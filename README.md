@@ -137,6 +137,65 @@ redirect URI:  http://localhost:7007/api/auth/oidc/handler/frame
 It lists `kubernetes` in `trustedPeers`, so it can mint cross-client tokens the
 apiserver will accept. Add more clients under `staticClients` and `make reload`.
 
+## Backstage
+
+`make backstage` deploys Backstage (the Red Hat Developer Hub community build,
+a prebuilt Backstage distribution) into the cluster with Dex as its **only**
+identity provider — no guest login, no GitHub.
+
+```bash
+make up
+make backstage      # first run loads a 4GB image into the node
+open http://localhost:7007
+```
+
+Sign In takes you to the same Dex login page, and you come back as a real
+Backstage identity with the groups from the token.
+
+Two things make it work:
+
+- **`hostNetwork: true` on the Backstage pod.** The issuer is
+  `https://127.0.0.1:32000/dex`, and from inside a normal pod that is the pod's
+  own loopback. On the host network it is the node's, which is the Dex
+  NodePort — the same URL the browser uses. Backstage and the browser must
+  agree on the issuer or OIDC breaks.
+- **`NODE_EXTRA_CA_CERTS`.** Dex serves a cert signed by the lab CA, and Node
+  rejects it otherwise. The failure is a bare `self-signed certificate in
+  certificate chain` during the token exchange, long after login looks fine.
+
+The sign-in resolver is `emailLocalPartMatchingUserEntityName`, so
+`admin@lab.local` maps to the `User:admin` entity in `manifests/backstage.yaml`.
+Without a matching entity Backstage refuses the login even though Dex
+authenticated it correctly. Add users to both places.
+
+`make backstage-test` drives the whole sign-in headlessly for all three users
+and prints what Dex asserted next to what Backstage resolved:
+
+```
+=== dev@lab.local ===
+  dex asserted    groups=['developers'] email=dev@lab.local
+  backstage user  user:default/dev
+  ownership refs  ['user:default/dev', 'group:default/developers']
+```
+
+### Backstage gotchas
+
+- **The `--config` flags live in the image entrypoint, not in `CMD`.** Setting
+  `args:` on the pod does not extend them, it replaces nothing and is ignored;
+  the whole `command:` has to be restated with the lab config appended last.
+- **`dynamic-plugins-root` must exist.** RHDH's plugin scanner `lstat()`s it at
+  startup and the process dies with a raw `ENOENT` before any Backstage logging
+  starts. An `emptyDir` means "no dynamic plugins" and is enough.
+- **`scope` is rejected by the oidc provider**; it is `additionalScopes` now,
+  and without `groups` there the token carries no group claim.
+- **`auth.session.secret` is required.** Without it `/api/auth/oidc/start`
+  returns 500 `authentication requires session support` — which sounds like a
+  cookie problem but is just a missing config key.
+- **`strategy: Recreate` is mandatory** with `hostNetwork`, because two pods
+  cannot both bind 7007 on the node and a rolling update deadlocks.
+- The image ships a Segment write key and sends telemetry by default; the
+  deployment sets `SEGMENT_TEST_MODE=true` to stop that.
+
 ## If you outgrow static passwords
 
 `staticPasswords` means editing YAML and reloading. If a demo needs users

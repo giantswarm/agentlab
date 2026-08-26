@@ -1,0 +1,192 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: backstage
+---
+# Catalog entities. The OIDC sign-in resolver needs a User entity to map the
+# incoming identity onto, otherwise login fails with "unable to resolve user".
+# emailLocalPartMatchingUserEntityName maps admin@lab.local -> User "admin".
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backstage-catalog
+  namespace: backstage
+data:
+  users.yaml: |
+    apiVersion: backstage.io/v1alpha1
+    kind: Group
+    metadata:
+      name: platform-admins
+    spec:
+      type: team
+      children: []
+    ---
+    apiVersion: backstage.io/v1alpha1
+    kind: Group
+    metadata:
+      name: developers
+    spec:
+      type: team
+      children: []
+    ---
+    apiVersion: backstage.io/v1alpha1
+    kind: Group
+    metadata:
+      name: viewers
+    spec:
+      type: team
+      children: []
+    ---
+    apiVersion: backstage.io/v1alpha1
+    kind: User
+    metadata:
+      name: admin
+    spec:
+      profile:
+        displayName: Lab Admin
+        email: admin@lab.local
+      memberOf: [platform-admins, developers]
+    ---
+    apiVersion: backstage.io/v1alpha1
+    kind: User
+    metadata:
+      name: dev
+    spec:
+      profile:
+        displayName: Lab Developer
+        email: dev@lab.local
+      memberOf: [developers]
+    ---
+    apiVersion: backstage.io/v1alpha1
+    kind: User
+    metadata:
+      name: viewer
+    spec:
+      profile:
+        displayName: Lab Viewer
+        email: viewer@lab.local
+      memberOf: [viewers]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backstage-config
+  namespace: backstage
+data:
+  app-config.lab.yaml: |
+    app:
+      title: Dex Lab
+      baseUrl: http://localhost:7007
+
+    backend:
+      baseUrl: http://localhost:7007
+      listen:
+        host: 0.0.0.0
+        port: 7007
+      cors:
+        origin: http://localhost:7007
+        credentials: true
+      database:
+        client: better-sqlite3
+        connection: ':memory:'
+
+    # Dex is the only identity provider. No guest login, no GitHub.
+    auth:
+      environment: production
+      # The oidc provider stores the in-flight auth request in a session;
+      # without this it fails with "authentication requires session support".
+      session:
+        secret: "68s34N/pNH1mnVcPQjJFhBbSQiKgEU3hr8v5RBxQJeo="
+      providers:
+        oidc:
+          production:
+            metadataUrl: https://127.0.0.1:32000/dex/.well-known/openid-configuration
+            clientId: backstage
+            clientSecret: backstage-lab-secret
+            prompt: auto
+            # 'scope' was removed from the oidc provider; openid/profile/email
+            # are implicit and anything extra goes here. Without 'groups' the
+            # token comes back with no group claim at all.
+            additionalScopes: groups
+            signIn:
+              resolvers:
+                - resolver: emailLocalPartMatchingUserEntityName
+
+    signInPage: oidc
+
+    catalog:
+      locations:
+        - type: file
+          target: /opt/app-root/src/lab-catalog/users.yaml
+          rules:
+            - allow: [User, Group]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backstage
+  namespace: backstage
+  labels: { app: backstage }
+spec:
+  replicas: 1
+  # hostNetwork means only one pod can hold port 7007 on the node, so a rolling
+  # update would deadlock: the new pod cannot bind while the old one lives.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: { app: backstage }
+  template:
+    metadata:
+      labels: { app: backstage }
+    spec:
+      # hostNetwork is the whole trick: it puts the container on the node's
+      # network namespace, so https://127.0.0.1:32000/dex resolves to the Dex
+      # NodePort — the exact same issuer URL the browser uses. Without it the
+      # issuer would differ between browser and server and OIDC would break.
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+        - name: backstage
+          image: quay.io/rhdh-community/rhdh:next-1.9
+          imagePullPolicy: IfNotPresent
+          # The image bakes its --config list into the entrypoint, so it has to
+          # be restated here with the lab config appended (last one wins).
+          command:
+            - node
+            - --require
+            - ./instrumentation.js
+            - packages/backend
+            - --config
+            - app-config.yaml
+            - --config
+            - /opt/app-root/src/lab-config/app-config.lab.yaml
+          ports:
+            - { name: http, containerPort: 7007 }
+          env:
+            # Dex serves a self-signed cert; Node rejects it otherwise.
+            - name: NODE_EXTRA_CA_CERTS
+              value: /opt/app-root/src/pki/ca.crt
+            # RHDH ships a Segment write key and phones home by default.
+            - name: SEGMENT_TEST_MODE
+              value: "true"
+            - name: LOG_LEVEL
+              value: info
+          volumeMounts:
+            - { name: config, mountPath: /opt/app-root/src/lab-config }
+            - { name: catalog, mountPath: /opt/app-root/src/lab-catalog }
+            - { name: pki, mountPath: /opt/app-root/src/pki }
+            # RHDH's dynamic plugin scanner lstat()s this path at startup and
+            # crashes if it is missing. An empty dir means "no dynamic plugins".
+            - { name: dynamic-plugins-root, mountPath: /opt/app-root/src/dynamic-plugins-root }
+          resources:
+            requests: { cpu: 200m, memory: 512Mi }
+            limits: { memory: 2Gi }
+      volumes:
+        - name: config
+          configMap: { name: backstage-config }
+        - name: catalog
+          configMap: { name: backstage-catalog }
+        - name: pki
+          secret: { secretName: dex-ca }
+        - name: dynamic-plugins-root
+          emptyDir: {}

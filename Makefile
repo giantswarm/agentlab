@@ -26,6 +26,15 @@ logs: ## Tail the Dex logs
 config: ## Show the effective Dex config
 	@kubectl -n dex get secret dex-config -o jsonpath='{.data.config\.yaml}' | base64 -d
 
+backstage: ## Deploy Backstage wired to Dex (needs `make up` first)
+	@./scripts/backstage.sh
+
+backstage-test: ## Headlessly sign all three users into Backstage via Dex
+	@./scripts/test-backstage.sh
+
+backstage-logs: ## Tail the Backstage logs
+	@kubectl -n backstage logs -f deploy/backstage
+
 restart-apiserver: ## Bounce the apiserver so it re-runs OIDC discovery
 	@./scripts/restart-apiserver.sh
 
@@ -34,4 +43,4 @@ reload: ## Re-apply the Dex config and restart Dex (after editing manifests/dex.
 	 sed "s/REPLACED_BY_UP_SH/$$SUM/" manifests/dex.yaml | kubectl apply -f - >/dev/null; \
 	 kubectl -n dex rollout status deployment/dex --timeout=90s
 
-.PHONY: help up down test login browser logs config reload restart-apiserver
+.PHONY: help up down test login browser logs config reload restart-apiserver backstage backstage-test backstage-logs

@@ -11,6 +11,11 @@ nodes:
       - containerPort: 32000
         hostPort: 32000
         protocol: TCP
+      # Backstage runs with hostNetwork (so it can reach the issuer on
+      # 127.0.0.1:32000 like the apiserver does), binding 7007 on the node.
+      - containerPort: 7007
+        hostPort: 7007
+        protocol: TCP
     # kubeadm already bind-mounts /etc/kubernetes/pki into the apiserver static
     # pod, so dropping the Dex CA in a subdirectory makes it visible there.
     extraMounts:
