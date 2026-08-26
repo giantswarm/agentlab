@@ -1,0 +1,158 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dex
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: dex-config
+  namespace: dex
+stringData:
+  config.yaml: |
+    issuer: https://127.0.0.1:32000/dex
+
+    # In-memory storage: nothing to provision, wiped on restart. Perfect for a
+    # lab that gets recreated. Swap for `type: kubernetes` to persist.
+    storage:
+      type: memory
+
+    web:
+      https: 0.0.0.0:5556
+      tlsCert: /etc/dex/tls/tls.crt
+      tlsKey: /etc/dex/tls/tls.key
+
+    telemetry:
+      http: 0.0.0.0:5558
+
+    logger:
+      level: debug
+
+    oauth2:
+      skipApprovalScreen: true
+      # Enables the Resource Owner Password grant against the local connector.
+      # This is what makes headless/CI testing a single curl. Lab only.
+      passwordConnector: local
+
+    frontend:
+      issuer: Dex Lab
+
+    # ---------------------------------------------------------------------
+    # The whole point: users that exist ONLY here. No GitHub, no GitLab, no
+    # Google, no Keycloak. `groups` on static passwords requires Dex >= v2.45.0.
+    # ---------------------------------------------------------------------
+    enablePasswordDB: true
+    staticPasswords:
+      - email: "admin@lab.local"
+        # bcrypt(cost 10) of "password"
+        hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"
+        username: "admin"
+        name: "Lab Admin"
+        preferredUsername: "admin"
+        emailVerified: true
+        userID: "11111111-1111-1111-1111-111111111111"
+        groups:
+          - "platform-admins"
+          - "developers"
+
+      - email: "dev@lab.local"
+        hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"
+        username: "dev"
+        name: "Lab Developer"
+        preferredUsername: "dev"
+        emailVerified: true
+        userID: "22222222-2222-2222-2222-222222222222"
+        groups:
+          - "developers"
+
+      - email: "viewer@lab.local"
+        hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"
+        username: "viewer"
+        name: "Lab Viewer"
+        preferredUsername: "viewer"
+        emailVerified: true
+        userID: "33333333-3333-3333-3333-333333333333"
+        groups:
+          - "viewers"
+
+    staticClients:
+      - id: kubernetes
+        name: Kubernetes
+        secret: kubernetes-lab-secret
+        redirectURIs:
+          - http://127.0.0.1:5555/callback
+          - http://localhost:5555/callback
+      # Spare client to point Backstage (or anything else) at.
+      - id: backstage
+        name: Backstage
+        secret: backstage-lab-secret
+        redirectURIs:
+          - http://localhost:7007/api/auth/oidc/handler/frame
+        # Lets Backstage mint tokens whose audience the apiserver accepts.
+        trustedPeers:
+          - kubernetes
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dex
+  namespace: dex
+  labels: { app: dex }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: dex }
+  template:
+    metadata:
+      labels: { app: dex }
+      annotations:
+        # Roll the pod whenever the config changes.
+        checksum/config: "REPLACED_BY_UP_SH"
+    spec:
+      containers:
+        - name: dex
+          image: ghcr.io/dexidp/dex:v2.45.1
+          args: ["dex", "serve", "/etc/dex/cfg/config.yaml"]
+          ports:
+            - { name: https, containerPort: 5556 }
+            - { name: telemetry, containerPort: 5558 }
+          volumeMounts:
+            - { name: config, mountPath: /etc/dex/cfg, readOnly: true }
+            - { name: tls, mountPath: /etc/dex/tls, readOnly: true }
+            # Dex expands its config through a temp file, so /tmp must be
+            # writable even with a read-only root filesystem.
+            - { name: tmp, mountPath: /tmp }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 5558 }
+            initialDelaySeconds: 2
+            periodSeconds: 3
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { memory: 128Mi }
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+      volumes:
+        - name: config
+          secret: { secretName: dex-config }
+        - name: tls
+          secret: { secretName: dex-tls }
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dex
+  namespace: dex
+spec:
+  type: NodePort
+  selector: { app: dex }
+  ports:
+    - name: https
+      port: 5556
+      targetPort: 5556
+      nodePort: 32000

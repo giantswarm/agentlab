@@ -1,0 +1,49 @@
+# RBAC bound to OIDC *groups* coming out of Dex's static passwords.
+# The apiserver is configured with --oidc-groups-prefix=oidc:, so the group
+# "platform-admins" in the token becomes "oidc:platform-admins" here.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: dexlab-platform-admins
+subjects:
+  - kind: Group
+    name: "oidc:platform-admins"
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: cluster-admin
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: dexlab-viewers
+subjects:
+  - kind: Group
+    name: "oidc:viewers"
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: view
+  apiGroup: rbac.authorization.k8s.io
+---
+# Developers: write access, but only inside the `demo` namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dexlab-developers
+  namespace: demo
+subjects:
+  - kind: Group
+    name: "oidc:developers"
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: edit
+  apiGroup: rbac.authorization.k8s.io

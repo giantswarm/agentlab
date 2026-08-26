@@ -1,0 +1,35 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: dexlab
+nodes:
+  - role: control-plane
+    # Expose Dex's NodePort on the host so that BOTH the browser/CLI on the Mac
+    # and the kube-apiserver inside the node can reach the SAME issuer URL
+    # (https://127.0.0.1:32000/dex). The apiserver static pod runs with
+    # hostNetwork, so its 127.0.0.1:32000 hits this NodePort too.
+    extraPortMappings:
+      - containerPort: 32000
+        hostPort: 32000
+        protocol: TCP
+    # kubeadm already bind-mounts /etc/kubernetes/pki into the apiserver static
+    # pod, so dropping the Dex CA in a subdirectory makes it visible there.
+    extraMounts:
+      - hostPath: ./certs
+        containerPath: /etc/kubernetes/pki/dex
+        readOnly: true
+kubeadmConfigPatches:
+  # kind v0.31 still emits kubeadm.k8s.io/v1beta3, where extraArgs is a MAP.
+  # (v1beta4 changed it to a list of name/value pairs — if you bump kind and the
+  # flags silently stop applying, this is why.)
+  - |
+    apiVersion: kubeadm.k8s.io/v1beta3
+    kind: ClusterConfiguration
+    apiServer:
+      extraArgs:
+        oidc-issuer-url: https://127.0.0.1:32000/dex
+        oidc-client-id: kubernetes
+        oidc-ca-file: /etc/kubernetes/pki/dex/ca.crt
+        oidc-username-claim: email
+        oidc-username-prefix: "oidc:"
+        oidc-groups-claim: groups
+        oidc-groups-prefix: "oidc:"
