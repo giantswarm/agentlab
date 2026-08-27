@@ -75,11 +75,12 @@ dir silently installed.
 **Fix:** store the sha256 of Chart.lock in `charts/.lock-digest` after a
 successful `helm dependency build` and rebuild whenever it differs.
 
-### H10. `gen-certs.sh`: private keys chmod 644 — PENDING
+### H10. `gen-certs.sh`: private keys chmod 644 — FIXED
 `chmod 644 certs/*.key` made the CA and server keys world-readable. Nothing
 needs that: the kind mount is read by root in the node container regardless,
 and the secrets are created from file by the invoking user.
-**Fix:** 600 on keys, 644 on certs.
+**Fix:** 600 on keys, 644 on certs; re-runs also tighten keys left
+world-readable by older versions of the script.
 
 ## Blocked upstream (documented, not fixable in this repo)
 
