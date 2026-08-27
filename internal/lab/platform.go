@@ -15,9 +15,10 @@ import (
 
 const platformNamespace = "agent-platform"
 
-const (
-	apsDir = "vendor/agent-platform-standalone"
-)
+// apsDir is where the umbrella chart is vendored from git. Deliberately NOT
+// `vendor/`: the repo is a Go module, and a top-level vendor/ directory would
+// flip the Go toolchain into vendored-build mode and break `go build`.
+const apsDir = ".vendor/agent-platform-standalone"
 
 // PlatformUp installs the Giant Swarm agent platform (muster + mcp-kubernetes)
 // into the lab cluster and wires it to the lab Dex.
@@ -51,7 +52,9 @@ func PlatformUp(cfg *config.Config) error {
 			return err
 		}
 	}
-	if err := runQuiet("git", "-C", apsDir, "cat-file", "-e", cfg.Platform.APSRef+"^{commit}"); err != nil {
+	// Probe with stderr swallowed: a missing commit is the expected trigger
+	// for the fetch, not an error worth showing.
+	if _, err := outputQuiet("git", "-C", apsDir, "cat-file", "-e", cfg.Platform.APSRef+"^{commit}"); err != nil {
 		if err := runQuiet("git", "-C", apsDir, "fetch", "-q", "--depth", "1", "origin", cfg.Platform.APSRef); err != nil {
 			return err
 		}

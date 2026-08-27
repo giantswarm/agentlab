@@ -12,10 +12,16 @@ stringData:
   config.yaml: |
     issuer: {{ .Issuer }}
 
-    # In-memory storage: nothing to provision, wiped on restart. Perfect for a
-    # lab that gets recreated. Swap for `type: kubernetes` to persist.
+    # CRD-backed storage, so the SIGNING KEYS survive pod rolls. With
+    # `type: memory` every `dexlab reload` (a config edit rolls the pod by
+    # design) rotated the keys and the apiserver rejected all tokens with
+    # "failed to verify id token signature" until its JWKS cache refreshed —
+    # minutes of every login failing right after the edit that prompted the
+    # reload. State still dies with the cluster, so the lab stays throwaway.
     storage:
-      type: memory
+      type: kubernetes
+      config:
+        inCluster: true
 
     web:
       https: 0.0.0.0:5556
@@ -99,6 +105,40 @@ stringData:
         trustedPeers:
           - backstage
 ---
+# Kubernetes storage needs its own identity: Dex creates its CRDs on first
+# boot and then CRUDs its resources (keys, auth codes, sessions) through the
+# apiserver.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dex
+  namespace: dex
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: dex
+rules:
+  - apiGroups: ["dex.coreos.com"]
+    resources: ["*"]
+    verbs: ["*"]
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: dex
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: dex
+subjects:
+  - kind: ServiceAccount
+    name: dex
+    namespace: dex
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -117,6 +157,7 @@ spec:
         # `dexlab reload` / `dexlab up` over this manifest + certs/tls.crt).
         checksum/config: "REPLACED_AT_APPLY"
     spec:
+      serviceAccountName: dex
       containers:
         - name: dex
           image: {{ .DexImage }}

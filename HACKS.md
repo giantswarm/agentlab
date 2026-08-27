@@ -3,6 +3,13 @@
 Inventory of every hack/workaround in the lab's scripts, what it papers over,
 and what happened to it. One commit per resolved item. Statuses:
 
+> **2026-08-27, Go port:** the lab was rewritten as a single Go binary
+> (`dexlab`) with form-driven configuration; scripts/ and manifests/ are gone.
+> Every fix below carries over — the checksum stamping (H2/H3), the digest
+> gate (H9), the exact-tag image check (H1), key permissions (H10, now 0600 at
+> creation) and the post-render patches (U1-U3, now `dexlab post-render`) all
+> live in `internal/lab/`. Two NEW items surfaced during the port: H11, H12.
+
 - **FIXED** — replaced with a proper solution (commit referenced).
 - **BLOCKED UPSTREAM** — cannot be fixed in this repo; the exact upstream
   change that unblocks it is named.
@@ -87,6 +94,25 @@ and the secrets are created from file by the invoking user.
 **Fix:** 600 on keys, 644 on certs; re-runs also tighten keys left
 world-readable by older versions of the script.
 
+### H11. Dex `storage: memory` rotates signing keys on every pod roll — FIXED
+Latent in the shell lab and exposed by the Go port's user-editing flow: a
+config change rolls the Dex pod by design (checksum annotation), and with
+in-memory storage the new pod mints new signing keys — the apiserver then
+rejects **every** token with `failed to verify id token signature` until its
+JWKS cache refreshes (observed: minutes). The old verification never noticed
+because `make reload` was only ever tested as a no-op; edit a user and reload,
+and all logins broke.
+**Fix:** Dex now uses its CRD-backed `kubernetes` storage (ServiceAccount +
+ClusterRole for the `dex.coreos.com` API group). Keys persist across rolls, an
+immediate post-reload login verifies, and the state still dies with the
+cluster.
+
+### H12. Chart vendored into `vendor/` collides with the Go toolchain — FIXED
+The agent-platform-standalone checkout lived in `vendor/`, which flips a Go
+module into vendored-build mode: after the first `dexlab platform`, `go build`
+failed with "inconsistent vendoring".
+**Fix:** the chart is vendored into `.vendor/` instead.
+
 ## Blocked upstream (documented, not fixable in this repo)
 
 ### U1. `muster-post-render.sh` patch: `allowPublicClientRegistration` edited into the rendered ConfigMap
@@ -149,7 +175,7 @@ is still open (its head is exactly the pinned `APS_REF`).
 - **`login-browser.py` fixed callback port 5555** — must be pre-registered in
   Dex's `redirectURIs`; a random port would break the static client. By design.
 
-## Full-stack verification (2026-08-27)
+## Full-stack verification (2026-08-27, shell lab)
 
 With every fix above in place, one full cycle on a cold cluster:
 
@@ -164,3 +190,29 @@ With every fix above in place, one full cycle on a cold cluster:
 | `make backstage` re-run | no image reload, same pod, same revision (checksum no-op) |
 | `make reload` | no-op apply, Dex stays at revision 1 |
 | `make down` | cluster deleted, no leftovers |
+
+## Full-stack verification (2026-08-27, Go binary)
+
+The same cycle through `dexlab`, on a cold cluster, defaults from
+`dexlab configure --defaults`:
+
+| Step | Result |
+|---|---|
+| `dexlab configure --defaults` / `--platform --backstage` | dexlab.yaml written, bcrypt hashes cached |
+| `dexlab up` (fresh kind cluster) | issuer up, apiserver accepts Dex tokens |
+| `dexlab test` | 10/10 RBAC assertions pass for admin/dev/viewer |
+| `dexlab login dev@lab.local` | kubeconfig.oidc works, `kubectl auth whoami` = `oidc:dev@lab.local` |
+| `dexlab platform` | deps built via digest gate, MCPServer `Connected`, muster live on :8090 |
+| `dexlab platform-test` | Dex → muster → mcp-kubernetes → apiserver chain passes |
+| `dexlab backstage` | image loaded once (exact-tag check), pod up |
+| `dexlab backstage-test` | all three users sign in, reach muster, see workflows + 29 core tools |
+| `dexlab backstage` re-run | no image reload, same pod (checksum no-op) |
+| `dexlab reload` (unchanged config) | no-op apply, single ReplicaSet |
+| `dexlab up` re-run (components enabled) | idempotent: cluster reused, secrets kept, post-render patches survive the helm upgrade |
+| edit a user in dexlab.yaml + `dexlab reload` | pod rolls (checksum), **immediate** login as the new user succeeds (H11) |
+| custom config (`dexlab2`, Dex :31000, run from an empty dir) | second cluster up alongside the first, 10/10 RBAC, clean `down` |
+| `dexlab down` | cluster deleted, no leftovers |
+
+TUI form coverage: `go test ./...` drives the real huh form with scripted
+keystrokes (accept defaults, edit fields, toggle components) and unit-tests
+the post-renderer against a synthetic Helm release.

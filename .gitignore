@@ -2,7 +2,7 @@ certs/
 .token
 kubeconfig.oidc
 .kubeconfig.*
-vendor/
+.vendor/
 /dexlab
 /dexlab.yaml
 /state/

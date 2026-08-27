@@ -55,7 +55,8 @@ func outputQuiet(name string, args ...string) (string, error) {
 	var buf bytes.Buffer
 	cmd := exec.Command(name, args...)
 	cmd.Stdout = &buf
-	return buf.String(), cmd.Run()
+	err := cmd.Run()
+	return buf.String(), err
 }
 
 // pipeInto feeds input to a command's stdin, showing output only on failure.

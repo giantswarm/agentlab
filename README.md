@@ -149,6 +149,13 @@ next version lands.
   misconfiguration on the apiserver side but is really a missing scope.
 - **Dex needs a writable `/tmp`** even with `readOnlyRootFilesystem: true`; it
   renders its config through a temp file. Hence the `emptyDir`.
+- **Dex storage must not be `memory` in this lab.** A config edit rolls the
+  Dex pod by design (`dexlab reload`), and with in-memory storage every roll
+  mints new signing keys — the apiserver then rejects **all** tokens with
+  `failed to verify id token signature` until its JWKS cache refreshes,
+  minutes after the very edit that prompted the reload. The lab uses Dex's
+  CRD-backed `kubernetes` storage instead: keys persist across rolls, tokens
+  keep verifying, and the state still dies with the cluster.
 - Kubernetes 1.35 still accepts the `--oidc-*` flags. The modern alternative is
   `--authentication-config` (structured `AuthenticationConfiguration`, which
   also supports CEL claim mappings). The flags are simpler and were kept here.
@@ -345,7 +352,8 @@ no HelmRelease indirection anywhere in this lab.
 The chart has no release yet
 ([PR #11](https://github.com/giantswarm/agent-platform-standalone/pull/11)), so
 `dexlab platform` vendors it from git at a pinned SHA (`platform.apsRef` in
-`dexlab.yaml`) into `vendor/` and installs from the local path. Once released,
+`dexlab.yaml`) into `.vendor/` (not `vendor/` — that would flip the Go
+toolchain into vendored-build mode) and installs from the local path. Once released,
 that step becomes a plain `helm install oci://…/agent-platform-standalone`.
 
 ```bash
@@ -479,7 +487,7 @@ internal/lab/                  everything operational:
   templates/                     every manifest, rendered from dexlab.yaml
 dexlab.yaml                    your configuration (gitignored; `dexlab configure`)
 state/                         rendered manifests, for inspection (gitignored)
-vendor/                        agent-platform-standalone checkout (gitignored)
+.vendor/                       agent-platform-standalone checkout (gitignored)
 .mcp.json                      registers muster as an MCP server for Claude Code
 ```
 
