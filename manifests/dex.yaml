@@ -128,8 +128,9 @@ spec:
     metadata:
       labels: { app: dex }
       annotations:
-        # Roll the pod whenever the config changes.
-        checksum/config: "REPLACED_BY_UP_SH"
+        # Roll the pod whenever the config or served cert changes (stamped by
+        # scripts/apply-dex.sh over this manifest + certs/tls.crt).
+        checksum/config: "REPLACED_AT_APPLY"
     spec:
       containers:
         - name: dex

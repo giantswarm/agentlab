@@ -60,9 +60,7 @@ restart-apiserver: ## Bounce the apiserver so it re-runs OIDC discovery
 	@./scripts/restart-apiserver.sh
 
 reload: ## Re-apply the Dex config and restart Dex (after editing manifests/dex.yaml)
-	@SUM=$$(shasum -a 256 manifests/dex.yaml | cut -d' ' -f1); \
-	 sed "s/REPLACED_BY_UP_SH/$$SUM/" manifests/dex.yaml | kubectl apply -f - >/dev/null; \
-	 kubectl -n dex rollout status deployment/dex --timeout=90s
+	@./scripts/apply-dex.sh
 
 .PHONY: help up down test login browser logs config reload restart-apiserver \
         platform platform-forward platform-test platform-logs platform-config platform-down backstage backstage-test backstage-logs

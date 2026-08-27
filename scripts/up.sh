@@ -24,16 +24,10 @@ kubectl -n dex create secret generic dex-tls \
   --from-file=tls.key=certs/tls.key \
   --dry-run=client -o yaml | kubectl apply -f -
 
-# Stamp the config checksum into the pod template before applying, so a config
-# change rolls the pod and we never create a throwaway ReplicaSet.
-SUM=$(shasum -a 256 manifests/dex.yaml | cut -d" " -f1)
-sed "s/REPLACED_BY_UP_SH/$SUM/" manifests/dex.yaml | kubectl apply -f -
+./scripts/apply-dex.sh
 
 echo "==> Applying RBAC bound to OIDC groups"
 kubectl apply -f manifests/rbac.yaml
-
-echo "==> Waiting for Dex to become ready"
-kubectl -n dex rollout status deployment/dex --timeout=120s
 
 echo "==> Waiting for the issuer to answer on https://localhost:32000/dex"
 for i in $(seq 1 60); do

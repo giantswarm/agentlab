@@ -27,10 +27,13 @@ is stamped into the pod template — same pattern `dex.yaml` already uses — so
 the pod rolls exactly when the config or CA changes and no-op re-runs stay
 no-ops. The blanket `rollout restart` is gone.
 
-### H3. `up.sh` + `Makefile reload`: duplicated sed/checksum stamping — PENDING
+### H3. `up.sh` + `Makefile reload`: duplicated sed/checksum stamping — FIXED
 The `sed "s/REPLACED_BY_UP_SH/$SUM/" manifests/dex.yaml | kubectl apply` logic
 lived in two places (up.sh and the `reload` target) and would drift.
-**Fix:** extracted `scripts/apply-dex.sh`; both callers use it.
+**Fix:** extracted `scripts/apply-dex.sh` (stamp + apply + rollout wait);
+up.sh and `make reload` both call it. The checksum now also covers
+`certs/tls.crt`, so a cert rotation rolls the pod too. Placeholder renamed to
+`REPLACED_AT_APPLY` to match its new owner.
 
 ### H4. `up.sh`: dex-tls secret created after the Dex Deployment — FIXED
 Same ordering smell as H2: on first boot the Dex pod waited on a secret that
