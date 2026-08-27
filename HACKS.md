@@ -63,7 +63,7 @@ MCPServer never reached `Connected`; the script then declared the platform up.
 **Fix:** the loop now reports the last observed state and exits non-zero on
 timeout, pointing at `make platform-logs`.
 
-### H8. `platform-test.sh`: fixed temp paths under /tmp — PENDING
+### H8. `platform-test.sh`: fixed temp paths under /tmp — FIXED
 Response headers/bodies went to `/tmp/.mcp-h` / `/tmp/.mcp-b` — collision-prone
 between concurrent runs and left behind afterwards.
 **Fix:** `mktemp` + `trap … EXIT` cleanup.

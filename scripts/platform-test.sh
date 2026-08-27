@@ -28,11 +28,14 @@ echo "    got an id_token"
 hdr=(-H "Authorization: Bearer $TOK" -H 'Content-Type: application/json'
      -H 'Accept: application/json, text/event-stream')
 
+HDRS=$(mktemp); BODY=$(mktemp)
+trap 'rm -f "$HDRS" "$BODY"' EXIT
+
 echo "==> MCP initialize"
-SID=$(curl -sS -D /tmp/.mcp-h -o /tmp/.mcp-b -X POST "$MUSTER/mcp" "${hdr[@]}" \
+SID=$(curl -sS -D "$HDRS" -o "$BODY" -X POST "$MUSTER/mcp" "${hdr[@]}" \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"platform-test","version":"1"}}}' \
-  && grep -i '^mcp-session-id' /tmp/.mcp-h | awk '{print $2}' | tr -d '\r')
-[[ -z "$SID" ]] && { echo "    no session id — muster rejected the token"; cat /tmp/.mcp-b; exit 1; }
+  && grep -i '^mcp-session-id' "$HDRS" | awk '{print $2}' | tr -d '\r')
+[[ -z "$SID" ]] && { echo "    no session id — muster rejected the token"; cat "$BODY"; exit 1; }
 echo "    session $SID"
 curl -sS -o /dev/null -X POST "$MUSTER/mcp" "${hdr[@]}" -H "Mcp-Session-Id: $SID" \
   -d '{"jsonrpc":"2.0","method":"notifications/initialized"}'
