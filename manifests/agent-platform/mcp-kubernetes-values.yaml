@@ -1,0 +1,22 @@
+# The Kubernetes MCP server itself. Not part of the agent-platform-standalone
+# umbrella (that only renders the MCPServer CR that points AT it), so it is its
+# own Helm release, installed by scripts/platform-up.sh from
+# oci://gsoci.azurecr.io/charts/giantswarm/mcp-kubernetes.
+
+# No Cilium in kind.
+ciliumNetworkPolicy:
+  enabled: false
+# Service Account Mode: mcp-kubernetes itself is unauthenticated on the
+# cluster network and talks to the apiserver as its own ServiceAccount.
+# muster is the only thing that can reach it, and muster is the component
+# that enforces Dex login. Matches `auth.mode: none` on the MCPServer CR.
+mcpKubernetes:
+  oauth:
+    enabled: false
+  kubernetes:
+    enableDownstreamOAuth: false
+rbac:
+  create: true
+  # Chart default. Grants writes and cluster-wide secret reads — acceptable
+  # for a throwaway lab; drop to "readonly" for a read-only demo.
+  profile: standard

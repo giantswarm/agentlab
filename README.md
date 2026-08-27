@@ -300,12 +300,22 @@ and then proves the muster hop with that user's own token:
 
 ## Giant Swarm agent platform (muster + Kubernetes MCP)
 
-Runs Giant Swarm's [agent-platform](https://github.com/giantswarm/agent-platform)
-meta-package against this Dex, so Claude Code can drive a Kubernetes MCP server
-living inside the kind cluster.
+Runs Giant Swarm's
+[agent-platform-standalone](https://github.com/giantswarm/agent-platform-standalone)
+umbrella chart against this Dex, so Claude Code can drive a Kubernetes MCP
+server living inside the kind cluster. It is one plain Helm chart — muster,
+valkey and the MCP registrations are pinned subcharts (`Chart.lock` is the
+BOM) — so unlike the old agent-platform meta-package there is **no Flux** and
+no HelmRelease indirection anywhere in this lab.
+
+The chart has no release yet
+([PR #11](https://github.com/giantswarm/agent-platform-standalone/pull/11)), so
+`platform-up.sh` vendors it from git at a pinned SHA (`APS_REF`) into
+`vendor/` and installs from the local path. Once released, that step becomes a
+plain `helm install oci://…/agent-platform-standalone`.
 
 ```bash
-make platform       # Flux + Gateway API CRDs + muster + valkey + mcp-kubernetes
+make platform       # vendors the chart + muster + valkey + mcp-kubernetes
 make platform-test  # headless proof of the whole chain
 ```
 
@@ -357,47 +367,47 @@ same one-URL trick, just spelled with a name.
 
 | What | Why |
 |---|---|
-| `components.agent-platform-connectivity.enabled: false` | The connectivity chart renders the public `HTTPRoute` / `Gateway` / CiliumNetworkPolicies. No Envoy Gateway and no Cilium here. |
-| `agentgateway.enabled: false` (`muster-direct`) | muster serves `/mcp` itself. The `agentgateway-muster` topology needs the agentgateway controller and a `GatewayClass`. |
+| `ingress.mode: muster-direct` (+ `components.agentgateway.enabled: false`, the default) | muster serves `/mcp` itself. The `agentgateway-muster` topology needs the agentgateway controller and a `GatewayClass`. |
+| `ingress.parentRefs` set to a placeholder, rendered `HTTPRoute` stripped | The chart hard-fails on empty `parentRefs` in **all** modes — even `muster-direct` assumes a public Gateway. This lab has no Gateway at all (hostNetwork + kind port mapping), so the values carry a placeholder to pass the guard and `muster-post-render.sh` strips the route. Also spares the lab the Gateway API CRDs, its only would-be consumer. |
 | `agent-platform-mcps.agentgateway.enabled: false` | The umbrella defaults it to **true**; left on it renders `AgentgatewayBackend` CRs whose CRD is not installed and the release fails. |
-| `valkey.valkey.metrics.podMonitor.enabled: false`, `muster…serviceMonitor.enabled: false`, `muster…prometheusRule.enabled: false` | No Prometheus Operator, so `PodMonitor` / `ServiceMonitor` / `PrometheusRule` have no CRD. The `PrometheusRule` default arrived in chart 2.12.0. |
+| `components.dicebear.enabled: false` | On by default; the avatar service is only reachable through the agentgateway edge this lab does not run. |
+| `networkPolicy.enabled: false`, `kyvernoPolicies.enabled: false` | The umbrella's own policy objects. No Cilium and no Kyverno in kind, so both would render CRs whose API groups the cluster does not serve. |
+| `valkey.valkey.metrics.podMonitor.enabled: false`, `muster…serviceMonitor.enabled: false`, `muster…prometheusRule.enabled: false` | No Prometheus Operator, so `PodMonitor` / `ServiceMonitor` / `PrometheusRule` have no CRD. |
 | `muster.rbac.{mcpServerEditor,workflowEditor}.subjects` → `oidc:platform-admins` | The umbrella binds muster's editor Roles to Giant Swarm's admin groups, which do not exist here. Rebound to the lab's own admin group (`--oidc-groups-prefix=oidc:`, same spelling as `manifests/rbac.yaml`). Lists replace, so the GS groups are dropped. |
-| muster patched to `hostNetwork` + `maxSurge: 0` | Same issuer trick as the apiserver and Backstage. `maxSurge: 0` because two hostNetwork pods cannot both bind `:8090` on a one-node cluster. |
-| Component versions pinned | The meta-package ships floating ranges (`muster: "5.x"`, `"0.x"` for the rest). The lab pins an exact bill-of-materials so two runs install the same thing — muster especially, whose ConfigMap the post-renderer freezes. |
+| muster patched to `hostNetwork` + `maxSurge: 0` | Same issuer trick as the apiserver and Backstage. `maxSurge: 0` because two hostNetwork pods cannot both bind `:8090` on a one-node cluster. Applied by `scripts/muster-post-render.sh` (`helm --post-renderer`) — the plain-Helm replacement for the Flux `postRenderers` the meta-package forwarded to helm-controller. |
+| The chart vendored at a pinned git SHA | Component versions are the chart's own tested BOM (`Chart.lock`); the lab no longer pins its own. The only lab-side pin is `APS_REF` — the chart repo commit — so two runs still install the same thing. |
 
 ### Platform gotchas
 
-- **The chart was renamed `agentic-platform` → `agent-platform` at 2.12.0's
-  lineage start, v2.5.5.** `charts/giantswarm/agentic-platform` dead-ends at
-  **2.5.4**; every release from **2.5.5** on is published under
-  `agent-platform`. The sub-charts moved too (`agentic-platform-mcps` →
-  `agent-platform-mcps`, last old tag 0.6.3 / first new tag 0.6.4;
-  `agentic-platform-connectivity` → `agent-platform-connectivity`), so a pin
-  copied from an older doc will 404 rather than fall back. 2.5.5 carried a
-  `legacyValuesFrom: agentic-platform-mcps` shim for the old values key — it is
-  **gone by 2.12.0**, so the values keys must use the new names.
-- **Flux must be ≥ 2.3.** The meta-package renders `helm.toolkit.fluxcd.io/v2` and
-  `source.toolkit.fluxcd.io/v1`. Flux 2.2.x only serves `v2beta2` / `v1beta2`, so
-  the HelmReleases are rejected outright. Worse, downgrading/upgrading in place
-  fails on `status.storedVersions` — you have to delete the five source/helm CRDs
-  (safe only while no CRs exist) and re-apply.
-- **`allowPublicClientRegistration` is a no-op in the muster chart.** It exists in
-  `values.yaml`, `values.schema.json`, the README table and the chart's unit
-  tests, but `templates/configmap.yaml` never renders it — so DCR stays gated and
-  Claude Code's login dies at `/oauth/register` with *"Registration requires
-  authentication"*. Neither of the other gates can help: Claude Code cannot send a
-  registration token, its loopback port is random (so
+- **Switching from the old meta-package needs a clean slate.** Both installs use
+  the Helm release name `agent-platform`, but the old one rendered Flux
+  HelmReleases and the new one renders the workloads directly — upgrading across
+  that boundary races helm-controller uninstalls against the fresh install.
+  `platform-up.sh` refuses if it finds the old HelmReleases; run
+  `make platform-down` first (an old cluster keeps its now-idle `flux-system`,
+  which is harmless).
+- **`allowPublicClientRegistration` is a no-op in the muster chart (still at
+  5.5.6).** It exists in `values.yaml`, `values.schema.json`, the README table
+  and the chart's unit tests, but `templates/configmap.yaml` never renders it —
+  so DCR stays gated and Claude Code's login dies at `/oauth/register` with
+  *"Registration requires authentication"*. Neither of the other gates can help:
+  Claude Code cannot send a registration token, its loopback port is random (so
   `trustedPublicRegistrationRedirectURIs` cannot match), and `http`/`https` are
   deliberately stripped from `trustedPublicRegistrationSchemes` by mcp-oauth's
-  config validation. `manifests/agent-platform/values.yaml` works around it by
-  re-rendering the whole `muster-config` ConfigMap in a post-renderer — which is
-  why muster is pinned to an exact version.
+  config validation. `scripts/muster-post-render.sh` works around it by editing
+  the key into the rendered config with `yq` — surgically, so everything else in
+  the ConfigMap stays chart-rendered and muster bumps via the chart need no
+  hand-copying (the old meta-package setup froze the whole ConfigMap and had to
+  pin muster for it).
 - **A `Recreate` strategy cannot be patched onto an existing Deployment.** The API
-  server has already defaulted `spec.strategy.rollingUpdate`, and server-side
-  apply will not drop a field it does not own, so the upgrade fails with
-  `rollingUpdate: Forbidden`. helm-controller then rolls the release back — taking
-  every *other* post-renderer patch with it. `maxSurge: 0` achieves the same thing
-  without the conflict.
+  server has already defaulted `spec.strategy.rollingUpdate`, and a patch that
+  flips the type without also deleting that field fails with
+  `rollingUpdate: Forbidden`. `maxSurge: 0` achieves the same thing without the
+  conflict.
+- **A disabled kagent still creates its namespace.** The umbrella's
+  `templates/namespace.yaml` is gated only on `kagent.kagent.namespaceOverride`,
+  not on `components.kagent.enabled`, so an empty `kagent` namespace appears.
+  Harmless — Helm owns it and removes it on uninstall.
 - **Family tools need an instance argument.** The `kubernetes` group is rendered as
   a muster *family* (`instanceArg: management_cluster`), so calls are
   `call_tool(name=x_kubernetes_list, arguments={management_cluster: "dexlab-mcp-kubernetes", ...})`.
@@ -436,10 +446,13 @@ scripts/backstage.sh       pulls/loads the GS image and deploys it
 scripts/test-backstage.sh  headless sign-in + muster proof for all three users
 
 manifests/agent-platform/
-  values.yaml              agent-platform meta-package values for this lab
-  mcp-kubernetes.yaml      Flux OCIRepository + HelmRelease for the k8s MCP
-  demo-workflow.yaml       one Workflow so the muster plugin has something to show
-scripts/platform-up.sh     Flux + Gateway API CRDs + secrets + the platform
-scripts/platform-test.sh   Dex -> muster -> Kubernetes MCP end-to-end proof
-.mcp.json                  registers muster as an MCP server for Claude Code
+  values.yaml                  agent-platform-standalone values for this lab
+  mcp-kubernetes-values.yaml   values for the mcp-kubernetes Helm release
+  demo-workflow.yaml           one Workflow so the muster plugin has something to show
+scripts/platform-up.sh         vendors the chart + secrets + the platform
+scripts/muster-post-render.sh  helm post-renderer: hostNetwork, DCR workaround,
+                               HTTPRoute strip (see its header)
+scripts/platform-test.sh       Dex -> muster -> Kubernetes MCP end-to-end proof
+vendor/                        agent-platform-standalone checkout (gitignored)
+.mcp.json                      registers muster as an MCP server for Claude Code
 ```

@@ -35,7 +35,7 @@ backstage-test: ## Headless sign-in + muster proof for all three users
 backstage-logs: ## Tail the Backstage logs
 	@kubectl -n backstage logs -f deploy/backstage
 
-platform: ## Install Flux + the Giant Swarm agent platform (muster + k8s MCP)
+platform: ## Install the Giant Swarm agent platform (muster + k8s MCP)
 	@./scripts/platform-up.sh
 
 platform-forward: ## Fallback only: port-forward muster if kind has no :8090 mapping
@@ -53,7 +53,7 @@ platform-config: ## Show muster's effective config
 
 platform-down: ## Remove the agent platform (leaves Dex and the cluster alone)
 	@helm -n agent-platform uninstall agent-platform 2>/dev/null || true
-	@kubectl delete -f manifests/agent-platform/mcp-kubernetes.yaml --ignore-not-found
+	@helm -n agent-platform uninstall mcp-kubernetes 2>/dev/null || true
 	@kubectl delete namespace agent-platform --ignore-not-found
 
 restart-apiserver: ## Bounce the apiserver so it re-runs OIDC discovery

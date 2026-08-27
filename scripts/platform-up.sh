@@ -2,33 +2,58 @@
 # Installs the Giant Swarm agent platform (muster + mcp-kubernetes) into the
 # dex lab cluster and wires it to the lab Dex.
 #
-# Order matters:
-#   1. Flux   — the agent-platform chart is a meta-package: it renders Flux
-#               OCIRepository/HelmRelease objects, so a controller must exist
-#               before `helm install` of it does anything useful.
-#   2. Gateway API CRDs — documented prerequisite of the chart.
-#   3. Secrets — muster's OAuth credentials and the lab CA.
-#   4. mcp-kubernetes — the MCP server muster will aggregate.
-#   5. agent-platform — the meta-package itself.
+# The platform ships as agent-platform-standalone: one plain Helm umbrella
+# chart with muster, valkey and the MCP registrations as pinned subcharts
+# (Chart.lock is the BOM). No GitOps controller involved — unlike the old
+# agent-platform meta-package, which rendered Flux HelmReleases and needed a
+# helm-controller on the cluster before `helm install` did anything useful.
+#
+# The chart has no release yet (giantswarm/agent-platform-standalone#11), so it
+# is vendored from git at a pinned SHA and installed from the local path.
+# Once released: swap the vendor step for the OCI ref.
+#
+# Order:
+#   1. Chart    — vendor at $APS_REF + `helm dependency build` (OCI pulls).
+#   2. Secrets  — muster's OAuth credentials and the lab CA.
+#   3. mcp-kubernetes — the MCP server muster will aggregate.
+#   4. The umbrella chart, through scripts/muster-post-render.sh (hostNetwork,
+#      the DCR chart-bug workaround, HTTPRoute strip — see that script).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 NS=agent-platform
-FLUX_VERSION=${FLUX_VERSION:-v2.9.4}
-GATEWAY_API_VERSION=${GATEWAY_API_VERSION:-v1.2.1}
-CHART_VERSION=${CHART_VERSION:-2.12.0}
+MCP_K8S_VERSION=${MCP_K8S_VERSION:-1.0.9}
+APS_REPO=${APS_REPO:-https://github.com/giantswarm/agent-platform-standalone}
+APS_REF=${APS_REF:-672e08cb67cb210cdcc3bb9c5d11f78a42e92003} # PR #11 head (feat/curate-generator)
+APS_DIR=vendor/agent-platform-standalone
+CHART_DIR=$APS_DIR/helm/agent-platform-standalone
 
-echo "==> Installing Flux $FLUX_VERSION"
-# Pinned deliberately: the meta-package renders helm.toolkit.fluxcd.io/v2 and
-# source.toolkit.fluxcd.io/v1. Flux < 2.3 only serves v2beta2 / v1beta2 and the
-# HelmReleases will not even be accepted by the API server.
-kubectl apply --server-side --force-conflicts \
-  -f "https://github.com/fluxcd/flux2/releases/download/$FLUX_VERSION/install.yaml" >/dev/null
-kubectl -n flux-system rollout status deploy/source-controller --timeout=180s
-kubectl -n flux-system rollout status deploy/helm-controller --timeout=180s
+# A cluster still running the old meta-package has Flux HelmReleases under the
+# same Helm release name; upgrading across that boundary races helm-controller
+# uninstalls against this install. Start clean instead.
+if kubectl -n "$NS" get helmrelease muster >/dev/null 2>&1; then
+  echo "ERROR: this cluster runs the old agent-platform meta-package (Flux HelmReleases found)."
+  echo "       Run 'make platform-down' first, then re-run 'make platform'."
+  exit 1
+fi
 
-echo "==> Installing Gateway API $GATEWAY_API_VERSION CRDs"
-kubectl apply -f "https://github.com/kubernetes-sigs/gateway-api/releases/download/$GATEWAY_API_VERSION/standard-install.yaml" >/dev/null
+echo "==> Vendoring agent-platform-standalone @ ${APS_REF:0:12}"
+if [[ ! -d "$APS_DIR/.git" ]]; then
+  git init -q "$APS_DIR"
+  git -C "$APS_DIR" remote add origin "$APS_REPO"
+fi
+if ! git -C "$APS_DIR" cat-file -e "$APS_REF^{commit}" 2>/dev/null; then
+  git -C "$APS_DIR" fetch -q --depth 1 origin "$APS_REF"
+fi
+git -C "$APS_DIR" -c advice.detachedHead=false checkout -q "$APS_REF"
+
+# Subchart .tgz pulls from gsoci/ghcr (anonymous). Skipped when charts/ is
+# already in sync with the checked-out Chart.lock.
+if [[ ! -d "$CHART_DIR/charts" || "$CHART_DIR/Chart.lock" -nt "$CHART_DIR/charts" ]]; then
+  echo "==> Building chart dependencies"
+  helm dependency build "$CHART_DIR" >/dev/null
+  touch "$CHART_DIR/charts"
+fi
 
 echo "==> Creating namespace and secrets"
 kubectl create namespace "$NS" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
@@ -52,25 +77,21 @@ else
   echo "    agent-platform-secrets already exists, leaving it alone"
 fi
 
-echo "==> Deploying mcp-kubernetes"
-kubectl apply -f manifests/agent-platform/mcp-kubernetes.yaml >/dev/null
+echo "==> Deploying mcp-kubernetes ($MCP_K8S_VERSION)"
+helm upgrade --install mcp-kubernetes \
+  "oci://gsoci.azurecr.io/charts/giantswarm/mcp-kubernetes" \
+  --version "$MCP_K8S_VERSION" -n "$NS" \
+  -f manifests/agent-platform/mcp-kubernetes-values.yaml \
+  --wait --timeout 5m >/dev/null
 
-echo "==> Installing the agent-platform meta-package ($CHART_VERSION)"
-helm upgrade --install agent-platform \
-  "oci://gsoci.azurecr.io/charts/giantswarm/agent-platform" \
-  --version "$CHART_VERSION" -n "$NS" \
-  -f manifests/agent-platform/values.yaml >/dev/null
-
-echo "==> Waiting for every HelmRelease to become Ready"
-for hr in mcp-kubernetes valkey muster agent-platform-mcps; do
-  printf "    %-24s" "$hr"
-  for _ in $(seq 1 60); do
-    if [[ "$(kubectl -n "$NS" get hr "$hr" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == "True" ]]; then
-      echo "Ready"; break
-    fi
-    printf "."; sleep 5
-  done
-done
+echo "==> Installing agent-platform-standalone (this waits for every workload)"
+# --wait replaces the old HelmRelease polling: Helm itself owns the workloads
+# now. The MCPServer/Workflow CRDs ship in the muster subchart's crds/ dir,
+# which Helm applies before the manifests on first install.
+helm upgrade --install agent-platform "$CHART_DIR" -n "$NS" \
+  -f manifests/agent-platform/values.yaml \
+  --post-renderer ./scripts/muster-post-render.sh \
+  --wait --timeout 10m >/dev/null
 
 echo "==> Waiting for muster to connect to the Kubernetes MCP"
 for _ in $(seq 1 40); do
@@ -80,9 +101,9 @@ for _ in $(seq 1 40); do
   sleep 3
 done
 
-# The Workflow CRD ships with muster, so this has to land after the HelmRelease
-# is Ready. A muster with no workflows leaves the Backstage muster plugin's main
-# tab empty, which reads as "the plugin is broken" rather than "nothing to show".
+# The Workflow CRD ships with muster, so this has to land after the install.
+# A muster with no workflows leaves the Backstage muster plugin's main tab
+# empty, which reads as "the plugin is broken" rather than "nothing to show".
 echo "==> Creating the demo workflow"
 kubectl apply -f manifests/agent-platform/demo-workflow.yaml >/dev/null
 
@@ -90,10 +111,10 @@ kubectl apply -f manifests/agent-platform/demo-workflow.yaml >/dev/null
 # it should be reachable directly. A cluster created before that mapping was
 # added has no such publish, and the only way to add one is to recreate it.
 #
-# Retry rather than probing once: the HelmRelease going Ready and the MCPServer
-# reporting Connected both happen before muster's HTTP listener accepts, so a
-# single-shot check on a cold cluster fails and then blames the port mapping,
-# which is the one thing that is definitely fine on a freshly created cluster.
+# Retry rather than probing once: helm --wait covers the Deployment, but
+# muster's HTTP listener accepts slightly later, so a single-shot check on a
+# cold cluster fails and then blames the port mapping, which is the one thing
+# that is definitely fine on a freshly created cluster.
 echo "==> Waiting for muster to serve on http://localhost:8090"
 REACH=""
 for _ in $(seq 1 40); do

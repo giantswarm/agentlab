@@ -1,172 +1,56 @@
 # ---------------------------------------------------------------------------
-# Giant Swarm agent-platform, tuned for this kind lab.
+# Giant Swarm agent-platform-standalone umbrella chart, tuned for this kind lab.
+#
+# Component versions are the chart's own tested BOM (Chart.yaml / Chart.lock);
+# the lab no longer pins its own. scripts/platform-up.sh pins the chart itself
+# to a git SHA instead.
 #
 # Differences from a real management cluster:
-#   * no Envoy Gateway / public Gateway  -> the connectivity component is off
-#     and muster is reached over kubectl port-forward instead of an HTTPRoute.
-#   * no Cilium                          -> every CiliumNetworkPolicy is off.
-#   * muster runs with hostNetwork       -> so that https://localhost:32000/dex
+#   * no Envoy Gateway / agentgateway edge -> ingress.mode muster-direct (the
+#     chart default) with no parentRefs/hostnames, so no route objects render
+#     and muster is reached on localhost:8090 via the kind port mapping.
+#   * no Cilium and no Kyverno            -> the umbrella's policy objects are
+#     off wholesale, plus each component's own network policy toggles.
+#   * muster runs with hostNetwork        -> so that https://localhost:32000/dex
 #     resolves to the Dex NodePort from inside the pod, exactly the trick the
 #     kube-apiserver static pod and the Backstage deployment already use. This
 #     is what lets muster share ONE issuer URL with the browser on the Mac.
+#     Not a chart value; patched in by scripts/muster-post-render.sh, the
+#     plain-Helm replacement for the Flux postRenderers the old agent-platform
+#     meta-package forwarded to helm-controller.
 # ---------------------------------------------------------------------------
-global:
-  registry: gsoci.azurecr.io
-
-gitops:
-  engine: flux
-  interval: 5m
-  retries: 5
 
 components:
-  # The meta-package ships floating ranges ("5.x" for muster, "0.x" for the
-  # rest). This lab pins an explicit bill-of-materials the way a customer
-  # release does, so a new upstream patch cannot change what the lab installs
-  # between two runs — which matters most for muster, whose ConfigMap is frozen
-  # by the post-renderer below.
-  muster:
-    versionRange: "5.1.0"
-    # hostNetwork is not a muster chart value, so it is patched in through the
-    # HelmRelease post-renderer the meta-package forwards to helm-controller.
-    postRenderers:
-      - kustomize:
-          patches:
-            - target:
-                kind: Deployment
-                name: muster
-              patch: |
-                apiVersion: apps/v1
-                kind: Deployment
-                metadata:
-                  name: muster
-                spec:
-                  template:
-                    spec:
-                      hostNetwork: true
-                      dnsPolicy: ClusterFirstWithHostNet
-            # WORKAROUND (muster chart 5.1.0): the chart exposes
-            # `oauth.server.allowPublicClientRegistration` in values.yaml,
-            # values.schema.json, its README and its unit tests, but
-            # templates/configmap.yaml never renders the key — so the value is
-            # silently dropped and Dynamic Client Registration stays gated. Claude
-            # Code registers as a PUBLIC client on a random loopback port, so
-            # neither `registrationToken` (it cannot send one),
-            # `trustedPublicRegistrationRedirectURIs` (the port is random) nor
-            # `trustedPublicRegistrationSchemes` (http/https are stripped by
-            # mcp-oauth's config validation on purpose) can gate it open.
-            # Re-rendering the whole ConfigMap is the only lever the chart leaves.
-            # Because this FREEZES muster's config, muster is pinned to 5.1.0
-            # above — re-copy this block from `kubectl get cm muster-config` after
-            # any muster bump, or drop it once the chart renders the key.
-            - target:
-                kind: ConfigMap
-                name: muster-config
-              patch: |
-                apiVersion: v1
-                kind: ConfigMap
-                metadata:
-                  name: muster-config
-                data:
-                  config.yaml: |
-                    aggregator:
-                      host: "0.0.0.0"
-                      port: 8090
-                      transport: "streamable-http"
-                      oauth:
-                        server:
-                          enabled: true
-                          baseUrl: "http://localhost:8090"
-                          provider: "dex"
-                          registrationTokenFile: "/etc/muster/secrets/registration-token"
-                          dex:
-                            issuerUrl: "https://localhost:32000/dex"
-                            clientId: "muster"
-                            clientSecretFile: "/etc/muster/secrets/dex-client-secret"
-                            allowPrivateIPOIDC: true
-                          storage:
-                            type: "valkey"
-                            valkey:
-                              url: "muster-valkey:6379"
-                              passwordFile: "/etc/muster/secrets/valkey-password"
-                              keyPrefix: "muster:"
-                          allowLocalhostRedirectURIs: true
-                          allowPublicClientRegistration: true
-                          trustedAudiences:
-                            - muster
-                    namespace: "agent-platform"
-                    kubernetes: true
-            # hostNetwork means the pod binds :8090 on the node, so the default
-            # rolling update deadlocks on a single-node cluster: the new pod
-            # cannot be scheduled until the old one releases the port.
-            # maxSurge: 0 makes the old pod go down first. (Not `type: Recreate`:
-            # the API server has already defaulted `rollingUpdate` on the live
-            # object and server-side apply will not drop a field it does not own,
-            # so Recreate fails with "rollingUpdate: Forbidden".)
-            - target:
-                kind: Deployment
-                name: muster
-              patch: |
-                - op: add
-                  path: /spec/strategy
-                  value:
-                    type: RollingUpdate
-                    rollingUpdate:
-                      maxSurge: 0
-                      maxUnavailable: 1
-  valkey:
-    versionRange: "0.1.4"
-  # 0.6.3 was the last tag published under the old `agentic-platform-mcps`
-  # name; the renamed repo starts at 0.6.4, so this pin cannot go lower.
+  # muster and valkey are on by default. The MCP server registrations are not.
   agent-platform-mcps:
-    versionRange: "0.6.7"
-  # Renders the public HTTPRoute / Gateway / CiliumNetworkPolicies. All of that
-  # needs an ingress stack this lab does not have.
-  agent-platform-connectivity:
-    enabled: false
+    enabled: true
+  # On by default; the avatar service is only reachable through the
+  # agentgateway edge this lab does not run.
   dicebear:
     enabled: false
 
-# muster-direct topology: muster serves /mcp itself, no agentgateway data plane.
-agentgateway:
+# The chart default, restated because this lab's whole topology hangs off it:
+# muster serves /mcp itself, no agentgateway data plane.
+ingress:
+  mode: muster-direct
+  # The chart hard-fails on empty parentRefs in ALL modes: it assumes a public
+  # Gateway exists and renders an umbrella-owned HTTPRoute for muster's `/`.
+  # This lab has no Gateway of any kind — muster is reached through hostNetwork
+  # and the kind port mapping — so this parentRef exists only to satisfy the
+  # guard, and scripts/muster-post-render.sh strips the rendered HTTPRoute
+  # (which also spares the lab the Gateway API CRDs, its only would-be consumer).
+  parentRefs:
+    - name: no-gateway-in-this-lab
+      namespace: agent-platform
+
+# The umbrella's own policy objects. No Cilium and no Kyverno in kind, so both
+# would render CRs whose API groups the cluster does not serve.
+networkPolicy:
+  enabled: false
+kyvernoPolicies:
   enabled: false
 
-valkey:
-  enabled: true
-  ciliumNetworkPolicy:
-    enabled: false
-  valkey:
-    # No Prometheus Operator in kind, so the PodMonitor CR has no CRD to bind to
-    # and the whole release fails to render without this.
-    metrics:
-      podMonitor:
-        enabled: false
-    auth:
-      usersExistingSecret: agent-platform-secrets
-      aclUsers:
-        default:
-          passwordKey: valkey-password
-
-mcps:
-  enabled: true
-
-agent-platform-mcps:
-  # The umbrella defaults this to true (agentgateway is the observability choke
-  # point on a real MC). With the agentgateway component off, leaving it on
-  # renders AgentgatewayBackend CRs whose CRD is not installed.
-  agentgateway:
-    enabled: false
-  mcpServers:
-    # The Kubernetes MCP server, in-cluster. auth.mode none: muster's own OAuth
-    # guards the front door and mcp-kubernetes talks to the apiserver with its
-    # ServiceAccount.
-    - cluster: dexlab
-      group: kubernetes
-      url: http://mcp-kubernetes.agent-platform.svc.cluster.local:8080/mcp
-      auth:
-        mode: none
-
 muster:
-  enabled: true
   networkPolicy:
     enabled: false
   # Who may write MCPServer / Workflow CRs *through muster*. These are session
@@ -196,10 +80,9 @@ muster:
           kind: Group
           name: "oidc:platform-admins"
   muster:
-    # The umbrella turns muster's ServiceMonitor on for the GS observability
-    # stack, and since chart 2.12.0 its PrometheusRule too. No Prometheus
-    # Operator in kind, so neither CRD exists and the release fails to render
-    # unless both are off.
+    # The umbrella turns muster's ServiceMonitor and PrometheusRule on for the
+    # GS observability stack. No Prometheus Operator in kind, so neither CRD
+    # exists and the release fails to render unless both are off.
     observability:
       metrics:
         prometheus:
@@ -227,7 +110,12 @@ muster:
           allowPrivateIPOIDC: true
         existingSecret: agent-platform-secrets
         # Lab only: lets Claude Code register itself over DCR without a
-        # pre-shared registration token.
+        # pre-shared registration token. WORKAROUND (muster chart <= 5.5.6):
+        # the chart exposes this key in values.yaml, values.schema.json and its
+        # README, but templates/configmap.yaml never renders it — so the value
+        # set here is silently dropped. scripts/muster-post-render.sh re-adds
+        # it to the rendered config; this entry stays so the values file tells
+        # the truth and the workaround can be deleted once the chart renders it.
         allowPublicClientRegistration: true
         # Lab only: accept a Dex id_token with aud=muster as a bearer token, so
         # the stack can be smoke-tested headlessly with the password grant.
@@ -237,3 +125,34 @@ muster:
           type: valkey
           valkey:
             url: muster-valkey:6379
+
+valkey:
+  ciliumNetworkPolicy:
+    enabled: false
+  valkey:
+    # No Prometheus Operator in kind, so the PodMonitor CR has no CRD to bind
+    # to and the whole release fails to render without this.
+    metrics:
+      podMonitor:
+        enabled: false
+    auth:
+      usersExistingSecret: agent-platform-secrets
+      aclUsers:
+        default:
+          passwordKey: valkey-password
+
+agent-platform-mcps:
+  # The umbrella defaults this to true (agentgateway is the observability choke
+  # point on a real MC). With the agentgateway component off, leaving it on
+  # renders AgentgatewayBackend CRs whose CRD is not installed.
+  agentgateway:
+    enabled: false
+  mcpServers:
+    # The Kubernetes MCP server, in-cluster. auth.mode none: muster's own OAuth
+    # guards the front door and mcp-kubernetes talks to the apiserver with its
+    # ServiceAccount.
+    - cluster: dexlab
+      group: kubernetes
+      url: http://mcp-kubernetes.agent-platform.svc.cluster.local:8080/mcp
+      auth:
+        mode: none
