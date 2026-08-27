@@ -7,11 +7,24 @@ set -euo pipefail
 NODE=dexlab-control-plane
 
 echo "==> Restarting kube-apiserver so it re-runs OIDC discovery"
+# Move the static-pod manifest away and wait until the kubelet has actually
+# torn the container down before restoring it. A blind sleep could restore the
+# file before the kubelet noticed the removal — a silent non-restart. The trap
+# guarantees the manifest comes back even if the wait fails, so the cluster is
+# never left without an apiserver.
 docker exec "$NODE" sh -c '
-  mkdir -p /tmp/holdmanifest
-  mv /etc/kubernetes/manifests/kube-apiserver.yaml /tmp/holdmanifest/
-  sleep 5
-  mv /tmp/holdmanifest/kube-apiserver.yaml /etc/kubernetes/manifests/
+  set -e
+  mv /etc/kubernetes/manifests/kube-apiserver.yaml /tmp/kube-apiserver.yaml.hold
+  trap "mv /tmp/kube-apiserver.yaml.hold /etc/kubernetes/manifests/" EXIT
+  i=0
+  while [ -n "$(crictl ps --name kube-apiserver -q 2>/dev/null)" ]; do
+    i=$((i+1))
+    if [ "$i" -gt 60 ]; then
+      echo "kube-apiserver container did not stop within 60s" >&2
+      exit 1
+    fi
+    sleep 1
+  done
 '
 
 echo -n "    waiting for the apiserver to come back "

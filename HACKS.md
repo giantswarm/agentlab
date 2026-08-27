@@ -40,12 +40,14 @@ Same ordering smell as H2: on first boot the Dex pod waited on a secret that
 was applied a step later.
 **Fix:** namespace + dex-tls secret are applied before the Deployment.
 
-### H5. `restart-apiserver.sh`: blind `sleep 5` between manifest removal and restore — PENDING
+### H5. `restart-apiserver.sh`: blind `sleep 5` between manifest removal and restore — FIXED
 The static-pod bounce moved the manifest away, slept 5 seconds, and moved it
 back. If the kubelet had not yet noticed the removal, the restore was a no-op
 and the apiserver never restarted — a silent false success.
-**Fix:** poll `crictl ps` inside the node until the kube-apiserver container is
-actually gone before restoring the manifest, and fail loudly on timeout.
+**Fix:** poll `crictl ps` inside the node until the kube-apiserver container
+is actually gone before restoring the manifest, fail loudly on timeout, and
+restore the manifest via an EXIT trap on every path so the cluster is never
+left without an apiserver.
 
 ### H6. Is the apiserver bounce needed at all on Kubernetes 1.35? — TO VERIFY during boot
 The whole reason for `restart-apiserver.sh` is the claim that the OIDC
@@ -125,7 +127,7 @@ is still open (its head is exactly the pinned `APS_REF`).
 
 ## Accepted lab trade-offs (not hacks to fix)
 
-- **Checksum stamping via `REPLACED_BY_UP_SH` placeholder** — the standard
+- **Checksum stamping via the `REPLACED_AT_APPLY` placeholder** — the standard
   Helm `checksum/config` pattern, done with sed because there is no templating
   engine here. Deduplicated into one script (H3), otherwise kept.
 - **Password grant + static secrets in git** (`kubernetes-lab-secret`, bcrypt
