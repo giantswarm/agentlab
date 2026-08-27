@@ -107,13 +107,15 @@ Watch out:
   ```bash
   docker exec dexlab-control-plane grep oidc /etc/kubernetes/manifests/kube-apiserver.yaml
   ```
-- **The apiserver gives up on OIDC discovery after ~40 seconds.** On a cold
-  `kind create`, Dex does not exist yet, so the authenticator logs
-  `oidc: authenticator not initialized` four times and then stays broken
-  forever — every token is rejected and nothing retries. `make up` bounces the
-  static pod once Dex is serving (`make restart-apiserver` if you ever need it
-  by hand). This is the single most confusing failure in this setup, because
-  the apiserver looks perfectly healthy.
+- **The apiserver keeps retrying OIDC discovery — no bounce needed.** On a
+  cold `kind create`, Dex does not exist yet and the apiserver logs
+  `oidc authenticator: initializing plugin: … connection refused` — but on
+  Kubernetes 1.35 it retries every 10 seconds forever and initializes on the
+  first tick after Dex answers (verified empirically; earlier versions of this
+  lab bounced the static pod because older apiservers gave up for good).
+  `make up`'s verification loop simply waits out the next retry tick. If
+  tokens are still rejected minutes after Dex is up, read the apiserver log
+  for those `oidc.go` lines rather than restarting things.
 - **Scopes are not optional.** `--oidc-username-claim=email` needs the client to
   request the `email` scope and `--oidc-groups-claim=groups` needs `groups`.
   Ask for `openid` alone and the apiserver rejects the token with

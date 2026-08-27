@@ -56,11 +56,8 @@ platform-down: ## Remove the agent platform (leaves Dex and the cluster alone)
 	@helm -n agent-platform uninstall mcp-kubernetes 2>/dev/null || true
 	@kubectl delete namespace agent-platform --ignore-not-found
 
-restart-apiserver: ## Bounce the apiserver so it re-runs OIDC discovery
-	@./scripts/restart-apiserver.sh
-
 reload: ## Re-apply the Dex config and restart Dex (after editing manifests/dex.yaml)
 	@./scripts/apply-dex.sh
 
-.PHONY: help up down test login browser logs config reload restart-apiserver \
+.PHONY: help up down test login browser logs config reload \
         platform platform-forward platform-test platform-logs platform-config platform-down backstage backstage-test backstage-logs

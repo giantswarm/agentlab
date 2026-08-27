@@ -40,8 +40,10 @@ for i in $(seq 1 60); do
   sleep 2
 done
 
-./scripts/restart-apiserver.sh
-
+# No apiserver bounce needed: since (at least) Kubernetes 1.35 the OIDC
+# authenticator retries discovery every 10s forever (oidc.go "initializing
+# plugin" errors until Dex answers), so the loop below just waits out the
+# next retry tick.
 echo "==> Verifying the end-to-end OIDC chain"
 for i in $(seq 1 30); do
   TOK=$(curl -sS --cacert certs/ca.crt "https://localhost:32000/dex/token" \

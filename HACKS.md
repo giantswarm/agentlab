@@ -40,7 +40,7 @@ Same ordering smell as H2: on first boot the Dex pod waited on a secret that
 was applied a step later.
 **Fix:** namespace + dex-tls secret are applied before the Deployment.
 
-### H5. `restart-apiserver.sh`: blind `sleep 5` between manifest removal and restore — FIXED
+### H5. `restart-apiserver.sh`: blind `sleep 5` between manifest removal and restore — FIXED, then superseded by H6
 The static-pod bounce moved the manifest away, slept 5 seconds, and moved it
 back. If the kubelet had not yet noticed the removal, the restore was a no-op
 and the apiserver never restarted — a silent false success.
@@ -49,13 +49,18 @@ is actually gone before restoring the manifest, fail loudly on timeout, and
 restore the manifest via an EXIT trap on every path so the cluster is never
 left without an apiserver.
 
-### H6. Is the apiserver bounce needed at all on Kubernetes 1.35? — TO VERIFY during boot
-The whole reason for `restart-apiserver.sh` is the claim that the OIDC
-authenticator gives up discovery after ~40 s and never retries. To be verified
-empirically on the next cold boot: create the cluster, wait for Dex, do NOT
-bounce the apiserver, and watch whether tokens start being accepted. If the
-1.35 authenticator recovers on its own, the script gets deleted; if not, the
-(hardened, see H5) bounce stays and this entry records the evidence.
+### H6. Is the apiserver bounce needed at all on Kubernetes 1.35? — FIXED (script deleted)
+The whole reason for `restart-apiserver.sh` was the claim that the OIDC
+authenticator gives up discovery after ~40 s and never retries. Verified
+false on a cold boot (kind v0.31, Kubernetes 1.35, 2026-08-27): the apiserver
+logs `oidc.go:433 … initializing plugin: … connection refused` every 10
+seconds indefinitely, and the first admin token was accepted immediately once
+Dex answered — zero bounces. The 40s/4-retries behavior belonged to older
+Kubernetes.
+**Fix:** `restart-apiserver.sh` deleted, the call removed from up.sh, the
+`restart-apiserver` Make target removed, README gotcha rewritten. up.sh's
+existing 60 s verification loop comfortably covers the ≤10 s window until the
+authenticator's next retry tick.
 
 ### H7. `platform-up.sh`: MCPServer "Connected" wait loop cannot fail — FIXED
 The `for … seq 1 40` loop printed nothing and fell through silently when the
