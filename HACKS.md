@@ -10,11 +10,11 @@ and what happened to it. One commit per resolved item. Statuses:
 
 ## Script hacks (fixable here)
 
-### H1. `backstage.sh`: image-presence check ignores the tag — PENDING
+### H1. `backstage.sh`: image-presence check ignores the tag — FIXED
 `docker exec … crictl images | grep -q giantswarm/backstage` matches *any*
 backstage image. Bumping `IMAGE` to a new tag would silently keep running the
 old one already loaded into the node.
-**Fix:** match the exact `repo:tag` of `$IMAGE` in the crictl output.
+**Fix:** exact `repo:tag` match against `crictl images -o json` repoTags.
 
 ### H2. `backstage.sh`: unconditional `rollout restart` + secret applied after the Deployment — PENDING
 The `dex-ca` secret was created *after* `kubectl apply -f manifests/backstage.yaml`,

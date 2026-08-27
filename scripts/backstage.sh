@@ -11,7 +11,10 @@ if ! kind get clusters 2>/dev/null | grep -qx dexlab; then
   echo "the dexlab cluster is not running -- run 'make up' first"; exit 1
 fi
 
-if ! docker exec dexlab-control-plane crictl images 2>/dev/null | grep -q giantswarm/backstage; then
+# Exact repo:tag match — a substring grep would accept any already-loaded tag
+# and silently keep running an old image after an IMAGE bump.
+if ! docker exec dexlab-control-plane crictl images -o json 2>/dev/null \
+     | jq -e --arg ref "$IMAGE" '.images[].repoTags[]? | select(. == $ref)' >/dev/null; then
   echo "==> Loading $IMAGE into the kind node (2.4GB, takes a few minutes)"
   # gsoci serves this anonymously -- no registry credentials needed. The image
   # is linux/amd64 only, so an arm64 Mac must ask for that platform explicitly
