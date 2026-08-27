@@ -32,7 +32,7 @@ The `sed "s/REPLACED_BY_UP_SH/$SUM/" manifests/dex.yaml | kubectl apply` logic
 lived in two places (up.sh and the `reload` target) and would drift.
 **Fix:** extracted `scripts/apply-dex.sh`; both callers use it.
 
-### H4. `up.sh`: dex-tls secret created after the Dex Deployment — PENDING
+### H4. `up.sh`: dex-tls secret created after the Dex Deployment — FIXED
 Same ordering smell as H2: on first boot the Dex pod waited on a secret that
 was applied a step later.
 **Fix:** namespace + dex-tls secret are applied before the Deployment.

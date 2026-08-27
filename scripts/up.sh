@@ -16,15 +16,18 @@ fi
 kubectl config use-context "kind-$CLUSTER" >/dev/null
 
 echo "==> Deploying Dex"
-# Stamp the config checksum into the pod template before applying, so a config
-# change rolls the pod and we never create a throwaway ReplicaSet.
-SUM=$(shasum -a 256 manifests/dex.yaml | cut -d" " -f1)
-sed "s/REPLACED_BY_UP_SH/$SUM/" manifests/dex.yaml | kubectl apply -f -
-
+# Namespace and TLS secret land before the Deployment so the pod never waits
+# on a missing volume on first boot.
+kubectl create namespace dex --dry-run=client -o yaml | kubectl apply -f -
 kubectl -n dex create secret generic dex-tls \
   --from-file=tls.crt=certs/tls.crt \
   --from-file=tls.key=certs/tls.key \
   --dry-run=client -o yaml | kubectl apply -f -
+
+# Stamp the config checksum into the pod template before applying, so a config
+# change rolls the pod and we never create a throwaway ReplicaSet.
+SUM=$(shasum -a 256 manifests/dex.yaml | cut -d" " -f1)
+sed "s/REPLACED_BY_UP_SH/$SUM/" manifests/dex.yaml | kubectl apply -f -
 
 echo "==> Applying RBAC bound to OIDC groups"
 kubectl apply -f manifests/rbac.yaml
