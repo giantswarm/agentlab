@@ -47,12 +47,14 @@ if ! git -C "$APS_DIR" cat-file -e "$APS_REF^{commit}" 2>/dev/null; then
 fi
 git -C "$APS_DIR" -c advice.detachedHead=false checkout -q "$APS_REF"
 
-# Subchart .tgz pulls from gsoci/ghcr (anonymous). Skipped when charts/ is
-# already in sync with the checked-out Chart.lock.
-if [[ ! -d "$CHART_DIR/charts" || "$CHART_DIR/Chart.lock" -nt "$CHART_DIR/charts" ]]; then
+# Subchart .tgz pulls from gsoci/ghcr (anonymous). Skipped when charts/ was
+# last built from exactly this Chart.lock — compared by content digest, not
+# mtime: mtimes change on checkout and prove nothing about the last build.
+LOCK_DIGEST=$(shasum -a 256 "$CHART_DIR/Chart.lock" | cut -d" " -f1)
+if [[ "$(cat "$CHART_DIR/charts/.lock-digest" 2>/dev/null)" != "$LOCK_DIGEST" ]]; then
   echo "==> Building chart dependencies"
   helm dependency build "$CHART_DIR" >/dev/null
-  touch "$CHART_DIR/charts"
+  echo "$LOCK_DIGEST" > "$CHART_DIR/charts/.lock-digest"
 fi
 
 echo "==> Creating namespace and secrets"

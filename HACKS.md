@@ -68,7 +68,7 @@ Response headers/bodies went to `/tmp/.mcp-h` / `/tmp/.mcp-b` — collision-pron
 between concurrent runs and left behind afterwards.
 **Fix:** `mktemp` + `trap … EXIT` cleanup.
 
-### H9. `platform-up.sh`: mtime-based chart-dependency freshness check — PENDING
+### H9. `platform-up.sh`: mtime-based chart-dependency freshness check — FIXED
 `[[ Chart.lock -nt charts ]]` plus a `touch charts` stamp. mtimes lie (git
 checkout order, copies, clock skew) and the failure mode is a stale charts/
 dir silently installed.
