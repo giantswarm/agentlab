@@ -148,3 +148,19 @@ is still open (its head is exactly the pinned `APS_REF`).
   vendored and gitignored; out of scope here.
 - **`login-browser.py` fixed callback port 5555** — must be pre-registered in
   Dex's `redirectURIs`; a random port would break the static client. By design.
+
+## Full-stack verification (2026-08-27)
+
+With every fix above in place, one full cycle on a cold cluster:
+
+| Step | Result |
+|---|---|
+| `make up` (fresh kind cluster, **no apiserver bounce**) | issuer up, apiserver accepts Dex tokens |
+| `make test` | 10/10 RBAC assertions pass for admin/dev/viewer |
+| `make platform` | deps rebuilt via digest gate, MCPServer `Connected`, muster live on :8090 |
+| `make platform-test` | Dex → muster → mcp-kubernetes → apiserver chain passes |
+| `make backstage` | image loaded once (exact-tag check), pod up |
+| `make backstage-test` | all three users sign in, reach muster, see workflows/tools |
+| `make backstage` re-run | no image reload, same pod, same revision (checksum no-op) |
+| `make reload` | no-op apply, Dex stays at revision 1 |
+| `make down` | cluster deleted, no leftovers |
