@@ -94,12 +94,20 @@ helm upgrade --install agent-platform "$CHART_DIR" -n "$NS" \
   --wait --timeout 10m >/dev/null
 
 echo "==> Waiting for muster to connect to the Kubernetes MCP"
+STATE=""
 for _ in $(seq 1 40); do
-  if [[ "$(kubectl -n "$NS" get mcpserver dexlab-mcp-kubernetes -o jsonpath='{.status.state}' 2>/dev/null)" == "Connected" ]]; then
-    echo "    MCPServer dexlab-mcp-kubernetes: Connected"; break
+  STATE=$(kubectl -n "$NS" get mcpserver dexlab-mcp-kubernetes -o jsonpath='{.status.state}' 2>/dev/null || true)
+  if [[ "$STATE" == "Connected" ]]; then
+    echo "    MCPServer dexlab-mcp-kubernetes: Connected"
+    break
   fi
   sleep 3
 done
+if [[ "$STATE" != "Connected" ]]; then
+  echo "ERROR: MCPServer dexlab-mcp-kubernetes never reached Connected (last state: '${STATE:-<none>}')." >&2
+  echo "       Check 'make platform-logs' and 'kubectl -n $NS describe mcpserver dexlab-mcp-kubernetes'." >&2
+  exit 1
+fi
 
 # The Workflow CRD ships with muster, so this has to land after the install.
 # A muster with no workflows leaves the Backstage muster plugin's main tab

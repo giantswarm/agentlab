@@ -57,7 +57,7 @@ bounce the apiserver, and watch whether tokens start being accepted. If the
 1.35 authenticator recovers on its own, the script gets deleted; if not, the
 (hardened, see H5) bounce stays and this entry records the evidence.
 
-### H7. `platform-up.sh`: MCPServer "Connected" wait loop cannot fail — PENDING
+### H7. `platform-up.sh`: MCPServer "Connected" wait loop cannot fail — FIXED
 The `for … seq 1 40` loop printed nothing and fell through silently when the
 MCPServer never reached `Connected`; the script then declared the platform up.
 **Fix:** the loop now reports the last observed state and exits non-zero on
