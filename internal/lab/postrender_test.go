@@ -1,0 +1,114 @@
+package lab
+
+import (
+	"bytes"
+	"strings"
+	"testing"
+
+	"gopkg.in/yaml.v3"
+)
+
+const postRenderInput = `---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: muster
+spec:
+  parentRefs: []
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: muster
+  namespace: agent-platform
+spec:
+  replicas: 1
+  template:
+    metadata:
+      labels: {app: muster}
+    spec:
+      containers:
+        - name: muster
+          image: muster:1.0
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: muster-config
+data:
+  config.yaml: |
+    aggregator:
+      port: 8090
+      oauth:
+        server:
+          enabled: true
+    other:
+      keep: value
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: muster
+spec:
+  ports: [{port: 8090}]
+`
+
+func TestPostRender(t *testing.T) {
+	var out bytes.Buffer
+	if err := PostRender(strings.NewReader(postRenderInput), &out); err != nil {
+		t.Fatalf("post-render: %v", err)
+	}
+	rendered := out.String()
+
+	if strings.Contains(rendered, "HTTPRoute") {
+		t.Errorf("muster HTTPRoute not stripped")
+	}
+	for _, want := range []string{
+		"hostNetwork: true",
+		"dnsPolicy: ClusterFirstWithHostNet",
+		"maxSurge: 0",
+		"maxUnavailable: 1",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("deployment patch missing %q", want)
+		}
+	}
+	if !strings.Contains(rendered, "kind: Service") {
+		t.Errorf("unrelated document dropped")
+	}
+
+	// The ConfigMap's nested config must gain exactly the DCR key and keep
+	// everything else.
+	var docs []map[string]any
+	dec := yaml.NewDecoder(strings.NewReader(rendered))
+	for {
+		var doc map[string]any
+		if err := dec.Decode(&doc); err != nil {
+			break
+		}
+		docs = append(docs, doc)
+	}
+	if len(docs) != 3 {
+		t.Fatalf("got %d documents, want 3", len(docs))
+	}
+	for _, doc := range docs {
+		if doc["kind"] != "ConfigMap" {
+			continue
+		}
+		inner := doc["data"].(map[string]any)["config.yaml"].(string)
+		var cfg map[string]any
+		if err := yaml.Unmarshal([]byte(inner), &cfg); err != nil {
+			t.Fatalf("inner config unparsable: %v", err)
+		}
+		server := cfg["aggregator"].(map[string]any)["oauth"].(map[string]any)["server"].(map[string]any)
+		if server["allowPublicClientRegistration"] != true {
+			t.Errorf("allowPublicClientRegistration not set: %v", server)
+		}
+		if server["enabled"] != true {
+			t.Errorf("existing server keys lost: %v", server)
+		}
+		if cfg["other"].(map[string]any)["keep"] != "value" {
+			t.Errorf("unrelated config lost: %v", cfg["other"])
+		}
+	}
+}

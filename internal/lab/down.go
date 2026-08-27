@@ -1,0 +1,28 @@
+package lab
+
+import (
+	"fmt"
+	"os"
+
+	"dexlab/internal/config"
+)
+
+// Down destroys the kind cluster. Certs are kept: the CA is only worth
+// regenerating deliberately (dexlab certs --force), and keeping it means an
+// immediate `dexlab up` reuses the same trust chain.
+func Down(cfg *config.Config) error {
+	if err := run("kind", "delete", "cluster", "--name", cfg.ClusterName); err != nil {
+		return err
+	}
+	os.Remove(".token")
+	fmt.Println("Lab destroyed. certs/ kept (dexlab certs --force to regenerate).")
+	return nil
+}
+
+// PlatformDown removes the agent platform releases and namespace, leaving Dex
+// and the cluster alone.
+func PlatformDown(cfg *config.Config) error {
+	_ = runQuiet("helm", "-n", platformNamespace, "uninstall", "agent-platform")
+	_ = runQuiet("helm", "-n", platformNamespace, "uninstall", "mcp-kubernetes")
+	return run("kubectl", "delete", "namespace", platformNamespace, "--ignore-not-found")
+}

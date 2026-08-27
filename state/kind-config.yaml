@@ -1,0 +1,61 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: dexlab
+nodes:
+  - role: control-plane
+    # Every mapping binds 127.0.0.1 explicitly. kind defaults listenAddress to
+    # 0.0.0.0, which would publish Dex, Backstage and the MCP gateway to the
+    # whole local network — pointless here, since every consumer (browser,
+    # kubectl, Claude Code) runs on this machine and every redirect URI in the
+    # lab is spelled `localhost`.
+    #
+    # These mappings exist ONLY for the host. Nothing inside the cluster uses
+    # them: the apiserver, Backstage and muster all reach Dex through the node's
+    # own localhost:32000, which hits the NodePort directly.
+    #
+    # They are fixed when the node container is created, so changing one means
+    # `dexlab down && dexlab up` — you cannot map a new port on a running
+    # cluster. All three are always mapped, so the platform and Backstage can
+    # be enabled later without recreating the cluster.
+    extraPortMappings:
+      # Dex's NodePort. The lynchpin: the browser on the host and the apiserver
+      # inside the node both resolve https://localhost:32000/dex to Dex, so the
+      # issuer URL is identical on both sides.
+      - containerPort: 32000
+        hostPort: 32000
+        listenAddress: "127.0.0.1"
+        protocol: TCP
+      # Backstage, hostNetwork so it reaches the issuer the same way.
+      - containerPort: 7007
+        hostPort: 7007
+        listenAddress: "127.0.0.1"
+        protocol: TCP
+      # muster (agent platform), hostNetwork for the same reason. The node-side
+      # port is the muster chart's default listen port; the host side is what
+      # lets Claude Code dial http://localhost:8090/mcp directly, no port-forward.
+      - containerPort: 8090
+        hostPort: 8090
+        listenAddress: "127.0.0.1"
+        protocol: TCP
+    # kubeadm already bind-mounts /etc/kubernetes/pki into the apiserver static
+    # pod, so dropping the Dex CA in a subdirectory makes it visible there.
+    extraMounts:
+      - hostPath: /Users/pau/workspace/dextest/.claude/worktrees/golang-binary-config-forms-ff0122/certs
+        containerPath: /etc/kubernetes/pki/dex
+        readOnly: true
+kubeadmConfigPatches:
+  # kind v0.31 still emits kubeadm.k8s.io/v1beta3, where extraArgs is a MAP.
+  # (v1beta4 changed it to a list of name/value pairs — if you bump kind and the
+  # flags silently stop applying, this is why.)
+  - |
+    apiVersion: kubeadm.k8s.io/v1beta3
+    kind: ClusterConfiguration
+    apiServer:
+      extraArgs:
+        oidc-issuer-url: https://localhost:32000/dex
+        oidc-client-id: kubernetes
+        oidc-ca-file: /etc/kubernetes/pki/dex/ca.crt
+        oidc-username-claim: email
+        oidc-username-prefix: "oidc:"
+        oidc-groups-claim: groups
+        oidc-groups-prefix: "oidc:"

@@ -1,0 +1,120 @@
+package lab
+
+import (
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"dexlab/internal/config"
+)
+
+// BackstageUp deploys Giant Swarm's Backstage into the lab and points it at
+// Dex as its only identity provider. This is the GS build (not upstream, not
+// RHDH) because it carries the first-party `muster` plugin that drives the
+// agent platform.
+func BackstageUp(cfg *config.Config) error {
+	if !kindClusterExists(cfg.ClusterName) {
+		return fmt.Errorf("the %s cluster is not running -- run `dexlab up` first", cfg.ClusterName)
+	}
+
+	image := cfg.Backstage.Image
+	node := cfg.ClusterName + "-control-plane"
+
+	// Exact repo:tag match — a substring check would accept any already-loaded
+	// tag and silently keep running an old image after an image bump.
+	if !nodeHasImage(node, image) {
+		step("Loading %s into the kind node (2.4GB, takes a few minutes)", image)
+		// gsoci serves this anonymously -- no registry credentials needed. The
+		// image is linux/amd64 only, so an arm64 Mac must ask for that platform
+		// explicitly and the kind node runs it through its Rosetta binfmt
+		// handler.
+		if _, err := outputQuiet("docker", "image", "inspect", image); err != nil {
+			if err := run("docker", "pull", "--platform", "linux/amd64", image); err != nil {
+				return err
+			}
+		}
+		if err := run("kind", "load", "docker-image", image, "--name", cfg.ClusterName); err != nil {
+			return err
+		}
+	}
+
+	step("Deploying Backstage")
+	// Namespace and CA secret land before the Deployment so the pod never
+	// waits on a missing volume. The checksum stamped into the pod template
+	// covers the lab CA and the whole rendered manifest (ConfigMaps included),
+	// so a config or cert change rolls the pod while an unchanged re-run stays
+	// a no-op — no blanket restart.
+	if err := ensureNamespace("backstage"); err != nil {
+		return err
+	}
+	if err := ensureSecretFromFiles("backstage", "dex-ca", map[string]string{
+		"ca.crt": "certs/ca.crt",
+	}); err != nil {
+		return err
+	}
+	stamped, _, err := renderStamped(cfg, "backstage.yaml.tmpl", "backstage.yaml", "certs/ca.crt")
+	if err != nil {
+		return err
+	}
+	if err := pipeInto(stamped, "kubectl", "apply", "-f", "-"); err != nil {
+		return err
+	}
+
+	step("Waiting for Backstage to start (first boot takes a minute under emulation)")
+	if err := run("kubectl", "-n", "backstage", "rollout", "status", "deployment/backstage", "--timeout=300s"); err != nil {
+		return err
+	}
+
+	step("Waiting for %s", cfg.BackstageBaseURL())
+	client, err := labHTTPClient(5 * time.Second)
+	if err != nil {
+		return err
+	}
+	up := false
+	for i := 0; i < 120; i++ {
+		if httpUp(client, cfg.BackstageBaseURL()) {
+			up = true
+			break
+		}
+		time.Sleep(2 * time.Second)
+	}
+	if !up {
+		return fmt.Errorf("backstage never answered on %s", cfg.BackstageBaseURL())
+	}
+
+	fmt.Printf(`
+Backstage is up: %s
+
+  Click "Sign In" -> you land on the Dex login page.
+  Log in with any user from %s.
+
+  The muster plugin lives under "Agent Platform" -> "MCP Servers".
+
+  Logs:  dexlab logs backstage
+`, cfg.BackstageBaseURL(), config.File)
+	return nil
+}
+
+// nodeHasImage checks the kind node's containerd for an exact repo:tag match.
+func nodeHasImage(node, image string) bool {
+	out, err := outputQuiet("docker", "exec", node, "crictl", "images", "-o", "json")
+	if err != nil {
+		return false
+	}
+	var imgs struct {
+		Images []struct {
+			RepoTags []string `json:"repoTags"`
+		} `json:"images"`
+	}
+	if err := json.Unmarshal([]byte(out), &imgs); err != nil {
+		return false
+	}
+	for _, img := range imgs.Images {
+		for _, tag := range img.RepoTags {
+			if tag == image {
+				return true
+			}
+		}
+	}
+	return false
+}
