@@ -13,7 +13,8 @@ MUSTER=${MUSTER:-http://localhost:8090}
 USER_EMAIL=${1:-admin@lab.local}
 
 if ! curl -sf -o /dev/null "$MUSTER/.well-known/oauth-authorization-server"; then
-  echo "muster is not reachable at $MUSTER — run 'make platform-forward' first" >&2
+  echo "muster is not reachable at $MUSTER — run 'make platform' first" >&2
+  echo "(or 'make platform-forward' on a cluster without the :8090 kind mapping)" >&2
   exit 1
 fi
 

@@ -42,7 +42,7 @@ platform-forward: ## Fallback only: port-forward muster if kind has no :8090 map
 	@echo "muster -> http://localhost:8090  (ctrl-c to stop)"
 	@kubectl -n agent-platform port-forward svc/muster 8090:8090
 
-platform-test: ## Headless Dex -> muster -> Kubernetes MCP proof (needs platform-forward)
+platform-test: ## Headless Dex -> muster -> Kubernetes MCP proof
 	@./scripts/platform-test.sh $(or $(USER_EMAIL),admin@lab.local)
 
 platform-logs: ## Tail the muster logs
