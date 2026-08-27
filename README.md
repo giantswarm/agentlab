@@ -6,31 +6,47 @@ this cluster. No GitHub, no GitLab, no Google, no Keycloak.
 Dex is the OIDC provider. The Kubernetes apiserver trusts it. RBAC is driven by
 the `groups` claim that Dex puts in the id_token.
 
+The whole lab is **one Go binary**. It asks for every configuration option
+through an interactive form (`dexlab configure`), persists the answers to
+`dexlab.yaml`, and renders every manifest from embedded templates — there is no
+YAML to hand-edit and no shell to source.
+
 ## Requirements
 
-`docker`, `kind` (>= 0.31), `kubectl`, `openssl`, `curl`, `jq`, `python3`.
+`go` (>= 1.25), `docker`, `kind` (>= 0.31), `kubectl`, `helm`, `git`.
+
+(The old script stack also needed openssl, curl, jq and python3; the binary
+does all of that itself.)
 
 ## Quick start
 
 ```bash
-make up      # ~1 min: certs, kind cluster, Dex
-make test    # asserts RBAC for all three users
+go build -o dexlab .
+./dexlab configure   # interactive form: cluster, users, components
+./dexlab up          # ~1 min: certs, kind cluster, Dex, RBAC, verification
+./dexlab test        # asserts RBAC for every configured user
 ```
+
+`dexlab configure --defaults` skips the form and writes the canonical lab
+(three users, Dex on 32000, optional components off); add `--platform`
+and/or `--backstage` to enable components non-interactively. On a plain
+terminal or screen reader, `dexlab configure --accessible` runs the form as
+one prompt per question.
 
 Then log in as a lab user:
 
 ```bash
-make login USER_EMAIL=dev@lab.local     # headless, instant
-make browser                            # real Dex login page in the browser
+./dexlab login dev@lab.local     # headless, instant
+./dexlab browser                 # real Dex login page in the browser
 export KUBECONFIG=$PWD/kubeconfig.oidc
 kubectl auth whoami
 ```
 
-Tear down with `make down`.
+Tear down with `./dexlab down`.
 
 ## The users
 
-Password for all three is `password`.
+The default configuration ships three users (password: `password`):
 
 | User | Groups in the token | Effective access |
 |---|---|---|
@@ -38,12 +54,13 @@ Password for all three is `password`.
 | `dev@lab.local`    | `developers` | `edit` inside `ns/demo` only |
 | `viewer@lab.local` | `viewers` | `view` cluster-wide |
 
-They are defined in `manifests/dex.yaml` under `staticPasswords`. To add one,
-edit that file and run `make reload`. Generate the bcrypt hash with:
-
-```bash
-htpasswd -bnBC 10 "" 'your-password' | tr -d ':\n'
-```
+Users are fully configurable: `dexlab configure` lets you keep, edit, remove
+and add users, with per-user passwords and group membership. The **groups are
+a fixed vocabulary** — RBAC binds exactly `platform-admins` → cluster-admin,
+`developers` → edit-in-demo, `viewers` → view — and the form only offers those
+three. Passwords are bcrypt-hashed automatically; the hash is cached in
+`dexlab.yaml` so renders stay deterministic (no spurious Dex pod rolls). After
+editing users, run `dexlab reload`.
 
 ## How it works
 
@@ -60,19 +77,25 @@ The single trick that makes this work is the **shared issuer URL**. The
 apiserver has to validate tokens against the same URL the browser was
 redirected to. Because the apiserver static pod runs with `hostNetwork`, its
 `localhost:32000` lands on the node's NodePort — and kind maps that same port
-onto the Mac. One URL, valid from both sides.
+onto the Mac. One URL, valid from both sides. (32000 is the default; the Dex
+port is a form question, constrained to the NodePort range 30000-32767.)
 
 Everything else follows from that:
 
-- `scripts/gen-certs.sh` mints a CA and a server cert whose SAN carries both
+- `dexlab up` mints a CA and a server cert (crypto/x509) whose SAN carries both
   `IP:127.0.0.1` and `DNS:localhost`. The issuer uses the **name**, not the IP —
   see [Why `localhost` and not `127.0.0.1`](#why-localhost-and-not-127001).
-- `kind-config.yaml` bind-mounts `certs/` into `/etc/kubernetes/pki/dex` on the
-  node. kubeadm already mounts `/etc/kubernetes/pki` into the apiserver pod, so
-  a subdirectory of it is the one place the CA is visible without extra plumbing.
+- The rendered kind config bind-mounts `certs/` into `/etc/kubernetes/pki/dex`
+  on the node. kubeadm already mounts `/etc/kubernetes/pki` into the apiserver
+  pod, so a subdirectory of it is the one place the CA is visible without extra
+  plumbing.
 - The apiserver gets `--oidc-issuer-url`, `--oidc-client-id`, `--oidc-ca-file`,
   `--oidc-username-claim=email`, `--oidc-groups-claim=groups` and `oidc:` prefixes.
-- `manifests/rbac.yaml` binds `Group: oidc:platform-admins` (etc.) to ClusterRoles.
+- RBAC binds `Group: oidc:platform-admins` (etc.) to ClusterRoles.
+
+Every manifest the binary applies is also written to `state/` (gitignored), so
+`kubectl diff -f state/dex.yaml` and plain reading remain possible. The
+templates live in `internal/lab/templates/`.
 
 ## Why Dex v2.45.1 specifically
 
@@ -93,13 +116,16 @@ Watch out:
   hardcodes `enablePasswordDB: false` with no `staticPasswords` support at all.
   This lab therefore uses plain manifests, not `dex-app`.
 
+The Dex image is a form question (`dexImage` in `dexlab.yaml`) for when the
+next version lands.
+
 ## Gotchas that cost time
 
 - **A client certificate beats a bearer token.** `kubectl --token=...` against
   the kind kubeconfig silently keeps authenticating as `kubernetes-admin`. You
-  need a kubeconfig with no client cert — that is what
-  `scripts/mk-kubeconfig.sh` builds. This will produce convincing false
-  positives in a test suite if you miss it.
+  need a kubeconfig with no client cert — that is what `dexlab login` builds
+  (`kubeconfig.oidc`). This will produce convincing false positives in a test
+  suite if you miss it.
 - **kind 0.31 still emits `kubeadm.k8s.io/v1beta3`**, even for Kubernetes 1.35,
   where `extraArgs` is a *map*. v1beta4 changed it to a list of name/value
   pairs. A patch with the wrong apiVersion is ignored **silently** — no error,
@@ -113,7 +139,7 @@ Watch out:
   Kubernetes 1.35 it retries every 10 seconds forever and initializes on the
   first tick after Dex answers (verified empirically; earlier versions of this
   lab bounced the static pod because older apiservers gave up for good).
-  `make up`'s verification loop simply waits out the next retry tick. If
+  `dexlab up`'s verification loop simply waits out the next retry tick. If
   tokens are still rejected minutes after Dex is up, read the apiserver log
   for those `oidc.go` lines rather than restarting things.
 - **Scopes are not optional.** `--oidc-username-claim=email` needs the client to
@@ -129,7 +155,7 @@ Watch out:
 
 ## Wiring another app to this Dex
 
-There is a `backstage` static client in `manifests/dex.yaml`:
+The rendered Dex config carries a `backstage` static client:
 
 ```
 issuer:        https://localhost:32000/dex
@@ -141,8 +167,9 @@ redirect URI:  http://localhost:7007/api/auth/oidc-lab/handler/frame
 The redirect path carries the **provider name** from the app's config, not the
 literal word `oidc` — Backstage serves each provider at
 `/api/auth/<provider>/handler/frame`. This lab names the provider `oidc-lab`,
-so that is what the client must allow. Add more clients under `staticClients`
-and `make reload`.
+so that is what the client must allow. More clients means editing the Dex
+template (`internal/lab/templates/dex.yaml.tmpl`), rebuilding and
+`dexlab reload`.
 
 ### `trustedPeers` points the other way round
 
@@ -167,26 +194,29 @@ $ curl -u backstage:... -d 'scope=...audience:server:client_id:kubernetes' .../t
  "error_description":"Client can't request scope(s) [\"audience:server:client_id:kubernetes\"]"}
 ```
 
-The lab uses one token for three audiences. `gs.auth.extraScopes` in
-`manifests/backstage.yaml` asks for both cross-client scopes, so a single Dex
-id_token comes back with `aud: ["kubernetes", "muster", "backstage"]` and is
-accepted by the apiserver (`--oidc-client-id=kubernetes`), by muster
+The lab uses one token for three audiences. `gs.auth.extraScopes` in the
+Backstage template asks for both cross-client scopes, so a single Dex id_token
+comes back with `aud: ["kubernetes", "muster", "backstage"]` and is accepted by
+the apiserver (`--oidc-client-id=kubernetes`), by muster
 (`trustedAudiences: [muster]`) and by Backstage itself.
 
 ## Backstage
 
-`make backstage` deploys **Giant Swarm's own Backstage** — the build behind
+`dexlab backstage` deploys **Giant Swarm's own Backstage** — the build behind
 [devportal.giantswarm.io](https://devportal.giantswarm.io/) — into the cluster
 with Dex as its **only** identity provider. Not upstream Backstage and not RHDH:
 the GS build is the one that carries the first-party `muster` plugin, which is
 the whole reason to run a portal in this lab at all.
 
 ```bash
-make up
-make platform      # muster must exist first, or the plugin has nothing to talk to
-make backstage     # first run pulls and loads a 2.4GB image
+./dexlab up
+./dexlab platform      # muster must exist first, or the plugin has nothing to talk to
+./dexlab backstage     # first run pulls and loads a 2.4GB image
 open http://localhost:7007
 ```
+
+(Or enable both components in `dexlab configure` and a single `dexlab up`
+deploys the whole stack.)
 
 The image is published **anonymously** to `gsoci.azurecr.io/giantswarm/backstage`
 — no Giant Swarm registry credentials needed. It is `linux/amd64` only, so on an
@@ -200,7 +230,7 @@ The first click on **Sign In** lands on a browser TLS warning: Dex serves a cert
 signed by the lab CA, which the browser does not trust (Backstage itself trusts
 it via `NODE_EXTRA_CA_CERTS`, but that only covers the server-to-server hop).
 Accept it once for `https://localhost:32000` and the login proceeds normally.
-`make backstage-test` sidesteps this entirely by passing `--cacert certs/ca.crt`.
+`dexlab backstage-test` sidesteps this entirely by trusting `certs/ca.crt`.
 
 Three things make it work:
 
@@ -225,8 +255,9 @@ map onto a `User` entity. Giant Swarm's resolver only consults the catalog when
 Dex reports `federated_claims.connector_id` of `giantswarm-ad` or
 `giantswarm-github`. This lab's static-password connector reports `local`, so it
 falls straight through to `email.split('@')[0]` and issues
-`user:default/<localpart>` regardless. The entities in `manifests/backstage.yaml`
-are kept only so the users and groups render as real things in the UI.
+`user:default/<localpart>` regardless. The catalog entities the lab renders
+(from your configured users) exist only so the users and groups show up as real
+things in the UI.
 
 ### The muster plugin
 
@@ -246,17 +277,17 @@ The browser forwards the signed-in user's Dex id_token in a
 muster accepts the token because its `aud` carries `muster` — see
 [`trustedPeers` points the other way round](#trustedpeers-points-the-other-way-round).
 
-`make backstage-test` drives the whole sign-in headlessly for all three users
-and then proves the muster hop with that user's own token:
+`dexlab backstage-test` drives the whole sign-in headlessly for every
+configured user and then proves the muster hop with that user's own token:
 
 ```
 === dev@lab.local ===
-  dex asserted    groups=['developers'] email=dev@lab.local
-  token audience  ['kubernetes', 'muster', 'backstage']
+  dex asserted    groups=[developers] email=dev@lab.local
+  token audience  [kubernetes muster backstage]
   backstage user  user:default/dev
-  ownership refs  ['user:default/dev']
-  muster servers  [('dexlab-mcp-kubernetes', 'Connected')]
-  muster workflows ['lab-cluster-overview']
+  ownership refs  [user:default/dev]
+  muster servers  [(dexlab-mcp-kubernetes, Connected)]
+  muster workflows [lab-cluster-overview]
   muster core tools 28 exposed
 ```
 
@@ -291,14 +322,15 @@ and then proves the muster hop with that user's own token:
   whole extensions list, per the first gotcha; the lab accepts the noise instead.
 - **A muster with no workflows looks like a broken plugin.** The workflow list
   is the plugin's main surface, and a fresh muster has none, so the tab renders
-  empty. `manifests/agent-platform/demo-workflow.yaml` seeds one
-  (`lab-cluster-overview`) that lists namespaces and pods through
-  `mcp-kubernetes`, exercising the whole chain from one click.
+  empty. `dexlab platform` seeds one (`lab-cluster-overview`) that lists
+  namespaces and pods through `mcp-kubernetes`, exercising the whole chain from
+  one click.
 - **`allowMutations` no longer exists.** `app-config.example.yaml` still
   documents `muster.installations[].allowMutations` as a read-only safety gate;
   it was removed and nothing reads it. The real guard is the downstream MCP
   server's RBAC — and `mcp-kubernetes` here uses the chart's `standard` profile,
-  which **can write**. Drop it to `readonly` for a read-only demo.
+  which **can write**. Drop it to `readonly` in the mcp-kubernetes values
+  template for a read-only demo.
 
 ## Giant Swarm agent platform (muster + Kubernetes MCP)
 
@@ -312,20 +344,20 @@ no HelmRelease indirection anywhere in this lab.
 
 The chart has no release yet
 ([PR #11](https://github.com/giantswarm/agent-platform-standalone/pull/11)), so
-`platform-up.sh` vendors it from git at a pinned SHA (`APS_REF`) into
-`vendor/` and installs from the local path. Once released, that step becomes a
-plain `helm install oci://…/agent-platform-standalone`.
+`dexlab platform` vendors it from git at a pinned SHA (`platform.apsRef` in
+`dexlab.yaml`) into `vendor/` and installs from the local path. Once released,
+that step becomes a plain `helm install oci://…/agent-platform-standalone`.
 
 ```bash
-make platform       # vendors the chart + muster + valkey + mcp-kubernetes
-make platform-test  # headless proof of the whole chain
+./dexlab platform       # vendors the chart + muster + valkey + mcp-kubernetes
+./dexlab platform-test  # headless proof of the whole chain
 ```
 
-muster runs with `hostNetwork`, so it binds `:8090` on the node, and
-`kind-config.yaml` publishes that onto the Mac at `127.0.0.1:8090` — no
-port-forward. (`make platform-forward` exists only for a cluster created before
-that mapping was added; kind port mappings are fixed at node-creation time, so
-the real fix is `make down && make up`.)
+muster runs with `hostNetwork`, so it binds `:8090` on the node, and the
+rendered kind config publishes that onto the Mac (host port `platform.musterPort`,
+default 8090) — no port-forward. Port mappings are fixed at node-creation time,
+so changing the port means `dexlab down && dexlab up`; the stopgap on an old
+cluster is `kubectl -n agent-platform port-forward svc/muster 8090:8090`.
 
 Then point Claude Code at it (`.mcp.json` in this repo already does):
 
@@ -345,7 +377,7 @@ Claude Code ──http://localhost:8090/mcp──> muster ──> mcp-kubernetes
 
 muster is the OAuth **server** towards Claude Code (DCR, `/oauth/authorize`,
 `/oauth/token`) and an OAuth **client** of Dex. The `muster` staticClient in
-`manifests/dex.yaml` closes that loop; its `redirectURIs` must equal
+the rendered Dex config closes that loop; its `redirectURIs` must equal
 `<oauth.server.baseUrl>/oauth/callback`.
 
 `mcp-kubernetes` is deliberately unauthenticated on the cluster network
@@ -370,14 +402,14 @@ same one-URL trick, just spelled with a name.
 | What | Why |
 |---|---|
 | `ingress.mode: muster-direct` (+ `components.agentgateway.enabled: false`, the default) | muster serves `/mcp` itself. The `agentgateway-muster` topology needs the agentgateway controller and a `GatewayClass`. |
-| `ingress.parentRefs` set to a placeholder, rendered `HTTPRoute` stripped | The chart hard-fails on empty `parentRefs` in **all** modes — even `muster-direct` assumes a public Gateway. This lab has no Gateway at all (hostNetwork + kind port mapping), so the values carry a placeholder to pass the guard and `muster-post-render.sh` strips the route. Also spares the lab the Gateway API CRDs, its only would-be consumer. |
+| `ingress.parentRefs` set to a placeholder, rendered `HTTPRoute` stripped | The chart hard-fails on empty `parentRefs` in **all** modes — even `muster-direct` assumes a public Gateway. This lab has no Gateway at all (hostNetwork + kind port mapping), so the values carry a placeholder to pass the guard and `dexlab post-render` strips the route. Also spares the lab the Gateway API CRDs, its only would-be consumer. |
 | `agent-platform-mcps.agentgateway.enabled: false` | The umbrella defaults it to **true**; left on it renders `AgentgatewayBackend` CRs whose CRD is not installed and the release fails. |
 | `components.dicebear.enabled: false` | On by default; the avatar service is only reachable through the agentgateway edge this lab does not run. |
 | `networkPolicy.enabled: false`, `kyvernoPolicies.enabled: false` | The umbrella's own policy objects. No Cilium and no Kyverno in kind, so both would render CRs whose API groups the cluster does not serve. |
 | `valkey.valkey.metrics.podMonitor.enabled: false`, `muster…serviceMonitor.enabled: false`, `muster…prometheusRule.enabled: false` | No Prometheus Operator, so `PodMonitor` / `ServiceMonitor` / `PrometheusRule` have no CRD. |
-| `muster.rbac.{mcpServerEditor,workflowEditor}.subjects` → `oidc:platform-admins` | The umbrella binds muster's editor Roles to Giant Swarm's admin groups, which do not exist here. Rebound to the lab's own admin group (`--oidc-groups-prefix=oidc:`, same spelling as `manifests/rbac.yaml`). Lists replace, so the GS groups are dropped. |
-| muster patched to `hostNetwork` + `maxSurge: 0` | Same issuer trick as the apiserver and Backstage. `maxSurge: 0` because two hostNetwork pods cannot both bind `:8090` on a one-node cluster. Applied by `scripts/muster-post-render.sh` (`helm --post-renderer`) — the plain-Helm replacement for the Flux `postRenderers` the meta-package forwarded to helm-controller. |
-| The chart vendored at a pinned git SHA | Component versions are the chart's own tested BOM (`Chart.lock`); the lab no longer pins its own. The only lab-side pin is `APS_REF` — the chart repo commit — so two runs still install the same thing. |
+| `muster.rbac.{mcpServerEditor,workflowEditor}.subjects` → `oidc:platform-admins` | The umbrella binds muster's editor Roles to Giant Swarm's admin groups, which do not exist here. Rebound to the lab's own admin group (`--oidc-groups-prefix=oidc:`, same spelling as the lab RBAC). Lists replace, so the GS groups are dropped. |
+| muster patched to `hostNetwork` + `maxSurge: 0` | Same issuer trick as the apiserver and Backstage. `maxSurge: 0` because two hostNetwork pods cannot both bind `:8090` on a one-node cluster. Applied by `dexlab post-render` (`helm --post-renderer`, the binary invoking itself) — the plain-Helm replacement for the Flux `postRenderers` the meta-package forwarded to helm-controller. |
+| The chart vendored at a pinned git SHA | Component versions are the chart's own tested BOM (`Chart.lock`); the lab no longer pins its own. The only lab-side pin is `platform.apsRef` — the chart repo commit — so two runs still install the same thing. |
 
 ### Platform gotchas
 
@@ -385,8 +417,8 @@ same one-URL trick, just spelled with a name.
   the Helm release name `agent-platform`, but the old one rendered Flux
   HelmReleases and the new one renders the workloads directly — upgrading across
   that boundary races helm-controller uninstalls against the fresh install.
-  `platform-up.sh` refuses if it finds the old HelmReleases; run
-  `make platform-down` first (an old cluster keeps its now-idle `flux-system`,
+  `dexlab platform` refuses if it finds the old HelmReleases; run
+  `dexlab platform-down` first (an old cluster keeps its now-idle `flux-system`,
   which is harmless).
 - **`allowPublicClientRegistration` is a no-op in the muster chart (still at
   5.5.6).** It exists in `values.yaml`, `values.schema.json`, the README table
@@ -396,11 +428,10 @@ same one-URL trick, just spelled with a name.
   Claude Code cannot send a registration token, its loopback port is random (so
   `trustedPublicRegistrationRedirectURIs` cannot match), and `http`/`https` are
   deliberately stripped from `trustedPublicRegistrationSchemes` by mcp-oauth's
-  config validation. `scripts/muster-post-render.sh` works around it by editing
-  the key into the rendered config with `yq` — surgically, so everything else in
-  the ConfigMap stays chart-rendered and muster bumps via the chart need no
-  hand-copying (the old meta-package setup froze the whole ConfigMap and had to
-  pin muster for it).
+  config validation. `dexlab post-render` works around it by editing the key
+  into the rendered config — surgically, so everything else in the ConfigMap
+  stays chart-rendered and muster bumps via the chart need no hand-copying (the
+  old meta-package setup froze the whole ConfigMap and had to pin muster for it).
 - **A `Recreate` strategy cannot be patched onto an existing Deployment.** The API
   server has already defaulted `spec.strategy.rollingUpdate`, and a patch that
   flips the type without also deleting that field fails with
@@ -416,12 +447,13 @@ same one-URL trick, just spelled with a name.
   The instance is the **`MCPServer` CR name**, not the `cluster:` field of the
   `mcpServers` entry.
 - **Tool results are double-wrapped.** `result.content[0].text` is JSON whose
-  `content[0].text` is the actual payload — two `fromjson` hops.
+  `content[0].text` is the actual payload — two decode hops.
 
 ## If you outgrow static passwords
 
-`staticPasswords` means editing YAML and reloading. If a demo needs users
-created live, put a lightweight LDAP behind Dex's `ldap` connector instead:
+`staticPasswords` means editing `dexlab.yaml` and reloading. If a demo needs
+users created live, put a lightweight LDAP behind Dex's `ldap` connector
+instead:
 
 - [lldap](https://github.com/lldap/lldap) — has a web UI, ships an
   [official Dex example config](https://github.com/lldap/lldap/blob/main/example_configs/dex_config.yml).
@@ -433,28 +465,24 @@ Both give real groups on any Dex version. Keycloak is not needed for this.
 ## Layout
 
 ```
-kind-config.yaml           cluster + port mapping + apiserver OIDC flags
-manifests/dex.yaml         Dex config (users, clients), Deployment, NodePort
-manifests/rbac.yaml        ClusterRoleBindings keyed on OIDC groups
-scripts/gen-certs.sh       CA + server cert (IP:127.0.0.1 + DNS:localhost SAN)
-scripts/up.sh down.sh      lifecycle
-scripts/login.sh           headless login (password grant)
-scripts/login-browser.py   authorization-code flow through the browser
-scripts/mk-kubeconfig.sh   token-only kubeconfig
-scripts/test.sh            RBAC assertions for all three users
-
-manifests/backstage.yaml   Giant Swarm Backstage wired to Dex + muster
-scripts/backstage.sh       pulls/loads the GS image and deploys it
-scripts/test-backstage.sh  headless sign-in + muster proof for all three users
-
-manifests/agent-platform/
-  values.yaml                  agent-platform-standalone values for this lab
-  mcp-kubernetes-values.yaml   values for the mcp-kubernetes Helm release
-  demo-workflow.yaml           one Workflow so the muster plugin has something to show
-scripts/platform-up.sh         vendors the chart + secrets + the platform
-scripts/muster-post-render.sh  helm post-renderer: hostNetwork, DCR workaround,
-                               HTTPRoute strip (see its header)
-scripts/platform-test.sh       Dex -> muster -> Kubernetes MCP end-to-end proof
+main.go                        the CLI (cobra): one subcommand per lifecycle step
+internal/config/               dexlab.yaml schema, defaults, validation
+internal/forms/                the interactive configuration forms (huh)
+internal/lab/                  everything operational:
+  certs.go                       CA + server cert (IP:127.0.0.1 + DNS:localhost SAN)
+  up.go down.go                  lifecycle; checksum-stamped Dex apply
+  test.go                        RBAC assertions for every configured user
+  login.go browser.go            password grant / authorization-code flow
+  platform.go platformtest.go    agent platform install + MCP smoke test
+  backstage.go backstagetest.go  Backstage deploy + headless sign-in proof
+  postrender.go                  helm post-renderer (hostNetwork, DCR fix, route strip)
+  templates/                     every manifest, rendered from dexlab.yaml
+dexlab.yaml                    your configuration (gitignored; `dexlab configure`)
+state/                         rendered manifests, for inspection (gitignored)
 vendor/                        agent-platform-standalone checkout (gitignored)
 .mcp.json                      registers muster as an MCP server for Claude Code
 ```
+
+Useful passthroughs: `dexlab logs dex|muster|backstage` tails logs; the
+effective Dex config is `kubectl -n dex get secret dex-config -o jsonpath='{.data.config\.yaml}' | base64 -d`,
+muster's is `kubectl -n agent-platform get cm muster-config -o jsonpath='{.data.config\.yaml}'`.
