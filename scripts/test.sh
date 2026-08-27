@@ -4,7 +4,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-ISSUER="https://127.0.0.1:32000/dex"
+ISSUER="https://localhost:32000/dex"
 PASS=0; FAIL=0
 
 token_for() {

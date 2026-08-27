@@ -14,7 +14,7 @@ import urllib.parse, urllib.request, webbrowser
 sys.stdout.reconfigure(line_buffering=True)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ISSUER = "https://127.0.0.1:32000/dex"
+ISSUER = "https://localhost:32000/dex"
 CLIENT_ID = "kubernetes"
 CLIENT_SECRET = "kubernetes-lab-secret"
 REDIRECT = "http://127.0.0.1:5555/callback"

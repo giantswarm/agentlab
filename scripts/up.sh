@@ -32,10 +32,10 @@ kubectl apply -f manifests/rbac.yaml
 echo "==> Waiting for Dex to become ready"
 kubectl -n dex rollout status deployment/dex --timeout=120s
 
-echo "==> Waiting for the issuer to answer on https://127.0.0.1:32000/dex"
+echo "==> Waiting for the issuer to answer on https://localhost:32000/dex"
 for i in $(seq 1 60); do
   if curl -sf --cacert certs/ca.crt \
-       https://127.0.0.1:32000/dex/.well-known/openid-configuration >/dev/null; then
+       https://localhost:32000/dex/.well-known/openid-configuration >/dev/null; then
     echo "    issuer is up"
     break
   fi
@@ -47,7 +47,7 @@ done
 
 echo "==> Verifying the end-to-end OIDC chain"
 for i in $(seq 1 30); do
-  TOK=$(curl -sS --cacert certs/ca.crt "https://127.0.0.1:32000/dex/token" \
+  TOK=$(curl -sS --cacert certs/ca.crt "https://localhost:32000/dex/token" \
         -u kubernetes:kubernetes-lab-secret \
         -d grant_type=password -d username=admin@lab.local \
         -d password=password -d "scope=openid email groups" | jq -r .id_token)

@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 
 USER_EMAIL="${1:-admin@lab.local}"
 PASSWORD="${2:-password}"
-ISSUER="https://127.0.0.1:32000/dex"
+ISSUER="https://localhost:32000/dex"
 
 RESP=$(curl -sS --cacert certs/ca.crt "$ISSUER/token" \
   -u "kubernetes:kubernetes-lab-secret" \

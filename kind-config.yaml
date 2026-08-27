@@ -3,18 +3,37 @@ apiVersion: kind.x-k8s.io/v1alpha4
 name: dexlab
 nodes:
   - role: control-plane
-    # Expose Dex's NodePort on the host so that BOTH the browser/CLI on the Mac
-    # and the kube-apiserver inside the node can reach the SAME issuer URL
-    # (https://127.0.0.1:32000/dex). The apiserver static pod runs with
-    # hostNetwork, so its 127.0.0.1:32000 hits this NodePort too.
+    # Every mapping binds 127.0.0.1 explicitly. kind defaults listenAddress to
+    # 0.0.0.0, which would publish Dex, Backstage and the MCP gateway to the
+    # whole local network — pointless here, since every consumer (browser,
+    # kubectl, Claude Code) runs on this Mac and every redirect URI in the lab
+    # is spelled `localhost`.
+    #
+    # These mappings exist ONLY for the Mac. Nothing inside the cluster uses
+    # them: the apiserver, Backstage and muster all reach Dex through the node's
+    # own localhost:32000, which hits the NodePort directly.
+    #
+    # They are fixed when the node container is created, so adding one means
+    # `make down && make up` — you cannot map a new port on a running cluster.
     extraPortMappings:
+      # Dex's NodePort. The lynchpin: the browser on the Mac and the apiserver
+      # inside the node both resolve https://localhost:32000/dex to Dex, so the
+      # issuer URL is identical on both sides.
       - containerPort: 32000
         hostPort: 32000
+        listenAddress: "127.0.0.1"
         protocol: TCP
-      # Backstage runs with hostNetwork (so it can reach the issuer on
-      # 127.0.0.1:32000 like the apiserver does), binding 7007 on the node.
+      # Backstage, hostNetwork so it reaches the issuer the same way -> :7007.
       - containerPort: 7007
         hostPort: 7007
+        listenAddress: "127.0.0.1"
+        protocol: TCP
+      # muster (agent platform), hostNetwork for the same reason -> :8090.
+      # This is what lets Claude Code dial http://localhost:8090/mcp directly,
+      # with no port-forward.
+      - containerPort: 8090
+        hostPort: 8090
+        listenAddress: "127.0.0.1"
         protocol: TCP
     # kubeadm already bind-mounts /etc/kubernetes/pki into the apiserver static
     # pod, so dropping the Dex CA in a subdirectory makes it visible there.
@@ -31,7 +50,7 @@ kubeadmConfigPatches:
     kind: ClusterConfiguration
     apiServer:
       extraArgs:
-        oidc-issuer-url: https://127.0.0.1:32000/dex
+        oidc-issuer-url: https://localhost:32000/dex
         oidc-client-id: kubernetes
         oidc-ca-file: /etc/kubernetes/pki/dex/ca.crt
         oidc-username-claim: email

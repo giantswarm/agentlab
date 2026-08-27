@@ -10,7 +10,7 @@ metadata:
   namespace: dex
 stringData:
   config.yaml: |
-    issuer: https://127.0.0.1:32000/dex
+    issuer: https://localhost:32000/dex
 
     # In-memory storage: nothing to provision, wiped on restart. Perfect for a
     # lab that gets recreated. Swap for `type: kubernetes` to persist.
@@ -76,21 +76,43 @@ stringData:
           - "viewers"
 
     staticClients:
+      # `trustedPeers` on client X lists the clients allowed to request *X's*
+      # audience through the cross-client scope `audience:server:client_id:X`.
+      # It reads backwards from the intuition: to let Backstage mint a token the
+      # apiserver accepts, `backstage` belongs on the *kubernetes* client here,
+      # not `kubernetes` on the backstage client.
       - id: kubernetes
         name: Kubernetes
         secret: kubernetes-lab-secret
         redirectURIs:
           - http://127.0.0.1:5555/callback
           - http://localhost:5555/callback
-      # Spare client to point Backstage (or anything else) at.
+        trustedPeers:
+          - backstage
+          - muster
+      # Giant Swarm Backstage. The provider name in app-config must begin with
+      # `oidc-` (auth-backend-module-gs only registers a provider whose name has
+      # that prefix), and the callback path carries that same provider name:
+      # /api/auth/<provider>/handler/frame.
       - id: backstage
         name: Backstage
         secret: backstage-lab-secret
         redirectURIs:
-          - http://localhost:7007/api/auth/oidc/handler/frame
-        # Lets Backstage mint tokens whose audience the apiserver accepts.
+          - http://localhost:7007/api/auth/oidc-lab/handler/frame
+      # muster (Giant Swarm agent platform) acts as an OAuth *client* of Dex
+      # and as an OAuth *server* towards MCP clients like Claude Code.
+      # redirectURI must equal <muster.oauth.server.baseUrl>/oauth/callback.
+      - id: muster
+        name: Muster
+        secret: muster-lab-secret
+        redirectURIs:
+          - http://localhost:8090/oauth/callback
+          - http://127.0.0.1:8090/oauth/callback
+        # Lets Backstage forward a token muster accepts: muster's
+        # trustedAudiences is just ["muster"], so the token has to carry that
+        # audience, which needs this cross-client grant.
         trustedPeers:
-          - kubernetes
+          - backstage
 ---
 apiVersion: apps/v1
 kind: Deployment

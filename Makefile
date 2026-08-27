@@ -26,14 +26,35 @@ logs: ## Tail the Dex logs
 config: ## Show the effective Dex config
 	@kubectl -n dex get secret dex-config -o jsonpath='{.data.config\.yaml}' | base64 -d
 
-backstage: ## Deploy Backstage wired to Dex (needs `make up` first)
+backstage: ## Deploy Giant Swarm Backstage wired to Dex + muster (needs `make platform`)
 	@./scripts/backstage.sh
 
-backstage-test: ## Headlessly sign all three users into Backstage via Dex
+backstage-test: ## Headless sign-in + muster proof for all three users
 	@./scripts/test-backstage.sh
 
 backstage-logs: ## Tail the Backstage logs
 	@kubectl -n backstage logs -f deploy/backstage
+
+platform: ## Install Flux + the Giant Swarm agent platform (muster + k8s MCP)
+	@./scripts/platform-up.sh
+
+platform-forward: ## Fallback only: port-forward muster if kind has no :8090 mapping
+	@echo "muster -> http://localhost:8090  (ctrl-c to stop)"
+	@kubectl -n agent-platform port-forward svc/muster 8090:8090
+
+platform-test: ## Headless Dex -> muster -> Kubernetes MCP proof (needs platform-forward)
+	@./scripts/platform-test.sh $(or $(USER_EMAIL),admin@lab.local)
+
+platform-logs: ## Tail the muster logs
+	@kubectl -n agent-platform logs -l app.kubernetes.io/name=muster -f
+
+platform-config: ## Show muster's effective config
+	@kubectl -n agent-platform get cm muster-config -o jsonpath='{.data.config\.yaml}'
+
+platform-down: ## Remove the agent platform (leaves Dex and the cluster alone)
+	@helm -n agent-platform uninstall agent-platform 2>/dev/null || true
+	@kubectl delete -f manifests/agent-platform/mcp-kubernetes.yaml --ignore-not-found
+	@kubectl delete namespace agent-platform --ignore-not-found
 
 restart-apiserver: ## Bounce the apiserver so it re-runs OIDC discovery
 	@./scripts/restart-apiserver.sh
@@ -43,4 +64,5 @@ reload: ## Re-apply the Dex config and restart Dex (after editing manifests/dex.
 	 sed "s/REPLACED_BY_UP_SH/$$SUM/" manifests/dex.yaml | kubectl apply -f - >/dev/null; \
 	 kubectl -n dex rollout status deployment/dex --timeout=90s
 
-.PHONY: help up down test login browser logs config reload restart-apiserver backstage backstage-test backstage-logs
+.PHONY: help up down test login browser logs config reload restart-apiserver \
+        platform platform-forward platform-test platform-logs platform-config platform-down backstage backstage-test backstage-logs

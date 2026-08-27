@@ -1,0 +1,239 @@
+# ---------------------------------------------------------------------------
+# Giant Swarm agent-platform, tuned for this kind lab.
+#
+# Differences from a real management cluster:
+#   * no Envoy Gateway / public Gateway  -> the connectivity component is off
+#     and muster is reached over kubectl port-forward instead of an HTTPRoute.
+#   * no Cilium                          -> every CiliumNetworkPolicy is off.
+#   * muster runs with hostNetwork       -> so that https://localhost:32000/dex
+#     resolves to the Dex NodePort from inside the pod, exactly the trick the
+#     kube-apiserver static pod and the Backstage deployment already use. This
+#     is what lets muster share ONE issuer URL with the browser on the Mac.
+# ---------------------------------------------------------------------------
+global:
+  registry: gsoci.azurecr.io
+
+gitops:
+  engine: flux
+  interval: 5m
+  retries: 5
+
+components:
+  # The meta-package ships floating ranges ("5.x" for muster, "0.x" for the
+  # rest). This lab pins an explicit bill-of-materials the way a customer
+  # release does, so a new upstream patch cannot change what the lab installs
+  # between two runs — which matters most for muster, whose ConfigMap is frozen
+  # by the post-renderer below.
+  muster:
+    versionRange: "5.1.0"
+    # hostNetwork is not a muster chart value, so it is patched in through the
+    # HelmRelease post-renderer the meta-package forwards to helm-controller.
+    postRenderers:
+      - kustomize:
+          patches:
+            - target:
+                kind: Deployment
+                name: muster
+              patch: |
+                apiVersion: apps/v1
+                kind: Deployment
+                metadata:
+                  name: muster
+                spec:
+                  template:
+                    spec:
+                      hostNetwork: true
+                      dnsPolicy: ClusterFirstWithHostNet
+            # WORKAROUND (muster chart 5.1.0): the chart exposes
+            # `oauth.server.allowPublicClientRegistration` in values.yaml,
+            # values.schema.json, its README and its unit tests, but
+            # templates/configmap.yaml never renders the key — so the value is
+            # silently dropped and Dynamic Client Registration stays gated. Claude
+            # Code registers as a PUBLIC client on a random loopback port, so
+            # neither `registrationToken` (it cannot send one),
+            # `trustedPublicRegistrationRedirectURIs` (the port is random) nor
+            # `trustedPublicRegistrationSchemes` (http/https are stripped by
+            # mcp-oauth's config validation on purpose) can gate it open.
+            # Re-rendering the whole ConfigMap is the only lever the chart leaves.
+            # Because this FREEZES muster's config, muster is pinned to 5.1.0
+            # above — re-copy this block from `kubectl get cm muster-config` after
+            # any muster bump, or drop it once the chart renders the key.
+            - target:
+                kind: ConfigMap
+                name: muster-config
+              patch: |
+                apiVersion: v1
+                kind: ConfigMap
+                metadata:
+                  name: muster-config
+                data:
+                  config.yaml: |
+                    aggregator:
+                      host: "0.0.0.0"
+                      port: 8090
+                      transport: "streamable-http"
+                      oauth:
+                        server:
+                          enabled: true
+                          baseUrl: "http://localhost:8090"
+                          provider: "dex"
+                          registrationTokenFile: "/etc/muster/secrets/registration-token"
+                          dex:
+                            issuerUrl: "https://localhost:32000/dex"
+                            clientId: "muster"
+                            clientSecretFile: "/etc/muster/secrets/dex-client-secret"
+                            allowPrivateIPOIDC: true
+                          storage:
+                            type: "valkey"
+                            valkey:
+                              url: "muster-valkey:6379"
+                              passwordFile: "/etc/muster/secrets/valkey-password"
+                              keyPrefix: "muster:"
+                          allowLocalhostRedirectURIs: true
+                          allowPublicClientRegistration: true
+                          trustedAudiences:
+                            - muster
+                    namespace: "agent-platform"
+                    kubernetes: true
+            # hostNetwork means the pod binds :8090 on the node, so the default
+            # rolling update deadlocks on a single-node cluster: the new pod
+            # cannot be scheduled until the old one releases the port.
+            # maxSurge: 0 makes the old pod go down first. (Not `type: Recreate`:
+            # the API server has already defaulted `rollingUpdate` on the live
+            # object and server-side apply will not drop a field it does not own,
+            # so Recreate fails with "rollingUpdate: Forbidden".)
+            - target:
+                kind: Deployment
+                name: muster
+              patch: |
+                - op: add
+                  path: /spec/strategy
+                  value:
+                    type: RollingUpdate
+                    rollingUpdate:
+                      maxSurge: 0
+                      maxUnavailable: 1
+  valkey:
+    versionRange: "0.1.4"
+  # 0.6.3 was the last tag published under the old `agentic-platform-mcps`
+  # name; the renamed repo starts at 0.6.4, so this pin cannot go lower.
+  agent-platform-mcps:
+    versionRange: "0.6.7"
+  # Renders the public HTTPRoute / Gateway / CiliumNetworkPolicies. All of that
+  # needs an ingress stack this lab does not have.
+  agent-platform-connectivity:
+    enabled: false
+  dicebear:
+    enabled: false
+
+# muster-direct topology: muster serves /mcp itself, no agentgateway data plane.
+agentgateway:
+  enabled: false
+
+valkey:
+  enabled: true
+  ciliumNetworkPolicy:
+    enabled: false
+  valkey:
+    # No Prometheus Operator in kind, so the PodMonitor CR has no CRD to bind to
+    # and the whole release fails to render without this.
+    metrics:
+      podMonitor:
+        enabled: false
+    auth:
+      usersExistingSecret: agent-platform-secrets
+      aclUsers:
+        default:
+          passwordKey: valkey-password
+
+mcps:
+  enabled: true
+
+agent-platform-mcps:
+  # The umbrella defaults this to true (agentgateway is the observability choke
+  # point on a real MC). With the agentgateway component off, leaving it on
+  # renders AgentgatewayBackend CRs whose CRD is not installed.
+  agentgateway:
+    enabled: false
+  mcpServers:
+    # The Kubernetes MCP server, in-cluster. auth.mode none: muster's own OAuth
+    # guards the front door and mcp-kubernetes talks to the apiserver with its
+    # ServiceAccount.
+    - cluster: dexlab
+      group: kubernetes
+      url: http://mcp-kubernetes.agent-platform.svc.cluster.local:8080/mcp
+      auth:
+        mode: none
+
+muster:
+  enabled: true
+  networkPolicy:
+    enabled: false
+  # Who may write MCPServer / Workflow CRs *through muster*. These are session
+  # writes made with the caller's own identity, so plain k8s RBAC authorizes
+  # them — muster only renders the namespaced Role + RoleBinding.
+  #
+  # The umbrella binds them to Giant Swarm's admin groups
+  # (`giantswarm-ad:giantswarm-admins`, `giantswarm-github:...`), which do not
+  # exist in this lab, so the bindings would be inert. Rebind to the lab's own
+  # admin group: the apiserver runs with --oidc-groups-prefix=oidc:, so Dex's
+  # `platform-admins` arrives as `oidc:platform-admins` — the same spelling
+  # manifests/rbac.yaml already uses.
+  #
+  # Helm replaces lists rather than merging them, so this drops the GS groups.
+  # Do not "disable" these by emptying the list: the chart hard-`fail`s on an
+  # empty subjects list (a RoleBinding bound to nobody reads as enforced while
+  # granting nothing). Use `create: false` to manage access out of band.
+  rbac:
+    mcpServerEditor:
+      subjects:
+        - apiGroup: rbac.authorization.k8s.io
+          kind: Group
+          name: "oidc:platform-admins"
+    workflowEditor:
+      subjects:
+        - apiGroup: rbac.authorization.k8s.io
+          kind: Group
+          name: "oidc:platform-admins"
+  muster:
+    # The umbrella turns muster's ServiceMonitor on for the GS observability
+    # stack, and since chart 2.12.0 its PrometheusRule too. No Prometheus
+    # Operator in kind, so neither CRD exists and the release fails to render
+    # unless both are off.
+    observability:
+      metrics:
+        prometheus:
+          serviceMonitor:
+            enabled: false
+          prometheusRule:
+            enabled: false
+    # Dex serves a self-signed cert; append the lab CA to muster's trust pool.
+    extraCaFile:
+      path: /etc/muster/ca/extra-ca.pem
+      secret:
+        name: dex-ca
+        key: ca.crt
+    oauth:
+      server:
+        enabled: true
+        # What Claude Code on the Mac dials, and what the OAuth callback and
+        # the Dex redirectURI must agree on.
+        baseUrl: "http://localhost:8090"
+        provider: dex
+        dex:
+          issuerUrl: "https://localhost:32000/dex"
+          clientId: muster
+          # The issuer is a loopback address; discovery refuses that by default.
+          allowPrivateIPOIDC: true
+        existingSecret: agent-platform-secrets
+        # Lab only: lets Claude Code register itself over DCR without a
+        # pre-shared registration token.
+        allowPublicClientRegistration: true
+        # Lab only: accept a Dex id_token with aud=muster as a bearer token, so
+        # the stack can be smoke-tested headlessly with the password grant.
+        trustedAudiences:
+          - muster
+        storage:
+          type: valkey
+          valkey:
+            url: muster-valkey:6379

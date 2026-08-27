@@ -3,9 +3,14 @@ kind: Namespace
 metadata:
   name: backstage
 ---
-# Catalog entities. The OIDC sign-in resolver needs a User entity to map the
-# incoming identity onto, otherwise login fails with "unable to resolve user".
-# emailLocalPartMatchingUserEntityName maps admin@lab.local -> User "admin".
+# Catalog entities. Unlike RHDH's emailLocalPartMatchingUserEntityName, Giant
+# Swarm's resolver (plugins/auth-backend-module-gs/src/signInResolver.ts) only
+# hits the catalog when Dex reports federated_claims.connector_id of
+# giantswarm-ad or giantswarm-github. This lab's static-password connector
+# reports "local", so the resolver falls through to email.split('@')[0] and
+# issues user:default/<localpart> with no catalog entity required.
+# These entities are therefore optional -- they exist so the users and groups
+# render as real things in the UI rather than dangling refs.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -92,32 +97,77 @@ data:
 
     # Dex is the only identity provider. No guest login, no GitHub.
     auth:
-      environment: production
-      # The oidc provider stores the in-flight auth request in a session;
-      # without this it fails with "authentication requires session support".
+      environment: development
       session:
         secret: "68s34N/pNH1mnVcPQjJFhBbSQiKgEU3hr8v5RBxQJeo="
       providers:
-        oidc:
-          production:
-            metadataUrl: https://127.0.0.1:32000/dex/.well-known/openid-configuration
+        # The provider name MUST start with "oidc-": auth-backend-module-gs
+        # registers exactly one login provider, and only if its name carries
+        # that prefix AND equals gs.authProvider. The name also forms the
+        # callback path, /api/auth/oidc-lab/handler/frame, which has to match
+        # the redirectURI on the `backstage` staticClient in manifests/dex.yaml.
+        oidc-lab:
+          development:
+            metadataUrl: https://localhost:32000/dex/.well-known/openid-configuration
             clientId: backstage
             clientSecret: backstage-lab-secret
-            prompt: auto
-            # 'scope' was removed from the oidc provider; openid/profile/email
-            # are implicit and anything extra goes here. Without 'groups' the
-            # token comes back with no group claim at all.
-            additionalScopes: groups
-            signIn:
-              resolvers:
-                - resolver: emailLocalPartMatchingUserEntityName
 
-    signInPage: oidc
+    gs:
+      authProvider: oidc-lab
+      auth:
+        # Base scopes (openid profile email groups offline_access) are hardcoded
+        # in plugins/gs/src/apis/auth/scopes.ts. These two cross-client scopes
+        # widen the id_token's audience so the SAME token is accepted by the
+        # apiserver (--oidc-client-id=kubernetes) and by muster
+        # (trustedAudiences: [muster]). Both require the `backstage` client to be
+        # listed in the corresponding client's trustedPeers in manifests/dex.yaml.
+        # Deliberately NO `federated:id`: with it the resolver would see
+        # connector_id "local", which matches neither catalog branch, so it
+        # changes nothing here and only widens the token.
+        extraScopes:
+          - 'audience:server:client_id:kubernetes'
+          - 'audience:server:client_id:muster'
+      installations:
+        # `installations` is non-optional inside `gs` (plugins/gs/config.d.ts):
+        # set the `gs` block at all and omit this, and config schema validation
+        # kills startup with "must have required property 'installations'".
+        dexlab:
+          pipeline: testing
+          providers: [capa]
+          authProvider: oidc
+          oidcTokenProvider: oidc-lab
+
+    kubernetes:
+      serviceLocatorMethod:
+        type: multiTenant
+      clusterLocatorMethods:
+        - type: config
+          clusters:
+            # The name must equal the muster installation name below: the muster
+            # plugin's Dashboard and Servers tabs read MCPServer/Workflow CRs
+            # through the Backstage Kubernetes proxy scoped to a cluster of that
+            # name, not over MCP.
+            - name: dexlab
+              url: https://localhost:6443
+              authProvider: oidc
+              oidcTokenProvider: oidc-lab
+              skipTLSVerify: true
+              skipMetricsLookup: true
+
+    # The Giant Swarm muster plugin. Talks MCP streamable-HTTP straight to
+    # muster's /mcp; the browser forwards the user's Dex id_token in a
+    # backstage-muster-authorization header and the backend promotes it to
+    # Authorization: Bearer on the MCP session.
+    muster:
+      installations:
+        - name: dexlab
+          url: http://localhost:8090/mcp
+          authProvider: oidc-lab
 
     catalog:
       locations:
         - type: file
-          target: /opt/app-root/src/lab-catalog/users.yaml
+          target: /lab-catalog/users.yaml
           rules:
             - allow: [User, Group]
 ---
@@ -140,44 +190,43 @@ spec:
       labels: { app: backstage }
     spec:
       # hostNetwork is the whole trick: it puts the container on the node's
-      # network namespace, so https://127.0.0.1:32000/dex resolves to the Dex
-      # NodePort — the exact same issuer URL the browser uses. Without it the
-      # issuer would differ between browser and server and OIDC would break.
+      # network namespace, so https://localhost:32000/dex resolves to the Dex
+      # NodePort -- the exact same issuer URL the browser uses. It is also what
+      # makes http://localhost:8090/mcp (muster) and https://localhost:6443
+      # (the apiserver) reachable, since both are hostNetwork/host-published too.
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
       containers:
         - name: backstage
-          image: quay.io/rhdh-community/rhdh:next-1.9
+          # Giant Swarm's own Backstage, which carries the first-party muster
+          # plugin. Published anonymously to gsoci; linux/amd64 only, so on an
+          # arm64 Mac it runs under the kind node's Rosetta binfmt handler.
+          image: gsoci.azurecr.io/giantswarm/backstage:0.192.0
           imagePullPolicy: IfNotPresent
-          # The image bakes its --config list into the entrypoint, so it has to
-          # be restated here with the lab config appended (last one wins).
-          command:
+          # The image ENTRYPOINT is docker-entrypoint.sh and the config list is
+          # a plain CMD, so args: extends it cleanly. app-config.production.yaml
+          # is a 0-byte file in the repo and is dropped here. Last --config wins.
+          args:
             - node
-            - --require
-            - ./instrumentation.js
             - packages/backend
             - --config
             - app-config.yaml
             - --config
-            - /opt/app-root/src/lab-config/app-config.lab.yaml
+            - /lab-config/app-config.lab.yaml
           ports:
             - { name: http, containerPort: 7007 }
           env:
-            # Dex serves a self-signed cert; Node rejects it otherwise.
+            # Dex serves a cert signed by the lab CA; Node rejects it otherwise.
+            # Without this the backend does not fail with a TLS error -- it fails
+            # issuer discovery and then serves 503 on every route, including "/".
             - name: NODE_EXTRA_CA_CERTS
-              value: /opt/app-root/src/pki/ca.crt
-            # RHDH ships a Segment write key and phones home by default.
-            - name: SEGMENT_TEST_MODE
-              value: "true"
+              value: /pki/ca.crt
             - name: LOG_LEVEL
               value: info
           volumeMounts:
-            - { name: config, mountPath: /opt/app-root/src/lab-config }
-            - { name: catalog, mountPath: /opt/app-root/src/lab-catalog }
-            - { name: pki, mountPath: /opt/app-root/src/pki }
-            # RHDH's dynamic plugin scanner lstat()s this path at startup and
-            # crashes if it is missing. An empty dir means "no dynamic plugins".
-            - { name: dynamic-plugins-root, mountPath: /opt/app-root/src/dynamic-plugins-root }
+            - { name: config, mountPath: /lab-config }
+            - { name: catalog, mountPath: /lab-catalog }
+            - { name: pki, mountPath: /pki }
           resources:
             requests: { cpu: 200m, memory: 512Mi }
             limits: { memory: 2Gi }
@@ -188,5 +237,3 @@ spec:
           configMap: { name: backstage-catalog }
         - name: pki
           secret: { secretName: dex-ca }
-        - name: dynamic-plugins-root
-          emptyDir: {}
