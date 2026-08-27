@@ -16,15 +16,16 @@ backstage image. Bumping `IMAGE` to a new tag would silently keep running the
 old one already loaded into the node.
 **Fix:** exact `repo:tag` match against `crictl images -o json` repoTags.
 
-### H2. `backstage.sh`: unconditional `rollout restart` + secret applied after the Deployment — PENDING
+### H2. `backstage.sh`: unconditional `rollout restart` + secret applied after the Deployment — FIXED
 The `dex-ca` secret was created *after* `kubectl apply -f manifests/backstage.yaml`,
 so on first boot the pod sat in ContainerCreating waiting for a volume that did
 not exist yet; an unconditional `rollout restart` then bounced the (2.4 GB,
 Rosetta-emulated) pod on *every* re-run to compensate for possible cert changes.
-**Fix:** create the secret before applying the Deployment, and stamp a
-`checksum/dex-ca` annotation into the pod template (same pattern `dex.yaml`
-already uses for its config) so the pod rolls exactly when the CA changes and
-no-op re-runs stay no-ops.
+**Fix:** namespace + secret are applied before the Deployment, and a
+`checksum/lab-inputs` annotation (sha256 over the manifest + `certs/ca.crt`)
+is stamped into the pod template — same pattern `dex.yaml` already uses — so
+the pod rolls exactly when the config or CA changes and no-op re-runs stay
+no-ops. The blanket `rollout restart` is gone.
 
 ### H3. `up.sh` + `Makefile reload`: duplicated sed/checksum stamping — PENDING
 The `sed "s/REPLACED_BY_UP_SH/$SUM/" manifests/dex.yaml | kubectl apply` logic

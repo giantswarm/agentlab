@@ -188,6 +188,10 @@ spec:
   template:
     metadata:
       labels: { app: backstage }
+      annotations:
+        # Roll the pod whenever the lab config or CA changes (stamped by
+        # scripts/backstage.sh over this manifest + certs/ca.crt).
+        checksum/lab-inputs: "REPLACED_BY_BACKSTAGE_SH"
     spec:
       # hostNetwork is the whole trick: it puts the container on the node's
       # network namespace, so https://localhost:32000/dex resolves to the Dex

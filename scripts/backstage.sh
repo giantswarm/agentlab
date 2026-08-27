@@ -24,14 +24,18 @@ if ! docker exec dexlab-control-plane crictl images -o json 2>/dev/null \
 fi
 
 echo "==> Deploying Backstage"
-kubectl apply -f manifests/backstage.yaml
-
-# Backstage talks to Dex over TLS signed by the lab CA.
+# Namespace and CA secret land before the Deployment so the pod never waits on
+# a missing volume. The checksum stamped into the pod template covers the lab
+# CA and the whole manifest (ConfigMaps included), so a config or cert change
+# rolls the pod while an unchanged re-run stays a no-op — no blanket restart.
+kubectl create namespace backstage --dry-run=client -o yaml | kubectl apply -f -
 kubectl -n backstage create secret generic dex-ca \
   --from-file=ca.crt=certs/ca.crt \
   --dry-run=client -o yaml | kubectl apply -f -
 
-kubectl -n backstage rollout restart deployment/backstage >/dev/null 2>&1 || true
+SUM=$(cat manifests/backstage.yaml certs/ca.crt | shasum -a 256 | cut -d" " -f1)
+sed "s/REPLACED_BY_BACKSTAGE_SH/$SUM/" manifests/backstage.yaml | kubectl apply -f -
+
 echo "==> Waiting for Backstage to start (first boot takes a minute under emulation)"
 kubectl -n backstage rollout status deployment/backstage --timeout=300s
 
