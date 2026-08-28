@@ -1,11 +1,12 @@
 // Package config holds the lab configuration: everything the interactive
-// form asks for, persisted to dexlab.yaml so re-runs are reproducible.
+// form asks for, persisted to agentlab.yaml so re-runs are reproducible.
 package config
 
 import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 
 	"golang.org/x/crypto/bcrypt"
@@ -13,18 +14,23 @@ import (
 )
 
 // File is the configuration file written next to the binary's working
-// directory by `dexlab configure` and read by every other command.
-const File = "dexlab.yaml"
+// directory by `agentlab configure` and read by every other command.
+const File = "agentlab.yaml"
 
 // The three lab groups are a fixed vocabulary: RBAC binds exactly these to
 // cluster-admin / edit-in-demo / view (see the rbac template).
 var Groups = []string{"platform-admins", "developers", "viewers"}
 
-// Static OAuth client secrets. The lab's entire point is self-contained
-// throwaway identity; nothing here guards anything real.
+// Static OAuth client IDs and secrets, paired per client. The IDs also appear
+// in the templates (Dex staticClients and each consumer's own config), which
+// must agree with these. The lab's entire point is self-contained throwaway
+// identity; nothing here guards anything real.
 const (
+	KubernetesClientID     = "kubernetes"
 	KubernetesClientSecret = "kubernetes-lab-secret"
+	BackstageClientID      = "backstage"
 	BackstageClientSecret  = "backstage-lab-secret"
+	MusterClientID         = "muster"
 	MusterClientSecret     = "muster-lab-secret"
 )
 
@@ -34,7 +40,7 @@ const (
 // host-side port mapping is configurable via Platform.MusterPort.
 const MusterNodePort = 8090
 
-// BrowserCallbackPort is the fixed local port for `dexlab browser`'s OAuth
+// BrowserCallbackPort is the fixed local port for `agentlab browser`'s OAuth
 // callback. Fixed because it must be pre-registered in Dex's redirectURIs.
 const BrowserCallbackPort = 5555
 
@@ -48,12 +54,7 @@ type User struct {
 }
 
 func (u User) HasGroup(g string) bool {
-	for _, have := range u.Groups {
-		if have == g {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(u.Groups, g)
 }
 
 type Platform struct {
@@ -96,7 +97,7 @@ type Config struct {
 // optional components off (mirrors the old `make up`).
 func Default() *Config {
 	return &Config{
-		ClusterName: "dexlab",
+		ClusterName: "agentlab",
 		DexPort:     32000,
 		// groups on staticPasswords requires Dex >= v2.45.0; see README.
 		DexImage: "ghcr.io/dexidp/dex:v2.45.1",
@@ -123,7 +124,7 @@ func Default() *Config {
 	}
 }
 
-// Load reads dexlab.yaml. A missing file is reported as os.ErrNotExist so
+// Load reads agentlab.yaml. A missing file is reported as os.ErrNotExist so
 // callers can decide whether to fall back to the form or to defaults.
 func Load() (*Config, error) {
 	raw, err := os.ReadFile(File)
@@ -142,7 +143,7 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if changed {
-		if err := cfg.Save(); err != nil {
+		if err := cfg.write(); err != nil {
 			return nil, err
 		}
 	}
@@ -153,11 +154,17 @@ func (c *Config) Save() error {
 	if _, err := c.EnsureHashes(); err != nil {
 		return err
 	}
+	return c.write()
+}
+
+// write persists the config as-is; Save and Load ensure the hashes first
+// (exactly once — bcrypt-comparing every user is not free).
+func (c *Config) write() error {
 	out, err := yaml.Marshal(c)
 	if err != nil {
 		return err
 	}
-	header := []byte("# dexlab lab configuration. Regenerate with `dexlab configure`.\n" +
+	header := []byte("# agentlab lab configuration. Regenerate with `agentlab configure`.\n" +
 		"# Passwords are lab-only throwaway credentials; the hash is cached so\n" +
 		"# rendered manifests stay byte-identical across runs (no spurious pod rolls).\n")
 	return os.WriteFile(File, append(header, out...), 0o644)
@@ -186,9 +193,27 @@ func (c *Config) EnsureHashes() (changed bool, err error) {
 
 var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
+// ValidateClusterName is the one home of the cluster-name rule; the huh form
+// uses it directly as an input validator.
+func ValidateClusterName(s string) error {
+	if !nameRe.MatchString(s) {
+		return fmt.Errorf("lowercase alphanumeric and dashes only")
+	}
+	return nil
+}
+
+// Normalize applies cross-field implications after an entry point sets the
+// enable flags: Backstage's muster plugin is the reason to run it, so it
+// implies the platform. Validate stays the backstop for hand-edited files.
+func (c *Config) Normalize() {
+	if c.Backstage.Enabled {
+		c.Platform.Enabled = true
+	}
+}
+
 func (c *Config) Validate() error {
-	if !nameRe.MatchString(c.ClusterName) {
-		return fmt.Errorf("cluster name %q must be lowercase alphanumeric/dashes", c.ClusterName)
+	if err := ValidateClusterName(c.ClusterName); err != nil {
+		return fmt.Errorf("cluster name %q: %w", c.ClusterName, err)
 	}
 	if err := ValidateNodePort(strconv.Itoa(c.DexPort)); err != nil {
 		return fmt.Errorf("dexPort: %w", err)
@@ -209,7 +234,7 @@ func (c *Config) Validate() error {
 		}
 		seen[u.Email] = true
 		for _, g := range u.Groups {
-			if !validGroup(g) {
+			if !slices.Contains(Groups, g) {
 				return fmt.Errorf("user %s: unknown group %q (RBAC only binds %v)", u.Email, g, Groups)
 			}
 		}
@@ -224,15 +249,6 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("backstage.port: %w", err)
 	}
 	return nil
-}
-
-func validGroup(g string) bool {
-	for _, known := range Groups {
-		if g == known {
-			return true
-		}
-	}
-	return false
 }
 
 // AdminUser returns the first user in platform-admins: the identity the up
@@ -261,6 +277,9 @@ func (c *Config) Issuer() string {
 
 func (c *Config) KubeContext() string { return "kind-" + c.ClusterName }
 
+// ControlPlaneNode is the docker container name kind gives the (only) node.
+func (c *Config) ControlPlaneNode() string { return c.ClusterName + "-control-plane" }
+
 // MCPServerName is the MCPServer CR name the umbrella chart derives from the
 // mcpServers entry: <cluster>-mcp-kubernetes. Muster family tool calls take it
 // as the management_cluster argument.
@@ -275,25 +294,23 @@ func (c *Config) BackstageBaseURL() string {
 }
 
 // ValidateNodePort checks the Kubernetes NodePort range; the Dex port must be
-// a NodePort because the Service exposes it as one.
+// a NodePort because the Service exposes it as one. String-typed (like
+// ValidatePort) so the huh form inputs can use it directly.
 func ValidateNodePort(s string) error {
-	n, err := strconv.Atoi(s)
-	if err != nil {
-		return fmt.Errorf("not a number")
-	}
-	if n < 30000 || n > 32767 {
-		return fmt.Errorf("must be in the NodePort range 30000-32767")
-	}
-	return nil
+	return validatePort(s, 30000, 32767, "must be in the NodePort range 30000-32767")
 }
 
 func ValidatePort(s string) error {
+	return validatePort(s, 1, 65535, "must be a port between 1 and 65535")
+}
+
+func validatePort(s string, lo, hi int, rangeMsg string) error {
 	n, err := strconv.Atoi(s)
 	if err != nil {
 		return fmt.Errorf("not a number")
 	}
-	if n < 1 || n > 65535 {
-		return fmt.Errorf("must be a port between 1 and 65535")
+	if n < lo || n > hi {
+		return fmt.Errorf("%s", rangeMsg)
 	}
 	return nil
 }

@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	"dexlab/internal/config"
+	"agentlab/internal/config"
 )
 
 // Test is the end-to-end RBAC proof: every configured user gets a real token
@@ -28,7 +28,7 @@ func Test(cfg *config.Config) error {
 	}
 
 	for _, u := range cfg.Users {
-		token, err := passwordGrant(cfg, "kubernetes", config.KubernetesClientSecret,
+		token, err := passwordGrant(cfg, config.KubernetesClientID, config.KubernetesClientSecret,
 			u.Email, u.Password, "openid email profile groups")
 		if err != nil {
 			return fmt.Errorf("could not get a token for %s: %w", u.Email, err)
@@ -46,7 +46,7 @@ func Test(cfg *config.Config) error {
 		fmt.Printf("  identity: %s\n", whoami)
 
 		// Assertions per effective role. Group membership is configurable in
-		// dexlab.yaml but the group -> role mapping is fixed by the lab RBAC,
+		// agentlab.yaml but the group -> role mapping is fixed by the lab RBAC,
 		// so the strongest group decides what to assert.
 		switch {
 		case u.HasGroup("platform-admins"):

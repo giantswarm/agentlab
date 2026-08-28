@@ -52,7 +52,7 @@ func TestMinimalFormDrive(t *testing.T) {
 // Reduced copy of the real form with paced input: input -> confirm ->
 // multiselect across three groups.
 func TestReducedFormDrivePaced(t *testing.T) {
-	name := "dexlab"
+	name := "agentlab"
 	customize := false
 	var comps []string
 	form := huh.NewForm(

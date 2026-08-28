@@ -6,17 +6,24 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"dexlab/internal/config"
+	"agentlab/internal/config"
 )
 
-// writeTokenKubeconfig builds a kubeconfig that authenticates ONLY with the
-// given bearer token. Needed because the kind kubeconfig ships an admin client
-// certificate, and a client cert always wins over --token / a token-based
-// user — kubectl would silently keep authenticating as kubernetes-admin.
-func writeTokenKubeconfig(cfg *config.Config, token, outPath string) error {
-	raw, err := output("kind", "get", "kubeconfig", "--name", cfg.ClusterName)
+// kindCluster is the cluster entry of the kind kubeconfig, cached per process:
+// `kind get kubeconfig` spawns a subprocess and its output never changes
+// within a run, while Test and the up verification write several kubeconfigs.
+var kindCluster struct {
+	name    string
+	cluster map[string]any
+}
+
+func kindClusterEntry(clusterName string) (string, map[string]any, error) {
+	if kindCluster.cluster != nil {
+		return kindCluster.name, kindCluster.cluster, nil
+	}
+	raw, err := output("kind", "get", "kubeconfig", "--name", clusterName)
 	if err != nil {
-		return fmt.Errorf("kind get kubeconfig: %w", err)
+		return "", nil, fmt.Errorf("kind get kubeconfig: %w", err)
 	}
 	var kc struct {
 		Clusters []struct {
@@ -25,24 +32,37 @@ func writeTokenKubeconfig(cfg *config.Config, token, outPath string) error {
 		} `yaml:"clusters"`
 	}
 	if err := yaml.Unmarshal([]byte(raw), &kc); err != nil {
-		return fmt.Errorf("parsing kind kubeconfig: %w", err)
+		return "", nil, fmt.Errorf("parsing kind kubeconfig: %w", err)
 	}
 	if len(kc.Clusters) == 0 {
-		return fmt.Errorf("kind kubeconfig has no clusters")
+		return "", nil, fmt.Errorf("kind kubeconfig has no clusters")
+	}
+	kindCluster.name, kindCluster.cluster = kc.Clusters[0].Name, kc.Clusters[0].Cluster
+	return kindCluster.name, kindCluster.cluster, nil
+}
+
+// writeTokenKubeconfig builds a kubeconfig that authenticates ONLY with the
+// given bearer token. Needed because the kind kubeconfig ships an admin client
+// certificate, and a client cert always wins over --token / a token-based
+// user — kubectl would silently keep authenticating as kubernetes-admin.
+func writeTokenKubeconfig(cfg *config.Config, token, outPath string) error {
+	name, cluster, err := kindClusterEntry(cfg.ClusterName)
+	if err != nil {
+		return err
 	}
 
 	out := map[string]any{
 		"apiVersion": "v1",
 		"kind":       "Config",
 		"clusters": []map[string]any{
-			{"name": kc.Clusters[0].Name, "cluster": kc.Clusters[0].Cluster},
+			{"name": name, "cluster": cluster},
 		},
 		"users": []map[string]any{
 			{"name": "oidc", "user": map[string]any{"token": token}},
 		},
 		"contexts": []map[string]any{
 			{"name": "oidc", "context": map[string]any{
-				"cluster": kc.Clusters[0].Name, "user": "oidc",
+				"cluster": name, "user": "oidc",
 			}},
 		},
 		"current-context": "oidc",

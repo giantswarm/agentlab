@@ -14,7 +14,7 @@ import (
 // muster patches). Plain Helm has no values hook for any of these, so they
 // live here — the replacement for the Flux postRenderers the old
 // agent-platform meta-package forwarded to helm-controller. Wired up as
-// `helm --post-renderer <dexlab> --post-renderer-args post-render`.
+// `helm --post-renderer <agentlab> --post-renderer-args post-render`.
 //
 //  1. hostNetwork + dnsPolicy on the muster Deployment: muster must resolve
 //     the issuer URL to the Dex NodePort from inside the pod so it can share
@@ -62,15 +62,13 @@ func PostRender(in io.Reader, out io.Writer) error {
 			continue // empty document (the `select(. != null)` of the old yq)
 		}
 		kind := scalarAt(root, "kind")
-		name := scalarAt(mapAt(root, "metadata"), "name")
+		name := scalarAt(mapValue(root, "metadata"), "name")
 
 		if kind == "HTTPRoute" && name == "muster" {
 			continue
 		}
 		if kind == "Deployment" && name == "muster" {
-			if err := patchMusterDeployment(root); err != nil {
-				return err
-			}
+			patchMusterDeployment(root)
 		}
 		if kind == "ConfigMap" && name == "muster-config" {
 			if err := patchMusterConfig(root); err != nil {
@@ -83,7 +81,7 @@ func PostRender(in io.Reader, out io.Writer) error {
 	}
 }
 
-func patchMusterDeployment(root *yaml.Node) error {
+func patchMusterDeployment(root *yaml.Node) {
 	podSpec := ensureMap(ensureMap(ensureMap(root, "spec"), "template"), "spec")
 	setKey(podSpec, "hostNetwork", boolNode(true))
 	setKey(podSpec, "dnsPolicy", strNode("ClusterFirstWithHostNet"))
@@ -95,11 +93,10 @@ func patchMusterDeployment(root *yaml.Node) error {
 	setKey(rolling, "maxUnavailable", intNode(1))
 	setKey(strategy, "rollingUpdate", rolling)
 	setKey(ensureMap(root, "spec"), "strategy", strategy)
-	return nil
 }
 
 func patchMusterConfig(root *yaml.Node) error {
-	data := mapAt(root, "data")
+	data := mapValue(root, "data")
 	if data == nil {
 		return fmt.Errorf("muster-config ConfigMap has no data")
 	}
@@ -161,8 +158,6 @@ func mapValue(m *yaml.Node, key string) *yaml.Node {
 	}
 	return nil
 }
-
-func mapAt(m *yaml.Node, key string) *yaml.Node { return mapValue(m, key) }
 
 func scalarAt(m *yaml.Node, key string) string {
 	v := mapValue(m, key)

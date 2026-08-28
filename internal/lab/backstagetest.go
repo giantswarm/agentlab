@@ -1,21 +1,22 @@
 package lab
 
 import (
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
-	"os"
 	"regexp"
 	"strings"
 	"time"
 
-	"dexlab/internal/config"
+	"agentlab/internal/config"
 )
+
+// handlerPayloadRe extracts the authorization payload Backstage's handler page
+// hands to the opener via postMessage (see step 4 in backstageSignIn).
+var handlerPayloadRe = regexp.MustCompile(`decodeURIComponent\('([^']+)'\)`)
 
 // BackstageTest drives the full Backstage <-> Dex sign-in headlessly for each
 // user, reports the identity Backstage resolved, and then proves the Giant
@@ -42,20 +43,14 @@ func BackstageTest(cfg *config.Config, emails []string) error {
 }
 
 func backstageSignIn(cfg *config.Config, user *config.User) error {
-	caPEM, err := os.ReadFile("certs/ca.crt")
+	transport, err := labTLSTransport()
 	if err != nil {
 		return err
 	}
-	pool, err := x509.SystemCertPool()
-	if err != nil {
-		pool = x509.NewCertPool()
-	}
-	pool.AppendCertsFromPEM(caPEM)
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		return err
 	}
-	transport := &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}}
 	follow := &http.Client{Jar: jar, Transport: transport, Timeout: 60 * time.Second}
 	noFollow := &http.Client{Jar: jar, Transport: transport, Timeout: 60 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
@@ -68,7 +63,8 @@ func backstageSignIn(cfg *config.Config, user *config.User) error {
 	//    gs.auth.extraScopes); hitting /start directly would otherwise get a
 	//    bare token with no groups and aud=["backstage"] alone.
 	scope := "openid profile email groups offline_access" +
-		" audience:server:client_id:kubernetes audience:server:client_id:muster"
+		" audience:server:client_id:" + config.KubernetesClientID +
+		" audience:server:client_id:" + config.MusterClientID
 	startURL := cfg.BackstageBaseURL() + "/api/auth/oidc-lab/start?env=development&scope=" +
 		url.QueryEscape(scope)
 	resp, err := noFollow.Get(startURL)
@@ -104,7 +100,7 @@ func backstageSignIn(cfg *config.Config, user *config.User) error {
 	// 4. The handler page hands the result to the opener via postMessage;
 	//    headlessly, the payload is regex'd out of the inline script. There is
 	//    no API that returns this payload cleanly — inherent to the test's job.
-	m := regexp.MustCompile(`decodeURIComponent\('([^']+)'\)`).FindSubmatch(body)
+	m := handlerPayloadRe.FindSubmatch(body)
 	if m == nil {
 		return fmt.Errorf("could not parse the handler response")
 	}

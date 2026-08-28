@@ -13,7 +13,7 @@ stringData:
     issuer: {{ .Issuer }}
 
     # CRD-backed storage, so the SIGNING KEYS survive pod rolls. With
-    # `type: memory` every `dexlab reload` (a config edit rolls the pod by
+    # `type: memory` every `agentlab reload` (a config edit rolls the pod by
     # design) rotated the keys and the apiserver rejected all tokens with
     # "failed to verify id token signature" until its JWKS cache refreshed —
     # minutes of every login failing right after the edit that prompted the
@@ -46,14 +46,14 @@ stringData:
     # ---------------------------------------------------------------------
     # The whole point: users that exist ONLY here. No GitHub, no GitLab, no
     # Google, no Keycloak. `groups` on static passwords requires Dex >= v2.45.0.
-    # Users come from dexlab.yaml (edit with `dexlab configure`, then
-    # `dexlab reload`).
+    # Users come from agentlab.yaml (edit with `agentlab configure`, then
+    # `agentlab reload`).
     # ---------------------------------------------------------------------
     enablePasswordDB: true
     staticPasswords:
 {{- range .Users }}
       - email: "{{ .Email }}"
-        # bcrypt(cost 10) of the password in dexlab.yaml
+        # bcrypt(cost 10) of the password in agentlab.yaml
         hash: "{{ .PasswordHash }}"
         username: "{{ .Username }}"
         name: "{{ .Name }}"
@@ -154,7 +154,7 @@ spec:
       labels: { app: dex }
       annotations:
         # Roll the pod whenever the config or served cert changes (stamped by
-        # `dexlab reload` / `dexlab up` over this manifest + certs/tls.crt).
+        # `agentlab reload` / `agentlab up` over this manifest + certs/tls.crt).
         checksum/config: "REPLACED_AT_APPLY"
     spec:
       serviceAccountName: dex

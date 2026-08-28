@@ -3,9 +3,10 @@ package lab
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 
-	"dexlab/internal/config"
+	"agentlab/internal/config"
 )
 
 // BackstageUp deploys Giant Swarm's Backstage into the lab and points it at
@@ -14,15 +15,14 @@ import (
 // agent platform.
 func BackstageUp(cfg *config.Config) error {
 	if !kindClusterExists(cfg.ClusterName) {
-		return fmt.Errorf("the %s cluster is not running -- run `dexlab up` first", cfg.ClusterName)
+		return fmt.Errorf("the %s cluster is not running -- run `agentlab up` first", cfg.ClusterName)
 	}
 
 	image := cfg.Backstage.Image
-	node := cfg.ClusterName + "-control-plane"
 
 	// Exact repo:tag match — a substring check would accept any already-loaded
 	// tag and silently keep running an old image after an image bump.
-	if !nodeHasImage(node, image) {
+	if !nodeHasImage(cfg.ControlPlaneNode(), image) {
 		step("Loading %s into the kind node (2.4GB, takes a few minutes)", image)
 		// gsoci serves this anonymously -- no registry credentials needed. The
 		// image is linux/amd64 only, so an arm64 Mac must ask for that platform
@@ -52,7 +52,7 @@ func BackstageUp(cfg *config.Config) error {
 	}); err != nil {
 		return err
 	}
-	stamped, _, err := renderStamped(cfg, "backstage.yaml.tmpl", "backstage.yaml", "certs/ca.crt")
+	stamped, _, err := renderManifest(cfg, "backstage.yaml.tmpl")
 	if err != nil {
 		return err
 	}
@@ -70,15 +70,7 @@ func BackstageUp(cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
-	up := false
-	for i := 0; i < 120; i++ {
-		if httpUp(client, cfg.BackstageBaseURL()) {
-			up = true
-			break
-		}
-		time.Sleep(2 * time.Second)
-	}
-	if !up {
+	if !waitFor(120, 2*time.Second, func() bool { return httpUp(client, cfg.BackstageBaseURL()) }) {
 		return fmt.Errorf("backstage never answered on %s", cfg.BackstageBaseURL())
 	}
 
@@ -90,9 +82,30 @@ Backstage is up: %s
 
   The muster plugin lives under "Agent Platform" -> "MCP Servers".
 
-  Logs:  dexlab logs backstage
+  Logs:  agentlab logs backstage
 `, cfg.BackstageBaseURL(), config.File)
 	return nil
+}
+
+// prefetchBackstageImage pulls the Backstage image into the local docker
+// cache in the background, so Up can overlap the multi-minute pull with the
+// platform install; BackstageUp then finds the image cached and only loads it
+// into the node. The buffered channel yields the pull result.
+func prefetchBackstageImage(cfg *config.Config) <-chan error {
+	image := cfg.Backstage.Image
+	done := make(chan error, 1)
+	if nodeHasImage(cfg.ControlPlaneNode(), image) {
+		done <- nil
+		return done
+	}
+	if _, err := outputQuiet("docker", "image", "inspect", image); err == nil {
+		done <- nil
+		return done
+	}
+	note("pulling %s in the background", image)
+	// -q: progress bars would garble the platform install's output.
+	go func() { done <- runQuiet("docker", "pull", "--platform", "linux/amd64", "-q", image) }()
+	return done
 }
 
 // nodeHasImage checks the kind node's containerd for an exact repo:tag match.
@@ -110,10 +123,8 @@ func nodeHasImage(node, image string) bool {
 		return false
 	}
 	for _, img := range imgs.Images {
-		for _, tag := range img.RepoTags {
-			if tag == image {
-				return true
-			}
+		if slices.Contains(img.RepoTags, image) {
+			return true
 		}
 	}
 	return false

@@ -162,7 +162,7 @@ spec:
       labels: { app: backstage }
       annotations:
         # Roll the pod whenever the lab config or CA changes (stamped by
-        # `dexlab backstage` over this manifest + certs/ca.crt).
+        # `agentlab backstage` over this manifest + certs/ca.crt).
         checksum/lab-inputs: "REPLACED_AT_APPLY"
     spec:
       # hostNetwork is the whole trick: it puts the container on the node's

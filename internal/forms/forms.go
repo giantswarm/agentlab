@@ -1,4 +1,4 @@
-// Package forms is the interactive face of dexlab: charmbracelet/huh forms
+// Package forms is the interactive face of agentlab: charmbracelet/huh forms
 // that ask for every configuration option and fill in a config.Config.
 package forms
 
@@ -12,11 +12,10 @@ import (
 
 	"github.com/charmbracelet/huh"
 
-	"dexlab/internal/config"
+	"agentlab/internal/config"
 )
 
 var emailRe = regexp.MustCompile(`^[^@\s]+@[^@\s]+$`)
-var clusterRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
 // testInput/testOutput let tests drive the real TUI form with a scripted
 // keystroke stream instead of a terminal. nil outside of tests.
@@ -74,12 +73,7 @@ func Run(cfg *config.Config, accessible bool) error {
 				Title("Cluster name").
 				Description("Names the kind cluster; also prefixes RBAC bindings and the muster installation.").
 				Value(&clusterName).
-				Validate(func(s string) error {
-					if !clusterRe.MatchString(s) {
-						return fmt.Errorf("lowercase alphanumeric and dashes only")
-					}
-					return nil
-				}),
+				Validate(config.ValidateClusterName),
 			huh.NewInput().
 				Title("Dex port").
 				Description("The issuer becomes https://localhost:<port>/dex on BOTH sides of the\nkind boundary — one URL for the browser and the apiserver. NodePort range (30000-32767).").
@@ -107,7 +101,7 @@ func Run(cfg *config.Config, accessible bool) error {
 		huh.NewGroup(
 			huh.NewMultiSelect[string]().
 				Title("Optional components").
-				Description("Deployed by `dexlab up` (or later via `dexlab platform` / `dexlab backstage`).\nBackstage's muster plugin needs the platform, so selecting it selects both.").
+				Description("Deployed by `agentlab up` (or later via `agentlab platform` / `agentlab backstage`).\nBackstage's muster plugin needs the platform, so selecting it selects both.").
 				Options(
 					huh.NewOption("Giant Swarm agent platform (muster + Kubernetes MCP)", "platform"),
 					huh.NewOption("Giant Swarm Backstage (developer portal)", "backstage"),
@@ -156,8 +150,8 @@ func Run(cfg *config.Config, accessible bool) error {
 	cfg.DexPort = mustAtoi(dexPort)
 	cfg.DexImage = dexImage
 	cfg.Backstage.Enabled = slices.Contains(components, "backstage")
-	// The Backstage muster plugin is the reason to run Backstage at all.
-	cfg.Platform.Enabled = slices.Contains(components, "platform") || cfg.Backstage.Enabled
+	cfg.Platform.Enabled = slices.Contains(components, "platform")
+	cfg.Normalize() // backstage implies the platform
 	cfg.Platform.MusterPort = mustAtoi(musterPort)
 	cfg.Platform.MCPKubernetesVersion = mcpVersion
 	cfg.Platform.APSRef = apsRef
@@ -254,17 +248,13 @@ func userForm(u config.User, accessible bool) (config.User, error) {
 			Validate(notEmpty),
 		huh.NewInput().
 			Title("Password").
-			Description("Lab-only; stored in dexlab.yaml alongside its bcrypt hash.").
+			Description("Lab-only; stored in agentlab.yaml alongside its bcrypt hash.").
 			Value(&password).
 			Validate(notEmpty),
 		huh.NewMultiSelect[string]().
 			Title("Groups").
 			Description("platform-admins -> cluster-admin, developers -> edit in ns/demo, viewers -> view.").
-			Options(
-				huh.NewOption("platform-admins", "platform-admins"),
-				huh.NewOption("developers", "developers"),
-				huh.NewOption("viewers", "viewers"),
-			).
+			Options(huh.NewOptions(config.Groups...)...).
 			Value(&groups).
 			Validate(func(sel []string) error {
 				if len(sel) == 0 {

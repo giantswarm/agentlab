@@ -1,4 +1,4 @@
-module dexlab
+module agentlab
 
 go 1.25.5
 

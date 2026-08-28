@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"dexlab/internal/config"
+	"agentlab/internal/config"
 )
 
 const platformNamespace = "agent-platform"
@@ -40,7 +40,7 @@ func PlatformUp(cfg *config.Config) error {
 	// helm-controller uninstalls against this install. Start clean instead.
 	if _, err := outputQuiet("kubectl", "-n", platformNamespace, "get", "helmrelease", "muster"); err == nil {
 		return fmt.Errorf("this cluster runs the old agent-platform meta-package (Flux HelmReleases found);\n" +
-			"run `dexlab platform-down` first, then re-run `dexlab platform`")
+			"run `agentlab platform-down` first, then re-run `agentlab platform`")
 	}
 
 	step("Vendoring agent-platform-standalone @ %.12s", cfg.Platform.APSRef)
@@ -110,13 +110,13 @@ func PlatformUp(cfg *config.Config) error {
 		note("agent-platform-secrets already exists, leaving it alone")
 	}
 
-	if _, _, err := renderToState(cfg, "mcp-kubernetes-values.yaml.tmpl", "mcp-kubernetes-values.yaml"); err != nil {
+	if _, _, err := renderManifest(cfg, "mcp-kubernetes-values.yaml.tmpl"); err != nil {
 		return err
 	}
-	if _, _, err := renderToState(cfg, "agent-platform-values.yaml.tmpl", "agent-platform-values.yaml"); err != nil {
+	if _, _, err := renderManifest(cfg, "agent-platform-values.yaml.tmpl"); err != nil {
 		return err
 	}
-	if _, _, err := renderToState(cfg, "demo-workflow.yaml.tmpl", "demo-workflow.yaml"); err != nil {
+	if _, _, err := renderManifest(cfg, "demo-workflow.yaml.tmpl"); err != nil {
 		return err
 	}
 
@@ -150,20 +150,17 @@ func PlatformUp(cfg *config.Config) error {
 	step("Waiting for muster to connect to the Kubernetes MCP")
 	mcpName := cfg.MCPServerName()
 	state := ""
-	for i := 0; i < 40; i++ {
+	connected := waitFor(40, 3*time.Second, func() bool {
 		state, _ = outputQuiet("kubectl", "-n", platformNamespace, "get", "mcpserver", mcpName,
 			"-o", "jsonpath={.status.state}")
-		if state == "Connected" {
-			note("MCPServer %s: Connected", mcpName)
-			break
-		}
-		time.Sleep(3 * time.Second)
-	}
-	if state != "Connected" {
+		return state == "Connected"
+	})
+	if !connected {
 		return fmt.Errorf("MCPServer %s never reached Connected (last state: %q);\n"+
-			"check `dexlab logs muster` and `kubectl -n %s describe mcpserver %s`",
+			"check `agentlab logs muster` and `kubectl -n %s describe mcpserver %s`",
 			mcpName, state, platformNamespace, mcpName)
 	}
+	note("MCPServer %s: Connected", mcpName)
 
 	// The Workflow CRD ships with muster, so this has to land after the
 	// install. A muster with no workflows leaves the Backstage muster plugin's
@@ -185,23 +182,18 @@ func PlatformUp(cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
-	reachable := false
-	for i := 0; i < 40; i++ {
-		if httpUp(client, cfg.MusterBaseURL()+"/.well-known/oauth-authorization-server") {
-			reachable = true
-			break
-		}
-		time.Sleep(3 * time.Second)
-	}
+	reachable := waitFor(40, 3*time.Second, func() bool {
+		return httpUp(client, cfg.MusterBaseURL()+"/.well-known/oauth-authorization-server")
+	})
 
 	reach := fmt.Sprintf("muster is live on %s (no port-forward needed)", cfg.MusterBaseURL())
 	if !reachable {
 		reach = fmt.Sprintf(`muster is NOT reachable on %s after 2 minutes.
-  If 'docker port %s-control-plane' shows no %d line, this cluster
-  predates the port mapping and must be recreated (dexlab down && dexlab up).
-  Otherwise check 'dexlab logs muster'. Stopgap either way:
+  If 'docker port %s' shows no %d line, this cluster
+  predates the port mapping and must be recreated (agentlab down && agentlab up).
+  Otherwise check 'agentlab logs muster'. Stopgap either way:
   kubectl -n %s port-forward svc/muster %d:%d`,
-			cfg.MusterBaseURL(), cfg.ClusterName, cfg.Platform.MusterPort,
+			cfg.MusterBaseURL(), cfg.ControlPlaneNode(), cfg.Platform.MusterPort,
 			platformNamespace, cfg.Platform.MusterPort, config.MusterNodePort)
 	}
 
@@ -214,7 +206,7 @@ Platform is up.
     # then in Claude Code: /mcp -> authenticate
 
   Smoke-test it headlessly instead:
-    dexlab platform-test
+    agentlab platform-test
 `, reach, cfg.MusterBaseURL())
 	return nil
 }

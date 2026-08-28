@@ -14,7 +14,7 @@ nodes:
     # own localhost:{{ .DexPort }}, which hits the NodePort directly.
     #
     # They are fixed when the node container is created, so changing one means
-    # `dexlab down && dexlab up` — you cannot map a new port on a running
+    # `agentlab down && agentlab up` — you cannot map a new port on a running
     # cluster. All three are always mapped, so the platform and Backstage can
     # be enabled later without recreating the cluster.
     extraPortMappings:

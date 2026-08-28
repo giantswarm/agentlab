@@ -4,19 +4,15 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"os/exec"
 	"runtime"
-	"strings"
 	"time"
 
-	"dexlab/internal/config"
+	"agentlab/internal/config"
 )
 
 // BrowserLogin runs the real OIDC authorization-code flow: opens the browser
@@ -62,7 +58,7 @@ func BrowserLogin(cfg *config.Config) error {
 	defer srv.Shutdown(context.Background())
 
 	authURL := cfg.Issuer() + "/auth?" + url.Values{
-		"client_id":     {"kubernetes"},
+		"client_id":     {config.KubernetesClientID},
 		"redirect_uri":  {redirect},
 		"response_type": {"code"},
 		"scope":         {"openid email profile groups offline_access"},
@@ -70,7 +66,7 @@ func BrowserLogin(cfg *config.Config) error {
 	}.Encode()
 
 	fmt.Println("Opening the Dex login page in your browser...")
-	fmt.Println("  users and passwords are in dexlab.yaml")
+	fmt.Println("  users and passwords are in agentlab.yaml")
 	fmt.Printf("  if it does not open: %s\n\n", authURL)
 	openBrowser(authURL)
 
@@ -81,55 +77,15 @@ func BrowserLogin(cfg *config.Config) error {
 		return fmt.Errorf("timed out waiting for the browser callback")
 	}
 
-	client, err := labHTTPClient(30 * time.Second)
-	if err != nil {
-		return err
-	}
-	form := url.Values{
+	token, err := dexToken(cfg, config.KubernetesClientID, config.KubernetesClientSecret, url.Values{
 		"grant_type":   {"authorization_code"},
 		"code":         {code},
 		"redirect_uri": {redirect},
-	}
-	req, err := http.NewRequest(http.MethodPost, cfg.Issuer()+"/token",
-		strings.NewReader(form.Encode()))
+	})
 	if err != nil {
-		return err
+		return fmt.Errorf("token exchange failed: %w", err)
 	}
-	req.SetBasicAuth("kubernetes", config.KubernetesClientSecret)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	var tok struct {
-		IDToken string `json:"id_token"`
-	}
-	if err := json.Unmarshal(body, &tok); err != nil || tok.IDToken == "" {
-		return fmt.Errorf("token exchange failed: %s", strings.TrimSpace(string(body)))
-	}
-
-	claims, err := decodeJWTClaims(tok.IDToken)
-	if err != nil {
-		return err
-	}
-	pretty, _ := json.MarshalIndent(claims, "", "  ")
-	fmt.Println("id_token claims:")
-	fmt.Println(string(pretty))
-
-	if err := os.WriteFile(".token", []byte(tok.IDToken), 0o600); err != nil {
-		return err
-	}
-	if err := writeTokenKubeconfig(cfg, tok.IDToken, "kubeconfig.oidc"); err != nil {
-		return err
-	}
-
-	cwd, _ := os.Getwd()
-	fmt.Printf("\nLogged in as %v.\n", claims["email"])
-	fmt.Printf("  export KUBECONFIG=%s/kubeconfig.oidc\n", cwd)
-	fmt.Println("  kubectl auth whoami")
-	return nil
+	return saveLoginArtifacts(cfg, token)
 }
 
 func openBrowser(url string) {

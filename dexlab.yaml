@@ -1,0 +1,39 @@
+# agentlab lab configuration. Regenerate with `agentlab configure`.
+# Passwords are lab-only throwaway credentials; the hash is cached so
+# rendered manifests stay byte-identical across runs (no spurious pod rolls).
+clusterName: agentlab
+dexPort: 32000
+dexImage: ghcr.io/dexidp/dex:v2.45.1
+users:
+    - email: admin@lab.local
+      username: admin
+      name: Lab Admin
+      password: password
+      passwordHash: $2a$10$lXy4lwZV1r7SH3ZQlBTO2u63DJN7lzcw9r4nF7N602lFSaCRWEt7O
+      groups:
+        - platform-admins
+        - developers
+    - email: dev@lab.local
+      username: dev
+      name: Lab Developer
+      password: password
+      passwordHash: $2a$10$9woLC5iEu/yV.jQ/7MWfq.4TO4zZ3Sa6oGRNBYqEATrtSR0RaBcIG
+      groups:
+        - developers
+    - email: viewer@lab.local
+      username: viewer
+      name: Lab Viewer
+      password: password
+      passwordHash: $2a$10$zRhEVslto1MUVO89mjdfde6Q1d7dmPJITwiXl1ZTZyCgv.kJ6plCe
+      groups:
+        - viewers
+platform:
+    enabled: true
+    musterPort: 8090
+    mcpKubernetesVersion: 1.0.9
+    apsRepo: https://github.com/giantswarm/agent-platform-standalone
+    apsRef: 672e08cb67cb210cdcc3bb9c5d11f78a42e92003
+backstage:
+    enabled: true
+    port: 7007
+    image: gsoci.azurecr.io/giantswarm/backstage:0.192.0

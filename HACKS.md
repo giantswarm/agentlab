@@ -4,10 +4,10 @@ Inventory of every hack/workaround in the lab's scripts, what it papers over,
 and what happened to it. One commit per resolved item. Statuses:
 
 > **2026-08-27, Go port:** the lab was rewritten as a single Go binary
-> (`dexlab`) with form-driven configuration; scripts/ and manifests/ are gone.
+> (`agentlab`) with form-driven configuration; scripts/ and manifests/ are gone.
 > Every fix below carries over — the checksum stamping (H2/H3), the digest
 > gate (H9), the exact-tag image check (H1), key permissions (H10, now 0600 at
-> creation) and the post-render patches (U1-U3, now `dexlab post-render`) all
+> creation) and the post-render patches (U1-U3, now `agentlab post-render`) all
 > live in `internal/lab/`. Two NEW items surfaced during the port: H11, H12.
 
 - **FIXED** — replaced with a proper solution (commit referenced).
@@ -109,7 +109,7 @@ cluster.
 
 ### H12. Chart vendored into `vendor/` collides with the Go toolchain — FIXED
 The agent-platform-standalone checkout lived in `vendor/`, which flips a Go
-module into vendored-build mode: after the first `dexlab platform`, `go build`
+module into vendored-build mode: after the first `agentlab platform`, `go build`
 failed with "inconsistent vendoring".
 **Fix:** the chart is vendored into `.vendor/` instead.
 
@@ -193,25 +193,25 @@ With every fix above in place, one full cycle on a cold cluster:
 
 ## Full-stack verification (2026-08-27, Go binary)
 
-The same cycle through `dexlab`, on a cold cluster, defaults from
-`dexlab configure --defaults`:
+The same cycle through `agentlab`, on a cold cluster, defaults from
+`agentlab configure --defaults`:
 
 | Step | Result |
 |---|---|
-| `dexlab configure --defaults` / `--platform --backstage` | dexlab.yaml written, bcrypt hashes cached |
-| `dexlab up` (fresh kind cluster) | issuer up, apiserver accepts Dex tokens |
-| `dexlab test` | 10/10 RBAC assertions pass for admin/dev/viewer |
-| `dexlab login dev@lab.local` | kubeconfig.oidc works, `kubectl auth whoami` = `oidc:dev@lab.local` |
-| `dexlab platform` | deps built via digest gate, MCPServer `Connected`, muster live on :8090 |
-| `dexlab platform-test` | Dex → muster → mcp-kubernetes → apiserver chain passes |
-| `dexlab backstage` | image loaded once (exact-tag check), pod up |
-| `dexlab backstage-test` | all three users sign in, reach muster, see workflows + 29 core tools |
-| `dexlab backstage` re-run | no image reload, same pod (checksum no-op) |
-| `dexlab reload` (unchanged config) | no-op apply, single ReplicaSet |
-| `dexlab up` re-run (components enabled) | idempotent: cluster reused, secrets kept, post-render patches survive the helm upgrade |
-| edit a user in dexlab.yaml + `dexlab reload` | pod rolls (checksum), **immediate** login as the new user succeeds (H11) |
-| custom config (`dexlab2`, Dex :31000, run from an empty dir) | second cluster up alongside the first, 10/10 RBAC, clean `down` |
-| `dexlab down` | cluster deleted, no leftovers |
+| `agentlab configure --defaults` / `--platform --backstage` | agentlab.yaml written, bcrypt hashes cached |
+| `agentlab up` (fresh kind cluster) | issuer up, apiserver accepts Dex tokens |
+| `agentlab test` | 10/10 RBAC assertions pass for admin/dev/viewer |
+| `agentlab login dev@lab.local` | kubeconfig.oidc works, `kubectl auth whoami` = `oidc:dev@lab.local` |
+| `agentlab platform` | deps built via digest gate, MCPServer `Connected`, muster live on :8090 |
+| `agentlab platform-test` | Dex → muster → mcp-kubernetes → apiserver chain passes |
+| `agentlab backstage` | image loaded once (exact-tag check), pod up |
+| `agentlab backstage-test` | all three users sign in, reach muster, see workflows + 29 core tools |
+| `agentlab backstage` re-run | no image reload, same pod (checksum no-op) |
+| `agentlab reload` (unchanged config) | no-op apply, single ReplicaSet |
+| `agentlab up` re-run (components enabled) | idempotent: cluster reused, secrets kept, post-render patches survive the helm upgrade |
+| edit a user in agentlab.yaml + `agentlab reload` | pod rolls (checksum), **immediate** login as the new user succeeds (H11) |
+| custom config (`agentlab2`, Dex :31000, run from an empty dir) | second cluster up alongside the first, 10/10 RBAC, clean `down` |
+| `agentlab down` | cluster deleted, no leftovers |
 
 TUI form coverage: `go test ./...` drives the real huh form with scripted
 keystrokes (accept defaults, edit fields, toggle components) and unit-tests

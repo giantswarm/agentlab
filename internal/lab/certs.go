@@ -29,7 +29,7 @@ func GenCerts(force bool) error {
 		for _, k := range []string{"ca.key", "tls.key"} {
 			_ = os.Chmod(filepath.Join("certs", k), 0o600)
 		}
-		fmt.Println("certs/ already populated (dexlab certs --force to regenerate)")
+		fmt.Println("certs/ already populated (agentlab certs --force to regenerate)")
 		return nil
 	}
 

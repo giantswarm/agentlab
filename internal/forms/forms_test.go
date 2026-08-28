@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"dexlab/internal/config"
+	"agentlab/internal/config"
 )
 
 const keyDelay = 30 * time.Millisecond
@@ -29,7 +29,7 @@ func TestRunTUIDrive(t *testing.T) {
 	if err := Run(cfg, false); err != nil {
 		t.Fatalf("form run: %v", err)
 	}
-	if cfg.ClusterName != "dexlab" || cfg.DexPort != 32000 {
+	if cfg.ClusterName != "agentlab" || cfg.DexPort != 32000 {
 		t.Errorf("defaults not kept: cluster=%q dexPort=%d", cfg.ClusterName, cfg.DexPort)
 	}
 	if !cfg.Platform.Enabled {

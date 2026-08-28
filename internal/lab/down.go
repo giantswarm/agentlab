@@ -4,18 +4,18 @@ import (
 	"fmt"
 	"os"
 
-	"dexlab/internal/config"
+	"agentlab/internal/config"
 )
 
 // Down destroys the kind cluster. Certs are kept: the CA is only worth
-// regenerating deliberately (dexlab certs --force), and keeping it means an
-// immediate `dexlab up` reuses the same trust chain.
+// regenerating deliberately (agentlab certs --force), and keeping it means an
+// immediate `agentlab up` reuses the same trust chain.
 func Down(cfg *config.Config) error {
 	if err := run("kind", "delete", "cluster", "--name", cfg.ClusterName); err != nil {
 		return err
 	}
 	os.Remove(".token")
-	fmt.Println("Lab destroyed. certs/ kept (dexlab certs --force to regenerate).")
+	fmt.Println("Lab destroyed. certs/ kept (agentlab certs --force to regenerate).")
 	return nil
 }
 

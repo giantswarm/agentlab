@@ -3,6 +3,6 @@ certs/
 kubeconfig.oidc
 .kubeconfig.*
 .vendor/
-/dexlab
-/dexlab.yaml
+/agentlab
+/agentlab.yaml
 /state/

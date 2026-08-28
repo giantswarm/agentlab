@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"dexlab/internal/config"
+	"agentlab/internal/config"
 )
 
 // PlatformTest is the headless end-to-end proof: Dex login -> muster
@@ -30,11 +30,11 @@ func PlatformTest(cfg *config.Config, email string) error {
 		return err
 	}
 	if !httpUp(client, cfg.MusterBaseURL()+"/.well-known/oauth-authorization-server") {
-		return fmt.Errorf("muster is not reachable at %s — run `dexlab platform` first", cfg.MusterBaseURL())
+		return fmt.Errorf("muster is not reachable at %s — run `agentlab platform` first", cfg.MusterBaseURL())
 	}
 
 	step("Logging in to Dex as %s", email)
-	token, err := passwordGrant(cfg, "muster", config.MusterClientSecret,
+	token, err := passwordGrant(cfg, config.MusterClientID, config.MusterClientSecret,
 		user.Email, user.Password, "openid email groups profile")
 	if err != nil {
 		return err
@@ -168,7 +168,7 @@ func parseMCPResponse(raw []byte) (map[string]any, error) {
 	if json.Unmarshal(trimmed, &out) == nil {
 		return out, nil
 	}
-	for _, line := range strings.Split(string(trimmed), "\n") {
+	for line := range strings.SplitSeq(string(trimmed), "\n") {
 		line = strings.TrimSpace(line)
 		if data, ok := strings.CutPrefix(line, "data:"); ok {
 			if json.Unmarshal([]byte(strings.TrimSpace(data)), &out) == nil {

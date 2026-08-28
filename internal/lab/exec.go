@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // step prints a top-level progress line, matching the ==> style the shell
@@ -28,15 +29,7 @@ func run(name string, args ...string) error {
 
 // runQuiet executes a command, showing output only if it fails.
 func runQuiet(name string, args ...string) error {
-	var buf bytes.Buffer
-	cmd := exec.Command(name, args...)
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
-	if err := cmd.Run(); err != nil {
-		os.Stderr.Write(buf.Bytes())
-		return fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), err)
-	}
-	return nil
+	return pipeInto(nil, name, args...)
 }
 
 // output captures a command's stdout (stderr goes to the terminal).
@@ -71,6 +64,19 @@ func pipeInto(input []byte, name string, args ...string) error {
 		return fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), err)
 	}
 	return nil
+}
+
+// waitFor polls probe up to attempts times, sleeping interval between tries,
+// and reports whether it ever succeeded. The one wait loop for every
+// "component is eventually up" check.
+func waitFor(attempts int, interval time.Duration, probe func() bool) bool {
+	for range attempts {
+		if probe() {
+			return true
+		}
+		time.Sleep(interval)
+	}
+	return false
 }
 
 // ensureNamespace idempotently creates a namespace (the dry-run|apply trick,
