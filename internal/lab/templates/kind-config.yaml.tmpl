@@ -15,8 +15,8 @@ nodes:
     #
     # They are fixed when the node container is created, so changing one means
     # `agentlab down && agentlab up` — you cannot map a new port on a running
-    # cluster. All three are always mapped, so the platform and Backstage can
-    # be enabled later without recreating the cluster.
+    # cluster. All four are always mapped, so the platform, agents and
+    # Backstage can be enabled later without recreating the cluster.
     extraPortMappings:
       # Dex's NodePort. The lynchpin: the browser on the host and the apiserver
       # inside the node both resolve {{ .Issuer }} to Dex, so the
@@ -35,6 +35,13 @@ nodes:
       # lets Claude Code dial {{ .MusterBaseURL }}/mcp directly, no port-forward.
       - containerPort: {{ .MusterNodePort }}
         hostPort: {{ .Platform.MusterPort }}
+        listenAddress: "127.0.0.1"
+        protocol: TCP
+      # The kagent UI. No issuer trick needed here (the lab UI does no OAuth),
+      # so it stays a plain NodePort Service — pinned to this node port by
+      # `agentlab post-render`, published as {{ .KagentUIBaseURL }}.
+      - containerPort: {{ .KagentUINodePort }}
+        hostPort: {{ .Platform.AgentsPort }}
         listenAddress: "127.0.0.1"
         protocol: TCP
     # kubeadm already bind-mounts /etc/kubernetes/pki into the apiserver static

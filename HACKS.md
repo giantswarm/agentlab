@@ -194,6 +194,60 @@ before bootstrap swaps it, or an mcp-oauth client built without
 `opts.RootCAs`) and thread the pool deterministically; then the probe can
 stay but the bounce becomes dead code.
 
+### U7. Backstage agent create flow: `agent-deployment` Template embedded as a copy
+The GS Backstage build (0.199.x) hard-defaults the create flow's deploy to
+`template:default/agent-deployment`, but ships no such entity — every
+installation is expected to load it from the external
+giantswarm/backstage-catalogs repo via a `catalog.locations` URL. Without it,
+Deploy dies with `404 Template template:default/agent-deployment not found`
+(observed 2026-08-28 on 0.199.9). The lab wants a hermetic catalog (no GitHub
+fetch at boot), so it embeds a **verbatim copy** of the upstream template
+(`internal/lab/templates/static/agent-deployment-template.yaml`, inlined into
+the `backstage-catalog` ConfigMap via the `staticFile` template func — the
+file bypasses Go templating because its `${{ … }}` scaffolder expressions
+contain `{{ … }}`). The copy can drift from upstream; `agentlab
+backstage-test` asserts the entity is registered, not that it matches.
+**Unblocks:** giantswarm/backstage — bundle the hidden Template with the
+backend (or point the default `deployTemplateRef` at an entity the image
+registers itself) so an install works without a network catalog location;
+then the embedded copy can be deleted.
+
+### U8. `golang-adk:0.9.12` not published to gsoci — agent pods ImagePullBackOff
+kagent-controller composes the runtime image for `runtime: go` agents from its
+own version tag: `IMAGE_REGISTRY`/golang-adk:`IMAGE_TAG` =
+`gsoci.azurecr.io/giantswarm/golang-adk:0.9.12` — with a `-full` suffix when
+the agent mounts skills. gsoci has kagent-controller:0.9.12,
+kagent-app:0.9.12 and kagent-skills-init:0.9.12, but golang-adk (both
+variants) stops at 0.9.11 (verified 2026-08-28 via the tags API), so every
+agent the platform creates — including everything deployed through the
+Backstage create flow — sits in ImagePullBackOff. Purely a publish/retag gap
+for the one repo.
+**Workaround (automated):** `healADKImages` (`internal/lab/adk.go`, run by
+`agentlab up`/`platform` when agents are enabled) resolves the tag kagent
+will reference from the kagent-controller ConfigMap and, per variant
+(plain/`-full`), pulls the real image first; only when the registry does not
+have it does it retag the newest published older release in its place and
+side-load it into the node. Self-converging: the pull-first order means the
+moment upstream publishes the real tag, the stand-in is overwritten and
+side-loaded on the next `up` — no manual cleanup. Failures downgrade to a
+note; the platform install never blocks on this heal.
+**Unblocks:** Giant Swarm image retagging — publish golang-adk (plain and
+`-full`) at every kagent release tag alongside the other kagent images; the
+heal then degenerates to an image preload and can eventually be deleted.
+
+### U9. `postrender.go` patch: fixed nodePort pinned onto the kagent-ui Service
+The lab host-publishes the kagent UI through a kind port mapping, which needs
+a *stable* node-side port. `ui.service.type: NodePort` is a chart value, but
+the upstream kagent chart's `ui-service.yaml` template renders no `nodePort`
+field (verified in kagent 0.9.12 via the vendored wrapper chart 0.1.37), so
+Kubernetes assigns a random one — useless to kind's fixed `extraPortMappings`.
+`agentlab post-render` pins `spec.ports[name=ui].nodePort` to
+`config.KagentUINodePort` (30880); the kind config maps that onto
+`platform.agentsPort` (default 8081) on the host.
+**Unblocks:** kagent-dev/kagent — render `ui.service.ports.nodePort` when set
+(the standard chart idiom). The value then moves into
+`agent-platform-values.yaml.tmpl` and the patch is deleted.
+
 ## Accepted lab trade-offs (not hacks to fix)
 
 - **Checksum stamping via the `REPLACED_AT_APPLY` placeholder** — the standard

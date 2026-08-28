@@ -42,6 +42,17 @@ data:
         email: {{ $u.Email }}
       memberOf: [{{ join $u.Groups ", " }}]
 {{- end }}
+  # The hidden scaffolder Template behind the agent create flow's Deploy button
+  # (/agents/new -> review -> scaffolderApi.scaffold() with
+  # template:default/agent-deployment, which kube:applies the composed
+  # OCIRepository + HelmRelease with the user's OIDC token). Without this
+  # entity the deploy dies with 404 "Template template:default/agent-deployment
+  # not found". Real installations load it from giantswarm/backstage-catalogs;
+  # the lab embeds the same file (templates/static/) so the catalog needs no
+  # network. The manifests it applies need Flux's source+helm controllers to
+  # actually deliver anything — see flux.go.
+  agent-deployment-template.yaml: |
+{{ staticFile "agent-deployment-template.yaml" | indent 4 }}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -149,6 +160,10 @@ data:
           target: /lab-catalog/users.yaml
           rules:
             - allow: [User, Group]
+        - type: file
+          target: /lab-catalog/agent-deployment-template.yaml
+          rules:
+            - allow: [Template]
 ---
 apiVersion: apps/v1
 kind: Deployment

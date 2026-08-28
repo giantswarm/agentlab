@@ -7,6 +7,8 @@ import (
 	"io"
 
 	"gopkg.in/yaml.v3"
+
+	"agentlab/internal/config"
 )
 
 // PostRender is the Helm post-renderer for the agent-platform-standalone
@@ -43,6 +45,13 @@ import (
 //     muster-direct), so the values carry a placeholder parentRef and the
 //     rendered route is stripped here: this lab has no Gateway, no Gateway API
 //     CRDs, and reaches muster through hostNetwork + the kind port mapping.
+//
+//  5. A fixed nodePort on the kagent-ui Service: the values set
+//     `ui.service.type: NodePort` (a chart value), but the chart's ui-service
+//     template renders no `nodePort` field, so Kubernetes would pick a random
+//     one — useless to kind's fixed extraPortMappings. Pinned to
+//     config.KagentUINodePort, the containerPort side of the mapping that
+//     publishes the UI on the host (HACKS.md U9).
 func PostRender(in io.Reader, out io.Writer) error {
 	dec := yaml.NewDecoder(in)
 	enc := yaml.NewEncoder(out)
@@ -75,6 +84,9 @@ func PostRender(in io.Reader, out io.Writer) error {
 				return err
 			}
 		}
+		if kind == "Service" && name == "kagent-ui" {
+			patchKagentUIService(root)
+		}
 		if err := enc.Encode(&doc); err != nil {
 			return err
 		}
@@ -93,6 +105,21 @@ func patchMusterDeployment(root *yaml.Node) {
 	setKey(rolling, "maxUnavailable", intNode(1))
 	setKey(strategy, "rollingUpdate", rolling)
 	setKey(ensureMap(root, "spec"), "strategy", strategy)
+}
+
+// patchKagentUIService pins the UI port entry to the fixed NodePort the kind
+// config maps onto the host. Keyed on the port name so an extra port added by
+// a future chart stays untouched.
+func patchKagentUIService(root *yaml.Node) {
+	ports := mapValue(ensureMap(root, "spec"), "ports")
+	if ports == nil || ports.Kind != yaml.SequenceNode {
+		return
+	}
+	for _, p := range ports.Content {
+		if scalarAt(p, "name") == "ui" {
+			setKey(p, "nodePort", intNode(config.KagentUINodePort))
+		}
+	}
 }
 
 func patchMusterConfig(root *yaml.Node) error {

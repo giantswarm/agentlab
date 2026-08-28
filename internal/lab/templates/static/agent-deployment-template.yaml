@@ -1,0 +1,77 @@
+# Verbatim copy of giantswarm/backstage-catalogs
+# templates/agent-deployment/template.yaml — the hidden scaffolder Template the
+# Backstage agent create flow (/agents/new) drives. Real installations load it
+# from that repo over the network; the lab embeds the same entity so its
+# catalog stays hermetic. Keep in sync when upstream changes.
+#
+# This file is in templates/static/ (inlined via the staticFile template func,
+# NOT rendered): its ${{ … }} scaffolder expressions contain `{{ … }}`, which
+# Go's text/template would otherwise try to parse.
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: agent-deployment
+  title: Agent deployment
+  description: >-
+    Applies a composed agent manifest (OCIRepository + HelmRelease) directly to
+    an installation via kube:apply. Driven by the Agent Platform create flow
+    (/agents/new) — not meant to be run standalone from the scaffolder.
+  # 'hidden' keeps it out of the /create template list (see the GS scaffolder
+  # list override, which filters entities tagged 'hidden').
+  tags:
+    - hidden
+spec:
+  owner: group:team-bumblebee
+  type: resource
+  parameters:
+    - title: Manifest
+      required:
+        - manifest
+        - clusterName
+      properties:
+        manifest:
+          title: Manifest
+          type: string
+          description: The multi-document YAML manifest to apply.
+        clusterName:
+          title: Installation
+          type: string
+          description: Installation / management cluster to apply the manifest to.
+        oidcTokenInstallation:
+          title: OIDC token installation
+          type: string
+          description: >-
+            Installation whose backend the task is routed to (read by the GS
+            scaffolder client).
+        releaseName:
+          title: Release name
+          type: string
+          description: HelmRelease name, used only to build the result link.
+        namespace:
+          title: Namespace
+          type: string
+          description: Namespace the resources land in, used only for the result link.
+  steps:
+    - id: apply
+      name: Apply to installation
+      action: kube:apply
+      input:
+        # 'namespaced' only affects the action's log message; the underlying
+        # KubernetesObjectApi resolves each document's scope on its own.
+        namespaced: true
+        clusterName: ${{ parameters.clusterName }}
+        token: ${{ secrets.USER_OIDC_TOKEN }}
+        manifest: ${{ parameters.manifest }}
+  output:
+    links:
+      - title: Go to the agents list
+        url: /agent-platform/agents
+      - title: Go to the deployment
+        if: ${{ parameters.releaseName and parameters.namespace }}
+        url: /deployments/${{ parameters.clusterName }}/helmrelease/${{ parameters.namespace }}/${{ parameters.releaseName }}
+    text:
+      - title: Applied manifest
+        content: |
+          ```yaml
+          ${{ parameters.manifest }}
+          ```

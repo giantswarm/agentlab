@@ -29,7 +29,14 @@ apiserver chain, with Dex doing the logins.
   default `admin@lab.local` / `password`).
 - muster's `kubernetes` tools are a *family*: pass the MCPServer CR name,
   e.g. `management_cluster: "agentlab-mcp-kubernetes"`.
-- The agents runtime (kagent) installs with the platform. Its default
+- The agents runtime (kagent) installs with the platform by default but is
+  optional (`platform.agents` in `agentlab.yaml`) — on real clusters agent
+  delivery runs through Flux/GitOps, which the lab does not run as a GitOps
+  loop. Backstage's agent create flow (`/agents/new`) deploys by kube:applying
+  Flux CRs through the scaffolder Template `agent-deployment` (embedded into
+  the lab catalog from `templates/static/`), so `agentlab backstage` also
+  installs Flux's source+helm controllers as the delivery engine when agents
+  are enabled — nothing watches git. Its default
   ModelConfig and Backstage's ai-chat both use `aiModel` from `agentlab.yaml`
   (Anthropic only); the API key comes from `$ANTHROPIC_API_KEY` on the host at
   deploy time and lives only in the Secrets `kagent/kagent-anthropic` and
@@ -90,9 +97,9 @@ Load-bearing invariants (details in README.md):
 - **The agent platform is on by default** — it is what the lab tests. Dex,
   kind and the RBAC exist to serve it; muster is the single auth enforcement
   point, and `mcp-kubernetes` is deliberately unauthenticated on the cluster
-  network. kagent (the agents runtime) is part of the platform install, with
-  `controller.auth.mode: unsecure` because the lab runs no JWT-validating
-  front proxy.
+  network. kagent (the agents runtime) is an optional part of the platform
+  install (on by default), with `controller.auth.mode: unsecure` because the
+  lab runs no JWT-validating front proxy.
 - **One issuer URL from every vantage point**: `https://localhost:<dexPort>/dex`
   works from the Mac, inside the node, and inside hostNetwork pods because the
   Dex NodePort equals the kind host port. The issuer must be spelled

@@ -17,7 +17,7 @@ import (
 	"agentlab/internal/config"
 )
 
-//go:embed templates/*.tmpl
+//go:embed templates/*.tmpl templates/static/*
 var templatesFS embed.FS
 
 // StateDir is where rendered manifests land, for inspection and for
@@ -34,6 +34,7 @@ type tmplData struct {
 	*config.Config
 	CertsDir            string // absolute, for the kind extraMount
 	MusterNodePort      int
+	KagentUINodePort    int
 	BrowserCallbackPort int
 	AllGroups           []string
 	KubernetesClientSecret,
@@ -50,6 +51,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		Config:                 cfg,
 		CertsDir:               certsDir,
 		MusterNodePort:         config.MusterNodePort,
+		KagentUINodePort:       config.KagentUINodePort,
 		BrowserCallbackPort:    config.BrowserCallbackPort,
 		AllGroups:              config.Groups,
 		KubernetesClientSecret: config.KubernetesClientSecret,
@@ -67,6 +69,26 @@ var tmplFuncs = template.FuncMap{
 		return fmt.Sprintf("%s-%s-%s-%s-%s", h[0:8], h[8:12], h[12:16], h[16:20], h[20:32])
 	},
 	"join": func(items []string, sep string) string { return strings.Join(items, sep) },
+	// staticFile inlines an embedded asset from templates/static/ verbatim —
+	// content that must bypass template rendering, like the scaffolder
+	// Template whose ${{ … }} expressions Go's text/template would try to
+	// parse as actions.
+	"staticFile": func(name string) (string, error) {
+		raw, err := templatesFS.ReadFile("templates/static/" + name)
+		return string(raw), err
+	},
+	// indent prefixes every non-empty line, for nesting staticFile content
+	// into a YAML block scalar.
+	"indent": func(n int, s string) string {
+		pad := strings.Repeat(" ", n)
+		lines := strings.Split(s, "\n")
+		for i, l := range lines {
+			if l != "" {
+				lines[i] = pad + l
+			}
+		}
+		return strings.Join(lines, "\n")
+	},
 }
 
 // renderTemplate renders one embedded template with the config.
@@ -100,6 +122,7 @@ var manifests = map[string]struct {
 	"rbac.yaml.tmpl":                  {out: "rbac.yaml"},
 	"agent-platform-values.yaml.tmpl": {out: "agent-platform-values.yaml"},
 	"mcp-kubernetes-values.yaml.tmpl": {out: "mcp-kubernetes-values.yaml"},
+	"flux-values.yaml.tmpl":           {out: "flux-values.yaml"},
 	"demo-workflow.yaml.tmpl":         {out: "demo-workflow.yaml"},
 	"dex.yaml.tmpl":                   {out: "dex.yaml", extraInputs: []string{"certs/tls.crt"}},
 	"backstage.yaml.tmpl":             {out: "backstage.yaml", extraInputs: []string{"certs/ca.crt"}},

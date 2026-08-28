@@ -122,10 +122,18 @@ ServiceAccount. muster is the single enforcement point.
 
 ### Agents (kagent)
 
-The platform's agent runtime ships with the lab: the umbrella's **kagent**
-component is enabled, so `Agent` CRs run against a **default `ModelConfig`**
-that the kagent chart renders from the lab's `aiModel` setting
-(`agentlab.yaml`, default `claude-sonnet-4-6` — the BOM's own default).
+The platform's agent runtime is an **optional component**, on by default
+(`platform.agents` in `agentlab.yaml`; headlessly:
+`agentlab configure --defaults --agents=false`). On real clusters agent
+delivery runs through Flux/GitOps, which this lab does not run as a GitOps
+loop — skip the runtime when agents are not what you are testing. (Backstage's
+agent create flow does need Flux's source+helm controllers as its delivery
+engine; the lab installs exactly those two when Backstage and agents are both
+enabled — see [The agent create flow](#the-agent-create-flow).) When enabled, the
+umbrella's **kagent** component installs and `Agent` CRs run against a
+**default `ModelConfig`** that the kagent chart renders from the lab's
+`aiModel` setting (`agentlab.yaml`, default `claude-sonnet-4-6` — the BOM's
+own default).
 
 The ModelConfig references the Secret `kagent/kagent-anthropic`. The API key
 is a **real credential**, so unlike the lab's throwaway passwords it never
@@ -136,11 +144,18 @@ succeeds — agents just cannot call a model until the Secret exists. The same
 key powers Backstage's AI chat via a second Secret,
 `backstage/backstage-anthropic`.
 
-The kagent UI is not host-published (no spare port mapping on an existing
-cluster):
+The kagent UI is host-published like the other components:
+`http://localhost:8081` (`platform.agentsPort` in `agentlab.yaml`). The UI does
+no OAuth in this lab, so it needs none of the issuer tricks — the `kagent-ui`
+Service is simply `type: NodePort`, pinned to node port 30880 by
+`agentlab post-render` (the chart's Service template renders no `nodePort`
+field — HACKS.md U9), and the kind config maps that onto the host. Like every
+kind port mapping it is fixed at node-creation time, so a cluster created
+before this mapping existed needs `agentlab down && agentlab up`; the stopgap
+there is the old port-forward:
 
 ```bash
-kubectl -n kagent port-forward svc/kagent-ui 8080:8080
+kubectl -n kagent port-forward svc/kagent-ui 8081:8080
 ```
 
 Lab deviations on the kagent side, same spirit as the table below: the
@@ -178,7 +193,8 @@ same one-URL trick, just spelled with a name.
 | `valkey.valkey.metrics.podMonitor.enabled: false`, `muster…serviceMonitor.enabled: false`, `muster…prometheusRule.enabled: false` | No Prometheus Operator, so `PodMonitor` / `ServiceMonitor` / `PrometheusRule` have no CRD. |
 | `muster.rbac.{mcpServerEditor,workflowEditor}.subjects` → `oidc:platform-admins` | The umbrella binds muster's editor Roles to Giant Swarm's admin groups, which do not exist here. Rebound to the lab's own admin group (`--oidc-groups-prefix=oidc:`, same spelling as the lab RBAC). Lists replace, so the GS groups are dropped. |
 | muster patched to `hostNetwork` + `maxSurge: 0` | Same issuer trick as the apiserver and Backstage. `maxSurge: 0` because two hostNetwork pods cannot both bind `:8090` on a one-node cluster. Applied by `agentlab post-render` (`helm --post-renderer`, the binary invoking itself) — the plain-Helm replacement for the Flux `postRenderers` the meta-package forwarded to helm-controller. |
-| `components.kagent.enabled: true`, `controller.auth.mode: unsecure`, kagent ServiceMonitor + OTel off | Agents are part of what the lab tests, so kagent is on (the umbrella defaults it off). `unsecure` because the GS `trusted-proxy` mode assumes a JWT-validating agentgateway in front; no Prometheus Operator / OTLP gateway in kind. See [Agents (kagent)](#agents-kagent). |
+| `components.kagent.enabled` from `platform.agents`, `controller.auth.mode: unsecure`, kagent ServiceMonitor + OTel off | Agents are part of what the lab tests, so kagent is on by default (the umbrella defaults it off) but optional — `platform.agents: false` skips the runtime. `unsecure` because the GS `trusted-proxy` mode assumes a JWT-validating agentgateway in front; no Prometheus Operator / OTLP gateway in kind. See [Agents (kagent)](#agents-kagent). |
+| `kagent.ui.service.type: NodePort`, nodePort 30880 pinned by `agentlab post-render` | On a real MC the UI sits behind the agentgateway edge; this lab publishes it through the kind port mapping instead (host side `platform.agentsPort`, default 8081). The chart's Service template renders no `nodePort` field, so the fixed node port is a post-render patch (HACKS.md U9). |
 | The chart vendored at a pinned git SHA | Component versions are the chart's own tested BOM (`Chart.lock`); the lab no longer pins its own. The only lab-side pin is `platform.apsRef` — the chart repo commit — so two runs still install the same thing. |
 
 ### Platform gotchas
@@ -307,7 +323,49 @@ configured user and then proves the muster hop with that user's own token:
   muster servers  [(agentlab-mcp-kubernetes, Connected)]
   muster workflows [lab-cluster-overview]
   muster core tools 28 exposed
+  agent deploy template registered (template:default/agent-deployment)
 ```
+
+### The agent create flow
+
+**Agent Platform → Agents → New agent** (`/agents/new`) composes an agent from
+a form (installation, name, model, system prompt) and its Deploy button applies
+the result **directly to the cluster**: the frontend calls the scaffolder with
+the hidden catalog template `template:default/agent-deployment`, which runs the
+`kube:apply` action with the *user's* per-installation OIDC token on a composed
+`OCIRepository` + `HelmRelease` (the `agent` chart from gsoci, values inlined).
+No pull request, no GitOps repo — but the applied resources are **Flux CRs**,
+so something on the cluster has to turn them into an installed chart.
+
+The lab supplies both halves:
+
+- **The template.** Real installations load the Template entity from
+  [giantswarm/backstage-catalogs](https://github.com/giantswarm/backstage-catalogs/tree/main/templates/agent-deployment);
+  the lab embeds a verbatim copy
+  (`internal/lab/templates/static/agent-deployment-template.yaml`) into the
+  `backstage-catalog` ConfigMap and registers it as a file location, so the
+  catalog needs no network. Without it every deploy dies with
+  `404 Template template:default/agent-deployment not found` (HACKS.md U7).
+- **The delivery engine.** `agentlab backstage` installs the fluxcd-community
+  `flux2` chart with **only source-controller and helm-controller** (release
+  `flux` in `flux-system`, values in `state/flux-values.yaml`) — enough to
+  reconcile exactly the two kinds the flow applies, still no GitOps loop.
+  Skipped when the platform or agents are disabled: with no kagent there is no
+  `ModelConfig` to build an agent on and the flow is unusable anyway.
+
+Everything lands in the selected ModelConfig's namespace (`kagent`): one shared
+`OCIRepository/agent` tracking `semver: x.x.x`, one `HelmRelease` per agent
+named after its slug. The lab omits `agentPlatform.fluxServiceAccountName`
+(composed HelmReleases then carry no `spec.serviceAccountName`), so
+helm-controller applies with its own — there is no Flux multi-tenancy admission
+policy here. RBAC still applies to the *apply* step itself: it runs with the
+signed-in user's token, so `platform-admins` can deploy agents and `developers`
+(edit only in `demo`) cannot — which is the platform behavior, not a lab bug.
+
+One more platform gap stands between "HelmRelease installed" and a running
+agent: upstream does not currently publish the `golang-adk` runtime image at
+kagent's own tag, so the agent pod would ImagePullBackOff. `agentlab up` heals
+this automatically by standing in the newest published release (HACKS.md U8).
 
 ### Backstage gotchas
 

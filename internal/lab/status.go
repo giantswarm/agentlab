@@ -17,6 +17,7 @@ type Status struct {
 	ClusterUp         bool
 	DexUp             bool
 	MusterUp          bool
+	AgentsUp          bool // the kagent UI on its host port
 	BackstageUp       bool
 	KubeconfigPresent bool // kubeconfig.oidc from a previous login
 }
@@ -45,6 +46,11 @@ func Probe(cfg *config.Config) Status {
 		if cfg.Platform.Enabled {
 			wg.Go(func() {
 				s.MusterUp = httpUp(client, cfg.MusterBaseURL()+"/.well-known/oauth-authorization-server")
+			})
+		}
+		if cfg.Platform.Enabled && cfg.Platform.Agents {
+			wg.Go(func() {
+				s.AgentsUp = httpUp(client, cfg.KagentUIBaseURL())
 			})
 		}
 		if cfg.Backstage.Enabled {

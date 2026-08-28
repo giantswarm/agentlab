@@ -18,8 +18,8 @@ func TestRunTUIDrive(t *testing.T) {
 		"\r", "\r", "\r", // group 1: cluster name, dex port, dex image
 		"\r",          // group 2: customize users? -> keep as is
 		"\x1b[B", " ", // group 3: platform is preselected; arrow down, toggle backstage
-		"\r",                   // submit component selection
-		"\r", "\r", "\r", "\r", // platform group: muster port, mcp version, aps ref, claude model
+		"\r",                               // submit component selection
+		"\r", "\r", "\r", "\r", "\r", "\r", // platform group: muster port, mcp version, aps ref, agents confirm, agents ui port, claude model
 		"\r", "\r", // backstage group: port, image
 	)
 	testOutput = io.Discard
@@ -34,6 +34,9 @@ func TestRunTUIDrive(t *testing.T) {
 	}
 	if !cfg.Platform.Enabled {
 		t.Errorf("platform not enabled (should be preselected from the default config)")
+	}
+	if !cfg.Platform.Agents {
+		t.Errorf("agents not enabled (the confirm should keep the default)")
 	}
 	if !cfg.Backstage.Enabled {
 		t.Errorf("backstage not enabled by multiselect")

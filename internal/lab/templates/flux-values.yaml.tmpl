@@ -1,0 +1,24 @@
+# Values for the fluxcd-community flux2 chart — the minimal Flux the lab runs.
+#
+# This is NOT a GitOps loop: no Git source or Kustomization is ever created.
+# Backstage's agent create flow deploys an agent by applying an OCIRepository +
+# HelmRelease directly to the cluster (scaffolder kube:apply, see the
+# agent-deployment Template in the backstage catalog), so source-controller and
+# helm-controller are the install engine those two kinds need — and nothing
+# else runs.
+sourceController:
+  create: true
+helmController:
+  create: true
+kustomizeController:
+  create: false
+notificationController:
+  create: false
+imageAutomationController:
+  create: false
+imageReflectionController:
+  create: false
+# NetworkPolicies would be inert anyway: kind's default CNI does not enforce
+# them.
+policies:
+  create: false

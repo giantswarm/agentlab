@@ -37,6 +37,17 @@ func BackstageUp(cfg *config.Config) error {
 		}
 	}
 
+	// The agent create flow (/agents/new) deploys agents as Flux CRs applied
+	// directly via the scaffolder — the lab needs source+helm controllers as
+	// the delivery engine for exactly those CRs. Without kagent there is no
+	// ModelConfig to build an agent on, so the flow is unusable and Flux is
+	// skipped along with it.
+	if cfg.Platform.Enabled && cfg.Platform.Agents {
+		if err := fluxUp(cfg); err != nil {
+			return err
+		}
+	}
+
 	step("Deploying Backstage")
 	// Namespace and CA secret land before the Deployment so the pod never
 	// waits on a missing volume. The checksum stamped into the pod template

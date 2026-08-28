@@ -230,6 +230,27 @@ func backstageSignIn(cfg *config.Config, user *config.User) error {
 	} else {
 		fmt.Printf("  muster /core-tools -> %d\n", status)
 	}
+
+	// The agent create flow's Deploy button scaffolds
+	// template:default/agent-deployment; without the catalog entity every
+	// deploy dies with a scaffolder 404. Assert the lab registered it (the
+	// embedded copy in backstage.yaml.tmpl).
+	req, err := http.NewRequest(http.MethodGet,
+		cfg.BackstageBaseURL()+"/api/catalog/entities/by-name/template/default/agent-deployment", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+bsToken)
+	resp, err = follow.Do(req)
+	if err != nil {
+		return err
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("agent-deployment template not in the catalog (%d) — the create flow's deploy would 404", resp.StatusCode)
+	}
+	fmt.Printf("  agent deploy template registered (template:default/agent-deployment)\n")
 	return nil
 }
 

@@ -56,6 +56,8 @@ func Run(cfg *config.Config, accessible bool) error {
 	musterPort := strconv.Itoa(cfg.Platform.MusterPort)
 	mcpVersion := cfg.Platform.MCPKubernetesVersion
 	apsRef := cfg.Platform.APSRef
+	agentsEnabled := cfg.Platform.Agents
+	agentsPort := strconv.Itoa(cfg.Platform.AgentsPort)
 	aiModel := cfg.AIModel
 	backstagePort := strconv.Itoa(cfg.Backstage.Port)
 	backstageImage := cfg.Backstage.Image
@@ -125,6 +127,17 @@ func Run(cfg *config.Config, accessible bool) error {
 				Description("The umbrella chart has no release yet; it is vendored from git at this pinned SHA.").
 				Value(&apsRef).
 				Validate(notEmpty),
+			huh.NewConfirm().
+				Title("Install the agents runtime (kagent)?").
+				Description("Optional: on real clusters agent delivery runs through Flux/GitOps, which\nthis lab does not run. Skip it if you are not exercising agents.").
+				Affirmative("Install").
+				Negative("Skip").
+				Value(&agentsEnabled),
+			huh.NewInput().
+				Title("kagent UI port on this machine").
+				Description("The agents web UI: http://localhost:<port>. The kind mapping exists even\nwith agents off (fixed at cluster creation), so they can be enabled later.").
+				Value(&agentsPort).
+				Validate(config.ValidatePort),
 			huh.NewInput().
 				Title("Claude model").
 				Description("Used by the platform agents' ModelConfig and Backstage's AI chat.\nThe API key comes from $ANTHROPIC_API_KEY at deploy time, never from this file.").
@@ -161,6 +174,8 @@ func Run(cfg *config.Config, accessible bool) error {
 	cfg.Platform.MusterPort = mustAtoi(musterPort)
 	cfg.Platform.MCPKubernetesVersion = mcpVersion
 	cfg.Platform.APSRef = apsRef
+	cfg.Platform.Agents = agentsEnabled
+	cfg.Platform.AgentsPort = mustAtoi(agentsPort)
 	cfg.AIModel = aiModel
 	cfg.Backstage.Port = mustAtoi(backstagePort)
 	cfg.Backstage.Image = backstageImage

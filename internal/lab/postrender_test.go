@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"agentlab/internal/config"
 )
 
 const postRenderInput = `---
@@ -51,6 +53,19 @@ metadata:
   name: muster
 spec:
   ports: [{port: 8090}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kagent-ui
+  namespace: kagent
+spec:
+  type: NodePort
+  ports:
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP
+      name: ui
 `
 
 func TestPostRender(t *testing.T) {
@@ -88,10 +103,26 @@ func TestPostRender(t *testing.T) {
 		}
 		docs = append(docs, doc)
 	}
-	if len(docs) != 3 {
-		t.Fatalf("got %d documents, want 3", len(docs))
+	if len(docs) != 4 {
+		t.Fatalf("got %d documents, want 4", len(docs))
 	}
 	for _, doc := range docs {
+		if doc["kind"] == "Service" {
+			name := doc["metadata"].(map[string]any)["name"]
+			ports := doc["spec"].(map[string]any)["ports"].([]any)
+			nodePort, pinned := ports[0].(map[string]any)["nodePort"]
+			switch name {
+			case "kagent-ui":
+				if !pinned || nodePort != config.KagentUINodePort {
+					t.Errorf("kagent-ui nodePort not pinned: %v", ports[0])
+				}
+			case "muster":
+				if pinned {
+					t.Errorf("unrelated service gained a nodePort: %v", ports[0])
+				}
+			}
+			continue
+		}
 		if doc["kind"] != "ConfigMap" {
 			continue
 		}

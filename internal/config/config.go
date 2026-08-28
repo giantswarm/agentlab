@@ -45,6 +45,14 @@ const MusterNodePort = 8090
 // callback. Fixed because it must be pre-registered in Dex's redirectURIs.
 const BrowserCallbackPort = 5555
 
+// KagentUINodePort is the fixed NodePort the kagent-ui Service is pinned to,
+// so the kind port mapping (created once, at cluster creation) has a stable
+// node-side port to publish. The kagent chart renders `ui.service.type` but no
+// `nodePort` field, so the pin is applied by `agentlab post-render` (HACKS.md
+// U9). A real Kubernetes NodePort, hence the 30000-32767 range; the host side
+// is configurable via Platform.AgentsPort.
+const KagentUINodePort = 30880
+
 type User struct {
 	Email        string   `yaml:"email"`
 	Username     string   `yaml:"username"`
@@ -60,6 +68,15 @@ func (u User) HasGroup(g string) bool {
 
 type Platform struct {
 	Enabled bool `yaml:"enabled"`
+	// The agents runtime (kagent), an optional part of the platform install.
+	// On real clusters agent delivery runs through Flux/GitOps, which the lab
+	// does not run, so labs that are not exercising agents can skip the
+	// runtime entirely. Inert when the platform itself is disabled.
+	Agents bool `yaml:"agents"`
+	// Host-side port for the kagent UI (http://localhost:<port>). The kind
+	// mapping onto KagentUINodePort always exists — like the other mappings,
+	// it is fixed at cluster creation — so agents can be enabled later.
+	AgentsPort int `yaml:"agentsPort"`
 	// Host-side port for muster; what Claude Code and the browser dial.
 	MusterPort int `yaml:"musterPort"`
 	// Chart version of the standalone mcp-kubernetes release.
@@ -122,6 +139,8 @@ func Default() *Config {
 		},
 		Platform: Platform{
 			Enabled:              true,
+			Agents:               true,
+			AgentsPort:           8081,
 			MusterPort:           8090,
 			MCPKubernetesVersion: "1.0.9",
 			APSRepo:              "https://github.com/giantswarm/agent-platform-standalone",
@@ -130,7 +149,7 @@ func Default() *Config {
 		Backstage: Backstage{
 			Enabled: false,
 			Port:    7007,
-			Image:   "gsoci.azurecr.io/giantswarm/backstage:0.192.0",
+			Image:   "gsoci.azurecr.io/giantswarm/backstage:0.199.9",
 		},
 	}
 }
@@ -269,6 +288,9 @@ func (c *Config) Validate() error {
 	if err := ValidatePort(strconv.Itoa(c.Platform.MusterPort)); err != nil {
 		return fmt.Errorf("platform.musterPort: %w", err)
 	}
+	if err := ValidatePort(strconv.Itoa(c.Platform.AgentsPort)); err != nil {
+		return fmt.Errorf("platform.agentsPort: %w", err)
+	}
 	if err := ValidatePort(strconv.Itoa(c.Backstage.Port)); err != nil {
 		return fmt.Errorf("backstage.port: %w", err)
 	}
@@ -315,6 +337,10 @@ func (c *Config) MusterBaseURL() string {
 
 func (c *Config) BackstageBaseURL() string {
 	return fmt.Sprintf("http://localhost:%d", c.Backstage.Port)
+}
+
+func (c *Config) KagentUIBaseURL() string {
+	return fmt.Sprintf("http://localhost:%d", c.Platform.AgentsPort)
 }
 
 // ValidateNodePort checks the Kubernetes NodePort range; the Dex port must be

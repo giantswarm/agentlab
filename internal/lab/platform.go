@@ -209,9 +209,15 @@ func platformUp(cfg *config.Config, chartReady <-chan error) error {
 	// subchart from providers.anthropic) references this secret; agent pods
 	// mount it at run time, so it can land after the install — which it must,
 	// since the chart itself creates the kagent namespace.
-	step("Wiring the agents to Anthropic (ModelConfig model: %s)", cfg.AIModel)
-	if _, err := ensureAnthropicSecret("kagent", "kagent-anthropic"); err != nil {
-		return err
+	if cfg.Platform.Agents {
+		step("Wiring the agents to Anthropic (ModelConfig model: %s)", cfg.AIModel)
+		if _, err := ensureAnthropicSecret("kagent", "kagent-anthropic"); err != nil {
+			return err
+		}
+		// Agent pods need the golang-adk runtime image at kagent's own tag,
+		// which upstream has been observed not to publish (HACKS.md U8).
+		step("Ensuring the agents' ADK runtime images are on the node")
+		healADKImages(cfg)
 	}
 
 	// muster runs with hostNetwork and the kind config maps its port onto the
@@ -246,6 +252,26 @@ func platformUp(cfg *config.Config, chartReady <-chan error) error {
 			platformNamespace, cfg.Platform.MusterPort, config.MusterNodePort)
 	}
 
+	agentsHint := "  Agents (kagent) are disabled (platform.agents in agentlab.yaml)."
+	if cfg.Platform.Agents {
+		// helm --wait already covered the kagent-ui rollout, so the NodePort
+		// answers as soon as kube-proxy programs it — a short retry suffices.
+		step("Waiting for the kagent UI on %s", cfg.KagentUIBaseURL())
+		uiUp := waitFor(10, 2*time.Second, func() bool {
+			return httpUp(client, cfg.KagentUIBaseURL())
+		})
+		if uiUp {
+			agentsHint = fmt.Sprintf("  Agents (kagent) run with model %s; UI: %s",
+				cfg.AIModel, cfg.KagentUIBaseURL())
+		} else {
+			agentsHint = fmt.Sprintf(`  Agents (kagent) run with model %s, but the UI is NOT reachable on %s.
+  If 'docker port %s' shows no %d line, this cluster
+  predates the kagent UI port mapping and must be recreated (agentlab down && agentlab up).
+  Stopgap: kubectl -n kagent port-forward svc/kagent-ui %d:8080`,
+				cfg.AIModel, cfg.KagentUIBaseURL(), cfg.ControlPlaneNode(),
+				cfg.Platform.AgentsPort, cfg.Platform.AgentsPort)
+		}
+	}
 	fmt.Printf(`
 Platform is up.
   %s
@@ -254,12 +280,11 @@ Platform is up.
     claude mcp add --transport http muster %s/mcp
     # then in Claude Code: /mcp -> authenticate
 
-  Agents (kagent) run with model %s; the UI is not host-published:
-    kubectl -n kagent port-forward svc/kagent-ui 8080:8080
+%s
 
   Smoke-test it headlessly instead:
     agentlab platform-test
-`, reach, cfg.MusterBaseURL(), cfg.AIModel)
+`, reach, cfg.MusterBaseURL(), agentsHint)
 	// Everything the platform runs is in the node now — record it so the next
 	// boot side-loads instead of pulling.
 	snapshotPreloadImages(cfg)

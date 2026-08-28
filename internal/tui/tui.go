@@ -296,6 +296,12 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.flash = "the platform is disabled in " + config.File
 			}
+		case "a":
+			if m.cfg.Platform.Enabled && m.cfg.Platform.Agents {
+				m.openURL(m.cfg.KagentUIBaseURL())
+			} else {
+				m.flash = "agents are disabled in " + config.File
+			}
 		case "b":
 			if m.cfg.Backstage.Enabled {
 				m.openURL(m.cfg.BackstageBaseURL())
@@ -487,6 +493,8 @@ func (m model) topView() string {
 	b.WriteString(m.statusLine("kind cluster", m.cfg.KubeContext(), true, m.status.ClusterUp))
 	b.WriteString(m.statusLine("dex", m.cfg.Issuer(), true, m.status.DexUp))
 	b.WriteString(m.statusLine("agent platform", m.cfg.MusterBaseURL(), m.cfg.Platform.Enabled, m.status.MusterUp))
+	b.WriteString(m.statusLine("agents (kagent)", m.cfg.KagentUIBaseURL(),
+		m.cfg.Platform.Enabled && m.cfg.Platform.Agents, m.status.AgentsUp))
 	b.WriteString(m.statusLine("backstage", m.cfg.BackstageBaseURL(), m.cfg.Backstage.Enabled, m.status.BackstageUp))
 
 	files := "  " + fileMark("certs/", m.status.CertsPresent) + "   " +
@@ -554,7 +562,8 @@ func (m model) footView() string {
 			keyHelp("y", "yes") + "  " + keyHelp("n", "no")
 	case modeOpen:
 		line = "open in browser: " + keyHelp("d", "dex discovery") + "  " +
-			keyHelp("m", "muster") + "  " + keyHelp("b", "backstage") + "  " + keyHelp("esc", "back")
+			keyHelp("m", "muster") + "  " + keyHelp("a", "agents ui") + "  " +
+			keyHelp("b", "backstage") + "  " + keyHelp("esc", "back")
 	case modeLogs:
 		line = "tail logs (follows until [x]): " + keyHelp("d", "dex") + "  " +
 			keyHelp("m", "muster") + "  " + keyHelp("b", "backstage") + "  " + keyHelp("esc", "back")

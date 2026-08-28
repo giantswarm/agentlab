@@ -26,9 +26,11 @@ components:
     enabled: true
   # The agent runtime: the platform's Agent CRs run here, wired to Anthropic
   # through the default ModelConfig (see the kagent block below). Off in the
-  # umbrella, on in this lab — agents are part of what the lab tests.
+  # umbrella; optional in this lab (platform.agents in agentlab.yaml) — on
+  # real clusters agent delivery runs through Flux/GitOps, which the lab does
+  # not run, so labs not exercising agents skip the runtime.
   kagent:
-    enabled: true
+    enabled: {{ .Platform.Agents }}
   # On by default; the avatar service is only reachable through the
   # agentgateway edge this lab does not run.
   dicebear:
@@ -131,6 +133,7 @@ muster:
           valkey:
             url: muster-valkey:6379
 
+{{- if .Platform.Agents }}
 kagent:
   kagent:
     # The default ModelConfig every agent starts from (the kagent subchart
@@ -154,6 +157,13 @@ kagent:
         # trust any forged header; upstream's local-dev mode is the honest
         # setting (X-User-Id or admin@kagent.dev).
         mode: unsecure
+    # Publish the UI on the host through the kind port mapping. NodePort is a
+    # chart value, but the chart's ui-service template renders no `nodePort`
+    # field (a random one would be useless to kind's fixed mappings), so
+    # `agentlab post-render` pins it to KagentUINodePort (HACKS.md U9).
+    ui:
+      service:
+        type: NodePort
     # No Prometheus Operator in kind, so the ServiceMonitor CRD does not exist
     # (same story as muster/valkey above).
     serviceMonitor:
@@ -164,6 +174,7 @@ kagent:
         enabled: false
       logging:
         enabled: false
+{{- end }}
 
 valkey:
   ciliumNetworkPolicy:
