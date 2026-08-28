@@ -148,6 +148,47 @@ func PlatformTest(cfg *config.Config, email string) error {
 	return nil
 }
 
+// musterTokenProbe is the smallest end-to-end auth check: a Dex password
+// grant for the admin user, then an MCP initialize with the id_token as
+// Bearer. A session id back means muster's whole token-validation chain
+// (JWKS / userinfo over the lab CA) works. PlatformTest proves the same and
+// more; this exists so `up` can verify and heal cheaply (see
+// ensureMusterValidatesTokens).
+func musterTokenProbe(cfg *config.Config) error {
+	admin := cfg.AdminUser()
+	token, err := passwordGrant(cfg, config.MusterClientID, config.MusterClientSecret,
+		admin.Email, admin.Password, "openid email groups profile")
+	if err != nil {
+		return err
+	}
+	client, err := labHTTPClient(10 * time.Second)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodPost, cfg.MusterBaseURL()+"/mcp",
+		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"agentlab-up","version":"1"}}}`))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.Header.Get("Mcp-Session-Id") == "" {
+		msg := strings.TrimSpace(string(body))
+		if len(msg) > 200 {
+			msg = msg[:200] + "..."
+		}
+		return fmt.Errorf("muster rejected the token: %s", msg)
+	}
+	return nil
+}
+
 // innerText pulls result.content[0].text out of a JSON-RPC tool response.
 func innerText(rpc map[string]any) string {
 	result, _ := rpc["result"].(map[string]any)

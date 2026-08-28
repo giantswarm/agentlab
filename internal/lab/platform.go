@@ -229,6 +229,12 @@ func platformUp(cfg *config.Config, chartReady <-chan error) error {
 		return httpUp(client, cfg.MusterBaseURL()+"/.well-known/oauth-authorization-server")
 	})
 
+	if reachable {
+		if err := ensureMusterValidatesTokens(cfg); err != nil {
+			return err
+		}
+	}
+
 	reach := fmt.Sprintf("muster is live on %s (no port-forward needed)", cfg.MusterBaseURL())
 	if !reachable {
 		reach = fmt.Sprintf(`muster is NOT reachable on %s after 2 minutes.
@@ -257,6 +263,46 @@ Platform is up.
 	// Everything the platform runs is in the node now — record it so the next
 	// boot side-loads instead of pulling.
 	snapshotPreloadImages(cfg)
+	return nil
+}
+
+// ensureMusterValidatesTokens proves the auth path end to end (Dex password
+// grant -> Bearer on /mcp) and heals the one known way it silently breaks:
+// muster can come up with a TLS trust pool that is missing the extra CA
+// (HACKS.md U6), rejecting every token with invalid_token until the pod is
+// replaced — while everything else (rollout, MCPServer Connected, the OAuth
+// metadata endpoint) looks healthy. One bounce, then re-probe.
+//
+// Only called once muster's OAuth endpoint answers 2xx, which implies OIDC
+// discovery already succeeded — so a rejected token here is the trust flake,
+// not a still-starting OAuth server.
+func ensureMusterValidatesTokens(cfg *config.Config) error {
+	step("Verifying muster accepts Dex tokens")
+	var lastErr error
+	if waitFor(3, 2*time.Second, func() bool {
+		lastErr = musterTokenProbe(cfg)
+		return lastErr == nil
+	}) {
+		note("muster validated a fresh Dex token")
+		return nil
+	}
+	note("muster rejects Dex tokens (%v)", lastErr)
+	note("known muster startup flake (HACKS.md U6) — replacing the muster pod once")
+	if err := runQuiet("kubectl", "-n", platformNamespace, "rollout", "restart", "deployment/muster"); err != nil {
+		return err
+	}
+	if err := runQuiet("kubectl", "-n", platformNamespace, "rollout", "status", "deployment/muster", "--timeout=120s"); err != nil {
+		return err
+	}
+	// The fresh pod redoes OIDC discovery (fast: Dex and valkey are up) and
+	// its OAuth mux 503s meanwhile, so poll the probe rather than the log.
+	if !waitFor(20, 3*time.Second, func() bool {
+		lastErr = musterTokenProbe(cfg)
+		return lastErr == nil
+	}) {
+		return fmt.Errorf("muster still rejects Dex tokens after a restart: %w", lastErr)
+	}
+	note("muster validated a fresh Dex token after the restart")
 	return nil
 }
 

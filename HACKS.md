@@ -170,6 +170,30 @@ dial always succeeds.
 scheduled retry time instead of on the coarse sweep interval; then the two
 installs can overlap.
 
+### U6. `platform.go`: token-validation probe + one-shot muster bounce after install
+A muster pod (5.5.6, mcp-oauth v1.3.1) can come up with a TLS trust pool that
+is missing the `--extra-ca-file` CA: every `/mcp` bearer is then rejected with
+`invalid_token` — the JWKS fetch AND the userinfo fallback both fail with
+`x509: certificate signed by unknown authority` against Dex — while
+everything the lab used to check looks healthy (rollout done, MCPServer
+Connected, OIDC discovery succeeded, `/.well-known/oauth-authorization-server`
+answers 200). Observed 2026-08-28; the same pod's OIDC *discovery* over the
+same endpoint succeeded, so only some client constructions miss the CA.
+Verified not to be config: the `dex-ca` secret matched `certs/ca.crt` and Dex
+served the lab-CA-signed cert at the moment the pod failed x509. Not
+deterministic — a pod restart with identical inputs validated fine, and a
+forced degraded-start reproduction (valkey down at muster start) also
+validated fine, so it is an in-process race in muster/mcp-oauth client
+construction, not the degraded-recovery path per se.
+**Workaround:** after the install, `up` now probes the real token path
+(password grant -> Bearer on `/mcp`, `ensureMusterValidatesTokens`) and, on
+rejection, replaces the muster pod once and re-probes.
+**Unblocks:** giantswarm/muster — find the client construction that misses
+`ExtraCAFile`/RootCAs (candidates: anything cloning `http.DefaultTransport`
+before bootstrap swaps it, or an mcp-oauth client built without
+`opts.RootCAs`) and thread the pool deterministically; then the probe can
+stay but the bounce becomes dead code.
+
 ## Accepted lab trade-offs (not hacks to fix)
 
 - **Checksum stamping via the `REPLACED_AT_APPLY` placeholder** — the standard
