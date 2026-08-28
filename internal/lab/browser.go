@@ -68,7 +68,7 @@ func BrowserLogin(cfg *config.Config) error {
 	fmt.Println("Opening the Dex login page in your browser...")
 	fmt.Println("  users and passwords are in agentlab.yaml")
 	fmt.Printf("  if it does not open: %s\n\n", authURL)
-	openBrowser(authURL)
+	OpenBrowser(authURL)
 
 	var code string
 	select {
@@ -88,7 +88,10 @@ func BrowserLogin(cfg *config.Config) error {
 	return saveLoginArtifacts(cfg, token)
 }
 
-func openBrowser(url string) {
+// OpenBrowser hands a URL (or, on macOS/Linux, any path) to the OS opener.
+// Fire-and-forget: a browser that fails to open is an inconvenience, not an
+// error the flow can act on.
+func OpenBrowser(url string) {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":

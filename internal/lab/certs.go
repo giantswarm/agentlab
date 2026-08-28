@@ -39,7 +39,7 @@ func GenCerts(force bool) error {
 	}
 	caTmpl := &x509.Certificate{
 		SerialNumber:          randomSerial(),
-		Subject:               pkix.Name{CommonName: "dex-lab-ca"},
+		Subject:               pkix.Name{CommonName: "agentlab-ca"},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().AddDate(0, 0, 3650),
 		IsCA:                  true,

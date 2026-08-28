@@ -52,12 +52,28 @@ func BackstageUp(cfg *config.Config) error {
 	}); err != nil {
 		return err
 	}
+	// The ai-chat plugin's Anthropic key. The Deployment references it as an
+	// optional env secret, so Backstage boots without it — but env vars are
+	// read at container start, so a key that arrives on a re-run (manifest
+	// unchanged, checksum no-op) needs the one conditional roll below.
+	keyCreated, err := ensureAnthropicSecret("backstage", "backstage-anthropic")
+	if err != nil {
+		return err
+	}
+	_, getDeployErr := outputQuiet("kubectl", "-n", "backstage", "get", "deployment", "backstage")
+	deployExisted := getDeployErr == nil
 	stamped, _, err := renderManifest(cfg, "backstage.yaml.tmpl")
 	if err != nil {
 		return err
 	}
 	if err := pipeInto(stamped, "kubectl", "apply", "-f", "-"); err != nil {
 		return err
+	}
+	if keyCreated && deployExisted {
+		step("Rolling Backstage to pick up the new Anthropic key")
+		if err := runQuiet("kubectl", "-n", "backstage", "rollout", "restart", "deployment/backstage"); err != nil {
+			return err
+		}
 	}
 
 	step("Waiting for Backstage to start (first boot takes a minute under emulation)")

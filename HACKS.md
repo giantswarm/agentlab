@@ -163,8 +163,8 @@ is still open (its head is exactly the pinned `APS_REF`).
   Helm `checksum/config` pattern, done with sed because there is no templating
   engine here. Deduplicated into one script (H3), otherwise kept.
 - **Password grant + static secrets in git** (`kubernetes-lab-secret`, bcrypt
-  of "password", the Backstage session key) — the lab's entire point is
-  self-contained throwaway identity; nothing here guards anything real.
+  of "password", the Backstage session key) — the lab's identity is
+  self-contained and throwaway by design; nothing here guards anything real.
 - **`skipTLSVerify: true`** for the Backstage→apiserver hop — the alternative
   is minting the kind CA into the Backstage trust store; zero value in a lab.
 - **`test-backstage.sh` regex-parsing `decodeURIComponent('…')` out of the

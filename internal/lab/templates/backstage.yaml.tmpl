@@ -136,6 +136,13 @@ data:
           url: http://localhost:{{ .MusterNodePort }}/mcp
           authProvider: oidc-lab
 
+    # The GS build ships the ai-chat plugin enabled, and its base app-config
+    # already reads the key from ${ANTHROPIC_API_KEY} — the env var injected
+    # below. The lab only has to pick the model: provider routing goes by
+    # prefix (claude-* -> Anthropic), and the base default is an OpenAI model.
+    aiChat:
+      model: {{ .AIModel }}
+
     catalog:
       locations:
         - type: file
@@ -199,6 +206,16 @@ spec:
               value: /pki/ca.crt
             - name: LOG_LEVEL
               value: info
+            # The ai-chat plugin's Anthropic key; `agentlab backstage` creates
+            # the secret from $ANTHROPIC_API_KEY. optional: without it the env
+            # var is simply absent and ai-chat stays unconfigured -- the pod
+            # must boot either way.
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: backstage-anthropic
+                  key: ANTHROPIC_API_KEY
+                  optional: true
           volumeMounts:
             - { name: config, mountPath: /lab-config }
             - { name: catalog, mountPath: /lab-catalog }

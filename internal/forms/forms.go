@@ -56,6 +56,7 @@ func Run(cfg *config.Config, accessible bool) error {
 	musterPort := strconv.Itoa(cfg.Platform.MusterPort)
 	mcpVersion := cfg.Platform.MCPKubernetesVersion
 	apsRef := cfg.Platform.APSRef
+	aiModel := cfg.AIModel
 	backstagePort := strconv.Itoa(cfg.Backstage.Port)
 	backstageImage := cfg.Backstage.Image
 
@@ -100,8 +101,8 @@ func Run(cfg *config.Config, accessible bool) error {
 
 		huh.NewGroup(
 			huh.NewMultiSelect[string]().
-				Title("Optional components").
-				Description("Deployed by `agentlab up` (or later via `agentlab platform` / `agentlab backstage`).\nBackstage's muster plugin needs the platform, so selecting it selects both.").
+				Title("Components").
+				Description("The agent platform is what this lab tests, so it is on by default; deselect it\nfor a bare kind+Dex OIDC sandbox. Deployed by `agentlab up` (or later via\n`agentlab platform` / `agentlab backstage`). Backstage's muster plugin needs\nthe platform, so selecting it selects both.").
 				Options(
 					huh.NewOption("Giant Swarm agent platform (muster + Kubernetes MCP)", "platform"),
 					huh.NewOption("Giant Swarm Backstage (developer portal)", "backstage"),
@@ -124,6 +125,11 @@ func Run(cfg *config.Config, accessible bool) error {
 				Description("The umbrella chart has no release yet; it is vendored from git at this pinned SHA.").
 				Value(&apsRef).
 				Validate(notEmpty),
+			huh.NewInput().
+				Title("Claude model").
+				Description("Used by the platform agents' ModelConfig and Backstage's AI chat.\nThe API key comes from $ANTHROPIC_API_KEY at deploy time, never from this file.").
+				Value(&aiModel).
+				Validate(config.ValidateAIModel),
 		).Title("Agent platform").
 			WithHideFunc(func() bool { return !slices.Contains(components, "platform") }),
 
@@ -155,6 +161,7 @@ func Run(cfg *config.Config, accessible bool) error {
 	cfg.Platform.MusterPort = mustAtoi(musterPort)
 	cfg.Platform.MCPKubernetesVersion = mcpVersion
 	cfg.Platform.APSRef = apsRef
+	cfg.AIModel = aiModel
 	cfg.Backstage.Port = mustAtoi(backstagePort)
 	cfg.Backstage.Image = backstageImage
 

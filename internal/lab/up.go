@@ -11,8 +11,8 @@ import (
 )
 
 // Up brings up the whole lab: certs, kind cluster, Dex, RBAC, an end-to-end
-// OIDC verification, and then whichever optional components the configuration
-// enables (agent platform, Backstage).
+// OIDC verification, and then the components the configuration enables — the
+// agent platform (the default; it is what the lab tests) and Backstage.
 func Up(cfg *config.Config) error {
 	if err := GenCerts(false); err != nil {
 		return err

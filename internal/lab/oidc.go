@@ -19,9 +19,21 @@ import (
 
 // labTLSTransport returns a transport that trusts the lab CA (certs/ca.crt)
 // on top of the system pool, so it can talk to both Dex (lab TLS) and
-// plain-HTTP services. Cached per process: the CA never changes within a run,
-// and sharing the transport reuses connections across clients.
-var labTLSTransport = sync.OnceValues(func() (*http.Transport, error) {
+// plain-HTTP services. Success is cached per process (the CA never changes
+// within a run, and sharing the transport reuses connections), but errors are
+// not: the TUI probes long before `agentlab up` has minted the CA and must
+// pick it up as soon as the file exists.
+var labTransport struct {
+	sync.Mutex
+	cached *http.Transport
+}
+
+func labTLSTransport() (*http.Transport, error) {
+	labTransport.Lock()
+	defer labTransport.Unlock()
+	if labTransport.cached != nil {
+		return labTransport.cached, nil
+	}
 	caPEM, err := os.ReadFile("certs/ca.crt")
 	if err != nil {
 		return nil, fmt.Errorf("reading lab CA (run `agentlab up` first?): %w", err)
@@ -33,8 +45,9 @@ var labTLSTransport = sync.OnceValues(func() (*http.Transport, error) {
 	if !pool.AppendCertsFromPEM(caPEM) {
 		return nil, fmt.Errorf("certs/ca.crt contains no usable certificate")
 	}
-	return &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}}, nil
-})
+	labTransport.cached = &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}}
+	return labTransport.cached, nil
+}
 
 // labHTTPClient returns a client on the shared lab transport.
 func labHTTPClient(timeout time.Duration) (*http.Client, error) {

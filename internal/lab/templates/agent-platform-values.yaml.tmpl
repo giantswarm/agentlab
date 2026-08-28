@@ -24,6 +24,11 @@ components:
   # muster and valkey are on by default. The MCP server registrations are not.
   agent-platform-mcps:
     enabled: true
+  # The agent runtime: the platform's Agent CRs run here, wired to Anthropic
+  # through the default ModelConfig (see the kagent block below). Off in the
+  # umbrella, on in this lab — agents are part of what the lab tests.
+  kagent:
+    enabled: true
   # On by default; the avatar service is only reachable through the
   # agentgateway edge this lab does not run.
   dicebear:
@@ -125,6 +130,40 @@ muster:
           type: valkey
           valkey:
             url: muster-valkey:6379
+
+kagent:
+  kagent:
+    # The default ModelConfig every agent starts from (the kagent subchart
+    # renders it from providers.<default>). The chart would only create the
+    # referenced Secret if the raw key were inlined in these values — which
+    # would put a real credential into state/ and the Helm release Secret —
+    # so the lab pre-creates kagent-anthropic from $ANTHROPIC_API_KEY instead
+    # (`agentlab platform`, after the install; agents mount it at run time).
+    providers:
+      default: anthropic
+      anthropic:
+        provider: Anthropic
+        model: {{ .AIModel }}
+        apiKeySecretRef: kagent-anthropic
+        apiKeySecretKey: ANTHROPIC_API_KEY
+    controller:
+      auth:
+        # The umbrella default is trusted-proxy, which decodes bearer claims
+        # WITHOUT verification and relies on a JWT-validating agentgateway in
+        # front. This lab runs no front proxy at all, so trusted-proxy would
+        # trust any forged header; upstream's local-dev mode is the honest
+        # setting (X-User-Id or admin@kagent.dev).
+        mode: unsecure
+    # No Prometheus Operator in kind, so the ServiceMonitor CRD does not exist
+    # (same story as muster/valkey above).
+    serviceMonitor:
+      enabled: false
+    # No OTLP gateway in kind; the exporters would only log dial errors.
+    otel:
+      tracing:
+        enabled: false
+      logging:
+        enabled: false
 
 valkey:
   ciliumNetworkPolicy:

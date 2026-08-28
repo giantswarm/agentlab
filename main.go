@@ -1,6 +1,7 @@
-// agentlab is a self-contained OIDC lab: kind + Dex, with users that exist
-// nowhere but this cluster, plus the optional Giant Swarm agent platform
-// (muster + Kubernetes MCP) and Backstage on top.
+// agentlab is a local lab for the Giant Swarm agent platform: muster + the
+// Kubernetes MCP (and optionally Backstage) on a throwaway kind cluster, with
+// a bundled Dex as the OIDC provider — users that exist nowhere but this
+// cluster.
 //
 // The binary embeds every manifest as a template; `agentlab configure` asks for
 // the configuration interactively and persists it to agentlab.yaml, and the
@@ -19,6 +20,7 @@ import (
 	"agentlab/internal/config"
 	"agentlab/internal/forms"
 	"agentlab/internal/lab"
+	"agentlab/internal/tui"
 )
 
 func main() {
@@ -31,21 +33,36 @@ func main() {
 func rootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "agentlab",
-		Short: "A self-contained OIDC lab: kind + Dex (+ Giant Swarm agent platform + Backstage)",
-		Long: `agentlab runs a throwaway OIDC lab on your machine: a kind cluster whose
-apiserver trusts a local Dex, users that exist nowhere else, RBAC driven by
-the groups claim, and optionally the Giant Swarm agent platform (muster +
-Kubernetes MCP) and Backstage wired to the same Dex.
+		Short: "A local lab for the Giant Swarm agent platform (muster + Kubernetes MCP + Backstage), on kind + Dex",
+		Long: `agentlab runs the Giant Swarm agent platform on your machine so it can be
+tested end to end: muster and the Kubernetes MCP (plus optionally Backstage)
+on a throwaway kind cluster. A bundled Dex provides the identity — users that
+exist nowhere else, RBAC driven by the groups claim, the apiserver and the
+platform trusting the same issuer.
 
 Start with:  agentlab configure   (interactive; asks every option)
-Then:        agentlab up          (creates the cluster and deploys everything enabled)`,
+Then:        agentlab up          (cluster + Dex + the platform, verified end to end)
+Then:        claude mcp add --transport http muster http://localhost:8090/mcp
+
+Running agentlab with no arguments on a terminal opens the dashboard (also:
+agentlab tui): live component status plus keys for the lifecycle actions.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		Args:          cobra.NoArgs,
+		// Bare `agentlab` on a terminal is the dashboard; piped/CI invocations
+		// get the usage text instead of a hung TUI.
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
+				return cmd.Help()
+			}
+			return runTUI()
+		},
 	}
 
 	root.AddCommand(
+		tuiCmd(),
 		configureCmd(),
-		labCmd("up", "Create the kind cluster, deploy Dex (+ enabled components) and verify the OIDC chain", lab.Up),
+		labCmd("up", "Create the kind cluster, deploy Dex and the enabled components, and verify the OIDC chain", lab.Up),
 		labCmd("down", "Destroy the kind cluster", lab.Down),
 		labCmd("test", "Assert RBAC for every configured user (token from Dex, kubectl auth can-i)", lab.Test),
 		loginCmd(),
@@ -114,6 +131,25 @@ func accessibleMode() bool {
 	return os.Getenv("ACCESSIBLE") != ""
 }
 
+func tuiCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "tui",
+		Short: "Interactive dashboard: live status, lifecycle actions, URLs, users",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runTUI()
+		},
+	}
+}
+
+func runTUI() error {
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	return tui.Run(cfg)
+}
+
 func configureCmd() *cobra.Command {
 	var defaults, accessible bool
 	var platform, backstage bool
@@ -152,6 +188,7 @@ func configureCmd() *cobra.Command {
 			fmt.Printf("  users      %d\n", len(cfg.Users))
 			fmt.Printf("  platform   %v\n", cfg.Platform.Enabled)
 			fmt.Printf("  backstage  %v\n", cfg.Backstage.Enabled)
+			fmt.Printf("  ai model   %s (key from $%s at deploy time)\n", cfg.AIModel, lab.AnthropicKeyEnv)
 			fmt.Println("\nNext: agentlab up")
 			return nil
 		},

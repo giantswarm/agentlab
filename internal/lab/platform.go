@@ -171,6 +171,15 @@ func PlatformUp(cfg *config.Config) error {
 		return err
 	}
 
+	// The agents' model key. The default ModelConfig (rendered by the kagent
+	// subchart from providers.anthropic) references this secret; agent pods
+	// mount it at run time, so it can land after the install — which it must,
+	// since the chart itself creates the kagent namespace.
+	step("Wiring the agents to Anthropic (ModelConfig model: %s)", cfg.AIModel)
+	if _, err := ensureAnthropicSecret("kagent", "kagent-anthropic"); err != nil {
+		return err
+	}
+
 	// muster runs with hostNetwork and the kind config maps its port onto the
 	// host, so it should be reachable directly. Retry rather than probing
 	// once: helm --wait covers the Deployment, but muster's HTTP listener
@@ -205,9 +214,12 @@ Platform is up.
     claude mcp add --transport http muster %s/mcp
     # then in Claude Code: /mcp -> authenticate
 
+  Agents (kagent) run with model %s; the UI is not host-published:
+    kubectl -n kagent port-forward svc/kagent-ui 8080:8080
+
   Smoke-test it headlessly instead:
     agentlab platform-test
-`, reach, cfg.MusterBaseURL())
+`, reach, cfg.MusterBaseURL(), cfg.AIModel)
 	return nil
 }
 

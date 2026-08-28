@@ -12,14 +12,14 @@ const keyDelay = 30 * time.Millisecond
 
 // TestRunTUIDrive drives the real TUI form (not accessible mode) with a
 // scripted keystroke stream: accept the cluster defaults, keep the default
-// users, select both optional components, and accept their defaults.
+// users, add Backstage to the preselected platform, and accept their defaults.
 func TestRunTUIDrive(t *testing.T) {
 	testInput = newPacedReader(keyDelay,
 		"\r", "\r", "\r", // group 1: cluster name, dex port, dex image
-		"\r",               // group 2: customize users? -> keep as is
-		" ", "\x1b[B", " ", // group 3: toggle platform, arrow down, toggle backstage
-		"\r",             // submit component selection
-		"\r", "\r", "\r", // platform group: muster port, mcp version, aps ref
+		"\r",          // group 2: customize users? -> keep as is
+		"\x1b[B", " ", // group 3: platform is preselected; arrow down, toggle backstage
+		"\r",                   // submit component selection
+		"\r", "\r", "\r", "\r", // platform group: muster port, mcp version, aps ref, claude model
 		"\r", "\r", // backstage group: port, image
 	)
 	testOutput = io.Discard
@@ -33,7 +33,7 @@ func TestRunTUIDrive(t *testing.T) {
 		t.Errorf("defaults not kept: cluster=%q dexPort=%d", cfg.ClusterName, cfg.DexPort)
 	}
 	if !cfg.Platform.Enabled {
-		t.Errorf("platform not enabled by multiselect")
+		t.Errorf("platform not enabled (should be preselected from the default config)")
 	}
 	if !cfg.Backstage.Enabled {
 		t.Errorf("backstage not enabled by multiselect")
@@ -52,9 +52,9 @@ func TestRunTUIDriveEdit(t *testing.T) {
 	testInput = newPacedReader(keyDelay,
 		"\x15", "renamed", "\r", // clear + retype cluster name
 		"\x15", "31000", "\r", // clear + retype dex port
-		"\r", // dex image: keep
-		"\r", // users: keep as is
-		"\r", // components: none selected
+		"\r",      // dex image: keep
+		"\r",      // users: keep as is
+		" ", "\r", // components: deselect the preselected platform -> none
 	)
 	testOutput = io.Discard
 	defer func() { testInput, testOutput = nil, nil }()

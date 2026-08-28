@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 
 	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/yaml.v3"
@@ -23,8 +24,8 @@ var Groups = []string{"platform-admins", "developers", "viewers"}
 
 // Static OAuth client IDs and secrets, paired per client. The IDs also appear
 // in the templates (Dex staticClients and each consumer's own config), which
-// must agree with these. The lab's entire point is self-contained throwaway
-// identity; nothing here guards anything real.
+// must agree with these. The lab's identity is self-contained and throwaway
+// by design; nothing here guards anything real.
 const (
 	KubernetesClientID     = "kubernetes"
 	KubernetesClientSecret = "kubernetes-lab-secret"
@@ -88,19 +89,29 @@ type Config struct {
 	DexPort  int    `yaml:"dexPort"`
 	DexImage string `yaml:"dexImage"`
 
+	// The Claude model both AI consumers use: the platform agents' default
+	// ModelConfig (kagent) and Backstage's ai-chat. The API key is NOT config:
+	// it is read from $ANTHROPIC_API_KEY at deploy time and lands only in
+	// Kubernetes Secrets, never in this file or in rendered manifests.
+	AIModel string `yaml:"aiModel"`
+
 	Users     []User    `yaml:"users"`
 	Platform  Platform  `yaml:"platform"`
 	Backstage Backstage `yaml:"backstage"`
 }
 
-// Default returns the canonical lab setup: three users, Dex on 32000,
-// optional components off (mirrors the old `make up`).
+// Default returns the canonical lab setup: the agent platform enabled (it is
+// what the lab exists to test), three users, Dex on 32000, Backstage off (a
+// 2.4GB image; opt in when the portal matters).
 func Default() *Config {
 	return &Config{
 		ClusterName: "agentlab",
 		DexPort:     32000,
 		// groups on staticPasswords requires Dex >= v2.45.0; see README.
 		DexImage: "ghcr.io/dexidp/dex:v2.45.1",
+		// The agent-platform BOM's own default, and the newest model the
+		// pinned Backstage build's thinking-mode handling is known to cover.
+		AIModel: "claude-sonnet-4-6",
 		Users: []User{
 			{Email: "admin@lab.local", Username: "admin", Name: "Lab Admin", Password: "password",
 				Groups: []string{"platform-admins", "developers"}},
@@ -110,7 +121,7 @@ func Default() *Config {
 				Groups: []string{"viewers"}},
 		},
 		Platform: Platform{
-			Enabled:              false,
+			Enabled:              true,
 			MusterPort:           8090,
 			MCPKubernetesVersion: "1.0.9",
 			APSRepo:              "https://github.com/giantswarm/agent-platform-standalone",
@@ -202,6 +213,16 @@ func ValidateClusterName(s string) error {
 	return nil
 }
 
+// ValidateAIModel constrains the model to Anthropic: both consumers (the
+// kagent ModelConfig provider and Backstage's ai-chat prefix routing) are
+// wired for Anthropic only, keyed by the one $ANTHROPIC_API_KEY secret.
+func ValidateAIModel(s string) error {
+	if !strings.HasPrefix(s, "claude-") {
+		return fmt.Errorf("must be a claude-* model (the lab only wires Anthropic)")
+	}
+	return nil
+}
+
 // Normalize applies cross-field implications after an entry point sets the
 // enable flags: Backstage's muster plugin is the reason to run it, so it
 // implies the platform. Validate stays the backstop for hand-edited files.
@@ -217,6 +238,9 @@ func (c *Config) Validate() error {
 	}
 	if err := ValidateNodePort(strconv.Itoa(c.DexPort)); err != nil {
 		return fmt.Errorf("dexPort: %w", err)
+	}
+	if err := ValidateAIModel(c.AIModel); err != nil {
+		return fmt.Errorf("aiModel %q: %w", c.AIModel, err)
 	}
 	if len(c.Users) == 0 {
 		return fmt.Errorf("at least one user is required")
