@@ -33,17 +33,24 @@ const apsDir = ".vendor/agent-platform-standalone"
 // it is vendored from git at a pinned SHA and installed from the local path.
 // Once released: swap the vendor step for the OCI ref.
 func PlatformUp(cfg *config.Config) error {
+	return platformUp(cfg, nil)
+}
+
+// vendorPlatformChart runs ensurePlatformChart in the background so the git
+// fetch and chart-dependency pulls (pure network work) overlap with cluster
+// creation; platformUp joins the buffered channel where the inline path would
+// have vendored.
+func vendorPlatformChart(cfg *config.Config) <-chan error {
+	done := make(chan error, 1)
+	go func() { done <- ensurePlatformChart(cfg) }()
+	return done
+}
+
+// ensurePlatformChart vendors agent-platform-standalone at the pinned ref and
+// builds its chart dependencies. Quiet on purpose: it may run concurrently
+// with other steps' output.
+func ensurePlatformChart(cfg *config.Config) error {
 	chartDir := filepath.Join(apsDir, "helm", "agent-platform-standalone")
-
-	// A cluster still running the old meta-package has Flux HelmReleases under
-	// the same Helm release name; upgrading across that boundary races
-	// helm-controller uninstalls against this install. Start clean instead.
-	if _, err := outputQuiet("kubectl", "-n", platformNamespace, "get", "helmrelease", "muster"); err == nil {
-		return fmt.Errorf("this cluster runs the old agent-platform meta-package (Flux HelmReleases found);\n" +
-			"run `agentlab platform-down` first, then re-run `agentlab platform`")
-	}
-
-	step("Vendoring agent-platform-standalone @ %.12s", cfg.Platform.APSRef)
 	if _, err := os.Stat(filepath.Join(apsDir, ".git")); os.IsNotExist(err) {
 		if err := runQuiet("git", "init", "-q", apsDir); err != nil {
 			return err
@@ -74,13 +81,34 @@ func PlatformUp(cfg *config.Config) error {
 	lockDigest := hex.EncodeToString(sha256sum(lockRaw))
 	digestFile := filepath.Join(chartDir, "charts", ".lock-digest")
 	if prev, err := os.ReadFile(digestFile); err != nil || string(prev) != lockDigest {
-		step("Building chart dependencies")
 		if err := runQuiet("helm", "dependency", "build", chartDir); err != nil {
 			return err
 		}
 		if err := os.WriteFile(digestFile, []byte(lockDigest), 0o644); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func platformUp(cfg *config.Config, chartReady <-chan error) error {
+	chartDir := filepath.Join(apsDir, "helm", "agent-platform-standalone")
+
+	// A cluster still running the old meta-package has Flux HelmReleases under
+	// the same Helm release name; upgrading across that boundary races
+	// helm-controller uninstalls against this install. Start clean instead.
+	if _, err := outputQuiet("kubectl", "-n", platformNamespace, "get", "helmrelease", "muster"); err == nil {
+		return fmt.Errorf("this cluster runs the old agent-platform meta-package (Flux HelmReleases found);\n" +
+			"run `agentlab platform-down` first, then re-run `agentlab platform`")
+	}
+
+	step("Vendoring agent-platform-standalone @ %.12s (chart + dependencies)", cfg.Platform.APSRef)
+	if chartReady != nil {
+		if err := <-chartReady; err != nil {
+			return err
+		}
+	} else if err := ensurePlatformChart(cfg); err != nil {
+		return err
 	}
 
 	step("Creating namespace and secrets")
@@ -121,6 +149,9 @@ func PlatformUp(cfg *config.Config) error {
 	}
 
 	step("Deploying mcp-kubernetes (%s)", cfg.Platform.MCPKubernetesVersion)
+	// --wait on purpose, BEFORE muster installs: muster dials the MCP within
+	// ~2s of starting, and a failed first dial costs a fixed ~60s reconnect
+	// backoff — far more than this rollout costs with the image preloaded.
 	if err := runQuiet("helm", "upgrade", "--install", "mcp-kubernetes",
 		"oci://gsoci.azurecr.io/charts/giantswarm/mcp-kubernetes",
 		"--version", cfg.Platform.MCPKubernetesVersion, "-n", platformNamespace,
@@ -151,14 +182,17 @@ func PlatformUp(cfg *config.Config) error {
 	mcpName := cfg.MCPServerName()
 	state := ""
 	connected := waitFor(40, 3*time.Second, func() bool {
-		state, _ = outputQuiet("kubectl", "-n", platformNamespace, "get", "mcpserver", mcpName,
+		// Fully qualified: kagent ships its own MCPServer CRD (mcpservers.kagent.dev),
+		// so the bare kind resolves to the wrong API group.
+		state, _ = outputQuiet("kubectl", "-n", platformNamespace, "get", "mcpservers.muster.giantswarm.io", mcpName,
 			"-o", "jsonpath={.status.state}")
 		return state == "Connected"
 	})
 	if !connected {
 		return fmt.Errorf("MCPServer %s never reached Connected (last state: %q);\n"+
-			"check `agentlab logs muster` and `kubectl -n %s describe mcpserver %s`",
-			mcpName, state, platformNamespace, mcpName)
+			"check `agentlab logs muster`, `kubectl -n %s describe mcpservers.muster.giantswarm.io %s`\n"+
+			"and the mcp-kubernetes rollout: `kubectl -n %s get deploy,pods`",
+			mcpName, state, platformNamespace, mcpName, platformNamespace)
 	}
 	note("MCPServer %s: Connected", mcpName)
 
@@ -220,6 +254,9 @@ Platform is up.
   Smoke-test it headlessly instead:
     agentlab platform-test
 `, reach, cfg.MusterBaseURL(), cfg.AIModel)
+	// Everything the platform runs is in the node now — record it so the next
+	// boot side-loads instead of pulling.
+	snapshotPreloadImages(cfg)
 	return nil
 }
 

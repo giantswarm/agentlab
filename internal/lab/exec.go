@@ -9,10 +9,16 @@ import (
 	"time"
 )
 
+// stepClock anchors the elapsed stamp on step lines, so boot logs show where
+// the time goes without external timing.
+var stepClock = time.Now()
+
 // step prints a top-level progress line, matching the ==> style the shell
-// scripts used.
+// scripts used, stamped with the elapsed time since the process started.
 func step(format string, a ...any) {
-	fmt.Printf("==> "+format+"\n", a...)
+	e := time.Since(stepClock).Round(time.Second)
+	fmt.Printf("==> [%02d:%02d] "+format+"\n",
+		append([]any{int(e.Minutes()), int(e.Seconds()) % 60}, a...)...)
 }
 
 func note(format string, a ...any) {

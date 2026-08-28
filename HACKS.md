@@ -157,6 +157,19 @@ is still open (its head is exactly the pinned `APS_REF`).
 **Unblocks:** merge #11 and publish the chart; then the vendor block becomes
 `helm upgrade --install … oci://gsoci.azurecr.io/charts/giantswarm/agent-platform-standalone`.
 
+### U5. `platform.go`: mcp-kubernetes must be `--wait`ed serially before muster installs
+muster dials its MCPServers ~2s after starting; a failed first dial schedules
+a retry "after 30s" but the orchestrator's backoff-expiry sweep only fires
+~60s later ("Attempting to reconnect failed MCPServer … (backoff expired)" at
++60s, observed 2026-08-28 on muster 5.5.6). Overlapping the two helm installs
+therefore *added* ~30s to boot: muster started before mcp-kubernetes was
+ready and ate the fixed penalty. The workaround is ordering — keep the
+mcp-kubernetes `--wait` (cheap now that images preload) so muster's first
+dial always succeeds.
+**Unblocks:** giantswarm/muster — run the reconnect sweep at (or near) the
+scheduled retry time instead of on the coarse sweep interval; then the two
+installs can overlap.
+
 ## Accepted lab trade-offs (not hacks to fix)
 
 - **Checksum stamping via the `REPLACED_AT_APPLY` placeholder** — the standard

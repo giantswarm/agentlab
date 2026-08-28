@@ -44,6 +44,14 @@ nodes:
         containerPath: /etc/kubernetes/pki/dex
         readOnly: true
 kubeadmConfigPatches:
+  # kubelet serializes image pulls by default, so a cold boot queues the
+  # platform's images behind each other (the queue wait dwarfs the pulls
+  # themselves). The lab pulls from three registries on localhost bandwidth —
+  # parallel is strictly better here.
+  - |
+    apiVersion: kubelet.config.k8s.io/v1beta1
+    kind: KubeletConfiguration
+    serializeImagePulls: false
   # kind v0.31 still emits kubeadm.k8s.io/v1beta3, where extraArgs is a MAP.
   # (v1beta4 changed it to a list of name/value pairs — if you bump kind and the
   # flags silently stop applying, this is why.)

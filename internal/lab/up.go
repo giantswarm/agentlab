@@ -18,6 +18,15 @@ func Up(cfg *config.Config) error {
 		return err
 	}
 
+	// Pure network work that needs no cluster starts first, so it overlaps
+	// with cluster creation: vendoring the platform chart, and pulling the
+	// last boot's images into the host docker cache (which survives `down`).
+	var chartReady <-chan error
+	if cfg.Platform.Enabled {
+		chartReady = vendorPlatformChart(cfg)
+	}
+	pulled := pullLabImages()
+
 	_, kindCfgPath, err := renderManifest(cfg, "kind-config.yaml.tmpl")
 	if err != nil {
 		return err
@@ -38,6 +47,10 @@ func Up(cfg *config.Config) error {
 	if err := runQuiet("kubectl", "config", "use-context", cfg.KubeContext()); err != nil {
 		return err
 	}
+
+	// Side-load the cached images while Dex and the OIDC verification run;
+	// joined before the platform install, which is what actually needs them.
+	loaded := loadLabImages(cfg, pulled)
 
 	step("Deploying Dex")
 	// Namespace and TLS secret land before the Deployment so the pod never
@@ -118,9 +131,10 @@ func Up(cfg *config.Config) error {
 	if cfg.Backstage.Enabled && cfg.Platform.Enabled {
 		backstagePull = prefetchBackstageImage(cfg)
 	}
+	reportPreload(loaded)
 	if cfg.Platform.Enabled {
 		fmt.Println()
-		if err := PlatformUp(cfg); err != nil {
+		if err := platformUp(cfg, chartReady); err != nil {
 			return err
 		}
 	}
@@ -135,6 +149,7 @@ func Up(cfg *config.Config) error {
 			return err
 		}
 	}
+	snapshotPreloadImages(cfg)
 	return nil
 }
 

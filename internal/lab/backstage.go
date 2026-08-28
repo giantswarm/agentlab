@@ -1,7 +1,6 @@
 package lab
 
 import (
-	"encoding/json"
 	"fmt"
 	"slices"
 	"time"
@@ -126,22 +125,9 @@ func prefetchBackstageImage(cfg *config.Config) <-chan error {
 
 // nodeHasImage checks the kind node's containerd for an exact repo:tag match.
 func nodeHasImage(node, image string) bool {
-	out, err := outputQuiet("docker", "exec", node, "crictl", "images", "-o", "json")
+	tags, err := nodeImageTags(node)
 	if err != nil {
 		return false
 	}
-	var imgs struct {
-		Images []struct {
-			RepoTags []string `json:"repoTags"`
-		} `json:"images"`
-	}
-	if err := json.Unmarshal([]byte(out), &imgs); err != nil {
-		return false
-	}
-	for _, img := range imgs.Images {
-		if slices.Contains(img.RepoTags, image) {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(tags, image)
 }
