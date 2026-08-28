@@ -1,0 +1,232 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: backstage
+---
+# Catalog entities. Unlike RHDH's emailLocalPartMatchingUserEntityName, Giant
+# Swarm's resolver (plugins/auth-backend-module-gs/src/signInResolver.ts) only
+# hits the catalog when Dex reports federated_claims.connector_id of
+# giantswarm-ad or giantswarm-github. This lab's static-password connector
+# reports "local", so the resolver falls through to email.split('@')[0] and
+# issues user:default/<localpart> with no catalog entity required.
+# These entities are therefore optional -- they exist so the users and groups
+# render as real things in the UI rather than dangling refs.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backstage-catalog
+  namespace: backstage
+data:
+  users.yaml: |
+{{- range .AllGroups }}
+    apiVersion: backstage.io/v1alpha1
+    kind: Group
+    metadata:
+      name: {{ . }}
+    spec:
+      type: team
+      children: []
+    ---
+{{- end }}
+{{- range $i, $u := .Users }}
+{{- if $i }}
+    ---
+{{- end }}
+    apiVersion: backstage.io/v1alpha1
+    kind: User
+    metadata:
+      name: {{ $u.Username }}
+    spec:
+      profile:
+        displayName: {{ $u.Name }}
+        email: {{ $u.Email }}
+      memberOf: [{{ join $u.Groups ", " }}]
+{{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backstage-config
+  namespace: backstage
+data:
+  app-config.lab.yaml: |
+    app:
+      title: Dex Lab
+      baseUrl: {{ .BackstageBaseURL }}
+
+    backend:
+      baseUrl: {{ .BackstageBaseURL }}
+      listen:
+        host: 0.0.0.0
+        port: {{ .Backstage.Port }}
+      cors:
+        origin: {{ .BackstageBaseURL }}
+        credentials: true
+      database:
+        client: better-sqlite3
+        connection: ':memory:'
+
+    # Dex is the only identity provider. No guest login, no GitHub.
+    auth:
+      environment: development
+      session:
+        secret: "68s34N/pNH1mnVcPQjJFhBbSQiKgEU3hr8v5RBxQJeo="
+      providers:
+        # The provider name MUST start with "oidc-": auth-backend-module-gs
+        # registers exactly one login provider, and only if its name carries
+        # that prefix AND equals gs.authProvider. The name also forms the
+        # callback path, /api/auth/oidc-lab/handler/frame, which has to match
+        # the redirectURI on the `backstage` staticClient in the Dex config.
+        oidc-lab:
+          development:
+            metadataUrl: {{ .Issuer }}/.well-known/openid-configuration
+            clientId: backstage
+            clientSecret: {{ .BackstageClientSecret }}
+
+    gs:
+      authProvider: oidc-lab
+      auth:
+        # Base scopes (openid profile email groups offline_access) are hardcoded
+        # in plugins/gs/src/apis/auth/scopes.ts. These two cross-client scopes
+        # widen the id_token's audience so the SAME token is accepted by the
+        # apiserver (--oidc-client-id=kubernetes) and by muster
+        # (trustedAudiences: [muster]). Both require the `backstage` client to be
+        # listed in the corresponding client's trustedPeers in the Dex config.
+        # Deliberately NO `federated:id`: with it the resolver would see
+        # connector_id "local", which matches neither catalog branch, so it
+        # changes nothing here and only widens the token.
+        extraScopes:
+          - 'audience:server:client_id:kubernetes'
+          - 'audience:server:client_id:muster'
+      installations:
+        # `installations` is non-optional inside `gs` (plugins/gs/config.d.ts):
+        # set the `gs` block at all and omit this, and config schema validation
+        # kills startup with "must have required property 'installations'".
+        {{ .ClusterName }}:
+          pipeline: testing
+          providers: [capa]
+          authProvider: oidc
+          oidcTokenProvider: oidc-lab
+
+    kubernetes:
+      serviceLocatorMethod:
+        type: multiTenant
+      clusterLocatorMethods:
+        - type: config
+          clusters:
+            # The name must equal the muster installation name below: the muster
+            # plugin's Dashboard and Servers tabs read MCPServer/Workflow CRs
+            # through the Backstage Kubernetes proxy scoped to a cluster of that
+            # name, not over MCP.
+            - name: {{ .ClusterName }}
+              url: https://localhost:6443
+              authProvider: oidc
+              oidcTokenProvider: oidc-lab
+              skipTLSVerify: true
+              skipMetricsLookup: true
+
+    # The Giant Swarm muster plugin. Talks MCP streamable-HTTP straight to
+    # muster's /mcp; the browser forwards the user's Dex id_token in a
+    # backstage-muster-authorization header and the backend promotes it to
+    # Authorization: Bearer on the MCP session. The URL is node-side, hence
+    # muster's fixed in-node listen port rather than the host-side mapping.
+    muster:
+      installations:
+        - name: {{ .ClusterName }}
+          url: http://localhost:{{ .MusterNodePort }}/mcp
+          authProvider: oidc-lab
+
+    # The GS build ships the ai-chat plugin enabled, and its base app-config
+    # already reads the key from ${ANTHROPIC_API_KEY} — the env var injected
+    # below. The lab only has to pick the model: provider routing goes by
+    # prefix (claude-* -> Anthropic), and the base default is an OpenAI model.
+    aiChat:
+      model: {{ .AIModel }}
+
+    catalog:
+      locations:
+        - type: file
+          target: /lab-catalog/users.yaml
+          rules:
+            - allow: [User, Group]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backstage
+  namespace: backstage
+  labels: { app: backstage }
+spec:
+  replicas: 1
+  # hostNetwork means only one pod can hold the port on the node, so a rolling
+  # update would deadlock: the new pod cannot bind while the old one lives.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: { app: backstage }
+  template:
+    metadata:
+      labels: { app: backstage }
+      annotations:
+        # Roll the pod whenever the lab config or CA changes (stamped by
+        # `agentlab backstage` over this manifest + certs/ca.crt).
+        checksum/lab-inputs: "REPLACED_AT_APPLY"
+    spec:
+      # hostNetwork is the whole trick: it puts the container on the node's
+      # network namespace, so the issuer URL resolves to the Dex NodePort --
+      # the exact same URL the browser uses. It is also what makes muster
+      # (localhost:{{ .MusterNodePort }}) and the apiserver (localhost:6443)
+      # reachable, since both are hostNetwork/host-published too.
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+        - name: backstage
+          # Giant Swarm's own Backstage, which carries the first-party muster
+          # plugin. Published anonymously to gsoci; linux/amd64 only, so on an
+          # arm64 Mac it runs under the kind node's Rosetta binfmt handler.
+          image: {{ .Backstage.Image }}
+          imagePullPolicy: IfNotPresent
+          # The image ENTRYPOINT is docker-entrypoint.sh and the config list is
+          # a plain CMD, so args: extends it cleanly. app-config.production.yaml
+          # is a 0-byte file in the repo and is dropped here. Last --config wins.
+          args:
+            - node
+            - packages/backend
+            - --config
+            - app-config.yaml
+            - --config
+            - /lab-config/app-config.lab.yaml
+          ports:
+            - { name: http, containerPort: {{ .Backstage.Port }} }
+          env:
+            # Dex serves a cert signed by the lab CA; Node rejects it otherwise.
+            # Without this the backend does not fail with a TLS error -- it fails
+            # issuer discovery and then serves 503 on every route, including "/".
+            - name: NODE_EXTRA_CA_CERTS
+              value: /pki/ca.crt
+            - name: LOG_LEVEL
+              value: info
+            # The ai-chat plugin's Anthropic key; `agentlab backstage` creates
+            # the secret from $ANTHROPIC_API_KEY. optional: without it the env
+            # var is simply absent and ai-chat stays unconfigured -- the pod
+            # must boot either way.
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: backstage-anthropic
+                  key: ANTHROPIC_API_KEY
+                  optional: true
+          volumeMounts:
+            - { name: config, mountPath: /lab-config }
+            - { name: catalog, mountPath: /lab-catalog }
+            - { name: pki, mountPath: /pki }
+          resources:
+            requests: { cpu: 200m, memory: 512Mi }
+            limits: { memory: 2Gi }
+      volumes:
+        - name: config
+          configMap: { name: backstage-config }
+        - name: catalog
+          configMap: { name: backstage-catalog }
+        - name: pki
+          secret: { secretName: dex-ca }

@@ -1,0 +1,197 @@
+# ---------------------------------------------------------------------------
+# Giant Swarm agent-platform-standalone umbrella chart, tuned for this kind lab.
+#
+# Component versions are the chart's own tested BOM (Chart.yaml / Chart.lock);
+# the lab no longer pins its own. `agentlab platform` pins the chart itself to a
+# git SHA instead (platform.apsRef in agentlab.yaml).
+#
+# Differences from a real management cluster:
+#   * no Envoy Gateway / agentgateway edge -> ingress.mode muster-direct (the
+#     chart default) with no parentRefs/hostnames, so no route objects render
+#     and muster is reached via the kind port mapping.
+#   * no Cilium and no Kyverno            -> the umbrella's policy objects are
+#     off wholesale, plus each component's own network policy toggles.
+#   * muster runs with hostNetwork        -> so that the issuer URL resolves to
+#     the Dex NodePort from inside the pod, exactly the trick the
+#     kube-apiserver static pod and the Backstage deployment already use. This
+#     is what lets muster share ONE issuer URL with the browser on the host.
+#     Not a chart value; patched in by `agentlab post-render` (helm
+#     --post-renderer), the plain-Helm replacement for the Flux postRenderers
+#     the old agent-platform meta-package forwarded to helm-controller.
+# ---------------------------------------------------------------------------
+
+components:
+  # muster and valkey are on by default. The MCP server registrations are not.
+  agent-platform-mcps:
+    enabled: true
+  # The agent runtime: the platform's Agent CRs run here, wired to Anthropic
+  # through the default ModelConfig (see the kagent block below). Off in the
+  # umbrella, on in this lab — agents are part of what the lab tests.
+  kagent:
+    enabled: true
+  # On by default; the avatar service is only reachable through the
+  # agentgateway edge this lab does not run.
+  dicebear:
+    enabled: false
+
+# The chart default, restated because this lab's whole topology hangs off it:
+# muster serves /mcp itself, no agentgateway data plane.
+ingress:
+  mode: muster-direct
+  # The chart hard-fails on empty parentRefs in ALL modes: it assumes a public
+  # Gateway exists and renders an umbrella-owned HTTPRoute for muster's `/`.
+  # This lab has no Gateway of any kind — muster is reached through hostNetwork
+  # and the kind port mapping — so this parentRef exists only to satisfy the
+  # guard, and `agentlab post-render` strips the rendered HTTPRoute (which also
+  # spares the lab the Gateway API CRDs, its only would-be consumer).
+  parentRefs:
+    - name: no-gateway-in-this-lab
+      namespace: agent-platform
+
+# The umbrella's own policy objects. No Cilium and no Kyverno in kind, so both
+# would render CRs whose API groups the cluster does not serve.
+networkPolicy:
+  enabled: false
+kyvernoPolicies:
+  enabled: false
+
+muster:
+  networkPolicy:
+    enabled: false
+  # Who may write MCPServer / Workflow CRs *through muster*. These are session
+  # writes made with the caller's own identity, so plain k8s RBAC authorizes
+  # them — muster only renders the namespaced Role + RoleBinding.
+  #
+  # The umbrella binds them to Giant Swarm's admin groups
+  # (`giantswarm-ad:giantswarm-admins`, `giantswarm-github:...`), which do not
+  # exist in this lab, so the bindings would be inert. Rebind to the lab's own
+  # admin group: the apiserver runs with --oidc-groups-prefix=oidc:, so Dex's
+  # `platform-admins` arrives as `oidc:platform-admins` — the same spelling
+  # the lab's RBAC template already uses.
+  #
+  # Helm replaces lists rather than merging them, so this drops the GS groups.
+  # Do not "disable" these by emptying the list: the chart hard-`fail`s on an
+  # empty subjects list (a RoleBinding bound to nobody reads as enforced while
+  # granting nothing). Use `create: false` to manage access out of band.
+  rbac:
+    mcpServerEditor:
+      subjects:
+        - apiGroup: rbac.authorization.k8s.io
+          kind: Group
+          name: "oidc:platform-admins"
+    workflowEditor:
+      subjects:
+        - apiGroup: rbac.authorization.k8s.io
+          kind: Group
+          name: "oidc:platform-admins"
+  muster:
+    # The umbrella turns muster's ServiceMonitor and PrometheusRule on for the
+    # GS observability stack. No Prometheus Operator in kind, so neither CRD
+    # exists and the release fails to render unless both are off.
+    observability:
+      metrics:
+        prometheus:
+          serviceMonitor:
+            enabled: false
+          prometheusRule:
+            enabled: false
+    # Dex serves a self-signed cert; append the lab CA to muster's trust pool.
+    extraCaFile:
+      path: /etc/muster/ca/extra-ca.pem
+      secret:
+        name: dex-ca
+        key: ca.crt
+    oauth:
+      server:
+        enabled: true
+        # What Claude Code on the host dials, and what the OAuth callback and
+        # the Dex redirectURI must agree on.
+        baseUrl: "{{ .MusterBaseURL }}"
+        provider: dex
+        dex:
+          issuerUrl: "{{ .Issuer }}"
+          clientId: muster
+          # The issuer is a loopback address; discovery refuses that by default.
+          allowPrivateIPOIDC: true
+        existingSecret: agent-platform-secrets
+        # Lab only: lets Claude Code register itself over DCR without a
+        # pre-shared registration token. WORKAROUND (muster chart <= 5.5.6):
+        # the chart exposes this key in values.yaml, values.schema.json and its
+        # README, but templates/configmap.yaml never renders it — so the value
+        # set here is silently dropped. `agentlab post-render` re-adds it to the
+        # rendered config; this entry stays so the values file tells the truth
+        # and the workaround can be deleted once the chart renders it.
+        allowPublicClientRegistration: true
+        # Lab only: accept a Dex id_token with aud=muster as a bearer token, so
+        # the stack can be smoke-tested headlessly with the password grant.
+        trustedAudiences:
+          - muster
+        storage:
+          type: valkey
+          valkey:
+            url: muster-valkey:6379
+
+kagent:
+  kagent:
+    # The default ModelConfig every agent starts from (the kagent subchart
+    # renders it from providers.<default>). The chart would only create the
+    # referenced Secret if the raw key were inlined in these values — which
+    # would put a real credential into state/ and the Helm release Secret —
+    # so the lab pre-creates kagent-anthropic from $ANTHROPIC_API_KEY instead
+    # (`agentlab platform`, after the install; agents mount it at run time).
+    providers:
+      default: anthropic
+      anthropic:
+        provider: Anthropic
+        model: {{ .AIModel }}
+        apiKeySecretRef: kagent-anthropic
+        apiKeySecretKey: ANTHROPIC_API_KEY
+    controller:
+      auth:
+        # The umbrella default is trusted-proxy, which decodes bearer claims
+        # WITHOUT verification and relies on a JWT-validating agentgateway in
+        # front. This lab runs no front proxy at all, so trusted-proxy would
+        # trust any forged header; upstream's local-dev mode is the honest
+        # setting (X-User-Id or admin@kagent.dev).
+        mode: unsecure
+    # No Prometheus Operator in kind, so the ServiceMonitor CRD does not exist
+    # (same story as muster/valkey above).
+    serviceMonitor:
+      enabled: false
+    # No OTLP gateway in kind; the exporters would only log dial errors.
+    otel:
+      tracing:
+        enabled: false
+      logging:
+        enabled: false
+
+valkey:
+  ciliumNetworkPolicy:
+    enabled: false
+  valkey:
+    # No Prometheus Operator in kind, so the PodMonitor CR has no CRD to bind
+    # to and the whole release fails to render without this.
+    metrics:
+      podMonitor:
+        enabled: false
+    auth:
+      usersExistingSecret: agent-platform-secrets
+      aclUsers:
+        default:
+          passwordKey: valkey-password
+
+agent-platform-mcps:
+  # The umbrella defaults this to true (agentgateway is the observability choke
+  # point on a real MC). With the agentgateway component off, leaving it on
+  # renders AgentgatewayBackend CRs whose CRD is not installed.
+  agentgateway:
+    enabled: false
+  mcpServers:
+    # The Kubernetes MCP server, in-cluster. auth.mode none: muster's own OAuth
+    # guards the front door and mcp-kubernetes talks to the apiserver with its
+    # ServiceAccount.
+    - cluster: {{ .ClusterName }}
+      group: kubernetes
+      url: http://mcp-kubernetes.agent-platform.svc.cluster.local:8080/mcp
+      auth:
+        mode: none

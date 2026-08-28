@@ -2,4 +2,7 @@ certs/
 .token
 kubeconfig.oidc
 .kubeconfig.*
-vendor/
+.vendor/
+/agentlab
+/agentlab.yaml
+/state/

@@ -1,0 +1,164 @@
+package lab
+
+import (
+	"fmt"
+	"os"
+	"slices"
+	"strings"
+	"time"
+
+	"agentlab/internal/config"
+)
+
+// Up brings up the whole lab: certs, kind cluster, Dex, RBAC, an end-to-end
+// OIDC verification, and then the components the configuration enables — the
+// agent platform (the default; it is what the lab tests) and Backstage.
+func Up(cfg *config.Config) error {
+	if err := GenCerts(false); err != nil {
+		return err
+	}
+
+	_, kindCfgPath, err := renderManifest(cfg, "kind-config.yaml.tmpl")
+	if err != nil {
+		return err
+	}
+	_, rbacPath, err := renderManifest(cfg, "rbac.yaml.tmpl")
+	if err != nil {
+		return err
+	}
+
+	if kindClusterExists(cfg.ClusterName) {
+		step("kind cluster %q already exists", cfg.ClusterName)
+	} else {
+		step("Creating kind cluster %q", cfg.ClusterName)
+		if err := run("kind", "create", "cluster", "--config", kindCfgPath, "--wait", "120s"); err != nil {
+			return err
+		}
+	}
+	if err := runQuiet("kubectl", "config", "use-context", cfg.KubeContext()); err != nil {
+		return err
+	}
+
+	step("Deploying Dex")
+	// Namespace and TLS secret land before the Deployment so the pod never
+	// waits on a missing volume on first boot.
+	if err := ensureNamespace("dex"); err != nil {
+		return err
+	}
+	if err := ensureSecretFromFiles("dex", "dex-tls", map[string]string{
+		"tls.crt": "certs/tls.crt",
+		"tls.key": "certs/tls.key",
+	}); err != nil {
+		return err
+	}
+	if err := ApplyDex(cfg); err != nil {
+		return err
+	}
+
+	step("Applying RBAC bound to OIDC groups")
+	if err := runQuiet("kubectl", "apply", "-f", rbacPath); err != nil {
+		return err
+	}
+
+	step("Waiting for the issuer to answer on %s", cfg.Issuer())
+	client, err := labHTTPClient(10 * time.Second)
+	if err != nil {
+		return err
+	}
+	if !waitFor(60, 2*time.Second, func() bool {
+		return httpUp(client, cfg.Issuer()+"/.well-known/openid-configuration")
+	}) {
+		return fmt.Errorf("issuer never answered on %s", cfg.Issuer())
+	}
+	note("issuer is up")
+
+	// No apiserver bounce needed: since (at least) Kubernetes 1.35 the OIDC
+	// authenticator retries discovery every 10s forever (oidc.go "initializing
+	// plugin" errors until Dex answers), so this loop just waits out the next
+	// retry tick. The token is fetched once — the issuer already answers, so
+	// only the apiserver side needs polling.
+	step("Verifying the end-to-end OIDC chain")
+	admin := cfg.AdminUser()
+	tok, err := passwordGrant(cfg, config.KubernetesClientID, config.KubernetesClientSecret,
+		admin.Email, admin.Password, "openid email groups")
+	if err != nil {
+		return err
+	}
+	const probeKubeconfig = ".kubeconfig.probe"
+	if err := writeTokenKubeconfig(cfg, tok, probeKubeconfig); err != nil {
+		return err
+	}
+	verified := waitFor(30, 2*time.Second, func() bool {
+		_, err := outputQuiet("kubectl", "--kubeconfig="+probeKubeconfig, "auth", "whoami")
+		return err == nil
+	})
+	os.Remove(probeKubeconfig)
+	if !verified {
+		return fmt.Errorf("apiserver still rejects Dex tokens; check the apiserver log for oidc.go lines")
+	}
+	note("apiserver accepts Dex tokens")
+
+	fmt.Println()
+	fmt.Println("Lab is up.")
+	fmt.Println()
+	fmt.Println("  Users:")
+	for _, u := range cfg.Users {
+		fmt.Printf("    %-22s password: %-12s groups: %s\n",
+			u.Email, u.Password, strings.Join(u.Groups, ", "))
+	}
+	fmt.Println()
+	fmt.Println("  Try it:")
+	fmt.Printf("    agentlab login %s     # headless, prints the token claims\n", admin.Email)
+	fmt.Println("    agentlab browser      # real browser login screen")
+	fmt.Println("    agentlab test         # full RBAC assertion run")
+
+	// The multi-minute Backstage image pull only needs docker, so it overlaps
+	// with the platform install instead of running after it.
+	var backstagePull <-chan error
+	if cfg.Backstage.Enabled && cfg.Platform.Enabled {
+		backstagePull = prefetchBackstageImage(cfg)
+	}
+	if cfg.Platform.Enabled {
+		fmt.Println()
+		if err := PlatformUp(cfg); err != nil {
+			return err
+		}
+	}
+	if cfg.Backstage.Enabled {
+		fmt.Println()
+		if backstagePull != nil {
+			if err := <-backstagePull; err != nil {
+				return fmt.Errorf("pulling %s: %w", cfg.Backstage.Image, err)
+			}
+		}
+		if err := BackstageUp(cfg); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ApplyDex renders manifests with the input checksum stamped into the pod
+// template, applies them, and waits for the rollout. The checksum covers the
+// rendered manifest AND the served cert, so editing the config or regenerating
+// certs rolls the pod, while an unchanged re-apply is a pure no-op (no
+// throwaway ReplicaSet). Shared by Up and `agentlab reload`.
+func ApplyDex(cfg *config.Config) error {
+	stamped, _, err := renderManifest(cfg, "dex.yaml.tmpl")
+	if err != nil {
+		return err
+	}
+	if err := pipeInto(stamped, "kubectl", "apply", "-f", "-"); err != nil {
+		return err
+	}
+	step("Waiting for Dex to become ready")
+	return run("kubectl", "-n", "dex", "rollout", "status", "deployment/dex", "--timeout=120s")
+}
+
+func kindClusterExists(name string) bool {
+	out, err := outputQuiet("kind", "get", "clusters")
+	if err != nil {
+		return false
+	}
+	return slices.Contains(strings.Split(strings.TrimSpace(out), "\n"), name)
+}
