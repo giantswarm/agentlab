@@ -115,20 +115,17 @@ failed with "inconsistent vendoring".
 
 ## Blocked upstream (documented, not fixable in this repo)
 
-### U1. `muster-post-render.sh` patch: `allowPublicClientRegistration` edited into the rendered ConfigMap
-The muster chart exposes the key in values.yaml, values.schema.json, README
-and unit tests, but `templates/configmap.yaml` never renders it, so the value
-is silently dropped and Claude Code's DCR registration dies with
-"Registration requires authentication". **Verified still broken in muster
-chart 5.7.1** (the BOM pin of the 3.2.2 curation, checked 2026-08-30: the
-oauth server block in `templates/configmap.yaml` renders every neighbouring
-key but not this one). Neither alternative gate can work for a
-public loopback client (no token, random port, http/https stripped from
-allowed schemes by mcp-oauth validation).
-**Unblocks:** giantswarm/muster — render the key in
-`helm/muster/templates/configmap.yaml` (`aggregator.oauth.server.allowPublicClientRegistration`).
-The values entry in `manifests/agent-platform/values.yaml` is kept so the
-values file tells the truth; delete the yq patch once the chart renders it.
+### U1. `muster-post-render.sh` patch: `allowPublicClientRegistration` edited into the rendered ConfigMap — FIXED upstream
+The muster chart exposed the key in values.yaml, values.schema.json, README
+and unit tests, but `templates/configmap.yaml` never rendered it, so the value
+was silently dropped and Claude Code's DCR registration died with
+"Registration requires authentication". Neither alternative gate can work for
+a public loopback client (no token, random port, http/https stripped from
+allowed schemes by mcp-oauth validation), so the key was edited into the
+rendered ConfigMap by the post-renderer.
+**Fixed:** muster 5.7.2 (giantswarm/muster#1118) renders the key; the chart
+BOM carries it since the curation that pinned muster 5.7.2. The post-render
+ConfigMap edit is deleted — the values entry alone is effective now.
 
 ### U2. `muster-post-render.sh` patch: hostNetwork + dnsPolicy + maxSurge 0 on the muster Deployment
 muster must resolve `https://localhost:32000/dex` to the Dex NodePort from

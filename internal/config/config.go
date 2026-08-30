@@ -154,7 +154,7 @@ func Default() *Config {
 			MusterPort:           8090,
 			MCPKubernetesVersion: "1.0.9",
 			APSRepo:              "https://github.com/giantswarm/agent-platform-standalone",
-			APSRef:               "4976adeecd118e27c52fc4402cd047f73616c657", // feat/curate-generator head: curated against agent-platform 3.2.2 (PR #24), Helm-4-installable
+			APSRef:               "07019de9707ebe098def6700fa4a916ce5e08728", // feat/curate-generator head: 3.2.2 curation, muster 5.7.2 (native DCR toggle), Renovate-owned pins
 		},
 		Backstage: Backstage{
 			Enabled: false,

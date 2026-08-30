@@ -211,18 +211,15 @@ same one-URL trick, just spelled with a name.
   `agentlab platform` refuses if it finds the old HelmReleases; run
   `agentlab platform-down` first (an old cluster keeps its now-idle `flux-system`,
   which is harmless).
-- **`allowPublicClientRegistration` is a no-op in the muster chart (still
-  unrendered at 5.7.1).** It exists in `values.yaml`, `values.schema.json`, the README table
-  and the chart's unit tests, but `templates/configmap.yaml` never renders it —
-  so DCR stays gated and Claude Code's login dies at `/oauth/register` with
-  *"Registration requires authentication"*. Neither of the other gates can help:
-  Claude Code cannot send a registration token, its loopback port is random (so
-  `trustedPublicRegistrationRedirectURIs` cannot match), and `http`/`https` are
-  deliberately stripped from `trustedPublicRegistrationSchemes` by mcp-oauth's
-  config validation. `agentlab post-render` works around it by editing the key
-  into the rendered config — surgically, so everything else in the ConfigMap
-  stays chart-rendered and muster bumps via the chart need no hand-copying (the
-  old meta-package setup froze the whole ConfigMap and had to pin muster for it).
+- **`allowPublicClientRegistration` must be on for Claude Code's login.**
+  Claude Code registers over DCR as a public client on a random loopback port,
+  so none of the other registration gates can be opened for it: it cannot send
+  a registration token, `trustedPublicRegistrationRedirectURIs` cannot match a
+  random port, and `http`/`https` are deliberately stripped from
+  `trustedPublicRegistrationSchemes` by mcp-oauth's config validation. The
+  muster chart renders the key since 5.7.2 (muster#1118); before that,
+  `agentlab post-render` had to edit it into the rendered ConfigMap
+  (HACKS.md U1, now fixed upstream).
 - **A `Recreate` strategy cannot be patched onto an existing Deployment.** The API
   server has already defaulted `spec.strategy.rollingUpdate`, and a patch that
   flips the type without also deleting that field fails with
@@ -612,7 +609,7 @@ internal/lab/                  everything operational:
   login.go browser.go            password grant / authorization-code flow
   platform.go platformtest.go    agent platform install + MCP smoke test
   backstage.go backstagetest.go  Backstage deploy + headless sign-in proof
-  postrender.go                  helm post-renderer (hostNetwork, DCR fix, route strip)
+  postrender.go                  helm post-renderer (hostNetwork, route strip, nodePort pin)
   helmplugin.go                  generates the Helm 4 postrenderer plugin wrapping it
   templates/                     every manifest, rendered from agentlab.yaml
 agentlab.yaml                    your configuration (gitignored; `agentlab configure`)

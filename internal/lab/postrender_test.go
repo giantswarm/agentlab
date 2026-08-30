@@ -92,8 +92,9 @@ func TestPostRender(t *testing.T) {
 		t.Errorf("unrelated document dropped")
 	}
 
-	// The ConfigMap's nested config must gain exactly the DCR key and keep
-	// everything else.
+	// The muster ConfigMap passes through UNTOUCHED: the chart renders
+	// allowPublicClientRegistration itself since muster 5.7.2 (muster#1118),
+	// so the retired DCR edit must not sneak back in.
 	var docs []map[string]any
 	dec := yaml.NewDecoder(strings.NewReader(rendered))
 	for {
@@ -132,11 +133,11 @@ func TestPostRender(t *testing.T) {
 			t.Fatalf("inner config unparsable: %v", err)
 		}
 		server := cfg["aggregator"].(map[string]any)["oauth"].(map[string]any)["server"].(map[string]any)
-		if server["allowPublicClientRegistration"] != true {
-			t.Errorf("allowPublicClientRegistration not set: %v", server)
+		if _, edited := server["allowPublicClientRegistration"]; edited {
+			t.Errorf("retired DCR edit resurfaced in the rendered config: %v", server)
 		}
 		if server["enabled"] != true {
-			t.Errorf("existing server keys lost: %v", server)
+			t.Errorf("chart-rendered server keys lost: %v", server)
 		}
 		if cfg["other"].(map[string]any)["keep"] != "value" {
 			t.Errorf("unrelated config lost: %v", cfg["other"])
