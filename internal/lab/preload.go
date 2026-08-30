@@ -140,10 +140,10 @@ func snapshotPreloadImages(cfg *config.Config) {
 		"# them on the host and side-loads them into the fresh node. Regenerated\n" +
 		"# after every boot — safe to delete.\n" +
 		strings.Join(images, "\n") + "\n"
-	if err := os.MkdirAll(StateDir, 0o755); err != nil {
+	if err := os.MkdirAll(StateDir, 0o750); err != nil {
 		return
 	}
-	_ = os.WriteFile(preloadImagesFile, []byte(content), 0o644)
+	_ = os.WriteFile(preloadImagesFile, []byte(content), 0o600)
 }
 
 // readPreloadManifest returns the cached image list, tolerating comments and

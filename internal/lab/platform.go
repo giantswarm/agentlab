@@ -15,6 +15,13 @@ import (
 
 const platformNamespace = "agent-platform"
 
+// Component names, shared by the log targets, the cert SANs, the deploy
+// steps and the post-renderer's resource matching.
+const (
+	componentDex    = "dex"
+	componentMuster = "muster"
+)
+
 // apsDir is where the umbrella chart is vendored from git. Deliberately NOT
 // `vendor/`: the repo is a Go module, and a top-level vendor/ directory would
 // flip the Go toolchain into vendored-build mode and break `go build`.
@@ -74,17 +81,17 @@ func ensurePlatformChart(cfg *config.Config) error {
 	// was last built from exactly this Chart.lock — compared by content digest,
 	// not mtime: mtimes change on checkout and prove nothing about the last
 	// build.
-	lockRaw, err := os.ReadFile(filepath.Join(chartDir, "Chart.lock"))
+	lockRaw, err := os.ReadFile(filepath.Join(chartDir, "Chart.lock")) // #nosec G304 -- lab-owned vendored chart path
 	if err != nil {
 		return fmt.Errorf("reading Chart.lock: %w", err)
 	}
 	lockDigest := hex.EncodeToString(sha256sum(lockRaw))
 	digestFile := filepath.Join(chartDir, "charts", ".lock-digest")
-	if prev, err := os.ReadFile(digestFile); err != nil || string(prev) != lockDigest {
+	if prev, err := os.ReadFile(digestFile); err != nil || string(prev) != lockDigest { // #nosec G304 -- lab-owned digest cache file
 		if err := runQuiet("helm", "dependency", "build", chartDir); err != nil {
 			return err
 		}
-		if err := os.WriteFile(digestFile, []byte(lockDigest), 0o644); err != nil {
+		if err := os.WriteFile(digestFile, []byte(lockDigest), 0o600); err != nil { // #nosec G703 -- digest cache path is built from package constants
 			return err
 		}
 	}
@@ -97,7 +104,7 @@ func platformUp(cfg *config.Config, chartReady <-chan error) error {
 	// A cluster still running the old meta-package has Flux HelmReleases under
 	// the same Helm release name; upgrading across that boundary races
 	// helm-controller uninstalls against this install. Start clean instead.
-	if _, err := outputQuiet("kubectl", "-n", platformNamespace, "get", "helmrelease", "muster"); err == nil {
+	if _, err := outputQuiet("kubectl", "-n", platformNamespace, "get", "helmrelease", componentMuster); err == nil {
 		return fmt.Errorf("this cluster runs the old agent-platform meta-package (Flux HelmReleases found);\n" +
 			"run `agentlab platform-down` first, then re-run `agentlab platform`")
 	}
@@ -118,7 +125,7 @@ func platformUp(cfg *config.Config, chartReady <-chan error) error {
 	// muster appends this to its system trust pool so it can talk to the lab's
 	// self-signed Dex over TLS (values: muster.muster.extraCaFile).
 	if err := ensureSecretFromFiles(platformNamespace, "dex-ca", map[string]string{
-		"ca.crt": "certs/ca.crt",
+		"ca.crt": caCertPath,
 	}); err != nil {
 		return err
 	}

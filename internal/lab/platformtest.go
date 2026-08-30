@@ -62,15 +62,15 @@ func PlatformTest(cfg *config.Config, email string) error {
 		return err
 	}
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	sessionID := resp.Header.Get("Mcp-Session-Id")
 	if sessionID == "" {
 		return fmt.Errorf("no session id — muster rejected the token:\n%s", strings.TrimSpace(string(body)))
 	}
 	note("session %s", sessionID)
 	if resp, err := post(sessionID, `{"jsonrpc":"2.0","method":"notifications/initialized"}`); err == nil {
-		io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
 	}
 
 	call := func(payload string) (map[string]any, error) {
@@ -78,7 +78,7 @@ func PlatformTest(cfg *config.Config, email string) error {
 		if err != nil {
 			return nil, err
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		raw, _ := io.ReadAll(resp.Body)
 		parsed, err := parseMCPResponse(raw)
 		if err != nil {
@@ -177,7 +177,7 @@ func musterTokenProbe(cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.Header.Get("Mcp-Session-Id") == "" {
 		msg := strings.TrimSpace(string(body))

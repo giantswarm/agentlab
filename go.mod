@@ -40,3 +40,5 @@ require (
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 )
+
+replace golang.org/x/mod => golang.org/x/mod v0.40.0

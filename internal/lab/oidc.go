@@ -34,7 +34,7 @@ func labTLSTransport() (*http.Transport, error) {
 	if labTransport.cached != nil {
 		return labTransport.cached, nil
 	}
-	caPEM, err := os.ReadFile("certs/ca.crt")
+	caPEM, err := os.ReadFile(caCertPath)
 	if err != nil {
 		return nil, fmt.Errorf("reading lab CA (run `agentlab up` first?): %w", err)
 	}
@@ -76,7 +76,7 @@ func dexToken(cfg *config.Config, clientID, clientSecret string, form url.Values
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(resp.Body)
 	var tok struct {
 		IDToken          string `json:"id_token"`
@@ -93,15 +93,22 @@ func dexToken(cfg *config.Config, clientID, clientSecret string, form url.Values
 	return tok.IDToken, nil
 }
 
+// grantTypePassword is the OAuth2 Resource Owner Password Credentials grant.
+const grantTypePassword = "password"
+
+// passwordParam is the password field name shared by Dex's token endpoint
+// (ROPC form) and its login form.
+const passwordParam = "password"
+
 // passwordGrant performs the OAuth2 Resource Owner Password grant against the
 // lab Dex (enabled by oauth2.passwordConnector: local) and returns the raw
 // id_token. This is what makes headless/CI testing a single HTTP call.
 func passwordGrant(cfg *config.Config, clientID, clientSecret, email, password, scope string) (string, error) {
 	token, err := dexToken(cfg, clientID, clientSecret, url.Values{
-		"grant_type": {"password"},
-		"username":   {email},
-		"password":   {password},
-		"scope":      {scope},
+		"grant_type":  {grantTypePassword},
+		"username":    {email},
+		passwordParam: {password},
+		"scope":       {scope},
 	})
 	if err != nil {
 		return "", fmt.Errorf("dex login failed for %s: %w", email, err)
@@ -133,7 +140,7 @@ func httpUp(client *http.Client, url string) bool {
 	if err != nil {
 		return false
 	}
-	defer resp.Body.Close()
-	io.Copy(io.Discard, resp.Body)
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(io.Discard, resp.Body)
 	return resp.StatusCode >= 200 && resp.StatusCode < 300
 }

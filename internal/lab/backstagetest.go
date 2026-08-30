@@ -71,8 +71,8 @@ func backstageSignIn(cfg *config.Config, user *config.User) error {
 	if err != nil {
 		return err
 	}
-	io.Copy(io.Discard, resp.Body)
-	resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
 	dexURL := resp.Header.Get("Location")
 	if dexURL == "" {
 		return fmt.Errorf("no redirect to Dex (status %d)", resp.StatusCode)
@@ -83,19 +83,19 @@ func backstageSignIn(cfg *config.Config, user *config.User) error {
 	if err != nil {
 		return err
 	}
-	io.Copy(io.Discard, resp.Body)
-	resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
 	loginURL := resp.Request.URL.String()
 
 	// 3. Submit lab credentials; Dex redirects back through the Backstage
 	//    handler, whose response embeds the authorization result.
-	form := url.Values{"login": {user.Email}, "password": {user.Password}}
+	form := url.Values{"login": {user.Email}, passwordParam: {user.Password}}
 	resp, err = follow.PostForm(loginURL, form)
 	if err != nil {
 		return err
 	}
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// 4. The handler page hands the result to the opener via postMessage;
 	//    headlessly, the payload is regex'd out of the inline script. There is
@@ -168,7 +168,7 @@ func backstageSignIn(cfg *config.Config, user *config.User) error {
 		if err != nil {
 			return 0, nil, err
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		raw, _ := io.ReadAll(resp.Body)
 		if resp.StatusCode != http.StatusOK {
 			return resp.StatusCode, strings.TrimSpace(string(raw)), nil
@@ -193,7 +193,7 @@ func backstageSignIn(cfg *config.Config, user *config.User) error {
 	pairs := make([]string, 0, len(servers))
 	for _, s := range servers {
 		if m, ok := s.(map[string]any); ok {
-			pairs = append(pairs, fmt.Sprintf("(%v, %v)", m["name"], m["state"]))
+			pairs = append(pairs, fmt.Sprintf("(%v, %v)", m[nameKey], m["state"]))
 		}
 	}
 	fmt.Printf("  muster servers  [%s]\n", strings.Join(pairs, ", "))
@@ -207,7 +207,7 @@ func backstageSignIn(cfg *config.Config, user *config.User) error {
 		wfs, _ := unwrapKey(payload, "workflows").([]any)
 		for _, w := range wfs {
 			if m, ok := w.(map[string]any); ok {
-				wfNames = append(wfNames, fmt.Sprintf("%v", m["name"]))
+				wfNames = append(wfNames, fmt.Sprintf("%v", m[nameKey]))
 			}
 		}
 	}
@@ -245,8 +245,8 @@ func backstageSignIn(cfg *config.Config, user *config.User) error {
 	if err != nil {
 		return err
 	}
-	io.Copy(io.Discard, resp.Body)
-	resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("agent-deployment template not in the catalog (%d) — the create flow's deploy would 404", resp.StatusCode)
 	}

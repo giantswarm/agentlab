@@ -14,6 +14,13 @@ import (
 	"time"
 )
 
+// Paths of the minted public certs, shared by every consumer in the package
+// (the kind mount, the in-cluster secrets, the manifest checksum inputs).
+const (
+	caCertPath  = "certs/ca.crt"
+	tlsCertPath = "certs/tls.crt"
+)
+
 // GenCerts mints a self-signed CA and a Dex server certificate under certs/.
 // The server cert carries both IP:127.0.0.1 and DNS:localhost in its SAN — the
 // issuer URL uses the *name* (muster rejects issuers whose host parses as a
@@ -21,7 +28,7 @@ import (
 // Existing certs are left alone unless force is set: regenerating invalidates
 // the CA baked into the running cluster's apiserver flags.
 func GenCerts(force bool) error {
-	if err := os.MkdirAll("certs", 0o755); err != nil {
+	if err := os.MkdirAll("certs", 0o750); err != nil {
 		return err
 	}
 	if _, err := os.Stat(filepath.Join("certs", "tls.crt")); err == nil && !force {
@@ -57,13 +64,13 @@ func GenCerts(force bool) error {
 	}
 	srvTmpl := &x509.Certificate{
 		SerialNumber: randomSerial(),
-		Subject:      pkix.Name{CommonName: "dex"},
+		Subject:      pkix.Name{CommonName: componentDex},
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().AddDate(0, 0, 3650),
 		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
-		DNSNames:     []string{"localhost", "dex", "dex.dex.svc", "dex.dex.svc.cluster.local"},
+		DNSNames:     []string{"localhost", componentDex, "dex.dex.svc", "dex.dex.svc.cluster.local"},
 	}
 	caCert, err := x509.ParseCertificate(caDER)
 	if err != nil {
@@ -81,9 +88,9 @@ func GenCerts(force bool) error {
 		pem  *pem.Block
 		mode os.FileMode
 	}{
-		{"certs/ca.crt", &pem.Block{Type: "CERTIFICATE", Bytes: caDER}, 0o644},
+		{caCertPath, &pem.Block{Type: "CERTIFICATE", Bytes: caDER}, 0o644},
 		{"certs/ca.key", &pem.Block{Type: "PRIVATE KEY", Bytes: mustPKCS8(caKey)}, 0o600},
-		{"certs/tls.crt", &pem.Block{Type: "CERTIFICATE", Bytes: srvDER}, 0o644},
+		{tlsCertPath, &pem.Block{Type: "CERTIFICATE", Bytes: srvDER}, 0o644},
 		{"certs/tls.key", &pem.Block{Type: "PRIVATE KEY", Bytes: mustPKCS8(srvKey)}, 0o600},
 	}
 	for _, w := range writes {

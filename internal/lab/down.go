@@ -14,7 +14,7 @@ func Down(cfg *config.Config) error {
 	if err := run("kind", "delete", "cluster", "--name", cfg.ClusterName); err != nil {
 		return err
 	}
-	os.Remove(".token")
+	_ = os.Remove(".token")
 	fmt.Println("Lab destroyed. certs/ kept (agentlab certs --force to regenerate).")
 	return nil
 }

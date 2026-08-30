@@ -7,13 +7,16 @@ import (
 	"strings"
 )
 
+// logCmd is the kubectl subcommand every log target shares.
+const logCmd = "logs"
+
 // logTargets maps each component to its `kubectl logs -f` args; the table also
 // feeds cobra's ValidArgs via LogComponents, so dispatch and completion cannot
 // drift.
 var logTargets = map[string][]string{
-	"dex":       {"-n", "dex", "logs", "-l", "app=dex", "-f"},
-	"muster":    {"-n", platformNamespace, "logs", "-l", "app.kubernetes.io/name=muster", "-f"},
-	"backstage": {"-n", "backstage", "logs", "-f", "deploy/backstage"},
+	componentDex:    {"-n", componentDex, logCmd, "-l", "app=dex", "-f"},
+	componentMuster: {"-n", platformNamespace, logCmd, "-l", "app.kubernetes.io/name=muster", "-f"},
+	"backstage":     {"-n", "backstage", logCmd, "-f", "deploy/backstage"},
 }
 
 // LogComponents lists what Logs accepts, for cobra's ValidArgs.

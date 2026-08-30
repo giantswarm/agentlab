@@ -27,7 +27,7 @@ func note(format string, a ...any) {
 
 // run executes a command with output streamed to the terminal.
 func run(name string, args ...string) error {
-	cmd := exec.Command(name, args...)
+	cmd := exec.Command(name, args...) // #nosec G204 -- fixed lab tooling (kind/kubectl/helm) with lab-controlled args
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
@@ -41,7 +41,7 @@ func runQuiet(name string, args ...string) error {
 // output captures a command's stdout (stderr goes to the terminal).
 func output(name string, args ...string) (string, error) {
 	var buf bytes.Buffer
-	cmd := exec.Command(name, args...)
+	cmd := exec.Command(name, args...) // #nosec G204 -- fixed lab tooling (kind/kubectl/helm) with lab-controlled args
 	cmd.Stdout = &buf
 	cmd.Stderr = os.Stderr
 	err := cmd.Run()
@@ -52,7 +52,7 @@ func output(name string, args ...string) (string, error) {
 // whose failures are expected.
 func outputQuiet(name string, args ...string) (string, error) {
 	var buf bytes.Buffer
-	cmd := exec.Command(name, args...)
+	cmd := exec.Command(name, args...) // #nosec G204 -- fixed lab tooling (kind/kubectl/helm) with lab-controlled args
 	cmd.Stdout = &buf
 	err := cmd.Run()
 	return buf.String(), err
@@ -61,12 +61,12 @@ func outputQuiet(name string, args ...string) (string, error) {
 // pipeInto feeds input to a command's stdin, showing output only on failure.
 func pipeInto(input []byte, name string, args ...string) error {
 	var buf bytes.Buffer
-	cmd := exec.Command(name, args...)
+	cmd := exec.Command(name, args...) // #nosec G204 -- fixed lab tooling (kind/kubectl/helm) with lab-controlled args
 	cmd.Stdin = bytes.NewReader(input)
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
 	if err := cmd.Run(); err != nil {
-		os.Stderr.Write(buf.Bytes())
+		_, _ = os.Stderr.Write(buf.Bytes())
 		return fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), err)
 	}
 	return nil

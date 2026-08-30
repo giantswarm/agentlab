@@ -43,7 +43,7 @@ func BrowserLogin(cfg *config.Config) error {
 			return
 		}
 		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprint(w, "<html><body style='font-family:sans-serif;padding:3rem'>"+
+		_, _ = fmt.Fprint(w, "<html><body style='font-family:sans-serif;padding:3rem'>"+
 			"<h2>Logged in.</h2><p>You can close this tab and go back to the terminal.</p>"+
 			"</body></html>")
 		codeCh <- q.Get("code")
@@ -53,9 +53,9 @@ func BrowserLogin(cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("callback port busy: %w", err)
 	}
-	srv := &http.Server{Handler: mux}
-	go srv.Serve(ln)
-	defer srv.Shutdown(context.Background())
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	go func() { _ = srv.Serve(ln) }()
+	defer func() { _ = srv.Shutdown(context.Background()) }()
 
 	authURL := cfg.Issuer() + "/auth?" + url.Values{
 		"client_id":     {config.KubernetesClientID},
@@ -95,9 +95,9 @@ func OpenBrowser(url string) {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
-		cmd = exec.Command("open", url)
+		cmd = exec.Command("open", url) // #nosec G204 -- fixed browser-opener command; the URL is lab-local
 	default:
-		cmd = exec.Command("xdg-open", url)
+		cmd = exec.Command("xdg-open", url) // #nosec G204 -- fixed browser-opener command; the URL is lab-local
 	}
 	_ = cmd.Start()
 }

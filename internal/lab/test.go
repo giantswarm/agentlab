@@ -39,7 +39,7 @@ func Test(cfg *config.Config) error {
 		if err := writeTokenKubeconfig(cfg, token, kubeconfig); err != nil {
 			return err
 		}
-		defer os.Remove(kubeconfig)
+		defer func() { _ = os.Remove(kubeconfig) }()
 
 		whoami, _ := outputQuiet("kubectl", "--kubeconfig="+kubeconfig, "auth", "whoami",
 			"-o", "jsonpath={.status.userInfo.username}  {.status.userInfo.groups}")

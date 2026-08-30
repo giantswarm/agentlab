@@ -2,7 +2,6 @@ package lab
 
 import (
 	"bytes"
-	"crypto/sha1"
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
@@ -64,7 +63,7 @@ var tmplFuncs = template.FuncMap{
 	// userID derives a stable UUID-shaped id from the email, so renders are
 	// deterministic and adding a user never renumbers the others.
 	"userID": func(email string) string {
-		sum := sha1.Sum([]byte("agentlab-user:" + email))
+		sum := sha256.Sum256([]byte("agentlab-user:" + email))
 		h := hex.EncodeToString(sum[:16])
 		return fmt.Sprintf("%s-%s-%s-%s-%s", h[0:8], h[8:12], h[12:16], h[16:20], h[20:32])
 	},
@@ -124,8 +123,8 @@ var manifests = map[string]struct {
 	"mcp-kubernetes-values.yaml.tmpl": {out: "mcp-kubernetes-values.yaml"},
 	"flux-values.yaml.tmpl":           {out: "flux-values.yaml"},
 	"demo-workflow.yaml.tmpl":         {out: "demo-workflow.yaml"},
-	"dex.yaml.tmpl":                   {out: "dex.yaml", extraInputs: []string{"certs/tls.crt"}},
-	"backstage.yaml.tmpl":             {out: "backstage.yaml", extraInputs: []string{"certs/ca.crt"}},
+	"dex.yaml.tmpl":                   {out: "dex.yaml", extraInputs: []string{tlsCertPath}},
+	"backstage.yaml.tmpl":             {out: "backstage.yaml", extraInputs: []string{caCertPath}},
 }
 
 // renderManifest renders one embedded template into state/ per the manifests
@@ -147,7 +146,7 @@ func renderManifest(cfg *config.Config, tmplName string) ([]byte, string, error)
 		h := sha256.New()
 		h.Write(content)
 		for _, path := range spec.extraInputs {
-			raw, err := os.ReadFile(path)
+			raw, err := os.ReadFile(path) // #nosec G304 -- lab-owned cert paths from the manifests table
 			if err != nil {
 				return nil, "", fmt.Errorf("checksum input %s: %w", path, err)
 			}
@@ -156,11 +155,11 @@ func renderManifest(cfg *config.Config, tmplName string) ([]byte, string, error)
 		sum := hex.EncodeToString(h.Sum(nil))
 		content = bytes.Replace(content, []byte(checksumPlaceholder), []byte(sum), 1)
 	}
-	if err := os.MkdirAll(StateDir, 0o755); err != nil {
+	if err := os.MkdirAll(StateDir, 0o750); err != nil {
 		return nil, "", err
 	}
 	path := filepath.Join(StateDir, spec.out)
-	if err := os.WriteFile(path, content, 0o644); err != nil {
+	if err := os.WriteFile(path, content, 0o600); err != nil {
 		return nil, "", err
 	}
 	return content, path, nil

@@ -56,7 +56,7 @@ func PostRender(in io.Reader, out io.Writer) error {
 	dec := yaml.NewDecoder(in)
 	enc := yaml.NewEncoder(out)
 	enc.SetIndent(2)
-	defer enc.Close()
+	defer func() { _ = enc.Close() }()
 
 	for {
 		var doc yaml.Node
@@ -71,12 +71,12 @@ func PostRender(in io.Reader, out io.Writer) error {
 			continue // empty document (the `select(. != null)` of the old yq)
 		}
 		kind := scalarAt(root, "kind")
-		name := scalarAt(mapValue(root, "metadata"), "name")
+		name := scalarAt(mapValue(root, "metadata"), nameKey)
 
-		if kind == "HTTPRoute" && name == "muster" {
+		if kind == "HTTPRoute" && name == componentMuster {
 			continue
 		}
-		if kind == "Deployment" && name == "muster" {
+		if kind == "Deployment" && name == componentMuster {
 			patchMusterDeployment(root)
 		}
 		if kind == "ConfigMap" && name == "muster-config" {
@@ -98,9 +98,9 @@ func patchMusterDeployment(root *yaml.Node) {
 	setKey(podSpec, "hostNetwork", boolNode(true))
 	setKey(podSpec, "dnsPolicy", strNode("ClusterFirstWithHostNet"))
 
-	strategy := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	strategy := &yaml.Node{Kind: yaml.MappingNode, Tag: yamlTagMap}
 	setKey(strategy, "type", strNode("RollingUpdate"))
-	rolling := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	rolling := &yaml.Node{Kind: yaml.MappingNode, Tag: yamlTagMap}
 	setKey(rolling, "maxSurge", intNode(0))
 	setKey(rolling, "maxUnavailable", intNode(1))
 	setKey(strategy, "rollingUpdate", rolling)
@@ -116,7 +116,7 @@ func patchKagentUIService(root *yaml.Node) {
 		return
 	}
 	for _, p := range ports.Content {
-		if scalarAt(p, "name") == "ui" {
+		if scalarAt(p, nameKey) == "ui" {
 			setKey(p, "nodePort", intNode(config.KagentUINodePort))
 		}
 	}
@@ -150,7 +150,7 @@ func patchMusterConfig(root *yaml.Node) error {
 	if err := ienc.Encode(&inner); err != nil {
 		return err
 	}
-	ienc.Close()
+	_ = ienc.Close()
 
 	cfgNode.SetString(buf.String())
 	cfgNode.Style = yaml.LiteralStyle
@@ -158,6 +158,9 @@ func patchMusterConfig(root *yaml.Node) error {
 }
 
 // --- yaml.Node plumbing -----------------------------------------------------
+
+// yamlTagMap is the YAML tag for mapping nodes built from scratch.
+const yamlTagMap = "!!map"
 
 func docRoot(doc *yaml.Node) *yaml.Node {
 	if doc.Kind == yaml.DocumentNode {
@@ -199,7 +202,7 @@ func ensureMap(m *yaml.Node, key string) *yaml.Node {
 	if v := mapValue(m, key); v != nil {
 		return v
 	}
-	v := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	v := &yaml.Node{Kind: yaml.MappingNode, Tag: yamlTagMap}
 	m.Content = append(m.Content, strNode(key), v)
 	return v
 }

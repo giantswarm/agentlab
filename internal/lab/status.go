@@ -26,7 +26,7 @@ type Status struct {
 // 2s) bounds the wall time and the TUI can call this on a ticker.
 func Probe(cfg *config.Config) Status {
 	var s Status
-	if _, err := os.Stat("certs/ca.crt"); err == nil {
+	if _, err := os.Stat(caCertPath); err == nil {
 		s.CertsPresent = true
 	}
 	if _, err := os.Stat("kubeconfig.oidc"); err == nil {

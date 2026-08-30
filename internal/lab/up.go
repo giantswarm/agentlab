@@ -55,11 +55,11 @@ func Up(cfg *config.Config) error {
 	step("Deploying Dex")
 	// Namespace and TLS secret land before the Deployment so the pod never
 	// waits on a missing volume on first boot.
-	if err := ensureNamespace("dex"); err != nil {
+	if err := ensureNamespace(componentDex); err != nil {
 		return err
 	}
-	if err := ensureSecretFromFiles("dex", "dex-tls", map[string]string{
-		"tls.crt": "certs/tls.crt",
+	if err := ensureSecretFromFiles(componentDex, "dex-tls", map[string]string{
+		"tls.crt": tlsCertPath,
 		"tls.key": "certs/tls.key",
 	}); err != nil {
 		return err
@@ -105,7 +105,7 @@ func Up(cfg *config.Config) error {
 		_, err := outputQuiet("kubectl", "--kubeconfig="+probeKubeconfig, "auth", "whoami")
 		return err == nil
 	})
-	os.Remove(probeKubeconfig)
+	_ = os.Remove(probeKubeconfig)
 	if !verified {
 		return fmt.Errorf("apiserver still rejects Dex tokens; check the apiserver log for oidc.go lines")
 	}
@@ -167,7 +167,7 @@ func ApplyDex(cfg *config.Config) error {
 		return err
 	}
 	step("Waiting for Dex to become ready")
-	return run("kubectl", "-n", "dex", "rollout", "status", "deployment/dex", "--timeout=120s")
+	return run("kubectl", "-n", componentDex, "rollout", "status", "deployment/dex", "--timeout=120s")
 }
 
 func kindClusterExists(name string) bool {
