@@ -195,7 +195,7 @@ func Default() *Config {
 			GatewayPort:          443,
 			MCPKubernetesVersion: "1.0.9",
 			APSRepo:              "https://github.com/giantswarm/agent-platform-standalone",
-			APSRef:               "8026394c4ff6f1aa315e4670095efc83e0690a72", // main: backstage 0.200.14 — kube:apply honors the cluster caFile (agent create flow TLS)
+			APSRef:               "d8dc380c70df4fe0cf9cfd7b8a1e0974b72a4386", // main: backstage 0.200.15 — actually ships the kube:apply caFile fix (0.200.14 image was cache-poisoned, backstage#2156)
 		},
 		Backstage: Backstage{
 			Enabled: true,
