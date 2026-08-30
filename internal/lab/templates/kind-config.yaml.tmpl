@@ -59,9 +59,13 @@ kubeadmConfigPatches:
     apiVersion: kubelet.config.k8s.io/v1beta1
     kind: KubeletConfiguration
     serializeImagePulls: false
-  # kind v0.31 still emits kubeadm.k8s.io/v1beta3, where extraArgs is a MAP.
-  # (v1beta4 changed it to a list of name/value pairs — if you bump kind and the
-  # flags silently stop applying, this is why.)
+  # kind matches a kubeadmConfigPatch by its apiVersion+kind and silently
+  # ignores the rest, so BOTH kubeadm generations are patched here: kind v0.31
+  # emits kubeadm.k8s.io/v1beta3 (extraArgs is a MAP), kind v0.32+ emits
+  # v1beta4 (extraArgs is a LIST of name/value pairs). Whichever matches the
+  # generated config applies; the other is a no-op. Dropping either one makes
+  # the OIDC flags vanish silently on the other kind version — verify with
+  #   docker exec <cluster>-control-plane grep oidc /etc/kubernetes/manifests/kube-apiserver.yaml
   - |
     apiVersion: kubeadm.k8s.io/v1beta3
     kind: ClusterConfiguration
@@ -74,3 +78,22 @@ kubeadmConfigPatches:
         oidc-username-prefix: "oidc:"
         oidc-groups-claim: groups
         oidc-groups-prefix: "oidc:"
+  - |
+    apiVersion: kubeadm.k8s.io/v1beta4
+    kind: ClusterConfiguration
+    apiServer:
+      extraArgs:
+        - name: oidc-issuer-url
+          value: {{ .Issuer }}
+        - name: oidc-client-id
+          value: kubernetes
+        - name: oidc-ca-file
+          value: /etc/kubernetes/pki/dex/ca.crt
+        - name: oidc-username-claim
+          value: email
+        - name: oidc-username-prefix
+          value: "oidc:"
+        - name: oidc-groups-claim
+          value: groups
+        - name: oidc-groups-prefix
+          value: "oidc:"
