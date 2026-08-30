@@ -279,6 +279,18 @@ the controller's own Service.
   vendored and gitignored; out of scope here.
 - **`login-browser.py` fixed callback port 5555** — must be pre-registered in
   Dex's `redirectURIs`; a random port would break the static client. By design.
+- **The TUI's "lab CA trusted" row is point-in-time per process** — Go
+  snapshots the system cert pool on first use and never re-reads it, so an
+  `agentlab trust`/`untrust` run while the dashboard is open shows up on the
+  dashboard's next start, not its next probe tick. Working around it would
+  mean per-OS store parsing or exec'ing a subprocess per 3s tick; the row is
+  a hint, not a control loop.
+- **A twice-replaced, once-trusted CA lingers only until the next trust op** —
+  a `platform.domain` change stashes the outgoing CA under `certs/replaced/`,
+  and both `agentlab trust` and `untrust` sweep every stashed CA out of the
+  trust stores before doing their own work. The stash (not the store) is the
+  source of truth for what to remove, because the stores index roots by
+  name+serial and the serial dies with the overwritten `ca.crt` otherwise.
 
 ## Full-stack verification (2026-08-27, shell lab)
 

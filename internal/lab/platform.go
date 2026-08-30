@@ -173,12 +173,18 @@ func platformUp(cfg *config.Config, chartReady <-chan error) error {
 	}); err != nil {
 		return err
 	}
-	// The edge Gateway's wildcard certificate (*.<domain>), signed by the lab
-	// CA so everything that already trusts certs/ca.crt trusts the edge too.
-	if err := ensureGatewayCert(cfg.Platform.Domain); err != nil {
+	// The edge certificate: an externally provisioned pair when configured
+	// (platform.tls in agentlab.yaml — a real cert for a domain the user
+	// owns), otherwise the lab-CA wildcard (*.<domain>), which everything
+	// that already trusts certs/ca.crt trusts too.
+	edgeCert, edgeKey := gatewayCertPath, gatewayKeyPath
+	if cfg.Platform.TLS.Set() {
+		note("edge certificate: externally provisioned (%s)", cfg.Platform.TLS.CertFile)
+		edgeCert, edgeKey = cfg.Platform.TLS.CertFile, cfg.Platform.TLS.KeyFile
+	} else if err := ensureGatewayCert(cfg.Platform.Domain); err != nil {
 		return err
 	}
-	if err := ensureTLSSecret(platformNamespace, "agent-platform-tls", gatewayCertPath, gatewayKeyPath); err != nil {
+	if err := ensureTLSSecret(platformNamespace, "agent-platform-tls", edgeCert, edgeKey); err != nil {
 		return err
 	}
 	// Created once and then left alone: regenerating the encryption key on
@@ -417,32 +423,53 @@ func platformUp(cfg *config.Config, chartReady <-chan error) error {
 				cfg.Platform.AgentsPort, cfg.Platform.AgentsPort)
 		}
 	}
-	caAbs, err := filepath.Abs(caCertPath)
-	if err != nil {
-		caAbs = caCertPath
-	}
 	fmt.Printf(`
 Platform is up.
   %s
 
 %s
 
-  Point Claude Code at it (browser login through Dex; the edge serves a
-  lab-CA certificate, so Node must be told to trust it):
-    export NODE_EXTRA_CA_CERTS=%s
-    claude mcp add --transport http muster %s/mcp
-    # then in Claude Code: /mcp -> authenticate
-  The browser will warn about the same lab CA once per hostname.
+%s
 
 %s
 
   Smoke-test it headlessly instead:
     agentlab platform-test
-`, reach, backstageHint, caAbs, cfg.MusterBaseURL(), agentsHint)
+`, reach, backstageHint, claudeCodeHint(cfg), agentsHint)
 	// Everything the platform runs is in the node now — record it so the next
 	// boot side-loads instead of pulling.
 	snapshotPreloadImages(cfg)
 	return nil
+}
+
+// claudeCodeHint is the "point Claude Code at it" block of the platform-up
+// output, adapted to whether the lab CA is in the system trust store
+// (`agentlab trust` — probed only, never installed from here) and to the
+// host's Node: NODE_USE_SYSTEM_CA replaces NODE_EXTRA_CA_CERTS on >= 22.15.
+func claudeCodeHint(cfg *config.Config) string {
+	var b strings.Builder
+	if SystemTrusted() {
+		b.WriteString("  Point Claude Code at it (browser login through Dex; the lab CA is trusted):\n")
+		if nodeSupportsSystemCA() {
+			b.WriteString("    export NODE_USE_SYSTEM_CA=1\n")
+		} else {
+			b.WriteString("    export NODE_EXTRA_CA_CERTS=" + absCAPath() + "   # Node >= 22.15 takes NODE_USE_SYSTEM_CA=1 instead\n")
+		}
+	} else {
+		b.WriteString("  The lab CA is not in the system trust store: browsers warn on every lab\n")
+		b.WriteString("  hostname and Node refuses the edge. One command fixes both (a sudo prompt,\n")
+		b.WriteString("  reverted by `agentlab untrust`):\n")
+		b.WriteString("    agentlab trust\n")
+		b.WriteString("  Then point Claude Code at it (browser login through Dex):\n")
+		if nodeSupportsSystemCA() {
+			b.WriteString("    export NODE_USE_SYSTEM_CA=1   # without trusting: NODE_EXTRA_CA_CERTS=" + absCAPath() + "\n")
+		} else {
+			b.WriteString("    export NODE_EXTRA_CA_CERTS=" + absCAPath() + "\n")
+		}
+	}
+	b.WriteString("    claude mcp add --transport http muster " + cfg.MusterBaseURL() + "/mcp\n")
+	b.WriteString("    # then in Claude Code: /mcp -> authenticate")
+	return b.String()
 }
 
 // platformImages derives the platform's image refs from the charts exactly

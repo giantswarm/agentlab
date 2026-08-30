@@ -23,10 +23,13 @@ edge. Interacting with the cluster through it is the point: it exercises the
 whole Claude Code → agentgateway → muster → mcp-kubernetes → apiserver chain,
 with Dex doing the logins.
 
-- The edge serves a lab-CA certificate: launch Claude Code with
-  `NODE_EXTRA_CA_CERTS=<repo>/certs/ca.crt` or the connection fails on TLS.
-  (Fallback for a shell without it: the direct, edge-bypassing
-  `http://localhost:8090/mcp`.)
+- The edge serves a lab-CA certificate. Either the CA is in the system trust
+  store (one-time `./agentlab trust`; then launch Claude Code with
+  `NODE_USE_SYSTEM_CA=1`, Node >= 22.15) or launch with
+  `NODE_EXTRA_CA_CERTS=<repo>/certs/ca.crt` — without one of the two the
+  connection fails on TLS. (Fallback for a shell without either: the direct,
+  edge-bypassing `http://localhost:8090/mcp`.) Never install trust silently:
+  `agentlab trust` is the user's explicit, sudo-gated step.
 - If `musterkind` is unreachable or unauthenticated, the lab is down — bring
   it up instead of switching tools: `./agentlab configure --defaults` (once;
   the platform and Backstage are enabled by default), then `./agentlab up`,
@@ -66,7 +69,9 @@ go test ./internal/tui/ -run TestCancelUnblocksWait -count=1 -v   # single test
 ./agentlab platform-test   # headless Dex -> muster -> mcp-kubernetes proof
 ./agentlab test            # RBAC assertions for every configured user
 ./agentlab backstage-test  # headless Backstage sign-in for every user
-./agentlab down            # delete the cluster (certs/ kept)
+./agentlab down            # delete the cluster (certs/ kept, trust stores untouched)
+./agentlab trust           # install the lab CA into the system + NSS trust stores (sudo)
+./agentlab untrust         # remove exactly the lab CA from those stores
 ./agentlab reload          # re-render + re-apply Dex after editing agentlab.yaml
 ./agentlab logs <dex|muster|backstage>
 ./agentlab render          # write every manifest to state/ without applying

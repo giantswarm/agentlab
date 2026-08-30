@@ -42,7 +42,8 @@ platform trusting the same issuer.
 
 Start with:  agentlab configure   (interactive; asks every option)
 Then:        agentlab up          (cluster + Dex + the platform, verified end to end)
-Then:        claude mcp add --transport http muster http://localhost:8090/mcp
+Then:        agentlab trust       (once: the lab CA into the trust stores — green locks)
+Then:        claude mcp add --transport http muster https://muster.127.0.0.1.nip.io/mcp
 
 Running agentlab with no arguments on a terminal opens the dashboard (also:
 agentlab tui): live component status plus keys for the lifecycle actions.`,
@@ -69,6 +70,8 @@ agentlab tui): live component status plus keys for the lifecycle actions.`,
 		labCmd("browser", "Log in through the real Dex login page in a browser (authorization-code flow)", lab.BrowserLogin),
 		labCmd("reload", "Re-render and re-apply the Dex config (after editing agentlab.yaml)", lab.ApplyDex),
 		certsCmd(),
+		labCmd("trust", "Install the lab CA into the system and browser trust stores (one sudo prompt; reversible)", lab.Trust),
+		labCmd("untrust", "Remove the lab CA from the system and browser trust stores", lab.Untrust),
 		labCmd("platform", "Install the Giant Swarm agent platform (muster + Kubernetes MCP)", lab.PlatformUp),
 		platformTestCmd(),
 		labCmd("platform-down", "Remove the agent platform (leaves Dex and the cluster alone)", lab.PlatformDown),
@@ -249,10 +252,14 @@ func certsCmd() *cobra.Command {
 	var force bool
 	cmd := &cobra.Command{
 		Use:   "certs",
-		Short: "Generate the lab CA and Dex server cert (no-op if present)",
+		Short: "Generate the lab CA and Dex server cert (re-mints only what config/policy require)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return lab.GenCerts(force)
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			return lab.GenCerts(cfg.Platform.Domain, force)
 		},
 	}
 	cmd.Flags().BoolVar(&force, "force", false, "regenerate even if certs/ exists (breaks a running cluster's trust)")

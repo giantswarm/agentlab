@@ -112,6 +112,12 @@ type Platform struct {
 	// (its baseUrl carries no port); change only if 443 is taken, and expect
 	// Backstage to break behind a non-443 edge.
 	GatewayPort int `yaml:"gatewayPort"`
+	// TLS optionally hands the edge an externally provisioned certificate
+	// pair (PEM) instead of the minted lab-CA wildcard — for users who own a
+	// real domain (wildcard record -> 127.0.0.1) and run their own ACME
+	// tooling. Both fields set or both empty. The Dex issuer still serves
+	// the lab CA either way; see the README's TLS section.
+	TLS PlatformTLS `yaml:"tls"`
 	// Chart version of the standalone mcp-kubernetes release.
 	MCPKubernetesVersion string `yaml:"mcpKubernetesVersion"`
 	// agent-platform-standalone has no chart release yet
@@ -120,6 +126,16 @@ type Platform struct {
 	APSRepo string `yaml:"apsRepo"`
 	APSRef  string `yaml:"apsRef"`
 }
+
+// PlatformTLS is an externally provisioned certificate for the edge; see
+// Platform.TLS.
+type PlatformTLS struct {
+	CertFile string `yaml:"certFile,omitempty"`
+	KeyFile  string `yaml:"keyFile,omitempty"`
+}
+
+// Set reports whether an external edge certificate is configured.
+func (t PlatformTLS) Set() bool { return t.CertFile != "" }
 
 type Backstage struct {
 	Enabled bool `yaml:"enabled"`
@@ -328,6 +344,16 @@ func (c *Config) Validate() error {
 	}
 	if err := ValidatePort(strconv.Itoa(c.Platform.GatewayPort)); err != nil {
 		return fmt.Errorf("platform.gatewayPort: %w", err)
+	}
+	if (c.Platform.TLS.CertFile == "") != (c.Platform.TLS.KeyFile == "") {
+		return fmt.Errorf("platform.tls: certFile and keyFile must be set together")
+	}
+	if c.Platform.TLS.Set() {
+		for _, p := range []string{c.Platform.TLS.CertFile, c.Platform.TLS.KeyFile} {
+			if _, err := os.Stat(p); err != nil {
+				return fmt.Errorf("platform.tls: %w", err)
+			}
+		}
 	}
 	if err := ValidatePort(strconv.Itoa(c.Platform.AgentsPort)); err != nil {
 		return fmt.Errorf("platform.agentsPort: %w", err)

@@ -180,7 +180,7 @@ func renderManifest(cfg *config.Config, tmplName string) ([]byte, string, error)
 // RenderAll renders every manifest into state/ for inspection. The stamped
 // manifest (dex) needs the certs, so they are generated first if missing.
 func RenderAll(cfg *config.Config) error {
-	if err := GenCerts(false); err != nil {
+	if err := GenCerts(cfg.Platform.Domain, false); err != nil {
 		return err
 	}
 	for _, tmpl := range slices.Sorted(maps.Keys(manifests)) {

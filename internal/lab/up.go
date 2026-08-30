@@ -23,7 +23,7 @@ func Up(cfg *config.Config) error {
 		}
 	}
 
-	if err := GenCerts(false); err != nil {
+	if err := GenCerts(cfg.Platform.Domain, false); err != nil {
 		return err
 	}
 
@@ -136,6 +136,12 @@ func Up(cfg *config.Config) error {
 	fmt.Printf("    agentlab login %s     # headless, prints the token claims\n", admin.Email)
 	fmt.Println("    agentlab browser      # real browser login screen")
 	fmt.Println("    agentlab test         # full RBAC assertion run")
+	// The platform path prints its own, more complete trust hint.
+	if !cfg.Platform.Enabled && !SystemTrusted() {
+		fmt.Println()
+		fmt.Println("  The browser will warn on the Dex login page (lab-CA certificate). One-time")
+		fmt.Println("  fix, reverted by `agentlab untrust`:  agentlab trust")
+	}
 
 	reportPreload(loaded)
 	if cfg.Platform.Enabled {
