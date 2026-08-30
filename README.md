@@ -17,7 +17,10 @@ YAML to hand-edit and no shell to source.
 
 ## Requirements
 
-`go` (>= 1.25), `docker`, `kind` (>= 0.31), `kubectl`, `helm`, `git`.
+`go` (>= 1.25), `docker`, `kind` (>= 0.31), `kubectl`, `helm` (**3.x** — Helm 4
+accepts only plugin-type post-renderers, which breaks the `agentlab
+post-render` mechanism the platform install depends on; see
+[#3](https://github.com/giantswarm/agentplatform-kind/issues/3)), `git`.
 
 (The old script stack also needed openssl, curl, jq and python3; the binary
 does all of that itself.)
@@ -495,10 +498,14 @@ next version lands.
   need a kubeconfig with no client cert — that is what `agentlab login` builds
   (`kubeconfig.oidc`). This will produce convincing false positives in a test
   suite if you miss it.
-- **kind 0.31 still emits `kubeadm.k8s.io/v1beta3`**, even for Kubernetes 1.35,
-  where `extraArgs` is a *map*. v1beta4 changed it to a list of name/value
-  pairs. A patch with the wrong apiVersion is ignored **silently** — no error,
-  the flags just never appear. Verify with:
+- **kind switches kubeadm config generations between releases** — v0.31 emits
+  `kubeadm.k8s.io/v1beta3` (`extraArgs` is a *map*), v0.32+ emits v1beta4
+  (`extraArgs` is a *list* of name/value pairs) — and a kubeadmConfigPatch
+  whose apiVersion does not match is ignored **silently**: no error, the
+  OIDC flags just never appear and every token is rejected. The rendered kind
+  config therefore carries the patch in BOTH flavors; whichever matches
+  applies, the other is a no-op. If the flags ever vanish after a kind bump
+  (a v1beta5 one day), verify with:
   ```bash
   docker exec agentlab-control-plane grep oidc /etc/kubernetes/manifests/kube-apiserver.yaml
   ```
