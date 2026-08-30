@@ -66,6 +66,33 @@ spec:
       targetPort: 8080
       protocol: TCP
       name: ui
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backstage
+  namespace: agent-platform
+spec:
+  replicas: 1
+  template:
+    metadata:
+      labels: {app: backstage}
+    spec:
+      containers:
+        - name: backstage
+          image: backstage:1.0
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kagent-controller
+  namespace: kagent
+spec:
+  template:
+    spec:
+      containers:
+        - name: controller
+          image: kagent:1.0
 `
 
 func TestPostRender(t *testing.T) {
@@ -75,8 +102,13 @@ func TestPostRender(t *testing.T) {
 	}
 	rendered := out.String()
 
-	if strings.Contains(rendered, "HTTPRoute") {
-		t.Errorf("muster HTTPRoute not stripped")
+	// Routes pass through untouched: the lab runs the real edge topology now
+	// (the retired muster-direct mode used to strip the muster HTTPRoute).
+	if !strings.Contains(rendered, "HTTPRoute") {
+		t.Errorf("HTTPRoute no longer passes through")
+	}
+	if strings.Count(rendered, "hostNetwork: true") != 2 {
+		t.Errorf("hostNetwork patch should hit exactly muster and backstage:\n%s", rendered)
 	}
 	for _, want := range []string{
 		"hostNetwork: true",
@@ -104,8 +136,19 @@ func TestPostRender(t *testing.T) {
 		}
 		docs = append(docs, doc)
 	}
-	if len(docs) != 4 {
-		t.Fatalf("got %d documents, want 4", len(docs))
+	if len(docs) != 7 {
+		t.Fatalf("got %d documents, want 7", len(docs))
+	}
+	for _, doc := range docs {
+		if doc["kind"] != "Deployment" {
+			continue
+		}
+		name := doc["metadata"].(map[string]any)["name"]
+		podSpec := doc["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+		_, patched := podSpec["hostNetwork"]
+		if (name == "muster" || name == "backstage") != patched {
+			t.Errorf("hostNetwork patch wrong for deployment %v (patched=%v)", name, patched)
+		}
 	}
 	for _, doc := range docs {
 		if doc["kind"] == "Service" {

@@ -39,10 +39,11 @@ const defaultPassword = "password"
 const (
 	KubernetesClientID     = "kubernetes"
 	KubernetesClientSecret = "kubernetes-lab-secret" // #nosec G101 -- static throwaway lab credential, by design
-	BackstageClientID      = "backstage"
-	BackstageClientSecret  = "backstage-lab-secret"
-	MusterClientID         = "muster"
-	MusterClientSecret     = "muster-lab-secret" // #nosec G101 -- static throwaway lab credential, by design
+	// The ONE platform client, following the chart's global.identity
+	// convention: muster and Backstage authenticate with the same Dex client,
+	// so a token minted for either carries an audience the other trusts.
+	AgentPlatformClientID     = "agent-platform"
+	AgentPlatformClientSecret = "agent-platform-lab-secret" // #nosec G101 -- static throwaway lab credential, by design
 )
 
 // MusterNodePort is the port muster's aggregator binds on the kind node
@@ -62,6 +63,15 @@ const BrowserCallbackPort = 5555
 // U9). A real Kubernetes NodePort, hence the 30000-32767 range; the host side
 // is configurable via Platform.AgentsPort.
 const KagentUINodePort = 30880
+
+// GatewayNodePort is the fixed NodePort publishing the agentgateway edge
+// (the chart-owned Gateway's HTTPS :443 listener) on the kind node. The
+// data-plane Service is created by the agentgateway controller at run time —
+// not part of the Helm release, so neither values nor the post-renderer can
+// pin its NodePort. The lab renders its own selector-matched NodePort Service
+// instead (gateway-nodeport.yaml.tmpl), pinned here so the kind port mapping
+// has a stable node-side port. Host side: Platform.GatewayPort.
+const GatewayNodePort = 30443
 
 type User struct {
 	Email        string   `yaml:"email"`
@@ -87,8 +97,21 @@ type Platform struct {
 	// mapping onto KagentUINodePort always exists — like the other mappings,
 	// it is fixed at cluster creation — so agents can be enabled later.
 	AgentsPort int `yaml:"agentsPort"`
-	// Host-side port for muster; what Claude Code and the browser dial.
+	// Host-side port for muster's DIRECT debug access (hostNetwork + kind
+	// mapping, bypassing the gateway). The platform's public URLs go through
+	// the agentgateway edge on GatewayPort.
 	MusterPort int `yaml:"musterPort"`
+	// The platform's public domain. Every public hostname derives from it
+	// (muster.<domain>, backstage.<domain>, ...). The default, nip.io's
+	// loopback wildcard, resolves to 127.0.0.1 from anywhere without host
+	// configuration; inside pods a CoreDNS rewrite points the same names at
+	// the edge Gateway Service.
+	Domain string `yaml:"domain"`
+	// Host-side port of the agentgateway edge (HTTPS). 443 keeps the public
+	// URLs port-free, which the chart's Backstage app-config assumes
+	// (its baseUrl carries no port); change only if 443 is taken, and expect
+	// Backstage to break behind a non-443 edge.
+	GatewayPort int `yaml:"gatewayPort"`
 	// Chart version of the standalone mcp-kubernetes release.
 	MCPKubernetesVersion string `yaml:"mcpKubernetesVersion"`
 	// agent-platform-standalone has no chart release yet
@@ -128,8 +151,8 @@ type Config struct {
 }
 
 // Default returns the canonical lab setup: the agent platform enabled (it is
-// what the lab exists to test), three users, Dex on 32000, Backstage off (a
-// 2.4GB image; opt in when the portal matters).
+// what the lab exists to test) with the agentgateway edge and Backstage — the
+// real platform topology — three users, and Dex on 32000.
 func Default() *Config {
 	return &Config{
 		ClusterName: "agentlab",
@@ -152,12 +175,14 @@ func Default() *Config {
 			Agents:               true,
 			AgentsPort:           8081,
 			MusterPort:           8090,
+			Domain:               "127.0.0.1.nip.io",
+			GatewayPort:          443,
 			MCPKubernetesVersion: "1.0.9",
 			APSRepo:              "https://github.com/giantswarm/agent-platform-standalone",
 			APSRef:               "07019de9707ebe098def6700fa4a916ce5e08728", // feat/curate-generator head: 3.2.2 curation, muster 5.7.2 (native DCR toggle), Renovate-owned pins
 		},
 		Backstage: Backstage{
-			Enabled: false,
+			Enabled: true,
 			Port:    7007,
 			Image:   "gsoci.azurecr.io/giantswarm/backstage:0.199.9",
 		},
@@ -298,6 +323,12 @@ func (c *Config) Validate() error {
 	if err := ValidatePort(strconv.Itoa(c.Platform.MusterPort)); err != nil {
 		return fmt.Errorf("platform.musterPort: %w", err)
 	}
+	if c.Platform.Domain == "" {
+		return fmt.Errorf("platform.domain is required (public hostnames derive from it)")
+	}
+	if err := ValidatePort(strconv.Itoa(c.Platform.GatewayPort)); err != nil {
+		return fmt.Errorf("platform.gatewayPort: %w", err)
+	}
 	if err := ValidatePort(strconv.Itoa(c.Platform.AgentsPort)); err != nil {
 		return fmt.Errorf("platform.agentsPort: %w", err)
 	}
@@ -341,11 +372,33 @@ func (c *Config) ControlPlaneNode() string { return c.ClusterName + "-control-pl
 // as the management_cluster argument.
 func (c *Config) MCPServerName() string { return c.ClusterName + "-mcp-kubernetes" }
 
-func (c *Config) MusterBaseURL() string {
+// gatewayURL builds the public URL of a platform hostname: through the
+// agentgateway edge, port-free when the edge sits on 443 (the chart's
+// app-config assumes exactly that).
+func (c *Config) gatewayURL(prefix string) string {
+	if c.Platform.GatewayPort == 443 {
+		return fmt.Sprintf("https://%s.%s", prefix, c.Platform.Domain)
+	}
+	return fmt.Sprintf("https://%s.%s:%d", prefix, c.Platform.Domain, c.Platform.GatewayPort)
+}
+
+// MusterBaseURL is muster's public URL: client -> agentgateway edge -> muster,
+// the real platform topology. What Claude Code dials and what muster's OAuth
+// server advertises.
+func (c *Config) MusterBaseURL() string { return c.gatewayURL("muster") }
+
+// MusterDirectURL bypasses the edge: the hostNetwork port mapping straight to
+// muster, kept for debugging the lab's own plumbing.
+func (c *Config) MusterDirectURL() string {
 	return fmt.Sprintf("http://localhost:%d", c.Platform.MusterPort)
 }
 
-func (c *Config) BackstageBaseURL() string {
+// BackstageBaseURL is Backstage's public URL through the agentgateway edge.
+func (c *Config) BackstageBaseURL() string { return c.gatewayURL("backstage") }
+
+// BackstageDirectURL bypasses the edge (hostNetwork port mapping), kept for
+// debugging.
+func (c *Config) BackstageDirectURL() string {
 	return fmt.Sprintf("http://localhost:%d", c.Backstage.Port)
 }
 

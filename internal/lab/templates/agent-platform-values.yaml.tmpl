@@ -5,56 +5,88 @@
 # the lab no longer pins its own. `agentlab platform` pins the chart itself to a
 # git SHA instead (platform.apsRef in agentlab.yaml).
 #
+# The topology mirrors a real installation (and the chart's own kind example,
+# examples/kind-lab-dex.yaml): the chart-owned agentgateway Gateway is the
+# public edge, terminating TLS for *.{{ .Platform.Domain }} with the lab's
+# wildcard cert, and every public route (muster `/`, the agentgateway `/mcp`,
+# Backstage) attaches to it. One Dex client (`agent-platform`) serves muster
+# and Backstage, per the chart's global.identity convention.
+#
 # Differences from a real management cluster:
-#   * no Envoy Gateway / agentgateway edge -> ingress.mode muster-direct (the
-#     chart default) with no parentRefs/hostnames, so no route objects render
-#     and muster is reached via the kind port mapping.
-#   * no Cilium and no Kyverno            -> the umbrella's policy objects are
-#     off wholesale, plus each component's own network policy toggles.
-#   * muster runs with hostNetwork        -> so that the issuer URL resolves to
-#     the Dex NodePort from inside the pod, exactly the trick the
-#     kube-apiserver static pod and the Backstage deployment already use. This
-#     is what lets muster share ONE issuer URL with the browser on the host.
-#     Not a chart value; patched in by `agentlab post-render` (a generated
-#     Helm 4 postrenderer plugin backed by the agentlab binary itself), the
-#     plain-Helm replacement for the Flux postRenderers the old agent-platform
-#     meta-package forwarded to helm-controller.
+#   * the issuer stays https://localhost:{{ .DexPort }}/dex — the apiserver's
+#     OIDC flags need an issuer reachable at boot from the node, which only the
+#     Dex NodePort trick provides. muster and Backstage reach it the same way:
+#     both run hostNetwork (patched in by `agentlab post-render`; not a chart
+#     value), exactly like the kube-apiserver static pod.
+#   * no Cilium and no Kyverno -> the umbrella's policy objects are off
+#     wholesale, plus each component's own network policy toggles.
+#   * the edge is published on a fixed NodePort by a lab-owned Service
+#     (the controller-created data-plane Service gets a random one), and
+#     inside pods a CoreDNS rewrite points *.{{ .Platform.Domain }} at the
+#     edge Gateway Service (outside, nip.io already resolves it to loopback).
 # ---------------------------------------------------------------------------
 
+global:
+  domain: {{ .Platform.Domain }}
+  identity:
+    issuerUrl: "{{ .Issuer }}"
+    clientId: agent-platform
+    existingSecret: agent-platform-secrets
+    # The lab CA: OIDC discovery/JWKS against the lab Dex, and the edge's
+    # wildcard cert chain (same CA signs both).
+    ca:
+      secretName: dex-ca
+      key: ca.crt
+
+# The chart-owned agentgateway Gateway is the public edge: it terminates TLS
+# for *.{{ .Platform.Domain }} and every public route attaches to its HTTPS
+# listener. NodePort (not the LoadBalancer default) — kind has no LB; the
+# lab's pinned NodePort Service does the actual publishing either way.
+gatewayApi:
+  gateway:
+    create: true
+    tls:
+      secretName: agent-platform-tls
+    serviceType: NodePort
+
+# client -> agentgateway /mcp -> muster: agentgateway is the observability
+# choke point, muster keeps all per-server connection logic and OAuth.
+ingress:
+  mode: agentgateway-muster
+
 components:
-  # muster and valkey are on by default. The MCP server registrations are not.
+  agentgateway:
+    enabled: true
   agent-platform-mcps:
     enabled: true
   # The agent runtime: the platform's Agent CRs run here, wired to Anthropic
-  # through the default ModelConfig (see the kagent block below). Off in the
-  # umbrella; optional in this lab (platform.agents in agentlab.yaml) — on
-  # real clusters agent delivery runs through Flux/GitOps, which the lab does
-  # not run, so labs not exercising agents skip the runtime.
+  # through the default ModelConfig (see the kagent block below). Optional in
+  # this lab (platform.agents in agentlab.yaml) — on real clusters agent
+  # delivery runs through Flux/GitOps, which the lab only runs as the create
+  # flow's delivery engine, so labs not exercising agents skip the runtime.
   kagent:
     enabled: {{ .Platform.Agents }}
-  # On by default; the avatar service is only reachable through the
-  # agentgateway edge this lab does not run.
-  dicebear:
-    enabled: false
-
-# The chart default, restated because this lab's whole topology hangs off it:
-# muster serves /mcp itself, no agentgateway data plane.
-ingress:
-  mode: muster-direct
-  # The chart hard-fails on empty parentRefs in ALL modes: it assumes a public
-  # Gateway exists and renders an umbrella-owned HTTPRoute for muster's `/`.
-  # This lab has no Gateway of any kind — muster is reached through hostNetwork
-  # and the kind port mapping — so this parentRef exists only to satisfy the
-  # guard, and `agentlab post-render` strips the rendered HTTPRoute (which also
-  # spares the lab the Gateway API CRDs, its only would-be consumer).
-  parentRefs:
-    - name: no-gateway-in-this-lab
-      namespace: agent-platform
-
-# The umbrella's own policy objects (network policy lives under
-# global.networkPolicy since the vanilla-defaults rework; a top-level
-# networkPolicy key now fails the strict schema). Both are off in the chart's
-# vanilla defaults — nothing to override.
+{{- if .Platform.Agents }}
+    # Expose the kagent controller API through the edge for Backstage's kagent
+    # page (the app-config derives its apiBaseUrl from this route). JWT
+    # validation stays off like in the chart's kind example; the edge only
+    # listens on the host's loopback.
+    controllerRoute:
+      enabled: true
+{{- end }}
+  backstage:
+    enabled: {{ .Backstage.Enabled }}
+{{- if .Backstage.Enabled }}
+    # The chart default requests the dex-k8s-authenticator cross-client
+    # audience (Giant Swarm apiservers trust that client id). This lab's
+    # apiserver trusts client id `kubernetes`, so that audience is added on
+    # top for the Kubernetes plugin's token minting; the kubernetes Dex client
+    # lists agent-platform under trustedPeers for it.
+    extraScopes:
+      - federated:id
+      - audience:server:client_id:dex-k8s-authenticator
+      - audience:server:client_id:kubernetes
+{{- end }}
 
 muster:
   networkPolicy:
@@ -63,17 +95,14 @@ muster:
   # writes made with the caller's own identity, so plain k8s RBAC authorizes
   # them — muster only renders the namespaced Role + RoleBinding.
   #
-  # The umbrella binds them to Giant Swarm's admin groups
-  # (`giantswarm-ad:giantswarm-admins`, `giantswarm-github:...`), which do not
-  # exist in this lab, so the bindings would be inert. Rebind to the lab's own
-  # admin group: the apiserver runs with --oidc-groups-prefix=oidc:, so Dex's
-  # `platform-admins` arrives as `oidc:platform-admins` — the same spelling
-  # the lab's RBAC template already uses.
+  # The umbrella binds them to Giant Swarm's admin groups, which do not exist
+  # in this lab. Rebind to the lab's own admin group: the apiserver runs with
+  # --oidc-groups-prefix=oidc:, so Dex's `platform-admins` arrives as
+  # `oidc:platform-admins` — the same spelling the lab's RBAC template uses.
   #
   # Helm replaces lists rather than merging them, so this drops the GS groups.
   # Do not "disable" these by emptying the list: the chart hard-`fail`s on an
-  # empty subjects list (a RoleBinding bound to nobody reads as enforced while
-  # granting nothing). Use `create: false` to manage access out of band.
+  # empty subjects list. Use `create: false` to manage access out of band.
   rbac:
     mcpServerEditor:
       subjects:
@@ -105,26 +134,29 @@ muster:
     oauth:
       server:
         enabled: true
-        # What Claude Code on the host dials, and what the OAuth callback and
-        # the Dex redirectURI must agree on.
+        # The public URL through the edge: what Claude Code dials, and what
+        # the OAuth callback and the Dex redirectURI must agree on.
         baseUrl: "{{ .MusterBaseURL }}"
         provider: dex
         dex:
           issuerUrl: "{{ .Issuer }}"
-          clientId: muster
+          # Must match global.identity.clientId (the render fails otherwise).
+          clientId: agent-platform
           # The issuer is a loopback address; discovery refuses that by default.
           allowPrivateIPOIDC: true
         existingSecret: agent-platform-secrets
         # Lab only: lets Claude Code register itself over DCR without a
         # pre-shared registration token (its loopback port is random, so no
-        # other registration gate can be opened for it). Rendered by the
-        # muster chart since 5.7.2 (muster#1118) — the post-render edit that
-        # used to force this key into the ConfigMap is retired.
+        # other registration gate can be opened for it).
         allowPublicClientRegistration: true
-        # Lab only: accept a Dex id_token with aud=muster as a bearer token, so
-        # the stack can be smoke-tested headlessly with the password grant.
+        # Lab only: accept Dex id_tokens as bearer tokens so the stack can be
+        # smoke-tested headlessly with the password grant (aud
+        # agent-platform), and so Backstage-forwarded tokens (aud
+        # dex-k8s-authenticator via the GS auth provider's default
+        # cross-client scope) pass.
         trustedAudiences:
-          - muster
+          - agent-platform
+          - dex-k8s-authenticator
         storage:
           type: valkey
           valkey:
@@ -149,10 +181,10 @@ kagent:
     controller:
       auth:
         # The umbrella default is trusted-proxy, which decodes bearer claims
-        # WITHOUT verification and relies on a JWT-validating agentgateway in
-        # front. This lab runs no front proxy at all, so trusted-proxy would
-        # trust any forged header; upstream's local-dev mode is the honest
-        # setting (X-User-Id or admin@kagent.dev).
+        # WITHOUT verification and relies on a JWT-validating agentgateway
+        # policy in front (controllerRoute.jwtAuthentication, off in this
+        # lab). The kagent UI's direct NodePort path sends no bearer at all,
+        # so upstream's local-dev mode is the honest setting here.
         mode: unsecure
     # Publish the UI on the host through the kind port mapping. NodePort is a
     # chart value, but the chart's ui-service template renders no `nodePort`
@@ -173,6 +205,37 @@ kagent:
         enabled: false
 {{- end }}
 
+{{- if .Backstage.Enabled }}
+backstage:
+  backstage:
+    # Helm replaces lists rather than merging them, so the umbrella's own
+    # entries are restated here next to the lab's additions (the catalog
+    # entities + the scaffolder Template behind the agent create flow, and an
+    # in-memory database — see backstage-catalog.yaml.tmpl).
+    extraAppConfig:
+      - filename: app-config.agent-platform.yaml
+        configMapRef: agent-platform-backstage-app-config
+      - filename: app-config.agentlab.yaml
+        configMapRef: agentlab-backstage-app-config
+    extraVolumes:
+      # Restated from the umbrella (global.identity.ca): the lab CA Backstage
+      # trusts via NODE_EXTRA_CA_CERTS.
+      - name: idp-ca
+        secret:
+          secretName: dex-ca
+          optional: true
+      - name: lab-catalog
+        configMap:
+          name: agentlab-backstage-catalog
+    extraVolumeMounts:
+      - name: idp-ca
+        mountPath: /etc/agent-platform/idp-ca
+        readOnly: true
+      - name: lab-catalog
+        mountPath: /lab-catalog
+        readOnly: true
+{{- end }}
+
 valkey:
   ciliumNetworkPolicy:
     enabled: false
@@ -189,11 +252,11 @@ valkey:
           passwordKey: valkey-password
 
 agent-platform-mcps:
-  # The umbrella defaults this to true (agentgateway is the observability choke
-  # point on a real MC). With the agentgateway component off, leaving it on
-  # renders AgentgatewayBackend CRs whose CRD is not installed.
   agentgateway:
-    enabled: false
+    # agentgateway-muster: all MCP traffic routes through muster, which keeps
+    # the per-server connection logic, OAuth and token exchange (guard-enforced
+    # pairing with ingress.mode).
+    viaMuster: true
   mcpServers:
     # The Kubernetes MCP server, in-cluster. auth.mode none: muster's own OAuth
     # guards the front door and mcp-kubernetes talks to the apiserver with its

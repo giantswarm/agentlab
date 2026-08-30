@@ -56,16 +56,16 @@ func backstageSignIn(cfg *config.Config, user *config.User) error {
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 
 	// 1. Backstage redirects to Dex and sets its own session cookie. The
-	//    provider name (oidc-lab) and the auth.environment (development) both
-	//    come from the Backstage lab config and must match, or this 404s.
-	//    The scope list is passed explicitly because only the BROWSER app
-	//    applies plugins/gs/src/apis/auth/scopes.ts (BASE_SCOPES +
+	//    provider name (oidc-agent-platform) and the auth.environment
+	//    (production) both come from the umbrella's app-config and must match,
+	//    or this 404s. The scope list is passed explicitly because only the
+	//    BROWSER app applies plugins/gs/src/apis/auth/scopes.ts (BASE_SCOPES +
 	//    gs.auth.extraScopes); hitting /start directly would otherwise get a
-	//    bare token with no groups and aud=["backstage"] alone.
+	//    bare token with no groups and aud=["agent-platform"] alone.
 	scope := "openid profile email groups offline_access" +
 		" audience:server:client_id:" + config.KubernetesClientID +
-		" audience:server:client_id:" + config.MusterClientID
-	startURL := cfg.BackstageBaseURL() + "/api/auth/oidc-lab/start?env=development&scope=" +
+		" audience:server:client_id:dex-k8s-authenticator"
+	startURL := cfg.BackstageBaseURL() + "/api/auth/oidc-agent-platform/start?env=production&scope=" +
 		url.QueryEscape(scope)
 	resp, err := noFollow.Get(startURL)
 	if err != nil {
@@ -180,7 +180,9 @@ func backstageSignIn(cfg *config.Config, user *config.User) error {
 		return resp.StatusCode, payload, nil
 	}
 
-	installation := "?installation=" + cfg.ClusterName
+	// The umbrella's app-config names the muster installation after the Helm
+	// release, not the kind cluster.
+	installation := "?installation=" + platformRelease
 
 	status, payload, err := muster("/servers" + installation)
 	if err != nil {

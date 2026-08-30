@@ -124,3 +124,22 @@ func ensureSecretFromFiles(ns, name string, files map[string]string) error {
 	}
 	return pipeInto([]byte(manifest), "kubectl", "apply", "-f", "-")
 }
+
+// ensureTLSSecret idempotently applies a kubernetes.io/tls secret from a cert
+// and key file — the type the Gateway API's certificateRefs require, which
+// ensureSecretFromFiles's generic secrets are not.
+func ensureTLSSecret(ns, name, certPath, keyPath string) error {
+	manifest, err := output("kubectl", "-n", ns, "create", "secret", "tls", name,
+		"--cert="+certPath, "--key="+keyPath, "--dry-run=client", "-o", "yaml")
+	if err != nil {
+		return err
+	}
+	return pipeInto([]byte(manifest), "kubectl", "apply", "-f", "-")
+}
+
+// secretHasKey reports whether a secret exists and carries the given data key.
+func secretHasKey(ns, name, key string) bool {
+	out, err := outputQuiet("kubectl", "-n", ns, "get", "secret", name,
+		"-o", "jsonpath={.data."+strings.ReplaceAll(key, ".", `\.`)+"}")
+	return err == nil && strings.TrimSpace(out) != ""
+}

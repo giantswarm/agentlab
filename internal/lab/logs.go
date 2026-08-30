@@ -16,7 +16,7 @@ const logCmd = "logs"
 var logTargets = map[string][]string{
 	componentDex:    {"-n", componentDex, logCmd, "-l", "app=dex", "-f"},
 	componentMuster: {"-n", platformNamespace, logCmd, "-l", "app.kubernetes.io/name=muster", "-f"},
-	"backstage":     {"-n", "backstage", logCmd, "-f", "deploy/backstage"},
+	"backstage":     {"-n", platformNamespace, logCmd, "-f", "deploy/backstage"},
 }
 
 // LogComponents lists what Logs accepts, for cobra's ValidArgs.

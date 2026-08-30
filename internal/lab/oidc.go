@@ -1,12 +1,14 @@
 package lab
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -17,12 +19,50 @@ import (
 	"agentlab/internal/config"
 )
 
+// labDomain is the platform's public domain, set once at command start
+// (SetDomain from main's config load). The lab's contract is that
+// *.<domain> reaches this host's loopback — the kind port mappings — and
+// public DNS merely agrees (the nip.io wildcard). The lab's own HTTP clients
+// therefore dial loopback directly for those names, so health checks and
+// smoke tests never flake on external DNS resolving a name that was always
+// going to mean 127.0.0.1.
+var labDomain struct {
+	sync.Mutex
+	domain string
+}
+
+// SetDomain registers the platform domain for the loopback dialer.
+func SetDomain(domain string) {
+	labDomain.Lock()
+	defer labDomain.Unlock()
+	labDomain.domain = domain
+}
+
+// dialLabAddr rewrites a *.<domain> (or apex) dial target to loopback.
+func dialLabAddr(addr string) string {
+	labDomain.Lock()
+	domain := labDomain.domain
+	labDomain.Unlock()
+	if domain == "" {
+		return addr
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	if host == domain || strings.HasSuffix(host, "."+domain) {
+		return net.JoinHostPort("127.0.0.1", port)
+	}
+	return addr
+}
+
 // labTLSTransport returns a transport that trusts the lab CA (certs/ca.crt)
 // on top of the system pool, so it can talk to both Dex (lab TLS) and
-// plain-HTTP services. Success is cached per process (the CA never changes
-// within a run, and sharing the transport reuses connections), but errors are
-// not: the TUI probes long before `agentlab up` has minted the CA and must
-// pick it up as soon as the file exists.
+// plain-HTTP services, and that dials the platform's public hostnames on
+// loopback (see labDomain). Success is cached per process (the CA never
+// changes within a run, and sharing the transport reuses connections), but
+// errors are not: the TUI probes long before `agentlab up` has minted the CA
+// and must pick it up as soon as the file exists.
 var labTransport struct {
 	sync.Mutex
 	cached *http.Transport
@@ -45,7 +85,13 @@ func labTLSTransport() (*http.Transport, error) {
 	if !pool.AppendCertsFromPEM(caPEM) {
 		return nil, fmt.Errorf("certs/ca.crt contains no usable certificate")
 	}
-	labTransport.cached = &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}}
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
+	labTransport.cached = &http.Transport{
+		TLSClientConfig: &tls.Config{RootCAs: pool},
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return dialer.DialContext(ctx, network, dialLabAddr(addr))
+		},
+	}
 	return labTransport.cached, nil
 }
 

@@ -34,7 +34,7 @@ func PlatformTest(cfg *config.Config, email string) error {
 	}
 
 	step("Logging in to Dex as %s", email)
-	token, err := passwordGrant(cfg, config.MusterClientID, config.MusterClientSecret,
+	token, err := passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret,
 		user.Email, user.Password, "openid email groups profile")
 	if err != nil {
 		return err
@@ -156,7 +156,7 @@ func PlatformTest(cfg *config.Config, email string) error {
 // ensureMusterValidatesTokens).
 func musterTokenProbe(cfg *config.Config) error {
 	admin := cfg.AdminUser()
-	token, err := passwordGrant(cfg, config.MusterClientID, config.MusterClientSecret,
+	token, err := passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret,
 		admin.Email, admin.Password, "openid email groups profile")
 	if err != nil {
 		return err

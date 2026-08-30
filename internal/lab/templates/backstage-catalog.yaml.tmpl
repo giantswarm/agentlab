@@ -1,0 +1,80 @@
+# Lab additions to the umbrella's Backstage: catalog entities and an
+# app-config overlay, mounted into the chart's Backstage via the
+# backstage.backstage.extraAppConfig / extraVolumes overrides in
+# agent-platform-values.yaml. Both land in the release namespace because the
+# umbrella deploys Backstage there.
+#
+# Catalog entities. Giant Swarm's sign-in resolver
+# (plugins/auth-backend-module-gs/src/signInResolver.ts) only hits the catalog
+# when Dex reports federated_claims.connector_id of giantswarm-ad or
+# giantswarm-github; this lab's static-password connector reports "local", so
+# the resolver falls through to email.split('@')[0] and needs no catalog
+# entity. These exist so the users and groups render as real things in the UI
+# rather than dangling refs.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agentlab-backstage-catalog
+  namespace: agent-platform
+data:
+  users.yaml: |
+{{- range .AllGroups }}
+    apiVersion: backstage.io/v1alpha1
+    kind: Group
+    metadata:
+      name: {{ . }}
+    spec:
+      type: team
+      children: []
+    ---
+{{- end }}
+{{- range $i, $u := .Users }}
+{{- if $i }}
+    ---
+{{- end }}
+    apiVersion: backstage.io/v1alpha1
+    kind: User
+    metadata:
+      name: {{ $u.Username }}
+    spec:
+      profile:
+        displayName: {{ $u.Name }}
+        email: {{ $u.Email }}
+      memberOf: [{{ join $u.Groups ", " }}]
+{{- end }}
+  # The hidden scaffolder Template behind the agent create flow's Deploy button
+  # (/agents/new -> review -> scaffolderApi.scaffold() with
+  # template:default/agent-deployment, which kube:applies the composed
+  # OCIRepository + HelmRelease with the user's OIDC token). Without this
+  # entity the deploy dies with 404 "Template template:default/agent-deployment
+  # not found". Real installations load it from giantswarm/backstage-catalogs;
+  # the lab embeds the same file (templates/static/) so the catalog needs no
+  # network. The manifests it applies need Flux's source+helm controllers to
+  # actually deliver anything — see flux.go.
+  agent-deployment-template.yaml: |
+{{ staticFile "agent-deployment-template.yaml" | indent 4 }}
+---
+# App-config overlay on top of the umbrella's own
+# (agent-platform-backstage-app-config): the catalog locations for the files
+# above, and an in-memory database — the lab needs no Postgres for Backstage.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agentlab-backstage-app-config
+  namespace: agent-platform
+data:
+  app-config.agentlab.yaml: |
+    backend:
+      database:
+        client: better-sqlite3
+        connection: ':memory:'
+    catalog:
+      locations:
+        - type: file
+          target: /lab-catalog/users.yaml
+          rules:
+            - allow: [User, Group]
+        - type: file
+          target: /lab-catalog/agent-deployment-template.yaml
+          rules:
+            - allow: [Template]

@@ -11,14 +11,23 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 )
 
 // Paths of the minted public certs, shared by every consumer in the package
 // (the kind mount, the in-cluster secrets, the manifest checksum inputs).
 const (
-	caCertPath  = "certs/ca.crt"
-	tlsCertPath = "certs/tls.crt"
+	caCertPath      = "certs/ca.crt"
+	tlsCertPath     = "certs/tls.crt"
+	gatewayCertPath = "certs/gateway-tls.crt"
+	gatewayKeyPath  = "certs/gateway-tls.key"
+)
+
+// PEM block types.
+const (
+	pemTypeCert = "CERTIFICATE"
+	pemTypeKey  = "PRIVATE KEY"
 )
 
 // GenCerts mints a self-signed CA and a Dex server certificate under certs/.
@@ -88,10 +97,10 @@ func GenCerts(force bool) error {
 		pem  *pem.Block
 		mode os.FileMode
 	}{
-		{caCertPath, &pem.Block{Type: "CERTIFICATE", Bytes: caDER}, 0o644},
-		{"certs/ca.key", &pem.Block{Type: "PRIVATE KEY", Bytes: mustPKCS8(caKey)}, 0o600},
-		{tlsCertPath, &pem.Block{Type: "CERTIFICATE", Bytes: srvDER}, 0o644},
-		{"certs/tls.key", &pem.Block{Type: "PRIVATE KEY", Bytes: mustPKCS8(srvKey)}, 0o600},
+		{caCertPath, &pem.Block{Type: pemTypeCert, Bytes: caDER}, 0o644},
+		{"certs/ca.key", &pem.Block{Type: pemTypeKey, Bytes: mustPKCS8(caKey)}, 0o600},
+		{tlsCertPath, &pem.Block{Type: pemTypeCert, Bytes: srvDER}, 0o644},
+		{"certs/tls.key", &pem.Block{Type: pemTypeKey, Bytes: mustPKCS8(srvKey)}, 0o600},
 	}
 	for _, w := range writes {
 		if err := os.WriteFile(w.path, pem.EncodeToMemory(w.pem), w.mode); err != nil {
@@ -100,6 +109,88 @@ func GenCerts(force bool) error {
 	}
 	fmt.Println("Generated certs/ (CA + server cert, SAN: IP:127.0.0.1, DNS:localhost, dex, dex.dex.svc, dex.dex.svc.cluster.local)")
 	return nil
+}
+
+// ensureGatewayCert mints the wildcard certificate the agentgateway edge
+// terminates TLS with (*.<domain> plus the apex), signed by the existing lab
+// CA so every consumer that already trusts certs/ca.crt (the lab tooling,
+// muster, Backstage via NODE_EXTRA_CA_CERTS) trusts the edge too. Existing
+// files are kept while they still cover the configured domain; a domain
+// change re-mints them from the same CA.
+func ensureGatewayCert(domain string) error {
+	wildcard := "*." + domain
+	if raw, err := os.ReadFile(gatewayCertPath); err == nil { // #nosec G304 -- lab-owned path constant
+		if block, _ := pem.Decode(raw); block != nil {
+			if cert, err := x509.ParseCertificate(block.Bytes); err == nil &&
+				slices.Contains(cert.DNSNames, wildcard) {
+				return nil
+			}
+		}
+	}
+	caCert, caKey, err := loadCA()
+	if err != nil {
+		return err
+	}
+	srvKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return err
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: randomSerial(),
+		Subject:      pkix.Name{CommonName: wildcard},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().AddDate(0, 0, 3650),
+		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:     []string{wildcard, domain},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, caCert, &srvKey.PublicKey, caKey)
+	if err != nil {
+		return err
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: pemTypeCert, Bytes: der})
+	if err := os.WriteFile(gatewayCertPath, certPEM, 0o644); err != nil { // #nosec G306 -- certificates are public
+		return err
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: pemTypeKey, Bytes: mustPKCS8(srvKey)})
+	if err := os.WriteFile(gatewayKeyPath, keyPEM, 0o600); err != nil {
+		return err
+	}
+	fmt.Printf("Generated %s (SAN: %s, %s; signed by the lab CA)\n", gatewayCertPath, wildcard, domain)
+	return nil
+}
+
+// loadCA reads the lab CA pair minted by GenCerts.
+func loadCA() (*x509.Certificate, *rsa.PrivateKey, error) {
+	certPEM, err := os.ReadFile(caCertPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("reading lab CA (run `agentlab certs` first?): %w", err)
+	}
+	block, _ := pem.Decode(certPEM)
+	if block == nil {
+		return nil, nil, fmt.Errorf("%s contains no PEM certificate", caCertPath)
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, nil, err
+	}
+	keyPEM, err := os.ReadFile("certs/ca.key")
+	if err != nil {
+		return nil, nil, err
+	}
+	block, _ = pem.Decode(keyPEM)
+	if block == nil {
+		return nil, nil, fmt.Errorf("certs/ca.key contains no PEM key")
+	}
+	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		return nil, nil, err
+	}
+	key, ok := parsed.(*rsa.PrivateKey)
+	if !ok {
+		return nil, nil, fmt.Errorf("certs/ca.key is not an RSA key")
+	}
+	return cert, key, nil
 }
 
 func mustPKCS8(key *rsa.PrivateKey) []byte {

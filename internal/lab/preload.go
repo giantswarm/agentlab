@@ -185,6 +185,12 @@ func reportPreload(loaded <-chan preloadResult) {
 // imageLineRe matches the image fields of rendered Kubernetes manifests.
 var imageLineRe = regexp.MustCompile(`(?m)^\s*(?:-\s*)?image:\s*["']?([^\s"']+)["']?\s*$`)
 
+// structuredImageRe matches the structured image block of an
+// AgentgatewayParameters CR (registry / repository / tag as separate keys) —
+// the data-plane image the agentgateway controller deploys at RUN TIME, so it
+// appears in no rendered pod spec the plain scraper could see.
+var structuredImageRe = regexp.MustCompile(`(?m)image:\s*\n\s*registry:\s*["']?([^\s"']+)["']?\s*\n\s*repository:\s*["']?([^\s"']+)["']?\s*\n\s*tag:\s*["']?([^\s"']+)["']?`)
+
 // scrapeImages extracts the image refs from rendered manifests. Only refs
 // carrying a tag or digest count: a bare word under some config blob's
 // `image:` key is not pullable and would poison the pull set.
@@ -194,6 +200,9 @@ func scrapeImages(rendered string) []string {
 		if ref := m[1]; strings.ContainsAny(ref, ":@") {
 			imgs = append(imgs, ref)
 		}
+	}
+	for _, m := range structuredImageRe.FindAllStringSubmatch(rendered, -1) {
+		imgs = append(imgs, fmt.Sprintf("%s/%s:%s", m[1], m[2], m[3]))
 	}
 	slices.Sort(imgs)
 	return slices.Compact(imgs)

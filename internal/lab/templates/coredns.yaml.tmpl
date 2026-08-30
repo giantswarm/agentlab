@@ -1,0 +1,42 @@
+# kind's default Corefile plus ONE rewrite (the pattern of the chart's own
+# prerequisites/lab-dex.yaml): inside pods, *.{{ .Platform.Domain }} would
+# resolve to each pod's own loopback (that is what nip.io answers), so no pod
+# could call another component through the edge — Backstage could never reach
+# https://muster.{{ .Platform.Domain }}/mcp. The rewrite points the whole
+# wildcard at the lab's pinned edge Service instead. REPLACES the kube-system
+# Corefile — kind only. CoreDNS's reload plugin picks the change up within
+# ~30s; `agentlab platform` restarts the deployment to make it immediate.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coredns
+  namespace: kube-system
+data:
+  Corefile: |
+    .:53 {
+        errors
+        health {
+           lameduck 5s
+        }
+        ready
+        rewrite stop {
+            name regex (.*)\.{{ .DomainRegex }} agentgateway-edge.agent-platform.svc.cluster.local
+            answer auto
+        }
+        kubernetes cluster.local in-addr.arpa ip6.arpa {
+           pods insecure
+           fallthrough in-addr.arpa ip6.arpa
+           ttl 30
+        }
+        prometheus :9153
+        forward . /etc/resolv.conf {
+           max_concurrent 1000
+        }
+        cache 30 {
+           disable success cluster.local
+           disable denial cluster.local
+        }
+        loop
+        reload
+        loadbalance
+    }

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"agentlab/internal/config"
@@ -15,11 +16,17 @@ import (
 
 const platformNamespace = "agent-platform"
 
+// platformRelease is the umbrella's Helm release name. Also the name of the
+// muster installation Backstage surfaces: the chart's app-config derives its
+// gs/kubernetes/muster installation entries from {{ .Release.Name }}.
+const platformRelease = "agent-platform"
+
 // Component names, shared by the log targets, the cert SANs, the deploy
 // steps and the post-renderer's resource matching.
 const (
-	componentDex    = "dex"
-	componentMuster = "muster"
+	componentDex       = "dex"
+	componentMuster    = "muster"
+	componentBackstage = "backstage"
 )
 
 // apsDir is where the umbrella chart is vendored from git. Deliberately NOT
@@ -146,31 +153,96 @@ func platformUp(cfg *config.Config, chartReady <-chan error) error {
 		return err
 	}
 
+	// The Gateway API CRDs are the chart's documented cluster-level
+	// prerequisite (like the CNPG operator); embedded so the boot needs no
+	// network for them. Idempotent re-apply.
+	step("Installing the Gateway API CRDs (standard channel)")
+	if err := pipeInto(gatewayAPICRDs, "kubectl", "apply", "-f", "-"); err != nil {
+		return err
+	}
+
 	step("Creating namespace and secrets")
 	if err := ensureNamespace(platformNamespace); err != nil {
 		return err
 	}
 	// muster appends this to its system trust pool so it can talk to the lab's
-	// self-signed Dex over TLS (values: muster.muster.extraCaFile).
+	// self-signed Dex over TLS (values: muster.muster.extraCaFile); Backstage
+	// mounts the same Secret through global.identity.ca (NODE_EXTRA_CA_CERTS).
 	if err := ensureSecretFromFiles(platformNamespace, "dex-ca", map[string]string{
 		"ca.crt": caCertPath,
 	}); err != nil {
 		return err
 	}
+	// The edge Gateway's wildcard certificate (*.<domain>), signed by the lab
+	// CA so everything that already trusts certs/ca.crt trusts the edge too.
+	if err := ensureGatewayCert(cfg.Platform.Domain); err != nil {
+		return err
+	}
+	if err := ensureTLSSecret(platformNamespace, "agent-platform-tls", gatewayCertPath, gatewayKeyPath); err != nil {
+		return err
+	}
 	// Created once and then left alone: regenerating the encryption key on
 	// every run would invalidate every issued token. dex-client-secret must
-	// match the `muster` staticClient in the Dex config.
+	// match the `agent-platform` staticClient in the Dex config.
 	if _, err := outputQuiet("kubectl", "-n", platformNamespace, "get", "secret", "agent-platform-secrets"); err != nil {
 		if err := runQuiet("kubectl", "-n", platformNamespace, "create", "secret", "generic", "agent-platform-secrets",
-			"--from-literal=dex-client-secret="+config.MusterClientSecret,
+			"--from-literal=dex-client-secret="+config.AgentPlatformClientSecret,
 			"--from-literal=registration-token="+randHex(32),
 			"--from-literal=oauth-encryption-key="+randBase64(32),
-			"--from-literal=valkey-password="+randHex(16)); err != nil {
+			"--from-literal=valkey-password="+randHex(16),
+			"--from-literal=backstage-session-secret="+randBase64(32)); err != nil {
 			return err
 		}
 		note("created agent-platform-secrets")
 	} else {
 		note("agent-platform-secrets already exists, leaving it alone")
+		// Except for keys this version introduced: a cluster created by an
+		// older lab lacks them, and Backstage's env would fail to resolve.
+		if !secretHasKey(platformNamespace, "agent-platform-secrets", "backstage-session-secret") {
+			if err := runQuiet("kubectl", "-n", platformNamespace, "patch", "secret", "agent-platform-secrets",
+				"-p", fmt.Sprintf(`{"stringData":{"backstage-session-secret":%q}}`, randBase64(32))); err != nil {
+				return err
+			}
+			note("added backstage-session-secret to agent-platform-secrets")
+		}
+	}
+
+	// Inside pods, *.<domain> must resolve to the edge Gateway (outside, the
+	// nip.io wildcard already answers 127.0.0.1) — without this Backstage
+	// could never reach https://muster.<domain>/mcp. The pinned edge Service
+	// below is the rewrite's target, applied before anything resolves it.
+	step("Pointing in-cluster *.%s at the edge (CoreDNS rewrite)", cfg.Platform.Domain)
+	if _, corednsPath, err := renderManifest(cfg, "coredns.yaml.tmpl"); err != nil {
+		return err
+	} else if out, err := outputQuiet("kubectl", "apply", "-f", corednsPath); err != nil {
+		return err
+	} else if !strings.Contains(out, "unchanged") {
+		if err := runQuiet("kubectl", "-n", "kube-system", "rollout", "restart", "deployment/coredns"); err != nil {
+			return err
+		}
+	}
+	if _, nodeportPath, err := renderManifest(cfg, "gateway-nodeport.yaml.tmpl"); err != nil {
+		return err
+	} else if err := runQuiet("kubectl", "apply", "-f", nodeportPath); err != nil {
+		return err
+	}
+
+	if cfg.Backstage.Enabled {
+		// Catalog entities + the agent create flow's scaffolder Template,
+		// mounted into the chart's Backstage; must exist before the pod starts.
+		if _, catalogPath, err := renderManifest(cfg, "backstage-catalog.yaml.tmpl"); err != nil {
+			return err
+		} else if err := runQuiet("kubectl", "apply", "-f", catalogPath); err != nil {
+			return err
+		}
+		// The create flow's Deploy button kube:applies Flux CRs; these two
+		// controllers are the delivery engine that turns them into an
+		// installed agent chart (see fluxUp).
+		if cfg.Platform.Agents {
+			if err := fluxUp(cfg); err != nil {
+				return err
+			}
+		}
 	}
 
 	if _, _, err := renderManifest(cfg, "mcp-kubernetes-values.yaml.tmpl"); err != nil {
@@ -228,7 +300,7 @@ func platformUp(cfg *config.Config, chartReady <-chan error) error {
 		return err
 	}
 	if err := runQuietEnv([]string{"HELM_PLUGINS=" + pluginsDir},
-		"helm", "upgrade", "--install", "agent-platform", chartDir,
+		"helm", "upgrade", "--install", platformRelease, chartDir,
 		"-n", platformNamespace,
 		"-f", StateDir+"/agent-platform-values.yaml",
 		"--post-renderer", postRenderPluginName,
@@ -278,18 +350,18 @@ func platformUp(cfg *config.Config, chartReady <-chan error) error {
 		healADKImages(cfg)
 	}
 
-	// muster runs with hostNetwork and the kind config maps its port onto the
-	// host, so it should be reachable directly. Retry rather than probing
-	// once: helm --wait covers the Deployment, but muster's HTTP listener
-	// accepts slightly later, so a single-shot check on a cold cluster fails
-	// and then blames the port mapping, which is the one thing that is
-	// definitely fine on a freshly created cluster.
-	step("Waiting for muster to serve on %s", cfg.MusterBaseURL())
+	// The public URL runs client -> agentgateway edge -> muster: reaching it
+	// proves the Gateway is programmed, the data-plane pod serves TLS with the
+	// lab wildcard cert, and the /-route forwards to muster. Retry rather than
+	// probing once: helm --wait covers the Deployments, but the controller
+	// creates the data-plane pod asynchronously after the Gateway lands, and
+	// muster's HTTP listener accepts slightly later.
+	step("Waiting for muster through the edge on %s", cfg.MusterBaseURL())
 	client, err := labHTTPClient(3 * time.Second)
 	if err != nil {
 		return err
 	}
-	reachable := waitFor(40, 3*time.Second, func() bool {
+	reachable := waitFor(60, 3*time.Second, func() bool {
 		return httpUp(client, cfg.MusterBaseURL()+"/.well-known/oauth-authorization-server")
 	})
 
@@ -299,15 +371,30 @@ func platformUp(cfg *config.Config, chartReady <-chan error) error {
 		}
 	}
 
-	reach := fmt.Sprintf("muster is live on %s (no port-forward needed)", cfg.MusterBaseURL())
+	reach := fmt.Sprintf("muster is live on %s (through the agentgateway edge)", cfg.MusterBaseURL())
 	if !reachable {
-		reach = fmt.Sprintf(`muster is NOT reachable on %s after 2 minutes.
+		reach = fmt.Sprintf(`muster is NOT reachable on %s after 3 minutes.
   If 'docker port %s' shows no %d line, this cluster
-  predates the port mapping and must be recreated (agentlab down && agentlab up).
-  Otherwise check 'agentlab logs muster'. Stopgap either way:
-  kubectl -n %s port-forward svc/muster %d:%d`,
-			cfg.MusterBaseURL(), cfg.ControlPlaneNode(), cfg.Platform.MusterPort,
-			platformNamespace, cfg.Platform.MusterPort, config.MusterNodePort)
+  predates the edge port mapping and must be recreated (agentlab down && agentlab up).
+  Otherwise check the edge (kubectl -n %s get gateway,pods) and 'agentlab logs muster'.
+  Direct (edge-bypassing) stopgap: %s`,
+			cfg.MusterBaseURL(), cfg.ControlPlaneNode(), cfg.Platform.GatewayPort,
+			platformNamespace, cfg.MusterDirectURL())
+	}
+
+	backstageHint := "  Backstage is disabled (backstage.enabled in agentlab.yaml)."
+	if cfg.Backstage.Enabled {
+		// helm --wait already covered the rollout; this proves the route
+		// through the edge and Backstage's own listener.
+		step("Waiting for Backstage on %s", cfg.BackstageBaseURL())
+		if waitFor(60, 3*time.Second, func() bool { return httpUp(client, cfg.BackstageBaseURL()) }) {
+			backstageHint = fmt.Sprintf("  Backstage: %s (Sign In -> Dex; users and passwords in %s)",
+				cfg.BackstageBaseURL(), config.File)
+		} else {
+			backstageHint = fmt.Sprintf(`  Backstage is NOT reachable on %s.
+  Check 'kubectl -n %s get pods' and 'agentlab logs backstage'.`,
+				cfg.BackstageBaseURL(), platformNamespace)
+		}
 	}
 
 	agentsHint := "  Agents (kagent) are disabled (platform.agents in agentlab.yaml)."
@@ -330,19 +417,28 @@ func platformUp(cfg *config.Config, chartReady <-chan error) error {
 				cfg.Platform.AgentsPort, cfg.Platform.AgentsPort)
 		}
 	}
+	caAbs, err := filepath.Abs(caCertPath)
+	if err != nil {
+		caAbs = caCertPath
+	}
 	fmt.Printf(`
 Platform is up.
   %s
 
-  Point Claude Code at it (browser login through Dex):
+%s
+
+  Point Claude Code at it (browser login through Dex; the edge serves a
+  lab-CA certificate, so Node must be told to trust it):
+    export NODE_EXTRA_CA_CERTS=%s
     claude mcp add --transport http muster %s/mcp
     # then in Claude Code: /mcp -> authenticate
+  The browser will warn about the same lab CA once per hostname.
 
 %s
 
   Smoke-test it headlessly instead:
     agentlab platform-test
-`, reach, cfg.MusterBaseURL(), agentsHint)
+`, reach, backstageHint, caAbs, cfg.MusterBaseURL(), agentsHint)
 	// Everything the platform runs is in the node now — record it so the next
 	// boot side-loads instead of pulling.
 	snapshotPreloadImages(cfg)
@@ -356,7 +452,7 @@ Platform is up.
 // ADK runtime tags kagent builds from its ConfigMap) are covered by
 // healADKImages and the snapshot manifest.
 func platformImages(cfg *config.Config, chartDir string) ([]string, error) {
-	umbrella, err := outputQuiet("helm", "template", "agent-platform", chartDir,
+	umbrella, err := outputQuiet("helm", "template", platformRelease, chartDir,
 		"-n", platformNamespace, "-f", StateDir+"/agent-platform-values.yaml")
 	if err != nil {
 		return nil, fmt.Errorf("templating agent-platform-standalone: %w", err)

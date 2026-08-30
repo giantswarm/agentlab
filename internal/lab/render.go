@@ -19,6 +19,14 @@ import (
 //go:embed templates/*.tmpl templates/static/*
 var templatesFS embed.FS
 
+// gatewayAPICRDs is the Gateway API standard-channel install (v1.5.0),
+// embedded so a boot needs no network to give the cluster the Gateway/
+// HTTPRoute/... CRDs — the documented cluster-level prerequisite of the
+// agent-platform-standalone chart.
+//
+//go:embed templates/gateway-api-crds.yaml
+var gatewayAPICRDs []byte
+
 // StateDir is where rendered manifests land, for inspection and for
 // kubectl/helm to consume. Gitignored; regenerated on every command.
 const StateDir = "state"
@@ -34,11 +42,12 @@ type tmplData struct {
 	CertsDir            string // absolute, for the kind extraMount
 	MusterNodePort      int
 	KagentUINodePort    int
+	GatewayNodePort     int
 	BrowserCallbackPort int
+	DomainRegex         string // Platform.Domain with dots escaped, for the CoreDNS rewrite
 	AllGroups           []string
 	KubernetesClientSecret,
-	BackstageClientSecret,
-	MusterClientSecret string
+	AgentPlatformClientSecret string
 }
 
 func newTmplData(cfg *config.Config) (*tmplData, error) {
@@ -47,15 +56,16 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		return nil, err
 	}
 	return &tmplData{
-		Config:                 cfg,
-		CertsDir:               certsDir,
-		MusterNodePort:         config.MusterNodePort,
-		KagentUINodePort:       config.KagentUINodePort,
-		BrowserCallbackPort:    config.BrowserCallbackPort,
-		AllGroups:              config.Groups,
-		KubernetesClientSecret: config.KubernetesClientSecret,
-		BackstageClientSecret:  config.BackstageClientSecret,
-		MusterClientSecret:     config.MusterClientSecret,
+		Config:                    cfg,
+		CertsDir:                  certsDir,
+		MusterNodePort:            config.MusterNodePort,
+		KagentUINodePort:          config.KagentUINodePort,
+		GatewayNodePort:           config.GatewayNodePort,
+		BrowserCallbackPort:       config.BrowserCallbackPort,
+		DomainRegex:               strings.ReplaceAll(cfg.Platform.Domain, ".", `\.`),
+		AllGroups:                 config.Groups,
+		KubernetesClientSecret:    config.KubernetesClientSecret,
+		AgentPlatformClientSecret: config.AgentPlatformClientSecret,
 	}, nil
 }
 
@@ -123,8 +133,10 @@ var manifests = map[string]struct {
 	"mcp-kubernetes-values.yaml.tmpl": {out: "mcp-kubernetes-values.yaml"},
 	"flux-values.yaml.tmpl":           {out: "flux-values.yaml"},
 	"demo-workflow.yaml.tmpl":         {out: "demo-workflow.yaml"},
+	"coredns.yaml.tmpl":               {out: "coredns.yaml"},
+	"gateway-nodeport.yaml.tmpl":      {out: "gateway-nodeport.yaml"},
+	"backstage-catalog.yaml.tmpl":     {out: "backstage-catalog.yaml"},
 	"dex.yaml.tmpl":                   {out: "dex.yaml", extraInputs: []string{tlsCertPath}},
-	"backstage.yaml.tmpl":             {out: "backstage.yaml", extraInputs: []string{caCertPath}},
 }
 
 // renderManifest renders one embedded template into state/ per the manifests
@@ -166,8 +178,7 @@ func renderManifest(cfg *config.Config, tmplName string) ([]byte, string, error)
 }
 
 // RenderAll renders every manifest into state/ for inspection. The stamped
-// manifests (dex, backstage) need the certs, so they are generated first if
-// missing.
+// manifest (dex) needs the certs, so they are generated first if missing.
 func RenderAll(cfg *config.Config) error {
 	if err := GenCerts(false); err != nil {
 		return err

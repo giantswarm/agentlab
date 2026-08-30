@@ -23,22 +23,19 @@ import (
 // gone: the muster chart renders the key itself since 5.7.2, muster#1118 —
 // the value in agent-platform-values.yaml.tmpl is enough now.)
 //
-//  1. hostNetwork + dnsPolicy on the muster Deployment: muster must resolve
-//     the issuer URL to the Dex NodePort from inside the pod so it can share
-//     ONE issuer URL with the browser on the host. Not a muster chart value.
+//  1. hostNetwork + dnsPolicy on the muster and backstage Deployments: both
+//     must resolve the issuer URL to the Dex NodePort from inside the pod so
+//     they can share ONE issuer URL with the browser on the host — the same
+//     trick the kube-apiserver static pod uses. Not a chart value in either
+//     chart. dnsPolicy ClusterFirstWithHostNet keeps cluster DNS, which the
+//     CoreDNS rewrite needs to point *.<domain> at the edge Gateway.
 //
-//  2. maxSurge 0: hostNetwork means the pod binds the muster port on the node,
-//     so the default rolling update deadlocks on a single-node cluster — the
-//     new pod cannot start until the old one releases the port. Old pod goes
-//     down first.
+//  2. maxSurge 0 on the same Deployments: hostNetwork means the pod binds its
+//     port on the node, so the default rolling update deadlocks on a
+//     single-node cluster — the new pod cannot start until the old one
+//     releases the port. Old pod goes down first.
 //
-//  3. Drop the muster HTTPRoute. The chart hard-fails on empty
-//     ingress.parentRefs in ALL modes (it assumes a public Gateway even for
-//     muster-direct), so the values carry a placeholder parentRef and the
-//     rendered route is stripped here: this lab has no Gateway, no Gateway API
-//     CRDs, and reaches muster through hostNetwork + the kind port mapping.
-//
-//  4. A fixed nodePort on the kagent-ui Service: the values set
+//  3. A fixed nodePort on the kagent-ui Service: the values set
 //     `ui.service.type: NodePort` (a chart value), but the chart's ui-service
 //     template renders no `nodePort` field, so Kubernetes would pick a random
 //     one — useless to kind's fixed extraPortMappings. Pinned to
@@ -65,11 +62,8 @@ func PostRender(in io.Reader, out io.Writer) error {
 		kind := scalarAt(root, "kind")
 		name := scalarAt(mapValue(root, "metadata"), nameKey)
 
-		if kind == "HTTPRoute" && name == componentMuster {
-			continue
-		}
-		if kind == "Deployment" && name == componentMuster {
-			patchMusterDeployment(root)
+		if kind == "Deployment" && (name == componentMuster || name == componentBackstage) {
+			patchHostNetworkDeployment(root)
 		}
 		if kind == "Service" && name == "kagent-ui" {
 			patchKagentUIService(root)
@@ -80,7 +74,7 @@ func PostRender(in io.Reader, out io.Writer) error {
 	}
 }
 
-func patchMusterDeployment(root *yaml.Node) {
+func patchHostNetworkDeployment(root *yaml.Node) {
 	podSpec := ensureMap(ensureMap(ensureMap(root, "spec"), "template"), "spec")
 	setKey(podSpec, "hostNetwork", boolNode(true))
 	setKey(podSpec, "dnsPolicy", strNode("ClusterFirstWithHostNet"))

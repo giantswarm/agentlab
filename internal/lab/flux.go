@@ -25,6 +25,21 @@ func fluxUp(cfg *config.Config) error {
 		return err
 	}
 	step("Installing Flux source+helm controllers (flux2 chart %s, for the agent create flow)", fluxChartVersion)
+	// Same host-cache -> node rule as the platform images (see preload.go):
+	// a separate Helm release, so the platform's chart-derived lane cannot
+	// see these images. Best-effort — anything missed is pulled in-node
+	// under the --wait timeout, and the snapshot manifest catches it for
+	// the next boot.
+	if rendered, err := outputQuiet("helm", "template", "flux",
+		"oci://ghcr.io/fluxcd-community/charts/flux2",
+		"--version", fluxChartVersion,
+		"-n", "flux-system", "-f", StateDir+"/flux-values.yaml"); err == nil {
+		if imgs := scrapeImages(rendered); len(imgs) > 0 {
+			if res := sideloadImages(cfg, hostPullImages(imgs)); res.n > 0 {
+				note("side-loaded %d flux images (%s)", res.n, res.d)
+			}
+		}
+	}
 	return runQuiet("helm", "upgrade", "--install", "flux",
 		"oci://ghcr.io/fluxcd-community/charts/flux2",
 		"--version", fluxChartVersion,

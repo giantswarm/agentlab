@@ -72,7 +72,7 @@ agentlab tui): live component status plus keys for the lifecycle actions.`,
 		labCmd("platform", "Install the Giant Swarm agent platform (muster + Kubernetes MCP)", lab.PlatformUp),
 		platformTestCmd(),
 		labCmd("platform-down", "Remove the agent platform (leaves Dex and the cluster alone)", lab.PlatformDown),
-		labCmd("backstage", "Deploy Giant Swarm Backstage wired to Dex + muster (needs `agentlab platform`)", lab.BackstageUp),
+		labCmd("backstage", "Retired: Backstage deploys with the platform now (backstage.enabled + `agentlab up`)", lab.BackstageUp),
 		backstageTestCmd(),
 		logsCmd(),
 		labCmd("render", "Render every manifest from agentlab.yaml into state/ without applying anything", lab.RenderAll),
@@ -103,6 +103,17 @@ func labCmd(use, short string, run func(*config.Config) error) *cobra.Command {
 // interactive form on a terminal, and otherwise refuses with a pointer to
 // `agentlab configure --defaults`.
 func loadConfig() (*config.Config, error) {
+	cfg, err := loadOrCreateConfig()
+	if err != nil {
+		return nil, err
+	}
+	// The lab's HTTP clients dial *.<domain> on loopback (the kind port
+	// mappings) so checks never flake on external DNS; see lab.SetDomain.
+	lab.SetDomain(cfg.Platform.Domain)
+	return cfg, nil
+}
+
+func loadOrCreateConfig() (*config.Config, error) {
 	cfg, err := config.Load()
 	if err == nil {
 		return cfg, nil

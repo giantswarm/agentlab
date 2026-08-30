@@ -70,8 +70,8 @@ stringData:
       # `trustedPeers` on client X lists the clients allowed to request *X's*
       # audience through the cross-client scope `audience:server:client_id:X`.
       # It reads backwards from the intuition: to let Backstage mint a token the
-      # apiserver accepts, `backstage` belongs on the *kubernetes* client here,
-      # not `kubernetes` on the backstage client.
+      # apiserver accepts, `agent-platform` belongs on the *kubernetes* client
+      # here, not `kubernetes` on the agent-platform client.
       - id: kubernetes
         name: Kubernetes
         secret: {{ .KubernetesClientSecret }}
@@ -79,31 +79,32 @@ stringData:
           - http://127.0.0.1:{{ .BrowserCallbackPort }}/callback
           - http://localhost:{{ .BrowserCallbackPort }}/callback
         trustedPeers:
-          - backstage
-          - muster
-      # Giant Swarm Backstage. The provider name in app-config must begin with
-      # `oidc-` (auth-backend-module-gs only registers a provider whose name has
-      # that prefix), and the callback path carries that same provider name:
-      # /api/auth/<provider>/handler/frame.
-      - id: backstage
-        name: Backstage
-        secret: {{ .BackstageClientSecret }}
-        redirectURIs:
-          - {{ .BackstageBaseURL }}/api/auth/oidc-lab/handler/frame
-      # muster (Giant Swarm agent platform) acts as an OAuth *client* of Dex
-      # and as an OAuth *server* towards MCP clients like Claude Code.
-      # redirectURI must equal <muster.oauth.server.baseUrl>/oauth/callback.
-      - id: muster
-        name: Muster
-        secret: {{ .MusterClientSecret }}
+          - agent-platform
+      # The ONE platform client, the chart's global.identity convention:
+      # muster (an OAuth *client* of Dex and an OAuth *server* towards MCP
+      # clients like Claude Code) and Backstage both authenticate with it, so
+      # a Backstage-forwarded token natively carries an audience muster
+      # trusts. The muster redirectURI must equal
+      # <muster.oauth.server.baseUrl>/oauth/callback — the public URL through
+      # the agentgateway edge. The Backstage callback path carries the
+      # provider name the chart's app-config registers (oidc-agent-platform;
+      # auth-backend-module-gs only registers providers with the oidc- prefix).
+      - id: agent-platform
+        name: Agent Platform
+        secret: {{ .AgentPlatformClientSecret }}
         redirectURIs:
           - {{ .MusterBaseURL }}/oauth/callback
-          - http://127.0.0.1:{{ .Platform.MusterPort }}/oauth/callback
-        # Lets Backstage forward a token muster accepts: muster's
-        # trustedAudiences is just ["muster"], so the token has to carry that
-        # audience, which needs this cross-client grant.
+          - {{ .BackstageBaseURL }}/api/auth/oidc-agent-platform/handler/frame
+      # Cross-client audience target. Backstage's GS auth provider requests
+      # the scope audience:server:client_id:dex-k8s-authenticator by default
+      # (components.backstage.extraScopes); Dex only honors that when the
+      # TARGET client lists the requesting client in trustedPeers. This client
+      # exists for that audience only — it never runs a flow itself.
+      - id: dex-k8s-authenticator
+        name: dex-k8s-authenticator audience (lab)
+        secret: {{ .KubernetesClientSecret }}
         trustedPeers:
-          - backstage
+          - agent-platform
 ---
 # Kubernetes storage needs its own identity: Dex creates its CRDs on first
 # boot and then CRUDs its resources (keys, auth codes, sessions) through the
