@@ -243,9 +243,21 @@ is a **real credential**, so unlike the lab's throwaway passwords it never
 enters `agentlab.yaml` or the rendered `state/` files: `agentlab platform`
 creates the Secret from `$ANTHROPIC_API_KEY` on the host (created once, left
 alone; delete it and re-run to rotate). Without the env var the install still
-succeeds — agents just cannot call a model until the Secret exists. The same
-key powers Backstage's AI chat via a second Secret,
-`backstage/backstage-anthropic`.
+succeeds — the ModelConfig then points at a Secret that does not exist yet,
+which is harmless until an `Agent` CR is created: that agent's pod sits in
+`CreateContainerConfigError` (missing Secret) and recovers on its own once the
+Secret lands. To supply the key later, either export it and re-run
+`agentlab platform` (idempotent — it only fills the gap), or create the Secret
+directly:
+
+```bash
+kubectl -n kagent create secret generic kagent-anthropic \
+  --from-literal=ANTHROPIC_API_KEY=sk-ant-...
+```
+
+The same key powers Backstage's AI chat via a second Secret,
+`backstage/backstage-anthropic` (see
+[Backstage gotchas](#backstage-gotchas) for its no-key behavior).
 
 The kagent UI is host-published like the other components:
 `http://localhost:8081` (`platform.agentsPort` in `agentlab.yaml`). The UI does
