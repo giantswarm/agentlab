@@ -17,16 +17,21 @@ configure`); every manifest renders from templates embedded in the binary into
 ## Always use the lab and its MCP
 
 Testing the agent platform is this repo's purpose, and `.mcp.json` registers
-the **`musterkind`** MCP server (`http://localhost:8090/mcp`) — muster running
-*inside* the lab cluster. Interacting with the cluster through it is the
-point: it exercises the whole Claude Code → muster → mcp-kubernetes →
-apiserver chain, with Dex doing the logins.
+the **`musterkind`** MCP server (`https://muster.127.0.0.1.nip.io/mcp`) —
+muster running *inside* the lab cluster, reached through the agentgateway
+edge. Interacting with the cluster through it is the point: it exercises the
+whole Claude Code → agentgateway → muster → mcp-kubernetes → apiserver chain,
+with Dex doing the logins.
 
+- The edge serves a lab-CA certificate: launch Claude Code with
+  `NODE_EXTRA_CA_CERTS=<repo>/certs/ca.crt` or the connection fails on TLS.
+  (Fallback for a shell without it: the direct, edge-bypassing
+  `http://localhost:8090/mcp`.)
 - If `musterkind` is unreachable or unauthenticated, the lab is down — bring
   it up instead of switching tools: `./agentlab configure --defaults` (once;
-  the platform is enabled by default), then `./agentlab up`, then authenticate
-  via `/mcp` (Dex browser login; users and passwords are in `agentlab.yaml`,
-  default `admin@lab.local` / `password`).
+  the platform and Backstage are enabled by default), then `./agentlab up`,
+  then authenticate via `/mcp` (Dex browser login; users and passwords are in
+  `agentlab.yaml`, default `admin@lab.local` / `password`).
 - muster's `kubernetes` tools are a *family*: pass the MCPServer CR name,
   e.g. `management_cluster: "agentlab-mcp-kubernetes"`.
 - The agents runtime (kagent) installs with the platform by default but is
