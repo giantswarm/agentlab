@@ -176,7 +176,10 @@ func ApplyDex(cfg *config.Config) error {
 		return err
 	}
 	step("Waiting for Dex to become ready")
-	return run("kubectl", "-n", componentDex, "rollout", "status", "deployment/dex", "--timeout=120s")
+	// 420s, not 120s: on a fresh kind node the Dex image is a cold pull from
+	// ghcr.io and regularly outlasts two minutes; the rollout itself is
+	// seconds once the image is local.
+	return run("kubectl", "-n", componentDex, "rollout", "status", "deployment/dex", "--timeout=420s")
 }
 
 func kindClusterExists(name string) bool {
