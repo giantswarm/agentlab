@@ -15,8 +15,10 @@ import (
 // install (stdin: the full rendered release, stdout: the same with three
 // muster patches). Plain Helm has no values hook for any of these, so they
 // live here — the replacement for the Flux postRenderers the old
-// agent-platform meta-package forwarded to helm-controller. Wired up as
-// `helm --post-renderer <agentlab> --post-renderer-args post-render`.
+// agent-platform meta-package forwarded to helm-controller. Wired up through
+// a generated postrenderer/v1 plugin whose command is this very binary with
+// the `post-render` arg (Helm 4 accepts only plugin-type post-renderers; see
+// helmplugin.go).
 //
 //  1. hostNetwork + dnsPolicy on the muster Deployment: muster must resolve
 //     the issuer URL to the Dex NodePort from inside the pod so it can share
@@ -27,8 +29,9 @@ import (
 //     new pod cannot start until the old one releases the port. Old pod goes
 //     down first.
 //
-//  3. allowPublicClientRegistration: WORKAROUND (muster chart <= 5.5.6). The
-//     chart exposes the key in values.yaml, values.schema.json and its README,
+//  3. allowPublicClientRegistration: WORKAROUND (muster chart <= 5.7.1, still
+//     unrendered as of the 3.2.2 curation). The chart exposes the key in
+//     values.yaml, values.schema.json and its README,
 //     but templates/configmap.yaml never renders it, so the value is silently
 //     dropped and Dynamic Client Registration stays gated. Claude Code
 //     registers as a PUBLIC client on a random loopback port, so neither

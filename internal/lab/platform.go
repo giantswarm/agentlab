@@ -77,6 +77,23 @@ func ensurePlatformChart(cfg *config.Config) error {
 		return err
 	}
 
+	// A `helm dependency build` killed mid-flight (this very function runs in
+	// a goroutine that dies with a failed boot) leaves a tmpcharts-<pid>/ dir
+	// inside the chart. Helm's directory loader embeds every file .helmignore
+	// does not exclude into the release record, so that corpse of raw .tgz
+	// archives silently doubles the payload and the install dies with
+	// `Secret "sh.helm.release.v1...." is invalid: data: Too long`. Sweep
+	// unconditionally: the corpse can outlive the digest-match fast path below.
+	stale, err := filepath.Glob(filepath.Join(chartDir, "tmpcharts-*"))
+	if err != nil {
+		return err
+	}
+	for _, dir := range stale {
+		if err := os.RemoveAll(dir); err != nil {
+			return err
+		}
+	}
+
 	// Subchart .tgz pulls from gsoci/ghcr (anonymous). Skipped when charts/
 	// was last built from exactly this Chart.lock — compared by content digest,
 	// not mtime: mtimes change on checkout and prove nothing about the last
@@ -100,6 +117,12 @@ func ensurePlatformChart(cfg *config.Config) error {
 
 func platformUp(cfg *config.Config, chartReady <-chan error) error {
 	chartDir := filepath.Join(apsDir, "helm", "agent-platform-standalone")
+
+	// Also checked at the very top of `agentlab up`; repeated here for the
+	// standalone `agentlab platform` entry point.
+	if err := ensureHelmSupportsPlatform(); err != nil {
+		return err
+	}
 
 	// A cluster still running the old meta-package has Flux HelmReleases under
 	// the same Helm release name; upgrading across that boundary races
@@ -172,15 +195,18 @@ func platformUp(cfg *config.Config, chartReady <-chan error) error {
 	// workloads now. The MCPServer/Workflow CRDs ship in the muster subchart's
 	// crds/ dir, which Helm applies before the manifests on first install.
 	// The post-renderer is this very binary (see PostRender): hostNetwork,
-	// the DCR chart-bug workaround, HTTPRoute strip.
-	self, err := os.Executable()
+	// the DCR chart-bug workaround, HTTPRoute strip, kagent-ui nodePort pin.
+	// Helm 4 accepts only plugin-type post-renderers, so the binary is wrapped
+	// in a generated plugin (see helmplugin.go) that HELM_PLUGINS points at.
+	pluginsDir, err := ensurePostRenderPlugin()
 	if err != nil {
 		return err
 	}
-	if err := runQuiet("helm", "upgrade", "--install", "agent-platform", chartDir,
+	if err := runQuietEnv([]string{"HELM_PLUGINS=" + pluginsDir},
+		"helm", "upgrade", "--install", "agent-platform", chartDir,
 		"-n", platformNamespace,
 		"-f", StateDir+"/agent-platform-values.yaml",
-		"--post-renderer", self, "--post-renderer-args", "post-render",
+		"--post-renderer", postRenderPluginName,
 		"--wait", "--timeout", "10m"); err != nil {
 		return err
 	}

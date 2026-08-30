@@ -15,9 +15,10 @@
 #     the Dex NodePort from inside the pod, exactly the trick the
 #     kube-apiserver static pod and the Backstage deployment already use. This
 #     is what lets muster share ONE issuer URL with the browser on the host.
-#     Not a chart value; patched in by `agentlab post-render` (helm
-#     --post-renderer), the plain-Helm replacement for the Flux postRenderers
-#     the old agent-platform meta-package forwarded to helm-controller.
+#     Not a chart value; patched in by `agentlab post-render` (a generated
+#     Helm 4 postrenderer plugin backed by the agentlab binary itself), the
+#     plain-Helm replacement for the Flux postRenderers the old agent-platform
+#     meta-package forwarded to helm-controller.
 # ---------------------------------------------------------------------------
 
 components:
@@ -50,12 +51,10 @@ ingress:
     - name: no-gateway-in-this-lab
       namespace: agent-platform
 
-# The umbrella's own policy objects. No Cilium and no Kyverno in kind, so both
-# would render CRs whose API groups the cluster does not serve.
-networkPolicy:
-  enabled: false
-kyvernoPolicies:
-  enabled: false
+# The umbrella's own policy objects (network policy lives under
+# global.networkPolicy since the vanilla-defaults rework; a top-level
+# networkPolicy key now fails the strict schema). Both are off in the chart's
+# vanilla defaults — nothing to override.
 
 muster:
   networkPolicy:
@@ -117,12 +116,13 @@ muster:
           allowPrivateIPOIDC: true
         existingSecret: agent-platform-secrets
         # Lab only: lets Claude Code register itself over DCR without a
-        # pre-shared registration token. WORKAROUND (muster chart <= 5.5.6):
-        # the chart exposes this key in values.yaml, values.schema.json and its
-        # README, but templates/configmap.yaml never renders it — so the value
-        # set here is silently dropped. `agentlab post-render` re-adds it to the
-        # rendered config; this entry stays so the values file tells the truth
-        # and the workaround can be deleted once the chart renders it.
+        # pre-shared registration token. WORKAROUND (muster chart <= 5.7.1,
+        # still unrendered): the chart exposes this key in values.yaml,
+        # values.schema.json and its README, but templates/configmap.yaml never
+        # renders it — so the value set here is silently dropped. `agentlab
+        # post-render` re-adds it to the rendered config; this entry stays so
+        # the values file tells the truth and the workaround can be deleted
+        # once the chart renders it.
         allowPublicClientRegistration: true
         # Lab only: accept a Dex id_token with aud=muster as a bearer token, so
         # the stack can be smoke-tested headlessly with the password grant.

@@ -14,6 +14,15 @@ import (
 // OIDC verification, and then the components the configuration enables — the
 // agent platform (the default; it is what the lab tests) and Backstage.
 func Up(cfg *config.Config) error {
+	// Fail on Helm 3 before any real work: the platform install at the end of
+	// this boot needs Helm 4 (see ensureHelmSupportsPlatform), and finding
+	// that out after a five-minute cluster boot is the wrong moment.
+	if cfg.Platform.Enabled {
+		if err := ensureHelmSupportsPlatform(); err != nil {
+			return err
+		}
+	}
+
 	if err := GenCerts(false); err != nil {
 		return err
 	}
