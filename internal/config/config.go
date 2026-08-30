@@ -195,7 +195,7 @@ func Default() *Config {
 			GatewayPort:          443,
 			MCPKubernetesVersion: "1.0.9",
 			APSRepo:              "https://github.com/giantswarm/agent-platform-standalone",
-			APSRef:               "d8dc380c70df4fe0cf9cfd7b8a1e0974b72a4386", // main: backstage 0.200.15 — actually ships the kube:apply caFile fix (0.200.14 image was cache-poisoned, backstage#2156)
+			APSRef:               "197e82270bb39eed8105760144d07b941bd3b945", // main: backstage 0.200.16 — global-agent no longer strips the kube client CA (backstage#2157); agent create flow verified e2e
 		},
 		Backstage: Backstage{
 			Enabled: true,
