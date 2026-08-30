@@ -17,10 +17,12 @@ YAML to hand-edit and no shell to source.
 
 ## Requirements
 
-`go` (>= 1.25), `docker`, `kind` (>= 0.31), `kubectl`, `helm` (**3.x** — Helm 4
-accepts only plugin-type post-renderers, which breaks the `agentlab
-post-render` mechanism the platform install depends on; see
-[#3](https://github.com/giantswarm/agentplatform-kind/issues/3)), `git`.
+`go` (>= 1.25), `docker`, `kind` (>= 0.31), `kubectl`, `helm` (**>= 4** — Helm 3
+cannot store the umbrella chart's release any more: the dependency archives put
+the release Secret over etcd's 1 MiB cap, see
+[agent-platform-standalone#21](https://github.com/giantswarm/agent-platform-standalone/issues/21);
+Helm 4's plugin-only post-renderer contract is handled by a generated plugin,
+see below), `git`.
 
 (The old script stack also needed openssl, curl, jq and python3; the binary
 does all of that itself.)
@@ -195,7 +197,7 @@ same one-URL trick, just spelled with a name.
 | `networkPolicy.enabled: false`, `kyvernoPolicies.enabled: false` | The umbrella's own policy objects. No Cilium and no Kyverno in kind, so both would render CRs whose API groups the cluster does not serve. |
 | `valkey.valkey.metrics.podMonitor.enabled: false`, `muster…serviceMonitor.enabled: false`, `muster…prometheusRule.enabled: false` | No Prometheus Operator, so `PodMonitor` / `ServiceMonitor` / `PrometheusRule` have no CRD. |
 | `muster.rbac.{mcpServerEditor,workflowEditor}.subjects` → `oidc:platform-admins` | The umbrella binds muster's editor Roles to Giant Swarm's admin groups, which do not exist here. Rebound to the lab's own admin group (`--oidc-groups-prefix=oidc:`, same spelling as the lab RBAC). Lists replace, so the GS groups are dropped. |
-| muster patched to `hostNetwork` + `maxSurge: 0` | Same issuer trick as the apiserver and Backstage. `maxSurge: 0` because two hostNetwork pods cannot both bind `:8090` on a one-node cluster. Applied by `agentlab post-render` (`helm --post-renderer`, the binary invoking itself) — the plain-Helm replacement for the Flux `postRenderers` the meta-package forwarded to helm-controller. |
+| muster patched to `hostNetwork` + `maxSurge: 0` | Same issuer trick as the apiserver and Backstage. `maxSurge: 0` because two hostNetwork pods cannot both bind `:8090` on a one-node cluster. Applied by `agentlab post-render` — Helm 4 accepts only plugin-type post-renderers, so the install generates a `postrenderer/v1` plugin in `state/helm-plugins/` whose command is the agentlab binary itself, and passes it via `HELM_PLUGINS` + `--post-renderer agentlab-postrender`. The plain-Helm replacement for the Flux `postRenderers` the meta-package forwarded to helm-controller. |
 | `components.kagent.enabled` from `platform.agents`, `controller.auth.mode: unsecure`, kagent ServiceMonitor + OTel off | Agents are part of what the lab tests, so kagent is on by default (the umbrella defaults it off) but optional — `platform.agents: false` skips the runtime. `unsecure` because the GS `trusted-proxy` mode assumes a JWT-validating agentgateway in front; no Prometheus Operator / OTLP gateway in kind. See [Agents (kagent)](#agents-kagent). |
 | `kagent.ui.service.type: NodePort`, nodePort 30880 pinned by `agentlab post-render` | On a real MC the UI sits behind the agentgateway edge; this lab publishes it through the kind port mapping instead (host side `platform.agentsPort`, default 8081). The chart's Service template renders no `nodePort` field, so the fixed node port is a post-render patch (HACKS.md U9). |
 | The chart vendored at a pinned git SHA | Component versions are the chart's own tested BOM (`Chart.lock`); the lab no longer pins its own. The only lab-side pin is `platform.apsRef` — the chart repo commit — so two runs still install the same thing. |
@@ -209,8 +211,8 @@ same one-URL trick, just spelled with a name.
   `agentlab platform` refuses if it finds the old HelmReleases; run
   `agentlab platform-down` first (an old cluster keeps its now-idle `flux-system`,
   which is harmless).
-- **`allowPublicClientRegistration` is a no-op in the muster chart (still at
-  5.5.6).** It exists in `values.yaml`, `values.schema.json`, the README table
+- **`allowPublicClientRegistration` is a no-op in the muster chart (still
+  unrendered at 5.7.1).** It exists in `values.yaml`, `values.schema.json`, the README table
   and the chart's unit tests, but `templates/configmap.yaml` never renders it —
   so DCR stays gated and Claude Code's login dies at `/oauth/register` with
   *"Registration requires authentication"*. Neither of the other gates can help:
@@ -611,6 +613,7 @@ internal/lab/                  everything operational:
   platform.go platformtest.go    agent platform install + MCP smoke test
   backstage.go backstagetest.go  Backstage deploy + headless sign-in proof
   postrender.go                  helm post-renderer (hostNetwork, DCR fix, route strip)
+  helmplugin.go                  generates the Helm 4 postrenderer plugin wrapping it
   templates/                     every manifest, rendered from agentlab.yaml
 agentlab.yaml                    your configuration (gitignored; `agentlab configure`)
 state/                         rendered manifests, for inspection (gitignored)

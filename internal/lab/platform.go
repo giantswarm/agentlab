@@ -101,6 +101,12 @@ func ensurePlatformChart(cfg *config.Config) error {
 func platformUp(cfg *config.Config, chartReady <-chan error) error {
 	chartDir := filepath.Join(apsDir, "helm", "agent-platform-standalone")
 
+	// Also checked at the very top of `agentlab up`; repeated here for the
+	// standalone `agentlab platform` entry point.
+	if err := ensureHelmSupportsPlatform(); err != nil {
+		return err
+	}
+
 	// A cluster still running the old meta-package has Flux HelmReleases under
 	// the same Helm release name; upgrading across that boundary races
 	// helm-controller uninstalls against this install. Start clean instead.
@@ -172,15 +178,18 @@ func platformUp(cfg *config.Config, chartReady <-chan error) error {
 	// workloads now. The MCPServer/Workflow CRDs ship in the muster subchart's
 	// crds/ dir, which Helm applies before the manifests on first install.
 	// The post-renderer is this very binary (see PostRender): hostNetwork,
-	// the DCR chart-bug workaround, HTTPRoute strip.
-	self, err := os.Executable()
+	// the DCR chart-bug workaround, HTTPRoute strip, kagent-ui nodePort pin.
+	// Helm 4 accepts only plugin-type post-renderers, so the binary is wrapped
+	// in a generated plugin (see helmplugin.go) that HELM_PLUGINS points at.
+	pluginsDir, err := ensurePostRenderPlugin()
 	if err != nil {
 		return err
 	}
-	if err := runQuiet("helm", "upgrade", "--install", "agent-platform", chartDir,
+	if err := runQuietEnv([]string{"HELM_PLUGINS=" + pluginsDir},
+		"helm", "upgrade", "--install", "agent-platform", chartDir,
 		"-n", platformNamespace,
 		"-f", StateDir+"/agent-platform-values.yaml",
-		"--post-renderer", self, "--post-renderer-args", "post-render",
+		"--post-renderer", postRenderPluginName,
 		"--wait", "--timeout", "10m"); err != nil {
 		return err
 	}

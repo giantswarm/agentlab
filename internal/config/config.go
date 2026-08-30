@@ -154,7 +154,7 @@ func Default() *Config {
 			MusterPort:           8090,
 			MCPKubernetesVersion: "1.0.9",
 			APSRepo:              "https://github.com/giantswarm/agent-platform-standalone",
-			APSRef:               "672e08cb67cb210cdcc3bb9c5d11f78a42e92003", // PR #11 head (feat/curate-generator)
+			APSRef:               "4976adeecd118e27c52fc4402cd047f73616c657", // feat/curate-generator head: curated against agent-platform 3.2.2 (PR #24), Helm-4-installable
 		},
 		Backstage: Backstage{
 			Enabled: false,

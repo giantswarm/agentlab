@@ -120,8 +120,9 @@ The muster chart exposes the key in values.yaml, values.schema.json, README
 and unit tests, but `templates/configmap.yaml` never renders it, so the value
 is silently dropped and Claude Code's DCR registration dies with
 "Registration requires authentication". **Verified still broken in muster
-chart 5.6.2** (latest stable as of 2026-08-27; templates are byte-identical to
-5.5.6 — only Chart.yaml differs). Neither alternative gate can work for a
+chart 5.7.1** (the BOM pin of the 3.2.2 curation, checked 2026-08-30: the
+oauth server block in `templates/configmap.yaml` renders every neighbouring
+key but not this one). Neither alternative gate can work for a
 public loopback client (no token, random port, http/https stripped from
 allowed schemes by mcp-oauth validation).
 **Unblocks:** giantswarm/muster — render the key in
