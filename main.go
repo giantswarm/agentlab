@@ -103,6 +103,17 @@ func labCmd(use, short string, run func(*config.Config) error) *cobra.Command {
 // interactive form on a terminal, and otherwise refuses with a pointer to
 // `agentlab configure --defaults`.
 func loadConfig() (*config.Config, error) {
+	cfg, err := loadOrCreateConfig()
+	if err != nil {
+		return nil, err
+	}
+	// The lab's HTTP clients dial *.<domain> on loopback (the kind port
+	// mappings) so checks never flake on external DNS; see lab.SetDomain.
+	lab.SetDomain(cfg.Platform.Domain)
+	return cfg, nil
+}
+
+func loadOrCreateConfig() (*config.Config, error) {
 	cfg, err := config.Load()
 	if err == nil {
 		return cfg, nil
