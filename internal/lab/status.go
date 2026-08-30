@@ -14,6 +14,7 @@ import (
 // configuration" from "down".
 type Status struct {
 	CertsPresent      bool
+	CATrusted         bool // the lab CA is in the system trust store (`agentlab trust`)
 	ClusterUp         bool
 	DexUp             bool
 	MusterUp          bool
@@ -37,6 +38,11 @@ func Probe(cfg *config.Config) Status {
 	wg.Go(func() {
 		s.ClusterUp = kindClusterExists(cfg.ClusterName)
 	})
+	if s.CertsPresent {
+		wg.Go(func() {
+			s.CATrusted = SystemTrusted()
+		})
+	}
 	// No certs yet means Dex cannot be serving its cert either; skip the HTTP
 	// probes instead of failing them slowly.
 	if client, err := labHTTPClient(2 * time.Second); err == nil {

@@ -37,15 +37,19 @@ export ANTHROPIC_API_KEY=sk-ant-...   # optional: powers the agents + Backstage 
 ./agentlab platform-test   # headless proof: Dex -> muster -> mcp-kubernetes -> apiserver
 ```
 
-Then point Claude Code at the platform (`.mcp.json` in this repo already
-does). The public URL runs through the agentgateway edge, which serves a
-lab-CA certificate, so Node must be told to trust it:
+Then trust the lab CA once and point Claude Code at the platform (`.mcp.json`
+in this repo already does the latter):
 
 ```bash
-export NODE_EXTRA_CA_CERTS=$PWD/certs/ca.crt
+./agentlab trust             # once per machine: green locks everywhere (one sudo prompt)
+export NODE_USE_SYSTEM_CA=1  # Node >= 22.15 (older Node: export NODE_EXTRA_CA_CERTS=$PWD/certs/ca.crt)
 claude mcp add --transport http muster https://muster.127.0.0.1.nip.io/mcp
 # in Claude Code:  /mcp  ->  authenticate  ->  Dex login page  ->  done
 ```
+
+The trust step is optional — see [TLS: one lab CA, trusted
+explicitly](#tls-one-lab-ca-trusted-explicitly) for what it does, how to
+revert it (`agentlab untrust`), and the untrusted fallback.
 
 `agentlab configure --defaults` skips the form and writes the canonical lab:
 the **agent platform on** (it is what the lab exists to test) behind the
@@ -65,6 +69,96 @@ kubectl auth whoami
 ```
 
 Tear down with `./agentlab down`.
+
+## TLS: one lab CA, trusted explicitly
+
+Everything the lab serves over TLS — the agentgateway edge
+(`*.127.0.0.1.nip.io`) and the bundled Dex (`https://localhost:32000/dex`) —
+chains to a **lab CA** that `agentlab up` mints per machine into `certs/`
+(key 0600, gitignored, never leaves the machine). Every in-cluster consumer
+trusts it automatically (muster's trust pool, Backstage, the apiserver's OIDC
+flags). Your browser and your Node don't, until you say so:
+
+```bash
+./agentlab trust      # one sudo prompt; ./agentlab untrust reverts it
+```
+
+`trust` installs `certs/ca.crt` into the system trust store (Linux
+`update-ca-certificates`/`update-ca-trust`, the macOS system keychain, the
+Windows root store — the same mechanism as mkcert, via smallstep/truststore)
+and, when the NSS `certutil` tool is installed, into the Firefox/Chromium NSS
+profiles. Every lab URL then gets a green lock, the Dex login included.
+Trust changes are always explicit: `up` only *probes* and points here, `down`
+never touches a trust store, and `untrust` removes exactly the lab CA.
+
+The CA you are trusting is deliberately narrow:
+
+- **X.509 name constraints** pin it to the lab's own names (`platform.domain`,
+  `localhost`, the Dex in-cluster names) and to `127.0.0.0/8`, so a leaked CA
+  key cannot sign for the web at large. (Non-critical for old-verifier
+  compatibility; Go, OpenSSL, Chrome, Firefox and macOS enforce them anyway.)
+- **Leafs live 825 days** — Apple's cap: macOS rejects longer-lived TLS server
+  certs *even under a user-trusted root* — and re-mint automatically from the
+  unchanged CA, so a leaf rotation never repeats the trust step.
+- Changing `platform.domain` **re-mints the CA** (the constraints pin the
+  domain). `agentlab up`/`certs` say so loudly: run `agentlab trust` again —
+  it also sweeps the replaced CA out of the stores — and recreate a running
+  cluster (`agentlab down && agentlab up`), whose apiserver pinned the old CA
+  at boot.
+
+Skipping the trust step keeps the old behavior: browser warnings once per
+hostname, and `export NODE_EXTRA_CA_CERTS=$PWD/certs/ca.crt` for Node
+clients. The headless `*-test` commands trust `certs/ca.crt` directly and
+never need any of this.
+
+### Node and Claude Code
+
+With the CA in the system store, Node **>= 22.15** picks it up with one env
+var — the per-shell `NODE_EXTRA_CA_CERTS` export is gone:
+
+```bash
+export NODE_USE_SYSTEM_CA=1
+claude mcp add --transport http muster https://muster.127.0.0.1.nip.io/mcp
+```
+
+Older Node keeps needing `NODE_EXTRA_CA_CERTS` (it ignores system stores
+entirely); the `agentlab up` output prints the right line for the Node it
+detects.
+
+### Known gaps
+
+- **Firefox without `certutil`**: Firefox reads its own NSS database, not the
+  system store. `agentlab trust` covers it only when NSS tools are installed
+  (`apt install libnss3-tools`, `dnf install nss-tools`, `pacman -S nss`,
+  `brew install nss` — then re-run `agentlab trust`). Alternative: set
+  `security.enterprise_roots.enabled` to `true` in `about:config`, which
+  makes Firefox honor the system store.
+- **WSL2**: the browser lives on the Windows side, which has its own trust
+  store. `agentlab trust` inside WSL covers curl/Node/Claude Code there;
+  import `certs/ca.crt` on the Windows side manually (an admin
+  `certutil.exe -addstore root ca.crt`, or certmgr.msc) for the browser.
+
+### Bring your own certificate
+
+If you own a domain you can skip lab-CA trust for the edge entirely: point a
+wildcard record (`*.lab.example.com` → 127.0.0.1) at loopback, mint a real
+wildcard cert with whatever ACME tooling you already run (certbot, lego,
+step, cert-manager — DNS-01, since a laptop lab is not publicly reachable),
+and hand the pair to the lab:
+
+```yaml
+platform:
+  domain: lab.example.com
+  tls:
+    certFile: /path/to/fullchain.pem
+    keyFile: /path/to/privkey.pem
+```
+
+The edge then serves your certificate instead of a minted wildcard (renewals:
+re-run `agentlab platform` after the files change). Caveat: the Dex login
+page still serves the lab-CA cert — the issuer cannot move under your domain
+yet ([#20](https://github.com/giantswarm/agentplatform-kind/issues/20)) — so
+the login hop keeps warning until you `agentlab trust`.
 
 ## The dashboard
 
@@ -262,11 +356,14 @@ a slower first boot, not a failure.
 Sign In takes you to the same Dex login page, and you come back as a real
 Backstage identity with the groups from the token.
 
-The first click lands on a browser TLS warning: the edge and Dex serve certs
-signed by the lab CA, which the browser does not trust (Backstage itself
-trusts it via `NODE_EXTRA_CA_CERTS`, but that only covers the server-to-server
-hops). Accept it once per hostname and the login proceeds normally.
-`agentlab backstage-test` sidesteps this entirely by trusting `certs/ca.crt`.
+The edge and Dex serve certs signed by the lab CA; after a one-time
+`agentlab trust` the whole flow — Backstage, the Dex login redirect and back —
+is green locks (see [TLS: one lab CA, trusted
+explicitly](#tls-one-lab-ca-trusted-explicitly)). Without it, the first click
+lands on a browser TLS warning once per hostname (Backstage itself always
+trusts the CA server-side, via the mounted `dex-ca` Secret).
+`agentlab backstage-test` sidesteps all of this by trusting `certs/ca.crt`
+directly.
 
 What the lab adds on top of the chart's own app-config
 (`agent-platform-backstage-app-config`):
@@ -455,9 +552,10 @@ port is a form question, constrained to the NodePort range 30000-32767.)
 
 Everything else follows from that:
 
-- `agentlab up` mints a CA and a server cert (crypto/x509) whose SAN carries both
-  `IP:127.0.0.1` and `DNS:localhost`. The issuer uses the **name**, not the IP —
-  see [Why `localhost` and not `127.0.0.1`](#why-localhost-and-not-127001).
+- `agentlab up` mints the name-constrained lab CA and a Dex server cert
+  (crypto/x509) whose SAN carries both `IP:127.0.0.1` and `DNS:localhost`. The
+  issuer uses the **name**, not the IP — see
+  [Why `localhost` and not `127.0.0.1`](#why-localhost-and-not-127001).
 - The rendered kind config bind-mounts `certs/` into `/etc/kubernetes/pki/dex`
   on the node. kubeadm already mounts `/etc/kubernetes/pki` into the apiserver
   pod, so a subdirectory of it is the one place the CA is visible without extra
@@ -605,7 +703,8 @@ internal/config/               agentlab.yaml schema, defaults, validation
 internal/forms/                the interactive configuration forms (huh)
 internal/tui/                  the dashboard (bubbletea)
 internal/lab/                  everything operational:
-  certs.go                       CA + server cert (IP:127.0.0.1 + DNS:localhost SAN)
+  certs.go                       the name-constrained lab CA + 825-day leaf certs
+  trust.go                       agentlab trust/untrust (system + NSS stores, via smallstep/truststore)
   up.go down.go                  lifecycle; checksum-stamped Dex apply
   test.go                        RBAC assertions for every configured user
   login.go browser.go            password grant / authorization-code flow

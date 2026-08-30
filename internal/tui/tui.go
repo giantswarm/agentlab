@@ -498,6 +498,13 @@ func (m model) topView() string {
 		files += styleSubtle.Render("   (KUBECONFIG=$PWD/kubeconfig.oidc)")
 	}
 	b.WriteString(files + "\n")
+	if m.status.CertsPresent {
+		trust := "  " + fileMark("lab CA trusted", m.status.CATrusted)
+		if !m.status.CATrusted {
+			trust += styleSubtle.Render("   (agentlab trust -> green locks, no cert exports)")
+		}
+		b.WriteString(trust + "\n")
+	}
 	if m.status.MusterUp {
 		b.WriteString(styleSubtle.Render("  Claude Code: claude mcp add --transport http muster "+
 			m.cfg.MusterBaseURL()+"/mcp") + "\n")
