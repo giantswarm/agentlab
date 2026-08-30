@@ -16,6 +16,11 @@ import (
 
 const platformNamespace = "agent-platform"
 
+// platformRelease is the umbrella's Helm release name. Also the name of the
+// muster installation Backstage surfaces: the chart's app-config derives its
+// gs/kubernetes/muster installation entries from {{ .Release.Name }}.
+const platformRelease = "agent-platform"
+
 // Component names, shared by the log targets, the cert SANs, the deploy
 // steps and the post-renderer's resource matching.
 const (
@@ -295,7 +300,7 @@ func platformUp(cfg *config.Config, chartReady <-chan error) error {
 		return err
 	}
 	if err := runQuietEnv([]string{"HELM_PLUGINS=" + pluginsDir},
-		"helm", "upgrade", "--install", "agent-platform", chartDir,
+		"helm", "upgrade", "--install", platformRelease, chartDir,
 		"-n", platformNamespace,
 		"-f", StateDir+"/agent-platform-values.yaml",
 		"--post-renderer", postRenderPluginName,
@@ -447,7 +452,7 @@ Platform is up.
 // ADK runtime tags kagent builds from its ConfigMap) are covered by
 // healADKImages and the snapshot manifest.
 func platformImages(cfg *config.Config, chartDir string) ([]string, error) {
-	umbrella, err := outputQuiet("helm", "template", "agent-platform", chartDir,
+	umbrella, err := outputQuiet("helm", "template", platformRelease, chartDir,
 		"-n", platformNamespace, "-f", StateDir+"/agent-platform-values.yaml")
 	if err != nil {
 		return nil, fmt.Errorf("templating agent-platform-standalone: %w", err)

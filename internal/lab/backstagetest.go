@@ -180,7 +180,9 @@ func backstageSignIn(cfg *config.Config, user *config.User) error {
 		return resp.StatusCode, payload, nil
 	}
 
-	installation := "?installation=" + cfg.ClusterName
+	// The umbrella's app-config names the muster installation after the Helm
+	// release, not the kind cluster.
+	installation := "?installation=" + platformRelease
 
 	status, payload, err := muster("/servers" + installation)
 	if err != nil {
