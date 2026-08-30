@@ -29,12 +29,14 @@ func Up(cfg *config.Config) error {
 
 	// Pure network work that needs no cluster starts first, so it overlaps
 	// with cluster creation: vendoring the platform chart, and pulling the
-	// last boot's images into the host docker cache (which survives `down`).
+	// Dex image plus the last boot's images into the host docker cache
+	// (which survives `down`).
 	var chartReady <-chan error
 	if cfg.Platform.Enabled {
 		chartReady = vendorPlatformChart(cfg)
 	}
-	pulled := pullLabImages()
+	pulled := pullLabImages(cfg)
+	dexReady := pullDexImage(cfg)
 
 	_, kindCfgPath, err := renderManifest(cfg, "kind-config.yaml.tmpl")
 	if err != nil {
@@ -73,6 +75,7 @@ func Up(cfg *config.Config) error {
 	}); err != nil {
 		return err
 	}
+	sideloadDexImage(cfg, dexReady)
 	if err := ApplyDex(cfg); err != nil {
 		return err
 	}

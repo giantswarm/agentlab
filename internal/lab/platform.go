@@ -40,6 +40,11 @@ const apsDir = ".vendor/agent-platform-standalone"
 // it is vendored from git at a pinned SHA and installed from the local path.
 // Once released: swap the vendor step for the OCI ref.
 func PlatformUp(cfg *config.Config) error {
+	// The standalone entry point skips Up's overlapped preload, so join a
+	// synchronous one here: on a live cluster the node filter makes it a
+	// no-op, and after a half-failed boot it heals the missing side-loads
+	// before the installs start their rollout waits.
+	reportPreload(loadLabImages(cfg, pullLabImages(cfg)))
 	return platformUp(cfg, nil)
 }
 
@@ -176,6 +181,26 @@ func platformUp(cfg *config.Config, chartReady <-chan error) error {
 	}
 	if _, _, err := renderManifest(cfg, "demo-workflow.yaml.tmpl"); err != nil {
 		return err
+	}
+
+	// Every platform image goes host cache -> node, never kubelet -> network:
+	// the host cache survives `agentlab down`, so even when this very boot
+	// fails later, the next one starts from warm images. Derived from the
+	// charts (not the snapshot manifest) so a first boot and version bumps
+	// are covered too. Best-effort: anything this misses is pulled in-node
+	// under the helm --wait timeouts, exactly as before.
+	step("Side-loading the platform images (the host cache survives `agentlab down`)")
+	if imgs, err := platformImages(cfg, chartDir); err != nil {
+		note("cannot derive the platform images from the charts (%v); the node pulls anything missing", err)
+	} else {
+		switch res := sideloadImages(cfg, hostPullImages(imgs)); {
+		case res.err != nil:
+			note("side-loading failed (%v); the node pulls anything missing", res.err)
+		case res.n > 0:
+			note("side-loaded %d of %d platform images (%s)", res.n, len(imgs), res.d)
+		default:
+			note("all %d platform images are already on the node", len(imgs))
+		}
 	}
 
 	step("Deploying mcp-kubernetes (%s)", cfg.Platform.MCPKubernetesVersion)
@@ -322,6 +347,32 @@ Platform is up.
 	// boot side-loads instead of pulling.
 	snapshotPreloadImages(cfg)
 	return nil
+}
+
+// platformImages derives the platform's image refs from the charts exactly
+// as they are about to be installed: helm-template the vendored umbrella
+// chart and the mcp-kubernetes chart with the rendered lab values, then
+// scrape the image fields. The runtime-composed images this cannot see (the
+// ADK runtime tags kagent builds from its ConfigMap) are covered by
+// healADKImages and the snapshot manifest.
+func platformImages(cfg *config.Config, chartDir string) ([]string, error) {
+	umbrella, err := outputQuiet("helm", "template", "agent-platform", chartDir,
+		"-n", platformNamespace, "-f", StateDir+"/agent-platform-values.yaml")
+	if err != nil {
+		return nil, fmt.Errorf("templating agent-platform-standalone: %w", err)
+	}
+	mcp, err := outputQuiet("helm", "template", "mcp-kubernetes",
+		"oci://gsoci.azurecr.io/charts/giantswarm/mcp-kubernetes",
+		"--version", cfg.Platform.MCPKubernetesVersion,
+		"-n", platformNamespace, "-f", StateDir+"/mcp-kubernetes-values.yaml")
+	if err != nil {
+		return nil, fmt.Errorf("templating mcp-kubernetes: %w", err)
+	}
+	imgs := scrapeImages(umbrella + "\n" + mcp)
+	if len(imgs) == 0 {
+		return nil, fmt.Errorf("no image fields found in the rendered charts")
+	}
+	return imgs, nil
 }
 
 // ensureMusterValidatesTokens proves the auth path end to end (Dex password
