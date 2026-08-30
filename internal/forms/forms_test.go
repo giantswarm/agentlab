@@ -12,13 +12,13 @@ const keyDelay = 30 * time.Millisecond
 
 // TestRunTUIDrive drives the real TUI form (not accessible mode) with a
 // scripted keystroke stream: accept the cluster defaults, keep the default
-// users, add Backstage to the preselected platform, and accept their defaults.
+// users, keep the preselected components (platform AND Backstage — the
+// canonical lab), and accept their defaults.
 func TestRunTUIDrive(t *testing.T) {
 	testInput = newPacedReader(keyDelay,
 		"\r", "\r", "\r", // group 1: cluster name, dex port, dex image
-		"\r",          // group 2: customize users? -> keep as is
-		"\x1b[B", " ", // group 3: platform is preselected; arrow down, toggle backstage
-		"\r",                               // submit component selection
+		"\r", // group 2: customize users? -> keep as is
+		"\r", // group 3: platform + backstage preselected; submit as is
 		"\r", "\r", "\r", "\r", "\r", "\r", // platform group: muster port, mcp version, aps ref, agents confirm, agents ui port, claude model
 		"\r", "\r", // backstage group: port, image
 	)
@@ -55,9 +55,11 @@ func TestRunTUIDriveEdit(t *testing.T) {
 	testInput = newPacedReader(keyDelay,
 		"\x15", "renamed", "\r", // clear + retype cluster name
 		"\x15", "31000", "\r", // clear + retype dex port
-		"\r",      // dex image: keep
-		"\r",      // users: keep as is
-		" ", "\r", // components: deselect the preselected platform -> none
+		"\r", // dex image: keep
+		"\r", // users: keep as is
+		// components: deselect the preselected platform, arrow down,
+		// deselect the preselected backstage -> none
+		" ", "\x1b[B", " ", "\r",
 	)
 	testOutput = io.Discard
 	defer func() { testInput, testOutput = nil, nil }()
