@@ -37,17 +37,21 @@ export ANTHROPIC_API_KEY=sk-ant-...   # optional: powers the agents + Backstage 
 ./agentlab platform-test   # headless proof: Dex -> muster -> mcp-kubernetes -> apiserver
 ```
 
-Then point Claude Code at the platform (`.mcp.json` in this repo already does):
+Then point Claude Code at the platform (`.mcp.json` in this repo already
+does). The public URL runs through the agentgateway edge, which serves a
+lab-CA certificate, so Node must be told to trust it:
 
 ```bash
-claude mcp add --transport http muster http://localhost:8090/mcp
+export NODE_EXTRA_CA_CERTS=$PWD/certs/ca.crt
+claude mcp add --transport http muster https://muster.127.0.0.1.nip.io/mcp
 # in Claude Code:  /mcp  ->  authenticate  ->  Dex login page  ->  done
 ```
 
 `agentlab configure --defaults` skips the form and writes the canonical lab:
-the **agent platform on** (it is what the lab exists to test), three users,
-Dex on 32000, Backstage off. `--platform=false` gives a bare kind+Dex OIDC
-sandbox; `--backstage` adds the portal. On a plain terminal or screen reader,
+the **agent platform on** (it is what the lab exists to test) behind the
+agentgateway edge, Backstage on, three users, Dex on 32000.
+`--platform=false` gives a bare kind+Dex OIDC sandbox;
+`--backstage=false` skips the portal. On a plain terminal or screen reader,
 `agentlab configure --accessible` runs the form as one prompt per question.
 
 To exercise the identity itself:
@@ -110,10 +114,10 @@ cluster is `kubectl -n agent-platform port-forward svc/muster 8090:8090`.
 ### The request path
 
 ```
-Claude Code ──http://localhost:8090/mcp──> muster ──> mcp-kubernetes ──> kube-apiserver
-                     │                       │
-                     │ 401 + WWW-Authenticate│ OIDC discovery + token exchange
-                     └──── browser ──────────┴──> https://localhost:32000/dex
+Claude Code ──https://muster.127.0.0.1.nip.io/mcp──> agentgateway ──> muster ──> mcp-kubernetes ──> kube-apiserver
+                     │                                 (edge, TLS)     │
+                     │ 401 + WWW-Authenticate                          │ OIDC discovery + token exchange
+                     └──── browser ────────────────────────────────────┴──> https://localhost:32000/dex
 ```
 
 muster is the OAuth **server** towards Claude Code (DCR, `/oauth/authorize`,
@@ -190,10 +194,8 @@ same one-URL trick, just spelled with a name.
 
 | What | Why |
 |---|---|
-| `ingress.mode: muster-direct` (+ `components.agentgateway.enabled: false`, the default) | muster serves `/mcp` itself. The `agentgateway-muster` topology needs the agentgateway controller and a `GatewayClass`. |
-| `ingress.parentRefs` set to a placeholder, rendered `HTTPRoute` stripped | The chart hard-fails on empty `parentRefs` in **all** modes — even `muster-direct` assumes a public Gateway. This lab has no Gateway at all (hostNetwork + kind port mapping), so the values carry a placeholder to pass the guard and `agentlab post-render` strips the route. Also spares the lab the Gateway API CRDs, its only would-be consumer. |
-| `agent-platform-mcps.agentgateway.enabled: false` | The umbrella defaults it to **true**; left on it renders `AgentgatewayBackend` CRs whose CRD is not installed and the release fails. |
-| `components.dicebear.enabled: false` | On by default; the avatar service is only reachable through the agentgateway edge this lab does not run. |
+| `gatewayApi.gateway.create: true` — the chart-owned agentgateway Gateway **is** the public edge | A real MC fronts the platform with the cluster's shared Envoy Gateway; kind has none, so the data-plane Gateway itself terminates TLS for `*.127.0.0.1.nip.io` with the lab's wildcard cert (the chart's own standalone/kind mode, `ingress.mode: agentgateway-muster`). The Gateway API CRDs are embedded in the binary and applied before the install; a lab-owned NodePort Service pins the edge onto the kind port mapping (HACKS.md U10), and a CoreDNS rewrite points `*.127.0.0.1.nip.io` at it inside pods (outside, nip.io answers 127.0.0.1 by itself). |
+| One Dex client, `agent-platform` | The chart's `global.identity` convention: muster and Backstage share the client, so a Backstage-forwarded token natively carries an audience muster trusts. The extra `dex-k8s-authenticator` client exists only as the cross-client audience target Backstage's GS auth provider requests by default. |
 | `networkPolicy.enabled: false`, `kyvernoPolicies.enabled: false` | The umbrella's own policy objects. No Cilium and no Kyverno in kind, so both would render CRs whose API groups the cluster does not serve. |
 | `valkey.valkey.metrics.podMonitor.enabled: false`, `muster…serviceMonitor.enabled: false`, `muster…prometheusRule.enabled: false` | No Prometheus Operator, so `PodMonitor` / `ServiceMonitor` / `PrometheusRule` have no CRD. |
 | `muster.rbac.{mcpServerEditor,workflowEditor}.subjects` → `oidc:platform-admins` | The umbrella binds muster's editor Roles to Giant Swarm's admin groups, which do not exist here. Rebound to the lab's own admin group (`--oidc-groups-prefix=oidc:`, same spelling as the lab RBAC). Lists replace, so the GS groups are dropped. |

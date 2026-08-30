@@ -30,10 +30,20 @@ spec:
   containers:
     - image: gsoci.azurecr.io/giantswarm/muster:5.7.2
     - image: gsoci.azurecr.io/giantswarm/valkey@sha256:abcdef0123456789
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayParameters
+spec:
+  # the data-plane image, structured — the controller composes the ref
+  image:
+    registry: gsoci.azurecr.io
+    repository: giantswarm/agentgateway
+    tag: v1.4.1
 `
 	got := scrapeImages(rendered)
 	want := []string{
 		"docker.io/library/postgres:18.3-alpine",
+		"gsoci.azurecr.io/giantswarm/agentgateway:v1.4.1",
 		"gsoci.azurecr.io/giantswarm/mcp-kubernetes:1.0.9",
 		"gsoci.azurecr.io/giantswarm/muster:5.7.2",
 		"gsoci.azurecr.io/giantswarm/valkey@sha256:abcdef0123456789",
