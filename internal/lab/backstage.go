@@ -58,7 +58,7 @@ func BackstageUp(cfg *config.Config) error {
 		return err
 	}
 	if err := ensureSecretFromFiles("backstage", "dex-ca", map[string]string{
-		"ca.crt": "certs/ca.crt",
+		"ca.crt": caCertPath,
 	}); err != nil {
 		return err
 	}

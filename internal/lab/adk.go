@@ -145,7 +145,7 @@ func registryTags(host, repo string) ([]string, error) {
 	}
 	if resp.StatusCode == http.StatusUnauthorized {
 		challenge := resp.Header.Get("WWW-Authenticate")
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		params := map[string]string{}
 		for _, m := range authParamRe.FindAllStringSubmatch(challenge, -1) {
 			params[m[1]] = m[2]
@@ -163,7 +163,7 @@ func registryTags(host, repo string) ([]string, error) {
 			AccessToken string `json:"access_token"`
 		}
 		err = json.NewDecoder(tokResp.Body).Decode(&tok)
-		tokResp.Body.Close()
+		_ = tokResp.Body.Close()
 		if err != nil {
 			return nil, fmt.Errorf("registry token from %s: %w", realm, err)
 		}
@@ -180,7 +180,7 @@ func registryTags(host, repo string) ([]string, error) {
 			return nil, err
 		}
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("listing %s tags: %s", repo, resp.Status)
 	}

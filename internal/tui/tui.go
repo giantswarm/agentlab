@@ -30,6 +30,9 @@ import (
 const (
 	probeInterval  = 3 * time.Second
 	maxOutputLines = 5000
+	// bubbletea's names for the keys every submenu handles.
+	keyCtrlC = "ctrl+c"
+	keyEsc   = "esc"
 )
 
 // Run starts the dashboard and blocks until the user quits.
@@ -154,7 +157,7 @@ func startAction(label string, args ...string) tea.Cmd {
 			return actionFailedMsg{err}
 		}
 		ctx, cancel := context.WithCancel(context.Background())
-		cmd := exec.CommandContext(ctx, self, args...)
+		cmd := exec.CommandContext(ctx, self, args...) // #nosec G204 -- re-invokes this same binary (os.Executable) with fixed args
 		// The subprocess spawns children of its own (kubectl logs -f, helm,
 		// kind). Killing just the direct child would leave those holding the
 		// output pipe — and cmd.Wait blocked on it forever — so each action
@@ -184,7 +187,7 @@ func startAction(label string, args ...string) tea.Cmd {
 			// pw; closing it then EOFs the scanner, so the done event follows
 			// the last line.
 			waitErr <- cmd.Wait()
-			pw.Close()
+			_ = pw.Close()
 		}()
 		ch := make(chan actionEvent, 64)
 		go func() {
@@ -280,7 +283,7 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "y", "enter":
 			m.mode = modeMain
 			return m.launch("down", "down")
-		case "n", "esc", "q", "ctrl+c":
+		case "n", keyEsc, "q", keyCtrlC:
 			m.mode = modeMain
 		}
 		return m, nil
@@ -308,7 +311,7 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.flash = "backstage is disabled in " + config.File
 			}
-		case "esc", "q", "ctrl+c":
+		case keyEsc, "q", keyCtrlC:
 		default:
 			m.mode = modeOpen // unknown key: stay in the submenu
 		}
@@ -323,7 +326,7 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.launch("logs muster", "logs", "muster")
 		case "b":
 			return m.launch("logs backstage", "logs", "backstage")
-		case "esc", "q", "ctrl+c":
+		case keyEsc, "q", keyCtrlC:
 		default:
 			m.mode = modeLogs
 		}
@@ -331,7 +334,7 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch key {
-	case "ctrl+c":
+	case keyCtrlC:
 		if m.cancel != nil {
 			m.cancel()
 		}

@@ -20,7 +20,17 @@ const File = "agentlab.yaml"
 
 // The three lab groups are a fixed vocabulary: RBAC binds exactly these to
 // cluster-admin / edit-in-demo / view (see the rbac template).
-var Groups = []string{"platform-admins", "developers", "viewers"}
+const (
+	groupPlatformAdmins = "platform-admins"
+	groupDevelopers     = "developers"
+	groupViewers        = "viewers"
+)
+
+var Groups = []string{groupPlatformAdmins, groupDevelopers, groupViewers}
+
+// defaultPassword is the throwaway password every default lab user starts
+// with; like everything else in the lab's identity, it guards nothing real.
+const defaultPassword = "password"
 
 // Static OAuth client IDs and secrets, paired per client. The IDs also appear
 // in the templates (Dex staticClients and each consumer's own config), which
@@ -28,11 +38,11 @@ var Groups = []string{"platform-admins", "developers", "viewers"}
 // by design; nothing here guards anything real.
 const (
 	KubernetesClientID     = "kubernetes"
-	KubernetesClientSecret = "kubernetes-lab-secret"
+	KubernetesClientSecret = "kubernetes-lab-secret" // #nosec G101 -- static throwaway lab credential, by design
 	BackstageClientID      = "backstage"
 	BackstageClientSecret  = "backstage-lab-secret"
 	MusterClientID         = "muster"
-	MusterClientSecret     = "muster-lab-secret"
+	MusterClientSecret     = "muster-lab-secret" // #nosec G101 -- static throwaway lab credential, by design
 )
 
 // MusterNodePort is the port muster's aggregator binds on the kind node
@@ -130,12 +140,12 @@ func Default() *Config {
 		// pinned Backstage build's thinking-mode handling is known to cover.
 		AIModel: "claude-sonnet-4-6",
 		Users: []User{
-			{Email: "admin@lab.local", Username: "admin", Name: "Lab Admin", Password: "password",
-				Groups: []string{"platform-admins", "developers"}},
-			{Email: "dev@lab.local", Username: "dev", Name: "Lab Developer", Password: "password",
-				Groups: []string{"developers"}},
-			{Email: "viewer@lab.local", Username: "viewer", Name: "Lab Viewer", Password: "password",
-				Groups: []string{"viewers"}},
+			{Email: "admin@lab.local", Username: "admin", Name: "Lab Admin", Password: defaultPassword,
+				Groups: []string{groupPlatformAdmins, groupDevelopers}},
+			{Email: "dev@lab.local", Username: "dev", Name: "Lab Developer", Password: defaultPassword,
+				Groups: []string{groupDevelopers}},
+			{Email: "viewer@lab.local", Username: "viewer", Name: "Lab Viewer", Password: defaultPassword,
+				Groups: []string{groupViewers}},
 		},
 		Platform: Platform{
 			Enabled:              true,
@@ -197,7 +207,7 @@ func (c *Config) write() error {
 	header := []byte("# agentlab lab configuration. Regenerate with `agentlab configure`.\n" +
 		"# Passwords are lab-only throwaway credentials; the hash is cached so\n" +
 		"# rendered manifests stay byte-identical across runs (no spurious pod rolls).\n")
-	return os.WriteFile(File, append(header, out...), 0o644)
+	return os.WriteFile(File, append(header, out...), 0o600)
 }
 
 // EnsureHashes fills in User.PasswordHash wherever it is missing or no longer
@@ -301,7 +311,7 @@ func (c *Config) Validate() error {
 // verification loop and the smoke tests default to.
 func (c *Config) AdminUser() *User {
 	for i := range c.Users {
-		if c.Users[i].HasGroup("platform-admins") {
+		if c.Users[i].HasGroup(groupPlatformAdmins) {
 			return &c.Users[i]
 		}
 	}

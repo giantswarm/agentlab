@@ -9,6 +9,15 @@ import (
 	"agentlab/internal/config"
 )
 
+const (
+	// nameKey is the "name" field key, shared by the kubeconfig maps and the
+	// manifest/JSON lookups elsewhere in the package.
+	nameKey = "name"
+	// oidcEntryName names the token kubeconfig's user and context entries
+	// (and its current-context).
+	oidcEntryName = "oidc"
+)
+
 // kindCluster is the cluster entry of the kind kubeconfig, cached per process:
 // `kind get kubeconfig` spawns a subprocess and its output never changes
 // within a run, while Test and the up verification write several kubeconfigs.
@@ -55,17 +64,17 @@ func writeTokenKubeconfig(cfg *config.Config, token, outPath string) error {
 		"apiVersion": "v1",
 		"kind":       "Config",
 		"clusters": []map[string]any{
-			{"name": name, "cluster": cluster},
+			{nameKey: name, "cluster": cluster},
 		},
 		"users": []map[string]any{
-			{"name": "oidc", "user": map[string]any{"token": token}},
+			{nameKey: oidcEntryName, "user": map[string]any{"token": token}},
 		},
 		"contexts": []map[string]any{
-			{"name": "oidc", "context": map[string]any{
-				"cluster": name, "user": "oidc",
+			{nameKey: oidcEntryName, "context": map[string]any{
+				"cluster": name, "user": oidcEntryName,
 			}},
 		},
-		"current-context": "oidc",
+		"current-context": oidcEntryName,
 	}
 	data, err := yaml.Marshal(out)
 	if err != nil {
