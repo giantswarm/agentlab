@@ -116,13 +116,10 @@ muster:
           allowPrivateIPOIDC: true
         existingSecret: agent-platform-secrets
         # Lab only: lets Claude Code register itself over DCR without a
-        # pre-shared registration token. WORKAROUND (muster chart <= 5.7.1,
-        # still unrendered): the chart exposes this key in values.yaml,
-        # values.schema.json and its README, but templates/configmap.yaml never
-        # renders it — so the value set here is silently dropped. `agentlab
-        # post-render` re-adds it to the rendered config; this entry stays so
-        # the values file tells the truth and the workaround can be deleted
-        # once the chart renders it.
+        # pre-shared registration token (its loopback port is random, so no
+        # other registration gate can be opened for it). Rendered by the
+        # muster chart since 5.7.2 (muster#1118) — the post-render edit that
+        # used to force this key into the ConfigMap is retired.
         allowPublicClientRegistration: true
         # Lab only: accept a Dex id_token with aud=muster as a bearer token, so
         # the stack can be smoke-tested headlessly with the password grant.

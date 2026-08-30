@@ -1,7 +1,6 @@
 package lab
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -12,13 +11,17 @@ import (
 )
 
 // PostRender is the Helm post-renderer for the agent-platform-standalone
-// install (stdin: the full rendered release, stdout: the same with three
-// muster patches). Plain Helm has no values hook for any of these, so they
-// live here — the replacement for the Flux postRenderers the old
+// install (stdin: the full rendered release, stdout: the same with the muster
+// and kagent-ui patches). Plain Helm has no values hook for any of these, so
+// they live here — the replacement for the Flux postRenderers the old
 // agent-platform meta-package forwarded to helm-controller. Wired up through
 // a generated postrenderer/v1 plugin whose command is this very binary with
 // the `post-render` arg (Helm 4 accepts only plugin-type post-renderers; see
 // helmplugin.go).
+//
+// (The allowPublicClientRegistration ConfigMap edit that used to live here is
+// gone: the muster chart renders the key itself since 5.7.2, muster#1118 —
+// the value in agent-platform-values.yaml.tmpl is enough now.)
 //
 //  1. hostNetwork + dnsPolicy on the muster Deployment: muster must resolve
 //     the issuer URL to the Dex NodePort from inside the pod so it can share
@@ -29,27 +32,13 @@ import (
 //     new pod cannot start until the old one releases the port. Old pod goes
 //     down first.
 //
-//  3. allowPublicClientRegistration: WORKAROUND (muster chart <= 5.7.1, still
-//     unrendered as of the 3.2.2 curation). The chart exposes the key in
-//     values.yaml, values.schema.json and its README,
-//     but templates/configmap.yaml never renders it, so the value is silently
-//     dropped and Dynamic Client Registration stays gated. Claude Code
-//     registers as a PUBLIC client on a random loopback port, so neither
-//     `registrationToken` (it cannot send one),
-//     `trustedPublicRegistrationRedirectURIs` (the port is random) nor
-//     `trustedPublicRegistrationSchemes` (http/https are stripped by
-//     mcp-oauth's config validation on purpose) can gate it open. The key is
-//     edited into the rendered config surgically — everything else in the
-//     ConfigMap stays chart-rendered, so muster bumps via the chart need no
-//     hand-copying here. Delete this patch once the chart renders the key.
-//
-//  4. Drop the muster HTTPRoute. The chart hard-fails on empty
+//  3. Drop the muster HTTPRoute. The chart hard-fails on empty
 //     ingress.parentRefs in ALL modes (it assumes a public Gateway even for
 //     muster-direct), so the values carry a placeholder parentRef and the
 //     rendered route is stripped here: this lab has no Gateway, no Gateway API
 //     CRDs, and reaches muster through hostNetwork + the kind port mapping.
 //
-//  5. A fixed nodePort on the kagent-ui Service: the values set
+//  4. A fixed nodePort on the kagent-ui Service: the values set
 //     `ui.service.type: NodePort` (a chart value), but the chart's ui-service
 //     template renders no `nodePort` field, so Kubernetes would pick a random
 //     one — useless to kind's fixed extraPortMappings. Pinned to
@@ -81,11 +70,6 @@ func PostRender(in io.Reader, out io.Writer) error {
 		}
 		if kind == "Deployment" && name == componentMuster {
 			patchMusterDeployment(root)
-		}
-		if kind == "ConfigMap" && name == "muster-config" {
-			if err := patchMusterConfig(root); err != nil {
-				return err
-			}
 		}
 		if kind == "Service" && name == "kagent-ui" {
 			patchKagentUIService(root)
@@ -123,41 +107,6 @@ func patchKagentUIService(root *yaml.Node) {
 			setKey(p, "nodePort", intNode(config.KagentUINodePort))
 		}
 	}
-}
-
-func patchMusterConfig(root *yaml.Node) error {
-	data := mapValue(root, "data")
-	if data == nil {
-		return fmt.Errorf("muster-config ConfigMap has no data")
-	}
-	cfgNode := mapValue(data, "config.yaml")
-	if cfgNode == nil {
-		return fmt.Errorf("muster-config ConfigMap has no config.yaml")
-	}
-	// Decode the nested config as a node tree too, so key order and the rest
-	// of the chart-rendered content survive byte-for-byte in structure.
-	var inner yaml.Node
-	if err := yaml.Unmarshal([]byte(cfgNode.Value), &inner); err != nil {
-		return fmt.Errorf("parsing muster config.yaml: %w", err)
-	}
-	innerRoot := docRoot(&inner)
-	if innerRoot == nil {
-		return fmt.Errorf("muster config.yaml is empty")
-	}
-	server := ensureMap(ensureMap(ensureMap(innerRoot, "aggregator"), "oauth"), "server")
-	setKey(server, "allowPublicClientRegistration", boolNode(true))
-
-	var buf bytes.Buffer
-	ienc := yaml.NewEncoder(&buf)
-	ienc.SetIndent(2)
-	if err := ienc.Encode(&inner); err != nil {
-		return err
-	}
-	_ = ienc.Close()
-
-	cfgNode.SetString(buf.String())
-	cfgNode.Style = yaml.LiteralStyle
-	return nil
 }
 
 // --- yaml.Node plumbing -----------------------------------------------------
