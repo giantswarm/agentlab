@@ -24,6 +24,12 @@ const (
 	gatewayKeyPath  = "certs/gateway-tls.key"
 )
 
+// PEM block types.
+const (
+	pemTypeCert = "CERTIFICATE"
+	pemTypeKey  = "PRIVATE KEY"
+)
+
 // GenCerts mints a self-signed CA and a Dex server certificate under certs/.
 // The server cert carries both IP:127.0.0.1 and DNS:localhost in its SAN — the
 // issuer URL uses the *name* (muster rejects issuers whose host parses as a
@@ -91,10 +97,10 @@ func GenCerts(force bool) error {
 		pem  *pem.Block
 		mode os.FileMode
 	}{
-		{caCertPath, &pem.Block{Type: "CERTIFICATE", Bytes: caDER}, 0o644},
-		{"certs/ca.key", &pem.Block{Type: "PRIVATE KEY", Bytes: mustPKCS8(caKey)}, 0o600},
-		{tlsCertPath, &pem.Block{Type: "CERTIFICATE", Bytes: srvDER}, 0o644},
-		{"certs/tls.key", &pem.Block{Type: "PRIVATE KEY", Bytes: mustPKCS8(srvKey)}, 0o600},
+		{caCertPath, &pem.Block{Type: pemTypeCert, Bytes: caDER}, 0o644},
+		{"certs/ca.key", &pem.Block{Type: pemTypeKey, Bytes: mustPKCS8(caKey)}, 0o600},
+		{tlsCertPath, &pem.Block{Type: pemTypeCert, Bytes: srvDER}, 0o644},
+		{"certs/tls.key", &pem.Block{Type: pemTypeKey, Bytes: mustPKCS8(srvKey)}, 0o600},
 	}
 	for _, w := range writes {
 		if err := os.WriteFile(w.path, pem.EncodeToMemory(w.pem), w.mode); err != nil {
@@ -142,12 +148,12 @@ func ensureGatewayCert(domain string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(gatewayCertPath,
-		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o644); err != nil { // #nosec G306 -- certificates are public
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: pemTypeCert, Bytes: der})
+	if err := os.WriteFile(gatewayCertPath, certPEM, 0o644); err != nil { // #nosec G306 -- certificates are public
 		return err
 	}
-	if err := os.WriteFile(gatewayKeyPath,
-		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: mustPKCS8(srvKey)}), 0o600); err != nil {
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: pemTypeKey, Bytes: mustPKCS8(srvKey)})
+	if err := os.WriteFile(gatewayKeyPath, keyPEM, 0o600); err != nil {
 		return err
 	}
 	fmt.Printf("Generated %s (SAN: %s, %s; signed by the lab CA)\n", gatewayCertPath, wildcard, domain)
