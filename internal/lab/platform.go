@@ -52,7 +52,7 @@ func PlatformUp(cfg *config.Config) error {
 	// no-op, and after a half-failed boot it heals the missing side-loads
 	// before the installs start their rollout waits.
 	reportPreload(loadLabImages(cfg, pullLabImages(cfg)))
-	return platformUp(cfg, nil)
+	return platformUp(cfg, nil, "Platform is up.")
 }
 
 // vendorPlatformChart runs ensurePlatformChart in the background so the git
@@ -127,7 +127,11 @@ func ensurePlatformChart(cfg *config.Config) error {
 	return nil
 }
 
-func platformUp(cfg *config.Config, chartReady <-chan error) error {
+// platformUp installs and verifies the platform, then prints the boot's one
+// and only summary under the given header: `up` passes "Lab is up." so the
+// user reads a single "what to do next" block once everything is verified,
+// the standalone `agentlab platform` entry point passes "Platform is up.".
+func platformUp(cfg *config.Config, chartReady <-chan error, header string) error {
 	chartDir := filepath.Join(apsDir, "helm", "agent-platform-standalone")
 
 	// Also checked at the very top of `agentlab up`; repeated here for the
@@ -424,18 +428,15 @@ func platformUp(cfg *config.Config, chartReady <-chan error) error {
 		}
 	}
 	fmt.Printf(`
-Platform is up.
+%s
   %s
-
+%s
 %s
 
 %s
 
 %s
-
-  Smoke-test it headlessly instead:
-    agentlab platform-test
-`, reach, backstageHint, claudeCodeHint(cfg), agentsHint)
+%s`, header, reach, usersBlock(cfg), backstageHint, claudeCodeHint(cfg), agentsHint, tryItBlock(cfg))
 	// Everything the platform runs is in the node now — record it so the next
 	// boot side-loads instead of pulling.
 	snapshotPreloadImages(cfg)

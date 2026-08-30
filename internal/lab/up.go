@@ -123,37 +123,64 @@ func Up(cfg *config.Config) error {
 	}
 	note("apiserver accepts Dex tokens")
 
-	fmt.Println()
-	fmt.Println("Lab is up.")
-	fmt.Println()
-	fmt.Println("  Users:")
-	for _, u := range cfg.Users {
-		fmt.Printf("    %-22s password: %-12s groups: %s\n",
-			u.Email, u.Password, strings.Join(u.Groups, ", "))
-	}
-	fmt.Println()
-	fmt.Println("  Try it:")
-	fmt.Printf("    agentlab login %s     # headless, prints the token claims\n", admin.Email)
-	fmt.Println("    agentlab browser      # real browser login screen")
-	fmt.Println("    agentlab test         # full RBAC assertion run")
-	// The platform path prints its own, more complete trust hint.
-	if !cfg.Platform.Enabled && !SystemTrusted() {
-		fmt.Println()
-		fmt.Println("  The browser will warn on the Dex login page (lab-CA certificate). One-time")
-		fmt.Println("  fix, reverted by `agentlab untrust`:  agentlab trust")
-	}
-
 	reportPreload(loaded)
 	if cfg.Platform.Enabled {
-		fmt.Println()
 		// Backstage deploys as part of the platform (the umbrella chart's
-		// backstage component), through the same agentgateway edge.
-		if err := platformUp(cfg, chartReady); err != nil {
+		// backstage component), through the same agentgateway edge. One
+		// summary per boot: the platform path prints it — users, URLs and
+		// try-it commands together — once everything is actually up.
+		if err := platformUp(cfg, chartReady, "Lab is up."); err != nil {
 			return err
+		}
+	} else {
+		fmt.Println()
+		fmt.Println("Lab is up.")
+		fmt.Print(usersBlock(cfg))
+		fmt.Print(tryItBlock(cfg))
+		// The platform summary carries its own, more complete trust hint.
+		if !SystemTrusted() {
+			fmt.Println()
+			fmt.Println("  The browser will warn on the Dex login page (lab-CA certificate). One-time")
+			fmt.Println("  fix, reverted by `agentlab untrust`:  agentlab trust")
 		}
 	}
 	snapshotPreloadImages(cfg)
 	return nil
+}
+
+// usersBlock and tryItBlock are the "what to do next" tail of every boot
+// summary — the configured identities and the commands that exercise them.
+// Both start with a blank separator line and end with a newline so callers
+// can concatenate them between other summary sections.
+func usersBlock(cfg *config.Config) string {
+	var b strings.Builder
+	b.WriteString("\n  Users:\n")
+	for _, u := range cfg.Users {
+		fmt.Fprintf(&b, "    %-22s password: %-12s groups: %s\n",
+			u.Email, u.Password, strings.Join(u.Groups, ", "))
+	}
+	return b.String()
+}
+
+func tryItBlock(cfg *config.Config) string {
+	cmds := [][2]string{
+		{"agentlab login " + cfg.AdminUser().Email, "headless, prints the token claims"},
+		{"agentlab browser", "real browser login screen"},
+		{"agentlab test", "full RBAC assertion run"},
+	}
+	if cfg.Platform.Enabled {
+		cmds = append(cmds, [2]string{"agentlab platform-test", "headless smoke test of the whole platform"})
+	}
+	width := 0
+	for _, c := range cmds {
+		width = max(width, len(c[0]))
+	}
+	var b strings.Builder
+	b.WriteString("\n  Try it:\n")
+	for _, c := range cmds {
+		fmt.Fprintf(&b, "    %-*s   # %s\n", width, c[0], c[1])
+	}
+	return b.String()
 }
 
 // ApplyDex renders manifests with the input checksum stamped into the pod
