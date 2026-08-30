@@ -10,6 +10,7 @@ package lab
 
 import (
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -45,7 +46,7 @@ func Trust(cfg *config.Config) error {
 	} else {
 		fmt.Println("Installing the lab CA into the system trust store (sudo may prompt)")
 		if err := truststore.InstallFile(caCertPath); err != nil {
-			return fmt.Errorf("installing into the system store: %w", err)
+			return trustErr("installing into the system store", err)
 		}
 		note("system store: installed")
 	}
@@ -136,7 +137,7 @@ func untrustCert(path string, cert *x509.Certificate) error {
 	}
 	fmt.Println("Removing the lab CA from the system trust store (sudo may prompt)")
 	if err := truststore.UninstallFile(path); err != nil {
-		return fmt.Errorf("removing from the system store: %w", err)
+		return trustErr("removing from the system store", err)
 	}
 	note("system store: removed")
 	return nil
@@ -165,6 +166,19 @@ func sweepReplacedCAs() error {
 	return nil
 }
 
+// trustErr keeps the failing command's output visible: truststore's own
+// error says only which binary failed, and the reason (a sudo refusal, a
+// keychain denial) is in the swallowed output.
+func trustErr(action string, err error) error {
+	var cmdErr *truststore.CmdError
+	if errors.As(err, &cmdErr) {
+		if out := strings.TrimSpace(string(cmdErr.Out())); out != "" {
+			return fmt.Errorf("%s: %w: %s", action, err, out)
+		}
+	}
+	return fmt.Errorf("%s: %w", action, err)
+}
+
 // nodeTrustHint is the Node.js line for the detected Node:
 // NODE_USE_SYSTEM_CA replaces the per-shell NODE_EXTRA_CA_CERTS export on
 // Node >= 22.15.
@@ -172,7 +186,7 @@ func nodeTrustHint() string {
 	if nodeSupportsSystemCA() {
 		return "Node picks it up with NODE_USE_SYSTEM_CA=1 (no cert exports)."
 	}
-	return "This Node predates NODE_USE_SYSTEM_CA (22.15): keep NODE_EXTRA_CA_CERTS=" + absCAPath() + "."
+	return "Node >= 22.15 picks it up with NODE_USE_SYSTEM_CA=1; older Node still needs NODE_EXTRA_CA_CERTS=" + absCAPath() + "."
 }
 
 // nodeSupportsSystemCA reports whether the host's node (if any) understands
