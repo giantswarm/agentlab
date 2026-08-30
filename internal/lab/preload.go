@@ -61,7 +61,12 @@ func hostPullImages(images []string) []string {
 	for _, img := range images {
 		wg.Go(func() {
 			if _, err := outputQuiet("docker", "image", "inspect", img); err != nil {
-				if err := runQuiet("docker", "pull", "-q", img); err != nil {
+				// Pull with stderr swallowed: the chart-derived lane scrapes
+				// the odd unpullable ref out of config blobs (e.g. a bare
+				// `giantswarm/valkey`, which docker reads as a Docker Hub
+				// repo), and dropping it here IS the filter — not an error
+				// worth showing.
+				if _, err := outputQuiet("docker", "pull", "-q", img); err != nil {
 					return
 				}
 			}
