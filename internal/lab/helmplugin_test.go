@@ -64,7 +64,7 @@ func TestEnsurePostRenderPlugin(t *testing.T) {
 		t.Errorf("HELM_PLUGINS path must be absolute, got %q", pluginsDir)
 	}
 
-	raw, err := os.ReadFile(filepath.Join(pluginsDir, postRenderPluginName, "plugin.yaml"))
+	raw, err := os.ReadFile(filepath.Join(pluginsDir, postRenderPluginName, "plugin.yaml")) // #nosec G304 -- reads back the file this test just generated under t.TempDir
 	if err != nil {
 		t.Fatal(err)
 	}
