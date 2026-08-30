@@ -1,0 +1,23 @@
+# Publishes the agentgateway edge on a FIXED NodePort. The data-plane
+# Deployment/Service are created by the agentgateway controller reconciling
+# the chart-owned Gateway — they are not part of the Helm release, so neither
+# values nor the post-renderer can pin the controller-created Service's
+# NodePort, and kind's port mappings (fixed at cluster creation) need a stable
+# node-side port. This lab-owned Service selects the same data-plane pods by
+# the standard Gateway API labels the controller stamps on them.
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentgateway-edge
+  namespace: agent-platform
+  labels:
+    app: agentlab
+spec:
+  type: NodePort
+  selector:
+    gateway.networking.k8s.io/gateway-name: agentgateway
+  ports:
+    - name: https
+      port: 443
+      targetPort: 443
+      nodePort: {{ .GatewayNodePort }}

@@ -246,6 +246,22 @@ Kubernetes assigns a random one — useless to kind's fixed `extraPortMappings`.
 (the standard chart idiom). The value then moves into
 `agent-platform-values.yaml.tmpl` and the patch is deleted.
 
+### U10. Lab-owned NodePort Service selecting the agentgateway data-plane pods
+The agentgateway edge (the chart-owned Gateway under
+`gatewayApi.gateway.create`) is host-published through a kind port mapping,
+which needs a *stable* node-side port. The data-plane Deployment/Service are
+created by the agentgateway controller reconciling the Gateway — they are not
+part of the Helm release, so neither chart values nor `agentlab post-render`
+can pin the controller-created Service's NodePort. The lab applies its own
+Service (`gateway-nodeport.yaml.tmpl`, NodePort `config.GatewayNodePort`
+30443) selecting the data-plane pods by the standard
+`gateway.networking.k8s.io/gateway-name` label the controller stamps on them;
+the kind config maps 30443 onto `platform.gatewayPort` (default 443).
+**Fragile if:** the controller changes its generated pod labels.
+**Unblocks:** an agentgateway/AgentgatewayParameters knob for the generated
+Service's nodePort; then this Service is deleted and the kind mapping targets
+the controller's own Service.
+
 ## Accepted lab trade-offs (not hacks to fix)
 
 - **Checksum stamping via the `REPLACED_AT_APPLY` placeholder** — the standard

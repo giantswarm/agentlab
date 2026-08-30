@@ -44,6 +44,15 @@ nodes:
         hostPort: {{ .Platform.AgentsPort }}
         listenAddress: "127.0.0.1"
         protocol: TCP
+      # The agentgateway edge: the chart-owned Gateway's HTTPS listener,
+      # published by the lab's pinned NodePort Service (the controller-created
+      # data-plane Service gets a random NodePort). *.{{ .Platform.Domain }}
+      # resolves to 127.0.0.1 on the host, so https://muster.{{ .Platform.Domain }}
+      # and friends land here.
+      - containerPort: {{ .GatewayNodePort }}
+        hostPort: {{ .Platform.GatewayPort }}
+        listenAddress: "127.0.0.1"
+        protocol: TCP
     # kubeadm already bind-mounts /etc/kubernetes/pki into the apiserver static
     # pod, so dropping the Dex CA in a subdirectory makes it visible there.
     extraMounts:

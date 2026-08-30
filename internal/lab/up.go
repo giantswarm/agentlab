@@ -137,27 +137,12 @@ func Up(cfg *config.Config) error {
 	fmt.Println("    agentlab browser      # real browser login screen")
 	fmt.Println("    agentlab test         # full RBAC assertion run")
 
-	// The multi-minute Backstage image pull only needs docker, so it overlaps
-	// with the platform install instead of running after it.
-	var backstagePull <-chan error
-	if cfg.Backstage.Enabled && cfg.Platform.Enabled {
-		backstagePull = prefetchBackstageImage(cfg)
-	}
 	reportPreload(loaded)
 	if cfg.Platform.Enabled {
 		fmt.Println()
+		// Backstage deploys as part of the platform (the umbrella chart's
+		// backstage component), through the same agentgateway edge.
 		if err := platformUp(cfg, chartReady); err != nil {
-			return err
-		}
-	}
-	if cfg.Backstage.Enabled {
-		fmt.Println()
-		if backstagePull != nil {
-			if err := <-backstagePull; err != nil {
-				return fmt.Errorf("pulling %s: %w", cfg.Backstage.Image, err)
-			}
-		}
-		if err := BackstageUp(cfg); err != nil {
 			return err
 		}
 	}

@@ -31,6 +31,9 @@ func drive(t *testing.T, m model, msg tea.Msg) model {
 func TestDashboardFlow(t *testing.T) {
 	cfg := config.Default()
 	cfg.Platform.Enabled = true
+	// Off on purpose (the default is on): the "disabled" status-row rendering
+	// is part of what this walk asserts.
+	cfg.Backstage.Enabled = false
 
 	var launched [][]string
 	m := newModel(cfg)
