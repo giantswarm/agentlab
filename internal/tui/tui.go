@@ -14,7 +14,6 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -161,16 +160,9 @@ func startAction(label string, args ...string) tea.Cmd {
 		// The subprocess spawns children of its own (kubectl logs -f, helm,
 		// kind). Killing just the direct child would leave those holding the
 		// output pipe — and cmd.Wait blocked on it forever — so each action
-		// gets its own process group and cancel kills the whole group.
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-		cmd.Cancel = func() error {
-			// Group gone or signal denied: fall back to the direct child.
-			// Process.Kill reports os.ErrProcessDone if it already exited.
-			if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM); err != nil {
-				return cmd.Process.Kill()
-			}
-			return nil
-		}
+		// gets its own process group and cancel kills the whole group
+		// (per-OS in proc_unix.go / proc_windows.go).
+		configureProcessGroup(cmd)
 		// Backstop for a child that ignores SIGTERM or escapes the group:
 		// stop waiting on the pipes shortly after the process is dead.
 		cmd.WaitDelay = 2 * time.Second
