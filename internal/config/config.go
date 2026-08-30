@@ -195,7 +195,7 @@ func Default() *Config {
 			GatewayPort:          443,
 			MCPKubernetesVersion: "1.0.9",
 			APSRepo:              "https://github.com/giantswarm/agent-platform-standalone",
-			APSRef:               "07019de9707ebe098def6700fa4a916ce5e08728", // feat/curate-generator head: 3.2.2 curation, muster 5.7.2 (native DCR toggle), Renovate-owned pins
+			APSRef:               "8026394c4ff6f1aa315e4670095efc83e0690a72", // main: backstage 0.200.14 — kube:apply honors the cluster caFile (agent create flow TLS)
 		},
 		Backstage: Backstage{
 			Enabled: true,
