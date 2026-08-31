@@ -262,6 +262,25 @@ the kind config maps 30443 onto `platform.gatewayPort` (default 443).
 Service's nodePort; then this Service is deleted and the kind mapping targets
 the controller's own Service.
 
+### U11. Agent CRD patched with `spec.iconUrl` — BLOCKED UPSTREAM
+The kagent package (giantswarm/kagent, ex-kagent-app) pins the upstream 0.9.x
+CRDs, whose v1alpha2 Agent spec predates the A2A-card metadata fields added on
+upstream main for 0.10 (kagent-dev/kagent#2188). The Backstage create flow
+composes `agent.iconUrl` (the deterministic `avatars.<baseDomain>` URL)
+whenever the installation has a `baseDomain` — this lab always sets one — the
+`agent` chart renders it into `Agent.spec.iconUrl`, and server-side apply
+rejects the whole HelmRelease: `.spec.iconUrl: field not declared in schema`.
+The agents list then stays empty with no visible error, because the scaffolder
+task only kube-applies the HelmRelease and reports success. Not lab-specific:
+any installation with a configured `baseDomain` fails the same way.
+**Workaround (automated):** `patchAgentCRDIconURL` (`internal/lab/kagentcrd.go`,
+run by `agentlab up`/`platform` when agents are enabled) adds upstream main's
+`iconUrl` property (optional string, stored and ignored by the 0.9.x
+controller) to the installed CRD's v1alpha2 schema. Idempotent, and a no-op
+once the CRD already carries the field — a kagent bump retires it silently.
+**Unblocks:** giantswarm/kagent#55 — ship CRDs that declare the A2A-card
+metadata fields (backport or the 0.10 bump); then delete `kagentcrd.go`.
+
 ## Accepted lab trade-offs (not hacks to fix)
 
 - **Checksum stamping via the `REPLACED_AT_APPLY` placeholder** — the standard
