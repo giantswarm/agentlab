@@ -40,5 +40,3 @@ require (
 	golang.org/x/sys v0.47.0 // indirect
 	howett.net/plist v1.0.0 // indirect
 )
-
-replace golang.org/x/mod => golang.org/x/mod v0.40.0
