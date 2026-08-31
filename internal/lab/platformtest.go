@@ -144,8 +144,59 @@ func PlatformTest(cfg *config.Config, email string) error {
 	}
 	note("namespaces: %s", strings.Join(names, ", "))
 
+	pass := "PASS: Claude Code -> muster (Dex) -> mcp-kubernetes -> kind apiserver"
+	if cfg.Platform.Observability {
+		// Same singleton prefixing as mcp-kubernetes: the lab's mcpServers
+		// entry deliberately keeps the server out of muster's families
+		// (see agent-platform-values.yaml.tmpl).
+		promPrefix := "x_" + mcpPrometheusRelease + "_"
+		step("Prometheus tools muster is aggregating")
+		shown = 0
+		for _, t := range toolList.Tools {
+			if strings.HasPrefix(t.Name, promPrefix) && shown < 8 {
+				note("%s", t.Name)
+				shown++
+			}
+		}
+		if shown == 0 {
+			return fmt.Errorf("muster aggregates no %s tools", promPrefix)
+		}
+
+		// `up` is non-empty as soon as Prometheus completes its first scrape,
+		// so a short retry absorbs a just-booted lab.
+		step("Calling %sexecute_query (PromQL: up) through muster", promPrefix)
+		queryPayload := fmt.Sprintf(`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"call_tool","arguments":{"name":%q,"arguments":{"query":"up"}}}}`, promPrefix+"execute_query")
+		var inner string
+		queried := waitFor(15, 4*time.Second, func() bool {
+			res, err := call(queryPayload)
+			if err != nil {
+				return false
+			}
+			var wrapped struct {
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
+			}
+			if json.Unmarshal([]byte(innerText(res)), &wrapped) != nil || len(wrapped.Content) == 0 {
+				return false
+			}
+			inner = wrapped.Content[0].Text
+			// The tool renders the Prometheus query result as text; an answer
+			// with scrape targets in it proves collection AND the query path.
+			return strings.Contains(inner, "up")
+		})
+		if !queried {
+			return fmt.Errorf("execute_query never returned scrape targets (last payload: %.200s)", inner)
+		}
+		if len(inner) > 160 {
+			inner = inner[:160] + "..."
+		}
+		note("query result: %s", strings.ReplaceAll(inner, "\n", " "))
+		pass += "\nPASS: Claude Code -> muster (Dex) -> mcp-prometheus -> Prometheus"
+	}
+
 	fmt.Println()
-	fmt.Println("PASS: Claude Code -> muster (Dex) -> mcp-kubernetes -> kind apiserver")
+	fmt.Println(pass)
 	return nil
 }
 

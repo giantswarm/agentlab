@@ -56,6 +56,7 @@ func Run(cfg *config.Config, accessible bool) error {
 	musterPort := strconv.Itoa(cfg.Platform.MusterPort)
 	apsRef := cfg.Platform.APSRef
 	agentsEnabled := cfg.Platform.Agents
+	observabilityEnabled := cfg.Platform.Observability
 	agentsPort := strconv.Itoa(cfg.Platform.AgentsPort)
 	aiModel := cfg.AIModel
 	backstagePort := strconv.Itoa(cfg.Backstage.Port)
@@ -132,6 +133,12 @@ func Run(cfg *config.Config, accessible bool) error {
 				Description("The agents web UI: http://localhost:<port>. The kind mapping exists even\nwith agents off (fixed at cluster creation), so they can be enabled later.").
 				Value(&agentsPort).
 				Validate(config.ValidatePort),
+			huh.NewConfirm().
+				Title("Install the observability stack (Prometheus + mcp-prometheus)?").
+				Description("Optional: a minimal Prometheus (Giant Swarm kube-prometheus-stack) plus the\nPrometheus MCP server, registered in muster as x_mcp-prometheus_* tools —\nask the platform about pod CPU/memory. ~5 extra pods.").
+				Affirmative("Install").
+				Negative("Skip").
+				Value(&observabilityEnabled),
 			huh.NewInput().
 				Title("Claude model").
 				Description("Used by the platform agents' ModelConfig and Backstage's AI chat.\nThe API key comes from $ANTHROPIC_API_KEY at deploy time, never from this file.").
@@ -163,6 +170,7 @@ func Run(cfg *config.Config, accessible bool) error {
 	cfg.Platform.MusterPort = mustAtoi(musterPort)
 	cfg.Platform.APSRef = apsRef
 	cfg.Platform.Agents = agentsEnabled
+	cfg.Platform.Observability = observabilityEnabled
 	cfg.Platform.AgentsPort = mustAtoi(agentsPort)
 	cfg.AIModel = aiModel
 	cfg.Backstage.Port = mustAtoi(backstagePort)

@@ -17,9 +17,9 @@ const keyDelay = 30 * time.Millisecond
 func TestRunTUIDrive(t *testing.T) {
 	testInput = newPacedReader(keyDelay,
 		"\r", "\r", "\r", // group 1: cluster name, dex port, dex image
-		"\r",                         // group 2: customize users? -> keep as is
-		"\r",                         // group 3: platform + backstage preselected; submit as is
-		"\r", "\r", "\r", "\r", "\r", // platform group: muster port, aps ref, agents confirm, agents ui port, claude model
+		"\r",                               // group 2: customize users? -> keep as is
+		"\r",                               // group 3: platform + backstage preselected; submit as is
+		"\r", "\r", "\r", "\r", "\r", "\r", // platform group: muster port, aps ref, agents confirm, agents ui port, observability confirm, claude model
 		"\r", // backstage group: port
 	)
 	testOutput = io.Discard
@@ -37,6 +37,9 @@ func TestRunTUIDrive(t *testing.T) {
 	}
 	if !cfg.Platform.Agents {
 		t.Errorf("agents not enabled (the confirm should keep the default)")
+	}
+	if !cfg.Platform.Observability {
+		t.Errorf("observability not enabled (the confirm should keep the default)")
 	}
 	if !cfg.Backstage.Enabled {
 		t.Errorf("backstage not enabled by multiselect")

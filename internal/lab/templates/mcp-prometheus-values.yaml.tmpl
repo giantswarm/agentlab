@@ -1,0 +1,18 @@
+# Values for the Giant Swarm mcp-prometheus chart — the Prometheus MCP server
+# muster aggregates as x_mcp-prometheus_<tool> (registered via the umbrella's
+# agent-platform-mcps values, see agent-platform-values.yaml.tmpl).
+#
+# Auth stays off (the chart default): like the umbrella's bundled
+# mcp-kubernetes, the server is deliberately unauthenticated on the cluster
+# network — muster is the single auth enforcement point in this lab.
+app:
+  env:
+    # The operator-owned headless Service: name-stable across releases, unlike
+    # the release-prefixed ones. Must agree with observabilityNamespace in
+    # observability.go.
+    - name: PROMETHEUS_URL
+      value: http://prometheus-operated.monitoring.svc.cluster.local:9090
+# No Cilium in kind; the chart default is true and would render a CR without
+# a CRD.
+ciliumNetworkPolicy:
+  enabled: false

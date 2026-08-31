@@ -38,6 +38,13 @@ with Dex doing the logins.
 - The Kubernetes tools come from the umbrella's bundled `mcp-kubernetes`
   MCPServer and use muster's per-server prefixing: `x_mcp-kubernetes_<tool>`
   (e.g. `x_mcp-kubernetes_list`), no `management_cluster` argument.
+- With `platform.observability: true` (the default), a minimal Prometheus
+  (the GS kube-prometheus-stack constituent of the observability bundle, with
+  the server re-enabled) and mcp-prometheus install too; the tools surface as
+  `x_mcp-prometheus_<tool>` (e.g. `x_mcp-prometheus_execute_query`) — the way
+  to answer CPU/memory questions about the lab. Chart pins are Go consts in
+  `internal/lab/observability.go`; the bundle itself is deliberately NOT
+  installed (MC-shaped: Flux HelmReleases, Alloy -> Mimir, no local PromQL).
 - The agents runtime (kagent) installs with the platform by default but is
   optional (`platform.agents` in `agentlab.yaml`) — on real clusters agent
   delivery runs through Flux/GitOps, which the lab does not run as a GitOps

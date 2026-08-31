@@ -1,0 +1,72 @@
+# ---------------------------------------------------------------------------
+# Giant Swarm kube-prometheus-stack, tuned for this kind lab.
+#
+# This is the observability-bundle's own pinned constituent chart (same
+# version, same gsoci images, same curated relabelings), installed directly
+# with helm because the bundle itself is MC-shaped: it renders Flux
+# HelmReleases with a hardcoded remote kubeconfig secret, dependsOn on
+# HelmReleases this lab lacks (cilium, kyverno-crds, VPA CRDs), and Alloy
+# configs that only observability-operator + Mimir can provide. The bundle
+# also ships NO local PromQL endpoint (prometheus.enabled: false — collection
+# goes Alloy -> Mimir on the MC); the lab's whole point here is a queryable
+# Prometheus, so it is re-enabled below.
+#
+# Result (verified against the 22.0.0 chart): prometheus-operator,
+# kube-state-metrics, node-exporter, one Prometheus (emptyDir, 10d retention)
+# scraping the apiserver, kubelet/cAdvisor (pod CPU/memory), node-exporter
+# (node CPU/memory) and kube-state-metrics — everything the
+# x_mcp-prometheus_* tools need for "how is the control plane / pod X doing".
+# ---------------------------------------------------------------------------
+
+# The GS wrapper renders a kyverno.io PolicyException when node-exporter is
+# enabled, and its final template fallback carries no Capabilities guard — on
+# a Kyverno-less cluster the apply fails on the missing CRD (HACKS.md U12).
+kyvernoPolicyExceptions:
+  enabled: false
+
+kube-prometheus-stack:
+  # Alerting and dashboards are out of scope: no Alertmanager to route to and
+  # the platform has no Grafana; the query path is mcp-prometheus via muster.
+  defaultRules:
+    create: false
+  alertmanager:
+    enabled: false
+  grafana:
+    enabled: false
+  # GS clusters get node metrics from the separate node-exporter-app, so the
+  # GS wrapper disables the bundled one; this lab has no separate app, and
+  # node CPU/memory ("how is the control plane?") needs it.
+  nodeExporter:
+    enabled: true
+  # kubeadm binds etcd, scheduler, controller-manager and kube-proxy metrics
+  # to 127.0.0.1 on kind, so their targets would only ever show as down.
+  kubeEtcd:
+    enabled: false
+  kubeScheduler:
+    enabled: false
+  kubeControllerManager:
+    enabled: false
+  kubeProxy:
+    enabled: false
+  # The GS wrapper points the CoreDNS metrics Service at k8s-app=coredns;
+  # kind labels the pods k8s-app=kube-dns, so the Service would select nothing.
+  coreDns:
+    enabled: false
+  prometheusOperator:
+    # Skips the two certgen jobs; fine for a throwaway lab.
+    admissionWebhooks:
+      enabled: false
+    tls:
+      enabled: false
+  kube-state-metrics:
+    # Inert on kindnet anyway (no NetworkPolicy enforcement).
+    networkPolicy:
+      enabled: false
+  prometheus:
+    # THE deviation from the bundle's userConfig: a real Prometheus server,
+    # the local PromQL endpoint mcp-prometheus queries
+    # (http://prometheus-operated.monitoring:9090). Storage is emptyDir —
+    # metrics are as throwaway as the cluster.
+    enabled: true
+    prometheusSpec:
+      retention: 10d
