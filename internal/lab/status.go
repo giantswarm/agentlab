@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"agentlab/internal/config"
+	"github.com/giantswarm/agentplatform-kind/internal/config"
 )
 
 // Status is a point-in-time probe of every lab component, for the TUI

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"agentlab/internal/config"
+	"github.com/giantswarm/agentplatform-kind/internal/config"
 )
 
 const platformNamespace = "agent-platform"
@@ -358,6 +358,12 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 		// which upstream has been observed not to publish (HACKS.md U8).
 		step("Ensuring the agents' ADK runtime images are on the node")
 		healADKImages(cfg)
+		// The 0.9.x Agent CRD rejects the spec.iconUrl the create flow always
+		// composes, failing every created agent's HelmRelease (HACKS.md U11).
+		step("Ensuring the Agent CRD accepts spec.iconUrl")
+		if err := patchAgentCRDIconURL(); err != nil {
+			return err
+		}
 	}
 
 	// The public URL runs client -> agentgateway edge -> muster: reaching it

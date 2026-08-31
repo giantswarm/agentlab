@@ -13,7 +13,7 @@ import (
 	"strings"
 	"text/template"
 
-	"agentlab/internal/config"
+	"github.com/giantswarm/agentplatform-kind/internal/config"
 )
 
 //go:embed templates/*.tmpl templates/static/*

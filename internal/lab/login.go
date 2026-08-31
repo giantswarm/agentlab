@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"agentlab/internal/config"
+	"github.com/giantswarm/agentplatform-kind/internal/config"
 )
 
 // Login performs the headless password-grant login, writes the raw id_token

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"agentlab/internal/config"
+	"github.com/giantswarm/agentplatform-kind/internal/config"
 )
 
 // PlatformTest is the headless end-to-end proof: Dex login -> muster

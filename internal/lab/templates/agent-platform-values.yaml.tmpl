@@ -86,6 +86,18 @@ components:
       - federated:id
       - audience:server:client_id:dex-k8s-authenticator
       - audience:server:client_id:kubernetes
+    # The vanilla UI hides the portal's HelmRelease pages, but the create
+    # flow's scaffolder result links straight to
+    # /deployments/<installation>/helmrelease/<ns>/<name> — without these the
+    # link 404s AND a failed agent install is invisible (the agents list only
+    # shows Agent CRs that exist). Clusters rides along because the
+    # deployments table links cluster details unconditionally and crashes
+    # without its routes (giantswarm/backstage#2161).
+    enabledExtensions:
+      - page:gs/deployments
+      - nav-item:gs/deployments
+      - page:gs/clusters
+      - nav-item:gs/clusters
 {{- end }}
 
 muster:
