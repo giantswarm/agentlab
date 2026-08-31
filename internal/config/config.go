@@ -193,7 +193,7 @@ func Default() *Config {
 			Domain:      "127.0.0.1.nip.io",
 			GatewayPort: 443,
 			APSRepo:     "https://github.com/giantswarm/agent-platform-standalone",
-			APSRef:      "ee2eeac0aeea55603805bcdabb65adc9138746e2", // main: backstage 0.200.26 (#49) — first multi-arch image (arm64), Deployments pages degrade without Mimir
+			APSRef:      "a6d2c0f197de4197c897cfef906f5ed4f4804fa4", // main: backstage 0.201.0 (#54) — sessions can be continued from the portal
 		},
 		Backstage: Backstage{
 			Enabled: true,
