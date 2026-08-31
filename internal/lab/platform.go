@@ -34,12 +34,12 @@ const (
 // flip the Go toolchain into vendored-build mode and break `go build`.
 const apsDir = ".vendor/agent-platform-standalone"
 
-// PlatformUp installs the Giant Swarm agent platform (muster + mcp-kubernetes)
-// into the lab cluster and wires it to the lab Dex.
+// PlatformUp installs the Giant Swarm agent platform into the lab cluster and
+// wires it to the lab Dex.
 //
 // The platform ships as agent-platform-standalone: one plain Helm umbrella
-// chart with muster, valkey and the MCP registrations as pinned subcharts
-// (Chart.lock is the BOM). No GitOps controller involved — unlike the old
+// chart with muster, valkey, mcp-kubernetes and the MCP registrations as
+// pinned subcharts (Chart.lock is the BOM). No GitOps controller involved — unlike the old
 // agent-platform meta-package, which rendered Flux HelmReleases and needed a
 // helm-controller on the cluster before `helm install` did anything useful.
 //
@@ -255,9 +255,6 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 		}
 	}
 
-	if _, _, err := renderManifest(cfg, "mcp-kubernetes-values.yaml.tmpl"); err != nil {
-		return err
-	}
 	if _, _, err := renderManifest(cfg, "agent-platform-values.yaml.tmpl"); err != nil {
 		return err
 	}
@@ -272,7 +269,7 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 	// are covered too. Best-effort: anything this misses is pulled in-node
 	// under the helm --wait timeouts, exactly as before.
 	step("Side-loading the platform images (the host cache survives `agentlab down`)")
-	if imgs, err := platformImages(cfg, chartDir); err != nil {
+	if imgs, err := platformImages(chartDir); err != nil {
 		note("cannot derive the platform images from the charts (%v); the node pulls anything missing", err)
 	} else {
 		switch res := sideloadImages(cfg, hostPullImages(imgs)); {
@@ -283,18 +280,6 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 		default:
 			note("all %d platform images are already on the node", len(imgs))
 		}
-	}
-
-	step("Deploying mcp-kubernetes (%s)", cfg.Platform.MCPKubernetesVersion)
-	// --wait on purpose, BEFORE muster installs: muster dials the MCP within
-	// ~2s of starting, and a failed first dial costs a fixed ~60s reconnect
-	// backoff — far more than this rollout costs with the image preloaded.
-	if err := runQuiet("helm", "upgrade", "--install", "mcp-kubernetes",
-		"oci://gsoci.azurecr.io/charts/giantswarm/mcp-kubernetes",
-		"--version", cfg.Platform.MCPKubernetesVersion, "-n", platformNamespace,
-		"-f", StateDir+"/mcp-kubernetes-values.yaml",
-		"--wait", "--timeout", "5m"); err != nil {
-		return err
 	}
 
 	step("Installing agent-platform-standalone (this waits for every workload)")
@@ -479,28 +464,21 @@ func claudeCodeHint(cfg *config.Config) string {
 	return b.String()
 }
 
-// platformImages derives the platform's image refs from the charts exactly
-// as they are about to be installed: helm-template the vendored umbrella
-// chart and the mcp-kubernetes chart with the rendered lab values, then
-// scrape the image fields. The runtime-composed images this cannot see (the
-// ADK runtime tags kagent builds from its ConfigMap) are covered by
-// healADKImages and the snapshot manifest.
-func platformImages(cfg *config.Config, chartDir string) ([]string, error) {
+// platformImages derives the platform's image refs from the chart exactly
+// as it is about to be installed: helm-template the vendored umbrella chart
+// (mcp-kubernetes included, as a bundled dependency) with the rendered lab
+// values, then scrape the image fields. The runtime-composed images this
+// cannot see (the ADK runtime tags kagent builds from its ConfigMap) are
+// covered by healADKImages and the snapshot manifest.
+func platformImages(chartDir string) ([]string, error) {
 	umbrella, err := outputQuiet("helm", "template", platformRelease, chartDir,
 		"-n", platformNamespace, "-f", StateDir+"/agent-platform-values.yaml")
 	if err != nil {
 		return nil, fmt.Errorf("templating agent-platform-standalone: %w", err)
 	}
-	mcp, err := outputQuiet("helm", "template", "mcp-kubernetes",
-		"oci://gsoci.azurecr.io/charts/giantswarm/mcp-kubernetes",
-		"--version", cfg.Platform.MCPKubernetesVersion,
-		"-n", platformNamespace, "-f", StateDir+"/mcp-kubernetes-values.yaml")
-	if err != nil {
-		return nil, fmt.Errorf("templating mcp-kubernetes: %w", err)
-	}
-	imgs := scrapeImages(umbrella + "\n" + mcp)
+	imgs := scrapeImages(umbrella)
 	if len(imgs) == 0 {
-		return nil, fmt.Errorf("no image fields found in the rendered charts")
+		return nil, fmt.Errorf("no image fields found in the rendered chart")
 	}
 	return imgs, nil
 }

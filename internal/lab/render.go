@@ -130,7 +130,6 @@ var manifests = map[string]struct {
 	"kind-config.yaml.tmpl":           {out: "kind-config.yaml"},
 	"rbac.yaml.tmpl":                  {out: "rbac.yaml"},
 	"agent-platform-values.yaml.tmpl": {out: "agent-platform-values.yaml"},
-	"mcp-kubernetes-values.yaml.tmpl": {out: "mcp-kubernetes-values.yaml"},
 	"flux-values.yaml.tmpl":           {out: "flux-values.yaml"},
 	"demo-workflow.yaml.tmpl":         {out: "demo-workflow.yaml"},
 	"coredns.yaml.tmpl":               {out: "coredns.yaml"},

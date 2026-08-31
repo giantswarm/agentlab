@@ -221,8 +221,8 @@ the rendered Dex config closes that loop; its `redirectURIs` must equal
 `<oauth.server.baseUrl>/oauth/callback`.
 
 `mcp-kubernetes` is deliberately unauthenticated on the cluster network
-(`auth.mode: none` on the `MCPServer` CR) and talks to the apiserver with its own
-ServiceAccount. muster is the single enforcement point.
+(the bundled `MCPServer` CR carries no auth block) and talks to the apiserver
+with its own ServiceAccount. muster is the single enforcement point.
 
 ### Agents (kagent)
 
@@ -338,11 +338,11 @@ same one-URL trick, just spelled with a name.
   `templates/namespace.yaml` is gated only on `kagent.kagent.namespaceOverride`,
   not on `components.kagent.enabled`, so an empty `kagent` namespace appears.
   Harmless — Helm owns it and removes it on uninstall.
-- **Family tools need an instance argument.** The `kubernetes` group is rendered as
-  a muster *family* (`instanceArg: management_cluster`), so calls are
-  `call_tool(name=x_kubernetes_list, arguments={management_cluster: "agentlab-mcp-kubernetes", ...})`.
-  The instance is the **`MCPServer` CR name**, not the `cluster:` field of the
-  `mcpServers` entry.
+- **Kubernetes tools carry the server-name prefix.** The umbrella's bundled
+  `mcp-kubernetes` MCPServer declares no muster *family*, so its tools use
+  per-server prefixing: `call_tool(name=x_mcp-kubernetes_list, arguments={...})`.
+  (Real fleet installations register per-cluster servers with a `kubernetes`
+  family and a `management_cluster` instance argument instead.)
 - **Tool results are double-wrapped.** `result.content[0].text` is JSON whose
   `content[0].text` is the actual payload — two decode hops.
 
@@ -362,9 +362,9 @@ open https://backstage.127.0.0.1.nip.io
 ```
 
 The image is published **anonymously** to `gsoci.azurecr.io/giantswarm/backstage`
-— no Giant Swarm registry credentials needed. It is `linux/amd64` only, so on an
-Apple Silicon Mac it runs through the kind node's Rosetta binfmt handler; expect
-a slower first boot, not a failure.
+— no Giant Swarm registry credentials needed. Since 0.200.25 it is multi-arch
+(`linux/amd64` + `linux/arm64`), so it runs natively on Apple Silicon; tags
+before that are amd64-only and fail to pull on an arm64 host.
 
 Sign In takes you to the same Dex login page, and you come back as a real
 Backstage identity with the groups from the token.
@@ -434,7 +434,7 @@ configured user and then proves the muster hop with that user's own token:
   token audience  [kubernetes muster backstage]
   backstage user  user:default/dev
   ownership refs  [user:default/dev]
-  muster servers  [(agentlab-mcp-kubernetes, Connected)]
+  muster servers  [(mcp-kubernetes, Connected)]
   muster workflows [lab-cluster-overview]
   muster core tools 28 exposed
   agent deploy template registered (template:default/agent-deployment)

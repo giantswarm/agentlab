@@ -100,21 +100,22 @@ func PlatformTest(cfg *config.Config, email string) error {
 	if err := json.Unmarshal([]byte(innerText(res)), &toolList); err != nil {
 		return fmt.Errorf("parsing list_tools payload: %w", err)
 	}
+	// The umbrella's bundled MCPServer CR declares no family, so muster uses
+	// per-server prefixing: x_<server>_<tool>, no management_cluster argument.
+	toolPrefix := "x_" + cfg.MCPServerName() + "_"
 	shown := 0
 	for _, t := range toolList.Tools {
-		if strings.HasPrefix(t.Name, "x_kubernetes_") && shown < 8 {
+		if strings.HasPrefix(t.Name, toolPrefix) && shown < 8 {
 			note("%s", t.Name)
 			shown++
 		}
 	}
 	if shown == 0 {
-		return fmt.Errorf("muster aggregates no x_kubernetes_ tools")
+		return fmt.Errorf("muster aggregates no %s tools", toolPrefix)
 	}
 
-	// The `kubernetes` group is rendered as a muster FAMILY (instanceArg
-	// management_cluster), so every call must name the backing MCPServer CR.
-	step("Calling x_kubernetes_list namespaces through muster")
-	payload := fmt.Sprintf(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"call_tool","arguments":{"name":"x_kubernetes_list","arguments":{"management_cluster":%q,"resourceType":"namespaces"}}}}`, cfg.MCPServerName())
+	step("Calling %slist namespaces through muster", toolPrefix)
+	payload := fmt.Sprintf(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"call_tool","arguments":{"name":%q,"arguments":{"resourceType":"namespaces"}}}}`, toolPrefix+"list")
 	res, err = call(payload)
 	if err != nil {
 		return err

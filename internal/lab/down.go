@@ -23,6 +23,5 @@ func Down(cfg *config.Config) error {
 // and the cluster alone.
 func PlatformDown(cfg *config.Config) error {
 	_ = runQuiet("helm", "-n", platformNamespace, "uninstall", "agent-platform")
-	_ = runQuiet("helm", "-n", platformNamespace, "uninstall", "mcp-kubernetes")
 	return run("kubectl", "delete", "namespace", platformNamespace, "--ignore-not-found")
 }

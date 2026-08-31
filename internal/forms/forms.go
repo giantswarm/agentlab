@@ -54,13 +54,11 @@ func Run(cfg *config.Config, accessible bool) error {
 		components = append(components, "backstage")
 	}
 	musterPort := strconv.Itoa(cfg.Platform.MusterPort)
-	mcpVersion := cfg.Platform.MCPKubernetesVersion
 	apsRef := cfg.Platform.APSRef
 	agentsEnabled := cfg.Platform.Agents
 	agentsPort := strconv.Itoa(cfg.Platform.AgentsPort)
 	aiModel := cfg.AIModel
 	backstagePort := strconv.Itoa(cfg.Backstage.Port)
-	backstageImage := cfg.Backstage.Image
 
 	userSummary := func() string {
 		lines := make([]string, 0, len(cfg.Users))
@@ -119,10 +117,6 @@ func Run(cfg *config.Config, accessible bool) error {
 				Value(&musterPort).
 				Validate(config.ValidatePort),
 			huh.NewInput().
-				Title("mcp-kubernetes chart version").
-				Value(&mcpVersion).
-				Validate(notEmpty),
-			huh.NewInput().
 				Title("agent-platform-standalone git ref").
 				Description("The umbrella chart has no release yet; it is vendored from git at this pinned SHA.").
 				Value(&apsRef).
@@ -152,11 +146,6 @@ func Run(cfg *config.Config, accessible bool) error {
 				Description("Backstage binds this port on the kind node (hostNetwork) and kind maps the\nsame number onto this machine, so the URL is identical on both sides.").
 				Value(&backstagePort).
 				Validate(config.ValidatePort),
-			huh.NewInput().
-				Title("Backstage image").
-				Description("Giant Swarm's build — the one that carries the muster plugin. ~2.4GB, pulled anonymously.").
-				Value(&backstageImage).
-				Validate(notEmpty),
 		).Title("Backstage").
 			WithHideFunc(func() bool { return !slices.Contains(components, "backstage") }),
 	).WithAccessible(accessible)
@@ -172,13 +161,11 @@ func Run(cfg *config.Config, accessible bool) error {
 	cfg.Platform.Enabled = slices.Contains(components, "platform")
 	cfg.Normalize() // backstage implies the platform
 	cfg.Platform.MusterPort = mustAtoi(musterPort)
-	cfg.Platform.MCPKubernetesVersion = mcpVersion
 	cfg.Platform.APSRef = apsRef
 	cfg.Platform.Agents = agentsEnabled
 	cfg.Platform.AgentsPort = mustAtoi(agentsPort)
 	cfg.AIModel = aiModel
 	cfg.Backstage.Port = mustAtoi(backstagePort)
-	cfg.Backstage.Image = backstageImage
 
 	if customizeUsers {
 		if err := editUsers(cfg, accessible); err != nil {

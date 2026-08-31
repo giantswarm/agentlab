@@ -118,8 +118,6 @@ type Platform struct {
 	// tooling. Both fields set or both empty. The Dex issuer still serves
 	// the lab CA either way; see the README's TLS section.
 	TLS PlatformTLS `yaml:"tls"`
-	// Chart version of the standalone mcp-kubernetes release.
-	MCPKubernetesVersion string `yaml:"mcpKubernetesVersion"`
 	// agent-platform-standalone has no chart release yet
 	// (giantswarm/agent-platform-standalone#11), so it is vendored from git
 	// at this pinned SHA. Once released this becomes an OCI ref.
@@ -141,8 +139,9 @@ type Backstage struct {
 	Enabled bool `yaml:"enabled"`
 	// Backstage binds this port on the node (hostNetwork) and kind maps the
 	// same number onto the host, so the URL is identical on both sides.
-	Port  int    `yaml:"port"`
-	Image string `yaml:"image"`
+	// The image is not configured here: the umbrella chart's backstage
+	// dependency (pinned by platform.apsRef) decides the version.
+	Port int `yaml:"port"`
 }
 
 type Config struct {
@@ -187,20 +186,18 @@ func Default() *Config {
 				Groups: []string{groupViewers}},
 		},
 		Platform: Platform{
-			Enabled:              true,
-			Agents:               true,
-			AgentsPort:           8081,
-			MusterPort:           8090,
-			Domain:               "127.0.0.1.nip.io",
-			GatewayPort:          443,
-			MCPKubernetesVersion: "1.0.9",
-			APSRepo:              "https://github.com/giantswarm/agent-platform-standalone",
-			APSRef:               "d2dc19f9a705b7b297c2fafcd685675683a4631c", // main: components.backstage.enabledExtensions (#39) + backstage 0.200.19
+			Enabled:     true,
+			Agents:      true,
+			AgentsPort:  8081,
+			MusterPort:  8090,
+			Domain:      "127.0.0.1.nip.io",
+			GatewayPort: 443,
+			APSRepo:     "https://github.com/giantswarm/agent-platform-standalone",
+			APSRef:      "ee2eeac0aeea55603805bcdabb65adc9138746e2", // main: backstage 0.200.26 (#49) — first multi-arch image (arm64), Deployments pages degrade without Mimir
 		},
 		Backstage: Backstage{
 			Enabled: true,
 			Port:    7007,
-			Image:   "gsoci.azurecr.io/giantswarm/backstage:0.199.9",
 		},
 	}
 }
@@ -393,10 +390,11 @@ func (c *Config) KubeContext() string { return "kind-" + c.ClusterName }
 // ControlPlaneNode is the docker container name kind gives the (only) node.
 func (c *Config) ControlPlaneNode() string { return c.ClusterName + "-control-plane" }
 
-// MCPServerName is the MCPServer CR name the umbrella chart derives from the
-// mcpServers entry: <cluster>-mcp-kubernetes. Muster family tool calls take it
-// as the management_cluster argument.
-func (c *Config) MCPServerName() string { return c.ClusterName + "-mcp-kubernetes" }
+// MCPServerName is the MCPServer CR name the umbrella chart registers for its
+// bundled mcp-kubernetes (templates/mcp-kubernetes/mcpserver.yaml): a fixed
+// name, independent of the cluster. Muster prefixes the server's tools with
+// it: x_mcp-kubernetes_<tool>.
+func (c *Config) MCPServerName() string { return "mcp-kubernetes" }
 
 // gatewayURL builds the public URL of a platform hostname: through the
 // agentgateway edge, port-free when the edge sits on 443 (the chart's
