@@ -144,8 +144,104 @@ func PlatformTest(cfg *config.Config, email string) error {
 	}
 	note("namespaces: %s", strings.Join(names, ", "))
 
+	verdict := "PASS: Claude Code -> muster (Dex) -> mcp-kubernetes -> kind apiserver"
+	if cfg.Platform.Observability {
+		// Same singleton prefixing as mcp-kubernetes: the lab's mcpServers
+		// entry deliberately keeps the server out of muster's families
+		// (see agent-platform-values.yaml.tmpl).
+		promPrefix := "x_" + mcpPrometheusRelease + "_"
+		step("Prometheus tools muster is aggregating")
+		shown = 0
+		for _, t := range toolList.Tools {
+			if strings.HasPrefix(t.Name, promPrefix) && shown < 8 {
+				note("%s", t.Name)
+				shown++
+			}
+		}
+		if shown == 0 {
+			return fmt.Errorf("muster aggregates no %s tools", promPrefix)
+		}
+
+		// promQL runs one instant query through muster and returns the tool's
+		// rendered answer (result.content[0].text is JSON whose own
+		// content[0].text is the actual payload — the same two decode hops as
+		// call_tool above).
+		promQL := func(query string) (string, error) {
+			q, _ := json.Marshal(query)
+			payload := fmt.Sprintf(`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"call_tool","arguments":{"name":%q,"arguments":{"query":%s}}}}`, promPrefix+"execute_query", q)
+			res, err := call(payload)
+			if err != nil {
+				return "", err
+			}
+			var wrapped struct {
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
+			}
+			if err := json.Unmarshal([]byte(innerText(res)), &wrapped); err != nil || len(wrapped.Content) == 0 {
+				return "", fmt.Errorf("unexpected execute_query payload shape")
+			}
+			return wrapped.Content[0].Text, nil
+		}
+
+		// `up` is non-empty as soon as Prometheus completes its first scrape,
+		// so a short retry absorbs a just-booted lab.
+		step("Calling %sexecute_query (PromQL: up) through muster", promPrefix)
+		var inner string
+		queried := waitFor(15, 4*time.Second, func() bool {
+			var err error
+			if inner, err = promQL("up"); err != nil {
+				return false
+			}
+			// The tool renders the Prometheus query result as text; an answer
+			// with scrape targets in it proves collection AND the query path.
+			return strings.Contains(inner, "up")
+		})
+		if !queried {
+			return fmt.Errorf("execute_query never returned scrape targets (last payload: %.200s)", inner)
+		}
+		if len(inner) > 160 {
+			inner = inner[:160] + "..."
+		}
+		note("query result: %s", strings.ReplaceAll(inner, "\n", " "))
+
+		// The platform's own monitors: muster ServiceMonitor, valkey
+		// PodMonitor and mcp-prometheus's ServiceMonitor (plus kagent's when
+		// agents run) are enabled with observability, and the lab Prometheus
+		// selects monitors from every release
+		// (…NilUsesHelmValues: false, kube-prometheus-stack-values.yaml.tmpl).
+		// A fresh install needs the operator to reload targets plus one 30s
+		// scrape interval, hence the generous retry.
+		expected := []string{componentMuster, "valkey", mcpPrometheusRelease}
+		if cfg.Platform.Agents {
+			expected = append(expected, "kagent")
+		}
+		step("Verifying Prometheus scrapes the platform itself (%s)", strings.Join(expected, ", "))
+		var missing []string
+		scraped := waitFor(30, 5*time.Second, func() bool {
+			series, err := promQL(`up{namespace=~"agent-platform|kagent|monitoring"} == 1`)
+			if err != nil {
+				return false
+			}
+			missing = missing[:0]
+			for _, want := range expected {
+				if !strings.Contains(series, want) {
+					missing = append(missing, want)
+				}
+			}
+			return len(missing) == 0
+		})
+		if !scraped {
+			return fmt.Errorf("prometheus is not scraping %s;\n"+
+				"check `kubectl -n %s get servicemonitors,podmonitors -A` and the targets via %sget_targets",
+				strings.Join(missing, ", "), platformNamespace, promPrefix)
+		}
+		note("all platform targets are up: %s", strings.Join(expected, ", "))
+		verdict += "\nPASS: Claude Code -> muster (Dex) -> mcp-prometheus -> Prometheus (platform targets scraped)"
+	}
+
 	fmt.Println()
-	fmt.Println("PASS: Claude Code -> muster (Dex) -> mcp-kubernetes -> kind apiserver")
+	fmt.Println(verdict)
 	return nil
 }
 

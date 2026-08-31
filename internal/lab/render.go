@@ -127,15 +127,17 @@ var manifests = map[string]struct {
 	out         string
 	extraInputs []string
 }{
-	"kind-config.yaml.tmpl":           {out: "kind-config.yaml"},
-	"rbac.yaml.tmpl":                  {out: "rbac.yaml"},
-	"agent-platform-values.yaml.tmpl": {out: "agent-platform-values.yaml"},
-	"flux-values.yaml.tmpl":           {out: "flux-values.yaml"},
-	"demo-workflow.yaml.tmpl":         {out: "demo-workflow.yaml"},
-	"coredns.yaml.tmpl":               {out: "coredns.yaml"},
-	"gateway-nodeport.yaml.tmpl":      {out: "gateway-nodeport.yaml"},
-	"backstage-catalog.yaml.tmpl":     {out: "backstage-catalog.yaml"},
-	"dex.yaml.tmpl":                   {out: "dex.yaml", extraInputs: []string{tlsCertPath}},
+	"kind-config.yaml.tmpl":                  {out: "kind-config.yaml"},
+	"rbac.yaml.tmpl":                         {out: "rbac.yaml"},
+	"agent-platform-values.yaml.tmpl":        {out: "agent-platform-values.yaml"},
+	"flux-values.yaml.tmpl":                  {out: "flux-values.yaml"},
+	"kube-prometheus-stack-values.yaml.tmpl": {out: "kube-prometheus-stack-values.yaml"},
+	"mcp-prometheus-values.yaml.tmpl":        {out: "mcp-prometheus-values.yaml"},
+	"demo-workflow.yaml.tmpl":                {out: "demo-workflow.yaml"},
+	"coredns.yaml.tmpl":                      {out: "coredns.yaml"},
+	"gateway-nodeport.yaml.tmpl":             {out: "gateway-nodeport.yaml"},
+	"backstage-catalog.yaml.tmpl":            {out: "backstage-catalog.yaml"},
+	"dex.yaml.tmpl":                          {out: "dex.yaml", extraInputs: []string{tlsCertPath}},
 }
 
 // renderManifest renders one embedded template into state/ per the manifests

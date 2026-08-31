@@ -37,6 +37,15 @@ global:
     ca:
       secretName: dex-ca
       key: ca.crt
+  observability:
+    metrics:
+      # Gates every monitor object the umbrella itself renders — the kagent
+      # controller ServiceMonitor (+ its metrics Service) and the CNPG
+      # PodMonitor. Only viable with platform.observability: without it the
+      # monitoring.coreos.com CRDs do not exist. The per-component toggle
+      # (kagent.kagent.serviceMonitor.enabled below) still applies underneath.
+      serviceMonitor:
+        enabled: {{ .Platform.Observability }}
 
 # The chart-owned agentgateway Gateway is the public edge: it terminates TLS
 # for *.{{ .Platform.Domain }} and every public route attaches to its HTTPS
@@ -131,15 +140,19 @@ muster:
           name: "oidc:platform-admins"
   muster:
     # The umbrella turns muster's ServiceMonitor and PrometheusRule on for the
-    # GS observability stack. No Prometheus Operator in kind, so neither CRD
-    # exists and the release fails to render unless both are off.
+    # GS observability stack. Only viable with platform.observability, which
+    # brings the Prometheus Operator (CRDs + a Prometheus whose selectors
+    # match everything — see kube-prometheus-stack-values.yaml.tmpl); without
+    # it neither CRD exists and the release fails to render. Note the toggle
+    # also changes muster's metrics-exporter env, so flipping observability
+    # rolls the muster pod once.
     observability:
       metrics:
         prometheus:
           serviceMonitor:
-            enabled: false
+            enabled: {{ .Platform.Observability }}
           prometheusRule:
-            enabled: false
+            enabled: {{ .Platform.Observability }}
     # Dex serves a self-signed cert; append the lab CA to muster's trust pool.
     extraCaFile:
       path: /etc/muster/ca/extra-ca.pem
@@ -208,10 +221,14 @@ kagent:
     ui:
       service:
         type: NodePort
-    # No Prometheus Operator in kind, so the ServiceMonitor CRD does not exist
-    # (same story as muster/valkey above).
+    # The umbrella's per-object toggle for the kagent controller
+    # ServiceMonitor it renders (templates/kagent/servicemonitor.yaml —
+    # the kagent subchart itself ships none); the umbrella-level gate is
+    # global.observability.metrics.serviceMonitor.enabled above, and the
+    # controller already serves plain-HTTP /metrics on :8080 via the
+    # umbrella's default METRICS_BIND_ADDRESS/METRICS_SECURE env.
     serviceMonitor:
-      enabled: false
+      enabled: {{ .Platform.Observability }}
     # No OTLP gateway in kind; the exporters would only log dial errors.
     otel:
       tracing:
@@ -255,11 +272,12 @@ valkey:
   ciliumNetworkPolicy:
     enabled: false
   valkey:
-    # No Prometheus Operator in kind, so the PodMonitor CR has no CRD to bind
-    # to and the whole release fails to render without this.
+    # Scraped by the lab Prometheus when platform.observability is on; without
+    # it the PodMonitor CR has no CRD to bind to and the whole release fails
+    # to render.
     metrics:
       podMonitor:
-        enabled: false
+        enabled: {{ .Platform.Observability }}
     auth:
       usersExistingSecret: agent-platform-secrets
       aclUsers:
@@ -272,8 +290,24 @@ agent-platform-mcps:
     # the per-server connection logic, OAuth and token exchange (guard-enforced
     # pairing with ingress.mode).
     viaMuster: true
-  # No mcpServers entries: the Kubernetes MCP server is the umbrella's bundled
+  # The Kubernetes MCP server is NOT listed here: it is the umbrella's bundled
   # mcp-kubernetes component, which registers its own MCPServer CR. The chart's
   # defaults leave the server unauthenticated in-cluster — muster's own OAuth
   # guards the front door and mcp-kubernetes talks to the apiserver with its
   # ServiceAccount.
+{{- if .Platform.Observability }}
+  # The Prometheus MCP server, a lab-installed release (observability.go);
+  # this entry only registers it with muster. `group` must stay OUTSIDE
+  # muster.families (kubernetes, prometheus): a family entry would surface the
+  # tools as x_prometheus_<tool> with a required management_cluster argument,
+  # while this singleton keeps mcp-kubernetes's UX — x_mcp-prometheus_<tool>,
+  # no extra argument. Unauthenticated in-cluster, same stance as
+  # mcp-kubernetes.
+  mcpServers:
+    - name: mcp-prometheus
+      cluster: {{ .ClusterName }}
+      group: observability
+      url: http://mcp-prometheus.monitoring.svc.cluster.local:8080/mcp
+      auth:
+        mode: none
+{{- end }}

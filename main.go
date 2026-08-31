@@ -134,7 +134,7 @@ func accessibleMode() bool {
 
 func configureCmd() *cobra.Command {
 	var defaults, accessible bool
-	var platform, agents, backstage bool
+	var platform, agents, observability, backstage bool
 	cmd := &cobra.Command{
 		Use:   "configure",
 		Short: "Ask for the lab configuration interactively and save agentlab.yaml",
@@ -152,6 +152,9 @@ func configureCmd() *cobra.Command {
 				}
 				if cmd.Flags().Changed("agents") {
 					cfg.Platform.Agents = agents
+				}
+				if cmd.Flags().Changed("observability") {
+					cfg.Platform.Observability = observability
 				}
 				if cmd.Flags().Changed("backstage") {
 					cfg.Backstage.Enabled = backstage
@@ -171,7 +174,7 @@ func configureCmd() *cobra.Command {
 			fmt.Printf("Saved %s:\n", config.File)
 			fmt.Printf("  cluster    %s (Dex on %s)\n", cfg.ClusterName, cfg.Issuer())
 			fmt.Printf("  users      %d\n", len(cfg.Users))
-			fmt.Printf("  platform   %v (agents %v)\n", cfg.Platform.Enabled, cfg.Platform.Agents)
+			fmt.Printf("  platform   %v (agents %v, observability %v)\n", cfg.Platform.Enabled, cfg.Platform.Agents, cfg.Platform.Observability)
 			fmt.Printf("  backstage  %v\n", cfg.Backstage.Enabled)
 			fmt.Printf("  ai model   %s (key from $%s at deploy time)\n", cfg.AIModel, lab.AnthropicKeyEnv)
 			fmt.Println("\nNext: agentlab up")
@@ -181,6 +184,7 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&defaults, "defaults", false, "skip the form; keep current values (or the canonical defaults)")
 	cmd.Flags().BoolVar(&platform, "platform", false, "with --defaults: enable/disable the agent platform")
 	cmd.Flags().BoolVar(&agents, "agents", false, "with --defaults: enable/disable the agents runtime (kagent, part of the platform install)")
+	cmd.Flags().BoolVar(&observability, "observability", false, "with --defaults: enable/disable the observability stack (Prometheus + mcp-prometheus)")
 	cmd.Flags().BoolVar(&backstage, "backstage", false, "with --defaults: enable/disable Backstage (implies the platform)")
 	cmd.Flags().BoolVar(&accessible, "accessible", false, "prompt-per-question form mode (for screen readers and plain terminals)")
 	return cmd
