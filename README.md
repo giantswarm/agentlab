@@ -176,20 +176,6 @@ page still serves the lab-CA cert — the issuer cannot move under your domain
 yet ([#20](https://github.com/giantswarm/agentplatform-kind/issues/20)) — so
 the login hop keeps warning until you `agentlab trust`.
 
-## The dashboard
-
-Running `./agentlab` with no arguments (or `agentlab tui`) opens an
-interactive dashboard: a live status line per component (kind cluster, Dex,
-agent platform, Backstage — each probed every few seconds against its real
-endpoint), plus single-key actions. `s` brings the lab up, `d` tears it down
-(with confirmation), `t` runs the RBAC test suite, `p` runs the platform
-smoke test, `b` opens the real Dex login page, `l` tails component logs, `o`
-opens component URLs in the browser, `u` shows the configured users with
-their passwords and groups, and `c` opens the lab directory. Actions run
-`agentlab <command>` as a subprocess with the output streamed into a
-scrollback pane, so everything the plain CLI prints is visible there too; `x`
-cancels a running action. Edits to `agentlab.yaml` are picked up live.
-
 ## The agent platform (muster + Kubernetes MCP)
 
 The lab's centerpiece: Giant Swarm's
@@ -729,7 +715,6 @@ Both give real groups on any Dex version. Keycloak is not needed for this.
 main.go                        the CLI (cobra): one subcommand per lifecycle step
 internal/config/               agentlab.yaml schema, defaults, validation
 internal/forms/                the interactive configuration forms (huh)
-internal/tui/                  the dashboard (bubbletea)
 internal/lab/                  everything operational:
   certs.go                       the name-constrained lab CA + 825-day leaf certs
   trust.go                       agentlab trust/untrust (system + NSS stores, via smallstep/truststore)

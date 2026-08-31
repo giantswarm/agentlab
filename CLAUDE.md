@@ -61,9 +61,8 @@ with Dex doing the logins.
 ```bash
 make build                 # go build -o agentlab .
 make test                  # go test ./...
-go test ./internal/tui/ -run TestCancelUnblocksWait -count=1 -v   # single test
+go test ./internal/forms/ -run TestMinimalFormDrive -count=1 -v   # single test
 
-./agentlab                 # bare invocation on a terminal = TUI dashboard
 ./agentlab configure       # interactive form; --defaults keeps/writes the canonical lab
 ./agentlab up              # certs, kind cluster, Dex, RBAC, the agent platform — verified
 ./agentlab platform-test   # headless Dex -> muster -> mcp-kubernetes proof
@@ -97,10 +96,6 @@ The lab's own e2e checks are the `*-test` subcommands, not `go test`.
   pure no-ops and config/cert edits roll the pod exactly once. The platform
   install (`platform.go`) uses the binary itself as a Helm post-renderer
   (`postrender.go`: hostNetwork, the DCR chart-bug fix, HTTPRoute strip).
-- `internal/tui` — bubbletea dashboard. Actions re-invoke this same binary as
-  a subprocess in its own process group (kill the group on cancel — children
-  like `kubectl logs -f` hold the output pipe otherwise) and stream output
-  into a scrollback pane.
 
 Load-bearing invariants (details in README.md):
 
