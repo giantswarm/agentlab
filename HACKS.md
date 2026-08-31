@@ -155,25 +155,25 @@ is still open (its head is exactly the pinned `APS_REF`).
 **Unblocks:** merge #11 and publish the chart; then the vendor block becomes
 `helm upgrade --install … oci://gsoci.azurecr.io/charts/giantswarm/agent-platform-standalone`.
 
-### U5. `platform.go`: mcp-kubernetes must be `--wait`ed serially before muster installs
+### U5. `platform.go`: mcp-kubernetes must be `--wait`ed serially before muster installs — RETIRED (#34)
 muster dials its MCPServers ~2s after starting; a failed first dial schedules
 a retry "after 30s" but the orchestrator's backoff-expiry sweep only fires
 ~60s later ("Attempting to reconnect failed MCPServer … (backoff expired)" at
 +60s, observed 2026-08-28 on muster 5.5.6). Overlapping the two helm installs
 therefore *added* ~30s to boot: muster started before mcp-kubernetes was
-ready and ate the fixed penalty. The workaround is ordering — keep the
-mcp-kubernetes `--wait` (cheap now that images preload) so muster's first
-dial always succeeds.
-**Unblocks:** giantswarm/muster — run the reconnect sweep at (or near) the
-scheduled retry time instead of on the coarse sweep interval; then the two
-installs can overlap.
-Since agent-platform-standalone#44 the umbrella bundles mcp-kubernetes itself
-(`components.mcp-kubernetes`, on by default, registering an MCPServer named
-`mcp-kubernetes`). The lab disables the bundled copy and keeps this standalone
-install: adopting it would collide with the ordering above (the subchart
-installs in the same release as muster) and rename the MCPServer CR —
-`agentlab-mcp-kubernetes` is the tool-family handle every doc and test here
-uses. Adoption is #34.
+ready and ate the fixed penalty. The workaround was ordering — a separate
+mcp-kubernetes release `--wait`ed before the umbrella so muster's first dial
+always succeeded.
+**Retired:** since agent-platform-standalone#44 the umbrella bundles
+mcp-kubernetes itself (`components.mcp-kubernetes`, on by default, registering
+an MCPServer named `mcp-kubernetes`, no muster family), and the lab adopted it
+(#34): the standalone release, its version pin and its values template are
+gone, and the tools renamed `x_kubernetes_*` → `x_mcp-kubernetes_*` with no
+`management_cluster` argument. The two workloads now start concurrently inside
+one release, so a muster pod that wins the race can still eat the reconnect
+backoff before the MCPServer shows Connected — the boot's 120s Connected wait
+absorbs it. The muster-side fix (sweep at the scheduled retry time) would
+remove that residual delay.
 
 ### U6. `platform.go`: token-validation probe + one-shot muster bounce after install
 A muster pod (5.5.6, mcp-oauth v1.3.1) can come up with a TLS trust pool that

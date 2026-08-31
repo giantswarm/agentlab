@@ -54,7 +54,6 @@ func Run(cfg *config.Config, accessible bool) error {
 		components = append(components, "backstage")
 	}
 	musterPort := strconv.Itoa(cfg.Platform.MusterPort)
-	mcpVersion := cfg.Platform.MCPKubernetesVersion
 	apsRef := cfg.Platform.APSRef
 	agentsEnabled := cfg.Platform.Agents
 	agentsPort := strconv.Itoa(cfg.Platform.AgentsPort)
@@ -118,10 +117,6 @@ func Run(cfg *config.Config, accessible bool) error {
 				Value(&musterPort).
 				Validate(config.ValidatePort),
 			huh.NewInput().
-				Title("mcp-kubernetes chart version").
-				Value(&mcpVersion).
-				Validate(notEmpty),
-			huh.NewInput().
 				Title("agent-platform-standalone git ref").
 				Description("The umbrella chart has no release yet; it is vendored from git at this pinned SHA.").
 				Value(&apsRef).
@@ -166,7 +161,6 @@ func Run(cfg *config.Config, accessible bool) error {
 	cfg.Platform.Enabled = slices.Contains(components, "platform")
 	cfg.Normalize() // backstage implies the platform
 	cfg.Platform.MusterPort = mustAtoi(musterPort)
-	cfg.Platform.MCPKubernetesVersion = mcpVersion
 	cfg.Platform.APSRef = apsRef
 	cfg.Platform.Agents = agentsEnabled
 	cfg.Platform.AgentsPort = mustAtoi(agentsPort)

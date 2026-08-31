@@ -59,14 +59,9 @@ components:
     enabled: true
   agent-platform-mcps:
     enabled: true
-  # The umbrella bundles mcp-kubernetes (enabled by default since APS #44),
-  # but this lab keeps its own standalone release: it must be `--wait`ed
-  # serially before muster installs (HACKS.md U5), and it is registered via
-  # the agent-platform-mcps entry below as {{ .ClusterName }}-mcp-kubernetes —
-  # the MCPServer name every doc and test in this repo uses. The bundled copy
-  # would collide with it (same Service name/namespace, second MCPServer CR).
-  mcp-kubernetes:
-    enabled: false
+  # mcp-kubernetes ships bundled in the umbrella (enabled by default since
+  # APS #44): the subchart at the BOM's version plus an MCPServer CR named
+  # mcp-kubernetes, so muster's tools surface as x_mcp-kubernetes_<tool>.
   # The agent runtime: the platform's Agent CRs run here, wired to Anthropic
   # through the default ModelConfig (see the kagent block below). Optional in
   # this lab (platform.agents in agentlab.yaml) — on real clusters agent
@@ -277,12 +272,8 @@ agent-platform-mcps:
     # the per-server connection logic, OAuth and token exchange (guard-enforced
     # pairing with ingress.mode).
     viaMuster: true
-  mcpServers:
-    # The Kubernetes MCP server, in-cluster. auth.mode none: muster's own OAuth
-    # guards the front door and mcp-kubernetes talks to the apiserver with its
-    # ServiceAccount.
-    - cluster: {{ .ClusterName }}
-      group: kubernetes
-      url: http://mcp-kubernetes.agent-platform.svc.cluster.local:8080/mcp
-      auth:
-        mode: none
+  # No mcpServers entries: the Kubernetes MCP server is the umbrella's bundled
+  # mcp-kubernetes component, which registers its own MCPServer CR. The chart's
+  # defaults leave the server unauthenticated in-cluster — muster's own OAuth
+  # guards the front door and mcp-kubernetes talks to the apiserver with its
+  # ServiceAccount.

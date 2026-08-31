@@ -35,8 +35,9 @@ with Dex doing the logins.
   the platform and Backstage are enabled by default), then `./agentlab up`,
   then authenticate via `/mcp` (Dex browser login; users and passwords are in
   `agentlab.yaml`, default `admin@lab.local` / `password`).
-- muster's `kubernetes` tools are a *family*: pass the MCPServer CR name,
-  e.g. `management_cluster: "agentlab-mcp-kubernetes"`.
+- The Kubernetes tools come from the umbrella's bundled `mcp-kubernetes`
+  MCPServer and use muster's per-server prefixing: `x_mcp-kubernetes_<tool>`
+  (e.g. `x_mcp-kubernetes_list`), no `management_cluster` argument.
 - The agents runtime (kagent) installs with the platform by default but is
   optional (`platform.agents` in `agentlab.yaml`) — on real clusters agent
   delivery runs through Flux/GitOps, which the lab does not run as a GitOps
