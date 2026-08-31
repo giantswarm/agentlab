@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/giantswarm/agentplatform-kind/internal/config"
+	"github.com/giantswarm/agentlab/internal/config"
 )
 
 // handlerPayloadRe extracts the authorization payload Backstage's handler page

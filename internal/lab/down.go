@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/giantswarm/agentplatform-kind/internal/config"
+	"github.com/giantswarm/agentlab/internal/config"
 )
 
 // Down destroys the kind cluster. Certs are kept: the CA is only worth

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/giantswarm/agentplatform-kind/internal/config"
+	"github.com/giantswarm/agentlab/internal/config"
 )
 
 // Up brings up the whole lab: certs, kind cluster, Dex, RBAC, an end-to-end

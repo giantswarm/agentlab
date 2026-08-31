@@ -20,7 +20,7 @@ import (
 
 	"github.com/smallstep/truststore"
 
-	"github.com/giantswarm/agentplatform-kind/internal/config"
+	"github.com/giantswarm/agentlab/internal/config"
 )
 
 // Trust installs the lab CA into the system trust store (one sudo prompt)

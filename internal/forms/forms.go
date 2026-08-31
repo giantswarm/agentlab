@@ -12,7 +12,7 @@ import (
 
 	"charm.land/huh/v2"
 
-	"github.com/giantswarm/agentplatform-kind/internal/config"
+	"github.com/giantswarm/agentlab/internal/config"
 )
 
 var emailRe = regexp.MustCompile(`^[^@\s]+@[^@\s]+$`)

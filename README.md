@@ -35,12 +35,11 @@ Install the `agentlab` binary one of three ways:
 # From source (clone this repo first):
 go build -o agentlab .
 
-# Via go install — the binary lands as `agentplatform-kind`, rename it once:
-go install github.com/giantswarm/agentplatform-kind@latest
-mv "$(go env GOPATH)/bin/agentplatform-kind" "$(go env GOPATH)/bin/agentlab"
+# Via go install:
+go install github.com/giantswarm/agentlab@latest
 
-# From a GitHub release — assets are named agentplatform-kind-<os>-<arch>:
-curl -Lo agentlab https://github.com/giantswarm/agentplatform-kind/releases/latest/download/agentplatform-kind-linux-amd64
+# From a GitHub release — assets are named agentlab-<os>-<arch>:
+curl -Lo agentlab https://github.com/giantswarm/agentlab/releases/latest/download/agentlab-linux-amd64
 chmod +x agentlab
 ```
 
@@ -173,7 +172,7 @@ platform:
 The edge then serves your certificate instead of a minted wildcard (renewals:
 re-run `agentlab platform` after the files change). Caveat: the Dex login
 page still serves the lab-CA cert — the issuer cannot move under your domain
-yet ([#20](https://github.com/giantswarm/agentplatform-kind/issues/20)) — so
+yet ([#20](https://github.com/giantswarm/agentlab/issues/20)) — so
 the login hop keeps warning until you `agentlab trust`.
 
 ## The agent platform (muster + Kubernetes MCP)

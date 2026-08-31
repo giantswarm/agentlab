@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/giantswarm/agentplatform-kind/internal/config"
+	"github.com/giantswarm/agentlab/internal/config"
 )
 
 // The lab's image rule: images are ALWAYS pulled on the HOST and side-loaded

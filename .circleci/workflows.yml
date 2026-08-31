@@ -12,7 +12,7 @@ workflows:
     jobs:
     - architect/go-build:
         name: go-build
-        binary: agentplatform-kind
+        binary: agentlab
         context: architect
         # Run unit tests through `make test` rather than the orb's hardcoded
         # `go test ./...`, so CI and local agent runs use the same command.
@@ -47,7 +47,7 @@ workflows:
     - architect/upload-release-assets:
         context: architect
         name: upload-release-assets
-        binary: agentplatform-kind
+        binary: agentlab
         requires:
         - go-build
         filters:

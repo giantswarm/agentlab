@@ -1,4 +1,4 @@
-module github.com/giantswarm/agentplatform-kind
+module github.com/giantswarm/agentlab
 
 go 1.25.8
 
