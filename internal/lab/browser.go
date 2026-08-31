@@ -12,7 +12,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/giantswarm/agentplatform-kind/internal/config"
+	"github.com/giantswarm/agentlab/internal/config"
 )
 
 // BrowserLogin runs the real OIDC authorization-code flow: opens the browser

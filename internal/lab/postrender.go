@@ -7,7 +7,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/giantswarm/agentplatform-kind/internal/config"
+	"github.com/giantswarm/agentlab/internal/config"
 )
 
 // PostRender is the Helm post-renderer for the agent-platform-standalone

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/giantswarm/agentplatform-kind/internal/config"
+	"github.com/giantswarm/agentlab/internal/config"
 )
 
 // healADKImages works around HACKS.md U8: kagent-controller composes the

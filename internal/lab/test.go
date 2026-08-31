@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/giantswarm/agentplatform-kind/internal/config"
+	"github.com/giantswarm/agentlab/internal/config"
 )
 
 // Test is the end-to-end RBAC proof: every configured user gets a real token

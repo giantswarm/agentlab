@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/giantswarm/agentplatform-kind/internal/config"
+	"github.com/giantswarm/agentlab/internal/config"
 )
 
 // labDomain is the platform's public domain, set once at command start

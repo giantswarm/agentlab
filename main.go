@@ -17,9 +17,9 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
-	"github.com/giantswarm/agentplatform-kind/internal/config"
-	"github.com/giantswarm/agentplatform-kind/internal/forms"
-	"github.com/giantswarm/agentplatform-kind/internal/lab"
+	"github.com/giantswarm/agentlab/internal/config"
+	"github.com/giantswarm/agentlab/internal/forms"
+	"github.com/giantswarm/agentlab/internal/lab"
 )
 
 func main() {

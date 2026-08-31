@@ -105,7 +105,7 @@ commit_parsers = [
 # below. The token is passed automatically via the workflow's GITHUB_TOKEN.
 [remote.github]
 owner = "giantswarm"
-repo = "agentplatform-kind"
+repo = "agentlab"
 
 # Template for the rendered release notes. Body is what gets posted to the
 # GitHub Release; header and footer are empty so the release page shows only
