@@ -81,6 +81,18 @@ func observabilityUp(cfg *config.Config) error {
 	}
 	note("Prometheus is serving (PromQL inside the cluster: http://prometheus-operated.%s:9090)",
 		observabilityNamespace)
+
+	// The edge route Backstage's Mimir integration queries
+	// (observability-route.yaml.tmpl); paired with the mimirEnabled override
+	// in backstage-catalog.yaml.tmpl. Applied regardless of Backstage so the
+	// endpoint is also there for humans and platform-test.
+	if _, routePath, err := renderManifest(cfg, "observability-route.yaml.tmpl"); err != nil {
+		return err
+	} else if err := runQuiet("kubectl", "apply", "-f", routePath); err != nil {
+		return err
+	}
+	note("PromQL on the edge: %s/api/v1/query (what Backstage's Deployments/Clusters metrics use)",
+		cfg.ObservabilityBaseURL())
 	return nil
 }
 

@@ -329,11 +329,28 @@ lab Prometheus scrapes them (its monitor/rule selectors are opened with
 `*NilUsesHelmValues: false` — upstream's default would only select monitors
 carrying the kps release label).
 
+**Backstage's own metrics views ride along too.** The Clusters and
+Deployments pages query Mimir through gs-backend's `MimirService`, hardcoded
+to `https://observability.<baseDomain>/prometheus/api/v1/query`; the umbrella
+sets `mimirEnabled: false` because standalone installations have no such
+endpoint. With observability on, the lab provides exactly that endpoint — an
+HTTPRoute on the edge (`observability.<domain>`, `/prometheus` prefix-strip →
+the lab Prometheus, whose query API is what Mimir's is compatible with) — and
+overrides `mimirEnabled: true` in its app-config overlay. The gs frontend
+attributes samples without Mimir's `cluster_id` label to the installation
+itself, which is exactly right for a single-cluster lab, so the
+Deployments/Clusters metrics show real numbers. Note the endpoint is
+unauthenticated read-only PromQL on the (localhost-only) lab edge: a real MC
+fronts it with an auth gateway validating the Bearer token, plain Prometheus
+ignores it — wider than muster's OAuth, accepted for the lab.
+
 `agentlab platform-test` grows a phase when the component is on: it lists the
 `x_mcp-prometheus_*` tools through muster, runs `execute_query` with `up`,
-and then asserts the platform itself is being scraped (muster, valkey,
-mcp-prometheus, and kagent when agents run all report `up == 1`), proving
-Dex → muster → mcp-prometheus → Prometheus end to end. Logs:
+asserts the platform itself is being scraped (muster, valkey,
+mcp-prometheus, and kagent when agents run all report `up == 1`), and then
+runs the Deployments page's exact workload query against the edge
+observability endpoint — proving Dex → muster → mcp-prometheus → Prometheus
+and the Backstage metrics path end to end. Logs:
 `agentlab logs prometheus`, `agentlab logs mcp-prometheus`.
 
 ### Why `localhost` and not `127.0.0.1`

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -238,6 +239,35 @@ func PlatformTest(cfg *config.Config, email string) error {
 		}
 		note("all platform targets are up: %s", strings.Join(expected, ", "))
 		verdict += "\nPASS: Claude Code -> muster (Dex) -> mcp-prometheus -> Prometheus (platform targets scraped)"
+
+		// The Backstage metrics path: gs-backend's MimirService queries
+		// https://observability.<domain>/prometheus/api/v1/query — the lab
+		// serves it via observability-route.yaml.tmpl. Run the exact
+		// workload query shape the Deployments page uses and expect the
+		// muster deployment in the answer (present whenever the platform
+		// runs, unlike backstage's own).
+		obsQueryURL := cfg.ObservabilityBaseURL() + "/api/v1/query?query=" +
+			url.QueryEscape(`max without(app, container, customer, endpoint, instance, job, pipeline, pod, provider, region, service, service_priority) (kube_deployment_spec_replicas)`)
+		step("Querying the Backstage metrics endpoint on the edge (%s)", cfg.ObservabilityBaseURL())
+		body := ""
+		answered := waitFor(10, 3*time.Second, func() bool {
+			resp, err := client.Get(obsQueryURL)
+			if err != nil {
+				return false
+			}
+			defer func() { _ = resp.Body.Close() }()
+			raw, _ := io.ReadAll(resp.Body)
+			body = string(raw)
+			return resp.StatusCode == http.StatusOK &&
+				strings.Contains(body, `"deployment":"muster"`)
+		})
+		if !answered {
+			return fmt.Errorf("the edge observability endpoint never answered the Deployments-page query "+
+				"(last body: %.200s);\ncheck `kubectl -n monitoring get httproute observability` and the edge",
+				body)
+		}
+		note("the Deployments-page query answers through the edge (deployment=muster found)")
+		verdict += "\nPASS: Backstage metrics path -> edge -> Prometheus (Mimir-shaped /prometheus API)"
 	}
 
 	fmt.Println()

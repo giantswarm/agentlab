@@ -431,6 +431,14 @@ func (c *Config) MusterDirectURL() string {
 // BackstageBaseURL is Backstage's public URL through the agentgateway edge.
 func (c *Config) BackstageBaseURL() string { return c.gatewayURL("backstage") }
 
+// ObservabilityBaseURL is the lab Prometheus's public query API through the
+// edge, at the /prometheus prefix Backstage's Mimir integration expects
+// (observability-route.yaml.tmpl). Backstage itself always dials it in-cluster
+// on 443 (the CoreDNS rewrite), so only host-side callers see GatewayPort.
+func (c *Config) ObservabilityBaseURL() string {
+	return c.gatewayURL("observability") + "/prometheus"
+}
+
 // BackstageDirectURL bypasses the edge (hostNetwork port mapping), kept for
 // debugging.
 func (c *Config) BackstageDirectURL() string {
