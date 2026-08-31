@@ -41,6 +41,13 @@ import (
 //     one — useless to kind's fixed extraPortMappings. Pinned to
 //     config.KagentUINodePort, the containerPort side of the mapping that
 //     publishes the UI on the host (HACKS.md U9).
+//
+//  4. imagePullPolicy IfNotPresent on every rendered container: the lab's
+//     image rule (preload.go) pulls on the host and side-loads into the node,
+//     which the backstage chart's hardcoded `Always` (no values knob) defeats
+//     — the kubelet re-resolves the registry manifest on every pod start, and
+//     containerd rejects the amd64-only backstage image on an arm64 node even
+//     though the side-loaded copy runs fine under Rosetta (HACKS.md U12).
 func PostRender(in io.Reader, out io.Writer) error {
 	dec := yaml.NewDecoder(in)
 	enc := yaml.NewEncoder(out)
@@ -68,6 +75,9 @@ func PostRender(in io.Reader, out io.Writer) error {
 		if kind == "Service" && name == "kagent-ui" {
 			patchKagentUIService(root)
 		}
+		if podSpec := podTemplateSpec(root); podSpec != nil {
+			pinPullPolicy(podSpec)
+		}
 		if err := enc.Encode(&doc); err != nil {
 			return err
 		}
@@ -86,6 +96,35 @@ func patchHostNetworkDeployment(root *yaml.Node) {
 	setKey(rolling, "maxUnavailable", intNode(1))
 	setKey(strategy, "rollingUpdate", rolling)
 	setKey(ensureMap(root, "spec"), "strategy", strategy)
+}
+
+// podTemplateSpec returns the pod spec of a workload document's template
+// (Deployment/StatefulSet/DaemonSet/Job all render it at spec.template.spec),
+// or nil for anything else. Read-only: never creates structure.
+func podTemplateSpec(root *yaml.Node) *yaml.Node {
+	spec := mapValue(mapValue(mapValue(root, "spec"), "template"), "spec")
+	if spec == nil || spec.Kind != yaml.MappingNode {
+		return nil
+	}
+	return spec
+}
+
+// pinPullPolicy sets imagePullPolicy IfNotPresent on every container of a pod
+// spec. IfNotPresent still pulls what the preload lanes missed; it only stops
+// the kubelet from re-resolving the registry manifest for an image the node
+// already holds.
+func pinPullPolicy(podSpec *yaml.Node) {
+	for _, key := range []string{"initContainers", "containers"} {
+		list := mapValue(podSpec, key)
+		if list == nil || list.Kind != yaml.SequenceNode {
+			continue
+		}
+		for _, c := range list.Content {
+			if c.Kind == yaml.MappingNode {
+				setKey(c, "imagePullPolicy", strNode("IfNotPresent"))
+			}
+		}
+	}
 }
 
 // patchKagentUIService pins the UI port entry to the fixed NodePort the kind

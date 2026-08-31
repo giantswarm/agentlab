@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -67,7 +68,18 @@ func hostPullImages(images []string) []string {
 				// repo), and dropping it here IS the filter — not an error
 				// worth showing.
 				if _, err := outputQuiet("docker", "pull", "-q", img); err != nil {
-					return
+					// Some Giant Swarm images are published linux/amd64 only
+					// (backstage: every tag, HACKS.md U12), so on an arm64
+					// host the default pull finds no manifest. Ask for amd64
+					// explicitly — side-loaded, the kind node runs it through
+					// the VM's Rosetta binfmt handler. A ref that plainly
+					// doesn't exist fails again and stays dropped.
+					if runtime.GOARCH == "amd64" {
+						return
+					}
+					if _, err := outputQuiet("docker", "pull", "--platform", "linux/amd64", "-q", img); err != nil {
+						return
+					}
 				}
 			}
 			mu.Lock()

@@ -281,6 +281,37 @@ once the CRD already carries the field — a kagent bump retires it silently.
 **Unblocks:** giantswarm/kagent#55 — ship CRDs that declare the A2A-card
 metadata fields (backport or the 0.10 bump); then delete `kagentcrd.go`.
 
+### U12. Backstage images are linux/amd64 only — amd64 pull fallback + imagePullPolicy pin
+`gsoci.azurecr.io/giantswarm/backstage` publishes **linux/amd64 only** — every
+tag from 0.192.0 through 0.200.19, verified 2026-08-31 (the index's second
+entry is an attestation, not a platform). On an arm64 Mac that breaks the lab
+twice over:
+
+1. The host-pull lane's plain `docker pull` fails with `no matching manifest
+   for linux/arm64/v8` and drops the ref by design, degrading to an in-node
+   kubelet pull that containerd rejects (`no match for platform in manifest`)
+   — ImagePullBackOff, `agentlab up` times out on the backstage rollout. The
+   pre-Go shell lab pulled backstage with `--platform linux/amd64` explicitly
+   ("the kind node runs it through its Rosetta binfmt handler"); the
+   generic preload lanes introduced in #19 lost that override.
+2. The backstage chart hardcodes `imagePullPolicy: Always` in
+   `deployments.yaml` (no values knob, verified in 0.200.16), so even a
+   side-loaded image is defeated: the kubelet re-resolves the registry
+   manifest on every pod start and hits the same platform mismatch with the
+   runnable image already sitting in the node's containerd.
+
+**Workaround (automated):** `hostPullImages` (`internal/lab/preload.go`)
+retries a failed pull with `--platform linux/amd64` on non-amd64 hosts, and
+`agentlab post-render` pins `imagePullPolicy: IfNotPresent` on every rendered
+container — which also enforces the lab's image rule (host-pull + side-load,
+never kubelet pulls) for everything else. Masked until 2026-08-31 by stale
+amd64 backstage images in the host docker cache from the pre-#19 lab; a fresh
+cache plus a new tag surfaced it.
+**Unblocks:** giantswarm/backstage — publish multi-arch (linux/arm64) images;
+the pull fallback then never triggers. Exposing `image.pullPolicy` in the
+chart would be nice but the IfNotPresent pin stays regardless, as the image
+rule's enforcement.
+
 ## Accepted lab trade-offs (not hacks to fix)
 
 - **Checksum stamping via the `REPLACED_AT_APPLY` placeholder** — the standard

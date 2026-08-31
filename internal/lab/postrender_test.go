@@ -78,9 +78,13 @@ spec:
     metadata:
       labels: {app: backstage}
     spec:
+      initContainers:
+        - name: catalog-copy
+          image: backstage:1.0
       containers:
         - name: backstage
           image: backstage:1.0
+          imagePullPolicy: Always
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -148,6 +152,20 @@ func TestPostRender(t *testing.T) {
 		_, patched := podSpec["hostNetwork"]
 		if (name == "muster" || name == "backstage") != patched {
 			t.Errorf("hostNetwork patch wrong for deployment %v (patched=%v)", name, patched)
+		}
+		// Every container runs cache-first: the backstage chart's hardcoded
+		// Always is rewritten, containers without a policy gain one, and
+		// initContainers are covered too (HACKS.md U12).
+		for _, key := range []string{"initContainers", "containers"} {
+			list, ok := podSpec[key].([]any)
+			if !ok {
+				continue
+			}
+			for _, c := range list {
+				if policy := c.(map[string]any)["imagePullPolicy"]; policy != "IfNotPresent" {
+					t.Errorf("deployment %v %s pull policy not pinned: %v", name, key, policy)
+				}
+			}
 		}
 	}
 	for _, doc := range docs {
