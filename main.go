@@ -20,7 +20,6 @@ import (
 	"github.com/giantswarm/agentplatform-kind/internal/config"
 	"github.com/giantswarm/agentplatform-kind/internal/forms"
 	"github.com/giantswarm/agentplatform-kind/internal/lab"
-	"github.com/giantswarm/agentplatform-kind/internal/tui"
 )
 
 func main() {
@@ -43,25 +42,13 @@ platform trusting the same issuer.
 Start with:  agentlab configure   (interactive; asks every option)
 Then:        agentlab up          (cluster + Dex + the platform, verified end to end)
 Then:        agentlab trust       (once: the lab CA into the trust stores — green locks)
-Then:        claude mcp add --transport http muster https://muster.127.0.0.1.nip.io/mcp
-
-Running agentlab with no arguments on a terminal opens the dashboard (also:
-agentlab tui): live component status plus keys for the lifecycle actions.`,
+Then:        claude mcp add --transport http muster https://muster.127.0.0.1.nip.io/mcp`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Args:          cobra.NoArgs,
-		// Bare `agentlab` on a terminal is the dashboard; piped/CI invocations
-		// get the usage text instead of a hung TUI.
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
-				return cmd.Help()
-			}
-			return runTUI()
-		},
 	}
 
 	root.AddCommand(
-		tuiCmd(),
 		configureCmd(),
 		labCmd("up", "Create the kind cluster, deploy Dex and the enabled components, and verify the OIDC chain", lab.Up),
 		labCmd("down", "Destroy the kind cluster", lab.Down),
@@ -143,25 +130,6 @@ func loadOrCreateConfig() (*config.Config, error) {
 // also what screen readers want.
 func accessibleMode() bool {
 	return os.Getenv("ACCESSIBLE") != ""
-}
-
-func tuiCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "tui",
-		Short: "Interactive dashboard: live status, lifecycle actions, URLs, users",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runTUI()
-		},
-	}
-}
-
-func runTUI() error {
-	cfg, err := loadConfig()
-	if err != nil {
-		return err
-	}
-	return tui.Run(cfg)
 }
 
 func configureCmd() *cobra.Command {

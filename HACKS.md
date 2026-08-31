@@ -298,12 +298,6 @@ metadata fields (backport or the 0.10 bump); then delete `kagentcrd.go`.
   vendored and gitignored; out of scope here.
 - **`login-browser.py` fixed callback port 5555** — must be pre-registered in
   Dex's `redirectURIs`; a random port would break the static client. By design.
-- **The TUI's "lab CA trusted" row is point-in-time per process** — Go
-  snapshots the system cert pool on first use and never re-reads it, so an
-  `agentlab trust`/`untrust` run while the dashboard is open shows up on the
-  dashboard's next start, not its next probe tick. Working around it would
-  mean per-OS store parsing or exec'ing a subprocess per 3s tick; the row is
-  a hint, not a control loop.
 - **A twice-replaced, once-trusted CA lingers only until the next trust op** —
   a `platform.domain` change stashes the outgoing CA under `certs/replaced/`,
   and both `agentlab trust` and `untrust` sweep every stashed CA out of the
@@ -349,6 +343,6 @@ The same cycle through `agentlab`, on a cold cluster, defaults from
 | custom config (`agentlab2`, Dex :31000, run from an empty dir) | second cluster up alongside the first, 10/10 RBAC, clean `down` |
 | `agentlab down` | cluster deleted, no leftovers |
 
-TUI form coverage: `go test ./...` drives the real huh form with scripted
+Form coverage: `go test ./...` drives the real huh form with scripted
 keystrokes (accept defaults, edit fields, toggle components) and unit-tests
 the post-renderer against a synthetic Helm release.
