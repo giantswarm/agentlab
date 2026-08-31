@@ -70,3 +70,11 @@ kube-prometheus-stack:
     enabled: true
     prometheusSpec:
       retention: 10d
+      # Upstream's default (…NilUsesHelmValues: true) makes Prometheus select
+      # only monitors/rules carrying THIS release's label — but the platform's
+      # own monitors (muster, kagent, valkey, mcp-prometheus) come from other
+      # releases. Select everything instead; on a one-tenant lab cluster that
+      # is exactly what you want.
+      serviceMonitorSelectorNilUsesHelmValues: false
+      podMonitorSelectorNilUsesHelmValues: false
+      ruleSelectorNilUsesHelmValues: false

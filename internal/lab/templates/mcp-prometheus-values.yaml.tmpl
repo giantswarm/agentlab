@@ -16,3 +16,8 @@ app:
 # a CRD.
 ciliumNetworkPolicy:
   enabled: false
+# The MCP server's own metrics, scraped by the lab Prometheus (its selectors
+# match every ServiceMonitor — see kube-prometheus-stack-values.yaml.tmpl).
+monitoring:
+  serviceMonitor:
+    enabled: true

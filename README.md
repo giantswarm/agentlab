@@ -322,9 +322,18 @@ the multi-cluster UX, not this single-cluster lab's. What the lab exercises is
 the mcp-prometheus tool chain against a plain local Prometheus; the GS
 production shape (Alloy → Mimir, `X-Scope-OrgID` tenancy) is out of scope.
 
+The platform's own monitors ride along: with observability on, the umbrella's
+muster ServiceMonitor + PrometheusRule, the kagent ServiceMonitor, the valkey
+PodMonitor and mcp-prometheus's own ServiceMonitor are all enabled, and the
+lab Prometheus scrapes them (its monitor/rule selectors are opened with
+`*NilUsesHelmValues: false` — upstream's default would only select monitors
+carrying the kps release label).
+
 `agentlab platform-test` grows a phase when the component is on: it lists the
-`x_mcp-prometheus_*` tools through muster and runs `execute_query` with `up`,
-proving Dex → muster → mcp-prometheus → Prometheus end to end. Logs:
+`x_mcp-prometheus_*` tools through muster, runs `execute_query` with `up`,
+and then asserts the platform itself is being scraped (muster, valkey,
+mcp-prometheus, and kagent when agents run all report `up == 1`), proving
+Dex → muster → mcp-prometheus → Prometheus end to end. Logs:
 `agentlab logs prometheus`, `agentlab logs mcp-prometheus`.
 
 ### Why `localhost` and not `127.0.0.1`
@@ -347,7 +356,7 @@ same one-URL trick, just spelled with a name.
 | `gatewayApi.gateway.create: true` — the chart-owned agentgateway Gateway **is** the public edge | A real MC fronts the platform with the cluster's shared Envoy Gateway; kind has none, so the data-plane Gateway itself terminates TLS for `*.127.0.0.1.nip.io` with the lab's wildcard cert (the chart's own standalone/kind mode, `ingress.mode: agentgateway-muster`). The Gateway API CRDs are embedded in the binary and applied before the install; a lab-owned NodePort Service pins the edge onto the kind port mapping (HACKS.md U10), and a CoreDNS rewrite points `*.127.0.0.1.nip.io` at it inside pods (outside, nip.io answers 127.0.0.1 by itself). |
 | One Dex client, `agent-platform` | The chart's `global.identity` convention: muster and Backstage share the client, so a Backstage-forwarded token natively carries an audience muster trusts. The extra `dex-k8s-authenticator` client exists only as the cross-client audience target Backstage's GS auth provider requests by default. |
 | `networkPolicy.enabled: false`, `kyvernoPolicies.enabled: false` | The umbrella's own policy objects. No Cilium and no Kyverno in kind, so both would render CRs whose API groups the cluster does not serve. |
-| `valkey.valkey.metrics.podMonitor.enabled: false`, `muster…serviceMonitor.enabled: false`, `muster…prometheusRule.enabled: false` | No Prometheus Operator, so `PodMonitor` / `ServiceMonitor` / `PrometheusRule` have no CRD. They stay off even with `platform.observability: true`: the lab Prometheus selects monitors by its own release label (upstream `*NilUsesHelmValues` defaults), so the umbrella's monitors would be rendered-but-never-scraped — and toggling them rolls the muster pod for nothing. |
+| The muster/kagent ServiceMonitors, valkey PodMonitor and muster PrometheusRule follow `platform.observability` | Without it there is no Prometheus Operator, so none of those CRDs exist and the releases fail to render. With it they are scraped by the lab Prometheus — whose selectors are opened up (`*NilUsesHelmValues: false`) because upstream's default selects only monitors carrying the kps release label, and the platform's monitors come from other releases. Flipping observability rolls the muster pod once (the toggle changes its metrics-exporter env). |
 | `platform.observability`: the GS kube-prometheus-stack constituent installed directly, Prometheus server re-enabled, instead of the observability-bundle | The bundle is MC-shaped (Flux HelmReleases with a hardcoded remote kubeconfig, Alloy → Mimir, no local PromQL endpoint). See [Observability](#observability-prometheus--mcp-prometheus). |
 | `muster.rbac.{mcpServerEditor,workflowEditor}.subjects` → `oidc:platform-admins` | The umbrella binds muster's editor Roles to Giant Swarm's admin groups, which do not exist here. Rebound to the lab's own admin group (`--oidc-groups-prefix=oidc:`, same spelling as the lab RBAC). Lists replace, so the GS groups are dropped. |
 | muster patched to `hostNetwork` + `maxSurge: 0` | Same issuer trick as the apiserver and Backstage. `maxSurge: 0` because two hostNetwork pods cannot both bind `:8090` on a one-node cluster. Applied by `agentlab post-render` — Helm 4 accepts only plugin-type post-renderers, so the install generates a `postrenderer/v1` plugin in `state/helm-plugins/` whose command is the agentlab binary itself, and passes it via `HELM_PLUGINS` + `--post-renderer agentlab-postrender`. The plain-Helm replacement for the Flux `postRenderers` the meta-package forwarded to helm-controller. |
