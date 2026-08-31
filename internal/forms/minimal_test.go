@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/huh"
+	"charm.land/huh/v2"
 )
 
 // pacedReader delivers one keystroke chunk per Read with a small delay,

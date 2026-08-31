@@ -1,4 +1,4 @@
-// Package forms is the interactive face of agentlab: charmbracelet/huh forms
+// Package forms is the interactive face of agentlab: charm.land/huh forms
 // that ask for every configuration option and fill in a config.Config.
 package forms
 
@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/charmbracelet/huh"
+	"charm.land/huh/v2"
 
 	"github.com/giantswarm/agentplatform-kind/internal/config"
 )
