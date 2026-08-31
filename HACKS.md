@@ -301,12 +301,22 @@ twice over:
    runnable image already sitting in the node's containerd.
 
 **Workaround (automated):** `hostPullImages` (`internal/lab/preload.go`)
-retries a failed pull with `--platform linux/amd64` on non-amd64 hosts, and
-`agentlab post-render` pins `imagePullPolicy: IfNotPresent` on every rendered
-container — which also enforces the lab's image rule (host-pull + side-load,
-never kubelet pulls) for everything else. Masked until 2026-08-31 by stale
+retries a pull that failed with a *manifest* error (`no matching manifest`,
+`no match for platform`) with `--platform linux/amd64` and notes it — scoped
+so a transient failure on a multi-arch image can never cache the amd64
+variant and run it silently emulated. `agentlab post-render` pins
+`imagePullPolicy: IfNotPresent` on every container the umbrella release
+renders, which also enforces the lab's image rule (host-pull + side-load,
+never kubelet pulls) across the release. Masked until 2026-08-31 by stale
 amd64 backstage images in the host docker cache from the pre-#19 lab; a fresh
 cache plus a new tag surfaced it.
+**Scope limits:** the pin cannot reach pods created at run time by
+controllers (kagent agent pods and the ADK runtime, the agentgateway data
+plane, CNPG instances) — a controller stamping `Always` there would revive
+this failure class outside the postrenderer's reach. The amd64 fallback
+assumes the node VM executes amd64 (Docker Desktop's Rosetta binfmt); a Linux
+arm64 host without a binfmt handler would trade the pull-time error for a
+run-time `exec format error`.
 **Unblocks:** giantswarm/backstage — publish multi-arch (linux/arm64) images;
 the pull fallback then never triggers. Exposing `image.pullPolicy` in the
 chart would be nice but the IfNotPresent pin stays regardless, as the image

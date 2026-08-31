@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -62,24 +61,30 @@ func hostPullImages(images []string) []string {
 	for _, img := range images {
 		wg.Go(func() {
 			if _, err := outputQuiet("docker", "image", "inspect", img); err != nil {
-				// Pull with stderr swallowed: the chart-derived lane scrapes
-				// the odd unpullable ref out of config blobs (e.g. a bare
-				// `giantswarm/valkey`, which docker reads as a Docker Hub
-				// repo), and dropping it here IS the filter — not an error
-				// worth showing.
-				if _, err := outputQuiet("docker", "pull", "-q", img); err != nil {
+				// Pull with stderr captured, not shown: the chart-derived
+				// lane scrapes the odd unpullable ref out of config blobs
+				// (e.g. a bare `giantswarm/valkey`, which docker reads as a
+				// Docker Hub repo), and dropping it here IS the filter — not
+				// an error worth showing.
+				if _, stderr, err := outputQuietErr("docker", "pull", "-q", img); err != nil {
 					// Some Giant Swarm images are published linux/amd64 only
 					// (backstage: every tag, HACKS.md U12), so on an arm64
-					// host the default pull finds no manifest. Ask for amd64
-					// explicitly — side-loaded, the kind node runs it through
-					// the VM's Rosetta binfmt handler. A ref that plainly
-					// doesn't exist fails again and stays dropped.
-					if runtime.GOARCH == "amd64" {
+					// host the pull finds no manifest for the daemon's
+					// platform. Only a manifest error earns the amd64 retry
+					// ("no matching manifest for linux/arm64/v8" from the
+					// classic store, "no match for platform in manifest" from
+					// containerd) — a transient failure must not, or a flaky
+					// pull of a multi-arch image would cache its amd64
+					// variant and run it emulated on every boot after.
+					// Side-loaded, the node executes the amd64 image through
+					// the Docker Desktop VM's Rosetta binfmt handler.
+					if !strings.Contains(stderr, "manifest") {
 						return
 					}
 					if _, err := outputQuiet("docker", "pull", "--platform", "linux/amd64", "-q", img); err != nil {
 						return
 					}
+					note("pulled %s as linux/amd64 (no manifest for the host platform); the node runs it emulated", img)
 				}
 			}
 			mu.Lock()

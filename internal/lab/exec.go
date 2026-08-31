@@ -73,6 +73,17 @@ func outputQuiet(name string, args ...string) (string, error) {
 	return buf.String(), err
 }
 
+// outputQuietErr is outputQuiet with stderr captured too, for probe-style
+// commands whose failure TEXT drives a decision, not just the status.
+func outputQuietErr(name string, args ...string) (stdout, stderr string, err error) {
+	var out, errBuf bytes.Buffer
+	cmd := exec.Command(name, args...) // #nosec G204 -- fixed lab tooling (kind/kubectl/helm) with lab-controlled args
+	cmd.Stdout = &out
+	cmd.Stderr = &errBuf
+	err = cmd.Run()
+	return out.String(), errBuf.String(), err
+}
+
 // pipeInto feeds input to a command's stdin, showing output only on failure.
 func pipeInto(input []byte, name string, args ...string) error {
 	var buf bytes.Buffer

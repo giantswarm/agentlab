@@ -169,6 +169,15 @@ func TestPostRender(t *testing.T) {
 		}
 	}
 	for _, doc := range docs {
+		// The pull-policy pin is read-only outside workloads: a non-workload
+		// document must never gain a spec.template.
+		if kind := doc["kind"]; kind == "Service" || kind == "HTTPRoute" {
+			if spec, ok := doc["spec"].(map[string]any); ok {
+				if _, mutated := spec["template"]; mutated {
+					t.Errorf("postrender injected a pod template into a %v", kind)
+				}
+			}
+		}
 		if doc["kind"] == "Service" {
 			name := doc["metadata"].(map[string]any)["name"]
 			ports := doc["spec"].(map[string]any)["ports"].([]any)
