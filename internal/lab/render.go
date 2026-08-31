@@ -133,6 +133,7 @@ var manifests = map[string]struct {
 	"flux-values.yaml.tmpl":                  {out: "flux-values.yaml"},
 	"kube-prometheus-stack-values.yaml.tmpl": {out: "kube-prometheus-stack-values.yaml"},
 	"mcp-prometheus-values.yaml.tmpl":        {out: "mcp-prometheus-values.yaml"},
+	"observability-route.yaml.tmpl":          {out: "observability-route.yaml"},
 	"demo-workflow.yaml.tmpl":                {out: "demo-workflow.yaml"},
 	"coredns.yaml.tmpl":                      {out: "coredns.yaml"},
 	"gateway-nodeport.yaml.tmpl":             {out: "gateway-nodeport.yaml"},

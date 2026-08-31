@@ -242,8 +242,15 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 		// mounted into the chart's Backstage; must exist before the pod starts.
 		if _, catalogPath, err := renderManifest(cfg, "backstage-catalog.yaml.tmpl"); err != nil {
 			return err
-		} else if err := runQuiet("kubectl", "apply", "-f", catalogPath); err != nil {
+		} else if applied, err := output("kubectl", "apply", "-f", catalogPath); err != nil {
 			return err
+		} else if strings.Contains(applied, "configured") {
+			// Backstage reads app-config at startup only, so a changed overlay
+			// (e.g. flipping platform.observability toggles mimirEnabled) needs
+			// a pod roll on re-runs. Started here and absorbed by the umbrella
+			// install's --wait right below; on a fresh install the deployment
+			// does not exist yet and the first pod reads the final config.
+			_ = runQuiet("kubectl", "-n", platformNamespace, "rollout", "restart", "deploy/backstage")
 		}
 		// The create flow's Deploy button kube:applies Flux CRs; these two
 		// controllers are the delivery engine that turns them into an

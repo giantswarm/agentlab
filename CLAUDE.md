@@ -45,6 +45,10 @@ with Dex doing the logins.
   to answer CPU/memory questions about the lab. Chart pins are Go consts in
   `internal/lab/observability.go`; the bundle itself is deliberately NOT
   installed (MC-shaped: Flux HelmReleases, Alloy -> Mimir, no local PromQL).
+  Backstage's Clusters/Deployments metrics work too: the lab serves the
+  Mimir-shaped endpoint (`observability.<domain>/prometheus` on the edge →
+  the lab Prometheus) and overrides the umbrella's `mimirEnabled: false` in
+  its app-config overlay (backstage-catalog.yaml.tmpl).
 - The agents runtime (kagent) installs with the platform by default but is
   optional (`platform.agents` in `agentlab.yaml`) — on real clusters agent
   delivery runs through Flux/GitOps, which the lab does not run as a GitOps
