@@ -144,7 +144,7 @@ func PlatformTest(cfg *config.Config, email string) error {
 	}
 	note("namespaces: %s", strings.Join(names, ", "))
 
-	pass := "PASS: Claude Code -> muster (Dex) -> mcp-kubernetes -> kind apiserver"
+	verdict := "PASS: Claude Code -> muster (Dex) -> mcp-kubernetes -> kind apiserver"
 	if cfg.Platform.Observability {
 		// Same singleton prefixing as mcp-kubernetes: the lab's mcpServers
 		// entry deliberately keeps the server out of muster's families
@@ -232,16 +232,16 @@ func PlatformTest(cfg *config.Config, email string) error {
 			return len(missing) == 0
 		})
 		if !scraped {
-			return fmt.Errorf("Prometheus is not scraping %s;\n"+
+			return fmt.Errorf("prometheus is not scraping %s;\n"+
 				"check `kubectl -n %s get servicemonitors,podmonitors -A` and the targets via %sget_targets",
 				strings.Join(missing, ", "), platformNamespace, promPrefix)
 		}
 		note("all platform targets are up: %s", strings.Join(expected, ", "))
-		pass += "\nPASS: Claude Code -> muster (Dex) -> mcp-prometheus -> Prometheus (platform targets scraped)"
+		verdict += "\nPASS: Claude Code -> muster (Dex) -> mcp-prometheus -> Prometheus (platform targets scraped)"
 	}
 
 	fmt.Println()
-	fmt.Println(pass)
+	fmt.Println(verdict)
 	return nil
 }
 

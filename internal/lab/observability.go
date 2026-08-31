@@ -75,7 +75,7 @@ func observabilityUp(cfg *config.Config) error {
 		return err == nil && n >= 1
 	})
 	if !up {
-		return fmt.Errorf("Prometheus never reported an available replica (last: %q);\n"+
+		return fmt.Errorf("no available Prometheus replica after the install (last status: %q);\n"+
 			"check `kubectl -n %s get prometheus,statefulset,pods`",
 			replicas, observabilityNamespace)
 	}
