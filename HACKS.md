@@ -167,6 +167,13 @@ dial always succeeds.
 **Unblocks:** giantswarm/muster — run the reconnect sweep at (or near) the
 scheduled retry time instead of on the coarse sweep interval; then the two
 installs can overlap.
+Since agent-platform-standalone#44 the umbrella bundles mcp-kubernetes itself
+(`components.mcp-kubernetes`, on by default, registering an MCPServer named
+`mcp-kubernetes`). The lab disables the bundled copy and keeps this standalone
+install: adopting it would collide with the ordering above (the subchart
+installs in the same release as muster) and rename the MCPServer CR —
+`agentlab-mcp-kubernetes` is the tool-family handle every doc and test here
+uses. Adoption is #34.
 
 ### U6. `platform.go`: token-validation probe + one-shot muster bounce after install
 A muster pod (5.5.6, mcp-oauth v1.3.1) can come up with a TLS trust pool that

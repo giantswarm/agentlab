@@ -59,6 +59,14 @@ components:
     enabled: true
   agent-platform-mcps:
     enabled: true
+  # The umbrella bundles mcp-kubernetes (enabled by default since APS #44),
+  # but this lab keeps its own standalone release: it must be `--wait`ed
+  # serially before muster installs (HACKS.md U5), and it is registered via
+  # the agent-platform-mcps entry below as {{ .ClusterName }}-mcp-kubernetes —
+  # the MCPServer name every doc and test in this repo uses. The bundled copy
+  # would collide with it (same Service name/namespace, second MCPServer CR).
+  mcp-kubernetes:
+    enabled: false
   # The agent runtime: the platform's Agent CRs run here, wired to Anthropic
   # through the default ModelConfig (see the kagent block below). Optional in
   # this lab (platform.agents in agentlab.yaml) — on real clusters agent

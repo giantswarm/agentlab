@@ -362,9 +362,9 @@ open https://backstage.127.0.0.1.nip.io
 ```
 
 The image is published **anonymously** to `gsoci.azurecr.io/giantswarm/backstage`
-— no Giant Swarm registry credentials needed. It is `linux/amd64` only, so on an
-Apple Silicon Mac it runs through the kind node's Rosetta binfmt handler; expect
-a slower first boot, not a failure.
+— no Giant Swarm registry credentials needed. Since 0.200.25 it is multi-arch
+(`linux/amd64` + `linux/arm64`), so it runs natively on Apple Silicon; tags
+before that are amd64-only and fail to pull on an arm64 host.
 
 Sign In takes you to the same Dex login page, and you come back as a real
 Backstage identity with the groups from the token.

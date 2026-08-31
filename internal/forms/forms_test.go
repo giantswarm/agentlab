@@ -20,7 +20,7 @@ func TestRunTUIDrive(t *testing.T) {
 		"\r",                               // group 2: customize users? -> keep as is
 		"\r",                               // group 3: platform + backstage preselected; submit as is
 		"\r", "\r", "\r", "\r", "\r", "\r", // platform group: muster port, mcp version, aps ref, agents confirm, agents ui port, claude model
-		"\r", "\r", // backstage group: port, image
+		"\r", // backstage group: port
 	)
 	testOutput = io.Discard
 	defer func() { testInput, testOutput = nil, nil }()
