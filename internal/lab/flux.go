@@ -1,7 +1,7 @@
 package lab
 
 import (
-	"agentlab/internal/config"
+	"github.com/giantswarm/agentplatform-kind/internal/config"
 )
 
 // fluxChartVersion pins the fluxcd-community flux2 chart (Flux v2.9.1),

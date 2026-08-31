@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"slices"
 
-	"agentlab/internal/config"
+	"github.com/giantswarm/agentplatform-kind/internal/config"
 )
 
 // BackstageUp is the retired bespoke deployment path: Backstage now deploys

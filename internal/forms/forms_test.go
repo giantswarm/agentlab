@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"agentlab/internal/config"
+	"github.com/giantswarm/agentplatform-kind/internal/config"
 )
 
 const keyDelay = 30 * time.Millisecond

@@ -22,8 +22,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
-	"agentlab/internal/config"
-	"agentlab/internal/lab"
+	"github.com/giantswarm/agentplatform-kind/internal/config"
+	"github.com/giantswarm/agentplatform-kind/internal/lab"
 )
 
 const (

@@ -29,8 +29,24 @@ does all of that itself.)
 
 ## Quick start
 
+Install the `agentlab` binary one of three ways:
+
 ```bash
+# From source (clone this repo first):
 go build -o agentlab .
+
+# Via go install — the binary lands as `agentplatform-kind`, rename it once:
+go install github.com/giantswarm/agentplatform-kind@latest
+mv "$(go env GOPATH)/bin/agentplatform-kind" "$(go env GOPATH)/bin/agentlab"
+
+# From a GitHub release — assets are named agentplatform-kind-<os>-<arch>:
+curl -Lo agentlab https://github.com/giantswarm/agentplatform-kind/releases/latest/download/agentplatform-kind-linux-amd64
+chmod +x agentlab
+```
+
+Then bring the lab up:
+
+```bash
 export ANTHROPIC_API_KEY=sk-ant-...   # optional: powers the agents + Backstage AI chat
 ./agentlab configure       # interactive form: cluster, users, components
 ./agentlab up              # certs, kind cluster, Dex, RBAC, the agent platform — verified

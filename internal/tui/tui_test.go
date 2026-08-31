@@ -8,8 +8,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"agentlab/internal/config"
-	"agentlab/internal/lab"
+	"github.com/giantswarm/agentplatform-kind/internal/config"
+	"github.com/giantswarm/agentplatform-kind/internal/lab"
 )
 
 func key(s string) tea.KeyMsg {
