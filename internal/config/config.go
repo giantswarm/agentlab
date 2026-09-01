@@ -299,6 +299,53 @@ func (c *Config) Normalize() {
 	}
 }
 
+// Pin is a version pin that ships with the binary: a known-good value bumped
+// in a reviewed commit, not something a user picks per lab. Pins are still
+// written to agentlab.yaml (and stay editable) so a ref can be overridden
+// while testing platform changes — but that makes them sticky, and a binary
+// that bumps a pin cannot move a file already spelling the old value. That is
+// how an amd64-only Backstage survived a pulled multi-arch bump. PinDrift
+// makes the divergence visible; AdoptPins resolves it.
+type Pin struct {
+	Name    string // the agentlab.yaml key
+	Current string // what the file says
+	Shipped string // what this binary ships
+}
+
+// pins pairs this config's version pins with the shipped defaults, in
+// agentlab.yaml order. Everything else in the file is the lab's shape
+// (cluster name, ports, users, components) and belongs to the user.
+func (c *Config) pins() []Pin {
+	d := Default()
+	return []Pin{
+		{"dexImage", c.DexImage, d.DexImage},
+		{"platform.apsRef", c.Platform.APSRef, d.Platform.APSRef},
+	}
+}
+
+// PinDrift lists the pins where agentlab.yaml and this binary disagree, in
+// either direction — a deliberate override reads the same as a stale value,
+// so callers report rather than decide.
+func (c *Config) PinDrift() []Pin {
+	var drift []Pin
+	for _, p := range c.pins() {
+		if p.Current != p.Shipped {
+			drift = append(drift, p)
+		}
+	}
+	return drift
+}
+
+// AdoptPins resets every version pin to the value this binary ships and
+// returns the pins that actually moved. The lab's shape is left alone.
+func (c *Config) AdoptPins() []Pin {
+	moved := c.PinDrift()
+	d := Default()
+	c.DexImage = d.DexImage
+	c.Platform.APSRef = d.Platform.APSRef
+	return moved
+}
+
 func (c *Config) Validate() error {
 	if err := ValidateClusterName(c.ClusterName); err != nil {
 		return fmt.Errorf("cluster name %q: %w", c.ClusterName, err)

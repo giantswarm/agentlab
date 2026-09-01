@@ -14,6 +14,8 @@ import (
 // OIDC verification, and then the components the configuration enables — the
 // agent platform (the default; it is what the lab tests) and Backstage.
 func Up(cfg *config.Config) error {
+	warnPinDrift(cfg)
+
 	// Fail on Helm 3 before any real work: the platform install at the end of
 	// this boot needs Helm 4 (see ensureHelmSupportsPlatform), and finding
 	// that out after a five-minute cluster boot is the wrong moment.
@@ -206,4 +208,22 @@ func kindClusterExists(name string) bool {
 		return false
 	}
 	return slices.Contains(strings.Split(strings.TrimSpace(out), "\n"), name)
+}
+
+// warnPinDrift reports version pins where agentlab.yaml and this binary
+// disagree. A pulled pin bump cannot move a file that already spells the old
+// value, so the drift is otherwise invisible until an image fails to pull —
+// five minutes into a boot, with nothing pointing at the config. Both
+// directions are reported: a deliberate override is indistinguishable from a
+// stale one here, so this informs and never changes the config.
+func warnPinDrift(cfg *config.Config) {
+	drift := cfg.PinDrift()
+	if len(drift) == 0 {
+		return
+	}
+	step("Warning: %s pins versions other than the ones this agentlab ships", config.File)
+	for _, p := range drift {
+		note("%s: %s (shipped: %s)", p.Name, p.Current, p.Shipped)
+	}
+	note("`agentlab configure --defaults` adopts the shipped values; ignore this if the override is deliberate.")
 }

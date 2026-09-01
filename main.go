@@ -146,7 +146,12 @@ func configureCmd() *cobra.Command {
 			} else if err != nil {
 				return err
 			}
+			var adopted []config.Pin
 			if defaults {
+				// --defaults means the canonical lab, and the version pins
+				// are part of it: silently keeping the file's older ref is
+				// what let a pre-multi-arch Backstage survive a pulled bump.
+				adopted = cfg.AdoptPins()
 				if cmd.Flags().Changed("platform") {
 					cfg.Platform.Enabled = platform
 				}
@@ -174,11 +179,14 @@ func configureCmd() *cobra.Command {
 			fmt.Printf("  platform   %v (agents %v)\n", cfg.Platform.Enabled, cfg.Platform.Agents)
 			fmt.Printf("  backstage  %v\n", cfg.Backstage.Enabled)
 			fmt.Printf("  ai model   %s (key from $%s at deploy time)\n", cfg.AIModel, lab.AnthropicKeyEnv)
+			for _, p := range adopted {
+				fmt.Printf("  adopted    %s %s (was %s)\n", p.Name, p.Shipped, p.Current)
+			}
 			fmt.Println("\nNext: agentlab up")
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&defaults, "defaults", false, "skip the form; keep current values (or the canonical defaults)")
+	cmd.Flags().BoolVar(&defaults, "defaults", false, "skip the form; keep the lab's shape and adopt the version pins this binary ships")
 	cmd.Flags().BoolVar(&platform, "platform", false, "with --defaults: enable/disable the agent platform")
 	cmd.Flags().BoolVar(&agents, "agents", false, "with --defaults: enable/disable the agents runtime (kagent, part of the platform install)")
 	cmd.Flags().BoolVar(&backstage, "backstage", false, "with --defaults: enable/disable Backstage (implies the platform)")
