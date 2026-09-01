@@ -62,6 +62,10 @@ with Dex doing the logins.
   deploy time and lives only in the Secrets `kagent/kagent-anthropic` and
   `backstage/backstage-anthropic` — never in `agentlab.yaml` or `state/`.
   Never inline a real key in config, templates, or rendered values.
+  `platform.extraModels` adds further ModelConfigs (self-hosted
+  OpenAI-compatible endpoints, OpenRouter, Gemini, Ollama) with the same
+  env-var -> Secret key handling; entries removed from the config are pruned
+  on the next run (see README "Extra model configs").
 - For verifying RBAC as a specific user, use `./agentlab login <email>` and
   `kubectl --kubeconfig kubeconfig.oidc` — that is the OIDC path.
 - The kind admin context (`kind-agentlab`) bypasses the platform and OIDC

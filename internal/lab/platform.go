@@ -346,7 +346,14 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 	// since the chart itself creates the kagent namespace.
 	if cfg.Platform.Agents {
 		step("Wiring the agents to Anthropic (ModelConfig model: %s)", cfg.AIModel)
-		if _, err := ensureAnthropicSecret("kagent", "kagent-anthropic"); err != nil {
+		if _, err := ensureAnthropicSecret(kagentNamespace, "kagent-anthropic"); err != nil {
+			return err
+		}
+		// The extra ModelConfigs from platform.extraModels (self-hosted
+		// endpoints, OpenRouter, Gemini, ...) — after the install for the same
+		// reason as the Secret above: the chart owns the kagent namespace and
+		// the ModelConfig CRD.
+		if err := ensureExtraModels(cfg); err != nil {
 			return err
 		}
 		// Agent pods need the golang-adk runtime image at kagent's own tag,
@@ -417,8 +424,8 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 			return httpUp(client, cfg.KagentUIBaseURL())
 		})
 		if uiUp {
-			agentsHint = fmt.Sprintf("  Agents (kagent) run with model %s; UI: %s",
-				cfg.AIModel, cfg.KagentUIBaseURL())
+			agentsHint = fmt.Sprintf("  Agents (kagent) run with model %s%s; UI: %s",
+				cfg.AIModel, extraModelsHint(cfg), cfg.KagentUIBaseURL())
 		} else {
 			agentsHint = fmt.Sprintf(`  Agents (kagent) run with model %s, but the UI is NOT reachable on %s.
   If 'docker port %s' shows no %d line, this cluster

@@ -1,0 +1,42 @@
+# Extra kagent ModelConfigs beyond the chart-rendered default: one CR per
+# platform.extraModels entry in agentlab.yaml. Key material never renders
+# here — each CR references the Secret kagent-<name>, which `agentlab
+# platform` creates from the entry's apiKeyEnv on the host (or with a
+# placeholder for keyless endpoints: the kagent ADK runtime requires the
+# provider's env var to exist even when the endpoint never checks it).
+# The managed-by label scopes pruning: entries removed from agentlab.yaml
+# are deleted on the next run; the chart's default ModelConfig is never
+# touched.
+{{- range .Platform.ExtraModels }}
+---
+apiVersion: kagent.dev/v1alpha2
+kind: ModelConfig
+metadata:
+  name: {{ .Name }}
+  namespace: kagent
+  labels:
+    app.kubernetes.io/managed-by: agentlab
+spec:
+  provider: {{ .Provider }}
+  model: {{ .Model }}
+{{- if .NeedsSecret }}
+  apiKeySecret: {{ .SecretName }}
+  apiKeySecretKey: {{ .SecretKey }}
+{{- end }}
+{{- if .InsecureTLS }}
+  tls:
+    disableVerify: true
+{{- end }}
+{{- if eq .Provider "Ollama" }}
+  ollama:
+    host: {{ .BaseURL }}
+{{- else if .BaseURL }}
+{{- if eq .Provider "Anthropic" }}
+  anthropic:
+    baseUrl: {{ .BaseURL }}
+{{- else }}
+  openAI:
+    baseUrl: {{ .BaseURL }}
+{{- end }}
+{{- end }}
+{{- end }}

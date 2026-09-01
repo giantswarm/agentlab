@@ -135,6 +135,7 @@ var manifests = map[string]struct {
 	"mcp-prometheus-values.yaml.tmpl":        {out: "mcp-prometheus-values.yaml"},
 	"observability-route.yaml.tmpl":          {out: "observability-route.yaml"},
 	"demo-workflow.yaml.tmpl":                {out: "demo-workflow.yaml"},
+	"extra-models.yaml.tmpl":                 {out: "extra-models.yaml"},
 	"coredns.yaml.tmpl":                      {out: "coredns.yaml"},
 	"gateway-nodeport.yaml.tmpl":             {out: "gateway-nodeport.yaml"},
 	"backstage-catalog.yaml.tmpl":            {out: "backstage-catalog.yaml"},

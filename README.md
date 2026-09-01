@@ -292,6 +292,67 @@ pointing agents at muster; note that kagent forwards the *caller's* token to
 muster, so agent tool calls through muster need a real Dex token on the way
 in — headless pokes at the unsecured controller API won't have one.
 
+### Extra model configs (self-hosted, OpenRouter, Gemini, OpenAI)
+
+Beyond the default Anthropic ModelConfig, `platform.extraModels` in
+`agentlab.yaml` adds more — a self-hosted OpenAI-compatible endpoint (vLLM,
+llama.cpp, LM Studio), OpenRouter, Gemini, a plain GPT model, or an Ollama
+host. Each entry becomes a lab-labeled `ModelConfig` CR in the `kagent`
+namespace, selectable when composing an agent (the kagent UI's model dropdown,
+or `modelConfig` on an `Agent` CR):
+
+```yaml
+platform:
+  extraModels:
+    # A self-hosted vLLM — any OpenAI-compatible endpoint works the same way.
+    # No apiKeyEnv: the endpoint is keyless, a placeholder key is shipped.
+    - name: qwen3-8-27b
+      provider: OpenAI
+      model: qwen3-8-27b
+      baseUrl: https://qwen.example.internal/v1
+    # OpenRouter: also just an OpenAI-compatible endpoint plus a key.
+    - name: openrouter-deepseek
+      provider: OpenAI
+      model: deepseek/deepseek-chat
+      baseUrl: https://openrouter.ai/api/v1
+      apiKeyEnv: OPENROUTER_API_KEY
+    - name: gemini-flash
+      provider: Gemini
+      model: gemini-2.5-flash
+      apiKeyEnv: GEMINI_API_KEY
+    - name: local-llama
+      provider: Ollama
+      model: llama3.3
+      baseUrl: http://192.168.1.10:11434
+```
+
+`agentlab configure` asks for these interactively (the "extra model configs"
+confirm in the platform group); `agentlab platform` (or `agentlab up`)
+applies them and waits for the kagent controller to accept each one. Entries
+removed from `agentlab.yaml` are **pruned** on the next run — the managed-by
+label scopes the pruning to lab-created ModelConfigs, so the chart's default
+one is never touched.
+
+Key handling follows the Anthropic pattern: `apiKeyEnv` names a host env var
+read at deploy time, and the value lands only in the Secret
+`kagent/kagent-<name>` (created once, left alone — delete it and re-run to
+rotate; never in `agentlab.yaml` or `state/`). The key *inside* the Secret is
+provider-derived (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`)
+because the kagent controller injects it as an env var of exactly that name
+and the ADK runtime looks up those canonical names. That is also why keyless
+endpoints still get a Secret with a placeholder value: the runtime requires
+the env var to *exist* — an agent pod without it crashloops before ever
+talking to the endpoint.
+
+Two practical notes for self-hosted endpoints: the URL must be reachable
+**from inside the kind node's pods** (a LAN IP or resolvable hostname —
+`localhost` would be the pod itself), and a self-signed certificate needs
+`insecureTLS: true` on the entry (rendered as the ModelConfig's
+`tls.disableVerify`). `Gemini` takes no `baseUrl` (the CRD has no endpoint
+field for it), and `Ollama` requires one (its `host`) and is keyless.
+Providers needing more than a model + endpoint + key (AzureOpenAI, Bedrock,
+Vertex) are out of the lab's vocabulary — create their ModelConfigs by hand.
+
 ### Observability (Prometheus + mcp-prometheus)
 
 An **optional component, on by default** (`platform.observability` in

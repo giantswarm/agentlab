@@ -198,6 +198,9 @@ func configureCmd() *cobra.Command {
 			fmt.Printf("  platform   %v (agents %v, observability %v)\n", cfg.Platform.Enabled, cfg.Platform.Agents, cfg.Platform.Observability)
 			fmt.Printf("  backstage  %v\n", cfg.Backstage.Enabled)
 			fmt.Printf("  ai model   %s (key from $%s at deploy time)\n", cfg.AIModel, lab.AnthropicKeyEnv)
+			for _, m := range cfg.Platform.ExtraModels {
+				fmt.Printf("  extra model %s (%s %s)\n", m.Name, m.Provider, m.Model)
+			}
 			fmt.Println("\nNext: agentlab up")
 			return nil
 		},
