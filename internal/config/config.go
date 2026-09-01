@@ -204,7 +204,7 @@ func Default() *Config {
 			Domain:        "127.0.0.1.nip.io",
 			GatewayPort:   443,
 			APSRepo:       "https://github.com/giantswarm/agent-platform-standalone",
-			APSRef:        "a6d2c0f197de4197c897cfef906f5ed4f4804fa4", // main: backstage 0.201.0 (#54) — sessions can be continued from the portal
+			APSRef:        "7d6f12b6781ba1013c3939aa8e652fcb76dbace2", // main: backstage 0.202.0 (#55) — start sessions and answer agent questions from the portal
 		},
 		Backstage: Backstage{
 			Enabled: true,
