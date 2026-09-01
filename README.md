@@ -73,6 +73,14 @@ agentgateway edge, Backstage on, three users, Dex on 32000.
 `--backstage=false` skips the portal. On a plain terminal or screen reader,
 `agentlab configure --accessible` runs the form as one prompt per question.
 
+When a **new** configuration is created (interactively or via `--defaults`),
+every host-side port is probed on 127.0.0.1 first — the address all kind port
+mappings bind — and any default that is already occupied is moved to a nearby
+free port, with a message saying what moved where (443 falls back to 8443).
+An existing `agentlab.yaml` is never renumbered: its cluster's port mappings
+are already fixed, and while the lab runs its own ports would probe as
+occupied.
+
 To exercise the identity itself:
 
 ```bash

@@ -116,6 +116,7 @@ func loadOrCreateConfig() (*config.Config, error) {
 	}
 	fmt.Printf("No %s yet — let's create one.\n\n", config.File)
 	cfg = config.Default()
+	reportPortChanges(cfg.ChooseFreePorts())
 	if err := forms.Run(cfg, accessibleMode()); err != nil {
 		return nil, err
 	}
@@ -124,6 +125,21 @@ func loadOrCreateConfig() (*config.Config, error) {
 	}
 	fmt.Printf("Saved %s.\n\n", config.File)
 	return cfg, nil
+}
+
+// reportPortChanges tells the user which default ports were already occupied
+// on this machine and what the fresh configuration uses instead. The form (or
+// the saved file) shows the adjusted numbers, but only this message explains
+// why they differ from the documented defaults.
+func reportPortChanges(changes []config.PortChange) {
+	if len(changes) == 0 {
+		return
+	}
+	fmt.Println("Some default ports are already in use on this machine; picked free ones:")
+	for _, ch := range changes {
+		fmt.Printf("  %s\n", ch)
+	}
+	fmt.Println()
 }
 
 // accessibleMode switches huh to its prompt-per-question accessible mode;
@@ -142,7 +158,12 @@ func configureCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := config.Load()
 			if errors.Is(err, os.ErrNotExist) {
+				// Only a FRESH config gets its ports moved off occupied
+				// defaults: an existing agentlab.yaml describes a cluster
+				// whose kind mappings are already fixed (and would count as
+				// "occupied" themselves while the lab runs).
 				cfg = config.Default()
+				reportPortChanges(cfg.ChooseFreePorts())
 			} else if err != nil {
 				return err
 			}
