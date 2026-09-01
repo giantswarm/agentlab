@@ -113,6 +113,24 @@ module into vendored-build mode: after the first `agentlab platform`, `go build`
 failed with "inconsistent vendoring".
 **Fix:** the chart is vendored into `.vendor/` instead.
 
+### H13. Version pins in `agentlab.yaml` outlive the binary that wrote them — FIXED
+`config.Load` overlays `agentlab.yaml` on `Default()`, so the file wins for
+every field — including the pins that ship with the binary (`platform.apsRef`,
+`dexImage`). A pin bump landed in a commit could not move a config that already
+spelled the old value, and `configure --defaults` preserved the stale value
+too: it loads the existing file and only overrides the flags explicitly
+changed. Bumping `apsRef` to the first multi-arch Backstage (#35) therefore
+did nothing for an existing lab — it kept vendoring the ref pinning Backstage
+0.200.19, whose image is amd64-only, and the pod sat in `ErrImagePull` on
+arm64 with nothing pointing at the config.
+**Fix:** `config.PinDrift`/`AdoptPins` name the version pins as a class
+distinct from the lab's shape (cluster name, ports, users, components — the
+user's). `agentlab up` warns up front when the file and the binary disagree,
+in either direction, and never edits the config; `configure --defaults` adopts
+the shipped pins and reports what moved. The pins stay in the file and in the
+form, so a deliberate override while testing platform changes still works
+(see U4) — it just stops being invisible.
+
 ## Blocked upstream (documented, not fixable in this repo)
 
 ### U1. `muster-post-render.sh` patch: `allowPublicClientRegistration` edited into the rendered ConfigMap — FIXED upstream
