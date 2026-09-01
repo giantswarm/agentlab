@@ -90,8 +90,8 @@ func TestExtraModelSecretWiring(t *testing.T) {
 func TestConfigValidateExtraModels(t *testing.T) {
 	cfg := Default()
 	cfg.Platform.ExtraModels = []ExtraModel{
-		{Name: "dup-model", Provider: ProviderOpenAI, Model: "qwen3-8-27b"},
-		{Name: "dup-model", Provider: ProviderOpenAI, Model: "qwen3-8-27b"},
+		{Name: "dup-model", Provider: ProviderOpenAI, Model: "some-model"},
+		{Name: "dup-model", Provider: ProviderOpenAI, Model: "other-model"},
 	}
 	if _, err := cfg.EnsureHashes(); err != nil {
 		t.Fatal(err)
