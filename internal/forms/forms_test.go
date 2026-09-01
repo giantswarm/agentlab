@@ -17,9 +17,11 @@ const keyDelay = 30 * time.Millisecond
 func TestRunTUIDrive(t *testing.T) {
 	testInput = newPacedReader(keyDelay,
 		"\r", "\r", "\r", // group 1: cluster name, dex port, dex image
-		"\r",                               // group 2: customize users? -> keep as is
-		"\r",                               // group 3: platform + backstage preselected; submit as is
-		"\r", "\r", "\r", "\r", "\r", "\r", // platform group: muster port, aps ref, agents confirm, agents ui port, observability confirm, claude model
+		"\r", // group 2: customize users? -> keep as is
+		"\r", // group 3: platform + backstage preselected; submit as is
+		// platform group: muster port, aps ref, agents confirm, agents ui
+		// port, observability confirm, claude model, extra models confirm
+		"\r", "\r", "\r", "\r", "\r", "\r", "\r",
 		"\r", // backstage group: port
 	)
 	testOutput = io.Discard

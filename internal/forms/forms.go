@@ -17,6 +17,14 @@ import (
 
 var emailRe = regexp.MustCompile(`^[^@\s]+@[^@\s]+$`)
 
+// The keep/edit/remove vocabulary shared by the list editors (users, extra
+// models).
+const (
+	actionKeep   = "keep"
+	actionEdit   = "edit"
+	actionRemove = "remove"
+)
+
 // testInput/testOutput let tests drive the real TUI form with a scripted
 // keystroke stream instead of a terminal. nil outside of tests.
 var (
@@ -59,12 +67,24 @@ func Run(cfg *config.Config, accessible bool) error {
 	observabilityEnabled := cfg.Platform.Observability
 	agentsPort := strconv.Itoa(cfg.Platform.AgentsPort)
 	aiModel := cfg.AIModel
+	customizeModels := false
 	backstagePort := strconv.Itoa(cfg.Backstage.Port)
 
 	userSummary := func() string {
 		lines := make([]string, 0, len(cfg.Users))
 		for _, u := range cfg.Users {
 			lines = append(lines, fmt.Sprintf("%s (%s)", u.Email, strings.Join(u.Groups, ", ")))
+		}
+		return strings.Join(lines, "\n")
+	}
+
+	modelSummary := func() string {
+		if len(cfg.Platform.ExtraModels) == 0 {
+			return "(none)"
+		}
+		lines := make([]string, 0, len(cfg.Platform.ExtraModels))
+		for _, m := range cfg.Platform.ExtraModels {
+			lines = append(lines, fmt.Sprintf("%s (%s %s)", m.Name, m.Provider, m.Model))
 		}
 		return strings.Join(lines, "\n")
 	}
@@ -144,6 +164,14 @@ func Run(cfg *config.Config, accessible bool) error {
 				Description("Used by the platform agents' ModelConfig and Backstage's AI chat.\nThe API key comes from $ANTHROPIC_API_KEY at deploy time, never from this file.").
 				Value(&aiModel).
 				Validate(config.ValidateAIModel),
+			huh.NewConfirm().
+				Title("Customize extra model configs?").
+				DescriptionFunc(func() string {
+					return "Additional kagent ModelConfigs beyond the default Claude one — a self-hosted\nOpenAI-compatible endpoint (vLLM, Ollama), OpenRouter, Gemini or plain OpenAI.\nCurrent extras:\n" + modelSummary()
+				}, &cfg.Platform.ExtraModels).
+				Affirmative("Edit them").
+				Negative("Keep as is").
+				Value(&customizeModels),
 		).Title("Agent platform").
 			WithHideFunc(func() bool { return !slices.Contains(components, "platform") }),
 
@@ -180,6 +208,11 @@ func Run(cfg *config.Config, accessible bool) error {
 			return err
 		}
 	}
+	if customizeModels {
+		if err := editExtraModels(cfg, accessible); err != nil {
+			return err
+		}
+	}
 	return cfg.Validate()
 }
 
@@ -189,15 +222,15 @@ func editUsers(cfg *config.Config, accessible bool) error {
 	var kept []config.User
 	for i := range cfg.Users {
 		u := cfg.Users[i]
-		action := "keep"
+		action := actionKeep
 		err := newForm(huh.NewGroup(
 			huh.NewSelect[string]().
 				Title(fmt.Sprintf("User %s", u.Email)).
 				Description(fmt.Sprintf("groups: %s", strings.Join(u.Groups, ", "))).
 				Options(
-					huh.NewOption("Keep", "keep"),
-					huh.NewOption("Edit", "edit"),
-					huh.NewOption("Remove", "remove"),
+					huh.NewOption("Keep", actionKeep),
+					huh.NewOption("Edit", actionEdit),
+					huh.NewOption("Remove", actionRemove),
 				).
 				Value(&action),
 		)).WithAccessible(accessible).Run()
@@ -205,15 +238,15 @@ func editUsers(cfg *config.Config, accessible bool) error {
 			return err
 		}
 		switch action {
-		case "keep":
+		case actionKeep:
 			kept = append(kept, u)
-		case "edit":
+		case actionEdit:
 			edited, err := userForm(u, accessible)
 			if err != nil {
 				return err
 			}
 			kept = append(kept, edited)
-		case "remove":
+		case actionRemove:
 		}
 	}
 
@@ -292,6 +325,141 @@ func userForm(u config.User, accessible bool) (config.User, error) {
 	u.Groups = orderGroups(groups)
 	u.Username = strings.SplitN(email, "@", 2)[0]
 	return u, nil
+}
+
+// editExtraModels rebuilds the extra-model list interactively, mirroring
+// editUsers: each existing entry can be kept, edited or dropped, then new
+// ones can be appended.
+func editExtraModels(cfg *config.Config, accessible bool) error {
+	var kept []config.ExtraModel
+	for i := range cfg.Platform.ExtraModels {
+		m := cfg.Platform.ExtraModels[i]
+		action := actionKeep
+		err := newForm(huh.NewGroup(
+			huh.NewSelect[string]().
+				Title(fmt.Sprintf("Model %s", m.Name)).
+				Description(fmt.Sprintf("%s %s%s", m.Provider, m.Model, baseURLNote(m.BaseURL))).
+				Options(
+					huh.NewOption("Keep", actionKeep),
+					huh.NewOption("Edit", actionEdit),
+					huh.NewOption("Remove", actionRemove),
+				).
+				Value(&action),
+		)).WithAccessible(accessible).Run()
+		if err != nil {
+			return err
+		}
+		switch action {
+		case actionKeep:
+			kept = append(kept, m)
+		case actionEdit:
+			edited, err := extraModelForm(m, accessible)
+			if err != nil {
+				return err
+			}
+			kept = append(kept, edited)
+		case actionRemove:
+		}
+	}
+
+	for {
+		addMore := false
+		err := newForm(huh.NewGroup(
+			huh.NewConfirm().
+				Title("Add another model config?").
+				Description(fmt.Sprintf("%d extra model(s) so far. Removed ones are pruned from the cluster on the next run.", len(kept))).
+				Value(&addMore),
+		)).WithAccessible(accessible).Run()
+		if err != nil {
+			return err
+		}
+		if !addMore {
+			break
+		}
+		m, err := extraModelForm(config.ExtraModel{Provider: config.ProviderOpenAI}, accessible)
+		if err != nil {
+			return err
+		}
+		kept = append(kept, m)
+	}
+
+	cfg.Platform.ExtraModels = kept
+	return nil
+}
+
+func baseURLNote(u string) string {
+	if u == "" {
+		return ""
+	}
+	return " @ " + u
+}
+
+func extraModelForm(m config.ExtraModel, accessible bool) (config.ExtraModel, error) {
+	name := m.Name
+	provider := m.Provider
+	model := m.Model
+	baseURL := m.BaseURL
+	apiKeyEnv := m.APIKeyEnv
+	insecure := m.InsecureTLS
+
+	form := newForm(huh.NewGroup(
+		huh.NewInput().
+			Title("Name").
+			Description("Names the ModelConfig CR and its key Secret (kagent-<name>).").
+			Value(&name).
+			Validate(config.ValidateModelName),
+		huh.NewSelect[string]().
+			Title("Provider").
+			Description("OpenAI also covers every OpenAI-compatible endpoint (vLLM, OpenRouter, ...)\nvia the base URL below.").
+			Options(huh.NewOptions(config.ModelProviderNames...)...).
+			Value(&provider),
+		huh.NewInput().
+			Title("Model").
+			Description("The model id the endpoint serves, e.g. qwen3-8-27b or deepseek/deepseek-chat.").
+			Value(&model).
+			Validate(notEmpty),
+		huh.NewInput().
+			Title("Base URL").
+			Description("Endpoint override: vLLM http://host:8000/v1, OpenRouter\nhttps://openrouter.ai/api/v1. Required for Ollama, not applicable to Gemini.").
+			Value(&baseURL).
+			Validate(func(s string) error {
+				switch {
+				case provider == config.ProviderOllama && s == "":
+					return fmt.Errorf("required for Ollama")
+				case provider == config.ProviderGemini && s != "":
+					return fmt.Errorf("not applicable to Gemini")
+				}
+				return nil
+			}),
+		huh.NewInput().
+			Title("API key env var").
+			Description("Host env var read at deploy time (e.g. OPENROUTER_API_KEY); the value lands\nonly in the Secret. Empty = keyless endpoint (a placeholder key is shipped).").
+			Value(&apiKeyEnv).
+			Validate(func(s string) error {
+				if provider == config.ProviderOllama && s != "" {
+					return fmt.Errorf("keyless provider — an API key env would be silently ignored")
+				}
+				return config.ValidateAPIKeyEnv(s)
+			}),
+		huh.NewConfirm().
+			Title("Skip TLS verification?").
+			Description("Only for self-hosted https endpoints with self-signed certificates.").
+			Affirmative("Skip verification").
+			Negative("Verify").
+			Value(&insecure),
+	)).WithAccessible(accessible)
+
+	if err := form.Run(); err != nil {
+		return config.ExtraModel{}, err
+	}
+
+	m.Name = name
+	m.Provider = provider
+	m.Model = model
+	m.BaseURL = baseURL
+	m.APIKeyEnv = apiKeyEnv
+	m.InsecureTLS = insecure
+	return m, m.Validate()
 }
 
 // orderGroups keeps the canonical group order regardless of selection order,

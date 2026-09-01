@@ -133,7 +133,74 @@ type Platform struct {
 	// at this pinned SHA. Once released this becomes an OCI ref.
 	APSRepo string `yaml:"apsRepo"`
 	APSRef  string `yaml:"apsRef"`
+	// Additional kagent ModelConfigs beyond the chart-rendered default
+	// (aiModel): self-hosted OpenAI-compatible endpoints (vLLM, Ollama),
+	// OpenRouter, Gemini, plain OpenAI. Rendered as lab-labeled ModelConfig
+	// CRs by `agentlab platform`; entries removed here are pruned on the next
+	// run. Inert unless agents are enabled.
+	ExtraModels []ExtraModel `yaml:"extraModels,omitempty"`
 }
+
+// ExtraModel is one additional kagent ModelConfig. API keys are NOT config:
+// APIKeyEnv only names the host env var read at deploy time — the value lands
+// in the Secret kagent-<name>, never in this file or in rendered state/.
+type ExtraModel struct {
+	// ModelConfig CR name; also names the key Secret kagent-<name>.
+	Name string `yaml:"name"`
+	// One of ModelProviders (a subset of the kagent CRD's enum: the providers
+	// expressible with just a model + base URL).
+	Provider string `yaml:"provider"`
+	// The provider's model id (what the endpoint serves, e.g. `qwen3-8-27b`
+	// for a local vLLM or `deepseek/deepseek-chat` on OpenRouter).
+	Model string `yaml:"model"`
+	// Endpoint override. Required for Ollama (the in-cluster default would be
+	// useless), optional for OpenAI/Anthropic (any compatible endpoint:
+	// vLLM `http://host:8000/v1`, OpenRouter `https://openrouter.ai/api/v1`),
+	// not applicable to Gemini.
+	BaseURL string `yaml:"baseUrl,omitempty"`
+	// Host env var holding the API key at deploy time. Empty means a keyless
+	// endpoint: the Secret is still created with a placeholder, because the
+	// kagent ADK runtime requires the provider's env var to exist.
+	APIKeyEnv string `yaml:"apiKeyEnv,omitempty"`
+	// Skip TLS verification on the provider connection (ModelConfig spec.tls.
+	// disableVerify) — for self-hosted endpoints with self-signed certs.
+	InsecureTLS bool `yaml:"insecureTLS,omitempty"`
+}
+
+// The provider vocabulary for extra models, spelled exactly as the kagent
+// ModelConfig CRD's provider enum spells them.
+const (
+	ProviderOpenAI    = "OpenAI"
+	ProviderAnthropic = "Anthropic"
+	ProviderGemini    = "Gemini"
+	ProviderOllama    = "Ollama"
+)
+
+// ModelProviders maps each provider to the key name inside the Secret. The
+// kagent controller injects that key as an env var of the same name into
+// agent pods, and the ADK runtime looks up exactly these canonical names —
+// so the key name is provider-derived, not configurable. Ollama is keyless
+// (empty key = no Secret).
+var ModelProviders = map[string]string{
+	ProviderOpenAI:    "OPENAI_API_KEY",
+	ProviderAnthropic: "ANTHROPIC_API_KEY",
+	ProviderGemini:    "GOOGLE_API_KEY",
+	ProviderOllama:    "",
+}
+
+// ModelProviderNames is ModelProviders' keys in a stable order, for the form
+// options and error messages.
+var ModelProviderNames = []string{ProviderOpenAI, ProviderAnthropic, ProviderGemini, ProviderOllama}
+
+// SecretName is the Kubernetes Secret (in ns kagent) holding this model's key.
+func (m ExtraModel) SecretName() string { return "kagent-" + m.Name }
+
+// SecretKey is the key inside the Secret — the provider's canonical env var
+// name. Empty for keyless providers (no Secret attached at all).
+func (m ExtraModel) SecretKey() string { return ModelProviders[m.Provider] }
+
+// NeedsSecret reports whether this model's ModelConfig references a Secret.
+func (m ExtraModel) NeedsSecret() bool { return m.SecretKey() != "" }
 
 // PlatformTLS is an externally provisioned certificate for the edge; see
 // Platform.TLS.
@@ -291,12 +358,72 @@ func ValidateClusterName(s string) error {
 	return nil
 }
 
-// ValidateAIModel constrains the model to Anthropic: both consumers (the
-// kagent ModelConfig provider and Backstage's ai-chat prefix routing) are
-// wired for Anthropic only, keyed by the one $ANTHROPIC_API_KEY secret.
+// ValidateAIModel constrains the DEFAULT model to Anthropic: both consumers
+// (the kagent ModelConfig provider and Backstage's ai-chat prefix routing)
+// are wired for Anthropic only, keyed by the one $ANTHROPIC_API_KEY secret.
+// Other providers go through platform.extraModels instead.
 func ValidateAIModel(s string) error {
 	if !strings.HasPrefix(s, "claude-") {
-		return fmt.Errorf("must be a claude-* model (the lab only wires Anthropic)")
+		return fmt.Errorf("must be a claude-* model (other providers go in platform.extraModels)")
+	}
+	return nil
+}
+
+// reservedModelNames collide with what the kagent chart / the lab already
+// own: the chart-rendered default ModelConfig, and the name whose Secret
+// (kagent-anthropic) the default ModelConfig references.
+var reservedModelNames = []string{"default-model-config", "anthropic"}
+
+// ValidateModelName is the one home of the extra-model-name rule; the huh
+// form uses it directly as an input validator.
+func ValidateModelName(s string) error {
+	if !nameRe.MatchString(s) {
+		return fmt.Errorf("lowercase alphanumeric and dashes only")
+	}
+	if slices.Contains(reservedModelNames, s) {
+		return fmt.Errorf("%q is reserved (the default ModelConfig and its Secret)", s)
+	}
+	return nil
+}
+
+var envNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// ValidateAPIKeyEnv accepts an env var name or empty (keyless endpoint).
+func ValidateAPIKeyEnv(s string) error {
+	if s != "" && !envNameRe.MatchString(s) {
+		return fmt.Errorf("not an environment variable name")
+	}
+	return nil
+}
+
+// Validate checks one extra model entry; string-typed like the port
+// validators where the form shares it, entry-level here.
+func (m ExtraModel) Validate() error {
+	if err := ValidateModelName(m.Name); err != nil {
+		return fmt.Errorf("name %q: %w", m.Name, err)
+	}
+	key, known := ModelProviders[m.Provider]
+	if !known {
+		return fmt.Errorf("%s: unknown provider %q (one of %s)", m.Name, m.Provider, strings.Join(ModelProviderNames, ", "))
+	}
+	if m.Model == "" {
+		return fmt.Errorf("%s: model is required", m.Name)
+	}
+	if err := ValidateAPIKeyEnv(m.APIKeyEnv); err != nil {
+		return fmt.Errorf("%s: apiKeyEnv %q: %w", m.Name, m.APIKeyEnv, err)
+	}
+	switch m.Provider {
+	case ProviderGemini:
+		if m.BaseURL != "" {
+			return fmt.Errorf("%s: Gemini takes no baseUrl (the ModelConfig CRD has no endpoint field for it)", m.Name)
+		}
+	case ProviderOllama:
+		if m.BaseURL == "" {
+			return fmt.Errorf("%s: Ollama requires baseUrl (the host serving the API, e.g. http://192.168.1.10:11434)", m.Name)
+		}
+	}
+	if key == "" && m.APIKeyEnv != "" {
+		return fmt.Errorf("%s: %s is keyless — apiKeyEnv would be silently ignored", m.Name, m.Provider)
 	}
 	return nil
 }
@@ -365,6 +492,16 @@ func (c *Config) Validate() error {
 	}
 	if err := ValidatePort(strconv.Itoa(c.Platform.AgentsPort)); err != nil {
 		return fmt.Errorf("platform.agentsPort: %w", err)
+	}
+	seenModels := map[string]bool{}
+	for _, m := range c.Platform.ExtraModels {
+		if err := m.Validate(); err != nil {
+			return fmt.Errorf("platform.extraModels: %w", err)
+		}
+		if seenModels[m.Name] {
+			return fmt.Errorf("platform.extraModels: duplicate name %q", m.Name)
+		}
+		seenModels[m.Name] = true
 	}
 	if err := ValidatePort(strconv.Itoa(c.Backstage.Port)); err != nil {
 		return fmt.Errorf("backstage.port: %w", err)
