@@ -1,0 +1,53 @@
+# Publishes the lab Prometheus's query API on the edge at the URL Backstage's
+# MimirService is hardcoded to: https://observability.<baseDomain>/prometheus
+# (gs-backend queries <that>/api/v1/query with the signed-in user's OIDC
+# token). Mimir's query API is Prometheus-compatible and the gs frontend
+# falls back to the installation name when the Mimir-only cluster_id label is
+# absent, so the plain lab Prometheus behind a /prometheus prefix-strip is a
+# drop-in — this is what puts real numbers on the Deployments/Clusters pages
+# (paired with the mimirEnabled override in backstage-catalog.yaml.tmpl).
+#
+# The endpoint is unauthenticated read-only PromQL on the lab edge: a real MC
+# fronts observability.<baseDomain> with an auth gateway that validates the
+# Bearer token; plain Prometheus ignores it. Same lab stance as the rest of
+# the edge (localhost-only kind mapping), just wider than muster's OAuth —
+# called out in README.md.
+#
+# Lives in the observability namespace so the backendRef needs no
+# ReferenceGrant (the umbrella's kagent UI route uses the same pattern); the
+# Gateway name/namespace are the chart-owned edge, hardcoded like
+# gateway-nodeport.yaml.tmpl. Only the /prometheus prefix is routed — the
+# Prometheus web UI's absolute asset paths would need / and are not the
+# point.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: observability
+  namespace: monitoring
+  labels:
+    app: agentlab
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: agentgateway
+      namespace: agent-platform
+      sectionName: https
+  hostnames:
+    - observability.{{ .Platform.Domain }}
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /prometheus
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /
+      backendRefs:
+        # The operator-owned headless Service, same name-stability argument
+        # as PROMETHEUS_URL in mcp-prometheus-values.yaml.tmpl.
+        - name: prometheus-operated
+          port: 9090

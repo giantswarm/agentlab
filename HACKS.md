@@ -306,6 +306,21 @@ once the CRD already carries the field — a kagent bump retires it silently.
 **Unblocks:** giantswarm/kagent#55 — ship CRDs that declare the A2A-card
 metadata fields (backport or the 0.10 bump); then delete `kagentcrd.go`.
 
+### U12. kube-prometheus-stack: `kyvernoPolicyExceptions.enabled: false` required on Kyverno-less clusters
+The GS kube-prometheus-stack wrapper (22.0.0) renders a `kyverno.io/v2alpha1
+PolicyException` for node-exporter's host access whenever node-exporter is
+enabled. The template's API-version selection has a final fallback that
+carries **no** `.Capabilities.APIVersions.Has` guard, so on a cluster without
+Kyverno (this lab) the object renders anyway and the install fails on the
+missing CRD. The lab needs node-exporter (node CPU/memory is half the point
+of `platform.observability`), so the exceptions are switched off wholesale in
+`kube-prometheus-stack-values.yaml.tmpl` — correct here regardless (no
+Kyverno to except from), but the toggle exists only because of the missing
+guard.
+**Unblocks:** giantswarm/kube-prometheus-stack-app — guard the PolicyException
+fallback with a Capabilities check like the sibling branches; then the value
+can be dropped (it would render nothing here either way).
+
 ## Accepted lab trade-offs (not hacks to fix)
 
 - **Checksum stamping via the `REPLACED_AT_APPLY` placeholder** — the standard

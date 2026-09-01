@@ -78,3 +78,25 @@ data:
           target: /lab-catalog/agent-deployment-template.yaml
           rules:
             - allow: [Template]
+{{- if .Platform.Observability }}
+    # The umbrella hardcodes mimirEnabled: false — standalone installations
+    # have no GS observability stack at observability.<baseDomain>. With
+    # platform.observability the lab provides exactly that endpoint
+    # (observability-route.yaml.tmpl: the lab Prometheus's query API behind
+    # the Mimir-shaped /prometheus prefix), so the override turns the
+    # Deployments/Clusters metrics back on. Deep-merged over the umbrella's
+    # app-config (this file is listed after it in extraAppConfig), and the
+    # gs frontend's cluster_id fallback maps every sample to this
+    # installation — right for a single-cluster lab.
+    #
+    # The key is the umbrella's Helm RELEASE name (its app-config registers
+    # gs.installations.<release name>), NOT the cluster name — same trap as
+    # backstagetest.go's `?installation=` parameter. Any other key creates a
+    # SECOND installation without authProvider, which the gs frontend skips
+    # with a console warning while the override silently lands on the wrong
+    # entry.
+    gs:
+      installations:
+        agent-platform:
+          mimirEnabled: true
+{{- end }}

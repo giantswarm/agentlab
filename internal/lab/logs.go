@@ -14,9 +14,11 @@ const logCmd = "logs"
 // feeds cobra's ValidArgs via LogComponents, so dispatch and completion cannot
 // drift.
 var logTargets = map[string][]string{
-	componentDex:    {"-n", componentDex, logCmd, "-l", "app=dex", "-f"},
-	componentMuster: {"-n", platformNamespace, logCmd, "-l", "app.kubernetes.io/name=muster", "-f"},
-	"backstage":     {"-n", platformNamespace, logCmd, "-f", "deploy/backstage"},
+	componentDex:     {"-n", componentDex, logCmd, "-l", "app=dex", "-f"},
+	componentMuster:  {"-n", platformNamespace, logCmd, "-l", "app.kubernetes.io/name=muster", "-f"},
+	"backstage":      {"-n", platformNamespace, logCmd, "-f", "deploy/backstage"},
+	"prometheus":     {"-n", observabilityNamespace, logCmd, "-l", "app.kubernetes.io/name=prometheus", "-f"},
+	"mcp-prometheus": {"-n", observabilityNamespace, logCmd, "-f", "deploy/" + mcpPrometheusRelease},
 }
 
 // LogComponents lists what Logs accepts, for cobra's ValidArgs.

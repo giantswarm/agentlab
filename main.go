@@ -116,6 +116,7 @@ func loadOrCreateConfig() (*config.Config, error) {
 	}
 	fmt.Printf("No %s yet — let's create one.\n\n", config.File)
 	cfg = config.Default()
+	reportPortChanges(cfg.ChooseFreePorts())
 	if err := forms.Run(cfg, accessibleMode()); err != nil {
 		return nil, err
 	}
@@ -126,6 +127,21 @@ func loadOrCreateConfig() (*config.Config, error) {
 	return cfg, nil
 }
 
+// reportPortChanges tells the user which default ports were already occupied
+// on this machine and what the fresh configuration uses instead. The form (or
+// the saved file) shows the adjusted numbers, but only this message explains
+// why they differ from the documented defaults.
+func reportPortChanges(changes []config.PortChange) {
+	if len(changes) == 0 {
+		return
+	}
+	fmt.Println("Some default ports are already in use on this machine; picked free ones:")
+	for _, ch := range changes {
+		fmt.Printf("  %s\n", ch)
+	}
+	fmt.Println()
+}
+
 // accessibleMode switches huh to its prompt-per-question accessible mode;
 // also what screen readers want.
 func accessibleMode() bool {
@@ -134,7 +150,7 @@ func accessibleMode() bool {
 
 func configureCmd() *cobra.Command {
 	var defaults, accessible bool
-	var platform, agents, backstage bool
+	var platform, agents, observability, backstage bool
 	cmd := &cobra.Command{
 		Use:   "configure",
 		Short: "Ask for the lab configuration interactively and save agentlab.yaml",
@@ -142,7 +158,12 @@ func configureCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := config.Load()
 			if errors.Is(err, os.ErrNotExist) {
+				// Only a FRESH config gets its ports moved off occupied
+				// defaults: an existing agentlab.yaml describes a cluster
+				// whose kind mappings are already fixed (and would count as
+				// "occupied" themselves while the lab runs).
 				cfg = config.Default()
+				reportPortChanges(cfg.ChooseFreePorts())
 			} else if err != nil {
 				return err
 			}
@@ -157,6 +178,9 @@ func configureCmd() *cobra.Command {
 				}
 				if cmd.Flags().Changed("agents") {
 					cfg.Platform.Agents = agents
+				}
+				if cmd.Flags().Changed("observability") {
+					cfg.Platform.Observability = observability
 				}
 				if cmd.Flags().Changed("backstage") {
 					cfg.Backstage.Enabled = backstage
@@ -176,7 +200,7 @@ func configureCmd() *cobra.Command {
 			fmt.Printf("Saved %s:\n", config.File)
 			fmt.Printf("  cluster    %s (Dex on %s)\n", cfg.ClusterName, cfg.Issuer())
 			fmt.Printf("  users      %d\n", len(cfg.Users))
-			fmt.Printf("  platform   %v (agents %v)\n", cfg.Platform.Enabled, cfg.Platform.Agents)
+			fmt.Printf("  platform   %v (agents %v, observability %v)\n", cfg.Platform.Enabled, cfg.Platform.Agents, cfg.Platform.Observability)
 			fmt.Printf("  backstage  %v\n", cfg.Backstage.Enabled)
 			fmt.Printf("  ai model   %s (key from $%s at deploy time)\n", cfg.AIModel, lab.AnthropicKeyEnv)
 			for _, p := range adopted {
@@ -189,6 +213,7 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&defaults, "defaults", false, "skip the form; keep the lab's shape and adopt the version pins this binary ships")
 	cmd.Flags().BoolVar(&platform, "platform", false, "with --defaults: enable/disable the agent platform")
 	cmd.Flags().BoolVar(&agents, "agents", false, "with --defaults: enable/disable the agents runtime (kagent, part of the platform install)")
+	cmd.Flags().BoolVar(&observability, "observability", false, "with --defaults: enable/disable the observability stack (Prometheus + mcp-prometheus)")
 	cmd.Flags().BoolVar(&backstage, "backstage", false, "with --defaults: enable/disable Backstage (implies the platform)")
 	cmd.Flags().BoolVar(&accessible, "accessible", false, "prompt-per-question form mode (for screen readers and plain terminals)")
 	return cmd

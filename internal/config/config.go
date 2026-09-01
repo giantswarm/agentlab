@@ -93,6 +93,16 @@ type Platform struct {
 	// does not run, so labs that are not exercising agents can skip the
 	// runtime entirely. Inert when the platform itself is disabled.
 	Agents bool `yaml:"agents"`
+	// A minimal observability stack: the Giant Swarm kube-prometheus-stack
+	// chart (the observability bundle's own pinned constituent, with the
+	// Prometheus server re-enabled — the bundle itself is MC-shaped: Alloy
+	// remote-writing to Mimir, no local query endpoint) plus mcp-prometheus
+	// registered in muster, so agents can answer PromQL questions
+	// (x_mcp-prometheus_<tool>). On by default: asking the platform about the
+	// cluster's CPU/memory is part of the demo story. Not in the umbrella's
+	// BOM (yet) — the lab pins the two charts itself (observability.go).
+	// Inert when the platform itself is disabled.
+	Observability bool `yaml:"observability"`
 	// Host-side port for the kagent UI (http://localhost:<port>). The kind
 	// mapping onto KagentUINodePort always exists — like the other mappings,
 	// it is fixed at cluster creation — so agents can be enabled later.
@@ -186,14 +196,15 @@ func Default() *Config {
 				Groups: []string{groupViewers}},
 		},
 		Platform: Platform{
-			Enabled:     true,
-			Agents:      true,
-			AgentsPort:  8081,
-			MusterPort:  8090,
-			Domain:      "127.0.0.1.nip.io",
-			GatewayPort: 443,
-			APSRepo:     "https://github.com/giantswarm/agent-platform-standalone",
-			APSRef:      "ee2eeac0aeea55603805bcdabb65adc9138746e2", // main: backstage 0.200.26 (#49) — first multi-arch image (arm64), Deployments pages degrade without Mimir
+			Enabled:       true,
+			Agents:        true,
+			Observability: true,
+			AgentsPort:    8081,
+			MusterPort:    8090,
+			Domain:        "127.0.0.1.nip.io",
+			GatewayPort:   443,
+			APSRepo:       "https://github.com/giantswarm/agent-platform-standalone",
+			APSRef:        "50f0d84ce81f470330bbe8766c0eb171a88a2395", // main: backstage 0.203.0 (#59) — stream agent replies in the portal session view
 		},
 		Backstage: Backstage{
 			Enabled: true,
@@ -466,6 +477,14 @@ func (c *Config) MusterDirectURL() string {
 
 // BackstageBaseURL is Backstage's public URL through the agentgateway edge.
 func (c *Config) BackstageBaseURL() string { return c.gatewayURL("backstage") }
+
+// ObservabilityBaseURL is the lab Prometheus's public query API through the
+// edge, at the /prometheus prefix Backstage's Mimir integration expects
+// (observability-route.yaml.tmpl). Backstage itself always dials it in-cluster
+// on 443 (the CoreDNS rewrite), so only host-side callers see GatewayPort.
+func (c *Config) ObservabilityBaseURL() string {
+	return c.gatewayURL("observability") + "/prometheus"
+}
 
 // BackstageDirectURL bypasses the edge (hostNetwork port mapping), kept for
 // debugging.

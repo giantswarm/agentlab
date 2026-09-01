@@ -20,8 +20,13 @@ func Down(cfg *config.Config) error {
 }
 
 // PlatformDown removes the agent platform releases and namespace, leaving Dex
-// and the cluster alone.
+// and the cluster alone. The observability releases go too (they only exist
+// to serve the platform's MCP tools); their prometheus-operator CRDs stay —
+// helm never removes a chart's crds/, and re-installs are unaffected.
 func PlatformDown(cfg *config.Config) error {
+	_ = runQuiet("helm", "-n", observabilityNamespace, "uninstall", mcpPrometheusRelease)
+	_ = runQuiet("helm", "-n", observabilityNamespace, "uninstall", kpsRelease)
+	_ = runQuiet("kubectl", "delete", "namespace", observabilityNamespace, "--ignore-not-found")
 	_ = runQuiet("helm", "-n", platformNamespace, "uninstall", "agent-platform")
 	return run("kubectl", "delete", "namespace", platformNamespace, "--ignore-not-found")
 }

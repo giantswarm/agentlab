@@ -242,8 +242,15 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 		// mounted into the chart's Backstage; must exist before the pod starts.
 		if _, catalogPath, err := renderManifest(cfg, "backstage-catalog.yaml.tmpl"); err != nil {
 			return err
-		} else if err := runQuiet("kubectl", "apply", "-f", catalogPath); err != nil {
+		} else if applied, err := output("kubectl", "apply", "-f", catalogPath); err != nil {
 			return err
+		} else if strings.Contains(applied, "configured") {
+			// Backstage reads app-config at startup only, so a changed overlay
+			// (e.g. flipping platform.observability toggles mimirEnabled) needs
+			// a pod roll on re-runs. Started here and absorbed by the umbrella
+			// install's --wait right below; on a fresh install the deployment
+			// does not exist yet and the first pod reads the final config.
+			_ = runQuiet("kubectl", "-n", platformNamespace, "rollout", "restart", "deploy/backstage")
 		}
 		// The create flow's Deploy button kube:applies Flux CRs; these two
 		// controllers are the delivery engine that turns them into an
@@ -252,6 +259,16 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 			if err := fluxUp(cfg); err != nil {
 				return err
 			}
+		}
+	}
+
+	// Before the umbrella on purpose: the umbrella registers the MCPServer CR
+	// for mcp-prometheus (agent-platform-mcps values), and muster's first dial
+	// should find the server already serving (a failed first dial costs up to
+	// ~60s of retry sweep, HACKS.md U5).
+	if cfg.Platform.Observability {
+		if err := observabilityUp(cfg); err != nil {
+			return err
 		}
 	}
 
@@ -304,22 +321,15 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 	}
 
 	step("Waiting for muster to connect to the Kubernetes MCP")
-	mcpName := cfg.MCPServerName()
-	state := ""
-	connected := waitFor(40, 3*time.Second, func() bool {
-		// Fully qualified: kagent ships its own MCPServer CRD (mcpservers.kagent.dev),
-		// so the bare kind resolves to the wrong API group.
-		state, _ = outputQuiet("kubectl", "-n", platformNamespace, "get", "mcpservers.muster.giantswarm.io", mcpName,
-			"-o", "jsonpath={.status.state}")
-		return state == "Connected"
-	})
-	if !connected {
-		return fmt.Errorf("MCPServer %s never reached Connected (last state: %q);\n"+
-			"check `agentlab logs muster`, `kubectl -n %s describe mcpservers.muster.giantswarm.io %s`\n"+
-			"and the mcp-kubernetes rollout: `kubectl -n %s get deploy,pods`",
-			mcpName, state, platformNamespace, mcpName, platformNamespace)
+	if err := waitMCPServerConnected(cfg.MCPServerName()); err != nil {
+		return err
 	}
-	note("MCPServer %s: Connected", mcpName)
+	if cfg.Platform.Observability {
+		step("Waiting for muster to connect to the Prometheus MCP")
+		if err := waitMCPServerConnected(mcpPrometheusRelease); err != nil {
+			return err
+		}
+	}
 
 	// The Workflow CRD ships with muster, so this has to land after the
 	// install. A muster with no workflows leaves the Backstage muster plugin's
@@ -418,6 +428,11 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 				cfg.Platform.AgentsPort, cfg.Platform.AgentsPort)
 		}
 	}
+	obsHint := "  Observability is disabled (platform.observability in agentlab.yaml)."
+	if cfg.Platform.Observability {
+		obsHint = "  Observability: Prometheus scrapes the cluster; muster serves it as x_mcp-prometheus_* tools\n" +
+			"  (try asking Claude Code for a pod's CPU or memory)."
+	}
 	fmt.Printf(`
 %s
   %s
@@ -427,10 +442,32 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 %s
 
 %s
-%s`, header, reach, usersBlock(cfg), backstageHint, claudeCodeHint(cfg), agentsHint, tryItBlock(cfg))
+%s
+%s`, header, reach, usersBlock(cfg), backstageHint, claudeCodeHint(cfg), agentsHint, obsHint, tryItBlock(cfg))
 	// Everything the platform runs is in the node now — record it so the next
 	// boot side-loads instead of pulling.
 	snapshotPreloadImages(cfg)
+	return nil
+}
+
+// waitMCPServerConnected polls one muster MCPServer CR (in the platform
+// namespace) until muster reports the downstream connection up. The name is
+// fully qualified because kagent ships its own MCPServer CRD
+// (mcpservers.kagent.dev), so the bare kind resolves to the wrong API group.
+func waitMCPServerConnected(name string) error {
+	state := ""
+	connected := waitFor(40, 3*time.Second, func() bool {
+		state, _ = outputQuiet("kubectl", "-n", platformNamespace, "get", "mcpservers.muster.giantswarm.io", name,
+			"-o", "jsonpath={.status.state}")
+		return state == "Connected"
+	})
+	if !connected {
+		return fmt.Errorf("MCPServer %s never reached Connected (last state: %q);\n"+
+			"check `agentlab logs muster`, `kubectl -n %s describe mcpservers.muster.giantswarm.io %s`\n"+
+			"and the server's rollout: `kubectl -n %s get deploy,pods`",
+			name, state, platformNamespace, name, platformNamespace)
+	}
+	note("MCPServer %s: Connected", name)
 	return nil
 }
 
