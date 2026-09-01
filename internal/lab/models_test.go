@@ -17,8 +17,8 @@ func TestExtraModelsTemplate(t *testing.T) {
 		{Name: "qwen3-8-27b", Provider: "OpenAI", Model: "qwen3-8-27b",
 			BaseURL: "https://qwen.example.com/v1", InsecureTLS: true},
 		{Name: "openrouter-deepseek", Provider: "OpenAI", Model: "deepseek/deepseek-chat",
-			BaseURL: "https://openrouter.ai/api/v1", APIKeyEnv: "OPENROUTER_API_KEY"},
-		{Name: "gemini-flash", Provider: "Gemini", Model: "gemini-2.5-flash", APIKeyEnv: "GEMINI_API_KEY"},
+			BaseURL: "https://openrouter.ai/api/v1", APIKeyEnv: "OPENROUTER_API_KEY"}, // #nosec G101 -- env var NAME, not a credential
+		{Name: "gemini-flash", Provider: "Gemini", Model: "gemini-2.5-flash", APIKeyEnv: "GEMINI_API_KEY"}, // #nosec G101 -- env var NAME, not a credential
 		{Name: "local-llama", Provider: "Ollama", Model: "llama3.3", BaseURL: "http://192.168.1.10:11434"},
 		{Name: "claude-proxy", Provider: "Anthropic", Model: "claude-haiku-4-5", BaseURL: "https://proxy.example.com"},
 	}

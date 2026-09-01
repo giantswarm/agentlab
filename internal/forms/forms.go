@@ -17,6 +17,14 @@ import (
 
 var emailRe = regexp.MustCompile(`^[^@\s]+@[^@\s]+$`)
 
+// The keep/edit/remove vocabulary shared by the list editors (users, extra
+// models).
+const (
+	actionKeep   = "keep"
+	actionEdit   = "edit"
+	actionRemove = "remove"
+)
+
 // testInput/testOutput let tests drive the real TUI form with a scripted
 // keystroke stream instead of a terminal. nil outside of tests.
 var (
@@ -214,15 +222,15 @@ func editUsers(cfg *config.Config, accessible bool) error {
 	var kept []config.User
 	for i := range cfg.Users {
 		u := cfg.Users[i]
-		action := "keep"
+		action := actionKeep
 		err := newForm(huh.NewGroup(
 			huh.NewSelect[string]().
 				Title(fmt.Sprintf("User %s", u.Email)).
 				Description(fmt.Sprintf("groups: %s", strings.Join(u.Groups, ", "))).
 				Options(
-					huh.NewOption("Keep", "keep"),
-					huh.NewOption("Edit", "edit"),
-					huh.NewOption("Remove", "remove"),
+					huh.NewOption("Keep", actionKeep),
+					huh.NewOption("Edit", actionEdit),
+					huh.NewOption("Remove", actionRemove),
 				).
 				Value(&action),
 		)).WithAccessible(accessible).Run()
@@ -230,15 +238,15 @@ func editUsers(cfg *config.Config, accessible bool) error {
 			return err
 		}
 		switch action {
-		case "keep":
+		case actionKeep:
 			kept = append(kept, u)
-		case "edit":
+		case actionEdit:
 			edited, err := userForm(u, accessible)
 			if err != nil {
 				return err
 			}
 			kept = append(kept, edited)
-		case "remove":
+		case actionRemove:
 		}
 	}
 
@@ -326,15 +334,15 @@ func editExtraModels(cfg *config.Config, accessible bool) error {
 	var kept []config.ExtraModel
 	for i := range cfg.Platform.ExtraModels {
 		m := cfg.Platform.ExtraModels[i]
-		action := "keep"
+		action := actionKeep
 		err := newForm(huh.NewGroup(
 			huh.NewSelect[string]().
 				Title(fmt.Sprintf("Model %s", m.Name)).
 				Description(fmt.Sprintf("%s %s%s", m.Provider, m.Model, baseURLNote(m.BaseURL))).
 				Options(
-					huh.NewOption("Keep", "keep"),
-					huh.NewOption("Edit", "edit"),
-					huh.NewOption("Remove", "remove"),
+					huh.NewOption("Keep", actionKeep),
+					huh.NewOption("Edit", actionEdit),
+					huh.NewOption("Remove", actionRemove),
 				).
 				Value(&action),
 		)).WithAccessible(accessible).Run()
@@ -342,15 +350,15 @@ func editExtraModels(cfg *config.Config, accessible bool) error {
 			return err
 		}
 		switch action {
-		case "keep":
+		case actionKeep:
 			kept = append(kept, m)
-		case "edit":
+		case actionEdit:
 			edited, err := extraModelForm(m, accessible)
 			if err != nil {
 				return err
 			}
 			kept = append(kept, edited)
-		case "remove":
+		case actionRemove:
 		}
 	}
 
@@ -368,7 +376,7 @@ func editExtraModels(cfg *config.Config, accessible bool) error {
 		if !addMore {
 			break
 		}
-		m, err := extraModelForm(config.ExtraModel{Provider: "OpenAI"}, accessible)
+		m, err := extraModelForm(config.ExtraModel{Provider: config.ProviderOpenAI}, accessible)
 		if err != nil {
 			return err
 		}
@@ -416,9 +424,9 @@ func extraModelForm(m config.ExtraModel, accessible bool) (config.ExtraModel, er
 			Value(&baseURL).
 			Validate(func(s string) error {
 				switch {
-				case provider == "Ollama" && s == "":
+				case provider == config.ProviderOllama && s == "":
 					return fmt.Errorf("required for Ollama")
-				case provider == "Gemini" && s != "":
+				case provider == config.ProviderGemini && s != "":
 					return fmt.Errorf("not applicable to Gemini")
 				}
 				return nil
@@ -428,8 +436,8 @@ func extraModelForm(m config.ExtraModel, accessible bool) (config.ExtraModel, er
 			Description("Host env var read at deploy time (e.g. OPENROUTER_API_KEY); the value lands\nonly in the Secret. Empty = keyless endpoint (a placeholder key is shipped).").
 			Value(&apiKeyEnv).
 			Validate(func(s string) error {
-				if provider == "Ollama" && s != "" {
-					return fmt.Errorf("Ollama is keyless — this would be silently ignored")
+				if provider == config.ProviderOllama && s != "" {
+					return fmt.Errorf("keyless provider — an API key env would be silently ignored")
 				}
 				return config.ValidateAPIKeyEnv(s)
 			}),

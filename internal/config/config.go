@@ -167,21 +167,30 @@ type ExtraModel struct {
 	InsecureTLS bool `yaml:"insecureTLS,omitempty"`
 }
 
-// ModelProviders is the fixed provider vocabulary for extra models, mapped to
-// the key name inside the Secret. The kagent controller injects that key as
-// an env var of the same name into agent pods, and the ADK runtime looks up
-// exactly these canonical names — so the key name is provider-derived, not
-// configurable. Ollama is keyless (empty key = no Secret).
+// The provider vocabulary for extra models, spelled exactly as the kagent
+// ModelConfig CRD's provider enum spells them.
+const (
+	ProviderOpenAI    = "OpenAI"
+	ProviderAnthropic = "Anthropic"
+	ProviderGemini    = "Gemini"
+	ProviderOllama    = "Ollama"
+)
+
+// ModelProviders maps each provider to the key name inside the Secret. The
+// kagent controller injects that key as an env var of the same name into
+// agent pods, and the ADK runtime looks up exactly these canonical names —
+// so the key name is provider-derived, not configurable. Ollama is keyless
+// (empty key = no Secret).
 var ModelProviders = map[string]string{
-	"OpenAI":    "OPENAI_API_KEY",
-	"Anthropic": "ANTHROPIC_API_KEY",
-	"Gemini":    "GOOGLE_API_KEY",
-	"Ollama":    "",
+	ProviderOpenAI:    "OPENAI_API_KEY",
+	ProviderAnthropic: "ANTHROPIC_API_KEY",
+	ProviderGemini:    "GOOGLE_API_KEY",
+	ProviderOllama:    "",
 }
 
 // ModelProviderNames is ModelProviders' keys in a stable order, for the form
 // options and error messages.
-var ModelProviderNames = []string{"OpenAI", "Anthropic", "Gemini", "Ollama"}
+var ModelProviderNames = []string{ProviderOpenAI, ProviderAnthropic, ProviderGemini, ProviderOllama}
 
 // SecretName is the Kubernetes Secret (in ns kagent) holding this model's key.
 func (m ExtraModel) SecretName() string { return "kagent-" + m.Name }
@@ -404,11 +413,11 @@ func (m ExtraModel) Validate() error {
 		return fmt.Errorf("%s: apiKeyEnv %q: %w", m.Name, m.APIKeyEnv, err)
 	}
 	switch m.Provider {
-	case "Gemini":
+	case ProviderGemini:
 		if m.BaseURL != "" {
 			return fmt.Errorf("%s: Gemini takes no baseUrl (the ModelConfig CRD has no endpoint field for it)", m.Name)
 		}
-	case "Ollama":
+	case ProviderOllama:
 		if m.BaseURL == "" {
 			return fmt.Errorf("%s: Ollama requires baseUrl (the host serving the API, e.g. http://192.168.1.10:11434)", m.Name)
 		}

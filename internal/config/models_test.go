@@ -6,7 +6,7 @@ import (
 )
 
 func TestExtraModelValidate(t *testing.T) {
-	valid := ExtraModel{Name: "qwen3-8-27b", Provider: "OpenAI", Model: "qwen3-8-27b",
+	valid := ExtraModel{Name: "qwen3-8-27b", Provider: ProviderOpenAI, Model: "qwen3-8-27b",
 		BaseURL: "http://192.168.1.10:8000/v1"}
 
 	cases := []struct {
@@ -22,17 +22,17 @@ func TestExtraModelValidate(t *testing.T) {
 			return m
 		}, ""},
 		{"gemini", func(m ExtraModel) ExtraModel {
-			m.Provider = "Gemini"
+			m.Provider = ProviderGemini
 			m.BaseURL = ""
 			m.APIKeyEnv = "GEMINI_API_KEY"
 			return m
 		}, ""},
 		{"anthropic base url", func(m ExtraModel) ExtraModel {
-			m.Provider = "Anthropic"
+			m.Provider = ProviderAnthropic
 			return m
 		}, ""},
 		{"ollama", func(m ExtraModel) ExtraModel {
-			m.Provider = "Ollama"
+			m.Provider = ProviderOllama
 			m.BaseURL = "http://192.168.1.10:11434"
 			return m
 		}, ""},
@@ -42,16 +42,16 @@ func TestExtraModelValidate(t *testing.T) {
 		{"unknown provider", func(m ExtraModel) ExtraModel { m.Provider = "Bedrock"; return m }, "unknown provider"},
 		{"missing model", func(m ExtraModel) ExtraModel { m.Model = ""; return m }, "model is required"},
 		{"gemini with base url", func(m ExtraModel) ExtraModel {
-			m.Provider = "Gemini"
+			m.Provider = ProviderGemini
 			return m
 		}, "no baseUrl"},
 		{"ollama without base url", func(m ExtraModel) ExtraModel {
-			m.Provider = "Ollama"
+			m.Provider = ProviderOllama
 			m.BaseURL = ""
 			return m
 		}, "requires baseUrl"},
 		{"ollama with key env", func(m ExtraModel) ExtraModel {
-			m.Provider = "Ollama"
+			m.Provider = ProviderOllama
 			m.BaseURL = "http://h:11434"
 			m.APIKeyEnv = "X"
 			return m
@@ -75,14 +75,14 @@ func TestExtraModelValidate(t *testing.T) {
 }
 
 func TestExtraModelSecretWiring(t *testing.T) {
-	m := ExtraModel{Name: "qwen", Provider: "OpenAI"}
+	m := ExtraModel{Name: "qwen", Provider: ProviderOpenAI}
 	if m.SecretName() != "kagent-qwen" || m.SecretKey() != "OPENAI_API_KEY" || !m.NeedsSecret() {
 		t.Errorf("OpenAI wiring: secret=%s key=%s needs=%v", m.SecretName(), m.SecretKey(), m.NeedsSecret())
 	}
-	if (ExtraModel{Provider: "Gemini"}).SecretKey() != "GOOGLE_API_KEY" {
+	if (ExtraModel{Provider: ProviderGemini}).SecretKey() != "GOOGLE_API_KEY" {
 		t.Errorf("Gemini must map to GOOGLE_API_KEY (what the ADK runtime reads)")
 	}
-	if (ExtraModel{Provider: "Ollama"}).NeedsSecret() {
+	if (ExtraModel{Provider: ProviderOllama}).NeedsSecret() {
 		t.Errorf("Ollama is keyless")
 	}
 }
@@ -90,8 +90,8 @@ func TestExtraModelSecretWiring(t *testing.T) {
 func TestConfigValidateExtraModels(t *testing.T) {
 	cfg := Default()
 	cfg.Platform.ExtraModels = []ExtraModel{
-		{Name: "qwen", Provider: "OpenAI", Model: "qwen3-8-27b"},
-		{Name: "qwen", Provider: "OpenAI", Model: "qwen3-8-27b"},
+		{Name: "dup-model", Provider: ProviderOpenAI, Model: "qwen3-8-27b"},
+		{Name: "dup-model", Provider: ProviderOpenAI, Model: "qwen3-8-27b"},
 	}
 	if _, err := cfg.EnsureHashes(); err != nil {
 		t.Fatal(err)
