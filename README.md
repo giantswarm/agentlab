@@ -353,6 +353,50 @@ field for it), and `Ollama` requires one (its `host`) and is keyless.
 Providers needing more than a model + endpoint + key (AzureOpenAI, Bedrock,
 Vertex) are out of the lab's vocabulary — create their ModelConfigs by hand.
 
+#### Local backends on the lab host (Ollama, Lemonade/NPU)
+
+A model server on the lab host itself is the cheapest self-hosted endpoint,
+and everything that can go wrong is host-side plumbing, not kagent:
+
+- **Address**: pods reach the host only through the kind docker network's
+  gateway — `docker network inspect kind` names it, typically `172.21.0.1`.
+  That IP goes in `baseUrl`; `localhost` would be the agent pod itself.
+- **Bind address**: the server must listen on `0.0.0.0` (or the bridge IP).
+  The usual `127.0.0.1` default is unreachable from pods regardless of any
+  firewall rule. Ollama: `OLLAMA_HOST=0.0.0.0`. Lemonade:
+  `lemonade config set host=0.0.0.0`.
+- **Host firewall**: on a default-deny INPUT host, pod→host traffic arrives
+  on the docker bridge like any other inbound connection and gets dropped —
+  allow the server's TCP port from the docker bridge subnets (they fall
+  inside `172.16.0.0/12`). The symptom is an agent replying
+  `Connection error.` (`kagent_error_code: API_ERROR`) while the same URL
+  works from the host.
+
+Both of these are keyless OpenAI-compatible endpoints, so the entries are
+minimal:
+
+```yaml
+platform:
+  extraModels:
+    # Ollama on the host, via its OpenAI-compatible /v1 alias.
+    - name: ollama-local
+      provider: OpenAI
+      model: qwen3.5:9b
+      baseUrl: http://172.21.0.1:11434/v1
+    # Lemonade Server (lemonade-server.ai): local inference with NPU
+    # acceleration on AMD Ryzen AI (XDNA2) through its FastFlowLM backend,
+    # or GPU via llama.cpp. Pick a tool-calling-capable model (the model
+    # list labels them) — agents send tool schemas with every turn.
+    - name: lemonade-npu
+      provider: OpenAI
+      model: qwen3-it-4b-FLM
+      baseUrl: http://172.21.0.1:13305/v1
+```
+
+One Lemonade-specific note: its FastFlowLM models default to a 4096-token
+context, which agent system prompts plus tool schemas outgrow quickly —
+raise it once with `lemonade config set ctx_size=16384`.
+
 ### Observability (Prometheus + mcp-prometheus)
 
 An **optional component, on by default** (`platform.observability` in
