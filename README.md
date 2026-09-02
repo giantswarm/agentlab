@@ -421,6 +421,21 @@ and everything that can go wrong is host-side plumbing, not kagent:
   inside `172.16.0.0/12`). The symptom is an agent replying
   `Connection error.` (`kagent_error_code: API_ERROR`) while the same URL
   works from the host.
+- **Keep-alive / eviction (Ollama)**: Ollama loads a model on the first
+  `/api/chat` that names it — an agent on a not-loaded model works, its
+  first turn pays the cold start — and evicts it when the keep-alive runs
+  out. The keep-alive is set **per request**: each request's `keep_alive`,
+  else the server's `OLLAMA_KEEP_ALIVE` (5m unless set), re-arms the timer
+  on every hit. kagent sends no `keep_alive`, so agent turns always re-arm
+  the server default, and a load through model-manager or the portal
+  (`keepAlive`, even `-1`) only pre-warms until the next agent request. The
+  knob for what agents experience is host-side: `OLLAMA_KEEP_ALIVE=30m` (or
+  `-1` for never) in the Ollama service environment — on a systemd host
+  `systemctl edit ollama` with `[Service]` `Environment="OLLAMA_KEEP_ALIVE=30m"`,
+  then restart Ollama. Nothing in model-manager changes this; its
+  `GET /api/v1/backend` reports the mechanics as `loading` (`onDemand`,
+  `idleEviction`, `keepAliveScope: request`) so the portal can say "idle,
+  loads on first request" instead of "not loaded".
 
 Both of these are keyless OpenAI-compatible endpoints, so the entries are
 minimal:
@@ -524,6 +539,11 @@ agentlab models-test
 ==> Unloading qwen2.5:0.5b                                 -> gone from /loaded
 ==> Deleting qwen2.5:0.5b                                  -> gone from Ollama, ModelConfig gone, list_models agrees
 ```
+
+Load and unload through model-manager (or the portal's Load) pre-warm and
+evict; they do not change how long agent traffic keeps a model resident —
+that is `OLLAMA_KEEP_ALIVE` on the host, see the keep-alive note in the
+section above.
 
 Both modes coexist: the static `extraModels` entries stay as they are
 (labeled `managed-by: agentlab`), model-manager's ModelConfigs carry
