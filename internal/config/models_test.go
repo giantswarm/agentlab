@@ -105,3 +105,51 @@ func TestConfigValidateExtraModels(t *testing.T) {
 		t.Fatalf("valid extra model rejected: %v", err)
 	}
 }
+
+func TestModelManagerValidate(t *testing.T) {
+	cases := []struct {
+		name    string
+		mm      ModelManager
+		agents  bool
+		wantErr string
+	}{
+		{"off", ModelManager{}, false, ""},
+		{"on with agents", ModelManager{Enabled: true, Backend: ModelManagerBackendOllama}, true, ""},
+		{"on, endpoint override", ModelManager{Enabled: true, Endpoint: "http://192.168.1.10:11434"}, true, ""},
+		{"on without agents", ModelManager{Enabled: true}, false, "requires platform.agents"},
+		{"kserve", ModelManager{Enabled: true, Backend: "kserve"}, true, "supports \"ollama\" only"},
+		{"bad endpoint", ModelManager{Enabled: true, Endpoint: "172.21.0.1:11434"}, true, "http(s) URL"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.mm.Validate(tc.agents)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("want error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestModelManagerEnabledNeedsPlatformAndAgents(t *testing.T) {
+	cfg := Default()
+	cfg.Platform.ModelManager.Enabled = true
+	if !cfg.ModelManagerEnabled() {
+		t.Fatalf("enabled with the default platform+agents should report on")
+	}
+	cfg.Platform.Agents = false
+	if cfg.ModelManagerEnabled() {
+		t.Fatalf("agents off must switch model-manager off")
+	}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "platform.modelManager") {
+		t.Fatalf("validate should reject model-manager without agents, got %v", err)
+	}
+	if cfg.ModelManagerBaseURL() != "https://agentgateway.127.0.0.1.nip.io/model-manager" {
+		t.Fatalf("unexpected model-manager base URL %q", cfg.ModelManagerBaseURL())
+	}
+}

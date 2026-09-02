@@ -113,6 +113,20 @@ module into vendored-build mode: after the first `agentlab platform`, `go build`
 failed with "inconsistent vendoring".
 **Fix:** the chart is vendored into `.vendor/` instead.
 
+### H13. `agentlab platform` failed on Helm 4 server-side-apply conflicts after a dev-image swap — FIXED
+The documented way back from a dev-image swap (`kubectl set image` /
+`kubectl patch` on a platform Deployment, see the agentlab skill) was "re-run
+`agentlab platform`, which reconciles every Deployment to the vendored chart".
+Helm 4 applies server-side, so the swapped image field belongs to the
+`kubectl` field manager afterwards and the upgrade died on the conflict
+(`Apply failed with 1 conflict: conflict with "kubectl-set" ... image`); the
+workaround was deleting the Deployment by hand and re-running.
+**Fix:** the umbrella upgrade passes `--force-conflicts`: Helm takes the
+fields it renders back from any other manager, so a re-run really does
+reconcile the lab to the chart — a dev image is gone after `agentlab
+platform` (say so in the lab lock's owner file when other people share the
+cluster). Fields Helm does not render (an annotation added by hand) stay.
+
 ## Blocked upstream (documented, not fixable in this repo)
 
 ### U1. `muster-post-render.sh` patch: `allowPublicClientRegistration` edited into the rendered ConfigMap — FIXED upstream

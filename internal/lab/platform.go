@@ -272,6 +272,23 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 		}
 	}
 
+	// Managed models: the Ollama endpoint is detected from the kind docker
+	// network and proven reachable from inside the cluster BEFORE the
+	// install, so a host-side misconfiguration (bind address, firewall) fails
+	// here with its fix instead of after helm's ten-minute wait.
+	modelManagerEndpoint := ""
+	if cfg.ModelManagerEnabled() {
+		endpoint, err := resolveModelManagerEndpoint(cfg)
+		if err != nil {
+			return err
+		}
+		modelManagerEndpoint = endpoint
+		step("Checking host Ollama is reachable from pods (%s)", endpoint)
+		if err := preflightOllama(cfg, endpoint); err != nil {
+			return err
+		}
+	}
+
 	if _, _, err := renderManifest(cfg, "agent-platform-values.yaml.tmpl"); err != nil {
 		return err
 	}
@@ -307,6 +324,11 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 	// the DCR chart-bug workaround, HTTPRoute strip, kagent-ui nodePort pin.
 	// Helm 4 accepts only plugin-type post-renderers, so the binary is wrapped
 	// in a generated plugin (see helmplugin.go) that HELM_PLUGINS points at.
+	// --force-conflicts: Helm 4 applies server-side, and a deployment whose
+	// image was swapped for a dev build with `kubectl set image`/`patch` is
+	// then owned by another field manager — without the flag the upgrade
+	// fails on the conflict instead of reconciling the lab back to the chart,
+	// which is what re-running `agentlab platform` promises (HACKS.md H13).
 	pluginsDir, err := ensurePostRenderPlugin()
 	if err != nil {
 		return err
@@ -316,6 +338,7 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 		"-n", platformNamespace,
 		"-f", StateDir+"/agent-platform-values.yaml",
 		"--post-renderer", postRenderPluginName,
+		"--force-conflicts",
 		"--wait", "--timeout", "10m"); err != nil {
 		return err
 	}
@@ -327,6 +350,14 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 	if cfg.Platform.Observability {
 		step("Waiting for muster to connect to the Prometheus MCP")
 		if err := waitMCPServerConnected(mcpPrometheusRelease); err != nil {
+			return err
+		}
+	}
+	if cfg.ModelManagerEnabled() {
+		// The model-manager chart renders its own MCPServer CR; Connected
+		// proves the pod serves MCP and muster aggregates x_model-manager_*.
+		step("Waiting for muster to connect to model-manager")
+		if err := waitMCPServerConnected(modelManagerMCPServer); err != nil {
 			return err
 		}
 	}
@@ -450,7 +481,8 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 
 %s
 %s
-%s`, header, reach, usersBlock(cfg), backstageHint, claudeCodeHint(cfg), agentsHint, obsHint, tryItBlock(cfg))
+%s
+%s`, header, reach, usersBlock(cfg), backstageHint, claudeCodeHint(cfg), agentsHint, modelManagerHint(cfg, modelManagerEndpoint), obsHint, tryItBlock(cfg))
 	// Everything the platform runs is in the node now — record it so the next
 	// boot side-loads instead of pulling.
 	snapshotPreloadImages(cfg)

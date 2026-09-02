@@ -50,6 +50,7 @@ export ANTHROPIC_API_KEY=sk-ant-...   # optional: powers the agents + Backstage 
 ./agentlab configure       # interactive form: cluster, users, components
 ./agentlab up              # certs, kind cluster, Dex, RBAC, the agent platform — verified
 ./agentlab platform-test   # headless proof: Dex -> muster -> mcp-kubernetes -> apiserver
+./agentlab models-test     # with an Ollama on the host: pull -> ModelConfig -> agent turn -> delete, through the platform
 ```
 
 Then trust the lab CA once and point Claude Code at the platform (`.mcp.json`
@@ -396,6 +397,88 @@ platform:
 One Lemonade-specific note: its FastFlowLM models default to a 4096-token
 context, which agent system prompts plus tool schemas outgrow quickly —
 raise it once with `lemonade config set ctx_size=16384`.
+
+#### Managed models: model-manager + host Ollama
+
+`extraModels` wires an endpoint and manages nothing: pulling or removing a
+model is CLI-on-host, and nothing shows what is downloaded or loaded. The
+managed mode puts the umbrella's **model-manager** component
+([giantswarm/model-manager](https://github.com/giantswarm/model-manager),
+the service behind the Model Manager epic) in front of the host's Ollama —
+inventory of downloaded and loaded models, pull with progress, load/unload,
+delete, and every pulled model wired into kagent automatically as a
+`ModelConfig` with the native, keyless `Ollama` provider. One block:
+
+```yaml
+platform:
+  agents: true                 # required: the ModelConfigs land in kagent
+  modelManager:
+    enabled: true
+    backend: ollama            # the lab's only backend (kserve needs GPUs + KServe)
+    # endpoint: http://192.168.1.10:11434   # optional; empty autodetects the host
+```
+
+`agentlab configure` turns it on for a fresh config when an Ollama answers on
+this machine (`--defaults --model-manager[=false]` forces it either way; the
+interactive form asks). The endpoint is **autodetected at platform time** as
+`http://<kind docker network gateway>:11434` — `docker network inspect kind`,
+the same address the section above documents for `extraModels` — so nobody
+types `172.21.0.1`; set `endpoint` for an Ollama elsewhere on the LAN.
+
+What `agentlab platform` (or `up`) does with it:
+
+- **Preflight, not README traps.** Before the install, a short-lived pod in
+  the cluster fetches `<endpoint>/api/version`. If that fails, the boot stops
+  right there with the diagnosis and the two fixes from the section above
+  spelled out — *connection refused* means Ollama listens on `127.0.0.1`
+  only (`OLLAMA_HOST=0.0.0.0`), a *timeout* means the host firewall drops
+  pod→host traffic on the docker bridge (allow TCP 11434 from the bridge
+  subnets, inside `172.16.0.0/12`) — instead of a model-manager pod
+  reporting an unhealthy backend after Helm's ten-minute wait.
+- **The umbrella's `components.model-manager`** goes on with the Ollama
+  backend (`model-manager.ollama.endpoint` = the detected address), its
+  agentgateway **route** at `https://agentgateway.<domain>/model-manager`
+  and, unlike the lab's kagent route, **JWT validation on**: the gateway
+  verifies the caller's Dex token against the lab Dex (JWKS over TLS at
+  `dex.dex.svc.cluster.local:5556/dex/keys`, trusted through the lab CA)
+  and answers 401 without one. model-manager checks no identity itself —
+  the gateway is the boundary, the same trust model as the kagent
+  controller route on real installations.
+- **The portal's service side.** The chart's Backstage app-config gains
+  `agentPlatform.modelManager.installations.agent-platform.apiBaseUrl:
+  https://agentgateway.<domain>/model-manager`; the portal backend forwards
+  the signed-in user's Dex ID token to it. What the Models tab shows on top
+  of that is the portal's business (giantswarm/backstage#2194).
+- **muster** registers the MCP endpoint (the chart's own `MCPServer` CR,
+  `Connected` is waited for) and the tools surface as
+  `x_model-manager_<tool>`: `list_models`, `get_model`, `list_loaded_models`,
+  `pull_model`, `load_model`, `unload_model`, `delete_model`, `wire_model`,
+  `unwire_model`, `list_jobs`, `get_job`, `cancel_job`, `get_backend` — ask
+  Claude Code to pull a model.
+
+The proof is `agentlab models-test` (`--model` picks another small,
+**tool-calling capable** model; the default `qwen2.5:0.5b` is ~400 MB —
+`smollm2:135m` pulls fine and then fails every agent turn with "does not
+support tools"). It goes through the platform path only and leaves nothing
+behind:
+
+```
+agentlab models-test
+==> Calling the model-manager API without a token         -> 401 at the gateway
+==> Logging in to Dex as admin@lab.local
+==> Backend through the gateway with the Dex token         -> ollama, healthy, capabilities
+==> Listing models
+==> Pulling qwen2.5:0.5b (progress via GET /api/v1/jobs/{id})
+==> Auto-created kagent ModelConfig                        -> Ollama provider, Accepted
+==> Agent turn on qwen2-5-0-5b (kagent Agent, runtime go -> host Ollama)
+==> MCP tools through muster (x_model-manager_*)           -> get_model
+==> Unloading qwen2.5:0.5b                                 -> gone from /loaded
+==> Deleting qwen2.5:0.5b                                  -> gone from Ollama, ModelConfig gone, list_models agrees
+```
+
+Both modes coexist: the static `extraModels` entries stay as they are
+(labeled `managed-by: agentlab`), model-manager's ModelConfigs carry
+`managed-by: model-manager`, and neither prunes the other's.
 
 ### Observability (Prometheus + mcp-prometheus)
 

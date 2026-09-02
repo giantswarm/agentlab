@@ -139,7 +139,39 @@ type Platform struct {
 	// CRs by `agentlab platform`; entries removed here are pruned on the next
 	// run. Inert unless agents are enabled.
 	ExtraModels []ExtraModel `yaml:"extraModels,omitempty"`
+	// Managed models: the umbrella's model-manager component with the Ollama
+	// backend, proxying the Ollama that runs on the lab host — pull, load,
+	// unload and delete models from the portal (or as x_model-manager_*
+	// tools through muster), each pulled model wired into kagent as a
+	// keyless ModelConfig automatically. Complements extraModels, which
+	// wires endpoints statically and manages nothing. Requires agents.
+	ModelManager ModelManager `yaml:"modelManager"`
 }
+
+// ModelManager configures the umbrella's model-manager component in the lab.
+type ModelManager struct {
+	// On, `agentlab platform` enables components.model-manager with the
+	// Ollama backend, its agentgateway route (JWT-validated: the portal
+	// backend forwards the user's Dex token) and the muster registration.
+	// `agentlab configure` turns it on for a fresh config when an Ollama
+	// answers on the host.
+	Enabled bool `yaml:"enabled"`
+	// The serving backend. The lab supports `ollama` only: kserve needs
+	// GPU nodes and a KServe install this kind cluster does not have.
+	Backend string `yaml:"backend,omitempty"`
+	// The Ollama API base URL as pods reach it. Empty autodetects
+	// http://<kind docker network gateway>:11434 at platform time — the
+	// same address the README documents for extraModels (`docker network
+	// inspect kind`). Set it for an Ollama elsewhere on the LAN.
+	Endpoint string `yaml:"endpoint,omitempty"`
+}
+
+// ModelManagerBackendOllama is the one backend the lab runs.
+const ModelManagerBackendOllama = "ollama"
+
+// OllamaPort is Ollama's default API port, the one the autodetected endpoint
+// assumes on the host.
+const OllamaPort = 11434
 
 // ExtraModel is one additional kagent ModelConfig. API keys are NOT config:
 // APIKeyEnv only names the host env var read at deploy time — the value lands
@@ -270,6 +302,7 @@ func Default() *Config {
 			MusterPort:    8090,
 			Domain:        "127.0.0.1.nip.io",
 			GatewayPort:   443,
+			ModelManager:  ModelManager{Backend: ModelManagerBackendOllama},
 			APSRepo:       "https://github.com/giantswarm/agent-platform-standalone",
 			APSRef:        "50f0d84ce81f470330bbe8766c0eb171a88a2395", // main: backstage 0.203.0 (#59) — stream agent replies in the portal session view
 		},
@@ -435,6 +468,9 @@ func (c *Config) Normalize() {
 	if c.Backstage.Enabled {
 		c.Platform.Enabled = true
 	}
+	if c.Platform.ModelManager.Backend == "" {
+		c.Platform.ModelManager.Backend = ModelManagerBackendOllama
+	}
 }
 
 func (c *Config) Validate() error {
@@ -503,10 +539,35 @@ func (c *Config) Validate() error {
 		}
 		seenModels[m.Name] = true
 	}
+	if err := c.Platform.ModelManager.Validate(c.Platform.Agents); err != nil {
+		return fmt.Errorf("platform.modelManager: %w", err)
+	}
 	if err := ValidatePort(strconv.Itoa(c.Backstage.Port)); err != nil {
 		return fmt.Errorf("backstage.port: %w", err)
 	}
 	return nil
+}
+
+var httpURLRe = regexp.MustCompile(`^https?://[^/]+`)
+
+// Validate checks the model-manager block; agents reports whether the kagent
+// runtime is on (model-manager wires ModelConfigs into it).
+func (m ModelManager) Validate(agents bool) error {
+	if m.Backend != "" && m.Backend != ModelManagerBackendOllama {
+		return fmt.Errorf("backend %q: the lab supports %q only (kserve needs GPU nodes and KServe)", m.Backend, ModelManagerBackendOllama)
+	}
+	if m.Endpoint != "" && !httpURLRe.MatchString(m.Endpoint) {
+		return fmt.Errorf("endpoint %q: must be an http(s) URL, e.g. http://172.21.0.1:%d", m.Endpoint, OllamaPort)
+	}
+	if m.Enabled && !agents {
+		return fmt.Errorf("requires platform.agents (model-manager wires pulled models into kagent ModelConfigs)")
+	}
+	return nil
+}
+
+// ModelManagerEnabled reports whether the platform installs model-manager.
+func (c *Config) ModelManagerEnabled() bool {
+	return c.Platform.Enabled && c.Platform.Agents && c.Platform.ModelManager.Enabled
 }
 
 // AdminUser returns the first user in platform-admins: the identity the up
@@ -575,6 +636,18 @@ func (c *Config) BackstageBaseURL() string { return c.gatewayURL("backstage") }
 func (c *Config) ObservabilityBaseURL() string {
 	return c.gatewayURL("observability") + "/prometheus"
 }
+
+// AgentgatewayBaseURL is the agentgateway hostname through the edge: the
+// path-prefixed platform APIs (the kagent controller at /kagent,
+// model-manager at /model-manager) live here, same as the chart's Backstage
+// app-config derives them.
+func (c *Config) AgentgatewayBaseURL() string { return c.gatewayURL("agentgateway") }
+
+// ModelManagerBaseURL is the model-manager API through the edge — the
+// umbrella's components.model-manager.route (pathPrefix /model-manager,
+// stripped before the service, so its REST API sits at <base>/api/v1). The
+// route's JWT policy wants a Dex token on every call.
+func (c *Config) ModelManagerBaseURL() string { return c.AgentgatewayBaseURL() + "/model-manager" }
 
 // BackstageDirectURL bypasses the edge (hostNetwork port mapping), kept for
 // debugging.

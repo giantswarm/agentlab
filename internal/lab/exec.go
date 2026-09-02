@@ -73,6 +73,17 @@ func outputQuiet(name string, args ...string) (string, error) {
 	return buf.String(), err
 }
 
+// outputAll captures stdout AND stderr together, for probe-style commands
+// whose diagnosis is in the error text (a probe pod's wget message).
+func outputAll(name string, args ...string) (string, error) {
+	var buf bytes.Buffer
+	cmd := exec.Command(name, args...) // #nosec G204 -- fixed lab tooling (kind/kubectl/helm) with lab-controlled args
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+	err := cmd.Run()
+	return buf.String(), err
+}
+
 // pipeInto feeds input to a command's stdin, showing output only on failure.
 func pipeInto(input []byte, name string, args ...string) error {
 	var buf bytes.Buffer

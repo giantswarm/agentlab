@@ -66,6 +66,16 @@ with Dex doing the logins.
   OpenAI-compatible endpoints, OpenRouter, Gemini, Ollama) with the same
   env-var -> Secret key handling; entries removed from the config are pruned
   on the next run (see README "Extra model configs").
+- `platform.modelManager` (on by default when `agentlab configure` finds an
+  Ollama on the host) installs the umbrella's model-manager component with
+  the Ollama backend: the host Ollama's models become manageable from the
+  portal and as `x_model-manager_<tool>` through muster, every pulled model
+  auto-wired into kagent (native keyless `Ollama` provider). The endpoint is
+  autodetected (`docker network inspect kind` gateway, port 11434) and
+  proven reachable from a pod before the install; the API sits behind the
+  agentgateway route `https://agentgateway.<domain>/model-manager` with JWT
+  validation on (a Dex token is required; 401 without). Proof:
+  `./agentlab models-test` (see README "Managed models").
 - For verifying RBAC as a specific user, use `./agentlab login <email>` and
   `kubectl --kubeconfig kubeconfig.oidc` — that is the OIDC path.
 - The kind admin context (`kind-agentlab`) bypasses the platform and OIDC
@@ -82,6 +92,7 @@ go test ./internal/forms/ -run TestMinimalFormDrive -count=1 -v   # single test
 ./agentlab configure       # interactive form; --defaults keeps/writes the canonical lab
 ./agentlab up              # certs, kind cluster, Dex, RBAC, the agent platform — verified
 ./agentlab platform-test   # headless Dex -> muster -> mcp-kubernetes proof
+./agentlab models-test     # managed models: 401 -> pull -> ModelConfig -> agent turn -> MCP -> unload -> delete
 ./agentlab test            # RBAC assertions for every configured user
 ./agentlab backstage-test  # headless Backstage sign-in for every user
 ./agentlab down            # delete the cluster (certs/ kept, trust stores untouched)
