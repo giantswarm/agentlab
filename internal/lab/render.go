@@ -48,6 +48,12 @@ type tmplData struct {
 	AllGroups           []string
 	KubernetesClientSecret,
 	AgentPlatformClientSecret string
+	// ModelManagerEnabled mirrors cfg.ModelManagerEnabled(); the endpoint is
+	// the Ollama URL model-manager dials (autodetected from the kind docker
+	// network — empty when the cluster does not exist yet, which only a
+	// pre-boot `agentlab render` sees; platformUp resolves it strictly).
+	ModelManagerEnabled  bool
+	ModelManagerEndpoint string
 }
 
 func newTmplData(cfg *config.Config) (*tmplData, error) {
@@ -55,8 +61,17 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 	if err != nil {
 		return nil, err
 	}
+	endpoint := ""
+	if cfg.ModelManagerEnabled() {
+		if endpoint, err = resolveModelManagerEndpoint(cfg); err != nil {
+			note("model-manager endpoint left empty in the render: %v", err)
+			endpoint = ""
+		}
+	}
 	return &tmplData{
 		Config:                    cfg,
+		ModelManagerEnabled:       cfg.ModelManagerEnabled(),
+		ModelManagerEndpoint:      endpoint,
 		CertsDir:                  certsDir,
 		MusterNodePort:            config.MusterNodePort,
 		KagentUINodePort:          config.KagentUINodePort,

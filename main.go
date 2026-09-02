@@ -61,6 +61,7 @@ Then:        claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		labCmd("untrust", "Remove the lab CA from the system and browser trust stores", lab.Untrust),
 		labCmd("platform", "Install the Giant Swarm agent platform (muster + Kubernetes MCP)", lab.PlatformUp),
 		platformTestCmd(),
+		modelsTestCmd(),
 		labCmd("platform-down", "Remove the agent platform (leaves Dex and the cluster alone)", lab.PlatformDown),
 		labCmd("backstage", "Retired: Backstage deploys with the platform now (backstage.enabled + `agentlab up`)", lab.BackstageUp),
 		backstageTestCmd(),
@@ -117,6 +118,7 @@ func loadOrCreateConfig() (*config.Config, error) {
 	fmt.Printf("No %s yet — let's create one.\n\n", config.File)
 	cfg = config.Default()
 	reportPortChanges(cfg.ChooseFreePorts())
+	detectModelManager(cfg)
 	if err := forms.Run(cfg, accessibleMode()); err != nil {
 		return nil, err
 	}
@@ -142,6 +144,20 @@ func reportPortChanges(changes []config.PortChange) {
 	fmt.Println()
 }
 
+// detectModelManager turns managed models on for a FRESH configuration when
+// an Ollama answers on this machine: the lab then installs the umbrella's
+// model-manager component with the Ollama backend. Reachability from pods
+// (bind address, firewall) is checked at platform time, with the fixes.
+func detectModelManager(cfg *config.Config) {
+	version, ok := lab.DetectHostOllama()
+	if !ok {
+		return
+	}
+	cfg.Platform.ModelManager.Enabled = true
+	fmt.Printf("Found Ollama %s on this machine: managed models (model-manager, Ollama backend) enabled.\n", version)
+	fmt.Printf("Turn it off with `agentlab configure --defaults --model-manager=false`.\n\n")
+}
+
 // accessibleMode switches huh to its prompt-per-question accessible mode;
 // also what screen readers want.
 func accessibleMode() bool {
@@ -150,7 +166,7 @@ func accessibleMode() bool {
 
 func configureCmd() *cobra.Command {
 	var defaults, accessible bool
-	var platform, agents, observability, backstage bool
+	var platform, agents, observability, backstage, modelManager bool
 	cmd := &cobra.Command{
 		Use:   "configure",
 		Short: "Ask for the lab configuration interactively and save agentlab.yaml",
@@ -161,9 +177,11 @@ func configureCmd() *cobra.Command {
 				// Only a FRESH config gets its ports moved off occupied
 				// defaults: an existing agentlab.yaml describes a cluster
 				// whose kind mappings are already fixed (and would count as
-				// "occupied" themselves while the lab runs).
+				// "occupied" themselves while the lab runs). Same for the
+				// model-manager detection: an existing file keeps its choice.
 				cfg = config.Default()
 				reportPortChanges(cfg.ChooseFreePorts())
+				detectModelManager(cfg)
 			} else if err != nil {
 				return err
 			}
@@ -176,6 +194,9 @@ func configureCmd() *cobra.Command {
 				}
 				if cmd.Flags().Changed("observability") {
 					cfg.Platform.Observability = observability
+				}
+				if cmd.Flags().Changed("model-manager") {
+					cfg.Platform.ModelManager.Enabled = modelManager
 				}
 				if cmd.Flags().Changed("backstage") {
 					cfg.Backstage.Enabled = backstage
@@ -201,6 +222,13 @@ func configureCmd() *cobra.Command {
 			for _, m := range cfg.Platform.ExtraModels {
 				fmt.Printf("  extra model %s (%s %s)\n", m.Name, m.Provider, m.Model)
 			}
+			if cfg.ModelManagerEnabled() {
+				endpoint := cfg.Platform.ModelManager.Endpoint
+				if endpoint == "" {
+					endpoint = "autodetected from the kind docker network at platform time"
+				}
+				fmt.Printf("  models     managed by model-manager (%s backend, %s)\n", cfg.Platform.ModelManager.Backend, endpoint)
+			}
 			fmt.Println("\nNext: agentlab up")
 			return nil
 		},
@@ -210,6 +238,7 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&agents, "agents", false, "with --defaults: enable/disable the agents runtime (kagent, part of the platform install)")
 	cmd.Flags().BoolVar(&observability, "observability", false, "with --defaults: enable/disable the observability stack (Prometheus + mcp-prometheus)")
 	cmd.Flags().BoolVar(&backstage, "backstage", false, "with --defaults: enable/disable Backstage (implies the platform)")
+	cmd.Flags().BoolVar(&modelManager, "model-manager", false, "with --defaults: enable/disable managed models (the model-manager component with the host Ollama; needs agents)")
 	cmd.Flags().BoolVar(&accessible, "accessible", false, "prompt-per-question form mode (for screen readers and plain terminals)")
 	return cmd
 }
@@ -279,6 +308,28 @@ func platformTestCmd() *cobra.Command {
 			return lab.PlatformTest(cfg, email)
 		},
 	}
+}
+
+func modelsTestCmd() *cobra.Command {
+	var model string
+	cmd := &cobra.Command{
+		Use:   "models-test [email]",
+		Short: "Headless managed-models proof: 401 without a token, then pull -> ModelConfig -> agent turn -> MCP via muster -> unload -> delete",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			email := cfg.AdminUser().Email
+			if len(args) == 1 {
+				email = args[0]
+			}
+			return lab.ModelsTest(cfg, email, model)
+		},
+	}
+	cmd.Flags().StringVar(&model, "model", lab.ModelsTestModel, "the Ollama model to pull and delete (small and tool-calling capable)")
+	return cmd
 }
 
 func backstageTestCmd() *cobra.Command {

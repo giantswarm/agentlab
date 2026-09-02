@@ -62,6 +62,17 @@ gatewayApi:
 # choke point, muster keeps all per-server connection logic and OAuth.
 ingress:
   mode: agentgateway-muster
+{{- if .ModelManagerEnabled }}
+
+gateway:
+  # The model-manager route's JWT policy makes the data plane fetch Dex's
+  # JWKS on 5556; the chart guards that this egress is declared (it only
+  # renders a network-policy rule, and the lab runs no policies).
+  jwksEgress:
+    enabled: true
+    namespace: dex
+    port: 5556
+{{- end }}
 
 components:
   agentgateway:
@@ -85,6 +96,32 @@ components:
     # listens on the host's loopback.
     controllerRoute:
       enabled: true
+{{- end }}
+{{- if .ModelManagerEnabled }}
+  # Managed models (platform.modelManager): the umbrella's model-manager
+  # dependency with the Ollama backend (its own values are in the
+  # `model-manager:` block below). The route exposes its REST API on the
+  # edge at https://agentgateway.{{ .Platform.Domain }}/model-manager — the
+  # chart's Backstage app-config points the portal backend there
+  # (agentPlatform.modelManager.installations.agent-platform.apiBaseUrl).
+  # Unlike the kagent route above, JWT validation is ON: the portal forwards
+  # the user's Dex ID token and the gateway is the identity boundary
+  # (model-manager checks none itself), so an unauthenticated call answers
+  # 401. The lab Dex serves its JWKS over TLS at the issuer path, hence the
+  # in-cluster host, the /dex/keys path and the TLS origination against the
+  # lab CA (jwks.tls.caSecretName defaults to global.identity.ca.secretName).
+  model-manager:
+    enabled: true
+    route:
+      enabled: true
+      jwtAuthentication:
+        enabled: true
+        jwks:
+          host: dex.dex.svc.cluster.local
+          port: 5556
+          path: /dex/keys
+          tls:
+            enabled: true
 {{- end }}
   backstage:
     enabled: {{ .Backstage.Enabled }}
@@ -235,6 +272,18 @@ kagent:
         enabled: false
       logging:
         enabled: false
+{{- end }}
+
+{{- if .ModelManagerEnabled }}
+# The model-manager chart's own values (the umbrella pins the Service name,
+# the kagent namespace and the muster registration in its contract). The
+# Ollama backend dials the host through the kind docker network's gateway —
+# autodetected by `agentlab platform` (platform.modelManager.endpoint
+# overrides). Agent pods dial the same address, so agentHost stays empty.
+model-manager:
+  backend: ollama
+  ollama:
+    endpoint: {{ .ModelManagerEndpoint | printf "%q" }}
 {{- end }}
 
 {{- if .Backstage.Enabled }}

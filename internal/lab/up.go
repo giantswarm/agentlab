@@ -171,6 +171,9 @@ func tryItBlock(cfg *config.Config) string {
 	if cfg.Platform.Enabled {
 		cmds = append(cmds, [2]string{"agentlab platform-test", "headless smoke test of the whole platform"})
 	}
+	if cfg.ModelManagerEnabled() {
+		cmds = append(cmds, [2]string{"agentlab models-test", "pull -> ModelConfig -> agent turn -> unload -> delete, through the platform"})
+	}
 	width := 0
 	for _, c := range cmds {
 		width = max(width, len(c[0]))

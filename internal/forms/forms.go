@@ -65,6 +65,7 @@ func Run(cfg *config.Config, accessible bool) error {
 	apsRef := cfg.Platform.APSRef
 	agentsEnabled := cfg.Platform.Agents
 	observabilityEnabled := cfg.Platform.Observability
+	modelManagerEnabled := cfg.Platform.ModelManager.Enabled
 	agentsPort := strconv.Itoa(cfg.Platform.AgentsPort)
 	aiModel := cfg.AIModel
 	customizeModels := false
@@ -159,6 +160,12 @@ func Run(cfg *config.Config, accessible bool) error {
 				Affirmative("Install").
 				Negative("Skip").
 				Value(&observabilityEnabled),
+			huh.NewConfirm().
+				Title("Manage this machine's Ollama models from the platform (model-manager)?").
+				Description("Optional, needs the agents runtime: the umbrella's model-manager component with\nthe Ollama backend — pull, load/unload and delete models from the portal or as\nx_model-manager_* tools, each pulled model wired into kagent as a ModelConfig.\nPods reach the host Ollama through the kind docker gateway (bind it to 0.0.0.0).").
+				Affirmative("Manage").
+				Negative("Skip").
+				Value(&modelManagerEnabled),
 			huh.NewInput().
 				Title("Claude model").
 				Description("Used by the platform agents' ModelConfig and Backstage's AI chat.\nThe API key comes from $ANTHROPIC_API_KEY at deploy time, never from this file.").
@@ -199,6 +206,9 @@ func Run(cfg *config.Config, accessible bool) error {
 	cfg.Platform.APSRef = apsRef
 	cfg.Platform.Agents = agentsEnabled
 	cfg.Platform.Observability = observabilityEnabled
+	// Managed models wire into kagent; without the runtime the confirm has
+	// nothing to manage into.
+	cfg.Platform.ModelManager.Enabled = modelManagerEnabled && agentsEnabled
 	cfg.Platform.AgentsPort = mustAtoi(agentsPort)
 	cfg.AIModel = aiModel
 	cfg.Backstage.Port = mustAtoi(backstagePort)
