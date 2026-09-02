@@ -1,0 +1,48 @@
+# A test fixture, not a real integration. Every downstream the lab aggregates
+# (mcp-kubernetes, mcp-prometheus, model-manager) is unauthenticated on the
+# cluster network, so nothing would otherwise exercise muster's OAuth *client*
+# role — the proxy behind core_auth_login and the portal's per-server
+# "Sign in" button. This MCPServer declares `auth.type: oauth` and stays
+# "Auth Required" forever: every core_auth_login against it answers a fresh
+# challenge (a /oauth/proxy/start URL with its own state), which is what
+# `agentlab platform-test` and `agentlab backstage-test` prove.
+#
+# The target is muster's OWN protected /mcp endpoint (its in-cluster Service).
+# It answers 401 with RFC 9728 resource metadata pointing at muster's own
+# OAuth 2.1 server, so the challenge chain is the real one — proxy start ->
+# muster /oauth/authorize -> Dex — and the authorization server accepts
+# muster's CIMD client id, which a Dex-protected stub could not (Dex knows
+# only static clients). A dedicated OAuth-protected stub server would cost a
+# workload plus an authorization server that knows muster, for the same 401.
+# What self-aggregation costs: right after a muster restart the CR reads
+# Failed (muster dials itself before its own listener is up) until the
+# reconnect backoff flips it to Auth Required, about a minute — `agentlab
+# platform` waits for that — and
+# a completed sign-in connects muster to itself, surfacing its own tools
+# under x_{{ .OAuthFixtureServer }}_. Harmless and per session; the fixture
+# exists to be signed in TO, not to be used.
+apiVersion: muster.giantswarm.io/v1alpha1
+kind: MCPServer
+metadata:
+  name: {{ .OAuthFixtureServer }}
+  namespace: agent-platform
+  labels:
+    app.kubernetes.io/managed-by: agentlab
+    agentlab.giantswarm.io/fixture: oauth-sign-in
+  annotations:
+    agentlab.giantswarm.io/purpose: >-
+      Lab test fixture for the per-server OAuth sign-in path: points muster at
+      its own OAuth-protected /mcp endpoint so this server stays "Auth
+      Required" and every core_auth_login yields a fresh challenge. Proven by
+      `agentlab platform-test` and `agentlab backstage-test`. Not a real
+      integration; signing in connects muster to itself (harmless).
+spec:
+  description: >-
+    Lab fixture: an OAuth-protected MCP server that stays Auth Required, for
+    testing the per-server Sign in flow. Not a real integration.
+  type: streamable-http
+  url: {{ .OAuthFixtureURL }}
+  autoStart: true
+  auth:
+    type: oauth
+    forwardToken: false

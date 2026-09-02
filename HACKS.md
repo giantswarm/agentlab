@@ -334,6 +334,14 @@ can be dropped (it would render nothing here either way).
   vendored and gitignored; out of scope here.
 - **`login-browser.py` fixed callback port 5555** — must be pre-registered in
   Dex's `redirectURIs`; a random port would break the static client. By design.
+- **The OAuth sign-in fixture aggregates muster itself** (`lab-oauth-fixture`
+  → muster's own protected `/mcp`, `internal/lab/oauthfixture.go`) — the one
+  way to get a downstream that stays `Auth Required` behind an authorization
+  server that accepts muster's CIMD client id without adding a workload (Dex
+  knows only static clients). Costs: `Failed` for about a minute after a muster
+  restart (self-dial before the listener is up; `agentlab platform` waits it
+  out), and a completed sign-in connects muster to itself. Both accepted; see
+  README "Signing in to a downstream server".
 - **A twice-replaced, once-trusted CA lingers only until the next trust op** —
   a `platform.domain` change stashes the outgoing CA under `certs/replaced/`,
   and both `agentlab trust` and `untrust` sweep every stashed CA out of the

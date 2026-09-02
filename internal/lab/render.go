@@ -54,6 +54,10 @@ type tmplData struct {
 	// pre-boot `agentlab render` sees; platformUp resolves it strictly).
 	ModelManagerEnabled  bool
 	ModelManagerEndpoint string
+	// The per-server OAuth sign-in fixture (oauthfixture.go): the MCPServer
+	// name the proofs sign in to and the protected endpoint it points at.
+	OAuthFixtureServer string
+	OAuthFixtureURL    string
 }
 
 func newTmplData(cfg *config.Config) (*tmplData, error) {
@@ -72,6 +76,8 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		Config:                    cfg,
 		ModelManagerEnabled:       cfg.ModelManagerEnabled(),
 		ModelManagerEndpoint:      endpoint,
+		OAuthFixtureServer:        oauthFixtureServer,
+		OAuthFixtureURL:           oauthFixtureURL,
 		CertsDir:                  certsDir,
 		MusterNodePort:            config.MusterNodePort,
 		KagentUINodePort:          config.KagentUINodePort,
@@ -150,6 +156,7 @@ var manifests = map[string]struct {
 	"mcp-prometheus-values.yaml.tmpl":        {out: "mcp-prometheus-values.yaml"},
 	"observability-route.yaml.tmpl":          {out: "observability-route.yaml"},
 	"demo-workflow.yaml.tmpl":                {out: "demo-workflow.yaml"},
+	"oauth-fixture.yaml.tmpl":                {out: "oauth-fixture.yaml"},
 	"extra-models.yaml.tmpl":                 {out: "extra-models.yaml"},
 	"coredns.yaml.tmpl":                      {out: "coredns.yaml"},
 	"gateway-nodeport.yaml.tmpl":             {out: "gateway-nodeport.yaml"},

@@ -197,6 +197,21 @@ muster:
         name: dex-ca
         key: ca.crt
     oauth:
+      # muster's OAuth *client* role: the proxy that signs a user in to a
+      # downstream MCP server declaring `auth.type: oauth` — behind
+      # core_auth_login and the portal's per-server "Sign in" button. The
+      # umbrella leaves it off (real installations turn it on); without it
+      # core_auth_login refuses with "OAuth proxy is not enabled" and no
+      # per-server sign-in can be exercised. publicUrl is where the
+      # downstream's authorization server sends the browser back — the chart
+      # defaults callbackPath to /oauth/proxy/callback (distinct from the
+      # server role's /oauth/callback) and serves the client ID metadata
+      # document at /.well-known/oauth-client.json. The one downstream that
+      # needs it is the lab's sign-in fixture, MCPServer
+      # {{ .OAuthFixtureServer }} (oauth-fixture.yaml.tmpl).
+      mcpClient:
+        enabled: true
+        publicUrl: "{{ .MusterBaseURL }}"
       server:
         enabled: true
         # The public URL through the edge: what Claude Code dials, and what

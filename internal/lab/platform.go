@@ -370,6 +370,11 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 	if err := runQuiet("kubectl", "apply", "-f", StateDir+"/demo-workflow.yaml"); err != nil {
 		return err
 	}
+	// The per-server OAuth sign-in fixture (oauthfixture.go) — after the
+	// install for the same CRD reason.
+	if err := ensureOAuthFixture(cfg); err != nil {
+		return err
+	}
 
 	// The agents' model key. The default ModelConfig (rendered by the kagent
 	// subchart from providers.anthropic) references this secret; agent pods
@@ -490,23 +495,29 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 }
 
 // waitMCPServerConnected polls one muster MCPServer CR (in the platform
-// namespace) until muster reports the downstream connection up. The name is
-// fully qualified because kagent ships its own MCPServer CRD
-// (mcpservers.kagent.dev), so the bare kind resolves to the wrong API group.
+// namespace) until muster reports the downstream connection up.
 func waitMCPServerConnected(name string) error {
+	return waitMCPServerState(name, "Connected")
+}
+
+// waitMCPServerState polls the MCPServer CR's status.state until it reads
+// want. The name is fully qualified because kagent ships its own MCPServer
+// CRD (mcpservers.kagent.dev), so the bare kind resolves to the wrong API
+// group.
+func waitMCPServerState(name, want string) error {
 	state := ""
-	connected := waitFor(40, 3*time.Second, func() bool {
+	reached := waitFor(40, 3*time.Second, func() bool {
 		state, _ = outputQuiet("kubectl", "-n", platformNamespace, "get", "mcpservers.muster.giantswarm.io", name,
 			"-o", "jsonpath={.status.state}")
-		return state == "Connected"
+		return state == want
 	})
-	if !connected {
-		return fmt.Errorf("MCPServer %s never reached Connected (last state: %q);\n"+
+	if !reached {
+		return fmt.Errorf("MCPServer %s never reached %s (last state: %q);\n"+
 			"check `agentlab logs muster`, `kubectl -n %s describe mcpservers.muster.giantswarm.io %s`\n"+
 			"and the server's rollout: `kubectl -n %s get deploy,pods`",
-			name, state, platformNamespace, name, platformNamespace)
+			name, want, state, platformNamespace, name, platformNamespace)
 	}
-	note("MCPServer %s: Connected", name)
+	note("MCPServer %s: %s", name, want)
 	return nil
 }
 
