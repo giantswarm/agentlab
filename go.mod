@@ -1,12 +1,12 @@
 module github.com/giantswarm/agentlab
 
-go 1.25.8
+go 1.26.0
 
 require (
 	charm.land/huh/v2 v2.0.3
 	github.com/smallstep/truststore v0.13.0
 	github.com/spf13/cobra v1.10.2
-	golang.org/x/crypto v0.55.0
+	golang.org/x/crypto v0.56.0
 	golang.org/x/term v0.45.0
 	gopkg.in/yaml.v3 v3.0.1
 )
