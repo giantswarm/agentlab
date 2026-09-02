@@ -304,7 +304,7 @@ func Default() *Config {
 			GatewayPort:   443,
 			ModelManager:  ModelManager{Backend: ModelManagerBackendOllama},
 			APSRepo:       "https://github.com/giantswarm/agent-platform-standalone",
-			APSRef:        "50f0d84ce81f470330bbe8766c0eb171a88a2395", // main: backstage 0.203.0 (#59) — stream agent replies in the portal session view
+			APSRef:        "203cfe9118e5c25cfa705d725f97396ad4781e2f", // main: the optional model-manager component (#75, chart v0.11.0)
 		},
 		Backstage: Backstage{
 			Enabled: true,
