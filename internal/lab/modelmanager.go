@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -32,6 +33,9 @@ const kindDockerNetwork = "kind"
 // the alpine image the umbrella already ships elsewhere (small, present in
 // the host cache after the first run, side-loaded before the probe pod).
 const ollamaProbeImage = "gsoci.azurecr.io/giantswarm/alpine:3.22.1"
+
+// ollamaVersionRe matches the {"version":"..."} document /api/version answers.
+var ollamaVersionRe = regexp.MustCompile(`\{\s*"version"\s*:\s*"[^"]*"\s*\}`)
 
 // DetectHostOllama probes the host's own Ollama on loopback and reports its
 // version. It answers the configure-time question "is there an Ollama on
@@ -107,9 +111,12 @@ func preflightOllama(cfg *config.Config, endpoint string) error {
 		"--image="+ollamaProbeImage, "--image-pull-policy=IfNotPresent",
 		"--command", "--", "wget", "-qO-", "-T", "5", endpoint+"/api/version")
 	if err == nil && strings.Contains(out, `"version"`) {
+		// The combined output also carries kubectl's own attach chatter
+		// ("warning: couldn't attach to pod ..., falling back to logs"), so
+		// pick the JSON document out of it.
 		version := strings.TrimSpace(out)
-		if len(version) > 60 {
-			version = version[:60] + "..."
+		if m := ollamaVersionRe.FindString(out); m != "" {
+			version = m
 		}
 		note("host Ollama answers from inside the cluster: %s", version)
 		return nil
