@@ -180,6 +180,29 @@ func backstageSignIn(cfg *config.Config, user *config.User) error {
 		return resp.StatusCode, payload, nil
 	}
 
+	// musterPost is the mutation shape of the same hop: a JSON body, the raw
+	// answer back (the routes normalise muster's tool results themselves).
+	musterPost := func(path string, body any) (int, []byte, error) {
+		payload, err := json.Marshal(body)
+		if err != nil {
+			return 0, nil, err
+		}
+		req, err := http.NewRequest(http.MethodPost, cfg.BackstageBaseURL()+"/api/muster"+path, strings.NewReader(string(payload)))
+		if err != nil {
+			return 0, nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+bsToken)
+		req.Header.Set("backstage-muster-authorization", dexIDToken)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := follow.Do(req)
+		if err != nil {
+			return 0, nil, err
+		}
+		defer func() { _ = resp.Body.Close() }()
+		raw, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, raw, nil
+	}
+
 	// The umbrella's app-config names the muster installation after the Helm
 	// release, not the kind cluster.
 	installation := "?installation=" + platformRelease
@@ -199,6 +222,46 @@ func backstageSignIn(cfg *config.Config, user *config.User) error {
 		}
 	}
 	fmt.Printf("  muster servers  [%s]\n", strings.Join(pairs, ", "))
+
+	// The per-server sign-in path behind the portal's Sign in button
+	// (backstage#2203), with this user's own forwarded token: the lab's
+	// fixture (oauthfixture.go) is listed as Auth Required, and /auth/login
+	// hands back muster's challenge — the OAuth proxy start URL with a state
+	// — normalised to status auth_required.
+	fixtureState := "missing"
+	for _, s := range servers {
+		if m, ok := s.(map[string]any); ok && m[nameKey] == oauthFixtureServer {
+			fixtureState = fmt.Sprintf("%v", m["state"])
+		}
+	}
+	if !isAuthRequiredState(fixtureState) {
+		return fmt.Errorf("MCPServer %s is %q, not Auth Required — the sign-in fixture is missing or broken (`agentlab platform` creates it)",
+			oauthFixtureServer, fixtureState)
+	}
+	status, raw, err := musterPost("/auth/login"+installation, map[string]any{"server": oauthFixtureServer})
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("muster /auth/login FAILED %d: %.200s", status, raw)
+	}
+	var login struct {
+		Status         string `json:"status"`
+		AuthURL        string `json:"authUrl"`
+		Message        string `json:"message"`
+		ClientIDMethod string `json:"clientIdMethod"`
+	}
+	if err := json.Unmarshal(raw, &login); err != nil {
+		return fmt.Errorf("parsing /auth/login answer: %w\n%.200s", err, raw)
+	}
+	if login.Status != "auth_required" {
+		return fmt.Errorf("/auth/login for %s answered status %q, not auth_required: %.300s", oauthFixtureServer, login.Status, login.Message)
+	}
+	if want := cfg.MusterBaseURL() + oauthProxyStartPath + "?state="; !strings.HasPrefix(login.AuthURL, want) {
+		return fmt.Errorf("/auth/login sign-in URL %q is not muster's proxy start endpoint (want %s…)", login.AuthURL, want)
+	}
+	fmt.Printf("  sign-in challenge %s -> %s%s?state=… (client id via %s)\n",
+		oauthFixtureServer, cfg.MusterBaseURL(), oauthProxyStartPath, login.ClientIDMethod)
 
 	status, payload, err = muster("/workflows" + installation)
 	if err != nil {

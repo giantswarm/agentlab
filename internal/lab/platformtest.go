@@ -146,6 +146,14 @@ func PlatformTest(cfg *config.Config, email string) error {
 	note("namespaces: %s", strings.Join(names, ", "))
 
 	verdict := "PASS: Claude Code -> muster (Dex) -> mcp-kubernetes -> kind apiserver"
+
+	// The per-server sign-in path: muster as OAuth client, challenged by the
+	// lab's Auth Required fixture (oauthfixture.go).
+	if err := proveOAuthSignIn(cfg, token); err != nil {
+		return err
+	}
+	verdict += "\nPASS: per-server OAuth sign-in -> muster (OAuth client) -> challenge on " + oauthProxyStartPath +
+		" (fixture " + oauthFixtureServer + ")"
 	if cfg.Platform.Observability {
 		// Same singleton prefixing as mcp-kubernetes: the lab's mcpServers
 		// entry deliberately keeps the server out of muster's families

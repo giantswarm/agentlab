@@ -49,7 +49,7 @@ Then bring the lab up:
 export ANTHROPIC_API_KEY=sk-ant-...   # optional: powers the agents + Backstage AI chat
 ./agentlab configure       # interactive form: cluster, users, components
 ./agentlab up              # certs, kind cluster, Dex, RBAC, the agent platform — verified
-./agentlab platform-test   # headless proof: Dex -> muster -> mcp-kubernetes -> apiserver
+./agentlab platform-test   # headless proof: Dex -> muster -> mcp-kubernetes -> apiserver, + the per-server OAuth sign-in challenge
 ./agentlab models-test     # with an Ollama on the host: pull -> ModelConfig -> agent turn -> delete, through the platform
 ```
 
@@ -232,6 +232,55 @@ the rendered Dex config closes that loop; its `redirectURIs` must equal
 `mcp-kubernetes` is deliberately unauthenticated on the cluster network
 (the bundled `MCPServer` CR carries no auth block) and talks to the apiserver
 with its own ServiceAccount. muster is the single enforcement point.
+
+### Signing in to a downstream server (muster as OAuth client)
+
+muster plays two OAuth roles. Towards Claude Code and Backstage it is the
+**server** (above). Towards a downstream MCP server that declares
+`auth.type: oauth` it is the **client**: `core_auth_login` (what the portal's
+per-server **Sign in** button calls) answers a challenge — a
+`https://muster.<domain>/oauth/proxy/start?state=…` URL — the browser follows
+it through the downstream's authorization server, and muster keeps the token
+per session. The umbrella leaves that role off (`oauth.mcpClient`), so the
+lab's values turn it on with the edge URL as `publicUrl` (the chart derives
+the callback `/oauth/proxy/callback` and serves muster's client ID metadata
+document at `/.well-known/oauth-client.json`), the way real installations run
+it.
+
+Nothing the lab aggregates needs a per-user login, though — mcp-kubernetes,
+mcp-prometheus and model-manager are unauthenticated in-cluster — so
+`agentlab platform` ships one downstream that does: the MCPServer
+`lab-oauth-fixture` (`oauth-fixture.yaml.tmpl`, annotated as a fixture). It
+points muster at its **own** protected `/mcp` endpoint, which answers 401 with
+RFC 9728 metadata naming muster's own OAuth 2.1 server as the authorization
+server. The CR therefore sits at `Auth Required` for good, every
+`core_auth_login` yields a fresh challenge, and the challenge chain is the
+real one: proxy start → muster `/oauth/authorize` → Dex. A Dex-protected stub
+could not serve the same purpose (Dex knows only static clients; the proxy
+identifies itself by CIMD), and a dedicated OAuth-protected stub server would
+add a workload plus an authorization server that knows muster, for the same
+401. What the self-aggregation costs: right after a muster restart the CR
+reads `Failed` (muster dials itself before its listener is up) until the
+reconnect backoff flips it to `Auth Required`, about a minute — `agentlab
+platform` waits for that — and
+completing the sign-in connects muster to itself, surfacing its own tools
+under `x_lab-oauth-fixture_`. Harmless and per session; the fixture is there
+to be signed in *to*.
+
+`agentlab platform-test` proves the path headlessly on a fresh MCP session
+(the shape of one portal user's session): `list_tools` flags the fixture under
+`servers_requiring_auth`; `core_auth_login` answers a challenge on
+`/oauth/proxy/start` with a state; a second call answers a **fresh** state (a
+re-clicked Sign in gets its own challenge, giantswarm/backstage#2203); and the
+URL redeems — GET-ing it redirects to the authorization server rather than
+rejecting the state. `agentlab backstage-test` proves the portal hop for every
+user: the fixture is listed `Auth Required` and `POST /api/muster/auth/login`
+answers `status: auth_required` with the same URL shape, on that user's own
+forwarded token.
+
+To drive the UI: **Agent Platform → MCP Servers**, expand `lab-oauth-fixture`,
+**Sign in** — the popup lands on muster's authorization page, then Dex. After a
+muster pod roll the row reads `Failed` for about a minute (Reconnect, or wait).
 
 ### Agents (kagent)
 
@@ -571,6 +620,7 @@ same one-URL trick, just spelled with a name.
 | `networkPolicy.enabled: false`, `kyvernoPolicies.enabled: false` | The umbrella's own policy objects. No Cilium and no Kyverno in kind, so both would render CRs whose API groups the cluster does not serve. |
 | The muster/kagent ServiceMonitors, valkey PodMonitor and muster PrometheusRule follow `platform.observability` | Without it there is no Prometheus Operator, so none of those CRDs exist and the releases fail to render. With it they are scraped by the lab Prometheus — whose selectors are opened up (`*NilUsesHelmValues: false`) because upstream's default selects only monitors carrying the kps release label, and the platform's monitors come from other releases. Flipping observability rolls the muster pod once (the toggle changes its metrics-exporter env). |
 | `platform.observability`: the GS kube-prometheus-stack constituent installed directly, Prometheus server re-enabled, instead of the observability-bundle | The bundle is MC-shaped (Flux HelmReleases with a hardcoded remote kubeconfig, Alloy → Mimir, no local PromQL endpoint). See [Observability](#observability-prometheus--mcp-prometheus). |
+| `muster.muster.oauth.mcpClient.enabled: true` + the `lab-oauth-fixture` MCPServer | The umbrella leaves muster's OAuth *client* role — the proxy behind `core_auth_login` and the portal's Sign in — off; real installations turn it on, and without it no per-server sign-in can be exercised. The fixture is the one `Auth Required` downstream to sign in to (muster's own protected `/mcp`); see [Signing in to a downstream server](#signing-in-to-a-downstream-server-muster-as-oauth-client). |
 | `muster.rbac.{mcpServerEditor,workflowEditor}.subjects` → `oidc:platform-admins` | The umbrella binds muster's editor Roles to Giant Swarm's admin groups, which do not exist here. Rebound to the lab's own admin group (`--oidc-groups-prefix=oidc:`, same spelling as the lab RBAC). Lists replace, so the GS groups are dropped. |
 | muster patched to `hostNetwork` + `maxSurge: 0` | Same issuer trick as the apiserver and Backstage. `maxSurge: 0` because two hostNetwork pods cannot both bind `:8090` on a one-node cluster. Applied by `agentlab post-render` — Helm 4 accepts only plugin-type post-renderers, so the install generates a `postrenderer/v1` plugin in `state/helm-plugins/` whose command is the agentlab binary itself, and passes it via `HELM_PLUGINS` + `--post-renderer agentlab-postrender`. The plain-Helm replacement for the Flux `postRenderers` the meta-package forwarded to helm-controller. |
 | `components.kagent.enabled` from `platform.agents`, `controller.auth.mode: unsecure`, kagent ServiceMonitor + OTel off | Agents are part of what the lab tests, so kagent is on by default (the umbrella defaults it off) but optional — `platform.agents: false` skips the runtime. `unsecure` because the GS `trusted-proxy` mode assumes a JWT-validating agentgateway in front; no Prometheus Operator / OTLP gateway in kind. See [Agents (kagent)](#agents-kagent). |
@@ -692,7 +742,9 @@ muster accepts the token because its `aud` carries `muster` — see
 [`trustedPeers` points the other way round](#trustedpeers-points-the-other-way-round).
 
 `agentlab backstage-test` drives the whole sign-in headlessly for every
-configured user and then proves the muster hop with that user's own token:
+configured user and then proves the muster hop with that user's own token —
+including the per-server **Sign in** path (`/api/muster/auth/login`) against
+the lab's `Auth Required` fixture:
 
 ```
 === dev@lab.local ===
@@ -700,7 +752,8 @@ configured user and then proves the muster hop with that user's own token:
   token audience  [kubernetes muster backstage]
   backstage user  user:default/dev
   ownership refs  [user:default/dev]
-  muster servers  [(mcp-kubernetes, Connected)]
+  muster servers  [(mcp-kubernetes, Connected), (mcp-prometheus, Connected), (lab-oauth-fixture, Auth Required)]
+  sign-in challenge lab-oauth-fixture -> https://muster.127.0.0.1.nip.io/oauth/proxy/start?state=… (client id via cimd)
   muster workflows [lab-cluster-overview]
   muster core tools 28 exposed
   agent deploy template registered (template:default/agent-deployment)
@@ -987,6 +1040,7 @@ internal/lab/                  everything operational:
   test.go                        RBAC assertions for every configured user
   login.go browser.go            password grant / authorization-code flow
   platform.go platformtest.go    agent platform install + MCP smoke test
+  oauthfixture.go                the Auth Required MCPServer fixture + the per-server sign-in proof
   backstage.go backstagetest.go  Backstage deploy + headless sign-in proof
   postrender.go                  helm post-renderer (hostNetwork, route strip, nodePort pin)
   helmplugin.go                  generates the Helm 4 postrenderer plugin wrapping it

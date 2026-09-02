@@ -38,6 +38,13 @@ with Dex doing the logins.
 - The Kubernetes tools come from the umbrella's bundled `mcp-kubernetes`
   MCPServer and use muster's per-server prefixing: `x_mcp-kubernetes_<tool>`
   (e.g. `x_mcp-kubernetes_list`), no `management_cluster` argument.
+- muster's OAuth *client* role is on (`oauth.mcpClient`), and the lab ships
+  one `Auth Required` downstream to sign in to: the MCPServer
+  `lab-oauth-fixture`, which points muster at its own protected `/mcp`. It
+  exists for the per-server sign-in path (`core_auth_login`, the portal's
+  Sign in button); `platform-test` and `backstage-test` assert the challenge.
+  Not a real integration — never "fix" its Auth Required state, and after a
+  muster pod roll it reads `Failed` for about a minute by design.
 - With `platform.observability: true` (the default), a minimal Prometheus
   (the GS kube-prometheus-stack constituent of the observability bundle, with
   the server re-enabled) and mcp-prometheus install too; the tools surface as
