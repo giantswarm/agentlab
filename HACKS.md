@@ -318,12 +318,12 @@ fallback with a Capabilities check like the sibling branches; then the value
 can be dropped (it would render nothing here either way).
 
 ### U13. `postrender.go` patch: `dex-localhost` sidecar on the MCP servers — ACCEPTED
-Since 2026-09-03 the bundled mcp-kubernetes and model-manager and the lab's
-mcp-prometheus validate the user's forwarded Dex id_token themselves (mcp-oauth
-resource servers against `global.identity`), so each of them does OIDC discovery
-and JWKS fetches against the issuer URL — `https://localhost:<dexPort>/dex`, the
+Since 2026-09-03 the bundled mcp-kubernetes, model-manager and agent-manager and
+the lab's mcp-prometheus validate the user's forwarded Dex id_token themselves
+(mcp-oauth resource servers against `global.identity`), so each of them does
+OIDC discovery and JWKS fetches against the issuer URL — `https://localhost:<dexPort>/dex`, the
 one URL the browser, the apiserver and every pod must share (H-issuer, above).
-muster and Backstage reach it through hostNetwork (U1); these three cannot: all
+muster and Backstage reach it through hostNetwork (U1); these four cannot: all
 listen on :8080 and would collide on the single kind node. **Fix:** the
 post-renderer injects a `dex-localhost` sidecar (`alpine/socat`) that listens on
 the pod's own loopback :<dexPort> (IPv6 wildcard, dual-stack) and forwards to the

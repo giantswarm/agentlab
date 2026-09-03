@@ -111,6 +111,7 @@ var dexLocalhostDeployments = map[string]bool{
 	"mcp-kubernetes":      true,
 	modelManagerMCPServer: true,
 	mcpPrometheusRelease:  true,
+	agentManagerMCPServer: true,
 }
 
 // dexLocalhostImage is the socat image of the sidecar (side-loaded like every

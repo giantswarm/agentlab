@@ -51,6 +51,7 @@ export ANTHROPIC_API_KEY=sk-ant-...   # optional: powers the agents + Backstage 
 ./agentlab up              # certs, kind cluster, Dex, RBAC, the agent platform — verified
 ./agentlab platform-test   # headless proof: Dex -> muster -> mcp-kubernetes -> apiserver, + the per-server OAuth sign-in challenge
 ./agentlab models-test     # with an Ollama on the host: pull -> ModelConfig -> agent turn -> delete, through the platform
+./agentlab agents-test     # agent-manager as the signed-in user: create -> ready -> update -> delete via muster; a viewer's create is Forbidden; the ServiceAccount holds no RBAC
 ```
 
 Then trust the lab CA once and point Claude Code at the platform (`.mcp.json`

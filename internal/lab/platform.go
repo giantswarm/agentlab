@@ -373,6 +373,14 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 			return err
 		}
 	}
+	if cfg.Platform.Agents {
+		// agent-manager ships with the umbrella whenever kagent is on and
+		// registers itself the same way (forward-token auth block).
+		step("Waiting for muster to reach agent-manager")
+		if err := waitMCPServerReachable(agentManagerMCPServer); err != nil {
+			return err
+		}
+	}
 
 	// The Workflow CRD ships with muster, so this has to land after the
 	// install. A muster with no workflows leaves the Backstage muster plugin's

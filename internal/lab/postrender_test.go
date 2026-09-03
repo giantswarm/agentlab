@@ -211,6 +211,18 @@ spec:
       containers:
         - name: controller
           image: kagent:1.0
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-manager
+  namespace: agent-platform
+spec:
+  template:
+    spec:
+      containers:
+        - name: agent-manager
+          image: agent-manager:1.0
 `
 
 func TestPostRenderDexLocalhostSidecar(t *testing.T) {
@@ -232,8 +244,8 @@ func TestPostRenderDexLocalhostSidecar(t *testing.T) {
 		}
 		docs = append(docs, d)
 	}
-	if len(docs) != 2 {
-		t.Fatalf("want 2 documents, got %d", len(docs))
+	if len(docs) != 3 {
+		t.Fatalf("want 3 documents, got %d", len(docs))
 	}
 	containersOf := func(d map[string]any) []any {
 		return d["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["containers"].([]any)
@@ -252,5 +264,10 @@ func TestPostRenderDexLocalhostSidecar(t *testing.T) {
 	}
 	if n := len(containersOf(docs[1])); n != 1 {
 		t.Fatalf("kagent-controller must stay untouched, got %d containers", n)
+	}
+	// agent-manager validates forwarded tokens against the lab issuer too.
+	am := containersOf(docs[2])
+	if len(am) != 2 || am[1].(map[string]any)["name"] != dexLocalhostContainer {
+		t.Fatalf("agent-manager: want the app container + the dex-localhost sidecar, got %v", am)
 	}
 }
