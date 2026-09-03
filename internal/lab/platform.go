@@ -508,14 +508,11 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 
 // waitMCPServerConnected polls one muster MCPServer CR (in the platform
 // namespace) until muster reports the downstream connection up.
-func waitMCPServerConnected(name string) error {
-	return waitMCPServerState(name, "Connected")
-}
-
-// waitMCPServerReachable is waitMCPServerConnected for a server muster
-// authenticates to per session (auth.forwardToken): Auth Required means the
-// server answered muster's probe with an OAuth challenge and waits for the
-// first session, Connected that a session already signed in.
+// waitMCPServerReachable waits for a server muster authenticates to per
+// session (auth.forwardToken): Auth Required means the server answered
+// muster's probe with an OAuth challenge and waits for the first session,
+// Connected that a session already signed in. Every downstream the lab
+// aggregates is such a server now, so this replaced the plain Connected wait.
 func waitMCPServerReachable(name string) error {
 	return waitMCPServerState(name, "Connected", mcpServerStateAuthRequired)
 }
