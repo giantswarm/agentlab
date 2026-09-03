@@ -52,7 +52,7 @@ func observabilityUp(cfg *config.Config) error {
 		kpsChartVersion, mcpPrometheusChartVersion)
 	if err := installOCIChart(cfg, kpsRelease,
 		"oci://gsoci.azurecr.io/charts/giantswarm/kube-prometheus-stack",
-		kpsChartVersion, "kube-prometheus-stack-values.yaml.tmpl"); err != nil {
+		kpsChartVersion, "kube-prometheus-stack-values.yaml.tmpl", false); err != nil {
 		return err
 	}
 	// mcp-prometheus runs as an OAuth resource server against the lab Dex
@@ -67,9 +67,15 @@ func observabilityUp(cfg *config.Config) error {
 	}); err != nil {
 		return err
 	}
+	// Through the lab post-renderer: mcp-prometheus gets the dex-localhost
+	// sidecar that makes the issuer URL (https://localhost:<DexPort>)
+	// reachable from inside the pod (postrender.go, item 4).
+	if res := sideloadImages(cfg, hostPullImages([]string{dexLocalhostImage})); res.n > 0 {
+		note("side-loaded the dex-localhost sidecar image (%s)", res.d)
+	}
 	if err := installOCIChart(cfg, mcpPrometheusRelease,
 		"oci://gsoci.azurecr.io/charts/giantswarm/mcp-prometheus",
-		mcpPrometheusChartVersion, "mcp-prometheus-values.yaml.tmpl"); err != nil {
+		mcpPrometheusChartVersion, "mcp-prometheus-values.yaml.tmpl", true); err != nil {
 		return err
 	}
 
@@ -115,7 +121,8 @@ func observabilityUp(cfg *config.Config) error {
 // chart into the observability namespace, side-loading its images first (the
 // same host-cache -> node rule as the platform; see flux.go for the pattern
 // and preload.go for the rule).
-func installOCIChart(cfg *config.Config, release, chartRef, version, valuesTmpl string) error {
+// postRender routes the release through the lab post-renderer (PostRender).
+func installOCIChart(cfg *config.Config, release, chartRef, version, valuesTmpl string, postRender bool) error {
 	_, valuesPath, err := renderManifest(cfg, valuesTmpl)
 	if err != nil {
 		return err
@@ -131,9 +138,18 @@ func installOCIChart(cfg *config.Config, release, chartRef, version, valuesTmpl 
 			}
 		}
 	}
-	return runQuiet("helm", "upgrade", "--install", release, chartRef,
+	args := []string{"upgrade", "--install", release, chartRef,
 		"--version", version,
 		"-n", observabilityNamespace, "--create-namespace",
 		"-f", valuesPath,
-		"--wait", "--timeout", "5m")
+		"--wait", "--timeout", "5m"}
+	if !postRender {
+		return runQuiet("helm", args...)
+	}
+	pluginsDir, err := ensurePostRenderPlugin()
+	if err != nil {
+		return err
+	}
+	args = append(args, "--post-renderer", postRenderPluginName)
+	return runQuietEnv([]string{"HELM_PLUGINS=" + pluginsDir}, "helm", args...)
 }

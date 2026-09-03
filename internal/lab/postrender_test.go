@@ -97,7 +97,7 @@ spec:
 
 func TestPostRender(t *testing.T) {
 	var out bytes.Buffer
-	if err := PostRender(strings.NewReader(postRenderInput), &out); err != nil {
+	if err := PostRender(strings.NewReader(postRenderInput), &out, 32000); err != nil {
 		t.Fatalf("post-render: %v", err)
 	}
 	rendered := out.String()
@@ -185,5 +185,72 @@ func TestPostRender(t *testing.T) {
 		if cfg["other"].(map[string]any)["keep"] != "value" {
 			t.Errorf("unrelated config lost: %v", cfg["other"])
 		}
+	}
+}
+
+const dexLocalhostInput = `---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: model-manager
+  namespace: agent-platform
+spec:
+  template:
+    spec:
+      containers:
+        - name: model-manager
+          image: model-manager:1.0
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kagent-controller
+spec:
+  template:
+    spec:
+      containers:
+        - name: controller
+          image: kagent:1.0
+`
+
+func TestPostRenderDexLocalhostSidecar(t *testing.T) {
+	var out bytes.Buffer
+	if err := PostRender(strings.NewReader(dexLocalhostInput), &out, 31000); err != nil {
+		t.Fatal(err)
+	}
+	// Re-render the output: the sidecar must be replaced, not appended.
+	var again bytes.Buffer
+	if err := PostRender(bytes.NewReader(out.Bytes()), &again, 31000); err != nil {
+		t.Fatal(err)
+	}
+	dec := yaml.NewDecoder(&again)
+	var docs []map[string]any
+	for {
+		var d map[string]any
+		if err := dec.Decode(&d); err != nil {
+			break
+		}
+		docs = append(docs, d)
+	}
+	if len(docs) != 2 {
+		t.Fatalf("want 2 documents, got %d", len(docs))
+	}
+	containersOf := func(d map[string]any) []any {
+		return d["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["containers"].([]any)
+	}
+	mm := containersOf(docs[0])
+	if len(mm) != 2 {
+		t.Fatalf("model-manager: want the app container + one sidecar, got %d containers", len(mm))
+	}
+	side := mm[1].(map[string]any)
+	if side["name"] != dexLocalhostContainer || side["image"] != dexLocalhostImage {
+		t.Fatalf("unexpected sidecar: %v", side)
+	}
+	args := side["args"].([]any)
+	if args[0] != "TCP6-LISTEN:31000,fork,reuseaddr" || args[1] != "TCP:"+dexServiceAddr {
+		t.Fatalf("unexpected sidecar args: %v", args)
+	}
+	if n := len(containersOf(docs[1])); n != 1 {
+		t.Fatalf("kagent-controller must stay untouched, got %d containers", n)
 	}
 }

@@ -73,6 +73,9 @@ const KagentUINodePort = 30880
 // has a stable node-side port. Host side: Platform.GatewayPort.
 const GatewayNodePort = 30443
 
+// DefaultDexPort is the lab Dex NodePort when agentlab.yaml sets none.
+const DefaultDexPort = 32000
+
 type User struct {
 	Email        string   `yaml:"email"`
 	Username     string   `yaml:"username"`
@@ -280,7 +283,7 @@ type Config struct {
 func Default() *Config {
 	return &Config{
 		ClusterName: "agentlab",
-		DexPort:     32000,
+		DexPort:     DefaultDexPort,
 		// groups on staticPasswords requires Dex >= v2.45.0; see README.
 		DexImage: "ghcr.io/dexidp/dex:v2.45.1",
 		// The agent-platform BOM's own default, and the newest model the

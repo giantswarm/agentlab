@@ -41,7 +41,20 @@ import (
 //     one — useless to kind's fixed extraPortMappings. Pinned to
 //     config.KagentUINodePort, the containerPort side of the mapping that
 //     publishes the UI on the host (HACKS.md U9).
-func PostRender(in io.Reader, out io.Writer) error {
+//
+//  4. A `dex-localhost` sidecar on the MCP servers that validate the user's
+//     forwarded id_token themselves (mcp-kubernetes, model-manager, and
+//     mcp-prometheus through installOCIChart): they too must reach the issuer
+//     URL, https://localhost:<DexPort>, but hostNetwork is not an option —
+//     all three listen on :8080 and would collide on the single kind node.
+//     The sidecar (socat) listens on the pod's own loopback :<DexPort> and
+//     forwards to the Dex Service, so `localhost` resolves inside the pod
+//     exactly as on the host; Dex's certificate carries `localhost`, so TLS
+//     verification against the lab CA holds. Lab only (HACKS.md U10).
+//
+// dexPort is the lab Dex NodePort (agentlab.yaml dexPort), the port of the
+// issuer URL the sidecar answers on.
+func PostRender(in io.Reader, out io.Writer, dexPort int) error {
 	dec := yaml.NewDecoder(in)
 	enc := yaml.NewEncoder(out)
 	enc.SetIndent(2)
@@ -65,6 +78,9 @@ func PostRender(in io.Reader, out io.Writer) error {
 		if kind == "Deployment" && (name == componentMuster || name == componentBackstage) {
 			patchHostNetworkDeployment(root)
 		}
+		if kind == "Deployment" && dexLocalhostDeployments[name] {
+			patchDexLocalhostSidecar(root, dexPort)
+		}
 		if kind == "Service" && name == "kagent-ui" {
 			patchKagentUIService(root)
 		}
@@ -86,6 +102,61 @@ func patchHostNetworkDeployment(root *yaml.Node) {
 	setKey(rolling, "maxUnavailable", intNode(1))
 	setKey(strategy, "rollingUpdate", rolling)
 	setKey(ensureMap(root, "spec"), "strategy", strategy)
+}
+
+// dexLocalhostDeployments are the Deployments that get the dex-localhost
+// sidecar: every MCP server that runs mcp-oauth against the lab issuer without
+// hostNetwork.
+var dexLocalhostDeployments = map[string]bool{
+	"mcp-kubernetes":      true,
+	modelManagerMCPServer: true,
+	mcpPrometheusRelease:  true,
+}
+
+// dexLocalhostImage is the socat image of the sidecar (side-loaded like every
+// other lab image; Docker Hub).
+const dexLocalhostImage = "alpine/socat:1.8.1.3"
+
+// dexLocalhostContainer is the sidecar's name; a re-render replaces it in
+// place instead of appending a second one.
+const dexLocalhostContainer = "dex-localhost"
+
+// dexServiceAddr is the lab Dex behind its ClusterIP Service (dex.yaml.tmpl):
+// the same HTTPS endpoint the NodePort publishes on the host.
+const dexServiceAddr = "dex.dex.svc.cluster.local:5556"
+
+// patchDexLocalhostSidecar adds (or replaces) the dex-localhost sidecar on a
+// Deployment's pod template. The pod keeps its own network namespace; the
+// sidecar just makes 127.0.0.1/::1:<DexPort> answer with Dex.
+func patchDexLocalhostSidecar(root *yaml.Node, dexPort int) {
+	podSpec := ensureMap(ensureMap(ensureMap(root, "spec"), "template"), "spec")
+	containers := mapValue(podSpec, "containers")
+	if containers == nil || containers.Kind != yaml.SequenceNode {
+		return
+	}
+	kept := make([]*yaml.Node, 0, len(containers.Content)+1)
+	for _, c := range containers.Content {
+		if scalarAt(c, nameKey) != dexLocalhostContainer {
+			kept = append(kept, c)
+		}
+	}
+	side := &yaml.Node{Kind: yaml.MappingNode, Tag: yamlTagMap}
+	setKey(side, nameKey, strNode(dexLocalhostContainer))
+	setKey(side, "image", strNode(dexLocalhostImage))
+	args := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+	// An IPv6 wildcard listener is dual-stack on Linux (bindv6only=0), so both
+	// [::1] — which Go dials first for localhost — and 127.0.0.1 answer.
+	args.Content = append(args.Content,
+		strNode(fmt.Sprintf("TCP6-LISTEN:%d,fork,reuseaddr", dexPort)),
+		strNode("TCP:"+dexServiceAddr))
+	setKey(side, "args", args)
+	resources := &yaml.Node{Kind: yaml.MappingNode, Tag: yamlTagMap}
+	requests := &yaml.Node{Kind: yaml.MappingNode, Tag: yamlTagMap}
+	setKey(requests, "cpu", strNode("5m"))
+	setKey(requests, "memory", strNode("16Mi"))
+	setKey(resources, "requests", requests)
+	setKey(side, "resources", resources)
+	containers.Content = append(kept, side)
 }
 
 // patchKagentUIService pins the UI port entry to the fixed NodePort the kind

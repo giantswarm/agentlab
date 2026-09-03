@@ -334,6 +334,12 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 	if err != nil {
 		return err
 	}
+	// The post-renderer adds the dex-localhost sidecar to mcp-kubernetes and
+	// model-manager (postrender.go, item 4); its image is not in the chart
+	// render, so it is side-loaded here.
+	if res := sideloadImages(cfg, hostPullImages([]string{dexLocalhostImage})); res.n > 0 {
+		note("side-loaded the dex-localhost sidecar image (%s)", res.d)
+	}
 	if err := runQuietEnv([]string{"HELM_PLUGINS=" + pluginsDir},
 		"helm", "upgrade", "--install", platformRelease, chartDir,
 		"-n", platformNamespace,
