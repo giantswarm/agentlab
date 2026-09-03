@@ -166,7 +166,8 @@ func accessibleMode() bool {
 
 func configureCmd() *cobra.Command {
 	var defaults, accessible bool
-	var platform, agents, observability, backstage, modelManager bool
+	var platform, agents, observability, backstage, modelManager, llmRouting bool
+	var apsPath string
 	cmd := &cobra.Command{
 		Use:   "configure",
 		Short: "Ask for the lab configuration interactively and save agentlab.yaml",
@@ -202,6 +203,12 @@ func configureCmd() *cobra.Command {
 					cfg.Backstage.Enabled = backstage
 					cfg.Normalize() // backstage implies the platform
 				}
+				if cmd.Flags().Changed("llm-routing") {
+					cfg.Platform.LLMRouting = llmRouting
+				}
+				if cmd.Flags().Changed("aps-path") {
+					cfg.Platform.APSPath = apsPath
+				}
 				if err := cfg.Validate(); err != nil {
 					return err
 				}
@@ -218,6 +225,12 @@ func configureCmd() *cobra.Command {
 			fmt.Printf("  users      %d\n", len(cfg.Users))
 			fmt.Printf("  platform   %v (agents %v, observability %v)\n", cfg.Platform.Enabled, cfg.Platform.Agents, cfg.Platform.Observability)
 			fmt.Printf("  backstage  %v\n", cfg.Backstage.Enabled)
+			if cfg.Platform.LLMRouting {
+				fmt.Printf("  llm        agent inference routed through agentgateway (GenAI metrics)\n")
+			}
+			if cfg.Platform.APSPath != "" {
+				fmt.Printf("  chart      %s (local checkout; apsRef ignored)\n", cfg.Platform.APSPath)
+			}
 			fmt.Printf("  ai model   %s (key from $%s at deploy time)\n", cfg.AIModel, lab.AnthropicKeyEnv)
 			for _, m := range cfg.Platform.ExtraModels {
 				fmt.Printf("  extra model %s (%s %s)\n", m.Name, m.Provider, m.Model)
@@ -239,6 +252,8 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&observability, "observability", false, "with --defaults: enable/disable the observability stack (Prometheus + mcp-prometheus)")
 	cmd.Flags().BoolVar(&backstage, "backstage", false, "with --defaults: enable/disable Backstage (implies the platform)")
 	cmd.Flags().BoolVar(&modelManager, "model-manager", false, "with --defaults: enable/disable managed models (the model-manager component with the host Ollama; needs agents)")
+	cmd.Flags().BoolVar(&llmRouting, "llm-routing", false, "with --defaults: enable/disable routing agent inference through agentgateway (needs a chart carrying llmRouting; see --aps-path)")
+	cmd.Flags().StringVar(&apsPath, "aps-path", "", "with --defaults: install the umbrella from this agent-platform-standalone checkout instead of vendoring apsRef (empty string clears it)")
 	cmd.Flags().BoolVar(&accessible, "accessible", false, "prompt-per-question form mode (for screen readers and plain terminals)")
 	return cmd
 }

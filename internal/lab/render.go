@@ -58,6 +58,11 @@ type tmplData struct {
 	// name the proofs sign in to and the protected endpoint it points at.
 	OAuthFixtureServer string
 	OAuthFixtureURL    string
+	// PlatformNamespace and LLMListenerPort build the base URL the kagent
+	// ModelConfig dials when llmRouting is on. The port is written into the
+	// listener AND into that URL from this one value, so they cannot drift.
+	PlatformNamespace string
+	LLMListenerPort   int
 }
 
 func newTmplData(cfg *config.Config) (*tmplData, error) {
@@ -87,6 +92,8 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		AllGroups:                 config.Groups,
 		KubernetesClientSecret:    config.KubernetesClientSecret,
 		AgentPlatformClientSecret: config.AgentPlatformClientSecret,
+		PlatformNamespace:         platformNamespace,
+		LLMListenerPort:           llmListenerPort,
 	}, nil
 }
 

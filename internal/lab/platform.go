@@ -16,6 +16,12 @@ import (
 
 const platformNamespace = "agent-platform"
 
+// llmListenerPort is the data-plane Gateway's cluster-internal LLM listener.
+// The chart's own default, restated here because the lab writes the same
+// number into the listener and into the ModelConfig base URL that dials it.
+// Unrelated to platform.agentsPort, which is a HOST port for the kagent UI.
+const llmListenerPort = 8081
+
 // platformRelease is the umbrella's Helm release name. Also the name of the
 // muster installation Backstage surfaces: the chart's app-config derives its
 // gs/kubernetes/muster installation entries from {{ .Release.Name }}.
@@ -33,6 +39,17 @@ const (
 // `vendor/`: the repo is a Go module, and a top-level vendor/ directory would
 // flip the Go toolchain into vendored-build mode and break `go build`.
 const apsDir = ".vendor/agent-platform-standalone"
+
+// platformChartDir is the umbrella chart the install reads: the vendored
+// checkout, or the local one platform.apsPath names. Both are the same
+// repository layout, so only the root differs.
+func platformChartDir(cfg *config.Config) string {
+	root := apsDir
+	if cfg.Platform.APSPath != "" {
+		root = cfg.Platform.APSPath
+	}
+	return filepath.Join(root, "helm", "agent-platform-standalone")
+}
 
 // PlatformUp installs the Giant Swarm agent platform into the lab cluster and
 // wires it to the lab Dex.
@@ -69,7 +86,13 @@ func vendorPlatformChart(cfg *config.Config) <-chan error {
 // builds its chart dependencies. Quiet on purpose: it may run concurrently
 // with other steps' output.
 func ensurePlatformChart(cfg *config.Config) error {
-	chartDir := filepath.Join(apsDir, "helm", "agent-platform-standalone")
+	chartDir := platformChartDir(cfg)
+	if cfg.Platform.APSPath != "" {
+		// A local checkout is the user's working copy: never fetch, never
+		// check out over it. Its dependencies still need building, which the
+		// rest of this function does.
+		return buildChartDependencies(chartDir)
+	}
 	if _, err := os.Stat(filepath.Join(apsDir, ".git")); os.IsNotExist(err) {
 		if err := runQuiet("git", "init", "-q", apsDir); err != nil {
 			return err
@@ -89,7 +112,13 @@ func ensurePlatformChart(cfg *config.Config) error {
 		return err
 	}
 
-	// A `helm dependency build` killed mid-flight (this very function runs in
+	return buildChartDependencies(chartDir)
+}
+
+// buildChartDependencies pulls the umbrella's subcharts into chartDir/charts,
+// skipping the work when they were last built from exactly this Chart.lock.
+func buildChartDependencies(chartDir string) error {
+	// A `helm dependency build` killed mid-flight (the caller runs in
 	// a goroutine that dies with a failed boot) leaves a tmpcharts-<pid>/ dir
 	// inside the chart. Helm's directory loader embeds every file .helmignore
 	// does not exclude into the release record, so that corpse of raw .tgz
@@ -132,7 +161,7 @@ func ensurePlatformChart(cfg *config.Config) error {
 // user reads a single "what to do next" block once everything is verified,
 // the standalone `agentlab platform` entry point passes "Platform is up.".
 func platformUp(cfg *config.Config, chartReady <-chan error, header string) error {
-	chartDir := filepath.Join(apsDir, "helm", "agent-platform-standalone")
+	chartDir := platformChartDir(cfg)
 
 	// Also checked at the very top of `agentlab up`; repeated here for the
 	// standalone `agentlab platform` entry point.
@@ -148,7 +177,11 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 			"run `agentlab platform-down` first, then re-run `agentlab platform`")
 	}
 
-	step("Vendoring agent-platform-standalone @ %.12s (chart + dependencies)", cfg.Platform.APSRef)
+	if cfg.Platform.APSPath != "" {
+		step("Using the local agent-platform-standalone at %s (chart dependencies only)", cfg.Platform.APSPath)
+	} else {
+		step("Vendoring agent-platform-standalone @ %.12s (chart + dependencies)", cfg.Platform.APSRef)
+	}
 	if chartReady != nil {
 		if err := <-chartReady; err != nil {
 			return err

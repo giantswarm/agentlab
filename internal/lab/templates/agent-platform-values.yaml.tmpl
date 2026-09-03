@@ -62,6 +62,25 @@ gatewayApi:
 # choke point, muster keeps all per-server connection logic and OAuth.
 ingress:
   mode: agentgateway-muster
+{{- if .Platform.LLMRouting }}
+
+# Agent inference through the same data plane, so the gateway observes every
+# model call: one more listener on the edge Gateway (cluster-internal — the
+# route pins itself to it by sectionName and never attaches to the public
+# HTTPS listener), the Anthropic backend, the mandatory client-path -> body-
+# format map, the per-agent metric labels and the USD price catalog the cost
+# counter reads. The gateway holds NO provider credential: the agent pods keep
+# their own key and x-api-key passes through untouched.
+#
+# The metrics land in the lab Prometheus through the data-plane PodMonitor
+# (rendered with platform.observability), so agentgateway_gen_ai_* is
+# queryable through x_mcp-prometheus_* right after an agent turn.
+llmRouting:
+  enabled: true
+  listener:
+    name: llm
+    port: {{ .LLMListenerPort }}
+{{- end }}
 {{- if .ModelManagerEnabled }}
 
 gateway:
@@ -258,6 +277,14 @@ kagent:
         model: {{ .AIModel }}
         apiKeySecretRef: kagent-anthropic
         apiKeySecretKey: ANTHROPIC_API_KEY
+{{- if .Platform.LLMRouting }}
+        # The cutover: the default ModelConfig dials the LLM listener instead
+        # of api.anthropic.com. It lands in each agent's config Secret and the
+        # pod template carries a config hash, so turning this on rolls the
+        # agent pods once. Removing it is the rollback; the listener may stay.
+        config:
+          baseUrl: http://agentgateway.{{ .PlatformNamespace }}.svc:{{ .LLMListenerPort }}
+{{- end }}
     controller:
       auth:
         # The umbrella default is trusted-proxy, which decodes bearer claims
