@@ -81,7 +81,7 @@ func (c *Config) ports() []labPort {
 			}
 			return scan(lo, 65535)
 		}, func(to int) string {
-			return fmt.Sprintf("public URLs gain :%d; the chart's Backstage app-config assumes a port-free baseUrl, expect rough edges", to)
+			return fmt.Sprintf("public URLs gain :%d, valid from the host only; platform-test's lab-oauth-fixture step will fail (muster cannot reach its own ported URL in-cluster)", to)
 		}},
 		{"backstage.port", "Backstage's direct debug access", &c.Backstage.Port, func(scan func(int, int) (int, bool)) (int, bool) {
 			return scan(c.Backstage.Port+1, 65535)

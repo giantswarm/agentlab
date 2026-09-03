@@ -122,9 +122,10 @@ type Platform struct {
 	// the edge Gateway Service.
 	Domain string `yaml:"domain"`
 	// Host-side port of the agentgateway edge (HTTPS). 443 keeps the public
-	// URLs port-free, which the chart's Backstage app-config assumes
-	// (its baseUrl carries no port); change only if 443 is taken, and expect
-	// Backstage to break behind a non-443 edge.
+	// URLs port-free; any other value is only reachable from the host (the
+	// edge Service inside the cluster stays on 443), so in-cluster callers of
+	// a ported public URL — muster fetching its own OAuth metadata for the
+	// lab-oauth-fixture — time out. Change only if 443 is taken.
 	GatewayPort int `yaml:"gatewayPort"`
 	// TLS optionally hands the edge an externally provisioned certificate
 	// pair (PEM) instead of the minted lab-CA wildcard — for users who own a
@@ -776,8 +777,9 @@ func (c *Config) ControlPlaneNode() string { return c.ClusterName + "-control-pl
 func (c *Config) MCPServerName() string { return "mcp-kubernetes" }
 
 // gatewayURL builds the public URL of a platform hostname: through the
-// agentgateway edge, port-free when the edge sits on 443 (the chart's
-// app-config assumes exactly that).
+// agentgateway edge, port-free when the edge sits on 443. The chart's
+// Backstage app-config renders port-free URLs regardless; the lab's overlay
+// restates them from BackstageBaseURL (HACKS.md U15).
 func (c *Config) gatewayURL(prefix string) string {
 	if c.Platform.GatewayPort == 443 {
 		return fmt.Sprintf("https://%s.%s", prefix, c.Platform.Domain)
