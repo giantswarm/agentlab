@@ -5,6 +5,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -133,6 +134,23 @@ type Platform struct {
 	// at this pinned SHA. Once released this becomes an OCI ref.
 	APSRepo string `yaml:"apsRepo"`
 	APSRef  string `yaml:"apsRef"`
+	// LLMRouting sends agent inference through the agentgateway data plane
+	// instead of straight out of the agent pods, so one component observes
+	// every model call: the edge Gateway grows a cluster-internal LLM
+	// listener, the default kagent ModelConfig dials it, and the data plane
+	// emits per-agent GenAI metrics (agentgateway_gen_ai_*, cost in USD) the
+	// lab's Prometheus scrapes. Off by default: the chart change is
+	// unreleased, so it needs a chart that carries it — today that means
+	// apsPath pointing at a locally curated agent-platform-standalone.
+	// Requires agents (the ModelConfig cutover is the point).
+	LLMRouting bool `yaml:"llmRouting,omitempty"`
+	// APSPath installs the umbrella from a local checkout instead, skipping
+	// the git vendor step: the path to an agent-platform-standalone working
+	// copy, whose helm/agent-platform-standalone is used as-is. This is how
+	// an UNRELEASED chart change is tested in the lab — curate the standalone
+	// chart from a local fleet checkout there (`hack/curate.sh -fleet-dir`),
+	// then point the lab at it. apsRepo/apsRef are ignored while it is set.
+	APSPath string `yaml:"apsPath,omitempty"`
 	// Additional kagent ModelConfigs beyond the chart-rendered default
 	// (aiModel): self-hosted OpenAI-compatible endpoints (vLLM, Ollama),
 	// OpenRouter, Gemini, plain OpenAI. Rendered as lab-labeled ModelConfig
@@ -528,6 +546,15 @@ func (c *Config) Validate() error {
 	}
 	if err := ValidatePort(strconv.Itoa(c.Platform.AgentsPort)); err != nil {
 		return fmt.Errorf("platform.agentsPort: %w", err)
+	}
+	if c.Platform.LLMRouting && !c.Platform.Agents {
+		return fmt.Errorf("platform.llmRouting needs platform.agents: the cutover points kagent's default ModelConfig at the LLM listener, and without the runtime there is no model call to route")
+	}
+	if c.Platform.APSPath != "" {
+		chart := filepath.Join(c.Platform.APSPath, "helm", "agent-platform-standalone", "Chart.yaml")
+		if _, err := os.Stat(chart); err != nil {
+			return fmt.Errorf("platform.apsPath %q: %w (expected an agent-platform-standalone checkout)", c.Platform.APSPath, err)
+		}
 	}
 	seenModels := map[string]bool{}
 	for _, m := range c.Platform.ExtraModels {

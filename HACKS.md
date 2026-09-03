@@ -168,6 +168,14 @@ does not exist in gsoci (verified 2026-08-27, `NAME_UNKNOWN`) and PR
 is still open (its head is exactly the pinned `APS_REF`).
 **Unblocks:** merge #11 and publish the chart; then the vendor block becomes
 `helm upgrade --install … oci://gsoci.azurecr.io/charts/giantswarm/agent-platform-standalone`.
+**Escape hatch:** `platform.apsPath` installs a local checkout instead of the
+pinned commit (`ensurePlatformChart` skips the fetch and only builds the
+chart's dependencies). It exists because the delivery chain consumes released
+artifacts at every hop — a change to `agentic-platform` is not installable
+here until it is published, which is when the lab is most useful. The
+`agent-platform-standalone` side of the same gap is `hack/curate.sh
+-fleet-dir` (giantswarm/agent-platform-standalone#93). Both stay useful after
+the OCI release: they are how the next unreleased chart change gets tested.
 
 ### U5. `platform.go`: mcp-kubernetes must be `--wait`ed serially before muster installs — RETIRED (#34)
 muster dials its MCPServers ~2s after starting; a failed first dial schedules
@@ -316,6 +324,19 @@ guard.
 **Unblocks:** giantswarm/kube-prometheus-stack-app — guard the PolicyException
 fallback with a Capabilities check like the sibling branches; then the value
 can be dropped (it would render nothing here either way).
+
+### U13. `platform.llmRouting` off by default — the chart change is unreleased
+Routing agent inference through the platform's agentgateway needs the
+`llmRouting` block, which only exists on
+[giantswarm/agent-platform#254](https://github.com/giantswarm/agent-platform/pull/254).
+The released umbrella declares no such key and its `values.schema.json`
+rejects an undeclared top-level one, so a lab that emitted the block by
+default would fail every install. The toggle therefore defaults to `false`
+and needs `platform.apsPath` (U4) pointing at a standalone chart curated from
+that branch.
+**Unblocks:** release the connectivity chart change and bump `platform.apsRef`
+to a standalone chart that carries `llmRouting`; then `platform.llmRouting`
+can default to `true` and stop needing `apsPath`.
 
 ## Accepted lab trade-offs (not hacks to fix)
 

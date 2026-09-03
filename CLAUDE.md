@@ -83,6 +83,17 @@ with Dex doing the logins.
   agentgateway route `https://agentgateway.<domain>/model-manager` with JWT
   validation on (a Dex token is required; 401 without). Proof:
   `./agentlab models-test` (see README "Managed models").
+- `platform.llmRouting` (off by default) routes agent inference through the
+  platform's agentgateway instead of straight out of the agent pods: a
+  cluster-internal `llm` listener on the edge Gateway plus the kagent
+  ModelConfig cutover, so the data plane emits per-agent GenAI metrics
+  (`agentgateway_gen_ai_client_token_usage_*`,
+  `agentgateway_gen_ai_client_cost_usd_total`, both carrying `agent` and
+  `agent_namespace`) that the lab Prometheus scrapes. The chart change is
+  unreleased (HACKS.md U13), so it needs `platform.apsPath` — a local
+  `agent-platform-standalone` checkout, curated from a local fleet checkout
+  with `hack/curate.sh -fleet-dir`, installed instead of `apsRef`. See the
+  README's "LLM routing" and "Installing an unreleased chart" sections.
 - For verifying RBAC as a specific user, use `./agentlab login <email>` and
   `kubectl --kubeconfig kubeconfig.oidc` — that is the OIDC path.
 - The kind admin context (`kind-agentlab`) bypasses the platform and OIDC

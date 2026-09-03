@@ -618,6 +618,77 @@ observability endpoint — proving Dex → muster → mcp-prometheus → Prometh
 and the Backstage metrics path end to end. Logs:
 `agentlab logs prometheus`, `agentlab logs mcp-prometheus`.
 
+### LLM routing (agent inference through agentgateway)
+
+**Off by default** (`platform.llmRouting`). On, agent inference stops going
+straight from the agent pods to `api.anthropic.com` and goes through the
+platform's own agentgateway instead, so one component observes every model
+call and the data plane emits GenAI metrics for it — tokens by type, cost in
+USD, request duration, and the calling agent as a label.
+
+Two things land together: the edge Gateway grows a cluster-internal `llm`
+listener on port 8081 (a pod port on the data plane — unrelated to
+`platform.agentsPort`, the *host* port for the kagent UI), and kagent's
+default ModelConfig dials it. The gateway holds no provider credential: the
+agent pods keep their own `$ANTHROPIC_API_KEY` and the client `x-api-key`
+header passes through untouched, so reach to the listener grants no spend.
+
+The metrics land in the lab Prometheus through the data-plane `PodMonitor`,
+which needs `platform.observability`. After one agent turn:
+
+```console
+$ agentlab login admin@lab.local   # or ask Claude Code through x_mcp-prometheus_execute_query
+$ curl -sS --cacert certs/ca.crt -G \
+    https://observability.127.0.0.1.nip.io/prometheus/api/v1/query \
+    --data-urlencode 'query=sum by (agent, agent_namespace) (agentgateway_gen_ai_client_cost_usd_total)'
+```
+
+`agent` is the agent's ServiceAccount name, resolved from the source IP
+against the agentgateway controller's pod store. It is **not** cryptographic
+identity — adequate for accounting, never for authorization. A caller the
+store does not know renders `unknown` and keeps the series.
+`agentgateway_cost_catalog_lookups_total{status="Exact"}` grows for a model
+the chart's price catalog knows; `Missing` means it does not.
+`agentgateway_gen_ai_server_time_to_first_token_*` only exists once something
+*streams* through the listener — a kagent agent turn does not, so those series
+stay absent under agent traffic alone.
+
+The chart change this rides on is unreleased, so the toggle needs a chart that
+carries it. See the next section.
+
+### Installing an unreleased chart (`platform.apsPath`)
+
+`platform.apsRef` pins the umbrella to a commit of
+`giantswarm/agent-platform-standalone`, which is generated from the *released*
+`agentic-platform` charts. So a change to those charts is not installable here
+until it is published — which is exactly when the lab is most useful. Two
+escape hatches close that gap:
+
+1. In an `agent-platform-standalone` checkout, curate from a local checkout of
+   the fleet charts instead of pulling the pin:
+
+   ```console
+   $ hack/curate.sh -fleet-dir ~/workspace/agentic-platform/helm
+   $ pre-commit run helm-schema-agent-platform-standalone --all-files
+   ```
+
+   A new top-level values key also needs its `keys:` rule in `curate.yaml`
+   (the transform is deny-unknown), and the schema regeneration is not
+   optional — Helm rejects a values key the committed `values.schema.json`
+   does not declare.
+
+2. Point the lab at that checkout:
+
+   ```console
+   $ agentlab configure --defaults --aps-path ~/workspace/agent-platform-standalone
+   $ agentlab platform
+   ```
+
+   `apsRepo`/`apsRef` are ignored while `apsPath` is set, and the boot says so
+   (`Using the local agent-platform-standalone at …`). The checkout is only
+   read — `helm dependency build` fills its gitignored `charts/`, nothing else
+   is written. Clear it with `--aps-path ""`.
+
 ### Why `localhost` and not `127.0.0.1`
 
 The issuer was originally `https://127.0.0.1:32000/dex`. muster refuses that:
