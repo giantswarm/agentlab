@@ -59,7 +59,7 @@ func ModelsTest(cfg *config.Config, email, model string) error {
 
 	step("Logging in to Dex as %s", email)
 	token, err := passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret,
-		user.Email, user.Password, "openid email groups profile")
+		user.Email, user.Password, musterLoginScopes)
 	if err != nil {
 		return err
 	}
@@ -183,7 +183,7 @@ func ModelsTest(cfg *config.Config, email, model string) error {
 	if viewer := cfg.FindUserInGroup("viewers"); viewer != nil {
 		step("Wiring %s as %s — expecting the apiserver's Forbidden (view role, no write in %s)", model, viewer.Email, kagentNamespace)
 		viewerToken, err := passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret,
-			viewer.Email, viewer.Password, "openid email groups profile")
+			viewer.Email, viewer.Password, musterLoginScopes)
 		if err != nil {
 			return err
 		}

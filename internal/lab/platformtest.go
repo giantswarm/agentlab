@@ -36,7 +36,7 @@ func PlatformTest(cfg *config.Config, email string) error {
 
 	step("Logging in to Dex as %s", email)
 	token, err := passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret,
-		user.Email, user.Password, "openid email groups profile")
+		user.Email, user.Password, musterLoginScopes)
 	if err != nil {
 		return err
 	}
@@ -299,7 +299,7 @@ func PlatformTest(cfg *config.Config, email string) error {
 func musterTokenProbe(cfg *config.Config) error {
 	admin := cfg.AdminUser()
 	token, err := passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret,
-		admin.Email, admin.Password, "openid email groups profile")
+		admin.Email, admin.Password, musterLoginScopes)
 	if err != nil {
 		return err
 	}
@@ -388,7 +388,7 @@ func proveDownstreamIdentity(cfg *config.Config, toolPrefix string) error {
 	} {
 		step("Listing kube-system Secrets through muster as %s — expecting %s", tc.user.Email, tc.expecting)
 		token, err := passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret,
-			tc.user.Email, tc.user.Password, "openid email groups profile")
+			tc.user.Email, tc.user.Password, musterLoginScopes)
 		if err != nil {
 			return err
 		}
