@@ -298,6 +298,23 @@ kagent:
         enabled: false
 {{- end }}
 
+{{- if .Platform.Agents }}
+# The agent-manager chart's own values (the umbrella pins the Service name,
+# the kagent namespace, the muster registration and OAuth against
+# global.identity in its contract; the component is on whenever kagent is).
+# Same audience story as mcp-kubernetes above: agent-manager writes the
+# HelmRelease and OCIRepository of every agent as the caller (downstream
+# OAuth), so the forwarded token must carry the `kubernetes` audience to pass
+# the kind apiserver — the lab Dex lists agent-platform as a trusted peer of
+# that client.
+agent-manager:
+  muster:
+    mcpServer:
+      auth:
+        requiredAudiences:
+          - kubernetes
+{{- end }}
+
 {{- if .ModelManagerEnabled }}
 # The model-manager chart's own values (the umbrella pins the Service name,
 # the kagent namespace, the muster registration and — since the identity

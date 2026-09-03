@@ -62,6 +62,7 @@ Then:        claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		labCmd("platform", "Install the Giant Swarm agent platform (muster + Kubernetes MCP)", lab.PlatformUp),
 		platformTestCmd(),
 		modelsTestCmd(),
+		agentsTestCmd(),
 		labCmd("platform-down", "Remove the agent platform (leaves Dex and the cluster alone)", lab.PlatformDown),
 		labCmd("backstage", "Retired: Backstage deploys with the platform now (backstage.enabled + `agentlab up`)", lab.BackstageUp),
 		backstageTestCmd(),
@@ -330,6 +331,25 @@ func modelsTestCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&model, "model", lab.ModelsTestModel, "the Ollama model to pull and delete (small and tool-calling capable)")
 	return cmd
+}
+
+func agentsTestCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "agents-test [email]",
+		Short: "Headless agent-manager proof through muster: get_info (caller) -> create -> ready -> update -> delete as the admin, a viewer's create Forbidden by the apiserver, the ServiceAccount without RBAC",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			email := cfg.AdminUser().Email
+			if len(args) == 1 {
+				email = args[0]
+			}
+			return lab.AgentsTest(cfg, email)
+		},
+	}
 }
 
 func backstageTestCmd() *cobra.Command {
