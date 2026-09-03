@@ -82,6 +82,15 @@ components:
   # mcp-kubernetes ships bundled in the umbrella (enabled by default since
   # APS #44): the subchart at the BOM's version plus an MCPServer CR named
   # mcp-kubernetes, so muster's tools surface as x_mcp-kubernetes_<tool>.
+  # The umbrella runs it as an OAuth resource server against global.identity
+  # and muster forwards the user's Dex id_token; enableDownstreamOAuth then
+  # presents that token to the kind apiserver, which trusts the lab Dex with
+  # client id `kubernetes` (kind-config.yaml.tmpl) — so the token must carry
+  # that audience, requested at login through the MCPServer CR. The umbrella
+  # default is dex-k8s-authenticator (Giant Swarm apiservers); the lab Dex
+  # lists agent-platform under the kubernetes client's trustedPeers for this.
+  mcp-kubernetes:
+    kubernetesAudience: kubernetes
   # The agent runtime: the platform's Agent CRs run here, wired to Anthropic
   # through the default ModelConfig (see the kagent block below). Optional in
   # this lab (platform.agents in agentlab.yaml) — on real clusters agent
@@ -291,14 +300,23 @@ kagent:
 
 {{- if .ModelManagerEnabled }}
 # The model-manager chart's own values (the umbrella pins the Service name,
-# the kagent namespace and the muster registration in its contract). The
-# Ollama backend dials the host through the kind docker network's gateway —
-# autodetected by `agentlab platform` (platform.modelManager.endpoint
-# overrides). Agent pods dial the same address, so agentHost stays empty.
+# the kagent namespace, the muster registration and — since the identity
+# change — OAuth against global.identity in its contract). The Ollama backend
+# dials the host through the kind docker network's gateway — autodetected by
+# `agentlab platform` (platform.modelManager.endpoint overrides). Agent pods
+# dial the same address, so agentHost stays empty. Same audience story as
+# mcp-kubernetes above: the forwarded token must carry the `kubernetes`
+# audience for model-manager's downstream OAuth (the ModelConfigs it writes
+# as the caller) to pass the kind apiserver.
 model-manager:
   backend: ollama
   ollama:
     endpoint: {{ .ModelManagerEndpoint | printf "%q" }}
+  muster:
+    mcpServer:
+      auth:
+        requiredAudiences:
+          - kubernetes
 {{- end }}
 
 {{- if .Backstage.Enabled }}
@@ -355,23 +373,24 @@ agent-platform-mcps:
     # pairing with ingress.mode).
     viaMuster: true
   # The Kubernetes MCP server is NOT listed here: it is the umbrella's bundled
-  # mcp-kubernetes component, which registers its own MCPServer CR. The chart's
-  # defaults leave the server unauthenticated in-cluster — muster's own OAuth
-  # guards the front door and mcp-kubernetes talks to the apiserver with its
-  # ServiceAccount.
+  # mcp-kubernetes component, which registers its own MCPServer CR (with the
+  # forward-token auth block, see components.mcp-kubernetes above).
 {{- if .Platform.Observability }}
   # The Prometheus MCP server, a lab-installed release (observability.go);
   # this entry only registers it with muster. `group` must stay OUTSIDE
   # muster.families (kubernetes, prometheus): a family entry would surface the
   # tools as x_prometheus_<tool> with a required management_cluster argument,
   # while this singleton keeps mcp-kubernetes's UX — x_mcp-prometheus_<tool>,
-  # no extra argument. Unauthenticated in-cluster, same stance as
-  # mcp-kubernetes.
+  # no extra argument. auth.mode forward: muster forwards the session's Dex
+  # id_token byte-identical and mcp-prometheus validates it against Dex's
+  # JWKS (mcp-prometheus-values.yaml.tmpl) — the caller's identity reaches
+  # the server. The chart's default audience (dex-k8s-authenticator) rides
+  # along; the lab Dex mints it and nothing downstream needs it.
   mcpServers:
     - name: mcp-prometheus
       cluster: {{ .ClusterName }}
       group: observability
       url: http://mcp-prometheus.monitoring.svc.cluster.local:8080/mcp
       auth:
-        mode: none
+        mode: forward
 {{- end }}

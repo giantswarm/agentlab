@@ -21,8 +21,10 @@ import (
 // endpoint. The lab installs the constituent directly and re-enables the
 // Prometheus server — see kube-prometheus-stack-values.yaml.tmpl.
 const (
-	kpsChartVersion           = "22.0.0" // wraps upstream kube-prometheus-stack 87.3.0
-	mcpPrometheusChartVersion = "0.7.16"
+	kpsChartVersion = "22.0.0" // wraps upstream kube-prometheus-stack 87.3.0
+	// 0.8.0: OAuth provider switch and tenancy mode `none` (a single-tenant
+	// Prometheus behind muster; the lab's identity proofs need both).
+	mcpPrometheusChartVersion = "0.8.0"
 )
 
 // observabilityNamespace also appears in the templates (the PROMETHEUS_URL in
@@ -42,14 +44,27 @@ const (
 // kube-prometheus-stack (operator + CRDs + kube-state-metrics + node-exporter
 // + a Prometheus scraping kubelet/cAdvisor) and mcp-prometheus, the MCP server
 // muster registers via the umbrella's agent-platform-mcps values (see
-// agent-platform-values.yaml.tmpl). Runs BEFORE the umbrella install so
-// muster's first dial of the MCPServer CR succeeds.
+// agent-platform-values.yaml.tmpl) and forwards the user's Dex id_token to.
+// Runs BEFORE the umbrella install so muster's first dial of the MCPServer CR
+// finds a listener.
 func observabilityUp(cfg *config.Config) error {
 	step("Installing the observability stack (kube-prometheus-stack %s + mcp-prometheus %s)",
 		kpsChartVersion, mcpPrometheusChartVersion)
 	if err := installOCIChart(cfg, kpsRelease,
 		"oci://gsoci.azurecr.io/charts/giantswarm/kube-prometheus-stack",
 		kpsChartVersion, "kube-prometheus-stack-values.yaml.tmpl"); err != nil {
+		return err
+	}
+	// mcp-prometheus runs as an OAuth resource server against the lab Dex
+	// (mcp-prometheus-values.yaml.tmpl): it needs the lab CA in its own
+	// namespace to verify Dex's certificate, so the Secret muster and
+	// Backstage use in agent-platform is mirrored here before the install.
+	if err := ensureNamespace(observabilityNamespace); err != nil {
+		return err
+	}
+	if err := ensureSecretFromFiles(observabilityNamespace, "dex-ca", map[string]string{
+		"ca.crt": caCertPath,
+	}); err != nil {
 		return err
 	}
 	if err := installOCIChart(cfg, mcpPrometheusRelease,

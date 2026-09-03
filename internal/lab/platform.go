@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -343,21 +344,26 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 		return err
 	}
 
-	step("Waiting for muster to connect to the Kubernetes MCP")
-	if err := waitMCPServerConnected(cfg.MCPServerName()); err != nil {
+	// Every downstream forwards the user's token (auth.forwardToken), so muster
+	// connects per session, not at startup: until the first session signs in
+	// the CR reads Auth Required, afterwards Connected. Either proves the
+	// server answers (a dead server reads Failed); platform-test and
+	// models-test then drive the sessions that flip them to Connected.
+	step("Waiting for muster to reach the Kubernetes MCP")
+	if err := waitMCPServerReachable(cfg.MCPServerName()); err != nil {
 		return err
 	}
 	if cfg.Platform.Observability {
-		step("Waiting for muster to connect to the Prometheus MCP")
-		if err := waitMCPServerConnected(mcpPrometheusRelease); err != nil {
+		step("Waiting for muster to reach the Prometheus MCP")
+		if err := waitMCPServerReachable(mcpPrometheusRelease); err != nil {
 			return err
 		}
 	}
 	if cfg.ModelManagerEnabled() {
-		// The model-manager chart renders its own MCPServer CR; Connected
-		// proves the pod serves MCP and muster aggregates x_model-manager_*.
-		step("Waiting for muster to connect to model-manager")
-		if err := waitMCPServerConnected(modelManagerMCPServer); err != nil {
+		// The model-manager chart renders its own MCPServer CR (with the
+		// forward-token auth block); reachable proves the pod serves MCP.
+		step("Waiting for muster to reach model-manager")
+		if err := waitMCPServerReachable(modelManagerMCPServer); err != nil {
 			return err
 		}
 	}
@@ -500,24 +506,32 @@ func waitMCPServerConnected(name string) error {
 	return waitMCPServerState(name, "Connected")
 }
 
-// waitMCPServerState polls the MCPServer CR's status.state until it reads
-// want. The name is fully qualified because kagent ships its own MCPServer
+// waitMCPServerReachable is waitMCPServerConnected for a server muster
+// authenticates to per session (auth.forwardToken): Auth Required means the
+// server answered muster's probe with an OAuth challenge and waits for the
+// first session, Connected that a session already signed in.
+func waitMCPServerReachable(name string) error {
+	return waitMCPServerState(name, "Connected", mcpServerStateAuthRequired)
+}
+
+// waitMCPServerState polls the MCPServer CR's status.state until it reads one
+// of want. The name is fully qualified because kagent ships its own MCPServer
 // CRD (mcpservers.kagent.dev), so the bare kind resolves to the wrong API
 // group.
-func waitMCPServerState(name, want string) error {
+func waitMCPServerState(name string, want ...string) error {
 	state := ""
 	reached := waitFor(40, 3*time.Second, func() bool {
 		state, _ = outputQuiet("kubectl", "-n", platformNamespace, "get", "mcpservers.muster.giantswarm.io", name,
 			"-o", "jsonpath={.status.state}")
-		return state == want
+		return slices.Contains(want, state)
 	})
 	if !reached {
 		return fmt.Errorf("MCPServer %s never reached %s (last state: %q);\n"+
 			"check `agentlab logs muster`, `kubectl -n %s describe mcpservers.muster.giantswarm.io %s`\n"+
 			"and the server's rollout: `kubectl -n %s get deploy,pods`",
-			name, want, state, platformNamespace, name, platformNamespace)
+			name, strings.Join(want, " or "), state, platformNamespace, name, platformNamespace)
 	}
-	note("MCPServer %s: %s", name, want)
+	note("MCPServer %s: %s", name, state)
 	return nil
 }
 

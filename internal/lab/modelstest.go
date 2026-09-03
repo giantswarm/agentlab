@@ -130,6 +130,18 @@ func ModelsTest(cfg *config.Config, email, model string) error {
 	}
 	note("pulled in %s", time.Since(started).Round(time.Second))
 
+	step("The job is attributed to the caller (requestedBy)")
+	var job struct {
+		RequestedBy string `json:"requestedBy"`
+	}
+	if err := api.getJSON("/jobs/"+pull.Job.ID, &job); err != nil {
+		return err
+	}
+	if job.RequestedBy != user.Email {
+		return fmt.Errorf("job %s carries requestedBy=%q, wanted %q: model-manager did not learn the caller from the forwarded token", pull.Job.ID, job.RequestedBy, user.Email)
+	}
+	note("requestedBy=%s", job.RequestedBy)
+
 	step("Auto-created kagent ModelConfig")
 	mcName := ""
 	found := waitFor(30, 2*time.Second, func() bool {
@@ -163,6 +175,31 @@ func ModelsTest(cfg *config.Config, email, model string) error {
 		return fmt.Errorf("ModelConfig %s is not the native Ollama provider: %s", mcName, spec)
 	}
 	note("ModelConfig %s: %s (keyless native provider)", mcName, strings.TrimSpace(spec))
+
+	// The user's identity, not a ServiceAccount: wiring writes a ModelConfig
+	// into the kagent namespace as the caller (downstream OAuth), so a user
+	// without RBAC there is refused by the apiserver, while the admin who
+	// pulled the model was allowed.
+	if viewer := cfg.FindUserInGroup("viewers"); viewer != nil {
+		step("Wiring %s as %s — expecting the apiserver's Forbidden (view role, no write in %s)", model, viewer.Email, kagentNamespace)
+		viewerToken, err := passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret,
+			viewer.Email, viewer.Password, "openid email groups profile")
+		if err != nil {
+			return err
+		}
+		viewerAPI := modelManagerAPI{client: client, base: api.base, token: viewerToken}
+		status, body, _, err := viewerAPI.do(http.MethodPost, "/models/wire", map[string]any{modelField: model})
+		if err != nil {
+			return err
+		}
+		if status/100 == 2 {
+			return fmt.Errorf("%s wired %s (HTTP %d) although the view role cannot write ModelConfigs — model-manager is not acting as the caller (ServiceAccount fallback?)", viewer.Email, model, status)
+		}
+		if !strings.Contains(strings.ToLower(string(body)), "forbidden") {
+			return fmt.Errorf("POST /models/wire as %s answered %d without the apiserver's Forbidden: %.300s", viewer.Email, status, body)
+		}
+		note("%s: HTTP %d, %s", viewer.Email, status, excerpt(string(body), 120))
+	}
 
 	step("Agent turn on %s (kagent Agent, runtime go -> host Ollama)", mcName)
 	reply, err := agentTurn(client, cfg, mcName, "Reply with exactly the word pong and nothing else.")
@@ -255,6 +292,7 @@ func ModelsTest(cfg *config.Config, email, model string) error {
 	fmt.Println("PASS: no token -> 401 at the gateway; Dex token -> model-manager REST through agentgateway")
 	fmt.Printf("PASS: list -> pull %s (progress) -> ModelConfig %s (Ollama provider) Accepted -> agent turn -> unload -> delete\n", model, mcName)
 	fmt.Printf("PASS: muster aggregates x_%s_* and calls them (get_model, list_models)\n", modelManagerMCPServer)
+	fmt.Printf("PASS: the caller's identity — job requestedBy=%s; a viewer's wire is Forbidden by the apiserver (user RBAC, not the ServiceAccount's)\n", user.Email)
 	return nil
 }
 

@@ -590,6 +590,18 @@ func (c *Config) FindUser(email string) *User {
 	return nil
 }
 
+// FindUserInGroup returns the first user carrying group, or nil.
+func (c *Config) FindUserInGroup(group string) *User {
+	for i := range c.Users {
+		for _, g := range c.Users[i].Groups {
+			if g == group {
+				return &c.Users[i]
+			}
+		}
+	}
+	return nil
+}
+
 func (c *Config) Issuer() string {
 	return fmt.Sprintf("https://localhost:%d/dex", c.DexPort)
 }

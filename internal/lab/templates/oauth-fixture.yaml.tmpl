@@ -1,8 +1,8 @@
 # A test fixture, not a real integration. Every downstream the lab aggregates
-# (mcp-kubernetes, mcp-prometheus, model-manager) is unauthenticated on the
-# cluster network, so nothing would otherwise exercise muster's OAuth *client*
-# role — the proxy behind core_auth_login and the portal's per-server
-# "Sign in" button. This MCPServer declares `auth.type: oauth` and stays
+# (mcp-kubernetes, mcp-prometheus, model-manager) authenticates the user
+# through the Dex id_token muster forwards (auth.forwardToken), so nothing
+# would otherwise exercise muster's OAuth *client* role — the proxy behind
+# core_auth_login and the portal's per-server "Sign in" button. This MCPServer declares `auth.type: oauth` and stays
 # "Auth Required" forever: every core_auth_login against it answers a fresh
 # challenge (a /oauth/proxy/start URL with its own state), which is what
 # `agentlab platform-test` and `agentlab backstage-test` prove.
