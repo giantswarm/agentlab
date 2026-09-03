@@ -122,7 +122,7 @@ func AgentsTest(cfg *config.Config, email string) error {
 		} `json:"created"`
 	}
 	if err := session.callServerJSON(toolPrefix+"create_agent", map[string]any{
-		"name": agentsTestAgent, "modelConfig": modelConfig, "displayName": "agentlab agents-test",
+		nameKey: agentsTestAgent, "modelConfig": modelConfig, "displayName": "agentlab agents-test",
 		"description":   "Throwaway agent of `agentlab agents-test`; deleted by the same run.",
 		"systemMessage": "Reply with exactly the word pong and nothing else.",
 	}, &created); err != nil {
