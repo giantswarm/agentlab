@@ -106,6 +106,16 @@ func labHTTPClient(timeout time.Duration) (*http.Client, error) {
 
 // dexToken POSTs a token request (any grant type, in form) to the lab Dex and
 // returns the raw id_token.
+// musterLoginScopes are the scopes the headless proofs request from Dex for a
+// token they present to muster (and that muster forwards downstream): the
+// standard claims plus the cross-client audience the kind apiserver trusts
+// (Dex client `kubernetes`, which lists agent-platform under trustedPeers).
+// muster's own browser login requests that audience through the MCPServer CRs'
+// requiredAudiences and Backstage through components.backstage.extraScopes;
+// a password-grant token must ask for it itself, or the servers' downstream
+// OAuth presents a token the apiserver answers with 401.
+const musterLoginScopes = "openid email groups profile audience:server:client_id:" + config.KubernetesClientID
+
 func dexToken(cfg *config.Config, clientID, clientSecret string, form url.Values) (string, error) {
 	client, err := labHTTPClient(30 * time.Second)
 	if err != nil {

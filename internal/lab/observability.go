@@ -21,8 +21,10 @@ import (
 // endpoint. The lab installs the constituent directly and re-enables the
 // Prometheus server — see kube-prometheus-stack-values.yaml.tmpl.
 const (
-	kpsChartVersion           = "22.0.0" // wraps upstream kube-prometheus-stack 87.3.0
-	mcpPrometheusChartVersion = "0.7.16"
+	kpsChartVersion = "22.0.0" // wraps upstream kube-prometheus-stack 87.3.0
+	// 0.8.0: OAuth provider switch and tenancy mode `none` (a single-tenant
+	// Prometheus behind muster; the lab's identity proofs need both).
+	mcpPrometheusChartVersion = "0.8.0"
 )
 
 // observabilityNamespace also appears in the templates (the PROMETHEUS_URL in
@@ -42,19 +44,38 @@ const (
 // kube-prometheus-stack (operator + CRDs + kube-state-metrics + node-exporter
 // + a Prometheus scraping kubelet/cAdvisor) and mcp-prometheus, the MCP server
 // muster registers via the umbrella's agent-platform-mcps values (see
-// agent-platform-values.yaml.tmpl). Runs BEFORE the umbrella install so
-// muster's first dial of the MCPServer CR succeeds.
+// agent-platform-values.yaml.tmpl) and forwards the user's Dex id_token to.
+// Runs BEFORE the umbrella install so muster's first dial of the MCPServer CR
+// finds a listener.
 func observabilityUp(cfg *config.Config) error {
 	step("Installing the observability stack (kube-prometheus-stack %s + mcp-prometheus %s)",
 		kpsChartVersion, mcpPrometheusChartVersion)
 	if err := installOCIChart(cfg, kpsRelease,
 		"oci://gsoci.azurecr.io/charts/giantswarm/kube-prometheus-stack",
-		kpsChartVersion, "kube-prometheus-stack-values.yaml.tmpl"); err != nil {
+		kpsChartVersion, "kube-prometheus-stack-values.yaml.tmpl", false); err != nil {
 		return err
+	}
+	// mcp-prometheus runs as an OAuth resource server against the lab Dex
+	// (mcp-prometheus-values.yaml.tmpl): it needs the lab CA in its own
+	// namespace to verify Dex's certificate, so the Secret muster and
+	// Backstage use in agent-platform is mirrored here before the install.
+	if err := ensureNamespace(observabilityNamespace); err != nil {
+		return err
+	}
+	if err := ensureSecretFromFiles(observabilityNamespace, "dex-ca", map[string]string{
+		"ca.crt": caCertPath,
+	}); err != nil {
+		return err
+	}
+	// Through the lab post-renderer: mcp-prometheus gets the dex-localhost
+	// sidecar that makes the issuer URL (https://localhost:<DexPort>)
+	// reachable from inside the pod (postrender.go, item 4).
+	if res := sideloadImages(cfg, hostPullImages([]string{dexLocalhostImage})); res.n > 0 {
+		note("side-loaded the dex-localhost sidecar image (%s)", res.d)
 	}
 	if err := installOCIChart(cfg, mcpPrometheusRelease,
 		"oci://gsoci.azurecr.io/charts/giantswarm/mcp-prometheus",
-		mcpPrometheusChartVersion, "mcp-prometheus-values.yaml.tmpl"); err != nil {
+		mcpPrometheusChartVersion, "mcp-prometheus-values.yaml.tmpl", true); err != nil {
 		return err
 	}
 
@@ -100,7 +121,8 @@ func observabilityUp(cfg *config.Config) error {
 // chart into the observability namespace, side-loading its images first (the
 // same host-cache -> node rule as the platform; see flux.go for the pattern
 // and preload.go for the rule).
-func installOCIChart(cfg *config.Config, release, chartRef, version, valuesTmpl string) error {
+// postRender routes the release through the lab post-renderer (PostRender).
+func installOCIChart(cfg *config.Config, release, chartRef, version, valuesTmpl string, postRender bool) error {
 	_, valuesPath, err := renderManifest(cfg, valuesTmpl)
 	if err != nil {
 		return err
@@ -116,9 +138,18 @@ func installOCIChart(cfg *config.Config, release, chartRef, version, valuesTmpl 
 			}
 		}
 	}
-	return runQuiet("helm", "upgrade", "--install", release, chartRef,
+	args := []string{"upgrade", "--install", release, chartRef,
 		"--version", version,
 		"-n", observabilityNamespace, "--create-namespace",
 		"-f", valuesPath,
-		"--wait", "--timeout", "5m")
+		"--wait", "--timeout", "5m"}
+	if !postRender {
+		return runQuiet("helm", args...)
+	}
+	pluginsDir, err := ensurePostRenderPlugin()
+	if err != nil {
+		return err
+	}
+	args = append(args, "--post-renderer", postRenderPluginName)
+	return runQuietEnv([]string{"HELM_PLUGINS=" + pluginsDir}, "helm", args...)
 }

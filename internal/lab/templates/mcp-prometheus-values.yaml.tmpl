@@ -2,9 +2,23 @@
 # muster aggregates as x_mcp-prometheus_<tool> (registered via the umbrella's
 # agent-platform-mcps values, see agent-platform-values.yaml.tmpl).
 #
-# Auth stays off (the chart default): like the umbrella's bundled
-# mcp-kubernetes, the server is deliberately unauthenticated on the cluster
-# network — muster is the single auth enforcement point in this lab.
+# The user's identity, not a ServiceAccount: the server runs as an OAuth 2.1
+# resource server (mcp-oauth) against the lab Dex — the same platform client
+# muster and Backstage use. muster forwards the session's Dex id_token
+# (the mcps entry's auth.mode: forward) and mcp-prometheus validates it against
+# Dex's JWKS because its audience, agent-platform, is trusted. The issuer is
+# the lab Dex on the host's loopback (see agent-platform-values.yaml.tmpl:
+# why the issuer is https://localhost), hence allowPrivateURLs; the lab CA
+# (Secret dex-ca, mirrored into this namespace by observability.go) verifies
+# Dex's self-signed certificate. Nothing here is routed on the edge: the
+# issuer/redirect URLs only name this server's own OAuth metadata, which no
+# client uses — muster forwards, nobody logs in to mcp-prometheus directly.
+#
+# The lab Prometheus is single-tenant (no Mimir, no X-Scope-OrgID), so the
+# tenancy resolver is `none`: OAuth authenticates the caller, no tenant header
+# is injected. The client secret and the token-encryption key are lab-only
+# throwaway values (the chart renders them into its Secret), like every other
+# credential in this lab.
 app:
   env:
     # The operator-owned headless Service: name-stable across releases, unlike
@@ -12,6 +26,26 @@ app:
     # observability.go.
     - name: PROMETHEUS_URL
       value: http://prometheus-operated.monitoring.svc.cluster.local:9090
+    - name: MCP_OAUTH_ISSUER
+      value: https://mcp-prometheus.{{ .Platform.Domain }}
+    - name: DEX_ISSUER_URL
+      value: "{{ .Issuer }}"
+    - name: DEX_CLIENT_ID
+      value: agent-platform
+  oauth:
+    enabled: true
+    provider: dex
+    redirectURL: https://mcp-prometheus.{{ .Platform.Domain }}/oauth/callback
+    dexClientSecret: "{{ .AgentPlatformClientSecret }}"
+    encryptionKey: "bGFiLW9ubHktbWNwLXByb21ldGhldXMta2V5LTMyYnk="
+    allowPrivateURLs: true
+    dexCASecret:
+      name: dex-ca
+      key: ca.crt
+    trustedAudiences:
+      - agent-platform
+  tenancy:
+    mode: none
 # No Cilium in kind; the chart default is true and would render a CR without
 # a CRD.
 ciliumNetworkPolicy:

@@ -36,7 +36,7 @@ func PlatformTest(cfg *config.Config, email string) error {
 
 	step("Logging in to Dex as %s", email)
 	token, err := passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret,
-		user.Email, user.Password, "openid email groups profile")
+		user.Email, user.Password, musterLoginScopes)
 	if err != nil {
 		return err
 	}
@@ -146,6 +146,13 @@ func PlatformTest(cfg *config.Config, email string) error {
 	note("namespaces: %s", strings.Join(names, ", "))
 
 	verdict := "PASS: Claude Code -> muster (Dex) -> mcp-kubernetes -> kind apiserver"
+
+	// The user's identity, not a ServiceAccount: the same tool as two users
+	// with different RBAC must answer differently.
+	if err := proveDownstreamIdentity(cfg, toolPrefix); err != nil {
+		return err
+	}
+	verdict += "\nPASS: the forwarded Dex id_token reaches the apiserver — kube-system Secrets: platform-admin allowed, viewer forbidden (user RBAC, not the ServiceAccount's)"
 
 	// The per-server sign-in path: muster as OAuth client, challenged by the
 	// lab's Auth Required fixture (oauthfixture.go).
@@ -292,7 +299,7 @@ func PlatformTest(cfg *config.Config, email string) error {
 func musterTokenProbe(cfg *config.Config) error {
 	admin := cfg.AdminUser()
 	token, err := passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret,
-		admin.Email, admin.Password, "openid email groups profile")
+		admin.Email, admin.Password, musterLoginScopes)
 	if err != nil {
 		return err
 	}
@@ -353,4 +360,55 @@ func parseMCPResponse(raw []byte) (map[string]any, error) {
 		}
 	}
 	return nil, fmt.Errorf("neither JSON nor SSE data frame")
+}
+
+// proveDownstreamIdentity shows that mcp-kubernetes acts as the signed-in
+// user: muster forwards each session's Dex id_token (auth.forwardToken), the
+// server validates it and presents it to the kind apiserver
+// (enableDownstreamOAuth), so the user's RBAC — not a ServiceAccount's —
+// decides. Listing kube-system Secrets separates the lab's groups cleanly: the
+// `view` ClusterRole bound to oidc:viewers excludes Secrets, cluster-admin
+// (oidc:platform-admins) reads them. A shared ServiceAccount would answer both
+// users alike.
+func proveDownstreamIdentity(cfg *config.Config, toolPrefix string) error {
+	admin := cfg.FindUserInGroup("platform-admins")
+	viewer := cfg.FindUserInGroup("viewers")
+	if admin == nil || viewer == nil {
+		note("skipping the identity proof: %s needs one platform-admins and one viewers user", config.File)
+		return nil
+	}
+	args := map[string]any{"resourceType": "secrets", "namespace": "kube-system"}
+	for _, tc := range []struct {
+		user      *config.User
+		allowed   bool
+		expecting string
+	}{
+		{admin, true, "allowed (cluster-admin via oidc:platform-admins)"},
+		{viewer, false, "forbidden (view role via oidc:viewers excludes Secrets)"},
+	} {
+		step("Listing kube-system Secrets through muster as %s — expecting %s", tc.user.Email, tc.expecting)
+		token, err := passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret,
+			tc.user.Email, tc.user.Password, musterLoginScopes)
+		if err != nil {
+			return err
+		}
+		session, err := openMusterSession(cfg, token, "platform-test-identity")
+		if err != nil {
+			return err
+		}
+		text, err := session.callServerTool(toolPrefix+"list", args)
+		switch {
+		case tc.allowed && err != nil:
+			return fmt.Errorf("%s could not list kube-system Secrets through %slist: %w", tc.user.Email, toolPrefix, err)
+		case tc.allowed:
+			note("%s: listed (%s)", tc.user.Email, excerpt(text, 80))
+		case err == nil:
+			return fmt.Errorf("%s listed kube-system Secrets through %slist although the view role excludes them — mcp-kubernetes is not acting as the caller (ServiceAccount fallback?): %.200s", tc.user.Email, toolPrefix, text)
+		case !strings.Contains(strings.ToLower(err.Error()), "forbidden"):
+			return fmt.Errorf("%s: wanted the apiserver's Forbidden for kube-system Secrets, got: %w", tc.user.Email, err)
+		default:
+			note("%s: %s", tc.user.Email, excerpt(err.Error(), 160))
+		}
+	}
+	return nil
 }

@@ -15,11 +15,11 @@ import (
 // The per-server OAuth sign-in fixture.
 //
 // Every downstream the lab aggregates (mcp-kubernetes, mcp-prometheus,
-// model-manager) is unauthenticated in-cluster, so nothing exercises muster's
-// OAuth *client* role: the proxy behind core_auth_login and the portal's
-// per-server "Sign in" button, which hands the user a challenge URL, walks the
-// browser through the downstream's authorization server and keeps the token
-// per session. The lab turns that role on (muster.muster.oauth.mcpClient in
+// model-manager) authenticates the user through the forwarded Dex id_token
+// (auth.forwardToken), so nothing exercises muster's OAuth *client* role: the
+// proxy behind core_auth_login and the portal's per-server "Sign in" button,
+// which hands the user a challenge URL, walks the browser through the
+// downstream's own authorization server and keeps the token per session. The lab turns that role on (muster.muster.oauth.mcpClient in
 // agent-platform-values.yaml.tmpl — the umbrella leaves it off, real
 // installations turn it on) and ships one downstream that declares auth.type
 // oauth and stays Auth Required, so the path can be driven and proven

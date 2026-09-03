@@ -365,7 +365,13 @@ func postRenderCmd() *cobra.Command {
 		Short:  "Helm post-renderer for the agent-platform install (stdin -> stdout)",
 		Args:   cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return lab.PostRender(os.Stdin, os.Stdout)
+			// The Dex NodePort from agentlab.yaml when the lab is configured;
+			// the default otherwise (the plugin runs in the lab's cwd).
+			dexPort := config.DefaultDexPort
+			if cfg, err := config.Load(); err == nil && cfg.DexPort != 0 {
+				dexPort = cfg.DexPort
+			}
+			return lab.PostRender(os.Stdin, os.Stdout, dexPort)
 		},
 	}
 }
