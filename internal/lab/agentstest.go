@@ -103,9 +103,9 @@ func AgentsTest(cfg *config.Config, email string) error {
 	note("using ModelConfig %s", modelConfig)
 
 	// A leftover from an aborted run would make the create a conflict.
-	if _, err := session.callServerTool(toolPrefix+"get_agent", map[string]any{"name": agentsTestAgent}); err == nil {
+	if _, err := session.callServerTool(toolPrefix+"get_agent", map[string]any{nameKey: agentsTestAgent}); err == nil {
 		note("removing the leftover agent %s from an earlier run", agentsTestAgent)
-		if _, err := session.callServerTool(toolPrefix+"delete_agent", map[string]any{"name": agentsTestAgent, "force": true}); err != nil {
+		if _, err := session.callServerTool(toolPrefix+"delete_agent", map[string]any{nameKey: agentsTestAgent, "force": true}); err != nil {
 			return err
 		}
 		if err := waitAgentGone(session, toolPrefix, agentsTestAgent); err != nil {
@@ -158,7 +158,7 @@ func AgentsTest(cfg *config.Config, email string) error {
 	}
 	ready := waitFor(40, 3*time.Second, func() bool {
 		status.Verdict, status.Summary = "", ""
-		if err := session.callServerJSON(toolPrefix+"get_agent_status", map[string]any{"name": agentsTestAgent}, &status); err != nil {
+		if err := session.callServerJSON(toolPrefix+"get_agent_status", map[string]any{nameKey: agentsTestAgent}, &status); err != nil {
 			return false
 		}
 		return status.Verdict == "ready"
@@ -173,7 +173,7 @@ func AgentsTest(cfg *config.Config, email string) error {
 		RequestedBy string   `json:"requestedBy"`
 		Changed     []string `json:"changed"`
 	}
-	if err := session.callServerJSON(toolPrefix+"update_agent", map[string]any{"name": agentsTestAgent, "description": "Updated by agentlab agents-test."}, &updated); err != nil {
+	if err := session.callServerJSON(toolPrefix+"update_agent", map[string]any{nameKey: agentsTestAgent, "description": "Updated by agentlab agents-test."}, &updated); err != nil {
 		return err
 	}
 	if updated.RequestedBy != user.Email || !slices.Contains(updated.Changed, "agent.description") {
@@ -199,7 +199,7 @@ func AgentsTest(cfg *config.Config, email string) error {
 		if err != nil {
 			return err
 		}
-		text, err := viewerSession.callServerTool(toolPrefix+"create_agent", map[string]any{"name": agentsTestAgent + "-viewer", "modelConfig": modelConfig})
+		text, err := viewerSession.callServerTool(toolPrefix+"create_agent", map[string]any{nameKey: agentsTestAgent + "-viewer", "modelConfig": modelConfig})
 		switch {
 		case err == nil:
 			return fmt.Errorf("%s created an agent through agent-manager although the view role cannot write HelmReleases — agent-manager is not acting as the caller (ServiceAccount fallback?): %.200s", viewer.Email, text)
@@ -243,7 +243,7 @@ func AgentsTest(cfg *config.Config, email string) error {
 		HelmReleaseDeleted bool   `json:"helmReleaseDeleted"`
 		OCIRepositoryKept  string `json:"ociRepositoryKept"`
 	}
-	if err := session.callServerJSON(toolPrefix+"delete_agent", map[string]any{"name": agentsTestAgent}, &deleted); err != nil {
+	if err := session.callServerJSON(toolPrefix+"delete_agent", map[string]any{nameKey: agentsTestAgent}, &deleted); err != nil {
 		return err
 	}
 	if !deleted.HelmReleaseDeleted || deleted.RequestedBy != user.Email {
