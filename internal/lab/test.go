@@ -12,6 +12,9 @@ import (
 // from Dex and a set of `kubectl auth can-i` assertions driven purely by the
 // `groups` claim in the id_token.
 func Test(cfg *config.Config) error {
+	if err := useClusterKubeconfig(cfg); err != nil {
+		return err
+	}
 	pass, fail := 0, 0
 
 	check := func(kubeconfig, desc, expect string, canIArgs ...string) {

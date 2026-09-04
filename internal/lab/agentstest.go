@@ -27,6 +27,9 @@ const agentManagerServiceAccount = "system:serviceaccount:" + platformNamespace 
 // agent-manager ServiceAccount holds nothing beyond API discovery. Leaves
 // nothing behind.
 func AgentsTest(cfg *config.Config, email string) error {
+	if err := useClusterKubeconfig(cfg); err != nil {
+		return err
+	}
 	if !cfg.Platform.Enabled || !cfg.Platform.Agents {
 		return fmt.Errorf("platform.agents is off in %s — enable it and run `agentlab platform` first", config.File)
 	}

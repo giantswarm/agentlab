@@ -85,20 +85,20 @@ func observabilityUp(cfg *config.Config) error {
 	// report an available replica; without it the mcp-prometheus tools connect
 	// fine and then fail every query.
 	step("Waiting for Prometheus to serve (the operator creates it after the install)")
-	replicas := ""
+	var replicas string
+	var readErr error
 	up := waitFor(40, 3*time.Second, func() bool {
 		// Fully qualified on principle (same reason as mcpservers): other
 		// charts may ship colliding kinds.
-		replicas, _ = outputQuiet("kubectl", "-n", observabilityNamespace,
+		replicas, readErr = outputQuiet("kubectl", "-n", observabilityNamespace,
 			"get", "prometheuses.monitoring.coreos.com",
 			"-o", "jsonpath={.items[0].status.availableReplicas}")
 		n, err := strconv.Atoi(strings.TrimSpace(replicas))
-		return err == nil && n >= 1
+		return readErr == nil && err == nil && n >= 1
 	})
 	if !up {
-		return fmt.Errorf("no available Prometheus replica after the install (last status: %q);\n"+
-			"check `kubectl -n %s get prometheus,statefulset,pods`",
-			replicas, observabilityNamespace)
+		return notReached("the Prometheus CR", "an available replica after the install", strings.TrimSpace(replicas), readErr,
+			fmt.Sprintf("check `kubectl -n %s get prometheus,statefulset,pods`", observabilityNamespace))
 	}
 	note("Prometheus is serving (PromQL inside the cluster: http://prometheus-operated.%s:9090)",
 		observabilityNamespace)

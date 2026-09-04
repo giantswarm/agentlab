@@ -48,6 +48,9 @@ const apsDir = ".vendor/agent-platform-standalone"
 // it is vendored from git at a pinned SHA and installed from the local path.
 // Once released: swap the vendor step for the OCI ref.
 func PlatformUp(cfg *config.Config) error {
+	if err := useClusterKubeconfig(cfg); err != nil {
+		return err
+	}
 	// The standalone entry point skips Up's overlapped preload, so join a
 	// synchronous one here: on a live cluster the node filter makes it a
 	// no-op, and after a half-failed boot it heals the missing side-loads
@@ -530,17 +533,17 @@ func waitMCPServerReachable(name string) error {
 // CRD (mcpservers.kagent.dev), so the bare kind resolves to the wrong API
 // group.
 func waitMCPServerState(name string, want ...string) error {
-	state := ""
+	var state string
+	var readErr error
 	reached := waitFor(40, 3*time.Second, func() bool {
-		state, _ = outputQuiet("kubectl", "-n", platformNamespace, "get", "mcpservers.muster.giantswarm.io", name,
+		state, readErr = outputQuiet("kubectl", "-n", platformNamespace, "get", "mcpservers.muster.giantswarm.io", name,
 			"-o", "jsonpath={.status.state}")
-		return slices.Contains(want, state)
+		return readErr == nil && slices.Contains(want, state)
 	})
 	if !reached {
-		return fmt.Errorf("MCPServer %s never reached %s (last state: %q);\n"+
-			"check `agentlab logs muster`, `kubectl -n %s describe mcpservers.muster.giantswarm.io %s`\n"+
-			"and the server's rollout: `kubectl -n %s get deploy,pods`",
-			name, strings.Join(want, " or "), state, platformNamespace, name, platformNamespace)
+		return notReached("MCPServer "+name, strings.Join(want, " or "), state, readErr,
+			fmt.Sprintf("check `agentlab logs muster`, `kubectl -n %s describe mcpservers.muster.giantswarm.io %s`\n"+
+				"and the server's rollout: `kubectl -n %s get deploy,pods`", platformNamespace, name, platformNamespace))
 	}
 	note("MCPServer %s: %s", name, state)
 	return nil

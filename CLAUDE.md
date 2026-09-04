@@ -87,7 +87,11 @@ with Dex doing the logins.
   `kubectl --kubeconfig kubeconfig.oidc` — that is the OIDC path.
 - The kind admin context (`kind-agentlab`) bypasses the platform and OIDC
   entirely; use it only to debug the lab's own plumbing, never to demonstrate
-  platform behavior.
+  platform behavior. The lab's own `kubectl`/`helm` never read the shell's
+  kubeconfig: every cluster-facing command exports the kind cluster's
+  kubeconfig to `state/kubeconfig` and pins `KUBECONFIG` to it (exec.go), so
+  the proofs are deterministic about the cluster whatever the current-context
+  is — `KUBECONFIG=state/kubeconfig kubectl ...` is the same view from a shell.
 
 ## Commands
 

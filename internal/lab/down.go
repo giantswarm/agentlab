@@ -15,6 +15,8 @@ func Down(cfg *config.Config) error {
 		return err
 	}
 	_ = os.Remove(".token")
+	// The exported kubeconfig described a cluster that no longer exists.
+	_ = os.Remove(labKubeconfigPath)
 	fmt.Println("Lab destroyed. certs/ kept (agentlab certs --force to regenerate).")
 	return nil
 }
@@ -24,6 +26,9 @@ func Down(cfg *config.Config) error {
 // to serve the platform's MCP tools); their prometheus-operator CRDs stay —
 // helm never removes a chart's crds/, and re-installs are unaffected.
 func PlatformDown(cfg *config.Config) error {
+	if err := useClusterKubeconfig(cfg); err != nil {
+		return err
+	}
 	_ = runQuiet("helm", "-n", observabilityNamespace, "uninstall", mcpPrometheusRelease)
 	_ = runQuiet("helm", "-n", observabilityNamespace, "uninstall", kpsRelease)
 	_ = runQuiet("kubectl", "delete", "namespace", observabilityNamespace, "--ignore-not-found")

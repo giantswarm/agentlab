@@ -55,7 +55,11 @@ func Up(cfg *config.Config) error {
 			return err
 		}
 	}
-	if err := runQuiet("kubectl", "config", "use-context", cfg.KubeContext()); err != nil {
+	// From here on the lab's own kubectl and helm run against the cluster's
+	// exported kubeconfig (exec.go); the user's current-context is left alone
+	// (kind create cluster merges the admin context into their kubeconfig, as
+	// kind always does — that is the `kind-<cluster>` context for debugging).
+	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
 	}
 
@@ -195,6 +199,9 @@ func tryItBlock(cfg *config.Config) string {
 // certs rolls the pod, while an unchanged re-apply is a pure no-op (no
 // throwaway ReplicaSet). Shared by Up and `agentlab reload`.
 func ApplyDex(cfg *config.Config) error {
+	if err := useClusterKubeconfig(cfg); err != nil {
+		return err
+	}
 	stamped, _, err := renderManifest(cfg, "dex.yaml.tmpl")
 	if err != nil {
 		return err

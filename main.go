@@ -373,7 +373,11 @@ func logsCmd() *cobra.Command {
 		Args:      cobra.ExactArgs(1),
 		ValidArgs: lab.LogComponents(),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return lab.Logs(args[0])
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			return lab.Logs(cfg, args[0])
 		},
 	}
 }

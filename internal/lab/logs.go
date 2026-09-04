@@ -5,6 +5,8 @@ import (
 	"maps"
 	"slices"
 	"strings"
+
+	"github.com/giantswarm/agentlab/internal/config"
 )
 
 // logCmd is the kubectl subcommand every log target shares.
@@ -24,11 +26,15 @@ var logTargets = map[string][]string{
 // LogComponents lists what Logs accepts, for cobra's ValidArgs.
 func LogComponents() []string { return slices.Sorted(maps.Keys(logTargets)) }
 
-// Logs tails the given component's logs (kubectl logs -f passthrough).
-func Logs(component string) error {
+// Logs tails the given component's logs (kubectl logs -f passthrough, against
+// the lab cluster whatever the shell's kubeconfig says).
+func Logs(cfg *config.Config, component string) error {
 	args, ok := logTargets[component]
 	if !ok {
 		return fmt.Errorf("unknown component %q (%s)", component, strings.Join(LogComponents(), ", "))
+	}
+	if err := useClusterKubeconfig(cfg); err != nil {
+		return err
 	}
 	return run("kubectl", args...)
 }
