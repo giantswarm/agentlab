@@ -56,7 +56,8 @@ data:
 ---
 # App-config overlay on top of the umbrella's own
 # (agent-platform-backstage-app-config): the catalog locations for the files
-# above, and an in-memory database — the lab needs no Postgres for Backstage.
+# above, an in-memory database — the lab needs no Postgres for Backstage —
+# and the gatewayPort-aware public URL.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -64,7 +65,17 @@ metadata:
   namespace: agent-platform
 data:
   app-config.agentlab.yaml: |
+    # Backstage's public URL. The umbrella's app-config renders these three
+    # without a port; Backstage derives its OAuth redirect_uri from them, and
+    # Dex accepts only the redirect URI registered on the agent-platform
+    # client (dex.yaml.tmpl, also .BackstageBaseURL). Both carry
+    # platform.gatewayPort when it is not 443 (HACKS.md U15).
+    app:
+      baseUrl: {{ .BackstageBaseURL }}
     backend:
+      baseUrl: {{ .BackstageBaseURL }}
+      cors:
+        origin: {{ .BackstageBaseURL }}
       database:
         client: better-sqlite3
         connection: ':memory:'

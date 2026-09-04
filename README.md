@@ -101,10 +101,14 @@ Applied to the configuration:
   kind port mappings bind. While **no kind node of this configuration
   exists** (a fresh lab, or after `agentlab down`), an occupied port is moved
   to a nearby free one, with a message saying what moved where (443 falls
-  back to 8443). Once the cluster exists its mappings are fixed at node
-  creation, so the ports it publishes never count as occupied and a foreign
-  listener on one of them is **reported**, not renumbered around (free it, or
-  `agentlab down`, re-run `configure`, `agentlab up`).
+  back to 8443). When the edge leaves 443, every public URL in this README
+  gains that port suffix (`https://backstage.127.0.0.1.nip.io:8443`), and
+  `platform-test`'s `lab-oauth-fixture` step fails: in-cluster the edge stays
+  on 443, so muster cannot reach its own ported OAuth metadata URL. Once the
+  cluster exists its mappings are fixed at node creation, so the ports it
+  publishes never count as occupied and a foreign listener on one of them is
+  **reported**, not renumbered around (free it, or `agentlab down`, re-run
+  `configure`, `agentlab up`).
 - **Host model servers**: an Ollama on `:11434` and a Lemonade Server on
   `:13305` (their default ports) are detected with version, whether they
   listen on the kind docker gateway (pods' path to the host — the bind-address
