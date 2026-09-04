@@ -51,4 +51,4 @@ repos:
           - --max-same-issues=0
           - --max-issues-per-linter=0
       - id: go-imports
-        args: [ -local, agentlab ]
+        args: [ -local, github.com/giantswarm/agentlab ]
