@@ -156,16 +156,16 @@ func extraModelsHint(cfg *config.Config) string {
 // it — the machine check that the provider/model/Secret combination is one
 // the runtime can mount, before anyone debugs it from a failing agent pod.
 func waitModelConfigAccepted(name string) error {
-	status := ""
+	var status string
+	var readErr error
 	accepted := waitFor(10, 2*time.Second, func() bool {
-		status, _ = outputQuiet("kubectl", "-n", kagentNamespace, "get", modelConfigResource, name,
+		status, readErr = outputQuiet("kubectl", "-n", kagentNamespace, "get", modelConfigResource, name,
 			"-o", `jsonpath={.status.conditions[?(@.type=="Accepted")].status}`)
-		return status == "True"
+		return readErr == nil && status == "True"
 	})
 	if !accepted {
-		return fmt.Errorf("ModelConfig %s never reached Accepted (last status: %q);\n"+
-			"check `kubectl -n %s describe %s %s`",
-			name, status, kagentNamespace, modelConfigResource, name)
+		return notReached("ModelConfig "+name, "Accepted", status, readErr,
+			fmt.Sprintf("check `kubectl -n %s describe %s %s`", kagentNamespace, modelConfigResource, name))
 	}
 	note("ModelConfig %s: Accepted", name)
 	return nil

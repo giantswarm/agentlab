@@ -609,8 +609,6 @@ func (c *Config) Issuer() string {
 	return fmt.Sprintf("https://localhost:%d/dex", c.DexPort)
 }
 
-func (c *Config) KubeContext() string { return "kind-" + c.ClusterName }
-
 // ControlPlaneNode is the docker container name kind gives the (only) node.
 func (c *Config) ControlPlaneNode() string { return c.ClusterName + "-control-plane" }
 

@@ -22,6 +22,9 @@ var handlerPayloadRe = regexp.MustCompile(`decodeURIComponent\('([^']+)'\)`)
 // user, reports the identity Backstage resolved, and then proves the Giant
 // Swarm muster plugin can reach muster with that user's forwarded token.
 func BackstageTest(cfg *config.Config, emails []string) error {
+	if err := useClusterKubeconfig(cfg); err != nil {
+		return err
+	}
 	if len(emails) == 0 {
 		for _, u := range cfg.Users {
 			emails = append(emails, u.Email)

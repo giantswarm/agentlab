@@ -21,6 +21,9 @@ import (
 // oauth.server.trustedAudiences. Claude Code instead does the full browser
 // authorization-code flow; this is the CI-friendly shortcut.
 func PlatformTest(cfg *config.Config, email string) error {
+	if err := useClusterKubeconfig(cfg); err != nil {
+		return err
+	}
 	user := cfg.FindUser(email)
 	if user == nil {
 		return fmt.Errorf("no user %q in %s", email, config.File)

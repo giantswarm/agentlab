@@ -33,6 +33,9 @@ const modelField = "model"
 // -> the MCP tools through muster -> unload -> delete (gone from Ollama, the
 // ModelConfig gone). Leaves nothing behind.
 func ModelsTest(cfg *config.Config, email, model string) error {
+	if err := useClusterKubeconfig(cfg); err != nil {
+		return err
+	}
 	if !cfg.ModelManagerEnabled() {
 		return fmt.Errorf("platform.modelManager is off in %s (needs platform.agents too) — enable it and run `agentlab platform` first", config.File)
 	}

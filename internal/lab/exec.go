@@ -25,9 +25,47 @@ func note(format string, a ...any) {
 	fmt.Printf("    "+format+"\n", a...)
 }
 
+// The two tools whose cluster is pinned by command; every other subprocess
+// (kind, docker, git, helm's plugins) inherits the environment untouched.
+const (
+	kubectlBin = "kubectl"
+	helmBin    = "helm"
+)
+
+// command builds the exec.Cmd behind every helper below. kubectl and helm run
+// with KUBECONFIG pinned to the lab-owned kubeconfig (labKubeconfigPath, the
+// kind cluster's own as exported by useClusterKubeconfig), so which cluster a
+// lab command talks to is decided by agentlab.yaml — never by the shell's
+// kubeconfig or its current-context, which the lab neither reads nor changes.
+// An explicit --kubeconfig flag (the token-only kubeconfigs of test and up)
+// still wins, as kubectl's precedence has it. kind is deliberately not
+// pinned: it manages the user's own kubeconfig (create/delete cluster merge
+// the admin context in and out) and reads the cluster's kubeconfig off the
+// node, not off the host.
+func command(name string, args ...string) *exec.Cmd {
+	cmd := exec.Command(name, args...) // #nosec G204 -- fixed lab tooling (kind/kubectl/helm) with lab-controlled args
+	cmd.Env = os.Environ()
+	if name == kubectlBin || name == helmBin {
+		// For duplicate keys os/exec keeps the last entry, so an inherited
+		// KUBECONFIG is overridden, not merged with.
+		cmd.Env = append(cmd.Env, "KUBECONFIG="+labKubeconfig())
+	}
+	return cmd
+}
+
+// cmdError wraps a failed command with its invocation and, when captured,
+// what it said on stderr — so a probe's failure reads "current-context is not
+// set" or "NotFound", not just "exit status 1".
+func cmdError(name string, args []string, err error, stderr []byte) error {
+	if msg := strings.TrimSpace(string(stderr)); msg != "" {
+		return fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, msg)
+	}
+	return fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), err)
+}
+
 // run executes a command with output streamed to the terminal.
 func run(name string, args ...string) error {
-	cmd := exec.Command(name, args...) // #nosec G204 -- fixed lab tooling (kind/kubectl/helm) with lab-controlled args
+	cmd := command(name, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
@@ -42,13 +80,13 @@ func runQuiet(name string, args ...string) error {
 // appended to the inherited environment.
 func runQuietEnv(extraEnv []string, name string, args ...string) error {
 	var buf bytes.Buffer
-	cmd := exec.Command(name, args...) // #nosec G204 -- fixed lab tooling (kind/kubectl/helm) with lab-controlled args
-	cmd.Env = append(os.Environ(), extraEnv...)
+	cmd := command(name, args...)
+	cmd.Env = append(cmd.Env, extraEnv...)
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
 	if err := cmd.Run(); err != nil {
 		_, _ = os.Stderr.Write(buf.Bytes())
-		return fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), err)
+		return cmdError(name, args, err, nil)
 	}
 	return nil
 }
@@ -56,28 +94,34 @@ func runQuietEnv(extraEnv []string, name string, args ...string) error {
 // output captures a command's stdout (stderr goes to the terminal).
 func output(name string, args ...string) (string, error) {
 	var buf bytes.Buffer
-	cmd := exec.Command(name, args...) // #nosec G204 -- fixed lab tooling (kind/kubectl/helm) with lab-controlled args
+	cmd := command(name, args...)
 	cmd.Stdout = &buf
 	cmd.Stderr = os.Stderr
 	err := cmd.Run()
 	return buf.String(), err
 }
 
-// outputQuiet captures stdout and swallows stderr; for probe-style commands
-// whose failures are expected.
+// outputQuiet captures stdout and keeps stderr off the terminal; for
+// probe-style commands whose failures are expected. The error still carries
+// the command and its stderr, so a caller that does report the failure says
+// what kubectl said — the empty stdout of a failed read is otherwise
+// indistinguishable from "no status yet".
 func outputQuiet(name string, args ...string) (string, error) {
-	var buf bytes.Buffer
-	cmd := exec.Command(name, args...) // #nosec G204 -- fixed lab tooling (kind/kubectl/helm) with lab-controlled args
-	cmd.Stdout = &buf
-	err := cmd.Run()
-	return buf.String(), err
+	var stdout, stderr bytes.Buffer
+	cmd := command(name, args...)
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return stdout.String(), cmdError(name, args, err, stderr.Bytes())
+	}
+	return stdout.String(), nil
 }
 
 // outputAll captures stdout AND stderr together, for probe-style commands
 // whose diagnosis is in the error text (a probe pod's wget message).
 func outputAll(name string, args ...string) (string, error) {
 	var buf bytes.Buffer
-	cmd := exec.Command(name, args...) // #nosec G204 -- fixed lab tooling (kind/kubectl/helm) with lab-controlled args
+	cmd := command(name, args...)
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
 	err := cmd.Run()
@@ -87,13 +131,13 @@ func outputAll(name string, args ...string) (string, error) {
 // pipeInto feeds input to a command's stdin, showing output only on failure.
 func pipeInto(input []byte, name string, args ...string) error {
 	var buf bytes.Buffer
-	cmd := exec.Command(name, args...) // #nosec G204 -- fixed lab tooling (kind/kubectl/helm) with lab-controlled args
+	cmd := command(name, args...)
 	cmd.Stdin = bytes.NewReader(input)
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
 	if err := cmd.Run(); err != nil {
 		_, _ = os.Stderr.Write(buf.Bytes())
-		return fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), err)
+		return cmdError(name, args, err, nil)
 	}
 	return nil
 }
@@ -109,6 +153,18 @@ func waitFor(attempts int, interval time.Duration, probe func() bool) bool {
 		time.Sleep(interval)
 	}
 	return false
+}
+
+// notReached words a wait loop's failure. readErr is the last status read's
+// own error: when the read itself failed, the message says so and carries
+// kubectl's words, instead of the empty status a failed read leaves behind —
+// which, on a shell without a kubeconfig current-context, read exactly like a
+// CR the controller had never touched.
+func notReached(subject, want, last string, readErr error, hint string) error {
+	if readErr != nil {
+		return fmt.Errorf("%s: kubectl failed: %w;\n%s", subject, readErr, hint)
+	}
+	return fmt.Errorf("%s never reached %s (last status: %q);\n%s", subject, want, last, hint)
 }
 
 // ensureNamespace idempotently creates a namespace (the dry-run|apply trick,
