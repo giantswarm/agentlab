@@ -445,7 +445,7 @@ func Default() *Config {
 			Domain:        "127.0.0.1.nip.io",
 			GatewayPort:   443,
 			APSRepo:       "https://github.com/giantswarm/agent-platform-standalone",
-			APSRef:        "434d12a972188afcaf417b7b4416ec979171d8f2", // main: model-manager 0.17.0 (several backends per instance) + agent-platform 3.7.0 (#143, #144, #147)
+			APSRef:        "bb940965cf203a5d48ecccda55f362bb541a2691", // main: muster 5.8.2 (kubernetes mode never falls back to the filesystem, muster#1143/#1145) + agent-platform-mcps 0.7.0 (#125, #150, #153)
 		},
 		Backstage: Backstage{
 			Enabled: true,
