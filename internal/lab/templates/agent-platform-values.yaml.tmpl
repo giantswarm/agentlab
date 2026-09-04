@@ -318,16 +318,19 @@ agent-manager:
 {{- if .ModelManagerEnabled }}
 # The model-manager chart's own values (the umbrella pins the Service name,
 # the kagent namespace, the muster registration and — since the identity
-# change — OAuth against global.identity in its contract). The Ollama backend
-# dials the host through the kind docker network's gateway — autodetected by
-# `agentlab platform` (platform.modelManager.endpoint overrides). Agent pods
-# dial the same address, so agentHost stays empty. Same audience story as
+# change — OAuth against global.identity in its contract). The backend is the
+# first of platform.modelManager.backends (an Ollama, or a Lemonade Server);
+# it dials the host through the kind docker network's gateway — autodetected
+# by `agentlab platform` (platform.modelManager.endpoints.<backend>
+# overrides). Agent pods dial the same address, so agentHost stays empty.
+# Further backends are wired statically (extra-models.yaml.tmpl) until
+# model-manager is multi-backend. Same audience story as
 # mcp-kubernetes above: the forwarded token must carry the `kubernetes`
 # audience for model-manager's downstream OAuth (the ModelConfigs it writes
 # as the caller) to pass the kind apiserver.
 model-manager:
-  backend: ollama
-  ollama:
+  backend: {{ .ModelManagerBackend }}
+  {{ .ModelManagerBackend }}:
     endpoint: {{ .ModelManagerEndpoint | printf "%q" }}
   muster:
     mcpServer:

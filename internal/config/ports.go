@@ -9,11 +9,11 @@ import (
 	"time"
 )
 
-// PortChange records one port of a freshly created configuration that was
-// moved off its default because something on this machine already listens
-// there. Field is the agentlab.yaml path, What names the component for the
-// human-facing message, Note carries an extra caveat where a non-default
-// port has consequences beyond the number itself.
+// PortChange records one port of the configuration that was moved off its
+// value because something on this machine already listens there. Field is
+// the agentlab.yaml path, What names the component for the human-facing
+// message, Note carries an extra caveat where a non-default port has
+// consequences beyond the number itself.
 type PortChange struct {
 	Field    string
 	What     string
@@ -29,14 +29,94 @@ func (ch PortChange) String() string {
 	return s + ")"
 }
 
-// ChooseFreePorts probes every host-side port of a freshly created
-// configuration on 127.0.0.1 — the address all kind port mappings bind — and
-// moves each occupied one to a nearby free port, returning what changed so
-// the caller can tell the user. Meant for new configs only: an existing
-// agentlab.yaml describes a cluster whose mappings are already fixed, where
-// silently renumbering would only mislead.
-func (c *Config) ChooseFreePorts() []PortChange {
-	return c.chooseFreePorts(portTaken)
+// PortConflict records one port of an existing cluster's configuration that
+// another process on this machine holds — the lab cannot renumber it (the
+// kind mappings are fixed at node creation), so it is reported instead.
+type PortConflict struct {
+	Field string
+	What  string
+	Port  int
+}
+
+func (pc PortConflict) String() string {
+	return fmt.Sprintf("%s: %d is held by another process (%s)", pc.Field, pc.Port, pc.What)
+}
+
+// labPort is one host-side port of the configuration: where it lives, what it
+// serves, and how to pick a replacement when it is occupied.
+type labPort struct {
+	field, what string
+	port        *int
+	// pick chooses a free replacement given the scanner; a nil note means
+	// the move has no caveat beyond the number.
+	pick func(scan func(lo, hi int) (int, bool)) (int, bool)
+	note func(to int) string
+}
+
+// ports lists every host-side port the configuration owns, in the order they
+// are probed and reported.
+func (c *Config) ports() []labPort {
+	return []labPort{
+		// Dex must stay in the NodePort range (host port == NodePort); scan
+		// upward from the current value and wrap around the range.
+		{"dexPort", "the Dex issuer", &c.DexPort, func(scan func(int, int) (int, bool)) (int, bool) {
+			if p, ok := scan(c.DexPort+1, 32767); ok {
+				return p, true
+			}
+			return scan(30000, c.DexPort-1)
+		}, nil},
+		{"platform.musterPort", "muster's direct debug access", &c.Platform.MusterPort, func(scan func(int, int) (int, bool)) (int, bool) {
+			return scan(c.Platform.MusterPort+1, 65535)
+		}, nil},
+		{"platform.agentsPort", "the kagent UI", &c.Platform.AgentsPort, func(scan func(int, int) (int, bool)) (int, bool) {
+			return scan(c.Platform.AgentsPort+1, 65535)
+		}, nil},
+		// The edge prefers 8443 over 444: dodging the whole privileged range
+		// keeps later probes honest (they can bind instead of dial), and
+		// 8443 is the conventional alternate HTTPS port.
+		{"platform.gatewayPort", "the agentgateway edge", &c.Platform.GatewayPort, func(scan func(int, int) (int, bool)) (int, bool) {
+			lo := c.Platform.GatewayPort + 1
+			if c.Platform.GatewayPort < 1024 {
+				lo = 8443
+			}
+			return scan(lo, 65535)
+		}, func(to int) string {
+			return fmt.Sprintf("public URLs gain :%d; the chart's Backstage app-config assumes a port-free baseUrl, expect rough edges", to)
+		}},
+		{"backstage.port", "Backstage's direct debug access", &c.Backstage.Port, func(scan func(int, int) (int, bool)) (int, bool) {
+			return scan(c.Backstage.Port+1, 65535)
+		}, nil},
+	}
+}
+
+// ChooseFreePorts probes every host-side port of the configuration on
+// 127.0.0.1 — the address all kind port mappings bind — and moves each
+// occupied one to a nearby free port, returning what changed so the caller
+// can tell the user. Ports in `ours` are the lab's own (published by an
+// existing kind node of this very configuration) and never count as
+// occupied. Meant for a configuration whose cluster does not exist (yet, or
+// any more): an existing cluster's mappings are fixed at node creation, where
+// renumbering would only mislead — PortConflicts is the read-only check for
+// that case.
+func (c *Config) ChooseFreePorts(ours map[int]bool) []PortChange {
+	return c.chooseFreePorts(func(p int) bool { return !ours[p] && portTaken(p) })
+}
+
+// PortConflicts reports which host-side ports of the configuration another
+// process holds, ignoring the lab's own (`ours`, the ports the existing kind
+// node publishes). Nothing is changed.
+func (c *Config) PortConflicts(ours map[int]bool) []PortConflict {
+	return c.portConflicts(func(p int) bool { return !ours[p] && portTaken(p) })
+}
+
+func (c *Config) portConflicts(taken func(int) bool) []PortConflict {
+	var conflicts []PortConflict
+	for _, lp := range c.ports() {
+		if taken(*lp.port) {
+			conflicts = append(conflicts, PortConflict{Field: lp.field, What: lp.what, Port: *lp.port})
+		}
+	}
+	return conflicts
 }
 
 // chooseFreePorts is ChooseFreePorts with the probe injected, so tests can
@@ -70,60 +150,24 @@ func (c *Config) chooseFreePorts(taken func(int) bool) []PortChange {
 	}
 
 	var changes []PortChange
-	move := func(field, what string, port *int, pick func() (int, bool), note func(to int) string) {
-		if !taken(*port) {
-			return
+	for _, lp := range c.ports() {
+		if !taken(*lp.port) {
+			continue
 		}
-		to, ok := pick()
+		to, ok := lp.pick(scan)
 		if !ok {
 			// Nowhere to go (the range is exhausted); leave the port alone
 			// and let `agentlab up` fail with the real bind error.
-			return
+			continue
 		}
 		reserved[to] = true
-		ch := PortChange{Field: field, What: what, From: *port, To: to}
-		if note != nil {
-			ch.Note = note(to)
+		ch := PortChange{Field: lp.field, What: lp.what, From: *lp.port, To: to}
+		if lp.note != nil {
+			ch.Note = lp.note(to)
 		}
 		changes = append(changes, ch)
-		*port = to
+		*lp.port = to
 	}
-	noNote := func(int) string { return "" }
-
-	// Dex must stay in the NodePort range (host port == NodePort); scan
-	// upward from the default and wrap around the range.
-	move("dexPort", "the Dex issuer", &c.DexPort, func() (int, bool) {
-		if p, ok := scan(c.DexPort+1, 32767); ok {
-			return p, true
-		}
-		return scan(30000, c.DexPort-1)
-	}, noNote)
-
-	move("platform.musterPort", "muster's direct debug access", &c.Platform.MusterPort, func() (int, bool) {
-		return scan(c.Platform.MusterPort+1, 65535)
-	}, noNote)
-
-	move("platform.agentsPort", "the kagent UI", &c.Platform.AgentsPort, func() (int, bool) {
-		return scan(c.Platform.AgentsPort+1, 65535)
-	}, noNote)
-
-	// The edge prefers 8443 over 444: dodging the whole privileged range
-	// keeps later probes honest (they can bind instead of dial), and 8443 is
-	// the conventional alternate HTTPS port.
-	move("platform.gatewayPort", "the agentgateway edge", &c.Platform.GatewayPort, func() (int, bool) {
-		lo := c.Platform.GatewayPort + 1
-		if c.Platform.GatewayPort < 1024 {
-			lo = 8443
-		}
-		return scan(lo, 65535)
-	}, func(to int) string {
-		return fmt.Sprintf("public URLs gain :%d; the chart's Backstage app-config assumes a port-free baseUrl, expect rough edges", to)
-	})
-
-	move("backstage.port", "Backstage's direct debug access", &c.Backstage.Port, func() (int, bool) {
-		return scan(c.Backstage.Port+1, 65535)
-	}, noNote)
-
 	return changes
 }
 

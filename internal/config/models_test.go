@@ -31,7 +31,7 @@ func TestExtraModelValidate(t *testing.T) {
 			m.Provider = ProviderAnthropic
 			return m
 		}, ""},
-		{"ollama", func(m ExtraModel) ExtraModel {
+		{ModelManagerBackendOllama, func(m ExtraModel) ExtraModel {
 			m.Provider = ProviderOllama
 			m.BaseURL = "http://192.168.1.10:11434"
 			return m
@@ -117,7 +117,12 @@ func TestModelManagerValidate(t *testing.T) {
 		{"on with agents", ModelManager{Enabled: true, Backend: ModelManagerBackendOllama}, true, ""},
 		{"on, endpoint override", ModelManager{Enabled: true, Endpoint: "http://192.168.1.10:11434"}, true, ""},
 		{"on without agents", ModelManager{Enabled: true}, false, "requires platform.agents"},
-		{"kserve", ModelManager{Enabled: true, Backend: "kserve"}, true, "supports \"ollama\" only"},
+		{"kserve", ModelManager{Enabled: true, Backend: "kserve"}, true, "supports ollama, lemonade"},
+		{"lemonade legacy form", ModelManager{Enabled: true, Backend: ModelManagerBackendLemonade, Endpoint: "http://172.21.0.1:13305"}, true, ""},
+		{"both backends", ModelManager{Enabled: true, Backends: []string{ModelManagerBackendOllama, ModelManagerBackendLemonade}}, true, ""},
+		{"duplicate backend", ModelManager{Enabled: true, Backends: []string{ModelManagerBackendOllama, ModelManagerBackendOllama}}, true, "listed twice"},
+		{"endpoint for a backend not listed", ModelManager{Enabled: true, Backends: []string{ModelManagerBackendOllama}, Endpoints: map[string]string{ModelManagerBackendLemonade: "http://h:13305"}}, true, "not in backends"},
+		{"bad per-backend endpoint", ModelManager{Enabled: true, Backends: []string{ModelManagerBackendLemonade}, Endpoints: map[string]string{ModelManagerBackendLemonade: "h:13305"}}, true, "http(s) URL"},
 		{"bad endpoint", ModelManager{Enabled: true, Endpoint: "172.21.0.1:11434"}, true, "http(s) URL"},
 	}
 	for _, tc := range cases {

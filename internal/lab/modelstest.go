@@ -84,8 +84,9 @@ func ModelsTest(cfg *config.Config, email, model string) error {
 	if err := api.getJSON("/backend", &backend); err != nil {
 		return err
 	}
-	if backend.Backend != config.ModelManagerBackendOllama || !backend.Healthy {
-		return fmt.Errorf("backend %q healthy=%v, wanted a healthy ollama backend (endpoint %s)", backend.Backend, backend.Healthy, backend.Endpoint)
+	primary := cfg.Platform.ModelManager.Primary()
+	if backend.Backend != primary || !backend.Healthy {
+		return fmt.Errorf("backend %q healthy=%v, wanted a healthy %s backend (endpoint %s)", backend.Backend, backend.Healthy, primary, backend.Endpoint)
 	}
 	caps := make([]string, 0, len(backend.Capabilities))
 	for name, on := range backend.Capabilities {
@@ -94,7 +95,7 @@ func ModelsTest(cfg *config.Config, email, model string) error {
 		}
 	}
 	slices.Sort(caps)
-	note("backend ollama %s at %s, healthy; capabilities: %s", backend.Version, backend.Endpoint, strings.Join(caps, ", "))
+	note("backend %s %s at %s, healthy; capabilities: %s", primary, backend.Version, backend.Endpoint, strings.Join(caps, ", "))
 	note("wiring: ModelConfigs in %s, autoWire=%v", backend.Wiring.Namespace, backend.Wiring.AutoWire)
 
 	step("Listing models")
@@ -170,14 +171,20 @@ func ModelsTest(cfg *config.Config, email, model string) error {
 		return err
 	}
 	spec, err := outputQuiet("kubectl", "-n", kagentNamespace, "get", modelConfigResource, mcName,
-		"-o", `jsonpath={.spec.provider} {.spec.model} {.spec.ollama.host} managed-by={.metadata.labels.app\.kubernetes\.io/managed-by}`)
+		"-o", `jsonpath={.spec.provider} {.spec.model} {.spec.ollama.host}{.spec.openAI.baseUrl} managed-by={.metadata.labels.app\.kubernetes\.io/managed-by}`)
 	if err != nil {
 		return err
 	}
-	if !strings.HasPrefix(spec, config.ProviderOllama+" ") {
-		return fmt.Errorf("ModelConfig %s is not the native Ollama provider: %s", mcName, spec)
+	// model-manager writes the native keyless Ollama provider for ollama and
+	// the OpenAI provider on /api/v1 (placeholder key) for lemonade.
+	wantProvider := config.ProviderOllama
+	if primary == config.ModelManagerBackendLemonade {
+		wantProvider = config.ProviderOpenAI
 	}
-	note("ModelConfig %s: %s (keyless native provider)", mcName, strings.TrimSpace(spec))
+	if !strings.HasPrefix(spec, wantProvider+" ") {
+		return fmt.Errorf("ModelConfig %s is not the %s provider model-manager writes for %s: %s", mcName, wantProvider, primary, spec)
+	}
+	note("ModelConfig %s: %s (keyless)", mcName, strings.TrimSpace(spec))
 
 	// The user's identity, not a ServiceAccount: wiring writes a ModelConfig
 	// into the kagent namespace as the caller (downstream OAuth), so a user
@@ -204,7 +211,7 @@ func ModelsTest(cfg *config.Config, email, model string) error {
 		note("%s: HTTP %d, %s", viewer.Email, status, excerpt(string(body), 120))
 	}
 
-	step("Agent turn on %s (kagent Agent, runtime go -> host Ollama)", mcName)
+	step("Agent turn on %s (kagent Agent, runtime go -> host %s)", mcName, config.BackendServerName(primary))
 	reply, err := agentTurn(client, cfg, mcName, "Reply with exactly the word pong and nothing else.")
 	if err != nil {
 		return err
@@ -270,18 +277,19 @@ func ModelsTest(cfg *config.Config, email, model string) error {
 		}
 	}
 	note("ModelConfig %s is gone", mcName)
-	endpoint, err := resolveModelManagerEndpoint(cfg)
+	endpoint, err := resolveBackendEndpoint(cfg, primary)
 	if err != nil {
 		return err
 	}
-	tags, err := ollamaTags(endpoint)
+	server := config.BackendServerName(primary)
+	remaining, err := hostServerModels(primary, endpoint)
 	if err != nil {
-		return fmt.Errorf("reading the host Ollama's tags at %s: %w", endpoint, err)
+		return fmt.Errorf("reading the host %s's models at %s: %w", server, endpoint, err)
 	}
-	if slices.Contains(tags, model) {
-		return fmt.Errorf("host Ollama still has %s after the delete", model)
+	if slices.ContainsFunc(remaining, func(m HostModel) bool { return m.ID == model }) {
+		return fmt.Errorf("host %s still has %s after the delete", server, model)
 	}
-	note("host Ollama at %s no longer has it (%d models left)", endpoint, len(tags))
+	note("host %s at %s no longer has it (%d models left)", server, endpoint, len(remaining))
 	text, err = session.callServerTool(toolPrefix+"list_models", nil)
 	if err != nil {
 		return err
@@ -291,9 +299,41 @@ func ModelsTest(cfg *config.Config, email, model string) error {
 	}
 	note("%slist_models agrees", toolPrefix)
 
+	// The backends model-manager does not front are wired statically by the
+	// platform run (hostmodels.go): prove one of those ModelConfigs answers
+	// an agent turn too, so "discovered" means "usable by agents".
+	wiredProof := ""
+	if secondary := cfg.Platform.ModelManager.Secondary(); len(secondary) > 0 {
+		endpoints, err := resolveBackendEndpoints(cfg)
+		if err != nil {
+			return err
+		}
+		wired, err := hostBackendModelConfigs(cfg, endpoints)
+		if err != nil {
+			return err
+		}
+		if len(wired) == 0 {
+			note("no tool-calling model downloaded on %s — nothing to prove for the static wiring", strings.Join(secondary, ", "))
+		} else {
+			w := wired[0]
+			step("Agent turn on %s (%s %s, wired statically — model-manager fronts %s only)", w.Name, config.BackendServerName(secondary[0]), w.Model, primary)
+			if err := waitModelConfigAccepted(w.Name); err != nil {
+				return err
+			}
+			reply, err := agentTurn(client, cfg, w.Name, "Reply with exactly the word pong and nothing else.")
+			if err != nil {
+				return err
+			}
+			note("agent replied: %q", excerpt(reply, 120))
+			wiredProof = fmt.Sprintf("PASS: %s's %s, wired statically as ModelConfig %s, answered an agent turn (%d wired)\n",
+				config.BackendServerName(secondary[0]), w.Model, w.Name, len(wired))
+		}
+	}
+
 	fmt.Println()
 	fmt.Println("PASS: no token -> 401 at the gateway; Dex token -> model-manager REST through agentgateway")
-	fmt.Printf("PASS: list -> pull %s (progress) -> ModelConfig %s (Ollama provider) Accepted -> agent turn -> unload -> delete\n", model, mcName)
+	fmt.Printf("PASS: list -> pull %s (progress) -> ModelConfig %s (%s provider) Accepted -> agent turn -> unload -> delete\n", model, mcName, wantProvider)
+	fmt.Print(wiredProof)
 	fmt.Printf("PASS: muster aggregates x_%s_* and calls them (get_model, list_models)\n", modelManagerMCPServer)
 	fmt.Printf("PASS: the caller's identity — job requestedBy=%s; a viewer's wire is Forbidden by the apiserver (user RBAC, not the ServiceAccount's)\n", user.Email)
 	return nil
@@ -536,30 +576,6 @@ func collectStrings(node any, key string) []string {
 	}
 	walk(node)
 	return out
-}
-
-// ollamaTags lists the models the host Ollama has (its /api/tags), dialed
-// directly from the lab host — the ground truth the delete is checked against.
-func ollamaTags(endpoint string) ([]string, error) {
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(endpoint + "/api/tags")
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	var tags struct {
-		Models []struct {
-			Name string `json:"name"`
-		} `json:"models"`
-	}
-	if err := decodeJSONBody(resp, &tags); err != nil {
-		return nil, err
-	}
-	names := make([]string, 0, len(tags.Models))
-	for _, m := range tags.Models {
-		names = append(names, m.Name)
-	}
-	return names, nil
 }
 
 func decodeJSONBody(resp *http.Response, out any) error {

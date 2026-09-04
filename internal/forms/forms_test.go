@@ -29,7 +29,7 @@ func TestRunTUIDrive(t *testing.T) {
 	defer func() { testInput, testOutput = nil, nil }()
 
 	cfg := config.Default()
-	if err := Run(cfg, false); err != nil {
+	if err := Run(cfg, false, Hints{ModelServers: "Ollama 0.33.2 (:11434)"}); err != nil {
 		t.Fatalf("form run: %v", err)
 	}
 	if cfg.ClusterName != "agentlab" || cfg.DexPort != 32000 {
@@ -74,7 +74,7 @@ func TestRunTUIDriveEdit(t *testing.T) {
 	defer func() { testInput, testOutput = nil, nil }()
 
 	cfg := config.Default()
-	if err := Run(cfg, false); err != nil {
+	if err := Run(cfg, false, Hints{}); err != nil {
 		t.Fatalf("form run: %v", err)
 	}
 	if cfg.ClusterName != "renamed" {

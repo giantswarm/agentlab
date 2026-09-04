@@ -333,6 +333,26 @@ holds. mcp-prometheus gets it because `installOCIChart` now runs that release
 through the post-renderer too. Lab-only by construction: real installations have
 a routable issuer.
 
+### U14. `hostmodels.go`: the further host backends are wired as static ModelConfigs
+`platform.modelManager.backends` lists every model server on the lab host
+(`agentlab configure` fills it from what answers: an Ollama, a Lemonade
+Server), but model-manager 0.16.0 fronts ONE backend per instance
+(`backend: ollama|kserve|lemonade`). Timo's direction (agentlab#60,
+2026-09-04) is one multi-backend model-manager, not one release per backend
+(the draft that did that, #61, is closed). Until it lands, the lab installs
+model-manager with the first backend and, for every further one, renders its
+downloaded tool-calling models as lab-labeled ModelConfigs in exactly the
+shape model-manager writes for that backend (`lemonade-<model>`: `OpenAI` on
+`<endpoint>/api/v1`, placeholder key; `ollama-<model>`: the native keyless
+provider), refreshed and pruned on every `agentlab platform` run and proven
+by the agent turn `models-test` ends with. Nothing manages those models
+(pull/delete stay CLI-on-host) and the portal's Models pages show the first
+backend only.
+**Unblocks:** giantswarm/model-manager multi-backend (one instance talking to
+ollama, lemonade and kserve at once) + the umbrella values for it; then
+`platform.go` hands the whole list to `model-manager.backends` and
+`hostmodels.go`'s static wiring is deleted — the `agentlab.yaml` shape stays.
+
 ## Accepted lab trade-offs (not hacks to fix)
 
 - **Checksum stamping via the `REPLACED_AT_APPLY` placeholder** — the standard
