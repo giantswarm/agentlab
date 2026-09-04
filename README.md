@@ -529,17 +529,15 @@ platform:
     #   ollama: http://192.168.1.10:11434
 ```
 
-The list has an order because **model-manager fronts one backend per instance
-today**: the first entry is model-manager's backend, and every further one is
-wired **statically** by `agentlab platform` — its downloaded tool-calling
-models become lab-labeled ModelConfigs named `<backend>-<model>` (e.g.
-`lemonade-qwen3-it-4b-flm`), in exactly the shape model-manager would write,
-refreshed on every run and pruned when the model is gone from the server or
-the backend from the list. That is the interim until model-manager talks to
-all of them at once (multi-backend, agentlab#60); the config shape stays.
-A model already wired by hand in `extraModels` (same model on the same
-host:port) is left to that entry. The one-backend form earlier versions wrote
-(`backend:` + `endpoint:`) still reads as the one-item list.
+**One model-manager fronts all of them** (model-manager ≥ 0.17.0; the
+umbrella's `model-manager.backends`): inventory, pull, load/unload, delete and
+the auto-wired ModelConfigs work per backend, `GET /api/v1/backends` lists
+them, every object says which `backend` it belongs to, and every ModelConfig
+carries the `model-manager.giantswarm.io/backend` label. The list has an
+order because the first entry is the **default backend** — where a request
+that names none goes; the REST API takes `?backend=` (reads) or `"backend"`
+(writes), the MCP tools a `backend` argument. The one-backend form earlier
+versions wrote (`backend:` + `endpoint:`) still reads as the one-item list.
 
 `agentlab configure` detects an Ollama on `:11434` and a Lemonade Server on
 `:13305` on every run (`--model-manager[=false]` pins the flag,
@@ -562,9 +560,10 @@ What `agentlab platform` (or `up`) does with it:
   the server's TCP port from the bridge subnets, inside `172.16.0.0/12`) —
   instead of a model-manager pod reporting an unhealthy backend after Helm's
   ten-minute wait, or ModelConfigs pointing at a dead endpoint.
-- **The umbrella's `components.model-manager`** goes on with the first
-  backend (`model-manager.backend` and `model-manager.<backend>.endpoint` =
-  the detected address), its agentgateway **route** at
+- **The umbrella's `components.model-manager`** goes on with every listed
+  backend (`model-manager.backends` plus one `model-manager.<backend>.endpoint`
+  each = the detected addresses; a single entry renders the chart's `backend:`
+  form), its agentgateway **route** at
   `https://agentgateway.<domain>/model-manager` and, unlike the lab's kagent
   route, **JWT validation on**: the gateway verifies the caller's Dex token
   against the lab Dex (JWKS over TLS at
@@ -575,8 +574,9 @@ What `agentlab platform` (or `up`) does with it:
 - **The portal's service side.** The chart's Backstage app-config gains
   `agentPlatform.modelManager.installations.agent-platform.apiBaseUrl:
   https://agentgateway.<domain>/model-manager`; the portal backend forwards
-  the signed-in user's Dex ID token to it. What the Models tab shows on top
-  of that is the portal's business (giantswarm/backstage#2194).
+  the signed-in user's Dex ID token to it. The portal renders one Serving
+  group per backend of the installation (giantswarm/backstage#2264); what
+  else the Models tab shows is the portal's business (giantswarm/backstage#2194).
 - **muster** registers the MCP endpoint (the chart's own `MCPServer` CR,
   `Connected` is waited for) and the tools surface as
   `x_model-manager_<tool>`: `list_models`, `get_model`, `list_loaded_models`,
@@ -584,14 +584,15 @@ What `agentlab platform` (or `up`) does with it:
   `unwire_model`, `list_jobs`, `get_job`, `cancel_job`, `get_backend` — ask
   Claude Code to pull a model.
 
-The proof is `agentlab models-test` (`--model` picks another small,
-**tool-calling capable** model; the default `qwen2.5:0.5b` is ~400 MB —
-`smollm2:135m` pulls fine and then fails every agent turn with "does not
-support tools"; on a lemonade-first lab name a Lemonade catalog model whose
-recipe backend is installed on the host). It goes through the platform path
-only and leaves nothing behind, and with a further backend in the list it
-ends with an agent turn on one of that server's statically wired
-ModelConfigs — "discovered" means "usable by agents":
+The proof is `agentlab models-test` — one backend per run: `--backend
+lemonade` proves the Lemonade Server through the same model-manager (default:
+the first of the list). `--model` picks another small, **tool-calling
+capable** model; the defaults are `qwen2.5:0.5b` (~400 MB) on ollama and
+`qwen3-4b-FLM` (3.1 GB, the smallest tool-calling FastFlowLM model — the
+smaller `*-FLM` ones cannot call tools) on lemonade; `smollm2:135m` pulls
+fine and then fails every agent turn with "does not support tools". Every
+request names the backend, the ModelConfig must carry the backend label, and
+the run goes through the platform path only and leaves nothing behind:
 
 ```
 agentlab models-test

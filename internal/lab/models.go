@@ -3,7 +3,6 @@ package lab
 import (
 	"fmt"
 	"os"
-	"slices"
 	"strings"
 	"time"
 
@@ -34,79 +33,43 @@ const managedByAgentlab = "app.kubernetes.io/managed-by=agentlab"
 // extraModelsTemplate renders the lab-owned ModelConfigs.
 const extraModelsTemplate = "extra-models.yaml.tmpl"
 
-// allExtraModels is everything the lab renders as its own ModelConfigs: the
-// platform.extraModels entries plus the tool-calling models of the host
-// backends model-manager does not front (wired, returned separately for the
-// summary). endpoints may be nil, in which case they are resolved here.
-func allExtraModels(cfg *config.Config, endpoints map[string]string) (all, wired []config.ExtraModel, err error) {
-	manual := cfg.Platform.ExtraModels
-	if cfg.ModelManagerEnabled() && len(cfg.Platform.ModelManager.Secondary()) > 0 {
-		if endpoints == nil {
-			if endpoints, err = resolveBackendEndpoints(cfg); err != nil {
-				return nil, nil, err
-			}
-		}
-		if wired, err = hostBackendModelConfigs(cfg, endpoints); err != nil {
-			return nil, nil, err
-		}
-	}
-	return append(slices.Clone(manual), wired...), wired, nil
-}
-
-// ensureExtraModels reconciles the platform.extraModels entries — and the
-// statically wired models of the host backends model-manager does not front
-// — into kagent ModelConfig CRs plus their key Secrets, and prunes
-// lab-labeled CRs whose entry is gone (from agentlab.yaml, or from the host
-// server). Only called with the agents runtime installed (the ModelConfig
-// CRD ships with the kagent chart). Returns the wired host models for the
-// summary.
-func ensureExtraModels(cfg *config.Config, endpoints map[string]string) ([]config.ExtraModel, error) {
-	models, wired, err := allExtraModels(cfg, endpoints)
-	if err != nil {
-		return nil, err
-	}
+// ensureExtraModels reconciles the platform.extraModels entries into kagent
+// ModelConfig CRs plus their key Secrets, and prunes lab-labeled CRs whose
+// entry is gone from agentlab.yaml. Only called with the agents runtime
+// installed (the ModelConfig CRD ships with the kagent chart). The host model
+// servers' models are model-manager's: it writes and removes their
+// ModelConfigs itself, for every backend it fronts.
+func ensureExtraModels(cfg *config.Config) error {
+	models := cfg.Platform.ExtraModels
 	_, path, err := renderManifestWith(cfg, extraModelsTemplate, func(d *tmplData) { d.ExtraModels = models })
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if len(cfg.Platform.ExtraModels) > 0 {
-		step("Adding extra model configs (%d beyond the default %s)", len(cfg.Platform.ExtraModels), cfg.AIModel)
-	}
-	for _, b := range cfg.Platform.ModelManager.Secondary() {
-		var names []string
-		for _, m := range wired {
-			if strings.HasPrefix(m.Name, b+"-") {
-				names = append(names, m.Name)
-			}
-		}
-		step("Wiring %s's tool-calling models as ModelConfigs (%d; model-manager fronts %s only, agentlab#60)",
-			config.BackendServerName(b), len(names), cfg.Platform.ModelManager.Primary())
-		if len(names) > 0 {
-			note("%s", strings.Join(names, ", "))
-		}
+	if len(models) > 0 {
+		step("Adding extra model configs (%d beyond the default %s)", len(models), cfg.AIModel)
 	}
 	// Secrets before the CRs: the controller hashes the referenced Secret
 	// into the ModelConfig status, so the reference should resolve on the
 	// controller's first look.
 	for _, m := range models {
 		if err := ensureModelKeySecret(m); err != nil {
-			return nil, err
+			return err
 		}
 	}
 	if len(models) > 0 {
 		if err := runQuiet("kubectl", "apply", "-f", path); err != nil {
-			return nil, err
+			return err
 		}
 	}
 	if err := pruneExtraModels(models); err != nil {
-		return nil, err
+		return err
 	}
 	for _, m := range models {
 		if err := waitModelConfigAccepted(m.Name); err != nil {
-			return nil, err
+			return err
 		}
 	}
-	return wired, nil
+	return nil
 }
 
 // ensureModelKeySecret creates the model's key Secret from the host env var

@@ -294,12 +294,9 @@ func configureCmd() *cobra.Command {
 			}
 			if cfg.ModelManagerEnabled() {
 				mm := cfg.Platform.ModelManager
-				primary := mm.Primary()
-				fmt.Printf("  models     model-manager fronts the host %s (%s backend, %s)\n",
-					config.BackendServerName(primary), primary, endpointNote(mm, primary))
-				for _, b := range mm.Secondary() {
-					fmt.Printf("             %s (%s): tool-calling models wired as ModelConfigs at platform time — statically, model-manager fronts one backend per instance today\n",
-						config.BackendServerName(b), endpointNote(mm, b))
+				fmt.Printf("  models     one model-manager fronts the host servers (default backend %s):\n", mm.Primary())
+				for _, b := range mm.Backends {
+					fmt.Printf("             %s (%s backend, %s)\n", config.BackendServerName(b), b, endpointNote(mm, b))
 				}
 			}
 			fmt.Println("\nNext: agentlab up")
@@ -312,7 +309,7 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&observability, "observability", false, "enable/disable the observability stack (Prometheus + mcp-prometheus)")
 	cmd.Flags().BoolVar(&backstage, "backstage", false, "enable/disable Backstage (implies the platform)")
 	cmd.Flags().BoolVar(&modelManager, "model-manager", false, "pin managed models on/off instead of following the host model servers the discovery finds (needs agents)")
-	cmd.Flags().StringSliceVar(&modelManagerBackends, "model-manager-backends", nil, "pin the host model servers, in order (ollama, lemonade; the first is model-manager's backend) instead of the ones the discovery finds")
+	cmd.Flags().StringSliceVar(&modelManagerBackends, "model-manager-backends", nil, "pin the host model servers, in order (ollama, lemonade; the first is model-manager's default backend) instead of the ones the discovery finds")
 	cmd.Flags().BoolVar(&accessible, "accessible", false, "prompt-per-question form mode (for screen readers and plain terminals)")
 	return cmd
 }
@@ -394,7 +391,7 @@ func platformTestCmd() *cobra.Command {
 }
 
 func modelsTestCmd() *cobra.Command {
-	var model string
+	var backend, model string
 	cmd := &cobra.Command{
 		Use:   "models-test [email]",
 		Short: "Headless managed-models proof: 401 without a token, then pull -> ModelConfig -> agent turn -> MCP via muster -> unload -> delete",
@@ -408,10 +405,11 @@ func modelsTestCmd() *cobra.Command {
 			if len(args) == 1 {
 				email = args[0]
 			}
-			return lab.ModelsTest(cfg, email, model)
+			return lab.ModelsTest(cfg, email, backend, model)
 		},
 	}
-	cmd.Flags().StringVar(&model, "model", lab.ModelsTestModel, "the Ollama model to pull and delete (small and tool-calling capable)")
+	cmd.Flags().StringVar(&backend, "backend", "", "the backend to prove, one of platform.modelManager.backends (default: the first — model-manager's default backend)")
+	cmd.Flags().StringVar(&model, "model", "", fmt.Sprintf("the model to pull and delete, small and tool-calling capable (default: %s on ollama, %s on lemonade)", lab.ModelsTestModel, lab.ModelsTestModelLemonade))
 	return cmd
 }
 

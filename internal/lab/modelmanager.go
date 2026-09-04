@@ -194,27 +194,20 @@ func preflightHostServer(cfg *config.Config, backend, endpoint string) error {
 		"  Probe output: %.300s", server, endpoint, reason, fixes, backend, out)
 }
 
-// modelManagerHint is the platform-up summary for managed models: the backend
-// model-manager fronts, and the further host servers wired statically.
-func modelManagerHint(cfg *config.Config, endpoints map[string]string, wired []config.ExtraModel) string {
+// modelManagerHint is the platform-up summary for managed models: the one
+// model-manager and every host server it fronts, the first being its default
+// backend.
+func modelManagerHint(cfg *config.Config, endpoints map[string]string) string {
 	if !cfg.ModelManagerEnabled() {
 		return "  Model manager is disabled (platform.modelManager in agentlab.yaml)."
 	}
 	mm := cfg.Platform.ModelManager
-	primary := mm.Primary()
-	s := fmt.Sprintf("  Model manager: %s backend (%s) at %s; REST %s/api/v1 (Dex token required),\n"+
-		"  MCP tools x_model-manager_* through muster; the portal's Models tab manages the same models.",
-		primary, config.BackendServerName(primary), endpoints[primary], cfg.ModelManagerBaseURL())
-	for _, b := range mm.Secondary() {
-		names := make([]string, 0, len(wired))
-		for _, m := range wired {
-			if strings.HasPrefix(m.Name, b+"-") {
-				names = append(names, m.Name)
-			}
-		}
-		s += fmt.Sprintf("\n  %s at %s: %d tool-calling model(s) wired as ModelConfigs (%s) — statically,\n"+
-			"  model-manager fronts one backend per instance today (agentlab#60).",
-			config.BackendServerName(b), endpoints[b], len(names), strings.Join(names, ", "))
+	parts := make([]string, 0, len(mm.Backends))
+	for _, b := range mm.Backends {
+		parts = append(parts, fmt.Sprintf("%s (%s) at %s", b, config.BackendServerName(b), endpoints[b]))
 	}
-	return s
+	return fmt.Sprintf("  Model manager: one instance fronting %s — default backend %s;\n"+
+		"  REST %s/api/v1 (Dex token required; ?backend= / \"backend\" name a server), MCP tools\n"+
+		"  x_model-manager_* through muster; the portal's Models tab manages the same models.",
+		strings.Join(parts, ", "), mm.Primary(), cfg.ModelManagerBaseURL())
 }
