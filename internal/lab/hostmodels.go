@@ -2,6 +2,7 @@ package lab
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -30,7 +31,15 @@ type HostModel struct {
 	// send tool schemas with every turn (a model without it fails each turn
 	// with "does not support tools").
 	Tools bool
+	// Size on disk in bytes (Lemonade reports decimal GB; converted). The
+	// wired list is ordered by it, smallest first, so a proof that takes the
+	// first entry loads the cheapest model.
+	Size int64
 }
+
+// lemonadeModelField is the request field Lemonade's management API takes
+// the model name in.
+const lemonadeModelField = "model_name"
 
 // The capability names the servers use for tool calling.
 const (
@@ -63,6 +72,7 @@ func ollamaModels(base string) ([]HostModel, error) {
 	var tags struct {
 		Models []struct {
 			Name string `json:"name"`
+			Size int64  `json:"size"`
 		} `json:"models"`
 	}
 	if err := decodeJSONBody(resp, &tags); err != nil {
@@ -70,7 +80,7 @@ func ollamaModels(base string) ([]HostModel, error) {
 	}
 	models := make([]HostModel, 0, len(tags.Models))
 	for _, m := range tags.Models {
-		body, _ := json.Marshal(map[string]string{"model": m.Name})
+		body, _ := json.Marshal(map[string]string{modelField: m.Name})
 		show, err := client.Post(base+"/api/show", "application/json", bytes.NewReader(body))
 		if err != nil {
 			return nil, err
@@ -83,7 +93,7 @@ func ollamaModels(base string) ([]HostModel, error) {
 		if err != nil {
 			return nil, fmt.Errorf("reading %s/api/show for %s: %w", base, m.Name, err)
 		}
-		models = append(models, HostModel{ID: m.Name, Tools: slices.Contains(info.Capabilities, ollamaToolsCapability)})
+		models = append(models, HostModel{ID: m.Name, Tools: slices.Contains(info.Capabilities, ollamaToolsCapability), Size: m.Size})
 	}
 	return models, nil
 }
@@ -102,6 +112,7 @@ func lemonadeModels(base string) ([]HostModel, error) {
 			ID         string   `json:"id"`
 			Downloaded bool     `json:"downloaded"`
 			Labels     []string `json:"labels"`
+			Size       float64  `json:"size"` // decimal GB
 		} `json:"data"`
 	}
 	if err := decodeJSONBody(resp, &list); err != nil {
@@ -112,9 +123,34 @@ func lemonadeModels(base string) ([]HostModel, error) {
 		if !m.Downloaded {
 			continue
 		}
-		models = append(models, HostModel{ID: m.ID, Tools: slices.Contains(m.Labels, lemonadeToolsLabel)})
+		models = append(models, HostModel{ID: m.ID, Tools: slices.Contains(m.Labels, lemonadeToolsLabel), Size: int64(m.Size * 1e9)})
 	}
 	return models, nil
+}
+
+// unloadHostModel evicts a model from a host server after a proof used it —
+// Lemonade has no idle eviction (POST /api/v1/unload), Ollama's keep-alive
+// is re-armed by every request (a zero keep_alive generate unloads now).
+func unloadHostModel(backend, endpoint, model string) error {
+	client := &http.Client{Timeout: 30 * time.Second}
+	var path string
+	var body []byte
+	if backend == config.ModelManagerBackendLemonade {
+		path = lemonadeAPIBasePath + "/unload"
+		body, _ = json.Marshal(map[string]string{lemonadeModelField: model})
+	} else {
+		path = "/api/generate"
+		body, _ = json.Marshal(map[string]any{modelField: model, "keep_alive": 0})
+	}
+	resp, err := client.Post(endpoint+path, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("%s answered %s", path, resp.Status)
+	}
+	return nil
 }
 
 // hostBackendModelConfigs synthesizes the ModelConfig entries for the
@@ -137,6 +173,15 @@ func hostBackendModelConfigs(cfg *config.Config, endpoints map[string]string) ([
 		if err != nil {
 			return nil, fmt.Errorf("listing %s's models at %s: %w", config.BackendServerName(b), endpoint, err)
 		}
+		// Smallest first: the proof takes the first entry, and the summary
+		// reads the same whatever order the server lists them in.
+		models = slices.Clone(models)
+		slices.SortStableFunc(models, func(a, b HostModel) int {
+			if c := cmp.Compare(a.Size, b.Size); c != 0 {
+				return c
+			}
+			return strings.Compare(a.ID, b.ID)
+		})
 		for _, m := range models {
 			if !m.Tools {
 				continue

@@ -29,6 +29,7 @@ const (
 	fieldOwnedBy    = "owned_by"
 	fieldDownloaded = "downloaded"
 	fieldLabels     = "labels"
+	fieldSize       = "size"
 	labelVision     = "vision"
 )
 
@@ -45,9 +46,10 @@ func fakeOllama(t *testing.T) *httptest.Server {
 		_ = json.NewEncoder(w).Encode(map[string]string{"version": ollamaVersion})
 	})
 	mux.HandleFunc("/api/tags", func(w http.ResponseWriter, _ *http.Request) {
-		var models []map[string]string
+		sizes := map[string]int64{modelQwen35: 6_000_000_000, modelGemma270m: 300_000_000, modelSmollm: 270_000_000}
+		var models []map[string]any
 		for _, name := range []string{modelQwen35, modelGemma270m, modelSmollm} {
-			models = append(models, map[string]string{"name": name})
+			models = append(models, map[string]any{"name": name, fieldSize: sizes[name]})
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"models": models})
 	})
@@ -71,10 +73,10 @@ func fakeLemonade(t *testing.T) *httptest.Server {
 	})
 	mux.HandleFunc("/api/v1/models", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"object": "list", fieldData: []map[string]any{
-			{"id": modelQwen3FLM, fieldDownloaded: true, fieldLabels: []string{lemonadeToolsLabel, labelChat}, "recipe": "flm"},
-			{"id": modelGemma4bFLM, fieldDownloaded: true, fieldLabels: []string{labelVision, labelChat}, "recipe": "flm"},
-			{"id": modelMoEFLM, fieldDownloaded: true, fieldLabels: []string{labelVision, "reasoning", lemonadeToolsLabel, labelChat}},
-			{"id": "not-yet", fieldDownloaded: false, fieldLabels: []string{lemonadeToolsLabel}},
+			{"id": modelQwen3FLM, fieldDownloaded: true, fieldLabels: []string{lemonadeToolsLabel, labelChat}, "recipe": "flm", fieldSize: 3.1},
+			{"id": modelGemma4bFLM, fieldDownloaded: true, fieldLabels: []string{labelVision, labelChat}, "recipe": "flm", fieldSize: 4.5},
+			{"id": modelMoEFLM, fieldDownloaded: true, fieldLabels: []string{labelVision, "reasoning", lemonadeToolsLabel, labelChat}, fieldSize: 24.3},
+			{"id": "not-yet", fieldDownloaded: false, fieldLabels: []string{lemonadeToolsLabel}, fieldSize: 1},
 		}})
 	})
 	return httptest.NewServer(mux)
@@ -111,7 +113,7 @@ func TestHostServerModels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []HostModel{{modelQwen35, true}, {modelGemma270m, false}, {modelSmollm, true}}
+	want := []HostModel{{modelQwen35, true, 6_000_000_000}, {modelGemma270m, false, 300_000_000}, {modelSmollm, true, 270_000_000}}
 	if !slices.Equal(got, want) {
 		t.Errorf("ollama models = %v, want %v", got, want)
 	}
@@ -120,9 +122,9 @@ func TestHostServerModels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want = []HostModel{{modelQwen3FLM, true}, {modelGemma4bFLM, false}, {modelMoEFLM, true}}
+	want = []HostModel{{modelQwen3FLM, true, 3_100_000_000}, {modelGemma4bFLM, false, 4_500_000_000}, {modelMoEFLM, true, 24_300_000_000}}
 	if !slices.Equal(got, want) {
-		t.Errorf("lemonade models = %v, want %v (downloaded only)", got, want)
+		t.Errorf("lemonade models = %v, want %v (downloaded only, decimal GB -> bytes)", got, want)
 	}
 }
 
@@ -169,9 +171,10 @@ func TestHostModelConfigName(t *testing.T) {
 // hand are left to that entry; the primary backend contributes nothing (it is
 // model-manager's).
 func TestHostBackendModelConfigs(t *testing.T) {
+	// Listed largest first on purpose: the wiring orders smallest first.
 	inventory := map[string][]HostModel{
-		ollama:   {{modelQwen35, true}},
-		lemonade: {{modelQwen3FLM, true}, {modelGemma4bFLM, false}, {modelQwenVLFLM, true}},
+		ollama:   {{modelQwen35, true, 6_000_000_000}},
+		lemonade: {{modelMoEFLM, true, 24_300_000_000}, {modelQwen3FLM, true, 3_100_000_000}, {modelGemma4bFLM, false, 4_500_000_000}, {modelQwenVLFLM, true, 3_900_000_000}},
 	}
 	orig := hostModelsFn
 	hostModelsFn = func(backend, _ string) ([]HostModel, error) { return inventory[backend], nil }
@@ -190,9 +193,10 @@ func TestHostBackendModelConfigs(t *testing.T) {
 	}
 	want := []config.ExtraModel{
 		{Name: "lemonade-qwen3vl-it-4b-flm", Provider: config.ProviderOpenAI, Model: modelQwenVLFLM, BaseURL: "http://172.21.0.1:13305/api/v1"},
+		{Name: "lemonade-qwen3-6-moe-35b-a3b-flm", Provider: config.ProviderOpenAI, Model: modelMoEFLM, BaseURL: "http://172.21.0.1:13305/api/v1"},
 	}
 	if !slices.Equal(got, want) {
-		t.Fatalf("wired = %+v, want %+v", got, want)
+		t.Fatalf("wired = %+v, want %+v (smallest first, the hand-wired qwen3-it-4b left to its entry)", got, want)
 	}
 	for _, m := range got {
 		if err := m.Validate(); err != nil {

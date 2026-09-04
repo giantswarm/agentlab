@@ -325,6 +325,12 @@ func ModelsTest(cfg *config.Config, email, model string) error {
 				return err
 			}
 			note("agent replied: %q", excerpt(reply, 120))
+			// Leave the host as found: the turn loaded the model there.
+			if err := unloadHostModel(secondary[0], endpoints[secondary[0]], w.Model); err != nil {
+				note("could not unload %s from the host %s: %v", w.Model, config.BackendServerName(secondary[0]), err)
+			} else {
+				note("unloaded %s from the host %s", w.Model, config.BackendServerName(secondary[0]))
+			}
 			wiredProof = fmt.Sprintf("PASS: %s's %s, wired statically as ModelConfig %s, answered an agent turn (%d wired)\n",
 				config.BackendServerName(secondary[0]), w.Model, w.Name, len(wired))
 		}
