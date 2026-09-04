@@ -43,6 +43,11 @@ func ModelsTest(cfg *config.Config, email, model string) error {
 	if user == nil {
 		return fmt.Errorf("no user %q in %s", email, config.File)
 	}
+	backendName := cfg.Platform.ModelManager.Backend
+	server := cfg.Platform.ModelManager.ServerName()
+	if backendName == config.ModelManagerBackendLemonade && model == ModelsTestModel {
+		return fmt.Errorf("the lemonade backend needs --model: a small, tool-calling capable Lemonade catalog model whose recipe backend is installed on this host (an *-FLM model on an AMD NPU host; `lemonade list`) — it is pulled, wired, exercised and DELETED")
+	}
 	// Generous: the first agent turn loads the model into Ollama.
 	client, err := labHTTPClient(180 * time.Second)
 	if err != nil {
@@ -84,8 +89,8 @@ func ModelsTest(cfg *config.Config, email, model string) error {
 	if err := api.getJSON("/backend", &backend); err != nil {
 		return err
 	}
-	if backend.Backend != config.ModelManagerBackendOllama || !backend.Healthy {
-		return fmt.Errorf("backend %q healthy=%v, wanted a healthy ollama backend (endpoint %s)", backend.Backend, backend.Healthy, backend.Endpoint)
+	if backend.Backend != backendName || !backend.Healthy {
+		return fmt.Errorf("backend %q healthy=%v, wanted a healthy %s backend (endpoint %s)", backend.Backend, backend.Healthy, backendName, backend.Endpoint)
 	}
 	caps := make([]string, 0, len(backend.Capabilities))
 	for name, on := range backend.Capabilities {
@@ -94,7 +99,7 @@ func ModelsTest(cfg *config.Config, email, model string) error {
 		}
 	}
 	slices.Sort(caps)
-	note("backend ollama %s at %s, healthy; capabilities: %s", backend.Version, backend.Endpoint, strings.Join(caps, ", "))
+	note("backend %s %s at %s, healthy; capabilities: %s", backendName, backend.Version, backend.Endpoint, strings.Join(caps, ", "))
 	note("wiring: ModelConfigs in %s, autoWire=%v", backend.Wiring.Namespace, backend.Wiring.AutoWire)
 
 	step("Listing models")
@@ -169,15 +174,21 @@ func ModelsTest(cfg *config.Config, email, model string) error {
 	if err := waitModelConfigAccepted(mcName); err != nil {
 		return err
 	}
+	// ollama wires kagent's native keyless Ollama provider; lemonade the
+	// OpenAI provider against Lemonade's /api/v1 (with a placeholder key).
+	wantProvider, providerNote := config.ProviderOllama, "keyless native provider"
+	if backendName == config.ModelManagerBackendLemonade {
+		wantProvider, providerNote = config.ProviderOpenAI, "OpenAI-compatible /api/v1, placeholder key"
+	}
 	spec, err := outputQuiet("kubectl", "-n", kagentNamespace, "get", modelConfigResource, mcName,
-		"-o", `jsonpath={.spec.provider} {.spec.model} {.spec.ollama.host} managed-by={.metadata.labels.app\.kubernetes\.io/managed-by}`)
+		"-o", `jsonpath={.spec.provider} {.spec.model} {.spec.ollama.host}{.spec.openAI.baseUrl} managed-by={.metadata.labels.app\.kubernetes\.io/managed-by}`)
 	if err != nil {
 		return err
 	}
-	if !strings.HasPrefix(spec, config.ProviderOllama+" ") {
-		return fmt.Errorf("ModelConfig %s is not the native Ollama provider: %s", mcName, spec)
+	if !strings.HasPrefix(spec, wantProvider+" ") {
+		return fmt.Errorf("ModelConfig %s is not the %s provider the %s backend wires: %s", mcName, wantProvider, backendName, spec)
 	}
-	note("ModelConfig %s: %s (keyless native provider)", mcName, strings.TrimSpace(spec))
+	note("ModelConfig %s: %s (%s)", mcName, strings.TrimSpace(spec), providerNote)
 
 	// The user's identity, not a ServiceAccount: wiring writes a ModelConfig
 	// into the kagent namespace as the caller (downstream OAuth), so a user
@@ -204,7 +215,7 @@ func ModelsTest(cfg *config.Config, email, model string) error {
 		note("%s: HTTP %d, %s", viewer.Email, status, excerpt(string(body), 120))
 	}
 
-	step("Agent turn on %s (kagent Agent, runtime go -> host Ollama)", mcName)
+	step("Agent turn on %s (kagent Agent, runtime go -> host %s)", mcName, server)
 	reply, err := agentTurn(client, cfg, mcName, "Reply with exactly the word pong and nothing else.")
 	if err != nil {
 		return err
@@ -274,14 +285,14 @@ func ModelsTest(cfg *config.Config, email, model string) error {
 	if err != nil {
 		return err
 	}
-	tags, err := ollamaTags(endpoint)
+	tags, err := hostModels(cfg, endpoint)
 	if err != nil {
-		return fmt.Errorf("reading the host Ollama's tags at %s: %w", endpoint, err)
+		return fmt.Errorf("reading the host %s's models at %s: %w", server, endpoint, err)
 	}
 	if slices.Contains(tags, model) {
-		return fmt.Errorf("host Ollama still has %s after the delete", model)
+		return fmt.Errorf("host %s still has %s after the delete", server, model)
 	}
-	note("host Ollama at %s no longer has it (%d models left)", endpoint, len(tags))
+	note("host %s at %s no longer has it (%d models left)", server, endpoint, len(tags))
 	text, err = session.callServerTool(toolPrefix+"list_models", nil)
 	if err != nil {
 		return err
@@ -293,7 +304,7 @@ func ModelsTest(cfg *config.Config, email, model string) error {
 
 	fmt.Println()
 	fmt.Println("PASS: no token -> 401 at the gateway; Dex token -> model-manager REST through agentgateway")
-	fmt.Printf("PASS: list -> pull %s (progress) -> ModelConfig %s (Ollama provider) Accepted -> agent turn -> unload -> delete\n", model, mcName)
+	fmt.Printf("PASS: list -> pull %s (progress) -> ModelConfig %s (%s provider) Accepted -> agent turn -> unload -> delete\n", model, mcName, wantProvider)
 	fmt.Printf("PASS: muster aggregates x_%s_* and calls them (get_model, list_models)\n", modelManagerMCPServer)
 	fmt.Printf("PASS: the caller's identity — job requestedBy=%s; a viewer's wire is Forbidden by the apiserver (user RBAC, not the ServiceAccount's)\n", user.Email)
 	return nil
@@ -538,8 +549,42 @@ func collectStrings(node any, key string) []string {
 	return out
 }
 
+// hostModels lists the models the host server has, dialed directly from the
+// lab host — the ground truth the delete is checked against: Ollama's
+// /api/tags, or the downloaded models of Lemonade's /api/v1/models.
+func hostModels(cfg *config.Config, endpoint string) ([]string, error) {
+	if cfg.Platform.ModelManager.Backend == config.ModelManagerBackendLemonade {
+		return lemonadeModels(endpoint)
+	}
+	return ollamaTags(endpoint)
+}
+
+// lemonadeModels lists the downloaded models of the host Lemonade Server
+// (GET /api/v1/models, an OpenAI model list with Lemonade's extensions).
+func lemonadeModels(endpoint string) ([]string, error) {
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(endpoint + "/api/v1/models")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var list struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := decodeJSONBody(resp, &list); err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(list.Data))
+	for _, m := range list.Data {
+		names = append(names, m.ID)
+	}
+	return names, nil
+}
+
 // ollamaTags lists the models the host Ollama has (its /api/tags), dialed
-// directly from the lab host — the ground truth the delete is checked against.
+// directly from the lab host.
 func ollamaTags(endpoint string) ([]string, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Get(endpoint + "/api/tags")

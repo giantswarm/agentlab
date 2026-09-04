@@ -48,11 +48,13 @@ type tmplData struct {
 	AllGroups           []string
 	KubernetesClientSecret,
 	AgentPlatformClientSecret string
-	// ModelManagerEnabled mirrors cfg.ModelManagerEnabled(); the endpoint is
-	// the Ollama URL model-manager dials (autodetected from the kind docker
+	// ModelManagerEnabled mirrors cfg.ModelManagerEnabled(); the backend is
+	// the host server model-manager proxies (ollama, lemonade) and the endpoint
+	// the URL it dials (autodetected from the kind docker
 	// network — empty when the cluster does not exist yet, which only a
 	// pre-boot `agentlab render` sees; platformUp resolves it strictly).
 	ModelManagerEnabled  bool
+	ModelManagerBackend  string
 	ModelManagerEndpoint string
 	// The per-server OAuth sign-in fixture (oauthfixture.go): the MCPServer
 	// name the proofs sign in to and the protected endpoint it points at.
@@ -75,6 +77,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 	return &tmplData{
 		Config:                    cfg,
 		ModelManagerEnabled:       cfg.ModelManagerEnabled(),
+		ModelManagerBackend:       cfg.Platform.ModelManager.Backend,
 		ModelManagerEndpoint:      endpoint,
 		OAuthFixtureServer:        oauthFixtureServer,
 		OAuthFixtureURL:           oauthFixtureURL,

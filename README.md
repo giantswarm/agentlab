@@ -50,7 +50,7 @@ export ANTHROPIC_API_KEY=sk-ant-...   # optional: powers the agents + Backstage 
 ./agentlab configure       # interactive form: cluster, users, components
 ./agentlab up              # certs, kind cluster, Dex, RBAC, the agent platform — verified
 ./agentlab platform-test   # headless proof: Dex -> muster -> mcp-kubernetes -> apiserver, + the per-server OAuth sign-in challenge
-./agentlab models-test     # with an Ollama on the host: pull -> ModelConfig -> agent turn -> delete, through the platform
+./agentlab models-test     # with an Ollama (or Lemonade Server) on the host: pull -> ModelConfig -> agent turn -> delete, through the platform
 ./agentlab agents-test     # agent-manager as the signed-in user: create -> ready -> update -> delete via muster; a viewer's create is Forbidden; the ServiceAccount holds no RBAC
 ```
 
@@ -463,45 +463,53 @@ One Lemonade-specific note: its FastFlowLM models default to a 4096-token
 context, which agent system prompts plus tool schemas outgrow quickly —
 raise it once with `lemonade config set ctx_size=16384`.
 
-#### Managed models: model-manager + host Ollama
+#### Managed models: model-manager + the host's Ollama or Lemonade Server
 
 `extraModels` wires an endpoint and manages nothing: pulling or removing a
 model is CLI-on-host, and nothing shows what is downloaded or loaded. The
 managed mode puts the umbrella's **model-manager** component
 ([giantswarm/model-manager](https://github.com/giantswarm/model-manager),
-the service behind the Model Manager epic) in front of the host's Ollama —
-inventory of downloaded and loaded models, pull with progress, load/unload,
-delete, and every pulled model wired into kagent automatically as a
-`ModelConfig` with the native, keyless `Ollama` provider. One block:
+the service behind the Model Manager epic) in front of the host's model
+server — an Ollama, or a Lemonade Server (FastFlowLM on AMD Ryzen AI NPUs,
+llama.cpp on GPU/CPU) — inventory of downloaded and loaded models, pull with
+progress, load/unload, delete, and every pulled model wired into kagent
+automatically as a `ModelConfig`: the native, keyless `Ollama` provider for
+Ollama, kagent's `OpenAI` provider against Lemonade's `/api/v1` (with a
+placeholder key) for Lemonade. One block:
 
 ```yaml
 platform:
   agents: true                 # required: the ModelConfigs land in kagent
   modelManager:
     enabled: true
-    backend: ollama            # the lab's only backend (kserve needs GPUs + KServe)
-    # endpoint: http://192.168.1.10:11434   # optional; empty autodetects the host
+    backend: ollama            # or lemonade: a Lemonade Server on the host (kserve needs GPUs + KServe)
+    # endpoint: http://192.168.1.10:11434   # optional; empty autodetects the host (11434 ollama, 13305 lemonade)
 ```
 
-`agentlab configure` turns it on for a fresh config when an Ollama answers on
-this machine (`--defaults --model-manager[=false]` forces it either way; the
-interactive form asks). The endpoint is **autodetected at platform time** as
-`http://<kind docker network gateway>:11434` — `docker network inspect kind`,
-the same address the section above documents for `extraModels` — so nobody
-types `172.21.0.1`; set `endpoint` for an Ollama elsewhere on the LAN.
+`agentlab configure` turns it on for a fresh config when an Ollama — else a
+Lemonade Server — answers on this machine (`--defaults --model-manager[=false]`
+forces it either way, `--model-manager-backend ollama|lemonade` picks the
+server; the interactive form asks). The endpoint is **autodetected at
+platform time** as `http://<kind docker network gateway>:<port>` — 11434 for
+Ollama, 13305 for Lemonade; `docker network inspect kind`, the same address
+the section above documents for `extraModels` — so nobody types
+`172.21.0.1`; set `endpoint` for a server elsewhere on the LAN.
 
 What `agentlab platform` (or `up`) does with it:
 
 - **Preflight, not README traps.** Before the install, a short-lived pod in
-  the cluster fetches `<endpoint>/api/version`. If that fails, the boot stops
+  the cluster fetches `<endpoint>/api/version` (Ollama) or
+  `<endpoint>/api/v1/health` (Lemonade). If that fails, the boot stops
   right there with the diagnosis and the two fixes from the section above
-  spelled out — *connection refused* means Ollama listens on `127.0.0.1`
-  only (`OLLAMA_HOST=0.0.0.0`), a *timeout* means the host firewall drops
-  pod→host traffic on the docker bridge (allow TCP 11434 from the bridge
+  spelled out — *connection refused* means the server listens on `127.0.0.1`
+  only (`OLLAMA_HOST=0.0.0.0`; `lemonade config set host=0.0.0.0`), a
+  *timeout* means the host firewall drops pod→host traffic on the docker
+  bridge (allow the server's TCP port, 11434 or 13305, from the bridge
   subnets, inside `172.16.0.0/12`) — instead of a model-manager pod
   reporting an unhealthy backend after Helm's ten-minute wait.
-- **The umbrella's `components.model-manager`** goes on with the Ollama
-  backend (`model-manager.ollama.endpoint` = the detected address), its
+- **The umbrella's `components.model-manager`** goes on with the configured
+  backend (`model-manager.ollama.endpoint` or `model-manager.lemonade.endpoint`
+  = the detected address), its
   agentgateway **route** at `https://agentgateway.<domain>/model-manager`
   and, unlike the lab's kagent route, **JWT validation on**: the gateway
   verifies the caller's Dex token against the lab Dex (JWKS over TLS at
@@ -524,8 +532,12 @@ What `agentlab platform` (or `up`) does with it:
 The proof is `agentlab models-test` (`--model` picks another small,
 **tool-calling capable** model; the default `qwen2.5:0.5b` is ~400 MB —
 `smollm2:135m` pulls fine and then fails every agent turn with "does not
-support tools"). It goes through the platform path only and leaves nothing
-behind:
+support tools"). On the lemonade backend `--model` is required and names a
+Lemonade catalog model whose recipe backend is installed on the host — an
+`*-FLM` model on an AMD NPU host (`lemonade list`) — and the ModelConfig it
+checks is kagent's `OpenAI` provider against `<gateway>:13305/api/v1`; the
+model is deleted at the end, so pick one you can re-pull. It goes through
+the platform path only and leaves nothing behind:
 
 ```
 agentlab models-test

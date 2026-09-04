@@ -108,7 +108,8 @@ components:
 {{- end }}
 {{- if .ModelManagerEnabled }}
   # Managed models (platform.modelManager): the umbrella's model-manager
-  # dependency with the Ollama backend (its own values are in the
+  # dependency with the configured backend — the host's Ollama, or a Lemonade
+  # Server (its own values are in the
   # `model-manager:` block below). The route exposes its REST API on the
   # edge at https://agentgateway.{{ .Platform.Domain }}/model-manager — the
   # chart's Backstage app-config points the portal backend there
@@ -318,7 +319,8 @@ agent-manager:
 {{- if .ModelManagerEnabled }}
 # The model-manager chart's own values (the umbrella pins the Service name,
 # the kagent namespace, the muster registration and — since the identity
-# change — OAuth against global.identity in its contract). The Ollama backend
+# change — OAuth against global.identity in its contract). The backend (the
+# host's Ollama, or a Lemonade Server — FastFlowLM on AMD Ryzen AI NPUs)
 # dials the host through the kind docker network's gateway — autodetected by
 # `agentlab platform` (platform.modelManager.endpoint overrides). Agent pods
 # dial the same address, so agentHost stays empty. Same audience story as
@@ -326,9 +328,14 @@ agent-manager:
 # audience for model-manager's downstream OAuth (the ModelConfigs it writes
 # as the caller) to pass the kind apiserver.
 model-manager:
-  backend: ollama
+  backend: {{ .ModelManagerBackend }}
+{{- if eq .ModelManagerBackend "lemonade" }}
+  lemonade:
+    endpoint: {{ .ModelManagerEndpoint | printf "%q" }}
+{{- else }}
   ollama:
     endpoint: {{ .ModelManagerEndpoint | printf "%q" }}
+{{- end }}
   muster:
     mcpServer:
       auth:

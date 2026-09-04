@@ -117,7 +117,8 @@ func TestModelManagerValidate(t *testing.T) {
 		{"on with agents", ModelManager{Enabled: true, Backend: ModelManagerBackendOllama}, true, ""},
 		{"on, endpoint override", ModelManager{Enabled: true, Endpoint: "http://192.168.1.10:11434"}, true, ""},
 		{"on without agents", ModelManager{Enabled: true}, false, "requires platform.agents"},
-		{"kserve", ModelManager{Enabled: true, Backend: "kserve"}, true, "supports \"ollama\" only"},
+		{"lemonade", ModelManager{Enabled: true, Backend: ModelManagerBackendLemonade}, true, ""},
+		{"kserve", ModelManager{Enabled: true, Backend: "kserve"}, true, "supports \"ollama\" or \"lemonade\""},
 		{"bad endpoint", ModelManager{Enabled: true, Endpoint: "172.21.0.1:11434"}, true, "http(s) URL"},
 	}
 	for _, tc := range cases {
@@ -151,5 +152,19 @@ func TestModelManagerEnabledNeedsPlatformAndAgents(t *testing.T) {
 	}
 	if cfg.ModelManagerBaseURL() != "https://agentgateway.127.0.0.1.nip.io/model-manager" {
 		t.Fatalf("unexpected model-manager base URL %q", cfg.ModelManagerBaseURL())
+	}
+}
+
+func TestModelManagerBackendServers(t *testing.T) {
+	ollama := ModelManager{Backend: ModelManagerBackendOllama}
+	if ollama.Port() != OllamaPort || ollama.ServerName() != "Ollama" {
+		t.Fatalf("ollama: port %d server %q", ollama.Port(), ollama.ServerName())
+	}
+	if def := (ModelManager{}); def.Port() != OllamaPort {
+		t.Fatalf("an unset backend must default to Ollama's port, got %d", def.Port())
+	}
+	lemonade := ModelManager{Backend: ModelManagerBackendLemonade}
+	if lemonade.Port() != LemonadePort || lemonade.ServerName() != "Lemonade Server" {
+		t.Fatalf("lemonade: port %d server %q", lemonade.Port(), lemonade.ServerName())
 	}
 }

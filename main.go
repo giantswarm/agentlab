@@ -146,17 +146,26 @@ func reportPortChanges(changes []config.PortChange) {
 }
 
 // detectModelManager turns managed models on for a FRESH configuration when
-// an Ollama answers on this machine: the lab then installs the umbrella's
-// model-manager component with the Ollama backend. Reachability from pods
-// (bind address, firewall) is checked at platform time, with the fixes.
+// an Ollama — else a Lemonade Server — answers on this machine: the lab then
+// installs the umbrella's model-manager component with that backend.
+// Reachability from pods (bind address, firewall) is checked at platform
+// time, with the fixes.
 func detectModelManager(cfg *config.Config) {
-	version, ok := lab.DetectHostOllama()
-	if !ok {
-		return
+	switch version, ok := lab.DetectHostOllama(); {
+	case ok:
+		cfg.Platform.ModelManager.Enabled = true
+		cfg.Platform.ModelManager.Backend = config.ModelManagerBackendOllama
+		fmt.Printf("Found Ollama %s on this machine: managed models (model-manager, ollama backend) enabled.\n", version)
+	default:
+		version, ok := lab.DetectHostLemonade()
+		if !ok {
+			return
+		}
+		cfg.Platform.ModelManager.Enabled = true
+		cfg.Platform.ModelManager.Backend = config.ModelManagerBackendLemonade
+		fmt.Printf("Found Lemonade Server %s on this machine: managed models (model-manager, lemonade backend) enabled.\n", version)
 	}
-	cfg.Platform.ModelManager.Enabled = true
-	fmt.Printf("Found Ollama %s on this machine: managed models (model-manager, Ollama backend) enabled.\n", version)
-	fmt.Printf("Turn it off with `agentlab configure --defaults --model-manager=false`.\n\n")
+	fmt.Printf("Turn it off with `agentlab configure --defaults --model-manager=false`; `--model-manager-backend ollama|lemonade` picks the server.\n\n")
 }
 
 // accessibleMode switches huh to its prompt-per-question accessible mode;
@@ -168,6 +177,7 @@ func accessibleMode() bool {
 func configureCmd() *cobra.Command {
 	var defaults, accessible bool
 	var platform, agents, observability, backstage, modelManager bool
+	var modelManagerBackend string
 	cmd := &cobra.Command{
 		Use:   "configure",
 		Short: "Ask for the lab configuration interactively and save agentlab.yaml",
@@ -198,6 +208,9 @@ func configureCmd() *cobra.Command {
 				}
 				if cmd.Flags().Changed("model-manager") {
 					cfg.Platform.ModelManager.Enabled = modelManager
+				}
+				if cmd.Flags().Changed("model-manager-backend") {
+					cfg.Platform.ModelManager.Backend = modelManagerBackend
 				}
 				if cmd.Flags().Changed("backstage") {
 					cfg.Backstage.Enabled = backstage
@@ -239,7 +252,8 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&agents, "agents", false, "with --defaults: enable/disable the agents runtime (kagent, part of the platform install)")
 	cmd.Flags().BoolVar(&observability, "observability", false, "with --defaults: enable/disable the observability stack (Prometheus + mcp-prometheus)")
 	cmd.Flags().BoolVar(&backstage, "backstage", false, "with --defaults: enable/disable Backstage (implies the platform)")
-	cmd.Flags().BoolVar(&modelManager, "model-manager", false, "with --defaults: enable/disable managed models (the model-manager component with the host Ollama; needs agents)")
+	cmd.Flags().BoolVar(&modelManager, "model-manager", false, "with --defaults: enable/disable managed models (the model-manager component in front of the host's Ollama or Lemonade Server; needs agents)")
+	cmd.Flags().StringVar(&modelManagerBackend, "model-manager-backend", "", "with --defaults: the host model server model-manager proxies, ollama (port 11434) or lemonade (a Lemonade Server, port 13305)")
 	cmd.Flags().BoolVar(&accessible, "accessible", false, "prompt-per-question form mode (for screen readers and plain terminals)")
 	return cmd
 }
@@ -329,7 +343,7 @@ func modelsTestCmd() *cobra.Command {
 			return lab.ModelsTest(cfg, email, model)
 		},
 	}
-	cmd.Flags().StringVar(&model, "model", lab.ModelsTestModel, "the Ollama model to pull and delete (small and tool-calling capable)")
+	cmd.Flags().StringVar(&model, "model", lab.ModelsTestModel, "the model to pull and delete: an Ollama tag on the ollama backend, or a Lemonade catalog name whose recipe backend is installed on the host on the lemonade backend (small and tool-calling capable; `lemonade list`)")
 	return cmd
 }
 

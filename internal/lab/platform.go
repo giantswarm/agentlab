@@ -276,8 +276,9 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 		}
 	}
 
-	// Managed models: the Ollama endpoint is detected from the kind docker
-	// network and proven reachable from inside the cluster BEFORE the
+	// Managed models: the host model server's endpoint (Ollama, or a Lemonade
+	// Server) is detected from the kind docker network and proven reachable
+	// from inside the cluster BEFORE the
 	// install, so a host-side misconfiguration (bind address, firewall) fails
 	// here with its fix instead of after helm's ten-minute wait.
 	modelManagerEndpoint := ""
@@ -287,8 +288,8 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 			return err
 		}
 		modelManagerEndpoint = endpoint
-		step("Checking host Ollama is reachable from pods (%s)", endpoint)
-		if err := preflightOllama(cfg, endpoint); err != nil {
+		step("Checking the host %s is reachable from pods (%s)", cfg.Platform.ModelManager.ServerName(), endpoint)
+		if err := preflightModelServer(cfg, endpoint); err != nil {
 			return err
 		}
 	}

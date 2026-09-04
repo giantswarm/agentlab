@@ -142,8 +142,9 @@ type Platform struct {
 	// CRs by `agentlab platform`; entries removed here are pruned on the next
 	// run. Inert unless agents are enabled.
 	ExtraModels []ExtraModel `yaml:"extraModels,omitempty"`
-	// Managed models: the umbrella's model-manager component with the Ollama
-	// backend, proxying the Ollama that runs on the lab host — pull, load,
+	// Managed models: the umbrella's model-manager component with the ollama
+	// or lemonade backend, proxying the model server that runs on the lab
+	// host (Ollama; Lemonade Server — FastFlowLM on AMD Ryzen AI NPUs) — pull, load,
 	// unload and delete models from the portal (or as x_model-manager_*
 	// tools through muster), each pulled model wired into kagent as a
 	// keyless ModelConfig automatically. Complements extraModels, which
@@ -154,27 +155,59 @@ type Platform struct {
 // ModelManager configures the umbrella's model-manager component in the lab.
 type ModelManager struct {
 	// On, `agentlab platform` enables components.model-manager with the
-	// Ollama backend, its agentgateway route (JWT-validated: the portal
+	// configured backend, its agentgateway route (JWT-validated: the portal
 	// backend forwards the user's Dex token) and the muster registration.
-	// `agentlab configure` turns it on for a fresh config when an Ollama
-	// answers on the host.
+	// `agentlab configure` turns it on for a fresh config when an Ollama (else
+	// a Lemonade Server) answers on the host.
 	Enabled bool `yaml:"enabled"`
-	// The serving backend. The lab supports `ollama` only: kserve needs
-	// GPU nodes and a KServe install this kind cluster does not have.
+	// The serving backend on the lab host: `ollama` (the default) or
+	// `lemonade` (a Lemonade Server — FastFlowLM on AMD Ryzen AI NPUs, llama.cpp
+	// on GPU/CPU). kserve needs GPU nodes and a KServe install this kind
+	// cluster does not have.
 	Backend string `yaml:"backend,omitempty"`
-	// The Ollama API base URL as pods reach it. Empty autodetects
-	// http://<kind docker network gateway>:11434 at platform time — the
-	// same address the README documents for extraModels (`docker network
-	// inspect kind`). Set it for an Ollama elsewhere on the LAN.
+	// The model server's base URL as pods reach it. Empty autodetects
+	// http://<kind docker network gateway>:<port> at platform time — 11434 for
+	// Ollama, 13305 for Lemonade; the same address the README documents for
+	// extraModels (`docker network inspect kind`). Set it for a server
+	// elsewhere on the LAN.
 	Endpoint string `yaml:"endpoint,omitempty"`
 }
 
-// ModelManagerBackendOllama is the one backend the lab runs.
-const ModelManagerBackendOllama = "ollama"
+// The serving backends the lab runs against a server on the host, which
+// model-manager reaches through the kind docker network's gateway.
+const (
+	// ModelManagerBackendOllama is a host Ollama (the default).
+	ModelManagerBackendOllama = "ollama"
+	// ModelManagerBackendLemonade is a host Lemonade Server (lemonade-server.ai):
+	// FastFlowLM on AMD Ryzen AI NPUs, llama.cpp on GPU and CPU.
+	ModelManagerBackendLemonade = "lemonade"
+)
 
-// OllamaPort is Ollama's default API port, the one the autodetected endpoint
-// assumes on the host.
-const OllamaPort = 11434
+// ModelManagerBackends lists the backends the lab accepts, the default first.
+var ModelManagerBackends = []string{ModelManagerBackendOllama, ModelManagerBackendLemonade}
+
+// OllamaPort and LemonadePort are the servers' default API ports, the ones the
+// autodetected endpoint assumes on the host.
+const (
+	OllamaPort   = 11434
+	LemonadePort = 13305
+)
+
+// Port is the default API port of the configured backend's server.
+func (m ModelManager) Port() int {
+	if m.Backend == ModelManagerBackendLemonade {
+		return LemonadePort
+	}
+	return OllamaPort
+}
+
+// ServerName is the configured backend's server as messages name it.
+func (m ModelManager) ServerName() string {
+	if m.Backend == ModelManagerBackendLemonade {
+		return "Lemonade Server"
+	}
+	return "Ollama"
+}
 
 // ExtraModel is one additional kagent ModelConfig. API keys are NOT config:
 // APIKeyEnv only names the host env var read at deploy time — the value lands
@@ -556,11 +589,11 @@ var httpURLRe = regexp.MustCompile(`^https?://[^/]+`)
 // Validate checks the model-manager block; agents reports whether the kagent
 // runtime is on (model-manager wires ModelConfigs into it).
 func (m ModelManager) Validate(agents bool) error {
-	if m.Backend != "" && m.Backend != ModelManagerBackendOllama {
-		return fmt.Errorf("backend %q: the lab supports %q only (kserve needs GPU nodes and KServe)", m.Backend, ModelManagerBackendOllama)
+	if m.Backend != "" && m.Backend != ModelManagerBackendOllama && m.Backend != ModelManagerBackendLemonade {
+		return fmt.Errorf("backend %q: the lab supports %q or %q (kserve needs GPU nodes and KServe)", m.Backend, ModelManagerBackendOllama, ModelManagerBackendLemonade)
 	}
 	if m.Endpoint != "" && !httpURLRe.MatchString(m.Endpoint) {
-		return fmt.Errorf("endpoint %q: must be an http(s) URL, e.g. http://172.21.0.1:%d", m.Endpoint, OllamaPort)
+		return fmt.Errorf("endpoint %q: must be an http(s) URL, e.g. http://172.21.0.1:%d", m.Endpoint, m.Port())
 	}
 	if m.Enabled && !agents {
 		return fmt.Errorf("requires platform.agents (model-manager wires pulled models into kagent ModelConfigs)")
