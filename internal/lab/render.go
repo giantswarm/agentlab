@@ -48,12 +48,19 @@ type tmplData struct {
 	AllGroups           []string
 	KubernetesClientSecret,
 	AgentPlatformClientSecret string
-	// ModelManagerEnabled mirrors cfg.ModelManagerEnabled(); the endpoint is
-	// the Ollama URL model-manager dials (autodetected from the kind docker
-	// network — empty when the cluster does not exist yet, which only a
-	// pre-boot `agentlab render` sees; platformUp resolves it strictly).
+	// ModelManagerEnabled mirrors cfg.ModelManagerEnabled(); the backend is
+	// the first of platform.modelManager.backends and the endpoint the URL
+	// model-manager dials for it (autodetected from the kind docker network
+	// — empty when the cluster does not exist yet, which only a pre-boot
+	// `agentlab render` sees; platformUp resolves it strictly).
 	ModelManagerEnabled  bool
+	ModelManagerBackend  string
 	ModelManagerEndpoint string
+	// ExtraModels is what extra-models.yaml.tmpl renders: the
+	// platform.extraModels entries, plus — when the platform run computes
+	// them — the tool-calling models of the host backends model-manager does
+	// not front (hostmodels.go).
+	ExtraModels []config.ExtraModel
 	// The per-server OAuth sign-in fixture (oauthfixture.go): the MCPServer
 	// name the proofs sign in to and the protected endpoint it points at.
 	OAuthFixtureServer string
@@ -67,7 +74,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 	}
 	endpoint := ""
 	if cfg.ModelManagerEnabled() {
-		if endpoint, err = resolveModelManagerEndpoint(cfg); err != nil {
+		if endpoint, err = resolveBackendEndpoint(cfg, cfg.Platform.ModelManager.Primary()); err != nil {
 			note("model-manager endpoint left empty in the render: %v", err)
 			endpoint = ""
 		}
@@ -75,7 +82,9 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 	return &tmplData{
 		Config:                    cfg,
 		ModelManagerEnabled:       cfg.ModelManagerEnabled(),
+		ModelManagerBackend:       cfg.Platform.ModelManager.Primary(),
 		ModelManagerEndpoint:      endpoint,
+		ExtraModels:               cfg.Platform.ExtraModels,
 		OAuthFixtureServer:        oauthFixtureServer,
 		OAuthFixtureURL:           oauthFixtureURL,
 		CertsDir:                  certsDir,
@@ -121,11 +130,16 @@ var tmplFuncs = template.FuncMap{
 	},
 }
 
-// renderTemplate renders one embedded template with the config.
-func renderTemplate(cfg *config.Config, name string) ([]byte, error) {
+// renderTemplate renders one embedded template with the config; mutate, when
+// given, adjusts the template data first (the platform run hands
+// extra-models.yaml.tmpl the statically wired host models this way).
+func renderTemplate(cfg *config.Config, name string, mutate func(*tmplData)) ([]byte, error) {
 	data, err := newTmplData(cfg)
 	if err != nil {
 		return nil, err
+	}
+	if mutate != nil {
+		mutate(data)
 	}
 	t, err := template.New(name).Funcs(tmplFuncs).Option("missingkey=error").
 		ParseFS(templatesFS, "templates/"+name)
@@ -171,11 +185,16 @@ var manifests = map[string]struct {
 // exactly when config or certs change and an unchanged re-apply is a pure
 // no-op.
 func renderManifest(cfg *config.Config, tmplName string) ([]byte, string, error) {
+	return renderManifestWith(cfg, tmplName, nil)
+}
+
+// renderManifestWith is renderManifest with a template-data mutator.
+func renderManifestWith(cfg *config.Config, tmplName string, mutate func(*tmplData)) ([]byte, string, error) {
 	spec, ok := manifests[tmplName]
 	if !ok {
 		return nil, "", fmt.Errorf("template %s is not in the manifests table", tmplName)
 	}
-	content, err := renderTemplate(cfg, tmplName)
+	content, err := renderTemplate(cfg, tmplName, mutate)
 	if err != nil {
 		return nil, "", err
 	}
@@ -204,12 +223,24 @@ func renderManifest(cfg *config.Config, tmplName string) ([]byte, string, error)
 
 // RenderAll renders every manifest into state/ for inspection. The stamped
 // manifest (dex) needs the certs, so they are generated first if missing.
+// The extra models include the statically wired host models when the host
+// servers answer (best effort: the platform run is where a failure counts).
 func RenderAll(cfg *config.Config) error {
 	if err := GenCerts(cfg.Platform.Domain, false); err != nil {
 		return err
 	}
+	extraModels := cfg.Platform.ExtraModels
+	if models, _, err := allExtraModels(cfg, nil); err == nil {
+		extraModels = models
+	} else {
+		note("extra-models.yaml rendered without the host backends' models: %v", err)
+	}
 	for _, tmpl := range slices.Sorted(maps.Keys(manifests)) {
-		if _, _, err := renderManifest(cfg, tmpl); err != nil {
+		var mutate func(*tmplData)
+		if tmpl == extraModelsTemplate {
+			mutate = func(d *tmplData) { d.ExtraModels = extraModels }
+		}
+		if _, _, err := renderManifestWith(cfg, tmpl, mutate); err != nil {
 			return err
 		}
 	}

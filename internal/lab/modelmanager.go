@@ -12,14 +12,19 @@ import (
 )
 
 // The model-manager component (platform.modelManager in agentlab.yaml): the
-// umbrella's `model-manager` dependency with the Ollama backend, proxying the
-// Ollama that runs on the lab host. Pods reach the host only through the kind
-// docker network's gateway — the same address the README documents for
-// extraModels — so the endpoint is detected from `docker network inspect
-// kind` rather than asked for. Everything that can go wrong is host-side
-// plumbing (bind address, firewall), which preflightOllama turns into an
-// early, actionable failure instead of a model-manager pod that reports an
-// unhealthy backend after a ten-minute install.
+// umbrella's `model-manager` dependency in front of the model servers that
+// run on the lab host — an Ollama (backend ollama), a Lemonade Server
+// (backend lemonade: FastFlowLM on AMD Ryzen AI NPUs, llama.cpp on GPU/CPU).
+// model-manager fronts ONE backend per instance today, the first of
+// platform.modelManager.backends; the further ones are wired statically
+// (hostmodels.go) until it is multi-backend. Pods reach the host only through
+// the kind docker network's gateway — the same address the README documents
+// for extraModels — so every endpoint is detected from `docker network
+// inspect kind` plus the server's default port rather than asked for.
+// Everything that can go wrong is host-side plumbing (bind address,
+// firewall), which preflightHostServer turns into an early, actionable
+// failure instead of a model-manager pod that reports an unhealthy backend
+// after a ten-minute install.
 
 // modelManagerMCPServer is the MCPServer CR name the model-manager chart
 // registers with muster (model-manager.muster.mcpServer.name, the chart
@@ -29,21 +34,38 @@ const modelManagerMCPServer = "model-manager"
 // kindDockerNetwork is the docker network kind creates its nodes on.
 const kindDockerNetwork = "kind"
 
-// ollamaProbeImage runs the in-cluster reachability probe: busybox wget in
-// the alpine image the umbrella already ships elsewhere (small, present in
-// the host cache after the first run, side-loaded before the probe pod).
-const ollamaProbeImage = "gsoci.azurecr.io/giantswarm/alpine:3.22.1"
+// probeImage runs the in-cluster reachability probe: busybox wget in the
+// alpine image the umbrella already ships elsewhere (small, present in the
+// host cache after the first run, side-loaded before the probe pod).
+const probeImage = "gsoci.azurecr.io/giantswarm/alpine:3.22.1"
 
-// ollamaVersionRe matches the {"version":"..."} document /api/version answers.
-var ollamaVersionRe = regexp.MustCompile(`\{\s*"version"\s*:\s*"[^"]*"\s*\}`)
+// The version-answering paths of the servers: Ollama's whole document is
+// {"version":"..."}, Lemonade's health document carries a version field.
+const (
+	ollamaVersionPath   = "/api/version"
+	lemonadeHealthPath  = "/api/v1/health"
+	lemonadeModelsPath  = "/api/v1/models"
+	lemonadeAPIBasePath = "/api/v1"
+)
 
-// DetectHostOllama probes the host's own Ollama on loopback and reports its
-// version. It answers the configure-time question "is there an Ollama on
-// this machine at all?" — reachability from pods (bind address, firewall) is
-// preflightOllama's job at platform time.
-func DetectHostOllama() (version string, ok bool) {
+// versionFieldRe matches the "version":"..." field both servers answer with.
+var versionFieldRe = regexp.MustCompile(`"version"\s*:\s*"[^"]*"`)
+
+// healthPath is the version-answering path of a backend's server.
+func healthPath(backend string) string {
+	if backend == config.ModelManagerBackendLemonade {
+		return lemonadeHealthPath
+	}
+	return ollamaVersionPath
+}
+
+// detectHostServer asks a model server at base for its version — the
+// configure-time question "is there one on this machine at all?" —
+// reachability from pods (bind address, firewall) is preflightHostServer's
+// job at platform time.
+func detectHostServer(backend, base string) (version string, ok bool) {
 	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/api/version", config.OllamaPort))
+	resp, err := client.Get(base + healthPath(backend))
 	if err != nil {
 		return "", false
 	}
@@ -54,10 +76,15 @@ func DetectHostOllama() (version string, ok bool) {
 	var v struct {
 		Version string `json:"version"`
 	}
-	if err := decodeJSONBody(resp, &v); err != nil {
+	if err := decodeJSONBody(resp, &v); err != nil || v.Version == "" {
 		return "", false
 	}
 	return v.Version, true
+}
+
+// loopbackBase is where a server on this machine answers on its default port.
+func loopbackBase(backend string) string {
+	return fmt.Sprintf("http://127.0.0.1:%d", config.BackendPort(backend))
 }
 
 // kindGatewayIP returns the IPv4 gateway of the kind docker network — the
@@ -77,75 +104,117 @@ func kindGatewayIP() (string, error) {
 	return "", fmt.Errorf("docker network %q has no IPv4 gateway", kindDockerNetwork)
 }
 
-// resolveModelManagerEndpoint is the Ollama endpoint model-manager dials: the
-// configured override, else http://<kind gateway>:11434. The kind network
-// exists once the cluster does, so callers that render before a boot get an
-// error they may tolerate (render) or must not (platform).
-func resolveModelManagerEndpoint(cfg *config.Config) (string, error) {
-	if ep := cfg.Platform.ModelManager.Endpoint; ep != "" {
+// resolveBackendEndpoint is the URL model-manager (or an agent pod) dials for
+// a backend: the configured override, else http://<kind gateway>:<the
+// server's default port>. The kind network exists once the cluster does, so
+// callers that render before a boot get an error they may tolerate (render)
+// or must not (platform).
+func resolveBackendEndpoint(cfg *config.Config, backend string) (string, error) {
+	if ep := cfg.Platform.ModelManager.EndpointFor(backend); ep != "" {
 		return strings.TrimSuffix(ep, "/"), nil
 	}
 	gw, err := kindGatewayIP()
 	if err != nil {
-		return "", fmt.Errorf("autodetecting the Ollama endpoint: %w (set platform.modelManager.endpoint to skip the detection)", err)
+		return "", fmt.Errorf("autodetecting the %s endpoint: %w (set platform.modelManager.endpoints.%s to skip the detection)",
+			config.BackendServerName(backend), err, backend)
 	}
-	return fmt.Sprintf("http://%s:%d", gw, config.OllamaPort), nil
+	return fmt.Sprintf("http://%s:%d", gw, config.BackendPort(backend)), nil
 }
 
-// preflightOllama proves host Ollama answers from INSIDE the cluster before
-// the platform install waits ten minutes on a model-manager whose backend is
-// unreachable. A short-lived pod fetches <endpoint>/api/version; the two
-// known host-side failures are spelled out with their fixes: the server
-// bound to 127.0.0.1 (connection refused from the bridge) and a host
-// firewall dropping pod->host traffic on the docker bridge (timeout).
-func preflightOllama(cfg *config.Config, endpoint string) error {
+// resolveBackendEndpoints resolves every configured backend's endpoint.
+func resolveBackendEndpoints(cfg *config.Config) (map[string]string, error) {
+	endpoints := map[string]string{}
+	for _, b := range cfg.Platform.ModelManager.Backends {
+		ep, err := resolveBackendEndpoint(cfg, b)
+		if err != nil {
+			return nil, err
+		}
+		endpoints[b] = ep
+	}
+	return endpoints, nil
+}
+
+// bindFix is the host-side fix for a server listening on loopback only.
+func bindFix(backend string) string {
+	if backend == config.ModelManagerBackendLemonade {
+		return "  - bind Lemonade to every interface, not loopback: `lemonade config set host=0.0.0.0`\n" +
+			"    (host in ~/.config/lemonade/config.json), then restart lemond"
+	}
+	return "  - bind Ollama to every interface, not loopback: OLLAMA_HOST=0.0.0.0 (systemd: an\n" +
+		"    Environment= drop-in on ollama.service), then restart it"
+}
+
+// preflightHostServer proves a host model server answers from INSIDE the
+// cluster before the platform install waits ten minutes on a model-manager
+// whose backend is unreachable (or wires ModelConfigs to a dead endpoint). A
+// short-lived pod fetches the server's version document; the two known
+// host-side failures are spelled out with their fixes: the server bound to
+// 127.0.0.1 (connection refused from the bridge) and a host firewall
+// dropping pod->host traffic on the docker bridge (timeout).
+func preflightHostServer(cfg *config.Config, backend, endpoint string) error {
+	server := config.BackendServerName(backend)
 	// The probe image goes host cache -> node like every lab image, so the
 	// pod never waits on an in-node pull (best-effort: a miss falls back to
 	// the kubelet's pull under the pod-running timeout).
-	sideloadImages(cfg, hostPullImages([]string{ollamaProbeImage}))
-	const pod = "ollama-preflight"
+	sideloadImages(cfg, hostPullImages([]string{probeImage}))
+	pod := backend + "-preflight"
 	// A leftover from an interrupted run would make `kubectl run` refuse.
 	_ = runQuiet("kubectl", "-n", platformNamespace, "delete", "pod", pod, "--ignore-not-found", "--wait=false")
 	out, err := outputAll("kubectl", "-n", platformNamespace, "run", pod,
 		"--rm", "-i", "--quiet", "--restart=Never", "--pod-running-timeout=120s",
-		"--image="+ollamaProbeImage, "--image-pull-policy=IfNotPresent",
-		"--command", "--", "wget", "-qO-", "-T", "5", endpoint+"/api/version")
+		"--image="+probeImage, "--image-pull-policy=IfNotPresent",
+		"--command", "--", "wget", "-qO-", "-T", "5", endpoint+healthPath(backend))
 	if err == nil && strings.Contains(out, `"version"`) {
 		// The combined output also carries kubectl's own attach chatter
 		// ("warning: couldn't attach to pod ..., falling back to logs"), so
-		// pick the JSON document out of it.
+		// pick the version field out of it.
 		version := strings.TrimSpace(out)
-		if m := ollamaVersionRe.FindString(out); m != "" {
+		if m := versionFieldRe.FindString(out); m != "" {
 			version = m
 		}
-		note("host Ollama answers from inside the cluster: %s", version)
+		note("host %s answers from inside the cluster: %s", server, version)
 		return nil
 	}
 	out = strings.TrimSpace(out)
 	reason := "the probe pod could not fetch it"
-	fixes := "  - bind Ollama to every interface, not loopback: OLLAMA_HOST=0.0.0.0 (systemd: an\n" +
-		"    Environment= drop-in on ollama.service), then restart it\n" +
-		"  - allow TCP " + fmt.Sprint(config.OllamaPort) + " from the docker bridge subnets (they fall inside\n" +
+	fixes := bindFix(backend) + "\n" +
+		"  - allow TCP " + fmt.Sprint(config.BackendPort(backend)) + " from the docker bridge subnets (they fall inside\n" +
 		"    172.16.0.0/12) through the host firewall — pod->host traffic arrives on the\n" +
 		"    bridge like any other inbound connection"
 	switch {
 	case strings.Contains(out, "refused"):
-		reason = "connection refused — Ollama is not listening on the bridge address (the usual\n  cause: OLLAMA_HOST left at 127.0.0.1)"
+		reason = fmt.Sprintf("connection refused — %s is not listening on the bridge address (the usual\n  cause: it is bound to 127.0.0.1)", server)
 	case strings.Contains(out, "timed out"), strings.Contains(out, "timeout"):
-		reason = "connection timed out — the host firewall drops pod->host traffic on the docker\n  bridge (the request never reaches Ollama)"
+		reason = "connection timed out — the host firewall drops pod->host traffic on the docker\n  bridge (the request never reaches the server)"
 	}
-	return fmt.Errorf("host Ollama is not reachable from pods at %s: %s.\n"+
+	return fmt.Errorf("host %s is not reachable from pods at %s: %s.\n"+
 		"  Fixes (README, \"Local backends on the lab host\"):\n%s\n"+
-		"  Then re-run `agentlab platform`, or set platform.modelManager.enabled: false.\n"+
-		"  Probe output: %.300s", endpoint, reason, fixes, out)
+		"  Then re-run `agentlab platform`, or drop %s from platform.modelManager.backends\n"+
+		"  (`agentlab configure --defaults` rewrites the list from what answers on this machine).\n"+
+		"  Probe output: %.300s", server, endpoint, reason, fixes, backend, out)
 }
 
-// modelManagerHint is the platform-up summary line for the component.
-func modelManagerHint(cfg *config.Config, endpoint string) string {
+// modelManagerHint is the platform-up summary for managed models: the backend
+// model-manager fronts, and the further host servers wired statically.
+func modelManagerHint(cfg *config.Config, endpoints map[string]string, wired []config.ExtraModel) string {
 	if !cfg.ModelManagerEnabled() {
 		return "  Model manager is disabled (platform.modelManager in agentlab.yaml)."
 	}
-	return fmt.Sprintf("  Model manager: Ollama backend at %s; REST %s/api/v1 (Dex token required),\n"+
+	mm := cfg.Platform.ModelManager
+	primary := mm.Primary()
+	s := fmt.Sprintf("  Model manager: %s backend (%s) at %s; REST %s/api/v1 (Dex token required),\n"+
 		"  MCP tools x_model-manager_* through muster; the portal's Models tab manages the same models.",
-		endpoint, cfg.ModelManagerBaseURL())
+		primary, config.BackendServerName(primary), endpoints[primary], cfg.ModelManagerBaseURL())
+	for _, b := range mm.Secondary() {
+		names := make([]string, 0, len(wired))
+		for _, m := range wired {
+			if strings.HasPrefix(m.Name, b+"-") {
+				names = append(names, m.Name)
+			}
+		}
+		s += fmt.Sprintf("\n  %s at %s: %d tool-calling model(s) wired as ModelConfigs (%s) — statically,\n"+
+			"  model-manager fronts one backend per instance today (agentlab#60).",
+			config.BackendServerName(b), endpoints[b], len(names), strings.Join(names, ", "))
+	}
+	return s
 }

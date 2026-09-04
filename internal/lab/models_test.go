@@ -22,7 +22,7 @@ func TestExtraModelsTemplate(t *testing.T) {
 		{Name: "local-llama", Provider: "Ollama", Model: "llama3.3", BaseURL: "http://192.168.1.10:11434"},
 		{Name: "claude-proxy", Provider: "Anthropic", Model: "claude-haiku-4-5", BaseURL: "https://proxy.example.com"},
 	}
-	raw, err := renderTemplate(cfg, "extra-models.yaml.tmpl")
+	raw, err := renderTemplate(cfg, "extra-models.yaml.tmpl", nil)
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestExtraModelsTemplate(t *testing.T) {
 	// No extras -> comments only, nothing to apply (the lifecycle skips
 	// kubectl apply on an empty list).
 	cfg.Platform.ExtraModels = nil
-	raw, err = renderTemplate(cfg, "extra-models.yaml.tmpl")
+	raw, err = renderTemplate(cfg, "extra-models.yaml.tmpl", nil)
 	if err != nil {
 		t.Fatalf("render empty: %v", err)
 	}

@@ -1,5 +1,8 @@
 # Extra kagent ModelConfigs beyond the chart-rendered default: one CR per
-# platform.extraModels entry in agentlab.yaml. Key material never renders
+# platform.extraModels entry in agentlab.yaml, plus one per downloaded
+# tool-calling model of every host model server model-manager does not front
+# (platform.modelManager.backends beyond the first — wired statically until
+# model-manager is multi-backend). Key material never renders
 # here — each CR references the Secret kagent-<name>, which `agentlab
 # platform` creates from the entry's apiKeyEnv on the host (or with a
 # placeholder for keyless endpoints: the kagent ADK runtime requires the
@@ -7,7 +10,7 @@
 # The managed-by label scopes pruning: entries removed from agentlab.yaml
 # are deleted on the next run; the chart's default ModelConfig is never
 # touched.
-{{- range .Platform.ExtraModels }}
+{{- range .ExtraModels }}
 ---
 apiVersion: kagent.dev/v1alpha2
 kind: ModelConfig

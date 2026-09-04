@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -118,9 +119,8 @@ func loadOrCreateConfig() (*config.Config, error) {
 	}
 	fmt.Printf("No %s yet — let's create one.\n\n", config.File)
 	cfg = config.Default()
-	reportPortChanges(cfg.ChooseFreePorts())
-	detectModelManager(cfg)
-	if err := forms.Run(cfg, accessibleMode()); err != nil {
+	disc := discoverInto(cfg, nil, nil)
+	if err := forms.Run(cfg, accessibleMode(), forms.Hints{ModelServers: disc.ModelServersHint()}); err != nil {
 		return nil, err
 	}
 	if err := cfg.Save(); err != nil {
@@ -130,33 +130,97 @@ func loadOrCreateConfig() (*config.Config, error) {
 	return cfg, nil
 }
 
-// reportPortChanges tells the user which default ports were already occupied
-// on this machine and what the fresh configuration uses instead. The form (or
-// the saved file) shows the adjusted numbers, but only this message explains
-// why they differ from the documented defaults.
+// discoverInto probes this machine (lab.Discover), prints what it found, and
+// applies it to cfg — on EVERY `agentlab configure` run, so agentlab.yaml
+// follows the host: the ports move off foreign listeners while no cluster
+// holds them (an existing cluster's mappings are fixed, so conflicts are
+// reported instead), and platform.modelManager.backends becomes the host
+// model servers that answer (pins from the --model-manager flags win).
+// Reachability from pods (bind address, firewall) is checked at platform
+// time, with the fixes.
+func discoverInto(cfg *config.Config, pinEnabled *bool, pinBackends []string) *lab.Discovery {
+	disc := lab.Discover(cfg)
+	fmt.Print(disc.Report(cfg))
+	fmt.Println()
+	applyPorts(cfg, disc)
+	before := cfg.Platform.ModelManager
+	cfg.Platform.ModelManager.ApplyDiscovered(disc.Backends(), cfg.Platform.Agents, pinEnabled, pinBackends)
+	reportModelManager(before, cfg.Platform.ModelManager, disc, cfg.Platform.Agents)
+	return disc
+}
+
+// applyPorts moves the configuration's host ports off foreign listeners when
+// no kind node of this configuration exists (fresh, or after `agentlab
+// down`); with the cluster in place its port mappings are fixed at node
+// creation, so a foreign listener on one of them is reported, not renumbered
+// around — the lab's own published ports never count as occupied.
+func applyPorts(cfg *config.Config, disc *lab.Discovery) {
+	if !disc.ClusterExists {
+		reportPortChanges(cfg.ChooseFreePorts(disc.ClusterPorts))
+		return
+	}
+	conflicts := cfg.PortConflicts(disc.ClusterPorts)
+	if len(conflicts) == 0 {
+		return
+	}
+	fmt.Println("Ports of the existing cluster are held by other processes on this machine:")
+	for _, c := range conflicts {
+		fmt.Printf("  %s\n", c)
+	}
+	fmt.Println("  The kind node cannot bind them while they are taken. Free the port, or `agentlab down`,")
+	fmt.Println("  re-run `agentlab configure` (which then picks free ones) and `agentlab up`.")
+	fmt.Println()
+}
+
+// reportPortChanges tells the user which ports were already occupied on this
+// machine and what the configuration uses instead. The form (or the saved
+// file) shows the adjusted numbers, but only this message explains why they
+// differ from the documented defaults.
 func reportPortChanges(changes []config.PortChange) {
 	if len(changes) == 0 {
 		return
 	}
-	fmt.Println("Some default ports are already in use on this machine; picked free ones:")
+	fmt.Println("Some ports are already in use on this machine; picked free ones:")
 	for _, ch := range changes {
 		fmt.Printf("  %s\n", ch)
 	}
 	fmt.Println()
 }
 
-// detectModelManager turns managed models on for a FRESH configuration when
-// an Ollama answers on this machine: the lab then installs the umbrella's
-// model-manager component with the Ollama backend. Reachability from pods
-// (bind address, firewall) is checked at platform time, with the fixes.
-func detectModelManager(cfg *config.Config) {
-	version, ok := lab.DetectHostOllama()
-	if !ok {
+// reportModelManager says what the discovery did to platform.modelManager.
+func reportModelManager(before, after config.ModelManager, disc *lab.Discovery, agents bool) {
+	var lines []string
+	if !slices.Equal(before.Backends, after.Backends) {
+		lines = append(lines, fmt.Sprintf("platform.modelManager.backends: %s -> %s", listOrNone(before.Backends), listOrNone(after.Backends)))
+	}
+	if before.Enabled != after.Enabled {
+		reason := "a host model server answers"
+		switch {
+		case !after.Enabled && !agents:
+			reason = "the agents runtime is off, and model-manager wires models into it"
+		case !after.Enabled:
+			reason = "no host model server answers on this machine"
+		}
+		lines = append(lines, fmt.Sprintf("platform.modelManager.enabled: %v -> %v (%s)", before.Enabled, after.Enabled, reason))
+	}
+	if len(lines) == 0 {
 		return
 	}
-	cfg.Platform.ModelManager.Enabled = true
-	fmt.Printf("Found Ollama %s on this machine: managed models (model-manager, Ollama backend) enabled.\n", version)
-	fmt.Printf("Turn it off with `agentlab configure --defaults --model-manager=false`.\n\n")
+	fmt.Println("Applied to the configuration:")
+	for _, l := range lines {
+		fmt.Printf("  %s\n", l)
+	}
+	if len(disc.Servers) > 0 && !after.Enabled && agents {
+		fmt.Println("  (managed models pinned off — `agentlab configure --defaults --model-manager` turns them on)")
+	}
+	fmt.Println()
+}
+
+func listOrNone(items []string) string {
+	if len(items) == 0 {
+		return "(none)"
+	}
+	return "[" + strings.Join(items, ", ") + "]"
 }
 
 // accessibleMode switches huh to its prompt-per-question accessible mode;
@@ -168,46 +232,51 @@ func accessibleMode() bool {
 func configureCmd() *cobra.Command {
 	var defaults, accessible bool
 	var platform, agents, observability, backstage, modelManager bool
+	var modelManagerBackends []string
 	cmd := &cobra.Command{
 		Use:   "configure",
-		Short: "Ask for the lab configuration interactively and save agentlab.yaml",
+		Short: "Discover this machine, then ask for the lab configuration (or keep it with --defaults) and save agentlab.yaml",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := config.Load()
 			if errors.Is(err, os.ErrNotExist) {
-				// Only a FRESH config gets its ports moved off occupied
-				// defaults: an existing agentlab.yaml describes a cluster
-				// whose kind mappings are already fixed (and would count as
-				// "occupied" themselves while the lab runs). Same for the
-				// model-manager detection: an existing file keeps its choice.
 				cfg = config.Default()
-				reportPortChanges(cfg.ChooseFreePorts())
-				detectModelManager(cfg)
 			} else if err != nil {
 				return err
 			}
+			// The component flags first: what the discovery applies depends
+			// on them (managed models need the agents runtime).
+			if cmd.Flags().Changed("platform") {
+				cfg.Platform.Enabled = platform
+			}
+			if cmd.Flags().Changed("agents") {
+				cfg.Platform.Agents = agents
+			}
+			if cmd.Flags().Changed("observability") {
+				cfg.Platform.Observability = observability
+			}
+			if cmd.Flags().Changed("backstage") {
+				cfg.Backstage.Enabled = backstage
+				cfg.Normalize() // backstage implies the platform
+			}
+			var pinEnabled *bool
+			if cmd.Flags().Changed("model-manager") {
+				pinEnabled = &modelManager
+			}
+			var pinBackends []string
+			if cmd.Flags().Changed("model-manager-backends") {
+				pinBackends = modelManagerBackends
+			}
+			// Every run discovers the machine — an existing agentlab.yaml
+			// follows the host too: a server that appeared is added, one that
+			// is gone drops out, ports move while no cluster holds them.
+			disc := discoverInto(cfg, pinEnabled, pinBackends)
 			if defaults {
-				if cmd.Flags().Changed("platform") {
-					cfg.Platform.Enabled = platform
-				}
-				if cmd.Flags().Changed("agents") {
-					cfg.Platform.Agents = agents
-				}
-				if cmd.Flags().Changed("observability") {
-					cfg.Platform.Observability = observability
-				}
-				if cmd.Flags().Changed("model-manager") {
-					cfg.Platform.ModelManager.Enabled = modelManager
-				}
-				if cmd.Flags().Changed("backstage") {
-					cfg.Backstage.Enabled = backstage
-					cfg.Normalize() // backstage implies the platform
-				}
 				if err := cfg.Validate(); err != nil {
 					return err
 				}
 			} else {
-				if err := forms.Run(cfg, accessible || accessibleMode()); err != nil {
+				if err := forms.Run(cfg, accessible || accessibleMode(), forms.Hints{ModelServers: disc.ModelServersHint()}); err != nil {
 					return err
 				}
 			}
@@ -224,24 +293,37 @@ func configureCmd() *cobra.Command {
 				fmt.Printf("  extra model %s (%s %s)\n", m.Name, m.Provider, m.Model)
 			}
 			if cfg.ModelManagerEnabled() {
-				endpoint := cfg.Platform.ModelManager.Endpoint
-				if endpoint == "" {
-					endpoint = "autodetected from the kind docker network at platform time"
+				mm := cfg.Platform.ModelManager
+				primary := mm.Primary()
+				fmt.Printf("  models     model-manager fronts the host %s (%s backend, %s)\n",
+					config.BackendServerName(primary), primary, endpointNote(mm, primary))
+				for _, b := range mm.Secondary() {
+					fmt.Printf("             %s (%s): tool-calling models wired as ModelConfigs at platform time — statically, model-manager fronts one backend per instance today\n",
+						config.BackendServerName(b), endpointNote(mm, b))
 				}
-				fmt.Printf("  models     managed by model-manager (%s backend, %s)\n", cfg.Platform.ModelManager.Backend, endpoint)
 			}
 			fmt.Println("\nNext: agentlab up")
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&defaults, "defaults", false, "skip the form; keep current values (or the canonical defaults)")
-	cmd.Flags().BoolVar(&platform, "platform", false, "with --defaults: enable/disable the agent platform")
-	cmd.Flags().BoolVar(&agents, "agents", false, "with --defaults: enable/disable the agents runtime (kagent, part of the platform install)")
-	cmd.Flags().BoolVar(&observability, "observability", false, "with --defaults: enable/disable the observability stack (Prometheus + mcp-prometheus)")
-	cmd.Flags().BoolVar(&backstage, "backstage", false, "with --defaults: enable/disable Backstage (implies the platform)")
-	cmd.Flags().BoolVar(&modelManager, "model-manager", false, "with --defaults: enable/disable managed models (the model-manager component with the host Ollama; needs agents)")
+	cmd.Flags().BoolVar(&defaults, "defaults", false, "skip the form; keep current values (or the canonical defaults) plus what the discovery finds")
+	cmd.Flags().BoolVar(&platform, "platform", false, "enable/disable the agent platform")
+	cmd.Flags().BoolVar(&agents, "agents", false, "enable/disable the agents runtime (kagent, part of the platform install)")
+	cmd.Flags().BoolVar(&observability, "observability", false, "enable/disable the observability stack (Prometheus + mcp-prometheus)")
+	cmd.Flags().BoolVar(&backstage, "backstage", false, "enable/disable Backstage (implies the platform)")
+	cmd.Flags().BoolVar(&modelManager, "model-manager", false, "pin managed models on/off instead of following the host model servers the discovery finds (needs agents)")
+	cmd.Flags().StringSliceVar(&modelManagerBackends, "model-manager-backends", nil, "pin the host model servers, in order (ollama, lemonade; the first is model-manager's backend) instead of the ones the discovery finds")
 	cmd.Flags().BoolVar(&accessible, "accessible", false, "prompt-per-question form mode (for screen readers and plain terminals)")
 	return cmd
+}
+
+// endpointNote says where a backend is dialed: the configured override or
+// the autodetection.
+func endpointNote(mm config.ModelManager, backend string) string {
+	if ep := mm.EndpointFor(backend); ep != "" {
+		return ep
+	}
+	return fmt.Sprintf("autodetected as http://<kind docker gateway>:%d at platform time", config.BackendPort(backend))
 }
 
 func loginCmd() *cobra.Command {

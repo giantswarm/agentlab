@@ -276,20 +276,25 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 		}
 	}
 
-	// Managed models: the Ollama endpoint is detected from the kind docker
-	// network and proven reachable from inside the cluster BEFORE the
-	// install, so a host-side misconfiguration (bind address, firewall) fails
-	// here with its fix instead of after helm's ten-minute wait.
-	modelManagerEndpoint := ""
+	// Managed models: every host model server's endpoint is detected from
+	// the kind docker network and proven reachable from inside the cluster
+	// BEFORE the install, so a host-side misconfiguration (bind address,
+	// firewall) fails here with its fix instead of after helm's ten-minute
+	// wait — for the backend model-manager fronts and for the ones wired
+	// statically alike.
+	var backendEndpoints map[string]string
+	var wiredModels []config.ExtraModel
 	if cfg.ModelManagerEnabled() {
-		endpoint, err := resolveModelManagerEndpoint(cfg)
+		endpoints, err := resolveBackendEndpoints(cfg)
 		if err != nil {
 			return err
 		}
-		modelManagerEndpoint = endpoint
-		step("Checking host Ollama is reachable from pods (%s)", endpoint)
-		if err := preflightOllama(cfg, endpoint); err != nil {
-			return err
+		backendEndpoints = endpoints
+		for _, b := range cfg.Platform.ModelManager.Backends {
+			step("Checking host %s is reachable from pods (%s)", config.BackendServerName(b), endpoints[b])
+			if err := preflightHostServer(cfg, b, endpoints[b]); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -409,12 +414,15 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 			return err
 		}
 		// The extra ModelConfigs from platform.extraModels (self-hosted
-		// endpoints, OpenRouter, Gemini, ...) — after the install for the same
-		// reason as the Secret above: the chart owns the kagent namespace and
-		// the ModelConfig CRD.
-		if err := ensureExtraModels(cfg); err != nil {
+		// endpoints, OpenRouter, Gemini, ...) and the statically wired models
+		// of the host backends model-manager does not front — after the
+		// install for the same reason as the Secret above: the chart owns the
+		// kagent namespace and the ModelConfig CRD.
+		wired, err := ensureExtraModels(cfg, backendEndpoints)
+		if err != nil {
 			return err
 		}
+		wiredModels = wired
 		// Agent pods need the golang-adk runtime image at kagent's own tag,
 		// which upstream has been observed not to publish (HACKS.md U8).
 		step("Ensuring the agents' ADK runtime images are on the node")
@@ -484,7 +492,7 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 		})
 		if uiUp {
 			agentsHint = fmt.Sprintf("  Agents (kagent) run with model %s%s; UI: %s",
-				cfg.AIModel, extraModelsHint(cfg), cfg.KagentUIBaseURL())
+				cfg.AIModel, extraModelsHint(append(slices.Clone(cfg.Platform.ExtraModels), wiredModels...)), cfg.KagentUIBaseURL())
 		} else {
 			agentsHint = fmt.Sprintf(`  Agents (kagent) run with model %s, but the UI is NOT reachable on %s.
   If 'docker port %s' shows no %d line, this cluster
@@ -510,7 +518,7 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 %s
 %s
 %s
-%s`, header, reach, usersBlock(cfg), backstageHint, claudeCodeHint(cfg), agentsHint, modelManagerHint(cfg, modelManagerEndpoint), obsHint, tryItBlock(cfg))
+%s`, header, reach, usersBlock(cfg), backstageHint, claudeCodeHint(cfg), agentsHint, modelManagerHint(cfg, backendEndpoints, wiredModels), obsHint, tryItBlock(cfg))
 	// Everything the platform runs is in the node now — record it so the next
 	// boot side-loads instead of pulling.
 	snapshotPreloadImages(cfg)

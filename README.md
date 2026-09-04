@@ -75,13 +75,56 @@ agentgateway edge, Backstage on, three users, Dex on 32000.
 `--backstage=false` skips the portal. On a plain terminal or screen reader,
 `agentlab configure --accessible` runs the form as one prompt per question.
 
-When a **new** configuration is created (interactively or via `--defaults`),
-every host-side port is probed on 127.0.0.1 first — the address all kind port
-mappings bind — and any default that is already occupied is moved to a nearby
-free port, with a message saying what moved where (443 falls back to 8443).
-An existing `agentlab.yaml` is never renumbered: its cluster's port mappings
-are already fixed, and while the lab runs its own ports would probe as
-occupied.
+### `configure` discovers this machine — on every run
+
+Before it asks anything (or, with `--defaults`, writes anything), `agentlab
+configure` probes the machine and prints what it found, then applies it to the
+configuration — a fresh one and an existing `agentlab.yaml` alike, so the file
+follows the host instead of freezing the first run's view of it:
+
+```
+Discovering this machine:
+  tools             docker 29.7.2, kind v0.32.0, kubectl v1.36.4, helm v4.2.2
+  cluster           kind "agentlab" exists — its port mappings are fixed at node creation (`agentlab down && agentlab up` to change them)
+  Ollama            0.33.2 on :11434 — listens on the kind gateway 172.21.0.1: yes; 10 downloaded, 4 tool-calling
+  Lemonade Server   11.9.0 on :13305 — listens on the kind gateway 172.21.0.1: yes; 4 downloaded, 3 tool-calling
+  Anthropic key     $ANTHROPIC_API_KEY is set — the agents' default ModelConfig and Backstage's AI chat get the real key at deploy time
+
+Applied to the configuration:
+  platform.modelManager.backends: [ollama] -> [ollama, lemonade]
+```
+
+- **Tools**: `docker`, `kind`, `kubectl`, `helm` are looked up and their
+  versions shown; a missing one (or a Helm 3) is called out here rather than
+  minutes into `agentlab up`.
+- **Ports**: every host-side port is probed on 127.0.0.1 — the address all
+  kind port mappings bind. While **no kind node of this configuration
+  exists** (a fresh lab, or after `agentlab down`), an occupied port is moved
+  to a nearby free one, with a message saying what moved where (443 falls
+  back to 8443). Once the cluster exists its mappings are fixed at node
+  creation, so the ports it publishes never count as occupied and a foreign
+  listener on one of them is **reported**, not renumbered around (free it, or
+  `agentlab down`, re-run `configure`, `agentlab up`).
+- **Host model servers**: an Ollama on `:11434` and a Lemonade Server on
+  `:13305` (their default ports) are detected with version, whether they
+  listen on the kind docker gateway (pods' path to the host — the bind-address
+  fix is named when they do not) and their downloaded models, counting the
+  tool-calling ones. What answers becomes `platform.modelManager.backends`
+  (Ollama first) and turns managed models on; a server that vanished drops
+  out and, with none left, managed models go off — see [Managed
+  models](#managed-models-model-manager--the-host-model-servers). A
+  standalone `flm serve` (FastFlowLM's own server, default `:52625`) is
+  reported but not wired: it has no management API and lists its catalog
+  rather than what is downloaded — the lab drives FLM through Lemonade.
+- **`$ANTHROPIC_API_KEY`**: whether it is exported, since the agents'
+  default ModelConfig and Backstage's AI chat take it at deploy time.
+
+Pins override the discovery for that run: `--model-manager[=false]` decides
+the flag regardless of what answers, `--model-manager-backends ollama,lemonade`
+sets the list (and its order) outright; `--platform`, `--agents`,
+`--observability` and `--backstage` toggle the components as before, with or
+without `--defaults`. Nothing else in an existing file is touched — users,
+extra models and the pinned chart ref stay as they are.
 
 To exercise the identity itself:
 
@@ -463,52 +506,72 @@ One Lemonade-specific note: its FastFlowLM models default to a 4096-token
 context, which agent system prompts plus tool schemas outgrow quickly —
 raise it once with `lemonade config set ctx_size=16384`.
 
-#### Managed models: model-manager + host Ollama
+#### Managed models: model-manager + the host model servers
 
 `extraModels` wires an endpoint and manages nothing: pulling or removing a
 model is CLI-on-host, and nothing shows what is downloaded or loaded. The
 managed mode puts the umbrella's **model-manager** component
 ([giantswarm/model-manager](https://github.com/giantswarm/model-manager),
-the service behind the Model Manager epic) in front of the host's Ollama —
-inventory of downloaded and loaded models, pull with progress, load/unload,
-delete, and every pulled model wired into kagent automatically as a
-`ModelConfig` with the native, keyless `Ollama` provider. One block:
+the service behind the Model Manager epic) in front of a model server on the
+host — inventory of downloaded and loaded models, pull with progress,
+load/unload, delete, and every pulled model wired into kagent automatically
+as a `ModelConfig`: the native, keyless `Ollama` provider for an Ollama, the
+`OpenAI` provider on `/api/v1` (placeholder key) for a Lemonade Server. One
+block, which `agentlab configure` writes from what answers on the machine:
 
 ```yaml
 platform:
   agents: true                 # required: the ModelConfigs land in kagent
   modelManager:
     enabled: true
-    backend: ollama            # the lab's only backend (kserve needs GPUs + KServe)
-    # endpoint: http://192.168.1.10:11434   # optional; empty autodetects the host
+    backends: [ollama, lemonade]   # the host model servers, Ollama first; kserve needs GPUs + KServe
+    # endpoints:                   # optional; empty autodetects the host
+    #   ollama: http://192.168.1.10:11434
 ```
 
-`agentlab configure` turns it on for a fresh config when an Ollama answers on
-this machine (`--defaults --model-manager[=false]` forces it either way; the
-interactive form asks). The endpoint is **autodetected at platform time** as
-`http://<kind docker network gateway>:11434` — `docker network inspect kind`,
-the same address the section above documents for `extraModels` — so nobody
-types `172.21.0.1`; set `endpoint` for an Ollama elsewhere on the LAN.
+The list has an order because **model-manager fronts one backend per instance
+today**: the first entry is model-manager's backend, and every further one is
+wired **statically** by `agentlab platform` — its downloaded tool-calling
+models become lab-labeled ModelConfigs named `<backend>-<model>` (e.g.
+`lemonade-qwen3-it-4b-flm`), in exactly the shape model-manager would write,
+refreshed on every run and pruned when the model is gone from the server or
+the backend from the list. That is the interim until model-manager talks to
+all of them at once (multi-backend, agentlab#60); the config shape stays.
+A model already wired by hand in `extraModels` (same model on the same
+host:port) is left to that entry. The one-backend form earlier versions wrote
+(`backend:` + `endpoint:`) still reads as the one-item list.
+
+`agentlab configure` detects an Ollama on `:11434` and a Lemonade Server on
+`:13305` on every run (`--model-manager[=false]` pins the flag,
+`--model-manager-backends` the list; the interactive form shows what was
+found). Each endpoint is **autodetected at platform time** as `http://<kind
+docker network gateway>:<default port>` — `docker network inspect kind`, the
+same address the section above documents for `extraModels` — so nobody types
+`172.21.0.1`; set `endpoints.<backend>` for a server elsewhere on the LAN
+(such a backend is kept whether or not one answers locally).
 
 What `agentlab platform` (or `up`) does with it:
 
 - **Preflight, not README traps.** Before the install, a short-lived pod in
-  the cluster fetches `<endpoint>/api/version`. If that fails, the boot stops
-  right there with the diagnosis and the two fixes from the section above
-  spelled out — *connection refused* means Ollama listens on `127.0.0.1`
-  only (`OLLAMA_HOST=0.0.0.0`), a *timeout* means the host firewall drops
-  pod→host traffic on the docker bridge (allow TCP 11434 from the bridge
-  subnets, inside `172.16.0.0/12`) — instead of a model-manager pod
-  reporting an unhealthy backend after Helm's ten-minute wait.
-- **The umbrella's `components.model-manager`** goes on with the Ollama
-  backend (`model-manager.ollama.endpoint` = the detected address), its
-  agentgateway **route** at `https://agentgateway.<domain>/model-manager`
-  and, unlike the lab's kagent route, **JWT validation on**: the gateway
-  verifies the caller's Dex token against the lab Dex (JWKS over TLS at
-  `dex.dex.svc.cluster.local:5556/dex/keys`, trusted through the lab CA)
-  and answers 401 without one. model-manager checks no identity itself —
-  the gateway is the boundary, the same trust model as the kagent
-  controller route on real installations.
+  the cluster fetches each server's version document (`/api/version` on
+  Ollama, `/api/v1/health` on Lemonade). If that fails, the boot stops right
+  there with the diagnosis and the two fixes from the section above spelled
+  out — *connection refused* means the server listens on `127.0.0.1` only
+  (`OLLAMA_HOST=0.0.0.0` / `lemonade config set host=0.0.0.0`), a *timeout*
+  means the host firewall drops pod→host traffic on the docker bridge (allow
+  the server's TCP port from the bridge subnets, inside `172.16.0.0/12`) —
+  instead of a model-manager pod reporting an unhealthy backend after Helm's
+  ten-minute wait, or ModelConfigs pointing at a dead endpoint.
+- **The umbrella's `components.model-manager`** goes on with the first
+  backend (`model-manager.backend` and `model-manager.<backend>.endpoint` =
+  the detected address), its agentgateway **route** at
+  `https://agentgateway.<domain>/model-manager` and, unlike the lab's kagent
+  route, **JWT validation on**: the gateway verifies the caller's Dex token
+  against the lab Dex (JWKS over TLS at
+  `dex.dex.svc.cluster.local:5556/dex/keys`, trusted through the lab CA) and
+  answers 401 without one. model-manager checks no identity itself — the
+  gateway is the boundary, the same trust model as the kagent controller
+  route on real installations.
 - **The portal's service side.** The chart's Backstage app-config gains
   `agentPlatform.modelManager.installations.agent-platform.apiBaseUrl:
   https://agentgateway.<domain>/model-manager`; the portal backend forwards
@@ -524,8 +587,11 @@ What `agentlab platform` (or `up`) does with it:
 The proof is `agentlab models-test` (`--model` picks another small,
 **tool-calling capable** model; the default `qwen2.5:0.5b` is ~400 MB —
 `smollm2:135m` pulls fine and then fails every agent turn with "does not
-support tools"). It goes through the platform path only and leaves nothing
-behind:
+support tools"; on a lemonade-first lab name a Lemonade catalog model whose
+recipe backend is installed on the host). It goes through the platform path
+only and leaves nothing behind, and with a further backend in the list it
+ends with an agent turn on one of that server's statically wired
+ModelConfigs — "discovered" means "usable by agents":
 
 ```
 agentlab models-test
@@ -546,9 +612,10 @@ evict; they do not change how long agent traffic keeps a model resident —
 that is `OLLAMA_KEEP_ALIVE` on the host, see the keep-alive note in the
 section above.
 
-Both modes coexist: the static `extraModels` entries stay as they are
-(labeled `managed-by: agentlab`), model-manager's ModelConfigs carry
-`managed-by: model-manager`, and neither prunes the other's.
+Both modes coexist: the static `extraModels` entries and the wired
+further-backend models stay as they are (labeled `managed-by: agentlab`),
+model-manager's ModelConfigs carry `managed-by: model-manager`, and neither
+prunes the other's.
 
 ### Observability (Prometheus + mcp-prometheus)
 

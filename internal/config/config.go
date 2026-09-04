@@ -4,6 +4,7 @@ package config
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"regexp"
 	"slices"
@@ -142,39 +143,178 @@ type Platform struct {
 	// CRs by `agentlab platform`; entries removed here are pruned on the next
 	// run. Inert unless agents are enabled.
 	ExtraModels []ExtraModel `yaml:"extraModels,omitempty"`
-	// Managed models: the umbrella's model-manager component with the Ollama
-	// backend, proxying the Ollama that runs on the lab host — pull, load,
+	// Managed models: the umbrella's model-manager component in front of the
+	// model servers that run on the lab host — an Ollama, a Lemonade Server
+	// (FastFlowLM on AMD Ryzen AI NPUs, llama.cpp on GPU/CPU) — pull, load,
 	// unload and delete models from the portal (or as x_model-manager_*
 	// tools through muster), each pulled model wired into kagent as a
 	// keyless ModelConfig automatically. Complements extraModels, which
 	// wires endpoints statically and manages nothing. Requires agents.
+	// `agentlab configure` fills the backends from what answers on this
+	// machine, on every run.
 	ModelManager ModelManager `yaml:"modelManager"`
 }
 
 // ModelManager configures the umbrella's model-manager component in the lab.
 type ModelManager struct {
 	// On, `agentlab platform` enables components.model-manager with the
-	// Ollama backend, its agentgateway route (JWT-validated: the portal
+	// first backend, its agentgateway route (JWT-validated: the portal
 	// backend forwards the user's Dex token) and the muster registration.
-	// `agentlab configure` turns it on for a fresh config when an Ollama
-	// answers on the host.
+	// `agentlab configure` turns it on whenever a host model server answers
+	// (and off when none does), unless --model-manager pins it.
 	Enabled bool `yaml:"enabled"`
-	// The serving backend. The lab supports `ollama` only: kserve needs
-	// GPU nodes and a KServe install this kind cluster does not have.
-	Backend string `yaml:"backend,omitempty"`
-	// The Ollama API base URL as pods reach it. Empty autodetects
-	// http://<kind docker network gateway>:11434 at platform time — the
-	// same address the README documents for extraModels (`docker network
-	// inspect kind`). Set it for an Ollama elsewhere on the LAN.
+	// The host model servers, in order: `ollama` (an Ollama) and `lemonade`
+	// (a Lemonade Server). model-manager manages ONE backend per instance
+	// today, so the first entry is its backend; every further one is wired
+	// statically by `agentlab platform` — its downloaded tool-calling models
+	// become lab-labeled ModelConfigs, refreshed on every run — until
+	// model-manager talks to all of them at once (giantswarm/model-manager
+	// multi-backend, agentlab#60). `agentlab configure` fills the list from
+	// what answers on this machine (Ollama first); --model-manager-backends
+	// pins it. kserve is no lab backend: GPU nodes and a KServe install.
+	Backends []string `yaml:"backends,omitempty"`
+	// Per-backend base URL as pods reach it, keyed by backend. Empty
+	// autodetects http://<kind docker network gateway>:<default port> at
+	// platform time (11434 for Ollama, 13305 for Lemonade) — the same
+	// address the README documents for extraModels (`docker network inspect
+	// kind`). Set one for a server elsewhere on the LAN: a backend with an
+	// endpoint here is kept by `agentlab configure` whether or not a server
+	// answers on this machine.
+	Endpoints map[string]string `yaml:"endpoints,omitempty"`
+	// The one-backend form earlier versions wrote (backend + endpoint):
+	// still read, folded into backends/endpoints on load, never written.
+	Backend  string `yaml:"backend,omitempty"`
 	Endpoint string `yaml:"endpoint,omitempty"`
 }
 
-// ModelManagerBackendOllama is the one backend the lab runs.
-const ModelManagerBackendOllama = "ollama"
+// The model servers the lab runs against on the host, which model-manager
+// and agent pods reach through the kind docker network's gateway.
+const (
+	// ModelManagerBackendOllama is a host Ollama.
+	ModelManagerBackendOllama = "ollama"
+	// ModelManagerBackendLemonade is a host Lemonade Server
+	// (lemonade-server.ai): FastFlowLM on AMD Ryzen AI NPUs, llama.cpp on
+	// GPU and CPU, behind one OpenAI-compatible API plus a management API.
+	ModelManagerBackendLemonade = "lemonade"
+)
 
-// OllamaPort is Ollama's default API port, the one the autodetected endpoint
-// assumes on the host.
-const OllamaPort = 11434
+// ModelManagerBackends lists the backends the lab accepts, in the canonical
+// order `agentlab configure` writes them — which is also the preference for
+// the one model-manager fronts.
+var ModelManagerBackends = []string{ModelManagerBackendOllama, ModelManagerBackendLemonade}
+
+// The servers' default API ports, the ones the autodetected endpoints assume.
+const (
+	OllamaPort   = 11434
+	LemonadePort = 13305
+)
+
+// BackendPort is the default API port of a backend's server.
+func BackendPort(backend string) int {
+	if backend == ModelManagerBackendLemonade {
+		return LemonadePort
+	}
+	return OllamaPort
+}
+
+// BackendServerName is a backend's server as messages name it.
+func BackendServerName(backend string) string {
+	if backend == ModelManagerBackendLemonade {
+		return "Lemonade Server"
+	}
+	return "Ollama"
+}
+
+// Primary is the backend model-manager fronts: the first, or the historical
+// default (an Ollama) for an enabled block that names none.
+func (m ModelManager) Primary() string {
+	if len(m.Backends) == 0 {
+		return ModelManagerBackendOllama
+	}
+	return m.Backends[0]
+}
+
+// Secondary lists the further backends — wired statically until
+// model-manager is multi-backend.
+func (m ModelManager) Secondary() []string {
+	if len(m.Backends) < 2 {
+		return nil
+	}
+	return m.Backends[1:]
+}
+
+// EndpointFor is the configured endpoint override of a backend, "" to
+// autodetect.
+func (m ModelManager) EndpointFor(backend string) string {
+	return m.Endpoints[backend]
+}
+
+// normalize folds the legacy one-backend form into the lists, orders the
+// backends canonically and gives an enabled block without backends the
+// historical default (an Ollama), so files written by earlier versions read
+// exactly as before.
+func (m *ModelManager) normalize() {
+	if m.Backend != "" {
+		if !slices.Contains(m.Backends, m.Backend) {
+			m.Backends = append([]string{m.Backend}, m.Backends...)
+		}
+		if m.Endpoint != "" {
+			if m.Endpoints == nil {
+				m.Endpoints = map[string]string{}
+			}
+			if _, set := m.Endpoints[m.Backend]; !set {
+				m.Endpoints[m.Backend] = m.Endpoint
+			}
+		}
+	}
+	m.Backend, m.Endpoint = "", ""
+	if m.Enabled && len(m.Backends) == 0 {
+		m.Backends = []string{ModelManagerBackendOllama}
+	}
+	if len(m.Endpoints) == 0 {
+		m.Endpoints = nil
+	}
+}
+
+// ApplyDiscovered merges what `agentlab configure` found on this machine into
+// the block: the backends are the servers that answer plus every backend kept
+// by an explicit endpoint (a server elsewhere on the LAN), in canonical order;
+// managed models go on when there is at least one and the agents runtime is
+// on, and off otherwise. pinBackends (--model-manager-backends) replaces the
+// list outright; pinEnabled (--model-manager) decides the flag instead of the
+// discovery — a pinned-on block without a backend falls back to the Ollama
+// default, so the platform preflight reports the real reachability error.
+func (m *ModelManager) ApplyDiscovered(found []string, agents bool, pinEnabled *bool, pinBackends []string) {
+	m.normalize()
+	var backends []string
+	switch {
+	case pinBackends != nil:
+		backends = slices.Clone(pinBackends)
+	default:
+		for _, b := range ModelManagerBackends {
+			if slices.Contains(found, b) || m.Endpoints[b] != "" {
+				backends = append(backends, b)
+			}
+		}
+	}
+	m.Backends = backends
+	for b := range m.Endpoints {
+		if !slices.Contains(m.Backends, b) {
+			delete(m.Endpoints, b)
+		}
+	}
+	if len(m.Endpoints) == 0 {
+		m.Endpoints = nil
+	}
+	if pinEnabled != nil {
+		m.Enabled = *pinEnabled
+	} else {
+		m.Enabled = agents && len(m.Backends) > 0
+	}
+	if m.Enabled && len(m.Backends) == 0 {
+		m.Backends = []string{ModelManagerBackendOllama}
+	}
+}
 
 // ExtraModel is one additional kagent ModelConfig. API keys are NOT config:
 // APIKeyEnv only names the host env var read at deploy time — the value lands
@@ -305,9 +445,8 @@ func Default() *Config {
 			MusterPort:    8090,
 			Domain:        "127.0.0.1.nip.io",
 			GatewayPort:   443,
-			ModelManager:  ModelManager{Backend: ModelManagerBackendOllama},
 			APSRepo:       "https://github.com/giantswarm/agent-platform-standalone",
-			APSRef:        "203cfe9118e5c25cfa705d725f97396ad4781e2f", // main: the optional model-manager component (#75, chart v0.11.0)
+			APSRef:        "d5a88b07b22785dc2f1032df172b2003773c8176", // main: model-manager 0.16.0 + agent-platform 3.6.0 — the umbrella accepts backend lemonade (#132, #108)
 		},
 		Backstage: Backstage{
 			Enabled: true,
@@ -327,6 +466,9 @@ func Load() (*Config, error) {
 	if err := yaml.Unmarshal(raw, cfg); err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", File, err)
 	}
+	// Earlier versions wrote the one-backend form (backend/endpoint); read
+	// it as the one-item lists so the same lab renders exactly as before.
+	cfg.Platform.ModelManager.normalize()
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("%s: %w", File, err)
 	}
@@ -471,9 +613,7 @@ func (c *Config) Normalize() {
 	if c.Backstage.Enabled {
 		c.Platform.Enabled = true
 	}
-	if c.Platform.ModelManager.Backend == "" {
-		c.Platform.ModelManager.Backend = ModelManagerBackendOllama
-	}
+	c.Platform.ModelManager.normalize()
 }
 
 func (c *Config) Validate() error {
@@ -556,11 +696,29 @@ var httpURLRe = regexp.MustCompile(`^https?://[^/]+`)
 // Validate checks the model-manager block; agents reports whether the kagent
 // runtime is on (model-manager wires ModelConfigs into it).
 func (m ModelManager) Validate(agents bool) error {
-	if m.Backend != "" && m.Backend != ModelManagerBackendOllama {
-		return fmt.Errorf("backend %q: the lab supports %q only (kserve needs GPU nodes and KServe)", m.Backend, ModelManagerBackendOllama)
+	backends := m.Backends
+	if m.Backend != "" && !slices.Contains(backends, m.Backend) {
+		backends = append([]string{m.Backend}, backends...) // the legacy form before normalize
+	}
+	for i, b := range backends {
+		if !slices.Contains(ModelManagerBackends, b) {
+			return fmt.Errorf("backend %q: the lab supports %s (kserve needs GPU nodes and KServe)", b, strings.Join(ModelManagerBackends, ", "))
+		}
+		if slices.Contains(backends[:i], b) {
+			return fmt.Errorf("backends: %q listed twice", b)
+		}
 	}
 	if m.Endpoint != "" && !httpURLRe.MatchString(m.Endpoint) {
 		return fmt.Errorf("endpoint %q: must be an http(s) URL, e.g. http://172.21.0.1:%d", m.Endpoint, OllamaPort)
+	}
+	for _, b := range slices.Sorted(maps.Keys(m.Endpoints)) {
+		ep := m.Endpoints[b]
+		if !slices.Contains(backends, b) {
+			return fmt.Errorf("endpoints.%s: %q is not in backends %v", b, b, backends)
+		}
+		if !httpURLRe.MatchString(ep) {
+			return fmt.Errorf("endpoints.%s %q: must be an http(s) URL, e.g. http://172.21.0.1:%d", b, ep, BackendPort(b))
+		}
 	}
 	if m.Enabled && !agents {
 		return fmt.Errorf("requires platform.agents (model-manager wires pulled models into kagent ModelConfigs)")

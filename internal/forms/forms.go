@@ -45,10 +45,19 @@ func newForm(groups ...*huh.Group) *huh.Form {
 	return form
 }
 
+// Hints is what `agentlab configure` learned about this machine before the
+// form runs, so the questions can say what the defaults are based on.
+type Hints struct {
+	// ModelServers names the host model servers found (versions and ports),
+	// or says that none answers — shown under the managed-models confirm.
+	ModelServers string
+}
+
 // Run walks the user through the lab configuration and mutates cfg in place.
 // The passed cfg provides the defaults shown in the form (so re-configuring
-// starts from the current answers, not from scratch).
-func Run(cfg *config.Config, accessible bool) error {
+// starts from the current answers, not from scratch); hints carry what the
+// discovery on this machine found.
+func Run(cfg *config.Config, accessible bool, hints Hints) error {
 	clusterName := cfg.ClusterName
 	dexPort := strconv.Itoa(cfg.DexPort)
 	dexImage := cfg.DexImage
@@ -161,8 +170,8 @@ func Run(cfg *config.Config, accessible bool) error {
 				Negative("Skip").
 				Value(&observabilityEnabled),
 			huh.NewConfirm().
-				Title("Manage this machine's Ollama models from the platform (model-manager)?").
-				Description("Optional, needs the agents runtime: the umbrella's model-manager component with\nthe Ollama backend — pull, load/unload and delete models from the portal or as\nx_model-manager_* tools, each pulled model wired into kagent as a ModelConfig.\nPods reach the host Ollama through the kind docker gateway (bind it to 0.0.0.0).").
+				Title("Manage this machine's model servers from the platform (model-manager)?").
+				Description("Optional, needs the agents runtime: the umbrella's model-manager component in\nfront of the host's Ollama or Lemonade Server — pull, load/unload and delete models\nfrom the portal or as x_model-manager_* tools, each pulled model wired into kagent\nas a ModelConfig. Pods reach the host through the kind docker gateway (bind the\nserver to 0.0.0.0). "+modelServersHint(hints)).
 				Affirmative("Manage").
 				Negative("Skip").
 				Value(&modelManagerEnabled),
@@ -395,6 +404,14 @@ func editExtraModels(cfg *config.Config, accessible bool) error {
 
 	cfg.Platform.ExtraModels = kept
 	return nil
+}
+
+// modelServersHint is the discovery's line under the managed-models confirm.
+func modelServersHint(h Hints) string {
+	if h.ModelServers == "" {
+		return "No Ollama or Lemonade Server answers on this machine right now."
+	}
+	return "Found: " + h.ModelServers + "."
 }
 
 func baseURLNote(u string) string {

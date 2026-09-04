@@ -13,7 +13,7 @@ import (
 // exchange — either would make core_auth_login refuse the manual login), and
 // its purpose spelled out on the object.
 func TestOAuthFixtureTemplate(t *testing.T) {
-	raw, err := renderTemplate(config.Default(), "oauth-fixture.yaml.tmpl")
+	raw, err := renderTemplate(config.Default(), "oauth-fixture.yaml.tmpl", nil)
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestOAuthFixtureTemplate(t *testing.T) {
 // public URL every sign-in challenge must carry.
 func TestPlatformValuesEnableOAuthClient(t *testing.T) {
 	cfg := config.Default()
-	raw, err := renderTemplate(cfg, "agent-platform-values.yaml.tmpl")
+	raw, err := renderTemplate(cfg, "agent-platform-values.yaml.tmpl", nil)
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}

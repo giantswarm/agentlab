@@ -3,6 +3,7 @@ package lab
 import (
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -30,40 +31,82 @@ const modelConfigResource = "modelconfigs.kagent.dev"
 // lab-owned CRs — the chart-rendered default ModelConfig is never touched.
 const managedByAgentlab = "app.kubernetes.io/managed-by=agentlab"
 
-// ensureExtraModels reconciles the platform.extraModels entries into kagent
-// ModelConfig CRs plus their key Secrets, and prunes lab-labeled CRs whose
-// entry is gone from agentlab.yaml. Only called with the agents runtime
-// installed (the ModelConfig CRD ships with the kagent chart).
-func ensureExtraModels(cfg *config.Config) error {
-	_, path, err := renderManifest(cfg, "extra-models.yaml.tmpl")
+// extraModelsTemplate renders the lab-owned ModelConfigs.
+const extraModelsTemplate = "extra-models.yaml.tmpl"
+
+// allExtraModels is everything the lab renders as its own ModelConfigs: the
+// platform.extraModels entries plus the tool-calling models of the host
+// backends model-manager does not front (wired, returned separately for the
+// summary). endpoints may be nil, in which case they are resolved here.
+func allExtraModels(cfg *config.Config, endpoints map[string]string) (all, wired []config.ExtraModel, err error) {
+	manual := cfg.Platform.ExtraModels
+	if cfg.ModelManagerEnabled() && len(cfg.Platform.ModelManager.Secondary()) > 0 {
+		if endpoints == nil {
+			if endpoints, err = resolveBackendEndpoints(cfg); err != nil {
+				return nil, nil, err
+			}
+		}
+		if wired, err = hostBackendModelConfigs(cfg, endpoints); err != nil {
+			return nil, nil, err
+		}
+	}
+	return append(slices.Clone(manual), wired...), wired, nil
+}
+
+// ensureExtraModels reconciles the platform.extraModels entries — and the
+// statically wired models of the host backends model-manager does not front
+// — into kagent ModelConfig CRs plus their key Secrets, and prunes
+// lab-labeled CRs whose entry is gone (from agentlab.yaml, or from the host
+// server). Only called with the agents runtime installed (the ModelConfig
+// CRD ships with the kagent chart). Returns the wired host models for the
+// summary.
+func ensureExtraModels(cfg *config.Config, endpoints map[string]string) ([]config.ExtraModel, error) {
+	models, wired, err := allExtraModels(cfg, endpoints)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	_, path, err := renderManifestWith(cfg, extraModelsTemplate, func(d *tmplData) { d.ExtraModels = models })
+	if err != nil {
+		return nil, err
 	}
 	if len(cfg.Platform.ExtraModels) > 0 {
 		step("Adding extra model configs (%d beyond the default %s)", len(cfg.Platform.ExtraModels), cfg.AIModel)
 	}
+	for _, b := range cfg.Platform.ModelManager.Secondary() {
+		var names []string
+		for _, m := range wired {
+			if strings.HasPrefix(m.Name, b+"-") {
+				names = append(names, m.Name)
+			}
+		}
+		step("Wiring %s's tool-calling models as ModelConfigs (%d; model-manager fronts %s only, agentlab#60)",
+			config.BackendServerName(b), len(names), cfg.Platform.ModelManager.Primary())
+		if len(names) > 0 {
+			note("%s", strings.Join(names, ", "))
+		}
+	}
 	// Secrets before the CRs: the controller hashes the referenced Secret
 	// into the ModelConfig status, so the reference should resolve on the
 	// controller's first look.
-	for _, m := range cfg.Platform.ExtraModels {
+	for _, m := range models {
 		if err := ensureModelKeySecret(m); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	if len(cfg.Platform.ExtraModels) > 0 {
+	if len(models) > 0 {
 		if err := runQuiet("kubectl", "apply", "-f", path); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	if err := pruneExtraModels(cfg); err != nil {
-		return err
+	if err := pruneExtraModels(models); err != nil {
+		return nil, err
 	}
-	for _, m := range cfg.Platform.ExtraModels {
+	for _, m := range models {
 		if err := waitModelConfigAccepted(m.Name); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	return wired, nil
 }
 
 // ensureModelKeySecret creates the model's key Secret from the host env var
@@ -109,24 +152,25 @@ stringData:
 	return nil
 }
 
-// pruneExtraModels deletes lab-labeled ModelConfigs (and their Secrets) whose
-// entry no longer exists in agentlab.yaml, so removing a model from the
-// config is a real removal on the next run.
-func pruneExtraModels(cfg *config.Config) error {
+// pruneExtraModels deletes lab-labeled ModelConfigs (and their Secrets) that
+// are not among the wanted entries any more — removed from agentlab.yaml, or
+// gone from the host server they were wired from — so a removal is a real
+// removal on the next run.
+func pruneExtraModels(want []config.ExtraModel) error {
 	out, err := outputQuiet("kubectl", "-n", kagentNamespace, "get", modelConfigResource,
 		"-l", managedByAgentlab, "-o", "jsonpath={.items[*].metadata.name}")
 	if err != nil {
 		return nil // no CRD / no namespace: nothing lab-owned to prune
 	}
-	want := map[string]bool{}
-	for _, m := range cfg.Platform.ExtraModels {
-		want[m.Name] = true
+	keep := map[string]bool{}
+	for _, m := range want {
+		keep[m.Name] = true
 	}
 	for _, name := range strings.Fields(out) {
-		if want[name] {
+		if keep[name] {
 			continue
 		}
-		note("pruning model config %s (removed from %s)", name, config.File)
+		note("pruning model config %s (removed from %s or gone from its host server)", name, config.File)
 		if err := runQuiet("kubectl", "-n", kagentNamespace, "delete", modelConfigResource, name); err != nil {
 			return err
 		}
@@ -139,14 +183,14 @@ func pruneExtraModels(cfg *config.Config) error {
 	return nil
 }
 
-// extraModelsHint names the extra ModelConfigs in the platform-up summary,
+// extraModelsHint names the lab's ModelConfigs in the platform-up summary,
 // e.g. " (+ qwen3-8-27b, gemini-flash)"; empty when there are none.
-func extraModelsHint(cfg *config.Config) string {
-	if len(cfg.Platform.ExtraModels) == 0 {
+func extraModelsHint(models []config.ExtraModel) string {
+	if len(models) == 0 {
 		return ""
 	}
-	names := make([]string, 0, len(cfg.Platform.ExtraModels))
-	for _, m := range cfg.Platform.ExtraModels {
+	names := make([]string, 0, len(models))
+	for _, m := range models {
 		names = append(names, m.Name)
 	}
 	return " (+ " + strings.Join(names, ", ") + ")"

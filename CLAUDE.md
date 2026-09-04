@@ -73,16 +73,32 @@ with Dex doing the logins.
   OpenAI-compatible endpoints, OpenRouter, Gemini, Ollama) with the same
   env-var -> Secret key handling; entries removed from the config are pruned
   on the next run (see README "Extra model configs").
-- `platform.modelManager` (on by default when `agentlab configure` finds an
-  Ollama on the host) installs the umbrella's model-manager component with
-  the Ollama backend: the host Ollama's models become manageable from the
-  portal and as `x_model-manager_<tool>` through muster, every pulled model
-  auto-wired into kagent (native keyless `Ollama` provider). The endpoint is
-  autodetected (`docker network inspect kind` gateway, port 11434) and
+- `agentlab configure` **discovers this machine on every run** (fresh or
+  existing `agentlab.yaml`): the tools `up` shells out to, whether this
+  configuration's kind node exists and which host ports it publishes (never
+  conflicts; while no node exists, occupied ports move to free ones), the
+  host model servers — an Ollama on 11434, a Lemonade Server on 13305 —
+  with their downloaded tool-calling models, a standalone `flm serve`
+  (report-only), and `$ANTHROPIC_API_KEY`. What answers becomes
+  `platform.modelManager.backends` (Ollama first); `--model-manager[=false]`
+  and `--model-manager-backends` pin it. Never hand-edit that list to
+  describe the machine — re-run `configure --defaults`.
+- `platform.modelManager` installs the umbrella's model-manager component
+  with the FIRST backend of the list (model-manager fronts one backend per
+  instance today): that server's models become manageable from the portal
+  and as `x_model-manager_<tool>` through muster, every pulled model
+  auto-wired into kagent (native keyless `Ollama` provider; `OpenAI` on
+  `/api/v1` for Lemonade). Every FURTHER backend is wired statically by
+  `agentlab platform`: its downloaded tool-calling models become
+  lab-labeled ModelConfigs `<backend>-<model>` (hostmodels.go), refreshed and
+  pruned on every run — the interim until model-manager is multi-backend
+  (agentlab#60, HACKS.md U14). Endpoints are autodetected (`docker network
+  inspect kind` gateway + the server's default port) and every server is
   proven reachable from a pod before the install; the API sits behind the
   agentgateway route `https://agentgateway.<domain>/model-manager` with JWT
   validation on (a Dex token is required; 401 without). Proof:
-  `./agentlab models-test` (see README "Managed models").
+  `./agentlab models-test` (see README "Managed models"), which ends with an
+  agent turn on a statically wired model when a further backend is listed.
 - For verifying RBAC as a specific user, use `./agentlab login <email>` and
   `kubectl --kubeconfig kubeconfig.oidc` — that is the OIDC path.
 - The kind admin context (`kind-agentlab`) bypasses the platform and OIDC
