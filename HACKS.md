@@ -360,6 +360,21 @@ wiring, its pruning and its agent-turn proof are gone. `models-test --backend
 lemonade` proves the second backend through model-manager instead. The
 `agentlab.yaml` shape did not change.
 
+### U15. Backstage app-config overlay restates `baseUrl`/`cors.origin` with `platform.gatewayPort` — ACCEPTED
+The umbrella's Backstage app-config renders `app.baseUrl`, `backend.baseUrl`
+and `backend.cors.origin` as `https://<hostname>` — no port, because
+`components.backstage.hostname` is also the HTTPRoute hostname and cannot
+carry one. With `platform.gatewayPort != 443` Backstage's OAuth `redirect_uri`
+is port-free while the Dex client (`dex.yaml.tmpl`) registers the ported one,
+and every login fails with "Unregistered redirect_uri". The lab's app-config
+overlay (`backstage-catalog.yaml.tmpl`) restates the three URLs from
+`.BackstageBaseURL`; at 443 the values are identical. Still open on a
+non-443 port: the in-cluster edge Service serves 443 only, so muster cannot
+fetch its own ported OAuth metadata and `platform-test` fails at the
+`lab-oauth-fixture` step. Lab-only by construction: a real installation runs
+its edge on 443, so the umbrella has no reason to carry a ported public URL;
+the overlay is the lab's permanent answer, not an interim.
+
 ## Accepted lab trade-offs (not hacks to fix)
 
 - **Checksum stamping via the `REPLACED_AT_APPLY` placeholder** — the standard

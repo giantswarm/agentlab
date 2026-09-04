@@ -354,8 +354,10 @@ backstage:
   backstage:
     # Helm replaces lists rather than merging them, so the umbrella's own
     # entries are restated here next to the lab's additions (the catalog
-    # entities + the scaffolder Template behind the agent create flow, and an
-    # in-memory database — see backstage-catalog.yaml.tmpl).
+    # entities + the scaffolder Template behind the agent create flow, an
+    # in-memory database, and the gatewayPort-aware baseUrl — see
+    # backstage-catalog.yaml.tmpl). The lab file must stay LAST: later files
+    # win the deep merge, which is what lets it override the umbrella's URLs.
     extraAppConfig:
       - filename: app-config.agent-platform.yaml
         configMapRef: agent-platform-backstage-app-config
