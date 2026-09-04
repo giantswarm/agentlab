@@ -333,7 +333,7 @@ holds. mcp-prometheus gets it because `installOCIChart` now runs that release
 through the post-renderer too. Lab-only by construction: real installations have
 a routable issuer.
 
-### U14. `hostmodels.go`: the further host backends are wired as static ModelConfigs
+### U14. `hostmodels.go`: the further host backends are wired as static ModelConfigs — FIXED upstream
 `platform.modelManager.backends` lists every model server on the lab host
 (`agentlab configure` fills it from what answers: an Ollama, a Lemonade
 Server), but model-manager 0.16.0 fronts ONE backend per instance
@@ -348,10 +348,17 @@ provider), refreshed and pruned on every `agentlab platform` run and proven
 by the agent turn `models-test` ends with. Nothing manages those models
 (pull/delete stay CLI-on-host) and the portal's Models pages show the first
 backend only.
-**Unblocks:** giantswarm/model-manager multi-backend (one instance talking to
-ollama, lemonade and kserve at once) + the umbrella values for it; then
-`platform.go` hands the whole list to `model-manager.backends` and
-`hostmodels.go`'s static wiring is deleted — the `agentlab.yaml` shape stays.
+**Fix:** model-manager 0.17.0 fronts several backends in one process
+(`--backends`, `GET /api/v1/backends`, `backend` on every object and request,
+one ModelConfig per (backend, model) carrying the
+`model-manager.giantswarm.io/backend` label), the fleet's connectivity chart
+3.7.0 and the umbrella (v0.35.15+) take `model-manager.backends`. The lab now
+hands the whole list to `model-manager.backends` (a single entry renders the
+`backend:` form), preflights every server, and `hostmodels.go` keeps only the
+inventories (discovery summary, the delete check of `models-test`); the static
+wiring, its pruning and its agent-turn proof are gone. `models-test --backend
+lemonade` proves the second backend through model-manager instead. The
+`agentlab.yaml` shape did not change.
 
 ## Accepted lab trade-offs (not hacks to fix)
 

@@ -280,10 +280,8 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 	// the kind docker network and proven reachable from inside the cluster
 	// BEFORE the install, so a host-side misconfiguration (bind address,
 	// firewall) fails here with its fix instead of after helm's ten-minute
-	// wait — for the backend model-manager fronts and for the ones wired
-	// statically alike.
+	// wait — for every backend model-manager fronts.
 	var backendEndpoints map[string]string
-	var wiredModels []config.ExtraModel
 	if cfg.ModelManagerEnabled() {
 		endpoints, err := resolveBackendEndpoints(cfg)
 		if err != nil {
@@ -414,15 +412,13 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 			return err
 		}
 		// The extra ModelConfigs from platform.extraModels (self-hosted
-		// endpoints, OpenRouter, Gemini, ...) and the statically wired models
-		// of the host backends model-manager does not front — after the
-		// install for the same reason as the Secret above: the chart owns the
-		// kagent namespace and the ModelConfig CRD.
-		wired, err := ensureExtraModels(cfg, backendEndpoints)
-		if err != nil {
+		// endpoints, OpenRouter, Gemini, ...) — after the install for the same
+		// reason as the Secret above: the chart owns the kagent namespace and
+		// the ModelConfig CRD. The host model servers' models are
+		// model-manager's own ModelConfigs, for every backend it fronts.
+		if err := ensureExtraModels(cfg); err != nil {
 			return err
 		}
-		wiredModels = wired
 		// Agent pods need the golang-adk runtime image at kagent's own tag,
 		// which upstream has been observed not to publish (HACKS.md U8).
 		step("Ensuring the agents' ADK runtime images are on the node")
@@ -492,7 +488,7 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 		})
 		if uiUp {
 			agentsHint = fmt.Sprintf("  Agents (kagent) run with model %s%s; UI: %s",
-				cfg.AIModel, extraModelsHint(append(slices.Clone(cfg.Platform.ExtraModels), wiredModels...)), cfg.KagentUIBaseURL())
+				cfg.AIModel, extraModelsHint(cfg.Platform.ExtraModels), cfg.KagentUIBaseURL())
 		} else {
 			agentsHint = fmt.Sprintf(`  Agents (kagent) run with model %s, but the UI is NOT reachable on %s.
   If 'docker port %s' shows no %d line, this cluster
@@ -518,7 +514,7 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 %s
 %s
 %s
-%s`, header, reach, usersBlock(cfg), backstageHint, claudeCodeHint(cfg), agentsHint, modelManagerHint(cfg, backendEndpoints, wiredModels), obsHint, tryItBlock(cfg))
+%s`, header, reach, usersBlock(cfg), backstageHint, claudeCodeHint(cfg), agentsHint, modelManagerHint(cfg, backendEndpoints), obsHint, tryItBlock(cfg))
 	// Everything the platform runs is in the node now — record it so the next
 	// boot side-loads instead of pulling.
 	snapshotPreloadImages(cfg)

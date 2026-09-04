@@ -48,18 +48,17 @@ type tmplData struct {
 	AllGroups           []string
 	KubernetesClientSecret,
 	AgentPlatformClientSecret string
-	// ModelManagerEnabled mirrors cfg.ModelManagerEnabled(); the backend is
-	// the first of platform.modelManager.backends and the endpoint the URL
-	// model-manager dials for it (autodetected from the kind docker network
-	// — empty when the cluster does not exist yet, which only a pre-boot
-	// `agentlab render` sees; platformUp resolves it strictly).
-	ModelManagerEnabled  bool
-	ModelManagerBackend  string
-	ModelManagerEndpoint string
+	// ModelManagerEnabled mirrors cfg.ModelManagerEnabled(); Backends is
+	// platform.modelManager.backends (the first is model-manager's default
+	// backend) and Endpoints the URL model-manager dials for each of them
+	// (autodetected from the kind docker network — empty when the cluster
+	// does not exist yet, which only a pre-boot `agentlab render` sees;
+	// platformUp resolves them strictly).
+	ModelManagerEnabled   bool
+	ModelManagerBackends  []string
+	ModelManagerEndpoints map[string]string
 	// ExtraModels is what extra-models.yaml.tmpl renders: the
-	// platform.extraModels entries, plus — when the platform run computes
-	// them — the tool-calling models of the host backends model-manager does
-	// not front (hostmodels.go).
+	// platform.extraModels entries.
 	ExtraModels []config.ExtraModel
 	// The per-server OAuth sign-in fixture (oauthfixture.go): the MCPServer
 	// name the proofs sign in to and the protected endpoint it points at.
@@ -72,18 +71,18 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 	if err != nil {
 		return nil, err
 	}
-	endpoint := ""
+	endpoints := map[string]string{}
 	if cfg.ModelManagerEnabled() {
-		if endpoint, err = resolveBackendEndpoint(cfg, cfg.Platform.ModelManager.Primary()); err != nil {
-			note("model-manager endpoint left empty in the render: %v", err)
-			endpoint = ""
+		if endpoints, err = resolveBackendEndpoints(cfg); err != nil {
+			note("model-manager endpoints left empty in the render: %v", err)
+			endpoints = map[string]string{}
 		}
 	}
 	return &tmplData{
 		Config:                    cfg,
 		ModelManagerEnabled:       cfg.ModelManagerEnabled(),
-		ModelManagerBackend:       cfg.Platform.ModelManager.Primary(),
-		ModelManagerEndpoint:      endpoint,
+		ModelManagerBackends:      cfg.Platform.ModelManager.Backends,
+		ModelManagerEndpoints:     endpoints,
 		ExtraModels:               cfg.Platform.ExtraModels,
 		OAuthFixtureServer:        oauthFixtureServer,
 		OAuthFixtureURL:           oauthFixtureURL,
@@ -230,11 +229,6 @@ func RenderAll(cfg *config.Config) error {
 		return err
 	}
 	extraModels := cfg.Platform.ExtraModels
-	if models, _, err := allExtraModels(cfg, nil); err == nil {
-		extraModels = models
-	} else {
-		note("extra-models.yaml rendered without the host backends' models: %v", err)
-	}
 	for _, tmpl := range slices.Sorted(maps.Keys(manifests)) {
 		var mutate func(*tmplData)
 		if tmpl == extraModelsTemplate {

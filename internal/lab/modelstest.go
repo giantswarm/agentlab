@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -13,26 +14,47 @@ import (
 	"github.com/giantswarm/agentlab/internal/config"
 )
 
-// ModelsTestModel is the model the proof pulls and deletes: small (~400 MB)
-// and tool-calling capable, which a kagent agent turn requires (agents send
-// tool schemas with every request; smollm2:135m pulls fine and then fails
-// "does not support tools").
+// ModelsTestModel is the model the proof pulls and deletes on the ollama
+// backend: small (~400 MB) and tool-calling capable, which a kagent agent turn
+// requires (agents send tool schemas with every request; smollm2:135m pulls
+// fine and then fails "does not support tools").
 const ModelsTestModel = "qwen2.5:0.5b"
+
+// ModelsTestModelLemonade is the proof's model on the lemonade backend: the
+// smallest FastFlowLM (NPU) model of Lemonade's catalog with the tool-calling
+// label (3.1 GB); the smaller *-FLM models (qwen3-0.6b-FLM, ...) cannot call
+// tools, so an agent turn on them fails.
+const ModelsTestModelLemonade = "qwen3-4b-FLM"
+
+// ModelsTestModelFor is the default proof model of a backend.
+func ModelsTestModelFor(backend string) string {
+	if backend == config.ModelManagerBackendLemonade {
+		return ModelsTestModelLemonade
+	}
+	return ModelsTestModel
+}
 
 // modelsTestAgent is the throwaway kagent Agent the proof runs one turn on.
 const modelsTestAgent = "agentlab-models-test"
 
-// modelField is the request field naming a model in the model-manager API.
-const modelField = "model"
+// modelField and backendField are the request fields naming a model and its
+// backend in the model-manager API.
+const (
+	modelField   = "model"
+	backendField = "backend"
+)
 
-// ModelsTest is the headless end-to-end proof of managed models, through the
-// platform path only: the model-manager REST API behind the agentgateway
-// route with a lab user's Dex token (and a 401 without one), then list ->
-// pull with observable progress -> the auto-created kagent ModelConfig
-// (native keyless Ollama provider) Accepted -> a kagent agent turn against it
-// -> the MCP tools through muster -> unload -> delete (gone from Ollama, the
-// ModelConfig gone). Leaves nothing behind.
-func ModelsTest(cfg *config.Config, email, model string) error {
+// ModelsTest is the headless end-to-end proof of managed models on ONE of the
+// configured backends, through the platform path only: the model-manager REST
+// API behind the agentgateway route with a lab user's Dex token (and a 401
+// without one), then list -> pull with observable progress -> the auto-created
+// kagent ModelConfig (native keyless Ollama provider on ollama, OpenAI
+// provider against Lemonade's /api/v1 on lemonade, carrying the backend label)
+// Accepted -> a kagent agent turn against it -> the MCP tools through muster
+// -> unload -> delete (gone from the host server, the ModelConfig gone). Every
+// request names the backend — the one model-manager fronting all servers
+// resolves by it. Leaves nothing behind.
+func ModelsTest(cfg *config.Config, email, backendName, model string) error {
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
 	}
@@ -43,7 +65,20 @@ func ModelsTest(cfg *config.Config, email, model string) error {
 	if user == nil {
 		return fmt.Errorf("no user %q in %s", email, config.File)
 	}
-	// Generous: the first agent turn loads the model into Ollama.
+	mm := cfg.Platform.ModelManager
+	backendName = strings.TrimSpace(backendName)
+	if backendName == "" {
+		backendName = mm.Primary()
+	}
+	if !slices.Contains(mm.Backends, backendName) {
+		return fmt.Errorf("backend %q is not among platform.modelManager.backends (%s)", backendName, strings.Join(mm.Backends, ", "))
+	}
+	if model == "" {
+		model = ModelsTestModelFor(backendName)
+	}
+	// The backend qualifier of every read and write of the proof.
+	q := "?backend=" + url.QueryEscape(backendName)
+	// Generous: the first agent turn loads the model into the host server.
 	client, err := labHTTPClient(180 * time.Second)
 	if err != nil {
 		return err
@@ -69,7 +104,7 @@ func ModelsTest(cfg *config.Config, email, model string) error {
 	api.token = token
 	note("got an id_token")
 
-	step("Backend through the gateway with the Dex token")
+	step("Backend %s through the gateway with the Dex token", backendName)
 	var backend struct {
 		Backend      string          `json:"backend"`
 		Version      string          `json:"version"`
@@ -81,12 +116,11 @@ func ModelsTest(cfg *config.Config, email, model string) error {
 			AutoWire  bool   `json:"autoWire"`
 		} `json:"wiring"`
 	}
-	if err := api.getJSON("/backend", &backend); err != nil {
+	if err := api.getJSON("/backend"+q, &backend); err != nil {
 		return err
 	}
-	primary := cfg.Platform.ModelManager.Primary()
-	if backend.Backend != primary || !backend.Healthy {
-		return fmt.Errorf("backend %q healthy=%v, wanted a healthy %s backend (endpoint %s)", backend.Backend, backend.Healthy, primary, backend.Endpoint)
+	if backend.Backend != backendName || !backend.Healthy {
+		return fmt.Errorf("backend %q healthy=%v, wanted a healthy %s backend (endpoint %s)", backend.Backend, backend.Healthy, backendName, backend.Endpoint)
 	}
 	caps := make([]string, 0, len(backend.Capabilities))
 	for name, on := range backend.Capabilities {
@@ -95,25 +129,25 @@ func ModelsTest(cfg *config.Config, email, model string) error {
 		}
 	}
 	slices.Sort(caps)
-	note("backend %s %s at %s, healthy; capabilities: %s", primary, backend.Version, backend.Endpoint, strings.Join(caps, ", "))
+	note("backend %s %s at %s, healthy; capabilities: %s", backendName, backend.Version, backend.Endpoint, strings.Join(caps, ", "))
 	note("wiring: ModelConfigs in %s, autoWire=%v", backend.Wiring.Namespace, backend.Wiring.AutoWire)
 
-	step("Listing models")
-	names, err := api.modelNames("/models")
+	step("Listing models on %s", backendName)
+	names, err := api.modelNames("/models" + q)
 	if err != nil {
 		return err
 	}
 	note("%d models: %s", len(names), strings.Join(names, ", "))
 	if slices.Contains(names, model) {
 		note("%s is left over from an earlier run — deleting it first", model)
-		if err := api.deleteModel(model); err != nil {
+		if err := api.deleteModel(model, backendName); err != nil {
 			return err
 		}
 	}
 
-	step("Pulling %s (progress via GET /api/v1/jobs/{id})", model)
+	step("Pulling %s on %s (progress via GET /api/v1/jobs/{id})", model, backendName)
 	started := time.Now()
-	status, body, _, err := api.do(http.MethodPost, "/models/pull", map[string]any{modelField: model})
+	status, body, _, err := api.do(http.MethodPost, "/models/pull", map[string]any{modelField: model, backendField: backendName})
 	if err != nil {
 		return err
 	}
@@ -155,7 +189,7 @@ func ModelsTest(cfg *config.Config, email, model string) error {
 			} `json:"modelConfig"`
 			Capabilities []string `json:"capabilities"`
 		}
-		if err := api.getJSON("/models/"+model, &m); err != nil {
+		if err := api.getJSON("/models/"+model+q, &m); err != nil {
 			return false
 		}
 		mcName = m.ModelConfig.Name
@@ -171,20 +205,23 @@ func ModelsTest(cfg *config.Config, email, model string) error {
 		return err
 	}
 	spec, err := outputQuiet("kubectl", "-n", kagentNamespace, "get", modelConfigResource, mcName,
-		"-o", `jsonpath={.spec.provider} {.spec.model} {.spec.ollama.host}{.spec.openAI.baseUrl} managed-by={.metadata.labels.app\.kubernetes\.io/managed-by}`)
+		"-o", `jsonpath={.spec.provider} {.spec.model} {.spec.ollama.host}{.spec.openAI.baseUrl} backend={.metadata.labels.model-manager\.giantswarm\.io/backend} managed-by={.metadata.labels.app\.kubernetes\.io/managed-by}`)
 	if err != nil {
 		return err
 	}
 	// model-manager writes the native keyless Ollama provider for ollama and
 	// the OpenAI provider on /api/v1 (placeholder key) for lemonade.
-	wantProvider := config.ProviderOllama
-	if primary == config.ModelManagerBackendLemonade {
-		wantProvider = config.ProviderOpenAI
+	wantProvider, providerNote := config.ProviderOllama, "keyless native provider"
+	if backendName == config.ModelManagerBackendLemonade {
+		wantProvider, providerNote = config.ProviderOpenAI, "OpenAI-compatible /api/v1, placeholder key"
 	}
 	if !strings.HasPrefix(spec, wantProvider+" ") {
-		return fmt.Errorf("ModelConfig %s is not the %s provider model-manager writes for %s: %s", mcName, wantProvider, primary, spec)
+		return fmt.Errorf("ModelConfig %s is not the %s provider model-manager writes for %s: %s", mcName, wantProvider, backendName, spec)
 	}
-	note("ModelConfig %s: %s (keyless)", mcName, strings.TrimSpace(spec))
+	if !strings.Contains(spec, " backend="+backendName+" ") {
+		return fmt.Errorf("ModelConfig %s does not carry the model-manager.giantswarm.io/backend=%s label: %s", mcName, backendName, spec)
+	}
+	note("ModelConfig %s: %s (%s)", mcName, strings.TrimSpace(spec), providerNote)
 
 	// The user's identity, not a ServiceAccount: wiring writes a ModelConfig
 	// into the kagent namespace as the caller (downstream OAuth), so a user
@@ -198,7 +235,7 @@ func ModelsTest(cfg *config.Config, email, model string) error {
 			return err
 		}
 		viewerAPI := modelManagerAPI{client: client, base: api.base, token: viewerToken}
-		status, body, _, err := viewerAPI.do(http.MethodPost, "/models/wire", map[string]any{modelField: model})
+		status, body, _, err := viewerAPI.do(http.MethodPost, "/models/wire", map[string]any{modelField: model, backendField: backendName})
 		if err != nil {
 			return err
 		}
@@ -211,7 +248,7 @@ func ModelsTest(cfg *config.Config, email, model string) error {
 		note("%s: HTTP %d, %s", viewer.Email, status, excerpt(string(body), 120))
 	}
 
-	step("Agent turn on %s (kagent Agent, runtime go -> host %s)", mcName, config.BackendServerName(primary))
+	step("Agent turn on %s (kagent Agent, runtime go -> host %s)", mcName, config.BackendServerName(backendName))
 	reply, err := agentTurn(client, cfg, mcName, "Reply with exactly the word pong and nothing else.")
 	if err != nil {
 		return err
@@ -239,7 +276,7 @@ func ModelsTest(cfg *config.Config, email, model string) error {
 	}
 	slices.Sort(mmTools)
 	note("%d tools: %s", len(mmTools), strings.Join(mmTools, ", "))
-	text, err := session.callServerTool(toolPrefix+"get_model", map[string]any{modelField: model})
+	text, err := session.callServerTool(toolPrefix+"get_model", map[string]any{modelField: model, backendField: backendName})
 	if err != nil {
 		return err
 	}
@@ -249,13 +286,13 @@ func ModelsTest(cfg *config.Config, email, model string) error {
 	note("%sget_model sees %s (%s)", toolPrefix, model, excerpt(text, 100))
 
 	step("Unloading %s", model)
-	if status, body, _, err := api.do(http.MethodPost, "/models/unload", map[string]any{modelField: model}); err != nil {
+	if status, body, _, err := api.do(http.MethodPost, "/models/unload", map[string]any{modelField: model, backendField: backendName}); err != nil {
 		return err
 	} else if status/100 != 2 {
 		return fmt.Errorf("POST /models/unload answered %d: %.300s", status, body)
 	}
 	unloaded := waitFor(15, 2*time.Second, func() bool {
-		loaded, err := api.modelNames("/loaded")
+		loaded, err := api.modelNames("/loaded" + q)
 		return err == nil && !slices.Contains(loaded, model)
 	})
 	if !unloaded {
@@ -264,7 +301,7 @@ func ModelsTest(cfg *config.Config, email, model string) error {
 	note("not loaded any more")
 
 	step("Deleting %s", model)
-	if err := api.deleteModel(model); err != nil {
+	if err := api.deleteModel(model, backendName); err != nil {
 		return err
 	}
 	if _, err := outputQuiet("kubectl", "-n", kagentNamespace, "get", modelConfigResource, mcName); err == nil {
@@ -277,12 +314,12 @@ func ModelsTest(cfg *config.Config, email, model string) error {
 		}
 	}
 	note("ModelConfig %s is gone", mcName)
-	endpoint, err := resolveBackendEndpoint(cfg, primary)
+	endpoint, err := resolveBackendEndpoint(cfg, backendName)
 	if err != nil {
 		return err
 	}
-	server := config.BackendServerName(primary)
-	remaining, err := hostServerModels(primary, endpoint)
+	server := config.BackendServerName(backendName)
+	remaining, err := hostServerModels(backendName, endpoint)
 	if err != nil {
 		return fmt.Errorf("reading the host %s's models at %s: %w", server, endpoint, err)
 	}
@@ -290,7 +327,7 @@ func ModelsTest(cfg *config.Config, email, model string) error {
 		return fmt.Errorf("host %s still has %s after the delete", server, model)
 	}
 	note("host %s at %s no longer has it (%d models left)", server, endpoint, len(remaining))
-	text, err = session.callServerTool(toolPrefix+"list_models", nil)
+	text, err = session.callServerTool(toolPrefix+"list_models", map[string]any{backendField: backendName})
 	if err != nil {
 		return err
 	}
@@ -299,47 +336,9 @@ func ModelsTest(cfg *config.Config, email, model string) error {
 	}
 	note("%slist_models agrees", toolPrefix)
 
-	// The backends model-manager does not front are wired statically by the
-	// platform run (hostmodels.go): prove one of those ModelConfigs answers
-	// an agent turn too, so "discovered" means "usable by agents".
-	wiredProof := ""
-	if secondary := cfg.Platform.ModelManager.Secondary(); len(secondary) > 0 {
-		endpoints, err := resolveBackendEndpoints(cfg)
-		if err != nil {
-			return err
-		}
-		wired, err := hostBackendModelConfigs(cfg, endpoints)
-		if err != nil {
-			return err
-		}
-		if len(wired) == 0 {
-			note("no tool-calling model downloaded on %s — nothing to prove for the static wiring", strings.Join(secondary, ", "))
-		} else {
-			w := wired[0]
-			step("Agent turn on %s (%s %s, wired statically — model-manager fronts %s only)", w.Name, config.BackendServerName(secondary[0]), w.Model, primary)
-			if err := waitModelConfigAccepted(w.Name); err != nil {
-				return err
-			}
-			reply, err := agentTurn(client, cfg, w.Name, "Reply with exactly the word pong and nothing else.")
-			if err != nil {
-				return err
-			}
-			note("agent replied: %q", excerpt(reply, 120))
-			// Leave the host as found: the turn loaded the model there.
-			if err := unloadHostModel(secondary[0], endpoints[secondary[0]], w.Model); err != nil {
-				note("could not unload %s from the host %s: %v", w.Model, config.BackendServerName(secondary[0]), err)
-			} else {
-				note("unloaded %s from the host %s", w.Model, config.BackendServerName(secondary[0]))
-			}
-			wiredProof = fmt.Sprintf("PASS: %s's %s, wired statically as ModelConfig %s, answered an agent turn (%d wired)\n",
-				config.BackendServerName(secondary[0]), w.Model, w.Name, len(wired))
-		}
-	}
-
 	fmt.Println()
 	fmt.Println("PASS: no token -> 401 at the gateway; Dex token -> model-manager REST through agentgateway")
-	fmt.Printf("PASS: list -> pull %s (progress) -> ModelConfig %s (%s provider) Accepted -> agent turn -> unload -> delete\n", model, mcName, wantProvider)
-	fmt.Print(wiredProof)
+	fmt.Printf("PASS: %s backend: list -> pull %s (progress) -> ModelConfig %s (%s provider, backend label) Accepted -> agent turn -> unload -> delete\n", backendName, model, mcName, wantProvider)
 	fmt.Printf("PASS: muster aggregates x_%s_* and calls them (get_model, list_models)\n", modelManagerMCPServer)
 	fmt.Printf("PASS: the caller's identity — job requestedBy=%s; a viewer's wire is Forbidden by the apiserver (user RBAC, not the ServiceAccount's)\n", user.Email)
 	return nil
@@ -414,10 +413,11 @@ func (a *modelManagerAPI) modelNames(path string) ([]string, error) {
 	return names, nil
 }
 
-// deleteModel deletes a model (its ModelConfig rides along) and waits until
-// the inventory no longer lists it.
-func (a *modelManagerAPI) deleteModel(model string) error {
-	status, body, _, err := a.do(http.MethodDelete, "/models/"+model, nil)
+// deleteModel deletes a model on a backend (its ModelConfig rides along) and
+// waits until the backend's inventory no longer lists it.
+func (a *modelManagerAPI) deleteModel(model, backend string) error {
+	q := "?backend=" + url.QueryEscape(backend)
+	status, body, _, err := a.do(http.MethodDelete, "/models/"+model+q, nil)
 	if err != nil {
 		return err
 	}
@@ -425,7 +425,7 @@ func (a *modelManagerAPI) deleteModel(model string) error {
 		return fmt.Errorf("DELETE /models/%s answered %d: %.300s", model, status, body)
 	}
 	gone := waitFor(15, 2*time.Second, func() bool {
-		names, err := a.modelNames("/models")
+		names, err := a.modelNames("/models" + q)
 		return err == nil && !slices.Contains(names, model)
 	})
 	if !gone {

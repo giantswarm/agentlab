@@ -157,21 +157,19 @@ type Platform struct {
 
 // ModelManager configures the umbrella's model-manager component in the lab.
 type ModelManager struct {
-	// On, `agentlab platform` enables components.model-manager with the
-	// first backend, its agentgateway route (JWT-validated: the portal
+	// On, `agentlab platform` enables components.model-manager in front of
+	// every listed backend, its agentgateway route (JWT-validated: the portal
 	// backend forwards the user's Dex token) and the muster registration.
 	// `agentlab configure` turns it on whenever a host model server answers
 	// (and off when none does), unless --model-manager pins it.
 	Enabled bool `yaml:"enabled"`
 	// The host model servers, in order: `ollama` (an Ollama) and `lemonade`
-	// (a Lemonade Server). model-manager manages ONE backend per instance
-	// today, so the first entry is its backend; every further one is wired
-	// statically by `agentlab platform` — its downloaded tool-calling models
-	// become lab-labeled ModelConfigs, refreshed on every run — until
-	// model-manager talks to all of them at once (giantswarm/model-manager
-	// multi-backend, agentlab#60). `agentlab configure` fills the list from
-	// what answers on this machine (Ollama first); --model-manager-backends
-	// pins it. kserve is no lab backend: GPU nodes and a KServe install.
+	// (a Lemonade Server). ONE model-manager fronts all of them at once
+	// (model-manager >= 0.17.0, `model-manager.backends` in the umbrella
+	// values); the first entry is its default backend — where a request that
+	// names none goes. `agentlab configure` fills the list from what answers
+	// on this machine (Ollama first); --model-manager-backends pins it.
+	// kserve is no lab backend: GPU nodes and a KServe install.
 	Backends []string `yaml:"backends,omitempty"`
 	// Per-backend base URL as pods reach it, keyed by backend. Empty
 	// autodetects http://<kind docker network gateway>:<default port> at
@@ -225,8 +223,9 @@ func BackendServerName(backend string) string {
 	return "Ollama"
 }
 
-// Primary is the backend model-manager fronts: the first, or the historical
-// default (an Ollama) for an enabled block that names none.
+// Primary is model-manager's default backend — where a request that names
+// none goes: the first of the list, or the historical default (an Ollama)
+// for an enabled block that names none.
 func (m ModelManager) Primary() string {
 	if len(m.Backends) == 0 {
 		return ModelManagerBackendOllama
@@ -446,7 +445,7 @@ func Default() *Config {
 			Domain:        "127.0.0.1.nip.io",
 			GatewayPort:   443,
 			APSRepo:       "https://github.com/giantswarm/agent-platform-standalone",
-			APSRef:        "d5a88b07b22785dc2f1032df172b2003773c8176", // main: model-manager 0.16.0 + agent-platform 3.6.0 — the umbrella accepts backend lemonade (#132, #108)
+			APSRef:        "434d12a972188afcaf417b7b4416ec979171d8f2", // main: model-manager 0.17.0 (several backends per instance) + agent-platform 3.7.0 (#143, #144, #147)
 		},
 		Backstage: Backstage{
 			Enabled: true,

@@ -108,8 +108,8 @@ components:
 {{- end }}
 {{- if .ModelManagerEnabled }}
   # Managed models (platform.modelManager): the umbrella's model-manager
-  # dependency with the Ollama backend (its own values are in the
-  # `model-manager:` block below). The route exposes its REST API on the
+  # dependency in front of every host model server of the list (its own
+  # values are in the `model-manager:` block below). The route exposes its REST API on the
   # edge at https://agentgateway.{{ .Platform.Domain }}/model-manager — the
   # chart's Backstage app-config points the portal backend there
   # (agentPlatform.modelManager.installations.agent-platform.apiBaseUrl).
@@ -318,20 +318,30 @@ agent-manager:
 {{- if .ModelManagerEnabled }}
 # The model-manager chart's own values (the umbrella pins the Service name,
 # the kagent namespace, the muster registration and — since the identity
-# change — OAuth against global.identity in its contract). The backend is the
-# first of platform.modelManager.backends (an Ollama, or a Lemonade Server);
-# it dials the host through the kind docker network's gateway — autodetected
-# by `agentlab platform` (platform.modelManager.endpoints.<backend>
-# overrides). Agent pods dial the same address, so agentHost stays empty.
-# Further backends are wired statically (extra-models.yaml.tmpl) until
-# model-manager is multi-backend. Same audience story as
+# change — OAuth against global.identity in its contract). ONE model-manager
+# fronts every host model server of platform.modelManager.backends (an
+# Ollama, a Lemonade Server): `backends` lists them, the first is the default
+# backend of a request that names none, and each dials the host through the
+# kind docker network's gateway — autodetected by `agentlab platform`
+# (platform.modelManager.endpoints.<backend> overrides). Agent pods dial the
+# same addresses, so agentHost stays empty. A single entry renders the
+# chart's one-backend form (`backend:`). Same audience story as
 # mcp-kubernetes above: the forwarded token must carry the `kubernetes`
 # audience for model-manager's downstream OAuth (the ModelConfigs it writes
 # as the caller) to pass the kind apiserver.
 model-manager:
-  backend: {{ .ModelManagerBackend }}
-  {{ .ModelManagerBackend }}:
-    endpoint: {{ .ModelManagerEndpoint | printf "%q" }}
+{{- if eq (len .ModelManagerBackends) 1 }}
+  backend: {{ index .ModelManagerBackends 0 }}
+{{- else }}
+  backends:
+{{- range .ModelManagerBackends }}
+    - {{ . }}
+{{- end }}
+{{- end }}
+{{- range .ModelManagerBackends }}
+  {{ . }}:
+    endpoint: {{ index $.ModelManagerEndpoints . | printf "%q" }}
+{{- end }}
   muster:
     mcpServer:
       auth:
