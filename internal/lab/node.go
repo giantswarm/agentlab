@@ -37,13 +37,16 @@ import (
 // finds them, exited ones included.
 const kindClusterLabel = "io.x-k8s.kind.cluster"
 
-// Docker container states as `docker ps` and `docker inspect` spell them.
+// Docker container states as `docker ps` and `docker inspect` spell them, and
+// the verbs that bring a container back to running.
 const (
 	stateRunning = "running"
 	statePaused  = "paused"
 	stateExited  = "exited"
 	stateCreated = "created"
 	stateDead    = "dead"
+	verbStart    = "start"
+	verbUnpause  = "unpause"
 )
 
 // nodeExitTimeout bounds how long Down waits for a node docker could not kill
@@ -160,9 +163,9 @@ func nodeStartVerb(state string) string {
 	case stateRunning:
 		return ""
 	case statePaused:
-		return "unpause"
+		return verbUnpause
 	default:
-		return "start"
+		return verbStart
 	}
 }
 

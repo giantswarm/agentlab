@@ -53,7 +53,7 @@ const dockerPSCall = "docker ps -a --filter label=io.x-k8s.kind.cluster=agentlab
 func TestAliveContainers(t *testing.T) {
 	cs := parseContainerStates("agentlab-control-plane\texited\nagentlab-worker\trunning\nagentlab-worker2\tpaused\n\n")
 	if want := []containerState{
-		{"agentlab-control-plane", "exited"}, {"agentlab-worker", "running"}, {"agentlab-worker2", "paused"},
+		{"agentlab-control-plane", stateExited}, {"agentlab-worker", stateRunning}, {"agentlab-worker2", statePaused},
 	}; !slices.Equal(cs, want) {
 		t.Fatalf("parseContainerStates = %v, want %v", cs, want)
 	}
@@ -63,12 +63,12 @@ func TestAliveContainers(t *testing.T) {
 	if got := alive(parseContainerStates("")); len(got) != 0 {
 		t.Errorf("no containers: alive = %v, want none", got)
 	}
-	for _, state := range []string{"exited", "created", "dead"} {
+	for _, state := range []string{stateExited, stateCreated, stateDead} {
 		if got := alive([]containerState{{"n", state}}); len(got) != 0 {
 			t.Errorf("%s container counted as alive", state)
 		}
 	}
-	for _, state := range []string{"running", "paused", "restarting", "removing"} {
+	for _, state := range []string{stateRunning, statePaused, "restarting", "removing"} {
 		if got := alive([]containerState{{"n", state}}); len(got) != 1 {
 			t.Errorf("%s container not counted as alive", state)
 		}
@@ -79,7 +79,7 @@ func TestAliveContainers(t *testing.T) {
 // everything else started — `docker start` on a paused container fails.
 func TestNodeStartVerb(t *testing.T) {
 	for state, want := range map[string]string{
-		"running": "", "paused": "unpause", "exited": "start", "created": "start", "dead": "start",
+		stateRunning: "", statePaused: verbUnpause, stateExited: verbStart, stateCreated: verbStart, stateDead: verbStart,
 	} {
 		if got := nodeStartVerb(state); got != want {
 			t.Errorf("nodeStartVerb(%q) = %q, want %q", state, got, want)
@@ -106,7 +106,7 @@ ps)
   fi ;;
 esac`)
 
-	t.Setenv("FAKE_LIVE_STATE", "running")
+	t.Setenv("FAKE_LIVE_STATE", stateRunning)
 	if err := waitForNodeExit("agentlab", time.Second, time.Millisecond); err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ esac`)
 
 	_ = os.Remove(counter)
 	_ = os.Remove(calls)
-	t.Setenv("FAKE_LIVE_STATE", "paused")
+	t.Setenv("FAKE_LIVE_STATE", statePaused)
 	if err := waitForNodeExit("agentlab", time.Second, time.Millisecond); err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ esac`)
 	cfg := config.Default()
 	const inspect = "docker inspect -f {{.State.Status}} agentlab-control-plane\n"
 
-	t.Setenv("FAKE_NODE_STATE", "running")
+	t.Setenv("FAKE_NODE_STATE", stateRunning)
 	if err := ensureNodeRunning(cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,7 @@ esac`)
 	}
 
 	_ = os.Remove(dockerCalls)
-	t.Setenv("FAKE_NODE_STATE", "exited")
+	t.Setenv("FAKE_NODE_STATE", stateExited)
 	if err := ensureNodeRunning(cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +194,7 @@ esac`)
 	}
 
 	_ = os.Remove(dockerCalls)
-	t.Setenv("FAKE_NODE_STATE", "paused")
+	t.Setenv("FAKE_NODE_STATE", statePaused)
 	if err := ensureNodeRunning(cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +202,7 @@ esac`)
 		t.Errorf("paused node: docker calls = %q, want an unpause", log)
 	}
 
-	t.Setenv("FAKE_NODE_STATE", "exited")
+	t.Setenv("FAKE_NODE_STATE", stateExited)
 	t.Setenv("FAKE_START_FAILS", "1")
 	err := ensureNodeRunning(cfg)
 	if err == nil {

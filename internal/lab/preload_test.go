@@ -9,6 +9,14 @@ import (
 	"github.com/giantswarm/agentlab/internal/config"
 )
 
+// Fixture refs, hoisted so the linter's constant check stays quiet.
+const (
+	refPostgres     = "docker.io/library/postgres:18.3-alpine"
+	refBackstageDev = "docker.io/library/backstage-dev:multi-backend-022f5b7e"
+	refMusterDev    = "gsoci.azurecr.io/giantswarm/muster:dev"
+	refGolangADK    = "gsoci.azurecr.io/giantswarm/golang-adk:0.10.0"
+)
+
 func TestScrapeImages(t *testing.T) {
 	rendered := `
 apiVersion: apps/v1
@@ -46,7 +54,7 @@ spec:
 `
 	got := scrapeImages(rendered)
 	want := []string{
-		"docker.io/library/postgres:18.3-alpine",
+		refPostgres,
 		"gsoci.azurecr.io/giantswarm/agentgateway:v1.4.1",
 		"gsoci.azurecr.io/giantswarm/mcp-kubernetes:1.0.9",
 		"gsoci.azurecr.io/giantswarm/muster:5.7.2",
@@ -71,12 +79,12 @@ func TestRegistryBacked(t *testing.T) {
 		"gsoci.azurecr.io/giantswarm/muster:5.10.2\tsha256:b97b80cd922c4aa2b6aa61e3fca50194d211b1b5a90b5931ce1eef5ff74d35a5\n" +
 		"<none>:<none>\t<none>\n")
 	for ref, want := range map[string]bool{
-		"docker.io/library/backstage-dev:multi-backend-022f5b7e": false, // built here
-		"docker.io/library/postgres:18.3-alpine":                 true,  // pulled from Docker Hub
-		"docker.io/alpine/socat:1.8.1.3":                         true,  // pulled, non-library namespace
-		"gsoci.azurecr.io/giantswarm/muster:dev":                 false, // a dev build tagged into a registry repo
-		"gsoci.azurecr.io/giantswarm/muster:5.10.2":              true,
-		"gsoci.azurecr.io/giantswarm/golang-adk:0.10.0":          true, // unknown to the host: the node pulled it
+		refBackstageDev:                  false, // built here
+		refPostgres:                      true,  // pulled from Docker Hub
+		"docker.io/alpine/socat:1.8.1.3": true,  // pulled, non-library namespace
+		refMusterDev:                     false, // a dev build tagged into a registry repo
+		"gsoci.azurecr.io/giantswarm/muster:5.10.2": true,
+		refGolangADK: true, // unknown to the host: the node pulled it
 	} {
 		if got := registryBacked(ref, prov); got != want {
 			t.Errorf("registryBacked(%q) = %v, want %v", ref, got, want)
@@ -86,9 +94,9 @@ func TestRegistryBacked(t *testing.T) {
 		t.Error("untagged rows must not enter the provenance map")
 	}
 	for ref, want := range map[string]string{
-		"docker.io/library/postgres:18.3-alpine": "postgres:18.3-alpine",
-		"docker.io/alpine/socat:1.8.1.3":         "alpine/socat:1.8.1.3",
-		"ghcr.io/dexidp/dex:v2.45.1":             "ghcr.io/dexidp/dex:v2.45.1",
+		refPostgres:                      "postgres:18.3-alpine",
+		"docker.io/alpine/socat:1.8.1.3": "alpine/socat:1.8.1.3",
+		"ghcr.io/dexidp/dex:v2.45.1":     "ghcr.io/dexidp/dex:v2.45.1",
 	} {
 		if got := shortRef(ref); got != want {
 			t.Errorf("shortRef(%q) = %q, want %q", ref, got, want)
@@ -142,12 +150,12 @@ esac`)
 		"postgres:18.3-alpine\tsha256:54451e\n" +
 		"gsoci.azurecr.io/giantswarm/muster:dev\t<none>\n")
 	check("host knows both local images",
-		[]string{"docker.io/library/postgres:18.3-alpine", "gsoci.azurecr.io/giantswarm/golang-adk:0.10.0"},
-		[]string{"docker.io/library/backstage-dev:multi-backend-022f5b7e", "gsoci.azurecr.io/giantswarm/muster:dev"})
+		[]string{refPostgres, refGolangADK},
+		[]string{refBackstageDev, refMusterDev})
 
 	writeHost("postgres:18.3-alpine\tsha256:54451e\n" +
 		"gsoci.azurecr.io/giantswarm/muster:dev\tsha256:0ff1ce\n")
 	check("dev image pruned on the host, muster:dev pulled for real",
-		[]string{"docker.io/library/postgres:18.3-alpine", "gsoci.azurecr.io/giantswarm/golang-adk:0.10.0", "gsoci.azurecr.io/giantswarm/muster:dev"},
-		[]string{"docker.io/library/backstage-dev:multi-backend-022f5b7e"})
+		[]string{refPostgres, refGolangADK, refMusterDev},
+		[]string{refBackstageDev})
 }
