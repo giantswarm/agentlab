@@ -229,19 +229,77 @@ func snapshotPreloadImages(cfg *config.Config) {
 			images = append(images, tag)
 		}
 	}
-	if len(images) == 0 {
-		return
-	}
 	slices.Sort(images)
 	images = slices.Compact(images)
-	content := "# Images the last successful boot ran; the next `agentlab up` pulls\n" +
+	// Images built here were side-loaded by whoever built them and have no
+	// registry to be pulled from on the next boot. They are remembered as
+	// such, so a later `docker image prune` on the host does not make them
+	// look like images the node pulled itself (localOnly).
+	prov, provErr := hostImageProvenance()
+	remembered := readLocalOnlyRefs()
+	var local []string
+	images = slices.DeleteFunc(images, func(img string) bool {
+		if !localOnly(img, prov, provErr == nil, remembered) {
+			return false
+		}
+		local = append(local, img)
+		return true
+	})
+	if len(images) == 0 && len(local) == 0 {
+		return
+	}
+	var b strings.Builder
+	b.WriteString("# Images the last successful boot ran; the next `agentlab up` pulls\n" +
 		"# them on the host and side-loads them into the fresh node. Regenerated\n" +
-		"# after every boot — safe to delete.\n" +
-		strings.Join(images, "\n") + "\n"
+		"# after every boot — safe to delete.\n")
+	for _, img := range images {
+		b.WriteString(img + "\n")
+	}
+	if len(local) > 0 {
+		b.WriteString("# Built or tagged on this host and side-loaded: no registry serves them,\n" +
+			"# so they stay out of the pull set even once the local copy is pruned.\n")
+		for _, img := range local {
+			b.WriteString(localOnlyMarker + img + "\n")
+		}
+	}
 	if err := os.MkdirAll(StateDir, 0o750); err != nil {
 		return
 	}
-	_ = os.WriteFile(preloadImagesFile, []byte(content), 0o600)
+	_ = os.WriteFile(preloadImagesFile, []byte(b.String()), 0o600)
+}
+
+// localOnlyMarker prefixes the manifest lines that remember local-only refs —
+// comments to readPreloadManifest, so they never enter the pull set.
+const localOnlyMarker = "# local-only: "
+
+// localOnly reports whether a node image is a local build the next boot must
+// not try to pull. The host cache's current knowledge decides whenever it has
+// any (registryBacked: a real pull of the same repo:tag makes it pullable
+// again); for a ref the host no longer knows — the local copy was pruned — the
+// manifest's memory decides.
+func localOnly(ref string, prov map[string]bool, provOK bool, remembered []string) bool {
+	if provOK {
+		if _, known := prov[shortRef(ref)]; known {
+			return !registryBacked(ref, prov)
+		}
+	}
+	return slices.Contains(remembered, ref)
+}
+
+// readLocalOnlyRefs returns the refs the manifest remembers as local builds;
+// no manifest, no memory.
+func readLocalOnlyRefs() []string {
+	raw, err := os.ReadFile(filepath.FromSlash(preloadImagesFile))
+	if err != nil {
+		return nil
+	}
+	var refs []string
+	for line := range strings.Lines(string(raw)) {
+		if ref, ok := strings.CutPrefix(strings.TrimSpace(line), localOnlyMarker); ok && ref != "" {
+			refs = append(refs, ref)
+		}
+	}
+	return refs
 }
 
 // readPreloadManifest returns the cached image list, tolerating comments and
@@ -280,4 +338,56 @@ func nodeImageTags(node string) ([]string, error) {
 		tags = append(tags, img.RepoTags...)
 	}
 	return tags, nil
+}
+
+// hostImageProvenance maps every repo:tag in the host docker cache to whether
+// a registry digest backs it: `docker images --digests` prints the digest of
+// the manifest a pulled image came from, and <none> for an image built or
+// tagged here. A pulled image re-tagged into ANOTHER repository shows <none>
+// too (the digest belongs to the repository it was pulled as); re-tagged within
+// the same repository it keeps the digest, and so still reads as pulled. Refs
+// are spelled the way docker prints them (shortRef).
+func hostImageProvenance() (map[string]bool, error) {
+	out, err := outputQuiet("docker", "images", "--digests", "--format", "{{.Repository}}:{{.Tag}}\t{{.Digest}}")
+	if err != nil {
+		return nil, err
+	}
+	return parseImageProvenance(out), nil
+}
+
+// parseImageProvenance reads hostImageProvenance's "repo:tag<TAB>digest"
+// lines; untagged rows are skipped, and a ref listed more than once is backed
+// if any of its rows is.
+func parseImageProvenance(out string) map[string]bool {
+	prov := map[string]bool{}
+	for line := range strings.Lines(out) {
+		ref, digest, ok := strings.Cut(strings.TrimSpace(line), "\t")
+		if !ok || strings.HasSuffix(ref, ":<none>") {
+			continue
+		}
+		digest = strings.TrimSpace(digest)
+		prov[ref] = prov[ref] || (digest != "" && digest != "<none>")
+	}
+	return prov
+}
+
+// shortRef spells a fully qualified ref (as crictl lists it) the way docker
+// prints it: the docker.io registry and its library/ namespace are implicit.
+func shortRef(ref string) string {
+	ref = strings.TrimPrefix(ref, "docker.io/library/")
+	return strings.TrimPrefix(ref, "docker.io/")
+}
+
+// registryBacked reports whether a node image can be pulled again on the next
+// boot. A ref the host cache does not know was pulled by the node itself —
+// pullable by construction; one the host knows with a registry digest was
+// pulled on the host. One the host knows WITHOUT a digest was built or tagged
+// here and side-loaded (a dev-image swap): no registry has it —
+// `docker.io/library/backstage-dev:<tag>` is what docker makes of a bare
+// `backstage-dev:<tag>` — and recording it means every boot after the local
+// copy is pruned asks Docker Hub for it and dockerd logs "denied: requested
+// access to the resource is denied" per ref.
+func registryBacked(ref string, prov map[string]bool) bool {
+	backed, known := prov[shortRef(ref)]
+	return !known || backed
 }

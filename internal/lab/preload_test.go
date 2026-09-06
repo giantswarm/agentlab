@@ -1,8 +1,12 @@
 package lab
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
+
+	"github.com/giantswarm/agentlab/internal/config"
 )
 
 func TestScrapeImages(t *testing.T) {
@@ -52,4 +56,98 @@ spec:
 	if !slices.Equal(got, want) {
 		t.Fatalf("scrapeImages:\n got  %v\n want %v", got, want)
 	}
+}
+
+// TestRegistryBacked: the snapshot keeps what the next boot can pull — refs
+// the host cache does not know (the node pulled them itself) and refs it
+// knows with a registry digest — and drops what it knows without one: images
+// built or tagged here and side-loaded, which docker spells
+// `docker.io/library/<name>` in the node although no registry has them.
+func TestRegistryBacked(t *testing.T) {
+	prov := parseImageProvenance("backstage-dev:multi-backend-022f5b7e\t<none>\n" +
+		"postgres:18.3-alpine\tsha256:54451ecb8ab38c24c3ec123f2fd501303a3a1856a5c66e98cecf2460d5e1e9d7\n" +
+		"alpine/socat:1.8.1.3\tsha256:5f275aa1b6e9889c851f61097142ee050fc6ac4615b4ea64ac1f2b0e81ff8d7f\n" +
+		"gsoci.azurecr.io/giantswarm/muster:dev\t<none>\n" +
+		"gsoci.azurecr.io/giantswarm/muster:5.10.2\tsha256:b97b80cd922c4aa2b6aa61e3fca50194d211b1b5a90b5931ce1eef5ff74d35a5\n" +
+		"<none>:<none>\t<none>\n")
+	for ref, want := range map[string]bool{
+		"docker.io/library/backstage-dev:multi-backend-022f5b7e": false, // built here
+		"docker.io/library/postgres:18.3-alpine":                 true,  // pulled from Docker Hub
+		"docker.io/alpine/socat:1.8.1.3":                         true,  // pulled, non-library namespace
+		"gsoci.azurecr.io/giantswarm/muster:dev":                 false, // a dev build tagged into a registry repo
+		"gsoci.azurecr.io/giantswarm/muster:5.10.2":              true,
+		"gsoci.azurecr.io/giantswarm/golang-adk:0.10.0":          true, // unknown to the host: the node pulled it
+	} {
+		if got := registryBacked(ref, prov); got != want {
+			t.Errorf("registryBacked(%q) = %v, want %v", ref, got, want)
+		}
+	}
+	if _, dangling := prov["<none>:<none>"]; dangling {
+		t.Error("untagged rows must not enter the provenance map")
+	}
+	for ref, want := range map[string]string{
+		"docker.io/library/postgres:18.3-alpine": "postgres:18.3-alpine",
+		"docker.io/alpine/socat:1.8.1.3":         "alpine/socat:1.8.1.3",
+		"ghcr.io/dexidp/dex:v2.45.1":             "ghcr.io/dexidp/dex:v2.45.1",
+	} {
+		if got := shortRef(ref); got != want {
+			t.Errorf("shortRef(%q) = %q, want %q", ref, got, want)
+		}
+	}
+}
+
+// TestSnapshotPreloadImagesSkipsLocalBuilds runs the snapshot against a
+// stand-in docker. The node's crictl list holds infra images, a pulled
+// official image, an image the node pulled itself, a dev image built on the
+// host and a dev build tagged into a registry repo: the pull set gets the two
+// pullable refs, the two local ones are remembered as such. Then the host
+// prunes the dev image and pulls that repo:tag for real: the memory
+// keeps the pruned one out, the real pull brings the other in.
+func TestSnapshotPreloadImagesSkipsLocalBuilds(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	hostImages := filepath.Join(dir, "host-images")
+	t.Setenv("FAKE_HOST_IMAGES", hostImages)
+	installFakeTool(t, dir, "docker", `
+case "$1" in
+exec) cat <<'JSON'
+{"images":[
+ {"repoTags":["docker.io/library/backstage-dev:multi-backend-022f5b7e"]},
+ {"repoTags":["docker.io/library/postgres:18.3-alpine"]},
+ {"repoTags":["gsoci.azurecr.io/giantswarm/golang-adk:0.10.0"]},
+ {"repoTags":["gsoci.azurecr.io/giantswarm/muster:dev"]},
+ {"repoTags":["registry.k8s.io/etcd:3.6.4-0","docker.io/kindest/kindnetd:v20250512-df8de77b"]}
+]}
+JSON
+;;
+images) cat "$FAKE_HOST_IMAGES" ;;
+esac`)
+	writeHost := func(rows string) {
+		if err := os.WriteFile(hostImages, []byte(rows), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := func(phase string, wantPull, wantLocal []string) {
+		t.Helper()
+		snapshotPreloadImages(config.Default())
+		if got := readPreloadManifest(); !slices.Equal(got, wantPull) {
+			t.Errorf("%s: pull set\n got  %v\n want %v", phase, got, wantPull)
+		}
+		if got := readLocalOnlyRefs(); !slices.Equal(got, wantLocal) {
+			t.Errorf("%s: local-only memory\n got  %v\n want %v", phase, got, wantLocal)
+		}
+	}
+
+	writeHost("backstage-dev:multi-backend-022f5b7e\t<none>\n" +
+		"postgres:18.3-alpine\tsha256:54451e\n" +
+		"gsoci.azurecr.io/giantswarm/muster:dev\t<none>\n")
+	check("host knows both local images",
+		[]string{"docker.io/library/postgres:18.3-alpine", "gsoci.azurecr.io/giantswarm/golang-adk:0.10.0"},
+		[]string{"docker.io/library/backstage-dev:multi-backend-022f5b7e", "gsoci.azurecr.io/giantswarm/muster:dev"})
+
+	writeHost("postgres:18.3-alpine\tsha256:54451e\n" +
+		"gsoci.azurecr.io/giantswarm/muster:dev\tsha256:0ff1ce\n")
+	check("dev image pruned on the host, muster:dev pulled for real",
+		[]string{"docker.io/library/postgres:18.3-alpine", "gsoci.azurecr.io/giantswarm/golang-adk:0.10.0", "gsoci.azurecr.io/giantswarm/muster:dev"},
+		[]string{"docker.io/library/backstage-dev:multi-backend-022f5b7e"})
 }

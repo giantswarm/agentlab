@@ -1071,6 +1071,28 @@ next version lands.
 - Kubernetes 1.35 still accepts the `--oidc-*` flags. The modern alternative is
   `--authentication-config` (structured `AuthenticationConfiguration`, which
   also supports CEL claim mappings). The flags are simpler and were kept here.
+- **`agentlab down` can lose a race with docker and leave an exited node.**
+  `kind delete cluster` is `docker rm -f` of the node container; docker gives
+  it ten seconds after SIGKILL to exit and then gives up (`could not kill
+  container: ... did not receive an exit event`) — a node busy with an
+  `agentlab up` side-load in another shell has taken 44 s. The container
+  stays in `docker ps -a` as `Exited (137)`, kind still lists the cluster,
+  and docker's restart policy does not fire (an API kill counts as a manual
+  stop). `agentlab down` therefore waits (up to 90 s) for the node to exit
+  and deletes again, and `agentlab up` on a cluster whose node is not running
+  starts the container (`docker start`, which kind supports) and waits for
+  the apiserver before touching anything — instead of failing inside `kind
+  get kubeconfig` with a runc `nsexec ... No such file or directory` or
+  `container ... is not running`. Do not run `down` while another `agentlab`
+  process is using the cluster (`ps -eo pid,args | grep '[a]gentlab '`).
+- **The image cache manifest only records what a registry can serve.**
+  `state/preload-images.txt` is snapshotted from the node after every boot;
+  an image built on the host and side-loaded (`kind load docker-image
+  backstage-dev:<tag>`) shows up there as `docker.io/library/backstage-dev:<tag>`
+  — a Docker Hub ref that does not exist — and once the local copy is pruned
+  every boot would ask Docker Hub for it (`denied: requested access to the
+  resource is denied` in the dockerd log, once per ref). Images the host cache
+  knows without a registry digest are therefore left out of the snapshot.
 
 ## Wiring another app to this Dex
 
