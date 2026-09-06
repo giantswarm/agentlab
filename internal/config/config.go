@@ -74,6 +74,12 @@ const KagentUINodePort = 30880
 // has a stable node-side port. Host side: Platform.GatewayPort.
 const GatewayNodePort = 30443
 
+// GatewayPublicNodePort pins the NodePort of the edge Service's second port
+// (platform.gatewayPort, rendered off 443 only) so the apiserver never picks
+// one that collides with the other fixed NodePorts. Nothing on the host maps
+// it.
+const GatewayPublicNodePort = 30444
+
 // DefaultDexPort is the lab Dex NodePort when agentlab.yaml sets none.
 const DefaultDexPort = 32000
 
@@ -122,10 +128,10 @@ type Platform struct {
 	// the edge Gateway Service.
 	Domain string `yaml:"domain"`
 	// Host-side port of the agentgateway edge (HTTPS). 443 keeps the public
-	// URLs port-free; any other value is only reachable from the host (the
-	// edge Service inside the cluster stays on 443), so in-cluster callers of
-	// a ported public URL — muster fetching its own OAuth metadata for the
-	// lab-oauth-fixture — time out. Change only if 443 is taken.
+	// URLs port-free; any other value suffixes every public URL with it, and
+	// the lab's edge Service (gateway-nodeport.yaml.tmpl) then also serves
+	// that port in-cluster, so the ported URLs resolve from pods too. Change
+	// only if 443 is taken.
 	GatewayPort int `yaml:"gatewayPort"`
 	// TLS optionally hands the edge an externally provisioned certificate
 	// pair (PEM) instead of the minted lab-CA wildcard — for users who own a
