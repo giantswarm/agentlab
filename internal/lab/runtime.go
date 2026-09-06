@@ -8,12 +8,17 @@ import (
 // The lab drives containers through the `docker` CLI, and Podman's
 // docker-compatible CLI answers to it too (kind picks its podman provider
 // the same way). Docker is the primary path; where podman differs, the code
-// branches on dockerIsPodman:
+// branches on dockerIsPodman. The differences:
 //
 //   - `docker save a b c` writes ONE image carrying every name as a tag
 //     (podman's archive is single-image unless --multi-image-archive is
 //     passed), and kind's `load docker-image` runs exactly that save — so
-//     the lab loads one image per call (kindLoadImages, HACKS.md U16).
+//     the lab loads one image per call (kindLoadImages, HACKS.md U16);
+//   - pods reach the host at host.containers.internal, not the bridge
+//     gateway, and the host cannot dial that address itself (kindGatewayIP,
+//     hostServerAnswers);
+//   - local builds are spelled `localhost/<name>` and carry a digest like any
+//     pull, so the name is what marks them local (parseImageProvenance).
 
 // dockerIsPodman reports whether the `docker` on PATH is Podman's
 // docker-compatible CLI. Cached for the process: the answer cannot change

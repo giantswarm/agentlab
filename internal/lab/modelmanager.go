@@ -87,21 +87,44 @@ func loopbackBase(backend string) string {
 	return fmt.Sprintf("http://127.0.0.1:%d", config.BackendPort(backend))
 }
 
-// kindGatewayIP returns the IPv4 gateway of the kind docker network — the
-// address pods use to reach services on the host.
-func kindGatewayIP() (string, error) {
+// kindGatewayIP returns the address pods dial to reach services on the host:
+// the IPv4 gateway of the kind docker network. Under rootless podman the
+// bridge gateway is not the host (pasta routes host traffic through
+// host.containers.internal, 169.254.1.2, and nothing answers on the
+// gateway), so there the address is what the node resolves that name to —
+// which needs the node, like the network needs the cluster.
+func kindGatewayIP(node string) (string, error) {
+	if dockerIsPodman() {
+		out, err := outputQuiet("docker", "exec", node, "getent", "hosts", "host.containers.internal")
+		if err != nil {
+			return "", fmt.Errorf("node %q cannot resolve host.containers.internal (the node must be running, and podman writes the name into its /etc/hosts): %w", node, err)
+		}
+		if ip := firstIPv4(out); ip != "" {
+			return ip, nil
+		}
+		return "", fmt.Errorf("node %q resolves host.containers.internal to no IPv4 address", node)
+	}
 	out, err := outputQuiet("docker", "network", "inspect", kindDockerNetwork,
 		"-f", `{{range .IPAM.Config}}{{.Gateway}}{{"\n"}}{{end}}`)
 	if err != nil {
 		return "", fmt.Errorf("docker network %q not found (the kind cluster creates it): %w", kindDockerNetwork, err)
 	}
-	for _, line := range strings.Split(out, "\n") {
-		ip := net.ParseIP(strings.TrimSpace(line))
-		if ip != nil && ip.To4() != nil {
-			return ip.String(), nil
-		}
+	if ip := firstIPv4(out); ip != "" {
+		return ip, nil
 	}
 	return "", fmt.Errorf("docker network %q has no IPv4 gateway", kindDockerNetwork)
+}
+
+// firstIPv4 returns the first IPv4 address leading a line of out.
+func firstIPv4(out string) string {
+	for _, line := range strings.Split(out, "\n") {
+		if f := strings.Fields(line); len(f) > 0 {
+			if ip := net.ParseIP(f[0]); ip != nil && ip.To4() != nil {
+				return ip.String()
+			}
+		}
+	}
+	return ""
 }
 
 // resolveBackendEndpoint is the URL model-manager (or an agent pod) dials for
@@ -113,7 +136,7 @@ func resolveBackendEndpoint(cfg *config.Config, backend string) (string, error) 
 	if ep := cfg.Platform.ModelManager.EndpointFor(backend); ep != "" {
 		return strings.TrimSuffix(ep, "/"), nil
 	}
-	gw, err := kindGatewayIP()
+	gw, err := kindGatewayIP(cfg.ControlPlaneNode())
 	if err != nil {
 		return "", fmt.Errorf("autodetecting the %s endpoint: %w (set platform.modelManager.endpoints.%s to skip the detection)",
 			config.BackendServerName(backend), err, backend)

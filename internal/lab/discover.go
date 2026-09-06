@@ -77,7 +77,7 @@ func Discover(cfg *config.Config) *Discovery {
 		{"helm", helmVersion()},
 	}
 	d.ClusterExists, d.ClusterPorts = kindNodePublishedPorts(cfg.ControlPlaneNode())
-	if gw, err := kindGatewayIP(); err == nil {
+	if gw, err := kindGatewayIP(cfg.ControlPlaneNode()); err == nil {
 		d.KindGateway = gw
 	}
 	for _, b := range config.ModelManagerBackends {
@@ -88,7 +88,7 @@ func Discover(cfg *config.Config) *Discovery {
 		}
 		s := HostServer{Backend: b, Version: version, Port: config.BackendPort(b)}
 		if d.KindGateway != "" {
-			answers := tcpAnswers(net.JoinHostPort(d.KindGateway, strconv.Itoa(s.Port)))
+			answers := hostServerAnswers(cfg.ControlPlaneNode(), net.JoinHostPort(d.KindGateway, strconv.Itoa(s.Port)))
 			s.OnGateway = &answers
 		}
 		s.Models, s.ModelsErr = hostModelsFn(b, base)
@@ -162,10 +162,13 @@ func (d *Discovery) Report(cfg *config.Config) string {
 	}
 	for _, s := range d.Servers {
 		reach := "kind gateway not known yet (first `agentlab up` creates the network)"
+		if dockerIsPodman() {
+			reach = "the address pods dial is not known while the node is not running (`agentlab up` starts it)"
+		}
 		if s.OnGateway != nil && *s.OnGateway {
-			reach = fmt.Sprintf("listens on the kind gateway %s: yes", d.KindGateway)
+			reach = fmt.Sprintf("answers on %s (the address pods dial): yes", d.KindGateway)
 		} else if s.OnGateway != nil {
-			reach = fmt.Sprintf("does NOT listen on the kind gateway %s — pods cannot reach it (%s)", d.KindGateway, bindHint(s.Backend))
+			reach = fmt.Sprintf("does NOT answer on %s (the address pods dial) — pods cannot reach it (%s)", d.KindGateway, bindHint(s.Backend))
 		}
 		models := "models not listed"
 		if s.ModelsErr == nil {
@@ -205,6 +208,21 @@ func bindHint(backend string) string {
 		return "`lemonade config set host=0.0.0.0`, restart lemond"
 	}
 	return "OLLAMA_HOST=0.0.0.0, restart Ollama"
+}
+
+// hostServerAnswers is tcpAnswers from where it matters: under podman the
+// host cannot dial host.containers.internal itself, so the node dials it.
+func hostServerAnswers(node, addr string) bool {
+	if !dockerIsPodman() {
+		return tcpAnswers(addr)
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	_, err = outputQuiet("docker", "exec", node, "timeout", "2", "bash", "-c",
+		fmt.Sprintf("exec 3<>/dev/tcp/%s/%s", host, port))
+	return err == nil
 }
 
 // tcpAnswers reports whether something accepts a TCP connection at addr.

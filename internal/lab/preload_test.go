@@ -15,6 +15,7 @@ const (
 	refBackstageDev = "docker.io/library/backstage-dev:multi-backend-022f5b7e"
 	refMusterDev    = "gsoci.azurecr.io/giantswarm/muster:dev"
 	refGolangADK    = "gsoci.azurecr.io/giantswarm/golang-adk:0.10.0"
+	refSocat        = "docker.io/alpine/socat:1.8.1.3"
 )
 
 func TestScrapeImages(t *testing.T) {
@@ -79,10 +80,10 @@ func TestRegistryBacked(t *testing.T) {
 		"gsoci.azurecr.io/giantswarm/muster:5.10.2\tsha256:b97b80cd922c4aa2b6aa61e3fca50194d211b1b5a90b5931ce1eef5ff74d35a5\n" +
 		"<none>:<none>\t<none>\n")
 	for ref, want := range map[string]bool{
-		refBackstageDev:                  false, // built here
-		refPostgres:                      true,  // pulled from Docker Hub
-		"docker.io/alpine/socat:1.8.1.3": true,  // pulled, non-library namespace
-		refMusterDev:                     false, // a dev build tagged into a registry repo
+		refBackstageDev: false, // built here
+		refPostgres:     true,  // pulled from Docker Hub
+		refSocat:        true,  // pulled, non-library namespace
+		refMusterDev:    false, // a dev build tagged into a registry repo
 		"gsoci.azurecr.io/giantswarm/muster:5.10.2": true,
 		refGolangADK: true, // unknown to the host: the node pulled it
 	} {
@@ -94,9 +95,9 @@ func TestRegistryBacked(t *testing.T) {
 		t.Error("untagged rows must not enter the provenance map")
 	}
 	for ref, want := range map[string]string{
-		refPostgres:                      "postgres:18.3-alpine",
-		"docker.io/alpine/socat:1.8.1.3": "alpine/socat:1.8.1.3",
-		"ghcr.io/dexidp/dex:v2.45.1":     "ghcr.io/dexidp/dex:v2.45.1",
+		refPostgres:                  "postgres:18.3-alpine",
+		refSocat:                     "alpine/socat:1.8.1.3",
+		"ghcr.io/dexidp/dex:v2.45.1": "ghcr.io/dexidp/dex:v2.45.1",
 	} {
 		if got := shortRef(ref); got != want {
 			t.Errorf("shortRef(%q) = %q, want %q", ref, got, want)
@@ -158,4 +159,25 @@ esac`)
 	check("dev image pruned on the host, muster:dev pulled for real",
 		[]string{refPostgres, refGolangADK, refMusterDev},
 		[]string{refBackstageDev})
+}
+
+// Podman gives local builds a digest like any pull but spells them
+// `localhost/<name>`; that name marks them local, and podman's fully
+// qualified rows key the map the way docker spells them.
+func TestParseImageProvenancePodman(t *testing.T) {
+	prov := parseImageProvenance("localhost/backstage-dev:t1\tsha256:0537\n" +
+		"docker.io/library/postgres:18.3-alpine\tsha256:5445\n" +
+		"docker.io/alpine/socat:1.8.1.3\tsha256:5f27\n")
+	for ref, want := range map[string]bool{
+		"localhost/backstage-dev:t1":             false,
+		"docker.io/library/postgres:18.3-alpine": true,
+		refSocat:                                 true,
+	} {
+		if got := registryBacked(ref, prov); got != want {
+			t.Errorf("registryBacked(%q) = %v, want %v", ref, got, want)
+		}
+	}
+	if _, known := prov["postgres:18.3-alpine"]; !known {
+		t.Error("podman's docker.io/library/ rows must key the map as docker spells them")
+	}
 }

@@ -365,7 +365,9 @@ func nodeImageTags(node string) ([]string, error) {
 // tagged here. A pulled image re-tagged into ANOTHER repository shows <none>
 // too (the digest belongs to the repository it was pulled as); re-tagged within
 // the same repository it keeps the digest, and so still reads as pulled. Refs
-// are spelled the way docker prints them (shortRef).
+// are spelled the way docker prints them (shortRef). Podman prints a digest
+// for local builds too, but spells them `localhost/<name>`: that name is
+// what marks them local there.
 func hostImageProvenance() (map[string]bool, error) {
 	out, err := outputQuiet("docker", "images", "--digests", "--format", "{{.Repository}}:{{.Tag}}\t{{.Digest}}")
 	if err != nil {
@@ -385,7 +387,9 @@ func parseImageProvenance(out string) map[string]bool {
 			continue
 		}
 		digest = strings.TrimSpace(digest)
-		prov[ref] = prov[ref] || (digest != "" && digest != "<none>")
+		ref = shortRef(ref)
+		backed := digest != "" && digest != "<none>" && !strings.HasPrefix(ref, "localhost/")
+		prov[ref] = prov[ref] || backed
 	}
 	return prov
 }

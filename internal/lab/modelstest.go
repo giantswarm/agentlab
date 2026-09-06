@@ -318,6 +318,12 @@ func ModelsTest(cfg *config.Config, email, backendName, model string) error {
 	if err != nil {
 		return err
 	}
+	if dockerIsPodman() && cfg.Platform.ModelManager.EndpointFor(backendName) == "" {
+		// This step runs on the host, and the host cannot dial the pods'
+		// address under podman (host.containers.internal, runtime.go): the
+		// autodetected server is this machine's, so read it on loopback.
+		endpoint = loopbackBase(backendName)
+	}
 	server := config.BackendServerName(backendName)
 	remaining, err := hostServerModels(backendName, endpoint)
 	if err != nil {

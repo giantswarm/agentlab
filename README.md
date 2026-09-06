@@ -87,8 +87,8 @@ follows the host instead of freezing the first run's view of it:
 Discovering this machine:
   tools             docker 29.7.2, kind v0.32.0, kubectl v1.36.4, helm v4.2.2
   cluster           kind "agentlab" exists — its port mappings are fixed at node creation (`agentlab down && agentlab up` to change them)
-  Ollama            0.33.2 on :11434 — listens on the kind gateway 172.21.0.1: yes; 10 downloaded, 4 tool-calling
-  Lemonade Server   11.9.0 on :13305 — listens on the kind gateway 172.21.0.1: yes; 4 downloaded, 3 tool-calling
+  Ollama            0.33.2 on :11434 — answers on 172.21.0.1 (the address pods dial): yes; 10 downloaded, 4 tool-calling
+  Lemonade Server   11.9.0 on :13305 — answers on 172.21.0.1 (the address pods dial): yes; 4 downloaded, 3 tool-calling
   Anthropic key     $ANTHROPIC_API_KEY is set — the agents' default ModelConfig and Backstage's AI chat get the real key at deploy time
 
 Applied to the configuration:
