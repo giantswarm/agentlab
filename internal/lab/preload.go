@@ -2,6 +2,7 @@ package lab
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -93,11 +94,29 @@ func sideloadImages(cfg *config.Config, images []string) preloadResult {
 	if len(images) == 0 {
 		return preloadResult{}
 	}
-	args := append([]string{"load", "docker-image", "--name", cfg.ClusterName}, images...)
-	if err := runQuiet("kind", args...); err != nil {
+	if err := kindLoadImages(cfg, images); err != nil {
 		return preloadResult{err: err}
 	}
 	return preloadResult{n: len(images), d: time.Since(start).Round(time.Second)}
+}
+
+// kindLoadImages is one `kind load docker-image` for the batch — except
+// under podman, where kind's own multi-image save would fold the batch into
+// one image under every tag (runtime.go): there it is one call per image,
+// which saves a single image and is always right. kind stages and cleans its
+// own archive either way.
+func kindLoadImages(cfg *config.Config, images []string) error {
+	if !dockerIsPodman() {
+		args := append([]string{"load", "docker-image", "--name", cfg.ClusterName}, images...)
+		return runQuiet("kind", args...)
+	}
+	var errs []error
+	for _, img := range images {
+		if err := runQuiet("kind", "load", "docker-image", "--name", cfg.ClusterName, img); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // pullLabImages starts pulling the snapshot manifest's images into the host

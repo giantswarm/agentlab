@@ -268,12 +268,18 @@ func kindNodePublishedPorts(node string) (exists bool, ports map[int]bool) {
 	return true, ports
 }
 
+// dockerVersion is the engine version, naming podman when its
+// docker-compatible CLI is what answers (runtime.go).
 func dockerVersion() string {
 	out, err := outputQuiet("docker", "version", "-f", "{{.Server.Version}}")
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(out)
+	v := strings.TrimSpace(out)
+	if dockerIsPodman() {
+		v += " (podman)"
+	}
+	return v
 }
 
 func kindVersion() string {

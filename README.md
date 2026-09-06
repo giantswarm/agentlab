@@ -17,7 +17,8 @@ YAML to hand-edit and no shell to source.
 
 ## Requirements
 
-`go` (>= 1.25), `docker`, `kind` (>= 0.31), `kubectl`, `helm` (**>= 4** — Helm 3
+`go` (>= 1.25), `docker` (or Podman >= 4's docker-compatible CLI), `kind`
+(>= 0.31), `kubectl`, `helm` (**>= 4** — Helm 3
 cannot store the umbrella chart's release any more: the dependency archives put
 the release Secret over etcd's 1 MiB cap, see
 [agent-platform-standalone#21](https://github.com/giantswarm/agent-platform-standalone/issues/21);

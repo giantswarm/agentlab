@@ -375,6 +375,16 @@ real installation runs its edge on 443, so the umbrella has no reason to
 carry a ported public URL; the overlay is the lab's permanent answer, not an
 interim.
 
+### U16. Podman: the side-load is one `kind load` per image — BLOCKED UPSTREAM
+`kind load docker-image a b c` runs `docker save -o <tar> a b c`. Podman's
+docker-compatible CLI writes ONE image carrying every name as a tag unless
+`--multi-image-archive` is passed, so the batch lands one image under all
+the tags (the Flux controllers crashlooped running flux-cli). Docker needs
+no flag, so kind cannot pass one portably. Under podman (`runtime.go`) the
+lab loads one image per call; under docker the batched call stays. Unblocks
+when kind's `load docker-image` saves with `--multi-image-archive` under
+its podman provider.
+
 ## Accepted lab trade-offs (not hacks to fix)
 
 - **Checksum stamping via the `REPLACED_AT_APPLY` placeholder** — the standard
