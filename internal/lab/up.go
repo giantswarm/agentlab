@@ -49,6 +49,12 @@ func Up(cfg *config.Config) error {
 
 	if kindClusterExists(cfg.ClusterName) {
 		step("kind cluster %q already exists", cfg.ClusterName)
+		// Its node may be exited — what a `down` that lost its race with
+		// docker leaves behind (node.go); `kind get kubeconfig` below would
+		// fail on it with an opaque docker exec error.
+		if err := ensureNodeRunning(cfg); err != nil {
+			return err
+		}
 	} else {
 		step("Creating kind cluster %q", cfg.ClusterName)
 		if err := run("kind", "create", "cluster", "--config", kindCfgPath, "--wait", "120s"); err != nil {

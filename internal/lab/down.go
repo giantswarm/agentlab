@@ -3,6 +3,7 @@ package lab
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -12,7 +13,19 @@ import (
 // immediate `agentlab up` reuses the same trust chain.
 func Down(cfg *config.Config) error {
 	if err := run("kind", "delete", "cluster", "--name", cfg.ClusterName); err != nil {
-		return err
+		// kind delete is `docker rm -f` of the node, and docker gives up on
+		// a node that does not exit within ten seconds of SIGKILL ("could
+		// not kill container: ... did not receive an exit event"), leaving
+		// the container in `docker ps -a` and the cluster listed by kind.
+		// The node is dying, not surviving (node.go): wait for it, then
+		// delete again — now a plain rm of an exited container.
+		if werr := waitForNodeExit(cfg.ClusterName, nodeExitTimeout, 2*time.Second); werr != nil {
+			return fmt.Errorf("%w (kind delete cluster: %v)", werr, err)
+		}
+		step("Retrying kind delete cluster")
+		if err := run("kind", "delete", "cluster", "--name", cfg.ClusterName); err != nil {
+			return err
+		}
 	}
 	_ = os.Remove(".token")
 	// The exported kubeconfig described a cluster that no longer exists.
