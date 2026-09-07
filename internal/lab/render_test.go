@@ -32,11 +32,28 @@ func TestModelManagerValuesRenderBackends(t *testing.T) {
 		t.Fatalf("two backends: want\n%s\nin\n%s", want, excerptAround(got, "model-manager:\n"))
 	}
 
+	// Every host server the lab knows, in the canonical order.
+	cfg.Platform.ModelManager.Backends = []string{ollama, lemonade, lmstudio}
+	endpoints[lmstudio] = "http://172.21.0.1:1234"
+	got = render()
+	want = "model-manager:\n  backends:\n    - ollama\n    - lemonade\n    - lmstudio\n  ollama:\n    endpoint: \"http://172.21.0.1:11434\"\n  lemonade:\n    endpoint: \"http://172.21.0.1:13305\"\n  lmstudio:\n    endpoint: \"http://172.21.0.1:1234\"\n  muster:"
+	if !strings.Contains(got, want) {
+		t.Fatalf("three backends: want\n%s\nin\n%s", want, excerptAround(got, "model-manager:\n"))
+	}
+
 	cfg.Platform.ModelManager.Backends = []string{lemonade}
 	got = render()
 	want = "model-manager:\n  backend: lemonade\n  lemonade:\n    endpoint: \"http://172.21.0.1:13305\"\n  muster:"
 	if !strings.Contains(got, want) || strings.Contains(got, "backends:") {
 		t.Fatalf("one backend: want the chart's one-backend form\n%s\nin\n%s", want, excerptAround(got, "model-manager:\n"))
+	}
+
+	// A single lmstudio also renders the one-backend form.
+	cfg.Platform.ModelManager.Backends = []string{lmstudio}
+	got = render()
+	want = "model-manager:\n  backend: lmstudio\n  lmstudio:\n    endpoint: \"http://172.21.0.1:1234\"\n  muster:"
+	if !strings.Contains(got, want) || strings.Contains(got, "backends:") {
+		t.Fatalf("one lmstudio backend: want\n%s\nin\n%s", want, excerptAround(got, "model-manager:\n"))
 	}
 }
 

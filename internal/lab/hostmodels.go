@@ -7,8 +7,6 @@ import (
 	"net/http"
 	"slices"
 	"time"
-
-	"github.com/giantswarm/agentlab/internal/config"
 )
 
 // The inventories of the host model servers: what each has downloaded and
@@ -32,6 +30,11 @@ type HostModel struct {
 const (
 	ollamaToolsCapability = "tools"
 	lemonadeToolsLabel    = "tool-calling"
+	// LM Studio reports tool calling as the model's training. It accepts
+	// `tools` for any model and emulates them through the prompt, but only a
+	// model trained for them calls them reliably, which is what an agent
+	// needs.
+	lmStudioLLMType = "llm"
 )
 
 // hostModelsFn lists a server's downloaded models; a variable so tests can
@@ -39,12 +42,15 @@ const (
 var hostModelsFn = hostServerModels
 
 // hostServerModels lists the downloaded models of a backend's server at base
-// and whether each one can call tools.
+// and whether each one can call tools. An unknown kind is an error rather
+// than an Ollama read: config.Validate rejects one when the file loads, so
+// reaching this with one is a bug worth seeing.
 func hostServerModels(backend, base string) ([]HostModel, error) {
-	if backend == config.ModelManagerBackendLemonade {
-		return lemonadeModels(base)
+	spec, known := backendSpec(backend)
+	if !known {
+		return nil, fmt.Errorf("unknown host model server backend %q", backend)
 	}
-	return ollamaModels(base)
+	return spec.models(base)
 }
 
 // ollamaModels reads /api/tags and asks /api/show for each model's
@@ -111,6 +117,43 @@ func lemonadeModels(base string) ([]HostModel, error) {
 			continue
 		}
 		models = append(models, HostModel{ID: m.ID, Tools: slices.Contains(m.Labels, lemonadeToolsLabel), Size: int64(m.Size * 1e9)})
+	}
+	return models, nil
+}
+
+// lmStudioModels reads LM Studio's /api/v1/models (0.4.0+): its library, so
+// every entry is downloaded. Only LLMs can serve an agent — embedding models
+// carry no capability object at all — and tool calling is the model's
+// training, which LM Studio reports directly, so there is no second request
+// per model as on Ollama. Size is already bytes here: no conversion, unlike
+// Lemonade's decimal GB above.
+func lmStudioModels(base string) ([]HostModel, error) {
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(base + lmStudioModelsPath)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var list struct {
+		Models []struct {
+			Key          string `json:"key"`
+			Type         string `json:"type"`
+			SizeBytes    int64  `json:"size_bytes"`
+			Capabilities *struct {
+				TrainedForToolUse bool `json:"trained_for_tool_use"`
+			} `json:"capabilities"`
+		} `json:"models"`
+	}
+	if err := decodeJSONBody(resp, &list); err != nil {
+		return nil, fmt.Errorf("reading %s%s: %w", base, lmStudioModelsPath, err)
+	}
+	var models []HostModel
+	for _, m := range list.Models {
+		if m.Type != lmStudioLLMType {
+			continue
+		}
+		tools := m.Capabilities != nil && m.Capabilities.TrainedForToolUse
+		models = append(models, HostModel{ID: m.Key, Tools: tools, Size: m.SizeBytes})
 	}
 	return models, nil
 }

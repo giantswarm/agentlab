@@ -79,8 +79,12 @@ with Dex doing the logins.
   existing `agentlab.yaml`): the tools `up` shells out to, whether this
   configuration's kind node exists and which host ports it publishes (never
   conflicts; while no node exists, occupied ports move to free ones), the
-  host model servers — an Ollama on 11434, a Lemonade Server on 13305 —
-  with their downloaded tool-calling models, a standalone `flm serve`
+  host model servers — an Ollama on 11434, a Lemonade Server on 13305, an
+  LM Studio on 1234 (0.4.0+) — with their downloaded tool-calling models,
+  each recognised by the SHAPE of its answer and never by a status code
+  (LM Studio answers 200 with an error body for every path outside its
+  `/api/v1`, Ollama's `/api/version` included, and reports no version
+  anywhere — its discovery line reads `api v1`), a standalone `flm serve`
   (report-only), and `$ANTHROPIC_API_KEY`. What answers becomes
   `platform.modelManager.backends` (Ollama first); `--model-manager[=false]`
   and `--model-manager-backends` pin it. Never hand-edit that list to
@@ -101,6 +105,15 @@ with Dex doing the logins.
   token is required; 401 without). Proof: `./agentlab models-test` (see
   docs/models.md "Managed models"), one backend per run — `--backend <kind>` picks
   it, the default is the first of the list.
+- The `lmstudio` backend is the one that cannot delete: LM Studio has no
+  delete over its API (`lms rm` on the host only), so model-manager reports
+  `delete: false` and `./agentlab models-test --backend lmstudio` asserts the
+  501 refusal, checks the model is still downloaded and still wired, then
+  tears the ModelConfig down with `POST /models/unwire`. It is the one
+  models-test run that leaves the pulled model behind, by design — never
+  "fix" that into a skipped step. Its default proof model is
+  `ibm/granite-4-micro`; keep LM Studio's just-in-time loading on, or the
+  agent turn fails instead of waiting for the load.
 - For verifying RBAC as a specific user, use `./agentlab login <email>` and
   `kubectl --kubeconfig kubeconfig.oidc` — that is the OIDC path.
 - The cluster's admin kubeconfig (`state/kubeconfig`, context `kind-agentlab`)

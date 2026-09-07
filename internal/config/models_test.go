@@ -117,13 +117,16 @@ func TestModelManagerValidate(t *testing.T) {
 		{"on with agents", ModelManager{Enabled: true, Backend: ModelManagerBackendOllama}, true, ""},
 		{"on, endpoint override", ModelManager{Enabled: true, Endpoint: "http://192.168.1.10:11434"}, true, ""},
 		{"on without agents", ModelManager{Enabled: true}, false, "requires platform.agents"},
-		{"kserve", ModelManager{Enabled: true, Backend: "kserve"}, true, "supports ollama, lemonade"},
+		{backendKServe, ModelManager{Enabled: true, Backend: backendKServe}, true, "supports ollama, lemonade, lmstudio"},
 		{"lemonade legacy form", ModelManager{Enabled: true, Backend: ModelManagerBackendLemonade, Endpoint: "http://172.21.0.1:13305"}, true, ""},
 		{"both backends", ModelManager{Enabled: true, Backends: []string{ModelManagerBackendOllama, ModelManagerBackendLemonade}}, true, ""},
+		{"lmstudio", ModelManager{Enabled: true, Backends: []string{ModelManagerBackendLMStudio}}, true, ""},
+		{"every host server", ModelManager{Enabled: true, Backends: []string{ModelManagerBackendOllama, ModelManagerBackendLemonade, ModelManagerBackendLMStudio}}, true, ""},
+		{"bad lmstudio endpoint", ModelManager{Enabled: true, Backends: []string{ModelManagerBackendLMStudio}, Endpoints: map[string]string{ModelManagerBackendLMStudio: "h:1234"}}, true, wantHTTPURL},
 		{"duplicate backend", ModelManager{Enabled: true, Backends: []string{ModelManagerBackendOllama, ModelManagerBackendOllama}}, true, "listed twice"},
 		{"endpoint for a backend not listed", ModelManager{Enabled: true, Backends: []string{ModelManagerBackendOllama}, Endpoints: map[string]string{ModelManagerBackendLemonade: "http://h:13305"}}, true, "not in backends"},
-		{"bad per-backend endpoint", ModelManager{Enabled: true, Backends: []string{ModelManagerBackendLemonade}, Endpoints: map[string]string{ModelManagerBackendLemonade: "h:13305"}}, true, "http(s) URL"},
-		{"bad endpoint", ModelManager{Enabled: true, Endpoint: "172.21.0.1:11434"}, true, "http(s) URL"},
+		{"bad per-backend endpoint", ModelManager{Enabled: true, Backends: []string{ModelManagerBackendLemonade}, Endpoints: map[string]string{ModelManagerBackendLemonade: "h:13305"}}, true, wantHTTPURL},
+		{"bad endpoint", ModelManager{Enabled: true, Endpoint: "172.21.0.1:11434"}, true, wantHTTPURL},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

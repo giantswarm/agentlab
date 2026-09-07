@@ -59,8 +59,10 @@ func toolVersions(docker string) []ToolVersion {
 // HostServer is a model server found on this machine.
 type HostServer struct {
 	Backend string // config.ModelManagerBackend*
-	Version string
-	Port    int
+	// Ident is what the server says it is: its version where it reports one,
+	// the API generation for LM Studio, which reports none anywhere.
+	Ident string
+	Port  int
 	// OnGateway: the server also answers on the address pods dial, i.e. it is
 	// bound to every interface and pods can reach it. nil when that address
 	// is not known yet (nothing to dial) or the probe could not run, which
@@ -97,11 +99,11 @@ func Discover(cfg *config.Config) *Discovery {
 	}
 	for _, b := range config.ModelManagerBackends {
 		base := loopbackBase(b)
-		version, ok := detectHostServer(b, base)
+		ident, ok := detectHostServer(b, base)
 		if !ok {
 			continue
 		}
-		s := HostServer{Backend: b, Version: version, Port: config.BackendPort(b)}
+		s := HostServer{Backend: b, Ident: ident, Port: config.BackendPort(b)}
 		if d.KindGateway != "" {
 			answers, err := hostServerAnswers(cfg.ControlPlaneNode(), net.JoinHostPort(d.KindGateway, strconv.Itoa(s.Port)))
 			if err != nil {
@@ -130,7 +132,7 @@ func (d *Discovery) Backends() []string {
 func (d *Discovery) ModelServersHint() string {
 	parts := make([]string, 0, len(d.Servers))
 	for _, s := range d.Servers {
-		parts = append(parts, fmt.Sprintf("%s %s (:%d)", config.BackendServerName(s.Backend), s.Version, s.Port))
+		parts = append(parts, fmt.Sprintf("%s %s (:%d)", config.BackendServerName(s.Backend), s.Ident, s.Port))
 	}
 	return strings.Join(parts, ", ")
 }
@@ -207,7 +209,7 @@ func (d *Discovery) Report(cfg *config.Config) string {
 		line("cluster", "kind %q does not exist yet — ports are free to move", cfg.ClusterName)
 	}
 	if len(d.Servers) == 0 {
-		line("model servers", "none — no Ollama on :%d, no Lemonade Server on :%d", config.OllamaPort, config.LemonadePort)
+		line("model servers", "none — %s", strings.Join(noServersFound(), ", "))
 	}
 	for _, s := range d.Servers {
 		reach := "kind gateway not known yet (first `agentlab up` creates the network)"
@@ -234,7 +236,7 @@ func (d *Discovery) Report(cfg *config.Config) string {
 			}
 			models = fmt.Sprintf("%d downloaded, %d tool-calling", len(s.Models), tools)
 		}
-		line(config.BackendServerName(s.Backend), "%s on :%d — %s; %s", s.Version, s.Port, reach, models)
+		line(config.BackendServerName(s.Backend), "%s on :%d — %s; %s", s.Ident, s.Port, reach, models)
 	}
 	if d.FLM != nil {
 		line("FastFlowLM", "standalone `flm serve` on :%d (%d catalog entries) — no management API and loopback by default; the lab drives FLM through Lemonade Server", d.FLM.Port, d.FLM.Models)
@@ -258,10 +260,20 @@ func (d *Discovery) toolVersion(name string) string {
 
 // bindHint is the one-line version of the bind fix for the report.
 func bindHint(backend string) string {
-	if backend == config.ModelManagerBackendLemonade {
-		return "`lemonade config set host=0.0.0.0`, restart lemond"
+	if spec, known := backendSpec(backend); known {
+		return spec.bindHint
 	}
-	return "OLLAMA_HOST=0.0.0.0, restart Ollama"
+	return ""
+}
+
+// noServersFound names every server the discovery looked for, so the "none"
+// line follows the backend table instead of a hand-kept sentence.
+func noServersFound() []string {
+	out := make([]string, 0, len(config.ModelManagerBackends))
+	for _, b := range config.ModelManagerBackends {
+		out = append(out, fmt.Sprintf("no %s on :%d", config.BackendServerName(b), config.BackendPort(b)))
+	}
+	return out
 }
 
 // nodeDialTimeout bounds the node-side dial, the podman counterpart of

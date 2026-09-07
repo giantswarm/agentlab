@@ -263,44 +263,6 @@ type ModelManager struct {
 	Endpoint string `yaml:"endpoint,omitempty"`
 }
 
-// The model servers the lab runs against on the host, which model-manager
-// and agent pods reach through the kind docker network's gateway.
-const (
-	// ModelManagerBackendOllama is a host Ollama.
-	ModelManagerBackendOllama = "ollama"
-	// ModelManagerBackendLemonade is a host Lemonade Server
-	// (lemonade-server.ai): FastFlowLM on AMD Ryzen AI NPUs, llama.cpp on
-	// GPU and CPU, behind one OpenAI-compatible API plus a management API.
-	ModelManagerBackendLemonade = "lemonade"
-)
-
-// ModelManagerBackends lists the backends the lab accepts, in the canonical
-// order `agentlab configure` writes them — which is also the preference for
-// the one model-manager fronts.
-var ModelManagerBackends = []string{ModelManagerBackendOllama, ModelManagerBackendLemonade}
-
-// The servers' default API ports, the ones the autodetected endpoints assume.
-const (
-	OllamaPort   = 11434
-	LemonadePort = 13305
-)
-
-// BackendPort is the default API port of a backend's server.
-func BackendPort(backend string) int {
-	if backend == ModelManagerBackendLemonade {
-		return LemonadePort
-	}
-	return OllamaPort
-}
-
-// BackendServerName is a backend's server as messages name it.
-func BackendServerName(backend string) string {
-	if backend == ModelManagerBackendLemonade {
-		return "Lemonade Server"
-	}
-	return "Ollama"
-}
-
 // Primary is model-manager's default backend — where a request that names
 // none goes: the first of the list, or the historical default (an Ollama)
 // for an enabled block that names none.

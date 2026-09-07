@@ -16,24 +16,39 @@ import (
 	"github.com/giantswarm/agentlab/internal/config"
 )
 
-// ModelsTestModel is the model the proof pulls and deletes on the ollama
-// backend: small (~400 MB) and tool-calling capable, which a kagent agent turn
-// requires (agents send tool schemas with every request; smollm2:135m pulls
-// fine and then fails "does not support tools").
-const ModelsTestModel = "qwen2.5:0.5b"
-
-// ModelsTestModelLemonade is the proof's model on the lemonade backend: the
-// smallest FastFlowLM (NPU) model of Lemonade's catalog with the tool-calling
-// label (3.1 GB); the smaller *-FLM models (qwen3-0.6b-FLM, ...) cannot call
-// tools, so an agent turn on them fails.
-const ModelsTestModelLemonade = "qwen3-4b-FLM"
+// The proof's default model per backend — every one small and tool-calling
+// capable, which a kagent agent turn requires: agents send tool schemas with
+// every request, and a model without them fails each turn with "does not
+// support tools" (smollm2:135m pulls fine and then does exactly that).
+const (
+	// ModelsTestModelOllama is ~400 MB from the Ollama registry.
+	ModelsTestModelOllama = "qwen2.5:0.5b"
+	// ModelsTestModelLemonade is the smallest FastFlowLM (NPU) model of
+	// Lemonade's catalog carrying the tool-calling label (3.1 GB); the
+	// smaller *-FLM models cannot call tools.
+	ModelsTestModelLemonade = "qwen3-4b-FLM"
+	// ModelsTestModelLMStudio is an LM Studio hub reference (~2 GB), so the
+	// download resolves the variant that fits the host — GGUF on Linux and
+	// NVIDIA, MLX on Apple silicon.
+	ModelsTestModelLMStudio = "ibm/granite-4-micro"
+)
 
 // ModelsTestModelFor is the default proof model of a backend.
 func ModelsTestModelFor(backend string) string {
-	if backend == config.ModelManagerBackendLemonade {
-		return ModelsTestModelLemonade
+	if spec, known := backendSpec(backend); known {
+		return spec.proofModel
 	}
-	return ModelsTestModel
+	return ""
+}
+
+// ModelsTestModelDefaults words the per-backend defaults for `--model`'s help
+// text, so the flag cannot drift from the table.
+func ModelsTestModelDefaults() string {
+	parts := make([]string, 0, len(config.ModelManagerBackends))
+	for _, b := range config.ModelManagerBackends {
+		parts = append(parts, fmt.Sprintf("%s on %s", ModelsTestModelFor(b), b))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // modelsTestAgent is the throwaway kagent AgentTemplate the proof runs one
@@ -76,8 +91,12 @@ func ModelsTest(cfg *config.Config, email, backendName, model string) error {
 	if !slices.Contains(mm.Backends, backendName) {
 		return fmt.Errorf("backend %q is not among platform.modelManager.backends (%s)", backendName, strings.Join(mm.Backends, ", "))
 	}
+	spec, known := backendSpec(backendName)
+	if !known {
+		return fmt.Errorf("unknown host model server backend %q", backendName)
+	}
 	if model == "" {
-		model = ModelsTestModelFor(backendName)
+		model = spec.proofModel
 	}
 	// The backend qualifier of every read and write of the proof.
 	q := "?backend=" + url.QueryEscape(backendName)
@@ -135,6 +154,18 @@ func ModelsTest(cfg *config.Config, email, backendName, model string) error {
 	note("backend %s %s at %s, healthy; capabilities: %s", backendName, backend.Version, backend.Endpoint, strings.Join(caps, ", "))
 	note("wiring: ModelConfigs in %s, autoWire=%v", backend.Wiring.Namespace, backend.Wiring.AutoWire)
 
+	// What the backend claims it can do has to match what its server really
+	// offers, in both directions: a driver claiming delete for an LM Studio
+	// (which has none) would fail at the end of the proof, and an Ollama that
+	// lost it would pass one that no longer proves a delete.
+	step("The advertised delete capability matches %s", config.BackendServerName(backendName))
+	if backend.Capabilities["delete"] != spec.deleteOverREST {
+		return fmt.Errorf("backend %s reports delete=%v, wanted %v: %s %s delete a model through its API",
+			backendName, backend.Capabilities["delete"], spec.deleteOverREST,
+			config.BackendServerName(backendName), map[bool]string{true: "can", false: "cannot"}[spec.deleteOverREST])
+	}
+	note("delete=%v, as %s offers", spec.deleteOverREST, config.BackendServerName(backendName))
+
 	step("Listing models on %s", backendName)
 	names, err := api.modelNames("/models" + q)
 	if err != nil {
@@ -142,9 +173,16 @@ func ModelsTest(cfg *config.Config, email, backendName, model string) error {
 	}
 	note("%d models: %s", len(names), strings.Join(names, ", "))
 	if slices.Contains(names, model) {
-		note("%s is left over from an earlier run — deleting it first", model)
-		if err := api.deleteModel(model, backendName); err != nil {
-			return err
+		// A server that cannot delete keeps what an earlier run pulled; the
+		// pull below then finds it downloaded and completes at once.
+		if !spec.deleteOverREST {
+			note("%s is already downloaded and %s cannot delete it — the pull below is a no-op",
+				model, config.BackendServerName(backendName))
+		} else {
+			note("%s is left over from an earlier run — deleting it first", model)
+			if err := api.deleteModel(model, backendName); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -211,20 +249,19 @@ func ModelsTest(cfg *config.Config, email, backendName, model string) error {
 	if err != nil {
 		return err
 	}
-	spec := modelConfigSummary(mc)
+	// `spec` is the backend's table entry here, so the summary keeps its own
+	// name.
+	mcSpec := modelConfigSummary(mc)
 	// model-manager writes the native keyless Ollama provider for ollama and
-	// the OpenAI provider on /api/v1 (placeholder key) for lemonade.
-	wantProvider, providerNote := config.ProviderOllama, "keyless native provider"
-	if backendName == config.ModelManagerBackendLemonade {
-		wantProvider, providerNote = config.ProviderOpenAI, "OpenAI-compatible /api/v1, placeholder key"
+	// the OpenAI provider for the servers behind an OpenAI-compatible API
+	// (backends.go says which, and on what path).
+	if !strings.HasPrefix(mcSpec, spec.provider+" ") {
+		return fmt.Errorf("ModelConfig %s is not the %s provider model-manager writes for %s: %s", mcName, spec.provider, backendName, mcSpec)
 	}
-	if !strings.HasPrefix(spec, wantProvider+" ") {
-		return fmt.Errorf("ModelConfig %s is not the %s provider model-manager writes for %s: %s", mcName, wantProvider, backendName, spec)
+	if !strings.Contains(mcSpec, " backend="+backendName+" ") {
+		return fmt.Errorf("ModelConfig %s does not carry the model-manager.giantswarm.io/backend=%s label: %s", mcName, backendName, mcSpec)
 	}
-	if !strings.Contains(spec, " backend="+backendName+" ") {
-		return fmt.Errorf("ModelConfig %s does not carry the model-manager.giantswarm.io/backend=%s label: %s", mcName, backendName, spec)
-	}
-	note("ModelConfig %s: %s (%s)", mcName, strings.TrimSpace(spec), providerNote)
+	note("ModelConfig %s: %s (%s)", mcName, strings.TrimSpace(mcSpec), spec.providerNote)
 
 	// The user's identity, not a ServiceAccount: wiring writes a ModelConfig
 	// into the kagent namespace as the caller (downstream OAuth), so a user
@@ -311,17 +348,6 @@ func ModelsTest(cfg *config.Config, email, backendName, model string) error {
 	}
 	note("not loaded any more")
 
-	step("Deleting %s", model)
-	if err := api.deleteModel(model, backendName); err != nil {
-		return err
-	}
-	if modelConfigExists(mcName) {
-		gone := waitFor(15, 2*time.Second, func() bool { return !modelConfigExists(mcName) })
-		if !gone {
-			return fmt.Errorf("ModelConfig %s survived the delete", mcName)
-		}
-	}
-	note("ModelConfig %s is gone", mcName)
 	endpoint, err := resolveBackendEndpoint(cfg, backendName)
 	if err != nil {
 		return err
@@ -333,28 +359,133 @@ func ModelsTest(cfg *config.Config, email, backendName, model string) error {
 		endpoint = loopbackBase(backendName)
 	}
 	server := config.BackendServerName(backendName)
+	teardown := "delete"
+	if !spec.deleteOverREST {
+		teardown = "delete refused (501) -> unwire"
+		if err := proveDeleteRefused(&api, session, cfg, backendName, model, mcName, endpoint, toolPrefix); err != nil {
+			return err
+		}
+	} else {
+		step("Deleting %s", model)
+		if err := api.deleteModel(model, backendName); err != nil {
+			return err
+		}
+		if err := waitModelConfigGone(mcName); err != nil {
+			return err
+		}
+		note("ModelConfig %s is gone", mcName)
+		remaining, err := hostServerModels(backendName, endpoint)
+		if err != nil {
+			return fmt.Errorf("reading the host %s's models at %s: %w", server, endpoint, err)
+		}
+		if slices.ContainsFunc(remaining, func(m HostModel) bool { return m.ID == model }) {
+			return fmt.Errorf("host %s still has %s after the delete", server, model)
+		}
+		note("host %s at %s no longer has it (%d models left)", server, endpoint, len(remaining))
+		text, err = session.callServerTool(toolPrefix+"list_models", map[string]any{backendField: backendName})
+		if err != nil {
+			return err
+		}
+		if strings.Contains(text, `"`+model+`"`) {
+			return fmt.Errorf("%slist_models still lists %s", toolPrefix, model)
+		}
+		note("%slist_models agrees", toolPrefix)
+	}
+
+	fmt.Println()
+	fmt.Println("PASS: no token -> 401 at the gateway; Dex token -> model-manager REST through agentgateway")
+	fmt.Printf("PASS: %s backend: list -> pull %s (progress) -> ModelConfig %s (%s provider, backend label) Accepted -> agent turn -> unload -> %s\n",
+		backendName, model, mcName, spec.provider, teardown)
+	fmt.Printf("PASS: muster aggregates x_%s_* and calls them (get_model, list_models)\n", modelManagerMCPServer)
+	fmt.Printf("PASS: the caller's identity — job requestedBy=%s; a viewer's wire is Forbidden by the apiserver (user RBAC, not the ServiceAccount's)\n", user.Email)
+	if !spec.deleteOverREST {
+		fmt.Printf("NOTE: %s is still downloaded on the host — %s has no delete over its API. Remove it there: `lms rm %s`\n",
+			model, server, model)
+	}
+	return nil
+}
+
+// waitModelConfigGone waits for a ModelConfig to disappear from the kagent
+// namespace.
+func waitModelConfigGone(mcName string) error {
+	if _, err := outputQuiet("kubectl", "-n", kagentNamespace, "get", modelConfigResource, mcName); err != nil {
+		return nil
+	}
+	gone := waitFor(15, 2*time.Second, func() bool {
+		_, err := outputQuiet("kubectl", "-n", kagentNamespace, "get", modelConfigResource, mcName)
+		return err != nil
+	})
+	if !gone {
+		return fmt.Errorf("ModelConfig %s survived", mcName)
+	}
+	return nil
+}
+
+// proveDeleteRefused is the teardown of a backend whose server cannot delete a
+// model (LM Studio: that is `lms rm` on the host, which no pod can run). The
+// refusal is a stronger proof than skipping the step: the platform must answer
+// 501 rather than pretend, the model must still be there afterwards — a
+// refused delete that removed something would be worse than one that refuses —
+// and the ModelConfig must still come off through the supported route, which
+// shows wiring and inventory are independent.
+func proveDeleteRefused(api *modelManagerAPI, session *musterSession, cfg *config.Config,
+	backendName, model, mcName, endpoint, toolPrefix string) error {
+	server := config.BackendServerName(backendName)
+	step("Deleting %s — expecting the refusal (%s has no delete over its API)", model, server)
+	status, body, _, err := api.do(http.MethodDelete, "/models/"+model+"?backend="+url.QueryEscape(backendName), nil)
+	if err != nil {
+		return err
+	}
+	if status/100 == 2 {
+		return fmt.Errorf("DELETE /models/%s answered %d: %s cannot delete a model, so the platform must refuse instead of reporting success",
+			model, status, server)
+	}
+	if status != http.StatusNotImplemented && !strings.Contains(strings.ToLower(string(body)), "unsupported") {
+		return fmt.Errorf("DELETE /models/%s answered %d without the unsupported answer: %.300s", model, status, body)
+	}
+	note("HTTP %d, %s", status, excerpt(string(body), 120))
+
+	// The refusal must have changed nothing: still downloaded, still wired,
+	// still listed.
 	remaining, err := hostServerModels(backendName, endpoint)
 	if err != nil {
 		return fmt.Errorf("reading the host %s's models at %s: %w", server, endpoint, err)
 	}
-	if slices.ContainsFunc(remaining, func(m HostModel) bool { return m.ID == model }) {
-		return fmt.Errorf("host %s still has %s after the delete", server, model)
+	if !slices.ContainsFunc(remaining, func(m HostModel) bool { return m.ID == model }) {
+		return fmt.Errorf("host %s no longer has %s after a refused delete", server, model)
 	}
-	note("host %s at %s no longer has it (%d models left)", server, endpoint, len(remaining))
-	text, err = session.callServerTool(toolPrefix+"list_models", map[string]any{backendField: backendName})
+	if _, err := outputQuiet("kubectl", "-n", kagentNamespace, "get", modelConfigResource, mcName); err != nil {
+		return fmt.Errorf("ModelConfig %s disappeared after a refused delete: %w", mcName, err)
+	}
+	note("nothing changed: still downloaded on the host, ModelConfig %s still there", mcName)
+
+	step("Unwiring %s — the teardown %s does offer", model, server)
+	if status, body, _, err := api.do(http.MethodPost, "/models/unwire",
+		map[string]any{modelField: model, backendField: backendName}); err != nil {
+		return err
+	} else if status/100 != 2 {
+		return fmt.Errorf("POST /models/unwire answered %d: %.300s", status, body)
+	}
+	if err := waitModelConfigGone(mcName); err != nil {
+		return err
+	}
+	note("ModelConfig %s is gone", mcName)
+	// Unwiring touches the ModelConfig only — the weights stay.
+	remaining, err = hostServerModels(backendName, endpoint)
+	if err != nil {
+		return fmt.Errorf("reading the host %s's models at %s: %w", server, endpoint, err)
+	}
+	if !slices.ContainsFunc(remaining, func(m HostModel) bool { return m.ID == model }) {
+		return fmt.Errorf("host %s lost %s to an unwire, which must only remove the ModelConfig", server, model)
+	}
+	text, err := session.callServerTool(toolPrefix+"list_models", map[string]any{backendField: backendName})
 	if err != nil {
 		return err
 	}
-	if strings.Contains(text, `"`+model+`"`) {
-		return fmt.Errorf("%slist_models still lists %s", toolPrefix, model)
+	if !strings.Contains(text, model) {
+		return fmt.Errorf("%slist_models no longer lists %s, which is still downloaded", toolPrefix, model)
 	}
-	note("%slist_models agrees", toolPrefix)
-
-	fmt.Println()
-	fmt.Println("PASS: no token -> 401 at the gateway; Dex token -> model-manager REST through agentgateway")
-	fmt.Printf("PASS: %s backend: list -> pull %s (progress) -> ModelConfig %s (%s provider, backend label) Accepted -> agent turn -> unload -> delete\n", backendName, model, mcName, wantProvider)
-	fmt.Printf("PASS: muster aggregates x_%s_* and calls them (get_model, list_models)\n", modelManagerMCPServer)
-	fmt.Printf("PASS: the caller's identity — job requestedBy=%s; a viewer's wire is Forbidden by the apiserver (user RBAC, not the ServiceAccount's)\n", user.Email)
+	note("%slist_models still lists it (%d models on the host)", toolPrefix, len(remaining))
 	return nil
 }
 
