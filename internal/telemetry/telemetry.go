@@ -23,7 +23,8 @@ import (
 // appID names the agentlab app in Giant Swarm's TelemetryDeck organization.
 // It is not a secret: it only says where signals are filed (kubectl-gs
 // carries its own in cmd/root.go the same way). Empty disables reporting.
-var appID = ""
+// Created 2026-09-07 by Team Honeybadger, which administers the organization.
+var appID = "89699F74-9A72-46BF-BF5A-7949901FBB36"
 
 const (
 	// OptOutEnv disables usage data collection when set to any value.
