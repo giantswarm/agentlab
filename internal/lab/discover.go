@@ -2,10 +2,12 @@ package lab
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -43,10 +45,12 @@ type HostServer struct {
 	Backend string // config.ModelManagerBackend*
 	Version string
 	Port    int
-	// OnGateway: the server also answers on the kind docker gateway address,
-	// i.e. it is bound to every interface and pods can reach it. nil when
-	// the kind network does not exist yet (nothing to dial).
+	// OnGateway: the server also answers on the address pods dial, i.e. it is
+	// bound to every interface and pods can reach it. nil when that address
+	// is not known yet (nothing to dial) or the probe could not run, which
+	// ReachErr then explains.
 	OnGateway *bool
+	ReachErr  error
 	Models    []HostModel
 	ModelsErr error
 }
@@ -88,8 +92,12 @@ func Discover(cfg *config.Config) *Discovery {
 		}
 		s := HostServer{Backend: b, Version: version, Port: config.BackendPort(b)}
 		if d.KindGateway != "" {
-			answers := hostServerAnswers(cfg.ControlPlaneNode(), net.JoinHostPort(d.KindGateway, strconv.Itoa(s.Port)))
-			s.OnGateway = &answers
+			answers, err := hostServerAnswers(cfg.ControlPlaneNode(), net.JoinHostPort(d.KindGateway, strconv.Itoa(s.Port)))
+			if err != nil {
+				s.ReachErr = err
+			} else {
+				s.OnGateway = &answers
+			}
 		}
 		s.Models, s.ModelsErr = hostModelsFn(b, base)
 		d.Servers = append(d.Servers, s)
@@ -165,9 +173,14 @@ func (d *Discovery) Report(cfg *config.Config) string {
 		if dockerIsPodman() {
 			reach = "the address pods dial is not known while the node is not running (`agentlab up` starts it)"
 		}
-		if s.OnGateway != nil && *s.OnGateway {
+		switch {
+		case s.ReachErr != nil:
+			// Not a verdict on the server: the probe itself did not run, so
+			// the bind hint would send the user to fix the wrong thing.
+			reach = fmt.Sprintf("cannot tell whether pods reach it on %s (%v)", d.KindGateway, s.ReachErr)
+		case s.OnGateway != nil && *s.OnGateway:
 			reach = fmt.Sprintf("answers on %s (the address pods dial): yes", d.KindGateway)
-		} else if s.OnGateway != nil {
+		case s.OnGateway != nil:
 			reach = fmt.Sprintf("does NOT answer on %s (the address pods dial) — pods cannot reach it (%s)", d.KindGateway, bindHint(s.Backend))
 		}
 		models := "models not listed"
@@ -210,19 +223,48 @@ func bindHint(backend string) string {
 	return "OLLAMA_HOST=0.0.0.0, restart Ollama"
 }
 
+// nodeDialTimeout bounds the node-side dial, the podman counterpart of
+// tcpAnswers' own timeout. Longer, because it pays for `docker exec` too.
+const nodeDialTimeout = 2 * time.Second
+
 // hostServerAnswers is tcpAnswers from where it matters: under podman the
-// host cannot dial host.containers.internal itself, so the node dials it.
-func hostServerAnswers(node, addr string) bool {
+// host cannot dial host.containers.internal itself, so the node dials it. A
+// non-nil error means the probe did not run — never that the server is
+// unreachable.
+func hostServerAnswers(node, addr string) (bool, error) {
 	if !dockerIsPodman() {
-		return tcpAnswers(addr)
+		return tcpAnswers(addr), nil
 	}
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
-		return false
+		return false, fmt.Errorf("probing %s: %w", addr, err)
 	}
-	_, err = outputQuiet("docker", "exec", node, "timeout", "2", "bash", "-c",
+	_, err = outputQuiet("docker", "exec", node,
+		"timeout", strconv.Itoa(int(nodeDialTimeout.Seconds())), "bash", "-c",
 		fmt.Sprintf("exec 3<>/dev/tcp/%s/%s", host, port))
-	return err == nil
+	if err == nil {
+		return true, nil
+	}
+	// bash exits 1 when the dial is refused and `timeout` exits 124 when it
+	// hangs: both are answers about the server. Every other code is the
+	// probe failing (no bash or no timeout in the node, docker exec itself),
+	// which says nothing about the server.
+	switch exitCode(err) {
+	case 1, 124:
+		return false, nil
+	default:
+		return false, fmt.Errorf("dialing %s from node %q: %w", addr, node, err)
+	}
+}
+
+// exitCode digs the process exit status out of a wrapped command error; -1
+// when the command did not run or did not exit normally.
+func exitCode(err error) int {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return ee.ExitCode()
+	}
+	return -1
 }
 
 // tcpAnswers reports whether something accepts a TCP connection at addr.
