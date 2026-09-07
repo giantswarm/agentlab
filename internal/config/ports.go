@@ -135,10 +135,9 @@ func (c *Config) chooseFreePorts(taken func(int) bool) []PortChange {
 		c.Platform.AgentsPort:  true,
 		c.Platform.GatewayPort: true,
 		BrowserCallbackPort:    true,
-		MusterNodePort:         true,
-		KagentUINodePort:       true,
-		GatewayNodePort:        true,
-		GatewayPublicNodePort:  true,
+	}
+	for _, p := range PinnedNodePorts {
+		reserved[p] = true
 	}
 
 	scan := func(lo, hi int) (int, bool) {

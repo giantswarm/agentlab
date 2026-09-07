@@ -2,6 +2,8 @@ package config
 
 import (
 	"net"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -137,5 +139,28 @@ func TestPortTakenProbe(t *testing.T) {
 	_ = l.Close()
 	if portTaken(port) {
 		t.Errorf("port %d is closed but probes taken", port)
+	}
+}
+
+// dexPort doubles as its Service's NodePort, so it may not take a node port a
+// lab Service already pins: the apiserver rejects the second claim at apply.
+func TestConfigValidateRejectsPinnedDexPort(t *testing.T) {
+	cfg := Default()
+	if _, err := cfg.EnsureHashes(); err != nil {
+		t.Fatal(err)
+	}
+	for _, pinned := range PinnedNodePorts {
+		if err := ValidateNodePort(strconv.Itoa(pinned)); err != nil {
+			continue // outside the NodePort range, so dexPort can never hold it
+		}
+		cfg.DexPort = pinned
+		err := cfg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "dexPort") {
+			t.Fatalf("dexPort %d not rejected: %v", pinned, err)
+		}
+	}
+	cfg.DexPort = DefaultDexPort
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("default dexPort rejected: %v", err)
 	}
 }

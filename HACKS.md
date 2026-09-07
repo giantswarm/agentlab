@@ -369,11 +369,11 @@ is port-free while the Dex client (`dex.yaml.tmpl`) registers the ported one,
 and every login fails with "Unregistered redirect_uri". The lab's app-config
 overlay (`backstage-catalog.yaml.tmpl`) restates the three URLs from
 `.BackstageBaseURL`; at 443 the values are identical. In-cluster, the lab's
-edge Service (`gateway-nodeport.yaml.tmpl`) also serves the ported port off
-443, so the ported URLs resolve from pods (agentlab#67). Lab-only by
-construction: a real installation runs
-its edge on 443, so the umbrella has no reason to carry a ported public URL;
-the overlay is the lab's permanent answer, not an interim.
+edge Service (`gateway-nodeport.yaml.tmpl`) serves that port as well, so the
+ported URLs resolve from pods too (agentlab#67). Lab-only by construction: a
+real installation runs its edge on 443, so the umbrella has no reason to
+carry a ported public URL; the overlay is the lab's permanent answer, not an
+interim.
 
 ## Accepted lab trade-offs (not hacks to fix)
 

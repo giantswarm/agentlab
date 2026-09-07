@@ -80,6 +80,11 @@ const GatewayNodePort = 30443
 // it.
 const GatewayPublicNodePort = 30444
 
+// PinnedNodePorts are the node-side ports the lab fixes itself. They share the
+// node's port space with DexPort, whose Service claims the host port as its
+// NodePort, so nothing else may take one of these numbers.
+var PinnedNodePorts = []int{MusterNodePort, KagentUINodePort, GatewayNodePort, GatewayPublicNodePort}
+
 // DefaultDexPort is the lab Dex NodePort when agentlab.yaml sets none.
 const DefaultDexPort = 32000
 
@@ -628,6 +633,9 @@ func (c *Config) Validate() error {
 	}
 	if err := ValidateNodePort(strconv.Itoa(c.DexPort)); err != nil {
 		return fmt.Errorf("dexPort: %w", err)
+	}
+	if slices.Contains(PinnedNodePorts, c.DexPort) {
+		return fmt.Errorf("dexPort: %d is a NodePort the lab already pins, and the apiserver rejects the second Service that claims it", c.DexPort)
 	}
 	if err := ValidateAIModel(c.AIModel); err != nil {
 		return fmt.Errorf("aiModel %q: %w", c.AIModel, err)

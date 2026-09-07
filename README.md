@@ -104,11 +104,11 @@ Applied to the configuration:
   back to 8443). When the edge leaves 443, every public URL in this README
   gains that port suffix (`https://backstage.127.0.0.1.nip.io:8443`); the
   lab's edge Service serves that port in-cluster as well, so the ported URLs
-  resolve from pods too and every proof still passes. Once the
-  cluster exists its mappings are fixed at node creation, so the ports it
-  publishes never count as occupied and a foreign listener on one of them is
-  **reported**, not renumbered around (free it, or `agentlab down`, re-run
-  `configure`, `agentlab up`).
+  resolve from pods too and every proof still passes. Once the cluster exists
+  its mappings are fixed at node creation, so the ports it publishes never
+  count as occupied and a foreign listener on one of them is **reported**, not
+  renumbered around (free it, or `agentlab down`, re-run `configure`,
+  `agentlab up`).
 - **Host model servers**: an Ollama on `:11434` and a Lemonade Server on
   `:13305` (their default ports) are detected with version, whether they
   listen on the kind docker gateway (pods' path to the host — the bind-address
