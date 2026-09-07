@@ -166,7 +166,7 @@ func discoverInto(cfg *config.Config, pinEnabled *bool, pinBackends []string) *l
 // around — the lab's own published ports never count as occupied.
 func applyPorts(cfg *config.Config, disc *lab.Discovery) {
 	if !disc.ClusterExists {
-		reportPortChanges(cfg.ChooseFreePorts(disc.ClusterPorts))
+		reportPortChanges(cfg.ChooseFreePorts(disc.ClusterPorts, lab.MinPublishablePort()))
 		return
 	}
 	conflicts := cfg.PortConflicts(disc.ClusterPorts)
@@ -182,15 +182,15 @@ func applyPorts(cfg *config.Config, disc *lab.Discovery) {
 	fmt.Println()
 }
 
-// reportPortChanges tells the user which ports were already occupied on this
-// machine and what the configuration uses instead. The form (or the saved
+// reportPortChanges tells the user which ports this machine cannot serve the
+// lab on and what the configuration uses instead. The form (or the saved
 // file) shows the adjusted numbers, but only this message explains why they
 // differ from the documented defaults.
 func reportPortChanges(changes []config.PortChange) {
 	if len(changes) == 0 {
 		return
 	}
-	fmt.Println("Some ports are already in use on this machine; picked free ones:")
+	fmt.Println("Some ports are not usable on this machine; picked ones that are:")
 	for _, ch := range changes {
 		fmt.Printf("  %s\n", ch)
 	}

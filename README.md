@@ -17,7 +17,8 @@ YAML to hand-edit and no shell to source.
 
 ## Requirements
 
-`go` (>= 1.25), `docker`, `kind` (>= 0.31), `kubectl`, `helm` (**>= 4** — Helm 3
+`go` (>= 1.25), `docker` (or Podman >= 4's docker-compatible CLI), `kind`
+(>= 0.31), `kubectl`, `helm` (**>= 4** — Helm 3
 cannot store the umbrella chart's release any more: the dependency archives put
 the release Secret over etcd's 1 MiB cap, see
 [agent-platform-standalone#21](https://github.com/giantswarm/agent-platform-standalone/issues/21);
@@ -26,6 +27,13 @@ see below), `git`.
 
 (The old script stack also needed openssl, curl, jq and python3; the binary
 does all of that itself.)
+
+Under **rootless Podman** the lab publishes its ports from your own network
+namespace, which cannot bind anything below
+`net.ipv4.ip_unprivileged_port_start` (1024 by default). `agentlab configure`
+detects this and moves the agentgateway edge off its default 443 — to 8443,
+so the public URLs gain `:8443` — and reports the move. Run Podman as root, or
+lower the sysctl, to keep 443.
 
 ## Quick start
 
@@ -86,8 +94,8 @@ follows the host instead of freezing the first run's view of it:
 Discovering this machine:
   tools             docker 29.7.2, kind v0.32.0, kubectl v1.36.4, helm v4.2.2
   cluster           kind "agentlab" exists — its port mappings are fixed at node creation (`agentlab down && agentlab up` to change them)
-  Ollama            0.33.2 on :11434 — listens on the kind gateway 172.21.0.1: yes; 10 downloaded, 4 tool-calling
-  Lemonade Server   11.9.0 on :13305 — listens on the kind gateway 172.21.0.1: yes; 4 downloaded, 3 tool-calling
+  Ollama            0.33.2 on :11434 — answers on 172.21.0.1 (the address pods dial): yes; 10 downloaded, 4 tool-calling
+  Lemonade Server   11.9.0 on :13305 — answers on 172.21.0.1 (the address pods dial): yes; 4 downloaded, 3 tool-calling
   Anthropic key     $ANTHROPIC_API_KEY is set — the agents' default ModelConfig and Backstage's AI chat get the real key at deploy time
 
 Applied to the configuration:

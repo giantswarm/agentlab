@@ -2,9 +2,12 @@ package lab
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/giantswarm/agentlab/internal/config"
@@ -161,5 +164,57 @@ func TestDiscoveryBackendsAndHint(t *testing.T) {
 	}
 	if (&Discovery{}).ModelServersHint() != "" {
 		t.Fatalf("empty discovery should hint nothing")
+	}
+}
+
+// The node-side dial answers about the SERVER only when it actually ran: a
+// refused connection (bash exits 1) and a hang (`timeout` exits 124) are
+// verdicts, every other exit is the probe itself failing and must not be
+// reported as an unreachable server.
+func TestHostServerAnswersUnderPodman(t *testing.T) {
+	for name, tc := range map[string]struct {
+		exit      int
+		want      bool
+		wantProbe bool // the probe failed, so there is no verdict
+	}{
+		"server answers":     {0, true, false},
+		"connection refused": {1, false, false},
+		"dial hangs":         {124, false, false},
+		"no bash in node":    {127, false, true},
+		"exec not permitted": {126, false, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			installFakeTool(t, dir, "docker", "exit "+strconv.Itoa(tc.exit))
+			withPodman(t, true)
+			got, err := hostServerAnswers("agentlab-control-plane", "169.254.1.2:11434")
+			if (err != nil) != tc.wantProbe {
+				t.Fatalf("err = %v, want probe failure %v", err, tc.wantProbe)
+			}
+			if !tc.wantProbe && got != tc.want {
+				t.Errorf("answers = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A probe that could not run leaves OnGateway unset, and the report says so
+// instead of blaming the server's bind address.
+func TestReportSaysWhenTheProbeCouldNotRun(t *testing.T) {
+	d := &Discovery{
+		KindGateway: "169.254.1.2",
+		Servers: []HostServer{{
+			Backend:  config.ModelManagerBackendOllama,
+			Version:  "0.20.2",
+			Port:     config.OllamaPort,
+			ReachErr: errors.New("no bash in the node"),
+		}},
+	}
+	out := d.Report(config.Default())
+	if !strings.Contains(out, "cannot tell whether pods reach it on 169.254.1.2") {
+		t.Errorf("report does not name the failed probe:\n%s", out)
+	}
+	if strings.Contains(out, "OLLAMA_HOST=0.0.0.0") {
+		t.Errorf("report blames the server's bind address for a probe failure:\n%s", out)
 	}
 }
