@@ -134,13 +134,17 @@ func proveSignInScopedToolset(cfg *config.Config, user, other *config.User, tool
 	if err := completeSignIn(challenge, user); err != nil {
 		return nil, err
 	}
-	// Leave the lab as found: the grant is the session's; muster forgets it
-	// with the sign-out (or when the token expires).
+	// Leave the lab as found: the grant is the session's and the sign-out
+	// forgets it, but the pooled connection to the fixture lingers until its
+	// next use and keeps the CR at Connected — where an older binary's
+	// platform-test waits for Auth Required. A one-shot restart request on
+	// the CR (spec.restartRequestedAt) drops the connection right away.
 	defer func() {
 		s, err := openMusterSession(cfg, ps.dexIDToken, "toolsets-test-g6-logout")
 		if err == nil {
 			_, _ = s.callToolEnvelope("core_auth_logout", map[string]any{serverKey: oauthFixtureServer})
 		}
+		restartOAuthFixture()
 	}()
 	note("Dex login completed; muster's proxy callback answered Authentication Successful")
 

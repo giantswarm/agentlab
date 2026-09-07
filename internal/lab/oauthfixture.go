@@ -282,3 +282,21 @@ func completeSignIn(challengeURL string, user *config.User) error {
 	}
 	return nil
 }
+
+// restartOAuthFixture asks muster for a one-shot restart of the fixture's
+// service (spec.restartRequestedAt, acted on once per value), which closes
+// every pooled connection and returns the CR to Auth Required. Best effort:
+// the lab's state is not the proof's verdict.
+func restartOAuthFixture() {
+	stamp := time.Now().UTC().Format(time.RFC3339)
+	if err := runQuiet("kubectl", "-n", platformNamespace, "patch", "mcpservers.muster.giantswarm.io", oauthFixtureServer,
+		"--type", "merge", "-p", fmt.Sprintf(`{"spec":{"restartRequestedAt":%q}}`, stamp)); err != nil {
+		note("could not request a restart of %s (%v); it reads Connected until the signed-in session's token expires", oauthFixtureServer, err)
+		return
+	}
+	if err := waitMCPServerState(oauthFixtureServer, mcpServerStateAuthRequired); err != nil {
+		note("%s did not return to Auth Required after the restart request: %v", oauthFixtureServer, err)
+		return
+	}
+	note("%s back to Auth Required", oauthFixtureServer)
+}
