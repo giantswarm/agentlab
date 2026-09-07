@@ -403,6 +403,11 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 	if err := ensureOAuthFixture(cfg); err != nil {
 		return err
 	}
+	// The fake-fleet fixture (fleetfixture.go): the family MCPServers with
+	// the tool-group label the fleet charts stamp — same CRD reason.
+	if err := ensureFleetFixture(cfg); err != nil {
+		return err
+	}
 
 	// The agents' model key. The default ModelConfig (rendered by the kagent
 	// subchart from providers.anthropic) references this secret; agent pods

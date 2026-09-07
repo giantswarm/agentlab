@@ -65,6 +65,12 @@ type tmplData struct {
 	// name the proofs sign in to and the protected endpoint it points at.
 	OAuthFixtureServer string
 	OAuthFixtureURL    string
+	// The fake-fleet fixture (fleetfixture.go): its members, the family
+	// instance argument and the tool-group label they carry.
+	FleetFixtureServers     []fleetFixtureServer
+	FamilyInstanceArg       string
+	ToolGroupLabel          string
+	ToolGroupInfrastructure string
 }
 
 func newTmplData(cfg *config.Config) (*tmplData, error) {
@@ -87,6 +93,10 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		ExtraModels:               cfg.Platform.ExtraModels,
 		OAuthFixtureServer:        oauthFixtureServer,
 		OAuthFixtureURL:           oauthFixtureURL,
+		FleetFixtureServers:       fleetFixtureServers(),
+		FamilyInstanceArg:         familyInstanceArg,
+		ToolGroupLabel:            toolGroupLabel,
+		ToolGroupInfrastructure:   toolGroupInfrastructure,
 		CertsDir:                  certsDir,
 		MusterNodePort:            config.MusterNodePort,
 		KagentUINodePort:          config.KagentUINodePort,
@@ -172,6 +182,7 @@ var manifests = map[string]struct {
 	"observability-route.yaml.tmpl":          {out: "observability-route.yaml"},
 	"demo-workflow.yaml.tmpl":                {out: "demo-workflow.yaml"},
 	"oauth-fixture.yaml.tmpl":                {out: "oauth-fixture.yaml"},
+	"fleet-fixture.yaml.tmpl":                {out: "fleet-fixture.yaml"},
 	"extra-models.yaml.tmpl":                 {out: "extra-models.yaml"},
 	"coredns.yaml.tmpl":                      {out: "coredns.yaml"},
 	"gateway-nodeport.yaml.tmpl":             {out: "gateway-nodeport.yaml"},
