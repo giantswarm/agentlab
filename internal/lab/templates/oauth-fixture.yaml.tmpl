@@ -59,12 +59,15 @@ spec:
     # platform client's audience, which the endpoint trusts -- so the sign-in
     # completes and the fixture connects, as `agentlab toolsets-test` proves.
     #
-    # The issuer is the identity the grant is filed under, not where the
-    # browser goes: it must be the authorization server the endpoint's own
-    # RFC 9728 metadata names (muster's public URL), because that is the key
-    # muster looks the session's token up under when it calls the server.
-    # Pinning Dex's URL as the issuer completes the sign-in but files the
-    # grant where no call finds it ("no valid token available").
+    # The issuer is the authorization server the sign-in runs against and the
+    # key the grant is filed under; since muster 5.12.1 (muster#1174) it may
+    # differ from the one the endpoint's RFC 9728 metadata names, and it may
+    # be muster's own IdP. This fixture keeps muster's public URL as the
+    # issuer with Dex's endpoints (the GitHub shape) on purpose: a grant
+    # under Dex's issuer would share muster's own login issuer, and
+    # core_auth_logout leaves grants of a shared issuer in place -- the next
+    # run's sign-in would then reconnect without a challenge and the
+    # per-server sign-in proof would have nothing to complete.
     authorizationServer:
       issuer: {{ .MusterBaseURL }}
       authorizationEndpoint: {{ .Issuer }}/auth
