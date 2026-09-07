@@ -407,9 +407,14 @@ exposes none of mcp-oauth's knobs for a lab (`AllowPrivateIPClientMetadata`,
 `DisableDNSValidation`, `AllowPrivateIPRedirectURIs`), so no sign-in could
 complete against it and the fixture was a challenge generator only. **Fix in
 the lab:** the CR pins the lab Dex through `spec.auth.authorizationServer`
-(issuer, `clientCredentialsSecretRef` → the platform client's id/secret in the
-Secret `lab-oauth-fixture-client`, `scopes` — a pinned server gets no default
-scope and Dex refuses a request without `openid`), and `dex.yaml.tmpl` lists
+(Dex's `authorizationEndpoint`/`tokenEndpoint`, `clientCredentialsSecretRef` →
+the platform client's id/secret in the Secret `lab-oauth-fixture-client`,
+`scopes` — a pinned server gets no default scope and Dex refuses a request
+without `openid` — and as `issuer` muster's own public URL: the grant is filed
+under the issuer the endpoint's RFC 9728 metadata names, which is also the key
+the connection looks it up under; a pin naming Dex's URL as the issuer
+completes the sign-in but every call then fails with "no valid token
+available" — worth a muster issue, the CRD text does not say so), and `dex.yaml.tmpl` lists
 muster's proxy callback on that client. Dex matches redirect URIs exactly and
 the token it issues carries the platform client's audience, which the endpoint
 trusts, so `agentlab toolsets-test` completes the sign-in headlessly. Unblocks

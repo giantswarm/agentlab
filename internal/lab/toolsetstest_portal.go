@@ -19,7 +19,7 @@ import (
 // the servers page and of the Tools step calls), with the session's own
 // forwarded Dex id_token, and returns the challenge URL.
 func signInChallengeViaPortal(ps *portalSession, server string) (string, error) {
-	status, raw, err := ps.musterPost("/auth/login"+installationQuery, map[string]any{"server": server})
+	status, raw, err := ps.musterPost("/auth/login"+installationQuery, map[string]any{serverKey: server})
 	if err != nil {
 		return "", err
 	}
@@ -139,7 +139,7 @@ func proveSignInScopedToolset(cfg *config.Config, user, other *config.User, tool
 	defer func() {
 		s, err := openMusterSession(cfg, ps.dexIDToken, "toolsets-test-g6-logout")
 		if err == nil {
-			_, _ = s.callToolEnvelope("core_auth_logout", map[string]any{"server": oauthFixtureServer})
+			_, _ = s.callToolEnvelope("core_auth_logout", map[string]any{serverKey: oauthFixtureServer})
 		}
 	}()
 	note("Dex login completed; muster's proxy callback answered Authentication Successful")
@@ -167,7 +167,7 @@ func proveSignInScopedToolset(cfg *config.Config, user, other *config.User, tool
 		return nil, err
 	}
 	agentSession.setHeader(toolsetHeader, toolsetFixtureSelector)
-	agentChallenge, err := agentSession.callToolEnvelope("core_auth_login", map[string]any{"server": oauthFixtureServer})
+	agentChallenge, err := agentSession.callToolEnvelope("core_auth_login", map[string]any{serverKey: oauthFixtureServer})
 	if err != nil {
 		return nil, err
 	}
@@ -305,7 +305,7 @@ func proveToolsetPortal(cfg *config.Config, user *config.User) ([]string, error)
 	for _, p := range presets.Presets {
 		presetNames = append(presetNames, p.Name)
 	}
-	for _, want := range []string{"read-only", "none", "full"} {
+	for _, want := range []string{presetReadOnlyName, presetNoneName, presetFullName} {
 		if !slices.Contains(presetNames, want) {
 			return nil, fmt.Errorf("/tools/filter?include_presets=true lacks the built-in preset %s: %v", want, presetNames)
 		}
@@ -356,10 +356,10 @@ func proveToolsetPortal(cfg *config.Config, user *config.User) ([]string, error)
 	}
 	header, err := toolsetHeaderOf(cr)
 	if err != nil {
-		return nil, fmt.Errorf("Agent %s: %w", toolsetsAgentPortal, err)
+		return nil, fmt.Errorf("agent %s: %w", toolsetsAgentPortal, err)
 	}
 	if header != presetReadOnly {
-		return nil, fmt.Errorf("Agent %s carries %s=%q, wanted %s", toolsetsAgentPortal, toolsetHeader, header, presetReadOnly)
+		return nil, fmt.Errorf("agent %s carries %s=%q, wanted %s", toolsetsAgentPortal, toolsetHeader, header, presetReadOnly)
 	}
 	note("HelmRelease values.toolset %v; Agent spec.declarative.tools[0].headersFrom %s=%s", toolset, toolsetHeader, header)
 	verdicts = append(verdicts, fmt.Sprintf("PASS: the portal's apply path (scaffolder template agent-deployment, kube:apply with the user's token) lands the composer's toolset on the HelmRelease and the header on the Agent (%s)", toolsetsAgentPortal))
@@ -448,7 +448,7 @@ func scaffold(ps *portalSession, manifest, releaseName string) (string, error) {
 		}
 		_ = json.Unmarshal(raw, &t)
 		state = t.Status
-		return state == "completed" || state == "failed" || state == "cancelled"
+		return state == "completed" || state == taskStateFailed || state == "cancelled"
 	})
 	if !done || state != "completed" {
 		_, events, _ := ps.backstageGet("/api/scaffolder/v2/tasks/" + task.ID + "/events")

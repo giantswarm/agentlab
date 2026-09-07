@@ -124,8 +124,8 @@ func AgentsTest(cfg *config.Config, email string) error {
 	// without one, naming the shipped presets); agents-test is the platform
 	// path, so it declares the read-only preset and asserts the refusal.
 	createArgs := map[string]any{
-		nameKey: agentsTestAgent, "modelConfig": modelConfig, "displayName": "agentlab agents-test",
-		"description":   "Throwaway agent of `agentlab agents-test`; deleted by the same run.",
+		nameKey: agentsTestAgent, modelConfigKey: modelConfig, "displayName": "agentlab agents-test",
+		descriptionKey:  "Throwaway agent of `agentlab agents-test`; deleted by the same run.",
 		"systemMessage": "Reply with exactly the word pong and nothing else.",
 	}
 	step("%screate_agent %s without a toolset — expecting the refusal naming the presets", toolPrefix, agentsTestAgent)
@@ -205,7 +205,7 @@ func AgentsTest(cfg *config.Config, email string) error {
 		RequestedBy string   `json:"requestedBy"`
 		Changed     []string `json:"changed"`
 	}
-	if err := session.callServerJSON(toolPrefix+"update_agent", map[string]any{nameKey: agentsTestAgent, "description": "Updated by agentlab agents-test."}, &updated); err != nil {
+	if err := session.callServerJSON(toolPrefix+"update_agent", map[string]any{nameKey: agentsTestAgent, descriptionKey: "Updated by agentlab agents-test."}, &updated); err != nil {
 		return err
 	}
 	if updated.RequestedBy != user.Email || !slices.Contains(updated.Changed, "agent.description") {
@@ -231,7 +231,7 @@ func AgentsTest(cfg *config.Config, email string) error {
 		if err != nil {
 			return err
 		}
-		text, err := viewerSession.callServerTool(toolPrefix+"create_agent", map[string]any{nameKey: agentsTestAgent + "-viewer", "modelConfig": modelConfig, "toolset": []string{agentsTestToolset}})
+		text, err := viewerSession.callServerTool(toolPrefix+"create_agent", map[string]any{nameKey: agentsTestAgent + "-viewer", modelConfigKey: modelConfig, "toolset": []string{agentsTestToolset}})
 		switch {
 		case err == nil:
 			return fmt.Errorf("%s created an agent through agent-manager although the view role cannot write HelmReleases — agent-manager is not acting as the caller (ServiceAccount fallback?): %.200s", viewer.Email, text)

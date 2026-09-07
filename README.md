@@ -313,8 +313,11 @@ metadata at zero cost), so the CR sits at `Auth Required` until a session
 signs in and every `core_auth_login` yields a fresh challenge. The
 authorization server the sign-in walks through is **pinned to the lab Dex**
 (`spec.auth.authorizationServer`, the shape an operator uses for a GitHub App:
-issuer, the client from the Secret `lab-oauth-fixture-client`, the scopes)
-rather than discovered. Discovery would name muster's own OAuth 2.1 server,
+Dex's authorization and token endpoints, the client from the Secret
+`lab-oauth-fixture-client`, the scopes — and, as the `issuer`, muster's own
+public URL, the identity the grant is filed under: it must be the server the
+endpoint's RFC 9728 metadata names, or no call finds the token) rather than
+discovered. Discovery would name muster's own OAuth 2.1 server,
 which identifies clients by Client ID Metadata Document — and that server's
 SSRF guards refuse every lab hostname, for the metadata URL and for a
 registered redirect URI alike (`muster.127.0.0.1.nip.io` resolves to the

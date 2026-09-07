@@ -93,11 +93,11 @@ func backstageSignIn(cfg *config.Config, user *config.User) error {
 			fixtureState = fmt.Sprintf("%v", m["state"])
 		}
 	}
-	if !isAuthRequiredState(fixtureState) {
-		return fmt.Errorf("MCPServer %s is %q, not Auth Required — the sign-in fixture is missing or broken (`agentlab platform` creates it)",
+	if !isAuthRequiredState(fixtureState) && !strings.EqualFold(fixtureState, "connected") {
+		return fmt.Errorf("MCPServer %s is %q, not Auth Required (or Connected for a signed-in session) — the sign-in fixture is missing or broken (`agentlab platform` creates it)",
 			oauthFixtureServer, fixtureState)
 	}
-	status, raw, err := musterPost("/auth/login"+installation, map[string]any{"server": oauthFixtureServer})
+	status, raw, err := musterPost("/auth/login"+installation, map[string]any{serverKey: oauthFixtureServer})
 	if err != nil {
 		return err
 	}

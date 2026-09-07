@@ -20,7 +20,9 @@ func TestOAuthFixtureRenderPinsDex(t *testing.T) {
 	s := string(out)
 	for _, want := range []string{
 		"authorizationServer:",
-		"issuer: " + cfg.Issuer(),
+		"issuer: " + cfg.MusterBaseURL(),
+		"authorizationEndpoint: " + cfg.Issuer() + "/auth",
+		"tokenEndpoint: " + cfg.Issuer() + "/token",
 		"name: " + oauthFixtureServer + "-client",
 		"scopes: openid profile email offline_access",
 		"kind: Secret",

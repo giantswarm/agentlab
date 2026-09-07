@@ -268,7 +268,7 @@ func (ps *portalSession) listMCPServerCRs() ([]mcpServerCR, error) {
 		return nil, err
 	}
 	if status != http.StatusOK {
-		return nil, fmt.Errorf("Kubernetes proxy list of MCPServers answered %d: %.300s", status, raw)
+		return nil, fmt.Errorf("the Kubernetes proxy list of MCPServers answered %d: %.300s", status, raw)
 	}
 	return decodeMCPServerList(raw)
 }

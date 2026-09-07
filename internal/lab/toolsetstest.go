@@ -89,12 +89,20 @@ func ToolsetsTest(cfg *config.Config, email string, opts ToolsetsTestOptions) er
 	if user == nil {
 		return fmt.Errorf("no user %q in %s", email, config.File)
 	}
-	other := cfg.FindUserInGroup("developers")
-	if other == nil || other.Email == user.Email {
-		other = cfg.FindUserInGroup("viewers")
+	// The second person of the sign-in proof: anyone but the first, a
+	// developer preferred (the lab admin is a developer too).
+	var other *config.User
+	for i := range cfg.Users {
+		u := &cfg.Users[i]
+		if u.Email == user.Email {
+			continue
+		}
+		if other == nil || (slices.Contains(u.Groups, "developers") && !slices.Contains(other.Groups, "developers")) {
+			other = u
+		}
 	}
-	if other == nil || other.Email == user.Email {
-		return fmt.Errorf("%s needs a second user (developers or viewers group) for the per-user sign-in proof", config.File)
+	if other == nil {
+		return fmt.Errorf("%s needs a second user for the per-user sign-in proof", config.File)
 	}
 	if opts.ModelConfig == "" {
 		opts.ModelConfig = toolsetTestDefaultModel
@@ -226,8 +234,8 @@ func proveAgentManagerToolset(s *musterSession, toolPrefix, modelConfig string) 
 	step("%screate_agent without a toolset — expecting the refusal", toolPrefix)
 	base := func(name string) map[string]any {
 		return map[string]any{
-			nameKey: name, "modelConfig": modelConfig, "displayName": "agentlab toolset proof: " + strings.TrimPrefix(name, toolsetsTestPrefix+"-"),
-			"description":   "Throwaway agent of `agentlab toolsets-test`; deleted by the same run.",
+			nameKey: name, modelConfigKey: modelConfig, "displayName": "agentlab toolset proof: " + strings.TrimPrefix(name, toolsetsTestPrefix+"-"),
+			descriptionKey:  "Throwaway agent of `agentlab toolsets-test`; deleted by the same run.",
 			"systemMessage": toolsetTestAgentSystemMsg,
 		}
 	}
@@ -235,7 +243,7 @@ func proveAgentManagerToolset(s *musterSession, toolPrefix, modelConfig string) 
 	if err == nil {
 		return fmt.Errorf("create_agent without a toolset was accepted (%.200s) — agent-manager predates the toolset contract (needs ≥ 0.4.0)", text)
 	}
-	for _, want := range []string{"toolset", "read-only", "none", "infrastructure", "agent-platform", "full", presetNone} {
+	for _, want := range []string{"toolset", presetReadOnlyName, presetNoneName, "infrastructure", "agent-platform", presetFullName, presetNone} {
 		if !strings.Contains(err.Error(), want) {
 			return fmt.Errorf("the refusal does not mention %q: %v", want, err)
 		}
@@ -315,7 +323,7 @@ func waitAgentCR(name string) (*agentCR, error) {
 	}
 	var cr agentCR
 	if err := json.Unmarshal([]byte(raw), &cr); err != nil {
-		return nil, fmt.Errorf("parsing Agent %s: %w", name, err)
+		return nil, fmt.Errorf("parsing agent %s: %w", name, err)
 	}
 	return &cr, nil
 }
@@ -370,16 +378,16 @@ func proveRenderedToolsets(s *musterSession, toolPrefix, modelConfig string) err
 		switch {
 		case a.name == toolsetsAgentNone:
 			if err == nil {
-				return fmt.Errorf("Agent %s (toolset %v) still has a muster tool entry (header %q); the chart must omit it", a.name, a.toolset, header)
+				return fmt.Errorf("agent %s (toolset %v) still has a muster tool entry (header %q); the chart must omit it", a.name, a.toolset, header)
 			}
 			if len(cr.Spec.Declarative.Tools) != 0 {
-				return fmt.Errorf("Agent %s has %d tool entries, wanted none", a.name, len(cr.Spec.Declarative.Tools))
+				return fmt.Errorf("agent %s has %d tool entries, wanted none", a.name, len(cr.Spec.Declarative.Tools))
 			}
 			note("no tool entry at all (spec.declarative.tools empty)")
 		case err != nil:
-			return fmt.Errorf("Agent %s: %w", a.name, err)
+			return fmt.Errorf("agent %s: %w", a.name, err)
 		case header != want:
-			return fmt.Errorf("Agent %s carries %s=%q on spec.declarative.tools[0].headersFrom, wanted %q", a.name, toolsetHeader, header, want)
+			return fmt.Errorf("agent %s carries %s=%q on spec.declarative.tools[0].headersFrom, wanted %q", a.name, toolsetHeader, header, want)
 		default:
 			note("spec.declarative.tools[0].headersFrom: %s=%s (mcpServer %s/%s)", toolsetHeader, header, cr.Spec.Declarative.Tools[0].MCPServer.Kind, cr.Spec.Declarative.Tools[0].MCPServer.Name)
 		}
@@ -435,10 +443,10 @@ spec:
 	}
 	header, err := toolsetHeaderOf(cr)
 	if err != nil {
-		return fmt.Errorf("Agent %s: %w", toolsetsAgentLegacy, err)
+		return fmt.Errorf("agent %s: %w", toolsetsAgentLegacy, err)
 	}
 	if header != "" {
-		return fmt.Errorf("Agent %s declares no toolset but carries %s=%q", toolsetsAgentLegacy, toolsetHeader, header)
+		return fmt.Errorf("agent %s declares no toolset but carries %s=%q", toolsetsAgentLegacy, toolsetHeader, header)
 	}
 	var list struct {
 		Agents []struct {
@@ -496,18 +504,18 @@ func proveMusterToolsets(cfg *config.Config, token string) (*musterToolsetResult
 	step("Workflows: a query-only one and one with a destructive step (core_workflow_create)")
 	for _, wf := range []map[string]any{
 		{
-			nameKey:       toolsetsWorkflowQuery,
-			"description": "agentlab toolsets-test: read-only steps only (deleted by the same run)",
+			nameKey:        toolsetsWorkflowQuery,
+			descriptionKey: "agentlab toolsets-test: read-only steps only (deleted by the same run)",
 			"steps": []map[string]any{
-				{"id": "namespaces", "tool": listTool, "args": map[string]any{"resourceType": "namespaces"}, "store": true},
+				{"id": resourceNamespaces, toolKey: listTool, argsKey: map[string]any{resourceTypeKey: resourceNamespaces}, "store": true},
 			},
 		},
 		{
-			nameKey:       toolsetsWorkflowMutating,
-			"description": "agentlab toolsets-test: a destructive step, never executed (deleted by the same run)",
+			nameKey:        toolsetsWorkflowMutating,
+			descriptionKey: "agentlab toolsets-test: a destructive step, never executed (deleted by the same run)",
 			"steps": []map[string]any{
-				{"id": "namespaces", "tool": listTool, "args": map[string]any{"resourceType": "namespaces"}},
-				{"id": "purge", "tool": deleteTool, "args": deleteArgs},
+				{"id": resourceNamespaces, toolKey: listTool, argsKey: map[string]any{resourceTypeKey: resourceNamespaces}},
+				{"id": "purge", toolKey: deleteTool, argsKey: deleteArgs},
 			},
 		},
 	} {
@@ -589,7 +597,7 @@ func proveMusterToolsets(cfg *config.Config, token string) (*musterToolsetResult
 	note("%d tools, all readOnlyHint (%d workflows, no core_*)", len(ro.Tools), countKind(ro.Tools, "workflow"))
 
 	step("Under %s: the read-only Kubernetes call succeeds, the destructive call and the mutating workflow are refused naming the toolset", presetReadOnly)
-	text, err := s.callServerTool(listTool, map[string]any{"resourceType": "namespaces"})
+	text, err := s.callServerTool(listTool, map[string]any{resourceTypeKey: resourceNamespaces})
 	if err != nil {
 		return nil, fmt.Errorf("%s under %s: %w", listTool, presetReadOnly, err)
 	}
@@ -627,7 +635,7 @@ func proveMusterToolsets(cfg *config.Config, token string) (*musterToolsetResult
 	if len(none.Tools) != 0 {
 		return nil, fmt.Errorf("%s resolved to %d tools", presetNone, len(none.Tools))
 	}
-	env, err := s.callToolEnvelope(listTool, map[string]any{"resourceType": "namespaces"})
+	env, err := s.callToolEnvelope(listTool, map[string]any{resourceTypeKey: resourceNamespaces})
 	if err != nil {
 		return nil, err
 	}
@@ -732,7 +740,7 @@ func proveMusterToolsets(cfg *config.Config, token string) (*musterToolsetResult
 	for _, p := range withPresets.Presets {
 		presetNames = append(presetNames, p.Name)
 	}
-	for _, builtIn := range []string{"read-only", "none", "full"} {
+	for _, builtIn := range []string{presetReadOnlyName, presetNoneName, presetFullName} {
 		if !slices.Contains(presetNames, builtIn) {
 			return nil, fmt.Errorf("filter_tools presets lack the built-in %s: %v", builtIn, presetNames)
 		}

@@ -12,6 +12,30 @@ import (
 	"github.com/giantswarm/agentlab/internal/config"
 )
 
+// JSON keys the proofs pass to and read from the platform's tools, named once
+// so the same word is not spelled in a dozen places (nameKey lives in
+// kubeconfig.go).
+const (
+	modelConfigKey  = "modelConfig"
+	descriptionKey  = "description"
+	serverKey       = "server"
+	resourceTypeKey = "resourceType"
+	argsKey         = "args"
+	// presetFullName is the built-in preset that resolves to the whole
+	// catalogue; presetFull (toolsetstest.go) is its selector.
+	presetFullName     = "full"
+	presetNoneName     = "none"
+	presetReadOnlyName = "read-only"
+	// toolKey names a tool: a workflow step's, a ToolInfo kind.
+	toolKey = "tool"
+	// resourceNamespaces is the mcp-kubernetes resourceType the proofs list:
+	// every user may, and the answer names the platform namespace.
+	resourceNamespaces = "namespaces"
+	// taskStateFailed is the terminal failure state of a model-manager job
+	// and of a scaffolder task alike.
+	taskStateFailed = "failed"
+)
+
 // musterSession is one MCP Streamable-HTTP session against the lab muster
 // through the edge, authenticated with a Dex id_token as Bearer (muster lists
 // the agent-platform client under trustedAudiences). The same path Claude
@@ -95,7 +119,7 @@ func (s *musterSession) callTool(name string, args map[string]any) (map[string]a
 	s.seq++
 	payload, err := json.Marshal(map[string]any{
 		"jsonrpc": "2.0", "id": s.seq, "method": "tools/call",
-		"params": map[string]any{"name": name, "arguments": args},
+		"params": map[string]any{nameKey: name, "arguments": args},
 	})
 	if err != nil {
 		return nil, err
@@ -157,13 +181,24 @@ func (s *musterSession) callToolEnvelope(name string, args map[string]any) (*too
 	if args == nil {
 		args = map[string]any{}
 	}
-	res, err := s.callTool("call_tool", map[string]any{"name": name, "arguments": args})
+	res, err := s.callTool("call_tool", map[string]any{nameKey: name, "arguments": args})
 	if err != nil {
 		return nil, err
 	}
 	var env toolEnvelope
 	inner := innerText(res)
 	if err := json.Unmarshal([]byte(inner), &env); err != nil || len(env.Content) == 0 {
+		// A refusal by muster itself — a tool outside the request's toolset,
+		// an unknown tool — is call_tool's own error result: plain text, no
+		// inner envelope. Hand it back as one so callers judge isError alike.
+		result, _ := res["result"].(map[string]any)
+		if isErr, _ := result["isError"].(bool); isErr && strings.TrimSpace(inner) != "" {
+			env = toolEnvelope{IsError: true}
+			env.Content = append(env.Content, struct {
+				Text string `json:"text"`
+			}{Text: inner})
+			return &env, nil
+		}
 		return nil, fmt.Errorf("unexpected call_tool payload shape for %s: %.300s", name, inner)
 	}
 	return &env, nil
@@ -279,7 +314,7 @@ type describeToolResponse struct {
 // describeTool runs muster's describe_tool meta-tool. A tool outside the
 // request's toolset is an error result and comes back as err.
 func (s *musterSession) describeTool(name string) (*describeToolResponse, error) {
-	res, err := s.callTool("describe_tool", map[string]any{"name": name})
+	res, err := s.callTool("describe_tool", map[string]any{nameKey: name})
 	if err != nil {
 		return nil, err
 	}
@@ -292,31 +327,4 @@ func (s *musterSession) describeTool(name string) (*describeToolResponse, error)
 		return nil, fmt.Errorf("parsing describe_tool payload: %w\n%.300s", err, innerText(res))
 	}
 	return &out, nil
-}
-
-// listToolInfos is listTools with the full entries (server, kind,
-// annotations) and the servers muster reports as requiring a sign-in.
-func (s *musterSession) listToolInfos() ([]toolInfo, []string, error) {
-	res, err := s.callTool("list_tools", nil)
-	if err != nil {
-		return nil, nil, err
-	}
-	result, _ := res["result"].(map[string]any)
-	if isErr, _ := result["isError"].(bool); isErr {
-		return nil, nil, fmt.Errorf("list_tools: %s", strings.TrimSpace(innerText(res)))
-	}
-	var listing struct {
-		Tools                []toolInfo `json:"tools"`
-		ServersRequiringAuth []struct {
-			Name string `json:"name"`
-		} `json:"servers_requiring_auth"`
-	}
-	if err := json.Unmarshal([]byte(innerText(res)), &listing); err != nil {
-		return nil, nil, fmt.Errorf("parsing list_tools payload: %w", err)
-	}
-	var requiring []string
-	for _, srv := range listing.ServersRequiringAuth {
-		requiring = append(requiring, srv.Name)
-	}
-	return listing.Tools, requiring, nil
 }

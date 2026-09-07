@@ -77,8 +77,15 @@ func ensureOAuthFixture(cfg *config.Config) error {
 	if err := runQuiet("kubectl", "apply", "-f", path); err != nil {
 		return err
 	}
-	return waitMCPServerState(oauthFixtureServer, mcpServerStateAuthRequired)
+	return waitMCPServerState(oauthFixtureServer, oauthFixtureHealthyStates...)
 }
+
+// oauthFixtureHealthyStates are the CR states of a reachable fixture: Auth
+// Required while no session is signed in, Connected while one is — a
+// completed sign-in (toolsets-test, the portal's Sign in) connects muster to
+// the endpoint for that session, and the connection outlives the session's
+// sign-out until its next use. Failed is the state that means trouble.
+var oauthFixtureHealthyStates = []string{mcpServerStateAuthRequired, "Connected"}
 
 // isAuthRequiredState accepts both spellings of muster's auth-required state:
 // the CRD's "Auth Required" and the service-state token "auth_required".
@@ -102,7 +109,7 @@ func signInChallenge(cfg *config.Config, s *musterSession) (*authChallenge, erro
 	// core_auth_login is a core tool: reachable only through muster's
 	// call_tool meta-tool, whose envelope carries the challenge's
 	// structuredContent — the same envelope the portal's backend unwraps.
-	env, err := s.callToolEnvelope("core_auth_login", map[string]any{"server": oauthFixtureServer})
+	env, err := s.callToolEnvelope("core_auth_login", map[string]any{serverKey: oauthFixtureServer})
 	if err != nil {
 		return nil, err
 	}
@@ -142,8 +149,10 @@ func proveOAuthSignIn(cfg *config.Config, token string) error {
 	step("Per-server OAuth sign-in: core_auth_login for the %s fixture", oauthFixtureServer)
 	// The challenge itself does not depend on the CR state, but right after a
 	// muster restart the CR reads Failed until muster's retry finds its own
-	// listener — and a Failed fixture is what the portal would show.
-	if err := waitMCPServerState(oauthFixtureServer, mcpServerStateAuthRequired); err != nil {
+	// listener — and a Failed fixture is what the portal would show. Connected
+	// (another session signed in) is as healthy as Auth Required: sign-ins
+	// are per session, and this session has none.
+	if err := waitMCPServerState(oauthFixtureServer, oauthFixtureHealthyStates...); err != nil {
 		return err
 	}
 	s, err := openMusterSession(cfg, token, "platform-test-oauth")
