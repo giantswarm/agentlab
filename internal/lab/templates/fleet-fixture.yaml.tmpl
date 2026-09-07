@@ -1,0 +1,71 @@
+# A test fixture, not a real integration: the fake fleet (fleetfixture.go).
+#
+# A real installation federates many management clusters — agent-platform-mcps
+# renders one MCPServer per cluster and per infrastructure family (kubernetes,
+# capi, prometheus), each declaring spec.family so muster exposes the family
+# once (x_kubernetes_<tool> with a management_cluster argument) and labelled
+# with the cluster it serves. The lab has one cluster and its bundled
+# mcp-kubernetes declares no family, so nothing here looks like a fleet — yet
+# the portal's MCP servers page, its dashboard's fleet coverage and the agent
+# Tools step group servers by family and by the tool-group label. These CRs
+# fake the fleet: {{ len .FleetFixtureServers }} members, the family block, the management-cluster label
+# and the label the fleet charts stamp:
+#
+#   {{ .ToolGroupLabel }}: {{ .ToolGroupInfrastructure }}
+#
+# That label sorts MCP servers into the platform's three groups — agent-platform
+# (agent-manager, model-manager, muster core), infrastructure (these families)
+# and, for a server WITHOUT the label, Registered servers (whatever an
+# installation or a user registers). The chart that ships a server stamps it;
+# the portal groups by it, muster's shipped `infrastructure` / `agent-platform`
+# toolset presets select by it, `kubectl get mcpservers.muster.giantswarm.io
+# -A -l {{ .ToolGroupLabel }}={{ .ToolGroupInfrastructure }}` lists by it.
+# Orientation and preset membership, not authorization. The OAuth sign-in
+# fixture ({{ .OAuthFixtureServer }}) and anything registered by hand carry
+# no label on purpose: the Registered servers group needs members too.
+#
+# Every member points at muster's own protected /mcp with auth.type oauth, like
+# the OAuth fixture, and so reads "Auth Required" — what an unconnected
+# forwardToken fleet member shows on a real installation — at zero cost.
+# Pointing them at the lab's single mcp-kubernetes instead makes muster open
+# one connection per member per user session; a dozen of those rate-limited
+# mcp-kubernetes (429) and took the session's real mcp-kubernetes connection
+# down with them. The fixture exists to be grouped, listed and selected, not
+# to be called.
+{{- range .FleetFixtureServers }}
+---
+apiVersion: muster.giantswarm.io/v1alpha1
+kind: MCPServer
+metadata:
+  name: {{ .Name }}
+  namespace: agent-platform
+  labels:
+    app.kubernetes.io/managed-by: agentlab
+    agentlab.giantswarm.io/fixture: fake-fleet
+    muster.giantswarm.io/type: {{ .Type }}
+    muster.giantswarm.io/management-cluster: {{ .Cluster }}
+    {{ $.ToolGroupLabel }}: {{ $.ToolGroupInfrastructure }}
+  annotations:
+    agentlab.giantswarm.io/purpose: >-
+      Lab test fixture: one member of the fake fleet — the {{ .Family }} family
+      on the fake management cluster {{ .Cluster }} — carrying the family
+      block, the management-cluster label and the tool-group label the fleet
+      charts stamp, so the portal's server groups, fleet coverage and the
+      infrastructure toolset preset can be exercised on one kind cluster. Not
+      a real integration: it points at muster's own OAuth-protected /mcp and
+      stays Auth Required.
+spec:
+  description: >-
+    Lab fixture: the {{ .Family }} MCP server of the fake management cluster
+    {{ .Cluster }}. Stays Auth Required; exists to be grouped and listed, not
+    to be called.
+  type: streamable-http
+  url: {{ $.OAuthFixtureURL }}
+  autoStart: true
+  family:
+    name: {{ .Family }}
+    instanceArg: {{ $.FamilyInstanceArg }}
+  auth:
+    type: oauth
+    forwardToken: false
+{{- end }}

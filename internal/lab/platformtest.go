@@ -164,6 +164,14 @@ func PlatformTest(cfg *config.Config, email string) error {
 	}
 	verdict += "\nPASS: per-server OAuth sign-in -> muster (OAuth client) -> challenge on " + oauthProxyStartPath +
 		" (fixture " + oauthFixtureServer + ")"
+	// The tool-group label (fleetfixture.go): the infrastructure value
+	// selects the fake-fleet families and nothing else the lab created; the
+	// OAuth fixture stays a Registered server.
+	if err := proveToolGroupLabels(); err != nil {
+		return err
+	}
+	verdict += fmt.Sprintf("\nPASS: %s=%s selects the fake-fleet fixture (%d MCPServers); %s unlabelled (Registered servers)",
+		toolGroupLabel, toolGroupInfrastructure, len(fleetFixtureNames()), oauthFixtureServer)
 	if cfg.Platform.Observability {
 		// Same singleton prefixing as mcp-kubernetes: the lab's mcpServers
 		// entry deliberately keeps the server out of muster's families
