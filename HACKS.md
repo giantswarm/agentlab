@@ -410,11 +410,13 @@ the lab:** the CR pins the lab Dex through `spec.auth.authorizationServer`
 (Dex's `authorizationEndpoint`/`tokenEndpoint`, `clientCredentialsSecretRef` →
 the platform client's id/secret in the Secret `lab-oauth-fixture-client`,
 `scopes` — a pinned server gets no default scope and Dex refuses a request
-without `openid` — and as `issuer` muster's own public URL: the grant is filed
-under the issuer the endpoint's RFC 9728 metadata names, which is also the key
-the connection looks it up under; a pin naming Dex's URL as the issuer
-completes the sign-in but every call then fails with "no valid token
-available" — worth a muster issue, the CRD text does not say so), and `dex.yaml.tmpl` lists
+without `openid` — and as `issuer` muster's own public URL, so the grant's
+token-store key stays apart from muster's own login issuer (Dex) and a
+`core_auth_logout` clears it; a pin naming Dex's URL as the issuer works since
+muster 5.12.1 (muster#1174, muster#1175: the grant key follows the pin and a
+changed pin takes effect without a restart) but leaves the grant behind on
+logout, which would make the next run's sign-in proof reconnect without a
+challenge), and `dex.yaml.tmpl` lists
 muster's proxy callback on that client. Dex matches redirect URIs exactly and
 the token it issues carries the platform client's audience, which the endpoint
 trusts, so `agentlab toolsets-test` completes the sign-in headlessly. Unblocks
