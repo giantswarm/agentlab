@@ -2,6 +2,7 @@ package lab
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -93,11 +94,35 @@ func sideloadImages(cfg *config.Config, images []string) preloadResult {
 	if len(images) == 0 {
 		return preloadResult{}
 	}
-	args := append([]string{"load", "docker-image", "--name", cfg.ClusterName}, images...)
-	if err := runQuiet("kind", args...); err != nil {
-		return preloadResult{err: err}
+	loaded, err := kindLoadImages(cfg, images)
+	return preloadResult{n: loaded, d: time.Since(start).Round(time.Second), err: err}
+}
+
+// kindLoadImages side-loads images and reports how many landed. It is one
+// `kind load docker-image` for the batch — except under podman, where kind's
+// own multi-image save would fold the batch into one image under every tag
+// (runtime.go): there it is one call per image, which saves a single image
+// and is always right. kind stages and cleans its own archive either way. A
+// failed image does not stop the rest, so the count and the error are both
+// reported and a partial load reads as one.
+func kindLoadImages(cfg *config.Config, images []string) (int, error) {
+	if !dockerIsPodman() {
+		args := append([]string{"load", "docker-image", "--name", cfg.ClusterName}, images...)
+		if err := runQuiet("kind", args...); err != nil {
+			return 0, err
+		}
+		return len(images), nil
 	}
-	return preloadResult{n: len(images), d: time.Since(start).Round(time.Second)}
+	loaded := 0
+	var errs []error
+	for _, img := range images {
+		if err := runQuiet("kind", "load", "docker-image", "--name", cfg.ClusterName, img); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		loaded++
+	}
+	return loaded, errors.Join(errs...)
 }
 
 // pullLabImages starts pulling the snapshot manifest's images into the host
@@ -175,6 +200,8 @@ func sideloadDexImage(cfg *config.Config, ready <-chan bool) {
 func reportPreload(loaded <-chan preloadResult) {
 	res := <-loaded
 	switch {
+	case res.err != nil && res.n > 0:
+		note("preloaded %d cached images into the node (%s); the rest failed (%v) and their pods pull from the network", res.n, res.d, res.err)
 	case res.err != nil:
 		note("image preload failed (%v); pods will pull from the network", res.err)
 	case res.n > 0:
@@ -346,7 +373,9 @@ func nodeImageTags(node string) ([]string, error) {
 // tagged here. A pulled image re-tagged into ANOTHER repository shows <none>
 // too (the digest belongs to the repository it was pulled as); re-tagged within
 // the same repository it keeps the digest, and so still reads as pulled. Refs
-// are spelled the way docker prints them (shortRef).
+// are spelled the way docker prints them (shortRef). Podman prints a digest
+// for local builds too, but spells them `localhost/<name>`: that name is
+// what marks them local there.
 func hostImageProvenance() (map[string]bool, error) {
 	out, err := outputQuiet("docker", "images", "--digests", "--format", "{{.Repository}}:{{.Tag}}\t{{.Digest}}")
 	if err != nil {
@@ -366,7 +395,9 @@ func parseImageProvenance(out string) map[string]bool {
 			continue
 		}
 		digest = strings.TrimSpace(digest)
-		prov[ref] = prov[ref] || (digest != "" && digest != "<none>")
+		ref = shortRef(ref)
+		backed := digest != "" && digest != "<none>" && !strings.HasPrefix(ref, "localhost/")
+		prov[ref] = prov[ref] || backed
 	}
 	return prov
 }

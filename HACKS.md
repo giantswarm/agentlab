@@ -368,12 +368,31 @@ carry one. With `platform.gatewayPort != 443` Backstage's OAuth `redirect_uri`
 is port-free while the Dex client (`dex.yaml.tmpl`) registers the ported one,
 and every login fails with "Unregistered redirect_uri". The lab's app-config
 overlay (`backstage-catalog.yaml.tmpl`) restates the three URLs from
-`.BackstageBaseURL`; at 443 the values are identical. Still open on a
-non-443 port: the in-cluster edge Service serves 443 only, so muster cannot
-fetch its own ported OAuth metadata and `platform-test` fails at the
-`lab-oauth-fixture` step. Lab-only by construction: a real installation runs
-its edge on 443, so the umbrella has no reason to carry a ported public URL;
-the overlay is the lab's permanent answer, not an interim.
+`.BackstageBaseURL`; at 443 the values are identical. In-cluster, the lab's
+edge Service (`gateway-nodeport.yaml.tmpl`) serves that port as well, so the
+ported URLs resolve from pods too (agentlab#67). Lab-only by construction: a
+real installation runs its edge on 443, so the umbrella has no reason to
+carry a ported public URL; the overlay is the lab's permanent answer, not an
+interim.
+
+### U16. Podman: the side-load is one `kind load` per image — BLOCKED UPSTREAM
+`kind load docker-image a b c` runs `docker save -o <tar> a b c`. Podman's
+docker-compatible CLI writes ONE image carrying every name as a tag unless
+`--multi-image-archive` is passed, so the batch lands one image under all
+the tags (the Flux controllers crashlooped running flux-cli). Docker needs
+no flag, so kind cannot pass one portably. Under podman (`runtime.go`) the
+lab loads one image per call; under docker the batched call stays. Unblocks
+when kind's `load docker-image` saves with `--multi-image-archive` under
+its podman provider.
+
+### U17. Rootless Podman: the edge moves off 443 — NOT A BUG, A HOST LIMIT
+Rootless Podman publishes ports from the invoking user's network namespace,
+where the kernel refuses everything below
+`net.ipv4.ip_unprivileged_port_start` (1024). A bind probe alone reads a free
+443 as usable, because the lab's own process cannot bind it either way, so
+`configure` asks the engine instead (`MinPublishablePort`, `runtime.go`) and
+`ChooseFreePorts` moves the edge to 8443. Resolves for a user who runs Podman
+as root or lowers the sysctl; nothing to fix in the lab.
 
 ## Accepted lab trade-offs (not hacks to fix)
 

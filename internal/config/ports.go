@@ -10,19 +10,24 @@ import (
 )
 
 // PortChange records one port of the configuration that was moved off its
-// value because something on this machine already listens there. Field is
-// the agentlab.yaml path, What names the component for the human-facing
-// message, Note carries an extra caveat where a non-default port has
-// consequences beyond the number itself.
+// value because this machine cannot serve the lab there. Field is the
+// agentlab.yaml path, What names the component for the human-facing message,
+// Why says what made the port unusable, and Note carries an extra caveat
+// where a non-default port has consequences beyond the number itself.
 type PortChange struct {
 	Field    string
 	What     string
 	From, To int
+	Why      string
 	Note     string
 }
 
 func (ch PortChange) String() string {
-	s := fmt.Sprintf("%s: %d is in use, using %d instead (%s", ch.Field, ch.From, ch.To, ch.What)
+	why := ch.Why
+	if why == "" {
+		why = "is in use"
+	}
+	s := fmt.Sprintf("%s: %d %s, using %d instead (%s", ch.Field, ch.From, why, ch.To, ch.What)
 	if ch.Note != "" {
 		s += "; " + ch.Note
 	}
@@ -81,7 +86,7 @@ func (c *Config) ports() []labPort {
 			}
 			return scan(lo, 65535)
 		}, func(to int) string {
-			return fmt.Sprintf("public URLs gain :%d, valid from the host only; platform-test's lab-oauth-fixture step will fail (muster cannot reach its own ported URL in-cluster)", to)
+			return fmt.Sprintf("public URLs gain :%d", to)
 		}},
 		{"backstage.port", "Backstage's direct debug access", &c.Backstage.Port, func(scan func(int, int) (int, bool)) (int, bool) {
 			return scan(c.Backstage.Port+1, 65535)
@@ -91,15 +96,17 @@ func (c *Config) ports() []labPort {
 
 // ChooseFreePorts probes every host-side port of the configuration on
 // 127.0.0.1 — the address all kind port mappings bind — and moves each
-// occupied one to a nearby free port, returning what changed so the caller
+// unusable one to a nearby free port, returning what changed so the caller
 // can tell the user. Ports in `ours` are the lab's own (published by an
 // existing kind node of this very configuration) and never count as
-// occupied. Meant for a configuration whose cluster does not exist (yet, or
-// any more): an existing cluster's mappings are fixed at node creation, where
-// renumbering would only mislead — PortConflicts is the read-only check for
-// that case.
-func (c *Config) ChooseFreePorts(ours map[int]bool) []PortChange {
-	return c.chooseFreePorts(func(p int) bool { return !ours[p] && portTaken(p) })
+// occupied. Ports below minPublishable are ones the container engine cannot
+// bind at all (rootless podman and the privileged range); pass 1 where every
+// port is available. Meant for a configuration whose cluster does not exist
+// (yet, or any more): an existing cluster's mappings are fixed at node
+// creation, where renumbering would only mislead — PortConflicts is the
+// read-only check for that case.
+func (c *Config) ChooseFreePorts(ours map[int]bool, minPublishable int) []PortChange {
+	return c.chooseFreePorts(func(p int) bool { return !ours[p] && portTaken(p) }, minPublishable)
 }
 
 // PortConflicts reports which host-side ports of the configuration another
@@ -121,7 +128,11 @@ func (c *Config) portConflicts(taken func(int) bool) []PortConflict {
 
 // chooseFreePorts is ChooseFreePorts with the probe injected, so tests can
 // run against a fixed set of "occupied" ports instead of the machine.
-func (c *Config) chooseFreePorts(taken func(int) bool) []PortChange {
+func (c *Config) chooseFreePorts(taken func(int) bool, minPublishable int) []PortChange {
+	// A port the engine cannot publish is unusable whatever the probe says:
+	// binding it here succeeds as often as not (the lab runs unprivileged
+	// too), so the probe alone would call it free.
+	unusable := func(p int) bool { return p < minPublishable || taken(p) }
 	// Every port with a fixed meaning in the lab, so replacements never
 	// collide with each other or with it: the config's own host ports, the
 	// browser-login callback (host-side, pre-registered in Dex), and the
@@ -135,14 +146,14 @@ func (c *Config) chooseFreePorts(taken func(int) bool) []PortChange {
 		c.Platform.AgentsPort:  true,
 		c.Platform.GatewayPort: true,
 		BrowserCallbackPort:    true,
-		MusterNodePort:         true,
-		KagentUINodePort:       true,
-		GatewayNodePort:        true,
+	}
+	for _, p := range PinnedNodePorts {
+		reserved[p] = true
 	}
 
 	scan := func(lo, hi int) (int, bool) {
 		for p := lo; p <= hi; p++ {
-			if !reserved[p] && !taken(p) {
+			if !reserved[p] && !unusable(p) {
 				return p, true
 			}
 		}
@@ -151,7 +162,7 @@ func (c *Config) chooseFreePorts(taken func(int) bool) []PortChange {
 
 	var changes []PortChange
 	for _, lp := range c.ports() {
-		if !taken(*lp.port) {
+		if !unusable(*lp.port) {
 			continue
 		}
 		to, ok := lp.pick(scan)
@@ -162,6 +173,9 @@ func (c *Config) chooseFreePorts(taken func(int) bool) []PortChange {
 		}
 		reserved[to] = true
 		ch := PortChange{Field: lp.field, What: lp.what, From: *lp.port, To: to}
+		if *lp.port < minPublishable {
+			ch.Why = fmt.Sprintf("cannot be published by this container engine (nothing below %d can)", minPublishable)
+		}
 		if lp.note != nil {
 			ch.Note = lp.note(to)
 		}

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/giantswarm/agentlab/internal/config"
@@ -15,6 +16,7 @@ const (
 	refBackstageDev = "docker.io/library/backstage-dev:multi-backend-022f5b7e"
 	refMusterDev    = "gsoci.azurecr.io/giantswarm/muster:dev"
 	refGolangADK    = "gsoci.azurecr.io/giantswarm/golang-adk:0.10.0"
+	refSocat        = "docker.io/alpine/socat:1.8.1.3"
 )
 
 func TestScrapeImages(t *testing.T) {
@@ -79,10 +81,10 @@ func TestRegistryBacked(t *testing.T) {
 		"gsoci.azurecr.io/giantswarm/muster:5.10.2\tsha256:b97b80cd922c4aa2b6aa61e3fca50194d211b1b5a90b5931ce1eef5ff74d35a5\n" +
 		"<none>:<none>\t<none>\n")
 	for ref, want := range map[string]bool{
-		refBackstageDev:                  false, // built here
-		refPostgres:                      true,  // pulled from Docker Hub
-		"docker.io/alpine/socat:1.8.1.3": true,  // pulled, non-library namespace
-		refMusterDev:                     false, // a dev build tagged into a registry repo
+		refBackstageDev: false, // built here
+		refPostgres:     true,  // pulled from Docker Hub
+		refSocat:        true,  // pulled, non-library namespace
+		refMusterDev:    false, // a dev build tagged into a registry repo
 		"gsoci.azurecr.io/giantswarm/muster:5.10.2": true,
 		refGolangADK: true, // unknown to the host: the node pulled it
 	} {
@@ -94,9 +96,9 @@ func TestRegistryBacked(t *testing.T) {
 		t.Error("untagged rows must not enter the provenance map")
 	}
 	for ref, want := range map[string]string{
-		refPostgres:                      "postgres:18.3-alpine",
-		"docker.io/alpine/socat:1.8.1.3": "alpine/socat:1.8.1.3",
-		"ghcr.io/dexidp/dex:v2.45.1":     "ghcr.io/dexidp/dex:v2.45.1",
+		refPostgres:                  "postgres:18.3-alpine",
+		refSocat:                     "alpine/socat:1.8.1.3",
+		"ghcr.io/dexidp/dex:v2.45.1": "ghcr.io/dexidp/dex:v2.45.1",
 	} {
 		if got := shortRef(ref); got != want {
 			t.Errorf("shortRef(%q) = %q, want %q", ref, got, want)
@@ -158,4 +160,82 @@ esac`)
 	check("dev image pruned on the host, muster:dev pulled for real",
 		[]string{refPostgres, refGolangADK, refMusterDev},
 		[]string{refBackstageDev})
+}
+
+// Podman gives local builds a digest like any pull but spells them
+// `localhost/<name>`; that name marks them local, and podman's fully
+// qualified rows key the map the way docker spells them.
+func TestParseImageProvenancePodman(t *testing.T) {
+	prov := parseImageProvenance("localhost/backstage-dev:t1\tsha256:0537\n" +
+		"docker.io/library/postgres:18.3-alpine\tsha256:5445\n" +
+		"docker.io/alpine/socat:1.8.1.3\tsha256:5f27\n")
+	for ref, want := range map[string]bool{
+		"localhost/backstage-dev:t1":             false,
+		"docker.io/library/postgres:18.3-alpine": true,
+		refSocat:                                 true,
+	} {
+		if got := registryBacked(ref, prov); got != want {
+			t.Errorf("registryBacked(%q) = %v, want %v", ref, got, want)
+		}
+	}
+	if _, known := prov["postgres:18.3-alpine"]; !known {
+		t.Error("podman's docker.io/library/ rows must key the map as docker spells them")
+	}
+}
+
+// The reason this whole podman branch exists: `kind load docker-image a b c`
+// runs one `docker save` of all three, and podman's archive is single-image,
+// so the batch would land one image under every tag. Under podman the lab
+// therefore loads one image per call; under docker the batch stays one call.
+func TestKindLoadImagesOneCallPerImageUnderPodman(t *testing.T) {
+	images := []string{refPostgres, refGolangADK, refMusterDev}
+	for name, tc := range map[string]struct {
+		podman    bool
+		wantCalls []string
+	}{
+		"docker batches": {false, []string{
+			"kind load docker-image --name agentlab " + refPostgres + " " + refGolangADK + " " + refMusterDev,
+		}},
+		"podman loads one at a time": {true, []string{
+			"kind load docker-image --name agentlab " + refPostgres,
+			"kind load docker-image --name agentlab " + refGolangADK,
+			"kind load docker-image --name agentlab " + refMusterDev,
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			calls := installFakeTool(t, dir, "kind", "exit 0")
+			withPodman(t, tc.podman)
+			cfg := config.Default()
+			loaded, err := kindLoadImages(cfg, images)
+			if err != nil {
+				t.Fatalf("kindLoadImages: %v", err)
+			}
+			if loaded != len(images) {
+				t.Errorf("loaded %d images, want %d", loaded, len(images))
+			}
+			got := strings.Split(strings.TrimSpace(readCalls(t, calls)), "\n")
+			if !slices.Equal(got, tc.wantCalls) {
+				t.Errorf("calls\n got  %v\n want %v", got, tc.wantCalls)
+			}
+		})
+	}
+}
+
+// Under podman a failed image must not stop the rest, and the count must say
+// how many landed so the caller can report a partial load as one.
+func TestKindLoadImagesPartialFailureUnderPodman(t *testing.T) {
+	dir := t.TempDir()
+	installFakeTool(t, dir, "kind", `case "$5" in
+`+refGolangADK+`) echo "no such image" >&2; exit 1 ;;
+*) exit 0 ;;
+esac`)
+	withPodman(t, true)
+	loaded, err := kindLoadImages(config.Default(), []string{refPostgres, refGolangADK, refMusterDev})
+	if err == nil {
+		t.Fatal("a failed image must surface as an error")
+	}
+	if loaded != 2 {
+		t.Errorf("loaded = %d, want 2 (the failure must not stop the rest)", loaded)
+	}
 }

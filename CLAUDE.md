@@ -144,6 +144,18 @@ The lab's own e2e checks are the `*-test` subcommands, not `go test`.
   so renders stay byte-identical (no spurious pod rolls).
 - `internal/forms` — the huh configuration form; tests drive it with scripted
   keystrokes.
+- `internal/telemetry` — one anonymous usage signal per user-facing command
+  to TelemetryDeck (giantswarm/telemetrydeck-go, kubectl-gs's signal shape:
+  `GiantSwarm.command` with the command path and the version). `main.go`
+  wires it as the root `PersistentPreRun`; hidden commands (post-render,
+  `__complete`), `completion` and `help` never count. Opt-outs:
+  `AGENTLAB_TELEMETRY_OPTOUT`, `DO_NOT_TRACK=1`. When iterating on the lab,
+  `AGENTLAB_TELEMETRY_TESTMODE=1` keeps the runs out of the production
+  numbers (and logs delivery errors). Details in README "Usage data".
+- `pkg/project` — the build identity (`Version()`, `GitSHA()`,
+  `BuildTimestamp()`): stamped by the devctl Makefile / architect CI through
+  `-ldflags -X`, else Go's VCS build info (`v0.16.6`, a pseudo-version
+  between tags, `+dirty`), else `dev`. `agentlab --version` prints it.
 - `internal/lab` — the lifecycle. Templates in `templates/` are embedded and
   rendered via the `manifests` table in `render.go`; stamped manifests (dex,
   backstage) carry a checksum over render + certs, so unchanged re-applies are

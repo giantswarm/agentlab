@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	charm.land/huh/v2 v2.0.3
+	github.com/giantswarm/telemetrydeck-go v0.1.26
 	github.com/smallstep/truststore v0.13.0
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/crypto v0.56.0
@@ -28,6 +29,7 @@ require (
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/google/uuid v1.6.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
 	github.com/mattn/go-runewidth v0.0.24 // indirect

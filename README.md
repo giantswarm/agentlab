@@ -17,7 +17,8 @@ YAML to hand-edit and no shell to source.
 
 ## Requirements
 
-`go` (>= 1.25), `docker`, `kind` (>= 0.31), `kubectl`, `helm` (**>= 4** — Helm 3
+`go` (>= 1.25), `docker` (or Podman >= 4's docker-compatible CLI), `kind`
+(>= 0.31), `kubectl`, `helm` (**>= 4** — Helm 3
 cannot store the umbrella chart's release any more: the dependency archives put
 the release Secret over etcd's 1 MiB cap, see
 [agent-platform-standalone#21](https://github.com/giantswarm/agent-platform-standalone/issues/21);
@@ -26,6 +27,13 @@ see below), `git`.
 
 (The old script stack also needed openssl, curl, jq and python3; the binary
 does all of that itself.)
+
+Under **rootless Podman** the lab publishes its ports from your own network
+namespace, which cannot bind anything below
+`net.ipv4.ip_unprivileged_port_start` (1024 by default). `agentlab configure`
+detects this and moves the agentgateway edge off its default 443 — to 8443,
+so the public URLs gain `:8443` — and reports the move. Run Podman as root, or
+lower the sysctl, to keep 443.
 
 ## Quick start
 
@@ -86,8 +94,8 @@ follows the host instead of freezing the first run's view of it:
 Discovering this machine:
   tools             docker 29.7.2, kind v0.32.0, kubectl v1.36.4, helm v4.2.2
   cluster           kind "agentlab" exists — its port mappings are fixed at node creation (`agentlab down && agentlab up` to change them)
-  Ollama            0.33.2 on :11434 — listens on the kind gateway 172.21.0.1: yes; 10 downloaded, 4 tool-calling
-  Lemonade Server   11.9.0 on :13305 — listens on the kind gateway 172.21.0.1: yes; 4 downloaded, 3 tool-calling
+  Ollama            0.33.2 on :11434 — answers on 172.21.0.1 (the address pods dial): yes; 10 downloaded, 4 tool-calling
+  Lemonade Server   11.9.0 on :13305 — answers on 172.21.0.1 (the address pods dial): yes; 4 downloaded, 3 tool-calling
   Anthropic key     $ANTHROPIC_API_KEY is set — the agents' default ModelConfig and Backstage's AI chat get the real key at deploy time
 
 Applied to the configuration:
@@ -102,13 +110,13 @@ Applied to the configuration:
   exists** (a fresh lab, or after `agentlab down`), an occupied port is moved
   to a nearby free one, with a message saying what moved where (443 falls
   back to 8443). When the edge leaves 443, every public URL in this README
-  gains that port suffix (`https://backstage.127.0.0.1.nip.io:8443`), and
-  `platform-test`'s `lab-oauth-fixture` step fails: in-cluster the edge stays
-  on 443, so muster cannot reach its own ported OAuth metadata URL. Once the
-  cluster exists its mappings are fixed at node creation, so the ports it
-  publishes never count as occupied and a foreign listener on one of them is
-  **reported**, not renumbered around (free it, or `agentlab down`, re-run
-  `configure`, `agentlab up`).
+  gains that port suffix (`https://backstage.127.0.0.1.nip.io:8443`); the
+  lab's edge Service serves that port in-cluster as well, so the ported URLs
+  resolve from pods too and every proof still passes. Once the cluster exists
+  its mappings are fixed at node creation, so the ports it publishes never
+  count as occupied and a foreign listener on one of them is **reported**, not
+  renumbered around (free it, or `agentlab down`, re-run `configure`,
+  `agentlab up`).
 - **Host model servers**: an Ollama on `:11434` and a Lemonade Server on
   `:13305` (their default ports) are detected with version, whether they
   listen on the kind docker gateway (pods' path to the host — the bind-address
@@ -1153,12 +1161,56 @@ instead:
 
 Both give real groups on any Dex version. Keycloak is not needed for this.
 
+## Usage data (telemetry)
+
+Since v0.17.0, agentlab reports **one anonymous usage signal per command you
+run** — the same integration [kubectl-gs has](https://docs.giantswarm.io/reference/kubectl-gs/telemetry/)
+— so Giant Swarm can see which parts of the lab get used, on which versions
+and platforms, and by roughly how many people. That shapes what gets built
+next.
+
+One signal contains:
+
+- the command (`agentlab up`, `agentlab platform-test`, …) — never its
+  arguments or flags
+- the agentlab version (what `agentlab --version` prints)
+- operating system and processor architecture
+- the library and version that sent it (`telemetrydeck-go/…`)
+- a user identifier hash: SHA-256 over OS, architecture, host name, OS user
+  and group IDs, user name and the MAC addresses — enough to count distinct
+  users, not to identify one (see the
+  [library source](https://github.com/giantswarm/telemetrydeck-go/blob/main/telemetrydeck.go))
+- a random session UUID, unique per command execution
+
+Nothing from `agentlab.yaml`, `state/`, `certs/`, the cluster, the users, the
+models or the model servers is ever sent. Help output (`-h`, `--help`), shell
+completion and the internal `post-render` call Helm makes back into the binary
+do not count. The signal goes out in the background while the command runs
+and is dropped when the network is unavailable — it never blocks or fails a
+command.
+
+Data is stored at [TelemetryDeck](https://telemetrydeck.com/) on servers in
+the EU; see their [privacy FAQ](https://telemetrydeck.com/docs/guides/privacy-faq/).
+
+**Opting out:** set `AGENTLAB_TELEMETRY_OPTOUT` to any value, or the
+cross-tool [`DO_NOT_TRACK=1`](https://consoledonottrack.com/):
+
+```bash
+export AGENTLAB_TELEMETRY_OPTOUT=1
+```
+
+Working on the lab itself? `AGENTLAB_TELEMETRY_TESTMODE=1` files your signals
+as test data (kept apart from the production numbers in the dashboard) and
+logs delivery errors to stderr.
+
 ## Layout
 
 ```
 main.go                        the CLI (cobra): one subcommand per lifecycle step
 internal/config/               agentlab.yaml schema, defaults, validation
 internal/forms/                the interactive configuration forms (huh)
+internal/telemetry/            the one anonymous usage signal per command (TelemetryDeck; see "Usage data")
+pkg/project/                   version, commit, build time: ldflags from make/CI, else Go's VCS build info (`agentlab --version`)
 internal/lab/                  everything operational:
   certs.go                       the name-constrained lab CA + 825-day leaf certs
   trust.go                       agentlab trust/untrust (system + NSS stores, via smallstep/truststore)
