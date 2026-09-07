@@ -6,3 +6,8 @@ kubeconfig.oidc
 /agentlab
 /agentlab.yaml
 /state/
+
+# Scratch file the architect CI writes next to the sources before `go build`;
+# untracked it would flip Go's VCS stamp to vcs.modified=true and every
+# release binary would report vX.Y.Z+dirty (pkg/project reads that stamp).
+.ldflags
