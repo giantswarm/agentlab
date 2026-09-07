@@ -21,3 +21,12 @@ spec:
       port: 443
       targetPort: 443
       nodePort: {{ .GatewayNodePort }}
+{{- /* Off 443 the public URLs carry the port; this entry serves it in-cluster
+   onto the same 443 listener. Not rendered at 443: it would duplicate the
+   entry above. */}}
+{{- if ne .Platform.GatewayPort 443 }}
+    - name: https-public
+      port: {{ .Platform.GatewayPort }}
+      targetPort: 443
+      nodePort: {{ .GatewayPublicNodePort }}
+{{- end }}

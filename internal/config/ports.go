@@ -81,7 +81,7 @@ func (c *Config) ports() []labPort {
 			}
 			return scan(lo, 65535)
 		}, func(to int) string {
-			return fmt.Sprintf("public URLs gain :%d, valid from the host only; platform-test's lab-oauth-fixture step will fail (muster cannot reach its own ported URL in-cluster)", to)
+			return fmt.Sprintf("public URLs gain :%d", to)
 		}},
 		{"backstage.port", "Backstage's direct debug access", &c.Backstage.Port, func(scan func(int, int) (int, bool)) (int, bool) {
 			return scan(c.Backstage.Port+1, 65535)
@@ -135,9 +135,9 @@ func (c *Config) chooseFreePorts(taken func(int) bool) []PortChange {
 		c.Platform.AgentsPort:  true,
 		c.Platform.GatewayPort: true,
 		BrowserCallbackPort:    true,
-		MusterNodePort:         true,
-		KagentUINodePort:       true,
-		GatewayNodePort:        true,
+	}
+	for _, p := range PinnedNodePorts {
+		reserved[p] = true
 	}
 
 	scan := func(lo, hi int) (int, bool) {

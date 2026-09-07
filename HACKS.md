@@ -368,12 +368,12 @@ carry one. With `platform.gatewayPort != 443` Backstage's OAuth `redirect_uri`
 is port-free while the Dex client (`dex.yaml.tmpl`) registers the ported one,
 and every login fails with "Unregistered redirect_uri". The lab's app-config
 overlay (`backstage-catalog.yaml.tmpl`) restates the three URLs from
-`.BackstageBaseURL`; at 443 the values are identical. Still open on a
-non-443 port: the in-cluster edge Service serves 443 only, so muster cannot
-fetch its own ported OAuth metadata and `platform-test` fails at the
-`lab-oauth-fixture` step. Lab-only by construction: a real installation runs
-its edge on 443, so the umbrella has no reason to carry a ported public URL;
-the overlay is the lab's permanent answer, not an interim.
+`.BackstageBaseURL`; at 443 the values are identical. In-cluster, the lab's
+edge Service (`gateway-nodeport.yaml.tmpl`) serves that port as well, so the
+ported URLs resolve from pods too (agentlab#67). Lab-only by construction: a
+real installation runs its edge on 443, so the umbrella has no reason to
+carry a ported public URL; the overlay is the lab's permanent answer, not an
+interim.
 
 ## Accepted lab trade-offs (not hacks to fix)
 

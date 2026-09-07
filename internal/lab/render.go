@@ -39,13 +39,14 @@ const checksumPlaceholder = "REPLACED_AT_APPLY"
 // tmplData exposes the config plus computed values to the templates.
 type tmplData struct {
 	*config.Config
-	CertsDir            string // absolute, for the kind extraMount
-	MusterNodePort      int
-	KagentUINodePort    int
-	GatewayNodePort     int
-	BrowserCallbackPort int
-	DomainRegex         string // Platform.Domain with dots escaped, for the CoreDNS rewrite
-	AllGroups           []string
+	CertsDir              string // absolute, for the kind extraMount
+	MusterNodePort        int
+	KagentUINodePort      int
+	GatewayNodePort       int
+	GatewayPublicNodePort int
+	BrowserCallbackPort   int
+	DomainRegex           string // Platform.Domain with dots escaped, for the CoreDNS rewrite
+	AllGroups             []string
 	KubernetesClientSecret,
 	AgentPlatformClientSecret string
 	// ModelManagerEnabled mirrors cfg.ModelManagerEnabled(); Backends is
@@ -90,6 +91,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		MusterNodePort:            config.MusterNodePort,
 		KagentUINodePort:          config.KagentUINodePort,
 		GatewayNodePort:           config.GatewayNodePort,
+		GatewayPublicNodePort:     config.GatewayPublicNodePort,
 		BrowserCallbackPort:       config.BrowserCallbackPort,
 		DomainRegex:               strings.ReplaceAll(cfg.Platform.Domain, ".", `\.`),
 		AllGroups:                 config.Groups,
