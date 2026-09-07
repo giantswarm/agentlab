@@ -28,6 +28,13 @@ see below), `git`.
 (The old script stack also needed openssl, curl, jq and python3; the binary
 does all of that itself.)
 
+Under **rootless Podman** the lab publishes its ports from your own network
+namespace, which cannot bind anything below
+`net.ipv4.ip_unprivileged_port_start` (1024 by default). `agentlab configure`
+detects this and moves the agentgateway edge off its default 443 — to 8443,
+so the public URLs gain `:8443` — and reports the move. Run Podman as root, or
+lower the sysctl, to keep 443.
+
 ## Quick start
 
 Install the `agentlab` binary one of three ways:
