@@ -767,10 +767,9 @@ evict; they do not change how long agent traffic keeps a model resident —
 that is `OLLAMA_KEEP_ALIVE` on the host, see the keep-alive note in the
 section above.
 
-Both modes coexist: the static `extraModels` entries and the wired
-further-backend models stay as they are (labeled `managed-by: agentlab`),
-model-manager's ModelConfigs carry `managed-by: model-manager`, and neither
-prunes the other's.
+Both modes coexist: the static `extraModels` entries stay as they are
+(labeled `managed-by: agentlab`), model-manager's ModelConfigs carry
+`managed-by: model-manager`, and neither prunes the other's.
 
 ### Observability (Prometheus + mcp-prometheus)
 
