@@ -60,6 +60,7 @@ export ANTHROPIC_API_KEY=sk-ant-...   # optional: powers the agents + Backstage 
 ./agentlab platform-test   # headless proof: Dex -> muster -> mcp-kubernetes -> apiserver, + the per-server OAuth sign-in challenge
 ./agentlab models-test     # with an Ollama on the host: pull -> ModelConfig -> agent turn -> delete, through the platform
 ./agentlab agents-test     # agent-manager as the signed-in user: create -> ready -> update -> delete via muster; a viewer's create is Forbidden; the ServiceAccount holds no RBAC
+./agentlab toolsets-test   # declared toolsets end to end: agent-manager requires one, the Agent carries the header, muster resolves and refuses per request, agents see their toolset, a per-server sign-in scopes tools to the token, the portal's Tools step and apply path
 ```
 
 Then trust the lab CA once and point Claude Code at the platform (`.mcp.json`
@@ -307,36 +308,177 @@ Nothing the lab aggregates needs a per-user login, though — mcp-kubernetes,
 mcp-prometheus and model-manager are unauthenticated in-cluster — so
 `agentlab platform` ships one downstream that does: the MCPServer
 `lab-oauth-fixture` (`oauth-fixture.yaml.tmpl`, annotated as a fixture). It
-points muster at its **own** protected `/mcp` endpoint, which answers 401 with
-RFC 9728 metadata naming muster's own OAuth 2.1 server as the authorization
-server. The CR therefore sits at `Auth Required` for good, every
-`core_auth_login` yields a fresh challenge, and the challenge chain is the
-real one: proxy start → muster `/oauth/authorize` → Dex. A Dex-protected stub
-could not serve the same purpose (Dex knows only static clients; the proxy
-identifies itself by CIMD), and a dedicated OAuth-protected stub server would
-add a workload plus an authorization server that knows muster, for the same
-401. What the self-aggregation costs: right after a muster restart the CR
-reads `Failed` (muster dials itself before its listener is up) until the
-reconnect backoff flips it to `Auth Required`, about a minute — `agentlab
-platform` waits for that — and
-completing the sign-in connects muster to itself, surfacing its own tools
-under `x_lab-oauth-fixture_`. Harmless and per session; the fixture is there
-to be signed in *to*.
+points muster at its **own** protected `/mcp` endpoint (a 401 with RFC 9728
+metadata at zero cost), so the CR sits at `Auth Required` until a session
+signs in and every `core_auth_login` yields a fresh challenge. The
+authorization server the sign-in walks through is **pinned to the lab Dex**
+(`spec.auth.authorizationServer`, the shape an operator uses for a GitHub App:
+Dex's authorization and token endpoints, the client from the Secret
+`lab-oauth-fixture-client`, the scopes — and, as the `issuer`, muster's own
+public URL, the identity the grant is filed under: it must be the server the
+endpoint's RFC 9728 metadata names, or no call finds the token) rather than
+discovered. Discovery would name muster's own OAuth 2.1 server,
+which identifies clients by Client ID Metadata Document — and that server's
+SSRF guards refuse every lab hostname, for the metadata URL and for a
+registered redirect URI alike (`muster.127.0.0.1.nip.io` resolves to the
+edge's cluster IP in-cluster and to loopback outside; muster exposes no knob
+for mcp-oauth's `AllowPrivateIPClientMetadata`, HACKS.md U18), so no sign-in
+could ever complete there. Dex matches redirect URIs exactly: the platform
+client lists muster's proxy callback `/oauth/proxy/callback` next to its
+server-role callback (`dex.yaml.tmpl`), and the token Dex issues carries the
+platform client's audience, which the endpoint trusts. Completing the sign-in
+therefore connects muster to itself and surfaces its own tools under
+`x_lab-oauth-fixture_` — harmless, per session, and exactly what the toolset
+proof needs (a toolset naming the server resolves to its tools only for the
+session that signed in). What the self-aggregation costs: right after a muster
+restart the CR reads `Failed` (muster dials itself before its listener is up)
+until the reconnect backoff flips it to `Auth Required`, about a minute —
+`agentlab platform` waits for that.
 
 `agentlab platform-test` proves the path headlessly on a fresh MCP session
 (the shape of one portal user's session): `list_tools` flags the fixture under
 `servers_requiring_auth`; `core_auth_login` answers a challenge on
 `/oauth/proxy/start` with a state; a second call answers a **fresh** state (a
 re-clicked Sign in gets its own challenge, giantswarm/backstage#2203); and the
-URL redeems — GET-ing it redirects to the authorization server rather than
-rejecting the state. `agentlab backstage-test` proves the portal hop for every
-user: the fixture is listed `Auth Required` and `POST /api/muster/auth/login`
-answers `status: auth_required` with the same URL shape, on that user's own
-forwarded token.
+URL redeems — GET-ing it redirects to the pinned authorization server (Dex,
+client `agent-platform`) rather than rejecting the state. `agentlab
+backstage-test` proves the portal hop for every user: the fixture is listed
+`Auth Required` and `POST /api/muster/auth/login` answers `status:
+auth_required` with the same URL shape, on that user's own forwarded token.
+`agentlab toolsets-test` completes the sign-in headlessly (the Dex login form,
+then muster's proxy callback) and proves what it unlocks — see
+[Toolsets](#toolsets-declared-tool-access).
 
 To drive the UI: **Agent Platform → MCP Servers**, expand `lab-oauth-fixture`,
-**Sign in** — the popup lands on muster's authorization page, then Dex. After a
-muster pod roll the row reads `Failed` for about a minute (Reconnect, or wait).
+**Sign in** — the popup lands on Dex directly. After a muster pod roll the row
+reads `Failed` for about a minute (Reconnect, or wait).
+
+### The fake fleet and the tool-group label
+
+A real installation federates many management clusters: agent-platform-mcps
+renders one MCPServer per cluster and per infrastructure family — `kubernetes`,
+`capi`, `prometheus` — each declaring `spec.family` (so muster exposes the
+family once, `x_kubernetes_<tool>` with a `management_cluster` argument) and
+labelled `muster.giantswarm.io/management-cluster: <cluster>`. The lab has one
+cluster and its bundled `mcp-kubernetes` declares no family, so nothing here
+looks like a fleet — yet the portal's MCP servers page, its dashboard's fleet
+coverage and the agent create flow's Tools step group servers by family and by
+tier. `agentlab platform` therefore ships a **fake fleet**
+(`fleet-fixture.yaml.tmpl`, `fleetfixture.go`): three families × two fake
+management clusters (`lab-01`, `lab-02`), six MCPServers named
+`<family>-<cluster>` in `agent-platform`, each with the family block, the
+management-cluster label, the `muster.giantswarm.io/type` the fleet charts
+stamp, and the tier label:
+
+```yaml
+agent-platform.giantswarm.io/tool-group: infrastructure
+```
+
+**What the label is for.** It is the Agent Platform's tiering of MCP servers —
+three groups the portal's MCP servers page, the Tools step, muster's toolset
+presets and the docs all use under the same names: **Agent Platform**
+(`agent-platform`: agent-manager, model-manager, muster's core tools),
+**Infrastructure** (`infrastructure`: the kubernetes/capi/prometheus families)
+and **Registered servers** (no label: whatever an installation or a user
+registers, including everything the portal's Register server flow creates).
+The chart that ships a server stamps it; every consumer only reads it, e.g.
+`kubectl get mcpservers.muster.giantswarm.io -A -l agent-platform.giantswarm.io/tool-group=infrastructure`
+lists the fleet families. Orientation and preset membership, not
+authorization — that stays with the servers' OAuth and the clusters' RBAC.
+In the lab only the fake fleet carries the label: `lab-oauth-fixture` and
+anything you register by hand stay unlabelled on purpose, so the Registered
+servers group has members; the vendored agent-manager / model-manager /
+umbrella charts bring their own labels (`agent-platform`; `infrastructure` on
+the bundled `mcp-kubernetes`) once bumped to the releases that stamp them.
+
+The members point at muster's own protected `/mcp` with `auth.type: oauth`,
+like the OAuth fixture, and so read `Auth Required` — what an unconnected
+forwardToken fleet member shows on a real installation — at zero cost.
+Pointing them at the lab's single mcp-kubernetes instead makes muster open one
+connection per member per user session; a dozen of those rate-limited
+mcp-kubernetes (429) and took the session's real `mcp-kubernetes` connection
+down with them. The fixture exists to be grouped, listed and selected, not
+called. `agentlab platform-test` asserts the label: the `infrastructure`
+selector lists every member and, of the lab's own CRs, nothing else; every
+value in the cluster is one of the two the contract knows; `lab-oauth-fixture`
+is unlabelled. Servers the vendored charts label are reported, not judged.
+
+### Toolsets (declared tool access)
+
+A **toolset** is the selector list an agent declares — the `agent` chart's
+`toolset` value, rendered as the `X-Muster-Toolset` header on the agent's
+muster tool entry (`spec.declarative.tools[0].headersFrom`), agent-manager's
+`toolset` argument, the portal's Tools step — that bounds which of the
+gateway's tools the agent's meta-tools can see and call. Selectors:
+`preset:<name>`, `server:<name>`, `workflow:<name>`, `tool:<name>`; built-in
+presets `read-only`, `none`, `full`; the platform chart ships `infrastructure`
+and `agent-platform`, defined by the tool-group label above. muster evaluates
+the header **per request** on the caller's own catalogue, so the invoking
+human's identity and the backends' authorization stay the boundary: a toolset
+is composition, not authorization, and it never widens what the person could
+reach.
+
+`agentlab toolsets-test` proves the feature end to end against the released
+components, as the admin, and leaves nothing behind (its agents are named
+`agentlab-toolset-*`, its workflows likewise):
+
+1. **agent-manager's contract** through muster: `create_agent` without a
+   toolset is refused naming the shipped presets and `preset:none`; the removed
+   `toolNames` argument is refused with the explaining error; four agents are
+   created with `preset:read-only`, `preset:none`, `preset:full` and
+   `server:lab-oauth-fixture`.
+2. **What was rendered**: the header on each Agent CR with the joined
+   selectors, the value on each HelmRelease, `get_agent` reporting the same;
+   the `preset:none` agent has **no** muster tool entry at all; a HelmRelease
+   applied without the value (every agent that predates toolsets) renders a
+   header-less entry and `list_agents` reports `implicitFullAccess: true`.
+3. **muster's resolution**, in sessions of the same user carrying the header
+   an agent's runtime sends: two workflows are created (`core_workflow_create`
+   as the caller), one query-only and one with a destructive step, and
+   `describe_tool` shows the derived `readOnlyHint` on the first only;
+   `preset:read-only` resolves to read-only tools only — the query-only
+   workflows included (the lab's `lab-cluster-overview` among them), the
+   mutating one and `core_*` excluded; the read-only Kubernetes call succeeds
+   and the destructive call (agent-manager's `delete_agent` — the lab's
+   mcp-kubernetes runs non-destructive and registers no writers) and the
+   mutating workflow are refused with `tool "…" is outside the toolset
+   [preset:read-only]`; `preset:none` sees and gets
+   nothing; `preset:full` equals the unscoped catalogue; header errors (an
+   unknown preset, the reserved `toolset:`, an inline `label:`) are error
+   results, never a fall-back; two toolsets on one token — request by request
+   in one session and from two sessions in parallel — each see their own
+   tools; when the platform chart shipped `infrastructure` / `agent-platform`,
+   each resolves to the tools of the servers carrying that label (the latter
+   plus `core_*`).
+4. **The runtime path** (skip with `--skip-chat`): through kagent's A2A
+   endpoint behind the edge, as the user, the read-only agent lists read-only
+   tools only (so kagent sends the header and the user's token), and the
+   `preset:none` agent answers a chat turn. The agents run on
+   `default-model-config` (`--model-config` to pick another).
+5. **The sign-in claim (ground-truth G6)**: before any sign-in,
+   `server:lab-oauth-fixture` resolves to nothing for everyone
+   (`toolset_unmatched` names the selector); the portal's Sign in (`POST
+   /api/muster/auth/login` with the portal's own forwarded Dex id_token) yields
+   the challenge, which the proof completes as the browser would; an
+   agent-shaped session on the **same** id_token then resolves the fixture's
+   tools and calls one; the real agent, driven through kagent with that token,
+   reports them too. A second user, and the same user under a **fresh**
+   id_token, still resolve nothing: muster keys a forwarded bearer's session by
+   the token (`ext-<hash>`), the grant belongs to that session
+   (`grantScope: session`), and the portal forwards one and the same
+   id_token to muster and to kagent — which is why the claim holds in the
+   portal and only there.
+6. **The portal**: the Tools step's backend calls (`/api/muster/tools/filter`
+   with `include_presets`, a `toolset=` resolution, an unmatched selector, an
+   unknown preset relayed as muster's error), and the composer's apply path —
+   the same hidden scaffolder template the wizard's Deploy drives, with the
+   composer's manifest and the user's OIDC token as the secret — landing the
+   `toolset` value on the HelmRelease and the header on the Agent.
+
+`agentlab agents-test` declares `preset:read-only` for its agent and asserts
+the refusal without one (agent-manager ≥ 0.4.0 requires a toolset), and
+`agentlab backstage-test` proves the MCP servers page's three groups from the
+data the page reads — see [The muster plugin](#the-muster-plugin).
 
 ### Agents (kagent)
 
@@ -721,6 +863,7 @@ same one-URL trick, just spelled with a name.
 | The muster/kagent ServiceMonitors, valkey PodMonitor and muster PrometheusRule follow `platform.observability` | Without it there is no Prometheus Operator, so none of those CRDs exist and the releases fail to render. With it they are scraped by the lab Prometheus — whose selectors are opened up (`*NilUsesHelmValues: false`) because upstream's default selects only monitors carrying the kps release label, and the platform's monitors come from other releases. Flipping observability rolls the muster pod once (the toggle changes its metrics-exporter env). |
 | `platform.observability`: the GS kube-prometheus-stack constituent installed directly, Prometheus server re-enabled, instead of the observability-bundle | The bundle is MC-shaped (Flux HelmReleases with a hardcoded remote kubeconfig, Alloy → Mimir, no local PromQL endpoint). See [Observability](#observability-prometheus--mcp-prometheus). |
 | `muster.muster.oauth.mcpClient.enabled: true` + the `lab-oauth-fixture` MCPServer | The umbrella leaves muster's OAuth *client* role — the proxy behind `core_auth_login` and the portal's Sign in — off; real installations turn it on, and without it no per-server sign-in can be exercised. The fixture is the one `Auth Required` downstream to sign in to (muster's own protected `/mcp`); see [Signing in to a downstream server](#signing-in-to-a-downstream-server-muster-as-oauth-client). |
+| The fake-fleet MCPServers (`<family>-lab-01`, `<family>-lab-02`) with `agent-platform.giantswarm.io/tool-group: infrastructure` | One cluster and a family-less bundled `mcp-kubernetes` look nothing like the federated fleet the portal's server groups, fleet coverage and Tools step are built for. Six `Auth Required` family members fake it, carrying the tier label the fleet charts stamp; see [The fake fleet and the tool-group label](#the-fake-fleet-and-the-tool-group-label). |
 | `muster.rbac.{mcpServerEditor,workflowEditor}.subjects` → `oidc:platform-admins` | The umbrella binds muster's editor Roles to Giant Swarm's admin groups, which do not exist here. Rebound to the lab's own admin group (`--oidc-groups-prefix=oidc:`, same spelling as the lab RBAC). Lists replace, so the GS groups are dropped. |
 | muster patched to `hostNetwork` + `maxSurge: 0` | Same issuer trick as the apiserver and Backstage. `maxSurge: 0` because two hostNetwork pods cannot both bind `:8090` on a one-node cluster. Applied by `agentlab post-render` — Helm 4 accepts only plugin-type post-renderers, so the install generates a `postrenderer/v1` plugin in `state/helm-plugins/` whose command is the agentlab binary itself, and passes it via `HELM_PLUGINS` + `--post-renderer agentlab-postrender`. The plain-Helm replacement for the Flux `postRenderers` the meta-package forwarded to helm-controller. |
 | `components.kagent.enabled` from `platform.agents`, `controller.auth.mode: unsecure`, kagent ServiceMonitor + OTel off | Agents are part of what the lab tests, so kagent is on by default (the umbrella defaults it off) but optional — `platform.agents: false` skips the runtime. `unsecure` because the GS `trusted-proxy` mode assumes a JWT-validating agentgateway in front; no Prometheus Operator / OTLP gateway in kind. See [Agents (kagent)](#agents-kagent). |
@@ -756,7 +899,8 @@ same one-URL trick, just spelled with a name.
   Harmless — Helm owns it and removes it on uninstall.
 - **Kubernetes tools carry the server-name prefix.** The umbrella's bundled
   `mcp-kubernetes` MCPServer declares no muster *family*, so its tools use
-  per-server prefixing: `call_tool(name=x_mcp-kubernetes_list, arguments={...})`.
+  per-server prefixing: `call_tool(name=x_mcp-kubernetes_list, arguments={...})`. The fake fleet's members are the lab's only family servers and they stay
+  `Auth Required`, so no `x_kubernetes_*` family tools appear in a session.
   (Real fleet installations register per-cluster servers with a `kubernetes`
   family and a `management_cluster` instance argument instead.)
 - **Tool results are double-wrapped.** `result.content[0].text` is JSON whose
@@ -841,6 +985,18 @@ The browser forwards the signed-in user's Dex id_token in a
 muster accepts the token because its `aud` carries `muster` — see
 [`trustedPeers` points the other way round](#trustedpeers-points-the-other-way-round).
 
+The MCP servers page groups servers into **Agent Platform**,
+**Infrastructure** and **Registered servers** by the tool-group label the
+shipping chart stamps on the CR (see [The fake fleet and the tool-group
+label](#the-fake-fleet-and-the-tool-group-label)); a family's members
+(`spec.family.name`) collapse into one row. The page reads the MCPServer CRs
+through Backstage's Kubernetes proxy with the user's own token, and
+`agentlab backstage-test` asserts the grouping from that same data with the
+plugin's arithmetic: the fake-fleet families under Infrastructure, the OAuth
+fixture under Registered servers, every chart-labelled server under the group
+its label names, and — with every label removed from the same data — one
+Registered servers list with all sections present, never an empty page.
+
 `agentlab backstage-test` drives the whole sign-in headlessly for every
 configured user and then proves the muster hop with that user's own token —
 including the per-server **Sign in** path (`/api/muster/auth/login`) against
@@ -852,11 +1008,16 @@ the lab's `Auth Required` fixture:
   token audience  [kubernetes muster backstage]
   backstage user  user:default/dev
   ownership refs  [user:default/dev]
-  muster servers  [(mcp-kubernetes, Connected), (mcp-prometheus, Connected), (lab-oauth-fixture, Auth Required)]
-  sign-in challenge lab-oauth-fixture -> https://muster.127.0.0.1.nip.io/oauth/proxy/start?state=… (client id via cimd)
+  muster servers  [(agent-manager, Connected), (capi-lab-01, Auth Required), (capi-lab-02, Auth Required), (kubernetes-lab-01, Auth Required), (kubernetes-lab-02, Auth Required), (lab-oauth-fixture, Auth Required), (mcp-kubernetes, Connected), (mcp-prometheus, Connected), (model-manager, Connected), (prometheus-lab-01, Auth Required), (prometheus-lab-02, Auth Required)]
+  sign-in challenge lab-oauth-fixture -> https://muster.127.0.0.1.nip.io/oauth/proxy/start?state=… (client id via preregistered)
   muster workflows [lab-cluster-overview]
   muster core tools 28 exposed
   agent deploy template registered (template:default/agent-deployment)
+  MCP servers page groups (11 CRs via /api/kubernetes/proxy):
+    Agent Platform      2 rows: agent-manager, model-manager
+    Infrastructure      4 rows: capi, kubernetes, prometheus, mcp-kubernetes
+    Registered servers  2 rows: lab-oauth-fixture, mcp-prometheus
+  fallback without any agent-platform.giantswarm.io/tool-group label: 8 rows, all under Registered servers; 9 of 11 CRs carry the label today
 ```
 
 ### The agent create flow
@@ -1219,6 +1380,7 @@ internal/lab/                  everything operational:
   login.go browser.go            password grant / authorization-code flow
   platform.go platformtest.go    agent platform install + MCP smoke test
   oauthfixture.go                the Auth Required MCPServer fixture + the per-server sign-in proof
+  fleetfixture.go                the fake-fleet MCPServers (families × fake clusters, tool-group label) + the label proof
   backstage.go backstagetest.go  Backstage deploy + headless sign-in proof
   postrender.go                  helm post-renderer (hostNetwork, route strip, nodePort pin)
   helmplugin.go                  generates the Helm 4 postrenderer plugin wrapping it

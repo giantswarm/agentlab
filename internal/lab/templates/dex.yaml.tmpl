@@ -95,6 +95,13 @@ stringData:
         redirectURIs:
           - {{ .MusterBaseURL }}/oauth/callback
           - {{ .BackstageBaseURL }}/api/auth/oidc-agent-platform/handler/frame
+          # muster's OAuth *proxy* callback (its client role): the sign-in
+          # fixture pins Dex as its authorization server with this very
+          # client (oauth-fixture.yaml.tmpl), so a per-server sign-in can
+          # complete headlessly in the lab. Dex matches redirect URIs
+          # exactly, no DNS lookups -- unlike muster's own authorization
+          # server, whose SSRF guards reject every lab hostname.
+          - {{ .MusterBaseURL }}/oauth/proxy/callback
       # Cross-client audience target. Backstage's GS auth provider requests
       # the scope audience:server:client_id:dex-k8s-authenticator by default
       # (components.backstage.extraScopes); Dex only honors that when the

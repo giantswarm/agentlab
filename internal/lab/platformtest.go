@@ -164,6 +164,14 @@ func PlatformTest(cfg *config.Config, email string) error {
 	}
 	verdict += "\nPASS: per-server OAuth sign-in -> muster (OAuth client) -> challenge on " + oauthProxyStartPath +
 		" (fixture " + oauthFixtureServer + ")"
+	// The tool-group label (fleetfixture.go): the infrastructure value
+	// selects the fake-fleet families and nothing else the lab created; the
+	// OAuth fixture stays a Registered server.
+	if err := proveToolGroupLabels(); err != nil {
+		return err
+	}
+	verdict += fmt.Sprintf("\nPASS: %s=%s selects the fake-fleet fixture (%d MCPServers); %s unlabelled (Registered servers)",
+		toolGroupLabel, toolGroupInfrastructure, len(fleetFixtureNames()), oauthFixtureServer)
 	if cfg.Platform.Observability {
 		// Same singleton prefixing as mcp-kubernetes: the lab's mcpServers
 		// entry deliberately keeps the server out of muster's families
@@ -347,20 +355,36 @@ func innerText(rpc map[string]any) string {
 }
 
 // parseMCPResponse handles both plain-JSON and SSE-framed (`data: {...}`)
-// MCP responses.
+// MCP responses. A streamed answer can carry notifications (progress,
+// logging) ahead of the response to the request; the frame with a `result`
+// or `error` is the answer, the last frame the fallback.
 func parseMCPResponse(raw []byte) (map[string]any, error) {
 	trimmed := bytes.TrimSpace(raw)
 	var out map[string]any
 	if json.Unmarshal(trimmed, &out) == nil {
 		return out, nil
 	}
+	var last map[string]any
 	for line := range strings.SplitSeq(string(trimmed), "\n") {
 		line = strings.TrimSpace(line)
-		if data, ok := strings.CutPrefix(line, "data:"); ok {
-			if json.Unmarshal([]byte(strings.TrimSpace(data)), &out) == nil {
-				return out, nil
-			}
+		data, ok := strings.CutPrefix(line, "data:")
+		if !ok {
+			continue
 		}
+		var frame map[string]any
+		if json.Unmarshal([]byte(strings.TrimSpace(data)), &frame) != nil {
+			continue
+		}
+		if _, isResult := frame["result"]; isResult {
+			return frame, nil
+		}
+		if _, isError := frame["error"]; isError {
+			return frame, nil
+		}
+		last = frame
+	}
+	if last != nil {
+		return last, nil
 	}
 	return nil, fmt.Errorf("neither JSON nor SSE data frame")
 }
