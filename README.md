@@ -436,9 +436,13 @@ components, as the admin, and leaves nothing behind (its agents are named
    an agent's runtime sends: two workflows are created (`core_workflow_create`
    as the caller), one query-only and one with a destructive step, and
    `describe_tool` shows the derived `readOnlyHint` on the first only;
-   `preset:read-only` resolves to read-only tools only — the query-only
-   workflows included (the lab's `lab-cluster-overview` among them), the
-   mutating one and `core_*` excluded; the read-only Kubernetes call succeeds
+   `preset:read-only` resolves to exactly the tools annotated `readOnlyHint`,
+   whatever their kind — the query-only workflows included (the lab's
+   `lab-cluster-overview` among them), the mutating one excluded, muster's
+   core tools by their own annotation: since muster 5.13.0 the reads such as
+   `core_config_get` and `core_workflow_list` are in, the writes such as
+   `core_workflow_delete` never are (a muster whose core tools carry no
+   annotations puts none in the preset); the read-only Kubernetes call succeeds
    and the destructive call (agent-manager's `delete_agent` — the lab's
    mcp-kubernetes runs non-destructive and registers no writers) and the
    mutating workflow are refused with `tool "…" is outside the toolset
@@ -451,8 +455,9 @@ components, as the admin, and leaves nothing behind (its agents are named
    each resolves to the tools of the servers carrying that label (the latter
    plus `core_*`).
 4. **The runtime path** (skip with `--skip-chat`): through kagent's A2A
-   endpoint behind the edge, as the user, the read-only agent lists read-only
-   tools only (so kagent sends the header and the user's token), and the
+   endpoint behind the edge, as the user, the read-only agent lists nothing
+   outside `preset:read-only` — read-only core tools may appear, no writer
+   does (so kagent sends the header and the user's token) — and the
    `preset:none` agent answers a chat turn. The agents run on
    `default-model-config` (`--model-config` to pick another).
 5. **The sign-in claim (ground-truth G6)**: before any sign-in,

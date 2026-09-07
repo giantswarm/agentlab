@@ -73,6 +73,73 @@ func TestToolNamesInReply(t *testing.T) {
 	}
 }
 
+// preset:read-only is the readOnlyHint predicate over the catalogue, kind
+// included: an annotated core read belongs to it, an unannotated core write,
+// a workflow without the derived hint and an un-annotated server tool do not.
+func TestReadOnlySetMismatch(t *testing.T) {
+	yes, no := true, false
+	ro := &toolAnnotations{ReadOnlyHint: &yes}
+	rw := &toolAnnotations{ReadOnlyHint: &no}
+	kindTool, kindWorkflow, kindCore := "tool", "workflow", "core"
+	list, writer, query, mutating := "x_k8s_list", "x_manager_delete", "workflow_query", "workflow_mutating"
+	coreRead, coreWrite := "core_config_get", "core_workflow_delete"
+	catalogue := []toolInfo{
+		{Name: list, Kind: kindTool, Annotations: ro},
+		{Name: writer, Kind: kindTool, Annotations: rw},
+		{Name: "x_legacy_probe", Kind: kindTool},
+		{Name: query, Kind: kindWorkflow, Annotations: ro},
+		{Name: mutating, Kind: kindWorkflow},
+		{Name: coreRead, Kind: kindCore, Annotations: ro},
+		{Name: coreWrite, Kind: kindCore, Annotations: rw},
+		{Name: "core_unannotated", Kind: kindCore},
+	}
+	var resolved []toolInfo
+	for _, tool := range catalogue {
+		if tool.Annotations.readOnly() {
+			resolved = append(resolved, tool)
+		}
+	}
+	if missing, extra := readOnlySetMismatch(catalogue, resolved); len(missing)+len(extra) != 0 {
+		t.Fatalf("the annotated tools themselves mismatch: missing %v, extra %v", missing, extra)
+	}
+	if got, want := (&filterToolsResponse{Tools: resolved}).names(), []string{coreRead, query, list}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("resolved %v, want %v", got, want)
+	}
+
+	// The pre-5.13 rule (kind core never in the preset) would leave the
+	// annotated read out; a preset carrying a write has an extra.
+	missing, extra := readOnlySetMismatch(catalogue, []toolInfo{catalogue[0], catalogue[3], catalogue[6]})
+	if !reflect.DeepEqual(missing, []string{coreRead}) || !reflect.DeepEqual(extra, []string{coreWrite}) {
+		t.Errorf("missing %v, extra %v; want [%s] and [%s]", missing, extra, coreRead, coreWrite)
+	}
+
+	// A catalogue whose core tools carry no annotations puts none in the
+	// preset — an empty share of core tools is then not a mismatch.
+	bare := []toolInfo{catalogue[0], catalogue[3], {Name: coreRead, Kind: kindCore}, {Name: coreWrite, Kind: kindCore}}
+	if missing, extra := readOnlySetMismatch(bare, bare[:2]); len(missing)+len(extra) != 0 {
+		t.Errorf("bare core tools: missing %v, extra %v", missing, extra)
+	}
+}
+
+// What the read-only agent reports is judged against the resolved set: a
+// read-only core tool is fine, a catalogue tool outside the set is the
+// missing header, a name the catalogue never had is noise.
+func TestNamesOutside(t *testing.T) {
+	coreRead, coreWrite, mutating, list, made := "core_config_get", "core_workflow_delete", "workflow_mutating", "x_k8s_list", "x_made_up"
+	toolset := []string{coreRead, "workflow_query", list}
+	catalogue := append([]string{coreWrite, mutating, "x_manager_delete"}, toolset...)
+	outside, unknown := namesOutside([]string{coreRead, coreWrite, list, made, mutating}, toolset, catalogue)
+	if !reflect.DeepEqual(outside, []string{coreWrite, mutating}) {
+		t.Errorf("outside = %v", outside)
+	}
+	if !reflect.DeepEqual(unknown, []string{made}) {
+		t.Errorf("unknown = %v", unknown)
+	}
+	if outside, unknown := namesOutside(toolset, toolset, catalogue); len(outside)+len(unknown) != 0 {
+		t.Errorf("the toolset itself: outside %v, unknown %v", outside, unknown)
+	}
+}
+
 // The composed manifest is the composer's shape: OCIRepository first, then
 // the HelmRelease with the top-level toolset value.
 func TestComposeAgentManifest(t *testing.T) {
