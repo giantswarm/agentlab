@@ -1,6 +1,9 @@
 package lab
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // The preflight picks the version field out of the probe pod's output for
 // both servers' documents: Ollama's {"version":...} alone and Lemonade's
@@ -74,5 +77,43 @@ func TestLMStudioKeyFieldRe(t *testing.T) {
 	in := `{"models":[{"type":"llm","key":"ibm/granite-4-micro"}]}warning: couldn't attach to pod/lmstudio-preflight, falling back to streaming logs`
 	if got, want := lmStudioKeyFieldRe.FindString(in), `"key":"ibm/granite-4-micro"`; got != want {
 		t.Errorf("FindString = %q, want %q", got, want)
+	}
+}
+
+// hostInventory reads the host server from THIS machine, so a pod-facing
+// endpoint the host cannot resolve (Docker Desktop's host.docker.internal,
+// podman's host.containers.internal) must fall back to the server's loopback
+// port — which is where `agentlab configure` found it to begin with.
+func TestHostInventoryFallsBackToLoopback(t *testing.T) {
+	srv := fakeLMStudio(t)
+	defer srv.Close()
+	const unreachable = "http://host.docker.internal.invalid:1234"
+	dead := "http://127.0.0.1:1"
+
+	// The endpoint answers: taken as is.
+	got, err := hostInventory(lmstudio, srv.URL)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("direct read: %d models, err=%v", len(got), err)
+	}
+
+	// The endpoint does not resolve, the loopback port does: fall back.
+	restore := loopbackBaseFn
+	loopbackBaseFn = func(string) string { return srv.URL }
+	defer func() { loopbackBaseFn = restore }()
+	got, err = hostInventory(lmstudio, unreachable)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("fallback read: %d models, err=%v", len(got), err)
+	}
+
+	// Neither answers: the endpoint's own error survives, with the loopback's.
+	loopbackBaseFn = func(string) string { return dead }
+	_, err = hostInventory(lmstudio, unreachable)
+	if err == nil {
+		t.Fatal("both unreachable must fail")
+	}
+	for _, want := range []string{"host.docker.internal.invalid", "127.0.0.1:1"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error should name %s: %v", want, err)
+		}
 	}
 }

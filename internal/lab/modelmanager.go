@@ -86,6 +86,10 @@ func detectHostServer(backend, base string) (ident string, ok bool) {
 	return spec.probe.ident(body)
 }
 
+// loopbackBaseFn resolves a backend's loopback base; a variable so tests can
+// point the host-side fallback at a stand-in server.
+var loopbackBaseFn = loopbackBase
+
 // loopbackBase is where a server on this machine answers on its default port.
 func loopbackBase(backend string) string {
 	return fmt.Sprintf("http://127.0.0.1:%d", config.BackendPort(backend))

@@ -374,7 +374,7 @@ func ModelsTest(cfg *config.Config, email, backendName, model string) error {
 			return err
 		}
 		note("ModelConfig %s is gone", mcName)
-		remaining, err := hostServerModels(backendName, endpoint)
+		remaining, err := hostInventory(backendName, endpoint)
 		if err != nil {
 			return fmt.Errorf("reading the host %s's models at %s: %w", server, endpoint, err)
 		}
@@ -403,6 +403,35 @@ func ModelsTest(cfg *config.Config, email, backendName, model string) error {
 			model, server, model)
 	}
 	return nil
+}
+
+// hostInventory reads a host model server's downloaded models from THIS
+// machine — the ground truth behind the proof's delete assertions. The
+// endpoint the platform uses is the one PODS dial, which the host cannot
+// always resolve: a kind docker-network gateway it can, but Docker Desktop's
+// host.docker.internal (and podman's host.containers.internal) exist only
+// inside the cluster. So fall back to the server's loopback port, where
+// `agentlab configure` found it in the first place.
+//
+// The caller above picks loopback outright for the one case it can predict
+// (podman with no configured endpoint), which keeps a guaranteed-failing dial
+// out of the run; this is the net for the cases it cannot — an explicit
+// endpoints.<backend> of host.docker.internal on Docker Desktop, say. Both
+// earn their keep: neither is the other's leftover.
+func hostInventory(backend, endpoint string) ([]HostModel, error) {
+	models, err := hostServerModels(backend, endpoint)
+	if err == nil {
+		return models, nil
+	}
+	loopback := loopbackBaseFn(backend)
+	if loopback == endpoint {
+		return nil, err
+	}
+	models, loopbackErr := hostServerModels(backend, loopback)
+	if loopbackErr != nil {
+		return nil, fmt.Errorf("%w (and %s: %w)", err, loopback, loopbackErr)
+	}
+	return models, nil
 }
 
 // waitModelConfigGone waits for a ModelConfig to disappear from the kagent
@@ -447,7 +476,7 @@ func proveDeleteRefused(api *modelManagerAPI, session *musterSession, cfg *confi
 
 	// The refusal must have changed nothing: still downloaded, still wired,
 	// still listed.
-	remaining, err := hostServerModels(backendName, endpoint)
+	remaining, err := hostInventory(backendName, endpoint)
 	if err != nil {
 		return fmt.Errorf("reading the host %s's models at %s: %w", server, endpoint, err)
 	}
@@ -471,7 +500,7 @@ func proveDeleteRefused(api *modelManagerAPI, session *musterSession, cfg *confi
 	}
 	note("ModelConfig %s is gone", mcName)
 	// Unwiring touches the ModelConfig only — the weights stay.
-	remaining, err = hostServerModels(backendName, endpoint)
+	remaining, err = hostInventory(backendName, endpoint)
 	if err != nil {
 		return fmt.Errorf("reading the host %s's models at %s: %w", server, endpoint, err)
 	}
