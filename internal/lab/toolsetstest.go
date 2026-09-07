@@ -151,7 +151,7 @@ func ToolsetsTest(cfg *config.Config, email string, opts ToolsetsTestOptions) er
 	if err != nil {
 		return err
 	}
-	pass("%s resolves to %d read-only tools incl. the query-only workflows %s and %s, not workflow_%s or core tools; the read-only Kubernetes call succeeds and the destructive call (x_%s_delete_agent) is refused naming the toolset",
+	pass("%s resolves to %d read-only tools incl. the query-only workflows %s and %s (core tools only by their own read-only annotation), not workflow_%s; the read-only Kubernetes call succeeds and the destructive call (x_%s_delete_agent) is refused naming the toolset",
 		presetReadOnly, res.readOnlyCount, "workflow_"+toolsetsWorkflowQuery, "workflow_lab-cluster-overview", toolsetsWorkflowMutating, agentManagerMCPServer)
 	pass("two toolsets on one token — in one session request by request and from two sessions in parallel — each see their own tools; %s sees nothing; %s equals the unscoped catalogue (%d tools) like an agent without a toolset", presetNone, presetFull, res.fullCount)
 	if res.presetsVerdict != "" {
@@ -568,7 +568,7 @@ func proveMusterToolsets(cfg *config.Config, token string) (*musterToolsetResult
 	out.fullCount = len(full.Tools)
 	note("%d tools either way", out.fullCount)
 
-	step("%s: only read-only tools, the query-only workflows included, the mutating one and core tools excluded", presetReadOnly)
+	step("%s: only tools annotated read-only, the query-only workflows included, the mutating one excluded; core tools only by their own read-only annotation", presetReadOnly)
 	s.setHeader(toolsetHeader, presetReadOnly)
 	ro, err := s.filterTools(nil)
 	if err != nil {
@@ -578,7 +578,7 @@ func proveMusterToolsets(cfg *config.Config, token string) (*musterToolsetResult
 		return nil, fmt.Errorf("%s resolved to %d of %d tools", presetReadOnly, len(ro.Tools), out.fullCount)
 	}
 	for _, t := range ro.Tools {
-		if t.Kind == "core" || !t.Annotations.readOnly() {
+		if !t.Annotations.readOnly() {
 			return nil, fmt.Errorf("%s includes %s (kind %s, readOnlyHint=%v)", presetReadOnly, t.Name, t.Kind, t.Annotations.readOnly())
 		}
 	}
@@ -593,8 +593,24 @@ func proveMusterToolsets(cfg *config.Config, token string) (*musterToolsetResult
 			return nil, fmt.Errorf("%s includes %s", presetReadOnly, unwanted)
 		}
 	}
+	// muster >= 5.13 annotates its core tools (giantswarm/muster#1172): the
+	// reads join read-only by their annotation, the writes never do. A muster
+	// without core annotations (5.11, 5.12) puts no core tool in the preset.
+	coreCount := countKind(ro.Tools, "core")
+	if coreCount > 0 {
+		for _, want := range []string{"core_workflow_list", "core_mcpserver_list", "core_auth_login"} {
+			if !slices.Contains(names, want) {
+				return nil, fmt.Errorf("%s carries %d core tools but lacks the read-only %s", presetReadOnly, coreCount, want)
+			}
+		}
+	}
+	for _, unwanted := range []string{"core_workflow_delete", "core_mcpserver_delete", "core_service_stop", "core_config_save", "core_auth_logout"} {
+		if slices.Contains(names, unwanted) {
+			return nil, fmt.Errorf("%s includes the core write %s", presetReadOnly, unwanted)
+		}
+	}
 	out.readOnlyCount = len(ro.Tools)
-	note("%d tools, all readOnlyHint (%d workflows, no core_*)", len(ro.Tools), countKind(ro.Tools, "workflow"))
+	note("%d tools, all readOnlyHint (%d workflows, %d read-only core tools, no core write)", len(ro.Tools), countKind(ro.Tools, "workflow"), coreCount)
 
 	step("Under %s: the read-only Kubernetes call succeeds, the destructive call and the mutating workflow are refused naming the toolset", presetReadOnly)
 	text, err := s.callServerTool(listTool, map[string]any{resourceTypeKey: resourceNamespaces})
@@ -914,12 +930,16 @@ func proveAgentRuntimeToolsets(cfg *config.Config, token, modelConfig, toolPrefi
 		return fmt.Errorf("%s did not report %slist among %d tools: %v", toolsetsAgentReadOnly, k8sPrefix, len(names), names)
 	}
 	writer := "x_" + agentManagerMCPServer + "_delete_agent"
+	// Core tools that write never carry readOnlyHint, whatever the muster
+	// version; the reads join read-only from muster 5.13 on (muster#1172), so
+	// only the writes prove a missing header.
+	coreWrites := []string{"core_workflow_create", "core_workflow_delete", "core_mcpserver_create", "core_mcpserver_delete", "core_service_stop", "core_config_save", "core_auth_logout"}
 	for _, n := range names {
-		if n == writer || strings.HasPrefix(n, "core_") || n == "workflow_"+toolsetsWorkflowMutating {
+		if n == writer || slices.Contains(coreWrites, n) || n == "workflow_"+toolsetsWorkflowMutating {
 			return fmt.Errorf("%s reported %s, which is outside %s: the runtime did not send the header (names: %v)", toolsetsAgentReadOnly, n, presetReadOnly, names)
 		}
 	}
-	note("%d tools reported, %slist among them, no %s, no core_*", len(names), k8sPrefix, writer)
+	note("%d tools reported, %slist among them, no %s, no core write", len(names), k8sPrefix, writer)
 
 	step("A2A turn as the user: %s (no tool entry) answers a chat turn", toolsetsAgentNone)
 	reply, err = agentTurnAs(cfg, toolsetsAgentNone, token, "Reply with exactly the word pong and nothing else.")
