@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/giantswarm/agentlab/internal/config"
@@ -179,5 +180,62 @@ func TestParseImageProvenancePodman(t *testing.T) {
 	}
 	if _, known := prov["postgres:18.3-alpine"]; !known {
 		t.Error("podman's docker.io/library/ rows must key the map as docker spells them")
+	}
+}
+
+// The reason this whole podman branch exists: `kind load docker-image a b c`
+// runs one `docker save` of all three, and podman's archive is single-image,
+// so the batch would land one image under every tag. Under podman the lab
+// therefore loads one image per call; under docker the batch stays one call.
+func TestKindLoadImagesOneCallPerImageUnderPodman(t *testing.T) {
+	images := []string{refPostgres, refGolangADK, refMusterDev}
+	for name, tc := range map[string]struct {
+		podman    bool
+		wantCalls []string
+	}{
+		"docker batches": {false, []string{
+			"kind load docker-image --name agentlab " + refPostgres + " " + refGolangADK + " " + refMusterDev,
+		}},
+		"podman loads one at a time": {true, []string{
+			"kind load docker-image --name agentlab " + refPostgres,
+			"kind load docker-image --name agentlab " + refGolangADK,
+			"kind load docker-image --name agentlab " + refMusterDev,
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			calls := installFakeTool(t, dir, "kind", "exit 0")
+			withPodman(t, tc.podman)
+			cfg := config.Default()
+			loaded, err := kindLoadImages(cfg, images)
+			if err != nil {
+				t.Fatalf("kindLoadImages: %v", err)
+			}
+			if loaded != len(images) {
+				t.Errorf("loaded %d images, want %d", loaded, len(images))
+			}
+			got := strings.Split(strings.TrimSpace(readCalls(t, calls)), "\n")
+			if !slices.Equal(got, tc.wantCalls) {
+				t.Errorf("calls\n got  %v\n want %v", got, tc.wantCalls)
+			}
+		})
+	}
+}
+
+// Under podman a failed image must not stop the rest, and the count must say
+// how many landed so the caller can report a partial load as one.
+func TestKindLoadImagesPartialFailureUnderPodman(t *testing.T) {
+	dir := t.TempDir()
+	installFakeTool(t, dir, "kind", `case "$5" in
+`+refGolangADK+`) echo "no such image" >&2; exit 1 ;;
+*) exit 0 ;;
+esac`)
+	withPodman(t, true)
+	loaded, err := kindLoadImages(config.Default(), []string{refPostgres, refGolangADK, refMusterDev})
+	if err == nil {
+		t.Fatal("a failed image must surface as an error")
+	}
+	if loaded != 2 {
+		t.Errorf("loaded = %d, want 2 (the failure must not stop the rest)", loaded)
 	}
 }

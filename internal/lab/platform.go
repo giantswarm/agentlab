@@ -314,6 +314,8 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 		note("cannot derive the platform images from the charts (%v); the node pulls anything missing", err)
 	} else {
 		switch res := sideloadImages(cfg, hostPullImages(imgs)); {
+		case res.err != nil && res.n > 0:
+			note("side-loaded %d of %d platform images (%s); the rest failed (%v) and the node pulls them", res.n, len(imgs), res.d, res.err)
 		case res.err != nil:
 			note("side-loading failed (%v); the node pulls anything missing", res.err)
 		case res.n > 0:

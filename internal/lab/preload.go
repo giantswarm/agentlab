@@ -94,29 +94,35 @@ func sideloadImages(cfg *config.Config, images []string) preloadResult {
 	if len(images) == 0 {
 		return preloadResult{}
 	}
-	if err := kindLoadImages(cfg, images); err != nil {
-		return preloadResult{err: err}
-	}
-	return preloadResult{n: len(images), d: time.Since(start).Round(time.Second)}
+	loaded, err := kindLoadImages(cfg, images)
+	return preloadResult{n: loaded, d: time.Since(start).Round(time.Second), err: err}
 }
 
-// kindLoadImages is one `kind load docker-image` for the batch — except
-// under podman, where kind's own multi-image save would fold the batch into
-// one image under every tag (runtime.go): there it is one call per image,
-// which saves a single image and is always right. kind stages and cleans its
-// own archive either way.
-func kindLoadImages(cfg *config.Config, images []string) error {
+// kindLoadImages side-loads images and reports how many landed. It is one
+// `kind load docker-image` for the batch — except under podman, where kind's
+// own multi-image save would fold the batch into one image under every tag
+// (runtime.go): there it is one call per image, which saves a single image
+// and is always right. kind stages and cleans its own archive either way. A
+// failed image does not stop the rest, so the count and the error are both
+// reported and a partial load reads as one.
+func kindLoadImages(cfg *config.Config, images []string) (int, error) {
 	if !dockerIsPodman() {
 		args := append([]string{"load", "docker-image", "--name", cfg.ClusterName}, images...)
-		return runQuiet("kind", args...)
+		if err := runQuiet("kind", args...); err != nil {
+			return 0, err
+		}
+		return len(images), nil
 	}
+	loaded := 0
 	var errs []error
 	for _, img := range images {
 		if err := runQuiet("kind", "load", "docker-image", "--name", cfg.ClusterName, img); err != nil {
 			errs = append(errs, err)
+			continue
 		}
+		loaded++
 	}
-	return errors.Join(errs...)
+	return loaded, errors.Join(errs...)
 }
 
 // pullLabImages starts pulling the snapshot manifest's images into the host
@@ -194,6 +200,8 @@ func sideloadDexImage(cfg *config.Config, ready <-chan bool) {
 func reportPreload(loaded <-chan preloadResult) {
 	res := <-loaded
 	switch {
+	case res.err != nil && res.n > 0:
+		note("preloaded %d cached images into the node (%s); the rest failed (%v) and their pods pull from the network", res.n, res.d, res.err)
 	case res.err != nil:
 		note("image preload failed (%v); pods will pull from the network", res.err)
 	case res.n > 0:
