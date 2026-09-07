@@ -394,6 +394,29 @@ where the kernel refuses everything below
 `ChooseFreePorts` moves the edge to 8443. Resolves for a user who runs Podman
 as root or lowers the sysctl; nothing to fix in the lab.
 
+### U18. `oauth-fixture.yaml.tmpl`: the sign-in fixture pins Dex as its authorization server — BLOCKED UPSTREAM
+The fixture points muster at its own protected `/mcp`, whose RFC 9728 metadata
+names muster's own OAuth 2.1 server. That server identifies muster-as-client by
+Client ID Metadata Document, and mcp-oauth's SSRF guards refuse the metadata
+URL — `muster.127.0.0.1.nip.io` resolves to the edge's cluster IP in-cluster
+(the CoreDNS rewrite) and to loopback everywhere else (`client_id metadata URL
+resolves to private/internal IP address … (SSRF protection)`); dynamic
+registration is refused the same way for the proxy callback's redirect URI
+(`hostname resolves to private IP address (DNS rebinding protection)`). muster
+exposes none of mcp-oauth's knobs for a lab (`AllowPrivateIPClientMetadata`,
+`DisableDNSValidation`, `AllowPrivateIPRedirectURIs`), so no sign-in could
+complete against it and the fixture was a challenge generator only. **Fix in
+the lab:** the CR pins the lab Dex through `spec.auth.authorizationServer`
+(issuer, `clientCredentialsSecretRef` → the platform client's id/secret in the
+Secret `lab-oauth-fixture-client`, `scopes` — a pinned server gets no default
+scope and Dex refuses a request without `openid`), and `dex.yaml.tmpl` lists
+muster's proxy callback on that client. Dex matches redirect URIs exactly and
+the token it issues carries the platform client's audience, which the endpoint
+trusts, so `agentlab toolsets-test` completes the sign-in headlessly. Unblocks
+when muster exposes `allowPrivateIPClientMetadata` for its OAuth server — then
+the pin can go and the challenge chain becomes proxy start → muster
+`/oauth/authorize` → Dex again.
+
 ## Accepted lab trade-offs (not hacks to fix)
 
 - **Checksum stamping via the `REPLACED_AT_APPLY` placeholder** — the standard

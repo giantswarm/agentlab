@@ -46,3 +46,38 @@ spec:
   auth:
     type: oauth
     forwardToken: false
+    # The authorization server muster signs the user in to, pinned (the
+    # GitHub-App shape of spec.auth.authorizationServer): the lab Dex, with
+    # the platform client registered out of band -- Dex lists muster's proxy
+    # callback on it (dex.yaml.tmpl). Without the pin muster would discover
+    # the endpoint's own authorization server (muster itself) and identify
+    # with its Client ID Metadata Document; that server's SSRF guards refuse
+    # every lab hostname (they resolve to the edge's cluster IP in-cluster,
+    # to loopback outside) for the metadata URL and for a registered redirect
+    # URI alike, so no sign-in could ever complete. Dex matches redirect URIs
+    # exactly, and the token it issues carries the platform client's
+    # audience, which the endpoint trusts -- so the sign-in completes and the
+    # fixture connects, as `agentlab toolsets-test` proves.
+    authorizationServer:
+      issuer: {{ .Issuer }}
+      clientCredentialsSecretRef:
+        name: {{ .OAuthFixtureServer }}-client
+      # A pinned authorization server gets no default scope; Dex refuses a
+      # request without openid (invalid_scope), and offline_access is what
+      # lets muster refresh the grant.
+      scopes: openid profile email offline_access
+---
+# The client the pin above names: the lab's platform client, the one Dex
+# registration that carries muster's proxy callback.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .OAuthFixtureServer }}-client
+  namespace: agent-platform
+  labels:
+    app.kubernetes.io/managed-by: agentlab
+    agentlab.giantswarm.io/fixture: oauth-sign-in
+type: Opaque
+stringData:
+  client-id: {{ .AgentPlatformClientID }}
+  client-secret: {{ .AgentPlatformClientSecret }}

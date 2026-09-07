@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -22,6 +23,25 @@ type musterSession struct {
 	token  string
 	id     string
 	seq    int
+	// headers are sent on every request of the session on top of the MCP
+	// ones — the way an agent's kagent runtime sends the X-Muster-Toolset
+	// header its Agent CR declares (headersFrom). Set per request through
+	// setHeader; muster reads the header on each request, never binds it to
+	// the session.
+	headers map[string]string
+}
+
+// setHeader adds (or, with an empty value, removes) a header the session
+// sends on every following request.
+func (s *musterSession) setHeader(name, value string) {
+	if s.headers == nil {
+		s.headers = map[string]string{}
+	}
+	if value == "" {
+		delete(s.headers, name)
+		return
+	}
+	s.headers[name] = value
 }
 
 // openMusterSession initializes an MCP session and returns it ready for
@@ -60,6 +80,9 @@ func (s *musterSession) post(sessionID, payload string) (*http.Response, error) 
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	if sessionID != "" {
 		req.Header.Set("Mcp-Session-Id", sessionID)
+	}
+	for name, value := range s.headers {
+		req.Header.Set(name, value)
 	}
 	return s.client.Do(req)
 }
@@ -159,4 +182,141 @@ func (s *musterSession) callServerTool(name string, args map[string]any) (string
 		return "", fmt.Errorf("%s failed: %.300s", name, env.Content[0].Text)
 	}
 	return env.Content[0].Text, nil
+}
+
+// toolAnnotations are the MCP tool annotations muster forwards from the
+// serving MCPServer (or derives, for a workflow whose step tools are all
+// read-only). Pointers: an absent hint is not a false one.
+type toolAnnotations struct {
+	ReadOnlyHint    *bool `json:"readOnlyHint,omitempty"`
+	DestructiveHint *bool `json:"destructiveHint,omitempty"`
+	IdempotentHint  *bool `json:"idempotentHint,omitempty"`
+	OpenWorldHint   *bool `json:"openWorldHint,omitempty"`
+}
+
+// readOnly reports whether the tool is annotated read-only.
+func (a *toolAnnotations) readOnly() bool {
+	return a != nil && a.ReadOnlyHint != nil && *a.ReadOnlyHint
+}
+
+// toolInfo is one entry of list_tools / filter_tools (muster's ToolInfo):
+// the exposed name, the owning server (empty for core tools and workflows),
+// the kind (tool | workflow | core) and the annotations, when any.
+type toolInfo struct {
+	Name        string           `json:"name"`
+	Server      string           `json:"server,omitempty"`
+	Kind        string           `json:"kind,omitempty"`
+	Annotations *toolAnnotations `json:"annotations,omitempty"`
+}
+
+// presetInfo is one entry of filter_tools' presets list.
+type presetInfo struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	BuiltIn     bool   `json:"built_in"`
+}
+
+// filterToolsResponse is muster's FilterToolsResponse as the toolset feature
+// extended it: the tools resolved for the caller, the selectors echoed back,
+// the selectors that matched nothing for this caller, the presets when asked
+// for, and the size of the catalogue the filter ran over (within the
+// toolset, when one applies).
+type filterToolsResponse struct {
+	Tools            []toolInfo   `json:"tools"`
+	Toolset          []string     `json:"toolset"`
+	ToolsetUnmatched []string     `json:"toolset_unmatched"`
+	Presets          []presetInfo `json:"presets"`
+	TotalTools       int          `json:"total_tools"`
+	FilteredCount    int          `json:"filtered_count"`
+	Truncated        bool         `json:"truncated"`
+}
+
+// names returns the tool names, sorted.
+func (r *filterToolsResponse) names() []string {
+	out := make([]string, 0, len(r.Tools))
+	for _, t := range r.Tools {
+		out = append(out, t.Name)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// filterTools runs muster's filter_tools meta-tool with the given arguments
+// (plus a limit high enough to never truncate — the default is 5) and
+// decodes the response. A toolset error (unknown preset, reserved selector,
+// empty header) is an error result and comes back as err.
+func (s *musterSession) filterTools(args map[string]any) (*filterToolsResponse, error) {
+	if args == nil {
+		args = map[string]any{}
+	}
+	if _, ok := args["limit"]; !ok {
+		args["limit"] = 1000
+	}
+	res, err := s.callTool("filter_tools", args)
+	if err != nil {
+		return nil, err
+	}
+	result, _ := res["result"].(map[string]any)
+	if isErr, _ := result["isError"].(bool); isErr {
+		return nil, fmt.Errorf("filter_tools: %s", strings.TrimSpace(innerText(res)))
+	}
+	var out filterToolsResponse
+	if err := json.Unmarshal([]byte(innerText(res)), &out); err != nil {
+		return nil, fmt.Errorf("parsing filter_tools payload: %w\n%.300s", err, innerText(res))
+	}
+	return &out, nil
+}
+
+// describeToolResponse is the part of muster's DescribeToolResponse the
+// proofs read: the name, the owning server, the kind and the annotations.
+type describeToolResponse struct {
+	Name        string           `json:"name"`
+	Server      string           `json:"server,omitempty"`
+	Kind        string           `json:"kind,omitempty"`
+	Annotations *toolAnnotations `json:"annotations,omitempty"`
+}
+
+// describeTool runs muster's describe_tool meta-tool. A tool outside the
+// request's toolset is an error result and comes back as err.
+func (s *musterSession) describeTool(name string) (*describeToolResponse, error) {
+	res, err := s.callTool("describe_tool", map[string]any{"name": name})
+	if err != nil {
+		return nil, err
+	}
+	result, _ := res["result"].(map[string]any)
+	if isErr, _ := result["isError"].(bool); isErr {
+		return nil, fmt.Errorf("describe_tool %s: %s", name, strings.TrimSpace(innerText(res)))
+	}
+	var out describeToolResponse
+	if err := json.Unmarshal([]byte(innerText(res)), &out); err != nil {
+		return nil, fmt.Errorf("parsing describe_tool payload: %w\n%.300s", err, innerText(res))
+	}
+	return &out, nil
+}
+
+// listToolInfos is listTools with the full entries (server, kind,
+// annotations) and the servers muster reports as requiring a sign-in.
+func (s *musterSession) listToolInfos() ([]toolInfo, []string, error) {
+	res, err := s.callTool("list_tools", nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	result, _ := res["result"].(map[string]any)
+	if isErr, _ := result["isError"].(bool); isErr {
+		return nil, nil, fmt.Errorf("list_tools: %s", strings.TrimSpace(innerText(res)))
+	}
+	var listing struct {
+		Tools                []toolInfo `json:"tools"`
+		ServersRequiringAuth []struct {
+			Name string `json:"name"`
+		} `json:"servers_requiring_auth"`
+	}
+	if err := json.Unmarshal([]byte(innerText(res)), &listing); err != nil {
+		return nil, nil, fmt.Errorf("parsing list_tools payload: %w", err)
+	}
+	var requiring []string
+	for _, srv := range listing.ServersRequiringAuth {
+		requiring = append(requiring, srv.Name)
+	}
+	return listing.Tools, requiring, nil
 }

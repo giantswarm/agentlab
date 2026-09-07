@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
 	"strings"
 	"time"
@@ -19,13 +20,27 @@ import (
 // (auth.forwardToken), so nothing exercises muster's OAuth *client* role: the
 // proxy behind core_auth_login and the portal's per-server "Sign in" button,
 // which hands the user a challenge URL, walks the browser through the
-// downstream's own authorization server and keeps the token per session. The lab turns that role on (muster.muster.oauth.mcpClient in
+// downstream's authorization server and keeps the token per session. The lab
+// turns that role on (muster.muster.oauth.mcpClient in
 // agent-platform-values.yaml.tmpl — the umbrella leaves it off, real
 // installations turn it on) and ships one downstream that declares auth.type
-// oauth and stays Auth Required, so the path can be driven and proven
-// headlessly. Why the fixture targets muster's own protected endpoint is
-// explained in templates/oauth-fixture.yaml.tmpl.
-
+// oauth and reads Auth Required until a session signs in, so the path can be
+// driven and proven headlessly — challenge AND completed sign-in.
+//
+// The downstream is muster's own protected /mcp (a 401 with RFC 9728 metadata
+// at zero cost); the authorization server is PINNED to the lab Dex with the
+// platform client (spec.auth.authorizationServer, the GitHub-App shape), not
+// discovered. Discovery would name muster's own authorization server, which
+// identifies clients by Client ID Metadata Document, and its SSRF guards
+// refuse every lab hostname — the metadata URL and a registered redirect URI
+// alike resolve to the edge's cluster IP in-cluster and to loopback outside —
+// so no sign-in could ever complete there. Dex matches redirect URIs exactly
+// (dex.yaml.tmpl lists muster's proxy callback on the client), and the token
+// it issues carries the platform client's audience, which the endpoint
+// trusts: signing in connects muster to itself and surfaces its own tools
+// under x_lab-oauth-fixture_ for that session. Harmless, per session, and
+// exactly what the toolset proof needs (toolsetstest.go: a toolset naming
+// the server resolves to its tools only for the session that signed in).
 const (
 	// oauthFixtureServer is the fixture MCPServer's name — what the proofs
 	// sign in to and what the portal lists.
@@ -37,6 +52,10 @@ const (
 	// every sign-in challenge points the browser at (muster's
 	// DefaultOAuthProxyStartPath; the chart renders no override).
 	oauthProxyStartPath = "/oauth/proxy/start"
+	// oauthProxyCallbackPath is where the authorization server sends the
+	// browser back (the chart's callbackPath default); registered on the
+	// platform client in dex.yaml.tmpl.
+	oauthProxyCallbackPath = "/oauth/proxy/callback"
 	// mcpServerStateAuthRequired is the CRD status.state of a reachable remote
 	// server that answered 401 — muster's api.StateAuthRequired, spelled the
 	// CRD way.
@@ -172,7 +191,9 @@ func proveOAuthSignIn(cfg *config.Config, token string) error {
 	}
 	note("a second core_auth_login answers a fresh state")
 
-	// Redeem the URL the way the browser would, minus following the redirect.
+	// Redeem the URL the way the browser would, minus following the redirect:
+	// the proxy start endpoint sends the browser to the pinned authorization
+	// server's authorization endpoint — the lab Dex.
 	transport, err := labTLSTransport()
 	if err != nil {
 		return err
@@ -194,9 +215,51 @@ func proveOAuthSignIn(cfg *config.Config, token string) error {
 	if err != nil {
 		return fmt.Errorf("proxy start redirect %q: %w", location, err)
 	}
-	if !strings.Contains(target.Path, "authorize") {
-		return fmt.Errorf("the proxy start endpoint redirected to %s, not to an authorization endpoint", location)
+	if !strings.HasPrefix(location, cfg.Issuer()+"/auth") {
+		return fmt.Errorf("the proxy start endpoint redirected to %s, not to the pinned authorization server's endpoint (%s/auth…)", location, cfg.Issuer())
 	}
-	note("proxy start redirects to %s://%s%s (the authorization server)", target.Scheme, target.Host, target.Path)
+	note("proxy start redirects to %s://%s%s (the pinned authorization server, client %s)",
+		target.Scheme, target.Host, target.Path, target.Query().Get("client_id"))
+	return nil
+}
+
+// completeSignIn finishes a per-server sign-in the way the browser does after
+// the portal (or core_auth_login) handed it the challenge URL: follow the
+// proxy start endpoint to the authorization server's login form, submit the
+// user's credentials, and follow Dex back through muster's proxy callback to
+// its "Authentication Successful" page. The session that produced the
+// challenge — identified by the state — then holds the server's token.
+func completeSignIn(challengeURL string, user *config.User) error {
+	transport, err := labTLSTransport()
+	if err != nil {
+		return err
+	}
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		return err
+	}
+	browser := &http.Client{Jar: jar, Transport: transport, Timeout: 60 * time.Second}
+	resp, err := browser.Get(challengeURL)
+	if err != nil {
+		return err
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	landed := resp.Request.URL.String()
+	if resp.StatusCode != http.StatusOK || !strings.Contains(landed, "/auth/local") {
+		return fmt.Errorf("the sign-in did not reach Dex's login form (landed on %s with %d):\n%.300s",
+			landed, resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	resp, err = browser.PostForm(landed, url.Values{"login": {user.Email}, passwordParam: {user.Password}})
+	if err != nil {
+		return err
+	}
+	body, _ = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	final := resp.Request.URL.String()
+	if resp.StatusCode != http.StatusOK || !strings.Contains(final, oauthProxyCallbackPath) || !strings.Contains(string(body), "Authentication Successful") {
+		return fmt.Errorf("the sign-in did not end on muster's proxy callback success page (ended on %s with %d):\n%.300s",
+			final, resp.StatusCode, excerpt(string(body), 300))
+	}
 	return nil
 }

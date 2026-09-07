@@ -116,6 +116,12 @@ func labHTTPClient(timeout time.Duration) (*http.Client, error) {
 // OAuth presents a token the apiserver answers with 401.
 const musterLoginScopes = "openid email groups profile audience:server:client_id:" + config.KubernetesClientID
 
+// musterWriterScopes adds the audience muster's own Kubernetes writes (a
+// workflow created through core_workflow_create, as the caller) require —
+// the one Backstage's sign-in requests too (components.backstage.extraScopes)
+// and the dex-k8s-authenticator client trusts agent-platform to ask for.
+const musterWriterScopes = musterLoginScopes + " audience:server:client_id:dex-k8s-authenticator"
+
 func dexToken(cfg *config.Config, clientID, clientSecret string, form url.Values) (string, error) {
 	client, err := labHTTPClient(30 * time.Second)
 	if err != nil {
@@ -170,6 +176,12 @@ func passwordGrant(cfg *config.Config, clientID, clientSecret, email, password, 
 		return "", fmt.Errorf("dex login failed for %s: %w", email, err)
 	}
 	return token, nil
+}
+
+// base64URLDecode decodes base64url with or without padding.
+func base64URLDecode(s string) ([]byte, error) {
+	s = strings.TrimRight(s, "=")
+	return base64.RawURLEncoding.DecodeString(s)
 }
 
 // decodeJWTClaims returns the (unverified) payload of a JWT as a JSON object.

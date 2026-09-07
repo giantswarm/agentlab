@@ -48,6 +48,7 @@ type tmplData struct {
 	DomainRegex           string // Platform.Domain with dots escaped, for the CoreDNS rewrite
 	AllGroups             []string
 	KubernetesClientSecret,
+	AgentPlatformClientID,
 	AgentPlatformClientSecret string
 	// ModelManagerEnabled mirrors cfg.ModelManagerEnabled(); Backends is
 	// platform.modelManager.backends (the first is model-manager's default
@@ -106,6 +107,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		DomainRegex:               strings.ReplaceAll(cfg.Platform.Domain, ".", `\.`),
 		AllGroups:                 config.Groups,
 		KubernetesClientSecret:    config.KubernetesClientSecret,
+		AgentPlatformClientID:     config.AgentPlatformClientID,
 		AgentPlatformClientSecret: config.AgentPlatformClientSecret,
 	}, nil
 }

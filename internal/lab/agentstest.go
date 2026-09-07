@@ -14,6 +14,10 @@ import (
 // deletes through agent-manager.
 const agentsTestAgent = "agentlab-agents-test"
 
+// agentsTestToolset is the toolset the proof declares: the read-only preset,
+// the smallest one that still gives the agent tools.
+const agentsTestToolset = "preset:read-only"
+
 // agentManagerServiceAccount is the ServiceAccount the umbrella's agent-manager
 // Deployment runs with (fullnameOverride: agent-manager).
 const agentManagerServiceAccount = "system:serviceaccount:" + platformNamespace + ":" + agentManagerMCPServer
@@ -116,7 +120,25 @@ func AgentsTest(cfg *config.Config, email string) error {
 		}
 	}
 
-	step("%screate_agent %s as %s", toolPrefix, agentsTestAgent, user.Email)
+	// Every agent declares a toolset (agent-manager ≥ 0.4.0 refuses a create
+	// without one, naming the shipped presets); agents-test is the platform
+	// path, so it declares the read-only preset and asserts the refusal.
+	createArgs := map[string]any{
+		nameKey: agentsTestAgent, "modelConfig": modelConfig, "displayName": "agentlab agents-test",
+		"description":   "Throwaway agent of `agentlab agents-test`; deleted by the same run.",
+		"systemMessage": "Reply with exactly the word pong and nothing else.",
+	}
+	step("%screate_agent %s without a toolset — expecting the refusal naming the presets", toolPrefix, agentsTestAgent)
+	if text, err := session.callServerTool(toolPrefix+"create_agent", createArgs); err == nil {
+		return fmt.Errorf("create_agent without a toolset was accepted (%.200s); agent-manager ≥ 0.4.0 requires one", text)
+	} else if !strings.Contains(err.Error(), "toolset") || !strings.Contains(err.Error(), "preset:none") {
+		return fmt.Errorf("the refusal does not name the toolset contract: %w", err)
+	} else {
+		note("refused: %s", excerpt(err.Error(), 200))
+	}
+
+	step("%screate_agent %s as %s with toolset [%s]", toolPrefix, agentsTestAgent, user.Email, agentsTestToolset)
+	createArgs["toolset"] = []string{agentsTestToolset}
 	var created struct {
 		RequestedBy string `json:"requestedBy"`
 		Created     struct {
@@ -124,11 +146,7 @@ func AgentsTest(cfg *config.Config, email string) error {
 			OCIRepository bool `json:"ociRepository"`
 		} `json:"created"`
 	}
-	if err := session.callServerJSON(toolPrefix+"create_agent", map[string]any{
-		nameKey: agentsTestAgent, "modelConfig": modelConfig, "displayName": "agentlab agents-test",
-		"description":   "Throwaway agent of `agentlab agents-test`; deleted by the same run.",
-		"systemMessage": "Reply with exactly the word pong and nothing else.",
-	}, &created); err != nil {
+	if err := session.callServerJSON(toolPrefix+"create_agent", createArgs, &created); err != nil {
 		return err
 	}
 	if !created.Created.HelmRelease {
@@ -170,6 +188,17 @@ func AgentsTest(cfg *config.Config, email string) error {
 		return fmt.Errorf("%s never reached ready (last: %s — %s);\ncheck `kubectl -n %s get helmrelease,agents.kagent.dev,pods`", agentsTestAgent, status.Verdict, status.Summary, kagentNamespace)
 	}
 	note("ready: %s", excerpt(status.Summary, 120))
+	var got struct {
+		Toolset            []string `json:"toolset"`
+		ImplicitFullAccess bool     `json:"implicitFullAccess"`
+	}
+	if err := session.callServerJSON(toolPrefix+"get_agent", map[string]any{nameKey: agentsTestAgent}, &got); err != nil {
+		return err
+	}
+	if len(got.Toolset) != 1 || got.Toolset[0] != agentsTestToolset || got.ImplicitFullAccess {
+		return fmt.Errorf("get_agent reports toolset=%v implicitFullAccess=%v, wanted [%s]/false", got.Toolset, got.ImplicitFullAccess, agentsTestToolset)
+	}
+	note("get_agent reports toolset %v", got.Toolset)
 
 	step("%supdate_agent as %s", toolPrefix, user.Email)
 	var updated struct {
@@ -202,7 +231,7 @@ func AgentsTest(cfg *config.Config, email string) error {
 		if err != nil {
 			return err
 		}
-		text, err := viewerSession.callServerTool(toolPrefix+"create_agent", map[string]any{nameKey: agentsTestAgent + "-viewer", "modelConfig": modelConfig})
+		text, err := viewerSession.callServerTool(toolPrefix+"create_agent", map[string]any{nameKey: agentsTestAgent + "-viewer", "modelConfig": modelConfig, "toolset": []string{agentsTestToolset}})
 		switch {
 		case err == nil:
 			return fmt.Errorf("%s created an agent through agent-manager although the view role cannot write HelmReleases — agent-manager is not acting as the caller (ServiceAccount fallback?): %.200s", viewer.Email, text)
@@ -260,7 +289,7 @@ func AgentsTest(cfg *config.Config, email string) error {
 
 	fmt.Println()
 	fmt.Printf("PASS: muster aggregates %s* and agent-manager reports identity caller\n", toolPrefix)
-	fmt.Printf("PASS: %s created -> ready -> updated -> deleted %s through call_tool, every write requestedBy=%s and logged with caller=\n", user.Email, agentsTestAgent, user.Email)
+	fmt.Printf("PASS: create_agent without a toolset is refused naming the presets; with [%s] %s created -> ready -> updated -> deleted %s through call_tool, every write requestedBy=%s and logged with caller=\n", agentsTestToolset, user.Email, agentsTestAgent, user.Email)
 	if viewer != nil {
 		fmt.Printf("PASS: %s's create is Forbidden by the apiserver as User \"oidc:%s\" (user RBAC, not the ServiceAccount's)\n", viewer.Email, viewer.Email)
 	}

@@ -510,7 +510,7 @@ spec:
 	var reply string
 	var lastErr error
 	answered := waitFor(6, 5*time.Second, func() bool {
-		reply, lastErr = a2aSend(client, a2aURL, payload, prompt)
+		reply, lastErr = a2aSend(client, a2aURL, "", payload, prompt)
 		return lastErr == nil
 	})
 	if !answered {
@@ -521,13 +521,18 @@ spec:
 
 // a2aSend posts one JSON-RPC message/send and returns the agent's text: the
 // last text part that is not the prompt, wherever the Task/Message shape put
-// it (status.message, artifacts, history).
-func a2aSend(client *http.Client, url, payload, prompt string) (string, error) {
+// it (status.message, artifacts, history). A non-empty token goes out as
+// Authorization: Bearer — the user's Dex id_token the portal forwards to
+// kagent, which the agent's runtime propagates to muster (KAGENT_PROPAGATE_TOKEN).
+func a2aSend(client *http.Client, url, token, payload, prompt string) (string, error) {
 	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(payload))
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
