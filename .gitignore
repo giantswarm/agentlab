@@ -7,7 +7,14 @@ kubeconfig.oidc
 /agentlab.yaml
 /state/
 
-# Scratch file the architect CI writes next to the sources before `go build`;
-# untracked it would flip Go's VCS stamp to vcs.modified=true and every
-# release binary would report vX.Y.Z+dirty (pkg/project reads that stamp).
+# Build outputs and CI scratch files, all written next to the sources: the
+# devctl Makefile's agentlab-v<version>-<os>-<arch> and bin-dist/, the
+# architect CI's .ldflags, .platforms and agentlab-<os>-<arch> (six of them,
+# built concurrently). Untracked, any of these flips Go's VCS stamp to
+# vcs.modified=true and the binaries built after it report vX.Y.Z+dirty
+# (pkg/project reads that stamp; kubectl-gs ignores kubectl-gs* for the same
+# reason).
+/agentlab-*
+/bin-dist/
 .ldflags
+.platforms
