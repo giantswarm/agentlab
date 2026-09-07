@@ -74,6 +74,7 @@ Then:        claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		platformTestCmd(),
 		modelsTestCmd(),
 		agentsTestCmd(),
+		toolsetsTestCmd(),
 		labCmd("platform-down", "Remove the agent platform (leaves Dex and the cluster alone)", lab.PlatformDown),
 		labCmd("backstage", "Retired: Backstage deploys with the platform now (backstage.enabled + `agentlab up`)", lab.BackstageUp),
 		backstageTestCmd(),
@@ -440,6 +441,29 @@ func agentsTestCmd() *cobra.Command {
 			return lab.AgentsTest(cfg, email)
 		},
 	}
+}
+
+func toolsetsTestCmd() *cobra.Command {
+	var opts lab.ToolsetsTestOptions
+	cmd := &cobra.Command{
+		Use:   "toolsets-test [email]",
+		Short: "Headless toolset proof: agent-manager requires a toolset; the Agent carries the X-Muster-Toolset header; muster resolves and refuses per request; agents through kagent see their toolset; the OAuth-fixture sign-in scopes a server's tools to the token (G6); the portal's Tools step endpoints and apply path",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			email := cfg.AdminUser().Email
+			if len(args) == 1 {
+				email = args[0]
+			}
+			return lab.ToolsetsTest(cfg, email, opts)
+		},
+	}
+	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the throwaway agents run on (default: default-model-config, the Anthropic one the lab renders from $ANTHROPIC_API_KEY)")
+	cmd.Flags().BoolVar(&opts.SkipChat, "skip-chat", false, "skip the turns that need the model to answer (the runtime path, the chat-only agent, the real agent's view of the fixture)")
+	return cmd
 }
 
 func backstageTestCmd() *cobra.Command {

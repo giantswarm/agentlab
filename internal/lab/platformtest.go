@@ -355,20 +355,36 @@ func innerText(rpc map[string]any) string {
 }
 
 // parseMCPResponse handles both plain-JSON and SSE-framed (`data: {...}`)
-// MCP responses.
+// MCP responses. A streamed answer can carry notifications (progress,
+// logging) ahead of the response to the request; the frame with a `result`
+// or `error` is the answer, the last frame the fallback.
 func parseMCPResponse(raw []byte) (map[string]any, error) {
 	trimmed := bytes.TrimSpace(raw)
 	var out map[string]any
 	if json.Unmarshal(trimmed, &out) == nil {
 		return out, nil
 	}
+	var last map[string]any
 	for line := range strings.SplitSeq(string(trimmed), "\n") {
 		line = strings.TrimSpace(line)
-		if data, ok := strings.CutPrefix(line, "data:"); ok {
-			if json.Unmarshal([]byte(strings.TrimSpace(data)), &out) == nil {
-				return out, nil
-			}
+		data, ok := strings.CutPrefix(line, "data:")
+		if !ok {
+			continue
 		}
+		var frame map[string]any
+		if json.Unmarshal([]byte(strings.TrimSpace(data)), &frame) != nil {
+			continue
+		}
+		if _, isResult := frame["result"]; isResult {
+			return frame, nil
+		}
+		if _, isError := frame["error"]; isError {
+			return frame, nil
+		}
+		last = frame
+	}
+	if last != nil {
+		return last, nil
 	}
 	return nil, fmt.Errorf("neither JSON nor SSE data frame")
 }
