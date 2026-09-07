@@ -234,15 +234,6 @@ func (m ModelManager) Primary() string {
 	return m.Backends[0]
 }
 
-// Secondary lists the further backends — wired statically until
-// model-manager is multi-backend.
-func (m ModelManager) Secondary() []string {
-	if len(m.Backends) < 2 {
-		return nil
-	}
-	return m.Backends[1:]
-}
-
 // EndpointFor is the configured endpoint override of a backend, "" to
 // autodetect.
 func (m ModelManager) EndpointFor(backend string) string {

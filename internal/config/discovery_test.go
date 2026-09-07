@@ -19,8 +19,8 @@ func TestModelManagerNormalizeFoldsLegacyForm(t *testing.T) {
 	if mm.Backend != "" || mm.Endpoint != "" {
 		t.Fatalf("legacy fields survived normalize: %+v", mm)
 	}
-	if mm.Primary() != ModelManagerBackendLemonade || len(mm.Secondary()) != 0 {
-		t.Fatalf("primary/secondary: %q / %v", mm.Primary(), mm.Secondary())
+	if mm.Primary() != ModelManagerBackendLemonade {
+		t.Fatalf("primary: %q", mm.Primary())
 	}
 }
 
