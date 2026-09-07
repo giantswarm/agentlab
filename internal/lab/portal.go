@@ -207,7 +207,8 @@ func (ps *portalSession) kubeProxyGet(path string) (int, []byte, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+ps.bsToken)
 	req.Header.Set("Backstage-Kubernetes-Cluster", platformRelease)
-	req.Header.Set("Backstage-Kubernetes-Authorization-oidc-oidc-agent-platform", "Bearer "+ps.dexIDToken)
+	// The raw token: the backend's OIDC strategy prefixes "Bearer " itself.
+	req.Header.Set("Backstage-Kubernetes-Authorization-oidc-oidc-agent-platform", ps.dexIDToken)
 	resp, err := ps.client.Do(req)
 	if err != nil {
 		return 0, nil, err

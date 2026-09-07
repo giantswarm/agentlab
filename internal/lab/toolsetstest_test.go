@@ -104,3 +104,28 @@ func TestSessionIDInChallenge(t *testing.T) {
 		t.Errorf("no state must give no session id, got %q", got)
 	}
 }
+
+// A streamed MCP answer may carry a notification frame before the response;
+// the response frame is the one that counts.
+func TestParseMCPResponsePicksTheResponseFrame(t *testing.T) {
+	raw := []byte("event: message\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{\"progress\":1}}\n\n" +
+		"event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"ok\"}]}}\n\n")
+	res, err := parseMCPResponse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if innerText(res) != "ok" {
+		t.Fatalf("picked the wrong frame: %v", res)
+	}
+	errRaw := []byte("data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/message\",\"params\":{}}\ndata: {\"jsonrpc\":\"2.0\",\"id\":3,\"error\":{\"code\":-1,\"message\":\"boom\"}}\n")
+	res, err = parseMCPResponse(errRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := res["error"]; !ok {
+		t.Fatalf("error frame not picked: %v", res)
+	}
+	if _, err := parseMCPResponse([]byte("nothing here")); err == nil {
+		t.Fatal("garbage must fail")
+	}
+}

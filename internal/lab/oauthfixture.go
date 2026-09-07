@@ -224,11 +224,21 @@ func proveOAuthSignIn(cfg *config.Config, token string) error {
 	if err != nil {
 		return fmt.Errorf("proxy start redirect %q: %w", location, err)
 	}
-	if !strings.HasPrefix(location, cfg.Issuer()+"/auth") {
-		return fmt.Errorf("the proxy start endpoint redirected to %s, not to the pinned authorization server's endpoint (%s/auth…)", location, cfg.Issuer())
+	// The fixture applied by this binary pins Dex (the browser lands on Dex's
+	// authorization endpoint); one applied by an older `agentlab platform`
+	// discovers muster's own authorization server instead. Both are the
+	// authorization server's endpoint; the pinned one is the one a sign-in
+	// can complete against (oauth-fixture.yaml.tmpl).
+	switch {
+	case strings.HasPrefix(location, cfg.Issuer()+"/auth"):
+		note("proxy start redirects to %s://%s%s (the pinned authorization server, client %s)",
+			target.Scheme, target.Host, target.Path, target.Query().Get("client_id"))
+	case strings.Contains(target.Path, "authorize"):
+		note("proxy start redirects to %s://%s%s (the discovered authorization server — the fixture is not pinned to Dex: re-run `agentlab platform` with this binary for a sign-in that completes)",
+			target.Scheme, target.Host, target.Path)
+	default:
+		return fmt.Errorf("the proxy start endpoint redirected to %s, not to an authorization endpoint", location)
 	}
-	note("proxy start redirects to %s://%s%s (the pinned authorization server, client %s)",
-		target.Scheme, target.Host, target.Path, target.Query().Get("client_id"))
 	return nil
 }
 
