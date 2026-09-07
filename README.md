@@ -27,6 +27,62 @@ see below), `git`.
 (The old script stack also needed openssl, curl, jq and python3; the binary
 does all of that itself.)
 
+### Docker resources
+
+The lab runs the whole platform on a single kind node, so whatever backs
+docker — Docker Desktop's VM, Colima, a podman machine — has to fit it. **CPU
+is the binding constraint, and it is a hard one**: the kube-scheduler refuses
+a pod whose CPU *request* does not fit, so a node that is 100m short simply
+leaves pods `Pending` forever. It does not degrade, it stalls.
+
+What a full default lab requests (measured from the chart renders at the
+pinned versions, plus kind's own control plane on a live node):
+
+| | CPU | Memory |
+|---|---|---|
+| kind's Kubernetes: apiserver, controller-manager, scheduler, etcd, CNI, CoreDNS | 950m | ~140 MiB |
+| the agent platform: muster + valkey, agentgateway + controller, mcp-kubernetes, agent-manager, model-manager, kagent + UI + postgres, Backstage | 1080m | ~1750 MiB |
+| Dex | 50m | 64 MiB |
+| Flux source + helm controllers (installed by the Backstage step, when agents are on — they are the agent create flow's delivery engine) | 200m | 128 MiB |
+| observability: kube-state-metrics + mcp-prometheus | 300m | 328 MiB |
+| **total requests** | **≈ 2.6 CPU** | **≈ 2.4 GiB** |
+
+The memory column *understates* real use, and by a lot: the Prometheus server
+(its CR sets no `resources`), the prometheus-operator and node-exporter
+declare nothing at all, and Backstage requests 250 MiB while its Node process
+uses several times that. A node running the platform with Backstage and
+observability **off** was observed at 2.4 GiB actual — i.e. the whole
+requests budget — so a full lab wants roughly twice that.
+
+Give docker at least:
+
+| | CPUs | Memory |
+|---|---|---|
+| the full default lab (platform + agents + observability + Backstage) | **6** | **8 GiB** |
+| the floor that still schedules | 4 | 6 GiB |
+| platform + agents only (`configure --backstage=false --observability=false`) | 3 | 4 GiB |
+
+That last row is the one that has actually been measured on a live node: it
+requests ~2.05 CPU (no Backstage, no observability, and no Flux — that comes
+with Backstage) and sat at 2.4 GiB of real use.
+
+Add headroom on top for the agent pods the platform creates at run time:
+every kagent agent is another pod, and `models-test` and `agents-test` each
+create one.
+
+Two CPUs — Docker Desktop's default — is not enough for any of it. The
+symptoms are specific, and worth recognising because nothing says "out of
+CPU": `agentgateway` (or any late pod) sits `Pending` while
+`kubectl describe node` shows CPU requests at 95%+ of allocatable; the
+platform install then waits on a workload that will never start and times
+out. With the platform up but the node full, `models-test` gets as far as the
+agent turn and fails there — the agent's own pod cannot be scheduled, so the
+Agent CR never goes `Ready`.
+
+Disk is not usually the constraint. A first boot pulls a few GiB of images —
+on the *host*, always, and side-loads them into the node — and that host
+cache survives `agentlab down`, so a re-boot does not pay for them again.
+
 ## Quick start
 
 Install the `agentlab` binary one of three ways:
