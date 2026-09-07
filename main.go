@@ -21,6 +21,8 @@ import (
 	"github.com/giantswarm/agentlab/internal/config"
 	"github.com/giantswarm/agentlab/internal/forms"
 	"github.com/giantswarm/agentlab/internal/lab"
+	"github.com/giantswarm/agentlab/internal/telemetry"
+	"github.com/giantswarm/agentlab/pkg/project"
 )
 
 func main() {
@@ -47,6 +49,14 @@ Then:        claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Args:          cobra.NoArgs,
+		Version:       project.VersionLine(),
+		// One anonymous usage signal per command a person runs, like
+		// kubectl-gs (README "Usage data"; AGENTLAB_TELEMETRY_OPTOUT=1 to
+		// disable). Runs for every subcommand, none of which has a
+		// PersistentPreRun of its own.
+		PersistentPreRun: func(cmd *cobra.Command, _ []string) {
+			telemetry.Command(cmd)
+		},
 	}
 
 	root.AddCommand(
