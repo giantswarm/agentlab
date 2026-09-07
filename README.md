@@ -35,6 +35,66 @@ detects this and moves the agentgateway edge off its default 443 — to 8443,
 so the public URLs gain `:8443` — and reports the move. Run Podman as root, or
 lower the sysctl, to keep 443.
 
+### Docker resources
+
+The lab runs the whole platform on a single kind node, so whatever backs
+docker has to fit it — a Docker Desktop VM, Colima or a podman machine on a
+Mac, the host itself under rootless Podman on Linux. **CPU is the binding
+constraint, and it is a hard one**: the kube-scheduler refuses
+a pod whose CPU *request* does not fit, so a node that is 100m short simply
+leaves pods `Pending` forever. It does not degrade, it stalls.
+
+What a full default lab requests (measured from the chart renders at the
+pinned versions, plus kind's own control plane on a live node):
+
+| | CPU | Memory |
+|---|---|---|
+| kind's Kubernetes: apiserver, controller-manager, scheduler, etcd, CNI, CoreDNS | 950m | ~290 MiB |
+| the agent platform: muster + valkey, agentgateway + controller, mcp-kubernetes, agent-manager, model-manager, kagent + UI + postgres, Backstage | 1080m | ~1750 MiB |
+| Dex | 50m | 64 MiB |
+| Flux source + helm controllers (installed by the Backstage step, when agents are on — they are the agent create flow's delivery engine) | 200m | 128 MiB |
+| observability: kube-state-metrics + mcp-prometheus | 300m | 328 MiB |
+| **total requests** | **≈ 2.6 CPU** | **≈ 2.5 GiB** |
+
+The memory column *understates* real use, and by a lot: the Prometheus server
+(its CR sets no `resources`), the prometheus-operator and node-exporter
+declare nothing at all, and Backstage requests 250 MiB while its Node process
+uses several times that. A node running the platform with Backstage and
+observability **off** was observed at 2.4 GiB actual — i.e. the whole
+requests budget — so a full lab wants roughly twice that.
+
+Give docker at least:
+
+| | CPUs | Memory |
+|---|---|---|
+| the full default lab (platform + agents + observability + Backstage) | **4** | **5 GiB** |
+| platform + agents only (`configure --backstage=false --observability=false`) | 3 | 3.5 GiB |
+
+Those are the floors `agentlab up` enforces, and they already include room for
+the pods the platform creates at run time: every kagent agent is another pod,
+and `models-test` and `agents-test` each create one. `agentlab up` checks the
+runtime before any cluster work — it prints the measured CPUs and memory next
+to this configuration's requests and floor on every boot, refuses below the
+CPU floor and warns below the memory one. Give it 6 CPUs and 8 GiB if you have
+them: the lab is then comfortable rather than exactly large enough.
+
+The second row is the one that has actually been measured on a live node: it
+requests ~2.05 CPU (no Backstage, no observability, and no Flux — that comes
+with Backstage) and sat at 2.4 GiB of real use.
+
+Two CPUs — what a small Docker Desktop or Colima VM gives you — is not enough
+for any of it. The symptoms are specific, and worth recognising because
+nothing says "out of CPU": `agentgateway` (or any late pod) sits `Pending` while
+`kubectl describe node` shows CPU requests at 95%+ of allocatable; the
+platform install then waits on a workload that will never start and times
+out. With the platform up but the node full, `models-test` gets as far as the
+agent turn and fails there — the agent's own pod cannot be scheduled, so the
+Agent CR never goes `Ready`.
+
+Disk is not usually the constraint. A first boot pulls a few GiB of images —
+on the *host*, always, and side-loads them into the node — and that host
+cache survives `agentlab down`, so a re-boot does not pay for them again.
+
 ## Quick start
 
 Install the `agentlab` binary one of three ways:
