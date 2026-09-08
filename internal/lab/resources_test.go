@@ -66,12 +66,11 @@ func labConfig(platform, agents, observability, backstage, modelManager bool) *c
 }
 
 // The floor follows the enabled components. The full default lab reproduces
-// the live measurement the constants come from (2540m / 2532Mi allocated on
+// the live measurement the constants come from (2590m / 2596Mi allocated on
 // 2026-09-08) and lands on the README's rows: 4 CPUs for the full lab, 3 for
-// the platform and its agents alone (which requests the ~2.05 CPUs the
-// README quotes). Flux counts only when Backstage AND agents are on
-// (platformUp installs it in that case only); everything but kind and Dex
-// is inert when the platform is off.
+// the platform and its agents alone. The chart's Flux engine counts whenever
+// the platform does (the lab shape brings it with the chart); everything but
+// kind and Dex is inert when the platform is off.
 func TestLabResourceNeeds(t *testing.T) {
 	for name, tc := range map[string]struct {
 		cfg     *config.Config
@@ -83,38 +82,38 @@ func TestLabResourceNeeds(t *testing.T) {
 	}{
 		"full default lab with model-manager (the measured lab)": {
 			cfg: labConfig(true, true, true, true, true),
-			cpu: 2540, mem: 2532, minCPUs: 4, minMem: 5064,
-			groups: "kind control plane,Dex,agent platform,agents runtime,model-manager,Backstage,Flux,observability",
+			cpu: 2590, mem: 2596, minCPUs: 4, minMem: 5192,
+			groups: "kind control plane,Dex,agent platform,agents runtime,model-manager,Backstage,Flux engine,observability",
 		},
 		"full default lab without model-manager": {
 			cfg: labConfig(true, true, true, true, false),
-			cpu: 2485, mem: 2452, minCPUs: 4, minMem: 4904,
-			groups: "kind control plane,Dex,agent platform,agents runtime,Backstage,Flux,observability",
+			cpu: 2535, mem: 2516, minCPUs: 4, minMem: 5032,
+			groups: "kind control plane,Dex,agent platform,agents runtime,Backstage,Flux engine,observability",
 		},
 		"platform + agents only (README's smaller lab)": {
 			cfg: labConfig(true, true, false, false, true),
-			cpu: 2015, mem: 1810, minCPUs: 3, minMem: 3620,
-			groups: "kind control plane,Dex,agent platform,agents runtime,model-manager",
+			cpu: 2265, mem: 2002, minCPUs: 3, minMem: 4004,
+			groups: "kind control plane,Dex,agent platform,agents runtime,model-manager,Flux engine",
 		},
-		"platform + agents + Backstage, no observability: Flux comes along": {
+		"platform + agents + Backstage, no observability": {
 			cfg: labConfig(true, true, false, true, false),
-			cpu: 2180, mem: 2108, minCPUs: 3, minMem: 4216,
-			groups: "kind control plane,Dex,agent platform,agents runtime,Backstage,Flux",
+			cpu: 2230, mem: 2172, minCPUs: 3, minMem: 4344,
+			groups: "kind control plane,Dex,agent platform,agents runtime,Backstage,Flux engine",
 		},
-		"platform + agents + observability, no Backstage: no Flux": {
+		"platform + agents + observability, no Backstage": {
 			cfg: labConfig(true, true, true, false, false),
-			cpu: 2265, mem: 2074, minCPUs: 3, minMem: 4148,
-			groups: "kind control plane,Dex,agent platform,agents runtime,observability",
+			cpu: 2515, mem: 2266, minCPUs: 4, minMem: 4532,
+			groups: "kind control plane,Dex,agent platform,agents runtime,Flux engine,observability",
 		},
-		"platform + Backstage without agents: no kagent, no Flux, no model-manager": {
+		"platform + Backstage without agents: no kagent, no model-manager": {
 			cfg: labConfig(true, false, false, true, true),
-			cpu: 1530, mem: 1340, minCPUs: 3, minMem: 2680,
-			groups: "kind control plane,Dex,agent platform,Backstage",
+			cpu: 1780, mem: 1532, minCPUs: 3, minMem: 3064,
+			groups: "kind control plane,Dex,agent platform,Backstage,Flux engine",
 		},
 		"platform alone": {
 			cfg: labConfig(true, false, false, false, false),
-			cpu: 1510, mem: 1090, minCPUs: 3, minMem: 2180,
-			groups: "kind control plane,Dex,agent platform",
+			cpu: 1760, mem: 1282, minCPUs: 3, minMem: 2564,
+			groups: "kind control plane,Dex,agent platform,Flux engine",
 		},
 		"platform off: kind and Dex only, the other toggles inert": {
 			cfg: labConfig(false, true, true, true, true),
@@ -175,14 +174,14 @@ func TestJudgeRuntimeResourcesRefusesTooFewCPUs(t *testing.T) {
 	}
 	for _, want := range []string{
 		"docker has 2 CPUs; this lab configuration needs 4",
-		"request 2.54 CPUs",
+		"request 2.59 CPUs",
 		// The breakdown is word-wrapped, so each group is asserted on its own.
 		"kind control plane 0.95", "Dex 0.05", "agent platform 0.51", "agents runtime 0.45",
-		"model-manager 0.06", "Backstage 0.02", "Flux 0.20", "observability 0.31",
+		"model-manager 0.06", "Backstage 0.02", "Flux engine 0.25", "observability 0.31",
 		"Docker Desktop: Settings -> Resources",
-		"colima start --cpu 4 --memory 5",
+		"colima start --cpu 4 --memory 6",
 		"agentlab configure --backstage=false --observability=false",
-		"needs 3 CPUs and 3.5 GiB",
+		"needs 3 CPUs and 3.9 GiB",
 		`README "Docker resources"`,
 	} {
 		if !strings.Contains(err.Error(), want) {
@@ -222,13 +221,13 @@ func TestJudgeRuntimeResourcesFloorFollowsConfiguration(t *testing.T) {
 // loud warning; below the requests nothing schedules, so it is refused.
 func TestJudgeRuntimeResourcesMemory(t *testing.T) {
 	cfg := labConfig(true, true, true, true, true)
-	needs := labResourceNeeds(cfg) // 2532Mi requested, floor 5064Mi
+	needs := labResourceNeeds(cfg) // 2596Mi requested, floor 5192Mi
 
 	warning, err := judgeRuntimeResources(measure(6, 4096), cfg, needs)
 	if err != nil {
 		t.Fatalf("4 GiB is below the floor but above the requests — a warning, not a refusal: %v", err)
 	}
-	for _, want := range []string{"docker has 4.0 GiB of memory", "wants 4.9 GiB", "request only 2.5 GiB", "OOM", "colima start --cpu 4 --memory 5"} {
+	for _, want := range []string{"docker has 4.0 GiB of memory", "wants 5.1 GiB", "request only 2.5 GiB", "OOM", "colima start --cpu 4 --memory 6"} {
 		if !strings.Contains(warning, want) {
 			t.Errorf("warning lacks %q:\n%s", want, warning)
 		}
@@ -243,7 +242,7 @@ func TestJudgeRuntimeResourcesMemory(t *testing.T) {
 	if warning, err := judgeRuntimeResources(measure(6, 8192), cfg, needs); err != nil || warning != "" {
 		t.Errorf("6 CPUs / 8 GiB is the README's recommendation and must pass silently, got warning %q, err %v", warning, err)
 	}
-	if warning, err := judgeRuntimeResources(measure(4, 5064), cfg, needs); err != nil || warning != "" {
+	if warning, err := judgeRuntimeResources(measure(4, 5192), cfg, needs); err != nil || warning != "" {
 		t.Errorf("exactly the floor passes without a warning, got warning %q, err %v", warning, err)
 	}
 }
@@ -259,7 +258,7 @@ func TestResourceFixesPerRuntime(t *testing.T) {
 	if err == nil {
 		t.Fatal("2 CPUs must be refused")
 	}
-	if !strings.Contains(err.Error(), "podman has 2 CPUs") || !strings.Contains(err.Error(), "podman machine set --cpus 4 --memory 5120") {
+	if !strings.Contains(err.Error(), "podman has 2 CPUs") || !strings.Contains(err.Error(), "podman machine set --cpus 4 --memory 6144") {
 		t.Errorf("podman machine refusal wording:\n%s", err)
 	}
 	if strings.Contains(err.Error(), "Colima") || strings.Contains(err.Error(), "Docker Desktop") {

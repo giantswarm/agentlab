@@ -83,21 +83,6 @@ func runQuiet(name string, args ...string) error {
 	return pipeInto(nil, name, args...)
 }
 
-// runQuietEnv is runQuiet with extra environment entries ("KEY=value")
-// appended to the inherited environment.
-func runQuietEnv(extraEnv []string, name string, args ...string) error {
-	var buf bytes.Buffer
-	cmd := command(name, args...)
-	cmd.Env = append(cmd.Env, extraEnv...)
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
-	if err := cmd.Run(); err != nil {
-		_, _ = os.Stderr.Write(buf.Bytes())
-		return cmdError(name, args, err, nil)
-	}
-	return nil
-}
-
 // output captures a command's stdout (stderr goes to the terminal).
 func output(name string, args ...string) (string, error) {
 	var buf bytes.Buffer

@@ -9,6 +9,18 @@ and what happened to it. One commit per resolved item. Statuses:
 > gate (H9), the exact-tag image check (H1), key permissions (H10, now 0600 at
 > creation) and the post-render patches (U1-U3, now `agentlab post-render`) all
 > live in `internal/lab/`. Two NEW items surfaced during the port: H11, H12.
+>
+> **2026-09-08, the agent-platform meta chart in the lab shape:** the lab
+> installs `giantswarm/agent-platform` (bundled Flux engine on,
+> self-management off) instead of the git-vendored agent-platform-standalone
+> umbrella. `fluxUp`, the vendored chart (`.vendor/`), the post-renderer
+> binary and its generated Helm plugin (`state/helm-plugins/`) are gone; the
+> post-render patches (U2, U9, U13) are per-component `postRenderers` values
+> the chart forwards to the component HelmReleases (`postrenderers.go`), the
+> image preload resolves the component charts from the rendered
+> OCIRepositories (`fluxreleases.go`), and mcp-prometheus is a lab-rendered
+> HelmRelease through the same engine. H12, H13, U3 and U4 are retired with
+> the mechanisms they patched.
 
 - **FIXED** — replaced with a proper solution (commit referenced).
 - **BLOCKED UPSTREAM** — cannot be fixed in this repo; the exact upstream
@@ -107,13 +119,16 @@ ClusterRole for the `dex.coreos.com` API group). Keys persist across rolls, an
 immediate post-reload login verifies, and the state still dies with the
 cluster.
 
-### H12. Chart vendored into `vendor/` collides with the Go toolchain — FIXED
+### H12. Chart vendored into `vendor/` collides with the Go toolchain — RETIRED
 The agent-platform-standalone checkout lived in `vendor/`, which flips a Go
 module into vendored-build mode: after the first `agentlab platform`, `go build`
 failed with "inconsistent vendoring".
-**Fix:** the chart is vendored into `.vendor/` instead.
+**Fix:** the chart was vendored into `.vendor/` instead. **Retired 2026-09-08:**
+the lab installs the released agent-platform chart from the registry (or a
+local chart directory, `platform.chartPath`); nothing is vendored, and
+`agentlab platform` removes a leftover `.vendor/`.
 
-### H13. `agentlab platform` failed on Helm 4 server-side-apply conflicts after a dev-image swap — FIXED
+### H13. `agentlab platform` failed on Helm 4 server-side-apply conflicts after a dev-image swap — RETIRED
 The documented way back from a dev-image swap (`kubectl set image` /
 `kubectl patch` on a platform Deployment, see the agentlab skill) was "re-run
 `agentlab platform`, which reconciles every Deployment to the vendored chart".
@@ -121,11 +136,14 @@ Helm 4 applies server-side, so the swapped image field belongs to the
 `kubectl` field manager afterwards and the upgrade died on the conflict
 (`Apply failed with 1 conflict: conflict with "kubectl-set" ... image`); the
 workaround was deleting the Deployment by hand and re-running.
-**Fix:** the umbrella upgrade passes `--force-conflicts`: Helm takes the
-fields it renders back from any other manager, so a re-run really does
-reconcile the lab to the chart — a dev image is gone after `agentlab
-platform` (say so in the lab lock's owner file when other people share the
-cluster). Fields Helm does not render (an annotation added by hand) stay.
+**Fix:** the umbrella upgrade passed `--force-conflicts`: Helm took the
+fields it renders back from any other manager, so a re-run really did
+reconcile the lab to the chart. **Retired 2026-09-08:** the workloads are the
+component HelmReleases' now (helm-controller applies them), and the dev-image
+loop goes through the values — `platform.devImages` renders a kustomize image
+override into the component's `postRenderers`, so the swap and its restore are
+plain `helm upgrade`s with no second writer and no flag. A hand `kubectl patch`
+lasts until helm-controller's next release of that component.
 
 ## Blocked upstream (documented, not fixable in this repo)
 
@@ -141,33 +159,38 @@ rendered ConfigMap by the post-renderer.
 BOM carries it since the curation that pinned muster 5.7.2. The post-render
 ConfigMap edit is deleted — the values entry alone is effective now.
 
-### U2. `muster-post-render.sh` patch: hostNetwork + dnsPolicy + maxSurge 0 on the muster Deployment
+### U2. hostNetwork + dnsPolicy + maxSurge 0 on the muster (and Backstage) Deployment
 muster must resolve `https://localhost:32000/dex` to the Dex NodePort from
 inside the pod (the lab's one-issuer-URL trick), which needs hostNetwork; and
 with hostNetwork a default rolling update deadlocks on a single node because
 both pods want :8090. The muster chart (checked through 5.6.2) exposes no
-`hostNetwork`, `dnsPolicy` or `strategy` values.
+`hostNetwork`, `dnsPolicy` or `strategy` values; the Backstage chart neither.
+Since 2026-09-08 the patch is a Kustomize strategic merge in
+`components.muster.postRenderers` / `components.backstage.postRenderers`
+(`postrenderers.go`), which the agent-platform chart forwards to the component
+HelmRelease and the bundled helm-controller applies — no post-renderer binary.
 **Unblocks:** giantswarm/muster — add deployment-level `hostNetwork`/
-`dnsPolicy`/`strategy` values. Until then a post-renderer is the correct
-plain-Helm mechanism; the patch is surgical so chart bumps need no hand-copying.
+`dnsPolicy`/`strategy` values. Until then the patch is surgical so chart bumps
+need no hand-copying.
 
-### U3. `muster-post-render.sh` patch: umbrella HTTPRoute stripped + placeholder parentRefs
-`agent-platform-standalone`'s `_helpers.tpl` hard-fails on empty
-`ingress.parentRefs` in **all** modes — even `muster-direct`, where this lab
-has no Gateway (and no Gateway API CRDs) at all. The values carry a
-`no-gateway-in-this-lab` placeholder to pass the guard and the rendered route
-is stripped.
-**Unblocks:** giantswarm/agent-platform-standalone — require `parentRefs` only
-in `agentgateway-*` modes, or add an `ingress.enabled: false` escape hatch for
-gateway-less clusters.
+### U3. `muster-post-render.sh` patch: umbrella HTTPRoute stripped + placeholder parentRefs — RETIRED
+`agent-platform-standalone`'s `_helpers.tpl` hard-failed on empty
+`ingress.parentRefs` in **all** modes — even `muster-direct`, where the lab
+had no Gateway at all. The values carried a `no-gateway-in-this-lab`
+placeholder to pass the guard and the rendered route was stripped.
+**Retired:** the lab runs the chart-owned agentgateway edge
+(`gatewayApi.gateway.create: true`), so the routes attach to a real Gateway and
+nothing is stripped; the post-renderer that did it is gone (2026-09-08).
 
-### U4. `platform-up.sh`: chart vendored from git at a pinned SHA
-The umbrella chart has no OCI release: `charts/giantswarm/agent-platform-standalone`
-does not exist in gsoci (verified 2026-08-27, `NAME_UNKNOWN`) and PR
-[giantswarm/agent-platform-standalone#11](https://github.com/giantswarm/agent-platform-standalone/pull/11)
-is still open (its head is exactly the pinned `APS_REF`).
-**Unblocks:** merge #11 and publish the chart; then the vendor block becomes
-`helm upgrade --install … oci://gsoci.azurecr.io/charts/giantswarm/agent-platform-standalone`.
+### U4. `platform-up.sh`: chart vendored from git at a pinned SHA — RETIRED
+The umbrella chart had no OCI release: `charts/giantswarm/agent-platform-standalone`
+did not exist in gsoci (verified 2026-08-27, `NAME_UNKNOWN`), so the lab
+vendored it from git at a pinned SHA (`platform.apsRef`).
+**Retired 2026-09-08:** the lab installs the released agent-platform meta
+chart — `helm upgrade --install … oci://gsoci.azurecr.io/charts/giantswarm/agent-platform
+--version <platform.chartVersion>` — or a local chart directory
+(`platform.chartPath`) for unreleased changes; the standalone umbrella retires
+with the one-chart delivery story.
 
 ### U5. `platform.go`: mcp-kubernetes must be `--wait`ed serially before muster installs — RETIRED (#34)
 muster dials its MCPServers ~2s after starting; a failed first dial schedules
@@ -254,15 +277,16 @@ note; the platform install never blocks on this heal.
 `-full`) at every kagent release tag alongside the other kagent images; the
 heal then degenerates to an image preload and can eventually be deleted.
 
-### U9. `postrender.go` patch: fixed nodePort pinned onto the kagent-ui Service
+### U9. `components.kagent.postRenderers` patch: fixed nodePort pinned onto the kagent-ui Service
 The lab host-publishes the kagent UI through a kind port mapping, which needs
 a *stable* node-side port. `ui.service.type: NodePort` is a chart value, but
 the upstream kagent chart's `ui-service.yaml` template renders no `nodePort`
 field (verified in kagent 0.9.12 via the vendored wrapper chart 0.1.37), so
 Kubernetes assigns a random one — useless to kind's fixed `extraPortMappings`.
-`agentlab post-render` pins `spec.ports[name=ui].nodePort` to
-`config.KagentUINodePort` (30880); the kind config maps that onto
-`platform.agentsPort` (default 8081) on the host.
+A Kustomize strategic-merge patch in `components.kagent.postRenderers`
+(`postrenderers.go`, since 2026-09-08; `agentlab post-render` before) pins the
+Service's `ui` port entry to `config.KagentUINodePort` (30880); the kind config
+maps that onto `platform.agentsPort` (default 8081) on the host.
 **Unblocks:** kagent-dev/kagent — render `ui.service.ports.nodePort` when set
 (the standard chart idiom). The value then moves into
 `agent-platform-values.yaml.tmpl` and the patch is deleted.
@@ -317,21 +341,23 @@ guard.
 fallback with a Capabilities check like the sibling branches; then the value
 can be dropped (it would render nothing here either way).
 
-### U13. `postrender.go` patch: `dex-localhost` sidecar on the MCP servers — ACCEPTED
+### U13. `postRenderers` patch: `dex-localhost` sidecar on the MCP servers — ACCEPTED
 Since 2026-09-03 the bundled mcp-kubernetes, model-manager and agent-manager and
 the lab's mcp-prometheus validate the user's forwarded Dex id_token themselves
 (mcp-oauth resource servers against `global.identity`), so each of them does
 OIDC discovery and JWKS fetches against the issuer URL — `https://localhost:<dexPort>/dex`, the
 one URL the browser, the apiserver and every pod must share (H-issuer, above).
 muster and Backstage reach it through hostNetwork (U1); these four cannot: all
-listen on :8080 and would collide on the single kind node. **Fix:** the
-post-renderer injects a `dex-localhost` sidecar (`alpine/socat`) that listens on
-the pod's own loopback :<dexPort> (IPv6 wildcard, dual-stack) and forwards to the
-Dex ClusterIP Service, so `localhost` resolves inside the pod exactly as on the
-host; Dex's certificate carries `localhost`, TLS verification against the lab CA
-holds. mcp-prometheus gets it because `installOCIChart` now runs that release
-through the post-renderer too. Lab-only by construction: real installations have
-a routable issuer.
+listen on :8080 and would collide on the single kind node. **Fix:** a
+`dex-localhost` sidecar (`alpine/socat`) that listens on the pod's own loopback
+:<dexPort> (IPv6 wildcard, dual-stack) and forwards to the Dex ClusterIP
+Service, so `localhost` resolves inside the pod exactly as on the host; Dex's
+certificate carries `localhost`, TLS verification against the lab CA holds.
+Since 2026-09-08 a Kustomize strategic-merge patch in
+`components.<server>.postRenderers` (`postrenderers.go`; the post-renderer
+binary before), and the same patch on the lab's own mcp-prometheus HelmRelease
+(mcp-prometheus.yaml.tmpl). Lab-only by construction: real installations have a
+routable issuer.
 
 ### U14. `hostmodels.go`: the further host backends are wired as static ModelConfigs — FIXED upstream
 `platform.modelManager.backends` lists every model server on the lab host
@@ -423,6 +449,38 @@ trusts, so `agentlab toolsets-test` completes the sign-in headlessly. Unblocks
 when muster exposes `allowPrivateIPClientMetadata` for its OAuth server — then
 the pin can go and the challenge chain becomes proxy start → muster
 `/oauth/authorize` → Dex again.
+
+### U19. `components.agent-platform-connectivity.postRenderers`: the kagent controller metrics Service selects the wrong instance label — BLOCKED UPSTREAM
+The connectivity chart (3.20.1) renders a Service for the kagent controller's
+metrics port and a ServiceMonitor on it, selecting the controller pods with
+`app.kubernetes.io/instance: <its own release name>`. Under the standalone
+umbrella every subchart shared one release name, so that matched; under the
+meta chart kagent is its own release named `kagent`, the Service selects no
+pod, and the lab Prometheus scrapes nothing of kagent (`platform-test`
+"Prometheus scrapes the platform itself" caught it on the first meta-chart
+run). **Fix here:** a Kustomize strategic-merge patch on the Service's
+selector (`postrenderers.go`, patch 6) rendered into
+`components.agent-platform-connectivity.postRenderers` while agents and
+observability are on — the chart's own mechanism for chart fixes.
+**Unblocks:** [giantswarm/agent-platform#305](https://github.com/giantswarm/agent-platform/issues/305)
+— select kagent's instance label. Then the patch is deleted.
+
+### U20. `platform.go`: the `kagent` namespace is created before the chart — BLOCKED UPSTREAM
+The kagent chart renders its workloads into `kagent.namespaceOverride`
+(`kagent`), but its HelmRelease targets the release namespace like every
+component, so helm-controller's `createNamespace` never creates `kagent`; the
+one chart object that does — the connectivity chart's Namespace — sits in a
+release that `dependsOn` kagent. A first install on a fresh cluster fails
+every kagent attempt with `namespaces "kagent" not found` until the retries
+are exhausted, and everything behind kagent waits (seen on the first
+meta-chart run: 6 attempts, then Stalled). Management clusters break the
+cycle by creating the namespace in their bases (management-cluster-bases#732);
+the lab does the same in `platformUp` when agents are on, and the
+connectivity release adopts it on install.
+**Unblocks:** [giantswarm/agent-platform#306](https://github.com/giantswarm/agent-platform/issues/306)
+— render the Namespace from the meta chart itself (or target the kagent
+HelmRelease at the namespace with `createNamespace`). Then `ensureNamespace`
+for kagent goes.
 
 ## Accepted lab trade-offs (not hacks to fix)
 

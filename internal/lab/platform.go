@@ -2,12 +2,11 @@ package lab
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -17,36 +16,57 @@ import (
 
 const platformNamespace = "agent-platform"
 
-// platformRelease is the umbrella's Helm release name. Also the name of the
-// muster installation Backstage surfaces: the chart's app-config derives its
-// gs/kubernetes/muster installation entries from {{ .Release.Name }}.
+// platformRelease is the platform's Helm release name. Also the name of the
+// muster installation Backstage surfaces: the chart's app-config registers
+// `gs.installations.<release name>` (backstage.installationName defaults to
+// it), and the portal proofs pass it as `?installation=`.
 const platformRelease = "agent-platform"
 
 // Component names, shared by the log targets, the cert SANs, the deploy
-// steps and the post-renderer's resource matching.
+// steps and the dev-image table.
 const (
-	componentDex       = "dex"
-	componentMuster    = "muster"
-	componentBackstage = "backstage"
+	componentDex           = "dex"
+	componentMuster        = "muster"
+	componentBackstage     = "backstage"
+	componentKagent        = "kagent"
+	componentMCPKubernetes = "mcp-kubernetes"
 )
 
-// apsDir is where the umbrella chart is vendored from git. Deliberately NOT
-// `vendor/`: the repo is a Go module, and a top-level vendor/ directory would
-// flip the Go toolchain into vendored-build mode and break `go build`.
-const apsDir = ".vendor/agent-platform-standalone"
+// conditionTrue is a Kubernetes condition's status when it holds.
+const conditionTrue = "True"
+
+// Leftovers of earlier agentlab versions in the lab's working directory: the
+// git-vendored agent-platform-standalone chart and the generated Helm
+// post-renderer plugin. Neither has a reader anymore; the platform install
+// removes them so a working directory does not carry a dead checkout around.
+const (
+	legacyVendorDir      = ".vendor"
+	legacyHelmPluginsDir = StateDir + "/helm-plugins"
+)
+
+// helmInstallTimeout bounds `helm upgrade --install --wait` of the meta chart.
+// Helm 4's --wait is kstatus over the chart's objects, the platform
+// HelmReleases included, so the command returns when every component is
+// Ready — a first boot side-loads the images, but the engine (source- and
+// helm-controller) still pulls its own on the way.
+const helmInstallTimeout = "15m"
 
 // PlatformUp installs the Giant Swarm agent platform into the lab cluster and
 // wires it to the lab Dex.
 //
-// The platform ships as agent-platform-standalone: one plain Helm umbrella
-// chart with muster, valkey, mcp-kubernetes and the MCP registrations as
-// pinned subcharts (Chart.lock is the BOM). No GitOps controller involved — unlike the old
-// agent-platform meta-package, which rendered Flux HelmReleases and needed a
-// helm-controller on the cluster before `helm install` did anything useful.
-//
-// The chart has no release yet (giantswarm/agent-platform-standalone#11), so
-// it is vendored from git at a pinned SHA and installed from the local path.
-// Once released: swap the vendor step for the OCI ref.
+// The platform is the agent-platform meta chart — the same chart every Giant
+// Swarm management cluster runs — in its LAB SHAPE: the chart brings its own
+// Flux engine (components.flux.enabled, the flux-engine subchart: Flux
+// Operator + one FluxInstance with source- and helm-controller), so `helm
+// install` yields a running platform on a cluster with no Flux; and the chart
+// does NOT manage itself (gitops.self.enabled: false). Self-management would
+// have the bundled helm-controller adopt this release and follow the
+// PUBLISHED chart's version range — the lab installs unreleased charts
+// (platform.chartPath) and dev images, which that HelmRelease would replace
+// with the release it finds in the registry. So the Helm CLI keeps owning the
+// release: `helm upgrade` is the lab's day-2 tool, and this function is the
+// one writer (idempotent `helm upgrade --install`, no post-renderer, no
+// --force-conflicts).
 func PlatformUp(cfg *config.Config) error {
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
@@ -56,114 +76,62 @@ func PlatformUp(cfg *config.Config) error {
 	// no-op, and after a half-failed boot it heals the missing side-loads
 	// before the installs start their rollout waits.
 	reportPreload(loadLabImages(cfg, pullLabImages(cfg)))
-	return platformUp(cfg, nil, "Platform is up.")
+	return platformUp(cfg, "Platform is up.")
 }
 
-// vendorPlatformChart runs ensurePlatformChart in the background so the git
-// fetch and chart-dependency pulls (pure network work) overlap with cluster
-// creation; platformUp joins the buffered channel where the inline path would
-// have vendored.
-func vendorPlatformChart(cfg *config.Config) <-chan error {
-	done := make(chan error, 1)
-	go func() { done <- ensurePlatformChart(cfg) }()
-	return done
+// platformChart is the chart argument of the Helm and template commands: the
+// pinned release from the registry, or a local chart directory.
+type platformChart struct {
+	// ref is what helm takes as the chart: an oci:// URL or a directory.
+	ref string
+	// version is the --version of a registry chart; empty for a directory.
+	version string
 }
 
-// ensurePlatformChart vendors agent-platform-standalone at the pinned ref and
-// builds its chart dependencies. Quiet on purpose: it may run concurrently
-// with other steps' output.
-func ensurePlatformChart(cfg *config.Config) error {
-	chartDir := filepath.Join(apsDir, "helm", "agent-platform-standalone")
-	if _, err := os.Stat(filepath.Join(apsDir, ".git")); os.IsNotExist(err) {
-		if err := runQuiet("git", "init", "-q", apsDir); err != nil {
-			return err
-		}
-		if err := runQuiet("git", "-C", apsDir, "remote", "add", "origin", cfg.Platform.APSRepo); err != nil {
-			return err
-		}
+// args are the helm arguments naming the chart.
+func (c platformChart) args() []string {
+	if c.version == "" {
+		return []string{c.ref}
 	}
-	// Probe with stderr swallowed: a missing commit is the expected trigger
-	// for the fetch, not an error worth showing.
-	if _, err := outputQuiet("git", "-C", apsDir, "cat-file", "-e", cfg.Platform.APSRef+"^{commit}"); err != nil {
-		if err := runQuiet("git", "-C", apsDir, "fetch", "-q", "--depth", "1", "origin", cfg.Platform.APSRef); err != nil {
-			return err
-		}
-	}
-	if err := runQuiet("git", "-C", apsDir, "-c", "advice.detachedHead=false", "checkout", "-q", cfg.Platform.APSRef); err != nil {
-		return err
-	}
+	return []string{c.ref, "--version", c.version}
+}
 
-	// A `helm dependency build` killed mid-flight (this very function runs in
-	// a goroutine that dies with a failed boot) leaves a tmpcharts-<pid>/ dir
-	// inside the chart. Helm's directory loader embeds every file .helmignore
-	// does not exclude into the release record, so that corpse of raw .tgz
-	// archives silently doubles the payload and the install dies with
-	// `Secret "sh.helm.release.v1...." is invalid: data: Too long`. Sweep
-	// unconditionally: the corpse can outlive the digest-match fast path below.
-	stale, err := filepath.Glob(filepath.Join(chartDir, "tmpcharts-*"))
-	if err != nil {
-		return err
+func (c platformChart) String() string {
+	if c.version == "" {
+		return "the local chart at " + c.ref
 	}
-	for _, dir := range stale {
-		if err := os.RemoveAll(dir); err != nil {
-			return err
-		}
-	}
+	return fmt.Sprintf("agent-platform %s", c.version)
+}
 
-	// Subchart .tgz pulls from gsoci/ghcr (anonymous). Skipped when charts/
-	// was last built from exactly this Chart.lock — compared by content digest,
-	// not mtime: mtimes change on checkout and prove nothing about the last
-	// build.
-	lockRaw, err := os.ReadFile(filepath.Join(chartDir, "Chart.lock")) // #nosec G304 -- lab-owned vendored chart path
-	if err != nil {
-		return fmt.Errorf("reading Chart.lock: %w", err)
+// platformChartFor reads the chart source from the config: platform.chartPath
+// wins over the pinned release.
+func platformChartFor(cfg *config.Config) platformChart {
+	if cfg.Platform.ChartPath != "" {
+		return platformChart{ref: cfg.Platform.ChartPath}
 	}
-	lockDigest := hex.EncodeToString(sha256sum(lockRaw))
-	digestFile := filepath.Join(chartDir, "charts", ".lock-digest")
-	if prev, err := os.ReadFile(digestFile); err != nil || string(prev) != lockDigest { // #nosec G304 -- lab-owned digest cache file
-		if err := runQuiet("helm", "dependency", "build", chartDir); err != nil {
-			return err
-		}
-		if err := os.WriteFile(digestFile, []byte(lockDigest), 0o600); err != nil { // #nosec G703 -- digest cache path is built from package constants
-			return err
-		}
-	}
-	return nil
+	return platformChart{ref: config.ChartRepository, version: cfg.Platform.ChartVersion}
 }
 
 // platformUp installs and verifies the platform, then prints the boot's one
 // and only summary under the given header: `up` passes "Lab is up." so the
 // user reads a single "what to do next" block once everything is verified,
 // the standalone `agentlab platform` entry point passes "Platform is up.".
-func platformUp(cfg *config.Config, chartReady <-chan error, header string) error {
-	chartDir := filepath.Join(apsDir, "helm", "agent-platform-standalone")
-
+func platformUp(cfg *config.Config, header string) error {
 	// Also checked at the very top of `agentlab up`; repeated here for the
 	// standalone `agentlab platform` entry point.
 	if err := ensureHelmSupportsPlatform(); err != nil {
 		return err
 	}
-
-	// A cluster still running the old meta-package has Flux HelmReleases under
-	// the same Helm release name; upgrading across that boundary races
-	// helm-controller uninstalls against this install. Start clean instead.
-	if _, err := outputQuiet("kubectl", "-n", platformNamespace, "get", "helmrelease", componentMuster); err == nil {
-		return fmt.Errorf("this cluster runs the old agent-platform meta-package (Flux HelmReleases found);\n" +
-			"run `agentlab platform-down` first, then re-run `agentlab platform`")
-	}
-
-	step("Vendoring agent-platform-standalone @ %.12s (chart + dependencies)", cfg.Platform.APSRef)
-	if chartReady != nil {
-		if err := <-chartReady; err != nil {
-			return err
-		}
-	} else if err := ensurePlatformChart(cfg); err != nil {
+	if err := refuseOlderLabShape(); err != nil {
 		return err
 	}
+	removeLegacyArtifacts()
+	chart := platformChartFor(cfg)
+	step("Installing %s in the lab shape (bundled Flux engine on, self-management off)", chart)
 
 	// The Gateway API CRDs are the chart's documented cluster-level
-	// prerequisite (like the CNPG operator); embedded so the boot needs no
-	// network for them. Idempotent re-apply.
+	// prerequisite; embedded so the boot needs no network for them.
+	// Idempotent re-apply.
 	step("Installing the Gateway API CRDs (standard channel)")
 	if err := pipeInto(gatewayAPICRDs, "kubectl", "apply", "-f", "-"); err != nil {
 		return err
@@ -172,6 +140,21 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 	step("Creating namespace and secrets")
 	if err := ensureNamespace(platformNamespace); err != nil {
 		return err
+	}
+	// The kagent namespace is created here, before the chart. The kagent
+	// chart renders its workloads into it (kagent.namespaceOverride), but its
+	// HelmRelease targets the release namespace like every other component,
+	// so helm-controller's createNamespace never creates it — and the one
+	// chart object that does, the connectivity chart's Namespace, sits in a
+	// release that dependsOn kagent: a first install deadlocks on
+	// `namespaces "kagent" not found` until the retries are exhausted.
+	// Management clusters break the cycle the same way, by creating the
+	// namespace out of band in their bases; the connectivity release adopts
+	// it on install.
+	if cfg.Platform.Agents {
+		if err := ensureNamespace(kagentNamespace); err != nil {
+			return err
+		}
 	}
 	// muster appends this to its system trust pool so it can talk to the lab's
 	// self-signed Dex over TLS (values: muster.muster.extraCaFile); Backstage
@@ -251,25 +234,17 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 		} else if strings.Contains(applied, "configured") {
 			// Backstage reads app-config at startup only, so a changed overlay
 			// (e.g. flipping platform.observability toggles mimirEnabled) needs
-			// a pod roll on re-runs. Started here and absorbed by the umbrella
-			// install's --wait right below; on a fresh install the deployment
-			// does not exist yet and the first pod reads the final config.
+			// a pod roll on re-runs. Started here and absorbed by the install's
+			// --wait right below; on a fresh install the deployment does not
+			// exist yet and the first pod reads the final config.
 			_ = runQuiet("kubectl", "-n", platformNamespace, "rollout", "restart", "deploy/backstage")
-		}
-		// The create flow's Deploy button kube:applies Flux CRs; these two
-		// controllers are the delivery engine that turns them into an
-		// installed agent chart (see fluxUp).
-		if cfg.Platform.Agents {
-			if err := fluxUp(cfg); err != nil {
-				return err
-			}
 		}
 	}
 
-	// Before the umbrella on purpose: the umbrella registers the MCPServer CR
-	// for mcp-prometheus (agent-platform-mcps values), and muster's first dial
-	// should find the server already serving (a failed first dial costs up to
-	// ~60s of retry sweep, HACKS.md U5).
+	// Before the platform on purpose: the Prometheus Operator's CRDs must be
+	// served when the chart renders — its cluster-shape knobs detect
+	// monitoring.coreos.com/v1 once, at render time — and the operator must
+	// exist before the ServiceMonitors the components render.
 	if cfg.Platform.Observability {
 		if err := observabilityUp(cfg); err != nil {
 			return err
@@ -279,8 +254,8 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 	// Managed models: every host model server's endpoint is detected from
 	// the kind docker network and proven reachable from inside the cluster
 	// BEFORE the install, so a host-side misconfiguration (bind address,
-	// firewall) fails here with its fix instead of after helm's ten-minute
-	// wait — for every backend model-manager fronts.
+	// firewall) fails here with its fix instead of after helm's wait — for
+	// every backend model-manager fronts.
 	var backendEndpoints map[string]string
 	if cfg.ModelManagerEnabled() {
 		endpoints, err := resolveBackendEndpoints(cfg)
@@ -296,7 +271,8 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 		}
 	}
 
-	if _, _, err := renderManifest(cfg, "agent-platform-values.yaml.tmpl"); err != nil {
+	_, valuesPath, err := renderManifest(cfg, "agent-platform-values.yaml.tmpl")
+	if err != nil {
 		return err
 	}
 	if _, _, err := renderManifest(cfg, "demo-workflow.yaml.tmpl"); err != nil {
@@ -306,56 +282,63 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 	// Every platform image goes host cache -> node, never kubelet -> network:
 	// the host cache survives `agentlab down`, so even when this very boot
 	// fails later, the next one starts from warm images. Derived from the
-	// charts (not the snapshot manifest) so a first boot and version bumps
-	// are covered too. Best-effort: anything this misses is pulled in-node
-	// under the helm --wait timeouts, exactly as before.
+	// charts as they are about to be installed (the meta chart's own objects,
+	// then every component chart at the version its OCIRepository resolves
+	// to), so a first boot and version bumps are covered too. Best-effort:
+	// anything this misses is pulled in-node under the helm --wait timeout,
+	// exactly as before.
 	step("Side-loading the platform images (the host cache survives `agentlab down`)")
-	if imgs, err := platformImages(chartDir); err != nil {
-		note("cannot derive the platform images from the charts (%v); the node pulls anything missing", err)
-	} else {
-		switch res := sideloadImages(cfg, hostPullImages(imgs)); {
-		case res.err != nil && res.n > 0:
-			note("side-loaded %d of %d platform images (%s); the rest failed (%v) and the node pulls them", res.n, len(imgs), res.d, res.err)
-		case res.err != nil:
-			note("side-loading failed (%v); the node pulls anything missing", res.err)
-		case res.n > 0:
-			note("side-loaded %d of %d platform images (%s)", res.n, len(imgs), res.d)
-		default:
-			note("all %d platform images are already on the node", len(imgs))
+	sideloadPlatformImages(cfg, platformImages(cfg, chart, valuesPath))
+	// The dev images (platform.devImages) are builds of this host: never
+	// pullable, always side-loaded, so their pods find them under
+	// imagePullPolicy IfNotPresent — which is why each ref is then verified
+	// in the node's own image list before the install (ensureNodeImages): a
+	// missing one would surface five minutes later as an ImagePullBackOff,
+	// helm-controller's upgrade timeout and a rollback to the chart's image.
+	if len(cfg.Platform.DevImages) > 0 {
+		refs := devImageRefs(cfg)
+		if res := sideloadImages(cfg, hostPullImages(refs)); res.n > 0 {
+			note("side-loaded %d dev images (%s)", res.n, res.d)
+		}
+		if err := ensureNodeImages(cfg, refs); err != nil {
+			return err
 		}
 	}
-
-	step("Installing agent-platform-standalone (this waits for every workload)")
-	// --wait replaces the old HelmRelease polling: Helm itself owns the
-	// workloads now. The MCPServer/Workflow CRDs ship in the muster subchart's
-	// crds/ dir, which Helm applies before the manifests on first install.
-	// The post-renderer is this very binary (see PostRender): hostNetwork,
-	// the DCR chart-bug workaround, HTTPRoute strip, kagent-ui nodePort pin.
-	// Helm 4 accepts only plugin-type post-renderers, so the binary is wrapped
-	// in a generated plugin (see helmplugin.go) that HELM_PLUGINS points at.
-	// --force-conflicts: Helm 4 applies server-side, and a deployment whose
-	// image was swapped for a dev build with `kubectl set image`/`patch` is
-	// then owned by another field manager — without the flag the upgrade
-	// fails on the conflict instead of reconciling the lab back to the chart,
-	// which is what re-running `agentlab platform` promises (HACKS.md H13).
-	pluginsDir, err := ensurePostRenderPlugin()
-	if err != nil {
-		return err
-	}
-	// The post-renderer adds the dex-localhost sidecar to mcp-kubernetes and
-	// model-manager (postrender.go, item 4); its image is not in the chart
-	// render, so it is side-loaded here.
+	// The dex-localhost sidecar the lab patches onto the MCP servers
+	// (agent-platform-values.yaml.tmpl); its image is in no chart render.
 	if res := sideloadImages(cfg, hostPullImages([]string{dexLocalhostImage})); res.n > 0 {
 		note("side-loaded the dex-localhost sidecar image (%s)", res.d)
 	}
-	if err := runQuietEnv([]string{"HELM_PLUGINS=" + pluginsDir},
-		"helm", "upgrade", "--install", platformRelease, chartDir,
+
+	step("Installing %s (this waits for every component HelmRelease)", chart)
+	// One writer, one command: the plain idempotent upgrade, no post-renderer
+	// (the lab's patches are per-component `postRenderers` VALUES the chart
+	// forwards to the component HelmReleases — see the values template) and
+	// no --force-conflicts (nothing else writes the release's objects: the
+	// dev-image loop goes through the values too). Helm 4's --wait is kstatus
+	// over the chart's objects — the FluxInstance and every platform
+	// HelmRelease among them — so the command returns once the components are
+	// Ready; waitPlatformReleases below then reads the outcome per release.
+	args := append([]string{"upgrade", "--install", platformRelease}, chart.args()...)
+	args = append(args,
 		"-n", platformNamespace,
-		"-f", StateDir+"/agent-platform-values.yaml",
-		"--post-renderer", postRenderPluginName,
-		"--force-conflicts",
-		"--wait", "--timeout", "10m"); err != nil {
+		"-f", valuesPath,
+		"--wait", "--timeout", helmInstallTimeout)
+	if err := runQuiet("helm", args...); err != nil {
+		reportPlatformReleases()
 		return err
+	}
+	if err := waitPlatformReleases(); err != nil {
+		return err
+	}
+
+	// The lab's own MCP server for the Prometheus tools rides the same engine
+	// (a HelmRelease of the mcp-prometheus chart) — after the platform, which
+	// brings the engine and the tenant identity the release runs as.
+	if cfg.Platform.Observability {
+		if err := mcpPrometheusUp(cfg); err != nil {
+			return err
+		}
 	}
 
 	// Every downstream forwards the user's token (auth.forwardToken), so muster
@@ -382,7 +365,7 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 		}
 	}
 	if cfg.Platform.Agents {
-		// agent-manager ships with the umbrella whenever kagent is on and
+		// agent-manager ships with the platform whenever kagent is on and
 		// registers itself the same way (forward-token auth block).
 		step("Waiting for muster to reach agent-manager")
 		if err := waitMCPServerReachable(agentManagerMCPServer); err != nil {
@@ -410,7 +393,7 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 	}
 
 	// The agents' model key. The default ModelConfig (rendered by the kagent
-	// subchart from providers.anthropic) references this secret; agent pods
+	// chart from providers.anthropic) references this secret; agent pods
 	// mount it at run time, so it can land after the install — which it must,
 	// since the chart itself creates the kagent namespace.
 	if cfg.Platform.Agents {
@@ -441,7 +424,7 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 	// The public URL runs client -> agentgateway edge -> muster: reaching it
 	// proves the Gateway is programmed, the data-plane pod serves TLS with the
 	// lab wildcard cert, and the /-route forwards to muster. Retry rather than
-	// probing once: helm --wait covers the Deployments, but the controller
+	// probing once: the component releases are Ready, but the controller
 	// creates the data-plane pod asynchronously after the Gateway lands, and
 	// muster's HTTP listener accepts slightly later.
 	step("Waiting for muster through the edge on %s", cfg.MusterBaseURL())
@@ -472,8 +455,8 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 
 	backstageHint := "  Backstage is disabled (backstage.enabled in agentlab.yaml)."
 	if cfg.Backstage.Enabled {
-		// helm --wait already covered the rollout; this proves the route
-		// through the edge and Backstage's own listener.
+		// The release is Ready; this proves the route through the edge and
+		// Backstage's own listener.
 		step("Waiting for Backstage on %s", cfg.BackstageBaseURL())
 		if waitFor(60, 3*time.Second, func() bool { return httpUp(client, cfg.BackstageBaseURL()) }) {
 			backstageHint = fmt.Sprintf("  Backstage: %s (Sign In -> Dex; users and passwords in %s)",
@@ -487,8 +470,8 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 
 	agentsHint := "  Agents (kagent) are disabled (platform.agents in agentlab.yaml)."
 	if cfg.Platform.Agents {
-		// helm --wait already covered the kagent-ui rollout, so the NodePort
-		// answers as soon as kube-proxy programs it — a short retry suffices.
+		// The kagent release is Ready, so the NodePort answers as soon as
+		// kube-proxy programs it — a short retry suffices.
 		step("Waiting for the kagent UI on %s", cfg.KagentUIBaseURL())
 		uiUp := waitFor(10, 2*time.Second, func() bool {
 			return httpUp(client, cfg.KagentUIBaseURL())
@@ -521,11 +504,159 @@ func platformUp(cfg *config.Config, chartReady <-chan error, header string) erro
 %s
 %s
 %s
-%s`, header, reach, usersBlock(cfg), backstageHint, claudeCodeHint(cfg), agentsHint, modelManagerHint(cfg, backendEndpoints), obsHint, tryItBlock(cfg))
+%s%s`, header, reach, usersBlock(cfg), backstageHint, claudeCodeHint(cfg), agentsHint, modelManagerHint(cfg, backendEndpoints), obsHint, devImagesHint(cfg), tryItBlock(cfg))
 	// Everything the platform runs is in the node now — record it so the next
 	// boot side-loads instead of pulling.
 	snapshotPreloadImages(cfg)
 	return nil
+}
+
+// refuseOlderLabShape stops an install onto a cluster an earlier agentlab
+// built: the standalone umbrella under the same release name, or the Flux
+// controllers the old lab installed itself in flux-system (the chart's own
+// guard refuses a second Flux too, with a message about clusters that run
+// Flux — this one names the actual cause). The lab has no in-place migration
+// on purpose: the kind cluster is throwaway, and `agentlab down && agentlab
+// up` is a clean five-minute slate.
+func refuseOlderLabShape() error {
+	if out, err := outputQuiet("helm", "-n", platformNamespace, "list", "--filter", "^"+platformRelease+"$", "-o", "json"); err == nil &&
+		strings.Contains(out, `"chart":"agent-platform-standalone`) {
+		return fmt.Errorf("this cluster runs the agent-platform-standalone umbrella an earlier agentlab installed;\n" +
+			"the lab installs the agent-platform meta chart now and has no in-place migration:\n" +
+			"run `agentlab down && agentlab up` (or `agentlab platform-down`, then `agentlab platform`)")
+	}
+	if _, err := outputQuiet("helm", "-n", "flux-system", "status", "flux"); err == nil {
+		return fmt.Errorf("this cluster runs the Flux controllers an earlier agentlab installed (release flux in flux-system);\n" +
+			"the agent-platform chart brings its own engine and refuses a second Flux:\n" +
+			"run `agentlab down && agentlab up`")
+	}
+	return nil
+}
+
+// removeLegacyArtifacts deletes what earlier agentlab versions left in the
+// working directory (see legacyVendorDir, legacyHelmPluginsDir). Quiet when
+// there is nothing; a failure to remove is a note, not an error — nothing
+// reads either directory anymore.
+func removeLegacyArtifacts() {
+	for _, dir := range []string{legacyVendorDir, legacyHelmPluginsDir} {
+		if _, err := os.Stat(dir); err != nil {
+			continue
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			note("could not remove %s (left by an earlier agentlab; safe to delete by hand): %v", dir, err)
+			continue
+		}
+		note("removed %s (left by an earlier agentlab; nothing reads it anymore)", dir)
+	}
+}
+
+// platformReleaseStatus is one platform HelmRelease as helm-controller
+// reports it: the Ready condition's status ("True", "False" or "" before the
+// first reconcile) and its message.
+type platformReleaseStatus struct {
+	name, ready, message string
+}
+
+// platformReleases lists the HelmReleases in the platform namespace — the
+// component releases the meta chart rendered plus the lab's own
+// (mcp-prometheus) — with their Ready condition.
+func platformReleases() ([]platformReleaseStatus, error) {
+	out, err := outputQuiet("kubectl", "-n", platformNamespace, "get", "helmreleases.helm.toolkit.fluxcd.io",
+		"-o", `jsonpath={range .items[*]}{.metadata.name}{"\t"}{.status.conditions[?(@.type=="Ready")].status}{"\t"}{.status.conditions[?(@.type=="Ready")].message}{"\n"}{end}`)
+	if err != nil {
+		return nil, err
+	}
+	var releases []platformReleaseStatus
+	for line := range strings.Lines(out) {
+		fields := strings.SplitN(strings.TrimRight(line, "\n"), "\t", 3)
+		if len(fields) < 2 || fields[0] == "" {
+			continue
+		}
+		rel := platformReleaseStatus{name: fields[0], ready: fields[1]}
+		if len(fields) == 3 {
+			rel.message = fields[2]
+		}
+		releases = append(releases, rel)
+	}
+	return releases, nil
+}
+
+// waitPlatformReleases waits for every platform HelmRelease to be Ready and
+// names the ones that are not, with helm-controller's own message. Helm's
+// --wait already covered them (kstatus), so this is normally instant; it is
+// the readable report when it was not, and the guard against a release the
+// wait could not see (one created after Helm returned).
+func waitPlatformReleases() error {
+	var pending []platformReleaseStatus
+	var readErr error
+	ready := waitFor(60, 5*time.Second, func() bool {
+		var releases []platformReleaseStatus
+		releases, readErr = platformReleases()
+		if readErr != nil {
+			return false
+		}
+		pending = pending[:0]
+		for _, r := range releases {
+			if r.ready != conditionTrue {
+				pending = append(pending, r)
+			}
+			// helm-controller gave up on this one: no point waiting out the
+			// clock, the message says why.
+			if r.ready == "False" && strings.Contains(r.message, "retries exhausted") {
+				readErr = fmt.Errorf("HelmRelease %s failed: %s", r.name, r.message)
+				return true
+			}
+		}
+		return len(pending) == 0
+	})
+	if readErr != nil {
+		return fmt.Errorf("%w\ncheck `kubectl -n %s describe helmrelease` and `agentlab logs <component>`", readErr, platformNamespace)
+	}
+	if !ready {
+		var lines []string
+		for _, r := range pending {
+			lines = append(lines, fmt.Sprintf("  %s: Ready=%s %s", r.name, orNone(r.ready), r.message))
+		}
+		return fmt.Errorf("platform HelmReleases not Ready after 5 minutes:\n%s\ncheck `kubectl -n %s describe helmrelease <name>` and `kubectl -n %s get pods`",
+			strings.Join(lines, "\n"), platformNamespace, platformNamespace)
+	}
+	return nil
+}
+
+// reportPlatformReleases notes the not-Ready platform HelmReleases after a
+// failed install, so a `helm upgrade --wait` timeout reads as the component
+// that held it up rather than a bare "timed out waiting".
+func reportPlatformReleases() {
+	releases, err := platformReleases()
+	if err != nil {
+		return
+	}
+	for _, r := range releases {
+		if r.ready != conditionTrue {
+			note("HelmRelease %s: Ready=%s %s", r.name, orNone(r.ready), r.message)
+		}
+	}
+}
+
+func orNone(s string) string {
+	if s == "" {
+		return "(none yet)"
+	}
+	return s
+}
+
+// devImagesHint lists the dev images in the boot summary, so a lab running a
+// build of yours says so where you look first.
+func devImagesHint(cfg *config.Config) string {
+	if len(cfg.Platform.DevImages) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n  Dev images (platform.devImages; remove the entry and re-run `agentlab platform` to restore the chart's):\n")
+	for _, name := range slices.Sorted(maps.Keys(cfg.Platform.DevImages)) {
+		fmt.Fprintf(&b, "    %-16s %s\n", name, cfg.Platform.DevImages[name])
+	}
+	return b.String()
 }
 
 // waitMCPServerConnected polls one muster MCPServer CR (in the platform
@@ -590,25 +721,6 @@ func claudeCodeHint(cfg *config.Config) string {
 	return b.String()
 }
 
-// platformImages derives the platform's image refs from the chart exactly
-// as it is about to be installed: helm-template the vendored umbrella chart
-// (mcp-kubernetes included, as a bundled dependency) with the rendered lab
-// values, then scrape the image fields. The runtime-composed images this
-// cannot see (the ADK runtime tags kagent builds from its ConfigMap) are
-// covered by healADKImages and the snapshot manifest.
-func platformImages(chartDir string) ([]string, error) {
-	umbrella, err := outputQuiet("helm", "template", platformRelease, chartDir,
-		"-n", platformNamespace, "-f", StateDir+"/agent-platform-values.yaml")
-	if err != nil {
-		return nil, fmt.Errorf("templating agent-platform-standalone: %w", err)
-	}
-	imgs := scrapeImages(umbrella)
-	if len(imgs) == 0 {
-		return nil, fmt.Errorf("no image fields found in the rendered chart")
-	}
-	return imgs, nil
-}
-
 // ensureMusterValidatesTokens proves the auth path end to end (Dex password
 // grant -> Bearer on /mcp) and heals the one known way it silently breaks:
 // muster can come up with a TLS trust pool that is missing the extra CA
@@ -649,11 +761,6 @@ func ensureMusterValidatesTokens(cfg *config.Config) error {
 	return nil
 }
 
-func sha256sum(b []byte) []byte {
-	h := sha256.Sum256(b)
-	return h[:]
-}
-
 func randHex(n int) string {
 	buf := make([]byte, n)
 	if _, err := rand.Read(buf); err != nil {
@@ -668,4 +775,47 @@ func randBase64(n int) string {
 		panic(err)
 	}
 	return base64.StdEncoding.EncodeToString(buf)
+}
+
+// ensureNodeImages checks that every ref is in the node's image list as the
+// kubelet sees it (crictl), side-loads what is missing once more, and fails
+// naming the ref when it still is not there — before the install, so a dev
+// image the node never got is a one-line error with its fix rather than a
+// five-minute helm-controller timeout and a rollback. `kind load` re-tags on
+// the node when an image's ID is already there instead of importing it, and
+// that tag has been seen to miss the node's image list on a first load.
+func ensureNodeImages(cfg *config.Config, refs []string) error {
+	have, err := nodeImageTags(cfg.ControlPlaneNode())
+	if err != nil {
+		return fmt.Errorf("listing the node's images: %w", err)
+	}
+	missing := missingImages(have, refs)
+	if len(missing) == 0 {
+		return nil
+	}
+	note("%d dev images are not on the node yet (%s); side-loading them again", len(missing), strings.Join(missing, ", "))
+	if _, err := kindLoadImages(cfg, missing); err != nil {
+		note("side-loading again failed: %v", err)
+	}
+	if have, err = nodeImageTags(cfg.ControlPlaneNode()); err != nil {
+		return fmt.Errorf("listing the node's images: %w", err)
+	}
+	if still := missingImages(have, refs); len(still) > 0 {
+		return fmt.Errorf("dev images not on the node %s after side-loading: %s\n"+
+			"check `docker image inspect <ref>` on the host and `kind load docker-image --name %s <ref>`,\n"+
+			"then re-run `agentlab platform`", cfg.ControlPlaneNode(), strings.Join(still, ", "), cfg.ClusterName)
+	}
+	note("all %d dev images are on the node", len(refs))
+	return nil
+}
+
+// missingImages is the subset of want that have does not list.
+func missingImages(have, want []string) []string {
+	var missing []string
+	for _, ref := range want {
+		if !slices.Contains(have, ref) {
+			missing = append(missing, ref)
+		}
+	}
+	return missing
 }

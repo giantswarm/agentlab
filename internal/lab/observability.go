@@ -9,8 +9,8 @@ import (
 	"github.com/giantswarm/agentlab/internal/config"
 )
 
-// The observability stack is not part of the umbrella chart's BOM, so the lab
-// pins its two charts itself, flux.go-style (Go consts, bumped deliberately).
+// The observability stack is not part of the agent-platform chart, so the lab
+// pins its two charts itself (Go consts, bumped deliberately).
 //
 // kube-prometheus-stack is the Giant Swarm wrapper chart — the exact
 // constituent (chart, version, registry, images) the observability-bundle
@@ -23,13 +23,14 @@ import (
 const (
 	kpsChartVersion = "22.0.0" // wraps upstream kube-prometheus-stack 87.3.0
 	// 0.8.0: OAuth provider switch and tenancy mode `none` (a single-tenant
-	// Prometheus behind muster; the lab's identity proofs need both).
+	// Prometheus behind muster; the lab's identity proofs need both). An exact
+	// version: the OCIRepository's semver range is this pin.
 	mcpPrometheusChartVersion = "0.8.0"
 )
 
-// observabilityNamespace also appears in the templates (the PROMETHEUS_URL in
-// mcp-prometheus-values and the MCPServer URL in agent-platform-values), which
-// must stay in agreement.
+// observabilityNamespace also appears in the templates (the PROMETHEUS_URL and
+// targetNamespace in mcp-prometheus.yaml.tmpl, the MCPServer URL in
+// agent-platform-values), which must stay in agreement.
 const observabilityNamespace = "monitoring"
 
 const (
@@ -40,42 +41,30 @@ const (
 	mcpPrometheusRelease = "mcp-prometheus"
 )
 
-// observabilityUp installs the minimal observability stack: the GS
-// kube-prometheus-stack (operator + CRDs + kube-state-metrics + node-exporter
-// + a Prometheus scraping kubelet/cAdvisor) and mcp-prometheus, the MCP server
-// muster registers via the umbrella's agent-platform-mcps values (see
-// agent-platform-values.yaml.tmpl) and forwards the user's Dex id_token to.
-// Runs BEFORE the umbrella install so muster's first dial of the MCPServer CR
-// finds a listener.
+// observabilityUp installs the lab Prometheus: the GS kube-prometheus-stack
+// (operator + CRDs + kube-state-metrics + node-exporter + a Prometheus
+// scraping kubelet/cAdvisor) and the edge route Backstage queries it through.
+// Runs BEFORE the platform chart on purpose: the chart's cluster-shape knobs
+// detect monitoring.coreos.com/v1 once, at render time, and the components'
+// ServiceMonitors need the operator. The MCP server for it (mcp-prometheus)
+// follows the platform — see mcpPrometheusUp.
 func observabilityUp(cfg *config.Config) error {
-	step("Installing the observability stack (kube-prometheus-stack %s + mcp-prometheus %s)",
-		kpsChartVersion, mcpPrometheusChartVersion)
+	step("Installing the observability stack (kube-prometheus-stack %s)", kpsChartVersion)
 	if err := installOCIChart(cfg, kpsRelease,
 		"oci://gsoci.azurecr.io/charts/giantswarm/kube-prometheus-stack",
-		kpsChartVersion, "kube-prometheus-stack-values.yaml.tmpl", false); err != nil {
+		kpsChartVersion, "kube-prometheus-stack-values.yaml.tmpl"); err != nil {
 		return err
 	}
 	// mcp-prometheus runs as an OAuth resource server against the lab Dex
-	// (mcp-prometheus-values.yaml.tmpl): it needs the lab CA in its own
-	// namespace to verify Dex's certificate, so the Secret muster and
-	// Backstage use in agent-platform is mirrored here before the install.
+	// (mcp-prometheus.yaml.tmpl): it needs the lab CA in its own namespace to
+	// verify Dex's certificate, so the Secret muster and Backstage use in
+	// agent-platform is mirrored here.
 	if err := ensureNamespace(observabilityNamespace); err != nil {
 		return err
 	}
 	if err := ensureSecretFromFiles(observabilityNamespace, "dex-ca", map[string]string{
 		"ca.crt": caCertPath,
 	}); err != nil {
-		return err
-	}
-	// Through the lab post-renderer: mcp-prometheus gets the dex-localhost
-	// sidecar that makes the issuer URL (https://localhost:<DexPort>)
-	// reachable from inside the pod (postrender.go, item 4).
-	if res := sideloadImages(cfg, hostPullImages([]string{dexLocalhostImage})); res.n > 0 {
-		note("side-loaded the dex-localhost sidecar image (%s)", res.d)
-	}
-	if err := installOCIChart(cfg, mcpPrometheusRelease,
-		"oci://gsoci.azurecr.io/charts/giantswarm/mcp-prometheus",
-		mcpPrometheusChartVersion, "mcp-prometheus-values.yaml.tmpl", true); err != nil {
 		return err
 	}
 
@@ -117,18 +106,60 @@ func observabilityUp(cfg *config.Config) error {
 	return nil
 }
 
+// mcpPrometheusTemplate renders the lab's mcp-prometheus release: a Flux
+// OCIRepository + HelmRelease in the platform namespace, installed into the
+// observability namespace by the platform's bundled helm-controller as the
+// tenant identity the chart renders (agent-platform-flux).
+const mcpPrometheusTemplate = "mcp-prometheus.yaml.tmpl"
+
+// mcpPrometheusUp registers the Prometheus MCP server with the engine: the
+// lab's one release outside the meta chart rides the same helm-controller, so
+// its lab-only dex-localhost sidecar is a postRenderers patch like the
+// platform components' (postrenderers.go) — no post-renderer binary, no
+// second Helm writer. muster registers the server through the platform's
+// agent-platform-mcps values (agent-platform-values.yaml.tmpl) and forwards
+// the user's Dex id_token to it. Runs after the platform install: the Flux
+// CRDs and the tenant ServiceAccount come with the chart.
+func mcpPrometheusUp(cfg *config.Config) error {
+	step("Installing mcp-prometheus %s through the platform's engine", mcpPrometheusChartVersion)
+	_, path, err := renderManifest(cfg, mcpPrometheusTemplate)
+	if err != nil {
+		return err
+	}
+	if err := runQuiet("kubectl", "apply", "-f", path); err != nil {
+		return err
+	}
+	var status platformReleaseStatus
+	ready := waitFor(60, 5*time.Second, func() bool {
+		releases, err := platformReleases()
+		if err != nil {
+			return false
+		}
+		for _, r := range releases {
+			if r.name == mcpPrometheusRelease {
+				status = r
+				return r.ready == conditionTrue
+			}
+		}
+		return false
+	})
+	if !ready {
+		return notReached("HelmRelease "+mcpPrometheusRelease, "Ready", status.ready, fmt.Errorf("%s", status.message),
+			fmt.Sprintf("check `kubectl -n %s describe helmrelease %s` and `kubectl -n %s get pods`", platformNamespace, mcpPrometheusRelease, observabilityNamespace))
+	}
+	return nil
+}
+
 // installOCIChart renders the values template and installs one pinned OCI
 // chart into the observability namespace, side-loading its images first (the
-// same host-cache -> node rule as the platform; see flux.go for the pattern
-// and preload.go for the rule).
-// postRender routes the release through the lab post-renderer (PostRender).
-func installOCIChart(cfg *config.Config, release, chartRef, version, valuesTmpl string, postRender bool) error {
+// same host-cache -> node rule as the platform; see preload.go).
+func installOCIChart(cfg *config.Config, release, chartRef, version, valuesTmpl string) error {
 	_, valuesPath, err := renderManifest(cfg, valuesTmpl)
 	if err != nil {
 		return err
 	}
-	// Best-effort, like flux.go: anything missed is pulled in-node under the
-	// --wait timeout, and the snapshot manifest catches it for the next boot.
+	// Best-effort: anything missed is pulled in-node under the --wait timeout,
+	// and the snapshot manifest catches it for the next boot.
 	if rendered, err := outputQuiet("helm", "template", release, chartRef,
 		"--version", version,
 		"-n", observabilityNamespace, "-f", valuesPath); err == nil {
@@ -138,18 +169,9 @@ func installOCIChart(cfg *config.Config, release, chartRef, version, valuesTmpl 
 			}
 		}
 	}
-	args := []string{"upgrade", "--install", release, chartRef,
+	return runQuiet("helm", "upgrade", "--install", release, chartRef,
 		"--version", version,
 		"-n", observabilityNamespace, "--create-namespace",
 		"-f", valuesPath,
-		"--wait", "--timeout", "5m"}
-	if !postRender {
-		return runQuiet("helm", args...)
-	}
-	pluginsDir, err := ensurePostRenderPlugin()
-	if err != nil {
-		return err
-	}
-	args = append(args, "--post-renderer", postRenderPluginName)
-	return runQuietEnv([]string{"HELM_PLUGINS=" + pluginsDir}, "helm", args...)
+		"--wait", "--timeout", "5m")
 }
