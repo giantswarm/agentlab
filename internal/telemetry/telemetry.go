@@ -70,7 +70,7 @@ func Enabled() bool {
 // TAB press), `completion` runs on every shell start once sourced from a
 // profile, and `help` is help. None of those count.
 func Command(cmd *cobra.Command) {
-	if !Enabled() || !userFacing(cmd) {
+	if !Enabled() || !UserFacing(cmd) {
 		return
 	}
 	testMode := os.Getenv(TestModeEnv) != ""
@@ -90,9 +90,9 @@ func Command(cmd *cobra.Command) {
 	}
 }
 
-// userFacing says whether cmd is something a person runs on purpose: not
+// UserFacing says whether cmd is something a person runs on purpose: not
 // hidden, and not cobra's built-in completion or help trees.
-func userFacing(cmd *cobra.Command) bool {
+func UserFacing(cmd *cobra.Command) bool {
 	for c := cmd; c != nil; c = c.Parent() {
 		if c.Hidden {
 			return false

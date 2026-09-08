@@ -53,8 +53,8 @@ func TestUserFacingSkipsPlumbingCompletionAndHelp(t *testing.T) {
 		{[]string{"completion", "zsh"}, false},
 		{[]string{"help"}, false},
 	} {
-		if got := userFacing(lab(t, tc.path...)); got != tc.want {
-			t.Errorf("userFacing(%v) = %v, want %v", tc.path, got, tc.want)
+		if got := UserFacing(lab(t, tc.path...)); got != tc.want {
+			t.Errorf("UserFacing(%v) = %v, want %v", tc.path, got, tc.want)
 		}
 	}
 }
