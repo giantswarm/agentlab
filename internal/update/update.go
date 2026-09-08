@@ -1,14 +1,20 @@
 // Package update keeps the agentlab binary current. `agentlab self-update`
 // installs the newest GitHub release over the running executable, the way
 // muster and mcp-kubernetes do it (creativeprojects/go-selfupdate against the
-// repository's releases; a development build is refused). Remind prints a
-// one-line hint ahead of every command while a newer release exists — the
-// per-command check devctl runs, with two deliberate differences: it never
-// blocks (an outdated lab still runs), and it gives up fast when GitHub cannot
-// be reached, so a machine without internet is never held up. GitHub's answer
-// is remembered under the user's cache directory for an hour (a failed attempt
-// for ten minutes), so the round trip is rare, and capped at two seconds when
-// it happens.
+// repository's releases; a development build is refused) — and only after the
+// release's cosign Sigstore bundle verifies: architect signs every binary it
+// publishes in CircleCI, keyless, and the shared validator
+// (github.com/giantswarm/selfupdate-cosign) checks the download against that
+// signature before anything is written. A release without a bundle, or a
+// download that does not match its bundle, is refused and the installed
+// binary stays as it is. Remind prints a one-line hint ahead of every command
+// while a newer release exists — the per-command check devctl runs, with two
+// deliberate differences: it never blocks (an outdated lab still runs), and it
+// gives up fast when GitHub cannot be reached, so a machine without internet
+// is never held up. GitHub's answer is remembered under the user's cache
+// directory for an hour (a failed attempt for ten minutes), so the round trip
+// is rare, and capped at two seconds when it happens. The hint installs
+// nothing, so it does not ask for a bundle.
 package update
 
 import (
@@ -24,6 +30,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/creativeprojects/go-selfupdate"
+	selfupdatecosign "github.com/giantswarm/selfupdate-cosign"
 
 	"github.com/giantswarm/agentlab/pkg/project"
 )
@@ -31,7 +38,8 @@ import (
 // Repository is the GitHub repository whose releases carry the binaries. Its
 // assets are named agentlab-<os>-<arch> (agentlab-windows-<arch>.exe), the
 // shape go-selfupdate picks out for the running OS and architecture by
-// itself; the .bundle signatures next to them never match.
+// itself, each next to its cosign Sigstore bundle (agentlab-<os>-<arch>.bundle)
+// — the signature self-update verifies the download against.
 const Repository = "giantswarm/agentlab"
 
 // OptOutEnv silences the newer-release hint when set to any value. The
@@ -64,9 +72,12 @@ var remindTimeout = 2 * time.Second
 // `version check`.
 var ErrOutdated = errors.New("a newer agentlab release is available")
 
-// Seams the tests replace: the release source (GitHub), the cache location
-// ("" disables the cache), the clock, the executable to replace and the
-// running version.
+// Seams the tests replace: the release source (GitHub), the signature check
+// (the shared cosign validator for releases of Repository: it pins the
+// CircleCI issuer, a CircleCI pipeline as the subject and this repository as
+// the source, against the Sigstore public-good trust root), the cache
+// location ("" disables the cache), the clock, the executable to replace and
+// the running version.
 var (
 	newSource = func() selfupdate.Source {
 		// The error is for GitHub Enterprise URLs only; nil makes NewUpdater
@@ -78,7 +89,8 @@ var (
 		}
 		return src
 	}
-	cacheDir = func() string {
+	newValidator = func() selfupdate.Validator { return selfupdatecosign.New(Repository) }
+	cacheDir     = func() string {
 		dir, err := os.UserCacheDir()
 		if err != nil {
 			return ""
@@ -113,12 +125,17 @@ func Remind(ctx context.Context, w io.Writer) {
 }
 
 // Run is `agentlab self-update`. It looks up the newest release and, unless
-// checkOnly, downloads the binary for this OS and architecture over the
-// running executable — the flow muster and mcp-kubernetes ship. Progress goes
-// to w. A development build is refused: "dev" compares with nothing and was
-// not installed from a release to begin with. With checkOnly the versions are
+// checkOnly, downloads the binary for this OS and architecture and its
+// Sigstore bundle, verifies the one against the other, and only then writes
+// it over the running executable — the flow muster and mcp-kubernetes ship.
+// Progress goes to w. A development build is refused: "dev" compares with
+// nothing and was not installed from a release to begin with. A release
+// without a bundle for this platform's binary is refused before anything is
+// downloaded, a download that does not verify before anything is written;
+// both leave the executable as it is. With checkOnly the versions are
 // reported and the result is ErrOutdated when a newer release exists, nil when
-// nothing newer is out.
+// nothing newer is out — and the same refusal when the newest release has no
+// bundle, since self-update would install nothing from it.
 func Run(ctx context.Context, w io.Writer, checkOnly bool) error {
 	current := currentVersion()
 	if _, err := semver.NewVersion(current); err != nil {
@@ -127,8 +144,13 @@ func Run(ctx context.Context, w io.Writer, checkOnly bool) error {
 	_, _ = fmt.Fprintf(w, "Current version: %s\n", current)
 	_, _ = fmt.Fprintf(w, "Looking up the latest release of %s...\n", Repository)
 	lookup, cancel := context.WithTimeout(ctx, selfUpdateTimeout)
-	up, rel, found, err := detect(lookup)
+	up, rel, found, err := detect(lookup, newValidator())
 	cancel()
+	if errors.Is(err, selfupdate.ErrValidationAssetNotFound) {
+		// go-selfupdate found the newest release with a binary for this
+		// platform but no bundle next to it; nothing has been downloaded.
+		return fmt.Errorf("the latest release of %s has no signature bundle for this platform's binary, so it cannot be verified; refusing to install it: %w", Repository, err)
+	}
 	if err != nil {
 		return fmt.Errorf("looking up the latest release of %s: %w (is this machine online?)", Repository, err)
 	}
@@ -152,18 +174,24 @@ func Run(ctx context.Context, w io.Writer, checkOnly bool) error {
 		return fmt.Errorf("locating the running executable: %w", err)
 	}
 	_, _ = fmt.Fprintf(w, "Updating %s to %s...\n", exe, latest)
+	// Downloads the binary and its bundle, verifies, then replaces the file;
+	// a failed verification leaves it untouched.
 	if err := up.UpdateTo(ctx, rel, exe); err != nil {
-		return fmt.Errorf("updating %s: %w", exe, err)
+		return fmt.Errorf("updating %s failed, it is unchanged: %w", exe, err)
 	}
-	_, _ = fmt.Fprintf(w, "Updated to %s.\n", latest)
+	_, _ = fmt.Fprintf(w, "Verified the signature and updated to %s.\n", latest)
 	return nil
 }
 
 // detect asks GitHub for the newest release with a binary for this platform
 // (found is false when none has one). The updater comes back with the release
-// because the download has to go through the same source.
-func detect(ctx context.Context) (up *selfupdate.Updater, rel *selfupdate.Release, found bool, err error) {
-	up, err = selfupdate.NewUpdater(selfupdate.Config{Source: newSource()})
+// because the download has to go through the same source. With a validator,
+// the release must also carry the validator's bundle for that binary — else
+// the error wraps selfupdate.ErrValidationAssetNotFound — and UpdateTo checks
+// the download against it; nil asks for no bundle, for a caller that installs
+// nothing.
+func detect(ctx context.Context, validator selfupdate.Validator) (up *selfupdate.Updater, rel *selfupdate.Release, found bool, err error) {
+	up, err = selfupdate.NewUpdater(selfupdate.Config{Source: newSource(), Validator: validator})
 	if err != nil {
 		return nil, nil, false, err
 	}
@@ -195,7 +223,9 @@ func newer(latest, current string) bool {
 }
 
 // rememberedLatest is the newest release version: from the cache while it is
-// current, else from GitHub within remindTimeout — "" when neither knows.
+// current, else from GitHub within remindTimeout — "" when neither knows. The
+// hint installs nothing, so it asks for no bundle: a release self-update would
+// refuse is still a newer release worth knowing about.
 func rememberedLatest(ctx context.Context) string {
 	c := load()
 	at := now()
@@ -204,7 +234,7 @@ func rememberedLatest(ctx context.Context) string {
 	}
 	ctx, cancel := context.WithTimeout(ctx, remindTimeout)
 	defer cancel()
-	_, rel, found, err := detect(ctx)
+	_, rel, found, err := detect(ctx, nil)
 	switch {
 	case err != nil:
 		// Keep the previous answer, if any: it is still the best this
