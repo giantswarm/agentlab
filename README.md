@@ -51,6 +51,10 @@ curl -Lo agentlab https://github.com/giantswarm/agentlab/releases/latest/downloa
 chmod +x agentlab
 ```
 
+Keep it current with `agentlab self-update`. Every command also starts with a
+one-line hint on stderr while a newer release is out — a hint, never a gate:
+an outdated agentlab keeps working (see "Keeping agentlab current").
+
 Then bring the lab up:
 
 ```bash
@@ -1327,6 +1331,34 @@ instead:
 
 Both give real groups on any Dex version. Keycloak is not needed for this.
 
+## Keeping agentlab current
+
+`agentlab self-update` replaces the running binary with the latest GitHub
+release for your OS and architecture — the command muster and mcp-kubernetes
+have too. `agentlab self-update --check` only reports the running and the
+latest version, with exit status 125 when a newer one exists (for scripts). A
+binary without a release version (`agentlab --version` says `dev`) is
+refused: reinstall it from a release or with `go install`. A `go build` from
+a checkout carries Go's pseudo-version (`v0.19.3-0.20260908…-8536d36`) and
+is treated as what it is: after the tag before it, before the tag after it.
+
+Every command also starts with a one-line hint on stderr while a newer
+release is out — devctl's per-command check, with two deliberate differences:
+
+- **A hint, never a gate.** An outdated agentlab runs every command the same;
+  nothing waits for you to update.
+- **It gives up fast.** The GitHub round trip is capped at two seconds, and
+  its answer is cached for an hour under your user cache directory
+  (`~/.cache/agentlab/latest-release.json` on Linux,
+  `~/Library/Caches/agentlab/` on macOS). A failed attempt is remembered for
+  ten minutes, so a machine without internet is not held up on every command,
+  and the last known answer keeps being shown meanwhile. A `GITHUB_TOKEN` in
+  the environment is used when present; it only lifts GitHub's anonymous
+  rate limit.
+
+`AGENTLAB_NO_UPDATE_CHECK=1` silences the hint (`self-update` itself always
+works); `dev` builds never check.
+
 ## Usage data (telemetry)
 
 Since v0.17.0, agentlab reports **one anonymous usage signal per command you
@@ -1376,6 +1408,7 @@ main.go                        the CLI (cobra): one subcommand per lifecycle ste
 internal/config/               agentlab.yaml schema, defaults, validation
 internal/forms/                the interactive configuration forms (huh)
 internal/telemetry/            the one anonymous usage signal per command (TelemetryDeck; see "Usage data")
+internal/update/               agentlab self-update + the newer-release hint before every command (go-selfupdate; see "Keeping agentlab current")
 pkg/project/                   version, commit, build time: ldflags from make/CI, else Go's VCS build info (`agentlab --version`)
 internal/lab/                  everything operational:
   certs.go                       the name-constrained lab CA + 825-day leaf certs

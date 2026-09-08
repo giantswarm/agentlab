@@ -128,6 +128,7 @@ go test ./internal/forms/ -run TestMinimalFormDrive -count=1 -v   # single test
 ./agentlab reload          # re-render + re-apply Dex after editing agentlab.yaml
 ./agentlab logs <dex|muster|backstage>
 ./agentlab render          # write every manifest to state/ without applying
+./agentlab self-update     # replace the binary with the latest GitHub release (--check only reports; exit 125 when outdated)
 ```
 
 The lab's own e2e checks are the `*-test` subcommands, not `go test`.
@@ -152,6 +153,16 @@ The lab's own e2e checks are the `*-test` subcommands, not `go test`.
   `AGENTLAB_TELEMETRY_OPTOUT`, `DO_NOT_TRACK=1`. When iterating on the lab,
   `AGENTLAB_TELEMETRY_TESTMODE=1` keeps the runs out of the production
   numbers (and logs delivery errors). Details in README "Usage data".
+- `internal/update` — `agentlab self-update` (creativeprojects/go-selfupdate
+  against the GitHub releases; the command muster and mcp-kubernetes ship)
+  and `Remind`, the newer-release hint the root `PersistentPreRun` prints on
+  stderr before every user-facing command except `self-update`. A hint,
+  never a gate: the command runs whatever the version. GitHub is asked at
+  most once an hour (`latest-release.json` under `os.UserCacheDir()/agentlab`)
+  with a two-second cap, and a failed attempt is remembered for ten minutes,
+  so an offline machine is not held up. `AGENTLAB_NO_UPDATE_CHECK=1`
+  silences it; `dev` builds never check and cannot self-update. Details in
+  README "Keeping agentlab current".
 - `pkg/project` — the build identity (`Version()`, `GitSHA()`,
   `BuildTimestamp()`): stamped by the devctl Makefile / architect CI through
   `-ldflags -X`, else Go's VCS build info (`v0.16.6`, a pseudo-version

@@ -1,0 +1,401 @@
+package update
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/creativeprojects/go-selfupdate"
+)
+
+// fakeSource stands in for GitHub: the releases it lists, how it fails, and
+// what every download returns.
+type fakeSource struct {
+	releases []selfupdate.SourceRelease
+	err      error  // ListReleases fails with it
+	hang     bool   // ListReleases waits for the context: a network that swallows packets
+	binary   []byte // what every asset download returns
+	calls    atomic.Int32
+}
+
+func (s *fakeSource) ListReleases(ctx context.Context, _ selfupdate.Repository) ([]selfupdate.SourceRelease, error) {
+	s.calls.Add(1)
+	if s.hang {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.releases, nil
+}
+
+func (s *fakeSource) DownloadReleaseAsset(context.Context, *selfupdate.Release, int64) (io.ReadCloser, error) {
+	return io.NopCloser(bytes.NewReader(s.binary)), nil
+}
+
+type fakeAsset struct {
+	id   int64
+	name string
+}
+
+func (a fakeAsset) GetID() int64                  { return a.id }
+func (a fakeAsset) GetName() string               { return a.name }
+func (a fakeAsset) GetSize() int                  { return 3 }
+func (a fakeAsset) GetBrowserDownloadURL() string { return "https://example.test/" + a.name }
+
+type fakeRelease struct {
+	tag        string
+	prerelease bool
+	draft      bool
+	assets     []selfupdate.SourceAsset
+}
+
+func (r fakeRelease) GetID() int64              { return 1 }
+func (r fakeRelease) GetTagName() string        { return r.tag }
+func (r fakeRelease) GetDraft() bool            { return r.draft }
+func (r fakeRelease) GetPrerelease() bool       { return r.prerelease }
+func (r fakeRelease) GetPublishedAt() time.Time { return time.Date(2026, 9, 8, 10, 0, 0, 0, time.UTC) }
+func (r fakeRelease) GetReleaseNotes() string   { return "notes" }
+func (r fakeRelease) GetName() string           { return r.tag }
+func (r fakeRelease) GetURL() string {
+	return "https://github.com/giantswarm/agentlab/releases/tag/" + r.tag
+}
+func (r fakeRelease) GetAssets() []selfupdate.SourceAsset { return r.assets }
+
+// The running binary and the release the fake GitHub carries in most tests.
+const (
+	running = "v0.19.2"
+	latestV = "v0.19.3"
+)
+
+// binaryName is the asset architect publishes for this platform.
+func binaryName() string {
+	name := "agentlab-" + runtime.GOOS + "-" + runtime.GOARCH
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	return name
+}
+
+// release is a GitHub release the way architect publishes agentlab's: one
+// binary per platform next to its cosign bundle — the bundle first, to prove
+// the binary is the one picked.
+func release(tag string) fakeRelease {
+	return fakeRelease{tag: tag, assets: []selfupdate.SourceAsset{
+		fakeAsset{1, binaryName() + ".bundle"},
+		fakeAsset{2, binaryName()},
+	}}
+}
+
+// fixture is a lab with src as GitHub, its own cache directory, a clock the
+// test moves and the given running version.
+type fixture struct {
+	src *fakeSource
+	dir string
+	at  time.Time
+}
+
+func lab(t *testing.T, current string, src *fakeSource) *fixture {
+	t.Helper()
+	f := &fixture{src: src, dir: t.TempDir(), at: time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)}
+	t.Setenv(OptOutEnv, "")
+	prevSource, prevDir, prevNow, prevVersion, prevExe, prevTimeout := newSource, cacheDir, now, currentVersion, executable, remindTimeout
+	newSource = func() selfupdate.Source { return src }
+	cacheDir = func() string { return f.dir }
+	now = func() time.Time { return f.at }
+	currentVersion = func() string { return current }
+	t.Cleanup(func() {
+		newSource, cacheDir, now, currentVersion, executable, remindTimeout = prevSource, prevDir, prevNow, prevVersion, prevExe, prevTimeout
+	})
+	return f
+}
+
+func (f *fixture) advance(d time.Duration) { f.at = f.at.Add(d) }
+
+func (f *fixture) cached(t *testing.T) cache {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(f.dir, cacheFile))
+	if err != nil {
+		t.Fatalf("reading the cache: %v", err)
+	}
+	var c cache
+	if err := json.Unmarshal(data, &c); err != nil {
+		t.Fatalf("cache is not JSON: %v\n%s", err, data)
+	}
+	return c
+}
+
+func remind(t *testing.T) string {
+	t.Helper()
+	var out bytes.Buffer
+	Remind(context.Background(), &out)
+	return out.String()
+}
+
+func TestNewerReadsTheVersionsProjectReports(t *testing.T) {
+	for _, tc := range []struct {
+		latest, current string
+		want            bool
+	}{
+		{latestV, running, true},
+		{latestV, latestV, false},
+		{latestV, "v0.19.3+dirty", false},                         // a tag with local edits is the tag
+		{latestV, "v0.19.4-0.20260908093000-8536d36c1a2b", false}, // a go build after the tag
+		{latestV, "v0.19.3-0.20260907220000-ba86c3b1d2e3", true},  // a go build before the tag
+		{"v1.0.0", latestV, true},
+		{latestV, "dev", false},
+		{"", running, false},
+	} {
+		if got := newer(tc.latest, tc.current); got != tc.want {
+			t.Errorf("newer(%q, %q) = %v, want %v", tc.latest, tc.current, got, tc.want)
+		}
+	}
+}
+
+func TestRemindHintsAtANewerRelease(t *testing.T) {
+	f := lab(t, running, &fakeSource{releases: []selfupdate.SourceRelease{
+		release("v0.19.1"),
+		release(latestV),
+		fakeRelease{tag: "v0.20.0-rc.1", prerelease: true, assets: release("v0.20.0-rc.1").assets},
+		fakeRelease{tag: "v0.21.0", draft: true, assets: release("v0.21.0").assets},
+	}})
+	out := remind(t)
+	for _, want := range []string{latestV, "v0.19.2", "agentlab self-update", OptOutEnv} {
+		if !strings.Contains(out, want) {
+			t.Errorf("hint lacks %q:\n%s", want, out)
+		}
+	}
+	for _, skipped := range []string{"v0.20.0-rc.1", "v0.21.0"} {
+		if strings.Contains(out, skipped) {
+			t.Errorf("hint names the pre-release or draft %s:\n%s", skipped, out)
+		}
+	}
+	if c := f.cached(t); c.Latest != latestV || !c.CheckedAt.Equal(f.at) || !c.FailedAt.IsZero() {
+		t.Errorf("cache after the hint: %+v", c)
+	}
+}
+
+func TestRemindStaysQuiet(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		current  string
+		releases []selfupdate.SourceRelease
+		optOut   string
+		asks     int32
+	}{
+		{name: "this is the latest", current: latestV, releases: []selfupdate.SourceRelease{release(latestV)}, asks: 1},
+		{name: "a build after the tag", current: "v0.19.4-0.20260908093000-8536d36c1a2b", releases: []selfupdate.SourceRelease{release(latestV)}, asks: 1},
+		{name: "the tag with local edits", current: "v0.19.3+dirty", releases: []selfupdate.SourceRelease{release(latestV)}, asks: 1},
+		{name: "no binary for this platform", current: running, releases: []selfupdate.SourceRelease{
+			fakeRelease{tag: latestV, assets: []selfupdate.SourceAsset{fakeAsset{1, "agentlab-plan9-mips.bundle"}}},
+		}, asks: 1},
+		{name: "a development build never asks", current: "dev", releases: []selfupdate.SourceRelease{release(latestV)}, asks: 0},
+		{name: "opted out never asks", current: running, releases: []selfupdate.SourceRelease{release(latestV)}, optOut: "1", asks: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := lab(t, tc.current, &fakeSource{releases: tc.releases})
+			if tc.optOut != "" {
+				t.Setenv(OptOutEnv, tc.optOut)
+			}
+			if out := remind(t); out != "" {
+				t.Errorf("unexpected hint:\n%s", out)
+			}
+			if got := f.src.calls.Load(); got != tc.asks {
+				t.Errorf("asked GitHub %d times, want %d", got, tc.asks)
+			}
+		})
+	}
+}
+
+func TestRemindAsksGitHubOnceAnHour(t *testing.T) {
+	f := lab(t, running, &fakeSource{releases: []selfupdate.SourceRelease{release(latestV)}})
+	for i := 0; i < 3; i++ {
+		if out := remind(t); !strings.Contains(out, latestV) {
+			t.Fatalf("run %d: no hint:\n%s", i, out)
+		}
+		f.advance(20 * time.Minute)
+	}
+	if got := f.src.calls.Load(); got != 1 {
+		t.Errorf("asked GitHub %d times within the hour, want 1", got)
+	}
+	f.advance(time.Minute) // 61 minutes after the fetch
+	remind(t)
+	if got := f.src.calls.Load(); got != 2 {
+		t.Errorf("asked GitHub %d times after the hour, want 2", got)
+	}
+}
+
+func TestRemindGivesUpFastWhenOffline(t *testing.T) {
+	f := lab(t, running, &fakeSource{hang: true})
+	remindTimeout = 100 * time.Millisecond
+
+	start := time.Now()
+	out := remind(t)
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("the hint held the command for %s", elapsed)
+	}
+	if out != "" {
+		t.Errorf("hint without an answer:\n%s", out)
+	}
+	if c := f.cached(t); !c.FailedAt.Equal(f.at) || c.Latest != "" || !c.CheckedAt.IsZero() {
+		t.Errorf("cache after the failed attempt: %+v", c)
+	}
+
+	// The failure is remembered: the next commands do not wait at all.
+	f.advance(5 * time.Minute)
+	remind(t)
+	if got := f.src.calls.Load(); got != 1 {
+		t.Errorf("asked GitHub %d times within the retry window, want 1", got)
+	}
+	f.advance(6 * time.Minute) // 11 minutes after the failure
+	remind(t)
+	if got := f.src.calls.Load(); got != 2 {
+		t.Errorf("asked GitHub %d times after the retry window, want 2", got)
+	}
+}
+
+func TestRemindKeepsTheLastAnswerWhileOffline(t *testing.T) {
+	f := lab(t, running, &fakeSource{releases: []selfupdate.SourceRelease{release(latestV)}})
+	if out := remind(t); !strings.Contains(out, latestV) {
+		t.Fatalf("no hint while online:\n%s", out)
+	}
+
+	f.advance(2 * time.Hour)
+	f.src.err = errors.New("dial tcp: no route to host")
+	if out := remind(t); !strings.Contains(out, latestV) {
+		t.Errorf("the remembered answer was dropped when GitHub failed:\n%s", out)
+	}
+	if got := f.src.calls.Load(); got != 2 {
+		t.Errorf("asked GitHub %d times, want 2", got)
+	}
+	if c := f.cached(t); c.Latest != latestV || !c.FailedAt.Equal(f.at) {
+		t.Errorf("cache after the failed refresh: %+v", c)
+	}
+}
+
+func TestRemindSurvivesAGarbledCache(t *testing.T) {
+	f := lab(t, running, &fakeSource{releases: []selfupdate.SourceRelease{release(latestV)}})
+	if err := os.WriteFile(filepath.Join(f.dir, cacheFile), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out := remind(t); !strings.Contains(out, latestV) {
+		t.Errorf("no hint over a garbled cache:\n%s", out)
+	}
+	if c := f.cached(t); c.Latest != latestV {
+		t.Errorf("cache was not rewritten: %+v", c)
+	}
+}
+
+func TestRemindWorksWithoutACacheDirectory(t *testing.T) {
+	f := lab(t, running, &fakeSource{releases: []selfupdate.SourceRelease{release(latestV)}})
+	cacheDir = func() string { return "" }
+	for i := 0; i < 2; i++ {
+		if out := remind(t); !strings.Contains(out, latestV) {
+			t.Errorf("run %d: no hint:\n%s", i, out)
+		}
+	}
+	if got := f.src.calls.Load(); got != 2 {
+		t.Errorf("asked GitHub %d times without a cache, want 2", got)
+	}
+}
+
+func TestRunCheckReportsANewerRelease(t *testing.T) {
+	f := lab(t, running, &fakeSource{releases: []selfupdate.SourceRelease{release(latestV)}})
+	var out bytes.Buffer
+	err := Run(context.Background(), &out, true)
+	if !errors.Is(err, ErrOutdated) {
+		t.Fatalf("Run(--check) = %v, want ErrOutdated", err)
+	}
+	for _, want := range []string{"v0.19.2", latestV, "releases/tag/v0.19.3"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("report lacks %q:\n%s", want, out.String())
+		}
+	}
+	if c := f.cached(t); c.Latest != latestV {
+		t.Errorf("the check did not refresh the cache: %+v", c)
+	}
+	// The hint agrees without asking again.
+	remind(t)
+	if got := f.src.calls.Load(); got != 1 {
+		t.Errorf("asked GitHub %d times, want 1", got)
+	}
+}
+
+func TestRunCheckSaysWhenNothingIsNewer(t *testing.T) {
+	lab(t, latestV, &fakeSource{releases: []selfupdate.SourceRelease{release(latestV)}})
+	var out bytes.Buffer
+	if err := Run(context.Background(), &out, true); err != nil {
+		t.Fatalf("Run(--check) = %v", err)
+	}
+	if !strings.Contains(out.String(), "Nothing newer") {
+		t.Errorf("report:\n%s", out.String())
+	}
+}
+
+func TestRunRefusesADevelopmentBuild(t *testing.T) {
+	f := lab(t, "dev", &fakeSource{releases: []selfupdate.SourceRelease{release(latestV)}})
+	err := Run(context.Background(), io.Discard, false)
+	if err == nil || !strings.Contains(err.Error(), "development build") {
+		t.Errorf("Run() = %v, want a refusal", err)
+	}
+	if got := f.src.calls.Load(); got != 0 {
+		t.Errorf("asked GitHub %d times for a dev build", got)
+	}
+}
+
+func TestRunReportsAnUnreachableGitHub(t *testing.T) {
+	lab(t, running, &fakeSource{err: errors.New("dial tcp: no route to host")})
+	err := Run(context.Background(), io.Discard, false)
+	if err == nil || !strings.Contains(err.Error(), "no route to host") || !strings.Contains(err.Error(), "online") {
+		t.Errorf("Run() = %v, want the network error and the hint", err)
+	}
+}
+
+func TestRunReplacesTheExecutable(t *testing.T) {
+	f := lab(t, running, &fakeSource{releases: []selfupdate.SourceRelease{release(latestV)}, binary: []byte("new")})
+	exe := filepath.Join(t.TempDir(), binaryName())
+	if err := os.WriteFile(exe, []byte("old"), 0o755); err != nil { //nolint:gosec // an executable
+		t.Fatal(err)
+	}
+	executable = func() (string, error) { return exe, nil }
+
+	var out bytes.Buffer
+	if err := Run(context.Background(), &out, false); err != nil {
+		t.Fatalf("Run() = %v\n%s", err, out.String())
+	}
+	got, err := os.ReadFile(filepath.Clean(exe))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "new" {
+		t.Errorf("executable holds %q after the update", got)
+	}
+	if runtime.GOOS != "windows" {
+		if info, err := os.Stat(exe); err != nil || info.Mode()&0o111 == 0 {
+			t.Errorf("executable is not executable: %v %v", info.Mode(), err)
+		}
+	}
+	if !strings.Contains(out.String(), "Updated to v0.19.3") {
+		t.Errorf("output:\n%s", out.String())
+	}
+
+	// The new binary reports the release; the hint has nothing to say and
+	// no reason to ask.
+	currentVersion = func() string { return latestV }
+	if hint := remind(t); hint != "" {
+		t.Errorf("hint after the update:\n%s", hint)
+	}
+	if got := f.src.calls.Load(); got != 1 {
+		t.Errorf("asked GitHub %d times, want 1", got)
+	}
+}

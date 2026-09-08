@@ -22,11 +22,18 @@ import (
 	"github.com/giantswarm/agentlab/internal/forms"
 	"github.com/giantswarm/agentlab/internal/lab"
 	"github.com/giantswarm/agentlab/internal/telemetry"
+	"github.com/giantswarm/agentlab/internal/update"
 	"github.com/giantswarm/agentlab/pkg/project"
 )
 
 func main() {
-	if err := rootCmd().Execute(); err != nil {
+	err := rootCmd().Execute()
+	if errors.Is(err, update.ErrOutdated) {
+		// `self-update --check` has reported both versions; the status is
+		// the answer (devctl's `version check` exits the same way).
+		os.Exit(125)
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
 	}
@@ -50,12 +57,18 @@ Then:        claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		SilenceErrors: true,
 		Args:          cobra.NoArgs,
 		Version:       project.VersionLine(),
-		// One anonymous usage signal per command a person runs, like
+		// Runs for every subcommand, none of which has a PersistentPreRun of
+		// its own: one anonymous usage signal per command a person runs, like
 		// kubectl-gs (README "Usage data"; AGENTLAB_TELEMETRY_OPTOUT=1 to
-		// disable). Runs for every subcommand, none of which has a
-		// PersistentPreRun of its own.
+		// disable), and the hint that a newer release exists, ahead of the
+		// command's own output (README "Keeping agentlab current";
+		// AGENTLAB_NO_UPDATE_CHECK=1 to disable). Plumbing, completion and
+		// help stay quiet for both; self-update reports the versions itself.
 		PersistentPreRun: func(cmd *cobra.Command, _ []string) {
 			telemetry.Command(cmd)
+			if telemetry.UserFacing(cmd) && cmd.Name() != "self-update" {
+				update.Remind(cmd.Context(), cmd.ErrOrStderr())
+			}
 		},
 	}
 
@@ -80,6 +93,7 @@ Then:        claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		backstageTestCmd(),
 		logsCmd(),
 		labCmd("render", "Render every manifest from agentlab.yaml into state/ without applying anything", lab.RenderAll),
+		selfUpdateCmd(),
 		postRenderCmd(),
 	)
 	return root
@@ -494,6 +508,23 @@ func logsCmd() *cobra.Command {
 			return lab.Logs(cfg, args[0])
 		},
 	}
+}
+
+// selfUpdateCmd replaces the running binary with the latest GitHub release —
+// the command muster and mcp-kubernetes ship — or, with --check, only says
+// whether one exists.
+func selfUpdateCmd() *cobra.Command {
+	var check bool
+	cmd := &cobra.Command{
+		Use:   "self-update",
+		Short: "Replace this binary with the latest GitHub release (--check only reports whether one exists)",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return update.Run(cmd.Context(), cmd.OutOrStdout(), check)
+		},
+	}
+	cmd.Flags().BoolVar(&check, "check", false, "report the running and the latest release without installing anything; exit status 125 when a newer one exists")
+	return cmd
 }
 
 func postRenderCmd() *cobra.Command {
