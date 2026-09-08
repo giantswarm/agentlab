@@ -92,7 +92,7 @@ const DefaultDexPort = 32000
 // DefaultChartVersion is the agent-platform release the lab installs when
 // agentlab.yaml pins none — the release this agentlab was verified with.
 // Bump deliberately, with a lab run: the lab never floats.
-const DefaultChartVersion = "3.20.0"
+const DefaultChartVersion = "3.20.2"
 
 // ChartRepository is where the agent-platform chart releases live.
 const ChartRepository = "oci://gsoci.azurecr.io/charts/giantswarm/agent-platform"

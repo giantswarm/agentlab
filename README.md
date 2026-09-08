@@ -1049,10 +1049,11 @@ same one-URL trick, just spelled with a name.
   flips the type without also deleting that field fails with
   `rollingUpdate: Forbidden`. `maxSurge: 0` achieves the same thing without the
   conflict.
-- **The `kagent` namespace follows the kagent component.** The chart's
-  connectivity component renders it only while `components.kagent.enabled` is
-  true, and `helm uninstall` (the ordered teardown) removes it with the
-  connectivity release.
+- **The `kagent` namespace follows the kagent component.** While
+  `components.kagent.enabled` is true the chart's pre-install/pre-upgrade hook
+  creates it ahead of the kagent `HelmRelease`, the connectivity component
+  adopts it, and `helm uninstall` (the ordered teardown) removes it with the
+  connectivity release. The lab creates no namespace of its own for kagent.
 - **Kubernetes tools carry the server-name prefix.** The chart's bundled
   `mcp-kubernetes` MCPServer declares no muster *family*, so its tools use
   per-server prefixing: `call_tool(name=x_mcp-kubernetes_list, arguments={...})`. The fake fleet's members are the lab's only family servers and they stay

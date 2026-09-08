@@ -176,14 +176,6 @@ components:
     postRenderers:
 {{ index .PostRenderers "backstage" | indent 6 }}
 {{- end }}
-{{- if and .Platform.Agents .Platform.Observability }}
-  # The wiring chart (always on). Its kagent controller metrics Service
-  # selects the wrong instance label under the meta chart (HACKS.md U19);
-  # the patch corrects the selector until the chart does.
-  agent-platform-connectivity:
-    postRenderers:
-{{ index .PostRenderers "agent-platform-connectivity" | indent 6 }}
-{{- end }}
 
 # The connectivity chart's key for the mcp-kubernetes MCPServer CR (dropped
 # from the values the mcp-kubernetes chart itself receives): the audience
