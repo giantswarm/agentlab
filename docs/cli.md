@@ -21,7 +21,7 @@ your shell's current-context.
 | `platform` | Install the agent platform (muster + Kubernetes MCP and the enabled components) on a running cluster. `up` runs this when the platform is enabled. |
 | `platform-down` | Remove the agent platform, leaving Dex and the cluster alone. |
 | `logs <component>` | Tail a component's logs: `backstage`, `dex`, `mcp-prometheus`, `muster` or `prometheus`. |
-| `self-update` | Replace the binary with the latest GitHub release. `--check` only reports the running and the latest version, exit status 125 when a newer one exists. |
+| `self-update` | Replace the binary with the latest GitHub release, once its cosign Sigstore bundle verifies (see below). `--check` only reports the running and the latest version, exit status 125 when a newer one exists. |
 
 `backstage` is retired: Backstage deploys with the platform (`backstage.enabled`
 in `agentlab.yaml` and `agentlab up`). The hidden `post-render` command is the
@@ -98,6 +98,20 @@ binary without a release version (`agentlab --version` says `dev`) is
 refused: reinstall it from a release or with `go install`. A `go build` from
 a checkout carries Go's pseudo-version (`v0.19.3-0.20260908…-8536d36`) and
 is treated as what it is: after the tag before it, before the tag after it.
+
+**Every release binary is verified before it is installed.** CI (the
+architect orb) signs each `agentlab-<os>-<arch>` with cosign — keyless, the
+CircleCI pipeline's identity, recorded in the Rekor transparency log — and
+publishes the signature next to it as `agentlab-<os>-<arch>.bundle`.
+`self-update` downloads both and installs the binary only after the bundle
+verifies against the Sigstore public-good trust root for a CircleCI build of
+`github.com/giantswarm/agentlab` (the shared
+[`selfupdate-cosign`](https://github.com/giantswarm/selfupdate-cosign)
+validator, the one muster and the other Giant Swarm CLIs use). A release
+without a bundle for your platform is refused before anything is downloaded; a
+download that does not match its signature is refused before anything is
+written. Either way the installed binary stays as it is, and the error says
+why. The hint below installs nothing, so it does not need the bundle.
 
 Every command also starts with a one-line hint on stderr while a newer
 release is out — devctl's per-command check, with two deliberate differences:

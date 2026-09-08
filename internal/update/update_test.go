@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -18,12 +19,12 @@ import (
 )
 
 // fakeSource stands in for GitHub: the releases it lists, how it fails, and
-// what every download returns.
+// what each asset's download returns.
 type fakeSource struct {
 	releases []selfupdate.SourceRelease
-	err      error  // ListReleases fails with it
-	hang     bool   // ListReleases waits for the context: a network that swallows packets
-	binary   []byte // what every asset download returns
+	err      error            // ListReleases fails with it
+	hang     bool             // ListReleases waits for the context: a network that swallows packets
+	assets   map[int64][]byte // what the download of each asset (by ID) returns
 	calls    atomic.Int32
 }
 
@@ -39,8 +40,12 @@ func (s *fakeSource) ListReleases(ctx context.Context, _ selfupdate.Repository) 
 	return s.releases, nil
 }
 
-func (s *fakeSource) DownloadReleaseAsset(context.Context, *selfupdate.Release, int64) (io.ReadCloser, error) {
-	return io.NopCloser(bytes.NewReader(s.binary)), nil
+func (s *fakeSource) DownloadReleaseAsset(_ context.Context, _ *selfupdate.Release, id int64) (io.ReadCloser, error) {
+	data, ok := s.assets[id]
+	if !ok {
+		return nil, fmt.Errorf("no asset %d", id)
+	}
+	return io.NopCloser(bytes.NewReader(data)), nil
 }
 
 type fakeAsset struct {
@@ -87,14 +92,45 @@ func binaryName() string {
 	return name
 }
 
+// The asset IDs of a release(): the bundle and the binary.
+const (
+	bundleID int64 = 1
+	binaryID int64 = 2
+)
+
 // release is a GitHub release the way architect publishes agentlab's: one
 // binary per platform next to its cosign bundle — the bundle first, to prove
 // the binary is the one picked.
 func release(tag string) fakeRelease {
 	return fakeRelease{tag: tag, assets: []selfupdate.SourceAsset{
-		fakeAsset{1, binaryName() + ".bundle"},
-		fakeAsset{2, binaryName()},
+		fakeAsset{bundleID, binaryName() + ".bundle"},
+		fakeAsset{binaryID, binaryName()},
 	}}
+}
+
+// unsignedRelease is a release with the binary for this platform but no
+// bundle next to it: what a release made outside architect would look like.
+func unsignedRelease(tag string) fakeRelease {
+	return fakeRelease{tag: tag, assets: []selfupdate.SourceAsset{fakeAsset{binaryID, binaryName()}}}
+}
+
+// acceptingValidator stands in for the cosign validator on the happy path:
+// it asks for the same bundle and accepts whatever it is handed, recording
+// what that was. The signature check itself (a bundle that verifies, a
+// tampered binary, a bundle for another repository) is tested where it
+// lives, in github.com/giantswarm/selfupdate-cosign; the tests here prove
+// that self-update wires it in so that nothing unverified reaches the disk.
+type acceptingValidator struct {
+	asset, bundleName string
+	binary, bundle    []byte
+}
+
+func (v *acceptingValidator) GetValidationAssetName(assetName string) string {
+	return assetName + ".bundle"
+}
+func (v *acceptingValidator) Validate(assetName string, release, validation []byte) error {
+	v.asset, v.bundleName, v.binary, v.bundle = assetName, v.GetValidationAssetName(assetName), release, validation
+	return nil
 }
 
 // fixture is a lab with src as GitHub, its own cache directory, a clock the
@@ -109,15 +145,40 @@ func lab(t *testing.T, current string, src *fakeSource) *fixture {
 	t.Helper()
 	f := &fixture{src: src, dir: t.TempDir(), at: time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)}
 	t.Setenv(OptOutEnv, "")
-	prevSource, prevDir, prevNow, prevVersion, prevExe, prevTimeout := newSource, cacheDir, now, currentVersion, executable, remindTimeout
+	prevSource, prevValidator, prevDir, prevNow, prevVersion, prevExe, prevTimeout := newSource, newValidator, cacheDir, now, currentVersion, executable, remindTimeout
 	newSource = func() selfupdate.Source { return src }
 	cacheDir = func() string { return f.dir }
 	now = func() time.Time { return f.at }
 	currentVersion = func() string { return current }
 	t.Cleanup(func() {
-		newSource, cacheDir, now, currentVersion, executable, remindTimeout = prevSource, prevDir, prevNow, prevVersion, prevExe, prevTimeout
+		newSource, newValidator, cacheDir, now, currentVersion, executable, remindTimeout = prevSource, prevValidator, prevDir, prevNow, prevVersion, prevExe, prevTimeout
 	})
 	return f
+}
+
+// installed points self-update at a throwaway file instead of the running
+// executable and returns its path and content, so a test can assert that the
+// file was replaced — or that it survived a refusal byte for byte.
+func installed(t *testing.T) (string, []byte) {
+	t.Helper()
+	content := []byte("the agentlab that is installed right now")
+	exe := filepath.Join(t.TempDir(), binaryName())
+	if err := os.WriteFile(exe, content, 0o755); err != nil { //nolint:gosec // an executable
+		t.Fatal(err)
+	}
+	executable = func() (string, error) { return exe, nil }
+	return exe, content
+}
+
+func assertUnchanged(t *testing.T, exe string, content []byte) {
+	t.Helper()
+	got, err := os.ReadFile(filepath.Clean(exe))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, content) {
+		t.Fatalf("the installed binary was replaced: %q", got)
+	}
 }
 
 func (f *fixture) advance(d time.Duration) { f.at = f.at.Add(d) }
@@ -361,13 +422,14 @@ func TestRunReportsAnUnreachableGitHub(t *testing.T) {
 	}
 }
 
-func TestRunReplacesTheExecutable(t *testing.T) {
-	f := lab(t, running, &fakeSource{releases: []selfupdate.SourceRelease{release(latestV)}, binary: []byte("new")})
-	exe := filepath.Join(t.TempDir(), binaryName())
-	if err := os.WriteFile(exe, []byte("old"), 0o755); err != nil { //nolint:gosec // an executable
-		t.Fatal(err)
-	}
-	executable = func() (string, error) { return exe, nil }
+func TestRunReplacesTheExecutableOnceTheBundleVerifies(t *testing.T) {
+	f := lab(t, running, &fakeSource{
+		releases: []selfupdate.SourceRelease{release(latestV)},
+		assets:   map[int64][]byte{binaryID: []byte("new"), bundleID: []byte("its bundle")},
+	})
+	exe, _ := installed(t)
+	v := &acceptingValidator{}
+	newValidator = func() selfupdate.Validator { return v }
 
 	var out bytes.Buffer
 	if err := Run(context.Background(), &out, false); err != nil {
@@ -385,8 +447,16 @@ func TestRunReplacesTheExecutable(t *testing.T) {
 			t.Errorf("executable is not executable: %v %v", info.Mode(), err)
 		}
 	}
-	if !strings.Contains(out.String(), "Updated to v0.19.3") {
+	if !strings.Contains(out.String(), "Verified the signature and updated to v0.19.3") {
 		t.Errorf("output:\n%s", out.String())
+	}
+	// The validator saw the binary that was installed and the bundle that
+	// was published next to it, by the names architect gives them.
+	if v.asset != binaryName() || v.bundleName != binaryName()+".bundle" {
+		t.Errorf("validated %q against %q", v.asset, v.bundleName)
+	}
+	if string(v.binary) != "new" || string(v.bundle) != "its bundle" {
+		t.Errorf("validated %q against bundle %q", v.binary, v.bundle)
 	}
 
 	// The new binary reports the release; the hint has nothing to say and
@@ -397,5 +467,96 @@ func TestRunReplacesTheExecutable(t *testing.T) {
 	}
 	if got := f.src.calls.Load(); got != 1 {
 		t.Errorf("asked GitHub %d times, want 1", got)
+	}
+}
+
+// The signature check itself is tested in github.com/giantswarm/selfupdate-cosign.
+// What follows proves that self-update refuses what the real validator cannot
+// vouch for, and leaves the installed binary untouched when it does.
+
+func TestRunRefusesAReleaseWithoutASignatureBundle(t *testing.T) {
+	f := lab(t, running, &fakeSource{
+		releases: []selfupdate.SourceRelease{unsignedRelease(latestV)},
+		assets:   map[int64][]byte{binaryID: []byte("a newer agentlab, unsigned")},
+	})
+	exe, content := installed(t)
+
+	var out bytes.Buffer
+	err := Run(context.Background(), &out, false)
+	if err == nil {
+		t.Fatal("a release without a bundle must be refused")
+	}
+	if !strings.Contains(err.Error(), "no signature bundle") || !strings.Contains(err.Error(), binaryName()+".bundle") {
+		t.Errorf("the error should say what is missing, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "online?") {
+		t.Errorf("a missing bundle is not a network problem: %v", err)
+	}
+	assertUnchanged(t, exe, content)
+	// Refused before the release was even reported: go-selfupdate returns no
+	// release with the error, so there is no tag to remember. The cache is
+	// the hint's, and the hint asks on its own (without a bundle).
+	if _, err := os.Stat(filepath.Join(f.dir, cacheFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the refusal wrote a cache: %v", err)
+	}
+	if got := f.src.calls.Load(); got != 1 {
+		t.Errorf("asked GitHub %d times, want 1", got)
+	}
+}
+
+func TestRunCheckRefusesAReleaseWithoutASignatureBundle(t *testing.T) {
+	lab(t, running, &fakeSource{releases: []selfupdate.SourceRelease{unsignedRelease(latestV)}})
+	var out bytes.Buffer
+	err := Run(context.Background(), &out, true)
+	if err == nil || errors.Is(err, ErrOutdated) {
+		t.Fatalf("Run(--check) = %v, want the refusal: self-update would install nothing from this release", err)
+	}
+	if !strings.Contains(err.Error(), "no signature bundle") {
+		t.Errorf("the error should say what is missing, got: %v", err)
+	}
+}
+
+func TestRunRefusesADownloadThatDoesNotVerify(t *testing.T) {
+	f := lab(t, running, &fakeSource{
+		releases: []selfupdate.SourceRelease{release(latestV)},
+		assets: map[int64][]byte{
+			binaryID: []byte("a newer agentlab"),
+			bundleID: []byte("{}"), // not a Sigstore bundle
+		},
+	})
+	exe, content := installed(t)
+
+	var out bytes.Buffer
+	err := Run(context.Background(), &out, false)
+	if err == nil {
+		t.Fatal("a download whose bundle does not verify must be refused")
+	}
+	if !strings.Contains(err.Error(), "is unchanged") || !strings.Contains(err.Error(), "is not a Sigstore bundle") {
+		t.Errorf("the error should say the binary was refused and why, got: %v", err)
+	}
+	if !strings.Contains(out.String(), "Newer release: "+latestV) {
+		t.Errorf("the newer release should have been announced before the refusal, got:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "Verified the signature") {
+		t.Errorf("a refused download must not report success:\n%s", out.String())
+	}
+	assertUnchanged(t, exe, content)
+	// The release exists and was reported; the hint remembers it like after
+	// any other look-up.
+	if c := f.cached(t); c.Latest != latestV {
+		t.Errorf("cache after the refusal: %+v", c)
+	}
+}
+
+func TestRemindHintsAtAReleaseWithoutASignatureBundle(t *testing.T) {
+	// The hint installs nothing, so a release self-update would refuse is
+	// still news worth a line.
+	f := lab(t, running, &fakeSource{releases: []selfupdate.SourceRelease{unsignedRelease(latestV)}})
+	out := remind(t)
+	if !strings.Contains(out, latestV) || !strings.Contains(out, "agentlab self-update") {
+		t.Errorf("no hint for a release without a bundle:\n%s", out)
+	}
+	if c := f.cached(t); c.Latest != latestV || !c.FailedAt.IsZero() {
+		t.Errorf("cache after the hint: %+v", c)
 	}
 }

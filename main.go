@@ -510,15 +510,25 @@ func logsCmd() *cobra.Command {
 	}
 }
 
-// selfUpdateCmd replaces the running binary with the latest GitHub release —
-// the command muster and mcp-kubernetes ship — or, with --check, only says
-// whether one exists.
+// selfUpdateCmd replaces the running binary with the latest GitHub release
+// once its signature verifies — the command muster and mcp-kubernetes ship —
+// or, with --check, only says whether one exists.
 func selfUpdateCmd() *cobra.Command {
 	var check bool
 	cmd := &cobra.Command{
 		Use:   "self-update",
 		Short: "Replace this binary with the latest GitHub release (--check only reports whether one exists)",
-		Args:  cobra.NoArgs,
+		Long: `Looks up the latest release of ` + update.Repository + ` on GitHub and, when it is
+newer than this binary, installs its binary for this OS and architecture over
+the running executable. --check only reports both versions (exit status 125
+when a newer release exists).
+
+Release binaries are signed in CI (cosign, keyless) and published next to
+their Sigstore bundle. The downloaded binary is installed only after that
+bundle verifies for a CircleCI build of ` + update.Repository + `; a release
+without a bundle, or a download that does not match its signature, is refused
+and the installed binary stays as it is.`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return update.Run(cmd.Context(), cmd.OutOrStdout(), check)
 		},

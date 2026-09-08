@@ -154,8 +154,13 @@ The lab's own e2e checks are the `*-test` subcommands, not `go test`.
   `AGENTLAB_TELEMETRY_TESTMODE=1` keeps the runs out of the production
   numbers (and logs delivery errors). Details in docs/telemetry.md.
 - `internal/update` — `agentlab self-update` (creativeprojects/go-selfupdate
-  against the GitHub releases; the command muster and mcp-kubernetes ship)
-  and `Remind`, the newer-release hint the root `PersistentPreRun` prints on
+  against the GitHub releases; the command muster and mcp-kubernetes ship).
+  A release binary is installed only after its cosign Sigstore bundle
+  (`agentlab-<os>-<arch>.bundle`, signed by the architect orb in CircleCI)
+  verifies through the shared `github.com/giantswarm/selfupdate-cosign`
+  validator; a release without a bundle or a download that does not verify is
+  refused and the installed binary stays. Also `Remind`, the newer-release
+  hint (no bundle needed: it installs nothing) the root `PersistentPreRun` prints on
   stderr before every user-facing command except `self-update`. A hint,
   never a gate: the command runs whatever the version. GitHub is asked at
   most once an hour (`latest-release.json` under `os.UserCacheDir()/agentlab`)
