@@ -22,6 +22,14 @@ func Up(cfg *config.Config) error {
 			return err
 		}
 	}
+	// Same moment for the machine itself: a docker VM too small for what
+	// this configuration schedules leaves pods Pending forever (the
+	// scheduler refuses CPU requests that do not fit — resources.go), and the
+	// symptom would be an install timing out on agentgateway, minutes from
+	// now. Refused here, with the fix and the numbers.
+	if err := preflightRuntimeResources(cfg); err != nil {
+		return err
+	}
 
 	if err := GenCerts(cfg.Platform.Domain, false); err != nil {
 		return err
