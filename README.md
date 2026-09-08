@@ -21,8 +21,13 @@ Kubernetes MCP server, the [kagent](https://github.com/kagent-dev/kagent)
 agents runtime and Giant Swarm's
 [Backstage](https://github.com/giantswarm/backstage) portal — on a
 [kind](https://kind.sigs.k8s.io/) cluster on your machine, so the whole
-platform can be tested and demoed without a management cluster: Claude Code →
-agentgateway → muster → mcp-kubernetes → apiserver, and Backstage → muster.
+platform can be tested and demoed without a management cluster.
+
+Two kinds of client meet at one gateway. MCP clients such as Claude Code talk
+to muster directly; people use **Backstage, the human frontend to the whole
+platform** — servers, workflows, tools, agents, models — with their own token.
+The agents Backstage creates run on kagent and are MCP clients of muster too,
+calling tools as the person who invoked them.
 
 The platform needs an identity provider, so the lab bundles its own
 [Dex](https://dexidp.io/): users that exist nowhere but this cluster, RBAC
@@ -32,7 +37,7 @@ trusting the same issuer.
 <div align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/img/architecture-dark.svg">
-    <img alt="agentlab architecture: Claude Code and the browser reach the agentgateway TLS edge, which fronts muster and Backstage; muster fans out to mcp-kubernetes, mcp-prometheus, model-manager and agent-manager; every sign-in, token exchange and apiserver token check goes to the bundled Dex at https://localhost:32000/dex" src="docs/img/architecture-light.svg" width="900">
+    <img alt="agentlab architecture: Claude Code and a person's browser reach the agentgateway TLS edge, which fronts muster and Backstage. Backstage, the human frontend, forwards the user's token to muster and creates and chats with kagent agents. muster fans out to mcp-kubernetes, mcp-prometheus, model-manager and agent-manager; the kagent agents call tools back through muster with the caller's token. Every login, token exchange and apiserver token check goes to the bundled Dex at https://localhost:32000/dex" src="docs/img/architecture-light.svg" width="900">
   </picture>
 </div>
 
@@ -45,11 +50,18 @@ trusting the same issuer.
   OAuth enforcement point in front of an unauthenticated in-cluster
   `mcp-kubernetes`. Per-server sign-in, declared toolsets and a fake
   multi-cluster fleet are all exercised.
-- **Agents and models.** kagent with an Anthropic default model; extra model
-  configs for OpenAI-compatible, Gemini and Ollama endpoints; managed models
-  through model-manager fronting an Ollama or Lemonade Server on the host.
-- **The portal.** Giant Swarm's Backstage with the first-party muster plugin
-  and the agent create flow, signed in through the same Dex.
+- **Backstage, the human frontend.** Giant Swarm's Backstage is how a person
+  works the whole platform: browse and sign in to MCP servers, run workflows,
+  explore tools, create agents and chat with them, manage models. Every call
+  carries the signed-in user's own token, so the portal shows exactly what
+  the platform grants that person.
+- **Agents.** kagent runs the agents Backstage or agent-manager creates. They
+  are MCP clients of muster like Claude Code is, forwarding the caller's token
+  and bounded further by declared toolsets, so they see the same catalogue
+  under the same rules.
+- **Models.** An Anthropic default; extra model configs for OpenAI-compatible,
+  Gemini and Ollama endpoints; managed models through model-manager fronting
+  an Ollama or Lemonade Server on the host.
 - **Observability.** A minimal Prometheus plus mcp-prometheus, so PromQL
   questions about the lab go through MCP too.
 - **Identity you can reason about.** Three throwaway users, a fixed group
@@ -100,7 +112,7 @@ machine, is in [Getting started](docs/getting-started.md).
 | [Agents](docs/agents.md) | The kagent runtime, the default ModelConfig and the API key Secret |
 | [Models](docs/models.md) | Extra model configs, model servers on the host, managed models through model-manager |
 | [Observability](docs/observability.md) | Prometheus + mcp-prometheus, and Backstage's metrics views |
-| [Backstage](docs/backstage.md) | The portal, the muster plugin, the agent create flow |
+| [Backstage](docs/backstage.md) | The human frontend: the muster plugin, agents and models in the portal, the agent create flow |
 | [Identity](docs/identity.md) | Users and groups, the shared issuer, the Dex version, wiring another app, `trustedPeers` |
 | [Troubleshooting](docs/troubleshooting.md) | The gotchas that cost time |
 | [Usage data](docs/telemetry.md) | The one anonymous signal per command, and how to opt out |
