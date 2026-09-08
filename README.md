@@ -37,7 +37,7 @@ trusting the same issuer.
 <div align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/img/architecture-dark.svg">
-    <img alt="agentlab architecture: Claude Code and a person's browser reach the agentgateway TLS edge, which fronts muster and Backstage. Backstage, the human frontend, forwards the user's token to muster and creates and chats with kagent agents. muster fans out to mcp-kubernetes, mcp-prometheus, model-manager and agent-manager; the kagent agents call tools back through muster with the caller's token. Every login, token exchange and apiserver token check goes to the bundled Dex at https://localhost:32000/dex" src="docs/img/architecture-light.svg" width="900">
+    <img alt="agentlab architecture: Claude Code and Backstage, the two interfaces on the left, reach the platform through the agentgateway TLS edge into muster. muster fans out to mcp-kubernetes (the kube-apiserver), mcp-prometheus (Prometheus), model-manager (Ollama and Lemonade on the host) and agent-manager. The kagent runtime holds the Agent CRs, run as ADK pods, and the ModelConfigs for Anthropic, Ollama, Lemonade and OpenAI-compatible endpoints; agent-manager creates the Agent CRs, model-manager wires the ModelConfigs, the agents call tools back through muster with the caller's token and toolset, and Backstage chats with them over A2A. The bundled Dex at https://localhost:32000/dex is the one issuer the browser, muster, Backstage and the apiserver trust" src="docs/img/architecture-light.svg" width="900">
   </picture>
 </div>
 
