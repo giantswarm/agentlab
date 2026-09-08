@@ -54,14 +54,6 @@ import (
 //     build on this host plus imagePullPolicy IfNotPresent on its container,
 //     so the side-loaded image is used as is (backstage's chart pulls Always).
 //
-//  6. The selector of the connectivity chart's kagent controller metrics
-//     Service (the ServiceMonitor's target): the chart selects
-//     `app.kubernetes.io/instance: <its own release name>`, which matched
-//     under the standalone umbrella (one release for every subchart) and
-//     matches no pod under the meta chart, where kagent is its own release
-//     named `kagent`. Until the chart selects kagent's instance label the
-//     lab's Prometheus would scrape nothing of kagent (HACKS.md U19).
-//
 // The values-side shape is Flux's: `postRenderers: [{kustomize: {patches:
 // [{target, patch}], images: [{name, newName, newTag}]}}]`.
 
@@ -209,30 +201,6 @@ spec:
 	}
 }
 
-// connectivityComponent is the meta chart's component name of the
-// agent-platform-connectivity chart, also its release name.
-const connectivityComponent = "agent-platform-connectivity"
-
-// kagentMetricsService is the connectivity chart's kagent controller metrics
-// Service: `<release name>-kagent-controller-metrics`, in the kagent namespace.
-const kagentMetricsService = connectivityComponent + "-kagent-controller-metrics"
-
-// kagentMetricsSelectorPatch is patch 6: a strategic merge on the Service's
-// selector map, so only the instance key changes (HACKS.md U19).
-func kagentMetricsSelectorPatch() kustomizePatch {
-	return kustomizePatch{
-		Target: map[string]string{kindKey: kindService, nameKey: kagentMetricsService},
-		Patch: literalYAML(fmt.Sprintf(`apiVersion: v1
-kind: Service
-metadata:
-  name: %s
-spec:
-  selector:
-    app.kubernetes.io/instance: %s
-`, kagentMetricsService, componentKagent)),
-	}
-}
-
 // pullPolicyPatch is patch 5's second half: the container of a dev image
 // takes the side-loaded copy as is.
 func pullPolicyPatch(target devImageTarget) kustomizePatch {
@@ -275,12 +243,6 @@ func componentPostRenderers(cfg *config.Config) (map[string]string, error) {
 	}
 	if cfg.Platform.Agents {
 		patches[agentManagerMCPServer] = []kustomizePatch{dexLocalhostPatch(agentManagerMCPServer, cfg.DexPort)}
-	}
-	// The metrics Service renders only with kagent AND the monitors on; a
-	// kustomize target that matches nothing is a no-op, but the values stay
-	// minimal when the object is not there.
-	if cfg.Platform.Agents && cfg.Platform.Observability {
-		patches[connectivityComponent] = []kustomizePatch{kagentMetricsSelectorPatch()}
 	}
 	images := map[string][]kustomizeImage{}
 	for _, component := range slices.Sorted(maps.Keys(cfg.Platform.DevImages)) {

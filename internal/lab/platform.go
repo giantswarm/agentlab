@@ -141,21 +141,10 @@ func platformUp(cfg *config.Config, header string) error {
 	if err := ensureNamespace(platformNamespace); err != nil {
 		return err
 	}
-	// The kagent namespace is created here, before the chart. The kagent
-	// chart renders its workloads into it (kagent.namespaceOverride), but its
-	// HelmRelease targets the release namespace like every other component,
-	// so helm-controller's createNamespace never creates it — and the one
-	// chart object that does, the connectivity chart's Namespace, sits in a
-	// release that dependsOn kagent: a first install deadlocks on
-	// `namespaces "kagent" not found` until the retries are exhausted.
-	// Management clusters break the cycle the same way, by creating the
-	// namespace out of band in their bases; the connectivity release adopts
-	// it on install.
-	if cfg.Platform.Agents {
-		if err := ensureNamespace(kagentNamespace); err != nil {
-			return err
-		}
-	}
+	// The kagent namespace is the chart's: with the bundled engine and kagent
+	// on, its pre-install/pre-upgrade hook creates the namespace ahead of the
+	// kagent HelmRelease, and the connectivity release adopts it (deleting it
+	// with the release on the ordered teardown).
 	// muster appends this to its system trust pool so it can talk to the lab's
 	// self-signed Dex over TLS (values: muster.muster.extraCaFile); Backstage
 	// mounts the same Secret through global.identity.ca (NODE_EXTRA_CA_CERTS).

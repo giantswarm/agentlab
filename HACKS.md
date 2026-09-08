@@ -450,37 +450,42 @@ when muster exposes `allowPrivateIPClientMetadata` for its OAuth server — then
 the pin can go and the challenge chain becomes proxy start → muster
 `/oauth/authorize` → Dex again.
 
-### U19. `components.agent-platform-connectivity.postRenderers`: the kagent controller metrics Service selects the wrong instance label — BLOCKED UPSTREAM
-The connectivity chart (3.20.1) renders a Service for the kagent controller's
-metrics port and a ServiceMonitor on it, selecting the controller pods with
-`app.kubernetes.io/instance: <its own release name>`. Under the standalone
-umbrella every subchart shared one release name, so that matched; under the
-meta chart kagent is its own release named `kagent`, the Service selects no
-pod, and the lab Prometheus scrapes nothing of kagent (`platform-test`
-"Prometheus scrapes the platform itself" caught it on the first meta-chart
-run). **Fix here:** a Kustomize strategic-merge patch on the Service's
-selector (`postrenderers.go`, patch 6) rendered into
-`components.agent-platform-connectivity.postRenderers` while agents and
-observability are on — the chart's own mechanism for chart fixes.
-**Unblocks:** [giantswarm/agent-platform#305](https://github.com/giantswarm/agent-platform/issues/305)
-— select kagent's instance label. Then the patch is deleted.
+### U19. `components.agent-platform-connectivity.postRenderers`: the kagent controller metrics Service selects the wrong instance label — FIXED upstream
+The connectivity chart (up to 3.20.1) rendered a Service for the kagent
+controller's metrics port and a ServiceMonitor on it, selecting the controller
+pods with `app.kubernetes.io/instance: <its own release name>`. Under the
+standalone umbrella every subchart shared one release name, so that matched;
+under the meta chart kagent is its own release named `kagent`, the Service
+selected no pod, and the lab Prometheus scraped nothing of kagent
+(`platform-test` "Prometheus scrapes the platform itself" caught it on the
+first meta-chart run). The lab carried a Kustomize strategic-merge patch on
+the Service's selector in `components.agent-platform-connectivity.postRenderers`.
+**Fixed:** agent-platform 3.20.2
+([giantswarm/agent-platform#305](https://github.com/giantswarm/agent-platform/issues/305),
+PR #308) — the Service selects kagent's own release name. The patch is
+deleted; the lab renders no `postRenderers` for the connectivity component,
+and the lab's Prometheus scrapes the kagent controller through the chart's
+own Service.
 
-### U20. `platform.go`: the `kagent` namespace is created before the chart — BLOCKED UPSTREAM
+### U20. `platform.go`: the `kagent` namespace is created before the chart — FIXED upstream
 The kagent chart renders its workloads into `kagent.namespaceOverride`
 (`kagent`), but its HelmRelease targets the release namespace like every
 component, so helm-controller's `createNamespace` never creates `kagent`; the
-one chart object that does — the connectivity chart's Namespace — sits in a
-release that `dependsOn` kagent. A first install on a fresh cluster fails
+one chart object that did — the connectivity chart's Namespace — sits in a
+release that `dependsOn` kagent. A first install on a fresh cluster failed
 every kagent attempt with `namespaces "kagent" not found` until the retries
-are exhausted, and everything behind kagent waits (seen on the first
-meta-chart run: 6 attempts, then Stalled). Management clusters break the
-cycle by creating the namespace in their bases (management-cluster-bases#732);
-the lab does the same in `platformUp` when agents are on, and the
-connectivity release adopts it on install.
-**Unblocks:** [giantswarm/agent-platform#306](https://github.com/giantswarm/agent-platform/issues/306)
-— render the Namespace from the meta chart itself (or target the kagent
-HelmRelease at the namespace with `createNamespace`). Then `ensureNamespace`
-for kagent goes.
+were exhausted, and everything behind kagent waited (seen on the first
+meta-chart run: 6 attempts, then Stalled). The lab created the namespace in
+`platformUp` when agents are on, the way management clusters do in their
+bases, and the connectivity release adopted it.
+**Fixed:** agent-platform 3.20.2
+([giantswarm/agent-platform#306](https://github.com/giantswarm/agent-platform/issues/306),
+PR #308) — with the bundled engine and kagent on, a `pre-install,pre-upgrade`
+hook Job (`<release>-kagent-namespace`, weight -8) creates the namespace when
+it is missing (and waits out a `Terminating` one left by a previous
+uninstall) ahead of the kagent HelmRelease; the connectivity release adopts
+it on install and deletes it with the release. `ensureNamespace` for kagent
+is deleted; a fresh `agentlab up` gets the namespace from the hook.
 
 ## Accepted lab trade-offs (not hacks to fix)
 

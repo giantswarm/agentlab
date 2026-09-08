@@ -9,6 +9,11 @@ import (
 	"github.com/giantswarm/agentlab/internal/config"
 )
 
+// connectivityComponent is the meta chart's component name of the
+// agent-platform-connectivity chart, also its release name — named here only
+// to assert the lab renders no patch for it.
+const connectivityComponent = "agent-platform-connectivity"
+
 // Fixture refs, hoisted so the linter's constant check stays quiet.
 const (
 	devMusterRef        = "muster:dev-1a2b"
@@ -66,11 +71,17 @@ func TestFullImageRef(t *testing.T) {
 func TestComponentPostRenderers(t *testing.T) {
 	cfg := config.Default()
 	cfg.Platform.Agents = true
+	cfg.Platform.Observability = true
 	cfg.Platform.ModelManager = config.ModelManager{Enabled: true, Backends: []string{ollama}}
 	cfg.Platform.DevImages = map[string]string{componentMuster: devMusterRef, componentBackstage: devBackstageRef}
 	rendered, err := componentPostRenderers(cfg)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// The connectivity chart is not patched: its kagent controller metrics
+	// Service selects kagent's own release since agent-platform 3.20.2.
+	if raw, ok := rendered[connectivityComponent]; ok {
+		t.Errorf("connectivity: the lab patches nothing on the wiring chart, got postRenderers:\n%s", raw)
 	}
 	parse := func(component string) postRenderer {
 		raw, ok := rendered[component]
@@ -118,12 +129,6 @@ func TestComponentPostRenderers(t *testing.T) {
 		t.Errorf("kagent: want the kagent-ui NodePort pin on the chart's 8080/TCP port entry, got %q", got)
 	}
 
-	// The connectivity chart's kagent metrics Service selector, corrected to
-	// kagent's instance label (HACKS.md U19) — with agents and observability on.
-	if got := patchOn(connectivityComponent, kindService, kagentMetricsService); len(got) != 1 || !strings.Contains(got[0], "app.kubernetes.io/instance: kagent") {
-		t.Errorf("connectivity: want the kagent metrics selector patch, got %q", got)
-	}
-
 	// The dev images: the override to the fully qualified local ref and the
 	// pull policy on the chart's container.
 	muster := parse(componentMuster)
@@ -147,7 +152,7 @@ func TestComponentPostRenderers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, c := range []string{modelManagerMCPServer, agentManagerMCPServer, connectivityComponent} {
+	for _, c := range []string{modelManagerMCPServer, agentManagerMCPServer} {
 		if _, ok := rendered[c]; ok {
 			t.Errorf("%s: off, want no postRenderers", c)
 		}
