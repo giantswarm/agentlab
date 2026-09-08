@@ -25,6 +25,13 @@ func note(format string, a ...any) {
 	fmt.Printf("    "+format+"\n", a...)
 }
 
+// warn prints a loud, indented warning on stderr — for a check that found
+// something the boot goes on despite (the runtime's memory below what the
+// lab really uses), as opposed to a note, which is informational.
+func warn(format string, a ...any) {
+	fmt.Fprintf(os.Stderr, "    WARNING: "+format+"\n", a...)
+}
+
 // The two tools whose cluster is pinned by command; every other subprocess
 // (kind, docker, git, helm's plugins) inherits the environment untouched.
 const (
