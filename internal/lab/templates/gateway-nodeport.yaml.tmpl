@@ -1,7 +1,7 @@
 # Publishes the agentgateway edge on a FIXED NodePort. The data-plane
 # Deployment/Service are created by the agentgateway controller reconciling
 # the chart-owned Gateway — they are not part of the Helm release, so neither
-# values nor the post-renderer can pin the controller-created Service's
+# values nor a postRenderers patch can pin the controller-created Service's
 # NodePort, and kind's port mappings (fixed at cluster creation) need a stable
 # node-side port. This lab-owned Service selects the same data-plane pods by
 # the standard Gateway API labels the controller stamps on them.

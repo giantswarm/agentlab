@@ -71,7 +71,7 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 		components = append(components, "backstage")
 	}
 	musterPort := strconv.Itoa(cfg.Platform.MusterPort)
-	apsRef := cfg.Platform.APSRef
+	chartVersion := cfg.Platform.ChartVersion
 	agentsEnabled := cfg.Platform.Agents
 	observabilityEnabled := cfg.Platform.Observability
 	modelManagerEnabled := cfg.Platform.ModelManager.Enabled
@@ -148,10 +148,10 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 				Value(&musterPort).
 				Validate(config.ValidatePort),
 			huh.NewInput().
-				Title("agent-platform-standalone git ref").
-				Description("The umbrella chart has no release yet; it is vendored from git at this pinned SHA.").
-				Value(&apsRef).
-				Validate(notEmpty),
+				Title("agent-platform chart version").
+				Description("The agent-platform release the lab installs (an exact version; the lab never floats).\nplatform.chartPath in agentlab.yaml installs a local checkout instead.").
+				Value(&chartVersion).
+				Validate(config.ValidateChartVersion),
 			huh.NewConfirm().
 				Title("Install the agents runtime (kagent)?").
 				Description("Optional: on real clusters agent delivery runs through Flux/GitOps, which\nthis lab does not run. Skip it if you are not exercising agents.").
@@ -212,7 +212,7 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 	cfg.Platform.Enabled = slices.Contains(components, "platform")
 	cfg.Normalize() // backstage implies the platform
 	cfg.Platform.MusterPort = mustAtoi(musterPort)
-	cfg.Platform.APSRef = apsRef
+	cfg.Platform.ChartVersion = chartVersion
 	cfg.Platform.Agents = agentsEnabled
 	cfg.Platform.Observability = observabilityEnabled
 	// Managed models wire into kagent; without the runtime the confirm has

@@ -36,13 +36,8 @@ func Up(cfg *config.Config) error {
 	}
 
 	// Pure network work that needs no cluster starts first, so it overlaps
-	// with cluster creation: vendoring the platform chart, and pulling the
-	// Dex image plus the last boot's images into the host docker cache
-	// (which survives `down`).
-	var chartReady <-chan error
-	if cfg.Platform.Enabled {
-		chartReady = vendorPlatformChart(cfg)
-	}
+	// with cluster creation: pulling the Dex image plus the last boot's
+	// images into the host docker cache (which survives `down`).
 	pulled := pullLabImages(cfg)
 	dexReady := pullDexImage(cfg)
 
@@ -143,11 +138,11 @@ func Up(cfg *config.Config) error {
 
 	reportPreload(loaded)
 	if cfg.Platform.Enabled {
-		// Backstage deploys as part of the platform (the umbrella chart's
-		// backstage component), through the same agentgateway edge. One
-		// summary per boot: the platform path prints it — users, URLs and
-		// try-it commands together — once everything is actually up.
-		if err := platformUp(cfg, chartReady, "Lab is up."); err != nil {
+		// Backstage deploys as part of the platform (the chart's backstage
+		// component), through the same agentgateway edge. One summary per
+		// boot: the platform path prints it — users, URLs and try-it
+		// commands together — once everything is actually up.
+		if err := platformUp(cfg, "Lab is up."); err != nil {
 			return err
 		}
 	} else {

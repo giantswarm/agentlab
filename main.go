@@ -11,6 +11,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -83,7 +84,7 @@ Then:        claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		certsCmd(),
 		labCmd("trust", "Install the lab CA into the system and browser trust stores (one sudo prompt; reversible)", lab.Trust),
 		labCmd("untrust", "Remove the lab CA from the system and browser trust stores", lab.Untrust),
-		labCmd("platform", "Install the Giant Swarm agent platform (muster + Kubernetes MCP)", lab.PlatformUp),
+		labCmd("platform", "Install the Giant Swarm agent platform (the agent-platform chart in the lab shape)", lab.PlatformUp),
 		platformTestCmd(),
 		modelsTestCmd(),
 		agentsTestCmd(),
@@ -94,7 +95,6 @@ Then:        claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		logsCmd(),
 		labCmd("render", "Render every manifest from agentlab.yaml into state/ without applying anything", lab.RenderAll),
 		selfUpdateCmd(),
-		postRenderCmd(),
 	)
 	return root
 }
@@ -258,6 +258,7 @@ func configureCmd() *cobra.Command {
 	var defaults, accessible bool
 	var platform, agents, observability, backstage, modelManager bool
 	var modelManagerBackends []string
+	var chartVersion, chartPath string
 	cmd := &cobra.Command{
 		Use:   "configure",
 		Short: "Discover this machine, then ask for the lab configuration (or keep it with --defaults) and save agentlab.yaml",
@@ -283,6 +284,12 @@ func configureCmd() *cobra.Command {
 			if cmd.Flags().Changed("backstage") {
 				cfg.Backstage.Enabled = backstage
 				cfg.Normalize() // backstage implies the platform
+			}
+			if cmd.Flags().Changed("chart-version") {
+				cfg.Platform.ChartVersion = chartVersion
+			}
+			if cmd.Flags().Changed("chart-path") {
+				cfg.Platform.ChartPath = chartPath
 			}
 			var pinEnabled *bool
 			if cmd.Flags().Changed("model-manager") {
@@ -312,6 +319,14 @@ func configureCmd() *cobra.Command {
 			fmt.Printf("  cluster    %s (Dex on %s)\n", cfg.ClusterName, cfg.Issuer())
 			fmt.Printf("  users      %d\n", len(cfg.Users))
 			fmt.Printf("  platform   %v (agents %v, observability %v)\n", cfg.Platform.Enabled, cfg.Platform.Agents, cfg.Platform.Observability)
+			if cfg.Platform.ChartPath != "" {
+				fmt.Printf("  chart      local checkout %s (chartVersion %s ignored while set)\n", cfg.Platform.ChartPath, cfg.Platform.ChartVersion)
+			} else {
+				fmt.Printf("  chart      agent-platform %s\n", cfg.Platform.ChartVersion)
+			}
+			for _, name := range slices.Sorted(maps.Keys(cfg.Platform.DevImages)) {
+				fmt.Printf("  dev image  %s -> %s\n", name, cfg.Platform.DevImages[name])
+			}
 			fmt.Printf("  backstage  %v\n", cfg.Backstage.Enabled)
 			fmt.Printf("  ai model   %s (key from $%s at deploy time)\n", cfg.AIModel, lab.AnthropicKeyEnv)
 			for _, m := range cfg.Platform.ExtraModels {
@@ -334,6 +349,8 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&observability, "observability", false, "enable/disable the observability stack (Prometheus + mcp-prometheus)")
 	cmd.Flags().BoolVar(&backstage, "backstage", false, "enable/disable Backstage (implies the platform)")
 	cmd.Flags().BoolVar(&modelManager, "model-manager", false, "pin managed models on/off instead of following the host model servers the discovery finds (needs agents)")
+	cmd.Flags().StringVar(&chartVersion, "chart-version", "", "the agent-platform chart release to install (an exact version; default "+config.DefaultChartVersion+")")
+	cmd.Flags().StringVar(&chartPath, "chart-path", "", "install the agent-platform chart from this local directory (an agent-platform checkout's helm/agent-platform) instead of the pinned release; \"\" clears it")
 	cmd.Flags().StringSliceVar(&modelManagerBackends, "model-manager-backends", nil, "pin the host model servers, in order (ollama, lemonade; the first is model-manager's default backend) instead of the ones the discovery finds")
 	cmd.Flags().BoolVar(&accessible, "accessible", false, "prompt-per-question form mode (for screen readers and plain terminals)")
 	return cmd
@@ -535,22 +552,4 @@ and the installed binary stays as it is.`,
 	}
 	cmd.Flags().BoolVar(&check, "check", false, "report the running and the latest release without installing anything; exit status 125 when a newer one exists")
 	return cmd
-}
-
-func postRenderCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:    "post-render",
-		Hidden: true,
-		Short:  "Helm post-renderer for the agent-platform install (stdin -> stdout)",
-		Args:   cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			// The Dex NodePort from agentlab.yaml when the lab is configured;
-			// the default otherwise (the plugin runs in the lab's cwd).
-			dexPort := config.DefaultDexPort
-			if cfg, err := config.Load(); err == nil && cfg.DexPort != 0 {
-				dexPort = cfg.DexPort
-			}
-			return lab.PostRender(os.Stdin, os.Stdout, dexPort)
-		},
-	}
 }

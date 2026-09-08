@@ -75,11 +75,12 @@ const (
 	// the memory floor below accounts for that with a factor, not here.
 	reqBackstageCPU = 20
 	reqBackstageMem = 250
-	// Flux source-controller + helm-controller at 100m/64Mi each: installed
-	// by the Backstage step when agents are on (platformUp/fluxUp) — the
-	// agent create flow's delivery engine.
-	reqFluxCPU = 200
-	reqFluxMem = 128
+	// The chart's bundled Flux engine (the lab shape): the Flux Operator plus
+	// the FluxInstance's source-controller and helm-controller — the delivery
+	// engine of every platform component, so it is always part of the platform.
+	// Measured on the lab 2026-09-08 (agent-platform 3.20.0, flux-engine 0.1.0): flux-operator 100m/64Mi, helm-controller 100m/64Mi, source-controller 50m/64Mi.
+	reqFluxCPU = 250
+	reqFluxMem = 192
 	// observability: kube-state-metrics 200m/200Mi, mcp-prometheus
 	// 105m/144Mi. The Prometheus server, the operator and node-exporter
 	// declare no requests at all, which is one reason real memory use runs
@@ -118,8 +119,8 @@ var labResourceGroups = []resourceGroup{
 		func(c *config.Config) bool { return c.ModelManagerEnabled() }},
 	{"Backstage", resourceRequests{reqBackstageCPU, reqBackstageMem},
 		func(c *config.Config) bool { return c.Platform.Enabled && c.Backstage.Enabled }},
-	{"Flux", resourceRequests{reqFluxCPU, reqFluxMem},
-		func(c *config.Config) bool { return c.Platform.Enabled && c.Backstage.Enabled && c.Platform.Agents }},
+	{"Flux engine", resourceRequests{reqFluxCPU, reqFluxMem},
+		func(c *config.Config) bool { return c.Platform.Enabled }},
 	{"observability", resourceRequests{reqObservabilityCPU, reqObservabilityMem},
 		func(c *config.Config) bool { return c.Platform.Enabled && c.Platform.Observability }},
 }

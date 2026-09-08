@@ -82,7 +82,7 @@ type fleetFamily struct {
 
 // fleetFamilies mirrors agent-platform-mcps' muster.families.
 var fleetFamilies = []fleetFamily{
-	{Name: "kubernetes", Type: "mcp-kubernetes"},
+	{Name: "kubernetes", Type: componentMCPKubernetes},
 	{Name: "capi", Type: "mcp-capi"},
 	{Name: "prometheus", Type: "mcp-observability"},
 }

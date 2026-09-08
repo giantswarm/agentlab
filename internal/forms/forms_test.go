@@ -19,7 +19,7 @@ func TestRunTUIDrive(t *testing.T) {
 		"\r", "\r", "\r", // group 1: cluster name, dex port, dex image
 		"\r", // group 2: customize users? -> keep as is
 		"\r", // group 3: platform + backstage preselected; submit as is
-		// platform group: muster port, aps ref, agents confirm, agents ui
+		// platform group: muster port, chart version, agents confirm, agents ui
 		// port, observability confirm, model-manager confirm, claude model,
 		// extra models confirm
 		"\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r",
