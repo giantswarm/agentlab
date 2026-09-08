@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1140" height="500" viewBox="0 0 1140 500" font-family='-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif'>
+<defs>
+<marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="#57606a"/></marker>
+<marker id="arrow-accent" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="#8250df"/></marker>
+</defs>
+<rect x="262" y="20" width="872" height="472" rx="12" fill="#f6f8fa" stroke="#d0d7de" stroke-dasharray="4 4"/>
+<text x="276" y="40" font-size="12" font-weight="600" fill="#57606a" letter-spacing="0.5">KIND CLUSTER</text>
+<rect x="16" y="120" width="220" height="256" rx="12" fill="#f6f8fa" stroke="#d0d7de" stroke-dasharray="4 4"/>
+<text x="30" y="140" font-size="12" font-weight="600" fill="#57606a" letter-spacing="0.5">YOUR MACHINE</text>
+<text x="820" y="40" text-anchor="middle" font-size="11" fill="#57606a">MCP servers · x_&lt;server&gt;_&lt;tool&gt;</text>
+<text x="1030" y="40" text-anchor="middle" font-size="11" fill="#57606a">what they drive</text>
+<path d="M220,176 L280,176" fill="none" stroke="#57606a" stroke-width="1.5" marker-end="url(#arrow)"/>
+<path d="M220,328 L280,328" fill="none" stroke="#57606a" stroke-width="1.5" marker-end="url(#arrow)"/>
+<path d="M410,176 L470,176" fill="none" stroke="#57606a" stroke-width="1.5" marker-end="url(#arrow)"/>
+<path d="M410,328 L470,328" fill="none" stroke="#57606a" stroke-width="1.5" marker-end="url(#arrow)"/>
+<path d="M670,176 L740,72" fill="none" stroke="#57606a" stroke-width="1.5" marker-end="url(#arrow)"/>
+<path d="M670,176 L740,144" fill="none" stroke="#57606a" stroke-width="1.5" marker-end="url(#arrow)"/>
+<path d="M670,176 L740,216" fill="none" stroke="#57606a" stroke-width="1.5" marker-end="url(#arrow)"/>
+<path d="M670,176 L740,288" fill="none" stroke="#57606a" stroke-width="1.5" marker-end="url(#arrow)"/>
+<path d="M900,72 L950,72" fill="none" stroke="#57606a" stroke-width="1.5" marker-end="url(#arrow)"/>
+<path d="M900,144 L950,144" fill="none" stroke="#57606a" stroke-width="1.5" marker-end="url(#arrow)"/>
+<path d="M900,216 L950,216" fill="none" stroke="#57606a" stroke-width="1.5" marker-end="url(#arrow)"/>
+<path d="M900,288 L950,288" fill="none" stroke="#57606a" stroke-width="1.5" marker-end="url(#arrow)"/>
+<path d="M535,300 L535,226" fill="none" stroke="#57606a" stroke-width="1.5" marker-end="url(#arrow)"/>
+<text x="527" y="264" text-anchor="end" font-size="11" fill="#57606a">forwards the user's</text>
+<text x="527" y="278" text-anchor="end" font-size="11" fill="#57606a">id_token</text>
+<path d="M125,204 L125,238" fill="none" stroke="#8250df" stroke-width="1.5" stroke-dasharray="6 4"/>
+<path d="M125,272 L125,300" fill="none" stroke="#8250df" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arrow-accent)"/>
+<text x="125" y="252" text-anchor="middle" font-size="11" fill="#8250df">401 + WWW-Authenticate</text>
+<text x="125" y="266" text-anchor="middle" font-size="11" fill="#8250df">opens the browser</text>
+<path d="M125,356 L125,452 L430,452" fill="none" stroke="#8250df" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arrow-accent)"/>
+<text x="278" y="444" text-anchor="middle" font-size="11" fill="#8250df">login · localhost:32000 is the kind host port</text>
+<path d="M630,226 L630,420" fill="none" stroke="#8250df" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arrow-accent)"/>
+<text x="640" y="330" text-anchor="start" font-size="11" fill="#8250df">OIDC discovery</text>
+<text x="640" y="344" text-anchor="start" font-size="11" fill="#8250df">token exchange</text>
+<path d="M535,356 L535,420" fill="none" stroke="#8250df" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arrow-accent)"/>
+<text x="527" y="392" text-anchor="end" font-size="11" fill="#8250df">sign in</text>
+<path d="M1110,72 L1119,72 L1119,452 L690,452" fill="none" stroke="#8250df" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arrow-accent)"/>
+<text x="907" y="444" text-anchor="middle" font-size="11" fill="#8250df">validates id_tokens against the same issuer · groups claim → RBAC</text>
+<rect x="30" y="148" width="190" height="56" rx="8" fill="#ffffff" stroke="#8c959f" stroke-width="1.2"/>
+<text x="125.0" y="172.7" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2328">Claude Code</text>
+<text x="125.0" y="187.7" text-anchor="middle" font-size="11.5" fill="#57606a">any MCP client</text>
+<rect x="30" y="300" width="190" height="56" rx="8" fill="#ffffff" stroke="#8c959f" stroke-width="1.2"/>
+<text x="125.0" y="324.7" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2328">Browser</text>
+<text x="125.0" y="339.7" text-anchor="middle" font-size="11.5" fill="#57606a">Dex login page, the portal</text>
+<rect x="280" y="132" width="130" height="224" rx="8" fill="#ffffff" stroke="#8c959f" stroke-width="1.2"/>
+<text x="345.0" y="233.2" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2328">agentgateway</text>
+<text x="345.0" y="248.2" text-anchor="middle" font-size="11.5" fill="#57606a">TLS edge</text>
+<text x="345.0" y="263.2" text-anchor="middle" font-size="11.5" fill="#57606a">*.127.0.0.1.nip.io</text>
+<rect x="470" y="126" width="200" height="100" rx="8" fill="#ffffff" stroke="#0969da" stroke-width="2"/>
+<text x="570.0" y="150.2" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2328">muster</text>
+<text x="570.0" y="165.2" text-anchor="middle" font-size="11.5" fill="#57606a">MCP gateway</text>
+<text x="570.0" y="180.2" text-anchor="middle" font-size="11.5" fill="#57606a">the enforcement point</text>
+<text x="570.0" y="195.2" text-anchor="middle" font-size="11.5" fill="#57606a">OAuth server to clients</text>
+<text x="570.0" y="210.2" text-anchor="middle" font-size="11.5" fill="#57606a">OAuth client to Dex</text>
+<rect x="740" y="48" width="160" height="48" rx="8" fill="#ffffff" stroke="#8c959f" stroke-width="1.2"/>
+<text x="820.0" y="68.7" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2328">mcp-kubernetes</text>
+<text x="820.0" y="83.7" text-anchor="middle" font-size="11.5" fill="#57606a">no auth in-cluster</text>
+<rect x="950" y="48" width="160" height="48" rx="8" fill="#ffffff" stroke="#8c959f" stroke-width="1.2"/>
+<text x="1030.0" y="68.7" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2328">kube-apiserver</text>
+<text x="1030.0" y="83.7" text-anchor="middle" font-size="11.5" fill="#57606a">OIDC · RBAC by groups</text>
+<rect x="740" y="120" width="160" height="48" rx="8" fill="#ffffff" stroke="#8c959f" stroke-width="1.2"/>
+<text x="820.0" y="140.7" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2328">mcp-prometheus</text>
+<text x="820.0" y="155.7" text-anchor="middle" font-size="11.5" fill="#57606a">PromQL over MCP</text>
+<rect x="950" y="120" width="160" height="48" rx="8" fill="#ffffff" stroke="#8c959f" stroke-width="1.2"/>
+<text x="1030.0" y="140.7" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2328">Prometheus</text>
+<text x="1030.0" y="155.7" text-anchor="middle" font-size="11.5" fill="#57606a">kube-prometheus-stack</text>
+<rect x="740" y="192" width="160" height="48" rx="8" fill="#ffffff" stroke="#8c959f" stroke-width="1.2"/>
+<text x="820.0" y="212.7" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2328">model-manager</text>
+<text x="820.0" y="227.7" text-anchor="middle" font-size="11.5" fill="#57606a">pull · load · ModelConfigs</text>
+<rect x="950" y="192" width="160" height="48" rx="8" fill="#ffffff" stroke="#8c959f" stroke-width="1.2" stroke-dasharray="5 4"/>
+<text x="1030.0" y="212.7" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2328">Ollama · Lemonade</text>
+<text x="1030.0" y="227.7" text-anchor="middle" font-size="11.5" fill="#57606a">on your machine</text>
+<rect x="740" y="264" width="160" height="48" rx="8" fill="#ffffff" stroke="#8c959f" stroke-width="1.2"/>
+<text x="820.0" y="284.7" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2328">agent-manager</text>
+<text x="820.0" y="299.7" text-anchor="middle" font-size="11.5" fill="#57606a">agents via muster</text>
+<rect x="950" y="264" width="160" height="48" rx="8" fill="#ffffff" stroke="#8c959f" stroke-width="1.2"/>
+<text x="1030.0" y="284.7" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2328">kagent</text>
+<text x="1030.0" y="299.7" text-anchor="middle" font-size="11.5" fill="#57606a">agents runtime</text>
+<rect x="470" y="300" width="130" height="56" rx="8" fill="#ffffff" stroke="#8c959f" stroke-width="1.2"/>
+<text x="535.0" y="324.7" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2328">Backstage</text>
+<text x="535.0" y="339.7" text-anchor="middle" font-size="11.5" fill="#57606a">Giant Swarm portal</text>
+<rect x="430" y="420" width="260" height="64" rx="8" fill="#ffffff" stroke="#8250df" stroke-width="2"/>
+<text x="560.0" y="441.2" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2328">Dex</text>
+<text x="560.0" y="456.2" text-anchor="middle" font-size="11.5" fill="#57606a">issuer https://localhost:32000/dex</text>
+<text x="560.0" y="471.2" text-anchor="middle" font-size="11.5" fill="#57606a">NodePort 32000 = the kind host port</text>
+</svg>

@@ -448,7 +448,7 @@ the pin can go and the challenge chain becomes proxy start → muster
   knows only static clients). Costs: `Failed` for about a minute after a muster
   restart (self-dial before the listener is up; `agentlab platform` waits it
   out), and a completed sign-in connects muster to itself. Both accepted; see
-  README "Signing in to a downstream server".
+  docs/platform.md "Signing in to a downstream server".
 - **A twice-replaced, once-trusted CA lingers only until the next trust op** —
   a `platform.domain` change stashes the outgoing CA under `certs/replaced/`,
   and both `agentlab trust` and `untrust` sweep every stashed CA out of the

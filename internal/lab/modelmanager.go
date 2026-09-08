@@ -18,7 +18,7 @@ import (
 // model-manager fronts ONE backend per instance today, the first of
 // platform.modelManager.backends; the further ones are wired statically
 // (hostmodels.go) until it is multi-backend. Pods reach the host only through
-// the kind docker network's gateway — the same address the README documents
+// the kind docker network's gateway — the same address docs/models.md documents
 // for extraModels — so every endpoint is detected from `docker network
 // inspect kind` plus the server's default port rather than asked for.
 // Everything that can go wrong is host-side plumbing (bind address,
@@ -211,7 +211,7 @@ func preflightHostServer(cfg *config.Config, backend, endpoint string) error {
 		reason = "connection timed out — the host firewall drops pod->host traffic on the docker\n  bridge (the request never reaches the server)"
 	}
 	return fmt.Errorf("host %s is not reachable from pods at %s: %s.\n"+
-		"  Fixes (README, \"Local backends on the lab host\"):\n%s\n"+
+		"  Fixes (docs/models.md, \"Local backends on the lab host\"):\n%s\n"+
 		"  Then re-run `agentlab platform`, or drop %s from platform.modelManager.backends\n"+
 		"  (`agentlab configure --defaults` rewrites the list from what answers on this machine).\n"+
 		"  Probe output: %.300s", server, endpoint, reason, fixes, backend, out)

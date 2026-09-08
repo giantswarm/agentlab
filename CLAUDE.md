@@ -72,7 +72,7 @@ with Dex doing the logins.
   `platform.extraModels` adds further ModelConfigs (self-hosted
   OpenAI-compatible endpoints, OpenRouter, Gemini, Ollama) with the same
   env-var -> Secret key handling; entries removed from the config are pruned
-  on the next run (see README "Extra model configs").
+  on the next run (see docs/models.md "Extra model configs").
 - `agentlab configure` **discovers this machine on every run** (fresh or
   existing `agentlab.yaml`): the tools `up` shells out to, whether this
   configuration's kind node exists and which host ports it publishes (never
@@ -97,7 +97,7 @@ with Dex doing the logins.
   sits behind the agentgateway route
   `https://agentgateway.<domain>/model-manager` with JWT validation on (a Dex
   token is required; 401 without). Proof: `./agentlab models-test` (see
-  README "Managed models"), one backend per run — `--backend <kind>` picks
+  docs/models.md "Managed models"), one backend per run — `--backend <kind>` picks
   it, the default is the first of the list.
 - For verifying RBAC as a specific user, use `./agentlab login <email>` and
   `kubectl --kubeconfig kubeconfig.oidc` — that is the OIDC path.
@@ -152,7 +152,7 @@ The lab's own e2e checks are the `*-test` subcommands, not `go test`.
   `__complete`), `completion` and `help` never count. Opt-outs:
   `AGENTLAB_TELEMETRY_OPTOUT`, `DO_NOT_TRACK=1`. When iterating on the lab,
   `AGENTLAB_TELEMETRY_TESTMODE=1` keeps the runs out of the production
-  numbers (and logs delivery errors). Details in README "Usage data".
+  numbers (and logs delivery errors). Details in docs/telemetry.md.
 - `internal/update` — `agentlab self-update` (creativeprojects/go-selfupdate
   against the GitHub releases; the command muster and mcp-kubernetes ship)
   and `Remind`, the newer-release hint the root `PersistentPreRun` prints on
@@ -162,7 +162,7 @@ The lab's own e2e checks are the `*-test` subcommands, not `go test`.
   with a two-second cap, and a failed attempt is remembered for ten minutes,
   so an offline machine is not held up. `AGENTLAB_NO_UPDATE_CHECK=1`
   silences it; `dev` builds never check and cannot self-update. Details in
-  README "Keeping agentlab current".
+  docs/cli.md "Keeping agentlab current".
 - `pkg/project` — the build identity (`Version()`, `GitSHA()`,
   `BuildTimestamp()`): stamped by the devctl Makefile / architect CI through
   `-ldflags -X`, else Go's VCS build info (`v0.16.6`, a pseudo-version
@@ -173,8 +173,15 @@ The lab's own e2e checks are the `*-test` subcommands, not `go test`.
   pure no-ops and config/cert edits roll the pod exactly once. The platform
   install (`platform.go`) uses the binary itself as a Helm post-renderer
   (`postrender.go`: hostNetwork, the DCR chart-bug fix, HTTPRoute strip).
+- `docs/` — the documentation, one page per topic (getting started, the
+  command reference, TLS, the platform, agents, models, observability,
+  Backstage, identity, troubleshooting, usage data, development).
+  `README.md` is the short front door: what the lab is, the quick start and
+  the page index — keep it that way and put detail in `docs/`. Code comments
+  cite pages by path and section (`docs/models.md "Local backends on the lab
+  host"`), so keep those section titles stable or update the citations.
 
-Load-bearing invariants (details in README.md):
+Load-bearing invariants (details in docs/):
 
 - **The agent platform is on by default** — it is what the lab tests. Dex,
   kind and the RBAC exist to serve it; muster is the single auth enforcement

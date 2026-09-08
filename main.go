@@ -59,9 +59,9 @@ Then:        claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		Version:       project.VersionLine(),
 		// Runs for every subcommand, none of which has a PersistentPreRun of
 		// its own: one anonymous usage signal per command a person runs, like
-		// kubectl-gs (README "Usage data"; AGENTLAB_TELEMETRY_OPTOUT=1 to
+		// kubectl-gs (docs/telemetry.md; AGENTLAB_TELEMETRY_OPTOUT=1 to
 		// disable), and the hint that a newer release exists, ahead of the
-		// command's own output (README "Keeping agentlab current";
+		// command's own output (docs/cli.md "Keeping agentlab current";
 		// AGENTLAB_NO_UPDATE_CHECK=1 to disable). Plumbing, completion and
 		// help stay quiet for both; self-update reports the versions itself.
 		PersistentPreRun: func(cmd *cobra.Command, _ []string) {

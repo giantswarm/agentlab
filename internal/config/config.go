@@ -142,7 +142,7 @@ type Platform struct {
 	// pair (PEM) instead of the minted lab-CA wildcard — for users who own a
 	// real domain (wildcard record -> 127.0.0.1) and run their own ACME
 	// tooling. Both fields set or both empty. The Dex issuer still serves
-	// the lab CA either way; see the README's TLS section.
+	// the lab CA either way; see docs/tls.md.
 	TLS PlatformTLS `yaml:"tls"`
 	// agent-platform-standalone has no chart release yet
 	// (giantswarm/agent-platform-standalone#11), so it is vendored from git
@@ -186,7 +186,7 @@ type ModelManager struct {
 	// Per-backend base URL as pods reach it, keyed by backend. Empty
 	// autodetects http://<kind docker network gateway>:<default port> at
 	// platform time (11434 for Ollama, 13305 for Lemonade) — the same
-	// address the README documents for extraModels (`docker network inspect
+	// address docs/models.md documents for extraModels (`docker network inspect
 	// kind`). Set one for a server elsewhere on the LAN: a backend with an
 	// endpoint here is kept by `agentlab configure` whether or not a server
 	// answers on this machine.
@@ -426,7 +426,7 @@ func Default() *Config {
 	return &Config{
 		ClusterName: "agentlab",
 		DexPort:     DefaultDexPort,
-		// groups on staticPasswords requires Dex >= v2.45.0; see README.
+		// groups on staticPasswords requires Dex >= v2.45.0; see docs/identity.md.
 		DexImage: "ghcr.io/dexidp/dex:v2.45.1",
 		// The agent-platform BOM's own default, and the newest model the
 		// pinned Backstage build's thinking-mode handling is known to cover.

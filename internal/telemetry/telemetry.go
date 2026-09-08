@@ -3,7 +3,7 @@
 // agentlab version, operating system and architecture, under a hashed
 // machine identifier that lets Giant Swarm count users without knowing who
 // they are. Nothing about the lab — its configuration, users, clusters,
-// arguments or flags — leaves the machine. See README "Usage data".
+// arguments or flags — leaves the machine. See docs/telemetry.md.
 //
 // Setting AGENTLAB_TELEMETRY_OPTOUT (any value) or the console convention
 // DO_NOT_TRACK=1 disables it. Reporting never blocks or fails a command.
