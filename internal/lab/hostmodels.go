@@ -34,7 +34,14 @@ const (
 	// `tools` for any model and emulates them through the prompt, but only a
 	// model trained for them calls them reliably, which is what an agent
 	// needs.
-	lmStudioLLMType = "llm"
+	//
+	// Its model types are llm, vlm (vision-language) and embedding. Only the
+	// embedding one cannot serve an agent, so the inventory excludes THAT
+	// rather than keeping only `llm`: a vlm is a chat model, and keying on
+	// llm dropped it from the count and from models-test's ground truth.
+	// Both spellings, since /api/v0 said embeddings.
+	lmStudioEmbeddingType  = "embedding"
+	lmStudioEmbeddingsType = "embeddings"
 )
 
 // hostModelsFn lists a server's downloaded models; a variable so tests can
@@ -122,8 +129,9 @@ func lemonadeModels(base string) ([]HostModel, error) {
 }
 
 // lmStudioModels reads LM Studio's /api/v1/models (0.4.0+): its library, so
-// every entry is downloaded. Only LLMs can serve an agent — embedding models
-// carry no capability object at all — and tool calling is the model's
+// every entry is downloaded. Everything but an embedding model can serve an
+// agent — a vlm is a chat model with vision, and embedding entries carry no
+// capability object at all — and tool calling is the model's
 // training, which LM Studio reports directly, so there is no second request
 // per model as on Ollama. Size is already bytes here: no conversion, unlike
 // Lemonade's decimal GB above.
@@ -149,7 +157,7 @@ func lmStudioModels(base string) ([]HostModel, error) {
 	}
 	var models []HostModel
 	for _, m := range list.Models {
-		if m.Type != lmStudioLLMType {
+		if m.Type == lmStudioEmbeddingType || m.Type == lmStudioEmbeddingsType {
 			continue
 		}
 		tools := m.Capabilities != nil && m.Capabilities.TrainedForToolUse

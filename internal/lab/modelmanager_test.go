@@ -91,8 +91,11 @@ func TestHostInventoryFallsBackToLoopback(t *testing.T) {
 	dead := "http://127.0.0.1:1"
 
 	// The endpoint answers: taken as is.
+	// The fake's library holds three agent models (its embedding entry is
+	// filtered out by the reader).
+	const agentModels = 3
 	got, err := hostInventory(lmstudio, srv.URL)
-	if err != nil || len(got) != 2 {
+	if err != nil || len(got) != agentModels {
 		t.Fatalf("direct read: %d models, err=%v", len(got), err)
 	}
 
@@ -101,7 +104,7 @@ func TestHostInventoryFallsBackToLoopback(t *testing.T) {
 	loopbackBaseFn = func(string) string { return srv.URL }
 	defer func() { loopbackBaseFn = restore }()
 	got, err = hostInventory(lmstudio, unreachable)
-	if err != nil || len(got) != 2 {
+	if err != nil || len(got) != agentModels {
 		t.Fatalf("fallback read: %d models, err=%v", len(got), err)
 	}
 

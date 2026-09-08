@@ -43,9 +43,11 @@ const (
 	fieldCapabilities = "capabilities"
 	fieldToolUse      = "trained_for_tool_use"
 	typeLLM           = "llm"
+	typeVLM           = "vlm"
 	typeEmbedding     = "embedding"
 	modelGranite      = "ibm/granite-4-micro"
 	modelQwen317b     = "qwen/qwen3-1.7b"
+	modelQwenVL       = "qwen/qwen3-vl-8b"
 	modelNomicEmbed   = "text-embedding-nomic-embed-text-v1.5"
 )
 
@@ -123,6 +125,10 @@ func fakeLMStudio(t *testing.T) *httptest.Server {
 			fieldCapabilities: map[string]any{fieldToolUse: true, labelVision: false}},
 		{fieldKey: modelQwen317b, fieldType: typeLLM, fieldSizeBytes: 1_000_000_000,
 			fieldCapabilities: map[string]any{fieldToolUse: false}},
+		// A vision-language model is a chat model: it belongs in the
+		// inventory, and it can call tools.
+		{fieldKey: modelQwenVL, fieldType: typeVLM, fieldSizeBytes: 5_800_000_000,
+			fieldCapabilities: map[string]any{fieldToolUse: true, labelVision: true}},
 		{fieldKey: modelNomicEmbed, fieldType: typeEmbedding, fieldSizeBytes: 84_106_624},
 	}))
 }
@@ -245,11 +251,16 @@ func TestHostServerModels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The embedding model is not an agent model; size_bytes needs no
-	// conversion, unlike Lemonade's decimal GB.
-	want = []HostModel{{modelGranite, true, 2_100_000_000}, {modelQwen317b, false, 1_000_000_000}}
+	// The embedding model is not an agent model, but the vision-language one
+	// is — keying on `llm` dropped it. size_bytes needs no conversion,
+	// unlike Lemonade's decimal GB.
+	want = []HostModel{
+		{modelGranite, true, 2_100_000_000},
+		{modelQwen317b, false, 1_000_000_000},
+		{modelQwenVL, true, 5_800_000_000},
+	}
 	if !slices.Equal(got, want) {
-		t.Errorf("lmstudio models = %v, want %v (LLMs only, size_bytes as is)", got, want)
+		t.Errorf("lmstudio models = %v, want %v (everything but embeddings, size_bytes as is)", got, want)
 	}
 }
 
