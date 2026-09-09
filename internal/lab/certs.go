@@ -50,7 +50,7 @@ const (
 )
 
 // dexSANNames are the DNS names of the Dex server cert: the issuer name
-// (localhost — see the README on why not 127.0.0.1) plus the in-cluster
+// (localhost — see docs/identity.md on why not 127.0.0.1) plus the in-cluster
 // service names. Also the fixed half of the CA's name constraints.
 var dexSANNames = []string{"localhost", componentDex, "dex.dex.svc", "dex.dex.svc.cluster.local"}
 

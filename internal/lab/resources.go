@@ -25,7 +25,7 @@ import (
 // The figures below are the requests `kubectl describe node` reports for each
 // group of pods, measured on a live full default lab (agents, observability,
 // Backstage, model-manager) on 2026-09-08: 2540m / 2532Mi allocated in total.
-// README "### Docker resources" is the human copy of these constants — its
+// docs/getting-started.md "Docker resources" is the human copy of these constants — its
 // table lists the same groups — so a change here is a change there.
 
 // resourceRequests is what a group of pods asks the scheduler for: CPU in
@@ -96,7 +96,7 @@ const (
 	runtimeHeadroomCPU = 600
 
 	// memRealUseFactor is how far real memory use runs above the requests
-	// column on a live lab: about twice (README "Docker resources" — a
+	// column on a live lab: about twice (docs/getting-started.md "Docker resources" — a
 	// platform+agents node sat at 2.4 GiB of real use against 1.8 GiB of
 	// requests, and the full lab's Backstage and Prometheus use several
 	// times what they declare). The memory floor is the requests times this.
@@ -165,8 +165,8 @@ func ceilCPUs(millicores int) int {
 }
 
 // smallerLabFlags is the configuration a refused boot is pointed at: the
-// platform and its agents without Backstage and observability — the README's
-// "platform + agents only" row. Empty when cfg is already that (or smaller),
+// platform and its agents without Backstage and observability — the Docker
+// resources page's "platform + agents only" row. Empty when cfg is already that (or smaller),
 // so the message never suggests a change that changes nothing.
 func smallerLabFlags(cfg *config.Config) string {
 	if !cfg.Platform.Enabled || (!cfg.Backstage.Enabled && !cfg.Platform.Observability) {
@@ -281,14 +281,14 @@ func judgeRuntimeResources(m runtimeMeasure, cfg *config.Config, needs resourceN
 			"  Its pods request %s CPUs of the single kind node, plus room for the pods the\n"+
 			"  platform creates at run time, and the kube-scheduler refuses a pod whose CPU\n"+
 			"  request does not fit: the boot would wait on an agentgateway that stays\n"+
-			"  Pending forever (README \"Docker resources\"). The requests:\n%s\n%s",
+			"  Pending forever (docs/getting-started.md \"Docker resources\"). The requests:\n%s\n%s",
 			m.engine(), m.CPUs, needs.MinCPUs, fmtCPUs(needs.Requests.CPU),
 			wrap(requestsBreakdown(needs), 84, "    "), resourceFixes(m, cfg, needs))
 	}
 	if m.MemMiB < needs.Requests.Mem {
 		return "", fmt.Errorf("%s has %s of memory; this lab configuration needs %s.\n"+
 			"  Its pods request %s of the single kind node, which does not fit, so they do not\n"+
-			"  even all schedule — and real use runs about %dx the requests (README \"Docker resources\").\n%s",
+			"  even all schedule — and real use runs about %dx the requests (docs/getting-started.md \"Docker resources\").\n%s",
 			m.engine(), fmtGiB(m.MemMiB), fmtGiB(needs.MinMemMiB), fmtGiB(needs.Requests.Mem),
 			memRealUseFactor, resourceFixes(m, cfg, needs))
 	}
@@ -296,7 +296,7 @@ func judgeRuntimeResources(m runtimeMeasure, cfg *config.Config, needs resourceN
 		warning = fmt.Sprintf("%s has %s of memory; this lab configuration wants %s.\n"+
 			"    Its pods request only %s, so they schedule — but real use runs about %dx the requests\n"+
 			"    (Backstage and Prometheus use several times what they declare): expect evictions\n"+
-			"    and OOM kills under load (README \"Docker resources\").\n%s",
+			"    and OOM kills under load (docs/getting-started.md \"Docker resources\").\n%s",
 			m.engine(), fmtGiB(m.MemMiB), fmtGiB(needs.MinMemMiB), fmtGiB(needs.Requests.Mem), memRealUseFactor,
 			indent(resourceFixes(m, cfg, needs), "  "))
 	}
@@ -305,7 +305,7 @@ func judgeRuntimeResources(m runtimeMeasure, cfg *config.Config, needs resourceN
 
 // requestsBreakdown lists the enabled groups with their CPU requests, so a
 // refusal shows where the number comes from: "kind control plane 0.95, Dex
-// 0.05, agent platform 0.51, ...". The names are the README table's rows.
+// 0.05, agent platform 0.51, ...". The names are the Docker resources table's rows.
 func requestsBreakdown(needs resourceNeeds) string {
 	parts := make([]string, 0, len(needs.Groups))
 	for _, g := range needs.Groups {
@@ -357,7 +357,7 @@ func preflightRuntimeResources(cfg *config.Config) error {
 	step("Checking the container runtime's CPUs and memory against this lab's requests")
 	cpus, memBytes, err := runtimeResources()
 	if err != nil {
-		note("could not read them (%v); going on. This lab requests %s CPUs / %s and needs %d CPUs / %s (README \"Docker resources\")",
+		note("could not read them (%v); going on. This lab requests %s CPUs / %s and needs %d CPUs / %s (docs/getting-started.md \"Docker resources\")",
 			err, fmtCPUs(needs.Requests.CPU), fmtGiB(needs.Requests.Mem), needs.MinCPUs, fmtGiB(needs.MinMemMiB))
 		return nil
 	}

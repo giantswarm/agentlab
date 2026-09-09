@@ -67,7 +67,7 @@ func labConfig(platform, agents, observability, backstage, modelManager bool) *c
 
 // The floor follows the enabled components. The full default lab reproduces
 // the live measurement the constants come from (2590m / 2596Mi allocated on
-// 2026-09-08) and lands on the README's rows: 4 CPUs for the full lab, 3 for
+// 2026-09-08) and lands on the Docker resources table's rows: 4 CPUs for the full lab, 3 for
 // the platform and its agents alone. The chart's Flux engine counts whenever
 // the platform does (the lab shape brings it with the chart); everything but
 // kind and Dex is inert when the platform is off.
@@ -90,7 +90,7 @@ func TestLabResourceNeeds(t *testing.T) {
 			cpu: 2535, mem: 2516, minCPUs: 4, minMem: 5032,
 			groups: "kind control plane,Dex,agent platform,agents runtime,Backstage,Flux engine,observability",
 		},
-		"platform + agents only (README's smaller lab)": {
+		"platform + agents only (the docs' smaller lab)": {
 			cfg: labConfig(true, true, false, false, true),
 			cpu: 2265, mem: 2002, minCPUs: 3, minMem: 4004,
 			groups: "kind control plane,Dex,agent platform,agents runtime,model-manager,Flux engine",
@@ -182,7 +182,7 @@ func TestJudgeRuntimeResourcesRefusesTooFewCPUs(t *testing.T) {
 		"colima start --cpu 4 --memory 6",
 		"agentlab configure --backstage=false --observability=false",
 		"needs 3 CPUs and 3.9 GiB",
-		`README "Docker resources"`,
+		`docs/getting-started.md "Docker resources"`,
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("refusal lacks %q:\n%s", want, err)
@@ -240,7 +240,7 @@ func TestJudgeRuntimeResourcesMemory(t *testing.T) {
 	}
 
 	if warning, err := judgeRuntimeResources(measure(6, 8192), cfg, needs); err != nil || warning != "" {
-		t.Errorf("6 CPUs / 8 GiB is the README's recommendation and must pass silently, got warning %q, err %v", warning, err)
+		t.Errorf("6 CPUs / 8 GiB is the Docker resources page's recommendation and must pass silently, got warning %q, err %v", warning, err)
 	}
 	if warning, err := judgeRuntimeResources(measure(4, 5192), cfg, needs); err != nil || warning != "" {
 		t.Errorf("exactly the floor passes without a warning, got warning %q, err %v", warning, err)
