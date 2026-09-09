@@ -227,7 +227,10 @@ func describe(gvr schema.GroupVersionResource, ns, name string) string {
 // "crd", "helmreleases.helm.toolkit.fluxcd.io" — to the GVR the apiserver
 // serves it under, preferred version first, through discovery. A fully
 // qualified name is tried as resource.version.group before resource.group,
-// as kubectl does, so a group with dots in it resolves.
+// as kubectl does, so a group with dots in it resolves. A miss resets the
+// cached discovery once and retries (kubectl invalidates its cache the same
+// way): the kinds a Helm install registers — a HelmRelease, an MCPServer, a
+// Prometheus — are asked for after the cache was primed by an earlier call.
 func gvrFor(resourceArg string) (schema.GroupVersionResource, error) {
 	k, err := labKube()
 	if err != nil {
@@ -237,6 +240,20 @@ func gvrFor(resourceArg string) (schema.GroupVersionResource, error) {
 }
 
 func (k *kubeClients) gvrFor(resourceArg string) (schema.GroupVersionResource, error) {
+	gvr, err := k.resourcesFor(resourceArg)
+	if err != nil {
+		k.resetMapper()
+		gvr, err = k.resourcesFor(resourceArg)
+	}
+	if err != nil {
+		return schema.GroupVersionResource{}, fmt.Errorf("the apiserver serves no resource %q: %w", resourceArg, err)
+	}
+	return gvr, nil
+}
+
+// resourcesFor is one lookup of a resource argument against the mapper as it
+// is cached now.
+func (k *kubeClients) resourcesFor(resourceArg string) (schema.GroupVersionResource, error) {
 	fully, gr := schema.ParseResourceArg(resourceArg)
 	if fully != nil {
 		if gvrs, err := k.mapper.ResourcesFor(*fully); err == nil && len(gvrs) > 0 {
@@ -245,9 +262,21 @@ func (k *kubeClients) gvrFor(resourceArg string) (schema.GroupVersionResource, e
 	}
 	gvrs, err := k.mapper.ResourcesFor(gr.WithVersion(""))
 	if err != nil {
-		return schema.GroupVersionResource{}, fmt.Errorf("the apiserver serves no resource %q: %w", resourceArg, err)
+		return schema.GroupVersionResource{}, err
 	}
 	return gvrs[0], nil
+}
+
+// restMapping resolves a kind to its resource and scope, resetting the cached
+// discovery once on a miss (see gvrFor): a custom resource is applied after
+// the chart that brought its CRD was installed, with the cache primed before.
+func (k *kubeClients) restMapping(gk schema.GroupKind, version string) (*meta.RESTMapping, error) {
+	mapping, err := k.mapper.RESTMapping(gk, version)
+	if err != nil {
+		k.resetMapper()
+		mapping, err = k.mapper.RESTMapping(gk, version)
+	}
+	return mapping, err
 }
 
 // applyResult is what one server-side apply did: the object, and whether it
@@ -374,7 +403,7 @@ func (k *kubeClients) apply(ctx context.Context, obj *unstructured.Unstructured)
 	if res.name == "" {
 		return res, fmt.Errorf("%s has no metadata.name", gvk.Kind)
 	}
-	mapping, err := k.mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
+	mapping, err := k.restMapping(gvk.GroupKind(), gvk.Version)
 	if err != nil {
 		return res, fmt.Errorf("%s %s: %w (ensure the CRDs are installed first)", gvk.Kind, res.name, err)
 	}

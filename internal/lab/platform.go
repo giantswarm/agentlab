@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
@@ -10,6 +11,11 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -32,8 +38,35 @@ const (
 	componentMCPKubernetes = "mcp-kubernetes"
 )
 
-// conditionTrue is a Kubernetes condition's status when it holds.
-const conditionTrue = "True"
+// A Kubernetes object's Ready condition, and a condition's status when it
+// holds.
+const (
+	conditionReady = "Ready"
+	conditionTrue  = "True"
+)
+
+// The platform's generated secrets (platformSecretsName): created once and
+// then left alone — regenerating the encryption key on every run would
+// invalidate every issued token. dex-client-secret must match the
+// `agent-platform` staticClient in the Dex config.
+const (
+	platformSecretsName       = "agent-platform-secrets"
+	backstageSessionSecretKey = "backstage-session-secret"
+)
+
+// The CoreDNS Deployment the Corefile rewrite rolls, in kube-system.
+const (
+	kubeSystemNamespace = "kube-system"
+	corednsDeployment   = "coredns"
+)
+
+// musterMCPServerResource is muster's MCPServer as kubectl's resource
+// argument, fully qualified because kagent ships an MCPServer CRD of its own
+// (mcpservers.kagent.dev): the bare kind resolves to the wrong API group.
+const musterMCPServerResource = "mcpservers.muster.giantswarm.io"
+
+// musterRestartTimeout bounds the rollout of a muster pod the lab replaces.
+const musterRestartTimeout = 120 * time.Second
 
 // Leftovers of earlier agentlab versions in the lab's working directory: the
 // git-vendored agent-platform-standalone chart and the generated Helm
@@ -127,12 +160,14 @@ func platformUp(cfg *config.Config, header string) error {
 	}
 	chart := platformChartFor(cfg)
 	step("Installing %s in the lab shape (bundled Flux engine on, self-management off)", chart)
+	ctx := context.Background()
 
 	// The Gateway API CRDs are the chart's documented cluster-level
 	// prerequisite; embedded so the boot needs no network for them.
-	// Idempotent re-apply.
+	// Idempotent re-apply; the apply waits for the apiserver to serve the
+	// kinds before anything below uses them.
 	step("Installing the Gateway API CRDs (standard channel)")
-	if err := pipeInto(gatewayAPICRDs, "kubectl", "apply", "-f", "-"); err != nil {
+	if _, err := applyManifests(ctx, gatewayAPICRDs); err != nil {
 		return err
 	}
 
@@ -166,30 +201,8 @@ func platformUp(cfg *config.Config, header string) error {
 	if err := ensureTLSSecret(platformNamespace, "agent-platform-tls", edgeCert, edgeKey); err != nil {
 		return err
 	}
-	// Created once and then left alone: regenerating the encryption key on
-	// every run would invalidate every issued token. dex-client-secret must
-	// match the `agent-platform` staticClient in the Dex config.
-	if _, err := outputQuiet("kubectl", "-n", platformNamespace, "get", "secret", "agent-platform-secrets"); err != nil {
-		if err := runQuiet("kubectl", "-n", platformNamespace, "create", "secret", "generic", "agent-platform-secrets",
-			"--from-literal=dex-client-secret="+config.AgentPlatformClientSecret,
-			"--from-literal=registration-token="+randHex(32),
-			"--from-literal=oauth-encryption-key="+randBase64(32),
-			"--from-literal=valkey-password="+randHex(16),
-			"--from-literal=backstage-session-secret="+randBase64(32)); err != nil {
-			return err
-		}
-		note("created agent-platform-secrets")
-	} else {
-		note("agent-platform-secrets already exists, leaving it alone")
-		// Except for keys this version introduced: a cluster created by an
-		// older lab lacks them, and Backstage's env would fail to resolve.
-		if !secretHasKey(platformNamespace, "agent-platform-secrets", "backstage-session-secret") {
-			if err := runQuiet("kubectl", "-n", platformNamespace, "patch", "secret", "agent-platform-secrets",
-				"-p", fmt.Sprintf(`{"stringData":{"backstage-session-secret":%q}}`, randBase64(32))); err != nil {
-				return err
-			}
-			note("added backstage-session-secret to agent-platform-secrets")
-		}
+	if err := ensurePlatformSecrets(ctx); err != nil {
+		return err
 	}
 
 	// Inside pods, *.<domain> must resolve to the edge Gateway (outside, the
@@ -197,35 +210,29 @@ func platformUp(cfg *config.Config, header string) error {
 	// could never reach https://muster.<domain>/mcp. The pinned edge Service
 	// below is the rewrite's target, applied before anything resolves it.
 	step("Pointing in-cluster *.%s at the edge (CoreDNS rewrite)", cfg.Platform.Domain)
-	if _, corednsPath, err := renderManifest(cfg, "coredns.yaml.tmpl"); err != nil {
+	if coredns, _, err := renderManifest(cfg, "coredns.yaml.tmpl"); err != nil {
 		return err
-	} else if out, err := outputQuiet("kubectl", "apply", "-f", corednsPath); err != nil {
+	} else if _, err := applyRestartingOnChange(ctx, coredns, kubeSystemNamespace, corednsDeployment); err != nil {
 		return err
-	} else if !strings.Contains(out, "unchanged") {
-		if err := runQuiet("kubectl", "-n", "kube-system", "rollout", "restart", "deployment/coredns"); err != nil {
-			return err
-		}
 	}
-	if _, nodeportPath, err := renderManifest(cfg, "gateway-nodeport.yaml.tmpl"); err != nil {
+	if nodeport, _, err := renderManifest(cfg, "gateway-nodeport.yaml.tmpl"); err != nil {
 		return err
-	} else if err := runQuiet("kubectl", "apply", "-f", nodeportPath); err != nil {
+	} else if _, err := applyManifests(ctx, nodeport); err != nil {
 		return err
 	}
 
 	if cfg.Backstage.Enabled {
 		// Catalog entities + the agent create flow's scaffolder Template,
 		// mounted into the chart's Backstage; must exist before the pod starts.
-		if _, catalogPath, err := renderManifest(cfg, "backstage-catalog.yaml.tmpl"); err != nil {
+		// Backstage reads app-config at startup only, so a changed overlay
+		// (e.g. flipping platform.observability toggles mimirEnabled) needs a
+		// pod roll on re-runs: started here and absorbed by the install's wait
+		// right below; on a fresh install the deployment does not exist yet and
+		// the first pod reads the final config.
+		if catalog, _, err := renderManifest(cfg, "backstage-catalog.yaml.tmpl"); err != nil {
 			return err
-		} else if applied, err := output("kubectl", "apply", "-f", catalogPath); err != nil {
+		} else if _, err := applyRestartingOnChange(ctx, catalog, platformNamespace, componentBackstage); err != nil {
 			return err
-		} else if strings.Contains(applied, "configured") {
-			// Backstage reads app-config at startup only, so a changed overlay
-			// (e.g. flipping platform.observability toggles mimirEnabled) needs
-			// a pod roll on re-runs. Started here and absorbed by the install's
-			// --wait right below; on a fresh install the deployment does not
-			// exist yet and the first pod reads the final config.
-			_ = runQuiet("kubectl", "-n", platformNamespace, "rollout", "restart", "deploy/backstage")
 		}
 	}
 
@@ -268,7 +275,10 @@ func platformUp(cfg *config.Config, header string) error {
 	if err != nil {
 		return err
 	}
-	if _, _, err := renderManifest(cfg, "demo-workflow.yaml.tmpl"); err != nil {
+	// Rendered here, applied after the install (the Workflow CRD ships with
+	// muster), so a render error surfaces before the long wait.
+	demoWorkflow, _, err := renderManifest(cfg, "demo-workflow.yaml.tmpl")
+	if err != nil {
 		return err
 	}
 
@@ -368,7 +378,7 @@ func platformUp(cfg *config.Config, header string) error {
 	// main tab empty, which reads as "the plugin is broken" rather than
 	// "nothing to show".
 	step("Creating the demo workflow")
-	if err := runQuiet("kubectl", "apply", "-f", StateDir+"/demo-workflow.yaml"); err != nil {
+	if _, err := applyManifests(ctx, demoWorkflow); err != nil {
 		return err
 	}
 	// The per-server OAuth sign-in fixture (oauthfixture.go) — after the
@@ -501,6 +511,63 @@ func platformUp(cfg *config.Config, header string) error {
 	return nil
 }
 
+// ensurePlatformSecrets creates the platform's generated secrets once
+// (platformSecretsName) and leaves an existing Secret alone, except for the
+// keys a newer lab introduced: a cluster created by an older lab lacks them,
+// and Backstage's env would fail to resolve.
+func ensurePlatformSecrets(ctx context.Context) error {
+	exists, err := objectExists(ctx, gvrSecrets, platformNamespace, platformSecretsName)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		if err := ensureSecret(platformNamespace, platformSecretsName, corev1.SecretTypeOpaque, map[string][]byte{
+			"dex-client-secret":       []byte(config.AgentPlatformClientSecret),
+			"registration-token":      []byte(randHex(32)),
+			"oauth-encryption-key":    []byte(randBase64(32)),
+			"valkey-password":         []byte(randHex(16)),
+			backstageSessionSecretKey: []byte(randBase64(32)),
+		}); err != nil {
+			return err
+		}
+		note("created %s", platformSecretsName)
+		return nil
+	}
+	note("%s already exists, leaving it alone", platformSecretsName)
+	if !secretHasKey(platformNamespace, platformSecretsName, backstageSessionSecretKey) {
+		patch := fmt.Sprintf(`{"stringData":{%q:%q}}`, backstageSessionSecretKey, randBase64(32))
+		if err := patchObject(ctx, gvrSecrets, platformNamespace, platformSecretsName, types.MergePatchType, []byte(patch)); err != nil {
+			return err
+		}
+		note("added %s to %s", backstageSessionSecretKey, platformSecretsName)
+	}
+	return nil
+}
+
+// applyRestartingOnChange applies a manifest and, when the apply created or
+// changed anything, restarts the Deployment that reads the result at startup
+// only — CoreDNS its Corefile, Backstage its app-config overlay — so a re-run
+// with a changed render rolls the pod exactly once and an unchanged one
+// leaves it alone. A Deployment that does not exist yet is not an error: a
+// fresh install's first pod reads the final config. Reports whether it
+// restarted.
+func applyRestartingOnChange(ctx context.Context, manifest []byte, ns, deployment string) (bool, error) {
+	results, err := applyManifests(ctx, manifest)
+	if err != nil {
+		return false, err
+	}
+	if !anyChanged(results) {
+		return false, nil
+	}
+	if err := restartDeployment(ctx, ns, deployment); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
 // refuseOlderLabShape stops an install onto a cluster an earlier agentlab
 // built: the standalone umbrella under the same release name, or the Flux
 // controllers the old lab installed itself in flux-system (the chart's own
@@ -558,22 +625,21 @@ type platformReleaseStatus struct {
 // component releases the meta chart rendered plus the lab's own
 // (mcp-prometheus) — with their Ready condition.
 func platformReleases() ([]platformReleaseStatus, error) {
-	out, err := outputQuiet("kubectl", "-n", platformNamespace, "get", "helmreleases.helm.toolkit.fluxcd.io",
-		"-o", `jsonpath={range .items[*]}{.metadata.name}{"\t"}{.status.conditions[?(@.type=="Ready")].status}{"\t"}{.status.conditions[?(@.type=="Ready")].message}{"\n"}{end}`)
+	gvr, err := gvrFor(fluxHelmReleaseResource)
 	if err != nil {
 		return nil, err
 	}
-	var releases []platformReleaseStatus
-	for line := range strings.Lines(out) {
-		fields := strings.SplitN(strings.TrimRight(line, "\n"), "\t", 3)
-		if len(fields) < 2 || fields[0] == "" {
-			continue
-		}
-		rel := platformReleaseStatus{name: fields[0], ready: fields[1]}
-		if len(fields) == 3 {
-			rel.message = fields[2]
-		}
-		releases = append(releases, rel)
+	items, err := listObjects(context.Background(), gvr, platformNamespace, "")
+	if err != nil {
+		return nil, err
+	}
+	releases := make([]platformReleaseStatus, 0, len(items))
+	for i := range items {
+		releases = append(releases, platformReleaseStatus{
+			name:    items[i].GetName(),
+			ready:   conditionStatus(&items[i], conditionReady),
+			message: conditionMessage(&items[i], conditionReady),
+		})
 	}
 	return releases, nil
 }
@@ -668,15 +734,12 @@ func waitMCPServerReachable(name string) error {
 }
 
 // waitMCPServerState polls the MCPServer CR's status.state until it reads one
-// of want. The name is fully qualified because kagent ships its own MCPServer
-// CRD (mcpservers.kagent.dev), so the bare kind resolves to the wrong API
-// group.
+// of want.
 func waitMCPServerState(name string, want ...string) error {
 	var state string
 	var readErr error
 	reached := waitFor(40, 3*time.Second, func() bool {
-		state, readErr = outputQuiet("kubectl", "-n", platformNamespace, "get", "mcpservers.muster.giantswarm.io", name,
-			"-o", "jsonpath={.status.state}")
+		state, readErr = mcpServerState(name)
 		return readErr == nil && slices.Contains(want, state)
 	})
 	if !reached {
@@ -686,6 +749,22 @@ func waitMCPServerState(name string, want ...string) error {
 	}
 	note("MCPServer %s: %s", name, state)
 	return nil
+}
+
+// mcpServerState reads one muster MCPServer's status.state in the platform
+// namespace (musterMCPServerResource): "" before muster's first reconcile,
+// the apiserver's error for a CR — or a CRD — that is not there.
+func mcpServerState(name string) (string, error) {
+	gvr, err := gvrFor(musterMCPServerResource)
+	if err != nil {
+		return "", err
+	}
+	obj, err := getObject(context.Background(), gvr, platformNamespace, name)
+	if err != nil {
+		return "", err
+	}
+	state, _, _ := unstructured.NestedString(obj.Object, "status", "state")
+	return state, nil
 }
 
 // claudeCodeHint is the "point Claude Code at it" block of the platform-up
@@ -740,10 +819,11 @@ func ensureMusterValidatesTokens(cfg *config.Config) error {
 	}
 	note("muster rejects Dex tokens (%v)", lastErr)
 	note("known muster startup flake (HACKS.md U6) — replacing the muster pod once")
-	if err := runQuiet("kubectl", "-n", platformNamespace, "rollout", "restart", "deployment/muster"); err != nil {
+	ctx := context.Background()
+	if err := restartDeployment(ctx, platformNamespace, componentMuster); err != nil {
 		return err
 	}
-	if err := runQuiet("kubectl", "-n", platformNamespace, "rollout", "status", "deployment/muster", "--timeout=120s"); err != nil {
+	if err := waitDeploymentRolledOut(ctx, platformNamespace, componentMuster, musterRestartTimeout); err != nil {
 		return err
 	}
 	// The fresh pod redoes OIDC discovery (fast: Dex and valkey are up) and

@@ -73,27 +73,9 @@ func cmdError(name string, args []string, err error, stderr []byte) error {
 	return fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), err)
 }
 
-// run executes a command with output streamed to the terminal.
-func run(name string, args ...string) error {
-	cmd := command(name, args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}
-
 // runQuiet executes a command, showing output only if it fails.
 func runQuiet(name string, args ...string) error {
 	return pipeInto(nil, name, args...)
-}
-
-// output captures a command's stdout (stderr goes to the terminal).
-func output(name string, args ...string) (string, error) {
-	var buf bytes.Buffer
-	cmd := command(name, args...)
-	cmd.Stdout = &buf
-	cmd.Stderr = os.Stderr
-	err := cmd.Run()
-	return buf.String(), err
 }
 
 // outputQuiet captures stdout and keeps stderr off the terminal; for
@@ -110,17 +92,6 @@ func outputQuiet(name string, args ...string) (string, error) {
 		return stdout.String(), cmdError(name, args, err, stderr.Bytes())
 	}
 	return stdout.String(), nil
-}
-
-// outputAll captures stdout AND stderr together, for probe-style commands
-// whose diagnosis is in the error text (a probe pod's wget message).
-func outputAll(name string, args ...string) (string, error) {
-	var buf bytes.Buffer
-	cmd := command(name, args...)
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
-	err := cmd.Run()
-	return buf.String(), err
 }
 
 // pipeInto feeds input to a command's stdin, showing output only on failure.

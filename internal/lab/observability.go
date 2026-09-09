@@ -1,10 +1,12 @@
 package lab
 
 import (
+	"context"
 	"fmt"
 	"strconv"
-	"strings"
 	"time"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -41,6 +43,11 @@ const (
 	mcpPrometheusRelease = "mcp-prometheus"
 )
 
+// prometheusResource is the operator's Prometheus CR as kubectl's resource
+// argument — fully qualified on principle (same reason as mcpservers): other
+// charts may ship colliding kinds.
+const prometheusResource = "prometheuses.monitoring.coreos.com"
+
 // observabilityUp installs the lab Prometheus: the GS kube-prometheus-stack
 // (operator + CRDs + kube-state-metrics + node-exporter + a Prometheus
 // scraping kubelet/cAdvisor) and the edge route Backstage queries it through.
@@ -49,6 +56,7 @@ const (
 // ServiceMonitors need the operator. The MCP server for it (mcp-prometheus)
 // follows the platform — see mcpPrometheusUp.
 func observabilityUp(cfg *config.Config) error {
+	ctx := context.Background()
 	step("Installing the observability stack (kube-prometheus-stack %s)", kpsChartVersion)
 	if err := installOCIChart(cfg, kpsRelease,
 		"oci://gsoci.azurecr.io/charts/giantswarm/kube-prometheus-stack",
@@ -77,16 +85,12 @@ func observabilityUp(cfg *config.Config) error {
 	var replicas string
 	var readErr error
 	up := waitFor(40, 3*time.Second, func() bool {
-		// Fully qualified on principle (same reason as mcpservers): other
-		// charts may ship colliding kinds.
-		replicas, readErr = outputQuiet("kubectl", "-n", observabilityNamespace,
-			"get", "prometheuses.monitoring.coreos.com",
-			"-o", "jsonpath={.items[0].status.availableReplicas}")
-		n, err := strconv.Atoi(strings.TrimSpace(replicas))
+		replicas, readErr = prometheusAvailableReplicas(ctx)
+		n, err := strconv.Atoi(replicas)
 		return readErr == nil && err == nil && n >= 1
 	})
 	if !up {
-		return notReached("the Prometheus CR", "an available replica after the install", strings.TrimSpace(replicas), readErr,
+		return notReached("the Prometheus CR", "an available replica after the install", replicas, readErr,
 			fmt.Sprintf("check `kubectl -n %s get prometheus,statefulset,pods`", observabilityNamespace))
 	}
 	note("Prometheus is serving (PromQL inside the cluster: http://prometheus-operated.%s:9090)",
@@ -96,14 +100,36 @@ func observabilityUp(cfg *config.Config) error {
 	// (observability-route.yaml.tmpl); paired with the mimirEnabled override
 	// in backstage-catalog.yaml.tmpl. Applied regardless of Backstage so the
 	// endpoint is also there for humans and platform-test.
-	if _, routePath, err := renderManifest(cfg, "observability-route.yaml.tmpl"); err != nil {
+	if route, _, err := renderManifest(cfg, "observability-route.yaml.tmpl"); err != nil {
 		return err
-	} else if err := runQuiet("kubectl", "apply", "-f", routePath); err != nil {
+	} else if _, err := applyManifests(ctx, route); err != nil {
 		return err
 	}
 	note("PromQL on the edge: %s/api/v1/query (what Backstage's Deployments/Clusters metrics use)",
 		cfg.ObservabilityBaseURL())
 	return nil
+}
+
+// prometheusAvailableReplicas is `{.items[0].status.availableReplicas}` of
+// the Prometheus CRs in the observability namespace: "" while the operator
+// has not reported any, an error when there is no CR — or no CRD — to read.
+func prometheusAvailableReplicas(ctx context.Context) (string, error) {
+	gvr, err := gvrFor(prometheusResource)
+	if err != nil {
+		return "", err
+	}
+	items, err := listObjects(ctx, gvr, observabilityNamespace, "")
+	if err != nil {
+		return "", err
+	}
+	if len(items) == 0 {
+		return "", fmt.Errorf("no %s in %s yet", prometheusResource, observabilityNamespace)
+	}
+	n, found, err := unstructured.NestedInt64(items[0].Object, "status", "availableReplicas")
+	if err != nil || !found {
+		return "", nil
+	}
+	return strconv.FormatInt(n, 10), nil
 }
 
 // mcpPrometheusTemplate renders the lab's mcp-prometheus release: a Flux
@@ -122,11 +148,11 @@ const mcpPrometheusTemplate = "mcp-prometheus.yaml.tmpl"
 // CRDs and the tenant ServiceAccount come with the chart.
 func mcpPrometheusUp(cfg *config.Config) error {
 	step("Installing mcp-prometheus %s through the platform's engine", mcpPrometheusChartVersion)
-	_, path, err := renderManifest(cfg, mcpPrometheusTemplate)
+	manifest, _, err := renderManifest(cfg, mcpPrometheusTemplate)
 	if err != nil {
 		return err
 	}
-	if err := runQuiet("kubectl", "apply", "-f", path); err != nil {
+	if _, err := applyManifests(context.Background(), manifest); err != nil {
 		return err
 	}
 	var status platformReleaseStatus
@@ -144,7 +170,7 @@ func mcpPrometheusUp(cfg *config.Config) error {
 		return false
 	})
 	if !ready {
-		return notReached("HelmRelease "+mcpPrometheusRelease, "Ready", status.ready, fmt.Errorf("%s", status.message),
+		return notReached("HelmRelease "+mcpPrometheusRelease, conditionReady, status.ready, fmt.Errorf("%s", status.message),
 			fmt.Sprintf("check `kubectl -n %s describe helmrelease %s` and `kubectl -n %s get pods`", platformNamespace, mcpPrometheusRelease, observabilityNamespace))
 	}
 	return nil
