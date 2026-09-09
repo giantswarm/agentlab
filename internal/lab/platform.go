@@ -42,6 +42,10 @@ const conditionTrue = "True"
 const (
 	legacyVendorDir      = ".vendor"
 	legacyHelmPluginsDir = StateDir + "/helm-plugins"
+	// Renders of templates that are gone: the old lab's own Flux values and
+	// the mcp-prometheus values of its `helm install` (a HelmRelease now).
+	legacyFluxValues          = StateDir + "/flux-values.yaml"
+	legacyMCPPrometheusValues = StateDir + "/mcp-prometheus-values.yaml"
 	// The Flux controllers the old lab installed itself (flux2 chart) for the
 	// agent create flow; the chart brings its own engine now and refuses a
 	// second Flux. Named here so the refusal and `platform-down` agree.
@@ -539,19 +543,19 @@ func legacyFluxInstalled() bool {
 }
 
 // removeLegacyArtifacts deletes what earlier agentlab versions left in the
-// working directory (see legacyVendorDir, legacyHelmPluginsDir). Quiet when
-// there is nothing; a failure to remove is a note, not an error — nothing
-// reads either directory anymore.
+// working directory (see legacyVendorDir and the constants next to it).
+// Quiet when there is nothing; a failure to remove is a note, not an error —
+// nothing reads any of them anymore.
 func removeLegacyArtifacts() {
-	for _, dir := range []string{legacyVendorDir, legacyHelmPluginsDir} {
-		if _, err := os.Stat(dir); err != nil {
+	for _, path := range []string{legacyVendorDir, legacyHelmPluginsDir, legacyFluxValues, legacyMCPPrometheusValues} {
+		if _, err := os.Stat(path); err != nil {
 			continue
 		}
-		if err := os.RemoveAll(dir); err != nil {
-			note("could not remove %s (left by an earlier agentlab; safe to delete by hand): %v", dir, err)
+		if err := os.RemoveAll(path); err != nil {
+			note("could not remove %s (left by an earlier agentlab; safe to delete by hand): %v", path, err)
 			continue
 		}
-		note("removed %s (left by an earlier agentlab; nothing reads it anymore)", dir)
+		note("removed %s (left by an earlier agentlab; nothing reads it anymore)", path)
 	}
 }
 
