@@ -7,7 +7,7 @@ and how to exercise the identity on its own.
 
 ## Requirements
 
-`go` (>= 1.25), `docker` (or Podman >= 4's docker-compatible CLI), `kind`
+`go` (>= 1.26), `docker` (or Podman >= 4's docker-compatible CLI), `kind`
 (>= 0.31), `kubectl`, `helm` (**>= 4** — the platform install relies on Helm
 4's `--wait`, which waits on the chart's Flux custom resources so the command
 returns with every component Ready; Helm 3's does not, and the agent-platform
@@ -99,7 +99,7 @@ chmod +x agentlab
 
 Keep it current with `agentlab self-update`. Every command also starts with a
 one-line hint on stderr while a newer release is out — a hint, never a gate:
-an outdated agentlab keeps working (see "Keeping agentlab current").
+an outdated agentlab keeps working (see [Keeping agentlab current](cli.md#keeping-agentlab-current)).
 
 Then bring the lab up:
 

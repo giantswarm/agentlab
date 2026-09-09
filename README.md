@@ -74,7 +74,7 @@ trusting the same issuer.
 
 ## Getting started
 
-Requirements: `go` >= 1.25, `docker` (or Podman >= 4), `kind` >= 0.31,
+Requirements: `go` >= 1.26, `docker` (or Podman >= 4), `kind` >= 0.31,
 `kubectl`, `helm` >= 4, `git`. Give docker at least 4 CPUs and 6 GiB for the
 full lab; `agentlab up` checks before it touches anything (see [Docker
 resources](docs/getting-started.md#docker-resources)).
