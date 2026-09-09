@@ -59,6 +59,17 @@ import (
 // environment so the release is always where the CLI looks by default.
 const helmDriver = "secret"
 
+// helmFieldManager is the field manager Helm records on every object it
+// applies server-side — the CLI's "helm". The SDK's own default is the name
+// of the running binary (filepath.Base of os.Args[0]), and server-side apply
+// refuses to change a field another manager owns while a chart's zero-valued
+// fields (hostNetwork: false, initialDelaySeconds: 0) count as changed on
+// every re-apply: a release installed by a binary of another name
+// (agentlab-linux-amd64 as downloaded), or by the Helm CLI, could not be
+// upgraded — "Apply failed with N conflicts". One name for the lab and for a
+// `helm upgrade` from a shell keeps the release upgradable by both.
+const helmFieldManager = "helm"
+
 // helmDebugEnv streams the SDK's log to stderr as it happens (the CLI's
 // --debug); without it the log is kept and printed only when an operation
 // fails. The CLI's own variable, so one habit covers both.
@@ -161,6 +172,7 @@ func newHelmOp(namespace string) (*helmOp, error) {
 	log := newHelmLog()
 	quietKlog(log.live)
 	settings := helmSettings()
+	kube.ManagedFieldsManager = helmFieldManager
 	cfg := action.NewConfiguration(action.ConfigurationSetLogger(log.handler()))
 	if err := cfg.Init(labRESTClientGetter(namespace), namespace, helmDriver); err != nil {
 		return nil, fmt.Errorf("initialising the embedded Helm: %w", err)
@@ -248,7 +260,8 @@ func helmChartLabel(ref, version string) string {
 }
 
 // helmUpgradeInstall is `helm upgrade --install <release> <chart> -n <ns> -f
-// <values> --wait --timeout <timeout>` (plus --create-namespace when asked):
+// <values> --wait --timeout <timeout> --force-conflicts` (plus
+// --create-namespace when asked):
 // the release is installed when it does not exist or was uninstalled,
 // upgraded otherwise, with the CLI's defaults — server-side apply on install
 // and, on upgrade, the method the release was applied with; no
@@ -286,6 +299,7 @@ func helmUpgradeInstall(namespace, releaseName, ref, version string, vals map[st
 		install.CreateNamespace = createNamespace
 		install.Timeout = timeout
 		install.WaitStrategy = kube.StatusWatcherStrategy
+		install.ForceConflicts = true
 		// The last revision is an uninstalled one kept in history: the name
 		// is reused, as the CLI does.
 		install.Replace = uninstalled
@@ -304,6 +318,11 @@ func helmUpgradeInstall(namespace, releaseName, ref, version string, vals map[st
 	upgrade.Namespace = namespace
 	upgrade.Timeout = timeout
 	upgrade.WaitStrategy = kube.StatusWatcherStrategy
+	// The CLI's --force-conflicts: fields another manager owns are taken over
+	// rather than refused — the release of a lab installed before the manager
+	// was pinned (owned by the binary's name then) upgrades instead of
+	// failing on every zero-valued field of the chart.
+	upgrade.ForceConflicts = true
 	upgrade.MaxHistory = h.settings.MaxHistory
 	ch, err := h.loadChart(&upgrade.ChartPathOptions, ref, version)
 	if err != nil {
