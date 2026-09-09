@@ -65,10 +65,19 @@ func devTagFilter(branch string) func(prerelease string) bool {
 // branches' builds are skipped; the order of the list does not matter.
 func pickDevTag(tags []string, branch string) (string, bool) {
 	matches := devTagFilter(branch)
+	return highestVersion(tags, func(v *semver.Version) bool { return matches(v.Prerelease()) })
+}
+
+// highestVersion is the pick source-controller makes for an OCIRepository:
+// the highest semver version among a repository's tags that keep accepts.
+// Tags that are no version are skipped; the order of the list does not
+// matter. The dev channel (pickDevTag) and the component charts' channels
+// (resolveComponentVersion) differ only in what they keep.
+func highestVersion(tags []string, keep func(*semver.Version) bool) (string, bool) {
 	var best *semver.Version
 	for _, tag := range tags {
 		v, err := semver.StrictNewVersion(tag)
-		if err != nil || !matches(v.Prerelease()) {
+		if err != nil || !keep(v) {
 			continue
 		}
 		if best == nil || v.GreaterThan(best) {

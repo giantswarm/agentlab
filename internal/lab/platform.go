@@ -359,7 +359,22 @@ func platformUp(cfg *config.Config, header string) error {
 	// HelmRelease among them — so the install returns once the components
 	// are Ready; waitPlatformReleases below then reads the outcome per
 	// release.
-	if err := helmUpgradeInstall(platformNamespace, platformRelease, chart.ref, chart.version, values, helmInstallTimeout, helmInstallOptions{}); err != nil {
+	//
+	// An unchanged re-run writes no revision: when the release's newest
+	// revision is deployed from this very chart version with these very
+	// values — the dev channel re-resolved to the build it already runs, an
+	// `up` over a live lab — there is nothing to upgrade to, and the wait
+	// below still reads every component's health. Whatever changes the
+	// values (a dev image, a values file, a toggle in agentlab.yaml) or the
+	// version (a newer build, a bumped pin) upgrades as before; a chart
+	// directory (platform.chartPath) always does, its content is not
+	// versioned. `helm -n agent-platform upgrade` from a shell stays the way
+	// to force a revision.
+	if rev, err := helmDeployedRevision(platformNamespace, platformRelease, chart.version, values); err != nil {
+		return err
+	} else if rev > 0 {
+		note("chart agent-platform %s already installed with these values — nothing to do (Helm revision %d stays)", chart.version, rev)
+	} else if err := helmUpgradeInstall(platformNamespace, platformRelease, chart.ref, chart.version, values, helmInstallTimeout, helmInstallOptions{}); err != nil {
 		reportPlatformReleases()
 		return err
 	}

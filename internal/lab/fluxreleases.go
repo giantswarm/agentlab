@@ -4,10 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
 
+	"github.com/Masterminds/semver/v3"
 	"gopkg.in/yaml.v3"
 
 	"github.com/giantswarm/agentlab/internal/config"
@@ -19,10 +21,10 @@ import (
 // The preload therefore resolves the same thing ahead of the install — a
 // `helm template`-style offline render of the meta chart (helmTemplate),
 // then, per rendered HelmRelease, the same render of the component chart at
-// the version its OCIRepository's semver range resolves to (Helm resolves a
-// range against the registry's tags the way source-controller does: the
-// highest matching version), with the HelmRelease's inlined values — and
-// scrapes the images out of those renders.
+// the version its OCIRepository resolves to (resolveComponentVersion: the
+// highest tag within the semver range, narrowed by the semverFilter where
+// the OCIRepository carries one — source-controller's pick), with the
+// HelmRelease's inlined values — and scrapes the images out of those renders.
 
 // fluxRelease is one HelmRelease of a rendered Flux manifest joined with the
 // OCIRepository it pulls its chart from.
@@ -32,8 +34,10 @@ type fluxRelease struct {
 	// Namespace is where the release's workloads land (targetNamespace, else
 	// the object's namespace).
 	Namespace string
-	// URL is the OCIRepository's oci:// chart URL, Version its semver range.
-	URL, Version string
+	// URL is the OCIRepository's oci:// chart URL, Version its semver range
+	// and Filter its semverFilter: the regexp that narrows the range's tags
+	// to a channel (a branch's dev builds); empty on the stable channel.
+	URL, Version, Filter string
 	// Values is the HelmRelease's inlined spec.values, as YAML.
 	Values []byte
 }
@@ -48,8 +52,9 @@ type fluxDoc struct {
 	Spec struct {
 		URL string `yaml:"url"`
 		Ref struct {
-			Semver string `yaml:"semver"`
-			Tag    string `yaml:"tag"`
+			Semver       string `yaml:"semver"`
+			SemverFilter string `yaml:"semverFilter"`
+			Tag          string `yaml:"tag"`
 		} `yaml:"ref"`
 		ReleaseName     string `yaml:"releaseName"`
 		TargetNamespace string `yaml:"targetNamespace"`
@@ -68,7 +73,7 @@ type fluxDoc struct {
 // resolve offline.
 func fluxReleases(manifests string) ([]fluxRelease, error) {
 	dec := yaml.NewDecoder(strings.NewReader(manifests))
-	type source struct{ url, version string }
+	type source struct{ url, version, filter string }
 	sources := map[string]source{}
 	var releases []fluxDoc
 	for {
@@ -85,7 +90,7 @@ func fluxReleases(manifests string) ([]fluxRelease, error) {
 			if version == "" {
 				version = doc.Spec.Ref.Tag
 			}
-			sources[doc.Metadata.Namespace+"/"+doc.Metadata.Name] = source{doc.Spec.URL, version}
+			sources[doc.Metadata.Namespace+"/"+doc.Metadata.Name] = source{doc.Spec.URL, version, doc.Spec.Ref.SemverFilter}
 		case "HelmRelease":
 			releases = append(releases, doc)
 		}
@@ -103,7 +108,7 @@ func fluxReleases(manifests string) ([]fluxRelease, error) {
 		if !ok {
 			continue
 		}
-		rel := fluxRelease{Name: hr.Spec.ReleaseName, Namespace: hr.Spec.TargetNamespace, URL: src.url, Version: src.version}
+		rel := fluxRelease{Name: hr.Spec.ReleaseName, Namespace: hr.Spec.TargetNamespace, URL: src.url, Version: src.version, Filter: src.filter}
 		if rel.Name == "" {
 			rel.Name = hr.Metadata.Name
 		}
@@ -134,38 +139,93 @@ var offlineAPIVersions = []string{
 // fluxReleaseImages templates every release's chart at the resolved version
 // with its values and scrapes the images, concurrently (one registry pull
 // each). A release that does not render is reported and skipped: the node
-// pulls whatever the preload misses.
-func fluxReleaseImages(releases []fluxRelease, apiVersions []string) ([]string, []error) {
+// pulls whatever the preload misses. The versions picked through a
+// semverFilter come back as "<name> <version>" lines, sorted — the channel
+// evidence the boot log shows.
+func fluxReleaseImages(releases []fluxRelease, apiVersions []string) (images, filtered []string, errs []error) {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	var images []string
-	var errs []error
 	for _, rel := range releases {
 		wg.Go(func() {
-			rendered, err := renderFluxRelease(rel, apiVersions)
+			rendered, version, err := renderFluxRelease(rel, apiVersions)
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
 				errs = append(errs, fmt.Errorf("%s (%s %s): %w", rel.Name, rel.URL, rel.Version, err))
 				return
 			}
+			if rel.Filter != "" {
+				filtered = append(filtered, rel.Name+" "+version)
+			}
 			images = append(images, scrapeImages(rendered)...)
 		})
 	}
 	wg.Wait()
 	slices.Sort(images)
-	return slices.Compact(images), errs
+	slices.Sort(filtered)
+	return slices.Compact(images), filtered, errs
 }
 
 // renderFluxRelease renders one component chart offline as helm-controller
-// is about to: the chart the OCIRepository names at the version its range
-// resolves to, with the HelmRelease's inlined values.
-func renderFluxRelease(rel fluxRelease, apiVersions []string) (string, error) {
+// is about to: the chart the OCIRepository names at the version it resolves
+// to, with the HelmRelease's inlined values. Reports the version rendered.
+func renderFluxRelease(rel fluxRelease, apiVersions []string) (rendered, version string, err error) {
 	vals, err := helmValues(rel.Values)
+	if err != nil {
+		return "", "", err
+	}
+	version, err = resolveComponentVersion(rel.URL, rel.Version, rel.Filter)
+	if err != nil {
+		return "", "", err
+	}
+	rendered, err = helmTemplate(rel.Namespace, rel.Name, rel.URL, version, vals, apiVersions)
+	return rendered, version, err
+}
+
+// listChartTags lists a chart repository's tags for the component
+// resolution (helmChartTags); a variable so tests answer for the registry.
+var listChartTags = helmChartTags
+
+// resolveComponentVersion is the version a component chart is rendered at,
+// resolved the way source-controller resolves the OCIRepository. Without a
+// semverFilter the range goes to Helm as it is: LocateChart picks the
+// highest tag within it, source-controller's pick too. With one, Helm cannot
+// help — it knows no filter and would pick the range's highest RELEASE over
+// the channel's dev build, whose schema the dev values then fail — so the
+// pick is made here: the repository's tags, those the filter's regexp
+// matches, those the range admits, the highest. No such tag is an error the
+// caller reports and skips: the node pulls that component's images itself.
+func resolveComponentVersion(url, versionRange, filter string) (string, error) {
+	if filter == "" {
+		return versionRange, nil
+	}
+	tags, err := listChartTags(url)
 	if err != nil {
 		return "", err
 	}
-	return helmTemplate(rel.Namespace, rel.Name, rel.URL, rel.Version, vals, apiVersions)
+	return pickFilteredTag(tags, versionRange, filter)
+}
+
+// pickFilteredTag is source-controller's getTagBySemver: the highest version
+// among the tags the filter's regexp matches (over the tag as spelled, like
+// Flux) and the range's constraint admits — a range without a `-0` floor
+// admits no prerelease, as in Flux.
+func pickFilteredTag(tags []string, versionRange, filter string) (string, error) {
+	re, err := regexp.Compile(filter)
+	if err != nil {
+		return "", fmt.Errorf("semverFilter %q: %w", filter, err)
+	}
+	constraint, err := semver.NewConstraint(versionRange)
+	if err != nil {
+		return "", fmt.Errorf("version range %q: %w", versionRange, err)
+	}
+	tag, ok := highestVersion(tags, func(v *semver.Version) bool {
+		return re.MatchString(v.Original()) && constraint.Check(v)
+	})
+	if !ok {
+		return "", fmt.Errorf("no tag matches semverFilter %s within %s (among %d)", filter, versionRange, len(tags))
+	}
+	return tag, nil
 }
 
 // platformImages derives the platform's image refs exactly as it is about to
@@ -200,13 +260,24 @@ func platformImages(cfg *config.Config, chart platformChart, values map[string]a
 	if cfg.Platform.Observability {
 		apiVersions = append(slices.Clone(apiVersions), "monitoring.coreos.com/v1")
 	}
-	componentImages, errs := fluxReleaseImages(releases, apiVersions)
+	componentImages, filtered, errs := fluxReleaseImages(releases, apiVersions)
 	for _, err := range errs {
 		note("component render skipped: %s", excerpt(err.Error(), 300))
 	}
+	note("rendered %d of %d component charts%s", len(releases)-len(errs), len(releases), filteredNote(filtered))
 	images = append(images, componentImages...)
 	slices.Sort(images)
 	return slices.Compact(images)
+}
+
+// filteredNote words the versions the component renders picked through a
+// semverFilter — the dev channel's evidence of which builds the components
+// are on — as the tail of the render count; empty on the stable channel.
+func filteredNote(filtered []string) string {
+	if len(filtered) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" (%d through a semverFilter: %s)", len(filtered), strings.Join(filtered, ", "))
 }
 
 // sideloadPlatformImages pulls the platform images on the host and side-loads

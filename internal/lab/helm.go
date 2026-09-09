@@ -3,6 +3,7 @@ package lab
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -394,6 +395,62 @@ func helmUpgradeInstall(namespace, releaseName, ref, version string, vals map[st
 		return h.fail(invocation, fmt.Errorf("UPGRADE FAILED: %w", err))
 	}
 	return nil
+}
+
+// helmDeployedRevision is the check `helm upgrade` itself never makes: the
+// number of the release's newest revision when that revision is deployed
+// from exactly this chart version with exactly these values, 0 otherwise —
+// no release, another version, other values, a failed or pending revision.
+// A caller skips the upgrade that would only write a new revision of the
+// same thing (the dev channel re-resolving to the build it already runs, an
+// `up` over a live lab). A chart directory — no version — is never up to
+// date: its content is not versioned.
+func helmDeployedRevision(namespace, releaseName, version string, vals map[string]any) (int, error) {
+	if version == "" {
+		return 0, nil
+	}
+	h, err := newHelmOp(namespace)
+	if err != nil {
+		return 0, err
+	}
+	history := action.NewHistory(h.cfg)
+	history.Max = 1
+	revisions, err := history.Run(releaseName)
+	if errors.Is(err, driver.ErrReleaseNotFound) || (err == nil && len(revisions) == 0) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, h.fail(fmt.Sprintf("history %s -n %s", releaseName, namespace), err)
+	}
+	rel, err := asV1Release(revisions[len(revisions)-1])
+	if err != nil {
+		return 0, err
+	}
+	if !releaseDeployedAs(rel, version, vals) {
+		return 0, nil
+	}
+	return rel.Version, nil
+}
+
+// releaseDeployedAs reports whether a revision is deployed from the chart
+// version with the values.
+func releaseDeployedAs(rel *release.Release, version string, vals map[string]any) bool {
+	return rel.Info != nil && rel.Info.Status == releasecommon.StatusDeployed &&
+		rel.Chart != nil && rel.Chart.Metadata != nil && rel.Chart.Metadata.Version == version &&
+		sameValues(rel.Config, vals)
+}
+
+// sameValues compares two values sets the way Helm stores them: by their
+// JSON encoding, so the int a values file yields equals the float64 the
+// release storage reads back and key order never matters; nil and empty are
+// one.
+func sameValues(a, b map[string]any) bool {
+	if len(a) == 0 && len(b) == 0 {
+		return true
+	}
+	ja, errA := json.Marshal(a)
+	jb, errB := json.Marshal(b)
+	return errA == nil && errB == nil && bytes.Equal(ja, jb)
 }
 
 // lastRevisionUninstalled reports whether the newest revision in a release's
