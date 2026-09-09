@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+	"sigs.k8s.io/kind/pkg/apis/config/v1alpha4"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -204,5 +205,34 @@ func TestMCPPrometheusRelease(t *testing.T) {
 		if !strings.Contains(s, want) {
 			t.Errorf("mcp-prometheus.yaml lacks %q", want)
 		}
+	}
+}
+
+// The kind config carries what Substrate's WorkerPools need from the
+// apiserver — the PodCertificateRequest API and ClusterTrustBundle projection,
+// pod identities and trust bundles projected into the ateom workers — and
+// points containerd at /etc/containerd/certs.d, where a node learns about the
+// local registry. All of it is fixed at `kind create`, so it renders always.
+// Decoded into kind's own config type, so the field names are the ones the
+// embedded kind reads.
+func TestKindConfigSubstrateGates(t *testing.T) {
+	out, err := renderTemplate(config.Default(), "kind-config.yaml.tmpl", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kindCfg v1alpha4.Cluster
+	if err := yaml.Unmarshal(out, &kindCfg); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	for _, gate := range []string{"ClusterTrustBundle", "ClusterTrustBundleProjection", "PodCertificateRequest"} {
+		if !kindCfg.FeatureGates[gate] {
+			t.Errorf("featureGates.%s = %v, want true", gate, kindCfg.FeatureGates[gate])
+		}
+	}
+	if got := kindCfg.RuntimeConfig["certificates.k8s.io/v1beta1"]; got != "true" {
+		t.Errorf("runtimeConfig[certificates.k8s.io/v1beta1] = %q, want \"true\"", got)
+	}
+	if len(kindCfg.ContainerdConfigPatches) != 1 || !strings.Contains(kindCfg.ContainerdConfigPatches[0], `config_path = "/etc/containerd/certs.d"`) {
+		t.Errorf("containerdConfigPatches = %q, want the one certs.d config_path patch", kindCfg.ContainerdConfigPatches)
 	}
 }

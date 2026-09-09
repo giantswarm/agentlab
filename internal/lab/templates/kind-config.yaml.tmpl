@@ -1,6 +1,26 @@
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: {{ .ClusterName }}
+# Substrate (kagent's actor runtime) projects pod identities and trust
+# bundles into its ateom workers: the PodCertificateRequest API behind
+# certificates.k8s.io/v1beta1 plus ClusterTrustBundle projection. Without
+# these its WorkerPools cannot start a single pod. Feature gates are fixed
+# at `kind create`, so they are always on — turning them on later means
+# `agentlab down && agentlab up`.
+featureGates:
+  ClusterTrustBundle: true
+  ClusterTrustBundleProjection: true
+  PodCertificateRequest: true
+runtimeConfig:
+  "certificates.k8s.io/v1beta1": "true"
+# The node image's containerd leaves the CRI registry config_path empty, so a
+# hosts.toml under /etc/containerd/certs.d would be ignored — and that
+# directory is how a node learns that localhost:5001 is the kind-registry
+# container, the registry Substrate resolves actor images through.
+containerdConfigPatches:
+  - |-
+    [plugins."io.containerd.grpc.v1.cri".registry]
+      config_path = "/etc/containerd/certs.d"
 nodes:
   - role: control-plane
     # Every mapping binds 127.0.0.1 explicitly. kind defaults listenAddress to
