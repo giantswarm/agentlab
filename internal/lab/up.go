@@ -1,8 +1,8 @@
 package lab
 
 import (
+	"context"
 	"fmt"
-	"os"
 	"slices"
 	"strings"
 	"time"
@@ -38,7 +38,7 @@ func Up(cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
-	_, rbacPath, err := renderManifest(cfg, "rbac.yaml.tmpl")
+	rbac, _, err := renderManifest(cfg, "rbac.yaml.tmpl")
 	if err != nil {
 		return err
 	}
@@ -57,11 +57,12 @@ func Up(cfg *config.Config) error {
 			return err
 		}
 	}
-	// From here on the lab's own kubectl and its embedded Helm run against the
-	// cluster's exported kubeconfig (exec.go, restclient.go). The user's own
-	// kubeconfig and current-context are never touched: the embedded kind
-	// writes the admin kubeconfig to state/kubeconfig (kind.go), and re-reading
-	// it off the node here covers a cluster that already existed too.
+	// From here on the lab's own kubectl, its embedded Helm and its Kubernetes
+	// client run against the cluster's exported kubeconfig (exec.go,
+	// restclient.go, kube.go). The user's own kubeconfig and current-context
+	// are never touched: the embedded kind writes the admin kubeconfig to
+	// state/kubeconfig (kind.go), and re-reading it off the node here covers a
+	// cluster that already existed too.
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
 	}
@@ -88,7 +89,7 @@ func Up(cfg *config.Config) error {
 	}
 
 	step("Applying RBAC bound to OIDC groups")
-	if err := runQuiet("kubectl", "apply", "-f", rbacPath); err != nil {
+	if _, err := applyManifests(context.Background(), rbac); err != nil {
 		return err
 	}
 
@@ -116,19 +117,25 @@ func Up(cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
-	const probeKubeconfig = ".kubeconfig.probe"
-	if err := writeTokenKubeconfig(cfg, tok, probeKubeconfig); err != nil {
+	// A config that carries ONLY the token: the admin client certificate of
+	// the kind kubeconfig would win over it (kube.go, tokenConfig).
+	probe, err := tokenConfig(tok)
+	if err != nil {
 		return err
 	}
+	var username string
+	var groups []string
 	verified := waitFor(30, 2*time.Second, func() bool {
-		_, err := outputQuiet("kubectl", "--kubeconfig="+probeKubeconfig, "auth", "whoami")
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		var err error
+		username, groups, err = whoAmI(ctx, probe)
 		return err == nil
 	})
-	_ = os.Remove(probeKubeconfig)
 	if !verified {
 		return fmt.Errorf("apiserver still rejects Dex tokens; check the apiserver log for oidc.go lines")
 	}
-	note("apiserver accepts Dex tokens")
+	note("apiserver accepts Dex tokens: %s is %s in %s", admin.Email, username, strings.Join(groups, ", "))
 
 	reportPreload(loaded)
 	if cfg.Platform.Enabled {
@@ -209,11 +216,11 @@ func ApplyDex(cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
-	if err := pipeInto(stamped, "kubectl", "apply", "-f", "-"); err != nil {
+	if _, err := applyManifests(context.Background(), stamped); err != nil {
 		return err
 	}
 	step("Waiting for Dex to become ready")
-	return run("kubectl", "-n", componentDex, "rollout", "status", "deployment/dex", "--timeout=120s")
+	return waitDeploymentRolledOut(context.Background(), componentDex, componentDex, 120*time.Second)
 }
 
 // kindClusterExists reports whether kind knows a cluster by that name — its

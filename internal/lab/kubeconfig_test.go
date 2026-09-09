@@ -59,7 +59,8 @@ func resetKindKubeconfigCache(t *testing.T) {
 // TestUseClusterKubeconfig drives the export against a stand-in for kind's
 // kubeconfig read: the lab-owned kubeconfig lands under state/ owner-only and
 // byte-identical to what kind emitted, the very file the command constructor
-// pins kubectl to; one read serves both it and the cluster entry the token
+// pins kubectl to and the embedded client is built from (a bundle built
+// before the export is dropped); one read serves both it and the cluster entry the token
 // kubeconfigs are built from; and a cluster kind does not know fails by name
 // with kind's message instead of leaving kubectl to the shell's kubeconfig.
 func TestUseClusterKubeconfig(t *testing.T) {
@@ -68,8 +69,13 @@ func TestUseClusterKubeconfig(t *testing.T) {
 	resetKindKubeconfigCache(t)
 
 	cfg := config.Default()
+	labKubeCache = &kubeClients{} // a bundle built before the export
+	t.Cleanup(resetLabKube)
 	if err := useClusterKubeconfig(cfg); err != nil {
 		t.Fatal(err)
+	}
+	if labKubeCache != nil {
+		t.Error("the export must drop the client bundle built from the previous kubeconfig")
 	}
 	info, err := os.Stat(labKubeconfigPath)
 	if err != nil {
@@ -93,7 +99,7 @@ func TestUseClusterKubeconfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if name != "kind-agentlab" || cluster["server"] != "https://127.0.0.1:34547" {
+	if name != "kind-agentlab" || cluster["server"] != fakeKindServer {
 		t.Errorf("cluster entry = %q %v", name, cluster)
 	}
 	if *calls != 1 {
