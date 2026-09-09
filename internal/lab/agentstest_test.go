@@ -12,26 +12,34 @@ import (
 	clienttesting "k8s.io/client-go/testing"
 )
 
-// TestRulesBeyondDiscovery: of what `can-i --list` grants, the selfsubject*
-// reviews and the non-resource URLs are everyone's; any other row is a
-// permission of the principal's own. The CLI's header row, were it there,
-// is skipped too.
-func TestRulesBeyondDiscovery(t *testing.T) {
-	rows := ruleRows(&authorizationv1.SubjectRulesReviewStatus{
+// TestRulesBeyond: of what `can-i --list` grants, every row a ServiceAccount no
+// binding names holds too — the selfsubject* reviews, the non-resource URLs,
+// the bootstrap trust-bundle discovery — is everyone's; any other row is a
+// permission of the principal's own. The CLI's header row, were it there, is
+// skipped too.
+func TestRulesBeyond(t *testing.T) {
+	baseline := ruleRows(&authorizationv1.SubjectRulesReviewStatus{
 		ResourceRules: []authorizationv1.ResourceRule{
 			{Verbs: []string{verbCreate}, APIGroups: []string{"authorization.k8s.io"}, Resources: []string{"selfsubjectaccessreviews", "selfsubjectrulesreviews"}},
 			{Verbs: []string{verbCreate}, APIGroups: []string{"authentication.k8s.io"}, Resources: []string{"selfsubjectreviews"}},
+			{Verbs: []string{verbGet, verbList, "watch"}, APIGroups: []string{"certificates.k8s.io"}, Resources: []string{"clustertrustbundles"}},
 		},
 		NonResourceRules: []authorizationv1.NonResourceRule{{Verbs: []string{verbGet}, NonResourceURLs: []string{"/healthz", "/api", "/api/*"}}},
 	})
-	if got := rulesBeyondDiscovery(append([]string{"Resources  Non-Resource URLs  Resource Names  Verbs", ""}, rows...)); len(got) != 0 {
-		t.Errorf("discovery-only rules judged as permissions: %v", got)
+	if got := rulesBeyond(append([]string{"Resources  Non-Resource URLs  Resource Names  Verbs", ""}, baseline...), baseline); len(got) != 0 {
+		t.Errorf("everyone's rules judged as permissions: %v", got)
 	}
 	extra := ruleRows(&authorizationv1.SubjectRulesReviewStatus{ResourceRules: []authorizationv1.ResourceRule{
-		{Verbs: []string{verbGet, verbList}, APIGroups: []string{fluxHelmReleaseGVK.Group}, Resources: []string{fluxHelmReleaseGVR.Resource}},
+		{Verbs: []string{verbGet, verbList}, APIGroups: []string{kagentGroupVersion.Group}, Resources: []string{gvrAgentTemplates.Resource}},
 	}})
-	if got := rulesBeyondDiscovery(append(rows, extra...)); !reflect.DeepEqual(got, extra) {
+	if got := rulesBeyond(append(baseline, extra...), baseline); !reflect.DeepEqual(got, extra) {
 		t.Errorf("granted = %v, want %v", got, extra)
+	}
+	if got := bootstrapExtras(baseline); got != ", clustertrustbundles.certificates.k8s.io" {
+		t.Errorf("bootstrapExtras = %q", got)
+	}
+	if got := bootstrapExtras(baseline[:3]); got != "" {
+		t.Errorf("bootstrapExtras without extras = %q", got)
 	}
 }
 
