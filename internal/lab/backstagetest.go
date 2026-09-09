@@ -26,35 +26,51 @@ func BackstageTest(cfg *config.Config, emails []string) error {
 			emails = append(emails, u.Email)
 		}
 	}
+	var sessions []*portalSession
 	for i, email := range emails {
 		user := cfg.FindUser(email)
 		if user == nil {
 			return fmt.Errorf("no user %q in %s", email, config.File)
 		}
 		fmt.Printf("=== %s ===\n", email)
-		if err := backstageSignIn(cfg, user); err != nil {
+		ps, err := backstageSignIn(cfg, user)
+		if err != nil {
 			return fmt.Errorf("%s: %w", email, err)
 		}
 		if i == 0 {
 			// The grouping does not depend on the viewer; once is enough.
-			ps, err := backstageLogin(cfg, user)
-			if err != nil {
-				return fmt.Errorf("%s: %w", email, err)
-			}
 			if err := proveServerGroups(ps); err != nil {
 				return fmt.Errorf("%s: %w", email, err)
 			}
 		}
+		sessions = append(sessions, ps)
 		fmt.Println()
 	}
 	fmt.Println("all sign-ins resolved and reached muster")
+
+	// The Agent Platform pages on kagent main, after every sign-in is in so
+	// the evidence above is complete whatever the portal answers: the agents
+	// list for every user, one chat turn for the first.
+	if !cfg.Platform.Agents {
+		fmt.Println("agent platform pages skipped (platform.agents off)")
+		return nil
+	}
+	for i, ps := range sessions {
+		fmt.Printf("=== %s: agent platform pages ===\n", ps.user.Email)
+		if err := proveAgentPlatformPages(ps, i == 0); err != nil {
+			return fmt.Errorf("%s: %w", ps.user.Email, err)
+		}
+	}
+	fmt.Println("agent platform pages listed the agents for every user and answered a chat turn")
 	return nil
 }
 
-func backstageSignIn(cfg *config.Config, user *config.User) error {
+// backstageSignIn drives one user's sign-in and the muster plugin's reads with
+// the session, and returns the session for the proofs that follow.
+func backstageSignIn(cfg *config.Config, user *config.User) (*portalSession, error) {
 	ps, err := backstageLogin(cfg, user)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	fmt.Printf("  dex asserted    groups=%v email=%v\n", ps.claims["groups"], ps.claims["email"])
 	fmt.Printf("  token audience  %v\n", ps.claims["aud"])
@@ -68,10 +84,10 @@ func backstageSignIn(cfg *config.Config, user *config.User) error {
 
 	status, payload, err := muster("/servers" + installation)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if status != http.StatusOK {
-		return fmt.Errorf("muster /servers FAILED %d: %.200v", status, payload)
+		return nil, fmt.Errorf("muster /servers FAILED %d: %.200v", status, payload)
 	}
 	servers, _ := unwrapKey(payload, "mcpServers").([]any)
 	pairs := make([]string, 0, len(servers))
@@ -94,15 +110,15 @@ func backstageSignIn(cfg *config.Config, user *config.User) error {
 		}
 	}
 	if !isAuthRequiredState(fixtureState) && !strings.EqualFold(fixtureState, "connected") {
-		return fmt.Errorf("MCPServer %s is %q, not Auth Required (or Connected for a signed-in session) — the sign-in fixture is missing or broken (`agentlab platform` creates it)",
+		return nil, fmt.Errorf("MCPServer %s is %q, not Auth Required (or Connected for a signed-in session) — the sign-in fixture is missing or broken (`agentlab platform` creates it)",
 			oauthFixtureServer, fixtureState)
 	}
 	status, raw, err := musterPost("/auth/login"+installation, map[string]any{serverKey: oauthFixtureServer})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if status != http.StatusOK {
-		return fmt.Errorf("muster /auth/login FAILED %d: %.200s", status, raw)
+		return nil, fmt.Errorf("muster /auth/login FAILED %d: %.200s", status, raw)
 	}
 	var login struct {
 		Status         string `json:"status"`
@@ -111,20 +127,20 @@ func backstageSignIn(cfg *config.Config, user *config.User) error {
 		ClientIDMethod string `json:"clientIdMethod"`
 	}
 	if err := json.Unmarshal(raw, &login); err != nil {
-		return fmt.Errorf("parsing /auth/login answer: %w\n%.200s", err, raw)
+		return nil, fmt.Errorf("parsing /auth/login answer: %w\n%.200s", err, raw)
 	}
 	if login.Status != "auth_required" {
-		return fmt.Errorf("/auth/login for %s answered status %q, not auth_required: %.300s", oauthFixtureServer, login.Status, login.Message)
+		return nil, fmt.Errorf("/auth/login for %s answered status %q, not auth_required: %.300s", oauthFixtureServer, login.Status, login.Message)
 	}
 	if want := cfg.MusterBaseURL() + oauthProxyStartPath + "?state="; !strings.HasPrefix(login.AuthURL, want) {
-		return fmt.Errorf("/auth/login sign-in URL %q is not muster's proxy start endpoint (want %s…)", login.AuthURL, want)
+		return nil, fmt.Errorf("/auth/login sign-in URL %q is not muster's proxy start endpoint (want %s…)", login.AuthURL, want)
 	}
 	fmt.Printf("  sign-in challenge %s -> %s%s?state=… (client id via %s)\n",
 		oauthFixtureServer, cfg.MusterBaseURL(), oauthProxyStartPath, login.ClientIDMethod)
 
 	status, payload, err = muster("/workflows" + installation)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var wfNames []string
 	if status == http.StatusOK {
@@ -139,7 +155,7 @@ func backstageSignIn(cfg *config.Config, user *config.User) error {
 
 	status, payload, err = muster("/core-tools" + installation)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if status == http.StatusOK {
 		count := 0
@@ -161,13 +177,13 @@ func backstageSignIn(cfg *config.Config, user *config.User) error {
 	// embedded copy in backstage.yaml.tmpl).
 	status, _, err = ps.backstageGet("/api/catalog/entities/by-name/template/default/agent-deployment")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if status != http.StatusOK {
-		return fmt.Errorf("agent-deployment template not in the catalog (%d) — the create flow's deploy would 404", status)
+		return nil, fmt.Errorf("agent-deployment template not in the catalog (%d) — the create flow's deploy would 404", status)
 	}
 	fmt.Printf("  agent deploy template registered (template:default/agent-deployment)\n")
-	return nil
+	return ps, nil
 }
 
 // proveServerGroups is the MCP servers page's grouping, asserted from the

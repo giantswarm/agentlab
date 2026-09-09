@@ -12,26 +12,34 @@ import (
 	clienttesting "k8s.io/client-go/testing"
 )
 
-// TestRulesBeyondDiscovery: of what `can-i --list` grants, the selfsubject*
-// reviews and the non-resource URLs are everyone's; any other row is a
-// permission of the principal's own. The CLI's header row, were it there,
-// is skipped too.
-func TestRulesBeyondDiscovery(t *testing.T) {
-	rows := ruleRows(&authorizationv1.SubjectRulesReviewStatus{
+// TestRulesBeyond: of what `can-i --list` grants, every row a ServiceAccount no
+// binding names holds too — the selfsubject* reviews, the non-resource URLs,
+// the bootstrap trust-bundle discovery — is everyone's; any other row is a
+// permission of the principal's own. The CLI's header row, were it there, is
+// skipped too.
+func TestRulesBeyond(t *testing.T) {
+	baseline := ruleRows(&authorizationv1.SubjectRulesReviewStatus{
 		ResourceRules: []authorizationv1.ResourceRule{
 			{Verbs: []string{verbCreate}, APIGroups: []string{"authorization.k8s.io"}, Resources: []string{"selfsubjectaccessreviews", "selfsubjectrulesreviews"}},
 			{Verbs: []string{verbCreate}, APIGroups: []string{"authentication.k8s.io"}, Resources: []string{"selfsubjectreviews"}},
+			{Verbs: []string{verbGet, verbList, "watch"}, APIGroups: []string{"certificates.k8s.io"}, Resources: []string{"clustertrustbundles"}},
 		},
 		NonResourceRules: []authorizationv1.NonResourceRule{{Verbs: []string{verbGet}, NonResourceURLs: []string{"/healthz", "/api", "/api/*"}}},
 	})
-	if got := rulesBeyondDiscovery(append([]string{"Resources  Non-Resource URLs  Resource Names  Verbs", ""}, rows...)); len(got) != 0 {
-		t.Errorf("discovery-only rules judged as permissions: %v", got)
+	if got := rulesBeyond(append([]string{"Resources  Non-Resource URLs  Resource Names  Verbs", ""}, baseline...), baseline); len(got) != 0 {
+		t.Errorf("everyone's rules judged as permissions: %v", got)
 	}
 	extra := ruleRows(&authorizationv1.SubjectRulesReviewStatus{ResourceRules: []authorizationv1.ResourceRule{
-		{Verbs: []string{verbGet, verbList}, APIGroups: []string{fluxHelmReleaseGVK.Group}, Resources: []string{fluxHelmReleaseGVR.Resource}},
+		{Verbs: []string{verbGet, verbList}, APIGroups: []string{kagentGroupVersion.Group}, Resources: []string{gvrAgentTemplates.Resource}},
 	}})
-	if got := rulesBeyondDiscovery(append(rows, extra...)); !reflect.DeepEqual(got, extra) {
+	if got := rulesBeyond(append(baseline, extra...), baseline); !reflect.DeepEqual(got, extra) {
 		t.Errorf("granted = %v, want %v", got, extra)
+	}
+	if got := bootstrapExtras(baseline); got != ", clustertrustbundles.certificates.k8s.io" {
+		t.Errorf("bootstrapExtras = %q", got)
+	}
+	if got := bootstrapExtras(baseline[:3]); got != "" {
+		t.Errorf("bootstrapExtras without extras = %q", got)
 	}
 }
 
@@ -64,27 +72,27 @@ func TestServiceAccountRules(t *testing.T) {
 	}
 }
 
-// TestAgentHelmReleaseManagers: the field managers of the agent's HelmRelease
-// are read off metadata.managedFields — who wrote it; a missing HelmRelease
-// is the apiserver's NotFound.
-func TestAgentHelmReleaseManagers(t *testing.T) {
-	hr := customObject(fluxHelmReleaseGVK, kagentNamespace, agentsTestAgent, nil)
-	_ = unstructured.SetNestedSlice(hr.Object, []any{
+// TestAgentTemplateManagers: the field managers of the agent's AgentTemplate
+// are read off metadata.managedFields — who wrote it; a missing template is
+// the apiserver's NotFound.
+func TestAgentTemplateManagers(t *testing.T) {
+	template := customObject(gvkAgentTemplate, kagentNamespace, agentsTestAgent, nil)
+	_ = unstructured.SetNestedSlice(template.Object, []any{
 		map[string]any{"manager": agentManagerMCPServer, "operation": "Apply"},
-		map[string]any{"manager": "helm-controller", "operation": "Update", "subresource": fieldStatus},
+		map[string]any{"manager": "kagent-controller", "operation": "Update", "subresource": fieldStatus},
 	}, "metadata", "managedFields")
-	newFakeLab(t, hr)
-	managers, err := agentHelmReleaseManagers(agentsTestAgent)
+	newFakeLab(t, template)
+	managers, err := agentTemplateManagers(agentsTestAgent)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(managers, []string{agentManagerMCPServer, "helm-controller"}) {
+	if !reflect.DeepEqual(managers, []string{agentManagerMCPServer, "kagent-controller"}) {
 		t.Errorf("managers = %v", managers)
 	}
-	if _, err := agentHelmReleaseManagers("absent"); err == nil {
-		t.Error("a missing HelmRelease must fail the read")
+	if _, err := agentTemplateManagers("absent"); err == nil {
+		t.Error("a missing AgentTemplate must fail the read")
 	}
-	if !agentHelmReleaseExists(agentsTestAgent) || agentHelmReleaseExists("absent") {
-		t.Error("agentHelmReleaseExists disagrees with the store")
+	if !agentTemplateExists(agentsTestAgent) || agentTemplateExists("absent") {
+		t.Error("agentTemplateExists disagrees with the store")
 	}
 }

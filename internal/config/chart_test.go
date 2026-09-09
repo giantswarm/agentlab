@@ -80,6 +80,28 @@ func TestChartSourceValidation(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("devImages for muster, backstage, kagent: %v", err)
 	}
+
+	cfg.Platform.ValuesFiles = []string{filepath.Join(t.TempDir(), "missing.yaml")}
+	if err := cfg.Validate(); err == nil {
+		t.Error("valuesFiles with a missing file: want an error")
+	}
+	cfg.Platform.ValuesFiles = []string{""}
+	if err := cfg.Validate(); err == nil {
+		t.Error("valuesFiles with an empty path: want an error")
+	}
+	overlay := filepath.Join(t.TempDir(), "overlay.yaml")
+	if err := os.WriteFile(overlay, []byte("components: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Platform.ValuesFiles = []string{overlay}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("valuesFiles with an existing file: %v", err)
+	}
+	cfg.Platform.ValuesFiles = []string{}
+	cfg.Normalize()
+	if cfg.Platform.ValuesFiles != nil {
+		t.Error("Normalize must drop an empty valuesFiles list")
+	}
 }
 
 func repeat(s string, n int) string {
