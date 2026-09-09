@@ -14,10 +14,11 @@ plumbing for model servers under
   pinned to it — so a shell with no current-context (or one pointing at a real
   cluster) proves the same lab as any other, and a lab that is not running
   fails by name (`no kubeconfig for kind cluster "agentlab"`) instead of as a
-  kubectl error. Your own kubeconfig is only ever touched by kind itself
-  (`kind create/delete cluster` merge the `kind-<cluster>` admin context in
-  and out); `agentlab` never switches your current-context. The same view from
-  a shell: `KUBECONFIG=state/kubeconfig kubectl -n agent-platform get pods`.
+  kubectl error. Your own kubeconfig is never touched: kind is embedded in
+  `agentlab` and writes the cluster's admin kubeconfig (the `kind-<cluster>`
+  context) to `state/kubeconfig` only, so nothing merges into `~/.kube/config`
+  and your current-context stays what it was. The same view from a shell:
+  `KUBECONFIG=state/kubeconfig kubectl -n agent-platform get pods`.
   A probe that fails reports what kubectl said (`kubectl failed: ... current-context
   is not set`), never an empty status.
 - **A client certificate beats a bearer token.** `kubectl --token=...` against
@@ -25,17 +26,6 @@ plumbing for model servers under
   need a kubeconfig with no client cert — that is what `agentlab login` builds
   (`kubeconfig.oidc`). This will produce convincing false positives in a test
   suite if you miss it.
-- **kind switches kubeadm config generations between releases** — v0.31 emits
-  `kubeadm.k8s.io/v1beta3` (`extraArgs` is a *map*), v0.32+ emits v1beta4
-  (`extraArgs` is a *list* of name/value pairs) — and a kubeadmConfigPatch
-  whose apiVersion does not match is ignored **silently**: no error, the
-  OIDC flags just never appear and every token is rejected. The rendered kind
-  config therefore carries the patch in BOTH flavors; whichever matches
-  applies, the other is a no-op. If the flags ever vanish after a kind bump
-  (a v1beta5 one day), verify with:
-  ```bash
-  docker exec agentlab-control-plane grep oidc /etc/kubernetes/manifests/kube-apiserver.yaml
-  ```
 - **The apiserver keeps retrying OIDC discovery — no bounce needed.** On a
   cold `kind create`, Dex does not exist yet and the apiserver logs
   `oidc authenticator: initializing plugin: … connection refused` — but on
@@ -63,7 +53,7 @@ plumbing for model servers under
   `--authentication-config` (structured `AuthenticationConfiguration`, which
   also supports CEL claim mappings). The flags are simpler and were kept here.
 - **`agentlab down` can lose a race with docker and leave an exited node.**
-  `kind delete cluster` is `docker rm -f` of the node container; docker gives
+  kind's delete is `docker rm -f` of the node container; docker gives
   it ten seconds after SIGKILL to exit and then gives up (`could not kill
   container: ... did not receive an exit event`) — a node busy with an
   `agentlab up` side-load in another shell has taken 44 s. The container
@@ -72,9 +62,9 @@ plumbing for model servers under
   stop). `agentlab down` therefore waits (up to 90 s) for the node to exit
   and deletes again, and `agentlab up` on a cluster whose node is not running
   starts the container (`docker start`, which kind supports) and waits for
-  the apiserver before touching anything — instead of failing inside `kind
-  get kubeconfig` with a runc `nsexec ... No such file or directory` or
-  `container ... is not running`. Do not run `down` while another `agentlab`
+  the apiserver before touching anything — instead of failing while kind
+  reads the kubeconfig off the node, with a runc `nsexec ... No such file or
+  directory` or `container ... is not running`. Do not run `down` while another `agentlab`
   process is using the cluster (`ps -eo pid,args | grep '[a]gentlab '`).
 - **The image cache manifest only records what a registry can serve.**
   `state/preload-images.txt` is snapshotted from the node after every boot;
@@ -84,13 +74,13 @@ plumbing for model servers under
   every boot would ask Docker Hub for it (`denied: requested access to the
   resource is denied` in the dockerd log, once per ref). Images the host cache
   knows without a registry digest are therefore left out of the snapshot.
-- **`ERROR: failed to load image: command "docker exec ... ctr ... images import
-  --all-platforms ..." failed with error: exit status 1` during `up`** is kind's
-  own `kind load docker-image` meeting Docker's containerd image store (Docker
-  Desktop, new Docker 29 installs): its plain `docker save` writes a
-  multi-platform index whose other platforms were never pulled, and the node's
-  import fails on the first missing digest (kubernetes-sigs/kind#3795). The lab
-  side-loads with `docker save --platform` + `kind load image-archive` instead
-  wherever `docker save --platform` exists — Docker 28 or newer — so seeing this
-  means an older docker: upgrade it. The boot went on regardless; the affected
-  images were pulled by the node.
+- **`failed to load image: command "docker exec ... ctr ... images import
+  --all-platforms ..." failed with error: exit status 1` during `up`** is the
+  node's containerd refusing an archive whose multi-platform index names blobs
+  the archive does not carry — what a plain `docker save` writes under Docker's
+  containerd image store (Docker Desktop, new Docker 29 installs), where only
+  the host platform's blobs were ever pulled (kubernetes-sigs/kind#3795). The
+  lab saves with `docker save --platform` wherever it exists — Docker 28 or
+  newer — and imports that archive through the embedded kind, so seeing this
+  means an older docker on that store: upgrade it. The boot went on regardless;
+  the affected images were pulled by the node.
