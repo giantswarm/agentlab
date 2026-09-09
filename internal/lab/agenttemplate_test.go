@@ -13,6 +13,12 @@ import (
 const (
 	testRevision    = "3bd7156d4194"
 	fieldConditions = "conditions"
+	testReadyName   = "ready"
+	testPong        = "pong"
+	testDevUser     = "dev@lab.local"
+	testSmoke       = "smoke"
+	testIDPrefix    = "01a0"
+	testToken       = "tok"
 )
 
 func readyTemplate(name, harness, readyStatus, readyMessage string) *unstructured.Unstructured {
@@ -24,7 +30,7 @@ func readyTemplate(name, harness, readyStatus, readyMessage string) *unstructure
 		"latestSuccessfulRevision": testRevision,
 		"warnings":                 []any{"tool narrowing downgraded"},
 		fieldConditions: []any{
-			map[string]any{fieldType: "Accepted", fieldStatus: "True", "reason": "Accepted", fieldMessage: "Harness admission selector matches the AgentTemplate"},
+			map[string]any{fieldType: "Accepted", fieldStatus: conditionTrue, "reason": "Accepted", fieldMessage: "Harness admission selector matches the AgentTemplate"},
 			map[string]any{fieldType: condReady, fieldStatus: readyStatus, "reason": "Ready", fieldMessage: readyMessage},
 		},
 	}}, fieldStatus, "harnesses")
@@ -64,11 +70,11 @@ func TestAgentTemplateFrom(t *testing.T) {
 // conditions and the warnings, and points at the label the Harness admits.
 func TestWaitAgentTemplateReady(t *testing.T) {
 	newFakeLab(t,
-		readyTemplate("ready", kagentHarness, "True", "ActorTemplate golden snapshot is ready"),
+		readyTemplate(testReadyName, kagentHarness, "True", "ActorTemplate golden snapshot is ready"),
 		readyTemplate("stuck", kagentHarness, "False", "waiting for the golden snapshot"),
 	)
-	template, err := waitAgentTemplateReady("ready", kagentHarness, 4*time.Second)
-	if err != nil || template == nil || template.Metadata.Name != "ready" {
+	template, err := waitAgentTemplateReady(testReadyName, kagentHarness, 4*time.Second)
+	if err != nil || template == nil || template.Metadata.Name != testReadyName {
 		t.Fatalf("ready template: %v %v", template, err)
 	}
 	_, err = waitAgentTemplateReady("stuck", kagentHarness, pollInterval)
@@ -90,8 +96,8 @@ func TestWaitAgentTemplateReady(t *testing.T) {
 // use; a row without a name and a payload without a list are refused.
 func TestPortalAgentRows(t *testing.T) {
 	rows, err := portalAgentRows(map[string]any{"agents": []any{
-		map[string]any{nameKey: "smoke", "namespace": kagentNamespace, "ready": true},
-		map[string]any{"metadata": map[string]any{nameKey: "stuck", "namespace": kagentNamespace}, "state": "NotReady"},
+		map[string]any{nameKey: "smoke", fieldNamespace: kagentNamespace, testReadyName: true},
+		map[string]any{"metadata": map[string]any{nameKey: "stuck", fieldNamespace: kagentNamespace}, "state": "NotReady"},
 		map[string]any{nameKey: "old", "status": "Ready"},
 	}})
 	if err != nil || len(rows) != 3 {
@@ -106,13 +112,13 @@ func TestPortalAgentRows(t *testing.T) {
 	if _, err := portalAgentRows(map[string]any{"total": 0}); err == nil || !strings.Contains(err.Error(), "no agents/items list") {
 		t.Errorf("no list: %v", err)
 	}
-	if _, err := portalAgentRows([]any{map[string]any{"ready": true}}); err == nil || !strings.Contains(err.Error(), "names no agent") {
+	if _, err := portalAgentRows([]any{map[string]any{testReadyName: true}}); err == nil || !strings.Contains(err.Error(), "names no agent") {
 		t.Errorf("a nameless row: %v", err)
 	}
 	if _, err := portalAgentRows("nope"); err == nil {
 		t.Error("a string payload must fail")
 	}
-	if got := lastTextBut([]string{"ping", "", "pong"}, "ping"); got != "pong" {
+	if got := lastTextBut([]string{"ping", "", testPong}, "ping"); got != testPong {
 		t.Errorf("lastTextBut = %q", got)
 	}
 }

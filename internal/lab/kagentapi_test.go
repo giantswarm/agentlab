@@ -75,7 +75,7 @@ func TestGRPCStatusFrom(t *testing.T) {
 func TestTaskText(t *testing.T) {
 	task := &a2apb.Task{
 		Status: &a2apb.TaskStatus{State: a2apb.TaskState_TASK_STATE_COMPLETED, Message: &a2apb.Message{Parts: []*a2apb.Part{
-			{Content: &a2apb.Part_Text{Text: "pong"}},
+			{Content: &a2apb.Part_Text{Text: testPong}},
 			{Content: &a2apb.Part_Raw{Raw: []byte{1}}},
 		}}},
 		Artifacts: []*a2apb.Artifact{{Parts: []*a2apb.Part{{Content: &a2apb.Part_Text{Text: "artifact"}}}}},
@@ -102,7 +102,7 @@ func TestKagentAPICall(t *testing.T) {
 		w.Header().Set("Content-Type", grpcWebContentType)
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/CreateAgentInstance"):
-			resp, _ := proto.Marshal(&kagentpb.CreateAgentInstanceResponse{AgentInstance: &kagentpb.AgentInstance{Id: "01a0", Creator: r.Header.Get(userIDHeader), State: kagentpb.AgentInstanceState_AGENT_INSTANCE_STATE_READY}})
+			resp, _ := proto.Marshal(&kagentpb.CreateAgentInstanceResponse{AgentInstance: &kagentpb.AgentInstance{Id: testIDPrefix, Creator: r.Header.Get(userIDHeader), State: kagentpb.AgentInstanceState_AGENT_INSTANCE_STATE_READY}})
 			_, _ = w.Write(grpcWebFrame(0, resp))
 			_, _ = w.Write(grpcWebFrame(grpcWebTrailerFlag, []byte("grpc-status: 0\r\n")))
 		case strings.HasSuffix(r.URL.Path, "/SendMessage"):
@@ -114,21 +114,21 @@ func TestKagentAPICall(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	api := &kagentAPI{client: srv.Client(), base: srv.URL + kagentRoutePrefix, user: "dev@lab.local", token: "tok"}
+	api := &kagentAPI{client: srv.Client(), base: srv.URL + kagentRoutePrefix, user: testDevUser, token: "tok"}
 
 	var resp kagentpb.CreateAgentInstanceResponse
-	req := &kagentpb.CreateAgentInstanceRequest{Harness: &kagentpb.ResourceReference{Namespace: kagentNamespace, Name: kagentHarness}, AgentTemplate: &kagentpb.ResourceReference{Namespace: kagentNamespace, Name: "smoke"}, RequestId: "r1"}
-	if err := api.call(context.Background(), agentInstanceService, "CreateAgentInstance", req, &resp, map[string]string{agentInstanceHeader: "01a0"}); err != nil {
+	req := &kagentpb.CreateAgentInstanceRequest{Harness: &kagentpb.ResourceReference{Namespace: kagentNamespace, Name: kagentHarness}, AgentTemplate: &kagentpb.ResourceReference{Namespace: kagentNamespace, Name: testSmoke}, RequestId: "r1"}
+	if err := api.call(context.Background(), agentInstanceService, "CreateAgentInstance", req, &resp, map[string]string{agentInstanceHeader: testIDPrefix}); err != nil {
 		t.Fatal(err)
 	}
-	if resp.GetAgentInstance().GetId() != "01a0" || resp.GetAgentInstance().GetCreator() != "dev@lab.local" {
+	if resp.GetAgentInstance().GetId() != testIDPrefix || resp.GetAgentInstance().GetCreator() != testDevUser {
 		t.Errorf("decoded %v", resp.GetAgentInstance())
 	}
 	if seen.URL.Path != kagentRoutePrefix+"/"+agentInstanceService+"/CreateAgentInstance" || seen.Method != http.MethodPost {
 		t.Errorf("request went to %s %s", seen.Method, seen.URL.Path)
 	}
 	for header, want := range map[string]string{
-		"Content-Type": grpcWebContentType, userIDHeader: "dev@lab.local", "Authorization": "Bearer tok", agentInstanceHeader: "01a0", "X-Grpc-Web": "1",
+		"Content-Type": grpcWebContentType, userIDHeader: testDevUser, "Authorization": "Bearer tok", agentInstanceHeader: testIDPrefix, "X-Grpc-Web": "1",
 	} {
 		if got := seen.Header.Get(header); got != want {
 			t.Errorf("header %s = %q, want %q", header, got, want)
@@ -139,7 +139,7 @@ func TestKagentAPICall(t *testing.T) {
 		t.Fatalf("request body: %v %d frames", err, len(messages))
 	}
 	var sent kagentpb.CreateAgentInstanceRequest
-	if err := proto.Unmarshal(messages[0], &sent); err != nil || sent.GetAgentTemplate().GetName() != "smoke" || sent.GetRequestId() != "r1" {
+	if err := proto.Unmarshal(messages[0], &sent); err != nil || sent.GetAgentTemplate().GetName() != testSmoke || sent.GetRequestId() != "r1" {
 		t.Errorf("sent %v (%v)", &sent, err)
 	}
 
