@@ -80,7 +80,6 @@ func Discover(cfg *config.Config) *Discovery {
 		{dockerBin, dockerVersion()},
 		{kindToolName, kindToolVersion()},
 		{kubectlBin, kubectlVersion()},
-		{helmBin, helmVersion()},
 	}
 	d.ClusterExists, d.ClusterPorts = kindNodePublishedPorts(cfg.ControlPlaneNode())
 	if gw, err := kindGatewayIP(cfg.ControlPlaneNode()); err == nil {
@@ -126,16 +125,14 @@ func (d *Discovery) ModelServersHint() string {
 	return strings.Join(parts, ", ")
 }
 
-// toolRequirement is one CLI `agentlab up` shells out to: the version floor
-// the lab needs ("" for any version), whether only the platform needs it, why,
-// and where to get it. kind is not one of them: it is embedded, and the
-// Kubernetes it boots is its release's default node image (kind.go).
+// toolRequirement is one CLI `agentlab up` shells out to: why the lab needs
+// it, and where to get it. Neither has a version floor; kind and Helm are not
+// among them: both are embedded (kind.go, helm.go), and the Kubernetes the
+// lab boots is the kind release's default node image.
 type toolRequirement struct {
-	name         string
-	floor        string
-	platformOnly bool
-	why          string
-	install      string
+	name    string
+	why     string
+	install string
 }
 
 // toolRequirements is what Preflight checks the discovered tools against, in
@@ -145,45 +142,21 @@ var toolRequirements = []toolRequirement{
 		install: "https://docs.docker.com/get-started/get-docker/"},
 	{name: kubectlBin, why: "every manifest is applied and every proof is read through it",
 		install: "https://kubernetes.io/docs/tasks/tools/"},
-	{name: helmBin, floor: helmFloor, platformOnly: true, why: helmWhy,
-		install: "https://helm.sh/docs/intro/install/ — the `helm` first on PATH has to be the Helm 4 one"},
 }
 
 // Preflight is the verdict on the tools, taken before `agentlab configure`
 // asks its first question (or, with --defaults, writes anything): an error
-// naming every tool `agentlab up` would fail on — not on PATH, or below the
-// version the lab needs — each with why and where to get it. So nobody walks
-// through the whole form to be refused at boot time. platform says whether
-// the configuration installs the platform; without it (the bare kind+Dex
-// sandbox) helm is not needed.
-func (d *Discovery) Preflight(platform bool) error {
+// naming every tool `agentlab up` would fail on — not on PATH — each with why
+// and where to get it. So nobody walks through the whole form to be refused
+// at boot time. kind and Helm are not among the tools: the lab embeds both
+// (kind.go, helm.go).
+func (d *Discovery) Preflight() error {
 	var problems []string
-	helmProblem := false
 	for _, req := range toolRequirements {
-		if req.platformOnly && !platform {
+		if d.toolVersion(req.name) != "" {
 			continue
 		}
-		v := d.toolVersion(req.name)
-		var problem string
-		switch {
-		case v == "":
-			problem = fmt.Sprintf("%s is not on PATH (or does not answer) — %s", req.name, req.why)
-		case req.floor != "":
-			below, err := belowFloor(v, req.floor)
-			switch {
-			case err != nil:
-				problem = fmt.Sprintf("%s reports a version this lab cannot read (%q); it needs %s >= %s — %s", req.name, v, req.name, req.floor, req.why)
-			case below:
-				problem = fmt.Sprintf("%s %s is too old; the lab needs %s >= %s — %s", req.name, v, req.name, req.floor, req.why)
-			}
-		}
-		if problem == "" {
-			continue
-		}
-		problems = append(problems, problem+"\n    install: "+req.install)
-		if req.name == helmBin {
-			helmProblem = true
-		}
+		problems = append(problems, fmt.Sprintf("%s is not on PATH (or does not answer) — %s\n    install: %s", req.name, req.why, req.install))
 	}
 	if len(problems) == 0 {
 		return nil
@@ -194,9 +167,6 @@ func (d *Discovery) Preflight(platform bool) error {
 		b.WriteString("  - " + p + "\n")
 	}
 	b.WriteString("Install the above and run the command again.")
-	if helmProblem {
-		b.WriteString("\nWithout the platform (`agentlab configure --platform=false`: a bare kind+Dex OIDC sandbox) helm is not needed.")
-	}
 	return errors.New(b.String())
 }
 
@@ -415,12 +385,4 @@ func kubectlVersion() string {
 		return ""
 	}
 	return v.ClientVersion.GitVersion
-}
-
-func helmVersion() string {
-	v, err := probeHelmVersion()
-	if err != nil {
-		return ""
-	}
-	return v
 }

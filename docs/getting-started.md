@@ -7,11 +7,8 @@ and how to exercise the identity on its own.
 
 ## Requirements
 
-`docker` (or Podman >= 4's docker-compatible CLI), `kubectl`, `helm` (**>= 4**
-— the platform install relies on Helm 4's `--wait`, which waits on the chart's
-Flux custom resources so the command returns with every component Ready; Helm
-3's does not, and the agent-platform chart documents a Helm 3 install as not
-measured). `go` (>= 1.26) only to build from source.
+`docker` (or Podman >= 4's docker-compatible CLI) and `kubectl`. `go` (>= 1.26)
+only to build from source.
 
 kind is not on the list: it is built into `agentlab` as a Go dependency
 (`sigs.k8s.io/kind`), which creates and deletes the cluster and side-loads
@@ -20,6 +17,13 @@ that kind release's default node image — `agentlab configure` names both
 (`kind v0.32.0 (embedded, kindest/node:v1.36.1)`), and a new agentlab release
 moves them together. kind drives the container engine through its CLI, so
 `docker` (or `podman`) is the prerequisite it does not remove.
+
+Neither is `helm`: the binary embeds Helm 4's SDK, so the platform installs
+with Helm 4's kstatus wait (which waits on the chart's Flux custom resources,
+so the install returns with every component Ready) whatever Helm, if any, is
+on the machine. The release it writes is a regular Helm release — `helm -n
+agent-platform status agent-platform` with `KUBECONFIG=state/kubeconfig` reads
+it.
 
 Under **rootless Podman** the lab publishes its ports from your own network
 namespace, which cannot bind anything below
@@ -151,7 +155,7 @@ follows the host instead of freezing the first run's view of it:
 
 ```
 Discovering this machine:
-  tools             docker 29.7.2, kind v0.32.0 (embedded, kindest/node:v1.36.1), kubectl v1.36.4, helm v4.2.2
+  tools             docker 29.7.2, kind v0.32.0 (embedded, kindest/node:v1.36.1), kubectl v1.36.4
   cluster           kind "agentlab" exists — its port mappings are fixed at node creation (`agentlab down && agentlab up` to change them)
   Ollama            0.33.2 on :11434 — answers on 172.21.0.1 (the address pods dial): yes; 10 downloaded, 4 tool-calling
   Lemonade Server   11.9.0 on :13305 — answers on 172.21.0.1 (the address pods dial): yes; 4 downloaded, 3 tool-calling
@@ -161,13 +165,12 @@ Applied to the configuration:
   platform.modelManager.backends: [ollama] -> [ollama, lemonade]
 ```
 
-- **Tools**: `docker`, `kubectl`, `helm` are looked up and their versions
-  shown, next to the kind embedded in the binary and the node image — the
-  Kubernetes — it boots. A missing tool or a Helm 3 **refuses `configure`
-  right here** — before the first question, with why the lab needs it and
-  where to get it — rather than after the whole form or minutes into
-  `agentlab up`. `helm` is only required while the platform is on
-  (`--platform=false`, the bare kind+Dex sandbox, does without it).
+- **Tools**: `docker` and `kubectl` are looked up and their versions shown,
+  next to the kind embedded in the binary and the node image — the Kubernetes
+  — it boots. A missing tool **refuses `configure` right here** — before the
+  first question, with why the lab needs it and where to get it — rather than
+  after the whole form or minutes into `agentlab up`. Helm is not looked up:
+  it is embedded.
 - **Ports**: every host-side port is probed on 127.0.0.1 — the address all
   kind port mappings bind. While **no kind node of this configuration
   exists** (a fresh lab, or after `agentlab down`), an occupied port is moved

@@ -21,10 +21,11 @@ const (
 	// kubeconfig exactly as kind emits it (its current-context is the
 	// kind-<cluster> context), written by the embedded kind at cluster
 	// creation and by useClusterKubeconfig on every cluster-facing command,
-	// and set as KUBECONFIG on every kubectl and helm the lab runs (exec.go).
-	// The one kubeconfig the lab writes — the user's own is never read or
-	// merged into. Under StateDir like every other generated artifact;
-	// `KUBECONFIG=state/kubeconfig kubectl ...` is the same view from a shell.
+	// set as KUBECONFIG on every kubectl the lab runs (exec.go) and bound to
+	// the embedded Helm (restclient.go). The one kubeconfig the lab writes —
+	// the user's own is never read or merged into. Under StateDir like every
+	// other generated artifact; `KUBECONFIG=state/kubeconfig kubectl ...` (or
+	// `helm ...`) is the same view from a shell.
 	labKubeconfigPath = StateDir + "/kubeconfig"
 )
 
@@ -63,8 +64,8 @@ func kindKubeconfig(clusterName string) ([]byte, error) {
 
 // useClusterKubeconfig exports the kind cluster's kubeconfig to
 // labKubeconfigPath. Every command that talks to the cluster calls it first:
-// from then on its kubectl and helm are deterministic about the cluster (the
-// one agentlab.yaml names), and a lab that is not running fails right here
+// from then on its kubectl and its embedded Helm are deterministic about the
+// cluster (the one agentlab.yaml names), and a lab that is not running fails right here
 // instead of as an opaque kubectl error — or, worse, as a command against
 // whatever cluster the shell's own kubeconfig happens to point at. The user's
 // kubeconfig and current-context are never read or changed.

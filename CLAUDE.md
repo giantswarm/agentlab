@@ -105,15 +105,16 @@ with Dex doing the logins.
   `kubectl --kubeconfig kubeconfig.oidc` — that is the OIDC path.
 - The cluster's admin kubeconfig (`state/kubeconfig`, context `kind-agentlab`)
   bypasses the platform and OIDC entirely; use it only to debug the lab's own
-  plumbing, never to demonstrate platform behavior. The lab's own
-  `kubectl`/`helm` never read the shell's kubeconfig: every cluster-facing
-  command exports the kind cluster's kubeconfig to `state/kubeconfig` and pins
-  `KUBECONFIG` to it (exec.go), so the proofs are deterministic about the
-  cluster whatever the current-context is — `KUBECONFIG=state/kubeconfig
-  kubectl ...` is the same view from a shell. Your own `~/.kube/config` is
-  never touched: kind is embedded (`internal/lab/kind.go`, `sigs.k8s.io/kind`
-  as a pinned Go dependency — the Kubernetes version is its release's default
-  node image), and it writes the admin kubeconfig to `state/kubeconfig` only.
+  plumbing, never to demonstrate platform behavior. The lab's own `kubectl`
+  and its embedded Helm never read the shell's kubeconfig: every
+  cluster-facing command exports the kind cluster's kubeconfig to
+  `state/kubeconfig` and binds to it (exec.go, restclient.go), so the proofs
+  are deterministic about the cluster whatever the current-context is —
+  `KUBECONFIG=state/kubeconfig kubectl ...` (or `helm ...`) is the same view
+  from a shell. Your own `~/.kube/config` is never touched: kind is embedded
+  (`internal/lab/kind.go`, `sigs.k8s.io/kind` as a pinned Go dependency — the
+  Kubernetes version is its release's default node image), and it writes the
+  admin kubeconfig to `state/kubeconfig` only.
 
 ## Commands
 
@@ -184,8 +185,10 @@ The lab's own e2e checks are the `*-test` subcommands, not `go test`.
   rendered via the `manifests` table in `render.go`; stamped manifests (dex,
   backstage) carry a checksum over render + certs, so unchanged re-applies are
   pure no-ops and config/cert edits roll the pod exactly once. The platform
-  install (`platform.go`) is one `helm upgrade --install --wait` of the
-  agent-platform meta chart in its lab shape; the lab's patches on the
+  install (`platform.go`) is one upgrade-or-install with the kstatus wait of
+  the agent-platform meta chart in its lab shape through the embedded Helm
+  (`helm.go`: Helm 4's SDK in-process, no `helm` binary — it writes a regular
+  release the CLI reads); the lab's patches on the
   component charts (hostNetwork, the dex-localhost sidecar, the kagent UI
   NodePort, dev images) are per-component `postRenderers` values the chart
   forwards to the component HelmReleases (`postrenderers.go`), and the image
@@ -215,8 +218,9 @@ Load-bearing invariants (details in docs/):
   (`components.flux.enabled: true` — the lab has no Flux of its own, and the
   chart refuses a second one) and self-management OFF (`gitops.self.enabled:
   false` — the lab installs unreleased charts and dev images, which the
-  chart's own HelmRelease would replace with the published release; the Helm
-  CLI stays the one writer of the release). The chart is pinned to an exact
+  chart's own HelmRelease would replace with the published release; the
+  lab's embedded Helm stays the one writer of the release, and the Helm CLI
+  its day-2 tool). The chart is pinned to an exact
   release (`platform.chartVersion`, default `config.DefaultChartVersion`);
   `platform.chartPath` installs a local checkout instead. Never emit
   `gitops.namespace` with the engine on.

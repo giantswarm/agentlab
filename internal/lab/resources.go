@@ -18,9 +18,8 @@ import (
 // scheduled. Nothing along the way says "out of CPU". preflightRuntimeResources
 // asks the container runtime what it has BEFORE any cluster work and refuses
 // (CPU, a hard limit) or warns (memory, a soft one) with the fix — in the
-// spirit of ensureHelmSupportsPlatform and preflightHostServer: a host-side
-// shortfall fails here, with its remedy, not after a five-minute boot and a
-// ten-minute helm wait.
+// spirit of preflightHostServer: a host-side shortfall fails here, with its
+// remedy, not after a five-minute boot and a ten-minute install wait.
 //
 // The figures below are the requests `kubectl describe node` reports for each
 // group of pods, measured on a live full default lab (agents, observability,

@@ -68,9 +68,9 @@ func observabilityUp(cfg *config.Config) error {
 		return err
 	}
 
-	// helm --wait returns as soon as kstatus is happy, but the operator creates
-	// the Prometheus StatefulSet asynchronously after the CR lands — so "helm
-	// succeeded" does not mean a query endpoint exists yet. Wait for the CR to
+	// Helm's wait returns as soon as kstatus is happy, but the operator creates
+	// the Prometheus StatefulSet asynchronously after the CR lands — so "the
+	// install succeeded" does not mean a query endpoint exists yet. Wait for the CR to
 	// report an available replica; without it the mcp-prometheus tools connect
 	// fine and then fail every query.
 	step("Waiting for Prometheus to serve (the operator creates it after the install)")
@@ -150,28 +150,32 @@ func mcpPrometheusUp(cfg *config.Config) error {
 	return nil
 }
 
+// ociChartInstallTimeout bounds the observability chart's upgrade-or-install
+// and its wait.
+const ociChartInstallTimeout = 5 * time.Minute
+
 // installOCIChart renders the values template and installs one pinned OCI
-// chart into the observability namespace, side-loading its images first (the
-// same host-cache -> node rule as the platform; see preload.go).
+// chart into the observability namespace through the embedded Helm (an
+// idempotent upgrade-or-install with the kstatus wait, creating the namespace),
+// side-loading its images first (the same host-cache -> node rule as the
+// platform; see preload.go).
 func installOCIChart(cfg *config.Config, release, chartRef, version, valuesTmpl string) error {
 	_, valuesPath, err := renderManifest(cfg, valuesTmpl)
 	if err != nil {
 		return err
 	}
-	// Best-effort: anything missed is pulled in-node under the --wait timeout,
+	values, err := helmValuesFile(valuesPath)
+	if err != nil {
+		return err
+	}
+	// Best-effort: anything missed is pulled in-node under the wait timeout,
 	// and the snapshot manifest catches it for the next boot.
-	if rendered, err := outputQuiet("helm", "template", release, chartRef,
-		"--version", version,
-		"-n", observabilityNamespace, "-f", valuesPath); err == nil {
+	if rendered, err := helmTemplate(observabilityNamespace, release, chartRef, version, values, nil); err == nil {
 		if imgs := scrapeImages(rendered); len(imgs) > 0 {
 			if res := sideloadImages(cfg, hostPullImages(imgs)); res.n > 0 {
 				note("side-loaded %d %s images (%s)", res.n, release, res.d)
 			}
 		}
 	}
-	return runQuiet("helm", "upgrade", "--install", release, chartRef,
-		"--version", version,
-		"-n", observabilityNamespace, "--create-namespace",
-		"-f", valuesPath,
-		"--wait", "--timeout", "5m")
+	return helmUpgradeInstall(observabilityNamespace, release, chartRef, version, values, ociChartInstallTimeout, true)
 }
