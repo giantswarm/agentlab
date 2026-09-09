@@ -168,10 +168,11 @@ Discovering this machine:
   cluster           kind "agentlab" exists — its port mappings are fixed at node creation (`agentlab down && agentlab up` to change them)
   Ollama            0.33.2 on :11434 — answers on 172.21.0.1 (the address pods dial): yes; 10 downloaded, 4 tool-calling
   Lemonade Server   11.9.0 on :13305 — answers on 172.21.0.1 (the address pods dial): yes; 4 downloaded, 3 tool-calling
+  LM Studio         api v1 on :1234 — answers on 172.21.0.1 (the address pods dial): yes; 6 downloaded, 4 tool-calling
   Anthropic key     $ANTHROPIC_API_KEY is set — the agents' default ModelConfig and Backstage's AI chat get the real key at deploy time
 
 Applied to the configuration:
-  platform.modelManager.backends: [ollama] -> [ollama, lemonade]
+  platform.modelManager.backends: [ollama] -> [ollama, lemonade, lmstudio]
 ```
 
 - **Tools**: `docker` is looked up and its version shown, next to what the
@@ -193,22 +194,32 @@ Applied to the configuration:
   count as occupied and a foreign listener on one of them is **reported**, not
   renumbered around (free it, or `agentlab down`, re-run `configure`,
   `agentlab up`).
-- **Host model servers**: an Ollama on `:11434` and a Lemonade Server on
-  `:13305` (their default ports) are detected with version, whether they
-  listen on the kind docker gateway (pods' path to the host — the bind-address
-  fix is named when they do not) and their downloaded models, counting the
-  tool-calling ones. What answers becomes `platform.modelManager.backends`
-  (Ollama first) and turns managed models on; a server that vanished drops
-  out and, with none left, managed models go off — see [Managed
+- **Host model servers**: an Ollama on `:11434`, a Lemonade Server on
+  `:13305` and an LM Studio on `:1234` (their default ports) are detected,
+  each with what it reports itself as, whether it listens on the kind docker
+  gateway (pods' path to the host — the bind-address fix is named when it does
+  not) and its downloaded models, counting the tool-calling ones. What answers
+  becomes `platform.modelManager.backends` (Ollama first) and turns managed
+  models on; a server that vanished drops out and, with none left, managed
+  models go off — see [Managed
   models](models.md#managed-models-model-manager--the-host-model-servers). A
   standalone `flm serve` (FastFlowLM's own server, default `:52625`) is
   reported but not wired: it has no management API and lists its catalog
   rather than what is downloaded — the lab drives FLM through Lemonade.
+
+  Each server is recognised by the **shape of its answer**, never by a status
+  code, and the report prints what it identified itself as. Ollama and
+  Lemonade report a version; **LM Studio reports none anywhere**, so its line
+  reads `api v1` — the API generation the lab requires (0.4.0 or newer). The
+  status code carries no information here because LM Studio answers HTTP 200
+  with an `{"error": …}` document for every path outside its own `/api/v1`,
+  Ollama's `/api/version`, `/api/tags` and `/api/show` among them; a probe
+  that trusted the code would find an Ollama on every LM Studio port.
 - **`$ANTHROPIC_API_KEY`**: whether it is exported, since the agents'
   default ModelConfig and Backstage's AI chat take it at deploy time.
 
 Pins override the discovery for that run: `--model-manager[=false]` decides
-the flag regardless of what answers, `--model-manager-backends ollama,lemonade`
+the flag regardless of what answers, `--model-manager-backends ollama,lmstudio`
 sets the list (and its order) outright; `--platform`, `--agents`,
 `--observability` and `--backstage` toggle the components as before, with or
 without `--defaults`. Nothing else in an existing file is touched — users,
