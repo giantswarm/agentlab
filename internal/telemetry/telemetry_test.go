@@ -135,6 +135,14 @@ func TestCommandPostsOneSignal(t *testing.T) {
 		if payload["appVersion"] != project.Version() {
 			t.Errorf("payload.appVersion %v, want %s", payload["appVersion"], project.Version())
 		}
+		// The dashboard's standard "App Versions" insight reads the reserved
+		// parameter, not the payload key the usage report queries.
+		if payload["TelemetryDeck.AppInfo.version"] != project.Version() {
+			t.Errorf("payload[TelemetryDeck.AppInfo.version] %v, want %s", payload["TelemetryDeck.AppInfo.version"], project.Version())
+		}
+		if sha := project.ShortSHA(); sha != "" && payload["TelemetryDeck.AppInfo.buildNumber"] != sha {
+			t.Errorf("payload[TelemetryDeck.AppInfo.buildNumber] %v, want %s", payload["TelemetryDeck.AppInfo.buildNumber"], sha)
+		}
 		for _, k := range []string{"TelemetryDeck.Device.operatingSystem", "TelemetryDeck.Device.architecture", "TelemetryDeck.SDK.nameAndVersion"} {
 			if payload[k] == "" || payload[k] == nil {
 				t.Errorf("payload lacks %s", k)

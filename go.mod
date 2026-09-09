@@ -7,7 +7,7 @@ require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/creativeprojects/go-selfupdate v1.6.0
 	github.com/giantswarm/selfupdate-cosign v0.1.0
-	github.com/giantswarm/telemetrydeck-go v0.1.26
+	github.com/giantswarm/telemetrydeck-go v0.2.0
 	github.com/smallstep/truststore v0.13.0
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/crypto v0.57.0

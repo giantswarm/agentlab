@@ -10,7 +10,8 @@ One signal contains:
 
 - the command (`agentlab up`, `agentlab platform-test`, …) — never its
   arguments or flags
-- the agentlab version (what `agentlab --version` prints)
+- the agentlab version (what `agentlab --version` prints) and the commit it
+  was built from
 - operating system and processor architecture
 - the library and version that sent it (`telemetrydeck-go/…`)
 - a user identifier hash: SHA-256 over OS, architecture, host name, OS user
