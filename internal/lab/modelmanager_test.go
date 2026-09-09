@@ -1,6 +1,8 @@
 package lab
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -94,23 +96,29 @@ func TestHostInventoryFallsBackToLoopback(t *testing.T) {
 	// The fake's library holds three agent models (its embedding entry is
 	// filtered out by the reader).
 	const agentModels = 3
-	got, err := hostInventory(lmstudio, srv.URL)
+	got, base, err := hostInventory(lmstudio, srv.URL)
 	if err != nil || len(got) != agentModels {
 		t.Fatalf("direct read: %d models, err=%v", len(got), err)
+	}
+	if base != srv.URL {
+		t.Errorf("direct read must report the endpoint it read: %s", base)
 	}
 
 	// The endpoint does not resolve, the loopback port does: fall back.
 	restore := loopbackBaseFn
 	loopbackBaseFn = func(string) string { return srv.URL }
 	defer func() { loopbackBaseFn = restore }()
-	got, err = hostInventory(lmstudio, unreachable)
+	got, base, err = hostInventory(lmstudio, unreachable)
 	if err != nil || len(got) != agentModels {
 		t.Fatalf("fallback read: %d models, err=%v", len(got), err)
+	}
+	if base != srv.URL {
+		t.Errorf("the fallback must report the base it actually read, not the endpoint: %s", base)
 	}
 
 	// Neither answers: the endpoint's own error survives, with the loopback's.
 	loopbackBaseFn = func(string) string { return dead }
-	_, err = hostInventory(lmstudio, unreachable)
+	_, _, err = hostInventory(lmstudio, unreachable)
 	if err == nil {
 		t.Fatal("both unreachable must fail")
 	}
@@ -118,5 +126,70 @@ func TestHostInventoryFallsBackToLoopback(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error should name %s: %v", want, err)
 		}
+	}
+}
+
+// A configured endpoint that RESOLVES but does not answer must fail the read,
+// never fall back: docs/models.md supports pointing a backend at a server
+// elsewhere on the LAN, and substituting a local server of the same kind would
+// have models-test assert against a library it never meant to read — reporting
+// a model "gone from the host" because a different host does not have it.
+func TestHostInventoryDoesNotFallBackForAResolvableEndpoint(t *testing.T) {
+	srv := fakeLMStudio(t)
+	defer srv.Close()
+	restore := loopbackBaseFn
+	loopbackBaseFn = func(string) string { return srv.URL }
+	defer func() { loopbackBaseFn = restore }()
+
+	// 127.0.0.1:1 resolves (an IP literal always does) and refuses the
+	// connection. The loopback stand-in above would answer happily.
+	const lanDown = "http://127.0.0.1:1"
+	got, base, err := hostInventory(lmstudio, lanDown)
+	if err == nil {
+		t.Fatalf("a resolvable endpoint that does not answer must fail, got %d models", len(got))
+	}
+	if base != lanDown {
+		t.Errorf("the failure must name the endpoint that was asked for: %s", base)
+	}
+}
+
+// lmStudioModels must reject a 200 whose body is not an LM Studio answer
+// rather than return an empty inventory with a nil error — the empty read is
+// indistinguishable from "the model is gone from the host", which is what the
+// delete assertions rest on.
+func TestLMStudioModelsRejectsAForeign200(t *testing.T) {
+	for _, tc := range []struct{ name, body string }{
+		{"lmstudio's own unknown-path answer", `{"error":"Unexpected endpoint or method."}`},
+		{"a lemonade envelope on the same path", `{"object":"list","data":[{"id":"m","downloaded":true}]}`},
+		{"an empty document", `{}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+			models, err := lmStudioModels(srv.URL)
+			if err == nil {
+				t.Fatalf("a foreign 200 must be an error, got %d models", len(models))
+			}
+		})
+	}
+}
+
+// An empty library is still an LM Studio: nothing downloaded is a valid
+// answer, and the reader must not confuse it with a foreign server.
+func TestLMStudioModelsAcceptsAnEmptyLibrary(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"models":[]}`))
+	}))
+	defer srv.Close()
+	models, err := lmStudioModels(srv.URL)
+	if err != nil {
+		t.Fatalf("an empty library must read cleanly: %v", err)
+	}
+	if len(models) != 0 {
+		t.Fatalf("want no models, got %d", len(models))
 	}
 }

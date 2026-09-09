@@ -142,8 +142,11 @@ func lmStudioModels(base string) ([]HostModel, error) {
 		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
+	// A pointer, so an absent `models` key is distinguishable from an empty
+	// library: a fresh LM Studio with nothing downloaded is still an LM
+	// Studio, and the check below rejects only the former.
 	var list struct {
-		Models []struct {
+		Models *[]struct {
 			Key          string `json:"key"`
 			Type         string `json:"type"`
 			SizeBytes    int64  `json:"size_bytes"`
@@ -155,8 +158,17 @@ func lmStudioModels(base string) ([]HostModel, error) {
 	if err := decodeJSONBody(resp, &list); err != nil {
 		return nil, fmt.Errorf("reading %s%s: %w", base, lmStudioModelsPath, err)
 	}
+	// A 200 on this path is not evidence that an LM Studio answered it — the
+	// whole reason detection fingerprints the body (backends.go). Without
+	// this, any 200 whose document has no `models` key unmarshals into the
+	// zero value and the caller gets an empty inventory with a nil error,
+	// which reads as "the model is gone from the host" in exactly the
+	// assertions that ground models-test.
+	if list.Models == nil {
+		return nil, fmt.Errorf("reading %s%s: not an LM Studio 0.4.0+ answer (no `models` array)", base, lmStudioModelsPath)
+	}
 	var models []HostModel
-	for _, m := range list.Models {
+	for _, m := range *list.Models {
 		if m.Type == lmStudioEmbeddingType || m.Type == lmStudioEmbeddingsType {
 			continue
 		}

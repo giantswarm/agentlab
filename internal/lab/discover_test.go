@@ -38,7 +38,7 @@ const (
 	// LM Studio's inventory fields.
 	fieldModels       = "models"
 	fieldKey          = "key"
-	fieldType         = "type"
+	fieldModelType    = "type"
 	fieldSizeBytes    = "size_bytes"
 	fieldCapabilities = "capabilities"
 	fieldToolUse      = "trained_for_tool_use"
@@ -121,15 +121,15 @@ func lmStudioMux(models []map[string]any) *http.ServeMux {
 func fakeLMStudio(t *testing.T) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(lmStudioMux([]map[string]any{
-		{fieldKey: modelGranite, fieldType: typeLLM, fieldSizeBytes: 2_100_000_000,
+		{fieldKey: modelGranite, fieldModelType: typeLLM, fieldSizeBytes: 2_100_000_000,
 			fieldCapabilities: map[string]any{fieldToolUse: true, labelVision: false}},
-		{fieldKey: modelQwen317b, fieldType: typeLLM, fieldSizeBytes: 1_000_000_000,
+		{fieldKey: modelQwen317b, fieldModelType: typeLLM, fieldSizeBytes: 1_000_000_000,
 			fieldCapabilities: map[string]any{fieldToolUse: false}},
 		// A vision-language model is a chat model: it belongs in the
 		// inventory, and it can call tools.
-		{fieldKey: modelQwenVL, fieldType: typeVLM, fieldSizeBytes: 5_800_000_000,
+		{fieldKey: modelQwenVL, fieldModelType: typeVLM, fieldSizeBytes: 5_800_000_000,
 			fieldCapabilities: map[string]any{fieldToolUse: true, labelVision: true}},
-		{fieldKey: modelNomicEmbed, fieldType: typeEmbedding, fieldSizeBytes: 84_106_624},
+		{fieldKey: modelNomicEmbed, fieldModelType: typeEmbedding, fieldSizeBytes: 84_106_624},
 	}))
 }
 

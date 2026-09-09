@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"slices"
@@ -361,8 +362,8 @@ func ModelsTest(cfg *config.Config, email, backendName, model string) error {
 	server := config.BackendServerName(backendName)
 	teardown := "delete"
 	if !spec.deleteOverREST {
-		teardown = "delete refused (501) -> unwire"
-		if err := proveDeleteRefused(&api, session, cfg, backendName, model, mcName, endpoint, toolPrefix); err != nil {
+		teardown = fmt.Sprintf("delete refused (%d) -> unwire", http.StatusNotImplemented)
+		if err := proveDeleteRefused(&api, session, backendName, model, mcName, endpoint, toolPrefix); err != nil {
 			return err
 		}
 	} else {
@@ -374,14 +375,14 @@ func ModelsTest(cfg *config.Config, email, backendName, model string) error {
 			return err
 		}
 		note("ModelConfig %s is gone", mcName)
-		remaining, err := hostInventory(backendName, endpoint)
+		remaining, base, err := hostInventory(backendName, endpoint)
 		if err != nil {
-			return fmt.Errorf("reading the host %s's models at %s: %w", server, endpoint, err)
+			return fmt.Errorf("reading the host %s's models at %s: %w", server, base, err)
 		}
 		if slices.ContainsFunc(remaining, func(m HostModel) bool { return m.ID == model }) {
-			return fmt.Errorf("host %s still has %s after the delete", server, model)
+			return fmt.Errorf("host %s at %s still has %s after the delete", server, base, model)
 		}
-		note("host %s at %s no longer has it (%d models left)", server, endpoint, len(remaining))
+		note("host %s at %s no longer has it (%d models left)", server, base, len(remaining))
 		text, err = session.callServerTool(toolPrefix+"list_models", map[string]any{backendField: backendName})
 		if err != nil {
 			return err
@@ -399,39 +400,66 @@ func ModelsTest(cfg *config.Config, email, backendName, model string) error {
 	fmt.Printf("PASS: muster aggregates x_%s_* and calls them (get_model, list_models)\n", modelManagerMCPServer)
 	fmt.Printf("PASS: the caller's identity — job requestedBy=%s; a viewer's wire is Forbidden by the apiserver (user RBAC, not the ServiceAccount's)\n", user.Email)
 	if !spec.deleteOverREST {
-		fmt.Printf("NOTE: %s is still downloaded on the host — %s has no delete over its API. Remove it there: `lms rm %s`\n",
-			model, server, model)
+		fmt.Printf("NOTE: %s is still downloaded on the host — %s has no delete over its API. Remove it there: `%s`\n",
+			model, server, fmt.Sprintf(spec.removeHint, model))
 	}
 	return nil
 }
 
 // hostInventory reads a host model server's downloaded models from THIS
-// machine — the ground truth behind the proof's delete assertions. The
-// endpoint the platform uses is the one PODS dial, which the host cannot
+// machine — the ground truth behind the proof's delete assertions — and
+// returns the base it actually read, so every message about the result names
+// that one rather than the endpoint that was asked for.
+//
+// The endpoint the platform uses is the one PODS dial, which the host cannot
 // always resolve: a kind docker-network gateway it can, but Docker Desktop's
 // host.docker.internal (and podman's host.containers.internal) exist only
-// inside the cluster. So fall back to the server's loopback port, where
-// `agentlab configure` found it in the first place.
+// inside the cluster. That, and only that, is what the loopback fallback is
+// for, so it fires on an unresolvable host and not on any error: a configured
+// LAN endpoint (docs/models.md supports one) that is merely down must fail the
+// read, never silently retarget it at a local server of the same kind, whose
+// different library would make the delete assertions report on a machine they
+// never touched.
 //
 // The caller above picks loopback outright for the one case it can predict
 // (podman with no configured endpoint), which keeps a guaranteed-failing dial
-// out of the run; this is the net for the cases it cannot — an explicit
-// endpoints.<backend> of host.docker.internal on Docker Desktop, say. Both
-// earn their keep: neither is the other's leftover.
-func hostInventory(backend, endpoint string) ([]HostModel, error) {
+// out of the run; this is the net for the cases it cannot. Both earn their
+// keep: neither is the other's leftover.
+func hostInventory(backend, endpoint string) ([]HostModel, string, error) {
 	models, err := hostServerModels(backend, endpoint)
 	if err == nil {
-		return models, nil
+		return models, endpoint, nil
 	}
 	loopback := loopbackBaseFn(backend)
-	if loopback == endpoint {
-		return nil, err
+	if loopback == endpoint || endpointResolves(endpoint) {
+		return nil, endpoint, err
 	}
 	models, loopbackErr := hostServerModels(backend, loopback)
 	if loopbackErr != nil {
-		return nil, fmt.Errorf("%w (and %s: %w)", err, loopback, loopbackErr)
+		return nil, endpoint, fmt.Errorf("%w (and %s: %w)", err, loopback, loopbackErr)
 	}
-	return models, nil
+	note("%s does not resolve from this machine (it is the address pods dial); read %s instead", endpoint, loopback)
+	return models, loopback, nil
+}
+
+// endpointResolves reports whether this machine can resolve the endpoint's
+// host — an IP literal always does. False is the signal that the address is
+// the cluster's alone (host.docker.internal, host.containers.internal), which
+// is the only case hostInventory substitutes loopback for.
+func endpointResolves(endpoint string) bool {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	if host == "" {
+		return false
+	}
+	if net.ParseIP(host) != nil {
+		return true
+	}
+	_, err = net.LookupHost(host)
+	return err == nil
 }
 
 // waitModelConfigGone waits for a ModelConfig to disappear from the kagent
@@ -457,7 +485,7 @@ func waitModelConfigGone(mcName string) error {
 // refused delete that removed something would be worse than one that refuses —
 // and the ModelConfig must still come off through the supported route, which
 // shows wiring and inventory are independent.
-func proveDeleteRefused(api *modelManagerAPI, session *musterSession, cfg *config.Config,
+func proveDeleteRefused(api *modelManagerAPI, session *musterSession,
 	backendName, model, mcName, endpoint, toolPrefix string) error {
 	server := config.BackendServerName(backendName)
 	step("Deleting %s — expecting the refusal (%s has no delete over its API)", model, server)
@@ -469,19 +497,27 @@ func proveDeleteRefused(api *modelManagerAPI, session *musterSession, cfg *confi
 		return fmt.Errorf("DELETE /models/%s answered %d: %s cannot delete a model, so the platform must refuse instead of reporting success",
 			model, status, server)
 	}
-	if status != http.StatusNotImplemented && !strings.Contains(strings.ToLower(string(body)), "unsupported") {
-		return fmt.Errorf("DELETE /models/%s answered %d without the unsupported answer: %.300s", model, status, body)
+	// The contract is the status, not a word in the body: 501 is what maps
+	// the driver's ErrUnsupported, and accepting any non-2xx that happens to
+	// say "unsupported" would pass a 400 validation error or a gateway's 502
+	// while the PASS line went on claiming a 501.
+	if status != http.StatusNotImplemented {
+		return fmt.Errorf("DELETE /models/%s answered %d, want %d (the platform's mapping of the driver's unsupported delete): %.300s",
+			model, status, http.StatusNotImplemented, body)
+	}
+	if !strings.Contains(strings.ToLower(string(body)), "unsupported") {
+		return fmt.Errorf("DELETE /models/%s answered %d but not with the unsupported code: %.300s", model, status, body)
 	}
 	note("HTTP %d, %s", status, excerpt(string(body), 120))
 
 	// The refusal must have changed nothing: still downloaded, still wired,
 	// still listed.
-	remaining, err := hostInventory(backendName, endpoint)
+	remaining, base, err := hostInventory(backendName, endpoint)
 	if err != nil {
-		return fmt.Errorf("reading the host %s's models at %s: %w", server, endpoint, err)
+		return fmt.Errorf("reading the host %s's models at %s: %w", server, base, err)
 	}
 	if !slices.ContainsFunc(remaining, func(m HostModel) bool { return m.ID == model }) {
-		return fmt.Errorf("host %s no longer has %s after a refused delete", server, model)
+		return fmt.Errorf("host %s at %s no longer has %s after a refused delete", server, base, model)
 	}
 	if _, err := outputQuiet("kubectl", "-n", kagentNamespace, "get", modelConfigResource, mcName); err != nil {
 		return fmt.Errorf("ModelConfig %s disappeared after a refused delete: %w", mcName, err)
@@ -500,12 +536,12 @@ func proveDeleteRefused(api *modelManagerAPI, session *musterSession, cfg *confi
 	}
 	note("ModelConfig %s is gone", mcName)
 	// Unwiring touches the ModelConfig only — the weights stay.
-	remaining, err = hostInventory(backendName, endpoint)
+	remaining, base, err = hostInventory(backendName, endpoint)
 	if err != nil {
-		return fmt.Errorf("reading the host %s's models at %s: %w", server, endpoint, err)
+		return fmt.Errorf("reading the host %s's models at %s: %w", server, base, err)
 	}
 	if !slices.ContainsFunc(remaining, func(m HostModel) bool { return m.ID == model }) {
-		return fmt.Errorf("host %s lost %s to an unwire, which must only remove the ModelConfig", server, model)
+		return fmt.Errorf("host %s at %s lost %s to an unwire, which must only remove the ModelConfig", server, base, model)
 	}
 	text, err := session.callServerTool(toolPrefix+"list_models", map[string]any{backendField: backendName})
 	if err != nil {

@@ -57,8 +57,17 @@ const (
 )
 
 // maxProbeBody bounds the identity probe's read: an inventory grows with the
-// host's library, and the whole document has to parse to prove its shape.
+// host's library, and the whole document has to parse to prove its shape. A
+// document that hits the bound is an error, not a short read — truncated JSON
+// would fail to parse and read as "no such server".
 const maxProbeBody = 8 << 20
+
+// probeTimeout is the identity probe's budget. It matches the inventory
+// readers in hostmodels.go on purpose: LM Studio's identifying document IS
+// its library, so a machine with a large one needs the same room here. Two
+// seconds silently dropped such a server from the discovery, and
+// ApplyDiscovered then rewrote platform.modelManager.backends without it.
+const probeTimeout = 10 * time.Second
 
 // detectHostServer asks a model server at base to identify itself — the
 // configure-time question "is there one on this machine at all?" —
@@ -70,7 +79,7 @@ func detectHostServer(backend, base string) (ident string, ok bool) {
 	if !known {
 		return "", false
 	}
-	client := &http.Client{Timeout: 2 * time.Second}
+	client := &http.Client{Timeout: probeTimeout}
 	resp, err := client.Get(base + spec.probe.path)
 	if err != nil {
 		return "", false
@@ -79,8 +88,8 @@ func detectHostServer(backend, base string) (ident string, ok bool) {
 	if resp.StatusCode != http.StatusOK {
 		return "", false
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxProbeBody))
-	if err != nil {
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxProbeBody+1))
+	if err != nil || len(body) > maxProbeBody {
 		return "", false
 	}
 	return spec.probe.ident(body)

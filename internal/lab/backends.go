@@ -54,6 +54,10 @@ type hostServer struct {
 	// Studio cannot (`lms rm` on the host only), so model-manager reports the
 	// delete capability false and models-test proves the refusal instead.
 	deleteOverREST bool
+	// removeHint is the host-side command that removes a model, for the
+	// closing note of the one run that leaves its model behind. Empty for a
+	// server that deletes over its API, where nothing is left to remove.
+	removeHint string
 }
 
 // hostServers is the per-backend behaviour, keyed by the kinds
@@ -103,6 +107,7 @@ var hostServers = map[string]hostServer{
 		provider:       config.ProviderOpenAI,
 		providerNote:   "OpenAI-compatible /v1, placeholder key",
 		deleteOverREST: false,
+		removeHint:     "lms rm %s",
 	},
 }
 
