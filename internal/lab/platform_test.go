@@ -188,3 +188,22 @@ func TestMCPServerState(t *testing.T) {
 		t.Errorf("mcpServerState(absent) = %v, want the apiserver's NotFound", err)
 	}
 }
+
+// TestKagentControllerMonitored: the kagent scrape target is expected only
+// while a ServiceMonitor for the kagent controller exists in the kagent
+// namespace — the connectivity chart's or the kagent chart's own; monitors of
+// other components or namespaces do not count.
+func TestKagentControllerMonitored(t *testing.T) {
+	newFakeLab(t, customObject(serviceMonitorGVK, platformNamespace, "agent-platform-connectivity-kagent-controller", nil))
+	if kagentControllerMonitored() {
+		t.Error("a monitor in another namespace counted")
+	}
+	newFakeLab(t, customObject(serviceMonitorGVK, kagentNamespace, "kagent-ui", nil))
+	if kagentControllerMonitored() {
+		t.Error("a monitor of another component counted")
+	}
+	newFakeLab(t, customObject(serviceMonitorGVK, kagentNamespace, "agent-platform-connectivity-kagent-controller", nil))
+	if !kagentControllerMonitored() {
+		t.Error("the connectivity chart's controller monitor not seen")
+	}
+}

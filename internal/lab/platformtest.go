@@ -2,6 +2,7 @@ package lab
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -241,7 +242,11 @@ func PlatformTest(cfg *config.Config, email string) error {
 		// scrape interval, hence the generous retry.
 		expected := []string{componentMuster, "valkey", mcpPrometheusRelease}
 		if cfg.Platform.Agents {
-			expected = append(expected, "kagent")
+			if kagentControllerMonitored() {
+				expected = append(expected, "kagent")
+			} else {
+				note("no ServiceMonitor for the kagent controller in %s (kagent main serves no metrics listener): not expecting a kagent target", kagentNamespace)
+			}
 		}
 		step("Verifying Prometheus scrapes the platform itself (%s)", strings.Join(expected, ", "))
 		var missing []string
@@ -438,4 +443,33 @@ func proveDownstreamIdentity(cfg *config.Config, toolPrefix string) error {
 		}
 	}
 	return nil
+}
+
+// serviceMonitorResource is the Prometheus operator's ServiceMonitor as a
+// resource argument.
+const serviceMonitorResource = "servicemonitors.monitoring.coreos.com"
+
+// kagentControllerMonitored reports whether a ServiceMonitor for the kagent
+// controller exists in the kagent namespace — the connectivity chart's
+// (agent-platform-connectivity-kagent-controller) or the kagent chart's own.
+// kagent main's controller serves no Prometheus listener; a lab that renders
+// no monitor for it has no kagent target to expect, one that does expects it
+// scraped. A read that fails counts as no monitor.
+func kagentControllerMonitored() bool {
+	gvr, err := gvrFor(serviceMonitorResource)
+	if err != nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
+	defer cancel()
+	monitors, err := listObjects(ctx, gvr, kagentNamespace, "")
+	if err != nil {
+		return false
+	}
+	for _, m := range monitors {
+		if strings.Contains(m.GetName(), "kagent-controller") {
+			return true
+		}
+	}
+	return false
 }
