@@ -198,6 +198,33 @@ func TestHostServerAnswersUnderPodman(t *testing.T) {
 	}
 }
 
+// The tools line separates what was found on PATH — docker, or its absence —
+// from what the binary carries, so a report never lists an embedded library
+// as missing and a reader sees at a glance that docker is all there is to
+// install.
+func TestReportToolsLine(t *testing.T) {
+	out := (&Discovery{Tools: toolVersions("29.7.2")}).Report(config.Default())
+	line := ""
+	for _, l := range strings.Split(out, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(l), "tools") {
+			line = l
+		}
+	}
+	for _, want := range []string{"tools             docker 29.7.2 — embedded: kind v", " (kindest/node:v", ", helm v", ", client-go v"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("tools line %q lacks %q", line, want)
+		}
+	}
+	if strings.Contains(line, "MISSING") || strings.Contains(line, "kubectl") {
+		t.Errorf("tools line %q names something missing, or kubectl", line)
+	}
+
+	out = (&Discovery{Tools: toolVersions("")}).Report(config.Default())
+	if !strings.Contains(out, "tools             docker MISSING — embedded: kind v") {
+		t.Errorf("a missing docker is reported as such, the embedded tools still listed:\n%s", out)
+	}
+}
+
 // A probe that could not run leaves OnGateway unset, and the report says so
 // instead of blaming the server's bind address.
 func TestReportSaysWhenTheProbeCouldNotRun(t *testing.T) {

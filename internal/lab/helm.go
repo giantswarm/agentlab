@@ -30,6 +30,8 @@ import (
 	release "helm.sh/helm/v4/pkg/release/v1"
 	"helm.sh/helm/v4/pkg/storage/driver"
 	"k8s.io/klog/v2"
+
+	"github.com/giantswarm/agentlab/pkg/project"
 )
 
 // The embedded Helm. Every Helm operation of the lab — the platform's
@@ -52,7 +54,15 @@ import (
 //
 // The cluster is always the lab's: every operation binds to the lab-owned
 // kubeconfig through labRESTClientGetter (restclient.go), never to the
-// shell's KUBECONFIG or current-context — the rule exec.go applies to kubectl.
+// shell's KUBECONFIG or current-context — as the Kubernetes client (kube.go).
+
+// helmToolName names Helm among the discovery report's embedded tools; its
+// version is the module this binary was built with.
+const helmToolName = "helm"
+
+func helmToolVersion() string {
+	return project.ModuleVersion("helm.sh/helm/v4")
+}
 
 // helmDriver is the release storage: Secrets in the release namespace, the
 // CLI's default (HELM_DRIVER unset). Pinned rather than read from the

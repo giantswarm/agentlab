@@ -32,40 +32,26 @@ func warn(format string, a ...any) {
 	fmt.Fprintf(os.Stderr, "    WARNING: "+format+"\n", a...)
 }
 
-// The CLIs the lab shells out to. kubectl is the one whose cluster is pinned
-// by command; every other subprocess (docker) inherits the environment
-// untouched. kind and Helm are not subprocesses: both are embedded — kind
-// (kind.go) drives docker — or podman — through its CLI itself, Helm
-// (helm.go) is bound to the same lab kubeconfig through labRESTClientGetter,
-// and so is the Kubernetes client (kube.go) that replaces kubectl call by
-// call.
-const (
-	dockerBin  = "docker"
-	kubectlBin = "kubectl"
-)
+// dockerBin is the one CLI the lab shells out to — docker, or Podman's
+// docker-compatible CLI (runtime.go) — for the node container, the image
+// pulls and saves, and the probes run inside the node. It is the lab's only
+// subprocess: kind (kind.go) and Helm (helm.go) are embedded, and every call
+// to the apiserver goes through the embedded Kubernetes client (kube.go),
+// bound to the lab-owned kubeconfig by labRESTClientGetter (restclient.go).
+// The container engine is therefore what a machine needs installed, and the
+// one tool Preflight (discover.go) asks for.
+const dockerBin = "docker"
 
-// command builds the exec.Cmd behind every helper below. kubectl runs with
-// KUBECONFIG pinned to the lab-owned kubeconfig (labKubeconfigPath, the kind
-// cluster's own as written by the embedded kind and re-exported by
-// useClusterKubeconfig), so which cluster a lab command talks to is decided
-// by agentlab.yaml — never by the shell's kubeconfig or its current-context,
-// which the lab neither reads nor changes. An explicit --kubeconfig flag (the
-// token-only kubeconfigs of test and up) still wins, as kubectl's precedence
-// has it.
+// command builds the exec.Cmd behind the helpers below. The child inherits
+// the environment untouched: nothing the lab runs reads a kubeconfig, so
+// there is nothing to pin.
 func command(name string, args ...string) *exec.Cmd {
-	cmd := exec.Command(name, args...) // #nosec G204 -- fixed lab tooling (docker/kubectl) with lab-controlled args
-	cmd.Env = os.Environ()
-	if name == kubectlBin {
-		// For duplicate keys os/exec keeps the last entry, so an inherited
-		// KUBECONFIG is overridden, not merged with.
-		cmd.Env = append(cmd.Env, "KUBECONFIG="+labKubeconfig())
-	}
-	return cmd
+	return exec.Command(name, args...) // #nosec G204 -- fixed lab tooling (docker) with lab-controlled args
 }
 
 // cmdError wraps a failed command with its invocation and, when captured,
-// what it said on stderr — so a probe's failure reads "current-context is not
-// set" or "NotFound", not just "exit status 1".
+// what it said on stderr — so a probe's failure reads "No such container" or
+// "permission denied", not just "exit status 1".
 func cmdError(name string, args []string, err error, stderr []byte) error {
 	if msg := strings.TrimSpace(string(stderr)); msg != "" {
 		return fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, msg)
@@ -73,16 +59,24 @@ func cmdError(name string, args []string, err error, stderr []byte) error {
 	return fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), err)
 }
 
-// runQuiet executes a command, showing output only if it fails.
+// runQuiet executes a command, showing its output only if it fails.
 func runQuiet(name string, args ...string) error {
-	return pipeInto(nil, name, args...)
+	var buf bytes.Buffer
+	cmd := command(name, args...)
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+	if err := cmd.Run(); err != nil {
+		_, _ = os.Stderr.Write(buf.Bytes())
+		return cmdError(name, args, err, nil)
+	}
+	return nil
 }
 
 // outputQuiet captures stdout and keeps stderr off the terminal; for
-// probe-style commands whose failures are expected. The error still carries
-// the command and its stderr, so a caller that does report the failure says
-// what kubectl said — the empty stdout of a failed read is otherwise
-// indistinguishable from "no status yet".
+// probe-style commands whose failures are expected (an image not yet pulled,
+// a node container that does not exist). The error still carries the command
+// and its stderr, so a caller that does report the failure says what docker
+// said.
 func outputQuiet(name string, args ...string) (string, error) {
 	var stdout, stderr bytes.Buffer
 	cmd := command(name, args...)
@@ -92,20 +86,6 @@ func outputQuiet(name string, args ...string) (string, error) {
 		return stdout.String(), cmdError(name, args, err, stderr.Bytes())
 	}
 	return stdout.String(), nil
-}
-
-// pipeInto feeds input to a command's stdin, showing output only on failure.
-func pipeInto(input []byte, name string, args ...string) error {
-	var buf bytes.Buffer
-	cmd := command(name, args...)
-	cmd.Stdin = bytes.NewReader(input)
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
-	if err := cmd.Run(); err != nil {
-		_, _ = os.Stderr.Write(buf.Bytes())
-		return cmdError(name, args, err, nil)
-	}
-	return nil
 }
 
 // waitFor polls probe up to attempts times, sleeping interval between tries,
@@ -122,13 +102,13 @@ func waitFor(attempts int, interval time.Duration, probe func() bool) bool {
 }
 
 // notReached words a wait loop's failure. readErr is the last status read's
-// own error: when the read itself failed, the message says so and carries
-// kubectl's words, instead of the empty status a failed read leaves behind —
-// which, on a shell without a kubeconfig current-context, read exactly like a
-// CR the controller had never touched.
+// own error: when the read against the apiserver itself failed, the message
+// says so and carries the apiserver's words, instead of the empty status a
+// failed read leaves behind — which would read exactly like a CR the
+// controller had never touched.
 func notReached(subject, want, last string, readErr error, hint string) error {
 	if readErr != nil {
-		return fmt.Errorf("%s: kubectl failed: %w;\n%s", subject, readErr, hint)
+		return fmt.Errorf("%s: the status read failed: %w;\n%s", subject, readErr, hint)
 	}
 	return fmt.Errorf("%s never reached %s (last status: %q);\n%s", subject, want, last, hint)
 }

@@ -87,6 +87,28 @@ func VersionLine() string {
 	return line
 }
 
+// ModuleVersion is the version of a dependency this binary was built with
+// ("v4.2.4"), read from the module list Go records in every build — a release,
+// a `go install`, a `go build` from a checkout alike — so what the binary
+// reports about the libraries it embeds is true for this very build. "" when
+// the module is not part of the build or the binary carries no build info.
+func ModuleVersion(path string) string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return ""
+	}
+	for _, dep := range info.Deps {
+		if dep.Path != path {
+			continue
+		}
+		if dep.Replace != nil {
+			return dep.Replace.Version
+		}
+		return dep.Version
+	}
+	return ""
+}
+
 func buildSetting(key string) string {
 	info, ok := debug.ReadBuildInfo()
 	if !ok {

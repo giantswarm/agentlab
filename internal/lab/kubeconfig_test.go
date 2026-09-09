@@ -58,13 +58,14 @@ func resetKindKubeconfigCache(t *testing.T) {
 
 // TestUseClusterKubeconfig drives the export against a stand-in for kind's
 // kubeconfig read: the lab-owned kubeconfig lands under state/ owner-only and
-// byte-identical to what kind emitted, the very file the command constructor
-// pins kubectl to and the embedded client is built from (a bundle built
-// before the export is dropped); one read serves both it and the cluster entry the token
+// byte-identical to what kind emitted, the very file the embedded clients are
+// built from whatever the shell's KUBECONFIG says (a bundle built before the
+// export is dropped); one read serves both it and the cluster entry the token
 // kubeconfigs are built from; and a cluster kind does not know fails by name
-// with kind's message instead of leaving kubectl to the shell's kubeconfig.
+// with kind's message instead of leaving the clients to the shell's kubeconfig.
 func TestUseClusterKubeconfig(t *testing.T) {
 	t.Chdir(t.TempDir())
+	t.Setenv("KUBECONFIG", "/elsewhere/config")
 	calls := stubKindKubeconfig(t)
 	resetKindKubeconfigCache(t)
 
@@ -91,8 +92,12 @@ func TestUseClusterKubeconfig(t *testing.T) {
 	if string(raw) != fakeKindKubeconfig {
 		t.Errorf("state/kubeconfig is not kind's output:\n%s", raw)
 	}
-	if got, want := lastEnv(command("kubectl", "get", "pods").Env, "KUBECONFIG"), "KUBECONFIG="+labKubeconfig(); got != want {
-		t.Errorf("kubectl runs with %q, want %q", got, want)
+	loader := labRESTClientGetter("").ToRawKubeConfigLoader()
+	if got := loader.ConfigAccess().GetExplicitFile(); got != labKubeconfig() {
+		t.Errorf("the clients read %q, want the exported %q", got, labKubeconfig())
+	}
+	if kc, err := loader.RawConfig(); err != nil || kc.CurrentContext != "kind-agentlab" {
+		t.Errorf("the clients see current-context %q (%v), want kind's from the exported file", kc.CurrentContext, err)
 	}
 
 	name, cluster, err := kindClusterEntry(cfg.ClusterName)

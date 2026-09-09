@@ -105,12 +105,12 @@ with Dex doing the logins.
   `kubectl --kubeconfig kubeconfig.oidc` — that is the OIDC path.
 - The cluster's admin kubeconfig (`state/kubeconfig`, context `kind-agentlab`)
   bypasses the platform and OIDC entirely; use it only to debug the lab's own
-  plumbing, never to demonstrate platform behavior. The lab's own `kubectl`
-  and its embedded Helm never read the shell's kubeconfig: every
-  cluster-facing command exports the kind cluster's kubeconfig to
-  `state/kubeconfig` and binds to it (exec.go, restclient.go), so the proofs
-  are deterministic about the cluster whatever the current-context is —
-  `KUBECONFIG=state/kubeconfig kubectl ...` (or `helm ...`) is the same view
+  plumbing, never to demonstrate platform behavior. The lab never reads the
+  shell's kubeconfig: every cluster-facing command exports the kind cluster's
+  kubeconfig to `state/kubeconfig`, and its embedded Helm and Kubernetes
+  client are built from that file alone (restclient.go, kube.go), so the
+  proofs are deterministic about the cluster whatever the current-context is
+  — `KUBECONFIG=state/kubeconfig kubectl ...` (or `helm ...`) is the same view
   from a shell. Your own `~/.kube/config` is never touched: kind is embedded
   (`internal/lab/kind.go`, `sigs.k8s.io/kind` as a pinned Go dependency — the
   Kubernetes version is its release's default node image), and it writes the
