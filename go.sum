@@ -152,8 +152,8 @@ github.com/felixge/httpsnoop v1.0.4 h1:NFTV2Zj1bL4mc9sqWACXbQFVBBg2W3GPvqp8/ESS2
 github.com/felixge/httpsnoop v1.0.4/go.mod h1:m8KPJKqk1gH5J9DgRY2ASl2lWCfGKXixSwevea8zH2U=
 github.com/giantswarm/selfupdate-cosign v0.1.0 h1:KRfPVIzbaDjO658QcPsFmof0QUAEj6AnIZ2e9mCbThA=
 github.com/giantswarm/selfupdate-cosign v0.1.0/go.mod h1:CVnryjSRY/xDqJDn+QeivgT8+WkOvVbY/Z+xLaIfZ1w=
-github.com/giantswarm/telemetrydeck-go v0.1.26 h1:CX8Df6SMhbfbCetc/biRrXf4YHgZUmC2LyJyULH92EA=
-github.com/giantswarm/telemetrydeck-go v0.1.26/go.mod h1:BitlH7nTrQmWvVEtnAa8pNM+FjI0+9S7JA9tl1PVvzo=
+github.com/giantswarm/telemetrydeck-go v0.2.0 h1:Ojw0XncmOEQyM68TK+4T9IYnU6xmJMFM/vr3oS8eb+I=
+github.com/giantswarm/telemetrydeck-go v0.2.0/go.mod h1:BitlH7nTrQmWvVEtnAa8pNM+FjI0+9S7JA9tl1PVvzo=
 github.com/go-chi/chi/v5 v5.3.0 h1:halUjDxhshgXHMrao5bB8eNBXo/rnzwr8m5m36glehM=
 github.com/go-chi/chi/v5 v5.3.0/go.mod h1:R+tYY2hNuVUUjxoPtqUdgBqevM9s9njzkTLutVsOCto=
 github.com/go-fed/httpsig v1.1.0 h1:9M+hb0jkEICD8/cAiNqEB66R87tTINszBRTjwjQzWcI=

@@ -62,8 +62,12 @@ func Enabled() bool {
 // Fire-and-forget: the HTTP request runs on its own goroutine while the
 // command does its work, and a failure to deliver is swallowed — telemetry
 // must never get in the user's way. Same shape as kubectl-gs: signal type
-// GiantSwarm.command with the command path and the app version, plus the
-// OS, architecture and SDK version the library adds.
+// GiantSwarm.command with the command path and the app version in the
+// payload, plus the OS, architecture and SDK version the library adds. The
+// version and commit also go out as TelemetryDeck.AppInfo.version and
+// .buildNumber (the library's WithAppVersion/WithBuildNumber): those are the
+// parameters the TelemetryDeck dashboard's standard "App Versions" insight
+// reads — the payload's appVersion is what the shared usage report queries.
 //
 // Not every invocation is a person using the lab: hidden commands are
 // plumbing (__complete runs on every TAB press), `completion` runs on every
@@ -115,5 +119,9 @@ func newClient(testMode bool) (*telemetrydeck.Client, error) {
 			telemetrydeck.WithLogger(log.New(os.Stderr, "telemetry: ", 0)),
 		)
 	}
+	opts = append(opts,
+		telemetrydeck.WithAppVersion(project.Version()),
+		telemetrydeck.WithBuildNumber(project.ShortSHA()),
+	)
 	return telemetrydeck.NewClient(appID, opts...)
 }

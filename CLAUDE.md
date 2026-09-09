@@ -149,7 +149,9 @@ The lab's own e2e checks are the `*-test` subcommands, not `go test`.
   keystrokes.
 - `internal/telemetry` — one anonymous usage signal per user-facing command
   to TelemetryDeck (giantswarm/telemetrydeck-go, kubectl-gs's signal shape:
-  `GiantSwarm.command` with the command path and the version). `main.go`
+  `GiantSwarm.command` with the command path and the version; the version
+  and commit also as `TelemetryDeck.AppInfo.version`/`.buildNumber`, which
+  the dashboard's standard insights read). `main.go`
   wires it as the root `PersistentPreRun`; hidden commands (`__complete`),
   `completion` and `help` never count. Opt-outs:
   `AGENTLAB_TELEMETRY_OPTOUT`, `DO_NOT_TRACK=1`. When iterating on the lab,

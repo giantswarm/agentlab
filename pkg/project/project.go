@@ -51,6 +51,16 @@ func GitSHA() string {
 	return buildSetting("vcs.revision")
 }
 
+// ShortSHA is GitSHA cut to the seven characters git shows, or "" when
+// unknown — the build identifier the usage signal carries.
+func ShortSHA() string {
+	sha := GitSHA()
+	if len(sha) > 7 {
+		sha = sha[:7]
+	}
+	return sha
+}
+
 // BuildTimestamp returns the build (or, unstamped, the commit) time in
 // RFC 3339, or "" when unknown.
 func BuildTimestamp() string {
@@ -65,10 +75,7 @@ func BuildTimestamp() string {
 func VersionLine() string {
 	line := Version()
 	var details []string
-	if sha := GitSHA(); sha != "" {
-		if len(sha) > 7 {
-			sha = sha[:7]
-		}
+	if sha := ShortSHA(); sha != "" {
 		details = append(details, "commit "+sha)
 	}
 	if ts := BuildTimestamp(); ts != "" {
