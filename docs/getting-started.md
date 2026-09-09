@@ -154,8 +154,11 @@ Applied to the configuration:
 ```
 
 - **Tools**: `docker`, `kind`, `kubectl`, `helm` are looked up and their
-  versions shown; a missing one (or a Helm 3) is called out here rather than
-  minutes into `agentlab up`.
+  versions shown. A missing one, a kind below 0.31 or a Helm 3 **refuses
+  `configure` right here** — before the first question, with why the lab
+  needs it and where to get it — rather than after the whole form or minutes
+  into `agentlab up`. `helm` is only required while the platform is on
+  (`--platform=false`, the bare kind+Dex sandbox, does without it).
 - **Ports**: every host-side port is probed on 127.0.0.1 — the address all
   kind port mappings bind. While **no kind node of this configuration
   exists** (a fresh lab, or after `agentlab down`), an occupied port is moved
