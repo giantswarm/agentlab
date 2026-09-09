@@ -210,7 +210,11 @@ func TestReportToolsLine(t *testing.T) {
 			line = l
 		}
 	}
-	for _, want := range []string{"tools             docker 29.7.2 — embedded: kind v", " (kindest/node:v", ", helm v", ", client-go v"} {
+	wants := []string{"tools             docker 29.7.2 — embedded: kind v", " (kindest/node:v", ", helm", ", client-go"}
+	if buildInfoHasDeps() {
+		wants = append(wants, ", helm v", ", client-go v")
+	}
+	for _, want := range wants {
 		if !strings.Contains(line, want) {
 			t.Errorf("tools line %q lacks %q", line, want)
 		}

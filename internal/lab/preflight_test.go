@@ -1,8 +1,11 @@
 package lab
 
 import (
+	"runtime/debug"
 	"strings"
 	"testing"
+
+	"github.com/giantswarm/agentlab/pkg/project"
 )
 
 // TestDiscoveryPreflight: the verdict `agentlab configure` takes on the tools
@@ -53,6 +56,17 @@ func TestDiscoveryPreflight(t *testing.T) {
 	}
 }
 
+// buildInfoHasDeps reports whether this test binary records its module
+// dependencies: a main binary always does — that is what project.ModuleVersion
+// reads in the shipped agentlab — but a test binary does only from Go 1.27 on
+// (Go 1.26's records none). The assertions on the embedded versions' values
+// are conditional on it; kind's version comes from kind's own package and is
+// there in every build.
+func buildInfoHasDeps() bool {
+	info, ok := debug.ReadBuildInfo()
+	return ok && len(info.Deps) > 0
+}
+
 // TestToolVersionsAreThisBuilds: the embedded entries carry the versions this
 // very binary was built with — read from the build info, so a release, a `go
 // install` and a `go build` from a checkout all report the truth — with kind
@@ -66,14 +80,23 @@ func TestToolVersionsAreThisBuilds(t *testing.T) {
 		if !tool.Embedded {
 			t.Errorf("%s must be reported as embedded", tool.Name)
 		}
+	}
+	if kind := tools[1]; kind.Name != kindToolName || !strings.HasPrefix(kind.Version, "v") || !strings.Contains(kind.Version, "(kindest/node:v") {
+		t.Errorf("kind entry %+v, want the embedded release and the node image named", kind)
+	}
+	if tools[2].Name != helmToolName || tools[3].Name != clientGoToolName {
+		t.Errorf("embedded order %s, %s; want helm then client-go", tools[2].Name, tools[3].Name)
+	}
+	if !buildInfoHasDeps() {
+		t.Log("this test binary records no dependency versions (Go 1.26 test binaries); helm's and client-go's values are checked where a main binary reports them")
+		return
+	}
+	for _, tool := range tools[2:] {
 		if !strings.HasPrefix(tool.Version, "v") {
 			t.Errorf("%s version %q, want the built-in module version", tool.Name, tool.Version)
 		}
 	}
-	if kind := tools[1]; kind.Name != kindToolName || !strings.Contains(kind.Version, "(kindest/node:v") {
-		t.Errorf("kind entry %+v, want the node image named", kind)
-	}
-	if tools[2].Name != helmToolName || tools[3].Name != clientGoToolName {
-		t.Errorf("embedded order %s, %s; want helm then client-go", tools[2].Name, tools[3].Name)
+	if got, want := tools[3].Version, project.ModuleVersion("k8s.io/client-go"); got != want || want == "" {
+		t.Errorf("client-go entry %q, want the build's %q", got, want)
 	}
 }
