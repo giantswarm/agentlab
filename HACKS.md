@@ -401,15 +401,17 @@ real installation runs its edge on 443, so the umbrella has no reason to
 carry a ported public URL; the overlay is the lab's permanent answer, not an
 interim.
 
-### U16. Podman: the side-load is one `kind load` per image — BLOCKED UPSTREAM
-`kind load docker-image a b c` runs `docker save -o <tar> a b c`. Podman's
-docker-compatible CLI writes ONE image carrying every name as a tag unless
-`--multi-image-archive` is passed, so the batch lands one image under all
-the tags (the Flux controllers crashlooped running flux-cli). Docker needs
-no flag, so kind cannot pass one portably. Under podman (`runtime.go`) the
-lab loads one image per call; under docker the batched call stays. Unblocks
-when kind's `load docker-image` saves with `--multi-image-archive` under
-its podman provider.
+### U16. Podman: the side-load is one archive per image — OPEN, FIXABLE IN THE LAB
+A multi-image `docker save -o <tar> a b c` under Podman's docker-compatible
+CLI writes ONE image carrying every name as a tag unless
+`--multi-image-archive` is passed, so a batched archive lands one image under
+all the tags (the Flux controllers crashlooped running flux-cli). Under podman
+(`runtime.go`) the lab therefore saves and imports one archive per image
+(`kindLoadImages`); under docker the batch is saved per platform (U21). The
+save is the lab's own `docker save` now (the import is the embedded kind's
+`nodeutils.LoadImageArchive`), so the lab could pass podman's
+`--multi-image-archive` itself and batch there too — not done for lack of a
+podman host to verify the flag through the compatible CLI on.
 
 ### U17. Rootless Podman: the edge moves off 443 — NOT A BUG, A HOST LIMIT
 Rootless Podman publishes ports from the invoking user's network namespace,
@@ -487,26 +489,30 @@ uninstall) ahead of the kagent HelmRelease; the connectivity release adopts
 it on install and deletes it with the release. `ensureNamespace` for kagent
 is deleted; a fresh `agentlab up` gets the namespace from the hook.
 
-### U21. `preload.go`: the docker side-load is `docker save --platform` + `kind load image-archive` — BLOCKED UPSTREAM
-`kind load docker-image` runs a plain `docker save` and pipes the archive into
-the node's `ctr images import --all-platforms`. Under Docker's containerd image
-store — the default on Docker Desktop and on new Docker 29 installs — that
-archive carries a pulled image's whole multi-platform index while only the
-host platform's blobs were ever pulled, and the import fails on the first
-missing digest: `ERROR: failed to load image: command "docker exec ... ctr
+### U21. `preload.go`: the docker side-load is `docker save --platform` + kind's archive import — BLOCKED UPSTREAM
+kind's `load docker-image` runs a plain `docker save` and pipes the archive
+into the node's `ctr images import --all-platforms`. Under Docker's containerd
+image store — the default on Docker Desktop and on new Docker 29 installs —
+that archive carries a pulled image's whole multi-platform index while only
+the host platform's blobs were ever pulled, and the import fails on the first
+missing digest: `failed to load image: command "docker exec ... ctr
 --namespace=k8s.io images import --all-platforms ..." failed with error: exit
 status 1` / `content digest sha256:...: not found`, once per side-load lane,
 every image degrading to the in-node pull the preload exists to avoid
 ([kubernetes-sigs/kind#3795](https://github.com/kubernetes-sigs/kind/issues/3795),
 open since 2024-11; the maintainers point consumers to `docker save --platform
 | kind load image-archive` and will not lock the platform inside `kind load`).
-The lab does exactly that under docker (`dockerLoadImages`): `docker image
-inspect` says which platform the host holds each ref in, one `docker save
---platform <p> -o <tmp.tar>` per platform, `kind load image-archive` of each.
-Needs Docker 28 (API 1.48) for `docker save --platform`; an older
-client/daemon keeps kind's own load, which is right under the classic graph
-driver. Podman keeps its one-image-per-call load (U16). Unblocks when kind's
-`load docker-image` survives the containerd image store.
+The lab does exactly that, with kind embedded (`kind.go`): the load path of
+kind's `load docker-image` command is not used at all — `dockerLoadImages`
+asks `docker image inspect` which platform the host holds each ref in, writes
+one `docker save --platform <p> -o <tmp.tar>` per platform and imports each
+archive with `nodeutils.LoadImageArchive`, the library call behind `kind load
+image-archive`. Needs Docker 28 (API 1.48) for `docker save --platform`; an
+older client/daemon gets one plain archive of the batch, which is right under
+the classic graph driver. Podman keeps its one-archive-per-image load (U16).
+Unblocks when kind's `load docker-image` logic (the re-tag of an image ID the
+node already has, the per-image save) survives the containerd image store and
+is worth reusing over the plain archive import.
 
 ## Accepted lab trade-offs (not hacks to fix)
 

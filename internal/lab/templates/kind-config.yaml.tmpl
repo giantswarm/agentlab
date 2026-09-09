@@ -69,24 +69,14 @@ kubeadmConfigPatches:
     kind: KubeletConfiguration
     serializeImagePulls: false
   # kind matches a kubeadmConfigPatch by its apiVersion+kind and silently
-  # ignores the rest, so BOTH kubeadm generations are patched here: kind v0.31
-  # emits kubeadm.k8s.io/v1beta3 (extraArgs is a MAP), kind v0.32+ emits
-  # v1beta4 (extraArgs is a LIST of name/value pairs). Whichever matches the
-  # generated config applies; the other is a no-op. Dropping either one makes
-  # the OIDC flags vanish silently on the other kind version — verify with
+  # ignores the rest, so this patch has to be in the kubeadm generation the
+  # embedded kind emits — kind is a pinned Go dependency (go.mod), and its
+  # release decides both the node image and the kubeadm config it renders.
+  # kind v0.32 (kindest/node:v1.36) emits kubeadm.k8s.io/v1beta4, where
+  # extraArgs is a LIST of name/value pairs. A kind bump that moves kubeadm to
+  # a new generation is where this is re-checked: on a mismatch the OIDC flags
+  # vanish silently and every token is rejected — verify on a fresh node with
   #   docker exec <cluster>-control-plane grep oidc /etc/kubernetes/manifests/kube-apiserver.yaml
-  - |
-    apiVersion: kubeadm.k8s.io/v1beta3
-    kind: ClusterConfiguration
-    apiServer:
-      extraArgs:
-        oidc-issuer-url: {{ .Issuer }}
-        oidc-client-id: kubernetes
-        oidc-ca-file: /etc/kubernetes/pki/dex/ca.crt
-        oidc-username-claim: email
-        oidc-username-prefix: "oidc:"
-        oidc-groups-claim: groups
-        oidc-groups-prefix: "oidc:"
   - |
     apiVersion: kubeadm.k8s.io/v1beta4
     kind: ClusterConfiguration

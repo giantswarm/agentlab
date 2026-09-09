@@ -10,12 +10,10 @@ func TestBelowFloor(t *testing.T) {
 	}{
 		{"v4.2.2", helmFloor, false, false},
 		{"v3.19.0", helmFloor, true, false},
-		{"v4.0.0-rc.1", helmFloor, false, false}, // a pre-release of the floor reaches it
-		{"4.2.2", helmFloor, false, false},       // defensive: no leading v
-		{"v0.32.0", kindFloor, false, false},
-		{"v0.31.0", kindFloor, false, false},
-		{"v0.30.0", kindFloor, true, false},
-		{"v0.32.0 go1.26.4 linux/amd64", kindFloor, false, false}, // the first word is the version
+		{"v4.0.0-rc.1", helmFloor, false, false},                 // a pre-release of the floor reaches it
+		{"4.2.2", helmFloor, false, false},                       // defensive: no leading v
+		{"v4.2.2 go1.26.4 linux/amd64", helmFloor, false, false}, // the first word is the version
+		{"v3.19.0 go1.25.0 linux/amd64", helmFloor, true, false},
 		{"", helmFloor, false, true},
 		{"garbage", helmFloor, false, true},
 	}

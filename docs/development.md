@@ -28,6 +28,18 @@ kubeconfig: every cluster-facing command exports the kind cluster's kubeconfig
 to `state/kubeconfig` and pins `KUBECONFIG` to it, so
 `KUBECONFIG=state/kubeconfig kubectl ...` is the same view from a shell.
 
+kind is a Go dependency, not a subprocess: `internal/lab/kind.go` wraps
+`sigs.k8s.io/kind`'s `pkg/cluster` (create, delete, list, the kubeconfig read
+off the node) and `pkg/cluster/nodeutils` (the image-archive import behind
+every side-load). The pinned kind release decides the default node image, i.e.
+the Kubernetes version the lab boots, and the kubeadm config generation the
+rendered kind config patches (`templates/kind-config.yaml.tmpl`); Renovate
+bumps go.mod, so a kind bump is where both are re-checked. Cluster creation
+writes the admin kubeconfig to `state/kubeconfig` (`CreateWithKubeconfigPath`)
+and never into `~/.kube/config`. kind execs the container engine's CLI
+(`docker`, or `podman` when the docker CLI is podman's), which is why the
+engine stays a requirement.
+
 ## The hack journal
 
 [HACKS.md](../HACKS.md) is the audit journal of every hack and workaround in
@@ -52,6 +64,7 @@ internal/update/                 agentlab self-update + the newer-release hint b
 pkg/project/                     version, commit, build time: ldflags from make/CI, else Go's VCS build info
 internal/lab/                    everything operational:
   up.go down.go                    lifecycle; checksum-stamped Dex apply
+  kind.go                          the embedded kind (sigs.k8s.io/kind): cluster create/delete/list, the kubeconfig read, the archive import
   discover.go                      what `configure` learns about this machine on every run
   node.go runtime.go               the kind node as a docker container; docker vs Podman
   preload.go                       images pulled on the host and side-loaded into the node, never by the kubelet
@@ -81,7 +94,7 @@ HACKS.md                         the hack journal
 agentlab.yaml                    your configuration (gitignored; `agentlab configure`)
 certs/                           the lab CA and leaf certs (gitignored; key 0600)
 state/                           rendered manifests, for inspection (gitignored)
-  kubeconfig                       the kind cluster's kubeconfig, exported per run — what the lab's own kubectl/helm use
+  kubeconfig                       the kind cluster's admin kubeconfig, written at creation and re-exported per run — what the lab's own kubectl/helm use
   agent-platform-values.yaml       the chart's values in the lab shape, incl. the postRenderers
 .mcp.json                        registers muster as an MCP server for Claude Code
 ```

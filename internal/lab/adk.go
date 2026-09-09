@@ -76,7 +76,7 @@ func healADKImage(cfg *config.Config, registry, tag, variant string) {
 		return
 	}
 	if id != prevID || !nodeHasImage(cfg.ControlPlaneNode(), img) {
-		if err := runQuiet("kind", "load", "docker-image", img, "--name", cfg.ClusterName); err != nil {
+		if _, err := kindLoadImages(cfg, []string{img}); err != nil {
 			note("side-loading %s failed (%v)", img, err)
 		}
 	}

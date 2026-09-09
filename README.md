@@ -74,9 +74,11 @@ trusting the same issuer.
 
 ## Getting started
 
-Requirements: `go` >= 1.26, `docker` (or Podman >= 4), `kind` >= 0.31,
-`kubectl`, `helm` >= 4, `git`. Give docker at least 4 CPUs and 6 GiB for the
-full lab; `agentlab up` checks before it touches anything (see [Docker
+Requirements: `docker` (or Podman >= 4), `kubectl`, `helm` >= 4 — and `go`
+>= 1.26 only to build from source. kind is built into the binary: the cluster
+runs the Kubernetes of the embedded kind release's default node image. Give
+docker at least 4 CPUs and 6 GiB for the full lab; `agentlab up` checks before
+it touches anything (see [Docker
 resources](docs/getting-started.md#docker-resources)).
 
 ```bash

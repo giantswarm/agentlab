@@ -144,15 +144,15 @@ esac`)
 }
 
 // TestEnsureNodeRunning drives Up's node check against stand-ins for docker,
-// kind and kubectl: a running node is left completely alone (no start, no
-// kubeconfig export); an exited node is started, the kubeconfig exported and
-// the apiserver probed before Up goes on; a paused node is unpaused; and a
-// node docker cannot start fails by node, state and fix instead of as the
-// `kind get kubeconfig` error it used to be.
+// kind's kubeconfig read and kubectl: a running node is left completely alone
+// (no start, no kubeconfig export); an exited node is started, the kubeconfig
+// exported and the apiserver probed before Up goes on; a paused node is
+// unpaused; and a node docker cannot start fails by node, state and fix
+// instead of as the opaque kubeconfig-read error it used to be.
 func TestEnsureNodeRunning(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
-	installFakeKind(t, dir)
+	stubKindKubeconfig(t)
 	resetKindKubeconfigCache(t)
 	kubectlCalls := installFakeTool(t, dir, "kubectl", "exit 0")
 	dockerCalls := installFakeTool(t, dir, "docker", `
