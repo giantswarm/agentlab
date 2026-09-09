@@ -373,7 +373,9 @@ func proveToolsetPortal(cfg *config.Config, user *config.User) ([]string, error)
 // composeAgentManifest is the composer's combinedManifest for a new agent
 // (plugins/agent-platform composeManifests.ts): the shared OCIRepository of
 // the chart, then the HelmRelease with the values — `agent`, `modelConfig`
-// and the top-level `toolset` exactly as the Tools step composed it.
+// and the top-level `toolset` exactly as the Tools step composed it — and
+// `spec.serviceAccountName`, which the portal takes from the app-config key
+// `agentPlatform.fluxServiceAccountName` the chart renders (composeManifests.ts).
 func composeAgentManifest(name, modelConfig string, toolset []string) string {
 	quoted := make([]string, 0, len(toolset))
 	for _, sel := range toolset {
@@ -397,6 +399,7 @@ metadata:
   namespace: %[1]s
 spec:
   interval: 10m
+  serviceAccountName: %[6]s
   chartRef:
     kind: OCIRepository
     name: agent
@@ -410,7 +413,7 @@ spec:
     modelConfig:
       name: %[4]s
     toolset: [%[5]s]
-`, kagentNamespace, name, toolsetTestAgentSystemMsg, modelConfig, strings.Join(quoted, ", "))
+`, kagentNamespace, name, toolsetTestAgentSystemMsg, modelConfig, strings.Join(quoted, ", "), kagentFluxServiceAccount)
 }
 
 // scaffold drives the hidden agent-deployment template the wizard's Deploy
