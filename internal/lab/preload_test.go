@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -193,46 +194,51 @@ func withSavePlatform(t *testing.T, has bool) {
 	t.Cleanup(func() { dockerSaveHasPlatform = prev })
 }
 
-// The two side-loads that still go through kind's own `kind load docker-image`.
-// Podman: kind's multi-image `docker save` is single-image there, so the batch
-// would land one image under every tag — one call per image. Docker older
-// than 28: no `docker save --platform`, so kind's own batched save it is (right
-// under the classic graph driver such an engine runs).
-func TestKindLoadImagesOneCallPerImageUnderPodman(t *testing.T) {
+// The two side-loads without `docker save --platform`. Podman: its multi-image
+// save is single-image, so the batch would land one image under every tag —
+// one plain archive per image. Docker older than 28: no `--platform`, so one
+// plain archive of the whole batch (right under the classic graph driver such
+// an engine runs). Either way the archive goes into the node through the
+// embedded kind's import, never through a kind on PATH.
+func TestKindLoadImagesArchivesWithoutSavePlatform(t *testing.T) {
 	images := []string{refPostgres, refGolangADK, refMusterDev}
 	for name, tc := range map[string]struct {
 		podman    bool
-		wantCalls []string
+		wantSaves []string
 	}{
 		"docker without save --platform batches": {false, []string{
-			"kind load docker-image --name agentlab " + refPostgres + " " + refGolangADK + " " + refMusterDev,
+			"docker save -o <tar> " + refPostgres + " " + refGolangADK + " " + refMusterDev,
 		}},
-		"podman loads one at a time": {true, []string{
-			"kind load docker-image --name agentlab " + refPostgres,
-			"kind load docker-image --name agentlab " + refGolangADK,
-			"kind load docker-image --name agentlab " + refMusterDev,
+		"podman saves one at a time": {true, []string{
+			"docker save -o <tar> " + refPostgres,
+			"docker save -o <tar> " + refGolangADK,
+			"docker save -o <tar> " + refMusterDev,
 		}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
-			calls := installFakeTool(t, dir, "kind", "exit 0")
-			dockerCalls := installFakeTool(t, dir, "docker", "exit 0")
+			t.Setenv("TMPDIR", dir)
+			dockerCalls := installFakeTool(t, dir, "docker", `[ "$1 $2" = "save -o" ] || { echo "unexpected docker $*" >&2; exit 2; }
+: > "$3"`)
+			kindCalls := stubKindLoadArchive(t, dir)
 			withPodman(t, tc.podman)
 			withSavePlatform(t, false)
-			cfg := config.Default()
-			loaded, err := kindLoadImages(cfg, images)
+			loaded, err := kindLoadImages(config.Default(), images)
 			if err != nil {
 				t.Fatalf("kindLoadImages: %v", err)
 			}
 			if loaded != len(images) {
 				t.Errorf("loaded %d images, want %d", loaded, len(images))
 			}
-			got := strings.Split(strings.TrimSpace(readCalls(t, calls)), "\n")
-			if !slices.Equal(got, tc.wantCalls) {
-				t.Errorf("calls\n got  %v\n want %v", got, tc.wantCalls)
+			if got := callLines(t, dockerCalls); !slices.Equal(got, tc.wantSaves) {
+				t.Errorf("saves\n got  %v\n want %v", got, tc.wantSaves)
 			}
-			if d := readCalls(t, dockerCalls); d != "" {
-				t.Errorf("kind's own load must not shell out to docker itself, got:\n%s", d)
+			wantKind := slices.Repeat([]string{kindLoadArchiveCall}, len(tc.wantSaves))
+			if got := callLines(t, kindCalls); !slices.Equal(got, wantKind) {
+				t.Errorf("kind loads\n got  %v\n want %v", got, wantKind)
+			}
+			if left := leftoverArchives(t, dir); len(left) > 0 {
+				t.Errorf("temporary archives left behind: %v", left)
 			}
 		})
 	}
@@ -241,9 +247,32 @@ func TestKindLoadImagesOneCallPerImageUnderPodman(t *testing.T) {
 // tarPathRe matches the temporary archive's path in a stand-in's call log.
 var tarPathRe = regexp.MustCompile(`\S+\.tar`)
 
-// kindLoadArchiveCall is the one kind call the docker side-load makes, as the
-// stand-in logs it with the archive path normalised.
-const kindLoadArchiveCall = "kind load image-archive --name agentlab <tar>"
+// kindLoadArchiveCall is the one kind import a side-loaded archive makes, as
+// the stand-in logs it with the archive path normalised.
+const kindLoadArchiveCall = "kindLoadArchive agentlab <tar>"
+
+// stubKindLoadArchive stands in for the embedded kind's archive import
+// (kindLoadArchive): it logs each call to a file under dir — returned, for
+// callLines — and insists the archive exists when it runs.
+func stubKindLoadArchive(t *testing.T, dir string) string {
+	t.Helper()
+	calls := filepath.Join(dir, "kind-calls")
+	prev := kindLoadArchive
+	kindLoadArchive = func(clusterName, archive string) error {
+		f, err := os.OpenFile(calls, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) // #nosec G304 -- the call log under t.TempDir
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = fmt.Fprintf(f, "kindLoadArchive %s %s\n", clusterName, archive)
+		_ = f.Close()
+		if _, err := os.Stat(archive); err != nil {
+			return fmt.Errorf("archive %s is not there: %w", archive, err)
+		}
+		return nil
+	}
+	t.Cleanup(func() { kindLoadArchive = prev })
+	return calls
+}
 
 // callLines splits a stand-in's log into lines with the archive path
 // normalised to <tar>, so the argv can be compared exactly.
@@ -256,11 +285,12 @@ func callLines(t *testing.T, path string) []string {
 	return strings.Split(tarPathRe.ReplaceAllString(raw, "<tar>"), "\n")
 }
 
-// installSideloadFakes puts a docker and a kind on PATH for the docker
-// side-load: docker answers `image inspect` with a platform per ref (muster
-// amd64, everything else arm64) and creates the archive `save` is asked for;
-// kind's `load image-archive` insists the archive exists when it runs. The
-// archives land in dir (TMPDIR), where the test can see them gone again.
+// installSideloadFakes puts a docker on PATH and a stand-in behind kind's
+// archive import for the docker side-load: docker answers `image inspect`
+// with a platform per ref (muster amd64, everything else arm64) and creates
+// the archive `save` is asked for; the import insists the archive exists when
+// it runs. The archives land in dir (TMPDIR), where the test can see them
+// gone again.
 func installSideloadFakes(t *testing.T, dir, saveBody string) (dockerCalls, kindCalls string) {
 	t.Helper()
 	t.Setenv("TMPDIR", dir)
@@ -273,8 +303,7 @@ func installSideloadFakes(t *testing.T, dir, saveBody string) (dockerCalls, kind
 "save --platform") `+saveBody+` ;;
 *) echo "unexpected docker $*" >&2; exit 2 ;;
 esac`)
-	kindCalls = installFakeTool(t, dir, "kind", `[ "$1 $2" = "load image-archive" ] || { echo "unexpected kind $*" >&2; exit 2; }
-[ -f "$5" ] || { echo "archive $5 is not there" >&2; exit 1; }`)
+	kindCalls = stubKindLoadArchive(t, dir)
 	withPodman(t, false)
 	withSavePlatform(t, true)
 	return dockerCalls, kindCalls
@@ -290,12 +319,11 @@ func leftoverArchives(t *testing.T, dir string) []string {
 	return left
 }
 
-// Under docker the side-load is `docker save --platform` + `kind load
-// image-archive`, one archive per platform the host holds the images in,
-// never kind's own `kind load docker-image`: its plain `docker save` breaks
-// under the containerd image store (kind#3795). Every ref is inspected for
-// its platform, the archives are written where docker was told to and are
-// gone afterwards.
+// Under docker the side-load is `docker save --platform` + kind's archive
+// import, one archive per platform the host holds the images in, never a
+// plain `docker save`: that breaks under the containerd image store
+// (kind#3795). Every ref is inspected for its platform, the archives are
+// written where docker was told to and are gone afterwards.
 func TestDockerLoadImagesSavesOneArchivePerPlatform(t *testing.T) {
 	dir := t.TempDir()
 	dockerCalls, kindCalls := installSideloadFakes(t, dir, `: > "$5"`)
@@ -403,20 +431,32 @@ func TestSaveHasPlatform(t *testing.T) {
 	}
 }
 
-// Under podman a failed image must not stop the rest, and the count must say
-// how many landed so the caller can report a partial load as one.
+// Under podman a failed image must not stop the rest, the count must say how
+// many landed so the caller can report a partial load as one, the error must
+// carry docker's words, and no archive may be left behind.
 func TestKindLoadImagesPartialFailureUnderPodman(t *testing.T) {
 	dir := t.TempDir()
-	installFakeTool(t, dir, "kind", `case "$5" in
-`+refGolangADK+`) echo "no such image" >&2; exit 1 ;;
-*) exit 0 ;;
+	t.Setenv("TMPDIR", dir)
+	installFakeTool(t, dir, "docker", `case "$4" in
+`+refGolangADK+`) echo "Error response from daemon: No such image: $4" >&2; exit 1 ;;
+*) : > "$3" ;;
 esac`)
+	kindCalls := stubKindLoadArchive(t, dir)
 	withPodman(t, true)
 	loaded, err := kindLoadImages(config.Default(), []string{refPostgres, refGolangADK, refMusterDev})
 	if err == nil {
 		t.Fatal("a failed image must surface as an error")
 	}
+	if !strings.Contains(err.Error(), "No such image") {
+		t.Errorf("error must carry docker's words, got:\n%v", err)
+	}
 	if loaded != 2 {
 		t.Errorf("loaded = %d, want 2 (the failure must not stop the rest)", loaded)
+	}
+	if got, want := callLines(t, kindCalls), []string{kindLoadArchiveCall, kindLoadArchiveCall}; !slices.Equal(got, want) {
+		t.Errorf("kind loads\n got  %v\n want %v (only the images whose save succeeded)", got, want)
+	}
+	if left := leftoverArchives(t, dir); len(left) > 0 {
+		t.Errorf("temporary archives left behind: %v", left)
 	}
 }

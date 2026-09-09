@@ -83,9 +83,9 @@ func hostPullImages(images []string) []string {
 	return have
 }
 
-// sideloadImages side-loads the given host-cached refs into the node in one
-// `kind load`, skipping what the node already has — on a re-run over a live
-// cluster that skip usually covers everything.
+// sideloadImages side-loads the given host-cached refs into the node,
+// skipping what the node already has — on a re-run over a live cluster that
+// skip usually covers everything.
 func sideloadImages(cfg *config.Config, images []string) preloadResult {
 	start := time.Now()
 	if have, err := nodeImageTags(cfg.ControlPlaneNode()); err == nil {
@@ -100,13 +100,15 @@ func sideloadImages(cfg *config.Config, images []string) preloadResult {
 	return preloadResult{n: loaded, d: time.Since(start).Round(time.Second), err: err}
 }
 
-// kindLoadImages side-loads images and reports how many landed. Under docker
-// the batch is saved per platform and loaded as archives (dockerLoadImages).
-// Under podman it is one `kind load docker-image` per image: kind's own
-// multi-image save would fold the batch into one image under every tag
-// (runtime.go), and a single-image save is always right. A failed image does
-// not stop the rest, so the count and the error are both reported and a
-// partial load reads as one.
+// kindLoadImages side-loads images and reports how many landed. Every load is
+// a `docker save` into a temporary archive that the embedded kind imports
+// into the node (kindLoadArchive) — what `kind load image-archive` does, and
+// the recipe kind's maintainers give consumers (HACKS.md U21). Under docker
+// the batch is saved per platform (dockerLoadImages). Under podman it is one
+// archive per image: podman's multi-image save folds the batch into one
+// image under every tag (runtime.go, HACKS.md U16), and a single-image save
+// is always right. A failed image does not stop the rest, so the count and
+// the error are both reported and a partial load reads as one.
 func kindLoadImages(cfg *config.Config, images []string) (int, error) {
 	if !dockerIsPodman() {
 		return dockerLoadImages(cfg, images)
@@ -114,7 +116,7 @@ func kindLoadImages(cfg *config.Config, images []string) (int, error) {
 	loaded := 0
 	var errs []error
 	for _, img := range images {
-		if err := runQuiet("kind", "load", "docker-image", "--name", cfg.ClusterName, img); err != nil {
+		if err := saveAndLoadArchive(cfg, "", []string{img}); err != nil {
 			errs = append(errs, err)
 			continue
 		}
@@ -124,23 +126,21 @@ func kindLoadImages(cfg *config.Config, images []string) (int, error) {
 }
 
 // dockerLoadImages is the docker side-load: `docker save --platform <what the
-// host holds>` into an archive, `kind load image-archive` of that — one
-// archive per platform — instead of `kind load docker-image`. kind's own load
-// runs a plain `docker save`, and under Docker's containerd image store (the
-// default on Docker Desktop and on new Docker 29 installs) that archive
-// carries the image's whole multi-platform index while only the host
-// platform's blobs were ever pulled; the node's `ctr images import
-// --all-platforms` then fails on the first missing digest
+// host holds>` into an archive per platform, imported into the node. A plain
+// `docker save` — what `kind load docker-image` runs — breaks under Docker's
+// containerd image store (the default on Docker Desktop and on new Docker 29
+// installs): that archive carries the image's whole multi-platform index
+// while only the host platform's blobs were ever pulled, and the node's `ctr
+// images import --all-platforms` fails on the first missing digest
 // (kubernetes-sigs/kind#3795, HACKS.md U21). Saving only the platform the
 // host has — `docker image inspect` says which — writes an archive whose
-// index references nothing it does not carry, and is the recipe kind's
-// maintainers give consumers. `docker save --platform` arrived with Docker
-// 28 (API 1.48); an older engine keeps kind's own load, which is right under
-// the classic graph driver — the only store such an engine is likely to run.
+// index references nothing it does not carry. `docker save --platform`
+// arrived with Docker 28 (API 1.48); an older engine gets one plain archive
+// of the whole batch, which is right under the classic graph driver — the
+// only store such an engine is likely to run.
 func dockerLoadImages(cfg *config.Config, images []string) (int, error) {
 	if !dockerSaveHasPlatform() {
-		args := append([]string{"load", "docker-image", "--name", cfg.ClusterName}, images...)
-		if err := runQuiet("kind", args...); err != nil {
+		if err := saveAndLoadArchive(cfg, "", images); err != nil {
 			return 0, err
 		}
 		return len(images), nil
@@ -189,10 +189,13 @@ func hostImagePlatforms(images []string) (map[string][]string, []error) {
 	return groups, failed
 }
 
-// saveAndLoadArchive writes the images' <platform> variants to a temporary
-// archive and loads it into the cluster's nodes. The archive is removed
-// either way; kind stages its own the same way, so the footprint is the one
-// `kind load docker-image` always had.
+// saveAndLoadArchive writes the images — their <platform> variants when one
+// is named, else as `docker save` has them — to a temporary archive and loads
+// it into the cluster's nodes. The archive is removed either way; the kind
+// CLI stages its own the same way, so the footprint is the one `kind load
+// docker-image` always had. docker's one-line stderr (the ref and platform it
+// could not export) belongs in the error the caller reports, as does kind's
+// (kindError carries the node-side command's output).
 func saveAndLoadArchive(cfg *config.Config, platform string, images []string) error {
 	f, err := os.CreateTemp("", "agentlab-images-*.tar")
 	if err != nil {
@@ -201,14 +204,15 @@ func saveAndLoadArchive(cfg *config.Config, platform string, images []string) er
 	tar := f.Name()
 	_ = f.Close()
 	defer func() { _ = os.Remove(tar) }()
-	// docker's one-line stderr (the ref and platform it could not export)
-	// belongs in the error the caller reports; kind's failure output is a
-	// diagnosis of its own and goes to the terminal as every kind call's does.
-	args := append([]string{"save", "--platform", platform, "-o", tar}, images...)
+	args := []string{"save"}
+	if platform != "" {
+		args = append(args, "--platform", platform)
+	}
+	args = append(append(args, "-o", tar), images...)
 	if _, err := outputQuiet("docker", args...); err != nil {
 		return err
 	}
-	return runQuiet("kind", "load", "image-archive", "--name", cfg.ClusterName, tar)
+	return kindLoadArchive(cfg.ClusterName, tar)
 }
 
 // dockerSaveHasPlatform reports whether `docker save --platform` works here:

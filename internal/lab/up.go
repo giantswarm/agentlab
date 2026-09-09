@@ -41,7 +41,7 @@ func Up(cfg *config.Config) error {
 	pulled := pullLabImages(cfg)
 	dexReady := pullDexImage(cfg)
 
-	_, kindCfgPath, err := renderManifest(cfg, "kind-config.yaml.tmpl")
+	kindCfg, _, err := renderManifest(cfg, "kind-config.yaml.tmpl")
 	if err != nil {
 		return err
 	}
@@ -53,21 +53,22 @@ func Up(cfg *config.Config) error {
 	if kindClusterExists(cfg.ClusterName) {
 		step("kind cluster %q already exists", cfg.ClusterName)
 		// Its node may be exited — what a `down` that lost its race with
-		// docker leaves behind (node.go); `kind get kubeconfig` below would
+		// docker leaves behind (node.go); the kubeconfig read below would
 		// fail on it with an opaque docker exec error.
 		if err := ensureNodeRunning(cfg); err != nil {
 			return err
 		}
 	} else {
-		step("Creating kind cluster %q", cfg.ClusterName)
-		if err := run("kind", "create", "cluster", "--config", kindCfgPath, "--wait", "120s"); err != nil {
+		step("Creating kind cluster %q (%s)", cfg.ClusterName, kindNodeImage())
+		if err := kindCreateCluster(cfg.ClusterName, kindCfg); err != nil {
 			return err
 		}
 	}
 	// From here on the lab's own kubectl and helm run against the cluster's
-	// exported kubeconfig (exec.go); the user's current-context is left alone
-	// (kind create cluster merges the admin context into their kubeconfig, as
-	// kind always does — that is the `kind-<cluster>` context for debugging).
+	// exported kubeconfig (exec.go). The user's own kubeconfig and
+	// current-context are never touched: the embedded kind writes the admin
+	// kubeconfig to state/kubeconfig (kind.go), and re-reading it off the
+	// node here covers a cluster that already existed too.
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
 	}
@@ -222,10 +223,9 @@ func ApplyDex(cfg *config.Config) error {
 	return run("kubectl", "-n", componentDex, "rollout", "status", "deployment/dex", "--timeout=120s")
 }
 
+// kindClusterExists reports whether kind knows a cluster by that name — its
+// node containers exist, running or not (node.go).
 func kindClusterExists(name string) bool {
-	out, err := outputQuiet("kind", "get", "clusters")
-	if err != nil {
-		return false
-	}
-	return slices.Contains(strings.Split(strings.TrimSpace(out), "\n"), name)
+	clusters, err := kindClusters()
+	return err == nil && slices.Contains(clusters, name)
 }

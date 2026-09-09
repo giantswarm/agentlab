@@ -17,7 +17,8 @@ import (
 
 // Discovery is what `agentlab configure` learns about this machine before it
 // writes agentlab.yaml — on every run, not only the first, so the file
-// follows the host: the tools `agentlab up` shells out to, whether this
+// follows the host: the tools `agentlab up` shells out to (and the kind it
+// embeds, with the node image it boots), whether this
 // configuration's kind cluster exists (and which host ports it publishes, so
 // they never count as conflicts), the kind docker network's gateway (the
 // address pods reach the host on), the model servers answering on their
@@ -33,8 +34,9 @@ type Discovery struct {
 	FLM           *FLMServer
 }
 
-// ToolVersion is one of the CLIs the lab shells out to; Version is empty
-// when the tool is not on PATH (or does not answer).
+// ToolVersion is one of the CLIs the lab shells out to — or the kind it
+// embeds (kind.go), whose Version names the release and the node image;
+// Version is empty when a tool is not on PATH (or does not answer).
 type ToolVersion struct {
 	Name    string
 	Version string
@@ -76,7 +78,7 @@ func Discover(cfg *config.Config) *Discovery {
 	d := &Discovery{AnthropicKey: os.Getenv(AnthropicKeyEnv) != ""}
 	d.Tools = []ToolVersion{
 		{dockerBin, dockerVersion()},
-		{kindBin, kindVersion()},
+		{kindToolName, kindToolVersion()},
 		{kubectlBin, kubectlVersion()},
 		{helmBin, helmVersion()},
 	}
@@ -124,17 +126,10 @@ func (d *Discovery) ModelServersHint() string {
 	return strings.Join(parts, ", ")
 }
 
-// kindFloor is the kind the lab needs. The rendered kind config names no node
-// image, so kind's default — the Kubernetes of its release — is what boots,
-// and the lab's OIDC flow relies on an apiserver that keeps retrying discovery
-// until Dex answers (Kubernetes >= 1.35, kind's default since v0.31; up.go,
-// docs/troubleshooting.md). The kubeadm patches are carried in both config
-// generations kind has emitted since (kind-config.yaml.tmpl).
-const kindFloor = "0.31.0"
-
 // toolRequirement is one CLI `agentlab up` shells out to: the version floor
 // the lab needs ("" for any version), whether only the platform needs it, why,
-// and where to get it.
+// and where to get it. kind is not one of them: it is embedded, and the
+// Kubernetes it boots is its release's default node image (kind.go).
 type toolRequirement struct {
 	name         string
 	floor        string
@@ -146,10 +141,8 @@ type toolRequirement struct {
 // toolRequirements is what Preflight checks the discovered tools against, in
 // report order.
 var toolRequirements = []toolRequirement{
-	{name: dockerBin, why: "kind runs the cluster as a container of this engine (Podman >= 4's docker-compatible CLI works too)",
+	{name: dockerBin, why: "the embedded kind runs the cluster as a container of this engine, through its CLI (Podman >= 4's docker-compatible CLI works too)",
 		install: "https://docs.docker.com/get-started/get-docker/"},
-	{name: kindBin, floor: kindFloor, why: "its default node image brings the Kubernetes whose apiserver keeps retrying OIDC discovery until Dex answers",
-		install: "https://kind.sigs.k8s.io/docs/user/quick-start/#installation"},
 	{name: kubectlBin, why: "every manifest is applied and every proof is read through it",
 		install: "https://kubernetes.io/docs/tasks/tools/"},
 	{name: helmBin, floor: helmFloor, platformOnly: true, why: helmWhy,
@@ -406,19 +399,6 @@ func dockerVersion() string {
 		v += " (podman)"
 	}
 	return v
-}
-
-func kindVersion() string {
-	// "kind v0.32.0 go1.26.4 linux/amd64"
-	out, err := outputQuiet("kind", "version")
-	if err != nil {
-		return ""
-	}
-	fields := strings.Fields(out)
-	if len(fields) < 2 {
-		return strings.TrimSpace(out)
-	}
-	return fields[1]
 }
 
 func kubectlVersion() string {

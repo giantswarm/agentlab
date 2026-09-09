@@ -33,27 +33,25 @@ func warn(format string, a ...any) {
 }
 
 // The CLIs the lab shells out to. kubectl and helm are the two whose cluster
-// is pinned by command; every other subprocess (kind, docker, git, helm's
-// plugins) inherits the environment untouched.
+// is pinned by command; every other subprocess (docker, helm's plugins)
+// inherits the environment untouched. kind is not a subprocess: it is
+// embedded (kind.go), and drives docker — or podman — through its CLI itself.
 const (
 	dockerBin  = "docker"
-	kindBin    = "kind"
 	kubectlBin = "kubectl"
 	helmBin    = "helm"
 )
 
 // command builds the exec.Cmd behind every helper below. kubectl and helm run
 // with KUBECONFIG pinned to the lab-owned kubeconfig (labKubeconfigPath, the
-// kind cluster's own as exported by useClusterKubeconfig), so which cluster a
-// lab command talks to is decided by agentlab.yaml — never by the shell's
-// kubeconfig or its current-context, which the lab neither reads nor changes.
-// An explicit --kubeconfig flag (the token-only kubeconfigs of test and up)
-// still wins, as kubectl's precedence has it. kind is deliberately not
-// pinned: it manages the user's own kubeconfig (create/delete cluster merge
-// the admin context in and out) and reads the cluster's kubeconfig off the
-// node, not off the host.
+// kind cluster's own as written by the embedded kind and re-exported by
+// useClusterKubeconfig), so which cluster a lab command talks to is decided
+// by agentlab.yaml — never by the shell's kubeconfig or its current-context,
+// which the lab neither reads nor changes. An explicit --kubeconfig flag (the
+// token-only kubeconfigs of test and up) still wins, as kubectl's precedence
+// has it.
 func command(name string, args ...string) *exec.Cmd {
-	cmd := exec.Command(name, args...) // #nosec G204 -- fixed lab tooling (kind/kubectl/helm) with lab-controlled args
+	cmd := exec.Command(name, args...) // #nosec G204 -- fixed lab tooling (docker/kubectl/helm) with lab-controlled args
 	cmd.Env = os.Environ()
 	if name == kubectlBin || name == helmBin {
 		// For duplicate keys os/exec keeps the last entry, so an inherited

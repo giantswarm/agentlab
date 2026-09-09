@@ -790,9 +790,9 @@ func randBase64(n int) string {
 // kubelet sees it (crictl), side-loads what is missing once more, and fails
 // naming the ref when it still is not there — before the install, so a dev
 // image the node never got is a one-line error with its fix rather than a
-// five-minute helm-controller timeout and a rollback. `kind load` re-tags on
-// the node when an image's ID is already there instead of importing it, and
-// that tag has been seen to miss the node's image list on a first load.
+// five-minute helm-controller timeout and a rollback. A side-loaded tag has
+// been seen to miss the node's image list on a first load when the image's
+// ID was already there under another tag.
 func ensureNodeImages(cfg *config.Config, refs []string) error {
 	have, err := nodeImageTags(cfg.ControlPlaneNode())
 	if err != nil {
@@ -812,8 +812,8 @@ func ensureNodeImages(cfg *config.Config, refs []string) error {
 	if still := missingImages(have, refs); len(still) > 0 {
 		return fmt.Errorf("dev images not on the node %s after side-loading: %s\n"+
 			"check `docker image inspect <ref>` on the host, load it by hand\n"+
-			"(`docker save --platform linux/<arch> -o img.tar <ref> && kind load image-archive --name %s img.tar`),\n"+
-			"then re-run `agentlab platform`", cfg.ControlPlaneNode(), strings.Join(still, ", "), cfg.ClusterName)
+			"(`docker save --platform linux/<arch> <ref> | docker exec -i %s ctr --namespace=k8s.io images import --all-platforms -`),\n"+
+			"then re-run `agentlab platform`", cfg.ControlPlaneNode(), strings.Join(still, ", "), cfg.ControlPlaneNode())
 	}
 	note("all %d dev images are on the node", len(refs))
 	return nil

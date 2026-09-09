@@ -21,9 +21,8 @@ func lastEnv(env []string, key string) string {
 
 // TestCommandPinsKubeconfig: kubectl and helm run against the lab-owned
 // kubeconfig whatever the shell has — an inherited KUBECONFIG is overridden
-// and a missing current-context is irrelevant — while kind and every other
-// tool inherit the environment untouched, because kind manages the user's own
-// kubeconfig.
+// and a missing current-context is irrelevant — while docker and every other
+// tool inherit the environment untouched.
 func TestCommandPinsKubeconfig(t *testing.T) {
 	t.Setenv("KUBECONFIG", "/elsewhere/config")
 	if !filepath.IsAbs(labKubeconfig()) || !strings.HasSuffix(labKubeconfig(), filepath.FromSlash(labKubeconfigPath)) {
@@ -35,7 +34,7 @@ func TestCommandPinsKubeconfig(t *testing.T) {
 			t.Errorf("%s: effective KUBECONFIG %q, want %q", name, got, want)
 		}
 	}
-	for _, name := range []string{"kind", "docker", "git"} {
+	for _, name := range []string{"docker", "git"} {
 		if got := lastEnv(command(name, "version").Env, "KUBECONFIG"); got != "KUBECONFIG=/elsewhere/config" {
 			t.Errorf("%s: effective KUBECONFIG %q, want the inherited one", name, got)
 		}

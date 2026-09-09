@@ -18,10 +18,12 @@ const (
 	// (and its current-context).
 	oidcEntryName = "oidc"
 	// labKubeconfigPath is the lab-owned kubeconfig: the kind cluster's admin
-	// kubeconfig exactly as `kind get kubeconfig` emits it (its
-	// current-context is the kind-<cluster> context), written by
-	// useClusterKubeconfig and set as KUBECONFIG on every kubectl and helm the
-	// lab runs (exec.go). Under StateDir like every other generated artifact;
+	// kubeconfig exactly as kind emits it (its current-context is the
+	// kind-<cluster> context), written by the embedded kind at cluster
+	// creation and by useClusterKubeconfig on every cluster-facing command,
+	// and set as KUBECONFIG on every kubectl and helm the lab runs (exec.go).
+	// The one kubeconfig the lab writes — the user's own is never read or
+	// merged into. Under StateDir like every other generated artifact;
 	// `KUBECONFIG=state/kubeconfig kubectl ...` is the same view from a shell.
 	labKubeconfigPath = StateDir + "/kubeconfig"
 )
@@ -35,26 +37,27 @@ func labKubeconfig() string {
 	return labKubeconfigPath
 }
 
-// kindKubeconfigCache holds `kind get kubeconfig` per process: a docker round
-// trip whose output never changes within a run, while up's verification, test
-// and login all want it.
+// kindKubeconfigCache holds the kubeconfig kind read off the node, per
+// process: a docker round trip whose output never changes within a run, while
+// up's verification, test and login all want it.
 var kindKubeconfigCache struct {
 	name string
 	raw  []byte
 }
 
-// kindKubeconfig returns the cluster's admin kubeconfig from kind, which reads
-// it off the control-plane node — independent of any kubeconfig on the host.
-// A cluster that is not running fails here, by name, with kind's message.
+// kindKubeconfig returns the cluster's admin kubeconfig from the embedded
+// kind, which reads it off the control-plane node (kind.go) — independent of
+// any kubeconfig on the host. A cluster that is not running fails here, by
+// name, with kind's message.
 func kindKubeconfig(clusterName string) ([]byte, error) {
 	if kindKubeconfigCache.raw != nil && kindKubeconfigCache.name == clusterName {
 		return kindKubeconfigCache.raw, nil
 	}
-	raw, err := outputQuiet("kind", "get", "kubeconfig", "--name", clusterName)
+	raw, err := kindKubeconfigRaw(clusterName)
 	if err != nil {
 		return nil, fmt.Errorf("no kubeconfig for kind cluster %q (is the lab up? `agentlab up`): %w", clusterName, err)
 	}
-	kindKubeconfigCache.name, kindKubeconfigCache.raw = clusterName, []byte(raw)
+	kindKubeconfigCache.name, kindKubeconfigCache.raw = clusterName, raw
 	return kindKubeconfigCache.raw, nil
 }
 

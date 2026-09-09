@@ -9,16 +9,16 @@ import (
 )
 
 // The kind node is a docker container, and kind's notion of "the cluster
-// exists" is that container's existence in ANY state: `kind get clusters`
-// lists a cluster whose node is exited, and `kind get kubeconfig` then fails
+// exists" is that container's existence in ANY state: kind lists a cluster
+// whose node is exited, and reading its kubeconfig off the node then fails
 // inside `docker exec` — a runc "nsexec ... failed to open /proc/<pid>/ns/ipc"
 // while the node is still dying, "container ... is not running" once it is
 // dead — with nothing in the message that names the node's state. Two lab
 // operations meet such a node:
 //
 //   - `agentlab down` while the node is busy (an `agentlab up` in another
-//     shell side-loading a hundred images) races docker: `kind delete
-//     cluster` is `docker rm -f`, docker gives the node ten seconds after
+//     shell side-loading a hundred images) races docker: kind's delete is
+//     `docker rm -f`, docker gives the node ten seconds after
 //     SIGKILL to exit, a node mid-import has taken 44 s, and docker answers
 //     "cannot remove container: could not kill container: tried to kill
 //     container, but did not receive an exit event". The container stays in
@@ -119,8 +119,8 @@ func containerNames(cs []containerState) string {
 // waitForNodeExit polls the cluster's node containers every interval until
 // none is alive — exited, or already removed — thawing a paused one so the
 // pending SIGKILL can land, and fails once timeout passes with a node still
-// alive. Called by Down after `kind delete cluster` failed; says what it is
-// waiting for, once.
+// alive. Called by Down after kind's delete failed; says what it is waiting
+// for, once.
 func waitForNodeExit(cluster string, timeout, interval time.Duration) error {
 	start := time.Now()
 	announced := false
@@ -174,7 +174,7 @@ func nodeStartVerb(state string) string {
 // for the exited node a lost `down` race leaves behind (see the file comment).
 // A running node is left alone. Called by Up before anything reads the
 // cluster, so a node that cannot come back fails by state and with the fix,
-// not as an opaque `kind get kubeconfig` error.
+// not as an opaque error from kind reading the kubeconfig off it.
 func ensureNodeRunning(cfg *config.Config) error {
 	node := cfg.ControlPlaneNode()
 	state, err := nodeState(node)
