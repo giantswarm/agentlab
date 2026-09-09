@@ -23,6 +23,14 @@ const agentsTestToolset = "preset:read-only"
 // Deployment runs with (fullnameOverride: agent-manager).
 const agentManagerServiceAccount = "system:serviceaccount:" + platformNamespace + ":" + agentManagerMCPServer
 
+// baselineServiceAccount is a ServiceAccount no binding names: what it may do
+// is what every ServiceAccount may — discovery, the self-subject reviews, and
+// whatever a cluster's bootstrap policy hands system:authenticated (the
+// trust-bundle discovery with the ClusterTrustBundle gate on, which the lab's
+// kind config turns on for every cluster). The agent-manager ServiceAccount's
+// permissions of its own are what it holds beyond that.
+const baselineServiceAccount = "system:serviceaccount:" + platformNamespace + ":agentlab-nobody"
+
 // AgentsTest is the headless proof that agent-manager acts as the signed-in
 // user, through the platform path only (Dex id_token -> muster -> call_tool
 // x_agent-manager_*): get_info reports identity caller; the admin's create ->
@@ -248,16 +256,20 @@ func AgentsTest(cfg *config.Config, email string) error {
 		}
 	}
 
-	step("The agent-manager ServiceAccount holds no RBAC (auth can-i --list --as=%s)", agentManagerServiceAccount)
+	step("The agent-manager ServiceAccount holds no RBAC of its own (auth can-i --list --as=%s, against a ServiceAccount no binding names)", agentManagerServiceAccount)
 	rules, err := serviceAccountRules(agentManagerServiceAccount, kagentNamespace)
 	if err != nil {
 		return err
 	}
-	granted := rulesBeyondDiscovery(rules)
-	if len(granted) > 0 {
-		return fmt.Errorf("the agent-manager ServiceAccount still holds permissions in %s:\n%s", kagentNamespace, strings.Join(granted, "\n"))
+	baseline, err := serviceAccountRules(baselineServiceAccount, kagentNamespace)
+	if err != nil {
+		return err
 	}
-	note("nothing beyond discovery and self-subject reviews")
+	granted := rulesBeyond(rules, baseline)
+	if len(granted) > 0 {
+		return fmt.Errorf("the agent-manager ServiceAccount still holds permissions in %s beyond every ServiceAccount's:\n%s", kagentNamespace, strings.Join(granted, "\n"))
+	}
+	note("nothing beyond what every ServiceAccount holds (%d rows: discovery, self-subject reviews%s)", len(baseline), bootstrapExtras(baseline))
 
 	step("%sdelete_agent %s as %s", toolPrefix, agentsTestAgent, user.Email)
 	var deleted struct {
@@ -304,22 +316,37 @@ func serviceAccountRules(principal, ns string) ([]string, error) {
 	return ruleRows(status), nil
 }
 
-// rulesBeyondDiscovery drops the rows every authenticated principal has — the
-// selfsubject* reviews and the non-resource discovery URLs — and returns the
-// rest: permissions of the principal's own.
-func rulesBeyondDiscovery(rows []string) []string {
+// rulesBeyond drops from rows every row of baseline — what a ServiceAccount no
+// binding names may do on this cluster — and the CLI's header row, and returns
+// the rest: permissions of the principal's own.
+func rulesBeyond(rows, baseline []string) []string {
 	var granted []string
 	for _, row := range rows {
 		fields := strings.Fields(row)
-		if len(fields) == 0 || fields[0] == "Resources" {
-			continue
-		}
-		if strings.HasPrefix(fields[0], "selfsubject") || strings.HasPrefix(fields[0], "[") {
+		if len(fields) == 0 || fields[0] == "Resources" || slices.Contains(baseline, row) {
 			continue
 		}
 		granted = append(granted, row)
 	}
 	return granted
+}
+
+// bootstrapExtras names the resource rows of the baseline beyond the
+// self-subject reviews — what the cluster's bootstrap policy hands every
+// principal (the ClusterTrustBundle discovery on a 1.36 cluster with the gate
+// on) — for the note.
+func bootstrapExtras(baseline []string) string {
+	var extras []string
+	for _, row := range baseline {
+		fields := strings.Fields(row)
+		if len(fields) > 0 && !strings.HasPrefix(fields[0], "selfsubject") && !strings.HasPrefix(fields[0], "[") {
+			extras = append(extras, fields[0])
+		}
+	}
+	if len(extras) == 0 {
+		return ""
+	}
+	return ", " + strings.Join(extras, ", ")
 }
 
 // agentHelmReleaseManagers lists the field managers on an agent's HelmRelease
