@@ -65,6 +65,12 @@ func labConfig(platform, agents, observability, backstage, modelManager bool) *c
 	return cfg
 }
 
+// devChannel puts a configuration on the dev channel (platform.chartBranch).
+func devChannel(cfg *config.Config) *config.Config {
+	cfg.Platform.ChartBranch = "poc/kagent-main"
+	return cfg
+}
+
 // The floor follows the enabled components. The full default lab reproduces
 // the live measurement the constants come from (2590m / 2596Mi allocated on
 // 2026-09-08) and lands on the Docker resources table's rows: 4 CPUs for the full lab, 3 for
@@ -84,6 +90,16 @@ func TestLabResourceNeeds(t *testing.T) {
 			cfg: labConfig(true, true, true, true, true),
 			cpu: 2590, mem: 2596, minCPUs: 4, minMem: 5192,
 			groups: "kind control plane,Dex,agent platform,agents runtime,model-manager,Backstage,Flux engine,observability",
+		},
+		"the dev channel: the full lab plus Substrate, implied by chartBranch": {
+			cfg: devChannel(labConfig(true, true, true, true, true)),
+			cpu: 3590, mem: 3620, minCPUs: 5, minMem: 7240,
+			groups: "kind control plane,Dex,agent platform,agents runtime,model-manager,Substrate,Backstage,Flux engine,observability",
+		},
+		"the dev channel without agents: no kagent, nothing for Substrate to serve": {
+			cfg: devChannel(labConfig(true, false, true, true, false)),
+			cpu: 2085, mem: 1876, minCPUs: 3, minMem: 3752,
+			groups: "kind control plane,Dex,agent platform,Backstage,Flux engine,observability",
 		},
 		"full default lab without model-manager": {
 			cfg: labConfig(true, true, true, true, false),

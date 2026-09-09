@@ -169,6 +169,27 @@ type Platform struct {
 	// chart changes that have no release yet (the lab's chart loop). The
 	// directory is read, never written; chartVersion is ignored while set.
 	ChartPath string `yaml:"chartPath,omitempty"`
+	// ChartBranch selects the DEV CHANNEL: the lab follows the newest dev
+	// build of this agent-platform branch — the `X.Y.Z-dev.<branch>.<date>.
+	// <time>.h<sha>` prerelease tags gitsemver publishes for every commit of
+	// a branch with branch publishing on — instead of a release. `configure`,
+	// `up` and `platform` resolve it against the chart registry's tags and
+	// write the tag they picked into chartVersion, so `render`, the image
+	// preload and a re-run install exactly what was resolved, and the boot
+	// says which build it runs. Mutually exclusive with chartPath; "" is the
+	// stable channel. See docs/platform.md "Dev channel".
+	ChartBranch string `yaml:"chartBranch,omitempty"`
+	// ChartPinned freezes chartVersion at the recorded dev build while
+	// chartBranch is set: `up` and `platform` stop re-resolving, so the lab
+	// keeps running the build under test until `agentlab platform --pin=false`
+	// (or the key is dropped). Meaningless without chartBranch.
+	ChartPinned bool `yaml:"chartPinned,omitempty"`
+	// Substrate installs kagent's actor runtime (kagent-dev/substrate) on the
+	// cluster before the platform — the kagent of the dev channel (kagent
+	// main, API v2) runs its agents as Substrate actors and cannot start
+	// without it; the released kagent ignores it. Left unset, it follows the
+	// channel: on with chartBranch (while agents are on), off otherwise.
+	Substrate Substrate `yaml:"substrate,omitempty"`
 	// DevImages swaps a component's image for a build of your own (the lab's
 	// dev-image loop): component name -> image ref (`muster: muster:dev-1a2b`).
 	// `agentlab platform` side-loads the ref from the host docker cache and
@@ -178,6 +199,14 @@ type Platform struct {
 	// the entry restores the chart's image on the next run. Keys are the
 	// DevImageComponents.
 	DevImages map[string]string `yaml:"devImages,omitempty"`
+	// ValuesFiles are extra Helm values files merged over the lab's rendered
+	// values before the meta chart install, in order, with `helm -f`
+	// semantics (maps merge, lists replace, the later file wins): a lab that
+	// points a component at another chart source
+	// (components.<name>.repository / versionRange / insecure) or forwards
+	// values the lab template does not know. Paths are absolute or relative
+	// to the lab directory; each must exist.
+	ValuesFiles []string `yaml:"valuesFiles,omitempty"`
 	// Additional kagent ModelConfigs beyond the chart-rendered default
 	// (aiModel): self-hosted OpenAI-compatible endpoints (vLLM, Ollama),
 	// OpenRouter, Gemini, plain OpenAI. Rendered as lab-labeled ModelConfig
@@ -194,6 +223,14 @@ type Platform struct {
 	// `agentlab configure` fills the backends from what answers on this
 	// machine, on every run.
 	ModelManager ModelManager `yaml:"modelManager"`
+}
+
+// Substrate configures kagent's actor runtime in the lab (docs/platform.md
+// "Dev channel"). Enabled is a tri-state on purpose: nil follows the chart
+// channel (SubstrateEnabled), an explicit value wins either way — `configure
+// --substrate[=false]` writes one.
+type Substrate struct {
+	Enabled *bool `yaml:"enabled,omitempty"`
 }
 
 // ModelManager configures the umbrella's model-manager component in the lab.
@@ -652,7 +689,93 @@ func (c *Config) Normalize() {
 	if len(c.Platform.DevImages) == 0 {
 		c.Platform.DevImages = nil
 	}
+	if len(c.Platform.ValuesFiles) == 0 {
+		c.Platform.ValuesFiles = nil
+	}
+	// A pin only means something on the dev channel; a stable lab has
+	// nothing to freeze.
+	if c.Platform.ChartBranch == "" {
+		c.Platform.ChartPinned = false
+	}
 	c.Platform.ModelManager.normalize()
+}
+
+// SubstrateEnabled reports whether the lab installs Substrate: the explicit
+// knob (platform.substrate.enabled) when set, else the chart channel — the
+// dev channel's kagent (kagent main, API v2) runs its agents as Substrate
+// actors and cannot start without it, so chartBranch with agents on implies
+// it; the stable channel's kagent ignores it. Inert without the platform.
+func (c *Config) SubstrateEnabled() bool {
+	if !c.Platform.Enabled {
+		return false
+	}
+	if c.Platform.Substrate.Enabled != nil {
+		return *c.Platform.Substrate.Enabled
+	}
+	return c.Platform.ChartBranch != "" && c.Platform.Agents
+}
+
+// SubstrateReason words why SubstrateEnabled reads the way it does, for the
+// configure summary.
+func (c *Config) SubstrateReason() string {
+	switch {
+	case c.Platform.Substrate.Enabled != nil:
+		return "pinned by platform.substrate.enabled"
+	case c.SubstrateEnabled():
+		return "the dev channel's kagent needs it; `configure --substrate=false` overrides"
+	default:
+		return "the released kagent does not need it; `configure --substrate` installs it anyway"
+	}
+}
+
+// branchSanitizeRe is gitsemver's: every run of characters outside [a-z0-9]
+// becomes one hyphen, so "--" never occurs in a sanitized name and stays
+// free as gitsemver's truncation marker.
+var branchSanitizeRe = regexp.MustCompile(`[^a-z0-9]+`)
+
+// SanitizeBranch spells a git branch the way gitsemver (v2.0.1,
+// sanitizeBranchName) embeds it in a dev version: lowercased, runs of
+// anything but [a-z0-9] collapsed to one hyphen, hyphens trimmed off both
+// ends — `poc/kagent-main` is `poc-kagent-main`. A purely numeric result
+// loses its leading zeros (a semver numeric identifier forbids them); an
+// empty result is gitsemver's "unknown". gitsemver may further shorten the
+// name to fit its 63-character version budget (head`--`tail), which the
+// dev-tag filter accounts for.
+func SanitizeBranch(branch string) string {
+	b := strings.Trim(branchSanitizeRe.ReplaceAllString(strings.ToLower(branch), "-"), "-")
+	if b == "" {
+		return "unknown"
+	}
+	if allDigits(b) {
+		if b = strings.TrimLeft(b, "0"); b == "" {
+			b = "0"
+		}
+	}
+	return b
+}
+
+func allDigits(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return s != ""
+}
+
+// ValidateChartBranch accepts a branch name that leaves something to match
+// a dev tag with; "" is the stable channel and always fine.
+func ValidateChartBranch(s string) error {
+	if s == "" {
+		return nil
+	}
+	if strings.TrimSpace(s) != s {
+		return fmt.Errorf("must not have surrounding whitespace")
+	}
+	if SanitizeBranch(s) == "unknown" {
+		return fmt.Errorf("must contain a letter or digit (the dev tags carry the branch as a lowercase [a-z0-9-] name)")
+	}
+	return nil
 }
 
 // exactVersionRe is a plain semver version (an optional leading v tolerated):
@@ -750,12 +873,26 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("platform.chartPath: %w (an agent-platform checkout's helm/agent-platform directory)", err)
 		}
 	}
+	if err := ValidateChartBranch(c.Platform.ChartBranch); err != nil {
+		return fmt.Errorf("platform.chartBranch %q: %w", c.Platform.ChartBranch, err)
+	}
+	if c.Platform.ChartBranch != "" && c.Platform.ChartPath != "" {
+		return fmt.Errorf("platform.chartBranch and platform.chartPath are mutually exclusive: a local chart has no dev builds to follow (`configure --chart-path \"\"` clears the path)")
+	}
 	for component, ref := range c.Platform.DevImages {
 		if !slices.Contains(DevImageComponents, component) {
 			return fmt.Errorf("platform.devImages: unknown component %q (one of %s)", component, strings.Join(DevImageComponents, ", "))
 		}
 		if err := ValidateImageRef(ref); err != nil {
 			return fmt.Errorf("platform.devImages.%s %q: %w", component, ref, err)
+		}
+	}
+	for _, path := range c.Platform.ValuesFiles {
+		if path == "" {
+			return fmt.Errorf("platform.valuesFiles: an empty path")
+		}
+		if _, err := os.Stat(path); err != nil {
+			return fmt.Errorf("platform.valuesFiles: %w", err)
 		}
 	}
 	seenModels := map[string]bool{}

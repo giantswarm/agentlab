@@ -36,6 +36,9 @@ The lab installs it in its **lab shape**:
 - The chart is **pinned** to an exact release, `platform.chartVersion` in
   `agentlab.yaml` (the default is the release this agentlab was verified
   with). The lab never floats; bump the pin deliberately, with a lab run.
+  The one exception is deliberate too: the [dev channel](#dev-channel),
+  where `platform.chartBranch` follows a branch's newest dev build — and
+  still installs an exact version, written into `chartVersion`.
 
 The platform installs as part of `agentlab up` (it is enabled in the default
 configuration); on an already-running cluster the steps are also standalone:
@@ -107,6 +110,139 @@ rendered kind config publishes that onto the Mac (host port `platform.musterPort
 default 8090) — no port-forward. Port mappings are fixed at node-creation time,
 so changing the port means `agentlab down && agentlab up`; the stopgap on an old
 cluster is `kubectl -n agent-platform port-forward svc/muster 8090:8090`.
+
+## Dev channel
+
+The stable channel is the pin above: `platform.chartVersion`, an exact
+release. The **dev channel** follows a branch of agent-platform instead —
+the dev builds gitsemver publishes for every commit of a branch that has
+branch publishing on (`gen.ci.branchPublish` in giantswarm/github): charts
+tagged `X.Y.Z-dev.<branch>.<YYYY-MM-DD>.<HH-MM-SS>.h<sha>` next to the
+releases in `oci://gsoci.azurecr.io/charts/giantswarm/agent-platform`, each
+coupled to the images its commit built. That is how a team works on the
+next platform line together before anything is released: every lab installs
+the branch's newest build from published artifacts only — no checkout, no
+dev images, no local registry.
+
+```bash
+agentlab configure --defaults --chart-branch poc/kagent-main
+export ANTHROPIC_API_KEY=sk-ant-...
+agentlab up
+agentlab platform-test && agentlab test && agentlab backstage-test
+```
+
+`configure` resolves the branch right away and says what it picked:
+
+```
+  chart      agent-platform 3.22.1-dev.poc-kagent-main.2026-09-10.08-12-33.h7f841be (branch poc/kagent-main, dev channel)
+  substrate  true (the dev channel's kagent needs it; `configure --substrate=false` overrides)
+```
+
+and `agentlab.yaml` carries both:
+
+```yaml
+platform:
+  chartBranch: poc/kagent-main   # the dev channel: chartVersion follows this branch's newest dev build
+  chartVersion: 3.22.1-dev.poc-kagent-main.2026-09-10.08-12-33.h7f841be   # written by the resolver
+```
+
+How the resolution works: the branch is spelled the way gitsemver embeds it
+(lowercased, anything outside `[a-z0-9]` collapsed to one hyphen —
+`poc/kagent-main` is `poc-kagent-main`; a long name is shortened around a
+`--` marker, which the filter accepts too), the registry's tags are listed
+through the embedded Helm's registry client (anonymously, as pulls are), the
+tags whose prerelease is `dev.<that name>.…` are the branch's builds, and the
+highest semver among them is the newest — the pick a Flux `OCIRepository`
+with `semver: "*-*"` and a `semverFilter` on the branch makes. `up` and
+`platform` re-resolve on every run, so the lab follows the branch like Flux
+would: a newer build is a new revision of the release on the next
+`agentlab platform`. Everything downstream — `render`, the image preload,
+the install, `helm -n agent-platform history` — sees the exact version
+written to `chartVersion`, as on the stable channel; `render` and the
+proofs never resolve.
+
+- **Freezing a build**: `agentlab platform --pin` writes
+  `platform.chartPinned: true` and stops re-resolving, so the lab keeps the
+  build under test; `--pin=false` follows the branch again. A new
+  `--chart-branch` (or `""`, back to the stable channel) always starts
+  unpinned.
+- **No build yet**: a branch without dev builds is refused with the two ways
+  out — the branch's publish has not run (agent-platform needs
+  `gen.ci.branchPublish` and a commit on the branch), or pin a tag by hand.
+- **The fallback that needs no resolver**: `platform.chartVersion` accepts a
+  full dev tag as it is — `agentlab configure --chart-version
+  3.22.1-dev.poc-kagent-main.2026-09-10.08-12-33.h7f841be` validates and
+  Helm pulls that exact tag (look it up with `crane ls
+  gsoci.azurecr.io/charts/giantswarm/agent-platform | grep -- -dev.poc-kagent-main`).
+  The lab then does not follow the branch, and Substrate needs
+  `--substrate` explicitly.
+- `chartBranch` and `chartPath` are mutually exclusive: a local chart has no
+  builds to follow.
+- The dev-tag schema lives in one place, `devTagFilter` in
+  `internal/lab/chartbranch.go`. When gitsemver ships the RFC's successor
+  schema (`X.Y.Z-b<crc32 of the branch>t<timestamp>c<sha>`), that function
+  switches and nothing else changes.
+
+Component channels: agentlab sets nothing per component. The meta chart's
+dev builds carry their siblings' channels in their own values (the branch's
+`components.<name>.semverFilter`), so selecting the meta chart's dev channel
+selects the whole line.
+
+### Substrate
+
+The dev channel's kagent (kagent main, API v2) runs every agent as an actor
+on [Substrate](https://github.com/kagent-dev/substrate) — sandboxed (gVisor)
+worker pods of a `WorkerPool`, an API server, a per-node agent (`atelet`) and
+the actors' ingress/egress data plane (`atenet`) — and its controller does
+not start without it. The lab installs Substrate as cluster infrastructure
+ahead of the platform when `platform.substrate.enabled` says so; unset, the
+knob follows the channel — on with `chartBranch` while agents are on, off on
+the stable channel, whose released kagent ignores it — and `configure
+--substrate[=false]` pins it either way.
+
+What `agentlab up` (and `platform`) does, idempotently:
+
+1. checks the apiserver serves `certificates.k8s.io/v1beta1` — the
+   `PodCertificateRequest` and `ClusterTrustBundle` gates the lab's kind
+   config turns on for every cluster (inert for the released platform). A
+   cluster created by an earlier agentlab lacks them, and feature gates are
+   fixed at `kind create`: that is `agentlab down && agentlab up`, said
+   before anything installs;
+2. creates the bootstrap the chart mounts but does not render: the four
+   CA/JWT pool Secrets (`service-dns-ca-pool` and `pod-identity-ca-pool` in
+   `podcertificate-controller-system`, `actor-id-jwt-pool` and
+   `actor-id-ca-pool` in `ate-system`) — never regenerated once they exist,
+   a rotated root would orphan every certificate issued from it — the
+   `actor-id-ca-certs` trust anchor derived from the actor-id pool, and
+   `ate-api-authentication`, ate-api-server's authentication config
+   pointing at the cluster's own ServiceAccount issuer. Upstream does this
+   with `kubectl-ate admin make-ca-pool` / `make-jwt-pool` and a shell step
+   between two `helm install`s; the lab embeds a Go port of the two commands
+   (`substratepools.go`, from substrate 0.0.26) and creates everything first,
+   so one waited install suffices (HACKS.md U22);
+3. installs `substrate-crds` and `substrate` 0.0.26 from
+   `oci://ghcr.io/kagent-dev/substrate/helm` into `ate-system` with the
+   chart's own values (`state/substrate-values.yaml`), the images
+   side-loaded like the platform's plus the gVisor worker image the
+   `WorkerPool` names, and waits for ate-api-server, atelet and atenet;
+4. checks the `SandboxConfig gvisor-default` the chart ships is there. The
+   `WorkerPool` and the `Harness`es come with the dev channel's kagent.
+
+`agentlab platform-down` uninstalls Substrate after the platform (whose
+teardown deletes kagent's `WorkerPool` through finalizers ate-controller has
+to be running for). Substrate's bundled PostgreSQL requests 1 CPU / 1 GiB,
+so the dev channel's floor is one CPU and about 2 GiB above the stable lab's
+— see [Docker resources](getting-started.md#docker-resources).
+
+**Proofs on the dev channel.** `platform-test`, `test` and the sign-in half
+of `backstage-test` run unchanged (platform-test expects a kagent scrape
+target only while a controller ServiceMonitor exists — the dev channel's
+kagent serves no metrics listener, and the lab renders none for it). The
+agent proofs — `agents-test`, `toolsets-test`, `models-test`'s agent turn,
+`backstage-test`'s agents pages — drive the released kagent's API (Agent CRs
+delivered as HelmReleases); kagent API v2 has `AgentTemplate`s and
+`Harness`es instead, so on the dev channel they do not apply until the
+proofs dispatch on the API the cluster serves, the dev channel's next step.
 
 ## The request path
 
@@ -339,6 +475,7 @@ data the page reads — see [The muster plugin](backstage.md#the-muster-plugin).
 | `kagent.ui.service.type: NodePort`, nodePort 30880 pinned by the kagent `postRenderers` patch | On a real MC the UI sits behind the agentgateway edge; this lab publishes it through the kind port mapping instead (host side `platform.agentsPort`, default 8081). The chart's Service template renders no `nodePort` field, so the fixed node port is a patch (HACKS.md U9). |
 | `components.flux.enabled: true`, `gitops.self.enabled: false` | The lab shape (see [The agent platform](#the-agent-platform-muster--kubernetes-mcp)): a management cluster runs its own Flux and installs the chart through it; the lab has none, so the chart brings the engine — and must not adopt its own release, because the lab installs charts and images that are not released. |
 | The chart pinned to an exact release (`platform.chartVersion`) | Component versions are the chart's own ranges, resolved by its Flux at reconcile time (the fleet's dogfooding track). The chart itself never floats in the lab: two runs install the same thing, and a bump is a deliberate edit with a lab run behind it. |
+| Substrate 0.0.26 installed by the lab ahead of the platform, bootstrap included (`platform.substrate.enabled`, implied by the dev channel) | The dev channel's kagent runs its agents as Substrate actors and cannot start without it, and Substrate is not a meta-chart component yet: its CA/JWT bootstrap is imperative (`kubectl-ate admin make-ca-pool`). The lab ports the two bootstrap commands, creates every object before one waited install and needs the apiserver gates its kind config turns on. See [Dev channel](#dev-channel). |
 | `mcp-prometheus` as a lab-rendered Flux `HelmRelease` | The one release the lab installs outside the chart rides the same engine, as the same tenant identity, so its lab-only sidecar is a `postRenderers` patch like the others and there is exactly one Helm writer (the embedded Helm, for the chart) and one Flux engine on the cluster. |
 
 ## Platform gotchas

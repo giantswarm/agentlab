@@ -187,6 +187,19 @@ func newHelmOp(namespace string) (*helmOp, error) {
 	if err := cfg.Init(labRESTClientGetter(namespace), namespace, helmDriver); err != nil {
 		return nil, fmt.Errorf("initialising the embedded Helm: %w", err)
 	}
+	rc, err := newHelmRegistryClient(settings, log)
+	if err != nil {
+		return nil, err
+	}
+	cfg.RegistryClient = rc
+	return &helmOp{cfg: cfg, settings: settings, log: log}, nil
+}
+
+// newHelmRegistryClient is the CLI's default OCI registry client: the
+// registry cache on, credentials from Helm's registry config file (anonymous
+// where there are none — gsoci and ghcr hand out pull and tag-list tokens
+// without any).
+func newHelmRegistryClient(settings *cli.EnvSettings, log *helmLog) (*registry.Client, error) {
 	rc, err := registry.NewClient(
 		registry.ClientOptDebug(settings.Debug),
 		registry.ClientOptEnableCache(true),
@@ -196,8 +209,27 @@ func newHelmOp(namespace string) (*helmOp, error) {
 	if err != nil {
 		return nil, fmt.Errorf("creating the OCI registry client: %w", err)
 	}
-	cfg.RegistryClient = rc
-	return &helmOp{cfg: cfg, settings: settings, log: log}, nil
+	return rc, nil
+}
+
+// helmChartTags lists an oci:// chart repository's tags the way Helm resolves
+// a version range against it (registry.Client.Tags, what source-controller
+// does for an OCIRepository too): every tag that parses as a semver version,
+// highest first — a `+` build metadata separator spelled `_` in the registry
+// comes back as `+`. Needs no cluster: only the registry is contacted.
+func helmChartTags(ref string) ([]string, error) {
+	log := newHelmLog()
+	settings := helmSettings()
+	rc, err := newHelmRegistryClient(settings, log)
+	if err != nil {
+		return nil, err
+	}
+	tags, err := rc.Tags(strings.TrimPrefix(ref, registry.OCIScheme+"://"))
+	if err != nil {
+		log.dump()
+		return nil, fmt.Errorf("listing the tags of %s: %w", ref, err)
+	}
+	return tags, nil
 }
 
 // fail wraps an operation's error the way a failed subprocess read — the
@@ -240,12 +272,18 @@ func (h *helmOp) loadChart(opts *action.ChartPathOptions, ref, version string) (
 }
 
 // helmValuesFile reads one values file the way `-f` does: Helm's values
-// loader, so a `null` deletes the key it overrides exactly as the CLI has it.
+// loader, so a `null` survives as the key's deletion marker.
 func helmValuesFile(path string) (map[string]any, error) {
-	opts := values.Options{ValueFiles: []string{path}}
+	return helmValuesFiles(path)
+}
+
+// helmValuesFiles reads values files the way repeated `-f` flags do: maps
+// merge, lists replace, the later file wins.
+func helmValuesFiles(paths ...string) (map[string]any, error) {
+	opts := values.Options{ValueFiles: paths}
 	vals, err := opts.MergeValues(getter.All(helmSettings()))
 	if err != nil {
-		return nil, fmt.Errorf("reading the values %s: %w", path, err)
+		return nil, fmt.Errorf("reading the values %s: %w", strings.Join(paths, ", "), err)
 	}
 	return vals, nil
 }
@@ -269,9 +307,21 @@ func helmChartLabel(ref, version string) string {
 	return ref + " --version " + version
 }
 
+// helmInstallOptions are the flags of helmUpgradeInstall beyond the chart
+// and its values.
+type helmInstallOptions struct {
+	// CreateNamespace is `--create-namespace`.
+	CreateNamespace bool
+	// TakeOwnership is `--take-ownership`: objects the chart renders that
+	// already exist without Helm's ownership metadata are adopted instead of
+	// refused — a namespace the lab had to create ahead of the chart to seed
+	// Secrets into (Substrate's podcertificate-controller-system).
+	TakeOwnership bool
+}
+
 // helmUpgradeInstall is `helm upgrade --install <release> <chart> -n <ns> -f
 // <values> --wait --timeout <timeout> --force-conflicts` (plus
-// --create-namespace when asked):
+// --create-namespace and --take-ownership when asked):
 // the release is installed when it does not exist or was uninstalled,
 // upgraded otherwise, with the CLI's defaults — server-side apply on install
 // and, on upgrade, the method the release was applied with; no
@@ -281,7 +331,7 @@ func helmChartLabel(ref, version string) string {
 // release, custom resources included, is Current. Ctrl-C cancels the
 // operation the way it cancels the CLI: the release is marked failed instead
 // of staying pending forever.
-func helmUpgradeInstall(namespace, releaseName, ref, version string, vals map[string]any, timeout time.Duration, createNamespace bool) error {
+func helmUpgradeInstall(namespace, releaseName, ref, version string, vals map[string]any, timeout time.Duration, opts helmInstallOptions) error {
 	h, err := newHelmOp(namespace)
 	if err != nil {
 		return err
@@ -306,7 +356,8 @@ func helmUpgradeInstall(namespace, releaseName, ref, version string, vals map[st
 		install := action.NewInstall(h.cfg)
 		install.ReleaseName = releaseName
 		install.Namespace = namespace
-		install.CreateNamespace = createNamespace
+		install.CreateNamespace = opts.CreateNamespace
+		install.TakeOwnership = opts.TakeOwnership
 		install.Timeout = timeout
 		install.WaitStrategy = kube.StatusWatcherStrategy
 		install.ForceConflicts = true
@@ -333,6 +384,7 @@ func helmUpgradeInstall(namespace, releaseName, ref, version string, vals map[st
 	// was pinned (owned by the binary's name then) upgrades instead of
 	// failing on every zero-valued field of the chart.
 	upgrade.ForceConflicts = true
+	upgrade.TakeOwnership = opts.TakeOwnership
 	upgrade.MaxHistory = h.settings.MaxHistory
 	ch, err := h.loadChart(&upgrade.ChartPathOptions, ref, version)
 	if err != nil {

@@ -90,12 +90,19 @@ func TestWaitModelConfigAccepted(t *testing.T) {
 	prev := modelConfigAcceptedPoll
 	modelConfigAcceptedPoll = time.Millisecond
 	t.Cleanup(func() { modelConfigAcceptedPoll = prev })
+	unresolved := withCondition(labelledModelConfig("unresolved"), "Accepted", "True", "")
+	conds, _, _ := unstructured.NestedSlice(unresolved.Object, fieldStatus, "conditions")
+	_ = unstructured.SetNestedSlice(unresolved.Object, append(conds, map[string]any{fieldType: conditionResolvedRefs, fieldStatus: condFalse, fieldMessage: "secret placeholder not found"}), fieldStatus, "conditions")
 	newFakeLab(t,
 		withCondition(labelledModelConfig("ok"), "Accepted", "True", ""),
 		withCondition(labelledModelConfig("nope"), "Accepted", condFalse, "no such provider"),
+		unresolved,
 	)
 	if err := waitModelConfigAccepted("ok"); err != nil {
-		t.Errorf("accepted: %v", err)
+		t.Errorf("accepted without a ResolvedRefs condition (the 0.x line): %v", err)
+	}
+	if err := waitModelConfigAccepted("unresolved"); err == nil || !strings.Contains(err.Error(), "ResolvedRefs=False: secret placeholder not found") {
+		t.Errorf("accepted but unresolved: %v", err)
 	}
 	err := waitModelConfigAccepted("nope")
 	if err == nil || !strings.Contains(err.Error(), `ModelConfig nope never reached Accepted (last status: "False")`) {

@@ -99,6 +99,11 @@ func PlatformDown(cfg *config.Config) error {
 	if err := deleteNamespace(ctx, platformNamespace); err != nil {
 		return err
 	}
+	// Substrate after the platform: the teardown above deleted kagent's
+	// WorkerPool and Harnesses, whose finalizers ate-controller processed.
+	if err := substrateDown(ctx); err != nil {
+		return err
+	}
 	// What an earlier agentlab installed next to the umbrella: its own Flux
 	// controllers for the agent create flow. The chart brings the engine now
 	// and refuses a second Flux (refuseOlderLabShape), so they go with the

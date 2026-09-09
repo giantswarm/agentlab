@@ -454,18 +454,58 @@ func (k *kubeClients) apply(ctx context.Context, obj *unstructured.Unstructured)
 // apiVersion/kind it carries, minus the empty creationTimestamp and status
 // the conversion emits, which are nobody's intent.
 func applyTyped(ctx context.Context, obj runtime.Object) (applyResult, error) {
-	raw, err := runtime.DefaultUnstructuredConverter.ToUnstructured(obj)
+	u, err := toUnstructured(obj)
 	if err != nil {
 		return applyResult{}, err
 	}
-	u := &unstructured.Unstructured{Object: raw}
-	unstructured.RemoveNestedField(u.Object, "metadata", "creationTimestamp")
-	unstructured.RemoveNestedField(u.Object, "status")
 	k, err := labKube()
 	if err != nil {
 		return applyResult{}, err
 	}
 	return k.apply(ctx, u)
+}
+
+// createTyped creates a typed object the way `kubectl create` does — no
+// apply, no update: for an object that must not overwrite one another run
+// created a moment earlier, a Secret holding freshly generated key material
+// (substrate.go). The caller guards with an existence check; an AlreadyExists
+// comes back as the apiserver's error.
+func createTyped(ctx context.Context, obj runtime.Object) error {
+	u, err := toUnstructured(obj)
+	if err != nil {
+		return err
+	}
+	k, err := labKube()
+	if err != nil {
+		return err
+	}
+	gvk := u.GroupVersionKind()
+	mapping, err := k.restMapping(gvk.GroupKind(), gvk.Version)
+	if err != nil {
+		return fmt.Errorf("%s %s: %w", gvk.Kind, u.GetName(), err)
+	}
+	ns := u.GetNamespace()
+	if mapping.Scope.Name() == meta.RESTScopeNameNamespace && ns == "" {
+		ns = defaultNamespace
+		u.SetNamespace(ns)
+	}
+	if _, err := k.resource(mapping.Resource, ns).Create(ctx, u, metav1.CreateOptions{FieldManager: applyFieldManager}); err != nil {
+		return fmt.Errorf("creating %s: %w", describe(mapping.Resource, ns, u.GetName()), err)
+	}
+	return nil
+}
+
+// toUnstructured is a typed object's wire form with the apiVersion/kind it
+// carries, minus the empty creationTimestamp and status the conversion emits.
+func toUnstructured(obj runtime.Object) (*unstructured.Unstructured, error) {
+	raw, err := runtime.DefaultUnstructuredConverter.ToUnstructured(obj)
+	if err != nil {
+		return nil, err
+	}
+	u := &unstructured.Unstructured{Object: raw}
+	unstructured.RemoveNestedField(u.Object, "metadata", "creationTimestamp")
+	unstructured.RemoveNestedField(u.Object, "status")
+	return u, nil
 }
 
 // awaitCRDs waits until the apiserver serves every kind the given

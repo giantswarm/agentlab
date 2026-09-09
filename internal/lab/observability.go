@@ -71,7 +71,7 @@ func observabilityUp(cfg *config.Config) error {
 		return err
 	}
 	if err := ensureSecretFromFiles(observabilityNamespace, "dex-ca", map[string]string{
-		"ca.crt": caCertPath,
+		caCertKey: caCertPath,
 	}); err != nil {
 		return err
 	}
@@ -212,5 +212,5 @@ func installOCIChart(cfg *config.Config, release, chartRef, version, valuesTmpl 
 			}
 		}
 	}
-	return helmUpgradeInstall(observabilityNamespace, release, chartRef, version, values, ociChartInstallTimeout, true)
+	return helmUpgradeInstall(observabilityNamespace, release, chartRef, version, values, ociChartInstallTimeout, helmInstallOptions{CreateNamespace: true})
 }

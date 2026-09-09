@@ -222,8 +222,13 @@ Load-bearing invariants (details in docs/):
   lab's embedded Helm stays the one writer of the release, and the Helm CLI
   its day-2 tool). The chart is pinned to an exact
   release (`platform.chartVersion`, default `config.DefaultChartVersion`);
-  `platform.chartPath` installs a local checkout instead. Never emit
-  `gitops.namespace` with the engine on.
+  `platform.chartPath` installs a local checkout instead; `platform.chartBranch`
+  is the dev channel — the branch's newest dev build, resolved into
+  `chartVersion` on every `configure`/`up`/`platform` (`chartbranch.go`,
+  `platform --pin` freezes it) — and implies Substrate, kagent main's actor
+  runtime, installed ahead of the platform (`substrate.go`,
+  `platform.substrate.enabled`). Never emit `gitops.namespace` with the
+  engine on.
 - The lab's credentials are throwaway by design; plaintext passwords in
   `agentlab.yaml` are fine.
 

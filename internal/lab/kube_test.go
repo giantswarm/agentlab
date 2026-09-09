@@ -80,6 +80,8 @@ var (
 	musterMCPServerGVR = musterMCPServerGVK.GroupVersion().WithResource("mcpservers")
 	prometheusGVK      = schema.GroupVersionKind{Group: "monitoring.coreos.com", Version: "v1", Kind: "Prometheus"}
 	prometheusGVR      = prometheusGVK.GroupVersion().WithResource("prometheuses")
+	serviceMonitorGVK  = prometheusGVK.GroupVersion().WithKind("ServiceMonitor")
+	serviceMonitorGVR  = prometheusGVK.GroupVersion().WithResource("servicemonitors")
 )
 
 // fakeLab is a kubeClients bundle on fakes, installed as the lab's client for
@@ -159,6 +161,7 @@ func newFakeLab(t *testing.T, objects ...runtime.Object) *fakeLab {
 		fluxHelmReleaseGVR: "HelmReleaseList",
 		musterMCPServerGVR: "MCPServerList",
 		prometheusGVR:      "PrometheusList",
+		serviceMonitorGVR:  "ServiceMonitorList",
 		gvrModelConfigs:    "ModelConfigList",
 		gvrAgents:          "AgentList",
 	}, seeds...)
@@ -180,6 +183,7 @@ func newFakeLab(t *testing.T, objects ...runtime.Object) *fakeLab {
 		fluxHelmReleaseGVK,
 		musterMCPServerGVK,
 		prometheusGVK,
+		serviceMonitorGVK,
 		// kagent's ModelConfig and Agent, which the proofs read and write
 		// (crds_test.go).
 		gvkModelConfig,

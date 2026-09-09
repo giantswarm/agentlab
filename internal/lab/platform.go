@@ -45,6 +45,11 @@ const (
 	conditionTrue  = "True"
 )
 
+// caCertKey is the data key a CA-bundle Secret carries its PEM under — the
+// convention the chart's global.identity.ca, muster's extraCaFile and
+// Substrate's actor-id trust anchor share.
+const caCertKey = "ca.crt"
+
 // The platform's generated secrets (platformSecretsName): created once and
 // then left alone — regenerating the encryption key on every run would
 // invalidate every issued token. dex-client-secret must match the
@@ -129,22 +134,30 @@ type platformChart struct {
 	ref string
 	// version is the version of a registry chart; empty for a directory.
 	version string
+	// branch is the dev channel's branch when the version is one of its
+	// builds (platform.chartBranch); empty on the stable channel.
+	branch string
 }
 
 func (c platformChart) String() string {
-	if c.version == "" {
+	switch {
+	case c.version == "":
 		return "the local chart at " + c.ref
+	case c.branch != "":
+		return fmt.Sprintf("agent-platform %s (branch %s)", c.version, c.branch)
+	default:
+		return fmt.Sprintf("agent-platform %s", c.version)
 	}
-	return fmt.Sprintf("agent-platform %s", c.version)
 }
 
 // platformChartFor reads the chart source from the config: platform.chartPath
-// wins over the pinned release.
+// wins over the pinned release; on the dev channel the version is the
+// branch's build ResolveChartVersion recorded.
 func platformChartFor(cfg *config.Config) platformChart {
 	if cfg.Platform.ChartPath != "" {
 		return platformChart{ref: cfg.Platform.ChartPath}
 	}
-	return platformChart{ref: config.ChartRepository, version: cfg.Platform.ChartVersion}
+	return platformChart{ref: config.ChartRepository, version: cfg.Platform.ChartVersion, branch: cfg.Platform.ChartBranch}
 }
 
 // platformUp installs and verifies the platform, then prints the boot's one
@@ -157,6 +170,17 @@ func platformUp(cfg *config.Config, header string) error {
 	removeLegacyArtifacts()
 	if err := refuseOlderLabShape(); err != nil {
 		return err
+	}
+	// The dev channel follows its branch on every run, like Flux would: a
+	// newer build is a new revision of the release below. The pick lands in
+	// agentlab.yaml so the next command — or a colleague reading the file —
+	// sees the exact version this lab runs.
+	if changed, err := ResolveChartVersion(cfg); err != nil {
+		return err
+	} else if changed {
+		if err := cfg.Save(); err != nil {
+			return err
+		}
 	}
 	chart := platformChartFor(cfg)
 	step("Installing %s in the lab shape (bundled Flux engine on, self-management off)", chart)
@@ -183,7 +207,7 @@ func platformUp(cfg *config.Config, header string) error {
 	// self-signed Dex over TLS (values: muster.muster.extraCaFile); Backstage
 	// mounts the same Secret through global.identity.ca (NODE_EXTRA_CA_CERTS).
 	if err := ensureSecretFromFiles(platformNamespace, "dex-ca", map[string]string{
-		"ca.crt": caCertPath,
+		caCertKey: caCertPath,
 	}); err != nil {
 		return err
 	}
@@ -245,6 +269,14 @@ func platformUp(cfg *config.Config, header string) error {
 			return err
 		}
 	}
+	// Substrate before the platform too: the dev channel's kagent creates
+	// its WorkerPool and Harnesses against Substrate's API at startup, and
+	// its controller does not come up without them (substrate.go).
+	if cfg.SubstrateEnabled() {
+		if err := substrateUp(cfg); err != nil {
+			return err
+		}
+	}
 
 	// Managed models: every host model server's endpoint is detected from
 	// the kind docker network and proven reachable from inside the cluster
@@ -270,8 +302,11 @@ func platformUp(cfg *config.Config, header string) error {
 	if err != nil {
 		return err
 	}
-	// Read the way `helm -f` reads it, once for the renders and the install.
-	values, err := helmValuesFile(valuesPath)
+	// Read the way `helm -f` reads it, once for the renders and the install:
+	// the lab's render first, then platform.valuesFiles in order (the overlays
+	// win) — a lab that points a component at another chart source or forwards
+	// values the template does not know.
+	values, err := helmValuesFiles(append([]string{valuesPath}, cfg.Platform.ValuesFiles...)...)
 	if err != nil {
 		return err
 	}
@@ -324,7 +359,7 @@ func platformUp(cfg *config.Config, header string) error {
 	// HelmRelease among them — so the install returns once the components
 	// are Ready; waitPlatformReleases below then reads the outcome per
 	// release.
-	if err := helmUpgradeInstall(platformNamespace, platformRelease, chart.ref, chart.version, values, helmInstallTimeout, false); err != nil {
+	if err := helmUpgradeInstall(platformNamespace, platformRelease, chart.ref, chart.version, values, helmInstallTimeout, helmInstallOptions{}); err != nil {
 		reportPlatformReleases()
 		return err
 	}
@@ -409,15 +444,23 @@ func platformUp(cfg *config.Config, header string) error {
 		if err := ensureExtraModels(cfg); err != nil {
 			return err
 		}
-		// Agent pods need the golang-adk runtime image at kagent's own tag,
-		// which upstream has been observed not to publish (HACKS.md U8).
-		step("Ensuring the agents' ADK runtime images are on the node")
-		healADKImages(cfg)
-		// The 0.9.x Agent CRD rejects the spec.iconUrl the create flow always
-		// composes, failing every created agent's HelmRelease (HACKS.md U11).
-		step("Ensuring the Agent CRD accepts spec.iconUrl")
-		if err := patchAgentCRDIconURL(); err != nil {
-			return err
+		// Both heals below are shaped for the 0.x line's Agent CR. kagent API
+		// v2 (Harness + AgentTemplate, kagent.dev/v1alpha3) serves no
+		// agents.kagent.dev, composes no runtime image from its release tag
+		// (Harnesses pin their images by digest) and has no iconUrl to accept.
+		if !agentCRDServed() {
+			note("kagent serves no %s (API v2: Harness + AgentTemplate); skipping the Agent-CR heals", agentCRD)
+		} else {
+			// Agent pods need the golang-adk runtime image at kagent's own tag,
+			// which upstream has been observed not to publish (HACKS.md U8).
+			step("Ensuring the agents' ADK runtime images are on the node")
+			healADKImages(cfg)
+			// The 0.9.x Agent CRD rejects the spec.iconUrl the create flow always
+			// composes, failing every created agent's HelmRelease (HACKS.md U11).
+			step("Ensuring the Agent CRD accepts spec.iconUrl")
+			if err := patchAgentCRDIconURL(); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -492,6 +535,9 @@ func platformUp(cfg *config.Config, header string) error {
 	if cfg.Platform.Observability {
 		obsHint = "  Observability: Prometheus scrapes the cluster; muster serves it as x_mcp-prometheus_* tools\n" +
 			"  (try asking Claude Code for a pod's CPU or memory)."
+	}
+	if cfg.SubstrateEnabled() {
+		agentsHint += fmt.Sprintf("\n  Substrate %s (kagent's actor runtime) runs in %s: kubectl get workerpools,sandboxconfigs -A", substrateVersion, substrateNamespace)
 	}
 	fmt.Printf(`
 %s

@@ -57,3 +57,8 @@ gateway in kind). The chart also renders the shared `RemoteMCPServer`
 pointing agents at muster; note that kagent forwards the *caller's* token to
 muster, so agent tool calls through muster need a real Dex token on the way
 in — headless pokes at the unsecured controller API won't have one.
+
+On the [dev channel](platform.md#dev-channel) the runtime is kagent main
+(API v2: `Harness` + `AgentTemplate`, every agent an actor on Substrate,
+which the lab installs ahead of the platform); the Agent CRs and the heals
+above belong to the released line and are skipped there.
