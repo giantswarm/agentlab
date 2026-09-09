@@ -64,27 +64,27 @@ func TestServiceAccountRules(t *testing.T) {
 	}
 }
 
-// TestAgentHelmReleaseManagers: the field managers of the agent's HelmRelease
-// are read off metadata.managedFields — who wrote it; a missing HelmRelease
-// is the apiserver's NotFound.
-func TestAgentHelmReleaseManagers(t *testing.T) {
-	hr := customObject(fluxHelmReleaseGVK, kagentNamespace, agentsTestAgent, nil)
-	_ = unstructured.SetNestedSlice(hr.Object, []any{
+// TestAgentTemplateManagers: the field managers of the agent's AgentTemplate
+// are read off metadata.managedFields — who wrote it; a missing template is
+// the apiserver's NotFound.
+func TestAgentTemplateManagers(t *testing.T) {
+	template := customObject(gvkAgentTemplate, kagentNamespace, agentsTestAgent, nil)
+	_ = unstructured.SetNestedSlice(template.Object, []any{
 		map[string]any{"manager": agentManagerMCPServer, "operation": "Apply"},
-		map[string]any{"manager": "helm-controller", "operation": "Update", "subresource": fieldStatus},
+		map[string]any{"manager": "kagent-controller", "operation": "Update", "subresource": fieldStatus},
 	}, "metadata", "managedFields")
-	newFakeLab(t, hr)
-	managers, err := agentHelmReleaseManagers(agentsTestAgent)
+	newFakeLab(t, template)
+	managers, err := agentTemplateManagers(agentsTestAgent)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(managers, []string{agentManagerMCPServer, "helm-controller"}) {
+	if !reflect.DeepEqual(managers, []string{agentManagerMCPServer, "kagent-controller"}) {
 		t.Errorf("managers = %v", managers)
 	}
-	if _, err := agentHelmReleaseManagers("absent"); err == nil {
-		t.Error("a missing HelmRelease must fail the read")
+	if _, err := agentTemplateManagers("absent"); err == nil {
+		t.Error("a missing AgentTemplate must fail the read")
 	}
-	if !agentHelmReleaseExists(agentsTestAgent) || agentHelmReleaseExists("absent") {
-		t.Error("agentHelmReleaseExists disagrees with the store")
+	if !agentTemplateExists(agentsTestAgent) || agentTemplateExists("absent") {
+		t.Error("agentTemplateExists disagrees with the store")
 	}
 }

@@ -154,13 +154,14 @@ func newFakeLab(t *testing.T, objects ...runtime.Object) *fakeLab {
 		}
 	}
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(usch, map[schema.GroupVersionResource]string{
-		gvrCRDs:            "CustomResourceDefinitionList",
-		widgetGVR:          "WidgetList",
-		fluxHelmReleaseGVR: "HelmReleaseList",
-		musterMCPServerGVR: "MCPServerList",
-		prometheusGVR:      "PrometheusList",
-		gvrModelConfigs:    "ModelConfigList",
-		gvrAgents:          "AgentList",
+		gvrCRDs:             "CustomResourceDefinitionList",
+		widgetGVR:           "WidgetList",
+		fluxHelmReleaseGVR:  "HelmReleaseList",
+		musterMCPServerGVR:  "MCPServerList",
+		prometheusGVR:       "PrometheusList",
+		gvrModelConfigs:     "ModelConfigList",
+		gvrAgentTemplates:   "AgentTemplateList",
+		gvrRemoteMCPServers: "RemoteMCPServerList",
 	}, seeds...)
 	dyn.PrependReactor("patch", "*", fakeApply(dyn.Tracker()))
 
@@ -180,10 +181,11 @@ func newFakeLab(t *testing.T, objects ...runtime.Object) *fakeLab {
 		fluxHelmReleaseGVK,
 		musterMCPServerGVK,
 		prometheusGVK,
-		// kagent's ModelConfig and Agent, which the proofs read and write
-		// (crds_test.go).
+		// kagent's ModelConfig, AgentTemplate and RemoteMCPServer, which the
+		// proofs read and write (crds_test.go).
 		gvkModelConfig,
-		gvkAgent,
+		gvkAgentTemplate,
+		gvkRemoteMCPServer,
 	} {
 		mapper.Add(gvk, meta.RESTScopeNamespace)
 	}
@@ -790,6 +792,8 @@ func TestGvrFor(t *testing.T) {
 		fluxHelmReleaseResource:                              fluxHelmReleaseGVR,
 		musterMCPServerResource:                              musterMCPServerGVR,
 		modelConfigResource:                                  gvrModelConfigs,
+		agentTemplateResource:                                gvrAgentTemplates,
+		remoteMCPServerResource:                              gvrRemoteMCPServers,
 	} {
 		if got, err := gvrFor(arg); err != nil || got != want {
 			t.Errorf("gvrFor(%q) = %v, %v; want %v", arg, got, err, want)

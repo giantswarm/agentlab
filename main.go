@@ -518,6 +518,7 @@ func toolsetsTestCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the throwaway agents run on (default: default-model-config, the Anthropic one the lab renders from $ANTHROPIC_API_KEY)")
 	cmd.Flags().BoolVar(&opts.SkipChat, "skip-chat", false, "skip the turns that need the model to answer (the runtime path, the chat-only agent, the real agent's view of the fixture)")
+	cmd.Flags().BoolVar(&opts.SkipPortal, "skip-portal", false, "skip the portal's apply path (the composed AgentTemplate through the scaffolder template) for a portal that does not speak kagent main yet; the Tools step's endpoints are proven regardless")
 	return cmd
 }
 
