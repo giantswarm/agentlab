@@ -10,15 +10,20 @@ import (
 
 // readyTemplate seeds an AgentTemplate with the controller's status shape for
 // one Harness: the four conditions, the revisions, the warnings.
+const (
+	testRevision    = "3bd7156d4194"
+	fieldConditions = "conditions"
+)
+
 func readyTemplate(name, harness, readyStatus, readyMessage string) *unstructured.Unstructured {
 	template := agentTemplateBinding(name, componentMuster)
 	_ = unstructured.SetNestedField(template.Object, "default-model-config", "spec", "modelConfig", nameKey)
 	_ = unstructured.SetNestedSlice(template.Object, []any{map[string]any{
 		"harness":                  harness,
-		"desiredRevision":          "3bd7156d4194",
-		"latestSuccessfulRevision": "3bd7156d4194",
+		"desiredRevision":          testRevision,
+		"latestSuccessfulRevision": testRevision,
 		"warnings":                 []any{"tool narrowing downgraded"},
-		"conditions": []any{
+		fieldConditions: []any{
 			map[string]any{fieldType: "Accepted", fieldStatus: "True", "reason": "Accepted", fieldMessage: "Harness admission selector matches the AgentTemplate"},
 			map[string]any{fieldType: condReady, fieldStatus: readyStatus, "reason": "Ready", fieldMessage: readyMessage},
 		},
@@ -46,7 +51,7 @@ func TestAgentTemplateFrom(t *testing.T) {
 	if template.mcpServer() != componentMuster || template.Spec.ModelConfig == nil || template.Spec.ModelConfig.Name != "default-model-config" || template.Metadata.Labels[harnessLabel] != kagentHarness {
 		t.Errorf("spec lost: %+v", template.Spec)
 	}
-	if template.Status.Harnesses[0].LatestSuccessfulRevision != "3bd7156d4194" || len(template.Status.Harnesses[0].Warnings) != 1 {
+	if template.Status.Harnesses[0].LatestSuccessfulRevision != testRevision || len(template.Status.Harnesses[0].Warnings) != 1 {
 		t.Errorf("harness status lost: %+v", template.Status.Harnesses[0])
 	}
 	if bare, err := agentTemplateFrom(customObject(gvkAgentTemplate, kagentNamespace, "bare", nil)); err != nil || bare.mcpServer() != "" || len(bare.Status.Harnesses) != 0 {

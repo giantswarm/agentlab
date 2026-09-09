@@ -185,7 +185,7 @@ func waitAgentTemplateReady(name, harness string, timeout time.Duration) (*agent
 			return false
 		}
 		status, _ := t.harnessCondition(harness, conditionReady)
-		return status == "True"
+		return status == conditionTrue
 	})
 	if ready {
 		return t, nil
@@ -304,7 +304,7 @@ func remoteMCPServerHeader(rms *unstructured.Unstructured, name string) (string,
 		encoded, _, _ := unstructured.NestedString(obj.Object, "data", key)
 		value, err := base64.StdEncoding.DecodeString(encoded)
 		if err != nil {
-			return "", fmt.Errorf("Secret %s key %s: %w", secret, key, err)
+			return "", fmt.Errorf("secret %s key %s: %w", secret, key, err)
 		}
 		return string(value), nil
 	}
