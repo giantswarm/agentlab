@@ -26,6 +26,7 @@ func BackstageTest(cfg *config.Config, emails []string) error {
 			emails = append(emails, u.Email)
 		}
 	}
+	var sessions []*portalSession
 	for i, email := range emails {
 		user := cfg.FindUser(email)
 		if user == nil {
@@ -42,19 +43,25 @@ func BackstageTest(cfg *config.Config, emails []string) error {
 				return fmt.Errorf("%s: %w", email, err)
 			}
 		}
-		// The Agent Platform pages on kagent main: the agents list for every
-		// user, one chat turn for the first.
-		switch {
-		case !cfg.Platform.Agents:
-			fmt.Printf("  agent platform pages skipped (platform.agents off)\n")
-		default:
-			if err := proveAgentPlatformPages(ps, i == 0); err != nil {
-				return fmt.Errorf("%s: %w", email, err)
-			}
-		}
+		sessions = append(sessions, ps)
 		fmt.Println()
 	}
 	fmt.Println("all sign-ins resolved and reached muster")
+
+	// The Agent Platform pages on kagent main, after every sign-in is in so
+	// the evidence above is complete whatever the portal answers: the agents
+	// list for every user, one chat turn for the first.
+	if !cfg.Platform.Agents {
+		fmt.Println("agent platform pages skipped (platform.agents off)")
+		return nil
+	}
+	for i, ps := range sessions {
+		fmt.Printf("=== %s: agent platform pages ===\n", ps.user.Email)
+		if err := proveAgentPlatformPages(ps, i == 0); err != nil {
+			return fmt.Errorf("%s: %w", ps.user.Email, err)
+		}
+	}
+	fmt.Println("agent platform pages listed the agents for every user and answered a chat turn")
 	return nil
 }
 
