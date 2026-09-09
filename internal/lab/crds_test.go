@@ -11,10 +11,11 @@ import (
 // versions are the fakes' — the lab itself resolves every custom kind through
 // discovery (gvrFor) and pins none.
 var (
-	gvkModelConfig  = schema.GroupVersionKind{Group: "kagent.dev", Version: "v1alpha2", Kind: "ModelConfig"}
-	gvrModelConfigs = gvkModelConfig.GroupVersion().WithResource("modelconfigs")
-	gvkAgent        = schema.GroupVersionKind{Group: "kagent.dev", Version: "v1alpha2", Kind: "Agent"}
-	gvrAgents       = gvkAgent.GroupVersion().WithResource("agents")
+	kagentGroupVersion = schema.GroupVersion{Group: "kagent.dev", Version: "v1alpha2"}
+	gvkModelConfig     = kagentGroupVersion.WithKind("ModelConfig")
+	gvrModelConfigs    = kagentGroupVersion.WithResource("modelconfigs")
+	gvkAgent           = kagentGroupVersion.WithKind("Agent")
+	gvrAgents          = kagentGroupVersion.WithResource("agents")
 )
 
 // customObject builds a seed for the dynamic fake: an object of the given

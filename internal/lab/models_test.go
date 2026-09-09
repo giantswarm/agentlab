@@ -148,12 +148,12 @@ func TestEnsureModelKeySecret(t *testing.T) {
 		t.Errorf("the existing Secret was rewritten: data %q", got)
 	}
 	t.Setenv(testKeyEnv, "sk-test")
-	if err := ensureModelKeySecret(config.ExtraModel{Name: "fresh", Provider: config.ProviderOpenAI, APIKeyEnv: testKeyEnv}); err != nil {
+	if err := ensureModelKeySecret(config.ExtraModel{Name: "newkey", Provider: config.ProviderOpenAI, APIKeyEnv: testKeyEnv}); err != nil {
 		t.Fatal(err)
 	}
-	fresh := f.stored(t, gvrSecrets, kagentNamespace, "kagent-fresh")
+	fresh := f.stored(t, gvrSecrets, kagentNamespace, "kagent-newkey")
 	if got, _, _ := unstructured.NestedString(fresh.Object, "data", "OPENAI_API_KEY"); got != "c2stdGVzdA==" {
-		t.Errorf("kagent-fresh data = %q, want the env var's value", got)
+		t.Errorf("kagent-newkey data = %q, want the env var's value", got)
 	}
 	if err := ensureModelKeySecret(config.ExtraModel{Name: "keyless", Provider: config.ProviderOpenAI}); err != nil {
 		t.Fatal(err)
