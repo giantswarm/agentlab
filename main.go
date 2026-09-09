@@ -9,6 +9,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"maps"
@@ -29,6 +30,9 @@ import (
 
 func main() {
 	err := rootCmd().Execute()
+	// After Execute rather than in a PersistentPostRun, which cobra skips
+	// when the command failed: the usage signal counts failed runs too.
+	telemetry.Flush(context.Background())
 	if errors.Is(err, update.ErrOutdated) {
 		// `self-update --check` has reported both versions; the status is
 		// the answer (devctl's `version check` exits the same way).
@@ -61,7 +65,8 @@ Then:        claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		// Runs for every subcommand, none of which has a PersistentPreRun of
 		// its own: one anonymous usage signal per command a person runs, like
 		// kubectl-gs (docs/telemetry.md; AGENTLAB_TELEMETRY_OPTOUT=1 to
-		// disable), and the hint that a newer release exists, ahead of the
+		// disable; main gives it a bounded moment to be delivered once the
+		// command is done), and the hint that a newer release exists, ahead of the
 		// command's own output (docs/cli.md "Keeping agentlab current";
 		// AGENTLAB_NO_UPDATE_CHECK=1 to disable). Plumbing, completion and
 		// help stay quiet for both; self-update reports the versions itself.
