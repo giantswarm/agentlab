@@ -89,7 +89,7 @@ Then:        claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		certsCmd(),
 		labCmd("trust", "Install the lab CA into the system and browser trust stores (one sudo prompt; reversible)", lab.Trust),
 		labCmd("untrust", "Remove the lab CA from the system and browser trust stores", lab.Untrust),
-		labCmd("platform", "Install the Giant Swarm agent platform (the agent-platform chart in the lab shape)", lab.PlatformUp),
+		platformCmd(),
 		platformTestCmd(),
 		modelsTestCmd(),
 		agentsTestCmd(),
@@ -266,9 +266,9 @@ func accessibleMode() bool {
 
 func configureCmd() *cobra.Command {
 	var defaults, accessible bool
-	var platform, agents, observability, backstage, modelManager bool
+	var platform, agents, observability, backstage, modelManager, substrate bool
 	var modelManagerBackends []string
-	var chartVersion, chartPath string
+	var chartVersion, chartPath, chartBranch string
 	cmd := &cobra.Command{
 		Use:   "configure",
 		Short: "Discover this machine, then ask for the lab configuration (or keep it with --defaults) and save agentlab.yaml",
@@ -309,6 +309,16 @@ func configureCmd() *cobra.Command {
 			if cmd.Flags().Changed("chart-path") {
 				cfg.Platform.ChartPath = chartPath
 			}
+			if cmd.Flags().Changed("chart-branch") {
+				// A new branch (or none) starts unpinned: the pin froze a
+				// build of the previous one.
+				cfg.Platform.ChartBranch = chartBranch
+				cfg.Platform.ChartPinned = false
+			}
+			if cmd.Flags().Changed("substrate") {
+				cfg.Platform.Substrate.Enabled = &substrate
+			}
+			cfg.Normalize()
 			var pinEnabled *bool
 			if cmd.Flags().Changed("model-manager") {
 				pinEnabled = &modelManager
@@ -336,6 +346,12 @@ func configureCmd() *cobra.Command {
 					return err
 				}
 			}
+			// The dev channel: the branch's newest build becomes the pinned
+			// chartVersion now, so the file says what `up` will install and
+			// a branch without builds is refused here, not after a boot.
+			if _, err := lab.ResolveChartVersion(cfg); err != nil {
+				return err
+			}
 			if err := cfg.Save(); err != nil {
 				return err
 			}
@@ -343,10 +359,16 @@ func configureCmd() *cobra.Command {
 			fmt.Printf("  cluster    %s (Dex on %s)\n", cfg.ClusterName, cfg.Issuer())
 			fmt.Printf("  users      %d\n", len(cfg.Users))
 			fmt.Printf("  platform   %v (agents %v, observability %v)\n", cfg.Platform.Enabled, cfg.Platform.Agents, cfg.Platform.Observability)
-			if cfg.Platform.ChartPath != "" {
+			switch {
+			case cfg.Platform.ChartPath != "":
 				fmt.Printf("  chart      local checkout %s (chartVersion %s ignored while set)\n", cfg.Platform.ChartPath, cfg.Platform.ChartVersion)
-			} else {
+			case cfg.Platform.ChartBranch != "":
+				fmt.Printf("  chart      agent-platform %s (branch %s, dev channel%s)\n", cfg.Platform.ChartVersion, cfg.Platform.ChartBranch, pinnedNote(cfg))
+			default:
 				fmt.Printf("  chart      agent-platform %s\n", cfg.Platform.ChartVersion)
+			}
+			if cfg.Platform.Enabled {
+				fmt.Printf("  substrate  %v (%s)\n", cfg.SubstrateEnabled(), cfg.SubstrateReason())
 			}
 			for _, name := range slices.Sorted(maps.Keys(cfg.Platform.DevImages)) {
 				fmt.Printf("  dev image  %s -> %s\n", name, cfg.Platform.DevImages[name])
@@ -375,8 +397,47 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&modelManager, "model-manager", false, "pin managed models on/off instead of following the host model servers the discovery finds (needs agents)")
 	cmd.Flags().StringVar(&chartVersion, "chart-version", "", "the agent-platform chart release to install (an exact version; default "+config.DefaultChartVersion+")")
 	cmd.Flags().StringVar(&chartPath, "chart-path", "", "install the agent-platform chart from this local directory (an agent-platform checkout's helm/agent-platform) instead of the pinned release; \"\" clears it")
+	cmd.Flags().StringVar(&chartBranch, "chart-branch", "", "the dev channel: follow this agent-platform branch's newest dev build (resolved now and on every up/platform, written to chartVersion); \"\" returns to the stable channel")
+	cmd.Flags().BoolVar(&substrate, "substrate", false, "pin Substrate (kagent's actor runtime) on/off instead of following the chart channel (on with --chart-branch)")
 	cmd.Flags().StringSliceVar(&modelManagerBackends, "model-manager-backends", nil, "pin the host model servers, in order (ollama, lemonade; the first is model-manager's default backend) instead of the ones the discovery finds")
 	cmd.Flags().BoolVar(&accessible, "accessible", false, "prompt-per-question form mode (for screen readers and plain terminals)")
+	return cmd
+}
+
+// pinnedNote marks a pinned dev-channel lab in the configure summary.
+func pinnedNote(cfg *config.Config) string {
+	if cfg.Platform.ChartPinned {
+		return ", pinned"
+	}
+	return ""
+}
+
+// platformCmd installs the platform on a running cluster; --pin freezes (or
+// --pin=false releases) the dev channel's recorded build first.
+func platformCmd() *cobra.Command {
+	var pin bool
+	cmd := &cobra.Command{
+		Use:   "platform",
+		Short: "Install the Giant Swarm agent platform (the agent-platform chart in the lab shape)",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			if cmd.Flags().Changed("pin") {
+				if cfg.Platform.ChartBranch == "" {
+					return fmt.Errorf("--pin only applies to the dev channel (platform.chartBranch is not set; the stable channel is always pinned)")
+				}
+				cfg.Platform.ChartPinned = pin
+				if err := cfg.Save(); err != nil {
+					return err
+				}
+			}
+			return lab.PlatformUp(cfg)
+		},
+	}
+	cmd.Flags().BoolVar(&pin, "pin", false, "dev channel: freeze platform.chartVersion at the recorded build instead of following platform.chartBranch (--pin=false follows it again)")
 	return cmd
 }
 

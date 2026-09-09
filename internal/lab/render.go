@@ -201,6 +201,7 @@ var manifests = map[string]struct {
 	"rbac.yaml.tmpl":                         {out: "rbac.yaml"},
 	"agent-platform-values.yaml.tmpl":        {out: "agent-platform-values.yaml"},
 	"kube-prometheus-stack-values.yaml.tmpl": {out: "kube-prometheus-stack-values.yaml"},
+	substrateValuesTemplate:                  {out: "substrate-values.yaml"},
 	mcpPrometheusTemplate:                    {out: "mcp-prometheus.yaml"},
 	"observability-route.yaml.tmpl":          {out: "observability-route.yaml"},
 	"demo-workflow.yaml.tmpl":                {out: "demo-workflow.yaml"},

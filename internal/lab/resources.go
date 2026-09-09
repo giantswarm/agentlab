@@ -70,6 +70,14 @@ const (
 	// model-manager in front of the host model servers.
 	reqModelManagerCPU = 55
 	reqModelManagerMem = 80
+	// Substrate (kagent's actor runtime, the dev channel): its bundled
+	// PostgreSQL requests 1 CPU / 1 GiB, the chart's default; ate-api-server,
+	// ate-controller, atelet, atenet and rustfs declare nothing. Measured in
+	// the POC lab 2026-09-09 (substrate 0.0.26): its control plane sat at
+	// 274 MiB real, the node's RSS grew from 2.26 to 3.53 GiB with Substrate
+	// and the dev channel's kagent together; worker pods are BestEffort.
+	reqSubstrateCPU = 1000
+	reqSubstrateMem = 1024
 	// Backstage requests almost nothing and uses several times its 250Mi;
 	// the memory floor below accounts for that with a factor, not here.
 	reqBackstageCPU = 20
@@ -116,6 +124,8 @@ var labResourceGroups = []resourceGroup{
 		func(c *config.Config) bool { return c.Platform.Enabled && c.Platform.Agents }},
 	{"model-manager", resourceRequests{reqModelManagerCPU, reqModelManagerMem},
 		func(c *config.Config) bool { return c.ModelManagerEnabled() }},
+	{"Substrate", resourceRequests{reqSubstrateCPU, reqSubstrateMem},
+		func(c *config.Config) bool { return c.SubstrateEnabled() }},
 	{"Backstage", resourceRequests{reqBackstageCPU, reqBackstageMem},
 		func(c *config.Config) bool { return c.Platform.Enabled && c.Backstage.Enabled }},
 	{"Flux engine", resourceRequests{reqFluxCPU, reqFluxMem},

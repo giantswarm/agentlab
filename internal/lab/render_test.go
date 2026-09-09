@@ -236,3 +236,65 @@ func TestKindConfigSubstrateGates(t *testing.T) {
 		t.Errorf("containerdConfigPatches = %q, want the one certs.d config_path patch", kindCfg.ContainerdConfigPatches)
 	}
 }
+
+// The kagent controller ServiceMonitor follows observability on the stable
+// channel and is off on the dev channel, whose kagent serves no metrics
+// listener; the chart-level gate stays with observability either way.
+func TestKagentServiceMonitorFollowsChannel(t *testing.T) {
+	cfg := config.Default()
+	render := func() map[string]any {
+		out, err := renderTemplate(cfg, "agent-platform-values.yaml.tmpl", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var values map[string]any
+		if err := yaml.Unmarshal(out, &values); err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		return values
+	}
+	kagentMonitor := func(v map[string]any) any {
+		return v["kagent"].(map[string]any)["serviceMonitor"].(map[string]any)["enabled"]
+	}
+	if got := kagentMonitor(render()); got != true {
+		t.Errorf("stable channel with observability: kagent.serviceMonitor.enabled = %v, want true", got)
+	}
+	cfg.Platform.ChartBranch = "poc/kagent-main"
+	v := render()
+	if got := kagentMonitor(v); got != false {
+		t.Errorf("dev channel: kagent.serviceMonitor.enabled = %v, want false", got)
+	}
+	if got := v["global"].(map[string]any)["observability"].(map[string]any)["metrics"].(map[string]any)["serviceMonitor"].(map[string]any)["enabled"]; got != true {
+		t.Errorf("dev channel: the chart-level monitor gate must still follow observability, got %v", got)
+	}
+	cfg.Platform.Observability = false
+	cfg.Platform.ChartBranch = ""
+	if got := kagentMonitor(render()); got != false {
+		t.Errorf("without observability: kagent.serviceMonitor.enabled = %v, want false", got)
+	}
+}
+
+// The Substrate values are the chart's defaults with the lab's two
+// deviations spelled out: no Namespace rendered (the lab creates it ahead of
+// the chart) and no atelet extra args (no local registry).
+func TestSubstrateValuesRender(t *testing.T) {
+	out, err := renderTemplate(config.Default(), substrateValuesTemplate, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var values map[string]any
+	if err := yaml.Unmarshal(out, &values); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if values["createNamespace"] != false {
+		t.Errorf("createNamespace = %v, want false", values["createNamespace"])
+	}
+	if args, _ := values["atelet"].(map[string]any)["extraArgs"].([]any); len(args) != 0 {
+		t.Errorf("atelet.extraArgs = %v, want none", args)
+	}
+	for _, store := range []string{"postgres", "rustfs"} {
+		if size := values[store].(map[string]any)["storageSize"]; size != "1Gi" {
+			t.Errorf("%s.storageSize = %v, want 1Gi", store, size)
+		}
+	}
+}
