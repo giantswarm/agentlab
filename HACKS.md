@@ -487,6 +487,27 @@ uninstall) ahead of the kagent HelmRelease; the connectivity release adopts
 it on install and deletes it with the release. `ensureNamespace` for kagent
 is deleted; a fresh `agentlab up` gets the namespace from the hook.
 
+### U21. `preload.go`: the docker side-load is `docker save --platform` + `kind load image-archive` — BLOCKED UPSTREAM
+`kind load docker-image` runs a plain `docker save` and pipes the archive into
+the node's `ctr images import --all-platforms`. Under Docker's containerd image
+store — the default on Docker Desktop and on new Docker 29 installs — that
+archive carries a pulled image's whole multi-platform index while only the
+host platform's blobs were ever pulled, and the import fails on the first
+missing digest: `ERROR: failed to load image: command "docker exec ... ctr
+--namespace=k8s.io images import --all-platforms ..." failed with error: exit
+status 1` / `content digest sha256:...: not found`, once per side-load lane,
+every image degrading to the in-node pull the preload exists to avoid
+([kubernetes-sigs/kind#3795](https://github.com/kubernetes-sigs/kind/issues/3795),
+open since 2024-11; the maintainers point consumers to `docker save --platform
+| kind load image-archive` and will not lock the platform inside `kind load`).
+The lab does exactly that under docker (`dockerLoadImages`): `docker image
+inspect` says which platform the host holds each ref in, one `docker save
+--platform <p> -o <tmp.tar>` per platform, `kind load image-archive` of each.
+Needs Docker 28 (API 1.48) for `docker save --platform`; an older
+client/daemon keeps kind's own load, which is right under the classic graph
+driver. Podman keeps its one-image-per-call load (U16). Unblocks when kind's
+`load docker-image` survives the containerd image store.
+
 ## Accepted lab trade-offs (not hacks to fix)
 
 - **Checksum stamping via the `REPLACED_AT_APPLY` placeholder** — the standard
