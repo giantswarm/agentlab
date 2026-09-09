@@ -27,9 +27,9 @@ plumbing for model servers under
   (`kubeconfig.oidc`). This will produce convincing false positives in a test
   suite if you miss it.
 - **The apiserver keeps retrying OIDC discovery — no bounce needed.** On a
-  cold `kind create`, Dex does not exist yet and the apiserver logs
+  cold cluster creation, Dex does not exist yet and the apiserver logs
   `oidc authenticator: initializing plugin: … connection refused` — but on
-  Kubernetes 1.35 it retries every 10 seconds forever and initializes on the
+  Kubernetes >= 1.35 it retries every 10 seconds forever and initializes on the
   first tick after Dex answers (verified empirically; earlier versions of this
   lab bounced the static pod because older apiservers gave up for good).
   `agentlab up`'s verification loop simply waits out the next retry tick. If
@@ -49,7 +49,8 @@ plumbing for model servers under
   minutes after the very edit that prompted the reload. The lab uses Dex's
   CRD-backed `kubernetes` storage instead: keys persist across rolls, tokens
   keep verifying, and the state still dies with the cluster.
-- Kubernetes 1.35 still accepts the `--oidc-*` flags. The modern alternative is
+- Kubernetes 1.36 (the embedded kind's node image) still accepts the `--oidc-*`
+  flags. The modern alternative is
   `--authentication-config` (structured `AuthenticationConfiguration`, which
   also supports CEL claim mappings). The flags are simpler and were kept here.
 - **`agentlab down` can lose a race with docker and leave an exited node.**
