@@ -62,3 +62,15 @@ func kagentLegacy() bool {
 	note("kagent serves no %s: kagent API v2 (%s AgentTemplates on a Harness, Substrate actors), the v2 proofs", agentCRD, agentTemplateAPIVersion)
 	return false
 }
+
+// agentTurnAs drives one turn on an agent as the user whose Dex id_token is
+// given — the way the portal's session chat does — on whichever kagent API
+// the cluster serves: A2A through the kagent UI route on the released line
+// (agentTurnAsV1), an AgentInstance over gRPC-Web through the edge on kagent
+// API v2 (agentTurnAsV2). Shared steps of the proofs call this one.
+func agentTurnAs(cfg *config.Config, name, token, prompt string) (string, error) {
+	if agentCRDServed() {
+		return agentTurnAsV1(cfg, name, token, prompt)
+	}
+	return agentTurnAsV2(cfg, name, token, prompt)
+}

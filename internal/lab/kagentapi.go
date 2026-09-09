@@ -356,10 +356,10 @@ func kagentTurn(cfg *config.Config, user, token, template, prompt string) (strin
 	return reply, nil
 }
 
-// agentTurnAs sends one turn to the agent as the person whose Dex id_token is
+// agentTurnAsV2 sends one turn to the agent as the person whose Dex id_token is
 // given — the way the portal's session chat does, x-user-id being the token's
 // email — and returns the agent's text.
-func agentTurnAs(cfg *config.Config, name, token, prompt string) (string, error) {
+func agentTurnAsV2(cfg *config.Config, name, token, prompt string) (string, error) {
 	claims, err := decodeJWTClaims(token)
 	if err != nil {
 		return "", fmt.Errorf("the token for the turn on %s: %w", name, err)
