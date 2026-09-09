@@ -240,12 +240,18 @@ func (h *helmOp) loadChart(opts *action.ChartPathOptions, ref, version string) (
 }
 
 // helmValuesFile reads one values file the way `-f` does: Helm's values
-// loader, so a `null` deletes the key it overrides exactly as the CLI has it.
+// loader, so a `null` survives as the key's deletion marker.
 func helmValuesFile(path string) (map[string]any, error) {
-	opts := values.Options{ValueFiles: []string{path}}
+	return helmValuesFiles(path)
+}
+
+// helmValuesFiles reads values files the way repeated `-f` flags do: maps
+// merge, lists replace, the later file wins.
+func helmValuesFiles(paths ...string) (map[string]any, error) {
+	opts := values.Options{ValueFiles: paths}
 	vals, err := opts.MergeValues(getter.All(helmSettings()))
 	if err != nil {
-		return nil, fmt.Errorf("reading the values %s: %w", path, err)
+		return nil, fmt.Errorf("reading the values %s: %w", strings.Join(paths, ", "), err)
 	}
 	return vals, nil
 }

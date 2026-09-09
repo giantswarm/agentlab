@@ -245,3 +245,32 @@ func TestHelmReleaseProbesWithoutCluster(t *testing.T) {
 		t.Errorf("error should name the missing lab kubeconfig: %v", err)
 	}
 }
+
+// TestHelmValuesFilesLaterWins: platform.valuesFiles are read as repeated
+// `-f` flags — maps merge, lists replace, the later file wins.
+func TestHelmValuesFilesLaterWins(t *testing.T) {
+	isolateHelm(t)
+	dir := t.TempDir()
+	base := filepath.Join(dir, "base.yaml")
+	overlay := filepath.Join(dir, "overlay.yaml")
+	if err := os.WriteFile(base, []byte("components:\n  kagent:\n    enabled: true\n    omitKeys: [a, b]\nkeep: base\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(overlay, []byte("components:\n  kagent:\n    repository: oci://kind-registry:5000/charts\n    omitKeys: [c]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	vals, err := helmValuesFiles(base, overlay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kagent, _ := vals["components"].(map[string]any)["kagent"].(map[string]any)
+	if kagent["enabled"] != true || kagent["repository"] != "oci://kind-registry:5000/charts" {
+		t.Errorf("maps not merged: %#v", kagent)
+	}
+	if keys, _ := kagent["omitKeys"].([]any); len(keys) != 1 || keys[0] != "c" {
+		t.Errorf("lists must be replaced by the later file, got %#v", kagent["omitKeys"])
+	}
+	if vals["keep"] != "base" {
+		t.Errorf("keys only the base file has must survive, got %#v", vals["keep"])
+	}
+}

@@ -75,3 +75,11 @@ func agentCRDIconURL(crd *unstructured.Unstructured) (idx int, present bool, nam
 	}
 	return idx, present, names
 }
+
+// agentCRDServed reports whether kagent's Agent CRD exists: the 0.x line
+// serves it, kagent API v2 (Harness + AgentTemplate, kagent.dev/v1alpha3)
+// does not — the Agent-CR heals then have nothing to apply to.
+func agentCRDServed() bool {
+	_, err := getObject(context.Background(), gvrCRDs, "", agentCRD)
+	return err == nil
+}
