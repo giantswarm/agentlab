@@ -178,35 +178,62 @@ func extraModelsHint(models []config.ExtraModel) string {
 // waitModelConfigAccepted polls one ModelConfig until the controller accepts
 // it — the machine check that the provider/model/Secret combination is one
 // the runtime can mount, before anyone debugs it from a failing agent pod.
-// A read that fails is reported as such, with the apiserver's words, never as
+// kagent main splits the verdict in two: Accepted (the spec is coherent) and
+// ResolvedRefs (the Secret it names exists and holds the key); an Accepted
+// ModelConfig whose ResolvedRefs is False is not usable, so that is refused
+// too, while a status without the condition (the 0.x line) still passes. A
+// read that fails is reported as such, with the apiserver's words, never as
 // an empty status.
 func waitModelConfigAccepted(name string) error {
 	var status string
 	var readErr error
 	accepted := waitFor(10, modelConfigAcceptedPoll, func() bool {
-		status, readErr = modelConfigCondition(name, "Accepted")
+		status, _, readErr = modelConfigCondition(name, "Accepted")
 		return readErr == nil && status == "True"
 	})
 	if !accepted {
 		return notReached("ModelConfig "+name, "Accepted", status, readErr,
 			fmt.Sprintf("check `kubectl -n %s describe %s %s`", kagentNamespace, modelConfigResource, name))
 	}
-	note("ModelConfig %s: Accepted", name)
+	resolved, message, err := modelConfigCondition(name, conditionResolvedRefs)
+	if err != nil {
+		return err
+	}
+	if resolved == condFalseStatus {
+		return fmt.Errorf("ModelConfig %s is Accepted but %s=False: %s;\ncheck `kubectl -n %s describe %s %s`", name, conditionResolvedRefs, message, kagentNamespace, modelConfigResource, name)
+	}
+	note("ModelConfig %s: Accepted%s", name, resolvedNote(resolved))
 	return nil
 }
 
-// modelConfigCondition reads one condition's status off a ModelConfig ("" while
-// the controller has not written it).
-func modelConfigCondition(name, condType string) (string, error) {
+// resolvedNote words the ResolvedRefs condition for the note: nothing when the
+// controller writes none (the 0.x line), the status otherwise.
+func resolvedNote(resolved string) string {
+	if resolved == "" {
+		return ""
+	}
+	return ", " + conditionResolvedRefs + "=" + resolved
+}
+
+// conditionResolvedRefs is kagent main's second ModelConfig condition: the
+// referenced Secret exists and holds the key.
+const conditionResolvedRefs = "ResolvedRefs"
+
+// condFalseStatus is a condition's False status.
+const condFalseStatus = "False"
+
+// modelConfigCondition reads one condition's status and message off a
+// ModelConfig ("" while the controller has not written it).
+func modelConfigCondition(name, condType string) (status, message string, err error) {
 	gvr, err := gvrFor(modelConfigResource)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	defer cancel()
 	obj, err := getObject(ctx, gvr, kagentNamespace, name)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return conditionStatus(obj, condType), nil
+	return conditionStatus(obj, condType), conditionMessage(obj, condType), nil
 }
