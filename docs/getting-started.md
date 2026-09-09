@@ -59,6 +59,7 @@ pinned versions, plus kind's own control plane on a live node):
 | the chart's Flux engine: the Flux Operator plus the `FluxInstance`'s source-controller and helm-controller (the lab shape brings it with the platform — it delivers every component and the agents) | 250m | 192 MiB |
 | observability: kube-state-metrics + mcp-prometheus | 300m | 328 MiB |
 | **total requests** | **≈ 2.6 CPU** | **≈ 2.5 GiB** |
+| the dev channel only (`--chart-branch`): Substrate's bundled PostgreSQL — its actor runtime, API server and data plane declare nothing | +1000m | +1 GiB |
 
 The memory column *understates* real use, and by a lot: the Prometheus server
 (its CR sets no `resources`), the prometheus-operator and node-exporter
@@ -73,6 +74,7 @@ Give docker at least:
 |---|---|---|
 | the full default lab (platform + agents + observability + Backstage) | **4** | **6 GiB** (the floor is 5.1 GiB; whole GiB) |
 | platform + agents only (`configure --backstage=false --observability=false`) | 3 | 4 GiB (3.9 GiB) |
+| the full lab on the [dev channel](platform.md#dev-channel) (`--chart-branch`, Substrate on) | 5 | 8 GiB (7.1 GiB) |
 
 Those are the floors `agentlab up` enforces, and they already include room for
 the pods the platform creates at run time: every kagent agent is another pod,

@@ -18,7 +18,7 @@ your shell's current-context.
 | `certs` | Generate the lab CA and Dex server cert, re-minting only what config or policy require. `--force` regenerates everything and breaks a running cluster's trust. |
 | `trust` | Install the lab CA into the system and browser trust stores (one sudo prompt; reversible). See [TLS](tls.md). |
 | `untrust` | Remove exactly the lab CA from those stores. |
-| `platform` | Install the agent platform on a running cluster: one idempotent upgrade-or-install of the agent-platform chart in its lab shape through the embedded Helm (the `helm upgrade --install --wait` of Helm 4, in-process), then wait for every component. `up` runs this when the platform is enabled. |
+| `platform` | Install the agent platform on a running cluster: one idempotent upgrade-or-install of the agent-platform chart in its lab shape through the embedded Helm (the `helm upgrade --install --wait` of Helm 4, in-process), then wait for every component. `up` runs this when the platform is enabled. On the [dev channel](platform.md#dev-channel) it first re-resolves the branch's newest build (and installs Substrate); `--pin` freezes the recorded build instead, `--pin=false` follows the branch again. |
 | `platform-down` | Remove the agent platform in the chart's ordered teardown, leaving Dex and the cluster alone. |
 | `logs <component>` | Tail a component's logs: `backstage`, `dex`, `mcp-prometheus`, `muster` or `prometheus`. |
 | `self-update` | Replace the binary with the latest GitHub release, once its cosign Sigstore bundle verifies (see below). `--check` only reports the running and the latest version, exit status 125 when a newer one exists. |
@@ -72,6 +72,8 @@ The flags pin a value regardless of the discovery, with or without
 | `--backstage[=false]` | Enable or disable Backstage (implies the platform). |
 | `--chart-version <x.y.z>` | The agent-platform chart release to install, an exact version (default: the release this agentlab was verified with, `config.DefaultChartVersion`). |
 | `--chart-path <dir>` | Install the agent-platform chart from a local checkout's `helm/agent-platform` directory instead of the pinned release; `--chart-path ""` clears it. See [Installing an unreleased chart](platform.md#installing-an-unreleased-chart). |
+| `--chart-branch <branch>` | The dev channel: follow this agent-platform branch's newest dev build — resolved now and on every `up`/`platform`, written to `chartVersion`; `--chart-branch ""` returns to the stable channel. Mutually exclusive with `--chart-path`; implies Substrate. See [Dev channel](platform.md#dev-channel). |
+| `--substrate[=false]` | Pin Substrate (kagent's actor runtime) on or off instead of following the chart channel (on with `--chart-branch`, off otherwise). |
 | `--model-manager[=false]` | Pin managed models on or off instead of following the host model servers the discovery finds (needs agents). |
 | `--model-manager-backends ollama,lemonade` | Pin the host model servers, in order; the first is model-manager's default backend. |
 

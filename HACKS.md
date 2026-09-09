@@ -514,6 +514,28 @@ Unblocks when kind's `load docker-image` logic (the re-tag of an image ID the
 node already has, the per-image save) survives the containerd image store and
 is worth reusing over the plain archive import.
 
+### U22. `substratepools.go`: Substrate's CA/JWT pool bootstrap is a Go port of `kubectl-ate` — BLOCKED UPSTREAM
+The substrate chart (0.0.26) mounts four pool Secrets, a trust-anchor Secret
+and an authentication ConfigMap it does not render. Upstream's install is
+`helm install`, then `kubectl-ate admin make-ca-pool` / `make-jwt-pool` plus a
+shell step (jq + openssl for the trust anchor, a heredoc for the
+authentication config), then a second `helm upgrade --wait` — the first
+install's pods restart on missing volumes until then. The lab downloads no
+binaries (kind, Helm and client-go are embedded; `kubectl-ate` is unsigned)
+and upstream publishes no image with the bootstrap in it (`ate-setup` is not
+published), so `substratepools.go` copies the generate + serialise subset of
+substrate's internal `localca` and `localjwtauthority` packages (Apache-2.0
+header kept, pinned to 0.0.26 in the comment) and `substrate.go` creates every
+bootstrap object BEFORE one waited install; the pre-created
+`podcertificate-controller-system` namespace the chart also renders is adopted
+with Helm's `--take-ownership`. Drift risk: a Substrate bump that changes the
+pool wire format shows up as ate-api-server never Ready. The issuer too:
+upstream's default authentication config names `https://kubernetes.default.svc`,
+which ate-api-server rejects against kind's tokens (their `iss` is
+`…svc.cluster.local`); the lab reads the issuer off the apiserver's discovery
+document, as upstream's own `ate-setup` does. Unblocks when the substrate
+chart renders the bootstrap (a hook Job) or the packages become importable.
+
 ## Accepted lab trade-offs (not hacks to fix)
 
 - **Checksum stamping via the `REPLACED_AT_APPLY` placeholder** — the standard
