@@ -283,8 +283,8 @@ func proveAgentManagerToolset(s *musterSession, toolPrefix, modelConfig string) 
 		if err := s.callServerJSON(toolPrefix+"create_agent", args, &created); err != nil {
 			return err
 		}
-		if !created.Created[createdAgentTemplateKey] {
-			return fmt.Errorf("create_agent %s reported no AgentTemplate written (created: %v)", a.name, created.Created)
+		if !created.Created[createdAgentTemplateKey] || !created.Created[createdToolsetCarrierKey] {
+			return fmt.Errorf("create_agent %s reported created=%v, wanted the AgentTemplate and its toolset carrier written", a.name, created.Created)
 		}
 		note("AgentTemplate written (created: %v), requestedBy=%s", created.Created, created.RequestedBy)
 	}
@@ -321,11 +321,11 @@ func proveRenderedToolsets(s *musterSession, toolPrefix, modelConfig string) err
 		want := strings.Join(a.toolset, ",")
 		bound := t.mcpServer()
 		header, err := toolsetHeaderOf(t)
+		// Every declared toolset rides on a carrier, preset:none included
+		// (muster resolves it to no tools); a template binding the shared
+		// server would be unscoped, one binding nothing is not an agent-manager
+		// agent at all.
 		switch {
-		case a.name == toolsetsAgentNone && bound == "":
-			// preset:none written as no tool binding at all: nothing to send
-			// a header to, nothing to reach.
-			note("no MCP server binding at all (spec.tools empty): the agent has no tools")
 		case bound == componentMuster:
 			return fmt.Errorf("agent %s (toolset %v) binds the shared %s server directly — unscoped access, the toolset is never sent", a.name, a.toolset, componentMuster)
 		case err != nil:

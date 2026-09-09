@@ -91,6 +91,9 @@ func AgentsTest(cfg *config.Config, email string) error {
 	if info.Identity != "caller" || !info.Capabilities["writesAsCaller"] {
 		return fmt.Errorf("agent-manager reports identity=%q writesAsCaller=%v: it is not running with downstream OAuth (umbrella agent-manager.oauth.downstream)", info.Identity, info.Capabilities["writesAsCaller"])
 	}
+	if got := info.APIVersions["agentTemplate"]; got != agentTemplateAPIVersion {
+		return fmt.Errorf("agent-manager composes apiVersions.agentTemplate=%q, the platform's agents are %s AgentTemplates (apiVersions: %v) — this agent-manager does not speak kagent main", got, agentTemplateAPIVersion, info.APIVersions)
+	}
 	note("version %s, identity %s, default namespace %s, apiVersions %v", info.Version, info.Identity, info.Namespaces.Default, info.APIVersions)
 
 	step("%slist_model_configs", toolPrefix)
@@ -150,8 +153,8 @@ func AgentsTest(cfg *config.Config, email string) error {
 	if err := session.callServerJSON(toolPrefix+"create_agent", createArgs, &created); err != nil {
 		return err
 	}
-	if !created.Created[createdAgentTemplateKey] {
-		return fmt.Errorf("create_agent reported no AgentTemplate written (created: %v)", created.Created)
+	if !created.Created[createdAgentTemplateKey] || !created.Created[createdToolsetCarrierKey] {
+		return fmt.Errorf("create_agent reported created=%v, wanted the AgentTemplate and its toolset carrier written", created.Created)
 	}
 	if created.RequestedBy != user.Email {
 		return fmt.Errorf("create_agent carries requestedBy=%q, wanted %q: agent-manager did not learn the caller from the forwarded token", created.RequestedBy, user.Email)
@@ -225,6 +228,12 @@ func AgentsTest(cfg *config.Config, email string) error {
 	var got struct {
 		Toolset            []string `json:"toolset"`
 		ImplicitFullAccess bool     `json:"implicitFullAccess"`
+		Harness            string   `json:"harness"`
+		ToolsetCarrier     struct {
+			Name   string `json:"name"`
+			Exists bool   `json:"exists"`
+			Header string `json:"header"`
+		} `json:"toolsetCarrier"`
 	}
 	if err := session.callServerJSON(toolPrefix+"get_agent", map[string]any{nameKey: agentsTestAgent}, &got); err != nil {
 		return err
@@ -232,7 +241,10 @@ func AgentsTest(cfg *config.Config, email string) error {
 	if len(got.Toolset) != 1 || got.Toolset[0] != agentsTestToolset || got.ImplicitFullAccess {
 		return fmt.Errorf("get_agent reports toolset=%v implicitFullAccess=%v, wanted [%s]/false", got.Toolset, got.ImplicitFullAccess, agentsTestToolset)
 	}
-	note("get_agent reports toolset %v", got.Toolset)
+	if got.Harness != kagentHarness || got.ToolsetCarrier.Name != toolsetCarrierName(agentsTestAgent) || !got.ToolsetCarrier.Exists || got.ToolsetCarrier.Header != agentsTestToolset {
+		return fmt.Errorf("get_agent reports harness=%q toolsetCarrier=%+v, wanted %s and %s carrying %s", got.Harness, got.ToolsetCarrier, kagentHarness, toolsetCarrierName(agentsTestAgent), agentsTestToolset)
+	}
+	note("get_agent reports toolset %v on Harness %s, carrier %s (%s=%s)", got.Toolset, got.Harness, got.ToolsetCarrier.Name, toolsetHeader, got.ToolsetCarrier.Header)
 
 	step("%supdate_agent as %s", toolPrefix, user.Email)
 	var updated struct {
@@ -242,7 +254,7 @@ func AgentsTest(cfg *config.Config, email string) error {
 	if err := session.callServerJSON(toolPrefix+"update_agent", map[string]any{nameKey: agentsTestAgent, descriptionKey: "Updated by agentlab agents-test."}, &updated); err != nil {
 		return err
 	}
-	if updated.RequestedBy != user.Email || !slices.Contains(updated.Changed, "agent.description") {
+	if updated.RequestedBy != user.Email || !slices.Contains(updated.Changed, descriptionKey) {
 		return fmt.Errorf("update_agent: requestedBy=%q changed=%v", updated.RequestedBy, updated.Changed)
 	}
 	note("changed %v, requestedBy=%s", updated.Changed, updated.RequestedBy)
@@ -293,19 +305,18 @@ func AgentsTest(cfg *config.Config, email string) error {
 
 	step("%sdelete_agent %s as %s — the template and its carrier go", toolPrefix, agentsTestAgent, user.Email)
 	var deleted struct {
-		RequestedBy string `json:"requestedBy"`
+		RequestedBy          string `json:"requestedBy"`
+		AgentTemplateDeleted bool   `json:"agentTemplateDeleted"`
+		ToolsetCarrierDelete bool   `json:"toolsetCarrierDeleted"`
+		ToolsetCarrierKept   string `json:"toolsetCarrierKept"`
 	}
-	deletedText, err := session.callServerTool(toolPrefix+"delete_agent", map[string]any{nameKey: agentsTestAgent})
-	if err != nil {
+	if err := session.callServerJSON(toolPrefix+"delete_agent", map[string]any{nameKey: agentsTestAgent}, &deleted); err != nil {
 		return err
 	}
-	if err := json.Unmarshal([]byte(deletedText), &deleted); err != nil {
-		return fmt.Errorf("delete_agent: payload is not the expected JSON: %w\n%.300s", err, deletedText)
+	if deleted.RequestedBy != user.Email || !deleted.AgentTemplateDeleted || !deleted.ToolsetCarrierDelete {
+		return fmt.Errorf("delete_agent: requestedBy=%q agentTemplateDeleted=%v toolsetCarrierDeleted=%v (kept: %q), wanted %s and both deleted", deleted.RequestedBy, deleted.AgentTemplateDeleted, deleted.ToolsetCarrierDelete, deleted.ToolsetCarrierKept, user.Email)
 	}
-	if deleted.RequestedBy != user.Email {
-		return fmt.Errorf("delete_agent: requestedBy=%q, wanted %q (%.200s)", deleted.RequestedBy, user.Email, deletedText)
-	}
-	note("requestedBy=%s: %s", deleted.RequestedBy, excerpt(deletedText, 160))
+	note("AgentTemplate and carrier deleted, requestedBy=%s", deleted.RequestedBy)
 	if err := waitAgentTemplateGone(agentsTestAgent); err != nil {
 		return err
 	}
@@ -325,9 +336,13 @@ func AgentsTest(cfg *config.Config, email string) error {
 	return nil
 }
 
-// createdAgentTemplateKey is the flag in create_agent's `created` report that
-// says the AgentTemplate was written (the HelmRelease flag of the 0.x line).
-const createdAgentTemplateKey = "agentTemplate"
+// createdAgentTemplateKey and createdToolsetCarrierKey are the flags in
+// create_agent's `created` report: the AgentTemplate and the per-agent muster
+// carrier were written (the HelmRelease flag of the 0.x line).
+const (
+	createdAgentTemplateKey  = "agentTemplate"
+	createdToolsetCarrierKey = "toolsetCarrier"
+)
 
 // serviceAccountRules is `kubectl auth can-i --list --as=<principal> -n <ns>`:
 // the rules the apiserver grants the impersonated principal in the namespace,
