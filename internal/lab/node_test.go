@@ -13,8 +13,8 @@ import (
 
 // installFakeTool puts a stand-in for a command on PATH: a shell script that
 // appends every invocation ("<name> <args>") to the returned log file and
-// then runs body with the arguments in $@. The same device as installFakeKind,
-// for the docker and kubectl the node recovery shells out to.
+// then runs body with the arguments in $@, for the docker the node recovery
+// shells out to.
 func installFakeTool(t *testing.T, dir, name, body string) string {
 	t.Helper()
 	bin := filepath.Join(dir, "bin")
@@ -144,17 +144,18 @@ esac`)
 }
 
 // TestEnsureNodeRunning drives Up's node check against stand-ins for docker,
-// kind's kubeconfig read and kubectl: a running node is left completely alone
-// (no start, no kubeconfig export); an exited node is started, the kubeconfig
-// exported and the apiserver probed before Up goes on; a paused node is
-// unpaused; and a node docker cannot start fails by node, state and fix
-// instead of as the opaque kubeconfig-read error it used to be.
+// kind's kubeconfig read and the apiserver: a running node is left completely
+// alone (no start, no kubeconfig export, no probe); an exited node is
+// started, the kubeconfig exported and the apiserver's /readyz probed through
+// the embedded client before Up goes on; a paused node is unpaused; and a
+// node docker cannot start fails by node, state and fix instead of as the
+// opaque kubeconfig-read error it used to be.
 func TestEnsureNodeRunning(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
 	stubKindKubeconfig(t)
 	resetKindKubeconfigCache(t)
-	kubectlCalls := installFakeTool(t, dir, "kubectl", "exit 0")
+	lab := newFakeLab(t)
 	dockerCalls := installFakeTool(t, dir, "docker", `
 case "$1" in
 inspect) echo "$FAKE_NODE_STATE" ;;
@@ -177,6 +178,9 @@ esac`)
 	if _, err := os.Stat(labKubeconfigPath); !os.IsNotExist(err) {
 		t.Errorf("running node: kubeconfig export happened (%v); Up does that itself", err)
 	}
+	if lab.readyz != 0 {
+		t.Errorf("running node: the apiserver was probed %d times, want none", lab.readyz)
+	}
 
 	_ = os.Remove(dockerCalls)
 	t.Setenv("FAKE_NODE_STATE", stateExited)
@@ -189,8 +193,8 @@ esac`)
 	if raw, err := os.ReadFile(labKubeconfigPath); err != nil || string(raw) != fakeKindKubeconfig {
 		t.Errorf("exited node: kubeconfig not exported after the start (err %v)", err)
 	}
-	if log := readCalls(t, kubectlCalls); log != "kubectl get --raw=/readyz\n" {
-		t.Errorf("exited node: kubectl calls = %q, want one /readyz probe", log)
+	if lab.readyz != 1 {
+		t.Errorf("exited node: /readyz probed %d times, want once", lab.readyz)
 	}
 
 	_ = os.Remove(dockerCalls)

@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -193,12 +194,14 @@ func ensureNodeRunning(cfg *config.Config) error {
 		return fmt.Errorf("node container %s is %s and could not be started: %w;\nrun `agentlab up` again once `docker ps -a` shows it settled, or `agentlab down` to start over", node, state, err)
 	}
 	// Only a running node has a kubeconfig to export (kind reads it off the
-	// node); from here on the lab's kubectl is pinned to it.
+	// node); from here on the lab's clients are bound to it.
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
 	}
 	if !waitFor(60, 2*time.Second, func() bool {
-		_, err := outputQuiet("kubectl", "get", "--raw=/readyz")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, err := rawGet(ctx, "/readyz")
 		return err == nil
 	}) {
 		return fmt.Errorf("node container %s started but its apiserver never answered /readyz; check `docker logs %s` and `docker exec %s crictl ps`, or `agentlab down` to start over", node, node, node)

@@ -26,10 +26,16 @@ func labRESTClientGetter(namespace string) genericclioptions.RESTClientGetter {
 		ns := namespace
 		flags.Namespace = &ns
 	}
-	return flags.WithWrapConfigFn(func(c *rest.Config) *rest.Config {
-		c.QPS = 50
-		c.Burst = 100
-		c.UserAgent = "agentlab/" + project.Version()
-		return c
-	})
+	return flags.WithWrapConfigFn(tuneRESTConfig)
+}
+
+// tuneRESTConfig is the lab's tuning of a REST config, whoever it
+// authenticates as: the rate limit a boot needs (client-go's default of five
+// requests a second throttles an install of the platform's size) and the
+// user agent that identifies the lab in the apiserver's audit log.
+func tuneRESTConfig(c *rest.Config) *rest.Config {
+	c.QPS = 50
+	c.Burst = 100
+	c.UserAgent = "agentlab/" + project.Version()
+	return c
 }

@@ -36,7 +36,9 @@ func warn(format string, a ...any) {
 // by command; every other subprocess (docker) inherits the environment
 // untouched. kind and Helm are not subprocesses: both are embedded — kind
 // (kind.go) drives docker — or podman — through its CLI itself, Helm
-// (helm.go) is bound to the same lab kubeconfig through labRESTClientGetter.
+// (helm.go) is bound to the same lab kubeconfig through labRESTClientGetter,
+// and so is the Kubernetes client (kube.go) that replaces kubectl call by
+// call.
 const (
 	dockerBin  = "docker"
 	kubectlBin = "kubectl"
@@ -158,48 +160,4 @@ func notReached(subject, want, last string, readErr error, hint string) error {
 		return fmt.Errorf("%s: kubectl failed: %w;\n%s", subject, readErr, hint)
 	}
 	return fmt.Errorf("%s never reached %s (last status: %q);\n%s", subject, want, last, hint)
-}
-
-// ensureNamespace idempotently creates a namespace (the dry-run|apply trick,
-// so re-runs are clean no-ops).
-func ensureNamespace(ns string) error {
-	manifest, err := output("kubectl", "create", "namespace", ns, "--dry-run=client", "-o", "yaml")
-	if err != nil {
-		return err
-	}
-	return pipeInto([]byte(manifest), "kubectl", "apply", "-f", "-")
-}
-
-// ensureSecretFromFiles idempotently applies a generic secret built from
-// files, same dry-run|apply trick as ensureNamespace.
-func ensureSecretFromFiles(ns, name string, files map[string]string) error {
-	args := []string{"-n", ns, "create", "secret", "generic", name}
-	for key, path := range files {
-		args = append(args, "--from-file="+key+"="+path)
-	}
-	args = append(args, "--dry-run=client", "-o", "yaml")
-	manifest, err := output("kubectl", args...)
-	if err != nil {
-		return err
-	}
-	return pipeInto([]byte(manifest), "kubectl", "apply", "-f", "-")
-}
-
-// ensureTLSSecret idempotently applies a kubernetes.io/tls secret from a cert
-// and key file — the type the Gateway API's certificateRefs require, which
-// ensureSecretFromFiles's generic secrets are not.
-func ensureTLSSecret(ns, name, certPath, keyPath string) error {
-	manifest, err := output("kubectl", "-n", ns, "create", "secret", "tls", name,
-		"--cert="+certPath, "--key="+keyPath, "--dry-run=client", "-o", "yaml")
-	if err != nil {
-		return err
-	}
-	return pipeInto([]byte(manifest), "kubectl", "apply", "-f", "-")
-}
-
-// secretHasKey reports whether a secret exists and carries the given data key.
-func secretHasKey(ns, name, key string) bool {
-	out, err := outputQuiet("kubectl", "-n", ns, "get", "secret", name,
-		"-o", "jsonpath={.data."+strings.ReplaceAll(key, ".", `\.`)+"}")
-	return err == nil && strings.TrimSpace(out) != ""
 }

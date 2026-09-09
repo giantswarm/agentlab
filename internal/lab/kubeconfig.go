@@ -22,7 +22,8 @@ const (
 	// kind-<cluster> context), written by the embedded kind at cluster
 	// creation and by useClusterKubeconfig on every cluster-facing command,
 	// set as KUBECONFIG on every kubectl the lab runs (exec.go) and bound to
-	// the embedded Helm (restclient.go). The one kubeconfig the lab writes —
+	// the embedded Helm and Kubernetes client (restclient.go, kube.go). The
+	// one kubeconfig the lab writes —
 	// the user's own is never read or merged into. Under StateDir like every
 	// other generated artifact; `KUBECONFIG=state/kubeconfig kubectl ...` (or
 	// `helm ...`) is the same view from a shell.
@@ -64,8 +65,9 @@ func kindKubeconfig(clusterName string) ([]byte, error) {
 
 // useClusterKubeconfig exports the kind cluster's kubeconfig to
 // labKubeconfigPath. Every command that talks to the cluster calls it first:
-// from then on its kubectl and its embedded Helm are deterministic about the
-// cluster (the one agentlab.yaml names), and a lab that is not running fails right here
+// from then on its kubectl, its embedded Helm and its Kubernetes client are
+// deterministic about the cluster (the one agentlab.yaml names), and a lab
+// that is not running fails right here
 // instead of as an opaque kubectl error — or, worse, as a command against
 // whatever cluster the shell's own kubeconfig happens to point at. The user's
 // kubeconfig and current-context are never read or changed.
@@ -77,7 +79,13 @@ func useClusterKubeconfig(cfg *config.Config) error {
 	if err := os.MkdirAll(StateDir, 0o750); err != nil {
 		return err
 	}
-	return os.WriteFile(labKubeconfigPath, raw, 0o600)
+	if err := os.WriteFile(labKubeconfigPath, raw, 0o600); err != nil {
+		return err
+	}
+	// The embedded client (kube.go) is built from this file: a bundle built
+	// before the rewrite must not outlive it.
+	resetLabKube()
+	return nil
 }
 
 // kindClusterEntry is the cluster entry (name and server/CA) of the kind
