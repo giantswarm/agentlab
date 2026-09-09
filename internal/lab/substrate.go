@@ -228,7 +228,7 @@ func ensureSubstratePools(ctx context.Context) (created int, err error) {
 			return created, fmt.Errorf("generating pool %s/%s: %w", pool.namespace, pool.name, err)
 		}
 		if err := createTyped(ctx, &corev1.Secret{
-			TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"},
+			TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: kindSecret},
 			ObjectMeta: metav1.ObjectMeta{Name: pool.name, Namespace: pool.namespace},
 			Type:       secretType,
 			Data:       data,

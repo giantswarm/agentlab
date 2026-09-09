@@ -156,14 +156,16 @@ func newFakeLab(t *testing.T, objects ...runtime.Object) *fakeLab {
 		}
 	}
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(usch, map[schema.GroupVersionResource]string{
-		gvrCRDs:            "CustomResourceDefinitionList",
-		widgetGVR:          "WidgetList",
-		fluxHelmReleaseGVR: "HelmReleaseList",
-		musterMCPServerGVR: "MCPServerList",
-		prometheusGVR:      "PrometheusList",
-		serviceMonitorGVR:  "ServiceMonitorList",
-		gvrModelConfigs:    "ModelConfigList",
-		gvrAgents:          "AgentList",
+		gvrCRDs:             "CustomResourceDefinitionList",
+		widgetGVR:           "WidgetList",
+		fluxHelmReleaseGVR:  "HelmReleaseList",
+		musterMCPServerGVR:  "MCPServerList",
+		prometheusGVR:       "PrometheusList",
+		serviceMonitorGVR:   "ServiceMonitorList",
+		gvrModelConfigs:     "ModelConfigList",
+		gvrAgentTemplates:   "AgentTemplateList",
+		gvrRemoteMCPServers: "RemoteMCPServerList",
+		gvrAgents:           "AgentList",
 	}, seeds...)
 	dyn.PrependReactor("patch", "*", fakeApply(dyn.Tracker()))
 
@@ -184,9 +186,11 @@ func newFakeLab(t *testing.T, objects ...runtime.Object) *fakeLab {
 		musterMCPServerGVK,
 		prometheusGVK,
 		serviceMonitorGVK,
-		// kagent's ModelConfig and Agent, which the proofs read and write
-		// (crds_test.go).
+		// kagent's ModelConfig, AgentTemplate and RemoteMCPServer, which the
+		// proofs read and write (crds_test.go).
 		gvkModelConfig,
+		gvkAgentTemplate,
+		gvkRemoteMCPServer,
 		gvkAgent,
 	} {
 		mapper.Add(gvk, meta.RESTScopeNamespace)
@@ -758,16 +762,16 @@ func TestWaitCondition(t *testing.T) {
 	ready.SetKind("ConfigMap")
 	ready.SetNamespace(testNS)
 	ready.SetName("ok")
-	_ = unstructured.SetNestedSlice(ready.Object, []any{map[string]any{fieldType: condReady, fieldStatus: "True"}}, fieldStatus, "conditions")
+	_ = unstructured.SetNestedSlice(ready.Object, []any{map[string]any{fieldType: condReady, fieldStatus: conditionTrue}}, fieldStatus, "conditions")
 	notReady := ready.DeepCopy()
 	notReady.SetName("nope")
 	_ = unstructured.SetNestedSlice(notReady.Object, []any{map[string]any{fieldType: condReady, fieldStatus: condFalse, fieldMessage: "waiting on the model"}}, fieldStatus, "conditions")
 	newFakeLab(t, ready, notReady)
 	ctx := context.Background()
-	if err := waitCondition(ctx, gvrConfigMaps, testNS, "ok", condReady, "True", time.Second); err != nil {
+	if err := waitCondition(ctx, gvrConfigMaps, testNS, "ok", condReady, conditionTrue, time.Second); err != nil {
 		t.Errorf("met condition: %v", err)
 	}
-	err := waitCondition(ctx, gvrConfigMaps, testNS, "nope", condReady, "True", 20*time.Millisecond)
+	err := waitCondition(ctx, gvrConfigMaps, testNS, "nope", condReady, conditionTrue, 20*time.Millisecond)
 	if err == nil {
 		t.Fatal("an unmet condition must hit the deadline")
 	}
@@ -776,7 +780,7 @@ func TestWaitCondition(t *testing.T) {
 			t.Errorf("deadline error %q lacks %q", err, want)
 		}
 	}
-	if err := waitCondition(ctx, gvrConfigMaps, testNS, "absent", condReady, "True", time.Second); err == nil || !apierrors.IsNotFound(err) {
+	if err := waitCondition(ctx, gvrConfigMaps, testNS, "absent", condReady, conditionTrue, time.Second); err == nil || !apierrors.IsNotFound(err) {
 		t.Errorf("a missing object: %v, want the apiserver's NotFound", err)
 	}
 }
@@ -794,6 +798,8 @@ func TestGvrFor(t *testing.T) {
 		fluxHelmReleaseResource:                              fluxHelmReleaseGVR,
 		musterMCPServerResource:                              musterMCPServerGVR,
 		modelConfigResource:                                  gvrModelConfigs,
+		agentTemplateResource:                                gvrAgentTemplates,
+		remoteMCPServerResource:                              gvrRemoteMCPServers,
 	} {
 		if got, err := gvrFor(arg); err != nil || got != want {
 			t.Errorf("gvrFor(%q) = %v, %v; want %v", arg, got, err, want)
@@ -822,7 +828,7 @@ func TestCanI(t *testing.T) {
 		return true, review, nil
 	})
 	seen := stubClientsetFor(t, cs)
-	cfg := &rest.Config{Host: "https://127.0.0.1:34547", BearerToken: "tok"}
+	cfg := &rest.Config{Host: "https://127.0.0.1:34547", BearerToken: testToken}
 	ctx := context.Background()
 
 	allowed, err := canI(ctx, cfg, verbCreate, gvrDeployments.Resource, "kube-system")
@@ -935,14 +941,14 @@ func TestTokenConfig(t *testing.T) {
 	if err := os.WriteFile(labKubeconfigPath, []byte(fakeKindKubeconfig), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := tokenConfig("tok")
+	cfg, err := tokenConfig(testToken)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cfg.Host != fakeKindServer || string(cfg.CAData) != "foo" {
 		t.Errorf("endpoint/CA = %q %q", cfg.Host, cfg.CAData)
 	}
-	if cfg.BearerToken != "tok" {
+	if cfg.BearerToken != testToken {
 		t.Errorf("bearer token = %q", cfg.BearerToken)
 	}
 	tls := cfg.TLSClientConfig
@@ -966,7 +972,7 @@ func TestTokenConfig(t *testing.T) {
 	}
 
 	_ = os.Remove(labKubeconfigPath)
-	if _, err := tokenConfig("tok"); err == nil || !strings.Contains(err.Error(), labKubeconfigPath) {
+	if _, err := tokenConfig(testToken); err == nil || !strings.Contains(err.Error(), labKubeconfigPath) {
 		t.Errorf("a lab that is not up must fail on the kubeconfig by name, got %v", err)
 	}
 }

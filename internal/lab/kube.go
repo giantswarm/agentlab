@@ -1220,6 +1220,9 @@ func rawGet(ctx context.Context, path string) ([]byte, error) {
 // read next to them. Server-side applied like everything else, so re-runs
 // are clean no-ops.
 
+// kindSecret is a Secret's kind, as a TypeMeta and a valueFrom reference spell it.
+const kindSecret = "Secret"
+
 // ensureNamespace idempotently creates a namespace.
 func ensureNamespace(ns string) error {
 	_, err := applyTyped(context.Background(), &corev1.Namespace{
@@ -1264,7 +1267,7 @@ func ensureTLSSecret(ns, name, certPath, keyPath string) error {
 
 func ensureSecret(ns, name string, secretType corev1.SecretType, data map[string][]byte) error {
 	_, err := applyTyped(context.Background(), &corev1.Secret{
-		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"},
+		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: kindSecret},
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 		Type:       secretType,
 		Data:       data,

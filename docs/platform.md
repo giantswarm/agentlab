@@ -234,15 +234,19 @@ to be running for). Substrate's bundled PostgreSQL requests 1 CPU / 1 GiB,
 so the dev channel's floor is one CPU and about 2 GiB above the stable lab's
 — see [Docker resources](getting-started.md#docker-resources).
 
-**Proofs on the dev channel.** `platform-test`, `test` and the sign-in half
-of `backstage-test` run unchanged (platform-test expects a kagent scrape
-target only while a controller ServiceMonitor exists — the dev channel's
-kagent serves no metrics listener, and the lab renders none for it). The
-agent proofs — `agents-test`, `toolsets-test`, `models-test`'s agent turn,
-`backstage-test`'s agents pages — drive the released kagent's API (Agent CRs
-delivered as HelmReleases); kagent API v2 has `AgentTemplate`s and
-`Harness`es instead, so on the dev channel they do not apply until the
-proofs dispatch on the API the cluster serves, the dev channel's next step.
+**Proofs on the dev channel.** Every proof runs on both channels.
+`platform-test`, `test` and the sign-in half of `backstage-test` are the same
+(platform-test expects a kagent scrape target only while a controller
+ServiceMonitor exists — the dev channel's kagent serves no metrics listener,
+and the lab renders none for it). The agent proofs — `agents-test`,
+`toolsets-test`, `models-test`'s agent turn, `backstage-test`'s agents
+pages — follow the kagent API the cluster serves and say which at the start:
+the released kagent's Agent CRs delivered as HelmReleases on the stable
+channel; on the dev channel kagent API v2's `AgentTemplate`s admitted by the
+Go ADK `Harness` and run as Substrate actors, a turn being an
+`AgentInstance` driven over gRPC-Web through the edge as the signed-in user,
+the toolset on the per-agent muster carrier (`RemoteMCPServer`) the template
+binds, and the portal's Agent Platform pages (`backstage-test`).
 
 ## The request path
 
