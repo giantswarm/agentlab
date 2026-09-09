@@ -106,7 +106,7 @@ func TestFleetFixtureTemplate(t *testing.T) {
 			"apiVersion":              {cr.APIVersion, "muster.giantswarm.io/v1alpha1"},
 			"kind":                    {cr.Kind, "MCPServer"},
 			"name":                    {cr.Metadata.Name, fam.Name + "-" + cluster},
-			"namespace":               {cr.Metadata.Namespace, platformNamespace},
+			fieldNamespace:            {cr.Metadata.Namespace, platformNamespace},
 			managedByLabel:            {cr.Metadata.Labels[managedByLabel], managedByAgentlabValue},
 			fleetFixtureLabel:         {cr.Metadata.Labels[fleetFixtureLabel], fleetFixtureValue},
 			"muster type label":       {cr.Metadata.Labels["muster.giantswarm.io/type"], fam.Type},
