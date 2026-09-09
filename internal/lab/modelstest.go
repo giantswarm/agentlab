@@ -2,6 +2,7 @@ package lab
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +11,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -204,11 +207,11 @@ func ModelsTest(cfg *config.Config, email, backendName, model string) error {
 	if err := waitModelConfigAccepted(mcName); err != nil {
 		return err
 	}
-	spec, err := outputQuiet("kubectl", "-n", kagentNamespace, "get", modelConfigResource, mcName,
-		"-o", `jsonpath={.spec.provider} {.spec.model} {.spec.ollama.host}{.spec.openAI.baseUrl} backend={.metadata.labels.model-manager\.giantswarm\.io/backend} managed-by={.metadata.labels.app\.kubernetes\.io/managed-by}`)
+	mc, err := readKagentObject(modelConfigResource, mcName)
 	if err != nil {
 		return err
 	}
+	spec := modelConfigSummary(mc)
 	// model-manager writes the native keyless Ollama provider for ollama and
 	// the OpenAI provider on /api/v1 (placeholder key) for lemonade.
 	wantProvider, providerNote := config.ProviderOllama, "keyless native provider"
@@ -304,11 +307,8 @@ func ModelsTest(cfg *config.Config, email, backendName, model string) error {
 	if err := api.deleteModel(model, backendName); err != nil {
 		return err
 	}
-	if _, err := outputQuiet("kubectl", "-n", kagentNamespace, "get", modelConfigResource, mcName); err == nil {
-		gone := waitFor(15, 2*time.Second, func() bool {
-			_, err := outputQuiet("kubectl", "-n", kagentNamespace, "get", modelConfigResource, mcName)
-			return err != nil
-		})
+	if modelConfigExists(mcName) {
+		gone := waitFor(15, 2*time.Second, func() bool { return !modelConfigExists(mcName) })
 		if !gone {
 			return fmt.Errorf("ModelConfig %s survived the delete", mcName)
 		}
@@ -492,14 +492,18 @@ spec:
     modelConfig: %s
     systemMessage: You are a terse assistant. Answer in one short line.
 `, modelsTestAgent, kagentNamespace, modelConfig)
-	if err := pipeInto([]byte(manifest), "kubectl", "apply", "-f", "-"); err != nil {
+	ctx := context.Background()
+	agents, err := gvrFor(kagentAgentResource)
+	if err != nil {
+		return "", err
+	}
+	if _, err := applyManifests(ctx, []byte(manifest)); err != nil {
 		return "", err
 	}
 	defer func() {
-		_ = runQuiet("kubectl", "-n", kagentNamespace, "delete", "agents.kagent.dev", modelsTestAgent, "--ignore-not-found", "--wait=false")
+		_ = deleteObject(ctx, agents, kagentNamespace, modelsTestAgent, 0)
 	}()
-	if err := runQuiet("kubectl", "-n", kagentNamespace, "wait", "--for=condition=Ready", "--timeout=240s",
-		"agents.kagent.dev/"+modelsTestAgent); err != nil {
+	if err := waitCondition(ctx, agents, kagentNamespace, modelsTestAgent, "Ready", "True", 240*time.Second); err != nil {
 		return "", fmt.Errorf("agent %s never became Ready: %w", modelsTestAgent, err)
 	}
 	// The pod may report Ready a moment before the ADK listens; a short retry
@@ -517,6 +521,27 @@ spec:
 		return "", fmt.Errorf("A2A turn against %s failed: %w", modelsTestAgent, lastErr)
 	}
 	return reply, nil
+}
+
+// modelConfigExists reports whether the ModelConfig is there; a read that
+// fails counts as absent, as the CLI probe's non-zero exit did.
+func modelConfigExists(name string) bool {
+	_, err := readKagentObject(modelConfigResource, name)
+	return err == nil
+}
+
+// modelConfigSummary words a ModelConfig the way the proof's jsonpath did:
+// "<provider> <model> <ollama host or openAI baseUrl> backend=<backend label>
+// managed-by=<managed-by label>" — the string the provider and label
+// assertions read.
+func modelConfigSummary(mc *unstructured.Unstructured) string {
+	provider, _, _ := unstructured.NestedString(mc.Object, "spec", "provider")
+	model, _, _ := unstructured.NestedString(mc.Object, "spec", "model")
+	ollamaHost, _, _ := unstructured.NestedString(mc.Object, "spec", "ollama", "host")
+	openAIBaseURL, _, _ := unstructured.NestedString(mc.Object, "spec", "openAI", "baseUrl")
+	labels := mc.GetLabels()
+	return fmt.Sprintf("%s %s %s%s backend=%s managed-by=%s", provider, model, ollamaHost, openAIBaseURL,
+		labels["model-manager.giantswarm.io/backend"], labels[managedByLabel])
 }
 
 // a2aSend posts one JSON-RPC message/send and returns the agent's text: the
