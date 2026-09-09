@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -38,6 +39,10 @@ const kindDockerNetwork = "kind"
 // alpine image the umbrella already ships elsewhere (small, present in the
 // host cache after the first run, side-loaded before the probe pod).
 const probeImage = "gsoci.azurecr.io/giantswarm/alpine:3.22.1"
+
+// probePodTimeout bounds the reachability probe: the pod scheduled, its image
+// present (side-loaded first), wget's own five-second timeout inside.
+const probePodTimeout = 120 * time.Second
 
 // The version-answering paths of the servers: Ollama's whole document is
 // {"version":"..."}, Lemonade's health document carries a version field.
@@ -181,16 +186,14 @@ func preflightHostServer(cfg *config.Config, backend, endpoint string) error {
 	// the kubelet's pull under the pod-running timeout).
 	sideloadImages(cfg, hostPullImages([]string{probeImage}))
 	pod := backend + "-preflight"
-	// A leftover from an interrupted run would make `kubectl run` refuse.
-	_ = runQuiet("kubectl", "-n", platformNamespace, "delete", "pod", pod, "--ignore-not-found", "--wait=false")
-	out, err := outputAll("kubectl", "-n", platformNamespace, "run", pod,
-		"--rm", "-i", "--quiet", "--restart=Never", "--pod-running-timeout=120s",
-		"--image="+probeImage, "--image-pull-policy=IfNotPresent",
-		"--command", "--", "wget", "-qO-", "-T", "5", endpoint+healthPath(backend))
+	// One probe pod running wget (a leftover of the same name from an
+	// interrupted run is removed first); its output is the container's log,
+	// wget's error message included.
+	out, err := runProbePod(context.Background(), platformNamespace, pod, probeImage,
+		[]string{"wget", "-qO-", "-T", "5", endpoint + healthPath(backend)}, probePodTimeout)
 	if err == nil && strings.Contains(out, `"version"`) {
-		// The combined output also carries kubectl's own attach chatter
-		// ("warning: couldn't attach to pod ..., falling back to logs"), so
-		// pick the version field out of it.
+		// The health document may carry more than the version (Lemonade's
+		// does), so pick the version field out of it.
 		version := strings.TrimSpace(out)
 		if m := versionFieldRe.FindString(out); m != "" {
 			version = m

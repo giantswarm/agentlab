@@ -55,14 +55,31 @@ const (
 	fieldType      = "type"
 	condReady      = "Ready"
 	condFalse      = "False"
-	verbGet        = "get"
-	verbList       = "list"
-	verbCreate     = "create"
+	// The keys of an unstructured object the tests build by hand, and
+	// helm-controller's message for a release it gave up on.
+	fieldAPIVersion  = "apiVersion"
+	fieldKind        = "kind"
+	fieldMetadata    = "metadata"
+	fieldMessage     = "message"
+	fieldNamespace   = "namespace"
+	retriesExhausted = "install retries exhausted"
+	verbGet          = "get"
+	verbList         = "list"
+	verbCreate       = "create"
 )
 
 var (
 	widgetGVK = schema.GroupVersionKind{Group: widgetGroup, Version: "v1", Kind: widgetKind}
 	widgetGVR = schema.GroupVersionResource{Group: widgetGroup, Version: "v1", Resource: "widgets"}
+	// The custom kinds the lab reads through gvrFor, as the fake apiserver
+	// serves them: Flux's HelmRelease, muster's MCPServer, the operator's
+	// Prometheus.
+	fluxHelmReleaseGVK = schema.GroupVersionKind{Group: "helm.toolkit.fluxcd.io", Version: "v2", Kind: "HelmRelease"}
+	fluxHelmReleaseGVR = fluxHelmReleaseGVK.GroupVersion().WithResource("helmreleases")
+	musterMCPServerGVK = schema.GroupVersionKind{Group: "muster.giantswarm.io", Version: "v1alpha1", Kind: "MCPServer"}
+	musterMCPServerGVR = musterMCPServerGVK.GroupVersion().WithResource("mcpservers")
+	prometheusGVK      = schema.GroupVersionKind{Group: "monitoring.coreos.com", Version: "v1", Kind: "Prometheus"}
+	prometheusGVR      = prometheusGVK.GroupVersion().WithResource("prometheuses")
 )
 
 // fakeLab is a kubeClients bundle on fakes, installed as the lab's client for
@@ -137,8 +154,11 @@ func newFakeLab(t *testing.T, objects ...runtime.Object) *fakeLab {
 		}
 	}
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(usch, map[schema.GroupVersionResource]string{
-		gvrCRDs:   "CustomResourceDefinitionList",
-		widgetGVR: "WidgetList",
+		gvrCRDs:            "CustomResourceDefinitionList",
+		widgetGVR:          "WidgetList",
+		fluxHelmReleaseGVR: "HelmReleaseList",
+		musterMCPServerGVR: "MCPServerList",
+		prometheusGVR:      "PrometheusList",
 	}, seeds...)
 	dyn.PrependReactor("patch", "*", fakeApply(dyn.Tracker()))
 
@@ -155,6 +175,9 @@ func newFakeLab(t *testing.T, objects ...runtime.Object) *fakeLab {
 		corev1.SchemeGroupVersion.WithKind("ConfigMap"),
 		corev1.SchemeGroupVersion.WithKind("Pod"),
 		appsv1.SchemeGroupVersion.WithKind(kindDeployment),
+		fluxHelmReleaseGVK,
+		musterMCPServerGVK,
+		prometheusGVK,
 	} {
 		mapper.Add(gvk, meta.RESTScopeNamespace)
 	}
@@ -433,8 +456,51 @@ spec:
 			t.Errorf("unknown-kind error %q lacks %q", err, want)
 		}
 	}
-	if f2.resets != 0 {
-		t.Errorf("no CRD in the batch, yet the mapper was reset %d times", f2.resets)
+	if f2.resets != 1 {
+		t.Errorf("the mapper was reset %d times for an unknown kind, want 1 (the miss's one retry; no CRD in the batch to wait for)", f2.resets)
+	}
+}
+
+// TestMapperMissResetsOnce: a resource or kind the cached discovery does not
+// know — the CRD arrived after the cache was primed, as the kinds a Helm
+// install brings do — resets the cache once and resolves on the retry, for
+// gvrFor and for an apply alike; a kind nobody serves costs one reset and
+// fails as before.
+func TestMapperMissResetsOnce(t *testing.T) {
+	f := newFakeLab(t)
+	f.onReset = func(f *fakeLab) { f.mapper.Add(widgetGVK, meta.RESTScopeNamespace) }
+	gvr, err := gvrFor("widgets.example.com")
+	if err != nil || gvr != widgetGVR {
+		t.Fatalf("gvrFor after the CRD arrived = %v, %v; want %v", gvr, err, widgetGVR)
+	}
+	if f.resets != 1 {
+		t.Errorf("mapper reset %d times, want 1 (the miss)", f.resets)
+	}
+	if _, err := gvrFor("widgets.example.com"); err != nil || f.resets != 1 {
+		t.Errorf("a known resource must resolve from the cache: %v, resets %d", err, f.resets)
+	}
+
+	f2 := newFakeLab(t)
+	f2.onReset = func(f *fakeLab) { f.mapper.Add(widgetGVK, meta.RESTScopeNamespace) }
+	results, err := applyManifests(context.Background(), []byte(`apiVersion: example.com/v1
+kind: Widget
+metadata:
+  name: w
+  namespace: demo
+`))
+	if err != nil || len(results) != 1 || !results[0].changed {
+		t.Fatalf("applying a kind the cache learns on reset: %+v, %v", results, err)
+	}
+	if f2.resets != 1 {
+		t.Errorf("mapper reset %d times for the apply, want 1", f2.resets)
+	}
+
+	f3 := newFakeLab(t)
+	if _, err := gvrFor("gadgets.example.com"); err == nil || !strings.Contains(err.Error(), `serves no resource "gadgets.example.com"`) {
+		t.Errorf("an unserved resource: %v", err)
+	}
+	if f3.resets != 1 {
+		t.Errorf("mapper reset %d times for an unserved resource, want 1", f3.resets)
 	}
 }
 
@@ -657,13 +723,13 @@ func TestConditions(t *testing.T) {
 	obj := &unstructured.Unstructured{Object: map[string]any{
 		fieldStatus: map[string]any{"conditions": []any{
 			map[string]any{fieldType: "Reconciling", fieldStatus: "Unknown"},
-			map[string]any{fieldType: condReady, fieldStatus: condFalse, "message": "install retries exhausted"},
+			map[string]any{fieldType: condReady, fieldStatus: condFalse, fieldMessage: retriesExhausted},
 		}},
 	}}
 	if s := conditionStatus(obj, condReady); s != condFalse {
 		t.Errorf("Ready status = %q", s)
 	}
-	if m := conditionMessage(obj, condReady); m != "install retries exhausted" {
+	if m := conditionMessage(obj, condReady); m != retriesExhausted {
 		t.Errorf("Ready message = %q", m)
 	}
 	if s, m := conditionStatus(obj, "Healthy"), conditionMessage(obj, "Healthy"); s != "" || m != "" {
@@ -685,7 +751,7 @@ func TestWaitCondition(t *testing.T) {
 	_ = unstructured.SetNestedSlice(ready.Object, []any{map[string]any{fieldType: condReady, fieldStatus: "True"}}, fieldStatus, "conditions")
 	notReady := ready.DeepCopy()
 	notReady.SetName("nope")
-	_ = unstructured.SetNestedSlice(notReady.Object, []any{map[string]any{fieldType: condReady, fieldStatus: condFalse, "message": "waiting on the model"}}, fieldStatus, "conditions")
+	_ = unstructured.SetNestedSlice(notReady.Object, []any{map[string]any{fieldType: condReady, fieldStatus: condFalse, fieldMessage: "waiting on the model"}}, fieldStatus, "conditions")
 	newFakeLab(t, ready, notReady)
 	ctx := context.Background()
 	if err := waitCondition(ctx, gvrConfigMaps, testNS, "ok", condReady, "True", time.Second); err != nil {
@@ -720,7 +786,7 @@ func TestGvrFor(t *testing.T) {
 			t.Errorf("gvrFor(%q) = %v, %v; want %v", arg, got, err, want)
 		}
 	}
-	if _, err := gvrFor("helmreleases.helm.toolkit.fluxcd.io"); err == nil || !strings.Contains(err.Error(), "helmreleases.helm.toolkit.fluxcd.io") {
+	if _, err := gvrFor("kustomizations.kustomize.toolkit.fluxcd.io"); err == nil || !strings.Contains(err.Error(), "kustomizations.kustomize.toolkit.fluxcd.io") {
 		t.Errorf("an unserved resource must fail by name, got %v", err)
 	}
 }
