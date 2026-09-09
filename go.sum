@@ -218,8 +218,8 @@ github.com/fxamacker/cbor/v2 v2.9.0 h1:NpKPmjDBgUfBms6tr6JZkTHtfFGcMKsw3eGcmD/sa
 github.com/fxamacker/cbor/v2 v2.9.0/go.mod h1:vM4b+DJCtHn+zz7h3FFp/hDAI9WNWCsZj23V5ytsSxQ=
 github.com/giantswarm/selfupdate-cosign v0.1.0 h1:KRfPVIzbaDjO658QcPsFmof0QUAEj6AnIZ2e9mCbThA=
 github.com/giantswarm/selfupdate-cosign v0.1.0/go.mod h1:CVnryjSRY/xDqJDn+QeivgT8+WkOvVbY/Z+xLaIfZ1w=
-github.com/giantswarm/telemetrydeck-go v0.2.0 h1:Ojw0XncmOEQyM68TK+4T9IYnU6xmJMFM/vr3oS8eb+I=
-github.com/giantswarm/telemetrydeck-go v0.2.0/go.mod h1:BitlH7nTrQmWvVEtnAa8pNM+FjI0+9S7JA9tl1PVvzo=
+github.com/giantswarm/telemetrydeck-go v0.2.2 h1:O6JSBjOXJIcWRwd4NAfHh/h5pJ5ZVsgVi3mO9gVHQfc=
+github.com/giantswarm/telemetrydeck-go v0.2.2/go.mod h1:BitlH7nTrQmWvVEtnAa8pNM+FjI0+9S7JA9tl1PVvzo=
 github.com/go-chi/chi/v5 v5.3.0 h1:halUjDxhshgXHMrao5bB8eNBXo/rnzwr8m5m36glehM=
 github.com/go-chi/chi/v5 v5.3.0/go.mod h1:R+tYY2hNuVUUjxoPtqUdgBqevM9s9njzkTLutVsOCto=
 github.com/go-errors/errors v1.5.1 h1:ZwEMSLRCapFLflTpT7NKaAc7ukJ8ZPEjzlxt8rPN8bk=
