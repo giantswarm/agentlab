@@ -62,10 +62,10 @@ func kindNodeImage() string {
 	return img
 }
 
-// kindToolVersion is the kind entry of the discovery report: the embedded
-// release and the node image it boots, "v0.32.0 (embedded, kindest/node:v1.36.1)".
+// kindToolVersion is the kind entry of the discovery report's embedded
+// tools: the release and the node image it boots, "v0.32.0 (kindest/node:v1.36.1)".
 func kindToolVersion() string {
-	return fmt.Sprintf("%s (embedded, %s)", kindVersion(), kindNodeImage())
+	return fmt.Sprintf("%s (%s)", kindVersion(), kindNodeImage())
 }
 
 // kindCreateCluster creates the cluster from the rendered kind config, waits

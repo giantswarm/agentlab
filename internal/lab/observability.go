@@ -156,9 +156,11 @@ func mcpPrometheusUp(cfg *config.Config) error {
 		return err
 	}
 	var status platformReleaseStatus
+	var readErr error
 	ready := waitFor(60, 5*time.Second, func() bool {
-		releases, err := platformReleases()
-		if err != nil {
+		var releases []platformReleaseStatus
+		releases, readErr = platformReleases()
+		if readErr != nil {
 			return false
 		}
 		for _, r := range releases {
@@ -170,7 +172,14 @@ func mcpPrometheusUp(cfg *config.Config) error {
 		return false
 	})
 	if !ready {
-		return notReached("HelmRelease "+mcpPrometheusRelease, conditionReady, status.ready, fmt.Errorf("%s", status.message),
+		// The Ready condition's message is the controller's own account of
+		// why (a failed chart pull, a timed-out install): part of the last
+		// status, not a failure of the read.
+		last := status.ready
+		if status.message != "" {
+			last += " (" + status.message + ")"
+		}
+		return notReached("HelmRelease "+mcpPrometheusRelease, conditionReady, last, readErr,
 			fmt.Sprintf("check `kubectl -n %s describe helmrelease %s` and `kubectl -n %s get pods`", platformNamespace, mcpPrometheusRelease, observabilityNamespace))
 	}
 	return nil

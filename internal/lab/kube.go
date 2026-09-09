@@ -35,6 +35,8 @@ import (
 	"k8s.io/client-go/restmapper"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
+
+	"github.com/giantswarm/agentlab/pkg/project"
 )
 
 // The embedded Kubernetes client. Every call the lab makes to its cluster's
@@ -84,6 +86,15 @@ const pollInterval = 2 * time.Second
 
 // probeContainer names the one container of a probe pod (runProbePod).
 const probeContainer = "probe"
+
+// clientGoToolName names the Kubernetes client among the discovery report's
+// embedded tools; its version is the k8s.io/client-go this binary was built
+// with, which is the Kubernetes API generation it speaks.
+const clientGoToolName = "client-go"
+
+func clientGoToolVersion() string {
+	return project.ModuleVersion("k8s.io/client-go")
+}
 
 // restartedAtAnnotation is the pod-template annotation `kubectl rollout
 // restart` stamps to roll a Deployment.

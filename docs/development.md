@@ -23,12 +23,12 @@ out of the production usage numbers (see [Usage data](telemetry.md)).
 
 The rendered manifests are always in `state/` (`agentlab render` writes them
 without applying), so `kubectl diff -f state/dex.yaml` and plain reading stay
-possible. The lab's own `kubectl`, its embedded Helm and its embedded
-Kubernetes client never read your shell's kubeconfig: every cluster-facing
-command exports the kind cluster's kubeconfig to `state/kubeconfig` and binds
-to it (`KUBECONFIG` for kubectl, the REST client getter for Helm and the
-client), so `KUBECONFIG=state/kubeconfig kubectl ...` and
-`KUBECONFIG=state/kubeconfig helm ...` are the same view from a shell.
+possible. The lab never reads your shell's kubeconfig: every cluster-facing
+command exports the kind cluster's kubeconfig to `state/kubeconfig`, and its
+embedded Helm and Kubernetes client are built from that file alone (the REST
+client getter in `restclient.go`). `KUBECONFIG=state/kubeconfig kubectl ...`
+and `KUBECONFIG=state/kubeconfig helm -n agent-platform status agent-platform`
+are how a person looks at the same cluster from a shell.
 
 The Kubernetes client is embedded: `internal/lab/kube.go` is the vocabulary
 the package speaks to the apiserver through client-go — server-side apply of
@@ -38,9 +38,8 @@ refused as a conflict), reads by resource, deletes with the CLI's wait,
 patches, `rollout status`/`rollout restart`, `wait --for=condition`, the
 `auth can-i`/`auth whoami` reviews as a token or an impersonated principal,
 pod logs and a probe pod. Kinds resolve through a discovery-backed mapper
-cached in memory and reset after a batch carries CRDs. `kubectl` itself is
-still shelled out to for the calls not converted yet (exec.go), with
-`KUBECONFIG` pinned the same way.
+cached in memory and reset after a batch carries CRDs. No `kubectl` runs: the
+binary's only subprocess is `docker` (exec.go).
 
 Helm is embedded: `internal/lab/helm.go` runs Helm 4's SDK
 (`helm.sh/helm/v4/pkg/action`) in-process for the upgrade-or-install with
@@ -112,7 +111,7 @@ internal/lab/                    everything operational:
   backstage.go backstagetest.go    Backstage deploy + headless sign-in proof
   portal.go mcpsession.go          one user's signed-in portal session; the proofs' MCP session against muster
   kube.go                          the embedded Kubernetes client: server-side apply, reads, deletes, rollouts, the can-i/whoami reviews, pod logs — bound to state/kubeconfig
-  exec.go kubeconfig.go            running docker, and kubectl with KUBECONFIG pinned to state/kubeconfig for the calls not yet on the client; the OIDC kubeconfig `login` writes
+  exec.go kubeconfig.go            the docker subprocesses (the lab's one CLI) and the wait loop; the exported state/kubeconfig and the OIDC kubeconfig `login` writes
   render.go logs.go                template rendering into state/; `agentlab logs`
   templates/                       every manifest, rendered from agentlab.yaml (static/: the verbatim agent-deployment Template)
 docs/                            this documentation; README.md is the front door
@@ -120,7 +119,7 @@ HACKS.md                         the hack journal
 agentlab.yaml                    your configuration (gitignored; `agentlab configure`)
 certs/                           the lab CA and leaf certs (gitignored; key 0600)
 state/                           rendered manifests, for inspection (gitignored)
-  kubeconfig                       the kind cluster's admin kubeconfig, written at creation and re-exported per run — what the lab's own kubectl, embedded Helm and Kubernetes client use
+  kubeconfig                       the kind cluster's admin kubeconfig, written at creation and re-exported per run — what the embedded Helm and Kubernetes client are built from
   agent-platform-values.yaml       the chart's values in the lab shape, incl. the postRenderers
 .mcp.json                        registers muster as an MCP server for Claude Code
 ```

@@ -32,7 +32,7 @@ in `agentlab.yaml` and `agentlab up`).
 |---|---|
 | `login [email]` | Headless login (password grant); writes `.token` and `kubeconfig.oidc` for that user. `--password` overrides the one in `agentlab.yaml`. |
 | `browser` | Log in through the real Dex login page in a browser (authorization-code flow). |
-| `test` | Assert RBAC for every configured user: a token from Dex, then `auth can-i` reviews with that token alone (SelfSubjectAccessReviews) against the expectations of each group. |
+| `test` | Assert RBAC for every configured user: a token from Dex, then one SelfSubjectAccessReview per expectation of each group — `kubectl auth can-i`, asked of the apiserver in-process with that token alone. |
 
 `kubectl --kubeconfig kubeconfig.oidc` after `login` is the OIDC path — the
 way to verify what a specific user can do. The kind admin context bypasses the
@@ -82,7 +82,7 @@ The flags pin a value regardless of the discovery, with or without
 | `ANTHROPIC_API_KEY` | `up`, `platform` | Becomes the Secrets `kagent/kagent-anthropic` and `backstage/backstage-anthropic` at deploy time; never written to `agentlab.yaml` or `state/`. See [Agents](agents.md). |
 | `<name>` per `extraModels[].apiKeyEnv` | `up`, `platform` | The key for that model config, same handling. See [Models](models.md). |
 | `NODE_USE_SYSTEM_CA=1` | Node >= 22.15, Claude Code | Makes Node honor the system trust store after `agentlab trust`. Older Node: `NODE_EXTRA_CA_CERTS=$PWD/certs/ca.crt`. See [TLS](tls.md). |
-| `KUBECONFIG` | your shell | Ignored by the lab, which pins its own. `KUBECONFIG=state/kubeconfig kubectl ...` is the lab's view from a shell. |
+| `KUBECONFIG` | your shell | Ignored by the lab: its embedded Helm and Kubernetes client are built from `state/kubeconfig` alone. `KUBECONFIG=state/kubeconfig kubectl ...` is the lab's view from a shell. |
 | `AGENTLAB_TELEMETRY_OPTOUT`, `DO_NOT_TRACK=1` | every command | Disable the anonymous usage signal. See [Usage data](telemetry.md). |
 | `AGENTLAB_TELEMETRY_TESTMODE=1` | every command | File the signals as test data and log delivery errors, for work on the lab itself. |
 | `AGENTLAB_NO_UPDATE_CHECK=1` | every command | Silence the newer-release hint (below). |

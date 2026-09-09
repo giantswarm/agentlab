@@ -57,9 +57,9 @@ func Up(cfg *config.Config) error {
 			return err
 		}
 	}
-	// From here on the lab's own kubectl, its embedded Helm and its Kubernetes
-	// client run against the cluster's exported kubeconfig (exec.go,
-	// restclient.go, kube.go). The user's own kubeconfig and current-context
+	// From here on the embedded Helm and the Kubernetes client run against
+	// the cluster's exported kubeconfig (restclient.go, kube.go), the one
+	// file they are built from. The user's own kubeconfig and current-context
 	// are never touched: the embedded kind writes the admin kubeconfig to
 	// state/kubeconfig (kind.go), and re-reading it off the node here covers a
 	// cluster that already existed too.
