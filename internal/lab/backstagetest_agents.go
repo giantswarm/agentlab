@@ -17,16 +17,19 @@ import (
 // a session (the user's AgentInstance) and one message (an A2A SendMessage),
 // every call carrying the user's forwarded Dex id_token in
 // backstage-kagent-authorization, so kagent attributes them to the person.
-// The sessions routes and their bodies are the released plugin's; the agents
-// route is the portal's kagent-main addition. A portal that still speaks
-// kagent 0.10 answers 404 to it — reported as such, not as a crash.
+// The sessions routes and their bodies are the released plugin's; the
+// agent-templates route is the portal's kagent-main addition
+// (`GET /kagent/agent-templates?installation=&namespace=`, answering the
+// `{error, data: [...]}` envelope with one summary per AgentTemplate: `ref`,
+// `harnesses[{name, ready}]`, `ready`, the CR under `resource`). A portal that
+// still speaks kagent 0.10 answers 404 to it — reported as such, not as a crash.
 
 const (
 	// portalKagentAuthHeader carries the user's Dex id_token to the portal's
 	// agent-platform backend (KAGENT_AUTH_HEADER in plugins/agent-platform).
 	portalKagentAuthHeader = "backstage-kagent-authorization"
 	portalKagentAPI        = "/api/agent-platform/kagent"
-	portalAgentsPath       = portalKagentAPI + "/agents"
+	portalAgentsPath       = portalKagentAPI + "/agent-templates?namespace=" + kagentNamespace
 	portalSessionsPath     = portalKagentAPI + "/sessions"
 	portalChatPrompt       = "Reply with exactly the word pong and nothing else."
 	portalSessionName      = "agentlab backstage-test"
@@ -76,9 +79,10 @@ type portalAgentRow struct {
 }
 
 // portalAgentRows reads the agents list off the route's payload — a list, or
-// an object carrying one under `agents` or `items` — each row naming the
-// agent (`name` and `namespace`, or metadata.name) with its readiness: a
-// `ready` bool, or a state/status/readiness string that reads Ready.
+// an object carrying one under `data` (the portal's envelope), `agents` or
+// `items` — each row naming the agent (`ref.name`/`ref.namespace`, `name` and
+// `namespace`, or metadata.name) with its readiness: a `ready` bool, or a
+// state/status/readiness string that reads Ready.
 func portalAgentRows(payload any) ([]portalAgentRow, error) {
 	items, ok := payload.([]any)
 	if !ok {
@@ -86,7 +90,7 @@ func portalAgentRows(payload any) ([]portalAgentRow, error) {
 		if !isMap {
 			return nil, fmt.Errorf("the agents payload is a %T, neither a list nor an object", payload)
 		}
-		for _, key := range []string{"agents", "items"} {
+		for _, key := range []string{"data", "agents", "items"} {
 			if list, found := m[key].([]any); found {
 				items, ok = list, true
 				break
@@ -103,6 +107,10 @@ func portalAgentRows(payload any) ([]portalAgentRow, error) {
 			return nil, fmt.Errorf("an agents row is a %T, not an object", item)
 		}
 		row := portalAgentRow{name: stringAt(m, nameKey), namespace: stringAt(m, "namespace")}
+		if ref, ok := m["ref"].(map[string]any); ok {
+			row.name = firstNonEmpty(row.name, stringAt(ref, nameKey))
+			row.namespace = firstNonEmpty(row.namespace, stringAt(ref, "namespace"))
+		}
 		if meta, ok := m["metadata"].(map[string]any); ok {
 			row.name = firstNonEmpty(row.name, stringAt(meta, nameKey))
 			row.namespace = firstNonEmpty(row.namespace, stringAt(meta, "namespace"))
