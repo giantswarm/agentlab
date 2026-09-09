@@ -215,8 +215,10 @@ func toolsetsCleanup(s *musterSession, toolPrefix string) {
 		}
 		if _, err := s.callServerTool(toolPrefix+"delete_agent", map[string]any{nameKey: name, "force": true}); err != nil {
 			note("cleanup: delete_agent %s: %v", name, err)
-			deleteAgentTemplate(name)
 		}
+		// agent-manager keeps a carrier it did not label (the legacy and
+		// portal agents' are the proof's own); the direct delete takes both.
+		deleteAgentTemplate(name)
 		removed = true
 	}
 	for _, wf := range []string{toolsetsWorkflowQuery, toolsetsWorkflowMutating} {
