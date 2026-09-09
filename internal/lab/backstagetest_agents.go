@@ -33,6 +33,9 @@ const (
 	portalSessionsPath     = portalKagentAPI + "/sessions"
 	portalChatPrompt       = "Reply with exactly the word pong and nothing else."
 	portalSessionName      = "agentlab backstage-test"
+	// backstageTestAgent is the AgentTemplate the proof brings along: the
+	// list must show it, the chat turn runs on it.
+	backstageTestAgent = "agentlab-backstage-test"
 )
 
 // kagentRequest is one call to the portal's agent-platform backend as the
@@ -136,11 +139,12 @@ func portalAgentRows(payload any) ([]portalAgentRow, error) {
 }
 
 // proveAgentPlatformPages drives the Agent Platform pages as the user: the
-// agents list (AgentTemplates with their readiness), and for the primary user
-// a session on a Ready agent with one message answered — attributed to the
-// person by the forwarded token. A portal without the agents route (kagent
-// 0.10) fails by name.
-func proveAgentPlatformPages(ps *portalSession, primary bool) error {
+// agents list (AgentTemplates with their readiness — own, the proof's agent,
+// Ready on the cluster, must be among them), and for the primary user a
+// session on own with one message answered — attributed to the person by the
+// forwarded token. A portal without the agents route (kagent 0.10) fails by
+// name.
+func proveAgentPlatformPages(ps *portalSession, primary bool, own string) error {
 	status, raw, err := ps.kagentRequest(http.MethodGet, portalAgentsPath, nil)
 	if err != nil {
 		return err
@@ -164,25 +168,29 @@ func proveAgentPlatformPages(ps *portalSession, primary bool) error {
 		return fmt.Errorf("GET %s: %w\n%.300s", portalAgentsPath, err, raw)
 	}
 	if len(rows) == 0 {
-		return fmt.Errorf("GET %s lists no agents for %s, the lab's AgentTemplates in %s should show", portalAgentsPath, ps.user.Email, kagentNamespace)
+		return fmt.Errorf("GET %s lists no agents for %s although AgentTemplate %s/%s exists and is Ready on Harness %s", portalAgentsPath, ps.user.Email, kagentNamespace, own, kagentHarness)
 	}
 	var lines []string
-	var ready []portalAgentRow
+	ready := 0
 	for _, r := range rows {
 		lines = append(lines, fmt.Sprintf("(%s, %s)", r.name, firstNonEmpty(r.readiness, "readiness unknown")))
 		if r.ready {
-			ready = append(ready, r)
+			ready++
 		}
 	}
 	slices.Sort(lines)
-	fmt.Printf("  agents list      %d agents, %d Ready: [%s]\n", len(rows), len(ready), strings.Join(lines, ", "))
+	fmt.Printf("  agents list      %d agents, %d Ready: [%s]\n", len(rows), ready, strings.Join(lines, ", "))
+	idx := slices.IndexFunc(rows, func(r portalAgentRow) bool { return r.name == own })
+	if idx < 0 {
+		return fmt.Errorf("GET %s does not list %s, the AgentTemplate the proof created in %s — the list must show every AgentTemplate of the namespace", portalAgentsPath, own, kagentNamespace)
+	}
 	if !primary {
 		return nil
 	}
-	if len(ready) == 0 {
-		return fmt.Errorf("no agent in the list is Ready — nothing to chat with (the list must carry the AgentTemplates' readiness)")
+	agent := rows[idx]
+	if !agent.ready {
+		return fmt.Errorf("%s is Ready on Harness %s but the portal's list says %s — nothing to chat with (the list must carry the AgentTemplates' readiness)", own, kagentHarness, firstNonEmpty(agent.readiness, "readiness unknown"))
 	}
-	agent := ready[0]
 	namespace := firstNonEmpty(agent.namespace, kagentNamespace)
 
 	status, raw, err = ps.kagentRequest(http.MethodPost, portalSessionsPath, map[string]any{

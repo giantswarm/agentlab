@@ -2,7 +2,6 @@ package lab
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -487,28 +486,10 @@ func (a *modelManagerAPI) waitJob(id string, timeout time.Duration) error {
 // as the user through the edge (kagentTurn) and returns the agent's text. The
 // template is deleted on every path.
 func agentTurn(cfg *config.Config, user, token, modelConfig, prompt string) (string, error) {
-	manifest := fmt.Sprintf(`apiVersion: %s
-kind: AgentTemplate
-metadata:
-  name: %s
-  namespace: %s
-  labels:
-    %s: agentlab
-    %s: %s
-spec:
-  description: agentlab models-test probe (deleted after the run)
-  modelConfig:
-    name: %s
-  systemPrompt: You are a terse assistant. Answer in one short line.
-`, agentTemplateAPIVersion, modelsTestAgent, kagentNamespace, managedByLabel, harnessLabel, kagentHarness, modelConfig)
-	if _, err := applyManifests(context.Background(), []byte(manifest)); err != nil {
-		return "", err
-	}
 	defer deleteAgentTemplate(modelsTestAgent)
-	// The first revision of a template pulls the runtime image into the
-	// Substrate layer cache and boots the golden actor; the model itself is
-	// loaded by the host server on the first turn (the turn timeout covers it).
-	if _, err := waitAgentTemplateReady(modelsTestAgent, kagentHarness, 240*time.Second); err != nil {
+	// The model itself is loaded by the host server on the first turn (the
+	// turn timeout covers it).
+	if err := createThrowawayAgent(modelsTestAgent, modelConfig, "agentlab models-test probe (deleted after the run)", 240*time.Second); err != nil {
 		return "", err
 	}
 	return kagentTurn(cfg, user, token, modelsTestAgent, prompt)

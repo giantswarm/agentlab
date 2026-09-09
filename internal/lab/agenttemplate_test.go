@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"gopkg.in/yaml.v3"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -88,6 +89,28 @@ func TestWaitAgentTemplateReady(t *testing.T) {
 	}
 	if _, err := waitAgentTemplateReady("absent", kagentHarness, pollInterval); err == nil || !strings.Contains(err.Error(), "absent") {
 		t.Errorf("a missing template: %v", err)
+	}
+}
+
+// TestThrowawayAgentTemplate: the agent a proof brings along is a v1alpha3
+// AgentTemplate in the kagent namespace on the Go ADK Harness, on the
+// ModelConfig, labelled as agentlab's, without tool bindings.
+func TestThrowawayAgentTemplate(t *testing.T) {
+	manifest := throwawayAgentTemplate(testSmoke, defaultModelConfig, "a probe")
+	var obj map[string]any
+	if err := yaml.Unmarshal([]byte(manifest), &obj); err != nil {
+		t.Fatalf("%v\n%s", err, manifest)
+	}
+	u := &unstructured.Unstructured{Object: obj}
+	labels := u.GetLabels()
+	modelConfig, _, _ := unstructured.NestedString(obj, "spec", "modelConfig", nameKey)
+	description, _, _ := unstructured.NestedString(obj, "spec", "description")
+	if u.GetAPIVersion() != agentTemplateAPIVersion || u.GetKind() != "AgentTemplate" || u.GetName() != testSmoke || u.GetNamespace() != kagentNamespace ||
+		labels[harnessLabel] != kagentHarness || labels[managedByLabel] != "agentlab" || modelConfig != defaultModelConfig || description != "a probe" {
+		t.Errorf("throwaway template:\n%s", manifest)
+	}
+	if _, found, _ := unstructured.NestedSlice(obj, "spec", "tools"); found {
+		t.Error("a throwaway agent binds no tools")
 	}
 }
 

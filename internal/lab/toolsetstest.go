@@ -47,7 +47,6 @@ const (
 	presetInfrastructure      = "preset:infrastructure"
 	presetAgentPlatform       = "preset:agent-platform"
 	toolsetFixtureSelector    = "server:" + oauthFixtureServer
-	toolsetTestDefaultModel   = "default-model-config"
 	toolsetTestAgentSystemMsg = "You are a test agent of the agentlab toolset proof. Do exactly what the message asks, tersely."
 )
 
@@ -116,7 +115,7 @@ func toolsetsTestV2(cfg *config.Config, email string, opts ToolsetsTestOptions) 
 		return fmt.Errorf("%s needs a second user for the per-user sign-in proof", config.File)
 	}
 	if opts.ModelConfig == "" {
-		opts.ModelConfig = toolsetTestDefaultModel
+		opts.ModelConfig = defaultModelConfig
 	}
 	toolPrefix := "x_" + agentManagerMCPServer + "_"
 	var verdicts []string

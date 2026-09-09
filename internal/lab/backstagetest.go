@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -50,7 +51,10 @@ func BackstageTest(cfg *config.Config, emails []string) error {
 
 	// The Agent Platform pages on kagent main, after every sign-in is in so
 	// the evidence above is complete whatever the portal answers: the agents
-	// list for every user, one chat turn for the first.
+	// list for every user, one chat turn for the first. A fresh lab has no
+	// AgentTemplate of its own (agent-manager and the portal write them on
+	// request), so the proof brings one along: every list must show it and
+	// the chat turn runs on it; deleted on every path.
 	if !cfg.Platform.Agents {
 		fmt.Println("agent platform pages skipped (platform.agents off)")
 		return nil
@@ -59,13 +63,18 @@ func BackstageTest(cfg *config.Config, emails []string) error {
 		fmt.Println("agent platform pages skipped (the released kagent: the portal's agents pages are the kagent API v2 proof)")
 		return nil
 	}
+	fmt.Printf("bringing AgentTemplate %s along on Harness %s (ModelConfig %s): a fresh lab has none to list\n", backstageTestAgent, kagentHarness, defaultModelConfig)
+	defer deleteAgentTemplate(backstageTestAgent)
+	if err := createThrowawayAgent(backstageTestAgent, defaultModelConfig, "agentlab backstage-test agent (deleted after the run)", 240*time.Second); err != nil {
+		return err
+	}
 	for i, ps := range sessions {
 		fmt.Printf("=== %s: agent platform pages ===\n", ps.user.Email)
-		if err := proveAgentPlatformPages(ps, i == 0); err != nil {
+		if err := proveAgentPlatformPages(ps, i == 0, backstageTestAgent); err != nil {
 			return fmt.Errorf("%s: %w", ps.user.Email, err)
 		}
 	}
-	fmt.Println("agent platform pages listed the agents for every user and answered a chat turn")
+	fmt.Printf("agent platform pages listed %s for every user and answered a chat turn on it\n", backstageTestAgent)
 	return nil
 }
 

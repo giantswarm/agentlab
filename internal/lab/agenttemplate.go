@@ -42,6 +42,9 @@ const (
 	// toolsetCarrierPrefix prefixes the per-agent RemoteMCPServer agent-manager
 	// writes for an agent with a toolset: muster-<agent>.
 	toolsetCarrierPrefix = componentMuster + "-"
+	// defaultModelConfig is the ModelConfig the lab renders from
+	// $ANTHROPIC_API_KEY (`agentlab up`), the throwaway agents' default.
+	defaultModelConfig = "default-model-config"
 )
 
 // agentTemplate is the part of a kagent AgentTemplate the proofs read.
@@ -237,6 +240,38 @@ func deleteAgentTemplate(name string) {
 		}
 		_ = deleteObject(ctx, gvr, kagentNamespace, target.name, 0)
 	}
+}
+
+// throwawayAgentTemplate is the AgentTemplate a proof brings along: the Go
+// ADK Harness, the ModelConfig, a terse prompt, no tool bindings, labelled as
+// agentlab's; description names the proof and says the proof deletes it.
+func throwawayAgentTemplate(name, modelConfig, description string) string {
+	return fmt.Sprintf(`apiVersion: %s
+kind: AgentTemplate
+metadata:
+  name: %s
+  namespace: %s
+  labels:
+    %s: agentlab
+    %s: %s
+spec:
+  description: %s
+  modelConfig:
+    name: %s
+  systemPrompt: You are a terse assistant. Answer in one short line.
+`, agentTemplateAPIVersion, name, kagentNamespace, managedByLabel, harnessLabel, kagentHarness, description, modelConfig)
+}
+
+// createThrowawayAgent applies a proof's own AgentTemplate and waits for its
+// golden snapshot on the Go ADK Harness (the first revision pulls the runtime
+// image into the Substrate layer cache and boots the actor). The caller
+// deletes it (deleteAgentTemplate) on every path.
+func createThrowawayAgent(name, modelConfig, description string, timeout time.Duration) error {
+	if _, err := applyManifests(context.Background(), []byte(throwawayAgentTemplate(name, modelConfig, description))); err != nil {
+		return err
+	}
+	_, err := waitAgentTemplateReady(name, kagentHarness, timeout)
+	return err
 }
 
 // agentTemplateManagers lists the field managers on an agent's AgentTemplate

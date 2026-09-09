@@ -64,7 +64,7 @@ func proveToolsetPortalV1(cfg *config.Config, user *config.User) ([]string, erro
 	verdicts = append(verdicts, fmt.Sprintf("PASS: the Tools step's backend (/api/muster/tools/filter) offers the presets [%s], resolves %s live (%d read-only tools) and reports unmatched selectors and unknown presets as muster does", strings.Join(presetNames, ", "), presetReadOnly, len(ro.Tools)))
 
 	step("The composer's apply path: template:default/agent-deployment with the composed manifest (toolset %s) as %s", presetReadOnly, user.Email)
-	manifest := composeAgentManifestV1(toolsetsAgentPortal, "default-model-config", []string{presetReadOnly})
+	manifest := composeAgentManifestV1(toolsetsAgentPortal, defaultModelConfig, []string{presetReadOnly})
 	taskID, err := scaffold(ps, manifest, toolsetsAgentPortal)
 	if err != nil {
 		return nil, err

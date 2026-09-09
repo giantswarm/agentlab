@@ -118,7 +118,7 @@ func agentsTestV2(cfg *config.Config, email string) error {
 	}
 	modelConfig := configs.ModelConfigs[0].Name
 	for _, mc := range configs.ModelConfigs {
-		if mc.Name == "default-model-config" {
+		if mc.Name == defaultModelConfig {
 			modelConfig = mc.Name
 		}
 	}

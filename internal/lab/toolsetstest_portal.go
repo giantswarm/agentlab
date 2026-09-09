@@ -353,7 +353,7 @@ func proveToolsetPortal(cfg *config.Config, user *config.User, opts ToolsetsTest
 		return nil, fmt.Errorf("the shared muster server the carrier copies: %w", err)
 	}
 	musterURL, _, _ := unstructured.NestedString(muster.Object, "spec", "url")
-	manifest := composeAgentManifest(toolsetsAgentPortal, "default-model-config", []string{presetReadOnly}, musterURL)
+	manifest := composeAgentManifest(toolsetsAgentPortal, defaultModelConfig, []string{presetReadOnly}, musterURL)
 	taskID, err := scaffold(ps, manifest, toolsetsAgentPortal)
 	if err != nil {
 		return nil, err

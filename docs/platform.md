@@ -246,7 +246,8 @@ channel; on the dev channel kagent API v2's `AgentTemplate`s admitted by the
 Go ADK `Harness` and run as Substrate actors, a turn being an
 `AgentInstance` driven over gRPC-Web through the edge as the signed-in user,
 the toolset on the per-agent muster carrier (`RemoteMCPServer`) the template
-binds, and the portal's Agent Platform pages (`backstage-test`).
+binds, and the portal's Agent Platform pages (`backstage-test`, on an
+`AgentTemplate` the proof brings along).
 
 ## The request path
 

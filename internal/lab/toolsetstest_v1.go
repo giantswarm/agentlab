@@ -73,7 +73,7 @@ func toolsetsTestV1(cfg *config.Config, email string, opts ToolsetsTestOptions) 
 		return fmt.Errorf("%s needs a second user for the per-user sign-in proof", config.File)
 	}
 	if opts.ModelConfig == "" {
-		opts.ModelConfig = toolsetTestDefaultModel
+		opts.ModelConfig = defaultModelConfig
 	}
 	toolPrefix := "x_" + agentManagerMCPServer + "_"
 	var verdicts []string
