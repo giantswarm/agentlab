@@ -488,40 +488,6 @@ it is missing (and waits out a `Terminating` one left by a previous
 uninstall) ahead of the kagent HelmRelease; the connectivity release adopts
 it on install and deletes it with the release. `ensureNamespace` for kagent
 is deleted; a fresh `agentlab up` gets the namespace from the hook.
-### U21. LM Studio has no delete over its API — `models-test` proves the refusal — BLOCKED UPSTREAM
-LM Studio's own API (`/api/v1`, 0.4.0+) serves the library, the download that
-backs a pull, and load/unload — but no delete. Removing a model is `lms rm`
-on the host, a CLI no pod can run, so the `lmstudio` backend of model-manager
-reports `delete: false` and the platform answers `501 unsupported`.
-**Consequence in the lab:** `agentlab models-test --backend lmstudio` is the
-one proof run that leaves something behind — the model it pulls stays
-downloaded, and the run's last line says so with the `lms rm` command. Rather
-than skip the step, the run asserts the refusal (a stronger check: the
-platform must refuse rather than pretend, nothing may be removed by a refused
-delete, and the ModelConfig must still come off through `POST
-/models/unwire`), and it cross-checks the advertised `delete` capability
-against what the server really offers in both directions. **Unblocked by** an
-LM Studio release that exposes over its API what `lms rm` does; the lab side
-is then one `deleteOverREST: true` in `internal/lab/backends.go` plus the
-driver's capability flag.
-
-### U22. LM Studio identity cannot be read from a status code — ACCEPTED
-Every other host model server answers a version or health document, so the
-discovery could ask "HTTP 200 with a `version` field?". LM Studio has no
-version, health or system-info endpoint anywhere, **and it answers HTTP 200
-with an `{"error": …}` body for every path outside its own `/api/v1`** —
-Ollama's `/api/version`, `/api/tags` and `/api/show` among them (verified
-against 0.4.20; paths under `/api/v1` do 404). A probe that trusted the
-status code would therefore find an "Ollama" on every LM Studio port.
-**Fix:** detection is a per-backend fingerprint over the response *body*
-(`backendProbe` in `internal/lab/backends.go`) — LM Studio is recognised by
-an `/api/v1/models` document carrying a `models` array whose entries are
-keyed by `key`, which also distinguishes it from Lemonade serving the very
-same path with a `data` envelope. The discovery prints `api v1` where the
-others print a version. Not a workaround to remove: the body is the only
-evidence such a server offers. The unit tests carry the 200-on-unknown-path
-behaviour in the fake, so a future "simplification" back to a status check
-fails them.
 
 ### U21. `preload.go`: the docker side-load is `docker save --platform` + kind's archive import — BLOCKED UPSTREAM
 kind's `load docker-image` runs a plain `docker save` and pipes the archive
@@ -569,6 +535,42 @@ which ate-api-server rejects against kind's tokens (their `iss` is
 `…svc.cluster.local`); the lab reads the issuer off the apiserver's discovery
 document, as upstream's own `ate-setup` does. Unblocks when the substrate
 chart renders the bootstrap (a hook Job) or the packages become importable.
+
+### U23. LM Studio has no delete over its API — `models-test` proves the refusal — BLOCKED UPSTREAM
+LM Studio's own API (`/api/v1`, 0.4.0+) serves the library, the download that
+backs a pull, and load/unload — but no delete. Removing a model is `lms rm`
+on the host, a CLI no pod can run, so the `lmstudio` backend of model-manager
+reports `delete: false` and the platform answers `501 unsupported`.
+**Consequence in the lab:** `agentlab models-test --backend lmstudio` is the
+one proof run that leaves something behind — the model it pulls stays
+downloaded, and the run's last line says so with the `lms rm` command. Rather
+than skip the step, the run asserts the refusal (a stronger check: the
+platform must refuse rather than pretend, nothing may be removed by a refused
+delete, and the ModelConfig must still come off through `POST
+/models/unwire`), and it cross-checks the advertised `delete` capability
+against what the server really offers in both directions. **Unblocked by** an
+LM Studio release that exposes over its API what `lms rm` does; the lab side
+is then one `deleteOverREST: true` in `internal/lab/backends.go` plus the
+driver's capability flag.
+
+### U24. LM Studio identity cannot be read from a status code — ACCEPTED
+Every other host model server answers a version or health document, so the
+discovery could ask "HTTP 200 with a `version` field?". LM Studio has no
+version, health or system-info endpoint anywhere, **and it answers HTTP 200
+with an `{"error": …}` body for every path outside its own `/api/v1`** —
+Ollama's `/api/version`, `/api/tags` and `/api/show` among them (verified
+against 0.4.20; paths under `/api/v1` do 404). A probe that trusted the
+status code would therefore find an "Ollama" on every LM Studio port.
+**Fix:** detection is a per-backend fingerprint over the response *body*
+(`backendProbe` in `internal/lab/backends.go`) — LM Studio is recognised by
+an `/api/v1/models` document carrying a `models` array whose entries are
+keyed by `key`, which also distinguishes it from Lemonade serving the very
+same path with a `data` envelope. The discovery prints `api v1` where the
+others print a version. Not a workaround to remove: the body is the only
+evidence such a server offers. The unit tests carry the 200-on-unknown-path
+behaviour in the fake, so a future "simplification" back to a status check
+fails them.
+
 
 ## Accepted lab trade-offs (not hacks to fix)
 
