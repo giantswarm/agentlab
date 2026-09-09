@@ -159,6 +159,8 @@ func newFakeLab(t *testing.T, objects ...runtime.Object) *fakeLab {
 		fluxHelmReleaseGVR: "HelmReleaseList",
 		musterMCPServerGVR: "MCPServerList",
 		prometheusGVR:      "PrometheusList",
+		gvrModelConfigs:    "ModelConfigList",
+		gvrAgents:          "AgentList",
 	}, seeds...)
 	dyn.PrependReactor("patch", "*", fakeApply(dyn.Tracker()))
 
@@ -178,6 +180,10 @@ func newFakeLab(t *testing.T, objects ...runtime.Object) *fakeLab {
 		fluxHelmReleaseGVK,
 		musterMCPServerGVK,
 		prometheusGVK,
+		// kagent's ModelConfig and Agent, which the proofs read and write
+		// (crds_test.go).
+		gvkModelConfig,
+		gvkAgent,
 	} {
 		mapper.Add(gvk, meta.RESTScopeNamespace)
 	}
@@ -781,6 +787,9 @@ func TestGvrFor(t *testing.T) {
 		gvrSecrets.Resource:     gvrSecrets,
 		"secret":                gvrSecrets,
 		gvrDeployments.Resource + "." + gvrDeployments.Group: gvrDeployments,
+		fluxHelmReleaseResource:                              fluxHelmReleaseGVR,
+		musterMCPServerResource:                              musterMCPServerGVR,
+		modelConfigResource:                                  gvrModelConfigs,
 	} {
 		if got, err := gvrFor(arg); err != nil || got != want {
 			t.Errorf("gvrFor(%q) = %v, %v; want %v", arg, got, err, want)

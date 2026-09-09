@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -158,15 +159,16 @@ func AgentsTest(cfg *config.Config, email string) error {
 	note("HelmRelease written (OCIRepository created: %v), requestedBy=%s", created.Created.OCIRepository, created.RequestedBy)
 
 	step("The HelmRelease belongs to the user, not the ServiceAccount (managedFields)")
-	managers, err := outputQuiet("kubectl", "-n", kagentNamespace, "get", "helmrelease", agentsTestAgent,
-		"-o", "jsonpath={range .metadata.managedFields[*]}{.manager}{'\\n'}{end}")
+	managers, err := agentHelmReleaseManagers(agentsTestAgent)
 	if err != nil {
 		return err
 	}
-	if !strings.Contains(managers, "agent-manager") {
+	if !slices.Contains(managers, "agent-manager") {
 		return fmt.Errorf("HelmRelease %s has no agent-manager field manager: %q", agentsTestAgent, managers)
 	}
-	events, _ := outputQuiet("kubectl", "-n", platformNamespace, "logs", "deploy/"+agentManagerMCPServer, "-c", agentManagerMCPServer, "--since=5m")
+	logCtx, cancelLogs := context.WithTimeout(context.Background(), 60*time.Second)
+	events, _ := podLogs(logCtx, platformNamespace, "deploy/"+agentManagerMCPServer, agentManagerMCPServer, 5*time.Minute)
+	cancelLogs()
 	if !strings.Contains(events, "caller="+user.Email) {
 		return fmt.Errorf("agent-manager's log carries no `caller=%s` line for the create", user.Email)
 	}
@@ -241,29 +243,17 @@ func AgentsTest(cfg *config.Config, email string) error {
 			return fmt.Errorf("%s: Forbidden, but not under the user's own name (the apiserver saw someone else): %w", viewer.Email, err)
 		}
 		note("%s: %s", viewer.Email, excerpt(err.Error(), 200))
-		if _, err := outputQuiet("kubectl", "-n", kagentNamespace, "get", "helmrelease", agentsTestAgent+"-viewer"); err == nil {
+		if agentHelmReleaseExists(agentsTestAgent + "-viewer") {
 			return fmt.Errorf("HelmRelease %s-viewer exists although the create was refused", agentsTestAgent)
 		}
 	}
 
-	step("The agent-manager ServiceAccount holds no RBAC (kubectl auth can-i --list --as=%s)", agentManagerServiceAccount)
-	rules, err := outputQuiet("kubectl", "auth", "can-i", "--list", "--as="+agentManagerServiceAccount, "-n", kagentNamespace)
+	step("The agent-manager ServiceAccount holds no RBAC (auth can-i --list --as=%s)", agentManagerServiceAccount)
+	rules, err := serviceAccountRules(agentManagerServiceAccount, kagentNamespace)
 	if err != nil {
 		return err
 	}
-	var granted []string
-	for line := range strings.SplitSeq(rules, "\n") {
-		fields := strings.Fields(line)
-		if len(fields) == 0 || fields[0] == "Resources" {
-			continue
-		}
-		// Every authenticated principal has the selfsubject* reviews and the
-		// discovery URLs; anything else is a permission of its own.
-		if strings.HasPrefix(fields[0], "selfsubject") || strings.HasPrefix(fields[0], "[") {
-			continue
-		}
-		granted = append(granted, line)
-	}
+	granted := rulesBeyondDiscovery(rules)
 	if len(granted) > 0 {
 		return fmt.Errorf("the agent-manager ServiceAccount still holds permissions in %s:\n%s", kagentNamespace, strings.Join(granted, "\n"))
 	}
@@ -295,6 +285,61 @@ func AgentsTest(cfg *config.Config, email string) error {
 	}
 	fmt.Printf("PASS: %s holds no permissions beyond discovery\n", agentManagerServiceAccount)
 	return nil
+}
+
+// serviceAccountRules is `kubectl auth can-i --list --as=<principal> -n <ns>`:
+// the rules the apiserver grants the impersonated principal in the namespace,
+// one row per resource the way the CLI prints them.
+func serviceAccountRules(principal, ns string) ([]string, error) {
+	as, err := asUserConfig(principal)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
+	defer cancel()
+	status, err := canIList(ctx, as, ns)
+	if err != nil {
+		return nil, err
+	}
+	return ruleRows(status), nil
+}
+
+// rulesBeyondDiscovery drops the rows every authenticated principal has — the
+// selfsubject* reviews and the non-resource discovery URLs — and returns the
+// rest: permissions of the principal's own.
+func rulesBeyondDiscovery(rows []string) []string {
+	var granted []string
+	for _, row := range rows {
+		fields := strings.Fields(row)
+		if len(fields) == 0 || fields[0] == "Resources" {
+			continue
+		}
+		if strings.HasPrefix(fields[0], "selfsubject") || strings.HasPrefix(fields[0], "[") {
+			continue
+		}
+		granted = append(granted, row)
+	}
+	return granted
+}
+
+// agentHelmReleaseManagers lists the field managers on an agent's HelmRelease
+// in the kagent namespace — who wrote it.
+func agentHelmReleaseManagers(name string) ([]string, error) {
+	gvr, err := gvrFor(fluxHelmReleaseResource)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
+	defer cancel()
+	hr, err := getObject(ctx, gvr, kagentNamespace, name)
+	if err != nil {
+		return nil, err
+	}
+	var managers []string
+	for _, entry := range hr.GetManagedFields() {
+		managers = append(managers, entry.Manager)
+	}
+	return managers, nil
 }
 
 func kept(reason string) string {

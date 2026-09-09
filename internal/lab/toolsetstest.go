@@ -1,12 +1,15 @@
 package lab
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
 	"sync"
 	"time"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -54,6 +57,11 @@ const (
 	toolsetTestDefaultModel   = "default-model-config"
 	toolsetTestAgentSystemMsg = "You are a test agent of the agentlab toolset proof. Do exactly what the message asks, tersely."
 )
+
+// kagentAgentResource is kagent's Agent as a resource argument, fully
+// qualified so a same-named kind in another group can never be meant (the
+// Flux HelmRelease every agent is rendered from is fluxHelmReleaseResource).
+const kagentAgentResource = "agents.kagent.dev"
 
 // ToolsetsTestOptions tunes the proof.
 type ToolsetsTestOptions struct {
@@ -210,12 +218,12 @@ func toolsetsCleanup(s *musterSession, toolPrefix string) {
 	for _, name := range names {
 		if _, err := s.callServerTool(toolPrefix+"get_agent", map[string]any{nameKey: name}); err != nil {
 			// Not known to agent-manager: a HelmRelease may still exist.
-			_ = runQuiet("kubectl", "-n", kagentNamespace, "delete", "helmrelease", name, "--ignore-not-found", "--wait=false")
+			deleteAgentHelmRelease(name)
 			continue
 		}
 		if _, err := s.callServerTool(toolPrefix+"delete_agent", map[string]any{nameKey: name, "force": true}); err != nil {
 			note("cleanup: delete_agent %s: %v", name, err)
-			_ = runQuiet("kubectl", "-n", kagentNamespace, "delete", "helmrelease", name, "--ignore-not-found", "--wait=false")
+			deleteAgentHelmRelease(name)
 		}
 		removed = true
 	}
@@ -256,7 +264,7 @@ func proveAgentManagerToolset(s *musterSession, toolPrefix, modelConfig string) 
 		}
 	}
 	note("refused: %s", excerpt(err.Error(), 220))
-	if _, err := outputQuiet("kubectl", "-n", kagentNamespace, "get", "helmrelease", toolsetsAgentReadOnly); err == nil {
+	if agentHelmReleaseExists(toolsetsAgentReadOnly) {
 		return fmt.Errorf("HelmRelease %s exists although the create was refused", toolsetsAgentReadOnly)
 	}
 
@@ -315,24 +323,75 @@ type agentCR struct {
 // waitAgentCR waits for helm-controller to render the Agent behind a
 // HelmRelease and returns it.
 func waitAgentCR(name string) (*agentCR, error) {
-	var raw string
+	var agent *unstructured.Unstructured
 	found := waitFor(40, 3*time.Second, func() bool {
-		out, err := outputQuiet("kubectl", "-n", kagentNamespace, "get", "agents.kagent.dev", name, "-o", "json")
+		obj, err := readKagentObject(kagentAgentResource, name)
 		if err != nil {
 			return false
 		}
-		raw = out
+		agent = obj
 		return true
 	})
 	if !found {
-		status, _ := outputQuiet("kubectl", "-n", kagentNamespace, "get", "helmrelease", name, "-o", "jsonpath={.status.conditions[?(@.type==\"Ready\")].message}")
+		status := ""
+		if hr, err := readKagentObject(fluxHelmReleaseResource, name); err == nil {
+			status = conditionMessage(hr, "Ready")
+		} else {
+			status = err.Error()
+		}
 		return nil, fmt.Errorf("no Agent %s rendered from its HelmRelease within 2 min (Ready: %s)", name, excerpt(status, 200))
 	}
-	var cr agentCR
-	if err := json.Unmarshal([]byte(raw), &cr); err != nil {
+	cr, err := agentCRFrom(agent)
+	if err != nil {
 		return nil, fmt.Errorf("parsing agent %s: %w", name, err)
 	}
+	return cr, nil
+}
+
+// agentCRFrom reads the part of a kagent Agent the proof looks at off the
+// object as the apiserver returned it.
+func agentCRFrom(obj *unstructured.Unstructured) (*agentCR, error) {
+	raw, err := json.Marshal(obj.Object)
+	if err != nil {
+		return nil, err
+	}
+	var cr agentCR
+	if err := json.Unmarshal(raw, &cr); err != nil {
+		return nil, err
+	}
 	return &cr, nil
+}
+
+// readKagentObject reads one object of the given resource (a kubectl resource
+// argument) in the kagent namespace, bounded by kubeReadTimeout.
+func readKagentObject(resourceArg, name string) (*unstructured.Unstructured, error) {
+	gvr, err := gvrFor(resourceArg)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
+	defer cancel()
+	return getObject(ctx, gvr, kagentNamespace, name)
+}
+
+// agentHelmReleaseExists reports whether an agent's HelmRelease is there; a
+// read that fails counts as absent, as the CLI probe's non-zero exit did.
+func agentHelmReleaseExists(name string) bool {
+	_, err := readKagentObject(fluxHelmReleaseResource, name)
+	return err == nil
+}
+
+// deleteAgentHelmRelease removes an agent's HelmRelease without waiting for
+// helm-controller's uninstall (`--ignore-not-found --wait=false`); best
+// effort, for the cleanup paths.
+func deleteAgentHelmRelease(name string) {
+	gvr, err := gvrFor(fluxHelmReleaseResource)
+	if err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
+	defer cancel()
+	_ = deleteObject(ctx, gvr, kagentNamespace, name, 0)
 }
 
 // toolsetHeaderOf returns the X-Muster-Toolset value on the agent's muster
@@ -355,16 +414,31 @@ func toolsetHeaderOf(cr *agentCR) (string, error) {
 
 // helmReleaseToolset reads the top-level toolset value of a HelmRelease.
 func helmReleaseToolset(name string) ([]string, bool, error) {
-	out, err := outputQuiet("kubectl", "-n", kagentNamespace, "get", "helmrelease", name, "-o", "jsonpath={.spec.values.toolset}")
+	hr, err := readKagentObject(fluxHelmReleaseResource, name)
 	if err != nil {
 		return nil, false, err
 	}
-	if strings.TrimSpace(out) == "" {
+	return toolsetValue(hr)
+}
+
+// toolsetValue is `{.spec.values.toolset}` of a HelmRelease: the list and
+// whether the value is set at all; anything but a list of strings is refused.
+func toolsetValue(hr *unstructured.Unstructured) ([]string, bool, error) {
+	value, found, err := unstructured.NestedFieldNoCopy(hr.Object, "spec", "values", "toolset")
+	if err != nil || !found || value == nil {
 		return nil, false, nil
 	}
-	var toolset []string
-	if err := json.Unmarshal([]byte(out), &toolset); err != nil {
-		return nil, false, fmt.Errorf("HelmRelease %s values.toolset is not a string list: %q", name, out)
+	items, ok := value.([]any)
+	if !ok {
+		return nil, false, fmt.Errorf("HelmRelease %s values.toolset is not a string list: %v", hr.GetName(), value)
+	}
+	toolset := make([]string, 0, len(items))
+	for _, item := range items {
+		s, ok := item.(string)
+		if !ok {
+			return nil, false, fmt.Errorf("HelmRelease %s values.toolset is not a string list: %v", hr.GetName(), value)
+		}
+		toolset = append(toolset, s)
 	}
 	return toolset, true, nil
 }
@@ -442,7 +516,7 @@ spec:
     modelConfig:
       name: %s
 `, toolsetsAgentLegacy, kagentNamespace, kagentFluxServiceAccount, kagentNamespace, toolsetsAgentLegacy, toolsetTestAgentSystemMsg, modelConfig)
-	if err := pipeInto([]byte(hr), "kubectl", "apply", "-f", "-"); err != nil {
+	if _, err := applyManifests(context.Background(), []byte(hr)); err != nil {
 		return err
 	}
 	cr, err := waitAgentCR(toolsetsAgentLegacy)
@@ -885,16 +959,15 @@ func namesOutside(reported, toolset, catalogue []string) (outside, unknown []str
 // mcpServerToolGroups maps every MCPServer of the platform namespace to its
 // tool-group label ("" when unlabelled).
 func mcpServerToolGroups() (map[string]string, error) {
-	out, err := outputQuiet("kubectl", "-n", platformNamespace, "get", "mcpservers.muster.giantswarm.io", "-o",
-		"jsonpath={range .items[*]}{.metadata.name}={.metadata.labels['agent-platform\\.giantswarm\\.io/tool-group']}{\"\\n\"}{end}")
+	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
+	defer cancel()
+	servers, err := listMCPServers(ctx, platformNamespace, "")
 	if err != nil {
 		return nil, err
 	}
-	labels := map[string]string{}
-	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
-		if name, value, ok := strings.Cut(line, "="); ok {
-			labels[name] = value
-		}
+	labels := make(map[string]string, len(servers))
+	for _, s := range servers {
+		labels[s.Name] = s.Labels[toolGroupLabel]
 	}
 	return labels, nil
 }

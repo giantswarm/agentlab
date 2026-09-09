@@ -32,7 +32,7 @@ in `agentlab.yaml` and `agentlab up`).
 |---|---|
 | `login [email]` | Headless login (password grant); writes `.token` and `kubeconfig.oidc` for that user. `--password` overrides the one in `agentlab.yaml`. |
 | `browser` | Log in through the real Dex login page in a browser (authorization-code flow). |
-| `test` | Assert RBAC for every configured user: a token from Dex, then `kubectl auth can-i` against the expectations of each group. |
+| `test` | Assert RBAC for every configured user: a token from Dex, then `auth can-i` reviews with that token alone (SelfSubjectAccessReviews) against the expectations of each group. |
 
 `kubectl --kubeconfig kubeconfig.oidc` after `login` is the OIDC path — the
 way to verify what a specific user can do. The kind admin context bypasses the

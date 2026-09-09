@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -8,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -297,8 +300,7 @@ func proveToolsetPortal(cfg *config.Config, user *config.User) ([]string, error)
 	if err != nil {
 		return nil, err
 	}
-	image, _ := outputQuiet("kubectl", "-n", platformNamespace, "get", "deploy", "backstage", "-o", "jsonpath={.spec.template.spec.containers[0].image}")
-	note("portal image %s", strings.TrimSpace(image))
+	note("portal image %s", deploymentImage(platformNamespace, componentBackstage))
 
 	step("The Tools step's backend calls: presets, live resolution, unmatched selectors (/api/muster/tools/filter)")
 	presets, err := portalFilterTools(ps, nil, true)
@@ -462,4 +464,26 @@ func scaffold(ps *portalSession, manifest, releaseName string) (string, error) {
 		return "", fmt.Errorf("scaffolder task %s ended %q:\n%s", task.ID, state, excerpt(string(events), 600))
 	}
 	return task.ID, nil
+}
+
+// deploymentImage is the image of a Deployment's first container — what
+// `kubectl get deploy -o jsonpath={.spec.template.spec.containers[0].image}`
+// printed — or "" when the Deployment cannot be read (a note, not a verdict).
+func deploymentImage(ns, name string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
+	defer cancel()
+	d, err := getObject(ctx, gvrDeployments, ns, name)
+	if err != nil {
+		return ""
+	}
+	containers, _, _ := unstructured.NestedSlice(d.Object, "spec", "template", "spec", "containers")
+	if len(containers) == 0 {
+		return ""
+	}
+	first, ok := containers[0].(map[string]any)
+	if !ok {
+		return ""
+	}
+	image, _, _ := unstructured.NestedString(first, "image")
+	return image
 }
