@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -98,20 +100,16 @@ func sideloadImages(cfg *config.Config, images []string) preloadResult {
 	return preloadResult{n: loaded, d: time.Since(start).Round(time.Second), err: err}
 }
 
-// kindLoadImages side-loads images and reports how many landed. It is one
-// `kind load docker-image` for the batch — except under podman, where kind's
-// own multi-image save would fold the batch into one image under every tag
-// (runtime.go): there it is one call per image, which saves a single image
-// and is always right. kind stages and cleans its own archive either way. A
-// failed image does not stop the rest, so the count and the error are both
-// reported and a partial load reads as one.
+// kindLoadImages side-loads images and reports how many landed. Under docker
+// the batch is saved per platform and loaded as archives (dockerLoadImages).
+// Under podman it is one `kind load docker-image` per image: kind's own
+// multi-image save would fold the batch into one image under every tag
+// (runtime.go), and a single-image save is always right. A failed image does
+// not stop the rest, so the count and the error are both reported and a
+// partial load reads as one.
 func kindLoadImages(cfg *config.Config, images []string) (int, error) {
 	if !dockerIsPodman() {
-		args := append([]string{"load", "docker-image", "--name", cfg.ClusterName}, images...)
-		if err := runQuiet("kind", args...); err != nil {
-			return 0, err
-		}
-		return len(images), nil
+		return dockerLoadImages(cfg, images)
 	}
 	loaded := 0
 	var errs []error
@@ -123,6 +121,137 @@ func kindLoadImages(cfg *config.Config, images []string) (int, error) {
 		loaded++
 	}
 	return loaded, errors.Join(errs...)
+}
+
+// dockerLoadImages is the docker side-load: `docker save --platform <what the
+// host holds>` into an archive, `kind load image-archive` of that — one
+// archive per platform — instead of `kind load docker-image`. kind's own load
+// runs a plain `docker save`, and under Docker's containerd image store (the
+// default on Docker Desktop and on new Docker 29 installs) that archive
+// carries the image's whole multi-platform index while only the host
+// platform's blobs were ever pulled; the node's `ctr images import
+// --all-platforms` then fails on the first missing digest
+// (kubernetes-sigs/kind#3795, HACKS.md U21). Saving only the platform the
+// host has — `docker image inspect` says which — writes an archive whose
+// index references nothing it does not carry, and is the recipe kind's
+// maintainers give consumers. `docker save --platform` arrived with Docker
+// 28 (API 1.48); an older engine keeps kind's own load, which is right under
+// the classic graph driver — the only store such an engine is likely to run.
+func dockerLoadImages(cfg *config.Config, images []string) (int, error) {
+	if !dockerSaveHasPlatform() {
+		args := append([]string{"load", "docker-image", "--name", cfg.ClusterName}, images...)
+		if err := runQuiet("kind", args...); err != nil {
+			return 0, err
+		}
+		return len(images), nil
+	}
+	groups, errs := hostImagePlatforms(images)
+	loaded := 0
+	for _, platform := range slices.Sorted(maps.Keys(groups)) {
+		imgs := groups[platform]
+		if err := saveAndLoadArchive(cfg, platform, imgs); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		loaded += len(imgs)
+	}
+	return loaded, errors.Join(errs...)
+}
+
+// imagePlatformFormat is the `docker image inspect` template that spells the
+// platform the host holds an image in the way `docker save --platform` wants
+// it: os/arch, with the variant where there is one (linux/arm/v7).
+const imagePlatformFormat = "{{.Os}}/{{.Architecture}}{{if .Variant}}/{{.Variant}}{{end}}"
+
+// hostImagePlatforms groups refs by the platform the host cache holds them in,
+// keeping each group in input order. A ref the host cannot inspect is not in
+// the cache: it is reported and left out, and the node pulls it itself.
+func hostImagePlatforms(images []string) (map[string][]string, []error) {
+	platforms := make([]string, len(images))
+	errs := make([]error, len(images))
+	var wg sync.WaitGroup
+	for i, img := range images {
+		wg.Go(func() {
+			out, err := outputQuiet("docker", "image", "inspect", "-f", imagePlatformFormat, img)
+			platforms[i], errs[i] = strings.TrimSpace(out), err
+		})
+	}
+	wg.Wait()
+	groups := map[string][]string{}
+	var failed []error
+	for i, img := range images {
+		if errs[i] != nil {
+			failed = append(failed, errs[i])
+			continue
+		}
+		groups[platforms[i]] = append(groups[platforms[i]], img)
+	}
+	return groups, failed
+}
+
+// saveAndLoadArchive writes the images' <platform> variants to a temporary
+// archive and loads it into the cluster's nodes. The archive is removed
+// either way; kind stages its own the same way, so the footprint is the one
+// `kind load docker-image` always had.
+func saveAndLoadArchive(cfg *config.Config, platform string, images []string) error {
+	f, err := os.CreateTemp("", "agentlab-images-*.tar")
+	if err != nil {
+		return err
+	}
+	tar := f.Name()
+	_ = f.Close()
+	defer func() { _ = os.Remove(tar) }()
+	// docker's one-line stderr (the ref and platform it could not export)
+	// belongs in the error the caller reports; kind's failure output is a
+	// diagnosis of its own and goes to the terminal as every kind call's does.
+	args := append([]string{"save", "--platform", platform, "-o", tar}, images...)
+	if _, err := outputQuiet("docker", args...); err != nil {
+		return err
+	}
+	return runQuiet("kind", "load", "image-archive", "--name", cfg.ClusterName, tar)
+}
+
+// dockerSaveHasPlatform reports whether `docker save --platform` works here:
+// the flag arrived with Docker 28 (API 1.48) and both the client and the
+// daemon have to speak that API. Cached for the process; a variable so tests
+// can pin the answer.
+var dockerSaveHasPlatform = sync.OnceValue(func() bool {
+	out, err := outputQuiet("docker", "version", "-f", "{{.Client.APIVersion}} {{.Server.APIVersion}}")
+	return err == nil && saveHasPlatform(out)
+})
+
+// saveHasPlatform reads `docker version -f '{{.Client.APIVersion}}
+// {{.Server.APIVersion}}'` ("1.53 1.53"): both at 1.48 or newer. The client
+// reports the version it negotiated with the daemon, so an old daemon shows on
+// both sides; an old client never prints a version it does not know.
+func saveHasPlatform(out string) bool {
+	versions := strings.Fields(out)
+	if len(versions) != 2 {
+		return false
+	}
+	for _, v := range versions {
+		if !apiAtLeast(v, 1, 48) {
+			return false
+		}
+	}
+	return true
+}
+
+// apiAtLeast compares a docker API version ("1.48") against major.minor.
+func apiAtLeast(v string, major, minor int) bool {
+	before, after, ok := strings.Cut(strings.TrimSpace(v), ".")
+	if !ok {
+		return false
+	}
+	gotMajor, err := strconv.Atoi(before)
+	if err != nil {
+		return false
+	}
+	gotMinor, err := strconv.Atoi(after)
+	if err != nil {
+		return false
+	}
+	return gotMajor > major || (gotMajor == major && gotMinor >= minor)
 }
 
 // pullLabImages starts pulling the snapshot manifest's images into the host

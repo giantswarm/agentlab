@@ -78,9 +78,19 @@ plumbing for model servers under
   process is using the cluster (`ps -eo pid,args | grep '[a]gentlab '`).
 - **The image cache manifest only records what a registry can serve.**
   `state/preload-images.txt` is snapshotted from the node after every boot;
-  an image built on the host and side-loaded (`kind load docker-image
-  backstage-dev:<tag>`) shows up there as `docker.io/library/backstage-dev:<tag>`
+  an image built on the host and side-loaded (a `platform.devImages` swap,
+  `backstage-dev:<tag>`) shows up there as `docker.io/library/backstage-dev:<tag>`
   — a Docker Hub ref that does not exist — and once the local copy is pruned
   every boot would ask Docker Hub for it (`denied: requested access to the
   resource is denied` in the dockerd log, once per ref). Images the host cache
   knows without a registry digest are therefore left out of the snapshot.
+- **`ERROR: failed to load image: command "docker exec ... ctr ... images import
+  --all-platforms ..." failed with error: exit status 1` during `up`** is kind's
+  own `kind load docker-image` meeting Docker's containerd image store (Docker
+  Desktop, new Docker 29 installs): its plain `docker save` writes a
+  multi-platform index whose other platforms were never pulled, and the node's
+  import fails on the first missing digest (kubernetes-sigs/kind#3795). The lab
+  side-loads with `docker save --platform` + `kind load image-archive` instead
+  wherever `docker save --platform` exists — Docker 28 or newer — so seeing this
+  means an older docker: upgrade it. The boot went on regardless; the affected
+  images were pulled by the node.

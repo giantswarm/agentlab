@@ -811,7 +811,8 @@ func ensureNodeImages(cfg *config.Config, refs []string) error {
 	}
 	if still := missingImages(have, refs); len(still) > 0 {
 		return fmt.Errorf("dev images not on the node %s after side-loading: %s\n"+
-			"check `docker image inspect <ref>` on the host and `kind load docker-image --name %s <ref>`,\n"+
+			"check `docker image inspect <ref>` on the host, load it by hand\n"+
+			"(`docker save --platform linux/<arch> -o img.tar <ref> && kind load image-archive --name %s img.tar`),\n"+
 			"then re-run `agentlab platform`", cfg.ControlPlaneNode(), strings.Join(still, ", "), cfg.ClusterName)
 	}
 	note("all %d dev images are on the node", len(refs))
