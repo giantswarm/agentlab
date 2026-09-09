@@ -25,6 +25,13 @@ func note(format string, a ...any) {
 	fmt.Printf("    "+format+"\n", a...)
 }
 
+// warn prints a loud, indented warning on stderr — for a check that found
+// something the boot goes on despite (the runtime's memory below what the
+// lab really uses), as opposed to a note, which is informational.
+func warn(format string, a ...any) {
+	fmt.Fprintf(os.Stderr, "    WARNING: "+format+"\n", a...)
+}
+
 // The two tools whose cluster is pinned by command; every other subprocess
 // (kind, docker, git, helm's plugins) inherits the environment untouched.
 const (
@@ -74,21 +81,6 @@ func run(name string, args ...string) error {
 // runQuiet executes a command, showing output only if it fails.
 func runQuiet(name string, args ...string) error {
 	return pipeInto(nil, name, args...)
-}
-
-// runQuietEnv is runQuiet with extra environment entries ("KEY=value")
-// appended to the inherited environment.
-func runQuietEnv(extraEnv []string, name string, args ...string) error {
-	var buf bytes.Buffer
-	cmd := command(name, args...)
-	cmd.Env = append(cmd.Env, extraEnv...)
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
-	if err := cmd.Run(); err != nil {
-		_, _ = os.Stderr.Write(buf.Bytes())
-		return cmdError(name, args, err, nil)
-	}
-	return nil
 }
 
 // output captures a command's stdout (stderr goes to the terminal).

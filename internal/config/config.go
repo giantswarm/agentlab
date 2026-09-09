@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -60,16 +61,16 @@ const BrowserCallbackPort = 5555
 // KagentUINodePort is the fixed NodePort the kagent-ui Service is pinned to,
 // so the kind port mapping (created once, at cluster creation) has a stable
 // node-side port to publish. The kagent chart renders `ui.service.type` but no
-// `nodePort` field, so the pin is applied by `agentlab post-render` (HACKS.md
-// U9). A real Kubernetes NodePort, hence the 30000-32767 range; the host side
+// `nodePort` field, so the pin is a Kustomize patch in the kagent component's
+// `postRenderers` (HACKS.md U9). A real Kubernetes NodePort, hence the 30000-32767 range; the host side
 // is configurable via Platform.AgentsPort.
 const KagentUINodePort = 30880
 
 // GatewayNodePort is the fixed NodePort publishing the agentgateway edge
 // (the chart-owned Gateway's HTTPS :443 listener) on the kind node. The
 // data-plane Service is created by the agentgateway controller at run time —
-// not part of the Helm release, so neither values nor the post-renderer can
-// pin its NodePort. The lab renders its own selector-matched NodePort Service
+// not part of the Helm release, so neither values nor a postRenderers patch
+// can pin its NodePort. The lab renders its own selector-matched NodePort Service
 // instead (gateway-nodeport.yaml.tmpl), pinned here so the kind port mapping
 // has a stable node-side port. Host side: Platform.GatewayPort.
 const GatewayNodePort = 30443
@@ -87,6 +88,19 @@ var PinnedNodePorts = []int{MusterNodePort, KagentUINodePort, GatewayNodePort, G
 
 // DefaultDexPort is the lab Dex NodePort when agentlab.yaml sets none.
 const DefaultDexPort = 32000
+
+// DefaultChartVersion is the agent-platform release the lab installs when
+// agentlab.yaml pins none — the release this agentlab was verified with.
+// Bump deliberately, with a lab run: the lab never floats.
+const DefaultChartVersion = "3.20.2"
+
+// ChartRepository is where the agent-platform chart releases live.
+const ChartRepository = "oci://gsoci.azurecr.io/charts/giantswarm/agent-platform"
+
+// DevImageComponents are the components whose image platform.devImages can
+// swap: the agent-platform chart's component names (its `components.<name>`
+// entries) for the workloads the lab's dev loops build from a checkout.
+var DevImageComponents = []string{"muster", "backstage", "kagent", "mcp-kubernetes", "model-manager", "agent-manager"}
 
 type User struct {
 	Email        string   `yaml:"email"`
@@ -144,11 +158,26 @@ type Platform struct {
 	// tooling. Both fields set or both empty. The Dex issuer still serves
 	// the lab CA either way; see docs/tls.md.
 	TLS PlatformTLS `yaml:"tls"`
-	// agent-platform-standalone has no chart release yet
-	// (giantswarm/agent-platform-standalone#11), so it is vendored from git
-	// at this pinned SHA. Once released this becomes an OCI ref.
-	APSRepo string `yaml:"apsRepo"`
-	APSRef  string `yaml:"apsRef"`
+	// The agent-platform chart release the lab installs
+	// (oci://gsoci.azurecr.io/charts/giantswarm/agent-platform): an exact
+	// version, never a range — two runs install the same thing, and the lab
+	// never floats onto a release nobody tested it with. DefaultChartVersion
+	// is the release this agentlab was verified against.
+	ChartVersion string `yaml:"chartVersion"`
+	// ChartPath installs the meta chart from a local directory instead of the
+	// pinned release — an agent-platform checkout's helm/agent-platform, for
+	// chart changes that have no release yet (the lab's chart loop). The
+	// directory is read, never written; chartVersion is ignored while set.
+	ChartPath string `yaml:"chartPath,omitempty"`
+	// DevImages swaps a component's image for a build of your own (the lab's
+	// dev-image loop): component name -> image ref (`muster: muster:dev-1a2b`).
+	// `agentlab platform` side-loads the ref from the host docker cache and
+	// renders it into the component's HelmRelease as a kustomize image
+	// override (postRenderers) with imagePullPolicy IfNotPresent, so the swap
+	// is part of the release — a plain `helm upgrade` applies it, and removing
+	// the entry restores the chart's image on the next run. Keys are the
+	// DevImageComponents.
+	DevImages map[string]string `yaml:"devImages,omitempty"`
 	// Additional kagent ModelConfigs beyond the chart-rendered default
 	// (aiModel): self-hosted OpenAI-compatible endpoints (vLLM, Ollama),
 	// OpenRouter, Gemini, plain OpenAI. Rendered as lab-labeled ModelConfig
@@ -393,8 +422,9 @@ type Backstage struct {
 	Enabled bool `yaml:"enabled"`
 	// Backstage binds this port on the node (hostNetwork) and kind maps the
 	// same number onto the host, so the URL is identical on both sides.
-	// The image is not configured here: the umbrella chart's backstage
-	// dependency (pinned by platform.apsRef) decides the version.
+	// The image is not configured here: the agent-platform chart's backstage
+	// component (its version range, resolved by the chart's Flux) decides the
+	// version; platform.devImages swaps in a build of your own.
 	Port int `yaml:"port"`
 }
 
@@ -447,8 +477,7 @@ func Default() *Config {
 			MusterPort:    8090,
 			Domain:        "127.0.0.1.nip.io",
 			GatewayPort:   443,
-			APSRepo:       "https://github.com/giantswarm/agent-platform-standalone",
-			APSRef:        "e946a2f2f68f7408042f1ba36ad539ecd286d39b", // main: backstage 0.226.0 (one Serving group per backend, #121) on muster 5.8.2 + agent-platform-mcps 0.7.0 (#125, #150, #153) + model-manager 0.17.0 (several backends per instance) + agent-platform 3.7.0
+			ChartVersion:  DefaultChartVersion,
 		},
 		Backstage: Backstage{
 			Enabled: true,
@@ -615,7 +644,43 @@ func (c *Config) Normalize() {
 	if c.Backstage.Enabled {
 		c.Platform.Enabled = true
 	}
+	// A file written by an earlier agentlab (or with the key emptied) pins
+	// nothing; the default pin is the release this binary was verified with.
+	if c.Platform.ChartVersion == "" {
+		c.Platform.ChartVersion = DefaultChartVersion
+	}
+	if len(c.Platform.DevImages) == 0 {
+		c.Platform.DevImages = nil
+	}
 	c.Platform.ModelManager.normalize()
+}
+
+// exactVersionRe is a plain semver version (an optional leading v tolerated):
+// what platform.chartVersion must be — a range would let the lab float.
+var exactVersionRe = regexp.MustCompile(`^v?\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$`)
+
+// ValidateChartVersion accepts an exact chart version only.
+func ValidateChartVersion(s string) error {
+	if s == "" {
+		return fmt.Errorf("required: the agent-platform release to install (an exact version, e.g. %s)", DefaultChartVersion)
+	}
+	if !exactVersionRe.MatchString(s) {
+		return fmt.Errorf("must be an exact version (e.g. %s), not a range — the lab never floats", DefaultChartVersion)
+	}
+	return nil
+}
+
+// imageRefRe is a container image reference with an explicit tag or digest:
+// [registry/][path/]name:tag or @sha256:…. A bare name would resolve to
+// `latest` and hide which build the lab runs.
+var imageRefRe = regexp.MustCompile(`^[a-z0-9]+([._-][a-z0-9]+)*(:[0-9]+)?(/[a-z0-9]+([._-][a-z0-9]+)*)*(:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}|@sha256:[a-f0-9]{64})$`)
+
+// ValidateImageRef accepts an image reference that names its tag or digest.
+func ValidateImageRef(s string) error {
+	if !imageRefRe.MatchString(s) {
+		return fmt.Errorf("must be an image reference with a tag or digest, e.g. muster:dev-1a2b3c")
+	}
+	return nil
 }
 
 func (c *Config) Validate() error {
@@ -676,6 +741,22 @@ func (c *Config) Validate() error {
 	}
 	if err := ValidatePort(strconv.Itoa(c.Platform.AgentsPort)); err != nil {
 		return fmt.Errorf("platform.agentsPort: %w", err)
+	}
+	if err := ValidateChartVersion(c.Platform.ChartVersion); err != nil {
+		return fmt.Errorf("platform.chartVersion %q: %w", c.Platform.ChartVersion, err)
+	}
+	if c.Platform.ChartPath != "" {
+		if _, err := os.Stat(filepath.Join(c.Platform.ChartPath, "Chart.yaml")); err != nil {
+			return fmt.Errorf("platform.chartPath: %w (an agent-platform checkout's helm/agent-platform directory)", err)
+		}
+	}
+	for component, ref := range c.Platform.DevImages {
+		if !slices.Contains(DevImageComponents, component) {
+			return fmt.Errorf("platform.devImages: unknown component %q (one of %s)", component, strings.Join(DevImageComponents, ", "))
+		}
+		if err := ValidateImageRef(ref); err != nil {
+			return fmt.Errorf("platform.devImages.%s %q: %w", component, ref, err)
+		}
 	}
 	seenModels := map[string]bool{}
 	for _, m := range c.Platform.ExtraModels {

@@ -11,22 +11,20 @@ your shell's current-context.
 | Command | What it does |
 |---|---|
 | `configure` | Discover this machine, then ask for the lab configuration (or keep it with `--defaults`) and save `agentlab.yaml`. Flags below. |
-| `up` | Create the kind cluster, deploy Dex and the enabled components, and verify the OIDC chain end to end. Idempotent: unchanged re-runs are no-ops. |
+| `up` | Check docker's CPUs and memory against this configuration's floors, then create the kind cluster, deploy Dex and the enabled components, and verify the OIDC chain end to end. Idempotent: unchanged re-runs are no-ops. |
 | `down` | Destroy the kind cluster. `certs/` is kept and the trust stores are untouched. |
 | `reload` | Re-render and re-apply the Dex config after editing `agentlab.yaml` (users, passwords, groups). |
 | `render` | Render every manifest from `agentlab.yaml` into `state/` without applying anything. |
 | `certs` | Generate the lab CA and Dex server cert, re-minting only what config or policy require. `--force` regenerates everything and breaks a running cluster's trust. |
 | `trust` | Install the lab CA into the system and browser trust stores (one sudo prompt; reversible). See [TLS](tls.md). |
 | `untrust` | Remove exactly the lab CA from those stores. |
-| `platform` | Install the agent platform (muster + Kubernetes MCP and the enabled components) on a running cluster. `up` runs this when the platform is enabled. |
-| `platform-down` | Remove the agent platform, leaving Dex and the cluster alone. |
+| `platform` | Install the agent platform on a running cluster: one `helm upgrade --install --wait` of the agent-platform chart in its lab shape, then wait for every component. `up` runs this when the platform is enabled. |
+| `platform-down` | Remove the agent platform in the chart's ordered teardown, leaving Dex and the cluster alone. |
 | `logs <component>` | Tail a component's logs: `backstage`, `dex`, `mcp-prometheus`, `muster` or `prometheus`. |
 | `self-update` | Replace the binary with the latest GitHub release, once its cosign Sigstore bundle verifies (see below). `--check` only reports the running and the latest version, exit status 125 when a newer one exists. |
 
 `backstage` is retired: Backstage deploys with the platform (`backstage.enabled`
-in `agentlab.yaml` and `agentlab up`). The hidden `post-render` command is the
-Helm post-renderer the platform install calls back into the binary with; it is
-not meant to be run by hand.
+in `agentlab.yaml` and `agentlab up`).
 
 ## Identity
 
@@ -72,6 +70,8 @@ The flags pin a value regardless of the discovery, with or without
 | `--agents[=false]` | Enable or disable the agents runtime (kagent, part of the platform install). |
 | `--observability[=false]` | Enable or disable the observability stack (Prometheus + mcp-prometheus). |
 | `--backstage[=false]` | Enable or disable Backstage (implies the platform). |
+| `--chart-version <x.y.z>` | The agent-platform chart release to install, an exact version (default: the release this agentlab was verified with, `config.DefaultChartVersion`). |
+| `--chart-path <dir>` | Install the agent-platform chart from a local checkout's `helm/agent-platform` directory instead of the pinned release; `--chart-path ""` clears it. See [Installing an unreleased chart](platform.md#installing-an-unreleased-chart). |
 | `--model-manager[=false]` | Pin managed models on or off instead of following the host model servers the discovery finds (needs agents). |
 | `--model-manager-backends ollama,lemonade` | Pin the host model servers, in order; the first is model-manager's default backend. |
 

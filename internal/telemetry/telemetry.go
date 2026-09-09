@@ -66,9 +66,9 @@ func Enabled() bool {
 // OS, architecture and SDK version the library adds.
 //
 // Not every invocation is a person using the lab: hidden commands are
-// plumbing (post-render is Helm calling the binary back, __complete every
-// TAB press), `completion` runs on every shell start once sourced from a
-// profile, and `help` is help. None of those count.
+// plumbing (__complete runs on every TAB press), `completion` runs on every
+// shell start once sourced from a profile, and `help` is help. None of those
+// count.
 func Command(cmd *cobra.Command) {
 	if !Enabled() || !UserFacing(cmd) {
 		return

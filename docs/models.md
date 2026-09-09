@@ -130,7 +130,7 @@ raise it once with `lemonade config set ctx_size=16384`.
 
 `extraModels` wires an endpoint and manages nothing: pulling or removing a
 model is CLI-on-host, and nothing shows what is downloaded or loaded. The
-managed mode puts the umbrella's **model-manager** component
+managed mode puts the chart's **model-manager** component
 ([giantswarm/model-manager](https://github.com/giantswarm/model-manager),
 the service behind the Model Manager epic) in front of a model server on the
 host — inventory of downloaded and loaded models, pull with progress,
@@ -150,7 +150,7 @@ platform:
 ```
 
 **One model-manager fronts all of them** (model-manager ≥ 0.17.0; the
-umbrella's `model-manager.backends`): inventory, pull, load/unload, delete and
+chart's `model-manager.backends`): inventory, pull, load/unload, delete and
 the auto-wired ModelConfigs work per backend, `GET /api/v1/backends` lists
 them, every object says which `backend` it belongs to, and every ModelConfig
 carries the `model-manager.giantswarm.io/backend` label. The list has an
@@ -180,7 +180,7 @@ What `agentlab platform` (or `up`) does with it:
   the server's TCP port from the bridge subnets, inside `172.16.0.0/12`) —
   instead of a model-manager pod reporting an unhealthy backend after Helm's
   ten-minute wait, or ModelConfigs pointing at a dead endpoint.
-- **The umbrella's `components.model-manager`** goes on with every listed
+- **The chart's `components.model-manager`** goes on with every listed
   backend (`model-manager.backends` plus one `model-manager.<backend>.endpoint`
   each = the detected addresses; a single entry renders the chart's `backend:`
   form), its agentgateway **route** at

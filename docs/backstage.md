@@ -1,6 +1,6 @@
 # Backstage
 
-Backstage deploys **with the platform** — the umbrella chart's `backstage`
+Backstage deploys **with the platform** — the chart's `backstage`
 component, on by default (`backstage.enabled` in `agentlab.yaml`), published
 through the agentgateway edge. It is **Giant Swarm's own Backstage** — the
 build behind [devportal.giantswarm.io](https://devportal.giantswarm.io/) —
@@ -33,8 +33,8 @@ directly.
 What the lab adds on top of the chart's own app-config
 (`agent-platform-backstage-app-config`):
 
-- **`hostNetwork: true` on the Backstage pod** (`agentlab post-render`, same
-  patch as muster). The issuer is `https://localhost:32000/dex`, and from
+- **`hostNetwork: true` on the Backstage pod** (a `postRenderers` patch on
+  the backstage component, the same as muster's). The issuer is `https://localhost:32000/dex`, and from
   inside a normal pod that is the pod's own loopback; on the host network it
   is the node's, which is the Dex NodePort — the same URL the browser uses.
   `dnsPolicy: ClusterFirstWithHostNet` keeps cluster DNS, so the CoreDNS
@@ -132,19 +132,22 @@ The lab supplies both halves:
   `backstage-catalog` ConfigMap and registers it as a file location, so the
   catalog needs no network. Without it every deploy dies with
   `404 Template template:default/agent-deployment not found` (HACKS.md U7).
-- **The delivery engine.** `agentlab backstage` installs the fluxcd-community
-  `flux2` chart with **only source-controller and helm-controller** (release
-  `flux` in `flux-system`, values in `state/flux-values.yaml`) — enough to
-  reconcile exactly the two kinds the flow applies, still no GitOps loop.
-  Skipped when the platform or agents are disabled: with no kagent there is no
-  `ModelConfig` to build an agent on and the flow is unusable anyway.
+- **The delivery engine.** The platform chart's bundled Flux — the Flux
+  Operator's `FluxInstance` with source-controller and helm-controller under
+  the multi-tenancy lockdown — is what turns those CRs into an installed agent
+  chart. Nothing watches git: it reconciles exactly the objects that are
+  applied to it. The lab installs no Flux of its own.
 
 Everything lands in the selected ModelConfig's namespace (`kagent`): one shared
 `OCIRepository/agent` tracking `semver: x.x.x`, one `HelmRelease` per agent
-named after its slug. The lab omits `agentPlatform.fluxServiceAccountName`
-(composed HelmReleases then carry no `spec.serviceAccountName`), so
-helm-controller applies with its own — there is no Flux multi-tenancy admission
-policy here. RBAC still applies to the *apply* step itself: it runs with the
+named after its slug. The `HelmRelease`s execute as the tenant identity
+`kagent-flux` — a ServiceAccount and a namespace-scoped RoleBinding the chart's
+connectivity component renders whenever kagent is on, and names into the
+portal's `agentPlatform.fluxServiceAccountName` and agent-manager's
+`flux.helmReleaseServiceAccount` from the one value
+`kagent.fluxServiceAccountName` — because under the engine's lockdown a
+`HelmRelease` without one runs as the rights-less default account and fails.
+RBAC still applies to the *apply* step itself: it runs with the
 signed-in user's token, so `platform-admins` can deploy agents and `developers`
 (edit only in `demo`) cannot — which is the platform behavior, not a lab bug.
 

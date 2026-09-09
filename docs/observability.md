@@ -28,7 +28,7 @@ no BOM covers them).
 
 mcp-prometheus follows the mcp-kubernetes stance exactly: unauthenticated on
 the cluster network, muster is the single enforcement point. Its MCPServer CR
-comes from the umbrella's `agent-platform-mcps.mcpServers` values — with a
+comes from the chart's `agent-platform-mcps.mcpServers` values — with a
 `group` deliberately **outside** the chart's `muster.families` (`kubernetes`,
 `prometheus`): a `prometheus`-family entry would surface the tools as
 `x_prometheus_<tool>` with a required `management_cluster` argument, which is
@@ -36,7 +36,7 @@ the multi-cluster UX, not this single-cluster lab's. What the lab exercises is
 the mcp-prometheus tool chain against a plain local Prometheus; the GS
 production shape (Alloy → Mimir, `X-Scope-OrgID` tenancy) is out of scope.
 
-The platform's own monitors ride along: with observability on, the umbrella's
+The platform's own monitors ride along: with observability on, the chart's
 muster ServiceMonitor + PrometheusRule, the kagent ServiceMonitor, the valkey
 PodMonitor and mcp-prometheus's own ServiceMonitor are all enabled, and the
 lab Prometheus scrapes them (its monitor/rule selectors are opened with
@@ -45,7 +45,7 @@ carrying the kps release label).
 
 **Backstage's own metrics views ride along too.** The Clusters and
 Deployments pages query Mimir through gs-backend's `MimirService`, hardcoded
-to `https://observability.<baseDomain>/prometheus/api/v1/query`; the umbrella
+to `https://observability.<baseDomain>/prometheus/api/v1/query`; the chart
 sets `mimirEnabled: false` because standalone installations have no such
 endpoint. With observability on, the lab provides exactly that endpoint — an
 HTTPRoute on the edge (`observability.<domain>`, `/prometheus` prefix-strip →

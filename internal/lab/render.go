@@ -13,6 +13,8 @@ import (
 	"strings"
 	"text/template"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/giantswarm/agentlab/internal/config"
 )
 
@@ -22,7 +24,7 @@ var templatesFS embed.FS
 // gatewayAPICRDs is the Gateway API standard-channel install (v1.5.0),
 // embedded so a boot needs no network to give the cluster the Gateway/
 // HTTPRoute/... CRDs — the documented cluster-level prerequisite of the
-// agent-platform-standalone chart.
+// agent-platform chart.
 //
 //go:embed templates/gateway-api-crds.yaml
 var gatewayAPICRDs []byte
@@ -72,6 +74,15 @@ type tmplData struct {
 	FamilyInstanceArg       string
 	ToolGroupLabel          string
 	ToolGroupInfrastructure string
+	// PostRenderers is the lab's per-component `postRenderers` list as
+	// indented YAML, keyed by agent-platform component name
+	// (postrenderers.go): the hostNetwork, sidecar and nodePort patches plus
+	// the dev-image overrides; MCPPrometheusPostRenderers the same for the
+	// lab's own mcp-prometheus HelmRelease. MCPPrometheusChartVersion pins
+	// that release's chart (observability.go).
+	PostRenderers              map[string]string
+	MCPPrometheusPostRenderers string
+	MCPPrometheusChartVersion  string
 }
 
 func newTmplData(cfg *config.Config) (*tmplData, error) {
@@ -86,29 +97,40 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 			endpoints = map[string]string{}
 		}
 	}
+	postRenderers, err := componentPostRenderers(cfg)
+	if err != nil {
+		return nil, err
+	}
+	mcpPrometheus, err := yaml.Marshal([]postRenderer{sidecarPostRenderer(mcpPrometheusRelease, cfg.DexPort)})
+	if err != nil {
+		return nil, err
+	}
 	return &tmplData{
-		Config:                    cfg,
-		ModelManagerEnabled:       cfg.ModelManagerEnabled(),
-		ModelManagerBackends:      cfg.Platform.ModelManager.Backends,
-		ModelManagerEndpoints:     endpoints,
-		ExtraModels:               cfg.Platform.ExtraModels,
-		OAuthFixtureServer:        oauthFixtureServer,
-		OAuthFixtureURL:           oauthFixtureURL,
-		FleetFixtureServers:       fleetFixtureServers(),
-		FamilyInstanceArg:         familyInstanceArg,
-		ToolGroupLabel:            toolGroupLabel,
-		ToolGroupInfrastructure:   toolGroupInfrastructure,
-		CertsDir:                  certsDir,
-		MusterNodePort:            config.MusterNodePort,
-		KagentUINodePort:          config.KagentUINodePort,
-		GatewayNodePort:           config.GatewayNodePort,
-		GatewayPublicNodePort:     config.GatewayPublicNodePort,
-		BrowserCallbackPort:       config.BrowserCallbackPort,
-		DomainRegex:               strings.ReplaceAll(cfg.Platform.Domain, ".", `\.`),
-		AllGroups:                 config.Groups,
-		KubernetesClientSecret:    config.KubernetesClientSecret,
-		AgentPlatformClientID:     config.AgentPlatformClientID,
-		AgentPlatformClientSecret: config.AgentPlatformClientSecret,
+		Config:                     cfg,
+		PostRenderers:              postRenderers,
+		MCPPrometheusPostRenderers: strings.TrimRight(string(mcpPrometheus), "\n"),
+		MCPPrometheusChartVersion:  mcpPrometheusChartVersion,
+		ModelManagerEnabled:        cfg.ModelManagerEnabled(),
+		ModelManagerBackends:       cfg.Platform.ModelManager.Backends,
+		ModelManagerEndpoints:      endpoints,
+		ExtraModels:                cfg.Platform.ExtraModels,
+		OAuthFixtureServer:         oauthFixtureServer,
+		OAuthFixtureURL:            oauthFixtureURL,
+		FleetFixtureServers:        fleetFixtureServers(),
+		FamilyInstanceArg:          familyInstanceArg,
+		ToolGroupLabel:             toolGroupLabel,
+		ToolGroupInfrastructure:    toolGroupInfrastructure,
+		CertsDir:                   certsDir,
+		MusterNodePort:             config.MusterNodePort,
+		KagentUINodePort:           config.KagentUINodePort,
+		GatewayNodePort:            config.GatewayNodePort,
+		GatewayPublicNodePort:      config.GatewayPublicNodePort,
+		BrowserCallbackPort:        config.BrowserCallbackPort,
+		DomainRegex:                strings.ReplaceAll(cfg.Platform.Domain, ".", `\.`),
+		AllGroups:                  config.Groups,
+		KubernetesClientSecret:     config.KubernetesClientSecret,
+		AgentPlatformClientID:      config.AgentPlatformClientID,
+		AgentPlatformClientSecret:  config.AgentPlatformClientSecret,
 	}, nil
 }
 
@@ -178,9 +200,8 @@ var manifests = map[string]struct {
 	"kind-config.yaml.tmpl":                  {out: "kind-config.yaml"},
 	"rbac.yaml.tmpl":                         {out: "rbac.yaml"},
 	"agent-platform-values.yaml.tmpl":        {out: "agent-platform-values.yaml"},
-	"flux-values.yaml.tmpl":                  {out: "flux-values.yaml"},
 	"kube-prometheus-stack-values.yaml.tmpl": {out: "kube-prometheus-stack-values.yaml"},
-	"mcp-prometheus-values.yaml.tmpl":        {out: "mcp-prometheus-values.yaml"},
+	mcpPrometheusTemplate:                    {out: "mcp-prometheus.yaml"},
 	"observability-route.yaml.tmpl":          {out: "observability-route.yaml"},
 	"demo-workflow.yaml.tmpl":                {out: "demo-workflow.yaml"},
 	"oauth-fixture.yaml.tmpl":                {out: "oauth-fixture.yaml"},

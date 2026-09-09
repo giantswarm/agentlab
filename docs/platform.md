@@ -1,27 +1,103 @@
 # The agent platform (muster + Kubernetes MCP)
 
 The lab's centerpiece: Giant Swarm's
-[agent-platform-standalone](https://github.com/giantswarm/agent-platform-standalone)
-umbrella chart, wired to the lab Dex, so Claude Code can drive a Kubernetes
-MCP server living inside the kind cluster. It is one plain Helm chart —
-muster, valkey and the MCP registrations are pinned subcharts (`Chart.lock`
-is the BOM) — so unlike the old agent-platform meta-package there is **no
-Flux** and no HelmRelease indirection anywhere in this lab.
+[agent-platform](https://github.com/giantswarm/agent-platform) chart — the
+same chart every Giant Swarm management cluster runs — wired to the lab Dex,
+so Claude Code can drive a Kubernetes MCP server living inside the kind
+cluster. The chart is a meta-package: it renders one Flux `OCIRepository` +
+`HelmRelease` per component (muster, valkey, agentgateway, the MCP
+registrations, kagent, agent-manager, model-manager, mcp-kubernetes,
+Backstage, and the connectivity chart that wires them together), and its
+bundled Flux engine turns those into running workloads.
 
-The chart has no release yet
-([PR #11](https://github.com/giantswarm/agent-platform-standalone/pull/11)), so
-`agentlab platform` vendors it from git at a pinned SHA (`platform.apsRef` in
-`agentlab.yaml`) into `.vendor/` (not `vendor/` — that would flip the Go
-toolchain into vendored-build mode) and installs from the local path. Once released,
-that step becomes a plain `helm install oci://…/agent-platform-standalone`.
+The lab installs it in its **lab shape**:
+
+- **The bundled engine is on** (`components.flux.enabled: true`, the chart's
+  default): the chart brings the Flux Operator and one `FluxInstance` running
+  source-controller + helm-controller under the multi-tenancy lockdown, plus
+  the tenant identity `agent-platform-flux` every platform `HelmRelease` runs
+  as. Nothing else in the lab installs Flux — the same engine also delivers
+  the agents the Backstage create flow and agent-manager write as
+  `HelmRelease`s.
+- **Self-management is off** (`gitops.self.enabled: false`). With the engine
+  on, the chart would by default render its own `OCIRepository` +
+  `HelmRelease`, adopt the release and follow the *published* chart's version
+  range — and refuse every later `helm upgrade` from the CLI. The lab exists
+  to install what is **not** released yet (a local chart checkout, a dev
+  image), which that `HelmRelease` would replace with whatever the registry
+  holds. So the Helm CLI keeps owning the release: `agentlab platform` is one
+  idempotent `helm upgrade --install … --wait` (no post-renderer, no
+  `--force-conflicts`), and `helm upgrade` stays the day-2 tool. Never drop
+  the value on a lab: the first upgrade without it makes the release
+  self-managed.
+- The chart is **pinned** to an exact release, `platform.chartVersion` in
+  `agentlab.yaml` (the default is the release this agentlab was verified
+  with). The lab never floats; bump the pin deliberately, with a lab run.
 
 The platform installs as part of `agentlab up` (it is enabled in the default
 configuration); on an already-running cluster the steps are also standalone:
 
 ```bash
-./agentlab platform       # vendors the chart + muster + valkey + mcp-kubernetes
+./agentlab platform       # helm upgrade --install of the chart, then waits for every component
 ./agentlab platform-test  # headless proof of the whole chain
 ```
+
+The lab's patches on the component charts — `hostNetwork` on muster and
+Backstage, the `dex-localhost` sidecar on the MCP servers, the kagent UI
+NodePort, and the dev images below — are per-component **`postRenderers`
+values** (`components.<name>.postRenderers` in
+`state/agent-platform-values.yaml`): Kustomize patches the chart forwards to
+that component's `HelmRelease` and the bundled helm-controller applies over
+the component chart's render — the same mechanism the fleet has for chart
+fixes.
+
+## Installing an unreleased chart
+
+Point `platform.chartPath` at a local checkout's chart directory and re-run
+`agentlab platform` — nothing needs a release or a push:
+
+```yaml
+platform:
+  chartPath: /path/to/agent-platform/helm/agent-platform
+```
+
+(or `agentlab configure --defaults --chart-path /path/to/agent-platform/helm/agent-platform`;
+`--chart-path ""` clears it). `chartVersion` is ignored while it is set, and
+the boot says which chart it installed. The directory is read, never written.
+
+## Dev images
+
+To run a component from a build of your own, build the image, and name it
+under `platform.devImages` keyed by the chart's component name (`muster`,
+`backstage`, `kagent` — the controller —, `mcp-kubernetes`, `model-manager`,
+`agent-manager`):
+
+```yaml
+platform:
+  devImages:
+    muster: muster:dev-1a2b3c
+    backstage: backstage-dev:my-feature-4d5e6f
+```
+
+`agentlab platform` side-loads the image from the host docker cache into the
+node, checks the node lists it before anything installs (a missing image
+fails right there with its fix, instead of five minutes later as an
+`ImagePullBackOff`, a helm-controller timeout and a rollback to the chart's
+image), and renders it into that component's `postRenderers` as a Kustomize
+image override with `imagePullPolicy: IfNotPresent`, so the swap is part of
+the release: the same plain `helm upgrade` applies it, `kubectl get deploy -o
+jsonpath` shows the new image, and removing the entry restores the chart's
+image on the next run. Use a distinctive tag per build — kind's containerd
+keeps running the old bits under a reused tag. And make it a build of its
+own, not a re-tag of a registry image the kubelet has pulled (a chart that
+pulls `Always`, like Backstage's, makes the kubelet pull): since Kubernetes
+1.33 the kubelet remembers which image IDs it pulled and re-pulls a pod's ref
+that maps to one of them (`KubeletEnsureSecretPulledImages`), so such a
+re-tag ends in `ImagePullBackOff` against Docker Hub while a real build — a
+new image ID, side-loaded, never pulled by the kubelet — is used as is. (A `kubectl patch` on the
+Deployment still works for a quick look, but only until helm-controller's
+next release of that component overwrites it — the values are the durable
+path.)
 
 muster runs with `hostNetwork`, so it binds `:8090` on the node, and the
 rendered kind config publishes that onto the Mac (host port `platform.musterPort`,
@@ -55,7 +131,7 @@ muster plays two OAuth roles. Towards Claude Code and Backstage it is the
 per-server **Sign in** button calls) answers a challenge — a
 `https://muster.<domain>/oauth/proxy/start?state=…` URL — the browser follows
 it through the downstream's authorization server, and muster keeps the token
-per session. The umbrella leaves that role off (`oauth.mcpClient`), so the
+per session. The chart leaves that role off (`oauth.mcpClient`), so the
 lab's values turn it on with the edge URL as `publicUrl` (the chart derives
 the callback `/oauth/proxy/callback` and serves muster's client ID metadata
 document at `/.well-known/oauth-client.json`), the way real installations run
@@ -145,7 +221,7 @@ authorization — that stays with the servers' OAuth and the clusters' RBAC.
 In the lab only the fake fleet carries the label: `lab-oauth-fixture` and
 anything you register by hand stay unlabelled on purpose, so the Registered
 servers group has members; the vendored agent-manager / model-manager /
-umbrella charts bring their own labels (`agent-platform`; `infrastructure` on
+component charts bring their own labels (`agent-platform`; `infrastructure` on
 the bundled `mcp-kubernetes`) once bumped to the releases that stamp them.
 
 The members point at muster's own protected `/mcp` with `auth.type: oauth`,
@@ -248,26 +324,39 @@ data the page reads — see [The muster plugin](backstage.md#the-muster-plugin).
 |---|---|
 | `gatewayApi.gateway.create: true` — the chart-owned agentgateway Gateway **is** the public edge | A real MC fronts the platform with the cluster's shared Envoy Gateway; kind has none, so the data-plane Gateway itself terminates TLS for `*.127.0.0.1.nip.io` with the lab's wildcard cert (the chart's own standalone/kind mode, `ingress.mode: agentgateway-muster`). The Gateway API CRDs are embedded in the binary and applied before the install; a lab-owned NodePort Service pins the edge onto the kind port mapping (HACKS.md U10), and a CoreDNS rewrite points `*.127.0.0.1.nip.io` at it inside pods (outside, nip.io answers 127.0.0.1 by itself). |
 | One Dex client, `agent-platform` | The chart's `global.identity` convention: muster and Backstage share the client, so a Backstage-forwarded token natively carries an audience muster trusts. The extra `dex-k8s-authenticator` client exists only as the cross-client audience target Backstage's GS auth provider requests by default. |
-| `networkPolicy.enabled: false`, `kyvernoPolicies.enabled: false` | The umbrella's own policy objects. No Cilium and no Kyverno in kind, so both would render CRs whose API groups the cluster does not serve. |
+| `networkPolicy.enabled: false`, `kyvernoPolicies.enabled: false` | The chart's own policy objects. No Cilium and no Kyverno in kind, so both would render CRs whose API groups the cluster does not serve. |
 | The muster/kagent ServiceMonitors, valkey PodMonitor and muster PrometheusRule follow `platform.observability` | Without it there is no Prometheus Operator, so none of those CRDs exist and the releases fail to render. With it they are scraped by the lab Prometheus — whose selectors are opened up (`*NilUsesHelmValues: false`) because upstream's default selects only monitors carrying the kps release label, and the platform's monitors come from other releases. Flipping observability rolls the muster pod once (the toggle changes its metrics-exporter env). |
 | `platform.observability`: the GS kube-prometheus-stack constituent installed directly, Prometheus server re-enabled, instead of the observability-bundle | The bundle is MC-shaped (Flux HelmReleases with a hardcoded remote kubeconfig, Alloy → Mimir, no local PromQL endpoint). See [Observability](observability.md). |
-| `muster.muster.oauth.mcpClient.enabled: true` + the `lab-oauth-fixture` MCPServer | The umbrella leaves muster's OAuth *client* role — the proxy behind `core_auth_login` and the portal's Sign in — off; real installations turn it on, and without it no per-server sign-in can be exercised. The fixture is the one `Auth Required` downstream to sign in to (muster's own protected `/mcp`); see [Signing in to a downstream server](#signing-in-to-a-downstream-server-muster-as-oauth-client). |
+| `muster.muster.oauth.mcpClient.enabled: true` + the `lab-oauth-fixture` MCPServer | The chart leaves muster's OAuth *client* role — the proxy behind `core_auth_login` and the portal's Sign in — off; real installations turn it on, and without it no per-server sign-in can be exercised. The fixture is the one `Auth Required` downstream to sign in to (muster's own protected `/mcp`); see [Signing in to a downstream server](#signing-in-to-a-downstream-server-muster-as-oauth-client). |
 | The fake-fleet MCPServers (`<family>-lab-01`, `<family>-lab-02`) with `agent-platform.giantswarm.io/tool-group: infrastructure` | One cluster and a family-less bundled `mcp-kubernetes` look nothing like the federated fleet the portal's server groups, fleet coverage and Tools step are built for. Six `Auth Required` family members fake it, carrying the tier label the fleet charts stamp; see [The fake fleet and the tool-group label](#the-fake-fleet-and-the-tool-group-label). |
-| `muster.rbac.{mcpServerEditor,workflowEditor}.subjects` → `oidc:platform-admins` | The umbrella binds muster's editor Roles to Giant Swarm's admin groups, which do not exist here. Rebound to the lab's own admin group (`--oidc-groups-prefix=oidc:`, same spelling as the lab RBAC). Lists replace, so the GS groups are dropped. |
-| muster patched to `hostNetwork` + `maxSurge: 0` | Same issuer trick as the apiserver and Backstage. `maxSurge: 0` because two hostNetwork pods cannot both bind `:8090` on a one-node cluster. Applied by `agentlab post-render` — Helm 4 accepts only plugin-type post-renderers, so the install generates a `postrenderer/v1` plugin in `state/helm-plugins/` whose command is the agentlab binary itself, and passes it via `HELM_PLUGINS` + `--post-renderer agentlab-postrender`. The plain-Helm replacement for the Flux `postRenderers` the meta-package forwarded to helm-controller. |
-| `components.kagent.enabled` from `platform.agents`, `controller.auth.mode: unsecure`, kagent ServiceMonitor + OTel off | Agents are part of what the lab tests, so kagent is on by default (the umbrella defaults it off) but optional — `platform.agents: false` skips the runtime. `unsecure` because the GS `trusted-proxy` mode assumes a JWT-validating agentgateway in front; no Prometheus Operator / OTLP gateway in kind. See [Agents (kagent)](agents.md). |
-| `kagent.ui.service.type: NodePort`, nodePort 30880 pinned by `agentlab post-render` | On a real MC the UI sits behind the agentgateway edge; this lab publishes it through the kind port mapping instead (host side `platform.agentsPort`, default 8081). The chart's Service template renders no `nodePort` field, so the fixed node port is a post-render patch (HACKS.md U9). |
-| The chart vendored at a pinned git SHA | Component versions are the chart's own tested BOM (`Chart.lock`); the lab no longer pins its own. The only lab-side pin is `platform.apsRef` — the chart repo commit — so two runs still install the same thing. |
+| `muster.rbac.{mcpServerEditor,workflowEditor}.subjects` → `oidc:platform-admins` | The chart binds muster's editor Roles to Giant Swarm's admin groups, which do not exist here. Rebound to the lab's own admin group (`--oidc-groups-prefix=oidc:`, same spelling as the lab RBAC). Lists replace, so the GS groups are dropped. |
+| muster patched to `hostNetwork` + `maxSurge: 0` | Same issuer trick as the apiserver and Backstage. `maxSurge: 0` because two hostNetwork pods cannot both bind `:8090` on a one-node cluster. A Kustomize strategic-merge patch in `components.muster.postRenderers`, which the chart forwards to muster's `HelmRelease` and the bundled helm-controller applies over the muster chart's render. |
+| The `dex-localhost` sidecar on mcp-kubernetes, model-manager, agent-manager and mcp-prometheus | Those servers validate the forwarded Dex token themselves and must reach the issuer URL `https://localhost:32000/dex`, but all listen on `:8080` and cannot share the host network. A socat sidecar on the pod's own loopback forwards `:32000` to the Dex Service (HACKS.md U13) — a `postRenderers` patch on each component, and on the lab's own mcp-prometheus `HelmRelease`. |
+| `components.kagent.enabled` from `platform.agents`, `controller.auth.mode: unsecure`, kagent ServiceMonitor + OTel off | Agents are part of what the lab tests, so kagent is on by default (the chart defaults it off) but optional — `platform.agents: false` skips the runtime. `unsecure` because the GS `trusted-proxy` mode assumes a JWT-validating agentgateway in front; no Prometheus Operator / OTLP gateway in kind. See [Agents (kagent)](agents.md). |
+| `kagent.ui.service.type: NodePort`, nodePort 30880 pinned by the kagent `postRenderers` patch | On a real MC the UI sits behind the agentgateway edge; this lab publishes it through the kind port mapping instead (host side `platform.agentsPort`, default 8081). The chart's Service template renders no `nodePort` field, so the fixed node port is a patch (HACKS.md U9). |
+| `components.flux.enabled: true`, `gitops.self.enabled: false` | The lab shape (see [The agent platform](#the-agent-platform-muster--kubernetes-mcp)): a management cluster runs its own Flux and installs the chart through it; the lab has none, so the chart brings the engine — and must not adopt its own release, because the lab installs charts and images that are not released. |
+| The chart pinned to an exact release (`platform.chartVersion`) | Component versions are the chart's own ranges, resolved by its Flux at reconcile time (the fleet's dogfooding track). The chart itself never floats in the lab: two runs install the same thing, and a bump is a deliberate edit with a lab run behind it. |
+| `mcp-prometheus` as a lab-rendered Flux `HelmRelease` | The one release the lab installs outside the chart rides the same engine, as the same tenant identity, so its lab-only sidecar is a `postRenderers` patch like the others and there is exactly one Helm writer (the CLI, for the chart) and one Flux engine on the cluster. |
 
 ## Platform gotchas
 
-- **Switching from the old meta-package needs a clean slate.** Both installs use
-  the Helm release name `agent-platform`, but the old one rendered Flux
-  HelmReleases and the new one renders the workloads directly — upgrading across
-  that boundary races helm-controller uninstalls against the fresh install.
-  `agentlab platform` refuses if it finds the old HelmReleases; run
-  `agentlab platform-down` first (an old cluster keeps its now-idle `flux-system`,
-  which is harmless).
+- **A cluster built by an earlier agentlab needs a clean slate.** Before the
+  chart brought its own engine, the lab installed the agent-platform-standalone
+  umbrella under the same release name and its own Flux controllers in
+  `flux-system`; the chart refuses a second Flux, and there is no in-place
+  migration on purpose — the kind cluster is throwaway. `agentlab platform`
+  names what it found and asks for `agentlab down && agentlab up`. It also
+  removes the leftovers of those versions in the working directory
+  (`.vendor/`, `state/helm-plugins/`).
+- **`agentlab platform-down` is the chart's ordered teardown.** It deletes
+  the lab's mcp-prometheus `HelmRelease` while the engine still runs, then
+  `helm uninstall --wait` runs the chart's pre-delete hooks — delete the
+  component `HelmRelease`s and wait for their releases, then delete the
+  `FluxInstance` and wait for the operator to remove Flux with its CRDs,
+  which takes every remaining `HelmRelease` (the agents' too) with it — and
+  only then deletes the namespaces. Nothing is left with a finalizer nobody
+  processes. The four Flux Operator CRDs and the prometheus-operator CRDs
+  stay (Helm never removes a chart's `crds/`); a reinstall is clean.
 - **`allowPublicClientRegistration` must be on for Claude Code's login.**
   Claude Code registers over DCR as a public client on a random loopback port,
   so none of the other registration gates can be opened for it: it cannot send
@@ -282,11 +371,12 @@ data the page reads — see [The muster plugin](backstage.md#the-muster-plugin).
   flips the type without also deleting that field fails with
   `rollingUpdate: Forbidden`. `maxSurge: 0` achieves the same thing without the
   conflict.
-- **A disabled kagent still creates its namespace.** The umbrella's
-  `templates/namespace.yaml` is gated only on `kagent.kagent.namespaceOverride`,
-  not on `components.kagent.enabled`, so an empty `kagent` namespace appears.
-  Harmless — Helm owns it and removes it on uninstall.
-- **Kubernetes tools carry the server-name prefix.** The umbrella's bundled
+- **The `kagent` namespace follows the kagent component.** While
+  `components.kagent.enabled` is true the chart's pre-install/pre-upgrade hook
+  creates it ahead of the kagent `HelmRelease`, the connectivity component
+  adopts it, and `helm uninstall` (the ordered teardown) removes it with the
+  connectivity release. The lab creates no namespace of its own for kagent.
+- **Kubernetes tools carry the server-name prefix.** The chart's bundled
   `mcp-kubernetes` MCPServer declares no muster *family*, so its tools use
   per-server prefixing: `call_tool(name=x_mcp-kubernetes_list, arguments={...})`. The fake fleet's members are the lab's only family servers and they stay
   `Auth Required`, so no `x_kubernetes_*` family tools appear in a session.

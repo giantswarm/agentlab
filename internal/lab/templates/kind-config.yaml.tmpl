@@ -38,8 +38,8 @@ nodes:
         listenAddress: "127.0.0.1"
         protocol: TCP
       # The kagent UI. No issuer trick needed here (the lab UI does no OAuth),
-      # so it stays a plain NodePort Service — pinned to this node port by
-      # `agentlab post-render`, published as {{ .KagentUIBaseURL }}.
+      # so it stays a plain NodePort Service — pinned to this node port by the
+      # kagent component's postRenderers patch, published as {{ .KagentUIBaseURL }}.
       - containerPort: {{ .KagentUINodePort }}
         hostPort: {{ .Platform.AgentsPort }}
         listenAddress: "127.0.0.1"

@@ -20,9 +20,8 @@ One signal contains:
 - a random session UUID, unique per command execution
 
 Nothing from `agentlab.yaml`, `state/`, `certs/`, the cluster, the users, the
-models or the model servers is ever sent. Help output (`-h`, `--help`), shell
-completion and the internal `post-render` call Helm makes back into the binary
-do not count. The signal goes out in the background while the command runs
+models or the model servers is ever sent. Help output (`-h`, `--help`) and
+shell completion do not count. The signal goes out in the background while the command runs
 and is dropped when the network is unavailable — it never blocks or fails a
 command.
 

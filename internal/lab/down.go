@@ -34,17 +34,36 @@ func Down(cfg *config.Config) error {
 	return nil
 }
 
-// PlatformDown removes the agent platform releases and namespace, leaving Dex
-// and the cluster alone. The observability releases go too (they only exist
-// to serve the platform's MCP tools); their prometheus-operator CRDs stay —
-// helm never removes a chart's crds/, and re-installs are unaffected.
+// PlatformDown removes the agent platform and the observability releases,
+// leaving Dex and the cluster alone. The order is the chart's: the lab's own
+// mcp-prometheus HelmRelease goes first while helm-controller still runs (a
+// clean uninstall of its release), then `helm uninstall --wait` of the
+// platform runs the chart's pre-delete hooks — delete the component
+// HelmReleases and wait for their releases to be uninstalled, then delete the
+// FluxInstance and wait for the operator to remove Flux with its CRDs, which
+// takes every remaining HelmRelease object (the agents' too) with it — before
+// Helm removes the operator and the identities. Nothing is left with a
+// finalizer nobody processes, so the namespaces delete promptly. The
+// prometheus-operator CRDs and the four Flux Operator CRDs stay — helm never
+// removes a chart's crds/, and re-installs are unaffected.
 func PlatformDown(cfg *config.Config) error {
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
 	}
-	_ = runQuiet("helm", "-n", observabilityNamespace, "uninstall", mcpPrometheusRelease)
+	if _, err := outputQuiet("kubectl", "-n", platformNamespace, "get", "helmreleases.helm.toolkit.fluxcd.io", mcpPrometheusRelease); err == nil {
+		step("Uninstalling mcp-prometheus (its HelmRelease, while the engine still runs)")
+		_ = runQuiet("kubectl", "-n", platformNamespace, "delete", "helmreleases.helm.toolkit.fluxcd.io", mcpPrometheusRelease,
+			"--ignore-not-found", "--wait", "--timeout=3m")
+		_ = runQuiet("kubectl", "-n", platformNamespace, "delete", "ocirepositories.source.toolkit.fluxcd.io", mcpPrometheusRelease,
+			"--ignore-not-found")
+	}
+	if _, err := outputQuiet("helm", "-n", platformNamespace, "status", platformRelease); err == nil {
+		step("Uninstalling the platform (the chart's ordered teardown: releases, then the engine)")
+		if err := run("helm", "-n", platformNamespace, "uninstall", platformRelease, "--wait", "--timeout", "10m"); err != nil {
+			return err
+		}
+	}
 	_ = runQuiet("helm", "-n", observabilityNamespace, "uninstall", kpsRelease)
 	_ = runQuiet("kubectl", "delete", "namespace", observabilityNamespace, "--ignore-not-found")
-	_ = runQuiet("helm", "-n", platformNamespace, "uninstall", "agent-platform")
 	return run("kubectl", "delete", "namespace", platformNamespace, "--ignore-not-found")
 }

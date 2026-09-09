@@ -35,7 +35,7 @@ with Dex doing the logins.
   the platform and Backstage are enabled by default), then `./agentlab up`,
   then authenticate via `/mcp` (Dex browser login; users and passwords are in
   `agentlab.yaml`, default `admin@lab.local` / `password`).
-- The Kubernetes tools come from the umbrella's bundled `mcp-kubernetes`
+- The Kubernetes tools come from the chart's `mcp-kubernetes` component
   MCPServer and use muster's per-server prefixing: `x_mcp-kubernetes_<tool>`
   (e.g. `x_mcp-kubernetes_list`), no `management_cluster` argument.
 - muster's OAuth *client* role is on (`oauth.mcpClient`), and the lab ships
@@ -54,16 +54,18 @@ with Dex doing the logins.
   installed (MC-shaped: Flux HelmReleases, Alloy -> Mimir, no local PromQL).
   Backstage's Clusters/Deployments metrics work too: the lab serves the
   Mimir-shaped endpoint (`observability.<domain>/prometheus` on the edge →
-  the lab Prometheus) and overrides the umbrella's `mimirEnabled: false` in
-  its app-config overlay (backstage-catalog.yaml.tmpl).
+  the lab Prometheus) and overrides the chart's `mimirEnabled: false` in
+  its app-config overlay (backstage-catalog.yaml.tmpl). mcp-prometheus is a
+  lab-rendered Flux HelmRelease through the platform's bundled engine
+  (mcp-prometheus.yaml.tmpl), not a helm install of its own.
 - The agents runtime (kagent) installs with the platform by default but is
-  optional (`platform.agents` in `agentlab.yaml`) — on real clusters agent
-  delivery runs through Flux/GitOps, which the lab does not run as a GitOps
-  loop. Backstage's agent create flow (`/agents/new`) deploys by kube:applying
-  Flux CRs through the scaffolder Template `agent-deployment` (embedded into
-  the lab catalog from `templates/static/`), so `agentlab backstage` also
-  installs Flux's source+helm controllers as the delivery engine when agents
-  are enabled — nothing watches git. Its default
+  optional (`platform.agents` in `agentlab.yaml`). Agents are Flux
+  HelmReleases on every installation: Backstage's agent create flow
+  (`/agents/new`) deploys by kube:applying Flux CRs through the scaffolder
+  Template `agent-deployment` (embedded into the lab catalog from
+  `templates/static/`), agent-manager writes the same objects, and the
+  platform chart's bundled engine reconciles them — nothing watches git, and
+  the lab installs no Flux of its own. Its default
   ModelConfig and Backstage's ai-chat both use `aiModel` from `agentlab.yaml`
   (Anthropic only); the API key comes from `$ANTHROPIC_API_KEY` on the host at
   deploy time and lives only in the Secrets `kagent/kagent-anthropic` and
@@ -83,7 +85,7 @@ with Dex doing the logins.
   `platform.modelManager.backends` (Ollama first); `--model-manager[=false]`
   and `--model-manager-backends` pin it. Never hand-edit that list to
   describe the machine — re-run `configure --defaults`.
-- `platform.modelManager` installs the umbrella's model-manager component in
+- `platform.modelManager` installs the chart's model-manager component in
   front of EVERY backend of the list (model-manager >= 0.17.0 fronts several
   per instance; the first is its default backend, where a request that names
   none goes): their models become manageable from the portal and as
@@ -148,8 +150,8 @@ The lab's own e2e checks are the `*-test` subcommands, not `go test`.
 - `internal/telemetry` — one anonymous usage signal per user-facing command
   to TelemetryDeck (giantswarm/telemetrydeck-go, kubectl-gs's signal shape:
   `GiantSwarm.command` with the command path and the version). `main.go`
-  wires it as the root `PersistentPreRun`; hidden commands (post-render,
-  `__complete`), `completion` and `help` never count. Opt-outs:
+  wires it as the root `PersistentPreRun`; hidden commands (`__complete`),
+  `completion` and `help` never count. Opt-outs:
   `AGENTLAB_TELEMETRY_OPTOUT`, `DO_NOT_TRACK=1`. When iterating on the lab,
   `AGENTLAB_TELEMETRY_TESTMODE=1` keeps the runs out of the production
   numbers (and logs delivery errors). Details in docs/telemetry.md.
@@ -176,8 +178,13 @@ The lab's own e2e checks are the `*-test` subcommands, not `go test`.
   rendered via the `manifests` table in `render.go`; stamped manifests (dex,
   backstage) carry a checksum over render + certs, so unchanged re-applies are
   pure no-ops and config/cert edits roll the pod exactly once. The platform
-  install (`platform.go`) uses the binary itself as a Helm post-renderer
-  (`postrender.go`: hostNetwork, the DCR chart-bug fix, HTTPRoute strip).
+  install (`platform.go`) is one `helm upgrade --install --wait` of the
+  agent-platform meta chart in its lab shape; the lab's patches on the
+  component charts (hostNetwork, the dex-localhost sidecar, the kagent UI
+  NodePort, dev images) are per-component `postRenderers` values the chart
+  forwards to the component HelmReleases (`postrenderers.go`), and the image
+  preload resolves the component charts from the rendered OCIRepositories
+  (`fluxreleases.go`).
 - `docs/` — the documentation, one page per topic (getting started, the
   command reference, TLS, the platform, agents, models, observability,
   Backstage, identity, troubleshooting, usage data, development).
@@ -198,9 +205,15 @@ Load-bearing invariants (details in docs/):
   works from the Mac, inside the node, and inside hostNetwork pods because the
   Dex NodePort equals the kind host port. The issuer must be spelled
   `localhost`, not `127.0.0.1` — muster rejects IP-literal loopback issuers.
-- The agent-platform chart has no release yet, so `agentlab platform` vendors
-  it from git at the SHA pinned in `agentlab.yaml` into `.vendor/` (not
-  `vendor/`, which would flip the Go toolchain into vendored-build mode).
+- **The lab shape of the agent-platform chart**: the bundled Flux engine ON
+  (`components.flux.enabled: true` — the lab has no Flux of its own, and the
+  chart refuses a second one) and self-management OFF (`gitops.self.enabled:
+  false` — the lab installs unreleased charts and dev images, which the
+  chart's own HelmRelease would replace with the published release; the Helm
+  CLI stays the one writer of the release). The chart is pinned to an exact
+  release (`platform.chartVersion`, default `config.DefaultChartVersion`);
+  `platform.chartPath` installs a local checkout instead. Never emit
+  `gitops.namespace` with the engine on.
 - The lab's credentials are throwaway by design; plaintext passwords in
   `agentlab.yaml` are fine.
 

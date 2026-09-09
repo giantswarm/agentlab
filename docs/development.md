@@ -10,9 +10,10 @@ go test ./internal/forms/ -run TestMinimalFormDrive -count=1 -v   # one test
 
 `go test` covers the pieces that run without a cluster: the config schema and
 its discovery and port logic, the form (driven with scripted keystrokes), the
-renderer, the post-renderer, the Helm plugin, the fixtures' arithmetic and the
-proofs' parsers. The lab's end-to-end checks are its own `*-test` subcommands
-— see [Proofs](cli.md#proofs) — run against a live lab.
+renderer, the `postRenderers` patches, the docker resource floors, the
+fixtures' arithmetic and the proofs' parsers. The lab's end-to-end checks are
+its own `*-test` subcommands — see [Proofs](cli.md#proofs) — run against a
+live lab.
 
 A `go build` from a checkout reports Go's pseudo-version (`agentlab
 --version`), never checks for releases and cannot self-update; releases are
@@ -58,7 +59,9 @@ internal/lab/                    everything operational:
   oidc.go login.go browser.go      the lab's Dex clients: password grant, authorization-code flow
   test.go                          RBAC assertions for every configured user
   platform.go platformtest.go      agent platform install + the headless MCP proof
-  postrender.go helmplugin.go      the Helm post-renderer (hostNetwork, route strip, nodePort pin) and the Helm 4 plugin wrapping it
+  postrenderers.go                 the lab's per-component postRenderers patches (hostNetwork, sidecar, nodePort, dev images)
+  fluxreleases.go helm.go          image preload from the chart's rendered OCIRepositories/HelmReleases; the Helm >= 4 check
+  resources.go                     docker CPU/memory: the requests table and the floors `up` enforces
   oauthfixture.go                  the Auth Required MCPServer fixture + the per-server sign-in proof
   fleetfixture.go servergroups.go  the fake-fleet MCPServers (families x fake clusters, tool-group label); the portal's grouping arithmetic
   toolsetstest*.go                 the toolset proof: muster, kagent, the portal
@@ -67,8 +70,7 @@ internal/lab/                    everything operational:
   modelmanager.go modelstest.go    managed models: host preflight, install, the models proof
   anthropic.go                     the API key: host environment -> Secret, never config or state/
   adk.go kagentcrd.go              kagent workarounds (HACKS.md U8, U11)
-  observability.go                 kube-prometheus-stack + mcp-prometheus: Go-const chart pins and install
-  flux.go                          Flux source+helm controllers, the agent create flow's delivery engine
+  observability.go                 the lab Prometheus (helm) and the mcp-prometheus HelmRelease through the platform's engine
   backstage.go backstagetest.go    Backstage deploy + headless sign-in proof
   portal.go mcpsession.go          one user's signed-in portal session; the proofs' MCP session against muster
   exec.go kubeconfig.go            running kubectl/helm with KUBECONFIG pinned to state/kubeconfig; the OIDC kubeconfig `login` writes
@@ -80,7 +82,7 @@ agentlab.yaml                    your configuration (gitignored; `agentlab confi
 certs/                           the lab CA and leaf certs (gitignored; key 0600)
 state/                           rendered manifests, for inspection (gitignored)
   kubeconfig                       the kind cluster's kubeconfig, exported per run — what the lab's own kubectl/helm use
-.vendor/                         agent-platform-standalone checkout (gitignored)
+  agent-platform-values.yaml       the chart's values in the lab shape, incl. the postRenderers
 .mcp.json                        registers muster as an MCP server for Claude Code
 ```
 

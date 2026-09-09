@@ -15,7 +15,7 @@ kind cluster, every chain proven end to end.**
 ---
 
 **agentlab** runs the [Giant Swarm agent
-platform](https://github.com/giantswarm/agent-platform-standalone) —
+platform](https://github.com/giantswarm/agent-platform) —
 [muster](https://github.com/giantswarm/muster) as the MCP gateway, the
 Kubernetes MCP server, the [kagent](https://github.com/kagent-dev/kagent)
 agents runtime and Giant Swarm's
@@ -46,10 +46,11 @@ trusting the same issuer.
 - **One Go binary.** `agentlab configure` asks every option through an
   interactive form and writes `agentlab.yaml`; every manifest renders from
   embedded templates. No YAML to hand-edit, no scripts to source.
-- **The agent platform.** muster behind an agentgateway TLS edge, the single
-  OAuth enforcement point in front of an unauthenticated in-cluster
-  `mcp-kubernetes`. Per-server sign-in, declared toolsets and a fake
-  multi-cluster fleet are all exercised.
+- **The agent platform.** The agent-platform chart every Giant Swarm
+  management cluster runs, installed in its lab shape: muster behind an
+  agentgateway TLS edge, the single OAuth enforcement point in front of an
+  unauthenticated in-cluster `mcp-kubernetes`. Per-server sign-in, declared
+  toolsets and a fake multi-cluster fleet are all exercised.
 - **Backstage, the human frontend.** Giant Swarm's Backstage is how a person
   works the whole platform: browse and sign in to MCP servers, run workflows,
   explore tools, create agents and chat with them, manage models. Every call
@@ -74,7 +75,9 @@ trusting the same issuer.
 ## Getting started
 
 Requirements: `go` >= 1.25, `docker` (or Podman >= 4), `kind` >= 0.31,
-`kubectl`, `helm` >= 4, `git`.
+`kubectl`, `helm` >= 4, `git`. Give docker at least 4 CPUs and 6 GiB for the
+full lab; `agentlab up` checks before it touches anything (see [Docker
+resources](docs/getting-started.md#docker-resources)).
 
 ```bash
 go install github.com/giantswarm/agentlab@latest   # or a release binary, or `go build -o agentlab .`
@@ -105,7 +108,7 @@ machine, is in [Getting started](docs/getting-started.md).
 
 | Page | What it covers |
 |---|---|
-| [Getting started](docs/getting-started.md) | Requirements, install, what `configure` discovers, the first `up`, connecting Claude Code |
+| [Getting started](docs/getting-started.md) | Requirements, docker CPU and memory, install, what `configure` discovers, the first `up`, connecting Claude Code |
 | [Command reference](docs/cli.md) | Every `agentlab` command and flag, the environment variables, keeping the binary current |
 | [TLS](docs/tls.md) | The lab CA, `trust` and `untrust`, Node and browsers, bringing your own certificate |
 | [The agent platform](docs/platform.md) | muster + mcp-kubernetes: the request path, per-server sign-in, the fake fleet, toolsets, deviations from a real management cluster |

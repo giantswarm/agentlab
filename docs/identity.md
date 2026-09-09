@@ -109,7 +109,7 @@ redirect URIs: https://muster.127.0.0.1.nip.io/oauth/callback
 
 The Backstage redirect path carries the **provider name** from the app-config,
 not the literal word `oidc` — Backstage serves each provider at
-`/api/auth/<provider>/handler/frame`, and the umbrella names it
+`/api/auth/<provider>/handler/frame`, and the chart names it
 `oidc-agent-platform`. More clients means editing the Dex template
 (`internal/lab/templates/dex.yaml.tmpl`), rebuilding and `agentlab reload`.
 
