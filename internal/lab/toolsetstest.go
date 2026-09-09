@@ -28,12 +28,19 @@ import (
 // Names of what the proof creates; every one of them is deleted by the same
 // run (and a leftover of an aborted run is removed first).
 const (
-	toolsetsTestPrefix        = "agentlab-toolset"
-	toolsetsAgentReadOnly     = toolsetsTestPrefix + "-ro"
-	toolsetsAgentNone         = toolsetsTestPrefix + "-none"
-	toolsetsAgentFull         = toolsetsTestPrefix + "-full"
-	toolsetsAgentOAuth        = toolsetsTestPrefix + "-oauth"
-	toolsetsAgentLegacy       = toolsetsTestPrefix + "-legacy"
+	toolsetsTestPrefix    = "agentlab-toolset"
+	toolsetsAgentReadOnly = toolsetsTestPrefix + "-ro"
+	toolsetsAgentNone     = toolsetsTestPrefix + "-none"
+	toolsetsAgentFull     = toolsetsTestPrefix + "-full"
+	toolsetsAgentOAuth    = toolsetsTestPrefix + "-oauth"
+	toolsetsAgentLegacy   = toolsetsTestPrefix + "-legacy"
+	// The tenant identity every agent HelmRelease runs as (the connectivity
+	// chart renders the ServiceAccount + RoleBinding from
+	// kagent.fluxServiceAccountName; agent-manager and the portal's template
+	// name it). The chart's engine is multitenant: a HelmRelease that names
+	// no ServiceAccount runs as the namespace's `default`, which holds no
+	// RBAC, and never renders.
+	kagentFluxServiceAccount  = "kagent-flux"
 	toolsetsAgentPortal       = toolsetsTestPrefix + "-portal"
 	toolsetsWorkflowQuery     = toolsetsTestPrefix + "-query"
 	toolsetsWorkflowMutating  = toolsetsTestPrefix + "-mutating"
@@ -421,6 +428,7 @@ metadata:
     app.kubernetes.io/managed-by: agentlab
 spec:
   interval: 10m
+  serviceAccountName: %s
   chartRef:
     kind: OCIRepository
     name: agent
@@ -433,7 +441,7 @@ spec:
       systemMessage: %q
     modelConfig:
       name: %s
-`, toolsetsAgentLegacy, kagentNamespace, kagentNamespace, toolsetsAgentLegacy, toolsetTestAgentSystemMsg, modelConfig)
+`, toolsetsAgentLegacy, kagentNamespace, kagentFluxServiceAccount, kagentNamespace, toolsetsAgentLegacy, toolsetTestAgentSystemMsg, modelConfig)
 	if err := pipeInto([]byte(hr), "kubectl", "apply", "-f", "-"); err != nil {
 		return err
 	}
