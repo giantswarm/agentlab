@@ -178,6 +178,14 @@ type Platform struct {
 	// the entry restores the chart's image on the next run. Keys are the
 	// DevImageComponents.
 	DevImages map[string]string `yaml:"devImages,omitempty"`
+	// ValuesFiles are extra Helm values files merged over the lab's rendered
+	// values before the meta chart install, in order, with `helm -f`
+	// semantics (maps merge, lists replace, the later file wins): a lab that
+	// points a component at another chart source
+	// (components.<name>.repository / versionRange / insecure) or forwards
+	// values the lab template does not know. Paths are absolute or relative
+	// to the lab directory; each must exist.
+	ValuesFiles []string `yaml:"valuesFiles,omitempty"`
 	// Additional kagent ModelConfigs beyond the chart-rendered default
 	// (aiModel): self-hosted OpenAI-compatible endpoints (vLLM, Ollama),
 	// OpenRouter, Gemini, plain OpenAI. Rendered as lab-labeled ModelConfig
@@ -652,6 +660,9 @@ func (c *Config) Normalize() {
 	if len(c.Platform.DevImages) == 0 {
 		c.Platform.DevImages = nil
 	}
+	if len(c.Platform.ValuesFiles) == 0 {
+		c.Platform.ValuesFiles = nil
+	}
 	c.Platform.ModelManager.normalize()
 }
 
@@ -756,6 +767,14 @@ func (c *Config) Validate() error {
 		}
 		if err := ValidateImageRef(ref); err != nil {
 			return fmt.Errorf("platform.devImages.%s %q: %w", component, ref, err)
+		}
+	}
+	for _, path := range c.Platform.ValuesFiles {
+		if path == "" {
+			return fmt.Errorf("platform.valuesFiles: an empty path")
+		}
+		if _, err := os.Stat(path); err != nil {
+			return fmt.Errorf("platform.valuesFiles: %w", err)
 		}
 	}
 	seenModels := map[string]bool{}
