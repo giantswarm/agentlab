@@ -53,12 +53,12 @@ const (
 	legacyFluxRelease   = "flux"
 )
 
-// helmInstallTimeout bounds `helm upgrade --install --wait` of the meta chart.
-// Helm 4's --wait is kstatus over the chart's objects, the platform
-// HelmReleases included, so the command returns when every component is
-// Ready — a first boot side-loads the images, but the engine (source- and
-// helm-controller) still pulls its own on the way.
-const helmInstallTimeout = "15m"
+// helmInstallTimeout bounds the upgrade-or-install of the meta chart and its
+// wait. The embedded Helm's wait is kstatus over the chart's objects, the
+// platform HelmReleases included, so the install returns when every
+// component is Ready — a first boot side-loads the images, but the engine
+// (source- and helm-controller) still pulls its own on the way.
+const helmInstallTimeout = 15 * time.Minute
 
 // PlatformUp installs the Giant Swarm agent platform into the lab cluster and
 // wires it to the lab Dex.
@@ -72,10 +72,11 @@ const helmInstallTimeout = "15m"
 // have the bundled helm-controller adopt this release and follow the
 // PUBLISHED chart's version range — the lab installs unreleased charts
 // (platform.chartPath) and dev images, which that HelmRelease would replace
-// with the release it finds in the registry. So the Helm CLI keeps owning the
-// release: `helm upgrade` is the lab's day-2 tool, and this function is the
-// one writer (idempotent `helm upgrade --install`, no post-renderer, no
-// --force-conflicts).
+// with the release it finds in the registry. So Helm keeps owning the
+// release: this function is the one writer (an idempotent upgrade-or-install
+// through the embedded Helm, no post-renderer, no --force-conflicts), and the
+// release is the Helm CLI's too — `helm upgrade` from a shell stays the lab's
+// day-2 tool.
 func PlatformUp(cfg *config.Config) error {
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
@@ -88,21 +89,13 @@ func PlatformUp(cfg *config.Config) error {
 	return platformUp(cfg, "Platform is up.")
 }
 
-// platformChart is the chart argument of the Helm and template commands: the
+// platformChart is the chart the embedded Helm installs and renders: the
 // pinned release from the registry, or a local chart directory.
 type platformChart struct {
-	// ref is what helm takes as the chart: an oci:// URL or a directory.
+	// ref is what Helm takes as the chart: an oci:// URL or a directory.
 	ref string
-	// version is the --version of a registry chart; empty for a directory.
+	// version is the version of a registry chart; empty for a directory.
 	version string
-}
-
-// args are the helm arguments naming the chart.
-func (c platformChart) args() []string {
-	if c.version == "" {
-		return []string{c.ref}
-	}
-	return []string{c.ref, "--version", c.version}
 }
 
 func (c platformChart) String() string {
@@ -126,11 +119,6 @@ func platformChartFor(cfg *config.Config) platformChart {
 // user reads a single "what to do next" block once everything is verified,
 // the standalone `agentlab platform` entry point passes "Platform is up.".
 func platformUp(cfg *config.Config, header string) error {
-	// Also checked at the very top of `agentlab up`; repeated here for the
-	// standalone `agentlab platform` entry point.
-	if err := ensureHelmSupportsPlatform(); err != nil {
-		return err
-	}
 	// The working-directory leftovers go first: nothing reads them, and the
 	// refusal below is exactly the moment a user of an earlier agentlab meets.
 	removeLegacyArtifacts()
@@ -275,6 +263,11 @@ func platformUp(cfg *config.Config, header string) error {
 	if err != nil {
 		return err
 	}
+	// Read the way `helm -f` reads it, once for the renders and the install.
+	values, err := helmValuesFile(valuesPath)
+	if err != nil {
+		return err
+	}
 	if _, _, err := renderManifest(cfg, "demo-workflow.yaml.tmpl"); err != nil {
 		return err
 	}
@@ -285,10 +278,10 @@ func platformUp(cfg *config.Config, header string) error {
 	// charts as they are about to be installed (the meta chart's own objects,
 	// then every component chart at the version its OCIRepository resolves
 	// to), so a first boot and version bumps are covered too. Best-effort:
-	// anything this misses is pulled in-node under the helm --wait timeout,
-	// exactly as before.
+	// anything this misses is pulled in-node under the install's wait
+	// timeout, exactly as before.
 	step("Side-loading the platform images (the host cache survives `agentlab down`)")
-	sideloadPlatformImages(cfg, platformImages(cfg, chart, valuesPath))
+	sideloadPlatformImages(cfg, platformImages(cfg, chart, values))
 	// The dev images (platform.devImages) are builds of this host: never
 	// pullable, always side-loaded, so their pods find them under
 	// imagePullPolicy IfNotPresent — which is why each ref is then verified
@@ -311,20 +304,17 @@ func platformUp(cfg *config.Config, header string) error {
 	}
 
 	step("Installing %s (this waits for every component HelmRelease)", chart)
-	// One writer, one command: the plain idempotent upgrade, no post-renderer
-	// (the lab's patches are per-component `postRenderers` VALUES the chart
-	// forwards to the component HelmReleases — see the values template) and
-	// no --force-conflicts (nothing else writes the release's objects: the
-	// dev-image loop goes through the values too). Helm 4's --wait is kstatus
+	// One writer, one operation: the plain idempotent upgrade-or-install
+	// through the embedded Helm (helm.go), no post-renderer (the lab's
+	// patches are per-component `postRenderers` VALUES the chart forwards to
+	// the component HelmReleases — see the values template) and no
+	// --force-conflicts (nothing else writes the release's objects: the
+	// dev-image loop goes through the values too). Helm 4's wait is kstatus
 	// over the chart's objects — the FluxInstance and every platform
-	// HelmRelease among them — so the command returns once the components are
-	// Ready; waitPlatformReleases below then reads the outcome per release.
-	args := append([]string{"upgrade", "--install", platformRelease}, chart.args()...)
-	args = append(args,
-		"-n", platformNamespace,
-		"-f", valuesPath,
-		"--wait", "--timeout", helmInstallTimeout)
-	if err := runQuiet("helm", args...); err != nil {
+	// HelmRelease among them — so the install returns once the components
+	// are Ready; waitPlatformReleases below then reads the outcome per
+	// release.
+	if err := helmUpgradeInstall(platformNamespace, platformRelease, chart.ref, chart.version, values, helmInstallTimeout, false); err != nil {
 		reportPlatformReleases()
 		return err
 	}
@@ -523,8 +513,7 @@ func platformUp(cfg *config.Config, header string) error {
 // releases replace the umbrella's CRDs (`crds: CreateReplace`).
 func refuseOlderLabShape() error {
 	const fix = "run `agentlab down && agentlab up` (or `agentlab platform-down`, then `agentlab platform`)"
-	if out, err := outputQuiet("helm", "-n", platformNamespace, "list", "--filter", "^"+platformRelease+"$", "-o", "json"); err == nil &&
-		strings.Contains(out, `"chart":"agent-platform-standalone`) {
+	if chartName, err := helmReleaseChart(platformNamespace, platformRelease); err == nil && chartName == "agent-platform-standalone" {
 		return fmt.Errorf("this cluster runs the agent-platform-standalone umbrella an earlier agentlab installed;\n" +
 			"the lab installs the agent-platform meta chart now and has no in-place migration:\n" + fix)
 	}
@@ -538,8 +527,7 @@ func refuseOlderLabShape() error {
 // legacyFluxInstalled reports whether the Flux controllers an earlier
 // agentlab installed itself are on the cluster (release flux in flux-system).
 func legacyFluxInstalled() bool {
-	_, err := outputQuiet("helm", "-n", legacyFluxNamespace, "status", legacyFluxRelease)
-	return err == nil
+	return helmReleaseExists(legacyFluxNamespace, legacyFluxRelease)
 }
 
 // removeLegacyArtifacts deletes what earlier agentlab versions left in the
@@ -592,7 +580,7 @@ func platformReleases() ([]platformReleaseStatus, error) {
 
 // waitPlatformReleases waits for every platform HelmRelease to be Ready and
 // names the ones that are not, with helm-controller's own message. Helm's
-// --wait already covered them (kstatus), so this is normally instant; it is
+// wait already covered them (kstatus), so this is normally instant; it is
 // the readable report when it was not, and the guard against a release the
 // wait could not see (one created after Helm returned).
 func waitPlatformReleases() error {
@@ -633,8 +621,8 @@ func waitPlatformReleases() error {
 }
 
 // reportPlatformReleases notes the not-Ready platform HelmReleases after a
-// failed install, so a `helm upgrade --wait` timeout reads as the component
-// that held it up rather than a bare "timed out waiting".
+// failed install, so a timed-out wait reads as the component that held it up
+// rather than a bare "timed out waiting".
 func reportPlatformReleases() {
 	releases, err := platformReleases()
 	if err != nil {

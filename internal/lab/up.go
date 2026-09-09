@@ -14,19 +14,12 @@ import (
 // OIDC verification, and then the components the configuration enables — the
 // agent platform (the default; it is what the lab tests) and Backstage.
 func Up(cfg *config.Config) error {
-	// Fail on Helm 3 before any real work: the platform install at the end of
-	// this boot needs Helm 4 (see ensureHelmSupportsPlatform), and finding
-	// that out after a five-minute cluster boot is the wrong moment.
-	if cfg.Platform.Enabled {
-		if err := ensureHelmSupportsPlatform(); err != nil {
-			return err
-		}
-	}
-	// Same moment for the machine itself: a docker VM too small for what
-	// this configuration schedules leaves pods Pending forever (the
-	// scheduler refuses CPU requests that do not fit — resources.go), and the
-	// symptom would be an install timing out on agentgateway, minutes from
-	// now. Refused here, with the fix and the numbers.
+	// Before any real work: a docker VM too small for what this
+	// configuration schedules leaves pods Pending forever (the scheduler
+	// refuses CPU requests that do not fit — resources.go), and the symptom
+	// would be an install timing out on agentgateway, minutes from now —
+	// after a five-minute cluster boot, the wrong moment. Refused here, with
+	// the fix and the numbers.
 	if err := preflightRuntimeResources(cfg); err != nil {
 		return err
 	}
@@ -64,11 +57,11 @@ func Up(cfg *config.Config) error {
 			return err
 		}
 	}
-	// From here on the lab's own kubectl and helm run against the cluster's
-	// exported kubeconfig (exec.go). The user's own kubeconfig and
-	// current-context are never touched: the embedded kind writes the admin
-	// kubeconfig to state/kubeconfig (kind.go), and re-reading it off the
-	// node here covers a cluster that already existed too.
+	// From here on the lab's own kubectl and its embedded Helm run against the
+	// cluster's exported kubeconfig (exec.go, restclient.go). The user's own
+	// kubeconfig and current-context are never touched: the embedded kind
+	// writes the admin kubeconfig to state/kubeconfig (kind.go), and re-reading
+	// it off the node here covers a cluster that already existed too.
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
 	}

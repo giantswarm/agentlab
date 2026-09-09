@@ -145,9 +145,9 @@ func loadOrCreateConfig() (*config.Config, error) {
 	fmt.Printf("No %s yet — let's create one.\n\n", config.File)
 	cfg = config.Default()
 	disc := discoverInto(cfg, nil, nil)
-	// The tools before the questions: a Helm 3 or a missing kind is refused
-	// here, not after the form and a cluster boot.
-	if err := disc.Preflight(cfg.Platform.Enabled); err != nil {
+	// The tools before the questions: a missing tool is refused here, not
+	// after the form and a cluster boot.
+	if err := disc.Preflight(); err != nil {
 		return nil, err
 	}
 	if err := forms.Run(cfg, accessibleMode(), forms.Hints{ModelServers: disc.ModelServersHint()}); err != nil {
@@ -318,10 +318,8 @@ func configureCmd() *cobra.Command {
 			disc := discoverInto(cfg, pinEnabled, pinBackends)
 			// The tools before the questions (or, with --defaults, before
 			// the file): what `agentlab up` would refuse is refused here,
-			// with the install hints, instead of after the whole form. The
-			// component flags are applied above, so --platform=false is
-			// spared the helm check.
-			if err := disc.Preflight(cfg.Platform.Enabled); err != nil {
+			// with the install hints, instead of after the whole form.
+			if err := disc.Preflight(); err != nil {
 				return err
 			}
 			if defaults {

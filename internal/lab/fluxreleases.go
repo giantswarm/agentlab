@@ -4,8 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -18,12 +16,13 @@ import (
 // The platform's images come from charts the meta chart never renders: it
 // renders one Flux OCIRepository + HelmRelease per component, and the bundled
 // helm-controller pulls and renders each component chart at reconcile time.
-// The preload therefore resolves the same thing ahead of the install —
-// `helm template` of the meta chart, then, per rendered HelmRelease, `helm
-// template` of the component chart at the version its OCIRepository's semver
-// range resolves to (Helm resolves a range against the registry's tags the way
-// source-controller does: the highest matching version), with the HelmRelease's
-// inlined values — and scrapes the images out of those renders.
+// The preload therefore resolves the same thing ahead of the install — a
+// `helm template`-style offline render of the meta chart (helmTemplate),
+// then, per rendered HelmRelease, the same render of the component chart at
+// the version its OCIRepository's semver range resolves to (Helm resolves a
+// range against the registry's tags the way source-controller does: the
+// highest matching version), with the HelmRelease's inlined values — and
+// scrapes the images out of those renders.
 
 // fluxRelease is one HelmRelease of a rendered Flux manifest joined with the
 // OCIRepository it pulls its chart from.
@@ -137,28 +136,13 @@ var offlineAPIVersions = []string{
 // each). A release that does not render is reported and skipped: the node
 // pulls whatever the preload misses.
 func fluxReleaseImages(releases []fluxRelease, apiVersions []string) ([]string, []error) {
-	dir, err := os.MkdirTemp("", "agentlab-preload-")
-	if err != nil {
-		return nil, []error{err}
-	}
-	defer func() { _ = os.RemoveAll(dir) }()
-
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	var images []string
 	var errs []error
-	for i, rel := range releases {
-		valuesPath := filepath.Join(dir, fmt.Sprintf("%d-%s.yaml", i, rel.Name))
-		if err := os.WriteFile(valuesPath, rel.Values, 0o600); err != nil {
-			errs = append(errs, err)
-			continue
-		}
+	for _, rel := range releases {
 		wg.Go(func() {
-			args := []string{"template", rel.Name, rel.URL, "--version", rel.Version, "-n", rel.Namespace, "-f", valuesPath}
-			for _, v := range apiVersions {
-				args = append(args, "--api-versions", v)
-			}
-			rendered, err := outputQuiet("helm", args...)
+			rendered, err := renderFluxRelease(rel, apiVersions)
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -173,6 +157,17 @@ func fluxReleaseImages(releases []fluxRelease, apiVersions []string) ([]string, 
 	return slices.Compact(images), errs
 }
 
+// renderFluxRelease renders one component chart offline as helm-controller
+// is about to: the chart the OCIRepository names at the version its range
+// resolves to, with the HelmRelease's inlined values.
+func renderFluxRelease(rel fluxRelease, apiVersions []string) (string, error) {
+	vals, err := helmValues(rel.Values)
+	if err != nil {
+		return "", err
+	}
+	return helmTemplate(rel.Namespace, rel.Name, rel.URL, rel.Version, vals, apiVersions)
+}
+
 // platformImages derives the platform's image refs exactly as it is about to
 // be installed: the meta chart's own objects (the Flux Operator, the hook
 // Jobs) from its render with the rendered lab values, then every component
@@ -182,10 +177,8 @@ func fluxReleaseImages(releases []fluxRelease, apiVersions []string) ([]string, 
 // helm-controller, the ADK runtime tags kagent builds from its ConfigMap —
 // are not in any render; healADKImages and the snapshot manifest cover them.
 // Best-effort throughout: failures are notes, the node pulls the rest.
-func platformImages(cfg *config.Config, chart platformChart, valuesPath string) []string {
-	args := append([]string{"template", platformRelease}, chart.args()...)
-	args = append(args, "-n", platformNamespace, "-f", valuesPath)
-	meta, err := outputQuiet("helm", args...)
+func platformImages(cfg *config.Config, chart platformChart, values map[string]any) []string {
+	meta, err := helmTemplate(platformNamespace, platformRelease, chart.ref, chart.version, values, nil)
 	if err != nil {
 		note("cannot render %s (%v); the node pulls the platform images itself", chart, excerpt(err.Error(), 300))
 		return nil

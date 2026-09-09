@@ -23,10 +23,21 @@ out of the production usage numbers (see [Usage data](telemetry.md)).
 
 The rendered manifests are always in `state/` (`agentlab render` writes them
 without applying), so `kubectl diff -f state/dex.yaml` and plain reading stay
-possible. The lab's own `kubectl` and `helm` never read your shell's
-kubeconfig: every cluster-facing command exports the kind cluster's kubeconfig
-to `state/kubeconfig` and pins `KUBECONFIG` to it, so
-`KUBECONFIG=state/kubeconfig kubectl ...` is the same view from a shell.
+possible. The lab's own `kubectl` and its embedded Helm never read your
+shell's kubeconfig: every cluster-facing command exports the kind cluster's
+kubeconfig to `state/kubeconfig` and binds to it (`KUBECONFIG` for kubectl,
+the REST client getter for Helm), so `KUBECONFIG=state/kubeconfig kubectl ...`
+and `KUBECONFIG=state/kubeconfig helm ...` are the same view from a shell.
+
+Helm is embedded: `internal/lab/helm.go` runs Helm 4's SDK
+(`helm.sh/helm/v4/pkg/action`) in-process for the upgrade-or-install with
+the kstatus wait, the offline renders the image preload scrapes, the release
+probes and the uninstalls. It writes a regular Helm release (secret driver,
+same name and namespace) and uses Helm's own cache and registry-credentials
+paths, so a `helm` on the machine reads and continues what the lab installed.
+`HELM_DEBUG=1` streams the SDK's log; otherwise it is printed only when an
+operation fails. `internal/lab/restclient.go` is the client-go plumbing the
+SDK is bound to — the one place the lab kubeconfig becomes a REST client.
 
 kind is a Go dependency, not a subprocess: `internal/lab/kind.go` wraps
 `sigs.k8s.io/kind`'s `pkg/cluster` (create, delete, list, the kubeconfig read
@@ -73,7 +84,8 @@ internal/lab/                    everything operational:
   test.go                          RBAC assertions for every configured user
   platform.go platformtest.go      agent platform install + the headless MCP proof
   postrenderers.go                 the lab's per-component postRenderers patches (hostNetwork, sidecar, nodePort, dev images)
-  fluxreleases.go helm.go          image preload from the chart's rendered OCIRepositories/HelmReleases; the Helm >= 4 check
+  fluxreleases.go                  image preload from the chart's rendered OCIRepositories/HelmReleases
+  helm.go restclient.go            the embedded Helm 4 (upgrade-or-install with the kstatus wait, offline renders, probes, uninstalls); the lab kubeconfig as a client-go REST client getter
   resources.go                     docker CPU/memory: the requests table and the floors `up` enforces
   oauthfixture.go                  the Auth Required MCPServer fixture + the per-server sign-in proof
   fleetfixture.go servergroups.go  the fake-fleet MCPServers (families x fake clusters, tool-group label); the portal's grouping arithmetic
@@ -83,10 +95,10 @@ internal/lab/                    everything operational:
   modelmanager.go modelstest.go    managed models: host preflight, install, the models proof
   anthropic.go                     the API key: host environment -> Secret, never config or state/
   adk.go kagentcrd.go              kagent workarounds (HACKS.md U8, U11)
-  observability.go                 the lab Prometheus (helm) and the mcp-prometheus HelmRelease through the platform's engine
+  observability.go                 the lab Prometheus (kube-prometheus-stack through the embedded Helm) and the mcp-prometheus HelmRelease through the platform's engine
   backstage.go backstagetest.go    Backstage deploy + headless sign-in proof
   portal.go mcpsession.go          one user's signed-in portal session; the proofs' MCP session against muster
-  exec.go kubeconfig.go            running kubectl/helm with KUBECONFIG pinned to state/kubeconfig; the OIDC kubeconfig `login` writes
+  exec.go kubeconfig.go            running kubectl with KUBECONFIG pinned to state/kubeconfig; the OIDC kubeconfig `login` writes
   render.go logs.go                template rendering into state/; `agentlab logs`
   templates/                       every manifest, rendered from agentlab.yaml (static/: the verbatim agent-deployment Template)
 docs/                            this documentation; README.md is the front door
@@ -94,7 +106,7 @@ HACKS.md                         the hack journal
 agentlab.yaml                    your configuration (gitignored; `agentlab configure`)
 certs/                           the lab CA and leaf certs (gitignored; key 0600)
 state/                           rendered manifests, for inspection (gitignored)
-  kubeconfig                       the kind cluster's admin kubeconfig, written at creation and re-exported per run — what the lab's own kubectl/helm use
+  kubeconfig                       the kind cluster's admin kubeconfig, written at creation and re-exported per run — what the lab's own kubectl and embedded Helm use
   agent-platform-values.yaml       the chart's values in the lab shape, incl. the postRenderers
 .mcp.json                        registers muster as an MCP server for Claude Code
 ```

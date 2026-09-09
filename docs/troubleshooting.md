@@ -10,14 +10,15 @@ plumbing for model servers under
 
 - **The lab never uses your kubeconfig's current-context.** Every command that
   talks to the cluster first exports the kind cluster's kubeconfig to
-  `state/kubeconfig` and runs its own `kubectl` and `helm` with `KUBECONFIG`
-  pinned to it — so a shell with no current-context (or one pointing at a real
-  cluster) proves the same lab as any other, and a lab that is not running
-  fails by name (`no kubeconfig for kind cluster "agentlab"`) instead of as a
-  kubectl error. Your own kubeconfig is never touched: kind is embedded in
-  `agentlab` and writes the cluster's admin kubeconfig (the `kind-<cluster>`
-  context) to `state/kubeconfig` only, so nothing merges into `~/.kube/config`
-  and your current-context stays what it was. The same view from a shell:
+  `state/kubeconfig`, runs its own `kubectl` with `KUBECONFIG` pinned to it
+  and binds its embedded Helm to the same file — so a shell with no
+  current-context (or one pointing at a real cluster) proves the same lab as
+  any other, and a lab that is not running fails by name (`no kubeconfig for
+  kind cluster "agentlab"`) instead of as a kubectl error. Your own kubeconfig
+  is never touched: kind is embedded in `agentlab` and writes the cluster's
+  admin kubeconfig (the `kind-<cluster>` context) to `state/kubeconfig` only,
+  so nothing merges into `~/.kube/config` and your current-context stays what
+  it was. The same view from a shell:
   `KUBECONFIG=state/kubeconfig kubectl -n agent-platform get pods`.
   A probe that fails reports what kubectl said (`kubectl failed: ... current-context
   is not set`), never an empty status.

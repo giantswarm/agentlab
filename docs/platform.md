@@ -25,11 +25,14 @@ The lab installs it in its **lab shape**:
   range — and refuse every later `helm upgrade` from the CLI. The lab exists
   to install what is **not** released yet (a local chart checkout, a dev
   image), which that `HelmRelease` would replace with whatever the registry
-  holds. So the Helm CLI keeps owning the release: `agentlab platform` is one
-  idempotent `helm upgrade --install … --wait` (no post-renderer, no
-  `--force-conflicts`), and `helm upgrade` stays the day-2 tool. Never drop
-  the value on a lab: the first upgrade without it makes the release
-  self-managed.
+  holds. So Helm keeps owning the release: `agentlab platform` is one
+  idempotent upgrade-or-install with the kstatus wait through the **embedded
+  Helm** — Helm 4's SDK in the binary, no `helm` on the machine required; the
+  same `helm upgrade --install … --wait`, no post-renderer, no
+  `--force-conflicts` — and the release it writes is a regular one, so `helm
+  upgrade` from a shell (`KUBECONFIG=state/kubeconfig`) stays the day-2 tool.
+  Never drop the value on a lab: the first upgrade without it makes the
+  release self-managed.
 - The chart is **pinned** to an exact release, `platform.chartVersion` in
   `agentlab.yaml` (the default is the release this agentlab was verified
   with). The lab never floats; bump the pin deliberately, with a lab run.
@@ -38,7 +41,7 @@ The platform installs as part of `agentlab up` (it is enabled in the default
 configuration); on an already-running cluster the steps are also standalone:
 
 ```bash
-./agentlab platform       # helm upgrade --install of the chart, then waits for every component
+./agentlab platform       # upgrade-or-install of the chart (embedded Helm), then waits for every component
 ./agentlab platform-test  # headless proof of the whole chain
 ```
 
@@ -354,7 +357,7 @@ data the page reads — see [The muster plugin](backstage.md#the-muster-plugin).
   releases replace the umbrella's CRDs (`crds: CreateReplace`).
 - **`agentlab platform-down` is the chart's ordered teardown.** It deletes
   the lab's mcp-prometheus `HelmRelease` while the engine still runs, then
-  `helm uninstall --wait` runs the chart's pre-delete hooks — delete the
+  the embedded Helm's waited uninstall runs the chart's pre-delete hooks — delete the
   component `HelmRelease`s and wait for their releases, then delete the
   `FluxInstance` and wait for the operator to remove Flux with its CRDs,
   which takes every remaining `HelmRelease` (the agents' too) with it — and
@@ -380,7 +383,7 @@ data the page reads — see [The muster plugin](backstage.md#the-muster-plugin).
 - **The `kagent` namespace follows the kagent component.** While
   `components.kagent.enabled` is true the chart's pre-install/pre-upgrade hook
   creates it ahead of the kagent `HelmRelease`, the connectivity component
-  adopts it, and `helm uninstall` (the ordered teardown) removes it with the
+  adopts it, and the uninstall (the ordered teardown) removes it with the
   connectivity release. The lab creates no namespace of its own for kagent.
 - **Kubernetes tools carry the server-name prefix.** The chart's bundled
   `mcp-kubernetes` MCPServer declares no muster *family*, so its tools use
