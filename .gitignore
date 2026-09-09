@@ -17,3 +17,6 @@ kubeconfig.oidc
 /bin-dist/
 .ldflags
 .platforms
+
+# graphify knowledge graph (regenerable, rebuilt by the post-commit hook)
+graphify-out/
