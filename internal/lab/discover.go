@@ -75,10 +75,10 @@ const flmOwner = "FastFlowLM"
 func Discover(cfg *config.Config) *Discovery {
 	d := &Discovery{AnthropicKey: os.Getenv(AnthropicKeyEnv) != ""}
 	d.Tools = []ToolVersion{
-		{"docker", dockerVersion()},
-		{"kind", kindVersion()},
-		{"kubectl", kubectlVersion()},
-		{"helm", helmVersion()},
+		{dockerBin, dockerVersion()},
+		{kindBin, kindVersion()},
+		{kubectlBin, kubectlVersion()},
+		{helmBin, helmVersion()},
 	}
 	d.ClusterExists, d.ClusterPorts = kindNodePublishedPorts(cfg.ControlPlaneNode())
 	if gw, err := kindGatewayIP(cfg.ControlPlaneNode()); err == nil {
@@ -124,19 +124,92 @@ func (d *Discovery) ModelServersHint() string {
 	return strings.Join(parts, ", ")
 }
 
-// MissingTools names the CLIs `agentlab up` needs that did not answer.
-func (d *Discovery) MissingTools() []string {
-	var missing []string
-	for _, t := range d.Tools {
-		if t.Version == "" {
-			missing = append(missing, t.Name)
+// kindFloor is the kind the lab needs. The rendered kind config names no node
+// image, so kind's default — the Kubernetes of its release — is what boots,
+// and the lab's OIDC flow relies on an apiserver that keeps retrying discovery
+// until Dex answers (Kubernetes >= 1.35, kind's default since v0.31; up.go,
+// docs/troubleshooting.md). The kubeadm patches are carried in both config
+// generations kind has emitted since (kind-config.yaml.tmpl).
+const kindFloor = "0.31.0"
+
+// toolRequirement is one CLI `agentlab up` shells out to: the version floor
+// the lab needs ("" for any version), whether only the platform needs it, why,
+// and where to get it.
+type toolRequirement struct {
+	name         string
+	floor        string
+	platformOnly bool
+	why          string
+	install      string
+}
+
+// toolRequirements is what Preflight checks the discovered tools against, in
+// report order.
+var toolRequirements = []toolRequirement{
+	{name: dockerBin, why: "kind runs the cluster as a container of this engine (Podman >= 4's docker-compatible CLI works too)",
+		install: "https://docs.docker.com/get-started/get-docker/"},
+	{name: kindBin, floor: kindFloor, why: "its default node image brings the Kubernetes whose apiserver keeps retrying OIDC discovery until Dex answers",
+		install: "https://kind.sigs.k8s.io/docs/user/quick-start/#installation"},
+	{name: kubectlBin, why: "every manifest is applied and every proof is read through it",
+		install: "https://kubernetes.io/docs/tasks/tools/"},
+	{name: helmBin, floor: helmFloor, platformOnly: true, why: helmWhy,
+		install: "https://helm.sh/docs/intro/install/ — the `helm` first on PATH has to be the Helm 4 one"},
+}
+
+// Preflight is the verdict on the tools, taken before `agentlab configure`
+// asks its first question (or, with --defaults, writes anything): an error
+// naming every tool `agentlab up` would fail on — not on PATH, or below the
+// version the lab needs — each with why and where to get it. So nobody walks
+// through the whole form to be refused at boot time. platform says whether
+// the configuration installs the platform; without it (the bare kind+Dex
+// sandbox) helm is not needed.
+func (d *Discovery) Preflight(platform bool) error {
+	var problems []string
+	helmProblem := false
+	for _, req := range toolRequirements {
+		if req.platformOnly && !platform {
+			continue
+		}
+		v := d.toolVersion(req.name)
+		var problem string
+		switch {
+		case v == "":
+			problem = fmt.Sprintf("%s is not on PATH (or does not answer) — %s", req.name, req.why)
+		case req.floor != "":
+			below, err := belowFloor(v, req.floor)
+			switch {
+			case err != nil:
+				problem = fmt.Sprintf("%s reports a version this lab cannot read (%q); it needs %s >= %s — %s", req.name, v, req.name, req.floor, req.why)
+			case below:
+				problem = fmt.Sprintf("%s %s is too old; the lab needs %s >= %s — %s", req.name, v, req.name, req.floor, req.why)
+			}
+		}
+		if problem == "" {
+			continue
+		}
+		problems = append(problems, problem+"\n    install: "+req.install)
+		if req.name == helmBin {
+			helmProblem = true
 		}
 	}
-	return missing
+	if len(problems) == 0 {
+		return nil
+	}
+	var b strings.Builder
+	b.WriteString("this machine cannot run the lab yet:\n")
+	for _, p := range problems {
+		b.WriteString("  - " + p + "\n")
+	}
+	b.WriteString("Install the above and run the command again.")
+	if helmProblem {
+		b.WriteString("\nWithout the platform (`agentlab configure --platform=false`: a bare kind+Dex OIDC sandbox) helm is not needed.")
+	}
+	return errors.New(b.String())
 }
 
 // Report is the human-readable account of the discovery, printed by
-// `agentlab configure` before it changes anything.
+// `agentlab configure` before it changes anything. The tools line only
+// states what answered; the verdict on them is Preflight's.
 func (d *Discovery) Report(cfg *config.Config) string {
 	var b strings.Builder
 	line := func(label, format string, a ...any) {
@@ -152,13 +225,6 @@ func (d *Discovery) Report(cfg *config.Config) string {
 		tools = append(tools, t.Name+" "+t.Version)
 	}
 	line("tools", "%s", strings.Join(tools, ", "))
-	if missing := d.MissingTools(); len(missing) > 0 {
-		line("", "`agentlab up` needs docker, kind, kubectl and helm >= 4 — install: %s", strings.Join(missing, ", "))
-	} else if v := d.toolVersion("helm"); v != "" {
-		if major, err := helmMajor(v); err == nil && major < 4 {
-			line("", "helm %s cannot install the platform: Helm >= 4 is required (agent-platform-standalone#21)", v)
-		}
-	}
 	switch {
 	case d.ClusterExists:
 		line("cluster", "kind %q exists — its port mappings are fixed at node creation (`agentlab down && agentlab up` to change them)", cfg.ClusterName)
@@ -372,9 +438,9 @@ func kubectlVersion() string {
 }
 
 func helmVersion() string {
-	out, err := outputQuiet("helm", "version", "--template", "{{.Version}}")
+	v, err := probeHelmVersion()
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(out)
+	return v
 }

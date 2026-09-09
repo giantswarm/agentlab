@@ -145,6 +145,11 @@ func loadOrCreateConfig() (*config.Config, error) {
 	fmt.Printf("No %s yet — let's create one.\n\n", config.File)
 	cfg = config.Default()
 	disc := discoverInto(cfg, nil, nil)
+	// The tools before the questions: a Helm 3 or a missing kind is refused
+	// here, not after the form and a cluster boot.
+	if err := disc.Preflight(cfg.Platform.Enabled); err != nil {
+		return nil, err
+	}
 	if err := forms.Run(cfg, accessibleMode(), forms.Hints{ModelServers: disc.ModelServersHint()}); err != nil {
 		return nil, err
 	}
@@ -274,6 +279,14 @@ func configureCmd() *cobra.Command {
 			// on them (managed models need the agents runtime).
 			if cmd.Flags().Changed("platform") {
 				cfg.Platform.Enabled = platform
+				// Backstage implies the platform (Normalize), so turning
+				// the platform off turns Backstage off with it unless
+				// --backstage says otherwise — `--platform=false` alone is
+				// the bare kind+Dex sandbox the docs promise, not a
+				// validation error about Backstage.
+				if !platform && !cmd.Flags().Changed("backstage") {
+					cfg.Backstage.Enabled = false
+				}
 			}
 			if cmd.Flags().Changed("agents") {
 				cfg.Platform.Agents = agents
@@ -303,6 +316,14 @@ func configureCmd() *cobra.Command {
 			// follows the host too: a server that appeared is added, one that
 			// is gone drops out, ports move while no cluster holds them.
 			disc := discoverInto(cfg, pinEnabled, pinBackends)
+			// The tools before the questions (or, with --defaults, before
+			// the file): what `agentlab up` would refuse is refused here,
+			// with the install hints, instead of after the whole form. The
+			// component flags are applied above, so --platform=false is
+			// spared the helm check.
+			if err := disc.Preflight(cfg.Platform.Enabled); err != nil {
+				return err
+			}
 			if defaults {
 				if err := cfg.Validate(); err != nil {
 					return err

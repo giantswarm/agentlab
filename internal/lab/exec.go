@@ -32,9 +32,12 @@ func warn(format string, a ...any) {
 	fmt.Fprintf(os.Stderr, "    WARNING: "+format+"\n", a...)
 }
 
-// The two tools whose cluster is pinned by command; every other subprocess
-// (kind, docker, git, helm's plugins) inherits the environment untouched.
+// The CLIs the lab shells out to. kubectl and helm are the two whose cluster
+// is pinned by command; every other subprocess (kind, docker, git, helm's
+// plugins) inherits the environment untouched.
 const (
+	dockerBin  = "docker"
+	kindBin    = "kind"
 	kubectlBin = "kubectl"
 	helmBin    = "helm"
 )
