@@ -6,13 +6,17 @@
 // arguments or flags — leaves the machine. See docs/telemetry.md.
 //
 // Setting AGENTLAB_TELEMETRY_OPTOUT (any value) or the console convention
-// DO_NOT_TRACK=1 disables it. Reporting never blocks or fails a command.
+// DO_NOT_TRACK=1 disables it. Reporting never fails a command: the signal
+// travels while the command works, and a command that finishes first waits
+// for it at most half a second (Flush) before the process exits.
 package telemetry
 
 import (
+	"context"
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/giantswarm/telemetrydeck-go"
 	"github.com/spf13/cobra"
@@ -41,11 +45,20 @@ const (
 
 	// signalType is the same as kubectl-gs's, so one usage report reads both.
 	signalType = "GiantSwarm.command"
+
+	// flushTimeout caps how long a finished command waits for its signal to
+	// leave the machine. One round trip to the ingest endpoint takes a few
+	// hundred milliseconds at most, and a slow exit is felt from about half a
+	// second on; a command that ran longer than this finds nothing to wait for.
+	flushTimeout = 500 * time.Millisecond
 )
 
 // endpoint overrides the TelemetryDeck ingest URL; tests point it at a local
 // server. Empty means the library's default.
 var endpoint string
+
+// sender is the client Command sent through, kept for Flush; nil until then.
+var sender *telemetrydeck.Client
 
 // Enabled reports whether this process sends usage signals.
 func Enabled() bool {
@@ -59,9 +72,10 @@ func Enabled() bool {
 }
 
 // Command records one execution of a user-facing command ("agentlab up").
-// Fire-and-forget: the HTTP request runs on its own goroutine while the
-// command does its work, and a failure to deliver is swallowed — telemetry
-// must never get in the user's way. Same shape as kubectl-gs: signal type
+// The HTTP request runs on its own goroutine while the command does its work
+// (Flush, at the end, gives a fast command a bounded moment to see it out),
+// and a failure to deliver is swallowed — telemetry must never get in the
+// user's way. Same shape as kubectl-gs: signal type
 // GiantSwarm.command with the command path and the app version in the
 // payload, plus the OS, architecture and SDK version the library adds. The
 // version and commit also go out as TelemetryDeck.AppInfo.version and
@@ -77,20 +91,47 @@ func Command(cmd *cobra.Command) {
 	if !Enabled() || !UserFacing(cmd) {
 		return
 	}
-	testMode := os.Getenv(TestModeEnv) != ""
-	client, err := newClient(testMode)
+	client, err := newClient(testMode())
 	if err != nil {
-		if testMode {
-			log.Printf("telemetry: creating the TelemetryDeck client: %s", err)
-		}
+		logf("creating the TelemetryDeck client: %s", err)
 		return
 	}
+	sender = client
 	err = client.SendSignal(cmd.Context(), signalType, map[string]interface{}{
 		"appVersion": project.Version(),
 		"command":    cmd.CommandPath(),
 	})
-	if err != nil && testMode {
-		log.Printf("telemetry: sending the usage signal: %s", err)
+	if err != nil {
+		logf("sending the usage signal: %s", err)
+	}
+}
+
+// Flush lets the signal Command sent finish its trip before the process
+// exits, waiting at most flushTimeout (and no longer than ctx allows): a
+// sub-second command such as `agentlab version` would otherwise exit before
+// its request has left the machine. Never an error for the caller — a signal
+// that did not make it is dropped, and said so only in test mode.
+func Flush(ctx context.Context) {
+	if sender == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, flushTimeout)
+	defer cancel()
+	if err := sender.Flush(ctx); err != nil {
+		logf("the usage signal was not delivered within %s: %s", flushTimeout, err)
+	}
+}
+
+// testMode says whether AGENTLAB_TELEMETRY_TESTMODE is set.
+func testMode() bool {
+	return os.Getenv(TestModeEnv) != ""
+}
+
+// logf reports a telemetry problem on stderr in test mode; production runs
+// stay silent, telemetry being nobody's concern but the lab's developers.
+func logf(format string, args ...any) {
+	if testMode() {
+		log.Printf("telemetry: "+format, args...)
 	}
 }
 

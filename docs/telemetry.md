@@ -22,9 +22,11 @@ One signal contains:
 
 Nothing from `agentlab.yaml`, `state/`, `certs/`, the cluster, the users, the
 models or the model servers is ever sent. Help output (`-h`, `--help`) and
-shell completion do not count. The signal goes out in the background while the command runs
-and is dropped when the network is unavailable — it never blocks or fails a
-command.
+shell completion do not count. The signal goes out in the background while
+the command runs; a command that finishes before the signal has left the
+machine (`agentlab version`, say) waits for it at most half a second, then
+exits regardless. The signal is dropped when the network is unavailable — it
+never fails a command.
 
 Data is stored at [TelemetryDeck](https://telemetrydeck.com/) on servers in
 the EU; see their [privacy FAQ](https://telemetrydeck.com/docs/guides/privacy-faq/).
