@@ -42,6 +42,15 @@ const conditionTrue = "True"
 const (
 	legacyVendorDir      = ".vendor"
 	legacyHelmPluginsDir = StateDir + "/helm-plugins"
+	// Renders of templates that are gone: the old lab's own Flux values and
+	// the mcp-prometheus values of its `helm install` (a HelmRelease now).
+	legacyFluxValues          = StateDir + "/flux-values.yaml"
+	legacyMCPPrometheusValues = StateDir + "/mcp-prometheus-values.yaml"
+	// The Flux controllers the old lab installed itself (flux2 chart) for the
+	// agent create flow; the chart brings its own engine now and refuses a
+	// second Flux. Named here so the refusal and `platform-down` agree.
+	legacyFluxNamespace = "flux-system"
+	legacyFluxRelease   = "flux"
 )
 
 // helmInstallTimeout bounds `helm upgrade --install --wait` of the meta chart.
@@ -122,10 +131,12 @@ func platformUp(cfg *config.Config, header string) error {
 	if err := ensureHelmSupportsPlatform(); err != nil {
 		return err
 	}
+	// The working-directory leftovers go first: nothing reads them, and the
+	// refusal below is exactly the moment a user of an earlier agentlab meets.
+	removeLegacyArtifacts()
 	if err := refuseOlderLabShape(); err != nil {
 		return err
 	}
-	removeLegacyArtifacts()
 	chart := platformChartFor(cfg)
 	step("Installing %s in the lab shape (bundled Flux engine on, self-management off)", chart)
 
@@ -506,36 +517,45 @@ func platformUp(cfg *config.Config, header string) error {
 // guard refuses a second Flux too, with a message about clusters that run
 // Flux — this one names the actual cause). The lab has no in-place migration
 // on purpose: the kind cluster is throwaway, and `agentlab down && agentlab
-// up` is a clean five-minute slate.
+// up` is a clean five-minute slate. The other way out, `agentlab
+// platform-down` then `agentlab platform`, keeps the cluster and Dex:
+// platform-down removes both of the above (PlatformDown), and the component
+// releases replace the umbrella's CRDs (`crds: CreateReplace`).
 func refuseOlderLabShape() error {
+	const fix = "run `agentlab down && agentlab up` (or `agentlab platform-down`, then `agentlab platform`)"
 	if out, err := outputQuiet("helm", "-n", platformNamespace, "list", "--filter", "^"+platformRelease+"$", "-o", "json"); err == nil &&
 		strings.Contains(out, `"chart":"agent-platform-standalone`) {
 		return fmt.Errorf("this cluster runs the agent-platform-standalone umbrella an earlier agentlab installed;\n" +
-			"the lab installs the agent-platform meta chart now and has no in-place migration:\n" +
-			"run `agentlab down && agentlab up` (or `agentlab platform-down`, then `agentlab platform`)")
+			"the lab installs the agent-platform meta chart now and has no in-place migration:\n" + fix)
 	}
-	if _, err := outputQuiet("helm", "-n", "flux-system", "status", "flux"); err == nil {
-		return fmt.Errorf("this cluster runs the Flux controllers an earlier agentlab installed (release flux in flux-system);\n" +
-			"the agent-platform chart brings its own engine and refuses a second Flux:\n" +
-			"run `agentlab down && agentlab up`")
+	if legacyFluxInstalled() {
+		return fmt.Errorf("this cluster runs the Flux controllers an earlier agentlab installed (release %s in %s);\n"+
+			"the agent-platform chart brings its own engine and refuses a second Flux:\n"+fix, legacyFluxRelease, legacyFluxNamespace)
 	}
 	return nil
 }
 
+// legacyFluxInstalled reports whether the Flux controllers an earlier
+// agentlab installed itself are on the cluster (release flux in flux-system).
+func legacyFluxInstalled() bool {
+	_, err := outputQuiet("helm", "-n", legacyFluxNamespace, "status", legacyFluxRelease)
+	return err == nil
+}
+
 // removeLegacyArtifacts deletes what earlier agentlab versions left in the
-// working directory (see legacyVendorDir, legacyHelmPluginsDir). Quiet when
-// there is nothing; a failure to remove is a note, not an error — nothing
-// reads either directory anymore.
+// working directory (see legacyVendorDir and the constants next to it).
+// Quiet when there is nothing; a failure to remove is a note, not an error —
+// nothing reads any of them anymore.
 func removeLegacyArtifacts() {
-	for _, dir := range []string{legacyVendorDir, legacyHelmPluginsDir} {
-		if _, err := os.Stat(dir); err != nil {
+	for _, path := range []string{legacyVendorDir, legacyHelmPluginsDir, legacyFluxValues, legacyMCPPrometheusValues} {
+		if _, err := os.Stat(path); err != nil {
 			continue
 		}
-		if err := os.RemoveAll(dir); err != nil {
-			note("could not remove %s (left by an earlier agentlab; safe to delete by hand): %v", dir, err)
+		if err := os.RemoveAll(path); err != nil {
+			note("could not remove %s (left by an earlier agentlab; safe to delete by hand): %v", path, err)
 			continue
 		}
-		note("removed %s (left by an earlier agentlab; nothing reads it anymore)", dir)
+		note("removed %s (left by an earlier agentlab; nothing reads it anymore)", path)
 	}
 }
 

@@ -65,5 +65,23 @@ func PlatformDown(cfg *config.Config) error {
 	}
 	_ = runQuiet("helm", "-n", observabilityNamespace, "uninstall", kpsRelease)
 	_ = runQuiet("kubectl", "delete", "namespace", observabilityNamespace, "--ignore-not-found")
-	return run("kubectl", "delete", "namespace", platformNamespace, "--ignore-not-found")
+	if err := run("kubectl", "delete", "namespace", platformNamespace, "--ignore-not-found"); err != nil {
+		return err
+	}
+	// What an earlier agentlab installed next to the umbrella: its own Flux
+	// controllers for the agent create flow. The chart brings the engine now
+	// and refuses a second Flux (refuseOlderLabShape), so they go with the
+	// platform — after it, so the umbrella's agent HelmReleases were
+	// finalized by a running helm-controller — and `agentlab platform` is a
+	// clean reinstall on this cluster.
+	if legacyFluxInstalled() {
+		step("Uninstalling the Flux controllers an earlier agentlab installed (release %s in %s)", legacyFluxRelease, legacyFluxNamespace)
+		if err := run("helm", "-n", legacyFluxNamespace, "uninstall", legacyFluxRelease, "--wait", "--timeout", "5m"); err != nil {
+			return err
+		}
+		if err := run("kubectl", "delete", "namespace", legacyFluxNamespace, "--ignore-not-found"); err != nil {
+			return err
+		}
+	}
+	return nil
 }

@@ -1025,7 +1025,11 @@ same one-URL trick, just spelled with a name.
   migration on purpose — the kind cluster is throwaway. `agentlab platform`
   names what it found and asks for `agentlab down && agentlab up`. It also
   removes the leftovers of those versions in the working directory
-  (`.vendor/`, `state/helm-plugins/`).
+  (`.vendor/`, `state/helm-plugins/`, `state/flux-values.yaml`,
+  `state/mcp-prometheus-values.yaml`). To keep the cluster and its Dex
+  instead, `agentlab platform-down` then `agentlab platform`: platform-down
+  uninstalls the umbrella and those Flux controllers too, and the component
+  releases replace the umbrella's CRDs (`crds: CreateReplace`).
 - **`agentlab platform-down` is the chart's ordered teardown.** It deletes
   the lab's mcp-prometheus `HelmRelease` while the engine still runs, then
   `helm uninstall --wait` runs the chart's pre-delete hooks — delete the
@@ -1034,7 +1038,9 @@ same one-URL trick, just spelled with a name.
   which takes every remaining `HelmRelease` (the agents' too) with it — and
   only then deletes the namespaces. Nothing is left with a finalizer nobody
   processes. The four Flux Operator CRDs and the prometheus-operator CRDs
-  stay (Helm never removes a chart's `crds/`); a reinstall is clean.
+  stay (Helm never removes a chart's `crds/`); a reinstall is clean. On a
+  cluster an earlier agentlab built it also uninstalls the Flux controllers
+  that lab installed itself (release `flux` in `flux-system`).
 - **`allowPublicClientRegistration` must be on for Claude Code's login.**
   Claude Code registers over DCR as a public client on a random loopback port,
   so none of the other registration gates can be opened for it: it cannot send
