@@ -31,6 +31,10 @@ The lab installs it in its **lab shape**:
   same `helm upgrade --install … --wait`, no post-renderer, no
   `--force-conflicts` — and the release it writes is a regular one, so `helm
   upgrade` from a shell (`KUBECONFIG=state/kubeconfig`) stays the day-2 tool.
+  A re-run that would install the same chart version with the same values
+  writes no revision (`chart agent-platform <version> already installed with
+  these values — nothing to do`) and only re-reads every component's health;
+  a changed value, version or a chart directory upgrades.
   Never drop the value on a lab: the first upgrade without it makes the
   release self-managed.
 - The chart is **pinned** to an exact release, `platform.chartVersion` in
@@ -156,7 +160,9 @@ highest semver among them is the newest — the pick a Flux `OCIRepository`
 with `semver: "*-*"` and a `semverFilter` on the branch makes. `up` and
 `platform` re-resolve on every run, so the lab follows the branch like Flux
 would: a newer build is a new revision of the release on the next
-`agentlab platform`. Everything downstream — `render`, the image preload,
+`agentlab platform`, the build the lab already runs is a no-op (`chart
+agent-platform <tag> already installed with these values — nothing to do`).
+Everything downstream — `render`, the image preload,
 the install, `helm -n agent-platform history` — sees the exact version
 written to `chartVersion`, as on the stable channel; `render` and the
 proofs never resolve.
@@ -186,7 +192,13 @@ proofs never resolve.
 Component channels: agentlab sets nothing per component. The meta chart's
 dev builds carry their siblings' channels in their own values (the branch's
 `components.<name>.semverFilter`), so selecting the meta chart's dev channel
-selects the whole line.
+selects the whole line. The image preload follows the same filters: a
+component whose `OCIRepository` carries a `semverFilter` is rendered at the
+tag Flux will pull (the filter's regexp over the repository's tags, within
+the range, the highest) rather than at Helm's own resolution of the range,
+which knows no filter and would land on the stable release; the boot log
+names the picks (`rendered 12 of 12 component charts (6 through a
+semverFilter: agent-platform-connectivity 3.22.1-dev…, …)`).
 
 ### Substrate
 

@@ -96,7 +96,7 @@ internal/lab/                    everything operational:
   test.go                          RBAC assertions for every configured user
   platform.go platformtest.go      agent platform install + the headless MCP proof
   postrenderers.go                 the lab's per-component postRenderers patches (hostNetwork, sidecar, nodePort, dev images)
-  fluxreleases.go                  image preload from the chart's rendered OCIRepositories/HelmReleases
+  fluxreleases.go                  image preload from the chart's rendered OCIRepositories/HelmReleases, each at the version Flux would pull (semverFilter included)
   helm.go restclient.go            the embedded Helm 4 (upgrade-or-install with the kstatus wait, offline renders, probes, uninstalls); the lab kubeconfig as a client-go REST client getter
   resources.go                     docker CPU/memory: the requests table and the floors `up` enforces
   oauthfixture.go                  the Auth Required MCPServer fixture + the per-server sign-in proof

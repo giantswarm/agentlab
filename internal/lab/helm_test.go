@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	chart "helm.sh/helm/v4/pkg/chart/v2"
 	ri "helm.sh/helm/v4/pkg/release"
 	releasecommon "helm.sh/helm/v4/pkg/release/common"
 	release "helm.sh/helm/v4/pkg/release/v1"
@@ -218,6 +219,62 @@ func TestLastRevisionUninstalled(t *testing.T) {
 	}
 }
 
+// TestReleaseDeployedAs: a revision is up to date when it is deployed from
+// the very chart version with the very values — read back from the release
+// storage, where every number is a float64 and keys come in any order; a
+// superseded or failed revision, another version or other values are not.
+func TestReleaseDeployedAs(t *testing.T) {
+	vals := func(port any) map[string]any {
+		return map[string]any{"port": port, "hosts": []any{"a", "b"}, "nested": map[string]any{"flag": true}}
+	}
+	stored, fresh, changed := vals(float64(8080)), vals(8080), vals(8081)
+	rel := func(status releasecommon.Status, version string) *release.Release {
+		return &release.Release{
+			Name:    platformRelease,
+			Version: 3,
+			Info:    &release.Info{Status: status},
+			Chart:   &chart.Chart{Metadata: &chart.Metadata{Name: platformRelease, Version: version}},
+			Config:  stored,
+		}
+	}
+	const v = "3.22.1-dev.poc-kagent-main.2026-09-09.22-55-49.h7aa7836"
+	if !releaseDeployedAs(rel(releasecommon.StatusDeployed, v), v, fresh) {
+		t.Error("deployed from the same chart with the same values must be up to date")
+	}
+	if releaseDeployedAs(rel(releasecommon.StatusSuperseded, v), v, fresh) {
+		t.Error("a superseded revision is not")
+	}
+	if releaseDeployedAs(rel(releasecommon.StatusFailed, v), v, fresh) {
+		t.Error("a failed revision is not")
+	}
+	if releaseDeployedAs(rel(releasecommon.StatusDeployed, "3.22.2"), v, fresh) {
+		t.Error("another chart version is not")
+	}
+	if releaseDeployedAs(rel(releasecommon.StatusDeployed, v), v, changed) {
+		t.Error("changed values are not")
+	}
+	if releaseDeployedAs(&release.Release{Info: &release.Info{Status: releasecommon.StatusDeployed}}, v, fresh) {
+		t.Error("a revision without a chart is not")
+	}
+}
+
+// TestSameValues: nil and empty are one values set; a list's order matters
+// (lists replace, they never merge).
+func TestSameValues(t *testing.T) {
+	if !sameValues(nil, map[string]any{}) {
+		t.Error("nil and empty must be equal")
+	}
+	if sameValues(map[string]any{"a": 1}, nil) {
+		t.Error("a value against none must differ")
+	}
+	if sameValues(map[string]any{"l": []any{"a", "b"}}, map[string]any{"l": []any{"b", "a"}}) {
+		t.Error("a reordered list is a different list")
+	}
+	if !sameValues(map[string]any{"n": nil}, map[string]any{"n": nil}) {
+		t.Error("a null (Helm's deletion marker) equals a null")
+	}
+}
+
 // TestHelmChartLabel: the chart reference as messages word it.
 func TestHelmChartLabel(t *testing.T) {
 	if got := helmChartLabel("oci://reg/charts/x", "1.2.3"); got != "oci://reg/charts/x --version 1.2.3" {
@@ -243,6 +300,14 @@ func TestHelmReleaseProbesWithoutCluster(t *testing.T) {
 	var pathErr *os.PathError
 	if !strings.Contains(err.Error(), labKubeconfigPath) && !errors.As(err, &pathErr) {
 		t.Errorf("error should name the missing lab kubeconfig: %v", err)
+	}
+	// A chart directory is never up to date, and that answer needs no
+	// cluster; a versioned chart's check does, and fails the same way.
+	if rev, err := helmDeployedRevision(platformNamespace, platformRelease, "", nil); err != nil || rev != 0 {
+		t.Errorf("a chart directory: %d, %v; want 0 without touching a cluster", rev, err)
+	}
+	if _, err := helmDeployedRevision(platformNamespace, platformRelease, "3.22.2", nil); err == nil {
+		t.Error("helmDeployedRevision must fail without a lab kubeconfig")
 	}
 }
 
