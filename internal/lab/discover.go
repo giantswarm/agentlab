@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -59,8 +60,10 @@ func toolVersions(docker string) []ToolVersion {
 // HostServer is a model server found on this machine.
 type HostServer struct {
 	Backend string // config.ModelManagerBackend*
-	Version string
-	Port    int
+	// Ident is what the server says it is: its version where it reports one,
+	// the API generation for LM Studio, which reports none anywhere.
+	Ident string
+	Port  int
 	// OnGateway: the server also answers on the address pods dial, i.e. it is
 	// bound to every interface and pods can reach it. nil when that address
 	// is not known yet (nothing to dial) or the probe could not run, which
@@ -97,11 +100,11 @@ func Discover(cfg *config.Config) *Discovery {
 	}
 	for _, b := range config.ModelManagerBackends {
 		base := loopbackBase(b)
-		version, ok := detectHostServer(b, base)
+		ident, ok := detectHostServer(b, base)
 		if !ok {
 			continue
 		}
-		s := HostServer{Backend: b, Version: version, Port: config.BackendPort(b)}
+		s := HostServer{Backend: b, Ident: ident, Port: config.BackendPort(b)}
 		if d.KindGateway != "" {
 			answers, err := hostServerAnswers(cfg.ControlPlaneNode(), net.JoinHostPort(d.KindGateway, strconv.Itoa(s.Port)))
 			if err != nil {
@@ -117,10 +120,27 @@ func Discover(cfg *config.Config) *Discovery {
 	return d
 }
 
-// Backends lists the backends whose servers answer, in canonical order.
+// Backends lists the backends the configuration should carry, in canonical
+// order: the servers that answer AND that pods can reach.
+//
+// A server pods cannot reach is no use to model-manager, which runs in one:
+// enrolling it made `agentlab configure` print "pods cannot reach it" and
+// apply it anyway, and `agentlab up` then aborted in preflightHostServer —
+// whose remedy, `configure --defaults`, re-added it because it still answers
+// on loopback. LM Studio brought this to the surface (its default bind is
+// loopback, "Serve on Local Network" off), but it was already true of the
+// others.
+//
+// Unknown reachability still enrolls: OnGateway is nil while there is no kind
+// network to probe (a fresh machine, or after `agentlab down`), and a lab that
+// has not booted yet must still be configurable. Only an explicit "no" is
+// left out, and Report says so where it says the rest.
 func (d *Discovery) Backends() []string {
 	var out []string
 	for _, s := range d.Servers {
+		if s.OnGateway != nil && !*s.OnGateway {
+			continue
+		}
 		out = append(out, s.Backend)
 	}
 	return out
@@ -130,7 +150,7 @@ func (d *Discovery) Backends() []string {
 func (d *Discovery) ModelServersHint() string {
 	parts := make([]string, 0, len(d.Servers))
 	for _, s := range d.Servers {
-		parts = append(parts, fmt.Sprintf("%s %s (:%d)", config.BackendServerName(s.Backend), s.Version, s.Port))
+		parts = append(parts, fmt.Sprintf("%s %s (:%d)", config.BackendServerName(s.Backend), s.Ident, s.Port))
 	}
 	return strings.Join(parts, ", ")
 }
@@ -207,7 +227,7 @@ func (d *Discovery) Report(cfg *config.Config) string {
 		line("cluster", "kind %q does not exist yet — ports are free to move", cfg.ClusterName)
 	}
 	if len(d.Servers) == 0 {
-		line("model servers", "none — no Ollama on :%d, no Lemonade Server on :%d", config.OllamaPort, config.LemonadePort)
+		line("model servers", "none — %s", strings.Join(noServersFound(), ", "))
 	}
 	for _, s := range d.Servers {
 		reach := "kind gateway not known yet (first `agentlab up` creates the network)"
@@ -222,7 +242,17 @@ func (d *Discovery) Report(cfg *config.Config) string {
 		case s.OnGateway != nil && *s.OnGateway:
 			reach = fmt.Sprintf("answers on %s (the address pods dial): yes", d.KindGateway)
 		case s.OnGateway != nil:
-			reach = fmt.Sprintf("does NOT answer on %s (the address pods dial) — pods cannot reach it (%s)", d.KindGateway, bindHint(s.Backend))
+			reach = fmt.Sprintf("does NOT answer on %s (the address pods dial) — left out of platform.modelManager.backends until it does (%s)",
+				d.KindGateway, bindHint(s.Backend))
+			// Where docker runs in a VM the gateway is a bridge inside it, so
+			// no bind address can make it this machine: the fix is to name
+			// the host, not to rebind the server. Saying only "bind to
+			// 0.0.0.0" there sends the reader after something that cannot
+			// work (docs/models.md, "Local backends on the lab host").
+			if runtime.GOOS != "linux" {
+				reach += fmt.Sprintf(", or — docker runs in a VM here, so the gateway is not this machine — set platform.modelManager.endpoints.%s: http://host.docker.internal:%d",
+					s.Backend, s.Port)
+			}
 		}
 		models := "models not listed"
 		if s.ModelsErr == nil {
@@ -234,7 +264,7 @@ func (d *Discovery) Report(cfg *config.Config) string {
 			}
 			models = fmt.Sprintf("%d downloaded, %d tool-calling", len(s.Models), tools)
 		}
-		line(config.BackendServerName(s.Backend), "%s on :%d — %s; %s", s.Version, s.Port, reach, models)
+		line(config.BackendServerName(s.Backend), "%s on :%d — %s; %s", s.Ident, s.Port, reach, models)
 	}
 	if d.FLM != nil {
 		line("FastFlowLM", "standalone `flm serve` on :%d (%d catalog entries) — no management API and loopback by default; the lab drives FLM through Lemonade Server", d.FLM.Port, d.FLM.Models)
@@ -258,10 +288,20 @@ func (d *Discovery) toolVersion(name string) string {
 
 // bindHint is the one-line version of the bind fix for the report.
 func bindHint(backend string) string {
-	if backend == config.ModelManagerBackendLemonade {
-		return "`lemonade config set host=0.0.0.0`, restart lemond"
+	if spec, known := backendSpec(backend); known {
+		return spec.bindHint
 	}
-	return "OLLAMA_HOST=0.0.0.0, restart Ollama"
+	return ""
+}
+
+// noServersFound names every server the discovery looked for, so the "none"
+// line follows the backend table instead of a hand-kept sentence.
+func noServersFound() []string {
+	out := make([]string, 0, len(config.ModelManagerBackends))
+	for _, b := range config.ModelManagerBackends {
+		out = append(out, fmt.Sprintf("no %s on :%d", config.BackendServerName(b), config.BackendPort(b)))
+	}
+	return out
 }
 
 // nodeDialTimeout bounds the node-side dial, the podman counterpart of

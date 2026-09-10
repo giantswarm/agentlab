@@ -399,7 +399,7 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().StringVar(&chartPath, "chart-path", "", "install the agent-platform chart from this local directory (an agent-platform checkout's helm/agent-platform) instead of the pinned release; \"\" clears it")
 	cmd.Flags().StringVar(&chartBranch, "chart-branch", "", "the dev channel: follow this agent-platform branch's newest dev build (resolved now and on every up/platform, written to chartVersion); \"\" returns to the stable channel")
 	cmd.Flags().BoolVar(&substrate, "substrate", false, "pin Substrate (kagent's actor runtime) on/off instead of following the chart channel (on with --chart-branch)")
-	cmd.Flags().StringSliceVar(&modelManagerBackends, "model-manager-backends", nil, "pin the host model servers, in order (ollama, lemonade; the first is model-manager's default backend) instead of the ones the discovery finds")
+	cmd.Flags().StringSliceVar(&modelManagerBackends, "model-manager-backends", nil, fmt.Sprintf("pin the host model servers, in order (%s; the first is model-manager's default backend) instead of the ones the discovery finds", strings.Join(config.ModelManagerBackends, ", ")))
 	cmd.Flags().BoolVar(&accessible, "accessible", false, "prompt-per-question form mode (for screen readers and plain terminals)")
 	return cmd
 }
@@ -521,7 +521,7 @@ func modelsTestCmd() *cobra.Command {
 	var backend, model string
 	cmd := &cobra.Command{
 		Use:   "models-test [email]",
-		Short: "Headless managed-models proof: 401 without a token, then pull -> ModelConfig -> agent turn -> MCP via muster -> unload -> delete",
+		Short: "Headless managed-models proof: 401 without a token, then pull -> ModelConfig -> agent turn -> MCP via muster -> unload -> delete (a refused delete + unwire where the server has none)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
@@ -536,7 +536,7 @@ func modelsTestCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&backend, "backend", "", "the backend to prove, one of platform.modelManager.backends (default: the first — model-manager's default backend)")
-	cmd.Flags().StringVar(&model, "model", "", fmt.Sprintf("the model to pull and delete, small and tool-calling capable (default: %s on ollama, %s on lemonade)", lab.ModelsTestModel, lab.ModelsTestModelLemonade))
+	cmd.Flags().StringVar(&model, "model", "", fmt.Sprintf("the model to pull, small and tool-calling capable (default: %s)", lab.ModelsTestModelDefaults()))
 	return cmd
 }
 

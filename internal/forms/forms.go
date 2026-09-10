@@ -165,7 +165,7 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 				Value(&observabilityEnabled),
 			huh.NewConfirm().
 				Title("Manage this machine's model servers from the platform (model-manager)?").
-				Description("Optional, needs the agents runtime: the umbrella's model-manager component in\nfront of the host's Ollama or Lemonade Server — pull, load/unload and delete models\nfrom the portal or as x_model-manager_* tools, each pulled model wired into kagent\nas a ModelConfig. Pods reach the host through the kind docker gateway (bind the\nserver to 0.0.0.0). "+modelServersHint(hints)).
+				Description("Optional, needs the agents runtime: the umbrella's model-manager component in\nfront of this machine's model servers — an Ollama, a Lemonade Server, an LM Studio.\nPull, load/unload and delete models from the portal or as x_model-manager_* tools,\neach pulled model wired into kagent as a ModelConfig. Pods reach the host through\nthe kind docker gateway (bind the server to 0.0.0.0). "+modelServersHint(hints)).
 				Affirmative("Manage").
 				Negative("Skip").
 				Value(&modelManagerEnabled),
@@ -401,9 +401,15 @@ func editExtraModels(cfg *config.Config, accessible bool) error {
 }
 
 // modelServersHint is the discovery's line under the managed-models confirm.
+// The empty case names the servers from the backend table, so it cannot go
+// stale when one is added.
 func modelServersHint(h Hints) string {
 	if h.ModelServers == "" {
-		return "No Ollama or Lemonade Server answers on this machine right now."
+		names := make([]string, 0, len(config.ModelManagerBackends))
+		for _, b := range config.ModelManagerBackends {
+			names = append(names, config.BackendServerName(b))
+		}
+		return "No " + strings.Join(names, ", ") + " answers on this machine right now."
 	}
 	return "Found: " + h.ModelServers + "."
 }

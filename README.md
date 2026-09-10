@@ -37,7 +37,7 @@ trusting the same issuer.
 <div align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/img/architecture-dark.svg">
-    <img alt="agentlab architecture: Claude Code and Backstage, the two interfaces on the left, reach the platform through the agentgateway TLS edge into muster. muster fans out to mcp-kubernetes (the kube-apiserver), mcp-prometheus (Prometheus), model-manager (Ollama and Lemonade on the host) and agent-manager. The kagent runtime holds the Agent CRs, run as ADK pods, and the ModelConfigs for Anthropic, Ollama, Lemonade and OpenAI-compatible endpoints; agent-manager creates the Agent CRs, model-manager wires the ModelConfigs, the agents call tools back through muster with the caller's token and toolset, and Backstage chats with them over A2A. The bundled Dex at https://localhost:32000/dex is the one issuer the browser, muster, Backstage and the apiserver trust" src="docs/img/architecture-light.svg" width="900">
+    <img alt="agentlab architecture: Claude Code and Backstage, the two interfaces on the left, reach the platform through the agentgateway TLS edge into muster. muster fans out to mcp-kubernetes (the kube-apiserver), mcp-prometheus (Prometheus), model-manager (Ollama, Lemonade and LM Studio on the host) and agent-manager. The kagent runtime holds the Agent CRs, run as ADK pods, and the ModelConfigs for Anthropic, Ollama, Lemonade, LM Studio and OpenAI-compatible endpoints; agent-manager creates the Agent CRs, model-manager wires the ModelConfigs, the agents call tools back through muster with the caller's token and toolset, and Backstage chats with them over A2A. The bundled Dex at https://localhost:32000/dex is the one issuer the browser, muster, Backstage and the apiserver trust" src="docs/img/architecture-light.svg" width="900">
   </picture>
 </div>
 
@@ -62,7 +62,7 @@ trusting the same issuer.
   under the same rules.
 - **Models.** An Anthropic default; extra model configs for OpenAI-compatible,
   Gemini and Ollama endpoints; managed models through model-manager fronting
-  an Ollama or Lemonade Server on the host.
+  the model servers on the host — an Ollama, a Lemonade Server, an LM Studio.
 - **Observability.** A minimal Prometheus plus mcp-prometheus, so PromQL
   questions about the lab go through MCP too.
 - **Identity you can reason about.** Three throwaway users, a fixed group

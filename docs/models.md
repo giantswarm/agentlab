@@ -67,7 +67,7 @@ field for it), and `Ollama` requires one (its `host`) and is keyless.
 Providers needing more than a model + endpoint + key (AzureOpenAI, Bedrock,
 Vertex) are out of the lab's vocabulary — create their ModelConfigs by hand.
 
-## Local backends on the lab host (Ollama, Lemonade/NPU)
+## Local backends on the lab host (Ollama, Lemonade/NPU, LM Studio)
 
 A model server on the lab host itself is the cheapest self-hosted endpoint,
 and everything that can go wrong is host-side plumbing, not kagent:
@@ -75,10 +75,30 @@ and everything that can go wrong is host-side plumbing, not kagent:
 - **Address**: pods reach the host only through the kind docker network's
   gateway — `docker network inspect kind` names it, typically `172.21.0.1`.
   That IP goes in `baseUrl`; `localhost` would be the agent pod itself.
+- **Docker in a VM (Docker Desktop on macOS or Windows, Colima, a podman
+  machine)**: the kind gateway is a bridge address *inside that VM*, so it is
+  not the machine your model server runs on and no bind address can make it
+  one. The server is reachable as **`host.docker.internal`** instead
+  (`host.containers.internal` under podman), which resolves only from inside
+  the cluster. Autodetection cannot use it — it would break every Linux lab,
+  where the gateway is the host — so name it once per backend:
+
+  ```yaml
+  platform:
+    modelManager:
+      endpoints:
+        lmstudio: http://host.docker.internal:1234
+  ```
+
+  Without this, `agentlab up` stops at the preflight and offers you the bind
+  fix, which cannot help: the request never leaves the VM. This applies to
+  every host backend equally, not just LM Studio.
 - **Bind address**: the server must listen on `0.0.0.0` (or the bridge IP).
   The usual `127.0.0.1` default is unreachable from pods regardless of any
   firewall rule. Ollama: `OLLAMA_HOST=0.0.0.0`. Lemonade:
-  `lemonade config set host=0.0.0.0`.
+  `lemonade config set host=0.0.0.0`. LM Studio: `lms server start --bind
+  0.0.0.0`, the app's Developer → "Serve on Local Network" toggle, or
+  `LMS_SERVER_HOST=0.0.0.0`.
 - **Host firewall**: on a default-deny INPUT host, pod→host traffic arrives
   on the docker bridge like any other inbound connection and gets dropped —
   allow the server's TCP port from the docker bridge subnets (they fall
@@ -101,7 +121,7 @@ and everything that can go wrong is host-side plumbing, not kagent:
   `idleEviction`, `keepAliveScope: request`) so the portal can say "idle,
   loads on first request" instead of "not loaded".
 
-Both of these are keyless OpenAI-compatible endpoints, so the entries are
+All three are keyless OpenAI-compatible endpoints, so the entries are
 minimal:
 
 ```yaml
@@ -120,11 +140,23 @@ platform:
       provider: OpenAI
       model: qwen3-it-4b-FLM
       baseUrl: http://172.21.0.1:13305/v1
+    # LM Studio (lmstudio.ai) on the host: llama.cpp on GPU/CPU, MLX on
+    # Apple silicon. The model is LM Studio's own key (`lms ls`), and it
+    # must be one trained for tool use — LM Studio accepts `tools` for any
+    # model and emulates them through the prompt, which agents trip over.
+    - name: lmstudio-local
+      provider: OpenAI
+      model: ibm/granite-4-micro
+      baseUrl: http://172.21.0.1:1234/v1
 ```
 
 One Lemonade-specific note: its FastFlowLM models default to a 4096-token
 context, which agent system prompts plus tool schemas outgrow quickly —
-raise it once with `lemonade config set ctx_size=16384`.
+raise it once with `lemonade config set ctx_size=16384`. LM Studio has the
+same trap per model (its context is a load-time setting) plus one of its own:
+keep **just-in-time model loading** on (its default), or an agent whose
+ModelConfig names a downloaded-but-unloaded model fails its first turn
+instead of waiting for the load.
 
 ## Managed models: model-manager + the host model servers
 
@@ -136,15 +168,16 @@ the service behind the Model Manager epic) in front of a model server on the
 host — inventory of downloaded and loaded models, pull with progress,
 load/unload, delete, and every pulled model wired into kagent automatically
 as a `ModelConfig`: the native, keyless `Ollama` provider for an Ollama, the
-`OpenAI` provider on `/api/v1` (placeholder key) for a Lemonade Server. One
-block, which `agentlab configure` writes from what answers on the machine:
+`OpenAI` provider (placeholder key) on `/api/v1` for a Lemonade Server and on
+`/v1` for an LM Studio. One block, which `agentlab configure` writes from what
+answers on the machine:
 
 ```yaml
 platform:
   agents: true                 # required: the ModelConfigs land in kagent
   modelManager:
     enabled: true
-    backends: [ollama, lemonade]   # the host model servers, Ollama first; kserve needs GPUs + KServe
+    backends: [ollama, lemonade, lmstudio]   # the host model servers, Ollama first; kserve needs GPUs + KServe
     # endpoints:                   # optional; empty autodetects the host
     #   ollama: http://192.168.1.10:11434
 ```
@@ -159,27 +192,32 @@ that names none goes; the REST API takes `?backend=` (reads) or `"backend"`
 (writes), the MCP tools a `backend` argument. The one-backend form earlier
 versions wrote (`backend:` + `endpoint:`) still reads as the one-item list.
 
-`agentlab configure` detects an Ollama on `:11434` and a Lemonade Server on
-`:13305` on every run (`--model-manager[=false]` pins the flag,
-`--model-manager-backends` the list; the interactive form shows what was
-found). Each endpoint is **autodetected at platform time** as `http://<kind
+`agentlab configure` detects an Ollama on `:11434`, a Lemonade Server on
+`:13305` and an LM Studio on `:1234` on every run (`--model-manager[=false]`
+pins the flag, `--model-manager-backends` the list; the interactive form shows
+what was found). Each endpoint is **autodetected at platform time** as `http://<kind
 docker network gateway>:<default port>` — `docker network inspect kind`, the
 same address the section above documents for `extraModels` — so nobody types
-`172.21.0.1`; set `endpoints.<backend>` for a server elsewhere on the LAN
-(such a backend is kept whether or not one answers locally).
+`172.21.0.1`; set `endpoints.<backend>` for a server the gateway does not
+reach — one elsewhere on the LAN, or the host itself when docker runs in a VM
+(`host.docker.internal`, see above). Such a backend is kept whether or not one
+answers locally.
 
 What `agentlab platform` (or `up`) does with it:
 
-- **Preflight, not README traps.** Before the install, a short-lived pod in
-  the cluster fetches each server's version document (`/api/version` on
-  Ollama, `/api/v1/health` on Lemonade). If that fails, the boot stops right
-  there with the diagnosis and the two fixes from the section above spelled
-  out — *connection refused* means the server listens on `127.0.0.1` only
-  (`OLLAMA_HOST=0.0.0.0` / `lemonade config set host=0.0.0.0`), a *timeout*
-  means the host firewall drops pod→host traffic on the docker bridge (allow
-  the server's TCP port from the bridge subnets, inside `172.16.0.0/12`) —
-  instead of a model-manager pod reporting an unhealthy backend after Helm's
-  ten-minute wait, or ModelConfigs pointing at a dead endpoint.
+- **Preflight, not documented traps.** Before the install, a short-lived pod
+  in the cluster fetches each server's identifying document (`/api/version` on
+  Ollama, `/api/v1/health` on Lemonade, `/api/v1/models` on LM Studio — which
+  serves no version or health endpoint at all, so the inventory's shape is
+  what identifies it). If that fails, the boot stops right there with the
+  diagnosis and the two fixes from the section above spelled out —
+  *connection refused* means the server listens on `127.0.0.1` only
+  (`OLLAMA_HOST=0.0.0.0` / `lemonade config set host=0.0.0.0` / `lms server
+  start --bind 0.0.0.0`), a *timeout* means the host firewall drops pod→host
+  traffic on the docker bridge (allow the server's TCP port from the bridge
+  subnets, inside `172.16.0.0/12`) — instead of a model-manager pod reporting
+  an unhealthy backend after Helm's ten-minute wait, or ModelConfigs pointing
+  at a dead endpoint.
 - **The chart's `components.model-manager`** goes on with every listed
   backend (`model-manager.backends` plus one `model-manager.<backend>.endpoint`
   each = the detected addresses; a single entry renders the chart's `backend:`
@@ -205,14 +243,31 @@ What `agentlab platform` (or `up`) does with it:
   Claude Code to pull a model.
 
 The proof is `agentlab models-test` — one backend per run: `--backend
-lemonade` proves the Lemonade Server through the same model-manager (default:
-the first of the list). `--model` picks another small, **tool-calling
-capable** model; the defaults are `qwen2.5:0.5b` (~400 MB) on ollama and
-`qwen3-4b-FLM` (3.1 GB, the smallest tool-calling FastFlowLM model — the
-smaller `*-FLM` ones cannot call tools) on lemonade; `smollm2:135m` pulls
-fine and then fails every agent turn with "does not support tools". Every
-request names the backend, the ModelConfig must carry the backend label, and
-the run goes through the platform path only and leaves nothing behind:
+lemonade` (or `--backend lmstudio`) proves that server through the same
+model-manager (default: the first of the list). `--model` picks another small,
+**tool-calling capable** model; the defaults are `qwen2.5:0.5b` (~400 MB) on
+ollama, `qwen3-4b-FLM` (3.1 GB, the smallest tool-calling FastFlowLM model —
+the smaller `*-FLM` ones cannot call tools) on lemonade and
+`ibm/granite-4-micro` (~2 GB) on lmstudio, an LM Studio hub reference so the
+download resolves the variant that fits the host (GGUF on Linux and NVIDIA,
+MLX on Apple silicon); `smollm2:135m` pulls fine and then fails every agent
+turn with "does not support tools". Every request names the backend, the
+ModelConfig must carry the backend label, and the run goes through the
+platform path only.
+
+**On lmstudio the run ends differently, and deliberately so.** LM Studio has
+no delete over its API — removing a model is `lms rm` on the host, which no
+pod can run — so model-manager reports `delete: false` and the proof asserts
+the *refusal* instead of skipping a step: the platform must answer `501
+unsupported`, the model must still be downloaded and still wired afterwards
+(a refused delete that removed something would be worse than one that
+refuses), and the ModelConfig must then come off through the route that does
+exist, `POST /models/unwire`. The run also cross-checks the advertised
+`delete` capability against what the server really offers, in both
+directions. It is therefore the one backend that **does** leave something
+behind — the model stays downloaded, and the last line says so.
+
+The ollama and lemonade runs leave nothing behind:
 
 ```
 agentlab models-test

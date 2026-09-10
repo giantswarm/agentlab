@@ -7,8 +7,6 @@ import (
 	"net/http"
 	"slices"
 	"time"
-
-	"github.com/giantswarm/agentlab/internal/config"
 )
 
 // The inventories of the host model servers: what each has downloaded and
@@ -32,6 +30,18 @@ type HostModel struct {
 const (
 	ollamaToolsCapability = "tools"
 	lemonadeToolsLabel    = "tool-calling"
+	// LM Studio reports tool calling as the model's training. It accepts
+	// `tools` for any model and emulates them through the prompt, but only a
+	// model trained for them calls them reliably, which is what an agent
+	// needs.
+	//
+	// Its model types are llm, vlm (vision-language) and embedding. Only the
+	// embedding one cannot serve an agent, so the inventory excludes THAT
+	// rather than keeping only `llm`: a vlm is a chat model, and keying on
+	// llm dropped it from the count and from models-test's ground truth.
+	// Both spellings, since /api/v0 said embeddings.
+	lmStudioEmbeddingType  = "embedding"
+	lmStudioEmbeddingsType = "embeddings"
 )
 
 // hostModelsFn lists a server's downloaded models; a variable so tests can
@@ -39,18 +49,26 @@ const (
 var hostModelsFn = hostServerModels
 
 // hostServerModels lists the downloaded models of a backend's server at base
-// and whether each one can call tools.
+// and whether each one can call tools. An unknown kind is an error rather
+// than an Ollama read: config.Validate rejects one when the file loads, so
+// reaching this with one is a bug worth seeing.
 func hostServerModels(backend, base string) ([]HostModel, error) {
-	if backend == config.ModelManagerBackendLemonade {
-		return lemonadeModels(base)
+	spec, known := backendSpec(backend)
+	if !known {
+		return nil, fmt.Errorf("unknown host model server backend %q", backend)
 	}
-	return ollamaModels(base)
+	return spec.models(base)
 }
+
+// hostModelsTimeout is the budget for reading a host server's inventory.
+// detectHostServer shares it (modelmanager.go): for LM Studio the identifying
+// document IS the library, so the two reads are the same read.
+const hostModelsTimeout = 10 * time.Second
 
 // ollamaModels reads /api/tags and asks /api/show for each model's
 // capabilities (Ollama reports `tools` per model, not in the tag list).
 func ollamaModels(base string) ([]HostModel, error) {
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: hostModelsTimeout}
 	resp, err := client.Get(base + "/api/tags")
 	if err != nil {
 		return nil, err
@@ -88,7 +106,7 @@ func ollamaModels(base string) ([]HostModel, error) {
 // lemonadeModels reads Lemonade's /api/v1/models — the downloaded models with
 // their labels (the catalog needs ?show_all=true, which this does not ask).
 func lemonadeModels(base string) ([]HostModel, error) {
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: hostModelsTimeout}
 	resp, err := client.Get(base + lemonadeModelsPath)
 	if err != nil {
 		return nil, err
@@ -111,6 +129,29 @@ func lemonadeModels(base string) ([]HostModel, error) {
 			continue
 		}
 		models = append(models, HostModel{ID: m.ID, Tools: slices.Contains(m.Labels, lemonadeToolsLabel), Size: int64(m.Size * 1e9)})
+	}
+	return models, nil
+}
+
+// lmStudioModels reads LM Studio's library from /api/v1/models (0.4.0+) and
+// hands the body to the one decoder both it and the identity fingerprint use
+// (decodeLMStudioLibrary in backends.go), so a 200 that is not an LM Studio
+// answer is an error here rather than an empty inventory — which would read as
+// "the model is gone from the host" in the assertions that ground models-test.
+func lmStudioModels(base string) ([]HostModel, error) {
+	client := &http.Client{Timeout: hostModelsTimeout}
+	resp, err := client.Get(base + lmStudioModelsPath)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := readJSONBody(resp)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s%s: %w", base, lmStudioModelsPath, err)
+	}
+	models, err := decodeLMStudioLibrary(body)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s%s: %w", base, lmStudioModelsPath, err)
 	}
 	return models, nil
 }

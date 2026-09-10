@@ -357,15 +357,16 @@ agent-manager:
 # The model-manager chart's own values (the chart pins the Service name, the
 # kagent namespace, the muster registration and OAuth against global.identity).
 # ONE model-manager fronts every host model server of
-# platform.modelManager.backends (an Ollama, a Lemonade Server): `backends`
-# lists them, the first is the default backend of a request that names none,
-# and each dials the host through the kind docker network's gateway —
-# autodetected by `agentlab platform` (platform.modelManager.endpoints.<backend>
-# overrides). Agent pods dial the same addresses, so agentHost stays empty. A
-# single entry renders the chart's one-backend form (`backend:`). Same
-# audience story as mcp-kubernetes above: the forwarded token must carry the
-# `kubernetes` audience for model-manager's downstream OAuth (the ModelConfigs
-# it writes as the caller) to pass the kind apiserver.
+# platform.modelManager.backends (an Ollama, a Lemonade Server, an LM Studio):
+# `backends` lists them, the first is the default backend of a request that
+# names none, and each dials the host through the kind docker network's
+# gateway — autodetected by `agentlab platform`
+# (platform.modelManager.endpoints.<backend> overrides). Agent pods dial the
+# same addresses, so agentHost stays empty. A single entry renders the chart's
+# one-backend form (`backend:`). Same audience story as mcp-kubernetes above:
+# the forwarded token must carry the `kubernetes` audience for model-manager's
+# downstream OAuth (the ModelConfigs it writes as the caller) to pass the kind
+# apiserver.
 model-manager:
 {{- if eq (len .ModelManagerBackends) 1 }}
   backend: {{ index .ModelManagerBackends 0 }}

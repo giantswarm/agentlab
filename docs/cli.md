@@ -42,7 +42,8 @@ platform and OIDC entirely.
 
 The lab's end-to-end checks. Each one logs in to Dex headlessly, drives the
 real components through the same paths a person would, asserts the result and
-leaves nothing behind. Where a command takes `[email]`, that user runs the
+leaves nothing behind — with one documented exception, `models-test` on a
+server that cannot delete a model (see below). Where a command takes `[email]`, that user runs the
 proof (default: the admin). They trust `certs/ca.crt` directly, so they need
 neither `agentlab trust` nor any Node setting. The agent proofs follow the
 kagent API the cluster serves — the released kagent's Agent CRs on the stable
@@ -52,7 +53,7 @@ channel, kagent API v2's AgentTemplates on the [dev channel](platform.md#dev-cha
 | Command | What it proves |
 |---|---|
 | `platform-test [email]` | Dex → muster → mcp-kubernetes → apiserver, the per-server OAuth sign-in challenge, the tool-group label on the fake fleet and, with observability on, mcp-prometheus and Backstage's metrics endpoint. See [The agent platform](platform.md). |
-| `models-test [email]` | Managed models: 401 at the gateway without a token, then pull → ModelConfig → agent turn → MCP via muster → unload → delete, one backend per run. `--backend` picks one of `platform.modelManager.backends` (default: the first); `--model` a small, tool-calling capable model. See [Models](models.md). |
+| `models-test [email]` | Managed models: 401 at the gateway without a token, then pull → ModelConfig → agent turn → MCP via muster → unload → delete, one backend per run. On `lmstudio` the teardown is the `501` refusal plus an unwire, since LM Studio serves no delete, and that run leaves its model downloaded. `--backend` picks one of `platform.modelManager.backends` (default: the first); `--model` a small, tool-calling capable model. See [Models](models.md). |
 | `agents-test [email]` | agent-manager through muster as the signed-in user: create → ready → update → delete; a viewer's create is Forbidden by the apiserver; the ServiceAccount holds no RBAC of its own. On kagent API v2 the AgentTemplate carries the user's field manager, is Ready on the Harness and its toolset rides on the per-agent muster carrier. |
 | `toolsets-test [email]` | Declared toolsets end to end: agent-manager requires one, the agent carries the header (the released kagent: on its Agent CR; kagent API v2: on the RemoteMCPServer its AgentTemplate binds), muster resolves and refuses per request, agents see their toolset through a turn on kagent, a per-server sign-in scopes a server's tools to the token, the portal's Tools step and apply path. `--model-config` picks the kagent ModelConfig the throwaway agents run on; `--skip-chat` skips the turns that need a model to answer; `--skip-portal` (kagent API v2) skips the portal's apply path. See [Toolsets](platform.md#toolsets-declared-tool-access). |
 | `backstage-test [email...]` | The headless Backstage sign-in and the muster hop with that user's own forwarded token, including the per-server Sign in challenge, the MCP servers page's grouping and, on kagent API v2 with agents on, the Agent Platform pages — the proof brings a throwaway AgentTemplate along (a fresh lab has none), every user's agents list must show it, a chat turn on it for the first (default: every user). See [Backstage](backstage.md). |
@@ -78,7 +79,7 @@ The flags pin a value regardless of the discovery, with or without
 | `--chart-branch <branch>` | The dev channel: follow this agent-platform branch's newest dev build — resolved now and on every `up`/`platform`, written to `chartVersion`; `--chart-branch ""` returns to the stable channel. Mutually exclusive with `--chart-path`; implies Substrate. See [Dev channel](platform.md#dev-channel). |
 | `--substrate[=false]` | Pin Substrate (kagent's actor runtime) on or off instead of following the chart channel (on with `--chart-branch`, off otherwise). |
 | `--model-manager[=false]` | Pin managed models on or off instead of following the host model servers the discovery finds (needs agents). |
-| `--model-manager-backends ollama,lemonade` | Pin the host model servers, in order; the first is model-manager's default backend. |
+| `--model-manager-backends ollama,lmstudio` | Pin the host model servers, in order (`ollama`, `lemonade`, `lmstudio`); the first is model-manager's default backend. |
 
 ## Environment variables
 

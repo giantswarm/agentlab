@@ -213,9 +213,9 @@ type Platform struct {
 	// CRs by `agentlab platform`; entries removed here are pruned on the next
 	// run. Inert unless agents are enabled.
 	ExtraModels []ExtraModel `yaml:"extraModels,omitempty"`
-	// Managed models: the umbrella's model-manager component in front of the
-	// model servers that run on the lab host — an Ollama, a Lemonade Server
-	// (FastFlowLM on AMD Ryzen AI NPUs, llama.cpp on GPU/CPU) — pull, load,
+	// Managed models: the chart's model-manager component in front of the
+	// model servers that run on the lab host (backends.go is the list, with
+	// each server's port and name) — pull, load,
 	// unload and delete models from the portal (or as x_model-manager_*
 	// tools through muster), each pulled model wired into kagent as a
 	// keyless ModelConfig automatically. Complements extraModels, which
@@ -241,17 +241,18 @@ type ModelManager struct {
 	// `agentlab configure` turns it on whenever a host model server answers
 	// (and off when none does), unless --model-manager pins it.
 	Enabled bool `yaml:"enabled"`
-	// The host model servers, in order: `ollama` (an Ollama) and `lemonade`
-	// (a Lemonade Server). ONE model-manager fronts all of them at once
-	// (model-manager >= 0.17.0, `model-manager.backends` in the umbrella
-	// values); the first entry is its default backend — where a request that
-	// names none goes. `agentlab configure` fills the list from what answers
-	// on this machine (Ollama first); --model-manager-backends pins it.
+	// The host model servers, in order; backends.go names them and owns the
+	// list, so this comment cannot go stale as servers are added. ONE
+	// model-manager fronts all of them at once (model-manager >= 0.17.0,
+	// `model-manager.backends` in the chart values); the first entry is its
+	// default backend — where a request that names none goes. `agentlab
+	// configure` fills the list from what answers on this machine and can be
+	// reached from pods (Ollama first); --model-manager-backends pins it.
 	// kserve is no lab backend: GPU nodes and a KServe install.
 	Backends []string `yaml:"backends,omitempty"`
 	// Per-backend base URL as pods reach it, keyed by backend. Empty
 	// autodetects http://<kind docker network gateway>:<default port> at
-	// platform time (11434 for Ollama, 13305 for Lemonade) — the same
+	// platform time (BackendPort names each server's) — the same
 	// address docs/models.md documents for extraModels (`docker network inspect
 	// kind`). Set one for a server elsewhere on the LAN: a backend with an
 	// endpoint here is kept by `agentlab configure` whether or not a server
@@ -261,44 +262,6 @@ type ModelManager struct {
 	// still read, folded into backends/endpoints on load, never written.
 	Backend  string `yaml:"backend,omitempty"`
 	Endpoint string `yaml:"endpoint,omitempty"`
-}
-
-// The model servers the lab runs against on the host, which model-manager
-// and agent pods reach through the kind docker network's gateway.
-const (
-	// ModelManagerBackendOllama is a host Ollama.
-	ModelManagerBackendOllama = "ollama"
-	// ModelManagerBackendLemonade is a host Lemonade Server
-	// (lemonade-server.ai): FastFlowLM on AMD Ryzen AI NPUs, llama.cpp on
-	// GPU and CPU, behind one OpenAI-compatible API plus a management API.
-	ModelManagerBackendLemonade = "lemonade"
-)
-
-// ModelManagerBackends lists the backends the lab accepts, in the canonical
-// order `agentlab configure` writes them — which is also the preference for
-// the one model-manager fronts.
-var ModelManagerBackends = []string{ModelManagerBackendOllama, ModelManagerBackendLemonade}
-
-// The servers' default API ports, the ones the autodetected endpoints assume.
-const (
-	OllamaPort   = 11434
-	LemonadePort = 13305
-)
-
-// BackendPort is the default API port of a backend's server.
-func BackendPort(backend string) int {
-	if backend == ModelManagerBackendLemonade {
-		return LemonadePort
-	}
-	return OllamaPort
-}
-
-// BackendServerName is a backend's server as messages name it.
-func BackendServerName(backend string) string {
-	if backend == ModelManagerBackendLemonade {
-		return "Lemonade Server"
-	}
-	return "Ollama"
 }
 
 // Primary is model-manager's default backend — where a request that names
@@ -932,7 +895,7 @@ func (m ModelManager) Validate(agents bool) error {
 		}
 	}
 	if m.Endpoint != "" && !httpURLRe.MatchString(m.Endpoint) {
-		return fmt.Errorf("endpoint %q: must be an http(s) URL, e.g. http://172.21.0.1:%d", m.Endpoint, OllamaPort)
+		return fmt.Errorf("endpoint %q: must be an http(s) URL, e.g. http://172.21.0.1:%d", m.Endpoint, BackendPort(m.Primary()))
 	}
 	for _, b := range slices.Sorted(maps.Keys(m.Endpoints)) {
 		ep := m.Endpoints[b]

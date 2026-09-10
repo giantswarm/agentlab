@@ -15,25 +15,45 @@ import (
 
 // Fixture vocabulary, hoisted so the linter's constant check stays quiet.
 const (
-	ollama          = config.ModelManagerBackendOllama
-	lemonade        = config.ModelManagerBackendLemonade
-	capCompletion   = "completion"
-	labelChat       = "chat"
-	ollamaVersion   = "0.33.2"
-	lemonadeVersion = "11.9.0"
-	modelQwen35     = "qwen3.5:9b"
-	modelGemma270m  = "gemma3:270m"
-	modelSmollm     = "smollm2:135m"
-	modelQwen3FLM   = "qwen3-it-4b-FLM"
-	modelGemma4bFLM = "gemma3-4b-FLM"
-	modelMoEFLM     = "Qwen3.6-MoE-35B-A3B-FLM"
-	modelQwenVLFLM  = "qwen3vl-it-4b-FLM"
-	fieldData       = "data"
-	fieldOwnedBy    = "owned_by"
-	fieldDownloaded = "downloaded"
-	fieldLabels     = "labels"
-	fieldSize       = "size"
-	labelVision     = "vision"
+	ollama        = config.ModelManagerBackendOllama
+	lemonade      = config.ModelManagerBackendLemonade
+	lmstudio      = config.ModelManagerBackendLMStudio
+	capCompletion = "completion"
+	// opDial is net.OpError's Op for a failed dial, as the stubs build one.
+	opDial = "dial"
+	// hostDockerInternal is the address only the cluster can resolve, which
+	// the loopback fallback exists for.
+	hostDockerInternal = "host.docker.internal"
+	labelChat          = "chat"
+	ollamaVersion      = "0.33.2"
+	lemonadeVersion    = "11.9.0"
+	modelQwen35        = "qwen3.5:9b"
+	modelGemma270m     = "gemma3:270m"
+	modelSmollm        = "smollm2:135m"
+	modelQwen3FLM      = "qwen3-it-4b-FLM"
+	modelGemma4bFLM    = "gemma3-4b-FLM"
+	modelMoEFLM        = "Qwen3.6-MoE-35B-A3B-FLM"
+	modelQwenVLFLM     = "qwen3vl-it-4b-FLM"
+	fieldData          = "data"
+	fieldOwnedBy       = "owned_by"
+	fieldDownloaded    = "downloaded"
+	fieldLabels        = "labels"
+	fieldSize          = "size"
+	labelVision        = "vision"
+	// LM Studio's inventory fields.
+	fieldModels       = "models"
+	fieldKey          = "key"
+	fieldModelType    = "type"
+	fieldSizeBytes    = "size_bytes"
+	fieldCapabilities = "capabilities"
+	fieldToolUse      = "trained_for_tool_use"
+	typeLLM           = "llm"
+	typeVLM           = "vlm"
+	typeEmbedding     = "embedding"
+	modelGranite      = "ibm/granite-4-micro"
+	modelQwen317b     = "qwen/qwen3-1.7b"
+	modelQwenVL       = "qwen/qwen3-vl-8b"
+	modelNomicEmbed   = "text-embedding-nomic-embed-text-v1.5"
 )
 
 // fakeOllama answers /api/version, /api/tags and /api/show like an Ollama.
@@ -85,24 +105,146 @@ func fakeLemonade(t *testing.T) *httptest.Server {
 	return httptest.NewServer(mux)
 }
 
-func TestDetectHostServer(t *testing.T) {
-	ollama := fakeOllama(t)
-	defer ollama.Close()
-	lemonade := fakeLemonade(t)
-	defer lemonade.Close()
+// lmStudioMux answers /api/v1/models like an LM Studio and — the trait the
+// whole detection design rests on — HTTP 200 with an error document for every
+// other path, Ollama's /api/version, /api/tags and /api/show among them.
+func lmStudioMux(models []map[string]any) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/models", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{fieldModels: models})
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error": "Unexpected endpoint or method. (" + r.Method + " " + r.URL.Path + ")",
+		})
+	})
+	return mux
+}
 
-	if v, ok := detectHostServer(config.ModelManagerBackendOllama, ollama.URL); !ok || v != ollamaVersion {
+// fakeLMStudio has a library: two text models (one trained for tool use) and
+// an embedding model, which carries no capability object at all.
+func fakeLMStudio(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(lmStudioMux([]map[string]any{
+		{fieldKey: modelGranite, fieldModelType: typeLLM, fieldSizeBytes: 2_100_000_000,
+			fieldCapabilities: map[string]any{fieldToolUse: true, labelVision: false}},
+		{fieldKey: modelQwen317b, fieldModelType: typeLLM, fieldSizeBytes: 1_000_000_000,
+			fieldCapabilities: map[string]any{fieldToolUse: false}},
+		// A vision-language model is a chat model: it belongs in the
+		// inventory, and it can call tools.
+		{fieldKey: modelQwenVL, fieldModelType: typeVLM, fieldSizeBytes: 5_800_000_000,
+			fieldCapabilities: map[string]any{fieldToolUse: true, labelVision: true}},
+		{fieldKey: modelNomicEmbed, fieldModelType: typeEmbedding, fieldSizeBytes: 84_106_624},
+	}))
+}
+
+// fakeLMStudioEmpty is a fresh install: still an LM Studio, nothing pulled.
+func fakeLMStudioEmpty(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(lmStudioMux([]map[string]any{}))
+}
+
+func TestDetectHostServer(t *testing.T) {
+	ollamaSrv := fakeOllama(t)
+	defer ollamaSrv.Close()
+	lemonadeSrv := fakeLemonade(t)
+	defer lemonadeSrv.Close()
+
+	if v, ok := detectHostServer(config.ModelManagerBackendOllama, ollamaSrv.URL); !ok || v != ollamaVersion {
 		t.Errorf("ollama: %q %v", v, ok)
 	}
-	if v, ok := detectHostServer(config.ModelManagerBackendLemonade, lemonade.URL); !ok || v != lemonadeVersion {
+	if v, ok := detectHostServer(config.ModelManagerBackendLemonade, lemonadeSrv.URL); !ok || v != lemonadeVersion {
 		t.Errorf("lemonade: %q %v", v, ok)
 	}
 	// The wrong server on a port is not a hit: Ollama's path on Lemonade 404s.
-	if _, ok := detectHostServer(config.ModelManagerBackendOllama, lemonade.URL); ok {
+	if _, ok := detectHostServer(config.ModelManagerBackendOllama, lemonadeSrv.URL); ok {
 		t.Errorf("Lemonade detected as Ollama")
 	}
 	if _, ok := detectHostServer(config.ModelManagerBackendOllama, "http://127.0.0.1:1"); ok {
 		t.Errorf("a closed port detected as a server")
+	}
+
+	lmstudioSrv := fakeLMStudio(t)
+	defer lmstudioSrv.Close()
+	empty := fakeLMStudioEmpty(t)
+	defer empty.Close()
+
+	if v, ok := detectHostServer(lmstudio, lmstudioSrv.URL); !ok || v != lmStudioIdentAPIv1 {
+		t.Errorf("lmstudio: %q %v", v, ok)
+	}
+	// A fresh install with nothing downloaded is still an LM Studio.
+	if v, ok := detectHostServer(lmstudio, empty.URL); !ok || v != lmStudioIdentAPIv1 {
+		t.Errorf("empty lmstudio: %q %v", v, ok)
+	}
+	// Lemonade serves the very same /api/v1/models, with a `data` envelope
+	// instead of `models` — the shape is what tells them apart.
+	if _, ok := detectHostServer(lmstudio, lemonadeSrv.URL); ok {
+		t.Errorf("Lemonade detected as LM Studio")
+	}
+	if _, ok := detectHostServer(lmstudio, ollamaSrv.URL); ok {
+		t.Errorf("Ollama detected as LM Studio")
+	}
+	// The reason none of this may key off a status code: LM Studio answers
+	// 200 for Ollama's and Lemonade's probe paths alike.
+	for _, backend := range []string{config.ModelManagerBackendOllama, config.ModelManagerBackendLemonade} {
+		if _, ok := detectHostServer(backend, lmstudioSrv.URL); ok {
+			t.Errorf("LM Studio detected as %s — a 200 on an unknown path was read as evidence", backend)
+		}
+	}
+}
+
+// Every backend the lab accepts must be fully described, or it would be
+// half-added: detected but not readable, or readable but never detected.
+func TestEveryBackendHasAProbeAndAReader(t *testing.T) {
+	for _, b := range config.ModelManagerBackends {
+		spec, known := backendSpec(b)
+		if !known {
+			t.Errorf("backend %q has no table entry", b)
+			continue
+		}
+		if spec.probe.path == "" || spec.probe.ident == nil {
+			t.Errorf("backend %q has an incomplete probe: %+v", b, spec.probe)
+		}
+		if spec.models == nil {
+			t.Errorf("backend %q has no inventory reader", b)
+		}
+		if spec.bindFix == "" || spec.bindHint == "" {
+			t.Errorf("backend %q has no host-side bind fix", b)
+		}
+		if spec.proofModel == "" || spec.provider == "" || spec.providerNote == "" {
+			t.Errorf("backend %q has no models-test expectations", b)
+		}
+		// A server that cannot delete leaves its model behind, so the run
+		// ends by naming the host command that removes it. Without this a
+		// fourth such backend passes every test and ends a green run with
+		// "Remove it there: `%!(EXTRA string=…)`".
+		switch {
+		case spec.deleteOverREST && spec.removeHint != "":
+			t.Errorf("backend %q deletes over its API, so it needs no removeHint: %q", b, spec.removeHint)
+		case !spec.deleteOverREST && strings.Count(spec.removeHint, "%s") != 1:
+			t.Errorf("backend %q cannot delete, so removeHint must take the model exactly once: %q", b, spec.removeHint)
+		}
+		// models-test asserts this suffix on the ModelConfig's baseUrl, so a
+		// provider that takes a path must name it.
+		if spec.provider == config.ProviderOpenAI && spec.agentPath == "" {
+			t.Errorf("backend %q wires the OpenAI provider but names no agentPath", b)
+		}
+	}
+	// The other direction: a table entry for a kind config does not list is
+	// unreachable, and reads as support the configuration cannot express.
+	for b := range hostServers {
+		if !slices.Contains(config.ModelManagerBackends, b) {
+			t.Errorf("the lab has a table entry for %q, which config.ModelManagerBackends does not list", b)
+		}
+	}
+}
+
+func TestUnknownBackendIsNotRead(t *testing.T) {
+	if _, err := hostServerModels("kserve", "http://127.0.0.1:1"); err == nil {
+		t.Error("hostServerModels read an unknown backend instead of failing")
+	}
+	if _, ok := detectHostServer("kserve", "http://127.0.0.1:1"); ok {
+		t.Error("detectHostServer claimed an unknown backend")
 	}
 }
 
@@ -129,6 +271,24 @@ func TestHostServerModels(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Errorf("lemonade models = %v, want %v (downloaded only, decimal GB -> bytes)", got, want)
 	}
+
+	lmstudioSrv := fakeLMStudio(t)
+	defer lmstudioSrv.Close()
+	got, err = hostServerModels(lmstudio, lmstudioSrv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The embedding model is not an agent model, but the vision-language one
+	// is — keying on `llm` dropped it. size_bytes needs no conversion,
+	// unlike Lemonade's decimal GB.
+	want = []HostModel{
+		{modelGranite, true, 2_100_000_000},
+		{modelQwen317b, false, 1_000_000_000},
+		{modelQwenVL, true, 5_800_000_000},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("lmstudio models = %v, want %v (everything but embeddings, size_bytes as is)", got, want)
+	}
 }
 
 func TestDetectFLM(t *testing.T) {
@@ -153,13 +313,34 @@ func TestDetectFLM(t *testing.T) {
 
 func TestDiscoveryBackendsAndHint(t *testing.T) {
 	d := &Discovery{Servers: []HostServer{
-		{Backend: ollama, Version: ollamaVersion, Port: 11434},
-		{Backend: lemonade, Version: lemonadeVersion, Port: 13305},
+		{Backend: ollama, Ident: ollamaVersion, Port: 11434},
+		{Backend: lemonade, Ident: lemonadeVersion, Port: 13305},
+		{Backend: lmstudio, Ident: lmStudioIdentAPIv1, Port: 1234},
 	}}
-	if !slices.Equal(d.Backends(), []string{ollama, lemonade}) {
+	if !slices.Equal(d.Backends(), []string{ollama, lemonade, lmstudio}) {
 		t.Fatalf("backends = %v", d.Backends())
 	}
-	if d.ModelServersHint() != "Ollama 0.33.2 (:11434), Lemonade Server 11.9.0 (:13305)" {
+	// Reachability decides enrolment, and all three states matter: a server
+	// pods cannot reach is no use to a model-manager that runs in one, while
+	// UNKNOWN reachability (no kind network to probe yet — a fresh machine,
+	// or after `agentlab down`) must still enrol or the lab stops being
+	// configurable before it has booted once.
+	reachable, unreachable := true, false
+	mixed := &Discovery{Servers: []HostServer{
+		{Backend: ollama, Ident: ollamaVersion, Port: 11434, OnGateway: &reachable},
+		{Backend: lemonade, Ident: lemonadeVersion, Port: 13305, OnGateway: &unreachable},
+		{Backend: lmstudio, Ident: lmStudioIdentAPIv1, Port: 1234},
+	}}
+	if got := mixed.Backends(); !slices.Equal(got, []string{ollama, lmstudio}) {
+		t.Fatalf("backends = %v, want the reachable and the unknown one only", got)
+	}
+	// The report still names the server that was left out, with its fix.
+	mixed.KindGateway = "172.18.0.1"
+	if report := mixed.Report(config.Default()); !strings.Contains(report, "left out of platform.modelManager.backends") {
+		t.Errorf("the report must say the unreachable server was left out:\n%s", report)
+	}
+	// LM Studio reports no version, so the hint carries its API generation.
+	if d.ModelServersHint() != "Ollama 0.33.2 (:11434), Lemonade Server 11.9.0 (:13305), LM Studio api v1 (:1234)" {
 		t.Fatalf("hint = %q", d.ModelServersHint())
 	}
 	if (&Discovery{}).ModelServersHint() != "" {
@@ -236,7 +417,7 @@ func TestReportSaysWhenTheProbeCouldNotRun(t *testing.T) {
 		KindGateway: "169.254.1.2",
 		Servers: []HostServer{{
 			Backend:  config.ModelManagerBackendOllama,
-			Version:  "0.20.2",
+			Ident:    "0.20.2",
 			Port:     config.OllamaPort,
 			ReachErr: errors.New("no bash in the node"),
 		}},
