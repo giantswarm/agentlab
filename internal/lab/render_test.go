@@ -291,6 +291,39 @@ func TestKagentServiceMonitorFollowsChannel(t *testing.T) {
 	}
 }
 
+// On the dev channel the WorkerPool's worker image follows the lab's
+// Substrate pin — control plane and workers at one version; the stable
+// channel, whose kagent creates no WorkerPool, renders no such key (the
+// released chart's schema does not know it).
+func TestKagentWorkerImageFollowsSubstratePin(t *testing.T) {
+	cfg := config.Default()
+	render := func() map[string]any {
+		out, err := renderTemplate(cfg, "agent-platform-values.yaml.tmpl", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var values map[string]any
+		if err := yaml.Unmarshal(out, &values); err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		return values
+	}
+	if _, ok := render()["kagent"].(map[string]any)["substrateWorkerPool"]; ok {
+		t.Error("stable channel: kagent.substrateWorkerPool rendered, but the released chart has no WorkerPool")
+	}
+	cfg.Platform.ChartBranch = "poc/kagent-main"
+	pool, ok := render()["kagent"].(map[string]any)["substrateWorkerPool"].(map[string]any)
+	if !ok {
+		t.Fatal("dev channel: kagent.substrateWorkerPool not rendered")
+	}
+	if got := pool["workerImage"]; got != ateomGVisorImage {
+		t.Errorf("dev channel: kagent.substrateWorkerPool.workerImage = %v, want %s", got, ateomGVisorImage)
+	}
+	if !strings.HasSuffix(ateomGVisorImage, ":"+substrateVersion) {
+		t.Errorf("the worker image %s must carry the Substrate pin %s", ateomGVisorImage, substrateVersion)
+	}
+}
+
 // The Substrate values are the chart's defaults with the lab's two
 // deviations spelled out: no Namespace rendered (the lab creates it ahead of
 // the chart) and no atelet extra args (no local registry).
