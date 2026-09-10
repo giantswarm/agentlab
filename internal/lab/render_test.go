@@ -276,7 +276,7 @@ func TestKagentServiceMonitorFollowsChannel(t *testing.T) {
 	if got := kagentMonitor(render()); got != true {
 		t.Errorf("stable channel with observability: kagent.serviceMonitor.enabled = %v, want true", got)
 	}
-	cfg.Platform.ChartBranch = "poc/kagent-main"
+	cfg.Platform.ChartBranch = devChannelBranch
 	v := render()
 	if got := kagentMonitor(v); got != false {
 		t.Errorf("dev channel: kagent.serviceMonitor.enabled = %v, want false", got)
@@ -288,6 +288,39 @@ func TestKagentServiceMonitorFollowsChannel(t *testing.T) {
 	cfg.Platform.ChartBranch = ""
 	if got := kagentMonitor(render()); got != false {
 		t.Errorf("without observability: kagent.serviceMonitor.enabled = %v, want false", got)
+	}
+}
+
+// On the dev channel the WorkerPool's worker image follows the lab's
+// Substrate pin — control plane and workers at one version; the stable
+// channel, whose kagent creates no WorkerPool, renders no such key (the
+// released chart's schema does not know it).
+func TestKagentWorkerImageFollowsSubstratePin(t *testing.T) {
+	cfg := config.Default()
+	render := func() map[string]any {
+		out, err := renderTemplate(cfg, "agent-platform-values.yaml.tmpl", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var values map[string]any
+		if err := yaml.Unmarshal(out, &values); err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		return values
+	}
+	if _, ok := render()["kagent"].(map[string]any)["substrateWorkerPool"]; ok {
+		t.Error("stable channel: kagent.substrateWorkerPool rendered, but the released chart has no WorkerPool")
+	}
+	cfg.Platform.ChartBranch = devChannelBranch
+	pool, ok := render()["kagent"].(map[string]any)["substrateWorkerPool"].(map[string]any)
+	if !ok {
+		t.Fatal("dev channel: kagent.substrateWorkerPool not rendered")
+	}
+	if got := pool["workerImage"]; got != ateomGVisorImage {
+		t.Errorf("dev channel: kagent.substrateWorkerPool.workerImage = %v, want %s", got, ateomGVisorImage)
+	}
+	if !strings.HasSuffix(ateomGVisorImage, ":"+substrateVersion) {
+		t.Errorf("the worker image %s must carry the Substrate pin %s", ateomGVisorImage, substrateVersion)
 	}
 }
 

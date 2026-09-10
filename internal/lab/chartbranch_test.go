@@ -4,12 +4,16 @@ import (
 	"testing"
 )
 
+// devChannelBranch is the dev channel the tests follow: the agent-platform
+// branch whose meta chart builds carry kagent API v2.
+const devChannelBranch = "poc/kagent-main"
+
 // The dev-channel filter reads gitsemver's dev tags: a branch's own builds,
 // spelled with its sanitized name, in either the full or the `--`-shortened
 // form; never a release, never a sibling branch whose sanitized name shares
 // a prefix, never a renovate branch.
 func TestDevTagFilter(t *testing.T) {
-	matches := devTagFilter("poc/kagent-main")
+	matches := devTagFilter(devChannelBranch)
 	for _, ok := range []string{
 		"dev.poc-kagent-main.2026-09-09.20-23-54.h28f7f50",
 		"dev.poc-kagent-main.2026-09-10.08-12-33",
@@ -64,14 +68,14 @@ func TestPickDevTag(t *testing.T) {
 		"3.22.1-rc.1",
 		"not-a-version",
 	}
-	got, ok := pickDevTag(tags, "poc/kagent-main")
+	got, ok := pickDevTag(tags, devChannelBranch)
 	if !ok || got != "3.22.1-dev.poc-kagent-main.2026-09-10.08-12-33.h7f841be" {
 		t.Errorf("pickDevTag = %q, %v; want the 2026-09-10 build", got, ok)
 	}
 	// A newer base version (the branch rebased over a release) beats an
 	// older base with a later timestamp: that is the semver order Flux and
 	// Helm resolve by too, and the branch's next build carries it forward.
-	got, _ = pickDevTag(append(tags, "3.23.1-dev.poc-kagent-main.2026-09-01.00-00-00.h0000000"), "poc/kagent-main")
+	got, _ = pickDevTag(append(tags, "3.23.1-dev.poc-kagent-main.2026-09-01.00-00-00.h0000000"), devChannelBranch)
 	if got != "3.23.1-dev.poc-kagent-main.2026-09-01.00-00-00.h0000000" {
 		t.Errorf("a higher base must win: %q", got)
 	}
@@ -81,7 +85,7 @@ func TestPickDevTag(t *testing.T) {
 	if _, ok := pickDevTag(tags, "main"); ok {
 		t.Error("a branch without builds must not resolve")
 	}
-	if _, ok := pickDevTag(nil, "poc/kagent-main"); ok {
+	if _, ok := pickDevTag(nil, devChannelBranch); ok {
 		t.Error("no tags must not resolve")
 	}
 }

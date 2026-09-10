@@ -293,6 +293,16 @@ kagent:
   # the edge only listens on the host's loopback.
   controllerRoute:
     enabled: true
+{{- if .SubstrateEnabled }}
+  # DEV CHANNEL: the WorkerPool the kagent chart creates runs the gVisor
+  # worker image of the Substrate the lab installs — one pin (substrate.go),
+  # control plane and workers at the same version. The worker image is where
+  # an actor's networking lives (atunnel, the egress tunnel), so the chart's
+  # own default — the image the platform ships — would run the lab's actors
+  # on a Substrate other than the one the lab just installed.
+  substrateWorkerPool:
+    workerImage: {{ .SubstrateWorkerImage }}
+{{- end }}
   # The default ModelConfig every agent starts from (the kagent chart renders
   # it from providers.<default>). The chart would only create the referenced
   # Secret if the raw key were inlined in these values — which would put a

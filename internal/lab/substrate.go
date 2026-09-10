@@ -51,7 +51,7 @@ import (
 // fork's publish workflow names it in its run summary); it moves only
 // together with kagent's Substrate pin.
 const (
-	substrateVersion       = "0.0.27-dev.giantswarm.2026-09-10.19-33-37.h734ec53"
+	substrateVersion       = "0.0.27-dev.giantswarm.2026-09-10.22-37-39.h1817627"
 	substrateChartsRepo    = "oci://ghcr.io/giantswarm/substrate/helm"
 	substrateImageRegistry = "ghcr.io/giantswarm/substrate"
 )
@@ -107,11 +107,14 @@ var substratePools = []substratePool{
 // PodCertificateRequest API behind the certificates.k8s.io/v1beta1 gate.
 const podCertificateAPIPath = "/apis/certificates.k8s.io/v1beta1"
 
-// ateomGVisorImage is the worker image the WorkerPool the dev channel's
-// kagent creates names (`workerImage:`, no `image:` line in any render), so
-// the preload lists it explicitly — pulled once here instead of at the first
-// actor's boot. The line tags its images with the bare version (upstream's
-// carry a `v`).
+// ateomGVisorImage is the worker image of the WorkerPool the dev channel's
+// kagent creates: the lab names it in the meta chart values
+// (kagent.substrateWorkerPool.workerImage, agent-platform-values.yaml.tmpl),
+// so workers and control plane run one Substrate — the worker image carries
+// the actor's networking (atunnel) and moves with the pin — and lists it in
+// the preload explicitly (`workerImage:` is no `image:` line in any render),
+// pulled once here instead of at the first actor's boot. The line tags its
+// images with the bare version (upstream's carry a `v`).
 const ateomGVisorImage = substrateImageRegistry + "/ateom-gvisor:" + substrateVersion
 
 // The SandboxConfig the chart ships, which every gVisor WorkerPool names.

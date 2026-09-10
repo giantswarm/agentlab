@@ -237,14 +237,20 @@ What `agentlab up` (and `platform`) does, idempotently:
    so one waited install suffices (HACKS.md U22);
 3. installs `substrate-crds` and `substrate` at the line's pinned version
    (`substrateVersion` in `internal/lab/substrate.go`: today upstream 0.0.26
-   plus kagent-dev/substrate#33, as a `0.0.27-dev.giantswarm.…` build) from
+   plus kagent-dev/substrate#33 and the line's egress-while-resuming patch,
+   as a `0.0.27-dev.giantswarm.…` build) from
    `oci://ghcr.io/giantswarm/substrate/helm` into `ate-system` with the
    chart's own values (`state/substrate-values.yaml`), the images
    (`ghcr.io/giantswarm/substrate/*`) side-loaded like the platform's plus the
    gVisor worker image the `WorkerPool` names, and waits for ate-api-server,
    atelet and atenet;
 4. checks the `SandboxConfig gvisor-default` the chart ships is there. The
-   `WorkerPool` and the `Harness`es come with the dev channel's kagent.
+   `WorkerPool` and the `Harness`es come with the dev channel's kagent; the
+   pool's worker image follows the same pin — the lab's meta chart values
+   name `ghcr.io/giantswarm/substrate/ateom-gvisor:<substrateVersion>` as
+   `kagent.substrateWorkerPool.workerImage`, so workers (where an actor's
+   networking runs) and control plane are one Substrate, and a bump of the
+   pin rolls the pool on the next `agentlab platform`.
 
 `agentlab platform-down` uninstalls Substrate after the platform (whose
 teardown deletes kagent's `WorkerPool` through finalizers ate-controller has
@@ -299,36 +305,47 @@ WorkerPool replaces it). A negative outcome is a finding about the line,
 not about the lab: the proof stays red until the line carries a fix, and
 is that fix's acceptance test.
 
-**Outcome (2026-09-10): negative.** Measured on agent-platform
-`3.22.1-dev.poc-kagent-main.2026-09-10.21-02-36.h2739fe3` (kagent chart
-`0.11.0-dev.poc-agent-platform.2026-09-10.21-15-57.hcc77fbb`,
-kagent-controller `0.11.0-dev.poc-agent-platform.2026-09-10.20-29-02.hc231bd6`,
-Go ADK `ghcr.io/giantswarm/kagent/golang-adk@sha256:99b7b816f0d0…` — Alpine
-with git 2.49.1, so the image is not the problem) and Substrate
-`0.0.27-dev.giantswarm.2026-09-10.19-33-37.h734ec53`: the template stays
-`Ready=False ActorTemplatePending: waiting for the ActorTemplate golden
-snapshot` (Accepted, ResolvedRefs and Compatible `True`, no warnings) for
-the whole timeout while Substrate re-runs the golden actor about once a
-minute (atelet's `AteomHerder/Run`, the same actor id, one worker of
-`kagent-default` pinned to it throughout). The worker pod's log of the
-actor reads `Initialized empty Git repository in
-/plugins/standalone-0/.git/`, then `fatal: unable to access
-'https://github.com/giantswarm/agent-skills/': Send failure: Broken pipe`,
-then `failed to materialize Agent Plugins: materialize agent plugins:
-materialize skill "agent-self-awareness": exit status 128` — the ADK exits
-before readyz. atenet-egress logs nothing about the refused connection
-(its `ext-proc` logs health checks only), so the actor's `Broken pipe` is
-the only trace of the gate. The control without the skill reaches Ready in
-10 s. Deleting the template does not free the worker either: two minutes
-later Substrate still reported the golden actor as `ACTOR_STATE_DELETING`,
-pinned to the same worker pod, kagent's revision garbage collector kept
-failing to delete the ActorTemplate (`delete unreferenced ActorTemplate …:
-Aborted … another operation is in progress`, then `Internal … failed to
-terminate`), and the proof's cleanup had to delete that pod (the WorkerPool
-replaced it; Substrate let go right after). It is the gate the Claude harness hit in
-the laptop POC; the finding is on the line's upstream ledger
-(giantswarm/giantswarm#37742, row 8: boot-phase egress in Substrate, or
-kagent materialising skills after readiness).
+**Outcome (2026-09-11): positive — once every gate on the actor's egress
+admits a resuming actor.** Three gates stood between a booting actor and
+the network, found by reading the line's code and by the proof's evidence:
+
+1. **ateom** (the worker runtime, `cmd/ateom-gvisor`): the actor
+   certificate was minted before the workload started, but atunnel's
+   egress was armed only after readyz, together with ingress — until then
+   an intercepted connection was closed without a word, which is the
+   `Send failure: Broken pipe` of the first runs (measured 2026-09-10 on
+   Substrate `0.0.27-dev.giantswarm.2026-09-10.19-33-37.h734ec53`: the
+   template stayed `Ready=False ActorTemplatePending` for the whole
+   timeout, one worker pinned, nothing logged at any hop; the control
+   without the skill Ready in 10 s).
+2. **atenet's egress `ext_proc` handler** refused any actor that is not
+   `RUNNING`, a state Substrate commits only after readyz.
+3. **the egress dataplane itself**: the agentgateway build the Substrate
+   chart deploys (`ghcr.io/kagent-dev/substrate/agentgateway:c0f5597c7cb8`,
+   a pre-merge build of upstream agentgateway #3237) authorizes every
+   CONNECT against ate-api by itself — actor UID, then `RUNNING` — and is
+   the check in the request path (the chart's egress config carries the
+   `substrateEgress` policy and no `ext_proc`).
+
+The Substrate line carries the fix for the first two (giantswarm/substrate#4,
+in `0.0.27-dev.giantswarm.2026-09-10.22-37-39.h1817627`: egress armed before
+the first container starts, `RESUMING` admitted next to `RUNNING`, both hops
+log a refusal). Under it the proof's evidence changed shape — the worker logs
+`atunnel failed to open egress tunnel … egress gateway rejected CONNECT with
+403 Forbidden: actor is not running` and ate-api logs the dataplane's
+`GetActor` — and the third gate remained: the dataplane's `RUNNING` check
+(upstream agentgateway `egress_actor_resolution.rs`; the fix is prepared on
+the agentgateway line as `upstream/substrate-egress-resuming`). With an egress
+dataplane that does not gate on `RUNNING` — upstream agentgateway `v1.5.0`,
+whose `substrateEgress` derives the actor from the SPIFFE id and does no
+UID or state check, swapped into `atenet-egress` for the run — the proof
+passed on both halves: `Ready after 20s`, the turn answered
+`Skills: agent-self-awareness … klaus-gateway`, nothing left behind
+(agent-platform `3.22.1-dev.poc-kagent-main.2026-09-10.22-15-11.h284980b`,
+kagent `0.11.0-dev.giantswarm.2026-09-10.22-06-46.h0ac5240`, Go ADK
+`golang-adk@sha256:1f016b65…`, Substrate `…h1817627`). Every skill-carrying
+agent of the fleet needs all three gates open; the third is the agentgateway
+line's, tracked with the rest on giantswarm/giantswarm#37742 (row 8).
 
 ## The request path
 

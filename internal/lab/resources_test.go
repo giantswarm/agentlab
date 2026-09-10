@@ -67,7 +67,7 @@ func labConfig(platform, agents, observability, backstage, modelManager bool) *c
 
 // devChannel puts a configuration on the dev channel (platform.chartBranch).
 func devChannel(cfg *config.Config) *config.Config {
-	cfg.Platform.ChartBranch = "poc/kagent-main"
+	cfg.Platform.ChartBranch = devChannelBranch
 	return cfg
 }
 
