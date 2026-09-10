@@ -81,6 +81,15 @@ var openTargets = map[string]openTarget{
 	},
 }
 
+// noteLines are the target's extra lines above the URL, if it has any (the
+// kagent UI needs none).
+func (t openTarget) noteLines(cfg *config.Config) []string {
+	if t.notes == nil {
+		return nil
+	}
+	return t.notes(cfg)
+}
+
 // OpenTargets lists what Open accepts, for cobra's ValidArgs.
 func OpenTargets() []string { return slices.Sorted(maps.Keys(openTargets)) }
 
@@ -92,15 +101,18 @@ var clusterNodeState = nodeState
 // what would have been opened.
 var openBrowser = OpenBrowser
 
-// probeReachable is the one-shot version of the boot summary's wait loop: does the
-// target answer right now? probed is false when the check itself could not run
-// (no lab CA on disk yet), which is not the target's fault.
+// probeReachable is the short version of the boot summary's wait loop: is the
+// target answering? Two attempts rather than one, because a single slow
+// response through an edge that has been idle must not be enough to refuse a
+// lab whose URL works — and only two, because `open` has a person waiting.
+// probed is false when the check itself could not run (no lab CA on disk yet),
+// which is not the target's fault.
 var probeReachable = func(url string) (up, probed bool) {
-	client, err := labHTTPClient(3 * time.Second)
+	client, err := labHTTPClient(5 * time.Second)
 	if err != nil {
 		return false, false
 	}
-	return httpUp(client, url), true
+	return waitFor(2, time.Second, func() bool { return httpUp(client, url) }), true
 }
 
 // Open hands one lab URL to the OS opener and prints it. Refuses when the
@@ -123,30 +135,41 @@ func Open(cfg *config.Config, target string) error {
 		return err
 	}
 	url := t.url(cfg)
+	// Before the trust question, which may cost a sudo prompt: a target that
+	// is not answering refuses here, so that prompt is never spent on a
+	// command that then opens nothing. The probe trusts certs/ca.crt
+	// directly, so an untrusted CA does not blind it.
+	if up, probed := probeReachable(url); probed && !up {
+		return fmt.Errorf("%s is not answering on %s yet — %s", t.what, url, t.hint)
+	}
+	justTrusted := false
 	if t.tls {
 		switch decideTrust(systemTrusted(), onTerminal()) {
 		case trustAsk:
-			aborted, err := askTrustNow(cfg)
-			if err != nil {
-				return err
-			}
+			installed, aborted := offerTrust(cfg, nil)
 			if aborted {
 				return nil
 			}
+			justTrusted = installed
 		case trustWarn:
 			warnUntrusted(url)
 		case trustNothing:
 		}
 	}
-	if up, probed := probeReachable(url); probed && !up {
-		return fmt.Errorf("%s is not answering on %s yet — %s", t.what, url, t.hint)
-	}
-	var notes []string
-	if t.notes != nil {
-		notes = t.notes(cfg)
-	}
-	announceAndOpen(t.what, url, notes)
+	announceAndOpen(t.what, url, openNotes(t, cfg, justTrusted))
 	return nil
+}
+
+// openNotes are the lines printed above the URL: the target's own, plus the
+// restart hint when the lab CA entered the trust stores in this very run —
+// a browser that was already running keeps warning until it is restarted
+// (`Trust` says the same thing, and NSS profiles cache their trust DB).
+func openNotes(t openTarget, cfg *config.Config, justTrusted bool) []string {
+	notes := t.noteLines(cfg)
+	if justTrusted {
+		notes = append(notes, "the lab CA was just installed: restart an already-running browser once if the page still warns")
+	}
+	return notes
 }
 
 // announceAndOpen is the printing and opening `agentlab open` and the
@@ -179,7 +202,7 @@ func requireRunningCluster(cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("no node container %s — the lab is not up (`agentlab up`)", node)
 	}
-	if state != "running" {
+	if state != stateRunning {
 		return fmt.Errorf("the node container %s is %s, not running — `agentlab up` starts the lab again", node, state)
 	}
 	return nil

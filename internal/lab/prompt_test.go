@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"errors"
 	"slices"
 	"testing"
 
@@ -29,6 +30,27 @@ func ptr(b bool) *bool { return &b }
 
 // The two questions a boot ends with: asked on a terminal, silent off one,
 // and skipped entirely where a flag already answered.
+// The end of a boot is decoration on work that already succeeded: a trust
+// install that fails warns, and the portal question is still asked.
+func TestOfferTrustAndOpenSurvivesAFailedTrustInstall(t *testing.T) {
+	lab := runningLab()
+	lab.caTrusted, lab.terminal, lab.answer = false, true, true
+	lab.trustErr = errors.New("installing into the system store: exit status 1")
+	s := lab.install(t)
+	cfg := config.Default()
+
+	offerTrustAndOpen(cfg, Offers{}, true)
+	if s.trustRun != 1 {
+		t.Errorf("ran trust %d times, want 1", s.trustRun)
+	}
+	if s.asked != 2 {
+		t.Errorf("asked %d questions, want both", s.asked)
+	}
+	if !slices.Equal(s.opened, []string{cfg.BackstageBaseURL()}) {
+		t.Errorf("opened %v, want the portal", s.opened)
+	}
+}
+
 func TestOfferTrustAndOpen(t *testing.T) {
 	for _, tc := range []struct {
 		name             string
@@ -71,22 +93,21 @@ func TestOfferTrustAndOpen(t *testing.T) {
 			wantAsked: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var answerErr error
+			lab := runningLab()
+			lab.caTrusted, lab.terminal, lab.answer = tc.trusted, tc.terminal, tc.answer
 			if tc.wantAnswerAborts {
-				answerErr = forms.ErrAborted
+				lab.answerErr = forms.ErrAborted
 			}
-			s := stubOpen(t, tc.trusted, tc.terminal, tc.answer, answerErr, "running", nil, true, true)
+			s := lab.install(t)
 			cfg := config.Default()
 			cfg.Backstage.Enabled = tc.backstage
 
-			if err := offerTrustAndOpen(cfg, tc.offers, tc.portalUp); err != nil {
-				t.Fatalf("offerTrustAndOpen: %v", err)
-			}
+			offerTrustAndOpen(cfg, tc.offers, tc.portalUp)
 			if s.asked != tc.wantAsked {
 				t.Errorf("asked %d questions, want %d", s.asked, tc.wantAsked)
 			}
-			if s.trusted != tc.wantTrusted {
-				t.Errorf("ran trust %d times, want %d", s.trusted, tc.wantTrusted)
+			if s.trustRun != tc.wantTrusted {
+				t.Errorf("ran trust %d times, want %d", s.trustRun, tc.wantTrusted)
 			}
 			want := []string(nil)
 			if tc.wantOpened {

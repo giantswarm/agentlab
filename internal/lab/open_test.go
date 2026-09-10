@@ -11,48 +11,61 @@ import (
 	"github.com/giantswarm/agentlab/internal/forms"
 )
 
-// openStubs replaces everything Open reaches outside the process for one test
-// and restores it afterwards: the trust probe, the terminal, the question,
-// `agentlab trust`, the docker state of the node, the reachability probe and
-// the OS opener. What it records is what the person would have seen happen.
+// openStubs is the world Open and the end-of-boot offers reach outside this
+// process — the trust probe, the terminal, the question, `agentlab trust`, the
+// node's docker state, the reachability probe and the OS opener — as told to
+// them, plus what they did with it. install swaps the package vars for one
+// test and restores them afterwards.
 type openStubs struct {
-	opened   []string
+	// What the world says.
+	caTrusted bool
+	terminal  bool
+	answer    bool
+	answerErr error
+	trustErr  error
+	nodeState string
+	nodeErr   error
+	up        bool
+	probed    bool
+
+	// What the code did with it.
 	asked    int
-	trusted  int
+	trustRun int
+	opened   []string
 	probedAt []string
 }
 
-func stubOpen(t *testing.T, trusted, terminal bool, answer bool, answerErr error, state string, stateErr error, up, probed bool) *openStubs {
+// runningLab is the happy path every test starts from: the node is up, the
+// target answers, the lab CA is trusted, nothing is a terminal.
+func runningLab() openStubs {
+	return openStubs{caTrusted: true, nodeState: stateRunning, up: true, probed: true}
+}
+
+func (s *openStubs) install(t *testing.T) *openStubs {
 	t.Helper()
-	s := &openStubs{}
 	oldTrusted, oldTerm, oldAsk, oldTrust, oldState, oldProbe, oldOpen :=
 		systemTrusted, onTerminal, askConfirm, runTrust, clusterNodeState, probeReachable, openBrowser
 	t.Cleanup(func() {
 		systemTrusted, onTerminal, askConfirm, runTrust, clusterNodeState, probeReachable, openBrowser =
 			oldTrusted, oldTerm, oldAsk, oldTrust, oldState, oldProbe, oldOpen
 	})
-	systemTrusted = func() bool { return trusted }
-	onTerminal = func() bool { return terminal }
+	systemTrusted = func() bool { return s.caTrusted }
+	onTerminal = func() bool { return s.terminal }
 	askConfirm = func(_, _, _, _ string, _ bool) (bool, error) {
 		s.asked++
-		return answer, answerErr
+		return s.answer, s.answerErr
 	}
 	runTrust = func(*config.Config) error {
-		s.trusted++
-		return nil
+		s.trustRun++
+		return s.trustErr
 	}
-	clusterNodeState = func(string) (string, error) { return state, stateErr }
+	clusterNodeState = func(string) (string, error) { return s.nodeState, s.nodeErr }
 	probeReachable = func(url string) (bool, bool) {
 		s.probedAt = append(s.probedAt, url)
-		return up, probed
+		return s.up, s.probed
 	}
 	openBrowser = func(url string) { s.opened = append(s.opened, url) }
 	return s
-}
-
-// running is the happy-path lab: node up, target answering, CA trusted.
-func stubRunning(t *testing.T) *openStubs {
-	return stubOpen(t, true, false, false, nil, "running", nil, true, true)
 }
 
 func TestOpenTargetsFeedValidArgs(t *testing.T) {
@@ -93,7 +106,8 @@ func TestOpenTargetURLsFollowTheConfiguration(t *testing.T) {
 // Without an argument the refusal names both targets: that is how a person
 // discovers there is more than one thing to open.
 func TestOpenWithoutATargetNamesThem(t *testing.T) {
-	s := stubRunning(t)
+	lab := runningLab()
+	s := lab.install(t)
 	err := Open(config.Default(), "")
 	if err == nil {
 		t.Fatal("Open(cfg, \"\") = nil, want a refusal")
@@ -109,7 +123,8 @@ func TestOpenWithoutATargetNamesThem(t *testing.T) {
 }
 
 func TestOpenUnknownTarget(t *testing.T) {
-	s := stubRunning(t)
+	lab := runningLab()
+	s := lab.install(t)
 	err := Open(config.Default(), "prometheus")
 	if err == nil || !strings.Contains(err.Error(), `"prometheus"`) || !strings.Contains(err.Error(), "portal") {
 		t.Fatalf("Open(cfg, \"prometheus\") = %v, want a refusal naming the target and the valid ones", err)
@@ -133,10 +148,11 @@ func TestOpenRefusesDisabledTargets(t *testing.T) {
 		{"agents off", openTargetAgents, func(c *config.Config) { c.Platform.Agents = false }, "platform.agents"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s := stubRunning(t)
+			lab := runningLab()
+			s := lab.install(t)
 			clusterNodeState = func(string) (string, error) {
 				t.Error("asked docker for the node state on the refusal path")
-				return "running", nil
+				return stateRunning, nil
 			}
 			cfg := config.Default()
 			tc.mutate(cfg)
@@ -163,7 +179,9 @@ func TestOpenRefusesWhileTheClusterIsNotRunning(t *testing.T) {
 		{"node exited", "exited", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s := stubOpen(t, true, false, false, nil, tc.state, tc.err, true, true)
+			lab := runningLab()
+			lab.nodeState, lab.nodeErr = tc.state, tc.err
+			s := lab.install(t)
 			err := Open(config.Default(), openTargetPortal)
 			if err == nil || !strings.Contains(err.Error(), "agentlab up") {
 				t.Fatalf("Open() = %v, want a refusal pointing at `agentlab up`", err)
@@ -176,7 +194,8 @@ func TestOpenRefusesWhileTheClusterIsNotRunning(t *testing.T) {
 }
 
 func TestOpenHandsTheTargetURLToTheOpener(t *testing.T) {
-	s := stubRunning(t)
+	lab := runningLab()
+	s := lab.install(t)
 	cfg := config.Default()
 	if err := Open(cfg, openTargetPortal); err != nil {
 		t.Fatalf("Open: %v", err)
@@ -194,7 +213,9 @@ func TestOpenHandsTheTargetURLToTheOpener(t *testing.T) {
 // fault.
 func TestOpenAndTheReachabilityProbe(t *testing.T) {
 	t.Run("unreachable refuses with the hint", func(t *testing.T) {
-		s := stubOpen(t, true, false, false, nil, "running", nil, false, true)
+		lab := runningLab()
+		lab.up = false
+		s := lab.install(t)
 		err := Open(config.Default(), openTargetPortal)
 		if err == nil || !strings.Contains(err.Error(), "not answering") || !strings.Contains(err.Error(), "agentlab logs backstage") {
 			t.Fatalf("Open() = %v, want the not-answering refusal with the hint", err)
@@ -204,7 +225,9 @@ func TestOpenAndTheReachabilityProbe(t *testing.T) {
 		}
 	})
 	t.Run("an unusable probe opens anyway", func(t *testing.T) {
-		s := stubOpen(t, true, false, false, nil, "running", nil, false, false)
+		lab := runningLab()
+		lab.up, lab.probed = false, false
+		s := lab.install(t)
 		if err := Open(config.Default(), openTargetPortal); err != nil {
 			t.Fatalf("Open: %v", err)
 		}
@@ -214,38 +237,94 @@ func TestOpenAndTheReachabilityProbe(t *testing.T) {
 	})
 }
 
+// A target that is not answering is refused before the trust question, so its
+// sudo prompt is never spent on a command that then opens nothing.
+func TestOpenDoesNotAskAboutTrustBeforeRefusing(t *testing.T) {
+	lab := runningLab()
+	lab.caTrusted, lab.terminal, lab.answer, lab.up = false, true, true, false
+	s := lab.install(t)
+	if err := Open(config.Default(), openTargetPortal); err == nil {
+		t.Fatal("Open() = nil, want the not-answering refusal")
+	}
+	if s.asked != 0 || s.trustRun != 0 {
+		t.Errorf("asked %d questions and ran trust %d times before refusing", s.asked, s.trustRun)
+	}
+}
+
+// A trust install that fails must not cost the person the one thing the
+// command exists for: the URL still prints, the browser still opens.
+func TestOpenSurvivesAFailedTrustInstall(t *testing.T) {
+	lab := runningLab()
+	lab.caTrusted, lab.terminal, lab.answer = false, true, true
+	lab.trustErr = errors.New("installing into the system store: exit status 1")
+	s := lab.install(t)
+	cfg := config.Default()
+	if err := Open(cfg, openTargetPortal); err != nil {
+		t.Fatalf("Open() = %v, want nil: the trust step is optional", err)
+	}
+	if s.trustRun != 1 || !slices.Equal(s.opened, []string{cfg.BackstageBaseURL()}) {
+		t.Errorf("ran trust %d times, opened %v", s.trustRun, s.opened)
+	}
+}
+
+// A CA installed in this very run leaves an already-running browser with the
+// old verdict, so the announcement says to restart it.
+func TestOpenNotesMentionARestartOnlyAfterInstalling(t *testing.T) {
+	cfg := config.Default()
+	portal := openTargets[openTargetPortal]
+	const restart = "restart an already-running browser"
+	if notes := strings.Join(openNotes(portal, cfg, true), " "); !strings.Contains(notes, restart) {
+		t.Errorf("notes after installing = %q, want the restart hint", notes)
+	}
+	if notes := strings.Join(openNotes(portal, cfg, false), " "); strings.Contains(notes, restart) {
+		t.Errorf("notes without installing = %q, want no restart hint", notes)
+	}
+	// The kagent UI defines no notes at all: the nil func must not be called.
+	if notes := openNotes(openTargets[openTargetAgents], cfg, false); len(notes) != 0 {
+		t.Errorf("agents notes = %v, want none", notes)
+	}
+}
+
 // The trust question is asked for the https target on a terminal only, and
 // never for the kagent UI, which is plain HTTP on loopback.
 func TestOpenAndTheTrustQuestion(t *testing.T) {
 	t.Run("yes trusts, then opens", func(t *testing.T) {
-		s := stubOpen(t, false, true, true, nil, "running", nil, true, true)
+		lab := runningLab()
+		lab.caTrusted, lab.terminal, lab.answer = false, true, true
+		s := lab.install(t)
 		if err := Open(config.Default(), openTargetPortal); err != nil {
 			t.Fatalf("Open: %v", err)
 		}
-		if s.asked != 1 || s.trusted != 1 || len(s.opened) != 1 {
-			t.Fatalf("asked %d, trusted %d, opened %v", s.asked, s.trusted, s.opened)
+		if s.asked != 1 || s.trustRun != 1 || len(s.opened) != 1 {
+			t.Fatalf("asked %d, trusted %d, opened %v", s.asked, s.trustRun, s.opened)
 		}
 	})
 	t.Run("no opens untrusted", func(t *testing.T) {
-		s := stubOpen(t, false, true, false, nil, "running", nil, true, true)
+		lab := runningLab()
+		lab.caTrusted, lab.terminal = false, true
+		s := lab.install(t)
 		if err := Open(config.Default(), openTargetPortal); err != nil {
 			t.Fatalf("Open: %v", err)
 		}
-		if s.asked != 1 || s.trusted != 0 || len(s.opened) != 1 {
-			t.Fatalf("asked %d, trusted %d, opened %v", s.asked, s.trusted, s.opened)
+		if s.asked != 1 || s.trustRun != 0 || len(s.opened) != 1 {
+			t.Fatalf("asked %d, trusted %d, opened %v", s.asked, s.trustRun, s.opened)
 		}
 	})
 	t.Run("Ctrl-C opens nothing", func(t *testing.T) {
-		s := stubOpen(t, false, true, false, forms.ErrAborted, "running", nil, true, true)
+		lab := runningLab()
+		lab.caTrusted, lab.terminal, lab.answerErr = false, true, forms.ErrAborted
+		s := lab.install(t)
 		if err := Open(config.Default(), openTargetPortal); err != nil {
 			t.Fatalf("Open() = %v, want nil after an aborted question", err)
 		}
-		if len(s.opened) != 0 || s.trusted != 0 {
-			t.Fatalf("trusted %d, opened %v", s.trusted, s.opened)
+		if len(s.opened) != 0 || s.trustRun != 0 {
+			t.Fatalf("trusted %d, opened %v", s.trustRun, s.opened)
 		}
 	})
 	t.Run("off a terminal it warns and opens", func(t *testing.T) {
-		s := stubOpen(t, false, false, false, nil, "running", nil, true, true)
+		lab := runningLab()
+		lab.caTrusted = false
+		s := lab.install(t)
 		if err := Open(config.Default(), openTargetPortal); err != nil {
 			t.Fatalf("Open: %v", err)
 		}
@@ -254,12 +333,14 @@ func TestOpenAndTheTrustQuestion(t *testing.T) {
 		}
 	})
 	t.Run("the kagent UI never asks", func(t *testing.T) {
-		s := stubOpen(t, false, true, true, nil, "running", nil, true, true)
+		lab := runningLab()
+		lab.caTrusted, lab.terminal, lab.answer = false, true, true
+		s := lab.install(t)
 		if err := Open(config.Default(), openTargetAgents); err != nil {
 			t.Fatalf("Open: %v", err)
 		}
-		if s.asked != 0 || s.trusted != 0 {
-			t.Fatalf("asked %d, trusted %d for a plain-HTTP target", s.asked, s.trusted)
+		if s.asked != 0 || s.trustRun != 0 {
+			t.Fatalf("asked %d, trusted %d for a plain-HTTP target", s.asked, s.trustRun)
 		}
 	})
 }

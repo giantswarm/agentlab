@@ -21,7 +21,8 @@ On a terminal you rarely type the command: while the CA is untrusted,
 `agentlab up` ends by *asking* ("Trust the lab CA now?", one sudo prompt), and
 so does `agentlab open portal` before it puts an https lab URL in your browser
 — `agentlab trust` is the same code path, for later or for a scripted run
-(`agentlab up --trust`). Trust changes stay explicit either way: the CA enters
+(`agentlab up --trust`) — and either way a browser that was already running
+keeps warning until it is restarted once, which the answer says too. Trust changes stay explicit either way: the CA enters
 a store only after a yes, off a terminal nothing is asked (`open` prints a
 warning and opens anyway, `up` keeps its hint), `down` never touches a trust
 store, and `untrust` removes exactly the lab CA.

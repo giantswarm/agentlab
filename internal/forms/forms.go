@@ -127,7 +127,7 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 		huh.NewGroup(
 			huh.NewMultiSelect[string]().
 				Title("Components").
-				Description("The agent platform is what this lab tests, so it is on by default; deselect it\nfor a bare kind+Dex OIDC sandbox. Deployed by `agentlab up` (or later via\n`agentlab platform` / `agentlab backstage`). Backstage's muster plugin needs\nthe platform, so selecting it selects both.").
+				Description("The agent platform is what this lab tests, so it is on by default; deselect it\nfor a bare kind+Dex OIDC sandbox. Deployed by `agentlab up` (or later via\n`agentlab platform`). Backstage's muster plugin needs\nthe platform, so selecting it selects both.").
 				Options(
 					huh.NewOption("Giant Swarm agent platform (muster + Kubernetes MCP)", "platform"),
 					huh.NewOption("Giant Swarm Backstage (developer portal)", "backstage"),

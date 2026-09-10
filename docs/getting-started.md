@@ -138,7 +138,9 @@ export ANTHROPIC_API_KEY=sk-ant-...   # optional: powers the agents + Backstage 
 On a terminal, `up` ends with the two steps its summary used to only describe:
 while the lab CA is untrusted it asks whether to trust it now (one sudo
 prompt), and then whether to open the portal — so a first boot ends in
-Backstage's sign-in page with a green lock. `--trust`/`--open` (or
+Backstage's sign-in page, with a green lock in any browser started after the
+install (one that was already running caches the old verdict; restart it
+once). `--trust`/`--open` (or
 `--trust=false`/`--open=false`) pre-answer both for a scripted run, and off a
 terminal nothing is asked at all.
 

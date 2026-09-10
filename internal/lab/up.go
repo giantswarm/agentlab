@@ -158,10 +158,9 @@ func Up(cfg *config.Config, offers Offers) error {
 			fmt.Println("  fix, reverted by `agentlab untrust`:  agentlab trust")
 		}
 		// No portal without the platform (config.Validate), so this path can
-		// only offer the trust step.
-		if err := offerTrustAndOpen(cfg, offers, false); err != nil {
-			return err
-		}
+		// only offer the trust step — and never at the cost of the preload
+		// snapshot below, which this boot already earned.
+		offerTrustAndOpen(cfg, offers, false)
 	}
 	snapshotPreloadImages(cfg)
 	return nil

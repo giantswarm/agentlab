@@ -574,8 +574,10 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	// boot side-loads instead of pulling.
 	snapshotPreloadImages(cfg)
 	// The two steps the summary above only describes: on a terminal, ask
-	// instead of telling (prompt.go).
-	return offerTrustAndOpen(cfg, offers, portalUp)
+	// instead of telling (prompt.go). Optional to the last: whatever the
+	// person answers, the platform is up and this returns nil.
+	offerTrustAndOpen(cfg, offers, portalUp)
+	return nil
 }
 
 // ensurePlatformSecrets creates the platform's generated secrets once
