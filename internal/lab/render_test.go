@@ -276,7 +276,7 @@ func TestKagentServiceMonitorFollowsChannel(t *testing.T) {
 	if got := kagentMonitor(render()); got != true {
 		t.Errorf("stable channel with observability: kagent.serviceMonitor.enabled = %v, want true", got)
 	}
-	cfg.Platform.ChartBranch = "poc/kagent-main"
+	cfg.Platform.ChartBranch = devChannelBranch
 	v := render()
 	if got := kagentMonitor(v); got != false {
 		t.Errorf("dev channel: kagent.serviceMonitor.enabled = %v, want false", got)
@@ -311,7 +311,7 @@ func TestKagentWorkerImageFollowsSubstratePin(t *testing.T) {
 	if _, ok := render()["kagent"].(map[string]any)["substrateWorkerPool"]; ok {
 		t.Error("stable channel: kagent.substrateWorkerPool rendered, but the released chart has no WorkerPool")
 	}
-	cfg.Platform.ChartBranch = "poc/kagent-main"
+	cfg.Platform.ChartBranch = devChannelBranch
 	pool, ok := render()["kagent"].(map[string]any)["substrateWorkerPool"].(map[string]any)
 	if !ok {
 		t.Fatal("dev channel: kagent.substrateWorkerPool not rendered")
