@@ -20,6 +20,7 @@ import (
 	"helm.sh/helm/v4/pkg/chart"
 	"helm.sh/helm/v4/pkg/chart/common"
 	"helm.sh/helm/v4/pkg/chart/loader"
+	chartv2 "helm.sh/helm/v4/pkg/chart/v2"
 	valuesloader "helm.sh/helm/v4/pkg/chart/v2/loader"
 	"helm.sh/helm/v4/pkg/cli"
 	"helm.sh/helm/v4/pkg/cli/values"
@@ -522,26 +523,47 @@ func helmReleaseExists(namespace, releaseName string) bool {
 // `helm -n <ns> list --filter '^<release>$'` reports in its chart column,
 // without the version. Empty when there is no such release.
 func helmReleaseChart(namespace, releaseName string) (string, error) {
+	meta, err := helmReleaseMeta(namespace, releaseName)
+	if err != nil || meta == nil {
+		return "", err
+	}
+	return meta.Name, nil
+}
+
+// helmReleaseVersion is the version of the chart a release was installed
+// from — the other half of `helm list`'s chart column. Empty when there is no
+// such release.
+func helmReleaseVersion(namespace, releaseName string) (string, error) {
+	meta, err := helmReleaseMeta(namespace, releaseName)
+	if err != nil || meta == nil {
+		return "", err
+	}
+	return meta.Version, nil
+}
+
+// helmReleaseMeta is the chart metadata of a release's current revision, nil
+// when the namespace holds no such release.
+func helmReleaseMeta(namespace, releaseName string) (*chartv2.Metadata, error) {
 	h, err := newHelmOp(namespace)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	list := action.NewList(h.cfg)
 	list.Filter = "^" + regexp.QuoteMeta(releaseName) + "$"
 	releases, err := list.Run()
 	if err != nil {
-		return "", h.fail(fmt.Sprintf("list -n %s --filter %s", namespace, list.Filter), err)
+		return nil, h.fail(fmt.Sprintf("list -n %s --filter %s", namespace, list.Filter), err)
 	}
 	for _, r := range releases {
 		rel, err := asV1Release(r)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		if rel.Name == releaseName && rel.Chart != nil && rel.Chart.Metadata != nil {
-			return rel.Chart.Metadata.Name, nil
+			return rel.Chart.Metadata, nil
 		}
 	}
-	return "", nil
+	return nil, nil
 }
 
 // helmUninstall is `helm -n <ns> uninstall <release> [--wait] --timeout

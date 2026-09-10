@@ -61,4 +61,7 @@ in — headless pokes at the unsecured controller API won't have one.
 On the [dev channel](platform.md#dev-channel) the runtime is kagent main
 (API v2: `Harness` + `AgentTemplate`, every agent an actor on Substrate,
 which the lab installs ahead of the platform); the Agent CRs and the heals
-above belong to the released line and are skipped there.
+above belong to the released line and are skipped there. Skills are the
+line's open question — an `AgentTemplate`'s git skill is fetched during the
+golden boot, which Substrate's egress gate refuses; `agentlab skills-test`
+is that proof, see [The skills proof](platform.md#the-skills-proof-the-golden-boot).
