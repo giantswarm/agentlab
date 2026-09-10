@@ -115,7 +115,7 @@ const helmInstallTimeout = 15 * time.Minute
 // through the embedded Helm, no post-renderer, no --force-conflicts), and the
 // release is the Helm CLI's too — `helm upgrade` from a shell stays the lab's
 // day-2 tool.
-func PlatformUp(cfg *config.Config) error {
+func PlatformUp(cfg *config.Config, offers Offers) error {
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
 	}
@@ -124,7 +124,7 @@ func PlatformUp(cfg *config.Config) error {
 	// no-op, and after a half-failed boot it heals the missing side-loads
 	// before the installs start their rollout waits.
 	reportPreload(loadLabImages(cfg, pullLabImages(cfg)))
-	return platformUp(cfg, "Platform is up.")
+	return platformUp(cfg, "Platform is up.", offers)
 }
 
 // platformChart is the chart the embedded Helm installs and renders: the
@@ -164,7 +164,7 @@ func platformChartFor(cfg *config.Config) platformChart {
 // and only summary under the given header: `up` passes "Lab is up." so the
 // user reads a single "what to do next" block once everything is verified,
 // the standalone `agentlab platform` entry point passes "Platform is up.".
-func platformUp(cfg *config.Config, header string) error {
+func platformUp(cfg *config.Config, header string, offers Offers) error {
 	// The working-directory leftovers go first: nothing reads them, and the
 	// refusal below is exactly the moment a user of an earlier agentlab meets.
 	removeLegacyArtifacts()
@@ -512,11 +512,15 @@ func platformUp(cfg *config.Config, header string) error {
 	}
 
 	backstageHint := "  Backstage is disabled (backstage.enabled in agentlab.yaml)."
+	// Whether the portal answered decides the open question at the end of the
+	// summary (prompt.go): an unreachable portal is not worth a browser tab.
+	portalUp := false
 	if cfg.Backstage.Enabled {
 		// The release is Ready; this proves the route through the edge and
 		// Backstage's own listener.
 		step("Waiting for Backstage on %s", cfg.BackstageBaseURL())
-		if waitFor(60, 3*time.Second, func() bool { return httpUp(client, cfg.BackstageBaseURL()) }) {
+		portalUp = waitFor(60, 3*time.Second, func() bool { return httpUp(client, cfg.BackstageBaseURL()) })
+		if portalUp {
 			backstageHint = fmt.Sprintf("  Backstage: %s (Sign In -> Dex; users and passwords in %s)",
 				cfg.BackstageBaseURL(), config.File)
 		} else {
@@ -569,7 +573,9 @@ func platformUp(cfg *config.Config, header string) error {
 	// Everything the platform runs is in the node now — record it so the next
 	// boot side-loads instead of pulling.
 	snapshotPreloadImages(cfg)
-	return nil
+	// The two steps the summary above only describes: on a terminal, ask
+	// instead of telling (prompt.go).
+	return offerTrustAndOpen(cfg, offers, portalUp)
 }
 
 // ensurePlatformSecrets creates the platform's generated secrets once

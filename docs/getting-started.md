@@ -128,17 +128,25 @@ Then bring the lab up:
 export ANTHROPIC_API_KEY=sk-ant-...   # optional: powers the agents + Backstage AI chat
 ./agentlab configure       # interactive form: cluster, users, components
 ./agentlab up              # certs, kind cluster, Dex, RBAC, the agent platform — verified
+./agentlab open portal     # the portal (Backstage) in the browser; `open agents` the kagent UI
 ./agentlab platform-test   # headless proof: Dex -> muster -> mcp-kubernetes -> apiserver, + the per-server OAuth sign-in challenge
 ./agentlab models-test     # with a model server on the host: pull -> ModelConfig -> agent turn -> delete, through the platform
 ./agentlab agents-test     # agent-manager as the signed-in user: create -> ready -> update -> delete via muster; a viewer's create is Forbidden; the ServiceAccount holds no RBAC
 ./agentlab toolsets-test   # declared toolsets end to end: agent-manager requires one, the Agent carries the header, muster resolves and refuses per request, agents see their toolset, a per-server sign-in scopes tools to the token, the portal's Tools step and apply path
 ```
 
-Then trust the lab CA once and point Claude Code at the platform (`.mcp.json`
-in this repo already does the latter):
+On a terminal, `up` ends with the two steps its summary used to only describe:
+while the lab CA is untrusted it asks whether to trust it now (one sudo
+prompt), and then whether to open the portal — so a first boot ends in
+Backstage's sign-in page with a green lock. `--trust`/`--open` (or
+`--trust=false`/`--open=false`) pre-answer both for a scripted run, and off a
+terminal nothing is asked at all.
+
+Then point Claude Code at the platform (`.mcp.json` in this repo already does
+that):
 
 ```bash
-./agentlab trust             # once per machine: green locks everywhere (one sudo prompt)
+./agentlab trust             # if you said no above: green locks everywhere (one sudo prompt)
 export NODE_USE_SYSTEM_CA=1  # Node >= 22.15 (older Node: export NODE_EXTRA_CA_CERTS=$PWD/certs/ca.crt)
 claude mcp add --transport http muster https://muster.127.0.0.1.nip.io/mcp
 # in Claude Code:  /mcp  ->  authenticate  ->  Dex login page  ->  done
@@ -230,7 +238,7 @@ To exercise the identity itself:
 ```bash
 ./agentlab test                    # asserts RBAC for every configured user
 ./agentlab login dev@lab.local     # headless, instant
-./agentlab browser                 # real Dex login page in the browser
+./agentlab login --browser         # real Dex login page in the browser
 export KUBECONFIG=$PWD/kubeconfig.oidc
 kubectl auth whoami
 ```

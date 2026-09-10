@@ -138,6 +138,8 @@ go test ./internal/forms/ -run TestMinimalFormDrive -count=1 -v   # single test
 
 ./agentlab configure       # interactive form; --defaults keeps/writes the canonical lab
 ./agentlab up              # certs, kind cluster, Dex, RBAC, the agent platform — verified
+                           # on a terminal it ends by offering `trust` and the portal (--trust/--open pre-answer)
+./agentlab open portal     # the portal (Backstage) in the browser; `open agents` the kagent UI
 ./agentlab platform-test   # headless Dex -> muster -> mcp-kubernetes proof
 ./agentlab models-test     # managed models: 401 -> pull -> ModelConfig -> agent turn -> MCP -> unload -> delete (on lmstudio: the 501 refusal -> unwire, U23)
 ./agentlab test            # RBAC assertions for every configured user
@@ -148,6 +150,7 @@ go test ./internal/forms/ -run TestMinimalFormDrive -count=1 -v   # single test
 ./agentlab untrust         # remove exactly the lab CA from those stores
 ./agentlab reload          # re-render + re-apply Dex after editing agentlab.yaml
 ./agentlab logs <dex|muster|backstage>
+./agentlab login <email>   # headless password grant; --browser for the real Dex login page
 ./agentlab render          # write every manifest to state/ without applying
 ./agentlab self-update     # replace the binary with the latest GitHub release (--check only reports; exit 125 when outdated)
 ```

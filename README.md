@@ -88,19 +88,24 @@ go install github.com/giantswarm/agentlab@latest   # or a release binary, or `go
 export ANTHROPIC_API_KEY=sk-ant-...   # optional: powers the agents and Backstage's AI chat
 agentlab configure --defaults         # drop --defaults for the interactive form
 agentlab up                           # certs, kind cluster, Dex, RBAC, the platform — verified
+agentlab open portal                  # the portal in your browser (the URL is printed too)
 agentlab platform-test                # headless proof: Dex -> muster -> mcp-kubernetes -> apiserver
 ```
 
-Then trust the lab CA once and point Claude Code at the platform:
+On a terminal, `up` ends by asking whether to trust the lab CA (one sudo
+prompt, so browsers get a green lock) and whether to open the portal — `open
+portal` is the command for later, and `open agents` opens the kagent UI.
+
+Then point Claude Code at the platform:
 
 ```bash
-agentlab trust                # one sudo prompt; `agentlab untrust` reverts it
+agentlab trust                # if you said no above: one sudo prompt, `agentlab untrust` reverts it
 export NODE_USE_SYSTEM_CA=1   # Node >= 22.15; older Node: NODE_EXTRA_CA_CERTS=$PWD/certs/ca.crt
 claude mcp add --transport http muster https://muster.127.0.0.1.nip.io/mcp
 # in Claude Code:  /mcp  ->  authenticate  ->  Dex login page  ->  done
 ```
 
-The portal is at <https://backstage.127.0.0.1.nip.io>. The default users are
+The portal (<https://backstage.127.0.0.1.nip.io>) signs in the default users
 `admin@lab.local`, `dev@lab.local` and `viewer@lab.local`, password
 `password`. `agentlab down` deletes the cluster.
 
