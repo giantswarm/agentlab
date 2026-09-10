@@ -283,8 +283,8 @@ func ModelsTest(cfg *config.Config, email, backendName, model string) error {
 	// four minutes — LM Studio answers 200 with an error body on a path it
 	// does not serve.
 	if spec.agentPath != "" {
-		url, _, _ := strings.Cut(mcSpec, " backend=")
-		if _, base, found := strings.Cut(url, " "+model+" "); !found || !strings.HasSuffix(base, spec.agentPath) {
+		baseURL, _, _ := unstructured.NestedString(mc.Object, "spec", "openAI", "baseUrl")
+		if !strings.HasSuffix(baseURL, spec.agentPath) {
 			return fmt.Errorf("ModelConfig %s does not point at %s's OpenAI-compatible %s: %s",
 				mcName, config.BackendServerName(backendName), spec.agentPath, mcSpec)
 		}
@@ -504,8 +504,6 @@ func loopbackFor(backend, endpoint string) string {
 	return b.String()
 }
 
-// waitModelConfigGone waits for a ModelConfig to disappear from the kagent
-// namespace.
 // waitModelConfigGone waits for a ModelConfig to disappear from the kagent
 // namespace. It asks the apiserver through objectExists, whose (false, nil)
 // means NotFound and nothing else: reading "gone" out of ANY failed read

@@ -571,7 +571,6 @@ evidence such a server offers. The unit tests carry the 200-on-unknown-path
 behaviour in the fake, so a future "simplification" back to a status check
 fails them.
 
-
 ## Accepted lab trade-offs (not hacks to fix)
 
 - **Checksum stamping via the `REPLACED_AT_APPLY` placeholder** — the standard

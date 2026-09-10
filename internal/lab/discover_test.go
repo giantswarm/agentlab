@@ -320,6 +320,25 @@ func TestDiscoveryBackendsAndHint(t *testing.T) {
 	if !slices.Equal(d.Backends(), []string{ollama, lemonade, lmstudio}) {
 		t.Fatalf("backends = %v", d.Backends())
 	}
+	// Reachability decides enrolment, and all three states matter: a server
+	// pods cannot reach is no use to a model-manager that runs in one, while
+	// UNKNOWN reachability (no kind network to probe yet — a fresh machine,
+	// or after `agentlab down`) must still enrol or the lab stops being
+	// configurable before it has booted once.
+	reachable, unreachable := true, false
+	mixed := &Discovery{Servers: []HostServer{
+		{Backend: ollama, Ident: ollamaVersion, Port: 11434, OnGateway: &reachable},
+		{Backend: lemonade, Ident: lemonadeVersion, Port: 13305, OnGateway: &unreachable},
+		{Backend: lmstudio, Ident: lmStudioIdentAPIv1, Port: 1234},
+	}}
+	if got := mixed.Backends(); !slices.Equal(got, []string{ollama, lmstudio}) {
+		t.Fatalf("backends = %v, want the reachable and the unknown one only", got)
+	}
+	// The report still names the server that was left out, with its fix.
+	mixed.KindGateway = "172.18.0.1"
+	if report := mixed.Report(config.Default()); !strings.Contains(report, "left out of platform.modelManager.backends") {
+		t.Errorf("the report must say the unreachable server was left out:\n%s", report)
+	}
 	// LM Studio reports no version, so the hint carries its API generation.
 	if d.ModelServersHint() != "Ollama 0.33.2 (:11434), Lemonade Server 11.9.0 (:13305), LM Studio api v1 (:1234)" {
 		t.Fatalf("hint = %q", d.ModelServersHint())
