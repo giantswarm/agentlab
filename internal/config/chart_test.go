@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -80,6 +81,28 @@ func TestChartSourceValidation(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("devImages for muster, backstage, kagent: %v", err)
 	}
+
+	cfg.Platform.ValuesFiles = []string{filepath.Join(t.TempDir(), "missing.yaml")}
+	if err := cfg.Validate(); err == nil {
+		t.Error("valuesFiles with a missing file: want an error")
+	}
+	cfg.Platform.ValuesFiles = []string{""}
+	if err := cfg.Validate(); err == nil {
+		t.Error("valuesFiles with an empty path: want an error")
+	}
+	overlay := filepath.Join(t.TempDir(), "overlay.yaml")
+	if err := os.WriteFile(overlay, []byte("components: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Platform.ValuesFiles = []string{overlay}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("valuesFiles with an existing file: %v", err)
+	}
+	cfg.Platform.ValuesFiles = []string{}
+	cfg.Normalize()
+	if cfg.Platform.ValuesFiles != nil {
+		t.Error("Normalize must drop an empty valuesFiles list")
+	}
 }
 
 func repeat(s string, n int) string {
@@ -88,4 +111,100 @@ func repeat(s string, n int) string {
 		out += s
 	}
 	return out
+}
+
+// The branches the dev-channel tests spell out.
+const (
+	pocBranch  = "poc/kagent-main"
+	mainBranch = "main"
+)
+
+// The branch spelling in a dev tag is gitsemver's: lowercase, runs of
+// anything outside [a-z0-9] collapsed to one hyphen, hyphens trimmed, a
+// numeric name without leading zeros, "unknown" for nothing at all.
+func TestSanitizeBranch(t *testing.T) {
+	for branch, want := range map[string]string{
+		pocBranch:                  "poc-kagent-main",
+		mainBranch:                 mainBranch,
+		"Feat/Agent_Workspaces.v2": "feat-agent-workspaces-v2",
+		"renovate/axios-1.x":       "renovate-axios-1-x",
+		"--weird//branch--":        "weird-branch",
+		"release/0042":             "release-0042",
+		"0042":                     "42",
+		"000":                      "0",
+		"":                         "unknown",
+		"///":                      "unknown",
+	} {
+		if got := SanitizeBranch(branch); got != want {
+			t.Errorf("SanitizeBranch(%q) = %q, want %q", branch, got, want)
+		}
+	}
+}
+
+// The dev channel: a branch must leave a name to match tags with, and it
+// excludes a local chart; the pin is meaningless without a branch; Substrate
+// follows the channel unless pinned.
+func TestChartBranchValidation(t *testing.T) {
+	for _, ok := range []string{"", pocBranch, mainBranch, "feat/x_1"} {
+		if err := ValidateChartBranch(ok); err != nil {
+			t.Errorf("%q: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{" main", "main ", "///", "--"} {
+		if err := ValidateChartBranch(bad); err == nil {
+			t.Errorf("%q: want an error", bad)
+		}
+	}
+
+	cfg := Default()
+	cfg.Platform.ChartBranch = pocBranch
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("chartBranch alone: %v", err)
+	}
+	if !cfg.SubstrateEnabled() {
+		t.Error("chartBranch with agents on must imply Substrate")
+	}
+	cfg.Platform.Agents = false
+	if cfg.SubstrateEnabled() {
+		t.Error("chartBranch without agents must not imply Substrate")
+	}
+	cfg.Platform.Agents = true
+	off := false
+	cfg.Platform.Substrate.Enabled = &off
+	if cfg.SubstrateEnabled() {
+		t.Error("an explicit substrate.enabled: false must win over the channel")
+	}
+	cfg.Platform.Substrate.Enabled = nil
+
+	cfg.Platform.ChartPath = t.TempDir()
+	if err := os.WriteFile(filepath.Join(cfg.Platform.ChartPath, "Chart.yaml"), []byte("name: agent-platform\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("chartBranch with chartPath: want the mutual-exclusion error, got %v", err)
+	}
+	cfg.Platform.ChartPath = ""
+
+	cfg.Platform.ChartPinned = true
+	cfg.Normalize()
+	if !cfg.Platform.ChartPinned {
+		t.Error("Normalize must keep the pin while chartBranch is set")
+	}
+	cfg.Platform.ChartBranch = ""
+	cfg.Normalize()
+	if cfg.Platform.ChartPinned {
+		t.Error("Normalize must drop the pin without a chartBranch")
+	}
+	if cfg.SubstrateEnabled() {
+		t.Error("the stable channel must not imply Substrate")
+	}
+	on := true
+	cfg.Platform.Substrate.Enabled = &on
+	if !cfg.SubstrateEnabled() {
+		t.Error("an explicit substrate.enabled: true must install it on the stable channel too")
+	}
+	cfg.Platform.Enabled = false
+	if cfg.SubstrateEnabled() {
+		t.Error("Substrate is inert without the platform")
+	}
 }

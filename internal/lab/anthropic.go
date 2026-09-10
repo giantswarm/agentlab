@@ -1,8 +1,10 @@
 package lab
 
 import (
-	"fmt"
+	"context"
 	"os"
+
+	corev1 "k8s.io/api/core/v1"
 )
 
 // AnthropicKeyEnv is where the lab reads the Anthropic API key from at deploy
@@ -19,7 +21,8 @@ const AnthropicKeyEnv = "ANTHROPIC_API_KEY"
 // error: everything boots without the key, the AI features just stay
 // unconfigured until the secret exists.
 func ensureAnthropicSecret(ns, name string) (created bool, err error) {
-	if _, err := outputQuiet("kubectl", "-n", ns, "get", "secret", name); err == nil {
+	ctx := context.Background()
+	if exists, err := objectExists(ctx, gvrSecrets, ns, name); err == nil && exists {
 		note("secret %s/%s already exists, leaving it alone (delete it and re-run to rotate)", ns, name)
 		return false, nil
 	}
@@ -30,17 +33,9 @@ func ensureAnthropicSecret(ns, name string) (created bool, err error) {
 		note("  kubectl -n %s create secret generic %s --from-literal=%s=...", ns, name, AnthropicKeyEnv)
 		return false, nil
 	}
-	// Applied via stdin so the key never appears in a process's argv.
-	manifest := fmt.Sprintf(`apiVersion: v1
-kind: Secret
-metadata:
-  name: %s
-  namespace: %s
-type: Opaque
-stringData:
-  %s: %q
-`, name, ns, AnthropicKeyEnv, key)
-	if err := pipeInto([]byte(manifest), "kubectl", "apply", "-f", "-"); err != nil {
+	// Applied in-process, so the key never appears in a process's argv or in
+	// a file.
+	if err := ensureSecret(ns, name, corev1.SecretTypeOpaque, map[string][]byte{AnthropicKeyEnv: []byte(key)}); err != nil {
 		return false, err
 	}
 	note("created secret %s/%s from $%s", ns, name, AnthropicKeyEnv)

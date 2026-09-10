@@ -17,7 +17,9 @@ import (
 
 // Discovery is what `agentlab configure` learns about this machine before it
 // writes agentlab.yaml — on every run, not only the first, so the file
-// follows the host: the tools `agentlab up` shells out to, whether this
+// follows the host: the one tool `agentlab up` shells out to (the container
+// engine) next to what the binary embeds (kind with the node image it boots,
+// Helm, the Kubernetes client), whether this
 // configuration's kind cluster exists (and which host ports it publishes, so
 // they never count as conflicts), the kind docker network's gateway (the
 // address pods reach the host on), the model servers answering on their
@@ -33,11 +35,25 @@ type Discovery struct {
 	FLM           *FLMServer
 }
 
-// ToolVersion is one of the CLIs the lab shells out to; Version is empty
-// when the tool is not on PATH (or does not answer).
+// ToolVersion is one entry of the report's tools line: the container engine
+// the lab shells out to (Version empty when it is not on PATH or does not
+// answer), or one of the libraries the binary carries — Embedded — whose
+// Version is the one built in (kind's names its node image too).
 type ToolVersion struct {
-	Name    string
-	Version string
+	Name     string
+	Version  string
+	Embedded bool
+}
+
+// toolVersions is the Tools entry of a discovery: docker with the version it
+// answered (or "" when missing), then what this build embeds.
+func toolVersions(docker string) []ToolVersion {
+	return []ToolVersion{
+		{Name: dockerBin, Version: docker},
+		{Name: kindToolName, Version: kindToolVersion(), Embedded: true},
+		{Name: helmToolName, Version: helmToolVersion(), Embedded: true},
+		{Name: clientGoToolName, Version: clientGoToolVersion(), Embedded: true},
+	}
 }
 
 // HostServer is a model server found on this machine.
@@ -74,12 +90,7 @@ const flmOwner = "FastFlowLM"
 // is loopback or a local CLI and degrades to "not found".
 func Discover(cfg *config.Config) *Discovery {
 	d := &Discovery{AnthropicKey: os.Getenv(AnthropicKeyEnv) != ""}
-	d.Tools = []ToolVersion{
-		{"docker", dockerVersion()},
-		{"kind", kindVersion()},
-		{"kubectl", kubectlVersion()},
-		{"helm", helmVersion()},
-	}
+	d.Tools = toolVersions(dockerVersion())
 	d.ClusterExists, d.ClusterPorts = kindNodePublishedPorts(cfg.ControlPlaneNode())
 	if gw, err := kindGatewayIP(cfg.ControlPlaneNode()); err == nil {
 		d.KindGateway = gw
@@ -124,41 +135,71 @@ func (d *Discovery) ModelServersHint() string {
 	return strings.Join(parts, ", ")
 }
 
-// MissingTools names the CLIs `agentlab up` needs that did not answer.
-func (d *Discovery) MissingTools() []string {
-	var missing []string
-	for _, t := range d.Tools {
-		if t.Version == "" {
-			missing = append(missing, t.Name)
+// toolRequirement is a CLI `agentlab up` shells out to: why the lab needs it,
+// and where to get it. There is no version floor. The container engine is the
+// only one: kind, Helm and the Kubernetes client are embedded (kind.go,
+// helm.go, kube.go), and the Kubernetes the lab boots is the kind release's
+// default node image.
+type toolRequirement struct {
+	name    string
+	why     string
+	install string
+}
+
+// toolRequirements is what Preflight checks the discovered tools against.
+var toolRequirements = []toolRequirement{
+	{name: dockerBin, why: "the embedded kind runs the cluster as a container of this engine, through its CLI (Podman >= 4's docker-compatible CLI works too)",
+		install: "https://docs.docker.com/get-started/get-docker/"},
+}
+
+// Preflight is the verdict on the tools, taken before `agentlab configure`
+// asks its first question (or, with --defaults, writes anything): an error
+// naming every tool `agentlab up` would fail on — not on PATH — with why and
+// where to get it. So nobody walks through the whole form to be refused at
+// boot time. The container engine is the one tool asked for; everything else
+// the lab runs is in the binary.
+func (d *Discovery) Preflight() error {
+	var problems []string
+	for _, req := range toolRequirements {
+		if d.toolVersion(req.name) != "" {
+			continue
 		}
+		problems = append(problems, fmt.Sprintf("%s is not on PATH (or does not answer) — %s\n    install: %s", req.name, req.why, req.install))
 	}
-	return missing
+	if len(problems) == 0 {
+		return nil
+	}
+	var b strings.Builder
+	b.WriteString("this machine cannot run the lab yet:\n")
+	for _, p := range problems {
+		b.WriteString("  - " + p + "\n")
+	}
+	b.WriteString("Install the above and run the command again.")
+	return errors.New(b.String())
 }
 
 // Report is the human-readable account of the discovery, printed by
-// `agentlab configure` before it changes anything.
+// `agentlab configure` before it changes anything. The tools line states
+// what answered on PATH and what the binary carries; the verdict on the
+// former is Preflight's.
 func (d *Discovery) Report(cfg *config.Config) string {
 	var b strings.Builder
 	line := func(label, format string, a ...any) {
 		fmt.Fprintf(&b, "  %-18s"+format+"\n", append([]any{label}, a...)...)
 	}
 	b.WriteString("Discovering this machine:\n")
-	tools := make([]string, 0, len(d.Tools))
+	var onPath, embedded []string
 	for _, t := range d.Tools {
-		if t.Version == "" {
-			tools = append(tools, t.Name+" MISSING")
-			continue
-		}
-		tools = append(tools, t.Name+" "+t.Version)
-	}
-	line("tools", "%s", strings.Join(tools, ", "))
-	if missing := d.MissingTools(); len(missing) > 0 {
-		line("", "`agentlab up` needs docker, kind, kubectl and helm >= 4 — install: %s", strings.Join(missing, ", "))
-	} else if v := d.toolVersion("helm"); v != "" {
-		if major, err := helmMajor(v); err == nil && major < 4 {
-			line("", "helm %s cannot install the platform: Helm >= 4 is required (agent-platform-standalone#21)", v)
+		switch {
+		case t.Embedded:
+			embedded = append(embedded, strings.TrimSpace(t.Name+" "+t.Version))
+		case t.Version == "":
+			onPath = append(onPath, t.Name+" MISSING")
+		default:
+			onPath = append(onPath, t.Name+" "+t.Version)
 		}
 	}
+	line("tools", "%s — embedded: %s", strings.Join(onPath, ", "), strings.Join(embedded, ", "))
 	switch {
 	case d.ClusterExists:
 		line("cluster", "kind %q exists — its port mappings are fixed at node creation (`agentlab down && agentlab up` to change them)", cfg.ClusterName)
@@ -340,41 +381,4 @@ func dockerVersion() string {
 		v += " (podman)"
 	}
 	return v
-}
-
-func kindVersion() string {
-	// "kind v0.32.0 go1.26.4 linux/amd64"
-	out, err := outputQuiet("kind", "version")
-	if err != nil {
-		return ""
-	}
-	fields := strings.Fields(out)
-	if len(fields) < 2 {
-		return strings.TrimSpace(out)
-	}
-	return fields[1]
-}
-
-func kubectlVersion() string {
-	out, err := outputQuiet("kubectl", "version", "--client", "-o", "json")
-	if err != nil {
-		return ""
-	}
-	var v struct {
-		ClientVersion struct {
-			GitVersion string `json:"gitVersion"`
-		} `json:"clientVersion"`
-	}
-	if err := json.Unmarshal([]byte(out), &v); err != nil {
-		return ""
-	}
-	return v.ClientVersion.GitVersion
-}
-
-func helmVersion() string {
-	out, err := outputQuiet("helm", "version", "--template", "{{.Version}}")
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(out)
 }

@@ -1,21 +1,17 @@
 package forms
 
 import (
-	"io"
 	"testing"
-	"time"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
-
-const keyDelay = 30 * time.Millisecond
 
 // TestRunTUIDrive drives the real TUI form (not accessible mode) with a
 // scripted keystroke stream: accept the cluster defaults, keep the default
 // users, keep the preselected components (platform AND Backstage — the
 // canonical lab), and accept their defaults.
 func TestRunTUIDrive(t *testing.T) {
-	testInput = newPacedReader(keyDelay,
+	testHook = newDriver(
 		"\r", "\r", "\r", // group 1: cluster name, dex port, dex image
 		"\r", // group 2: customize users? -> keep as is
 		"\r", // group 3: platform + backstage preselected; submit as is
@@ -24,9 +20,8 @@ func TestRunTUIDrive(t *testing.T) {
 		// extra models confirm
 		"\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r",
 		"\r", // backstage group: port
-	)
-	testOutput = io.Discard
-	defer func() { testInput, testOutput = nil, nil }()
+	).attach
+	defer func() { testHook = nil }()
 
 	cfg := config.Default()
 	if err := Run(cfg, false, Hints{ModelServers: "Ollama 0.33.2 (:11434)"}); err != nil {
@@ -61,7 +56,7 @@ func TestRunTUIDrive(t *testing.T) {
 // TestRunTUIDriveEdit changes the cluster name and dex port through the form:
 // ctrl+u clears an input's pre-filled value before typing a replacement.
 func TestRunTUIDriveEdit(t *testing.T) {
-	testInput = newPacedReader(keyDelay,
+	testHook = newDriver(
 		"\x15", "renamed", "\r", // clear + retype cluster name
 		"\x15", "31000", "\r", // clear + retype dex port
 		"\r", // dex image: keep
@@ -69,9 +64,8 @@ func TestRunTUIDriveEdit(t *testing.T) {
 		// components: deselect the preselected platform, arrow down,
 		// deselect the preselected backstage -> none
 		" ", "\x1b[B", " ", "\r",
-	)
-	testOutput = io.Discard
-	defer func() { testInput, testOutput = nil, nil }()
+	).attach
+	defer func() { testHook = nil }()
 
 	cfg := config.Default()
 	if err := Run(cfg, false, Hints{}); err != nil {

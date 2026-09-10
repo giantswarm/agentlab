@@ -51,6 +51,16 @@ func GitSHA() string {
 	return buildSetting("vcs.revision")
 }
 
+// ShortSHA is GitSHA cut to the seven characters git shows, or "" when
+// unknown — the build identifier the usage signal carries.
+func ShortSHA() string {
+	sha := GitSHA()
+	if len(sha) > 7 {
+		sha = sha[:7]
+	}
+	return sha
+}
+
 // BuildTimestamp returns the build (or, unstamped, the commit) time in
 // RFC 3339, or "" when unknown.
 func BuildTimestamp() string {
@@ -65,10 +75,7 @@ func BuildTimestamp() string {
 func VersionLine() string {
 	line := Version()
 	var details []string
-	if sha := GitSHA(); sha != "" {
-		if len(sha) > 7 {
-			sha = sha[:7]
-		}
+	if sha := ShortSHA(); sha != "" {
 		details = append(details, "commit "+sha)
 	}
 	if ts := BuildTimestamp(); ts != "" {
@@ -78,6 +85,28 @@ func VersionLine() string {
 		line += " (" + strings.Join(details, ", ") + ")"
 	}
 	return line
+}
+
+// ModuleVersion is the version of a dependency this binary was built with
+// ("v4.2.4"), read from the module list Go records in every build — a release,
+// a `go install`, a `go build` from a checkout alike — so what the binary
+// reports about the libraries it embeds is true for this very build. "" when
+// the module is not part of the build or the binary carries no build info.
+func ModuleVersion(path string) string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return ""
+	}
+	for _, dep := range info.Deps {
+		if dep.Path != path {
+			continue
+		}
+		if dep.Replace != nil {
+			return dep.Replace.Version
+		}
+		return dep.Version
+	}
+	return ""
 }
 
 func buildSetting(key string) string {

@@ -1,8 +1,8 @@
 package lab
 
 import (
+	"context"
 	"fmt"
-	"os"
 	"slices"
 	"strings"
 	"time"
@@ -14,19 +14,12 @@ import (
 // OIDC verification, and then the components the configuration enables — the
 // agent platform (the default; it is what the lab tests) and Backstage.
 func Up(cfg *config.Config) error {
-	// Fail on Helm 3 before any real work: the platform install at the end of
-	// this boot needs Helm 4 (see ensureHelmSupportsPlatform), and finding
-	// that out after a five-minute cluster boot is the wrong moment.
-	if cfg.Platform.Enabled {
-		if err := ensureHelmSupportsPlatform(); err != nil {
-			return err
-		}
-	}
-	// Same moment for the machine itself: a docker VM too small for what
-	// this configuration schedules leaves pods Pending forever (the
-	// scheduler refuses CPU requests that do not fit — resources.go), and the
-	// symptom would be an install timing out on agentgateway, minutes from
-	// now. Refused here, with the fix and the numbers.
+	// Before any real work: a docker VM too small for what this
+	// configuration schedules leaves pods Pending forever (the scheduler
+	// refuses CPU requests that do not fit — resources.go), and the symptom
+	// would be an install timing out on agentgateway, minutes from now —
+	// after a five-minute cluster boot, the wrong moment. Refused here, with
+	// the fix and the numbers.
 	if err := preflightRuntimeResources(cfg); err != nil {
 		return err
 	}
@@ -41,11 +34,11 @@ func Up(cfg *config.Config) error {
 	pulled := pullLabImages(cfg)
 	dexReady := pullDexImage(cfg)
 
-	_, kindCfgPath, err := renderManifest(cfg, "kind-config.yaml.tmpl")
+	kindCfg, _, err := renderManifest(cfg, "kind-config.yaml.tmpl")
 	if err != nil {
 		return err
 	}
-	_, rbacPath, err := renderManifest(cfg, "rbac.yaml.tmpl")
+	rbac, _, err := renderManifest(cfg, "rbac.yaml.tmpl")
 	if err != nil {
 		return err
 	}
@@ -53,21 +46,23 @@ func Up(cfg *config.Config) error {
 	if kindClusterExists(cfg.ClusterName) {
 		step("kind cluster %q already exists", cfg.ClusterName)
 		// Its node may be exited — what a `down` that lost its race with
-		// docker leaves behind (node.go); `kind get kubeconfig` below would
+		// docker leaves behind (node.go); the kubeconfig read below would
 		// fail on it with an opaque docker exec error.
 		if err := ensureNodeRunning(cfg); err != nil {
 			return err
 		}
 	} else {
-		step("Creating kind cluster %q", cfg.ClusterName)
-		if err := run("kind", "create", "cluster", "--config", kindCfgPath, "--wait", "120s"); err != nil {
+		step("Creating kind cluster %q (%s)", cfg.ClusterName, kindNodeImage())
+		if err := kindCreateCluster(cfg.ClusterName, kindCfg); err != nil {
 			return err
 		}
 	}
-	// From here on the lab's own kubectl and helm run against the cluster's
-	// exported kubeconfig (exec.go); the user's current-context is left alone
-	// (kind create cluster merges the admin context into their kubeconfig, as
-	// kind always does — that is the `kind-<cluster>` context for debugging).
+	// From here on the embedded Helm and the Kubernetes client run against
+	// the cluster's exported kubeconfig (restclient.go, kube.go), the one
+	// file they are built from. The user's own kubeconfig and current-context
+	// are never touched: the embedded kind writes the admin kubeconfig to
+	// state/kubeconfig (kind.go), and re-reading it off the node here covers a
+	// cluster that already existed too.
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
 	}
@@ -94,7 +89,7 @@ func Up(cfg *config.Config) error {
 	}
 
 	step("Applying RBAC bound to OIDC groups")
-	if err := runQuiet("kubectl", "apply", "-f", rbacPath); err != nil {
+	if _, err := applyManifests(context.Background(), rbac); err != nil {
 		return err
 	}
 
@@ -122,19 +117,25 @@ func Up(cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
-	const probeKubeconfig = ".kubeconfig.probe"
-	if err := writeTokenKubeconfig(cfg, tok, probeKubeconfig); err != nil {
+	// A config that carries ONLY the token: the admin client certificate of
+	// the kind kubeconfig would win over it (kube.go, tokenConfig).
+	probe, err := tokenConfig(tok)
+	if err != nil {
 		return err
 	}
+	var username string
+	var groups []string
 	verified := waitFor(30, 2*time.Second, func() bool {
-		_, err := outputQuiet("kubectl", "--kubeconfig="+probeKubeconfig, "auth", "whoami")
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		var err error
+		username, groups, err = whoAmI(ctx, probe)
 		return err == nil
 	})
-	_ = os.Remove(probeKubeconfig)
 	if !verified {
 		return fmt.Errorf("apiserver still rejects Dex tokens; check the apiserver log for oidc.go lines")
 	}
-	note("apiserver accepts Dex tokens")
+	note("apiserver accepts Dex tokens: %s is %s in %s", admin.Email, username, strings.Join(groups, ", "))
 
 	reportPreload(loaded)
 	if cfg.Platform.Enabled {
@@ -215,17 +216,16 @@ func ApplyDex(cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
-	if err := pipeInto(stamped, "kubectl", "apply", "-f", "-"); err != nil {
+	if _, err := applyManifests(context.Background(), stamped); err != nil {
 		return err
 	}
 	step("Waiting for Dex to become ready")
-	return run("kubectl", "-n", componentDex, "rollout", "status", "deployment/dex", "--timeout=120s")
+	return waitDeploymentRolledOut(context.Background(), componentDex, componentDex, 120*time.Second)
 }
 
+// kindClusterExists reports whether kind knows a cluster by that name — its
+// node containers exist, running or not (node.go).
 func kindClusterExists(name string) bool {
-	out, err := outputQuiet("kind", "get", "clusters")
-	if err != nil {
-		return false
-	}
-	return slices.Contains(strings.Split(strings.TrimSpace(out), "\n"), name)
+	clusters, err := kindClusters()
+	return err == nil && slices.Contains(clusters, name)
 }

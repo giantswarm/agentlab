@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,6 +10,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -60,6 +63,9 @@ const (
 	// server that answered 401 — muster's api.StateAuthRequired, spelled the
 	// CRD way.
 	mcpServerStateAuthRequired = "Auth Required"
+	// fixtureDeleteWait bounds how long a removed fixture member may take to
+	// go away — kubectl's default delete waits too.
+	fixtureDeleteWait = 2 * time.Minute
 )
 
 // ensureOAuthFixture applies the fixture and waits until muster reports it
@@ -70,11 +76,11 @@ const (
 // a minute, measured.
 func ensureOAuthFixture(cfg *config.Config) error {
 	step("Creating the OAuth sign-in fixture (MCPServer %s)", oauthFixtureServer)
-	_, path, err := renderManifest(cfg, "oauth-fixture.yaml.tmpl")
+	rendered, _, err := renderManifest(cfg, "oauth-fixture.yaml.tmpl")
 	if err != nil {
 		return err
 	}
-	if err := runQuiet("kubectl", "apply", "-f", path); err != nil {
+	if _, err := applyManifests(context.Background(), rendered); err != nil {
 		return err
 	}
 	return waitMCPServerState(oauthFixtureServer, oauthFixtureHealthyStates...)
@@ -289,8 +295,7 @@ func completeSignIn(challengeURL string, user *config.User) error {
 // the lab's state is not the proof's verdict.
 func restartOAuthFixture() {
 	stamp := time.Now().UTC().Format(time.RFC3339)
-	if err := runQuiet("kubectl", "-n", platformNamespace, "patch", "mcpservers.muster.giantswarm.io", oauthFixtureServer,
-		"--type", "merge", "-p", fmt.Sprintf(`{"spec":{"restartRequestedAt":%q}}`, stamp)); err != nil {
+	if err := requestOAuthFixtureRestart(stamp); err != nil {
 		note("could not request a restart of %s (%v); it reads Connected until the signed-in session's token expires", oauthFixtureServer, err)
 		return
 	}
@@ -299,4 +304,17 @@ func restartOAuthFixture() {
 		return
 	}
 	note("%s back to Auth Required", oauthFixtureServer)
+}
+
+// requestOAuthFixtureRestart merge-patches spec.restartRequestedAt on the
+// fixture's MCPServer with the given stamp.
+func requestOAuthFixtureRestart(stamp string) error {
+	gvr, err := gvrFor(musterMCPServerResource)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
+	defer cancel()
+	body := fmt.Sprintf(`{"spec":{"restartRequestedAt":%q}}`, stamp)
+	return patchObject(ctx, gvr, platformNamespace, oauthFixtureServer, types.MergePatchType, []byte(body))
 }

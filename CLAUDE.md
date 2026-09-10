@@ -74,7 +74,7 @@ with Dex doing the logins.
   `platform.extraModels` adds further ModelConfigs (self-hosted
   OpenAI-compatible endpoints, OpenRouter, Gemini, Ollama) with the same
   env-var -> Secret key handling; entries removed from the config are pruned
-  on the next run (see README "Extra model configs").
+  on the next run (see docs/models.md "Extra model configs").
 - `agentlab configure` **discovers this machine on every run** (fresh or
   existing `agentlab.yaml`): the tools `up` shells out to, whether this
   configuration's kind node exists and which host ports it publishes (never
@@ -99,17 +99,22 @@ with Dex doing the logins.
   sits behind the agentgateway route
   `https://agentgateway.<domain>/model-manager` with JWT validation on (a Dex
   token is required; 401 without). Proof: `./agentlab models-test` (see
-  README "Managed models"), one backend per run — `--backend <kind>` picks
+  docs/models.md "Managed models"), one backend per run — `--backend <kind>` picks
   it, the default is the first of the list.
 - For verifying RBAC as a specific user, use `./agentlab login <email>` and
   `kubectl --kubeconfig kubeconfig.oidc` — that is the OIDC path.
-- The kind admin context (`kind-agentlab`) bypasses the platform and OIDC
-  entirely; use it only to debug the lab's own plumbing, never to demonstrate
-  platform behavior. The lab's own `kubectl`/`helm` never read the shell's
-  kubeconfig: every cluster-facing command exports the kind cluster's
-  kubeconfig to `state/kubeconfig` and pins `KUBECONFIG` to it (exec.go), so
-  the proofs are deterministic about the cluster whatever the current-context
-  is — `KUBECONFIG=state/kubeconfig kubectl ...` is the same view from a shell.
+- The cluster's admin kubeconfig (`state/kubeconfig`, context `kind-agentlab`)
+  bypasses the platform and OIDC entirely; use it only to debug the lab's own
+  plumbing, never to demonstrate platform behavior. The lab never reads the
+  shell's kubeconfig: every cluster-facing command exports the kind cluster's
+  kubeconfig to `state/kubeconfig`, and its embedded Helm and Kubernetes
+  client are built from that file alone (restclient.go, kube.go), so the
+  proofs are deterministic about the cluster whatever the current-context is
+  — `KUBECONFIG=state/kubeconfig kubectl ...` (or `helm ...`) is the same view
+  from a shell. Your own `~/.kube/config` is never touched: kind is embedded
+  (`internal/lab/kind.go`, `sigs.k8s.io/kind` as a pinned Go dependency — the
+  Kubernetes version is its release's default node image), and it writes the
+  admin kubeconfig to `state/kubeconfig` only.
 
 ## Commands
 
@@ -149,12 +154,14 @@ The lab's own e2e checks are the `*-test` subcommands, not `go test`.
   keystrokes.
 - `internal/telemetry` — one anonymous usage signal per user-facing command
   to TelemetryDeck (giantswarm/telemetrydeck-go, kubectl-gs's signal shape:
-  `GiantSwarm.command` with the command path and the version). `main.go`
+  `GiantSwarm.command` with the command path and the version; the version
+  and commit also as `TelemetryDeck.AppInfo.version`/`.buildNumber`, which
+  the dashboard's standard insights read). `main.go`
   wires it as the root `PersistentPreRun`; hidden commands (`__complete`),
   `completion` and `help` never count. Opt-outs:
   `AGENTLAB_TELEMETRY_OPTOUT`, `DO_NOT_TRACK=1`. When iterating on the lab,
   `AGENTLAB_TELEMETRY_TESTMODE=1` keeps the runs out of the production
-  numbers (and logs delivery errors). Details in README "Usage data".
+  numbers (and logs delivery errors). Details in docs/telemetry.md.
 - `internal/update` — `agentlab self-update` (creativeprojects/go-selfupdate
   against the GitHub releases; the command muster and mcp-kubernetes ship).
   A release binary is installed only after its cosign Sigstore bundle
@@ -169,7 +176,7 @@ The lab's own e2e checks are the `*-test` subcommands, not `go test`.
   with a two-second cap, and a failed attempt is remembered for ten minutes,
   so an offline machine is not held up. `AGENTLAB_NO_UPDATE_CHECK=1`
   silences it; `dev` builds never check and cannot self-update. Details in
-  README "Keeping agentlab current".
+  docs/cli.md "Keeping agentlab current".
 - `pkg/project` — the build identity (`Version()`, `GitSHA()`,
   `BuildTimestamp()`): stamped by the devctl Makefile / architect CI through
   `-ldflags -X`, else Go's VCS build info (`v0.16.6`, a pseudo-version
@@ -178,15 +185,24 @@ The lab's own e2e checks are the `*-test` subcommands, not `go test`.
   rendered via the `manifests` table in `render.go`; stamped manifests (dex,
   backstage) carry a checksum over render + certs, so unchanged re-applies are
   pure no-ops and config/cert edits roll the pod exactly once. The platform
-  install (`platform.go`) is one `helm upgrade --install --wait` of the
-  agent-platform meta chart in its lab shape; the lab's patches on the
+  install (`platform.go`) is one upgrade-or-install with the kstatus wait of
+  the agent-platform meta chart in its lab shape through the embedded Helm
+  (`helm.go`: Helm 4's SDK in-process, no `helm` binary — it writes a regular
+  release the CLI reads); the lab's patches on the
   component charts (hostNetwork, the dex-localhost sidecar, the kagent UI
   NodePort, dev images) are per-component `postRenderers` values the chart
   forwards to the component HelmReleases (`postrenderers.go`), and the image
   preload resolves the component charts from the rendered OCIRepositories
   (`fluxreleases.go`).
+- `docs/` — the documentation, one page per topic (getting started, the
+  command reference, TLS, the platform, agents, models, observability,
+  Backstage, identity, troubleshooting, usage data, development).
+  `README.md` is the short front door: what the lab is, the quick start and
+  the page index — keep it that way and put detail in `docs/`. Code comments
+  cite pages by path and section (`docs/models.md "Local backends on the lab
+  host"`), so keep those section titles stable or update the citations.
 
-Load-bearing invariants (details in README.md):
+Load-bearing invariants (details in docs/):
 
 - **The agent platform is on by default** — it is what the lab tests. Dex,
   kind and the RBAC exist to serve it; muster is the single auth enforcement
@@ -202,11 +218,17 @@ Load-bearing invariants (details in README.md):
   (`components.flux.enabled: true` — the lab has no Flux of its own, and the
   chart refuses a second one) and self-management OFF (`gitops.self.enabled:
   false` — the lab installs unreleased charts and dev images, which the
-  chart's own HelmRelease would replace with the published release; the Helm
-  CLI stays the one writer of the release). The chart is pinned to an exact
+  chart's own HelmRelease would replace with the published release; the
+  lab's embedded Helm stays the one writer of the release, and the Helm CLI
+  its day-2 tool). The chart is pinned to an exact
   release (`platform.chartVersion`, default `config.DefaultChartVersion`);
-  `platform.chartPath` installs a local checkout instead. Never emit
-  `gitops.namespace` with the engine on.
+  `platform.chartPath` installs a local checkout instead; `platform.chartBranch`
+  is the dev channel — the branch's newest dev build, resolved into
+  `chartVersion` on every `configure`/`up`/`platform` (`chartbranch.go`,
+  `platform --pin` freezes it) — and implies Substrate, kagent main's actor
+  runtime, installed ahead of the platform (`substrate.go`,
+  `platform.substrate.enabled`). Never emit `gitops.namespace` with the
+  engine on.
 - The lab's credentials are throwaway by design; plaintext passwords in
   `agentlab.yaml` are fine.
 

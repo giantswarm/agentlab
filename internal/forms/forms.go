@@ -4,7 +4,6 @@ package forms
 
 import (
 	"fmt"
-	"io"
 	"regexp"
 	"slices"
 	"strconv"
@@ -25,22 +24,17 @@ const (
 	actionRemove = "remove"
 )
 
-// testInput/testOutput let tests drive the real TUI form with a scripted
-// keystroke stream instead of a terminal. nil outside of tests.
-var (
-	testInput  io.Reader
-	testOutput io.Writer
-)
+// testHook lets tests take over every form this package builds (input,
+// output, view hook), so the real TUI form runs against a scripted keystroke
+// stream instead of a terminal. nil outside of tests.
+var testHook func(*huh.Form) *huh.Form
 
-// newForm wraps huh.NewForm so the test IO overrides apply to every form this
+// newForm wraps huh.NewForm so the test hook applies to every form this
 // package builds.
 func newForm(groups ...*huh.Group) *huh.Form {
 	form := huh.NewForm(groups...)
-	if testInput != nil {
-		form = form.WithInput(testInput)
-	}
-	if testOutput != nil {
-		form = form.WithOutput(testOutput)
+	if testHook != nil {
+		return testHook(form)
 	}
 	return form
 }

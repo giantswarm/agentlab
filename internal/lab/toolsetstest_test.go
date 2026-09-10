@@ -6,8 +6,16 @@ import (
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
 	"github.com/giantswarm/agentlab/internal/config"
 )
+
+// workflowIncidentTriage is a workflow selector the toolset fixtures share.
+const workflowIncidentTriage = "workflow:incident-triage"
 
 // The fixture pins Dex as its authorization server with the platform client,
 // and ships the Secret that client is read from.
@@ -140,24 +148,33 @@ func TestNamesOutside(t *testing.T) {
 	}
 }
 
-// The composed manifest is the composer's shape: OCIRepository first, then
-// the HelmRelease with the top-level toolset value.
+// The composed manifest is the composer's shape on kagent main: the muster
+// carrier with the toolset header first, then the AgentTemplate binding it;
+// without a toolset, one AgentTemplate binding the shared muster server.
 func TestComposeAgentManifest(t *testing.T) {
-	m := composeAgentManifest("probe", "default-model-config", []string{presetReadOnly, "workflow:incident-triage"})
+	const musterURL = "http://muster.agent-platform.svc.cluster.local:8090/mcp"
+	m := composeAgentManifest("probe", "default-model-config", []string{presetReadOnly, workflowIncidentTriage}, musterURL)
 	docs := strings.Split(m, "\n---\n")
-	if len(docs) != 2 || !strings.Contains(docs[0], "kind: OCIRepository") || !strings.Contains(docs[1], "kind: HelmRelease") {
-		t.Fatalf("wanted OCIRepository then HelmRelease, got:\n%s", m)
+	if len(docs) != 2 || !strings.Contains(docs[0], "kind: "+remoteMCPServerKind) || !strings.Contains(docs[1], "kind: AgentTemplate") {
+		t.Fatalf("wanted RemoteMCPServer then AgentTemplate, got:\n%s", m)
 	}
 	for _, want := range []string{
-		"url: oci://gsoci.azurecr.io/charts/giantswarm/agent",
-		"semver: x.x.x",
+		"apiVersion: " + agentTemplateAPIVersion,
+		"name: " + toolsetCarrierName("probe") + "\n  namespace: kagent",
+		"url: " + musterURL,
+		"- name: " + toolsetHeader + "\n      value: \"preset:read-only," + workflowIncidentTriage + "\"",
 		"name: probe\n  namespace: kagent",
-		`toolset: ["preset:read-only", "workflow:incident-triage"]`,
-		"modelConfig:\n      name: default-model-config",
+		harnessLabel + ": " + kagentHarness,
+		"modelConfig:\n    name: default-model-config",
+		"kind: " + remoteMCPServerKind + "\n          name: " + toolsetCarrierName("probe"),
 	} {
 		if !strings.Contains(m, want) {
 			t.Errorf("manifest lacks %q:\n%s", want, m)
 		}
+	}
+	bare := composeAgentManifest("plain", "default-model-config", nil, musterURL)
+	if strings.Contains(bare, "---") || strings.Contains(bare, "headersFrom") || !strings.Contains(bare, "kind: "+remoteMCPServerKind+"\n          name: "+componentMuster+"\n") {
+		t.Errorf("an agent without a toolset must bind %s directly, got:\n%s", componentMuster, bare)
 	}
 }
 
@@ -194,5 +211,118 @@ func TestParseMCPResponsePicksTheResponseFrame(t *testing.T) {
 	}
 	if _, err := parseMCPResponse([]byte("nothing here")); err == nil {
 		t.Fatal("garbage must fail")
+	}
+}
+
+// agentTemplateBinding seeds an agent's AgentTemplate binding one
+// RemoteMCPServer ("" for a template without tools).
+func agentTemplateBinding(name, server string) *unstructured.Unstructured {
+	template := customObject(gvkAgentTemplate, kagentNamespace, name, map[string]string{harnessLabel: kagentHarness})
+	if server != "" {
+		_ = unstructured.SetNestedSlice(template.Object, []any{map[string]any{
+			"mcp": map[string]any{"server": map[string]any{fieldKind: remoteMCPServerKind, nameKey: server}},
+		}}, "spec", "tools")
+	}
+	return template
+}
+
+// toolsetCarrier seeds an agent's muster carrier with the header as a literal
+// value.
+func toolsetCarrier(agent, header string) *unstructured.Unstructured {
+	rms := customObject(gvkRemoteMCPServer, kagentNamespace, toolsetCarrierName(agent), nil)
+	_ = unstructured.SetNestedSlice(rms.Object, []any{map[string]any{nameKey: toolsetHeader, "value": header}}, "spec", "headersFrom")
+	return rms
+}
+
+// TestToolsetHeaderOf: the header is read off the RemoteMCPServer the
+// template binds — a literal value on the carrier, a Secret key on an older
+// one, none for the shared muster server — and a template binding no server
+// or a missing carrier is an error that says so.
+func TestToolsetHeaderOf(t *testing.T) {
+	secretCarrier := customObject(gvkRemoteMCPServer, kagentNamespace, toolsetCarrierName(toolsetsAgentFull), nil)
+	_ = unstructured.SetNestedSlice(secretCarrier.Object, []any{map[string]any{
+		nameKey: toolsetHeader, "valueFrom": map[string]any{fieldTypeKey: "Secret", nameKey: "toolset-full", "key": "toolset"},
+	}}, "spec", "headersFrom")
+	newFakeLab(t,
+		agentTemplateBinding(toolsetsAgentReadOnly, toolsetCarrierName(toolsetsAgentReadOnly)),
+		toolsetCarrier(toolsetsAgentReadOnly, presetReadOnly),
+		agentTemplateBinding(toolsetsAgentLegacy, componentMuster),
+		agentTemplateBinding(toolsetsAgentNone, ""),
+		agentTemplateBinding(toolsetsAgentOAuth, toolsetCarrierName(toolsetsAgentOAuth)),
+		agentTemplateBinding(toolsetsAgentFull, toolsetCarrierName(toolsetsAgentFull)),
+		secretCarrier,
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: kagentNamespace, Name: "toolset-full"}, Data: map[string][]byte{"toolset": []byte(presetFull)}},
+	)
+	for _, tc := range []struct {
+		agent, want, wantErr string
+	}{
+		{toolsetsAgentReadOnly, presetReadOnly, ""},
+		{toolsetsAgentLegacy, "", ""},
+		{toolsetsAgentFull, presetFull, ""},
+		{toolsetsAgentNone, "", "no MCP server binding"},
+		{toolsetsAgentOAuth, "", "the bound RemoteMCPServer " + toolsetCarrierName(toolsetsAgentOAuth)},
+	} {
+		template, err := waitAgentTemplate(tc.agent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := template.Metadata.Labels[harnessLabel]; got != kagentHarness {
+			t.Errorf("%s: label %s=%q", tc.agent, harnessLabel, got)
+		}
+		header, err := toolsetHeaderOf(template)
+		switch {
+		case tc.wantErr != "":
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("%s: header %q, err %v; want an error containing %q", tc.agent, header, err, tc.wantErr)
+			}
+		case err != nil || header != tc.want:
+			t.Errorf("%s: header %q, err %v; want %q", tc.agent, header, err, tc.want)
+		}
+	}
+}
+
+// TestDeleteAgentTemplate: the cleanup's delete is --ignore-not-found
+// --wait=false for the template and its carrier alike — present ones go, a
+// missing agent is no failure.
+func TestDeleteAgentTemplate(t *testing.T) {
+	f := newFakeLab(t, agentTemplateBinding(toolsetsAgentFull, toolsetCarrierName(toolsetsAgentFull)), toolsetCarrier(toolsetsAgentFull, presetFull))
+	if !agentTemplateExists(toolsetsAgentFull) {
+		t.Fatal("seed not visible")
+	}
+	deleteAgentTemplate(toolsetsAgentFull)
+	deleteAgentTemplate("absent")
+	if _, err := f.dyn.Tracker().Get(gvrAgentTemplates, kagentNamespace, toolsetsAgentFull); !apierrors.IsNotFound(err) {
+		t.Errorf("AgentTemplate still there: %v", err)
+	}
+	if _, err := f.dyn.Tracker().Get(gvrRemoteMCPServers, kagentNamespace, toolsetCarrierName(toolsetsAgentFull)); !apierrors.IsNotFound(err) {
+		t.Errorf("carrier still there: %v", err)
+	}
+	if agentTemplateExists(toolsetsAgentFull) {
+		t.Error("agentTemplateExists still true after the delete")
+	}
+	if err := waitAgentTemplateGone(toolsetsAgentFull); err != nil {
+		t.Error(err)
+	}
+}
+
+// TestModelConfigSummary: the summary is the proof's jsonpath line —
+// provider, model, the endpoint field the provider uses, the backend and
+// managed-by labels — so the provider and label assertions read it as before.
+func TestModelConfigSummary(t *testing.T) {
+	mc := customObject(gvkModelConfig, kagentNamespace, "qwen", map[string]string{
+		"model-manager.giantswarm.io/backend": "ollama", managedByLabel: modelManagerMCPServer})
+	_ = unstructured.SetNestedField(mc.Object, config.ProviderOllama, "spec", "provider")
+	_ = unstructured.SetNestedField(mc.Object, "qwen2.5:0.5b", "spec", "model")
+	_ = unstructured.SetNestedField(mc.Object, "http://host:11434", "spec", "ollama", "host")
+	if got, want := modelConfigSummary(mc), "Ollama qwen2.5:0.5b http://host:11434 backend=ollama managed-by=model-manager"; got != want {
+		t.Errorf("summary = %q, want %q", got, want)
+	}
+	bare := customObject(gvkModelConfig, kagentNamespace, "bare", nil)
+	if got, want := modelConfigSummary(bare), "   backend= managed-by="; got != want {
+		t.Errorf("bare summary = %q, want %q", got, want)
+	}
+	newFakeLab(t, mc)
+	if !modelConfigExists("qwen") || modelConfigExists("absent") {
+		t.Error("modelConfigExists disagrees with the store")
 	}
 }

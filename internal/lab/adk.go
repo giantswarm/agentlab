@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -9,8 +10,14 @@ import (
 	"strings"
 	"time"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
 	"github.com/giantswarm/agentlab/internal/config"
 )
+
+// kagentControllerConfigMap is the controller's ConfigMap in the kagent
+// namespace; its IMAGE_REGISTRY and IMAGE_TAG compose the runtime image.
+const kagentControllerConfigMap = "kagent-controller"
 
 // healADKImages works around HACKS.md U8: kagent-controller composes the
 // runtime image for `runtime: go` agents from its own release tag —
@@ -28,15 +35,16 @@ import (
 // Only the go runtime is healed: the lab's create flow deploys the `agent`
 // chart, whose runtime defaults to (and stays) go.
 func healADKImages(cfg *config.Config) {
-	registry, err := outputQuiet("kubectl", "-n", "kagent", "get", "cm", "kagent-controller",
-		"-o", "jsonpath={.data.IMAGE_REGISTRY}")
-	if err != nil || registry == "" {
+	var registry, tag string
+	if cm, err := getObject(context.Background(), gvrConfigMaps, kagentNamespace, kagentControllerConfigMap); err == nil {
+		registry, _, _ = unstructured.NestedString(cm.Object, "data", "IMAGE_REGISTRY")
+		tag, _, _ = unstructured.NestedString(cm.Object, "data", "IMAGE_TAG")
+	}
+	if registry == "" {
 		note("cannot read kagent's IMAGE_REGISTRY; skipping the ADK image heal (HACKS.md U8)")
 		return
 	}
-	tag, err := outputQuiet("kubectl", "-n", "kagent", "get", "cm", "kagent-controller",
-		"-o", "jsonpath={.data.IMAGE_TAG}")
-	if err != nil || tag == "" {
+	if tag == "" {
 		note("cannot read kagent's IMAGE_TAG; skipping the ADK image heal (HACKS.md U8)")
 		return
 	}
@@ -76,7 +84,7 @@ func healADKImage(cfg *config.Config, registry, tag, variant string) {
 		return
 	}
 	if id != prevID || !nodeHasImage(cfg.ControlPlaneNode(), img) {
-		if err := runQuiet("kind", "load", "docker-image", img, "--name", cfg.ClusterName); err != nil {
+		if _, err := kindLoadImages(cfg, []string{img}); err != nil {
 			note("side-loading %s failed (%v)", img, err)
 		}
 	}

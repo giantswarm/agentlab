@@ -325,9 +325,11 @@ kagent:
   # ServiceMonitor it renders (the kagent chart itself ships none); the
   # chart-level gate is global.observability.metrics.serviceMonitor.enabled
   # above, and the controller already serves plain-HTTP /metrics on :8080 via
-  # the chart's default METRICS_BIND_ADDRESS/METRICS_SECURE env.
+  # the chart's default METRICS_BIND_ADDRESS/METRICS_SECURE env. Off on the
+  # dev channel: kagent main's controller opens no metrics listener, and a
+  # monitor of a port nobody serves is a target platform-test would wait for.
   serviceMonitor:
-    enabled: {{ .Platform.Observability }}
+    enabled: {{ and .Platform.Observability (not .Platform.ChartBranch) }}
   # No OTLP gateway in kind; the exporters would only log dial errors.
   otel:
     tracing:

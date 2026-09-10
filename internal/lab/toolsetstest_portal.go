@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -8,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -255,7 +258,7 @@ func proveSignInScopedToolset(cfg *config.Config, user, other *config.User, tool
 func portalFilterTools(ps *portalSession, toolset []string, includePresets bool) (*filterToolsResponse, error) {
 	q := url.Values{"installation": {platformRelease}, "limit": {"1000"}}
 	for _, sel := range toolset {
-		q.Add("toolset", sel)
+		q.Add(toolsetKey, sel)
 	}
 	if includePresets {
 		q.Set("include_presets", "true")
@@ -290,15 +293,15 @@ func portalFilterTools(ps *portalSession, toolset []string, includePresets bool)
 // (presets, live resolution, unmatched selectors) and the composer's apply
 // path (the same scaffolder template the wizard's Deploy drives, with the
 // manifest the composer emits, the user's own OIDC token as the secret) —
-// asserted on what lands: the HelmRelease value and the Agent's header.
-func proveToolsetPortal(cfg *config.Config, user *config.User) ([]string, error) {
+// asserted on what lands: the AgentTemplate binding the muster carrier that
+// carries the header.
+func proveToolsetPortal(cfg *config.Config, user *config.User, opts ToolsetsTestOptions) ([]string, error) {
 	var verdicts []string
 	ps, err := backstageLogin(cfg, user)
 	if err != nil {
 		return nil, err
 	}
-	image, _ := outputQuiet("kubectl", "-n", platformNamespace, "get", "deploy", "backstage", "-o", "jsonpath={.spec.template.spec.containers[0].image}")
-	note("portal image %s", strings.TrimSpace(image))
+	note("portal image %s", deploymentImage(platformNamespace, componentBackstage))
 
 	step("The Tools step's backend calls: presets, live resolution, unmatched selectors (/api/muster/tools/filter)")
 	presets, err := portalFilterTools(ps, nil, true)
@@ -334,83 +337,94 @@ func proveToolsetPortal(cfg *config.Config, user *config.User) ([]string, error)
 	if !slices.Contains(unmatched.ToolsetUnmatched, "server:agentlab-no-such-server") || len(unmatched.Tools) != 0 {
 		return nil, fmt.Errorf("/tools/filter?toolset=server:agentlab-no-such-server: tools=%d unmatched=%v", len(unmatched.Tools), unmatched.ToolsetUnmatched)
 	}
-	if _, err := portalFilterTools(ps, []string{"preset:agentlab-no-such-preset"}, false); err == nil || !strings.Contains(err.Error(), "unknown preset") {
+	if _, err := portalFilterTools(ps, []string{presetNoSuch}, false); err == nil || !strings.Contains(err.Error(), "unknown preset") {
 		return nil, fmt.Errorf("/tools/filter with an unknown preset should relay muster's error, got %v", err)
 	}
 	note("%s -> %d read-only tools; an unknown server -> toolset_unmatched; an unknown preset -> muster's error relayed", presetReadOnly, len(ro.Tools))
 	verdicts = append(verdicts, fmt.Sprintf("PASS: the Tools step's backend (/api/muster/tools/filter) offers the presets [%s], resolves %s live (%d read-only tools) and reports unmatched selectors and unknown presets as muster does", strings.Join(presetNames, ", "), presetReadOnly, len(ro.Tools)))
 
+	if opts.SkipPortal {
+		note("skipping the portal's apply path (--skip-portal): the composed AgentTemplate through the scaffolder template was not exercised")
+		return verdicts, nil
+	}
 	step("The composer's apply path: template:default/agent-deployment with the composed manifest (toolset %s) as %s", presetReadOnly, user.Email)
-	manifest := composeAgentManifest(toolsetsAgentPortal, "default-model-config", []string{presetReadOnly})
+	muster, err := readKagentObject(remoteMCPServerResource, componentMuster)
+	if err != nil {
+		return nil, fmt.Errorf("the shared muster server the carrier copies: %w", err)
+	}
+	musterURL, _, _ := unstructured.NestedString(muster.Object, "spec", "url")
+	manifest := composeAgentManifest(toolsetsAgentPortal, defaultModelConfig, []string{presetReadOnly}, musterURL)
 	taskID, err := scaffold(ps, manifest, toolsetsAgentPortal)
 	if err != nil {
 		return nil, err
 	}
 	note("scaffolder task %s completed (kube:apply as %s)", taskID, user.Email)
-	toolset, set, err := helmReleaseToolset(toolsetsAgentPortal)
+	t, err := waitAgentTemplate(toolsetsAgentPortal)
 	if err != nil {
 		return nil, err
 	}
-	if !set || !slices.Equal(toolset, []string{presetReadOnly}) {
-		return nil, fmt.Errorf("HelmRelease %s applied by the portal path carries values.toolset=%v (set %v), wanted [%s]", toolsetsAgentPortal, toolset, set, presetReadOnly)
+	if bound := t.mcpServer(); bound != toolsetCarrierName(toolsetsAgentPortal) {
+		return nil, fmt.Errorf("AgentTemplate %s applied by the portal path binds RemoteMCPServer %q, wanted its carrier %s", toolsetsAgentPortal, bound, toolsetCarrierName(toolsetsAgentPortal))
 	}
-	cr, err := waitAgentCR(toolsetsAgentPortal)
-	if err != nil {
-		return nil, err
-	}
-	header, err := toolsetHeaderOf(cr)
+	header, err := toolsetHeaderOf(t)
 	if err != nil {
 		return nil, fmt.Errorf("agent %s: %w", toolsetsAgentPortal, err)
 	}
 	if header != presetReadOnly {
 		return nil, fmt.Errorf("agent %s carries %s=%q, wanted %s", toolsetsAgentPortal, toolsetHeader, header, presetReadOnly)
 	}
-	note("HelmRelease values.toolset %v; Agent spec.declarative.tools[0].headersFrom %s=%s", toolset, toolsetHeader, header)
-	verdicts = append(verdicts, fmt.Sprintf("PASS: the portal's apply path (scaffolder template agent-deployment, kube:apply with the user's token) lands the composer's toolset on the HelmRelease and the header on the Agent (%s)", toolsetsAgentPortal))
+	note("AgentTemplate binds %s; carrier headersFrom %s=%s", toolsetCarrierName(toolsetsAgentPortal), toolsetHeader, header)
+	verdicts = append(verdicts, fmt.Sprintf("PASS: the portal's apply path (scaffolder template agent-deployment, kube:apply with the user's token) lands the composer's AgentTemplate %s binding the carrier %s with %s=%s", toolsetsAgentPortal, toolsetCarrierName(toolsetsAgentPortal), toolsetHeader, presetReadOnly))
 	return verdicts, nil
 }
 
-// composeAgentManifest is the composer's combinedManifest for a new agent
-// (plugins/agent-platform composeManifests.ts): the shared OCIRepository of
-// the chart, then the HelmRelease with the values — `agent`, `modelConfig`
-// and the top-level `toolset` exactly as the Tools step composed it.
-func composeAgentManifest(name, modelConfig string, toolset []string) string {
-	quoted := make([]string, 0, len(toolset))
-	for _, sel := range toolset {
-		quoted = append(quoted, fmt.Sprintf("%q", sel))
-	}
-	return fmt.Sprintf(`apiVersion: source.toolkit.fluxcd.io/v1
-kind: OCIRepository
-metadata:
-  name: agent
-  namespace: %[1]s
-spec:
-  interval: 30m
-  url: oci://gsoci.azurecr.io/charts/giantswarm/agent
-  ref:
-    semver: x.x.x
----
-apiVersion: helm.toolkit.fluxcd.io/v2
-kind: HelmRelease
+// composeAgentManifest is the composer's combinedManifest for a new agent on
+// kagent main: the per-agent muster carrier — a copy of the shared muster
+// server (its URL) plus the toolset as the X-Muster-Toolset header — then the
+// AgentTemplate for the Go ADK Harness binding that carrier, with the
+// ModelConfig and the prompt the wizard collected. An agent composed without
+// a toolset binds the shared server directly and needs no carrier.
+func composeAgentManifest(name, modelConfig string, toolset []string, musterURL string) string {
+	server := componentMuster
+	var carrier string
+	if len(toolset) > 0 {
+		server = toolsetCarrierName(name)
+		carrier = fmt.Sprintf(`apiVersion: %[1]s
+kind: RemoteMCPServer
 metadata:
   name: %[2]s
-  namespace: %[1]s
+  namespace: %[3]s
+  labels:
+    kagent.dev/discovery: disabled
 spec:
-  interval: 10m
-  chartRef:
-    kind: OCIRepository
-    name: agent
-    namespace: %[1]s
-  values:
-    agent:
-      name: %[2]s
-      displayName: "agentlab toolset proof: portal"
-      description: "Throwaway agent of agentlab toolsets-test, applied through the portal's deploy path; deleted by the same run."
-      systemMessage: %[3]q
-    modelConfig:
-      name: %[4]s
-    toolset: [%[5]s]
-`, kagentNamespace, name, toolsetTestAgentSystemMsg, modelConfig, strings.Join(quoted, ", "))
+  description: "muster for %[4]s with its toolset (agentlab toolsets-test, portal path)"
+  url: %[5]s
+  protocol: STREAMABLE_HTTP
+  timeout: 30s
+  headersFrom:
+    - name: %[6]s
+      value: %[7]q
+---
+`, agentTemplateAPIVersion, server, kagentNamespace, name, musterURL, toolsetHeader, strings.Join(toolset, ","))
+	}
+	return carrier + fmt.Sprintf(`apiVersion: %[1]s
+kind: AgentTemplate
+metadata:
+  name: %[2]s
+  namespace: %[3]s
+  labels:
+    %[4]s: %[5]s
+spec:
+  description: "Throwaway agent of agentlab toolsets-test, applied through the portal's deploy path; deleted by the same run."
+  modelConfig:
+    name: %[6]s
+  systemPrompt: %[7]q
+  tools:
+    - mcp:
+        server:
+          kind: %[8]s
+          name: %[9]s
+`, agentTemplateAPIVersion, name, kagentNamespace, harnessLabel, kagentHarness, modelConfig, toolsetTestAgentSystemMsg, remoteMCPServerKind, server)
 }
 
 // scaffold drives the hidden agent-deployment template the wizard's Deploy
@@ -459,4 +473,26 @@ func scaffold(ps *portalSession, manifest, releaseName string) (string, error) {
 		return "", fmt.Errorf("scaffolder task %s ended %q:\n%s", task.ID, state, excerpt(string(events), 600))
 	}
 	return task.ID, nil
+}
+
+// deploymentImage is the image of a Deployment's first container — what
+// `kubectl get deploy -o jsonpath={.spec.template.spec.containers[0].image}`
+// printed — or "" when the Deployment cannot be read (a note, not a verdict).
+func deploymentImage(ns, name string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
+	defer cancel()
+	d, err := getObject(ctx, gvrDeployments, ns, name)
+	if err != nil {
+		return ""
+	}
+	containers, _, _ := unstructured.NestedSlice(d.Object, "spec", "template", "spec", "containers")
+	if len(containers) == 0 {
+		return ""
+	}
+	first, ok := containers[0].(map[string]any)
+	if !ok {
+		return ""
+	}
+	image, _, _ := unstructured.NestedString(first, "image")
+	return image
 }

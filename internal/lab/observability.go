@@ -1,10 +1,12 @@
 package lab
 
 import (
+	"context"
 	"fmt"
 	"strconv"
-	"strings"
 	"time"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -41,6 +43,11 @@ const (
 	mcpPrometheusRelease = "mcp-prometheus"
 )
 
+// prometheusResource is the operator's Prometheus CR as kubectl's resource
+// argument — fully qualified on principle (same reason as mcpservers): other
+// charts may ship colliding kinds.
+const prometheusResource = "prometheuses.monitoring.coreos.com"
+
 // observabilityUp installs the lab Prometheus: the GS kube-prometheus-stack
 // (operator + CRDs + kube-state-metrics + node-exporter + a Prometheus
 // scraping kubelet/cAdvisor) and the edge route Backstage queries it through.
@@ -49,6 +56,7 @@ const (
 // ServiceMonitors need the operator. The MCP server for it (mcp-prometheus)
 // follows the platform — see mcpPrometheusUp.
 func observabilityUp(cfg *config.Config) error {
+	ctx := context.Background()
 	step("Installing the observability stack (kube-prometheus-stack %s)", kpsChartVersion)
 	if err := installOCIChart(cfg, kpsRelease,
 		"oci://gsoci.azurecr.io/charts/giantswarm/kube-prometheus-stack",
@@ -63,30 +71,26 @@ func observabilityUp(cfg *config.Config) error {
 		return err
 	}
 	if err := ensureSecretFromFiles(observabilityNamespace, "dex-ca", map[string]string{
-		"ca.crt": caCertPath,
+		caCertKey: caCertPath,
 	}); err != nil {
 		return err
 	}
 
-	// helm --wait returns as soon as kstatus is happy, but the operator creates
-	// the Prometheus StatefulSet asynchronously after the CR lands — so "helm
-	// succeeded" does not mean a query endpoint exists yet. Wait for the CR to
+	// Helm's wait returns as soon as kstatus is happy, but the operator creates
+	// the Prometheus StatefulSet asynchronously after the CR lands — so "the
+	// install succeeded" does not mean a query endpoint exists yet. Wait for the CR to
 	// report an available replica; without it the mcp-prometheus tools connect
 	// fine and then fail every query.
 	step("Waiting for Prometheus to serve (the operator creates it after the install)")
 	var replicas string
 	var readErr error
 	up := waitFor(40, 3*time.Second, func() bool {
-		// Fully qualified on principle (same reason as mcpservers): other
-		// charts may ship colliding kinds.
-		replicas, readErr = outputQuiet("kubectl", "-n", observabilityNamespace,
-			"get", "prometheuses.monitoring.coreos.com",
-			"-o", "jsonpath={.items[0].status.availableReplicas}")
-		n, err := strconv.Atoi(strings.TrimSpace(replicas))
+		replicas, readErr = prometheusAvailableReplicas(ctx)
+		n, err := strconv.Atoi(replicas)
 		return readErr == nil && err == nil && n >= 1
 	})
 	if !up {
-		return notReached("the Prometheus CR", "an available replica after the install", strings.TrimSpace(replicas), readErr,
+		return notReached("the Prometheus CR", "an available replica after the install", replicas, readErr,
 			fmt.Sprintf("check `kubectl -n %s get prometheus,statefulset,pods`", observabilityNamespace))
 	}
 	note("Prometheus is serving (PromQL inside the cluster: http://prometheus-operated.%s:9090)",
@@ -96,14 +100,36 @@ func observabilityUp(cfg *config.Config) error {
 	// (observability-route.yaml.tmpl); paired with the mimirEnabled override
 	// in backstage-catalog.yaml.tmpl. Applied regardless of Backstage so the
 	// endpoint is also there for humans and platform-test.
-	if _, routePath, err := renderManifest(cfg, "observability-route.yaml.tmpl"); err != nil {
+	if route, _, err := renderManifest(cfg, "observability-route.yaml.tmpl"); err != nil {
 		return err
-	} else if err := runQuiet("kubectl", "apply", "-f", routePath); err != nil {
+	} else if _, err := applyManifests(ctx, route); err != nil {
 		return err
 	}
 	note("PromQL on the edge: %s/api/v1/query (what Backstage's Deployments/Clusters metrics use)",
 		cfg.ObservabilityBaseURL())
 	return nil
+}
+
+// prometheusAvailableReplicas is `{.items[0].status.availableReplicas}` of
+// the Prometheus CRs in the observability namespace: "" while the operator
+// has not reported any, an error when there is no CR — or no CRD — to read.
+func prometheusAvailableReplicas(ctx context.Context) (string, error) {
+	gvr, err := gvrFor(prometheusResource)
+	if err != nil {
+		return "", err
+	}
+	items, err := listObjects(ctx, gvr, observabilityNamespace, "")
+	if err != nil {
+		return "", err
+	}
+	if len(items) == 0 {
+		return "", fmt.Errorf("no %s in %s yet", prometheusResource, observabilityNamespace)
+	}
+	n, found, err := unstructured.NestedInt64(items[0].Object, "status", "availableReplicas")
+	if err != nil || !found {
+		return "", nil
+	}
+	return strconv.FormatInt(n, 10), nil
 }
 
 // mcpPrometheusTemplate renders the lab's mcp-prometheus release: a Flux
@@ -122,17 +148,19 @@ const mcpPrometheusTemplate = "mcp-prometheus.yaml.tmpl"
 // CRDs and the tenant ServiceAccount come with the chart.
 func mcpPrometheusUp(cfg *config.Config) error {
 	step("Installing mcp-prometheus %s through the platform's engine", mcpPrometheusChartVersion)
-	_, path, err := renderManifest(cfg, mcpPrometheusTemplate)
+	manifest, _, err := renderManifest(cfg, mcpPrometheusTemplate)
 	if err != nil {
 		return err
 	}
-	if err := runQuiet("kubectl", "apply", "-f", path); err != nil {
+	if _, err := applyManifests(context.Background(), manifest); err != nil {
 		return err
 	}
 	var status platformReleaseStatus
+	var readErr error
 	ready := waitFor(60, 5*time.Second, func() bool {
-		releases, err := platformReleases()
-		if err != nil {
+		var releases []platformReleaseStatus
+		releases, readErr = platformReleases()
+		if readErr != nil {
 			return false
 		}
 		for _, r := range releases {
@@ -144,34 +172,45 @@ func mcpPrometheusUp(cfg *config.Config) error {
 		return false
 	})
 	if !ready {
-		return notReached("HelmRelease "+mcpPrometheusRelease, "Ready", status.ready, fmt.Errorf("%s", status.message),
+		// The Ready condition's message is the controller's own account of
+		// why (a failed chart pull, a timed-out install): part of the last
+		// status, not a failure of the read.
+		last := status.ready
+		if status.message != "" {
+			last += " (" + status.message + ")"
+		}
+		return notReached("HelmRelease "+mcpPrometheusRelease, conditionReady, last, readErr,
 			fmt.Sprintf("check `kubectl -n %s describe helmrelease %s` and `kubectl -n %s get pods`", platformNamespace, mcpPrometheusRelease, observabilityNamespace))
 	}
 	return nil
 }
 
+// ociChartInstallTimeout bounds the observability chart's upgrade-or-install
+// and its wait.
+const ociChartInstallTimeout = 5 * time.Minute
+
 // installOCIChart renders the values template and installs one pinned OCI
-// chart into the observability namespace, side-loading its images first (the
-// same host-cache -> node rule as the platform; see preload.go).
+// chart into the observability namespace through the embedded Helm (an
+// idempotent upgrade-or-install with the kstatus wait, creating the namespace),
+// side-loading its images first (the same host-cache -> node rule as the
+// platform; see preload.go).
 func installOCIChart(cfg *config.Config, release, chartRef, version, valuesTmpl string) error {
 	_, valuesPath, err := renderManifest(cfg, valuesTmpl)
 	if err != nil {
 		return err
 	}
-	// Best-effort: anything missed is pulled in-node under the --wait timeout,
+	values, err := helmValuesFile(valuesPath)
+	if err != nil {
+		return err
+	}
+	// Best-effort: anything missed is pulled in-node under the wait timeout,
 	// and the snapshot manifest catches it for the next boot.
-	if rendered, err := outputQuiet("helm", "template", release, chartRef,
-		"--version", version,
-		"-n", observabilityNamespace, "-f", valuesPath); err == nil {
+	if rendered, err := helmTemplate(observabilityNamespace, release, chartRef, version, values, nil); err == nil {
 		if imgs := scrapeImages(rendered); len(imgs) > 0 {
 			if res := sideloadImages(cfg, hostPullImages(imgs)); res.n > 0 {
 				note("side-loaded %d %s images (%s)", res.n, release, res.d)
 			}
 		}
 	}
-	return runQuiet("helm", "upgrade", "--install", release, chartRef,
-		"--version", version,
-		"-n", observabilityNamespace, "--create-namespace",
-		"-f", valuesPath,
-		"--wait", "--timeout", "5m")
+	return helmUpgradeInstall(observabilityNamespace, release, chartRef, version, values, ociChartInstallTimeout, helmInstallOptions{CreateNamespace: true})
 }

@@ -2,15 +2,27 @@ package lab
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/giantswarm/agentlab/internal/config"
+)
+
+// The fixture-label value of the OAuth fixture and the managed-by value of a
+// chart-shipped server, as the tests seed them.
+const (
+	oauthFixtureMarker = "oauth-sign-in"
+	helmManaged        = "Helm"
 )
 
 // fixtureCR is the shape of one rendered MCPServer the tests decode into.
@@ -94,7 +106,7 @@ func TestFleetFixtureTemplate(t *testing.T) {
 			"apiVersion":              {cr.APIVersion, "muster.giantswarm.io/v1alpha1"},
 			"kind":                    {cr.Kind, "MCPServer"},
 			"name":                    {cr.Metadata.Name, fam.Name + "-" + cluster},
-			"namespace":               {cr.Metadata.Namespace, platformNamespace},
+			fieldNamespace:            {cr.Metadata.Namespace, platformNamespace},
 			managedByLabel:            {cr.Metadata.Labels[managedByLabel], managedByAgentlabValue},
 			fleetFixtureLabel:         {cr.Metadata.Labels[fleetFixtureLabel], fleetFixtureValue},
 			"muster type label":       {cr.Metadata.Labels["muster.giantswarm.io/type"], fam.Type},
@@ -165,9 +177,9 @@ func TestCheckToolGroupLabels(t *testing.T) {
 		return out
 	}
 	oauth := labelledServer{Namespace: platformNamespace, Name: oauthFixtureServer,
-		Labels: map[string]string{managedByLabel: managedByAgentlabValue, fleetFixtureLabel: "oauth-sign-in"}}
+		Labels: map[string]string{managedByLabel: managedByAgentlabValue, fleetFixtureLabel: oauthFixtureMarker}}
 	helm := func(name, group string) labelledServer {
-		return labelledServer{Namespace: platformNamespace, Name: name, Labels: map[string]string{managedByLabel: "Helm", toolGroupLabel: group}}
+		return labelledServer{Namespace: platformNamespace, Name: name, Labels: map[string]string{managedByLabel: helmManaged, toolGroupLabel: group}}
 	}
 
 	t.Run("exactly the fixture", func(t *testing.T) {
@@ -220,4 +232,102 @@ func TestCheckToolGroupLabels(t *testing.T) {
 			t.Fatalf("want the labelled OAuth fixture refused, got %v", err)
 		}
 	})
+}
+
+// fakeFleetOnCluster seeds what `agentlab platform` leaves on a lab: every
+// fake-fleet member, the OAuth fixture, a chart-labelled server, and — in
+// another namespace — a server of the other group.
+func fakeFleetOnCluster() []runtime.Object {
+	var objs []runtime.Object
+	for _, name := range fleetFixtureNames() {
+		objs = append(objs, customObject(musterMCPServerGVK, platformNamespace, name, map[string]string{
+			managedByLabel: managedByAgentlabValue, fleetFixtureLabel: fleetFixtureValue, toolGroupLabel: toolGroupInfrastructure}))
+	}
+	objs = append(objs,
+		customObject(musterMCPServerGVK, platformNamespace, oauthFixtureServer, map[string]string{managedByLabel: managedByAgentlabValue, fleetFixtureLabel: oauthFixtureMarker}),
+		customObject(musterMCPServerGVK, platformNamespace, componentMCPKubernetes, map[string]string{managedByLabel: helmManaged, toolGroupLabel: toolGroupInfrastructure}),
+		customObject(musterMCPServerGVK, "elsewhere", "pro", map[string]string{managedByLabel: helmManaged, toolGroupLabel: toolGroupAgentPlatform}),
+	)
+	return objs
+}
+
+// TestListMCPServersByLabel: the tool-group listing is a label selector
+// across every namespace, the fixture's a selector in the platform
+// namespace; a single server reads by name and a missing one is the
+// apiserver's NotFound.
+func TestListMCPServersByLabel(t *testing.T) {
+	newFakeLab(t, fakeFleetOnCluster()...)
+	ctx := context.Background()
+	labelled, err := listMCPServers(ctx, "", toolGroupLabel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys []string
+	for _, s := range labelled {
+		keys = append(keys, s.key())
+	}
+	slices.Sort(keys)
+	want := []string{"elsewhere/pro", platformNamespace + "/" + componentMCPKubernetes}
+	for _, name := range fleetFixtureNames() {
+		want = append(want, platformNamespace+"/"+name)
+	}
+	slices.Sort(want)
+	if !reflect.DeepEqual(keys, want) {
+		t.Errorf("labelled = %v, want %v", keys, want)
+	}
+	members, err := listMCPServers(ctx, platformNamespace, fleetFixtureLabel+"="+fleetFixtureValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(members) != len(fleetFixtureNames()) {
+		t.Errorf("the fixture selector lists %d servers, want %d", len(members), len(fleetFixtureNames()))
+	}
+	oauth, err := getMCPServer(ctx, platformNamespace, oauthFixtureServer)
+	if err != nil || oauth.Labels[fleetFixtureLabel] != oauthFixtureMarker {
+		t.Errorf("getMCPServer = %+v, %v", oauth, err)
+	}
+	if _, err := getMCPServer(ctx, platformNamespace, "absent"); !apierrors.IsNotFound(err) {
+		t.Errorf("a missing server: %v, want the apiserver's NotFound", err)
+	}
+}
+
+// TestProveToolGroupLabelsOnCluster: the platform-test step passes on what
+// `agentlab platform` leaves behind (the chart-labelled server reported, not
+// judged), fails once the OAuth fixture is missing, and the per-server map
+// the presets proof reads carries "" for the unlabelled fixture.
+func TestProveToolGroupLabelsOnCluster(t *testing.T) {
+	f := newFakeLab(t, fakeFleetOnCluster()...)
+	if err := proveToolGroupLabels(); err != nil {
+		t.Errorf("on a complete lab: %v", err)
+	}
+	groups, err := mcpServerToolGroups()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{oauthFixtureServer: "", componentMCPKubernetes: toolGroupInfrastructure}
+	for _, name := range fleetFixtureNames() {
+		want[name] = toolGroupInfrastructure
+	}
+	if !reflect.DeepEqual(groups, want) {
+		t.Errorf("tool groups = %v, want %v", groups, want)
+	}
+	if err := f.dyn.Tracker().Delete(musterMCPServerGVR, platformNamespace, oauthFixtureServer); err != nil {
+		t.Fatal(err)
+	}
+	if err := proveToolGroupLabels(); err == nil || !strings.Contains(err.Error(), oauthFixtureServer+" is missing") {
+		t.Errorf("without the OAuth fixture: %v", err)
+	}
+}
+
+// TestLabelledServerOf reads namespace, name and labels off the object as the
+// apiserver returns it; no labels is an empty map's worth of lookups.
+func TestLabelledServerOf(t *testing.T) {
+	got := labelledServerOf(customObject(musterMCPServerGVK, platformNamespace, "x", map[string]string{toolGroupLabel: toolGroupAgentPlatform}))
+	if got.key() != platformNamespace+"/x" || got.Labels[toolGroupLabel] != toolGroupAgentPlatform {
+		t.Errorf("labelledServerOf = %+v", got)
+	}
+	bare := labelledServerOf(&unstructured.Unstructured{Object: map[string]any{"metadata": map[string]any{nameKey: "bare"}}})
+	if bare.Name != "bare" || bare.Namespace != "" || bare.Labels[toolGroupLabel] != "" {
+		t.Errorf("a bare object = %+v", bare)
+	}
 }

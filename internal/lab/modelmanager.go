@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -18,7 +19,7 @@ import (
 // model-manager fronts ONE backend per instance today, the first of
 // platform.modelManager.backends; the further ones are wired statically
 // (hostmodels.go) until it is multi-backend. Pods reach the host only through
-// the kind docker network's gateway — the same address the README documents
+// the kind docker network's gateway — the same address docs/models.md documents
 // for extraModels — so every endpoint is detected from `docker network
 // inspect kind` plus the server's default port rather than asked for.
 // Everything that can go wrong is host-side plumbing (bind address,
@@ -38,6 +39,10 @@ const kindDockerNetwork = "kind"
 // alpine image the umbrella already ships elsewhere (small, present in the
 // host cache after the first run, side-loaded before the probe pod).
 const probeImage = "gsoci.azurecr.io/giantswarm/alpine:3.22.1"
+
+// probePodTimeout bounds the reachability probe: the pod scheduled, its image
+// present (side-loaded first), wget's own five-second timeout inside.
+const probePodTimeout = 120 * time.Second
 
 // The version-answering paths of the servers: Ollama's whole document is
 // {"version":"..."}, Lemonade's health document carries a version field.
@@ -181,16 +186,14 @@ func preflightHostServer(cfg *config.Config, backend, endpoint string) error {
 	// the kubelet's pull under the pod-running timeout).
 	sideloadImages(cfg, hostPullImages([]string{probeImage}))
 	pod := backend + "-preflight"
-	// A leftover from an interrupted run would make `kubectl run` refuse.
-	_ = runQuiet("kubectl", "-n", platformNamespace, "delete", "pod", pod, "--ignore-not-found", "--wait=false")
-	out, err := outputAll("kubectl", "-n", platformNamespace, "run", pod,
-		"--rm", "-i", "--quiet", "--restart=Never", "--pod-running-timeout=120s",
-		"--image="+probeImage, "--image-pull-policy=IfNotPresent",
-		"--command", "--", "wget", "-qO-", "-T", "5", endpoint+healthPath(backend))
+	// One probe pod running wget (a leftover of the same name from an
+	// interrupted run is removed first); its output is the container's log,
+	// wget's error message included.
+	out, err := runProbePod(context.Background(), platformNamespace, pod, probeImage,
+		[]string{"wget", "-qO-", "-T", "5", endpoint + healthPath(backend)}, probePodTimeout)
 	if err == nil && strings.Contains(out, `"version"`) {
-		// The combined output also carries kubectl's own attach chatter
-		// ("warning: couldn't attach to pod ..., falling back to logs"), so
-		// pick the version field out of it.
+		// The health document may carry more than the version (Lemonade's
+		// does), so pick the version field out of it.
 		version := strings.TrimSpace(out)
 		if m := versionFieldRe.FindString(out); m != "" {
 			version = m
@@ -211,7 +214,7 @@ func preflightHostServer(cfg *config.Config, backend, endpoint string) error {
 		reason = "connection timed out — the host firewall drops pod->host traffic on the docker\n  bridge (the request never reaches the server)"
 	}
 	return fmt.Errorf("host %s is not reachable from pods at %s: %s.\n"+
-		"  Fixes (README, \"Local backends on the lab host\"):\n%s\n"+
+		"  Fixes (docs/models.md, \"Local backends on the lab host\"):\n%s\n"+
 		"  Then re-run `agentlab platform`, or drop %s from platform.modelManager.backends\n"+
 		"  (`agentlab configure --defaults` rewrites the list from what answers on this machine).\n"+
 		"  Probe output: %.300s", server, endpoint, reason, fixes, backend, out)

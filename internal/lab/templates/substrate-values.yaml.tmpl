@@ -1,0 +1,31 @@
+# ---------------------------------------------------------------------------
+# kagent-dev/substrate — kagent's actor runtime — in this kind lab.
+#
+# The chart's own defaults, on purpose: the dev channel's kagent creates its
+# WorkerPool against this Substrate exactly as a management cluster's would,
+# and the lab has nothing to deviate on. What the lab does differently sits
+# outside the values: the CA/JWT pool Secrets, the actor-id trust anchor and
+# ate-api-server's authentication config are created by `agentlab` before the
+# chart installs (substrate.go), so one waited upgrade-or-install suffices.
+# ---------------------------------------------------------------------------
+
+# The lab creates ate-system itself (the pools have to exist before the
+# chart), so the chart renders no Namespace for its release.
+createNamespace: false
+
+postgres:
+  enabled: true
+  # kind's local-path provisioner backs the claim.
+  storageSize: 1Gi
+
+rustfs:
+  enabled: true
+  # The actor snapshot store (s3://ate-snapshots): enough for the proofs'
+  # throwaway actors; raise it before real workspace use.
+  storageSize: 1Gi
+
+atelet:
+  # No --localhost-registry-replacement: the lab runs no local registry, the
+  # actor images come from registries the node pulls from (the dev channel
+  # pins them by digest).
+  extraArgs: []

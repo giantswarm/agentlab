@@ -1,10 +1,12 @@
 package telemetry
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -135,6 +137,14 @@ func TestCommandPostsOneSignal(t *testing.T) {
 		if payload["appVersion"] != project.Version() {
 			t.Errorf("payload.appVersion %v, want %s", payload["appVersion"], project.Version())
 		}
+		// The dashboard's standard "App Versions" insight reads the reserved
+		// parameter, not the payload key the usage report queries.
+		if payload["TelemetryDeck.AppInfo.version"] != project.Version() {
+			t.Errorf("payload[TelemetryDeck.AppInfo.version] %v, want %s", payload["TelemetryDeck.AppInfo.version"], project.Version())
+		}
+		if sha := project.ShortSHA(); sha != "" && payload["TelemetryDeck.AppInfo.buildNumber"] != sha {
+			t.Errorf("payload[TelemetryDeck.AppInfo.buildNumber] %v, want %s", payload["TelemetryDeck.AppInfo.buildNumber"], sha)
+		}
 		for _, k := range []string{"TelemetryDeck.Device.operatingSystem", "TelemetryDeck.Device.architecture", "TelemetryDeck.SDK.nameAndVersion"} {
 			if payload[k] == "" || payload[k] == nil {
 				t.Errorf("payload lacks %s", k)
@@ -171,5 +181,75 @@ func TestCommandSendsNothingWhenOptedOutOrUnconfigured(t *testing.T) {
 	case p := <-hit:
 		t.Fatalf("a signal was sent (%s) despite the opt-out / plumbing / empty app ID", p)
 	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// enable turns reporting on for one test, pointed at srv.
+func enable(t *testing.T, srv *httptest.Server) {
+	t.Helper()
+	withAppID(t, testAppID)
+	t.Setenv(OptOutEnv, "")
+	t.Setenv(doNotTrackEnv, "")
+	t.Setenv(TestModeEnv, "1")
+	endpoint = srv.URL
+	t.Cleanup(func() {
+		endpoint = ""
+		sender = nil
+	})
+}
+
+// TestFlushSeesTheSignalOut: a command that finishes before the endpoint has
+// answered waits for the answer, so nothing is lost.
+func TestFlushSeesTheSignalOut(t *testing.T) {
+	got := make(chan struct{}, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(100 * time.Millisecond) // a slow network
+		got <- struct{}{}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	enable(t, srv)
+
+	Flush(context.Background()) // nothing sent yet: returns at once
+
+	Command(lab(t, "up"))
+	start := time.Now()
+	Flush(context.Background())
+	waited := time.Since(start)
+
+	select {
+	case <-got:
+	default:
+		t.Fatalf("Flush returned after %s without the signal having reached the endpoint", waited)
+	}
+	if waited >= flushTimeout {
+		t.Errorf("Flush waited %s, the whole budget, for a signal that was answered after 100ms", waited)
+	}
+}
+
+// TestFlushIsBounded: an endpoint that never answers costs the command's exit
+// no more than the budget, and no error.
+func TestFlushIsBounded(t *testing.T) {
+	gate := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(gate) }) }
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-gate:
+		case <-r.Context().Done():
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer func() {
+		release()
+		srv.Close()
+	}()
+	enable(t, srv)
+
+	Command(lab(t, "up"))
+	start := time.Now()
+	Flush(context.Background())
+	if waited := time.Since(start); waited < flushTimeout || waited > flushTimeout+time.Second {
+		t.Errorf("Flush waited %s on a stalled endpoint, want about %s", waited, flushTimeout)
 	}
 }

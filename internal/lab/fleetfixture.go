@@ -1,11 +1,14 @@
 package lab
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
 	"slices"
 	"sort"
 	"strings"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -125,22 +128,26 @@ func ensureFleetFixture(cfg *config.Config) error {
 	names := fleetFixtureNames()
 	step("Creating the fake-fleet fixture (%d MCPServers: %s × %s)", len(names),
 		strings.Join(familyNames(), "/"), strings.Join(fleetFixtureClusters, ", "))
-	_, path, err := renderManifest(cfg, "fleet-fixture.yaml.tmpl")
+	rendered, _, err := renderManifest(cfg, "fleet-fixture.yaml.tmpl")
 	if err != nil {
 		return err
 	}
-	if err := runQuiet("kubectl", "apply", "-f", path); err != nil {
+	ctx := context.Background()
+	if _, err := applyManifests(ctx, rendered); err != nil {
 		return err
 	}
-	existing, err := outputQuiet("kubectl", "-n", platformNamespace, "get", "mcpservers.muster.giantswarm.io",
-		"-l", fleetFixtureLabel+"="+fleetFixtureValue, "-o", "jsonpath={.items[*].metadata.name}")
+	gvr, err := gvrFor(musterMCPServerResource)
 	if err != nil {
 		return err
 	}
-	for _, name := range strings.Fields(existing) {
-		if !slices.Contains(names, name) {
+	existing, err := listObjects(ctx, gvr, platformNamespace, fleetFixtureLabel+"="+fleetFixtureValue)
+	if err != nil {
+		return err
+	}
+	for _, member := range existing {
+		if name := member.GetName(); !slices.Contains(names, name) {
 			note("removing stale fixture member %s", name)
-			if err := runQuiet("kubectl", "-n", platformNamespace, "delete", "mcpservers.muster.giantswarm.io", name); err != nil {
+			if err := deleteObject(ctx, gvr, platformNamespace, name, fixtureDeleteWait); err != nil {
 				return err
 			}
 		}
@@ -171,26 +178,28 @@ type labelledServer struct {
 
 func (s labelledServer) key() string { return s.Namespace + "/" + s.Name }
 
-// proveToolGroupLabels is the platform-test step for the label: kubectl -l
-// with the infrastructure value lists every fake-fleet member and, of the
-// lab's own CRs, nothing else; every value in the cluster is one of the two
-// the contract knows; the OAuth fixture is unlabelled (a Registered server).
-// Servers the vendored charts label (Helm-managed) are reported, not judged:
-// they appear as the charts bump to the releases that stamp the label.
+// proveToolGroupLabels is the platform-test step for the label: a label
+// selector with the infrastructure value lists every fake-fleet member and,
+// of the lab's own CRs, nothing else; every value in the cluster is one of
+// the two the contract knows; the OAuth fixture is unlabelled (a Registered
+// server). Servers the vendored charts label (Helm-managed) are reported, not
+// judged: they appear as the charts bump to the releases that stamp the label.
 func proveToolGroupLabels() error {
 	step("Tool-group label: %s=%s selects the fake-fleet fixture", toolGroupLabel, toolGroupInfrastructure)
-	labelled, err := listMCPServers("-A", "-l", toolGroupLabel)
+	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
+	defer cancel()
+	labelled, err := listMCPServers(ctx, "", toolGroupLabel)
 	if err != nil {
 		return err
 	}
-	oauth, err := listMCPServers("-n", platformNamespace, "--field-selector", "metadata.name="+oauthFixtureServer)
-	if err != nil {
-		return err
-	}
-	if len(oauth) != 1 {
+	oauth, err := getMCPServer(ctx, platformNamespace, oauthFixtureServer)
+	if apierrors.IsNotFound(err) {
 		return fmt.Errorf("MCPServer %s is missing — the sign-in fixture `agentlab platform` creates", oauthFixtureServer)
 	}
-	chartLabelled, err := checkToolGroupLabels(labelled, oauth[0])
+	if err != nil {
+		return err
+	}
+	chartLabelled, err := checkToolGroupLabels(labelled, oauth)
 	if err != nil {
 		return err
 	}
@@ -249,29 +258,39 @@ func checkToolGroupLabels(labelled []labelledServer, oauth labelledServer) ([]st
 	return chartLabelled, nil
 }
 
-// listMCPServers reads muster MCPServer CRs (fully qualified: kagent ships
-// its own mcpservers.kagent.dev) with the given kubectl selectors.
-func listMCPServers(selectors ...string) ([]labelledServer, error) {
-	args := append([]string{"get", "mcpservers.muster.giantswarm.io", "-o", "json"}, selectors...)
-	raw, err := outputQuiet("kubectl", args...)
+// listMCPServers reads muster's MCPServer CRs (musterMCPServerResource, fully
+// qualified: kagent ships its own mcpservers.kagent.dev) in a namespace — or
+// in every one with ns "" — matching the label selector.
+func listMCPServers(ctx context.Context, ns, labelSelector string) ([]labelledServer, error) {
+	gvr, err := gvrFor(musterMCPServerResource)
 	if err != nil {
 		return nil, err
 	}
-	var list struct {
-		Items []struct {
-			Metadata struct {
-				Namespace string            `json:"namespace"`
-				Name      string            `json:"name"`
-				Labels    map[string]string `json:"labels"`
-			} `json:"metadata"`
-		} `json:"items"`
+	items, err := listObjects(ctx, gvr, ns, labelSelector)
+	if err != nil {
+		return nil, err
 	}
-	if err := json.Unmarshal([]byte(raw), &list); err != nil {
-		return nil, fmt.Errorf("parsing MCPServer list: %w", err)
-	}
-	out := make([]labelledServer, 0, len(list.Items))
-	for _, it := range list.Items {
-		out = append(out, labelledServer{Namespace: it.Metadata.Namespace, Name: it.Metadata.Name, Labels: it.Metadata.Labels})
+	out := make([]labelledServer, 0, len(items))
+	for i := range items {
+		out = append(out, labelledServerOf(&items[i]))
 	}
 	return out, nil
+}
+
+// getMCPServer reads one of muster's MCPServer CRs; a missing one stays an
+// apierrors.IsNotFound.
+func getMCPServer(ctx context.Context, ns, name string) (labelledServer, error) {
+	gvr, err := gvrFor(musterMCPServerResource)
+	if err != nil {
+		return labelledServer{}, err
+	}
+	obj, err := getObject(ctx, gvr, ns, name)
+	if err != nil {
+		return labelledServer{}, err
+	}
+	return labelledServerOf(obj), nil
+}
+
+func labelledServerOf(obj *unstructured.Unstructured) labelledServer {
+	return labelledServer{Namespace: obj.GetNamespace(), Name: obj.GetName(), Labels: obj.GetLabels()}
 }

@@ -1,10 +1,13 @@
 package lab
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
 	"time"
+
+	corev1 "k8s.io/api/core/v1"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -33,6 +36,18 @@ const managedByAgentlab = "app.kubernetes.io/managed-by=agentlab"
 // extraModelsTemplate renders the lab-owned ModelConfigs.
 const extraModelsTemplate = "extra-models.yaml.tmpl"
 
+// modelConfigAcceptedPoll is the cadence of waitModelConfigAccepted's ten
+// looks (a variable so the tests need not wait it out).
+var modelConfigAcceptedPoll = 2 * time.Second
+
+// kubeReadTimeout bounds one read of the apiserver in the proofs and
+// fixtures — a status poll's look, an RBAC question, an identity probe.
+const kubeReadTimeout = 15 * time.Second
+
+// modelDeleteWait bounds how long a pruned ModelConfig or key Secret may take
+// to go away — kubectl's default delete waits too.
+const modelDeleteWait = 2 * time.Minute
+
 // ensureExtraModels reconciles the platform.extraModels entries into kagent
 // ModelConfig CRs plus their key Secrets, and prunes lab-labeled CRs whose
 // entry is gone from agentlab.yaml. Only called with the agents runtime
@@ -41,7 +56,7 @@ const extraModelsTemplate = "extra-models.yaml.tmpl"
 // ModelConfigs itself, for every backend it fronts.
 func ensureExtraModels(cfg *config.Config) error {
 	models := cfg.Platform.ExtraModels
-	_, path, err := renderManifestWith(cfg, extraModelsTemplate, func(d *tmplData) { d.ExtraModels = models })
+	rendered, _, err := renderManifestWith(cfg, extraModelsTemplate, func(d *tmplData) { d.ExtraModels = models })
 	if err != nil {
 		return err
 	}
@@ -57,7 +72,7 @@ func ensureExtraModels(cfg *config.Config) error {
 		}
 	}
 	if len(models) > 0 {
-		if err := runQuiet("kubectl", "apply", "-f", path); err != nil {
+		if _, err := applyManifests(context.Background(), rendered); err != nil {
 			return err
 		}
 	}
@@ -82,7 +97,11 @@ func ensureModelKeySecret(m config.ExtraModel) error {
 	if !m.NeedsSecret() {
 		return nil
 	}
-	if _, err := outputQuiet("kubectl", "-n", kagentNamespace, "get", "secret", m.SecretName()); err == nil {
+	exists, err := objectExists(context.Background(), gvrSecrets, kagentNamespace, m.SecretName())
+	if err != nil {
+		return err
+	}
+	if exists {
 		note("secret %s/%s already exists, leaving it alone (delete it and re-run to rotate)", kagentNamespace, m.SecretName())
 		return nil
 	}
@@ -96,17 +115,9 @@ func ensureModelKeySecret(m config.ExtraModel) error {
 	default:
 		key = os.Getenv(m.APIKeyEnv)
 	}
-	// Applied via stdin so the key never appears in a process's argv.
-	manifest := fmt.Sprintf(`apiVersion: v1
-kind: Secret
-metadata:
-  name: %s
-  namespace: %s
-type: Opaque
-stringData:
-  %s: %q
-`, m.SecretName(), kagentNamespace, m.SecretKey(), key)
-	if err := pipeInto([]byte(manifest), "kubectl", "apply", "-f", "-"); err != nil {
+	// Applied in-process: the key never appears in a process's argv or in a
+	// rendered file.
+	if err := ensureSecret(kagentNamespace, m.SecretName(), corev1.SecretTypeOpaque, map[string][]byte{m.SecretKey(): []byte(key)}); err != nil {
 		return err
 	}
 	if key != placeholderAPIKey {
@@ -120,26 +131,31 @@ stringData:
 // gone from the host server they were wired from — so a removal is a real
 // removal on the next run.
 func pruneExtraModels(want []config.ExtraModel) error {
-	out, err := outputQuiet("kubectl", "-n", kagentNamespace, "get", modelConfigResource,
-		"-l", managedByAgentlab, "-o", "jsonpath={.items[*].metadata.name}")
+	ctx := context.Background()
+	gvr, err := gvrFor(modelConfigResource)
 	if err != nil {
-		return nil // no CRD / no namespace: nothing lab-owned to prune
+		return nil // no CRD: nothing lab-owned to prune
+	}
+	existing, err := listObjects(ctx, gvr, kagentNamespace, managedByAgentlab)
+	if err != nil {
+		return nil // no namespace: nothing lab-owned to prune
 	}
 	keep := map[string]bool{}
 	for _, m := range want {
 		keep[m.Name] = true
 	}
-	for _, name := range strings.Fields(out) {
+	for _, mc := range existing {
+		name := mc.GetName()
 		if keep[name] {
 			continue
 		}
 		note("pruning model config %s (removed from %s or gone from its host server)", name, config.File)
-		if err := runQuiet("kubectl", "-n", kagentNamespace, "delete", modelConfigResource, name); err != nil {
+		if err := deleteObject(ctx, gvr, kagentNamespace, name, modelDeleteWait); err != nil {
 			return err
 		}
-		// Its key Secret rides along; --ignore-not-found because keyless
+		// Its key Secret rides along; a missing one is fine — keyless
 		// providers never had one.
-		if err := runQuiet("kubectl", "-n", kagentNamespace, "delete", "secret", "kagent-"+name, "--ignore-not-found"); err != nil {
+		if err := deleteObject(ctx, gvrSecrets, kagentNamespace, "kagent-"+name, modelDeleteWait); err != nil {
 			return err
 		}
 	}
@@ -162,18 +178,62 @@ func extraModelsHint(models []config.ExtraModel) string {
 // waitModelConfigAccepted polls one ModelConfig until the controller accepts
 // it — the machine check that the provider/model/Secret combination is one
 // the runtime can mount, before anyone debugs it from a failing agent pod.
+// kagent main splits the verdict in two: Accepted (the spec is coherent) and
+// ResolvedRefs (the Secret it names exists and holds the key); an Accepted
+// ModelConfig whose ResolvedRefs is False is not usable, so that is refused
+// too, while a status without the condition (the 0.x line) still passes. A
+// read that fails is reported as such, with the apiserver's words, never as
+// an empty status.
 func waitModelConfigAccepted(name string) error {
 	var status string
 	var readErr error
-	accepted := waitFor(10, 2*time.Second, func() bool {
-		status, readErr = outputQuiet("kubectl", "-n", kagentNamespace, "get", modelConfigResource, name,
-			"-o", `jsonpath={.status.conditions[?(@.type=="Accepted")].status}`)
+	accepted := waitFor(10, modelConfigAcceptedPoll, func() bool {
+		status, _, readErr = modelConfigCondition(name, "Accepted")
 		return readErr == nil && status == "True"
 	})
 	if !accepted {
 		return notReached("ModelConfig "+name, "Accepted", status, readErr,
 			fmt.Sprintf("check `kubectl -n %s describe %s %s`", kagentNamespace, modelConfigResource, name))
 	}
-	note("ModelConfig %s: Accepted", name)
+	resolved, message, err := modelConfigCondition(name, conditionResolvedRefs)
+	if err != nil {
+		return err
+	}
+	if resolved == condFalseStatus {
+		return fmt.Errorf("ModelConfig %s is Accepted but %s=False: %s;\ncheck `kubectl -n %s describe %s %s`", name, conditionResolvedRefs, message, kagentNamespace, modelConfigResource, name)
+	}
+	note("ModelConfig %s: Accepted%s", name, resolvedNote(resolved))
 	return nil
+}
+
+// resolvedNote words the ResolvedRefs condition for the note: nothing when the
+// controller writes none (the 0.x line), the status otherwise.
+func resolvedNote(resolved string) string {
+	if resolved == "" {
+		return ""
+	}
+	return ", " + conditionResolvedRefs + "=" + resolved
+}
+
+// conditionResolvedRefs is kagent main's second ModelConfig condition: the
+// referenced Secret exists and holds the key.
+const conditionResolvedRefs = "ResolvedRefs"
+
+// condFalseStatus is a condition's False status.
+const condFalseStatus = "False"
+
+// modelConfigCondition reads one condition's status and message off a
+// ModelConfig ("" while the controller has not written it).
+func modelConfigCondition(name, condType string) (status, message string, err error) {
+	gvr, err := gvrFor(modelConfigResource)
+	if err != nil {
+		return "", "", err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
+	defer cancel()
+	obj, err := getObject(ctx, gvr, kagentNamespace, name)
+	if err != nil {
+		return "", "", err
+	}
+	return conditionStatus(obj, condType), conditionMessage(obj, condType), nil
 }
