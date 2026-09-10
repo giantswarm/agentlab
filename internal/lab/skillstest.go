@@ -68,12 +68,20 @@ const SkillsTestReadyTimeout = 10 * time.Minute
 // either way), the control boot runs on the same runtime image and is bounded
 // tighter, Substrate is given a while to let go of a deleted template.
 const (
-	goldenBootPoll         = 5 * time.Second
-	skillsControlTimeout   = 5 * time.Minute
-	substrateReleaseWait   = 2 * time.Minute
-	substrateRecoveryWait  = time.Minute
-	skillsEvidenceLogSince = 20 * time.Minute
-	skillsEvidenceLogLines = 20
+	goldenBootPoll          = 5 * time.Second
+	skillsControlTimeout    = 5 * time.Minute
+	substrateReleaseWait    = 2 * time.Minute
+	substrateRecoveryWait   = time.Minute
+	skillsEvidenceLogSince  = 20 * time.Minute
+	skillsEvidenceLogLines  = 12
+	skillsEvidenceTailLines = 3
+)
+
+// The words a failed golden boot leaves in the logs: the gate's, and the
+// actor's own about its skill fetch and its exit.
+var (
+	egressGateWords = []string{"denied", "not running", "RUNNING", "reject", "forbid", "CONNECT"}
+	actorBootWords  = []string{"fatal", "materializ", "readyz", "unable to", "exit", "level\":\"error", "\"error\":"}
 )
 
 // Resources of kagent API v2 the proof reads beyond the AgentTemplate, and
@@ -143,9 +151,14 @@ func SkillsTest(cfg *config.Config, email string, opts SkillsTestOptions) error 
 	}
 
 	// Leftovers of an aborted run first, and everything this run creates on
-	// every exit path.
-	skillsCleanup(api)
-	defer skillsCleanup(api)
+	// every exit path; what Substrate would not let go of is said.
+	cleanup := func() {
+		for _, left := range skillsCleanup(api) {
+			note("cleanup: still in Substrate: %s", left)
+		}
+	}
+	cleanup()
+	defer cleanup()
 
 	step("Applying AgentTemplate %s on Harness %s: skill %s from %s @ %.12s, tools from %s", skillsTestAgent, kagentHarness, skillsTestSkill, skillsTestRepo, skillsTestCommit, componentMuster)
 	if _, err := applyManifests(context.Background(), []byte(skillsAgentTemplate(skillsTestAgent, opts.ModelConfig, true))); err != nil {
@@ -355,55 +368,65 @@ func goldenBootEvidence(api *kagentAPI, name string, harness *harnessStatus, fac
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	lines = append(lines, logEvidence(ctx, kagentControllerName, kagentNamespace, "deploy/"+kagentControllerName, "", name)...)
+	lines = append(lines, logEvidence(ctx, kagentControllerName, kagentNamespace, "deploy/"+kagentControllerName, "", "", name)...)
 	// atenet's pods run the egress proxy and its gate as sidecars
 	// (agentgateway + ext-proc); every container is read, for the actors'
 	// ids and the gate's words.
+	patterns := append([]string(nil), egressGateWords...)
+	for _, actor := range footprint.actors {
+		patterns = append(patterns, actor.GetActorId())
+	}
 	for _, pod := range podsNamed(ctx, substrateNamespace, atenetPodPrefix) {
-		patterns := []string{"egress", "denied", "RUNNING", "not running", "refus", "connect"}
-		for _, actor := range footprint.actors {
-			patterns = append(patterns, actor.GetActorId())
-		}
 		for _, container := range podContainers(ctx, substrateNamespace, pod) {
-			lines = append(lines, logEvidence(ctx, pod+"/"+container, substrateNamespace, "pod/"+pod, container, patterns...)...)
+			lines = append(lines, logEvidence(ctx, pod+"/"+container, substrateNamespace, "pod/"+pod, container, "", patterns...)...)
 		}
 	}
 	// The actor's own output: Substrate's worker pods write it as JSON lines
 	// labelled with the ActorTemplate (ate.template.name) and the actor, so
 	// every worker of the pool is read for the template's name — the actor
-	// that failed may have run on any of them, and be gone by now.
+	// that failed may have run on any of them, and be gone by now — and
+	// within those lines for the words of a boot that went wrong.
 	for _, pod := range podsLabelled(ctx, kagentNamespace, substrateWorkerLabel+"="+facts.workerPool) {
-		lines = append(lines, logEvidence(ctx, "worker "+pod, kagentNamespace, "pod/"+pod, "", actorTemplatePrefix(name, harness.Harness))...)
+		lines = append(lines, logEvidence(ctx, "worker "+pod, kagentNamespace, "pod/"+pod, "", actorTemplatePrefix(name, harness.Harness), actorBootWords...)...)
 	}
 	return lines
 }
 
 // logEvidence is the last lines of a target's recent logs (of the named
-// container, or the pod's default) that carry any of the patterns
-// (case-insensitively), titled; when none does, it says so and gives the tail
-// instead, so a changed log vocabulary still leaves a trace.
-func logEvidence(ctx context.Context, title, ns, target, container string, patterns ...string) []string {
+// container, or the pod's default) that carry must (when given) and any of
+// the patterns, case-insensitively, titled; when none does, it says so and
+// gives a short tail instead, so a changed log vocabulary still leaves a
+// trace.
+func logEvidence(ctx context.Context, title, ns, target, container, must string, patterns ...string) []string {
 	logs, err := podLogs(ctx, ns, target, container, skillsEvidenceLogSince)
 	if err != nil {
 		return []string{fmt.Sprintf("%s logs: %v", title, err)}
 	}
-	matched := grepLines(logs, skillsEvidenceLogLines, patterns...)
+	matched := grepLines(logs, skillsEvidenceLogLines, must, patterns...)
+	wanted := fmt.Sprintf("%v", patterns)
+	if must != "" {
+		wanted = fmt.Sprintf("%q and %v", must, patterns)
+	}
 	if len(matched) == 0 {
-		tail := lastLines(logs, skillsEvidenceLogLines/2)
+		tail := lastLines(logs, skillsEvidenceTailLines)
 		if len(tail) == 0 {
 			return []string{fmt.Sprintf("%s logs (last %s): empty", title, skillsEvidenceLogSince)}
 		}
-		return append([]string{fmt.Sprintf("%s logs (last %s): no line matches %v; the tail:", title, skillsEvidenceLogSince, patterns)}, indentLines(tail)...)
+		return append([]string{fmt.Sprintf("%s logs (last %s): no line carries %s; the tail:", title, skillsEvidenceLogSince, wanted)}, indentLines(tail)...)
 	}
-	return append([]string{fmt.Sprintf("%s logs (last %s), lines matching %v:", title, skillsEvidenceLogSince, patterns)}, indentLines(matched)...)
+	return append([]string{fmt.Sprintf("%s logs (last %s), lines carrying %s:", title, skillsEvidenceLogSince, wanted)}, indentLines(matched)...)
 }
 
-// grepLines is the last max lines of text that contain any of the patterns,
-// case-insensitively; an empty pattern matches nothing.
-func grepLines(text string, maxLines int, patterns ...string) []string {
+// grepLines is the last max lines of text that contain must (when given)
+// and any of the patterns, case-insensitively; an empty pattern matches
+// nothing.
+func grepLines(text string, maxLines int, must string, patterns ...string) []string {
 	var matched []string
 	for _, line := range strings.Split(text, "\n") {
 		lower := strings.ToLower(line)
+		if must != "" && !strings.Contains(lower, strings.ToLower(must)) {
+			continue
+		}
 		for _, p := range patterns {
 			if p != "" && strings.Contains(lower, strings.ToLower(p)) {
 				matched = append(matched, line)

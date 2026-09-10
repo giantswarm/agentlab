@@ -319,10 +319,16 @@ materialize skill "agent-self-awareness": exit status 128` — the ADK exits
 before readyz. atenet-egress logs nothing about the refused connection
 (its `ext-proc` logs health checks only), so the actor's `Broken pipe` is
 the only trace of the gate. The control without the skill reaches Ready in
-CONTROL_SECONDS. It is the gate the Claude harness hit in the laptop POC;
-the finding is on the line's upstream ledger (giantswarm/giantswarm#37742,
-row 8: boot-phase egress in Substrate, or kagent materialising skills after
-readiness).
+10 s. Deleting the template does not free the worker either: two minutes
+later Substrate still reported the golden actor as `ACTOR_STATE_DELETING`,
+pinned to the same worker pod, kagent's revision garbage collector kept
+failing to delete the ActorTemplate (`delete unreferenced ActorTemplate …:
+Aborted … another operation is in progress`, then `Internal … failed to
+terminate`), and the proof's cleanup had to delete that pod (the WorkerPool
+replaced it; Substrate let go right after). It is the gate the Claude harness hit in
+the laptop POC; the finding is on the line's upstream ledger
+(giantswarm/giantswarm#37742, row 8: boot-phase egress in Substrate, or
+kagent materialising skills after readiness).
 
 ## The request path
 

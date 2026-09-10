@@ -211,17 +211,21 @@ func TestSkillReplyProves(t *testing.T) {
 // TestGrepLines: matching is case-insensitive over any pattern, bounded to
 // the last n lines; the tail helper drops empty lines.
 func TestGrepLines(t *testing.T) {
-	text := "a first\nEGRESS denied for 01a0\nnoise\n\nactor 01a0 not RUNNING\nlast"
-	if got := grepLines(text, 10, "egress", "01a0"); len(got) != 2 || got[0] != "EGRESS denied for 01a0" {
+	const gateLine = "actor 01a0 not RUNNING"
+	text := "a first\nEGRESS denied for 01a0\nnoise\n\n" + gateLine + "\nlast"
+	if got := grepLines(text, 10, "", "egress", "01a0"); len(got) != 2 || got[0] != "EGRESS denied for 01a0" {
 		t.Errorf("grep = %q", got)
 	}
-	if got := grepLines(text, 1, "01a0"); len(got) != 1 || got[0] != "actor 01a0 not RUNNING" {
+	if got := grepLines(text, 1, "", "01a0"); len(got) != 1 || got[0] != gateLine {
 		t.Errorf("bounded grep = %q", got)
 	}
-	if got := grepLines(text, 10, ""); len(got) != 0 {
+	if got := grepLines(text, 10, "", ""); len(got) != 0 {
 		t.Errorf("an empty pattern matched %q", got)
 	}
-	if got := lastLines(text, 2); len(got) != 2 || got[0] != "actor 01a0 not RUNNING" || got[1] != "last" {
+	if got := grepLines(text, 10, "actor", "denied", "running"); len(got) != 1 || got[0] != gateLine {
+		t.Errorf("must + any = %q", got)
+	}
+	if got := lastLines(text, 2); len(got) != 2 || got[0] != gateLine || got[1] != "last" {
 		t.Errorf("tail = %q", got)
 	}
 	if got := indentLines([]string{"x"}); got[0] != "  x" {
