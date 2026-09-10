@@ -41,7 +41,7 @@ func stubKindKubeconfig(t *testing.T) *int {
 	prev := kindKubeconfigRaw
 	kindKubeconfigRaw = func(name string) ([]byte, error) {
 		calls++
-		if name != "agentlab" {
+		if name != managedByAgentlabValue {
 			return nil, fmt.Errorf("kind: reading the kubeconfig of cluster %s: could not locate any control plane nodes for cluster named '%s'", name, name)
 		}
 		return []byte(fakeKindKubeconfig), nil

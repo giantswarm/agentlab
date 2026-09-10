@@ -78,33 +78,59 @@ type agentTemplate struct {
 // conditions, the revision the controller wants and the last one whose golden
 // snapshot succeeded, and compile warnings.
 type harnessStatus struct {
-	Harness                  string   `json:"harness"`
-	DesiredRevision          string   `json:"desiredRevision"`
-	LatestSuccessfulRevision string   `json:"latestSuccessfulRevision"`
-	Warnings                 []string `json:"warnings"`
-	Conditions               []struct {
-		Type    string `json:"type"`
-		Status  string `json:"status"`
-		Reason  string `json:"reason"`
-		Message string `json:"message"`
-	} `json:"conditions"`
+	Harness                  string              `json:"harness"`
+	DesiredRevision          string              `json:"desiredRevision"`
+	LatestSuccessfulRevision string              `json:"latestSuccessfulRevision"`
+	Warnings                 []string            `json:"warnings"`
+	Conditions               []templateCondition `json:"conditions"`
+}
+
+// templateCondition is one condition of a Harness's status: Accepted,
+// ResolvedRefs, Compatible, Ready.
+type templateCondition struct {
+	Type    string `json:"type"`
+	Status  string `json:"status"`
+	Reason  string `json:"reason"`
+	Message string `json:"message"`
+}
+
+// String is the condition the way the evidence quotes it:
+// `Ready=False ActorTemplatePending: waiting for the ActorTemplate golden snapshot`.
+func (c templateCondition) String() string {
+	return fmt.Sprintf("%s=%s %s: %s", c.Type, c.Status, c.Reason, c.Message)
+}
+
+// harness is the status of the named Harness, nil while the controller has
+// not reported on it.
+func (t *agentTemplate) harness(name string) *harnessStatus {
+	for i := range t.Status.Harnesses {
+		if t.Status.Harnesses[i].Harness == name {
+			return &t.Status.Harnesses[i]
+		}
+	}
+	return nil
+}
+
+// condition is one condition's status ("True", "False", "Unknown", or ""
+// while it is not there yet) and message.
+func (h *harnessStatus) condition(condType string) (status, message string) {
+	for _, c := range h.Conditions {
+		if c.Type == condType {
+			return c.Status, c.Message
+		}
+	}
+	return "", ""
 }
 
 // harnessCondition is `{.status.harnesses[?(@.harness=="<h>")].conditions[?(@.type=="<t>")]}`:
 // the condition's status ("True", "False", "Unknown", or "" when the Harness
 // or the condition is not there yet) and its message.
 func (t *agentTemplate) harnessCondition(harness, condType string) (status, message string) {
-	for _, h := range t.Status.Harnesses {
-		if h.Harness != harness {
-			continue
-		}
-		for _, c := range h.Conditions {
-			if c.Type == condType {
-				return c.Status, c.Message
-			}
-		}
+	h := t.harness(harness)
+	if h == nil {
+		return "", ""
 	}
-	return "", ""
+	return h.condition(condType)
 }
 
 // mcpServer is the RemoteMCPServer the template's first MCP tool binding

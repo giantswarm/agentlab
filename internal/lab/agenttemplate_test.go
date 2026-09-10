@@ -31,8 +31,8 @@ func readyTemplate(name, harness, readyStatus, readyMessage string) *unstructure
 		"latestSuccessfulRevision": testRevision,
 		"warnings":                 []any{"tool narrowing downgraded"},
 		fieldConditions: []any{
-			map[string]any{fieldType: "Accepted", fieldStatus: conditionTrue, "reason": "Accepted", fieldMessage: "Harness admission selector matches the AgentTemplate"},
-			map[string]any{fieldType: condReady, fieldStatus: readyStatus, "reason": "Ready", fieldMessage: readyMessage},
+			map[string]any{fieldType: "Accepted", fieldStatus: conditionTrue, fieldReason: "Accepted", fieldMessage: "Harness admission selector matches the AgentTemplate"},
+			map[string]any{fieldType: condReady, fieldStatus: readyStatus, fieldReason: "Ready", fieldMessage: readyMessage},
 		},
 	}}, fieldStatus, "harnesses")
 	return template
@@ -106,7 +106,7 @@ func TestThrowawayAgentTemplate(t *testing.T) {
 	modelConfig, _, _ := unstructured.NestedString(obj, "spec", "modelConfig", nameKey)
 	description, _, _ := unstructured.NestedString(obj, "spec", "description")
 	if u.GetAPIVersion() != agentTemplateAPIVersion || u.GetKind() != "AgentTemplate" || u.GetName() != testSmoke || u.GetNamespace() != kagentNamespace ||
-		labels[harnessLabel] != kagentHarness || labels[managedByLabel] != "agentlab" || modelConfig != defaultModelConfig || description != "a probe" {
+		labels[harnessLabel] != kagentHarness || labels[managedByLabel] != managedByAgentlabValue || modelConfig != defaultModelConfig || description != "a probe" {
 		t.Errorf("throwaway template:\n%s", manifest)
 	}
 	if _, found, _ := unstructured.NestedSlice(obj, "spec", "tools"); found {

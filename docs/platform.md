@@ -267,6 +267,63 @@ the toolset on the per-agent muster carrier (`RemoteMCPServer`) the template
 binds, and the portal's Agent Platform pages (`backstage-test`, on an
 `AgentTemplate` the proof brings along).
 
+### The skills proof (the golden boot)
+
+`agentlab skills-test` asks the question every skill-carrying agent of the
+fleet hangs on: does a Go ADK `AgentTemplate` with a git skill boot under
+Substrate? The controller compiles a template into an ActorTemplate;
+Substrate boots one actor from it — the golden boot — waits for its readyz
+and takes the golden snapshot every turn resumes from; the Go ADK
+materialises the template's skills when it starts (a git skill is
+`git fetch --depth 1 origin <commit>` of a full commit into `/plugins`,
+copied to `/skills`), before it serves readyz; and atenet refuses outbound
+connections from an actor that is not `RUNNING`. The proof creates an
+`AgentTemplate` on the platform's Go ADK Harness (`kagent`) with one skill
+pinned to a full commit of a public repository — `agent-self-awareness` of
+giantswarm/agent-skills, the repository most of the fleet's skills come
+from — and the shared muster server as its tools, waits for `Ready` on the
+Harness (`--ready-timeout`, 10 min by default) and, on success, drives one
+turn through the edge as the signed-in user that names the skill and
+answers a fact only its `SKILL.md` has (the Harness re-emits the person's
+bearer on tool calls, `KAGENT_PROPAGATE_TOKEN`, which the proof asserts).
+On a failed boot it prints the evidence — the Harness's conditions and
+warnings; Substrate's ActorTemplate, actor and pinned worker as the
+controller's `GetSubstrateStatus` reports them; the controller's, atenet's
+(every container) and the pool's worker pods' log lines about the
+template's actors — boots the same template without the skill as the
+control, and exits non-zero. Either way it leaves nothing behind: the
+templates go, Substrate lets go of their ActorTemplates and actors through
+kagent's revision garbage collector, and a worker still pinned to an actor
+of a deleted template is freed the documented way (its pod deleted, the
+WorkerPool replaces it). A negative outcome is a finding about the line,
+not about the lab: the proof stays red until the line carries a fix, and
+is that fix's acceptance test.
+
+**Outcome (2026-09-10): negative.** Measured on agent-platform
+`3.22.1-dev.poc-kagent-main.2026-09-10.21-02-36.h2739fe3` (kagent chart
+`0.11.0-dev.poc-agent-platform.2026-09-10.21-15-57.hcc77fbb`,
+kagent-controller `0.11.0-dev.poc-agent-platform.2026-09-10.20-29-02.hc231bd6`,
+Go ADK `ghcr.io/giantswarm/kagent/golang-adk@sha256:99b7b816f0d0…` — Alpine
+with git 2.49.1, so the image is not the problem) and Substrate
+`0.0.27-dev.giantswarm.2026-09-10.19-33-37.h734ec53`: the template stays
+`Ready=False ActorTemplatePending: waiting for the ActorTemplate golden
+snapshot` (Accepted, ResolvedRefs and Compatible `True`, no warnings) for
+the whole timeout while Substrate re-runs the golden actor about once a
+minute (atelet's `AteomHerder/Run`, the same actor id, one worker of
+`kagent-default` pinned to it throughout). The worker pod's log of the
+actor reads `Initialized empty Git repository in
+/plugins/standalone-0/.git/`, then `fatal: unable to access
+'https://github.com/giantswarm/agent-skills/': Send failure: Broken pipe`,
+then `failed to materialize Agent Plugins: materialize agent plugins:
+materialize skill "agent-self-awareness": exit status 128` — the ADK exits
+before readyz. atenet-egress logs nothing about the refused connection
+(its `ext-proc` logs health checks only), so the actor's `Broken pipe` is
+the only trace of the gate. The control without the skill reaches Ready in
+CONTROL_SECONDS. It is the gate the Claude harness hit in the laptop POC;
+the finding is on the line's upstream ledger (giantswarm/giantswarm#37742,
+row 8: boot-phase egress in Substrate, or kagent materialising skills after
+readiness).
+
 ## The request path
 
 ```

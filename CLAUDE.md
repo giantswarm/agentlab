@@ -142,6 +142,7 @@ go test ./internal/forms/ -run TestMinimalFormDrive -count=1 -v   # single test
 ./agentlab models-test     # managed models: 401 -> pull -> ModelConfig -> agent turn -> MCP -> unload -> delete (on lmstudio: the 501 refusal -> unwire, U23)
 ./agentlab test            # RBAC assertions for every configured user
 ./agentlab backstage-test  # headless Backstage sign-in for every user
+./agentlab skills-test     # kagent API v2: an AgentTemplate with a git-pinned skill boots (the golden boot) and answers from the skill
 ./agentlab down            # delete the cluster (certs/ kept, trust stores untouched)
 ./agentlab trust           # install the lab CA into the system + NSS trust stores (sudo)
 ./agentlab untrust         # remove exactly the lab CA from those stores

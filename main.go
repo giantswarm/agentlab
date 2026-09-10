@@ -94,6 +94,7 @@ Then:        claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		modelsTestCmd(),
 		agentsTestCmd(),
 		toolsetsTestCmd(),
+		skillsTestCmd(),
 		labCmd("platform-down", "Remove the agent platform (leaves Dex and the cluster alone)", lab.PlatformDown),
 		labCmd("backstage", "Retired: Backstage deploys with the platform now (backstage.enabled + `agentlab up`)", lab.BackstageUp),
 		backstageTestCmd(),
@@ -580,6 +581,29 @@ func toolsetsTestCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the throwaway agents run on (default: default-model-config, the Anthropic one the lab renders from $ANTHROPIC_API_KEY)")
 	cmd.Flags().BoolVar(&opts.SkipChat, "skip-chat", false, "skip the turns that need the model to answer (the runtime path, the chat-only agent, the real agent's view of the fixture)")
 	cmd.Flags().BoolVar(&opts.SkipPortal, "skip-portal", false, "kagent API v2 only: skip the portal's apply path (the composed AgentTemplate through the scaffolder template) for a portal that does not speak kagent main yet; the Tools step's endpoints are proven regardless")
+	return cmd
+}
+
+func skillsTestCmd() *cobra.Command {
+	var opts lab.SkillsTestOptions
+	cmd := &cobra.Command{
+		Use:   "skills-test [email]",
+		Short: "Headless skills proof (kagent API v2): an AgentTemplate with a git skill pinned to a full commit boots on the Go ADK Harness — the golden boot fetches the skill under Substrate's egress gate — and one turn as the user answers from the skill; a failed boot prints the evidence for the line's upstream issue",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			email := cfg.AdminUser().Email
+			if len(args) == 1 {
+				email = args[0]
+			}
+			return lab.SkillsTest(cfg, email, opts)
+		},
+	}
+	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the throwaway agent runs on (default: default-model-config, the Anthropic one the lab renders from $ANTHROPIC_API_KEY)")
+	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", lab.SkillsTestReadyTimeout, "how long the golden boot may take to reach Ready on the Harness before the proof reports the failure")
 	return cmd
 }
 

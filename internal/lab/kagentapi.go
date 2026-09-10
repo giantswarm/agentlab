@@ -61,6 +61,7 @@ const (
 	grpcMessageHeader   = "Grpc-Message"
 
 	agentInstanceService = "kagent.api.v1alpha1.AgentInstanceService"
+	systemService        = "kagent.api.v1alpha1.SystemService"
 	a2aService           = "lf.a2a.v1.A2AService"
 
 	// grpcWebTrailerFlag marks the frame that carries the trailers
@@ -279,6 +280,28 @@ func (a *kagentAPI) deleteInstance(id string) {
 	if err := a.call(ctx, agentInstanceService, "DeleteAgentInstance", &kagentpb.DeleteAgentInstanceRequest{AgentInstanceId: id}, &resp, nil); err != nil {
 		note("deleting AgentInstance %s: %v", id, err)
 	}
+}
+
+// version is SystemService/GetVersion: the controller's own build identity.
+func (a *kagentAPI) version(ctx context.Context) (*kagentpb.GetVersionResponse, error) {
+	var resp kagentpb.GetVersionResponse
+	if err := a.call(ctx, systemService, "GetVersion", &kagentpb.GetVersionRequest{}, &resp, nil); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// substrateStatus is SystemService/GetSubstrateStatus for one namespace: the
+// controller's view of Substrate — the WorkerPools, the ActorTemplates it
+// wrote (phase Pending, Ready or Failed, the golden snapshot), the actors
+// with their state and worker assignment, the pools' workers. What the
+// portal's Substrate page shows; the person needs get on Substrate.
+func (a *kagentAPI) substrateStatus(ctx context.Context, namespace string) (*kagentpb.GetSubstrateStatusResponse, error) {
+	var resp kagentpb.GetSubstrateStatusResponse
+	if err := a.call(ctx, systemService, "GetSubstrateStatus", &kagentpb.GetSubstrateStatusRequest{Namespace: namespace}, &resp, nil); err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }
 
 // sendMessage is one A2A turn on the instance — lf.a2a.v1.A2AService/SendMessage
