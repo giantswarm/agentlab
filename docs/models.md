@@ -75,6 +75,24 @@ and everything that can go wrong is host-side plumbing, not kagent:
 - **Address**: pods reach the host only through the kind docker network's
   gateway — `docker network inspect kind` names it, typically `172.21.0.1`.
   That IP goes in `baseUrl`; `localhost` would be the agent pod itself.
+- **Docker in a VM (Docker Desktop on macOS or Windows, Colima, a podman
+  machine)**: the kind gateway is a bridge address *inside that VM*, so it is
+  not the machine your model server runs on and no bind address can make it
+  one. The server is reachable as **`host.docker.internal`** instead
+  (`host.containers.internal` under podman), which resolves only from inside
+  the cluster. Autodetection cannot use it — it would break every Linux lab,
+  where the gateway is the host — so name it once per backend:
+
+  ```yaml
+  platform:
+    modelManager:
+      endpoints:
+        lmstudio: http://host.docker.internal:1234
+  ```
+
+  Without this, `agentlab up` stops at the preflight and offers you the bind
+  fix, which cannot help: the request never leaves the VM. This applies to
+  every host backend equally, not just LM Studio.
 - **Bind address**: the server must listen on `0.0.0.0` (or the bridge IP).
   The usual `127.0.0.1` default is unreachable from pods regardless of any
   firewall rule. Ollama: `OLLAMA_HOST=0.0.0.0`. Lemonade:
@@ -103,7 +121,7 @@ and everything that can go wrong is host-side plumbing, not kagent:
   `idleEviction`, `keepAliveScope: request`) so the portal can say "idle,
   loads on first request" instead of "not loaded".
 
-Both of these are keyless OpenAI-compatible endpoints, so the entries are
+All three are keyless OpenAI-compatible endpoints, so the entries are
 minimal:
 
 ```yaml
@@ -180,8 +198,10 @@ pins the flag, `--model-manager-backends` the list; the interactive form shows
 what was found). Each endpoint is **autodetected at platform time** as `http://<kind
 docker network gateway>:<default port>` — `docker network inspect kind`, the
 same address the section above documents for `extraModels` — so nobody types
-`172.21.0.1`; set `endpoints.<backend>` for a server elsewhere on the LAN
-(such a backend is kept whether or not one answers locally).
+`172.21.0.1`; set `endpoints.<backend>` for a server the gateway does not
+reach — one elsewhere on the LAN, or the host itself when docker runs in a VM
+(`host.docker.internal`, see above). Such a backend is kept whether or not one
+answers locally.
 
 What `agentlab platform` (or `up`) does with it:
 

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -119,10 +120,27 @@ func Discover(cfg *config.Config) *Discovery {
 	return d
 }
 
-// Backends lists the backends whose servers answer, in canonical order.
+// Backends lists the backends the configuration should carry, in canonical
+// order: the servers that answer AND that pods can reach.
+//
+// A server pods cannot reach is no use to model-manager, which runs in one:
+// enrolling it made `agentlab configure` print "pods cannot reach it" and
+// apply it anyway, and `agentlab up` then aborted in preflightHostServer —
+// whose remedy, `configure --defaults`, re-added it because it still answers
+// on loopback. LM Studio brought this to the surface (its default bind is
+// loopback, "Serve on Local Network" off), but it was already true of the
+// others.
+//
+// Unknown reachability still enrolls: OnGateway is nil while there is no kind
+// network to probe (a fresh machine, or after `agentlab down`), and a lab that
+// has not booted yet must still be configurable. Only an explicit "no" is
+// left out, and Report says so where it says the rest.
 func (d *Discovery) Backends() []string {
 	var out []string
 	for _, s := range d.Servers {
+		if s.OnGateway != nil && !*s.OnGateway {
+			continue
+		}
 		out = append(out, s.Backend)
 	}
 	return out
@@ -224,7 +242,17 @@ func (d *Discovery) Report(cfg *config.Config) string {
 		case s.OnGateway != nil && *s.OnGateway:
 			reach = fmt.Sprintf("answers on %s (the address pods dial): yes", d.KindGateway)
 		case s.OnGateway != nil:
-			reach = fmt.Sprintf("does NOT answer on %s (the address pods dial) — pods cannot reach it (%s)", d.KindGateway, bindHint(s.Backend))
+			reach = fmt.Sprintf("does NOT answer on %s (the address pods dial) — left out of platform.modelManager.backends until it does (%s)",
+				d.KindGateway, bindHint(s.Backend))
+			// Where docker runs in a VM the gateway is a bridge inside it, so
+			// no bind address can make it this machine: the fix is to name
+			// the host, not to rebind the server. Saying only "bind to
+			// 0.0.0.0" there sends the reader after something that cannot
+			// work (docs/models.md, "Local backends on the lab host").
+			if runtime.GOOS != "linux" {
+				reach += fmt.Sprintf(", or — docker runs in a VM here, so the gateway is not this machine — set platform.modelManager.endpoints.%s: http://host.docker.internal:%d",
+					s.Backend, s.Port)
+			}
 		}
 		models := "models not listed"
 		if s.ModelsErr == nil {

@@ -139,7 +139,7 @@ go test ./internal/forms/ -run TestMinimalFormDrive -count=1 -v   # single test
 ./agentlab configure       # interactive form; --defaults keeps/writes the canonical lab
 ./agentlab up              # certs, kind cluster, Dex, RBAC, the agent platform — verified
 ./agentlab platform-test   # headless Dex -> muster -> mcp-kubernetes proof
-./agentlab models-test     # managed models: 401 -> pull -> ModelConfig -> agent turn -> MCP -> unload -> delete
+./agentlab models-test     # managed models: 401 -> pull -> ModelConfig -> agent turn -> MCP -> unload -> delete (on lmstudio: the 501 refusal -> unwire, U22)
 ./agentlab test            # RBAC assertions for every configured user
 ./agentlab backstage-test  # headless Backstage sign-in for every user
 ./agentlab down            # delete the cluster (certs/ kept, trust stores untouched)

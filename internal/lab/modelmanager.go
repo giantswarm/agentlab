@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -62,12 +63,32 @@ const (
 // would fail to parse and read as "no such server".
 const maxProbeBody = 8 << 20
 
-// probeTimeout is the identity probe's budget. It matches the inventory
-// readers in hostmodels.go on purpose: LM Studio's identifying document IS
-// its library, so a machine with a large one needs the same room here. Two
-// seconds silently dropped such a server from the discovery, and
-// ApplyDiscovered then rewrote platform.modelManager.backends without it.
-const probeTimeout = 10 * time.Second
+// The identity probe's two budgets, which measure different things on
+// purpose.
+//
+// probeTimeout is the whole exchange, and it matches the inventory readers in
+// hostmodels.go: LM Studio's identifying document IS its library, so a
+// machine with a large one needs the same room here. Two seconds silently
+// dropped such a server from the discovery, and ApplyDiscovered then rewrote
+// platform.modelManager.backends without it.
+//
+// probeHeaderTimeout bounds the wait for the answer to START. Without it the
+// whole budget is also the budget for a listener that accepts and never
+// writes — a debugger stub on 1234, say — and `configure` probes the servers
+// one after another, so every such port costs the full timeout. It is also
+// the number the in-cluster preflight's `wget -T` uses, so a server that
+// passes here cannot fail there for a reason this probe tolerated.
+const (
+	probeTimeout       = 10 * time.Second
+	probeHeaderTimeout = 2 * time.Second
+)
+
+// probeClient dials a host model server for the identity probe.
+func probeClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = probeHeaderTimeout
+	return &http.Client{Timeout: probeTimeout, Transport: transport}
+}
 
 // detectHostServer asks a model server at base to identify itself — the
 // configure-time question "is there one on this machine at all?" —
@@ -79,8 +100,7 @@ func detectHostServer(backend, base string) (ident string, ok bool) {
 	if !known {
 		return "", false
 	}
-	client := &http.Client{Timeout: probeTimeout}
-	resp, err := client.Get(base + spec.probe.path)
+	resp, err := probeClient().Get(base + spec.probe.path)
 	if err != nil {
 		return "", false
 	}
@@ -177,16 +197,13 @@ func resolveBackendEndpoints(cfg *config.Config) (map[string]string, error) {
 // preflightHostServer proves a host model server answers from INSIDE the
 // cluster before the platform install waits ten minutes on a model-manager
 // whose backend is unreachable (or wires ModelConfigs to a dead endpoint). A
-// short-lived pod fetches the server's identifying document; the two known
-// host-side failures are spelled out with their fixes: the server bound to
-// 127.0.0.1 (connection refused from the bridge) and a host firewall
-// dropping pod->host traffic on the docker bridge (timeout).
-//
-// The marker it looks for is deliberately weaker than the probe's ident:
-// busybox wget writes the body next to kubectl's own chatter, so nothing here
-// can be parsed as JSON. This step answers reachability — `agentlab
-// configure` already established on loopback that this is the server it says
-// it is.
+// short-lived pod fetches the server's identifying document and the SAME
+// fingerprint the loopback discovery used decides what answered
+// (backends.go), through runProbePod's clean container log — so the three
+// outcomes stay apart: this server answered, something else answered, or
+// nothing did. The last two used to share one message, which diagnosed a
+// wrong-server 200 — normal for LM Studio outside its /api/v1 — as an
+// unreachable host, complete with bind and firewall fixes.
 func preflightHostServer(cfg *config.Config, backend, endpoint string) error {
 	server := config.BackendServerName(backend)
 	spec, known := backendSpec(backend)
@@ -198,20 +215,26 @@ func preflightHostServer(cfg *config.Config, backend, endpoint string) error {
 	// the kubelet's pull under the pod-running timeout).
 	sideloadImages(cfg, hostPullImages([]string{probeImage}))
 	pod := backend + "-preflight"
-	// One probe pod running wget (a leftover of the same name from an
-	// interrupted run is removed first); its output is the container's log,
-	// wget's error message included.
-	out, err := runProbePod(context.Background(), platformNamespace, pod, probeImage,
-		[]string{"wget", "-qO-", "-T", "5", endpoint + spec.probe.path}, probePodTimeout)
-	if err == nil && strings.Contains(out, spec.probe.marker) {
-		// The document may carry more than the identifying field (Lemonade's
-		// health document does), so pick that field out of it.
-		detail := strings.TrimSpace(out)
-		if m := spec.probe.detail.FindString(out); m != "" {
-			detail = m
+	ctx, cancel := context.WithTimeout(context.Background(), probePodTimeout)
+	defer cancel()
+	// -T is wget's per-read budget and matches the loopback probe's header
+	// timeout, so a server that passed there cannot fail here on a wait this
+	// lab already decided to tolerate.
+	out, err := runProbePod(ctx, platformNamespace, pod, probeImage,
+		[]string{"wget", "-qO-", "-T", strconv.Itoa(int(probeHeaderTimeout.Seconds())), endpoint + spec.probe.path},
+		probePodTimeout)
+	if err == nil {
+		if ident, ok := spec.probe.ident([]byte(out)); ok {
+			note("host %s answers from inside the cluster: %s", server, ident)
+			return nil
 		}
-		note("host %s answers from inside the cluster: %s", server, detail)
-		return nil
+		return fmt.Errorf("something at %s answered the probe, but it is not %s: the document at %s "+
+			"is not this server's.\n"+
+			"  Pods reached the address — this is not a bind or firewall problem — so either\n"+
+			"  platform.modelManager.endpoints.%s points at a different server, or the %s\n"+
+			"  there is older than the API the lab needs.\n"+
+			"  Answer: %.300s",
+			endpoint, server, spec.probe.path, backend, server, strings.TrimSpace(out))
 	}
 	out = strings.TrimSpace(out)
 	reason := "the probe pod could not fetch it"

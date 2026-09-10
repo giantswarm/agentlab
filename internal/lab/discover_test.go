@@ -15,26 +15,31 @@ import (
 
 // Fixture vocabulary, hoisted so the linter's constant check stays quiet.
 const (
-	ollama          = config.ModelManagerBackendOllama
-	lemonade        = config.ModelManagerBackendLemonade
-	lmstudio        = config.ModelManagerBackendLMStudio
-	capCompletion   = "completion"
-	labelChat       = "chat"
-	ollamaVersion   = "0.33.2"
-	lemonadeVersion = "11.9.0"
-	modelQwen35     = "qwen3.5:9b"
-	modelGemma270m  = "gemma3:270m"
-	modelSmollm     = "smollm2:135m"
-	modelQwen3FLM   = "qwen3-it-4b-FLM"
-	modelGemma4bFLM = "gemma3-4b-FLM"
-	modelMoEFLM     = "Qwen3.6-MoE-35B-A3B-FLM"
-	modelQwenVLFLM  = "qwen3vl-it-4b-FLM"
-	fieldData       = "data"
-	fieldOwnedBy    = "owned_by"
-	fieldDownloaded = "downloaded"
-	fieldLabels     = "labels"
-	fieldSize       = "size"
-	labelVision     = "vision"
+	ollama        = config.ModelManagerBackendOllama
+	lemonade      = config.ModelManagerBackendLemonade
+	lmstudio      = config.ModelManagerBackendLMStudio
+	capCompletion = "completion"
+	// opDial is net.OpError's Op for a failed dial, as the stubs build one.
+	opDial = "dial"
+	// hostDockerInternal is the address only the cluster can resolve, which
+	// the loopback fallback exists for.
+	hostDockerInternal = "host.docker.internal"
+	labelChat          = "chat"
+	ollamaVersion      = "0.33.2"
+	lemonadeVersion    = "11.9.0"
+	modelQwen35        = "qwen3.5:9b"
+	modelGemma270m     = "gemma3:270m"
+	modelSmollm        = "smollm2:135m"
+	modelQwen3FLM      = "qwen3-it-4b-FLM"
+	modelGemma4bFLM    = "gemma3-4b-FLM"
+	modelMoEFLM        = "Qwen3.6-MoE-35B-A3B-FLM"
+	modelQwenVLFLM     = "qwen3vl-it-4b-FLM"
+	fieldData          = "data"
+	fieldOwnedBy       = "owned_by"
+	fieldDownloaded    = "downloaded"
+	fieldLabels        = "labels"
+	fieldSize          = "size"
+	labelVision        = "vision"
 	// LM Studio's inventory fields.
 	fieldModels       = "models"
 	fieldKey          = "key"
@@ -197,7 +202,7 @@ func TestEveryBackendHasAProbeAndAReader(t *testing.T) {
 			t.Errorf("backend %q has no table entry", b)
 			continue
 		}
-		if spec.probe.path == "" || spec.probe.marker == "" || spec.probe.detail == nil || spec.probe.ident == nil {
+		if spec.probe.path == "" || spec.probe.ident == nil {
 			t.Errorf("backend %q has an incomplete probe: %+v", b, spec.probe)
 		}
 		if spec.models == nil {
@@ -208,6 +213,28 @@ func TestEveryBackendHasAProbeAndAReader(t *testing.T) {
 		}
 		if spec.proofModel == "" || spec.provider == "" || spec.providerNote == "" {
 			t.Errorf("backend %q has no models-test expectations", b)
+		}
+		// A server that cannot delete leaves its model behind, so the run
+		// ends by naming the host command that removes it. Without this a
+		// fourth such backend passes every test and ends a green run with
+		// "Remove it there: `%!(EXTRA string=…)`".
+		switch {
+		case spec.deleteOverREST && spec.removeHint != "":
+			t.Errorf("backend %q deletes over its API, so it needs no removeHint: %q", b, spec.removeHint)
+		case !spec.deleteOverREST && strings.Count(spec.removeHint, "%s") != 1:
+			t.Errorf("backend %q cannot delete, so removeHint must take the model exactly once: %q", b, spec.removeHint)
+		}
+		// models-test asserts this suffix on the ModelConfig's baseUrl, so a
+		// provider that takes a path must name it.
+		if spec.provider == config.ProviderOpenAI && spec.agentPath == "" {
+			t.Errorf("backend %q wires the OpenAI provider but names no agentPath", b)
+		}
+	}
+	// The other direction: a table entry for a kind config does not list is
+	// unreachable, and reads as support the configuration cannot express.
+	for b := range hostServers {
+		if !slices.Contains(config.ModelManagerBackends, b) {
+			t.Errorf("the lab has a table entry for %q, which config.ModelManagerBackends does not list", b)
 		}
 	}
 }

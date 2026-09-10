@@ -2,7 +2,8 @@ package lab
 
 import (
 	"encoding/json"
-	"regexp"
+	"errors"
+	"fmt"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -22,15 +23,11 @@ type backendProbe struct {
 	// path is the GET that identifies the server. The loopback detection and
 	// the in-cluster preflight fetch the same one.
 	path string
-	// marker is a substring every answer of this server carries. The
-	// preflight runs busybox wget in a pod and its output also holds
-	// kubectl's attach chatter, so nothing there can be parsed.
-	marker string
-	// detail picks the identifying field out of that output for the note.
-	detail *regexp.Regexp
-	// ident reads the body the loopback probe got and returns what the
-	// discovery prints for the server; ok is false when the body is not this
-	// server's answer.
+	// ident reads the document the probe got and returns what the discovery
+	// prints for the server; ok is false when the body is not this server's
+	// answer. The loopback probe and the in-cluster preflight both decide
+	// with it, so "reachable" and "is the server it claims to be" are never
+	// answered by a substring.
 	ident func(body []byte) (string, bool)
 }
 
@@ -50,6 +47,14 @@ type hostServer struct {
 	// models, providerNote how the proof words it.
 	provider     string
 	providerNote string
+	// agentPath is the suffix the ModelConfig's baseUrl must carry — the
+	// OpenAI-compatible surface of this server, which is the ONE thing the
+	// lemonade and lmstudio wirings do not share (/api/v1 against /v1).
+	// Empty where the provider takes no path (the native Ollama one), and
+	// models-test asserts it so providerNote cannot claim a path nobody
+	// checked: a release writing the other one passes the wiring step and
+	// then fails as an opaque agent-turn timeout.
+	agentPath string
 	// deleteOverREST: the server can delete a model through its API. LM
 	// Studio cannot (`lms rm` on the host only), so model-manager reports the
 	// delete capability false and models-test proves the refusal instead.
@@ -65,10 +70,8 @@ type hostServer struct {
 var hostServers = map[string]hostServer{
 	config.ModelManagerBackendOllama: {
 		probe: backendProbe{
-			path:   "/api/version",
-			marker: versionMarker,
-			detail: versionFieldRe,
-			ident:  versionIdent,
+			path:  "/api/version",
+			ident: versionIdent,
 		},
 		models:         ollamaModels,
 		bindFix:        "  - bind Ollama to every interface, not loopback: OLLAMA_HOST=0.0.0.0 (systemd: an\n    Environment= drop-in on ollama.service), then restart it",
@@ -76,14 +79,13 @@ var hostServers = map[string]hostServer{
 		proofModel:     ModelsTestModelOllama,
 		provider:       config.ProviderOllama,
 		providerNote:   "keyless native provider",
+		agentPath:      "",
 		deleteOverREST: true,
 	},
 	config.ModelManagerBackendLemonade: {
 		probe: backendProbe{
-			path:   lemonadeHealthPath,
-			marker: versionMarker,
-			detail: versionFieldRe,
-			ident:  versionIdent,
+			path:  lemonadeHealthPath,
+			ident: versionIdent,
 		},
 		models:         lemonadeModels,
 		bindFix:        "  - bind Lemonade to every interface, not loopback: `lemonade config set host=0.0.0.0`\n    (host in ~/.config/lemonade/config.json), then restart lemond",
@@ -91,14 +93,13 @@ var hostServers = map[string]hostServer{
 		proofModel:     ModelsTestModelLemonade,
 		provider:       config.ProviderOpenAI,
 		providerNote:   "OpenAI-compatible /api/v1, placeholder key",
+		agentPath:      "/api/v1",
 		deleteOverREST: true,
 	},
 	config.ModelManagerBackendLMStudio: {
 		probe: backendProbe{
-			path:   lmStudioModelsPath,
-			marker: lmStudioMarker,
-			detail: lmStudioKeyFieldRe,
-			ident:  lmStudioIdent,
+			path:  lmStudioModelsPath,
+			ident: lmStudioIdent,
 		},
 		models:         lmStudioModels,
 		bindFix:        "  - serve LM Studio on the local network, not loopback: `lms server start --bind 0.0.0.0`\n    (or the app's Developer > \"Serve on Local Network\" toggle, or LMS_SERVER_HOST=0.0.0.0)",
@@ -106,6 +107,7 @@ var hostServers = map[string]hostServer{
 		proofModel:     ModelsTestModelLMStudio,
 		provider:       config.ProviderOpenAI,
 		providerNote:   "OpenAI-compatible /v1, placeholder key",
+		agentPath:      "/v1",
 		deleteOverREST: false,
 		removeHint:     "lms rm %s",
 	},
@@ -117,14 +119,6 @@ func backendSpec(backend string) (hostServer, bool) {
 	s, ok := hostServers[backend]
 	return s, ok
 }
-
-// The identity a version-reporting server answers with: Ollama's whole
-// /api/version document is {"version":"..."}, Lemonade's health document
-// carries the field.
-const versionMarker = `"version"`
-
-// versionFieldRe matches that field in a probe pod's output.
-var versionFieldRe = regexp.MustCompile(`"version"\s*:\s*"[^"]*"`)
 
 // versionIdent reads the version both servers report.
 func versionIdent(body []byte) (string, bool) {
@@ -142,31 +136,62 @@ func versionIdent(body []byte) (string, bool) {
 // envelope is both the identity and the "version" the discovery prints.
 const (
 	lmStudioModelsPath = "/api/v1/models"
-	lmStudioMarker     = `"models"`
 	// lmStudioIdentAPIv1 stands in for the version LM Studio does not report.
 	lmStudioIdentAPIv1 = "api v1"
 )
 
-// lmStudioKeyFieldRe matches the key field of an inventory entry, the detail
-// the preflight quotes back.
-var lmStudioKeyFieldRe = regexp.MustCompile(`"key"\s*:\s*"[^"]*"`)
-
-// lmStudioIdent recognises LM Studio by the shape of its inventory: a
-// `models` array whose entries are keyed by `key`. The array is a pointer so
-// that absent and empty are distinguishable — a fresh install with nothing
-// downloaded is still an LM Studio, while every other answer (including LM
-// Studio's own 200 for an unknown path, and Lemonade's `data` envelope on the
-// very same path) carries no `models` key at all.
-func lmStudioIdent(body []byte) (string, bool) {
+// decodeLMStudioLibrary is the ONE decoder of LM Studio's /api/v1/models
+// document: the fingerprint that recognises the server and the inventory the
+// lab reads are the same question asked of the same body, and two hand-written
+// decoders drifted apart once already ({"models":[{"name":"x"}]} was "not an
+// LM Studio" to one and a one-model library to the other).
+//
+// The array is a pointer so absent and empty are distinguishable — a fresh
+// install with nothing downloaded is still an LM Studio, while every other
+// answer (LM Studio's own 200 for an unknown path, Lemonade's `data` envelope
+// on the very same path) carries no `models` key at all. Entries must be
+// keyed by `key`; anything else is a document this lab cannot read as an
+// inventory, so it is not an LM Studio for either caller's purpose.
+//
+// Everything but an embedding model can serve an agent — a vlm is a chat
+// model with vision, and embedding entries carry no capability object at all
+// — and tool calling is the model's training, which LM Studio reports
+// directly, so there is no second request per model as on Ollama. Size is
+// already bytes: no conversion, unlike Lemonade's decimal GB.
+func decodeLMStudioLibrary(body []byte) ([]HostModel, error) {
 	var doc struct {
 		Models *[]struct {
-			Key string `json:"key"`
+			Key          string `json:"key"`
+			Type         string `json:"type"`
+			SizeBytes    int64  `json:"size_bytes"`
+			Capabilities *struct {
+				TrainedForToolUse bool `json:"trained_for_tool_use"`
+			} `json:"capabilities"`
 		} `json:"models"`
 	}
-	if err := json.Unmarshal(body, &doc); err != nil || doc.Models == nil {
-		return "", false
+	if err := json.Unmarshal(body, &doc); err != nil {
+		return nil, fmt.Errorf("not an LM Studio 0.4.0+ answer (%w)", err)
 	}
-	if len(*doc.Models) > 0 && (*doc.Models)[0].Key == "" {
+	if doc.Models == nil {
+		return nil, errors.New("not an LM Studio 0.4.0+ answer (no `models` array)")
+	}
+	models := make([]HostModel, 0, len(*doc.Models))
+	for _, m := range *doc.Models {
+		if m.Key == "" {
+			return nil, errors.New("not an LM Studio 0.4.0+ answer (an entry carries no `key`)")
+		}
+		if m.Type == lmStudioEmbeddingType || m.Type == lmStudioEmbeddingsType {
+			continue
+		}
+		tools := m.Capabilities != nil && m.Capabilities.TrainedForToolUse
+		models = append(models, HostModel{ID: m.Key, Tools: tools, Size: m.SizeBytes})
+	}
+	return models, nil
+}
+
+// lmStudioIdent recognises LM Studio by whether its inventory decodes at all.
+func lmStudioIdent(body []byte) (string, bool) {
+	if _, err := decodeLMStudioLibrary(body); err != nil {
 		return "", false
 	}
 	return lmStudioIdentAPIv1, true

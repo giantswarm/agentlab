@@ -1,34 +1,21 @@
 package lab
 
 import (
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
 
-// The preflight picks the version field out of the probe pod's output for
-// both servers' documents: Ollama's {"version":...} alone and Lemonade's
-// health document, where version is one field among many.
-func TestVersionFieldRe(t *testing.T) {
-	cases := map[string]string{
-		`{"version":"0.33.2"}`: `"version":"0.33.2"`,
-		`{"all_models_loaded":[],"status":"ok","telemetry":{"enabled":false},"version":"11.9.0","websocket_port":9000}`: `"version":"11.9.0"`,
-	}
-	for in, want := range cases {
-		if got := versionFieldRe.FindString(in); got != want {
-			t.Errorf("FindString(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
-// Each backend's probe fetches its own path, and the marker the preflight
-// greps for is one the server's answer really carries.
+// Each backend's probe fetches its own path.
 func TestBackendProbePaths(t *testing.T) {
-	cases := map[string]struct{ path, marker string }{
-		"ollama":   {"/api/version", `"version"`},
-		"lemonade": {"/api/v1/health", `"version"`},
-		"lmstudio": {"/api/v1/models", `"models"`},
+	cases := map[string]string{
+		ollama:   "/api/version",
+		lemonade: "/api/v1/health",
+		lmstudio: "/api/v1/models",
 	}
 	for backend, want := range cases {
 		spec, known := backendSpec(backend)
@@ -36,8 +23,8 @@ func TestBackendProbePaths(t *testing.T) {
 			t.Errorf("backend %q has no table entry", backend)
 			continue
 		}
-		if spec.probe.path != want.path || spec.probe.marker != want.marker {
-			t.Errorf("%s probe = %q/%q, want %q/%q", backend, spec.probe.path, spec.probe.marker, want.path, want.marker)
+		if spec.probe.path != want {
+			t.Errorf("%s probe path = %q, want %q", backend, spec.probe.path, want)
 		}
 	}
 }
@@ -73,29 +60,23 @@ func TestLMStudioIdent(t *testing.T) {
 	}
 }
 
-// The preflight picks LM Studio's identifying field out of kubectl's combined
-// output, as it does the version field for the other two.
-func TestLMStudioKeyFieldRe(t *testing.T) {
-	in := `{"models":[{"type":"llm","key":"ibm/granite-4-micro"}]}warning: couldn't attach to pod/lmstudio-preflight, falling back to streaming logs`
-	if got, want := lmStudioKeyFieldRe.FindString(in), `"key":"ibm/granite-4-micro"`; got != want {
-		t.Errorf("FindString = %q, want %q", got, want)
-	}
-}
-
 // hostInventory reads the host server from THIS machine, so a pod-facing
-// endpoint the host cannot resolve (Docker Desktop's host.docker.internal,
-// podman's host.containers.internal) must fall back to the server's loopback
-// port — which is where `agentlab configure` found it to begin with.
+// The endpoint the platform dials can be an address only the cluster has
+// (Docker Desktop's host.docker.internal, podman's host.containers.internal).
+// Reading the host's own inventory then has to fall back to loopback — where
+// `agentlab configure` found the server to begin with — and the fallback must
+// key on the dial's OWN answer that the name does not exist, so no live
+// resolver is involved and a hijacking one cannot change the outcome.
 func TestHostInventoryFallsBackToLoopback(t *testing.T) {
 	srv := fakeLMStudio(t)
 	defer srv.Close()
-	const unreachable = "http://host.docker.internal.invalid:1234"
-	dead := "http://127.0.0.1:1"
-
-	// The endpoint answers: taken as is.
 	// The fake's library holds three agent models (its embedding entry is
 	// filtered out by the reader).
 	const agentModels = 3
+	restore := hostModelsFn
+	defer func() { hostModelsFn = restore }()
+
+	// The endpoint answers: taken as is, and reported as the base read.
 	got, base, err := hostInventory(lmstudio, srv.URL)
 	if err != nil || len(got) != agentModels {
 		t.Fatalf("direct read: %d models, err=%v", len(got), err)
@@ -104,27 +85,92 @@ func TestHostInventoryFallsBackToLoopback(t *testing.T) {
 		t.Errorf("direct read must report the endpoint it read: %s", base)
 	}
 
-	// The endpoint does not resolve, the loopback port does: fall back.
-	restore := loopbackBaseFn
-	loopbackBaseFn = func(string) string { return srv.URL }
-	defer func() { loopbackBaseFn = restore }()
-	got, base, err = hostInventory(lmstudio, unreachable)
+	// The endpoint's host does not exist for this machine — the shape of
+	// error a dial gives for that — and loopback answers: fall back, and
+	// report loopback as the base.
+	// The cluster-only name on the fake's port, so the host-only rewrite
+	// (which keeps the endpoint's port) lands on the fake.
+	srvURL, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clusterOnly := "http://" + hostDockerInternal + ":" + srvURL.Port()
+	loopbackRestore := loopbackBaseFn
+	loopbackBaseFn = func(string) string { return "http://127.0.0.1:1234" }
+	defer func() { loopbackBaseFn = loopbackRestore }()
+	hostModelsFn = func(backend, base string) ([]HostModel, error) {
+		if base == clusterOnly {
+			return nil, &net.OpError{Op: opDial, Err: &net.DNSError{Err: "no such host", Name: hostDockerInternal, IsNotFound: true}}
+		}
+		return restore(backend, base)
+	}
+	got, base, err = hostInventory(lmstudio, clusterOnly)
 	if err != nil || len(got) != agentModels {
 		t.Fatalf("fallback read: %d models, err=%v", len(got), err)
 	}
-	if base != srv.URL {
-		t.Errorf("the fallback must report the base it actually read, not the endpoint: %s", base)
+	if want := "http://127.0.0.1:" + srvURL.Port(); base != want {
+		t.Errorf("the fallback must report the base it actually read (%s), not the endpoint: %s", want, base)
 	}
 
 	// Neither answers: the endpoint's own error survives, with the loopback's.
-	loopbackBaseFn = func(string) string { return dead }
-	_, _, err = hostInventory(lmstudio, unreachable)
+	loopbackBaseFn = func(string) string { return "http://127.0.0.1:1" }
+	deadEndpoint := "http://" + hostDockerInternal + ":1"
+	hostModelsFn = func(backend, base string) ([]HostModel, error) {
+		if base == deadEndpoint {
+			return nil, &net.OpError{Op: opDial, Err: &net.DNSError{Err: "no such host", Name: hostDockerInternal, IsNotFound: true}}
+		}
+		return restore(backend, base)
+	}
+	_, _, err = hostInventory(lmstudio, deadEndpoint)
 	if err == nil {
 		t.Fatal("both unreachable must fail")
 	}
-	for _, want := range []string{"host.docker.internal.invalid", "127.0.0.1:1"} {
+	for _, want := range []string{hostDockerInternal, "127.0.0.1:1"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error should name %s: %v", want, err)
+		}
+	}
+}
+
+// A read that fails for any other reason must NOT fall back: a configured LAN
+// endpoint that is merely down would otherwise be silently replaced by a
+// local server of the same kind, whose different library makes the delete
+// assertions report on a machine they never touched.
+func TestHostInventoryFallsBackOnlyForAnUnresolvableHost(t *testing.T) {
+	srv := fakeLMStudio(t)
+	defer srv.Close()
+	loopbackRestore := loopbackBaseFn
+	loopbackBaseFn = func(string) string { return srv.URL }
+	defer func() { loopbackBaseFn = loopbackRestore }()
+	restore := hostModelsFn
+	defer func() { hostModelsFn = restore }()
+
+	const lan = "http://192.0.2.10:11434"
+	hostModelsFn = func(backend, base string) ([]HostModel, error) {
+		if base == lan {
+			return nil, &net.OpError{Op: opDial, Err: errors.New("connection refused")}
+		}
+		return restore(backend, base)
+	}
+	got, base, err := hostInventory(lmstudio, lan)
+	if err == nil {
+		t.Fatalf("a resolvable endpoint that does not answer must fail, got %d models", len(got))
+	}
+	if base != lan {
+		t.Errorf("the failure must name the endpoint that was asked for: %s", base)
+	}
+}
+
+// The fallback replaces the HOST, never the port: an endpoint on a
+// non-default port must fall back to the same port on loopback, or the read
+// lands on whatever else listens on the backend's default port.
+func TestLoopbackForKeepsTheEndpointsPort(t *testing.T) {
+	for _, tc := range []struct{ endpoint, want string }{
+		{"http://" + hostDockerInternal + ":5678", "http://127.0.0.1:5678"},
+		{"http://" + hostDockerInternal, "http://127.0.0.1:1234"},
+	} {
+		if got := loopbackFor(lmstudio, tc.endpoint); got != tc.want {
+			t.Errorf("loopbackFor(%q) = %q, want %q", tc.endpoint, got, tc.want)
 		}
 	}
 }
