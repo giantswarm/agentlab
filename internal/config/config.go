@@ -184,8 +184,8 @@ type Platform struct {
 	// keeps running the build under test until `agentlab platform --pin=false`
 	// (or the key is dropped). Meaningless without chartBranch.
 	ChartPinned bool `yaml:"chartPinned,omitempty"`
-	// Substrate installs kagent's actor runtime (kagent-dev/substrate) on the
-	// cluster before the platform — the kagent of the dev channel (kagent
+	// Substrate installs kagent's actor runtime (the Giant Swarm line of
+	// kagent-dev/substrate, giantswarm/substrate) on the cluster before the platform — the kagent of the dev channel (kagent
 	// main, API v2) runs its agents as Substrate actors and cannot start
 	// without it; the released kagent ignores it. Left unset, it follows the
 	// channel: on with chartBranch (while agents are on), off otherwise.

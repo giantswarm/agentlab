@@ -203,7 +203,10 @@ semverFilter: agent-platform-connectivity 3.22.1-dev…, …)`).
 ### Substrate
 
 The dev channel's kagent (kagent main, API v2) runs every agent as an actor
-on [Substrate](https://github.com/kagent-dev/substrate) — sandboxed (gVisor)
+on Substrate — the Giant Swarm line of
+[kagent-dev/substrate](https://github.com/kagent-dev/substrate), published from
+[giantswarm/substrate](https://github.com/giantswarm/substrate) (its `FORK.md`
+records the pin, the carried patches and the published versions) — sandboxed (gVisor)
 worker pods of a `WorkerPool`, an API server, a per-node agent (`atelet`) and
 the actors' ingress/egress data plane (`atenet`) — and its controller does
 not start without it. The lab installs Substrate as cluster infrastructure
@@ -232,11 +235,14 @@ What `agentlab up` (and `platform`) does, idempotently:
    between two `helm install`s; the lab embeds a Go port of the two commands
    (`substratepools.go`, from substrate 0.0.26) and creates everything first,
    so one waited install suffices (HACKS.md U22);
-3. installs `substrate-crds` and `substrate` 0.0.26 from
-   `oci://ghcr.io/kagent-dev/substrate/helm` into `ate-system` with the
+3. installs `substrate-crds` and `substrate` at the line's pinned version
+   (`substrateVersion` in `internal/lab/substrate.go`: today upstream 0.0.26
+   plus kagent-dev/substrate#33, as a `0.0.27-dev.giantswarm.…` build) from
+   `oci://ghcr.io/giantswarm/substrate/helm` into `ate-system` with the
    chart's own values (`state/substrate-values.yaml`), the images
-   side-loaded like the platform's plus the gVisor worker image the
-   `WorkerPool` names, and waits for ate-api-server, atelet and atenet;
+   (`ghcr.io/giantswarm/substrate/*`) side-loaded like the platform's plus the
+   gVisor worker image the `WorkerPool` names, and waits for ate-api-server,
+   atelet and atenet;
 4. checks the `SandboxConfig gvisor-default` the chart ships is there. The
    `WorkerPool` and the `Harness`es come with the dev channel's kagent.
 
@@ -492,7 +498,7 @@ data the page reads — see [The muster plugin](backstage.md#the-muster-plugin).
 | `kagent.ui.service.type: NodePort`, nodePort 30880 pinned by the kagent `postRenderers` patch | On a real MC the UI sits behind the agentgateway edge; this lab publishes it through the kind port mapping instead (host side `platform.agentsPort`, default 8081). The chart's Service template renders no `nodePort` field, so the fixed node port is a patch (HACKS.md U9). |
 | `components.flux.enabled: true`, `gitops.self.enabled: false` | The lab shape (see [The agent platform](#the-agent-platform-muster--kubernetes-mcp)): a management cluster runs its own Flux and installs the chart through it; the lab has none, so the chart brings the engine — and must not adopt its own release, because the lab installs charts and images that are not released. |
 | The chart pinned to an exact release (`platform.chartVersion`) | Component versions are the chart's own ranges, resolved by its Flux at reconcile time (the fleet's dogfooding track). The chart itself never floats in the lab: two runs install the same thing, and a bump is a deliberate edit with a lab run behind it. |
-| Substrate 0.0.26 installed by the lab ahead of the platform, bootstrap included (`platform.substrate.enabled`, implied by the dev channel) | The dev channel's kagent runs its agents as Substrate actors and cannot start without it, and Substrate is not a meta-chart component yet: its CA/JWT bootstrap is imperative (`kubectl-ate admin make-ca-pool`). The lab ports the two bootstrap commands, creates every object before one waited install and needs the apiserver gates its kind config turns on. See [Dev channel](#dev-channel). |
+| Substrate (the Giant Swarm line of kagent-dev/substrate, `ghcr.io/giantswarm/substrate`, pinned in `substrate.go`) installed by the lab ahead of the platform, bootstrap included (`platform.substrate.enabled`, implied by the dev channel) | The dev channel's kagent runs its agents as Substrate actors and cannot start without it, and Substrate is not a meta-chart component yet: its CA/JWT bootstrap is imperative (`kubectl-ate admin make-ca-pool`). The lab ports the two bootstrap commands, creates every object before one waited install and needs the apiserver gates its kind config turns on. See [Dev channel](#dev-channel). |
 | `mcp-prometheus` as a lab-rendered Flux `HelmRelease` | The one release the lab installs outside the chart rides the same engine, as the same tenant identity, so its lab-only sidecar is a `postRenderers` patch like the others and there is exactly one Helm writer (the embedded Helm, for the chart) and one Flux engine on the cluster. |
 
 ## Platform gotchas
