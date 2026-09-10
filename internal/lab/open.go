@@ -33,9 +33,12 @@ type openTarget struct {
 	notes func(*config.Config) []string
 }
 
-// openTargetPortal is the portal's target name: `up`'s open question opens the
-// same target `agentlab open portal` does.
-const openTargetPortal = "portal"
+// The target names. openTargetPortal is also what `up`'s open question opens,
+// so the question and `agentlab open portal` cannot drift apart.
+const (
+	openTargetPortal = "portal"
+	openTargetAgents = "agents"
+)
 
 // openTargets maps each target name to how it is opened; the table also feeds
 // cobra's ValidArgs via OpenTargets, so dispatch and completion cannot drift.
@@ -60,7 +63,7 @@ var openTargets = map[string]openTarget{
 			return []string{"Sign In -> Dex; users and passwords are in " + config.File}
 		},
 	},
-	"agents": {
+	openTargetAgents: {
 		what: "the kagent UI",
 		// http://localhost:<platform.agentsPort>, a kind-mapped NodePort: no
 		// certificate, so the lab CA plays no part (tls stays false).

@@ -57,7 +57,7 @@ func stubRunning(t *testing.T) *openStubs {
 
 func TestOpenTargetsFeedValidArgs(t *testing.T) {
 	got := OpenTargets()
-	if want := []string{"agents", "portal"}; !slices.Equal(got, want) {
+	if want := []string{openTargetAgents, openTargetPortal}; !slices.Equal(got, want) {
 		t.Fatalf("OpenTargets() = %v, want %v", got, want)
 	}
 	if _, ok := openTargets[openTargetPortal]; !ok {
@@ -83,7 +83,7 @@ func TestOpenTargetURLsFollowTheConfiguration(t *testing.T) {
 			if got := openTargets[openTargetPortal].url(cfg); got != tc.wantPortal {
 				t.Errorf("portal url = %q, want %q", got, tc.wantPortal)
 			}
-			if got := openTargets["agents"].url(cfg); got != tc.wantAgent {
+			if got := openTargets[openTargetAgents].url(cfg); got != tc.wantAgent {
 				t.Errorf("agents url = %q, want %q", got, tc.wantAgent)
 			}
 		})
@@ -129,8 +129,8 @@ func TestOpenRefusesDisabledTargets(t *testing.T) {
 		want   string
 	}{
 		{"backstage off", "portal", func(c *config.Config) { c.Backstage.Enabled = false }, "backstage.enabled"},
-		{"platform off", "agents", func(c *config.Config) { c.Platform.Enabled = false; c.Backstage.Enabled = false }, "platform.enabled"},
-		{"agents off", "agents", func(c *config.Config) { c.Platform.Agents = false }, "platform.agents"},
+		{"platform off", openTargetAgents, func(c *config.Config) { c.Platform.Enabled = false; c.Backstage.Enabled = false }, "platform.enabled"},
+		{"agents off", openTargetAgents, func(c *config.Config) { c.Platform.Agents = false }, "platform.agents"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := stubRunning(t)
@@ -255,7 +255,7 @@ func TestOpenAndTheTrustQuestion(t *testing.T) {
 	})
 	t.Run("the kagent UI never asks", func(t *testing.T) {
 		s := stubOpen(t, false, true, true, nil, "running", nil, true, true)
-		if err := Open(config.Default(), "agents"); err != nil {
+		if err := Open(config.Default(), openTargetAgents); err != nil {
 			t.Fatalf("Open: %v", err)
 		}
 		if s.asked != 0 || s.trusted != 0 {
