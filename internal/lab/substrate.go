@@ -15,15 +15,24 @@ import (
 	"github.com/giantswarm/agentlab/internal/config"
 )
 
-// Substrate (kagent-dev/substrate) is kagent's actor runtime: WorkerPools of
-// sandboxed (gVisor) worker pods that ate-controller schedules actors onto,
-// ate-api-server as their control plane, atelet as the per-node agent and
-// atenet as the actors' ingress/egress data plane. The dev channel's kagent
-// (kagent main, API v2) runs every agent as a Substrate actor and cannot
-// start without it, so the lab installs Substrate as cluster infrastructure
-// ahead of the platform when platform.substrate.enabled says so
-// (config.SubstrateEnabled — implied by the dev channel); the released
-// kagent ignores it. docs/platform.md "Dev channel".
+// Substrate is kagent's actor runtime: WorkerPools of sandboxed (gVisor)
+// worker pods that ate-controller schedules actors onto, ate-api-server as
+// their control plane, atelet as the per-node agent and atenet as the actors'
+// ingress/egress data plane. The dev channel's kagent (kagent main, API v2)
+// runs every agent as a Substrate actor and cannot start without it, so the
+// lab installs Substrate as cluster infrastructure ahead of the platform when
+// platform.substrate.enabled says so (config.SubstrateEnabled — implied by
+// the dev channel); the released kagent ignores it. docs/platform.md "Dev
+// channel".
+//
+// The lab consumes the Giant Swarm line of Substrate — giantswarm/substrate,
+// branch `giantswarm`: the upstream (kagent-dev/substrate) release the
+// platform's kagent pins in its go.mod plus cherry-picked upstream fixes,
+// published by the fork's own workflow as multi-arch images and charts under
+// ghcr.io/giantswarm/substrate with dev versions
+// `<next upstream patch>-dev.giantswarm.<date>.<time>.h<sha7>` (no `v`
+// prefix on the tags). Its FORK.md is the ledger: pin, carried patches,
+// re-pin procedure, published digests.
 //
 // Not a meta-chart component (yet): Substrate needs an imperative bootstrap
 // the chart does not render — the CA and JWT pools its signers and
@@ -38,11 +47,13 @@ import (
 // config for every cluster (kind-config.yaml.tmpl).
 //
 // Pinned like the observability charts: Go consts, bumped deliberately, with
-// a lab run.
+// a lab run. The version is an exact published version of the line (the
+// fork's publish workflow names it in its run summary); it moves only
+// together with kagent's Substrate pin.
 const (
-	substrateVersion       = "0.0.26"
-	substrateChartsRepo    = "oci://ghcr.io/kagent-dev/substrate/helm"
-	substrateImageRegistry = "ghcr.io/kagent-dev/substrate"
+	substrateVersion       = "0.0.27-dev.giantswarm.2026-09-10.19-33-37.h734ec53"
+	substrateChartsRepo    = "oci://ghcr.io/giantswarm/substrate/helm"
+	substrateImageRegistry = "ghcr.io/giantswarm/substrate"
 )
 
 // The namespaces and releases. ate-system is hardcoded in the chart
@@ -99,8 +110,9 @@ const podCertificateAPIPath = "/apis/certificates.k8s.io/v1beta1"
 // ateomGVisorImage is the worker image the WorkerPool the dev channel's
 // kagent creates names (`workerImage:`, no `image:` line in any render), so
 // the preload lists it explicitly — pulled once here instead of at the first
-// actor's boot.
-const ateomGVisorImage = substrateImageRegistry + "/ateom-gvisor:v" + substrateVersion
+// actor's boot. The line tags its images with the bare version (upstream's
+// carry a `v`).
+const ateomGVisorImage = substrateImageRegistry + "/ateom-gvisor:" + substrateVersion
 
 // The SandboxConfig the chart ships, which every gVisor WorkerPool names.
 const (
