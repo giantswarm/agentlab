@@ -182,11 +182,13 @@ func usersBlock(cfg *config.Config) string {
 
 func tryItBlock(cfg *config.Config) string {
 	var cmds [][2]string
-	switch {
-	case cfg.Backstage.Enabled:
-		cmds = append(cmds, [2]string{"agentlab open portal", "the portal in the browser"})
-	case cfg.Platform.Enabled && cfg.Platform.Agents:
-		cmds = append(cmds, [2]string{"agentlab open agents", "the kagent UI in the browser"})
+	// The names come from the open table (open.go), so a renamed target
+	// cannot leave a Try it line that refuses when run.
+	if cfg.Backstage.Enabled {
+		cmds = append(cmds, [2]string{"agentlab open " + openTargetPortal, "the portal in the browser"})
+	}
+	if cfg.Platform.Enabled && cfg.Platform.Agents {
+		cmds = append(cmds, [2]string{"agentlab open " + openTargetAgents, "the kagent UI in the browser"})
 	}
 	cmds = append(cmds,
 		[2]string{"agentlab login " + cfg.AdminUser().Email, "headless, prints the token claims"},

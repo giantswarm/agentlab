@@ -148,6 +148,10 @@ func Open(cfg *config.Config, target string) error {
 		case trustAsk:
 			installed, aborted := offerTrust(cfg, nil)
 			if aborted {
+				// Ctrl-C answers the question, it does not cancel what the
+				// person asked for: no browser tab after an interrupt, but
+				// the URL is what this command exists to hand over.
+				fmt.Printf("%s is at %s\n", t.what, url)
 				return nil
 			}
 			justTrusted = installed

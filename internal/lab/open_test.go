@@ -310,7 +310,7 @@ func TestOpenAndTheTrustQuestion(t *testing.T) {
 			t.Fatalf("asked %d, trusted %d, opened %v", s.asked, s.trustRun, s.opened)
 		}
 	})
-	t.Run("Ctrl-C opens nothing", func(t *testing.T) {
+	t.Run("Ctrl-C opens nothing but keeps the URL", func(t *testing.T) {
 		lab := runningLab()
 		lab.caTrusted, lab.terminal, lab.answerErr = false, true, forms.ErrAborted
 		s := lab.install(t)
@@ -354,15 +354,21 @@ func TestTryItBlockLeadsWithOpen(t *testing.T) {
 		want   string
 	}{
 		{"the canonical lab", func(*config.Config) {}, "agentlab open portal"},
+		{"portal and agents both listed", func(*config.Config) {}, "agentlab open agents"},
 		{"no portal, but agents", func(c *config.Config) { c.Backstage.Enabled = false }, "agentlab open agents"},
 		{"neither", func(c *config.Config) { c.Backstage.Enabled = false; c.Platform.Agents = false }, "agentlab login"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := config.Default()
 			tc.mutate(cfg)
-			lines := strings.Split(strings.TrimLeft(tryItBlock(cfg), "\n"), "\n")
-			if len(lines) < 2 || !strings.Contains(lines[1], tc.want) {
-				t.Fatalf("Try it block:\n%s\nwant %q first", tryItBlock(cfg), tc.want)
+			block := tryItBlock(cfg)
+			lines := strings.Split(strings.TrimLeft(block, "\n"), "\n")
+			if !strings.Contains(block, tc.want) {
+				t.Fatalf("Try it block:\n%s\nwant a %q line", block, tc.want)
+			}
+			// Whatever else it lists, the block leads with a way in.
+			if len(lines) < 2 || !strings.Contains(lines[1], "agentlab open") && cfg.Backstage.Enabled {
+				t.Fatalf("Try it block:\n%s\nwant `agentlab open` first", block)
 			}
 		})
 	}
