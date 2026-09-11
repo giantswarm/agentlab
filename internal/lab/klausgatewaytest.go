@@ -951,6 +951,12 @@ func (w *webClient) send(ctx context.Context, msg webMessage, timeout time.Durat
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		if ctx.Err() != nil {
+			// The deadline fired before the stream's headers arrived: the
+			// gateway had the message and sees the connection close — a
+			// stop all the same.
+			return &webTurn{Status: http.StatusOK, Cut: true}, nil
+		}
 		return nil, fmt.Errorf("POST %s: %w", webMessagesPath, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
