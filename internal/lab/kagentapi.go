@@ -450,11 +450,15 @@ func (a *kagentAPI) getInstance(ctx context.Context, id string) (*apiv1alpha1.Ag
 	return resp.GetAgentInstance(), nil
 }
 
+// listPageLimit is the largest page the controller's list calls validate
+// (page.limit 0..100).
+const listPageLimit = 100
+
 // listInstances is AgentInstanceService/ListAgentInstances for the person:
 // the instances the controller keeps for them (creator-scoped), every page.
 func (a *kagentAPI) listInstances(ctx context.Context) ([]*apiv1alpha1.AgentInstance, error) {
 	var all []*apiv1alpha1.AgentInstance
-	page := &apiv1alpha1.PageRequest{Limit: 200}
+	page := &apiv1alpha1.PageRequest{Limit: listPageLimit}
 	for {
 		resp, err := a.instances.ListAgentInstances(a.callCtx(ctx), &apiv1alpha1.ListAgentInstancesRequest{Page: page})
 		if err != nil {
@@ -464,7 +468,7 @@ func (a *kagentAPI) listInstances(ctx context.Context) ([]*apiv1alpha1.AgentInst
 		if resp.GetPage().GetNextPageToken() == "" {
 			return all, nil
 		}
-		page = &apiv1alpha1.PageRequest{Limit: 200, PageToken: resp.GetPage().GetNextPageToken()}
+		page = &apiv1alpha1.PageRequest{Limit: listPageLimit, PageToken: resp.GetPage().GetNextPageToken()}
 	}
 }
 

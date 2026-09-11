@@ -288,8 +288,12 @@ func (f *fakeKagent) GetAgentInstance(ctx context.Context, req *apiv1alpha1.GetA
 	return &apiv1alpha1.GetAgentInstanceResponse{AgentInstance: inst}, nil
 }
 
-func (f *fakeKagent) ListAgentInstances(ctx context.Context, _ *apiv1alpha1.ListAgentInstancesRequest) (*apiv1alpha1.ListAgentInstancesResponse, error) {
+func (f *fakeKagent) ListAgentInstances(ctx context.Context, req *apiv1alpha1.ListAgentInstancesRequest) (*apiv1alpha1.ListAgentInstancesResponse, error) {
 	f.record(ctx, "ListAgentInstances")
+	// The controller's validation of the page.
+	if limit := req.GetPage().GetLimit(); limit < 0 || limit > 100 {
+		return nil, status.Errorf(codes.InvalidArgument, "validation error: page.limit: must be greater than or equal to 0 and less than or equal to 100")
+	}
 	who, err := edge(ctx)
 	if err != nil {
 		return nil, err
