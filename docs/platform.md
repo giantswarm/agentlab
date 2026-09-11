@@ -353,7 +353,7 @@ listener (with the old shape the gs.2 dataplane refused its config and the
 first roll never became ready). The lab's Substrate pin follows that build
 (`0.0.27-dev.giantswarm.2026-09-11.02-07-06.h213d76b`), and the WorkerPool's
 worker image with it. On it the proof passed on both halves with the check in
-place: RESULT_PENDING. Every skill-carrying agent of the fleet needs all three
+place: Ready after 15s on Harness kagent, the turn as admin@lab.local answered "klaus-gateway" from the skill, nothing left behind (revision a8949e0f2c79); platform-test 6/6 and agents-test 5/5 green on the same lab. Every skill-carrying agent of the fleet needs all three
 gates open; the upstream exits of the two patches are tracked on
 giantswarm/giantswarm#37742 (row 8).
 
