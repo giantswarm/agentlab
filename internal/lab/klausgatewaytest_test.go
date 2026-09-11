@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -518,6 +519,34 @@ func TestMusterAttribution(t *testing.T) {
 // TestGatewayProcessLog: the bound instance is read from the last
 // instance_bound record, the count follows the records, the version from the
 // starting record; a log without a binding says so.
+// TestGatewayProcessExitsBeforeHealthy: a gateway that dies before serving
+// its health endpoint (the documented negative: a 0.x image rejecting the
+// transport flags) fails start() promptly with its exit, and the stop() on
+// that path returns — the process's end must satisfy every later wait.
+func TestGatewayProcessExitsBeforeHealthy(t *testing.T) {
+	bin, err := exec.LookPath("false")
+	if err != nil {
+		t.Skip("no false binary")
+	}
+	g := newGatewayProcess(KlausGatewayTestOptions{GatewayBinary: bin, Port: 18099}.withDefaults(), t.TempDir(), "/ca", "grpcs://x:1")
+	done := make(chan error, 1)
+	go func() { done <- g.start() }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "exited before serving "+webHealthPath) {
+			t.Errorf("start() = %v, want the exit before serving", err)
+		}
+	case <-time.After(klausGatewayStartWait):
+		t.Fatal("start() hung after the gateway exited")
+	}
+	if g.cmd != nil || g.exited != nil {
+		t.Error("a failed start left the process fields set")
+	}
+	if err := g.stop(); err != nil {
+		t.Errorf("stop() after the failed start: %v", err)
+	}
+}
+
 func TestGatewayProcessLog(t *testing.T) {
 	dir := t.TempDir()
 	g := newGatewayProcess(KlausGatewayTestOptions{GatewayBinary: "/bin/x"}.withDefaults(), dir, "/ca", "grpcs://x:1")

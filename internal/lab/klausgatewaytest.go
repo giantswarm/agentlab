@@ -333,7 +333,11 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	if left := klausGatewayLeftovers(api); len(left) > 0 {
 		return fmt.Errorf("left behind: %s", strings.Join(left, "; "))
 	}
-	note("nothing left in the kagent namespace; gateway stopped, run directory removed")
+	runDirFate := "removed"
+	if opts.RunDir != "" {
+		runDirFate = "kept at " + runDir
+	}
+	note("nothing left in the kagent namespace; gateway stopped, run directory %s", runDirFate)
 
 	fmt.Println()
 	fmt.Printf("PASS: klaus-gateway %s ran on the host against %s (TLS with the lab CA, JWT validated at the edge) and listed AgentTemplate %s with its display name and icon on GET %s as %s; %s (no admission label) was hidden and refused with the reason\n",
@@ -636,8 +640,11 @@ type gatewayProcess struct {
 	target  string
 	cmd     *exec.Cmd
 	logFile *os.File
-	// done receives the process's Wait result once it has ended.
-	done chan error
+	// exited is closed once the process has ended; exitErr is its Wait result.
+	// A closed channel satisfies every later wait, so a gateway that died
+	// before serving is noticed by the health probe and stop() still returns.
+	exited  chan struct{}
+	exitErr error
 }
 
 func newGatewayProcess(opts KlausGatewayTestOptions, runDir, caFile, target string) *gatewayProcess {
@@ -714,18 +721,13 @@ func (g *gatewayProcess) start() error {
 		g.cmd, g.logFile = nil, nil
 		return fmt.Errorf("starting klaus-gateway (%s): %w", g.describe(), err)
 	}
-	g.done = make(chan error, 1)
-	go func(cmd *exec.Cmd, done chan<- error) { done <- cmd.Wait() }(g.cmd, g.done)
+	g.exited = make(chan struct{})
+	go func(cmd *exec.Cmd, exited chan<- struct{}) { g.exitErr = cmd.Wait(); close(exited) }(g.cmd, g.exited)
 
 	client := &http.Client{Timeout: 2 * time.Second}
-	var exit error
-	ended := false
 	healthy := waitFor(int(klausGatewayStartWait/(500*time.Millisecond)), 500*time.Millisecond, func() bool {
-		select {
-		case exit = <-g.done:
-			ended = true
+		if g.ended() {
 			return true
-		default:
 		}
 		resp, err := client.Get(g.baseURL() + webHealthPath)
 		if err != nil {
@@ -734,16 +736,26 @@ func (g *gatewayProcess) start() error {
 		_ = resp.Body.Close()
 		return resp.StatusCode == http.StatusOK
 	})
-	if ended || !healthy {
+	if g.ended() || !healthy {
 		why := fmt.Sprintf("did not become healthy at %s%s within %s", g.baseURL(), webHealthPath, klausGatewayStartWait)
-		if ended {
-			why = fmt.Sprintf("exited before serving %s (%v)", webHealthPath, exit)
+		if g.ended() {
+			why = fmt.Sprintf("exited before serving %s (%v)", webHealthPath, g.exitErr)
 		}
 		log := tailLines(g.logs(), 8)
 		_ = g.stop()
 		return fmt.Errorf("klaus-gateway (%s) %s; its log ends:\n%s", g.describe(), why, log)
 	}
 	return nil
+}
+
+// ended reports whether the gateway process has exited (exitErr says how).
+func (g *gatewayProcess) ended() bool {
+	select {
+	case <-g.exited:
+		return true
+	default:
+		return false
+	}
 }
 
 // stop ends the gateway: SIGTERM (docker stop for the container) and a
@@ -759,12 +771,12 @@ func (g *gatewayProcess) stop() error {
 		_ = g.cmd.Process.Signal(syscall.SIGTERM)
 	}
 	select {
-	case <-g.done:
+	case <-g.exited:
 	case <-time.After(klausGatewayStopWait):
 		_ = g.cmd.Process.Kill()
-		<-g.done
+		<-g.exited
 	}
-	g.cmd, g.done = nil, nil
+	g.cmd, g.exited = nil, nil
 	if g.logFile != nil {
 		_ = g.logFile.Close()
 		g.logFile = nil
