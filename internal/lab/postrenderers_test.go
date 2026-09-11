@@ -23,6 +23,13 @@ const (
 	devBackstageFull    = "docker.io/library/" + devBackstageRef
 	chartMusterImage    = "gsoci.azurecr.io/giantswarm/muster"
 	chartBackstageImage = "gsoci.azurecr.io/giantswarm/backstage"
+	devControllerRef    = "kagent-controller:dev-139"
+	devHarnessRepo      = "golang-adk"
+	devHarnessRef       = devHarnessRepo + ":dev-139"
+	devTag              = "dev"
+	// lineControllerImage is the controller's name on the kagent line, as its
+	// chart renders it (the table's fallback is the 3.x wrapper's).
+	lineControllerImage = "ghcr.io/giantswarm/kagent/controller"
 )
 
 // The dev-image swap spells the ref the way containerd lists a side-loaded
@@ -33,8 +40,8 @@ func TestDevImageOverride(t *testing.T) {
 		want kustomizeImage
 	}{
 		{devMusterRef, kustomizeImage{Name: chartMusterImage, NewName: devMusterName, NewTag: "dev-1a2b"}},
-		{"giantswarm/muster:dev", kustomizeImage{Name: chartMusterImage, NewName: "docker.io/giantswarm/muster", NewTag: "dev"}},
-		{"localhost:5000/muster:dev", kustomizeImage{Name: chartMusterImage, NewName: "localhost:5000/muster", NewTag: "dev"}},
+		{"giantswarm/muster:dev", kustomizeImage{Name: chartMusterImage, NewName: "docker.io/giantswarm/muster", NewTag: devTag}},
+		{"localhost:5000/muster:dev", kustomizeImage{Name: chartMusterImage, NewName: "localhost:5000/muster", NewTag: devTag}},
 		{"gsoci.azurecr.io/giantswarm/muster:5.14.1", kustomizeImage{Name: chartMusterImage, NewName: chartMusterImage, NewTag: "5.14.1"}},
 		{"muster@sha256:" + strings.Repeat("a", 64), kustomizeImage{Name: chartMusterImage, NewName: devMusterName, Digest: "sha256:" + strings.Repeat("a", 64)}},
 	}
@@ -66,17 +73,31 @@ func TestFullImageRef(t *testing.T) {
 // componentPostRenderers is the lab's whole patch set as the chart forwards
 // it: Flux's postRenderers shape per component, the hostNetwork patches on
 // muster and Backstage, the sidecar on every MCP server, the UI NodePort on
-// kagent — and, for a dev image, the kustomize image override plus the pull
-// policy patch on its container, nothing on the others.
+// kagent — and, for a dev image, the kustomize image override on the name the
+// render resolved plus the pull policy patch on its container, nothing on the
+// others. The `harness` target is no post-renderer: it pins the platform
+// Harness through the values.
 func TestComponentPostRenderers(t *testing.T) {
 	cfg := config.Default()
 	cfg.Platform.Agents = true
 	cfg.Platform.Observability = true
 	cfg.Platform.ModelManager = config.ModelManager{Enabled: true, Backends: []string{ollama}}
-	cfg.Platform.DevImages = map[string]string{componentMuster: devMusterRef, componentBackstage: devBackstageRef}
-	rendered, err := componentPostRenderers(cfg)
+	cfg.Platform.DevImages = map[string]string{
+		componentMuster:        devMusterRef,
+		componentBackstage:     devBackstageRef,
+		componentKagent:        devControllerRef,
+		config.DevImageHarness: devHarnessRef,
+	}
+	names := defaultDevImageNames(cfg)
+	// The controller's name as the kagent line's render says it (devimages.go).
+	names[componentKagent] = lineControllerImage
+	rendered, err := componentPostRenderers(cfg, names)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// The harness is not a component: nothing renders under its key.
+	if raw, ok := rendered[config.DevImageHarness]; ok {
+		t.Errorf("harness: the Harness pins its image through the values, got postRenderers:\n%s", raw)
 	}
 	// The connectivity chart is not patched: its kagent controller metrics
 	// Service selects kagent's own release since agent-platform 3.20.2.
@@ -142,13 +163,39 @@ func TestComponentPostRenderers(t *testing.T) {
 	if len(backstage.Kustomize.Images) != 1 || backstage.Kustomize.Images[0].Name != chartBackstageImage || backstage.Kustomize.Images[0].NewTag != "tools-84e5" {
 		t.Errorf("backstage dev image: got %+v", backstage.Kustomize.Images)
 	}
-	if refs := devImageRefs(cfg); len(refs) != 2 || refs[0] != devBackstageFull || refs[1] != devMusterFull {
+	// The controller override replaces the name the line renders, not the
+	// table's wrapper name, and relaxes the pull policy on container
+	// `controller` of Deployment kagent-controller.
+	kagent := parse(componentKagent)
+	if want := (kustomizeImage{Name: lineControllerImage, NewName: "docker.io/library/kagent-controller", NewTag: "dev-139"}); len(kagent.Kustomize.Images) != 1 || kagent.Kustomize.Images[0] != want {
+		t.Errorf("kagent dev image: got %+v, want %+v", kagent.Kustomize.Images, want)
+	}
+	if got := patchOn(componentKagent, kindDeployment, "kagent-controller"); len(got) != 1 || !strings.Contains(got[0], "name: controller\n          imagePullPolicy: IfNotPresent") {
+		t.Errorf("kagent: want the pull-policy patch on container controller, got %q", got)
+	}
+	// The side-load list is the Deployment targets: the harness image goes to
+	// the registry instead.
+	if refs := devImageRefs(cfg); len(refs) != 3 || refs[0] != devBackstageFull || refs[1] != "docker.io/library/kagent-controller:dev-139" || refs[2] != devMusterFull {
 		t.Errorf("devImageRefs = %v", refs)
+	}
+	if got := harnessDevImage(cfg); got != devHarnessRef {
+		t.Errorf("harnessDevImage = %q", got)
+	}
+	// A configured target whose name did not resolve renders no override
+	// (resolveDevImageNames refuses that case before the render; here the
+	// table simply has no entry).
+	delete(names, componentMuster)
+	rendered, err = componentPostRenderers(cfg, names)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if imgs := parse(componentMuster).Kustomize.Images; len(imgs) != 0 {
+		t.Errorf("muster without a resolved name: want no override, got %+v", imgs)
 	}
 
 	// Without agents and managed models the optional servers render nothing.
 	cfg.Platform.Agents, cfg.Platform.ModelManager.Enabled, cfg.Platform.DevImages = false, false, nil
-	rendered, err = componentPostRenderers(cfg)
+	rendered, err = componentPostRenderers(cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,12 +204,16 @@ func TestComponentPostRenderers(t *testing.T) {
 			t.Errorf("%s: off, want no postRenderers", c)
 		}
 	}
-	// Every dev-image component has a render target — the config's list and
-	// the lab's table cannot drift apart.
+	// Every Deployment target of the config's list has a render target — the
+	// list and the lab's table cannot drift apart; the harness is the one
+	// key that is no Deployment.
 	for _, c := range config.DevImageComponents {
-		if _, ok := devImageTargets[c]; !ok {
+		if _, ok := devImageTargets[c]; !ok && c != config.DevImageHarness {
 			t.Errorf("config.DevImageComponents names %s, but devImageTargets has no render target for it", c)
 		}
+	}
+	if _, ok := devImageTargets[config.DevImageHarness]; ok {
+		t.Errorf("the harness target is no Deployment; devImageTargets must not list it")
 	}
 }
 

@@ -83,6 +83,15 @@ type tmplData struct {
 	PostRenderers              map[string]string
 	MCPPrometheusPostRenderers string
 	MCPPrometheusChartVersion  string
+	// HarnessDevImage is the `harness` dev image as the platform Harness pins
+	// it — the lab registry's ref by digest (devimages.go), forwarded as
+	// kagent.harness.image; empty without the target, or in a render that
+	// cannot ask the registry. LocalRegistryEndpoint is the lab registry as
+	// Substrate's atelet reaches it on the kind docker network
+	// (--localhost-registry-replacement): a fixed name per cluster, rendered
+	// whenever the agents are, so the flag is in place before any swap.
+	HarnessDevImage       string
+	LocalRegistryEndpoint string
 }
 
 func newTmplData(cfg *config.Config) (*tmplData, error) {
@@ -97,7 +106,9 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 			endpoints = map[string]string{}
 		}
 	}
-	postRenderers, err := componentPostRenderers(cfg)
+	// The dev-image overrides with the table's names: `agentlab platform`
+	// re-renders with the names the component renders say (devimages.go).
+	postRenderers, err := componentPostRenderers(cfg, defaultDevImageNames(cfg))
 	if err != nil {
 		return nil, err
 	}
@@ -110,6 +121,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		PostRenderers:              postRenderers,
 		MCPPrometheusPostRenderers: strings.TrimRight(string(mcpPrometheus), "\n"),
 		MCPPrometheusChartVersion:  mcpPrometheusChartVersion,
+		LocalRegistryEndpoint:      devRegistryEndpoint(cfg),
 		ModelManagerEnabled:        cfg.ModelManagerEnabled(),
 		ModelManagerBackends:       cfg.Platform.ModelManager.Backends,
 		ModelManagerEndpoints:      endpoints,
@@ -165,6 +177,10 @@ var tmplFuncs = template.FuncMap{
 	},
 }
 
+// platformValuesTemplate renders the meta chart's lab values (the lab
+// shape, platform.go).
+const platformValuesTemplate = "agent-platform-values.yaml.tmpl"
+
 // renderTemplate renders one embedded template with the config; mutate, when
 // given, adjusts the template data first (the platform run hands
 // extra-models.yaml.tmpl the statically wired host models this way).
@@ -199,7 +215,7 @@ var manifests = map[string]struct {
 }{
 	"kind-config.yaml.tmpl":                  {out: "kind-config.yaml"},
 	"rbac.yaml.tmpl":                         {out: "rbac.yaml"},
-	"agent-platform-values.yaml.tmpl":        {out: "agent-platform-values.yaml"},
+	platformValuesTemplate:                   {out: "agent-platform-values.yaml"},
 	"kube-prometheus-stack-values.yaml.tmpl": {out: "kube-prometheus-stack-values.yaml"},
 	mcpPrometheusTemplate:                    {out: "mcp-prometheus.yaml"},
 	"observability-route.yaml.tmpl":          {out: "observability-route.yaml"},

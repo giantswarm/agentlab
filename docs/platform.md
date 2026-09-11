@@ -78,36 +78,100 @@ the boot says which chart it installed. The directory is read, never written.
 ## Dev images
 
 To run a component from a build of your own, build the image, and name it
-under `platform.devImages` keyed by the chart's component name (`muster`,
-`backstage`, `kagent` — the controller —, `mcp-kubernetes`, `model-manager`,
-`agent-manager`):
+under `platform.devImages`. The targets are the chart's component names for
+the Deployments the lab can swap — `muster`, `backstage`, `kagent` (the
+controller), `mcp-kubernetes`, `model-manager`, `agent-manager` — and
+`harness`, the platform Harness's runtime image (the Go ADK every agent runs
+on under kagent API v2):
 
 ```yaml
 platform:
   devImages:
     muster: muster:dev-1a2b3c
     backstage: backstage-dev:my-feature-4d5e6f
+    kagent: kagent-controller:dev-7e8f9a      # the line's controller, built from go/ of giantswarm/kagent-upstream
+    harness: golang-adk:dev-7e8f9a            # the Go ADK, same checkout, BUILD_PACKAGE=adk/cmd/main.go
 ```
+
+Either way the swap is part of the release: `agentlab platform` renders it
+into the values it installs, so the same plain `helm upgrade` applies it, and
+removing the entry restores the chart's image on the next run. Use a
+distinctive tag per build — kind's containerd keeps running the old bits
+under a reused tag, and a Harness digest that did not change recompiles
+nothing.
+
+### Deployment targets
 
 `agentlab platform` side-loads the image from the host docker cache into the
 node, checks the node lists it before anything installs (a missing image
 fails right there with its fix, instead of five minutes later as an
 `ImagePullBackOff`, a helm-controller timeout and a rollback to the chart's
 image), and renders it into that component's `postRenderers` as a Kustomize
-image override with `imagePullPolicy: IfNotPresent`, so the swap is part of
-the release: the same plain `helm upgrade` applies it, `kubectl get deploy -o
-jsonpath` shows the new image, and removing the entry restores the chart's
-image on the next run. Use a distinctive tag per build — kind's containerd
-keeps running the old bits under a reused tag. And make it a build of its
-own, not a re-tag of a registry image the kubelet has pulled (a chart that
-pulls `Always`, like Backstage's, makes the kubelet pull): since Kubernetes
-1.33 the kubelet remembers which image IDs it pulled and re-pulls a pod's ref
-that maps to one of them (`KubeletEnsureSecretPulledImages`), so such a
-re-tag ends in `ImagePullBackOff` against Docker Hub while a real build — a
-new image ID, side-loaded, never pulled by the kubelet — is used as is. (A `kubectl patch` on the
-Deployment still works for a quick look, but only until helm-controller's
-next release of that component overwrites it — the values are the durable
-path.)
+image override with `imagePullPolicy: IfNotPresent`; `kubectl get deploy -o
+jsonpath` shows the new image. Make it a build of its own, not a re-tag of a
+registry image the kubelet has pulled (a chart that pulls `Always`, like
+Backstage's, makes the kubelet pull): since Kubernetes 1.33 the kubelet
+remembers which image IDs it pulled and re-pulls a pod's ref that maps to one
+of them (`KubeletEnsureSecretPulledImages`), so such a re-tag ends in
+`ImagePullBackOff` against Docker Hub while a real build — a new image ID,
+side-loaded, never pulled by the kubelet — is used as is. (A `kubectl patch`
+on the Deployment still works for a quick look, but only until
+helm-controller's next release of that component overwrites it — the values
+are the durable path.)
+
+The image name the override replaces is read off the component chart's
+render, the one the boot renders anyway to side-load the platform images —
+not from a table, because it differs between lines: the `kagent` target
+replaces `gsoci.azurecr.io/giantswarm/kagent-controller` under the 3.x meta
+chart (the wrapper chart) and `ghcr.io/giantswarm/kagent/controller` under
+4.x (the kagent line's own chart), whatever Deployment `kagent-controller`'s
+`controller` container names. A Kustomize image override whose name is in no
+rendered object matches nothing, and kustomize drops it without a word — so
+a target whose chart rendered without the Deployment and container the lab
+patches is **refused before the install**, naming both (`platform.devImages.kagent:
+the kagent chart's render has no Deployment kagent-controller with a container
+controller …`); a chart that did not render at all (the preload reports why)
+falls back to the table's name with a note that it is unverified.
+
+### The `harness` target
+
+Under kagent API v2 an agent runs on the platform Harness's workload image,
+not on a Deployment the lab could patch: the connectivity chart renders the
+image **by digest** into the `Harness` object `kagent` (the CRD accepts no
+tag), and Substrate's atelet fetches it from a registry into its own layer
+cache — the actors' overlay lowerdirs — never through the node's containerd,
+so a side-load is invisible to it. The lab therefore runs a **registry**
+for this target: a `registry` container named `<clusterName>-registry` on
+the kind docker network, published on the host's loopback
+(`platform.devRegistryPort`, default 5001, kind's documented local-registry
+port; created on demand, removed by `agentlab down`). `agentlab platform`
+tags the build into it (`localhost:<port>/<path of your ref>:<tag>`), pushes,
+reads the manifest digest the registry computed, and forwards
+`kagent.harness.image: localhost:<port>/<path>@sha256:<digest>` through the
+meta chart to the connectivity chart. atelet's side of the pattern,
+`--localhost-registry-replacement=<clusterName>-registry:5000` (a `localhost`
+registry in an image ref is rewritten to that endpoint and pulled over plain
+HTTP), is part of the lab shape whenever the agents are on — through the
+meta chart's `substrate.atelet.extraArgs`, forwarded to its substrate
+component — not only while a dev image is configured: the flag is inert for every other
+ref, and having it in place before a swap means the Harness's new digest
+(the connectivity release) can never race ahead of the atelet roll (the
+substrate release) that would carry it. The boot then asserts the Harness
+pins the dev digest, and — because a **digest-pinned Harness recompiles
+every template it admits** (a new golden snapshot per revision) — lists the
+admitted templates as they come back Ready on it
+(`Harness kagent runs localhost:5001/golang-adk@sha256:…; 1 admitted templates
+recompiled on it: my-agent 88c11e… -> ebfce6…`). Removing the entry restores
+the chart's digest on the next run — again one `helm upgrade`, again a
+recompile. A `platform.valuesFiles` overlay that sets `kagent.harness.image`
+itself (the way a lab pins a published build) or replaces
+`substrate.atelet.extraArgs` (lists replace in a Helm merge) is refused while
+the target is configured.
+
+Because atelet keys its cache by digest, the kubelet re-pull trap above does
+not apply here, and a pushed image is pulled once per node. The mechanism
+needs the platform Harness, so the target is for the 4.x meta chart with
+the agents on; the 3.x line has no Harness.
 
 muster runs with `hostNetwork`, so it binds `:8090` on the node, and the
 rendered kind config publishes that onto the Mac (host port `platform.musterPort`,

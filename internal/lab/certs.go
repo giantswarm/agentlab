@@ -52,7 +52,7 @@ const (
 // dexSANNames are the DNS names of the Dex server cert: the issuer name
 // (localhost — see docs/identity.md on why not 127.0.0.1) plus the in-cluster
 // service names. Also the fixed half of the CA's name constraints.
-var dexSANNames = []string{"localhost", componentDex, "dex.dex.svc", "dex.dex.svc.cluster.local"}
+var dexSANNames = []string{localhostName, componentDex, "dex.dex.svc", "dex.dex.svc.cluster.local"}
 
 // permittedDNSNames is the CA's DNS name-constraint allowlist: the platform
 // domain plus the fixed lab names. Everything a lab leaf will ever carry,

@@ -136,7 +136,7 @@ func PlatformUp(cfg *config.Config, offers Offers) error {
 func platformTopologyFor(cfg *config.Config) platformTopology {
 	var roster *platformRoster
 	if cfg.Platform.Enabled {
-		_, valuesPath, err := renderManifest(cfg, "agent-platform-values.yaml.tmpl")
+		_, valuesPath, err := renderManifest(cfg, platformValuesTemplate)
 		if err == nil {
 			var values map[string]any
 			if values, err = helmValuesFiles(append([]string{valuesPath}, cfg.Platform.ValuesFiles...)...); err == nil {
@@ -312,7 +312,7 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 		}
 	}
 
-	_, valuesPath, err := renderManifest(cfg, "agent-platform-values.yaml.tmpl")
+	_, valuesPath, err := renderManifest(cfg, platformValuesTemplate)
 	if err != nil {
 		return err
 	}
@@ -361,20 +361,38 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	// anything this misses is pulled in-node under the install's wait
 	// timeout, exactly as before.
 	step("Side-loading the platform images (the host cache survives `agentlab down`)")
-	sideloadPlatformImages(cfg, platformImages(cfg, roster))
-	// The dev images (platform.devImages) are builds of this host: never
-	// pullable, always side-loaded, so their pods find them under
-	// imagePullPolicy IfNotPresent — which is why each ref is then verified
-	// in the node's own image list before the install (ensureNodeImages): a
-	// missing one would surface five minutes later as an ImagePullBackOff,
-	// helm-controller's upgrade timeout and a rollback to the chart's image.
+	images, renders := platformImages(cfg, roster)
+	sideloadPlatformImages(cfg, images)
+	// The dev images (platform.devImages, devimages.go): the Deployment
+	// targets side-loaded and their chart image names read off the component
+	// renders above, the `harness` image pushed to the lab registry and
+	// pinned by digest — then the values rendered once more with what only
+	// the cluster and the registry could say, so the release carries the
+	// swap. The Harness's state before the install is what the recompile
+	// report afterwards compares against.
+	var dev *devImages
+	var harnessBefore harnessState
 	if len(cfg.Platform.DevImages) > 0 {
-		refs := devImageRefs(cfg)
-		if res := sideloadImages(cfg, hostPullImages(refs)); res.n > 0 {
-			note("side-loaded %d dev images (%s)", res.n, res.d)
-		}
-		if err := ensureNodeImages(cfg, refs); err != nil {
+		if dev, err = prepareDevImages(cfg, renders); err != nil {
 			return err
+		}
+		mutate, err := dev.templateData(cfg)
+		if err != nil {
+			return err
+		}
+		if _, valuesPath, err = renderManifestWith(cfg, platformValuesTemplate, mutate); err != nil {
+			return err
+		}
+		if values, err = helmValuesFiles(append([]string{valuesPath}, cfg.Platform.ValuesFiles...)...); err != nil {
+			return err
+		}
+		if err := dev.checkValues(cfg, values); err != nil {
+			return err
+		}
+		if dev.harness != "" {
+			if harnessBefore, err = readHarnessState(ctx); err != nil {
+				return err
+			}
 		}
 	}
 	// The dex-localhost sidecar the lab patches onto the MCP servers
@@ -415,6 +433,11 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	}
 	if err := waitPlatformReleases(); err != nil {
 		return err
+	}
+	if dev != nil && dev.harness != "" {
+		if err := reportHarnessDevImage(ctx, dev, harnessBefore); err != nil {
+			return err
+		}
 	}
 
 	// The lab's own MCP server for the Prometheus tools rides the same engine
@@ -587,7 +610,7 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 %s
 %s
 %s
-%s%s`, header, reach, usersBlock(cfg), backstageHint, claudeCodeHint(cfg), agentsHint, modelManagerHint(cfg, backendEndpoints), obsHint, devImagesHint(cfg), tryItBlock(cfg))
+%s%s`, header, reach, usersBlock(cfg), backstageHint, claudeCodeHint(cfg), agentsHint, modelManagerHint(cfg, backendEndpoints), obsHint, devImagesHint(cfg, dev), tryItBlock(cfg))
 	// Everything the platform runs is in the node now — record it so the next
 	// boot side-loads instead of pulling.
 	snapshotPreloadImages(cfg)
@@ -796,15 +819,20 @@ func orNone(s string) string {
 }
 
 // devImagesHint lists the dev images in the boot summary, so a lab running a
-// build of yours says so where you look first.
-func devImagesHint(cfg *config.Config) string {
+// build of yours says so where you look first: the harness target with the
+// registry ref the platform Harness pins.
+func devImagesHint(cfg *config.Config, dev *devImages) string {
 	if len(cfg.Platform.DevImages) == 0 {
 		return ""
 	}
 	var b strings.Builder
 	b.WriteString("\n  Dev images (platform.devImages; remove the entry and re-run `agentlab platform` to restore the chart's):\n")
 	for _, name := range slices.Sorted(maps.Keys(cfg.Platform.DevImages)) {
-		fmt.Fprintf(&b, "    %-16s %s\n", name, cfg.Platform.DevImages[name])
+		ref := cfg.Platform.DevImages[name]
+		if name == config.DevImageHarness && dev != nil && dev.harness != "" {
+			ref += "  (Harness " + platformHarness + " pins " + dev.harness + ")"
+		}
+		fmt.Fprintf(&b, "    %-16s %s\n", name, ref)
 	}
 	return b.String()
 }

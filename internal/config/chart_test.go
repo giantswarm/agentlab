@@ -81,6 +81,30 @@ func TestChartSourceValidation(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("devImages for muster, backstage, kagent: %v", err)
 	}
+	// The harness target is the platform Harness's image: it comes with the
+	// agents, and the registry that serves it has a host port of its own.
+	cfg.Platform.DevImages = map[string]string{DevImageHarness: "golang-adk:dev-139"}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("devImages.harness with agents on: %v", err)
+	}
+	if cfg.Platform.DevRegistryPort != DefaultDevRegistryPort {
+		t.Errorf("default devRegistryPort = %d, want %d", cfg.Platform.DevRegistryPort, DefaultDevRegistryPort)
+	}
+	cfg.Platform.DevRegistryPort = 0
+	cfg.Normalize()
+	if cfg.Platform.DevRegistryPort != DefaultDevRegistryPort {
+		t.Errorf("Normalize left devRegistryPort %d, want the default", cfg.Platform.DevRegistryPort)
+	}
+	cfg.Platform.DevRegistryPort = 70000
+	if err := cfg.Validate(); err == nil {
+		t.Error("devRegistryPort out of range: want an error")
+	}
+	cfg.Platform.DevRegistryPort = DefaultDevRegistryPort
+	cfg.Platform.Agents = false
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "platform.agents") {
+		t.Errorf("devImages.harness without agents: want the error naming platform.agents, got %v", err)
+	}
+	cfg.Platform.Agents = true
 
 	cfg.Platform.ValuesFiles = []string{filepath.Join(t.TempDir(), "missing.yaml")}
 	if err := cfg.Validate(); err == nil {
