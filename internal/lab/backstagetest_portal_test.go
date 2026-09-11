@@ -46,6 +46,8 @@ const (
 	fieldMessageID    = "messageId"
 	fieldArtifactID   = "artifactId"
 	fieldTools        = "tools"
+	fieldRole         = "role"
+	frameArtifact     = "artifactUpdate"
 )
 
 // fakePortal is the fake Backstage backend: a handler per route, the muster
@@ -289,13 +291,13 @@ func TestPortalValidateAgent(t *testing.T) {
 func streamFixture(state string) string {
 	frames := []map[string]any{
 		{"task": map[string]any{"id": testTaskID, fieldContextID: testContextID, fieldStatus: map[string]any{fieldState: "TASK_STATE_SUBMITTED"},
-			"history": []map[string]any{{fieldMessageID: "m-1", "role": "ROLE_USER", fieldParts: []map[string]any{{fieldText: "Reply with exactly the word pong."}}}}}},
+			"history": []map[string]any{{fieldMessageID: "m-1", fieldRole: "ROLE_USER", fieldParts: []map[string]any{{fieldText: "Reply with exactly the word pong."}}}}}},
 		{"statusUpdate": map[string]any{fieldTaskID: testTaskID, fieldContextID: testContextID, fieldStatus: map[string]any{fieldState: taskStateWorking}}},
-		{"artifactUpdate": map[string]any{fieldTaskID: testTaskID, fieldArtifact: map[string]any{fieldArtifactID: testArtifactID, fieldParts: []map[string]any{{fieldText: "p"}}}}},
-		{"artifactUpdate": map[string]any{fieldTaskID: testTaskID, fieldArtifact: map[string]any{fieldArtifactID: testArtifactID, fieldParts: []map[string]any{{fieldText: "ong"}}}, "append": true}},
-		{"artifactUpdate": map[string]any{fieldTaskID: testTaskID, fieldArtifact: map[string]any{fieldArtifactID: testArtifactID, fieldParts: []map[string]any{{fieldText: testPong}}}, "lastChunk": true}},
+		{frameArtifact: map[string]any{fieldTaskID: testTaskID, fieldArtifact: map[string]any{fieldArtifactID: testArtifactID, fieldParts: []map[string]any{{fieldText: "p"}}}}},
+		{frameArtifact: map[string]any{fieldTaskID: testTaskID, fieldArtifact: map[string]any{fieldArtifactID: testArtifactID, fieldParts: []map[string]any{{fieldText: "ong"}}}, "append": true}},
+		{frameArtifact: map[string]any{fieldTaskID: testTaskID, fieldArtifact: map[string]any{fieldArtifactID: testArtifactID, fieldParts: []map[string]any{{fieldText: testPong}}}, "lastChunk": true}},
 		{"statusUpdate": map[string]any{fieldTaskID: testTaskID, fieldContextID: testContextID, "final": true,
-			fieldStatus: map[string]any{fieldState: state, "message": map[string]any{fieldMessageID: "m-2", "role": "ROLE_AGENT", fieldParts: []map[string]any{{fieldText: testPong}}}}}},
+			fieldStatus: map[string]any{fieldState: state, "message": map[string]any{fieldMessageID: "m-2", fieldRole: "ROLE_AGENT", fieldParts: []map[string]any{{fieldText: testPong}}}}}},
 	}
 	var b strings.Builder
 	for _, f := range frames {
@@ -365,7 +367,7 @@ func TestStreamTurn(t *testing.T) {
 // paused without the extension carries none.
 func TestHITLRequestOf(t *testing.T) {
 	paused := map[string]any{"id": testTaskID, fieldStatus: map[string]any{fieldState: taskStateInputRequired, fieldMessage: map[string]any{
-		fieldMessageID: "m", "role": "ROLE_AGENT",
+		fieldMessageID: "m", fieldRole: "ROLE_AGENT",
 		fieldParts:    []any{map[string]any{fieldText: "Please approve or reject the tool call filter_tools()"}},
 		fieldMetadata: map[string]any{hitlExtensionURI: map[string]any{fieldType: hitlToolApprovalType, "hint": hitlDecisionApprove, fieldTools: []any{map[string]any{nameKey: "filter_tools", "args": map[string]any{"query": "namespaces"}, "id": "adk-1", "call_id": "toolu_1"}}}},
 		"extensions":  []any{hitlExtensionURI},
