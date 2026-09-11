@@ -76,9 +76,9 @@ var (
 
 // The floor follows the enabled components and the chart's topology. The
 // full default lab on the 4.x line reproduces the live measurement the
-// constants come from (3340m / 4388Mi requested, ~4.6 GiB in use on
+// constants come from (3340m / 4388Mi requested, ~4.4 GiB in use on
 // 2026-09-11) and lands on the Docker resources table's rows: 4 CPUs and
-// 5.6 GiB (the WorkerPool's four workers are a CPU of requests by
+// 5.5 GiB (the WorkerPool's four workers are a CPU of requests by
 // themselves, the apiserver and Prometheus most of the use). A chart without
 // Substrate and the platform Postgres — the 0.10 product's 3.x line — budgets
 // kagent's bundled Postgres and six agent pods instead: the 4 CPUs of old.
@@ -97,7 +97,7 @@ func TestLabResourceNeeds(t *testing.T) {
 	}{
 		"the 4.x line, full default lab with model-manager (the measured lab)": {
 			cfg: labConfig(true, true, true, true, true), topo: fourX,
-			cpu: 3340, mem: 4388, use: 4605, minCPUs: 4, minMem: 5756,
+			cpu: 3340, mem: 4388, use: 4535, minCPUs: 4, minMem: 5668,
 			groups: "kind control plane,Dex,agent platform,agents runtime,model-manager,Substrate,platform Postgres,Backstage,Flux engine,observability",
 		},
 		"the 4.x line without agents: no runtime, nothing for Substrate or the Cluster to serve": {
@@ -107,12 +107,12 @@ func TestLabResourceNeeds(t *testing.T) {
 		},
 		"the 4.x line, full default lab without model-manager": {
 			cfg: labConfig(true, true, true, true, false), topo: fourX,
-			cpu: 3285, mem: 4308, use: 4590, minCPUs: 4, minMem: 5737,
+			cpu: 3285, mem: 4308, use: 4520, minCPUs: 4, minMem: 5650,
 			groups: "kind control plane,Dex,agent platform,agents runtime,Substrate,platform Postgres,Backstage,Flux engine,observability",
 		},
 		"the 4.x line, platform + agents only (the docs' smaller lab)": {
 			cfg: labConfig(true, true, false, false, true), topo: fourX,
-			cpu: 3015, mem: 3794, use: 3495, minCPUs: 4, minMem: 4368,
+			cpu: 3015, mem: 3794, use: 3425, minCPUs: 4, minMem: 4281,
 			groups: "kind control plane,Dex,agent platform,agents runtime,model-manager,Substrate,platform Postgres,Flux engine",
 		},
 		"the 3.x line, full default lab with model-manager: the bundled Postgres, six agent pods of headroom": {
@@ -200,7 +200,7 @@ func TestJudgeRuntimeResourcesRefusesTooFewCPUs(t *testing.T) {
 		"Docker Desktop: Settings -> Resources",
 		"colima start --cpu 4 --memory 6",
 		"agentlab configure --backstage=false --observability=false",
-		"needs 4 CPUs and 4.3 GiB",
+		"needs 4 CPUs and 4.2 GiB",
 		`docs/getting-started.md "Docker resources"`,
 	} {
 		// The breakdown is word-wrapped: compare on one line.
@@ -247,13 +247,13 @@ func TestJudgeRuntimeResourcesFloorFollowsConfiguration(t *testing.T) {
 // loud warning; below the requests nothing schedules, so it is refused.
 func TestJudgeRuntimeResourcesMemory(t *testing.T) {
 	cfg := labConfig(true, true, true, true, true)
-	needs := labResourceNeeds(cfg, fourX) // 4388Mi requested, 4605Mi in use, floor 5756Mi
+	needs := labResourceNeeds(cfg, fourX) // 4388Mi requested, 4535Mi in use, floor 5668Mi
 
 	warning, err := judgeRuntimeResources(measure(6, 5120), cfg, fourX, needs)
 	if err != nil {
 		t.Fatalf("5 GiB is below the floor but above the requests — a warning, not a refusal: %v", err)
 	}
-	for _, want := range []string{"docker has 5.0 GiB of memory", "wants 5.6 GiB", "request 4.3 GiB", "use about 4.5 GiB", "OOM", "colima start --cpu 4 --memory 6"} {
+	for _, want := range []string{"docker has 5.0 GiB of memory", "wants 5.5 GiB", "request 4.3 GiB", "use about 4.4 GiB", "OOM", "colima start --cpu 4 --memory 6"} {
 		if !strings.Contains(warning, want) {
 			t.Errorf("warning lacks %q:\n%s", want, warning)
 		}
@@ -268,7 +268,7 @@ func TestJudgeRuntimeResourcesMemory(t *testing.T) {
 	if warning, err := judgeRuntimeResources(measure(6, 8192), cfg, fourX, needs); err != nil || warning != "" {
 		t.Errorf("6 CPUs / 8 GiB is the Docker resources page's recommendation and must pass silently, got warning %q, err %v", warning, err)
 	}
-	if warning, err := judgeRuntimeResources(measure(4, 5756), cfg, fourX, needs); err != nil || warning != "" {
+	if warning, err := judgeRuntimeResources(measure(4, 5668), cfg, fourX, needs); err != nil || warning != "" {
 		t.Errorf("exactly the floor passes without a warning, got warning %q, err %v", warning, err)
 	}
 }

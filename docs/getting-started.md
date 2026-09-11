@@ -60,12 +60,12 @@ second what the containers' memory working sets summed to):
 | the agent platform: muster + valkey, agentgateway + controller, mcp-kubernetes, agent-manager | 510m | 736 MiB | 245 MiB |
 | the agents runtime: kagent controller + UI | 200m | 384 MiB | 75 MiB |
 | Agent Substrate (from the chart): the WorkerPool's four gVisor workers at 250m/512Mi each; the control plane in `ate-system` (ate-api-server ×2, ate-controller, atelet, atenet router/egress/dns, RustFS) and the podcertificate-controller declare nothing | 1000m | 2048 MiB | 480 MiB (a worker idles at 9 MiB) |
-| the platform Postgres (from the chart): the CloudNativePG operator and the one-instance Cluster declare nothing | 0 | 0 | ~250 MiB |
+| the platform Postgres (from the chart): the CloudNativePG operator and the one-instance Cluster declare nothing | 0 | 0 | ~180 MiB (the operator 63, the instance 114 right after its bootstrap) |
 | model-manager | 55m | 80 MiB | 15 MiB |
 | Backstage | 20m | 250 MiB | 400 MiB |
 | the chart's Flux engine: the Flux Operator plus the `FluxInstance`'s source-controller and helm-controller (the lab shape brings it with the platform — it delivers every component and the agents) | 250m | 192 MiB | 320 MiB |
 | observability: kube-state-metrics + mcp-prometheus (the Prometheus server, its operator and node-exporter declare nothing) | 305m | 344 MiB | 710 MiB (the server 564 MiB) |
-| **total** | **≈ 3.3 CPU** | **≈ 4.3 GiB** | **≈ 4.6 GiB** |
+| **total** | **≈ 3.3 CPU** | **≈ 4.3 GiB** | **≈ 4.4 GiB** |
 
 On a chart without Agent Substrate and the platform Postgres — the 0.10
 product's 3.x line — kagent's bundled PostgreSQL (250m / 256 MiB) takes the
@@ -86,8 +86,8 @@ Give docker at least:
 
 | | CPUs | Memory |
 |---|---|---|
-| the full default lab (platform + agents + observability + Backstage) | **4** | **6 GiB** (the floor is 5.6 GiB; whole GiB) |
-| platform + agents only (`configure --backstage=false --observability=false`) | 4 (the WorkerPool is a CPU of requests by itself) | 5 GiB (4.3 GiB) |
+| the full default lab (platform + agents + observability + Backstage) | **4** | **6 GiB** (the floor is 5.5 GiB; whole GiB) |
+| platform + agents only (`configure --backstage=false --observability=false`) | 4 (the WorkerPool is a CPU of requests by itself) | 5 GiB (4.2 GiB) |
 | the platform without agents (`configure --agents=false`) | 3 | 4 GiB (3.3 GiB) |
 
 Those are the floors `agentlab up` enforces — computed for what the chart

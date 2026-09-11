@@ -29,8 +29,9 @@ import (
 // declare far less than they use, Substrate's WorkerPool reserves far more).
 // The 4.x line was measured on 2026-09-11 (agent-platform 4.7.11: kagent
 // 0.11.0-gs.3, Substrate 0.0.27-gs.5, the full default lab with model-manager
-// on kind v1.37.0, a node up for 19 hours): 3340m / 4388Mi requested, about
-// 4.6 GiB in use. docs/getting-started.md "Docker resources" is the human
+// on kind v1.37.0, a node up for 19 hours): 3340m / 4388Mi requested — the
+// node's Allocated resources read exactly that — about 4.4 GiB in use.
+// docs/getting-started.md "Docker resources" is the human
 // copy of these constants — its table lists the same groups — so a change
 // here is a change there.
 
@@ -139,10 +140,11 @@ const (
 	useSubstrateMem = 480
 	// The platform Postgres (the 4.x line, from the chart): the CloudNativePG
 	// operator and the one-instance Cluster the lab renders declare nothing.
-	// In use: the operator and the instance together.
+	// In use, right after the bootstrap: the operator 63Mi, the instance
+	// (kagent-pg-1, both databases created) 114Mi.
 	reqCNPGCPU = 0
 	reqCNPGMem = 0
-	useCNPGMem = 250
+	useCNPGMem = 180
 	// Backstage requests almost nothing and uses several times its 250Mi
 	// (400Mi measured).
 	reqBackstageCPU = 20
