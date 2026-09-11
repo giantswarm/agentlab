@@ -185,12 +185,26 @@ func resolveBackendEndpoint(cfg *config.Config, backend string) (string, error) 
 	// what resolves to this machine from inside the cluster — so the endpoint
 	// follows what answers, and an installation on such a runtime needs no
 	// endpoints override to reach its own model servers.
-	if !nodeDialAnswers(node, net.JoinHostPort(gw, strconv.Itoa(port))) {
-		if alias := hostAlias(); nodeDialAnswers(node, net.JoinHostPort(alias, strconv.Itoa(port))) {
-			return fmt.Sprintf("http://%s:%d", alias, port), nil
-		}
+	//
+	// A probe that could not run is not a verdict: it leaves the gateway, the
+	// documented default, so a busy node cannot change the rendered values.
+	// A gateway that definitively does NOT answer is never returned — wiring
+	// it would install a release against an address known not to work — so
+	// either the alias answers or this is an error naming both attempts.
+	gwAnswers, err := nodeDial(node, net.JoinHostPort(gw, strconv.Itoa(port)))
+	if err != nil || gwAnswers {
+		return fmt.Sprintf("http://%s:%d", gw, port), nil
 	}
-	return fmt.Sprintf("http://%s:%d", gw, port), nil
+	alias := hostAlias()
+	aliasAnswers, aliasErr := nodeDial(node, net.JoinHostPort(alias, strconv.Itoa(port)))
+	switch {
+	case aliasErr != nil:
+		return fmt.Sprintf("http://%s:%d", gw, port), nil
+	case aliasAnswers:
+		return fmt.Sprintf("http://%s:%d", alias, port), nil
+	}
+	return "", fmt.Errorf("no address reaches the host %s from pods: %s does not answer (the container runtime's gateway) and neither does %s (its host alias) — start the server, bind it to every interface, or set platform.modelManager.endpoints.%s",
+		config.BackendServerName(backend), net.JoinHostPort(gw, strconv.Itoa(port)), net.JoinHostPort(alias, strconv.Itoa(port)), backend)
 }
 
 // resolveBackendEndpoints resolves every configured backend's endpoint.

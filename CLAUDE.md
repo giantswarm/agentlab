@@ -97,9 +97,13 @@ with Dex doing the logins.
   kagent (native keyless `Ollama` provider; `OpenAI` for the servers behind
   an OpenAI-compatible API). Every object the API returns names its backend,
   every request may name one, and each ModelConfig carries the
-  `model-manager.giantswarm.io/backend` label. Endpoints are autodetected
-  (`docker network inspect kind` gateway + the server's default port) and
-  every server is proven reachable from a pod before the install; the API
+  `model-manager.giantswarm.io/backend` label. Endpoints are autodetected —
+  the `docker network inspect kind` gateway, or the container runtime's host
+  alias (`host.docker.internal`, podman's `host.containers.internal`) where
+  that gateway is a bridge inside the runtime's VM, whichever answers when
+  dialled from inside the node — and a server pods cannot reach on either is
+  reported and left out of the backends list. Every server is proven reachable
+  from a pod before the install; the API
   sits behind the agentgateway route
   `https://agentgateway.<domain>/model-manager` with JWT validation on (a Dex
   token is required; 401 without). Proof: `./agentlab models-test` (see

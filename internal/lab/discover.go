@@ -109,22 +109,37 @@ func Discover(cfg *config.Config) *Discovery {
 			continue
 		}
 		s := HostServer{Backend: b, Ident: ident, Port: config.BackendPort(b)}
-		if d.KindGateway != "" {
+		// Reachability needs both an address pods dial and a node to dial it
+		// from. The kind network outlives `kind delete cluster`, so a gateway
+		// without a node is the normal state after `agentlab down` — probing
+		// then would record "unreachable" from a probe that cannot run.
+		if d.KindGateway != "" && d.ClusterExists {
+			node := cfg.ControlPlaneNode()
 			port := strconv.Itoa(s.Port)
-			answers, err := hostServerAnswers(cfg.ControlPlaneNode(), net.JoinHostPort(d.KindGateway, port))
+			answers, err := hostServerAnswers(node, net.JoinHostPort(d.KindGateway, port))
 			switch {
 			case err != nil:
 				s.ReachErr = err
-			default:
+			case answers:
 				s.OnGateway = &answers
-				if answers {
-					s.PodHost = d.KindGateway
-				} else if alias := hostAlias(); nodeDialAnswers(cfg.ControlPlaneNode(), net.JoinHostPort(alias, port)) {
-					// The gateway is not this machine (a runtime in a VM),
-					// but the alias is, from inside the cluster. Autodetecting
-					// it is what keeps the server usable without an endpoints
-					// override no form asks for.
-					s.PodHost = alias
+				s.PodHost = d.KindGateway
+			default:
+				// The gateway is not this machine (a runtime in a VM), so the
+				// runtime's host alias is the only other address pods have
+				// for it. Autodetecting that is what keeps the server usable
+				// without an endpoints override no form asks for.
+				alias := hostAlias()
+				aliasAnswers, aliasErr := nodeDial(node, net.JoinHostPort(alias, port))
+				switch {
+				case aliasErr != nil:
+					// Neither verdict is in: say nothing rather than drop the
+					// server on a probe that did not run.
+					s.ReachErr = aliasErr
+				default:
+					s.OnGateway = &answers
+					if aliasAnswers {
+						s.PodHost = alias
+					}
 				}
 			}
 		}
@@ -153,10 +168,11 @@ func hostAlias() string {
 // Reachable means on the kind gateway OR on the runtime's host alias, so a
 // runtime in a VM enrolls its servers like a native one.
 //
-// Unknown reachability still enrolls: OnGateway is nil while there is no kind
-// network to probe (a fresh machine, or after `agentlab down`), and a lab that
-// has not booted yet must still be configurable. Only an explicit "no" is
-// left out, and Report says so where it says the rest.
+// Unknown reachability still enrolls: OnGateway is nil while there is no node
+// to probe from — a fresh machine, or after `agentlab down`, which leaves the
+// kind network behind but no container to dial from — and a lab that has not
+// booted yet must still be configurable. Only an explicit "no" is left out,
+// and Report says so where it says the rest.
 func (d *Discovery) Backends() []string {
 	var out []string
 	for _, s := range d.Servers {
@@ -360,7 +376,15 @@ func hostServerAnswers(node, addr string) (bool, error) {
 // nodeDial dials addr from inside the node, which is the only vantage point
 // that can answer for an address the host cannot resolve (the runtime's host
 // alias). An error is the probe itself failing, never a verdict.
+//
+// The node has to be running, and that is checked rather than inferred:
+// `docker exec` into a container that is not there exits 1, exactly as bash
+// does on a refused dial, so without this a missing node would read as
+// "nothing is listening".
 func nodeDial(node, addr string) (bool, error) {
+	if !nodeRunning(node) {
+		return false, fmt.Errorf("dialing %s: node %q is not running", addr, node)
+	}
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return false, fmt.Errorf("probing %s: %w", addr, err)
@@ -383,12 +407,11 @@ func nodeDial(node, addr string) (bool, error) {
 	}
 }
 
-// nodeDialAnswers is nodeDial where a failed probe is not a verdict: the
-// alias fallback only ever adds an address, so it can treat "cannot tell" as
-// "no".
-func nodeDialAnswers(node, addr string) bool {
-	answers, err := nodeDial(node, addr)
-	return err == nil && answers
+// nodeRunning reports whether the node container is up, the precondition of
+// every probe that dials from inside it.
+func nodeRunning(node string) bool {
+	out, err := outputQuiet("docker", "inspect", "-f", "{{.State.Running}}", node)
+	return err == nil && strings.TrimSpace(out) == "true"
 }
 
 // exitCode digs the process exit status out of a wrapped command error; -1

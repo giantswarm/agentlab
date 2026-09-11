@@ -336,8 +336,6 @@ func TestDiscoveryBackendsAndHint(t *testing.T) {
 	if got := mixed.Backends(); !slices.Equal(got, []string{ollama, lmstudio}) {
 		t.Fatalf("backends = %v, want the reachable and the unknown one only", got)
 	}
-	// The report still names the server that was left out, with its fix.
-
 	// A server that answers on neither the gateway nor the alias is left out,
 	// and the report says so with the bind fix — which is the fix there,
 	// because a gateway that is this machine can be bound to.
@@ -347,6 +345,18 @@ func TestDiscoveryBackendsAndHint(t *testing.T) {
 	}
 	if !strings.Contains(report, "host=0.0.0.0") {
 		t.Errorf("a server reachable nowhere must get the bind fix:\n%s", report)
+	}
+	// The form's own line marks what the answer will not enrol: listing a
+	// server the configuration then drops reads as a promise it does not keep.
+	wantHint := "Ollama 0.33.2 (:11434), Lemonade Server 11.9.0 (:13305) — pods cannot reach it, " +
+		"so it is not enrolled, LM Studio api v1 (:1234)"
+	if got := mixed.ModelServersHint(); got != wantHint {
+		t.Errorf("hint = %q, want %q", got, wantHint)
+	}
+	// An empty discovery hints nothing: forms.modelServersHint answers the
+	// "none found" case from the backend table instead.
+	if (&Discovery{}).ModelServersHint() != "" {
+		t.Error("an empty discovery should hint nothing")
 	}
 
 	// Reachable on the alias instead of the gateway: enrolled, and the report
@@ -370,7 +380,6 @@ func TestDiscoveryBackendsAndHint(t *testing.T) {
 			t.Errorf("a reachable server needs no bind fix (%q):\n%s", forbidden, aliasReport)
 		}
 	}
-
 }
 
 // The node-side dial answers about the SERVER only when it actually ran: a
@@ -391,7 +400,10 @@ func TestHostServerAnswersUnderPodman(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
-			installFakeTool(t, dir, "docker", "exit "+strconv.Itoa(tc.exit))
+			// A running node whose dial exits tc.exit: `docker inspect` is the
+			// precondition nodeDial checks, and only `docker exec` carries the
+			// dial's own code.
+			installFakeTool(t, dir, "docker", "case \"$1\" in inspect) echo true ;; *) exit "+strconv.Itoa(tc.exit)+" ;; esac")
 			withPodman(t, true)
 			got, err := hostServerAnswers("agentlab-control-plane", "169.254.1.2:11434")
 			if (err != nil) != tc.wantProbe {
@@ -399,6 +411,26 @@ func TestHostServerAnswersUnderPodman(t *testing.T) {
 			}
 			if !tc.wantProbe && got != tc.want {
 				t.Errorf("answers = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A node that is not running cannot answer for the server, and `docker exec`
+// into a missing container exits 1 — the same code bash uses for a refused
+// dial. Reading that as "nothing is listening" dropped a server from the
+// configuration after `agentlab down`, which leaves the kind network (and so
+// the gateway) behind with no container to dial from.
+func TestNodeDialNeedsARunningNode(t *testing.T) {
+	for name, inspect := range map[string]string{
+		"node is gone":        "exit 1",
+		"node is not running": "echo false",
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			installFakeTool(t, dir, "docker", "case \"$1\" in inspect) "+inspect+" ;; *) exit 1 ;; esac")
+			if _, err := nodeDial("agentlab-control-plane", "169.254.1.2:11434"); err == nil {
+				t.Fatal("a probe that cannot run must be an error, not a verdict")
 			}
 		})
 	}
