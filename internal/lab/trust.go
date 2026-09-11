@@ -87,6 +87,11 @@ func SystemTrusted() bool {
 	return cert != nil && certTrustedBySystem(cert)
 }
 
+// systemTrusted indirects SystemTrusted for the code that decides whether to
+// ask (open.go, the end of `up`). A variable so tests can stand in for the
+// system trust store.
+var systemTrusted = SystemTrusted
+
 // certTrustedBySystem verifies cert against the OS trust store. Go
 // snapshots the system pool once per process, so the answer is
 // point-in-time: fresh for every CLI run; the TUI's row catches up on its

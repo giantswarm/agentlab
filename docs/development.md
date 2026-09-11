@@ -12,7 +12,7 @@ go test ./internal/forms/ -run TestMinimalFormDrive -count=1 -v   # one test
 its discovery and port logic, the form (driven with scripted keystrokes), the
 renderer, the `postRenderers` patches, the docker resource floors, the
 fixtures' arithmetic and the proofs' parsers. The lab's end-to-end checks are
-its own `*-test` subcommands — see [Proofs](cli.md#proofs) — run against a
+its own `*-test` subcommands — see [Testing](cli.md#testing) — run against a
 live lab.
 
 A `go build` from a checkout reports Go's pseudo-version (`agentlab
@@ -109,11 +109,12 @@ internal/lab/                    everything operational:
   anthropic.go                     the API key: host environment -> Secret, never config or state/
   adk.go kagentcrd.go              kagent workarounds (HACKS.md U8, U11)
   observability.go                 the lab Prometheus (kube-prometheus-stack through the embedded Helm) and the mcp-prometheus HelmRelease through the platform's engine
-  backstage.go backstagetest.go    Backstage deploy + headless sign-in proof
+  backstagetest.go                 the headless Backstage sign-in proof
   portal.go mcpsession.go          one user's signed-in portal session; the proofs' MCP session against muster
   kube.go                          the embedded Kubernetes client: server-side apply, reads, deletes, rollouts, the can-i/whoami reviews, pod logs — bound to state/kubeconfig
   exec.go kubeconfig.go            the docker subprocesses (the lab's one CLI) and the wait loop; the exported state/kubeconfig and the OIDC kubeconfig `login` writes
   render.go logs.go                template rendering into state/; `agentlab logs`
+  open.go prompt.go                `agentlab open`'s target table (URL, gate, probe); the lab's yes/no questions — the trust offer `open` and the end of `up` share
   templates/                       every manifest, rendered from agentlab.yaml (static/: the verbatim agent-deployment Template)
 docs/                            this documentation; README.md is the front door
 HACKS.md                         the hack journal

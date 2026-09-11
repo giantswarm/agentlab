@@ -13,7 +13,7 @@ import (
 // Up brings up the whole lab: certs, kind cluster, Dex, RBAC, an end-to-end
 // OIDC verification, and then the components the configuration enables — the
 // agent platform (the default; it is what the lab tests) and Backstage.
-func Up(cfg *config.Config) error {
+func Up(cfg *config.Config, offers Offers) error {
 	// Before any real work: a docker VM too small for what this
 	// configuration schedules leaves pods Pending forever (the scheduler
 	// refuses CPU requests that do not fit — resources.go), and the symptom
@@ -143,7 +143,7 @@ func Up(cfg *config.Config) error {
 		// component), through the same agentgateway edge. One summary per
 		// boot: the platform path prints it — users, URLs and try-it
 		// commands together — once everything is actually up.
-		if err := platformUp(cfg, "Lab is up."); err != nil {
+		if err := platformUp(cfg, "Lab is up.", offers); err != nil {
 			return err
 		}
 	} else {
@@ -157,6 +157,14 @@ func Up(cfg *config.Config) error {
 			fmt.Println("  The browser will warn on the Dex login page (lab-CA certificate). One-time")
 			fmt.Println("  fix, reverted by `agentlab untrust`:  agentlab trust")
 		}
+		// Bookkeeping this boot earned goes in before the question: in
+		// accessible mode the prompt reads lines, so a Ctrl-C there is a real
+		// SIGINT that ends the process (platformUp snapshots first for the
+		// same reason). No portal without the platform (config.Validate), so
+		// this path can only offer the trust step.
+		snapshotPreloadImages(cfg)
+		offerTrustAndOpen(cfg, offers, false)
+		return nil
 	}
 	snapshotPreloadImages(cfg)
 	return nil
@@ -177,11 +185,20 @@ func usersBlock(cfg *config.Config) string {
 }
 
 func tryItBlock(cfg *config.Config) string {
-	cmds := [][2]string{
-		{"agentlab login " + cfg.AdminUser().Email, "headless, prints the token claims"},
-		{"agentlab browser", "real browser login screen"},
-		{"agentlab test", "full RBAC assertion run"},
+	var cmds [][2]string
+	// The names come from the open table (open.go), so a renamed target
+	// cannot leave a Try it line that refuses when run.
+	if cfg.Backstage.Enabled {
+		cmds = append(cmds, [2]string{"agentlab open " + openTargetPortal, "the portal in the browser"})
 	}
+	if cfg.Platform.Enabled && cfg.Platform.Agents {
+		cmds = append(cmds, [2]string{"agentlab open " + openTargetAgents, "the kagent UI in the browser"})
+	}
+	cmds = append(cmds,
+		[2]string{"agentlab login " + cfg.AdminUser().Email, "headless, prints the token claims"},
+		[2]string{"agentlab login --browser", "real browser login screen"},
+		[2]string{"agentlab test", "full RBAC assertion run"},
+	)
 	if cfg.Platform.Enabled {
 		cmds = append(cmds, [2]string{"agentlab platform-test", "headless smoke test of the whole platform"})
 	}

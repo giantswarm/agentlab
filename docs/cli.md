@@ -6,48 +6,43 @@ terminal, a missing file starts the form) and talks to the kind cluster
 through the cluster's own exported kubeconfig, `state/kubeconfig` — never
 your shell's current-context.
 
-## Lifecycle
+The sections below are the groups `agentlab --help` prints, in the same order.
+
+## Setup
 
 | Command | What it does |
 |---|---|
+| `up` | Check docker's CPUs and memory against this configuration's floors, then create the kind cluster, deploy Dex and the enabled components, and verify the OIDC chain end to end. Idempotent: unchanged re-runs are no-ops. On a terminal it ends by asking what the summary used to only describe: whether to trust the lab CA while it is untrusted, then whether to open the portal. `--trust` and `--open` (or `--trust=false`/`--open=false`) pre-answer both for scripted runs; off a terminal nothing is asked. See [TLS](tls.md). |
 | `configure` | Discover this machine, then ask for the lab configuration (or keep it with `--defaults`) and save `agentlab.yaml`. Flags below. |
-| `up` | Check docker's CPUs and memory against this configuration's floors, then create the kind cluster, deploy Dex and the enabled components, and verify the OIDC chain end to end. Idempotent: unchanged re-runs are no-ops. |
-| `down` | Destroy the kind cluster. `certs/` is kept and the trust stores are untouched. |
-| `reload` | Re-render and re-apply the Dex config after editing `agentlab.yaml` (users, passwords, groups). |
-| `render` | Render every manifest from `agentlab.yaml` into `state/` without applying anything. |
-| `certs` | Generate the lab CA and Dex server cert, re-minting only what config or policy require. `--force` regenerates everything and breaks a running cluster's trust. |
 | `trust` | Install the lab CA into the system and browser trust stores (one sudo prompt; reversible). See [TLS](tls.md). |
-| `untrust` | Remove exactly the lab CA from those stores. |
-| `platform` | Install the agent platform on a running cluster: one idempotent upgrade-or-install of the agent-platform chart in its lab shape through the embedded Helm (the `helm upgrade --install --wait` of Helm 4, in-process), then wait for every component. A re-run that would install the same chart version with the same values writes no Helm revision. `up` runs this when the platform is enabled. On the [dev channel](platform.md#dev-channel) it first re-resolves the branch's newest build (and installs Substrate); `--pin` freezes the recorded build instead, `--pin=false` follows the branch again. |
-| `platform-down` | Remove the agent platform in the chart's ordered teardown, leaving Dex and the cluster alone. |
-| `logs <component>` | Tail a component's logs: `backstage`, `dex`, `mcp-prometheus`, `muster` or `prometheus`. |
-| `self-update` | Replace the binary with the latest GitHub release, once its cosign Sigstore bundle verifies (see below). `--check` only reports the running and the latest version, exit status 125 when a newer one exists. |
 
-`backstage` is retired: Backstage deploys with the platform (`backstage.enabled`
-in `agentlab.yaml` and `agentlab up`).
-
-## Identity
+## Everyday
 
 | Command | What it does |
 |---|---|
-| `login [email]` | Headless login (password grant); writes `.token` and `kubeconfig.oidc` for that user. `--password` overrides the one in `agentlab.yaml`. |
-| `browser` | Log in through the real Dex login page in a browser (authorization-code flow). |
-| `test` | Assert RBAC for every configured user: a token from Dex, then one SelfSubjectAccessReview per expectation of each group — `kubectl auth can-i`, asked of the apiserver in-process with that token alone. |
+| `open <portal\|agents>` | Open a lab URL in the browser and print it (so it can be copied where the opener finds no browser — SSH, WSL): `portal` is Backstage, `agents` the kagent UI. The target is required; without one, the refusal names both. Refused when the target is disabled in `agentlab.yaml`, when the cluster is not running, or when the target does not answer yet (a short reachability probe, before any trust question, so a sudo prompt is never spent on a command that then opens nothing) — a plain fact instead of an error page in the browser. While the lab CA is untrusted, `open portal` offers `agentlab trust` first on a terminal and warns off one; `open agents` is plain HTTP on loopback and asks nothing. |
+| `logs <component>` | Tail a component's logs: `backstage`, `dex`, `mcp-prometheus`, `muster` or `prometheus`. |
+| `login [email]` | Log in as a lab user: the headless password grant, or `--browser` for the real Dex login page (authorization-code flow, which asks for the user itself). Either way it prints the token claims and writes `.token` and `kubeconfig.oidc` for that user. `--password` overrides the one in `agentlab.yaml`. |
 
 `kubectl --kubeconfig kubeconfig.oidc` after `login` is the OIDC path — the
 way to verify what a specific user can do. The kind admin context bypasses the
 platform and OIDC entirely.
 
-## Proofs
+## Testing
 
-The lab's end-to-end checks. Each one logs in to Dex headlessly, drives the
-real components through the same paths a person would, asserts the result and
-leaves nothing behind — with one documented exception, `models-test` on a
-server that cannot delete a model (see below). Where a command takes `[email]`, that user runs the
-proof (default: the admin). They trust `certs/ca.crt` directly, so they need
-neither `agentlab trust` nor any Node setting. The agent proofs follow the
-kagent API the cluster serves — the released kagent's Agent CRs on the stable
-channel, kagent API v2's AgentTemplates on the [dev channel](platform.md#dev-channel)
+| Command | What it does |
+|---|---|
+| `test` | Assert RBAC for every configured user: a token from Dex, then one SelfSubjectAccessReview per expectation of each group — `kubectl auth can-i`, asked of the apiserver in-process with that token alone. |
+
+The rest of the group are the lab's end-to-end proofs. Each one logs in to
+Dex headlessly, drives the real components through the same paths a person
+would, asserts the result and leaves nothing behind — with one documented
+exception, `models-test` on a server that cannot delete a model (see below).
+Where a command takes `[email]`, that user runs the proof (default: the
+admin). They trust `certs/ca.crt` directly, so they need neither `agentlab
+trust` nor any Node setting. The agent proofs follow the kagent API the
+cluster serves — the released kagent's Agent CRs on the stable channel,
+kagent API v2's AgentTemplates on the [dev channel](platform.md#dev-channel)
 — and say which at the start.
 
 | Command | What it proves |
@@ -58,6 +53,28 @@ channel, kagent API v2's AgentTemplates on the [dev channel](platform.md#dev-cha
 | `toolsets-test [email]` | Declared toolsets end to end: agent-manager requires one, the agent carries the header (the released kagent: on its Agent CR; kagent API v2: on the RemoteMCPServer its AgentTemplate binds), muster resolves and refuses per request, agents see their toolset through a turn on kagent, a per-server sign-in scopes a server's tools to the token, the portal's Tools step and apply path. `--model-config` picks the kagent ModelConfig the throwaway agents run on; `--skip-chat` skips the turns that need a model to answer; `--skip-portal` (kagent API v2) skips the portal's apply path. See [Toolsets](platform.md#toolsets-declared-tool-access). |
 | `skills-test [email]` | kagent API v2 only — the golden boot under Substrate's egress gate: an `AgentTemplate` on the Go ADK Harness with one git skill pinned to a full commit of a public repository (giantswarm/agent-skills) and the shared muster server as its tools; Ready on the Harness, then one turn through the edge as the user that names the skill and answers a fact only its `SKILL.md` has. A failed boot prints the evidence (the Harness conditions and warnings, Substrate's ActorTemplate, actor and worker as the controller reports them, the controller, atenet and worker log lines, the versions) and boots the same template without the skill as the control. `--ready-timeout` bounds the boot (default 10m). See [The skills proof](platform.md#the-skills-proof-the-golden-boot). |
 | `backstage-test [email...]` | The headless Backstage sign-in and the muster hop with that user's own forwarded token, including the per-server Sign in challenge, the MCP servers page's grouping and, on kagent API v2 with agents on, the Agent Platform pages — the proof brings a throwaway AgentTemplate along (a fresh lab has none), every user's agents list must show it, a chat turn on it for the first (default: every user). See [Backstage](backstage.md). |
+
+## Cleanup
+
+| Command | What it does |
+|---|---|
+| `down` | Destroy the kind cluster. `certs/` is kept and the trust stores are untouched. |
+| `untrust` | Remove exactly the lab CA from the system and browser trust stores. |
+| `platform-down` | Remove the agent platform in the chart's ordered teardown, leaving Dex and the cluster alone. |
+
+## Advanced
+
+| Command | What it does |
+|---|---|
+| `platform` | Install the agent platform on a running cluster: one idempotent upgrade-or-install of the agent-platform chart in its lab shape through the embedded Helm (the `helm upgrade --install --wait` of Helm 4, in-process), then wait for every component. A re-run that would install the same chart version with the same values writes no Helm revision. `up` runs this when the platform is enabled. On the [dev channel](platform.md#dev-channel) it first re-resolves the branch's newest build (and installs Substrate); `--pin` freezes the recorded build instead, `--pin=false` follows the branch again. Like `up`, it ends with the trust and portal questions on a terminal, and takes the same `--trust`/`--open`. |
+| `certs` | Generate the lab CA and Dex server cert, re-minting only what config or policy require. `--force` regenerates everything and breaks a running cluster's trust. |
+| `render` | Render every manifest from `agentlab.yaml` into `state/` without applying anything. |
+| `reload` | Re-render and re-apply the Dex config after editing `agentlab.yaml` (users, passwords, groups). |
+| `self-update` | Replace the binary with the latest GitHub release, once its cosign Sigstore bundle verifies (see below). `--check` only reports the running and the latest version, exit status 125 when a newer one exists. |
+
+Backstage has no command of its own: it deploys with the platform
+(`backstage.enabled` in `agentlab.yaml` and `agentlab up`), and
+`agentlab open portal` is how you reach it.
 
 ## `configure` flags
 

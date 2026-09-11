@@ -90,12 +90,15 @@ func BrowserLogin(cfg *config.Config) error {
 
 // OpenBrowser hands a URL (or, on macOS/Linux, any path) to the OS opener.
 // Fire-and-forget: a browser that fails to open is an inconvenience, not an
-// error the flow can act on.
+// error the flow can act on — every caller prints the URL as well.
 func OpenBrowser(url string) {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
 		cmd = exec.Command("open", url) // #nosec G204 -- fixed browser-opener command; the URL is lab-local
+	case "windows":
+		// The shell's own handler; `start` is a cmd.exe builtin, not a binary.
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url) // #nosec G204 -- fixed browser-opener command; the URL is lab-local
 	default:
 		cmd = exec.Command("xdg-open", url) // #nosec G204 -- fixed browser-opener command; the URL is lab-local
 	}

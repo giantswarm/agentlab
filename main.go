@@ -45,6 +45,11 @@ func main() {
 }
 
 func rootCmd() *cobra.Command {
+	// Commands show up in the order they are registered below, not
+	// alphabetically: inside a group the order is the order a person needs
+	// them (`up` before `configure`, `open` before `logs`).
+	cobra.EnableCommandSorting = false
+
 	root := &cobra.Command{
 		Use:   "agentlab",
 		Short: "A local lab for the Giant Swarm agent platform (muster + Kubernetes MCP + Backstage), on kind + Dex",
@@ -54,10 +59,11 @@ on a throwaway kind cluster. A bundled Dex provides the identity — users that
 exist nowhere else, RBAC driven by the groups claim, the apiserver and the
 platform trusting the same issuer.
 
-Start with:  agentlab configure   (interactive; asks every option)
-Then:        agentlab up          (cluster + Dex + the platform, verified end to end)
-Then:        agentlab trust       (once: the lab CA into the trust stores — green locks)
-Then:        claude mcp add --transport http muster https://muster.127.0.0.1.nip.io/mcp`,
+Start with:  agentlab up            (cluster + Dex + the platform, verified end to end;
+                                    it asks whether to trust the lab CA and to open the portal)
+Then:        agentlab open portal   (the portal in your browser)
+Customize:   agentlab configure     (interactive; asks every option)
+Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip.io/mcp`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Args:          cobra.NoArgs,
@@ -78,31 +84,65 @@ Then:        claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		},
 	}
 
+	// The help groups, in the order a person meets them. docs/cli.md carries
+	// the same groups in the same order.
+	root.AddGroup(
+		&cobra.Group{ID: groupSetup, Title: "Setup"},
+		&cobra.Group{ID: groupEveryday, Title: "Everyday"},
+		&cobra.Group{ID: groupTesting, Title: "Testing"},
+		&cobra.Group{ID: groupCleanup, Title: "Cleanup"},
+		&cobra.Group{ID: groupAdvanced, Title: "Advanced"},
+	)
+	root.SetHelpCommandGroupID(groupAdvanced)
+	root.SetCompletionCommandGroupID(groupAdvanced)
+
 	root.AddCommand(
-		configureCmd(),
-		labCmd("up", "Create the kind cluster, deploy Dex and the enabled components, and verify the OIDC chain", lab.Up),
-		labCmd("down", "Destroy the kind cluster", lab.Down),
-		labCmd("test", "Assert RBAC for every configured user (token from Dex, kubectl auth can-i)", lab.Test),
-		loginCmd(),
-		labCmd("browser", "Log in through the real Dex login page in a browser (authorization-code flow)", lab.BrowserLogin),
-		labCmd("reload", "Re-render and re-apply the Dex config (after editing agentlab.yaml)", lab.ApplyDex),
-		certsCmd(),
-		labCmd("trust", "Install the lab CA into the system and browser trust stores (one sudo prompt; reversible)", lab.Trust),
-		labCmd("untrust", "Remove the lab CA from the system and browser trust stores", lab.Untrust),
-		platformCmd(),
-		platformTestCmd(),
-		modelsTestCmd(),
-		agentsTestCmd(),
-		toolsetsTestCmd(),
-		skillsTestCmd(),
-		labCmd("platform-down", "Remove the agent platform (leaves Dex and the cluster alone)", lab.PlatformDown),
-		labCmd("backstage", "Retired: Backstage deploys with the platform now (backstage.enabled + `agentlab up`)", lab.BackstageUp),
-		backstageTestCmd(),
-		logsCmd(),
-		labCmd("render", "Render every manifest from agentlab.yaml into state/ without applying anything", lab.RenderAll),
-		selfUpdateCmd(),
+		inGroup(groupSetup, upCmd()),
+		inGroup(groupSetup, configureCmd()),
+		inGroup(groupSetup, labCmd("trust", "Install the lab CA into the system and browser trust stores (one sudo prompt; reversible)", lab.Trust)),
+
+		inGroup(groupEveryday, openCmd()),
+		inGroup(groupEveryday, logsCmd()),
+		inGroup(groupEveryday, loginCmd()),
+
+		inGroup(groupTesting, labCmd("test", "Assert RBAC for every configured user (token from Dex, kubectl auth can-i)", lab.Test)),
+		inGroup(groupTesting, platformTestCmd()),
+		inGroup(groupTesting, agentsTestCmd()),
+		inGroup(groupTesting, toolsetsTestCmd()),
+		inGroup(groupTesting, modelsTestCmd()),
+		inGroup(groupTesting, skillsTestCmd()),
+		inGroup(groupTesting, backstageTestCmd()),
+
+		inGroup(groupCleanup, labCmd("down", "Destroy the kind cluster", lab.Down)),
+		inGroup(groupCleanup, labCmd("untrust", "Remove the lab CA from the system and browser trust stores", lab.Untrust)),
+		inGroup(groupCleanup, labCmd("platform-down", "Remove the agent platform (leaves Dex and the cluster alone)", lab.PlatformDown)),
+
+		inGroup(groupAdvanced, platformCmd()),
+		inGroup(groupAdvanced, certsCmd()),
+		inGroup(groupAdvanced, labCmd("render", "Render every manifest from agentlab.yaml into state/ without applying anything", lab.RenderAll)),
+		inGroup(groupAdvanced, labCmd("reload", "Re-render and re-apply the Dex config (after editing agentlab.yaml)", lab.ApplyDex)),
+		inGroup(groupAdvanced, selfUpdateCmd()),
+
+		browserCmd(),
 	)
 	return root
+}
+
+// The help group IDs; their titles and order are in rootCmd.
+const (
+	groupSetup    = "setup"
+	groupEveryday = "everyday"
+	groupTesting  = "testing"
+	groupCleanup  = "cleanup"
+	groupAdvanced = "advanced"
+)
+
+// inGroup puts a command in one of the help groups, so the AddCommand list
+// above is the one place that says where a command shows up. Every registered
+// command needs a group (main_test.go asserts it).
+func inGroup(id string, cmd *cobra.Command) *cobra.Command {
+	cmd.GroupID = id
+	return cmd
 }
 
 // labCmd wires a no-arg lifecycle command: load (or interactively create) the
@@ -260,9 +300,93 @@ func listOrNone(items []string) string {
 }
 
 // accessibleMode switches huh to its prompt-per-question accessible mode;
-// also what screen readers want.
+// also what screen readers want. internal/forms is the one reader of the
+// environment variable, since the questions it asks outside `configure` have
+// no flag to OR with.
 func accessibleMode() bool {
-	return os.Getenv("ACCESSIBLE") != ""
+	return forms.Accessible()
+}
+
+// upCmd boots the lab. --trust and --open pre-answer the two questions the
+// boot ends with on a terminal, for scripted runs.
+func upCmd() *cobra.Command {
+	var trust, open bool
+	cmd := &cobra.Command{
+		Use:   "up",
+		Short: "Create the kind cluster, deploy Dex and the enabled components, and verify the OIDC chain",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			return lab.Up(cfg, offersFromFlags(cmd, &trust, &open))
+		},
+	}
+	addOfferFlags(cmd, &trust, &open)
+	return cmd
+}
+
+// addOfferFlags declares the pre-answers for the questions a boot ends with,
+// and offersFromFlags reads them back: an unset flag means "ask on a terminal
+// and stay silent off one", a set one is the answer wherever the command runs.
+func addOfferFlags(cmd *cobra.Command, trust, open *bool) {
+	cmd.Flags().BoolVar(trust, "trust", false, "install the lab CA into the trust stores without asking (--trust=false asks nothing and leaves it)")
+	cmd.Flags().BoolVar(open, "open", false, "open the portal in the browser without asking (--open=false asks nothing)")
+}
+
+func offersFromFlags(cmd *cobra.Command, trust, open *bool) lab.Offers {
+	var offers lab.Offers
+	if cmd.Flags().Changed("trust") {
+		offers.Trust = trust
+	}
+	if cmd.Flags().Changed("open") {
+		offers.Open = open
+	}
+	return offers
+}
+
+// openCmd opens one lab URL in the browser. The target is required: a default
+// would hide the fact that there is more than one thing to open.
+func openCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:       "open <" + strings.Join(lab.OpenTargets(), "|") + ">",
+		Short:     "Open a lab URL in the browser and print it: the portal, or the kagent UI",
+		Args:      cobra.MaximumNArgs(1),
+		ValidArgs: lab.OpenTargets(),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			// No argument is lab.Open's case too, so one place names the
+			// targets in both messages.
+			target := ""
+			if len(args) == 1 {
+				target = args[0]
+			}
+			return lab.Open(cfg, target)
+		},
+	}
+}
+
+// browserCmd is `agentlab login --browser` under the name it had before the
+// two logins merged: hidden, so --help lists one way to log in, and kept
+// because it is a name people type.
+func browserCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:    "browser",
+		Short:  "Deprecated: use `agentlab login --browser`",
+		Args:   cobra.NoArgs,
+		Hidden: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			return lab.BrowserLogin(cfg)
+		},
+	}
 }
 
 func configureCmd() *cobra.Command {
@@ -417,6 +541,7 @@ func pinnedNote(cfg *config.Config) string {
 // --pin=false releases) the dev channel's recorded build first.
 func platformCmd() *cobra.Command {
 	var pin bool
+	var trust, open bool
 	cmd := &cobra.Command{
 		Use:   "platform",
 		Short: "Install the Giant Swarm agent platform (the agent-platform chart in the lab shape)",
@@ -435,9 +560,10 @@ func platformCmd() *cobra.Command {
 					return err
 				}
 			}
-			return lab.PlatformUp(cfg)
+			return lab.PlatformUp(cfg, offersFromFlags(cmd, &trust, &open))
 		},
 	}
+	addOfferFlags(cmd, &trust, &open)
 	cmd.Flags().BoolVar(&pin, "pin", false, "dev channel: freeze platform.chartVersion at the recorded build instead of following platform.chartBranch (--pin=false follows it again)")
 	return cmd
 }
@@ -453,14 +579,24 @@ func endpointNote(mm config.ModelManager, backend string) string {
 
 func loginCmd() *cobra.Command {
 	var password string
+	var browser bool
 	cmd := &cobra.Command{
 		Use:   "login [email]",
-		Short: "Headless login (password grant); writes .token and kubeconfig.oidc",
+		Short: "Log in as a lab user and write .token and kubeconfig.oidc (--browser: the real Dex login page)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
 			if err != nil {
 				return err
+			}
+			// Both paths end in the same place (lab.saveLoginArtifacts); they
+			// differ only in how the token is obtained, and the login page
+			// asks for the user itself.
+			if browser {
+				if len(args) == 1 || password != "" {
+					return fmt.Errorf("--browser takes no user: the Dex login page asks for it (drop the argument and --password)")
+				}
+				return lab.BrowserLogin(cfg)
 			}
 			email := cfg.AdminUser().Email
 			if len(args) == 1 {
@@ -478,6 +614,7 @@ func loginCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&password, "password", "", "password (default: the one in agentlab.yaml)")
+	cmd.Flags().BoolVar(&browser, "browser", false, "log in on the real Dex login page in a browser (authorization-code flow) instead of the headless password grant")
 	return cmd
 }
 

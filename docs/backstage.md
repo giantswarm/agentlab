@@ -183,8 +183,8 @@ this automatically by standing in the newest published release (HACKS.md U8).
 - **`ai-chat` needs `$ANTHROPIC_API_KEY` at deploy time.** The image's base
   app-config already reads the key from that env var, and the lab overlay sets
   `aiChat.model` to the lab's `aiModel` (claude-\* routes to Anthropic);
-  `agentlab backstage` creates the `backstage-anthropic` Secret from the host
-  env and injects the env var (as `optional:`, so the pod boots without it).
+  the key reaches the pod from a Secret in Backstage's namespace, injected as
+  `optional:` so the pod boots without it.
   When the key is absent, ai-chat is simply unconfigured — and its
   assistant-ui runtime then logs five `Maximum update depth exceeded` errors
   on the signed-out page before React bails out. Cosmetic (the page renders,

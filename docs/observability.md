@@ -58,6 +58,10 @@ unauthenticated read-only PromQL on the (localhost-only) lab edge: a real MC
 fronts it with an auth gateway validating the Bearer token, plain Prometheus
 ignores it — wider than muster's OAuth, accepted for the lab.
 
+Only that query API is routed, not Prometheus's own web UI (its absolute asset
+paths would need `/`, and PromQL through muster is the point) — which is why
+`agentlab open` has a portal and an agents target, but no `prometheus` one.
+
 `agentlab platform-test` grows a phase when the component is on: it lists the
 `x_mcp-prometheus_*` tools through muster, runs `execute_query` with `up`,
 asserts the platform itself is being scraped (muster, valkey,

@@ -34,7 +34,9 @@ The same key powers Backstage's AI chat via a second Secret,
 [Backstage gotchas](backstage.md#backstage-gotchas) for its no-key behavior).
 
 The kagent UI is host-published like the other components:
-`http://localhost:8081` (`platform.agentsPort` in `agentlab.yaml`). The UI does
+`http://localhost:8081` (`platform.agentsPort` in `agentlab.yaml`);
+`agentlab open agents` opens it. Being plain HTTP on loopback, it involves the
+lab CA in nothing — no trust question, no browser warning. The UI does
 no OAuth in this lab, so it needs none of the issuer tricks — the `kagent-ui`
 Service is simply `type: NodePort`, pinned to node port 30880 by the kagent
 component's `postRenderers` patch (the chart's Service template renders no
