@@ -1,56 +1,59 @@
 package lab
 
 import (
-	"bytes"
 	"context"
-	"encoding/binary"
+	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
-	"net/textproto"
+	"iter"
+	"net"
 	"net/url"
-	"strconv"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/a2aproject/a2a-go/v2/a2aclient"
+	a2agrpc "github.com/a2aproject/a2a-go/v2/a2agrpc/v1"
 	a2apb "github.com/a2aproject/a2a-go/v2/a2apb/v1"
 	"github.com/google/uuid"
-	"google.golang.org/protobuf/proto"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 
 	"github.com/giantswarm/agentlab/internal/config"
 	apiv1alpha1 "github.com/giantswarm/agentlab/internal/kagent/gen/kagent/api/v1alpha1"
 )
 
-// kagent API v2 (kagent main) on the wire, as the proofs speak it.
+// kagent API v2 on the wire, as the surfaces speak it.
 //
 // The controller serves one gRPC API — kagent.api.v1alpha1 for the control
-// plane, lf.a2a.v1 for the turns — and no REST. The portal's backend reaches
-// it through the agentgateway edge as gRPC-Web (application/grpc-web+proto
-// over HTTP/1.1 POST) at <AgentgatewayBaseURL>/kagent/<service>/<method>, the
-// connectivity chart's kagent.controllerRoute: the route's URLRewrite strips
-// the prefix and the request reaches the controller's grpcweb wrapper. The
-// proofs take the same path on the lab's TLS transport, so a turn proves the
-// route as well as the controller.
+// plane, lf.a2a.v1 for the turns — and no REST. Swarmgeist (klaus-gateway)
+// and the Dev Portal's backend reach it as native gRPC over HTTP/2 through
+// the agentgateway edge: the connectivity chart's GRPCRoute
+// `kagent-controller` matches the five services, its AgentgatewayPolicy
+// validates the person's Dex id_token (JWT Strict) and rewrites `x-user-id`
+// from the token's email claim before the controller — in trusted-proxy mode
+// — reads it; whatever `x-user-id` the caller sent is replaced. The proofs
+// take the same path on the lab's TLS transport (the public hostname, the lab
+// CA), so a turn proves the route and the policy as well as the controller.
 //
-// Two headers carry the person: x-user-id, the identity the controller keeps
-// AgentInstances for (creator-scoped: nobody else reads or drives them), and
-// authorization: Bearer <Dex id_token>, forwarded unchanged to the actor and
-// re-emitted by the Go ADK on every MCP call (KAGENT_PROPAGATE_TOKEN), so
-// muster sees the person. A turn is routed to its instance by
-// x-kagent-agent-instance-id. The messages are the controller's own protos:
-// internal/kagentpb (generated from kagent/api/v1alpha1/{common,agent_instances}.proto)
-// and the A2A v1 package the controller itself is built with.
+// The metadata contract every call carries: `authorization: Bearer <Dex
+// id_token>`; on the A2A calls exactly one `x-kagent-agent-instance-id`
+// naming the AgentInstance that holds the conversation, and the
+// human-in-the-loop extension requested (`A2A-Extensions`, gRPC metadata
+// `a2a-extensions`) so a tool that needs approval pauses the task at
+// input-required with a decidable request instead of a plain notice. The
+// Harness re-emits the person's bearer on every MCP call, so muster logs the
+// tool calls under the person. The messages are kagent's own protos
+// (internal/kagent/gen, generated from the line's proto tree) and the A2A v1
+// package the controller itself is built with.
 
 const (
-	// kagentRoutePrefix is the path prefix the 3.x connectivity chart mounts the
-	// kagent API at on the agentgateway hostname (an HTTPRoute whose URLRewrite
-	// strips it). The 4.x chart routes the API by gRPC service and method on a
-	// GRPCRoute instead, under no prefix — kagentRoutePrefixServed tells which.
-	kagentRoutePrefix = "/kagent"
-	// kagentGRPCRouteName is the 4.x connectivity chart's GRPCRoute for the
-	// controller, in the platform namespace.
-	kagentGRPCRouteName = "kagent-controller"
 	// kagentHarness is the platform's Go ADK Harness: every AgentTemplate the
 	// proofs create is labelled for it (harnessLabel) and every turn runs on it.
 	kagentHarness = "kagent"
@@ -58,261 +61,201 @@ const (
 	// cold resume from the golden snapshot, the model's answer with its tool
 	// calls, the instance delete.
 	kagentTurnTimeout = 180 * time.Second
+	// templateRevisionTimeout bounds CreateAgentInstance's wait for a
+	// template whose golden snapshot is still being taken (the controller
+	// answers FailedPrecondition meanwhile; kagent's own e2e polls through it
+	// the same way).
+	templateRevisionTimeout = 60 * time.Second
+	// instanceReadyTimeout bounds a freshly created instance's way to READY:
+	// the controller converges it synchronously, so the poll only covers a
+	// create that was interrupted and retried.
+	instanceReadyTimeout = 90 * time.Second
 
-	grpcWebContentType  = "application/grpc-web+proto"
-	userIDHeader        = "x-user-id"
-	agentInstanceHeader = "x-kagent-agent-instance-id"
-	grpcStatusHeader    = "Grpc-Status"
-	grpcMessageHeader   = "Grpc-Message"
+	// The gRPC metadata of the contract (keys lower-case on the wire).
+	authorizationMetadata = "authorization"
+	instanceIDMetadata    = "x-kagent-agent-instance-id"
+	// userIDHeader is the header the edge sets from the verified token's
+	// email claim for the controller's trusted-proxy authenticator. The
+	// identity proof forges it to show the edge replaces it.
+	userIDHeader = "x-user-id"
 
-	agentInstanceService = "kagent.api.v1alpha1.AgentInstanceService"
-	systemService        = "kagent.api.v1alpha1.SystemService"
-	a2aService           = "lf.a2a.v1.A2AService"
+	// hitlExtensionURI identifies kagent's human-in-the-loop A2A extension;
+	// the payload types are the `type` field of the message metadata it
+	// carries under that URI.
+	hitlExtensionURI             = "https://kagent.dev/extensions/hitl/v1"
+	hitlTypeToolApprovalRequest  = "tool_approval_request"
+	hitlTypeToolApprovalResponse = "tool_approval_response"
 
-	// grpcWebTrailerFlag marks the frame that carries the trailers
-	// (grpc-status, grpc-message) at the end of a gRPC-Web response body.
-	grpcWebTrailerFlag = 0x80
-	// grpcWebFrameHeader is the length-prefix of every gRPC-Web frame: one
-	// flag byte and the payload length as a big-endian uint32.
-	grpcWebFrameHeader = 5
-	// grpcFailedPrecondition is the status CreateAgentInstance answers while
-	// the template has no successful revision yet (its golden snapshot is
-	// still being taken); kagent's own e2e polls through it the same way.
-	grpcFailedPrecondition = 9
+	// kagentControllerRoute and kagentControllerJWTPolicy are the
+	// connectivity chart's route objects in front of the controller: the
+	// GRPCRoute on the edge and the policy that validates the token and
+	// rewrites x-user-id.
+	kagentControllerRoute     = "kagent-controller"
+	kagentControllerJWTPolicy = "kagent-controller-jwt"
+	// a2aService is the A2A v1 service the route matches next to the kagent
+	// ones (lf.a2a.v1.A2AService).
+	a2aService = "lf.a2a.v1.A2AService"
 )
 
-// kagentAPI is one person's view of the kagent controller through the edge.
+// kagentAPI is one person's client of the controller through the edge: one
+// gRPC connection, the person's token on every call, the surfaces' metadata
+// on the A2A ones. Zero-value token: no `authorization` at all — the way the
+// refusal proof calls.
 type kagentAPI struct {
-	client *http.Client
-	// base is the kagent API's root on the edge: <AgentgatewayBaseURL> plus
-	// the route's prefix (kagentRoutePrefixServed).
-	base string
-	// user is the x-user-id: the person the controller attributes instances to.
-	user string
-	// token is the person's Dex id_token, sent as Bearer on every call.
-	token string
+	a2a       *a2aclient.Client
+	templates apiv1alpha1.AgentTemplateServiceClient
+	instances apiv1alpha1.AgentInstanceServiceClient
+	system    apiv1alpha1.SystemServiceClient
+	token     string
+	// extra is metadata sent beside the token on every call — the identity
+	// proof's forged x-user-id; nil for everyone else.
+	extra     metadata.MD
+	closeConn func() error
 }
 
-// newKagentAPI is the controller's API through the edge for one person: the
-// same base URL Backstage's app-config carries for the installation
-// (agentPlatform.kagent.installations.<i>.apiBaseUrl), on the lab transport.
-func newKagentAPI(cfg *config.Config, user, token string) (*kagentAPI, error) {
-	client, err := labHTTPClient(kagentTurnTimeout)
+// kagentTarget is the controller's gRPC endpoint through the edge, derived
+// from the agentgateway hostname the platform publishes (the same base URL
+// Backstage's app-config carries): host:port and whether the hop is TLS.
+func kagentTarget(cfg *config.Config) (hostPort string, useTLS bool, err error) {
+	base := cfg.AgentgatewayBaseURL()
+	u, err := url.Parse(base)
+	if err != nil || u.Host == "" {
+		return "", false, fmt.Errorf("the agentgateway base URL %q is not a URL", base)
+	}
+	useTLS = u.Scheme == "https"
+	port := u.Port()
+	if port == "" {
+		port = "80"
+		if useTLS {
+			port = "443"
+		}
+	}
+	return u.Hostname() + ":" + port, useTLS, nil
+}
+
+// dialKagentAPI connects to the controller through the edge as the person
+// whose Dex id_token is given ("" for nobody): native gRPC over HTTP/2 on the
+// lab's TLS transport — the lab CA trusted, the public hostname dialled on
+// loopback like every lab client (dialLab) — the way klaus-gateway's
+// `a2a.url: grpcs://agentgateway.<domain>:443` does. The connection is made on
+// the first call; close releases it.
+func dialKagentAPI(cfg *config.Config, token string) (*kagentAPI, error) {
+	hostPort, useTLS, err := kagentTarget(cfg)
 	if err != nil {
 		return nil, err
 	}
-	return &kagentAPI{client: client, base: cfg.AgentgatewayBaseURL() + kagentRoutePrefixServed(), user: user, token: token}, nil
-}
-
-// kagentRoutePrefixServed is the prefix the lab's edge puts the kagent API
-// under: none when the connectivity chart routes it by gRPC service and
-// method (a GRPCRoute in the platform namespace, the 4.x shape — a request
-// under /kagent would fall through to the MCP catch-all route there),
-// /kagent when it is the prefixed HTTPRoute of the 3.x shape.
-func kagentRoutePrefixServed() string {
-	gvr, err := gvrFor("grpcroutes.gateway.networking.k8s.io")
+	creds := insecure.NewCredentials()
+	if useTLS {
+		pool, err := labCertPool()
+		if err != nil {
+			return nil, err
+		}
+		creds = credentials.NewTLS(&tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12})
+	}
+	// passthrough: the authority stays the public hostname (the TLS server
+	// name and the route's host), the dialer takes it to loopback.
+	conn, err := grpc.NewClient("passthrough:///"+hostPort, grpc.WithTransportCredentials(creds), grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
+		return dialLab(ctx, "tcp", addr)
+	}))
 	if err != nil {
-		return kagentRoutePrefix
+		return nil, fmt.Errorf("dialling the kagent controller through %s: %w", hostPort, err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
-	defer cancel()
-	if _, err := getObject(ctx, gvr, platformNamespace, kagentGRPCRouteName); err == nil {
-		return ""
-	}
-	return kagentRoutePrefix
-}
-
-// grpcStatus is a non-OK gRPC status the controller answered with.
-type grpcStatus struct {
-	code    int
-	message string
-}
-
-func (s *grpcStatus) Error() string {
-	return fmt.Sprintf("grpc status %d: %s", s.code, s.message)
-}
-
-// call is one unary gRPC-Web call: the request framed and POSTed to
-// <base>/<service>/<method> with the person's headers (and extra ones), the
-// answer's message frame decoded into out, its trailers judged. A status
-// other than OK is a *grpcStatus; an HTTP status other than 200 is the edge
-// or the route talking, reported with the body.
-func (a *kagentAPI) call(ctx context.Context, service, method string, in, out proto.Message, headers map[string]string) error {
-	payload, err := proto.Marshal(in)
+	api, err := newKagentAPI(conn, token)
 	if err != nil {
-		return fmt.Errorf("%s/%s: encoding the request: %w", service, method, err)
+		_ = conn.Close()
+		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.base+"/"+service+"/"+method, bytes.NewReader(grpcWebFrame(0, payload)))
+	api.closeConn = conn.Close
+	return api, nil
+}
+
+// newKagentAPI is the client on an existing connection (the tests hand in a
+// bufconn to a fake controller).
+func newKagentAPI(conn grpc.ClientConnInterface, token string) (*kagentAPI, error) {
+	transport := a2agrpc.NewGRPCTransportFromClient(a2apb.NewA2AServiceClient(conn))
+	// NewFromEndpoints does no I/O: the factory hands back the transport on
+	// the shared connection, so the only error is a configuration mismatch.
+	a2aClient, err := a2aclient.NewFromEndpoints(context.Background(),
+		[]*a2a.AgentInterface{{URL: "grpc://" + kagentControllerRoute, ProtocolBinding: a2a.TransportProtocolGRPC, ProtocolVersion: a2a.Version}},
+		a2aclient.WithDefaultsDisabled(),
+		a2aclient.WithTransport(a2a.TransportProtocolGRPC, a2aclient.TransportFactoryFn(
+			func(context.Context, *a2a.AgentCard, *a2a.AgentInterface) (a2aclient.Transport, error) {
+				return transport, nil
+			})),
+	)
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("building the A2A client: %w", err)
 	}
-	req.Header.Set("Content-Type", grpcWebContentType)
-	req.Header.Set("Accept", grpcWebContentType)
-	req.Header.Set("X-Grpc-Web", "1")
-	req.Header.Set(userIDHeader, a.user)
+	return &kagentAPI{
+		a2a:       a2aClient,
+		templates: apiv1alpha1.NewAgentTemplateServiceClient(conn),
+		instances: apiv1alpha1.NewAgentInstanceServiceClient(conn),
+		system:    apiv1alpha1.NewSystemServiceClient(conn),
+		token:     token,
+		closeConn: func() error { return nil },
+	}, nil
+}
+
+// close releases the connection.
+func (a *kagentAPI) close() {
+	_ = a.closeConn()
+}
+
+// callCtx attaches the person's bearer (and the extra metadata) to a kagent
+// service call.
+func (a *kagentAPI) callCtx(ctx context.Context) context.Context {
+	md := metadata.Join(a.extra)
 	if a.token != "" {
-		req.Header.Set("Authorization", "Bearer "+a.token)
+		md.Set(authorizationMetadata, "Bearer "+a.token)
 	}
-	for name, value := range headers {
-		req.Header.Set(name, value)
-	}
-	resp, err := a.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("%s/%s through %s: %w", service, method, a.base, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("%s/%s: reading the answer: %w", service, method, err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s/%s through %s answered HTTP %d (the edge or the route, not the controller): %.300s", service, method, a.base, resp.StatusCode, body)
-	}
-	messages, trailers, err := parseGRPCWebBody(body)
-	if err != nil {
-		return fmt.Errorf("%s/%s: %w", service, method, err)
-	}
-	status, err := grpcStatusFrom(resp.Header, trailers)
-	if err != nil {
-		return fmt.Errorf("%s/%s: %w", service, method, err)
-	}
-	if status != nil {
-		return fmt.Errorf("%s/%s: %w", service, method, status)
-	}
-	if len(messages) == 0 {
-		return fmt.Errorf("%s/%s: OK without a message", service, method)
-	}
-	if err := proto.Unmarshal(messages[0], out); err != nil {
-		return fmt.Errorf("%s/%s: decoding the answer: %w", service, method, err)
-	}
-	return nil
+	return metadata.NewOutgoingContext(ctx, md)
 }
 
-// grpcWebFrame is one length-prefixed gRPC-Web frame: the flag byte (0 for a
-// message, grpcWebTrailerFlag for trailers), the payload length big-endian,
-// the payload.
-func grpcWebFrame(flag byte, payload []byte) []byte {
-	frame := make([]byte, grpcWebFrameHeader+len(payload))
-	frame[0] = flag
-	binary.BigEndian.PutUint32(frame[1:grpcWebFrameHeader], uint32(len(payload))) // #nosec G115 -- a proto message never approaches 4 GiB
-	copy(frame[grpcWebFrameHeader:], payload)
-	return frame
+// a2aCtx attaches the A2A service parameters of a call on the instance: the
+// person's bearer, exactly one instance route, the HITL extension request
+// (and the extra metadata). The gRPC transport carries them as metadata.
+func (a *kagentAPI) a2aCtx(ctx context.Context, instanceID string) context.Context {
+	params := a2aclient.ServiceParams{
+		instanceIDMetadata:     {instanceID},
+		a2a.SvcParamExtensions: {hitlExtensionURI},
+	}
+	if a.token != "" {
+		params[authorizationMetadata] = []string{"Bearer " + a.token}
+	}
+	for key, values := range a.extra {
+		params[key] = values
+	}
+	return a2aclient.AttachServiceParams(ctx, params)
 }
 
-// parseGRPCWebBody splits a gRPC-Web response body into its message frames
-// and the trailers frame, if the answer carried one ("key: value" lines). A
-// body that ends inside a frame is refused: it is not a gRPC-Web answer.
-func parseGRPCWebBody(body []byte) (messages [][]byte, trailers http.Header, err error) {
-	for len(body) > 0 {
-		if len(body) < grpcWebFrameHeader {
-			return nil, nil, fmt.Errorf("gRPC-Web answer ends inside a frame header (%d trailing bytes)", len(body))
-		}
-		flag, length := body[0], binary.BigEndian.Uint32(body[1:grpcWebFrameHeader])
-		body = body[grpcWebFrameHeader:]
-		if uint64(len(body)) < uint64(length) {
-			return nil, nil, fmt.Errorf("gRPC-Web frame announces %d bytes, %d follow", length, len(body))
-		}
-		frame, rest := body[:length], body[length:]
-		body = rest
-		if flag&grpcWebTrailerFlag != 0 {
-			trailers = parseGRPCWebTrailers(frame)
-			continue
-		}
-		messages = append(messages, frame)
-	}
-	return messages, trailers, nil
-}
-
-// parseGRPCWebTrailers reads a trailers frame: HTTP header lines, CRLF-separated.
-func parseGRPCWebTrailers(raw []byte) http.Header {
-	trailers := http.Header{}
-	for _, line := range strings.Split(string(raw), "\r\n") {
-		key, value, ok := strings.Cut(strings.TrimSpace(line), ":")
-		if !ok {
-			continue
-		}
-		trailers.Add(textproto.CanonicalMIMEHeaderKey(strings.TrimSpace(key)), strings.TrimSpace(value))
-	}
-	return trailers
-}
-
-// grpcStatusFrom is the call's verdict: grpc-status from the trailers frame,
-// or from the response headers of a trailers-only answer (an error before
-// any message). nil for OK; an answer without any status is not gRPC-Web.
-func grpcStatusFrom(headers, trailers http.Header) (*grpcStatus, error) {
-	source := trailers
-	if source.Get(grpcStatusHeader) == "" {
-		source = headers
-	}
-	raw := source.Get(grpcStatusHeader)
-	if raw == "" {
-		return nil, fmt.Errorf("no grpc-status in the trailers or the headers — not a gRPC-Web answer (content-type %q)", headers.Get("Content-Type"))
-	}
-	code, err := strconv.Atoi(raw)
+// currentUser is SystemService/GetCurrentUser: the claims the controller
+// attributes the call to — in trusted-proxy mode what the edge put into
+// x-user-id from the verified token.
+func (a *kagentAPI) currentUser(ctx context.Context) (map[string]any, error) {
+	resp, err := a.system.GetCurrentUser(a.callCtx(ctx), &apiv1alpha1.GetCurrentUserRequest{})
 	if err != nil {
-		return nil, fmt.Errorf("grpc-status %q is not a number", raw)
+		return nil, fmt.Errorf("GetCurrentUser: %w", err)
 	}
-	if code == 0 {
-		return nil, nil
-	}
-	message := source.Get(grpcMessageHeader)
-	if decoded, err := url.PathUnescape(message); err == nil {
-		message = decoded
-	}
-	return &grpcStatus{code: code, message: message}, nil
+	return resp.GetClaims().AsMap(), nil
 }
 
-// createInstance is AgentInstanceService/CreateAgentInstance for the person:
-// one conversation of the AgentTemplate on the Go ADK Harness, both in the
-// kagent namespace. A template whose golden snapshot is still being taken
-// answers FailedPrecondition; that is waited through, bounded.
-func (a *kagentAPI) createInstance(ctx context.Context, template string) (*apiv1alpha1.AgentInstance, error) {
-	req := &apiv1alpha1.CreateAgentInstanceRequest{
-		Harness:       &apiv1alpha1.ResourceReference{Namespace: kagentNamespace, Name: kagentHarness},
-		AgentTemplate: &apiv1alpha1.ResourceReference{Namespace: kagentNamespace, Name: template},
-		RequestId:     uuid.NewString(),
+// principalOf is the person the controller's claims name: the email claim,
+// else the subject.
+func principalOf(claims map[string]any) string {
+	if email, _ := claims["email"].(string); email != "" {
+		return email
 	}
-	var resp apiv1alpha1.CreateAgentInstanceResponse
-	var err error
-	created := waitFor(20, 3*time.Second, func() bool {
-		err = a.call(ctx, agentInstanceService, "CreateAgentInstance", req, &resp, nil)
-		var status *grpcStatus
-		if errors.As(err, &status) && status.code == grpcFailedPrecondition {
-			return false
-		}
-		return true
-	})
-	if err != nil {
-		return nil, fmt.Errorf("creating an AgentInstance of %s/%s on Harness %s as %s: %w", kagentNamespace, template, kagentHarness, a.user, err)
-	}
-	if !created {
-		return nil, fmt.Errorf("AgentTemplate %s has no successful revision after 60 s (the controller keeps answering FailedPrecondition)", template)
-	}
-	instance := resp.GetAgentInstance()
-	if instance.GetId() == "" {
-		return nil, fmt.Errorf("CreateAgentInstance of %s answered without an id", template)
-	}
-	return instance, nil
-}
-
-// deleteInstance is AgentInstanceService/DeleteAgentInstance: best effort,
-// on the cleanup paths.
-func (a *kagentAPI) deleteInstance(id string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	var resp apiv1alpha1.DeleteAgentInstanceResponse
-	if err := a.call(ctx, agentInstanceService, "DeleteAgentInstance", &apiv1alpha1.DeleteAgentInstanceRequest{AgentInstanceId: id}, &resp, nil); err != nil {
-		note("deleting AgentInstance %s: %v", id, err)
-	}
+	sub, _ := claims["sub"].(string)
+	return sub
 }
 
 // version is SystemService/GetVersion: the controller's own build identity.
 func (a *kagentAPI) version(ctx context.Context) (*apiv1alpha1.GetVersionResponse, error) {
-	var resp apiv1alpha1.GetVersionResponse
-	if err := a.call(ctx, systemService, "GetVersion", &apiv1alpha1.GetVersionRequest{}, &resp, nil); err != nil {
-		return nil, err
+	resp, err := a.system.GetVersion(a.callCtx(ctx), &apiv1alpha1.GetVersionRequest{})
+	if err != nil {
+		return nil, fmt.Errorf("GetVersion: %w", err)
 	}
-	return &resp, nil
+	return resp, nil
 }
 
 // substrateStatus is SystemService/GetSubstrateStatus for one namespace: the
@@ -321,100 +264,565 @@ func (a *kagentAPI) version(ctx context.Context) (*apiv1alpha1.GetVersionRespons
 // with their state and worker assignment, the pools' workers. What the
 // portal's Substrate page shows; the person needs get on Substrate.
 func (a *kagentAPI) substrateStatus(ctx context.Context, namespace string) (*apiv1alpha1.GetSubstrateStatusResponse, error) {
-	var resp apiv1alpha1.GetSubstrateStatusResponse
-	if err := a.call(ctx, systemService, "GetSubstrateStatus", &apiv1alpha1.GetSubstrateStatusRequest{Namespace: namespace}, &resp, nil); err != nil {
-		return nil, err
+	resp, err := a.system.GetSubstrateStatus(a.callCtx(ctx), &apiv1alpha1.GetSubstrateStatusRequest{Namespace: namespace})
+	if err != nil {
+		return nil, fmt.Errorf("GetSubstrateStatus: %w", err)
 	}
-	return &resp, nil
+	return resp, nil
 }
 
-// sendMessage is one A2A turn on the instance — lf.a2a.v1.A2AService/SendMessage
-// with the person's headers and x-kagent-agent-instance-id — and returns the
-// text of the terminal Task (or of a bare Message answer). A task that ends
-// anywhere but completed is an error carrying what it said.
-func (a *kagentAPI) sendMessage(ctx context.Context, instanceID, prompt string) (string, error) {
-	req := &a2apb.SendMessageRequest{Message: &a2apb.Message{
-		MessageId: uuid.NewString(),
-		Role:      a2apb.Role_ROLE_USER,
-		Parts:     []*a2apb.Part{{Content: &a2apb.Part_Text{Text: prompt}}},
-	}}
-	var resp a2apb.SendMessageResponse
-	if err := a.call(ctx, a2aService, "SendMessage", req, &resp, map[string]string{agentInstanceHeader: instanceID}); err != nil {
-		return "", err
+// listTemplates is AgentTemplateService/ListAgentTemplates of the kagent
+// namespace — Swarmgeist's roster call.
+func (a *kagentAPI) listTemplates(ctx context.Context) ([]*apiv1alpha1.AgentTemplate, error) {
+	resp, err := a.templates.ListAgentTemplates(a.callCtx(ctx), &apiv1alpha1.ListAgentTemplatesRequest{Namespace: kagentNamespace})
+	if err != nil {
+		return nil, fmt.Errorf("ListAgentTemplates in %s: %w", kagentNamespace, err)
 	}
-	if msg := resp.GetMessage(); msg != nil {
-		return partsText(msg.GetParts()), nil
-	}
-	task := resp.GetTask()
-	if task == nil {
-		return "", fmt.Errorf("SendMessage answered neither a Task nor a Message")
-	}
-	text := taskText(task)
-	if state := task.GetStatus().GetState(); state != a2apb.TaskState_TASK_STATE_COMPLETED {
-		return "", fmt.Errorf("the task ended %s: %s", strings.TrimPrefix(state.String(), "TASK_STATE_"), excerpt(text, 300))
-	}
-	return text, nil
+	return resp.GetAgentTemplates(), nil
 }
 
-// taskText is what a Task says: its status message's text parts, then its
-// artifacts' — the shape kagent's own e2e reads.
-func taskText(task *a2apb.Task) string {
-	texts := []string{partsText(task.GetStatus().GetMessage().GetParts())}
-	for _, artifact := range task.GetArtifacts() {
-		texts = append(texts, partsText(artifact.GetParts()))
+// templateListing is what a surface reads off one listed AgentTemplate: the
+// technical name, the display name and icon from the chart's annotations,
+// the Harness a conversation is created with, and why the template cannot
+// start one (empty for a selectable template) — klaus-gateway's roster entry.
+type templateListing struct {
+	Name, Namespace, DisplayName, IconURL, Description, Harness, Unavailable string
+}
+
+// listingOf derives the roster entry from a listed template: the annotations
+// from the CR's metadata, the readiness from status.harnesses[] of the
+// admitting Harnesses the controller reports — a template is selectable when
+// an admitting Harness reports Ready=True for it.
+func listingOf(t *apiv1alpha1.AgentTemplate) templateListing {
+	resource := t.GetResource().GetValue().AsMap()
+	annotations, _ := nestedMap(resource, "metadata")["annotations"].(map[string]any)
+	l := templateListing{
+		Name:        t.GetRef().GetName(),
+		Namespace:   t.GetRef().GetNamespace(),
+		DisplayName: stringOf(annotations[displayNameAnnotation]),
+		IconURL:     stringOf(annotations[iconURLAnnotation]),
+		Description: t.GetDescription(),
+	}
+	admitting := t.GetAdmittingHarnesses()
+	if len(admitting) == 0 {
+		l.Unavailable = "no Harness admits this AgentTemplate (it carries no admission label a platform Harness selects)"
+		return l
+	}
+	harnesses, _ := nestedMap(resource, "status")["harnesses"].([]any)
+	var firstReason string
+	for _, name := range admitting {
+		ready, reason := readyConditionOf(harnesses, name)
+		if ready {
+			l.Harness = name
+			return l
+		}
+		if firstReason == "" {
+			firstReason = reason
+		}
+	}
+	l.Harness = admitting[0]
+	l.Unavailable = fmt.Sprintf("Harness %s has not compiled a ready revision: %s", admitting[0], firstReason)
+	return l
+}
+
+// readyConditionOf reads the Ready condition of one Harness's entry in
+// status.harnesses[]: true, or false with the reason.
+func readyConditionOf(harnesses []any, harness string) (bool, string) {
+	for _, h := range harnesses {
+		entry, ok := h.(map[string]any)
+		if !ok || stringOf(entry["harness"]) != harness {
+			continue
+		}
+		conditions, _ := entry["conditions"].([]any)
+		for _, c := range conditions {
+			cond, ok := c.(map[string]any)
+			if !ok || stringOf(cond["type"]) != conditionReady {
+				continue
+			}
+			if stringOf(cond["status"]) == conditionTrue {
+				return true, ""
+			}
+			reason := stringOf(cond["message"])
+			if reason == "" {
+				reason = stringOf(cond["reason"])
+			}
+			return false, reason
+		}
+		return false, "no Ready condition reported yet"
+	}
+	return false, "no status reported yet"
+}
+
+func nestedMap(m map[string]any, key string) map[string]any {
+	v, _ := m[key].(map[string]any)
+	return v
+}
+
+func stringOf(v any) string {
+	s, _ := v.(string)
+	return s
+}
+
+// createInstance is AgentInstanceService/CreateAgentInstance for the person:
+// one conversation of the AgentTemplate on the Go ADK Harness, both in the
+// kagent namespace, keyed by requestID — the controller's create is
+// idempotent per (creator, request_id), so a retried first turn gets the
+// same instance back. A template whose golden snapshot is still being taken
+// answers FailedPrecondition; that is waited through, bounded. Returns once
+// the instance is READY (or SUSPENDED: a resumable conversation).
+func (a *kagentAPI) createInstance(ctx context.Context, template, requestID string) (*apiv1alpha1.AgentInstance, error) {
+	req := &apiv1alpha1.CreateAgentInstanceRequest{
+		Harness:       &apiv1alpha1.ResourceReference{Namespace: kagentNamespace, Name: kagentHarness},
+		AgentTemplate: &apiv1alpha1.ResourceReference{Namespace: kagentNamespace, Name: template},
+		RequestId:     requestID,
+	}
+	var resp *apiv1alpha1.CreateAgentInstanceResponse
+	var err error
+	created := waitFor(int(templateRevisionTimeout/pollInterval), pollInterval, func() bool {
+		resp, err = a.instances.CreateAgentInstance(a.callCtx(ctx), req)
+		return status.Code(err) != codes.FailedPrecondition
+	})
+	if err != nil {
+		return nil, fmt.Errorf("creating an AgentInstance of %s/%s on Harness %s: %w", kagentNamespace, template, kagentHarness, err)
+	}
+	if !created {
+		return nil, fmt.Errorf("AgentTemplate %s has no successful revision after %s (the controller keeps answering FailedPrecondition)", template, templateRevisionTimeout)
+	}
+	instance := resp.GetAgentInstance()
+	if instance.GetId() == "" {
+		return nil, fmt.Errorf("CreateAgentInstance of %s answered without an id", template)
+	}
+	return a.awaitInstanceReady(ctx, instance)
+}
+
+// awaitInstanceReady polls the instance until it is READY or SUSPENDED (a
+// conversation gives its worker back between turns; the next send resumes
+// it), FAILED, or the deadline passes. The common case returns at once.
+func (a *kagentAPI) awaitInstanceReady(ctx context.Context, instance *apiv1alpha1.AgentInstance) (*apiv1alpha1.AgentInstance, error) {
+	deadline := time.Now().Add(instanceReadyTimeout)
+	for {
+		switch instance.GetState() {
+		case apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_READY, apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_SUSPENDED:
+			return instance, nil
+		case apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_FAILED:
+			return instance, fmt.Errorf("AgentInstance %s failed: %s %s", instance.GetId(), instance.GetFailure().GetReason(), instance.GetFailure().GetMessage())
+		case apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_DELETING, apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_DELETED:
+			return instance, fmt.Errorf("AgentInstance %s is %s", instance.GetId(), instanceState(instance))
+		}
+		if time.Now().After(deadline) {
+			return instance, fmt.Errorf("AgentInstance %s is still %s after %s", instance.GetId(), instanceState(instance), instanceReadyTimeout)
+		}
+		select {
+		case <-ctx.Done():
+			return instance, ctx.Err()
+		case <-time.After(pollInterval):
+		}
+		next, err := a.getInstance(ctx, instance.GetId())
+		if err != nil {
+			return instance, err
+		}
+		instance = next
+	}
+}
+
+// instanceState is the state the way the evidence quotes it (READY, not
+// AGENT_INSTANCE_STATE_READY).
+func instanceState(instance *apiv1alpha1.AgentInstance) string {
+	return strings.TrimPrefix(instance.GetState().String(), "AGENT_INSTANCE_STATE_")
+}
+
+// getInstance is AgentInstanceService/GetAgentInstance.
+func (a *kagentAPI) getInstance(ctx context.Context, id string) (*apiv1alpha1.AgentInstance, error) {
+	resp, err := a.instances.GetAgentInstance(a.callCtx(ctx), &apiv1alpha1.GetAgentInstanceRequest{AgentInstanceId: id})
+	if err != nil {
+		return nil, fmt.Errorf("GetAgentInstance %s: %w", id, err)
+	}
+	return resp.GetAgentInstance(), nil
+}
+
+// listInstances is AgentInstanceService/ListAgentInstances for the person:
+// the instances the controller keeps for them (creator-scoped), every page.
+func (a *kagentAPI) listInstances(ctx context.Context) ([]*apiv1alpha1.AgentInstance, error) {
+	var all []*apiv1alpha1.AgentInstance
+	page := &apiv1alpha1.PageRequest{Limit: 200}
+	for {
+		resp, err := a.instances.ListAgentInstances(a.callCtx(ctx), &apiv1alpha1.ListAgentInstancesRequest{Page: page})
+		if err != nil {
+			return nil, fmt.Errorf("ListAgentInstances: %w", err)
+		}
+		all = append(all, resp.GetAgentInstances()...)
+		if resp.GetPage().GetNextPageToken() == "" {
+			return all, nil
+		}
+		page = &apiv1alpha1.PageRequest{Limit: 200, PageToken: resp.GetPage().GetNextPageToken()}
+	}
+}
+
+// deleteInstance is AgentInstanceService/DeleteAgentInstance; an instance
+// that is already gone is success.
+func (a *kagentAPI) deleteInstance(ctx context.Context, id string) error {
+	_, err := a.instances.DeleteAgentInstance(a.callCtx(ctx), &apiv1alpha1.DeleteAgentInstanceRequest{AgentInstanceId: id})
+	if err != nil && status.Code(err) != codes.NotFound {
+		return fmt.Errorf("DeleteAgentInstance %s: %w", id, err)
+	}
+	return nil
+}
+
+// stream is lf.a2a.v1.A2AService/SendStreamingMessage on the instance and
+// yields the task's events as the SDK types. A message without a TaskID
+// starts a new task; one carrying the id of a paused task resumes it. The
+// message's ContextID stays empty: the controller owns the conversation's
+// context id and rejects any other value.
+func (a *kagentAPI) stream(ctx context.Context, instanceID string, msg *a2a.Message) iter.Seq2[a2a.Event, error] {
+	return a.a2a.SendStreamingMessage(a.a2aCtx(ctx, instanceID), &a2a.SendMessageRequest{Message: msg})
+}
+
+// getTask is A2AService/GetTask on the instance.
+func (a *kagentAPI) getTask(ctx context.Context, instanceID string, taskID a2a.TaskID) (*a2a.Task, error) {
+	task, err := a.a2a.GetTask(a.a2aCtx(ctx, instanceID), &a2a.GetTaskRequest{ID: taskID})
+	if err != nil {
+		return nil, fmt.Errorf("GetTask %s: %w", taskID, err)
+	}
+	return task, nil
+}
+
+// cancelTask is A2AService/CancelTask on the instance: the controller stops
+// the task server-side and answers its final state.
+func (a *kagentAPI) cancelTask(ctx context.Context, instanceID string, taskID a2a.TaskID) (*a2a.Task, error) {
+	task, err := a.a2a.CancelTask(a.a2aCtx(ctx, instanceID), &a2a.CancelTaskRequest{ID: taskID})
+	if err != nil {
+		return nil, fmt.Errorf("CancelTask %s: %w", taskID, err)
+	}
+	return task, nil
+}
+
+// userMessage is one user turn: a text part, no context id (the controller's).
+func userMessage(prompt string) *a2a.Message {
+	return a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart(prompt))
+}
+
+// turn is what one streamed A2A turn produced, folded from its events.
+type turn struct {
+	taskID    a2a.TaskID
+	contextID string
+	// states are the task states the stream reported, in order — SUBMITTED,
+	// WORKING, …, the one the stream ended on.
+	states []a2a.TaskState
+	// artifacts are the artifacts' text so far, in the order first seen
+	// (an appended chunk joins its artifact's text).
+	artifactOrder []a2a.ArtifactID
+	artifactText  map[a2a.ArtifactID]string
+	// statusText is the text of the status message the stream ended on: the
+	// agent's hint on a pause, its words on a failure.
+	statusText string
+	// approval is the tool_approval_request the task paused on at
+	// input-required, nil otherwise.
+	approval *toolApprovalRequest
+	// message is set for a bare Message answer (no task).
+	message *a2a.Message
+	events  int
+}
+
+// state is the task state the stream ended on (unspecified before any).
+func (t *turn) state() a2a.TaskState {
+	if len(t.states) == 0 {
+		return a2a.TaskStateUnspecified
+	}
+	return t.states[len(t.states)-1]
+}
+
+// text is the agent's answer: the artifacts' text parts in order, then the
+// terminal status message's, or a bare Message's parts.
+func (t *turn) text() string {
+	if t.message != nil {
+		return partsText(t.message.Parts)
+	}
+	texts := make([]string, 0, len(t.artifactOrder)+1)
+	for _, id := range t.artifactOrder {
+		if s := t.artifactText[id]; s != "" {
+			texts = append(texts, s)
+		}
+	}
+	if t.statusText != "" && !slices.Contains(texts, t.statusText) {
+		texts = append(texts, t.statusText)
 	}
 	return strings.TrimSpace(strings.Join(texts, "\n"))
 }
 
-// partsText joins the text parts of a message or artifact, one per line.
-func partsText(parts []*a2apb.Part) string {
+// observe folds one event in.
+func (t *turn) observe(ev a2a.Event) {
+	t.events++
+	switch e := ev.(type) {
+	case *a2a.Task:
+		t.taskID, t.contextID = e.ID, e.ContextID
+		for _, artifact := range e.Artifacts {
+			t.addArtifact(artifact, false)
+		}
+		t.setStatus(e.Status)
+	case *a2a.TaskStatusUpdateEvent:
+		t.taskID, t.contextID = e.TaskID, e.ContextID
+		t.setStatus(e.Status)
+	case *a2a.TaskArtifactUpdateEvent:
+		t.taskID, t.contextID = e.TaskID, e.ContextID
+		t.addArtifact(e.Artifact, e.Append)
+	case *a2a.Message:
+		t.message = e
+	}
+}
+
+func (t *turn) setStatus(s a2a.TaskStatus) {
+	t.states = append(t.states, s.State)
+	t.approval = nil
+	switch {
+	case s.State == a2a.TaskStateInputRequired:
+		t.approval = parseToolApprovalRequest(s.Message)
+		t.statusText = messageText(s.Message)
+	case s.State.Terminal():
+		t.statusText = messageText(s.Message)
+	}
+}
+
+func (t *turn) addArtifact(artifact *a2a.Artifact, appendChunk bool) {
+	if artifact == nil {
+		return
+	}
+	if t.artifactText == nil {
+		t.artifactText = map[a2a.ArtifactID]string{}
+	}
+	if _, seen := t.artifactText[artifact.ID]; !seen {
+		t.artifactOrder = append(t.artifactOrder, artifact.ID)
+	}
+	text := partsText(artifact.Parts)
+	if appendChunk {
+		t.artifactText[artifact.ID] += text
+		return
+	}
+	t.artifactText[artifact.ID] = text
+}
+
+// statesString is the states the way the evidence quotes them:
+// `submitted → working → completed`.
+func (t *turn) statesString() string {
+	names := make([]string, 0, len(t.states))
+	for _, s := range t.states {
+		names = append(names, string(s))
+	}
+	return strings.Join(names, " → ")
+}
+
+// messageText is the text of a message's text parts, "" for no message.
+func messageText(msg *a2a.Message) string {
+	if msg == nil {
+		return ""
+	}
+	return partsText(msg.Parts)
+}
+
+// partsText joins the text parts of a message or artifact (a data part — a
+// tool call, a tool result — carries no text and is skipped).
+func partsText(parts a2a.ContentParts) string {
 	var texts []string
 	for _, part := range parts {
-		if text := part.GetText(); text != "" {
+		if text := part.Text(); text != "" {
 			texts = append(texts, text)
 		}
 	}
-	return strings.Join(texts, "\n")
+	return strings.Join(texts, "")
 }
 
-// kagentTurn is one conversation turn on kagent main as a person — what the
-// portal does for a chat message: an AgentInstance of the AgentTemplate on the
-// Go ADK Harness, created for the person and deleted afterwards, and one A2A
-// SendMessage carrying the person's bearer, answered by the terminal Task's
-// text. user is the person's email (the controller's x-user-id), token the
-// same person's Dex id_token.
-func kagentTurn(cfg *config.Config, user, token, template, prompt string) (string, error) {
-	api, err := newKagentAPI(cfg, user, token)
+// turn drives one streamed turn on the instance to the end of its stream
+// and folds what it said. The state it ended on is the caller's to judge: a
+// completed task is an answer, input-required a pause the caller decides on.
+func (a *kagentAPI) turn(ctx context.Context, instanceID string, msg *a2a.Message) (*turn, error) {
+	t := &turn{}
+	for ev, err := range a.stream(ctx, instanceID, msg) {
+		if err != nil {
+			return t, fmt.Errorf("SendStreamingMessage on %s: %w", instanceID, err)
+		}
+		t.observe(ev)
+	}
+	return t, nil
+}
+
+// hitlTool is one tool invocation awaiting the person's decision.
+type hitlTool struct {
+	ID     string         `json:"id"`
+	CallID string         `json:"call_id"`
+	Name   string         `json:"name"`
+	Args   map[string]any `json:"args"`
+}
+
+// toolApprovalRequest is the HITL payload of a task paused at
+// input-required on one or more tool calls that need approval.
+type toolApprovalRequest struct {
+	Type   string     `json:"type"`
+	Hint   string     `json:"hint,omitempty"`
+	Tools  []hitlTool `json:"tools"`
+	Nested *struct {
+		Tools []hitlTool `json:"tools"`
+	} `json:"nested,omitempty"`
+}
+
+// decidedTools are the tools a decision covers: a nested child's when the
+// request was propagated from a sub-agent, the request's own otherwise.
+func (r *toolApprovalRequest) decidedTools() []hitlTool {
+	if r.Nested != nil {
+		return r.Nested.Tools
+	}
+	return r.Tools
+}
+
+// toolNames names the tools awaiting the decision.
+func (r *toolApprovalRequest) toolNames() []string {
+	var names []string
+	for _, tool := range r.decidedTools() {
+		names = append(names, tool.Name)
+	}
+	return names
+}
+
+// toolApproval is one decision, toolApprovalResponse the answer to a request:
+// exactly one decision per requested tool.
+type toolApproval struct {
+	ID              string `json:"id"`
+	Approved        bool   `json:"approved"`
+	RejectionReason string `json:"rejection_reason,omitempty"`
+}
+
+type toolApprovalResponse struct {
+	Type      string         `json:"type"`
+	Approvals []toolApproval `json:"approvals"`
+}
+
+// parseToolApprovalRequest reads the tool_approval_request a paused task's
+// status message carries under the extension URI in its metadata; nil for a
+// message without one (a plain-text prompt, an ask_user question, a runtime
+// that did not activate the extension).
+func parseToolApprovalRequest(msg *a2a.Message) *toolApprovalRequest {
+	if msg == nil || !slices.Contains(msg.Extensions, hitlExtensionURI) {
+		return nil
+	}
+	raw, ok := msg.Metadata[hitlExtensionURI].(map[string]any)
+	if !ok || stringOf(raw["type"]) != hitlTypeToolApprovalRequest {
+		return nil
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return nil
+	}
+	var req toolApprovalRequest
+	if err := json.Unmarshal(encoded, &req); err != nil || len(req.decidedTools()) == 0 {
+		return nil
+	}
+	return &req
+}
+
+// decisionMessage answers a paused task's tool_approval_request: a user
+// message carrying the paused task's id, the extension declared, and under
+// its URI one approval per requested tool — all approved, or all rejected
+// with the reason — so the task resumes in place.
+func decisionMessage(taskID a2a.TaskID, req *toolApprovalRequest, approve bool, reason string) (*a2a.Message, error) {
+	response := toolApprovalResponse{Type: hitlTypeToolApprovalResponse}
+	for _, tool := range req.decidedTools() {
+		approval := toolApproval{ID: tool.ID, Approved: approve}
+		if !approve {
+			approval.RejectionReason = reason
+		}
+		response.Approvals = append(response.Approvals, approval)
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		return nil, err
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(encoded, &raw); err != nil {
+		return nil, err
+	}
+	msg := a2a.NewMessage(a2a.MessageRoleUser)
+	msg.TaskID = taskID
+	msg.SetMeta(hitlExtensionURI, raw)
+	msg.Extensions = append(msg.Extensions, hitlExtensionURI)
+	return msg, nil
+}
+
+// decide resumes a task paused on a tool_approval_request with the decision
+// and folds the resumed stream.
+func (a *kagentAPI) decide(ctx context.Context, instanceID string, paused *turn, approve bool, reason string) (*turn, error) {
+	if paused.approval == nil {
+		return nil, fmt.Errorf("task %s carries no tool_approval_request to decide on (state %s)", paused.taskID, paused.state())
+	}
+	msg, err := decisionMessage(paused.taskID, paused.approval, approve, reason)
+	if err != nil {
+		return nil, err
+	}
+	return a.turn(ctx, instanceID, msg)
+}
+
+// errTurnPaused says a shared proof's turn paused for a decision it does not
+// take: its agents bind no tool that requires approval, so a pause is a
+// finding.
+var errTurnPaused = errors.New("the turn paused at input-required")
+
+// completedText is the answer of a turn that ended completed; any other end
+// is an error naming the state and what the agent said.
+func (t *turn) completedText() (string, error) {
+	switch {
+	case t.message != nil:
+		return t.text(), nil
+	case t.state() == a2a.TaskStateCompleted:
+		return t.text(), nil
+	case t.state() == a2a.TaskStateInputRequired:
+		tools := "no tools named"
+		if t.approval != nil {
+			tools = strings.Join(t.approval.toolNames(), ", ")
+		}
+		return "", fmt.Errorf("%w on task %s (%s): %s", errTurnPaused, t.taskID, tools, excerpt(t.statusText, 200))
+	case len(t.states) == 0:
+		return "", fmt.Errorf("the stream ended without a task or a message (%d events)", t.events)
+	default:
+		return "", fmt.Errorf("the task ended %s (%s): %s", t.state(), t.statesString(), excerpt(t.text(), 300))
+	}
+}
+
+// agentTurnAs sends one turn to the agent as the person whose Dex id_token is
+// given — the way Swarmgeist and the portal drive a message: an AgentInstance
+// of the AgentTemplate on the Go ADK Harness created for the person and
+// deleted afterwards, one SendStreamingMessage carrying the person's bearer,
+// the instance route and the HITL extension request, the answer consumed as
+// a stream — and returns the agent's text. Shared steps of the proofs call
+// this one; a turn that pauses for a decision is an error (their agents bind
+// nothing that requires approval).
+func agentTurnAs(cfg *config.Config, name, token, prompt string) (string, error) {
+	api, err := dialKagentAPI(cfg, token)
 	if err != nil {
 		return "", err
 	}
+	defer api.close()
 	ctx, cancel := context.WithTimeout(context.Background(), kagentTurnTimeout)
 	defer cancel()
-	instance, err := api.createInstance(ctx, template)
+	instance, err := api.createInstance(ctx, name, uuid.NewString())
 	if err != nil {
 		return "", err
 	}
-	defer api.deleteInstance(instance.GetId())
-	note("AgentInstance %s of %s for %s (creator %s, %s)", instance.GetId(), template, user, instance.GetCreator(), strings.TrimPrefix(instance.GetState().String(), "AGENT_INSTANCE_STATE_"))
-	reply, err := api.sendMessage(ctx, instance.GetId(), prompt)
+	defer api.removeInstance(instance.GetId())
+	note("AgentInstance %s of %s (creator %s, %s)", instance.GetId(), name, instance.GetCreator(), instanceState(instance))
+	t, err := api.turn(ctx, instance.GetId(), userMessage(prompt))
 	if err != nil {
-		return "", fmt.Errorf("A2A turn on %s as %s: %w", template, user, err)
+		return "", fmt.Errorf("A2A turn on %s: %w", name, err)
+	}
+	reply, err := t.completedText()
+	if err != nil {
+		return "", fmt.Errorf("A2A turn on %s: %w", name, err)
 	}
 	return reply, nil
 }
 
-// agentTurnAs sends one turn to the agent as the person whose Dex id_token is
-// given — the way the portal's session chat does, x-user-id being the token's
-// email — and returns the agent's text. Shared steps of the proofs call this
-// one.
-func agentTurnAs(cfg *config.Config, name, token, prompt string) (string, error) {
-	claims, err := decodeJWTClaims(token)
-	if err != nil {
-		return "", fmt.Errorf("the token for the turn on %s: %w", name, err)
+// removeInstance deletes an instance on the cleanup paths, bounded on its own
+// context, and says when it could not.
+func (a *kagentAPI) removeInstance(id string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := a.deleteInstance(ctx, id); err != nil {
+		note("deleting AgentInstance %s: %v", id, err)
 	}
-	email, _ := claims["email"].(string)
-	if email == "" {
-		return "", fmt.Errorf("the token for the turn on %s carries no email claim to send as %s", name, userIDHeader)
-	}
-	return kagentTurn(cfg, email, token, name, prompt)
 }

@@ -74,6 +74,21 @@ func labTLSTransport() (*http.Transport, error) {
 	if labTransport.cached != nil {
 		return labTransport.cached, nil
 	}
+	pool, err := labCertPool()
+	if err != nil {
+		return nil, err
+	}
+	labTransport.cached = &http.Transport{
+		TLSClientConfig: &tls.Config{RootCAs: pool},
+		DialContext:     dialLab,
+	}
+	return labTransport.cached, nil
+}
+
+// labCertPool is what every client of the lab trusts — HTTP and gRPC alike:
+// the system roots plus the lab CA (certs/ca.crt). Read on every call; the
+// callers cache what they build on it.
+func labCertPool() (*x509.CertPool, error) {
 	caPEM, err := os.ReadFile(caCertPath)
 	if err != nil {
 		return nil, fmt.Errorf("reading lab CA (run `agentlab up` first?): %w", err)
@@ -85,14 +100,15 @@ func labTLSTransport() (*http.Transport, error) {
 	if !pool.AppendCertsFromPEM(caPEM) {
 		return nil, fmt.Errorf("certs/ca.crt contains no usable certificate")
 	}
+	return pool, nil
+}
+
+// dialLab dials a TCP address the lab way: a platform hostname on loopback
+// (dialLabAddr), anything else as given — the DialContext of every lab
+// client, HTTP and gRPC.
+func dialLab(ctx context.Context, network, addr string) (net.Conn, error) {
 	dialer := &net.Dialer{Timeout: 10 * time.Second}
-	labTransport.cached = &http.Transport{
-		TLSClientConfig: &tls.Config{RootCAs: pool},
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return dialer.DialContext(ctx, network, dialLabAddr(addr))
-		},
-	}
-	return labTransport.cached, nil
+	return dialer.DialContext(ctx, network, dialLabAddr(addr))
 }
 
 // labHTTPClient returns a client on the shared lab transport.

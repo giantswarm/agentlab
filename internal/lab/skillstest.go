@@ -243,10 +243,11 @@ func SkillsTest(cfg *config.Config, email string, opts SkillsTestOptions) error 
 	if err != nil {
 		return err
 	}
-	api, err := newKagentAPI(cfg, user.Email, token)
+	api, err := dialKagentAPI(cfg, token)
 	if err != nil {
 		return err
 	}
+	defer api.close()
 
 	step("The line under test")
 	facts := skillsLineFacts(cfg, api)
