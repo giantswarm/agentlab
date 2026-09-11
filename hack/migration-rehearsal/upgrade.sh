@@ -127,12 +127,13 @@ assert_hr_ready() { # <ns> <name> [<chart regex>]
   log "HelmRelease $1/$2 Ready chart $chart"
 }
 
-# The Helm-ownership refusal the 4.x kagent-crds release is predicted to hit on
-# the CRDs the 0.10 wrapper installed unowned from its crds/ dir.
-OWNERSHIP_RE='invalid ownership metadata|cannot be imported into the current release|rendered manifests contain a resource that already exists'
+# The refusal the 4.x kagent-crds release hits on the CRDs the 0.10 wrapper
+# installed unowned from its crds/ dir: Helm ownership, or the apiserver storage-version
+# rule (status.storedVersions keeps v1alpha2, the 0.11 CRDs carry only v1alpha3).
+CRD_REFUSAL_RE='invalid ownership metadata|storedVersions|is invalid:|cannot be imported into the current release|rendered manifests contain a resource that already exists'
 kagent_crds_refusal() {
   kubectl -n agent-platform get helmrelease kagent-crds -o json 2>/dev/null \
-    | jq -r '.status.conditions[]?.message' | /usr/bin/grep -E -m1 "$OWNERSHIP_RE" || true
+    | jq -r '.status.conditions[]?.message' | /usr/bin/grep -E -m1 "$CRD_REFUSAL_RE" || true
 }
 
 # strip <file>: an object without the fields every reconcile rewrites.
@@ -184,7 +185,7 @@ step_before() {
     kubectl get helmrelease,ocirepository -n "$GITOPS_NS" -o yaml >| "$EVIDENCE/before-hr-oci-$GITOPS_NS.yaml"
     dump_gitops before
     helm -n agent-platform history agent-platform >| "$EVIDENCE/before-helm-history.txt"
-    kubectl get crd -o custom-columns='N:.metadata.name,REL:.metadata.annotations.meta\.helm\.sh/release-name,NS:.metadata.annotations.meta\.helm\.sh/release-namespace,MANAGED:.metadata.labels.app\.kubernetes\.io/managed-by' \
+    kubectl get crd -o custom-columns='N:.metadata.name,REL:.metadata.annotations.meta\.helm\.sh/release-name,NS:.metadata.annotations.meta\.helm\.sh/release-namespace,MANAGED:.metadata.labels.app\.kubernetes\.io/managed-by,STORED:.status.storedVersions,VERSIONS:.spec.versions[*].name' \
       | /usr/bin/grep -i 'kagent\|kmcp\|^N ' >| "$EVIDENCE/before-crds.txt"
     hr_table >| "$EVIDENCE/before-helmreleases.txt"
     kubectl -n agent-platform get deploy -o custom-columns='N:.metadata.name,I:.spec.template.spec.containers[*].image' >| "$EVIDENCE/before-deploy-images.txt"
@@ -252,7 +253,7 @@ collect_refusal_evidence() { # <suffix>
   hr_table >| "$d/helmreleases.txt"
   kubectl -n agent-platform get helmrelease kagent-crds -o yaml >| "$d/hr-kagent-crds.yaml"
   kubectl describe helmrelease -n agent-platform kagent-crds >| "$d/describe-hr-kagent-crds.txt" 2>&1
-  kubectl get crd -o custom-columns='N:.metadata.name,REL:.metadata.annotations.meta\.helm\.sh/release-name,NS:.metadata.annotations.meta\.helm\.sh/release-namespace,MANAGED:.metadata.labels.app\.kubernetes\.io/managed-by' \
+  kubectl get crd -o custom-columns='N:.metadata.name,REL:.metadata.annotations.meta\.helm\.sh/release-name,NS:.metadata.annotations.meta\.helm\.sh/release-namespace,MANAGED:.metadata.labels.app\.kubernetes\.io/managed-by,STORED:.status.storedVersions,VERSIONS:.spec.versions[*].name' \
     | /usr/bin/grep -i 'kagent\|kmcp\|^N ' >| "$d/crds.txt"
   local c
   for c in modelconfigs modelproviderconfigs remotemcpservers agents; do
@@ -284,7 +285,7 @@ step_upgrade() {
       trap_seen=1
       log "kagent-crds ownership refusal seen after $(( $(now) - t0 ))s: $(cat "$EVIDENCE/TRAP")"
       collect_refusal_evidence at-detection
-      status "FOUND-ISSUE (early, $(( $(now) - t0 ))s in) agent-platform: $BEFORE_VERSION→$TARGET upgrade — the kagent-crds release cannot adopt the CRDs the giantswarm/kagent 0.3.x wrapper installed unowned from crds/ ($(cat "$EVIDENCE/TRAP")); letting agentlab platform run out its --wait for a terminal Helm state; evidence $EVIDENCE/refusal-at-detection"
+      status "FOUND-ISSUE (early, $(( $(now) - t0 ))s in) agent-platform: $BEFORE_VERSION→$TARGET upgrade — the kagent-crds release cannot replace the CRDs the giantswarm/kagent 0.3.x wrapper installed unowned from crds/ ($(cat "$EVIDENCE/TRAP")); letting agentlab platform run out its --wait for a terminal Helm state; evidence $EVIDENCE/refusal-at-detection"
     fi
     sleep 10; waited=$((waited + 10))
   done
@@ -300,7 +301,7 @@ step_upgrade() {
   local msg; msg=$(kagent_crds_refusal)
   if [ -n "$msg" ] || [ -n "$trap_seen" ]; then
     collect_refusal_evidence final
-    found_issue "agent-platform: $BEFORE_VERSION→$TARGET upgrade — the kagent-crds release cannot adopt the CRDs the giantswarm/kagent 0.3.x wrapper installed unowned from crds/ (${msg:-$(cat "$EVIDENCE/TRAP")}); agentlab platform exit $rc after $(load_t platform)s; evidence $EVIDENCE/refusal-final"
+    found_issue "agent-platform: $BEFORE_VERSION→$TARGET upgrade — the kagent-crds release cannot replace the CRDs the giantswarm/kagent 0.3.x wrapper installed unowned from crds/ (${msg:-$(cat "$EVIDENCE/TRAP")}); agentlab platform exit $rc after $(load_t platform)s; evidence $EVIDENCE/refusal-final"
   fi
   if [ "$rc" -ne 0 ]; then
     tail -n 20 "$EVIDENCE/platform.log" >&2
@@ -368,7 +369,7 @@ step_assert_platform() {
   kubectl -n kagent get secret kagent-pg-kagent-v2-app -o custom-columns='N:.metadata.name,KEYS:.data' | cut -c1-120 | tee "$d/cnpg-secret.txt" >&2
 
   local c rel
-  kubectl get crd -o custom-columns='N:.metadata.name,REL:.metadata.annotations.meta\.helm\.sh/release-name,NS:.metadata.annotations.meta\.helm\.sh/release-namespace,MANAGED:.metadata.labels.app\.kubernetes\.io/managed-by' \
+  kubectl get crd -o custom-columns='N:.metadata.name,REL:.metadata.annotations.meta\.helm\.sh/release-name,NS:.metadata.annotations.meta\.helm\.sh/release-namespace,MANAGED:.metadata.labels.app\.kubernetes\.io/managed-by,STORED:.status.storedVersions,VERSIONS:.spec.versions[*].name' \
     | /usr/bin/grep -i 'kagent\|kmcp\|^N ' | tee "$d/crds.txt" >&2
   for c in agenttemplates harnesses modelconfigs remotemcpservers; do
     rel=$(kubectl get crd "$c.kagent.dev" -o jsonpath='{.metadata.annotations.meta\.helm\.sh/release-name}')
@@ -561,4 +562,5 @@ main() {
   step_record
 }
 
-main "$@"
+# Sourceable: the helpers and evidence collectors run standalone.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then main "$@"; fi
