@@ -289,14 +289,23 @@ func A2ATest(cfg *config.Config, email string, opts A2ATestOptions) error {
 
 	step("HITL: a rejected tool_approval_request ends the task without the tool call")
 	declineStarted := time.Now()
-	paused, err = api.turnOn(instance.GetId(), userMessage(a2aToolPrompt))
+	// On a fresh instance: the first one's conversation already holds the
+	// count, and a model that answers from it makes no tool call to pause on.
+	ctx, cancel = context.WithTimeout(context.Background(), kagentTurnTimeout)
+	fresh, err := api.createInstance(ctx, a2aTestAgent, uuid.NewString())
+	cancel()
+	if err != nil {
+		return err
+	}
+	instances.add(fresh.GetId())
+	paused, err = api.turnOn(fresh.GetId(), userMessage(a2aToolPrompt))
 	if err != nil {
 		return err
 	}
 	if paused.state() != a2a.TaskStateInputRequired || paused.approval == nil {
-		return fmt.Errorf("the second tool turn did not pause for approval: task %s ended %s (%s)", paused.taskID, stateName(paused.state()), paused.statesString())
+		return fmt.Errorf("the tool turn on the fresh instance %s did not pause for approval: task %s ended %s (%s): %s", fresh.GetId(), paused.taskID, stateName(paused.state()), paused.statesString(), excerpt(paused.text(), 200))
 	}
-	declined, rounds, err := api.decideUntilSettled(instance.GetId(), paused, false, a2aDeclineReason)
+	declined, rounds, err := api.decideUntilSettled(fresh.GetId(), paused, false, a2aDeclineReason)
 	if err != nil {
 		return err
 	}
