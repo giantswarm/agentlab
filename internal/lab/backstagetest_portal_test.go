@@ -36,6 +36,7 @@ const (
 	testOtherHarness  = "claude"
 	testRefMain       = "main"
 	testArtifactID    = "a-1"
+	testSkillPath     = "plugins/gs-base/skills/runbooks"
 	fieldParts        = "parts"
 	fieldTaskID       = "taskId"
 	fieldContextID    = "contextId"
@@ -176,7 +177,7 @@ func TestDiscoverSkills(t *testing.T) {
 	fp := newFakePortal(t)
 	good := skillDiscovery{Ref: testRefMain, Commit: testSkillCommit, Skills: []discoveredSkill{
 		{Name: "agent-self-awareness", Path: "agent-self-awareness", RepoURL: skillsTestRepo, Ref: testRefMain, Commit: testSkillCommit},
-		{Name: testSkillName, Path: "plugins/gs-base/skills/runbooks", RepoURL: skillsTestRepo, Ref: testRefMain, Commit: testSkillCommit},
+		{Name: testSkillName, Path: testSkillPath, RepoURL: skillsTestRepo, Ref: testRefMain, Commit: testSkillCommit},
 	}}
 	fp.handle(portalSkillsPath, http.StatusOK, good)
 	ps := fp.session(testPortalUser, platformAdminsGroup)
@@ -188,7 +189,7 @@ func TestDiscoverSkills(t *testing.T) {
 		t.Errorf("discovery = %+v", d)
 	}
 	entry := d.Skills[1].skillEntry()
-	if entry.Name != testSkillName || entry.Path != "plugins/gs-base/skills/runbooks" || entry.Git == nil || entry.Git.Commit != testSkillCommit || entry.Git.URL != skillsTestRepo || entry.Git.Ref != "" {
+	if entry.Name != testSkillName || entry.Path != testSkillPath || entry.Git == nil || entry.Git.Commit != testSkillCommit || entry.Git.URL != skillsTestRepo || entry.Git.Ref != "" {
 		t.Errorf("skillEntry = %+v", entry)
 	}
 	if got := fp.headers[portalSkillsPath].Get("Authorization"); got != "Bearer "+testBSToken {
@@ -215,7 +216,7 @@ func TestDiscoverSkills(t *testing.T) {
 func TestDiscoverSkillsTruncated(t *testing.T) {
 	fp := newFakePortal(t)
 	fp.handle(portalSkillsPath, http.StatusOK, skillDiscovery{Ref: testRefMain, Commit: testSkillCommit, Truncated: true, Skills: []discoveredSkill{
-		{Name: testSkillName, Path: "plugins/gs-base/skills/runbooks", RepoURL: skillsTestRepo, Ref: testRefMain, Commit: testSkillCommit},
+		{Name: testSkillName, Path: testSkillPath, RepoURL: skillsTestRepo, Ref: testRefMain, Commit: testSkillCommit},
 	}})
 	_, err := discoverSkills(fp.session(testPortalUser, platformAdminsGroup), skillsTestRepo)
 	if err == nil || !strings.Contains(err.Error(), "is truncated (1 skills listed)") {
