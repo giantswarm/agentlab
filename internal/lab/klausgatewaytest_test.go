@@ -16,21 +16,19 @@ import (
 	"testing"
 	"time"
 
-	a2apb "github.com/a2aproject/a2a-go/v2/a2apb/v1"
-	"google.golang.org/protobuf/proto"
+	"github.com/a2aproject/a2a-go/v2/a2a"
 
-	"github.com/giantswarm/agentlab/internal/kagentpb"
+	apiv1alpha1 "github.com/giantswarm/agentlab/internal/kagent/gen/kagent/api/v1alpha1"
 )
 
 // Fixed names of the fakes.
 const (
-	testUser          = "admin@lab.local"
-	testInstance      = "inst-1"
-	testTask          = "task-1"
-	testOldTask       = "old"
-	testThread        = "t-1"
-	kindAgentTemplate = "AgentTemplate"
-	toolCallTool      = "call_tool"
+	testUser     = "admin@lab.local"
+	testInstance = "inst-1"
+	testTask     = "task-1"
+	testOldTask  = "old"
+	testThread   = "t-1"
+	toolCallTool = "call_tool"
 )
 
 // TestKlausGatewayFixtures: the admitted template carries the Harness's
@@ -51,7 +49,7 @@ func TestKlausGatewayFixtures(t *testing.T) {
 	if carrier.GetKind() != remoteMCPServerKind || carrier.GetName() != klausGatewayTestAgent || carrier.GetNamespace() != kagentNamespace {
 		t.Errorf("carrier = %s %s/%s", carrier.GetKind(), carrier.GetNamespace(), carrier.GetName())
 	}
-	if url, _, _ := nestedString(carrier.Object, "spec", "url"); url != klausGatewayMusterURL {
+	if url := nestedString(carrier.Object, "spec", "url"); url != klausGatewayMusterURL {
 		t.Errorf("carrier url = %q", url)
 	}
 	if carrier.GetLabels()["kagent.dev/discovery"] != "disabled" {
@@ -75,10 +73,10 @@ func TestKlausGatewayFixtures(t *testing.T) {
 	if ann["ui.giantswarm.io/display-name"] != klausGatewayTestDisplay || ann["ui.giantswarm.io/icon-url"] != klausGatewayTestIcon {
 		t.Errorf("admitted annotations = %v", ann)
 	}
-	if model, _, _ := nestedString(admitted.Object, "spec", "modelConfig", "name"); model != "my-model" {
+	if model := nestedString(admitted.Object, "spec", "modelConfig", "name"); model != "my-model" {
 		t.Errorf("admitted modelConfig = %q", model)
 	}
-	tools, _, _ := nestedSlice(admitted.Object, "spec", "tools")
+	tools, _ := nestedValue(admitted.Object, "spec", "tools").([]any)
 	if len(tools) != 1 {
 		t.Fatalf("admitted tools = %v", tools)
 	}
@@ -100,33 +98,6 @@ func TestKlausGatewayFixtures(t *testing.T) {
 	if unadmitted.GetLabels()[managedByLabel] != managedByAgentlabValue {
 		t.Error("the unadmitted template is not labelled as agentlab's")
 	}
-}
-
-func nestedString(obj map[string]any, fields ...string) (string, bool, error) {
-	v, found := nested(obj, fields...)
-	s, ok := v.(string)
-	return s, found && ok, nil
-}
-
-func nestedSlice(obj map[string]any, fields ...string) ([]any, bool, error) {
-	v, found := nested(obj, fields...)
-	s, ok := v.([]any)
-	return s, found && ok, nil
-}
-
-func nested(obj map[string]any, fields ...string) (any, bool) {
-	var cur any = obj
-	for _, f := range fields {
-		m, ok := cur.(map[string]any)
-		if !ok {
-			return nil, false
-		}
-		cur, ok = m[f]
-		if !ok {
-			return nil, false
-		}
-	}
-	return cur, true
 }
 
 // TestGatewayArgs: the binary shape's flags name the loopback ports, the bolt
@@ -344,61 +315,12 @@ func TestWebClientTurns(t *testing.T) {
 	}
 }
 
-// fakeController answers the gRPC-Web reads the proof makes on the
-// controller: GetTask by id with a scripted state, ListTasks, and
-// ListAgentInstances.
-type fakeController struct {
-	tasks     map[string]a2apb.TaskState
-	instances []*kagentpb.AgentInstance
-}
-
-func (f *fakeController) handler(t *testing.T) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		messages, _, err := parseGRPCWebBody(body)
-		if err != nil || len(messages) != 1 {
-			t.Errorf("request body: %v (%d messages)", err, len(messages))
-		}
-		var out proto.Message
-		switch r.URL.Path {
-		case "/" + a2aService + "/GetTask":
-			var req a2apb.GetTaskRequest
-			_ = proto.Unmarshal(messages[0], &req)
-			state, ok := f.tasks[req.GetId()]
-			if !ok {
-				w.Header().Set(grpcStatusHeader, "5")
-				w.Header().Set(grpcMessageHeader, "task not found")
-				w.WriteHeader(http.StatusOK)
-				return
-			}
-			out = &a2apb.Task{Id: req.GetId(), Status: &a2apb.TaskStatus{State: state}}
-		case "/" + a2aService + "/ListTasks":
-			resp := &a2apb.ListTasksResponse{}
-			for id, state := range f.tasks {
-				resp.Tasks = append(resp.Tasks, &a2apb.Task{Id: id, Status: &a2apb.TaskStatus{State: state}})
-			}
-			out = resp
-		case "/" + agentInstanceService + "/ListAgentInstances":
-			var req kagentpb.ListAgentInstancesRequest
-			_ = proto.Unmarshal(messages[0], &req)
-			if req.GetAgentTemplate().GetName() != klausGatewayTestAgent {
-				t.Errorf("ListAgentInstances narrowed to %v, wanted %s", req.GetAgentTemplate(), klausGatewayTestAgent)
-			}
-			out = &kagentpb.ListAgentInstancesResponse{AgentInstances: f.instances}
-		default:
-			t.Errorf("unexpected call %s", r.URL.Path)
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		if r.URL.Path != "/"+agentInstanceService+"/ListAgentInstances" && r.Header.Get(agentInstanceHeader) != testInstance {
-			t.Errorf("%s without %s=inst-1: %q", r.URL.Path, agentInstanceHeader, r.Header.Get(agentInstanceHeader))
-		}
-		payload, _ := proto.Marshal(out)
-		w.Header().Set("Content-Type", grpcWebContentType)
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(grpcWebFrame(0, payload))
-		_, _ = w.Write(grpcWebFrame(grpcWebTrailerFlag, []byte("grpc-status: 0\r\n")))
-	})
+// proofInstance is the fixture's one AgentInstance as the fake serves it to
+// the person whose bearer is testToken.
+func proofInstance(id, template string) *apiv1alpha1.AgentInstance {
+	return &apiv1alpha1.AgentInstance{Id: id, Creator: testToken,
+		Harness:       &apiv1alpha1.ResourceReference{Namespace: kagentNamespace, Name: kagentHarness},
+		AgentTemplate: &apiv1alpha1.ResourceReference{Namespace: kagentNamespace, Name: template}}
 }
 
 // TestApproveUntilDone: the tool-using turn pauses twice (filter_tools, then
@@ -407,10 +329,10 @@ func (f *fakeController) handler(t *testing.T) http.Handler {
 // nothing left waiting; a pause on another task, or a task the controller does
 // not have paused, fails.
 func TestApproveUntilDone(t *testing.T) {
-	ctrl := &fakeController{tasks: map[string]a2apb.TaskState{testTask: a2apb.TaskState_TASK_STATE_INPUT_REQUIRED}}
-	ctrlSrv := httptest.NewServer(ctrl.handler(t))
-	defer ctrlSrv.Close()
-	api := &kagentAPI{client: ctrlSrv.Client(), base: ctrlSrv.URL, user: testUser, token: testToken}
+	ctrl := newFakeKagent()
+	ctrl.instances[testInstance] = proofInstance(testInstance, klausGatewayTestAgent)
+	ctrl.setTaskState(testTask, a2a.TaskStateInputRequired)
+	api := ctrl.serve(t, testToken)
 
 	prompt := func(tool string) string {
 		return fmt.Sprintf("event: prompt\ndata: {\"taskId\":\"task-1\",\"text\":\"%s?\",\"prompt\":{\"toolName\":\"%s\",\"tools\":[{\"id\":\"a\",\"name\":\"%s\"}]}}\n\n", tool, tool, tool)
@@ -432,7 +354,7 @@ func TestApproveUntilDone(t *testing.T) {
 				_, _ = io.WriteString(w, prompt(toolCallTool))
 				return
 			}
-			ctrl.tasks[testTask] = a2apb.TaskState_TASK_STATE_COMPLETED
+			ctrl.setTaskState(testTask, a2a.TaskStateCompleted)
 			_, _ = io.WriteString(w, "data: {\"content\":\"There are 12 namespaces.\"}\n\nevent: done\ndata: {}\n\n")
 			return
 		}
@@ -454,7 +376,7 @@ func TestApproveUntilDone(t *testing.T) {
 	}
 
 	// The controller does not have the task paused: the gateway's prompt is not trusted alone.
-	ctrl.tasks["task-2"] = a2apb.TaskState_TASK_STATE_WORKING
+	ctrl.setTaskState("task-2", a2a.TaskStateWorking)
 	other := &webTurn{Status: http.StatusOK, Prompt: &webPrompt{TaskID: "task-2"}}
 	other.Prompt.Prompt.ToolName = toolCallTool
 	if _, err := web.approveUntilDone(api, testInstance, other); err == nil || !strings.Contains(err.Error(), "not TASK_STATE_INPUT_REQUIRED") {
@@ -465,33 +387,32 @@ func TestApproveUntilDone(t *testing.T) {
 	}
 }
 
-// TestControllerReads: ListAgentInstances is narrowed to the fixture, taskIDs
+// TestControllerReads: the listing is narrowed to the fixture's template, taskIDs
 // is the set of the instance's tasks, and waitCanceledTask finds the task new
 // since the snapshot that reached TASK_STATE_CANCELED — or says what the new
 // tasks are.
 func TestControllerReads(t *testing.T) {
-	ctrl := &fakeController{
-		tasks:     map[string]a2apb.TaskState{testOldTask: a2apb.TaskState_TASK_STATE_COMPLETED, "new": a2apb.TaskState_TASK_STATE_CANCELED},
-		instances: []*kagentpb.AgentInstance{{Id: testInstance, Creator: testUser}},
-	}
-	srv := httptest.NewServer(ctrl.handler(t))
-	defer srv.Close()
-	api := &kagentAPI{client: srv.Client(), base: srv.URL, user: testUser, token: testToken}
+	ctrl := newFakeKagent()
+	ctrl.instances[testInstance] = proofInstance(testInstance, klausGatewayTestAgent)
+	ctrl.instances["other"] = proofInstance("other", "another-template")
+	ctrl.setTaskState(testOldTask, a2a.TaskStateCompleted)
+	ctrl.setTaskState("new", a2a.TaskStateCanceled)
+	api := ctrl.serve(t, testToken)
 
-	instances, err := api.listInstances(context.Background(), klausGatewayTestAgent)
+	instances, err := templateInstances(context.Background(), api)
 	if err != nil || len(instances) != 1 || instances[0].GetId() != testInstance {
-		t.Errorf("listInstances = %v %v", instanceIDs(instances), err)
+		t.Errorf("templateInstances = %v %v (the other template's instance must not be listed)", instanceIDs(instances), err)
 	}
 	ids, err := api.taskIDs(context.Background(), testInstance)
 	if err != nil || !ids[testOldTask] || !ids["new"] {
 		t.Errorf("taskIDs = %v %v", ids, err)
 	}
-	canceled, err := api.waitCanceledTask(testInstance, map[string]bool{testOldTask: true}, 3*time.Second)
+	canceled, err := api.waitCanceledTask(testInstance, map[a2a.TaskID]bool{testOldTask: true}, 3*time.Second)
 	if err != nil || canceled != "new" {
 		t.Errorf("waitCanceledTask = %q %v", canceled, err)
 	}
-	ctrl.tasks["new"] = a2apb.TaskState_TASK_STATE_WORKING
-	if _, err := api.waitCanceledTask(testInstance, map[string]bool{testOldTask: true}, 2*pollInterval); err == nil || !strings.Contains(err.Error(), "new TASK_STATE_WORKING") {
+	ctrl.setTaskState("new", a2a.TaskStateWorking)
+	if _, err := api.waitCanceledTask(testInstance, map[a2a.TaskID]bool{testOldTask: true}, 2*pollInterval); err == nil || !strings.Contains(err.Error(), "new TASK_STATE_WORKING") {
 		t.Errorf("no cancel: %v", err)
 	}
 }

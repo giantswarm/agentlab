@@ -19,11 +19,10 @@ import (
 	"syscall"
 	"time"
 
-	a2apb "github.com/a2aproject/a2a-go/v2/a2apb/v1"
-	"google.golang.org/protobuf/proto"
+	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/giantswarm/agentlab/internal/config"
-	"github.com/giantswarm/agentlab/internal/kagentpb"
+	apiv1alpha1 "github.com/giantswarm/agentlab/internal/kagent/gen/kagent/api/v1alpha1"
 )
 
 // The Swarmgeist proof: klaus-gateway on kagent API v2, headless.
@@ -151,9 +150,6 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	if !cfg.Platform.Enabled || !cfg.Platform.Agents {
 		return fmt.Errorf("platform.agents is off in %s — enable it and run `agentlab platform` first", config.File)
 	}
-	if kagentLegacy() {
-		return fmt.Errorf("the Swarmgeist proof needs kagent API v2 (klaus-gateway 1.x speaks A2A v1 over gRPC to it); the released 0.x kagent serves the REST surface the 0.x gateway used")
-	}
 	user := cfg.FindUser(email)
 	if user == nil {
 		return fmt.Errorf("no user %q in %s", email, config.File)
@@ -179,10 +175,11 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 		return fmt.Errorf("the id_token of %s: %w", user.Email, err)
 	}
 	subject, _ := claims["sub"].(string)
-	api, err := newKagentAPI(cfg, user.Email, token)
+	api, err := dialKagentAPI(cfg, token)
 	if err != nil {
 		return err
 	}
+	defer api.close()
 
 	// Leftovers of an aborted run first, and everything this run creates on
 	// every exit path.
@@ -196,7 +193,7 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 		return err
 	}
 	step("Waiting up to %s for %s Ready on Harness %s (the golden boot)", opts.ReadyTimeout, klausGatewayTestAgent, kagentHarness)
-	boot, err := waitGoldenBoot(klausGatewayTestAgent, kagentHarness, opts.ReadyTimeout)
+	boot, err := waitAgentReady(klausGatewayTestAgent, opts.ReadyTimeout)
 	if err != nil {
 		return err
 	}
@@ -248,7 +245,7 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	if err != nil {
 		return err
 	}
-	instances, err := api.listInstances(context.Background(), klausGatewayTestAgent)
+	instances, err := templateInstances(context.Background(), api)
 	if err != nil {
 		return err
 	}
@@ -316,7 +313,7 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	if after := gw.boundCount(); after != boundBefore {
 		return fmt.Errorf("the restarted gateway bound the thread anew (%d instance_bound records before, %d after): the bolt store did not carry the mapping", boundBefore, after)
 	}
-	instances, err = api.listInstances(context.Background(), klausGatewayTestAgent)
+	instances, err = templateInstances(context.Background(), api)
 	if err != nil {
 		return err
 	}
@@ -496,9 +493,9 @@ func harnessReadySummary(t *agentTemplate, harness string) string {
 func klausGatewayCleanup(api *kagentAPI) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if instances, err := api.listInstances(ctx, klausGatewayTestAgent); err == nil {
+	if instances, err := templateInstances(ctx, api); err == nil {
 		for _, inst := range instances {
-			api.deleteInstance(inst.GetId())
+			api.removeInstance(inst.GetId())
 		}
 	}
 	for _, obj := range klausGatewayObjects() {
@@ -527,7 +524,7 @@ func klausGatewayLeftovers(api *kagentAPI) []string {
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	defer cancel()
 	var left []string
-	if instances, err := api.listInstances(ctx, klausGatewayTestAgent); err == nil && len(instances) > 0 {
+	if instances, err := templateInstances(ctx, api); err == nil && len(instances) > 0 {
 		left = append(left, fmt.Sprintf("%d AgentInstance(s) of %s: %s", len(instances), klausGatewayTestAgent, instanceIDs(instances)))
 	}
 	for _, obj := range klausGatewayObjects() {
@@ -543,7 +540,7 @@ func klausGatewayLeftovers(api *kagentAPI) []string {
 }
 
 // instanceIDs joins the ids of instances for a message.
-func instanceIDs(instances []*kagentpb.AgentInstance) string {
+func instanceIDs(instances []*apiv1alpha1.AgentInstance) string {
 	ids := make([]string, 0, len(instances))
 	for _, inst := range instances {
 		ids = append(ids, inst.GetId())
@@ -551,46 +548,27 @@ func instanceIDs(instances []*kagentpb.AgentInstance) string {
 	return strings.Join(ids, ", ")
 }
 
-// --- the controller, read as the person over gRPC-Web through the edge ------
+// --- the controller, read as the person through the edge --------------------
 
-// listInstances is AgentInstanceService/ListAgentInstances narrowed to one
-// template's conversations of the caller.
-func (a *kagentAPI) listInstances(ctx context.Context, template string) ([]*kagentpb.AgentInstance, error) {
-	var resp kagentpb.ListAgentInstancesResponse
-	req := &kagentpb.ListAgentInstancesRequest{AgentTemplate: &kagentpb.ResourceReference{Namespace: kagentNamespace, Name: template}}
-	if err := a.call(ctx, agentInstanceService, "ListAgentInstances", req, &resp, nil); err != nil {
-		return nil, fmt.Errorf("listing the AgentInstances of %s as %s: %w", template, a.user, err)
+// templateInstances is the caller's conversations of the fixture:
+// ListAgentInstances narrowed to the template.
+func templateInstances(ctx context.Context, api *kagentAPI) ([]*apiv1alpha1.AgentInstance, error) {
+	instances, err := api.listInstancesOf(ctx, &apiv1alpha1.ResourceReference{Namespace: kagentNamespace, Name: klausGatewayTestAgent})
+	if err != nil {
+		return nil, fmt.Errorf("listing the AgentInstances of %s: %w", klausGatewayTestAgent, err)
 	}
-	return resp.GetAgentInstances(), nil
-}
-
-// getTask is A2AService/GetTask on one instance's task.
-func (a *kagentAPI) getTask(ctx context.Context, instanceID, taskID string) (*a2apb.Task, error) {
-	var task a2apb.Task
-	if err := a.call(ctx, a2aService, "GetTask", &a2apb.GetTaskRequest{Id: taskID}, &task, map[string]string{agentInstanceHeader: instanceID}); err != nil {
-		return nil, fmt.Errorf("GetTask %s on AgentInstance %s: %w", taskID, instanceID, err)
-	}
-	return &task, nil
-}
-
-// listTasks is A2AService/ListTasks on one instance.
-func (a *kagentAPI) listTasks(ctx context.Context, instanceID string) ([]*a2apb.Task, error) {
-	var resp a2apb.ListTasksResponse
-	if err := a.call(ctx, a2aService, "ListTasks", &a2apb.ListTasksRequest{PageSize: proto.Int32(100)}, &resp, map[string]string{agentInstanceHeader: instanceID}); err != nil {
-		return nil, fmt.Errorf("ListTasks on AgentInstance %s: %w", instanceID, err)
-	}
-	return resp.GetTasks(), nil
+	return instances, nil
 }
 
 // taskIDs is the set of an instance's task ids.
-func (a *kagentAPI) taskIDs(ctx context.Context, instanceID string) (map[string]bool, error) {
+func (a *kagentAPI) taskIDs(ctx context.Context, instanceID string) (map[a2a.TaskID]bool, error) {
 	tasks, err := a.listTasks(ctx, instanceID)
 	if err != nil {
 		return nil, err
 	}
-	ids := make(map[string]bool, len(tasks))
+	ids := make(map[a2a.TaskID]bool, len(tasks))
 	for _, t := range tasks {
-		ids[t.GetId()] = true
+		ids[t.ID] = true
 	}
 	return ids, nil
 }
@@ -598,7 +576,7 @@ func (a *kagentAPI) taskIDs(ctx context.Context, instanceID string) (map[string]
 // waitCanceledTask polls the instance's tasks until one not in before is
 // TASK_STATE_CANCELED and returns its id; what the new tasks say otherwise is
 // the error.
-func (a *kagentAPI) waitCanceledTask(instanceID string, before map[string]bool, timeout time.Duration) (string, error) {
+func (a *kagentAPI) waitCanceledTask(instanceID string, before map[a2a.TaskID]bool, timeout time.Duration) (string, error) {
 	var canceled string
 	var seen []string
 	waitFor(int(timeout/pollInterval), pollInterval, func() bool {
@@ -610,13 +588,13 @@ func (a *kagentAPI) waitCanceledTask(instanceID string, before map[string]bool, 
 		}
 		seen = seen[:0]
 		for _, t := range tasks {
-			if before[t.GetId()] {
+			if before[t.ID] {
 				continue
 			}
-			state := t.GetStatus().GetState()
-			seen = append(seen, t.GetId()+" "+state.String())
-			if state == a2apb.TaskState_TASK_STATE_CANCELED {
-				canceled = t.GetId()
+			state := t.Status.State
+			seen = append(seen, string(t.ID)+" "+string(state))
+			if state == a2a.TaskStateCanceled {
+				canceled = string(t.ID)
 			}
 		}
 		return canceled != ""
@@ -1122,12 +1100,12 @@ func (w *webClient) approveUntilDone(api *kagentAPI, instanceID string, turn *we
 		out.rounds++
 		out.tools = append(out.tools, turn.Prompt.Prompt.ToolName)
 		ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
-		task, err := api.getTask(ctx, instanceID, out.taskID)
+		task, err := api.getTask(ctx, instanceID, a2a.TaskID(out.taskID))
 		cancel()
 		if err != nil {
 			return nil, err
 		}
-		if state := task.GetStatus().GetState(); state != a2apb.TaskState_TASK_STATE_INPUT_REQUIRED {
+		if state := task.Status.State; state != a2a.TaskStateInputRequired {
 			return nil, fmt.Errorf("the gateway reports a prompt on task %s but the controller has it %s, not TASK_STATE_INPUT_REQUIRED", out.taskID, state)
 		}
 		turn, err = w.send(context.Background(), webMessage{Text: "approve", TaskID: out.taskID, Decision: &webDecision{Type: "approve"}}, klausGatewayTurnTimeout)
@@ -1141,12 +1119,12 @@ func (w *webClient) approveUntilDone(api *kagentAPI, instanceID string, turn *we
 	out.text = turn.Text
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	defer cancel()
-	task, err := api.getTask(ctx, instanceID, out.taskID)
+	task, err := api.getTask(ctx, instanceID, a2a.TaskID(out.taskID))
 	if err != nil {
 		return nil, err
 	}
-	out.finalState = task.GetStatus().GetState().String()
-	if task.GetStatus().GetState() != a2apb.TaskState_TASK_STATE_COMPLETED {
+	out.finalState = string(task.Status.State)
+	if task.Status.State != a2a.TaskStateCompleted {
 		return nil, fmt.Errorf("the resumed task %s ended %s at the controller, not completed", out.taskID, out.finalState)
 	}
 	tasks, err := api.listTasks(ctx, instanceID)
@@ -1154,8 +1132,8 @@ func (w *webClient) approveUntilDone(api *kagentAPI, instanceID string, turn *we
 		return nil, err
 	}
 	for _, t := range tasks {
-		if t.GetStatus().GetState() == a2apb.TaskState_TASK_STATE_INPUT_REQUIRED {
-			return nil, fmt.Errorf("task %s of the instance is still at input-required after the decisions", t.GetId())
+		if t.Status.State == a2a.TaskStateInputRequired {
+			return nil, fmt.Errorf("task %s of the instance is still at input-required after the decisions", t.ID)
 		}
 	}
 	return out, nil

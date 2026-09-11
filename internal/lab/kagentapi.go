@@ -457,10 +457,16 @@ const listPageLimit = 100
 // listInstances is AgentInstanceService/ListAgentInstances for the person:
 // the instances the controller keeps for them (creator-scoped), every page.
 func (a *kagentAPI) listInstances(ctx context.Context) ([]*apiv1alpha1.AgentInstance, error) {
+	return a.listInstancesOf(ctx, nil)
+}
+
+// listInstancesOf is the listing narrowed to one template's conversations of
+// the caller (nil: all of them), every page.
+func (a *kagentAPI) listInstancesOf(ctx context.Context, template *apiv1alpha1.ResourceReference) ([]*apiv1alpha1.AgentInstance, error) {
 	var all []*apiv1alpha1.AgentInstance
 	page := &apiv1alpha1.PageRequest{Limit: listPageLimit}
 	for {
-		resp, err := a.instances.ListAgentInstances(a.callCtx(ctx), &apiv1alpha1.ListAgentInstancesRequest{Page: page})
+		resp, err := a.instances.ListAgentInstances(a.callCtx(ctx), &apiv1alpha1.ListAgentInstancesRequest{Page: page, AgentTemplate: template})
 		if err != nil {
 			return nil, fmt.Errorf("ListAgentInstances: %w", err)
 		}
@@ -498,6 +504,16 @@ func (a *kagentAPI) getTask(ctx context.Context, instanceID string, taskID a2a.T
 		return nil, fmt.Errorf("GetTask %s: %w", taskID, err)
 	}
 	return task, nil
+}
+
+// listTasks is A2AService/ListTasks on the instance: its tasks, one page of
+// up to 100 (a proof's instance has a handful).
+func (a *kagentAPI) listTasks(ctx context.Context, instanceID string) ([]*a2a.Task, error) {
+	resp, err := a.a2a.ListTasks(a.a2aCtx(ctx, instanceID), &a2a.ListTasksRequest{PageSize: listPageLimit})
+	if err != nil {
+		return nil, fmt.Errorf("ListTasks: %w", err)
+	}
+	return resp.Tasks, nil
 }
 
 // cancelTask is A2AService/CancelTask on the instance: the controller stops
