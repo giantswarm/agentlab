@@ -333,19 +333,29 @@ the first container starts, `RESUMING` admitted next to `RUNNING`, both hops
 log a refusal). Under it the proof's evidence changed shape — the worker logs
 `atunnel failed to open egress tunnel … egress gateway rejected CONNECT with
 403 Forbidden: actor is not running` and ate-api logs the dataplane's
-`GetActor` — and the third gate remained: the dataplane's `RUNNING` check
-(upstream agentgateway `egress_actor_resolution.rs`; the fix is prepared on
-the agentgateway line as `upstream/substrate-egress-resuming`). With an egress
-dataplane that does not gate on `RUNNING` — upstream agentgateway `v1.5.0`,
-whose `substrateEgress` derives the actor from the SPIFFE id and does no
-UID or state check, swapped into `atenet-egress` for the run — the proof
-passed on both halves: `Ready after 20s`, the turn answered
-`Skills: agent-self-awareness … klaus-gateway`, nothing left behind
-(agent-platform `3.22.1-dev.poc-kagent-main.2026-09-10.22-15-11.h284980b`,
-kagent `0.11.0-dev.giantswarm.2026-09-10.22-06-46.h0ac5240`, Go ADK
-`golang-adk@sha256:1f016b65…`, Substrate `…h1817627`). Every skill-carrying
-agent of the fleet needs all three gates open; the third is the agentgateway
-line's, tracked with the rest on giantswarm/giantswarm#37742 (row 8).
+`GetActor` — and the third gate remained: the dataplane's `RUNNING` check.
+With an egress dataplane that does not gate on `RUNNING` — upstream
+agentgateway `v1.5.0`, whose `substrateEgress` derives the actor from the
+SPIFFE id and does no UID or state check, swapped into `atenet-egress` for
+the run — the proof passed on both halves on 2026-09-11 (`Ready after 20s`,
+the turn answered `Skills: agent-self-awareness … klaus-gateway`), which
+proved the Substrate half but gave the authorization up.
+
+The agentgateway line closes the third gate without giving it up: its release
+`v1.5.1-gs.2` (giantswarm/agentgateway-upstream#4) carries upstream
+agentgateway #3237 — every egress CONNECT authorized against ate-api, the
+actor's UID and then its state — and admits `RESUMING` next to `RUNNING`
+(SUSPENDED, PAUSED, CRASHED and DELETING stay refused). giantswarm/substrate#7
+pins it for `atenet-router` and `atenet-egress`, and giantswarm/substrate#9
+declares the actor authorization where that dataplane reads it — #3237 made
+it a frontend policy on the CONNECT, no longer a route policy on the inner
+listener (with the old shape the gs.2 dataplane refused its config and the
+first roll never became ready). The lab's Substrate pin follows that build
+(`0.0.27-dev.giantswarm.2026-09-11.02-07-06.h213d76b`), and the WorkerPool's
+worker image with it. On it the proof passed on both halves with the check in
+place: Ready after 15s on Harness kagent, the turn as admin@lab.local answered "klaus-gateway" from the skill, nothing left behind (revision a8949e0f2c79); platform-test 6/6 and agents-test 5/5 green on the same lab. Every skill-carrying agent of the fleet needs all three
+gates open; the upstream exits of the two patches are tracked on
+giantswarm/giantswarm#37742 (row 8).
 
 ## The request path
 

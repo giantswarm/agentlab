@@ -51,7 +51,7 @@ import (
 // fork's publish workflow names it in its run summary); it moves only
 // together with kagent's Substrate pin.
 const (
-	substrateVersion       = "0.0.27-dev.giantswarm.2026-09-10.22-37-39.h1817627"
+	substrateVersion       = "0.0.27-dev.giantswarm.2026-09-11.02-07-06.h213d76b"
 	substrateChartsRepo    = "oci://ghcr.io/giantswarm/substrate/helm"
 	substrateImageRegistry = "ghcr.io/giantswarm/substrate"
 )
