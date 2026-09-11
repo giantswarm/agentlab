@@ -90,8 +90,15 @@ func TestSkillsAgentTemplate(t *testing.T) {
 }
 
 // kagentAdmission is kagent's default admission label, what the tests
-// render unless they test the Harness's own.
+// render unless they test the Harness's own; platformHarnessLabel is the
+// connectivity chart's; the fixture names below are the test's.
 var kagentAdmission = skillsTemplateShape{admission: map[string]string{harnessLabel: kagentHarness}, musterTools: true}
+
+const (
+	platformHarnessLabel = "agent-platform.giantswarm.io/harness"
+	exampleRepo          = "https://example.com/x"
+	gitAuthObject        = "skills-git-auth"
+)
 
 // TestSkillsAgentTemplateAdmissionLabels: the template carries the labels the
 // Harness admits — the platform's own label here — and not kagent's default
@@ -99,12 +106,12 @@ var kagentAdmission = skillsTemplateShape{admission: map[string]string{harnessLa
 func TestSkillsAgentTemplateAdmissionLabels(t *testing.T) {
 	fixture, _ := SkillsFixture{}.resolve()
 	var obj map[string]any
-	if err := yaml.Unmarshal([]byte(skillsAgentTemplate(skillsTestAgent, defaultModelConfig, &fixture, skillsTemplateShape{admission: map[string]string{"agent-platform.giantswarm.io/harness": "kagent"}})), &obj); err != nil {
+	if err := yaml.Unmarshal([]byte(skillsAgentTemplate(skillsTestAgent, defaultModelConfig, &fixture, skillsTemplateShape{admission: map[string]string{platformHarnessLabel: kagentHarness}})), &obj); err != nil {
 		t.Fatal(err)
 	}
 	u := &unstructured.Unstructured{Object: obj}
 	labels := u.GetLabels()
-	if labels["agent-platform.giantswarm.io/harness"] != "kagent" || labels[managedByLabel] != managedByAgentlabValue {
+	if labels[platformHarnessLabel] != kagentHarness || labels[managedByLabel] != managedByAgentlabValue {
 		t.Errorf("labels = %v", labels)
 	}
 	if _, has := labels[harnessLabel]; has {
@@ -122,7 +129,7 @@ func TestSkillsAgentTemplateAdmissionLabels(t *testing.T) {
 func TestSkillsFixturePrivate(t *testing.T) {
 	fixture, err := SkillsFixture{
 		Repo: "https://github.com/acme/private-skills", Commit: strings.Repeat("c", 40), Skill: "skills/runbooks",
-		Question: "which flag renders a recipe?", Expect: "--render", CredentialSecret: "skills-git-auth",
+		Question: "which flag renders a recipe?", Expect: "--render", CredentialSecret: gitAuthObject,
 	}.resolve()
 	if err != nil {
 		t.Fatal(err)
@@ -146,9 +153,9 @@ func TestSkillsFixturePrivate(t *testing.T) {
 	url, _, _ := unstructured.NestedString(skill, "source", "git", "url")
 	commit, _, _ := unstructured.NestedString(skill, "source", "git", "commit")
 	path, _, _ := unstructured.NestedString(skill, "source", "path")
-	secret, _, _ := unstructured.NestedString(skill, "source", "git", "credentialRef", nameKey)
+	refName, _, _ := unstructured.NestedString(skill, "source", "git", "credentialRef", nameKey)
 	key, _, _ := unstructured.NestedString(skill, "source", "git", "credentialRef", "key")
-	if name != "runbooks" || url != fixture.Repo || commit != fixture.Commit || path != "skills/runbooks" || secret != "skills-git-auth" || key != skillsCredentialKey {
+	if name != "runbooks" || url != fixture.Repo || commit != fixture.Commit || path != "skills/runbooks" || refName != gitAuthObject || key != skillsCredentialKey {
 		t.Errorf("skill = %v", skill)
 	}
 
@@ -176,10 +183,10 @@ func TestSkillsFixtureResolve(t *testing.T) {
 		fixture SkillsFixture
 		want    string
 	}{
-		"missing fields": {SkillsFixture{Repo: "https://example.com/x"}, "missing: --skill-commit, --skill-path, --skill-question, --skill-expect"},
-		"short commit":   {SkillsFixture{Repo: "https://example.com/x", Commit: "abc123", Skill: "s", Question: "q", Expect: "e"}, "full 40- or 64-hex"},
+		"missing fields": {SkillsFixture{Repo: exampleRepo}, "missing: --skill-commit, --skill-path, --skill-question, --skill-expect"},
+		"short commit":   {SkillsFixture{Repo: exampleRepo, Commit: "abc123", Skill: "s", Question: "q", Expect: "e"}, "full 40- or 64-hex"},
 		"not a url":      {SkillsFixture{Repo: "git@example.com:x", Commit: full, Skill: "s", Question: "q", Expect: "e"}, "http(s) git URL"},
-		"bad path":       {SkillsFixture{Repo: "https://example.com/x", Commit: full, Skill: "../s", Question: "q", Expect: "e"}, "--skill-path"},
+		"bad path":       {SkillsFixture{Repo: exampleRepo, Commit: full, Skill: "../s", Question: "q", Expect: "e"}, "--skill-path"},
 		"secret on http": {SkillsFixture{Repo: "http://example.com/x", Commit: full, Skill: "s", Question: "q", Expect: "e", CredentialSecret: "t"}, "https://"},
 	}
 	for name, tc := range cases {
@@ -190,7 +197,7 @@ func TestSkillsFixtureResolve(t *testing.T) {
 			}
 		})
 	}
-	ok, err := SkillsFixture{Repo: "https://example.com/x", Commit: full, Skill: "/dir/skill/", Question: "q", Expect: "e"}.resolve()
+	ok, err := SkillsFixture{Repo: exampleRepo, Commit: full, Skill: "/dir/skill/", Question: "q", Expect: "e"}.resolve()
 	if err != nil || ok.Skill != "dir/skill" || ok.name() != "skill" {
 		t.Errorf("resolve() = %+v, %v", ok, err)
 	}
