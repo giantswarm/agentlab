@@ -171,8 +171,13 @@ const (
 	// what the platform runs AFTER the boot. On the 4.x line an agent is an
 	// actor inside one of the WorkerPool's pre-provisioned workers (their
 	// requests are counted above), so the headroom is what one Go ADK turn
-	// bursts: about 0.3 core for a second or two on the worker while the
-	// actor answers (its memory stays inside the worker's request).
+	// bursts. Measured 2026-09-11 (cAdvisor, 3 s samples, skills-test's
+	// golden boot with a git skill plus one turn through the edge): the
+	// worker hosting the actor peaked at 64Mi working set and spent 2.0 CPU
+	// seconds over the run, the idle workers 12Mi and 0.06 s; the controller
+	// peaked at 59Mi, ate-api-server at 33Mi. A turn's memory stays inside
+	// the worker's 512Mi request; its CPU is a burst of a fraction of a core
+	// for a few seconds, budgeted as 300m.
 	// On a chart without Substrate every kagent agent is one more pod at the
 	// 100m the platform's own small pods request, and models-test and
 	// agents-test each create one: six of them.
