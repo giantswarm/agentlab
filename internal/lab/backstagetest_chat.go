@@ -56,7 +56,6 @@ const (
 // The HITL extension the backend negotiates on every turn and the request
 // type a paused tool call carries in the task's status message.
 const (
-	hitlExtensionURI       = "https://kagent.dev/extensions/hitl/v1"
 	hitlToolApprovalType   = "tool_approval_request"
 	hitlDecisionApprove    = "approve"
 	musterTokenAcceptedLog = "forwarded_id_token_accepted"
