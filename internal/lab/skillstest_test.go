@@ -41,14 +41,18 @@ func bootTemplate(name, readyStatus, reason, message string) *unstructured.Unstr
 // pinned to the fixture's full commit and selected by its directory; the
 // control carries no skills at all.
 func TestSkillsAgentTemplate(t *testing.T) {
+	fixture, err := SkillsFixture{}.resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
 	var obj map[string]any
-	if err := yaml.Unmarshal([]byte(skillsAgentTemplate(skillsTestAgent, defaultModelConfig, true)), &obj); err != nil {
+	if err := yaml.Unmarshal([]byte(skillsAgentTemplate(skillsTestAgent, defaultModelConfig, &fixture)), &obj); err != nil {
 		t.Fatal(err)
 	}
 	u := &unstructured.Unstructured{Object: obj}
 	if u.GetAPIVersion() != agentTemplateAPIVersion || u.GetKind() != "AgentTemplate" || u.GetNamespace() != kagentNamespace ||
 		u.GetLabels()[harnessLabel] != kagentHarness || u.GetLabels()[managedByLabel] != managedByAgentlabValue {
-		t.Errorf("template head:\n%s", skillsAgentTemplate(skillsTestAgent, defaultModelConfig, true))
+		t.Errorf("template head:\n%s", skillsAgentTemplate(skillsTestAgent, defaultModelConfig, &fixture))
 	}
 	template, err := agentTemplateFrom(u)
 	if err != nil {
@@ -74,7 +78,7 @@ func TestSkillsAgentTemplate(t *testing.T) {
 	}
 
 	var control map[string]any
-	if err := yaml.Unmarshal([]byte(skillsAgentTemplate(skillsTestControlAgent, defaultModelConfig, false)), &control); err != nil {
+	if err := yaml.Unmarshal([]byte(skillsAgentTemplate(skillsTestControlAgent, defaultModelConfig, nil)), &control); err != nil {
 		t.Fatal(err)
 	}
 	if _, found, _ := unstructured.NestedSlice(control, "spec", "skills"); found {
@@ -82,6 +86,87 @@ func TestSkillsAgentTemplate(t *testing.T) {
 	}
 	if description, _, _ := unstructured.NestedString(control, "spec", "description"); !strings.Contains(description, "control") {
 		t.Errorf("the control's description does not say so: %q", description)
+	}
+}
+
+// TestSkillsFixturePrivate: a fixture of the caller's renders its repository,
+// commit and directory (the last element the skill's name) and, when it names
+// a Secret, the source's credentialRef on the token key — nothing else about
+// the template changes; the public fixture renders no credentialRef.
+func TestSkillsFixturePrivate(t *testing.T) {
+	fixture, err := SkillsFixture{
+		Repo: "https://github.com/acme/private-skills", Commit: strings.Repeat("c", 40), Skill: "skills/runbooks",
+		Question: "which flag renders a recipe?", Expect: "--render", CredentialSecret: "skills-git-auth",
+	}.resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fixture.name() != "runbooks" {
+		t.Errorf("name = %q", fixture.name())
+	}
+	if !strings.Contains(fixture.prompt(), "named runbooks") || !strings.Contains(fixture.prompt(), "which flag renders a recipe?") {
+		t.Errorf("prompt = %q", fixture.prompt())
+	}
+	var obj map[string]any
+	if err := yaml.Unmarshal([]byte(skillsAgentTemplate(skillsTestAgent, defaultModelConfig, &fixture)), &obj); err != nil {
+		t.Fatal(err)
+	}
+	skills, _, _ := unstructured.NestedSlice(obj, "spec", "skills")
+	if len(skills) != 1 {
+		t.Fatalf("skills = %v", skills)
+	}
+	skill, _ := skills[0].(map[string]any)
+	name, _, _ := unstructured.NestedString(skill, nameKey)
+	url, _, _ := unstructured.NestedString(skill, "source", "git", "url")
+	commit, _, _ := unstructured.NestedString(skill, "source", "git", "commit")
+	path, _, _ := unstructured.NestedString(skill, "source", "path")
+	secret, _, _ := unstructured.NestedString(skill, "source", "git", "credentialRef", nameKey)
+	key, _, _ := unstructured.NestedString(skill, "source", "git", "credentialRef", "key")
+	if name != "runbooks" || url != fixture.Repo || commit != fixture.Commit || path != "skills/runbooks" || secret != "skills-git-auth" || key != skillsCredentialKey {
+		t.Errorf("skill = %v", skill)
+	}
+
+	public, _ := SkillsFixture{}.resolve()
+	var anonymous map[string]any
+	if err := yaml.Unmarshal([]byte(skillsAgentTemplate(skillsTestAgent, defaultModelConfig, &public)), &anonymous); err != nil {
+		t.Fatal(err)
+	}
+	publicSkills, _, _ := unstructured.NestedSlice(anonymous, "spec", "skills")
+	if _, found, _ := unstructured.NestedMap(publicSkills[0].(map[string]any), "source", "git", "credentialRef"); found {
+		t.Error("the public fixture renders a credentialRef")
+	}
+}
+
+// TestSkillsFixtureResolve: the zero value is the public fixture; a fixture
+// of the caller's needs every field, a full commit and an http(s) URL, and a
+// Secret only on https.
+func TestSkillsFixtureResolve(t *testing.T) {
+	public, err := SkillsFixture{}.resolve()
+	if err != nil || public.Repo != skillsTestRepo || public.Commit != skillsTestCommit || public.Skill != skillsTestSkill || public.Question != skillsTestQuestion || public.Expect != skillsTestFact {
+		t.Errorf("public fixture = %+v, %v", public, err)
+	}
+	full := strings.Repeat("a", 40)
+	cases := map[string]struct {
+		fixture SkillsFixture
+		want    string
+	}{
+		"missing fields": {SkillsFixture{Repo: "https://example.com/x"}, "missing: --skill-commit, --skill-path, --skill-question, --skill-expect"},
+		"short commit":   {SkillsFixture{Repo: "https://example.com/x", Commit: "abc123", Skill: "s", Question: "q", Expect: "e"}, "full 40- or 64-hex"},
+		"not a url":      {SkillsFixture{Repo: "git@example.com:x", Commit: full, Skill: "s", Question: "q", Expect: "e"}, "http(s) git URL"},
+		"bad path":       {SkillsFixture{Repo: "https://example.com/x", Commit: full, Skill: "../s", Question: "q", Expect: "e"}, "--skill-path"},
+		"secret on http": {SkillsFixture{Repo: "http://example.com/x", Commit: full, Skill: "s", Question: "q", Expect: "e", CredentialSecret: "t"}, "https://"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := tc.fixture.resolve()
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("resolve() = %v, want %q", err, tc.want)
+			}
+		})
+	}
+	ok, err := SkillsFixture{Repo: "https://example.com/x", Commit: full, Skill: "/dir/skill/", Question: "q", Expect: "e"}.resolve()
+	if err != nil || ok.Skill != "dir/skill" || ok.name() != "skill" {
+		t.Errorf("resolve() = %+v, %v", ok, err)
 	}
 }
 
