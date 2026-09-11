@@ -3,6 +3,9 @@ package lab
 import (
 	"context"
 	"fmt"
+	"maps"
+	"path"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -44,19 +47,117 @@ const (
 	skillsTestControlAgent = skillsTestAgent + "-control"
 )
 
-// The fixture: giantswarm/agent-skills, the public repository most of the
-// fleet's skills come from, at a full commit; the skill whose SKILL.md names
-// a fact the model cannot know otherwise (skillsTestFact), which the turn
-// asks for without saying it.
+// The default fixture: giantswarm/agent-skills, the public repository most of
+// the fleet's skills come from, at a full commit; the skill whose SKILL.md
+// names a fact the model cannot know otherwise (skillsTestFact), which the
+// turn asks for without saying it. A SkillsFixture of the caller's puts
+// another repository in its place — a private one, with the Secret whose
+// token its host takes.
 const (
-	skillsTestRepo   = "https://github.com/giantswarm/agent-skills"
-	skillsTestCommit = "cb1fb768bbbbcaa035b884a99ad308b14f846468"
-	skillsTestSkill  = "agent-self-awareness"
-	skillsTestFact   = "klaus-gateway"
-	skillsTestPrompt = "First list the names of every skill available to you. Then load the skill named " + skillsTestSkill +
-		" and answer from its text only: which application bridges kagent with Slack? Reply in one line: the skill names, then the application's name."
+	skillsTestRepo         = "https://github.com/giantswarm/agent-skills"
+	skillsTestCommit       = "cb1fb768bbbbcaa035b884a99ad308b14f846468"
+	skillsTestSkill        = "agent-self-awareness"
+	skillsTestFact         = "klaus-gateway"
+	skillsTestQuestion     = "which application bridges kagent with Slack?"
 	skillsTestSystemPrompt = "You are a terse assistant of the agentlab skills proof. Use your skills when asked about them. Answer in one short line."
+	// skillsCredentialKey is the Secret key the runtime reads a source's token
+	// from (skills[].source.git.credentialRef.key).
+	skillsCredentialKey = "token"
 )
+
+// SkillsFixture is the skill the proof boots and asks about: a git repository
+// at a full commit, the skill's directory within it (its last element is the
+// skill's name), the question the turn asks and the answer only the skill's
+// text has — and, for a private repository, the Secret in the kagent
+// namespace whose token key the runtime presents to the repository's host
+// (skills[].source.git.credentialRef). The zero value is the public fixture.
+type SkillsFixture struct {
+	Repo, Commit, Skill, Question, Expect string
+	// CredentialSecret names the Secret (key skillsCredentialKey); "" fetches
+	// anonymously. The proof never reads the Secret.
+	CredentialSecret string
+}
+
+var fullCommitID = regexp.MustCompile(`^([0-9a-fA-F]{40}|[0-9a-fA-F]{64})$`)
+
+// resolve returns the public fixture for the zero value and checks a fixture
+// of the caller's: every field but the Secret, an http(s) URL, a full commit.
+func (f SkillsFixture) resolve() (SkillsFixture, error) {
+	if f.Repo == "" && f.Commit == "" && f.Skill == "" && f.Question == "" && f.Expect == "" {
+		f.Repo, f.Commit, f.Skill, f.Question, f.Expect = skillsTestRepo, skillsTestCommit, skillsTestSkill, skillsTestQuestion, skillsTestFact
+		return f, nil
+	}
+	var missing []string
+	for _, field := range []struct{ flag, value string }{
+		{"--skill-repo", f.Repo}, {"--skill-commit", f.Commit}, {"--skill-path", f.Skill}, {"--skill-question", f.Question}, {"--skill-expect", f.Expect},
+	} {
+		if field.value == "" {
+			missing = append(missing, field.flag)
+		}
+	}
+	if len(missing) > 0 {
+		return f, fmt.Errorf("a fixture of your own takes every one of --skill-repo, --skill-commit, --skill-path, --skill-question and --skill-expect; missing: %s", strings.Join(missing, ", "))
+	}
+	if !strings.HasPrefix(f.Repo, "https://") && !strings.HasPrefix(f.Repo, "http://") {
+		return f, fmt.Errorf("--skill-repo %q: an http(s) git URL", f.Repo)
+	}
+	if !fullCommitID.MatchString(f.Commit) {
+		return f, fmt.Errorf("--skill-commit %q: a full 40- or 64-hex commit id (the CRD refuses anything else)", f.Commit)
+	}
+	f.Skill = strings.Trim(f.Skill, "/")
+	if f.Skill == "" || f.Skill == "." || strings.Contains(f.Skill, "..") {
+		return f, fmt.Errorf("--skill-path %q: the skill's directory within the repository", f.Skill)
+	}
+	if f.CredentialSecret != "" && !strings.HasPrefix(f.Repo, "https://") {
+		return f, fmt.Errorf("--skill-secret needs an https:// repository (the CRD refuses a credentialRef on an http URL)")
+	}
+	return f, nil
+}
+
+// skillsAgentTemplateCRD is the CRD the fixture's credentialRef must be served by.
+const skillsAgentTemplateCRD = "agenttemplates.kagent.dev"
+
+// requireCredentialRefServed checks the served AgentTemplate CRD carries
+// skills[].source.git.credentialRef: a kagent line without it prunes the
+// field at admission and fetches anonymously, which a private fixture would
+// report as a boot failure for the wrong reason.
+func requireCredentialRefServed() error {
+	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
+	defer cancel()
+	crd, err := getObject(ctx, gvrCRDs, "", skillsAgentTemplateCRD)
+	if err != nil {
+		return fmt.Errorf("read the AgentTemplate CRD: %w", err)
+	}
+	versions, _, _ := unstructured.NestedSlice(crd.Object, "spec", "versions")
+	for _, v := range versions {
+		version, _ := v.(map[string]any)
+		if name, _, _ := unstructured.NestedString(version, nameKey); name != path.Base(agentTemplateAPIVersion) {
+			continue
+		}
+		if _, found, _ := unstructured.NestedMap(version, "schema", "openAPIV3Schema", "properties", "spec", "properties", "skills", "items", "properties", "source", "properties", "git", "properties", "credentialRef"); found {
+			return nil
+		}
+	}
+	return fmt.Errorf("the served AgentTemplate CRD (%s) has no skills[].source.git.credentialRef: the kagent line under test predates the per-source credential, a private fixture cannot be fetched", skillsAgentTemplateCRD)
+}
+
+// name is the skill's name: the last element of its directory.
+func (f SkillsFixture) name() string { return path.Base(f.Skill) }
+
+// prompt is the turn: list the skills, load the fixture's, answer its
+// question from the text only.
+func (f SkillsFixture) prompt() string {
+	return "First list the names of every skill available to you. Then load the skill named " + f.name() +
+		" and answer from its text only: " + f.Question + " Reply in one line: the skill names, then the answer."
+}
+
+// credentialNote words the fixture's credential for the steps, "" when none.
+func (f SkillsFixture) credentialNote() string {
+	if f.CredentialSecret == "" {
+		return ""
+	}
+	return fmt.Sprintf(" with credentialRef {name: %s, key: %s}", f.CredentialSecret, skillsCredentialKey)
+}
 
 // SkillsTestReadyTimeout bounds the golden boot by default: the runtime image
 // into Substrate's layer cache, the actor's start, the skill fetch, the
@@ -81,7 +182,7 @@ const (
 // actor's own about its skill fetch and its exit.
 var (
 	egressGateWords = []string{"denied", "not running", "RUNNING", "reject", "forbid", "CONNECT"}
-	actorBootWords  = []string{"fatal", "materializ", "readyz", "unable to", "exit", "level\":\"error", "\"error\":"}
+	actorBootWords  = []string{"fatal", "materializ", "readyz", "unable to", "exit", "level\":\"error", "\"error\":", "authentication", "401", "credential"}
 )
 
 // Resources of kagent API v2 the proof reads beyond the AgentTemplate, and
@@ -102,6 +203,9 @@ type SkillsTestOptions struct {
 	ModelConfig string
 	// ReadyTimeout bounds the golden boot (default SkillsTestReadyTimeout).
 	ReadyTimeout time.Duration
+	// Fixture is the skill to boot and ask about; the zero value is the
+	// public fixture, a private repository's names its Secret.
+	Fixture SkillsFixture
 }
 
 // SkillsTest is the headless proof that a Go ADK AgentTemplate with a git skill
@@ -129,6 +233,11 @@ func SkillsTest(cfg *config.Config, email string, opts SkillsTestOptions) error 
 	if opts.ReadyTimeout <= 0 {
 		opts.ReadyTimeout = SkillsTestReadyTimeout
 	}
+	fixture, err := opts.Fixture.resolve()
+	if err != nil {
+		return err
+	}
+	opts.Fixture = fixture
 
 	step("Logging in to Dex as %s", user.Email)
 	token, err := passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret,
@@ -160,11 +269,17 @@ func SkillsTest(cfg *config.Config, email string, opts SkillsTestOptions) error 
 	cleanup()
 	defer cleanup()
 
-	step("Applying AgentTemplate %s on Harness %s: skill %s from %s @ %.12s, tools from %s", skillsTestAgent, kagentHarness, skillsTestSkill, skillsTestRepo, skillsTestCommit, componentMuster)
-	if _, err := applyManifests(context.Background(), []byte(skillsAgentTemplate(skillsTestAgent, opts.ModelConfig, true))); err != nil {
+	shape := readSkillsTemplateShape()
+	step("Applying AgentTemplate %s on Harness %s: skill %s from %s @ %.12s%s, %s", skillsTestAgent, kagentHarness, fixture.name(), fixture.Repo, fixture.Commit, fixture.credentialNote(), shape.toolsNote())
+	if fixture.CredentialSecret != "" {
+		if err := requireCredentialRefServed(); err != nil {
+			return err
+		}
+	}
+	if _, err := applyManifests(context.Background(), []byte(skillsAgentTemplate(skillsTestAgent, opts.ModelConfig, &fixture, shape))); err != nil {
 		return err
 	}
-	note("accepted by the apiserver (the CRD validates the full commit and the relative path)")
+	note("accepted by the apiserver (the CRD validates the full commit and the relative path); labelled %v as the Harness admits", shape.admission)
 
 	step("Waiting up to %s for Ready on Harness %s — the golden boot: the actor starts, fetches the skill, serves readyz, is snapshotted", opts.ReadyTimeout, kagentHarness)
 	boot, err := waitGoldenBoot(skillsTestAgent, kagentHarness, opts.ReadyTimeout)
@@ -172,7 +287,7 @@ func SkillsTest(cfg *config.Config, email string, opts SkillsTestOptions) error 
 		return err
 	}
 	if !boot.ready {
-		return skillsGoldenBootFailed(cfg, api, opts, boot, facts)
+		return skillsGoldenBootFailed(cfg, api, opts, boot, facts, shape)
 	}
 	harness := boot.template.harness(kagentHarness)
 	note("Ready after %s: revision %.12s%s", boot.elapsed.Round(time.Second), harness.LatestSuccessfulRevision, warningsNote(harness.Warnings))
@@ -182,11 +297,11 @@ func SkillsTest(cfg *config.Config, email string, opts SkillsTestOptions) error 
 	}
 
 	step("One A2A turn through the edge as %s: the agent names its skills and answers from the skill's text", user.Email)
-	reply, err := agentTurnAs(cfg, skillsTestAgent, token, skillsTestPrompt)
+	reply, err := agentTurnAs(cfg, skillsTestAgent, token, fixture.prompt())
 	if err != nil {
 		return err
 	}
-	if err := skillReplyProves(reply, skillsTestSkill, skillsTestFact); err != nil {
+	if err := skillReplyProves(reply, fixture.name(), fixture.Expect); err != nil {
 		return fmt.Errorf("the skill was not in effect on the turn: %w", err)
 	}
 	note("answered: %s", excerpt(reply, 200))
@@ -199,32 +314,100 @@ func SkillsTest(cfg *config.Config, email string, opts SkillsTestOptions) error 
 	note("nothing left in the kagent namespace or in Substrate")
 
 	fmt.Println()
-	fmt.Printf("PASS: AgentTemplate %s with the git skill %s (%s @ %.12s) reached Ready on Harness %s in %s — the Go ADK fetched the skill during the golden boot under Substrate's egress gate (%s)\n",
-		skillsTestAgent, skillsTestSkill, skillsTestRepo, skillsTestCommit, kagentHarness, boot.elapsed.Round(time.Second), facts.summary())
+	fmt.Printf("PASS: AgentTemplate %s with the git skill %s (%s @ %.12s%s) reached Ready on Harness %s in %s — the Go ADK fetched the skill during the golden boot under Substrate's egress gate (%s)\n",
+		skillsTestAgent, fixture.name(), fixture.Repo, fixture.Commit, fixture.credentialNote(), kagentHarness, boot.elapsed.Round(time.Second), facts.summary())
 	fmt.Printf("PASS: one turn through the edge as %s named the skill and answered %q from its text; the Harness re-emits the person's bearer on tool calls (%s=true), so muster attributes any tool call of the turn to %s\n",
-		user.Email, skillsTestFact, propagateIdentityEnv, user.Email)
+		user.Email, fixture.Expect, propagateIdentityEnv, user.Email)
 	fmt.Printf("PASS: nothing left behind — the AgentTemplate, its AgentInstance, Substrate's ActorTemplate and actor are gone\n")
 	return nil
 }
 
+// skillsTemplateShape is what the lab's platform dictates about the proof's
+// templates: the labels the Harness admits, and whether the shared muster
+// RemoteMCPServer exists to bind as the template's tools (the 3.x
+// connectivity chart renders one; the 4.x chart renders one per agent
+// instead, so there the proof's template carries no tools — the skill is
+// what it proves).
+type skillsTemplateShape struct {
+	admission   map[string]string
+	musterTools bool
+}
+
+// readSkillsTemplateShape reads the shape off the lab.
+func readSkillsTemplateShape() skillsTemplateShape {
+	shape := skillsTemplateShape{admission: harnessAdmissionLabels()}
+	if _, err := readKagentObject(remoteMCPServerResource, componentMuster); err == nil {
+		shape.musterTools = true
+	}
+	return shape
+}
+
+// toolsNote words the template's tools for the steps.
+func (s skillsTemplateShape) toolsNote() string {
+	if s.musterTools {
+		return "tools from " + componentMuster
+	}
+	return "no tools (the platform renders no shared " + componentMuster + " RemoteMCPServer; the skill is what the template carries)"
+}
+
+// harnessAdmissionLabels are the labels the platform Harness admits
+// (spec.allowedAgentTemplates.selector.matchLabels): the proof's templates
+// carry them, so the Harness picks them up whichever label the platform
+// chose — kagent's default kagent.dev/harness: <name>, or the chart's own.
+// A Harness that cannot be read leaves kagent's default.
+func harnessAdmissionLabels() map[string]string {
+	fallback := map[string]string{harnessLabel: kagentHarness}
+	h, err := readKagentObject(harnessResource, kagentHarness)
+	if err != nil {
+		return fallback
+	}
+	labels, found, _ := unstructured.NestedStringMap(h.Object, "spec", "allowedAgentTemplates", "selector", "matchLabels")
+	if !found || len(labels) == 0 {
+		return fallback
+	}
+	return labels
+}
+
 // skillsAgentTemplate is the proof's AgentTemplate: the Go ADK Harness, the
-// ModelConfig, the terse prompt, the shared muster server as its tools (the
-// fleet's shape: skills and tools), labelled as agentlab's — and, unless
-// control, one git skill pinned to the fixture's full commit, selected by
-// the directory of the same name within the repository.
-func skillsAgentTemplate(name, modelConfig string, withSkill bool) string {
+// ModelConfig, the terse prompt, the shared muster server as its tools where
+// the platform renders one (the fleet's shape: skills and tools), labelled
+// as agentlab's and as the Harness admits — and, given a fixture (nil is the
+// control), one git skill pinned to its full commit, selected by its
+// directory within the repository, with the fixture's credentialRef when it
+// names a Secret.
+func skillsAgentTemplate(name, modelConfig string, fixture *SkillsFixture, shape skillsTemplateShape) string {
+	labels := []string{managedByLabel + ": " + managedByAgentlabValue}
+	for _, key := range slices.Sorted(maps.Keys(shape.admission)) {
+		labels = append(labels, key+": "+shape.admission[key])
+	}
+	tools := ""
+	if shape.musterTools {
+		tools = fmt.Sprintf(`  tools:
+    - mcp:
+        server:
+          kind: %s
+          name: %s
+`, remoteMCPServerKind, componentMuster)
+	}
 	skills := ""
 	description := "Throwaway agent of `agentlab skills-test` (the control: the same template without the skill); deleted by the same run."
-	if withSkill {
+	if fixture != nil {
 		description = "Throwaway agent of `agentlab skills-test`: one git skill pinned to a full commit; deleted by the same run."
+		credential := ""
+		if fixture.CredentialSecret != "" {
+			credential = fmt.Sprintf(`          credentialRef:
+            name: %s
+            key: %s
+`, fixture.CredentialSecret, skillsCredentialKey)
+		}
 		skills = fmt.Sprintf(`  skills:
     - name: %s
       source:
         git:
           url: %s
           commit: %s
-        path: %s
-`, skillsTestSkill, skillsTestRepo, skillsTestCommit, skillsTestSkill)
+%s        path: %s
+`, fixture.name(), fixture.Repo, fixture.Commit, credential, fixture.Skill)
 	}
 	return fmt.Sprintf(`apiVersion: %s
 kind: AgentTemplate
@@ -232,19 +415,13 @@ metadata:
   name: %s
   namespace: %s
   labels:
-    %s: agentlab
-    %s: %s
+    %s
 spec:
   description: %q
   modelConfig:
     name: %s
   systemPrompt: %q
-  tools:
-    - mcp:
-        server:
-          kind: %s
-          name: %s
-%s`, agentTemplateAPIVersion, name, kagentNamespace, managedByLabel, harnessLabel, kagentHarness, description, modelConfig, skillsTestSystemPrompt, remoteMCPServerKind, componentMuster, skills)
+%s%s`, agentTemplateAPIVersion, name, kagentNamespace, strings.Join(labels, "\n    "), description, modelConfig, skillsTestSystemPrompt, tools, skills)
 }
 
 // goldenBoot is how waiting on a template's golden boot ended: Ready on the
@@ -316,7 +493,7 @@ func terminalHarnessFailure(h *harnessStatus) (string, bool) {
 // skillsGoldenBootFailed is the negative outcome: the evidence, the control
 // boot, and the FAIL verdict that carries the versions — the finding for the
 // line's upstream issue.
-func skillsGoldenBootFailed(cfg *config.Config, api *kagentAPI, opts SkillsTestOptions, boot goldenBoot, facts lineFacts) error {
+func skillsGoldenBootFailed(cfg *config.Config, api *kagentAPI, opts SkillsTestOptions, boot goldenBoot, facts lineFacts, shape skillsTemplateShape) error {
 	harness := boot.template.harness(kagentHarness)
 	verdict := fmt.Sprintf("never became Ready within %s", opts.ReadyTimeout)
 	if boot.terminal {
@@ -331,7 +508,7 @@ func skillsGoldenBootFailed(cfg *config.Config, api *kagentAPI, opts SkillsTestO
 
 	step("The control: the same template without the skill, up to %s", skillsControlTimeout)
 	control := "not booted"
-	if _, err := applyManifests(context.Background(), []byte(skillsAgentTemplate(skillsTestControlAgent, opts.ModelConfig, false))); err != nil {
+	if _, err := applyManifests(context.Background(), []byte(skillsAgentTemplate(skillsTestControlAgent, opts.ModelConfig, nil, shape))); err != nil {
 		control = "could not be applied: " + err.Error()
 	} else if boot, err := waitGoldenBoot(skillsTestControlAgent, kagentHarness, skillsControlTimeout); err != nil {
 		control = "could not be read: " + err.Error()
@@ -344,8 +521,8 @@ func skillsGoldenBootFailed(cfg *config.Config, api *kagentAPI, opts SkillsTestO
 	note("%s", control)
 
 	fmt.Println()
-	fmt.Printf("FAIL: AgentTemplate %s with the git skill %s (%s @ %.12s) %s on Harness %s (%s)\n",
-		skillsTestAgent, skillsTestSkill, skillsTestRepo, skillsTestCommit, verdict, kagentHarness, facts.summary())
+	fmt.Printf("FAIL: AgentTemplate %s with the git skill %s (%s @ %.12s%s) %s on Harness %s (%s)\n",
+		skillsTestAgent, opts.Fixture.name(), opts.Fixture.Repo, opts.Fixture.Commit, opts.Fixture.credentialNote(), verdict, kagentHarness, facts.summary())
 	fmt.Printf("FAIL: the control without the skill: %s\n", control)
 	return fmt.Errorf("the golden boot of a template with a git skill %s on Harness %s; the evidence above is the finding (docs/platform.md \"The skills proof (the golden boot)\")", verdict, kagentHarness)
 }

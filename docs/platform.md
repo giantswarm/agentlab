@@ -284,7 +284,9 @@ materialises the template's skills when it starts (a git skill is
 `git fetch --depth 1 origin <commit>` of a full commit into `/plugins`,
 copied to `/skills`), before it serves readyz; and atenet refuses outbound
 connections from an actor that is not `RUNNING`. The proof creates an
-`AgentTemplate` on the platform's Go ADK Harness (`kagent`) with one skill
+`AgentTemplate` on the platform's Go ADK Harness (`kagent`) — labelled as
+that Harness's `allowedAgentTemplates` selector admits, read from the
+Harness itself — with one skill
 pinned to a full commit of a public repository — `agent-self-awareness` of
 giantswarm/agent-skills, the repository most of the fleet's skills come
 from — and the shared muster server as its tools, waits for `Ready` on the
@@ -304,6 +306,21 @@ of a deleted template is freed the documented way (its pod deleted, the
 WorkerPool replaces it). A negative outcome is a finding about the line,
 not about the lab: the proof stays red until the line carries a fix, and
 is that fix's acceptance test.
+
+Another fixture takes the public one's place: `--skill-repo`,
+`--skill-commit`, `--skill-path` (the skill's directory within the
+repository, its last element the skill's name), `--skill-question` and
+`--skill-expect` (the answer only the skill's text has, matched
+case-insensitively in the reply together with the skill's name). A private
+repository adds `--skill-secret`: a Secret in the kagent namespace whose
+`token` key holds a read token for the repository's host, rendered as the
+source's `skills[].source.git.credentialRef` (`{name, key: token}`) — the
+proof refuses to run it against a kagent whose served `AgentTemplate` CRD
+lacks the field, since that kagent would prune it and fetch anonymously. The
+Secret is yours to create; the proof never reads its value. A Secret that
+does not exist shows as `ResolvedRefs=False` on the Harness before any
+actor boots; a wrong token as a failed golden boot whose worker log carries
+git's authentication error.
 
 **Outcome (2026-09-11): positive — once every gate on the actor's egress
 admits a resuming actor.** Three gates stood between a booting actor and

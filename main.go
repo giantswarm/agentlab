@@ -741,6 +741,12 @@ func skillsTestCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the throwaway agent runs on (default: default-model-config, the Anthropic one the lab renders from $ANTHROPIC_API_KEY)")
 	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", lab.SkillsTestReadyTimeout, "how long the golden boot may take to reach Ready on the Harness before the proof reports the failure")
+	cmd.Flags().StringVar(&opts.Fixture.Repo, "skill-repo", "", "another fixture: the git repository of the skill to boot (an http(s) URL), with --skill-commit, --skill-path, --skill-question and --skill-expect (default: the public fixture, agent-self-awareness of giantswarm/agent-skills)")
+	cmd.Flags().StringVar(&opts.Fixture.Commit, "skill-commit", "", "the full 40- or 64-hex commit id the skill is pinned to")
+	cmd.Flags().StringVar(&opts.Fixture.Skill, "skill-path", "", "the skill's directory within the repository; its last element is the skill's name")
+	cmd.Flags().StringVar(&opts.Fixture.Question, "skill-question", "", "the question the turn asks the agent to answer from the skill's text only")
+	cmd.Flags().StringVar(&opts.Fixture.Expect, "skill-expect", "", "the answer only the skill's text has; the turn passes when the reply names the skill and carries it (case-insensitive)")
+	cmd.Flags().StringVar(&opts.Fixture.CredentialSecret, "skill-secret", "", "a private repository: the Secret in the kagent namespace whose `token` key holds a read token for the repository's host, referenced as skills[].source.git.credentialRef; the Secret is yours to create, the proof never reads it")
 	return cmd
 }
 
