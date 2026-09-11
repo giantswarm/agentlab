@@ -165,10 +165,11 @@ func firstIPv4(out string) string {
 }
 
 // resolveBackendEndpoint is the URL model-manager (or an agent pod) dials for
-// a backend: the configured override, else http://<kind gateway>:<the
-// server's default port>. The kind network exists once the cluster does, so
-// callers that render before a boot get an error they may tolerate (render)
-// or must not (platform).
+// a backend: the configured override, else the address pods reach this
+// machine on — the kind gateway, or the container runtime's host alias where
+// that gateway is inside its VM — on the server's default port. The kind
+// network exists once the cluster does, so callers that render before a boot
+// get an error they may tolerate (render) or must not (platform).
 func resolveBackendEndpoint(cfg *config.Config, backend string) (string, error) {
 	if ep := cfg.Platform.ModelManager.EndpointFor(backend); ep != "" {
 		return strings.TrimSuffix(ep, "/"), nil
@@ -180,31 +181,20 @@ func resolveBackendEndpoint(cfg *config.Config, backend string) (string, error) 
 		return "", fmt.Errorf("autodetecting the %s endpoint: %w (set platform.modelManager.endpoints.%s to skip the detection)",
 			config.BackendServerName(backend), err, backend)
 	}
-	// The gateway is this machine only where the container runtime runs on it.
-	// In a VM it is a bridge inside that VM, and the runtime's host alias is
-	// what resolves to this machine from inside the cluster — so the endpoint
-	// follows what answers, and an installation on such a runtime needs no
-	// endpoints override to reach its own model servers.
-	//
-	// A probe that could not run is not a verdict: it leaves the gateway, the
-	// documented default, so a busy node cannot change the rendered values.
-	// A gateway that definitively does NOT answer is never returned — wiring
-	// it would install a release against an address known not to work — so
-	// either the alias answers or this is an error naming both attempts.
-	gwAnswers, err := nodeDial(node, net.JoinHostPort(gw, strconv.Itoa(port)))
-	if err != nil || gwAnswers {
-		return fmt.Sprintf("http://%s:%d", gw, port), nil
-	}
-	alias := hostAlias()
-	aliasAnswers, aliasErr := nodeDial(node, net.JoinHostPort(alias, strconv.Itoa(port)))
+	// The same helper the discovery reports from, so the address named there
+	// and the address wired here cannot disagree.
+	host, err := podReachableHost(node, gw, port)
 	switch {
-	case aliasErr != nil:
+	case err != nil:
+		// The probe could not run, so there is no verdict: the gateway is the
+		// documented default, and a busy node cannot move the rendered values.
 		return fmt.Sprintf("http://%s:%d", gw, port), nil
-	case aliasAnswers:
-		return fmt.Sprintf("http://%s:%d", alias, port), nil
+	case host == "":
+		return "", fmt.Errorf("no address reaches the host %s from pods: neither %s (the container runtime's gateway) nor %s (its host alias) answers — start the server, bind it to every interface, or set platform.modelManager.endpoints.%s",
+			config.BackendServerName(backend), net.JoinHostPort(gw, strconv.Itoa(port)),
+			net.JoinHostPort(hostAlias(), strconv.Itoa(port)), backend)
 	}
-	return "", fmt.Errorf("no address reaches the host %s from pods: %s does not answer (the container runtime's gateway) and neither does %s (its host alias) — start the server, bind it to every interface, or set platform.modelManager.endpoints.%s",
-		config.BackendServerName(backend), net.JoinHostPort(gw, strconv.Itoa(port)), net.JoinHostPort(alias, strconv.Itoa(port)), backend)
+	return fmt.Sprintf("http://%s:%d", host, port), nil
 }
 
 // resolveBackendEndpoints resolves every configured backend's endpoint.

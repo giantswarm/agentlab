@@ -21,8 +21,8 @@ const (
 	capCompletion = "completion"
 	// opDial is net.OpError's Op for a failed dial, as the stubs build one.
 	opDial = "dial"
-	// hostDockerInternal is the address only the cluster can resolve, which
-	// the loopback fallback exists for.
+	// hostDockerInternal is the container runtime's host alias: this machine
+	// as the cluster can resolve it, and nowhere else.
 	hostDockerInternal = "host.docker.internal"
 	// gatewayIP stands in for the kind network gateway.
 	gatewayIP       = "172.18.0.1"
@@ -327,10 +327,9 @@ func TestDiscoveryBackendsAndHint(t *testing.T) {
 	// UNKNOWN reachability (no kind network to probe yet — a fresh machine,
 	// or after `agentlab down`) must still enrol or the lab stops being
 	// configurable before it has booted once.
-	reachable, unreachable := true, false
 	mixed := &Discovery{KindGateway: gatewayIP, Servers: []HostServer{
-		{Backend: ollama, Ident: ollamaVersion, Port: 11434, OnGateway: &reachable, PodHost: gatewayIP},
-		{Backend: lemonade, Ident: lemonadeVersion, Port: 13305, OnGateway: &unreachable},
+		{Backend: ollama, Ident: ollamaVersion, Port: 11434, Probed: true, PodHost: gatewayIP},
+		{Backend: lemonade, Ident: lemonadeVersion, Port: 13305, Probed: true},
 		{Backend: lmstudio, Ident: lmStudioIdentAPIv1, Port: 1234},
 	}}
 	if got := mixed.Backends(); !slices.Equal(got, []string{ollama, lmstudio}) {
@@ -348,8 +347,8 @@ func TestDiscoveryBackendsAndHint(t *testing.T) {
 	}
 	// The form's own line marks what the answer will not enrol: listing a
 	// server the configuration then drops reads as a promise it does not keep.
-	wantHint := "Ollama 0.33.2 (:11434), Lemonade Server 11.9.0 (:13305) — pods cannot reach it, " +
-		"so it is not enrolled, LM Studio api v1 (:1234)"
+	wantHint := "Ollama 0.33.2 (:11434); Lemonade Server 11.9.0 (:13305) — pods cannot reach it, " +
+		"so it is not enrolled; LM Studio api v1 (:1234)"
 	if got := mixed.ModelServersHint(); got != wantHint {
 		t.Errorf("hint = %q, want %q", got, wantHint)
 	}
@@ -363,7 +362,7 @@ func TestDiscoveryBackendsAndHint(t *testing.T) {
 	// names the address rather than offering a remedy — no bind setting can
 	// make a gateway inside the runtime's VM answer.
 	viaAlias := &Discovery{KindGateway: gatewayIP, Servers: []HostServer{
-		{Backend: lmstudio, Ident: lmStudioIdentAPIv1, Port: 1234, OnGateway: &unreachable, PodHost: hostDockerInternal},
+		{Backend: lmstudio, Ident: lmStudioIdentAPIv1, Port: 1234, Probed: true, PodHost: hostDockerInternal},
 	}}
 	if got := viaAlias.Backends(); !slices.Equal(got, []string{lmstudio}) {
 		t.Fatalf("a server reachable on the alias must enroll: %v", got)
@@ -386,7 +385,7 @@ func TestDiscoveryBackendsAndHint(t *testing.T) {
 // refused connection (bash exits 1) and a hang (`timeout` exits 124) are
 // verdicts, every other exit is the probe itself failing and must not be
 // reported as an unreachable server.
-func TestHostServerAnswersUnderPodman(t *testing.T) {
+func TestNodeDialMapsExitCodes(t *testing.T) {
 	for name, tc := range map[string]struct {
 		exit      int
 		want      bool
@@ -405,7 +404,7 @@ func TestHostServerAnswersUnderPodman(t *testing.T) {
 			// dial's own code.
 			installFakeTool(t, dir, "docker", "case \"$1\" in inspect) echo true ;; *) exit "+strconv.Itoa(tc.exit)+" ;; esac")
 			withPodman(t, true)
-			got, err := hostServerAnswers("agentlab-control-plane", "169.254.1.2:11434")
+			got, err := nodeDial("agentlab-control-plane", "169.254.1.2:11434")
 			if (err != nil) != tc.wantProbe {
 				t.Fatalf("err = %v, want probe failure %v", err, tc.wantProbe)
 			}
