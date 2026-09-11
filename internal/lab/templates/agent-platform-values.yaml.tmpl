@@ -157,6 +157,7 @@ components:
 {{- if .Platform.Agents }}
     postRenderers:
 {{ index .PostRenderers "kagent" | indent 6 }}
+{{- if not .LegacyChart }}
   # The platform Postgres: the CloudNativePG operator (the chart's optional
   # component; a management cluster runs it as its own app) and, under
   # postgres.enabled below, the CNPG Cluster the connectivity chart renders
@@ -165,6 +166,7 @@ components:
   # here for real. Rides with the agents: nothing else in the lab needs it.
   cloudnative-pg:
     enabled: true
+{{- end }}
   # The agent write surface (agents as HelmReleases of the agent chart, as
   # the caller), on whenever kagent is — the standalone umbrella's contract.
   agent-manager:
@@ -297,6 +299,7 @@ muster:
             url: muster-valkey:6379
 
 {{- if .Platform.Agents }}
+{{- if not .LegacyChart }}
 # The platform Postgres — one CNPG Cluster in the kagent namespace holding
 # kagent's `kagent_v2` database (postgres.databases.kagent-v2, the vector
 # extension for the memory API) and Substrate's control-plane database
@@ -343,8 +346,21 @@ substrate:
   atelet:
     extraArgs:
       - --localhost-registry-replacement={{ .LocalRegistryEndpoint }}
+{{- end }}
 
 kagent:
+{{- if .LegacyChart }}
+  # THE 3.x LINE (a released meta chart below 4.0.0, config.LegacyChart):
+  # kagent 0.10 on its bundled Postgres, no platform Harness, no platform
+  # Postgres, no Agent Substrate — that chart's root schema is closed and the
+  # kagent 0.10 wrapper refuses the keys of the current line, so none of
+  # them render here. The controller API through the edge for the Dev
+  # Portal's kagent page (the connectivity chart derives the app-config's
+  # apiBaseUrl from this route); JWT validation stays off like in that
+  # chart's kind example — the edge only listens on the host's loopback.
+  controllerRoute:
+    enabled: true
+{{- else }}
   # The kagent controller's gRPC API through the edge — the Dev Portal, the
   # proofs and klaus-gateway dial it there — with the chart's JWT policy in
   # front (jwtAuthentication.enabled, mode Strict: the fleet shape). The
@@ -397,6 +413,7 @@ kagent:
       vectorEnabled: true
       bundled:
         enabled: false
+{{- end }}
   # The default ModelConfig every agent starts from (the kagent chart renders
   # it from providers.<default>). The chart would only create the referenced
   # Secret if the raw key were inlined in these values — which would put a
@@ -412,6 +429,14 @@ kagent:
       apiKeySecretKey: ANTHROPIC_API_KEY
   controller:
     auth:
+{{- if .LegacyChart }}
+      # The 3.x line runs no JWT-validating policy in front of the controller
+      # (controllerRoute.jwtAuthentication is off above), so trusted-proxy —
+      # bearer claims decoded WITHOUT verification — would trust anyone, and
+      # the kagent UI's direct NodePort path sends no bearer at all:
+      # upstream's local-dev mode is the honest setting here.
+      mode: unsecure
+{{- else }}
       # The chart's default: the controller decodes the bearer's claims
       # WITHOUT verifying the signature and trusts the JWT-validating
       # agentgateway policy in front of it (controllerRoute.jwtAuthentication
@@ -429,6 +454,7 @@ kagent:
       - name: cnpg-dsn
         mountPath: /etc/cnpg
         readOnly: true
+{{- end }}
   # Publish the UI on the host through the kind port mapping. NodePort is a
   # chart value, but the chart's ui-service template renders no `nodePort`
   # field (a random one would be useless to kind's fixed mappings), so the
@@ -436,6 +462,16 @@ kagent:
   ui:
     service:
       type: NodePort
+{{- if .LegacyChart }}
+  # The connectivity chart's per-object toggle for the kagent controller
+  # ServiceMonitor it renders (the kagent chart itself ships none); the
+  # chart-level gate is global.observability.metrics.serviceMonitor.enabled
+  # above, and the 3.x line's kagent 0.10 controller serves plain-HTTP
+  # /metrics on :8080 via the chart's default METRICS_BIND_ADDRESS/
+  # METRICS_SECURE env, so the monitor follows observability.
+  serviceMonitor:
+    enabled: {{ .Platform.Observability }}
+{{- else }}
   # The connectivity chart's per-object toggle for the kagent controller
   # ServiceMonitor (the chart-level gate is
   # global.observability.metrics.serviceMonitor.enabled above). Off, the
@@ -445,6 +481,7 @@ kagent:
   # serves them.
   serviceMonitor:
     enabled: false
+{{- end }}
   # No OTLP gateway in kind; the exporters would only log dial errors.
   otel:
     tracing:

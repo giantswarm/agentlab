@@ -61,6 +61,11 @@ type tmplData struct {
 	ModelManagerEnabled   bool
 	ModelManagerBackends  []string
 	ModelManagerEndpoints map[string]string
+	// LegacyChart mirrors cfg.LegacyChart(): the lab installs a released
+	// 3.x meta chart, and agent-platform-values.yaml.tmpl renders the 3.x
+	// lab shape (kagent 0.10 with its bundled Postgres, no Substrate, no
+	// platform Postgres) instead of the current line's.
+	LegacyChart bool
 	// ExtraModels is what extra-models.yaml.tmpl renders: the
 	// platform.extraModels entries.
 	ExtraModels []config.ExtraModel
@@ -123,6 +128,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		MCPPrometheusChartVersion:  mcpPrometheusChartVersion,
 		LocalRegistryEndpoint:      devRegistryEndpoint(cfg),
 		ModelManagerEnabled:        cfg.ModelManagerEnabled(),
+		LegacyChart:                cfg.LegacyChart(),
 		ModelManagerBackends:       cfg.Platform.ModelManager.Backends,
 		ModelManagerEndpoints:      endpoints,
 		ExtraModels:                cfg.Platform.ExtraModels,

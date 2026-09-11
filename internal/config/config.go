@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Masterminds/semver/v3"
 	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/yaml.v3"
 )
@@ -915,6 +916,33 @@ func (m ModelManager) Validate(agents bool) error {
 // ModelManagerEnabled reports whether the platform installs model-manager.
 func (c *Config) ModelManagerEnabled() bool {
 	return c.Platform.Enabled && c.Platform.Agents && c.Platform.ModelManager.Enabled
+}
+
+// ChartMajor is the major version of the meta chart release platform.
+// chartVersion pins (a leading v tolerated); 0 when it is not an exact
+// version — ValidateChartVersion rejects that before anything renders.
+func (c *Config) ChartMajor() uint64 {
+	v, err := semver.NewVersion(c.Platform.ChartVersion)
+	if err != nil {
+		return 0
+	}
+	return v.Major()
+}
+
+// LegacyChart reports whether the lab installs a released meta chart of the
+// 3.x line: an exact platform.chartVersion below 4.0.0 on the stable
+// channel. The 3.x line's values are a different shape (kagent 0.10 with
+// its bundled Postgres, no Agent Substrate, no platform Postgres, a closed
+// root schema that refuses the 4.x keys), so the lab values render in that
+// shape for it; a dev channel (platform.chartBranch) or a chart directory
+// (platform.chartPath) is always the current line, whatever version its
+// Chart.yaml or resolved tag carries.
+func (c *Config) LegacyChart() bool {
+	if c.Platform.ChartBranch != "" || c.Platform.ChartPath != "" {
+		return false
+	}
+	major := c.ChartMajor()
+	return major > 0 && major < 4
 }
 
 // AdminUser returns the first user in platform-admins: the identity the up

@@ -22,6 +22,37 @@ func TestValidateChartVersion(t *testing.T) {
 	}
 }
 
+// A released 3.x meta chart is the legacy shape; the current line is every
+// 4.x release, and the dev channel and a chart directory whatever their
+// version says.
+func TestLegacyChart(t *testing.T) {
+	for _, tc := range []struct {
+		name                      string
+		version, branch, chartDir string
+		major                     uint64
+		legacy                    bool
+	}{
+		{"3.x release", "3.23.1", "", "", 3, true},
+		{"3.x release with a v", "v3.20.0", "", "", 3, true},
+		{"4.x release", "4.7.11", "", "", 4, false},
+		{"the default", DefaultChartVersion, "", "", 4, false},
+		{"4.0 prerelease", "4.0.0-rc.1", "", "", 4, false},
+		{"5.x release", "5.0.0", "", "", 5, false},
+		{"dev channel resolved to a 3.x-numbered build", "3.24.0-dev.main.2026-09-11.08-12-33.h7f841be", "main", "", 3, false},
+		{"chart directory with a 3.x pin left over", "3.23.1", "", "/tmp/agent-platform", 3, false},
+		{"unset (rejected by ValidateChartVersion first)", "", "", "", 0, false},
+	} {
+		cfg := Default()
+		cfg.Platform.ChartVersion, cfg.Platform.ChartBranch, cfg.Platform.ChartPath = tc.version, tc.branch, tc.chartDir
+		if got := cfg.ChartMajor(); got != tc.major {
+			t.Errorf("%s: ChartMajor() = %d, want %d", tc.name, got, tc.major)
+		}
+		if got := cfg.LegacyChart(); got != tc.legacy {
+			t.Errorf("%s: LegacyChart() = %v, want %v", tc.name, got, tc.legacy)
+		}
+	}
+}
+
 // A dev image names its tag or digest; a bare name would resolve to latest
 // and hide which build the lab runs.
 func TestValidateImageRef(t *testing.T) {
