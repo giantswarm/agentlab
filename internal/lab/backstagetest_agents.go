@@ -104,9 +104,13 @@ func hitlAgentManifest(spec agentSpec) (string, error) {
 // interval, so a release published since is asked for with Flux's reconcile
 // request and waited for, bounded. Nothing of the source's spec changes.
 func ensureAgentChartCarriesApproval() error {
-	version, err := agentChartArtifactVersion()
+	version, exists, err := agentChartArtifactVersion()
 	if err != nil {
 		return err
+	}
+	if !exists {
+		note("no OCIRepository %s in %s yet: the first create makes it, tracking the newest %s release", agentChartOCIRepository, kagentNamespace, agentChartRange)
+		return nil
 	}
 	if !chartVersionBelow(version, agentChartWithApproval) {
 		return nil
@@ -123,7 +127,7 @@ func ensureAgentChartCarriesApproval() error {
 		return err
 	}
 	caught := waitFor(int(agentChartCatchUpTimeout/pollInterval), pollInterval, func() bool {
-		version, err = agentChartArtifactVersion()
+		version, _, err = agentChartArtifactVersion()
 		return err == nil && !chartVersionBelow(version, agentChartWithApproval)
 	})
 	if err != nil {
@@ -138,18 +142,18 @@ func ensureAgentChartCarriesApproval() error {
 
 // agentChartArtifactVersion is the chart version the shared OCIRepository
 // last fetched (status.artifact.revision, `<version>@sha256:…`), "" while it
-// has none; a missing source is not an error (the first create makes it).
-func agentChartArtifactVersion() (string, error) {
+// has none, and whether the source exists at all (the first create makes it).
+func agentChartArtifactVersion() (version string, exists bool, err error) {
 	obj, err := readKagentFluxObject(fluxOCIRepositoryResource, agentChartOCIRepository)
 	if apierrors.IsNotFound(err) {
-		return "", nil
+		return "", false, nil
 	}
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	revision, _, _ := unstructured.NestedString(obj.Object, "status", "artifact", "revision")
-	version, _, _ := strings.Cut(revision, "@")
-	return version, nil
+	version, _, _ = strings.Cut(revision, "@")
+	return version, true, nil
 }
 
 // chartVersionBelow reports whether the fetched version is older than the
