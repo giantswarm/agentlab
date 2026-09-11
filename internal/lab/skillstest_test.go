@@ -91,7 +91,7 @@ func TestSkillsAgentTemplate(t *testing.T) {
 
 // kagentAdmission is kagent's default admission label, what the tests
 // render unless they test the Harness's own.
-var kagentAdmission = map[string]string{harnessLabel: kagentHarness}
+var kagentAdmission = skillsTemplateShape{admission: map[string]string{harnessLabel: kagentHarness}, musterTools: true}
 
 // TestSkillsAgentTemplateAdmissionLabels: the template carries the labels the
 // Harness admits — the platform's own label here — and not kagent's default
@@ -99,7 +99,7 @@ var kagentAdmission = map[string]string{harnessLabel: kagentHarness}
 func TestSkillsAgentTemplateAdmissionLabels(t *testing.T) {
 	fixture, _ := SkillsFixture{}.resolve()
 	var obj map[string]any
-	if err := yaml.Unmarshal([]byte(skillsAgentTemplate(skillsTestAgent, defaultModelConfig, &fixture, map[string]string{"agent-platform.giantswarm.io/harness": "kagent"})), &obj); err != nil {
+	if err := yaml.Unmarshal([]byte(skillsAgentTemplate(skillsTestAgent, defaultModelConfig, &fixture, skillsTemplateShape{admission: map[string]string{"agent-platform.giantswarm.io/harness": "kagent"}})), &obj); err != nil {
 		t.Fatal(err)
 	}
 	u := &unstructured.Unstructured{Object: obj}
@@ -109,6 +109,9 @@ func TestSkillsAgentTemplateAdmissionLabels(t *testing.T) {
 	}
 	if _, has := labels[harnessLabel]; has {
 		t.Errorf("kagent's default label rendered although the Harness does not select on it: %v", labels)
+	}
+	if _, found, _ := unstructured.NestedSlice(obj, "spec", "tools"); found {
+		t.Errorf("tools rendered although the platform has no shared muster server: %v", obj["spec"])
 	}
 }
 

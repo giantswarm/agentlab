@@ -269,17 +269,17 @@ func SkillsTest(cfg *config.Config, email string, opts SkillsTestOptions) error 
 	cleanup()
 	defer cleanup()
 
-	admission := harnessAdmissionLabels()
-	step("Applying AgentTemplate %s on Harness %s: skill %s from %s @ %.12s%s, tools from %s", skillsTestAgent, kagentHarness, fixture.name(), fixture.Repo, fixture.Commit, fixture.credentialNote(), componentMuster)
+	shape := readSkillsTemplateShape()
+	step("Applying AgentTemplate %s on Harness %s: skill %s from %s @ %.12s%s, %s", skillsTestAgent, kagentHarness, fixture.name(), fixture.Repo, fixture.Commit, fixture.credentialNote(), shape.toolsNote())
 	if fixture.CredentialSecret != "" {
 		if err := requireCredentialRefServed(); err != nil {
 			return err
 		}
 	}
-	if _, err := applyManifests(context.Background(), []byte(skillsAgentTemplate(skillsTestAgent, opts.ModelConfig, &fixture, admission))); err != nil {
+	if _, err := applyManifests(context.Background(), []byte(skillsAgentTemplate(skillsTestAgent, opts.ModelConfig, &fixture, shape))); err != nil {
 		return err
 	}
-	note("accepted by the apiserver (the CRD validates the full commit and the relative path); labelled %v as the Harness admits", admission)
+	note("accepted by the apiserver (the CRD validates the full commit and the relative path); labelled %v as the Harness admits", shape.admission)
 
 	step("Waiting up to %s for Ready on Harness %s — the golden boot: the actor starts, fetches the skill, serves readyz, is snapshotted", opts.ReadyTimeout, kagentHarness)
 	boot, err := waitGoldenBoot(skillsTestAgent, kagentHarness, opts.ReadyTimeout)
@@ -287,7 +287,7 @@ func SkillsTest(cfg *config.Config, email string, opts SkillsTestOptions) error 
 		return err
 	}
 	if !boot.ready {
-		return skillsGoldenBootFailed(cfg, api, opts, boot, facts, admission)
+		return skillsGoldenBootFailed(cfg, api, opts, boot, facts, shape)
 	}
 	harness := boot.template.harness(kagentHarness)
 	note("Ready after %s: revision %.12s%s", boot.elapsed.Round(time.Second), harness.LatestSuccessfulRevision, warningsNote(harness.Warnings))
@@ -322,6 +322,34 @@ func SkillsTest(cfg *config.Config, email string, opts SkillsTestOptions) error 
 	return nil
 }
 
+// skillsTemplateShape is what the lab's platform dictates about the proof's
+// templates: the labels the Harness admits, and whether the shared muster
+// RemoteMCPServer exists to bind as the template's tools (the 3.x
+// connectivity chart renders one; the 4.x chart renders one per agent
+// instead, so there the proof's template carries no tools — the skill is
+// what it proves).
+type skillsTemplateShape struct {
+	admission   map[string]string
+	musterTools bool
+}
+
+// readSkillsTemplateShape reads the shape off the lab.
+func readSkillsTemplateShape() skillsTemplateShape {
+	shape := skillsTemplateShape{admission: harnessAdmissionLabels()}
+	if _, err := readKagentObject(remoteMCPServerResource, componentMuster); err == nil {
+		shape.musterTools = true
+	}
+	return shape
+}
+
+// toolsNote words the template's tools for the steps.
+func (s skillsTemplateShape) toolsNote() string {
+	if s.musterTools {
+		return "tools from " + componentMuster
+	}
+	return "no tools (the platform renders no shared " + componentMuster + " RemoteMCPServer; the skill is what the template carries)"
+}
+
 // harnessAdmissionLabels are the labels the platform Harness admits
 // (spec.allowedAgentTemplates.selector.matchLabels): the proof's templates
 // carry them, so the Harness picks them up whichever label the platform
@@ -341,15 +369,25 @@ func harnessAdmissionLabels() map[string]string {
 }
 
 // skillsAgentTemplate is the proof's AgentTemplate: the Go ADK Harness, the
-// ModelConfig, the terse prompt, the shared muster server as its tools (the
-// fleet's shape: skills and tools), labelled as agentlab's and as the
-// Harness admits — and, given a fixture (nil is the control), one git skill
-// pinned to its full commit, selected by its directory within the
-// repository, with the fixture's credentialRef when it names a Secret.
-func skillsAgentTemplate(name, modelConfig string, fixture *SkillsFixture, admission map[string]string) string {
+// ModelConfig, the terse prompt, the shared muster server as its tools where
+// the platform renders one (the fleet's shape: skills and tools), labelled
+// as agentlab's and as the Harness admits — and, given a fixture (nil is the
+// control), one git skill pinned to its full commit, selected by its
+// directory within the repository, with the fixture's credentialRef when it
+// names a Secret.
+func skillsAgentTemplate(name, modelConfig string, fixture *SkillsFixture, shape skillsTemplateShape) string {
 	labels := []string{managedByLabel + ": " + managedByAgentlabValue}
-	for _, key := range slices.Sorted(maps.Keys(admission)) {
-		labels = append(labels, key+": "+admission[key])
+	for _, key := range slices.Sorted(maps.Keys(shape.admission)) {
+		labels = append(labels, key+": "+shape.admission[key])
+	}
+	tools := ""
+	if shape.musterTools {
+		tools = fmt.Sprintf(`  tools:
+    - mcp:
+        server:
+          kind: %s
+          name: %s
+`, remoteMCPServerKind, componentMuster)
 	}
 	skills := ""
 	description := "Throwaway agent of `agentlab skills-test` (the control: the same template without the skill); deleted by the same run."
@@ -383,12 +421,7 @@ spec:
   modelConfig:
     name: %s
   systemPrompt: %q
-  tools:
-    - mcp:
-        server:
-          kind: %s
-          name: %s
-%s`, agentTemplateAPIVersion, name, kagentNamespace, strings.Join(labels, "\n    "), description, modelConfig, skillsTestSystemPrompt, remoteMCPServerKind, componentMuster, skills)
+%s%s`, agentTemplateAPIVersion, name, kagentNamespace, strings.Join(labels, "\n    "), description, modelConfig, skillsTestSystemPrompt, tools, skills)
 }
 
 // goldenBoot is how waiting on a template's golden boot ended: Ready on the
@@ -460,7 +493,7 @@ func terminalHarnessFailure(h *harnessStatus) (string, bool) {
 // skillsGoldenBootFailed is the negative outcome: the evidence, the control
 // boot, and the FAIL verdict that carries the versions — the finding for the
 // line's upstream issue.
-func skillsGoldenBootFailed(cfg *config.Config, api *kagentAPI, opts SkillsTestOptions, boot goldenBoot, facts lineFacts, admission map[string]string) error {
+func skillsGoldenBootFailed(cfg *config.Config, api *kagentAPI, opts SkillsTestOptions, boot goldenBoot, facts lineFacts, shape skillsTemplateShape) error {
 	harness := boot.template.harness(kagentHarness)
 	verdict := fmt.Sprintf("never became Ready within %s", opts.ReadyTimeout)
 	if boot.terminal {
@@ -475,7 +508,7 @@ func skillsGoldenBootFailed(cfg *config.Config, api *kagentAPI, opts SkillsTestO
 
 	step("The control: the same template without the skill, up to %s", skillsControlTimeout)
 	control := "not booted"
-	if _, err := applyManifests(context.Background(), []byte(skillsAgentTemplate(skillsTestControlAgent, opts.ModelConfig, nil, admission))); err != nil {
+	if _, err := applyManifests(context.Background(), []byte(skillsAgentTemplate(skillsTestControlAgent, opts.ModelConfig, nil, shape))); err != nil {
 		control = "could not be applied: " + err.Error()
 	} else if boot, err := waitGoldenBoot(skillsTestControlAgent, kagentHarness, skillsControlTimeout); err != nil {
 		control = "could not be read: " + err.Error()
