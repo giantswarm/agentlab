@@ -644,6 +644,20 @@ data the page reads — see [The muster plugin](backstage.md#the-muster-plugin).
   stay (Helm never removes a chart's `crds/`); a reinstall is clean. On a
   cluster an earlier agentlab built it also uninstalls the Flux controllers
   that lab installed itself (release `flux` in `flux-system`).
+- **A WorkerPool outlives a Substrate database it never knew.** When
+  Agent Substrate's control-plane database is replaced under a running
+  `WorkerPool` — a lab moving from the substrate chart's bundled Postgres to
+  the platform's CNPG `Database`, which `agentlab platform` does once on a
+  lab that ran an earlier shape — ate-api-server restarts against an empty
+  database, ate-controller re-registers the existing worker pods, and every
+  golden boot then fails inside ate-api-server with `AssignWorker:
+  ResourceExhausted: no free workers available` (the `AgentTemplate` stays
+  `Ready=False ActorTemplatePending`, `skills-test` red after its timeout):
+  the re-registered workers still hold the actors the old database knew and
+  never report free. Free them the documented way — `kubectl -n kagent delete
+  pod -l ate.dev/worker-pool=kagent-default`; the `WorkerPool` recreates
+  them, the pending golden actor gets a worker within seconds. A fresh
+  install and `platform-down` → `platform` recreate the pods anyway.
 - **`allowPublicClientRegistration` must be on for Claude Code's login.**
   Claude Code registers over DCR as a public client on a random loopback port,
   so none of the other registration gates can be opened for it: it cannot send
