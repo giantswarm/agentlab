@@ -191,6 +191,32 @@ func (f *fakeKagent) GetTask(ctx context.Context, req *a2apb.GetTaskRequest) (*a
 	return pbconv.ToProtoTask(task)
 }
 
+func (f *fakeKagent) ListTasks(ctx context.Context, _ *a2apb.ListTasksRequest) (*a2apb.ListTasksResponse, error) {
+	f.record(ctx, "ListTasks")
+	if _, err := f.routed(ctx); err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	resp := &a2apb.ListTasksResponse{}
+	for _, task := range f.tasks {
+		pb, err := pbconv.ToProtoTask(task)
+		if err != nil {
+			return nil, err
+		}
+		resp.Tasks = append(resp.Tasks, pb)
+	}
+	return resp, nil
+}
+
+// setTaskState scripts the controller's view of one task — under the lock,
+// since the web fakes flip states from their handler goroutines.
+func (f *fakeKagent) setTaskState(id a2a.TaskID, state a2a.TaskState) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.tasks[id] = &a2a.Task{ID: id, ContextID: "ctx-" + string(id), Status: a2a.TaskStatus{State: state}}
+}
+
 func (f *fakeKagent) CancelTask(ctx context.Context, req *a2apb.CancelTaskRequest) (*a2apb.Task, error) {
 	f.record(ctx, "CancelTask")
 	if _, err := f.routed(ctx); err != nil {
@@ -302,9 +328,13 @@ func (f *fakeKagent) ListAgentInstances(ctx context.Context, req *apiv1alpha1.Li
 	defer f.mu.Unlock()
 	var out []*apiv1alpha1.AgentInstance
 	for _, inst := range f.instances {
-		if inst.GetCreator() == who {
-			out = append(out, inst)
+		if inst.GetCreator() != who {
+			continue
 		}
+		if tpl := req.GetAgentTemplate(); tpl != nil && (inst.GetAgentTemplate().GetNamespace() != tpl.GetNamespace() || inst.GetAgentTemplate().GetName() != tpl.GetName()) {
+			continue
+		}
+		out = append(out, inst)
 	}
 	return &apiv1alpha1.ListAgentInstancesResponse{AgentInstances: out, Page: &apiv1alpha1.PageResponse{}}, nil
 }

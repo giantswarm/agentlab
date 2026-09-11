@@ -601,6 +601,34 @@ func waitAgentReady(name string, timeout time.Duration) (agentReadiness, error) 
 	return r, nil
 }
 
+// harnessAdmissionLabels are the labels the platform Harness admits
+// (spec.allowedAgentTemplates.selector.matchLabels): the proof's templates
+// carry them, so the Harness picks them up whichever label the platform
+// chose — the connectivity chart's agent-platform.giantswarm.io/harness:
+// <name>, or another. A Harness that cannot be read leaves the chart's.
+func harnessAdmissionLabels() map[string]string {
+	fallback := map[string]string{harnessLabel: kagentHarness}
+	h, err := readKagentObject(harnessResource, kagentHarness)
+	if err != nil {
+		return fallback
+	}
+	labels, found, _ := unstructured.NestedStringMap(h.Object, "spec", "allowedAgentTemplates", "selector", "matchLabels")
+	if !found || len(labels) == 0 {
+		return fallback
+	}
+	return labels
+}
+
+// admits reports whether labels satisfy a matchLabels selector.
+func admits(selector, labels map[string]string) bool {
+	for key, want := range selector {
+		if labels[key] != want {
+			return false
+		}
+	}
+	return true
+}
+
 // readAgentReadiness is one reading of an agent's state (waitAgentReady's
 // probe): the release first, then the template and its Harness entry.
 func readAgentReadiness(name string) (agentReadiness, error) {
@@ -637,7 +665,14 @@ func readAgentReadiness(name string) (agentReadiness, error) {
 		case len(template.Status.Harnesses) > 0:
 			r.terminal, r.reason = true, fmt.Sprintf("AgentTemplate %s is admitted by %s only, not by the platform Harness %s", name, strings.Join(template.harnessNames(), ", "), kagentHarness)
 		case template.Status.ObservedGeneration >= template.Metadata.Generation && template.Status.ObservedGeneration > 0:
-			r.terminal, r.reason = true, fmt.Sprintf("no Harness admits AgentTemplate %s (labels %v; the platform Harness %s admits %s=%s)", name, template.Metadata.Labels, kagentHarness, harnessLabel, kagentHarness)
+			// Observed, and no entry: a verdict only for a template the platform
+			// Harness's selector does not match. One it matches is between the
+			// controllers' passes — the entry follows.
+			if selector := harnessAdmissionLabels(); admits(selector, template.Metadata.Labels) {
+				r.reason = fmt.Sprintf("AgentTemplate %s carries the labels the platform Harness %s admits (%v); its status.harnesses[] entry is not written yet", name, kagentHarness, selector)
+			} else {
+				r.terminal, r.reason = true, fmt.Sprintf("no Harness admits AgentTemplate %s (labels %v; the platform Harness %s admits %v)", name, template.Metadata.Labels, kagentHarness, selector)
+			}
 		default:
 			r.reason = fmt.Sprintf("kagent has not reported on AgentTemplate %s yet", name)
 		}
