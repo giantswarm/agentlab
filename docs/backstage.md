@@ -190,9 +190,10 @@ the first message with a `requestId` and a repeat answers the same instance;
 the turn streams (`…/messages/stream`, SSE frames of A2A v1 events) and the
 agent's tool call reaches muster as the person (muster's
 `forwarded_id_token_accepted` audit event names them, in the turn's window);
-the instance is `SUSPENDED` after the turn — every quiescent turn is a
-snapshot — and the next message resumes it with the conversation intact (a
-codeword told in turn one, recalled in turn two); rename, the tasks list,
+the instance is quiescent after the turn — the gateway gives the worker back
+and the runtime is a snapshot, the logical state still `READY` (`SUSPENDED`
+is the explicit suspend) — and the next message resumes the conversation
+intact (a codeword told in turn one, recalled in turn two); rename, the tasks list,
 `session-states` and `session-usage` read; another user does not list the
 session and reads it as 404; the delete leaves nothing.
 

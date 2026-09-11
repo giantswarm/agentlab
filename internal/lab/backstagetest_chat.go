@@ -71,7 +71,7 @@ const (
 	portalRecallPrompt       = "Reply with the codeword of this conversation only, nothing else."
 	portalStopPrompt         = "Count slowly from 1 to 400, one number per line, no other text, and do not stop early."
 	portalTurnTimeout        = 4 * time.Minute
-	portalSuspendTimeout     = 3 * time.Minute
+	portalQuiescentTimeout   = 3 * time.Minute
 	portalHITLRounds         = 5
 	portalHITLResumeTimeout  = 2 * time.Minute
 	portalStopSettleTimeout  = time.Minute
@@ -468,9 +468,9 @@ func (ps *portalSession) cancelTask(id, taskID string) (*a2aTask, error) {
 	return &task, nil
 }
 
-// waitInstanceState polls the session until the instance reports the wanted
-// state, bounded; the last state seen comes back either way.
-func (ps *portalSession) waitInstanceState(id, want string, timeout time.Duration) (string, bool, error) {
+// waitInstanceState polls the session until the instance reports one of the
+// wanted states, bounded; the last state seen comes back either way.
+func (ps *portalSession) waitInstanceState(id string, timeout time.Duration, want ...string) (string, bool, error) {
 	var last string
 	var err error
 	reached := waitFor(int(timeout/pollInterval), pollInterval, func() bool {
@@ -481,7 +481,7 @@ func (ps *portalSession) waitInstanceState(id, want string, timeout time.Duratio
 			return false
 		}
 		last = inst.State
-		return last == want
+		return slices.Contains(want, last)
 	})
 	return last, reached, err
 }
@@ -640,13 +640,17 @@ func proveChat(primary *portalSession, others []*portalSession, agent portalAgen
 	note("task %s: %d frames (%v), states %v, %s; reply %q; muster: %s for %s", turn1.TaskID, frameCount(turn1), turn1.Frames, turn1.States, turn1.elapsed.Round(time.Second), excerpt(turn1.reply(), 80), musterTokenAcceptedLog, email)
 	verdicts = append(verdicts, fmt.Sprintf("PASS: the turn streams through POST %s/:id/messages/stream (%d frames: task, %d status updates, %d artifact updates) and muster attributes the agent's tool call to %s (%s)", kagentSessionsPath, frameCount(turn1), turn1.Frames["statusUpdate"], turn1.Frames["artifactUpdate"], email, musterTokenAcceptedLog))
 
-	step("The instance suspends after the turn (every quiescent turn is a snapshot), then turn 2 resumes the conversation")
-	state, suspended, err := primary.waitInstanceState(sessionID, instanceStateSuspended, portalSuspendTimeout)
+	// The gateway gives the worker back at the end of every turn — the
+	// runtime is quiesced into a snapshot — while the instance's logical
+	// state stays READY; SUSPENDED is the explicit suspend. Either is the
+	// quiescent instance the next turn resumes from.
+	step("The instance is quiescent after the turn (its runtime a snapshot), then turn 2 resumes the conversation from it")
+	state, quiescent, err := primary.waitInstanceState(sessionID, portalQuiescentTimeout, instanceStateReady, instanceStateSuspended)
 	if err != nil {
 		return nil, err
 	}
-	if !suspended {
-		return nil, fmt.Errorf("the instance %s is still %s %s after turn 1 completed — the controller parks a quiescent instance in %s (the snapshot the next turn resumes from); check `kubectl -n %s logs deploy/kagent-controller`", sessionID, state, portalSuspendTimeout, instanceStateSuspended, kagentNamespace)
+	if !quiescent {
+		return nil, fmt.Errorf("the instance %s is still %s %s after turn 1 completed — a quiescent instance reads %s (its runtime a snapshot) or %s; check `kubectl -n %s logs deploy/kagent-controller`", sessionID, state, portalQuiescentTimeout, instanceStateReady, instanceStateSuspended, kagentNamespace)
 	}
 	turn2, err := primary.streamTurn(sessionID, agent, portalRecallPrompt, nil)
 	if err != nil {
@@ -659,7 +663,7 @@ func proveChat(primary *portalSession, others []*portalSession, agent portalAgen
 		return nil, fmt.Errorf("turn 2 answered %q — the codeword %s of turn 1 is not in it: the resumed instance lost its context", excerpt(turn2.reply(), 200), word)
 	}
 	note("instance %s after turn 1; turn 2 (%s) recalled %q", state, turn2.elapsed.Round(time.Second), word)
-	verdicts = append(verdicts, fmt.Sprintf("PASS: the instance was %s after turn 1 and turn 2 resumed it with the conversation intact (the codeword %s recalled)", instanceStateSuspended, word))
+	verdicts = append(verdicts, fmt.Sprintf("PASS: the instance was %s after turn 1 and turn 2 resumed the conversation intact (the codeword %s recalled)", state, word))
 
 	step("Rename, the conversation's tasks, the derived states and usage")
 	if err := primary.renameSession(sessionID, portalSessionRenamed); err != nil {
