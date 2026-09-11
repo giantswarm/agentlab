@@ -3,6 +3,7 @@ package lab
 import (
 	"context"
 	"fmt"
+	"maps"
 	"path"
 	"regexp"
 	"slices"
@@ -268,16 +269,17 @@ func SkillsTest(cfg *config.Config, email string, opts SkillsTestOptions) error 
 	cleanup()
 	defer cleanup()
 
+	admission := harnessAdmissionLabels()
 	step("Applying AgentTemplate %s on Harness %s: skill %s from %s @ %.12s%s, tools from %s", skillsTestAgent, kagentHarness, fixture.name(), fixture.Repo, fixture.Commit, fixture.credentialNote(), componentMuster)
 	if fixture.CredentialSecret != "" {
 		if err := requireCredentialRefServed(); err != nil {
 			return err
 		}
 	}
-	if _, err := applyManifests(context.Background(), []byte(skillsAgentTemplate(skillsTestAgent, opts.ModelConfig, &fixture))); err != nil {
+	if _, err := applyManifests(context.Background(), []byte(skillsAgentTemplate(skillsTestAgent, opts.ModelConfig, &fixture, admission))); err != nil {
 		return err
 	}
-	note("accepted by the apiserver (the CRD validates the full commit and the relative path)")
+	note("accepted by the apiserver (the CRD validates the full commit and the relative path); labelled %v as the Harness admits", admission)
 
 	step("Waiting up to %s for Ready on Harness %s — the golden boot: the actor starts, fetches the skill, serves readyz, is snapshotted", opts.ReadyTimeout, kagentHarness)
 	boot, err := waitGoldenBoot(skillsTestAgent, kagentHarness, opts.ReadyTimeout)
@@ -285,7 +287,7 @@ func SkillsTest(cfg *config.Config, email string, opts SkillsTestOptions) error 
 		return err
 	}
 	if !boot.ready {
-		return skillsGoldenBootFailed(cfg, api, opts, boot, facts)
+		return skillsGoldenBootFailed(cfg, api, opts, boot, facts, admission)
 	}
 	harness := boot.template.harness(kagentHarness)
 	note("Ready after %s: revision %.12s%s", boot.elapsed.Round(time.Second), harness.LatestSuccessfulRevision, warningsNote(harness.Warnings))
@@ -320,13 +322,35 @@ func SkillsTest(cfg *config.Config, email string, opts SkillsTestOptions) error 
 	return nil
 }
 
+// harnessAdmissionLabels are the labels the platform Harness admits
+// (spec.allowedAgentTemplates.selector.matchLabels): the proof's templates
+// carry them, so the Harness picks them up whichever label the platform
+// chose — kagent's default kagent.dev/harness: <name>, or the chart's own.
+// A Harness that cannot be read leaves kagent's default.
+func harnessAdmissionLabels() map[string]string {
+	fallback := map[string]string{harnessLabel: kagentHarness}
+	h, err := readKagentObject(harnessResource, kagentHarness)
+	if err != nil {
+		return fallback
+	}
+	labels, found, _ := unstructured.NestedStringMap(h.Object, "spec", "allowedAgentTemplates", "selector", "matchLabels")
+	if !found || len(labels) == 0 {
+		return fallback
+	}
+	return labels
+}
+
 // skillsAgentTemplate is the proof's AgentTemplate: the Go ADK Harness, the
 // ModelConfig, the terse prompt, the shared muster server as its tools (the
-// fleet's shape: skills and tools), labelled as agentlab's — and, given a
-// fixture (nil is the control), one git skill pinned to its full commit,
-// selected by its directory within the repository, with the fixture's
-// credentialRef when it names a Secret.
-func skillsAgentTemplate(name, modelConfig string, fixture *SkillsFixture) string {
+// fleet's shape: skills and tools), labelled as agentlab's and as the
+// Harness admits — and, given a fixture (nil is the control), one git skill
+// pinned to its full commit, selected by its directory within the
+// repository, with the fixture's credentialRef when it names a Secret.
+func skillsAgentTemplate(name, modelConfig string, fixture *SkillsFixture, admission map[string]string) string {
+	labels := []string{managedByLabel + ": " + managedByAgentlabValue}
+	for _, key := range slices.Sorted(maps.Keys(admission)) {
+		labels = append(labels, key+": "+admission[key])
+	}
 	skills := ""
 	description := "Throwaway agent of `agentlab skills-test` (the control: the same template without the skill); deleted by the same run."
 	if fixture != nil {
@@ -353,8 +377,7 @@ metadata:
   name: %s
   namespace: %s
   labels:
-    %s: agentlab
-    %s: %s
+    %s
 spec:
   description: %q
   modelConfig:
@@ -365,7 +388,7 @@ spec:
         server:
           kind: %s
           name: %s
-%s`, agentTemplateAPIVersion, name, kagentNamespace, managedByLabel, harnessLabel, kagentHarness, description, modelConfig, skillsTestSystemPrompt, remoteMCPServerKind, componentMuster, skills)
+%s`, agentTemplateAPIVersion, name, kagentNamespace, strings.Join(labels, "\n    "), description, modelConfig, skillsTestSystemPrompt, remoteMCPServerKind, componentMuster, skills)
 }
 
 // goldenBoot is how waiting on a template's golden boot ended: Ready on the
@@ -437,7 +460,7 @@ func terminalHarnessFailure(h *harnessStatus) (string, bool) {
 // skillsGoldenBootFailed is the negative outcome: the evidence, the control
 // boot, and the FAIL verdict that carries the versions — the finding for the
 // line's upstream issue.
-func skillsGoldenBootFailed(cfg *config.Config, api *kagentAPI, opts SkillsTestOptions, boot goldenBoot, facts lineFacts) error {
+func skillsGoldenBootFailed(cfg *config.Config, api *kagentAPI, opts SkillsTestOptions, boot goldenBoot, facts lineFacts, admission map[string]string) error {
 	harness := boot.template.harness(kagentHarness)
 	verdict := fmt.Sprintf("never became Ready within %s", opts.ReadyTimeout)
 	if boot.terminal {
@@ -452,7 +475,7 @@ func skillsGoldenBootFailed(cfg *config.Config, api *kagentAPI, opts SkillsTestO
 
 	step("The control: the same template without the skill, up to %s", skillsControlTimeout)
 	control := "not booted"
-	if _, err := applyManifests(context.Background(), []byte(skillsAgentTemplate(skillsTestControlAgent, opts.ModelConfig, nil))); err != nil {
+	if _, err := applyManifests(context.Background(), []byte(skillsAgentTemplate(skillsTestControlAgent, opts.ModelConfig, nil, admission))); err != nil {
 		control = "could not be applied: " + err.Error()
 	} else if boot, err := waitGoldenBoot(skillsTestControlAgent, kagentHarness, skillsControlTimeout); err != nil {
 		control = "could not be read: " + err.Error()

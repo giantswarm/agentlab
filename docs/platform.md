@@ -284,7 +284,9 @@ materialises the template's skills when it starts (a git skill is
 `git fetch --depth 1 origin <commit>` of a full commit into `/plugins`,
 copied to `/skills`), before it serves readyz; and atenet refuses outbound
 connections from an actor that is not `RUNNING`. The proof creates an
-`AgentTemplate` on the platform's Go ADK Harness (`kagent`) with one skill
+`AgentTemplate` on the platform's Go ADK Harness (`kagent`) — labelled as
+that Harness's `allowedAgentTemplates` selector admits, read from the
+Harness itself — with one skill
 pinned to a full commit of a public repository — `agent-self-awareness` of
 giantswarm/agent-skills, the repository most of the fleet's skills come
 from — and the shared muster server as its tools, waits for `Ready` on the

@@ -46,13 +46,13 @@ func TestSkillsAgentTemplate(t *testing.T) {
 		t.Fatal(err)
 	}
 	var obj map[string]any
-	if err := yaml.Unmarshal([]byte(skillsAgentTemplate(skillsTestAgent, defaultModelConfig, &fixture)), &obj); err != nil {
+	if err := yaml.Unmarshal([]byte(skillsAgentTemplate(skillsTestAgent, defaultModelConfig, &fixture, kagentAdmission)), &obj); err != nil {
 		t.Fatal(err)
 	}
 	u := &unstructured.Unstructured{Object: obj}
 	if u.GetAPIVersion() != agentTemplateAPIVersion || u.GetKind() != "AgentTemplate" || u.GetNamespace() != kagentNamespace ||
 		u.GetLabels()[harnessLabel] != kagentHarness || u.GetLabels()[managedByLabel] != managedByAgentlabValue {
-		t.Errorf("template head:\n%s", skillsAgentTemplate(skillsTestAgent, defaultModelConfig, &fixture))
+		t.Errorf("template head:\n%s", skillsAgentTemplate(skillsTestAgent, defaultModelConfig, &fixture, kagentAdmission))
 	}
 	template, err := agentTemplateFrom(u)
 	if err != nil {
@@ -78,7 +78,7 @@ func TestSkillsAgentTemplate(t *testing.T) {
 	}
 
 	var control map[string]any
-	if err := yaml.Unmarshal([]byte(skillsAgentTemplate(skillsTestControlAgent, defaultModelConfig, nil)), &control); err != nil {
+	if err := yaml.Unmarshal([]byte(skillsAgentTemplate(skillsTestControlAgent, defaultModelConfig, nil, kagentAdmission)), &control); err != nil {
 		t.Fatal(err)
 	}
 	if _, found, _ := unstructured.NestedSlice(control, "spec", "skills"); found {
@@ -86,6 +86,29 @@ func TestSkillsAgentTemplate(t *testing.T) {
 	}
 	if description, _, _ := unstructured.NestedString(control, "spec", "description"); !strings.Contains(description, "control") {
 		t.Errorf("the control's description does not say so: %q", description)
+	}
+}
+
+// kagentAdmission is kagent's default admission label, what the tests
+// render unless they test the Harness's own.
+var kagentAdmission = map[string]string{harnessLabel: kagentHarness}
+
+// TestSkillsAgentTemplateAdmissionLabels: the template carries the labels the
+// Harness admits — the platform's own label here — and not kagent's default
+// when the Harness does not select on it; agentlab's managed-by label stays.
+func TestSkillsAgentTemplateAdmissionLabels(t *testing.T) {
+	fixture, _ := SkillsFixture{}.resolve()
+	var obj map[string]any
+	if err := yaml.Unmarshal([]byte(skillsAgentTemplate(skillsTestAgent, defaultModelConfig, &fixture, map[string]string{"agent-platform.giantswarm.io/harness": "kagent"})), &obj); err != nil {
+		t.Fatal(err)
+	}
+	u := &unstructured.Unstructured{Object: obj}
+	labels := u.GetLabels()
+	if labels["agent-platform.giantswarm.io/harness"] != "kagent" || labels[managedByLabel] != managedByAgentlabValue {
+		t.Errorf("labels = %v", labels)
+	}
+	if _, has := labels[harnessLabel]; has {
+		t.Errorf("kagent's default label rendered although the Harness does not select on it: %v", labels)
 	}
 }
 
@@ -108,7 +131,7 @@ func TestSkillsFixturePrivate(t *testing.T) {
 		t.Errorf("prompt = %q", fixture.prompt())
 	}
 	var obj map[string]any
-	if err := yaml.Unmarshal([]byte(skillsAgentTemplate(skillsTestAgent, defaultModelConfig, &fixture)), &obj); err != nil {
+	if err := yaml.Unmarshal([]byte(skillsAgentTemplate(skillsTestAgent, defaultModelConfig, &fixture, kagentAdmission)), &obj); err != nil {
 		t.Fatal(err)
 	}
 	skills, _, _ := unstructured.NestedSlice(obj, "spec", "skills")
@@ -128,7 +151,7 @@ func TestSkillsFixturePrivate(t *testing.T) {
 
 	public, _ := SkillsFixture{}.resolve()
 	var anonymous map[string]any
-	if err := yaml.Unmarshal([]byte(skillsAgentTemplate(skillsTestAgent, defaultModelConfig, &public)), &anonymous); err != nil {
+	if err := yaml.Unmarshal([]byte(skillsAgentTemplate(skillsTestAgent, defaultModelConfig, &public, kagentAdmission)), &anonymous); err != nil {
 		t.Fatal(err)
 	}
 	publicSkills, _, _ := unstructured.NestedSlice(anonymous, "spec", "skills")
