@@ -113,7 +113,7 @@ wait_agent_ready() {
 # assert_label <kind> <ns> <name> <label> <want>
 assert_label() {
   local got
-  got=$(kubectl -n "$2" get "$1" "$3" -o jsonpath="{.metadata.labels['$4']}")
+  got=$(kubectl -n "$2" get "$1" "$3" -o json | jq -r --arg l "$4" '.metadata.labels[$l] // ""')
   [ "$got" = "$5" ] || die "$1 $2/$3 label $4 = '$got', want '$5'"
   log "$1 $2/$3 label $4=$got"
 }
