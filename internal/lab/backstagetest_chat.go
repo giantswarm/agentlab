@@ -48,6 +48,8 @@ const (
 	taskStateCanceled      = "TASK_STATE_CANCELED"
 	taskStateInputRequired = "TASK_STATE_INPUT_REQUIRED"
 	taskStateFailedA2A     = "TASK_STATE_FAILED"
+	taskStateRejected      = "TASK_STATE_REJECTED"
+	taskStateAuthRequired  = "TASK_STATE_AUTH_REQUIRED"
 	taskStateWorking       = "TASK_STATE_WORKING"
 )
 
@@ -214,7 +216,7 @@ func (t *streamedTurn) absorb(f streamFrame) {
 		t.Frames["statusUpdate"]++
 		t.TaskID = firstNonEmpty(t.TaskID, f.StatusUpdate.TaskID)
 		state(f.StatusUpdate.Status.State)
-		if f.StatusUpdate.Final {
+		if f.StatusUpdate.Final || streamEndsOn(f.StatusUpdate.Status.State) {
 			t.Final = f.StatusUpdate
 			if t.Reply == "" && f.StatusUpdate.Status.Message != nil {
 				t.Reply = wireText(f.StatusUpdate.Status.Message.Parts)
@@ -242,6 +244,18 @@ func (t *streamedTurn) absorb(f streamFrame) {
 // reply is the reply text, falling back to the streamed chunks.
 func (t *streamedTurn) reply() string {
 	return strings.TrimSpace(firstNonEmpty(t.Reply, t.chunks.String()))
+}
+
+// streamEndsOn reports whether a status update in this state is the turn's
+// terminal one: A2A's terminal and interrupted states. The spec flags that
+// event `final: true`; kagent's Go executor path omits the flag and closes the
+// stream on the state, so the state is what tells.
+func streamEndsOn(state string) bool {
+	switch state {
+	case taskStateCompleted, taskStateCanceled, taskStateFailedA2A, taskStateRejected, taskStateInputRequired, taskStateAuthRequired:
+		return true
+	}
+	return false
 }
 
 // finalState is the terminal state the stream ended in, "" when it ended

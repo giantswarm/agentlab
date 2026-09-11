@@ -293,7 +293,8 @@ func TestPortalValidateAgent(t *testing.T) {
 
 // streamFixture is the recorded stream of one Go ADK turn as the backend
 // relays it: the task snapshot, a working status, streamed artifact chunks,
-// the complete artifact, the terminal status update.
+// the complete artifact, the terminal status update — carrying the state,
+// not the spec's `final` flag, as kagent's Go path sends it.
 func streamFixture(state string) string {
 	frames := []map[string]any{
 		{"task": map[string]any{"id": testTaskID, fieldContextID: testContextID, fieldStatus: map[string]any{fieldState: "TASK_STATE_SUBMITTED"},
@@ -302,7 +303,7 @@ func streamFixture(state string) string {
 		{frameArtifact: map[string]any{fieldTaskID: testTaskID, fieldArtifact: map[string]any{fieldArtifactID: testArtifactID, fieldParts: []map[string]any{{fieldText: "p"}}}}},
 		{frameArtifact: map[string]any{fieldTaskID: testTaskID, fieldArtifact: map[string]any{fieldArtifactID: testArtifactID, fieldParts: []map[string]any{{fieldText: "ong"}}}, "append": true}},
 		{frameArtifact: map[string]any{fieldTaskID: testTaskID, fieldArtifact: map[string]any{fieldArtifactID: testArtifactID, fieldParts: []map[string]any{{fieldText: testPong}}}, "lastChunk": true}},
-		{"statusUpdate": map[string]any{fieldTaskID: testTaskID, fieldContextID: testContextID, "final": true,
+		{"statusUpdate": map[string]any{fieldTaskID: testTaskID, fieldContextID: testContextID,
 			fieldStatus: map[string]any{fieldState: state, "message": map[string]any{fieldMessageID: "m-2", fieldRole: "ROLE_AGENT", fieldParts: []map[string]any{{fieldText: testPong}}}}}},
 	}
 	var b strings.Builder
@@ -311,6 +312,31 @@ func streamFixture(state string) string {
 		b.WriteString("data: " + string(raw) + "\n\n")
 	}
 	return b.String()
+}
+
+// TestStreamedTurnFinal: the terminal status update is the one flagged
+// `final` (the spec) or the one in a terminal or interrupted state (kagent's
+// Go path, which omits the flag); a working update is neither.
+func TestStreamedTurnFinal(t *testing.T) {
+	update := func(state string, final bool) streamFrame {
+		return streamFrame{StatusUpdate: &a2aStatusUpdate{TaskID: testTaskID, Status: a2aTaskStatus{State: state}, Final: final}}
+	}
+	for _, tc := range []struct {
+		frame streamFrame
+		want  string
+	}{
+		{update(taskStateWorking, false), ""},
+		{update(taskStateWorking, true), taskStateWorking},
+		{update(taskStateCompleted, false), taskStateCompleted},
+		{update(taskStateInputRequired, false), taskStateInputRequired},
+		{update(taskStateCanceled, false), taskStateCanceled},
+	} {
+		var turn streamedTurn
+		turn.absorb(tc.frame)
+		if got := turn.finalState(); got != tc.want {
+			t.Errorf("%s final=%v: finalState() = %q, want %q", tc.frame.StatusUpdate.Status.State, tc.frame.StatusUpdate.Final, got, tc.want)
+		}
+	}
 }
 
 // TestStreamTurn: the streaming route's SSE frames fold into the turn — the
