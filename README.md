@@ -119,7 +119,7 @@ machine, is in [Getting started](docs/getting-started.md).
 | [Getting started](docs/getting-started.md) | Requirements, docker CPU and memory, install, what `configure` discovers, the first `up`, connecting Claude Code |
 | [Command reference](docs/cli.md) | Every `agentlab` command and flag, the environment variables, keeping the binary current |
 | [TLS](docs/tls.md) | The lab CA, `trust` and `untrust`, Node and browsers, bringing your own certificate |
-| [The agent platform](docs/platform.md) | muster + mcp-kubernetes: the request path, per-server sign-in, the fake fleet, toolsets, deviations from a real management cluster, the dev channel (a branch's dev builds, Substrate) |
+| [The agent platform](docs/platform.md) | muster + mcp-kubernetes: the request path, per-server sign-in, the fake fleet, toolsets, deviations from a real management cluster, the dev channel (a branch's dev builds), Agent Substrate and the platform Postgres from the chart |
 | [Agents](docs/agents.md) | The kagent runtime, the default ModelConfig and the API key Secret |
 | [Models](docs/models.md) | Extra model configs, model servers on the host, managed models through model-manager |
 | [Observability](docs/observability.md) | Prometheus + mcp-prometheus, and Backstage's metrics views |

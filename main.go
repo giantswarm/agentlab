@@ -391,7 +391,7 @@ func browserCmd() *cobra.Command {
 
 func configureCmd() *cobra.Command {
 	var defaults, accessible bool
-	var platform, agents, observability, backstage, modelManager, substrate bool
+	var platform, agents, observability, backstage, modelManager bool
 	var modelManagerBackends []string
 	var chartVersion, chartPath, chartBranch string
 	cmd := &cobra.Command{
@@ -439,9 +439,6 @@ func configureCmd() *cobra.Command {
 				// build of the previous one.
 				cfg.Platform.ChartBranch = chartBranch
 				cfg.Platform.ChartPinned = false
-			}
-			if cmd.Flags().Changed("substrate") {
-				cfg.Platform.Substrate.Enabled = &substrate
 			}
 			cfg.Normalize()
 			var pinEnabled *bool
@@ -492,9 +489,6 @@ func configureCmd() *cobra.Command {
 			default:
 				fmt.Printf("  chart      agent-platform %s\n", cfg.Platform.ChartVersion)
 			}
-			if cfg.Platform.Enabled {
-				fmt.Printf("  substrate  %v (%s)\n", cfg.SubstrateEnabled(), cfg.SubstrateReason())
-			}
 			for _, name := range slices.Sorted(maps.Keys(cfg.Platform.DevImages)) {
 				fmt.Printf("  dev image  %s -> %s\n", name, cfg.Platform.DevImages[name])
 			}
@@ -523,7 +517,6 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().StringVar(&chartVersion, "chart-version", "", "the agent-platform chart release to install (an exact version; default "+config.DefaultChartVersion+")")
 	cmd.Flags().StringVar(&chartPath, "chart-path", "", "install the agent-platform chart from this local directory (an agent-platform checkout's helm/agent-platform) instead of the pinned release; \"\" clears it")
 	cmd.Flags().StringVar(&chartBranch, "chart-branch", "", "the dev channel: follow this agent-platform branch's newest dev build (resolved now and on every up/platform, written to chartVersion); \"\" returns to the stable channel")
-	cmd.Flags().BoolVar(&substrate, "substrate", false, "pin Substrate (kagent's actor runtime) on/off instead of following the chart channel (on with --chart-branch)")
 	cmd.Flags().StringSliceVar(&modelManagerBackends, "model-manager-backends", nil, fmt.Sprintf("pin the host model servers, in order (%s; the first is model-manager's default backend) instead of the ones the discovery finds", strings.Join(config.ModelManagerBackends, ", ")))
 	cmd.Flags().BoolVar(&accessible, "accessible", false, "prompt-per-question form mode (for screen readers and plain terminals)")
 	return cmd

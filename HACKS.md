@@ -514,27 +514,29 @@ Unblocks when kind's `load docker-image` logic (the re-tag of an image ID the
 node already has, the per-image save) survives the containerd image store and
 is worth reusing over the plain archive import.
 
-### U22. `substratepools.go`: Substrate's CA/JWT pool bootstrap is a Go port of `kubectl-ate` — BLOCKED UPSTREAM
+### U22. `substratepools.go`: Substrate's CA/JWT pool bootstrap is a Go port of `kubectl-ate` — FIXED upstream
 The substrate chart (0.0.26) mounts four pool Secrets, a trust-anchor Secret
-and an authentication ConfigMap it does not render. Upstream's install is
-`helm install`, then `kubectl-ate admin make-ca-pool` / `make-jwt-pool` plus a
-shell step (jq + openssl for the trust anchor, a heredoc for the
-authentication config), then a second `helm upgrade --wait` — the first
-install's pods restart on missing volumes until then. The lab downloads no
-binaries (kind, Helm and client-go are embedded; `kubectl-ate` is unsigned)
-and upstream publishes no image with the bootstrap in it (`ate-setup` is not
-published), so `substratepools.go` copies the generate + serialise subset of
-substrate's internal `localca` and `localjwtauthority` packages (Apache-2.0
-header kept, pinned to 0.0.26 in the comment) and `substrate.go` creates every
-bootstrap object BEFORE one waited install; the pre-created
-`podcertificate-controller-system` namespace the chart also renders is adopted
-with Helm's `--take-ownership`. Drift risk: a Substrate bump that changes the
-pool wire format shows up as ate-api-server never Ready. The issuer too:
-upstream's default authentication config names `https://kubernetes.default.svc`,
-which ate-api-server rejects against kind's tokens (their `iss` is
-`…svc.cluster.local`); the lab reads the issuer off the apiserver's discovery
-document, as upstream's own `ate-setup` does. Unblocks when the substrate
-chart renders the bootstrap (a hook Job) or the packages become importable.
+and an authentication ConfigMap it does not render, and upstream's install was
+`helm install` → `kubectl-ate admin make-ca-pool` / `make-jwt-pool` plus a
+shell step → a second `helm upgrade --wait`. While no chart shipped Substrate
+the lab installed it itself ahead of the platform, with `substratepools.go`
+copying the generate + serialise subset of substrate's `localca` and
+`localjwtauthority` packages and `substrate.go` creating every bootstrap
+object before one waited install (the POC channel's shape).
+**Fixed upstream (agent-platform 4.0.x):** the meta chart ships Agent
+Substrate as the `substrate-crds` and `substrate` components, and the
+connectivity release's `pre-install,pre-upgrade` hook Job
+`<release>-substrate-bootstrap` mints the same key material (openssl in an
+init container, the pools' wire format, a pool that exists is never touched)
+and publishes the trust anchors — the lab's port was that Job's prior art.
+The lab installs nothing of Substrate anymore: `substrate.go` keeps the one
+check the chart cannot make early — the apiserver serves
+`certificates.k8s.io/v1beta1`, else `agentlab down && agentlab up` — and the
+`platform.substrate` knob, the Go port, its tests and the Substrate values
+template are gone (agentlab#138). The chart's `substrate` component adopts a
+lab's earlier `substrate`/`substrate-crds` releases in `ate-system` by name
+(`storageNamespace` = `targetNamespace`), so a lab that ran the POC channel
+upgrades in place.
 
 ### U23. LM Studio has no delete over its API — `models-test` proves the refusal — BLOCKED UPSTREAM
 LM Studio's own API (`/api/v1`, 0.4.0+) serves the library, the download that

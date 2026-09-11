@@ -14,18 +14,26 @@ import (
 // a docker VM with two CPUs leaves agentgateway (100m) Pending forever, and
 // the platform install waits on a workload that will never start until helm
 // gives up; with the platform up but the node full, models-test gets as far
-// as the agent turn and fails there, because the agent's own pod cannot be
-// scheduled. Nothing along the way says "out of CPU". preflightRuntimeResources
-// asks the container runtime what it has BEFORE any cluster work and refuses
-// (CPU, a hard limit) or warns (memory, a soft one) with the fix — in the
-// spirit of preflightHostServer: a host-side shortfall fails here, with its
-// remedy, not after a five-minute boot and a ten-minute install wait.
+// as the agent turn and fails there. Nothing along the way says "out of CPU".
+// preflightRuntimeResources asks the container runtime what it has BEFORE any
+// cluster work and refuses (CPU, a hard limit) or warns (memory, a soft one)
+// with the fix — in the spirit of preflightHostServer: a host-side shortfall
+// fails here, with its remedy, not after a five-minute boot and a ten-minute
+// install wait.
 //
-// The figures below are the requests `kubectl describe node` reports for each
-// group of pods, measured on a live full default lab (agents, observability,
-// Backstage, model-manager) on 2026-09-08: 2540m / 2532Mi allocated in total.
-// docs/getting-started.md "Docker resources" is the human copy of these constants — its
-// table lists the same groups — so a change here is a change there.
+// Two columns per group of pods, both measured on a live lab: what the group
+// REQUESTS of the scheduler (`kubectl describe node`'s Allocated resources —
+// the hard column: a request that does not fit never schedules) and what it
+// USES (the containers' memory working set, summed from the kubelet's
+// cAdvisor metrics — the column RAM is actually spent on; several groups
+// declare far less than they use, Substrate's WorkerPool reserves far more).
+// The 4.x line was measured on 2026-09-11 (agent-platform 4.7.11: kagent
+// 0.11.0-gs.3, Substrate 0.0.27-gs.5, the full default lab with model-manager
+// on kind v1.37.0, a node up for 19 hours): 3340m / 4388Mi requested — the
+// node's Allocated resources read exactly that — about 4.4 GiB in use.
+// docs/getting-started.md "Docker resources" is the human
+// copy of these constants — its table lists the same groups — so a change
+// here is a change there.
 
 // resourceRequests is what a group of pods asks the scheduler for: CPU in
 // millicores, memory in MiB — the units describe node uses.
@@ -39,105 +47,200 @@ func (r resourceRequests) add(o resourceRequests) resourceRequests {
 	return resourceRequests{r.CPU + o.CPU, r.Mem + o.Mem}
 }
 
-// resourceGroup is one group of pods the lab may schedule, with what it
-// requests and the configuration that installs it.
+// platformTopology is what the chart the lab installs brings along with the
+// components agentlab.yaml switches on — read off the chart's rendered roster
+// (platformRoster), never off a version string, so a lab on a chart that
+// ships less budgets less.
+type platformTopology struct {
+	// Substrate: the chart delivers Agent Substrate (the 4.x line, with
+	// kagent on) — the control plane in ate-system and the WorkerPool's
+	// gVisor workers, every agent an actor on one of them.
+	Substrate bool
+	// CNPG: the chart delivers the CloudNativePG operator and, with it, the
+	// platform's Postgres Cluster in the kagent namespace.
+	CNPG bool
+}
+
+// topologyOf reads the topology off a rendered roster; a nil roster (the
+// render failed) is the line the lab is verified with — the 4.x line ships
+// both with the agents — so a boot that cannot render still budgets for
+// what the default chart installs.
+func topologyOf(cfg *config.Config, roster *platformRoster) platformTopology {
+	if roster == nil {
+		agents := cfg.Platform.Enabled && cfg.Platform.Agents
+		return platformTopology{Substrate: agents, CNPG: agents}
+	}
+	return platformTopology{Substrate: roster.shipsSubstrate(), CNPG: roster.shipsCNPG()}
+}
+
+// resourceGroup is one group of pods the lab may schedule: what it requests,
+// what it was measured to use (memory only — CPU use idles near zero and
+// bursts are the headroom's business), and the configuration and topology
+// that install it.
 type resourceGroup struct {
 	Name     string
 	Requests resourceRequests
-	Enabled  func(*config.Config) bool
+	// UseMem is the group's measured memory working set in MiB.
+	UseMem  int
+	Enabled func(*config.Config, platformTopology) bool
 }
 
-// The request figures, one constant per group (see the package comment for
+// The figures, one pair of constants per group (see the package comment for
 // where they were measured).
 const (
 	// kind's static pods: kube-apiserver 250m, controller-manager 200m,
 	// scheduler 100m, etcd 100m/100Mi, kindnet 100m/50Mi, two CoreDNS at
-	// 100m/70Mi. Always there — it is the node.
+	// 100m/70Mi. Always there — it is the node. In use: the apiserver alone
+	// held 1.6 GiB after a day of platform churn, controller-manager 147Mi,
+	// etcd 124Mi, scheduler 55Mi, CoreDNS 66Mi, kube-proxy 35Mi, kindnet
+	// 32Mi, the local-path provisioner 18Mi.
 	reqKindControlPlaneCPU = 950
 	reqKindControlPlaneMem = 290
+	useKindControlPlaneMem = 2070
 	// The lab's own Dex. Always deployed by Up.
 	reqDexCPU = 50
 	reqDexMem = 64
-	// The umbrella chart without its optional parts: muster 100m/128Mi and
-	// its valkey 150m/192Mi, agentgateway 100m/128Mi and its controller
-	// 50m/128Mi, mcp-kubernetes 105m/144Mi, agent-manager 55m/80Mi.
+	useDexMem = 40
+	// The chart without its optional parts: muster 100m/128Mi and its valkey
+	// 150m/192Mi, agentgateway 100m/128Mi and its controller 50m/128Mi,
+	// mcp-kubernetes 105m/144Mi, agent-manager 55m/80Mi. In use: muster 91Mi,
+	// valkey 28Mi, the data plane 20Mi and its controller 63Mi,
+	// mcp-kubernetes 24Mi, agent-manager 17Mi.
 	reqPlatformCoreCPU = 510
 	reqPlatformCoreMem = 736
-	// The agents runtime: kagent controller 100m/128Mi, UI 100m/256Mi, its
-	// bundled PostgreSQL 250m/256Mi.
-	reqAgentsRuntimeCPU = 450
-	reqAgentsRuntimeMem = 640
-	// model-manager in front of the host model servers.
+	usePlatformCoreMem = 245
+	// The agents runtime: the kagent controller 100m/128Mi and the UI
+	// 100m/256Mi (70Mi and 2Mi in use).
+	reqAgentsRuntimeCPU = 200
+	reqAgentsRuntimeMem = 384
+	useAgentsRuntimeMem = 75
+	// kagent's bundled PostgreSQL, 250m/256Mi (47Mi in use) — on a chart
+	// without the platform Postgres (the 0.10 product's 3.x line); on the
+	// 4.x line the controller's database is the CNPG Cluster below.
+	reqKagentPostgresCPU = 250
+	reqKagentPostgresMem = 256
+	useKagentPostgresMem = 50
+	// model-manager in front of the host model servers (14Mi in use).
 	reqModelManagerCPU = 55
 	reqModelManagerMem = 80
-	// Substrate (kagent's actor runtime, the dev channel): its bundled
-	// PostgreSQL requests 1 CPU / 1 GiB, the chart's default; ate-api-server,
-	// ate-controller, atelet, atenet and rustfs declare nothing. Measured in
-	// the POC lab 2026-09-09 (substrate 0.0.26): its control plane sat at
-	// 274 MiB real, the node's RSS grew from 2.26 to 3.53 GiB with Substrate
-	// and the dev channel's kagent together; worker pods are BestEffort.
+	useModelManagerMem = 15
+	// Agent Substrate (the 4.x line, from the chart): the control plane in
+	// ate-system — ate-api-server ×2, ate-controller, atelet, the atenet
+	// router, egress and dns, RustFS — and the podcertificate-controller
+	// declare nothing; the WorkerPool's four gVisor workers request the
+	// chart's 250m/512Mi each (limits 2 CPU / 2Gi: one worker hosts one
+	// actor, the limit bounds its sandbox), so the pool is the whole
+	// request. In use, idle: the control plane 425Mi (RustFS 175Mi, atelet
+	// 51Mi, dns 45Mi, egress 35Mi, router 32Mi, ate-api-server 2 × 28Mi,
+	// ate-controller 27Mi), the podcertificate-controller 17Mi, a worker
+	// 9Mi (four: 37Mi) — the reservation is capacity for the actors, not
+	// what idles.
 	reqSubstrateCPU = 1000
-	reqSubstrateMem = 1024
-	// Backstage requests almost nothing and uses several times its 250Mi;
-	// the memory floor below accounts for that with a factor, not here.
+	reqSubstrateMem = 2048
+	useSubstrateMem = 480
+	// The platform Postgres (the 4.x line, from the chart): the CloudNativePG
+	// operator and the one-instance Cluster the lab renders declare nothing.
+	// In use, right after the bootstrap: the operator 63Mi, the instance
+	// (kagent-pg-1, both databases created) 114Mi.
+	reqCNPGCPU = 0
+	reqCNPGMem = 0
+	useCNPGMem = 180
+	// Backstage requests almost nothing and uses several times its 250Mi
+	// (400Mi measured).
 	reqBackstageCPU = 20
 	reqBackstageMem = 250
+	useBackstageMem = 400
 	// The chart's bundled Flux engine (the lab shape): the Flux Operator plus
 	// the FluxInstance's source-controller and helm-controller — the delivery
 	// engine of every platform component, so it is always part of the platform.
-	// Measured on the lab 2026-09-08 (agent-platform 3.20.0, flux-engine 0.1.0): flux-operator 100m/64Mi, helm-controller 100m/64Mi, source-controller 50m/64Mi.
+	// flux-operator 100m/64Mi (145Mi in use), helm-controller 100m/64Mi
+	// (124Mi), source-controller 50m/64Mi (52Mi).
 	reqFluxCPU = 250
 	reqFluxMem = 192
+	useFluxMem = 320
 	// observability: kube-state-metrics 200m/200Mi, mcp-prometheus
 	// 105m/144Mi. The Prometheus server, the operator and node-exporter
-	// declare no requests at all, which is one reason real memory use runs
-	// so far above this column.
+	// declare no requests at all — and the server alone uses 564Mi (the
+	// operator 46Mi, kube-state-metrics 49Mi, node-exporter 25Mi,
+	// mcp-prometheus 24Mi).
 	reqObservabilityCPU = 305
 	reqObservabilityMem = 344
+	useObservabilityMem = 710
 
-	// runtimeHeadroomCPU is what the CPU floor keeps free beyond the
-	// requests for the pods the platform creates AFTER the boot: every kagent
-	// agent is one more pod, and models-test and agents-test each create one.
-	// Six of them at the 100m the platform's own small pods request; without
-	// this room a lab that boots fine cannot run a single agent.
-	runtimeHeadroomCPU = 600
+	// The run-time headroom the CPU floor keeps free beyond the requests, for
+	// what the platform runs AFTER the boot. On the 4.x line an agent is an
+	// actor inside one of the WorkerPool's pre-provisioned workers (their
+	// requests are counted above), so the headroom is what one Go ADK turn
+	// bursts. Measured 2026-09-11 (cAdvisor, 3 s samples, skills-test's
+	// golden boot with a git skill plus one turn through the edge): the
+	// worker hosting the actor peaked at 64Mi working set and spent 2.0 CPU
+	// seconds over the run, the idle workers 12Mi and 0.06 s; the controller
+	// peaked at 59Mi, ate-api-server at 33Mi. A turn's memory stays inside
+	// the worker's 512Mi request; its CPU is a burst of a fraction of a core
+	// for a few seconds, budgeted as 300m.
+	// On a chart without Substrate every kagent agent is one more pod at the
+	// 100m the platform's own small pods request, and models-test and
+	// agents-test each create one: six of them.
+	runtimeHeadroomCPUTurn      = 300
+	runtimeHeadroomCPUAgentPods = 600
 
-	// memRealUseFactor is how far real memory use runs above the requests
-	// column on a live lab: about twice (docs/getting-started.md "Docker resources" — a
-	// platform+agents node sat at 2.4 GiB of real use against 1.8 GiB of
-	// requests, and the full lab's Backstage and Prometheus use several
-	// times what they declare). The memory floor is the requests times this.
-	memRealUseFactor = 2
+	// memUseHeadroom is the room the memory floor keeps above the measured
+	// use: a turn's working set on a worker (55–70Mi), Backstage and
+	// Prometheus growing under load. A quarter over the idle measurement.
+	memUseHeadroomNum, memUseHeadroomDen = 5, 4
 )
 
 // labResourceGroups lists every group in boot order, gated the way Up and
 // platformUp install them. Groups that hang off the platform are inert when
-// the platform itself is disabled, like their config fields.
+// the platform itself is disabled, like their config fields; the two the
+// chart brings with the agents on the 4.x line follow the topology.
 var labResourceGroups = []resourceGroup{
-	{"kind control plane", resourceRequests{reqKindControlPlaneCPU, reqKindControlPlaneMem},
-		func(*config.Config) bool { return true }},
-	{"Dex", resourceRequests{reqDexCPU, reqDexMem},
-		func(*config.Config) bool { return true }},
-	{"agent platform", resourceRequests{reqPlatformCoreCPU, reqPlatformCoreMem},
-		func(c *config.Config) bool { return c.Platform.Enabled }},
-	{"agents runtime", resourceRequests{reqAgentsRuntimeCPU, reqAgentsRuntimeMem},
-		func(c *config.Config) bool { return c.Platform.Enabled && c.Platform.Agents }},
-	{"model-manager", resourceRequests{reqModelManagerCPU, reqModelManagerMem},
-		func(c *config.Config) bool { return c.ModelManagerEnabled() }},
-	{"Substrate", resourceRequests{reqSubstrateCPU, reqSubstrateMem},
-		func(c *config.Config) bool { return c.SubstrateEnabled() }},
-	{"Backstage", resourceRequests{reqBackstageCPU, reqBackstageMem},
-		func(c *config.Config) bool { return c.Platform.Enabled && c.Backstage.Enabled }},
-	{"Flux engine", resourceRequests{reqFluxCPU, reqFluxMem},
-		func(c *config.Config) bool { return c.Platform.Enabled }},
-	{"observability", resourceRequests{reqObservabilityCPU, reqObservabilityMem},
-		func(c *config.Config) bool { return c.Platform.Enabled && c.Platform.Observability }},
+	{"kind control plane", resourceRequests{reqKindControlPlaneCPU, reqKindControlPlaneMem}, useKindControlPlaneMem,
+		func(*config.Config, platformTopology) bool { return true }},
+	{"Dex", resourceRequests{reqDexCPU, reqDexMem}, useDexMem,
+		func(*config.Config, platformTopology) bool { return true }},
+	{"agent platform", resourceRequests{reqPlatformCoreCPU, reqPlatformCoreMem}, usePlatformCoreMem,
+		func(c *config.Config, _ platformTopology) bool { return c.Platform.Enabled }},
+	{"agents runtime", resourceRequests{reqAgentsRuntimeCPU, reqAgentsRuntimeMem}, useAgentsRuntimeMem,
+		func(c *config.Config, _ platformTopology) bool { return c.Platform.Enabled && c.Platform.Agents }},
+	{"kagent's bundled Postgres", resourceRequests{reqKagentPostgresCPU, reqKagentPostgresMem}, useKagentPostgresMem,
+		func(c *config.Config, t platformTopology) bool {
+			return c.Platform.Enabled && c.Platform.Agents && !t.CNPG
+		}},
+	{"model-manager", resourceRequests{reqModelManagerCPU, reqModelManagerMem}, useModelManagerMem,
+		func(c *config.Config, _ platformTopology) bool { return c.ModelManagerEnabled() }},
+	{"Substrate", resourceRequests{reqSubstrateCPU, reqSubstrateMem}, useSubstrateMem,
+		func(c *config.Config, t platformTopology) bool {
+			return c.Platform.Enabled && c.Platform.Agents && t.Substrate
+		}},
+	{"platform Postgres", resourceRequests{reqCNPGCPU, reqCNPGMem}, useCNPGMem,
+		func(c *config.Config, t platformTopology) bool {
+			return c.Platform.Enabled && c.Platform.Agents && t.CNPG
+		}},
+	{"Backstage", resourceRequests{reqBackstageCPU, reqBackstageMem}, useBackstageMem,
+		func(c *config.Config, _ platformTopology) bool { return c.Platform.Enabled && c.Backstage.Enabled }},
+	{"Flux engine", resourceRequests{reqFluxCPU, reqFluxMem}, useFluxMem,
+		func(c *config.Config, _ platformTopology) bool { return c.Platform.Enabled }},
+	{"observability", resourceRequests{reqObservabilityCPU, reqObservabilityMem}, useObservabilityMem,
+		func(c *config.Config, _ platformTopology) bool { return c.Platform.Enabled && c.Platform.Observability }},
+}
+
+// runtimeHeadroomCPU is the CPU the floor keeps free for run-time work on a
+// topology: a Go ADK turn inside a pre-provisioned worker with Substrate,
+// six agent pods without.
+func runtimeHeadroomCPU(topo platformTopology) int {
+	if topo.Substrate {
+		return runtimeHeadroomCPUTurn
+	}
+	return runtimeHeadroomCPUAgentPods
 }
 
 // resourceNeeds is what one configuration asks of the container runtime.
 type resourceNeeds struct {
 	// Requests is the sum over the enabled groups: what the boot schedules.
 	Requests resourceRequests
+	// UseMem is the sum of the groups' measured memory use, in MiB.
+	UseMem int
 	// Groups names the enabled groups with their requests, for the
 	// breakdown a refusal prints.
 	Groups []resourceGroup
@@ -145,26 +248,28 @@ type resourceNeeds struct {
 	// rounded up to whole CPUs — the unit docker is given them in, and the
 	// node's allocatable CPU is exactly the runtime's count.
 	MinCPUs int
-	// MinMemMiB is the soft floor: the requests times memRealUseFactor.
-	// Below Requests.Mem the pods do not even schedule; between the two
-	// they schedule and then get evicted or OOM-killed under real use.
+	// MinMemMiB is the soft floor: the measured use plus its headroom, never
+	// below the requests. Below Requests.Mem the pods do not even schedule;
+	// between the two they schedule and then get evicted or OOM-killed under
+	// real use.
 	MinMemMiB int
 }
 
 // labResourceNeeds computes what cfg asks of the runtime from the enabled
 // groups — never one hard-coded number, so a lab without Backstage and
 // observability is held to its own, smaller floor.
-func labResourceNeeds(cfg *config.Config) resourceNeeds {
+func labResourceNeeds(cfg *config.Config, topo platformTopology) resourceNeeds {
 	var n resourceNeeds
 	for _, g := range labResourceGroups {
-		if !g.Enabled(cfg) {
+		if !g.Enabled(cfg, topo) {
 			continue
 		}
 		n.Groups = append(n.Groups, g)
 		n.Requests = n.Requests.add(g.Requests)
+		n.UseMem += g.UseMem
 	}
-	n.MinCPUs = ceilCPUs(n.Requests.CPU + runtimeHeadroomCPU)
-	n.MinMemMiB = n.Requests.Mem * memRealUseFactor
+	n.MinCPUs = ceilCPUs(n.Requests.CPU + runtimeHeadroomCPU(topo))
+	n.MinMemMiB = max(n.Requests.Mem, n.UseMem*memUseHeadroomNum/memUseHeadroomDen)
 	return n
 }
 
@@ -284,7 +389,7 @@ func (m runtimeMeasure) onHost() bool {
 // (schedules, then starves), and otherwise a note only when the run-time
 // pods have less than one CPU to themselves. Pure, so every branch is
 // unit-tested without a container runtime.
-func judgeRuntimeResources(m runtimeMeasure, cfg *config.Config, needs resourceNeeds) (warning string, err error) {
+func judgeRuntimeResources(m runtimeMeasure, cfg *config.Config, topo platformTopology, needs resourceNeeds) (warning string, err error) {
 	if m.CPUs < needs.MinCPUs {
 		return "", fmt.Errorf("%s has %d CPUs; this lab configuration needs %d.\n"+
 			"  Its pods request %s CPUs of the single kind node, plus room for the pods the\n"+
@@ -292,22 +397,22 @@ func judgeRuntimeResources(m runtimeMeasure, cfg *config.Config, needs resourceN
 			"  request does not fit: the boot would wait on an agentgateway that stays\n"+
 			"  Pending forever (docs/getting-started.md \"Docker resources\"). The requests:\n%s\n%s",
 			m.engine(), m.CPUs, needs.MinCPUs, fmtCPUs(needs.Requests.CPU),
-			wrap(requestsBreakdown(needs), 84, "    "), resourceFixes(m, cfg, needs))
+			wrap(requestsBreakdown(needs), 84, "    "), resourceFixes(m, cfg, topo, needs))
 	}
 	if m.MemMiB < needs.Requests.Mem {
 		return "", fmt.Errorf("%s has %s of memory; this lab configuration needs %s.\n"+
 			"  Its pods request %s of the single kind node, which does not fit, so they do not\n"+
-			"  even all schedule — and real use runs about %dx the requests (docs/getting-started.md \"Docker resources\").\n%s",
+			"  even all schedule — and they use about %s (docs/getting-started.md \"Docker resources\").\n%s",
 			m.engine(), fmtGiB(m.MemMiB), fmtGiB(needs.MinMemMiB), fmtGiB(needs.Requests.Mem),
-			memRealUseFactor, resourceFixes(m, cfg, needs))
+			fmtGiB(needs.UseMem), resourceFixes(m, cfg, topo, needs))
 	}
 	if m.MemMiB < needs.MinMemMiB {
 		warning = fmt.Sprintf("%s has %s of memory; this lab configuration wants %s.\n"+
-			"    Its pods request only %s, so they schedule — but real use runs about %dx the requests\n"+
-			"    (Backstage and Prometheus use several times what they declare): expect evictions\n"+
+			"    Its pods request %s, so they schedule — but they use about %s (Backstage, Prometheus\n"+
+			"    and the kind apiserver use several times what they declare): expect evictions\n"+
 			"    and OOM kills under load (docs/getting-started.md \"Docker resources\").\n%s",
-			m.engine(), fmtGiB(m.MemMiB), fmtGiB(needs.MinMemMiB), fmtGiB(needs.Requests.Mem), memRealUseFactor,
-			indent(resourceFixes(m, cfg, needs), "  "))
+			m.engine(), fmtGiB(m.MemMiB), fmtGiB(needs.MinMemMiB), fmtGiB(needs.Requests.Mem), fmtGiB(needs.UseMem),
+			indent(resourceFixes(m, cfg, topo, needs), "  "))
 	}
 	return warning, nil
 }
@@ -325,7 +430,7 @@ func requestsBreakdown(needs resourceNeeds) string {
 
 // resourceFixes is the "what to change" tail of a refusal or warning: the
 // resize step for the runtime the user has, and the smaller lab that fits.
-func resourceFixes(m runtimeMeasure, cfg *config.Config, needs resourceNeeds) string {
+func resourceFixes(m runtimeMeasure, cfg *config.Config, topo platformTopology, needs resourceNeeds) string {
 	var b strings.Builder
 	cpus, memGiB := needs.MinCPUs, ceilGiB(needs.MinMemMiB)
 	switch {
@@ -344,8 +449,10 @@ func resourceFixes(m runtimeMeasure, cfg *config.Config, needs resourceNeeds) st
 			fmt.Fprintf(&b, "  - Colima:         colima stop && colima start --cpu %d --memory %d\n", cpus, memGiB)
 		}
 	}
-	if flags := smallerLabFlags(cfg); flags != "" {
-		small := labResourceNeeds(smallerLab(cfg))
+	// The smaller lab is offered where it lowers a floor: with Substrate the
+	// WorkerPool is the CPU of requests that Backstage and observability
+	// never were, so the offer may only buy memory.
+	if flags, small := smallerLabFlags(cfg), labResourceNeeds(smallerLab(cfg), topo); flags != "" && (small.MinCPUs < needs.MinCPUs || small.MinMemMiB < needs.MinMemMiB) {
 		fmt.Fprintf(&b, "  Or run the smaller lab, the platform and its agents without Backstage and observability\n"+
 			"  (needs %d CPUs and %s):  %s", small.MinCPUs, fmtGiB(small.MinMemMiB), flags)
 	} else {
@@ -361,13 +468,13 @@ func resourceFixes(m runtimeMeasure, cfg *config.Config, needs resourceNeeds) st
 // probe that fails (no docker on PATH is caught later by kind, with its own
 // message; an engine answering something unexpected) degrades to a note and
 // lets the boot go on — an unreadable runtime is not a small one.
-func preflightRuntimeResources(cfg *config.Config) error {
-	needs := labResourceNeeds(cfg)
+func preflightRuntimeResources(cfg *config.Config, topo platformTopology) error {
+	needs := labResourceNeeds(cfg, topo)
 	step("Checking the container runtime's CPUs and memory against this lab's requests")
 	cpus, memBytes, err := runtimeResources()
 	if err != nil {
-		note("could not read them (%v); going on. This lab requests %s CPUs / %s and needs %d CPUs / %s (docs/getting-started.md \"Docker resources\")",
-			err, fmtCPUs(needs.Requests.CPU), fmtGiB(needs.Requests.Mem), needs.MinCPUs, fmtGiB(needs.MinMemMiB))
+		note("could not read them (%v); going on. This lab requests %s CPUs / %s, uses about %s, and needs %d CPUs / %s (docs/getting-started.md \"Docker resources\")",
+			err, fmtCPUs(needs.Requests.CPU), fmtGiB(needs.Requests.Mem), fmtGiB(needs.UseMem), needs.MinCPUs, fmtGiB(needs.MinMemMiB))
 		return nil
 	}
 	m := runtimeMeasure{
@@ -377,20 +484,20 @@ func preflightRuntimeResources(cfg *config.Config) error {
 		GOOS:     runtime.GOOS,
 		HostCPUs: runtime.NumCPU(),
 	}
-	note("%s: %d CPUs, %s memory; the lab requests %s CPUs / %s and needs %d CPUs / %s",
-		m.engine(), m.CPUs, fmtGiB(m.MemMiB), fmtCPUs(needs.Requests.CPU), fmtGiB(needs.Requests.Mem), needs.MinCPUs, fmtGiB(needs.MinMemMiB))
-	warning, err := judgeRuntimeResources(m, cfg, needs)
+	note("%s: %d CPUs, %s memory; the lab requests %s CPUs / %s, uses about %s, and needs %d CPUs / %s",
+		m.engine(), m.CPUs, fmtGiB(m.MemMiB), fmtCPUs(needs.Requests.CPU), fmtGiB(needs.Requests.Mem), fmtGiB(needs.UseMem), needs.MinCPUs, fmtGiB(needs.MinMemMiB))
+	warning, err := judgeRuntimeResources(m, cfg, topo, needs)
 	if err != nil {
 		return err
 	}
 	if warning != "" {
 		warn("%s", warning)
 	}
-	// Above the floor but with less than a CPU for the run-time pods: say so,
-	// so a models-test that later fails at the agent turn has its cause on
-	// record in the boot log.
+	// Above the floor but with less than a CPU to spare: say so, so a
+	// models-test that later fails at the agent turn has its cause on record
+	// in the boot log.
 	if spare := m.CPUs*1000 - needs.Requests.CPU; spare < 1000 {
-		note("tight: %s CPUs left for the pods the platform creates at run time (every kagent agent is one; models-test and agents-test create one each)", fmtCPUs(spare))
+		note("tight: %s CPUs left beyond the requests for the agents' turns (and, without Substrate, their pods)", fmtCPUs(spare))
 	}
 	return nil
 }

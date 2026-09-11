@@ -49,21 +49,29 @@ there is the old port-forward:
 kubectl -n kagent port-forward svc/kagent-ui 8081:8080
 ```
 
-Lab deviations on the kagent side, same spirit as the [deviations
+The topology is the installation's (the 4.x line, kagent API v2): the
+controller's gRPC API is a `GRPCRoute` on the edge with the chart's JWT
+`Strict` policy in front — every bearer verified against the lab Dex,
+`x-user-id` set from the verified email claim — and the controller runs the
+fleet's `auth.mode: trusted-proxy`, re-deriving the caller from the same
+bearer; `agentlab platform-test` asserts both (a call without a token refused
+at the edge; a forged header attributed to the token's subject). Every agent
+is an `AgentTemplate` admitted by the platform `Harness kagent` (labelled
+`agent-platform.giantswarm.io/harness: kagent`) and runs as an actor on Agent
+Substrate — the `WorkerPool kagent-default`'s gVisor workers in the kagent
+namespace, the control plane in `ate-system` — which the chart ships and the
+lab installs nothing of; kagent's `kagent_v2` database lives on the platform's
+CNPG `Cluster kagent-pg` next to Substrate's (see [Agent Substrate and the
+platform Postgres](platform.md#agent-substrate-and-the-platform-postgres--from-the-chart)).
+The agent chart 1.x renders one `RemoteMCPServer` per agent pointing it at
+muster with its toolset header; kagent forwards the *caller's* token
+(`KAGENT_PROPAGATE_TOKEN`), so agent tool calls through muster are the
+person's. Lab deviations on the kagent side, same spirit as the [deviations
 table](platform.md#lab-specific-deviations-from-a-real-management-cluster):
-the controller runs `auth.mode: unsecure` (upstream's local-dev mode — the GS
-default `trusted-proxy` decodes bearer claims *without verification* and
-depends on a JWT-validating agentgateway this lab does not run), and the
-ServiceMonitor / OTel exporters are off (no Prometheus Operator, no OTLP
-gateway in kind). The chart also renders the shared `RemoteMCPServer`
-pointing agents at muster; note that kagent forwards the *caller's* token to
-muster, so agent tool calls through muster need a real Dex token on the way
-in — headless pokes at the unsecured controller API won't have one.
-
-On the [dev channel](platform.md#dev-channel) the runtime is kagent main
-(API v2: `Harness` + `AgentTemplate`, every agent an actor on Substrate,
-which the lab installs ahead of the platform); the Agent CRs and the heals
-above belong to the released line and are skipped there. Skills are the
-line's open question — an `AgentTemplate`'s git skill is fetched during the
-golden boot, which Substrate's egress gate refuses; `agentlab skills-test`
-is that proof, see [The skills proof](platform.md#the-skills-proof-the-golden-boot).
+the JWKS source is the lab Dex, the snapshot store the bundled RustFS, the
+ServiceMonitor / OTel exporters are off (the line serves no /metrics, no
+OTLP gateway in kind). A git skill of an `AgentTemplate` is fetched during
+the golden boot under Substrate's egress gate; `agentlab skills-test` is
+that proof, see [The skills proof](platform.md#the-skills-proof-the-golden-boot).
+On a chart that still serves `agents.kagent.dev` (the 0.10 product's 3.x
+line) the Agent CRs and the heals above apply instead.

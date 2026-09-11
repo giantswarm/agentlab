@@ -55,13 +55,44 @@ spec:
     registry: gsoci.azurecr.io
     repository: giantswarm/agentgateway
     tag: v1.4.1
+---
+# the images pods get at run time from an operator: the WorkerPool's worker,
+# the CNPG Cluster's operand and its ImageVolume extension
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+spec:
+  workerImage: ghcr.io/giantswarm/substrate/ateom-gvisor:0.0.27-gs.5
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+spec:
+  imageName: "gsoci.azurecr.io/giantswarm/postgresql-cnpg:18.3"
+  postgresql:
+    extensions:
+      - name: pgvector
+        image:
+          reference: gsoci.azurecr.io/giantswarm/pgvector:0.8.2-18-bookworm
+---
+apiVersion: kagent.dev/v1alpha3
+kind: Harness
+spec:
+  workload:
+    image: "ghcr.io/giantswarm/kagent/golang-adk@sha256:a2d23f5eb9c01e1903459a6e742f7d4aaa5e950d7e9aa6f07f8982761be0163a"
+  substrate:
+    snapshotPolicy:
+      # a URL under a scraped key is no image
+      location: s3://ate-snapshots/kagent
 `
 	got := scrapeImages(rendered)
 	want := []string{
 		refPostgres,
+		"ghcr.io/giantswarm/kagent/golang-adk@sha256:a2d23f5eb9c01e1903459a6e742f7d4aaa5e950d7e9aa6f07f8982761be0163a",
+		"ghcr.io/giantswarm/substrate/ateom-gvisor:0.0.27-gs.5",
 		"gsoci.azurecr.io/giantswarm/agentgateway:v1.4.1",
 		"gsoci.azurecr.io/giantswarm/mcp-kubernetes:1.0.9",
 		"gsoci.azurecr.io/giantswarm/muster:5.7.2",
+		"gsoci.azurecr.io/giantswarm/pgvector:0.8.2-18-bookworm",
+		"gsoci.azurecr.io/giantswarm/postgresql-cnpg:18.3",
 		"gsoci.azurecr.io/giantswarm/valkey@sha256:abcdef0123456789",
 		"not-yaml-context:but-tagged",
 	}

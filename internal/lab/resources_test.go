@@ -65,81 +65,85 @@ func labConfig(platform, agents, observability, backstage, modelManager bool) *c
 	return cfg
 }
 
-// devChannel puts a configuration on the dev channel (platform.chartBranch).
-func devChannel(cfg *config.Config) *config.Config {
-	cfg.Platform.ChartBranch = devChannelBranch
-	return cfg
-}
+// The two topologies the floor is computed for: the 4.x line ships Agent
+// Substrate and the platform Postgres with the agents (fourX); a chart that
+// ships neither — the 0.10 product's 3.x line — budgets for kagent's bundled
+// Postgres instead (stableLine).
+var (
+	fourX      = platformTopology{Substrate: true, CNPG: true}
+	stableLine = platformTopology{}
+)
 
-// The floor follows the enabled components. The full default lab reproduces
-// the live measurement the constants come from (2590m / 2596Mi allocated on
-// 2026-09-08) and lands on the Docker resources table's rows: 4 CPUs for the full lab, 3 for
-// the platform and its agents alone. The chart's Flux engine counts whenever
-// the platform does (the lab shape brings it with the chart); everything but
+// The floor follows the enabled components and the chart's topology. The
+// full default lab on the 4.x line reproduces the live measurement the
+// constants come from (3340m / 4388Mi requested, ~4.4 GiB in use on
+// 2026-09-11) and lands on the Docker resources table's rows: 4 CPUs and
+// 5.5 GiB (the WorkerPool's four workers are a CPU of requests by
+// themselves, the apiserver and Prometheus most of the use). A chart without
+// Substrate and the platform Postgres — the 0.10 product's 3.x line — budgets
+// kagent's bundled Postgres and six agent pods instead: the 4 CPUs of old.
+// The chart's Flux engine counts whenever the platform does; everything but
 // kind and Dex is inert when the platform is off.
 func TestLabResourceNeeds(t *testing.T) {
 	for name, tc := range map[string]struct {
 		cfg     *config.Config
+		topo    platformTopology
 		cpu     int
 		mem     int
+		use     int
 		minCPUs int
 		minMem  int
 		groups  string
 	}{
-		"full default lab with model-manager (the measured lab)": {
-			cfg: labConfig(true, true, true, true, true),
-			cpu: 2590, mem: 2596, minCPUs: 4, minMem: 5192,
-			groups: "kind control plane,Dex,agent platform,agents runtime,model-manager,Backstage,Flux engine,observability",
+		"the 4.x line, full default lab with model-manager (the measured lab)": {
+			cfg: labConfig(true, true, true, true, true), topo: fourX,
+			cpu: 3340, mem: 4388, use: 4535, minCPUs: 4, minMem: 5668,
+			groups: "kind control plane,Dex,agent platform,agents runtime,model-manager,Substrate,platform Postgres,Backstage,Flux engine,observability",
 		},
-		"the dev channel: the full lab plus Substrate, implied by chartBranch": {
-			cfg: devChannel(labConfig(true, true, true, true, true)),
-			cpu: 3590, mem: 3620, minCPUs: 5, minMem: 7240,
-			groups: "kind control plane,Dex,agent platform,agents runtime,model-manager,Substrate,Backstage,Flux engine,observability",
-		},
-		"the dev channel without agents: no kagent, nothing for Substrate to serve": {
-			cfg: devChannel(labConfig(true, false, true, true, false)),
-			cpu: 2085, mem: 1876, minCPUs: 3, minMem: 3752,
+		"the 4.x line without agents: no runtime, nothing for Substrate or the Cluster to serve": {
+			cfg: labConfig(true, false, true, true, false), topo: fourX,
+			cpu: 2085, mem: 1876, use: 3785, minCPUs: 3, minMem: 4731,
 			groups: "kind control plane,Dex,agent platform,Backstage,Flux engine,observability",
 		},
-		"full default lab without model-manager": {
-			cfg: labConfig(true, true, true, true, false),
-			cpu: 2535, mem: 2516, minCPUs: 4, minMem: 5032,
-			groups: "kind control plane,Dex,agent platform,agents runtime,Backstage,Flux engine,observability",
+		"the 4.x line, full default lab without model-manager": {
+			cfg: labConfig(true, true, true, true, false), topo: fourX,
+			cpu: 3285, mem: 4308, use: 4520, minCPUs: 4, minMem: 5650,
+			groups: "kind control plane,Dex,agent platform,agents runtime,Substrate,platform Postgres,Backstage,Flux engine,observability",
 		},
-		"platform + agents only (the docs' smaller lab)": {
-			cfg: labConfig(true, true, false, false, true),
-			cpu: 2265, mem: 2002, minCPUs: 3, minMem: 4004,
-			groups: "kind control plane,Dex,agent platform,agents runtime,model-manager,Flux engine",
+		"the 4.x line, platform + agents only (the docs' smaller lab)": {
+			cfg: labConfig(true, true, false, false, true), topo: fourX,
+			cpu: 3015, mem: 3794, use: 3425, minCPUs: 4, minMem: 4281,
+			groups: "kind control plane,Dex,agent platform,agents runtime,model-manager,Substrate,platform Postgres,Flux engine",
 		},
-		"platform + agents + Backstage, no observability": {
-			cfg: labConfig(true, true, false, true, false),
-			cpu: 2230, mem: 2172, minCPUs: 3, minMem: 4344,
-			groups: "kind control plane,Dex,agent platform,agents runtime,Backstage,Flux engine",
+		"the 3.x line, full default lab with model-manager: the bundled Postgres, six agent pods of headroom": {
+			cfg: labConfig(true, true, true, true, true), topo: stableLine,
+			cpu: 2590, mem: 2596, use: 3925, minCPUs: 4, minMem: 4906,
+			groups: "kind control plane,Dex,agent platform,agents runtime,kagent's bundled Postgres,model-manager,Backstage,Flux engine,observability",
 		},
-		"platform + agents + observability, no Backstage": {
-			cfg: labConfig(true, true, true, false, false),
-			cpu: 2515, mem: 2266, minCPUs: 4, minMem: 4532,
-			groups: "kind control plane,Dex,agent platform,agents runtime,Flux engine,observability",
+		"the 3.x line, platform + agents only": {
+			cfg: labConfig(true, true, false, false, true), topo: stableLine,
+			cpu: 2265, mem: 2002, use: 2815, minCPUs: 3, minMem: 3518,
+			groups: "kind control plane,Dex,agent platform,agents runtime,kagent's bundled Postgres,model-manager,Flux engine",
 		},
 		"platform + Backstage without agents: no kagent, no model-manager": {
-			cfg: labConfig(true, false, false, true, true),
-			cpu: 1780, mem: 1532, minCPUs: 3, minMem: 3064,
+			cfg: labConfig(true, false, false, true, true), topo: fourX,
+			cpu: 1780, mem: 1532, use: 3075, minCPUs: 3, minMem: 3843,
 			groups: "kind control plane,Dex,agent platform,Backstage,Flux engine",
 		},
 		"platform alone": {
-			cfg: labConfig(true, false, false, false, false),
-			cpu: 1760, mem: 1282, minCPUs: 3, minMem: 2564,
+			cfg: labConfig(true, false, false, false, false), topo: fourX,
+			cpu: 1760, mem: 1282, use: 2675, minCPUs: 3, minMem: 3343,
 			groups: "kind control plane,Dex,agent platform,Flux engine",
 		},
 		"platform off: kind and Dex only, the other toggles inert": {
-			cfg: labConfig(false, true, true, true, true),
-			cpu: 1000, mem: 354, minCPUs: 2, minMem: 708,
+			cfg: labConfig(false, true, true, true, true), topo: fourX,
+			cpu: 1000, mem: 354, use: 2110, minCPUs: 2, minMem: 2637,
 			groups: "kind control plane,Dex",
 		},
 	} {
-		n := labResourceNeeds(tc.cfg)
-		if n.Requests.CPU != tc.cpu || n.Requests.Mem != tc.mem {
-			t.Errorf("%s: requests = %dm / %dMi, want %dm / %dMi", name, n.Requests.CPU, n.Requests.Mem, tc.cpu, tc.mem)
+		n := labResourceNeeds(tc.cfg, tc.topo)
+		if n.Requests.CPU != tc.cpu || n.Requests.Mem != tc.mem || n.UseMem != tc.use {
+			t.Errorf("%s: requests = %dm / %dMi, use %dMi, want %dm / %dMi, %dMi", name, n.Requests.CPU, n.Requests.Mem, n.UseMem, tc.cpu, tc.mem, tc.use)
 		}
 		if n.MinCPUs != tc.minCPUs {
 			t.Errorf("%s: MinCPUs = %d, want %d", name, n.MinCPUs, tc.minCPUs)
@@ -158,7 +162,7 @@ func TestLabResourceNeeds(t *testing.T) {
 }
 
 // The floor is the requests plus the run-time headroom rounded UP to whole
-// CPUs: 2540m + 600m = 3140m needs 4, not 3.
+// CPUs: 3340m + 300m = 3640m needs 4, not 3.
 func TestCeilCPUs(t *testing.T) {
 	for in, want := range map[int]int{0: 0, 1: 1, 999: 1, 1000: 1, 1001: 2, 2540: 3, 3140: 4, 3000: 3} {
 		if got := ceilCPUs(in); got != want {
@@ -180,8 +184,8 @@ func measure(cpus, memMiB int) runtimeMeasure {
 // steps and the smaller lab that fits.
 func TestJudgeRuntimeResourcesRefusesTooFewCPUs(t *testing.T) {
 	cfg := labConfig(true, true, true, true, true)
-	needs := labResourceNeeds(cfg)
-	warning, err := judgeRuntimeResources(measure(2, 2048), cfg, needs)
+	needs := labResourceNeeds(cfg, fourX)
+	warning, err := judgeRuntimeResources(measure(2, 2048), cfg, fourX, needs)
 	if err == nil {
 		t.Fatal("2 CPUs for the full lab must be refused")
 	}
@@ -190,17 +194,17 @@ func TestJudgeRuntimeResourcesRefusesTooFewCPUs(t *testing.T) {
 	}
 	for _, want := range []string{
 		"docker has 2 CPUs; this lab configuration needs 4",
-		"request 2.59 CPUs",
-		// The breakdown is word-wrapped, so each group is asserted on its own.
-		"kind control plane 0.95", "Dex 0.05", "agent platform 0.51", "agents runtime 0.45",
-		"model-manager 0.06", "Backstage 0.02", "Flux engine 0.25", "observability 0.31",
+		"request 3.34 CPUs",
+		"kind control plane 0.95", "Dex 0.05", "agent platform 0.51", "agents runtime 0.20",
+		"model-manager 0.06", "Substrate 1.00", "platform Postgres 0.00", "Backstage 0.02", "Flux engine 0.25", "observability 0.31",
 		"Docker Desktop: Settings -> Resources",
 		"colima start --cpu 4 --memory 6",
 		"agentlab configure --backstage=false --observability=false",
-		"needs 3 CPUs and 3.9 GiB",
+		"needs 4 CPUs and 4.2 GiB",
 		`docs/getting-started.md "Docker resources"`,
 	} {
-		if !strings.Contains(err.Error(), want) {
+		// The breakdown is word-wrapped: compare on one line.
+		if flat := strings.Join(strings.Fields(err.Error()), " "); !strings.Contains(flat, want) {
 			t.Errorf("refusal lacks %q:\n%s", want, err)
 		}
 	}
@@ -209,19 +213,25 @@ func TestJudgeRuntimeResourcesRefusesTooFewCPUs(t *testing.T) {
 	}
 }
 
-// The floor is per configuration: 3 CPUs refuse the full lab and pass the
-// platform + agents lab, whose refusal at 2 CPUs offers no smaller lab (it is
-// the smaller lab).
+// The floor is per configuration and topology: 3 CPUs refuse the full lab
+// and pass the platform without agents (no WorkerPool to reserve a CPU); on
+// the 3.x line, where an agent is a pod, 3 CPUs pass the platform + agents
+// lab. The platform + agents lab's refusal at 2 CPUs offers no smaller lab
+// (it is the smaller lab).
 func TestJudgeRuntimeResourcesFloorFollowsConfiguration(t *testing.T) {
 	full := labConfig(true, true, true, true, true)
-	if _, err := judgeRuntimeResources(measure(3, 8192), full, labResourceNeeds(full)); err == nil {
+	if _, err := judgeRuntimeResources(measure(3, 8192), full, fourX, labResourceNeeds(full, fourX)); err == nil {
 		t.Error("3 CPUs must be refused for the full lab (floor 4)")
 	}
-	small := labConfig(true, true, false, false, true)
-	if warning, err := judgeRuntimeResources(measure(3, 8192), small, labResourceNeeds(small)); err != nil || warning != "" {
-		t.Errorf("3 CPUs / 8 GiB must pass the platform + agents lab, got warning %q, err %v", warning, err)
+	noAgents := labConfig(true, false, false, false, false)
+	if warning, err := judgeRuntimeResources(measure(3, 8192), noAgents, fourX, labResourceNeeds(noAgents, fourX)); err != nil || warning != "" {
+		t.Errorf("3 CPUs / 8 GiB must pass the platform without agents, got warning %q, err %v", warning, err)
 	}
-	_, err := judgeRuntimeResources(measure(2, 8192), small, labResourceNeeds(small))
+	small := labConfig(true, true, false, false, true)
+	if warning, err := judgeRuntimeResources(measure(3, 8192), small, stableLine, labResourceNeeds(small, stableLine)); err != nil || warning != "" {
+		t.Errorf("3 CPUs / 8 GiB must pass the platform + agents lab on the 3.x line, got warning %q, err %v", warning, err)
+	}
+	_, err := judgeRuntimeResources(measure(2, 8192), small, fourX, labResourceNeeds(small, fourX))
 	if err == nil {
 		t.Fatal("2 CPUs must be refused even for the platform + agents lab")
 	}
@@ -237,28 +247,28 @@ func TestJudgeRuntimeResourcesFloorFollowsConfiguration(t *testing.T) {
 // loud warning; below the requests nothing schedules, so it is refused.
 func TestJudgeRuntimeResourcesMemory(t *testing.T) {
 	cfg := labConfig(true, true, true, true, true)
-	needs := labResourceNeeds(cfg) // 2596Mi requested, floor 5192Mi
+	needs := labResourceNeeds(cfg, fourX) // 4388Mi requested, 4535Mi in use, floor 5668Mi
 
-	warning, err := judgeRuntimeResources(measure(6, 4096), cfg, needs)
+	warning, err := judgeRuntimeResources(measure(6, 5120), cfg, fourX, needs)
 	if err != nil {
-		t.Fatalf("4 GiB is below the floor but above the requests — a warning, not a refusal: %v", err)
+		t.Fatalf("5 GiB is below the floor but above the requests — a warning, not a refusal: %v", err)
 	}
-	for _, want := range []string{"docker has 4.0 GiB of memory", "wants 5.1 GiB", "request only 2.5 GiB", "OOM", "colima start --cpu 4 --memory 6"} {
+	for _, want := range []string{"docker has 5.0 GiB of memory", "wants 5.5 GiB", "request 4.3 GiB", "use about 4.4 GiB", "OOM", "colima start --cpu 4 --memory 6"} {
 		if !strings.Contains(warning, want) {
 			t.Errorf("warning lacks %q:\n%s", want, warning)
 		}
 	}
 
-	if _, err := judgeRuntimeResources(measure(6, 2048), cfg, needs); err == nil {
-		t.Fatal("2 GiB is below the 2.5 GiB of requests: the pods cannot schedule, refuse")
-	} else if !strings.Contains(err.Error(), "docker has 2.0 GiB of memory") || !strings.Contains(err.Error(), "do not\n  even all schedule") {
+	if _, err := judgeRuntimeResources(measure(6, 4096), cfg, fourX, needs); err == nil {
+		t.Fatal("4 GiB is below the 4.3 GiB of requests: the pods cannot schedule, refuse")
+	} else if !strings.Contains(err.Error(), "docker has 4.0 GiB of memory") || !strings.Contains(err.Error(), "do not\n  even all schedule") {
 		t.Errorf("memory refusal wording:\n%s", err)
 	}
 
-	if warning, err := judgeRuntimeResources(measure(6, 8192), cfg, needs); err != nil || warning != "" {
+	if warning, err := judgeRuntimeResources(measure(6, 8192), cfg, fourX, needs); err != nil || warning != "" {
 		t.Errorf("6 CPUs / 8 GiB is the Docker resources page's recommendation and must pass silently, got warning %q, err %v", warning, err)
 	}
-	if warning, err := judgeRuntimeResources(measure(4, 5192), cfg, needs); err != nil || warning != "" {
+	if warning, err := judgeRuntimeResources(measure(4, 5668), cfg, fourX, needs); err != nil || warning != "" {
 		t.Errorf("exactly the floor passes without a warning, got warning %q, err %v", warning, err)
 	}
 }
@@ -268,9 +278,9 @@ func TestJudgeRuntimeResourcesMemory(t *testing.T) {
 // host itself — nothing to resize, only the smaller lab to fall back to.
 func TestResourceFixesPerRuntime(t *testing.T) {
 	cfg := labConfig(true, true, true, true, true)
-	needs := labResourceNeeds(cfg)
+	needs := labResourceNeeds(cfg, fourX)
 	podmanMac := runtimeMeasure{CPUs: 2, MemMiB: 2048, Podman: true, GOOS: "darwin", HostCPUs: 10}
-	_, err := judgeRuntimeResources(podmanMac, cfg, needs)
+	_, err := judgeRuntimeResources(podmanMac, cfg, fourX, needs)
 	if err == nil {
 		t.Fatal("2 CPUs must be refused")
 	}
@@ -282,7 +292,7 @@ func TestResourceFixesPerRuntime(t *testing.T) {
 	}
 
 	podmanLinuxHost := runtimeMeasure{CPUs: 2, MemMiB: 2048, Podman: true, GOOS: goosLinux, HostCPUs: 2}
-	_, err = judgeRuntimeResources(podmanLinuxHost, cfg, needs)
+	_, err = judgeRuntimeResources(podmanLinuxHost, cfg, fourX, needs)
 	if err == nil {
 		t.Fatal("2 CPUs must be refused")
 	}
@@ -292,7 +302,7 @@ func TestResourceFixesPerRuntime(t *testing.T) {
 	}
 
 	dockerLinuxHost := runtimeMeasure{CPUs: 2, MemMiB: 2048, GOOS: goosLinux, HostCPUs: 2}
-	_, err = judgeRuntimeResources(dockerLinuxHost, cfg, needs)
+	_, err = judgeRuntimeResources(dockerLinuxHost, cfg, fourX, needs)
 	if err == nil {
 		t.Fatal("2 CPUs must be refused")
 	}
@@ -303,7 +313,7 @@ func TestResourceFixesPerRuntime(t *testing.T) {
 	// A Linux host running a VM (Docker Desktop for Linux) has more CPUs than
 	// the VM: the resize hints apply.
 	dockerLinuxVM := runtimeMeasure{CPUs: 2, MemMiB: 2048, GOOS: goosLinux, HostCPUs: 16}
-	_, err = judgeRuntimeResources(dockerLinuxVM, cfg, needs)
+	_, err = judgeRuntimeResources(dockerLinuxVM, cfg, fourX, needs)
 	if err == nil || !strings.Contains(err.Error(), "Docker Desktop: Settings") {
 		t.Errorf("a VM on a Linux host gets the resize hints:\n%v", err)
 	}

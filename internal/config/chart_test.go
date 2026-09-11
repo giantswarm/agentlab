@@ -142,8 +142,7 @@ func TestSanitizeBranch(t *testing.T) {
 }
 
 // The dev channel: a branch must leave a name to match tags with, and it
-// excludes a local chart; the pin is meaningless without a branch; Substrate
-// follows the channel unless pinned.
+// excludes a local chart; the pin is meaningless without a branch.
 func TestChartBranchValidation(t *testing.T) {
 	for _, ok := range []string{"", pocBranch, mainBranch, "feat/x_1"} {
 		if err := ValidateChartBranch(ok); err != nil {
@@ -161,21 +160,6 @@ func TestChartBranchValidation(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("chartBranch alone: %v", err)
 	}
-	if !cfg.SubstrateEnabled() {
-		t.Error("chartBranch with agents on must imply Substrate")
-	}
-	cfg.Platform.Agents = false
-	if cfg.SubstrateEnabled() {
-		t.Error("chartBranch without agents must not imply Substrate")
-	}
-	cfg.Platform.Agents = true
-	off := false
-	cfg.Platform.Substrate.Enabled = &off
-	if cfg.SubstrateEnabled() {
-		t.Error("an explicit substrate.enabled: false must win over the channel")
-	}
-	cfg.Platform.Substrate.Enabled = nil
-
 	cfg.Platform.ChartPath = t.TempDir()
 	if err := os.WriteFile(filepath.Join(cfg.Platform.ChartPath, "Chart.yaml"), []byte("name: agent-platform\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -194,17 +178,5 @@ func TestChartBranchValidation(t *testing.T) {
 	cfg.Normalize()
 	if cfg.Platform.ChartPinned {
 		t.Error("Normalize must drop the pin without a chartBranch")
-	}
-	if cfg.SubstrateEnabled() {
-		t.Error("the stable channel must not imply Substrate")
-	}
-	on := true
-	cfg.Platform.Substrate.Enabled = &on
-	if !cfg.SubstrateEnabled() {
-		t.Error("an explicit substrate.enabled: true must install it on the stable channel too")
-	}
-	cfg.Platform.Enabled = false
-	if cfg.SubstrateEnabled() {
-		t.Error("Substrate is inert without the platform")
 	}
 }

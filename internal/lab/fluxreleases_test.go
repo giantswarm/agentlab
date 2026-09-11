@@ -207,3 +207,39 @@ func TestFilteredNote(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+// The roster says what the chart ships: a `substrate` release means Agent
+// Substrate comes with the chart (the lab installs none, checks the gates
+// and budgets for the pool), a `cloudnative-pg` release the platform
+// Postgres; a roster that could not be rendered ships nothing.
+func TestPlatformRosterShips(t *testing.T) {
+	fourX := &platformRoster{releases: []fluxRelease{{Name: componentKagent}, {Name: substrateRelease}, {Name: "substrate-crds"}, {Name: cnpgRelease}}}
+	if !fourX.shipsSubstrate() || !fourX.shipsCNPG() {
+		t.Errorf("the 4.x roster ships Substrate and CNPG: %v / %v", fourX.shipsSubstrate(), fourX.shipsCNPG())
+	}
+	stable := &platformRoster{releases: []fluxRelease{{Name: componentKagent}, {Name: componentMuster}}}
+	if stable.shipsSubstrate() || stable.shipsCNPG() {
+		t.Errorf("a roster without the releases ships neither: %v / %v", stable.shipsSubstrate(), stable.shipsCNPG())
+	}
+	var none *platformRoster
+	if none.shipsSubstrate() || none.has(componentMuster) {
+		t.Error("a nil roster (the render failed) ships nothing")
+	}
+}
+
+// The side-load carries tagged references only: a digest-pinned one is the
+// node's to pull (an archive of it imports unnamed and the CRI cannot start a
+// pod from it).
+func TestSplitDigestRefs(t *testing.T) {
+	tagged, byDigest := splitDigestRefs([]string{
+		"ghcr.io/giantswarm/kagent/golang-adk@sha256:a2d23f5eb9c01e1903459a6e742f7d4aaa5e950d7e9aa6f07f8982761be0163a",
+		"gsoci.azurecr.io/giantswarm/muster:5.18.3",
+		"rustfs/rustfs:1.0.0-beta.3@sha256:378642b05b7dcb4849fb77ebe6aca4ced1c3f66e7e504247df95a5c9018d3358",
+	})
+	if len(tagged) != 1 || tagged[0] != "gsoci.azurecr.io/giantswarm/muster:5.18.3" {
+		t.Errorf("tagged = %v", tagged)
+	}
+	if len(byDigest) != 2 {
+		t.Errorf("byDigest = %v", byDigest)
+	}
+}
