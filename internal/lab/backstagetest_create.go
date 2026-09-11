@@ -113,6 +113,9 @@ func discoverSkills(ps *portalSession, repo string) (*skillDiscovery, error) {
 	if err := json.Unmarshal(raw, &d); err != nil {
 		return nil, fmt.Errorf("GET %s: not the expected JSON: %w\n%.300s", portalSkillsPath, err, raw)
 	}
+	if d.Truncated {
+		return nil, fmt.Errorf("GET %s?repoUrl=%s is truncated (%d skills listed): the portal could not read every skill — its GitHub API budget (unauthenticated: 60 requests an hour per egress address) is the usual cause; run again once the window has reset", portalSkillsPath, repo, len(d.Skills))
+	}
 	if len(d.Skills) == 0 {
 		return nil, fmt.Errorf("GET %s?repoUrl=%s lists no skills", portalSkillsPath, repo)
 	}

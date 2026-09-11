@@ -210,6 +210,19 @@ func TestDiscoverSkills(t *testing.T) {
 	}
 }
 
+// TestDiscoverSkillsTruncated: a listing the portal marks truncated (a skill
+// it could not read) is refused by name, whatever it lists.
+func TestDiscoverSkillsTruncated(t *testing.T) {
+	fp := newFakePortal(t)
+	fp.handle(portalSkillsPath, http.StatusOK, skillDiscovery{Ref: testRefMain, Commit: testSkillCommit, Truncated: true, Skills: []discoveredSkill{
+		{Name: testSkillName, Path: "plugins/gs-base/skills/runbooks", RepoURL: skillsTestRepo, Ref: testRefMain, Commit: testSkillCommit},
+	}})
+	_, err := discoverSkills(fp.session(testPortalUser, platformAdminsGroup), skillsTestRepo)
+	if err == nil || !strings.Contains(err.Error(), "is truncated (1 skills listed)") {
+		t.Errorf("a truncated listing: %v", err)
+	}
+}
+
 // dryRunReport is a validate_agent answer for the spec — the manifests
 // agent-manager renders, as the review page shows them.
 func dryRunReport(spec agentSpec, mode string, values map[string]any) validateReport {
