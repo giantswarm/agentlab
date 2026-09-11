@@ -379,9 +379,9 @@ func readControllerRoute() (*controllerRoute, error) {
 	r := &controllerRoute{routeConditions: map[string]string{}, policyConditions: map[string]string{}}
 	rules, _, _ := unstructured.NestedSlice(route.Object, "spec", "rules")
 	for _, rule := range rules {
-		matches, _, _ := unstructured.NestedSlice(rule.(map[string]any), "matches")
+		matches, _, _ := unstructured.NestedSlice(asMap(rule), "matches")
 		for _, m := range matches {
-			if svc, _, _ := unstructured.NestedString(m.(map[string]any), "method", "service"); svc != "" && !slices.Contains(r.services, svc) {
+			if svc, _, _ := unstructured.NestedString(asMap(m), "method", "service"); svc != "" && !slices.Contains(r.services, svc) {
 				r.services = append(r.services, svc)
 			}
 		}
@@ -410,7 +410,7 @@ func readControllerRoute() (*controllerRoute, error) {
 	targets, _, _ := unstructured.NestedSlice(policy.Object, "spec", "targetRefs")
 	var targetNames []string
 	for _, t := range targets {
-		name, _, _ := unstructured.NestedString(t.(map[string]any), nameKey)
+		name, _, _ := unstructured.NestedString(asMap(t), nameKey)
 		targetNames = append(targetNames, name)
 	}
 	if !slices.Contains(targetNames, kagentControllerRoute) {
@@ -423,7 +423,7 @@ func readControllerRoute() (*controllerRoute, error) {
 	}
 	set, _, _ := unstructured.NestedSlice(policy.Object, "spec", "traffic", "transformation", "request", "set")
 	for _, h := range set {
-		m, _ := h.(map[string]any)
+		m := asMap(h)
 		if name, _, _ := unstructured.NestedString(m, nameKey); name == userIDHeader {
 			r.userIDClaim, _, _ = unstructured.NestedString(m, "value")
 		}
@@ -439,15 +439,22 @@ func readControllerRoute() (*controllerRoute, error) {
 func ancestorConditions(entries []any) map[string]string {
 	out := map[string]string{}
 	for _, e := range entries {
-		conditions, _, _ := unstructured.NestedSlice(e.(map[string]any), crConditions)
+		conditions, _, _ := unstructured.NestedSlice(asMap(e), crConditions)
 		for _, c := range conditions {
-			m, _ := c.(map[string]any)
+			m := asMap(c)
 			condType, _, _ := unstructured.NestedString(m, fieldTypeKey)
 			condStatus, _, _ := unstructured.NestedString(m, crStatus)
 			out[condType] = condStatus
 		}
 	}
 	return out
+}
+
+// asMap is one element of an unstructured slice as the map it is, or an
+// empty map for anything else (a read that never panics on a shape).
+func asMap(v any) map[string]any {
+	m, _ := v.(map[string]any)
+	return m
 }
 
 // lines is the route the way the evidence quotes it.
