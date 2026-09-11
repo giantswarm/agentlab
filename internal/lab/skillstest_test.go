@@ -9,7 +9,7 @@ import (
 	"gopkg.in/yaml.v3"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	"github.com/giantswarm/agentlab/internal/kagentpb"
+	apiv1alpha1 "github.com/giantswarm/agentlab/internal/kagent/gen/kagent/api/v1alpha1"
 )
 
 // fieldReason is a condition's reason key.
@@ -239,15 +239,15 @@ func TestTerminalHarnessFailure(t *testing.T) {
 // from them, other templates' left out; the worded lines name the phase, the
 // snapshot and the pinned worker; an ate-api error is carried.
 func TestFootprintOf(t *testing.T) {
-	status := &kagentpb.GetSubstrateStatusResponse{
+	status := &apiv1alpha1.GetSubstrateStatusResponse{
 		Enabled:     true,
-		WorkerPools: []*kagentpb.SubstrateWorkerPool{{Namespace: kagentNamespace, Name: "kagent-default", Replicas: 2, AteomImage: "ateom:v0"}},
-		ActorTemplates: []*kagentpb.SubstrateActorTemplate{
+		WorkerPools: []*apiv1alpha1.SubstrateWorkerPool{{Namespace: kagentNamespace, Name: "kagent-default", Replicas: 2, AteomImage: "ateom:v0"}},
+		ActorTemplates: []*apiv1alpha1.SubstrateActorTemplate{
 			{Namespace: kagentNamespace, Name: skillsTestAgent + "-kagent-3bd7156d4194", Phase: "Pending", HarnessName: kagentHarness},
 			{Namespace: kagentNamespace, Name: skillsTestAgent + "-control-kagent-0a0a0a0a0a0a", Phase: conditionReady, GoldenSnapshot: "s3://ate-snapshots/kagent/x"},
 			{Namespace: kagentNamespace, Name: "agentlab-toolset-ro-kagent-111111111111", Phase: conditionReady},
 		},
-		Actors: []*kagentpb.SubstrateActor{
+		Actors: []*apiv1alpha1.SubstrateActor{
 			{ActorId: "01a0aaaa", ActorTemplateNamespace: kagentNamespace, ActorTemplateName: skillsTestAgent + "-kagent-3bd7156d4194", Status: "Resuming", AteomPodNamespace: kagentNamespace, AteomPodName: "kagent-default-abc", AteomPodIp: "10.0.0.7"},
 			{ActorId: "01a0bbbb", ActorTemplateNamespace: kagentNamespace, ActorTemplateName: "agentlab-toolset-ro-kagent-111111111111", Status: "Paused"},
 		},
@@ -272,7 +272,7 @@ func TestFootprintOf(t *testing.T) {
 	if none := footprintOf(status, "nobody", kagentHarness); !none.empty() || !strings.Contains(strings.Join(none.lines(), "\n"), "holds no ActorTemplate") {
 		t.Errorf("an absent template: %+v %v", none, none.lines())
 	}
-	broken := footprintOf(&kagentpb.GetSubstrateStatusResponse{AteApiError: "dial ate-api: refused"}, skillsTestAgent, kagentHarness)
+	broken := footprintOf(&apiv1alpha1.GetSubstrateStatusResponse{AteApiError: "dial ate-api: refused"}, skillsTestAgent, kagentHarness)
 	if broken.err == nil || broken.empty() || !strings.Contains(broken.lines()[0], "dial ate-api: refused") {
 		t.Errorf("an ate-api error: %+v %v", broken, broken.lines())
 	}

@@ -58,7 +58,8 @@ type agentTemplate struct {
 					Kind string `json:"kind"`
 					Name string `json:"name"`
 				} `json:"server"`
-				Tools []string `json:"tools"`
+				Tools           []string `json:"tools"`
+				RequireApproval bool     `json:"requireApproval"`
 			} `json:"mcp"`
 		} `json:"tools"`
 	} `json:"spec"`
@@ -170,6 +171,24 @@ func (t *agentTemplate) skill(name string) *templateSkill {
 		}
 	}
 	return nil
+}
+
+// requiresApproval reports whether the template's binding of the named
+// RemoteMCPServer carries requireApproval: every tool call through it pauses
+// the task for the person's decision.
+func (t *agentTemplate) requiresApproval(server string) bool {
+	for _, tool := range t.Spec.Tools {
+		if tool.MCP != nil && tool.MCP.Server.Name == server {
+			return tool.MCP.RequireApproval
+		}
+	}
+	return false
+}
+
+// chartLabel is the helm.sh/chart label the release stamped on the template
+// (the chart version the render came from), "" for a template no chart wrote.
+func (t *agentTemplate) chartLabel() string {
+	return t.Metadata.Labels["helm.sh/chart"]
 }
 
 // agentTemplateFrom reads the part of an AgentTemplate the proofs look at off

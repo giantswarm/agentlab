@@ -13,7 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/giantswarm/agentlab/internal/config"
-	"github.com/giantswarm/agentlab/internal/kagentpb"
+	apiv1alpha1 "github.com/giantswarm/agentlab/internal/kagent/gen/kagent/api/v1alpha1"
 )
 
 // The skills proof: the golden boot under Substrate's egress gate.
@@ -243,10 +243,11 @@ func SkillsTest(cfg *config.Config, email string, opts SkillsTestOptions) error 
 	if err != nil {
 		return err
 	}
-	api, err := newKagentAPI(cfg, user.Email, token)
+	api, err := dialKagentAPI(cfg, token)
 	if err != nil {
 		return err
 	}
+	defer api.close()
 
 	step("The line under test")
 	facts := skillsLineFacts(cfg, api)
@@ -629,9 +630,9 @@ func podsNamed(ctx context.Context, ns, prefix string) []string {
 // <template>-<harness>-<revision>), the actors booted from them with their
 // state and worker pod. err is the status call's failure, when it failed.
 type substrateFootprint struct {
-	templates []*kagentpb.SubstrateActorTemplate
-	actors    []*kagentpb.SubstrateActor
-	pools     []*kagentpb.SubstrateWorkerPool
+	templates []*apiv1alpha1.SubstrateActorTemplate
+	actors    []*apiv1alpha1.SubstrateActor
+	pools     []*apiv1alpha1.SubstrateWorkerPool
 	err       error
 }
 
@@ -648,7 +649,7 @@ func skillsFootprint(api *kagentAPI, name string) substrateFootprint {
 }
 
 // footprintOf filters a GetSubstrateStatus answer down to one template's.
-func footprintOf(status *kagentpb.GetSubstrateStatusResponse, agentTemplate, harness string) substrateFootprint {
+func footprintOf(status *apiv1alpha1.GetSubstrateStatusResponse, agentTemplate, harness string) substrateFootprint {
 	prefix := actorTemplatePrefix(agentTemplate, harness)
 	f := substrateFootprint{pools: status.GetWorkerPools()}
 	if status.GetAteApiError() != "" {
