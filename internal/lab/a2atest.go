@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,7 +34,7 @@ import (
 // This proof drives the same calls with the same metadata on the lab's
 // public TLS hostname and asserts what the surfaces rely on: the route and
 // its JWT policy exist and are Accepted; a call without a token is refused at
-// the edge (Unauthenticated, HTTP 401); the identity is the verified token's
+// the edge (Unauthenticated; a plain HTTP POST gets 401); the identity is the verified token's
 // — a forged x-user-id beside it is replaced; ListAgentTemplates lists the
 // proof's agent with its readiness and the display-name and icon-url
 // annotations; CreateAgentInstance is idempotent on request_id;
@@ -465,11 +467,12 @@ func (r *controllerRoute) lines() []string {
 	}
 }
 
-// proveEdgeRefusesWithoutToken makes the no-token call twice: as gRPC (the
-// client must see Unauthenticated) and as a raw HTTP/2 POST of the same
-// method on the lab's TLS transport (the edge must answer 401 before any
-// controller code runs — the HTTP status the gRPC client folds into
-// Unauthenticated).
+// proveEdgeRefusesWithoutToken makes the no-token call three ways: as gRPC
+// (the client must see Unauthenticated), as a raw HTTP/2 POST of the same
+// gRPC frame (the edge must answer the way gRPC carries a refusal — HTTP 200
+// with grpc-status Unauthenticated in a trailers-only response and no body,
+// before any controller code runs) and as a plain HTTP POST of the same path
+// (the edge's JWT policy answers 401).
 func proveEdgeRefusesWithoutToken(cfg *config.Config) error {
 	nobody, err := dialKagentAPI(cfg, "")
 	if err != nil {
@@ -483,47 +486,80 @@ func proveEdgeRefusesWithoutToken(cfg *config.Config) error {
 		return fmt.Errorf("GetCurrentUser without a token answered %s (%v), wanted Unauthenticated from the edge", status.Code(err), err)
 	}
 	note("gRPC without a token: %s — %s", codes.Unauthenticated, excerpt(status.Convert(err).Message(), 120))
-	httpStatus, proto, err := edgeHTTPStatusWithoutToken(cfg)
+	framed, err := edgePostWithoutToken(cfg, grpcContentType, emptyGRPCFrame)
 	if err != nil {
 		return err
 	}
-	if httpStatus != http.StatusUnauthorized {
-		return fmt.Errorf("a raw %s POST of %s/GetCurrentUser without a token answered HTTP %d, wanted 401 from the edge's JWT policy", proto, apiSystemService, httpStatus)
+	if framed.httpStatus != http.StatusOK || framed.grpcStatus != strconv.Itoa(int(codes.Unauthenticated)) || framed.bodyBytes != 0 {
+		return fmt.Errorf("a raw %s POST of the gRPC frame %s/GetCurrentUser without a token answered HTTP %d, grpc-status %q, %d body bytes — wanted the edge's trailers-only refusal (HTTP 200, grpc-status %d, no body)", framed.proto, apiSystemService, framed.httpStatus, framed.grpcStatus, framed.bodyBytes, codes.Unauthenticated)
 	}
-	note("%s POST %s/GetCurrentUser without a token: HTTP %d", proto, apiSystemService, httpStatus)
+	note("%s POST of the gRPC frame without a token: HTTP %d, grpc-status %s (%s), no body", framed.proto, framed.httpStatus, framed.grpcStatus, excerpt(framed.grpcMessage, 80))
+	plain, err := edgePostWithoutToken(cfg, "application/json", []byte("{}"))
+	if err != nil {
+		return err
+	}
+	if plain.httpStatus != http.StatusUnauthorized {
+		return fmt.Errorf("a plain %s POST of %s/GetCurrentUser without a token answered HTTP %d, wanted 401 from the edge's JWT policy", plain.proto, apiSystemService, plain.httpStatus)
+	}
+	note("%s POST as plain HTTP without a token: HTTP %d", plain.proto, plain.httpStatus)
 	return nil
 }
 
-// apiSystemService is the kagent service the raw probe posts to.
+// apiSystemService is the kagent service the raw probes post to.
 const apiSystemService = "kagent.api.v1alpha1.SystemService"
 
-// edgeHTTPStatusWithoutToken POSTs one empty gRPC frame to the controller's
-// GetCurrentUser through the edge over HTTP/2 without a token and returns
-// the HTTP status and protocol the edge answered with.
-func edgeHTTPStatusWithoutToken(cfg *config.Config) (int, string, error) {
+// grpcContentType frames a request as gRPC on the wire.
+const grpcContentType = "application/grpc"
+
+// emptyGRPCFrame is one length-prefixed gRPC message with no fields.
+var emptyGRPCFrame = []byte{0, 0, 0, 0, 0}
+
+// edgeAnswer is how the edge answered one raw HTTP/2 POST without a token.
+type edgeAnswer struct {
+	proto      string
+	httpStatus int
+	// grpcStatus and grpcMessage are the gRPC trailers — in the headers of
+	// a trailers-only response, after the body otherwise; "" when absent.
+	grpcStatus  string
+	grpcMessage string
+	bodyBytes   int64
+}
+
+// edgePostWithoutToken POSTs body as contentType to the controller's
+// GetCurrentUser through the edge over HTTP/2 without a token.
+func edgePostWithoutToken(cfg *config.Config, contentType string, body []byte) (edgeAnswer, error) {
 	pool, err := labCertPool()
 	if err != nil {
-		return 0, "", err
+		return edgeAnswer{}, err
 	}
 	client := &http.Client{Timeout: kubeReadTimeout, Transport: &http.Transport{
 		TLSClientConfig:   &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
 		ForceAttemptHTTP2: true,
 		DialContext:       dialLab,
 	}}
-	// One empty length-prefixed gRPC message: the request has no fields.
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, cfg.AgentgatewayBaseURL()+"/"+apiSystemService+"/GetCurrentUser", bytes.NewReader([]byte{0, 0, 0, 0, 0}))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, cfg.AgentgatewayBaseURL()+"/"+apiSystemService+"/GetCurrentUser", bytes.NewReader(body))
 	if err != nil {
-		return 0, "", err
+		return edgeAnswer{}, err
 	}
-	req.Header.Set("Content-Type", "application/grpc")
+	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("TE", "trailers")
 	resp, err := client.Do(req)
 	if err != nil {
-		return 0, "", fmt.Errorf("the raw HTTP/2 probe through the edge: %w", err)
+		return edgeAnswer{}, fmt.Errorf("the raw HTTP/2 probe through the edge: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	_, _ = io.Copy(io.Discard, resp.Body)
-	return resp.StatusCode, resp.Proto, nil
+	n, _ := io.Copy(io.Discard, resp.Body)
+	trailer := func(name string) string {
+		if v := resp.Header.Get(name); v != "" {
+			return v
+		}
+		return resp.Trailer.Get(name)
+	}
+	message, err := url.PathUnescape(trailer("grpc-message"))
+	if err != nil {
+		message = trailer("grpc-message")
+	}
+	return edgeAnswer{proto: resp.Proto, httpStatus: resp.StatusCode, grpcStatus: trailer("grpc-status"), grpcMessage: message, bodyBytes: n}, nil
 }
 
 // findListing is the roster entry of one template among the listed ones.

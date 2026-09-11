@@ -176,8 +176,9 @@ on the way in.
 
 `agentlab a2a-test` is the proof of that path, with the assertions the
 surfaces rely on: the route and its policy exist and are Accepted; a call
-without a token is refused at the edge (`Unauthenticated`, HTTP 401 on a
-raw HTTP/2 POST); a forged `x-user-id` beside a valid token is replaced
+without a token is refused at the edge (`Unauthenticated` — on a raw
+HTTP/2 POST the gRPC frame gets the trailers-only `grpc-status 16`, a plain
+POST gets 401); a forged `x-user-id` beside a valid token is replaced
 (`GetCurrentUser` names the token's person); `ListAgentTemplates` lists the
 proof's agent Ready on the platform Harness with the display-name and
 icon-url annotations as Swarmgeist reads them; `CreateAgentInstance` is
