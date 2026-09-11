@@ -42,6 +42,10 @@ const (
 	fieldState        = "state"
 	fieldContent      = "content"
 	fieldError        = "error"
+	fieldArtifact     = "artifact"
+	fieldMessageID    = "messageId"
+	fieldArtifactID   = "artifactId"
+	fieldTools        = "tools"
 )
 
 // fakePortal is the fake Backstage backend: a handler per route, the muster
@@ -191,7 +195,7 @@ func TestDiscoverSkills(t *testing.T) {
 		t.Errorf("a short commit: %v", err)
 	}
 	fp3 := newFakePortal(t)
-	fp3.handle(portalSkillsPath, http.StatusNotFound, map[string]any{fieldError: map[string]any{"message": "Failed to discover skills: HTTP 404"}})
+	fp3.handle(portalSkillsPath, http.StatusNotFound, map[string]any{fieldError: map[string]any{fieldMessage: "Failed to discover skills: HTTP 404"}})
 	if _, err := discoverSkills(fp3.session(testPortalUser), skillsTestRepo); err == nil || !strings.Contains(err.Error(), "404") {
 		t.Errorf("a missing repository: %v", err)
 	}
@@ -235,9 +239,9 @@ func TestAssertDryRun(t *testing.T) {
 		"other SA": {func(r *validateReport) {
 			r.Manifests.HelmRelease = strings.Replace(r.Manifests.HelmRelease, kagentFluxServiceAccount, "default", 1)
 		}, "serviceAccountName"},
-		"runtime":    {func(r *validateReport) { r.Manifests.Values["agent"].(map[string]any)["runtime"] = "go" }, "runtime"},
-		fieldHarness: {func(r *validateReport) { r.Manifests.Values["agent"].(map[string]any)["harness"] = testOtherHarness }, "harness"},
-		"toolset":    {func(r *validateReport) { r.Manifests.Values[toolsetKey] = []any{presetNone} }, "toolset"},
+		"runtime":      {func(r *validateReport) { r.Manifests.Values["agent"].(map[string]any)["runtime"] = "go" }, "runtime"},
+		fieldHarness:   {func(r *validateReport) { r.Manifests.Values["agent"].(map[string]any)["harness"] = testOtherHarness }, "harness"},
+		"toolset list": {func(r *validateReport) { r.Manifests.Values[toolsetKey] = []any{presetNone} }, toolsetKey},
 		"skill pin": {func(r *validateReport) {
 			r.Manifests.Values[skillsKey].([]any)[0].(map[string]any)["git"].(map[string]any)["commit"] = testHeadCommit
 		}, "discovered commit"},
@@ -285,13 +289,13 @@ func TestPortalValidateAgent(t *testing.T) {
 func streamFixture(state string) string {
 	frames := []map[string]any{
 		{"task": map[string]any{"id": testTaskID, fieldContextID: testContextID, fieldStatus: map[string]any{fieldState: "TASK_STATE_SUBMITTED"},
-			"history": []map[string]any{{"messageId": "m-1", "role": "ROLE_USER", fieldParts: []map[string]any{{"text": "Reply with exactly the word pong."}}}}}},
+			"history": []map[string]any{{fieldMessageID: "m-1", "role": "ROLE_USER", fieldParts: []map[string]any{{fieldText: "Reply with exactly the word pong."}}}}}},
 		{"statusUpdate": map[string]any{fieldTaskID: testTaskID, fieldContextID: testContextID, fieldStatus: map[string]any{fieldState: taskStateWorking}}},
-		{"artifactUpdate": map[string]any{fieldTaskID: testTaskID, "artifact": map[string]any{"artifactId": testArtifactID, fieldParts: []map[string]any{{"text": "p"}}}}},
-		{"artifactUpdate": map[string]any{fieldTaskID: testTaskID, "artifact": map[string]any{"artifactId": testArtifactID, fieldParts: []map[string]any{{"text": "ong"}}}, "append": true}},
-		{"artifactUpdate": map[string]any{fieldTaskID: testTaskID, "artifact": map[string]any{"artifactId": testArtifactID, fieldParts: []map[string]any{{"text": testPong}}}, "lastChunk": true}},
+		{"artifactUpdate": map[string]any{fieldTaskID: testTaskID, fieldArtifact: map[string]any{fieldArtifactID: testArtifactID, fieldParts: []map[string]any{{fieldText: "p"}}}}},
+		{"artifactUpdate": map[string]any{fieldTaskID: testTaskID, fieldArtifact: map[string]any{fieldArtifactID: testArtifactID, fieldParts: []map[string]any{{fieldText: "ong"}}}, "append": true}},
+		{"artifactUpdate": map[string]any{fieldTaskID: testTaskID, fieldArtifact: map[string]any{fieldArtifactID: testArtifactID, fieldParts: []map[string]any{{fieldText: testPong}}}, "lastChunk": true}},
 		{"statusUpdate": map[string]any{fieldTaskID: testTaskID, fieldContextID: testContextID, "final": true,
-			fieldStatus: map[string]any{fieldState: state, "message": map[string]any{"messageId": "m-2", "role": "ROLE_AGENT", fieldParts: []map[string]any{{"text": testPong}}}}}},
+			fieldStatus: map[string]any{fieldState: state, "message": map[string]any{fieldMessageID: "m-2", "role": "ROLE_AGENT", fieldParts: []map[string]any{{fieldText: testPong}}}}}},
 	}
 	var b strings.Builder
 	for _, f := range frames {
@@ -340,7 +344,7 @@ func TestStreamTurn(t *testing.T) {
 
 	// A refusal before the stream opens, and a stream broken mid-turn.
 	fp2 := newFakePortal(t)
-	fp2.handle(portalKagentAPI+kagentSessionsPath+"/"+testSessionID+"/messages/stream", http.StatusConflict, map[string]any{fieldError: map[string]any{"message": "a turn is running"}})
+	fp2.handle(portalKagentAPI+kagentSessionsPath+"/"+testSessionID+"/messages/stream", http.StatusConflict, map[string]any{fieldError: map[string]any{fieldMessage: "a turn is running"}})
 	if _, err := fp2.session(testPortalUser).streamTurn(testSessionID, agent, portalPongPrompt, nil); err == nil || !strings.Contains(err.Error(), "409") {
 		t.Errorf("a 409: %v", err)
 	}
@@ -360,16 +364,18 @@ func TestStreamTurn(t *testing.T) {
 // under the extension URI with the tools to approve; a completed task or one
 // paused without the extension carries none.
 func TestHITLRequestOf(t *testing.T) {
-	raw := `{"id":"` + testTaskID + `",fieldStatus:{fieldState:"TASK_STATE_INPUT_REQUIRED","message":{"messageId":"m","role":"ROLE_AGENT",
-	  fieldParts:[{"text":"Please approve or reject the tool call filter_tools()"}],
-	  fieldMetadata:{"https://kagent.dev/extensions/hitl/v1":{fieldType:"tool_approval_request","hint":"approve","tools":[{nameKey:"filter_tools","args":{"query":"namespaces"},"id":"adk-1","call_id":"toolu_1"}]}},
-	  "extensions":["https://kagent.dev/extensions/hitl/v1"]}}}`
+	paused := map[string]any{"id": testTaskID, fieldStatus: map[string]any{fieldState: taskStateInputRequired, fieldMessage: map[string]any{
+		fieldMessageID: "m", "role": "ROLE_AGENT",
+		fieldParts:    []any{map[string]any{fieldText: "Please approve or reject the tool call filter_tools()"}},
+		fieldMetadata: map[string]any{hitlExtensionURI: map[string]any{fieldType: hitlToolApprovalType, "hint": hitlDecisionApprove, fieldTools: []any{map[string]any{nameKey: "filter_tools", "args": map[string]any{"query": "namespaces"}, "id": "adk-1", "call_id": "toolu_1"}}}},
+		"extensions":  []any{hitlExtensionURI},
+	}}}
 	var task a2aTask
-	if err := json.Unmarshal([]byte(raw), &task); err != nil {
+	if err := json.Unmarshal([]byte(mustJSON(t, paused)), &task); err != nil {
 		t.Fatal(err)
 	}
 	req := hitlRequestOf(&task)
-	if req == nil || req.Type != hitlToolApprovalType || !reflect.DeepEqual(req.Tools, []string{"filter_tools"}) || req.Hint != "approve" {
+	if req == nil || req.Type != hitlToolApprovalType || !reflect.DeepEqual(req.Tools, []string{"filter_tools"}) || req.Hint != hitlDecisionApprove {
 		t.Errorf("request = %+v", req)
 	}
 	if got := taskReplyText(&task); !strings.Contains(got, "filter_tools") {
@@ -417,7 +423,7 @@ func TestSessionsRoutes(t *testing.T) {
 			instance["name"] = body[nameKey]
 			writeJSON(w, http.StatusOK, map[string]any{})
 		case deleted:
-			writeJSON(w, http.StatusNotFound, map[string]any{fieldError: map[string]any{"message": "gone"}})
+			writeJSON(w, http.StatusNotFound, map[string]any{fieldError: map[string]any{fieldMessage: "gone"}})
 		default:
 			writeJSON(w, http.StatusOK, map[string]any{"agentInstance": instance})
 		}
@@ -495,7 +501,7 @@ func TestRoster(t *testing.T) {
 	fp.mux.HandleFunc(portalKubeProxyAPI+"/apis/"+agentTemplateAPIVersion+"/agenttemplates", func(w http.ResponseWriter, r *http.Request) {
 		fp.headers[r.URL.Path] = r.Header.Clone()
 		if r.Header.Get(portalKubeAuthHeader) == "viewer-token" {
-			writeJSON(w, http.StatusForbidden, map[string]any{"message": "forbidden"})
+			writeJSON(w, http.StatusForbidden, map[string]any{fieldMessage: "forbidden"})
 			return
 		}
 		writeJSON(w, http.StatusOK, templates)
