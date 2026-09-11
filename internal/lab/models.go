@@ -189,7 +189,7 @@ func waitModelConfigAccepted(name string) error {
 	var readErr error
 	accepted := waitFor(10, modelConfigAcceptedPoll, func() bool {
 		status, _, readErr = modelConfigCondition(name, "Accepted")
-		return readErr == nil && status == "True"
+		return readErr == nil && status == conditionTrue
 	})
 	if !accepted {
 		return notReached("ModelConfig "+name, "Accepted", status, readErr,

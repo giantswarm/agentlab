@@ -210,18 +210,16 @@ type SkillsTestOptions struct {
 
 // SkillsTest is the headless proof that a Go ADK AgentTemplate with a git skill
 // pinned to a full commit boots under Substrate and uses the skill in a turn
-// as the signed-in user; on a failed golden boot it prints the evidence. On
-// the released kagent (agents as HelmReleases, skills from the agent chart's
-// values) there is no golden boot to prove, and the proof says so.
+// as the signed-in user; on a failed golden boot it prints the evidence. The
+// template is written below the agent chart on purpose — a raw AgentTemplate,
+// so a private fixture's credentialRef and the control boot stay possible;
+// the same skill through agent-manager and the chart is agents-test's.
 func SkillsTest(cfg *config.Config, email string, opts SkillsTestOptions) error {
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
 	}
 	if !cfg.Platform.Enabled || !cfg.Platform.Agents {
 		return fmt.Errorf("platform.agents is off in %s — enable it and run `agentlab platform` first", config.File)
-	}
-	if kagentLegacy() {
-		return fmt.Errorf("the skills proof needs kagent API v2 (the dev channel, docs/platform.md \"Dev channel\"): the released kagent runs no golden boot, its agents take skills from the agent chart's values")
 	}
 	user := cfg.FindUser(email)
 	if user == nil {
@@ -282,7 +280,7 @@ func SkillsTest(cfg *config.Config, email string, opts SkillsTestOptions) error 
 	note("accepted by the apiserver (the CRD validates the full commit and the relative path); labelled %v as the Harness admits", shape.admission)
 
 	step("Waiting up to %s for Ready on Harness %s — the golden boot: the actor starts, fetches the skill, serves readyz, is snapshotted", opts.ReadyTimeout, kagentHarness)
-	boot, err := waitGoldenBoot(skillsTestAgent, kagentHarness, opts.ReadyTimeout)
+	boot, err := waitAgentReady(skillsTestAgent, opts.ReadyTimeout)
 	if err != nil {
 		return err
 	}
@@ -297,7 +295,7 @@ func SkillsTest(cfg *config.Config, email string, opts SkillsTestOptions) error 
 	}
 
 	step("One A2A turn through the edge as %s: the agent names its skills and answers from the skill's text", user.Email)
-	reply, err := agentTurnAs(cfg, skillsTestAgent, token, fixture.prompt())
+	reply, err := firstTurnAs(cfg, skillsTestAgent, token, fixture.prompt())
 	if err != nil {
 		return err
 	}
@@ -323,11 +321,11 @@ func SkillsTest(cfg *config.Config, email string, opts SkillsTestOptions) error 
 }
 
 // skillsTemplateShape is what the lab's platform dictates about the proof's
-// templates: the labels the Harness admits, and whether the shared muster
-// RemoteMCPServer exists to bind as the template's tools (the 3.x
-// connectivity chart renders one; the 4.x chart renders one per agent
-// instead, so there the proof's template carries no tools — the skill is
-// what it proves).
+// templates: the labels the Harness admits, and whether a shared muster
+// RemoteMCPServer exists to bind as the template's tools (the platform
+// renders one per agent from the agent chart, none shared, so the proof's
+// template carries no tools — the skill is what it proves; an older
+// connectivity chart that renders a shared one gets it bound).
 type skillsTemplateShape struct {
 	admission   map[string]string
 	musterTools bool
@@ -353,8 +351,8 @@ func (s skillsTemplateShape) toolsNote() string {
 // harnessAdmissionLabels are the labels the platform Harness admits
 // (spec.allowedAgentTemplates.selector.matchLabels): the proof's templates
 // carry them, so the Harness picks them up whichever label the platform
-// chose — kagent's default kagent.dev/harness: <name>, or the chart's own.
-// A Harness that cannot be read leaves kagent's default.
+// chose — the connectivity chart's agent-platform.giantswarm.io/harness:
+// <name>, or another. A Harness that cannot be read leaves the chart's.
 func harnessAdmissionLabels() map[string]string {
 	fallback := map[string]string{harnessLabel: kagentHarness}
 	h, err := readKagentObject(harnessResource, kagentHarness)
@@ -424,99 +422,36 @@ spec:
 %s%s`, agentTemplateAPIVersion, name, kagentNamespace, strings.Join(labels, "\n    "), description, modelConfig, skillsTestSystemPrompt, tools, skills)
 }
 
-// goldenBoot is how waiting on a template's golden boot ended: Ready on the
-// Harness, a failure the controller will not get past on its own (terminal),
-// or the timeout — with the template as last read and the time it took.
-type goldenBoot struct {
-	template *agentTemplate
-	ready    bool
-	terminal bool
-	elapsed  time.Duration
-}
-
-// waitGoldenBoot polls a template's Harness status until Ready, until a
-// condition says the controller has given up (terminalHarnessFailure), or
-// until the timeout; a read that keeps failing is the error.
-func waitGoldenBoot(name, harness string, timeout time.Duration) (goldenBoot, error) {
-	started := time.Now()
-	var boot goldenBoot
-	var lastErr error
-	waitFor(int(timeout/goldenBootPoll), goldenBootPoll, func() bool {
-		boot.template, lastErr = readAgentTemplate(name)
-		if lastErr != nil {
-			return false
-		}
-		h := boot.template.harness(harness)
-		if h == nil {
-			return false
-		}
-		if status, _ := h.condition(conditionReady); status == conditionTrue {
-			boot.ready = true
-			return true
-		}
-		if _, terminal := terminalHarnessFailure(h); terminal {
-			boot.terminal = true
-			return true
-		}
-		return false
-	})
-	boot.elapsed = time.Since(started)
-	if boot.template == nil {
-		return boot, fmt.Errorf("AgentTemplate %s: %w", name, lastErr)
-	}
-	return boot, nil
-}
-
-// terminalHarnessFailure reads a Harness's conditions for a failure the
-// controller will not retry: ResolvedRefs or Compatible False, or Ready False
-// for a reason other than the golden snapshot still pending
-// (ActorTemplatePending). ActorTemplateFailed carries Substrate's own error
-// for the boot, ActorTemplateConflict an immutable-template clash. The text
-// is the condition as the evidence quotes it.
-func terminalHarnessFailure(h *harnessStatus) (string, bool) {
-	for _, c := range h.Conditions {
-		if c.Status != "False" {
-			continue
-		}
-		switch c.Type {
-		case "ResolvedRefs", "Compatible":
-			return c.String(), true
-		case conditionReady:
-			if c.Reason != "ActorTemplatePending" {
-				return c.String(), true
-			}
-		}
-	}
-	return "", false
-}
-
 // skillsGoldenBootFailed is the negative outcome: the evidence, the control
 // boot, and the FAIL verdict that carries the versions — the finding for the
 // line's upstream issue.
-func skillsGoldenBootFailed(cfg *config.Config, api *kagentAPI, opts SkillsTestOptions, boot goldenBoot, facts lineFacts, shape skillsTemplateShape) error {
-	harness := boot.template.harness(kagentHarness)
-	verdict := fmt.Sprintf("never became Ready within %s", opts.ReadyTimeout)
+func skillsGoldenBootFailed(cfg *config.Config, api *kagentAPI, opts SkillsTestOptions, boot agentReadiness, facts lineFacts, shape skillsTemplateShape) error {
+	verdict := fmt.Sprintf("never became Ready within %s (%s)", opts.ReadyTimeout, boot.reason)
 	if boot.terminal {
-		reason, _ := terminalHarnessFailure(harness)
-		verdict = "failed for good after " + boot.elapsed.Round(time.Second).String() + ": " + reason
+		verdict = "failed for good after " + boot.elapsed.Round(time.Second).String() + ": " + boot.reason
 	}
 	step("The golden boot %s — collecting the evidence", verdict)
+	harness := &harnessStatus{Harness: kagentHarness}
+	if boot.template != nil {
+		if h := boot.template.harness(kagentHarness); h != nil {
+			harness = h
+		}
+	}
 	evidence := goldenBootEvidence(api, skillsTestAgent, harness, facts)
 	for _, line := range evidence {
 		note("%s", line)
 	}
 
 	step("The control: the same template without the skill, up to %s", skillsControlTimeout)
-	control := "not booted"
+	var control string
 	if _, err := applyManifests(context.Background(), []byte(skillsAgentTemplate(skillsTestControlAgent, opts.ModelConfig, nil, shape))); err != nil {
 		control = "could not be applied: " + err.Error()
-	} else if boot, err := waitGoldenBoot(skillsTestControlAgent, kagentHarness, skillsControlTimeout); err != nil {
+	} else if boot, err := waitAgentReady(skillsTestControlAgent, skillsControlTimeout); err != nil {
 		control = "could not be read: " + err.Error()
 	} else if boot.ready {
 		control = fmt.Sprintf("Ready in %s — the skill is the difference", boot.elapsed.Round(time.Second))
-	} else if h := boot.template.harness(kagentHarness); h != nil {
-		status, message := h.condition(conditionReady)
-		control = fmt.Sprintf("not Ready either (Ready=%q %s) — the lab's Harness does not boot at all right now, the skill is not the difference", status, message)
+	} else {
+		control = fmt.Sprintf("not Ready either (%s) — the lab's Harness does not boot at all right now, the skill is not the difference", boot.reason)
 	}
 	note("%s", control)
 
@@ -788,16 +723,12 @@ func skillsCleanup(api *kagentAPI) []string {
 	names := []string{skillsTestAgent, skillsTestControlAgent}
 	removed := false
 	for _, name := range names {
-		if agentTemplateExists(name) {
-			removed = true
+		if !agentExists(name) {
+			continue
 		}
-		deleteAgentTemplate(name)
-	}
-	if removed {
-		for _, name := range names {
-			if err := waitAgentTemplateGone(name); err != nil {
-				note("cleanup: %v", err)
-			}
+		removed = true
+		if err := removeAgent(name); err != nil {
+			note("cleanup: %v", err)
 		}
 	}
 	footprints := func() (all []substrateFootprint, clean bool) {

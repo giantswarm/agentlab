@@ -151,10 +151,10 @@ RBAC still applies to the *apply* step itself: it runs with the
 signed-in user's token, so `platform-admins` can deploy agents and `developers`
 (edit only in `demo`) cannot — which is the platform behavior, not a lab bug.
 
-One more platform gap stands between "HelmRelease installed" and a running
-agent: upstream does not currently publish the `golang-adk` runtime image at
-kagent's own tag, so the agent pod would ImagePullBackOff. `agentlab up` heals
-this automatically by standing in the newest published release (HACKS.md U8).
+Between "HelmRelease installed" and a running agent stands the golden boot:
+the platform Harness compiles the rendered `AgentTemplate` and Substrate
+snapshots one actor of it, the runtime image being the Harness's
+digest-pinned one — see [Agents](agents.md).
 
 ## Backstage gotchas
 

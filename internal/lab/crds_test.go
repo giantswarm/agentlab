@@ -18,12 +18,6 @@ var (
 	gvrAgentTemplates   = kagentGroupVersion.WithResource("agenttemplates")
 	gvkRemoteMCPServer  = kagentGroupVersion.WithKind(remoteMCPServerKind)
 	gvrRemoteMCPServers = kagentGroupVersion.WithResource("remotemcpservers")
-	// The released line's Agent (kagent.dev/v1alpha2), which the *_v1 proofs
-	// read: served next to the v2 kinds, as a cluster serves only one of the
-	// two lines, but the fakes must know both.
-	kagentLegacyGroupVersion = schema.GroupVersion{Group: kagentGroupVersion.Group, Version: "v1alpha2"}
-	gvkAgent                 = kagentLegacyGroupVersion.WithKind("Agent")
-	gvrAgents                = kagentLegacyGroupVersion.WithResource("agents")
 )
 
 // customObject builds a seed for the dynamic fake: an object of the given

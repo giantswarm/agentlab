@@ -273,13 +273,12 @@ the bearer alone.
 target only while a controller ServiceMonitor exists — the kagent line's
 controller serves no metrics listener, and the lab renders none for it). The
 agent proofs — `agents-test`, `toolsets-test`, `models-test`'s agent turn,
-`backstage-test`'s agents pages, `skills-test` — drive kagent API v2:
-`AgentTemplate`s admitted by the Go ADK `Harness` and run as Substrate
-actors, a turn being an `AgentInstance` driven over gRPC-Web through the edge
-as the signed-in user, the toolset on the per-agent muster carrier
-(`RemoteMCPServer`) the agent chart 1.x renders. On a chart that still
-serves `agents.kagent.dev` (the 0.10 product's 3.x line) the same commands
-run the 0.x proofs.
+`backstage-test`'s agents pages, `skills-test` — drive kagent API v2: every
+agent a HelmRelease of the Generic agent chart (1.x) whose render is an
+`AgentTemplate` admitted by the platform `Harness` and run as a Substrate
+actor, a turn an `AgentInstance` driven over gRPC-Web through the edge as the
+signed-in user, the toolset on the agent's own `RemoteMCPServer` the template
+binds; see [Agents](agents.md).
 
 ### The skills proof (the golden boot)
 
@@ -516,9 +515,10 @@ is unlabelled. Servers the vendored charts label are reported, not judged.
 ## Toolsets (declared tool access)
 
 A **toolset** is the selector list an agent declares — the `agent` chart's
-`toolset` value, rendered as the `X-Muster-Toolset` header on the agent's
-muster tool entry (`spec.declarative.tools[0].headersFrom`), agent-manager's
-`toolset` argument, the portal's Tools step — that bounds which of the
+`toolset` value on the agent's HelmRelease, rendered as the `X-Muster-Toolset`
+header on the agent's own `RemoteMCPServer` (`spec.headersFrom`, the one its
+`AgentTemplate` binds), agent-manager's `toolset` argument, the portal's
+Tools step — that bounds which of the
 gateway's tools the agent's meta-tools can see and call. Selectors:
 `preset:<name>`, `server:<name>`, `workflow:<name>`, `tool:<name>`; built-in
 presets `read-only`, `none`, `full`; the platform chart ships `infrastructure`
@@ -536,12 +536,14 @@ components, as the admin, and leaves nothing behind (its agents are named
    toolset is refused naming the shipped presets and `preset:none`; the removed
    `toolNames` argument is refused with the explaining error; four agents are
    created with `preset:read-only`, `preset:none`, `preset:full` and
-   `server:lab-oauth-fixture`.
-2. **What was rendered**: the header on each Agent CR with the joined
-   selectors, the value on each HelmRelease, `get_agent` reporting the same;
-   the `preset:none` agent has **no** muster tool entry at all; a HelmRelease
-   applied without the value (every agent that predates toolsets) renders a
-   header-less entry and `list_agents` reports `implicitFullAccess: true`.
+   `server:lab-oauth-fixture` — a HelmRelease of the agent chart each.
+2. **What was rendered**: `values.toolset` on each HelmRelease with the
+   declared list, the `AgentTemplate` on the platform Harness binding the
+   agent's own `RemoteMCPServer` that carries the header with the joined
+   selectors, `get_agent` reporting the same; the `preset:none` agent has
+   **no** RemoteMCPServer and no binding at all; a HelmRelease applied
+   without the value (every agent that predates toolsets) renders the server
+   without the header and `list_agents` reports `implicitFullAccess: true`.
 3. **muster's resolution**, in sessions of the same user carrying the header
    an agent's runtime sends: two workflows are created (`core_workflow_create`
    as the caller), one query-only and one with a destructive step, and
@@ -564,8 +566,8 @@ components, as the admin, and leaves nothing behind (its agents are named
    tools; when the platform chart shipped `infrastructure` / `agent-platform`,
    each resolves to the tools of the servers carrying that label (the latter
    plus `core_*`).
-4. **The runtime path** (skip with `--skip-chat`): through kagent's A2A
-   endpoint behind the edge, as the user, the read-only agent lists nothing
+4. **The runtime path** (skip with `--skip-chat`): an `AgentInstance` and
+   one A2A turn through the edge, as the user, the read-only agent lists nothing
    outside `preset:read-only` — read-only core tools may appear, no writer
    does (so kagent sends the header and the user's token) — and the
    `preset:none` agent answers a chat turn. The agents run on
@@ -583,15 +585,18 @@ components, as the admin, and leaves nothing behind (its agents are named
    (`grantScope: session`), and the portal forwards one and the same
    id_token to muster and to kagent — which is why the claim holds in the
    portal and only there.
-6. **The portal**: the Tools step's backend calls (`/api/muster/tools/filter`
-   with `include_presets`, a `toolset=` resolution, an unmatched selector, an
-   unknown preset relayed as muster's error), and the composer's apply path —
-   the same hidden scaffolder template the wizard's Deploy drives, with the
-   composer's manifest and the user's OIDC token as the secret — landing the
-   `toolset` value on the HelmRelease and the header on the Agent.
+6. **The portal** (skip the create with `--skip-portal`): the Tools step's
+   backend calls (`/api/muster/tools/filter` with `include_presets`, a
+   `toolset=` resolution, an unmatched selector, an unknown preset relayed as
+   muster's error), and the create path the Dev Portal's wizard takes —
+   `x_agent-manager_create_agent` through the portal's muster backend
+   (`POST /api/muster/call`) with the person's forwarded token — landing the
+   HelmRelease as agent-manager's write with `values.toolset`, rendered and
+   Ready on the platform Harness with the header on the agent's
+   RemoteMCPServer.
 
 `agentlab agents-test` declares `preset:read-only` for its agent and asserts
-the refusal without one (agent-manager ≥ 0.4.0 requires a toolset), and
+the refusal without one (agent-manager requires a toolset), and
 `agentlab backstage-test` proves the MCP servers page's three groups from the
 data the page reads — see [The muster plugin](backstage.md#the-muster-plugin).
 

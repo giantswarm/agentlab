@@ -101,13 +101,13 @@ internal/lab/                    everything operational:
   resources.go                     docker CPU/memory: the requests table and the floors `up` enforces
   oauthfixture.go                  the Auth Required MCPServer fixture + the per-server sign-in proof
   fleetfixture.go servergroups.go  the fake-fleet MCPServers (families x fake clusters, tool-group label); the portal's grouping arithmetic
+  agent.go agenttemplate.go        an agent on the platform (the Generic chart 1.x contract: the two writers, the one readiness wait, the cleanup) and the AgentTemplate as the proofs read it
   toolsetstest*.go                 the toolset proof: muster, kagent, the portal
   agentmanager.go agentstest.go    the agent-manager MCPServer + the agents proof
   models.go hostmodels.go          ModelConfigs from extraModels (+ pruning); the host model servers' inventories
   backends.go                      one table per host model server: probe, inventory reader, bind fix, models-test expectations
   modelmanager.go modelstest.go    managed models: host preflight, install, the models proof
   anthropic.go                     the API key: host environment -> Secret, never config or state/
-  adk.go kagentcrd.go              kagent workarounds (HACKS.md U8, U11)
   observability.go                 the lab Prometheus (kube-prometheus-stack through the embedded Helm) and the mcp-prometheus HelmRelease through the platform's engine
   backstagetest.go                 the headless Backstage sign-in proof
   portal.go mcpsession.go          one user's signed-in portal session; the proofs' MCP session against muster

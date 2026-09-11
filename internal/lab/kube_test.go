@@ -74,14 +74,16 @@ var (
 	// The custom kinds the lab reads through gvrFor, as the fake apiserver
 	// serves them: Flux's HelmRelease, muster's MCPServer, the operator's
 	// Prometheus.
-	fluxHelmReleaseGVK = schema.GroupVersionKind{Group: "helm.toolkit.fluxcd.io", Version: "v2", Kind: "HelmRelease"}
-	fluxHelmReleaseGVR = fluxHelmReleaseGVK.GroupVersion().WithResource("helmreleases")
-	musterMCPServerGVK = schema.GroupVersionKind{Group: "muster.giantswarm.io", Version: "v1alpha1", Kind: "MCPServer"}
-	musterMCPServerGVR = musterMCPServerGVK.GroupVersion().WithResource("mcpservers")
-	prometheusGVK      = schema.GroupVersionKind{Group: "monitoring.coreos.com", Version: "v1", Kind: "Prometheus"}
-	prometheusGVR      = prometheusGVK.GroupVersion().WithResource("prometheuses")
-	serviceMonitorGVK  = prometheusGVK.GroupVersion().WithKind("ServiceMonitor")
-	serviceMonitorGVR  = prometheusGVK.GroupVersion().WithResource("servicemonitors")
+	fluxHelmReleaseGVK   = schema.GroupVersionKind{Group: "helm.toolkit.fluxcd.io", Version: "v2", Kind: "HelmRelease"}
+	fluxHelmReleaseGVR   = fluxHelmReleaseGVK.GroupVersion().WithResource("helmreleases")
+	fluxOCIRepositoryGVK = schema.GroupVersionKind{Group: "source.toolkit.fluxcd.io", Version: "v1", Kind: kindOCIRepository}
+	fluxOCIRepositoryGVR = fluxOCIRepositoryGVK.GroupVersion().WithResource("ocirepositories")
+	musterMCPServerGVK   = schema.GroupVersionKind{Group: "muster.giantswarm.io", Version: "v1alpha1", Kind: "MCPServer"}
+	musterMCPServerGVR   = musterMCPServerGVK.GroupVersion().WithResource("mcpservers")
+	prometheusGVK        = schema.GroupVersionKind{Group: "monitoring.coreos.com", Version: "v1", Kind: "Prometheus"}
+	prometheusGVR        = prometheusGVK.GroupVersion().WithResource("prometheuses")
+	serviceMonitorGVK    = prometheusGVK.GroupVersion().WithKind("ServiceMonitor")
+	serviceMonitorGVR    = prometheusGVK.GroupVersion().WithResource("servicemonitors")
 )
 
 // fakeLab is a kubeClients bundle on fakes, installed as the lab's client for
@@ -156,16 +158,16 @@ func newFakeLab(t *testing.T, objects ...runtime.Object) *fakeLab {
 		}
 	}
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(usch, map[schema.GroupVersionResource]string{
-		gvrCRDs:             "CustomResourceDefinitionList",
-		widgetGVR:           "WidgetList",
-		fluxHelmReleaseGVR:  "HelmReleaseList",
-		musterMCPServerGVR:  "MCPServerList",
-		prometheusGVR:       "PrometheusList",
-		serviceMonitorGVR:   "ServiceMonitorList",
-		gvrModelConfigs:     "ModelConfigList",
-		gvrAgentTemplates:   "AgentTemplateList",
-		gvrRemoteMCPServers: "RemoteMCPServerList",
-		gvrAgents:           "AgentList",
+		gvrCRDs:              "CustomResourceDefinitionList",
+		widgetGVR:            "WidgetList",
+		fluxHelmReleaseGVR:   "HelmReleaseList",
+		fluxOCIRepositoryGVR: "OCIRepositoryList",
+		musterMCPServerGVR:   "MCPServerList",
+		prometheusGVR:        "PrometheusList",
+		serviceMonitorGVR:    "ServiceMonitorList",
+		gvrModelConfigs:      "ModelConfigList",
+		gvrAgentTemplates:    "AgentTemplateList",
+		gvrRemoteMCPServers:  "RemoteMCPServerList",
 	}, seeds...)
 	dyn.PrependReactor("patch", "*", fakeApply(dyn.Tracker()))
 
@@ -183,6 +185,7 @@ func newFakeLab(t *testing.T, objects ...runtime.Object) *fakeLab {
 		corev1.SchemeGroupVersion.WithKind("Pod"),
 		appsv1.SchemeGroupVersion.WithKind(kindDeployment),
 		fluxHelmReleaseGVK,
+		fluxOCIRepositoryGVK,
 		musterMCPServerGVK,
 		prometheusGVK,
 		serviceMonitorGVK,
@@ -191,7 +194,6 @@ func newFakeLab(t *testing.T, objects ...runtime.Object) *fakeLab {
 		gvkModelConfig,
 		gvkAgentTemplate,
 		gvkRemoteMCPServer,
-		gvkAgent,
 	} {
 		mapper.Add(gvk, meta.RESTScopeNamespace)
 	}

@@ -3,7 +3,6 @@ package lab
 import (
 	"context"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -69,15 +68,6 @@ func nodeState(node string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(out), nil
-}
-
-// nodeHasImage checks the kind node's containerd for an exact repo:tag match.
-func nodeHasImage(node, image string) bool {
-	tags, err := nodeImageTags(node)
-	if err != nil {
-		return false
-	}
-	return slices.Contains(tags, image)
 }
 
 // clusterContainers lists a kind cluster's node containers with their states,

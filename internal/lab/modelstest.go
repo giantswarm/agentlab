@@ -54,8 +54,8 @@ func ModelsTestModelDefaults() string {
 	return strings.Join(parts, ", ")
 }
 
-// modelsTestAgent is the throwaway kagent AgentTemplate the proof runs one
-// turn on.
+// modelsTestAgent is the throwaway agent the proof runs one turn on: created
+// through agent-manager as the person, on the ModelConfig model-manager wired.
 const modelsTestAgent = "agentlab-models-test"
 
 // modelField and backendField are the request fields naming a model and its
@@ -316,26 +316,19 @@ func ModelsTest(cfg *config.Config, email, backendName, model string) error {
 		note("%s: HTTP %d, %s", viewer.Email, status, excerpt(string(body), 120))
 	}
 
-	// The turn follows the kagent API the cluster serves (proofs.go).
 	const pongPrompt = "Reply with exactly the word pong and nothing else."
-	var reply string
-	if kagentLegacy() {
-		step("Agent turn on %s (kagent Agent, runtime go -> host %s)", mcName, config.BackendServerName(backendName))
-		reply, err = agentTurnV1(client, cfg, mcName, pongPrompt)
-	} else {
-		step("Agent turn on %s (an AgentTemplate on Harness %s, one A2A turn through the edge as %s; runtime -> host %s)", mcName, kagentHarness, user.Email, config.BackendServerName(backendName))
-		reply, err = agentTurn(cfg, user.Email, token, mcName, pongPrompt)
+	session, err := openMusterSession(cfg, token, "models-test")
+	if err != nil {
+		return err
 	}
+	step("Agent turn on %s: an agent created through agent-manager as %s, Ready on Harness %s, one A2A turn through the edge (runtime -> host %s)", mcName, user.Email, kagentHarness, config.BackendServerName(backendName))
+	reply, err := agentTurn(cfg, session, token, mcName, pongPrompt)
 	if err != nil {
 		return err
 	}
 	note("agent replied: %q", excerpt(reply, 120))
 
 	step("MCP tools through muster (x_%s_*)", modelManagerMCPServer)
-	session, err := openMusterSession(cfg, token, "models-test")
-	if err != nil {
-		return err
-	}
 	tools, err := session.listTools()
 	if err != nil {
 		return err
@@ -732,18 +725,33 @@ func (a *modelManagerAPI) waitJob(id string, timeout time.Duration) error {
 	return fmt.Errorf("job %s did not finish within %s", id, timeout)
 }
 
-// agentTurn creates a throwaway AgentTemplate on the ModelConfig for the Go
-// ADK Harness, waits for its golden snapshot (Ready), drives one turn on it
-// as the user through the edge (kagentTurn) and returns the agent's text. The
-// template is deleted on every path.
-func agentTurn(cfg *config.Config, user, token, modelConfig, prompt string) (string, error) {
-	defer deleteAgentTemplate(modelsTestAgent)
+// agentTurn creates the proof's throwaway agent on the ModelConfig through
+// agent-manager as the person (a chat-only agent: no tools, so the model
+// needs none), waits until it is Ready on the platform Harness (readyAgent),
+// drives one turn on it as the same person through the edge and returns the
+// agent's text. The agent is removed on every path.
+func agentTurn(cfg *config.Config, session *musterSession, token, modelConfig, prompt string) (string, error) {
+	defer func() {
+		if err := removeAgent(modelsTestAgent); err != nil {
+			note("cleanup: %v", err)
+		}
+	}()
+	if agentExists(modelsTestAgent) {
+		note("removing the leftover agent %s from an earlier run", modelsTestAgent)
+		if err := removeAgent(modelsTestAgent); err != nil {
+			return "", err
+		}
+	}
 	// The model itself is loaded by the host server on the first turn (the
 	// turn timeout covers it).
-	if err := createThrowawayAgent(modelsTestAgent, modelConfig, "agentlab models-test probe (deleted after the run)", 240*time.Second); err != nil {
+	if _, _, err := readyAgent(agentManagerWriter{session}, agentSpec{
+		Name: modelsTestAgent, ModelConfig: modelConfig, DisplayName: "agentlab models-test", Toolset: []string{presetNone},
+		Description:   "Throwaway agent of `agentlab models-test` on the model the run pulled; deleted by the same run.",
+		SystemMessage: "You are a terse assistant. Answer in one short line.",
+	}, agentReadyTimeout); err != nil {
 		return "", err
 	}
-	return kagentTurn(cfg, user, token, modelsTestAgent, prompt)
+	return firstTurnAs(cfg, modelsTestAgent, token, prompt)
 }
 
 // modelConfigExists reports whether the ModelConfig is there; a read that

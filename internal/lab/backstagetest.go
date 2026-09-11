@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -59,13 +58,16 @@ func BackstageTest(cfg *config.Config, emails []string) error {
 		fmt.Println("agent platform pages skipped (platform.agents off)")
 		return nil
 	}
-	if kagentLegacy() {
-		fmt.Println("agent platform pages skipped (the released kagent: the portal's agents pages are the kagent API v2 proof)")
-		return nil
-	}
-	fmt.Printf("bringing AgentTemplate %s along on Harness %s (ModelConfig %s): a fresh lab has none to list\n", backstageTestAgent, kagentHarness, defaultModelConfig)
-	defer deleteAgentTemplate(backstageTestAgent)
-	if err := createThrowawayAgent(backstageTestAgent, defaultModelConfig, "agentlab backstage-test agent (deleted after the run)", 240*time.Second); err != nil {
+	fmt.Printf("bringing agent %s along on Harness %s (ModelConfig %s): a fresh lab has none to list\n", backstageTestAgent, kagentHarness, defaultModelConfig)
+	defer func() {
+		if err := removeAgent(backstageTestAgent); err != nil {
+			note("cleanup: %v", err)
+		}
+	}()
+	if _, _, err := readyAgent(helmReleaseWriter{}, agentSpec{
+		Name: backstageTestAgent, ModelConfig: defaultModelConfig, DisplayName: "agentlab backstage-test", Toolset: []string{presetNone},
+		Description: "Throwaway agent of `agentlab backstage-test`; deleted by the same run.",
+	}, agentReadyTimeout); err != nil {
 		return err
 	}
 	for i, ps := range sessions {

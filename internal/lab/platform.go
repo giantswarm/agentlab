@@ -494,24 +494,6 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 		if err := ensureExtraModels(cfg); err != nil {
 			return err
 		}
-		// Both heals below are shaped for the 0.x line's Agent CR. kagent API
-		// v2 (Harness + AgentTemplate, kagent.dev/v1alpha3) serves no
-		// agents.kagent.dev, composes no runtime image from its release tag
-		// (Harnesses pin their images by digest) and has no iconUrl to accept.
-		if !agentCRDServed() {
-			note("kagent serves no %s (API v2: Harness + AgentTemplate); skipping the Agent-CR heals", agentCRD)
-		} else {
-			// Agent pods need the golang-adk runtime image at kagent's own tag,
-			// which upstream has been observed not to publish (HACKS.md U8).
-			step("Ensuring the agents' ADK runtime images are on the node")
-			healADKImages(cfg)
-			// The 0.9.x Agent CRD rejects the spec.iconUrl the create flow always
-			// composes, failing every created agent's HelmRelease (HACKS.md U11).
-			step("Ensuring the Agent CRD accepts spec.iconUrl")
-			if err := patchAgentCRDIconURL(); err != nil {
-				return err
-			}
-		}
 	}
 
 	// The public URL runs client -> agentgateway edge -> muster: reaching it
@@ -770,7 +752,7 @@ func waitPlatformReleases() error {
 			}
 			// helm-controller gave up on this one: no point waiting out the
 			// clock, the message says why.
-			if r.ready == "False" && strings.Contains(r.message, "retries exhausted") {
+			if r.ready == condFalseStatus && strings.Contains(r.message, "retries exhausted") {
 				readErr = fmt.Errorf("HelmRelease %s failed: %s", r.name, r.message)
 				return true
 			}

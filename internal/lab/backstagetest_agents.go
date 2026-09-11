@@ -128,7 +128,7 @@ func portalAgentRows(payload any) ([]portalAgentRow, error) {
 			for _, key := range []string{"readiness", "state", "status"} {
 				if v := stringAt(m, key); v != "" {
 					row.readiness = key + "=" + v
-					row.ready = strings.EqualFold(v, "ready") || v == "True"
+					row.ready = strings.EqualFold(v, "ready") || v == conditionTrue
 					break
 				}
 			}
