@@ -14,7 +14,7 @@ import (
 	a2apb "github.com/a2aproject/a2a-go/v2/a2apb/v1"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/giantswarm/agentlab/internal/kagentpb"
+	apiv1alpha1 "github.com/giantswarm/agentlab/internal/kagent/gen/kagent/api/v1alpha1"
 )
 
 // TestGRPCWebFrames: a frame round-trips; a body of two messages and a
@@ -102,7 +102,7 @@ func TestKagentAPICall(t *testing.T) {
 		w.Header().Set("Content-Type", grpcWebContentType)
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/CreateAgentInstance"):
-			resp, _ := proto.Marshal(&kagentpb.CreateAgentInstanceResponse{AgentInstance: &kagentpb.AgentInstance{Id: testIDPrefix, Creator: r.Header.Get(userIDHeader), State: kagentpb.AgentInstanceState_AGENT_INSTANCE_STATE_READY}})
+			resp, _ := proto.Marshal(&apiv1alpha1.CreateAgentInstanceResponse{AgentInstance: &apiv1alpha1.AgentInstance{Id: testIDPrefix, Creator: r.Header.Get(userIDHeader), State: apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_READY}})
 			_, _ = w.Write(grpcWebFrame(0, resp))
 			_, _ = w.Write(grpcWebFrame(grpcWebTrailerFlag, []byte("grpc-status: 0\r\n")))
 		case strings.HasSuffix(r.URL.Path, "/SendMessage"):
@@ -116,8 +116,8 @@ func TestKagentAPICall(t *testing.T) {
 	defer srv.Close()
 	api := &kagentAPI{client: srv.Client(), base: srv.URL + kagentRoutePrefix, user: testDevUser, token: "tok"}
 
-	var resp kagentpb.CreateAgentInstanceResponse
-	req := &kagentpb.CreateAgentInstanceRequest{Harness: &kagentpb.ResourceReference{Namespace: kagentNamespace, Name: kagentHarness}, AgentTemplate: &kagentpb.ResourceReference{Namespace: kagentNamespace, Name: testSmoke}, RequestId: "r1"}
+	var resp apiv1alpha1.CreateAgentInstanceResponse
+	req := &apiv1alpha1.CreateAgentInstanceRequest{Harness: &apiv1alpha1.ResourceReference{Namespace: kagentNamespace, Name: kagentHarness}, AgentTemplate: &apiv1alpha1.ResourceReference{Namespace: kagentNamespace, Name: testSmoke}, RequestId: "r1"}
 	if err := api.call(context.Background(), agentInstanceService, "CreateAgentInstance", req, &resp, map[string]string{agentInstanceHeader: testIDPrefix}); err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestKagentAPICall(t *testing.T) {
 	if err != nil || len(messages) != 1 {
 		t.Fatalf("request body: %v %d frames", err, len(messages))
 	}
-	var sent kagentpb.CreateAgentInstanceRequest
+	var sent apiv1alpha1.CreateAgentInstanceRequest
 	if err := proto.Unmarshal(messages[0], &sent); err != nil || sent.GetAgentTemplate().GetName() != testSmoke || sent.GetRequestId() != "r1" {
 		t.Errorf("sent %v (%v)", &sent, err)
 	}

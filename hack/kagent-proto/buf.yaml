@@ -1,0 +1,15 @@
+# The kagent API v2 service protos the lab generates its client stubs from.
+# The files under kagent/ are verbatim copies from giantswarm/kagent-upstream
+# at the commit recorded in ../../internal/kagent/gen/README.md;
+# `make generate-kagent` refreshes both.
+version: v2
+modules:
+  - path: .
+deps:
+  - buf.build/bufbuild/protovalidate
+lint:
+  use:
+    - STANDARD
+breaking:
+  use:
+    - FILE

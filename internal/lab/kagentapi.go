@@ -19,7 +19,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/giantswarm/agentlab/internal/config"
-	"github.com/giantswarm/agentlab/internal/kagentpb"
+	apiv1alpha1 "github.com/giantswarm/agentlab/internal/kagent/gen/kagent/api/v1alpha1"
 )
 
 // kagent API v2 (kagent main) on the wire, as the proofs speak it.
@@ -266,13 +266,13 @@ func grpcStatusFrom(headers, trailers http.Header) (*grpcStatus, error) {
 // one conversation of the AgentTemplate on the Go ADK Harness, both in the
 // kagent namespace. A template whose golden snapshot is still being taken
 // answers FailedPrecondition; that is waited through, bounded.
-func (a *kagentAPI) createInstance(ctx context.Context, template string) (*kagentpb.AgentInstance, error) {
-	req := &kagentpb.CreateAgentInstanceRequest{
-		Harness:       &kagentpb.ResourceReference{Namespace: kagentNamespace, Name: kagentHarness},
-		AgentTemplate: &kagentpb.ResourceReference{Namespace: kagentNamespace, Name: template},
+func (a *kagentAPI) createInstance(ctx context.Context, template string) (*apiv1alpha1.AgentInstance, error) {
+	req := &apiv1alpha1.CreateAgentInstanceRequest{
+		Harness:       &apiv1alpha1.ResourceReference{Namespace: kagentNamespace, Name: kagentHarness},
+		AgentTemplate: &apiv1alpha1.ResourceReference{Namespace: kagentNamespace, Name: template},
 		RequestId:     uuid.NewString(),
 	}
-	var resp kagentpb.CreateAgentInstanceResponse
+	var resp apiv1alpha1.CreateAgentInstanceResponse
 	var err error
 	created := waitFor(20, 3*time.Second, func() bool {
 		err = a.call(ctx, agentInstanceService, "CreateAgentInstance", req, &resp, nil)
@@ -300,16 +300,16 @@ func (a *kagentAPI) createInstance(ctx context.Context, template string) (*kagen
 func (a *kagentAPI) deleteInstance(id string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	var resp kagentpb.DeleteAgentInstanceResponse
-	if err := a.call(ctx, agentInstanceService, "DeleteAgentInstance", &kagentpb.DeleteAgentInstanceRequest{AgentInstanceId: id}, &resp, nil); err != nil {
+	var resp apiv1alpha1.DeleteAgentInstanceResponse
+	if err := a.call(ctx, agentInstanceService, "DeleteAgentInstance", &apiv1alpha1.DeleteAgentInstanceRequest{AgentInstanceId: id}, &resp, nil); err != nil {
 		note("deleting AgentInstance %s: %v", id, err)
 	}
 }
 
 // version is SystemService/GetVersion: the controller's own build identity.
-func (a *kagentAPI) version(ctx context.Context) (*kagentpb.GetVersionResponse, error) {
-	var resp kagentpb.GetVersionResponse
-	if err := a.call(ctx, systemService, "GetVersion", &kagentpb.GetVersionRequest{}, &resp, nil); err != nil {
+func (a *kagentAPI) version(ctx context.Context) (*apiv1alpha1.GetVersionResponse, error) {
+	var resp apiv1alpha1.GetVersionResponse
+	if err := a.call(ctx, systemService, "GetVersion", &apiv1alpha1.GetVersionRequest{}, &resp, nil); err != nil {
 		return nil, err
 	}
 	return &resp, nil
@@ -320,9 +320,9 @@ func (a *kagentAPI) version(ctx context.Context) (*kagentpb.GetVersionResponse, 
 // wrote (phase Pending, Ready or Failed, the golden snapshot), the actors
 // with their state and worker assignment, the pools' workers. What the
 // portal's Substrate page shows; the person needs get on Substrate.
-func (a *kagentAPI) substrateStatus(ctx context.Context, namespace string) (*kagentpb.GetSubstrateStatusResponse, error) {
-	var resp kagentpb.GetSubstrateStatusResponse
-	if err := a.call(ctx, systemService, "GetSubstrateStatus", &kagentpb.GetSubstrateStatusRequest{Namespace: namespace}, &resp, nil); err != nil {
+func (a *kagentAPI) substrateStatus(ctx context.Context, namespace string) (*apiv1alpha1.GetSubstrateStatusResponse, error) {
+	var resp apiv1alpha1.GetSubstrateStatusResponse
+	if err := a.call(ctx, systemService, "GetSubstrateStatus", &apiv1alpha1.GetSubstrateStatusRequest{Namespace: namespace}, &resp, nil); err != nil {
 		return nil, err
 	}
 	return &resp, nil
