@@ -213,16 +213,16 @@ func TestFilteredNote(t *testing.T) {
 // and budgets for the pool), a `cloudnative-pg` release the platform
 // Postgres; a roster that could not be rendered ships nothing.
 func TestPlatformRosterShips(t *testing.T) {
-	fourX := &platformRoster{releases: []fluxRelease{{Name: "kagent"}, {Name: "substrate"}, {Name: "substrate-crds"}, {Name: "cloudnative-pg"}}}
+	fourX := &platformRoster{releases: []fluxRelease{{Name: componentKagent}, {Name: substrateRelease}, {Name: "substrate-crds"}, {Name: cnpgRelease}}}
 	if !fourX.shipsSubstrate() || !fourX.shipsCNPG() {
 		t.Errorf("the 4.x roster ships Substrate and CNPG: %v / %v", fourX.shipsSubstrate(), fourX.shipsCNPG())
 	}
-	stable := &platformRoster{releases: []fluxRelease{{Name: "kagent"}, {Name: "muster"}}}
+	stable := &platformRoster{releases: []fluxRelease{{Name: componentKagent}, {Name: componentMuster}}}
 	if stable.shipsSubstrate() || stable.shipsCNPG() {
 		t.Errorf("a roster without the releases ships neither: %v / %v", stable.shipsSubstrate(), stable.shipsCNPG())
 	}
 	var none *platformRoster
-	if none.shipsSubstrate() || none.has("muster") {
+	if none.shipsSubstrate() || none.has(componentMuster) {
 		t.Error("a nil roster (the render failed) ships nothing")
 	}
 }

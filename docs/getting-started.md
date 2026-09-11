@@ -48,46 +48,57 @@ constraint, and it is a hard one**: the kube-scheduler refuses
 a pod whose CPU *request* does not fit, so a node that is 100m short simply
 leaves pods `Pending` forever. It does not degrade, it stalls.
 
-What a full default lab requests (measured from the chart renders at the
-pinned versions, plus kind's own control plane on a live node):
+What a full default lab requests and uses (measured on a live lab on the 4.x
+line — agent-platform 4.7.11, kagent 0.11.0-gs.3, Substrate 0.0.27-gs.5 —
+2026-09-11; the first column is what the kube-scheduler is asked for, the
+second what the containers' memory working sets summed to):
 
-| | CPU | Memory |
-|---|---|---|
-| kind's Kubernetes: apiserver, controller-manager, scheduler, etcd, CNI, CoreDNS | 950m | ~290 MiB |
-| the agent platform: muster + valkey, agentgateway + controller, mcp-kubernetes, agent-manager, model-manager, kagent + UI + postgres, Backstage | 1080m | ~1750 MiB |
-| Dex | 50m | 64 MiB |
-| the chart's Flux engine: the Flux Operator plus the `FluxInstance`'s source-controller and helm-controller (the lab shape brings it with the platform — it delivers every component and the agents) | 250m | 192 MiB |
-| observability: kube-state-metrics + mcp-prometheus | 300m | 328 MiB |
-| **total requests** | **≈ 2.6 CPU** | **≈ 2.5 GiB** |
-| the dev channel only (`--chart-branch`): Substrate's bundled PostgreSQL — its actor runtime, API server and data plane declare nothing | +1000m | +1 GiB |
+| | CPU requests | memory requests | memory in use |
+|---|---|---|---|
+| kind's Kubernetes: apiserver, controller-manager, scheduler, etcd, CNI, CoreDNS | 950m | 290 MiB | ~2.0 GiB (the apiserver 1.6 GiB after a day of platform churn) |
+| Dex | 50m | 64 MiB | 40 MiB |
+| the agent platform: muster + valkey, agentgateway + controller, mcp-kubernetes, agent-manager | 510m | 736 MiB | 245 MiB |
+| the agents runtime: kagent controller + UI | 200m | 384 MiB | 75 MiB |
+| Agent Substrate (from the chart): the WorkerPool's four gVisor workers at 250m/512Mi each; the control plane in `ate-system` (ate-api-server ×2, ate-controller, atelet, atenet router/egress/dns, RustFS) and the podcertificate-controller declare nothing | 1000m | 2048 MiB | 480 MiB (a worker idles at 9 MiB) |
+| the platform Postgres (from the chart): the CloudNativePG operator and the one-instance Cluster declare nothing | 0 | 0 | ~250 MiB |
+| model-manager | 55m | 80 MiB | 15 MiB |
+| Backstage | 20m | 250 MiB | 400 MiB |
+| the chart's Flux engine: the Flux Operator plus the `FluxInstance`'s source-controller and helm-controller (the lab shape brings it with the platform — it delivers every component and the agents) | 250m | 192 MiB | 320 MiB |
+| observability: kube-state-metrics + mcp-prometheus (the Prometheus server, its operator and node-exporter declare nothing) | 305m | 344 MiB | 710 MiB (the server 564 MiB) |
+| **total** | **≈ 3.3 CPU** | **≈ 4.3 GiB** | **≈ 4.6 GiB** |
 
-The memory column *understates* real use, and by a lot: the Prometheus server
-(its CR sets no `resources`), the prometheus-operator and node-exporter
-declare nothing at all, and Backstage requests 250 MiB while its Node process
-uses several times that. A node running the platform with Backstage and
-observability **off** was observed at 2.4 GiB actual — i.e. the whole
-requests budget — so a full lab wants roughly twice that.
+On a chart without Agent Substrate and the platform Postgres — the 0.10
+product's 3.x line — kagent's bundled PostgreSQL (250m / 256 MiB) takes the
+place of the two chart-shipped rows, and every agent is a pod of its own.
+
+The requests column and the use column disagree in both directions: Backstage,
+Prometheus and the kind apiserver use several times what they declare, while
+Substrate's WorkerPool reserves two GiB for workers that idle at 40 MiB — the
+reservation is capacity for the agents' sandboxes (one worker hosts one actor;
+its limits, 2 CPU / 2 GiB, bound that actor), not what runs idle. So the CPU
+floor is the requests (a request that does not fit never schedules), and the
+memory floor is the measured use with a quarter of headroom — for the turns
+(a Go ADK turn's working set on a worker is 55–70 MiB, about 0.3 core for a
+second or two) and for Backstage and Prometheus growing under load — never
+below the requests.
 
 Give docker at least:
 
 | | CPUs | Memory |
 |---|---|---|
-| the full default lab (platform + agents + observability + Backstage) | **4** | **6 GiB** (the floor is 5.1 GiB; whole GiB) |
-| platform + agents only (`configure --backstage=false --observability=false`) | 3 | 4 GiB (3.9 GiB) |
-| the full lab on the [dev channel](platform.md#dev-channel) (`--chart-branch`, Substrate on) | 5 | 8 GiB (7.1 GiB) |
+| the full default lab (platform + agents + observability + Backstage) | **4** | **6 GiB** (the floor is 5.6 GiB; whole GiB) |
+| platform + agents only (`configure --backstage=false --observability=false`) | 4 (the WorkerPool is a CPU of requests by itself) | 5 GiB (4.3 GiB) |
+| the platform without agents (`configure --agents=false`) | 3 | 4 GiB (3.3 GiB) |
 
-Those are the floors `agentlab up` enforces, and they already include room for
-the pods the platform creates at run time: every kagent agent is another pod,
-and `models-test` and `agents-test` each create one. `agentlab up` checks the
+Those are the floors `agentlab up` enforces — computed for what the chart
+about to be installed ships (its rendered roster, so a lab on the 3.x line is
+held to that line's smaller floor) — and they already include room for the
+pods the platform creates at run time: with Substrate a Go ADK turn inside a
+pre-provisioned worker, without it six agent pods. `agentlab up` checks the
 runtime before any cluster work — it prints the measured CPUs and memory next
-to this configuration's requests and floor on every boot, refuses below the
-CPU floor and warns below the memory one. Give it 6 CPUs and 8 GiB if you have
-them: the lab is then comfortable rather than exactly large enough.
-
-The second row is the one that has actually been measured on a live node: it
-requests ~2.3 CPU (no Backstage, no observability; the chart's Flux engine is
-always part of it) and sat at 2.4 GiB of real use — measured before the engine
-joined the platform, which adds 250m / 192 MiB of requests on top.
+to this configuration's requests, use and floor on every boot, refuses below
+the CPU floor and warns below the memory one. Give it 6 CPUs and 8 GiB if you
+have them: the lab is then comfortable rather than exactly large enough.
 
 Two CPUs — what a small Docker Desktop or Colima VM gives you — is not enough
 for any of it. The symptoms are specific, and worth recognising because

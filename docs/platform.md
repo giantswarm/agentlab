@@ -123,13 +123,13 @@ the dev builds gitsemver publishes for every commit of a branch that has
 branch publishing on (`gen.ci.branchPublish` in giantswarm/github): charts
 tagged `X.Y.Z-dev.<branch>.<YYYY-MM-DD>.<HH-MM-SS>.h<sha>` next to the
 releases in `oci://gsoci.azurecr.io/charts/giantswarm/agent-platform`, each
-coupled to the images its commit built. That is how a team works on the
-next platform line together before anything is released: every lab installs
-the branch's newest build from published artifacts only — no checkout, no
-dev images, no local registry.
+coupled to the images its commit built. That is how a chart change is
+verified before it is released: every lab installs the branch's newest build
+from published artifacts only — no checkout, no dev images, no local
+registry.
 
 ```bash
-agentlab configure --defaults --chart-branch poc/kagent-main
+agentlab configure --defaults --chart-branch my-feature
 export ANTHROPIC_API_KEY=sk-ant-...
 agentlab up
 agentlab platform-test && agentlab test && agentlab backstage-test
@@ -138,21 +138,20 @@ agentlab platform-test && agentlab test && agentlab backstage-test
 `configure` resolves the branch right away and says what it picked:
 
 ```
-  chart      agent-platform 3.22.1-dev.poc-kagent-main.2026-09-10.08-12-33.h7f841be (branch poc/kagent-main, dev channel)
-  substrate  true (the dev channel's kagent needs it; `configure --substrate=false` overrides)
+  chart      agent-platform 4.7.12-dev.my-feature.2026-09-11.08-12-33.h7f841be (branch my-feature, dev channel)
 ```
 
 and `agentlab.yaml` carries both:
 
 ```yaml
 platform:
-  chartBranch: poc/kagent-main   # the dev channel: chartVersion follows this branch's newest dev build
-  chartVersion: 3.22.1-dev.poc-kagent-main.2026-09-10.08-12-33.h7f841be   # written by the resolver
+  chartBranch: my-feature   # the dev channel: chartVersion follows this branch's newest dev build
+  chartVersion: 4.7.12-dev.my-feature.2026-09-11.08-12-33.h7f841be   # written by the resolver
 ```
 
 How the resolution works: the branch is spelled the way gitsemver embeds it
 (lowercased, anything outside `[a-z0-9]` collapsed to one hyphen —
-`poc/kagent-main` is `poc-kagent-main`; a long name is shortened around a
+`my/feature` is `my-feature`; a long name is shortened around a
 `--` marker, which the filter accepts too), the registry's tags are listed
 through the embedded Helm's registry client (anonymously, as pulls are), the
 tags whose prerelease is `dev.<that name>.…` are the branch's builds, and the
@@ -177,11 +176,10 @@ proofs never resolve.
   `gen.ci.branchPublish` and a commit on the branch), or pin a tag by hand.
 - **The fallback that needs no resolver**: `platform.chartVersion` accepts a
   full dev tag as it is — `agentlab configure --chart-version
-  3.22.1-dev.poc-kagent-main.2026-09-10.08-12-33.h7f841be` validates and
+  4.7.12-dev.my-feature.2026-09-11.08-12-33.h7f841be` validates and
   Helm pulls that exact tag (look it up with `crane ls
-  gsoci.azurecr.io/charts/giantswarm/agent-platform | grep -- -dev.poc-kagent-main`).
-  The lab then does not follow the branch, and Substrate needs
-  `--substrate` explicitly.
+  gsoci.azurecr.io/charts/giantswarm/agent-platform | grep -- -dev.my-feature`).
+  The lab then does not follow the branch.
 - `chartBranch` and `chartPath` are mutually exclusive: a local chart has no
   builds to follow.
 - The dev-tag schema lives in one place, `devTagFilter` in
@@ -189,8 +187,8 @@ proofs never resolve.
   schema (`X.Y.Z-b<crc32 of the branch>t<timestamp>c<sha>`), that function
   switches and nothing else changes.
 
-Component channels: agentlab sets nothing per component. The meta chart's
-dev builds carry their siblings' channels in their own values (the branch's
+Component channels: agentlab sets nothing per component. A meta chart's dev
+build may carry a sibling's channel in its own values (the branch's
 `components.<name>.semverFilter`), so selecting the meta chart's dev channel
 selects the whole line. The image preload follows the same filters: a
 component whose `OCIRepository` carries a `semverFilter` is rendered at the
@@ -200,78 +198,88 @@ which knows no filter and would land on the stable release; the boot log
 names the picks (`rendered 12 of 12 component charts (6 through a
 semverFilter: agent-platform-connectivity 3.22.1-dev…, …)`).
 
-### Substrate
+### Agent Substrate and the platform Postgres — from the chart
 
-The dev channel's kagent (kagent main, API v2) runs every agent as an actor
-on Substrate — the Giant Swarm line of
-[kagent-dev/substrate](https://github.com/kagent-dev/substrate), published from
-[giantswarm/substrate](https://github.com/giantswarm/substrate) (its `FORK.md`
-records the pin, the carried patches and the published versions) — sandboxed (gVisor)
-worker pods of a `WorkerPool`, an API server, a per-node agent (`atelet`) and
-the actors' ingress/egress data plane (`atenet`) — and its controller does
-not start without it. The lab installs Substrate as cluster infrastructure
-ahead of the platform when `platform.substrate.enabled` says so; unset, the
-knob follows the channel — on with `chartBranch` while agents are on, off on
-the stable channel, whose released kagent ignores it — and `configure
---substrate[=false]` pins it either way.
+kagent API v2 (the 4.x line: `kagent.dev/v1alpha3`, kagent `0.11.0-gs.N`
+from the Giant Swarm kagent line) runs every agent as an actor on
+[Agent Substrate](https://github.com/kagent-dev/substrate) — sandboxed
+(gVisor) worker pods of a `WorkerPool`, an API server, a per-node agent
+(`atelet`) and the actors' ingress/egress data plane (`atenet`) — from the
+Giant Swarm line [giantswarm/substrate](https://github.com/giantswarm/substrate)
+(its `FORK.md` records the pin, the carried patches and the published
+versions). **The chart ships it**: `components.substrate-crds` and
+`components.substrate` follow `components.kagent`, both land in `ate-system`
+as component releases of the chart's engine at the version the chart pins
+(`>=0.0.27-gs.5 <0.0.28-0`, the range the `WorkerPool`'s worker image
+`kagent.substrateWorkerPool.workerImage` names too), the connectivity
+release's `pre-install,pre-upgrade` hook Job mints what the substrate chart
+mounts but does not render (the CA/JWT pools, the actor-identity trust
+anchor, ate-api-server's authentication config; a pool that exists is never
+touched), the kagent chart creates the `WorkerPool kagent-default` and the
+connectivity chart renders the one platform `Harness kagent` (the Go ADK
+image by digest, `KAGENT_PROPAGATE_TOKEN`, the WorkerPool, the snapshot
+location; admission by the label `agent-platform.giantswarm.io/harness:
+kagent`). The lab installs **nothing** of it — one Helm owner, the objects an
+installation has (the [agent-platform README](https://github.com/giantswarm/agent-platform#agent-substrate)).
+What the lab brings is what the chart cannot: the kind cluster carries the
+apiserver gates Substrate needs (`ClusterTrustBundle`,
+`ClusterTrustBundleProjection`, `PodCertificateRequest`,
+`certificates.k8s.io/v1beta1` — `kind-config.yaml.tmpl`, fixed at `kind
+create`), and `agentlab up`/`platform` refuse a cluster that lacks them
+before the install, whenever the chart's rendered roster carries the
+`substrate` release (`agentlab down && agentlab up` is the fix). A lab that
+ran the retired POC channel, where agentlab installed Substrate itself,
+upgrades in place: the chart's `substrate` component adopts the
+`substrate`/`substrate-crds` releases in `ate-system` by name.
 
-What `agentlab up` (and `platform`) does, idempotently:
+The lab's Substrate values are two: the actor snapshot store is the chart's
+bundled in-cluster RustFS (`substrate.rustfs.enabled: true`,
+`kagent.harness.snapshotLocation: s3://ate-snapshots/kagent` — an
+installation names its own bucket), and the control-plane database follows
+the platform Postgres (the chart's `substrate.postgres.enabled: auto`).
 
-1. checks the apiserver serves `certificates.k8s.io/v1beta1` — the
-   `PodCertificateRequest` and `ClusterTrustBundle` gates the lab's kind
-   config turns on for every cluster (inert for the released platform). A
-   cluster created by an earlier agentlab lacks them, and feature gates are
-   fixed at `kind create`: that is `agentlab down && agentlab up`, said
-   before anything installs;
-2. creates the bootstrap the chart mounts but does not render: the four
-   CA/JWT pool Secrets (`service-dns-ca-pool` and `pod-identity-ca-pool` in
-   `podcertificate-controller-system`, `actor-id-jwt-pool` and
-   `actor-id-ca-pool` in `ate-system`) — never regenerated once they exist,
-   a rotated root would orphan every certificate issued from it — the
-   `actor-id-ca-certs` trust anchor derived from the actor-id pool, and
-   `ate-api-authentication`, ate-api-server's authentication config
-   pointing at the cluster's own ServiceAccount issuer. Upstream does this
-   with `kubectl-ate admin make-ca-pool` / `make-jwt-pool` and a shell step
-   between two `helm install`s; the lab embeds a Go port of the two commands
-   (`substratepools.go`, from substrate 0.0.26) and creates everything first,
-   so one waited install suffices (HACKS.md U22);
-3. installs `substrate-crds` and `substrate` at the line's pinned version
-   (`substrateVersion` in `internal/lab/substrate.go`: today upstream 0.0.26
-   plus kagent-dev/substrate#33 and the line's egress-while-resuming patch,
-   as a `0.0.27-dev.giantswarm.…` build) from
-   `oci://ghcr.io/giantswarm/substrate/helm` into `ate-system` with the
-   chart's own values (`state/substrate-values.yaml`), the images
-   (`ghcr.io/giantswarm/substrate/*`) side-loaded like the platform's plus the
-   gVisor worker image the `WorkerPool` names, and waits for ate-api-server,
-   atelet and atenet;
-4. checks the `SandboxConfig gvisor-default` the chart ships is there. The
-   `WorkerPool` and the `Harness`es come with the dev channel's kagent; the
-   pool's worker image follows the same pin — the lab's meta chart values
-   name `ghcr.io/giantswarm/substrate/ateom-gvisor:<substrateVersion>` as
-   `kagent.substrateWorkerPool.workerImage`, so workers (where an actor's
-   networking runs) and control plane are one Substrate, and a bump of the
-   pin rolls the pool on the next `agentlab platform`.
+**The platform Postgres** is the fleet's shape too: `components.cloudnative-pg`
+(the upstream CloudNativePG operator, the chart's optional component — a
+management cluster runs it as its own app) and `postgres.enabled` render one
+CNPG `Cluster kagent-pg` in the kagent namespace with kagent's `kagent_v2`
+database (`Database kagent-pg-kagent-v2`, the `vector` extension for the
+memory API) and Substrate's database (`Database kagent-pg-substrate`) on it;
+the connectivity release's `post-install,post-upgrade` hook derives one
+connection Secret per database from CNPG's `kagent-pg-app` —
+`kagent-pg-kagent-v2-app` in `kagent`, mounted by the controller as
+`database.postgres.urlFile`, and `kagent-pg-substrate-app` copied into
+`ate-system` for ate-api-server. Sized for one kind node: one instance, a
+2Gi claim on the local-path storage class, the platform's Postgres image
+(`gsoci.azurecr.io/giantswarm/postgresql-cnpg:18.3`) with pgvector as a CNPG
+ImageVolume extension (`gsoci.azurecr.io/giantswarm/pgvector`, the kind
+node's kubelet serves image volumes) — the fleet runs three instances on
+20Gi with backups. Both bundled databases (kagent's, Substrate's) stay off.
 
-`agentlab platform-down` uninstalls Substrate after the platform (whose
-teardown deletes kagent's `WorkerPool` through finalizers ate-controller has
-to be running for). Substrate's bundled PostgreSQL requests 1 CPU / 1 GiB,
-so the dev channel's floor is one CPU and about 2 GiB above the stable lab's
-— see [Docker resources](getting-started.md#docker-resources).
+**Authentication on the controller route** is the fleet's too: the kagent
+controller's gRPC API is a `GRPCRoute` on the edge Gateway with the chart's
+JWT policy (`kagent.controllerRoute.jwtAuthentication`, mode `Strict`)
+verifying every bearer against the lab Dex (its JWKS over TLS at
+`dex.dex.svc.cluster.local:5556/dex/keys`) and setting `x-user-id` from the
+verified email claim — replacing whatever the client sent — and the
+controller runs `auth.mode: trusted-proxy`, re-deriving the caller from the
+same bearer. `agentlab platform-test` proves both halves: a call without a
+token is refused at the edge, a call with a valid token and a forged
+`x-user-id` is attributed to the token's subject by the controller, and the
+same forged header changes nothing at muster and agent-manager, which read
+the bearer alone.
 
-**Proofs on the dev channel.** Every proof runs on both channels.
-`platform-test`, `test` and the sign-in half of `backstage-test` are the same
-(platform-test expects a kagent scrape target only while a controller
-ServiceMonitor exists — the dev channel's kagent serves no metrics listener,
-and the lab renders none for it). The agent proofs — `agents-test`,
-`toolsets-test`, `models-test`'s agent turn, `backstage-test`'s agents
-pages — follow the kagent API the cluster serves and say which at the start:
-the released kagent's Agent CRs delivered as HelmReleases on the stable
-channel; on the dev channel kagent API v2's `AgentTemplate`s admitted by the
-Go ADK `Harness` and run as Substrate actors, a turn being an
-`AgentInstance` driven over gRPC-Web through the edge as the signed-in user,
-the toolset on the per-agent muster carrier (`RemoteMCPServer`) the template
-binds, and the portal's Agent Platform pages (`backstage-test`, on an
-`AgentTemplate` the proof brings along).
+**Proofs on the 4.x line.** `platform-test`, `test` and the sign-in half of
+`backstage-test` are the platform's (platform-test expects a kagent scrape
+target only while a controller ServiceMonitor exists — the kagent line's
+controller serves no metrics listener, and the lab renders none for it). The
+agent proofs — `agents-test`, `toolsets-test`, `models-test`'s agent turn,
+`backstage-test`'s agents pages, `skills-test` — drive kagent API v2:
+`AgentTemplate`s admitted by the Go ADK `Harness` and run as Substrate
+actors, a turn being an `AgentInstance` driven over gRPC-Web through the edge
+as the signed-in user, the toolset on the per-agent muster carrier
+(`RemoteMCPServer`) the agent chart 1.x renders. On a chart that still
+serves `agents.kagent.dev` (the 0.10 product's 3.x line) the same commands
+run the 0.x proofs.
 
 ### The skills proof (the golden boot)
 
@@ -601,11 +609,14 @@ data the page reads — see [The muster plugin](backstage.md#the-muster-plugin).
 | `muster.rbac.{mcpServerEditor,workflowEditor}.subjects` → `oidc:platform-admins` | The chart binds muster's editor Roles to Giant Swarm's admin groups, which do not exist here. Rebound to the lab's own admin group (`--oidc-groups-prefix=oidc:`, same spelling as the lab RBAC). Lists replace, so the GS groups are dropped. |
 | muster patched to `hostNetwork` + `maxSurge: 0` | Same issuer trick as the apiserver and Backstage. `maxSurge: 0` because two hostNetwork pods cannot both bind `:8090` on a one-node cluster. A Kustomize strategic-merge patch in `components.muster.postRenderers`, which the chart forwards to muster's `HelmRelease` and the bundled helm-controller applies over the muster chart's render. |
 | The `dex-localhost` sidecar on mcp-kubernetes, model-manager, agent-manager and mcp-prometheus | Those servers validate the forwarded Dex token themselves and must reach the issuer URL `https://localhost:32000/dex`, but all listen on `:8080` and cannot share the host network. A socat sidecar on the pod's own loopback forwards `:32000` to the Dex Service (HACKS.md U13) — a `postRenderers` patch on each component, and on the lab's own mcp-prometheus `HelmRelease`. |
-| `components.kagent.enabled` from `platform.agents`, `controller.auth.mode: unsecure`, kagent ServiceMonitor + OTel off | Agents are part of what the lab tests, so kagent is on by default (the chart defaults it off) but optional — `platform.agents: false` skips the runtime. `unsecure` because the GS `trusted-proxy` mode assumes a JWT-validating agentgateway in front; no Prometheus Operator / OTLP gateway in kind. See [Agents (kagent)](agents.md). |
+| `components.kagent.enabled` from `platform.agents`; kagent ServiceMonitor + OTel off | Agents are part of what the lab tests, so kagent is on by default (the chart defaults it off) but optional — `platform.agents: false` skips the runtime. The controller's authentication is the fleet's (`trusted-proxy` behind the JWT `Strict` policy on the controller route); the kagent line serves no /metrics and there is no OTLP gateway in kind. See [Agents (kagent)](agents.md). |
+| `kagent.controllerRoute.jwtAuthentication.jwks` = the lab Dex (`dex.dex.svc.cluster.local:5556/dex/keys` over TLS) | The chart's default JWKS source is a Giant Swarm Dex; the policy itself (`Strict`, the identity transformation) is the chart's default, unchanged. |
+| `kagent.harness.snapshotLocation: s3://ate-snapshots/kagent` + `substrate.rustfs.enabled: true` | An installation names its own snapshot bucket (S3 with IRSA on CAPA); the lab's store is the substrate chart's bundled in-cluster RustFS. |
+| `postgres`: one instance, a 2Gi claim, no backups | The fleet's CNPG `Cluster` runs three instances on 20Gi with Barman backups; the lab keeps the shape (the same operand and pgvector images, the same `Database` CRs and derived Secrets) on one kind node. |
 | `kagent.ui.service.type: NodePort`, nodePort 30880 pinned by the kagent `postRenderers` patch | On a real MC the UI sits behind the agentgateway edge; this lab publishes it through the kind port mapping instead (host side `platform.agentsPort`, default 8081). The chart's Service template renders no `nodePort` field, so the fixed node port is a patch (HACKS.md U9). |
 | `components.flux.enabled: true`, `gitops.self.enabled: false` | The lab shape (see [The agent platform](#the-agent-platform-muster--kubernetes-mcp)): a management cluster runs its own Flux and installs the chart through it; the lab has none, so the chart brings the engine — and must not adopt its own release, because the lab installs charts and images that are not released. |
 | The chart pinned to an exact release (`platform.chartVersion`) | Component versions are the chart's own ranges, resolved by its Flux at reconcile time (the fleet's dogfooding track). The chart itself never floats in the lab: two runs install the same thing, and a bump is a deliberate edit with a lab run behind it. |
-| Substrate (the Giant Swarm line of kagent-dev/substrate, `ghcr.io/giantswarm/substrate`, pinned in `substrate.go`) installed by the lab ahead of the platform, bootstrap included (`platform.substrate.enabled`, implied by the dev channel) | The dev channel's kagent runs its agents as Substrate actors and cannot start without it, and Substrate is not a meta-chart component yet: its CA/JWT bootstrap is imperative (`kubectl-ate admin make-ca-pool`). The lab ports the two bootstrap commands, creates every object before one waited install and needs the apiserver gates its kind config turns on. See [Dev channel](#dev-channel). |
+| The kind config turns on the `ClusterTrustBundle`, `ClusterTrustBundleProjection` and `PodCertificateRequest` gates | Agent Substrate (from the chart) needs them on the apiserver, controller-manager and kubelet; a Giant Swarm cluster sets them through its cluster chart. Fixed at `kind create` — the boot refuses a cluster that predates them. See [Agent Substrate and the platform Postgres](#agent-substrate-and-the-platform-postgres--from-the-chart). |
 | `mcp-prometheus` as a lab-rendered Flux `HelmRelease` | The one release the lab installs outside the chart rides the same engine, as the same tenant identity, so its lab-only sidecar is a `postRenderers` patch like the others and there is exactly one Helm writer (the embedded Helm, for the chart) and one Flux engine on the cluster. |
 
 ## Platform gotchas

@@ -152,11 +152,24 @@ func PlatformTest(cfg *config.Config, email string) error {
 	verdict := "PASS: Claude Code -> muster (Dex) -> mcp-kubernetes -> kind apiserver"
 
 	// The user's identity, not a ServiceAccount: the same tool as two users
-	// with different RBAC must answer differently.
+	// with different RBAC must answer differently — and a forged identity
+	// header changes nothing, the bearer decides.
 	if err := proveDownstreamIdentity(cfg, toolPrefix); err != nil {
 		return err
 	}
-	verdict += "\nPASS: the forwarded Dex id_token reaches the apiserver — kube-system Secrets: platform-admin allowed, viewer forbidden (user RBAC, not the ServiceAccount's)"
+	verdict += "\nPASS: the forwarded Dex id_token reaches the apiserver — kube-system Secrets: platform-admin allowed, viewer forbidden (user RBAC, not the ServiceAccount's; a forged x-user-id changes nothing)"
+	if cfg.Platform.Agents {
+		// The kagent controller behind the JWT policy on its route, and
+		// agent-manager writing as the caller: the same forged header.
+		if err := proveControllerIdentity(cfg, user, token); err != nil {
+			return err
+		}
+		verdict += "\nPASS: the kagent controller route — no token refused at the edge (JWT Strict); a valid token with a forged x-user-id attributed to the token's subject"
+		if err := proveAgentManagerIdentity(cfg); err != nil {
+			return err
+		}
+		verdict += "\nPASS: agent-manager writes as the caller — a viewer's create_agent with a forged x-user-id is the apiserver's Forbidden for the viewer"
+	}
 
 	// The per-server sign-in path: muster as OAuth client, challenged by the
 	// lab's Auth Required fixture (oauthfixture.go).
@@ -418,7 +431,7 @@ func proveDownstreamIdentity(cfg *config.Config, toolPrefix string) error {
 		{admin, true, "allowed (cluster-admin via oidc:platform-admins)"},
 		{viewer, false, "forbidden (view role via oidc:viewers excludes Secrets)"},
 	} {
-		step("Listing kube-system Secrets through muster as %s — expecting %s", tc.user.Email, tc.expecting)
+		step("Listing kube-system Secrets through muster as %s with x-user-id forged to %s — expecting %s", tc.user.Email, forgedIdentity, tc.expecting)
 		token, err := passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret,
 			tc.user.Email, tc.user.Password, musterLoginScopes)
 		if err != nil {
@@ -428,6 +441,9 @@ func proveDownstreamIdentity(cfg *config.Config, toolPrefix string) error {
 		if err != nil {
 			return err
 		}
+		// muster and mcp-kubernetes read the bearer, never this header: the
+		// apiserver must still see the token's user.
+		session.setHeader(userIDHeader, forgedIdentity)
 		text, err := session.callServerTool(toolPrefix+"list", args)
 		switch {
 		case tc.allowed && err != nil:
@@ -438,6 +454,8 @@ func proveDownstreamIdentity(cfg *config.Config, toolPrefix string) error {
 			return fmt.Errorf("%s listed kube-system Secrets through %slist although the view role excludes them — mcp-kubernetes is not acting as the caller (ServiceAccount fallback?): %.200s", tc.user.Email, toolPrefix, text)
 		case !strings.Contains(strings.ToLower(err.Error()), "forbidden"):
 			return fmt.Errorf("%s: wanted the apiserver's Forbidden for kube-system Secrets, got: %w", tc.user.Email, err)
+		case !strings.Contains(err.Error(), `User "oidc:`+tc.user.Email+`"`):
+			return fmt.Errorf("%s: Forbidden, but not under the user's own name — the apiserver saw someone else (the forged header?): %w", tc.user.Email, err)
 		default:
 			note("%s: %s", tc.user.Email, excerpt(err.Error(), 160))
 		}

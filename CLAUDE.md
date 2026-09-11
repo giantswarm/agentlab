@@ -242,9 +242,11 @@ Load-bearing invariants (details in docs/):
   `platform.chartPath` installs a local checkout instead; `platform.chartBranch`
   is the dev channel — the branch's newest dev build, resolved into
   `chartVersion` on every `configure`/`up`/`platform` (`chartbranch.go`,
-  `platform --pin` freezes it) — and implies Substrate, kagent main's actor
-  runtime, installed ahead of the platform (`substrate.go`,
-  `platform.substrate.enabled`). Never emit `gitops.namespace` with the
+  `platform --pin` freezes it). Agent Substrate and the platform Postgres
+  come with the chart (the 4.x line: the `substrate` and `cloudnative-pg`
+  component releases) — the lab installs neither; it reads the chart's
+  rendered roster (`platformRoster`) to know what to budget for, check the
+  apiserver gates for and preload. Never emit `gitops.namespace` with the
   engine on.
 - The lab's credentials are throwaway by design; plaintext passwords in
   `agentlab.yaml` are fine.
