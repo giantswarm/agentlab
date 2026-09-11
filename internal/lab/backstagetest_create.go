@@ -3,7 +3,6 @@ package lab
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -52,8 +51,12 @@ const (
 // portalToolCall runs one agent-manager tool the way the portal does — the
 // muster plugin's backend, POST /api/muster/call {name, arguments}, with the
 // person's forwarded token — and decodes the tool's JSON payload into out.
-// agent-manager's refusal is the error, worded as the tool answered it
-// (`<code>: <message>`), so callers judge the code by prefix.
+// The backend (MusterMcpClient.callTool) has already looked through
+// call_tool's `{isError, content}` envelope: a 200 carries the tool's payload
+// itself, and a tool-level refusal is thrown, arriving as a non-200 whose
+// Backstage error body carries the refusal as the tool worded it
+// (`<code>: <message>`); that message is the error, so callers judge the code
+// by its marker.
 func portalToolCall(ps *portalSession, tool string, args map[string]any, out any) error {
 	if args == nil {
 		args = map[string]any{}
@@ -63,21 +66,13 @@ func portalToolCall(ps *portalSession, tool string, args map[string]any, out any
 		return err
 	}
 	if status != http.StatusOK {
-		return fmt.Errorf("POST /api/muster/call %s%s answered %d: %.300s", agentManagerToolPrefix, tool, status, raw)
-	}
-	var envelope toolEnvelope
-	if err := json.Unmarshal(raw, &envelope); err != nil || len(envelope.Content) == 0 {
-		return fmt.Errorf("POST /api/muster/call %s%s: not a tool result: %v\n%.300s", agentManagerToolPrefix, tool, err, raw)
-	}
-	text := envelope.Content[0].Text
-	if envelope.IsError {
-		return errors.New(strings.TrimSpace(text))
+		return fmt.Errorf("POST /api/muster/call %s%s answered %d: %s", agentManagerToolPrefix, tool, status, excerpt(strings.TrimSpace(backstageErrorMessage(raw)), 300))
 	}
 	if out == nil {
 		return nil
 	}
-	if err := json.Unmarshal([]byte(text), out); err != nil {
-		return fmt.Errorf("%s%s through the portal: payload is not the expected JSON: %w\n%.300s", agentManagerToolPrefix, tool, err, text)
+	if err := json.Unmarshal(raw, out); err != nil {
+		return fmt.Errorf("%s%s through the portal: payload is not the expected JSON: %w\n%.300s", agentManagerToolPrefix, tool, err, raw)
 	}
 	return nil
 }

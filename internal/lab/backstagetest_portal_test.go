@@ -40,7 +40,6 @@ const (
 	fieldTaskID       = "taskId"
 	fieldContextID    = "contextId"
 	fieldState        = "state"
-	fieldContent      = "content"
 	fieldError        = "error"
 	fieldArtifact     = "artifact"
 	fieldMessageID    = "messageId"
@@ -82,8 +81,15 @@ func newFakePortal(t *testing.T) *fakePortal {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
+		// As the portal's backend answers: the tool's payload itself on a
+		// 200; a tool-level refusal thrown, so Backstage's error body.
 		text, isError := answer(call.Arguments)
-		writeJSON(w, http.StatusOK, map[string]any{"isError": isError, fieldContent: []map[string]any{{fieldType: fieldText, fieldText: text}}})
+		if isError {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"name": "Error", "message": text}, "response": map[string]any{"statusCode": http.StatusInternalServerError}})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(text))
 	})
 	fp.srv = httptest.NewServer(fp.mux)
 	t.Cleanup(fp.srv.Close)
@@ -154,7 +160,7 @@ func TestPortalToolCall(t *testing.T) {
 		t.Errorf("Authorization = %q", got)
 	}
 	err := portalToolCall(ps, "create_agent", map[string]any{nameKey: "probe"}, nil)
-	if err == nil || !strings.HasPrefix(err.Error(), refusalConflict) {
+	if err == nil || !strings.Contains(err.Error(), refusalConflict) {
 		t.Errorf("a refusal: %v", err)
 	}
 	if got := fp.captured["create_agent"]; len(got) != 1 || got[0][nameKey] != "probe" {
