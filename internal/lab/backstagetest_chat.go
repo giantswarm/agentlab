@@ -2,8 +2,8 @@ package lab
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
-	"math/rand/v2"
 	"net/http"
 	"slices"
 	"strings"
@@ -527,7 +527,7 @@ func musterAttributedTurn(email string, since time.Duration) error {
 // codeword is the fact turn one tells and turn two must recall: a word the
 // model cannot guess, readable in the notes.
 func codeword() string {
-	return fmt.Sprintf("amber-%04d", rand.IntN(10000))
+	return "amber-" + strings.ToLower(rand.Text()[:6])
 }
 
 // proveChat drives the Sessions pages for the primary user on the agent, and
