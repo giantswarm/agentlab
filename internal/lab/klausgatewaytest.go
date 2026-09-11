@@ -198,7 +198,7 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 		return err
 	}
 	if !boot.ready {
-		return fmt.Errorf("AgentTemplate %s never became Ready on Harness %s within %s: %s", klausGatewayTestAgent, kagentHarness, opts.ReadyTimeout, harnessReadySummary(boot.template, kagentHarness))
+		return boot.failure(klausGatewayTestAgent, opts.ReadyTimeout)
 	}
 	note("Ready after %s", boot.elapsed.Round(time.Second))
 
@@ -471,20 +471,6 @@ spec:
 `, agentTemplateAPIVersion, klausGatewayTestAgent, kagentNamespace, managedByLabel, managedByAgentlabValue,
 		klausGatewayTestToolset, klausGatewayMusterURL, strings.Join(labels, "\n    "), klausGatewayTestDisplay, klausGatewayTestIcon,
 		modelConfig, klausGatewayTestPrompt, remoteMCPServerKind, klausGatewayTestUnadmitted)
-}
-
-// harnessReadySummary words a template's Ready condition on a Harness for a
-// failed boot.
-func harnessReadySummary(t *agentTemplate, harness string) string {
-	if t == nil {
-		return "the template could not be read"
-	}
-	h := t.harness(harness)
-	if h == nil {
-		return "no status.harnesses[] entry for " + harness + " (the Harness does not admit it)"
-	}
-	status, message := h.condition(conditionReady)
-	return fmt.Sprintf("Ready=%q %s", status, message)
 }
 
 // klausGatewayCleanup removes what the proof creates: the AgentInstances of

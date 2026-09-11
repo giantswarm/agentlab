@@ -229,7 +229,8 @@ func unadmittedTemplate(name string) *unstructured.Unstructured {
 // admits, one another Harness admits, a Harness condition the controller will
 // not retry, and a release Helm gave up on; and keeps waiting (naming what it
 // saw last) while a revision compiles, while the release has not rendered
-// yet, and while nothing is there.
+// yet, while an admitted template's Harness entry is not written yet, and
+// while nothing is there.
 func TestWaitAgentReady(t *testing.T) {
 	// A new revision compiling: Ready still True on the last successful
 	// revision, the desired one ahead of it.
@@ -245,10 +246,15 @@ func TestWaitAgentReady(t *testing.T) {
 			map[string]any{fieldType: condReady, fieldStatus: condFalse, fieldReason: readyReasonPending, fieldMessage: "waiting"},
 		},
 	}}, fieldStatus, "harnesses")
+	// Observed with the platform Harness's admission labels and no entry yet:
+	// the controllers' first pass, not a verdict.
+	labelledTemplate := unadmittedTemplate("labelled")
+	labelledTemplate.SetLabels(map[string]string{harnessLabel: kagentHarness})
 	newFakeLab(t,
 		readyTemplate(testReadyName, kagentHarness, conditionTrue, "ActorTemplate golden snapshot is ready"),
 		helmRelease(testReadyName, agentValues(testSpec()), conditionTrue, "InstallSucceeded", ""),
 		unadmittedTemplate("unadmitted"),
+		labelledTemplate,
 		readyTemplate("elsewhere", "claude", conditionTrue, "ready"),
 		bootTemplate("pending", condFalse, readyReasonPending, "waiting for the ActorTemplate golden snapshot"),
 		compiling,
@@ -266,6 +272,7 @@ func TestWaitAgentReady(t *testing.T) {
 		reason   string
 	}{
 		{"unadmitted", true, "no Harness admits"},
+		{"labelled", false, "entry is not written yet"},
 		{"elsewhere", true, "admitted by claude only"},
 		{"blocked", true, "ResolvedRefs=False ModelConfigNotFound"},
 		{"refused", true, "InstallFailed"},

@@ -349,24 +349,6 @@ func (s skillsTemplateShape) toolsNote() string {
 	return "no tools (the platform renders no shared " + componentMuster + " RemoteMCPServer; the skill is what the template carries)"
 }
 
-// harnessAdmissionLabels are the labels the platform Harness admits
-// (spec.allowedAgentTemplates.selector.matchLabels): the proof's templates
-// carry them, so the Harness picks them up whichever label the platform
-// chose — the connectivity chart's agent-platform.giantswarm.io/harness:
-// <name>, or another. A Harness that cannot be read leaves the chart's.
-func harnessAdmissionLabels() map[string]string {
-	fallback := map[string]string{harnessLabel: kagentHarness}
-	h, err := readKagentObject(harnessResource, kagentHarness)
-	if err != nil {
-		return fallback
-	}
-	labels, found, _ := unstructured.NestedStringMap(h.Object, "spec", "allowedAgentTemplates", "selector", "matchLabels")
-	if !found || len(labels) == 0 {
-		return fallback
-	}
-	return labels
-}
-
 // skillsAgentTemplate is the proof's AgentTemplate: the Go ADK Harness, the
 // ModelConfig, the terse prompt, the shared muster server as its tools where
 // the platform renders one (the fleet's shape: skills and tools), labelled
