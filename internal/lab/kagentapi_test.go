@@ -539,6 +539,9 @@ func TestHITLRoundTrip(t *testing.T) {
 	if decision.TaskID != fakeTaskID || decision.ContextID != "" || !slices.Contains(decision.Extensions, hitlExtensionURI) {
 		t.Errorf("the decision message = %+v", decision)
 	}
+	if got := partsText(decision.Parts); got != "Approved: "+fakeTool {
+		t.Errorf("the decision's transcript line = %q", got)
+	}
 	payload, _ := decision.Metadata[hitlExtensionURI].(map[string]any)
 	approvals, _ := payload["approvals"].([]any)
 	if payload["type"] != hitlTypeToolApprovalResponse || len(approvals) != 1 {
@@ -556,6 +559,9 @@ func TestHITLRoundTrip(t *testing.T) {
 	approvals, _ = payload["approvals"].([]any)
 	if approval, _ := approvals[0].(map[string]any); approval["approved"] != false || approval["rejection_reason"] != a2aDeclineReason {
 		t.Errorf("rejection = %v", approval)
+	}
+	if got := partsText(rejection.Parts); got != "Rejected: "+fakeTool+"\nReason: "+a2aDeclineReason {
+		t.Errorf("the rejection's transcript line = %q", got)
 	}
 
 	canceled, err := api.cancelTask(t.Context(), fakeInstanceID, fakeTaskID)

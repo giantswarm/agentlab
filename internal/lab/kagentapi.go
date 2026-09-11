@@ -733,18 +733,28 @@ func parseToolApprovalRequest(msg *a2a.Message) *toolApprovalRequest {
 	return &req
 }
 
-// decisionMessage answers a paused task's tool_approval_request: a user
-// message carrying the paused task's id, the extension declared, and under
-// its URI one approval per requested tool — all approved, or all rejected
-// with the reason — so the task resumes in place.
+// decisionMessage answers a paused task's tool_approval_request the way
+// kagent's UI does: a user message on the paused task, the extension
+// declared, under its URI one approval per requested tool — all approved,
+// or all rejected with the reason — so the task resumes in place, and as
+// its one text part the transcript line of the same choices ("Approved:
+// <tool>", "Rejected: <tool>" with a "Reason:" line): the A2A server
+// requires a part, and the conversation reads as what happened.
 func decisionMessage(taskID a2a.TaskID, req *toolApprovalRequest, approve bool, reason string) (*a2a.Message, error) {
 	response := toolApprovalResponse{Type: hitlTypeToolApprovalResponse}
+	var lines []string
 	for _, tool := range req.decidedTools() {
 		approval := toolApproval{ID: tool.ID, Approved: approve}
+		line := "Approved: " + tool.Name
 		if !approve {
 			approval.RejectionReason = reason
+			line = "Rejected: " + tool.Name
+			if reason != "" {
+				line += "\nReason: " + reason
+			}
 		}
 		response.Approvals = append(response.Approvals, approval)
+		lines = append(lines, line)
 	}
 	encoded, err := json.Marshal(response)
 	if err != nil {
@@ -754,7 +764,7 @@ func decisionMessage(taskID a2a.TaskID, req *toolApprovalRequest, approve bool, 
 	if err := json.Unmarshal(encoded, &raw); err != nil {
 		return nil, err
 	}
-	msg := a2a.NewMessage(a2a.MessageRoleUser)
+	msg := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart(strings.Join(lines, "\n")))
 	msg.TaskID = taskID
 	msg.SetMeta(hitlExtensionURI, raw)
 	msg.Extensions = append(msg.Extensions, hitlExtensionURI)
