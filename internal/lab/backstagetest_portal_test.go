@@ -40,6 +40,7 @@ const (
 	fieldTaskID       = "taskId"
 	fieldContextID    = "contextId"
 	fieldState        = "state"
+	fieldSpec         = "spec"
 	fieldError        = "error"
 	fieldArtifact     = "artifact"
 	fieldMessageID    = "messageId"
@@ -511,7 +512,7 @@ func rosterTemplate(name, harness string, ready bool, binds string) map[string]a
 		fieldMetadata: map[string]any{nameKey: name, fieldNamespace: kagentNamespace, "generation": 1,
 			"labels":      map[string]any{harnessLabel: testHarnessName, fluxHelmReleaseNameLabel: name},
 			"annotations": map[string]any{displayNameAnnotation: "Display " + name}},
-		"spec": spec, fieldStatus: status,
+		fieldSpec: spec, fieldStatus: status,
 	}
 }
 
@@ -586,7 +587,7 @@ func TestHITLAgentManifest(t *testing.T) {
 	if err := yaml.Unmarshal([]byte(agentHelmReleaseManifest(spec)), &plain); err != nil {
 		t.Fatal(err)
 	}
-	values := got["spec"].(map[string]any)["values"].(map[string]any)
+	values := got[fieldSpec].(map[string]any)["values"].(map[string]any)
 	muster, _ := values["muster"].(map[string]any)
 	if muster[musterRequireApprovalKey] != true {
 		t.Errorf("values.muster = %v", values["muster"])
