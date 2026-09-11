@@ -485,9 +485,11 @@ the Harness's admission label read from the Harness itself, the
 `RemoteMCPServer agentlab-klaus-gateway-test` (muster's in-cluster URL,
 `X-Muster-Toolset: preset:read-only`, discovery off, never an Authorization
 header) bound with **`requireApproval: true`**, so every muster call pauses
-for a decision (the chart has no value for this yet, hence the hand-applied
-pair); and `AgentTemplate agentlab-klaus-gateway-test-unadmitted`, which
-carries no admission label.
+for a decision (the Generic chart renders the same binding from
+`muster.requireApproval` since agent 1.1.0; the proof applies the pair
+directly so it depends on no chart release resolving in the lab); and
+`AgentTemplate agentlab-klaus-gateway-test-unadmitted`, which carries no
+admission label.
 
 **Assertions** — the five of giantswarm/agentlab#146 and the attribution:
 
