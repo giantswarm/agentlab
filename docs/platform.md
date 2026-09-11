@@ -447,6 +447,89 @@ place: Ready after 15s on Harness kagent, the turn as admin@lab.local answered "
 gates open; the upstream exits of the two patches are tracked on
 giantswarm/giantswarm#37742 (row 8).
 
+### The Swarmgeist proof (klaus-gateway on kagent API v2)
+
+`agentlab klaus-gateway-test` is the lab carrier of
+[klaus-gateway](https://github.com/giantswarm/klaus-gateway) (Swarmgeist,
+the fleet's Slack bridge) on kagent API v2: A2A v1 over gRPC through the
+agentgateway edge, the roster from `ListAgentTemplates`, one `AgentInstance`
+per channel thread kept in the gateway's routing store, human-in-the-loop as
+kagent's HITL extension, a stop as `CancelTask` — every call made as the
+person behind the turn, whose Dex id_token the gateway forwards and validates
+nowhere itself. Slack cannot be driven headlessly; the gateway's web channel
+(`/web/*`) is the same facade one adapter down, so the proof drives that.
+
+**Deployment shape.** The gateway runs **out of cluster, on the host** —
+the released image on the host network by default
+(`--gateway-image`, `gsoci.azurecr.io/giantswarm/klaus-gateway:1.0.2`), or a
+local build (`--gateway-binary`, the proof of a branch) — with `a2a.url` =
+the lab's public gRPC target `grpcs://agentgateway.<domain>:<gatewayPort>`
+(TLS with the lab CA from `certs/ca.crt`; the JWT `Strict` policy of the
+controller `GRPCRoute` validates the forwarded token at the edge),
+`a2a.namespace: kagent`, a bolt store in a run directory (`--run-dir` keeps
+it, together with the gateway's log), the web channel on `127.0.0.1:18090`
+(`--gateway-port`; the admin endpoints take the next port), the static
+lifecycle driver (no Klaus instances). This is the leg the meta chart's
+in-cluster component (`components.klaus-gateway`, `klausGateway.a2a.url` =
+the in-cluster `grpc://agentgateway.agent-platform.svc.cluster.local:8080`)
+does not exercise: the public route with TLS and the JWT policy. The
+component itself stays off in the lab; enabling it is a values change under
+the lab lock and is not part of this proof. The gateway forwards the
+person's token and talks to no Dex, so it needs no `dex-localhost` bridge.
+
+**Fixtures** (in `kagent`, deleted by the same run, leftovers removed first):
+`AgentTemplate agentlab-klaus-gateway-test` in the Generic chart 1.x shape —
+the Harness's admission label read from the Harness itself, the
+`ui.giantswarm.io/display-name` and `ui.giantswarm.io/icon-url` annotations,
+`default-model-config` (`--model-config`), and its own muster carrier
+`RemoteMCPServer agentlab-klaus-gateway-test` (muster's in-cluster URL,
+`X-Muster-Toolset: preset:read-only`, discovery off, never an Authorization
+header) bound with **`requireApproval: true`**, so every muster call pauses
+for a decision (the chart has no value for this yet, hence the hand-applied
+pair); and `AgentTemplate agentlab-klaus-gateway-test-unadmitted`, which
+carries no admission label.
+
+**Assertions** — the five of giantswarm/agentlab#146 and the attribution:
+
+1. **Discovery**: `GET /web/agents` as the user lists the fixture with the
+   display name and icon from its annotations; the unadmitted template is
+   not listed, and a turn naming it (`agentRef`) is refused synchronously
+   (HTTP 502) with the reason `no Harness admits this AgentTemplate`.
+2. **One turn**: the thread's first message streams to `done`; the gateway's
+   `instance_bound` record names the `AgentInstance`, and the controller
+   (`ListAgentInstances` narrowed to the template, as the user) lists
+   exactly that one. A cold worker's first resume may hit Substrate's
+   ResumeActor deadline once; the first turn is retried once, visibly.
+3. **HITL**: a tool-using question pauses on a `prompt` event (`filter_tools`,
+   then `call_tool` on the same task); each pause is `TASK_STATE_INPUT_REQUIRED`
+   at the controller (`GetTask`), each approve decision on the web channel
+   carries the task id, the resumed task ends `TASK_STATE_COMPLETED` and
+   `ListTasks` shows nothing of the instance left at input-required.
+   **Attribution**: muster's log since the turn began carries the
+   `forwarded_id_token_accepted` audit record with the user's email and
+   `tools/call request` lines under the token's subject.
+4. **Stop**: a long turn's stream is closed by the client after 6 s; the
+   gateway cancels the task at the controller (`ListTasks` shows the new
+   task `TASK_STATE_CANCELED`) and the thread takes a following turn.
+5. **Restart**: the gateway is stopped and started again on the same bolt
+   store; the next turn recalls the first turn's word, no new
+   `instance_bound` record is written, and the controller still lists the
+   one `AgentInstance`.
+
+The controller reads go over gRPC-Web through the same edge
+(`kagentapi.go`), as the portal's backend does. The thread key is
+`web|agentlab||thread-<run>|agentlab-klaus-gateway-test`, the user the
+signed-in email (`admin@lab.local` by default).
+
+**The negative.** A gateway built without the transport — the `release-v0.x`
+line, e.g. `--gateway-image gsoci.azurecr.io/giantswarm/klaus-gateway:0.39.4`
+— must fail the proof at start-up or discovery: its `a2a.url` is an HTTP
+base URL for kagent's retired JSON-RPC/REST surface and it cannot speak A2A
+v1 over gRPC. Run it once when the gateway line changes; it is not a default
+step. Not provable here: Slack itself (the `@`-mention, thread reply, `/agent`,
+the Block Kit surface) — verified on the first installation that runs
+Swarmgeist on klaus-gateway 1.x, per the agentlab-first exception.
+
 ## The request path
 
 ```

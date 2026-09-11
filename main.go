@@ -113,6 +113,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		inGroup(groupTesting, modelsTestCmd()),
 		inGroup(groupTesting, skillsTestCmd()),
 		inGroup(groupTesting, a2aTestCmd()),
+		inGroup(groupTesting, klausGatewayTestCmd()),
 		inGroup(groupTesting, backstageTestCmd()),
 
 		inGroup(groupCleanup, labCmd("down", "Destroy the kind cluster", lab.Down)),
@@ -764,6 +765,33 @@ func skillsTestCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.Fixture.Question, "skill-question", "", "the question the turn asks the agent to answer from the skill's text only")
 	cmd.Flags().StringVar(&opts.Fixture.Expect, "skill-expect", "", "the answer only the skill's text has; the turn passes when the reply names the skill and carries it (case-insensitive)")
 	cmd.Flags().StringVar(&opts.Fixture.CredentialSecret, "skill-secret", "", "a private repository: the Secret in the kagent namespace whose `token` key holds a read token for the repository's host, referenced as skills[].source.git.credentialRef; the Secret is yours to create, the proof never reads it")
+	return cmd
+}
+
+func klausGatewayTestCmd() *cobra.Command {
+	var opts lab.KlausGatewayTestOptions
+	cmd := &cobra.Command{
+		Use:   "klaus-gateway-test [email]",
+		Short: "Headless Swarmgeist proof (kagent API v2): klaus-gateway runs on the host against the lab's edge (A2A v1 over gRPC, TLS with the lab CA, JWT at the edge) and its web channel is driven with the user's forwarded Dex id_token — discovery with the template's annotations (a not-admitted template hidden and refused), one turn attributed to the person at muster, a requireApproval round trip, a stop cancelled server-side, a restart on the bolt store that keeps the thread → AgentInstance mapping",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			email := cfg.AdminUser().Email
+			if len(args) == 1 {
+				email = args[0]
+			}
+			return lab.KlausGatewayTest(cfg, email, opts)
+		},
+	}
+	cmd.Flags().StringVar(&opts.GatewayImage, "gateway-image", lab.KlausGatewayImageDefault, "the klaus-gateway image to run on the host network (a 0.x image is the documented negative: it cannot speak the transport)")
+	cmd.Flags().StringVar(&opts.GatewayBinary, "gateway-binary", "", "a local klaus-gateway build to run instead of the image — the proof of a branch")
+	cmd.Flags().IntVar(&opts.Port, "gateway-port", 18090, "host port of the gateway's web channel; the admin endpoints take the next port")
+	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the fixture runs on (default: default-model-config, the Anthropic one the lab renders)")
+	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", 0, "how long the fixture's golden boot may take to reach Ready on the Harness (default 10m)")
+	cmd.Flags().StringVar(&opts.RunDir, "run-dir", "", "directory for the bolt store and the gateway's log, kept afterwards (default: a temporary directory, removed)")
 	return cmd
 }
 
