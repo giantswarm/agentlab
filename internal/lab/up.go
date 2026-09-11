@@ -157,10 +157,14 @@ func Up(cfg *config.Config, offers Offers) error {
 			fmt.Println("  The browser will warn on the Dex login page (lab-CA certificate). One-time")
 			fmt.Println("  fix, reverted by `agentlab untrust`:  agentlab trust")
 		}
-		// No portal without the platform (config.Validate), so this path can
-		// only offer the trust step — and never at the cost of the preload
-		// snapshot below, which this boot already earned.
+		// Bookkeeping this boot earned goes in before the question: in
+		// accessible mode the prompt reads lines, so a Ctrl-C there is a real
+		// SIGINT that ends the process (platformUp snapshots first for the
+		// same reason). No portal without the platform (config.Validate), so
+		// this path can only offer the trust step.
+		snapshotPreloadImages(cfg)
 		offerTrustAndOpen(cfg, offers, false)
+		return nil
 	}
 	snapshotPreloadImages(cfg)
 	return nil

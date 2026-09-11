@@ -54,8 +54,8 @@ const (
 // host-side port mapping is configurable via Platform.MusterPort.
 const MusterNodePort = 8090
 
-// BrowserCallbackPort is the fixed local port for `agentlab browser`'s OAuth
-// callback. Fixed because it must be pre-registered in Dex's redirectURIs.
+// BrowserCallbackPort is the fixed local port for the OAuth callback of
+// `agentlab login --browser` (and its hidden `agentlab browser` alias). Fixed because it must be pre-registered in Dex's redirectURIs.
 const BrowserCallbackPort = 5555
 
 // KagentUINodePort is the fixed NodePort the kagent-ui Service is pinned to,
