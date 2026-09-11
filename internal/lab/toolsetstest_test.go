@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
@@ -148,36 +147,6 @@ func TestNamesOutside(t *testing.T) {
 	}
 }
 
-// The composed manifest is the composer's shape on kagent main: the muster
-// carrier with the toolset header first, then the AgentTemplate binding it;
-// without a toolset, one AgentTemplate binding the shared muster server.
-func TestComposeAgentManifest(t *testing.T) {
-	const musterURL = "http://muster.agent-platform.svc.cluster.local:8090/mcp"
-	m := composeAgentManifest("probe", "default-model-config", []string{presetReadOnly, workflowIncidentTriage}, musterURL)
-	docs := strings.Split(m, "\n---\n")
-	if len(docs) != 2 || !strings.Contains(docs[0], "kind: "+remoteMCPServerKind) || !strings.Contains(docs[1], "kind: AgentTemplate") {
-		t.Fatalf("wanted RemoteMCPServer then AgentTemplate, got:\n%s", m)
-	}
-	for _, want := range []string{
-		"apiVersion: " + agentTemplateAPIVersion,
-		"name: " + toolsetCarrierName("probe") + "\n  namespace: kagent",
-		"url: " + musterURL,
-		"- name: " + toolsetHeader + "\n      value: \"preset:read-only," + workflowIncidentTriage + "\"",
-		"name: probe\n  namespace: kagent",
-		harnessLabel + ": " + kagentHarness,
-		"modelConfig:\n    name: default-model-config",
-		"kind: " + remoteMCPServerKind + "\n          name: " + toolsetCarrierName("probe"),
-	} {
-		if !strings.Contains(m, want) {
-			t.Errorf("manifest lacks %q:\n%s", want, m)
-		}
-	}
-	bare := composeAgentManifest("plain", "default-model-config", nil, musterURL)
-	if strings.Contains(bare, "---") || strings.Contains(bare, "headersFrom") || !strings.Contains(bare, "kind: "+remoteMCPServerKind+"\n          name: "+componentMuster+"\n") {
-		t.Errorf("an agent without a toolset must bind %s directly, got:\n%s", componentMuster, bare)
-	}
-}
-
 func TestSessionIDInChallenge(t *testing.T) {
 	state := base64.RawURLEncoding.EncodeToString([]byte(`{"session_id":"ext-0123abcd","user_id":"u","server_name":"lab-oauth-fixture"}`))
 	got := sessionIDInChallenge("https://muster.127.0.0.1.nip.io/oauth/proxy/start?state=" + state)
@@ -226,41 +195,49 @@ func agentTemplateBinding(name, server string) *unstructured.Unstructured {
 	return template
 }
 
-// toolsetCarrier seeds an agent's muster carrier with the header as a literal
-// value.
-func toolsetCarrier(agent, header string) *unstructured.Unstructured {
-	rms := customObject(gvkRemoteMCPServer, kagentNamespace, toolsetCarrierName(agent), nil)
-	_ = unstructured.SetNestedSlice(rms.Object, []any{map[string]any{nameKey: toolsetHeader, "value": header}}, "spec", "headersFrom")
+// agentServer seeds an agent's own RemoteMCPServer the way the chart renders
+// it — named after the agent, pointing at muster, discovery off, rendered by
+// the agent's release — with the toolset header as a literal value ("" for a
+// release that declares no toolset: no header at all).
+func agentServer(agent, header string) *unstructured.Unstructured {
+	rms := customObject(gvkRemoteMCPServer, kagentNamespace, agent, map[string]string{discoveryLabel: discoveryDisabledValue, fluxHelmReleaseNameLabel: agent})
+	_ = unstructured.SetNestedField(rms.Object, testMusterURL, "spec", "url")
+	if header != "" {
+		_ = unstructured.SetNestedSlice(rms.Object, []any{map[string]any{nameKey: toolsetHeader, fieldValue: header}}, "spec", "headersFrom")
+	}
 	return rms
 }
 
 // TestToolsetHeaderOf: the header is read off the RemoteMCPServer the
-// template binds — a literal value on the carrier, a Secret key on an older
-// one, none for the shared muster server — and a template binding no server
-// or a missing carrier is an error that says so.
+// template binds — a literal value, a Secret key on an older one, none for a
+// release without a toolset — and a template binding no server (chat-only)
+// or a missing server is an error that says so.
 func TestToolsetHeaderOf(t *testing.T) {
-	secretCarrier := customObject(gvkRemoteMCPServer, kagentNamespace, toolsetCarrierName(toolsetsAgentFull), nil)
-	_ = unstructured.SetNestedSlice(secretCarrier.Object, []any{map[string]any{
+	secretServer := agentServer(toolsetsAgentFull, "")
+	_ = unstructured.SetNestedSlice(secretServer.Object, []any{map[string]any{
 		nameKey: toolsetHeader, "valueFrom": map[string]any{fieldTypeKey: "Secret", nameKey: "toolset-full", "key": "toolset"},
 	}}, "spec", "headersFrom")
 	newFakeLab(t,
-		agentTemplateBinding(toolsetsAgentReadOnly, toolsetCarrierName(toolsetsAgentReadOnly)),
-		toolsetCarrier(toolsetsAgentReadOnly, presetReadOnly),
-		agentTemplateBinding(toolsetsAgentLegacy, componentMuster),
+		agentTemplateBinding(toolsetsAgentReadOnly, toolsetsAgentReadOnly),
+		agentServer(toolsetsAgentReadOnly, presetReadOnly),
+		agentTemplateBinding(toolsetsAgentUnscoped, toolsetsAgentUnscoped),
+		agentServer(toolsetsAgentUnscoped, ""),
 		agentTemplateBinding(toolsetsAgentNone, ""),
-		agentTemplateBinding(toolsetsAgentOAuth, toolsetCarrierName(toolsetsAgentOAuth)),
-		agentTemplateBinding(toolsetsAgentFull, toolsetCarrierName(toolsetsAgentFull)),
-		secretCarrier,
+		agentTemplateBinding(toolsetsAgentOAuth, toolsetsAgentOAuth),
+		agentTemplateBinding(toolsetsAgentFull, toolsetsAgentFull),
+		secretServer,
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: kagentNamespace, Name: "toolset-full"}, Data: map[string][]byte{"toolset": []byte(presetFull)}},
 	)
 	for _, tc := range []struct {
-		agent, want, wantErr string
+		agent, want string
+		found       bool
+		wantErr     string
 	}{
-		{toolsetsAgentReadOnly, presetReadOnly, ""},
-		{toolsetsAgentLegacy, "", ""},
-		{toolsetsAgentFull, presetFull, ""},
-		{toolsetsAgentNone, "", "no MCP server binding"},
-		{toolsetsAgentOAuth, "", "the bound RemoteMCPServer " + toolsetCarrierName(toolsetsAgentOAuth)},
+		{toolsetsAgentReadOnly, presetReadOnly, true, ""},
+		{toolsetsAgentUnscoped, "", false, ""},
+		{toolsetsAgentFull, presetFull, true, ""},
+		{toolsetsAgentNone, "", false, "no MCP server binding"},
+		{toolsetsAgentOAuth, "", false, "the bound RemoteMCPServer " + toolsetsAgentOAuth},
 	} {
 		template, err := waitAgentTemplate(tc.agent)
 		if err != nil {
@@ -269,39 +246,18 @@ func TestToolsetHeaderOf(t *testing.T) {
 		if got := template.Metadata.Labels[harnessLabel]; got != kagentHarness {
 			t.Errorf("%s: label %s=%q", tc.agent, harnessLabel, got)
 		}
-		header, err := toolsetHeaderOf(template)
+		header, found, err := toolsetHeaderOf(template)
 		switch {
 		case tc.wantErr != "":
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Errorf("%s: header %q, err %v; want an error containing %q", tc.agent, header, err, tc.wantErr)
 			}
-		case err != nil || header != tc.want:
-			t.Errorf("%s: header %q, err %v; want %q", tc.agent, header, err, tc.want)
+		case err != nil || header != tc.want || found != tc.found:
+			t.Errorf("%s: header %q found %v, err %v; want %q found %v", tc.agent, header, found, err, tc.want, tc.found)
 		}
 	}
-}
-
-// TestDeleteAgentTemplate: the cleanup's delete is --ignore-not-found
-// --wait=false for the template and its carrier alike — present ones go, a
-// missing agent is no failure.
-func TestDeleteAgentTemplate(t *testing.T) {
-	f := newFakeLab(t, agentTemplateBinding(toolsetsAgentFull, toolsetCarrierName(toolsetsAgentFull)), toolsetCarrier(toolsetsAgentFull, presetFull))
-	if !agentTemplateExists(toolsetsAgentFull) {
-		t.Fatal("seed not visible")
-	}
-	deleteAgentTemplate(toolsetsAgentFull)
-	deleteAgentTemplate("absent")
-	if _, err := f.dyn.Tracker().Get(gvrAgentTemplates, kagentNamespace, toolsetsAgentFull); !apierrors.IsNotFound(err) {
-		t.Errorf("AgentTemplate still there: %v", err)
-	}
-	if _, err := f.dyn.Tracker().Get(gvrRemoteMCPServers, kagentNamespace, toolsetCarrierName(toolsetsAgentFull)); !apierrors.IsNotFound(err) {
-		t.Errorf("carrier still there: %v", err)
-	}
-	if agentTemplateExists(toolsetsAgentFull) {
-		t.Error("agentTemplateExists still true after the delete")
-	}
-	if err := waitAgentTemplateGone(toolsetsAgentFull); err != nil {
-		t.Error(err)
+	if names := headerNames(secretServer); !reflect.DeepEqual(names, []string{toolsetHeader}) {
+		t.Errorf("headerNames = %v", names)
 	}
 }
 

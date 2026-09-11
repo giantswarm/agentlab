@@ -16,9 +16,11 @@ import (
 // so the same word is not spelled in a dozen places (nameKey lives in
 // kubeconfig.go).
 const (
-	modelConfigKey  = "modelConfig"
-	descriptionKey  = "description"
-	serverKey       = "server"
+	modelConfigKey = "modelConfig"
+	descriptionKey = "description"
+	serverKey      = "server"
+	// argumentsKey is the tool arguments of a tools/call and of call_tool.
+	argumentsKey    = "arguments"
 	resourceTypeKey = "resourceType"
 	argsKey         = "args"
 	// presetFullName is the built-in preset that resolves to the whole
@@ -31,9 +33,6 @@ const (
 	// resourceNamespaces is the mcp-kubernetes resourceType the proofs list:
 	// every user may, and the answer names the platform namespace.
 	resourceNamespaces = "namespaces"
-	// taskStateFailed is the terminal failure state of a model-manager job
-	// and of a scaffolder task alike.
-	taskStateFailed = "failed"
 )
 
 // musterSession is one MCP Streamable-HTTP session against the lab muster
@@ -119,7 +118,7 @@ func (s *musterSession) callTool(name string, args map[string]any) (map[string]a
 	s.seq++
 	payload, err := json.Marshal(map[string]any{
 		"jsonrpc": "2.0", "id": s.seq, "method": "tools/call",
-		"params": map[string]any{nameKey: name, "arguments": args},
+		"params": map[string]any{nameKey: name, argumentsKey: args},
 	})
 	if err != nil {
 		return nil, err
@@ -181,7 +180,7 @@ func (s *musterSession) callToolEnvelope(name string, args map[string]any) (*too
 	if args == nil {
 		args = map[string]any{}
 	}
-	res, err := s.callTool("call_tool", map[string]any{nameKey: name, "arguments": args})
+	res, err := s.callTool("call_tool", map[string]any{nameKey: name, argumentsKey: args})
 	if err != nil {
 		return nil, err
 	}

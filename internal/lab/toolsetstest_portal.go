@@ -220,10 +220,10 @@ func proveSignInScopedToolset(cfg *config.Config, user, other *config.User, tool
 		return verdicts, nil
 	}
 	step("The real agent %s through kagent: as %s (the portal's token) it reports the fixture's tools, as %s none", toolsetsAgentOAuth, user.Email, other.Email)
-	if err := waitAgentReady(admin, toolPrefix, toolsetsAgentOAuth); err != nil {
+	if err := awaitAgentsReady(toolsetsAgentOAuth); err != nil {
 		return nil, err
 	}
-	reply, err := agentTurnAs(cfg, toolsetsAgentOAuth, ps.dexIDToken, toolListingPrompt)
+	reply, err := firstTurnAs(cfg, toolsetsAgentOAuth, ps.dexIDToken, toolListingPrompt)
 	if err != nil {
 		return nil, err
 	}
@@ -290,11 +290,12 @@ func portalFilterTools(ps *portalSession, toolset []string, includePresets bool)
 }
 
 // proveToolsetPortal is the portal half: the Tools step's backend calls
-// (presets, live resolution, unmatched selectors) and the composer's apply
-// path (the same scaffolder template the wizard's Deploy drives, with the
-// manifest the composer emits, the user's own OIDC token as the secret) —
-// asserted on what lands: the AgentTemplate binding the muster carrier that
-// carries the header.
+// (presets, live resolution, unmatched selectors) and the create path — the
+// Dev Portal's create flow calls agent-manager's create_agent through the
+// muster plugin's backend as the signed-in person, the same tool the MCP
+// session drives — asserted on what lands: the HelmRelease as agent-manager's
+// write with values.toolset, the AgentTemplate binding the agent's
+// RemoteMCPServer that carries the header, Ready on the platform Harness.
 func proveToolsetPortal(cfg *config.Config, user *config.User, opts ToolsetsTestOptions) ([]string, error) {
 	var verdicts []string
 	ps, err := backstageLogin(cfg, user)
@@ -344,135 +345,40 @@ func proveToolsetPortal(cfg *config.Config, user *config.User, opts ToolsetsTest
 	verdicts = append(verdicts, fmt.Sprintf("PASS: the Tools step's backend (/api/muster/tools/filter) offers the presets [%s], resolves %s live (%d read-only tools) and reports unmatched selectors and unknown presets as muster does", strings.Join(presetNames, ", "), presetReadOnly, len(ro.Tools)))
 
 	if opts.SkipPortal {
-		note("skipping the portal's apply path (--skip-portal): the composed AgentTemplate through the scaffolder template was not exercised")
+		note("skipping the portal's create path (--skip-portal): create_agent through the portal's muster backend was not exercised")
 		return verdicts, nil
 	}
-	step("The composer's apply path: template:default/agent-deployment with the composed manifest (toolset %s) as %s", presetReadOnly, user.Email)
-	muster, err := readKagentObject(remoteMCPServerResource, componentMuster)
-	if err != nil {
-		return nil, fmt.Errorf("the shared muster server the carrier copies: %w", err)
-	}
-	musterURL, _, _ := unstructured.NestedString(muster.Object, "spec", "url")
-	manifest := composeAgentManifest(toolsetsAgentPortal, defaultModelConfig, []string{presetReadOnly}, musterURL)
-	taskID, err := scaffold(ps, manifest, toolsetsAgentPortal)
+	writer := portalAgentManagerWriter{ps}
+	spec := toolsetsSpec(toolsetsAgentPortal, defaultModelConfig, []string{presetReadOnly})
+	spec.Description = "Throwaway agent of `agentlab toolsets-test`, created through the portal's muster backend; deleted by the same run."
+	step("The portal's create path: %s with toolset %v as %s", writer, spec.Toolset, user.Email)
+	t, written, err := readyAgent(writer, spec, agentReadyTimeout)
 	if err != nil {
 		return nil, err
 	}
-	note("scaffolder task %s completed (kube:apply as %s)", taskID, user.Email)
-	t, err := waitAgentTemplate(toolsetsAgentPortal)
+	if written.RequestedBy != user.Email {
+		return nil, fmt.Errorf("create_agent through the portal carries requestedBy=%q, wanted %q (the portal forwards the person's token)", written.RequestedBy, user.Email)
+	}
+	release, err := readAgentRelease(toolsetsAgentPortal)
 	if err != nil {
 		return nil, err
 	}
-	if bound := t.mcpServer(); bound != toolsetCarrierName(toolsetsAgentPortal) {
-		return nil, fmt.Errorf("AgentTemplate %s applied by the portal path binds RemoteMCPServer %q, wanted its carrier %s", toolsetsAgentPortal, bound, toolsetCarrierName(toolsetsAgentPortal))
+	if !slices.Contains(release.managers, agentManagerFieldManager) {
+		return nil, fmt.Errorf("HelmRelease %s has no %s field manager: %q", toolsetsAgentPortal, agentManagerFieldManager, release.managers)
 	}
-	header, err := toolsetHeaderOf(t)
+	declared, set, err := release.toolset()
 	if err != nil {
-		return nil, fmt.Errorf("agent %s: %w", toolsetsAgentPortal, err)
+		return nil, err
 	}
-	if header != presetReadOnly {
-		return nil, fmt.Errorf("agent %s carries %s=%q, wanted %s", toolsetsAgentPortal, toolsetHeader, header, presetReadOnly)
+	if !set || !slices.Equal(declared, spec.Toolset) {
+		return nil, fmt.Errorf("HelmRelease %s carries values.toolset=%v, wanted %v", toolsetsAgentPortal, declared, spec.Toolset)
 	}
-	note("AgentTemplate binds %s; carrier headersFrom %s=%s", toolsetCarrierName(toolsetsAgentPortal), toolsetHeader, header)
-	verdicts = append(verdicts, fmt.Sprintf("PASS: the portal's apply path (scaffolder template agent-deployment, kube:apply with the user's token) lands the composer's AgentTemplate %s binding the carrier %s with %s=%s", toolsetsAgentPortal, toolsetCarrierName(toolsetsAgentPortal), toolsetHeader, presetReadOnly))
+	if err := assertAgentRender(t, spec, release.value("muster", "url")); err != nil {
+		return nil, err
+	}
+	note("requestedBy=%s; HelmRelease managers %q, values.toolset %v; AgentTemplate Ready on Harness %s, binds %s carrying %s=%s", written.RequestedBy, release.managers, declared, kagentHarness, toolsetsAgentPortal, toolsetHeader, presetReadOnly)
+	verdicts = append(verdicts, fmt.Sprintf("PASS: the portal's create path (POST /api/muster/call %screate_agent with the person's forwarded token) lands HelmRelease %s as agent-manager's write with values.toolset [%s], rendered as the AgentTemplate binding RemoteMCPServer %s with %s=%s and Ready on Harness %s", agentManagerToolPrefix, toolsetsAgentPortal, presetReadOnly, toolsetsAgentPortal, toolsetHeader, presetReadOnly, kagentHarness))
 	return verdicts, nil
-}
-
-// composeAgentManifest is the composer's combinedManifest for a new agent on
-// kagent main: the per-agent muster carrier — a copy of the shared muster
-// server (its URL) plus the toolset as the X-Muster-Toolset header — then the
-// AgentTemplate for the Go ADK Harness binding that carrier, with the
-// ModelConfig and the prompt the wizard collected. An agent composed without
-// a toolset binds the shared server directly and needs no carrier.
-func composeAgentManifest(name, modelConfig string, toolset []string, musterURL string) string {
-	server := componentMuster
-	var carrier string
-	if len(toolset) > 0 {
-		server = toolsetCarrierName(name)
-		carrier = fmt.Sprintf(`apiVersion: %[1]s
-kind: RemoteMCPServer
-metadata:
-  name: %[2]s
-  namespace: %[3]s
-  labels:
-    kagent.dev/discovery: disabled
-spec:
-  description: "muster for %[4]s with its toolset (agentlab toolsets-test, portal path)"
-  url: %[5]s
-  protocol: STREAMABLE_HTTP
-  timeout: 30s
-  headersFrom:
-    - name: %[6]s
-      value: %[7]q
----
-`, agentTemplateAPIVersion, server, kagentNamespace, name, musterURL, toolsetHeader, strings.Join(toolset, ","))
-	}
-	return carrier + fmt.Sprintf(`apiVersion: %[1]s
-kind: AgentTemplate
-metadata:
-  name: %[2]s
-  namespace: %[3]s
-  labels:
-    %[4]s: %[5]s
-spec:
-  description: "Throwaway agent of agentlab toolsets-test, applied through the portal's deploy path; deleted by the same run."
-  modelConfig:
-    name: %[6]s
-  systemPrompt: %[7]q
-  tools:
-    - mcp:
-        server:
-          kind: %[8]s
-          name: %[9]s
-`, agentTemplateAPIVersion, name, kagentNamespace, harnessLabel, kagentHarness, modelConfig, toolsetTestAgentSystemMsg, remoteMCPServerKind, server)
-}
-
-// scaffold drives the hidden agent-deployment template the wizard's Deploy
-// button drives (useDeployAgent.ts): scaffolderApi.scaffold() with the
-// manifest, the installation and the user's per-installation OIDC token as
-// the USER_OIDC_TOKEN secret, then waits for the task to complete.
-func scaffold(ps *portalSession, manifest, releaseName string) (string, error) {
-	status, raw, err := ps.backstagePostJSON("/api/scaffolder/v2/tasks", map[string]any{
-		"templateRef": "template:default/agent-deployment",
-		"values": map[string]any{
-			"manifest":              manifest,
-			"clusterName":           platformRelease,
-			"releaseName":           releaseName,
-			"namespace":             kagentNamespace,
-			"oidcTokenInstallation": platformRelease,
-		},
-		"secrets": map[string]any{"USER_OIDC_TOKEN": ps.dexIDToken},
-	})
-	if err != nil {
-		return "", err
-	}
-	if status != http.StatusCreated && status != http.StatusOK {
-		return "", fmt.Errorf("scaffolder refused the task (%d): %.300s", status, raw)
-	}
-	var task struct {
-		ID string `json:"id"`
-	}
-	if err := json.Unmarshal(raw, &task); err != nil || task.ID == "" {
-		return "", fmt.Errorf("scaffolder answered without a task id: %.200s", raw)
-	}
-	var state string
-	done := waitFor(30, 3*time.Second, func() bool {
-		_, raw, err := ps.backstageGet("/api/scaffolder/v2/tasks/" + task.ID)
-		if err != nil {
-			return false
-		}
-		var t struct {
-			Status string `json:"status"`
-		}
-		_ = json.Unmarshal(raw, &t)
-		state = t.Status
-		return state == "completed" || state == taskStateFailed || state == "cancelled"
-	})
-	if !done || state != "completed" {
-		_, events, _ := ps.backstageGet("/api/scaffolder/v2/tasks/" + task.ID + "/events")
-		return "", fmt.Errorf("scaffolder task %s ended %q:\n%s", task.ID, state, excerpt(string(events), 600))
-	}
-	return task.ID, nil
 }
 
 // deploymentImage is the image of a Deployment's first container — what

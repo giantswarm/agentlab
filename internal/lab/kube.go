@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1253,4 +1254,21 @@ func secretHasKey(ns, name, key string) bool {
 	}
 	value, _, _ := unstructured.NestedString(secret.Object, "data", key)
 	return value != ""
+}
+
+// secretDataKey reads one data key of a Secret, decoded.
+func secretDataKey(ctx context.Context, ns, name, key string) ([]byte, error) {
+	secret, err := getObject(ctx, gvrSecrets, ns, name)
+	if err != nil {
+		return nil, err
+	}
+	encoded, found, _ := unstructured.NestedString(secret.Object, "data", key)
+	if !found {
+		return nil, fmt.Errorf("secret %s/%s has no data key %s", ns, name, key)
+	}
+	raw, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, fmt.Errorf("secret %s/%s key %s: %w", ns, name, key, err)
+	}
+	return raw, nil
 }

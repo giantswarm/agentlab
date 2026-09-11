@@ -2,10 +2,8 @@ package lab
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"slices"
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -13,16 +11,14 @@ import (
 
 // kagent API v2 (kagent.dev/v1alpha3) as the proofs read it.
 //
-// An agent is an AgentTemplate in the kagent namespace — model, prompt, tool
-// bindings — admitted by the Harness whose selector its harnessLabel matches
-// (the platform's Go ADK Harness, kagentHarness) and compiled by the
-// controller into a golden snapshot per revision; the template's readiness is
-// status.harnesses[].conditions, per Harness. Its tools are whole
-// RemoteMCPServers of the same namespace: the shared `muster` the
-// connectivity chart renders (no header, the caller's bearer alone), or, for
-// an agent that declares a toolset, agent-manager's per-agent copy
-// `muster-<agent>` carrying X-Muster-Toolset in headersFrom. Nothing here
-// pins an API version: the resources resolve through discovery (gvrFor).
+// An agent's AgentTemplate in the kagent namespace — model, prompt, skills,
+// tool bindings — is admitted by the Harness whose selector its harnessLabel
+// matches (the platform's Go ADK Harness, kagentHarness) and compiled by the
+// controller into a golden snapshot per revision; the template's readiness
+// is status.harnesses[].conditions, per Harness. Its tools are whole
+// RemoteMCPServers of the same namespace: the agent's own, named after it,
+// carrying the toolset header (agent.go). Nothing here pins an API version:
+// the resources resolve through discovery (gvrFor).
 
 const (
 	// agentTemplateResource and remoteMCPServerResource are the resource
@@ -30,18 +26,12 @@ const (
 	// never be meant.
 	agentTemplateResource   = "agenttemplates.kagent.dev"
 	remoteMCPServerResource = "remotemcpservers.kagent.dev"
-	// agentTemplateAPIVersion is the apiVersion of the AgentTemplates and
-	// RemoteMCPServers the proofs write themselves; a manifest names its
-	// version, the reads never pin one.
+	// agentTemplateAPIVersion is the apiVersion of the AgentTemplates the
+	// proofs write themselves (skills-test's golden-boot template); a
+	// manifest names its version, the reads never pin one.
 	agentTemplateAPIVersion = "kagent.dev/v1alpha3"
-	// harnessLabel selects the Harness that admits an AgentTemplate
-	// (allowedAgentTemplates.selector.matchLabels).
-	harnessLabel = "kagent.dev/harness"
 	// remoteMCPServerKind is the kind an AgentTemplate's MCP tool binding names.
 	remoteMCPServerKind = "RemoteMCPServer"
-	// toolsetCarrierPrefix prefixes the per-agent RemoteMCPServer agent-manager
-	// writes for an agent with a toolset: muster-<agent>.
-	toolsetCarrierPrefix = componentMuster + "-"
 	// defaultModelConfig is the ModelConfig the lab renders from
 	// $ANTHROPIC_API_KEY (`agentlab up`), the throwaway agents' default.
 	defaultModelConfig = "default-model-config"
@@ -50,14 +40,18 @@ const (
 // agentTemplate is the part of a kagent AgentTemplate the proofs read.
 type agentTemplate struct {
 	Metadata struct {
-		Name   string            `json:"name"`
-		Labels map[string]string `json:"labels"`
+		Name        string            `json:"name"`
+		Generation  int64             `json:"generation"`
+		Labels      map[string]string `json:"labels"`
+		Annotations map[string]string `json:"annotations"`
 	} `json:"metadata"`
 	Spec struct {
+		Description string `json:"description"`
 		ModelConfig *struct {
 			Name string `json:"name"`
 		} `json:"modelConfig"`
-		SystemPrompt string `json:"systemPrompt"`
+		SystemPrompt string          `json:"systemPrompt"`
+		Skills       []templateSkill `json:"skills"`
 		Tools        []struct {
 			MCP *struct {
 				Server struct {
@@ -69,8 +63,23 @@ type agentTemplate struct {
 		} `json:"tools"`
 	} `json:"spec"`
 	Status struct {
-		Harnesses []harnessStatus `json:"harnesses"`
+		ObservedGeneration int64           `json:"observedGeneration"`
+		Harnesses          []harnessStatus `json:"harnesses"`
 	} `json:"status"`
+}
+
+// templateSkill is one spec.skills[] entry as the chart renders it:
+// {name, source: {git: {url, commit} | oci, path}}.
+type templateSkill struct {
+	Name   string `json:"name"`
+	Source struct {
+		Git *struct {
+			URL    string `json:"url"`
+			Commit string `json:"commit"`
+		} `json:"git"`
+		OCI  string `json:"oci"`
+		Path string `json:"path"`
+	} `json:"source"`
 }
 
 // harnessStatus is one Harness's view of an AgentTemplate
@@ -86,7 +95,7 @@ type harnessStatus struct {
 }
 
 // templateCondition is one condition of a Harness's status: Accepted,
-// ResolvedRefs, Compatible, Ready.
+// ResolvedRefs, Compatible, Ready — and of a HelmRelease's status.
 type templateCondition struct {
 	Type    string `json:"type"`
 	Status  string `json:"status"`
@@ -109,6 +118,15 @@ func (t *agentTemplate) harness(name string) *harnessStatus {
 		}
 	}
 	return nil
+}
+
+// harnessNames lists the Harnesses that reported on the template.
+func (t *agentTemplate) harnessNames() []string {
+	names := make([]string, 0, len(t.Status.Harnesses))
+	for _, h := range t.Status.Harnesses {
+		names = append(names, h.Harness)
+	}
+	return names
 }
 
 // condition is one condition's status ("True", "False", "Unknown", or ""
@@ -144,6 +162,16 @@ func (t *agentTemplate) mcpServer() string {
 	return ""
 }
 
+// skill is the template's skill of that name, nil when it carries none.
+func (t *agentTemplate) skill(name string) *templateSkill {
+	for i := range t.Spec.Skills {
+		if t.Spec.Skills[i].Name == name {
+			return &t.Spec.Skills[i]
+		}
+	}
+	return nil
+}
+
 // agentTemplateFrom reads the part of an AgentTemplate the proofs look at off
 // the object as the apiserver returned it.
 func agentTemplateFrom(obj *unstructured.Unstructured) (*agentTemplate, error) {
@@ -158,7 +186,8 @@ func agentTemplateFrom(obj *unstructured.Unstructured) (*agentTemplate, error) {
 	return &t, nil
 }
 
-// readAgentTemplate reads one AgentTemplate of the kagent namespace.
+// readAgentTemplate reads one AgentTemplate of the kagent namespace; a
+// missing one is the apiserver's NotFound.
 func readAgentTemplate(name string) (*agentTemplate, error) {
 	obj, err := readKagentObject(agentTemplateResource, name)
 	if err != nil {
@@ -171,6 +200,18 @@ func readAgentTemplate(name string) (*agentTemplate, error) {
 	return t, nil
 }
 
+// readKagentObject reads one object of the given resource (a kubectl resource
+// argument) in the kagent namespace, bounded by kubeReadTimeout.
+func readKagentObject(resourceArg, name string) (*unstructured.Unstructured, error) {
+	gvr, err := gvrFor(resourceArg)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
+	defer cancel()
+	return getObject(ctx, gvr, kagentNamespace, name)
+}
+
 // agentTemplateExists reports whether an agent's AgentTemplate is there; a
 // read that fails counts as absent.
 func agentTemplateExists(name string) bool {
@@ -178,126 +219,20 @@ func agentTemplateExists(name string) bool {
 	return err == nil
 }
 
-// toolsetCarrierName is the per-agent RemoteMCPServer of an agent with a
-// toolset.
-func toolsetCarrierName(agent string) string {
-	return toolsetCarrierPrefix + agent
-}
-
-// waitAgentTemplate waits for an agent's AgentTemplate to exist (agent-manager
-// writes it synchronously; the portal's apply path within a scaffolder task)
-// and returns it.
+// waitAgentTemplate waits for an agent's AgentTemplate to exist — the
+// render of its HelmRelease, seconds after the release is written — and
+// returns it.
 func waitAgentTemplate(name string) (*agentTemplate, error) {
 	var t *agentTemplate
 	var lastErr error
-	found := waitFor(20, 3*time.Second, func() bool {
+	found := waitFor(int(time.Minute/pollInterval), pollInterval, func() bool {
 		t, lastErr = readAgentTemplate(name)
 		return lastErr == nil
 	})
 	if !found {
-		return nil, fmt.Errorf("no AgentTemplate %s within 1 min: %w", name, lastErr)
+		return nil, fmt.Errorf("no AgentTemplate %s within 1 min (the HelmRelease's render): %w;\ncheck `kubectl -n %s get %s %s -o yaml`", name, lastErr, kagentNamespace, fluxHelmReleaseResource, name)
 	}
 	return t, nil
-}
-
-// waitAgentTemplateReady waits for the Harness's Ready condition on the
-// AgentTemplate — the controller has compiled the revision and taken its
-// golden snapshot (≈ 10 s with the runtime image cached, ≈ 40 s cold) — and
-// returns the template. The deadline reports the last Ready and Accepted
-// conditions seen, and the compile warnings.
-func waitAgentTemplateReady(name, harness string, timeout time.Duration) (*agentTemplate, error) {
-	var t *agentTemplate
-	var lastErr error
-	ready := waitFor(int(timeout/pollInterval), pollInterval, func() bool {
-		t, lastErr = readAgentTemplate(name)
-		if lastErr != nil {
-			return false
-		}
-		status, _ := t.harnessCondition(harness, conditionReady)
-		return status == conditionTrue
-	})
-	if ready {
-		return t, nil
-	}
-	if lastErr != nil {
-		return nil, fmt.Errorf("AgentTemplate %s: %w", name, lastErr)
-	}
-	readyStatus, readyMsg := t.harnessCondition(harness, conditionReady)
-	acceptedStatus, acceptedMsg := t.harnessCondition(harness, "Accepted")
-	var warnings []string
-	for _, h := range t.Status.Harnesses {
-		if h.Harness == harness {
-			warnings = h.Warnings
-		}
-	}
-	return nil, fmt.Errorf("AgentTemplate %s never became Ready on Harness %s within %s (Ready=%q %s; Accepted=%q %s; warnings %v);\ncheck `kubectl -n %s get %s %s -o yaml` and the label %s=%s the Harness admits",
-		name, harness, timeout, readyStatus, readyMsg, acceptedStatus, acceptedMsg, warnings, kagentNamespace, agentTemplateResource, name, harnessLabel, harness)
-}
-
-// waitAgentTemplateGone waits for the AgentTemplate and its toolset carrier to
-// be gone after a delete.
-func waitAgentTemplateGone(name string) error {
-	gone := waitFor(20, 3*time.Second, func() bool {
-		if agentTemplateExists(name) {
-			return false
-		}
-		_, err := readKagentObject(remoteMCPServerResource, toolsetCarrierName(name))
-		return err != nil
-	})
-	if !gone {
-		return fmt.Errorf("AgentTemplate %s or its carrier %s is still there 1 min after the delete", name, toolsetCarrierName(name))
-	}
-	return nil
-}
-
-// deleteAgentTemplate removes an agent's AgentTemplate and its toolset
-// carrier without waiting (`--ignore-not-found --wait=false`); best effort,
-// for the cleanup paths.
-func deleteAgentTemplate(name string) {
-	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
-	defer cancel()
-	for _, target := range []struct{ resource, name string }{
-		{agentTemplateResource, name},
-		{remoteMCPServerResource, toolsetCarrierName(name)},
-	} {
-		gvr, err := gvrFor(target.resource)
-		if err != nil {
-			continue
-		}
-		_ = deleteObject(ctx, gvr, kagentNamespace, target.name, 0)
-	}
-}
-
-// throwawayAgentTemplate is the AgentTemplate a proof brings along: the Go
-// ADK Harness, the ModelConfig, a terse prompt, no tool bindings, labelled as
-// agentlab's; description names the proof and says the proof deletes it.
-func throwawayAgentTemplate(name, modelConfig, description string) string {
-	return fmt.Sprintf(`apiVersion: %s
-kind: AgentTemplate
-metadata:
-  name: %s
-  namespace: %s
-  labels:
-    %s: agentlab
-    %s: %s
-spec:
-  description: %s
-  modelConfig:
-    name: %s
-  systemPrompt: You are a terse assistant. Answer in one short line.
-`, agentTemplateAPIVersion, name, kagentNamespace, managedByLabel, harnessLabel, kagentHarness, description, modelConfig)
-}
-
-// createThrowawayAgent applies a proof's own AgentTemplate and waits for its
-// golden snapshot on the Go ADK Harness (the first revision pulls the runtime
-// image into the Substrate layer cache and boots the actor). The caller
-// deletes it (deleteAgentTemplate) on every path.
-func createThrowawayAgent(name, modelConfig, description string, timeout time.Duration) error {
-	if _, err := applyManifests(context.Background(), []byte(throwawayAgentTemplate(name, modelConfig, description))); err != nil {
-		return err
-	}
-	_, err := waitAgentTemplateReady(name, kagentHarness, timeout)
-	return err
 }
 
 // agentTemplateManagers lists the field managers on an agent's AgentTemplate
@@ -313,78 +248,3 @@ func agentTemplateManagers(name string) ([]string, error) {
 	}
 	return managers, nil
 }
-
-// toolsetHeaderOf is the X-Muster-Toolset an agent's runtime sends, read off
-// what the template binds: "" for the shared muster server (no toolset, the
-// caller's bearer alone), the header's value on a per-agent carrier — the
-// literal value agent-manager writes, or the Secret key an older carrier
-// names. An error when the template binds no MCP server at all, or the
-// carrier is missing or carries no such header.
-func toolsetHeaderOf(t *agentTemplate) (string, error) {
-	server := t.mcpServer()
-	switch server {
-	case "":
-		return "", fmt.Errorf("no MCP server binding (spec.tools)")
-	case componentMuster:
-		return "", nil
-	}
-	rms, err := readKagentObject(remoteMCPServerResource, server)
-	if err != nil {
-		return "", fmt.Errorf("the bound RemoteMCPServer %s: %w", server, err)
-	}
-	return remoteMCPServerHeader(rms, toolsetHeader)
-}
-
-// remoteMCPServerHeader is the value of one spec.headersFrom entry of a
-// RemoteMCPServer: its literal value, or the Secret key it names, decoded.
-func remoteMCPServerHeader(rms *unstructured.Unstructured, name string) (string, error) {
-	headers, _, _ := unstructured.NestedSlice(rms.Object, "spec", "headersFrom")
-	for _, h := range headers {
-		m, ok := h.(map[string]any)
-		if !ok {
-			continue
-		}
-		if got, _, _ := unstructured.NestedString(m, nameKey); got != name {
-			continue
-		}
-		if value, found, _ := unstructured.NestedString(m, "value"); found {
-			return value, nil
-		}
-		kind, _, _ := unstructured.NestedString(m, "valueFrom", fieldTypeKey)
-		secret, _, _ := unstructured.NestedString(m, "valueFrom", nameKey)
-		key, _, _ := unstructured.NestedString(m, "valueFrom", "key")
-		if kind != kindSecret {
-			return "", fmt.Errorf("RemoteMCPServer %s takes %s from a %s (%s/%s), not a value the proof can read", rms.GetName(), name, kind, secret, key)
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
-		defer cancel()
-		obj, err := getObject(ctx, gvrSecrets, rms.GetNamespace(), secret)
-		if err != nil {
-			return "", fmt.Errorf("RemoteMCPServer %s takes %s from Secret %s/%s: %w", rms.GetName(), name, secret, key, err)
-		}
-		encoded, _, _ := unstructured.NestedString(obj.Object, "data", key)
-		value, err := base64.StdEncoding.DecodeString(encoded)
-		if err != nil {
-			return "", fmt.Errorf("secret %s key %s: %w", secret, key, err)
-		}
-		return string(value), nil
-	}
-	return "", fmt.Errorf("RemoteMCPServer %s carries no %s header (headersFrom names %v)", rms.GetName(), name, headerNames(headers))
-}
-
-// headerNames lists the names of a headersFrom slice, for an error.
-func headerNames(headers []any) []string {
-	var names []string
-	for _, h := range headers {
-		if m, ok := h.(map[string]any); ok {
-			if n, _, _ := unstructured.NestedString(m, nameKey); n != "" {
-				names = append(names, n)
-			}
-		}
-	}
-	slices.Sort(names)
-	return names
-}
-
-// fieldTypeKey is the `type` key of a headersFrom valueFrom (Secret | ConfigMap).
-const fieldTypeKey = "type"

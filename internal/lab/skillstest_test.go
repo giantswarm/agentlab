@@ -24,8 +24,8 @@ const condAccepted = "Accepted"
 func bootTemplate(name, readyStatus, reason, message string) *unstructured.Unstructured {
 	template := customObject(gvkAgentTemplate, kagentNamespace, name, map[string]string{harnessLabel: kagentHarness})
 	_ = unstructured.SetNestedSlice(template.Object, []any{map[string]any{
-		"harness":         kagentHarness,
-		"desiredRevision": testRevision,
+		fieldHarness:         kagentHarness,
+		fieldDesiredRevision: testRevision,
 		fieldConditions: []any{
 			map[string]any{fieldType: condAccepted, fieldStatus: conditionTrue, fieldReason: condAccepted, fieldMessage: "Harness admission selector matches the AgentTemplate"},
 			map[string]any{fieldType: "ResolvedRefs", fieldStatus: conditionTrue, fieldReason: "Resolved", fieldMessage: "All runtime references resolved"},
@@ -89,33 +89,35 @@ func TestSkillsAgentTemplate(t *testing.T) {
 	}
 }
 
-// kagentAdmission is kagent's default admission label, what the tests
-// render unless they test the Harness's own; platformHarnessLabel is the
-// connectivity chart's; the fixture names below are the test's.
+// kagentAdmission is the platform's admission label (the connectivity
+// chart's Harness selects on it), what the tests render unless they test
+// another Harness's own; legacyHarnessLabel is kagent's default, which a
+// Harness of another chart might still select on; the fixture names below
+// are the test's.
 var kagentAdmission = skillsTemplateShape{admission: map[string]string{harnessLabel: kagentHarness}, musterTools: true}
 
 const (
-	platformHarnessLabel = "agent-platform.giantswarm.io/harness"
-	exampleRepo          = "https://example.com/x"
-	gitAuthObject        = "skills-git-auth"
+	legacyHarnessLabel = "kagent.dev/harness"
+	exampleRepo        = "https://example.com/x"
+	gitAuthObject      = "skills-git-auth"
 )
 
 // TestSkillsAgentTemplateAdmissionLabels: the template carries the labels the
-// Harness admits — the platform's own label here — and not kagent's default
-// when the Harness does not select on it; agentlab's managed-by label stays.
+// Harness admits — kagent's default label here — and not the platform's when
+// the Harness does not select on it; agentlab's managed-by label stays.
 func TestSkillsAgentTemplateAdmissionLabels(t *testing.T) {
 	fixture, _ := SkillsFixture{}.resolve()
 	var obj map[string]any
-	if err := yaml.Unmarshal([]byte(skillsAgentTemplate(skillsTestAgent, defaultModelConfig, &fixture, skillsTemplateShape{admission: map[string]string{platformHarnessLabel: kagentHarness}})), &obj); err != nil {
+	if err := yaml.Unmarshal([]byte(skillsAgentTemplate(skillsTestAgent, defaultModelConfig, &fixture, skillsTemplateShape{admission: map[string]string{legacyHarnessLabel: kagentHarness}})), &obj); err != nil {
 		t.Fatal(err)
 	}
 	u := &unstructured.Unstructured{Object: obj}
 	labels := u.GetLabels()
-	if labels[platformHarnessLabel] != kagentHarness || labels[managedByLabel] != managedByAgentlabValue {
+	if labels[legacyHarnessLabel] != kagentHarness || labels[managedByLabel] != managedByAgentlabValue {
 		t.Errorf("labels = %v", labels)
 	}
 	if _, has := labels[harnessLabel]; has {
-		t.Errorf("kagent's default label rendered although the Harness does not select on it: %v", labels)
+		t.Errorf("the platform's label rendered although the Harness does not select on it: %v", labels)
 	}
 	if _, found, _ := unstructured.NestedSlice(obj, "spec", "tools"); found {
 		t.Errorf("tools rendered although the platform has no shared muster server: %v", obj["spec"])
@@ -229,35 +231,6 @@ func TestTerminalHarnessFailure(t *testing.T) {
 	}
 	if text, terminal := terminalHarnessFailure(&harnessStatus{}); terminal || text != "" {
 		t.Errorf("no conditions = %q %v", text, terminal)
-	}
-}
-
-// TestWaitGoldenBoot: a template Ready on the Harness returns ready with the
-// time it took; one failed for good returns before the timeout, terminal; one
-// still pending runs into the timeout, neither.
-func TestWaitGoldenBoot(t *testing.T) {
-	newFakeLab(t,
-		bootTemplate(testReadyName, conditionTrue, "Ready", "ActorTemplate golden snapshot is ready"),
-		bootTemplate("failed", condFalseStatus, "ActorTemplateFailed", "golden actor exited"),
-		bootTemplate("pending", condFalseStatus, "ActorTemplatePending", "waiting for the ActorTemplate golden snapshot"),
-	)
-	boot, err := waitGoldenBoot(testReadyName, kagentHarness, goldenBootPoll)
-	if err != nil || !boot.ready || boot.terminal || boot.template.Metadata.Name != testReadyName {
-		t.Errorf("ready: %+v %v", boot, err)
-	}
-	boot, err = waitGoldenBoot("failed", kagentHarness, goldenBootPoll)
-	if err != nil || boot.ready || !boot.terminal {
-		t.Errorf("failed: %+v %v", boot, err)
-	}
-	if text, _ := terminalHarnessFailure(boot.template.harness(kagentHarness)); !strings.Contains(text, "ActorTemplateFailed") {
-		t.Errorf("the failed template's condition: %q", text)
-	}
-	boot, err = waitGoldenBoot("pending", kagentHarness, goldenBootPoll)
-	if err != nil || boot.ready || boot.terminal || boot.elapsed < goldenBootPoll {
-		t.Errorf("pending: %+v %v", boot, err)
-	}
-	if _, err := waitGoldenBoot("absent", kagentHarness, goldenBootPoll); err == nil || !strings.Contains(err.Error(), "absent") {
-		t.Errorf("a missing template: %v", err)
 	}
 }
 

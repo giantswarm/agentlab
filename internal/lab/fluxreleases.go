@@ -85,7 +85,7 @@ func fluxReleases(manifests string) ([]fluxRelease, error) {
 			return nil, fmt.Errorf("parsing the rendered Flux manifests: %w", err)
 		}
 		switch doc.Kind {
-		case "OCIRepository":
+		case kindOCIRepository:
 			version := doc.Spec.Ref.Semver
 			if version == "" {
 				version = doc.Spec.Ref.Tag

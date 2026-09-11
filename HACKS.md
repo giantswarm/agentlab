@@ -254,28 +254,18 @@ backend (or point the default `deployTemplateRef` at an entity the image
 registers itself) so an install works without a network catalog location;
 then the embedded copy can be deleted.
 
-### U8. `golang-adk:0.9.12` not published to gsoci — agent pods ImagePullBackOff
-kagent-controller composes the runtime image for `runtime: go` agents from its
-own version tag: `IMAGE_REGISTRY`/golang-adk:`IMAGE_TAG` =
-`gsoci.azurecr.io/giantswarm/golang-adk:0.9.12` — with a `-full` suffix when
-the agent mounts skills. gsoci has kagent-controller:0.9.12,
-kagent-app:0.9.12 and kagent-skills-init:0.9.12, but golang-adk (both
-variants) stops at 0.9.11 (verified 2026-08-28 via the tags API), so every
-agent the platform creates — including everything deployed through the
-Backstage create flow — sits in ImagePullBackOff. Purely a publish/retag gap
-for the one repo.
-**Workaround (automated):** `healADKImages` (`internal/lab/adk.go`, run by
-`agentlab up`/`platform` when agents are enabled) resolves the tag kagent
-will reference from the kagent-controller ConfigMap and, per variant
-(plain/`-full`), pulls the real image first; only when the registry does not
-have it does it retag the newest published older release in its place and
-side-load it into the node. Self-converging: the pull-first order means the
-moment upstream publishes the real tag, the stand-in is overwritten and
-side-loaded on the next `up` — no manual cleanup. Failures downgrade to a
-note; the platform install never blocks on this heal.
-**Unblocks:** Giant Swarm image retagging — publish golang-adk (plain and
-`-full`) at every kagent release tag alongside the other kagent images; the
-heal then degenerates to an image preload and can eventually be deleted.
+### U8. `golang-adk:0.9.12` not published to gsoci — agent pods ImagePullBackOff — RETIRED
+kagent 0.x's controller composed the runtime image for `runtime: go` agents
+from its own version tag (`IMAGE_REGISTRY`/golang-adk:`IMAGE_TAG`), which
+Giant Swarm's retagging lagged for exactly that repo, leaving every created
+agent in ImagePullBackOff; `healADKImages` (`internal/lab/adk.go`) pulled
+the tag or stood in the newest published older release and side-loaded it.
+Retired with kagent API v2: the platform `Harness` pins its runtime image by
+digest (the connectivity chart's `kagent.harness.image`, moved with the line's
+re-pins), the controller composes no image from its tag, and there is no
+agent pod — agents run as Substrate actors from the Harness's image. The
+heal and its file are deleted; the image reaches the node through the
+preload (`preload.go`) like every other of the platform's.
 
 ### U9. `components.kagent.postRenderers` patch: fixed nodePort pinned onto the kagent-ui Service
 The lab host-publishes the kagent UI through a kind port mapping, which needs
@@ -307,24 +297,17 @@ the kind config maps 30443 onto `platform.gatewayPort` (default 443).
 Service's nodePort; then this Service is deleted and the kind mapping targets
 the controller's own Service.
 
-### U11. Agent CRD patched with `spec.iconUrl` — BLOCKED UPSTREAM
-The kagent package (giantswarm/kagent, ex-kagent-app) pins the upstream 0.9.x
-CRDs, whose v1alpha2 Agent spec predates the A2A-card metadata fields added on
-upstream main for 0.10 (kagent-dev/kagent#2188). The Backstage create flow
-composes `agent.iconUrl` (the deterministic `avatars.<baseDomain>` URL)
-whenever the installation has a `baseDomain` — this lab always sets one — the
-`agent` chart renders it into `Agent.spec.iconUrl`, and server-side apply
-rejects the whole HelmRelease: `.spec.iconUrl: field not declared in schema`.
-The agents list then stays empty with no visible error, because the scaffolder
-task only kube-applies the HelmRelease and reports success. Not lab-specific:
-any installation with a configured `baseDomain` fails the same way.
-**Workaround (automated):** `patchAgentCRDIconURL` (`internal/lab/kagentcrd.go`,
-run by `agentlab up`/`platform` when agents are enabled) adds upstream main's
-`iconUrl` property (optional string, stored and ignored by the 0.9.x
-controller) to the installed CRD's v1alpha2 schema. Idempotent, and a no-op
-once the CRD already carries the field — a kagent bump retires it silently.
-**Unblocks:** giantswarm/kagent#55 — ship CRDs that declare the A2A-card
-metadata fields (backport or the 0.10 bump); then delete `kagentcrd.go`.
+### U11. Agent CRD patched with `spec.iconUrl` — RETIRED
+The kagent 0.x package pinned upstream 0.9.x CRDs whose v1alpha2 Agent spec
+predated the A2A-card metadata fields; the Backstage create flow composed
+`agent.iconUrl`, the 0.x agent chart rendered it into `Agent.spec.iconUrl`,
+and server-side apply rejected the whole HelmRelease. `patchAgentCRDIconURL`
+(`internal/lab/kagentcrd.go`) added the property to the installed CRD.
+Retired with kagent API v2: no `agents.kagent.dev` is served any more, and
+the Generic agent chart 1.x renders `agent.iconUrl` as the
+`ui.giantswarm.io/icon-url` annotation on the `AgentTemplate` (which has no
+icon field) — the Dev Portal reads the annotation, `agents-test` asserts it.
+The patch and its file are deleted.
 
 ### U12. kube-prometheus-stack: `kyvernoPolicyExceptions.enabled: false` required on Kyverno-less clusters
 The GS kube-prometheus-stack wrapper (22.0.0) renders a `kyverno.io/v2alpha1

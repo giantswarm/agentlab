@@ -234,28 +234,6 @@ func (ps *portalSession) backstageGet(path string) (int, []byte, error) {
 	return resp.StatusCode, raw, nil
 }
 
-// backstagePostJSON is a plain authenticated JSON POST to a Backstage
-// backend path.
-func (ps *portalSession) backstagePostJSON(path string, body any) (int, []byte, error) {
-	payload, err := json.Marshal(body)
-	if err != nil {
-		return 0, nil, err
-	}
-	req, err := http.NewRequest(http.MethodPost, ps.cfg.BackstageBaseURL()+path, strings.NewReader(string(payload)))
-	if err != nil {
-		return 0, nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+ps.bsToken)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := ps.client.Do(req)
-	if err != nil {
-		return 0, nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	raw, _ := io.ReadAll(resp.Body)
-	return resp.StatusCode, raw, nil
-}
-
 // installationQuery is the `?installation=` parameter every muster-backend
 // route takes. The umbrella's app-config names the muster installation after
 // the Helm release, not the kind cluster.

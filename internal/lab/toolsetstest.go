@@ -8,25 +8,25 @@ import (
 	"sync"
 	"time"
 
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-
 	"github.com/giantswarm/agentlab/internal/config"
 )
 
 // The toolset proof.
 //
 // A toolset is the selector list an agent declares — agent-manager argument
-// `toolset`, header `X-Muster-Toolset` on the agent's own muster carrier (the
-// per-agent RemoteMCPServer its AgentTemplate binds) — that bounds which of
-// the gateway's tools its meta-tools can see and call. muster evaluates it
-// per request, statelessly, on the caller's own catalogue, so the invoking
-// human's identity and the backends' authorization stay the boundary; the
-// toolset is composition. This proof drives the components in the lab
-// through every seam the plan names: agent-manager's contract, the objects it
-// writes, muster's resolution and refusal under the header the agent's
-// runtime sends, the runtime actually sending it (a turn on kagent main), the
-// per-server sign-in the toolset resolution depends on (the one uncertain
-// claim of the plan), and the portal's Tools step and composer path.
+// `toolset`, the agent chart's `toolset` value on its HelmRelease, header
+// `X-Muster-Toolset` on the agent's own RemoteMCPServer (the one its
+// AgentTemplate binds) — that bounds which of the gateway's tools its
+// meta-tools can see and call. muster evaluates it per request, statelessly,
+// on the caller's own catalogue, so the invoking human's identity and the
+// backends' authorization stay the boundary; the toolset is composition.
+// This proof drives the components in the lab through every seam the plan
+// names: agent-manager's contract, the release it writes and the objects the
+// chart renders from it, muster's resolution and refusal under the header
+// the agent's runtime sends, the runtime actually sending it (a turn through
+// the edge), the per-server sign-in the toolset resolution depends on (the
+// one uncertain claim of the plan), and the portal's Tools step and its
+// create path.
 
 // Names of what the proof creates; every one of them is deleted by the same
 // run (and a leftover of an aborted run is removed first).
@@ -36,7 +36,7 @@ const (
 	toolsetsAgentNone         = toolsetsTestPrefix + "-none"
 	toolsetsAgentFull         = toolsetsTestPrefix + "-full"
 	toolsetsAgentOAuth        = toolsetsTestPrefix + "-oauth"
-	toolsetsAgentLegacy       = toolsetsTestPrefix + "-legacy"
+	toolsetsAgentUnscoped     = toolsetsTestPrefix + "-unscoped"
 	toolsetsAgentPortal       = toolsetsTestPrefix + "-portal"
 	toolsetsWorkflowQuery     = toolsetsTestPrefix + "-query"
 	toolsetsWorkflowMutating  = toolsetsTestPrefix + "-mutating"
@@ -63,9 +63,9 @@ type ToolsetsTestOptions struct {
 	// path and the chat-only agent); the objects, muster's resolution and
 	// the sign-in claim are proven regardless.
 	SkipChat bool
-	// SkipPortal skips the portal's apply path (the composed AgentTemplate
-	// through the scaffolder template) — for a portal that does not speak
-	// kagent main yet; the Tools step's endpoints are proven regardless.
+	// SkipPortal skips the portal's create path (agent-manager's create_agent
+	// through the portal's muster backend as the person); the Tools step's
+	// endpoints are proven regardless.
 	SkipPortal bool
 }
 
@@ -82,10 +82,10 @@ var toolsetsAgents = []toolsetsAgent{
 	{toolsetsAgentOAuth, []string{toolsetFixtureSelector}},
 }
 
-// toolsetsTestV2 is the headless end-to-end proof of declared toolsets against
+// ToolsetsTest is the headless end-to-end proof of declared toolsets against
 // the released components in the lab. See the file comment for what it
 // covers; it prints one PASS line per claim and leaves nothing behind.
-func toolsetsTestV2(cfg *config.Config, email string, opts ToolsetsTestOptions) error {
+func ToolsetsTest(cfg *config.Config, email string, opts ToolsetsTestOptions) error {
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
 	}
@@ -117,7 +117,7 @@ func toolsetsTestV2(cfg *config.Config, email string, opts ToolsetsTestOptions) 
 	if opts.ModelConfig == "" {
 		opts.ModelConfig = defaultModelConfig
 	}
-	toolPrefix := "x_" + agentManagerMCPServer + "_"
+	toolPrefix := agentManagerToolPrefix
 	var verdicts []string
 	pass := func(format string, a ...any) { verdicts = append(verdicts, fmt.Sprintf("PASS: "+format, a...)) }
 
@@ -145,15 +145,16 @@ func toolsetsTestV2(cfg *config.Config, email string, opts ToolsetsTestOptions) 
 	if err := proveAgentManagerToolset(admin, toolPrefix, opts.ModelConfig); err != nil {
 		return err
 	}
-	pass("agent-manager refuses create_agent without a toolset (naming the presets and preset:none), refuses toolNames, and accepts a toolset")
+	pass("agent-manager refuses create_agent without a toolset (naming the presets and preset:none), refuses toolNames, and writes a HelmRelease of the agent chart for each toolset")
 
-	// 2. What agent-manager wrote: the AgentTemplate binding the per-agent
-	//    muster carrier with the header, agent-manager's own report — and the
-	//    agent that declares none.
+	// 2. What agent-manager wrote and the chart rendered: values.toolset on
+	//    the HelmRelease, the AgentTemplate binding the agent's own
+	//    RemoteMCPServer with the header, agent-manager's own report — the
+	//    chat-only agent without any, and the release that declares none.
 	if err := proveRenderedToolsets(admin, toolPrefix, opts.ModelConfig); err != nil {
 		return err
 	}
-	pass("%s binds its muster carrier %s carrying %s=%s (never the unscoped %s server); %s binds no unscoped server either; an agent without a toolset binds %s directly and reports implicitFullAccess", toolsetsAgentReadOnly, toolsetCarrierName(toolsetsAgentReadOnly), toolsetHeader, presetReadOnly, componentMuster, toolsetsAgentNone, componentMuster)
+	pass("every HelmRelease carries values.toolset as declared; %s binds its own RemoteMCPServer %s carrying %s=%s; %s (%s) renders no RemoteMCPServer and binds nothing; a release without a toolset renders %s without the header and reports implicitFullAccess", toolsetsAgentReadOnly, toolsetsAgentReadOnly, toolsetHeader, presetReadOnly, toolsetsAgentNone, presetNone, toolsetsAgentUnscoped)
 
 	// 3. muster resolves and refuses per request, under the header the
 	//    agents' runtimes send, in a session of the same user.
@@ -176,10 +177,10 @@ func toolsetsTestV2(cfg *config.Config, email string, opts ToolsetsTestOptions) 
 	if opts.SkipChat {
 		note("skipping the model turns (--skip-chat): the runtime path and the chat-only turn were not exercised")
 	} else {
-		if err := proveAgentRuntimeToolsets(cfg, token, opts.ModelConfig, toolPrefix, admin, res); err != nil {
+		if err := proveAgentRuntimeToolsets(cfg, token, opts.ModelConfig, res); err != nil {
 			return err
 		}
-		pass("through kagent main (an AgentInstance and one A2A SendMessage through the edge as %s) %s lists nothing outside %s — read-only core tools may appear, no writer does; the runtime sends the header and the user's token — and %s answers a chat turn under %s", user.Email, toolsetsAgentReadOnly, presetReadOnly, toolsetsAgentNone, presetNone)
+		pass("through kagent (an AgentInstance and one A2A SendMessage through the edge as %s) %s lists nothing outside %s — read-only core tools may appear, no writer does; the runtime sends the header and the user's token — and %s answers a chat turn under %s", user.Email, toolsetsAgentReadOnly, presetReadOnly, toolsetsAgentNone, presetNone)
 	}
 
 	// 5. The OAuth fixture: the sign-in completed in the portal path is what
@@ -191,7 +192,7 @@ func toolsetsTestV2(cfg *config.Config, email string, opts ToolsetsTestOptions) 
 	}
 	verdicts = append(verdicts, g6...)
 
-	// 6. The portal: the Tools step's endpoints and the composer's apply path.
+	// 6. The portal: the Tools step's endpoints and its create path.
 	portal, err := proveToolsetPortal(cfg, user, opts)
 	if err != nil {
 		return err
@@ -203,25 +204,19 @@ func toolsetsTestV2(cfg *config.Config, email string, opts ToolsetsTestOptions) 
 	return nil
 }
 
-// toolsetsCleanup removes everything the proof creates: the agents through
-// agent-manager (force: the legacy and portal templates have no agent-manager
-// provenance), the AgentTemplates and carriers directly when agent-manager
-// does not list them, the workflows, and the fixture sign-in of the run.
+// toolsetsCleanup removes everything the proof creates: the agents (their
+// HelmReleases, and whatever render is left), the workflows, and the fixture
+// sign-in of the run.
 func toolsetsCleanup(s *musterSession, toolPrefix string) {
-	names := []string{toolsetsAgentReadOnly, toolsetsAgentNone, toolsetsAgentFull, toolsetsAgentOAuth, toolsetsAgentLegacy, toolsetsAgentPortal}
+	names := []string{toolsetsAgentReadOnly, toolsetsAgentNone, toolsetsAgentFull, toolsetsAgentOAuth, toolsetsAgentUnscoped, toolsetsAgentPortal}
 	removed := false
 	for _, name := range names {
-		if _, err := s.callServerTool(toolPrefix+"get_agent", map[string]any{nameKey: name}); err != nil {
-			// Not known to agent-manager: an AgentTemplate may still exist.
-			deleteAgentTemplate(name)
+		if !agentExists(name) {
 			continue
 		}
-		if _, err := s.callServerTool(toolPrefix+"delete_agent", map[string]any{nameKey: name, forceKey: true}); err != nil {
-			note("cleanup: delete_agent %s: %v", name, err)
+		if err := removeAgent(name); err != nil {
+			note("cleanup: %v", err)
 		}
-		// agent-manager keeps a carrier it did not label (the legacy and
-		// portal agents' are the proof's own); the direct delete takes both.
-		deleteAgentTemplate(name)
 		removed = true
 	}
 	for _, wf := range []string{toolsetsWorkflowQuery, toolsetsWorkflowMutating} {
@@ -232,28 +227,32 @@ func toolsetsCleanup(s *musterSession, toolPrefix string) {
 	}
 	if removed {
 		for _, name := range names {
-			_ = waitAgentGone(s, toolPrefix, name)
+			_ = waitAgentUnlisted(s, name)
 		}
 		note("cleanup: %s* agents and workflows removed", toolsetsTestPrefix)
+	}
+}
+
+// toolsetsSpec is the throwaway agent of the proof by name and toolset.
+func toolsetsSpec(name, modelConfig string, toolset []string) agentSpec {
+	return agentSpec{
+		Name: name, ModelConfig: modelConfig, DisplayName: "agentlab toolset proof: " + strings.TrimPrefix(name, toolsetsTestPrefix+"-"),
+		Description:   "Throwaway agent of `agentlab toolsets-test`; deleted by the same run.",
+		SystemMessage: toolsetTestAgentSystemMsg, Toolset: toolset,
 	}
 }
 
 // proveAgentManagerToolset drives agent-manager's contract through muster:
 // create_agent without a toolset is refused naming the shipped presets and
 // pointing at preset:none; the removed toolNames argument is refused with the
-// explaining error; the four agents of the proof are created with theirs.
+// explaining error; the four agents of the proof are created with theirs — a
+// HelmRelease of the agent chart each.
 func proveAgentManagerToolset(s *musterSession, toolPrefix, modelConfig string) error {
 	step("%screate_agent without a toolset — expecting the refusal", toolPrefix)
-	base := func(name string) map[string]any {
-		return map[string]any{
-			nameKey: name, modelConfigKey: modelConfig, displayNameKey: "agentlab toolset proof: " + strings.TrimPrefix(name, toolsetsTestPrefix+"-"),
-			descriptionKey:   "Throwaway agent of `agentlab toolsets-test`; deleted by the same run.",
-			systemMessageKey: toolsetTestAgentSystemMsg,
-		}
-	}
-	text, err := s.callServerTool(toolPrefix+"create_agent", base(toolsetsAgentReadOnly))
+	writer := agentManagerWriter{s}
+	_, err := writer.createAgent(toolsetsSpec(toolsetsAgentReadOnly, modelConfig, nil))
 	if err == nil {
-		return fmt.Errorf("create_agent without a toolset was accepted (%.200s) — agent-manager predates the toolset contract (needs ≥ 0.4.0)", text)
+		return fmt.Errorf("create_agent without a toolset was accepted — agent-manager predates the toolset contract")
 	}
 	for _, want := range []string{toolsetKey, presetReadOnlyName, presetNoneName, "infrastructure", "agent-platform", presetFullName, presetNone} {
 		if !strings.Contains(err.Error(), want) {
@@ -261,13 +260,15 @@ func proveAgentManagerToolset(s *musterSession, toolPrefix, modelConfig string) 
 		}
 	}
 	note("refused: %s", excerpt(err.Error(), 220))
-	if agentTemplateExists(toolsetsAgentReadOnly) {
-		return fmt.Errorf("AgentTemplate %s exists although the create was refused", toolsetsAgentReadOnly)
+	if agentExists(toolsetsAgentReadOnly) {
+		return fmt.Errorf("something of %s exists although the create was refused", toolsetsAgentReadOnly)
 	}
 
 	step("%screate_agent with the removed toolNames argument — expecting the explaining refusal", toolPrefix)
-	args := base(toolsetsAgentReadOnly)
-	args[toolsetKey] = []string{presetReadOnly}
+	args, err := createAgentArgs(toolsetsSpec(toolsetsAgentReadOnly, modelConfig, []string{presetReadOnly}))
+	if err != nil {
+		return err
+	}
 	args["toolNames"] = []string{"list_tools"}
 	if text, err := s.callServerTool(toolPrefix+"create_agent", args); err == nil {
 		return fmt.Errorf("create_agent accepted toolNames (%.200s); the inert knob must be refused", text)
@@ -279,68 +280,50 @@ func proveAgentManagerToolset(s *musterSession, toolPrefix, modelConfig string) 
 
 	for _, a := range toolsetsAgents {
 		step("%screate_agent %s with toolset %v", toolPrefix, a.name, a.toolset)
-		args := base(a.name)
-		args[toolsetKey] = a.toolset
-		var created struct {
-			RequestedBy string          `json:"requestedBy"`
-			Created     map[string]bool `json:"created"`
-		}
-		if err := s.callServerJSON(toolPrefix+"create_agent", args, &created); err != nil {
+		written, err := writer.createAgent(toolsetsSpec(a.name, modelConfig, a.toolset))
+		if err != nil {
 			return err
 		}
-		if !created.Created[createdAgentTemplateKey] || !created.Created[createdToolsetCarrierKey] {
-			return fmt.Errorf("create_agent %s reported created=%v, wanted the AgentTemplate and its toolset carrier written", a.name, created.Created)
+		if !written.HelmRelease {
+			return fmt.Errorf("create_agent %s reported no HelmRelease written", a.name)
 		}
-		note("AgentTemplate written (created: %v), requestedBy=%s", created.Created, created.RequestedBy)
+		note("HelmRelease written (OCIRepository created: %v), requestedBy=%s", written.OCIRepository, written.RequestedBy)
 	}
 	return nil
 }
 
-// readKagentObject reads one object of the given resource (a kubectl resource
-// argument) in the kagent namespace, bounded by kubeReadTimeout.
-func readKagentObject(resourceArg, name string) (*unstructured.Unstructured, error) {
-	gvr, err := gvrFor(resourceArg)
-	if err != nil {
-		return nil, err
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
-	defer cancel()
-	return getObject(ctx, gvr, kagentNamespace, name)
-}
-
-// proveRenderedToolsets asserts the objects behind the created agents and
-// agent-manager's report of them — the AgentTemplate, admitted by the Go ADK
-// Harness, binding the per-agent muster carrier that sends the header — and
-// the shape of an agent that declares no toolset: an AgentTemplate binding
-// the shared muster server directly, like the platform's own examples.
+// proveRenderedToolsets asserts the release behind each created agent and
+// what the chart rendered from it — values.toolset as declared, the
+// AgentTemplate admitted by the platform Harness binding the agent's own
+// RemoteMCPServer that sends the header, none of either for the chat-only
+// agent — next to agent-manager's report; and the shape of a release that
+// declares no toolset: the RemoteMCPServer without the header, implicit full
+// access.
 func proveRenderedToolsets(s *musterSession, toolPrefix, modelConfig string) error {
 	for _, a := range toolsetsAgents {
-		step("Agent %s: the AgentTemplate, its muster carrier and the header", a.name)
+		step("Agent %s: values.toolset on the HelmRelease, the AgentTemplate, its RemoteMCPServer and the header", a.name)
+		release, err := readAgentRelease(a.name)
+		if err != nil {
+			return err
+		}
+		declared, set, err := release.toolset()
+		if err != nil {
+			return err
+		}
+		if !set || !slices.Equal(declared, a.toolset) {
+			return fmt.Errorf("HelmRelease %s carries values.toolset=%v (declared %v), wanted %v — the release is the toolset's anchor", a.name, declared, set, a.toolset)
+		}
 		t, err := waitAgentTemplate(a.name)
 		if err != nil {
 			return err
 		}
-		if got := t.Metadata.Labels[harnessLabel]; got != kagentHarness {
-			return fmt.Errorf("AgentTemplate %s carries %s=%q, wanted %q (no Harness admits it otherwise)", a.name, harnessLabel, got, kagentHarness)
+		if err := assertAgentRender(t, toolsetsSpec(a.name, modelConfig, a.toolset), release.value("muster", "url")); err != nil {
+			return err
 		}
-		want := strings.Join(a.toolset, ",")
-		bound := t.mcpServer()
-		header, err := toolsetHeaderOf(t)
-		// Every declared toolset rides on a carrier, preset:none included
-		// (muster resolves it to no tools); a template binding the shared
-		// server would be unscoped, one binding nothing is not an agent-manager
-		// agent at all.
-		switch {
-		case bound == componentMuster:
-			return fmt.Errorf("agent %s (toolset %v) binds the shared %s server directly — unscoped access, the toolset is never sent", a.name, a.toolset, componentMuster)
-		case err != nil:
-			return fmt.Errorf("agent %s: %w", a.name, err)
-		case bound != toolsetCarrierName(a.name):
-			return fmt.Errorf("agent %s binds RemoteMCPServer %q, wanted its own carrier %s", a.name, bound, toolsetCarrierName(a.name))
-		case header != want:
-			return fmt.Errorf("carrier %s sends %s=%q, wanted %q", bound, toolsetHeader, header, want)
-		default:
-			note("binds %s/%s carrying %s=%s", remoteMCPServerKind, bound, toolsetHeader, header)
+		if bound := t.mcpServer(); bound == "" {
+			note("values.toolset %v; the template binds nothing and no RemoteMCPServer %s exists (chat-only)", declared, a.name)
+		} else {
+			note("values.toolset %v; binds %s/%s carrying %s=%s", declared, remoteMCPServerKind, bound, toolsetHeader, strings.Join(a.toolset, ","))
 		}
 		var got struct {
 			Toolset            []string `json:"toolset"`
@@ -355,39 +338,25 @@ func proveRenderedToolsets(s *musterSession, toolPrefix, modelConfig string) err
 		note("get_agent reports toolset %v", got.Toolset)
 	}
 
-	step("An agent without a toolset (an AgentTemplate binding %s directly): no header, implicit full access", componentMuster)
-	manifest := fmt.Sprintf(`apiVersion: %s
-kind: AgentTemplate
-metadata:
-  name: %s
-  namespace: %s
-  labels:
-    %s: agentlab
-    %s: %s
-spec:
-  description: "Throwaway agent of agentlab toolsets-test without a toolset; deleted by the same run."
-  modelConfig:
-    name: %s
-  systemPrompt: %q
-  tools:
-    - mcp:
-        server:
-          kind: %s
-          name: %s
-`, agentTemplateAPIVersion, toolsetsAgentLegacy, kagentNamespace, managedByLabel, harnessLabel, kagentHarness, modelConfig, toolsetTestAgentSystemMsg, remoteMCPServerKind, componentMuster)
-	if _, err := applyManifests(context.Background(), []byte(manifest)); err != nil {
+	step("A release without a toolset (HelmRelease %s applied directly): the RemoteMCPServer without the header, implicit full access", toolsetsAgentUnscoped)
+	unscoped := toolsetsSpec(toolsetsAgentUnscoped, modelConfig, nil)
+	unscoped.Description = "Throwaway agent of `agentlab toolsets-test` without a toolset; deleted by the same run."
+	if _, err := (helmReleaseWriter{}).createAgent(unscoped); err != nil {
 		return err
 	}
-	t, err := waitAgentTemplate(toolsetsAgentLegacy)
+	t, err := waitAgentTemplate(toolsetsAgentUnscoped)
 	if err != nil {
 		return err
 	}
-	header, err := toolsetHeaderOf(t)
-	if err != nil {
-		return fmt.Errorf("agent %s: %w", toolsetsAgentLegacy, err)
+	if err := assertAgentRender(t, unscoped, ""); err != nil && !strings.Contains(err.Error(), "points at") {
+		return err
 	}
-	if header != "" {
-		return fmt.Errorf("agent %s declares no toolset but its binding carries %s=%q", toolsetsAgentLegacy, toolsetHeader, header)
+	header, found, err := toolsetHeaderOf(t)
+	if err != nil {
+		return fmt.Errorf("agent %s: %w", toolsetsAgentUnscoped, err)
+	}
+	if found {
+		return fmt.Errorf("agent %s declares no toolset but its RemoteMCPServer carries %s=%q", toolsetsAgentUnscoped, toolsetHeader, header)
 	}
 	var list struct {
 		Agents []struct {
@@ -401,7 +370,7 @@ spec:
 	}
 	seen := false
 	for _, a := range list.Agents {
-		if a.Name != toolsetsAgentLegacy {
+		if a.Name != toolsetsAgentUnscoped {
 			continue
 		}
 		seen = true
@@ -410,9 +379,9 @@ spec:
 		}
 	}
 	if !seen {
-		return fmt.Errorf("list_agents does not list %s", toolsetsAgentLegacy)
+		return fmt.Errorf("list_agents does not list %s", toolsetsAgentUnscoped)
 	}
-	note("binds %s directly, no header; list_agents: implicitFullAccess=true", componentMuster)
+	note("binds its RemoteMCPServer %s without %s; list_agents: implicitFullAccess=true", toolsetsAgentUnscoped, toolsetHeader)
 	return nil
 }
 
@@ -831,22 +800,18 @@ func mcpServerToolGroups() (map[string]string, error) {
 	return labels, nil
 }
 
-// waitAgentReady polls agent-manager's get_agent_status until the verdict is
-// ready.
-func waitAgentReady(s *musterSession, toolPrefix, name string) error {
-	var status struct {
-		Verdict string `json:"verdict"`
-		Summary string `json:"summary"`
-	}
-	ready := waitFor(60, 3*time.Second, func() bool {
-		status.Verdict, status.Summary = "", ""
-		if err := s.callServerJSON(toolPrefix+"get_agent_status", map[string]any{nameKey: name}, &status); err != nil {
-			return false
+// awaitAgentsReady waits for the named agents to be Ready on the platform
+// Harness, one after the other (waitAgentReady), and says how long each took.
+func awaitAgentsReady(names ...string) error {
+	for _, name := range names {
+		r, err := waitAgentReady(name, agentReadyTimeout)
+		if err != nil {
+			return err
 		}
-		return status.Verdict == verdictReady
-	})
-	if !ready {
-		return fmt.Errorf("%s never reached ready (last: %s — %s);\ncheck `kubectl -n %s get %s,%s`", name, status.Verdict, status.Summary, kagentNamespace, agentTemplateResource, remoteMCPServerResource)
+		if !r.ready {
+			return r.failure(name, agentReadyTimeout)
+		}
+		note("%s Ready on Harness %s after %s", name, kagentHarness, r.elapsed.Round(time.Second))
 	}
 	return nil
 }
@@ -875,15 +840,13 @@ func toolNamesInReply(reply string) []string {
 // proveAgentRuntimeToolsets is the runtime path: the agents answer real A2A
 // turns as the user, and what they report seeing is what their header
 // resolves to — so kagent sends the header and the token.
-func proveAgentRuntimeToolsets(cfg *config.Config, token, modelConfig, toolPrefix string, s *musterSession, res *musterToolsetResults) error {
-	for _, name := range []string{toolsetsAgentReadOnly, toolsetsAgentNone} {
-		step("Waiting for %s to be ready (ModelConfig %s)", name, modelConfig)
-		if err := waitAgentReady(s, toolPrefix, name); err != nil {
-			return err
-		}
+func proveAgentRuntimeToolsets(cfg *config.Config, token, modelConfig string, res *musterToolsetResults) error {
+	step("Waiting for %s and %s to be Ready on Harness %s (ModelConfig %s)", toolsetsAgentReadOnly, toolsetsAgentNone, kagentHarness, modelConfig)
+	if err := awaitAgentsReady(toolsetsAgentReadOnly, toolsetsAgentNone); err != nil {
+		return err
 	}
 	step("A2A turn as the user: %s reports its tools", toolsetsAgentReadOnly)
-	reply, err := agentTurnAs(cfg, toolsetsAgentReadOnly, token, toolListingPrompt)
+	reply, err := firstTurnAs(cfg, toolsetsAgentReadOnly, token, toolListingPrompt)
 	if err != nil {
 		return err
 	}
@@ -915,7 +878,7 @@ func proveAgentRuntimeToolsets(cfg *config.Config, token, modelConfig, toolPrefi
 	note("%d tools reported, %slist among them, every one within %s (%d read-only core tools, no writer)", len(names), k8sPrefix, presetReadOnly, coreReported)
 
 	step("A2A turn as the user: %s (toolset %s, no tools to call) answers a chat turn", toolsetsAgentNone, presetNone)
-	reply, err = agentTurnAs(cfg, toolsetsAgentNone, token, "Reply with exactly the word pong and nothing else.")
+	reply, err = firstTurnAs(cfg, toolsetsAgentNone, token, "Reply with exactly the word pong and nothing else.")
 	if err != nil {
 		return err
 	}

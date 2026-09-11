@@ -106,8 +106,8 @@ nothing says "out of CPU": `agentgateway` (or any late pod) sits `Pending` while
 `kubectl describe node` shows CPU requests at 95%+ of allocatable; the
 platform install then waits on a workload that will never start and times
 out. With the platform up but the node full, `models-test` gets as far as the
-agent turn and fails there — the agent's own pod cannot be scheduled, so the
-Agent CR never goes `Ready`.
+agent turn and fails there — Substrate's workers cannot be scheduled, so the
+agent's `AgentTemplate` never goes `Ready` on the Harness.
 
 Disk is not usually the constraint. A first boot pulls a few GiB of images —
 on the *host*, always, and side-loads them into the node — and that host
