@@ -179,7 +179,7 @@ func backstageLogin(cfg *config.Config, user *config.User) (*portalSession, erro
 // the Backstage identity token, the given extra headers, the body as JSON
 // when one is given. Returns the status and the raw answer.
 func (ps *portalSession) request(method, path string, body any, headers map[string]string) (int, []byte, error) {
-	resp, err := ps.open(method, path, body, headers)
+	resp, err := ps.open(ps.client, method, path, body, headers)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -189,8 +189,10 @@ func (ps *portalSession) request(method, path string, body any, headers map[stri
 }
 
 // open sends the request and hands the response back unread — for the
-// streaming route; every other caller goes through request.
-func (ps *portalSession) open(method, path string, body any, headers map[string]string) (*http.Response, error) {
+// streaming route; every other caller goes through request. client is the
+// session's unless the caller needs another bound (a turn outlives the
+// session client's timeout, which covers the whole exchange).
+func (ps *portalSession) open(client *http.Client, method, path string, body any, headers map[string]string) (*http.Response, error) {
 	var payload io.Reader
 	if body != nil {
 		raw, err := json.Marshal(body)
@@ -210,7 +212,7 @@ func (ps *portalSession) open(method, path string, body any, headers map[string]
 	for name, value := range headers {
 		req.Header.Set(name, value)
 	}
-	return ps.client.Do(req)
+	return client.Do(req)
 }
 
 // musterHeaders is the muster plugin's hop: the backend promotes the Dex
@@ -301,9 +303,12 @@ func (ps *portalSession) kagentJSON(method, path string, body, out any) (int, []
 // and hands every SSE data frame to onFrame as it arrives — the relay
 // flushes per event, so the frames come as kagent produces them — until the
 // stream ends or onFrame returns false. A status other than 200 is the
-// route's refusal, returned with its body.
+// route's refusal, returned with its body. The stream is bounded by the
+// turn timeout, not the session client's (which covers the whole exchange).
 func (ps *portalSession) kagentStream(path string, body any, onFrame func(streamFrame) bool) error {
-	resp, err := ps.open(http.MethodPost, kagentPath(path), body, ps.kagentHeaders())
+	streaming := *ps.client
+	streaming.Timeout = portalTurnTimeout
+	resp, err := ps.open(&streaming, http.MethodPost, kagentPath(path), body, ps.kagentHeaders())
 	if err != nil {
 		return err
 	}
