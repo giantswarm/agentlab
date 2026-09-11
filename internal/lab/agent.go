@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 	"time"
@@ -230,25 +231,39 @@ func (w portalAgentManagerWriter) createAgent(spec agentSpec) (*agentWritten, er
 	if err != nil {
 		return nil, err
 	}
-	if status != 200 {
-		return nil, fmt.Errorf("POST /api/muster/call %screate_agent answered %d: %.300s", agentManagerToolPrefix, status, raw)
-	}
-	var envelope toolEnvelope
-	if err := json.Unmarshal(raw, &envelope); err != nil {
-		return nil, fmt.Errorf("POST /api/muster/call: not a tool result: %w\n%.300s", err, raw)
-	}
-	text := ""
-	if len(envelope.Content) > 0 {
-		text = envelope.Content[0].Text
-	}
-	if envelope.IsError {
-		return nil, fmt.Errorf("%screate_agent through the portal: %s", agentManagerToolPrefix, excerpt(text, 300))
+	return portalCreateAgentReport(status, raw)
+}
+
+// portalCreateAgentReport reads POST /api/muster/call's answer for
+// create_agent. Unlike an MCP session, the portal's backend
+// (MusterMcpClient.callTool) has already looked through call_tool's
+// `{isError, content}` envelope: a 200 carries the tool's payload itself —
+// create_agent's report — and a tool-level refusal is thrown, so it arrives
+// as a non-200 with Backstage's `{"error": {"message"}}` body.
+func portalCreateAgentReport(status int, raw []byte) (*agentWritten, error) {
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("%screate_agent through the portal answered %d: %s", agentManagerToolPrefix, status, excerpt(backstageErrorMessage(raw), 300))
 	}
 	var created createAgentReport
-	if err := json.Unmarshal([]byte(text), &created); err != nil {
-		return nil, fmt.Errorf("%screate_agent through the portal: payload is not the expected JSON: %w\n%.300s", agentManagerToolPrefix, err, text)
+	if err := json.Unmarshal(raw, &created); err != nil {
+		return nil, fmt.Errorf("%screate_agent through the portal: payload is not the expected JSON: %w\n%.300s", agentManagerToolPrefix, err, raw)
 	}
 	return created.written(), nil
+}
+
+// backstageErrorMessage is the message of Backstage's error middleware body
+// (`{"error": {"name", "message"}, …}`), or the body itself when it is not
+// one.
+func backstageErrorMessage(raw []byte) string {
+	var body struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil || body.Error.Message == "" {
+		return string(raw)
+	}
+	return body.Error.Message
 }
 
 // createAgentReport is create_agent's result as the proofs read it.

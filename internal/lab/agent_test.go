@@ -504,3 +504,29 @@ func jsonValue(t *testing.T, v any) any {
 	}
 	return out
 }
+
+// TestPortalCreateAgentReport: the portal's backend has already looked
+// through call_tool's envelope — a 200 is create_agent's report itself, a
+// refusal is Backstage's error body — so the writer reads the payload
+// directly and relays the refusal's message.
+func TestPortalCreateAgentReport(t *testing.T) {
+	report, _ := json.Marshal(map[string]any{"requestedBy": testDevUser, "created": map[string]bool{"helmRelease": true, "ociRepository": false}})
+	written, err := portalCreateAgentReport(http.StatusOK, report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if written.RequestedBy != testDevUser || !written.HelmRelease || written.OCIRepository {
+		t.Errorf("written = %+v", written)
+	}
+
+	refusal, _ := json.Marshal(map[string]any{"error": map[string]any{"message": "invalid_request: toolset is required"}, "response": map[string]any{"statusCode": 500}})
+	if _, err := portalCreateAgentReport(http.StatusInternalServerError, refusal); err == nil || !strings.Contains(err.Error(), "answered 500: invalid_request: toolset is required") {
+		t.Errorf("refusal error = %v", err)
+	}
+	if _, err := portalCreateAgentReport(http.StatusBadGateway, []byte("upstream unavailable")); err == nil || !strings.Contains(err.Error(), "answered 502: upstream unavailable") {
+		t.Errorf("non-JSON refusal error = %v", err)
+	}
+	if _, err := portalCreateAgentReport(http.StatusOK, []byte("")); err == nil || !strings.Contains(err.Error(), "not the expected JSON") {
+		t.Errorf("empty payload error = %v", err)
+	}
+}
