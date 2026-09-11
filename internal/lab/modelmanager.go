@@ -173,12 +173,24 @@ func resolveBackendEndpoint(cfg *config.Config, backend string) (string, error) 
 	if ep := cfg.Platform.ModelManager.EndpointFor(backend); ep != "" {
 		return strings.TrimSuffix(ep, "/"), nil
 	}
-	gw, err := kindGatewayIP(cfg.ControlPlaneNode())
+	node := cfg.ControlPlaneNode()
+	port := config.BackendPort(backend)
+	gw, err := kindGatewayIP(node)
 	if err != nil {
 		return "", fmt.Errorf("autodetecting the %s endpoint: %w (set platform.modelManager.endpoints.%s to skip the detection)",
 			config.BackendServerName(backend), err, backend)
 	}
-	return fmt.Sprintf("http://%s:%d", gw, config.BackendPort(backend)), nil
+	// The gateway is this machine only where the container runtime runs on it.
+	// In a VM it is a bridge inside that VM, and the runtime's host alias is
+	// what resolves to this machine from inside the cluster — so the endpoint
+	// follows what answers, and an installation on such a runtime needs no
+	// endpoints override to reach its own model servers.
+	if !nodeDialAnswers(node, net.JoinHostPort(gw, strconv.Itoa(port))) {
+		if alias := hostAlias(); nodeDialAnswers(node, net.JoinHostPort(alias, strconv.Itoa(port))) {
+			return fmt.Sprintf("http://%s:%d", alias, port), nil
+		}
+	}
+	return fmt.Sprintf("http://%s:%d", gw, port), nil
 }
 
 // resolveBackendEndpoints resolves every configured backend's endpoint.

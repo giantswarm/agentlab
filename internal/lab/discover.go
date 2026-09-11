@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -70,6 +69,11 @@ type HostServer struct {
 	// ReachErr then explains.
 	OnGateway *bool
 	ReachErr  error
+	// PodHost is the host part pods reach this server on: the kind network
+	// gateway where that is this machine, else the container runtime's host
+	// alias, which resolves only inside the cluster. Empty when neither
+	// answers, or while reachability is unknown.
+	PodHost   string
 	Models    []HostModel
 	ModelsErr error
 }
@@ -106,11 +110,22 @@ func Discover(cfg *config.Config) *Discovery {
 		}
 		s := HostServer{Backend: b, Ident: ident, Port: config.BackendPort(b)}
 		if d.KindGateway != "" {
-			answers, err := hostServerAnswers(cfg.ControlPlaneNode(), net.JoinHostPort(d.KindGateway, strconv.Itoa(s.Port)))
-			if err != nil {
+			port := strconv.Itoa(s.Port)
+			answers, err := hostServerAnswers(cfg.ControlPlaneNode(), net.JoinHostPort(d.KindGateway, port))
+			switch {
+			case err != nil:
 				s.ReachErr = err
-			} else {
+			default:
 				s.OnGateway = &answers
+				if answers {
+					s.PodHost = d.KindGateway
+				} else if alias := hostAlias(); nodeDialAnswers(cfg.ControlPlaneNode(), net.JoinHostPort(alias, port)) {
+					// The gateway is not this machine (a runtime in a VM),
+					// but the alias is, from inside the cluster. Autodetecting
+					// it is what keeps the server usable without an endpoints
+					// override no form asks for.
+					s.PodHost = alias
+				}
 			}
 		}
 		s.Models, s.ModelsErr = hostModelsFn(b, base)
@@ -120,16 +135,23 @@ func Discover(cfg *config.Config) *Discovery {
 	return d
 }
 
+// hostAlias is the name that resolves to this machine from inside the
+// cluster but not on it: what a container runtime in a VM publishes, since
+// the kind network gateway is then a bridge inside that VM. kindGatewayIP
+// resolves the podman one for the gateway itself.
+func hostAlias() string {
+	if dockerIsPodman() {
+		return "host.containers.internal"
+	}
+	return "host.docker.internal"
+}
+
 // Backends lists the backends the configuration should carry, in canonical
 // order: the servers that answer AND that pods can reach.
 //
-// A server pods cannot reach is no use to model-manager, which runs in one:
-// enrolling it made `agentlab configure` print "pods cannot reach it" and
-// apply it anyway, and `agentlab up` then aborted in preflightHostServer —
-// whose remedy, `configure --defaults`, re-added it because it still answers
-// on loopback. LM Studio brought this to the surface (its default bind is
-// loopback, "Serve on Local Network" off), but it was already true of the
-// others.
+// A server pods cannot reach is no use to model-manager, which runs in one.
+// Reachable means on the kind gateway OR on the runtime's host alias, so a
+// runtime in a VM enrolls its servers like a native one.
 //
 // Unknown reachability still enrolls: OnGateway is nil while there is no kind
 // network to probe (a fresh machine, or after `agentlab down`), and a lab that
@@ -138,7 +160,7 @@ func Discover(cfg *config.Config) *Discovery {
 func (d *Discovery) Backends() []string {
 	var out []string
 	for _, s := range d.Servers {
-		if s.OnGateway != nil && !*s.OnGateway {
+		if s.OnGateway != nil && s.PodHost == "" {
 			continue
 		}
 		out = append(out, s.Backend)
@@ -146,11 +168,29 @@ func (d *Discovery) Backends() []string {
 	return out
 }
 
-// ModelServersHint names the servers found for the configure form.
+// PodHostFor is the host pods reach a backend's server on, "" when the
+// discovery could not establish one.
+func (d *Discovery) PodHostFor(backend string) string {
+	for _, s := range d.Servers {
+		if s.Backend == backend {
+			return s.PodHost
+		}
+	}
+	return ""
+}
+
+// ModelServersHint names the servers found for the configure form, and says
+// which of them the answer cannot enrol. Listing a server the form is about
+// to drop reads as a promise the configuration does not keep — the confirm
+// says "Found: X" and X never reaches platform.modelManager.backends.
 func (d *Discovery) ModelServersHint() string {
 	parts := make([]string, 0, len(d.Servers))
 	for _, s := range d.Servers {
-		parts = append(parts, fmt.Sprintf("%s %s (:%d)", config.BackendServerName(s.Backend), s.Ident, s.Port))
+		part := fmt.Sprintf("%s %s (:%d)", config.BackendServerName(s.Backend), s.Ident, s.Port)
+		if s.OnGateway != nil && s.PodHost == "" {
+			part += " — pods cannot reach it, so it is not enrolled"
+		}
+		parts = append(parts, part)
 	}
 	return strings.Join(parts, ", ")
 }
@@ -241,18 +281,16 @@ func (d *Discovery) Report(cfg *config.Config) string {
 			reach = fmt.Sprintf("cannot tell whether pods reach it on %s (%v)", d.KindGateway, s.ReachErr)
 		case s.OnGateway != nil && *s.OnGateway:
 			reach = fmt.Sprintf("answers on %s (the address pods dial): yes", d.KindGateway)
+		case s.OnGateway != nil && !*s.OnGateway && s.PodHost != "":
+			// The gateway is a bridge inside the runtime's VM, so it is not
+			// an address of this machine and no bind setting makes the server
+			// answer there; the alias is, from inside the cluster. Nothing to
+			// fix, so the line reports the address instead of a remedy.
+			reach = fmt.Sprintf("pods reach it at %s (%s is inside the container runtime's VM, not this machine)",
+				s.PodHost, d.KindGateway)
 		case s.OnGateway != nil:
 			reach = fmt.Sprintf("does NOT answer on %s (the address pods dial) — left out of platform.modelManager.backends until it does (%s)",
 				d.KindGateway, bindHint(s.Backend))
-			// Where docker runs in a VM the gateway is a bridge inside it, so
-			// no bind address can make it this machine: the fix is to name
-			// the host, not to rebind the server. Saying only "bind to
-			// 0.0.0.0" there sends the reader after something that cannot
-			// work (docs/models.md, "Local backends on the lab host").
-			if runtime.GOOS != "linux" {
-				reach += fmt.Sprintf(", or — docker runs in a VM here, so the gateway is not this machine — set platform.modelManager.endpoints.%s: http://host.docker.internal:%d",
-					s.Backend, s.Port)
-			}
 		}
 		models := "models not listed"
 		if s.ModelsErr == nil {
@@ -316,6 +354,13 @@ func hostServerAnswers(node, addr string) (bool, error) {
 	if !dockerIsPodman() {
 		return tcpAnswers(addr), nil
 	}
+	return nodeDial(node, addr)
+}
+
+// nodeDial dials addr from inside the node, which is the only vantage point
+// that can answer for an address the host cannot resolve (the runtime's host
+// alias). An error is the probe itself failing, never a verdict.
+func nodeDial(node, addr string) (bool, error) {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return false, fmt.Errorf("probing %s: %w", addr, err)
@@ -336,6 +381,14 @@ func hostServerAnswers(node, addr string) (bool, error) {
 	default:
 		return false, fmt.Errorf("dialing %s from node %q: %w", addr, node, err)
 	}
+}
+
+// nodeDialAnswers is nodeDial where a failed probe is not a verdict: the
+// alias fallback only ever adds an address, so it can treat "cannot tell" as
+// "no".
+func nodeDialAnswers(node, addr string) bool {
+	answers, err := nodeDial(node, addr)
+	return err == nil && answers
 }
 
 // exitCode digs the process exit status out of a wrapped command error; -1

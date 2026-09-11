@@ -507,7 +507,7 @@ func configureCmd() *cobra.Command {
 				mm := cfg.Platform.ModelManager
 				fmt.Printf("  models     one model-manager fronts the host servers (default backend %s):\n", mm.Primary())
 				for _, b := range mm.Backends {
-					fmt.Printf("             %s (%s backend, %s)\n", config.BackendServerName(b), b, endpointNote(mm, b))
+					fmt.Printf("             %s (%s backend, %s)\n", config.BackendServerName(b), b, endpointNote(mm, b, disc))
 				}
 			}
 			fmt.Println("\nNext: agentlab up")
@@ -570,11 +570,16 @@ func platformCmd() *cobra.Command {
 
 // endpointNote says where a backend is dialed: the configured override or
 // the autodetection.
-func endpointNote(mm config.ModelManager, backend string) string {
+func endpointNote(mm config.ModelManager, backend string, disc *lab.Discovery) string {
 	if ep := mm.EndpointFor(backend); ep != "" {
 		return ep
 	}
-	return fmt.Sprintf("autodetected as http://<kind docker gateway>:%d at platform time", config.BackendPort(backend))
+	// The discovery already established which address pods reach this server
+	// on, so name it rather than the gateway it may not be.
+	if host := disc.PodHostFor(backend); host != "" {
+		return fmt.Sprintf("autodetected as http://%s:%d", host, config.BackendPort(backend))
+	}
+	return fmt.Sprintf("autodetected at platform time on port %d", config.BackendPort(backend))
 }
 
 func loginCmd() *cobra.Command {
