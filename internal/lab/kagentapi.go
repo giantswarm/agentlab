@@ -43,9 +43,14 @@ import (
 // and the A2A v1 package the controller itself is built with.
 
 const (
-	// kagentRoutePrefix is the path prefix the connectivity chart mounts the
-	// kagent API at on the agentgateway hostname (kagent.controllerRoute.pathPrefix).
+	// kagentRoutePrefix is the path prefix the 3.x connectivity chart mounts the
+	// kagent API at on the agentgateway hostname (an HTTPRoute whose URLRewrite
+	// strips it). The 4.x chart routes the API by gRPC service and method on a
+	// GRPCRoute instead, under no prefix — kagentRoutePrefixServed tells which.
 	kagentRoutePrefix = "/kagent"
+	// kagentGRPCRouteName is the 4.x connectivity chart's GRPCRoute for the
+	// controller, in the platform namespace.
+	kagentGRPCRouteName = "kagent-controller"
 	// kagentHarness is the platform's Go ADK Harness: every AgentTemplate the
 	// proofs create is labelled for it (harnessLabel) and every turn runs on it.
 	kagentHarness = "kagent"
@@ -79,7 +84,8 @@ const (
 // kagentAPI is one person's view of the kagent controller through the edge.
 type kagentAPI struct {
 	client *http.Client
-	// base is <AgentgatewayBaseURL>/kagent.
+	// base is the kagent API's root on the edge: <AgentgatewayBaseURL> plus
+	// the route's prefix (kagentRoutePrefixServed).
 	base string
 	// user is the x-user-id: the person the controller attributes instances to.
 	user string
@@ -95,7 +101,25 @@ func newKagentAPI(cfg *config.Config, user, token string) (*kagentAPI, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &kagentAPI{client: client, base: cfg.AgentgatewayBaseURL() + kagentRoutePrefix, user: user, token: token}, nil
+	return &kagentAPI{client: client, base: cfg.AgentgatewayBaseURL() + kagentRoutePrefixServed(), user: user, token: token}, nil
+}
+
+// kagentRoutePrefixServed is the prefix the lab's edge puts the kagent API
+// under: none when the connectivity chart routes it by gRPC service and
+// method (a GRPCRoute in the platform namespace, the 4.x shape — a request
+// under /kagent would fall through to the MCP catch-all route there),
+// /kagent when it is the prefixed HTTPRoute of the 3.x shape.
+func kagentRoutePrefixServed() string {
+	gvr, err := gvrFor("grpcroutes.gateway.networking.k8s.io")
+	if err != nil {
+		return kagentRoutePrefix
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
+	defer cancel()
+	if _, err := getObject(ctx, gvr, platformNamespace, kagentGRPCRouteName); err == nil {
+		return ""
+	}
+	return kagentRoutePrefix
 }
 
 // grpcStatus is a non-OK gRPC status the controller answered with.
