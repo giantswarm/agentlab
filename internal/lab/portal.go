@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,11 +18,16 @@ import (
 // (backstageLogin): the Backstage identity token and the Dex id_token the
 // portal minted for the installation, plus the calls the portal's plugins
 // make with them — the muster backend (`/api/muster/*`, the Dex token in
-// backstage-muster-authorization), the Kubernetes proxy the MCP servers page
-// lists CRs through, and the scaffolder the agent create flow deploys with.
+// backstage-muster-authorization), the Kubernetes proxy the MCP servers and
+// agents pages list CRs through, and the agent-platform backend's kagent
+// routes (`/api/agent-platform/kagent/*`, the Dex token in
+// backstage-kagent-authorization).
 type portalSession struct {
-	cfg        *config.Config
-	user       *config.User
+	cfg  *config.Config
+	user *config.User
+	// base is Backstage's public URL every request goes to (cfg's, or a test
+	// server's).
+	base       string
 	client     *http.Client
 	bsToken    string
 	dexIDToken string
@@ -31,6 +37,31 @@ type portalSession struct {
 	}
 	claims map[string]any
 }
+
+// The headers the portal's plugins put the user's Dex id_token in for their
+// backends: the muster plugin's, the agent-platform plugin's
+// (KAGENT_AUTH_HEADER), and the Kubernetes plugin's provider-specific one
+// (authProvider oidc, oidcTokenProvider oidc-agent-platform in the umbrella's
+// app-config) — plus the cluster header that names the installation.
+const (
+	portalMusterAuthHeader  = "backstage-muster-authorization"
+	portalKagentAuthHeader  = "backstage-kagent-authorization"
+	portalKubeAuthHeader    = "Backstage-Kubernetes-Authorization-oidc-oidc-agent-platform"
+	portalKubeClusterHeader = "Backstage-Kubernetes-Cluster"
+)
+
+// The portal backends' route prefixes.
+const (
+	portalMusterAPI    = "/api/muster"
+	portalKubeProxyAPI = "/api/kubernetes/proxy"
+	portalKagentAPI    = "/api/agent-platform/kagent"
+	portalSkillsPath   = "/api/gs/agent-skills"
+)
+
+// installationQuery is the `?installation=` parameter every muster-backend
+// and kagent route takes. The umbrella's app-config names the installation
+// after the Helm release, not the kind cluster.
+const installationQuery = "?installation=" + platformRelease
 
 // backstageLogin drives the full Backstage <-> Dex sign-in for a user and
 // returns the session. The steps are the browser's: /start redirects to Dex,
@@ -135,7 +166,7 @@ func backstageLogin(cfg *config.Config, user *config.User) (*portalSession, erro
 	if err := json.Unmarshal([]byte(decoded), &auth); err != nil {
 		return nil, err
 	}
-	ps := &portalSession{cfg: cfg, user: user, client: follow,
+	ps := &portalSession{cfg: cfg, user: user, base: cfg.BackstageBaseURL(), client: follow,
 		bsToken: auth.Response.BackstageIdentity.Token, dexIDToken: auth.Response.ProviderInfo.IDToken}
 	ps.identity = auth.Response.BackstageIdentity.Identity
 	if ps.claims, err = decodeJWTClaims(ps.dexIDToken); err != nil {
@@ -144,100 +175,191 @@ func backstageLogin(cfg *config.Config, user *config.User) (*portalSession, erro
 	return ps, nil
 }
 
-// musterGet is the muster plugin's read hop: the backend promotes the Dex
-// id_token from backstage-muster-authorization to Authorization: Bearer on
-// its MCP session to muster. Returns the status and the JSON payload (or the
-// raw text when the answer is not JSON / not 200).
-func (ps *portalSession) musterGet(path string) (int, any, error) {
-	req, err := http.NewRequest(http.MethodGet, ps.cfg.BackstageBaseURL()+"/api/muster"+path, nil)
-	if err != nil {
-		return 0, nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+ps.bsToken)
-	req.Header.Set("backstage-muster-authorization", ps.dexIDToken)
-	resp, err := ps.client.Do(req)
+// request is one authenticated call to a Backstage backend path as the user:
+// the Backstage identity token, the given extra headers, the body as JSON
+// when one is given. Returns the status and the raw answer.
+func (ps *portalSession) request(method, path string, body any, headers map[string]string) (int, []byte, error) {
+	resp, err := ps.open(ps.client, method, path, body, headers)
 	if err != nil {
 		return 0, nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	raw, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return resp.StatusCode, strings.TrimSpace(string(raw)), nil
+	return resp.StatusCode, raw, nil
+}
+
+// open sends the request and hands the response back unread — for the
+// streaming route; every other caller goes through request. client is the
+// session's unless the caller needs another bound (a turn outlives the
+// session client's timeout, which covers the whole exchange).
+func (ps *portalSession) open(client *http.Client, method, path string, body any, headers map[string]string) (*http.Response, error) {
+	var payload io.Reader
+	if body != nil {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			return nil, err
+		}
+		payload = strings.NewReader(string(raw))
+	}
+	req, err := http.NewRequest(method, ps.base+path, payload)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+ps.bsToken)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	for name, value := range headers {
+		req.Header.Set(name, value)
+	}
+	return client.Do(req)
+}
+
+// musterHeaders is the muster plugin's hop: the backend promotes the Dex
+// id_token from backstage-muster-authorization to Authorization: Bearer on
+// its MCP session to muster.
+func (ps *portalSession) musterHeaders() map[string]string {
+	return map[string]string{portalMusterAuthHeader: ps.dexIDToken}
+}
+
+// musterGet is the muster plugin's read hop. Returns the status and the JSON
+// payload (or the raw text when the answer is not JSON / not 200).
+func (ps *portalSession) musterGet(path string) (int, any, error) {
+	status, raw, err := ps.request(http.MethodGet, portalMusterAPI+path, nil, ps.musterHeaders())
+	if err != nil {
+		return 0, nil, err
 	}
 	var payload any
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return resp.StatusCode, strings.TrimSpace(string(raw)), nil
+	if status != http.StatusOK || json.Unmarshal(raw, &payload) != nil {
+		return status, strings.TrimSpace(string(raw)), nil
 	}
-	return resp.StatusCode, payload, nil
+	return status, payload, nil
 }
 
 // musterPost is the mutation shape of the same hop: a JSON body, the raw
 // answer back (the routes normalise muster's tool results themselves).
 func (ps *portalSession) musterPost(path string, body any) (int, []byte, error) {
-	payload, err := json.Marshal(body)
-	if err != nil {
-		return 0, nil, err
-	}
-	req, err := http.NewRequest(http.MethodPost, ps.cfg.BackstageBaseURL()+"/api/muster"+path, strings.NewReader(string(payload)))
-	if err != nil {
-		return 0, nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+ps.bsToken)
-	req.Header.Set("backstage-muster-authorization", ps.dexIDToken)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := ps.client.Do(req)
-	if err != nil {
-		return 0, nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	raw, _ := io.ReadAll(resp.Body)
-	return resp.StatusCode, raw, nil
+	return ps.request(http.MethodPost, portalMusterAPI+path, body, ps.musterHeaders())
 }
 
 // kubeProxyGet reads a Kubernetes API path through Backstage's Kubernetes
-// backend the way the muster plugin's useResources does: the installation in
+// backend the way the plugins' useResources does: the installation in
 // Backstage-Kubernetes-Cluster and the user's own Dex id_token in the
-// provider-specific authorization header (authProvider oidc, oidcTokenProvider
-// oidc-agent-platform in the umbrella's app-config), so the apiserver sees
-// the person, not Backstage.
+// provider-specific authorization header, so the apiserver sees the person,
+// not Backstage.
 func (ps *portalSession) kubeProxyGet(path string) (int, []byte, error) {
-	req, err := http.NewRequest(http.MethodGet, ps.cfg.BackstageBaseURL()+"/api/kubernetes/proxy"+path, nil)
-	if err != nil {
-		return 0, nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+ps.bsToken)
-	req.Header.Set("Backstage-Kubernetes-Cluster", platformRelease)
 	// The raw token: the backend's OIDC strategy prefixes "Bearer " itself.
-	req.Header.Set("Backstage-Kubernetes-Authorization-oidc-oidc-agent-platform", ps.dexIDToken)
-	resp, err := ps.client.Do(req)
-	if err != nil {
-		return 0, nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	raw, _ := io.ReadAll(resp.Body)
-	return resp.StatusCode, raw, nil
+	return ps.request(http.MethodGet, portalKubeProxyAPI+path, nil, map[string]string{
+		portalKubeClusterHeader: platformRelease, portalKubeAuthHeader: ps.dexIDToken,
+	})
 }
 
 // backstageGet is a plain authenticated read of a Backstage backend path.
 func (ps *portalSession) backstageGet(path string) (int, []byte, error) {
-	req, err := http.NewRequest(http.MethodGet, ps.cfg.BackstageBaseURL()+path, nil)
-	if err != nil {
-		return 0, nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+ps.bsToken)
-	resp, err := ps.client.Do(req)
-	if err != nil {
-		return 0, nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	raw, _ := io.ReadAll(resp.Body)
-	return resp.StatusCode, raw, nil
+	return ps.request(http.MethodGet, path, nil, nil)
 }
 
-// installationQuery is the `?installation=` parameter every muster-backend
-// route takes. The umbrella's app-config names the muster installation after
-// the Helm release, not the kind cluster.
-const installationQuery = "?installation=" + platformRelease
+// kagentHeaders is the agent-platform plugin's hop: the user's Dex id_token
+// in backstage-kagent-authorization, which the backend forwards to the
+// controller as the person's bearer.
+func (ps *portalSession) kagentHeaders() map[string]string {
+	return map[string]string{portalKagentAuthHeader: ps.dexIDToken}
+}
+
+// kagentPath is a kagent route with the installation appended the way the
+// plugin's client builds it.
+func kagentPath(path string) string {
+	separator := "?"
+	if strings.Contains(path, "?") {
+		separator = "&"
+	}
+	return portalKagentAPI + path + separator + strings.TrimPrefix(installationQuery, "?")
+}
+
+// kagentRequest is one call to the portal's agent-platform backend as the
+// user: the Backstage identity token, the installation, and the user's Dex
+// id_token in the header the backend promotes to kagent.
+func (ps *portalSession) kagentRequest(method, path string, body any) (int, []byte, error) {
+	return ps.request(method, kagentPath(path), body, ps.kagentHeaders())
+}
+
+// kagentJSON is kagentRequest with the answer decoded into out when the
+// status is a 2xx and out is given; the status and the raw answer come back
+// either way, so callers judge a 404 or a 409 by name.
+func (ps *portalSession) kagentJSON(method, path string, body, out any) (int, []byte, error) {
+	status, raw, err := ps.kagentRequest(method, path, body)
+	if err != nil {
+		return 0, nil, err
+	}
+	if out != nil && status/100 == 2 && len(raw) > 0 {
+		if err := json.Unmarshal(raw, out); err != nil {
+			return status, raw, fmt.Errorf("%s %s: not the expected JSON: %w\n%.300s", method, path, err, raw)
+		}
+	}
+	return status, raw, nil
+}
+
+// kagentStream opens the portal's streaming route (POST …/messages/stream)
+// and hands every SSE data frame to onFrame as it arrives — the relay
+// flushes per event, so the frames come as kagent produces them — until the
+// stream ends or onFrame returns false. A status other than 200 is the
+// route's refusal, returned with its body. The stream is bounded by the
+// turn timeout, not the session client's (which covers the whole exchange).
+func (ps *portalSession) kagentStream(path string, body any, onFrame func(streamFrame) bool) error {
+	streaming := *ps.client
+	streaming.Timeout = portalTurnTimeout
+	resp, err := ps.open(&streaming, http.MethodPost, kagentPath(path), body, ps.kagentHeaders())
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("POST %s answered %d: %.300s", path, resp.StatusCode, raw)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "text/event-stream") {
+		raw, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("POST %s answered %q, not an event stream: %.300s", path, ct, raw)
+	}
+	return readSSE(resp.Body, onFrame)
+}
+
+// readSSE reads server-sent events off r: the `data:` lines of one event
+// (joined by newlines, a blank line ends the event) decode into a
+// streamFrame handed to onFrame; comment and other field lines are skipped.
+func readSSE(r io.Reader, onFrame func(streamFrame) bool) error {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	var data []string
+	flush := func() (bool, error) {
+		if len(data) == 0 {
+			return true, nil
+		}
+		payload := strings.Join(data, "\n")
+		data = data[:0]
+		var frame streamFrame
+		if err := json.Unmarshal([]byte(payload), &frame); err != nil {
+			return false, fmt.Errorf("an SSE frame is not JSON: %w\n%.300s", err, payload)
+		}
+		return onFrame(frame), nil
+	}
+	for scanner.Scan() {
+		line := scanner.Text()
+		switch {
+		case line == "":
+			if more, err := flush(); err != nil || !more {
+				return err
+			}
+		case strings.HasPrefix(line, "data:"):
+			data = append(data, strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("reading the event stream: %w", err)
+	}
+	_, err := flush()
+	return err
+}
 
 // listMCPServerCRs reads the MCPServer CRs the way the portal's MCP servers
 // page does (useResources(MCPServer) over the Kubernetes proxy), as the user.

@@ -40,9 +40,8 @@ What the lab adds on top of the chart's own app-config
   `dnsPolicy: ClusterFirstWithHostNet` keeps cluster DNS, so the CoreDNS
   rewrite still routes `https://muster.127.0.0.1.nip.io/mcp` to the edge.
 - **The lab catalog overlay** (`agentlab-backstage-app-config` +
-  `agentlab-backstage-catalog`): the users/groups entities, the
-  `agent-deployment` scaffolder Template behind the agent create flow, and an
-  in-memory sqlite database — no Postgres needed for a lab portal.
+  `agentlab-backstage-catalog`): the users/groups entities and an in-memory
+  sqlite database — no Postgres needed for a lab portal.
 - **The shared `agent-platform` Dex client** carries Backstage's callback
   (`/api/auth/oidc-agent-platform/handler/frame` — the chart's provider name),
   and the `kubernetes` client trusts it as a peer so the Kubernetes plugin can
@@ -104,7 +103,6 @@ the lab's `Auth Required` fixture:
   sign-in challenge lab-oauth-fixture -> https://muster.127.0.0.1.nip.io/oauth/proxy/start?state=… (client id via preregistered)
   muster workflows [lab-cluster-overview]
   muster core tools 28 exposed
-  agent deploy template registered (template:default/agent-deployment)
   MCP servers page groups (11 CRs via /api/kubernetes/proxy):
     Agent Platform      2 rows: agent-manager, model-manager
     Infrastructure      4 rows: capi, kubernetes, prometheus, mcp-kubernetes
@@ -115,46 +113,116 @@ the lab's `Auth Required` fixture:
 ## The agent create flow
 
 **Agent Platform → Agents → New agent** (`/agents/new`) composes an agent from
-a form (installation, name, model, system prompt) and its Deploy button applies
-the result **directly to the cluster**: the frontend calls the scaffolder with
-the hidden catalog template `template:default/agent-deployment`, which runs the
-`kube:apply` action with the *user's* per-installation OIDC token on a composed
-`OCIRepository` + `HelmRelease` (the `agent` chart from gsoci, values inlined).
-No pull request, no GitOps repo — but the applied resources are **Flux CRs**,
-so something on the cluster has to turn them into an installed chart.
+a form (installation, name, model, system prompt), a skills step and a tools
+step, and its Deploy button is **agent-manager's `create_agent`** called
+through the muster plugin's backend (`POST /api/muster/call`) with the
+signed-in person's own forwarded Dex id_token — the same tool an MCP session
+drives. The portal composes no manifest: the review page is agent-manager's
+`validate_agent` dry run rendered verbatim (the `OCIRepository` tracking the
+Generic agent chart at **`1.x`**, the `HelmRelease` as the tenant
+ServiceAccount `kagent-flux`, the values it composed), and Deploy applies
+exactly that. Skills come from the gs backend's discovery
+(`GET /api/gs/agent-skills?repoUrl=…`), every entry pinned to the head commit
+the listing was read at, so a selected skill becomes a chart `skills[]` entry
+`{name, path, git: {url, commit}}` — never a branch. There is no scaffolder
+task, no `kube:apply` and no OIDC token minted by the portal any more; the
+`agent-deployment` Template the 0.x portal drove is gone from the lab catalog
+(HACKS.md U7).
 
-The lab supplies both halves:
+What lands is a Flux `HelmRelease` per agent in the ModelConfig's namespace
+(`kagent`) next to one shared `OCIRepository/agent` per namespace, reconciled
+by the platform chart's bundled engine as `kagent-flux` (a ServiceAccount and
+RoleBinding the connectivity component renders from
+`kagent.fluxServiceAccountName`, named into agent-manager's
+`flux.helmReleaseServiceAccount`); the render is a `kagent.dev/v1alpha3`
+`AgentTemplate` the platform Harness admits and compiles into a golden
+snapshot, plus the agent's own `RemoteMCPServer` carrying its toolset — see
+[Agents](agents.md). RBAC applies to the write as the person: `platform-admins`
+deploy, a `viewers`-group user gets agent-manager's `forbidden: …`.
 
-- **The template.** Real installations load the Template entity from
-  [giantswarm/backstage-catalogs](https://github.com/giantswarm/backstage-catalogs/tree/main/templates/agent-deployment);
-  the lab embeds a verbatim copy
-  (`internal/lab/templates/static/agent-deployment-template.yaml`) into the
-  `backstage-catalog` ConfigMap and registers it as a file location, so the
-  catalog needs no network. Without it every deploy dies with
-  `404 Template template:default/agent-deployment not found` (HACKS.md U7).
-- **The delivery engine.** The platform chart's bundled Flux — the Flux
-  Operator's `FluxInstance` with source-controller and helm-controller under
-  the multi-tenancy lockdown — is what turns those CRs into an installed agent
-  chart. Nothing watches git: it reconciles exactly the objects that are
-  applied to it. The lab installs no Flux of its own.
+## The Agent Platform proof
 
-Everything lands in the selected ModelConfig's namespace (`kagent`): one shared
-`OCIRepository/agent` tracking `semver: x.x.x`, one `HelmRelease` per agent
-named after its slug. The `HelmRelease`s execute as the tenant identity
-`kagent-flux` — a ServiceAccount and a namespace-scoped RoleBinding the chart's
-connectivity component renders whenever kagent is on, and names into the
-portal's `agentPlatform.fluxServiceAccountName` and agent-manager's
-`flux.helmReleaseServiceAccount` from the one value
-`kagent.fluxServiceAccountName` — because under the engine's lockdown a
-`HelmRelease` without one runs as the rights-less default account and fails.
-RBAC still applies to the *apply* step itself: it runs with the
-signed-in user's token, so `platform-admins` can deploy agents and `developers`
-(edit only in `demo`) cannot — which is the platform behavior, not a lab bug.
+`agentlab backstage-test` drives the Dev Portal's Agent Platform pages on
+kagent API v2 the way a person does, through the routes the browser uses and
+with each user's own forwarded token, after the sign-in half above. Nothing it
+asserts is composed in the lab: the wizard's spec goes to agent-manager, and
+what the proof checks is what the portal shows.
 
-Between "HelmRelease installed" and a running agent stands the golden boot:
-the platform Harness compiles the rendered `AgentTemplate` and Substrate
-snapshots one actor of it, the runtime image being the Harness's
-digest-pinned one — see [Agents](agents.md).
+**The create path** (as the first `platform-admins` user):
+
+- skill discovery for `https://github.com/giantswarm/agent-skills` — every
+  entry carries the listing's head commit as a full id;
+- `get_info` and `list_model_configs` through the portal;
+- the dry run (`validate_agent`): valid, mode `create`, the `OCIRepository` at
+  `1.x`, the `HelmRelease` as `kagent-flux`, `values.agent.harness` = the
+  platform Harness `get_info` names, no `values.agent.runtime`, the toolset as
+  composed, the skill pinned to the discovered commit;
+- Deploy (`create_agent`) through the same route, then the shared readiness
+  wait of [Agents](agents.md): `requestedBy` is the person, agent-manager's log
+  says `caller=<person>`, the `HelmRelease` carries **exactly** the dry run's
+  values as `kagent-flux` next to `OCIRepository/agent` at `1.x`, the
+  `AgentTemplate` is Ready on the platform Harness with the admission label,
+  the display-name and icon-url annotations and the skill, its
+  `RemoteMCPServer` carries `X-Muster-Toolset`;
+- `get_agent_status` through the portal says `ready` on that Harness (the
+  detail page's poll); a second create of the name answers `conflict: …`, a
+  viewer's create `forbidden: …`.
+
+**The agents list** (as every user), read as the portal reads it — the
+`agenttemplates` and `remotemcpservers` of the installation through
+`/api/kubernetes/proxy` with the person's token: a `platform-admins` user sees
+the agent with its readiness (the portal's derivation from
+`status.harnesses[]`), its toolset off the carrier and the owning
+`HelmRelease` (the Flux provenance label). A developer or viewer meets the
+apiserver's **403** and the portal shows the installation as unreadable —
+the lab's RBAC (`rbac.yaml.tmpl`) binds `platform-admins` to `cluster-admin`,
+`viewers` to `view` and `developers` to `edit` in `demo`, none of which reads
+`kagent.dev`; the 0.10 line's `agents.kagent.dev` was never readable for them
+either, so this is no loss of the migration and the proof asserts it as it is
+(a change of the lab's grants fails here by name). Fleet installations grant
+reads differently; what a non-admin sees there is the migration rehearsal's
+question, not this lab's.
+
+**The chat** (as the admin, every other user as the boundary):
+`GET /kagent/installations` offers the installation and `GET /kagent/me`
+resolves the person; a session (the person's `AgentInstance`) is created on
+the first message with a `requestId` and a repeat answers the same instance;
+the turn streams (`…/messages/stream`, SSE frames of A2A v1 events) and the
+agent's tool call reaches muster as the person (muster's
+`forwarded_id_token_accepted` audit event names them, in the turn's window);
+the instance is quiescent after the turn — the gateway gives the worker back
+and the runtime is a snapshot, the logical state still `READY` (`SUSPENDED`
+is the explicit suspend) — and the next message resumes the conversation
+intact (a codeword told in turn one, recalled in turn two); rename, the tasks list,
+`session-states` and `session-usage` read; another user does not list the
+session and reads it as 404; the delete leaves nothing.
+
+**HITL and Stop**, on a second agent the lab writes itself with
+`muster.requireApproval: true` (chart ≥ 1.1.0; the proof asks the shared
+`OCIRepository` to fetch a newer release when it holds an older one): a tool
+prompt pauses the task in `input-required` with a `tool_approval_request` under
+the HITL extension; `POST …/answer` approving it, naming the task, resumes the
+same task — rounds until it completes; then a long turn is cancelled
+server-side from the task the stream named (`POST …/tasks/:taskId/cancel`),
+the task settles `canceled`, and the following turn completes.
+
+**The edit path** (the detail page's kebab, as the admin): `get_agent` reports
+the pins written at create; `validate_agent{update}` and `update_agent` with a
+new description change exactly `agent.description`; `validate_agent{update,
+refreshSkills}` and `update_agent{refreshSkills}` pin every git skill to
+`list_skills`' head of the repository and nothing else (discovery read the
+same head, so the pin stays); the agent is Ready after; a viewer's
+`update_agent`/`delete_agent` are `forbidden: …`; `delete_agent` of the agent
+while the fixture still needs the chart keeps `OCIRepository/agent` and says
+which release for; `delete_agent` of the fixture, the last release the proof
+holds, records the source's fate. A GitOps-owned release (refused as
+`conflict: …`) has no fixture in the lab and is not asserted.
+
+Both agents and every session are removed on every path, leftovers of an
+aborted run first. Not provable headlessly and out of scope: the browser's
+versioned persisted query cache (a stale v1alpha2 entry never renders) — that
+is the frontend's own guard, exercised by the plugin's tests, not by a portal
+API the lab can drive.
 
 ## Backstage gotchas
 
