@@ -143,3 +143,50 @@ OTLP gateway in kind). A git skill of an `AgentTemplate` is fetched during
 the golden boot, which Substrate's egress gate has to let through;
 `agentlab skills-test` is that proof, see [The skills
 proof](platform.md#the-skills-proof-the-golden-boot).
+
+## Turns through the edge: native gRPC, as the surfaces drive them
+
+The controller serves gRPC only (`kagent.api.v1alpha1` for the control
+plane, `lf.a2a.v1` for the turns) behind the connectivity chart's
+`GRPCRoute` `kagent-controller` on the edge — native gRPC over HTTP/2, the
+five services matched by name — with the `AgentgatewayPolicy`
+`kagent-controller-jwt` validating the person's Dex id_token (JWT `Strict`)
+and rewriting `x-user-id` from the token's email claim for the controller's
+`trusted-proxy` authenticator; whatever `x-user-id` a caller sent is
+replaced. Swarmgeist (klaus-gateway) and the Dev Portal's backend speak to
+the controller this way, and so do the proofs' turns
+(`internal/lab/kagentapi.go`): one gRPC connection on the lab's TLS
+transport (`agentgateway.<domain>:<gateway port>`, the lab CA trusted), the
+`a2a-go/v2` client on its gRPC transport for the turns and the stubs
+generated from kagent's protos (`internal/kagent/gen`, see
+[development.md](development.md)) for the rest. Every call carries
+`authorization: Bearer <id_token>`; every A2A call exactly one
+`x-kagent-agent-instance-id` — the `AgentInstance` that holds the
+conversation, created for the person with `CreateAgentInstance`
+(idempotent on `request_id`) and deleted afterwards — and the
+human-in-the-loop extension request (`A2A-Extensions:
+https://kagent.dev/extensions/hitl/v1`), so a tool bound with
+`requireApproval` pauses the task at `input-required` with a decidable
+`tool_approval_request` instead of a plain notice. The answer is consumed
+as a stream (`SendStreamingMessage`: the submitted task, working, the
+artifacts, the terminal status). The Harness re-emits the caller's bearer
+on every MCP call (`KAGENT_PROPAGATE_TOKEN`), so muster sees the person,
+never the platform — agent tool calls through muster need a real Dex token
+on the way in.
+
+`agentlab a2a-test` is the proof of that path, with the assertions the
+surfaces rely on: the route and its policy exist and are Accepted; a call
+without a token is refused at the edge (`Unauthenticated`, HTTP 401 on a
+raw HTTP/2 POST); a forged `x-user-id` beside a valid token is replaced
+(`GetCurrentUser` names the token's person); `ListAgentTemplates` lists the
+proof's agent Ready on the platform Harness with the display-name and
+icon-url annotations as Swarmgeist reads them; `CreateAgentInstance` is
+idempotent; a turn streams its answer; on the proof's agent — the Generic
+chart with `toolset: [preset:read-only]` and `muster.requireApproval: true`
+(chart ≥ 1.1.0) — a tool call pauses the task, the person's approval
+resumes it to completed with muster logging the call under the person, a
+rejection ends it without the call; `CancelTask` on a running turn ends it
+server-side (`GetTask` reports it canceled) and the instance takes a
+following turn. It leaves nothing behind: the instances over gRPC
+(`ListAgentInstances` lists none of its), the agent's release and render on
+the cluster.

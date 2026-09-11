@@ -16,6 +16,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -111,6 +112,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		inGroup(groupTesting, toolsetsTestCmd()),
 		inGroup(groupTesting, modelsTestCmd()),
 		inGroup(groupTesting, skillsTestCmd()),
+		inGroup(groupTesting, a2aTestCmd()),
 		inGroup(groupTesting, backstageTestCmd()),
 
 		inGroup(groupCleanup, labCmd("down", "Destroy the kind cluster", lab.Down)),
@@ -688,6 +690,28 @@ func agentsTestCmd() *cobra.Command {
 			return lab.AgentsTest(cfg, email)
 		},
 	}
+}
+
+func a2aTestCmd() *cobra.Command {
+	var readyTimeout time.Duration
+	cmd := &cobra.Command{
+		Use:   "a2a-test [email]",
+		Short: "Headless A2A proof: native gRPC through the edge as the surfaces drive it — the GRPCRoute and its JWT policy, no token refused, a forged x-user-id replaced, ListAgentTemplates with annotations, CreateAgentInstance idempotent, a streamed turn, HITL pause → approve / reject, CancelTask server-side",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			email := cfg.AdminUser().Email
+			if len(args) == 1 {
+				email = args[0]
+			}
+			return lab.A2ATest(cfg, email, lab.A2ATestOptions{ReadyTimeout: readyTimeout})
+		},
+	}
+	cmd.Flags().DurationVar(&readyTimeout, "ready-timeout", 4*time.Minute, "how long the fixture agent's golden boot may take before the proof gives up")
+	return cmd
 }
 
 func toolsetsTestCmd() *cobra.Command {

@@ -15,6 +15,17 @@ fixtures' arithmetic and the proofs' parsers. The lab's end-to-end checks are
 its own `*-test` subcommands — see [Testing](cli.md#testing) — run against a
 live lab.
 
+The kagent API v2 client stubs the proofs call (`internal/kagent/gen`,
+`kagent.api.v1alpha1`'s `AgentTemplateService`, `AgentInstanceService`,
+`SystemService`) are generated with `buf` from verbatim copies of the
+controller's protos under `hack/kagent-proto/`, pinned to a commit of the
+kagent line the platform release resolves (`KAGENT_PROTO_COMMIT` in
+`Makefile.custom.mk`, recorded in `internal/kagent/gen/README.md`). The
+A2A v1 service comes from the `a2a-go/v2` module the controller itself is
+built with. To move the pin: set the commit, `make generate-kagent` (needs
+`buf`, `protoc-gen-go`, `protoc-gen-go-grpc` on the PATH), commit the protos
+and the generated code together.
+
 A `go build` from a checkout reports Go's pseudo-version (`agentlab
 --version`), never checks for releases and cannot self-update; releases are
 stamped by the devctl Makefile and the architect CI through `-ldflags -X`.

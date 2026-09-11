@@ -102,6 +102,8 @@ const (
 	iconURLKey       = "iconUrl"
 	skillsKey        = "skills"
 	refreshSkillsKey = "refreshSkills"
+	// requireApprovalKey is the chart's muster.requireApproval value.
+	requireApprovalKey = "requireApproval"
 	// verdictFailed is get_agent_status's verdict for an agent the platform
 	// will not get to run on its own.
 	verdictFailed = "failed"
@@ -141,6 +143,13 @@ type agentSpec struct {
 	// platform Harness. Another name places the template on no Harness — the
 	// direct writer's way to a template nothing admits.
 	Harness string
+	// RequireApproval gates every tool call through the agent's muster
+	// binding behind the person's approval (the chart's
+	// muster.requireApproval → spec.tools[].mcp.requireApproval): with the
+	// HITL extension negotiated, the task pauses at input-required until the
+	// decision. The direct writer only — agent-manager's create_agent has no
+	// such argument.
+	RequireApproval bool
 }
 
 // agentSkill is one skills[] entry: a name, a directory and exactly one
@@ -286,6 +295,9 @@ func createAgentArgs(spec agentSpec) (map[string]any, error) {
 	if spec.Harness != "" && spec.Harness != kagentHarness {
 		return nil, fmt.Errorf("agent %s: agent-manager places every agent on the platform Harness %s; a template for Harness %q is the direct HelmRelease writer's", spec.Name, kagentHarness, spec.Harness)
 	}
+	if spec.RequireApproval {
+		return nil, fmt.Errorf("agent %s: agent-manager's create_agent takes no requireApproval; a HITL-gated muster binding is the direct HelmRelease writer's", spec.Name)
+	}
 	args := map[string]any{nameKey: spec.Name, modelConfigKey: spec.ModelConfig}
 	for key, value := range map[string]string{
 		displayNameKey: spec.DisplayName, descriptionKey: spec.Description, systemMessageKey: spec.SystemMessage, iconURLKey: spec.IconURL,
@@ -392,6 +404,9 @@ func agentValues(spec agentSpec) map[string]any {
 	values := map[string]any{"agent": agent, modelConfigKey: map[string]any{nameKey: spec.ModelConfig}}
 	if spec.Toolset != nil {
 		values[toolsetKey] = spec.Toolset
+	}
+	if spec.RequireApproval {
+		values[componentMuster] = map[string]any{requireApprovalKey: true}
 	}
 	if len(spec.Skills) > 0 {
 		skills := make([]agentSkill, len(spec.Skills))

@@ -337,12 +337,14 @@ the bearer alone.
 target only while a controller ServiceMonitor exists — the kagent line's
 controller serves no metrics listener, and the lab renders none for it). The
 agent proofs — `agents-test`, `toolsets-test`, `models-test`'s agent turn,
-`backstage-test`'s agents pages, `skills-test` — drive kagent API v2: every
+`backstage-test`'s agents pages, `skills-test`, `a2a-test` — drive kagent API
+v2: every
 agent a HelmRelease of the Generic agent chart (1.x) whose render is an
 `AgentTemplate` admitted by the platform `Harness` and run as a Substrate
-actor, a turn an `AgentInstance` driven over gRPC-Web through the edge as the
-signed-in user, the toolset on the agent's own `RemoteMCPServer` the template
-binds; see [Agents](agents.md).
+actor, a turn an `AgentInstance` driven over native gRPC through the edge as
+the signed-in user (`a2a-test` asserts that path as the surfaces drive it), the
+toolset on the agent's own `RemoteMCPServer` the template binds; see
+[Agents](agents.md).
 
 ### The skills proof (the golden boot)
 

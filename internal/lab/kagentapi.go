@@ -86,6 +86,12 @@ const (
 	hitlTypeToolApprovalRequest  = "tool_approval_request"
 	hitlTypeToolApprovalResponse = "tool_approval_response"
 
+	// The keys of the CR the controller hands back whole (StructuredObject)
+	// and of the route objects' status, read as maps.
+	crMetadata   = "metadata"
+	crStatus     = "status"
+	crConditions = "conditions"
+
 	// kagentControllerRoute and kagentControllerJWTPolicy are the
 	// connectivity chart's route objects in front of the controller: the
 	// GRPCRoute on the edge and the policy that validates the token and
@@ -117,7 +123,11 @@ type kagentAPI struct {
 // from the agentgateway hostname the platform publishes (the same base URL
 // Backstage's app-config carries): host:port and whether the hop is TLS.
 func kagentTarget(cfg *config.Config) (hostPort string, useTLS bool, err error) {
-	base := cfg.AgentgatewayBaseURL()
+	return kagentTargetOf(cfg.AgentgatewayBaseURL())
+}
+
+// kagentTargetOf is kagentTarget for a base URL.
+func kagentTargetOf(base string) (hostPort string, useTLS bool, err error) {
 	u, err := url.Parse(base)
 	if err != nil || u.Host == "" {
 		return "", false, fmt.Errorf("the agentgateway base URL %q is not a URL", base)
@@ -295,7 +305,7 @@ type templateListing struct {
 // an admitting Harness reports Ready=True for it.
 func listingOf(t *apiv1alpha1.AgentTemplate) templateListing {
 	resource := t.GetResource().GetValue().AsMap()
-	annotations, _ := nestedMap(resource, "metadata")["annotations"].(map[string]any)
+	annotations, _ := nestedMap(resource, crMetadata)["annotations"].(map[string]any)
 	l := templateListing{
 		Name:        t.GetRef().GetName(),
 		Namespace:   t.GetRef().GetNamespace(),
@@ -308,7 +318,7 @@ func listingOf(t *apiv1alpha1.AgentTemplate) templateListing {
 		l.Unavailable = "no Harness admits this AgentTemplate (it carries no admission label a platform Harness selects)"
 		return l
 	}
-	harnesses, _ := nestedMap(resource, "status")["harnesses"].([]any)
+	harnesses, _ := nestedMap(resource, crStatus)["harnesses"].([]any)
 	var firstReason string
 	for _, name := range admitting {
 		ready, reason := readyConditionOf(harnesses, name)
@@ -333,13 +343,13 @@ func readyConditionOf(harnesses []any, harness string) (bool, string) {
 		if !ok || stringOf(entry["harness"]) != harness {
 			continue
 		}
-		conditions, _ := entry["conditions"].([]any)
+		conditions, _ := entry[crConditions].([]any)
 		for _, c := range conditions {
 			cond, ok := c.(map[string]any)
-			if !ok || stringOf(cond["type"]) != conditionReady {
+			if !ok || stringOf(cond[fieldTypeKey]) != conditionReady {
 				continue
 			}
-			if stringOf(cond["status"]) == conditionTrue {
+			if stringOf(cond[crStatus]) == conditionTrue {
 				return true, ""
 			}
 			reason := stringOf(cond["message"])
@@ -605,9 +615,15 @@ func (t *turn) addArtifact(artifact *a2a.Artifact, appendChunk bool) {
 func (t *turn) statesString() string {
 	names := make([]string, 0, len(t.states))
 	for _, s := range t.states {
-		names = append(names, string(s))
+		names = append(names, stateName(s))
 	}
 	return strings.Join(names, " → ")
+}
+
+// stateName is a task state the way the evidence quotes it (canceled, not
+// TASK_STATE_CANCELED).
+func stateName(s a2a.TaskState) string {
+	return strings.ToLower(strings.TrimPrefix(string(s), "TASK_STATE_"))
 }
 
 // messageText is the text of a message's text parts, "" for no message.
@@ -703,7 +719,7 @@ func parseToolApprovalRequest(msg *a2a.Message) *toolApprovalRequest {
 		return nil
 	}
 	raw, ok := msg.Metadata[hitlExtensionURI].(map[string]any)
-	if !ok || stringOf(raw["type"]) != hitlTypeToolApprovalRequest {
+	if !ok || stringOf(raw[fieldTypeKey]) != hitlTypeToolApprovalRequest {
 		return nil
 	}
 	encoded, err := json.Marshal(raw)
@@ -749,13 +765,20 @@ func decisionMessage(taskID a2a.TaskID, req *toolApprovalRequest, approve bool, 
 // and folds the resumed stream.
 func (a *kagentAPI) decide(ctx context.Context, instanceID string, paused *turn, approve bool, reason string) (*turn, error) {
 	if paused.approval == nil {
-		return nil, fmt.Errorf("task %s carries no tool_approval_request to decide on (state %s)", paused.taskID, paused.state())
+		return nil, fmt.Errorf("task %s carries no tool_approval_request to decide on (state %s)", paused.taskID, stateName(paused.state()))
 	}
 	msg, err := decisionMessage(paused.taskID, paused.approval, approve, reason)
 	if err != nil {
 		return nil, err
 	}
 	return a.turn(ctx, instanceID, msg)
+}
+
+// isUnauthenticated reports whether the edge refused the call for want of a
+// token: the gRPC status on a kagent service call, the A2A error the SDK
+// maps it to on an A2A call.
+func isUnauthenticated(err error) bool {
+	return status.Code(err) == codes.Unauthenticated || errors.Is(err, a2a.ErrUnauthenticated)
 }
 
 // errTurnPaused says a shared proof's turn paused for a decision it does not
@@ -780,7 +803,7 @@ func (t *turn) completedText() (string, error) {
 	case len(t.states) == 0:
 		return "", fmt.Errorf("the stream ended without a task or a message (%d events)", t.events)
 	default:
-		return "", fmt.Errorf("the task ended %s (%s): %s", t.state(), t.statesString(), excerpt(t.text(), 300))
+		return "", fmt.Errorf("the task ended %s (%s): %s", stateName(t.state()), t.statesString(), excerpt(t.text(), 300))
 	}
 }
 
