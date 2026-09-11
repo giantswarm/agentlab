@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -285,6 +286,120 @@ func TestKagentServiceMonitorStaysOff(t *testing.T) {
 	if got := kagentMonitor(render()); got != false {
 		t.Errorf("dev channel: kagent.serviceMonitor.enabled = %v, want false", got)
 	}
+}
+
+// A released 3.x meta chart (platform.chartVersion below 4.0.0 on the stable
+// channel) gets the 3.x lab shape: the chart's closed root schema and the
+// kagent 0.10 wrapper it resolves refuse every key of the current line, so
+// none of them render — no platform Postgres or CNPG operator, no Substrate,
+// and a kagent block with the plain controller route, the local-dev auth
+// mode and the monitor following observability (the 0.10 controller serves
+// /metrics). Everything else is the current line's render, byte for byte:
+// the legacy values are exactly the 4.x values minus those keys.
+func TestPlatformValuesLegacyChartShape(t *testing.T) {
+	render := func(cfg *config.Config) (map[string]any, string) {
+		out, err := renderTemplate(cfg, "agent-platform-values.yaml.tmpl", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var values map[string]any
+		if err := yaml.Unmarshal(out, &values); err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		return values, string(out)
+	}
+	current := config.Default()
+	legacy := config.Default()
+	legacy.Platform.ChartVersion = "3.23.1"
+	if !legacy.LegacyChart() || current.LegacyChart() {
+		t.Fatalf("LegacyChart(): 3.23.1=%v %s=%v", legacy.LegacyChart(), current.Platform.ChartVersion, current.LegacyChart())
+	}
+	currentValues, currentOut := render(current)
+	legacyValues, legacyOut := render(legacy)
+
+	kagent := legacyValues["kagent"].(map[string]any)
+	for _, key := range []string{"postgres", "substrate"} {
+		if _, ok := legacyValues[key]; ok {
+			t.Errorf("3.x shape: root %s rendered (the 3.x root schema is closed)", key)
+		}
+	}
+	if _, ok := legacyValues["components"].(map[string]any)["cloudnative-pg"]; ok {
+		t.Error("3.x shape: components.cloudnative-pg rendered (kagent 0.10 runs its bundled Postgres)")
+	}
+	for _, key := range []string{fieldHarness, "database", "substrateWorkerPool"} {
+		if _, ok := kagent[key]; ok {
+			t.Errorf("3.x shape: kagent.%s rendered (the 0.10 wrapper's schema is closed)", key)
+		}
+	}
+	if _, ok := kagent["controllerRoute"].(map[string]any)["jwtAuthentication"]; ok || kagent["controllerRoute"].(map[string]any)["enabled"] != true {
+		t.Errorf("3.x shape: kagent.controllerRoute = %v, want enabled without jwtAuthentication", kagent["controllerRoute"])
+	}
+	controller := kagent["controller"].(map[string]any)
+	for _, key := range []string{"volumes", "volumeMounts"} {
+		if _, ok := controller[key]; ok {
+			t.Errorf("3.x shape: kagent.controller.%s rendered (no platform Postgres to mount)", key)
+		}
+	}
+	if got := controller["auth"].(map[string]any)["mode"]; got != "unsecure" {
+		t.Errorf("3.x shape: kagent.controller.auth.mode = %v, want unsecure (no JWT policy in front)", got)
+	}
+	if got := kagent["serviceMonitor"].(map[string]any)["enabled"]; got != true {
+		t.Errorf("3.x shape: kagent.serviceMonitor.enabled = %v, want observability (%v)", got, legacy.Platform.Observability)
+	}
+	if got := kagent["providers"].(map[string]any)["default"]; got != "anthropic" {
+		t.Errorf("3.x shape: kagent.providers.default = %v, want anthropic", got)
+	}
+	if got := kagent["ui"].(map[string]any)["service"].(map[string]any)["type"]; got != "NodePort" {
+		t.Errorf("3.x shape: kagent.ui.service.type = %v, want NodePort", got)
+	}
+
+	// The legacy render is the current one minus the 4.x keys — nothing else
+	// moves between the shapes.
+	expected := currentValues
+	delete(expected, "postgres")
+	delete(expected, "substrate")
+	delete(expected["components"].(map[string]any), "cloudnative-pg")
+	expectedKagent := expected["kagent"].(map[string]any)
+	delete(expectedKagent, fieldHarness)
+	delete(expectedKagent, "database")
+	delete(expectedKagent["controllerRoute"].(map[string]any), "jwtAuthentication")
+	delete(expectedKagent["controller"].(map[string]any), "volumes")
+	delete(expectedKagent["controller"].(map[string]any), "volumeMounts")
+	expectedKagent["controller"].(map[string]any)["auth"].(map[string]any)["mode"] = "unsecure"
+	expectedKagent["serviceMonitor"].(map[string]any)["enabled"] = legacy.Platform.Observability
+	if !reflect.DeepEqual(expected, legacyValues) {
+		t.Errorf("the 3.x values differ from the 4.x values in more than the 4.x keys:\n--- 4.x minus the keys\n%s\n--- 3.x\n%s", mustYAML(t, expected), mustYAML(t, legacyValues))
+	}
+
+	// The current line is unchanged by the switch: a 4.x release, a 5.x one,
+	// the dev channel and a chart directory render the same bytes, and a
+	// 3.x-numbered dev build is still the current line.
+	for name, mutate := range map[string]func(*config.Config){
+		"4.x release": func(c *config.Config) { c.Platform.ChartVersion = "4.7.11" },
+		"5.x release": func(c *config.Config) { c.Platform.ChartVersion = "5.0.0" },
+		"dev channel on a 3.x-numbered": func(c *config.Config) {
+			c.Platform.ChartVersion, c.Platform.ChartBranch = "3.24.0-dev.main.2026-09-11.08-12-33.h7f841be", testRefMain
+		},
+		"chart directory": func(c *config.Config) { c.Platform.ChartVersion, c.Platform.ChartPath = "3.23.1", t.TempDir() },
+	} {
+		cfg := config.Default()
+		mutate(cfg)
+		if _, out := render(cfg); out != currentOut {
+			t.Errorf("%s: the render differs from the current line's", name)
+		}
+	}
+	if legacyOut == currentOut {
+		t.Error("the 3.x render must differ from the current line's")
+	}
+}
+
+func mustYAML(t *testing.T, v any) string {
+	t.Helper()
+	out, err := yaml.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
 }
 
 // The 4.x line's topology is the lab's shape: Agent Substrate and the

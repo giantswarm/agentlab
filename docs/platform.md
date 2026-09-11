@@ -43,6 +43,18 @@ The lab installs it in its **lab shape**:
   The one exception is deliberate too: the [dev channel](#dev-channel),
   where `platform.chartBranch` follows a branch's newest dev build — and
   still installs an exact version, written into `chartVersion`.
+- A **released 3.x meta chart** (`chartVersion` below `4.0.0`, no
+  `chartBranch`, no `chartPath`) renders the **3.x lab shape**: that line's
+  root schema is closed and the kagent 0.10 wrapper it resolves refuses the
+  current line's keys, so the lab values carry no platform Postgres
+  (`postgres`, `components.cloudnative-pg`), no `substrate`, and a `kagent`
+  block without `harness`, `database`, the JWT policy on the controller route
+  or the CNPG DSN mount — kagent 0.10 on its bundled Postgres, the controller
+  in its local-dev auth mode, the controller ServiceMonitor following
+  observability. This is what a migration rehearsal seeds before upgrading
+  in place to the 4.x line; the switch is `config.LegacyChart`. The dev
+  channel and a chart directory always render the current line's shape,
+  whatever version they carry.
 
 The platform installs as part of `agentlab up` (it is enabled in the default
 configuration); on an already-running cluster the steps are also standalone:
