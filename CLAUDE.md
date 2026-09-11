@@ -60,12 +60,12 @@ with Dex doing the logins.
   (mcp-prometheus.yaml.tmpl), not a helm install of its own.
 - The agents runtime (kagent) installs with the platform by default but is
   optional (`platform.agents` in `agentlab.yaml`). Agents are Flux
-  HelmReleases on every installation: Backstage's agent create flow
-  (`/agents/new`) deploys by kube:applying Flux CRs through the scaffolder
-  Template `agent-deployment` (embedded into the lab catalog from
-  `templates/static/`), agent-manager writes the same objects, and the
-  platform chart's bundled engine reconciles them — nothing watches git, and
-  the lab installs no Flux of its own. Its default
+  HelmReleases of the Generic agent chart (1.x) on every installation:
+  Backstage's agent create flow (`/agents/new`) deploys through
+  agent-manager's `create_agent` over muster as the signed-in person, the
+  same tool an MCP session drives, and the platform chart's bundled engine
+  reconciles the HelmRelease — nothing watches git, and the lab installs no
+  Flux of its own. Its default
   ModelConfig and Backstage's ai-chat both use `aiModel` from `agentlab.yaml`
   (Anthropic only); the API key comes from `$ANTHROPIC_API_KEY` on the host at
   deploy time and lives only in the Secrets `kagent/kagent-anthropic` and

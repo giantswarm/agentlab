@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/giantswarm/agentlab/internal/config"
@@ -15,8 +16,13 @@ import (
 var handlerPayloadRe = regexp.MustCompile(`decodeURIComponent\('([^']+)'\)`)
 
 // BackstageTest drives the full Backstage <-> Dex sign-in headlessly for each
-// user, reports the identity Backstage resolved, and then proves the Giant
-// Swarm muster plugin can reach muster with that user's forwarded token.
+// user, reports the identity Backstage resolved, proves the Giant Swarm
+// muster plugin can reach muster with that user's forwarded token, and then
+// drives the Dev Portal's Agent Platform pages on kagent API v2 the way a
+// person does (backstagetest_agents.go): the wizard's create path through
+// agent-manager as the person, the agents list per user, a streamed and a
+// resumed conversation, HITL and Stop, the detail page's edit, skills update
+// and delete.
 func BackstageTest(cfg *config.Config, emails []string) error {
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
@@ -48,36 +54,11 @@ func BackstageTest(cfg *config.Config, emails []string) error {
 	}
 	fmt.Println("all sign-ins resolved and reached muster")
 
-	// The Agent Platform pages on kagent main, after every sign-in is in so
-	// the evidence above is complete whatever the portal answers: the agents
-	// list for every user, one chat turn for the first. A fresh lab has no
-	// AgentTemplate of its own (agent-manager and the portal write them on
-	// request), so the proof brings one along: every list must show it and
-	// the chat turn runs on it; deleted on every path.
 	if !cfg.Platform.Agents {
 		fmt.Println("agent platform pages skipped (platform.agents off)")
 		return nil
 	}
-	fmt.Printf("bringing agent %s along on Harness %s (ModelConfig %s): a fresh lab has none to list\n", backstageTestAgent, kagentHarness, defaultModelConfig)
-	defer func() {
-		if err := removeAgent(backstageTestAgent); err != nil {
-			note("cleanup: %v", err)
-		}
-	}()
-	if _, _, err := readyAgent(helmReleaseWriter{}, agentSpec{
-		Name: backstageTestAgent, ModelConfig: defaultModelConfig, DisplayName: "agentlab backstage-test", Toolset: []string{presetNone},
-		Description: "Throwaway agent of `agentlab backstage-test`; deleted by the same run.",
-	}, agentReadyTimeout); err != nil {
-		return err
-	}
-	for i, ps := range sessions {
-		fmt.Printf("=== %s: agent platform pages ===\n", ps.user.Email)
-		if err := proveAgentPlatformPages(ps, i == 0, backstageTestAgent); err != nil {
-			return fmt.Errorf("%s: %w", ps.user.Email, err)
-		}
-	}
-	fmt.Printf("agent platform pages listed %s for every user and answered a chat turn on it\n", backstageTestAgent)
-	return nil
+	return proveAgentPlatform(cfg, sessions)
 }
 
 // backstageSignIn drives one user's sign-in and the muster plugin's reads with
@@ -106,12 +87,19 @@ func backstageSignIn(cfg *config.Config, user *config.User) (*portalSession, err
 	}
 	servers, _ := unwrapKey(payload, "mcpServers").([]any)
 	pairs := make([]string, 0, len(servers))
+	names := make([]string, 0, len(servers))
 	for _, s := range servers {
 		if m, ok := s.(map[string]any); ok {
 			pairs = append(pairs, fmt.Sprintf("(%v, %v)", m[nameKey], m["state"]))
+			names = append(names, fmt.Sprintf("%v", m[nameKey]))
 		}
 	}
 	fmt.Printf("  muster servers  [%s]\n", strings.Join(pairs, ", "))
+	// The create wizard offers an installation only when its muster lists
+	// agent-manager (useAgentManagerAvailability): the feature detection.
+	if !slices.Contains(names, agentManagerMCPServer) {
+		return nil, fmt.Errorf("muster /servers lists no %s — the portal offers no installation to create agents on", agentManagerMCPServer)
+	}
 
 	// The per-server sign-in path behind the portal's Sign in button
 	// (backstage#2203), with this user's own forwarded token: the lab's
@@ -185,19 +173,6 @@ func backstageSignIn(cfg *config.Config, user *config.User) (*portalSession, err
 	} else {
 		fmt.Printf("  muster /core-tools -> %d\n", status)
 	}
-
-	// The agent create flow's Deploy button scaffolds
-	// template:default/agent-deployment; without the catalog entity every
-	// deploy dies with a scaffolder 404. Assert the lab registered it (the
-	// embedded copy in backstage.yaml.tmpl).
-	status, _, err = ps.backstageGet("/api/catalog/entities/by-name/template/default/agent-deployment")
-	if err != nil {
-		return nil, err
-	}
-	if status != http.StatusOK {
-		return nil, fmt.Errorf("agent-deployment template not in the catalog (%d) — the create flow's deploy would 404", status)
-	}
-	fmt.Printf("  agent deploy template registered (template:default/agent-deployment)\n")
 	return ps, nil
 }
 

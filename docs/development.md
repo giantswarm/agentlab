@@ -127,7 +127,7 @@ internal/lab/                    everything operational:
   exec.go kubeconfig.go            the docker subprocesses (the lab's one CLI) and the wait loop; the exported state/kubeconfig and the OIDC kubeconfig `login` writes
   render.go logs.go                template rendering into state/; `agentlab logs`
   open.go prompt.go                `agentlab open`'s target table (URL, gate, probe); the lab's yes/no questions — the trust offer `open` and the end of `up` share
-  templates/                       every manifest, rendered from agentlab.yaml (static/: the verbatim agent-deployment Template)
+  templates/                       every manifest, rendered from agentlab.yaml
 docs/                            this documentation; README.md is the front door
 HACKS.md                         the hack journal
 agentlab.yaml                    your configuration (gitignored; `agentlab configure`)

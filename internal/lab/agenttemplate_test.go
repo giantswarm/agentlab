@@ -84,35 +84,3 @@ func TestAgentTemplateFrom(t *testing.T) {
 		t.Errorf("a bare template: %+v %v", bare, err)
 	}
 }
-
-// TestPortalAgentRows: the agents list is read off a bare list or an object
-// carrying one, each row's name and readiness in the shapes a portal might
-// use; a row without a name and a payload without a list are refused.
-func TestPortalAgentRows(t *testing.T) {
-	rows, err := portalAgentRows(map[string]any{"agents": []any{
-		map[string]any{nameKey: "smoke", fieldNamespace: kagentNamespace, testReadyName: true},
-		map[string]any{"metadata": map[string]any{nameKey: "stuck", fieldNamespace: kagentNamespace}, "state": "NotReady"},
-		map[string]any{nameKey: "old", "status": "Ready"},
-	}})
-	if err != nil || len(rows) != 3 {
-		t.Fatalf("rows = %v, %v", rows, err)
-	}
-	if !rows[0].ready || rows[0].name != "smoke" || rows[1].ready || rows[1].name != "stuck" || rows[1].readiness != "state=NotReady" || !rows[2].ready || rows[2].namespace != "" {
-		t.Errorf("rows = %+v", rows)
-	}
-	if rows, err := portalAgentRows([]any{map[string]any{nameKey: "a"}}); err != nil || len(rows) != 1 || rows[0].ready || rows[0].readiness != "" {
-		t.Errorf("a bare list: %+v %v", rows, err)
-	}
-	if _, err := portalAgentRows(map[string]any{"total": 0}); err == nil || !strings.Contains(err.Error(), "no agents/items list") {
-		t.Errorf("no list: %v", err)
-	}
-	if _, err := portalAgentRows([]any{map[string]any{testReadyName: true}}); err == nil || !strings.Contains(err.Error(), "names no agent") {
-		t.Errorf("a nameless row: %v", err)
-	}
-	if _, err := portalAgentRows("nope"); err == nil {
-		t.Error("a string payload must fail")
-	}
-	if got := lastTextBut([]string{"ping", "", testPong}, "ping"); got != testPong {
-		t.Errorf("lastTextBut = %q", got)
-	}
-}

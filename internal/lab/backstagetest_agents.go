@@ -1,253 +1,297 @@
 package lab
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
-	"io"
-	"net/http"
 	"slices"
 	"strings"
+	"time"
 
-	"github.com/google/uuid"
+	"github.com/Masterminds/semver/v3"
+	"gopkg.in/yaml.v3"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
+
+	"github.com/giantswarm/agentlab/internal/config"
 )
 
-// The Agent Platform pages on kagent main, through the routes the portal's
-// backend (plugins/agent-platform-backend) serves the frontend: the agents
-// list — AgentTemplates joined with their Ready Harnesses — and a chat turn:
-// a session (the user's AgentInstance) and one message (an A2A SendMessage),
-// every call carrying the user's forwarded Dex id_token in
-// backstage-kagent-authorization, so kagent attributes them to the person.
-// The sessions routes and their bodies are the released plugin's; the
-// agent-templates route is the portal's kagent-main addition
-// (`GET /kagent/agent-templates?installation=&namespace=`, answering the
-// `{error, data: [...]}` envelope with one summary per AgentTemplate: `ref`,
-// `harnesses[{name, ready}]`, `ready`, the CR under `resource`). A portal that
-// still speaks kagent 0.10 answers 404 to it — reported as such, not as a crash.
+// The Agent Platform half of `agentlab backstage-test`: the Dev Portal's
+// create and chat paths on kagent API v2, driven headlessly the way a person
+// drives them, per user — the wizard's Deploy through agent-manager over
+// muster as the person (backstagetest_create.go), the agents list through
+// the Kubernetes proxy (backstagetest_roster.go), the Sessions pages through
+// the agent-platform backend (backstagetest_chat.go), the detail page's
+// edit, skills update and delete (backstagetest_edit.go). Everything the
+// proof creates — two agents, their sessions — is removed on every path.
 
+// backstageTestHITLAgent is the second agent the proof brings along: the
+// same shape written by the lab directly, with its muster binding requiring
+// approval, so the session page's confirmation and Stop paths have a tool
+// call that pauses. It is also the second release of the chart E7 keeps the
+// shared source for.
+const backstageTestHITLAgent = backstageTestAgent + "-hitl"
+
+// The chart value that gates every muster tool call behind a human approval
+// (spec.tools[].mcp.requireApproval on the binding), and the first chart
+// release that carries it.
 const (
-	// portalKagentAuthHeader carries the user's Dex id_token to the portal's
-	// agent-platform backend (KAGENT_AUTH_HEADER in plugins/agent-platform).
-	portalKagentAuthHeader = "backstage-kagent-authorization"
-	portalKagentAPI        = "/api/agent-platform/kagent"
-	portalAgentsPath       = portalKagentAPI + "/agent-templates?namespace=" + kagentNamespace
-	portalSessionsPath     = portalKagentAPI + "/sessions"
-	portalChatPrompt       = "Reply with exactly the word pong and nothing else."
-	portalSessionName      = "agentlab backstage-test"
-	// backstageTestAgent is the AgentTemplate the proof brings along: the
-	// list must show it, the chat turn runs on it.
-	backstageTestAgent = "agentlab-backstage-test"
+	musterRequireApprovalKey = "requireApproval"
+	agentChartWithApproval   = "1.1.0"
+	agentChartCatchUpTimeout = 2 * time.Minute
+	fluxReconcileAnnotation  = "reconcile.fluxcd.io/requestedAt"
 )
 
-// kagentRequest is one call to the portal's agent-platform backend as the
-// user: the Backstage identity token, the installation, and the user's Dex
-// id_token in the header the backend promotes to kagent.
-func (ps *portalSession) kagentRequest(method, path string, body any) (int, []byte, error) {
-	var payload string
-	if body != nil {
-		raw, err := json.Marshal(body)
-		if err != nil {
-			return 0, nil, err
-		}
-		payload = string(raw)
-	}
-	separator := "?"
-	if strings.Contains(path, "?") {
-		separator = "&"
-	}
-	req, err := http.NewRequest(method, ps.cfg.BackstageBaseURL()+path+separator+"installation="+platformRelease, strings.NewReader(payload))
+// hitlFixtureWriter writes an agent whose muster binding requires approval:
+// the direct writer's HelmRelease with values.muster.requireApproval set. The
+// manifest is the direct writer's, re-read and extended — one apply, one
+// Helm revision.
+type hitlFixtureWriter struct{}
+
+func (hitlFixtureWriter) String() string {
+	return "a HelmRelease of the agent chart applied directly, its muster binding requiring approval (muster.requireApproval)"
+}
+
+func (hitlFixtureWriter) createAgent(spec agentSpec) (*agentWritten, error) {
+	manifest, err := hitlAgentManifest(spec)
 	if err != nil {
-		return 0, nil, err
+		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+ps.bsToken)
-	req.Header.Set(portalKagentAuthHeader, ps.dexIDToken)
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
+	defer cancel()
+	written := &agentWritten{HelmRelease: true}
+	if _, _, _, err := agentChartSource(); apierrors.IsNotFound(err) {
+		written.OCIRepository = true
+		manifest = agentOCIRepositoryManifest() + "---\n" + manifest
+	} else if err != nil {
+		return nil, err
 	}
-	resp, err := ps.client.Do(req)
+	if _, err := applyManifests(ctx, []byte(manifest)); err != nil {
+		return nil, err
+	}
+	return written, nil
+}
+
+// hitlAgentManifest is the direct writer's HelmRelease for the spec with
+// values.muster.requireApproval, which the chart renders as requireApproval
+// on the template's binding of the agent's own RemoteMCPServer.
+func hitlAgentManifest(spec agentSpec) (string, error) {
+	var release map[string]any
+	if err := yaml.Unmarshal([]byte(agentHelmReleaseManifest(spec)), &release); err != nil {
+		return "", fmt.Errorf("re-reading the direct writer's HelmRelease: %w", err)
+	}
+	releaseSpec, _ := release["spec"].(map[string]any)
+	values, _ := releaseSpec["values"].(map[string]any)
+	if values == nil {
+		return "", fmt.Errorf("the direct writer's HelmRelease carries no spec.values:\n%s", agentHelmReleaseManifest(spec))
+	}
+	muster, _ := values["muster"].(map[string]any)
+	if muster == nil {
+		muster = map[string]any{}
+	}
+	muster[musterRequireApprovalKey] = true
+	values["muster"] = muster
+	out, err := yaml.Marshal(release)
 	if err != nil {
-		return 0, nil, err
+		return "", err
 	}
-	defer func() { _ = resp.Body.Close() }()
-	raw, _ := io.ReadAll(resp.Body)
-	return resp.StatusCode, raw, nil
+	return string(out), nil
 }
 
-// portalAgentRow is one agent of the portal's list as the proof reads it.
-type portalAgentRow struct {
-	name      string
-	namespace string
-	ready     bool
-	// readiness is what the row said, for the note.
-	readiness string
-}
-
-// portalAgentRows reads the agents list off the route's payload — a list, or
-// an object carrying one under `data` (the portal's envelope), `agents` or
-// `items` — each row naming the agent (`ref.name`/`ref.namespace`, `name` and
-// `namespace`, or metadata.name) with its readiness: a `ready` bool, or a
-// state/status/readiness string that reads Ready.
-func portalAgentRows(payload any) ([]portalAgentRow, error) {
-	items, ok := payload.([]any)
-	if !ok {
-		m, isMap := payload.(map[string]any)
-		if !isMap {
-			return nil, fmt.Errorf("the agents payload is a %T, neither a list nor an object", payload)
-		}
-		for _, key := range []string{"data", "agents", "items"} {
-			if list, found := m[key].([]any); found {
-				items, ok = list, true
-				break
-			}
-		}
-		if !ok {
-			return nil, fmt.Errorf("the agents payload carries no agents/items list (keys %v)", mapKeys(m))
-		}
-	}
-	rows := make([]portalAgentRow, 0, len(items))
-	for _, item := range items {
-		m, ok := item.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("an agents row is a %T, not an object", item)
-		}
-		row := portalAgentRow{name: stringAt(m, nameKey), namespace: stringAt(m, "namespace")}
-		if ref, ok := m["ref"].(map[string]any); ok {
-			row.name = firstNonEmpty(row.name, stringAt(ref, nameKey))
-			row.namespace = firstNonEmpty(row.namespace, stringAt(ref, "namespace"))
-		}
-		if meta, ok := m["metadata"].(map[string]any); ok {
-			row.name = firstNonEmpty(row.name, stringAt(meta, nameKey))
-			row.namespace = firstNonEmpty(row.namespace, stringAt(meta, "namespace"))
-		}
-		if row.name == "" {
-			return nil, fmt.Errorf("an agents row names no agent (keys %v)", mapKeys(m))
-		}
-		switch ready := m["ready"].(type) {
-		case bool:
-			row.ready, row.readiness = ready, fmt.Sprintf("ready=%v", ready)
-		default:
-			for _, key := range []string{"readiness", "state", "status"} {
-				if v := stringAt(m, key); v != "" {
-					row.readiness = key + "=" + v
-					row.ready = strings.EqualFold(v, "ready") || v == conditionTrue
-					break
-				}
-			}
-		}
-		rows = append(rows, row)
-	}
-	return rows, nil
-}
-
-// proveAgentPlatformPages drives the Agent Platform pages as the user: the
-// agents list (AgentTemplates with their readiness — own, the proof's agent,
-// Ready on the cluster, must be among them), and for the primary user a
-// session on own with one message answered — attributed to the person by the
-// forwarded token. A portal without the agents route (kagent 0.10) fails by
-// name.
-func proveAgentPlatformPages(ps *portalSession, primary bool, own string) error {
-	status, raw, err := ps.kagentRequest(http.MethodGet, portalAgentsPath, nil)
+// ensureAgentChartCarriesApproval makes sure the namespace's shared chart
+// source has fetched a release with muster.requireApproval before any agent
+// of this run renders: the OCIRepository tracks 1.x and polls on its
+// interval, so a release published since is asked for with Flux's reconcile
+// request and waited for, bounded. Nothing of the source's spec changes.
+func ensureAgentChartCarriesApproval() error {
+	version, err := agentChartArtifactVersion()
 	if err != nil {
 		return err
 	}
-	switch {
-	case status == http.StatusNotFound:
-		return fmt.Errorf("the portal backend answers 404 to %s — this Backstage (%s) still speaks kagent 0.10 (sessions over REST, agents from the cluster); the Agent Platform pages on kagent main are not runnable against it",
-			portalAgentsPath, firstNonEmpty(deploymentImage(platformNamespace, componentBackstage), "image unknown"))
-	case status == http.StatusForbidden && !primary:
-		fmt.Printf("  agents list      %d for %s (the portal lists as the person; the person may not read AgentTemplates): %.160s\n", status, ps.user.Email, raw)
+	if !chartVersionBelow(version, agentChartWithApproval) {
 		return nil
-	case status != http.StatusOK:
-		return fmt.Errorf("GET %s answered %d — the portal cannot read kagent's API as it expects (kagent main serves gRPC only): %.300s", portalAgentsPath, status, raw)
 	}
-	var payload any
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return fmt.Errorf("GET %s: not JSON: %w\n%.300s", portalAgentsPath, err, raw)
-	}
-	rows, err := portalAgentRows(payload)
+	note("OCIRepository %s holds chart %s; muster.%s needs %s — requesting a reconcile", agentChartOCIRepository, version, musterRequireApprovalKey, agentChartWithApproval)
+	gvr, err := gvrFor(fluxOCIRepositoryResource)
 	if err != nil {
-		return fmt.Errorf("GET %s: %w\n%.300s", portalAgentsPath, err, raw)
+		return err
 	}
-	if len(rows) == 0 {
-		return fmt.Errorf("GET %s lists no agents for %s although AgentTemplate %s/%s exists and is Ready on Harness %s", portalAgentsPath, ps.user.Email, kagentNamespace, own, kagentHarness)
+	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
+	defer cancel()
+	patch := fmt.Sprintf(`{"metadata":{"annotations":{%q:%q}}}`, fluxReconcileAnnotation, time.Now().UTC().Format(time.RFC3339Nano))
+	if err := patchObject(ctx, gvr, kagentNamespace, agentChartOCIRepository, types.MergePatchType, []byte(patch)); err != nil {
+		return err
 	}
-	var lines []string
-	ready := 0
-	for _, r := range rows {
-		lines = append(lines, fmt.Sprintf("(%s, %s)", r.name, firstNonEmpty(r.readiness, "readiness unknown")))
-		if r.ready {
-			ready++
-		}
-	}
-	slices.Sort(lines)
-	fmt.Printf("  agents list      %d agents, %d Ready: [%s]\n", len(rows), ready, strings.Join(lines, ", "))
-	idx := slices.IndexFunc(rows, func(r portalAgentRow) bool { return r.name == own })
-	if idx < 0 {
-		return fmt.Errorf("GET %s does not list %s, the AgentTemplate the proof created in %s — the list must show every AgentTemplate of the namespace", portalAgentsPath, own, kagentNamespace)
-	}
-	if !primary {
-		return nil
-	}
-	agent := rows[idx]
-	if !agent.ready {
-		return fmt.Errorf("%s is Ready on Harness %s but the portal's list says %s — nothing to chat with (the list must carry the AgentTemplates' readiness)", own, kagentHarness, firstNonEmpty(agent.readiness, "readiness unknown"))
-	}
-	namespace := firstNonEmpty(agent.namespace, kagentNamespace)
-
-	status, raw, err = ps.kagentRequest(http.MethodPost, portalSessionsPath, map[string]any{
-		"agentNamespace": namespace, "agentName": agent.name, nameKey: portalSessionName,
+	caught := waitFor(int(agentChartCatchUpTimeout/pollInterval), pollInterval, func() bool {
+		version, err = agentChartArtifactVersion()
+		return err == nil && !chartVersionBelow(version, agentChartWithApproval)
 	})
 	if err != nil {
 		return err
 	}
-	if status != http.StatusCreated && status != http.StatusOK {
-		return fmt.Errorf("POST %s for %s/%s answered %d: %.300s", portalSessionsPath, namespace, agent.name, status, raw)
+	if !caught {
+		return fmt.Errorf("OCIRepository %s still holds chart %s after %s; the HITL fixture needs >= %s (muster.%s)", agentChartOCIRepository, version, agentChartCatchUpTimeout, agentChartWithApproval, musterRequireApprovalKey)
 	}
-	var created any
-	_ = json.Unmarshal(raw, &created)
-	sessionID, _ := unwrapKey(created, "id").(string)
-	if sessionID == "" {
-		return fmt.Errorf("POST %s answered without a session id: %.300s", portalSessionsPath, raw)
-	}
-	defer func() {
-		if status, raw, err := ps.kagentRequest(http.MethodDelete, portalSessionsPath+"/"+sessionID, nil); err != nil || status/100 != 2 {
-			note("deleting session %s: %d %v %.120s", sessionID, status, err, raw)
-		}
-	}()
-	fmt.Printf("  session          %s on %s/%s (created for %s)\n", sessionID, namespace, agent.name, ps.user.Email)
-
-	status, raw, err = ps.kagentRequest(http.MethodPost, portalSessionsPath+"/"+sessionID+"/messages", map[string]any{
-		"agentNamespace": namespace, "agentName": agent.name, "messageId": uuid.NewString(), "text": portalChatPrompt,
-	})
-	if err != nil {
-		return err
-	}
-	switch {
-	case status == http.StatusAccepted:
-		return fmt.Errorf("the turn on %s outlived the portal backend's timeout (202 pending): %.200s", agent.name, raw)
-	case status != http.StatusOK:
-		return fmt.Errorf("POST %s/%s/messages answered %d: %.300s", portalSessionsPath, sessionID, status, raw)
-	}
-	var answer any
-	if err := json.Unmarshal(raw, &answer); err != nil {
-		return fmt.Errorf("the message answer is not JSON: %w\n%.300s", err, raw)
-	}
-	reply := lastTextBut(collectStrings(answer, "text"), portalChatPrompt)
-	if reply == "" {
-		return fmt.Errorf("the turn on %s answered without a text part: %.300s", agent.name, raw)
-	}
-	fmt.Printf("  chat turn        %s answered %q\n", agent.name, excerpt(reply, 80))
+	note("OCIRepository %s now holds chart %s", agentChartOCIRepository, version)
 	return nil
 }
 
-// lastTextBut is the last non-empty text that is not the prompt echoed back.
-func lastTextBut(texts []string, prompt string) string {
-	var reply string
-	for _, t := range texts {
-		if strings.TrimSpace(t) != "" && t != prompt {
-			reply = t
+// agentChartArtifactVersion is the chart version the shared OCIRepository
+// last fetched (status.artifact.revision, `<version>@sha256:…`), "" while it
+// has none; a missing source is not an error (the first create makes it).
+func agentChartArtifactVersion() (string, error) {
+	obj, err := readKagentFluxObject(fluxOCIRepositoryResource, agentChartOCIRepository)
+	if apierrors.IsNotFound(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	revision, _, _ := unstructured.NestedString(obj.Object, "status", "artifact", "revision")
+	version, _, _ := strings.Cut(revision, "@")
+	return version, nil
+}
+
+// chartVersionBelow reports whether the fetched version is older than the
+// floor; an empty or unparsable version counts as below (the source has not
+// fetched anything the proof can rely on).
+func chartVersionBelow(version, floor string) bool {
+	v, err := semver.NewVersion(version)
+	if err != nil {
+		return true
+	}
+	f, err := semver.NewVersion(floor)
+	if err != nil {
+		return true
+	}
+	return v.LessThan(f)
+}
+
+// proveAgentPlatform is the whole Agent Platform proof over the signed-in
+// sessions: the create path as the first platform-admin (the wizard needs
+// one), the roster as every user, the chat as the admin with every other
+// user as the boundary, HITL and Stop on the fixture, the edit path, and
+// both agents deleted through agent-manager. Every verdict line is printed
+// at the end.
+func proveAgentPlatform(cfg *config.Config, sessions []*portalSession) error {
+	primary := adminSession(sessions)
+	if primary == nil {
+		fmt.Printf("agent platform pages skipped: the portal's create path runs as a %s user and none is among %s\n", platformAdminsGroup, sessionEmails(sessions))
+		return nil
+	}
+	viewer := sessionInGroup(sessions, viewerGroup)
+	if viewer == nil {
+		note("no %s-group user among the sessions: the forbidden-write assertions are skipped", viewerGroup)
+	}
+
+	// Leftovers of an aborted run first, and everything this run creates on
+	// every exit path.
+	cleanup := func() {
+		for _, name := range []string{backstageTestAgent, backstageTestHITLAgent, backstageTestAgent + "-viewer"} {
+			if !agentExists(name) {
+				continue
+			}
+			note("cleanup: removing %s", name)
+			if err := removeAgent(name); err != nil {
+				note("cleanup: %v", err)
+			}
 		}
 	}
-	return reply
+	cleanup()
+	defer cleanup()
+	if err := ensureAgentChartCarriesApproval(); err != nil {
+		return err
+	}
+
+	var verdicts []string
+	spec, _, info, created, err := proveCreatePath(primary, viewer)
+	verdicts = append(verdicts, created...)
+	if err != nil {
+		return err
+	}
+
+	rostered, err := proveRoster(sessions, spec)
+	verdicts = append(verdicts, rostered...)
+	if err != nil {
+		return err
+	}
+
+	agent := portalAgentRef{Namespace: kagentNamespace, Name: spec.Name}
+	chatted, err := proveChat(primary, otherSessions(sessions, primary), agent)
+	verdicts = append(verdicts, chatted...)
+	if err != nil {
+		return err
+	}
+
+	hitlSpec := agentSpec{
+		Name: backstageTestHITLAgent, ModelConfig: spec.ModelConfig, DisplayName: backstageTestDisplayName + " (hitl)", Toolset: spec.Toolset,
+		Description:   "Throwaway agent of `agentlab backstage-test` whose muster binding requires approval; deleted by the same run.",
+		SystemMessage: skillsTestSystemPrompt,
+	}
+	writer := hitlFixtureWriter{}
+	step("The HITL fixture %s: %s", hitlSpec.Name, writer)
+	hitlTemplate, _, err := readyAgent(writer, hitlSpec, agentReadyTimeout)
+	if err != nil {
+		return err
+	}
+	if err := assertAgentRender(hitlTemplate, hitlSpec, firstNonEmpty(info.Muster.URL, defaultMusterMCPURL)); err != nil {
+		return err
+	}
+	if approval, err := templateRequiresApproval(hitlSpec.Name, hitlSpec.Name); err != nil {
+		return err
+	} else if !approval {
+		return fmt.Errorf("AgentTemplate %s binds RemoteMCPServer %s without requireApproval — the escape hatch did not reach the binding", hitlSpec.Name, hitlSpec.Name)
+	}
+	note("Ready on Harness %s; the binding of RemoteMCPServer %s requires approval", kagentHarness, hitlSpec.Name)
+	interrupted, err := proveHITLAndStop(primary, portalAgentRef{Namespace: kagentNamespace, Name: hitlSpec.Name})
+	verdicts = append(verdicts, interrupted...)
+	if err != nil {
+		return err
+	}
+
+	edited, err := proveEditPath(primary, viewer, spec, hitlSpec.Name)
+	verdicts = append(verdicts, edited...)
+	if err != nil {
+		return err
+	}
+
+	fmt.Println()
+	for _, v := range verdicts {
+		fmt.Println(v)
+	}
+	return nil
+}
+
+// templateRequiresApproval reports whether the AgentTemplate's binding of the
+// named MCP server carries spec.tools[].mcp.requireApproval, read off the
+// object as the apiserver holds it.
+func templateRequiresApproval(template, server string) (bool, error) {
+	obj, err := readKagentObject(agentTemplateResource, template)
+	if err != nil {
+		return false, err
+	}
+	tools, _, _ := unstructured.NestedSlice(obj.Object, "spec", "tools")
+	for _, tool := range tools {
+		m, ok := tool.(map[string]any)
+		if !ok {
+			continue
+		}
+		if bound, _, _ := unstructured.NestedString(m, "mcp", "server", nameKey); bound != server {
+			continue
+		}
+		approval, _, _ := unstructured.NestedBool(m, "mcp", "requireApproval")
+		return approval, nil
+	}
+	return false, nil
+}
+
+// sessionEmails lists the sessions' users.
+func sessionEmails(sessions []*portalSession) string {
+	emails := make([]string, 0, len(sessions))
+	for _, ps := range sessions {
+		emails = append(emails, ps.user.Email)
+	}
+	return strings.Join(emails, ", ")
 }
 
 // collectStrings walks a decoded JSON tree in document order and returns

@@ -18,7 +18,7 @@ import (
 	"github.com/giantswarm/agentlab/internal/config"
 )
 
-//go:embed templates/*.tmpl templates/static/*
+//go:embed templates/*.tmpl
 var templatesFS embed.FS
 
 // gatewayAPICRDs is the Gateway API standard-channel install (v1.5.0),
@@ -155,15 +155,7 @@ var tmplFuncs = template.FuncMap{
 		return fmt.Sprintf("%s-%s-%s-%s-%s", h[0:8], h[8:12], h[12:16], h[16:20], h[20:32])
 	},
 	"join": func(items []string, sep string) string { return strings.Join(items, sep) },
-	// staticFile inlines an embedded asset from templates/static/ verbatim —
-	// content that must bypass template rendering, like the scaffolder
-	// Template whose ${{ … }} expressions Go's text/template would try to
-	// parse as actions.
-	"staticFile": func(name string) (string, error) {
-		raw, err := templatesFS.ReadFile("templates/static/" + name)
-		return string(raw), err
-	},
-	// indent prefixes every non-empty line, for nesting staticFile content
+	// indent prefixes every non-empty line, for nesting rendered content
 	// into a YAML block scalar.
 	"indent": func(n int, s string) string {
 		pad := strings.Repeat(" ", n)

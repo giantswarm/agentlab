@@ -236,23 +236,19 @@ before bootstrap swaps it, or an mcp-oauth client built without
 `opts.RootCAs`) and thread the pool deterministically; then the probe can
 stay but the bounce becomes dead code.
 
-### U7. Backstage agent create flow: `agent-deployment` Template embedded as a copy
-The GS Backstage build (0.199.x) hard-defaults the create flow's deploy to
-`template:default/agent-deployment`, but ships no such entity — every
-installation is expected to load it from the external
-giantswarm/backstage-catalogs repo via a `catalog.locations` URL. Without it,
-Deploy dies with `404 Template template:default/agent-deployment not found`
-(observed 2026-08-28 on 0.199.9). The lab wants a hermetic catalog (no GitHub
-fetch at boot), so it embeds a **verbatim copy** of the upstream template
-(`internal/lab/templates/static/agent-deployment-template.yaml`, inlined into
-the `backstage-catalog` ConfigMap via the `staticFile` template func — the
-file bypasses Go templating because its `${{ … }}` scaffolder expressions
-contain `{{ … }}`). The copy can drift from upstream; `agentlab
-backstage-test` asserts the entity is registered, not that it matches.
-**Unblocks:** giantswarm/backstage — bundle the hidden Template with the
-backend (or point the default `deployTemplateRef` at an entity the image
-registers itself) so an install works without a network catalog location;
-then the embedded copy can be deleted.
+### U7. Backstage agent create flow: `agent-deployment` Template embedded as a copy — RETIRED
+The GS Backstage build up to 0.244.x deployed an agent by scaffolding the
+hidden catalog Template `template:default/agent-deployment` (a `kube:apply`
+of manifests the portal composed itself); the image shipped no such entity,
+so the lab embedded a verbatim copy of the upstream template into its
+catalog ConfigMap (`internal/lab/templates/static/`, the `staticFile` template
+func). Retired with the kagent API v2 portal (backstage 2.x): the wizard's
+Deploy is agent-manager's `create_agent` through the muster plugin's backend
+as the signed-in person — no scaffolder task, no `kube:apply`, no manifest
+composed in the portal — and `agentlab backstage-test` drives exactly that
+path (docs/backstage.md "The agent create flow"). The embedded copy, the
+catalog location and the template func are deleted; the lab catalog carries
+the users and groups only.
 
 ### U8. `golang-adk:0.9.12` not published to gsoci — agent pods ImagePullBackOff — RETIRED
 kagent 0.x's controller composed the runtime image for `runtime: go` agents
