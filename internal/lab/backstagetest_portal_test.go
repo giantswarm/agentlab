@@ -85,7 +85,7 @@ func newFakePortal(t *testing.T) *fakePortal {
 		// 200; a tool-level refusal thrown, so Backstage's error body.
 		text, isError := answer(call.Arguments)
 		if isError {
-			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"name": "Error", "message": text}, "response": map[string]any{"statusCode": http.StatusInternalServerError}})
+			writeJSON(w, http.StatusInternalServerError, map[string]any{fieldError: map[string]any{nameKey: "Error", "message": text}, "response": map[string]any{"statusCode": http.StatusInternalServerError}})
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
