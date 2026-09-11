@@ -99,10 +99,23 @@ const DefaultChartVersion = "4.7.11"
 // ChartRepository is where the agent-platform chart releases live.
 const ChartRepository = "oci://gsoci.azurecr.io/charts/giantswarm/agent-platform"
 
-// DevImageComponents are the components whose image platform.devImages can
-// swap: the agent-platform chart's component names (its `components.<name>`
-// entries) for the workloads the lab's dev loops build from a checkout.
-var DevImageComponents = []string{"muster", "backstage", "kagent", "mcp-kubernetes", "model-manager", "agent-manager"}
+// DevImageComponents are the targets platform.devImages can swap: the
+// agent-platform chart's component names (its `components.<name>` entries)
+// for the Deployments the lab's dev loops build from a checkout, plus
+// DevImageHarness for the platform Harness's runtime image.
+var DevImageComponents = []string{"muster", "backstage", "kagent", "mcp-kubernetes", "model-manager", "agent-manager", DevImageHarness}
+
+// DevImageHarness is the devImages key of the platform Harness's workload
+// image — the Go ADK runtime every agent runs on under kagent API v2. Not a
+// Deployment: the connectivity chart renders the image by digest into the
+// `Harness` object, and Substrate's atelet pulls it from a registry into its
+// own layer cache, so the lab pushes the local build to its registry
+// (DevRegistryPort) and forwards the digest through kagent.harness.image.
+const DevImageHarness = "harness"
+
+// DefaultDevRegistryPort is the host port of the lab registry when
+// agentlab.yaml sets none: kind's documented local-registry port.
+const DefaultDevRegistryPort = 5001
 
 type User struct {
 	Email        string   `yaml:"email"`
@@ -187,14 +200,27 @@ type Platform struct {
 	// (or the key is dropped). Meaningless without chartBranch.
 	ChartPinned bool `yaml:"chartPinned,omitempty"`
 	// DevImages swaps a component's image for a build of your own (the lab's
-	// dev-image loop): component name -> image ref (`muster: muster:dev-1a2b`).
-	// `agentlab platform` side-loads the ref from the host docker cache and
-	// renders it into the component's HelmRelease as a kustomize image
-	// override (postRenderers) with imagePullPolicy IfNotPresent, so the swap
-	// is part of the release — a plain `helm upgrade` applies it, and removing
-	// the entry restores the chart's image on the next run. Keys are the
-	// DevImageComponents.
+	// dev-image loop): target -> image ref (`muster: muster:dev-1a2b`). Keys
+	// are the DevImageComponents. For a Deployment target `agentlab platform`
+	// side-loads the ref from the host docker cache, resolves the image name
+	// it replaces from the component chart's render (the kagent controller is
+	// `ghcr.io/giantswarm/kagent/controller` on the 4.x line and
+	// `gsoci.azurecr.io/giantswarm/kagent-controller` on 3.x — a target that
+	// matches nothing in the render is an error before the install, never a
+	// silently dropped override) and renders it into the component's
+	// HelmRelease as a kustomize image override (postRenderers) with
+	// imagePullPolicy IfNotPresent. For the `harness` target it pushes the
+	// build to the lab registry and forwards the digest as
+	// kagent.harness.image, so the platform Harness runs it and recompiles
+	// every admitted template. Either way the swap is part of the release — a
+	// plain `helm upgrade` applies it, and removing the entry restores the
+	// chart's image (or digest) on the next run.
 	DevImages map[string]string `yaml:"devImages,omitempty"`
+	// DevRegistryPort is the host port (127.0.0.1) of the lab registry that
+	// serves the `harness` dev image: a `registry` container on the kind
+	// docker network, created on demand by `agentlab platform` and removed by
+	// `agentlab down`. Unset means DefaultDevRegistryPort.
+	DevRegistryPort int `yaml:"devRegistryPort,omitempty"`
 	// ValuesFiles are extra Helm values files merged over the lab's rendered
 	// values before the meta chart install, in order, with `helm -f`
 	// semantics (maps merge, lists replace, the later file wins): a lab that
@@ -466,6 +492,9 @@ func Default() *Config {
 			Domain:        "127.0.0.1.nip.io",
 			GatewayPort:   443,
 			ChartVersion:  DefaultChartVersion,
+			// The lab registry behind the `harness` dev image; a container
+			// on the kind network, so no node port mapping is involved.
+			DevRegistryPort: DefaultDevRegistryPort,
 		},
 		Backstage: Backstage{
 			Enabled: true,
@@ -640,6 +669,9 @@ func (c *Config) Normalize() {
 	if len(c.Platform.DevImages) == 0 {
 		c.Platform.DevImages = nil
 	}
+	if c.Platform.DevRegistryPort == 0 {
+		c.Platform.DevRegistryPort = DefaultDevRegistryPort
+	}
 	if len(c.Platform.ValuesFiles) == 0 {
 		c.Platform.ValuesFiles = nil
 	}
@@ -804,10 +836,18 @@ func (c *Config) Validate() error {
 	}
 	for component, ref := range c.Platform.DevImages {
 		if !slices.Contains(DevImageComponents, component) {
-			return fmt.Errorf("platform.devImages: unknown component %q (one of %s)", component, strings.Join(DevImageComponents, ", "))
+			return fmt.Errorf("platform.devImages: unknown target %q (one of %s)", component, strings.Join(DevImageComponents, ", "))
 		}
 		if err := ValidateImageRef(ref); err != nil {
 			return fmt.Errorf("platform.devImages.%s %q: %w", component, ref, err)
+		}
+	}
+	if _, ok := c.Platform.DevImages[DevImageHarness]; ok && !c.Platform.Agents {
+		return fmt.Errorf("platform.devImages.%s: the platform Harness comes with the agents (platform.agents: true)", DevImageHarness)
+	}
+	if c.Platform.DevRegistryPort != 0 {
+		if err := ValidatePort(strconv.Itoa(c.Platform.DevRegistryPort)); err != nil {
+			return fmt.Errorf("platform.devRegistryPort: %w", err)
 		}
 	}
 	for _, path := range c.Platform.ValuesFiles {

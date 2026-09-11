@@ -53,6 +53,13 @@ import (
 //  5. The dev images (platform.devImages): a kustomize image override to the
 //     build on this host plus imagePullPolicy IfNotPresent on its container,
 //     so the side-loaded image is used as is (backstage's chart pulls Always).
+//     The name the override replaces is the component chart's, read from its
+//     render (devimages.go) — the kagent controller's differs between the
+//     lines — and an override that would match nothing in the render is an
+//     error before the install, because kustomize drops it silently. The
+//     `harness` target is not a post-renderer: the platform Harness pins its
+//     image by digest through the connectivity values (kagent.harness.image,
+//     the values template), served by the lab registry.
 //
 // The values-side shape is Flux's: `postRenderers: [{kustomize: {patches:
 // [{target, patch}], images: [{name, newName, newTag}]}}]`.
@@ -108,16 +115,22 @@ type postRenderer struct {
 	} `yaml:"kustomize"`
 }
 
-// devImageTarget is what the dev-image swap of one component has to know
-// about the component chart's render: the image name it replaces and the
-// Deployment/container whose pull policy it relaxes.
+// devImageTarget is what the dev-image swap of one Deployment component has
+// to know about the component chart's render: the Deployment/container whose
+// image it replaces and whose pull policy it relaxes, and the image name the
+// chart renders there when the render itself cannot be asked (`agentlab
+// render`, a component chart that failed to render) — what kustomize matches
+// on (the name without tag). `agentlab platform` resolves the live name from
+// the render instead (resolveDevImageNames).
 type devImageTarget struct {
 	deployment, container, image string
 }
 
-// devImageTargets maps the DevImageComponents to their chart render. Image
-// names are the charts' at global.registry gsoci.azurecr.io — what kustomize
-// matches on (the name without tag).
+// devImageTargets maps the Deployment targets of the DevImageComponents to
+// their chart render. The fallback names are the charts' at global.registry
+// gsoci.azurecr.io; the kagent controller's is the 3.x wrapper's — the kagent
+// line publishes it as ghcr.io/giantswarm/kagent/controller, which the render
+// says.
 var devImageTargets = map[string]devImageTarget{
 	componentMuster:        {componentMuster, componentMuster, "gsoci.azurecr.io/giantswarm/muster"},
 	componentBackstage:     {componentBackstage, componentBackstage, "gsoci.azurecr.io/giantswarm/backstage"},
@@ -125,6 +138,18 @@ var devImageTargets = map[string]devImageTarget{
 	componentMCPKubernetes: {componentMCPKubernetes, componentMCPKubernetes, "gsoci.azurecr.io/giantswarm/mcp-kubernetes"},
 	modelManagerMCPServer:  {modelManagerMCPServer, modelManagerMCPServer, "gsoci.azurecr.io/giantswarm/model-manager"},
 	agentManagerMCPServer:  {agentManagerMCPServer, agentManagerMCPServer, "gsoci.azurecr.io/giantswarm/agent-manager"},
+}
+
+// defaultDevImageNames is the image name per configured Deployment target as
+// the table above has it — the names a render without a cluster uses.
+func defaultDevImageNames(cfg *config.Config) map[string]string {
+	names := map[string]string{}
+	for component := range cfg.Platform.DevImages {
+		if target, ok := devImageTargets[component]; ok {
+			names[component] = target.image
+		}
+	}
+	return names
 }
 
 // hostNetworkPatch is patch 1+2 for a Deployment.
@@ -230,8 +255,11 @@ func sidecarPostRenderer(deployment string, dexPort int) postRenderer {
 
 // componentPostRenderers renders the lab's postRenderers list per component
 // as indented YAML, keyed by the agent-platform component name, for the
-// values template. Components without a patch are absent.
-func componentPostRenderers(cfg *config.Config) (map[string]string, error) {
+// values template. Components without a patch are absent. imageNames is the
+// chart image name each configured Deployment target replaces (resolved from
+// the render, or defaultDevImageNames); a configured target absent from it
+// renders no override.
+func componentPostRenderers(cfg *config.Config, imageNames map[string]string) (map[string]string, error) {
 	patches := map[string][]kustomizePatch{
 		componentMuster:        {hostNetworkPatch(componentMuster)},
 		componentBackstage:     {hostNetworkPatch(componentBackstage)},
@@ -246,8 +274,12 @@ func componentPostRenderers(cfg *config.Config) (map[string]string, error) {
 	}
 	images := map[string][]kustomizeImage{}
 	for _, component := range slices.Sorted(maps.Keys(cfg.Platform.DevImages)) {
-		target := devImageTargets[component]
-		images[component] = append(images[component], devImageOverride(target.image, cfg.Platform.DevImages[component]))
+		target, ok := devImageTargets[component]
+		name := imageNames[component]
+		if !ok || name == "" {
+			continue
+		}
+		images[component] = append(images[component], devImageOverride(name, cfg.Platform.DevImages[component]))
 		patches[component] = append(patches[component], pullPolicyPatch(target))
 	}
 	out := map[string]string{}
@@ -287,15 +319,30 @@ func devImageOverride(name, ref string) kustomizeImage {
 	return img
 }
 
-// devImageRefs lists the dev images to side-load, fully qualified.
+// devImageRefs lists the dev images to side-load into the node, fully
+// qualified: the Deployment targets. The `harness` image is not among them —
+// nothing on the node's containerd pulls it (pushDevImage).
 func devImageRefs(cfg *config.Config) []string {
 	var refs []string
-	for _, ref := range cfg.Platform.DevImages {
+	for component, ref := range cfg.Platform.DevImages {
+		if component == config.DevImageHarness {
+			continue
+		}
 		refs = append(refs, fullImageRef(ref))
 	}
 	slices.Sort(refs)
 	return refs
 }
+
+// harnessDevImage is the configured `harness` dev image ref, "" when none.
+func harnessDevImage(cfg *config.Config) string {
+	return cfg.Platform.DevImages[config.DevImageHarness]
+}
+
+// localhostName is the host docker, containerd and atelet treat as a local
+// registry without TLS: the lab registry's spelling on the host and in the
+// Harness ref, and one of the lab Dex's names (certs.go).
+const localhostName = "localhost"
 
 // fullImageRef spells a ref the way containerd (and `crictl images`) does:
 // docker's implicit registry and library namespace made explicit, so
@@ -307,7 +354,7 @@ func fullImageRef(ref string) string {
 	if !hasPath {
 		return "docker.io/library/" + ref
 	}
-	if strings.ContainsAny(first, ".:") || first == "localhost" {
+	if strings.ContainsAny(first, ".:") || first == localhostName {
 		return ref
 	}
 	return "docker.io/" + ref

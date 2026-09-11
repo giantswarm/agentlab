@@ -334,6 +334,15 @@ func TestPlatformValuesFourXTopology(t *testing.T) {
 	if at("kagent", "harness", "snapshotLocation") != "s3://ate-snapshots/kagent" || at("substrate", "rustfs", "enabled") != true {
 		t.Errorf("snapshot store: kagent.harness.snapshotLocation=%v substrate.rustfs.enabled=%v", at("kagent", "harness", "snapshotLocation"), at("substrate", "rustfs", "enabled"))
 	}
+	// The lab registry rewrite rides in the same substrate block (a second
+	// `substrate:` key would replace the first in the values merge) and the
+	// Harness keeps the chart's digest until a `harness` dev image pins it.
+	if args, _ := at("substrate", "atelet", "extraArgs").([]any); len(args) != 1 || args[0] != "--localhost-registry-replacement=agentlab-registry:5000" {
+		t.Errorf("substrate.atelet.extraArgs = %v, want only the lab registry rewrite", args)
+	}
+	if at("kagent", "harness", "image") != nil {
+		t.Errorf("kagent.harness.image = %v, want the chart's pin without a harness dev image", at("kagent", "harness", "image"))
+	}
 	if at("kagent", "controller", "auth", "mode") != "trusted-proxy" {
 		t.Errorf("kagent.controller.auth.mode = %v, want trusted-proxy (the JWT policy is the first layer)", at("kagent", "controller", "auth", "mode"))
 	}

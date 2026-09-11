@@ -31,6 +31,9 @@ func Down(cfg *config.Config) error {
 	_ = os.Remove(".token")
 	// The exported kubeconfig described a cluster that no longer exists.
 	_ = os.Remove(labKubeconfigPath)
+	// The lab registry (the `harness` dev image, devimages.go) served this
+	// cluster's Harness; its content is a push away on the next lab.
+	removeDevRegistry(cfg)
 	fmt.Println("Lab destroyed. certs/ kept (agentlab certs --force to regenerate).")
 	return nil
 }

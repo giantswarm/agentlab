@@ -95,7 +95,8 @@ internal/lab/                    everything operational:
   oidc.go login.go browser.go      the lab's Dex clients: password grant, authorization-code flow
   test.go                          RBAC assertions for every configured user
   platform.go platformtest.go      agent platform install + the headless MCP proof
-  postrenderers.go                 the lab's per-component postRenderers patches (hostNetwork, sidecar, nodePort, dev images)
+  postrenderers.go                 the lab's per-component postRenderers patches (hostNetwork, sidecar, nodePort, dev-image overrides)
+  devimages.go                     the dev-image swap: image names resolved from the component renders, the lab registry + the digest-pinned Harness image
   fluxreleases.go                  image preload from the chart's rendered OCIRepositories/HelmReleases, each at the version Flux would pull (semverFilter included)
   helm.go restclient.go            the embedded Helm 4 (upgrade-or-install with the kstatus wait, offline renders, probes, uninstalls); the lab kubeconfig as a client-go REST client getter
   resources.go                     docker CPU/memory: the requests table and the floors `up` enforces

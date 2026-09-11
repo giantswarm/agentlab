@@ -326,6 +326,23 @@ postgres:
 substrate:
   rustfs:
     enabled: true
+  # The lab registry a `harness` dev image is served from
+  # (platform.devImages.harness, devimages.go). The Harness's workload image
+  # is pulled by Substrate's atelet into its own layer cache, never through
+  # the node's containerd, so a side-load cannot reach it; the kind
+  # local-registry pattern can: the Harness names the image as
+  # localhost:<port>/…@sha256:…, and atelet rewrites that registry to the
+  # container's endpoint on the kind docker network (plain HTTP). The chart
+  # forwards the flag verbatim to its substrate component. Always on with the
+  # agents, not only while a dev image is configured: the flag is inert for
+  # every other image ref, and having it in place before a swap means the
+  # Harness's new digest can never race ahead of the atelet roll that would
+  # carry it — the connectivity release (the Harness) and the substrate
+  # release (atelet) reconcile independently. The registry container itself
+  # is created on the first swap.
+  atelet:
+    extraArgs:
+      - --localhost-registry-replacement={{ .LocalRegistryEndpoint }}
 
 kagent:
   # The kagent controller's gRPC API through the edge — the Dev Portal, the
@@ -356,6 +373,18 @@ kagent:
   # Required by the chart with kagent on; an installation names its bucket.
   harness:
     snapshotLocation: s3://ate-snapshots/kagent
+{{- if .HarnessDevImage }}
+    # The `harness` dev image (platform.devImages.harness, devimages.go): the
+    # build on this host, pushed to the lab registry and pinned by the digest
+    # the registry computed for it. The meta chart forwards this to the
+    # connectivity chart, which renders it as the platform Harness's workload
+    # image — the CRD accepts nothing but a digest — and a changed image
+    # recompiles every template the Harness admits (a new golden snapshot per
+    # revision). Substrate's atelet pulls it from the registry, rewriting the
+    # localhost host to the registry container (substrate.atelet.extraArgs
+    # above).
+    image: {{ .HarnessDevImage }}
+{{- end }}
   # The controller's database is the platform Postgres (postgres.enabled
   # below, the fleet shape): kagent's `kagent_v2` database on the CNPG
   # Cluster, its connection Secret <clusterName>-kagent-v2-app derived by

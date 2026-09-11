@@ -141,10 +141,13 @@ var offlineAPIVersions = []string{
 // each). A release that does not render is reported and skipped: the node
 // pulls whatever the preload misses. The versions picked through a
 // semverFilter come back as "<name> <version>" lines, sorted — the channel
-// evidence the boot log shows.
-func fluxReleaseImages(releases []fluxRelease, apiVersions []string) (images, filtered []string, errs []error) {
+// evidence the boot log shows. The renders themselves come back keyed by
+// release name: what the dev-image swap reads a component's image name off
+// (resolveDevImageNames).
+func fluxReleaseImages(releases []fluxRelease, apiVersions []string) (images, filtered []string, renders map[string]string, errs []error) {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
+	renders = map[string]string{}
 	for _, rel := range releases {
 		wg.Go(func() {
 			rendered, version, err := renderFluxRelease(rel, apiVersions)
@@ -157,13 +160,14 @@ func fluxReleaseImages(releases []fluxRelease, apiVersions []string) (images, fi
 			if rel.Filter != "" {
 				filtered = append(filtered, rel.Name+" "+version)
 			}
+			renders[rel.Name] = rendered
 			images = append(images, scrapeImages(rendered)...)
 		})
 	}
 	wg.Wait()
 	slices.Sort(images)
 	slices.Sort(filtered)
-	return slices.Compact(images), filtered, errs
+	return slices.Compact(images), filtered, renders, errs
 }
 
 // renderFluxRelease renders one component chart offline as helm-controller
@@ -287,10 +291,13 @@ const cnpgRelease = "cloudnative-pg"
 // mcp-prometheus HelmRelease the same way. The images the engine composes at
 // run time — the FluxInstance's source- and helm-controller — are in no
 // render; the snapshot manifest covers them from the second boot on.
-// Best-effort throughout: failures are notes, the node pulls the rest.
-func platformImages(cfg *config.Config, roster *platformRoster) []string {
+// Best-effort throughout: failures are notes, the node pulls the rest. The
+// component renders come back too, keyed by release name (nil without a
+// roster): the dev-image swap reads its image names off them
+// (resolveDevImageNames).
+func platformImages(cfg *config.Config, roster *platformRoster) ([]string, map[string]string) {
 	if roster == nil {
-		return nil
+		return nil, nil
 	}
 	images := scrapeImages(roster.manifest)
 	releases := roster.releases
@@ -305,7 +312,7 @@ func platformImages(cfg *config.Config, roster *platformRoster) []string {
 	if cfg.Platform.Observability {
 		apiVersions = append(slices.Clone(apiVersions), "monitoring.coreos.com/v1")
 	}
-	componentImages, filtered, errs := fluxReleaseImages(releases, apiVersions)
+	componentImages, filtered, renders, errs := fluxReleaseImages(releases, apiVersions)
 	for _, err := range errs {
 		note("component render skipped: %s", excerpt(err.Error(), 300))
 	}
@@ -316,7 +323,7 @@ func platformImages(cfg *config.Config, roster *platformRoster) []string {
 	if len(byDigest) > 0 {
 		note("%d digest-pinned refs are the node's to pull (a saved archive of a digest-only reference imports as an unnamed image the CRI cannot start a pod from):\n      %s", len(byDigest), strings.Join(byDigest, "\n      "))
 	}
-	return images
+	return images, renders
 }
 
 // splitDigestRefs separates the refs a side-load can carry — tagged
