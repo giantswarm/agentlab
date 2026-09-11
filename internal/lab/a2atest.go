@@ -613,9 +613,15 @@ func (a *kagentAPI) cancelRunningTurn(instanceID, prompt string) (*canceledTurn,
 	defer cancel()
 	events := make(chan streamed)
 	go func() {
+		// The consumer may leave early on an error of its own; the context
+		// it cancels on the way out ends the stream and this send alike.
 		defer close(events)
 		for ev, err := range a.stream(ctx, instanceID, userMessage(prompt)) {
-			events <- streamed{ev, err}
+			select {
+			case events <- streamed{ev, err}:
+			case <-ctx.Done():
+				return
+			}
 			if err != nil {
 				return
 			}
