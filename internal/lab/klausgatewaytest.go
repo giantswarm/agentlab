@@ -1094,7 +1094,7 @@ func (w *webClient) approveUntilDone(api *kagentAPI, instanceID string, turn *we
 		if state := task.Status.State; state != a2a.TaskStateInputRequired {
 			return nil, fmt.Errorf("the gateway reports a prompt on task %s but the controller has it %s, not TASK_STATE_INPUT_REQUIRED", out.taskID, state)
 		}
-		turn, err = w.send(context.Background(), webMessage{Text: "approve", TaskID: out.taskID, Decision: &webDecision{Type: "approve"}}, klausGatewayTurnTimeout)
+		turn, err = w.send(context.Background(), webMessage{Text: hitlDecisionApprove, TaskID: out.taskID, Decision: &webDecision{Type: hitlDecisionApprove}}, klausGatewayTurnTimeout)
 		if err != nil {
 			return nil, fmt.Errorf("approval %d: %w", out.rounds, err)
 		}

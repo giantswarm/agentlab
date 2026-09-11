@@ -338,7 +338,7 @@ func TestApproveUntilDone(t *testing.T) {
 		return fmt.Sprintf("event: prompt\ndata: {\"taskId\":\"task-1\",\"text\":\"%s?\",\"prompt\":{\"toolName\":\"%s\",\"tools\":[{\"id\":\"a\",\"name\":\"%s\"}]}}\n\n", tool, tool, tool)
 	}
 	approvals := 0
-	fake := &fakeWebGateway{t: t, script: map[string]string{klausGatewayToolPrompt: prompt("filter_tools")}}
+	fake := &fakeWebGateway{t: t, script: map[string]string{klausGatewayToolPrompt: prompt(fakeTool)}}
 	webSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		r.Body = io.NopCloser(bytes.NewReader(body))
@@ -371,7 +371,7 @@ func TestApproveUntilDone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out.taskID != testTask || out.rounds != 2 || !reflect.DeepEqual(out.tools, []string{"filter_tools", toolCallTool}) || out.finalState != "TASK_STATE_COMPLETED" || !strings.Contains(out.text, "12 namespaces") {
+	if out.taskID != testTask || out.rounds != 2 || !reflect.DeepEqual(out.tools, []string{fakeTool, toolCallTool}) || out.finalState != "TASK_STATE_COMPLETED" || !strings.Contains(out.text, "12 namespaces") {
 		t.Errorf("outcome = %+v", out)
 	}
 
