@@ -254,10 +254,11 @@ func TestKindConfigSubstrateGates(t *testing.T) {
 	}
 }
 
-// The kagent controller ServiceMonitor follows observability on the stable
-// channel and is off on the dev channel, whose kagent serves no metrics
-// listener; the chart-level gate stays with observability either way.
-func TestKagentServiceMonitorFollowsChannel(t *testing.T) {
+// The kagent controller ServiceMonitor stays off on every channel — the
+// kagent line's controller serves no metrics listener, and platform-test
+// expects a kagent target iff a monitor exists — while the chart-level gate
+// keeps following observability.
+func TestKagentServiceMonitorStaysOff(t *testing.T) {
 	cfg := config.Default()
 	render := func() map[string]any {
 		out, err := renderTemplate(cfg, "agent-platform-values.yaml.tmpl", nil)
@@ -273,62 +274,29 @@ func TestKagentServiceMonitorFollowsChannel(t *testing.T) {
 	kagentMonitor := func(v map[string]any) any {
 		return v["kagent"].(map[string]any)["serviceMonitor"].(map[string]any)["enabled"]
 	}
-	if got := kagentMonitor(render()); got != true {
-		t.Errorf("stable channel with observability: kagent.serviceMonitor.enabled = %v, want true", got)
-	}
-	cfg.Platform.ChartBranch = devChannelBranch
 	v := render()
 	if got := kagentMonitor(v); got != false {
-		t.Errorf("dev channel: kagent.serviceMonitor.enabled = %v, want false", got)
+		t.Errorf("stable channel with observability: kagent.serviceMonitor.enabled = %v, want false (the line serves no /metrics)", got)
 	}
 	if got := v["global"].(map[string]any)["observability"].(map[string]any)["metrics"].(map[string]any)["serviceMonitor"].(map[string]any)["enabled"]; got != true {
-		t.Errorf("dev channel: the chart-level monitor gate must still follow observability, got %v", got)
-	}
-	cfg.Platform.Observability = false
-	cfg.Platform.ChartBranch = ""
-	if got := kagentMonitor(render()); got != false {
-		t.Errorf("without observability: kagent.serviceMonitor.enabled = %v, want false", got)
-	}
-}
-
-// On the dev channel the WorkerPool's worker image follows the lab's
-// Substrate pin — control plane and workers at one version; the stable
-// channel, whose kagent creates no WorkerPool, renders no such key (the
-// released chart's schema does not know it).
-func TestKagentWorkerImageFollowsSubstratePin(t *testing.T) {
-	cfg := config.Default()
-	render := func() map[string]any {
-		out, err := renderTemplate(cfg, "agent-platform-values.yaml.tmpl", nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var values map[string]any
-		if err := yaml.Unmarshal(out, &values); err != nil {
-			t.Fatalf("%v\n%s", err, out)
-		}
-		return values
-	}
-	if _, ok := render()["kagent"].(map[string]any)["substrateWorkerPool"]; ok {
-		t.Error("stable channel: kagent.substrateWorkerPool rendered, but the released chart has no WorkerPool")
+		t.Errorf("the chart-level monitor gate must still follow observability, got %v", got)
 	}
 	cfg.Platform.ChartBranch = devChannelBranch
-	pool, ok := render()["kagent"].(map[string]any)["substrateWorkerPool"].(map[string]any)
-	if !ok {
-		t.Fatal("dev channel: kagent.substrateWorkerPool not rendered")
-	}
-	if got := pool["workerImage"]; got != ateomGVisorImage {
-		t.Errorf("dev channel: kagent.substrateWorkerPool.workerImage = %v, want %s", got, ateomGVisorImage)
-	}
-	if !strings.HasSuffix(ateomGVisorImage, ":"+substrateVersion) {
-		t.Errorf("the worker image %s must carry the Substrate pin %s", ateomGVisorImage, substrateVersion)
+	if got := kagentMonitor(render()); got != false {
+		t.Errorf("dev channel: kagent.serviceMonitor.enabled = %v, want false", got)
 	}
 }
 
-// The Substrate values are the chart's defaults with the lab's two
-// deviations spelled out: no Namespace rendered (the lab creates it ahead of
-// the chart) and no atelet extra args (no local registry).
-func TestSubstrateValuesRender(t *testing.T) {
-	out, err := renderTemplate(config.Default(), substrateValuesTemplate, nil)
+// The 4.x line's topology is the lab's shape: Agent Substrate and the
+// platform Postgres come with the chart, so the lab renders no worker image
+// of its own (the chart pins the Substrate version), turns the CNPG
+// component on with the agents, puts kagent's database on the platform
+// Cluster and mounts its derived Secret, names the Harness's snapshot store
+// (the chart's bundled RustFS) and runs the controller route with the JWT
+// Strict policy against the lab Dex — trusted-proxy at the controller.
+func TestPlatformValuesFourXTopology(t *testing.T) {
+	cfg := config.Default()
+	out, err := renderTemplate(cfg, "agent-platform-values.yaml.tmpl", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,15 +304,56 @@ func TestSubstrateValuesRender(t *testing.T) {
 	if err := yaml.Unmarshal(out, &values); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	if values["createNamespace"] != false {
-		t.Errorf("createNamespace = %v, want false", values["createNamespace"])
-	}
-	if args, _ := values["atelet"].(map[string]any)["extraArgs"].([]any); len(args) != 0 {
-		t.Errorf("atelet.extraArgs = %v, want none", args)
-	}
-	for _, store := range []string{"postgres", "rustfs"} {
-		if size := values[store].(map[string]any)["storageSize"]; size != "1Gi" {
-			t.Errorf("%s.storageSize = %v, want 1Gi", store, size)
+	at := func(path ...string) any {
+		var cur any = values
+		for _, key := range path {
+			m, ok := cur.(map[string]any)
+			if !ok {
+				return nil
+			}
+			cur = m[key]
 		}
+		return cur
+	}
+	if _, ok := at("kagent", "substrateWorkerPool").(map[string]any); ok {
+		t.Error("kagent.substrateWorkerPool rendered: the chart pins the worker image with its Substrate version, the lab must not")
+	}
+	if at("components", "cloudnative-pg", "enabled") != true || at("postgres", "enabled") != true || at("postgres", "namespace") != kagentNamespace {
+		t.Errorf("the platform Postgres: components.cloudnative-pg.enabled=%v postgres.enabled=%v postgres.namespace=%v", at("components", "cloudnative-pg", "enabled"), at("postgres", "enabled"), at("postgres", "namespace"))
+	}
+	if at("postgres", "instances") != 1 || at("postgres", "vector", "enabled") != true || at("postgres", "vector", "extensionImage", "reference") == "" {
+		t.Errorf("the lab's Cluster: one instance with the vector extension image, got instances=%v vector=%v", at("postgres", "instances"), at("postgres", "vector"))
+	}
+	if at("kagent", "database", "postgres", "urlFile") != "/etc/cnpg/uri" || at("kagent", "database", "postgres", "bundled", "enabled") != false {
+		t.Errorf("kagent.database.postgres = %v, want the urlFile mount and the bundled instance off", at("kagent", "database", "postgres"))
+	}
+	volumes, _ := at("kagent", "controller", "volumes").([]any)
+	if len(volumes) != 1 || volumes[0].(map[string]any)["secret"].(map[string]any)["secretName"] != "kagent-pg-kagent-v2-app" {
+		t.Errorf("kagent.controller.volumes must mount the derived kagent-pg-kagent-v2-app Secret, got %v", volumes)
+	}
+	if at("kagent", "harness", "snapshotLocation") != "s3://ate-snapshots/kagent" || at("substrate", "rustfs", "enabled") != true {
+		t.Errorf("snapshot store: kagent.harness.snapshotLocation=%v substrate.rustfs.enabled=%v", at("kagent", "harness", "snapshotLocation"), at("substrate", "rustfs", "enabled"))
+	}
+	if at("kagent", "controller", "auth", "mode") != "trusted-proxy" {
+		t.Errorf("kagent.controller.auth.mode = %v, want trusted-proxy (the JWT policy is the first layer)", at("kagent", "controller", "auth", "mode"))
+	}
+	jwt := at("kagent", "controllerRoute", "jwtAuthentication")
+	if at("kagent", "controllerRoute", "jwtAuthentication", "enabled") != true || at("kagent", "controllerRoute", "jwtAuthentication", "mode") != "Strict" ||
+		at("kagent", "controllerRoute", "jwtAuthentication", "jwks", "host") != "dex.dex.svc.cluster.local" || at("kagent", "controllerRoute", "jwtAuthentication", "jwks", "path") != "/dex/keys" ||
+		at("kagent", "controllerRoute", "jwtAuthentication", "jwks", "tls", "enabled") != true {
+		t.Errorf("kagent.controllerRoute.jwtAuthentication = %v, want Strict against the lab Dex's JWKS over TLS", jwt)
+	}
+	if at("gateway", "jwksEgress", "enabled") != true || at("gateway", "jwksEgress", "namespace") != "dex" {
+		t.Errorf("gateway.jwksEgress = %v, want the dex namespace declared", at("gateway", "jwksEgress"))
+	}
+	// Without agents nothing of it renders: no runtime, no Postgres.
+	cfg.Platform.Agents = false
+	cfg.Platform.ModelManager.Enabled = false
+	out, err = renderTemplate(cfg, "agent-platform-values.yaml.tmpl", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "cloudnative-pg") || strings.Contains(string(out), "\npostgres:") || strings.Contains(string(out), "\nsubstrate:") {
+		t.Errorf("without agents the Postgres and Substrate blocks must not render:\n%s", excerptAround(string(out), "postgres"))
 	}
 }

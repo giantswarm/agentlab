@@ -104,17 +104,16 @@ ingress:
 # the edge).
 networkPolicy:
   enabled: false
-{{- if .ModelManagerEnabled }}
 
 gateway:
-  # The model-manager route's JWT policy makes the data plane fetch Dex's
-  # JWKS on 5556; the chart guards that this egress is declared (it only
-  # renders a network-policy rule, and the lab runs no policies).
+  # The JWT policies on the kagent controller route and the model-manager
+  # route make the data plane fetch Dex's JWKS on 5556; the chart guards that
+  # this egress is declared (it only renders a network-policy rule, and the
+  # lab runs no policies).
   jwksEgress:
     enabled: true
     namespace: dex
     port: 5556
-{{- end }}
 
 # The component roster. `postRenderers` are Flux kustomize post-renderers the
 # chart forwards verbatim to that component's HelmRelease — the lab's patches
@@ -146,14 +145,26 @@ components:
     enabled: true
     postRenderers:
 {{ index .PostRenderers "mcp-kubernetes" | indent 6 }}
-  # The agent runtime: the platform's Agent CRs run here, wired to Anthropic
-  # through the default ModelConfig (see the kagent block below). Optional in
-  # this lab (platform.agents in agentlab.yaml).
+  # The agent runtime — kagent API v2: AgentTemplates admitted by the platform
+  # Harness run as Agent Substrate actors in gVisor worker pods, wired to
+  # Anthropic through the default ModelConfig (see the kagent block below).
+  # Substrate itself (substrate-crds, substrate — the control plane in
+  # ate-system and the per-node atelet) follows this switch inside the chart:
+  # the lab installs nothing of it. Optional in this lab (platform.agents in
+  # agentlab.yaml).
   kagent:
     enabled: {{ .Platform.Agents }}
 {{- if .Platform.Agents }}
     postRenderers:
 {{ index .PostRenderers "kagent" | indent 6 }}
+  # The platform Postgres: the CloudNativePG operator (the chart's optional
+  # component; a management cluster runs it as its own app) and, under
+  # postgres.enabled below, the CNPG Cluster the connectivity chart renders
+  # with kagent's and Substrate's databases on it — the fleet's shape, so the
+  # connectivity chart's Database CRs and derived connection Secrets run
+  # here for real. Rides with the agents: nothing else in the lab needs it.
+  cloudnative-pg:
+    enabled: true
   # The agent write surface (agents as HelmReleases of the agent chart, as
   # the caller), on whenever kagent is — the standalone umbrella's contract.
   agent-manager:
@@ -286,23 +297,77 @@ muster:
             url: muster-valkey:6379
 
 {{- if .Platform.Agents }}
+# The platform Postgres — one CNPG Cluster in the kagent namespace holding
+# kagent's `kagent_v2` database (postgres.databases.kagent-v2, the vector
+# extension for the memory API) and Substrate's control-plane database
+# (postgres.databases.substrate, its derived Secret copied into ate-system).
+# The chart's shape sized for one kind node: one instance on the local-path
+# storage class, a small claim; the fleet runs three on 20Gi. The operand is
+# the platform's Postgres image and pgvector rides in as a CNPG ImageVolume
+# extension (the fleet's pair; the kind node's kubelet serves image volumes).
+postgres:
+  enabled: true
+  namespace: kagent
+  instances: 1
+  storage:
+    size: 2Gi
+  image:
+    name: gsoci.azurecr.io/giantswarm/postgresql-cnpg:18.3
+  vector:
+    enabled: true
+    extensionImage:
+      reference: gsoci.azurecr.io/giantswarm/pgvector:0.8.2-18-bookworm
+
+# Agent Substrate's stateful parts in the lab shape: the control-plane
+# database follows the platform Postgres (postgres.enabled above, the chart's
+# `auto`), and the actor snapshot store is the chart's bundled in-cluster
+# RustFS — what kagent.harness.snapshotLocation below names. An installation
+# brings its own bucket instead.
+substrate:
+  rustfs:
+    enabled: true
+
 kagent:
-  # Expose the kagent controller API through the edge for Backstage's kagent
-  # page (the connectivity chart derives the app-config's apiBaseUrl from
-  # this route). JWT validation stays off like in the chart's kind example;
-  # the edge only listens on the host's loopback.
+  # The kagent controller's gRPC API through the edge — the Dev Portal, the
+  # proofs and klaus-gateway dial it there — with the chart's JWT policy in
+  # front (jwtAuthentication.enabled, mode Strict: the fleet shape). The
+  # agentgateway data plane verifies the bearer against the lab Dex, refuses
+  # a call without one, and sets x-user-id from the verified email claim,
+  # replacing whatever the client sent; the controller re-derives the caller
+  # from the same bearer (controller.auth.mode trusted-proxy below).
+  # platform-test asserts both halves. The chart's default JWKS source is a
+  # Giant Swarm Dex; the lab Dex serves its keys over TLS at the issuer path
+  # (the model-manager route below uses the same source).
   controllerRoute:
     enabled: true
-{{- if .SubstrateEnabled }}
-  # DEV CHANNEL: the WorkerPool the kagent chart creates runs the gVisor
-  # worker image of the Substrate the lab installs — one pin (substrate.go),
-  # control plane and workers at the same version. The worker image is where
-  # an actor's networking lives (atunnel, the egress tunnel), so the chart's
-  # own default — the image the platform ships — would run the lab's actors
-  # on a Substrate other than the one the lab just installed.
-  substrateWorkerPool:
-    workerImage: {{ .SubstrateWorkerImage }}
-{{- end }}
+    jwtAuthentication:
+      enabled: true
+      mode: Strict
+      jwks:
+        host: dex.dex.svc.cluster.local
+        port: 5556
+        path: /dex/keys
+        tls:
+          enabled: true
+  # The platform Harness (the connectivity chart renders it from
+  # kagent.harness.image, the line's Go ADK digest the meta chart pins):
+  # where Substrate keeps this Harness's actor snapshots — the lab's
+  # in-cluster store, the chart's bundled RustFS (substrate.rustfs below).
+  # Required by the chart with kagent on; an installation names its bucket.
+  harness:
+    snapshotLocation: s3://ate-snapshots/kagent
+  # The controller's database is the platform Postgres (postgres.enabled
+  # below, the fleet shape): kagent's `kagent_v2` database on the CNPG
+  # Cluster, its connection Secret <clusterName>-kagent-v2-app derived by
+  # the connectivity release's hook and mounted here as urlFile — the wiring
+  # the meta chart documents next to postgres.enabled; the bundled Postgres
+  # stays off.
+  database:
+    postgres:
+      urlFile: /etc/cnpg/uri
+      vectorEnabled: true
+      bundled:
+        enabled: false
   # The default ModelConfig every agent starts from (the kagent chart renders
   # it from providers.<default>). The chart would only create the referenced
   # Secret if the raw key were inlined in these values — which would put a
@@ -318,12 +383,23 @@ kagent:
       apiKeySecretKey: ANTHROPIC_API_KEY
   controller:
     auth:
-      # The chart default is trusted-proxy, which decodes bearer claims
-      # WITHOUT verification and relies on a JWT-validating agentgateway
-      # policy in front (controllerRoute.jwtAuthentication, off in this
-      # lab). The kagent UI's direct NodePort path sends no bearer at all,
-      # so upstream's local-dev mode is the honest setting here.
-      mode: unsecure
+      # The chart's default: the controller decodes the bearer's claims
+      # WITHOUT verifying the signature and trusts the JWT-validating
+      # agentgateway policy in front of it (controllerRoute.jwtAuthentication
+      # above) — the second of the two authentication layers. A caller that
+      # bypasses the edge sends no verified bearer and is nobody.
+      mode: trusted-proxy
+    volumes:
+      - name: cnpg-dsn
+        secret:
+          secretName: kagent-pg-kagent-v2-app
+          items:
+            - key: uri
+              path: uri
+    volumeMounts:
+      - name: cnpg-dsn
+        mountPath: /etc/cnpg
+        readOnly: true
   # Publish the UI on the host through the kind port mapping. NodePort is a
   # chart value, but the chart's ui-service template renders no `nodePort`
   # field (a random one would be useless to kind's fixed mappings), so the
@@ -332,14 +408,14 @@ kagent:
     service:
       type: NodePort
   # The connectivity chart's per-object toggle for the kagent controller
-  # ServiceMonitor it renders (the kagent chart itself ships none); the
-  # chart-level gate is global.observability.metrics.serviceMonitor.enabled
-  # above, and the controller already serves plain-HTTP /metrics on :8080 via
-  # the chart's default METRICS_BIND_ADDRESS/METRICS_SECURE env. Off on the
-  # dev channel: kagent main's controller opens no metrics listener, and a
-  # monitor of a port nobody serves is a target platform-test would wait for.
+  # ServiceMonitor (the chart-level gate is
+  # global.observability.metrics.serviceMonitor.enabled above). Off, the
+  # chart's default: the kagent line's controller serves no Prometheus
+  # /metrics, and a monitor of a port nobody serves is a target
+  # platform-test would wait for. Back on with the chart when upstream
+  # serves them.
   serviceMonitor:
-    enabled: {{ and .Platform.Observability (not .Platform.ChartBranch) }}
+    enabled: false
   # No OTLP gateway in kind; the exporters would only log dial errors.
   otel:
     tracing:

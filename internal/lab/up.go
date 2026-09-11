@@ -19,8 +19,10 @@ func Up(cfg *config.Config, offers Offers) error {
 	// refuses CPU requests that do not fit — resources.go), and the symptom
 	// would be an install timing out on agentgateway, minutes from now —
 	// after a five-minute cluster boot, the wrong moment. Refused here, with
-	// the fix and the numbers.
-	if err := preflightRuntimeResources(cfg); err != nil {
+	// the fix and the numbers — for what the chart about to be installed
+	// ships (its rendered roster: Agent Substrate and the platform Postgres
+	// come with the agents on the 4.x line), not for a version's folklore.
+	if err := preflightRuntimeResources(cfg, platformTopologyFor(cfg)); err != nil {
 		return err
 	}
 

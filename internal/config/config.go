@@ -90,9 +90,11 @@ var PinnedNodePorts = []int{MusterNodePort, KagentUINodePort, GatewayNodePort, G
 const DefaultDexPort = 32000
 
 // DefaultChartVersion is the agent-platform release the lab installs when
-// agentlab.yaml pins none — the release this agentlab was verified with.
-// Bump deliberately, with a lab run: the lab never floats.
-const DefaultChartVersion = "3.20.2"
+// agentlab.yaml pins none — the release this agentlab was verified with: the
+// 4.x line (kagent API v2 with Agent Substrate and the platform Postgres
+// shipped by the chart). Bump deliberately, with a lab run: the lab never
+// floats.
+const DefaultChartVersion = "4.7.11"
 
 // ChartRepository is where the agent-platform chart releases live.
 const ChartRepository = "oci://gsoci.azurecr.io/charts/giantswarm/agent-platform"
@@ -184,12 +186,6 @@ type Platform struct {
 	// keeps running the build under test until `agentlab platform --pin=false`
 	// (or the key is dropped). Meaningless without chartBranch.
 	ChartPinned bool `yaml:"chartPinned,omitempty"`
-	// Substrate installs kagent's actor runtime (the Giant Swarm line of
-	// kagent-dev/substrate, giantswarm/substrate) on the cluster before the platform — the kagent of the dev channel (kagent
-	// main, API v2) runs its agents as Substrate actors and cannot start
-	// without it; the released kagent ignores it. Left unset, it follows the
-	// channel: on with chartBranch (while agents are on), off otherwise.
-	Substrate Substrate `yaml:"substrate,omitempty"`
 	// DevImages swaps a component's image for a build of your own (the lab's
 	// dev-image loop): component name -> image ref (`muster: muster:dev-1a2b`).
 	// `agentlab platform` side-loads the ref from the host docker cache and
@@ -223,14 +219,6 @@ type Platform struct {
 	// `agentlab configure` fills the backends from what answers on this
 	// machine, on every run.
 	ModelManager ModelManager `yaml:"modelManager"`
-}
-
-// Substrate configures kagent's actor runtime in the lab (docs/platform.md
-// "Dev channel"). Enabled is a tri-state on purpose: nil follows the chart
-// channel (SubstrateEnabled), an explicit value wins either way — `configure
-// --substrate[=false]` writes one.
-type Substrate struct {
-	Enabled *bool `yaml:"enabled,omitempty"`
 }
 
 // ModelManager configures the umbrella's model-manager component in the lab.
@@ -661,34 +649,6 @@ func (c *Config) Normalize() {
 		c.Platform.ChartPinned = false
 	}
 	c.Platform.ModelManager.normalize()
-}
-
-// SubstrateEnabled reports whether the lab installs Substrate: the explicit
-// knob (platform.substrate.enabled) when set, else the chart channel — the
-// dev channel's kagent (kagent main, API v2) runs its agents as Substrate
-// actors and cannot start without it, so chartBranch with agents on implies
-// it; the stable channel's kagent ignores it. Inert without the platform.
-func (c *Config) SubstrateEnabled() bool {
-	if !c.Platform.Enabled {
-		return false
-	}
-	if c.Platform.Substrate.Enabled != nil {
-		return *c.Platform.Substrate.Enabled
-	}
-	return c.Platform.ChartBranch != "" && c.Platform.Agents
-}
-
-// SubstrateReason words why SubstrateEnabled reads the way it does, for the
-// configure summary.
-func (c *Config) SubstrateReason() string {
-	switch {
-	case c.Platform.Substrate.Enabled != nil:
-		return "pinned by platform.substrate.enabled"
-	case c.SubstrateEnabled():
-		return "the dev channel's kagent needs it; `configure --substrate=false` overrides"
-	default:
-		return "the released kagent does not need it; `configure --substrate` installs it anyway"
-	}
 }
 
 // branchSanitizeRe is gitsemver's: every run of characters outside [a-z0-9]

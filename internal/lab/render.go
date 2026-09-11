@@ -83,11 +83,6 @@ type tmplData struct {
 	PostRenderers              map[string]string
 	MCPPrometheusPostRenderers string
 	MCPPrometheusChartVersion  string
-	// SubstrateWorkerImage is the gVisor worker image of the Substrate the
-	// lab installs (substrate.go, ateomGVisorImage): on the dev channel the
-	// meta chart values name it as the WorkerPool's workerImage, so the
-	// workers run the same Substrate as the control plane.
-	SubstrateWorkerImage string
 }
 
 func newTmplData(cfg *config.Config) (*tmplData, error) {
@@ -115,7 +110,6 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		PostRenderers:              postRenderers,
 		MCPPrometheusPostRenderers: strings.TrimRight(string(mcpPrometheus), "\n"),
 		MCPPrometheusChartVersion:  mcpPrometheusChartVersion,
-		SubstrateWorkerImage:       ateomGVisorImage,
 		ModelManagerEnabled:        cfg.ModelManagerEnabled(),
 		ModelManagerBackends:       cfg.Platform.ModelManager.Backends,
 		ModelManagerEndpoints:      endpoints,
@@ -207,7 +201,6 @@ var manifests = map[string]struct {
 	"rbac.yaml.tmpl":                         {out: "rbac.yaml"},
 	"agent-platform-values.yaml.tmpl":        {out: "agent-platform-values.yaml"},
 	"kube-prometheus-stack-values.yaml.tmpl": {out: "kube-prometheus-stack-values.yaml"},
-	substrateValuesTemplate:                  {out: "substrate-values.yaml"},
 	mcpPrometheusTemplate:                    {out: "mcp-prometheus.yaml"},
 	"observability-route.yaml.tmpl":          {out: "observability-route.yaml"},
 	"demo-workflow.yaml.tmpl":                {out: "demo-workflow.yaml"},

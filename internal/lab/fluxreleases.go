@@ -228,31 +228,76 @@ func pickFilteredTag(tags []string, versionRange, filter string) (string, error)
 	return tag, nil
 }
 
-// platformImages derives the platform's image refs exactly as it is about to
-// be installed: the meta chart's own objects (the Flux Operator, the hook
-// Jobs) from its render with the rendered lab values, then every component
-// chart at the version its OCIRepository resolves to (fluxReleaseImages),
-// then the lab's own mcp-prometheus HelmRelease the same way. The images the
-// engine composes at run time — the FluxInstance's source- and
-// helm-controller, the ADK runtime tags kagent builds from its ConfigMap —
-// are not in any render; healADKImages and the snapshot manifest cover them.
-// Best-effort throughout: failures are notes, the node pulls the rest.
-func platformImages(cfg *config.Config, chart platformChart, values map[string]any) []string {
+// platformRoster is the meta chart as it is about to be installed — its
+// offline render with the lab's values and the component releases read out
+// of it. One render per command: the roster says what the chart ships (the
+// components the lab must budget for and must not install itself), the
+// preload derives the images from it.
+type platformRoster struct {
+	chart    platformChart
+	manifest string
+	releases []fluxRelease
+}
+
+// renderPlatformRoster renders the meta chart offline with the values the
+// install is about to use and joins its component releases. An error is the
+// chart's (not found, a values guard) — the callers degrade to notes: the
+// install itself reports the same error, with Helm's wording.
+func renderPlatformRoster(chart platformChart, values map[string]any) (*platformRoster, error) {
 	meta, err := helmTemplate(platformNamespace, platformRelease, chart.ref, chart.version, values, nil)
 	if err != nil {
-		note("cannot render %s (%v); the node pulls the platform images itself", chart, excerpt(err.Error(), 300))
-		return nil
+		return nil, err
 	}
-	images := scrapeImages(meta)
 	releases, err := fluxReleases(meta)
 	if err != nil {
-		note("cannot read the component releases out of the render (%v); the node pulls their images itself", err)
-		return images
+		return nil, err
 	}
+	return &platformRoster{chart: chart, manifest: meta, releases: releases}, nil
+}
+
+// has reports whether the roster carries a component release of that name.
+func (r *platformRoster) has(release string) bool {
+	if r == nil {
+		return false
+	}
+	return slices.ContainsFunc(r.releases, func(rel fluxRelease) bool { return rel.Name == release })
+}
+
+// shipsSubstrate reports whether the chart delivers Agent Substrate itself —
+// the `substrate` component release in its roster (the 4.x line: it follows
+// components.kagent) — read off the render, never off a version string. A
+// chart that ships it is Substrate's one Helm owner: the lab installs none,
+// budgets for the control plane and the WorkerPool's workers, and checks the
+// apiserver gates Substrate needs before the install.
+func (r *platformRoster) shipsSubstrate() bool { return r.has(substrateRelease) }
+
+// shipsCNPG reports whether the chart delivers the CloudNativePG operator
+// (components.cloudnative-pg) — with it the connectivity chart's Postgres
+// Cluster and databases run here (postgres.enabled), the lab budgets for
+// them and the preload fetches the operator's and the Cluster's images.
+func (r *platformRoster) shipsCNPG() bool { return r.has(cnpgRelease) }
+
+// cnpgRelease is the CloudNativePG operator's component release name.
+const cnpgRelease = "cloudnative-pg"
+
+// platformImages derives the platform's image refs exactly as it is about to
+// be installed: the meta chart's own objects (the Flux Operator, the hook
+// Jobs) from the roster's render, then every component chart at the version
+// its OCIRepository resolves to (fluxReleaseImages), then the lab's own
+// mcp-prometheus HelmRelease the same way. The images the engine composes at
+// run time — the FluxInstance's source- and helm-controller — are in no
+// render; the snapshot manifest covers them from the second boot on.
+// Best-effort throughout: failures are notes, the node pulls the rest.
+func platformImages(cfg *config.Config, roster *platformRoster) []string {
+	if roster == nil {
+		return nil
+	}
+	images := scrapeImages(roster.manifest)
+	releases := roster.releases
 	if cfg.Platform.Observability {
 		if rendered, _, err := renderManifest(cfg, mcpPrometheusTemplate); err == nil {
 			if own, err := fluxReleases(string(rendered)); err == nil {
-				releases = append(releases, own...)
+				releases = append(slices.Clone(releases), own...)
 			}
 		}
 	}
@@ -281,18 +326,24 @@ func filteredNote(filtered []string) string {
 }
 
 // sideloadPlatformImages pulls the platform images on the host and side-loads
-// them into the node, reporting the outcome in one line.
+// them into the node, naming what landed: the boot log is the record that
+// nothing of the topology is left to the kubelet under the install's wait.
 func sideloadPlatformImages(cfg *config.Config, images []string) {
 	if len(images) == 0 {
 		return
 	}
-	switch res := sideloadImages(cfg, hostPullImages(images)); {
+	res := sideloadImages(cfg, hostPullImages(images))
+	loaded := ""
+	if res.n > 0 {
+		loaded = ":\n      " + strings.Join(res.refs, "\n      ")
+	}
+	switch {
 	case res.err != nil && res.n > 0:
-		note("side-loaded %d of %d platform images (%s); the rest failed (%v) and the node pulls them", res.n, len(images), res.d, res.err)
+		note("side-loaded %d of %d platform images (%s); the rest failed (%v) and the node pulls them%s", res.n, len(images), res.d, res.err, loaded)
 	case res.err != nil:
 		note("side-loading failed (%v); the node pulls anything missing", res.err)
 	case res.n > 0:
-		note("side-loaded %d of %d platform images (%s)", res.n, len(images), res.d)
+		note("side-loaded %d of %d platform images (%s)%s", res.n, len(images), res.d, loaded)
 	default:
 		note("all %d platform images are already on the node", len(images))
 	}

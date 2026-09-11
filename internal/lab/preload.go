@@ -48,9 +48,10 @@ var infraImagePrefixes = []string{"registry.k8s.io/", "docker.io/kindest/"}
 
 // preloadResult is what a side-load reports back.
 type preloadResult struct {
-	n   int // images actually side-loaded into the node
-	d   time.Duration
-	err error
+	n    int      // images actually side-loaded into the node
+	refs []string // which ones, for the boot log
+	d    time.Duration
+	err  error
 }
 
 // hostPullImages ensures every ref is in the host docker cache, pulling the
@@ -97,7 +98,14 @@ func sideloadImages(cfg *config.Config, images []string) preloadResult {
 		return preloadResult{}
 	}
 	loaded, err := kindLoadImages(cfg, images)
-	return preloadResult{n: loaded, d: time.Since(start).Round(time.Second), err: err}
+	refs := images
+	if err != nil {
+		// A partial load: the node's list says which landed.
+		if have, listErr := nodeImageTags(cfg.ControlPlaneNode()); listErr == nil {
+			refs = slices.DeleteFunc(slices.Clone(images), func(img string) bool { return !slices.Contains(have, img) })
+		}
+	}
+	return preloadResult{n: loaded, refs: refs, d: time.Since(start).Round(time.Second), err: err}
 }
 
 // kindLoadImages side-loads images and reports how many landed. Every load is
@@ -351,14 +359,25 @@ var imageLineRe = regexp.MustCompile(`(?m)^\s*(?:-\s*)?image:\s*["']?([^\s"']+)[
 // appears in no rendered pod spec the plain scraper could see.
 var structuredImageRe = regexp.MustCompile(`(?m)image:\s*\n\s*registry:\s*["']?([^\s"']+)["']?\s*\n\s*repository:\s*["']?([^\s"']+)["']?\s*\n\s*tag:\s*["']?([^\s"']+)["']?`)
 
+// runtimeImageLineRe matches the image refs pods get at RUN TIME from an
+// operator, under keys the plain scraper does not read: a Substrate
+// WorkerPool's `workerImage` (the gVisor worker every pool pod runs), a CNPG
+// Cluster's `imageName` (the Postgres operand its instance pods run) and the
+// `reference` of a CNPG ImageVolume extension (the pgvector image mounted
+// into those pods). Each is a pod image the kubelet would otherwise pull
+// under the install's wait — the first actor's boot, the Cluster's bootstrap.
+var runtimeImageLineRe = regexp.MustCompile(`(?m)^\s*(?:workerImage|imageName|reference):\s*["']?([^\s"']+)["']?\s*$`)
+
 // scrapeImages extracts the image refs from rendered manifests. Only refs
 // carrying a tag or digest count: a bare word under some config blob's
 // `image:` key is not pullable and would poison the pull set.
 func scrapeImages(rendered string) []string {
 	var imgs []string
-	for _, m := range imageLineRe.FindAllStringSubmatch(rendered, -1) {
-		if ref := m[1]; strings.ContainsAny(ref, ":@") {
-			imgs = append(imgs, ref)
+	for _, re := range []*regexp.Regexp{imageLineRe, runtimeImageLineRe} {
+		for _, m := range re.FindAllStringSubmatch(rendered, -1) {
+			if ref := m[1]; strings.ContainsAny(ref, ":@") && !strings.Contains(ref, "://") {
+				imgs = append(imgs, ref)
+			}
 		}
 	}
 	for _, m := range structuredImageRe.FindAllStringSubmatch(rendered, -1) {

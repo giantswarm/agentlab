@@ -127,6 +127,29 @@ func PlatformUp(cfg *config.Config, offers Offers) error {
 	return platformUp(cfg, "Platform is up.", offers)
 }
 
+// platformTopologyFor is the topology of the chart the config installs, read
+// off its offline render before the cluster exists (the preflight's input):
+// the lab values rendered as the install will render them, the meta chart
+// templated with them, the roster read out. A render that fails here (no
+// network, an unpublished pin) falls back to the verified line's topology
+// with a note; the install reports the chart's error properly, later.
+func platformTopologyFor(cfg *config.Config) platformTopology {
+	var roster *platformRoster
+	if cfg.Platform.Enabled {
+		_, valuesPath, err := renderManifest(cfg, "agent-platform-values.yaml.tmpl")
+		if err == nil {
+			var values map[string]any
+			if values, err = helmValuesFiles(append([]string{valuesPath}, cfg.Platform.ValuesFiles...)...); err == nil {
+				roster, err = renderPlatformRoster(platformChartFor(cfg), values)
+			}
+		}
+		if err != nil {
+			note("cannot render %s ahead of the boot (%v); budgeting for the 4.x line's topology", platformChartFor(cfg), excerpt(err.Error(), 200))
+		}
+	}
+	return topologyOf(cfg, roster)
+}
+
 // platformChart is the chart the embedded Helm installs and renders: the
 // pinned release from the registry, or a local chart directory.
 type platformChart struct {
@@ -269,15 +292,6 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 			return err
 		}
 	}
-	// Substrate before the platform too: the dev channel's kagent creates
-	// its WorkerPool and Harnesses against Substrate's API at startup, and
-	// its controller does not come up without them (substrate.go).
-	if cfg.SubstrateEnabled() {
-		if err := substrateUp(cfg); err != nil {
-			return err
-		}
-	}
-
 	// Managed models: every host model server's endpoint is detected from
 	// the kind docker network and proven reachable from inside the cluster
 	// BEFORE the install, so a host-side misconfiguration (bind address,
@@ -317,16 +331,37 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 		return err
 	}
 
+	// The chart as it is about to be installed, rendered once: what it ships
+	// decides what the lab checks and preloads. A render that fails is a
+	// note here — the install below reports the same error in Helm's words.
+	roster, err := renderPlatformRoster(chart, values)
+	if err != nil {
+		note("cannot render %s (%v); the node pulls the platform images itself", chart, excerpt(err.Error(), 300))
+	}
+	// Agent Substrate comes with the chart (the substrate component follows
+	// kagent on the 4.x line): its pods need the PodCertificateRequest API
+	// the lab's kind config turns on, and a cluster created before the gates
+	// cannot be fixed in place — refused here, before the install's wait
+	// would sit on a Substrate that never comes up.
+	if roster.shipsSubstrate() {
+		if err := preflightPodCertificateAPI(ctx); err != nil {
+			return err
+		}
+	}
+
 	// Every platform image goes host cache -> node, never kubelet -> network:
 	// the host cache survives `agentlab down`, so even when this very boot
 	// fails later, the next one starts from warm images. Derived from the
 	// charts as they are about to be installed (the meta chart's own objects,
 	// then every component chart at the version its OCIRepository resolves
-	// to), so a first boot and version bumps are covered too. Best-effort:
+	// to — the kagent line's controller and UI, the Go ADK Harness image by
+	// digest, Substrate's control plane and its gVisor worker, the CNPG
+	// operator and the Postgres operand, the hook Jobs' kubectl and openssl),
+	// so a first boot and version bumps are covered too. Best-effort:
 	// anything this misses is pulled in-node under the install's wait
 	// timeout, exactly as before.
 	step("Side-loading the platform images (the host cache survives `agentlab down`)")
-	sideloadPlatformImages(cfg, platformImages(cfg, chart, values))
+	sideloadPlatformImages(cfg, platformImages(cfg, roster))
 	// The dev images (platform.devImages) are builds of this host: never
 	// pullable, always side-loaded, so their pods find them under
 	// imagePullPolicy IfNotPresent — which is why each ref is then verified
@@ -555,8 +590,9 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 		obsHint = "  Observability: Prometheus scrapes the cluster; muster serves it as x_mcp-prometheus_* tools\n" +
 			"  (try asking Claude Code for a pod's CPU or memory)."
 	}
-	if cfg.SubstrateEnabled() {
-		agentsHint += fmt.Sprintf("\n  Substrate %s (kagent's actor runtime) runs in %s: kubectl get workerpools,sandboxconfigs -A", substrateVersion, substrateNamespace)
+	if roster.shipsSubstrate() {
+		version, _ := helmReleaseVersion(substrateNamespace, substrateRelease)
+		agentsHint += fmt.Sprintf("\n  Agent Substrate %s (the actors' runtime, from the chart) runs in %s: kubectl get workerpools,sandboxconfigs -A", orNone(version), substrateNamespace)
 	}
 	fmt.Printf(`
 %s
