@@ -135,7 +135,7 @@ func TestGatewayArgs(t *testing.T) {
 func TestReadSSE(t *testing.T) {
 	turn := webTurn{Status: http.StatusOK}
 	stream := "data: {\"content\":\"po\"}\n\ndata: {\"content\":\"ng\"}\n\nevent: done\ndata: {}\n\n"
-	if err := readSSE(strings.NewReader(stream), &turn); err != nil {
+	if err := readTurnStream(strings.NewReader(stream), &turn); err != nil {
 		t.Fatal(err)
 	}
 	if turn.Text != "pong" || !turn.Done || turn.Prompt != nil || turn.Err != "" {
@@ -147,7 +147,7 @@ func TestReadSSE(t *testing.T) {
 
 	turn = webTurn{Status: http.StatusOK}
 	stream = "data: {\"content\":\"Let me check.\"}\n\nevent: prompt\ndata: {\"taskId\":\"t-1\",\"text\":\"Run call_tool?\",\"prompt\":{\"toolName\":\"call_tool\",\"hint\":\"Run call_tool?\",\"tools\":[{\"id\":\"a-1\",\"name\":\"call_tool\"}]}}\n\n"
-	if err := readSSE(strings.NewReader(stream), &turn); err != nil {
+	if err := readTurnStream(strings.NewReader(stream), &turn); err != nil {
 		t.Fatal(err)
 	}
 	if turn.Done || turn.Prompt == nil || turn.Prompt.TaskID != testThread || turn.Prompt.Prompt.ToolName != toolCallTool || len(turn.Prompt.Prompt.Tools) != 1 {
@@ -159,7 +159,7 @@ func TestReadSSE(t *testing.T) {
 
 	turn = webTurn{Status: http.StatusOK}
 	stream = "event: error\ndata: \"upstream timed out\"\n\n"
-	if err := readSSE(strings.NewReader(stream), &turn); err != nil {
+	if err := readTurnStream(strings.NewReader(stream), &turn); err != nil {
 		t.Fatal(err)
 	}
 	if turn.Err != "upstream timed out" || turn.Done {

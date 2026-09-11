@@ -942,7 +942,7 @@ func (w *webClient) send(ctx context.Context, msg webMessage, timeout time.Durat
 		turn.Body = string(b)
 		return turn, nil
 	}
-	if err := readSSE(resp.Body, turn); err != nil {
+	if err := readTurnStream(resp.Body, turn); err != nil {
 		if ctx.Err() != nil {
 			turn.Cut = true
 			return turn, nil
@@ -952,10 +952,10 @@ func (w *webClient) send(ctx context.Context, msg webMessage, timeout time.Durat
 	return turn, nil
 }
 
-// readSSE folds the stream's events into the turn: `data:` lines of the
+// readTurnStream folds the stream's events into the turn: `data:` lines of the
 // default event carry {"content"} deltas, `event: done` ends the turn,
 // `event: prompt` pauses it on a decision, `event: error` fails it.
-func readSSE(r io.Reader, turn *webTurn) error {
+func readTurnStream(r io.Reader, turn *webTurn) error {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	event := ""
