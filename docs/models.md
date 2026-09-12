@@ -83,19 +83,17 @@ and everything that can go wrong is host-side plumbing, not kagent:
   not the machine your model server runs on and no bind address can make it
   one. The server is reachable as **`host.docker.internal`** instead
   (`host.containers.internal` under podman), which resolves only from inside
-  the cluster. Autodetection cannot use it — it would break every Linux lab,
-  where the gateway is the host — so name it once per backend:
+  the cluster. Nothing to configure: the lab dials the gateway from inside the
+  node, and where that does not answer it tries the alias and uses whichever
+  does. `agentlab configure` reports which address it found —
 
-  ```yaml
-  platform:
-    modelManager:
-      endpoints:
-        lmstudio: http://host.docker.internal:1234
+  ```
+  LM Studio   api v1 on :1234 — pods reach it at host.docker.internal
+              (172.18.0.1 is inside the container runtime's VM, not this machine)
   ```
 
-  Without this, `agentlab up` stops at the preflight and offers you the bind
-  fix, which cannot help: the request never leaves the VM. This applies to
-  every host backend equally, not just LM Studio.
+  — and `agentlab platform` wires that one. This applies to every host backend
+  equally, not just LM Studio.
 - **Bind address**: the server must listen on `0.0.0.0` (or the bridge IP).
   The usual `127.0.0.1` default is unreachable from pods regardless of any
   firewall rule. Ollama: `OLLAMA_HOST=0.0.0.0`. Lemonade:
@@ -198,13 +196,13 @@ versions wrote (`backend:` + `endpoint:`) still reads as the one-item list.
 `agentlab configure` detects an Ollama on `:11434`, a Lemonade Server on
 `:13305` and an LM Studio on `:1234` on every run (`--model-manager[=false]`
 pins the flag, `--model-manager-backends` the list; the interactive form shows
-what was found). Each endpoint is **autodetected at platform time** as `http://<kind
-docker network gateway>:<default port>` — `docker network inspect kind`, the
-same address the section above documents for `extraModels` — so nobody types
-`172.21.0.1`; set `endpoints.<backend>` for a server the gateway does not
-reach — one elsewhere on the LAN, or the host itself when docker runs in a VM
-(`host.docker.internal`, see above). Such a backend is kept whether or not one
-answers locally.
+what was found). Each endpoint is **autodetected at platform time**: the kind
+docker network's gateway (`docker network inspect kind`, the same address the
+section above documents for `extraModels`), or the container runtime's host
+alias where that gateway is inside its VM — whichever answers when dialled
+from inside the node. So nobody types `172.21.0.1`. Set `endpoints.<backend>`
+for a server the lab cannot find that way, such as one elsewhere on the LAN;
+such a backend is kept whether or not one answers locally.
 
 What `agentlab platform` (or `up`) does with it:
 

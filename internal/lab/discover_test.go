@@ -21,25 +21,27 @@ const (
 	capCompletion = "completion"
 	// opDial is net.OpError's Op for a failed dial, as the stubs build one.
 	opDial = "dial"
-	// hostDockerInternal is the address only the cluster can resolve, which
-	// the loopback fallback exists for.
+	// hostDockerInternal is the container runtime's host alias: this machine
+	// as the cluster can resolve it, and nowhere else.
 	hostDockerInternal = "host.docker.internal"
-	labelChat          = "chat"
-	ollamaVersion      = "0.33.2"
-	lemonadeVersion    = "11.9.0"
-	modelQwen35        = "qwen3.5:9b"
-	modelGemma270m     = "gemma3:270m"
-	modelSmollm        = "smollm2:135m"
-	modelQwen3FLM      = "qwen3-it-4b-FLM"
-	modelGemma4bFLM    = "gemma3-4b-FLM"
-	modelMoEFLM        = "Qwen3.6-MoE-35B-A3B-FLM"
-	modelQwenVLFLM     = "qwen3vl-it-4b-FLM"
-	fieldData          = "data"
-	fieldOwnedBy       = "owned_by"
-	fieldDownloaded    = "downloaded"
-	fieldLabels        = "labels"
-	fieldSize          = "size"
-	labelVision        = "vision"
+	// gatewayIP stands in for the kind network gateway.
+	gatewayIP       = "172.18.0.1"
+	labelChat       = "chat"
+	ollamaVersion   = "0.33.2"
+	lemonadeVersion = "11.9.0"
+	modelQwen35     = "qwen3.5:9b"
+	modelGemma270m  = "gemma3:270m"
+	modelSmollm     = "smollm2:135m"
+	modelQwen3FLM   = "qwen3-it-4b-FLM"
+	modelGemma4bFLM = "gemma3-4b-FLM"
+	modelMoEFLM     = "Qwen3.6-MoE-35B-A3B-FLM"
+	modelQwenVLFLM  = "qwen3vl-it-4b-FLM"
+	fieldData       = "data"
+	fieldOwnedBy    = "owned_by"
+	fieldDownloaded = "downloaded"
+	fieldLabels     = "labels"
+	fieldSize       = "size"
+	labelVision     = "vision"
 	// LM Studio's inventory fields.
 	fieldModels       = "models"
 	fieldKey          = "key"
@@ -325,26 +327,57 @@ func TestDiscoveryBackendsAndHint(t *testing.T) {
 	// UNKNOWN reachability (no kind network to probe yet — a fresh machine,
 	// or after `agentlab down`) must still enrol or the lab stops being
 	// configurable before it has booted once.
-	reachable, unreachable := true, false
-	mixed := &Discovery{Servers: []HostServer{
-		{Backend: ollama, Ident: ollamaVersion, Port: 11434, OnGateway: &reachable},
-		{Backend: lemonade, Ident: lemonadeVersion, Port: 13305, OnGateway: &unreachable},
+	mixed := &Discovery{KindGateway: gatewayIP, Servers: []HostServer{
+		{Backend: ollama, Ident: ollamaVersion, Port: 11434, Probed: true, PodHost: gatewayIP},
+		{Backend: lemonade, Ident: lemonadeVersion, Port: 13305, Probed: true},
 		{Backend: lmstudio, Ident: lmStudioIdentAPIv1, Port: 1234},
 	}}
 	if got := mixed.Backends(); !slices.Equal(got, []string{ollama, lmstudio}) {
 		t.Fatalf("backends = %v, want the reachable and the unknown one only", got)
 	}
-	// The report still names the server that was left out, with its fix.
-	mixed.KindGateway = "172.18.0.1"
-	if report := mixed.Report(config.Default()); !strings.Contains(report, "left out of platform.modelManager.backends") {
+	// A server that answers on neither the gateway nor the alias is left out,
+	// and the report says so with the bind fix — which is the fix there,
+	// because a gateway that is this machine can be bound to.
+	report := mixed.Report(config.Default())
+	if !strings.Contains(report, "left out of platform.modelManager.backends") {
 		t.Errorf("the report must say the unreachable server was left out:\n%s", report)
 	}
-	// LM Studio reports no version, so the hint carries its API generation.
-	if d.ModelServersHint() != "Ollama 0.33.2 (:11434), Lemonade Server 11.9.0 (:13305), LM Studio api v1 (:1234)" {
-		t.Fatalf("hint = %q", d.ModelServersHint())
+	if !strings.Contains(report, "host=0.0.0.0") {
+		t.Errorf("a server reachable nowhere must get the bind fix:\n%s", report)
 	}
+	// The form's own line marks what the answer will not enrol: listing a
+	// server the configuration then drops reads as a promise it does not keep.
+	wantHint := "Ollama 0.33.2 (:11434); Lemonade Server 11.9.0 (:13305) — pods cannot reach it, " +
+		"so it is not enrolled; LM Studio api v1 (:1234)"
+	if got := mixed.ModelServersHint(); got != wantHint {
+		t.Errorf("hint = %q, want %q", got, wantHint)
+	}
+	// An empty discovery hints nothing: forms.modelServersHint answers the
+	// "none found" case from the backend table instead.
 	if (&Discovery{}).ModelServersHint() != "" {
-		t.Fatalf("empty discovery should hint nothing")
+		t.Error("an empty discovery should hint nothing")
+	}
+
+	// Reachable on the alias instead of the gateway: enrolled, and the report
+	// names the address rather than offering a remedy — no bind setting can
+	// make a gateway inside the runtime's VM answer.
+	viaAlias := &Discovery{KindGateway: gatewayIP, Servers: []HostServer{
+		{Backend: lmstudio, Ident: lmStudioIdentAPIv1, Port: 1234, Probed: true, PodHost: hostDockerInternal},
+	}}
+	if got := viaAlias.Backends(); !slices.Equal(got, []string{lmstudio}) {
+		t.Fatalf("a server reachable on the alias must enroll: %v", got)
+	}
+	if got := viaAlias.PodHostFor(lmstudio); got != hostDockerInternal {
+		t.Errorf("PodHostFor = %q, want the alias", got)
+	}
+	aliasReport := viaAlias.Report(config.Default())
+	if !strings.Contains(aliasReport, "pods reach it at "+hostDockerInternal) {
+		t.Errorf("the report must name the address pods reach:\n%s", aliasReport)
+	}
+	for _, forbidden := range []string{"0.0.0.0", "--bind", "Serve on Local Network", "left out of"} {
+		if strings.Contains(aliasReport, forbidden) {
+			t.Errorf("a reachable server needs no bind fix (%q):\n%s", forbidden, aliasReport)
+		}
 	}
 }
 
@@ -352,7 +385,7 @@ func TestDiscoveryBackendsAndHint(t *testing.T) {
 // refused connection (bash exits 1) and a hang (`timeout` exits 124) are
 // verdicts, every other exit is the probe itself failing and must not be
 // reported as an unreachable server.
-func TestHostServerAnswersUnderPodman(t *testing.T) {
+func TestNodeDialMapsExitCodes(t *testing.T) {
 	for name, tc := range map[string]struct {
 		exit      int
 		want      bool
@@ -366,14 +399,37 @@ func TestHostServerAnswersUnderPodman(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
-			installFakeTool(t, dir, "docker", "exit "+strconv.Itoa(tc.exit))
+			// A running node whose dial exits tc.exit: `docker inspect` is the
+			// precondition nodeDial checks, and only `docker exec` carries the
+			// dial's own code.
+			installFakeTool(t, dir, "docker", "case \"$1\" in inspect) echo true ;; *) exit "+strconv.Itoa(tc.exit)+" ;; esac")
 			withPodman(t, true)
-			got, err := hostServerAnswers("agentlab-control-plane", "169.254.1.2:11434")
+			got, err := nodeDial("agentlab-control-plane", "169.254.1.2:11434")
 			if (err != nil) != tc.wantProbe {
 				t.Fatalf("err = %v, want probe failure %v", err, tc.wantProbe)
 			}
 			if !tc.wantProbe && got != tc.want {
 				t.Errorf("answers = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A node that is not running cannot answer for the server, and `docker exec`
+// into a missing container exits 1 — the same code bash uses for a refused
+// dial. Reading that as "nothing is listening" dropped a server from the
+// configuration after `agentlab down`, which leaves the kind network (and so
+// the gateway) behind with no container to dial from.
+func TestNodeDialNeedsARunningNode(t *testing.T) {
+	for name, inspect := range map[string]string{
+		"node is gone":        "exit 1",
+		"node is not running": "echo false",
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			installFakeTool(t, dir, "docker", "case \"$1\" in inspect) "+inspect+" ;; *) exit 1 ;; esac")
+			if _, err := nodeDial("agentlab-control-plane", "169.254.1.2:11434"); err == nil {
+				t.Fatal("a probe that cannot run must be an error, not a verdict")
 			}
 		})
 	}

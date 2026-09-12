@@ -165,20 +165,36 @@ func firstIPv4(out string) string {
 }
 
 // resolveBackendEndpoint is the URL model-manager (or an agent pod) dials for
-// a backend: the configured override, else http://<kind gateway>:<the
-// server's default port>. The kind network exists once the cluster does, so
-// callers that render before a boot get an error they may tolerate (render)
-// or must not (platform).
+// a backend: the configured override, else the address pods reach this
+// machine on — the kind gateway, or the container runtime's host alias where
+// that gateway is inside its VM — on the server's default port. The kind
+// network exists once the cluster does, so callers that render before a boot
+// get an error they may tolerate (render) or must not (platform).
 func resolveBackendEndpoint(cfg *config.Config, backend string) (string, error) {
 	if ep := cfg.Platform.ModelManager.EndpointFor(backend); ep != "" {
 		return strings.TrimSuffix(ep, "/"), nil
 	}
-	gw, err := kindGatewayIP(cfg.ControlPlaneNode())
+	node := cfg.ControlPlaneNode()
+	port := config.BackendPort(backend)
+	gw, err := kindGatewayIP(node)
 	if err != nil {
 		return "", fmt.Errorf("autodetecting the %s endpoint: %w (set platform.modelManager.endpoints.%s to skip the detection)",
 			config.BackendServerName(backend), err, backend)
 	}
-	return fmt.Sprintf("http://%s:%d", gw, config.BackendPort(backend)), nil
+	// The same helper the discovery reports from, so the address named there
+	// and the address wired here cannot disagree.
+	host, err := podReachableHost(node, gw, port)
+	switch {
+	case err != nil:
+		// The probe could not run, so there is no verdict: the gateway is the
+		// documented default, and a busy node cannot move the rendered values.
+		return fmt.Sprintf("http://%s:%d", gw, port), nil
+	case host == "":
+		return "", fmt.Errorf("no address reaches the host %s from pods: neither %s (the container runtime's gateway) nor %s (its host alias) answers — start the server, bind it to every interface, or set platform.modelManager.endpoints.%s",
+			config.BackendServerName(backend), net.JoinHostPort(gw, strconv.Itoa(port)),
+			net.JoinHostPort(hostAlias(), strconv.Itoa(port)), backend)
+	}
+	return fmt.Sprintf("http://%s:%d", host, port), nil
 }
 
 // resolveBackendEndpoints resolves every configured backend's endpoint.

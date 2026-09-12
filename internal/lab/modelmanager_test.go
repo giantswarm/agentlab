@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/giantswarm/agentlab/internal/config"
 )
 
 // Each backend's probe fetches its own path.
@@ -237,5 +239,62 @@ func TestLMStudioModelsAcceptsAnEmptyLibrary(t *testing.T) {
 	}
 	if len(models) != 0 {
 		t.Fatalf("want no models, got %d", len(models))
+	}
+}
+
+// resolveBackendEndpoint decides the endpoint the release is installed with,
+// so each of its three outcomes is pinned here: the address must never be one
+// a dial has just refused, and a probe that could not run must not move it.
+func TestResolveBackendEndpointFollowsWhatAnswers(t *testing.T) {
+	const (
+		gateway = "172.18.0.1"
+		port    = 1234
+	)
+	for name, tc := range map[string]struct {
+		// dial is the fake `docker exec` body, keyed on the address the dial
+		// names, so the gateway and the alias can answer differently.
+		dial    string
+		want    string
+		wantErr string
+	}{
+		"gateway answers": {
+			dial: "exit 0",
+			want: "http://" + gateway + ":1234",
+		},
+		"only the alias answers": {
+			dial: `case "$*" in *host.docker.internal*) exit 0 ;; *) exit 1 ;; esac`,
+			want: "http://host.docker.internal:1234",
+		},
+		"neither answers": {
+			dial:    "exit 1",
+			wantErr: "no address reaches the host LM Studio from pods",
+		},
+		"the probe cannot run keeps the gateway": {
+			dial: "exit 127", // no bash in the node: not a verdict
+			want: "http://" + gateway + ":1234",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			installFakeTool(t, dir, "docker", `case "$1" in
+  inspect) echo true ;;
+  network) echo `+gateway+` ;;
+  *) `+tc.dial+` ;;
+esac`)
+			withPodman(t, false)
+			cfg := config.Default()
+			cfg.Platform.ModelManager.Backends = []string{lmstudio}
+			got, err := resolveBackendEndpoint(cfg, lmstudio)
+			switch {
+			case tc.wantErr != "":
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err = %v, want one containing %q", err, tc.wantErr)
+				}
+			case err != nil:
+				t.Fatalf("unexpected error: %v", err)
+			case got != tc.want:
+				t.Errorf("endpoint = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

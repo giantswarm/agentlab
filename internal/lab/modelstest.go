@@ -565,8 +565,21 @@ func proveDeleteRefused(api *modelManagerAPI, session *musterSession,
 	if !hasModel(remaining, model) {
 		return fmt.Errorf("host %s at %s no longer has %s after a refused delete", server, base, model)
 	}
-	if _, err := outputQuiet("kubectl", "-n", kagentNamespace, "get", modelConfigResource, mcName); err != nil {
-		return fmt.Errorf("ModelConfig %s disappeared after a refused delete: %w", mcName, err)
+	// Through the lab's own client: a shelled-out kubectl would read the
+	// shell's kubeconfig and current-context, not state/kubeconfig, so its
+	// answer is about whichever cluster that names. objectExists separates
+	// "not there" from "could not read".
+	gvr, err := gvrFor(modelConfigResource)
+	if err != nil {
+		return err
+	}
+	mcCtx, cancelMC := context.WithTimeout(context.Background(), kubeReadTimeout)
+	defer cancelMC()
+	switch exists, err := objectExists(mcCtx, gvr, kagentNamespace, mcName); {
+	case err != nil:
+		return fmt.Errorf("reading ModelConfig %s after the refused delete: %w", mcName, err)
+	case !exists:
+		return fmt.Errorf("ModelConfig %s disappeared after a refused delete", mcName)
 	}
 	note("nothing changed: still downloaded on the host, ModelConfig %s still there", mcName)
 
