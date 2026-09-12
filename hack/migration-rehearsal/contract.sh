@@ -1,23 +1,13 @@
 #!/usr/bin/env bash
-# The contract phase of the migration rehearsal (agentlab#143), after the
-# in-place upgrade to the 4.x meta chart and the migrate Job's expand run:
-#   1. the operator's pull request — the GitOps agent's manifests with the
-#      Job's diff applied (seed-gitops-1x.yaml) — lands, and Flux upgrades
-#      that release to the 1.x agent chart (a short "values don't meet the
-#      specifications of the schema" refusal is expected between the values
-#      rewrite and the OCIRepository resolving 1.x);
-#   2. every migrated AgentTemplate Ready on the platform Harness, the skill
-#      pinned to the commit the expand report named, one RemoteMCPServer each;
-#   3. the Job cloned once more (the chart's UPGRADE.md recipe): phase
-#      contract — the leftover v1alpha2 Agents and the five retired CRDs gone;
-#   4. cloned again: phase complete, changed false, every release on 1.x;
-#   5. one turn per migrated agent as a person through the edge (`agentlab
-#      turn`), and the roster a developer sees;
-#   6. nothing left behind.
+# Stage 2b of the migration rehearsal (agentlab#143): the operator's diff PR
+# applied, the releases on the 1.x agent chart, the migrate Job's contract and
+# no-op runs asserted, one turn per migrated agent through the edge.
 #
 # Usage: contract.sh <evidence-dir> [expand-run-report.yaml]
 #   The second argument is the expand run's report (the ConfigMap holds only
 #   the latest run): its pinned skill commit is asserted on the template.
+#
+# Inputs (environment, all optional):
 #   GITOPS_MANIFEST  the manifest applied first (default: seed-gitops-1x.yaml
 #                    next to this script; empty skips the apply)
 #   AGENTLAB         the agentlab binary (default: agentlab on PATH)
@@ -25,9 +15,10 @@
 #                    appended (default: $PWD)
 #   START_STEP       resume at this step (1-6, default 1) with the evidence of
 #                    the earlier steps already in the evidence dir
-# Every wait is bounded (timeout); a failed assertion stops the script. The
-# functions are sourceable: `source contract.sh <evidence-dir>` defines them
-# without running main.
+#
+# The recipe is docs/migration-rehearsal.md. Every wait is bounded (timeout); a
+# failed assertion stops the script. The functions are sourceable:
+# `source contract.sh <evidence-dir>` defines them without running main.
 set -euo pipefail
 
 EVIDENCE=${1:?usage: contract.sh <evidence-dir> [expand-run-report.yaml]}
@@ -46,10 +37,11 @@ LOG=$EVIDENCE/contract.log
 TIMINGS=$EVIDENCE/timings.md
 export EVIDENCE RUN1_REPORT NS GITOPS_NS HARNESS REPORT_CM JOB_LABEL LOG TIMINGS AGENTLAB LAB_DIR
 
-log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" | tee -a "$LOG"; }
-fail() { log "ASSERTION FAILED: $*"; exit 1; }
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=lib.sh
+source "$HERE/lib.sh"
+fail() { die "ASSERTION FAILED: $*"; }
 timing() { printf '| %s | %s |\n' "$1" "$2" >>"$TIMINGS"; log "timing: $1: $2"; }
-now() { date +%s; }
 due() { ((START_STEP <= $1)); }
 # bounded runs a function under timeout, in a subshell that inherits the
 # exported functions and variables; a timeout is a failed assertion.
@@ -74,10 +66,6 @@ snapshot() { # <prefix>: the releases, sources, templates, v1alpha2 Agents, Remo
   kubectl -n "$GITOPS_NS" get helmreleases,ocirepositories -o wide >|"$EVIDENCE/$1-flux-giantswarm.txt" 2>&1
   kubectl get crd -o name | /usr/bin/grep '\.kagent\.dev$' >|"$EVIDENCE/$1-crds.txt"
   save_report "$1-report"
-}
-hold_lock() {
-  [[ -f $LAB_DIR/state/lab-lock/owner ]] || return 0
-  printf '; stage 2b contract since %s\n' "$(date -Is)" >>"$LAB_DIR/state/lab-lock/owner"
 }
 apply_gitops() {
   [[ -n $GITOPS_MANIFEST ]] || { log "GITOPS_MANIFEST empty: not applying anything"; return 0; }
@@ -302,7 +290,9 @@ assert_nothing_left() { # no AgentInstance of ours; the templates and their rele
   local n
   n=$(kubectl -n "$NS" get agenttemplates -o name | wc -l)
   ((n >= 3)) || fail "only $n AgentTemplates left"
-  kubectl -n "$NS" get helmrelease sre narrow >/dev/null && kubectl -n "$GITOPS_NS" get helmrelease sre-agent >/dev/null || fail "a release is gone"
+  if ! kubectl -n "$NS" get helmrelease sre narrow >/dev/null || ! kubectl -n "$GITOPS_NS" get helmrelease sre-agent >/dev/null; then
+    fail "a release is gone"
+  fi
 }
 
 while read -r _ _ fn; do export -f "${fn?}"; done < <(declare -F)
@@ -317,7 +307,7 @@ main() {
 
   if due 1; then
     log "step 1: the operator's pull request"
-    hold_lock
+    lock_note "stage 2b contract"
     snapshot before
     apply_gitops
   fi

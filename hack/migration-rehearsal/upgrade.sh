@@ -1,43 +1,28 @@
 #!/usr/bin/env bash
-# Upgrade the seeded 3.x agentlab in place to a 4.x meta chart and assert the
-# expand phase of the agent migration (agentlab#143), stage 2a:
-#
-#   1. BEFORE     record the 3.x state (Agents, HelmReleases, OCIRepositories,
-#                 helm history, CRD ownership); the GitOps objects are the
-#                 byte-identity baseline
-#   2. config     agentlab.yaml -> <target> + values-4x-migration.yaml; render;
-#                 helm template with the rendered values before the cluster is touched
-#   3. upgrade    agentlab platform in place, watched: the kagent-crds ownership
-#                 refusal is recognised within minutes and reported as FOUND-ISSUE
-#   4. assert     the 4.x platform: Substrate, Harness, WorkerPool, kagent_v2
-#                 database, Helm-owned v1alpha3 CRDs, leftover v1alpha2 Agents
-#   5. run 1      the migrate Job's expand report and the live rewrites
-#   6. GitOps     seed-gitops-1x.yaml = the report's diff, applied as the tenant's PR
-#   7. timings
+# Stage 2a of the migration rehearsal (agentlab#143): the seeded 3.x lab
+# upgraded in place to a 4.x meta chart, the migrate Job's expand run asserted.
 #
 # Usage:  cd <lab dir> && upgrade.sh <evidence-dir> <target-version>
 #
-# Environment (all optional):
+# Inputs (environment, all optional):
 #   LAB_DIR         the lab directory (default: $PWD; needs agentlab.yaml, state/)
 #   WANT_AGENTLAB   the agentlab release the run must use (default: v0.39.1)
 #   SCRATCH         where the meta chart is pulled for the pre-flight helm template
 #   STATUS_FILE     append-only status log; no status lines when unset
 #   STATUS_PREFIX   prefix of every status line (default: agentlab#143-stage2a)
 #   AGENTLAB, YQ    binaries (default: agentlab on PATH; a mikefarah yq v4)
+#   ANTHROPIC_API_KEY  read from the Secret kagent/kagent-anthropic when unset; never printed
 #   START_STEP      resume at this step on a lab already on the target, skipping
 #                   the earlier ones: before | config | upgrade | assert-platform
 #                   (alias: assert) | migrate-run1 | gitops-pr | record; preflight
 #                   always runs, the skipped steps' summary fields read -
 #   REPORT_RUN1     a saved copy of the first expand report when the migrate Job
-#                   re-ran since (a changed image/args/env hash renders a new Job,
-#                   whose report replaces the first one's in the ConfigMap): the
-#                   rewrite is asserted from the copy, the live report must say
-#                   unchanged for the rewritten releases
+#                   re-ran since (the report ConfigMap holds only the latest run):
+#                   the rewrite is asserted from the copy, the live report must
+#                   say unchanged for the rewritten releases
 #
-# The Anthropic key is read from the Secret kagent/kagent-anthropic into the
-# environment (agentlab platform consumes $ANTHROPIC_API_KEY) and is never
-# printed. Steps are idempotent where that is cheap: a run resumed on a lab
-# already on the target skips the upgrade and re-reads its timings.
+# The recipe is docs/migration-rehearsal.md. A platform defect stops the run
+# with exit 2 and a FOUND-ISSUE.md in the evidence dir; the lab is left as is.
 set -Eeuo pipefail
 
 EVIDENCE="${1:?usage: upgrade.sh <evidence-dir> <target-version>}"
@@ -66,28 +51,9 @@ export AGENTLAB_TELEMETRY_TESTMODE=1 AGENTLAB_NO_UPDATE_CHECK=1
 
 # ---------------------------------------------------------------- helpers ---
 
-log() { printf '%s upgrade: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >&2; }
-now() { date +%s; }
-utc() { date -u +%Y-%m-%dT%H:%MZ; }
-
-status() {
-  [ -n "$STATUS_FILE" ] || return 0
-  printf '%s %s %s\n' "$(utc)" "$STATUS_PREFIX" "$*" >>"$STATUS_FILE"
-}
-
-CURRENT_STEP=preflight
-die() {
-  log "FATAL: $*"
-  status "BLOCKED step=$CURRENT_STEP — ${1%%$'\n'*} — lab left as is (lock HELD); see $EVIDENCE"
-  trap - ERR
-  exit 1
-}
-on_error() {
-  local rc=$?
-  log "step '$CURRENT_STEP' failed (exit $rc)"
-  status "BLOCKED step=$CURRENT_STEP exit=$rc — lab left as is (lock HELD); see $EVIDENCE"
-  exit "$rc"
-}
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=lib.sh
+source "$HERE/lib.sh"
 trap on_error ERR
 
 # A platform defect, not a bug of this script: record it, stop, leave the lab.
@@ -99,39 +65,15 @@ found_issue() {
   exit 2
 }
 
-step() { CURRENT_STEP="$1"; log "== $1"; }
-
 # Timings survive a resumed run in the evidence dir.
 save_t() { printf '%s\n' "$2" >| "$EVIDENCE/t-$1"; }
 load_t() { cat "$EVIDENCE/t-$1" 2>/dev/null || echo -; }
-
-# Never let the key reach an evidence file: redact it if a tool echoed it.
-scrub_key() {
-  local f="$1"
-  [ -f "$f" ] || return 0
-  if /usr/bin/grep -qF -- "$ANTHROPIC_API_KEY" "$f"; then
-    log "WARNING: the Anthropic key appeared in $f — redacted"
-    sed -i "s|$ANTHROPIC_API_KEY|<redacted>|g" "$f"
-  fi
-}
-
-pick_yq() {
-  local c
-  for c in "${YQ:-}" yq "$HOME/.go/bin/yq" go-yq; do
-    [ -n "$c" ] || continue
-    if command -v "$c" >/dev/null 2>&1 && "$c" --version 2>&1 | /usr/bin/grep -q mikefarah; then
-      echo "$c"; return 0
-    fi
-  done
-  return 1
-}
 
 hr_table() { # every HelmRelease of the platform namespace with its Ready condition
   kubectl -n agent-platform get helmrelease \
     -o custom-columns='N:.metadata.name,READY:.status.conditions[?(@.type=="Ready")].status,CHART:.status.history[0].chartVersion,MSG:.status.conditions[?(@.type=="Ready")].message' 2>&1
 }
 hr_ready() { kubectl -n "$1" get helmrelease "$2" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null; }
-hr_chart_version() { kubectl -n "$1" get helmrelease "$2" -o jsonpath='{.status.history[0].chartVersion}' 2>/dev/null; }
 hr_conditions() { kubectl -n "$1" get helmrelease "$2" -o jsonpath='{.status.conditions[*].message}' 2>/dev/null; }
 
 # The HelmRelease a not-ready one reports for: a dependency chain
@@ -207,14 +149,8 @@ step_preflight() {
   /usr/bin/mkdir -p "$EVIDENCE" "$SCRATCH"
   CLUSTER=$("$YQ" '.clusterName' agentlab.yaml)
   BEFORE_VERSION=$(helm -n agent-platform history agent-platform -o json | jq -r '.[-1].chart' | sed 's/^agent-platform-//')
-  [ -f state/lab-lock/owner ] && /usr/bin/grep -q 'agentlab#143' state/lab-lock/owner \
-    || die "the lab lock is not held by the agentlab#143 rehearsal: $(cat state/lab-lock/owner 2>&1)"
-  if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
-    local key
-    key=$(kubectl -n kagent get secret kagent-anthropic -o jsonpath='{.data.ANTHROPIC_API_KEY}' | base64 -d)
-    export ANTHROPIC_API_KEY="$key"
-  fi
-  [ "${#ANTHROPIC_API_KEY}" -gt 40 ] || die "ANTHROPIC_API_KEY has ${#ANTHROPIC_API_KEY} bytes"
+  lock_require
+  export_anthropic_key 41
   log "agentlab $v, cluster $CLUSTER, on $BEFORE_VERSION → $TARGET, yq=$YQ, key ${#ANTHROPIC_API_KEY} bytes"
 }
 
@@ -233,10 +169,7 @@ step_before() {
     kubectl -n agent-platform get deploy -o custom-columns='N:.metadata.name,I:.spec.template.spec.containers[*].image' >| "$EVIDENCE/before-deploy-images.txt"
     cp agentlab.yaml "$EVIDENCE/before-agentlab.yaml"
   fi
-  if ! /usr/bin/grep -q 'stage 2a' state/lab-lock/owner; then
-    printf '; stage 2a upgrading in place to %s since %s' "$TARGET" "$(date -Is)" >>state/lab-lock/owner
-  fi
-  log "lock owner: $(cat state/lab-lock/owner)"
+  lock_note "stage 2a upgrading in place to $TARGET"
   status "STARTED target=$TARGET lab=$BEFORE_VERSION seeded ($(kubectl -n kagent get agents.kagent.dev --no-headers | wc -l) Agents; worktree $(git -C "$HERE" rev-parse --short HEAD))"
 }
 
@@ -447,6 +380,7 @@ step_migrate_run1() {
     | tee "$d/jobs.txt" >&2
   local job; job=$(kubectl -n kagent get job -l "$MIGRATE_SELECTOR" --sort-by=.metadata.creationTimestamp -o name | tail -n1)
   log "newest migrate Job: $job ($(kubectl -n kagent get job -l "$MIGRATE_SELECTOR" --no-headers | wc -l) rendered so far)"
+  # shellcheck disable=SC2016  # the body runs in bash -c with its own positionals
   if ! timeout 600 bash -c '
       until [ "$(kubectl -n kagent get "$1" -o jsonpath="{.status.conditions[?(@.type==\"Complete\")].status}" 2>/dev/null)" = True ]; do
         [ "$(kubectl -n kagent get "$1" -o jsonpath="{.status.conditions[?(@.type==\"Failed\")].status}" 2>/dev/null)" = True ] && exit 3

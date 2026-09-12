@@ -1,15 +1,10 @@
 #!/usr/bin/env bash
-# Seed the agentlab with the 3.x meta chart and the four fleet shapes of the
-# migration rehearsal (agentlab#143), stage 1:
-#
-#   shape 4  k8s-agent   bundled example, owned by the meta chart's kagent HelmRelease
-#   shape 1  sre         portal-shaped, created by agent-manager through muster
-#   shape 2  narrow      hand-applied agent-chart HelmRelease with muster.toolNames
-#   shape 3  sre-agent   GitOps-owned: OCIRepository + HelmRelease in flux-giantswarm
+# Stage 1 of the migration rehearsal (agentlab#143): `agentlab down && up` on
+# the 3.x meta chart, then the four fleet shapes seeded and asserted Accepted.
 #
 # Usage:  cd <lab dir> && seed.sh <evidence-dir>
 #
-# Environment (all optional):
+# Inputs (environment, all optional):
 #   LAB_DIR         the lab directory (default: $PWD; needs agentlab.yaml, state/, certs/)
 #   CHART_VERSION   the 3.x meta chart to seed (default: 3.23.1)
 #   WANT_AGENTLAB   the agentlab release the run must use (default: v0.39.1)
@@ -18,11 +13,10 @@
 #   STATUS_PREFIX   prefix of every status line (default: agentlab#143-stage1)
 #   LOCK_OWNER      text of state/lab-lock/owner
 #   AGENTLAB, YQ    binaries (default: agentlab on PATH; a mikefarah yq v4)
+#   ANTHROPIC_API_KEY  read from the Secret kagent/kagent-anthropic when unset; never printed
 #
-# The Anthropic key is read from the Secret kagent/kagent-anthropic into the
-# environment (agentlab up consumes $ANTHROPIC_API_KEY) and is never printed;
-# only its length is logged. Steps are idempotent where that is cheap, so a
-# failed run can be resumed by re-running with the same arguments.
+# The recipe is docs/migration-rehearsal.md. Steps are idempotent where that is
+# cheap, so a failed run can be resumed by re-running with the same arguments.
 set -Eeuo pipefail
 
 EVIDENCE="${1:?usage: seed.sh <evidence-dir>}"
@@ -45,55 +39,15 @@ export AGENTLAB_TELEMETRY_TESTMODE=1 AGENTLAB_NO_UPDATE_CHECK=1
 
 # ---------------------------------------------------------------- helpers ---
 
-log() { printf '%s seed: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >&2; }
-die() {
-  log "FATAL: $*"
-  status "BLOCKED step=$CURRENT_STEP — ${1%%$'\n'*} — lab left as is (lock HELD if taken); see $EVIDENCE"
-  trap - ERR
-  exit 1
-}
-now() { date +%s; }
-
-status() {
-  [ -n "$STATUS_FILE" ] || return 0
-  printf '%s %s %s\n' "$(date -u +%Y-%m-%dT%H:%MZ)" "$STATUS_PREFIX" "$*" >>"$STATUS_FILE"
-}
-
-CURRENT_STEP=preflight
-on_error() {
-  local rc=$?
-  log "step '$CURRENT_STEP' failed (exit $rc)"
-  status "BLOCKED step=$CURRENT_STEP exit=$rc — lab left as is (lock HELD if taken); see $EVIDENCE"
-  exit "$rc"
-}
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=lib.sh
+source "$HERE/lib.sh"
 trap on_error ERR
-
-step() { CURRENT_STEP="$1"; log "== $1"; }
-
-# Never let the key reach an evidence file: redact it if a tool echoed it.
-scrub_key() {
-  local f="$1"
-  [ -f "$f" ] || return 0
-  if /usr/bin/grep -qF -- "$ANTHROPIC_API_KEY" "$f"; then
-    log "WARNING: the Anthropic key appeared in $f — redacted"
-    sed -i "s|$ANTHROPIC_API_KEY|<redacted>|g" "$f"
-  fi
-}
-
-pick_yq() {
-  local c
-  for c in "${YQ:-}" yq "$HOME/.go/bin/yq" go-yq; do
-    [ -n "$c" ] || continue
-    if command -v "$c" >/dev/null 2>&1 && "$c" --version 2>&1 | /usr/bin/grep -q mikefarah; then
-      echo "$c"; return 0
-    fi
-  done
-  return 1
-}
 
 # wait_agent <ns> <name> <timeout-s>: until the Agent's Accepted condition is True.
 wait_agent() {
   local ns="$1" name="$2" to="$3"
+  # shellcheck disable=SC2016  # the body runs in bash -c with its own $1 $2
   timeout "$to" bash -c '
     until [ "$(kubectl -n "$1" get agent "$2" -o jsonpath="{.status.conditions[?(@.type==\"Accepted\")].status}" 2>/dev/null)" = True ]; do
       sleep 5
@@ -105,6 +59,7 @@ wait_agent() {
 wait_agent_ready() {
   local ns="$1" name="$2" to="$3"
   wait_agent "$ns" "$name" "$to"
+  # shellcheck disable=SC2016
   timeout "$to" bash -c 'until kubectl -n "$1" get deploy "$2" >/dev/null 2>&1; do sleep 5; done' _ "$ns" "$name" \
     || die "deploy/$name never appeared in $ns"
   kubectl -n "$ns" rollout status "deploy/$name" --timeout=300s >&2
@@ -116,10 +71,6 @@ assert_label() {
   got=$(kubectl -n "$2" get "$1" "$3" -o json | jq -r --arg l "$4" '.metadata.labels[$l] // ""')
   [ "$got" = "$5" ] || die "$1 $2/$3 label $4 = '$got', want '$5'"
   log "$1 $2/$3 label $4=$got"
-}
-
-hr_chart_version() { # <ns> <name>
-  kubectl -n "$1" get helmrelease "$2" -o jsonpath='{.status.history[0].chartVersion}'
 }
 
 assert_hr_version() { # <ns> <name> <regex>
@@ -165,16 +116,7 @@ step_preflight() {
 
 step_lock_and_before() {
   step lock-and-before
-  local owner="${LOCK_OWNER:-agentlab#143 migration rehearsal (stage 1 seed: down && up on $CHART_VERSION, then stages 2a/2b/3) since $(date -Is) — HELD until the rehearsal ends; do not touch}"
-  if /usr/bin/mkdir state/lab-lock 2>/dev/null; then
-    echo "$owner" >| state/lab-lock/owner
-    log "lab lock taken"
-  elif [ -f state/lab-lock/owner ] && /usr/bin/grep -q 'agentlab#143' state/lab-lock/owner; then
-    log "lab lock already held by this rehearsal: $(cat state/lab-lock/owner)"
-  else
-    cat state/lab-lock/owner 2>/dev/null || true
-    die "lab lock held by someone else"
-  fi
+  lock_take "${LOCK_OWNER:-agentlab#143 migration rehearsal (stage 1 seed: down && up on $CHART_VERSION, then stages 2a/2b/3) since $(date -Is) — HELD until the rehearsal ends; do not touch}"
   [ -f agentlab.yaml.before-143 ] || cp agentlab.yaml agentlab.yaml.before-143
 
   if [ ! -f "$EVIDENCE/before-helmreleases.txt" ]; then
@@ -187,13 +129,7 @@ step_lock_and_before() {
   BEFORE_READY=$(awk 'NR>1 && $4=="True"' "$EVIDENCE/before-helmreleases.txt" | wc -l)
   BEFORE_TOTAL=$(awk 'NR>1' "$EVIDENCE/before-helmreleases.txt" | wc -l)
 
-  if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
-    local key
-    key=$(kubectl -n kagent get secret kagent-anthropic -o jsonpath='{.data.ANTHROPIC_API_KEY}' | base64 -d)
-    export ANTHROPIC_API_KEY="$key"
-  fi
-  [ "${#ANTHROPIC_API_KEY}" -eq 108 ] || die "ANTHROPIC_API_KEY has ${#ANTHROPIC_API_KEY} bytes, want 108"
-  log "ANTHROPIC_API_KEY exported (${#ANTHROPIC_API_KEY} bytes)"
+  export_anthropic_key 108
 }
 
 step_config() {
