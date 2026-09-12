@@ -183,14 +183,14 @@ func TestCheckToolGroupLabels(t *testing.T) {
 	}
 
 	t.Run("exactly the fixture", func(t *testing.T) {
-		chart, err := checkToolGroupLabels(fixture(), oauth)
+		chart, err := checkToolGroupLabels(fixture(), oauth, true)
 		if err != nil || len(chart) != 0 {
 			t.Fatalf("want ok and no chart-labelled servers, got %v, %v", chart, err)
 		}
 	})
 	t.Run("chart-labelled servers are reported, not judged", func(t *testing.T) {
 		all := append(fixture(), helm("mcp-kubernetes", toolGroupInfrastructure), helm("agent-manager", toolGroupAgentPlatform))
-		chart, err := checkToolGroupLabels(all, oauth)
+		chart, err := checkToolGroupLabels(all, oauth, true)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -201,47 +201,65 @@ func TestCheckToolGroupLabels(t *testing.T) {
 	})
 	t.Run("a missing member fails", func(t *testing.T) {
 		all := fixture()[1:]
-		if _, err := checkToolGroupLabels(all, oauth); err == nil || !strings.Contains(err.Error(), fleetFixtureNames()[0]) {
+		if _, err := checkToolGroupLabels(all, oauth, true); err == nil || !strings.Contains(err.Error(), fleetFixtureNames()[0]) {
 			t.Fatalf("want the missing member named, got %v", err)
 		}
 	})
 	t.Run("a member with the wrong value fails", func(t *testing.T) {
 		all := fixture()
 		all[0].Labels[toolGroupLabel] = toolGroupAgentPlatform
-		if _, err := checkToolGroupLabels(all, oauth); err == nil || !strings.Contains(err.Error(), "want "+toolGroupInfrastructure) {
+		if _, err := checkToolGroupLabels(all, oauth, true); err == nil || !strings.Contains(err.Error(), "want "+toolGroupInfrastructure) {
 			t.Fatalf("want the wrong value refused, got %v", err)
 		}
 	})
 	t.Run("an unknown value fails", func(t *testing.T) {
 		all := append(fixture(), helm("pro", "other"))
-		if _, err := checkToolGroupLabels(all, oauth); err == nil || !strings.Contains(err.Error(), `"other"`) {
+		if _, err := checkToolGroupLabels(all, oauth, true); err == nil || !strings.Contains(err.Error(), `"other"`) {
 			t.Fatalf("want the unknown value refused, got %v", err)
 		}
 	})
 	t.Run("another lab-created labelled server fails", func(t *testing.T) {
 		stray := member("stray")
 		delete(stray.Labels, fleetFixtureLabel)
-		if _, err := checkToolGroupLabels(append(fixture(), stray), oauth); err == nil || !strings.Contains(err.Error(), "stray") {
+		if _, err := checkToolGroupLabels(append(fixture(), stray), oauth, true); err == nil || !strings.Contains(err.Error(), "stray") {
 			t.Fatalf("want the stray lab server refused, got %v", err)
 		}
 	})
 	t.Run("a labelled OAuth fixture fails", func(t *testing.T) {
 		labelledOAuth := oauth
 		labelledOAuth.Labels = map[string]string{managedByLabel: managedByAgentlabValue, toolGroupLabel: toolGroupInfrastructure}
-		if _, err := checkToolGroupLabels(fixture(), labelledOAuth); err == nil || !strings.Contains(err.Error(), oauthFixtureServer) {
+		if _, err := checkToolGroupLabels(fixture(), labelledOAuth, true); err == nil || !strings.Contains(err.Error(), oauthFixtureServer) {
 			t.Fatalf("want the labelled OAuth fixture refused, got %v", err)
+		}
+	})
+	t.Run("fake fleet off: the charts' labels alone pass", func(t *testing.T) {
+		chart, err := checkToolGroupLabels([]labelledServer{helm("mcp-kubernetes", toolGroupInfrastructure)}, oauth, false)
+		if err != nil || !slices.Equal(chart, []string{platformNamespace + "/mcp-kubernetes=infrastructure"}) {
+			t.Fatalf("want ok with the chart-labelled server reported, got %v, %v", chart, err)
+		}
+	})
+	t.Run("fake fleet off: a member is one more lab-created labelled server", func(t *testing.T) {
+		if _, err := checkToolGroupLabels(fixture()[:1], oauth, false); err == nil || !strings.Contains(err.Error(), fleetFixtureNames()[0]) {
+			t.Fatalf("want the member refused, got %v", err)
 		}
 	})
 }
 
-// fakeFleetOnCluster seeds what `agentlab platform` leaves on a lab: every
-// fake-fleet member, the OAuth fixture, a chart-labelled server, and — in
-// another namespace — a server of the other group.
-func fakeFleetOnCluster() []runtime.Object {
+// fakeFleetOnCluster seeds what `agentlab platform` leaves on a lab with
+// platform.fakeFleet on: every fake-fleet member, the OAuth fixture, a
+// chart-labelled server, and — in another namespace — a server of the other
+// group.
+func fakeFleetOnCluster() []runtime.Object { return labOnCluster(true) }
+
+// labOnCluster is fakeFleetOnCluster with or without the fixture's members
+// (platform.fakeFleet on or off).
+func labOnCluster(fakeFleet bool) []runtime.Object {
 	var objs []runtime.Object
-	for _, name := range fleetFixtureNames() {
-		objs = append(objs, customObject(musterMCPServerGVK, platformNamespace, name, map[string]string{
-			managedByLabel: managedByAgentlabValue, fleetFixtureLabel: fleetFixtureValue, toolGroupLabel: toolGroupInfrastructure}))
+	if fakeFleet {
+		for _, name := range fleetFixtureNames() {
+			objs = append(objs, customObject(musterMCPServerGVK, platformNamespace, name, map[string]string{
+				managedByLabel: managedByAgentlabValue, fleetFixtureLabel: fleetFixtureValue, toolGroupLabel: toolGroupInfrastructure}))
+		}
 	}
 	objs = append(objs,
 		customObject(musterMCPServerGVK, platformNamespace, oauthFixtureServer, map[string]string{managedByLabel: managedByAgentlabValue, fleetFixtureLabel: oauthFixtureMarker}),
@@ -297,7 +315,7 @@ func TestListMCPServersByLabel(t *testing.T) {
 // the presets proof reads carries "" for the unlabelled fixture.
 func TestProveToolGroupLabelsOnCluster(t *testing.T) {
 	f := newFakeLab(t, fakeFleetOnCluster()...)
-	if err := proveToolGroupLabels(); err != nil {
+	if err := proveToolGroupLabels(true); err != nil {
 		t.Errorf("on a complete lab: %v", err)
 	}
 	groups, err := mcpServerToolGroups()
@@ -314,8 +332,52 @@ func TestProveToolGroupLabelsOnCluster(t *testing.T) {
 	if err := f.dyn.Tracker().Delete(musterMCPServerGVR, platformNamespace, oauthFixtureServer); err != nil {
 		t.Fatal(err)
 	}
-	if err := proveToolGroupLabels(); err == nil || !strings.Contains(err.Error(), oauthFixtureServer+" is missing") {
+	if err := proveToolGroupLabels(true); err == nil || !strings.Contains(err.Error(), oauthFixtureServer+" is missing") {
 		t.Errorf("without the OAuth fixture: %v", err)
+	}
+}
+
+// TestProveToolGroupLabelsFakeFleetOff: the step reads platform.fakeFleet —
+// a default lab (no member) passes with the key off and fails with it on
+// (members missing); a lab still carrying the members fails with the key
+// off, naming them and the command that removes them.
+func TestProveToolGroupLabelsFakeFleetOff(t *testing.T) {
+	newFakeLab(t, labOnCluster(false)...)
+	if err := proveToolGroupLabels(false); err != nil {
+		t.Errorf("a default lab with the fake fleet off: %v", err)
+	}
+	if err := proveToolGroupLabels(true); err == nil || !strings.Contains(err.Error(), "fake-fleet members without") {
+		t.Errorf("a default lab with the fake fleet on must miss the members, got %v", err)
+	}
+	newFakeLab(t, labOnCluster(true)...)
+	err := proveToolGroupLabels(false)
+	if err == nil || !strings.Contains(err.Error(), "platform.fakeFleet is off") || !strings.Contains(err.Error(), fleetFixtureNames()[0]) {
+		t.Errorf("members with the fake fleet off must fail naming the key and the members, got %v", err)
+	}
+}
+
+// TestRemoveFleetFixture: switching the key off removes exactly the fixture
+// — the OAuth fixture and the chart's servers stay — and a lab without it
+// is a no-op.
+func TestRemoveFleetFixture(t *testing.T) {
+	newFakeLab(t, fakeFleetOnCluster()...)
+	ctx := context.Background()
+	for round := 1; round <= 2; round++ {
+		if err := removeFleetFixture(ctx); err != nil {
+			t.Fatalf("round %d: %v", round, err)
+		}
+		members, err := listMCPServers(ctx, platformNamespace, fleetFixtureSelector)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(members) != 0 {
+			t.Errorf("round %d: %d members remain", round, len(members))
+		}
+	}
+	for _, name := range []string{oauthFixtureServer, componentMCPKubernetes} {
+		if _, err := getMCPServer(ctx, platformNamespace, name); err != nil {
+			t.Errorf("%s must survive the removal: %v", name, err)
+		}
 	}
 }
 

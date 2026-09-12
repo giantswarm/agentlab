@@ -83,10 +83,12 @@ label](platform.md#the-fake-fleet-and-the-tool-group-label)); a family's members
 (`spec.family.name`) collapse into one row. The page reads the MCPServer CRs
 through Backstage's Kubernetes proxy with the user's own token, and
 `agentlab backstage-test` asserts the grouping from that same data with the
-plugin's arithmetic: the fake-fleet families under Infrastructure, the OAuth
-fixture under Registered servers, every chart-labelled server under the group
-its label names, and — with every label removed from the same data — one
-Registered servers list with all sections present, never an empty page.
+plugin's arithmetic: the fake-fleet families under Infrastructure while
+`platform.fakeFleet` is on and no row named after them while it is off (the
+default: the sample below is a lab with the fleet on), the OAuth fixture under
+Registered servers, every chart-labelled server under the group its label
+names, and — with every label removed from the same data — one Registered
+servers list with all sections present, never an empty page.
 
 `agentlab backstage-test` drives the whole sign-in headlessly for every
 configured user and then proves the muster hop with that user's own token —
