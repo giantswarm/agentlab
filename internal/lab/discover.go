@@ -29,6 +29,7 @@ import (
 type Discovery struct {
 	Tools         []ToolVersion
 	AnthropicKey  bool
+	GitHubToken   bool
 	ClusterExists bool
 	ClusterPorts  map[int]bool
 	KindGateway   string
@@ -92,7 +93,7 @@ const flmOwner = "FastFlowLM"
 // Discover probes this machine. Nothing here needs the cluster; every probe
 // is loopback or a local CLI and degrades to "not found".
 func Discover(cfg *config.Config) *Discovery {
-	d := &Discovery{AnthropicKey: os.Getenv(AnthropicKeyEnv) != ""}
+	d := &Discovery{AnthropicKey: os.Getenv(AnthropicKeyEnv) != "", GitHubToken: gitHubTokenSet()}
 	d.Tools = toolVersions(dockerVersion())
 	d.ClusterExists, d.ClusterPorts = kindNodePublishedPorts(cfg.ControlPlaneNode())
 	if gw, err := kindGatewayIP(cfg.ControlPlaneNode()); err == nil {
@@ -273,6 +274,11 @@ func (d *Discovery) Report(cfg *config.Config) string {
 		line("Anthropic key", "$%s is set — the agents' default ModelConfig and Backstage's AI chat get the real key at deploy time", AnthropicKeyEnv)
 	} else {
 		line("Anthropic key", "$%s is not set — the default ModelConfig and Backstage's AI chat get a placeholder until it is exported and `agentlab platform` re-runs", AnthropicKeyEnv)
+	}
+	if d.GitHubToken {
+		line("GitHub token", "$%s is set — the portal's skill discovery and agent-manager's skill resolution call GitHub authenticated (5000 requests an hour) from deploy time", GitHubTokenEnv)
+	} else {
+		line("GitHub token", "$%s is not set — skill discovery and resolution share this machine's unauthenticated GitHub window (60 requests an hour) until it is exported and `agentlab platform` re-runs", GitHubTokenEnv)
 	}
 	return b.String()
 }

@@ -101,6 +101,12 @@ type tmplData struct {
 	// (ateletImageCacheArgs, substrate.go), rendered after the registry flag
 	// in the same substrate.atelet.extraArgs list.
 	AteletImageCacheArgs []string
+	// GitHubToken mirrors gitHubTokenWired(cfg): $GITHUB_TOKEN is set on the
+	// host (githubtoken.go), so the values name the Secret the lab creates
+	// from it — the portal's extraEnvVarsSecrets and the overlay's
+	// integrations.github, agent-manager's skills.github.tokenSecret, the
+	// migrate Job's githubToken. Only ever the Secret's name, never the token.
+	GitHubToken bool
 }
 
 func newTmplData(cfg *config.Config) (*tmplData, error) {
@@ -132,6 +138,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		MCPPrometheusChartVersion:  mcpPrometheusChartVersion,
 		LocalRegistryEndpoint:      devRegistryEndpoint(cfg),
 		AteletImageCacheArgs:       ateletImageCacheArgs,
+		GitHubToken:                gitHubTokenWired(cfg),
 		ModelManagerEnabled:        cfg.ModelManagerEnabled(),
 		LegacyChart:                cfg.LegacyChart(),
 		ModelManagerBackends:       cfg.Platform.ModelManager.Backends,
@@ -181,8 +188,12 @@ var tmplFuncs = template.FuncMap{
 }
 
 // platformValuesTemplate renders the meta chart's lab values (the lab
-// shape, platform.go).
-const platformValuesTemplate = "agent-platform-values.yaml.tmpl"
+// shape, platform.go); backstageOverlayTemplate the lab's Backstage catalog
+// and app-config overlay.
+const (
+	platformValuesTemplate   = "agent-platform-values.yaml.tmpl"
+	backstageOverlayTemplate = "backstage-catalog.yaml.tmpl"
+)
 
 // renderTemplate renders one embedded template with the config; mutate, when
 // given, adjusts the template data first (the platform run hands

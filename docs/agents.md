@@ -96,6 +96,41 @@ The same key powers Backstage's AI chat via a second Secret,
 Further models — the host model servers through model-manager,
 `platform.extraModels` — are their own ModelConfigs; see [Models](models.md).
 
+## The GitHub token
+
+Two consumers of the lab resolve skills through GitHub's REST API: the
+portal's skill discovery (`GET /api/gs/agent-skills?repoUrl=…`, the create
+wizard's skills step) and agent-manager (`list_skills`, the commit
+`create_agent` pins a branch to, `refreshSkills`, the migrate Job of the
+cut-over). Without a token GitHub allows 60 requests an hour **per egress
+address**, and the kind cluster shares this machine's — a handful of
+`backstage-test` runs within an hour exhaust it, after which discovery comes
+back truncated (the proof refuses that by name) until the window resets.
+
+`$GITHUB_TOKEN` on the host lifts that: `agentlab up`/`platform` create **or
+update** the Secret `agentlab-github-token` (key `GITHUB_TOKEN`) in
+`agent-platform` — the portal takes it through `extraEnvVarsSecrets` and the
+lab's app-config overlay (`integrations.github[].token: ${GITHUB_TOKEN}`),
+agent-manager through the chart's `skills.github.tokenSecret` — and in
+`kagent` for the migrate Job (`agentManager.migration.githubToken`), which then
+call GitHub authenticated (5000 requests an hour; the rate-limit headers say
+so). A fine-grained token with public read access is enough; a token that
+reads a private skill repository lets agent-manager resolve skills from it.
+As with the Anthropic key, the token is a real credential: it travels host
+environment -> Secret and never enters `agentlab.yaml`, `state/` (the
+rendered values carry the Secret's *name*), a log line or a process's argv.
+Re-running with a new token rotates the Secret.
+
+Without the variable the lab is as before: the values name no Secret, the
+consumers call GitHub unauthenticated, and a Secret an earlier run created
+stays — unreferenced — until `agentlab down` (a run that merely lacks the
+export never deletes a credential; `kubectl -n agent-platform delete secret
+agentlab-github-token` does). `backstage-test`, `agents-test` and the
+rehearsal print the window before their first skill-resolving step
+(`GitHub API window (unauthenticated: this machine's shared window): 12 of 60
+requests remaining, resets 14:32:10 CEST`) and, when it is exhausted, wait once
+until the reset instead of failing on a truncated listing.
+
 ## The UI and the controller's route
 
 The kagent UI is host-published like the other components:

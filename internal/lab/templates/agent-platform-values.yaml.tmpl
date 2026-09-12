@@ -508,11 +508,36 @@ kagent:
 # carry the `kubernetes` audience to pass the kind apiserver — the lab Dex
 # lists agent-platform as a trusted peer of that client.
 agent-manager:
+{{- if .GitHubToken }}
+  # The token agent-manager resolves skills with (list_skills, the
+  # create_agent pin, refreshSkills): the Secret the lab creates from
+  # $GITHUB_TOKEN (githubtoken.go), lifting the unauthenticated 60-an-hour
+  # window this machine's egress address shares. The chart renders it as the
+  # Deployment's GITHUB_TOKEN; the repositories list stays the chart's.
+  skills:
+    github:
+      tokenSecret:
+        name: agentlab-github-token
+        key: GITHUB_TOKEN
+{{- end }}
   muster:
     mcpServer:
       auth:
         requiredAudiences:
           - kubernetes
+{{- if .GitHubToken }}
+
+# The connectivity chart's wiring for agent-manager: its migrate Job (the
+# cut-over the rehearsal drives) resolves skills through GitHub too, from the
+# kagent namespace — the same token, the lab's copy of the Secret there
+# (githubtoken.go). The Job's env is optional, so a first install, where the
+# copy lands after the chart created the namespace, still runs.
+agentManager:
+  migration:
+    githubToken:
+      secretName: agentlab-github-token
+      key: GITHUB_TOKEN
+{{- end }}
 {{- end }}
 
 {{- if .ModelManagerEnabled }}
@@ -607,6 +632,16 @@ backstage:
         configMapRef: agent-platform-backstage-app-config
       - filename: app-config.agentlab.yaml
         configMapRef: agentlab-backstage-app-config
+{{- if .GitHubToken }}
+    # $GITHUB_TOKEN into the portal's environment from the Secret the lab
+    # creates (githubtoken.go); the overlay's integrations.github reads it
+    # (backstage-catalog.yaml.tmpl), so the gs backend's skill discovery calls
+    # GitHub authenticated — 5000 requests an hour instead of the 60 this
+    # machine's egress address shares. A separate list from the umbrella's
+    # extraEnvVars, so nothing of the umbrella's is overridden.
+    extraEnvVarsSecrets:
+      - agentlab-github-token
+{{- end }}
     extraVolumes:
       # Restated from the chart (global.identity.ca): the lab CA Backstage
       # trusts via NODE_EXTRA_CA_CERTS.
