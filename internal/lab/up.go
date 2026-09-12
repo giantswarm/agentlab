@@ -69,10 +69,6 @@ func Up(cfg *config.Config, offers Offers) error {
 		return err
 	}
 
-	// Side-load the cached images while Dex and the OIDC verification run;
-	// joined before the platform install, which is what actually needs them.
-	loaded := loadLabImages(cfg, pulled)
-
 	step("Deploying Dex")
 	// Namespace and TLS secret land before the Deployment so the pod never
 	// waits on a missing volume on first boot.
@@ -86,6 +82,13 @@ func Up(cfg *config.Config, offers Offers) error {
 		return err
 	}
 	sideloadDexImage(cfg, dexReady)
+	// The bulk side-load starts only now, with the Dex image in the node: it
+	// runs while Dex rolls out and the OIDC chain is verified, and is joined
+	// before the platform install, which is what actually needs it. Started
+	// any earlier it is what the Dex image queues behind — an import of
+	// everything the last boot ran, minutes long — with the boot log stuck on
+	// "Deploying Dex" meanwhile.
+	loaded := loadLabImages(cfg, pulled)
 	if err := ApplyDex(cfg); err != nil {
 		return err
 	}
@@ -164,11 +167,11 @@ func Up(cfg *config.Config, offers Offers) error {
 		// SIGINT that ends the process (platformUp snapshots first for the
 		// same reason). No portal without the platform (config.Validate), so
 		// this path can only offer the trust step.
-		snapshotPreloadImages(cfg)
+		snapshotPreloadImages()
 		offerTrustAndOpen(cfg, offers, false)
 		return nil
 	}
-	snapshotPreloadImages(cfg)
+	snapshotPreloadImages()
 	return nil
 }
 
