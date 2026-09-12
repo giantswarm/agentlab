@@ -343,9 +343,19 @@ substrate:
   # carry it — the connectivity release (the Harness) and the substrate
   # release (atelet) reconcile independently. The registry container itself
   # is created on the first swap.
+  #
+  # The image-cache policy that follows takes the host disk out of atelet's
+  # eviction: the cache dir is the kind node's root overlay, i.e. the host's
+  # disk, and above the chart's 85 % watermark every GC pass (5 min) would
+  # evict the Harness image and the next turn's cold restore overruns the
+  # router's budget (ateletImageCacheArgs, substrate.go; docs/platform.md
+  # "Platform gotchas"). platform-test asserts the flags on the DaemonSet.
   atelet:
     extraArgs:
       - --localhost-registry-replacement={{ .LocalRegistryEndpoint }}
+{{- range .AteletImageCacheArgs }}
+      - {{ . }}
+{{- end }}
 {{- end }}
 
 kagent:

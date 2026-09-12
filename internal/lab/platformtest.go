@@ -169,6 +169,20 @@ func PlatformTest(cfg *config.Config, email string) error {
 			return err
 		}
 		verdict += "\nPASS: agent-manager writes as the caller — a viewer's create_agent with a forged x-user-id is the apiserver's Forbidden for the viewer"
+		// The lab's atelet image-cache policy, live on the node agents
+		// (ateletImageCacheArgs): without it a laptop above the chart's 85 %
+		// watermark loses the Harness image five minutes after every turn.
+		if version, _ := helmReleaseVersion(substrateNamespace, substrateRelease); version != "" {
+			step("Verifying the atelet DaemonSet carries the lab's image-cache policy %s", strings.Join(ateletImageCacheArgs, " "))
+			ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
+			ready, err := proveAteletImageCachePolicy(ctx)
+			cancel()
+			if err != nil {
+				return err
+			}
+			note("atelet %s/%s: the policy flags on all %d ready pods", substrateNamespace, ateletDaemonSet, ready)
+			verdict += "\nPASS: atelet carries the lab's image-cache policy (the host disk cannot evict the Harness image; a 4 GiB cap bounds the cache)"
+		}
 	}
 
 	// The per-server sign-in path: muster as OAuth client, challenged by the
