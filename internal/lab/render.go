@@ -101,6 +101,12 @@ type tmplData struct {
 	// (ateletImageCacheArgs, substrate.go), rendered after the registry flag
 	// in the same substrate.atelet.extraArgs list.
 	AteletImageCacheArgs []string
+	// GitHubToken mirrors gitHubTokenWired(cfg): $GITHUB_TOKEN is set on the
+	// host (githubtoken.go), so the values name the Secret the lab creates
+	// from it — the portal's extraEnvVarsSecrets and the overlay's
+	// integrations.github, agent-manager's skills.github.tokenSecret, the
+	// migrate Job's githubToken. Only ever the Secret's name, never the token.
+	GitHubToken bool
 }
 
 func newTmplData(cfg *config.Config) (*tmplData, error) {
@@ -132,6 +138,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		MCPPrometheusChartVersion:  mcpPrometheusChartVersion,
 		LocalRegistryEndpoint:      devRegistryEndpoint(cfg),
 		AteletImageCacheArgs:       ateletImageCacheArgs,
+		GitHubToken:                gitHubTokenWired(cfg),
 		ModelManagerEnabled:        cfg.ModelManagerEnabled(),
 		LegacyChart:                cfg.LegacyChart(),
 		ModelManagerBackends:       cfg.Platform.ModelManager.Backends,

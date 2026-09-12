@@ -337,6 +337,12 @@ func proveCreatePath(primary, viewer *portalSession) (agentSpec, *agentTemplate,
 	}
 
 	step("Skill discovery through the portal: GET %s for %s, every skill pinned to the head commit", portalSkillsPath, skillsTestRepo)
+	// The portal reads GitHub for this; its window is this machine's
+	// (githubwindow.go) — printed, and waited for once when exhausted, rather
+	// than failing on the truncated listing below.
+	if err := awaitGitHubWindow("the portal's skill discovery"); err != nil {
+		return fail(err)
+	}
 	discovery, err := discoverSkills(primary, skillsTestRepo)
 	if err != nil {
 		return fail(err)

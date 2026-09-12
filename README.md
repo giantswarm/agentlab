@@ -86,6 +86,7 @@ it touches anything (see [Docker resources](docs/getting-started.md#docker-resou
 go install github.com/giantswarm/agentlab@latest   # or a release binary, or `go build -o agentlab .`
 
 export ANTHROPIC_API_KEY=sk-ant-...   # optional: powers the agents and Backstage's AI chat
+export GITHUB_TOKEN=github_pat_...    # optional: skill discovery/resolution call GitHub authenticated (5000/h, not 60/h)
 agentlab configure --defaults         # drop --defaults for the interactive form
 agentlab up                           # certs, kind cluster, Dex, RBAC, the platform — verified
 agentlab open portal                  # the portal in your browser (the URL is printed too)

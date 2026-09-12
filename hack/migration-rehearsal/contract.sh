@@ -328,6 +328,7 @@ main() {
     # the AgentTemplate in the Agent's place) is what the contract phase sweeps.
     kubectl -n "$NS" get agents.kagent.dev -o name 2>/dev/null | sed 's#.*/##' | sort >|"$EVIDENCE/before-run2-v1alpha2-agents.txt" || true
     log "  v1alpha2 Agents left for the contract phase: [$(paste -sd, "$EVIDENCE/before-run2-v1alpha2-agents.txt")]"
+    github_window "the contract phase's migrate Job (it resolves every skill through GitHub)"
     run_migrate agent-manager-migrate-2
     report=$EVIDENCE/agent-manager-migrate-2-report.json
     if [[ $(jq -r .phase "$report") == wait ]]; then

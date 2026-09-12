@@ -251,6 +251,13 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	if err := ensurePlatformSecrets(ctx); err != nil {
 		return err
 	}
+	// The GitHub token (githubtoken.go) — before the install: the portal's
+	// envFrom and agent-manager's env reference the Secret without
+	// `optional`, and the values just rendered name it whenever $GITHUB_TOKEN
+	// is set.
+	if err := ensureGitHubTokenSecrets(ctx, cfg); err != nil {
+		return err
+	}
 
 	// Inside pods, *.<domain> must resolve to the edge Gateway (outside, the
 	// nip.io wildcard already answers 127.0.0.1) — without this Backstage
@@ -507,6 +514,12 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	if cfg.Platform.Agents {
 		step("Wiring the agents to Anthropic (ModelConfig model: %s)", cfg.AIModel)
 		if _, err := ensureAnthropicSecret(kagentNamespace, "kagent-anthropic"); err != nil {
+			return err
+		}
+		// The migrate Job's copy of the GitHub token (githubtoken.go) — the
+		// chart created the kagent namespace by now; a no-op when the
+		// pre-install pass already found the namespace, or without the token.
+		if err := ensureGitHubTokenSecret(ctx, kagentNamespace); err != nil {
 			return err
 		}
 		// The extra ModelConfigs from platform.extraModels (self-hosted

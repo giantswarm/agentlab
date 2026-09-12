@@ -106,13 +106,13 @@ The flags pin a value regardless of the discovery, with or without
 | Variable | Read by | Effect |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | `up`, `platform` | Becomes the Secrets `kagent/kagent-anthropic` and `backstage/backstage-anthropic` at deploy time; never written to `agentlab.yaml` or `state/`. See [Agents](agents.md). |
+| `GITHUB_TOKEN` | `up`, `platform`, `backstage-test`, `agents-test`, the rehearsal, the update check | Becomes the Secret `agentlab-github-token` (key `GITHUB_TOKEN`) in `agent-platform` and `kagent` at deploy time — created or updated, so a re-run rotates it — and the values name that Secret for the portal's skill discovery, agent-manager's skill resolution and the migrate Job, which then call GitHub authenticated (5000 requests an hour instead of the 60 this machine's address shares). Never written to `agentlab.yaml` or `state/`. Unset: the lab is as before, the Secret of an earlier run stays unreferenced, and the proofs print the remaining unauthenticated window before resolving skills. See [Agents](agents.md#the-github-token). |
 | `<name>` per `extraModels[].apiKeyEnv` | `up`, `platform` | The key for that model config, same handling. See [Models](models.md). |
 | `NODE_USE_SYSTEM_CA=1` | Node >= 22.15, Claude Code | Makes Node honor the system trust store after `agentlab trust`. Older Node: `NODE_EXTRA_CA_CERTS=$PWD/certs/ca.crt`. See [TLS](tls.md). |
 | `KUBECONFIG` | your shell | Ignored by the lab: its embedded Helm and Kubernetes client are built from `state/kubeconfig` alone. `KUBECONFIG=state/kubeconfig kubectl ...` is the lab's view from a shell. |
 | `AGENTLAB_TELEMETRY_OPTOUT`, `DO_NOT_TRACK=1` | every command | Disable the anonymous usage signal. See [Usage data](telemetry.md). |
 | `AGENTLAB_TELEMETRY_TESTMODE=1` | every command | File the signals as test data and log delivery errors, for work on the lab itself. |
 | `AGENTLAB_NO_UPDATE_CHECK=1` | every command | Silence the newer-release hint (below). |
-| `GITHUB_TOKEN` | the update check | Lifts GitHub's anonymous rate limit; nothing else. |
 
 ## Keeping agentlab current
 

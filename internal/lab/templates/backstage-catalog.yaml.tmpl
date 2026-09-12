@@ -74,6 +74,17 @@ data:
           target: /lab-catalog/users.yaml
           rules:
             - allow: [User, Group]
+{{- if .GitHubToken }}
+    # The portal's skill discovery (the gs backend's GET /api/gs/agent-skills
+    # reads GitHub through Backstage's integrations) authenticates with the
+    # token the lab put into the pod's environment (extraEnvVarsSecrets in
+    # agent-platform-values.yaml, from the Secret githubtoken.go creates). A
+    # reference Backstage resolves at start-up, never the value.
+    integrations:
+      github:
+        - host: github.com
+          token: ${GITHUB_TOKEN}
+{{- end }}
 {{- if .Platform.Observability }}
     # The umbrella hardcodes mimirEnabled: false — standalone installations
     # have no GS observability stack at observability.<baseDomain>. With

@@ -209,6 +209,7 @@ registry.
 ```bash
 agentlab configure --defaults --chart-branch my-feature
 export ANTHROPIC_API_KEY=sk-ant-...
+export GITHUB_TOKEN=github_pat_...   # optional: the proofs' skill discovery/resolution off the 60/h window (agents.md)
 agentlab up
 agentlab platform-test && agentlab test && agentlab backstage-test
 ```

@@ -153,7 +153,12 @@ what the proof checks is what the portal shows.
 **The create path** (as the first `platform-admins` user):
 
 - skill discovery for `https://github.com/giantswarm/agent-skills` — every
-  entry carries the listing's head commit as a full id;
+  entry carries the listing's head commit as a full id. The portal reads
+  GitHub for this, so the proof first prints the GitHub API window it shares
+  with this machine (authenticated when `$GITHUB_TOKEN` is set — see
+  [The GitHub token](agents.md#the-github-token)) and, when the window is
+  exhausted, waits once for its reset; a listing GitHub truncated is refused
+  by name, never asserted on;
 - `get_info` and `list_model_configs` through the portal;
 - the dry run (`validate_agent`): valid, mode `create`, the `OCIRepository` at
   `1.x`, the `HelmRelease` as `kagent-flux`, `values.agent.harness` = the

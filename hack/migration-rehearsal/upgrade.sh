@@ -250,6 +250,9 @@ step_upgrade() {
   status "LAB UPGRADING in place $BEFORE_VERSION → $TARGET (agentlab platform, lock held)"
   rm -f "$EVIDENCE/TRAP"
   local t0 pid rc=0 trap_seen='' waited=0
+  # The connectivity release's migrate Job resolves every seeded skill
+  # through GitHub as part of this upgrade.
+  github_window "the upgrade's migrate Job"
   t0=$(now)
   timeout 1500 "$AGENTLAB" platform --trust=false --open=false >"$EVIDENCE/platform.log" 2>&1 &
   pid=$!

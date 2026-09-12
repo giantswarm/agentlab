@@ -159,6 +159,12 @@ func AgentsTest(cfg *config.Config, email string) error {
 	defer cleanup()
 
 	step("%slist_skills — the head commit of %s (the commit refreshSkills re-pins to)", agentManagerToolPrefix, fixture.Repo)
+	// agent-manager reads GitHub for this and for the create_agent pin
+	// below; its window is this machine's (githubwindow.go) — printed, and
+	// waited for once when exhausted.
+	if err := awaitGitHubWindow("agent-manager's skill resolution"); err != nil {
+		return err
+	}
 	head, err := agentManagerSkillHead(session, fixture)
 	if err != nil {
 		return err

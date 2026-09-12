@@ -137,6 +137,7 @@ Then bring the lab up:
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...   # optional: powers the agents + Backstage AI chat
+export GITHUB_TOKEN=github_pat_...    # optional: skill discovery/resolution call GitHub authenticated (5000/h, not 60/h)
 ./agentlab configure       # interactive form: cluster, users, components
 ./agentlab up              # certs, kind cluster, Dex, RBAC, the agent platform — verified
 ./agentlab open portal     # the portal (Backstage) in the browser; `open agents` the kagent UI
@@ -192,6 +193,7 @@ Discovering this machine:
   Lemonade Server   11.9.0 on :13305 — answers on 172.21.0.1 (the address pods dial): yes; 4 downloaded, 3 tool-calling
   LM Studio         api v1 on :1234 — answers on 172.21.0.1 (the address pods dial): yes; 6 downloaded, 4 tool-calling
   Anthropic key     $ANTHROPIC_API_KEY is set — the agents' default ModelConfig and Backstage's AI chat get the real key at deploy time
+  GitHub token      $GITHUB_TOKEN is set — the portal's skill discovery and agent-manager's skill resolution call GitHub authenticated (5000 requests an hour) from deploy time
 
 Applied to the configuration:
   platform.modelManager.backends: [ollama] -> [ollama, lemonade, lmstudio]
@@ -239,6 +241,10 @@ Applied to the configuration:
   that trusted the code would find an Ollama on every LM Studio port.
 - **`$ANTHROPIC_API_KEY`**: whether it is exported, since the agents'
   default ModelConfig and Backstage's AI chat take it at deploy time.
+- **`$GITHUB_TOKEN`**: whether it is exported, since the portal's skill
+  discovery and agent-manager's skill resolution take it at deploy time and
+  otherwise share this machine's unauthenticated GitHub window (60 requests
+  an hour). See [Agents](agents.md#the-github-token).
 
 Pins override the discovery for that run: `--model-manager[=false]` decides
 the flag regardless of what answers, `--model-manager-backends ollama,lmstudio`

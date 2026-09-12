@@ -91,6 +91,47 @@ scrub_key() {
   fi
 }
 
+# ----------------------------------------------------------------- github ---
+
+# github_window <what>: print GitHub's core API window before a step that
+# resolves skills through GitHub (the migrate Job, agent-manager), the way
+# `agentlab backstage-test` and `agents-test` do. Authenticated with
+# GITHUB_TOKEN from the environment, else with the lab's own Secret
+# agent-platform/agentlab-github-token when `agentlab platform` created one;
+# the token reaches curl through a header file, never argv, and is never
+# logged. An exhausted window is waited out once (bounded to an hour and a
+# bit) rather than failing later on a truncated resolution; an endpoint that
+# cannot be read is a log line, never a failure.
+github_window() {
+  local what="$1" token="${GITHUB_TOKEN:-}" who json limit remaining reset wait
+  if [ -z "$token" ]; then
+    token=$(kubectl -n agent-platform get secret agentlab-github-token -o jsonpath='{.data.GITHUB_TOKEN}' 2>/dev/null | base64 -d 2>/dev/null || true)
+  fi
+  who="unauthenticated: this machine's shared window"
+  if [ -n "$token" ]; then
+    who="authenticated with GITHUB_TOKEN"
+    json=$(curl -sS --max-time 15 -H 'Accept: application/vnd.github+json' \
+      -H @<(printf 'Authorization: Bearer %s\n' "$token") https://api.github.com/rate_limit 2>/dev/null) || json=''
+  else
+    json=$(curl -sS --max-time 15 -H 'Accept: application/vnd.github+json' https://api.github.com/rate_limit 2>/dev/null) || json=''
+  fi
+  limit=$(jq -r '.resources.core.limit // empty' <<<"$json" 2>/dev/null || true)
+  remaining=$(jq -r '.resources.core.remaining // empty' <<<"$json" 2>/dev/null || true)
+  reset=$(jq -r '.resources.core.reset // empty' <<<"$json" 2>/dev/null || true)
+  if ! [[ $remaining =~ ^[0-9]+$ && $reset =~ ^[0-9]+$ ]]; then
+    log "GitHub API window not read; $what proceeds without it"
+    return 0
+  fi
+  log "GitHub API window ($who): $remaining of $limit requests remaining, resets $(date -d "@$reset" +%H:%M:%S)"
+  if (( remaining == 0 )); then
+    wait=$(( reset - $(now) + 5 ))
+    (( wait < 0 )) && wait=0
+    (( wait > 3900 )) && wait=3900
+    log "the window is exhausted — waiting ${wait}s for it to reset at $(date -d "@$reset" +%H:%M:%S) before $what (one bounded wait; export GITHUB_TOKEN to lift it to 5000 an hour)"
+    sleep "$wait"
+  fi
+}
+
 # ------------------------------------------------------------------ tools ---
 
 pick_yq() { # prints the first mikefarah yq v4 found (YQ, yq, ~/.go/bin/yq, go-yq)
