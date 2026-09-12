@@ -15,7 +15,7 @@ import (
 // environment -> Kubernetes Secret only and never enters agentlab.yaml, the
 // rendered state/ files, a log line or a process's argv. The same variable
 // lifts the anonymous rate limit of the self-update check (internal/update).
-const GitHubTokenEnv = "GITHUB_TOKEN"
+const GitHubTokenEnv = "GITHUB_TOKEN" // #nosec G101 -- env var NAME, not a credential
 
 // gitHubTokenSecret is the Secret the consumers read — one key, named after
 // the env var so Backstage's envFrom yields $GITHUB_TOKEN as it is:
@@ -29,7 +29,7 @@ const GitHubTokenEnv = "GITHUB_TOKEN"
 // name the Secret only when the variable is set at render time, so a render
 // and the Secret always agree on one environment.
 const (
-	gitHubTokenSecret    = "agentlab-github-token"
+	gitHubTokenSecret    = "agentlab-github-token" // #nosec G101 -- Secret NAME, not a credential
 	gitHubTokenSecretKey = GitHubTokenEnv
 )
 
