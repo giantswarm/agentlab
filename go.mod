@@ -9,7 +9,7 @@ require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/a2aproject/a2a-go/v2 v2.5.0
 	github.com/creativeprojects/go-selfupdate v1.6.0
-	github.com/giantswarm/selfupdate-cosign v0.1.1
+	github.com/giantswarm/selfupdate-cosign v0.2.0
 	github.com/giantswarm/telemetrydeck-go v0.3.0
 	github.com/google/uuid v1.6.0
 	github.com/smallstep/truststore v0.13.0
