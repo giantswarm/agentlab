@@ -8,15 +8,15 @@ func TestRosterLine(t *testing.T) {
 		want string
 	}{
 		"ready": {
-			in:   templateListing{Namespace: "kagent", Name: "sre", Harness: "kagent", DisplayName: "SRE"},
+			in:   templateListing{Namespace: kagentNamespace, Name: "sre", Harness: platformHarness, DisplayName: "SRE"},
 			want: `  kagent/sre  harness=kagent  "SRE"`,
 		},
 		"unavailable": {
-			in:   templateListing{Namespace: "kagent", Name: "narrow", Harness: "kagent", Unavailable: "Harness kagent has not compiled a ready revision: booting"},
+			in:   templateListing{Namespace: kagentNamespace, Name: "narrow", Harness: platformHarness, Unavailable: "Harness kagent has not compiled a ready revision: booting"},
 			want: "  kagent/narrow  harness=kagent  unavailable: Harness kagent has not compiled a ready revision: booting",
 		},
 		"no harness": {
-			in:   templateListing{Namespace: "kagent", Name: "orphan", Unavailable: "no Harness admits this AgentTemplate"},
+			in:   templateListing{Namespace: kagentNamespace, Name: "orphan", Unavailable: "no Harness admits this AgentTemplate"},
 			want: "  kagent/orphan  unavailable: no Harness admits this AgentTemplate",
 		},
 	} {

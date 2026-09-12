@@ -363,4 +363,5 @@ main() {
   cat "$TIMINGS"
 }
 
-[[ ${BASH_SOURCE[0]:-} == "$0" ]] && main "$@"
+# Sourceable: `source contract.sh <evidence-dir>` defines the functions without running main.
+if [[ ${BASH_SOURCE[0]:-} == "$0" ]]; then main "$@"; fi

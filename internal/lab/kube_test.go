@@ -894,11 +894,11 @@ func TestCanIListRows(t *testing.T) {
 		return true, review, nil
 	})
 	stubClientsetFor(t, cs)
-	status, err := canIList(context.Background(), &rest.Config{}, "kagent")
+	status, err := canIList(context.Background(), &rest.Config{}, kagentNamespace)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(namespaces, []string{"kagent"}) {
+	if !reflect.DeepEqual(namespaces, []string{kagentNamespace}) {
 		t.Errorf("review namespaces = %v", namespaces)
 	}
 	rows := ruleRows(status)
