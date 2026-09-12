@@ -49,6 +49,15 @@ import (
 // start; a dozen such members rate-limited mcp-kubernetes (429) and took the
 // real mcp-kubernetes connection down with them. The fixture exists to be
 // grouped, listed and selected, not to be called.
+//
+// Opt-in. platform.fakeFleet (default false) turns the fixture on. A default
+// lab lists only the MCP servers of the lab that runs it: every member reads
+// Auth Required, so the portal's Tool explorer would otherwise greet a person
+// with seven servers asking for sign-in, named after clusters that do not
+// exist. With the key off `agentlab platform` removes the members by the
+// fixture label (a lab created while it was on loses them), and the proofs
+// assert the single-cluster shape: no lab-created server carries the
+// tool-group label, no family row is named after a fake cluster.
 
 const (
 	// fleetFixtureLabel marks the fixture's CRs for cleanup and for the
@@ -119,12 +128,21 @@ func fleetFixtureNames() []string {
 	return names
 }
 
-// ensureFleetFixture applies the fixture, removes members of an earlier
-// shape (a cluster or family dropped from the lists above — the label
-// selector must keep listing exactly the fixture) and waits until muster
-// reports every member Auth Required. After the umbrella install for the
-// same reason as the OAuth fixture: the MCPServer CRD ships with muster.
+// fleetFixtureSelector lists exactly the fixture's members.
+const fleetFixtureSelector = fleetFixtureLabel + "=" + fleetFixtureValue
+
+// ensureFleetFixture brings the fixture to what platform.fakeFleet says. On:
+// applies the members, removes those of an earlier shape (a cluster or
+// family dropped from the lists above — the label selector must keep
+// listing exactly the fixture) and waits until muster reports every member
+// Auth Required. Off: removes every member the lab carries, so a lab created
+// while the key was on loses them. After the umbrella install for the same
+// reason as the OAuth fixture: the MCPServer CRD ships with muster.
 func ensureFleetFixture(cfg *config.Config) error {
+	ctx := context.Background()
+	if !cfg.Platform.FakeFleet {
+		return removeFleetFixture(ctx)
+	}
 	names := fleetFixtureNames()
 	step("Creating the fake-fleet fixture (%d MCPServers: %s × %s)", len(names),
 		strings.Join(familyNames(), "/"), strings.Join(fleetFixtureClusters, ", "))
@@ -132,28 +150,45 @@ func ensureFleetFixture(cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
-	ctx := context.Background()
 	if _, err := applyManifests(ctx, rendered); err != nil {
 		return err
 	}
+	if err := deleteFleetFixtureMembers(ctx, func(name string) bool { return !slices.Contains(names, name) }, "stale fixture member"); err != nil {
+		return err
+	}
+	for _, name := range names {
+		if err := waitMCPServerState(name, mcpServerStateAuthRequired); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// removeFleetFixture deletes every fake-fleet member in the platform
+// namespace — what `agentlab platform` does while platform.fakeFleet is off.
+// Idempotent: a lab that never had the fixture is one step of silence.
+func removeFleetFixture(ctx context.Context) error {
+	return deleteFleetFixtureMembers(ctx, func(string) bool { return true }, "fake-fleet member (platform.fakeFleet is off)")
+}
+
+// deleteFleetFixtureMembers deletes the fixture members drop selects, each
+// noted with why, waiting for every deletion to complete.
+func deleteFleetFixtureMembers(ctx context.Context, drop func(name string) bool, why string) error {
 	gvr, err := gvrFor(musterMCPServerResource)
 	if err != nil {
 		return err
 	}
-	existing, err := listObjects(ctx, gvr, platformNamespace, fleetFixtureLabel+"="+fleetFixtureValue)
+	existing, err := listObjects(ctx, gvr, platformNamespace, fleetFixtureSelector)
 	if err != nil {
 		return err
 	}
 	for _, member := range existing {
-		if name := member.GetName(); !slices.Contains(names, name) {
-			note("removing stale fixture member %s", name)
-			if err := deleteObject(ctx, gvr, platformNamespace, name, fixtureDeleteWait); err != nil {
-				return err
-			}
+		name := member.GetName()
+		if !drop(name) {
+			continue
 		}
-	}
-	for _, name := range names {
-		if err := waitMCPServerState(name, mcpServerStateAuthRequired); err != nil {
+		note("removing %s %s", why, name)
+		if err := deleteObject(ctx, gvr, platformNamespace, name, fixtureDeleteWait); err != nil {
 			return err
 		}
 	}
@@ -178,16 +213,36 @@ type labelledServer struct {
 
 func (s labelledServer) key() string { return s.Namespace + "/" + s.Name }
 
-// proveToolGroupLabels is the platform-test step for the label: a label
-// selector with the infrastructure value lists every fake-fleet member and,
-// of the lab's own CRs, nothing else; every value in the cluster is one of
-// the two the contract knows; the OAuth fixture is unlabelled (a Registered
-// server). Servers the vendored charts label (Helm-managed) are reported, not
-// judged: they appear as the charts bump to the releases that stamp the label.
-func proveToolGroupLabels() error {
-	step("Tool-group label: %s=%s selects the fake-fleet fixture", toolGroupLabel, toolGroupInfrastructure)
+// proveToolGroupLabels is the platform-test step for the label. With the
+// fake fleet on, a label selector with the infrastructure value lists every
+// member and, of the lab's own CRs, nothing else; off, no fixture member
+// exists and no lab-created server carries the label at all. Either way
+// every value in the cluster is one of the two the contract knows and the
+// OAuth fixture is unlabelled (a Registered server). Servers the vendored
+// charts label (Helm-managed) are reported, not judged: they appear as the
+// charts bump to the releases that stamp the label.
+func proveToolGroupLabels(fakeFleet bool) error {
+	if fakeFleet {
+		step("Tool-group label: %s=%s selects the fake-fleet fixture", toolGroupLabel, toolGroupInfrastructure)
+	} else {
+		step("Tool-group label: no lab-created server carries %s (platform.fakeFleet off)", toolGroupLabel)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	defer cancel()
+	if !fakeFleet {
+		members, err := listMCPServers(ctx, platformNamespace, fleetFixtureSelector)
+		if err != nil {
+			return err
+		}
+		if len(members) > 0 {
+			names := make([]string, 0, len(members))
+			for _, m := range members {
+				names = append(names, m.Name)
+			}
+			sort.Strings(names)
+			return fmt.Errorf("fake-fleet members exist although platform.fakeFleet is off: %s (`agentlab platform` removes them)", strings.Join(names, ", "))
+		}
+	}
 	labelled, err := listMCPServers(ctx, "", toolGroupLabel)
 	if err != nil {
 		return err
@@ -199,11 +254,15 @@ func proveToolGroupLabels() error {
 	if err != nil {
 		return err
 	}
-	chartLabelled, err := checkToolGroupLabels(labelled, oauth)
+	chartLabelled, err := checkToolGroupLabels(labelled, oauth, fakeFleet)
 	if err != nil {
 		return err
 	}
-	note("%s=%s: %s", toolGroupLabel, toolGroupInfrastructure, strings.Join(fleetFixtureNames(), ", "))
+	if fakeFleet {
+		note("%s=%s: %s", toolGroupLabel, toolGroupInfrastructure, strings.Join(fleetFixtureNames(), ", "))
+	} else {
+		note("no fake-fleet member, no lab-created server labelled")
+	}
 	if len(chartLabelled) > 0 {
 		note("labelled by the vendored charts: %s", strings.Join(chartLabelled, ", "))
 	}
@@ -212,16 +271,20 @@ func proveToolGroupLabels() error {
 }
 
 // checkToolGroupLabels is the pure half of proveToolGroupLabels: labelled is
-// every MCPServer carrying the tool-group label, oauth the OAuth fixture. It
+// every MCPServer carrying the tool-group label, oauth the OAuth fixture,
+// fakeFleet whether the fixture's members are expected among labelled (on)
+// or are one more lab-created labelled server, i.e. an error (off). It
 // returns the labelled servers the lab did not create (the charts' own).
-func checkToolGroupLabels(labelled []labelledServer, oauth labelledServer) ([]string, error) {
+func checkToolGroupLabels(labelled []labelledServer, oauth labelledServer, fakeFleet bool) ([]string, error) {
 	if v, ok := oauth.Labels[toolGroupLabel]; ok {
 		return nil, fmt.Errorf("MCPServer %s carries %s=%s — the OAuth fixture must stay unlabelled so the Registered servers group has a member",
 			oauth.Name, toolGroupLabel, v)
 	}
 	want := map[string]bool{}
-	for _, name := range fleetFixtureNames() {
-		want[platformNamespace+"/"+name] = false
+	if fakeFleet {
+		for _, name := range fleetFixtureNames() {
+			want[platformNamespace+"/"+name] = false
+		}
 	}
 	var chartLabelled []string
 	for _, s := range labelled {

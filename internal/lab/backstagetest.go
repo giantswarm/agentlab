@@ -179,11 +179,12 @@ func backstageSignIn(cfg *config.Config, user *config.User) (*portalSession, err
 // proveServerGroups is the MCP servers page's grouping, asserted from the
 // data the page reads: the MCPServer CRs through Backstage's Kubernetes proxy
 // as this user, partitioned by the tool-group label with the released
-// plugin's arithmetic (servergroups.go). The lab's fixtures pin the three
-// groups — the fake-fleet families under Infrastructure, the OAuth fixture
-// under Registered servers — and the chart-shipped servers are judged by the
-// label their chart stamps (agent-manager and model-manager under Agent
-// Platform once their charts carry it, the bundled mcp-kubernetes under
+// plugin's arithmetic (servergroups.go). The lab's fixtures pin the groups —
+// the fake-fleet families under Infrastructure while platform.fakeFleet is
+// on and no row named after them while it is off, the OAuth fixture under
+// Registered servers — and the chart-shipped servers are judged by the label
+// their chart stamps (agent-manager and model-manager under Agent Platform
+// once their charts carry it, the bundled mcp-kubernetes under
 // Infrastructure). The fallback is proven on the same data with every
 // tool-group label removed: one Registered servers list, every section still
 // present, never an empty page.
@@ -197,7 +198,7 @@ func proveServerGroups(ps *portalSession) error {
 	}
 	groups := partitionServers(servers)
 	fmt.Printf("  MCP servers page groups (%d CRs via /api/kubernetes/proxy):\n%s\n", len(servers), describeGroups(groups))
-	if err := assertServerGroups(servers, groups); err != nil {
+	if err := assertServerGroups(servers, groups, ps.cfg.Platform.FakeFleet); err != nil {
 		return fmt.Errorf("servers page grouping: %w", err)
 	}
 	labelled := 0

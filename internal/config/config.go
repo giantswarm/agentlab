@@ -148,6 +148,16 @@ type Platform struct {
 	// BOM (yet) — the lab pins the two charts itself (observability.go).
 	// Inert when the platform itself is disabled.
 	Observability bool `yaml:"observability"`
+	// The fake fleet (lab/fleetfixture.go): six `Auth Required` MCPServers
+	// (kubernetes/capi/prometheus × two fake management clusters) that give
+	// the portal's server groups, its fleet coverage and the agent Tools
+	// step a federated shape to render on one cluster. Off by default: a
+	// default lab lists only the MCP servers of the lab that runs it, and
+	// the fixture's rows ask a person to sign in to clusters that do not
+	// exist. Switching it off removes the members on the next `agentlab
+	// platform`; the proofs assert the fleet shape only while it is on.
+	// Inert when the platform itself is disabled.
+	FakeFleet bool `yaml:"fakeFleet"`
 	// Host-side port for the kagent UI (http://localhost:<port>). The kind
 	// mapping onto KagentUINodePort always exists — like the other mappings,
 	// it is fixed at cluster creation — so agents can be enabled later.
