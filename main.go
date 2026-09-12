@@ -105,6 +105,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		inGroup(groupEveryday, openCmd()),
 		inGroup(groupEveryday, logsCmd()),
 		inGroup(groupEveryday, loginCmd()),
+		inGroup(groupEveryday, turnCmd()),
 
 		inGroup(groupTesting, labCmd("test", "Assert RBAC for every configured user (token from Dex, kubectl auth can-i)", lab.Test)),
 		inGroup(groupTesting, platformTestCmd()),
@@ -371,6 +372,42 @@ func openCmd() *cobra.Command {
 			return lab.Open(cfg, target)
 		},
 	}
+}
+
+// turnCmd is `agentlab turn`: one conversation with an agent as a lab user
+// through the edge, or the roster that user sees.
+func turnCmd() *cobra.Command {
+	var user, template string
+	var list bool
+	cmd := &cobra.Command{
+		Use:   "turn (--list | --template <name> <prompt>)",
+		Short: "One turn with an agent as a lab user through the edge, or the roster that user sees (--list)",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			switch {
+			case list && (template != "" || len(args) == 1):
+				return fmt.Errorf("--list takes no template and no prompt")
+			case !list && (template == "" || len(args) != 1):
+				return fmt.Errorf("give --list, or --template <name> and one prompt")
+			}
+			if user == "" {
+				user = cfg.AdminUser().Email
+			}
+			prompt := ""
+			if len(args) == 1 {
+				prompt = args[0]
+			}
+			return lab.Turn(cfg, user, template, prompt)
+		},
+	}
+	cmd.Flags().StringVar(&user, "user", "", "the lab user to act as (default: the first admin in agentlab.yaml)")
+	cmd.Flags().StringVar(&template, "template", "", "the AgentTemplate in the kagent namespace to converse with")
+	cmd.Flags().BoolVar(&list, "list", false, "print the roster this user sees instead of a turn")
+	return cmd
 }
 
 // browserCmd is `agentlab login --browser` under the name it had before the
