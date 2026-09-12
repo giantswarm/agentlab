@@ -1,10 +1,12 @@
 package lab
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -70,6 +72,70 @@ func TestExtraModelsTemplate(t *testing.T) {
 	}
 	if strings.Contains(string(raw), "kind:") {
 		t.Errorf("empty extraModels rendered objects:\n%s", raw)
+	}
+}
+
+// The extra ModelConfigs render at the kagent.dev version the chart line
+// serves: v1alpha3 on the kagent line (meta chart >= 4.0), v1alpha2 on a
+// released 3.x chart (kagent 0.10) — the ModelConfig spec is the same in
+// both, so nothing but the apiVersion moves between the two renders.
+func TestExtraModelsAPIVersionFollowsChartLine(t *testing.T) {
+	render := func(cfg *config.Config) map[string]any {
+		out, err := renderTemplate(cfg, extraModelsTemplate, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var docs []map[string]any
+		dec := yaml.NewDecoder(strings.NewReader(string(out)))
+		for {
+			var doc map[string]any
+			if err := dec.Decode(&doc); err != nil {
+				break
+			}
+			if doc != nil {
+				docs = append(docs, doc)
+			}
+		}
+		if len(docs) != 1 {
+			t.Fatalf("rendered %d ModelConfigs, want 1:\n%s", len(docs), out)
+		}
+		return docs[0]
+	}
+	model := config.ExtraModel{Name: "local-vllm", Provider: config.ProviderOpenAI, Model: "mistral-small-3.2", BaseURL: "https://vllm.example.internal/v1"}
+	current := config.Default()
+	current.Platform.ChartVersion = "4.7.15"
+	current.Platform.ExtraModels = []config.ExtraModel{model}
+	legacy := config.Default()
+	legacy.Platform.ChartVersion = "3.24.0"
+	legacy.Platform.ExtraModels = []config.ExtraModel{model}
+	if !legacy.LegacyChart() || current.LegacyChart() {
+		t.Fatalf("LegacyChart(): 3.24.0=%v 4.7.15=%v", legacy.LegacyChart(), current.LegacyChart())
+	}
+	currentMC, legacyMC := render(current), render(legacy)
+
+	if got := currentMC["apiVersion"]; got != "kagent.dev/v1alpha3" {
+		t.Errorf("4.7.15: apiVersion = %v, want kagent.dev/v1alpha3", got)
+	}
+	if got := legacyMC["apiVersion"]; got != "kagent.dev/v1alpha2" {
+		t.Errorf("3.24.0: apiVersion = %v, want kagent.dev/v1alpha2", got)
+	}
+	if got := currentMC["kind"]; got != "ModelConfig" {
+		t.Errorf("kind = %v, want ModelConfig", got)
+	}
+	metadata := currentMC["metadata"].(map[string]any)
+	if metadata["name"] != model.Name || metadata["namespace"] != kagentNamespace {
+		t.Errorf("metadata = %v, want %s/%s", metadata, kagentNamespace, model.Name)
+	}
+	spec := currentMC["spec"].(map[string]any)
+	if spec["provider"] != model.Provider || spec["model"] != model.Model || spec["openAI"].(map[string]any)["baseUrl"] != model.BaseURL {
+		t.Errorf("spec = %v, want provider %s, model %s, openAI.baseUrl %s", spec, model.Provider, model.Model, model.BaseURL)
+	}
+
+	// Nothing but the apiVersion differs between the two lines.
+	delete(currentMC, "apiVersion")
+	delete(legacyMC, "apiVersion")
+	if !reflect.DeepEqual(currentMC, legacyMC) {
+		t.Errorf("the 3.x ModelConfig differs from the 4.x one beyond the apiVersion:\n--- 4.x\n%s\n--- 3.x\n%s", mustYAML(t, currentMC), mustYAML(t, legacyMC))
 	}
 }
 
