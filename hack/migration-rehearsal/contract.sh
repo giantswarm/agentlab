@@ -23,7 +23,11 @@
 #   AGENTLAB         the agentlab binary (default: agentlab on PATH)
 #   LAB_DIR          the lab directory whose lock owner file gets this stage
 #                    appended (default: $PWD)
-# Every wait is bounded (timeout); a failed assertion stops the script.
+#   START_STEP       resume at this step (1-6, default 1) with the evidence of
+#                    the earlier steps already in the evidence dir
+# Every wait is bounded (timeout); a failed assertion stops the script. The
+# functions are sourceable: `source contract.sh <evidence-dir>` defines them
+# without running main.
 set -euo pipefail
 
 EVIDENCE=${1:?usage: contract.sh <evidence-dir> [expand-run-report.yaml]}
@@ -32,6 +36,7 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 GITOPS_MANIFEST=${GITOPS_MANIFEST-$HERE/seed-gitops-1x.yaml}
 AGENTLAB=${AGENTLAB:-agentlab}
 LAB_DIR=${LAB_DIR:-$PWD}
+START_STEP=${START_STEP:-1}
 NS=kagent
 GITOPS_NS=flux-giantswarm
 HARNESS=kagent
@@ -45,6 +50,7 @@ log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" | tee -a "$LOG"; }
 fail() { log "ASSERTION FAILED: $*"; exit 1; }
 timing() { printf '| %s | %s |\n' "$1" "$2" >>"$TIMINGS"; log "timing: $1: $2"; }
 now() { date +%s; }
+due() { ((START_STEP <= $1)); }
 # bounded runs a function under timeout, in a subshell that inherits the
 # exported functions and variables; a timeout is a failed assertion.
 bounded() {
@@ -302,59 +308,69 @@ assert_nothing_left() { # no AgentInstance of ours; the templates and their rele
 while read -r _ _ fn; do export -f "${fn?}"; done < <(declare -F)
 
 main() {
-  local t0
+  local t0 report
   /usr/bin/mkdir -p "$EVIDENCE"
-  printf '| step | timing |\n|---|---|\n' >|"$TIMINGS"
-  : >|"$EVIDENCE/turn-instances.txt"
+  [[ -s $TIMINGS ]] || printf '| step | timing |\n|---|---|\n' >|"$TIMINGS"
   trap 'rc=$?; ((rc)) && log "stopped with exit $rc; evidence in $EVIDENCE"' EXIT
   t0=$(now)
-  log "stage 2b contract: evidence $EVIDENCE; $("$AGENTLAB" --version 2>/dev/null | head -1)"
-  hold_lock
-  snapshot before
-  kubectl -n "$NS" get agents.kagent.dev -o name 2>/dev/null | sed 's#.*/##' | sort >|"$EVIDENCE/before-run2-v1alpha2-agents.txt" || true
-  log "v1alpha2 Agents left for the contract phase: $(paste -sd, "$EVIDENCE/before-run2-v1alpha2-agents.txt")"
+  log "stage 2b contract from step $START_STEP: evidence $EVIDENCE; $("$AGENTLAB" --version 2>/dev/null | head -1)"
 
-  log "step 1: the operator's pull request"
-  apply_gitops
-  log "step 2: Flux upgrades the releases to the 1.x agent chart"
-  bounded 900 wait_release_1x "$NS" sre
-  bounded 900 wait_release_1x "$NS" narrow
-  bounded 900 wait_release_1x "$GITOPS_NS" sre-agent
-  save_events
-  log "step 2: the AgentTemplates on Harness $HARNESS"
-  bounded 900 wait_templates sre narrow sre-agent
-  assert_skill_pin
-  assert_rmcp sre narrow sre-agent
-
-  log "step 3: run 2 — the contract phase"
-  run_migrate agent-manager-migrate-2
-  local report=$EVIDENCE/agent-manager-migrate-2-report.json
-  if [[ $(jq -r .phase "$report") == wait ]]; then
-    jq -r '.pending[]' "$report" | tee "$EVIDENCE/agent-manager-migrate-2-pending.txt" | sed 's/^/  pending: /' | tee -a "$LOG"
-    log "  phase wait: waiting (bounded 10 min) for the releases and templates it names, then cloning once more"
-    bounded 600 wait_release_1x "$GITOPS_NS" sre-agent
-    bounded 600 wait_templates sre narrow sre-agent
-    run_migrate agent-manager-migrate-2b
-    report=$EVIDENCE/agent-manager-migrate-2b-report.json
+  if due 1; then
+    log "step 1: the operator's pull request"
+    hold_lock
+    snapshot before
+    apply_gitops
   fi
-  assert_contract "$report" "$EVIDENCE/before-run2-v1alpha2-agents.txt"
-  assert_templates_ready sre narrow sre-agent
-
-  log "step 4: run 3 — the no-op"
-  run_migrate agent-manager-migrate-3
-  assert_complete "$EVIDENCE/agent-manager-migrate-3-report.json"
-
-  log "step 5: one turn per migrated agent as admin@lab.local, then the developer's roster"
-  turn sre "In one short line: which skills do you have, and what is 2+2?"
-  turn narrow "Answer with one word: pong"
-  dev_roster
-
-  log "step 6: after"
-  snapshot after
-  assert_nothing_left
-  timing "stage 2b total" "$(($(now) - t0)) s"
+  if due 2; then
+    log "step 2: Flux upgrades the releases to the 1.x agent chart"
+    bounded 900 wait_release_1x "$NS" sre
+    bounded 900 wait_release_1x "$NS" narrow
+    bounded 900 wait_release_1x "$GITOPS_NS" sre-agent
+    save_events
+    log "step 2: the AgentTemplates on Harness $HARNESS"
+    bounded 900 wait_templates sre narrow sre-agent
+    assert_skill_pin
+    assert_rmcp sre narrow sre-agent
+  fi
+  if due 3; then
+    log "step 3: run 2 — the contract phase"
+    # What Helm left behind when the releases upgraded (the 1.x chart renders
+    # the AgentTemplate in the Agent's place) is what the contract phase sweeps.
+    kubectl -n "$NS" get agents.kagent.dev -o name 2>/dev/null | sed 's#.*/##' | sort >|"$EVIDENCE/before-run2-v1alpha2-agents.txt" || true
+    log "  v1alpha2 Agents left for the contract phase: [$(paste -sd, "$EVIDENCE/before-run2-v1alpha2-agents.txt")]"
+    run_migrate agent-manager-migrate-2
+    report=$EVIDENCE/agent-manager-migrate-2-report.json
+    if [[ $(jq -r .phase "$report") == wait ]]; then
+      jq -r '.pending[]' "$report" | tee "$EVIDENCE/agent-manager-migrate-2-pending.txt" | sed 's/^/  pending: /' | tee -a "$LOG"
+      log "  phase wait: waiting (bounded 10 min) for the releases and templates it names, then cloning once more"
+      bounded 600 wait_release_1x "$GITOPS_NS" sre-agent
+      bounded 600 wait_templates sre narrow sre-agent
+      run_migrate agent-manager-migrate-2b
+      report=$EVIDENCE/agent-manager-migrate-2b-report.json
+    fi
+    assert_contract "$report" "$EVIDENCE/before-run2-v1alpha2-agents.txt"
+    assert_templates_ready sre narrow sre-agent
+  fi
+  if due 4; then
+    log "step 4: run 3 — the no-op"
+    run_migrate agent-manager-migrate-3
+    assert_complete "$EVIDENCE/agent-manager-migrate-3-report.json"
+  fi
+  if due 5; then
+    log "step 5: one turn per migrated agent as admin@lab.local, then the developer's roster"
+    : >|"$EVIDENCE/turn-instances.txt"
+    turn sre "In one short line: which skills do you have, and what is 2+2?"
+    turn narrow "Answer with one word: pong"
+    dev_roster
+  fi
+  if due 6; then
+    log "step 6: after"
+    snapshot after
+    assert_nothing_left
+  fi
+  timing "stage 2b steps $START_STEP-6" "$(($(now) - t0)) s"
   log "done; timings:"
   cat "$TIMINGS"
 }
 
-main "$@"
+[[ ${BASH_SOURCE[0]} == "$0" ]] && main "$@"
