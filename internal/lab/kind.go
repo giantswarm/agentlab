@@ -1,8 +1,9 @@
 package lab
 
 import (
+	"errors"
 	"fmt"
-	"os"
+	"io"
 	"strings"
 	"sync"
 	"time"
@@ -109,30 +110,61 @@ var kindKubeconfigRaw = func(name string) ([]byte, error) {
 	return []byte(raw), nil
 }
 
-// kindLoadArchive imports an image archive into every node of the cluster:
+// kindLoadArchive streams an image archive into every node of the cluster:
 // `ctr images import` over the engine's exec, what `kind load image-archive`
-// runs (preload.go says why the archive, HACKS.md U21). A variable so tests
-// can stand in for the node.
-var kindLoadArchive = func(clusterName, archive string) error {
+// runs (preload.go says why the archive, HACKS.md U21), reading the stream as
+// it comes — never a file. The lab is a single-node cluster
+// (config.ControlPlaneNode); a cluster with more nodes gets the one stream
+// fanned out to each of them, a node whose import stopped dropping out
+// without stalling the rest. A variable so tests can stand in for the node.
+var kindLoadArchive = func(clusterName string, archive io.Reader) error {
 	nodes, err := kindProvider().ListInternalNodes(clusterName)
 	if err != nil {
 		return kindError("listing the nodes of cluster "+clusterName, err)
 	}
 	if len(nodes) == 0 {
-		return fmt.Errorf("kind: cluster %q has no nodes to load %s into", clusterName, archive)
+		return fmt.Errorf("kind: cluster %q has no nodes to load images into", clusterName)
 	}
-	for _, node := range nodes {
-		f, err := os.Open(archive) // #nosec G304 -- the temporary archive this process wrote
-		if err != nil {
-			return err
-		}
-		err = nodeutils.LoadImageArchive(node, f)
-		_ = f.Close()
-		if err != nil {
-			return kindError("loading "+archive+" into "+node.String(), err)
+	if len(nodes) == 1 {
+		return kindError("loading images into "+nodes[0].String(), nodeutils.LoadImageArchive(nodes[0], archive))
+	}
+	sinks := make([]*nodeSink, len(nodes))
+	writers := make([]io.Writer, len(nodes))
+	errs := make([]error, len(nodes))
+	var wg sync.WaitGroup
+	for i, node := range nodes {
+		r, w := io.Pipe()
+		sinks[i] = &nodeSink{w: w}
+		writers[i] = sinks[i]
+		wg.Go(func() {
+			errs[i] = kindError("loading images into "+node.String(), nodeutils.LoadImageArchive(node, r))
+			_ = r.Close() // the sink's next write fails and it goes quiet
+		})
+	}
+	_, copyErr := io.Copy(io.MultiWriter(writers...), archive)
+	for _, s := range sinks {
+		_ = s.w.CloseWithError(copyErr)
+	}
+	wg.Wait()
+	return errors.Join(errs...)
+}
+
+// nodeSink is one node's end of a fanned-out archive stream: a write the
+// node's import no longer takes (its pipe closed) is dropped and reported
+// complete, so io.MultiWriter keeps feeding the other nodes — the failed
+// import speaks for itself through kindLoadArchive's error.
+type nodeSink struct {
+	w    *io.PipeWriter
+	dead bool
+}
+
+func (s *nodeSink) Write(p []byte) (int, error) {
+	if !s.dead {
+		if _, err := s.w.Write(p); err != nil {
+			s.dead = true
 		}
 	}
-	return nil
+	return len(p), nil
 }
 
 // kindError is the error a failed kind operation reports: kind's own message

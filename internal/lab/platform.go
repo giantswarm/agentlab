@@ -626,7 +626,7 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 %s%s`, header, reach, usersBlock(cfg), backstageHint, claudeCodeHint(cfg), agentsHint, modelManagerHint(cfg, backendEndpoints), obsHint, devImagesHint(cfg, dev), tryItBlock(cfg))
 	// Everything the platform runs is in the node now — record it so the next
 	// boot side-loads instead of pulling.
-	snapshotPreloadImages(cfg)
+	snapshotPreloadImages()
 	// The two steps the summary above only describes: on a terminal, ask
 	// instead of telling (prompt.go). Optional to the last: whatever the
 	// person answers, the platform is up and this returns nil.

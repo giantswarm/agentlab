@@ -380,12 +380,12 @@ real installation runs its edge on 443, so the umbrella has no reason to
 carry a ported public URL; the overlay is the lab's permanent answer, not an
 interim.
 
-### U16. Podman: the side-load is one archive per image — OPEN, FIXABLE IN THE LAB
+### U16. Podman: the side-load is one save per image — OPEN, FIXABLE IN THE LAB
 A multi-image `docker save -o <tar> a b c` under Podman's docker-compatible
 CLI writes ONE image carrying every name as a tag unless
 `--multi-image-archive` is passed, so a batched archive lands one image under
 all the tags (the Flux controllers crashlooped running flux-cli). Under podman
-(`runtime.go`) the lab therefore saves and imports one archive per image
+(`runtime.go`) the lab therefore saves and imports one image at a time
 (`kindLoadImages`); under docker the batch is saved per platform (U21). The
 save is the lab's own `docker save` now (the import is the embedded kind's
 `nodeutils.LoadImageArchive`), so the lab could pass podman's
@@ -483,12 +483,17 @@ open since 2024-11; the maintainers point consumers to `docker save --platform
 | kind load image-archive` and will not lock the platform inside `kind load`).
 The lab does exactly that, with kind embedded (`kind.go`): the load path of
 kind's `load docker-image` command is not used at all — `dockerLoadImages`
-asks `docker image inspect` which platform the host holds each ref in, writes
-one `docker save --platform <p> -o <tmp.tar>` per platform and imports each
-archive with `nodeutils.LoadImageArchive`, the library call behind `kind load
-image-archive`. Needs Docker 28 (API 1.48) for `docker save --platform`; an
-older client/daemon gets one plain archive of the batch, which is right under
-the classic graph driver. Podman keeps its one-archive-per-image load (U16).
+asks `docker image inspect` which platform the host holds each ref in, runs
+one `docker save --platform <p>` per platform and streams its stdout into
+`nodeutils.LoadImageArchive`, the library call behind `kind load
+image-archive`. Streamed, not staged: `kind load docker-image` writes the
+archive to the temp dir first, and the archive of everything a lab ran is
+tens of GiB — on `/tmp`, a tmpfs on many Linux hosts, that is RAM for the
+length of the import, and for good when the boot is interrupted (a 20 GiB
+leftover was found filling a host's swap). Needs Docker 28 (API 1.48) for
+`docker save --platform`; an older client/daemon gets one plain save of the
+batch, which is right under the classic graph driver. Podman keeps its
+one-save-per-image load (U16).
 Unblocks when kind's `load docker-image` logic (the re-tag of an image ID the
 node already has, the per-image save) survives the containerd image store and
 is worth reusing over the plain archive import.

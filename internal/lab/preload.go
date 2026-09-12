@@ -1,9 +1,12 @@
 package lab
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"path/filepath"
@@ -13,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -109,14 +114,14 @@ func sideloadImages(cfg *config.Config, images []string) preloadResult {
 }
 
 // kindLoadImages side-loads images and reports how many landed. Every load is
-// a `docker save` into a temporary archive that the embedded kind imports
-// into the node (kindLoadArchive) — what `kind load image-archive` does, and
-// the recipe kind's maintainers give consumers (HACKS.md U21). Under docker
+// a `docker save` streamed into the node's `ctr images import` through the
+// embedded kind (kindLoadArchive): the archive `kind load image-archive`
+// reads, never written out (saveAndLoadArchive, HACKS.md U21). Under docker
 // the batch is saved per platform (dockerLoadImages). Under podman it is one
-// archive per image: podman's multi-image save folds the batch into one
-// image under every tag (runtime.go, HACKS.md U16), and a single-image save
-// is always right. A failed image does not stop the rest, so the count and
-// the error are both reported and a partial load reads as one.
+// save per image: podman's multi-image save folds the batch into one image
+// under every tag (runtime.go, HACKS.md U16), and a single-image save is
+// always right. A failed image does not stop the rest, so the count and the
+// error are both reported and a partial load reads as one.
 func kindLoadImages(cfg *config.Config, images []string) (int, error) {
 	if !dockerIsPodman() {
 		return dockerLoadImages(cfg, images)
@@ -134,7 +139,7 @@ func kindLoadImages(cfg *config.Config, images []string) (int, error) {
 }
 
 // dockerLoadImages is the docker side-load: `docker save --platform <what the
-// host holds>` into an archive per platform, imported into the node. A plain
+// host holds>`, one stream per platform, imported into the node. A plain
 // `docker save` — what `kind load docker-image` runs — breaks under Docker's
 // containerd image store (the default on Docker Desktop and on new Docker 29
 // installs): that archive carries the image's whole multi-platform index
@@ -197,30 +202,41 @@ func hostImagePlatforms(images []string) (map[string][]string, []error) {
 	return groups, failed
 }
 
-// saveAndLoadArchive writes the images — their <platform> variants when one
-// is named, else as `docker save` has them — to a temporary archive and loads
-// it into the cluster's nodes. The archive is removed either way; the kind
-// CLI stages its own the same way, so the footprint is the one `kind load
-// docker-image` always had. docker's one-line stderr (the ref and platform it
-// could not export) belongs in the error the caller reports, as does kind's
-// (kindError carries the node-side command's output).
+// saveAndLoadArchive streams the images — their <platform> variants when one
+// is named, else as `docker save` has them — from `docker save` straight into
+// the cluster's nodes (kindLoadArchive). Nothing is staged on the way: the
+// archive of everything a lab ran is tens of gigabytes, and a temporary file
+// (what `kind load docker-image` writes first) puts that much on /tmp — a
+// tmpfs on many Linux hosts, so in RAM — for as long as the import takes,
+// and for good when the boot is interrupted (HACKS.md U21). A save that fails
+// cuts the stream short and fails the import with it, so docker's one-line
+// stderr (the ref and platform it could not export) is the error the caller
+// gets; kind's (kindError carries the node-side command's output) only when
+// docker had nothing to say.
 func saveAndLoadArchive(cfg *config.Config, platform string, images []string) error {
-	f, err := os.CreateTemp("", "agentlab-images-*.tar")
-	if err != nil {
-		return err
-	}
-	tar := f.Name()
-	_ = f.Close()
-	defer func() { _ = os.Remove(tar) }()
 	args := []string{"save"}
 	if platform != "" {
 		args = append(args, "--platform", platform)
 	}
-	args = append(append(args, "-o", tar), images...)
-	if _, err := outputQuiet("docker", args...); err != nil {
+	args = append(args, images...)
+	save := command(dockerBin, args...)
+	var stderr bytes.Buffer
+	save.Stderr = &stderr
+	archive, err := save.StdoutPipe()
+	if err != nil {
 		return err
 	}
-	return kindLoadArchive(cfg.ClusterName, tar)
+	if err := save.Start(); err != nil {
+		return cmdError(dockerBin, args, err, nil)
+	}
+	loadErr := kindLoadArchive(cfg.ClusterName, archive)
+	// An import that stopped early would leave docker blocked on the full
+	// pipe; draining lets it finish and say why.
+	_, _ = io.Copy(io.Discard, archive)
+	if err := save.Wait(); err != nil {
+		return cmdError(dockerBin, args, err, stderr.Bytes())
+	}
+	return loadErr
 }
 
 // dockerSaveHasPlatform reports whether `docker save --platform` works here:
@@ -387,29 +403,21 @@ func scrapeImages(rendered string) []string {
 	return slices.Compact(imgs)
 }
 
-// snapshotPreloadImages records the node's current workload images into the
-// preload manifest for the next boot. Best-effort: a failed snapshot only
-// costs the next boot its cache.
-func snapshotPreloadImages(cfg *config.Config) {
-	tags, err := nodeImageTags(cfg.ControlPlaneNode())
+// snapshotPreloadImages records the images the cluster's pods run into the
+// preload manifest for the next boot. The pods, not the node's image store:
+// that store keeps every image the node ever ran — each dev-image swap,
+// reload and chart bump of a lab's lifetime adds a version and none leaves —
+// and a manifest read off it grew to 130 images and 21 GiB, most of them tags
+// no pod would ask for again, each pulled, saved and imported on the next
+// boot. Best-effort: a failed snapshot only costs the next boot its cache.
+func snapshotPreloadImages() {
+	images, err := podImages()
 	if err != nil {
 		return
 	}
-	var images []string
-	for _, tag := range tags {
-		infra := false
-		for _, p := range infraImagePrefixes {
-			if strings.HasPrefix(tag, p) {
-				infra = true
-				break
-			}
-		}
-		if !infra {
-			images = append(images, tag)
-		}
-	}
-	slices.Sort(images)
-	images = slices.Compact(images)
+	images = slices.DeleteFunc(images, func(img string) bool {
+		return slices.ContainsFunc(infraImagePrefixes, func(p string) bool { return strings.HasPrefix(img, p) })
+	})
 	// Images built here were side-loaded by whoever built them and have no
 	// registry to be pulled from on the next boot. They are remembered as
 	// such, so a later `docker image prune` on the host does not make them
@@ -445,6 +453,45 @@ func snapshotPreloadImages(cfg *config.Config) {
 		return
 	}
 	_ = os.WriteFile(preloadImagesFile, []byte(b.String()), 0o600)
+}
+
+// podImages lists the images the cluster's pods reference — every namespace,
+// init and ephemeral containers included, finished Job pods too (the hook
+// Jobs' images are the first the next boot needs) — spelled the way the node
+// spells them (fullImageRef), so the node-side skip in sideloadImages matches.
+// Tagged refs only: a digest-pinned reference is the kubelet's to pull
+// (splitDigestRefs), and a bare name is not a pullable ref (the rule
+// scrapeImages applies).
+func podImages() ([]string, error) {
+	k, err := labKube()
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pods, err := k.clientset.CoreV1().Pods(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("listing pods: %w", err)
+	}
+	var images []string
+	for _, pod := range pods.Items {
+		for _, c := range pod.Spec.InitContainers {
+			images = append(images, c.Image)
+		}
+		for _, c := range pod.Spec.Containers {
+			images = append(images, c.Image)
+		}
+		for _, c := range pod.Spec.EphemeralContainers {
+			images = append(images, c.Image)
+		}
+	}
+	images = slices.DeleteFunc(images, func(ref string) bool { return !strings.ContainsAny(ref, ":@") })
+	for i, ref := range images {
+		images[i] = fullImageRef(ref)
+	}
+	slices.Sort(images)
+	tagged, _ := splitDigestRefs(slices.Compact(images))
+	return tagged, nil
 }
 
 // localOnlyMarker prefixes the manifest lines that remember local-only refs —
