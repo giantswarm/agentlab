@@ -188,8 +188,12 @@ var tmplFuncs = template.FuncMap{
 }
 
 // platformValuesTemplate renders the meta chart's lab values (the lab
-// shape, platform.go).
-const platformValuesTemplate = "agent-platform-values.yaml.tmpl"
+// shape, platform.go); backstageOverlayTemplate the lab's Backstage catalog
+// and app-config overlay.
+const (
+	platformValuesTemplate   = "agent-platform-values.yaml.tmpl"
+	backstageOverlayTemplate = "backstage-catalog.yaml.tmpl"
+)
 
 // renderTemplate renders one embedded template with the config; mutate, when
 // given, adjusts the template data first (the platform run hands

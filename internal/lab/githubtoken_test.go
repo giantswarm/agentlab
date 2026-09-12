@@ -13,24 +13,44 @@ import (
 
 // gitHubTestToken is a sentinel no real token looks like; the assertions
 // below hunt for it in everything the render writes to state/.
-const gitHubTestToken = "ghp_agentlab_unit_test_sentinel_0000000000"
+const gitHubTestToken = "ghp_agentlab_unit_test_sentinel_0000000000" // #nosec G101 -- test sentinel, not a credential
 
-// renderGitHubTokenSurfaces renders the two files that name the Secret: the
-// meta chart's values and the Backstage overlay, raw and parsed.
-func renderGitHubTokenSurfaces(t *testing.T, cfg *config.Config) (valuesRaw string, values map[string]any, overlayRaw string, overlay map[string]any) {
+// The values blocks the token lands in: the agent-manager chart's own and
+// the connectivity chart's wiring for it; the chart version of the 3.x line.
+const (
+	agentManagerValuesKey = "agent-manager"
+	agentManagerWiringKey = "agentManager"
+	legacyChartVersion    = "3.23.1"
+)
+
+// gitHubTokenSurfaces is what the render writes that could name the Secret
+// (or leak the token): the meta chart's values and the Backstage overlay,
+// raw and parsed.
+type gitHubTokenSurfaces struct {
+	valuesRaw, overlayRaw string
+	values, overlay       map[string]any
+}
+
+// raw is the rendered text by template name, for the token hunt.
+func (s gitHubTokenSurfaces) raw() map[string]string {
+	return map[string]string{platformValuesTemplate: s.valuesRaw, backstageOverlayTemplate: s.overlayRaw}
+}
+
+func renderGitHubTokenSurfaces(t *testing.T, cfg *config.Config) gitHubTokenSurfaces {
 	t.Helper()
 	out, err := renderTemplate(cfg, platformValuesTemplate, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	var values map[string]any
 	if err := yaml.Unmarshal(out, &values); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	raw, err := renderTemplate(cfg, "backstage-catalog.yaml.tmpl", nil)
+	overlayRaw, err := renderTemplate(cfg, backstageOverlayTemplate, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return string(out), values, string(raw), backstageOverlayAppConfig(t, cfg)
+	return gitHubTokenSurfaces{valuesRaw: string(out), overlayRaw: string(overlayRaw), values: values, overlay: backstageOverlayAppConfig(t, cfg)}
 }
 
 func gitHubTokenTestConfig() *config.Config {
@@ -46,39 +66,42 @@ func gitHubTokenTestConfig() *config.Config {
 // NAME only: the token itself appears in nothing the render writes.
 func TestGitHubTokenWiresBothConsumers(t *testing.T) {
 	t.Setenv(GitHubTokenEnv, gitHubTestToken)
-	valuesRaw, values, overlayRaw, overlay := renderGitHubTokenSurfaces(t, gitHubTokenTestConfig())
+	s := renderGitHubTokenSurfaces(t, gitHubTokenTestConfig())
 
-	if got := dig(values, "backstage", "backstage", "extraEnvVarsSecrets"); !reflect.DeepEqual(got, []any{gitHubTokenSecret}) {
+	if got := dig(s.values, componentBackstage, componentBackstage, "extraEnvVarsSecrets"); !reflect.DeepEqual(got, []any{gitHubTokenSecret}) {
 		t.Errorf("backstage.backstage.extraEnvVarsSecrets = %v, want [%s]", got, gitHubTokenSecret)
 	}
+	tokenSecret := []string{agentManagerValuesKey, "skills", "github", "tokenSecret"}
+	githubToken := []string{agentManagerWiringKey, "migration", "githubToken"}
 	for _, tc := range []struct {
 		path []string
 		want any
 	}{
-		{[]string{"agent-manager", "skills", "github", "tokenSecret", "name"}, gitHubTokenSecret},
-		{[]string{"agent-manager", "skills", "github", "tokenSecret", "key"}, gitHubTokenSecretKey},
-		{[]string{"agentManager", "migration", "githubToken", "secretName"}, gitHubTokenSecret},
-		{[]string{"agentManager", "migration", "githubToken", "key"}, gitHubTokenSecretKey},
+		{append(tokenSecret, nameKey), gitHubTokenSecret},
+		{append(tokenSecret, fieldKey), gitHubTokenSecretKey},
+		{append(githubToken, "secretName"), gitHubTokenSecret},
+		{append(githubToken, fieldKey), gitHubTokenSecretKey},
 	} {
-		if got := dig(values, tc.path...); got != tc.want {
+		if got := dig(s.values, tc.path...); got != tc.want {
 			t.Errorf("%s = %v, want %v", strings.Join(tc.path, "."), got, tc.want)
 		}
 	}
 	// The lab's other agent-manager values survive next to the new key.
-	if got := dig(values, "agent-manager", "muster", "mcpServer", "auth", "requiredAudiences"); got == nil {
-		t.Errorf("agent-manager.muster.mcpServer.auth.requiredAudiences went missing:\n%s", valuesRaw)
+	if got := dig(s.values, agentManagerValuesKey, "muster", "mcpServer", "auth", "requiredAudiences"); got == nil {
+		t.Errorf("agent-manager.muster.mcpServer.auth.requiredAudiences went missing:\n%s", s.valuesRaw)
 	}
 
-	github, _ := dig(overlay, "integrations", "github").([]any)
+	integrations := dig(s.overlay, "integrations", "github")
+	github, _ := integrations.([]any)
 	if len(github) != 1 {
-		t.Fatalf("overlay integrations.github = %v, want one github.com entry", dig(overlay, "integrations", "github"))
+		t.Fatalf("overlay integrations.github = %v, want one github.com entry", integrations)
 	}
 	entry, _ := github[0].(map[string]any)
 	if entry["host"] != "github.com" || entry["token"] != "${"+GitHubTokenEnv+"}" {
 		t.Errorf("overlay integrations.github[0] = %v, want host github.com and token ${%s}", entry, GitHubTokenEnv)
 	}
 
-	for name, text := range map[string]string{platformValuesTemplate: valuesRaw, "backstage-catalog.yaml.tmpl": overlayRaw} {
+	for name, text := range s.raw() {
 		if strings.Contains(text, gitHubTestToken) {
 			t.Errorf("%s carries the token itself:\n%s", name, text)
 		}
@@ -89,20 +112,20 @@ func TestGitHubTokenWiresBothConsumers(t *testing.T) {
 // keys render — the consumers call GitHub unauthenticated, as before.
 func TestGitHubTokenUnsetLeavesTheLabAsItWas(t *testing.T) {
 	t.Setenv(GitHubTokenEnv, "")
-	valuesRaw, values, overlayRaw, overlay := renderGitHubTokenSurfaces(t, gitHubTokenTestConfig())
+	s := renderGitHubTokenSurfaces(t, gitHubTokenTestConfig())
 	for _, path := range [][]string{
-		{"backstage", "backstage", "extraEnvVarsSecrets"},
-		{"agent-manager", "skills"},
-		{"agentManager"},
+		{componentBackstage, componentBackstage, "extraEnvVarsSecrets"},
+		{agentManagerValuesKey, "skills"},
+		{agentManagerWiringKey},
 	} {
-		if got := dig(values, path...); got != nil {
+		if got := dig(s.values, path...); got != nil {
 			t.Errorf("%s = %v without $%s, want nothing", strings.Join(path, "."), got, GitHubTokenEnv)
 		}
 	}
-	if got := dig(overlay, "integrations"); got != nil {
+	if got := dig(s.overlay, "integrations"); got != nil {
 		t.Errorf("overlay integrations = %v without $%s, want nothing", got, GitHubTokenEnv)
 	}
-	for name, text := range map[string]string{platformValuesTemplate: valuesRaw, "backstage-catalog.yaml.tmpl": overlayRaw} {
+	for name, text := range s.raw() {
 		if strings.Contains(text, gitHubTokenSecret) {
 			t.Errorf("%s names %s without $%s:\n%s", name, gitHubTokenSecret, GitHubTokenEnv, text)
 		}
@@ -115,12 +138,11 @@ func TestGitHubTokenUnsetLeavesTheLabAsItWas(t *testing.T) {
 func TestGitHubTokenLegacyChartTakesNoKeys(t *testing.T) {
 	t.Setenv(GitHubTokenEnv, gitHubTestToken)
 	cfg := gitHubTokenTestConfig()
-	cfg.Platform.ChartVersion = "3.23.1"
+	cfg.Platform.ChartVersion = legacyChartVersion
 	if !cfg.LegacyChart() {
-		t.Fatal("3.23.1 is not the legacy line?")
+		t.Fatalf("%s is not the legacy line?", legacyChartVersion)
 	}
-	valuesRaw, _, overlayRaw, _ := renderGitHubTokenSurfaces(t, cfg)
-	for name, text := range map[string]string{platformValuesTemplate: valuesRaw, "backstage-catalog.yaml.tmpl": overlayRaw} {
+	for name, text := range renderGitHubTokenSurfaces(t, cfg).raw() {
 		if strings.Contains(text, gitHubTokenSecret) || strings.Contains(text, gitHubTestToken) {
 			t.Errorf("%s wires the GitHub token on the 3.x line:\n%s", name, text)
 		}
