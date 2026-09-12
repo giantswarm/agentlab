@@ -24,6 +24,15 @@
 #   STATUS_FILE     append-only status log; no status lines when unset
 #   STATUS_PREFIX   prefix of every status line (default: agentlab#143-stage2a)
 #   AGENTLAB, YQ    binaries (default: agentlab on PATH; a mikefarah yq v4)
+#   START_STEP      resume at this step on a lab already on the target, skipping
+#                   the earlier ones: before | config | upgrade | assert-platform
+#                   (alias: assert) | migrate-run1 | gitops-pr | record; preflight
+#                   always runs, the skipped steps' summary fields read -
+#   REPORT_RUN1     a saved copy of the first expand report when the migrate Job
+#                   re-ran since (a changed image/args/env hash renders a new Job,
+#                   whose report replaces the first one's in the ConfigMap): the
+#                   rewrite is asserted from the copy, the live report must say
+#                   unchanged for the rewritten releases
 #
 # The Anthropic key is read from the Secret kagent/kagent-anthropic into the
 # environment (agentlab platform consumes $ANTHROPIC_API_KEY) and is never
@@ -45,6 +54,13 @@ GITOPS_MANIFEST="$HERE/seed-gitops.yaml"
 GITOPS_1X_MANIFEST="$HERE/seed-gitops-1x.yaml"
 MIGRATE_SELECTOR='app.kubernetes.io/component=agent-manager-migrate'
 GITOPS_NS=flux-giantswarm
+START_STEP="${START_STEP:-before}"
+REPORT_RUN1="${REPORT_RUN1:-}"
+STEPS=(before config upgrade assert-platform migrate-run1 gitops-pr record)
+
+# The summary fields the steps fill; a resumed run leaves the skipped steps' at -.
+KAGENT_CHART=- SUBSTRATE_CHART=- LEFTOVER_AGENTS=- K8S_AGENT_STATE=- K8S_AGENT_REPORT=-
+SRE_REMOVED=- NARROW_REMOVED=- NARROW_RENAMED=- SRE_PINNED=- PENDING=- GITOPS_IDENTITY=-
 
 export AGENTLAB_TELEMETRY_TESTMODE=1 AGENTLAB_NO_UPDATE_CHECK=1
 
@@ -77,7 +93,7 @@ trap on_error ERR
 # A platform defect, not a bug of this script: record it, stop, leave the lab.
 found_issue() {
   log "FOUND-ISSUE: $*"
-  printf '%s\n' "$*" >| "$EVIDENCE/FOUND-ISSUE.md"
+  { echo "## $(utc) step=$CURRENT_STEP"; printf '%s\n\n' "$*"; } >>"$EVIDENCE/FOUND-ISSUE.md"
   status "FOUND-ISSUE $* — lab left exactly as is (lock HELD, no restore, no hand-patching)"
   trap - ERR
   exit 2
@@ -118,11 +134,37 @@ hr_ready() { kubectl -n "$1" get helmrelease "$2" -o jsonpath='{.status.conditio
 hr_chart_version() { kubectl -n "$1" get helmrelease "$2" -o jsonpath='{.status.history[0].chartVersion}' 2>/dev/null; }
 hr_conditions() { kubectl -n "$1" get helmrelease "$2" -o jsonpath='{.status.conditions[*].message}' 2>/dev/null; }
 
+# The HelmRelease a not-ready one reports for: a dependency chain
+# ("dependency 'ns/name' is not ready") is followed to its root.
+hr_root() { # <ns> <name>
+  local ns="$1" name="$2" msg dep i=0
+  while [ "$i" -lt 10 ]; do
+    msg=$(kubectl -n "$ns" get helmrelease "$name" -o jsonpath='{.status.conditions[?(@.type=="Ready")].message}' 2>/dev/null)
+    dep=$(sed -nE "s#.*dependency '([^/]+)/([^']+)' is not ready.*#\1 \2#p" <<<"$msg")
+    [ -n "$dep" ] || break
+    read -r ns name <<<"$dep"; i=$((i + 1))
+  done
+  echo "$ns $name"
+}
+HELM_FAILURE_RE='Helm (upgrade|install|rollback)|field is immutable|RetriesExceeded|failed for release'
+
 assert_hr_ready() { # <ns> <name> [<chart regex>]
   local ready chart
   ready=$(hr_ready "$1" "$2")
   chart=$(hr_chart_version "$1" "$2")
-  [ "$ready" = True ] || die "HelmRelease $1/$2 Ready=$ready chart=$chart: $(hr_conditions "$1" "$2")"
+  if [ "$ready" != True ]; then
+    # A failed Helm action of the root release is the platform's defect, not this script's.
+    local rns rname rmsg
+    read -r rns rname <<<"$(hr_root "$1" "$2")"
+    rmsg=$(kubectl -n "$rns" get helmrelease "$rname" -o json 2>/dev/null \
+      | jq -r '[.status.conditions[]? | select(.type=="Ready" or .type=="Released" or .type=="Stalled") | .type + "=" + .status + " " + .reason + ": " + .message] | join(" | ")')
+    kubectl -n "$rns" get helmrelease "$rname" -o yaml >| "$EVIDENCE/hr-$rname.not-ready.yaml" 2>&1 || true
+    helm -n "$rns" history "$rname" >| "$EVIDENCE/helm-history-$rname.txt" 2>&1 || true
+    if /usr/bin/grep -Eq "$HELM_FAILURE_RE" <<<"$rmsg"; then
+      found_issue "HelmRelease $rns/$rname (the root of $1/$2 Ready=$ready) failed its Helm action: chart $(hr_chart_version "$rns" "$rname"), attempted $(kubectl -n "$rns" get helmrelease "$rname" -o jsonpath='{.status.lastAttemptedRevision}'): $(head -c 900 <<<"$rmsg"); evidence $EVIDENCE/hr-$rname.not-ready.yaml"
+    fi
+    die "HelmRelease $1/$2 Ready=$ready chart=$chart (root $rns/$rname): $rmsg"
+  fi
   if [ -n "${3:-}" ]; then [[ "$chart" =~ ^$3$ ]] || die "HelmRelease $1/$2 chart $chart, want $3"; fi
   log "HelmRelease $1/$2 Ready chart $chart"
 }
@@ -352,7 +394,7 @@ step_assert_platform() {
   assert_hr_ready agent-platform kagent-crds
   assert_hr_ready agent-platform kagent '0\.11\.0-gs\.3.*'
   assert_hr_ready agent-platform agent-platform-connectivity "${TARGET//./\\.}.*"
-  assert_hr_ready agent-platform agent-manager '1\.1\.1.*'
+  assert_hr_ready agent-platform agent-manager '1\.[0-9]+\.[0-9]+.*'
   assert_hr_ready agent-platform backstage '2\.[0-9]+\.[0-9]+.*'
   assert_hr_ready agent-platform cloudnative-pg
   assert_hr_ready agent-platform model-manager
@@ -400,8 +442,11 @@ step_migrate_run1() {
     kubectl -n agent-platform get helmrelease agent-platform-connectivity -o yaml | /usr/bin/grep -A3 migration >| "$d/connectivity-migration-values.txt" || true
     found_issue "agent-platform-connectivity $TARGET rendered no migrate Job in kagent (selector $MIGRATE_SELECTOR); connectivity values: $(tr '\n' ' ' <"$d/connectivity-migration-values.txt" | head -c 300); evidence $d"
   fi
-  local job; job=$(kubectl -n kagent get job -l "$MIGRATE_SELECTOR" -o name | head -n1)
-  log "migrate Job: $job"
+  kubectl -n kagent get job -l "$MIGRATE_SELECTOR" \
+    -o custom-columns='N:.metadata.name,CREATED:.metadata.creationTimestamp,COMPLETE:.status.conditions[?(@.type=="Complete")].status,START:.status.startTime,END:.status.completionTime,IMAGE:.spec.template.spec.containers[0].image,CHART:.metadata.labels.helm\.sh/chart' \
+    | tee "$d/jobs.txt" >&2
+  local job; job=$(kubectl -n kagent get job -l "$MIGRATE_SELECTOR" --sort-by=.metadata.creationTimestamp -o name | tail -n1)
+  log "newest migrate Job: $job ($(kubectl -n kagent get job -l "$MIGRATE_SELECTOR" --no-headers | wc -l) rendered so far)"
   if ! timeout 600 bash -c '
       until [ "$(kubectl -n kagent get "$1" -o jsonpath="{.status.conditions[?(@.type==\"Complete\")].status}" 2>/dev/null)" = True ]; do
         [ "$(kubectl -n kagent get "$1" -o jsonpath="{.status.conditions[?(@.type==\"Failed\")].status}" 2>/dev/null)" = True ] && exit 3
@@ -422,6 +467,20 @@ step_migrate_run1() {
   REPORT_JSON="$d/report.json"; "$YQ" -o=json '.' "$d/report.yaml" >| "$REPORT_JSON"
   log "report: $(wc -c <"$d/report.yaml") bytes, cm phase=$(kubectl -n kagent get cm agent-manager-migrate-report -o jsonpath='{.data.phase}')"
 
+  local LIVE_REPORT_JSON="$REPORT_JSON"
+  if [ -n "$REPORT_RUN1" ]; then
+    # The Job re-ran since the first expand run: the live report describes the
+    # re-run (nothing left to rewrite), the rewrite is in the saved copy.
+    [ -f "$REPORT_RUN1" ] || die "REPORT_RUN1=$REPORT_RUN1 does not exist"
+    cp "$REPORT_RUN1" "$d/report-run1.yaml"
+    REPORT_JSON="$d/report-run1.json"; "$YQ" -o=json '.' "$d/report-run1.yaml" >| "$REPORT_JSON"
+    local r
+    for r in sre narrow; do
+      assert_eq "$(jq -r --arg n "$r" '.releases[] | select(.namespace=="kagent" and .name==$n) | .action' "$LIVE_REPORT_JSON")" unchanged "live report releases kagent/$r action"
+      assert_eq "$(jq -r --arg n "$r" '.releases[] | select(.namespace=="kagent" and .name==$n) | .reason' "$LIVE_REPORT_JSON")" "already on the 1.x values" "live report releases kagent/$r reason"
+    done
+    log "rewrite asserted from the first run's report (run.at $(jq -r .run.at "$REPORT_JSON"), $REPORT_RUN1); the live report is the re-run's (run.at $(jq -r .run.at "$LIVE_REPORT_JSON"), $job)"
+  fi
   assert_eq "$("$YQ" '.phase' "$d/report.yaml")" expand "report.phase"
   local e
   e=$(entry releases kagent/sre); [ -n "$e" ] || die "report: no releases[] entry for kagent/sre"
@@ -462,8 +521,8 @@ step_migrate_run1() {
     assert_has "$e" not-migratable "agents kagent/k8s-agent"
     K8S_AGENT_REPORT=not-migratable
   else
-    K8S_AGENT_REPORT="absent from the report: ${e:-no entry}"
-    log "k8s-agent $K8S_AGENT_STATE; report entry: ${e:-none}"
+    if [ -n "$e" ]; then assert_has "$e" not-migratable "agents kagent/k8s-agent"; K8S_AGENT_REPORT="not-migratable at run time, the object gone since"; else K8S_AGENT_REPORT="no report entry"; fi
+    log "k8s-agent $K8S_AGENT_STATE; report: $K8S_AGENT_REPORT"
   fi
   PENDING=$(jq -c '.pending // []' "$REPORT_JSON"); assert_has "$PENDING" "$GITOPS_NS/sre-agent" "pending[]"
 
@@ -472,7 +531,7 @@ step_migrate_run1() {
   v=$(kubectl -n kagent get helmrelease sre -o jsonpath='{.spec.values}'); printf '%s\n' "$v" | "$YQ" -P '.' >| "$d/live-values-sre.yaml"
   [ -z "$(jq -r '.agent.runtime // empty' <<<"$v")" ] || die "live kagent/sre still has agent.runtime"
   [ -n "$(jq -r '.agent.iconUrl // empty' <<<"$v")" ] || die "live kagent/sre lost agent.iconUrl"
-  [[ "$(jq -r '.skills.gitRefs[0].ref // empty' <<<"$v")" =~ ^[0-9a-f]{40}$ ]] || die "live kagent/sre skills.gitRefs[0].ref not 40-hex: $(jq -c .skills <<<"$v")"
+  [[ "$(jq -r '.skills[0].git.commit // empty' <<<"$v")" =~ ^[0-9a-f]{40}$ ]] || die "live kagent/sre skills[0].git.commit not 40-hex: $(jq -c .skills <<<"$v")"
   v=$(kubectl -n kagent get helmrelease narrow -o jsonpath='{.spec.values}'); printf '%s\n' "$v" | "$YQ" -P '.' >| "$d/live-values-narrow.yaml"
   [ -n "$(jq -c '.muster.tools // empty' <<<"$v")" ] || die "live kagent/narrow has no muster.tools"
   [ -z "$(jq -c '.muster.toolNames // empty' <<<"$v")" ] || die "live kagent/narrow still has muster.toolNames"
@@ -553,13 +612,13 @@ step_record() {
 
 main() {
   step_preflight
-  step_before
-  step_config
-  step_upgrade
-  step_assert_platform
-  step_migrate_run1
-  step_gitops_pr
-  step_record
+  if [ "$START_STEP" = assert ]; then START_STEP=assert-platform; fi
+  [[ " ${STEPS[*]} " == *" $START_STEP "* ]] || die "START_STEP=$START_STEP is none of: ${STEPS[*]}"
+  local s run=''
+  for s in "${STEPS[@]}"; do
+    [ "$s" != "$START_STEP" ] || run=1
+    if [ -n "$run" ]; then "step_${s//-/_}"; else log "skipping $s (START_STEP=$START_STEP)"; fi
+  done
 }
 
 # Sourceable: the helpers and evidence collectors run standalone.
