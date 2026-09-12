@@ -452,8 +452,11 @@ func TestPlatformValuesFourXTopology(t *testing.T) {
 	// The lab registry rewrite rides in the same substrate block (a second
 	// `substrate:` key would replace the first in the values merge) and the
 	// Harness keeps the chart's digest until a `harness` dev image pins it.
-	if args, _ := at("substrate", "atelet", "extraArgs").([]any); len(args) != 1 || args[0] != "--localhost-registry-replacement=agentlab-registry:5000" {
-		t.Errorf("substrate.atelet.extraArgs = %v, want only the lab registry rewrite", args)
+	// The image-cache policy (ateletImageCacheArgs) follows it in the same
+	// list — the host disk must not evict the Harness image.
+	wantArgs := append([]any{testRegistryFlag}, anySlice(ateletImageCacheArgs)...)
+	if args, _ := at("substrate", "atelet", "extraArgs").([]any); !reflect.DeepEqual(args, wantArgs) {
+		t.Errorf("substrate.atelet.extraArgs = %v, want the lab registry rewrite then the image-cache policy %v", args, wantArgs)
 	}
 	if at("kagent", "harness", "image") != nil {
 		t.Errorf("kagent.harness.image = %v, want the chart's pin without a harness dev image", at("kagent", "harness", "image"))

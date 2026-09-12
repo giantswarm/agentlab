@@ -828,6 +828,31 @@ data the page reads — see [The muster plugin](backstage.md#the-muster-plugin).
   pod -l ate.dev/worker-pool=kagent-default`; the `WorkerPool` recreates
   them, the pending golden actor gets a worker within seconds. A fresh
   install and `platform-down` → `platform` recreate the pods anyway.
+- **The first turn after idling hangs on a full laptop disk — the lab
+  renders an atelet image-cache policy against it.** Substrate's atelet
+  evicts cached images on every GC pass (`--image-cache-gc-period`, 5 min)
+  while its cache volume is at or above `--image-cache-high-percent` (85 %),
+  sparing only records younger than `--image-cache-min-age` (2 min). In the
+  lab that volume is the kind node's root overlay, i.e. the host's disk: on a
+  laptop above 85 % the Harness image is gone five minutes after every turn
+  (atelet log `Image cache evicting image record`), the next turn pulls and
+  unpacks it cold (`Restore timing breakdown` with `oci_unpack` ≈ 5 s), the
+  atenet router's 5 s parked-request budget cancels the restore (ate-api-server
+  `CallAteletRestore … context canceled`) and the agent stays "Working…" —
+  while every turn within five minutes of the previous one works. The lab
+  takes the host disk out of the policy through the chart's
+  `substrate.atelet.extraArgs`: `--image-cache-high-percent=100` and
+  `--image-cache-low-percent=99` (eviction only below 1 % free, where nothing
+  runs anyway) with `--image-cache-max-bytes=4294967296` as the bound instead
+  (4 GiB, some twenty Harness digests, evicted oldest-first past that);
+  period and min-age keep the chart's defaults. `agentlab platform` rolls the
+  atelet DaemonSet to it on an existing lab and `agentlab platform-test`
+  asserts the flags on the rolled DaemonSet. A `platform.valuesFiles` overlay
+  that sets `substrate.atelet.extraArgs` replaces the whole list (Helm merges
+  maps, not lists) — keep the policy and the registry flag in it, or drop the
+  key. The Substrate line's fix (eviction that spares live images, a restore
+  budget that covers a cold start) retires the policy once the meta chart
+  pins that release.
 - **`allowPublicClientRegistration` must be on for Claude Code's login.**
   Claude Code registers over DCR as a public client on a random loopback port,
   so none of the other registration gates can be opened for it: it cannot send

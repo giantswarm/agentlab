@@ -97,6 +97,10 @@ type tmplData struct {
 	// whenever the agents are, so the flag is in place before any swap.
 	HarnessDevImage       string
 	LocalRegistryEndpoint string
+	// AteletImageCacheArgs is the lab's atelet image-cache policy
+	// (ateletImageCacheArgs, substrate.go), rendered after the registry flag
+	// in the same substrate.atelet.extraArgs list.
+	AteletImageCacheArgs []string
 }
 
 func newTmplData(cfg *config.Config) (*tmplData, error) {
@@ -127,6 +131,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		MCPPrometheusPostRenderers: strings.TrimRight(string(mcpPrometheus), "\n"),
 		MCPPrometheusChartVersion:  mcpPrometheusChartVersion,
 		LocalRegistryEndpoint:      devRegistryEndpoint(cfg),
+		AteletImageCacheArgs:       ateletImageCacheArgs,
 		ModelManagerEnabled:        cfg.ModelManagerEnabled(),
 		LegacyChart:                cfg.LegacyChart(),
 		ModelManagerBackends:       cfg.Platform.ModelManager.Backends,
