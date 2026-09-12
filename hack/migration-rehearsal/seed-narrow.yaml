@@ -1,0 +1,33 @@
+# Fleet shape 2: a hand-applied agent-chart HelmRelease in the kagent namespace
+# that narrows muster to two tools (`muster.toolNames`). Runs as the tenant
+# ServiceAccount the connectivity chart renders (Flux multi-tenancy lockdown)
+# and consumes the OCIRepository `agent` that agent-manager owns in kagent.
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: narrow
+  namespace: kagent
+  labels:
+    agentlab.giantswarm.io/rehearsal: migration
+spec:
+  interval: 10m
+  serviceAccountName: kagent-flux
+  chartRef:
+    kind: OCIRepository
+    name: agent
+    namespace: kagent
+  values:
+    agent:
+      name: narrow
+      displayName: Narrow
+      runtime: python
+    modelConfig:
+      name: default-model-config
+    muster:
+      serverRef:
+        namespace: agent-platform
+      toolNames:
+        - list_tools
+        - call_tool
+    toolset:
+      - preset:infrastructure

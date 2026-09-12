@@ -1,0 +1,13 @@
+# Meta-chart values overlay for the 3.x seed of the migration rehearsal.
+#
+# Turns on the bundled k8s-agent example (fleet shape 4: an Agent owned by the
+# meta chart's own `kagent` HelmRelease, not by the agent chart). The k8s-agent
+# binds the RemoteMCPServer `kagent-tool-server`, which the kagent-tools
+# subchart renders, so both are enabled together. Wire it through
+# `platform.valuesFiles` in agentlab.yaml.
+kagent:
+  k8s-agent:
+    enabled: true
+    namespaceOverride: kagent
+  kagent-tools:
+    enabled: true

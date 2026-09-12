@@ -1,0 +1,108 @@
+# Fleet shape 3: a GitOps-owned agent. The OCIRepository and HelmRelease live in
+# a tenant namespace (flux-giantswarm) and carry the kustomize-controller
+# ownership labels a Flux Kustomization would stamp; the release targets the
+# kagent namespace. The Namespace, ServiceAccount and RoleBindings are the lab
+# plumbing that stands in for the tenant's real RBAC under the Flux
+# multi-tenancy lockdown.
+#
+# This is the operator's pull request after the migrate Job's expand run: the
+# OCIRepository range moved to the 1.x agent chart and the values rewritten
+# exactly as the Job's report said (agent.runtime dropped, muster.serverRef
+# dropped, muster.toolNames renamed to muster.tools, the two driftDetection
+# ignore paths of the retired Agent kind dropped). seed-gitops.yaml is the
+# 0.x shape the rehearsal seeds.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: flux-giantswarm
+  labels:
+    agentlab.giantswarm.io/rehearsal: migration
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kagent-flux
+  namespace: flux-giantswarm
+  labels:
+    agentlab.giantswarm.io/rehearsal: migration
+---
+# Release storage and the OCIRepository live in the tenant namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kagent-flux
+  namespace: flux-giantswarm
+  labels:
+    agentlab.giantswarm.io/rehearsal: migration
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: kagent-flux
+    namespace: flux-giantswarm
+---
+# The rendered Agent lands in kagent (targetNamespace).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kagent-flux-gitops
+  namespace: kagent
+  labels:
+    agentlab.giantswarm.io/rehearsal: migration
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: kagent-flux
+    namespace: flux-giantswarm
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  name: agent
+  namespace: flux-giantswarm
+  labels:
+    agentlab.giantswarm.io/rehearsal: migration
+    kustomize.toolkit.fluxcd.io/name: flux-giantswarm
+    kustomize.toolkit.fluxcd.io/namespace: flux-giantswarm
+spec:
+  interval: 30m
+  url: oci://gsoci.azurecr.io/charts/giantswarm/agent
+  ref:
+    semver: 1.x
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: sre-agent
+  namespace: flux-giantswarm
+  labels:
+    agentlab.giantswarm.io/rehearsal: migration
+    kustomize.toolkit.fluxcd.io/name: flux-giantswarm
+    kustomize.toolkit.fluxcd.io/namespace: flux-giantswarm
+spec:
+  interval: 10m
+  serviceAccountName: kagent-flux
+  chartRef:
+    kind: OCIRepository
+    name: agent
+    namespace: flux-giantswarm
+  targetNamespace: kagent
+  driftDetection:
+    mode: enabled
+  values:
+    agent:
+      name: sre-agent
+      displayName: GitOps SRE
+    modelConfig:
+      name: default-model-config
+    muster:
+      tools:
+        - list_tools
+        - call_tool
+    toolset:
+      - preset:read-only

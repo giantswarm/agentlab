@@ -52,7 +52,9 @@ The lab installs it in its **lab shape**:
   or the CNPG DSN mount — kagent 0.10 on its bundled Postgres, the controller
   in its local-dev auth mode, the controller ServiceMonitor following
   observability. This is what a migration rehearsal seeds before upgrading
-  in place to the 4.x line; the switch is `config.LegacyChart`. The dev
+  in place to the 4.x line; the switch is `config.LegacyChart`. The
+  rehearsal — the four fleet shapes, the in-place upgrade, the migrate Job's
+  three phases, the timings — is [The migration rehearsal](migration-rehearsal.md). The dev
   channel and a chart directory always render the current line's shape,
   whatever version they carry.
 

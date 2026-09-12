@@ -1,0 +1,12 @@
+# Meta-chart values overlay for the 4.x upgrade of the migration rehearsal.
+#
+# The 3.x seed overlay (values-3x-example-agent.yaml) is dropped on the
+# upgrade: the 4.x line does not ship the bundled k8s-agent example. What the
+# fleet adds instead is the migrate Job's list of GitOps tenant namespaces:
+# releases the Job finds there are reported as a diff for the tenant's pull
+# request, never rewritten. Wire it through `platform.valuesFiles` in
+# agentlab.yaml.
+agentManager:
+  migration:
+    gitopsNamespaces:
+      - flux-giantswarm
