@@ -220,8 +220,8 @@ github.com/frankban/quicktest v1.14.6 h1:7Xjx+VpznH+oBnejlPUj8oUpdxnVs4f8XU8WnHk
 github.com/frankban/quicktest v1.14.6/go.mod h1:4ptaffx2x8+WTWXmUCuVU6aPUX1/Mz7zb5vbUoiM6w0=
 github.com/fxamacker/cbor/v2 v2.9.1 h1:2rWm8B193Ll4VdjsJY28jxs70IdDsHRWgQYAI80+rMQ=
 github.com/fxamacker/cbor/v2 v2.9.1/go.mod h1:vM4b+DJCtHn+zz7h3FFp/hDAI9WNWCsZj23V5ytsSxQ=
-github.com/giantswarm/selfupdate-cosign v0.1.1 h1:2zuqHAkcw27tn3k9NQ1R5A6WYmOztvcI7yBwaN2Wd+U=
-github.com/giantswarm/selfupdate-cosign v0.1.1/go.mod h1:CVnryjSRY/xDqJDn+QeivgT8+WkOvVbY/Z+xLaIfZ1w=
+github.com/giantswarm/selfupdate-cosign v0.2.0 h1:T77Q41viXAv5uNJ8SoQlJh1Dxsuh8brvvPp8Nt9KlOI=
+github.com/giantswarm/selfupdate-cosign v0.2.0/go.mod h1:CVnryjSRY/xDqJDn+QeivgT8+WkOvVbY/Z+xLaIfZ1w=
 github.com/giantswarm/telemetrydeck-go v0.3.0 h1:hgmySEd5P6D78ZoUcNBKB/xaEBhtF9yGa8xhuQUrc1g=
 github.com/giantswarm/telemetrydeck-go v0.3.0/go.mod h1:BitlH7nTrQmWvVEtnAa8pNM+FjI0+9S7JA9tl1PVvzo=
 github.com/go-chi/chi/v5 v5.3.0 h1:halUjDxhshgXHMrao5bB8eNBXo/rnzwr8m5m36glehM=
