@@ -410,6 +410,26 @@ does not exist shows as `ResolvedRefs=False` on the Harness before any
 actor boots; a wrong token as a failed golden boot whose worker log carries
 git's authentication error.
 
+This repository ships a second fixture for the loader itself:
+`fixtures/skills/frontmatter-fields`, a skill whose frontmatter carries
+Claude Code's `user-invocable` and `argument-hint` and a top-level
+`version` next to the specification's fields — the shape of a skill written
+once for several harnesses, which the Go ADK's strict parser refused until
+the kagent line loaded it leniently. Boot it against a full commit of this
+repository's `main`:
+
+```bash
+agentlab skills-test \
+  --skill-repo https://github.com/giantswarm/agentlab --skill-commit <commit> \
+  --skill-path fixtures/skills/frontmatter-fields \
+  --skill-question 'what is the codeword of the frontmatter fixture?' \
+  --skill-expect marzipan-lantern
+```
+
+A red boot whose worker log says `field user-invocable not found in type
+skill.Frontmatter` is the loader refusing the fields; green is the skill
+listed, loaded and its codeword answered.
+
 **Outcome (2026-09-11): positive — once every gate on the actor's egress
 admits a resuming actor.** Three gates stood between a booting actor and
 the network, found by reading the line's code and by the proof's evidence:
