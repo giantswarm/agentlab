@@ -118,6 +118,20 @@ with Dex doing the logins.
   "fix" that into a skipped step. Its default proof model is
   `ibm/granite-4-micro`; keep LM Studio's just-in-time loading on, or the
   agent turn fails instead of waiting for the load.
+- `platform.vmManager` wires a **vm-manager on the lab host** (the platform's
+  VM provisioner: KVM VMs with IMDS, vTPM and attestation — it runs on the
+  host, never in a pod) into muster as the MCPServer `vm-manager`
+  (`x_vm-manager_<tool>`, tool group `agent-platform`, forward-token auth).
+  `configure` discovers it on `platform.vmManager.port` (default 8100) by its
+  `vm_manager_build_info` metric; `platform` proves it reachable from a pod,
+  applies the registration and writes `state/vm-manager.env` — the
+  environment `vm-manager serve` reads to trust the lab Dex (issuer, CA, the
+  platform client, the trusted audience; `agentlab vm-manager-env` prints
+  it). Run vm-manager FROM that environment; a vm-manager without OAuth
+  answers anonymously and `./agentlab vm-manager-test` fails on it first.
+  The proof: 401 anonymous, the person's token accepted directly, the tools
+  through muster with annotations, then create_vm → ready → delete_vm
+  (`--skip-vm` boots nothing). See docs/vm-manager.md.
 - For verifying RBAC as a specific user, use `./agentlab login <email>` and
   `kubectl --kubeconfig kubeconfig.oidc` — that is the OIDC path.
 - The cluster's admin kubeconfig (`state/kubeconfig`, context `kind-agentlab`)
@@ -146,6 +160,7 @@ go test ./internal/forms/ -run TestMinimalFormDrive -count=1 -v   # single test
 ./agentlab open portal     # the portal (Backstage) in the browser; `open agents` the kagent UI
 ./agentlab platform-test   # headless Dex -> muster -> mcp-kubernetes proof
 ./agentlab models-test     # managed models: 401 -> pull -> ModelConfig -> agent turn -> MCP -> unload -> delete (on lmstudio: the 501 refusal -> unwire, U23)
+./agentlab vm-manager-test # the host vm-manager as the person: 401 anonymous -> tools via muster -> create_vm -> ready -> delete_vm
 ./agentlab test            # RBAC assertions for every configured user
 ./agentlab backstage-test  # headless Backstage sign-in for every user
 ./agentlab skills-test     # kagent API v2: an AgentTemplate with a git-pinned skill boots (the golden boot) and answers from the skill

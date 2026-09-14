@@ -256,6 +256,75 @@ type Platform struct {
 	// `agentlab configure` fills the backends from what answers on this
 	// machine, on every run.
 	ModelManager ModelManager `yaml:"modelManager"`
+	// A vm-manager on the lab host (github.com/giantswarm/vm-manager): the
+	// platform's VM provisioner runs on the KVM host itself, never in a pod,
+	// so the lab registers it with muster as an external MCPServer
+	// (x_vm-manager_<tool>, tool group agent-platform) dialed through the
+	// kind docker network's gateway, and writes the environment its
+	// `serve` needs to trust the lab Dex (state/vm-manager.env). `agentlab
+	// configure` turns it on whenever a vm-manager answers on this machine.
+	VMManager VMManager `yaml:"vmManager"`
+}
+
+// VMManager configures the lab's wiring of a host vm-manager.
+type VMManager struct {
+	// On, `agentlab platform` registers the host vm-manager with muster
+	// (forward-token auth: vm-manager validates the person's Dex id_token
+	// itself) and proves it reachable from a pod first. `agentlab configure`
+	// follows the host — on when a vm-manager answers, off when none does —
+	// unless --vm-manager pins it.
+	Enabled bool `yaml:"enabled"`
+	// The host port vm-manager listens on. The lab's default is not
+	// vm-manager's own 8080 (the lab shares machines with other things on
+	// 8080); state/vm-manager.env carries the matching VM_MANAGER_LISTEN.
+	Port int `yaml:"port,omitempty"`
+	// The URL pods dial, overriding the autodetected
+	// http://<kind docker network gateway>:<port> — a vm-manager on another
+	// machine of the LAN, or the runtime's host alias where the gateway is
+	// not this machine (Docker Desktop's host.docker.internal).
+	Endpoint string `yaml:"endpoint,omitempty"`
+}
+
+// DefaultVMManagerPort is the host port the lab expects vm-manager on.
+const DefaultVMManagerPort = 8100
+
+// ListenPort is the configured port, or the default.
+func (v VMManager) ListenPort() int {
+	if v.Port == 0 {
+		return DefaultVMManagerPort
+	}
+	return v.Port
+}
+
+// normalize writes the port out explicitly, so agentlab.yaml says what
+// state/vm-manager.env binds.
+func (v *VMManager) normalize() {
+	if v.Port == 0 {
+		v.Port = DefaultVMManagerPort
+	}
+}
+
+// Validate checks the vm-manager block.
+func (v VMManager) Validate() error {
+	if err := ValidatePort(strconv.Itoa(v.ListenPort())); err != nil {
+		return fmt.Errorf("port: %w", err)
+	}
+	if v.Endpoint != "" && !httpURLRe.MatchString(v.Endpoint) {
+		return fmt.Errorf("endpoint %q: must be an http(s) URL, e.g. http://172.21.0.1:%d", v.Endpoint, v.ListenPort())
+	}
+	return nil
+}
+
+// ApplyDiscovered follows what `agentlab configure` found: on when a
+// vm-manager answers on this machine (or an explicit endpoint names one
+// elsewhere), off otherwise; pinEnabled (--vm-manager) decides instead.
+func (v *VMManager) ApplyDiscovered(found bool, pinEnabled *bool) {
+	switch {
+	case pinEnabled != nil:
+		v.Enabled = *pinEnabled
+	default:
+		v.Enabled = found || v.Endpoint != ""
+	}
 }
 
 // ModelManager configures the umbrella's model-manager component in the lab.
@@ -506,6 +575,7 @@ func Default() *Config {
 			// The lab registry behind the `harness` dev image; a container
 			// on the kind network, so no node port mapping is involved.
 			DevRegistryPort: DefaultDevRegistryPort,
+			VMManager:       VMManager{Port: DefaultVMManagerPort},
 		},
 		Backstage: Backstage{
 			Enabled: true,
@@ -528,6 +598,7 @@ func Load() (*Config, error) {
 	// Earlier versions wrote the one-backend form (backend/endpoint); read
 	// it as the one-item lists so the same lab renders exactly as before.
 	cfg.Platform.ModelManager.normalize()
+	cfg.Platform.VMManager.normalize()
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("%s: %w", File, err)
 	}
@@ -692,6 +763,7 @@ func (c *Config) Normalize() {
 		c.Platform.ChartPinned = false
 	}
 	c.Platform.ModelManager.normalize()
+	c.Platform.VMManager.normalize()
 }
 
 // branchSanitizeRe is gitsemver's: every run of characters outside [a-z0-9]
@@ -882,6 +954,9 @@ func (c *Config) Validate() error {
 	if err := c.Platform.ModelManager.Validate(c.Platform.Agents); err != nil {
 		return fmt.Errorf("platform.modelManager: %w", err)
 	}
+	if err := c.Platform.VMManager.Validate(); err != nil {
+		return fmt.Errorf("platform.vmManager: %w", err)
+	}
 	if err := ValidatePort(strconv.Itoa(c.Backstage.Port)); err != nil {
 		return fmt.Errorf("backstage.port: %w", err)
 	}
@@ -926,6 +1001,13 @@ func (m ModelManager) Validate(agents bool) error {
 // ModelManagerEnabled reports whether the platform installs model-manager.
 func (c *Config) ModelManagerEnabled() bool {
 	return c.Platform.Enabled && c.Platform.Agents && c.Platform.ModelManager.Enabled
+}
+
+// VMManagerEnabled reports whether the platform registers the host
+// vm-manager with muster. The platform is all it needs: vm-manager is an MCP
+// server of muster's, not a consumer of the agents runtime.
+func (c *Config) VMManagerEnabled() bool {
+	return c.Platform.Enabled && c.Platform.VMManager.Enabled
 }
 
 // ChartMajor is the major version of the meta chart release platform.

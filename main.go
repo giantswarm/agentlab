@@ -112,6 +112,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		inGroup(groupTesting, agentsTestCmd()),
 		inGroup(groupTesting, toolsetsTestCmd()),
 		inGroup(groupTesting, modelsTestCmd()),
+		inGroup(groupTesting, vmManagerTestCmd()),
 		inGroup(groupTesting, skillsTestCmd()),
 		inGroup(groupTesting, a2aTestCmd()),
 		inGroup(groupTesting, klausGatewayTestCmd()),
@@ -123,6 +124,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 
 		inGroup(groupAdvanced, platformCmd()),
 		inGroup(groupAdvanced, certsCmd()),
+		inGroup(groupAdvanced, vmManagerEnvCmd()),
 		inGroup(groupAdvanced, labCmd("render", "Render every manifest from agentlab.yaml into state/ without applying anything", lab.RenderAll)),
 		inGroup(groupAdvanced, labCmd("reload", "Re-render and re-apply the Dex config (after editing agentlab.yaml)", lab.ApplyDex)),
 		inGroup(groupAdvanced, selfUpdateCmd()),
@@ -194,7 +196,7 @@ func loadOrCreateConfig() (*config.Config, error) {
 	}
 	fmt.Printf("No %s yet — let's create one.\n\n", config.File)
 	cfg = config.Default()
-	disc := discoverInto(cfg, nil, nil)
+	disc := discoverInto(cfg, nil, nil, nil)
 	// The tools before the questions: a missing tool is refused here, not
 	// after the form and a cluster boot.
 	if err := disc.Preflight(); err != nil {
@@ -218,15 +220,35 @@ func loadOrCreateConfig() (*config.Config, error) {
 // model servers that answer (pins from the --model-manager flags win).
 // Reachability from pods (bind address, firewall) is checked at platform
 // time, with the fixes.
-func discoverInto(cfg *config.Config, pinEnabled *bool, pinBackends []string) *lab.Discovery {
+func discoverInto(cfg *config.Config, pinEnabled *bool, pinBackends []string, pinVMManager *bool) *lab.Discovery {
 	disc := lab.Discover(cfg)
 	fmt.Print(disc.Report(cfg))
 	fmt.Println()
 	applyPorts(cfg, disc)
 	before := cfg.Platform.ModelManager
 	cfg.Platform.ModelManager.ApplyDiscovered(disc.Backends(), cfg.Platform.Agents, pinEnabled, pinBackends)
+	vmBefore := cfg.Platform.VMManager.Enabled
+	cfg.Platform.VMManager.ApplyDiscovered(disc.VMManagerFound(), pinVMManager)
 	reportModelManager(before, cfg.Platform.ModelManager, disc, cfg.Platform.Agents)
+	reportVMManager(vmBefore, cfg.Platform.VMManager.Enabled, disc)
 	return disc
+}
+
+// reportVMManager says what the discovery did to platform.vmManager.
+func reportVMManager(before, after bool, disc *lab.Discovery) {
+	if before == after {
+		return
+	}
+	reason := "a vm-manager answers on this machine"
+	if !after {
+		reason = "no vm-manager answers on this machine"
+		if disc.VMManager != nil {
+			reason = "the vm-manager on this machine does not answer on the address pods dial"
+		}
+	}
+	fmt.Println("Applied to the configuration:")
+	fmt.Printf("  platform.vmManager.enabled: %v -> %v (%s)\n", before, after, reason)
+	fmt.Println()
 }
 
 // applyPorts moves the configuration's host ports off foreign listeners when
@@ -431,8 +453,9 @@ func browserCmd() *cobra.Command {
 
 func configureCmd() *cobra.Command {
 	var defaults, accessible bool
-	var platform, agents, observability, backstage, modelManager bool
+	var platform, agents, observability, backstage, modelManager, vmManager bool
 	var modelManagerBackends []string
+	var vmManagerPort int
 	var chartVersion, chartPath, chartBranch string
 	cmd := &cobra.Command{
 		Use:   "configure",
@@ -489,10 +512,17 @@ func configureCmd() *cobra.Command {
 			if cmd.Flags().Changed("model-manager-backends") {
 				pinBackends = modelManagerBackends
 			}
+			var pinVMManager *bool
+			if cmd.Flags().Changed("vm-manager") {
+				pinVMManager = &vmManager
+			}
+			if cmd.Flags().Changed("vm-manager-port") {
+				cfg.Platform.VMManager.Port = vmManagerPort
+			}
 			// Every run discovers the machine — an existing agentlab.yaml
 			// follows the host too: a server that appeared is added, one that
 			// is gone drops out, ports move while no cluster holds them.
-			disc := discoverInto(cfg, pinEnabled, pinBackends)
+			disc := discoverInto(cfg, pinEnabled, pinBackends, pinVMManager)
 			// The tools before the questions (or, with --defaults, before
 			// the file): what `agentlab up` would refuse is refused here,
 			// with the install hints, instead of after the whole form.
@@ -544,6 +574,10 @@ func configureCmd() *cobra.Command {
 					fmt.Printf("             %s (%s backend, %s)\n", config.BackendServerName(b), b, endpointNote(mm, b, disc))
 				}
 			}
+			if cfg.VMManagerEnabled() {
+				fmt.Printf("  vm-manager the host's VM provisioner on :%d, registered with muster as x_vm-manager_* (%s)\n",
+					cfg.Platform.VMManager.ListenPort(), vmManagerEndpointNote(cfg.Platform.VMManager, disc))
+			}
 			fmt.Println("\nNext: agentlab up")
 			return nil
 		},
@@ -558,6 +592,8 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().StringVar(&chartPath, "chart-path", "", "install the agent-platform chart from this local directory (an agent-platform checkout's helm/agent-platform) instead of the pinned release; \"\" clears it")
 	cmd.Flags().StringVar(&chartBranch, "chart-branch", "", "the dev channel: follow this agent-platform branch's newest dev build (resolved now and on every up/platform, written to chartVersion); \"\" returns to the stable channel")
 	cmd.Flags().StringSliceVar(&modelManagerBackends, "model-manager-backends", nil, fmt.Sprintf("pin the host model servers, in order (%s; the first is model-manager's default backend) instead of the ones the discovery finds", strings.Join(config.ModelManagerBackends, ", ")))
+	cmd.Flags().BoolVar(&vmManager, "vm-manager", false, "pin the host vm-manager wiring on/off instead of following whether one answers on this machine")
+	cmd.Flags().IntVar(&vmManagerPort, "vm-manager-port", config.DefaultVMManagerPort, "the host port vm-manager listens on (state/vm-manager.env binds it)")
 	cmd.Flags().BoolVar(&accessible, "accessible", false, "prompt-per-question form mode (for screen readers and plain terminals)")
 	return cmd
 }
@@ -613,6 +649,18 @@ func endpointNote(mm config.ModelManager, backend string, disc *lab.Discovery) s
 		return fmt.Sprintf("autodetected as http://%s:%d", host, config.BackendPort(backend))
 	}
 	return fmt.Sprintf("autodetected at platform time on port %d", config.BackendPort(backend))
+}
+
+// vmManagerEndpointNote says where pods dial vm-manager: the override, the
+// address the discovery found, or the autodetection to come.
+func vmManagerEndpointNote(vmm config.VMManager, disc *lab.Discovery) string {
+	if vmm.Endpoint != "" {
+		return vmm.Endpoint
+	}
+	if disc != nil && disc.VMManager != nil && disc.VMManager.PodHost != "" {
+		return fmt.Sprintf("http://%s:%d", disc.VMManager.PodHost, vmm.ListenPort())
+	}
+	return fmt.Sprintf("autodetected as http://<the address pods reach this machine on>:%d at platform time", vmm.ListenPort())
 }
 
 func loginCmd() *cobra.Command {
@@ -714,6 +762,46 @@ func modelsTestCmd() *cobra.Command {
 	cmd.Flags().StringVar(&backend, "backend", "", "the backend to prove, one of platform.modelManager.backends (default: the first — model-manager's default backend)")
 	cmd.Flags().StringVar(&model, "model", "", fmt.Sprintf("the model to pull, small and tool-calling capable (default: %s)", lab.ModelsTestModelDefaults()))
 	return cmd
+}
+
+func vmManagerTestCmd() *cobra.Command {
+	var opts lab.VMManagerTestOptions
+	cmd := &cobra.Command{
+		Use:   "vm-manager-test [email]",
+		Short: "Headless vm-manager proof: 401 anonymous -> the person's token accepted -> x_vm-manager_* through muster (annotations, get_host, images, networks) -> create_vm -> ready -> attestation -> delete_vm",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			email := cfg.AdminUser().Email
+			if len(args) == 1 {
+				email = args[0]
+			}
+			return lab.VMManagerTest(cfg, email, opts)
+		},
+	}
+	cmd.Flags().BoolVar(&opts.SkipVM, "skip-vm", false, "prove the registration, the identity boundary and the read tools only; boot no VM")
+	cmd.Flags().DurationVar(&opts.VMTimeout, "vm-timeout", lab.DefaultVMManagerTestVMTimeout, "how long the proof's VM may take to reach ready (installer boot + installed boot to READY=1)")
+	return cmd
+}
+
+// vmManagerEnvCmd prints the environment `vm-manager serve` needs to trust
+// this lab — what `agentlab platform` writes to state/vm-manager.env.
+func vmManagerEnvCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "vm-manager-env",
+		Short: "Print the environment `vm-manager serve` needs for this lab (listen address, OAuth against the lab Dex); the same as state/vm-manager.env",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			return lab.VMManagerEnv(cfg, cmd.OutOrStdout())
+		},
+	}
 }
 
 func agentsTestCmd() *cobra.Command {

@@ -319,6 +319,28 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 		}
 	}
 
+	// The host vm-manager: its endpoint detected the same way and proven
+	// reachable from a pod before muster is pointed at it (vmmanager.go).
+	var vmManagerEndpoint string
+	if cfg.VMManagerEnabled() {
+		ep, err := resolveVMManagerEndpoint(cfg)
+		if err != nil {
+			return err
+		}
+		vmManagerEndpoint = ep
+		// The environment first: the preflight's fix names this file, and a
+		// vm-manager nobody could start yet is the usual reason it fails.
+		envPath, err := writeVMManagerEnv(cfg)
+		if err != nil {
+			return err
+		}
+		note("wrote %s — the environment `vm-manager serve` reads to trust this lab", envPath)
+		step("Checking the host vm-manager is reachable from pods (%s)", ep)
+		if err := preflightVMManager(cfg, ep); err != nil {
+			return err
+		}
+	}
+
 	_, valuesPath, err := renderManifest(cfg, platformValuesTemplate)
 	if err != nil {
 		return err
@@ -506,6 +528,11 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	if err := ensureFleetFixture(cfg); err != nil {
 		return err
 	}
+	// The host vm-manager's registration (vmmanager.go) — same CRD reason;
+	// off, it removes the registration a lab created while the key was on.
+	if err := ensureVMManager(cfg, vmManagerEndpoint); err != nil {
+		return err
+	}
 
 	// The agents' model key. The default ModelConfig (rendered by the kagent
 	// chart from providers.anthropic) references this secret; agent pods
@@ -623,7 +650,8 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 %s
 %s
 %s
-%s%s`, header, reach, usersBlock(cfg), backstageHint, claudeCodeHint(cfg), agentsHint, modelManagerHint(cfg, backendEndpoints), obsHint, devImagesHint(cfg, dev), tryItBlock(cfg))
+%s
+%s%s`, header, reach, usersBlock(cfg), backstageHint, claudeCodeHint(cfg), agentsHint, modelManagerHint(cfg, backendEndpoints), vmManagerHint(cfg, vmManagerEndpoint), obsHint, devImagesHint(cfg, dev), tryItBlock(cfg))
 	// Everything the platform runs is in the node now — record it so the next
 	// boot side-loads instead of pulling.
 	snapshotPreloadImages()

@@ -192,6 +192,7 @@ Discovering this machine:
   Ollama            0.33.2 on :11434 — answers on 172.21.0.1 (the address pods dial): yes; 10 downloaded, 4 tool-calling
   Lemonade Server   11.9.0 on :13305 — answers on 172.21.0.1 (the address pods dial): yes; 4 downloaded, 3 tool-calling
   LM Studio         api v1 on :1234 — answers on 172.21.0.1 (the address pods dial): yes; 6 downloaded, 4 tool-calling
+  vm-manager        0.4.0 on 127.0.0.1:8100 — answers on 172.21.0.1 (the address pods dial): yes
   Anthropic key     $ANTHROPIC_API_KEY is set — the agents' default ModelConfig and Backstage's AI chat get the real key at deploy time
   GitHub token      $GITHUB_TOKEN is set — the portal's skill discovery and agent-manager's skill resolution call GitHub authenticated (5000 requests an hour) from deploy time
 
@@ -239,6 +240,11 @@ Applied to the configuration:
   with an `{"error": …}` document for every path outside its own `/api/v1`,
   Ollama's `/api/version`, `/api/tags` and `/api/show` among them; a probe
   that trusted the code would find an Ollama on every LM Studio port.
+- **vm-manager**: the platform's VM provisioner, when one runs on this
+  machine (`platform.vmManager.port`, default `:8100`), recognised by its
+  `vm_manager_build_info` metric and asked, from inside the node, which
+  address pods reach it on. What answers turns `platform.vmManager.enabled`
+  on — see [vm-manager](vm-manager.md).
 - **`$ANTHROPIC_API_KEY`**: whether it is exported, since the agents'
   default ModelConfig and Backstage's AI chat take it at deploy time.
 - **`$GITHUB_TOKEN`**: whether it is exported, since the portal's skill

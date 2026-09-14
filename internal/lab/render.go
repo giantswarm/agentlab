@@ -79,6 +79,12 @@ type tmplData struct {
 	FamilyInstanceArg       string
 	ToolGroupLabel          string
 	ToolGroupInfrastructure string
+	ToolGroupAgentPlatform  string
+	// The host vm-manager's registration (vmmanager.go): the MCPServer name
+	// and the URL muster dials — resolved from the kind docker network by
+	// the platform run, empty in a render that has no cluster to ask.
+	VMManagerServer string
+	VMManagerURL    string
 	// PostRenderers is the lab's per-component `postRenderers` list as
 	// indented YAML, keyed by agent-platform component name
 	// (postrenderers.go): the hostNetwork, sidecar and nodePort patches plus
@@ -150,6 +156,9 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		FamilyInstanceArg:          familyInstanceArg,
 		ToolGroupLabel:             toolGroupLabel,
 		ToolGroupInfrastructure:    toolGroupInfrastructure,
+		ToolGroupAgentPlatform:     toolGroupAgentPlatform,
+		VMManagerServer:            vmManagerMCPServer,
+		VMManagerURL:               vmManagerURL(vmManagerRenderEndpoint(cfg)),
 		CertsDir:                   certsDir,
 		MusterNodePort:             config.MusterNodePort,
 		KagentUINodePort:           config.KagentUINodePort,
@@ -189,10 +198,12 @@ var tmplFuncs = template.FuncMap{
 
 // platformValuesTemplate renders the meta chart's lab values (the lab
 // shape, platform.go); backstageOverlayTemplate the lab's Backstage catalog
-// and app-config overlay.
+// and app-config overlay; vmManagerTemplate the host vm-manager's muster
+// registration (vmmanager.go).
 const (
 	platformValuesTemplate   = "agent-platform-values.yaml.tmpl"
 	backstageOverlayTemplate = "backstage-catalog.yaml.tmpl"
+	vmManagerTemplate        = "vm-manager.yaml.tmpl"
 )
 
 // renderTemplate renders one embedded template with the config; mutate, when
@@ -236,6 +247,7 @@ var manifests = map[string]struct {
 	"demo-workflow.yaml.tmpl":                {out: "demo-workflow.yaml"},
 	"oauth-fixture.yaml.tmpl":                {out: "oauth-fixture.yaml"},
 	"fleet-fixture.yaml.tmpl":                {out: "fleet-fixture.yaml"},
+	vmManagerTemplate:                        {out: "vm-manager.yaml"},
 	"extra-models.yaml.tmpl":                 {out: "extra-models.yaml"},
 	"coredns.yaml.tmpl":                      {out: "coredns.yaml"},
 	"gateway-nodeport.yaml.tmpl":             {out: "gateway-nodeport.yaml"},

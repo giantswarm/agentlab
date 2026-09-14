@@ -256,7 +256,7 @@ func proveSignInScopedToolset(cfg *config.Config, user, other *config.User, tool
 // GET /api/muster/tools/filter with one toolset= entry per selector and
 // include_presets, with the portal's forwarded token.
 func portalFilterTools(ps *portalSession, toolset []string, includePresets bool) (*filterToolsResponse, error) {
-	q := url.Values{"installation": {platformRelease}, "limit": {"1000"}}
+	q := url.Values{"installation": {platformRelease}, limitKey: {"1000"}}
 	for _, sel := range toolset {
 		q.Add(toolsetKey, sel)
 	}

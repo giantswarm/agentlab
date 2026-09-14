@@ -199,6 +199,24 @@ func TestCheckToolGroupLabels(t *testing.T) {
 			t.Fatalf("want %v, got %v", want, chart)
 		}
 	})
+	t.Run("the host-service registration may carry the platform group", func(t *testing.T) {
+		vmm := labelledServer{Namespace: platformNamespace, Name: vmManagerMCPServer, Labels: map[string]string{
+			managedByLabel: managedByAgentlabValue, vmManagerHostServiceLabel: vmManagerMCPServer, toolGroupLabel: toolGroupAgentPlatform}}
+		chart, err := checkToolGroupLabels(append(fixture(), vmm), oauth, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []string{platformNamespace + "/" + vmManagerMCPServer + "=agent-platform (host service)"}
+		if !slices.Equal(chart, want) {
+			t.Fatalf("want %v, got %v", want, chart)
+		}
+		// The infrastructure group is the fleet's; a host service claiming it
+		// is a mislabel.
+		vmm.Labels[toolGroupLabel] = toolGroupInfrastructure
+		if _, err := checkToolGroupLabels(append(fixture(), vmm), oauth, true); err == nil || !strings.Contains(err.Error(), vmManagerMCPServer) {
+			t.Fatalf("want the mislabelled registration named, got %v", err)
+		}
+	})
 	t.Run("a missing member fails", func(t *testing.T) {
 		all := fixture()[1:]
 		if _, err := checkToolGroupLabels(all, oauth, true); err == nil || !strings.Contains(err.Error(), fleetFixtureNames()[0]) {
