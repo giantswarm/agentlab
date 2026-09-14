@@ -165,7 +165,7 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 				Value(&observabilityEnabled),
 			huh.NewConfirm().
 				Title("Manage this machine's model servers from the platform (model-manager)?").
-				Description("Optional, needs the agents runtime: the umbrella's model-manager component in\nfront of this machine's model servers — an Ollama, a Lemonade Server, an LM Studio.\nPull, load/unload and delete models from the portal or as x_model-manager_* tools,\neach pulled model wired into kagent as a ModelConfig. Pods reach the host through\nthe kind docker gateway (bind the server to 0.0.0.0). "+modelServersHint(hints)).
+				Description("Optional, needs the agents runtime: the chart's model-manager component in\nfront of this machine's model servers — an Ollama, a Lemonade Server, an LM Studio.\nPull, load/unload and delete models from the portal or as x_model-manager_* tools,\neach pulled model wired into kagent as a ModelConfig. Only servers pods can reach\nare enrolled; the discovery report above says which, and how to fix one that is not.\n"+modelServersHint(hints)).
 				Affirmative("Manage").
 				Negative("Skip").
 				Value(&modelManagerEnabled),
