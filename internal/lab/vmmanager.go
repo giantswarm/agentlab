@@ -114,7 +114,7 @@ func resolveVMManagerEndpoint(cfg *config.Config) (string, error) {
 		return fmt.Sprintf("http://%s:%d", gw, port), nil
 	case host == "":
 		return "", fmt.Errorf("no address reaches the host vm-manager from pods: neither %s (the container runtime's gateway) nor %s (its host alias) answers — %s\n"+
-			"  or set platform.vmManager.endpoint for a vm-manager elsewhere.",
+			"  or set platform.vmManager.endpoint for a vm-manager elsewhere",
 			net.JoinHostPort(gw, strconv.Itoa(port)), net.JoinHostPort(hostAlias(), strconv.Itoa(port)), vmManagerUnreachableCause(gw, port))
 	}
 	return fmt.Sprintf("http://%s:%d", host, port), nil

@@ -154,7 +154,7 @@ func Discover(cfg *config.Config) *Discovery {
 // where that is known, from pods — the value platform.vmManager.enabled
 // follows, by the same rule as Backends: only an explicit "no" leaves it off.
 func (d *Discovery) VMManagerFound() bool {
-	return d.VMManager != nil && !(d.VMManager.Probed && d.VMManager.PodHost == "")
+	return d.VMManager != nil && (!d.VMManager.Probed || d.VMManager.PodHost != "")
 }
 
 // podReachableHost is the address pods reach this machine on for port: the

@@ -139,6 +139,12 @@ func (s *musterSession) callTool(name string, args map[string]any) (map[string]a
 	return parsed, nil
 }
 
+// The paging arguments of muster's list_tools and filter_tools.
+const (
+	limitKey  = "limit"
+	offsetKey = "offset"
+)
+
 // listToolsPage is the page size listTools asks for: muster pages list_tools
 // (50 a page by default, `total` and `truncated` on every answer), so one
 // answer is never the whole catalogue of a lab with every server on.
@@ -151,7 +157,7 @@ const listToolsPage = 200
 func (s *musterSession) listTools() ([]string, error) {
 	var names []string
 	for offset := 0; ; {
-		res, err := s.callTool("list_tools", map[string]any{"limit": listToolsPage, "offset": offset})
+		res, err := s.callTool("list_tools", map[string]any{limitKey: listToolsPage, offsetKey: offset})
 		if err != nil {
 			return nil, err
 		}
@@ -297,8 +303,8 @@ func (s *musterSession) filterTools(args map[string]any) (*filterToolsResponse, 
 	if args == nil {
 		args = map[string]any{}
 	}
-	if _, ok := args["limit"]; !ok {
-		args["limit"] = 1000
+	if _, ok := args[limitKey]; !ok {
+		args[limitKey] = 1000
 	}
 	res, err := s.callTool("filter_tools", args)
 	if err != nil {

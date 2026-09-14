@@ -668,7 +668,7 @@ func proveMusterToolsets(cfg *config.Config, token string) (*musterToolsetResult
 
 	// The shipped presets, when the platform chart configured them.
 	s.setHeader(toolsetHeader, "")
-	withPresets, err := s.filterTools(map[string]any{"include_presets": true, "limit": 1})
+	withPresets, err := s.filterTools(map[string]any{"include_presets": true, limitKey: 1})
 	if err != nil {
 		return nil, err
 	}
