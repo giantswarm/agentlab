@@ -49,23 +49,23 @@ a pod whose CPU *request* does not fit, so a node that is 100m short simply
 leaves pods `Pending` forever. It does not degrade, it stalls.
 
 What a full default lab requests and uses (measured on a live lab on the 4.x
-line — agent-platform 4.7.11, kagent 0.11.0-gs.3, Substrate 0.0.27-gs.5 —
-2026-09-11; the first column is what the kube-scheduler is asked for, the
+line — agent-platform 4.15.2, kagent 0.11.0-gs.13, Substrate 0.0.27-gs.9 —
+2026-09-14, the use column keeping the higher of that and the 2026-09-11 reading on 4.7.11; the first column is what the kube-scheduler is asked for, the
 second what the containers' memory working sets summed to):
 
 | | CPU requests | memory requests | memory in use |
 |---|---|---|---|
 | kind's Kubernetes: apiserver, controller-manager, scheduler, etcd, CNI, CoreDNS | 950m | 290 MiB | ~2.0 GiB (the apiserver 1.6 GiB after a day of platform churn) |
 | Dex | 50m | 64 MiB | 40 MiB |
-| the agent platform: muster + valkey, agentgateway + controller, mcp-kubernetes, agent-manager | 510m | 736 MiB | 245 MiB |
-| the agents runtime: kagent controller + UI | 200m | 384 MiB | 75 MiB |
+| the agent platform: muster + valkey (256 MiB and a 64 MiB metrics sidecar), agentgateway + controller, mcp-kubernetes, agent-manager | 510m | 928 MiB | 245 MiB |
+| the agents runtime: kagent controller + UI | 200m | 384 MiB | 110 MiB |
 | Agent Substrate (from the chart): the WorkerPool's four gVisor workers at 250m/512Mi each; the control plane in `ate-system` (ate-api-server ×2, ate-controller, atelet, atenet router/egress/dns, RustFS) and the podcertificate-controller declare nothing | 1000m | 2048 MiB | 480 MiB (a worker idles at 9 MiB) |
 | the platform Postgres (from the chart): the CloudNativePG operator and the one-instance Cluster declare nothing | 0 | 0 | ~180 MiB (the operator 63, the instance 114 right after its bootstrap) |
 | model-manager | 55m | 80 MiB | 15 MiB |
-| Backstage | 20m | 250 MiB | 400 MiB |
+| Backstage | 20m | 250 MiB | 500 MiB |
 | the chart's Flux engine: the Flux Operator plus the `FluxInstance`'s source-controller and helm-controller (the lab shape brings it with the platform — it delivers every component and the agents) | 250m | 192 MiB | 320 MiB |
 | observability: kube-state-metrics + mcp-prometheus (the Prometheus server, its operator and node-exporter declare nothing) | 305m | 344 MiB | 710 MiB (the server 564 MiB) |
-| **total** | **≈ 3.3 CPU** | **≈ 4.3 GiB** | **≈ 4.4 GiB** |
+| **total** | **≈ 3.3 CPU** | **≈ 4.5 GiB** | **≈ 4.6 GiB** |
 
 On a chart without Agent Substrate and the platform Postgres — the 0.10
 product's 3.x line — kagent's bundled PostgreSQL (250m / 256 MiB) takes the
@@ -86,9 +86,10 @@ Give docker at least:
 
 | | CPUs | Memory |
 |---|---|---|
-| the full default lab (platform + agents + observability + Backstage) | **4** | **6 GiB** (the floor is 5.5 GiB; whole GiB) |
+| the full default lab (platform + agents + observability + Backstage) | **4** | **6 GiB** (the floor is 5.7 GiB; whole GiB) |
 | platform + agents only (`configure --backstage=false --observability=false`) | 4 (the WorkerPool is a CPU of requests by itself) | 5 GiB (4.2 GiB) |
-| the platform without agents (`configure --agents=false`) | 3 | 4 GiB (3.3 GiB) |
+| the platform without agents (`configure --agents=false`; Backstage and observability stay on) | 3 | 5 GiB (4.7 GiB) |
+| the platform alone (`configure --agents=false --backstage=false --observability=false`) | 3 | 4 GiB (3.3 GiB) |
 
 Those are the floors `agentlab up` enforces — computed for what the chart
 about to be installed ships (its rendered roster, so a lab on the 3.x line is
