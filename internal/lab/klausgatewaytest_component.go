@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -148,7 +149,11 @@ func klausGatewayComponentProof(cfg *config.Config, token string, user *config.U
 	if err != nil {
 		return nil, fmt.Errorf("opening the link store through the gateway's package: %w", err)
 	}
-	if removed := removeProofLinks(store, links.Data); removed > 0 {
+	removed, err := removeProofLinks(store, links.Data)
+	if err != nil {
+		return nil, err
+	}
+	if removed > 0 {
 		note("removed %d leftover record(s) of an earlier run", removed)
 	}
 	out.baseline, err = store.Check()
@@ -157,11 +162,15 @@ func klausGatewayComponentProof(cfg *config.Config, token string, user *config.U
 	}
 	seeded := proofLinks(user, randomSuffix())
 	for _, id := range slices.Sorted(maps.Keys(seeded)) {
-		store.Put(id, seeded[id])
+		if err := store.Put(id, seeded[id]); err != nil {
+			return nil, fmt.Errorf("writing link %s through the package: %w", id, err)
+		}
 	}
 	defer func() {
+		// Best effort on the error paths: the success path removes the records
+		// itself and verifies the count.
 		for id := range seeded {
-			store.Delete(id)
+			_ = store.Delete(id)
 		}
 	}()
 	if count, err := store.Check(); err != nil {
@@ -229,8 +238,10 @@ func klausGatewayComponentProof(cfg *config.Config, token string, user *config.U
 	out.answer = turn.Text
 	note("roster through the pod: %s; answered %q", rosterLine(agents), excerpt(turn.Text, 60))
 
-	for id := range seeded {
-		store.Delete(id)
+	for _, id := range slices.Sorted(maps.Keys(seeded)) {
+		if err := store.Delete(id); err != nil {
+			return nil, fmt.Errorf("removing link %s through the package: %w", id, err)
+		}
 	}
 	if count, err := store.Check(); err != nil {
 		return nil, fmt.Errorf("the link store after the cleanup: %w", err)
@@ -356,24 +367,29 @@ func proofLinks(user *config.User, run string) map[string]*musterlink.Link {
 
 // removeProofLinks deletes the records of earlier runs — the Secret's keys
 // with the proof's prefix — and reports how many.
-func removeProofLinks(store *musterlink.SecretStore, data map[string][]byte) int {
+func removeProofLinks(store *musterlink.SecretStore, data map[string][]byte) (int, error) {
 	removed := 0
 	for id := range data {
 		if strings.HasPrefix(id, klausGatewayLinkPrefix) {
-			store.Delete(id)
+			if err := store.Delete(id); err != nil {
+				return removed, fmt.Errorf("removing leftover link %s: %w", id, err)
+			}
 			removed++
 		}
 	}
-	return removed
+	return removed, nil
 }
 
 // readBackLinks reads every seeded record through the package and checks it
 // decrypts to what was written.
 func readBackLinks(store musterlink.Store, seeded map[string]*musterlink.Link) error {
 	for _, id := range slices.Sorted(maps.Keys(seeded)) {
-		got, ok := store.Get(id)
-		if !ok {
+		got, err := store.Get(id)
+		if errors.Is(err, musterlink.ErrNotLinked) {
 			return fmt.Errorf("link %s is not in the store after it was written", id)
+		}
+		if err != nil {
+			return fmt.Errorf("reading link %s back: %w", id, err)
 		}
 		if !sameLink(got, seeded[id]) {
 			return fmt.Errorf("link %s read back differently: got sub=%s email=%s linked=%s, wrote sub=%s email=%s linked=%s", id,
