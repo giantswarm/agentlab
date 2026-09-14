@@ -290,8 +290,10 @@ Giant Swarm line [giantswarm/substrate](https://github.com/giantswarm/substrate)
 versions). **The chart ships it**: `components.substrate-crds` and
 `components.substrate` follow `components.kagent`, both land in `ate-system`
 as component releases of the chart's engine at the version the chart pins
-(`>=0.0.27-gs.5 <0.0.28-0`, the range the `WorkerPool`'s worker image
-`kagent.substrateWorkerPool.workerImage` names too), the connectivity
+(`>=0.0.30-gs.1 <0.0.31-0` from agent-platform 4.16 — upstream kagent-dev/substrate
+v0.0.29 plus the line's patches; `>=0.0.27-gs.9 <0.0.28-0` through 4.15 — the
+range the `WorkerPool`'s worker image `kagent.substrateWorkerPool.workerImage`
+names too), the connectivity
 release's `pre-install,pre-upgrade` hook Job mints what the substrate chart
 mounts but does not render (the CA/JWT pools, the actor-identity trust
 anchor, ate-api-server's authentication config; a pool that exists is never
@@ -482,6 +484,17 @@ worker image with it. On it the proof passed on both halves with the check in
 place: Ready after 15s on Harness kagent, the turn as admin@lab.local answered "klaus-gateway" from the skill, nothing left behind (revision a8949e0f2c79); platform-test 6/6 and agents-test 5/5 green on the same lab. Every skill-carrying agent of the fleet needs all three
 gates open; the upstream exits of the two patches are tracked on
 giantswarm/giantswarm#37742 (row 8).
+
+Since the 2026-09-14 re-pin the three lines sit on the shape upstream chose:
+the Substrate line on kagent-dev/substrate v0.0.29 (release `v0.0.30-gs.1`),
+whose chart declares the check as agentgateway#3318's
+`substrateEgressActorResolution` frontend policy, and its router and egress
+gateway on the agentgateway line's `v1.5.1-gs.4` — upstream agentgateway
+`main` past `9f9744cf` (the substrate ingress header of #3409 the v0.0.29
+router speaks), still admitting a `RESUMING` actor; the kagent line on upstream
+`main` `800015de` (release `v0.11.0-gs.14`, kagent-dev/kagent#2802: the a2a
+gateway addresses an actor by the `ate-target-actor` header, which only a
+router from v0.0.28 on knows — the three move together).
 
 ### The Swarmgeist proof (klaus-gateway on kagent API v2)
 
