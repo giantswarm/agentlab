@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/giantswarm/agentlab/internal/config"
@@ -102,27 +103,44 @@ func Discover(cfg *config.Config) *Discovery {
 	if gw, err := kindGatewayIP(cfg.ControlPlaneNode()); err == nil {
 		d.KindGateway = gw
 	}
-	for _, b := range config.ModelManagerBackends {
-		base := loopbackBase(b)
-		ident, ok := detectHostServer(b, base)
-		if !ok {
-			continue
-		}
-		s := HostServer{Backend: b, Ident: ident, Port: config.BackendPort(b)}
-		// Reachability needs both an address pods dial and a node to dial it
-		// from. The kind network outlives `kind delete cluster`, so a gateway
-		// without a node is the normal state after `agentlab down` — probing
-		// then would record "unreachable" from a probe that cannot run.
-		if d.KindGateway != "" && d.ClusterExists {
-			host, err := podReachableHost(cfg.ControlPlaneNode(), d.KindGateway, s.Port)
-			if err != nil {
-				s.ReachErr = err
-			} else {
-				s.Probed, s.PodHost = true, host
+	// One backend's probes tell nothing about another's, and each pays an
+	// HTTP timeout plus up to two node-side dials, so the backends run
+	// together. The slot keeps config.ModelManagerBackends' canonical order
+	// whichever finishes first.
+	found := make([]*HostServer, len(config.ModelManagerBackends))
+	var wg sync.WaitGroup
+	for i, b := range config.ModelManagerBackends {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			base := loopbackBase(b)
+			ident, ok := detectHostServer(b, base)
+			if !ok {
+				return
 			}
+			s := &HostServer{Backend: b, Ident: ident, Port: config.BackendPort(b)}
+			// Reachability needs both an address pods dial and a node to dial
+			// it from. The kind network outlives `kind delete cluster`, so a
+			// gateway without a node is the normal state after `agentlab
+			// down` — probing then would record "unreachable" from a probe
+			// that cannot run.
+			if d.KindGateway != "" && d.ClusterExists {
+				host, err := podReachableHost(cfg.ControlPlaneNode(), d.KindGateway, s.Port)
+				if err != nil {
+					s.ReachErr = err
+				} else {
+					s.Probed, s.PodHost = true, host
+				}
+			}
+			s.Models, s.ModelsErr = hostModelsFn(b, base)
+			found[i] = s
+		}()
+	}
+	wg.Wait()
+	for _, s := range found {
+		if s != nil {
+			d.Servers = append(d.Servers, *s)
 		}
-		s.Models, s.ModelsErr = hostModelsFn(b, base)
-		d.Servers = append(d.Servers, s)
 	}
 	d.FLM = detectFLM(fmt.Sprintf("http://127.0.0.1:%d", flmDefaultPort), flmDefaultPort)
 	return d
@@ -307,10 +325,21 @@ func (d *Discovery) Report(cfg *config.Config) string {
 		// The address pods dial is only knowable from a running node, and the
 		// kind network outlives `kind delete cluster` — so a known gateway
 		// with no node is the state after `agentlab down`, and saying the
-		// network is missing would deny what is there.
-		reach := "the address pods dial is not known yet (`agentlab up` creates the cluster)"
-		if d.KindGateway != "" && !d.ClusterExists {
+		// network is missing would deny what is there. A running cluster
+		// whose network has no gateway is neither, and sending that reader to
+		// `agentlab up` would deny the cluster instead.
+		var reach string
+		switch {
+		case d.KindGateway == "" && !d.ClusterExists:
+			reach = "the address pods dial is not known yet (`agentlab up` creates the cluster)"
+		case d.KindGateway == "":
+			reach = fmt.Sprintf("the address pods dial is not known — kind %q is up, but docker network %q reports no IPv4 gateway", cfg.ClusterName, kindDockerNetwork)
+		case !d.ClusterExists:
 			reach = "the address pods dial is not known while the node is not running (`agentlab up` starts it)"
+		default:
+			// Discover probes whenever both are there, so one of the cases
+			// below replaces this.
+			reach = "the address pods dial is not known"
 		}
 		switch {
 		case s.ReachErr != nil:
@@ -385,27 +414,19 @@ func noServersFound() []string {
 	return out
 }
 
-// nodeDialTimeout bounds the node-side dial, the podman counterpart of
-// tcpAnswers' own timeout. Longer, because it pays for `docker exec` too.
+// nodeDialTimeout bounds one node-side dial. Longer than a host-side dial
+// would need, because it pays for `docker exec` too.
 const nodeDialTimeout = 2 * time.Second
 
-// nodeDial dials addr from inside the node, which is the only vantage point
+// nodeDialOn dials addr from inside the node, which is the only vantage point
 // that can answer for an address the host cannot resolve (the runtime's host
 // alias). An error is the probe itself failing, never a verdict.
 //
-// The node has to be running, and that is checked rather than inferred:
-// `docker exec` into a container that is not there exits 1, exactly as bash
-// does on a refused dial, so without this a missing node would read as
-// "nothing is listening".
-func nodeDial(node, addr string) (bool, error) {
-	if !nodeRunning(node) {
-		return false, fmt.Errorf("dialing %s: node %q is not running", addr, node)
-	}
-	return nodeDialOn(node, addr)
-}
-
-// nodeDialOn is nodeDial for a caller that has already established the node is
-// running, so a resolution does not pay one `docker inspect` per dial.
+// The caller establishes that the node runs (podReachableHost does), so a
+// resolution does not pay one `docker inspect` per dial. That precondition is
+// checked and never inferred: `docker exec` into a container that is not
+// there exits 1, exactly as bash does on a refused dial, so a missing node
+// would otherwise read as "nothing is listening".
 func nodeDialOn(node, addr string) (bool, error) {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {

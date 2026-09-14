@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/giantswarm/agentlab/internal/config"
@@ -175,12 +176,24 @@ func resolveBackendEndpoint(cfg *config.Config, backend string) (string, error) 
 		return strings.TrimSuffix(ep, "/"), nil
 	}
 	node := cfg.ControlPlaneNode()
-	port := config.BackendPort(backend)
 	gw, err := kindGatewayIP(node)
 	if err != nil {
-		return "", fmt.Errorf("autodetecting the %s endpoint: %w (set platform.modelManager.endpoints.%s to skip the detection)",
-			config.BackendServerName(backend), err, backend)
+		return "", gatewayDetectionErr(backend, err)
 	}
+	return backendEndpointVia(node, backend, gw)
+}
+
+// gatewayDetectionErr is the one failure the caller cannot probe past: with no
+// gateway there is no address to dial, and the override is the way out.
+func gatewayDetectionErr(backend string, err error) error {
+	return fmt.Errorf("autodetecting the %s endpoint: %w (set platform.modelManager.endpoints.%s to skip the detection)",
+		config.BackendServerName(backend), err, backend)
+}
+
+// backendEndpointVia is resolveBackendEndpoint for a caller that holds the
+// gateway already, so a whole backend list costs one `docker network inspect`.
+func backendEndpointVia(node, backend, gw string) (string, error) {
+	port := config.BackendPort(backend)
 	// The same helper the discovery reports from, so the address named there
 	// and the address wired here cannot disagree.
 	host, err := podReachableHost(node, gw, port)
@@ -190,22 +203,60 @@ func resolveBackendEndpoint(cfg *config.Config, backend string) (string, error) 
 		// documented default, and a busy node cannot move the rendered values.
 		return fmt.Sprintf("http://%s:%d", gw, port), nil
 	case host == "":
-		return "", fmt.Errorf("no address reaches the host %s from pods: neither %s (the container runtime's gateway) nor %s (its host alias) answers — start the server, bind it to every interface, or set platform.modelManager.endpoints.%s",
+		// Both causes get their own remedy: a server that is not running
+		// answers nowhere, and binding is the fix only where the gateway is
+		// this machine — where it is a bridge inside the runtime's VM, no
+		// bind address can make the server answer on it.
+		return "", fmt.Errorf("no address reaches the host %s from pods: neither %s (the container runtime's gateway) nor %s (its host alias) answers — start the server if it is stopped, bind it to every interface if %s is this machine, or set platform.modelManager.endpoints.%s",
 			config.BackendServerName(backend), net.JoinHostPort(gw, strconv.Itoa(port)),
-			net.JoinHostPort(hostAlias(), strconv.Itoa(port)), backend)
+			net.JoinHostPort(hostAlias(), strconv.Itoa(port)), gw, backend)
 	}
 	return fmt.Sprintf("http://%s:%d", host, port), nil
 }
 
 // resolveBackendEndpoints resolves every configured backend's endpoint.
+//
+// The backends share the node and the gateway but dial a different port each,
+// so one lookup serves the list and the probes run together: a list whose
+// servers are all stopped otherwise pays two node dial timeouts per backend,
+// one after the other.
 func resolveBackendEndpoints(cfg *config.Config) (map[string]string, error) {
-	endpoints := map[string]string{}
-	for _, b := range cfg.Platform.ModelManager.Backends {
-		ep, err := resolveBackendEndpoint(cfg, b)
-		if err != nil {
-			return nil, err
+	backends := cfg.Platform.ModelManager.Backends
+	endpoints := make(map[string]string, len(backends))
+	var probe []string
+	for _, b := range backends {
+		if ep := cfg.Platform.ModelManager.EndpointFor(b); ep != "" {
+			endpoints[b] = strings.TrimSuffix(ep, "/")
+			continue
 		}
-		endpoints[b] = ep
+		probe = append(probe, b)
+	}
+	if len(probe) == 0 {
+		return endpoints, nil
+	}
+	node := cfg.ControlPlaneNode()
+	gw, err := kindGatewayIP(node)
+	if err != nil {
+		return nil, gatewayDetectionErr(probe[0], err)
+	}
+	resolved := make([]string, len(probe))
+	errs := make([]error, len(probe))
+	var wg sync.WaitGroup
+	for i, b := range probe {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			resolved[i], errs[i] = backendEndpointVia(node, b, gw)
+		}()
+	}
+	wg.Wait()
+	// In the configured order, so the same unreachable list always names the
+	// same backend.
+	for i, b := range probe {
+		if errs[i] != nil {
+			return nil, errs[i]
+		}
+		endpoints[b] = resolved[i]
 	}
 	return endpoints, nil
 }

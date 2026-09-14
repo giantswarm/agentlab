@@ -385,7 +385,7 @@ func TestDiscoveryBackendsAndHint(t *testing.T) {
 // refused connection (bash exits 1) and a hang (`timeout` exits 124) are
 // verdicts, every other exit is the probe itself failing and must not be
 // reported as an unreachable server.
-func TestNodeDialMapsExitCodes(t *testing.T) {
+func TestNodeDialOnMapsExitCodes(t *testing.T) {
 	for name, tc := range map[string]struct {
 		exit      int
 		want      bool
@@ -399,12 +399,11 @@ func TestNodeDialMapsExitCodes(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
-			// A running node whose dial exits tc.exit: `docker inspect` is the
-			// precondition nodeDial checks, and only `docker exec` carries the
-			// dial's own code.
-			installFakeTool(t, dir, "docker", "case \"$1\" in inspect) echo true ;; *) exit "+strconv.Itoa(tc.exit)+" ;; esac")
+			// Only `docker exec` carries the dial's own code: the caller has
+			// already established that the node runs.
+			installFakeTool(t, dir, "docker", "exit "+strconv.Itoa(tc.exit))
 			withPodman(t, true)
-			got, err := nodeDial("agentlab-control-plane", "169.254.1.2:11434")
+			got, err := nodeDialOn("agentlab-control-plane", "169.254.1.2:11434")
 			if (err != nil) != tc.wantProbe {
 				t.Fatalf("err = %v, want probe failure %v", err, tc.wantProbe)
 			}
@@ -420,7 +419,7 @@ func TestNodeDialMapsExitCodes(t *testing.T) {
 // dial. Reading that as "nothing is listening" dropped a server from the
 // configuration after `agentlab down`, which leaves the kind network (and so
 // the gateway) behind with no container to dial from.
-func TestNodeDialNeedsARunningNode(t *testing.T) {
+func TestPodReachableHostNeedsARunningNode(t *testing.T) {
 	for name, inspect := range map[string]string{
 		"node is gone":        "exit 1",
 		"node is not running": "echo false",
@@ -428,7 +427,7 @@ func TestNodeDialNeedsARunningNode(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
 			installFakeTool(t, dir, "docker", "case \"$1\" in inspect) "+inspect+" ;; *) exit 1 ;; esac")
-			if _, err := nodeDial("agentlab-control-plane", "169.254.1.2:11434"); err == nil {
+			if _, err := podReachableHost("agentlab-control-plane", gatewayIP, 11434); err == nil {
 				t.Fatal("a probe that cannot run must be an error, not a verdict")
 			}
 		})
@@ -466,8 +465,9 @@ func TestReportToolsLine(t *testing.T) {
 	}
 }
 
-// A probe that could not run leaves OnGateway unset, and the report says so
-// instead of blaming the server's bind address.
+// A probe that could not run leaves Probed false, so the report says so
+// instead of blaming the server's bind address — and the server still
+// enrolls, because only an explicit "no" is left out.
 func TestReportSaysWhenTheProbeCouldNotRun(t *testing.T) {
 	d := &Discovery{
 		KindGateway: "169.254.1.2",
@@ -478,9 +478,15 @@ func TestReportSaysWhenTheProbeCouldNotRun(t *testing.T) {
 			ReachErr: errors.New("no bash in the node"),
 		}},
 	}
+	if got := d.Backends(); !slices.Equal(got, []string{config.ModelManagerBackendOllama}) {
+		t.Fatalf("backends = %v, want the unprobed server kept", got)
+	}
 	out := d.Report(config.Default())
 	if !strings.Contains(out, "cannot tell whether pods reach it on 169.254.1.2") {
 		t.Errorf("report does not name the failed probe:\n%s", out)
+	}
+	if !strings.Contains(out, "no bash in the node") {
+		t.Errorf("report does not carry why the probe failed:\n%s", out)
 	}
 	if strings.Contains(out, "OLLAMA_HOST=0.0.0.0") {
 		t.Errorf("report blames the server's bind address for a probe failure:\n%s", out)
