@@ -7,13 +7,16 @@ import (
 	"github.com/giantswarm/agentlab/internal/config"
 )
 
+// testImageDir is the image directory the tests configure.
+const testImageDir = "/srv/images"
+
 // TestKVMLine: the discovery report says whether the VM provisioner can run
 // as a pod of the node here and what the configuration does with it.
 func TestKVMLine(t *testing.T) {
 	cfg := config.Default()
-	cfg.Platform.VMManager = config.VMManager{Enabled: true, ImageDir: "/srv/images"}
+	cfg.Platform.VMManager = config.VMManager{Enabled: true, ImageDir: testImageDir}
 	d := &Discovery{}
-	if got := d.kvmLine(cfg); !strings.Contains(got, "present") || !strings.Contains(got, "on, images from /srv/images") {
+	if got := d.kvmLine(cfg); !strings.Contains(got, "present") || !strings.Contains(got, "on, images from "+testImageDir) {
 		t.Fatalf("with the devices and a directory: %q", got)
 	}
 	cfg.Platform.VMManager.ImageDir = ""
@@ -59,10 +62,10 @@ func TestVMManagerHint(t *testing.T) {
 	if got := vmManagerHint(cfg); !strings.Contains(got, "not wired") {
 		t.Fatalf("off: %q", got)
 	}
-	cfg.Platform.VMManager = config.VMManager{Enabled: true, ImageDir: "/srv/images"}
+	cfg.Platform.VMManager = config.VMManager{Enabled: true, ImageDir: testImageDir}
 	cfg.Platform.DevImages = map[string]string{"vm-manager": "vm-manager:dev"}
 	got := vmManagerHint(cfg)
-	for _, want := range []string{"/srv/images", "vm-manager:dev", "x_vm-manager_*", toolGroupAgentPlatform} {
+	for _, want := range []string{testImageDir, "vm-manager:dev", "x_vm-manager_*", toolGroupAgentPlatform} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("hint lacks %q: %q", want, got)
 		}

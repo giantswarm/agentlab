@@ -40,12 +40,9 @@ const vmManagerMCPServer = "vm-manager"
 // stay byte-identical across machines.
 const vmManagerImageMount = "/var/lib/agentlab/vm-manager/images"
 
-// vm-manager's own paths: the MCP endpoint (the chart's mcp.path) and the
-// guarded capability report the proof calls.
-const (
-	vmManagerMCPPath  = "/mcp"
-	vmManagerHostPath = "/api/v1/host"
-)
+// vmManagerHostPath is the guarded capability report the proof calls; the
+// MCP endpoint is the chart's mcp.path, dialed by muster alone.
+const vmManagerHostPath = "/api/v1/host"
 
 // kvmDevices are the node devices the pod mounts from the node: without them
 // vm-manager starts, reports them under `missing`, and create_vm cannot work.
@@ -155,9 +152,6 @@ func removeLegacyVMManagerRegistration(ctx context.Context) error {
 func vmManagerServiceURL() string {
 	return fmt.Sprintf("http://%s.%s.svc.cluster.local:8080", vmManagerMCPServer, platformNamespace)
 }
-
-// vmManagerURL is the MCP endpoint muster dials.
-func vmManagerURL() string { return vmManagerServiceURL() + vmManagerMCPPath }
 
 // vmManagerHint is the platform-up summary for the vm-manager wiring.
 func vmManagerHint(cfg *config.Config) string {
