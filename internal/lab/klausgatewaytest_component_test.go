@@ -175,7 +175,9 @@ func TestProofLinks(t *testing.T) {
 	}
 	mem := musterlink.NewMemStore()
 	for id, l := range links {
-		mem.Put(id, l)
+		if err := mem.Put(id, l); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := readBackLinks(mem, links); err != nil {
 		t.Fatalf("read back from a store holding them: %v", err)
@@ -184,12 +186,18 @@ func TestProofLinks(t *testing.T) {
 	if sameLink(first, changed) {
 		t.Error("a rotated refresh token must not compare equal")
 	}
-	mem.Put(klausGatewayLinkPrefix+"r1-1", changed)
+	if err := mem.Put(klausGatewayLinkPrefix+"r1-1", changed); err != nil {
+		t.Fatal(err)
+	}
 	if err := readBackLinks(mem, links); err == nil || !strings.Contains(err.Error(), "read back differently") {
 		t.Fatalf("a changed record must be reported, got %v", err)
 	}
-	mem.Put(klausGatewayLinkPrefix+"r1-1", first)
-	mem.Delete(klausGatewayLinkPrefix + "r1-2")
+	if err := mem.Put(klausGatewayLinkPrefix+"r1-1", first); err != nil {
+		t.Fatal(err)
+	}
+	if err := mem.Delete(klausGatewayLinkPrefix + "r1-2"); err != nil {
+		t.Fatal(err)
+	}
 	if err := readBackLinks(mem, links); err == nil || !strings.Contains(err.Error(), "not in the store") {
 		t.Fatalf("a missing record must be reported, got %v", err)
 	}
