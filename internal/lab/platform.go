@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -373,6 +374,14 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	// note here — the install below reports the same error in Helm's words.
 	roster, err := renderPlatformRoster(chart, values)
 	if err != nil {
+		// A chart that refuses these values refuses them on the cluster too:
+		// the install would carry them to helm-controller and fail there, so
+		// it is not started. Every other render failure stays a note — the
+		// install reports it in Helm's own words if it is real.
+		var rejection *schemaRejection
+		if errors.As(err, &rejection) {
+			return fmt.Errorf("%s does not accept the values the lab renders for it, so the install would fail:\n\n  %s\n\nSet platform.chartVersion in agentlab.yaml to a release that accepts them", chart, strings.ReplaceAll(strings.TrimSpace(err.Error()), "\n", "\n  "))
+		}
 		note("cannot render %s (%v); the node pulls the platform images itself", chart, excerpt(err.Error(), 300))
 	}
 	// Agent Substrate comes with the chart (the substrate component follows
@@ -398,7 +407,10 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	// anything this misses is pulled in-node under the install's wait
 	// timeout, exactly as before.
 	step("Side-loading the platform images (the host cache survives `agentlab down`)")
-	images, renders := platformImages(cfg, roster)
+	images, renders, err := platformImages(cfg, roster)
+	if err != nil {
+		return err
+	}
 	sideloadPlatformImages(cfg, images)
 	// The dev images (platform.devImages, devimages.go): the Deployment
 	// targets side-loaded and their chart image names read off the component

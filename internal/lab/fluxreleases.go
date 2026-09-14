@@ -291,13 +291,17 @@ const cnpgRelease = "cloudnative-pg"
 // mcp-prometheus HelmRelease the same way. The images the engine composes at
 // run time — the FluxInstance's source- and helm-controller — are in no
 // render; the snapshot manifest covers them from the second boot on.
-// Best-effort throughout: failures are notes, the node pulls the rest. The
-// component renders come back too, keyed by release name (nil without a
-// roster): the dev-image swap reads its image names off them
+// Best-effort for what it is for — a render the registry or the network
+// denied is a note, and the node pulls those images itself — with one
+// exception it returns an error for: a component chart that REFUSES the
+// values (schemaRejection). That is not a preload problem but the install's
+// outcome, known early; refusing here costs seconds instead of the install's
+// whole wait. The component renders come back too, keyed by release name (nil
+// without a roster): the dev-image swap reads its image names off them
 // (resolveDevImageNames).
-func platformImages(cfg *config.Config, roster *platformRoster) ([]string, map[string]string) {
+func platformImages(cfg *config.Config, roster *platformRoster) ([]string, map[string]string, error) {
 	if roster == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	images := scrapeImages(roster.manifest)
 	releases := roster.releases
@@ -313,8 +317,17 @@ func platformImages(cfg *config.Config, roster *platformRoster) ([]string, map[s
 		apiVersions = append(slices.Clone(apiVersions), "monitoring.coreos.com/v1")
 	}
 	componentImages, filtered, renders, errs := fluxReleaseImages(releases, apiVersions)
+	var rejected []error
 	for _, err := range errs {
+		var rejection *schemaRejection
+		if errors.As(err, &rejection) {
+			rejected = append(rejected, err)
+			continue
+		}
 		note("component render skipped: %s", excerpt(err.Error(), 300))
+	}
+	if len(rejected) > 0 {
+		return nil, nil, rejectedComponentsError(rejected)
 	}
 	note("rendered %d of %d component charts%s", len(releases)-len(errs), len(releases), filteredNote(filtered))
 	images = append(images, componentImages...)
@@ -323,7 +336,31 @@ func platformImages(cfg *config.Config, roster *platformRoster) ([]string, map[s
 	if len(byDigest) > 0 {
 		note("%d digest-pinned refs are the node's to pull (a saved archive of a digest-only reference imports as an unnamed image the CRI cannot start a pod from):\n      %s", len(byDigest), strings.Join(byDigest, "\n      "))
 	}
-	return images, renders
+	return images, renders, nil
+}
+
+// rejectedComponentsError words the component charts that refuse the values
+// the meta chart forwards to them.
+//
+// This is a statement about the install, not about the preload: the values are
+// the HelmRelease's own spec.values and the chart is the one its OCIRepository
+// resolves to, so helm-controller coalesces and validates exactly this pair on
+// the cluster. A HelmRelease may also carry valuesFrom, which the lab does not
+// read — but Flux lets spec.values win, so a reference can only add keys that
+// are missing here, never rescue one that is refused. What is refused here is
+// therefore refused there, and the install would spend its whole wait
+// discovering it.
+//
+// Printed whole, never through excerpt: the offending path is the last line of
+// Helm's message and it is the only part worth reading.
+func rejectedComponentsError(rejected []error) error {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d component chart(s) refuse the values %s forwards to them, so the install would fail after its wait:\n", len(rejected), platformRelease)
+	for _, err := range rejected {
+		fmt.Fprintf(&b, "\n  %s\n", strings.ReplaceAll(strings.TrimSpace(err.Error()), "\n", "\n  "))
+	}
+	b.WriteString("\nThe meta chart and the component it pins disagree. Set platform.chartVersion in agentlab.yaml to a release whose components accept these values.")
+	return errors.New(b.String())
 }
 
 // splitDigestRefs separates the refs a side-load can carry — tagged

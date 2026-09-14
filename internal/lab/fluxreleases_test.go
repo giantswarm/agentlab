@@ -2,8 +2,11 @@ package lab
 
 import (
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/giantswarm/agentlab/internal/config"
 )
 
 // The preload joins each rendered HelmRelease with the OCIRepository its
@@ -241,5 +244,78 @@ func TestSplitDigestRefs(t *testing.T) {
 	}
 	if len(byDigest) != 2 {
 		t.Errorf("byDigest = %v", byDigest)
+	}
+}
+
+// TestPlatformImagesRefusesARejectedComponent: a component chart that refuses
+// the values its HelmRelease carries stops the install, while a component the
+// render cannot reach stays a note and the rest of the preload proceeds.
+// These are the two halves of the same step: one predicts the install's
+// outcome, the other only says an image will be pulled in-node.
+func TestPlatformImagesRefusesARejectedComponent(t *testing.T) {
+	dir := isolateHelm(t)
+	chartDir := writeClosedSchemaChart(t, dir)
+	cfg := &config.Config{}
+
+	rosterFor := func(values string) *platformRoster {
+		t.Helper()
+		manifest := `apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  name: closedchart
+  namespace: default
+spec:
+  url: ` + chartDir + `
+  ref:
+    tag: "0.1.0"
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: closedchart
+  namespace: default
+spec:
+  chartRef:
+    kind: OCIRepository
+    name: closedchart
+    namespace: default
+  values:
+` + values
+		releases, err := fluxReleases(manifest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(releases) != 1 {
+			t.Fatalf("fixture joined %d releases, want 1", len(releases))
+		}
+		return &platformRoster{manifest: manifest, releases: releases}
+	}
+
+	// Refused: a key the chart's closed schema does not allow.
+	_, _, err := platformImages(cfg, rosterFor("    nosuchkey: 1\n"))
+	if err == nil {
+		t.Fatal("a component chart that refuses its values did not stop the install")
+	}
+	for _, want := range []string{"refuse", "nosuchkey", "platform.chartVersion"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not mention %q:\n%s", want, err)
+		}
+	}
+	// Whole, not an excerpt: the offending path is the end of Helm's message.
+	if strings.Contains(err.Error(), "...") {
+		t.Errorf("the refusal is truncated, hiding the schema path:\n%s", err)
+	}
+
+	// Accepted values, failing template: nothing here says the install would
+	// fail, so the preload notes it and carries on.
+	if _, _, err := platformImages(cfg, rosterFor("    boom: true\n")); err != nil {
+		t.Errorf("an ordinary render failure stopped the install: %v", err)
+	}
+
+	// A chart that cannot be reached at all is the same best-effort case.
+	unreachable := rosterFor("    known: a\n")
+	unreachable.releases[0].URL = filepath.Join(dir, "no-such-chart")
+	if _, _, err := platformImages(cfg, unreachable); err != nil {
+		t.Errorf("an unreachable component chart stopped the install: %v", err)
 	}
 }

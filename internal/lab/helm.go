@@ -19,6 +19,7 @@ import (
 	"helm.sh/helm/v4/pkg/action"
 	"helm.sh/helm/v4/pkg/chart"
 	"helm.sh/helm/v4/pkg/chart/common"
+	chartutil "helm.sh/helm/v4/pkg/chart/common/util"
 	"helm.sh/helm/v4/pkg/chart/loader"
 	chartv2 "helm.sh/helm/v4/pkg/chart/v2"
 	valuesloader "helm.sh/helm/v4/pkg/chart/v2/loader"
@@ -468,6 +469,43 @@ func lastRevisionUninstalled(revisions []ri.Releaser) (bool, error) {
 	return last.Info != nil && last.Info.Status == releasecommon.StatusUninstalled, nil
 }
 
+// schemaRejection is a render the chart's own values.schema.json refused: the
+// values are not merely incomplete, they are not values this chart accepts.
+// It is worth a type because it is the one render failure that predicts the
+// install — helm-controller coalesces and validates the same way against the
+// same chart, so what is refused here is refused on the cluster — while every
+// other failure (a registry that will not answer, a tag that is not there,
+// no network) says nothing about whether the install would succeed.
+type schemaRejection struct{ err error }
+
+func (e *schemaRejection) Error() string { return e.err.Error() }
+func (e *schemaRejection) Unwrap() error { return e.err }
+
+// asSchemaRejection labels err a schemaRejection when the values violate the
+// chart's schema, and returns it untouched otherwise.
+//
+// The verdict comes from asking the chart, never from reading Helm's message:
+// the same coalesce-then-validate the render just did (ToRenderValues), so a
+// reworded Helm error cannot turn a rejection into an ordinary failure. It
+// runs only on the error path — a render that succeeded is never
+// second-guessed, so this cannot refuse a chart Helm accepts.
+func asSchemaRejection(ch chart.Charter, vals map[string]any, err error) error {
+	if err == nil {
+		return nil
+	}
+	coalesced, cerr := chartutil.CoalesceValues(ch, vals)
+	if cerr != nil {
+		return err
+	}
+	serr := chartutil.ValidateAgainstSchema(ch, coalesced)
+	if serr == nil {
+		return err
+	}
+	// Helm's own message opens with the name of the chart whose schema
+	// refused — the subchart's, where it is one — so nothing is added here.
+	return &schemaRejection{err: serr}
+}
+
 // helmTemplate is `helm template <release> <chart> -n <ns> -f <values>
 // [--api-versions ...]`: a client-only render — no cluster is contacted,
 // .Capabilities is Helm's default set plus apiVersions — of the chart's
@@ -491,6 +529,15 @@ func helmTemplate(namespace, releaseName, ref, version string, vals map[string]a
 	}
 	rendered, err := install.RunWithContext(context.Background(), ch, vals)
 	if err != nil {
+		// A refusal is returned as it is: the caller names the release and
+		// the chart, and the invocation h.fail would prepend only buries the
+		// schema path that is the whole message.
+		classified := asSchemaRejection(ch, vals, err)
+		var rejection *schemaRejection
+		if errors.As(classified, &rejection) {
+			h.log.dump()
+			return "", classified
+		}
 		return "", h.fail(invocation, err)
 	}
 	rel, err := asV1Release(rendered)

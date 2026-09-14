@@ -339,3 +339,72 @@ func TestHelmValuesFilesLaterWins(t *testing.T) {
 		t.Errorf("keys only the base file has must survive, got %#v", vals["keep"])
 	}
 }
+
+// writeClosedSchemaChart lays out a chart whose values.schema.json is closed
+// (additionalProperties: false) — the shape every component chart of the
+// platform that rejects a forwarded key has — plus a template that fails on
+// demand, so a schema rejection and an ordinary render failure can be told
+// apart in the same chart.
+func writeClosedSchemaChart(t *testing.T, dir string) string {
+	t.Helper()
+	chartDir := filepath.Join(dir, "closedchart")
+	files := map[string]string{
+		"Chart.yaml":  "apiVersion: v2\nname: closedchart\nversion: 0.1.0\n",
+		"values.yaml": "known: a\nboom: false\n",
+		"values.schema.json": `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {"known": {"type": "string"}, "boom": {"type": "boolean"}},
+  "additionalProperties": false
+}`,
+		"templates/cm.yaml": `{{- if .Values.boom }}{{ fail "boom" }}{{ end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}
+`,
+	}
+	for name, body := range files {
+		path := filepath.Join(chartDir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return chartDir
+}
+
+// TestHelmTemplateSchemaRejection: a value the chart's schema forbids comes
+// back as a *schemaRejection — the class the install must refuse before it
+// starts — while a template that merely fails does not, however it is worded.
+func TestHelmTemplateSchemaRejection(t *testing.T) {
+	dir := isolateHelm(t)
+	chartDir := writeClosedSchemaChart(t, dir)
+
+	_, err := helmTemplate("apps", "rel", chartDir, "", map[string]any{"unknown": 1}, nil)
+	if err == nil {
+		t.Fatal("a value outside the chart's closed schema rendered")
+	}
+	var rejected *schemaRejection
+	if !errors.As(err, &rejected) {
+		t.Fatalf("a schema rejection is not reported as one: %v", err)
+	}
+	if !strings.Contains(err.Error(), "closedchart") {
+		t.Errorf("the rejection does not name the chart whose schema refused: %v", err)
+	}
+	if !strings.Contains(err.Error(), "unknown") {
+		t.Errorf("the rejection does not name the offending key: %v", err)
+	}
+
+	// The other half: the values are fine, the template fails. Nothing here
+	// predicts the install, so it must NOT be a schema rejection.
+	_, err = helmTemplate("apps", "rel", chartDir, "", map[string]any{"boom": true}, nil)
+	if err == nil {
+		t.Fatal("the failing template rendered")
+	}
+	if errors.As(err, &rejected) {
+		t.Fatalf("an ordinary template failure is read as a schema rejection: %v", err)
+	}
+}

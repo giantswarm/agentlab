@@ -863,6 +863,22 @@ data the page reads — see [The muster plugin](backstage.md#the-muster-plugin).
 
 ## Platform gotchas
 
+- **A component chart that refuses its values stops the install before it
+  starts.** The boot renders every component chart offline to side-load its
+  images, at the version its `OCIRepository` resolves to and with the values
+  its `HelmRelease` carries — the same pair helm-controller validates on the
+  cluster. Most render failures there are notes (a registry that will not
+  answer, a chart whose `kubeVersion` an offline render cannot satisfy): the
+  node pulls those images itself and the install proceeds. One is not. When a
+  chart's own `values.schema.json` *refuses* the values, the install would
+  carry them to helm-controller and fail after its whole wait, so `agentlab
+  platform` refuses immediately instead, printing the schema path Helm names
+  and the release it came from. The usual cause is a meta chart whose
+  component range floats onto a chart from another line — `platform.chartVersion`
+  3.20.2 carries `agent-platform-connectivity >=1.0.0`, which resolves to a
+  4.x connectivity that rejects the 3.x `kyvernoPolicies.*` keys the meta
+  chart still forwards. Pin `platform.chartVersion` to a release whose
+  components accept its values.
 - **A cluster built by an earlier agentlab needs a clean slate.** Before the
   chart brought its own engine, the lab installed the agent-platform-standalone
   umbrella under the same release name and its own Flux controllers in
