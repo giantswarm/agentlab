@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -16,12 +17,12 @@ func TestKVMLine(t *testing.T) {
 	cfg := config.Default()
 	cfg.Platform.VMManager = config.VMManager{Enabled: true, ImageDir: testImageDir}
 	d := &Discovery{}
-	if got := d.kvmLine(cfg); !strings.Contains(got, "present") || !strings.Contains(got, "on, images from "+testImageDir) {
+	if got := d.kvmLine(cfg); !strings.Contains(got, "present") || !strings.Contains(got, "a local guest image build from "+testImageDir) {
 		t.Fatalf("with the devices and a directory: %q", got)
 	}
 	cfg.Platform.VMManager.ImageDir = ""
-	if got := d.kvmLine(cfg); !strings.Contains(got, "no image directory") {
-		t.Fatalf("without a directory the report must say so: %q", got)
+	if got := d.kvmLine(cfg); !strings.Contains(got, "the release's guest image") {
+		t.Fatalf("without a directory the report names the release's image: %q", got)
 	}
 	cfg.Platform.VMManager.Enabled = false
 	if got := d.kvmLine(cfg); !strings.Contains(got, "--vm-manager") {
@@ -43,16 +44,36 @@ func TestKVMFixHint(t *testing.T) {
 	}
 }
 
-// TestVMManagerImageMount: the chart's images.hostPath is the node path the
-// image directory is mounted at, or nothing without a directory.
-func TestVMManagerImageMount(t *testing.T) {
+// TestVMManagerGuestImageFor: without a local build, and before one is
+// pushed (the renders of `agentlab up`), the chart keeps its default (nil);
+// a record reads back with its digest, a missing or digest-less one is an
+// error for the reader.
+func TestVMManagerGuestImageFor(t *testing.T) {
 	cfg := config.Default()
-	if got := vmManagerImageMountFor(cfg); got != "" {
-		t.Fatalf("no directory, got %q", got)
+	got, err := vmManagerGuestImageFor(cfg)
+	if err != nil || got != nil {
+		t.Fatalf("no directory: got %+v, %v", got, err)
 	}
-	cfg.Platform.VMManager.ImageDir = "/home/x/vm-manager/images/build"
-	if got := vmManagerImageMountFor(cfg); got != vmManagerImageMount {
-		t.Fatalf("got %q, want %q", got, vmManagerImageMount)
+	cfg.Platform.VMManager.ImageDir = testImageDir
+	if got, err := vmManagerGuestImageFor(cfg); err != nil || got != nil {
+		t.Fatalf("a directory before the push renders the chart default, got %+v, %v", got, err)
+	}
+	path := t.TempDir() + "/record.json"
+	if err := os.WriteFile(path, []byte(`{"imageDir":"`+testImageDir+`","reference":"localhost:5001/vm-manager-guest-image:dev","digest":"sha256:abc"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	record, err := readGuestImageRecord(path)
+	if err != nil || record.Digest != "sha256:abc" {
+		t.Fatalf("record: %+v, %v", record, err)
+	}
+	if _, err := readGuestImageRecord(t.TempDir() + "/missing.json"); err == nil {
+		t.Fatal("a missing record must be an error")
+	}
+	if err := os.WriteFile(path, []byte(`{"digest":""}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readGuestImageRecord(path); err == nil {
+		t.Fatal("a record without a digest must be an error")
 	}
 }
 
