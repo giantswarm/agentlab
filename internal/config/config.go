@@ -121,9 +121,10 @@ const DevImageHarness = "harness"
 
 // vmManagerChartFloor is the first agent-platform release whose vm-manager
 // component (components.vm-manager) comes from gsoci and fetches its guest
-// image as an artifact (vm-manager >= 0.20.1, the guestImage values this lab
-// sets); 4.11 and 4.12 pinned the ghcr.io chart with the node-path inputs.
-var vmManagerChartFloor = semver.MustParse("4.13.0")
+// image as an artifact (vm-manager >= 0.20.2, the guestImage values this lab
+// sets; giantswarm/agent-platform#452); 4.11 to 4.14 pinned the ghcr.io chart
+// with the node-path inputs.
+var vmManagerChartFloor = semver.MustParse("4.15.0")
 
 // DefaultDevRegistryPort is the host port of the lab registry when
 // agentlab.yaml sets none: kind's documented local-registry port.
