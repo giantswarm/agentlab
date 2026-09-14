@@ -211,7 +211,7 @@ func tryItBlock(cfg *config.Config) string {
 		cmds = append(cmds, [2]string{"agentlab models-test", "pull -> ModelConfig -> agent turn -> unload -> delete, through the platform"})
 	}
 	if cfg.VMManagerEnabled() {
-		cmds = append(cmds, [2]string{"agentlab vm-manager-test", "the host vm-manager as the person: 401 anonymous -> get_host -> create_vm -> ready -> delete_vm, through muster"})
+		cmds = append(cmds, [2]string{"agentlab vm-manager-test", "vm-manager (the VM provisioner as a pod of the node) as the person: 401 anonymous -> get_host -> create_vm -> ready -> delete_vm, through muster"})
 	}
 	if cfg.Platform.Enabled && cfg.Platform.Agents {
 		cmds = append(cmds, [2]string{"agentlab agents-test", "agent-manager as the caller: create -> ready -> update -> delete, a viewer refused, the ServiceAccount without RBAC"})

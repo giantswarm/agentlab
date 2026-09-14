@@ -301,14 +301,7 @@ func checkToolGroupLabels(labelled []labelledServer, oauth labelledServer, fakeF
 			continue
 		}
 		if s.Labels[managedByLabel] == managedByAgentlabValue {
-			// The lab's registration of a host service (vmmanager.go)
-			// stands in for the chart's on a management cluster and
-			// carries the platform tool group the chart would stamp.
-			if s.Labels[vmManagerHostServiceLabel] != "" && v == toolGroupAgentPlatform {
-				chartLabelled = append(chartLabelled, s.key()+"="+v+" (host service)")
-				continue
-			}
-			return nil, fmt.Errorf("MCPServer %s is lab-created but carries %s=%s — only the fake-fleet fixture and a host-service registration are labelled",
+			return nil, fmt.Errorf("MCPServer %s is lab-created but carries %s=%s — only the fake-fleet fixture is labelled; the platform's own servers (agent-manager, model-manager, vm-manager) are the charts' and carry the group from their templates",
 				s.key(), toolGroupLabel, v)
 		}
 		chartLabelled = append(chartLabelled, s.key()+"="+v)

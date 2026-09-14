@@ -63,10 +63,10 @@ trusting the same issuer.
 - **Models.** An Anthropic default; extra model configs for OpenAI-compatible,
   Gemini and Ollama endpoints; managed models through model-manager fronting
   the model servers on the host — an Ollama, a Lemonade Server, an LM Studio.
-- **VMs.** vm-manager, the platform's VM provisioner, running on the lab
-  host (KVM) and registered with muster as `x_vm-manager_*`: VMs with an
-  instance metadata service, a vTPM and attestation, created by the person
-  or an agent who asked.
+- **VMs.** vm-manager, the platform's VM provisioner, as a pod of the KVM
+  node (the chart's `components.vm-manager`) registered with muster as
+  `x_vm-manager_*`: VMs with an instance metadata service, a vTPM and
+  attestation, created by the person or an agent who asked.
 - **Observability.** A minimal Prometheus plus mcp-prometheus, so PromQL
   questions about the lab go through MCP too.
 - **Identity you can reason about.** Three throwaway users, a fixed group
@@ -128,7 +128,7 @@ machine, is in [Getting started](docs/getting-started.md).
 | [Agents](docs/agents.md) | The kagent runtime, the default ModelConfig and the API key Secret |
 | [The migration rehearsal](docs/migration-rehearsal.md) | A 3.x lab with the four fleet shapes upgraded in place to the 4.x line: the command sequence, the timings, what the migrate Job rewrote, refused and deleted, what an installation's cut-over does differently |
 | [Models](docs/models.md) | Extra model configs, model servers on the host, managed models through model-manager |
-| [vm-manager](docs/vm-manager.md) | The platform's VM provisioner on the lab host: discovery, the muster registration, the environment it runs from, the proof |
+| [vm-manager](docs/vm-manager.md) | The platform's VM provisioner as a pod of the node: the KVM devices, the image directory, the dev image, the golden PCR recipe, the proof |
 | [Observability](docs/observability.md) | Prometheus + mcp-prometheus, and Backstage's metrics views |
 | [Backstage](docs/backstage.md) | The human frontend: the muster plugin, agents and models in the portal, the agent create flow |
 | [Identity](docs/identity.md) | Users and groups, the shared issuer, the Dex version, wiring another app, `trustedPeers` |

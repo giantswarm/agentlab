@@ -1,0 +1,66 @@
+# agentlab lab configuration. Regenerate with `agentlab configure`.
+# Passwords are lab-only throwaway credentials; the hash is cached so
+# rendered manifests stay byte-identical across runs (no spurious pod rolls).
+clusterName: agentlab
+dexPort: 32000
+dexImage: ghcr.io/dexidp/dex:v2.45.1
+aiModel: claude-sonnet-4-6
+users:
+    - email: admin@lab.local
+      username: admin
+      name: Lab Admin
+      password: password
+      passwordHash: $2a$10$eBu4z0aezFsCgGj9WG2B5eW0q7sOzzeI2768lbOHXQBR7r8Y/eOMK
+      groups:
+        - platform-admins
+        - developers
+    - email: dev@lab.local
+      username: dev
+      name: Lab Developer
+      password: password
+      passwordHash: $2a$10$kvGoaEzhWS9DkyX4ZQ9BP.l5/v0kEcfKPWwRk8QoxFjpkpP0KEWIW
+      groups:
+        - developers
+    - email: viewer@lab.local
+      username: viewer
+      name: Lab Viewer
+      password: password
+      passwordHash: $2a$10$fxVsc/lBqArzi5vTHLGDAOW0.HZWRZeP/MJoL1hoYMw2tQwNk08hi
+      groups:
+        - viewers
+platform:
+    enabled: true
+    agents: true
+    observability: true
+    agentsPort: 8081
+    musterPort: 8092
+    domain: 127.0.0.1.nip.io
+    gatewayPort: 443
+    tls: {}
+    apsRepo: https://github.com/giantswarm/agent-platform-standalone
+    apsRef: e946a2f2f68f7408042f1ba36ad539ecd286d39b
+    extraModels:
+        - name: qwen3-8-27b
+          provider: OpenAI
+          model: qwen3-8-27b
+          baseUrl: https://qwen3-8-27b-kserve.k8s-internal.home.derstappen.com/v1
+        - name: qwen35-local
+          provider: OpenAI
+          model: qwen3.5:9b
+          baseUrl: http://172.21.0.1:11434/v1
+        - name: lemonade-npu
+          provider: OpenAI
+          model: qwen3-it-4b-FLM
+          baseUrl: http://172.21.0.1:13305/v1
+        - name: gpt-6-astra
+          provider: OpenAI
+          model: gpt-6-astra
+          apiKeyEnv: OPENAI_API_KEY
+    modelManager:
+        enabled: true
+        backends:
+            - ollama
+            - lemonade
+backstage:
+    enabled: true
+    port: 7007

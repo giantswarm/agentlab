@@ -104,7 +104,7 @@ const ChartRepository = "oci://gsoci.azurecr.io/charts/giantswarm/agent-platform
 // agent-platform chart's component names (its `components.<name>` entries)
 // for the Deployments the lab's dev loops build from a checkout, plus
 // DevImageHarness for the platform Harness's runtime image.
-var DevImageComponents = []string{"muster", "backstage", "kagent", "mcp-kubernetes", "model-manager", "agent-manager", DevImageHarness}
+var DevImageComponents = []string{"muster", "backstage", "kagent", "mcp-kubernetes", "model-manager", "agent-manager", "vm-manager", DevImageHarness}
 
 // DevImageHarness is the devImages key of the platform Harness's workload
 // image — the Go ADK runtime every agent runs on under kagent API v2. Not a
@@ -113,6 +113,10 @@ var DevImageComponents = []string{"muster", "backstage", "kagent", "mcp-kubernet
 // own layer cache, so the lab pushes the local build to its registry
 // (DevRegistryPort) and forwards the digest through kagent.harness.image.
 const DevImageHarness = "harness"
+
+// vmManagerChartFloor is the first agent-platform release with the vm-manager
+// component (components.vm-manager).
+var vmManagerChartFloor = semver.MustParse("4.11.0")
 
 // DefaultDevRegistryPort is the host port of the lab registry when
 // agentlab.yaml sets none: kind's documented local-registry port.
@@ -256,74 +260,63 @@ type Platform struct {
 	// `agentlab configure` fills the backends from what answers on this
 	// machine, on every run.
 	ModelManager ModelManager `yaml:"modelManager"`
-	// A vm-manager on the lab host (github.com/giantswarm/vm-manager): the
-	// platform's VM provisioner runs on the KVM host itself, never in a pod,
-	// so the lab registers it with muster as an external MCPServer
-	// (x_vm-manager_<tool>, tool group agent-platform) dialed through the
-	// kind docker network's gateway, and writes the environment its
-	// `serve` needs to trust the lab Dex (state/vm-manager.env). `agentlab
-	// configure` turns it on whenever a vm-manager answers on this machine.
+	// The platform's VM provisioner (github.com/giantswarm/vm-manager) as a
+	// pod of the kind node: the chart's components.vm-manager, turned on by
+	// the lab's values (x_vm-manager_<tool> through muster, tool group
+	// agent-platform, forward-token auth against the lab Dex). The node is a
+	// privileged container, so the host's /dev/kvm and /dev/vhost-vsock are
+	// in it for the pod; the image directory of a vm-manager checkout
+	// reaches the pod through a kind extraMount (imageDir). `agentlab
+	// configure` turns it off on a machine without the devices; --vm-manager
+	// turns it on. A build of the checkout swaps in through devImages.
 	VMManager VMManager `yaml:"vmManager"`
 }
 
-// VMManager configures the lab's wiring of a host vm-manager.
+// VMManager configures the chart's vm-manager component in the lab.
 type VMManager struct {
-	// On, `agentlab platform` registers the host vm-manager with muster
-	// (forward-token auth: vm-manager validates the person's Dex id_token
-	// itself) and proves it reachable from a pod first. `agentlab configure`
-	// follows the host — on when a vm-manager answers, off when none does —
-	// unless --vm-manager pins it.
+	// On, `agentlab platform` enables components.vm-manager: the pod with
+	// the node's KVM devices, OAuth against the lab Dex and the muster
+	// registration the chart renders. Refused on a machine without /dev/kvm
+	// and /dev/vhost-vsock (`agentlab configure` turns it off there).
 	Enabled bool `yaml:"enabled"`
-	// The host port vm-manager listens on. The lab's default is not
-	// vm-manager's own 8080 (the lab shares machines with other things on
-	// 8080); state/vm-manager.env carries the matching VM_MANAGER_LISTEN.
-	Port int `yaml:"port,omitempty"`
-	// The URL pods dial, overriding the autodetected
-	// http://<kind docker network gateway>:<port> — a vm-manager on another
-	// machine of the LAN, or the runtime's host alias where the gateway is
-	// not this machine (Docker Desktop's host.docker.internal).
-	Endpoint string `yaml:"endpoint,omitempty"`
+	// The image directory `vm-manager serve --image-dir` reads — a
+	// vm-manager checkout's images/build after `make -C images`: the base
+	// image, its UKI, the Kubernetes sysext layers and policy.json with the
+	// golden PCR values. Mounted into the kind node at `kind create`
+	// (kind-config.yaml.tmpl), so a change means `agentlab down && up`;
+	// empty starts the pod with no bootable image (list_images empty, the
+	// proof boots nothing). An absolute path, or relative to the lab
+	// directory.
+	ImageDir string `yaml:"imageDir,omitempty"`
 }
 
-// DefaultVMManagerPort is the host port the lab expects vm-manager on.
-const DefaultVMManagerPort = 8100
-
-// ListenPort is the configured port, or the default.
-func (v VMManager) ListenPort() int {
-	if v.Port == 0 {
-		return DefaultVMManagerPort
-	}
-	return v.Port
-}
-
-// normalize writes the port out explicitly, so agentlab.yaml says what
-// state/vm-manager.env binds.
-func (v *VMManager) normalize() {
-	if v.Port == 0 {
-		v.Port = DefaultVMManagerPort
-	}
-}
-
-// Validate checks the vm-manager block.
+// Validate checks the vm-manager block: the image directory, when set, is a
+// directory that exists.
 func (v VMManager) Validate() error {
-	if err := ValidatePort(strconv.Itoa(v.ListenPort())); err != nil {
-		return fmt.Errorf("port: %w", err)
+	if v.ImageDir == "" {
+		return nil
 	}
-	if v.Endpoint != "" && !httpURLRe.MatchString(v.Endpoint) {
-		return fmt.Errorf("endpoint %q: must be an http(s) URL, e.g. http://172.21.0.1:%d", v.Endpoint, v.ListenPort())
+	st, err := os.Stat(v.ImageDir)
+	switch {
+	case err != nil:
+		return fmt.Errorf("imageDir: %w (a vm-manager checkout's images/build after `make -C images`)", err)
+	case !st.IsDir():
+		return fmt.Errorf("imageDir %q: not a directory", v.ImageDir)
 	}
 	return nil
 }
 
-// ApplyDiscovered follows what `agentlab configure` found: on when a
-// vm-manager answers on this machine (or an explicit endpoint names one
-// elsewhere), off otherwise; pinEnabled (--vm-manager) decides instead.
-func (v *VMManager) ApplyDiscovered(found bool, pinEnabled *bool) {
+// ApplyDiscovered follows what `agentlab configure` found: a machine without
+// the KVM devices cannot run the pod, so the key goes off there with the
+// reason; a machine with them keeps what the file says (the pod is a heavier
+// piece of the lab than a model server, so it is never turned on by itself);
+// pinEnabled (--vm-manager) decides instead.
+func (v *VMManager) ApplyDiscovered(kvm bool, pinEnabled *bool) {
 	switch {
 	case pinEnabled != nil:
 		v.Enabled = *pinEnabled
-	default:
-		v.Enabled = found || v.Endpoint != ""
+	case !kvm:
+		v.Enabled = false
 	}
 }
 
@@ -575,7 +568,6 @@ func Default() *Config {
 			// The lab registry behind the `harness` dev image; a container
 			// on the kind network, so no node port mapping is involved.
 			DevRegistryPort: DefaultDevRegistryPort,
-			VMManager:       VMManager{Port: DefaultVMManagerPort},
 		},
 		Backstage: Backstage{
 			Enabled: true,
@@ -598,7 +590,6 @@ func Load() (*Config, error) {
 	// Earlier versions wrote the one-backend form (backend/endpoint); read
 	// it as the one-item lists so the same lab renders exactly as before.
 	cfg.Platform.ModelManager.normalize()
-	cfg.Platform.VMManager.normalize()
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("%s: %w", File, err)
 	}
@@ -763,7 +754,6 @@ func (c *Config) Normalize() {
 		c.Platform.ChartPinned = false
 	}
 	c.Platform.ModelManager.normalize()
-	c.Platform.VMManager.normalize()
 }
 
 // branchSanitizeRe is gitsemver's: every run of characters outside [a-z0-9]
@@ -927,6 +917,15 @@ func (c *Config) Validate() error {
 	}
 	if _, ok := c.Platform.DevImages[DevImageHarness]; ok && !c.Platform.Agents {
 		return fmt.Errorf("platform.devImages.%s: the platform Harness comes with the agents (platform.agents: true)", DevImageHarness)
+	}
+	// The vm-manager component exists from agent-platform 4.11.0; a pinned
+	// release before it would take components.vm-manager as an unknown key
+	// and fail the install out of sight. A local checkout or a branch build
+	// carries its own answer.
+	if c.Platform.VMManager.Enabled && c.Platform.Enabled && c.Platform.ChartPath == "" && c.Platform.ChartBranch == "" {
+		if v, err := semver.NewVersion(c.Platform.ChartVersion); err == nil && v.LessThan(vmManagerChartFloor) {
+			return fmt.Errorf("platform.vmManager needs agent-platform %s or newer (components.vm-manager); platform.chartVersion is %s", vmManagerChartFloor, c.Platform.ChartVersion)
+		}
 	}
 	if c.Platform.DevRegistryPort != 0 {
 		if err := ValidatePort(strconv.Itoa(c.Platform.DevRegistryPort)); err != nil {

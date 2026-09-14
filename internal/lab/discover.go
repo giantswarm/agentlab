@@ -35,9 +35,9 @@ type Discovery struct {
 	KindGateway   string
 	Servers       []HostServer
 	FLM           *FLMServer
-	// VMManager is the vm-manager found on this machine (vmmanager.go), nil
-	// when none answers on platform.vmManager.port.
-	VMManager *HostVMManager
+	// KVMMissing names the KVM devices this machine lacks (vmmanager.go):
+	// empty when the platform's VM provisioner can run as a pod of the node.
+	KVMMissing []string
 }
 
 // ToolVersion is one entry of the report's tools line: the container engine
@@ -146,16 +146,14 @@ func Discover(cfg *config.Config) *Discovery {
 		}
 	}
 	d.FLM = detectFLM(fmt.Sprintf("http://127.0.0.1:%d", flmDefaultPort), flmDefaultPort)
-	d.VMManager = discoverVMManager(cfg, d.KindGateway, d.ClusterExists)
+	d.KVMMissing = missingKVMDevices()
 	return d
 }
 
-// VMManagerFound reports whether a vm-manager answers on this machine and,
-// where that is known, from pods — the value platform.vmManager.enabled
-// follows, by the same rule as Backends: only an explicit "no" leaves it off.
-func (d *Discovery) VMManagerFound() bool {
-	return d.VMManager != nil && (!d.VMManager.Probed || d.VMManager.PodHost != "")
-}
+// KVMReady reports whether this machine has the KVM devices the platform's
+// VM provisioner needs as a pod of the node — what platform.vmManager.enabled
+// is refused without.
+func (d *Discovery) KVMReady() bool { return len(d.KVMMissing) == 0 }
 
 // podReachableHost is the address pods reach this machine on for port: the
 // kind network gateway where that is this machine, else the container
@@ -385,7 +383,7 @@ func (d *Discovery) Report(cfg *config.Config) string {
 	if d.FLM != nil {
 		line("FastFlowLM", "standalone `flm serve` on :%d (%d catalog entries) — no management API and loopback by default; the lab drives FLM through Lemonade Server", d.FLM.Port, d.FLM.Models)
 	}
-	line("vm-manager", "%s", d.vmManagerLine(cfg))
+	line("KVM", "%s", d.kvmLine(cfg))
 	if d.AnthropicKey {
 		line("Anthropic key", "$%s is set — the agents' default ModelConfig and Backstage's AI chat get the real key at deploy time", AnthropicKeyEnv)
 	} else {
@@ -408,27 +406,22 @@ func (d *Discovery) toolVersion(name string) string {
 	return ""
 }
 
-// vmManagerLine words the vm-manager entry of the report.
-func (d *Discovery) vmManagerLine(cfg *config.Config) string {
-	port := cfg.Platform.VMManager.ListenPort()
-	if d.VMManager == nil {
-		return fmt.Sprintf("none on :%d — the platform's VM provisioner runs on the KVM host; `agentlab vm-manager-env` prints the settings to start one for this lab", port)
+// kvmLine words the KVM entry of the report: whether the platform's VM
+// provisioner (platform.vmManager) can run as a pod of the node here.
+func (d *Discovery) kvmLine(cfg *config.Config) string {
+	if len(d.KVMMissing) > 0 {
+		return fmt.Sprintf("no %s — platform.vmManager (the VM provisioner as a pod of the node) stays off", strings.Join(d.KVMMissing, " and "))
 	}
-	v := d.VMManager
-	reach := "the address pods dial is not known while the node is not running (`agentlab up` starts it)"
-	switch {
-	case v.ReachErr != nil:
-		reach = fmt.Sprintf("cannot tell whether pods reach it on %s (%v)", d.KindGateway, v.ReachErr)
-	case v.Probed && v.PodHost == d.KindGateway:
-		reach = fmt.Sprintf("answers on %s (the address pods dial): yes", d.KindGateway)
-	case v.Probed && v.PodHost != "":
-		reach = fmt.Sprintf("pods reach it at %s (%s is inside the container runtime's VM, not this machine)", v.PodHost, d.KindGateway)
-	case v.Probed && v.HostReachesGateway:
-		reach = fmt.Sprintf("this machine reaches it on %s but pods do NOT — the host firewall rejects the docker bridge on this port; left off until TCP %d is allowed from 172.16.0.0/12 the way the model servers' ports are", d.KindGateway, port)
-	case v.Probed:
-		reach = fmt.Sprintf("does NOT answer on %s (the address pods dial) — left off until it does (VM_MANAGER_LISTEN=0.0.0.0:%d, as `agentlab vm-manager-env` says)", d.KindGateway, port)
+	state := "off (`agentlab configure --vm-manager --vm-manager-image-dir <a vm-manager checkout's images/build>` turns it on)"
+	if cfg.Platform.VMManager.Enabled {
+		state = "on"
+		if cfg.Platform.VMManager.ImageDir == "" {
+			state += ", no image directory (platform.vmManager.imageDir: the pod has nothing to boot)"
+		} else {
+			state += fmt.Sprintf(", images from %s", cfg.Platform.VMManager.ImageDir)
+		}
 	}
-	return fmt.Sprintf("%s on %s — %s", v.Version, v.Addr, reach)
+	return fmt.Sprintf("%s present — platform.vmManager %s", strings.Join(kvmDevices, " and "), state)
 }
 
 // bindHint is the one-line version of the bind fix for the report.

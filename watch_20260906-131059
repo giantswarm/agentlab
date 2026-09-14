@@ -1,0 +1,11 @@
+NAMESPACE            NAME                                             READY   STATUS    RESTARTS        AGE
+dex                  dex-54dc5fc7f6-6jmfm                             1/1     Running   2 (2m38s ago)   11m
+kube-system          coredns-589f44dc88-8xcsm                         1/1     Running   3 (2m14s ago)   12m
+kube-system          coredns-589f44dc88-d8kpw                         1/1     Running   3 (2m40s ago)   12m
+kube-system          etcd-agentlab-control-plane                      1/1     Running   0               12m
+kube-system          kindnet-k9t26                                    1/1     Running   0               12m
+kube-system          kube-apiserver-agentlab-control-plane            1/1     Running   0               12m
+kube-system          kube-controller-manager-agentlab-control-plane   1/1     Running   2 (3m9s ago)    12m
+kube-system          kube-proxy-97fdr                                 1/1     Running   0               12m
+kube-system          kube-scheduler-agentlab-control-plane            1/1     Running   3 (2m37s ago)   12m
+local-path-storage   local-path-provisioner-855c7b7774-p9dqw          1/1     Running   4 (2m37s ago)   12m

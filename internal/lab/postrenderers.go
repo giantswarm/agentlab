@@ -138,6 +138,7 @@ var devImageTargets = map[string]devImageTarget{
 	componentMCPKubernetes: {componentMCPKubernetes, componentMCPKubernetes, "gsoci.azurecr.io/giantswarm/mcp-kubernetes"},
 	modelManagerMCPServer:  {modelManagerMCPServer, modelManagerMCPServer, "gsoci.azurecr.io/giantswarm/model-manager"},
 	agentManagerMCPServer:  {agentManagerMCPServer, agentManagerMCPServer, "gsoci.azurecr.io/giantswarm/agent-manager"},
+	vmManagerMCPServer:     {vmManagerMCPServer, vmManagerMCPServer, "ghcr.io/giantswarm/vm-manager"},
 }
 
 // defaultDevImageNames is the image name per configured Deployment target as
@@ -271,6 +272,9 @@ func componentPostRenderers(cfg *config.Config, imageNames map[string]string) (m
 	}
 	if cfg.Platform.Agents {
 		patches[agentManagerMCPServer] = []kustomizePatch{dexLocalhostPatch(agentManagerMCPServer, cfg.DexPort)}
+	}
+	if cfg.VMManagerEnabled() {
+		patches[vmManagerMCPServer] = []kustomizePatch{dexLocalhostPatch(vmManagerMCPServer, cfg.DexPort)}
 	}
 	images := map[string][]kustomizeImage{}
 	for _, component := range slices.Sorted(maps.Keys(cfg.Platform.DevImages)) {

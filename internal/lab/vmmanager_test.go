@@ -7,125 +7,68 @@ import (
 	"github.com/giantswarm/agentlab/internal/config"
 )
 
-// TestVMManagerTemplate pins the registration to what the proof and the
-// tool-group check look for: the name muster prefixes the tools with, the
-// forward-token auth block (vm-manager validates the person's token itself),
-// the agent-platform tool group the chart stamps on the platform's own
-// management surface, and the host-service marker that tells the tool-group
-// proof this labelled server is the lab's registration, not a fixture.
-func TestVMManagerTemplate(t *testing.T) {
+// TestKVMLine: the discovery report says whether the VM provisioner can run
+// as a pod of the node here and what the configuration does with it.
+func TestKVMLine(t *testing.T) {
 	cfg := config.Default()
-	cfg.Platform.VMManager.Enabled = true
-	raw, err := renderTemplate(cfg, vmManagerTemplate, func(d *tmplData) { d.VMManagerURL = vmManagerURL("http://172.21.0.1:8100") })
-	if err != nil {
-		t.Fatalf("render: %v", err)
+	cfg.Platform.VMManager = config.VMManager{Enabled: true, ImageDir: "/srv/images"}
+	d := &Discovery{}
+	if got := d.kvmLine(cfg); !strings.Contains(got, "present") || !strings.Contains(got, "on, images from /srv/images") {
+		t.Fatalf("with the devices and a directory: %q", got)
 	}
-	out := string(raw)
-	for _, want := range []string{
-		"kind: MCPServer",
-		"name: " + vmManagerMCPServer,
-		"namespace: " + platformNamespace,
-		"url: http://172.21.0.1:8100" + vmManagerMCPPath,
-		"type: streamable-http",
-		"type: oauth",
-		"forwardToken: true",
-		"autoStart: true",
-		managedByLabel + ": " + managedByAgentlabValue,
-		vmManagerHostServiceLabel + ": " + vmManagerMCPServer,
-		toolGroupLabel + ": " + toolGroupAgentPlatform,
-		"agentlab.giantswarm.io/purpose:",
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("rendered registration missing %q:\n%s", want, out)
+	cfg.Platform.VMManager.ImageDir = ""
+	if got := d.kvmLine(cfg); !strings.Contains(got, "no image directory") {
+		t.Fatalf("without a directory the report must say so: %q", got)
+	}
+	cfg.Platform.VMManager.Enabled = false
+	if got := d.kvmLine(cfg); !strings.Contains(got, "--vm-manager") {
+		t.Fatalf("off: the report names the flag that turns it on: %q", got)
+	}
+	d.KVMMissing = []string{"/dev/vhost-vsock"}
+	if got := d.kvmLine(cfg); !strings.Contains(got, "no /dev/vhost-vsock") || d.KVMReady() {
+		t.Fatalf("a missing device is named and KVMReady is false: %q", got)
+	}
+}
+
+// TestKVMFixHint: every missing device comes with its own fix.
+func TestKVMFixHint(t *testing.T) {
+	got := kvmFixHint([]string{"/dev/kvm", "/dev/vhost-vsock"})
+	for _, want := range []string{"kvm_intel", "modprobe vhost_vsock"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("hint lacks %q: %q", want, got)
 		}
 	}
-	if strings.Contains(out, fleetFixtureLabel) {
-		t.Errorf("the registration must not read as a fixture:\n%s", out)
+}
+
+// TestVMManagerImageMount: the chart's images.hostPath is the node path the
+// image directory is mounted at, or nothing without a directory.
+func TestVMManagerImageMount(t *testing.T) {
+	cfg := config.Default()
+	if got := vmManagerImageMountFor(cfg); got != "" {
+		t.Fatalf("no directory, got %q", got)
 	}
-	if got := strings.Count(out, "kind: MCPServer"); got != 1 {
-		t.Errorf("want exactly one MCPServer, got %d:\n%s", got, out)
+	cfg.Platform.VMManager.ImageDir = "/home/x/vm-manager/images/build"
+	if got := vmManagerImageMountFor(cfg); got != vmManagerImageMount {
+		t.Fatalf("got %q, want %q", got, vmManagerImageMount)
 	}
 }
 
-// TestVMManagerEnv: the environment hands vm-manager exactly the lab's
-// identity — the one issuer URL, the lab CA, the platform client and its
-// audience as the trusted one — and a listen address pods can dial.
-func TestVMManagerEnv(t *testing.T) {
+// TestVMManagerHint: the summary names the image directory and a dev image.
+func TestVMManagerHint(t *testing.T) {
 	cfg := config.Default()
-	cfg.Platform.VMManager.Port = 8123
-	out, err := vmManagerEnv(cfg)
-	if err != nil {
-		t.Fatal(err)
+	if got := vmManagerHint(cfg); !strings.Contains(got, "not wired") {
+		t.Fatalf("off: %q", got)
 	}
-	for _, want := range []string{
-		"VM_MANAGER_LISTEN=0.0.0.0:8123\n",
-		"VM_MANAGER_OAUTH_ENABLED=true\n",
-		"VM_MANAGER_OAUTH_BASE_URL=http://localhost:8123\n",
-		"VM_MANAGER_OAUTH_PROVIDER=dex\n",
-		"DEX_ISSUER_URL=" + cfg.Issuer() + "\n",
-		"DEX_CLIENT_ID=" + config.AgentPlatformClientID + "\n",
-		"DEX_CLIENT_SECRET=" + config.AgentPlatformClientSecret + "\n",
-		"DEX_CA_FILE=/",
-		"/" + caCertPath + "\n",
-		"VM_MANAGER_OAUTH_ALLOW_PRIVATE_URLS=true\n",
-		"SSO_ALLOW_PRIVATE_IPS=true\n",
-		"OAUTH_TRUSTED_AUDIENCES=" + config.AgentPlatformClientID + "\n",
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("env missing %q:\n%s", want, out)
+	cfg.Platform.VMManager = config.VMManager{Enabled: true, ImageDir: "/srv/images"}
+	cfg.Platform.DevImages = map[string]string{"vm-manager": "vm-manager:dev"}
+	got := vmManagerHint(cfg)
+	for _, want := range []string{"/srv/images", "vm-manager:dev", "x_vm-manager_*", toolGroupAgentPlatform} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("hint lacks %q: %q", want, got)
 		}
 	}
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		if strings.HasPrefix(line, "#") || strings.Contains(line, "=") {
-			continue
-		}
-		t.Errorf("line %q is neither a comment nor KEY=value", line)
-	}
 }
 
-// TestVMManagerIdent: a vm-manager is recognised by its build-info series,
-// with the version it carries; every other exposition is not one.
-func TestVMManagerIdent(t *testing.T) {
-	cases := []struct {
-		name, body, wantVersion string
-		wantOK                  bool
-	}{
-		{"vm-manager", "# HELP vm_manager_build_info Build information.\n# TYPE vm_manager_build_info gauge\nvm_manager_build_info{commit=\"abc\",go_version=\"go1.26\",version=\"0.4.0\"} 1\n", "0.4.0", true},
-		{"dev build", "vm_manager_build_info{version=\"dev-6f1665c\",commit=\"unknown\"} 1\n", "dev-6f1665c", true},
-		{"no version label", "vm_manager_build_info{commit=\"abc\"} 1\n", "unknown version", true},
-		{"another exporter", "# TYPE go_goroutines gauge\ngo_goroutines 12\nmodel_manager_build_info{version=\"1\"} 1\n", "", false},
-		{"html", "<html><body>ok</body></html>", "", false},
-		{"empty", "", "", false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			version, ok := vmManagerIdent([]byte(tc.body))
-			if ok != tc.wantOK || version != tc.wantVersion {
-				t.Fatalf("got (%q, %v), want (%q, %v)", version, ok, tc.wantVersion, tc.wantOK)
-			}
-		})
-	}
-}
-
-// TestVMManagerEndpointOverride: an explicit endpoint is dialed as given
-// (trailing slash dropped), with no detection.
-func TestVMManagerEndpointOverride(t *testing.T) {
-	cfg := config.Default()
-	cfg.Platform.VMManager.Endpoint = "http://host.docker.internal:8100/"
-	got, err := resolveVMManagerEndpoint(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := "http://host.docker.internal:8100"; got != want {
-		t.Fatalf("got %q, want %q", got, want)
-	}
-	if u := vmManagerURL(got); u != "http://host.docker.internal:8100/mcp" {
-		t.Fatalf("mcp url %q", u)
-	}
-}
-
-// TestVMImageHasGolden reads the image policy the way the proof decides
-// whether to require attestation.
 func TestVMImageHasGolden(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -148,30 +91,6 @@ func TestVMImageHasGolden(t *testing.T) {
 			}
 			if img.ref() != "giantswarm-vm-base_0.1.0" {
 				t.Fatalf("ref %q", img.ref())
-			}
-		})
-	}
-}
-
-// TestVMManagerFound: only an explicit "pods cannot reach it" leaves the
-// wiring off; unknown reachability enrolls, like the model servers.
-func TestVMManagerFound(t *testing.T) {
-	cases := []struct {
-		name string
-		vm   *HostVMManager
-		want bool
-	}{
-		{"none", nil, false},
-		{"not probed", &HostVMManager{Version: "1"}, true},
-		{"on the gateway", &HostVMManager{Version: "1", Probed: true, PodHost: gatewayIP}, true},
-		{"on the alias", &HostVMManager{Version: "1", Probed: true, PodHost: hostDockerInternal}, true},
-		{"unreachable", &HostVMManager{Version: "1", Probed: true}, false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			d := &Discovery{VMManager: tc.vm}
-			if got := d.VMManagerFound(); got != tc.want {
-				t.Fatalf("VMManagerFound = %v, want %v", got, tc.want)
 			}
 		})
 	}
