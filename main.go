@@ -452,7 +452,7 @@ func browserCmd() *cobra.Command {
 
 func configureCmd() *cobra.Command {
 	var defaults, accessible bool
-	var platform, agents, observability, backstage, modelManager, vmManager bool
+	var platform, agents, observability, backstage, modelManager, vmManager, klausGateway bool
 	var modelManagerBackends []string
 	var vmManagerImageDir string
 	var chartVersion, chartPath, chartBranch string
@@ -518,6 +518,9 @@ func configureCmd() *cobra.Command {
 			if cmd.Flags().Changed("vm-manager-image-dir") {
 				cfg.Platform.VMManager.ImageDir = vmManagerImageDir
 			}
+			if cmd.Flags().Changed("klaus-gateway") {
+				cfg.Platform.KlausGateway.Enabled = klausGateway
+			}
 			// Every run discovers the machine — an existing agentlab.yaml
 			// follows the host too: a server that appeared is added, one that
 			// is gone drops out, ports move while no cluster holds them.
@@ -577,6 +580,9 @@ func configureCmd() *cobra.Command {
 				fmt.Printf("  vm-manager the platform's VM provisioner as a pod of the node, registered with muster as x_vm-manager_* (%s)\n",
 					vmManagerImagesNote(cfg.Platform.VMManager))
 			}
+			if cfg.KlausGatewayEnabled() {
+				fmt.Println("  klaus-gtw  Swarmgeist as the meta chart's component: A2A on the in-cluster controller, the web channel, Slack on a placeholder Secret, the OBO link store in a Secret")
+			}
 			fmt.Println("\nNext: agentlab up")
 			return nil
 		},
@@ -593,6 +599,7 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().StringSliceVar(&modelManagerBackends, "model-manager-backends", nil, fmt.Sprintf("pin the host model servers, in order (%s; the first is model-manager's default backend) instead of the ones the discovery finds", strings.Join(config.ModelManagerBackends, ", ")))
 	cmd.Flags().BoolVar(&vmManager, "vm-manager", false, "run the platform's VM provisioner (vm-manager) as a pod of the node; --vm-manager=false turns it off (needs /dev/kvm and /dev/vhost-vsock on this machine)")
 	cmd.Flags().StringVar(&vmManagerImageDir, "vm-manager-image-dir", "", "the image directory the vm-manager pod boots from: a vm-manager checkout's images/build after `make -C images` (mounted into the node at `agentlab up`; empty for none)")
+	cmd.Flags().BoolVar(&klausGateway, "klaus-gateway", false, "run Swarmgeist (klaus-gateway) as the meta chart's in-cluster component: A2A on the in-cluster controller target, the web channel, Slack on a placeholder Secret, the OBO link store in a Secret (needs agents); --klaus-gateway=false turns it off")
 	cmd.Flags().BoolVar(&accessible, "accessible", false, "prompt-per-question form mode (for screen readers and plain terminals)")
 	return cmd
 }
@@ -880,7 +887,7 @@ func klausGatewayTestCmd() *cobra.Command {
 	var opts lab.KlausGatewayTestOptions
 	cmd := &cobra.Command{
 		Use:   "klaus-gateway-test [email]",
-		Short: "Headless Swarmgeist proof (kagent API v2): klaus-gateway runs on the host against the lab's edge (A2A v1 over gRPC, TLS with the lab CA, JWT at the edge) and its web channel is driven with the user's forwarded Dex id_token — discovery with the template's annotations (a not-admitted template hidden and refused), one turn attributed to the person at muster, a requireApproval round trip, a stop cancelled server-side, a restart on the bolt store that keeps the thread → AgentInstance mapping",
+		Short: "Headless Swarmgeist proof (kagent API v2): klaus-gateway runs on the host against the lab's edge (A2A v1 over gRPC, TLS with the lab CA, JWT at the edge) and its web channel is driven with the user's forwarded Dex id_token — discovery with the template's annotations (a not-admitted template hidden and refused), one turn attributed to the person at muster, a requireApproval round trip, a stop cancelled server-side, a restart on the bolt store that keeps the thread → AgentInstance mapping; with platform.klausGateway on, the meta chart's in-cluster component too — the Role scoped to the OBO link Secret, two links seeded through the store package, the pod deleted and its replacement Ready with the same links, one turn through the pod",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()

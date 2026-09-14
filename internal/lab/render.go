@@ -86,6 +86,11 @@ type tmplData struct {
 	// chart's images.hostPath — empty when no directory is configured.
 	VMManagerEnabled    bool
 	VMManagerImageMount string
+	// KlausGatewayEnabled turns the chart's klaus-gateway component on
+	// (klausgateway.go); KlausGateway carries the names and URLs its
+	// `klausGateway:` block needs.
+	KlausGatewayEnabled bool
+	KlausGateway        klausGatewayValues
 	// PostRenderers is the lab's per-component `postRenderers` list as
 	// indented YAML, keyed by agent-platform component name
 	// (postrenderers.go): the hostNetwork, sidecar and nodePort patches plus
@@ -160,6 +165,8 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		ToolGroupAgentPlatform:     toolGroupAgentPlatform,
 		VMManagerEnabled:           cfg.VMManagerEnabled(),
 		VMManagerImageMount:        vmManagerImageMountFor(cfg),
+		KlausGatewayEnabled:        cfg.KlausGatewayEnabled(),
+		KlausGateway:               klausGatewayValuesFor(cfg),
 		CertsDir:                   certsDir,
 		MusterNodePort:             config.MusterNodePort,
 		KagentUINodePort:           config.KagentUINodePort,

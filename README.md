@@ -67,6 +67,11 @@ trusting the same issuer.
   node (the chart's `components.vm-manager`) registered with muster as
   `x_vm-manager_*`: VMs with an instance metadata service, a vTPM and
   attestation, created by the person or an agent who asked.
+- **Swarmgeist.** klaus-gateway, the fleet's Slack bridge, on the host
+  against the lab's public gRPC edge and — with `platform.klausGateway` —
+  as the meta chart's in-cluster component with its OBO link store in a
+  Secret, proven across a pod loss. No Slack workspace, so no real
+  sign-in: the store is proven through the gateway's own package.
 - **Observability.** A minimal Prometheus plus mcp-prometheus, so PromQL
   questions about the lab go through MCP too.
 - **Identity you can reason about.** Three throwaway users, a fixed group
@@ -129,6 +134,7 @@ machine, is in [Getting started](docs/getting-started.md).
 | [The migration rehearsal](docs/migration-rehearsal.md) | A 3.x lab with the four fleet shapes upgraded in place to the 4.x line: the command sequence, the timings, what the migrate Job rewrote, refused and deleted, what an installation's cut-over does differently |
 | [Models](docs/models.md) | Extra model configs, model servers on the host, managed models through model-manager |
 | [vm-manager](docs/vm-manager.md) | The platform's VM provisioner as a pod of the node: the KVM devices, the image directory, the dev image, the golden PCR recipe, the proof |
+| [klaus-gateway](docs/klaus-gateway.md) | Swarmgeist as the meta chart's component: the values, the two lab Secrets, the OBO link store in a Secret across a pod loss, the dev image, what a lab without a Slack workspace cannot prove |
 | [Observability](docs/observability.md) | Prometheus + mcp-prometheus, and Backstage's metrics views |
 | [Backstage](docs/backstage.md) | The human frontend: the muster plugin, agents and models in the portal, the agent create flow |
 | [Identity](docs/identity.md) | Users and groups, the shared issuer, the Dex version, wiring another app, `trustedPeers` |

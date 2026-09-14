@@ -134,6 +134,21 @@ with Dex doing the logins.
   through muster with annotations, then create_vm → ready → attestation →
   delete_vm (`--skip-vm` boots nothing). The golden PCR values are the pod's
   OVMF's, recorded once per vm-manager image (docs/vm-manager.md).
+- `platform.klausGateway` runs **Swarmgeist (klaus-gateway) as the meta
+  chart's in-cluster component** (`components.klaus-gateway`), the shape
+  every installation runs next to the host-mode gateway
+  `klaus-gateway-test` starts for the public leg: A2A on the in-cluster
+  controller target, the web channel, the Slack adapter on a placeholder
+  Secret (`agentlab-klaus-gateway-slack`; the gateway refuses OBO without
+  Slack, no workspace answers), the OBO link store in a Secret
+  (`obo.store: secret`, keys in `agentlab-klaus-gateway-obo`, generated
+  once — never regenerate them, the store key seals every link).
+  `platform.devImages.klaus-gateway` swaps a build in. The proof's component
+  half: the Role scoped to the link Secret, two links seeded through
+  `pkg/auth/musterlink`, the pod deleted and its replacement Ready with the
+  same links, a turn through the pod. A real OBO sign-in is out of reach
+  here (docs/klaus-gateway.md) — never "fix" that with a fake muster
+  identity.
 - For verifying RBAC as a specific user, use `./agentlab login <email>` and
   `kubectl --kubeconfig kubeconfig.oidc` — that is the OIDC path.
 - The cluster's admin kubeconfig (`state/kubeconfig`, context `kind-agentlab`)
@@ -163,6 +178,7 @@ go test ./internal/forms/ -run TestMinimalFormDrive -count=1 -v   # single test
 ./agentlab platform-test   # headless Dex -> muster -> mcp-kubernetes proof
 ./agentlab models-test     # managed models: 401 -> pull -> ModelConfig -> agent turn -> MCP -> unload -> delete (on lmstudio: the 501 refusal -> unwire, U23)
 ./agentlab vm-manager-test # the vm-manager pod as the person: 401 anonymous -> tools via muster -> create_vm -> ready -> attestation -> delete_vm
+./agentlab klaus-gateway-test # Swarmgeist on the host against the edge, and with platform.klausGateway the in-cluster component: the OBO link store in a Secret across a pod loss
 ./agentlab test            # RBAC assertions for every configured user
 ./agentlab backstage-test  # headless Backstage sign-in for every user
 ./agentlab skills-test     # kagent API v2: an AgentTemplate with a git-pinned skill boots (the golden boot) and answers from the skill

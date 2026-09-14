@@ -94,9 +94,10 @@ the boot says which chart it installed. The directory is read, never written.
 To run a component from a build of your own, build the image, and name it
 under `platform.devImages`. The targets are the chart's component names for
 the Deployments the lab can swap — `muster`, `backstage`, `kagent` (the
-controller), `mcp-kubernetes`, `model-manager`, `agent-manager` — and
-`harness`, the platform Harness's runtime image (the Go ADK every agent runs
-on under kagent API v2):
+controller), `mcp-kubernetes`, `model-manager`, `agent-manager`,
+`vm-manager` (with `platform.vmManager`), `klaus-gateway` (with
+`platform.klausGateway`) — and `harness`, the platform Harness's runtime
+image (the Go ADK every agent runs on under kagent API v2):
 
 ```yaml
 platform:
@@ -496,7 +497,7 @@ nowhere itself. Slack cannot be driven headlessly; the gateway's web channel
 
 **Deployment shape.** The gateway runs **out of cluster, on the host** —
 the released image on the host network by default
-(`--gateway-image`, `gsoci.azurecr.io/giantswarm/klaus-gateway:1.0.2`), or a
+(`--gateway-image`, `gsoci.azurecr.io/giantswarm/klaus-gateway:1.5.0`), or a
 local build (`--gateway-binary`, the proof of a branch) — with `a2a.url` =
 the lab's public gRPC target `grpcs://agentgateway.<domain>:<gatewayPort>`
 (TLS with the lab CA from `certs/ca.crt`; the JWT `Strict` policy of the
@@ -508,9 +509,10 @@ lifecycle driver (no Klaus instances). This is the leg the meta chart's
 in-cluster component (`components.klaus-gateway`, `klausGateway.a2a.url` =
 the in-cluster `grpc://agentgateway.agent-platform.svc.cluster.local:8080`)
 does not exercise: the public route with TLS and the JWT policy. The
-component itself stays off in the lab; enabling it is a values change under
-the lab lock and is not part of this proof. The gateway forwards the
-person's token and talks to no Dex, so it needs no `dex-localhost` bridge.
+component is the other shape, `platform.klausGateway` — on a lab that runs
+it, the proof continues on the component (assertions 6–9 below). The
+gateway forwards the person's token and talks to no Dex, so it needs no
+`dex-localhost` bridge.
 
 **Fixtures** (in `kagent`, deleted by the same run, leftovers removed first):
 `AgentTemplate agentlab-klaus-gateway-test` in the Generic chart 1.x shape —
@@ -552,6 +554,14 @@ admission label.
    store; the next turn recalls the first turn's word, no new
    `instance_bound` record is written, and the controller still lists the
    one `AgentInstance`.
+
+With `platform.klausGateway` on, the meta chart's `klaus-gateway` component
+follows (the in-cluster shape, the OBO link store in a Secret): 6. the
+render — the Role scoped to the link Secret, no store volume; 7. two links
+written through the gateway's store package; 8. the pod deleted and its
+replacement Ready with the same links within seconds; 9. one turn through
+the pod over the in-cluster target. The details, the dev-image loop and what
+stays out of reach (a real OBO sign-in) are in [klaus-gateway](klaus-gateway.md).
 
 The controller reads go over gRPC-Web through the same edge
 (`kagentapi.go`), as the portal's backend does. The thread key is

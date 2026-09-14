@@ -48,8 +48,10 @@ import (
 
 // KlausGatewayImageDefault is the released gateway the proof runs when no
 // image or binary is named: the klaus-gateway the 4.x meta chart's
-// `components.klaus-gateway` range (1.x) resolves at the time of writing.
-const KlausGatewayImageDefault = "gsoci.azurecr.io/giantswarm/klaus-gateway:1.0.2"
+// `components.klaus-gateway` range (1.x) resolves at the time of writing. A
+// release before 1.3.1 refuses the port-free `grpcs://<host>` target a
+// gatewayPort 443 lab passes.
+const KlausGatewayImageDefault = "gsoci.azurecr.io/giantswarm/klaus-gateway:1.5.0"
 
 // Names of what the proof creates in the kagent namespace; all are deleted by
 // the same run, and a leftover of an aborted run is removed first.
@@ -234,7 +236,7 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	note("roster: %s; %s refused: HTTP %d %s", rosterLine(agents), klausGatewayTestUnadmitted, refusal.Status, excerpt(refusal.Body, 160))
 
 	step("2. One streamed turn as %s: the thread's first turn creates the AgentInstance", user.Email)
-	turn, err := web.firstTurn(klausGatewayWordPrompt)
+	turn, err := web.firstTurn(webMessage{Text: klausGatewayWordPrompt})
 	if err != nil {
 		return err
 	}
@@ -322,6 +324,18 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	}
 	note("no new binding, still the one AgentInstance %s; the agent recalled %q", instanceID, excerpt(turn.Text, 40))
 
+	// The component half (klausgatewaytest_component.go) while the meta
+	// chart's klaus-gateway runs in this lab: its fixtures are the ones
+	// above, and the instance its turn creates is removed by the cleanup.
+	var component *componentOutcome
+	if cfg.KlausGatewayEnabled() {
+		if component, err = klausGatewayComponentProof(cfg, token, user); err != nil {
+			return err
+		}
+	} else {
+		note("the meta chart's klaus-gateway component is off in this lab (platform.klausGateway; `agentlab configure --klaus-gateway` turns it on): the host-mode assertions alone")
+	}
+
 	step("Deleting the fixtures, the AgentInstance and the gateway")
 	if err := gw.stop(); err != nil {
 		return err
@@ -343,7 +357,13 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	fmt.Printf("PASS: the requireApproval binding paused task %s at input-required; %d approval decision(s) carrying the task id resumed it to %s with nothing left waiting\n", hitl.taskID, hitl.rounds, hitl.finalState)
 	fmt.Printf("PASS: closing the stream mid-turn had the gateway cancel task %s at the controller (TASK_STATE_CANCELED); the thread took a following turn\n", canceled)
 	fmt.Printf("PASS: a gateway restart on the bolt store kept the thread → AgentInstance mapping: the next turn continued %s and recalled the earlier word\n", instanceID)
-	fmt.Printf("PASS: nothing left behind — the AgentTemplates, the RemoteMCPServer, the AgentInstance, the gateway process and its store are gone\n")
+	if component != nil {
+		fmt.Printf("PASS: the meta chart's %s component runs the OBO link store in Secret %s — Role %s grants get/update/patch on that Secret alone, no store volume, RollingUpdate\n", klausGatewayComponent, klausGatewayLinksSecret, klausGatewayLinksSecret)
+		fmt.Printf("PASS: two links written through pkg/auth/musterlink with the lab's store-key survived the loss of pod %s: %s was Ready %s after the deletion and read %d links (%d before the proof), both read back unchanged, the proof's records removed\n",
+			component.pod, component.replacement, component.elapsed, component.links, component.baseline)
+		fmt.Printf("PASS: one turn through the component (%s, the in-cluster target %s) as %s listed %s and answered %q\n", component.version, klausGatewayInClusterTarget, user.Email, klausGatewayTestAgent, excerpt(component.answer, 40))
+	}
+	fmt.Printf("PASS: nothing left behind — the AgentTemplates, the RemoteMCPServer, the AgentInstances, the gateway process and its store are gone\n")
 	return nil
 }
 
@@ -749,16 +769,22 @@ func (g *gatewayProcess) stop() error {
 }
 
 // version is the gateway's own "starting" record, for the notes.
-func (g *gatewayProcess) version() string {
-	for _, line := range strings.Split(g.logs(), "\n") {
-		if strings.Contains(line, `"klaus-gateway starting"`) {
-			var rec struct {
-				Version string `json:"version"`
-				GitSHA  string `json:"git_sha"`
-			}
-			if json.Unmarshal([]byte(line), &rec) == nil && rec.Version != "" {
-				return fmt.Sprintf("klaus-gateway %s (%s)", rec.Version, rec.GitSHA)
-			}
+func (g *gatewayProcess) version() string { return gatewayVersion(g.logs()) }
+
+// gatewayVersion reads the gateway's "starting" record off its log: the
+// version and commit it runs, whatever shape (a host process, a pod) wrote
+// the log. A line may carry a pod prefix before its JSON record.
+func gatewayVersion(logs string) string {
+	for _, line := range strings.Split(logs, "\n") {
+		if !strings.Contains(line, `"klaus-gateway starting"`) {
+			continue
+		}
+		var rec struct {
+			Version string `json:"version"`
+			GitSHA  string `json:"git_sha"`
+		}
+		if start := strings.IndexByte(line, '{'); start >= 0 && json.Unmarshal([]byte(line[start:]), &rec) == nil && rec.Version != "" {
+			return fmt.Sprintf("klaus-gateway %s (%s)", rec.Version, rec.GitSHA)
 		}
 	}
 	return "klaus-gateway (version not logged)"
@@ -1000,8 +1026,8 @@ func readTurnStream(r io.Reader, turn *webTurn) error {
 
 // firstTurn is the thread's first message with one visible retry: a cold
 // worker's first resume can hit Substrate's ResumeActor deadline once.
-func (w *webClient) firstTurn(text string) (*webTurn, error) {
-	turn, err := w.send(context.Background(), webMessage{Text: text}, klausGatewayTurnTimeout)
+func (w *webClient) firstTurn(msg webMessage) (*webTurn, error) {
+	turn, err := w.send(context.Background(), msg, klausGatewayTurnTimeout)
 	if err == nil && turn.Status == http.StatusOK && turn.Err == "" {
 		return turn, nil
 	}
@@ -1010,7 +1036,7 @@ func (w *webClient) firstTurn(text string) (*webTurn, error) {
 		reason = turnFailure(turn)
 	}
 	note("the first turn failed (%s); retrying once — a cold worker's first resume may hit the ResumeActor deadline", excerpt(reason, 200))
-	return w.send(context.Background(), webMessage{Text: text}, klausGatewayTurnTimeout)
+	return w.send(context.Background(), msg, klausGatewayTurnTimeout)
 }
 
 // turnFailure words a turn that did not complete.
