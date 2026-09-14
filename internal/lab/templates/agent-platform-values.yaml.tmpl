@@ -183,6 +183,16 @@ components:
     postRenderers:
 {{ index .PostRenderers "model-manager" | indent 6 }}
 {{- end }}
+{{- if .VMManagerEnabled }}
+  # The VM provisioner (platform.vmManager): vm-manager as a pod of the node
+  # — privileged, the node's /dev/kvm and /dev/vhost-vsock, the image
+  # directory mounted from the node (its own values are in the `vm-manager:`
+  # block below).
+  vm-manager:
+    enabled: true
+    postRenderers:
+{{ index .PostRenderers "vm-manager" | indent 6 }}
+{{- end }}
   backstage:
     enabled: {{ .Backstage.Enabled }}
 {{- if .Backstage.Enabled }}
@@ -594,6 +604,22 @@ modelManager:
         path: /dex/keys
         tls:
           enabled: true
+{{- end }}
+
+{{- if .VMManagerEnabled }}
+# The vm-manager chart's own values, on top of the meta chart's block (the
+# pinned Service name, OAuth against global.identity — the lab Dex — and the
+# muster registration with the agent-platform tool group): the image
+# directory as the node sees it, the kind extraMount of
+# platform.vmManager.imageDir (kind-config.yaml.tmpl); without one the pod
+# starts with an empty directory. The state (VM records, disks, vTPM state)
+# stays an emptyDir: the lab's VMs are throwaway. The devices come from the
+# node, a privileged container with the host's /dev.
+vm-manager:
+  images:
+    hostPath: {{ .VMManagerImageMount | printf "%q" }}
+  persistence:
+    create: false
 {{- end }}
 
 {{- if .Backstage.Enabled }}

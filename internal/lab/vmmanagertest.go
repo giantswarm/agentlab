@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -132,15 +132,17 @@ type vmRecord struct {
 	ReadyAt     *time.Time `json:"readyAt"`
 }
 
-// VMManagerTest is the headless proof of the vm-manager wiring: the host's
-// VM provisioner registered with muster, reached as the signed-in person.
+// VMManagerTest is the headless proof of the vm-manager wiring: the
+// platform's VM provisioner as a pod of the node, registered with muster by
+// its chart, reached as the signed-in person.
 //
-// The identity boundary first, directly against the host: vm-manager without
-// a token answers 401 — a vm-manager running anonymously (no --enable-oauth)
-// would make every forwarded identity meaningless, and the proof fails on it
-// — and with the person's Dex id_token it answers the capability report,
-// validated against the lab Dex the way state/vm-manager.env configured it.
-// Then through muster: the x_vm-manager_* tools are aggregated with their
+// The identity boundary first, against the pod's Service from inside the
+// cluster (a probe pod, the way muster dials it): vm-manager without a token
+// answers 401 — a vm-manager running anonymously (oauth off) would make every
+// forwarded identity meaningless, and the proof fails on it — and with the
+// person's Dex id_token it answers the capability report, validated against
+// the lab Dex through the chart's global.identity wiring. Then through
+// muster: the x_vm-manager_* tools are aggregated with their
 // annotations intact (get_host read-only, delete_vm destructive), get_host,
 // list_images and list_networks answer as the person, and the MCPServer CR
 // carries the agent-platform tool group and reads Connected. Then, unless
@@ -152,7 +154,7 @@ type vmRecord struct {
 // or has no image skips the lifecycle with the reason.
 func VMManagerTest(cfg *config.Config, email string, opts VMManagerTestOptions) error {
 	if !cfg.VMManagerEnabled() {
-		return fmt.Errorf("platform.vmManager is off in %s — `agentlab configure` turns it on when a vm-manager answers on this machine, then `agentlab platform` registers it", config.File)
+		return fmt.Errorf("platform.vmManager is off in %s — `agentlab configure --vm-manager --vm-manager-image-dir <dir>` turns it on, then `agentlab platform` installs the component", config.File)
 	}
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
@@ -164,13 +166,10 @@ func VMManagerTest(cfg *config.Config, email string, opts VMManagerTestOptions) 
 	if opts.VMTimeout <= 0 {
 		opts.VMTimeout = DefaultVMManagerTestVMTimeout
 	}
-	endpoint, err := resolveVMManagerEndpoint(cfg)
-	if err != nil {
-		return err
-	}
+	endpoint := vmManagerServiceURL()
 
-	step("Calling vm-manager without a token (GET %s%s)", endpoint, vmManagerHostPath)
-	if err := proveVMManagerRefusesAnonymous(endpoint); err != nil {
+	step("Calling vm-manager without a token from inside the cluster (GET %s%s)", endpoint, vmManagerHostPath)
+	if err := proveVMManagerRefusesAnonymous(cfg); err != nil {
 		return err
 	}
 	note("401 — vm-manager is an OAuth resource server; nothing answers without an identity")
@@ -183,8 +182,8 @@ func VMManagerTest(cfg *config.Config, email string, opts VMManagerTestOptions) 
 	}
 	note("got an id_token")
 
-	step("vm-manager with the forwarded token, directly (the boundary muster's forwarding relies on)")
-	direct, err := vmManagerHostDirect(endpoint, token)
+	step("vm-manager with the person's token, directly against the Service (the boundary muster's forwarding relies on)")
+	direct, err := vmManagerHostDirect(cfg, token)
 	if err != nil {
 		return err
 	}
@@ -224,7 +223,7 @@ func VMManagerTest(cfg *config.Config, email string, opts VMManagerTestOptions) 
 		note("image %s — Kubernetes %s; %s", img.ref(), orNone(strings.Join(img.KubernetesVersions, ", ")), golden)
 	}
 	if len(images) == 0 {
-		note("no image in vm-manager's image directory (--image-dir: `make -C images` in a vm-manager checkout builds one)")
+		note("no image in vm-manager's image directory (platform.vmManager.imageDir: a vm-manager checkout's images/build after `make -C images`, mounted at `agentlab up`)")
 	}
 	var networks []vmNetwork
 	if err := callVMTool(session, prefix+vmToolListNetworks, nil, &networks); err != nil {
@@ -255,55 +254,83 @@ func VMManagerTest(cfg *config.Config, email string, opts VMManagerTestOptions) 
 		}
 	}
 
-	fmt.Printf("PASS: vm-manager on %s refuses anonymous calls, answers %s's forwarded token, and muster aggregates x_%s_* (%d tools) for the person\n",
+	fmt.Printf("PASS: the vm-manager pod (%s) refuses anonymous calls, answers %s's forwarded token, and muster aggregates x_%s_* (%d tools) for the person\n",
 		direct.Hostname, email, vmManagerMCPServer, toolCount)
 	return nil
 }
 
+// vmManagerDirect GETs the guarded capability report from inside the
+// cluster — the Service the chart renders, dialed from a probe pod the way
+// muster dials it — with the bearer token given (none for anonymous), and
+// returns the status code and the body. The token is the lab's throwaway
+// id_token and travels in the probe pod's command.
+func vmManagerDirect(cfg *config.Config, name, token string) (int, string, error) {
+	sideloadImages(cfg, hostPullImages([]string{probeImage}))
+	ctx, cancel := context.WithTimeout(context.Background(), probePodTimeout)
+	defer cancel()
+	// -S prints the status line (to stderr, in the same log); `|| true` keeps
+	// a 401 from failing the pod — the code is the answer, not an error.
+	cmd := fmt.Sprintf("wget -q -S -O - -T %d", int(probeHeaderTimeout.Seconds())*5)
+	if token != "" {
+		cmd += " --header 'Authorization: Bearer " + token + "'"
+	}
+	cmd += " " + vmManagerServiceURL() + vmManagerHostPath + " 2>&1 || true"
+	out, err := runProbePod(ctx, platformNamespace, name, probeImage, []string{"sh", "-c", cmd}, probePodTimeout)
+	if err != nil {
+		return 0, "", fmt.Errorf("probing vm-manager from inside the cluster: %w\n%.300s", err, strings.TrimSpace(out))
+	}
+	m := httpStatusRe.FindStringSubmatch(out)
+	if m == nil {
+		return 0, "", fmt.Errorf("vm-manager does not answer at %s from inside the cluster (no status line): is the pod running? `kubectl -n %s get pods -l app.kubernetes.io/name=%s`, `agentlab logs %s`\n  Probe output: %.300s",
+			vmManagerServiceURL(), platformNamespace, vmManagerMCPServer, vmManagerMCPServer, strings.TrimSpace(out))
+	}
+	status, _ := strconv.Atoi(m[1])
+	body := ""
+	if i := strings.Index(out, "{"); i >= 0 {
+		if j := strings.LastIndex(out, "}"); j > i {
+			body = out[i : j+1]
+		}
+	}
+	return status, body, nil
+}
+
+// httpStatusRe matches the status line wget -S prints; the last match is the
+// final answer of a redirected request.
+var httpStatusRe = regexp.MustCompile(`HTTP/1\.[01] (\d{3})`)
+
 // proveVMManagerRefusesAnonymous GETs the guarded capability report with no
 // token and wants the 401.
-func proveVMManagerRefusesAnonymous(endpoint string) error {
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(endpoint + vmManagerHostPath)
+func proveVMManagerRefusesAnonymous(cfg *config.Config) error {
+	status, body, err := vmManagerDirect(cfg, vmManagerMCPServer+"-test-anonymous", "")
 	if err != nil {
-		return fmt.Errorf("vm-manager does not answer at %s: %w\n  Run it with this lab's settings:\n%s", endpoint, err, vmManagerRunHint())
+		return err
 	}
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	_ = resp.Body.Close()
-	switch resp.StatusCode {
+	switch status {
 	case http.StatusUnauthorized:
 		return nil
 	case http.StatusOK:
-		return fmt.Errorf("vm-manager answered the capability report WITHOUT a token: it runs anonymously (no --enable-oauth), so every identity muster forwards is ignored.\n"+
-			"  Run it from the lab's environment, which turns OAuth against the lab Dex on:\n%s", vmManagerRunHint())
+		return fmt.Errorf("vm-manager answered the capability report WITHOUT a token: it runs anonymously (vm-manager.oauth.enabled is false), so every identity muster forwards is ignored.\n"+
+			"  The meta chart's vm-manager block turns OAuth on; check the release's values: `kubectl -n %s get helmrelease %s -o yaml`", platformNamespace, vmManagerMCPServer)
 	default:
-		return fmt.Errorf("vm-manager answered %d to an anonymous call, want 401:\n%.300s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return fmt.Errorf("vm-manager answered %d to an anonymous call, want 401:\n%.300s", status, strings.TrimSpace(body))
 	}
 }
 
 // vmManagerHostDirect GETs the capability report with the person's token —
-// the very token muster would forward — and parses it.
-func vmManagerHostDirect(endpoint, token string) (*vmHostInfo, error) {
-	client := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequest(http.MethodGet, endpoint+vmManagerHostPath, nil)
+// the very token muster forwards — and parses it.
+func vmManagerHostDirect(cfg *config.Config, token string) (*vmHostInfo, error) {
+	status, body, err := vmManagerDirect(cfg, vmManagerMCPServer+"-test-token", token)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxProbeBody))
-	if resp.StatusCode != http.StatusOK {
+	if status != http.StatusOK {
 		return nil, fmt.Errorf("vm-manager refused the lab's Dex id_token (%d) — its OAuth settings do not match this lab "+
-			"(issuer, CA, trusted audience: compare its environment with `agentlab vm-manager-env`):\n%.300s",
-			resp.StatusCode, strings.TrimSpace(string(body)))
+			"(issuer, CA, trusted audience: the chart reads global.identity; compare `kubectl -n %s get deploy %s -o yaml` with the lab's Dex):\n%.300s",
+			status, platformNamespace, vmManagerMCPServer, strings.TrimSpace(body))
 	}
 	var info vmHostInfo
-	if err := json.Unmarshal(body, &info); err != nil {
-		return nil, fmt.Errorf("parsing the capability report: %w\n%.300s", err, strings.TrimSpace(string(body)))
+	if err := json.Unmarshal([]byte(body), &info); err != nil {
+		return nil, fmt.Errorf("parsing the capability report: %w\n%.300s", err, strings.TrimSpace(body))
 	}
 	return &info, nil
 }

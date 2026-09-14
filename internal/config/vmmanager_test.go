@@ -6,17 +6,16 @@ import (
 )
 
 func TestVMManagerValidate(t *testing.T) {
+	dir := t.TempDir()
 	cases := []struct {
 		name    string
 		vmm     VMManager
 		wantErr string
 	}{
 		{"off", VMManager{}, ""},
-		{"on, default port", VMManager{Enabled: true}, ""},
-		{"on, explicit port", VMManager{Enabled: true, Port: 8123}, ""},
-		{"endpoint override", VMManager{Enabled: true, Endpoint: "http://host.docker.internal:8100"}, ""},
-		{"bad port", VMManager{Enabled: true, Port: 70000}, "port"},
-		{"bad endpoint", VMManager{Enabled: true, Endpoint: "172.21.0.1:8100"}, "must be an http(s) URL"},
+		{"on, no images", VMManager{Enabled: true}, ""},
+		{"on, a directory", VMManager{Enabled: true, ImageDir: dir}, ""},
+		{"missing directory", VMManager{Enabled: true, ImageDir: dir + "/missing"}, "imageDir"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -34,38 +33,28 @@ func TestVMManagerValidate(t *testing.T) {
 	}
 }
 
-func TestVMManagerListenPortDefaults(t *testing.T) {
-	var vmm VMManager
-	if vmm.ListenPort() != DefaultVMManagerPort {
-		t.Fatalf("ListenPort = %d, want %d", vmm.ListenPort(), DefaultVMManagerPort)
-	}
-	vmm.normalize()
-	if vmm.Port != DefaultVMManagerPort {
-		t.Fatalf("normalize left port %d", vmm.Port)
-	}
-	if Default().Platform.VMManager.Port != DefaultVMManagerPort {
-		t.Fatalf("Default() writes no port")
-	}
-}
-
+// TestVMManagerApplyDiscovered: the key is refused without KVM, kept with it
+// (never turned on by itself: the pod is a heavier piece than a model
+// server), and pinned by the flag either way.
 func TestVMManagerApplyDiscovered(t *testing.T) {
 	on, off := true, false
 	cases := []struct {
-		name  string
-		vmm   VMManager
-		found bool
-		pin   *bool
-		want  bool
+		name string
+		vmm  VMManager
+		kvm  bool
+		pin  *bool
+		want bool
 	}{
-		{"found turns it on", VMManager{}, true, nil, true},
-		{"gone turns it off", VMManager{Enabled: true}, false, nil, false},
-		{"an endpoint keeps it on", VMManager{Enabled: true, Endpoint: "http://10.0.0.5:8100"}, false, nil, true},
-		{"pinned on without a server", VMManager{}, false, &on, true},
-		{"pinned off despite a server", VMManager{Enabled: true}, true, &off, false},
+		{"KVM keeps an off key off", VMManager{}, true, nil, false},
+		{"KVM keeps an on key on", VMManager{Enabled: true}, true, nil, true},
+		{"no KVM turns it off", VMManager{Enabled: true}, false, nil, false},
+		{"pinned on", VMManager{}, true, &on, true},
+		{"pinned off despite KVM", VMManager{Enabled: true}, true, &off, false},
+		{"pinned on without KVM (the preflight refuses it later)", VMManager{}, false, &on, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			tc.vmm.ApplyDiscovered(tc.found, tc.pin)
+			tc.vmm.ApplyDiscovered(tc.kvm, tc.pin)
 			if tc.vmm.Enabled != tc.want {
 				t.Fatalf("Enabled = %v, want %v", tc.vmm.Enabled, tc.want)
 			}
@@ -91,5 +80,14 @@ func TestVMManagerEnabledNeedsThePlatform(t *testing.T) {
 		// Default() enables Backstage, which requires the platform: the
 		// error is Backstage's, not vm-manager's.
 		t.Fatalf("expected the backstage/platform error, got %v", err)
+	}
+}
+
+// TestDevImagesKnowVMManager: the dev-image loop swaps the vm-manager build in.
+func TestDevImagesKnowVMManager(t *testing.T) {
+	cfg := Default()
+	cfg.Platform.DevImages = map[string]string{"vm-manager": "vm-manager:dev"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("vm-manager must be a devImages target: %v", err)
 	}
 }

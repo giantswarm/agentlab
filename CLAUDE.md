@@ -118,20 +118,22 @@ with Dex doing the logins.
   "fix" that into a skipped step. Its default proof model is
   `ibm/granite-4-micro`; keep LM Studio's just-in-time loading on, or the
   agent turn fails instead of waiting for the load.
-- `platform.vmManager` wires a **vm-manager on the lab host** (the platform's
-  VM provisioner: KVM VMs with IMDS, vTPM and attestation — it runs on the
-  host, never in a pod) into muster as the MCPServer `vm-manager`
-  (`x_vm-manager_<tool>`, tool group `agent-platform`, forward-token auth).
-  `configure` discovers it on `platform.vmManager.port` (default 8100) by its
-  `vm_manager_build_info` metric; `platform` proves it reachable from a pod,
-  applies the registration and writes `state/vm-manager.env` — the
-  environment `vm-manager serve` reads to trust the lab Dex (issuer, CA, the
-  platform client, the trusted audience; `agentlab vm-manager-env` prints
-  it). Run vm-manager FROM that environment; a vm-manager without OAuth
-  answers anonymously and `./agentlab vm-manager-test` fails on it first.
-  The proof: 401 anonymous, the person's token accepted directly, the tools
-  through muster with annotations, then create_vm → ready → delete_vm
-  (`--skip-vm` boots nothing). See docs/vm-manager.md.
+- `platform.vmManager` runs **vm-manager as a pod of the node** (the
+  platform's VM provisioner: KVM VMs with IMDS, vTPM and attestation), the
+  chart's `components.vm-manager` — like agent-manager and model-manager,
+  never a host service. The node is a privileged container, so the host's
+  `/dev/kvm` and `/dev/vhost-vsock` are in it; `platform.vmManager.imageDir`
+  (a vm-manager checkout's `images/build`) is mounted into the node at
+  `agentlab up` (a change means `down && up`); `platform.devImages.vm-manager`
+  swaps a local build in. The chart brings OAuth against the lab Dex and the
+  MCPServer `vm-manager` (`x_vm-manager_<tool>`, tool group `agent-platform`,
+  forward-token auth). `configure` turns the key off on a machine without the
+  devices and never on by itself (`--vm-manager`); `up`/`platform` refuse it
+  on a node without the devices or the mount, with the fix. The proof: 401
+  anonymous from inside the cluster, the person's token accepted, the tools
+  through muster with annotations, then create_vm → ready → attestation →
+  delete_vm (`--skip-vm` boots nothing). The golden PCR values are the pod's
+  OVMF's, recorded once per vm-manager image (docs/vm-manager.md).
 - For verifying RBAC as a specific user, use `./agentlab login <email>` and
   `kubectl --kubeconfig kubeconfig.oidc` — that is the OIDC path.
 - The cluster's admin kubeconfig (`state/kubeconfig`, context `kind-agentlab`)
@@ -160,7 +162,7 @@ go test ./internal/forms/ -run TestMinimalFormDrive -count=1 -v   # single test
 ./agentlab open portal     # the portal (Backstage) in the browser; `open agents` the kagent UI
 ./agentlab platform-test   # headless Dex -> muster -> mcp-kubernetes proof
 ./agentlab models-test     # managed models: 401 -> pull -> ModelConfig -> agent turn -> MCP -> unload -> delete (on lmstudio: the 501 refusal -> unwire, U23)
-./agentlab vm-manager-test # the host vm-manager as the person: 401 anonymous -> tools via muster -> create_vm -> ready -> delete_vm
+./agentlab vm-manager-test # the vm-manager pod as the person: 401 anonymous -> tools via muster -> create_vm -> ready -> attestation -> delete_vm
 ./agentlab test            # RBAC assertions for every configured user
 ./agentlab backstage-test  # headless Backstage sign-in for every user
 ./agentlab skills-test     # kagent API v2: an AgentTemplate with a git-pinned skill boots (the golden boot) and answers from the skill
