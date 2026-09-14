@@ -30,7 +30,12 @@ import (
 // The 4.x line was measured on 2026-09-11 (agent-platform 4.7.11: kagent
 // 0.11.0-gs.3, Substrate 0.0.27-gs.5, the full default lab with model-manager
 // on kind v1.37.0, a node up for 19 hours): 3340m / 4388Mi requested — the
-// node's Allocated resources read exactly that — about 4.4 GiB in use.
+// node's Allocated resources read exactly that — about 4.4 GiB in use. The
+// requests were re-read on 2026-09-14 on agent-platform 4.15.2 (kagent
+// 0.11.0-gs.13, Substrate 0.0.27-gs.9, the same lab): 3340m / 4580Mi — the
+// only mover is muster's valkey (256Mi + its metrics sidecar's 64Mi, the
+// memory bound agent-platform 4.12.1 gave a grown token store); the use
+// figures below keep the higher of the two readings.
 // docs/getting-started.md "Docker resources" is the human
 // copy of these constants — its table lists the same groups — so a change
 // here is a change there.
@@ -102,18 +107,19 @@ const (
 	reqDexMem = 64
 	useDexMem = 40
 	// The chart without its optional parts: muster 100m/128Mi and its valkey
-	// 150m/192Mi, agentgateway 100m/128Mi and its controller 50m/128Mi,
-	// mcp-kubernetes 105m/144Mi, agent-manager 55m/80Mi. In use: muster 91Mi,
-	// valkey 28Mi, the data plane 20Mi and its controller 63Mi,
-	// mcp-kubernetes 24Mi, agent-manager 17Mi.
+	// 100m/320Mi (the server 50m/256Mi, its metrics sidecar 50m/64Mi),
+	// agentgateway 100m/128Mi and its controller 50m/128Mi, mcp-kubernetes
+	// 105m/144Mi, agent-manager 55m/80Mi. In use: muster 91Mi, valkey 28Mi,
+	// the data plane 20Mi and its controller 63Mi, mcp-kubernetes 24Mi,
+	// agent-manager 17Mi.
 	reqPlatformCoreCPU = 510
-	reqPlatformCoreMem = 736
+	reqPlatformCoreMem = 928
 	usePlatformCoreMem = 245
 	// The agents runtime: the kagent controller 100m/128Mi and the UI
-	// 100m/256Mi (70Mi and 2Mi in use).
+	// 100m/256Mi (103Mi and 3Mi in use on 4.15.2; 70Mi and 2Mi on 4.7.11).
 	reqAgentsRuntimeCPU = 200
 	reqAgentsRuntimeMem = 384
-	useAgentsRuntimeMem = 75
+	useAgentsRuntimeMem = 110
 	// kagent's bundled PostgreSQL, 250m/256Mi (47Mi in use) — on a chart
 	// without the platform Postgres (the 0.10 product's 3.x line); on the
 	// 4.x line the controller's database is the CNPG Cluster below.
@@ -146,10 +152,10 @@ const (
 	reqCNPGMem = 0
 	useCNPGMem = 180
 	// Backstage requests almost nothing and uses several times its 250Mi
-	// (400Mi measured).
+	// (500Mi measured on 4.15.2 with Backstage 2.4.1; 400Mi on 4.7.11).
 	reqBackstageCPU = 20
 	reqBackstageMem = 250
-	useBackstageMem = 400
+	useBackstageMem = 500
 	// The chart's bundled Flux engine (the lab shape): the Flux Operator plus
 	// the FluxInstance's source-controller and helm-controller — the delivery
 	// engine of every platform component, so it is always part of the platform.

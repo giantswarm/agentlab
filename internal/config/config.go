@@ -95,7 +95,7 @@ const DefaultDexPort = 32000
 // 4.x line (kagent API v2 with Agent Substrate and the platform Postgres
 // shipped by the chart). Bump deliberately, with a lab run: the lab never
 // floats.
-const DefaultChartVersion = "4.7.11"
+const DefaultChartVersion = "4.15.2"
 
 // ChartRepository is where the agent-platform chart releases live.
 const ChartRepository = "oci://gsoci.azurecr.io/charts/giantswarm/agent-platform"
