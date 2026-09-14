@@ -623,17 +623,26 @@ modelManager:
 {{- if .VMManagerEnabled }}
 # The vm-manager chart's own values, on top of the meta chart's block (the
 # pinned Service name, OAuth against global.identity — the lab Dex — and the
-# muster registration with the agent-platform tool group): the image
-# directory as the node sees it, the kind extraMount of
-# platform.vmManager.imageDir (kind-config.yaml.tmpl); without one the pod
-# starts with an empty directory. The state (VM records, disks, vTPM state)
-# stays an emptyDir: the lab's VMs are throwaway. The devices come from the
-# node, a privileged container with the host's /dev.
+# muster registration with the agent-platform tool group): the guest image
+# the pod's init container fetches — the lab registry's copy of a local build
+# (platform.vmManager.imageDir, pushed at `agentlab platform`, pinned by
+# digest so a rebuilt image rolls the pod) or, without one, the artifact the
+# chart's release published (the chart default) — and a state claim on the
+# node's local-path storage, so the fetched image and the golden PCR values
+# recorded into its policy.json survive a pod restart (the lab's VMs and their
+# disks with them). The devices come from the node, a privileged container
+# with the host's /dev; nothing is mounted from the node.
 vm-manager:
-  images:
-    hostPath: {{ .VMManagerImageMount | printf "%q" }}
+{{- with .VMManagerGuestImage }}
+  guestImage:
+    registry: {{ .Registry }}
+    repository: {{ .Repository }}
+    tag: {{ .Tag }}
+    digest: {{ .Digest }}
+    plainHTTP: true
+{{- end }}
   persistence:
-    create: false
+    create: true
 {{- end }}
 
 {{- if .KlausGatewayEnabled }}

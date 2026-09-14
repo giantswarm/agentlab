@@ -8,8 +8,12 @@ the Agent Platform group. vm-manager is the sibling of agent-manager (agents)
 and model-manager (models) — the write surface for VMs — and runs the way they
 do: as a **pod**, the agent-platform chart's `components.vm-manager`. The kind
 node is a privileged docker container, so the host's `/dev/kvm` and
-`/dev/vhost-vsock` are in it, and the chart mounts them into the pod; QEMU and
-swtpm are the pod's children.
+`/dev/vhost-vsock` are in it, and the runtime hands them to the privileged pod
+(nothing is mounted from the node; the chart has no hostPath); QEMU and swtpm
+are the pod's children. The guest image the pod boots is an OCI artifact its
+init container fetches into the pod's state volume: the one every vm-manager
+release publishes (`gsoci.azurecr.io/giantswarm/vm-manager-guest-image:<version>`,
+the chart default), or a local build the lab pushes into its registry.
 
 ## What the lab does
 
@@ -19,32 +23,37 @@ swtpm are the pod's children.
 platform:
   vmManager:
     enabled: true
-    imageDir: /home/you/projects/giantswarm/vm-manager/images/build   # `make -C images` in a vm-manager checkout
+    imageDir: /home/you/projects/giantswarm/vm-manager/images/build   # optional: a local guest image build (`make -C images`); empty boots the release's
   devImages:
-    vm-manager: vm-manager:dev                                        # optional: a build of the checkout (`make docker-build`)
+    vm-manager: vm-manager:dev                                        # optional: a build of the checkout's binary (`make docker-build`)
 ```
 
 - **`agentlab configure`** reports whether this machine has the KVM devices
-  (`KVM  /dev/kvm and /dev/vhost-vsock present — platform.vmManager on, images
-  from …`). A machine without them turns the key off with the reason; a
-  machine with them keeps what the file says — the pod is a heavier piece of
-  the lab than a model server, so it is never turned on by itself.
-  `--vm-manager[=false]` pins it, `--vm-manager-image-dir <dir>` names the
-  image directory.
-- **`agentlab up`** mounts `imageDir` into the kind node at
-  `/var/lib/agentlab/vm-manager/images` (read-only, a kind `extraMount` —
-  fixed at `kind create` like the port mappings, so a changed directory means
-  `agentlab down && agentlab up`), and refuses the key on a node without the
-  devices or the mount, with the fix.
+  (`KVM  /dev/kvm and /dev/vhost-vsock present — platform.vmManager on, the
+  release's guest image` or `… a local guest image build from …`). A machine
+  without them turns the key off with the reason; a machine with them keeps
+  what the file says — the pod is a heavier piece of the lab than a model
+  server, so it is never turned on by itself. `--vm-manager[=false]` pins it,
+  `--vm-manager-image-dir <dir>` names a local build.
+- **`agentlab up`** / **`agentlab platform`** refuse the key on a node without
+  the devices, with the fix. With `imageDir` set, `platform` pushes the build
+  into the lab registry (`<cluster>-registry:5000`, the one the Harness dev
+  image uses; created when missing) as `vm-manager-guest-image:dev` with
+  `vm-manager image push` — the same code the release pipeline runs — and
+  records the manifest digest in `state/vm-manager-guest-image.json`. A
+  rebuilt image is a new digest: the next `platform` rolls the pod, whose init
+  container replaces the directory. Nothing is fixed at `kind create` any more.
 - **`agentlab platform`** turns `components.vm-manager` on in the chart's
   values: the meta chart's own `vm-manager:` block brings the pinned Service
   name, OAuth against `global.identity` (the lab Dex, private URLs and IPs)
   and the muster `MCPServer` with the `agent-platform` tool group and
-  forward-token auth; the lab adds `images.hostPath` (the node path above) and
-  keeps the state an emptyDir (the lab's VMs are throwaway). A
-  `platform.devImages.vm-manager` build is side-loaded into the node and
-  swapped in like model-manager's. The run waits until muster reports the
-  registration reachable.
+  forward-token auth; the lab adds `guestImage` (the lab registry, by digest,
+  plain HTTP) when a local build is configured and a state claim
+  (`persistence.create: true`, the node's local-path storage) so the fetched
+  image, its golden PCR values and the lab's VM records survive a pod restart.
+  A `platform.devImages.vm-manager` build is side-loaded into the node and
+  swapped in like model-manager's (both containers of the pod run it). The run
+  waits until muster reports the registration reachable.
 - **`agentlab vm-manager-test`** is the proof (below).
 
 An agentlab before 0.44 registered a vm-manager running on the host
@@ -61,7 +70,10 @@ boots its VM with `require_attestation: false` and says so. The firmware is
 the **pod's** OVMF (Ubuntu 26.04's, inside the vm-manager image), not the
 host's: values recorded for another firmware fail every quote (`golden
 mismatch` on PCRs 0 and 7) and the VM never releases its user-data. Record
-them once per image and vm-manager image, through the lab's identity:
+them once per guest image and vm-manager image, through the lab's identity,
+inside the pod — the image directory is the pod's state volume, and the
+pod's environment makes `vm-manager image golden` default to the pod's server
+and directory:
 
 ```sh
 # 1. one boot in learn mode: the pod accepts the golden PCRs it has no value for
@@ -76,17 +88,23 @@ kubectl --kubeconfig state/kubeconfig -n agent-platform port-forward svc/vm-mana
 curl -s -H "Authorization: Bearer $(cat .token)" -H 'Content-Type: application/json' \
   -d '{"name":"golden-bringup","cpus":1,"memory_mib":1024,"disk_gib":8,"require_attestation":true,"wait_for":"ready"}' \
   http://127.0.0.1:18080/api/v1/vms | jq -r .id
-# 2. write the VM's verified ready-stage quote into the image's policy.json (on the host: the mount is read-only in the pod)
-vm-manager image golden giantswarm-vm-base_0.1.0 --from-vm <id> \
-  --server http://127.0.0.1:18080 --token "$(cat .token)" --image-dir <imageDir>
+# 2. write the VM's verified ready-stage quote into the image's policy.json, inside the pod
+kubectl --kubeconfig state/kubeconfig -n agent-platform exec deploy/vm-manager -- \
+  vm-manager image golden giantswarm-vm-base_0.1.0 --from-vm <id> --token "$(cat .token)"
 # 3. delete the VM, drop the overlay, `agentlab platform` (the pod restarts and reads the policy): every later boot is compared
 curl -s -X DELETE -H "Authorization: Bearer $(cat .token)" http://127.0.0.1:18080/api/v1/vms/<id>
 ```
 
 From then on `list_images` reports the golden values, `agentlab
 vm-manager-test` boots its VM with `require_attestation: true` and reads both
-quotes verified. A new vm-manager image with another OVMF build changes PCRs 0
-and 2-4: `image golden` again.
+quotes verified. The values live in the pod's state claim: they survive pod
+restarts, and a *new* guest image (another digest — a rebuilt local build, or
+a vm-manager release with another image) replaces the directory, so `image
+golden` again; a new vm-manager image with another OVMF build changes PCRs 0
+and 2-4, the same. To keep them for a local build, copy the pod's
+`policy.json` back into the checkout's `images/build` (`kubectl cp` from
+`/var/lib/vm-manager/images/policy.json`) before the next push: it travels
+inside the artifact.
 
 ## The proof
 
@@ -137,7 +155,7 @@ provision VMs as the person who asked. `agentlab logs vm-manager` follows the
 pod (`--verbose` is on in the lab's values for a dev image).
 
 The pod's VMs end with the pod: a `agentlab platform` that rolls the
-Deployment (a new dev image, changed values) stops every VM; their records
-stay in the emptyDir only as long as the pod does. What is **not** in the
-lab: a persistent state claim (`vm-manager.persistence`) and a network policy
-around the pod (the lab runs without policies).
+Deployment (a new dev image, a new guest image digest, changed values) stops
+every VM; their records and disks stay on the state claim for the next
+`start_vm`. What is **not** in the lab: a network policy around the pod (the
+lab runs without policies).

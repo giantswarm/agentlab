@@ -122,18 +122,25 @@ with Dex doing the logins.
   platform's VM provisioner: KVM VMs with IMDS, vTPM and attestation), the
   chart's `components.vm-manager` — like agent-manager and model-manager,
   never a host service. The node is a privileged container, so the host's
-  `/dev/kvm` and `/dev/vhost-vsock` are in it; `platform.vmManager.imageDir`
-  (a vm-manager checkout's `images/build`) is mounted into the node at
-  `agentlab up` (a change means `down && up`); `platform.devImages.vm-manager`
-  swaps a local build in. The chart brings OAuth against the lab Dex and the
-  MCPServer `vm-manager` (`x_vm-manager_<tool>`, tool group `agent-platform`,
-  forward-token auth). `configure` turns the key off on a machine without the
-  devices and never on by itself (`--vm-manager`); `up`/`platform` refuse it
-  on a node without the devices or the mount, with the fix. The proof: 401
+  `/dev/kvm` and `/dev/vhost-vsock` are in it and the runtime hands them to
+  the pod — nothing is mounted from the node, the chart has no hostPath. The
+  guest image is an OCI artifact the pod's init container fetches: the one
+  the chart's release published, or a local build (`platform.vmManager.imageDir`,
+  a vm-manager checkout's `images/build`) that `agentlab platform` pushes into
+  the lab registry (`<cluster>-registry:5000`) and pins by digest, so a
+  rebuilt image rolls the pod on the next run — no `down && up`.
+  `platform.devImages.vm-manager` swaps a local build of the binary in. The
+  chart brings OAuth against the lab Dex and the MCPServer `vm-manager`
+  (`x_vm-manager_<tool>`, tool group `agent-platform`, forward-token auth); the
+  lab gives the pod a state claim, so the fetched image and the golden PCR
+  values survive a restart. `configure` turns the key off on a machine without
+  the devices and never on by itself (`--vm-manager`); `up`/`platform` refuse it
+  on a node without the devices, with the fix. The proof: 401
   anonymous from inside the cluster, the person's token accepted, the tools
   through muster with annotations, then create_vm → ready → attestation →
   delete_vm (`--skip-vm` boots nothing). The golden PCR values are the pod's
-  OVMF's, recorded once per vm-manager image (docs/vm-manager.md).
+  OVMF's, recorded once per vm-manager image and guest image inside the pod
+  (`kubectl exec … vm-manager image golden`, docs/vm-manager.md).
 - `platform.klausGateway` runs **Swarmgeist (klaus-gateway) as the meta
   chart's in-cluster component** (`components.klaus-gateway`), the shape
   every installation runs next to the host-mode gateway

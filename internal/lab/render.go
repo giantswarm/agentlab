@@ -81,11 +81,11 @@ type tmplData struct {
 	ToolGroupInfrastructure string
 	ToolGroupAgentPlatform  string
 	// VMManagerEnabled turns the chart's vm-manager component on
-	// (vmmanager.go); VMManagerImageMount is where the kind node sees
-	// platform.vmManager.imageDir — the extraMount's containerPath, the
-	// chart's images.hostPath — empty when no directory is configured.
+	// (vmmanager.go); VMManagerGuestImage is the chart's guestImage block for
+	// a local build pushed into the lab registry, nil for the release's
+	// published artifact.
 	VMManagerEnabled    bool
-	VMManagerImageMount string
+	VMManagerGuestImage *vmManagerGuestImage
 	// KlausGatewayEnabled turns the chart's klaus-gateway component on
 	// (klausgateway.go); KlausGateway carries the names and URLs its
 	// `klausGateway:` block needs.
@@ -122,6 +122,10 @@ type tmplData struct {
 }
 
 func newTmplData(cfg *config.Config) (*tmplData, error) {
+	vmManagerGuestImage, err := vmManagerGuestImageFor(cfg)
+	if err != nil {
+		return nil, err
+	}
 	certsDir, err := filepath.Abs("certs")
 	if err != nil {
 		return nil, err
@@ -164,7 +168,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		ToolGroupInfrastructure:    toolGroupInfrastructure,
 		ToolGroupAgentPlatform:     toolGroupAgentPlatform,
 		VMManagerEnabled:           cfg.VMManagerEnabled(),
-		VMManagerImageMount:        vmManagerImageMountFor(cfg),
+		VMManagerGuestImage:        vmManagerGuestImage,
 		KlausGatewayEnabled:        cfg.KlausGatewayEnabled(),
 		KlausGateway:               klausGatewayValuesFor(cfg),
 		CertsDir:                   certsDir,

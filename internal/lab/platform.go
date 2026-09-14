@@ -328,13 +328,20 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	}
 
 	// The VM provisioner as a pod of the node (vmmanager.go): the node's KVM
-	// devices and the image directory's mount, checked before the install
-	// would leave the pod stuck on a hostPath the node lacks; and the
-	// registration an earlier agentlab created for a host vm-manager removed,
-	// since the chart now renders one of the same name.
+	// devices checked before the install would leave a pod that cannot boot
+	// anything; a local guest image build pushed into the lab registry so the
+	// values below can pin it; and the registration an earlier agentlab
+	// created for a host vm-manager removed, since the chart now renders one
+	// of the same name.
 	if cfg.VMManagerEnabled() {
-		step("Checking the node can run vm-manager (%s, the image directory)", strings.Join(kvmDevices, ", "))
+		step("Checking the node can run vm-manager (%s)", strings.Join(kvmDevices, ", "))
 		if err := preflightVMManager(cfg); err != nil {
+			return err
+		}
+		if cfg.Platform.VMManager.ImageDir != "" {
+			step("Pushing the guest image of %s into the lab registry", cfg.Platform.VMManager.ImageDir)
+		}
+		if err := pushVMManagerGuestImage(context.Background(), cfg); err != nil {
 			return err
 		}
 	}

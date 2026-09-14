@@ -138,7 +138,7 @@ var devImageTargets = map[string]devImageTarget{
 	componentMCPKubernetes: {componentMCPKubernetes, componentMCPKubernetes, "gsoci.azurecr.io/giantswarm/mcp-kubernetes"},
 	modelManagerMCPServer:  {modelManagerMCPServer, modelManagerMCPServer, "gsoci.azurecr.io/giantswarm/model-manager"},
 	agentManagerMCPServer:  {agentManagerMCPServer, agentManagerMCPServer, "gsoci.azurecr.io/giantswarm/agent-manager"},
-	vmManagerMCPServer:     {vmManagerMCPServer, vmManagerMCPServer, "ghcr.io/giantswarm/vm-manager"},
+	vmManagerMCPServer:     {vmManagerMCPServer, vmManagerMCPServer, "gsoci.azurecr.io/giantswarm/vm-manager"},
 	klausGatewayComponent:  {klausGatewayComponent, klausGatewayComponent, "gsoci.azurecr.io/giantswarm/klaus-gateway"},
 }
 

@@ -119,9 +119,11 @@ const DevImageKlausGateway = "klaus-gateway"
 // (DevRegistryPort) and forwards the digest through kagent.harness.image.
 const DevImageHarness = "harness"
 
-// vmManagerChartFloor is the first agent-platform release with the vm-manager
-// component (components.vm-manager).
-var vmManagerChartFloor = semver.MustParse("4.11.0")
+// vmManagerChartFloor is the first agent-platform release whose vm-manager
+// component (components.vm-manager) comes from gsoci and fetches its guest
+// image as an artifact (vm-manager >= 0.20.1, the guestImage values this lab
+// sets); 4.11 and 4.12 pinned the ghcr.io chart with the node-path inputs.
+var vmManagerChartFloor = semver.MustParse("4.13.0")
 
 // DefaultDevRegistryPort is the host port of the lab registry when
 // agentlab.yaml sets none: kind's documented local-registry port.
@@ -270,10 +272,11 @@ type Platform struct {
 	// the lab's values (x_vm-manager_<tool> through muster, tool group
 	// agent-platform, forward-token auth against the lab Dex). The node is a
 	// privileged container, so the host's /dev/kvm and /dev/vhost-vsock are
-	// in it for the pod; the image directory of a vm-manager checkout
-	// reaches the pod through a kind extraMount (imageDir). `agentlab
-	// configure` turns it off on a machine without the devices; --vm-manager
-	// turns it on. A build of the checkout swaps in through devImages.
+	// in it for the pod. The guest image is the artifact the chart's release
+	// published, or a local build pushed into the lab registry (imageDir).
+	// `agentlab configure` turns it off on a machine without the devices;
+	// --vm-manager turns it on. A build of the checkout swaps in through
+	// devImages.
 	VMManager VMManager `yaml:"vmManager"`
 	// Swarmgeist (github.com/giantswarm/klaus-gateway) as the meta chart's
 	// in-cluster component (components.klaus-gateway), the way every
@@ -305,14 +308,13 @@ type VMManager struct {
 	// registration the chart renders. Refused on a machine without /dev/kvm
 	// and /dev/vhost-vsock (`agentlab configure` turns it off there).
 	Enabled bool `yaml:"enabled"`
-	// The image directory `vm-manager serve --image-dir` reads — a
-	// vm-manager checkout's images/build after `make -C images`: the base
-	// image, its UKI, the Kubernetes sysext layers and policy.json with the
-	// golden PCR values. Mounted into the kind node at `kind create`
-	// (kind-config.yaml.tmpl), so a change means `agentlab down && up`;
-	// empty starts the pod with no bootable image (list_images empty, the
-	// proof boots nothing). An absolute path, or relative to the lab
-	// directory.
+	// A local guest image build the pod boots instead of the artifact the
+	// chart's release published — a vm-manager checkout's images/build
+	// after `make -C images`: the base image, its UKI, the Kubernetes sysext
+	// layers and policy.json. `agentlab platform` pushes it into the lab
+	// registry and pins the chart to its digest, so a rebuilt image rolls
+	// the pod on the next run. Empty: the release's guest image. An absolute
+	// path, or relative to the lab directory.
 	ImageDir string `yaml:"imageDir,omitempty"`
 }
 

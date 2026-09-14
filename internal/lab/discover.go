@@ -412,13 +412,13 @@ func (d *Discovery) kvmLine(cfg *config.Config) string {
 	if len(d.KVMMissing) > 0 {
 		return fmt.Sprintf("no %s — platform.vmManager (the VM provisioner as a pod of the node) stays off", strings.Join(d.KVMMissing, " and "))
 	}
-	state := "off (`agentlab configure --vm-manager --vm-manager-image-dir <a vm-manager checkout's images/build>` turns it on)"
+	state := "off (`agentlab configure --vm-manager` turns it on; `--vm-manager-image-dir <a vm-manager checkout's images/build>` boots a local build)"
 	if cfg.Platform.VMManager.Enabled {
 		state = "on"
 		if cfg.Platform.VMManager.ImageDir == "" {
-			state += ", no image directory (platform.vmManager.imageDir: the pod has nothing to boot)"
+			state += ", the release's guest image (platform.vmManager.imageDir boots a local build instead)"
 		} else {
-			state += fmt.Sprintf(", images from %s", cfg.Platform.VMManager.ImageDir)
+			state += fmt.Sprintf(", a local guest image build from %s", cfg.Platform.VMManager.ImageDir)
 		}
 	}
 	return fmt.Sprintf("%s present — platform.vmManager %s", strings.Join(kvmDevices, " and "), state)

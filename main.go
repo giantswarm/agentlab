@@ -598,7 +598,7 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().StringVar(&chartBranch, "chart-branch", "", "the dev channel: follow this agent-platform branch's newest dev build (resolved now and on every up/platform, written to chartVersion); \"\" returns to the stable channel")
 	cmd.Flags().StringSliceVar(&modelManagerBackends, "model-manager-backends", nil, fmt.Sprintf("pin the host model servers, in order (%s; the first is model-manager's default backend) instead of the ones the discovery finds", strings.Join(config.ModelManagerBackends, ", ")))
 	cmd.Flags().BoolVar(&vmManager, "vm-manager", false, "run the platform's VM provisioner (vm-manager) as a pod of the node; --vm-manager=false turns it off (needs /dev/kvm and /dev/vhost-vsock on this machine)")
-	cmd.Flags().StringVar(&vmManagerImageDir, "vm-manager-image-dir", "", "the image directory the vm-manager pod boots from: a vm-manager checkout's images/build after `make -C images` (mounted into the node at `agentlab up`; empty for none)")
+	cmd.Flags().StringVar(&vmManagerImageDir, "vm-manager-image-dir", "", "a local guest image build the vm-manager pod boots instead of its release's: a vm-manager checkout's images/build after `make -C images`, pushed into the lab registry at `agentlab platform` (empty for the release's)")
 	cmd.Flags().BoolVar(&klausGateway, "klaus-gateway", false, "run Swarmgeist (klaus-gateway) as the meta chart's in-cluster component: A2A on the in-cluster controller target, the web channel, Slack on a placeholder Secret, the OBO link store in a Secret (needs agents); --klaus-gateway=false turns it off")
 	cmd.Flags().BoolVar(&accessible, "accessible", false, "prompt-per-question form mode (for screen readers and plain terminals)")
 	return cmd
@@ -660,9 +660,9 @@ func endpointNote(mm config.ModelManager, backend string, disc *lab.Discovery) s
 // vmManagerImagesNote says what the vm-manager pod boots from.
 func vmManagerImagesNote(vmm config.VMManager) string {
 	if vmm.ImageDir == "" {
-		return "no image directory: list_images is empty until --vm-manager-image-dir names a vm-manager checkout's images/build"
+		return "the guest image its release published (--vm-manager-image-dir <a vm-manager checkout's images/build> boots a local build)"
 	}
-	return "images from " + vmm.ImageDir + ", mounted into the node at `agentlab up`"
+	return "the local guest image build of " + vmm.ImageDir + ", pushed into the lab registry at `agentlab platform`"
 }
 
 func loginCmd() *cobra.Command {
