@@ -26,11 +26,12 @@ type logTarget struct {
 // cobra's ValidArgs via LogComponents, so dispatch and completion cannot
 // drift.
 var logTargets = map[string]logTarget{
-	componentDex:         {componentDex, "app=dex"},
-	componentMuster:      {platformNamespace, "app.kubernetes.io/name=muster"},
-	componentBackstage:   {platformNamespace, "deploy/" + componentBackstage},
-	componentPrometheus:  {observabilityNamespace, "app.kubernetes.io/name=prometheus"},
-	mcpPrometheusRelease: {observabilityNamespace, "deploy/" + mcpPrometheusRelease},
+	componentDex:          {componentDex, "app=dex"},
+	componentMuster:       {platformNamespace, "app.kubernetes.io/name=muster"},
+	componentBackstage:    {platformNamespace, "deploy/" + componentBackstage},
+	klausGatewayComponent: {platformNamespace, "deploy/" + klausGatewayComponent},
+	componentPrometheus:   {observabilityNamespace, "app.kubernetes.io/name=prometheus"},
+	mcpPrometheusRelease:  {observabilityNamespace, "deploy/" + mcpPrometheusRelease},
 }
 
 // LogComponents lists what Logs accepts, for cobra's ValidArgs.

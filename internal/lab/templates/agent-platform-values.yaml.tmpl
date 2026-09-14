@@ -193,6 +193,20 @@ components:
     postRenderers:
 {{ index .PostRenderers "vm-manager" | indent 6 }}
 {{- end }}
+{{- if .KlausGatewayEnabled }}
+  # Swarmgeist (platform.klausGateway): klaus-gateway as the meta chart's
+  # component — A2A to the kagent controller over the in-cluster agentgateway
+  # target, the web channel, Slack on a placeholder Secret, the OBO link
+  # store in a Secret (its own values are in the `klausGateway:` block
+  # below). The lab patches nothing on it; the entry below is the dev-image
+  # override when platform.devImages names one.
+  klaus-gateway:
+    enabled: true
+{{- with index .PostRenderers "klaus-gateway" }}
+    postRenderers:
+{{ . | indent 6 }}
+{{- end }}
+{{- end }}
   backstage:
     enabled: {{ .Backstage.Enabled }}
 {{- if .Backstage.Enabled }}
@@ -620,6 +634,36 @@ vm-manager:
     hostPath: {{ .VMManagerImageMount | printf "%q" }}
   persistence:
     create: false
+{{- end }}
+
+{{- if .KlausGatewayEnabled }}
+# Swarmgeist's own values, on top of the meta chart's klausGateway block (the
+# static lifecycle driver, no second agentgateway, the disruption guards;
+# klausgateway.go has the reasoning): the in-cluster controller target and
+# the proof's fixture as the default agent, the web channel, the Slack
+# adapter on the lab's placeholder Secret, the OBO link store in a Secret
+# with the lab's keys Secret mounted, the ServiceMonitor following the
+# observability switch. The edge route for the channels stays off.
+klausGateway:
+  a2a:
+    enabled: true
+    url: {{ .KlausGateway.A2ATarget }}
+    namespace: {{ .KlausGateway.AgentNamespace }}
+    defaultAgent: {{ .KlausGateway.DefaultAgent }}
+  web:
+    enabled: true
+  slack:
+    enabled: true
+    mode: events
+    secretName: {{ .KlausGateway.SlackSecret }}
+  obo:
+    enabled: true
+    store: secret
+    musterUrl: {{ .KlausGateway.MusterURL }}
+    callbackBaseUrl: {{ .KlausGateway.CallbackBaseURL }}
+    existingSecret: {{ .KlausGateway.KeysSecret }}
+  serviceMonitor:
+    enabled: {{ .Platform.Observability }}
 {{- end }}
 
 {{- if .Backstage.Enabled }}

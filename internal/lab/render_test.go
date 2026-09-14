@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -482,5 +483,94 @@ func TestPlatformValuesFourXTopology(t *testing.T) {
 	}
 	if strings.Contains(string(out), "cloudnative-pg") || strings.Contains(string(out), "\npostgres:") || strings.Contains(string(out), "\nsubstrate:") {
 		t.Errorf("without agents the Postgres and Substrate blocks must not render:\n%s", excerptAround(string(out), "postgres"))
+	}
+}
+
+// The klaus-gateway component (platform.klausGateway) renders only when on:
+// the component entry without a postRenderers key unless a dev image names
+// one, and the `klausGateway:` block with the in-cluster a2a target, the web
+// channel, Slack on the placeholder Secret, the OBO link store in a Secret
+// with the lab's keys Secret, the ServiceMonitor following observability.
+func TestPlatformValuesKlausGateway(t *testing.T) {
+	render := func(cfg *config.Config) func(path ...string) any {
+		out, err := renderTemplate(cfg, platformValuesTemplate, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var values map[string]any
+		if err := yaml.Unmarshal(out, &values); err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		return func(path ...string) any {
+			var cur any = values
+			for _, key := range path {
+				m, ok := cur.(map[string]any)
+				if !ok {
+					return nil
+				}
+				cur = m[key]
+			}
+			return cur
+		}
+	}
+	const block = "klausGateway"
+	off := render(config.Default())
+	if off("components", klausGatewayComponent) != nil || off(block) != nil {
+		t.Fatalf("off by default: components.klaus-gateway=%v klausGateway=%v", off("components", klausGatewayComponent), off(block))
+	}
+
+	cfg := config.Default()
+	cfg.Platform.KlausGateway.Enabled = true
+	cfg.Platform.Observability = false
+	at := render(cfg)
+	if at("components", klausGatewayComponent, "enabled") != true {
+		t.Errorf("components.klaus-gateway.enabled = %v", at("components", klausGatewayComponent, "enabled"))
+	}
+	if at("components", klausGatewayComponent, "postRenderers") != nil {
+		t.Errorf("without a dev image the lab patches nothing on the component: %v", at("components", klausGatewayComponent, "postRenderers"))
+	}
+	// The block's keys as dotted paths under klausGateway.
+	checks := map[string]any{
+		"a2a.enabled":            true,
+		"a2a.url":                klausGatewayInClusterTarget,
+		"a2a.namespace":          kagentNamespace,
+		"a2a.defaultAgent":       klausGatewayTestAgent,
+		"web.enabled":            true,
+		"slack.enabled":          true,
+		"slack.mode":             "events",
+		"slack.secretName":       klausGatewaySlackPlaceholder,
+		"obo.enabled":            true,
+		"obo.store":              oboStoreSecretBackend,
+		"obo.musterUrl":          cfg.MusterBaseURL(),
+		"obo.callbackBaseUrl":    "https://agentgateway." + cfg.Platform.Domain,
+		"obo.existingSecret":     klausGatewayOBOKeys,
+		"serviceMonitor.enabled": false,
+	}
+	for path, want := range checks {
+		if got := at(append([]string{block}, strings.Split(path, ".")...)...); got != want {
+			t.Errorf("%s.%s = %v, want %v", block, path, got, want)
+		}
+	}
+	if at(block, "agentgatewayRoute") != nil {
+		t.Errorf("the edge route for the channels stays the meta chart's default (off): %v", at(block, "agentgatewayRoute"))
+	}
+
+	// A dev image rides the component's postRenderers as a kustomize image
+	// override on the chart's image name, with the pull-policy patch on the
+	// Deployment's container.
+	cfg.Platform.DevImages = map[string]string{klausGatewayComponent: "klaus-gateway:dev-5a6b"}
+	at = render(cfg)
+	prs, _ := at("components", klausGatewayComponent, "postRenderers").([]any)
+	if len(prs) != 1 {
+		t.Fatalf("postRenderers with a dev image: %v", at("components", klausGatewayComponent, "postRenderers"))
+	}
+	kustomize := prs[0].(map[string]any)["kustomize"].(map[string]any)
+	imgs, _ := kustomize["images"].([]any)
+	if len(imgs) != 1 || imgs[0].(map[string]any)["name"] != "gsoci.azurecr.io/giantswarm/klaus-gateway" || imgs[0].(map[string]any)["newTag"] != "dev-5a6b" {
+		t.Errorf("klaus-gateway dev image override: %v", kustomize["images"])
+	}
+	patches, _ := kustomize["patches"].([]any)
+	if len(patches) != 1 || !strings.Contains(fmt.Sprint(patches[0]), "imagePullPolicy: IfNotPresent") || !strings.Contains(fmt.Sprint(patches[0]), "name: klaus-gateway") {
+		t.Errorf("klaus-gateway pull-policy patch: %v", kustomize["patches"])
 	}
 }

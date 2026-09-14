@@ -48,7 +48,7 @@ func TestLogTargets(t *testing.T) {
 			t.Errorf("%s: streamed %q", component, b.String())
 		}
 	}
-	if got, want := LogComponents(), []string{componentBackstage, componentDex, mcpPrometheusRelease, componentMuster, componentPrometheus}; !slices.Equal(got, want) {
+	if got, want := LogComponents(), []string{componentBackstage, componentDex, klausGatewayComponent, mcpPrometheusRelease, componentMuster, componentPrometheus}; !slices.Equal(got, want) {
 		t.Errorf("LogComponents = %v, want %v", got, want)
 	}
 }

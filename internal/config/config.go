@@ -104,7 +104,12 @@ const ChartRepository = "oci://gsoci.azurecr.io/charts/giantswarm/agent-platform
 // agent-platform chart's component names (its `components.<name>` entries)
 // for the Deployments the lab's dev loops build from a checkout, plus
 // DevImageHarness for the platform Harness's runtime image.
-var DevImageComponents = []string{"muster", "backstage", "kagent", "mcp-kubernetes", "model-manager", "agent-manager", "vm-manager", DevImageHarness}
+var DevImageComponents = []string{"muster", "backstage", "kagent", "mcp-kubernetes", "model-manager", "agent-manager", "vm-manager", DevImageKlausGateway, DevImageHarness}
+
+// DevImageKlausGateway is the devImages key of the klaus-gateway component
+// (platform.klausGateway): the Deployment `klaus-gateway`, container
+// `klaus-gateway`. Meaningful only while the component is on.
+const DevImageKlausGateway = "klaus-gateway"
 
 // DevImageHarness is the devImages key of the platform Harness's workload
 // image — the Go ADK runtime every agent runs on under kagent API v2. Not a
@@ -270,6 +275,27 @@ type Platform struct {
 	// configure` turns it off on a machine without the devices; --vm-manager
 	// turns it on. A build of the checkout swaps in through devImages.
 	VMManager VMManager `yaml:"vmManager"`
+	// Swarmgeist (github.com/giantswarm/klaus-gateway) as the meta chart's
+	// in-cluster component (components.klaus-gateway), the way every
+	// installation runs it: A2A to the kagent controller over the in-cluster
+	// agentgateway target, the web channel, the Slack adapter on a
+	// placeholder credentials Secret (no workspace answers it; the gateway
+	// refuses OBO without Slack), and the OBO link store as a Kubernetes
+	// Secret (obo.store: secret) with keys the lab generates once. Off by
+	// default; --klaus-gateway turns it on; needs the agents runtime. A build
+	// of the checkout swaps in through devImages. `agentlab
+	// klaus-gateway-test` proves it next to the host-mode gateway
+	// (klausgateway.go).
+	KlausGateway KlausGateway `yaml:"klausGateway"`
+}
+
+// KlausGateway configures the chart's klaus-gateway component in the lab.
+type KlausGateway struct {
+	// On, `agentlab platform` enables components.klaus-gateway with the
+	// lab's values (the values template's `klausGateway:` block) and creates
+	// the two Secrets the component reads: the placeholder Slack
+	// credentials and the OBO keys.
+	Enabled bool `yaml:"enabled"`
 }
 
 // VMManager configures the chart's vm-manager component in the lab.
@@ -918,6 +944,14 @@ func (c *Config) Validate() error {
 	if _, ok := c.Platform.DevImages[DevImageHarness]; ok && !c.Platform.Agents {
 		return fmt.Errorf("platform.devImages.%s: the platform Harness comes with the agents (platform.agents: true)", DevImageHarness)
 	}
+	if _, ok := c.Platform.DevImages[DevImageKlausGateway]; ok && !c.Platform.KlausGateway.Enabled {
+		return fmt.Errorf("platform.devImages.%s: the component is off (platform.klausGateway.enabled: true, or `agentlab configure --klaus-gateway`) — the override would swap the image of nothing", DevImageKlausGateway)
+	}
+	// Swarmgeist is a client of the kagent controller: without the agents
+	// runtime the component has nothing to talk to.
+	if c.Platform.KlausGateway.Enabled && c.Platform.Enabled && !c.Platform.Agents {
+		return fmt.Errorf("platform.klausGateway requires platform.agents (klaus-gateway runs its conversations on the kagent controller)")
+	}
 	// The vm-manager component exists from agent-platform 4.11.0; a pinned
 	// release before it would take components.vm-manager as an unknown key
 	// and fail the install out of sight. A local checkout or a branch build
@@ -1007,6 +1041,12 @@ func (c *Config) ModelManagerEnabled() bool {
 // server of muster's, not a consumer of the agents runtime.
 func (c *Config) VMManagerEnabled() bool {
 	return c.Platform.Enabled && c.Platform.VMManager.Enabled
+}
+
+// KlausGatewayEnabled reports whether the platform runs the klaus-gateway
+// component: the platform with its agents runtime, and the key on.
+func (c *Config) KlausGatewayEnabled() bool {
+	return c.Platform.Enabled && c.Platform.Agents && c.Platform.KlausGateway.Enabled
 }
 
 // ChartMajor is the major version of the meta chart release platform.
