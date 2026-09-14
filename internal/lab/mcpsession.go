@@ -139,26 +139,40 @@ func (s *musterSession) callTool(name string, args map[string]any) (map[string]a
 	return parsed, nil
 }
 
-// listTools returns the names of every tool muster aggregates (its core
-// list_tools tool, the way the Backstage muster plugin and Claude Code see it).
+// listToolsPage is the page size listTools asks for: muster pages list_tools
+// (50 a page by default, `total` and `truncated` on every answer), so one
+// answer is never the whole catalogue of a lab with every server on.
+const listToolsPage = 200
+
+// listTools returns the names of every tool muster aggregates for this
+// session (its core list_tools tool, the way the Backstage muster plugin and
+// Claude Code see it), across every page: a server whose tools sort late
+// (x_vm-manager_*) is on a page a single call never reaches.
 func (s *musterSession) listTools() ([]string, error) {
-	res, err := s.callTool("list_tools", nil)
-	if err != nil {
-		return nil, err
+	var names []string
+	for offset := 0; ; {
+		res, err := s.callTool("list_tools", map[string]any{"limit": listToolsPage, "offset": offset})
+		if err != nil {
+			return nil, err
+		}
+		var page struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+			Total     int  `json:"total"`
+			Truncated bool `json:"truncated"`
+		}
+		if err := json.Unmarshal([]byte(innerText(res)), &page); err != nil {
+			return nil, fmt.Errorf("parsing list_tools payload: %w", err)
+		}
+		for _, t := range page.Tools {
+			names = append(names, t.Name)
+		}
+		offset += len(page.Tools)
+		if len(page.Tools) == 0 || !page.Truncated && offset >= page.Total {
+			return names, nil
+		}
 	}
-	var toolList struct {
-		Tools []struct {
-			Name string `json:"name"`
-		} `json:"tools"`
-	}
-	if err := json.Unmarshal([]byte(innerText(res)), &toolList); err != nil {
-		return nil, fmt.Errorf("parsing list_tools payload: %w", err)
-	}
-	names := make([]string, 0, len(toolList.Tools))
-	for _, t := range toolList.Tools {
-		names = append(names, t.Name)
-	}
-	return names, nil
 }
 
 // toolEnvelope is the target tool's full result as muster's call_tool
