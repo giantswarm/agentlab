@@ -222,7 +222,15 @@ The lab's own e2e checks are the `*-test` subcommands, not `go test`.
   `completion` and `help` never count. Opt-outs:
   `AGENTLAB_TELEMETRY_OPTOUT`, `DO_NOT_TRACK=1`. When iterating on the lab,
   `AGENTLAB_TELEMETRY_TESTMODE=1` keeps the runs out of the production
-  numbers (and logs delivery errors). Details in docs/telemetry.md.
+  numbers (and logs delivery errors). The user identifier is agentlab's own,
+  not the library's: `internal/telemetry/machineid` reads the identifier the
+  OS keeps for the computer (macOS `kern.uuid`, Linux `/etc/machine-id`,
+  Windows `MachineGuid`) and `telemetry.go` hashes it with the OS user name
+  and a fixed salt into `WithUserID`; a machine that exposes none falls back
+  to the library's derived default. **Changing that salt or the layout of the
+  hashed string resets every user in the TelemetryDeck dashboard** — the
+  pinned digest in the tests is there to make that deliberate. Details in
+  docs/telemetry.md.
 - `internal/update` — `agentlab self-update` (creativeprojects/go-selfupdate
   against the GitHub releases; the command muster and mcp-kubernetes ship).
   A release binary is installed only after its cosign Sigstore bundle
