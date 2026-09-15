@@ -878,7 +878,17 @@ data the page reads — see [The muster plugin](backstage.md#the-muster-plugin).
   3.20.2 carries `agent-platform-connectivity >=1.0.0`, which resolves to a
   4.x connectivity that rejects the 3.x `kyvernoPolicies.*` keys the meta
   chart still forwards. Pin `platform.chartVersion` to a release whose
-  components accept its values.
+  components accept its values. Where the **meta chart's own** schema refuses
+  the lab's values, the boot's first render already holds that verdict and
+  `agentlab up` stops there, before the certs and the cluster.
+  Three cases stay notes, because a refusal there does not predict the
+  install: a chart whose `values.schema.json` cannot be loaded or compiled at
+  all (a remote `$ref` this host cannot fetch — helm-controller has cluster
+  egress and may render it fine); the lab's own mcp-prometheus `HelmRelease`,
+  whose chart version is a Go const and whose values are the lab's, so no
+  `platform.chartVersion` governs it; and a `HelmRelease` with a `valuesFrom`,
+  whose values an offline render only partly sees — helm-controller reads the
+  ConfigMap or Secret and may find the missing key there.
 - **A cluster built by an earlier agentlab needs a clean slate.** Before the
   chart brought its own engine, the lab installed the agent-platform-standalone
   umbrella under the same release name and its own Flux controllers in

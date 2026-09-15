@@ -134,7 +134,12 @@ func PlatformUp(cfg *config.Config, offers Offers) error {
 // templated with them, the roster read out. A render that fails here (no
 // network, an unpublished pin) falls back to the verified line's topology
 // with a note; the install reports the chart's error properly, later.
-func platformTopologyFor(cfg *config.Config) platformTopology {
+//
+// The exception is a chart that refuses the lab's values: this is the FIRST
+// render of a boot, so the verdict is in hand before the certs, the cluster
+// and Dex — the five minutes an install would spend before reaching the same
+// answer. It is returned rather than noted.
+func platformTopologyFor(cfg *config.Config) (platformTopology, error) {
 	var roster *platformRoster
 	if cfg.Platform.Enabled {
 		_, valuesPath, err := renderManifest(cfg, platformValuesTemplate)
@@ -145,10 +150,22 @@ func platformTopologyFor(cfg *config.Config) platformTopology {
 			}
 		}
 		if err != nil {
+			var rejection *schemaRejection
+			if errors.As(err, &rejection) {
+				return platformTopology{}, chartRefusesValuesError(platformChartFor(cfg), err)
+			}
 			note("cannot render %s ahead of the boot (%v); budgeting for the 4.x line's topology", platformChartFor(cfg), excerpt(err.Error(), 200))
 		}
 	}
-	return topologyOf(cfg, roster)
+	return topologyOf(cfg, roster), nil
+}
+
+// chartRefusesValuesError words a meta chart that will not accept the values
+// the lab renders for it. Printed whole: the schema path is the last line of
+// Helm's message and the only part worth reading.
+func chartRefusesValuesError(chart platformChart, err error) error {
+	return fmt.Errorf("%s does not accept the values the lab renders for it, so the install would fail:\n\n  %s\n\nSet platform.chartVersion in agentlab.yaml to a release that accepts them",
+		chart, strings.ReplaceAll(strings.TrimSpace(err.Error()), "\n", "\n  "))
 }
 
 // platformChart is the chart the embedded Helm installs and renders: the
@@ -380,7 +397,7 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 		// install reports it in Helm's own words if it is real.
 		var rejection *schemaRejection
 		if errors.As(err, &rejection) {
-			return fmt.Errorf("%s does not accept the values the lab renders for it, so the install would fail:\n\n  %s\n\nSet platform.chartVersion in agentlab.yaml to a release that accepts them", chart, strings.ReplaceAll(strings.TrimSpace(err.Error()), "\n", "\n  "))
+			return chartRefusesValuesError(chart, err)
 		}
 		note("cannot render %s (%v); the node pulls the platform images itself", chart, excerpt(err.Error(), 300))
 	}

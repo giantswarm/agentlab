@@ -3,7 +3,10 @@ package lab
 import (
 	"context"
 	"encoding/base64"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -205,5 +208,60 @@ func TestKagentControllerMonitored(t *testing.T) {
 	newFakeLab(t, customObject(serviceMonitorGVK, kagentNamespace, "agent-platform-connectivity-kagent-controller", nil))
 	if !kagentControllerMonitored() {
 		t.Error("the connectivity chart's controller monitor not seen")
+	}
+}
+
+// TestPlatformTopologyForRefusesAChartThatWillNotTakeTheValues: the boot's
+// FIRST render holds the verdict, so a chart that refuses the lab's values is
+// reported there — before the certs, the kind cluster and Dex, which is the
+// five minutes the refusal exists to save. Every other render failure stays a
+// note and the boot proceeds on the budgeted topology.
+func TestPlatformTopologyForRefusesAChartThatWillNotTakeTheValues(t *testing.T) {
+	dir := isolateHelm(t)
+	cfg := config.Default()
+	cfg.Platform.Enabled = true
+
+	// A meta chart whose schema takes nothing the lab sends it.
+	closed := filepath.Join(dir, "closedmeta")
+	files := map[string]string{
+		"Chart.yaml":  "apiVersion: v2\nname: closedmeta\nversion: 0.1.0\n",
+		"values.yaml": "{}\n",
+		"values.schema.json": `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {},
+  "additionalProperties": false
+}`,
+		"templates/cm.yaml": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: {{ .Release.Name }}\n",
+	}
+	for name, body := range files {
+		path := filepath.Join(closed, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg.Platform.ChartPath = closed
+
+	_, err := platformTopologyFor(cfg)
+	if err == nil {
+		t.Fatal("a chart that refuses the lab's values did not stop the boot at its first render")
+	}
+	for _, want := range []string{"does not accept the values", "platform.chartVersion"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not mention %q:\n%s", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), "...") {
+		t.Errorf("the refusal is truncated, hiding the schema path:\n%s", err)
+	}
+
+	// A chart that is simply not there is the best-effort case: noted, and
+	// the boot goes on with the budgeted topology.
+	cfg.Platform.ChartPath = filepath.Join(dir, "no-such-chart")
+	if _, err := platformTopologyFor(cfg); err != nil {
+		t.Errorf("a missing chart stopped the boot instead of falling back: %v", err)
 	}
 }

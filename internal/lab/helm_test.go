@@ -408,3 +408,43 @@ func TestHelmTemplateSchemaRejection(t *testing.T) {
 		t.Fatalf("an ordinary template failure is read as a schema rejection: %v", err)
 	}
 }
+
+// TestHelmTemplateSchemaLoadFailureIsNotARejection: a chart whose schema Helm
+// cannot compile fails the render, but says nothing about the values — a
+// remote $ref this host cannot fetch is the real case, and helm-controller
+// with cluster egress may render the same chart fine. It must stay an ordinary
+// failure, or an offline host turns an installable chart into a refused one.
+func TestHelmTemplateSchemaLoadFailureIsNotARejection(t *testing.T) {
+	dir := isolateHelm(t)
+	chartDir := filepath.Join(dir, "badschema")
+	files := map[string]string{
+		"Chart.yaml":  "apiVersion: v2\nname: badschema\nversion: 0.1.0\n",
+		"values.yaml": "known: a\n",
+		// A $ref no loader can resolve: the compile step fails, which is not
+		// a verdict on the values.
+		"values.schema.json": `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {"known": {"$ref": "https://schema.invalid/nope.json"}}
+}`,
+		"templates/cm.yaml": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: {{ .Release.Name }}\n",
+	}
+	for name, body := range files {
+		path := filepath.Join(chartDir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	_, err := helmTemplate("apps", "rel", chartDir, "", map[string]any{"known": "a"}, nil)
+	if err == nil {
+		t.Skip("this Helm resolved the unresolvable $ref; nothing to classify")
+	}
+	var rejected *schemaRejection
+	if errors.As(err, &rejected) {
+		t.Fatalf("a schema Helm could not load is read as a refusal of the values: %v", err)
+	}
+}

@@ -22,7 +22,11 @@ func Up(cfg *config.Config, offers Offers) error {
 	// the fix and the numbers — for what the chart about to be installed
 	// ships (its rendered roster: Agent Substrate and the platform Postgres
 	// come with the agents on the 4.x line), not for a version's folklore.
-	if err := preflightRuntimeResources(cfg, platformTopologyFor(cfg)); err != nil {
+	topology, err := platformTopologyFor(cfg)
+	if err != nil {
+		return err
+	}
+	if err := preflightRuntimeResources(cfg, topology); err != nil {
 		return err
 	}
 

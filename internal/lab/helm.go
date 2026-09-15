@@ -476,34 +476,54 @@ func lastRevisionUninstalled(revisions []ri.Releaser) (bool, error) {
 // same chart, so what is refused here is refused on the cluster — while every
 // other failure (a registry that will not answer, a tag that is not there,
 // no network) says nothing about whether the install would succeed.
-type schemaRejection struct{ err error }
+type schemaRejection struct {
+	chart string
+	err   error
+}
 
-func (e *schemaRejection) Error() string { return e.err.Error() }
+func (e *schemaRejection) Error() string { return e.chart + ": " + e.err.Error() }
 func (e *schemaRejection) Unwrap() error { return e.err }
 
-// asSchemaRejection labels err a schemaRejection when the values violate the
-// chart's schema, and returns it untouched otherwise.
+// asSchemaRejection labels err a schemaRejection when the chart's schema
+// returns a validation verdict against these values, and returns it untouched
+// otherwise.
 //
 // The verdict comes from asking the chart, never from reading Helm's message:
 // the same coalesce-then-validate the render just did (ToRenderValues), so a
 // reworded Helm error cannot turn a rejection into an ordinary failure. It
-// runs only on the error path — a render that succeeded is never
-// second-guessed, so this cannot refuse a chart Helm accepts.
+// runs only on the error path, so a render that succeeded is never
+// second-guessed.
+//
+// A validation verdict is the only thing that counts, and it is narrower than
+// "validation returned an error". ValidateAgainstSingleSchema also answers for
+// a schema that does not unmarshal or does not compile — one whose $ref is an
+// http(s) URL this host cannot fetch, say — and for its own recover() path.
+// None of those says anything about the values: helm-controller, with cluster
+// egress, may render that chart perfectly well. Helm wraps the verdict itself,
+// and only the verdict, in JSONSchemaValidationError, so that is what is
+// asked for here.
+//
+// Only the chart's own schema is consulted, not its subcharts'. A refusal that
+// exists solely in a subchart's schema is therefore missed, which is the safe
+// direction: this decides whether to refuse an install.
 func asSchemaRejection(ch chart.Charter, vals map[string]any, err error) error {
 	if err == nil {
 		return nil
+	}
+	accessor, aerr := chart.NewAccessor(ch)
+	if aerr != nil || accessor.Schema() == nil {
+		return err
 	}
 	coalesced, cerr := chartutil.CoalesceValues(ch, vals)
 	if cerr != nil {
 		return err
 	}
-	serr := chartutil.ValidateAgainstSchema(ch, coalesced)
-	if serr == nil {
+	var invalid chartutil.JSONSchemaValidationError
+	verdict := chartutil.ValidateAgainstSingleSchema(coalesced, accessor.Schema())
+	if !errors.As(verdict, &invalid) {
 		return err
 	}
-	// Helm's own message opens with the name of the chart whose schema
-	// refused — the subchart's, where it is one — so nothing is added here.
-	return &schemaRejection{err: serr}
+	return &schemaRejection{chart: accessor.Name(), err: verdict}
 }
 
 // helmTemplate is `helm template <release> <chart> -n <ns> -f <values>

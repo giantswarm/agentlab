@@ -318,4 +318,79 @@ spec:
 	if _, _, err := platformImages(cfg, unreachable); err != nil {
 		t.Errorf("an unreachable component chart stopped the install: %v", err)
 	}
+
+	// A release the LAB renders, not the meta chart's: platform.chartVersion
+	// has no say over its chart or its values, so refusing the install and
+	// pointing at that knob would be advice nothing can act on.
+	labOwned := rosterFor("    nosuchkey: 1\n")
+	labOwned.releases[0].LabOwned = true
+	if _, _, err := platformImages(cfg, labOwned); err != nil {
+		t.Errorf("a refusal in the lab's own release stopped the install: %v", err)
+	}
+
+	// A HelmRelease that also draws values from the cluster: the render here
+	// ran on an incomplete set, so what the chart refused is not what
+	// helm-controller will see — a missing required key may well be in the
+	// ConfigMap the lab cannot read.
+	withValuesFrom := rosterFor("    nosuchkey: 1\n")
+	withValuesFrom.releases[0].ValuesFrom = true
+	if _, _, err := platformImages(cfg, withValuesFrom); err != nil {
+		t.Errorf("a refusal on a release with valuesFrom stopped the install: %v", err)
+	}
+}
+
+// TestFluxReleasesReadsValuesFrom: the join records that a HelmRelease draws
+// values the lab cannot see, which is what keeps its render failures notes.
+func TestFluxReleasesReadsValuesFrom(t *testing.T) {
+	manifest := `apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  name: c
+  namespace: default
+spec:
+  url: oci://example.test/c
+  ref:
+    tag: "1.0.0"
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: c
+  namespace: default
+spec:
+  chartRef:
+    kind: OCIRepository
+    name: c
+    namespace: default
+  valuesFrom:
+    - kind: ConfigMap
+      name: kagent-images
+  values:
+    a: 1
+`
+	releases, err := fluxReleases(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(releases) != 1 {
+		t.Fatalf("joined %d releases, want 1", len(releases))
+	}
+	if !releases[0].ValuesFrom {
+		t.Error("a HelmRelease with spec.valuesFrom is not recorded as drawing values from the cluster")
+	}
+	if releases[0].LabOwned {
+		t.Error("a release of the rendered manifest is marked as the lab's own")
+	}
+
+	// And the negative: no valuesFrom, so its values are the whole set.
+	plain, err := fluxReleases(strings.Replace(manifest, `  valuesFrom:
+    - kind: ConfigMap
+      name: kagent-images
+`, "", 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain[0].ValuesFrom {
+		t.Error("a HelmRelease without spec.valuesFrom is recorded as drawing values from the cluster")
+	}
 }
