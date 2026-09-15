@@ -222,8 +222,8 @@ github.com/frankban/quicktest v1.14.6 h1:7Xjx+VpznH+oBnejlPUj8oUpdxnVs4f8XU8WnHk
 github.com/frankban/quicktest v1.14.6/go.mod h1:4ptaffx2x8+WTWXmUCuVU6aPUX1/Mz7zb5vbUoiM6w0=
 github.com/fxamacker/cbor/v2 v2.9.1 h1:2rWm8B193Ll4VdjsJY28jxs70IdDsHRWgQYAI80+rMQ=
 github.com/fxamacker/cbor/v2 v2.9.1/go.mod h1:vM4b+DJCtHn+zz7h3FFp/hDAI9WNWCsZj23V5ytsSxQ=
-github.com/giantswarm/klaus-gateway v1.9.1 h1:hJS6ipt6TlAIdk4iJeuPmmPZ9Wn8XODcskhC8zQpRng=
-github.com/giantswarm/klaus-gateway v1.9.1/go.mod h1:lcEb9WnXQftY166Q3XulKTwSePl9zxQkluKs7opOf4Y=
+github.com/giantswarm/klaus-gateway v1.10.1 h1:Q6wMtBxV2FWLnS9jxSZ2mW3h4WvhwBKO1kqaC7E+Zik=
+github.com/giantswarm/klaus-gateway v1.10.1/go.mod h1:SbBVdl/ygV4WKAu1l+AI/TKCM2TOmdy3u31kswbcSm0=
 github.com/giantswarm/selfupdate-cosign v0.2.0 h1:T77Q41viXAv5uNJ8SoQlJh1Dxsuh8brvvPp8Nt9KlOI=
 github.com/giantswarm/selfupdate-cosign v0.2.0/go.mod h1:CVnryjSRY/xDqJDn+QeivgT8+WkOvVbY/Z+xLaIfZ1w=
 github.com/giantswarm/telemetrydeck-go v0.3.0 h1:hgmySEd5P6D78ZoUcNBKB/xaEBhtF9yGa8xhuQUrc1g=
@@ -619,8 +619,8 @@ go.opentelemetry.io/contrib/bridges/prometheus v0.67.0 h1:dkBzNEAIKADEaFnuESzcXv
 go.opentelemetry.io/contrib/bridges/prometheus v0.67.0/go.mod h1:Z5RIwRkZgauOIfnG5IpidvLpERjhTninpP1dTG2jTl4=
 go.opentelemetry.io/contrib/exporters/autoexport v0.67.0 h1:4fnRcNpc6YFtG3zsFw9achKn3XgmxPxuMuqIL5rE8e8=
 go.opentelemetry.io/contrib/exporters/autoexport v0.67.0/go.mod h1:qTvIHMFKoxW7HXg02gm6/Wofhq5p3Ib/A/NNt1EoBSQ=
-go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.70.0 h1:oECp5f+hN7nkwjU/8BxQ/q23bGPb8FIrD839owX222E=
-go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.70.0/go.mod h1:DqEFwLumhzMBDQv9PcWbyoDxHI/4lAk6CM4nJBH39sc=
+go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.71.0 h1:B2h3uqicet1CT2N5TOFhS+Gq++9i0/CLmaxvhmhtP5s=
+go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.71.0/go.mod h1:dylvB+ZiiwMvsDij9O84Uy7SijLgHMX4mbkncds+4Sw=
 go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.71.0 h1:3g7B90UzBltIDKq1/5mrTGxTnOFDV0ICOhLoxiZ8jlg=
 go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.71.0/go.mod h1:Ef8SuTh59BT7+ofpDxN9z+yOlc4t2GjLmKDgYNJL/NU=
 go.opentelemetry.io/otel v1.46.0 h1:FHt5/CDyVxi/8IM1CH7VE/rRgq3kLHa2mSTVMO8AWyc=
