@@ -14,11 +14,31 @@ One signal contains:
   was built from
 - operating system and processor architecture
 - the library and version that sent it (`telemetrydeck-go/…`)
-- a user identifier hash: SHA-256 over OS, architecture, host name, OS user
-  and group IDs, user name and the MAC addresses — enough to count distinct
-  users, not to identify one (see the
-  [library source](https://github.com/giantswarm/telemetrydeck-go/blob/main/telemetrydeck.go))
+- a user identifier hash: SHA-256 over the identifier your operating system
+  keeps for this computer (macOS `kern.uuid`, Linux `/etc/machine-id`,
+  Windows `MachineGuid`), your OS user name, and a fixed agentlab salt —
+  enough to count distinct people on distinct machines, not to identify one,
+  and not reversible (the derivation is
+  [`internal/telemetry`](https://github.com/giantswarm/agentlab/tree/main/internal/telemetry))
 - a random session UUID, unique per command execution
+
+**Since v0.48.0 that identifier comes from the computer, not from the
+network.** It used to be derived partly from every MAC address the machine
+had, so a laptop that docks, joins a VPN or runs Docker drifted into several
+"users" — and the host name and the processor architecture were part of it
+too, so renaming the machine, moving between networks, or running the Intel
+build under Rosetta each counted as somebody new. The identifier therefore
+changed once, with that release: installations that reported before it appear
+as new users from then on. What is *sent* did not change — still a one-way
+hash, still nothing that says who you are. A machine that exposes no such
+identifier (a container without `/etc/machine-id`, say) falls back to the one
+the library derives for itself, which means the fallback cannot be counted:
+in the dashboard it looks exactly like a pre-v0.48.0 user.
+
+A random identifier saved under your cache directory would be steadier still,
+and would cover containers. The lab does not do that on purpose: reporting
+usage should not write state to your disk as a side effect, and it would fail
+on a read-only home directory.
 
 Nothing from `agentlab.yaml`, `state/`, `certs/`, the cluster, the users, the
 models or the model servers is ever sent. Help output (`-h`, `--help`) and

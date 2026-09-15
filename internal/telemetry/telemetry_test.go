@@ -2,10 +2,13 @@ package telemetry
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -24,6 +27,16 @@ func withAppID(t *testing.T, id string) {
 	prev := appID
 	appID = id
 	t.Cleanup(func() { appID = prev })
+}
+
+// withUserIdentity pins the two inputs to userID so a test can assert on the
+// digest without depending on the machine it runs on.
+func withUserIdentity(t *testing.T, machine string, user string) {
+	t.Helper()
+	prevMachine, prevUser := machineID, osUser
+	machineID = func() (string, bool) { return machine, machine != "" }
+	osUser = func() string { return user }
+	t.Cleanup(func() { machineID, osUser = prevMachine, prevUser })
 }
 
 // lab returns a root command shaped like agentlab's, with the built-ins cobra
@@ -127,8 +140,17 @@ func TestCommandPostsOneSignal(t *testing.T) {
 		if s["isTestMode"] != true {
 			t.Errorf("isTestMode %v, want true under %s", s["isTestMode"], TestModeEnv)
 		}
-		if user, _ := s["clientUser"].(string); len(user) != 64 {
-			t.Errorf("clientUser %q is not a SHA-256 hex digest", user)
+		// The library hashes once more over what WithUserID was given, so
+		// this is the assertion that agentlab's own identifier was wired in
+		// at all: without it a missing WithUserID looks identical, the
+		// library's derived digest being 64 hex characters too.
+		want, ok := userID()
+		if !ok {
+			t.Fatal("this machine exposes no identifier, so the signal cannot be checked against one")
+		}
+		sum := sha256.Sum256([]byte(want))
+		if user, _ := s["clientUser"].(string); user != hex.EncodeToString(sum[:]) {
+			t.Errorf("clientUser %q, want sha256 of agentlab's identifier %s", user, hex.EncodeToString(sum[:]))
 		}
 		payload, _ := s["payload"].(map[string]any)
 		if payload["command"] != "agentlab up" {
@@ -251,5 +273,106 @@ func TestFlushIsBounded(t *testing.T) {
 	Flush(context.Background())
 	if waited := time.Since(start); waited < flushTimeout || waited > flushTimeout+time.Second {
 		t.Errorf("Flush waited %s on a stalled endpoint, want about %s", waited, flushTimeout)
+	}
+}
+
+func TestUserIDIsStableSaltedAndDropsWhenUnknown(t *testing.T) {
+	const (
+		machine = "12a0d395-dbb9-3050-b357-f0f9f3185660"
+		user    = "tester"
+	)
+
+	t.Run("it is a stable hex digest", func(t *testing.T) {
+		withUserIdentity(t, machine, user)
+		first, ok := userID()
+		if !ok {
+			t.Fatal("userID() gave up on a machine that has an identifier")
+		}
+		if len(first) != 64 || first != strings.ToLower(first) {
+			t.Errorf("userID() = %q, want 64 lower-case hex characters", first)
+		}
+		if second, _ := userID(); second != first {
+			t.Errorf("userID() is not stable: %q then %q", first, second)
+		}
+	})
+
+	// The digest is pinned so that changing the salt or the layout of the
+	// hashed string cannot pass unnoticed: either one re-identifies every
+	// agentlab installation in the TelemetryDeck dashboard.
+	t.Run("the digest is pinned to the salt and the layout", func(t *testing.T) {
+		withUserIdentity(t, machine, user)
+		const want = "1cd584bd30211c4eefeb327acfbdeb6d890d7039398a7b2410b4b51c96e447d1"
+		if got, _ := userID(); got != want {
+			t.Errorf("userID() = %q, want %q — if this is a deliberate change, every user is reset by it", got, want)
+		}
+	})
+
+	t.Run("the salt is applied", func(t *testing.T) {
+		withUserIdentity(t, machine, user)
+		unsalted := sha256.Sum256([]byte(machine + "|" + user))
+		if got, _ := userID(); got == hex.EncodeToString(unsalted[:]) {
+			t.Error("userID() hashes the inputs without the salt")
+		}
+	})
+
+	t.Run("it distinguishes machines and users", func(t *testing.T) {
+		withUserIdentity(t, machine, user)
+		base, _ := userID()
+
+		withUserIdentity(t, "9f1c2b4e-0000-4000-8000-0123456789ab", user)
+		if other, _ := userID(); other == base {
+			t.Error("two machines share one identifier")
+		}
+
+		withUserIdentity(t, machine, "someone-else")
+		if other, _ := userID(); other == base {
+			t.Error("two users on one machine share one identifier")
+		}
+	})
+
+	t.Run("a machine without an identifier gets none", func(t *testing.T) {
+		withUserIdentity(t, "", user)
+		if got, ok := userID(); got != "" || ok {
+			t.Errorf("userID() = (%q, %v), want (\"\", false)", got, ok)
+		}
+	})
+}
+
+// TestCommandFallsBackToTheLibraryIdentifier is the promise that telemetry
+// never breaks: a machine that exposes no identifier still reports, under the
+// one the library derives for itself.
+func TestCommandFallsBackToTheLibraryIdentifier(t *testing.T) {
+	withAppID(t, testAppID)
+	withUserIdentity(t, "", "tester")
+	t.Setenv(OptOutEnv, "")
+	t.Setenv(doNotTrackEnv, "")
+	t.Setenv(TestModeEnv, "1")
+
+	got := make(chan []map[string]any, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var signals []map[string]any
+		if err := json.Unmarshal(body, &signals); err != nil {
+			t.Errorf("body is not a signal array: %v\n%s", err, body)
+		}
+		got <- signals
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	endpoint = srv.URL
+	defer func() { endpoint = "" }()
+
+	Command(lab(t, "up"))
+
+	select {
+	case signals := <-got:
+		if len(signals) != 1 {
+			t.Fatalf("got %d signals, want 1", len(signals))
+		}
+		if user, _ := signals[0]["clientUser"].(string); len(user) != 64 {
+			t.Errorf("clientUser %q is not a SHA-256 hex digest", user)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no signal reached the endpoint")
 	}
 }
