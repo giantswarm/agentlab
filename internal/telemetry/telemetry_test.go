@@ -105,6 +105,10 @@ func TestEnabledHonoursTheOptOuts(t *testing.T) {
 // hashed, test mode flagged.
 func TestCommandPostsOneSignal(t *testing.T) {
 	withAppID(t, testAppID)
+	// Pinned, because a CI container has no /etc/machine-id and would take
+	// the fallback path — which TestCommandFallsBackToTheLibraryIdentifier
+	// covers on purpose, and this test must not drift into.
+	withUserIdentity(t, "12a0d395-dbb9-3050-b357-f0f9f3185660", "tester")
 	t.Setenv(OptOutEnv, "")
 	t.Setenv(doNotTrackEnv, "")
 	t.Setenv(TestModeEnv, "1")
@@ -146,7 +150,7 @@ func TestCommandPostsOneSignal(t *testing.T) {
 		// library's derived digest being 64 hex characters too.
 		want, ok := userID()
 		if !ok {
-			t.Fatal("this machine exposes no identifier, so the signal cannot be checked against one")
+			t.Fatal("the pinned identity did not reach userID")
 		}
 		sum := sha256.Sum256([]byte(want))
 		if user, _ := s["clientUser"].(string); user != hex.EncodeToString(sum[:]) {
