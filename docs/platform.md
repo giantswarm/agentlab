@@ -863,6 +863,44 @@ data the page reads — see [The muster plugin](backstage.md#the-muster-plugin).
 
 ## Platform gotchas
 
+- **A chart that refuses its values stops the install before it starts.** The
+  boot renders the meta chart and every component chart offline to side-load
+  their images — each at the version its `OCIRepository` resolves to, with
+  the values its `HelmRelease` carries: the pair helm-controller validates on
+  the cluster. Most render failures there are notes (a registry that will not
+  answer, a chart whose `kubeVersion` an offline render cannot satisfy): the
+  node pulls those images itself and the install proceeds. One is not. When a
+  `values.schema.json` — the chart's own or a subchart's — *refuses* the
+  values, the install would carry them to helm-controller and fail after its
+  whole wait, so the lab refuses instead, printing Helm's verdict whole (the
+  schema paths are its last lines), the release and the chart version it
+  came from, and the knob that selects the chart in this lab's mode:
+  `platform.chartVersion` for a release, another build or a pin on the dev
+  channel, the checkout itself under `platform.chartPath`. The usual cause is
+  a meta chart whose component range floats onto a chart from another line —
+  `platform.chartVersion` 3.20.2 carries `agent-platform-connectivity
+  >=1.0.0`, which resolves to a 4.x connectivity that rejects the 3.x
+  `kyvernoPolicies.*` keys the meta chart still forwards. Where the **meta
+  chart's own** schema refuses the lab's values, the boot's first render
+  already holds that verdict and `agentlab up` stops there, before the certs
+  and the cluster (the dev channel is resolved first, so the build judged is
+  the one the install would use); a component's verdict comes after the
+  cluster boot, when the components are rendered. The lab's own
+  mcp-prometheus `HelmRelease` is judged like a component, with the advice
+  that fits it (its chart version and its values are agentlab's). With
+  `platform.devImages` the values the install carries are rendered once more
+  after the swap, and the changed pair is put to the charts again, so a dev
+  image a schema refuses is refused here too.
+  Three cases stay notes, because a refusal there does not predict the
+  install: a chart whose `values.schema.json` cannot be loaded or compiled at
+  all (a remote `$ref` this host cannot fetch — helm-controller has cluster
+  egress and may render it fine); a `HelmRelease` that turns helm-controller's
+  schema validation off (`spec.install.disableSchemaValidation`); and a
+  `HelmRelease` with a `valuesFrom` whose verdict the ConfigMap or Secret
+  could answer — a missing property may be there — while `additional
+  properties … not allowed` on keys the render did see is refused all the
+  same, since Flux lets `spec.values` win and a reference cannot take a key
+  away.
 - **A cluster built by an earlier agentlab needs a clean slate.** Before the
   chart brought its own engine, the lab installed the agent-platform-standalone
   umbrella under the same release name and its own Flux controllers in

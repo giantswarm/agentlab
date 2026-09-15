@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -40,6 +41,31 @@ type fluxRelease struct {
 	URL, Version, Filter string
 	// Values is the HelmRelease's inlined spec.values, as YAML.
 	Values []byte
+	// ValuesFrom reports that the HelmRelease also draws values from a
+	// ConfigMap or Secret on the cluster (spec.valuesFrom), which an offline
+	// render cannot see: a key the render found missing may be there.
+	ValuesFrom bool
+	// SchemaValidationOff reports that the HelmRelease tells helm-controller
+	// not to validate the values against the chart's schema
+	// (spec.install.disableSchemaValidation, spec.upgrade's): a verdict the
+	// offline render gets is one the cluster never asks for.
+	SchemaValidationOff bool
+	// LabOwned marks a release the lab renders itself rather than one the
+	// meta chart ships (mcp-prometheus): its chart version is a Go const and
+	// its values the lab's template, so platform.chartVersion has no say over
+	// what it accepts — a refusal is worded for agentlab, not for the chart.
+	LabOwned bool
+}
+
+// chartLabel names the chart a render of the release was for: the
+// OCIRepository's URL and range, and the version the range resolved to where
+// the render got that far.
+func (rel fluxRelease) chartLabel(resolved string) string {
+	label := rel.URL + " " + rel.Version
+	if resolved != "" && resolved != rel.Version {
+		label += ", resolved to " + resolved
+	}
+	return label
 }
 
 // fluxDoc is the subset of an OCIRepository or HelmRelease the join reads.
@@ -56,9 +82,16 @@ type fluxDoc struct {
 			SemverFilter string `yaml:"semverFilter"`
 			Tag          string `yaml:"tag"`
 		} `yaml:"ref"`
-		ReleaseName     string `yaml:"releaseName"`
-		TargetNamespace string `yaml:"targetNamespace"`
-		ChartRef        struct {
+		ReleaseName     string      `yaml:"releaseName"`
+		ValuesFrom      []yaml.Node `yaml:"valuesFrom"`
+		TargetNamespace string      `yaml:"targetNamespace"`
+		Install         struct {
+			DisableSchemaValidation bool `yaml:"disableSchemaValidation"`
+		} `yaml:"install"`
+		Upgrade struct {
+			DisableSchemaValidation bool `yaml:"disableSchemaValidation"`
+		} `yaml:"upgrade"`
+		ChartRef struct {
 			Kind      string `yaml:"kind"`
 			Name      string `yaml:"name"`
 			Namespace string `yaml:"namespace"`
@@ -115,6 +148,8 @@ func fluxReleases(manifests string) ([]fluxRelease, error) {
 		if rel.Namespace == "" {
 			rel.Namespace = hr.Metadata.Namespace
 		}
+		rel.ValuesFrom = len(hr.Spec.ValuesFrom) > 0
+		rel.SchemaValidationOff = hr.Spec.Install.DisableSchemaValidation || hr.Spec.Upgrade.DisableSchemaValidation
 		if !hr.Spec.Values.IsZero() {
 			raw, err := yaml.Marshal(&hr.Spec.Values)
 			if err != nil {
@@ -136,15 +171,86 @@ var offlineAPIVersions = []string{
 	"gateway.networking.k8s.io/v1",
 }
 
+// componentAPIVersions are the API groups the component renders are given as
+// .Capabilities (offlineAPIVersions), plus the Prometheus Operator's when the
+// observability stack is on.
+func componentAPIVersions(cfg *config.Config) []string {
+	if cfg.Platform.Observability {
+		return append(slices.Clone(offlineAPIVersions), "monitoring.coreos.com/v1")
+	}
+	return offlineAPIVersions
+}
+
+// renderFailure is one component render that produced no manifest, kept with
+// the release it was for: whether a failure predicts the install depends on
+// facts about the release, not only on what the chart said.
+type renderFailure struct {
+	rel fluxRelease
+	err error
+}
+
+// refusesTheInstall reports whether this failure is a chart refusing values
+// helm-controller will put to it the same way — the only class worth
+// refusing an install for — and, where the chart did refuse but the install
+// is not predicted, why.
+//
+// The chart must have returned a validation verdict (schemaRejection); a
+// render the registry or the network denied says nothing about the install.
+// The HelmRelease must not switch helm-controller's validation off
+// (SchemaValidationOff): that verdict is never asked for on the cluster. And
+// a HelmRelease with a valuesFrom was rendered on an incomplete set: Flux
+// merges the ConfigMap or Secret first and spec.values on top, so a
+// reference can add keys the render found missing — a `missing property`
+// verdict may well be answered there — but it cannot take a key away, so
+// `additional properties … not allowed` on keys the render did see is
+// refused on the cluster too. Whose release it is (LabOwned) changes the
+// advice, never the verdict: the lab's own mcp-prometheus is installed and
+// waited for like any component.
+func (f renderFailure) refusesTheInstall() (refuses bool, reason string) {
+	var rejection *schemaRejection
+	if !errors.As(f.err, &rejection) {
+		return false, ""
+	}
+	if f.rel.SchemaValidationOff {
+		return false, "its HelmRelease turns helm-controller's schema validation off"
+	}
+	if f.rel.ValuesFrom && !onlyAdditionalProperties(rejection) {
+		return false, "its HelmRelease also draws values from the cluster, which may hold what the render found missing"
+	}
+	return true, ""
+}
+
+// onlyAdditionalProperties reports whether every violation in a verdict is an
+// `additional properties … not allowed` — the closed-schema class a
+// valuesFrom cannot rescue, since the keys it names are in spec.values and
+// stay there whatever the reference adds. Any other violation (a missing
+// property, a type) may be about a key the reference supplies, so one is
+// enough to keep the verdict a note.
+func onlyAdditionalProperties(rejection *schemaRejection) bool {
+	violations := 0
+	for line := range strings.Lines(rejection.Error()) {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "- ") {
+			continue
+		}
+		violations++
+		if !strings.Contains(line, "additional propert") {
+			return false
+		}
+	}
+	return violations > 0
+}
+
 // fluxReleaseImages templates every release's chart at the resolved version
 // with its values and scrapes the images, concurrently (one registry pull
-// each). A release that does not render is reported and skipped: the node
-// pulls whatever the preload misses. The versions picked through a
-// semverFilter come back as "<name> <version>" lines, sorted — the channel
-// evidence the boot log shows. The renders themselves come back keyed by
-// release name: what the dev-image swap reads a component's image name off
+// each). A release that does not render comes back as a failure with its
+// release, for the caller to sort into notes and refusals
+// (refuseRejectedComponents). The versions picked through a semverFilter
+// come back as "<name> <version>" lines, sorted — the channel evidence the
+// boot log shows. The renders themselves come back keyed by release name:
+// what the dev-image swap reads a component's image name off
 // (resolveDevImageNames).
-func fluxReleaseImages(releases []fluxRelease, apiVersions []string) (images, filtered []string, renders map[string]string, errs []error) {
+func fluxReleaseImages(releases []fluxRelease, apiVersions []string) (images, filtered []string, renders map[string]string, errs []renderFailure) {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	renders = map[string]string{}
@@ -154,7 +260,7 @@ func fluxReleaseImages(releases []fluxRelease, apiVersions []string) (images, fi
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
-				errs = append(errs, fmt.Errorf("%s (%s %s): %w", rel.Name, rel.URL, rel.Version, err))
+				errs = append(errs, renderFailure{rel: rel, err: fmt.Errorf("%s (%s): %w", rel.Name, rel.chartLabel(version), err)})
 				return
 			}
 			if rel.Filter != "" {
@@ -172,7 +278,9 @@ func fluxReleaseImages(releases []fluxRelease, apiVersions []string) (images, fi
 
 // renderFluxRelease renders one component chart offline as helm-controller
 // is about to: the chart the OCIRepository names at the version it resolves
-// to, with the HelmRelease's inlined values. Reports the version rendered.
+// to, with the HelmRelease's inlined values. Reports the version rendered —
+// the loaded chart's, so a range Helm resolved itself comes back as the tag,
+// on a failed render too once the chart was loaded.
 func renderFluxRelease(rel fluxRelease, apiVersions []string) (rendered, version string, err error) {
 	vals, err := helmValues(rel.Values)
 	if err != nil {
@@ -182,7 +290,10 @@ func renderFluxRelease(rel fluxRelease, apiVersions []string) (rendered, version
 	if err != nil {
 		return "", "", err
 	}
-	rendered, err = helmTemplate(rel.Namespace, rel.Name, rel.URL, version, vals, apiVersions)
+	rendered, resolved, err := helmTemplate(rel.Namespace, rel.Name, rel.URL, version, vals, apiVersions)
+	if resolved != "" {
+		version = resolved
+	}
 	return rendered, version, err
 }
 
@@ -248,7 +359,7 @@ type platformRoster struct {
 // chart's (not found, a values guard) — the callers degrade to notes: the
 // install itself reports the same error, with Helm's wording.
 func renderPlatformRoster(chart platformChart, values map[string]any) (*platformRoster, error) {
-	meta, err := helmTemplate(platformNamespace, platformRelease, chart.ref, chart.version, values, nil)
+	meta, _, err := helmTemplate(platformNamespace, platformRelease, chart.ref, chart.version, values, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -291,30 +402,37 @@ const cnpgRelease = "cloudnative-pg"
 // mcp-prometheus HelmRelease the same way. The images the engine composes at
 // run time — the FluxInstance's source- and helm-controller — are in no
 // render; the snapshot manifest covers them from the second boot on.
-// Best-effort throughout: failures are notes, the node pulls the rest. The
-// component renders come back too, keyed by release name (nil without a
-// roster): the dev-image swap reads its image names off them
+// Best-effort for what it is for — a render the registry or the network
+// denied is a note, and the node pulls those images itself — with one
+// exception it returns an error for: a chart that REFUSES the values its
+// HelmRelease carries (refusesTheInstall). That is not a preload problem but
+// the install's outcome, known early; refusing here costs seconds instead of
+// the install's whole wait, and nothing is side-loaded for an install that
+// will not start. The component renders come back too, keyed by release name
+// (nil without a roster): the dev-image swap reads its image names off them
 // (resolveDevImageNames).
-func platformImages(cfg *config.Config, roster *platformRoster) ([]string, map[string]string) {
+func platformImages(cfg *config.Config, roster *platformRoster) ([]string, map[string]string, error) {
 	if roster == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	images := scrapeImages(roster.manifest)
 	releases := roster.releases
 	if cfg.Platform.Observability {
 		if rendered, _, err := renderManifest(cfg, mcpPrometheusTemplate); err == nil {
 			if own, err := fluxReleases(string(rendered)); err == nil {
+				// The lab's own HelmRelease, not the meta chart's (see
+				// fluxRelease.LabOwned): a refusal must say so, since no
+				// platform.chartVersion can answer it.
+				for i := range own {
+					own[i].LabOwned = true
+				}
 				releases = append(slices.Clone(releases), own...)
 			}
 		}
 	}
-	apiVersions := offlineAPIVersions
-	if cfg.Platform.Observability {
-		apiVersions = append(slices.Clone(apiVersions), "monitoring.coreos.com/v1")
-	}
-	componentImages, filtered, renders, errs := fluxReleaseImages(releases, apiVersions)
-	for _, err := range errs {
-		note("component render skipped: %s", excerpt(err.Error(), 300))
+	componentImages, filtered, renders, errs := fluxReleaseImages(releases, componentAPIVersions(cfg))
+	if err := refuseRejectedComponents(roster.chart, errs); err != nil {
+		return nil, nil, err
 	}
 	note("rendered %d of %d component charts%s", len(releases)-len(errs), len(releases), filteredNote(filtered))
 	images = append(images, componentImages...)
@@ -323,7 +441,95 @@ func platformImages(cfg *config.Config, roster *platformRoster) ([]string, map[s
 	if len(byDigest) > 0 {
 		note("%d digest-pinned refs are the node's to pull (a saved archive of a digest-only reference imports as an unnamed image the CRI cannot start a pod from):\n      %s", len(byDigest), strings.Join(byDigest, "\n      "))
 	}
-	return images, renders
+	return images, renders, nil
+}
+
+// refuseRejectedComponents sorts the component render failures into notes
+// and refusals: a failure that does not predict the install is noted — with
+// why, where the chart did refuse — and the refusals, if any, come back as
+// one error naming every refusing release.
+func refuseRejectedComponents(chart platformChart, errs []renderFailure) error {
+	var rejected []renderFailure
+	for _, failure := range errs {
+		refuses, reason := failure.refusesTheInstall()
+		switch {
+		case refuses:
+			rejected = append(rejected, failure)
+		case reason != "":
+			note("component render skipped (%s): %s", reason, excerptEnds(failure.err.Error(), 300))
+		default:
+			note("component render skipped: %s", excerptEnds(failure.err.Error(), 300))
+		}
+	}
+	if len(rejected) == 0 {
+		return nil
+	}
+	slices.SortFunc(rejected, func(a, b renderFailure) int { return strings.Compare(a.rel.Name, b.rel.Name) })
+	return rejectedComponentsError(chart, rejected)
+}
+
+// recheckReleases puts values that changed after the preload's renders (the
+// dev-image swap) to the charts once more — the meta chart, and every
+// component whose spec.values moved — for the verdict only: the images and
+// the renders stay the first pass's. A chart that refuses the new values
+// refuses the install, exactly as in the first pass.
+func recheckReleases(cfg *config.Config, chart platformChart, before *platformRoster, values map[string]any) error {
+	after, err := renderPlatformRoster(chart, values)
+	if err != nil {
+		if isSchemaRejection(err) {
+			return chartRefusesValuesError(chart, err)
+		}
+		// Not a verdict: the first pass noted the same failure.
+		return nil
+	}
+	var changed []fluxRelease
+	for _, rel := range after.releases {
+		if before != nil {
+			i := slices.IndexFunc(before.releases, func(b fluxRelease) bool { return b.Name == rel.Name })
+			if i >= 0 && bytes.Equal(before.releases[i].Values, rel.Values) {
+				continue
+			}
+		}
+		changed = append(changed, rel)
+	}
+	if len(changed) == 0 {
+		return nil
+	}
+	_, _, _, errs := fluxReleaseImages(changed, componentAPIVersions(cfg))
+	return refuseRejectedComponents(chart, errs)
+}
+
+// rejectedComponentsError words the component charts that refuse the values
+// their HelmReleases carry.
+//
+// A statement about the install, not about the preload: the chart is the one
+// the OCIRepository resolves to and the values are the HelmRelease's own, so
+// helm-controller coalesces and validates the same pair on the cluster
+// (refusesTheInstall says when that holds) and the install would spend its
+// whole wait discovering the verdict. Printed whole, never through excerpt:
+// the offending paths are the last lines of Helm's message and the only part
+// worth reading. The advice follows the release — the chart source for the
+// meta chart's components (platformChart.remedy), agentlab for its own.
+func rejectedComponentsError(chart platformChart, rejected []renderFailure) error {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d component chart(s) refuse the values their HelmReleases carry, so the install would fail after its wait:\n", len(rejected))
+	var labOwned []string
+	meta := false
+	for _, f := range rejected {
+		fmt.Fprintf(&b, "\n%s\n", indent(strings.TrimSpace(f.err.Error()), "  "))
+		if f.rel.LabOwned {
+			labOwned = append(labOwned, f.rel.Name)
+		} else {
+			meta = true
+		}
+	}
+	if meta {
+		fmt.Fprintf(&b, "\nThe meta chart and a component it pins disagree. %s", chart.remedy())
+	}
+	if len(labOwned) > 0 {
+		fmt.Fprintf(&b, "\n%s: the lab's own release, outside the meta chart — its chart version and its values are agentlab's, so no chart pin in agentlab.yaml answers this. Update agentlab, or turn platform.observability off.", strings.Join(labOwned, ", "))
+	}
+	return errors.New(b.String())
 }
 
 // splitDigestRefs separates the refs a side-load can carry — tagged

@@ -133,21 +133,40 @@ func PlatformUp(cfg *config.Config, offers Offers) error {
 // templated with them, the roster read out. A render that fails here (no
 // network, an unpublished pin) falls back to the verified line's topology
 // with a note; the install reports the chart's error properly, later.
-func platformTopologyFor(cfg *config.Config) platformTopology {
+//
+// The exception is a chart that refuses the lab's values: this is the FIRST
+// render of a boot, so the verdict is in hand before the certs, the cluster
+// and Dex — the five minutes an install would spend before reaching the same
+// answer. It is returned rather than noted. The caller has resolved the dev
+// channel first (Up), so the chart judged is the one the install will use.
+func platformTopologyFor(cfg *config.Config) (platformTopology, error) {
 	var roster *platformRoster
 	if cfg.Platform.Enabled {
+		chart := platformChartFor(cfg)
 		_, valuesPath, err := renderManifest(cfg, platformValuesTemplate)
 		if err == nil {
 			var values map[string]any
 			if values, err = helmValuesFiles(append([]string{valuesPath}, cfg.Platform.ValuesFiles...)...); err == nil {
-				roster, err = renderPlatformRoster(platformChartFor(cfg), values)
+				roster, err = renderPlatformRoster(chart, values)
 			}
 		}
 		if err != nil {
-			note("cannot render %s ahead of the boot (%v); budgeting for the 4.x line's topology", platformChartFor(cfg), excerpt(err.Error(), 200))
+			if isSchemaRejection(err) {
+				return platformTopology{}, chartRefusesValuesError(chart, err)
+			}
+			note("cannot render %s ahead of the boot (%v); budgeting for the 4.x line's topology", chart, excerptEnds(err.Error(), 300))
 		}
 	}
-	return topologyOf(cfg, roster)
+	return topologyOf(cfg, roster), nil
+}
+
+// chartRefusesValuesError words a meta chart that will not accept the values
+// the lab renders for it. Printed whole: the schema path is the last line of
+// Helm's message and the only part worth reading; the advice is the knob
+// that selects the chart in this lab's mode (platformChart.remedy).
+func chartRefusesValuesError(chart platformChart, err error) error {
+	return fmt.Errorf("%s does not accept the values the lab renders for it, so the install would fail:\n\n%s\n\n%s",
+		chart, indent(strings.TrimSpace(err.Error()), "  "), chart.remedy())
 }
 
 // platformChart is the chart the embedded Helm installs and renders: the
@@ -170,6 +189,22 @@ func (c platformChart) String() string {
 		return fmt.Sprintf("agent-platform %s (branch %s)", c.version, c.branch)
 	default:
 		return fmt.Sprintf("agent-platform %s", c.version)
+	}
+}
+
+// remedy is what to change when this chart, or a component it pins, refuses
+// the values: the knob that selects the chart in this lab's mode. Never
+// chartVersion where it is ignored (platform.chartPath) or overwritten on the
+// next run (an unpinned platform.chartBranch) — that would be advice nothing
+// can act on.
+func (c platformChart) remedy() string {
+	switch {
+	case c.version == "":
+		return fmt.Sprintf("Fix the chart at %s, or the values the lab renders for it (platform.valuesFiles).", c.ref)
+	case c.branch != "":
+		return fmt.Sprintf("Pick another build of branch %s, or pin one: `agentlab configure --chart-branch \"\"`, then `--chart-version <full dev tag>`; or leave the dev channel for a release that accepts these values.", c.branch)
+	default:
+		return "Set platform.chartVersion in agentlab.yaml to a release that accepts these values."
 	}
 }
 
@@ -373,7 +408,14 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	// note here — the install below reports the same error in Helm's words.
 	roster, err := renderPlatformRoster(chart, values)
 	if err != nil {
-		note("cannot render %s (%v); the node pulls the platform images itself", chart, excerpt(err.Error(), 300))
+		// A chart that refuses these values refuses them on the cluster too:
+		// the install would carry them to helm-controller and fail there, so
+		// it is not started. Every other render failure stays a note — the
+		// install reports it in Helm's own words if it is real.
+		if isSchemaRejection(err) {
+			return chartRefusesValuesError(chart, err)
+		}
+		note("cannot render %s (%v); the node pulls the platform images itself", chart, excerptEnds(err.Error(), 300))
 	}
 	// Agent Substrate comes with the chart (the substrate component follows
 	// kagent on the 4.x line): its pods need the PodCertificateRequest API
@@ -394,11 +436,16 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	// to — the kagent line's controller and UI, the Go ADK Harness image by
 	// digest, Substrate's control plane and its gVisor worker, the CNPG
 	// operator and the Postgres operand, the hook Jobs' kubectl and openssl),
-	// so a first boot and version bumps are covered too. Best-effort:
-	// anything this misses is pulled in-node under the install's wait
-	// timeout, exactly as before.
+	// so a first boot and version bumps are covered too. Best-effort for the
+	// images: anything this misses is pulled in-node under the install's
+	// wait timeout. Not for the verdict: a chart that refuses the values its
+	// HelmRelease carries stops the boot here, before anything is side-loaded
+	// for an install that would not start.
 	step("Side-loading the platform images (the host cache survives `agentlab down`)")
-	images, renders := platformImages(cfg, roster)
+	images, renders, err := platformImages(cfg, roster)
+	if err != nil {
+		return err
+	}
 	sideloadPlatformImages(cfg, images)
 	// The dev images (platform.devImages, devimages.go): the Deployment
 	// targets side-loaded and their chart image names read off the component
@@ -424,6 +471,15 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 			return err
 		}
 		if err := dev.checkValues(cfg, values); err != nil {
+			return err
+		}
+		// The swap changed what the install carries — kagent.harness.image
+		// reaches the connectivity chart — so the values the renders above
+		// judged are not these. The changed pair goes to the charts once
+		// more, the meta chart and every component whose spec.values moved,
+		// so a schema that refuses the dev image is refused here and not
+		// after the install's wait.
+		if err := recheckReleases(cfg, chart, roster, values); err != nil {
 			return err
 		}
 		if dev.harness != "" {

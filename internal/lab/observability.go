@@ -205,7 +205,7 @@ func installOCIChart(cfg *config.Config, release, chartRef, version, valuesTmpl 
 	}
 	// Best-effort: anything missed is pulled in-node under the wait timeout,
 	// and the snapshot manifest catches it for the next boot.
-	if rendered, err := helmTemplate(observabilityNamespace, release, chartRef, version, values, nil); err == nil {
+	if rendered, _, err := helmTemplate(observabilityNamespace, release, chartRef, version, values, nil); err == nil {
 		if imgs := scrapeImages(rendered); len(imgs) > 0 {
 			if res := sideloadImages(cfg, hostPullImages(imgs)); res.n > 0 {
 				note("side-loaded %d %s images (%s)", res.n, release, res.d)

@@ -3,7 +3,9 @@ package lab
 import (
 	"context"
 	"encoding/base64"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -205,5 +207,66 @@ func TestKagentControllerMonitored(t *testing.T) {
 	newFakeLab(t, customObject(serviceMonitorGVK, kagentNamespace, "agent-platform-connectivity-kagent-controller", nil))
 	if !kagentControllerMonitored() {
 		t.Error("the connectivity chart's controller monitor not seen")
+	}
+}
+
+// TestPlatformTopologyForRefusesAChartThatWillNotTakeTheValues: the boot's
+// FIRST render holds the verdict, so a chart that refuses the lab's values is
+// reported there — before the certs, the kind cluster and Dex, which is the
+// five minutes the refusal exists to save. Every other render failure stays a
+// note and the boot proceeds on the budgeted topology.
+func TestPlatformTopologyForRefusesAChartThatWillNotTakeTheValues(t *testing.T) {
+	dir := isolateHelm(t)
+	cfg := config.Default()
+	cfg.Platform.Enabled = true
+
+	// A meta chart whose closed schema takes nothing the lab sends it.
+	cfg.Platform.ChartPath = writeClosedSchemaChart(t, dir)
+
+	_, err := platformTopologyFor(cfg)
+	if err == nil {
+		t.Fatal("a chart that refuses the lab's values did not stop the boot at its first render")
+	}
+	// Whole, with the advice for THIS mode — a local chart directory, where
+	// platform.chartVersion is ignored.
+	for _, want := range []string{"does not accept the values", "Fix the chart at " + cfg.Platform.ChartPath} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not mention %q:\n%s", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), chartVersionKnob) {
+		t.Errorf("a chartPath lab is pointed at platform.chartVersion, which it ignores:\n%s", err)
+	}
+	if strings.Contains(err.Error(), "...") {
+		t.Errorf("the refusal is truncated, hiding the schema path:\n%s", err)
+	}
+
+	// A chart that is simply not there is the best-effort case: noted, and
+	// the boot goes on with the budgeted topology.
+	cfg.Platform.ChartPath = filepath.Join(dir, "no-such-chart")
+	if _, err := platformTopologyFor(cfg); err != nil {
+		t.Errorf("a missing chart stopped the boot instead of falling back: %v", err)
+	}
+}
+
+// TestPlatformChartRemedy: the advice a refusal ends with names the knob that
+// selects the chart in the lab's mode — never chartVersion where it is
+// ignored (chartPath) or overwritten on the next run (an unpinned branch).
+func TestPlatformChartRemedy(t *testing.T) {
+	for _, c := range []struct {
+		chart       platformChart
+		want, never string
+	}{
+		{platformChart{ref: "/src/agent-platform"}, "/src/agent-platform", chartVersionKnob},
+		{platformChart{ref: config.ChartRepository, version: "4.0.0-dev.feat.x.20260915.h1", branch: "feat/x"}, "feat/x", chartVersionKnob},
+		{platformChart{ref: config.ChartRepository, version: "4.15.2"}, chartVersionKnob, "branch"},
+	} {
+		got := c.chart.remedy()
+		if !strings.Contains(got, c.want) {
+			t.Errorf("remedy for %s lacks %q: %s", c.chart, c.want, got)
+		}
+		if strings.Contains(got, c.never) {
+			t.Errorf("remedy for %s names %q, which cannot help there: %s", c.chart, c.never, got)
+		}
 	}
 }

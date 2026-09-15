@@ -19,6 +19,7 @@ import (
 	"helm.sh/helm/v4/pkg/action"
 	"helm.sh/helm/v4/pkg/chart"
 	"helm.sh/helm/v4/pkg/chart/common"
+	chartutil "helm.sh/helm/v4/pkg/chart/common/util"
 	"helm.sh/helm/v4/pkg/chart/loader"
 	chartv2 "helm.sh/helm/v4/pkg/chart/v2"
 	valuesloader "helm.sh/helm/v4/pkg/chart/v2/loader"
@@ -468,14 +469,118 @@ func lastRevisionUninstalled(revisions []ri.Releaser) (bool, error) {
 	return last.Info != nil && last.Info.Status == releasecommon.StatusUninstalled, nil
 }
 
+// schemaRejection is a render a values.schema.json refused — the chart's own
+// or a subchart's: the values are not merely incomplete, they are not values
+// this chart accepts. It is worth a type because it is the one render failure
+// that predicts the install — helm-controller coalesces and validates the
+// same way against the same chart, so what is refused here is refused on the
+// cluster — while every other failure (a registry that will not answer, a
+// tag that is not there, no network) says nothing about whether the install
+// would succeed. err is Helm's own message, whole: every chart's verdict,
+// the offending paths on its last lines.
+type schemaRejection struct {
+	err error
+}
+
+// Error is Helm's message without its headline (helmSchemaPrefix): the
+// callers word the headline for the release the render was for.
+func (e *schemaRejection) Error() string {
+	return strings.TrimSpace(strings.TrimPrefix(e.err.Error(), helmSchemaPrefix))
+}
+
+func (e *schemaRejection) Unwrap() error { return e.err }
+
+// isSchemaRejection reports whether err is, or wraps, a schemaRejection.
+func isSchemaRejection(err error) bool {
+	var rejection *schemaRejection
+	return errors.As(err, &rejection)
+}
+
+// helmSchemaPrefix is the headline Helm puts above every schema failure
+// (ToRenderValuesWithSchemaValidation): a render error carrying it failed at
+// validation and nowhere earlier.
+const helmSchemaPrefix = "values don't meet the specifications of the schema(s) in the following chart(s):"
+
+// schemaRejectionOf labels a render error a schemaRejection when a schema of
+// the chart — its own or a subchart's — refused the values, and returns nil
+// otherwise.
+//
+// Helm's message decides only whether to ask: a render that failed anywhere
+// but at validation (a template's fail, a kubeVersion guard, a dependency
+// that does not process) does not carry helmSchemaPrefix and is never
+// second-guessed. The verdict itself comes from asking the chart, not from
+// reading the message: the same coalesce-then-validate the render just did
+// (ToRenderValues). A reworded Helm can therefore at worst turn a rejection
+// into an ordinary failure — the safe direction — never the reverse.
+//
+// A validation verdict is narrower than "validation returned an error".
+// ValidateAgainstSingleSchema also answers for a schema that does not
+// unmarshal or does not compile — one whose $ref is an http(s) URL this host
+// cannot fetch, say — and for its own recover() path. None of those says
+// anything about the values: helm-controller, with cluster egress, may
+// render that chart perfectly well. Helm wraps the verdict itself, and only
+// the verdict, in JSONSchemaValidationError, so that is what is asked for
+// here, chart by chart down the dependency tree the way Helm's own
+// ValidateAgainstSchema walks it. Asking again at all is HACKS.md U25: Helm
+// flattens the verdicts into one string on the way out, and the type with
+// them.
+func schemaRejectionOf(ch chart.Charter, vals map[string]any, err error) *schemaRejection {
+	if err == nil || !strings.Contains(err.Error(), helmSchemaPrefix) {
+		return nil
+	}
+	coalesced, cerr := chartutil.CoalesceValues(ch, vals)
+	if cerr != nil || !schemaRefuses(ch, coalesced) {
+		return nil
+	}
+	return &schemaRejection{err: err}
+}
+
+// schemaRefuses reports whether the chart's own schema, or a subchart's,
+// returns a validation verdict against the coalesced values.
+func schemaRefuses(ch chart.Charter, vals map[string]any) bool {
+	accessor, err := chart.NewAccessor(ch)
+	if err != nil {
+		return false
+	}
+	if schema := accessor.Schema(); schema != nil {
+		var invalid chartutil.JSONSchemaValidationError
+		if errors.As(chartutil.ValidateAgainstSingleSchema(vals, schema), &invalid) {
+			return true
+		}
+	}
+	for _, sub := range accessor.Dependencies() {
+		subAccessor, err := chart.NewAccessor(sub)
+		if err != nil {
+			continue
+		}
+		if subVals, ok := vals[subAccessor.Name()].(map[string]any); ok && schemaRefuses(sub, subVals) {
+			return true
+		}
+	}
+	return false
+}
+
+// chartVersionOf is the version of a loaded chart — for an oci:// reference
+// the tag LocateChart picked out of the range, which Helm otherwise keeps to
+// itself; empty for a chart shape the lab does not know (every chart here is
+// apiVersion v2).
+func chartVersionOf(ch chart.Charter) string {
+	if c, ok := ch.(*chartv2.Chart); ok && c.Metadata != nil {
+		return c.Metadata.Version
+	}
+	return ""
+}
+
 // helmTemplate is `helm template <release> <chart> -n <ns> -f <values>
 // [--api-versions ...]`: a client-only render — no cluster is contacted,
 // .Capabilities is Helm's default set plus apiVersions — of the chart's
-// templates and hooks, CRDs excluded, as one multi-document manifest.
-func helmTemplate(namespace, releaseName, ref, version string, vals map[string]any, apiVersions []string) (string, error) {
+// templates and hooks, CRDs excluded, as one multi-document manifest. The
+// version reported is the loaded chart's — the tag a range resolved to —
+// known from the moment the chart is loaded, so a failed render names it too.
+func helmTemplate(namespace, releaseName, ref, version string, vals map[string]any, apiVersions []string) (rendered, resolved string, err error) {
 	h, err := newHelmOp(namespace)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	invocation := fmt.Sprintf("template %s %s -n %s", releaseName, helmChartLabel(ref, version), namespace)
 	install := action.NewInstall(h.cfg)
@@ -487,22 +592,30 @@ func helmTemplate(namespace, releaseName, ref, version string, vals map[string]a
 	install.APIVersions = common.VersionSet(apiVersions)
 	ch, err := h.loadChart(&install.ChartPathOptions, ref, version)
 	if err != nil {
-		return "", h.fail(invocation, err)
+		return "", "", h.fail(invocation, err)
 	}
-	rendered, err := install.RunWithContext(context.Background(), ch, vals)
+	resolved = chartVersionOf(ch)
+	out, err := install.RunWithContext(context.Background(), ch, vals)
 	if err != nil {
-		return "", h.fail(invocation, err)
+		// A refusal is returned as it is: the callers name the release and
+		// the chart, and the invocation h.fail would prepend only buries the
+		// schema path that is the whole message.
+		if rejection := schemaRejectionOf(ch, vals, err); rejection != nil {
+			h.log.dump()
+			return "", resolved, rejection
+		}
+		return "", resolved, h.fail(invocation, err)
 	}
-	rel, err := asV1Release(rendered)
+	rel, err := asV1Release(out)
 	if err != nil {
-		return "", h.fail(invocation, err)
+		return "", resolved, h.fail(invocation, err)
 	}
 	var b strings.Builder
 	fmt.Fprintln(&b, strings.TrimSpace(rel.Manifest))
 	for _, hook := range rel.Hooks {
 		fmt.Fprintf(&b, "---\n# Source: %s\n%s\n", hook.Path, hook.Manifest)
 	}
-	return b.String(), nil
+	return b.String(), resolved, nil
 }
 
 // helmReleaseExists is `helm -n <ns> status <release>` reduced to its
