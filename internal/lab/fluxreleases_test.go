@@ -247,22 +247,15 @@ func TestSplitDigestRefs(t *testing.T) {
 	}
 }
 
-// TestPlatformImagesRefusesARejectedComponent: a component chart that refuses
-// the values its HelmRelease carries stops the install, while a component the
-// render cannot reach stays a note and the rest of the preload proceeds.
-// These are the two halves of the same step: one predicts the install's
-// outcome, the other only says an image will be pulled in-node.
-func TestPlatformImagesRefusesARejectedComponent(t *testing.T) {
-	dir := isolateHelm(t)
-	chartDir := writeClosedSchemaChart(t, dir)
-	cfg := &config.Config{}
-
-	rosterFor := func(values string) *platformRoster {
-		t.Helper()
-		manifest := `apiVersion: source.toolkit.fluxcd.io/v1
+// componentManifest is one OCIRepository + HelmRelease pair of a rendered
+// meta chart, the component release named `component`: the chart at chartDir,
+// the HelmRelease's spec.values as given (indented YAML), and any further
+// spec lines (a valuesFrom, an install block) before them.
+func componentManifest(chartDir, spec, values string) string {
+	return `apiVersion: source.toolkit.fluxcd.io/v1
 kind: OCIRepository
 metadata:
-  name: closedchart
+  name: component
   namespace: default
 spec:
   url: ` + chartDir + `
@@ -272,15 +265,42 @@ spec:
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
-  name: closedchart
+  name: component
   namespace: default
 spec:
   chartRef:
     kind: OCIRepository
-    name: closedchart
+    name: component
     namespace: default
-  values:
+` + spec + `  values:
 ` + values
+}
+
+// TestPlatformImagesRefusesARejectedComponent: a component chart that refuses
+// the values its HelmRelease carries stops the install, while a component the
+// render cannot reach stays a note and the rest of the preload proceeds.
+// These are the two halves of the same step: one predicts the install's
+// outcome, the other only says an image will be pulled in-node. The release's
+// own facts decide the borderline: whose it is changes the advice, a
+// valuesFrom keeps only a verdict the reference could answer a note, and a
+// HelmRelease that turns validation off gets no verdict on the cluster.
+func TestPlatformImagesRefusesARejectedComponent(t *testing.T) {
+	dir := isolateHelm(t)
+	closed := writeClosedSchemaChart(t, dir)
+	// A schema that wants a key the values do not carry: the `missing
+	// property` class, the one a valuesFrom can answer.
+	demanding := writeSchemaChart(t, dir, "demandingchart", `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {"known": {"type": "string"}, "boom": {"type": "boolean"}, "needed": {"type": "string"}},
+  "required": ["needed"]
+}`)
+	cfg := &config.Config{}
+	chart := platformChart{ref: config.ChartRepository, version: "0.0.0-test"}
+
+	rosterFor := func(chartDir, values string) *platformRoster {
+		t.Helper()
+		manifest := componentManifest(chartDir, "", values)
 		releases, err := fluxReleases(manifest)
 		if err != nil {
 			t.Fatal(err)
@@ -288,109 +308,187 @@ spec:
 		if len(releases) != 1 {
 			t.Fatalf("fixture joined %d releases, want 1", len(releases))
 		}
-		return &platformRoster{manifest: manifest, releases: releases}
+		return &platformRoster{chart: chart, manifest: manifest, releases: releases}
 	}
-
-	// Refused: a key the chart's closed schema does not allow.
-	_, _, err := platformImages(cfg, rosterFor("    nosuchkey: 1\n"))
-	if err == nil {
-		t.Fatal("a component chart that refuses its values did not stop the install")
-	}
-	for _, want := range []string{"refuse", "nosuchkey", "platform.chartVersion"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("the refusal does not mention %q:\n%s", want, err)
+	refusal := func(what string, roster *platformRoster, wants ...string) {
+		t.Helper()
+		_, _, err := platformImages(cfg, roster)
+		if err == nil {
+			t.Fatalf("%s did not stop the install", what)
+		}
+		for _, want := range wants {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("the refusal of %s does not mention %q:\n%s", what, want, err)
+			}
+		}
+		// Whole, not an excerpt: the offending path is the end of Helm's
+		// message.
+		if strings.Contains(err.Error(), "...") {
+			t.Errorf("the refusal of %s is truncated, hiding the schema path:\n%s", what, err)
 		}
 	}
-	// Whole, not an excerpt: the offending path is the end of Helm's message.
-	if strings.Contains(err.Error(), "...") {
-		t.Errorf("the refusal is truncated, hiding the schema path:\n%s", err)
+	proceeds := func(what string, roster *platformRoster) {
+		t.Helper()
+		if _, _, err := platformImages(cfg, roster); err != nil {
+			t.Errorf("%s stopped the install: %v", what, err)
+		}
 	}
+
+	// Refused: a key the chart's closed schema does not allow, with the
+	// release, the chart and the knob that selects it.
+	refusal("a component chart that refuses its values", rosterFor(closed, "    nosuchkey: 1\n"),
+		"refuse", "component (", "nosuchkey", chartVersionKnob)
 
 	// Accepted values, failing template: nothing here says the install would
 	// fail, so the preload notes it and carries on.
-	if _, _, err := platformImages(cfg, rosterFor("    boom: true\n")); err != nil {
-		t.Errorf("an ordinary render failure stopped the install: %v", err)
-	}
+	proceeds("an ordinary render failure", rosterFor(closed, "    boom: true\n"))
 
 	// A chart that cannot be reached at all is the same best-effort case.
-	unreachable := rosterFor("    known: a\n")
+	unreachable := rosterFor(closed, "    known: a\n")
 	unreachable.releases[0].URL = filepath.Join(dir, "no-such-chart")
-	if _, _, err := platformImages(cfg, unreachable); err != nil {
-		t.Errorf("an unreachable component chart stopped the install: %v", err)
-	}
+	proceeds("an unreachable component chart", unreachable)
 
-	// A release the LAB renders, not the meta chart's: platform.chartVersion
-	// has no say over its chart or its values, so refusing the install and
-	// pointing at that knob would be advice nothing can act on.
-	labOwned := rosterFor("    nosuchkey: 1\n")
+	// A release the LAB renders, not the meta chart's: refused all the same
+	// — helm-controller installs it and waits for it like any component —
+	// but platform.chartVersion has no say over its chart or its values, so
+	// the advice is agentlab's, not the chart's.
+	labOwned := rosterFor(closed, "    nosuchkey: 1\n")
 	labOwned.releases[0].LabOwned = true
-	if _, _, err := platformImages(cfg, labOwned); err != nil {
-		t.Errorf("a refusal in the lab's own release stopped the install: %v", err)
+	refusal("a refusal in the lab's own release", labOwned, "nosuchkey", "lab's own release", "platform.observability")
+	if _, _, err := platformImages(cfg, labOwned); strings.Contains(err.Error(), chartVersionKnob) {
+		t.Errorf("the lab's own release is pointed at platform.chartVersion, which does not govern it:\n%s", err)
 	}
 
-	// A HelmRelease that also draws values from the cluster: the render here
-	// ran on an incomplete set, so what the chart refused is not what
-	// helm-controller will see — a missing required key may well be in the
-	// ConfigMap the lab cannot read.
-	withValuesFrom := rosterFor("    nosuchkey: 1\n")
+	// A HelmRelease that also draws values from the cluster: a reference can
+	// add keys, so a `missing property` verdict may be answered there and
+	// stays a note — but it cannot take a key away, so `additional
+	// properties … not allowed` is refused on the cluster too.
+	withValuesFrom := rosterFor(closed, "    nosuchkey: 1\n")
 	withValuesFrom.releases[0].ValuesFrom = true
-	if _, _, err := platformImages(cfg, withValuesFrom); err != nil {
-		t.Errorf("a refusal on a release with valuesFrom stopped the install: %v", err)
+	refusal("a closed schema refusing a key of a release with valuesFrom", withValuesFrom, "nosuchkey")
+	missing := rosterFor(demanding, "    known: a\n")
+	missing.releases[0].ValuesFrom = true
+	proceeds("a missing property on a release with valuesFrom", missing)
+	// Without the reference the same verdict is final.
+	refusal("a missing property on a release without valuesFrom", rosterFor(demanding, "    known: a\n"), "needed")
+
+	// A HelmRelease that turns helm-controller's validation off: the verdict
+	// is one the cluster never asks for.
+	unvalidated := rosterFor(closed, "    nosuchkey: 1\n")
+	unvalidated.releases[0].SchemaValidationOff = true
+	proceeds("a refusal on a release with schema validation off", unvalidated)
+}
+
+// TestFluxReleasesReadsTheValidationFacts: the join records what decides
+// whether a render failure predicts the install — a valuesFrom (the lab
+// cannot see those values) and a HelmRelease that turns helm-controller's
+// schema validation off (the cluster never asks for the verdict).
+func TestFluxReleasesReadsTheValidationFacts(t *testing.T) {
+	one := func(spec string) fluxRelease {
+		t.Helper()
+		releases, err := fluxReleases(componentManifest("oci://example.test/c", spec, "    a: 1\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(releases) != 1 {
+			t.Fatalf("joined %d releases, want 1", len(releases))
+		}
+		return releases[0]
+	}
+
+	plain := one("")
+	if plain.ValuesFrom || plain.SchemaValidationOff {
+		t.Errorf("a HelmRelease with spec.values only is recorded as %+v", plain)
+	}
+	withRef := one("  valuesFrom:\n    - kind: ConfigMap\n      name: kagent-images\n")
+	if !withRef.ValuesFrom {
+		t.Error("a HelmRelease with spec.valuesFrom is not recorded as drawing values from the cluster")
+	}
+	if withRef.SchemaValidationOff {
+		t.Error("a HelmRelease with spec.valuesFrom is recorded as turning validation off")
+	}
+	for _, block := range []string{"install", "upgrade"} {
+		if !one("  " + block + ":\n    disableSchemaValidation: true\n").SchemaValidationOff {
+			t.Errorf("a HelmRelease with spec.%s.disableSchemaValidation is not recorded as turning validation off", block)
+		}
+	}
+	if one("  install:\n    createNamespace: true\n").SchemaValidationOff {
+		t.Error("an install block without disableSchemaValidation is recorded as turning validation off")
 	}
 }
 
-// TestFluxReleasesReadsValuesFrom: the join records that a HelmRelease draws
-// values the lab cannot see, which is what keeps its render failures notes.
-func TestFluxReleasesReadsValuesFrom(t *testing.T) {
-	manifest := `apiVersion: source.toolkit.fluxcd.io/v1
+// TestRecheckReleasesJudgesChangedValues: the dev-image swap re-renders the
+// values after the preload's renders, so the pair the install carries goes
+// to the charts once more — only the components whose spec.values moved, and
+// with the same verdict as the first pass.
+func TestRecheckReleasesJudgesChangedValues(t *testing.T) {
+	dir := isolateHelm(t)
+	component := writeClosedSchemaChart(t, dir)
+	// A meta chart of one component whose spec.values are .Values.forward.
+	meta := writeChartFiles(t, dir, "meta", map[string]string{
+		chartYAML:   "apiVersion: v2\nname: meta\nversion: 0.1.0\n",
+		chartValues: "component: \"\"\nforward: {}\n",
+		"templates/component.yaml": `apiVersion: source.toolkit.fluxcd.io/v1
 kind: OCIRepository
 metadata:
-  name: c
+  name: component
   namespace: default
 spec:
-  url: oci://example.test/c
+  url: {{ .Values.component }}
   ref:
-    tag: "1.0.0"
+    tag: "0.1.0"
 ---
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
-  name: c
+  name: component
   namespace: default
 spec:
   chartRef:
     kind: OCIRepository
-    name: c
+    name: component
     namespace: default
-  valuesFrom:
-    - kind: ConfigMap
-      name: kagent-images
   values:
-    a: 1
-`
-	releases, err := fluxReleases(manifest)
+{{ toYaml .Values.forward | indent 4 }}
+`,
+	})
+	chart := platformChart{ref: meta}
+	valuesWith := func(forward map[string]any) map[string]any {
+		return map[string]any{"component": component, "forward": forward}
+	}
+	before, err := renderPlatformRoster(chart, valuesWith(map[string]any{knownKey: "a"}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(releases) != 1 {
-		t.Fatalf("joined %d releases, want 1", len(releases))
-	}
-	if !releases[0].ValuesFrom {
-		t.Error("a HelmRelease with spec.valuesFrom is not recorded as drawing values from the cluster")
-	}
-	if releases[0].LabOwned {
-		t.Error("a release of the rendered manifest is marked as the lab's own")
-	}
+	cfg := &config.Config{}
 
-	// And the negative: no valuesFrom, so its values are the whole set.
-	plain, err := fluxReleases(strings.Replace(manifest, `  valuesFrom:
-    - kind: ConfigMap
-      name: kagent-images
-`, "", 1))
-	if err != nil {
-		t.Fatal(err)
+	if err := recheckReleases(cfg, chart, before, valuesWith(map[string]any{knownKey: "a"})); err != nil {
+		t.Errorf("unchanged values were refused: %v", err)
 	}
-	if plain[0].ValuesFrom {
-		t.Error("a HelmRelease without spec.valuesFrom is recorded as drawing values from the cluster")
+	if err := recheckReleases(cfg, chart, before, valuesWith(map[string]any{knownKey: "b"})); err != nil {
+		t.Errorf("changed but accepted values were refused: %v", err)
+	}
+	// The swap put a key the component's closed schema forbids.
+	err = recheckReleases(cfg, chart, before, valuesWith(map[string]any{"nosuchkey": 1}))
+	if err == nil {
+		t.Fatal("a component that refuses the changed values did not stop the install")
+	}
+	for _, want := range []string{"nosuchkey", "Fix the chart at " + meta} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not mention %q:\n%s", want, err)
+		}
+	}
+}
+
+// TestExcerptEnds: a render note keeps the tail of a long message, where Helm
+// puts the part worth reading.
+func TestExcerptEnds(t *testing.T) {
+	long := "head " + strings.Repeat("x", 400) + "\n- at '/kyvernoPolicies': additional properties not allowed"
+	got := excerptEnds(long, 120)
+	if !strings.HasPrefix(got, "head ") || !strings.HasSuffix(got, "additional properties not allowed") || !strings.Contains(got, " ... ") {
+		t.Errorf("excerptEnds kept the wrong ends: %q", got)
+	}
+	if short := excerptEnds("short\nmessage", 120); short != "short message" {
+		t.Errorf("a short message must come back whole, flattened: %q", short)
 	}
 }

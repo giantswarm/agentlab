@@ -557,6 +557,27 @@ evidence such a server offers. The unit tests carry the 200-on-unknown-path
 behaviour in the fake, so a future "simplification" back to a status check
 fails them.
 
+### U25. `helm.go`: a schema refusal is classified by re-validating, not by Helm's error type — BLOCKED UPSTREAM
+A render the values fail is the one render failure that predicts the install
+(`schemaRejection`; `fluxreleases.go` refuses the install on it), so the lab
+must tell it from every other render error. Helm 4.2 does type the verdict —
+`ValidateAgainstSingleSchema` returns `JSONSchemaValidationError` for a
+validation verdict and a plain error for a schema that does not unmarshal or
+compile — but `ValidateAgainstSchema` walks the dependency tree and flattens
+every chart's verdict into one `errors.New(sb.String())`
+(`pkg/chart/common/util/jsonschema.go`), and `ToRenderValuesWithSchemaValidation`
+wraps that with `%w`: the type never reaches `Install.RunWithContext`'s
+caller, so `errors.As` cannot find it. `schemaRejectionOf` therefore re-runs
+the same coalesce (`CoalesceValues`) and asks each chart's schema down the
+tree itself (`ValidateAgainstSingleSchema`), on the error path only and only
+for a render error carrying Helm's schema headline (`values don't meet the
+specifications of the schema(s)`) — a second coalesce and schema compile per
+refused render, and a second fetch of a remote `$ref` where a schema has one.
+Unblocks when `ValidateAgainstSchema` keeps the verdicts' type on the way out
+(an `errors.Join` of the per-chart `JSONSchemaValidationError`s, or a typed
+aggregate); the re-validation then becomes one `errors.As` on the render
+error.
+
 ## Accepted lab trade-offs (not hacks to fix)
 
 - **Checksum stamping via the `REPLACED_AT_APPLY` placeholder** — the standard

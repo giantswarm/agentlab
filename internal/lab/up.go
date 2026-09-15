@@ -22,6 +22,19 @@ func Up(cfg *config.Config, offers Offers) error {
 	// the fix and the numbers — for what the chart about to be installed
 	// ships (its rendered roster: Agent Substrate and the platform Postgres
 	// come with the agents on the 4.x line), not for a version's folklore.
+	//
+	// The dev channel is resolved first: the render must judge the build the
+	// install will use, not the one the last run recorded (platformUp
+	// resolves too, for the standalone entry point, and finds it done).
+	if cfg.Platform.Enabled {
+		if changed, err := ResolveChartVersion(cfg); err != nil {
+			return err
+		} else if changed {
+			if err := cfg.Save(); err != nil {
+				return err
+			}
+		}
+	}
 	topology, err := platformTopologyFor(cfg)
 	if err != nil {
 		return err

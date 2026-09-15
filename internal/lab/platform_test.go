@@ -220,27 +220,22 @@ func TestPlatformTopologyForRefusesAChartThatWillNotTakeTheValues(t *testing.T) 
 	cfg := config.Default()
 	cfg.Platform.Enabled = true
 
-	// A meta chart whose schema takes nothing the lab sends it.
-	cfg.Platform.ChartPath = writeChartFiles(t, dir, "closedmeta", map[string]string{
-		chartYAML:   "apiVersion: v2\nname: closedmeta\nversion: 0.1.0\n",
-		chartValues: "{}\n",
-		chartSchema: `{
-  "$schema": "http://json-schema.org/draft-07/schema#",
-  "type": "object",
-  "properties": {},
-  "additionalProperties": false
-}`,
-		chartConfMap: "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: {{ .Release.Name }}\n",
-	})
+	// A meta chart whose closed schema takes nothing the lab sends it.
+	cfg.Platform.ChartPath = writeClosedSchemaChart(t, dir)
 
 	_, err := platformTopologyFor(cfg)
 	if err == nil {
 		t.Fatal("a chart that refuses the lab's values did not stop the boot at its first render")
 	}
-	for _, want := range []string{"does not accept the values", "platform.chartVersion"} {
+	// Whole, with the advice for THIS mode — a local chart directory, where
+	// platform.chartVersion is ignored.
+	for _, want := range []string{"does not accept the values", "Fix the chart at " + cfg.Platform.ChartPath} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal does not mention %q:\n%s", want, err)
 		}
+	}
+	if strings.Contains(err.Error(), chartVersionKnob) {
+		t.Errorf("a chartPath lab is pointed at platform.chartVersion, which it ignores:\n%s", err)
 	}
 	if strings.Contains(err.Error(), "...") {
 		t.Errorf("the refusal is truncated, hiding the schema path:\n%s", err)
@@ -251,5 +246,27 @@ func TestPlatformTopologyForRefusesAChartThatWillNotTakeTheValues(t *testing.T) 
 	cfg.Platform.ChartPath = filepath.Join(dir, "no-such-chart")
 	if _, err := platformTopologyFor(cfg); err != nil {
 		t.Errorf("a missing chart stopped the boot instead of falling back: %v", err)
+	}
+}
+
+// TestPlatformChartRemedy: the advice a refusal ends with names the knob that
+// selects the chart in the lab's mode — never chartVersion where it is
+// ignored (chartPath) or overwritten on the next run (an unpinned branch).
+func TestPlatformChartRemedy(t *testing.T) {
+	for _, c := range []struct {
+		chart       platformChart
+		want, never string
+	}{
+		{platformChart{ref: "/src/agent-platform"}, "/src/agent-platform", chartVersionKnob},
+		{platformChart{ref: config.ChartRepository, version: "4.0.0-dev.feat.x.20260915.h1", branch: "feat/x"}, "feat/x", chartVersionKnob},
+		{platformChart{ref: config.ChartRepository, version: "4.15.2"}, chartVersionKnob, "branch"},
+	} {
+		got := c.chart.remedy()
+		if !strings.Contains(got, c.want) {
+			t.Errorf("remedy for %s lacks %q: %s", c.chart, c.want, got)
+		}
+		if strings.Contains(got, c.never) {
+			t.Errorf("remedy for %s names %q, which cannot help there: %s", c.chart, c.never, got)
+		}
 	}
 }

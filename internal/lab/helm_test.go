@@ -41,6 +41,11 @@ const (
 	chartValues  = "values.yaml"
 	chartSchema  = "values.schema.json"
 	chartConfMap = "templates/cm.yaml"
+	// The keys the schema-chart tests send — one the fixtures' schemas know,
+	// one they do not — and the knob a release-mode refusal points at.
+	knownKey         = "known"
+	unknownKey       = "unknown"
+	chartVersionKnob = "platform.chartVersion"
 )
 
 // writeChartFiles lays out a chart directory under dir from name -> content,
@@ -122,9 +127,14 @@ func TestHelmTemplateOffline(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rendered, err := helmTemplate("apps", "myrel", chartDir, "", vals, []string{"monitoring.coreos.com/v1"})
+	rendered, resolved, err := helmTemplate("apps", "myrel", chartDir, "", vals, []string{"monitoring.coreos.com/v1"})
 	if err != nil {
 		t.Fatalf("helmTemplate: %v", err)
+	}
+	// The version rendered is read off the loaded chart: what a range
+	// resolved to, for the boot log and a refusal to name.
+	if resolved != "0.1.0" {
+		t.Errorf("resolved version = %q, want the chart's 0.1.0", resolved)
 	}
 	for _, want := range []string{
 		"image: registry.example/app:override",                                          // the values override the chart's default
@@ -145,7 +155,7 @@ func TestHelmTemplateOffline(t *testing.T) {
 
 	// Without the declared API version the guarded object does not render —
 	// the client-only capabilities are Helm's default set.
-	rendered, err = helmTemplate("apps", "myrel", chartDir, "", vals, nil)
+	rendered, _, err = helmTemplate("apps", "myrel", chartDir, "", vals, nil)
 	if err != nil {
 		t.Fatalf("helmTemplate without api versions: %v", err)
 	}
@@ -160,11 +170,11 @@ func TestHelmTemplateOffline(t *testing.T) {
 func TestHelmTemplateMissingDependency(t *testing.T) {
 	dir := isolateHelm(t)
 	chartDir := writeChart(t, dir)
-	chartYAML := "apiVersion: v2\nname: testchart\nversion: 0.1.0\ndependencies:\n  - name: sub\n    version: 1.0.0\n    repository: oci://registry.example/charts\n"
-	if err := os.WriteFile(filepath.Join(chartDir, "Chart.yaml"), []byte(chartYAML), 0o600); err != nil {
+	withDependency := "apiVersion: v2\nname: testchart\nversion: 0.1.0\ndependencies:\n  - name: sub\n    version: 1.0.0\n    repository: oci://registry.example/charts\n"
+	if err := os.WriteFile(filepath.Join(chartDir, chartYAML), []byte(withDependency), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, err := helmTemplate("apps", "myrel", chartDir, "", map[string]any{}, nil)
+	_, _, err := helmTemplate("apps", "myrel", chartDir, "", map[string]any{}, nil)
 	if err == nil {
 		t.Fatal("expected the missing dependency to be refused")
 	}
@@ -356,40 +366,51 @@ func TestHelmValuesFilesLaterWins(t *testing.T) {
 	}
 }
 
-// writeClosedSchemaChart lays out a chart whose values.schema.json is closed
-// (additionalProperties: false) — the shape every component chart of the
-// platform that rejects a forwarded key has — plus a template that fails on
-// demand, so a schema rejection and an ordinary render failure can be told
-// apart in the same chart.
-func writeClosedSchemaChart(t *testing.T, dir string) string {
-	t.Helper()
-	files := map[string]string{
-		chartYAML:   "apiVersion: v2\nname: closedchart\nversion: 0.1.0\n",
-		chartValues: "known: a\nboom: false\n",
-		chartSchema: `{
+// closedSchema is a closed values.schema.json (additionalProperties: false)
+// over the keys writeSchemaChart's values carry — the shape every component
+// chart of the platform that rejects a forwarded key has.
+const closedSchema = `{
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
   "properties": {"known": {"type": "string"}, "boom": {"type": "boolean"}},
   "additionalProperties": false
-}`,
+}`
+
+// writeSchemaChart lays out a chart named name whose values.schema.json is
+// schema, with fixed values (`known`, `boom`) and a template that fails on
+// demand (`boom: true`), so a schema verdict and an ordinary render failure
+// can be told apart in the same chart.
+func writeSchemaChart(t *testing.T, dir, name, schema string) string {
+	t.Helper()
+	return writeChartFiles(t, dir, name, map[string]string{
+		chartYAML:   "apiVersion: v2\nname: " + name + "\nversion: 0.1.0\n",
+		chartValues: "known: a\nboom: false\n",
+		chartSchema: schema,
 		chartConfMap: `{{- if .Values.boom }}{{ fail "boom" }}{{ end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: {{ .Release.Name }}
 `,
-	}
-	return writeChartFiles(t, dir, "closedchart", files)
+	})
 }
 
-// TestHelmTemplateSchemaRejection: a value the chart's schema forbids comes
-// back as a *schemaRejection — the class the install must refuse before it
-// starts — while a template that merely fails does not, however it is worded.
+// writeClosedSchemaChart is writeSchemaChart with closedSchema, as
+// `closedchart`.
+func writeClosedSchemaChart(t *testing.T, dir string) string {
+	t.Helper()
+	return writeSchemaChart(t, dir, "closedchart", closedSchema)
+}
+
+// TestHelmTemplateSchemaRejection: a value a schema forbids — the chart's own
+// or a subchart's — comes back as a *schemaRejection carrying Helm's whole
+// verdict, the class the install must refuse before it starts, while a
+// template that merely fails does not, however it is worded.
 func TestHelmTemplateSchemaRejection(t *testing.T) {
 	dir := isolateHelm(t)
 	chartDir := writeClosedSchemaChart(t, dir)
 
-	_, err := helmTemplate("apps", "rel", chartDir, "", map[string]any{"unknown": 1}, nil)
+	_, _, err := helmTemplate("apps", "rel", chartDir, "", map[string]any{unknownKey: 1}, nil)
 	if err == nil {
 		t.Fatal("a value outside the chart's closed schema rendered")
 	}
@@ -397,21 +418,47 @@ func TestHelmTemplateSchemaRejection(t *testing.T) {
 	if !errors.As(err, &rejected) {
 		t.Fatalf("a schema rejection is not reported as one: %v", err)
 	}
-	if !strings.Contains(err.Error(), "closedchart") {
-		t.Errorf("the rejection does not name the chart whose schema refused: %v", err)
+	for _, want := range []string{"closedchart", unknownKey} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the rejection does not name %q (the chart whose schema refused and the offending key): %v", want, err)
+		}
 	}
-	if !strings.Contains(err.Error(), "unknown") {
-		t.Errorf("the rejection does not name the offending key: %v", err)
+	// Helm's headline is the callers' to word; the verdict starts with the
+	// chart it came from.
+	if strings.Contains(err.Error(), helmSchemaPrefix) {
+		t.Errorf("the rejection still carries Helm's headline: %v", err)
 	}
 
-	// The other half: the values are fine, the template fails. Nothing here
-	// predicts the install, so it must NOT be a schema rejection.
-	_, err = helmTemplate("apps", "rel", chartDir, "", map[string]any{"boom": true}, nil)
+	// The values are fine, the template fails: nothing here predicts the
+	// install, so it must NOT be a schema rejection.
+	_, _, err = helmTemplate("apps", "rel", chartDir, "", map[string]any{"boom": true}, nil)
 	if err == nil {
 		t.Fatal("the failing template rendered")
 	}
-	if errors.As(err, &rejected) {
+	if isSchemaRejection(err) {
 		t.Fatalf("an ordinary template failure is read as a schema rejection: %v", err)
+	}
+
+	// A refusal that lives only in a SUBCHART's schema is one too: Helm
+	// validates the dependency tree, and so does the classification.
+	parent := writeChartFiles(t, dir, "parent", map[string]string{
+		chartYAML:                          "apiVersion: v2\nname: parent\nversion: 0.1.0\n",
+		chartValues:                        "{}\n",
+		chartConfMap:                       "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: {{ .Release.Name }}\n",
+		"charts/closedsub/" + chartYAML:    "apiVersion: v2\nname: closedsub\nversion: 0.1.0\n",
+		"charts/closedsub/" + chartValues:  "known: a\n",
+		"charts/closedsub/" + chartSchema:  closedSchema,
+		"charts/closedsub/" + chartConfMap: "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: {{ .Release.Name }}-sub\n",
+	})
+	_, _, err = helmTemplate("apps", "rel", parent, "", map[string]any{"closedsub": map[string]any{unknownKey: 1}}, nil)
+	if err == nil {
+		t.Fatal("a value outside the subchart's closed schema rendered")
+	}
+	if !errors.As(err, &rejected) {
+		t.Fatalf("a subchart's schema rejection is not reported as one: %v", err)
+	}
+	if !strings.Contains(err.Error(), "closedsub") {
+		t.Errorf("the rejection does not name the subchart whose schema refused: %v", err)
 	}
 }
 
@@ -420,28 +467,29 @@ func TestHelmTemplateSchemaRejection(t *testing.T) {
 // remote $ref this host cannot fetch is the real case, and helm-controller
 // with cluster egress may render the same chart fine. It must stay an ordinary
 // failure, or an offline host turns an installable chart into a refused one.
+// The fixture's $ref fails to compile without touching the network (a JSON
+// pointer into nothing): the same branch of Helm's validation as the remote
+// one, at no cost and with no proxy to stall on.
 func TestHelmTemplateSchemaLoadFailureIsNotARejection(t *testing.T) {
 	dir := isolateHelm(t)
-	files := map[string]string{
-		chartYAML:   "apiVersion: v2\nname: badschema\nversion: 0.1.0\n",
-		chartValues: "known: a\n",
-		// A $ref no loader can resolve: the compile step fails, which is not
-		// a verdict on the values.
-		chartSchema: `{
+	chartDir := writeSchemaChart(t, dir, "badschema", `{
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
-  "properties": {"known": {"$ref": "https://schema.invalid/nope.json"}}
-}`,
-		chartConfMap: "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: {{ .Release.Name }}\n",
-	}
-	chartDir := writeChartFiles(t, dir, "badschema", files)
+  "properties": {"known": {"$ref": "#/definitions/missing"}}
+}`)
 
-	_, err := helmTemplate("apps", "rel", chartDir, "", map[string]any{"known": "a"}, nil)
+	_, _, err := helmTemplate("apps", "rel", chartDir, "", map[string]any{knownKey: "a"}, nil)
 	if err == nil {
-		t.Skip("this Helm resolved the unresolvable $ref; nothing to classify")
+		t.Fatal("a schema that cannot compile rendered")
 	}
-	var rejected *schemaRejection
-	if errors.As(err, &rejected) {
+	// It did fail at validation, and named the chart — exactly the failure
+	// the classification must leave alone.
+	for _, want := range []string{helmSchemaPrefix, "badschema"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the failure is not Helm's schema failure for the chart (lacks %q): %v", want, err)
+		}
+	}
+	if isSchemaRejection(err) {
 		t.Fatalf("a schema Helm could not load is read as a refusal of the values: %v", err)
 	}
 }

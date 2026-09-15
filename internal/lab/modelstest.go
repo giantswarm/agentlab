@@ -891,6 +891,19 @@ func excerpt(s string, n int) string {
 	return s
 }
 
+// excerptEnds is excerpt keeping both ends: the head, then the tail, of a
+// message whose meaning is on its last line — Helm's, whose failing template
+// or schema path comes last — so a render note does not cut it off.
+func excerptEnds(s string, n int) string {
+	s = strings.ReplaceAll(strings.TrimSpace(s), "\n", " ")
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	head, tail := n/2, n-n/2
+	return string(r[:head]) + " ... " + string(r[len(r)-tail:])
+}
+
 func firstNonEmpty(values ...string) string {
 	for _, v := range values {
 		if v != "" {
