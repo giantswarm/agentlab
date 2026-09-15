@@ -34,15 +34,40 @@ func isolateHelm(t *testing.T) string {
 	return dir
 }
 
+// The files a chart fixture is made of. Named because several fixtures below
+// lay out charts of their own and goconst counts the repeats.
+const (
+	chartYAML    = "Chart.yaml"
+	chartValues  = "values.yaml"
+	chartSchema  = "values.schema.json"
+	chartConfMap = "templates/cm.yaml"
+)
+
+// writeChartFiles lays out a chart directory under dir from name -> content,
+// creating the template subdirectories on the way, and returns its path.
+func writeChartFiles(t *testing.T, dir, name string, files map[string]string) string {
+	t.Helper()
+	chartDir := filepath.Join(dir, name)
+	for file, content := range files {
+		path := filepath.Join(chartDir, file)
+		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return chartDir
+}
+
 // writeChart lays out a minimal chart: a Deployment whose image comes from
 // the values, a ServiceMonitor guarded on the Prometheus Operator API being
 // known, a pre-install hook Job, and a CRD.
 func writeChart(t *testing.T, dir string) string {
 	t.Helper()
-	chartDir := filepath.Join(dir, "testchart")
 	files := map[string]string{
-		"Chart.yaml":  "apiVersion: v2\nname: testchart\nversion: 0.1.0\n",
-		"values.yaml": "image: registry.example/app:1.0.0\nmonitor: true\n",
+		chartYAML:   "apiVersion: v2\nname: testchart\nversion: 0.1.0\n",
+		chartValues: "image: registry.example/app:1.0.0\nmonitor: true\n",
 		"templates/deploy.yaml": `apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -81,16 +106,7 @@ metadata:
   name: widgets.example.com
 `,
 	}
-	for name, content := range files {
-		path := filepath.Join(chartDir, name)
-		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return chartDir
+	return writeChartFiles(t, dir, "testchart", files)
 }
 
 // TestHelmTemplateOffline: the `helm template` equivalent renders a chart
@@ -347,33 +363,23 @@ func TestHelmValuesFilesLaterWins(t *testing.T) {
 // apart in the same chart.
 func writeClosedSchemaChart(t *testing.T, dir string) string {
 	t.Helper()
-	chartDir := filepath.Join(dir, "closedchart")
 	files := map[string]string{
-		"Chart.yaml":  "apiVersion: v2\nname: closedchart\nversion: 0.1.0\n",
-		"values.yaml": "known: a\nboom: false\n",
-		"values.schema.json": `{
+		chartYAML:   "apiVersion: v2\nname: closedchart\nversion: 0.1.0\n",
+		chartValues: "known: a\nboom: false\n",
+		chartSchema: `{
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
   "properties": {"known": {"type": "string"}, "boom": {"type": "boolean"}},
   "additionalProperties": false
 }`,
-		"templates/cm.yaml": `{{- if .Values.boom }}{{ fail "boom" }}{{ end }}
+		chartConfMap: `{{- if .Values.boom }}{{ fail "boom" }}{{ end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: {{ .Release.Name }}
 `,
 	}
-	for name, body := range files {
-		path := filepath.Join(chartDir, name)
-		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return chartDir
+	return writeChartFiles(t, dir, "closedchart", files)
 }
 
 // TestHelmTemplateSchemaRejection: a value the chart's schema forbids comes
@@ -416,28 +422,19 @@ func TestHelmTemplateSchemaRejection(t *testing.T) {
 // failure, or an offline host turns an installable chart into a refused one.
 func TestHelmTemplateSchemaLoadFailureIsNotARejection(t *testing.T) {
 	dir := isolateHelm(t)
-	chartDir := filepath.Join(dir, "badschema")
 	files := map[string]string{
-		"Chart.yaml":  "apiVersion: v2\nname: badschema\nversion: 0.1.0\n",
-		"values.yaml": "known: a\n",
+		chartYAML:   "apiVersion: v2\nname: badschema\nversion: 0.1.0\n",
+		chartValues: "known: a\n",
 		// A $ref no loader can resolve: the compile step fails, which is not
 		// a verdict on the values.
-		"values.schema.json": `{
+		chartSchema: `{
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
   "properties": {"known": {"$ref": "https://schema.invalid/nope.json"}}
 }`,
-		"templates/cm.yaml": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: {{ .Release.Name }}\n",
+		chartConfMap: "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: {{ .Release.Name }}\n",
 	}
-	for name, body := range files {
-		path := filepath.Join(chartDir, name)
-		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
+	chartDir := writeChartFiles(t, dir, "badschema", files)
 
 	_, err := helmTemplate("apps", "rel", chartDir, "", map[string]any{"known": "a"}, nil)
 	if err == nil {

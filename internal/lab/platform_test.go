@@ -3,7 +3,6 @@ package lab
 import (
 	"context"
 	"encoding/base64"
-	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -222,28 +221,17 @@ func TestPlatformTopologyForRefusesAChartThatWillNotTakeTheValues(t *testing.T) 
 	cfg.Platform.Enabled = true
 
 	// A meta chart whose schema takes nothing the lab sends it.
-	closed := filepath.Join(dir, "closedmeta")
-	files := map[string]string{
-		"Chart.yaml":  "apiVersion: v2\nname: closedmeta\nversion: 0.1.0\n",
-		"values.yaml": "{}\n",
-		"values.schema.json": `{
+	cfg.Platform.ChartPath = writeChartFiles(t, dir, "closedmeta", map[string]string{
+		chartYAML:   "apiVersion: v2\nname: closedmeta\nversion: 0.1.0\n",
+		chartValues: "{}\n",
+		chartSchema: `{
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
   "properties": {},
   "additionalProperties": false
 }`,
-		"templates/cm.yaml": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: {{ .Release.Name }}\n",
-	}
-	for name, body := range files {
-		path := filepath.Join(closed, name)
-		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	cfg.Platform.ChartPath = closed
+		chartConfMap: "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: {{ .Release.Name }}\n",
+	})
 
 	_, err := platformTopologyFor(cfg)
 	if err == nil {
