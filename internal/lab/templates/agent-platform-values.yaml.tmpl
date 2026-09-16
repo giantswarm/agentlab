@@ -118,8 +118,14 @@ gateway:
 # The component roster. `postRenderers` are Flux kustomize post-renderers the
 # chart forwards verbatim to that component's HelmRelease — the lab's patches
 # on the component charts' renders (postrenderers.go: hostNetwork on muster
-# and Backstage, the dex-localhost sidecar on the MCP servers, the kagent UI
-# NodePort, and the dev-image overrides from platform.devImages).
+# and Backstage, the dex-localhost sidecar on every Deployment the component
+# charts tell the lab Dex's localhost address, the kagent UI NodePort, and the
+# dev-image overrides from platform.devImages). The sidecar's targets are
+# read off the component renders, so `agentlab platform` renders this file
+# twice: without them for the roster render, then with them for the install;
+# a plain `agentlab render` shows the first. Components this roster does not
+# name — turned on by the chart's defaults or an overlay — take their patches
+# from the range at the roster's end.
 components:
   # The bundled engine: the lab shape's first half (see the header).
   flux:
@@ -129,8 +135,10 @@ components:
   dicebear:
     enabled: false
   muster:
+{{- with index .PostRenderers "muster" }}
     postRenderers:
-{{ index .PostRenderers "muster" | indent 6 }}
+{{ . | indent 6 }}
+{{- end }}
   agentgateway:
     enabled: true
   agent-platform-mcps:
@@ -143,8 +151,10 @@ components:
   # that audience (mcp-kubernetes.kubernetesAudience below).
   mcp-kubernetes:
     enabled: true
+{{- with index .PostRenderers "mcp-kubernetes" }}
     postRenderers:
-{{ index .PostRenderers "mcp-kubernetes" | indent 6 }}
+{{ . | indent 6 }}
+{{- end }}
   # The agent runtime — kagent API v2: AgentTemplates admitted by the platform
   # Harness run as Agent Substrate actors in gVisor worker pods, wired to
   # Anthropic through the default ModelConfig (see the kagent block below).
@@ -171,8 +181,10 @@ components:
   # the caller), on whenever kagent is — the standalone umbrella's contract.
   agent-manager:
     enabled: true
+{{- with index .PostRenderers "agent-manager" }}
     postRenderers:
-{{ index .PostRenderers "agent-manager" | indent 6 }}
+{{ . | indent 6 }}
+{{- end }}
 {{- end }}
 {{- if .ModelManagerEnabled }}
   # Managed models (platform.modelManager): model-manager in front of every
@@ -180,8 +192,10 @@ components:
   # block below, its edge route in `modelManager:`).
   model-manager:
     enabled: true
+{{- with index .PostRenderers "model-manager" }}
     postRenderers:
-{{ index .PostRenderers "model-manager" | indent 6 }}
+{{ . | indent 6 }}
+{{- end }}
 {{- end }}
 {{- if .VMManagerEnabled }}
   # The VM provisioner (platform.vmManager): vm-manager as a pod of the node
@@ -190,8 +204,10 @@ components:
   # block below).
   vm-manager:
     enabled: true
+{{- with index .PostRenderers "vm-manager" }}
     postRenderers:
-{{ index .PostRenderers "vm-manager" | indent 6 }}
+{{ . | indent 6 }}
+{{- end }}
 {{- end }}
 {{- if .KlausGatewayEnabled }}
   # Swarmgeist (platform.klausGateway): klaus-gateway as the meta chart's
@@ -210,8 +226,18 @@ components:
   backstage:
     enabled: {{ .Backstage.Enabled }}
 {{- if .Backstage.Enabled }}
+{{- with index .PostRenderers "backstage" }}
     postRenderers:
-{{ index .PostRenderers "backstage" | indent 6 }}
+{{ . | indent 6 }}
+{{- end }}
+{{- end }}
+{{- range $component, $postRenderers := .ExtraPostRenderers }}
+  # A component this roster names no block for under these settings — turned
+  # on by the chart's defaults or by a platform.valuesFiles overlay — with the
+  # patches the rule found on its render (the dex-localhost sidecar).
+  {{ $component }}:
+    postRenderers:
+{{ $postRenderers | indent 6 }}
 {{- end }}
 
 # The connectivity chart's key for the mcp-kubernetes MCPServer CR (dropped

@@ -63,6 +63,9 @@ const (
 	// server that answered 401 — muster's api.StateAuthRequired, spelled the
 	// CRD way.
 	mcpServerStateAuthRequired = "Auth Required"
+	// mcpServerStateConnected is the state once a session signed in to the
+	// server and muster holds a connection to it.
+	mcpServerStateConnected = "Connected"
 	// fixtureDeleteWait bounds how long a removed fixture member may take to
 	// go away — kubectl's default delete waits too.
 	fixtureDeleteWait = 2 * time.Minute

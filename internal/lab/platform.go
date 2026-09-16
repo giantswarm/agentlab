@@ -445,45 +445,55 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 		return err
 	}
 	sideloadPlatformImages(cfg, images)
-	// The dev images (platform.devImages, devimages.go): the Deployment
-	// targets side-loaded and their chart image names read off the component
-	// renders above, the `harness` image pushed to the lab registry and
-	// pinned by digest — then the values rendered once more with what only
-	// the cluster and the registry could say, so the release carries the
-	// swap. The Harness's state before the install is what the recompile
-	// report afterwards compares against.
+	// What only the renders could say goes into the values now, rendered
+	// once more: the dex-localhost sidecar's targets (dexLocalhostTargets —
+	// every Deployment the component charts tell the lab Dex's localhost
+	// address, the chart's default-on managers and an overlay's included)
+	// and, with dev images (platform.devImages, devimages.go), the Deployment
+	// targets side-loaded and their chart image names read off the renders,
+	// the `harness` image pushed to the lab registry and pinned by digest.
+	// Then the changed pair goes to the charts once more: the meta chart and
+	// every component whose spec.values moved (recheckReleases), so a schema
+	// that refuses a patch or a dev image is refused here and not after the
+	// install's wait. The Harness's state before the install is what the
+	// recompile report afterwards compares against.
+	sidecars := dexLocalhostTargets(cfg, renders)
+	noteDexLocalhostTargets(roster, sidecars)
 	var dev *devImages
 	var harnessBefore harnessState
+	imageNames := defaultDevImageNames(cfg)
 	if len(cfg.Platform.DevImages) > 0 {
 		if dev, err = prepareDevImages(cfg, renders); err != nil {
 			return err
 		}
-		mutate, err := dev.templateData(cfg)
-		if err != nil {
-			return err
+		imageNames = dev.names
+	}
+	postRenderers, err := componentPostRenderers(cfg, imageNames, sidecars)
+	if err != nil {
+		return err
+	}
+	if _, valuesPath, err = renderManifestWith(cfg, platformValuesTemplate, func(t *tmplData) {
+		t.PostRenderers = postRenderers
+		if dev != nil {
+			t.HarnessDevImage = dev.harness
 		}
-		if _, valuesPath, err = renderManifestWith(cfg, platformValuesTemplate, mutate); err != nil {
-			return err
-		}
-		if values, err = helmValuesFiles(append([]string{valuesPath}, cfg.Platform.ValuesFiles...)...); err != nil {
-			return err
-		}
+	}); err != nil {
+		return err
+	}
+	if values, err = helmValuesFiles(append([]string{valuesPath}, cfg.Platform.ValuesFiles...)...); err != nil {
+		return err
+	}
+	if dev != nil {
 		if err := dev.checkValues(cfg, values); err != nil {
 			return err
 		}
-		// The swap changed what the install carries — kagent.harness.image
-		// reaches the connectivity chart — so the values the renders above
-		// judged are not these. The changed pair goes to the charts once
-		// more, the meta chart and every component whose spec.values moved,
-		// so a schema that refuses the dev image is refused here and not
-		// after the install's wait.
-		if err := recheckReleases(cfg, chart, roster, values); err != nil {
+	}
+	if err := recheckReleases(cfg, chart, roster, values); err != nil {
+		return err
+	}
+	if dev != nil && dev.harness != "" {
+		if harnessBefore, err = readHarnessState(ctx); err != nil {
 			return err
-		}
-		if dev.harness != "" {
-			if harnessBefore, err = readHarnessState(ctx); err != nil {
-				return err
-			}
 		}
 	}
 	// The dex-localhost sidecar the lab patches onto the MCP servers
@@ -555,21 +565,12 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 			return err
 		}
 	}
-	if cfg.ModelManagerEnabled() {
-		// The model-manager chart renders its own MCPServer CR (with the
-		// forward-token auth block); reachable proves the pod serves MCP.
-		step("Waiting for muster to reach model-manager")
-		if err := waitMCPServerReachable(modelManagerMCPServer); err != nil {
-			return err
-		}
-	}
-	if cfg.Platform.Agents {
-		// agent-manager ships with the platform whenever kagent is on and
-		// registers itself the same way (forward-token auth block).
-		step("Waiting for muster to reach agent-manager")
-		if err := waitMCPServerReachable(agentManagerMCPServer); err != nil {
-			return err
-		}
+	// Every server the rule gave the sidecar to registers itself with muster
+	// under its own name (the manager charts render their MCPServer CR with
+	// the forward-token auth block; the Kubernetes MCP's was waited for
+	// above): reachable proves the pod serves MCP through the bridge.
+	if err := waitSidecarMCPServers(ctx, cfg, sidecars); err != nil {
+		return err
 	}
 
 	// The Workflow CRD ships with muster, so this has to land after the
@@ -590,15 +591,6 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	if err := ensureFleetFixture(cfg); err != nil {
 		return err
 	}
-	// The chart's vm-manager registration (vmmanager.go): the MCPServer the
-	// component rendered reaches muster — Auth Required until the first
-	// session signs in, Connected afterwards.
-	if cfg.VMManagerEnabled() {
-		if err := waitMCPServerReachable(vmManagerMCPServer); err != nil {
-			return err
-		}
-	}
-
 	// The agents' model key. The default ModelConfig (rendered by the kagent
 	// chart from providers.anthropic) references this secret; agent pods
 	// mount it at run time, so it can land after the install — which it must,
@@ -944,6 +936,62 @@ func devImagesHint(cfg *config.Config, dev *devImages) string {
 	return b.String()
 }
 
+// noteDexLocalhostTargets reports the sidecar rule's outcome in the boot
+// log: which Deployments get the bridge — or, with no component render to
+// read, that none does and what that means.
+func noteDexLocalhostTargets(roster *platformRoster, sidecars map[string][]string) {
+	if len(sidecars) == 0 {
+		if roster == nil {
+			note("no component render to read, so no %s sidecar is patched: a server that validates the forwarded token cannot reach the lab Dex", dexLocalhostContainer)
+		} else {
+			note("no component render tells a pod the lab Dex address: no %s sidecar to patch", dexLocalhostContainer)
+		}
+		return
+	}
+	var names []string
+	for _, component := range slices.Sorted(maps.Keys(sidecars)) {
+		for _, deployment := range sidecars[component] {
+			if deployment != component {
+				deployment = component + "/" + deployment
+			}
+			names = append(names, deployment)
+		}
+	}
+	note("%s sidecar on the %d Deployments told the lab Dex address: %s", dexLocalhostContainer, len(names), strings.Join(names, ", "))
+}
+
+// waitSidecarMCPServers waits for muster to reach every server the sidecar
+// rule selected (dexLocalhostTargets) that registers itself with muster under
+// its Deployment's name — the manager charts render their MCPServer CR that
+// way; the Kubernetes MCP's CR is the connectivity chart's and waited for by
+// the caller. A target without a CR of its name is noted, not waited for.
+func waitSidecarMCPServers(ctx context.Context, cfg *config.Config, sidecars map[string][]string) error {
+	gvr, err := gvrFor(musterMCPServerResource)
+	if err != nil {
+		return err
+	}
+	for _, component := range slices.Sorted(maps.Keys(sidecars)) {
+		for _, name := range sidecars[component] {
+			if name == cfg.MCPServerName() {
+				continue
+			}
+			registered, err := objectExists(ctx, gvr, platformNamespace, name)
+			if err != nil {
+				return err
+			}
+			if !registered {
+				note("Deployment %s carries the %s sidecar but registers no MCPServer of its name — nothing to wait for", name, dexLocalhostContainer)
+				continue
+			}
+			step("Waiting for muster to reach %s", name)
+			if err := waitMCPServerReachable(name); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // waitMCPServerConnected polls one muster MCPServer CR (in the platform
 // namespace) until muster reports the downstream connection up.
 // waitMCPServerReachable waits for a server muster authenticates to per
@@ -952,7 +1000,7 @@ func devImagesHint(cfg *config.Config, dev *devImages) string {
 // Connected that a session already signed in. Every downstream the lab
 // aggregates is such a server now, so this replaced the plain Connected wait.
 func waitMCPServerReachable(name string) error {
-	return waitMCPServerState(name, "Connected", mcpServerStateAuthRequired)
+	return waitMCPServerState(name, mcpServerStateConnected, mcpServerStateAuthRequired)
 }
 
 // waitMCPServerState polls the MCPServer CR's status.state until it reads one

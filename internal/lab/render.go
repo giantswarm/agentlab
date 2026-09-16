@@ -86,7 +86,9 @@ type tmplData struct {
 	// PostRenderers is the lab's per-component `postRenderers` list as
 	// indented YAML, keyed by agent-platform component name
 	// (postrenderers.go): the hostNetwork, sidecar and nodePort patches plus
-	// the dev-image overrides; MCPPrometheusPostRenderers the same for the
+	// the dev-image overrides — the template's roster blocks read their
+	// component's entry, its trailing range renders the rest
+	// (ExtraPostRenderers); MCPPrometheusPostRenderers the same for the
 	// lab's own mcp-prometheus HelmRelease. MCPPrometheusChartVersion pins
 	// that release's chart (observability.go).
 	PostRenderers              map[string]string
@@ -129,9 +131,11 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 			endpoints = map[string]string{}
 		}
 	}
-	// The dev-image overrides with the table's names: `agentlab platform`
-	// re-renders with the names the component renders say (devimages.go).
-	postRenderers, err := componentPostRenderers(cfg, defaultDevImageNames(cfg))
+	// The patches a render without the component charts can know: the
+	// dev-image overrides with the table's names, no dex-localhost sidecar.
+	// `agentlab platform` re-renders with what the component renders say —
+	// the names (devimages.go) and the sidecar's targets (postrenderers.go).
+	postRenderers, err := componentPostRenderers(cfg, defaultDevImageNames(cfg), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -175,6 +179,38 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		AgentPlatformClientID:      config.AgentPlatformClientID,
 		AgentPlatformClientSecret:  config.AgentPlatformClientSecret,
 	}, nil
+}
+
+// ExtraPostRenderers is the part of PostRenderers the values template's
+// roster does not render under these settings: the components it names no
+// block for — cluster-manager, which only an overlay turns on — and the ones
+// whose block it renders only while the lab's own toggle is on, when the
+// chart runs them regardless (model-manager, on by default since
+// agent-platform 4.24.0, with platform.modelManager off). The template's
+// trailing range renders these as `<component>: {postRenderers: …}` so every
+// patch the rule found reaches its release and no component key renders
+// twice. Mirrors the template's conditions: a block that is always there
+// (muster, mcp-kubernetes, kagent, backstage — the last two carry their
+// `enabled` from a toggle and render their patches only while it is on) is
+// never extra.
+func (t *tmplData) ExtraPostRenderers() map[string]string {
+	named := map[string]bool{
+		componentMuster:        true,
+		componentMCPKubernetes: true,
+		componentKagent:        true,
+		componentBackstage:     true,
+		agentManagerMCPServer:  t.Platform.Agents,
+		modelManagerMCPServer:  t.ModelManagerEnabled,
+		vmManagerMCPServer:     t.VMManagerEnabled,
+		klausGatewayComponent:  t.KlausGatewayEnabled,
+	}
+	extra := map[string]string{}
+	for component, postRenderers := range t.PostRenderers {
+		if !named[component] {
+			extra[component] = postRenderers
+		}
+	}
+	return extra
 }
 
 var tmplFuncs = template.FuncMap{
