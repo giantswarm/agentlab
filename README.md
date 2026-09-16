@@ -77,6 +77,10 @@ trusting the same issuer.
 - **Identity you can reason about.** Three throwaway users, a fixed group
   vocabulary, one issuer URL valid from the host, the node and every
   hostNetwork pod, and a lab CA you trust explicitly.
+- **The fleet's admission.** Kyverno with the `flux-multi-tenancy` policy
+  every Giant Swarm management cluster enforces, verbatim and in Enforce, and
+  an org namespace with the fleet's tenant ServiceAccount — a release that an
+  installation would refuse is refused here, with the same message.
 - **Proofs, not hope.** Headless `*-test` commands drive every chain — Dex
   login, muster, MCP tools, agents, toolsets, models, RBAC, Backstage — and
   fail loudly.

@@ -65,7 +65,8 @@ second what the containers' memory working sets summed to):
 | Backstage | 20m | 250 MiB | 500 MiB |
 | the chart's Flux engine: the Flux Operator plus the `FluxInstance`'s source-controller and helm-controller (the lab shape brings it with the platform — it delivers every component and the agents) | 250m | 192 MiB | 320 MiB |
 | observability: kube-state-metrics + mcp-prometheus (the Prometheus server, its operator and node-exporter declare nothing) | 305m | 344 MiB | 710 MiB (the server 564 MiB) |
-| **total** | **≈ 3.3 CPU** | **≈ 4.5 GiB** | **≈ 4.6 GiB** |
+| the fleet's admission: Kyverno's admission controller alone, with the `flux-multi-tenancy` policy (installed with the platform) | 100m | 128 MiB | 66 MiB |
+| **total** | **≈ 3.4 CPU** | **≈ 4.6 GiB** | **≈ 4.6 GiB** |
 
 On a chart without Agent Substrate and the platform Postgres — the 0.10
 product's 3.x line — kagent's bundled PostgreSQL (250m / 256 MiB) takes the
@@ -86,9 +87,9 @@ Give docker at least:
 
 | | CPUs | Memory |
 |---|---|---|
-| the full default lab (platform + agents + observability + Backstage) | **4** | **6 GiB** (the floor is 5.7 GiB; whole GiB) |
-| platform + agents only (`configure --backstage=false --observability=false`) | 4 (the WorkerPool is a CPU of requests by itself) | 5 GiB (4.2 GiB) |
-| the platform without agents (`configure --agents=false`; Backstage and observability stay on) | 3 | 5 GiB (4.7 GiB) |
+| the full default lab (platform + agents + observability + Backstage) | **4** | **6 GiB** (the floor is 5.8 GiB; whole GiB) |
+| platform + agents only (`configure --backstage=false --observability=false`) | 4 (the WorkerPool is a CPU of requests by itself) | 5 GiB (4.3 GiB) |
+| the platform without agents (`configure --agents=false`; Backstage and observability stay on) | 3 | 5 GiB (4.8 GiB) |
 | the platform alone (`configure --agents=false --backstage=false --observability=false`) | 3 | 4 GiB (3.3 GiB) |
 
 Those are the floors `agentlab up` enforces — computed for what the chart

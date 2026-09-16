@@ -302,6 +302,18 @@ Load-bearing invariants (details in docs/):
   rendered roster (`platformRoster`) to know what to budget for, check the
   apiserver gates for and preload. Never emit `gitops.namespace` with the
   engine on.
+- **The fleet's admission is in the lab**: `agentlab up` installs Kyverno
+  (the upstream chart at the fleet's version, admission controller only)
+  with the fleet's `flux-multi-tenancy` ClusterPolicy in Enforce, verbatim
+  from management-cluster-bases (`internal/lab/templates/flux-multi-tenancy.yaml`),
+  the platform namespace exempt in code next to the fleet's three, and the
+  org namespace `org-lab` with the tenant ServiceAccount `automation`
+  (`admission.go`). A HelmRelease in an org namespace without
+  `serviceAccountName`/`kubeConfig.secretRef` is denied as on an
+  installation; `platform-test` proves the matrix. Never "fix" a denial by
+  exempting a namespace or turning the policy to Audit — the denial is the
+  finding. The chart's own Kyverno objects stay pinned off
+  (`kyvernoPolicies.enabled: false`).
 - The lab's credentials are throwaway by design; plaintext passwords in
   `agentlab.yaml` are fine.
 

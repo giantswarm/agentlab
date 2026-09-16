@@ -130,6 +130,7 @@ internal/lab/                    everything operational:
   modelmanager.go modelstest.go    managed models: host preflight, install, the models proof
   anthropic.go                     the API key: host environment -> Secret, never config or state/
   observability.go                 the lab Prometheus (kube-prometheus-stack through the embedded Helm) and the mcp-prometheus HelmRelease through the platform's engine
+  admission.go                     the fleet's admission: Kyverno (upstream chart, admission controller only) with the fleet's flux-multi-tenancy ClusterPolicy verbatim in Enforce, the platform namespace exempt in code, the org namespace with the tenant ServiceAccount; the dry-run matrix `up` gates on and platform-test proves
   backstagetest.go                 the headless Backstage sign-in proof
   portal.go mcpsession.go          one user's signed-in portal session; the proofs' MCP session against muster
   kube.go                          the embedded Kubernetes client: server-side apply, reads, deletes, rollouts, the can-i/whoami reviews, pod logs — bound to state/kubeconfig

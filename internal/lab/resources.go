@@ -172,6 +172,14 @@ const (
 	reqObservabilityCPU = 305
 	reqObservabilityMem = 344
 	useObservabilityMem = 710
+	// The fleet's admission (admission.go): Kyverno reduced to its admission
+	// controller, 100m/128Mi (limit 384Mi; its init container's 10m/64Mi
+	// runs before it and is not scheduled beside it). In use, idle with the
+	// one policy: 66Mi (measured 2026-09-16 on a 4.28.4 lab). Installed with
+	// the platform, after its releases.
+	reqKyvernoCPU = 100
+	reqKyvernoMem = 128
+	useKyvernoMem = 66
 
 	// The run-time headroom the CPU floor keeps free beyond the requests, for
 	// what the platform runs AFTER the boot. On the 4.x line an agent is an
@@ -229,6 +237,8 @@ var labResourceGroups = []resourceGroup{
 		func(c *config.Config, _ platformTopology) bool { return c.Platform.Enabled }},
 	{"observability", resourceRequests{reqObservabilityCPU, reqObservabilityMem}, useObservabilityMem,
 		func(c *config.Config, _ platformTopology) bool { return c.Platform.Enabled && c.Platform.Observability }},
+	{"fleet admission (Kyverno)", resourceRequests{reqKyvernoCPU, reqKyvernoMem}, useKyvernoMem,
+		func(c *config.Config, _ platformTopology) bool { return c.Platform.Enabled }},
 }
 
 // runtimeHeadroomCPU is the CPU the floor keeps free for run-time work on a
