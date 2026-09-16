@@ -13,14 +13,18 @@ package telemetry
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"log"
 	"os"
+	"os/user"
 	"strings"
 	"time"
 
 	"github.com/giantswarm/telemetrydeck-go"
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/agentlab/internal/telemetry/machineid"
 	"github.com/giantswarm/agentlab/pkg/project"
 )
 
@@ -51,6 +55,29 @@ const (
 	// hundred milliseconds at most, and a slow exit is felt from about half a
 	// second on; a command that ran longer than this finds nothing to wait for.
 	flushTimeout = 500 * time.Millisecond
+)
+
+// userSalt prefixes the string agentlab hashes into its user identifier. It
+// is not a secret and cannot be one — agentlab is a public repo. Its one job
+// is domain separation: the same computer hashes to a different identifier
+// for agentlab than for kubectl-gs or any other TelemetryDeck reporter.
+//
+// It is not a defence against guessing the inputs, and the hash should not be
+// treated as one. The machine identifiers are derived from hardware or
+// written at install time, not drawn at random, and the user name alongside
+// them carries little entropy; someone holding both for a given computer can
+// confirm a row in the dashboard. That is no worse than what the MAC-derived
+// default gave, but it is a confirmation the salt does not prevent.
+//
+// The trailing version marks the layout of the hashed string: changing either
+// resets every user in the dashboard.
+const userSalt = "agentlab-telemetry-v1"
+
+// machineID and osUser are the inputs to userID, as vars so tests can pin
+// them (appID and endpoint are swapped the same way).
+var (
+	machineID = machineid.ID
+	osUser    = userName
 )
 
 // endpoint overrides the TelemetryDeck ingest URL; tests point it at a local
@@ -122,6 +149,40 @@ func Flush(ctx context.Context) {
 	}
 }
 
+// userID identifies one person on one computer: the identifier the OS keeps
+// for the machine, the OS user name and the salt. False when the machine
+// exposes none, leaving the library to derive its own.
+//
+// The layout is fixed, with empty fields rather than omitted ones, so that a
+// machine whose user name is briefly unreadable keeps the identifier it had.
+//
+// What TelemetryDeck stores is one hash further out than what this returns:
+// the library hashes the value given to WithUserID again. Harmless, but a
+// digest reproduced from this function alone will not match the dashboard's.
+func userID() (string, bool) {
+	machine, ok := machineID()
+	if !ok {
+		return "", false
+	}
+	sum := sha256.Sum256([]byte(userSalt + "|" + machine + "|" + osUser()))
+	return hex.EncodeToString(sum[:]), true
+}
+
+// userName is the OS user, so that two people sharing a computer count as
+// two. user.Current reads the password database in pure Go (and answers
+// DOMAIN\user on Windows); the environment is the fallback.
+func userName() string {
+	if u, err := user.Current(); err == nil && u.Username != "" {
+		return u.Username
+	}
+	for _, env := range []string{"USER", "USERNAME"} {
+		if v := os.Getenv(env); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 // testMode says whether AGENTLAB_TELEMETRY_TESTMODE is set.
 func testMode() bool {
 	return os.Getenv(TestModeEnv) != ""
@@ -164,5 +225,10 @@ func newClient(testMode bool) (*telemetrydeck.Client, error) {
 		telemetrydeck.WithAppVersion(project.Version()),
 		telemetrydeck.WithBuildNumber(project.ShortSHA()),
 	)
+	if id, ok := userID(); ok {
+		opts = append(opts, telemetrydeck.WithUserID(id))
+	} else {
+		logf("this computer exposes no stable identifier; the library's own stands in")
+	}
 	return telemetrydeck.NewClient(appID, opts...)
 }

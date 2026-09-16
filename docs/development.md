@@ -6,7 +6,15 @@
 make build                 # go build -o agentlab .
 make test                  # go test ./...
 go test ./internal/forms/ -run TestMinimalFormDrive -count=1 -v   # one test
+
+GOOS=windows go vet ./...  # and GOOS=linux, GOOS=darwin
 ```
+
+The release builds six OS/architecture pairs, so anything with a per-OS
+implementation (`internal/telemetry/machineid/`) has to compile on all of
+them. `go vet` is the check to run before pushing: `go build` skips test
+files and `make test` only ever runs on the Linux CI runner, so a mistake in
+a file that only Windows compiles is otherwise caught by nothing.
 
 `go test` covers the pieces that run without a cluster: the config schema and
 its discovery and port logic, the form (driven with scripted keystrokes), the
@@ -94,6 +102,7 @@ main.go                          the CLI (cobra): one subcommand per lifecycle s
 internal/config/                 agentlab.yaml schema, defaults, validation; the fixed group vocabulary and the static OAuth clients
 internal/forms/                  the interactive configuration form (huh); tests drive it with scripted keystrokes
 internal/telemetry/              the one anonymous usage signal per command (TelemetryDeck)
+  machineid/                       the identifier the OS keeps for the computer (kern.uuid / machine-id / MachineGuid)
 internal/update/                 agentlab self-update + the newer-release hint before every command (go-selfupdate)
 pkg/project/                     version, commit, build time: ldflags from make/CI, else Go's VCS build info
 internal/lab/                    everything operational:
