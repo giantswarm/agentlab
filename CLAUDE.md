@@ -90,7 +90,9 @@ with Dex doing the logins.
   and `--model-manager-backends` pin it. Never hand-edit that list to
   describe the machine — re-run `configure --defaults`.
 - `platform.modelManager` installs the chart's model-manager component in
-  front of EVERY backend of the list (model-manager >= 0.17.0 fronts several
+  front of EVERY backend of the list — and off states
+  `components.model-manager.enabled: false` in the rendered values (the chart
+  runs the component by default since agent-platform 4.24.0, with no backend) (model-manager >= 0.17.0 fronts several
   per instance; the first is its default backend, where a request that names
   none goes): their models become manageable from the portal and as
   `x_model-manager_<tool>` through muster, every pulled model auto-wired into

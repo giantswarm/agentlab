@@ -254,7 +254,9 @@ Applied to the configuration:
   an hour). See [Agents](agents.md#the-github-token).
 
 Pins override the discovery for that run: `--model-manager[=false]` decides
-the flag regardless of what answers, `--model-manager-backends ollama,lmstudio`
+the flag regardless of what answers (off keeps the chart's default-on
+model-manager out of the lab: the values state
+`components.model-manager.enabled: false`), `--model-manager-backends ollama,lmstudio`
 sets the list (and its order) outright; `--platform`, `--agents`,
 `--observability` and `--backstage` toggle the components as before, with or
 without `--defaults`. Nothing else in an existing file is touched — users,

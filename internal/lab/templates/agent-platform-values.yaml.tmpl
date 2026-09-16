@@ -186,12 +186,17 @@ components:
 {{ . | indent 6 }}
 {{- end }}
 {{- end }}
-{{- if .ModelManagerEnabled }}
   # Managed models (platform.modelManager): model-manager in front of every
   # host model server of the list (its own values are in the `model-manager:`
-  # block below, its edge route in `modelManager:`).
+  # block below, its edge route in `modelManager:`). The flag is always
+  # stated: the chart runs the component by default since agent-platform
+  # 4.24.0 (with no backend), and in the lab that pod would only do OIDC
+  # discovery against the lab Dex's localhost address without a backend to
+  # front — so the lab's toggle off is the component off, not left to the
+  # chart's default.
   model-manager:
-    enabled: true
+    enabled: {{ .ModelManagerEnabled }}
+{{- if .ModelManagerEnabled }}
 {{- with index .PostRenderers "model-manager" }}
     postRenderers:
 {{ . | indent 6 }}

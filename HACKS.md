@@ -338,10 +338,13 @@ binary before), and the same patch on the lab's own mcp-prometheus HelmRelease
 (mcp-prometheus.yaml.tmpl). Since 2026-09-16 the targets are a rule over the
 component charts' renders, not a list: every Deployment whose containers are
 told the lab Dex's localhost address (`--dex-issuer-url=`, `DEX_ISSUER_URL`) gets
-the sidecar (`dexLocalhostTargets`), so a component the chart turns on by
-default (model-manager since agent-platform 4.24.0) or an overlay turns on
-(cluster-manager) is covered without a lab release — the list had left both
-crash-looping on the unreachable issuer (agentlab#58). `agentlab platform-test`
+the sidecar (`dexLocalhostTargets`), so a component an overlay turns on
+(cluster-manager) or one the chart turns on by default is covered without a
+lab release — the list had left both crash-looping on the unreachable issuer
+(agentlab#58). model-manager, on by default in the chart since agent-platform
+4.24.0 with no backend, never gets that far in a lab without one: the roster
+states `components.model-manager.enabled` from `platform.modelManager`, so
+the toggle off is the component off. `agentlab platform-test`
 reads the same rule off the live Deployments and asserts the sidecar, a clean
 rollout with no restart and the MCPServer Connected. Lab-only by construction:
 real installations have a routable issuer.
