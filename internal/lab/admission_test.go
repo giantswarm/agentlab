@@ -9,6 +9,9 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
+// aggregated is the value of Kyverno's aggregation labels.
+const aggregated = "true"
+
 // The fleet's exclude list, as management-cluster-bases writes it on every
 // rule.
 var fleetExemptNamespaces = []string{"flux-giantswarm", "giantswarm", "monitoring"}
@@ -54,7 +57,7 @@ func TestFluxMultiTenancyBundleIsTheFleets(t *testing.T) {
 	if role.GetKind() != "ClusterRole" || role.GetName() != "kyverno:gs-mcb:flux-multi-tenancy" {
 		t.Errorf("second document is %s %s, want the fleet's aggregated ClusterRole", role.GetKind(), role.GetName())
 	}
-	if v := role.GetLabels()["rbac.kyverno.io/aggregate-to-admission-controller"]; v != "true" {
+	if v := role.GetLabels()["rbac.kyverno.io/aggregate-to-admission-controller"]; v != aggregated {
 		t.Errorf("the ClusterRole does not aggregate to the admission controller (label %q)", v)
 	}
 	// The matrix's denials name rules of this policy with their messages.
@@ -146,9 +149,9 @@ func TestAdmissionCasesShape(t *testing.T) {
 func TestAdmissionCaseJudge(t *testing.T) {
 	cases := fleetAdmissionCases()
 	deny, admit := cases[0], cases[1]
-	fleetDenial := errors.New(`admission webhook "validate.kyverno.svc-fail" denied the request: 
+	fleetDenial := errors.New(`admission webhook "validate.kyverno.svc-fail" denied the request:
 
-resource HelmRelease/org-lab/lab-admission-probe was blocked due to the following policies 
+resource HelmRelease/org-lab/lab-admission-probe was blocked due to the following policies
 
 flux-multi-tenancy:
   serviceAccountNameMustBeSet: 'validation error: either .spec.serviceAccountName

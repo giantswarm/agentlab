@@ -265,15 +265,15 @@ func fleetAdmissionCases() []admissionCase {
 		{
 			name: "kubeConfig.secretRef into kube-system (the fleet's <cluster>-* into-the-cluster shape)",
 			shape: map[string]any{
-				"kubeConfig":      map[string]any{"secretRef": map[string]any{"name": "lab-kubeconfig"}},
-				"targetNamespace": "kube-system",
+				"kubeConfig":      map[string]any{"secretRef": map[string]any{nameKey: "lab-kubeconfig"}},
+				"targetNamespace": kubeSystemNamespace,
 			},
 		},
 		{
 			name: "serviceAccountName: " + tenantServiceAccount + " with targetNamespace kube-system and no kubeConfig",
 			shape: map[string]any{
 				"serviceAccountName": tenantServiceAccount,
-				"targetNamespace":    "kube-system",
+				"targetNamespace":    kubeSystemNamespace,
 			},
 			deniedBy: "targetNamespaceMustBeLocal",
 			message:  "spec.targetNamespace must be the same as metadata.namespace unless kubeConfig.secretRef.name is set",
@@ -288,7 +288,7 @@ func (c admissionCase) release() *unstructured.Unstructured {
 	spec := map[string]any{
 		"interval": "10m",
 		"suspend":  true,
-		"chartRef": map[string]any{"kind": "OCIRepository", "name": admissionProbeName},
+		"chartRef": map[string]any{kindKey: "OCIRepository", nameKey: admissionProbeName},
 	}
 	for k, v := range c.shape {
 		spec[k] = v
@@ -297,9 +297,9 @@ func (c admissionCase) release() *unstructured.Unstructured {
 		"apiVersion": "helm.toolkit.fluxcd.io/v2",
 		"kind":       "HelmRelease",
 		"metadata": map[string]any{
-			"name":      admissionProbeName,
-			"namespace": orgNamespace,
-			"labels":    map[string]any{managedByLabel: managedByAgentlabValue},
+			nameKey:      admissionProbeName,
+			namespaceKey: orgNamespace,
+			"labels":     map[string]any{managedByLabel: managedByAgentlabValue},
 		},
 		"spec": spec,
 	}}
