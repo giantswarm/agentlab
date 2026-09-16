@@ -168,6 +168,7 @@ func newFakeLab(t *testing.T, objects ...runtime.Object) *fakeLab {
 		gvrModelConfigs:      "ModelConfigList",
 		gvrAgentTemplates:    "AgentTemplateList",
 		gvrRemoteMCPServers:  "RemoteMCPServerList",
+		gvrWorkerPools:       "WorkerPoolList",
 	}, seeds...)
 	dyn.PrependReactor("patch", "*", fakeApply(dyn.Tracker()))
 
@@ -184,6 +185,7 @@ func newFakeLab(t *testing.T, objects ...runtime.Object) *fakeLab {
 		corev1.SchemeGroupVersion.WithKind("ConfigMap"),
 		corev1.SchemeGroupVersion.WithKind("Pod"),
 		appsv1.SchemeGroupVersion.WithKind(kindDeployment),
+		appsv1.SchemeGroupVersion.WithKind("DaemonSet"),
 		fluxHelmReleaseGVK,
 		fluxOCIRepositoryGVK,
 		musterMCPServerGVK,
@@ -194,6 +196,8 @@ func newFakeLab(t *testing.T, objects ...runtime.Object) *fakeLab {
 		gvkModelConfig,
 		gvkAgentTemplate,
 		gvkRemoteMCPServer,
+		// Substrate's WorkerPool, which the Substrate release check reads.
+		gvkWorkerPool,
 	} {
 		mapper.Add(gvk, meta.RESTScopeNamespace)
 	}
@@ -802,6 +806,7 @@ func TestGvrFor(t *testing.T) {
 		modelConfigResource:                                  gvrModelConfigs,
 		agentTemplateResource:                                gvrAgentTemplates,
 		remoteMCPServerResource:                              gvrRemoteMCPServers,
+		workerPoolsResource:                                  gvrWorkerPools,
 	} {
 		if got, err := gvrFor(arg); err != nil || got != want {
 			t.Errorf("gvrFor(%q) = %v, %v; want %v", arg, got, err, want)

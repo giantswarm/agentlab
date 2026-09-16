@@ -235,6 +235,20 @@ func PlatformTest(cfg *config.Config, email string) error {
 			}
 			note("atelet %s/%s: the policy flags on all %d ready pods", substrateNamespace, ateletDaemonSet, ready)
 			verdict += "\nPASS: atelet carries the lab's image-cache policy (the host disk cannot evict the Harness image; a 4 GiB cap bounds the cache)"
+			// The two halves of Substrate on one release (proveSubstrateLine):
+			// a skew installs green, boots no golden actor and shows only in
+			// the atelet log — the first agents proof would burn its timeout.
+			step("Verifying the atelet and the WorkerPool's workers are one Substrate release")
+			ctx, cancel = context.WithTimeout(context.Background(), kubeReadTimeout)
+			substrate, err := proveSubstrateLine(ctx, substrateSkewRemedy(cfg))
+			cancel()
+			if err != nil {
+				return err
+			}
+			for _, s := range substrate {
+				note("%s", s)
+			}
+			verdict += fmt.Sprintf("\nPASS: Agent Substrate is one release (%s) on the atelet and the WorkerPool's workers — golden actors can boot", substrate[0].release)
 		}
 	}
 

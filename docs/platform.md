@@ -294,10 +294,10 @@ Giant Swarm line [giantswarm/substrate](https://github.com/giantswarm/substrate)
 versions). **The chart ships it**: `components.substrate-crds` and
 `components.substrate` follow `components.kagent`, both land in `ate-system`
 as component releases of the chart's engine at the version the chart pins
-(`>=0.0.30-gs.1 <0.0.31-0` from agent-platform 4.16 — upstream kagent-dev/substrate
-v0.0.29 plus the line's patches; `>=0.0.27-gs.9 <0.0.28-0` through 4.15 — the
+(`>=0.0.30-gs.1 <0.0.31-0` from agent-platform 4.15.5 — upstream kagent-dev/substrate
+v0.0.29 plus the line's patches; `>=0.0.27-gs.9 <0.0.28-0` through 4.15.2 — the
 range the `WorkerPool`'s worker image `kagent.substrateWorkerPool.workerImage`
-names too), the connectivity
+names too, and the release check below holds the two to), the connectivity
 release's `pre-install,pre-upgrade` hook Job mints what the substrate chart
 mounts but does not render (the CA/JWT pools, the actor-identity trust
 anchor, ate-api-server's authentication config; a pool that exists is never
@@ -930,6 +930,32 @@ data the page reads — see [The muster plugin](backstage.md#the-muster-plugin).
   stay (Helm never removes a chart's `crds/`); a reinstall is clean. On a
   cluster an earlier agentlab built it also uninstalls the Flux controllers
   that lab installed itself (release `flux` in `flux-system`).
+- **The atelet and the WorkerPool's workers must be one Substrate release.**
+  The chart installs two halves of Agent Substrate from two pins: the control
+  plane and the per-node `atelet` from `components.substrate`, and the
+  `WorkerPool`'s worker image (`spec.workerImage`, `ateom-gvisor`) from the
+  kagent release `components.kagent` resolves to — kagent's own Substrate pin,
+  forwarded by the meta chart. A meta chart whose kagent range admits a kagent
+  from a newer Substrate release while its substrate range stays installs
+  green and boots no golden actor: agent-platform 4.15.2 pinned Substrate
+  `>=0.0.27-gs.9 <0.0.28-0` under kagent `>=0.11.0-gs.12 <0.11.1-0`, kagent
+  gs.14 moved the worker image to 0.0.30, and Substrate 0.0.30 had renamed the
+  actor's pause bundle (`bundles/pause` → `bundles/_pause`) — every compile
+  the atelet asked of the worker failed inside the worker on
+  `bundles/_pause/config.json: no such file or directory`, every
+  `AgentTemplate` sat at `Ready=False ActorTemplatePending` ("golden snapshot
+  compiling"), `agentlab up` and the platform releases stayed green,
+  `agents-test` and `skills-test` burned their five minutes and only
+  `kubectl -n ate-system logs ds/atelet` said why. `agentlab platform` now
+  reads the atelet's image off its DaemonSet and the worker image off every
+  `WorkerPool` in `kagent` after the install and refuses a lab whose halves
+  are different Substrate releases (the tag's version without its `-gs.N`
+  prerelease: the line's patches share the upstream release's bundle layout),
+  naming both images and the fix — `agentlab configure --defaults
+  --chart-version <a release that pins them together> && agentlab platform`
+  for a release pin, the chart's own ranges for a checkout or the dev channel;
+  `platform-test` asserts the same pair and prints it. The chart-side
+  coupling is giantswarm/agent-platform#466.
 - **A WorkerPool outlives a Substrate database it never knew.** When
   Agent Substrate's control-plane database is replaced under a running
   `WorkerPool` — a lab moving from the substrate chart's bundled Postgres to

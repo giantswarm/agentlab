@@ -94,8 +94,13 @@ const DefaultDexPort = 32000
 // agentlab.yaml pins none — the release this agentlab was verified with: the
 // 4.x line (kagent API v2 with Agent Substrate and the platform Postgres
 // shipped by the chart). Bump deliberately, with a lab run: the lab never
-// floats.
-const DefaultChartVersion = "4.15.2"
+// floats. A candidate must pin kagent and Substrate on one Substrate release
+// (`helm show values` of the chart: components.kagent's range admits only
+// kagent releases whose worker image is the release components.substrate
+// installs) — 4.15.2 left the kagent range open within 0.11.0 and a later
+// kagent moved the worker image to Substrate 0.0.30 under its 0.0.27 atelet,
+// so a fresh lab booted no golden actor (agentlab#187).
+const DefaultChartVersion = "4.28.4"
 
 // ChartRepository is where the agent-platform chart releases live.
 const ChartRepository = "oci://gsoci.azurecr.io/charts/giantswarm/agent-platform"

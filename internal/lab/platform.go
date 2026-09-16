@@ -535,6 +535,17 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	if err := waitPlatformReleases(); err != nil {
 		return err
 	}
+	// The two halves of Agent Substrate on one release (proveSubstrateLine):
+	// a chart whose kagent range admits a worker image from another Substrate
+	// release than its atelet installs green and boots no golden actor —
+	// refused here, with both images and the fix, not five minutes into the
+	// first agents proof.
+	var substrate []substrateImages
+	if roster.shipsSubstrate() {
+		if substrate, err = proveSubstrateLine(ctx, substrateSkewRemedy(cfg)); err != nil {
+			return err
+		}
+	}
 	if dev != nil && dev.harness != "" {
 		if err := reportHarnessDevImage(ctx, dev, harnessBefore); err != nil {
 			return err
@@ -704,6 +715,9 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	if roster.shipsSubstrate() {
 		version, _ := helmReleaseVersion(substrateNamespace, substrateRelease)
 		agentsHint += fmt.Sprintf("\n  Agent Substrate %s (the actors' runtime, from the chart) runs in %s: kubectl get workerpools,sandboxconfigs -A", orNone(version), substrateNamespace)
+		for _, s := range substrate {
+			agentsHint += "\n  " + s.String()
+		}
 	}
 	fmt.Printf(`
 %s
