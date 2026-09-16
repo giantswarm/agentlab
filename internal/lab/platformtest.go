@@ -168,6 +168,24 @@ func PlatformTest(cfg *config.Config, email string) error {
 	}
 	verdict += fmt.Sprintf("\nPASS: the apiserver serves the %d kinds the lab provides itself (%s) — Gateway API routes and Cilium policies render, the policies enforce nothing", kindCount, strings.Join(groupVersions, ", "))
 
+	// The fleet's admission (admission.go): the flux-multi-tenancy policy in
+	// Enforce on the lab's Kyverno, answered for the four HelmRelease shapes
+	// as server-side dry runs in the org namespace — denied with the fleet's
+	// message where an installation denies, admitted where it admits.
+	step("Verifying the fleet's %s policy enforces on HelmReleases in %s", fleetPolicyName, orgNamespace)
+	admissionCtx, cancelAdmission := context.WithTimeout(context.Background(), kubeReadTimeout)
+	cases, err := proveFleetAdmission(admissionCtx)
+	cancelAdmission()
+	if err != nil {
+		return err
+	}
+	var caseLines []string
+	for _, c := range cases {
+		note("%s", c)
+		caseLines = append(caseLines, c.String())
+	}
+	verdict += fmt.Sprintf("\nPASS: the fleet's %s policy (Enforce, Kyverno %s) answers as an installation does for %d HelmRelease shapes in %s — %s", fleetPolicyName, kyvernoChartVersion, len(cases), orgNamespace, strings.Join(caseLines, "; "))
+
 	// The lab's Dex bridge: every OAuth resource server the rule selects on
 	// the live Deployments carries the dex-localhost sidecar, runs without a
 	// restart and reads Connected in muster (platformtest_sidecar.go) — the

@@ -1,0 +1,42 @@
+# The lab's organization namespace, shaped like the fleet's org-<org>: on a
+# Giant Swarm installation rbac-operator gives every org namespace the tenant
+# ServiceAccount `automation`, bound to cluster-admin inside the namespace by
+# the RoleBinding `write-all-customer-sa`, and the installation's Flux runs the
+# releases in that namespace as it (the fleet's `<cluster>-*-bundle` releases,
+# cluster-manager's pool and slice releases). The lab's Flux is the platform's
+# bundled engine, so `serviceAccountName: automation` on a HelmRelease here
+# names an identity that exists and is bound the way the fleet binds it —
+# what the flux-multi-tenancy policy (admission.go) requires the release to
+# carry, and what cluster-manager's default `flux.tenantServiceAccount`
+# names. Applied by `agentlab up` with the policy.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: org-lab
+  labels:
+    app.kubernetes.io/managed-by: agentlab
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: automation
+  namespace: org-lab
+  labels:
+    app.kubernetes.io/managed-by: agentlab
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: write-all-customer-sa
+  namespace: org-lab
+  labels:
+    app.kubernetes.io/managed-by: agentlab
+subjects:
+  - kind: ServiceAccount
+    name: automation
+    namespace: org-lab
+roleRef:
+  kind: ClusterRole
+  name: cluster-admin
+  apiGroup: rbac.authorization.k8s.io

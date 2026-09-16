@@ -615,6 +615,22 @@ error.
   for the sake of policies the lab never tests; the CRDs alone let the charts
   install and validate their policies against the real schema, and enforce
   nothing. Named as a lab-only difference in docs/platform.md.
+- **The fleet's `flux-multi-tenancy` policy on an upstream Kyverno chart, the
+  platform namespace exempt in code** (`internal/lab/admission.go`,
+  `templates/flux-multi-tenancy.yaml` byte-identical to
+  management-cluster-bases, `templates/kyverno-values.yaml`,
+  `templates/org-fixture.yaml`) — the fleet's own Kyverno wrapper chart
+  (giantswarm/kyverno) renders policy-reporter, a ServiceMonitor and
+  VerticalPodAutoscalers unconditionally, objects for an installation, so
+  the lab pins the upstream chart at the subchart version the wrapper wraps
+  (3.7.2 = v1.17.2) with the fleet's images, reduced to the admission
+  controller. The exemption of `agent-platform` is the lab's one deviation
+  from the policy text: on an installation the platform's child HelmReleases
+  live in the exempt `flux-giantswarm`, in the lab shape in the platform
+  namespace, and rewriting the fleet's YAML by hand would hide that the file
+  is the fleet's — so the namespace is appended to every rule's exclude list
+  at apply time and the embedded file stays refreshable from the source.
+  Named in docs/platform.md "Lab-specific deviations".
 - **The OAuth sign-in fixture aggregates muster itself** (`lab-oauth-fixture`
   → muster's own protected `/mcp`, `internal/lab/oauthfixture.go`) — the one
   way to get a downstream that stays `Auth Required` behind an authorization

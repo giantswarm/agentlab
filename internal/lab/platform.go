@@ -541,6 +541,15 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 		}
 	}
 
+	// The fleet's admission (admission.go): Kyverno with the
+	// flux-multi-tenancy policy in Enforce, the platform namespace exempt
+	// like flux-giantswarm on an installation — after the platform, whose
+	// engine brings the Flux kinds the policy names, and before the lab's own
+	// HelmRelease below, which is then admitted under it.
+	if err := fleetAdmissionUp(cfg); err != nil {
+		return err
+	}
+
 	// The lab's own MCP server for the Prometheus tools rides the same engine
 	// (a HelmRelease of the mcp-prometheus chart) — after the platform, which
 	// brings the engine and the tenant identity the release runs as.

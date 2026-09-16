@@ -58,9 +58,17 @@ const prometheusResource = "prometheuses.monitoring.coreos.com"
 func observabilityUp(cfg *config.Config) error {
 	ctx := context.Background()
 	step("Installing the observability stack (kube-prometheus-stack %s)", kpsChartVersion)
-	if err := installOCIChart(cfg, kpsRelease,
+	_, kpsValuesPath, err := renderManifest(cfg, "kube-prometheus-stack-values.yaml.tmpl")
+	if err != nil {
+		return err
+	}
+	kpsValues, err := helmValuesFile(kpsValuesPath)
+	if err != nil {
+		return err
+	}
+	if err := installOCIChart(cfg, observabilityNamespace, kpsRelease,
 		"oci://gsoci.azurecr.io/charts/giantswarm/kube-prometheus-stack",
-		kpsChartVersion, "kube-prometheus-stack-values.yaml.tmpl"); err != nil {
+		kpsChartVersion, kpsValues, ociChartInstallTimeout); err != nil {
 		return err
 	}
 	// mcp-prometheus runs as an OAuth resource server against the lab Dex
@@ -189,28 +197,21 @@ func mcpPrometheusUp(cfg *config.Config) error {
 // and its wait.
 const ociChartInstallTimeout = 5 * time.Minute
 
-// installOCIChart renders the values template and installs one pinned OCI
-// chart into the observability namespace through the embedded Helm (an
-// idempotent upgrade-or-install with the kstatus wait, creating the namespace),
+// installOCIChart installs one pinned OCI chart with the given values into a
+// namespace of its own through the embedded Helm (an idempotent
+// upgrade-or-install with the kstatus wait, creating the namespace),
 // side-loading its images first (the same host-cache -> node rule as the
-// platform; see preload.go).
-func installOCIChart(cfg *config.Config, release, chartRef, version, valuesTmpl string) error {
-	_, valuesPath, err := renderManifest(cfg, valuesTmpl)
-	if err != nil {
-		return err
-	}
-	values, err := helmValuesFile(valuesPath)
-	if err != nil {
-		return err
-	}
+// platform; see preload.go). The observability stack and the fleet's Kyverno
+// (admission.go) install this way.
+func installOCIChart(cfg *config.Config, namespace, release, chartRef, version string, values map[string]any, timeout time.Duration) error {
 	// Best-effort: anything missed is pulled in-node under the wait timeout,
 	// and the snapshot manifest catches it for the next boot.
-	if rendered, _, err := helmTemplate(observabilityNamespace, release, chartRef, version, values, nil); err == nil {
+	if rendered, _, err := helmTemplate(namespace, release, chartRef, version, values, nil); err == nil {
 		if imgs := scrapeImages(rendered); len(imgs) > 0 {
 			if res := sideloadImages(cfg, hostPullImages(imgs)); res.n > 0 {
 				note("side-loaded %d %s images (%s)", res.n, release, res.d)
 			}
 		}
 	}
-	return helmUpgradeInstall(observabilityNamespace, release, chartRef, version, values, ociChartInstallTimeout, helmInstallOptions{CreateNamespace: true})
+	return helmUpgradeInstall(namespace, release, chartRef, version, values, timeout, helmInstallOptions{CreateNamespace: true})
 }

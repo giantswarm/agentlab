@@ -36,8 +36,10 @@
 #     both run hostNetwork, exactly like the kube-apiserver static pod — a
 #     per-component `postRenderers` patch below (not a chart value in either
 #     chart); the MCP servers get a `dex-localhost` sidecar the same way.
-#   * no Cilium and no Kyverno: the chart's cluster-shape knobs detect that
-#     (`auto`), and the connectivity network policies are off wholesale.
+#   * no Cilium, and Kyverno only for the fleet's flux-multi-tenancy policy
+#     (admission.go): the chart's own Kyverno objects are pinned off below —
+#     the `auto` knob would render them once kyverno.io/v1 is served — and
+#     the connectivity network policies are off wholesale.
 #   * the edge is published on a fixed NodePort by a lab-owned Service
 #     (the controller-created data-plane Service gets a random one), and
 #     inside pods a CoreDNS rewrite points *.{{ .Platform.Domain }} at the
@@ -103,6 +105,17 @@ ingress:
 # traffic open instead of describing it (the host model servers, the lab Dex,
 # the edge).
 networkPolicy:
+  enabled: false
+
+# The chart's own kyverno.io objects — PolicyExceptions to the fleet's Pod
+# Security Standards policies and the mutate policies of agent-sandbox and
+# model serving — stay off: the lab's Kyverno (admission.go) enforces the
+# fleet's flux-multi-tenancy policy and nothing else, so the exceptions would
+# except from policies that are not here and the mutate policies would change
+# pods no lab proof ever ran with. `auto` would turn them on with the API
+# served; pinned so a lab with and without the fleet's admission renders the
+# same platform.
+kyvernoPolicies:
   enabled: false
 
 gateway:
