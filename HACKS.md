@@ -320,23 +320,31 @@ guard.
 fallback with a Capabilities check like the sibling branches; then the value
 can be dropped (it would render nothing here either way).
 
-### U13. `postRenderers` patch: `dex-localhost` sidecar on the MCP servers — ACCEPTED
-Since 2026-09-03 the bundled mcp-kubernetes, model-manager and agent-manager and
-the lab's mcp-prometheus validate the user's forwarded Dex id_token themselves
-(mcp-oauth resource servers against `global.identity`), so each of them does
-OIDC discovery and JWKS fetches against the issuer URL — `https://localhost:<dexPort>/dex`, the
-one URL the browser, the apiserver and every pod must share (H-issuer, above).
-muster and Backstage reach it through hostNetwork (U1); these four cannot: all
-listen on :8080 and would collide on the single kind node. **Fix:** a
-`dex-localhost` sidecar (`alpine/socat`) that listens on the pod's own loopback
-:<dexPort> (IPv6 wildcard, dual-stack) and forwards to the Dex ClusterIP
-Service, so `localhost` resolves inside the pod exactly as on the host; Dex's
-certificate carries `localhost`, TLS verification against the lab CA holds.
-Since 2026-09-08 a Kustomize strategic-merge patch in
+### U13. `postRenderers` patch: `dex-localhost` sidecar on the OAuth resource servers — ACCEPTED
+Since 2026-09-03 the bundled mcp-kubernetes, the managers (model-manager,
+agent-manager, vm-manager, cluster-manager) and the lab's mcp-prometheus validate
+the user's forwarded Dex id_token themselves (mcp-oauth resource servers against
+`global.identity`), so each of them does OIDC discovery and JWKS fetches against
+the issuer URL — `https://localhost:<dexPort>/dex`, the one URL the browser, the
+apiserver and every pod must share (H-issuer, above). muster and Backstage reach
+it through hostNetwork (U1); these cannot: all listen on :8080 and would collide
+on the single kind node. **Fix:** a `dex-localhost` sidecar (`alpine/socat`) that
+listens on the pod's own loopback :<dexPort> (IPv6 wildcard, dual-stack) and
+forwards to the Dex ClusterIP Service, so `localhost` resolves inside the pod
+exactly as on the host; Dex's certificate carries `localhost`, TLS verification
+against the lab CA holds. Since 2026-09-08 a Kustomize strategic-merge patch in
 `components.<server>.postRenderers` (`postrenderers.go`; the post-renderer
 binary before), and the same patch on the lab's own mcp-prometheus HelmRelease
-(mcp-prometheus.yaml.tmpl). Lab-only by construction: real installations have a
-routable issuer.
+(mcp-prometheus.yaml.tmpl). Since 2026-09-16 the targets are a rule over the
+component charts' renders, not a list: every Deployment whose containers are
+told the lab Dex's localhost address (`--dex-issuer-url=`, `DEX_ISSUER_URL`) gets
+the sidecar (`dexLocalhostTargets`), so a component the chart turns on by
+default (model-manager since agent-platform 4.24.0) or an overlay turns on
+(cluster-manager) is covered without a lab release — the list had left both
+crash-looping on the unreachable issuer (agentlab#58). `agentlab platform-test`
+reads the same rule off the live Deployments and asserts the sidecar, a clean
+rollout with no restart and the MCPServer Connected. Lab-only by construction:
+real installations have a routable issuer.
 
 ### U14. `hostmodels.go`: the further host backends are wired as static ModelConfigs — FIXED upstream
 `platform.modelManager.backends` lists every model server on the lab host
