@@ -318,11 +318,29 @@ ran the retired POC channel, where agentlab installed Substrate itself,
 upgrades in place: the chart's `substrate` component adopts the
 `substrate`/`substrate-crds` releases in `ate-system` by name.
 
-The lab's Substrate values are two: the actor snapshot store is the chart's
+The lab's Substrate values are three: the actor snapshot store is the chart's
 bundled in-cluster RustFS (`substrate.rustfs.enabled: true`,
 `kagent.harness.snapshotLocation: s3://ate-snapshots/kagent` — an
-installation names its own bucket), and the control-plane database follows
-the platform Postgres (the chart's `substrate.postgres.enabled: auto`).
+installation names its own bucket), the control-plane database follows
+the platform Postgres (the chart's `substrate.postgres.enabled: auto`), and
+the `WorkerPool`'s workers are pinned to the node's architecture.
+
+**The architecture pin** is the one worker-pool value the lab sets. One pool
+runs one CPU feature set — an actor's golden snapshot is a gVisor checkpoint,
+and gVisor restores it only where the CPU offers every feature it recorded —
+so the chart pins the pool with
+`kagent.substrateWorkerPool.template.nodeSelector`, defaulting to the fleet's
+`kubernetes.io/arch: amd64`. The lab is the arm64 installation the chart's
+`UPGRADE.md` describes: on an Apple Silicon host that default matches no node,
+every gVisor worker stays `Pending` and every agent turn waits for a worker
+that never comes. `agentlab platform` therefore renders the architecture **the
+node reports**, not the binary's — the devctl Makefile's `make build`
+cross-builds amd64 even on an arm64 host, so `GOARCH` would pin the very thing
+this avoids (it stays the fallback for an `agentlab render` without a cluster).
+Only the architecture key travels: Helm merges the map, so the worker
+resources and the `workerImage` stamp stay the chart's. A pin no node carries
+is refused before the install, so an overlay that sets the key wrongly is
+named rather than waited out.
 
 **The platform Postgres** is the fleet's shape too: `components.cloudnative-pg`
 (the upstream CloudNativePG operator, the chart's optional component — a
@@ -956,6 +974,20 @@ data the page reads — see [The muster plugin](backstage.md#the-muster-plugin).
   for a release pin, the chart's own ranges for a checkout or the dev channel;
   `platform-test` asserts the same pair and prints it. The chart-side
   coupling is giantswarm/agent-platform#466.
+- **Every worker is `Pending` and no agent turn ever finishes.** The
+  `WorkerPool`'s gVisor workers carry the pool's CPU feature-set pin
+  (`kagent.substrateWorkerPool.template.nodeSelector`), and a pin the node does
+  not match schedules nothing: `kubectl -n kagent get pod -l
+  ate.dev/worker-pool=kagent-default` shows `Pending`, the pod's events read
+  `node(s) didn't match Pod's node affinity/selector`, and the
+  `AgentTemplate` sits `Ready=False ActorTemplatePending` while agents stay
+  "Working…". Compare the two with `kubectl get nodes -L kubernetes.io/arch`
+  and `kubectl -n kagent get workerpool kagent-default -o
+  jsonpath='{.spec.template.nodeSelector}'`. The lab renders the node's own
+  architecture, so a mismatch means a `platform.valuesFiles` overlay sets the
+  key — drop it or correct it, then `agentlab platform`. `up`/`platform`
+  refuse the install outright when no node carries the pin, so this only
+  bites a cluster whose values changed underneath it.
 - **A WorkerPool outlives a Substrate database it never knew.** When
   Agent Substrate's control-plane database is replaced under a running
   `WorkerPool` — a lab moving from the substrate chart's bundled Postgres to

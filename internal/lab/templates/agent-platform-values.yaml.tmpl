@@ -479,6 +479,17 @@ kagent:
     # above).
     image: {{ .HarnessDevImage }}
 {{- end }}
+  # The WorkerPool the chart creates runs its gVisor workers on the one node
+  # this lab has, so the chart's CPU feature-set pin must name that node's
+  # architecture — the fleet's default is amd64, and on an Apple Silicon host
+  # it leaves every worker Pending and every agent turn waiting for one. The
+  # arch key alone: Helm merges the map, so the chart keeps the worker
+  # resources resources.go budgets for, and workerImage stays the stamp the
+  # chart carries from its own Substrate version (the lab never names it).
+  substrateWorkerPool:
+    template:
+      nodeSelector:
+        {{ .WorkerPoolArchLabel }}: {{ .WorkerPoolArch }}
   # The controller's database is the platform Postgres (postgres.enabled
   # below, the fleet shape): kagent's `kagent_v2` database on the CNPG
   # Cluster, its connection Secret <clusterName>-kagent-v2-app derived by

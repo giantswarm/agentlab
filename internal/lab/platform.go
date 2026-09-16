@@ -382,7 +382,14 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 		return err
 	}
 
-	_, valuesPath, err := renderManifest(cfg, platformValuesTemplate)
+	// The WorkerPool's CPU feature-set pin names the node its workers land on,
+	// which only the cluster can say: the binary's GOARCH — what a render
+	// without a cluster falls back to — is cross-built amd64 by the devctl
+	// Makefile even on an arm64 host. Resolved once, for both renders below.
+	workerArch := clusterWorkerPoolArch(ctx)
+	pinWorkerArch := func(t *tmplData) { t.WorkerPoolArch = workerArch }
+
+	_, valuesPath, err := renderManifestWith(cfg, platformValuesTemplate, pinWorkerArch)
 	if err != nil {
 		return err
 	}
@@ -422,6 +429,12 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	// would sit on a Substrate that never comes up.
 	if roster.shipsSubstrate() {
 		if err := preflightPodCertificateAPI(ctx); err != nil {
+			return err
+		}
+		// And the pool's CPU feature-set pin against the node that would run
+		// its workers: a pin no node carries installs cleanly and shows up
+		// only as workers that never schedule.
+		if err := preflightWorkerPoolArch(ctx, values); err != nil {
 			return err
 		}
 	}
@@ -473,6 +486,7 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 		return err
 	}
 	if _, valuesPath, err = renderManifestWith(cfg, platformValuesTemplate, func(t *tmplData) {
+		pinWorkerArch(t)
 		t.PostRenderers = postRenderers
 		if dev != nil {
 			t.HarnessDevImage = dev.harness

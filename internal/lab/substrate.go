@@ -3,6 +3,7 @@ package lab
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"slices"
 	"strings"
 
@@ -53,6 +54,79 @@ func preflightPodCertificateAPI(ctx context.Context) error {
 			"cluster predates them — feature gates are fixed at kind create, so run `agentlab down && agentlab up`", err)
 	}
 	return nil
+}
+
+// workerPoolArchLabel is the node label the WorkerPool's CPU feature-set pin
+// names (kagent.substrateWorkerPool.template.nodeSelector). One pool runs one
+// CPU feature set — a gVisor checkpoint restores only where the CPU carries
+// every feature it recorded — so the chart pins the pool, at the fleet's
+// amd64; the lab is the arm64 installation its UPGRADE.md describes, and on
+// an Apple Silicon host that default matches no node at all.
+const workerPoolArchLabel = "kubernetes.io/arch"
+
+// workerPoolArch is the binary's architecture: the fallback for a render
+// without a cluster, and not the pin itself — the devctl Makefile's `make
+// build` cross-builds amd64 even on an arm64 Mac (Makefile.gen.go.mk), so a
+// pin taken from it would recreate the very mismatch this avoids.
+func workerPoolArch() string { return runtime.GOARCH }
+
+// clusterWorkerPoolArch is the architecture of the node the pool's workers
+// would land on — what `agentlab platform` renders the pin from.
+func clusterWorkerPoolArch(ctx context.Context) string {
+	gvr, err := gvrFor("nodes")
+	if err != nil {
+		return workerPoolArch()
+	}
+	nodes, err := listObjects(ctx, gvr, "", "")
+	if err != nil {
+		return workerPoolArch()
+	}
+	for _, node := range nodes {
+		if arch := node.GetLabels()[workerPoolArchLabel]; arch != "" {
+			return arch
+		}
+	}
+	return workerPoolArch()
+}
+
+// preflightWorkerPoolArch refuses a cluster whose nodes do not carry the
+// architecture the values pin the WorkerPool to. Nothing else would say it:
+// the chart takes the pin as a free-form map, so a wrong one installs cleanly
+// and surfaces minutes later as workers that never schedule. values is the
+// merged set the install carries, so an overlay's pin is the one checked;
+// without the key — the 3.x line — there is nothing to check.
+func preflightWorkerPoolArch(ctx context.Context, values map[string]any) error {
+	pinned, found, err := unstructured.NestedString(values,
+		"kagent", "substrateWorkerPool", "template", "nodeSelector", workerPoolArchLabel)
+	if err != nil || !found || pinned == "" {
+		return nil
+	}
+	gvr, err := gvrFor("nodes")
+	if err != nil {
+		return err
+	}
+	nodes, err := listObjects(ctx, gvr, "", "")
+	if err != nil {
+		return err
+	}
+	// A node that carries the pin is enough — that is where the workers land.
+	var carry []string
+	for _, node := range nodes {
+		arch := node.GetLabels()[workerPoolArchLabel]
+		if arch == pinned {
+			return nil
+		}
+		carry = append(carry, fmt.Sprintf("%s (%s)", node.GetName(), orNone(arch)))
+	}
+	if len(carry) == 0 {
+		return nil
+	}
+	return fmt.Errorf("the WorkerPool is pinned to %s=%s but no node of this cluster carries it: %s\n"+
+		"Its gVisor workers would stay Pending and every agent turn would wait for a worker that never comes. The lab pins\n"+
+		"the pool to the node's own architecture, so the pin can only differ through a platform.valuesFiles overlay that\n"+
+		"sets kagent.substrateWorkerPool.template.nodeSelector — drop that key, or give it the architecture above, then\n"+
+		"`agentlab platform`",
+		workerPoolArchLabel, pinned, strings.Join(carry, ", "))
 }
 
 // ateletImageCacheArgs is the lab's atelet image-cache policy, rendered into

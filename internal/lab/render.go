@@ -107,6 +107,12 @@ type tmplData struct {
 	// (ateletImageCacheArgs, substrate.go), rendered after the registry flag
 	// in the same substrate.atelet.extraArgs list.
 	AteletImageCacheArgs []string
+	// WorkerPoolArchLabel and WorkerPoolArch are the WorkerPool's CPU
+	// feature-set pin (substrate.go): the node label, and the architecture
+	// this host's only node carries. The chart's pin is the fleet's amd64,
+	// and an arm64 lab whose pool keeps it never schedules a worker.
+	WorkerPoolArchLabel string
+	WorkerPoolArch      string
 	// GitHubToken mirrors gitHubTokenWired(cfg): $GITHUB_TOKEN is set on the
 	// host (githubtoken.go), so the values name the Secret the lab creates
 	// from it — the portal's extraEnvVarsSecrets and the overlay's
@@ -150,6 +156,8 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		MCPPrometheusChartVersion:  mcpPrometheusChartVersion,
 		LocalRegistryEndpoint:      devRegistryEndpoint(cfg),
 		AteletImageCacheArgs:       ateletImageCacheArgs,
+		WorkerPoolArchLabel:        workerPoolArchLabel,
+		WorkerPoolArch:             workerPoolArch(),
 		GitHubToken:                gitHubTokenWired(cfg),
 		ModelManagerEnabled:        cfg.ModelManagerEnabled(),
 		LegacyChart:                cfg.LegacyChart(),
