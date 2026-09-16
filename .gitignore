@@ -6,6 +6,12 @@ kubeconfig.oidc
 /agentlab.yaml
 /state/
 
+# Manual scratch next to the config: timestamped copies of agentlab.yaml taken
+# before `agentlab configure` rewrites it, and saved `kubectl get pods -A`
+# snapshots. Neither is written by the CLI; both have leaked into main once.
+/agentlab.yaml.bak-*
+/watch_*
+
 # Build outputs and CI scratch files, all written next to the sources: the
 # devctl Makefile's agentlab-v<version>-<os>-<arch> and bin-dist/, the
 # architect CI's .ldflags, .platforms and agentlab-<os>-<arch> (six of them,
