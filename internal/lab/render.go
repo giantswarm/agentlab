@@ -21,14 +21,6 @@ import (
 //go:embed templates/*.tmpl
 var templatesFS embed.FS
 
-// gatewayAPICRDs is the Gateway API standard-channel install (v1.5.0),
-// embedded so a boot needs no network to give the cluster the Gateway/
-// HTTPRoute/... CRDs — the documented cluster-level prerequisite of the
-// agent-platform chart.
-//
-//go:embed templates/gateway-api-crds.yaml
-var gatewayAPICRDs []byte
-
 // StateDir is where rendered manifests land, for inspection and for
 // kubectl/helm to consume. Gitignored; regenerated on every command.
 const StateDir = "state"

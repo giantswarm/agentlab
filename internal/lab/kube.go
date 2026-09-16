@@ -485,39 +485,17 @@ func toUnstructured(obj runtime.Object) (*unstructured.Unstructured, error) {
 // gap between a CRD being accepted and its endpoints existing, in which an
 // apply of one of its objects fails with "no matches for kind".
 func (k *kubeClients) awaitCRDs(ctx context.Context, crds []*unstructured.Unstructured) error {
-	type served struct {
-		gk       schema.GroupKind
-		versions []string
-	}
-	var want []served
+	var want []schema.GroupVersionKind
 	for _, crd := range crds {
-		group, _, _ := unstructured.NestedString(crd.Object, "spec", "group")
-		kind, _, _ := unstructured.NestedString(crd.Object, "spec", "names", "kind")
-		versions, _, _ := unstructured.NestedSlice(crd.Object, "spec", "versions")
-		s := served{gk: schema.GroupKind{Group: group, Kind: kind}}
-		for _, v := range versions {
-			m, ok := v.(map[string]any)
-			if !ok {
-				continue
-			}
-			if on, found, _ := unstructured.NestedBool(m, "served"); found && !on {
-				continue
-			}
-			if name, _, _ := unstructured.NestedString(m, "name"); name != "" {
-				s.versions = append(s.versions, name)
-			}
-		}
-		want = append(want, s)
+		want = append(want, crdServedGVKs(crd)...)
 	}
 	var missing string
 	err := wait.PollUntilContextTimeout(ctx, 500*time.Millisecond, crdEstablishTimeout, true, func(context.Context) (bool, error) {
 		k.resetMapper()
-		for _, s := range want {
-			for _, v := range s.versions {
-				if _, err := k.mapper.RESTMapping(s.gk, v); err != nil {
-					missing = s.gk.String() + " " + v
-					return false, nil
-				}
+		for _, gvk := range want {
+			if _, err := k.mapper.RESTMapping(gvk.GroupKind(), gvk.Version); err != nil {
+				missing = gvk.GroupKind().String() + " " + gvk.Version
+				return false, nil
 			}
 		}
 		return true, nil

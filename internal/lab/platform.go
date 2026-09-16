@@ -244,12 +244,10 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	step("Installing %s in the lab shape (bundled Flux engine on, self-management off)", chart)
 	ctx := context.Background()
 
-	// The Gateway API CRDs are the chart's documented cluster-level
-	// prerequisite; embedded so the boot needs no network for them.
-	// Idempotent re-apply; the apply waits for the apiserver to serve the
-	// kinds before anything below uses them.
-	step("Installing the Gateway API CRDs (standard channel)")
-	if _, err := applyManifests(ctx, gatewayAPICRDs); err != nil {
+	// The cluster-level APIs the lab provides itself (providedapis.go: the
+	// Gateway API, the Cilium policy CRDs) — before anything that renders
+	// their kinds.
+	if err := installProvidedAPIs(ctx); err != nil {
 		return err
 	}
 

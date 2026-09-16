@@ -151,6 +151,23 @@ func PlatformTest(cfg *config.Config, email string) error {
 
 	verdict := "PASS: Claude Code -> muster (Dex) -> mcp-kubernetes -> kind apiserver"
 
+	// The APIs the lab provides itself (providedapis.go), as `kubectl
+	// api-resources` would list them: a component chart that renders a
+	// Gateway API route or a Cilium policy installs only while they are served.
+	step("Verifying the apiserver serves the APIs the lab provides itself")
+	served, err := proveProvidedAPIs()
+	if err != nil {
+		return err
+	}
+	var groupVersions []string
+	kindCount := 0
+	for _, s := range served {
+		note("%s", s)
+		groupVersions = append(groupVersions, s.gv.String())
+		kindCount += len(s.kinds)
+	}
+	verdict += fmt.Sprintf("\nPASS: the apiserver serves the %d kinds the lab provides itself (%s) — Gateway API routes and Cilium policies render, the policies enforce nothing", kindCount, strings.Join(groupVersions, ", "))
+
 	// The user's identity, not a ServiceAccount: the same tool as two users
 	// with different RBAC must answer differently — and a forged identity
 	// header changes nothing, the bearer decides.
