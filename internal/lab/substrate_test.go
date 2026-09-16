@@ -34,6 +34,13 @@ func TestSubstratePreflightWithoutTheAPI(t *testing.T) {
 // the image-cache policy (registryFlag on the default config).
 const testRegistryFlag = "--localhost-registry-replacement=agentlab-registry:5000"
 
+// The fakes' atelet DaemonSet: a sidecar next to the atelet container, and
+// the Substrate release the proofs' images are from.
+const (
+	testSidecarContainer = "sidecar"
+	testSubstrateRelease = "0.0.30"
+)
+
 // anySlice is a []string as the YAML decoder hands a list back.
 func anySlice(s []string) []any {
 	out := make([]any, len(s))
@@ -48,7 +55,7 @@ func TestAteletArgsMissing(t *testing.T) {
 		return &unstructured.Unstructured{Object: map[string]any{
 			fieldSpec: map[string]any{"template": map[string]any{fieldSpec: map[string]any{
 				"containers": []any{
-					map[string]any{nameKey: "sidecar", argsKey: anySlice(ateletImageCacheArgs)},
+					map[string]any{nameKey: testSidecarContainer, argsKey: anySlice(ateletImageCacheArgs)},
 					map[string]any{nameKey: ateletDaemonSet, argsKey: anySlice(args)},
 				},
 			}}},
@@ -75,11 +82,11 @@ func TestAteletArgsMissing(t *testing.T) {
 // by name.
 func TestSubstrateReleaseOf(t *testing.T) {
 	for image, want := range map[string]string{
-		"ghcr.io/giantswarm/substrate/atelet:0.0.30-gs.4":                                                                         "0.0.30",
+		"ghcr.io/giantswarm/substrate/atelet:0.0.30-gs.4":                                                                         testSubstrateRelease,
 		"ghcr.io/giantswarm/substrate/ateom-gvisor:0.0.27-gs.9":                                                                   "0.0.27",
-		"localhost:5000/substrate/ateom-gvisor:0.0.30-gs.1":                                                                       "0.0.30",
-		"ghcr.io/giantswarm/substrate/atelet:0.0.30-gs.4@sha256:0000000000000000000000000000000000000000000000000000000000000000": "0.0.30",
-		"ghcr.io/giantswarm/substrate/atelet:v0.1.0":                                                                              "0.1.0",
+		"localhost:5000/substrate/ateom-gvisor:0.0.30-gs.1":                                                                       testSubstrateRelease,
+		"ghcr.io/giantswarm/substrate/atelet:0.0.30-gs.4@sha256:0000000000000000000000000000000000000000000000000000000000000000": testSubstrateRelease,
+		"ghcr.io/giantswarm/substrate/atelet:v1.2.3":                                                                              "1.2.3",
 	} {
 		if got, err := substrateReleaseOf(image); err != nil || got != want {
 			t.Errorf("substrateReleaseOf(%q) = %q, %v; want %q", image, got, err, want)
@@ -100,10 +107,10 @@ func TestSubstrateReleaseOf(t *testing.T) {
 // container on the given image.
 func ateletDS(image string) *unstructured.Unstructured {
 	ds := &unstructured.Unstructured{Object: map[string]any{
-		"spec": map[string]any{"template": map[string]any{"spec": map[string]any{
+		fieldSpec: map[string]any{"template": map[string]any{fieldSpec: map[string]any{
 			"containers": []any{
-				map[string]any{nameKey: "sidecar", "image": "ghcr.io/giantswarm/substrate/sidecar:9.9.9"},
-				map[string]any{nameKey: ateletDaemonSet, "image": image, argsKey: anySlice(ateletImageCacheArgs)},
+				map[string]any{nameKey: testSidecarContainer, imageKey: "ghcr.io/giantswarm/substrate/sidecar:9.9.9"},
+				map[string]any{nameKey: ateletDaemonSet, imageKey: image, argsKey: anySlice(ateletImageCacheArgs)},
 			},
 		}}},
 	}}
@@ -117,7 +124,7 @@ func ateletDS(image string) *unstructured.Unstructured {
 // given image.
 func workerPool(name, image string) *unstructured.Unstructured {
 	pool := customObject(gvkWorkerPool, kagentNamespace, name, nil)
-	_ = unstructured.SetNestedField(pool.Object, image, "spec", "workerImage")
+	_ = unstructured.SetNestedField(pool.Object, image, fieldSpec, "workerImage")
 	return pool
 }
 
@@ -139,7 +146,7 @@ func TestProveSubstrateLine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("one release: %v", err)
 	}
-	want := []substrateImages{{atelet: atelet, pool: kagentNamespace + "/kagent-default", worker: worker, release: "0.0.30"}}
+	want := []substrateImages{{atelet: atelet, pool: kagentNamespace + "/kagent-default", worker: worker, release: testSubstrateRelease}}
 	if !reflect.DeepEqual(images, want) {
 		t.Errorf("images = %+v, want %+v", images, want)
 	}
@@ -182,8 +189,8 @@ func TestSubstrateSkewRemedy(t *testing.T) {
 	if got := substrateSkewRemedy(cfg); !strings.Contains(got, "--chart-version <version>") || !strings.Contains(got, config.ChartRepository) {
 		t.Errorf("the default itself asks for a release of the person's choosing, got %q", got)
 	}
-	cfg.Platform.ChartBranch = "feat/x"
-	if got := substrateSkewRemedy(cfg); !strings.Contains(got, "feat/x") || strings.Contains(got, "--chart-version") {
+	cfg.Platform.ChartBranch = "feat/skew"
+	if got := substrateSkewRemedy(cfg); !strings.Contains(got, "feat/skew") || strings.Contains(got, "--chart-version") {
 		t.Errorf("the dev channel is the branch's to align, got %q", got)
 	}
 	cfg.Platform.ChartPath = "/src/agent-platform/helm/agent-platform"

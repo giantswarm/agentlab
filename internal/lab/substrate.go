@@ -84,6 +84,9 @@ var ateletImageCacheArgs = []string{
 // ateletDaemonSet is the substrate chart's per-node agent (templates/atelet.yaml).
 const ateletDaemonSet = "atelet"
 
+// imageKey is a container's image field as the apiserver hands it back.
+const imageKey = "image"
+
 // proveAteletImageCachePolicy asserts the atelet DaemonSet carries every flag
 // of ateletImageCacheArgs and that its pods have rolled to that spec — the
 // live half of the policy: values that render but never reach the node
@@ -183,7 +186,7 @@ func proveSubstrateLine(ctx context.Context, remedy string) ([]substrateImages, 
 	if err != nil {
 		return nil, fmt.Errorf("reading the %s DaemonSet in %s: %w", ateletDaemonSet, substrateNamespace, err)
 	}
-	atelet, _ := ateletContainer(ds)["image"].(string)
+	atelet, _ := ateletContainer(ds)[imageKey].(string)
 	if atelet == "" {
 		return nil, fmt.Errorf("the %s DaemonSet in %s has no %s container", ateletDaemonSet, substrateNamespace, ateletDaemonSet)
 	}
