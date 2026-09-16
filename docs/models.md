@@ -196,7 +196,10 @@ versions wrote (`backend:` + `endpoint:`) still reads as the one-item list.
 `agentlab configure` detects an Ollama on `:11434`, a Lemonade Server on
 `:13305` and an LM Studio on `:1234` on every run (`--model-manager[=false]`
 pins the flag, `--model-manager-backends` the list; the interactive form shows
-what was found). Each endpoint is **autodetected at platform time**: the kind
+what was found). The flag off is the chart's component off: the rendered
+values state `components.model-manager.enabled: false`, because the meta
+chart runs model-manager by default since 4.24.0 — with no backend, which in
+the lab would only crash-loop on the Dex localhost address. Each endpoint is **autodetected at platform time**: the kind
 docker network's gateway (`docker network inspect kind`, the same address the
 section above documents for `extraModels`), or the container runtime's host
 alias where that gateway is inside its VM — whichever answers when dialled

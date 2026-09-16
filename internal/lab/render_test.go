@@ -220,12 +220,13 @@ func TestPlatformValuesLabShape(t *testing.T) {
 }
 
 // Every patch reaches its component exactly once, whatever the lab's
-// toggles: a component the roster names a block for renders it there; one
-// the roster leaves out under these settings — model-manager with the lab's
-// managed models off while the chart runs it by default, cluster-manager
-// always — renders through the trailing range. A key rendered twice would
-// not parse (yaml.v3 refuses a duplicate mapping key), which is what pins
-// ExtraPostRenderers to the template's conditions.
+// toggles: a component the roster names a block for renders it there — or,
+// while its toggle is off, renders the block as `enabled: false` and no patch
+// (model-manager, backstage) — and one the roster leaves out under these
+// settings (cluster-manager, which only an overlay turns on) renders through
+// the trailing range. A key rendered twice would not parse (yaml.v3 refuses
+// a duplicate mapping key), which is what pins ExtraPostRenderers to the
+// template's conditions.
 func TestPlatformValuesExtraPostRenderers(t *testing.T) {
 	sidecars := map[string][]string{
 		componentMCPKubernetes: {componentMCPKubernetes},
@@ -269,9 +270,16 @@ func TestPlatformValuesExtraPostRenderers(t *testing.T) {
 				t.Fatalf("%v\n%s", err, out)
 			}
 			for component := range sidecars {
-				list, ok := values.Components[component]["postRenderers"].([]any)
+				comp := values.Components[component]
+				if component == modelManagerMCPServer && !cfg.ModelManagerEnabled() {
+					if _, patched := comp["postRenderers"]; comp["enabled"] != false || patched {
+						t.Errorf("components.%s with the toggle off: want enabled false and no patch, got %v", component, comp)
+					}
+					continue
+				}
+				list, ok := comp["postRenderers"].([]any)
 				if !ok || len(list) != 1 {
-					t.Errorf("components.%s.postRenderers: want the one entry, got %v", component, values.Components[component])
+					t.Errorf("components.%s.postRenderers: want the one entry, got %v", component, comp)
 				}
 			}
 			// The blocks that are always there render their patches only
@@ -280,6 +288,62 @@ func TestPlatformValuesExtraPostRenderers(t *testing.T) {
 				comp := values.Components[component]
 				if _, ok := comp["enabled"]; !ok {
 					t.Errorf("components.%s: want the enabled key, got %v", component, comp)
+				}
+			}
+		})
+	}
+}
+
+// platform.modelManager off is the chart's component off: the roster always
+// states components.model-manager.enabled, so the chart's default — on since
+// agent-platform 4.24.0, with no backend — cannot install a model-manager the
+// lab has no backend for (in the lab it would only crash-loop on OIDC
+// discovery against the Dex localhost address); the component's own blocks
+// (`model-manager:`, `modelManager:`) render only while it is on. The 3.x
+// roster knows the component too, so the flag renders on that line as well.
+func TestPlatformValuesModelManagerToggle(t *testing.T) {
+	render := func(t *testing.T, cfg *config.Config) map[string]any {
+		t.Helper()
+		out, err := renderTemplate(cfg, platformValuesTemplate, func(d *tmplData) {
+			d.ModelManagerEndpoints = map[string]string{ollama: ollamaLabEndpoint}
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var values map[string]any
+		if err := yaml.Unmarshal(out, &values); err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		return values
+	}
+	component := func(values map[string]any) map[string]any {
+		comp, _ := values["components"].(map[string]any)[modelManagerMCPServer].(map[string]any)
+		return comp
+	}
+	for name, chartVersion := range map[string]string{"current line": config.DefaultChartVersion, "3.x line": legacyChartVersion} {
+		t.Run(name, func(t *testing.T) {
+			cfg := config.Default()
+			cfg.Platform.Agents = true
+			cfg.Platform.ChartVersion = chartVersion
+			cfg.Platform.ModelManager.Enabled = false
+			values := render(t, cfg)
+			if component(values)["enabled"] != false {
+				t.Errorf("components.model-manager = %v, want enabled: false stated (the chart's default is on)", component(values))
+			}
+			for _, key := range []string{modelManagerMCPServer, "modelManager"} {
+				if _, ok := values[key]; ok {
+					t.Errorf("%s: want no block while the component is off, got %v", key, values[key])
+				}
+			}
+
+			cfg.Platform.ModelManager = config.ModelManager{Enabled: true, Backends: []string{ollama}}
+			values = render(t, cfg)
+			if component(values)["enabled"] != true {
+				t.Errorf("components.model-manager = %v, want enabled: true", component(values))
+			}
+			for _, key := range []string{modelManagerMCPServer, "modelManager"} {
+				if _, ok := values[key]; !ok {
+					t.Errorf("%s: want the block while the component is on", key)
 				}
 			}
 		})

@@ -184,23 +184,22 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 // ExtraPostRenderers is the part of PostRenderers the values template's
 // roster does not render under these settings: the components it names no
 // block for — cluster-manager, which only an overlay turns on — and the ones
-// whose block it renders only while the lab's own toggle is on, when the
-// chart runs them regardless (model-manager, on by default since
-// agent-platform 4.24.0, with platform.modelManager off). The template's
-// trailing range renders these as `<component>: {postRenderers: …}` so every
-// patch the rule found reaches its release and no component key renders
-// twice. Mirrors the template's conditions: a block that is always there
-// (muster, mcp-kubernetes, kagent, backstage — the last two carry their
-// `enabled` from a toggle and render their patches only while it is on) is
-// never extra.
+// whose block it renders only while the lab's own toggle is on (vm-manager,
+// klaus-gateway, agent-manager with the agents). The template's trailing
+// range renders these as `<component>: {postRenderers: …}` so every patch
+// the rule found reaches its release and no component key renders twice.
+// Mirrors the template's conditions: a block that is always there (muster,
+// mcp-kubernetes, kagent, model-manager, backstage — the last three carry
+// their `enabled` from a toggle and render their patches only while it is
+// on) is never extra.
 func (t *tmplData) ExtraPostRenderers() map[string]string {
 	named := map[string]bool{
 		componentMuster:        true,
 		componentMCPKubernetes: true,
 		componentKagent:        true,
 		componentBackstage:     true,
+		modelManagerMCPServer:  true,
 		agentManagerMCPServer:  t.Platform.Agents,
-		modelManagerMCPServer:  t.ModelManagerEnabled,
 		vmManagerMCPServer:     t.VMManagerEnabled,
 		klausGatewayComponent:  t.KlausGatewayEnabled,
 	}
