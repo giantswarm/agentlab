@@ -71,34 +71,75 @@ const workerPoolArchLabel = "kubernetes.io/arch"
 func workerPoolArch() string { return runtime.GOARCH }
 
 // clusterWorkerPoolArch is the architecture of the node the pool's workers
-// would land on — what `agentlab platform` renders the pin from.
+// would land on — what `agentlab platform` renders the pin from. A node the
+// lab cannot read leaves the binary's, which on a cross-built agentlab is the
+// wrong one, so the fallback says so rather than pinning in silence.
 func clusterWorkerPoolArch(ctx context.Context) string {
+	arch, err := nodeArch(ctx)
+	if err != nil {
+		note("cannot read the node's architecture (%v); the WorkerPool is pinned to this binary's %s, and `agentlab platform` refuses the install if the node disagrees", err, workerPoolArch())
+		return workerPoolArch()
+	}
+	return arch
+}
+
+// nodeArch is the architecture the cluster's nodes carry, or an error saying
+// why none could be read.
+func nodeArch(ctx context.Context) (string, error) {
 	gvr, err := gvrFor("nodes")
 	if err != nil {
-		return workerPoolArch()
+		return "", err
 	}
 	nodes, err := listObjects(ctx, gvr, "", "")
 	if err != nil {
-		return workerPoolArch()
+		return "", err
 	}
 	for _, node := range nodes {
 		if arch := node.GetLabels()[workerPoolArchLabel]; arch != "" {
+			return arch, nil
+		}
+	}
+	return "", fmt.Errorf("no node carries the label %s", workerPoolArchLabel)
+}
+
+// renderedWorkerPoolArch is the architecture the WorkerPool will carry ON THE
+// CLUSTER, read off the kagent component's render — the object helm-controller
+// is about to apply, so it answers for the chart's own default and for what the
+// chart does with the lab's values, not merely for what the lab asked. That
+// matters: the kagent values are a free-form map, so a chart that renames or
+// stops honouring the key leaves the lab's pin inert and its amd64 default on
+// the pool, which no reading of the lab's values could ever notice.
+//
+// Empty when the pool is not in the render — the 3.x line, a component whose
+// render failed (noted, not fatal), a chart that creates no pool.
+func renderedWorkerPoolArch(renders map[string]string) string {
+	objs, err := decodeManifests([]byte(renders[componentKagent]))
+	if err != nil {
+		return ""
+	}
+	for _, obj := range objs {
+		if obj.GetKind() != workerPoolKind {
+			continue
+		}
+		arch, _, _ := unstructured.NestedString(obj.Object, "spec", "template", "nodeSelector", workerPoolArchLabel)
+		if arch != "" {
 			return arch
 		}
 	}
-	return workerPoolArch()
+	return ""
 }
 
+// workerPoolKind is the Substrate object the kagent chart renders the pool as.
+const workerPoolKind = "WorkerPool"
+
 // preflightWorkerPoolArch refuses a cluster whose nodes do not carry the
-// architecture the values pin the WorkerPool to. Nothing else would say it:
-// the chart takes the pin as a free-form map, so a wrong one installs cleanly
-// and surfaces minutes later as workers that never schedule. values is the
-// merged set the install carries, so an overlay's pin is the one checked;
-// without the key — the 3.x line — there is nothing to check.
-func preflightWorkerPoolArch(ctx context.Context, values map[string]any) error {
-	pinned, found, err := unstructured.NestedString(values,
-		"kagent", "substrateWorkerPool", "template", "nodeSelector", workerPoolArchLabel)
-	if err != nil || !found || pinned == "" {
+// architecture the WorkerPool is about to be created with. Nothing else would
+// say it: the pool's workers are ate-controller's, not the Helm release's, so
+// the release goes Ready while they sit Pending and the wedge only surfaces
+// minutes later as agent turns that never finish.
+func preflightWorkerPoolArch(ctx context.Context, renders map[string]string) error {
+	pinned := renderedWorkerPoolArch(renders)
+	if pinned == "" {
 		return nil
 	}
 	gvr, err := gvrFor("nodes")
@@ -121,11 +162,11 @@ func preflightWorkerPoolArch(ctx context.Context, values map[string]any) error {
 	if len(carry) == 0 {
 		return nil
 	}
-	return fmt.Errorf("the WorkerPool is pinned to %s=%s but no node of this cluster carries it: %s\n"+
-		"Its gVisor workers would stay Pending and every agent turn would wait for a worker that never comes. The lab pins\n"+
-		"the pool to the node's own architecture, so the pin can only differ through a platform.valuesFiles overlay that\n"+
-		"sets kagent.substrateWorkerPool.template.nodeSelector — drop that key, or give it the architecture above, then\n"+
-		"`agentlab platform`",
+	return fmt.Errorf("the WorkerPool the chart is about to create is pinned to %s=%s, which no node of this cluster carries: %s\n"+
+		"Its gVisor workers would stay Pending and every agent turn would wait for a worker that never comes. The lab pins the\n"+
+		"pool to the node's own architecture, so either a platform.valuesFiles overlay sets\n"+
+		"kagent.substrateWorkerPool.template.nodeSelector, or this chart version no longer takes that key and left its own\n"+
+		"default on the pool — check `kagent.substrateWorkerPool.template` against the chart, then `agentlab platform`",
 		workerPoolArchLabel, pinned, strings.Join(carry, ", "))
 }
 

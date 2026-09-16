@@ -338,9 +338,14 @@ node reports**, not the binary's — the devctl Makefile's `make build`
 cross-builds amd64 even on an arm64 host, so `GOARCH` would pin the very thing
 this avoids (it stays the fallback for an `agentlab render` without a cluster).
 Only the architecture key travels: Helm merges the map, so the worker
-resources and the `workerImage` stamp stay the chart's. A pin no node carries
-is refused before the install, so an overlay that sets the key wrongly is
-named rather than waited out.
+resources and the `workerImage` stamp stay the chart's, and the value is
+quoted — a `nodeSelector` value is a string, and the chart's
+`validateWorkerPool` fails the render otherwise. Before the install
+`up`/`platform` read the pin **off the rendered `WorkerPool`** — the object
+the chart is about to create, so the chart's own default counts too, not just
+what the lab asked for — and refuse a cluster no node of which carries it.
+That is the only warning there is: the pool's workers are ate-controller's,
+so the Helm release goes Ready while they sit `Pending`.
 
 **The platform Postgres** is the fleet's shape too: `components.cloudnative-pg`
 (the upstream CloudNativePG operator, the chart's optional component — a
@@ -984,10 +989,12 @@ data the page reads — see [The muster plugin](backstage.md#the-muster-plugin).
   "Working…". Compare the two with `kubectl get nodes -L kubernetes.io/arch`
   and `kubectl -n kagent get workerpool kagent-default -o
   jsonpath='{.spec.template.nodeSelector}'`. The lab renders the node's own
-  architecture, so a mismatch means a `platform.valuesFiles` overlay sets the
-  key — drop it or correct it, then `agentlab platform`. `up`/`platform`
-  refuse the install outright when no node carries the pin, so this only
-  bites a cluster whose values changed underneath it.
+  architecture, so a mismatch means either a `platform.valuesFiles` overlay
+  setting the key, or a chart version that no longer takes it and left its own
+  `amd64` default on the pool — then `agentlab platform`. `up`/`platform`
+  refuse the install when the `WorkerPool` they are about to create names an
+  architecture no node carries, so this only bites a cluster whose values or
+  chart changed underneath it.
 - **A WorkerPool outlives a Substrate database it never knew.** When
   Agent Substrate's control-plane database is replaced under a running
   `WorkerPool` — a lab moving from the substrate chart's bundled Postgres to

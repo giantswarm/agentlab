@@ -2,6 +2,7 @@ package lab
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"runtime"
 	"strings"
@@ -33,14 +34,32 @@ func TestSubstratePreflightWithoutTheAPI(t *testing.T) {
 	}
 }
 
-// archValues is the merged values with the WorkerPool pinned to arch; an
-// empty arch is the shape of a render that names no pin at all.
-func archValues(arch string) map[string]any {
-	pool := map[string]any{}
+// archRenders is the kagent component render carrying a WorkerPool pinned to
+// arch — what the preflight reads, since that is the object the chart is
+// about to create. An empty arch renders the pool without a nodeSelector.
+func archRenders(arch string) map[string]string {
+	selector := ""
 	if arch != "" {
-		pool["template"] = map[string]any{"nodeSelector": map[string]any{workerPoolArchLabel: arch}}
+		selector = fmt.Sprintf("\n    nodeSelector:\n      %s: %q", workerPoolArchLabel, arch)
 	}
-	return map[string]any{"kagent": map[string]any{"substrateWorkerPool": pool}}
+	return map[string]string{componentKagent: fmt.Sprintf(`apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kagent-controller
+  namespace: kagent
+---
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: kagent-default
+  namespace: kagent
+spec:
+  replicas: 4
+  template:%s
+    resources:
+      requests:
+        cpu: 250m
+`, selector)}
 }
 
 func archNode(name, arch string) *corev1.Node {
@@ -54,14 +73,20 @@ func TestWorkerPoolArchPreflight(t *testing.T) {
 	ctx := context.Background()
 
 	newFakeLab(t, archNode("agentlab-control-plane", "arm64"))
-	if err := preflightWorkerPoolArch(ctx, archValues("arm64")); err != nil {
+	if err := preflightWorkerPoolArch(ctx, archRenders("arm64")); err != nil {
 		t.Errorf("the node carries the pin: %v", err)
 	}
-	// No pin rendered — the 3.x line, where the chart creates no pool.
-	if err := preflightWorkerPoolArch(ctx, archValues("")); err != nil {
-		t.Errorf("without a pin there is nothing to check: %v", err)
+	// A pool with no pin, and no pool at all — the 3.x line, or a component
+	// whose render failed (noted, not fatal): nothing to check either way.
+	if err := preflightWorkerPoolArch(ctx, archRenders("")); err != nil {
+		t.Errorf("a pool without a pin: %v", err)
 	}
-	err := preflightWorkerPoolArch(ctx, archValues("amd64"))
+	if err := preflightWorkerPoolArch(ctx, nil); err != nil {
+		t.Errorf("without the kagent render: %v", err)
+	}
+	// The chart's own default on the pool is caught the same way — the point
+	// of reading the render and not the lab's values.
+	err := preflightWorkerPoolArch(ctx, archRenders("amd64"))
 	if err == nil {
 		t.Fatal("a pin no node carries must be refused")
 	}
@@ -73,7 +98,7 @@ func TestWorkerPoolArchPreflight(t *testing.T) {
 
 	// One node that carries it is enough — that is where the workers land.
 	newFakeLab(t, archNode("amd", "amd64"), archNode("arm", "arm64"))
-	if err := preflightWorkerPoolArch(ctx, archValues("arm64")); err != nil {
+	if err := preflightWorkerPoolArch(ctx, archRenders("arm64")); err != nil {
 		t.Errorf("a mixed cluster with a matching node: %v", err)
 	}
 }
