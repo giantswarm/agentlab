@@ -168,6 +168,24 @@ func PlatformTest(cfg *config.Config, email string) error {
 	}
 	verdict += fmt.Sprintf("\nPASS: the apiserver serves the %d kinds the lab provides itself (%s) — Gateway API routes and Cilium policies render, the policies enforce nothing", kindCount, strings.Join(groupVersions, ", "))
 
+	// The lab's Dex bridge: every OAuth resource server the rule selects on
+	// the live Deployments carries the dex-localhost sidecar, runs without a
+	// restart and reads Connected in muster (platformtest_sidecar.go) — the
+	// chart's default-on managers and an overlay's included, not only the
+	// servers the lab turns on itself.
+	step("Verifying the %s sidecar on every server told the lab Dex address", dexLocalhostContainer)
+	sidecarCtx, cancelSidecar := context.WithTimeout(context.Background(), kubeReadTimeout)
+	servers, err := proveDexLocalhostSidecars(sidecarCtx, cfg)
+	cancelSidecar()
+	if err != nil {
+		return err
+	}
+	var serverNames []string
+	for _, s := range servers {
+		serverNames = append(serverNames, s.String())
+	}
+	verdict += fmt.Sprintf("\nPASS: the %s bridge on all %d servers told the lab Dex address (%s) — sidecar present, 0 restarts, MCPServer Connected", dexLocalhostContainer, len(servers), strings.Join(serverNames, ", "))
+
 	// The user's identity, not a ServiceAccount: the same tool as two users
 	// with different RBAC must answer differently — and a forged identity
 	// header changes nothing, the bearer decides.
