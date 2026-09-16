@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -13,6 +14,11 @@ import (
 // agent-platform-connectivity chart, also its release name — named here only
 // to assert the lab renders no patch for it.
 const connectivityComponent = "agent-platform-connectivity"
+
+// clusterManager is the meta chart's cluster-manager component — a release
+// the lab has no toggle for (an overlay turns it on) and no name for: the
+// sidecar rule finds it on its render like any other.
+const clusterManager = "cluster-manager"
 
 // Fixture refs, hoisted so the linter's constant check stays quiet.
 const (
@@ -72,11 +78,11 @@ func TestFullImageRef(t *testing.T) {
 
 // componentPostRenderers is the lab's whole patch set as the chart forwards
 // it: Flux's postRenderers shape per component, the hostNetwork patches on
-// muster and Backstage, the sidecar on every MCP server, the UI NodePort on
-// kagent — and, for a dev image, the kustomize image override on the name the
-// render resolved plus the pull policy patch on its container, nothing on the
-// others. The `harness` target is no post-renderer: it pins the platform
-// Harness through the values.
+// muster and Backstage, the sidecar on every Deployment the rule selected,
+// the UI NodePort on kagent — and, for a dev image, the kustomize image
+// override on the name the render resolved plus the pull policy patch on its
+// container, nothing on the others. The `harness` target is no post-renderer:
+// it pins the platform Harness through the values.
 func TestComponentPostRenderers(t *testing.T) {
 	cfg := config.Default()
 	cfg.Platform.Agents = true
@@ -91,7 +97,14 @@ func TestComponentPostRenderers(t *testing.T) {
 	names := defaultDevImageNames(cfg)
 	// The controller's name as the kagent line's render says it (devimages.go).
 	names[componentKagent] = lineControllerImage
-	rendered, err := componentPostRenderers(cfg, names)
+	// The sidecar's targets as the rule found them on the renders.
+	sidecars := map[string][]string{
+		componentMCPKubernetes: {componentMCPKubernetes},
+		modelManagerMCPServer:  {modelManagerMCPServer},
+		agentManagerMCPServer:  {agentManagerMCPServer},
+		clusterManager:         {clusterManager},
+	}
+	rendered, err := componentPostRenderers(cfg, names, sidecars)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +147,7 @@ func TestComponentPostRenderers(t *testing.T) {
 			t.Errorf("%s: want the hostNetwork + maxSurge 0 patch, got %q", c, got)
 		}
 	}
-	for _, c := range []string{componentMCPKubernetes, modelManagerMCPServer, agentManagerMCPServer} {
+	for _, c := range []string{componentMCPKubernetes, modelManagerMCPServer, agentManagerMCPServer, clusterManager} {
 		got := patchOn(c, kindDeployment, c)
 		if len(got) != 1 || !strings.Contains(got[0], "name: "+dexLocalhostContainer) || !strings.Contains(got[0], "TCP6-LISTEN:32000,fork,reuseaddr") {
 			t.Errorf("%s: want the dex-localhost sidecar patch on the lab Dex port, got %q", c, got)
@@ -185,7 +198,7 @@ func TestComponentPostRenderers(t *testing.T) {
 	// (resolveDevImageNames refuses that case before the render; here the
 	// table simply has no entry).
 	delete(names, componentMuster)
-	rendered, err = componentPostRenderers(cfg, names)
+	rendered, err = componentPostRenderers(cfg, names, sidecars)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,15 +206,16 @@ func TestComponentPostRenderers(t *testing.T) {
 		t.Errorf("muster without a resolved name: want no override, got %+v", imgs)
 	}
 
-	// Without agents and managed models the optional servers render nothing.
+	// Without the renders (a plain `agentlab render`) no sidecar is patched
+	// — the rule has nothing to read — and no dev image, no override.
 	cfg.Platform.Agents, cfg.Platform.ModelManager.Enabled, cfg.Platform.DevImages = false, false, nil
-	rendered, err = componentPostRenderers(cfg, nil)
+	rendered, err = componentPostRenderers(cfg, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, c := range []string{modelManagerMCPServer, agentManagerMCPServer} {
+	for _, c := range []string{componentMCPKubernetes, modelManagerMCPServer, agentManagerMCPServer, clusterManager} {
 		if _, ok := rendered[c]; ok {
-			t.Errorf("%s: off, want no postRenderers", c)
+			t.Errorf("%s: no render to read, want no postRenderers", c)
 		}
 	}
 	// Every Deployment target of the config's list has a render target — the
@@ -234,5 +248,118 @@ func TestMissingImages(t *testing.T) {
 	}
 	if got := missingImages(have, []string{devMusterFull}); len(got) != 0 {
 		t.Errorf("nothing missing, got %v", got)
+	}
+}
+
+// The sidecar rule reads the platform's OAuth contract off the component
+// renders: a Deployment whose containers are told the lab Dex's localhost
+// address — as an argument (the managers' --dex-issuer-url) or an environment
+// variable (mcp-kubernetes' DEX_ISSUER_URL) — is a target, whatever its name;
+// one that is not told it is not, nor is one on the host network (the
+// chart's or the lab's), and documents that are not Deployments or not
+// objects are skipped.
+func TestDexLocalhostTargets(t *testing.T) {
+	cfg := config.Default()
+	renders := map[string]string{
+		clusterManager: `# Source: cluster-manager/templates/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cluster-manager
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cluster-manager
+spec:
+  template:
+    spec:
+      containers:
+        - name: cluster-manager
+          image: gsoci.azurecr.io/giantswarm/cluster-manager:0.4.2
+          args:
+            - --enable-oauth=true
+            - --oauth-provider=dex
+            - --dex-issuer-url=https://localhost:32000/dex
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cluster-manager
+`,
+		componentMCPKubernetes: `---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-kubernetes
+spec:
+  template:
+    spec:
+      containers:
+        - name: mcp-kubernetes
+          env:
+            - name: DEX_ISSUER_URL
+              value: "https://localhost:32000/dex"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-kubernetes-helper
+spec:
+  template:
+    spec:
+      containers:
+        - name: helper
+          args: ["--nothing"]
+`,
+		// muster is told the address too, and reaches it through the lab's
+		// hostNetwork patch.
+		componentMuster: `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: muster
+spec:
+  template:
+    spec:
+      containers:
+        - name: muster
+          args: ["--oauth-issuer=https://localhost:32000/dex"]
+`,
+		// A chart that runs its pod on the host network needs no bridge.
+		"host-networked": `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: host-networked
+spec:
+  template:
+    spec:
+      hostNetwork: true
+      containers:
+        - name: x
+          args: ["--dex-issuer-url=https://localhost:32000/dex"]
+`,
+		// Another Dex port is another lab's, or a real installation's.
+		"other-port": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: other\nspec:\n  template:\n    spec:\n      containers:\n        - name: x\n          args: [\"--dex-issuer-url=https://localhost:32001/dex\"]\n",
+		// A scalar document, then the object: the scalar is skipped.
+		"scalar-first": "just a string\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: after-scalar\nspec:\n  template:\n    spec:\n      containers:\n        - name: x\n          env:\n            - name: DEX_ISSUER_URL\n              value: https://localhost:32000/dex\n",
+		"empty":        "",
+	}
+	got := dexLocalhostTargets(cfg, renders)
+	want := map[string][]string{
+		clusterManager:         {clusterManager},
+		componentMCPKubernetes: {componentMCPKubernetes},
+		"scalar-first":         {"after-scalar"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("dexLocalhostTargets = %v, want %v", got, want)
+	}
+	// The rule follows the lab's Dex port.
+	cfg.DexPort = 32001
+	if got := dexLocalhostTargets(cfg, renders); !reflect.DeepEqual(got, map[string][]string{"other-port": {"other"}}) {
+		t.Errorf("dexLocalhostTargets on port 32001 = %v", got)
+	}
+	// Nothing to read, nothing to patch.
+	if got := dexLocalhostTargets(cfg, nil); len(got) != 0 {
+		t.Errorf("dexLocalhostTargets(nil) = %v", got)
 	}
 }

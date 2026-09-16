@@ -39,16 +39,22 @@ import (
 //     config.KagentUINodePort, the containerPort side of the mapping that
 //     publishes the UI on the host (HACKS.md U9).
 //
-//  4. A `dex-localhost` sidecar on the MCP servers that validate the user's
-//     forwarded id_token themselves (mcp-kubernetes, model-manager,
-//     agent-manager, and the lab's mcp-prometheus through its own
-//     HelmRelease): they too must reach the issuer URL,
-//     https://localhost:<DexPort>, but hostNetwork is not an option — all
-//     four listen on :8080 and would collide on the single kind node. The
-//     sidecar (socat) listens on the pod's own loopback :<DexPort> and
-//     forwards to the Dex Service, so `localhost` resolves inside the pod
+//  4. A `dex-localhost` sidecar on every Deployment that carries the
+//     platform's OAuth contract: the MCP servers that validate the user's
+//     forwarded id_token themselves (mcp-kubernetes, the managers —
+//     model-manager, agent-manager, vm-manager, cluster-manager — and the
+//     lab's mcp-prometheus through its own HelmRelease) must reach the issuer
+//     URL, https://localhost:<DexPort>/dex, but hostNetwork is not an option
+//     — all of them listen on :8080 and would collide on the single kind
+//     node. The sidecar (socat) listens on the pod's own loopback :<DexPort>
+//     and forwards to the Dex Service, so `localhost` resolves inside the pod
 //     exactly as on the host; Dex's certificate carries `localhost`, so TLS
-//     verification against the lab CA holds. Lab only (HACKS.md U13).
+//     verification against the lab CA holds. Which Deployments get it is a
+//     rule over the component charts' renders, not a list: every Deployment
+//     whose containers are told the lab Dex's localhost address
+//     (dexLocalhostTargets) — so a component the chart turns on by default or
+//     an overlay turns on is covered the day it appears. Lab only (HACKS.md
+//     U13).
 //
 //  5. The dev images (platform.devImages): a kustomize image override to the
 //     build on this host plus imagePullPolicy IfNotPresent on its container,
@@ -255,27 +261,82 @@ func sidecarPostRenderer(deployment string, dexPort int) postRenderer {
 	return pr
 }
 
+// hostNetworkComponents are the components whose Deployment the lab puts on
+// the host network (patch 1+2): they reach the issuer URL as the host does
+// and are no sidecar targets.
+var hostNetworkComponents = []string{componentMuster, componentBackstage}
+
+// dexLocalhostAddr is the lab Dex as the pods are told it — the host:port of
+// the issuer URL (config.Issuer) — the address the sidecar answers on.
+func dexLocalhostAddr(cfg *config.Config) string {
+	return fmt.Sprintf("%s:%d", localhostName, cfg.DexPort)
+}
+
+// dexLocalhostTargets is the rule that picks the sidecar's targets (patch 4)
+// off the component renders (keyed by release name, platformImages): every
+// Deployment whose containers are told the lab Dex's localhost address — the
+// issuer URL in an argument (`--dex-issuer-url=`) or an environment variable
+// (DEX_ISSUER_URL) — has to reach it from inside the pod. That is the
+// platform's OAuth contract as a render shows it (global.identity forwarded
+// into the pod by the chart), so a manager the chart adds is covered the day
+// it is turned on, without a name here. The Deployments the lab puts on the
+// host network (hostNetworkComponents) and any the chart already runs there
+// reach the address as the host does and are left out. Keyed by component,
+// the Deployment names sorted; a component without a target is absent.
+func dexLocalhostTargets(cfg *config.Config, renders map[string]string) map[string][]string {
+	addr := dexLocalhostAddr(cfg)
+	targets := map[string][]string{}
+	for _, component := range slices.Sorted(maps.Keys(renders)) {
+		if slices.Contains(hostNetworkComponents, component) {
+			continue
+		}
+		for _, d := range renderedDeployments(renders[component]) {
+			if d.Spec.Template.Spec.HostNetwork || !d.mentions(addr) {
+				continue
+			}
+			targets[component] = append(targets[component], d.Metadata.Name)
+		}
+		slices.Sort(targets[component])
+	}
+	return targets
+}
+
+// mentions reports whether any container of the workload's pod template
+// carries the string in an argument or an environment variable's value.
+func (w renderedWorkload) mentions(s string) bool {
+	for _, c := range w.Spec.Template.Spec.Containers {
+		if slices.ContainsFunc(c.Args, func(arg string) bool { return strings.Contains(arg, s) }) {
+			return true
+		}
+		for _, env := range c.Env {
+			if strings.Contains(env.Value, s) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // componentPostRenderers renders the lab's postRenderers list per component
 // as indented YAML, keyed by the agent-platform component name, for the
 // values template. Components without a patch are absent. imageNames is the
 // chart image name each configured Deployment target replaces (resolved from
 // the render, or defaultDevImageNames); a configured target absent from it
-// renders no override.
-func componentPostRenderers(cfg *config.Config, imageNames map[string]string) (map[string]string, error) {
+// renders no override. sidecars is the sidecar's targets per component
+// (dexLocalhostTargets) — nil in a render without the component charts
+// (`agentlab render`, the values the roster is rendered from), which patches
+// no sidecar: `agentlab platform` renders the values once more with them.
+func componentPostRenderers(cfg *config.Config, imageNames map[string]string, sidecars map[string][]string) (map[string]string, error) {
 	patches := map[string][]kustomizePatch{
-		componentMuster:        {hostNetworkPatch(componentMuster)},
-		componentBackstage:     {hostNetworkPatch(componentBackstage)},
-		componentKagent:        {kagentUINodePortPatch()},
-		componentMCPKubernetes: {dexLocalhostPatch(componentMCPKubernetes, cfg.DexPort)},
+		componentKagent: {kagentUINodePortPatch()},
 	}
-	if cfg.ModelManagerEnabled() {
-		patches[modelManagerMCPServer] = []kustomizePatch{dexLocalhostPatch(modelManagerMCPServer, cfg.DexPort)}
+	for _, component := range hostNetworkComponents {
+		patches[component] = []kustomizePatch{hostNetworkPatch(component)}
 	}
-	if cfg.Platform.Agents {
-		patches[agentManagerMCPServer] = []kustomizePatch{dexLocalhostPatch(agentManagerMCPServer, cfg.DexPort)}
-	}
-	if cfg.VMManagerEnabled() {
-		patches[vmManagerMCPServer] = []kustomizePatch{dexLocalhostPatch(vmManagerMCPServer, cfg.DexPort)}
+	for _, component := range slices.Sorted(maps.Keys(sidecars)) {
+		for _, deployment := range sidecars[component] {
+			patches[component] = append(patches[component], dexLocalhostPatch(deployment, cfg.DexPort))
+		}
 	}
 	images := map[string][]kustomizeImage{}
 	for _, component := range slices.Sorted(maps.Keys(cfg.Platform.DevImages)) {

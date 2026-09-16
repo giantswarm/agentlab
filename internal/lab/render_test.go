@@ -117,8 +117,22 @@ func TestPlatformValuesLabShape(t *testing.T) {
 	cfg := config.Default()
 	cfg.Platform.ModelManager = config.ModelManager{Enabled: true, Backends: []string{ollama}}
 	cfg.Platform.DevImages = map[string]string{componentKagent: "kagent-controller:dev-9f8e"}
+	// The second render of `agentlab platform`: the sidecar's targets as the
+	// rule found them on the component renders — the servers the lab turns
+	// on and cluster-manager, which only an overlay does.
+	sidecars := map[string][]string{
+		componentMCPKubernetes: {componentMCPKubernetes},
+		modelManagerMCPServer:  {modelManagerMCPServer},
+		agentManagerMCPServer:  {agentManagerMCPServer},
+		clusterManager:         {clusterManager},
+	}
+	postRenderers, err := componentPostRenderers(cfg, defaultDevImageNames(cfg), sidecars)
+	if err != nil {
+		t.Fatal(err)
+	}
 	out, err := renderTemplate(cfg, "agent-platform-values.yaml.tmpl", func(d *tmplData) {
 		d.ModelManagerEndpoints = map[string]string{ollama: "http://172.21.0.1:11434"}
+		d.PostRenderers = postRenderers
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -155,10 +169,16 @@ func TestPlatformValuesLabShape(t *testing.T) {
 	if at("components", "dicebear", "enabled") != false {
 		t.Errorf("components.dicebear.enabled = %v, want false", at("components", "dicebear", "enabled"))
 	}
-	for _, c := range []string{componentMuster, componentBackstage, componentKagent, componentMCPKubernetes, modelManagerMCPServer, agentManagerMCPServer} {
+	for _, c := range []string{componentMuster, componentBackstage, componentKagent, componentMCPKubernetes, modelManagerMCPServer, agentManagerMCPServer, clusterManager} {
 		if _, ok := at("components", c, "postRenderers").([]any); !ok {
 			t.Errorf("components.%s.postRenderers missing: %v", c, at("components", c))
 		}
+	}
+	// cluster-manager has no block in the roster: its patch renders through
+	// the trailing range, and nothing but the patch — the chart's default and
+	// the overlay decide `enabled`.
+	if comp, _ := at("components", clusterManager).(map[string]any); len(comp) != 1 {
+		t.Errorf("components.%s: want the postRenderers only, got %v", clusterManager, comp)
 	}
 	// The dev image rides the component's postRenderers as a kustomize image.
 	kagent := at("components", componentKagent, "postRenderers").([]any)[0].(map[string]any)["kustomize"].(map[string]any)
@@ -192,6 +212,73 @@ func TestPlatformValuesLabShape(t *testing.T) {
 	}
 	if at("global", "identity", "issuerUrl") != cfg.Issuer() || at("global", "identity", "ca", "secretName") != "dex-ca" {
 		t.Errorf("global.identity: %v", at("global", "identity"))
+	}
+}
+
+// Every patch reaches its component exactly once, whatever the lab's
+// toggles: a component the roster names a block for renders it there; one
+// the roster leaves out under these settings — model-manager with the lab's
+// managed models off while the chart runs it by default, cluster-manager
+// always — renders through the trailing range. A key rendered twice would
+// not parse (yaml.v3 refuses a duplicate mapping key), which is what pins
+// ExtraPostRenderers to the template's conditions.
+func TestPlatformValuesExtraPostRenderers(t *testing.T) {
+	sidecars := map[string][]string{
+		componentMCPKubernetes: {componentMCPKubernetes},
+		modelManagerMCPServer:  {modelManagerMCPServer},
+		agentManagerMCPServer:  {agentManagerMCPServer},
+		vmManagerMCPServer:     {vmManagerMCPServer},
+		clusterManager:         {clusterManager},
+	}
+	for name, cfg := range map[string]*config.Config{
+		"everything off": func() *config.Config {
+			cfg := config.Default()
+			cfg.Platform.Agents, cfg.Backstage.Enabled, cfg.Platform.Observability = false, false, false
+			return cfg
+		}(),
+		"everything on": func() *config.Config {
+			cfg := config.Default()
+			cfg.Platform.Agents, cfg.Backstage.Enabled = true, true
+			cfg.Platform.ModelManager = config.ModelManager{Enabled: true, Backends: []string{ollama}}
+			cfg.Platform.VMManager.Enabled = true
+			cfg.Platform.KlausGateway.Enabled = true
+			cfg.Platform.DevImages = map[string]string{componentMuster: devMusterRef, componentBackstage: devBackstageRef, klausGatewayComponent: "klaus-gateway:dev"}
+			return cfg
+		}(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			postRenderers, err := componentPostRenderers(cfg, defaultDevImageNames(cfg), sidecars)
+			if err != nil {
+				t.Fatal(err)
+			}
+			out, err := renderTemplate(cfg, platformValuesTemplate, func(d *tmplData) {
+				d.PostRenderers = postRenderers
+				d.ModelManagerEndpoints = map[string]string{ollama: "http://172.21.0.1:11434"}
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var values struct {
+				Components map[string]map[string]any `yaml:"components"`
+			}
+			if err := yaml.Unmarshal(out, &values); err != nil {
+				t.Fatalf("%v\n%s", err, out)
+			}
+			for component := range sidecars {
+				list, ok := values.Components[component]["postRenderers"].([]any)
+				if !ok || len(list) != 1 {
+					t.Errorf("components.%s.postRenderers: want the one entry, got %v", component, values.Components[component])
+				}
+			}
+			// The blocks that are always there render their patches only
+			// while their toggle is on; the range never doubles them.
+			for _, component := range []string{componentKagent, componentBackstage} {
+				comp := values.Components[component]
+				if _, ok := comp["enabled"]; !ok {
+					t.Errorf("components.%s: want the enabled key, got %v", component, comp)
+				}
+			}
+		})
 	}
 }
 

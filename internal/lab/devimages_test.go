@@ -280,12 +280,7 @@ func TestValuesTemplateHarnessDevImage(t *testing.T) {
 	cfg.Platform.Agents = true
 	cfg.Platform.DevImages = map[string]string{config.DevImageHarness: devHarnessRef}
 	pinned := "localhost:5001/golang-adk@sha256:" + strings.Repeat("3f", 32)
-	dev := &devImages{harness: pinned}
-	mutate, err := dev.templateData(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	out, err := renderTemplate(cfg, platformValuesTemplate, mutate)
+	out, err := renderTemplate(cfg, platformValuesTemplate, func(t *tmplData) { t.HarnessDevImage = pinned })
 	if err != nil {
 		t.Fatal(err)
 	}

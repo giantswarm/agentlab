@@ -134,19 +134,6 @@ func prepareDevImages(cfg *config.Config, renders map[string]string) (*devImages
 	return dev, nil
 }
 
-// templateData is the values template's mutator for this swap: the
-// postRenderers with the resolved names, and the Harness pin.
-func (d *devImages) templateData(cfg *config.Config) (func(*tmplData), error) {
-	postRenderers, err := componentPostRenderers(cfg, d.names)
-	if err != nil {
-		return nil, err
-	}
-	return func(t *tmplData) {
-		t.PostRenderers = postRenderers
-		t.HarnessDevImage = d.harness
-	}, nil
-}
-
 // registryFlag is atelet's flag for the lab registry as the substrate values
 // carry it.
 func registryFlag(cfg *config.Config) string {
@@ -225,8 +212,10 @@ func resolveDevImageNames(cfg *config.Config, renders map[string]string) (map[st
 	return names, nil
 }
 
-// renderedWorkload is the part of a rendered Deployment the name resolution
-// reads: its name and its containers' names and images.
+// renderedWorkload is the part of a rendered Deployment the lab reads off a
+// component chart's render: its name and its pod template's host-network
+// flag and containers — names and images (the dev-image swap), arguments and
+// environment (the sidecar rule, dexLocalhostTargets).
 type renderedWorkload struct {
 	Kind     string `yaml:"kind"`
 	Metadata struct {
@@ -235,38 +224,64 @@ type renderedWorkload struct {
 	Spec struct {
 		Template struct {
 			Spec struct {
-				Containers []struct {
-					Name  string `yaml:"name"`
-					Image string `yaml:"image"`
-				} `yaml:"containers"`
+				HostNetwork bool                `yaml:"hostNetwork"`
+				Containers  []renderedContainer `yaml:"containers"`
 			} `yaml:"spec"`
 		} `yaml:"template"`
 	} `yaml:"spec"`
 }
 
-// renderedContainerImage finds the image of the named container of the
-// named Deployment in a multi-document render. Documents that are not
-// objects (comments, empty separators) are skipped.
-func renderedContainerImage(rendered, deployment, container string) (string, bool) {
+// renderedContainer is one container of a renderedWorkload.
+type renderedContainer struct {
+	Name  string   `yaml:"name"`
+	Image string   `yaml:"image"`
+	Args  []string `yaml:"args"`
+	Env   []struct {
+		Name  string `yaml:"name"`
+		Value string `yaml:"value"`
+	} `yaml:"env"`
+}
+
+// renderedDeployments lists the Deployments of a multi-document render.
+// Documents that are not objects (comments, empty separators) or not of
+// the shape (a scalar, a list) are skipped; a render that is not YAML ends
+// the list where it breaks.
+func renderedDeployments(rendered string) []renderedWorkload {
 	dec := yaml.NewDecoder(strings.NewReader(rendered))
+	var out []renderedWorkload
 	for {
 		var doc renderedWorkload
 		err := dec.Decode(&doc)
 		if errors.Is(err, io.EOF) {
-			return "", false
+			return out
+		}
+		var typeErr *yaml.TypeError
+		if errors.As(err, &typeErr) {
+			continue
 		}
 		if err != nil {
+			return out
+		}
+		if doc.Kind == kindDeployment {
+			out = append(out, doc)
+		}
+	}
+}
+
+// renderedContainerImage finds the image of the named container of the
+// named Deployment in a multi-document render.
+func renderedContainerImage(rendered, deployment, container string) (string, bool) {
+	for _, d := range renderedDeployments(rendered) {
+		if d.Metadata.Name != deployment {
 			continue
 		}
-		if doc.Kind != kindDeployment || doc.Metadata.Name != deployment {
-			continue
-		}
-		for _, c := range doc.Spec.Template.Spec.Containers {
+		for _, c := range d.Spec.Template.Spec.Containers {
 			if c.Name == container && c.Image != "" {
 				return c.Image, true
 			}
 		}
 	}
+	return "", false
 }
 
 // imageName is a ref without its tag or digest — the name kustomize's image
