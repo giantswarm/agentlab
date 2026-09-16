@@ -58,13 +58,19 @@ const (
 )
 
 // userSalt prefixes the string agentlab hashes into its user identifier. It
-// is not a secret and cannot be one — agentlab is a public repo — and it does
-// not need to be: the value it guards is a 128-bit machine UUID, so there is
-// no candidate set to enumerate and no rainbow table to build, salt or no
-// salt. Its one job is to keep the namespace apart, so the same computer
-// hashes to a different identifier for agentlab than for kubectl-gs or any
-// other TelemetryDeck reporter. The trailing version marks the layout of the
-// hashed string: changing either resets every user in the dashboard.
+// is not a secret and cannot be one — agentlab is a public repo. Its one job
+// is domain separation: the same computer hashes to a different identifier
+// for agentlab than for kubectl-gs or any other TelemetryDeck reporter.
+//
+// It is not a defence against guessing the inputs, and the hash should not be
+// treated as one. The machine identifiers are derived from hardware or
+// written at install time, not drawn at random, and the user name alongside
+// them carries little entropy; someone holding both for a given computer can
+// confirm a row in the dashboard. That is no worse than what the MAC-derived
+// default gave, but it is a confirmation the salt does not prevent.
+//
+// The trailing version marks the layout of the hashed string: changing either
+// resets every user in the dashboard.
 const userSalt = "agentlab-telemetry-v1"
 
 // machineID and osUser are the inputs to userID, as vars so tests can pin

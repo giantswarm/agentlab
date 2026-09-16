@@ -107,6 +107,8 @@ func TestFirstFileSkipsMissingAndEmpty(t *testing.T) {
 	missing := filepath.Join(dir, "absent")
 	empty := write("empty", "")
 	blank := write("blank", "  \n")
+	uninitialized := write("uninitialized", "uninitialized\n")
+	zeros := write("zeros", "00000000-0000-0000-0000-000000000000\n")
 	filled := write("filled", stored+"\n")
 
 	for _, tc := range []struct {
@@ -118,7 +120,14 @@ func TestFirstFileSkipsMissingAndEmpty(t *testing.T) {
 		{"a missing first path falls through", []string{missing, filled}, stored},
 		{"an empty one falls through", []string{empty, filled}, stored},
 		{"so does one holding only whitespace", []string{blank, filled}, stored},
+		// The case /var/lib/dbus/machine-id exists for: systemd writes
+		// "uninitialized" before the first save, and a first path that holds
+		// it must not stop the search.
+		{"systemd's first-boot marker falls through to the next path", []string{uninitialized, filled}, stored},
+		{"so does an all-zeros identifier", []string{zeros, filled}, stored},
+		{"a first path holding junk does not win", []string{uninitialized, zeros, blank, filled}, stored},
 		{"nothing readable is an error", []string{missing, empty}, ""},
+		{"nothing usable is an error too", []string{uninitialized, zeros}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := firstFile(tc.paths...)

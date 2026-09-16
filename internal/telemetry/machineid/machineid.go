@@ -45,17 +45,20 @@ func canonical(raw string) (string, bool) {
 	return u.String(), true
 }
 
-// firstFile returns the contents of the first path that exists and holds
-// something. It lives here rather than in machineid_linux.go so its branches
-// run on every platform the tests do.
+// firstFile returns the contents of the first path holding an identifier.
+// Missing, empty and unusable all fall through alike: systemd writes the
+// literal "uninitialized" into /etc/machine-id before the first save, and
+// treating that as an answer would leave the later paths unread in the one
+// case they exist for. It lives here rather than in machineid_linux.go so
+// its branches run on every platform the tests do.
 func firstFile(paths ...string) (string, error) {
 	for _, p := range paths {
 		raw, err := os.ReadFile(p) // #nosec G304 -- fixed OS paths, varied only by tests
 		if err != nil {
 			continue
 		}
-		if s := strings.TrimSpace(string(raw)); s != "" {
-			return s, nil
+		if _, ok := canonical(string(raw)); ok {
+			return strings.TrimSpace(string(raw)), nil
 		}
 	}
 	return "", fmt.Errorf("none of %s holds a machine identifier", strings.Join(paths, ", "))

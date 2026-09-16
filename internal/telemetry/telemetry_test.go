@@ -148,6 +148,10 @@ func TestCommandPostsOneSignal(t *testing.T) {
 		// this is the assertion that agentlab's own identifier was wired in
 		// at all: without it a missing WithUserID looks identical, the
 		// library's derived digest being 64 hex characters too.
+		//
+		// No salt in the sum below, because agentlab does not call
+		// WithHashSalt and the library's own defaults to "". Adding one
+		// there fails here, and this is the line to change.
 		want, ok := userID()
 		if !ok {
 			t.Fatal("the pinned identity did not reach userID")
