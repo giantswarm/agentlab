@@ -595,6 +595,15 @@ error.
   vendored and gitignored; out of scope here.
 - **`login-browser.py` fixed callback port 5555** — must be pre-registered in
   Dex's `redirectURIs`; a random port would break the static client. By design.
+- **The Cilium policy CRDs served without Cilium** (`cilium.io/v2`,
+  `internal/lab/templates/cilium-crds.yaml`, applied by `up` next to the
+  Gateway API CRDs; `providedapis.go`) — every Giant Swarm cluster runs
+  Cilium, so component charts render `CiliumNetworkPolicy` objects
+  unconditionally (gpu-operator-app) and their HelmReleases fail in kind
+  without the API. The alternative, a Cilium in kind, would replace kindnet
+  for the sake of policies the lab never tests; the CRDs alone let the charts
+  install and validate their policies against the real schema, and enforce
+  nothing. Named as a lab-only difference in docs/platform.md.
 - **The OAuth sign-in fixture aggregates muster itself** (`lab-oauth-fixture`
   → muster's own protected `/mcp`, `internal/lab/oauthfixture.go`) — the one
   way to get a downstream that stays `Auth Required` behind an authorization
