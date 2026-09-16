@@ -4,8 +4,12 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 
+	"github.com/Masterminds/semver/v3"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/giantswarm/agentlab/internal/config"
 )
 
 // Agent Substrate is kagent API v2's actor runtime: WorkerPools of sandboxed
@@ -80,6 +84,9 @@ var ateletImageCacheArgs = []string{
 // ateletDaemonSet is the substrate chart's per-node agent (templates/atelet.yaml).
 const ateletDaemonSet = "atelet"
 
+// imageKey is a container's image field as the apiserver hands it back.
+const imageKey = "image"
+
 // proveAteletImageCachePolicy asserts the atelet DaemonSet carries every flag
 // of ateletImageCacheArgs and that its pods have rolled to that spec — the
 // live half of the policy: values that render but never reach the node
@@ -110,15 +117,7 @@ func proveAteletImageCachePolicy(ctx context.Context) (int64, error) {
 // ateletArgsMissing is the policy flags the DaemonSet's atelet container does
 // not carry, in policy order; empty when it carries them all.
 func ateletArgsMissing(ds *unstructured.Unstructured) []string {
-	var args []any
-	containers, _, _ := unstructured.NestedSlice(ds.Object, "spec", "template", "spec", "containers")
-	for _, c := range containers {
-		container, _ := c.(map[string]any)
-		if container["name"] == ateletDaemonSet {
-			args, _ = container["args"].([]any)
-			break
-		}
-	}
+	args, _ := ateletContainer(ds)["args"].([]any)
 	var missing []string
 	for _, want := range ateletImageCacheArgs {
 		if !slices.Contains(args, any(want)) {
@@ -126,4 +125,139 @@ func ateletArgsMissing(ds *unstructured.Unstructured) []string {
 		}
 	}
 	return missing
+}
+
+// ateletContainer is the DaemonSet's atelet container as the apiserver hands
+// it back; nil when the pod template has none.
+func ateletContainer(ds *unstructured.Unstructured) map[string]any {
+	containers, _, _ := unstructured.NestedSlice(ds.Object, "spec", "template", "spec", "containers")
+	for _, c := range containers {
+		if container, _ := c.(map[string]any); container[nameKey] == ateletDaemonSet {
+			return container
+		}
+	}
+	return nil
+}
+
+// The two halves of Agent Substrate, held to one release (agentlab#187). The
+// atelet is the chart's `components.substrate`; the WorkerPool's worker image
+// (`spec.workerImage`, ateom-gvisor) is the kagent chart's stamp — kagent's
+// own Substrate pin, forwarded by the meta chart. A meta chart whose kagent
+// range admits a kagent from a newer Substrate release while its substrate
+// range stays installs green and boots no golden actor: agent-platform 4.15.2
+// pinned Substrate 0.0.27-gs.9 and kagent `>=0.11.0-gs.12 <0.11.1-0`, kagent
+// gs.14 moved the worker image to 0.0.30, and Substrate 0.0.30 had renamed
+// the actor's pause bundle (`bundles/pause` → `bundles/_pause`) — every
+// compile the atelet asked of the worker failed on `bundles/_pause/
+// config.json: no such file or directory`, the AgentTemplate sat at
+// ActorTemplatePending ("golden snapshot compiling"), `agentlab up` and the
+// platform releases stayed green, `agents-test` burned its five minutes and
+// only the atelet log said why. The release compared is the image tag without
+// its prerelease (0.0.30 from 0.0.30-gs.4): the line's -gs.N patches share
+// the upstream release's bundle layout, a new upstream release changes it.
+
+// workerPoolsResource is Substrate's WorkerPool API, resolved through
+// discovery like every custom kind the lab reads (never pinned here).
+const workerPoolsResource = "workerpools.ate.dev"
+
+// substrateImages is one WorkerPool's half of the pair next to the atelet's.
+type substrateImages struct {
+	atelet  string // the atelet container's image on the DaemonSet
+	pool    string // the WorkerPool, namespace/name
+	worker  string // its spec.workerImage
+	release string // the Substrate release both are on
+}
+
+func (s substrateImages) String() string {
+	return fmt.Sprintf("Substrate %s: atelet %s, WorkerPool %s workers %s", s.release, s.atelet, s.pool, s.worker)
+}
+
+// proveSubstrateLine reads the atelet's image off its DaemonSet and the
+// worker image off every WorkerPool in the kagent namespace and refuses a
+// lab whose halves are different Substrate releases, naming both images and
+// the remedy (substrateSkewRemedy). Cheap — two reads — so `agentlab
+// platform` runs it after the install and `platform-test` asserts it.
+func proveSubstrateLine(ctx context.Context, remedy string) ([]substrateImages, error) {
+	gvr, err := gvrFor("daemonsets.apps")
+	if err != nil {
+		return nil, err
+	}
+	ds, err := getObject(ctx, gvr, substrateNamespace, ateletDaemonSet)
+	if err != nil {
+		return nil, fmt.Errorf("reading the %s DaemonSet in %s: %w", ateletDaemonSet, substrateNamespace, err)
+	}
+	atelet, _ := ateletContainer(ds)[imageKey].(string)
+	if atelet == "" {
+		return nil, fmt.Errorf("the %s DaemonSet in %s has no %s container", ateletDaemonSet, substrateNamespace, ateletDaemonSet)
+	}
+	ateletRelease, err := substrateReleaseOf(atelet)
+	if err != nil {
+		return nil, fmt.Errorf("the %s DaemonSet: %w", ateletDaemonSet, err)
+	}
+	poolGVR, err := gvrFor(workerPoolsResource)
+	if err != nil {
+		return nil, err
+	}
+	pools, err := listObjects(ctx, poolGVR, kagentNamespace, "")
+	if err != nil {
+		return nil, fmt.Errorf("listing the WorkerPools in %s: %w", kagentNamespace, err)
+	}
+	if len(pools) == 0 {
+		return nil, fmt.Errorf("no WorkerPool in %s — the kagent chart creates it (substrateWorkerPool.create) and the platform Harness runs its actors on it; `kubectl -n %s get helmrelease kagent`", kagentNamespace, kagentNamespace)
+	}
+	var images []substrateImages
+	for _, pool := range pools {
+		name := pool.GetNamespace() + "/" + pool.GetName()
+		worker, _, _ := unstructured.NestedString(pool.Object, "spec", "workerImage")
+		if worker == "" {
+			return nil, fmt.Errorf("WorkerPool %s names no spec.workerImage", name)
+		}
+		release, err := substrateReleaseOf(worker)
+		if err != nil {
+			return nil, fmt.Errorf("WorkerPool %s: %w", name, err)
+		}
+		if release != ateletRelease {
+			return nil, fmt.Errorf("the two halves of Agent Substrate are different releases: atelet %s (Substrate %s, the chart's components.substrate) and the workers of WorkerPool %s %s (Substrate %s, the worker image the kagent chart stamps) — "+
+				"a worker from another release than its atelet looks for actor bundles the atelet does not write, so no golden actor boots and every AgentTemplate stays ActorTemplatePending (`kubectl -n %s logs ds/%s` has the failing compiles). %s",
+				atelet, ateletRelease, name, worker, release, substrateNamespace, ateletDaemonSet, remedy)
+		}
+		images = append(images, substrateImages{atelet: atelet, pool: name, worker: worker, release: release})
+	}
+	return images, nil
+}
+
+// substrateReleaseOf is the Substrate release an image is from: its tag's
+// version without the prerelease (0.0.30 from
+// ghcr.io/giantswarm/substrate/atelet:0.0.30-gs.4). An image with no tag or
+// a tag that is no version cannot be placed and is refused by name.
+func substrateReleaseOf(image string) (string, error) {
+	ref, _, _ := strings.Cut(image, "@")
+	name := ref[strings.LastIndex(ref, "/")+1:]
+	_, tag, ok := strings.Cut(name, ":")
+	if !ok || tag == "" {
+		return "", fmt.Errorf("image %s names no tag to read its Substrate release off", image)
+	}
+	v, err := semver.NewVersion(tag)
+	if err != nil {
+		return "", fmt.Errorf("image %s: tag %q is not a version (%v)", image, tag, err)
+	}
+	return fmt.Sprintf("%d.%d.%d", v.Major(), v.Minor(), v.Patch()), nil
+}
+
+// substrateSkewRemedy is the fix a skewed lab is told, for the way this lab
+// selects its chart: a release pin moves to a chart that pins kagent and
+// Substrate together — the default when the lab is not on it, otherwise a
+// release of the person's choosing; a checkout or the dev channel is the
+// chart's own to align.
+func substrateSkewRemedy(cfg *config.Config) string {
+	switch {
+	case cfg.Platform.ChartPath != "":
+		return fmt.Sprintf("The chart at %s pins them apart: align components.kagent with components.substrate (the worker image the kagent release stamps must be the release the substrate range installs), then `agentlab platform`.", cfg.Platform.ChartPath)
+	case cfg.Platform.ChartBranch != "":
+		return fmt.Sprintf("The dev channel of %s pins them apart: align components.kagent with components.substrate on the branch (the worker image the kagent release stamps must be the release the substrate range installs), then `agentlab platform`.", cfg.Platform.ChartBranch)
+	case cfg.Platform.ChartVersion != config.DefaultChartVersion:
+		return fmt.Sprintf("agent-platform %s pins them apart; the release this agentlab was verified with pins them together: `agentlab configure --defaults --chart-version %s && agentlab platform`.", cfg.Platform.ChartVersion, config.DefaultChartVersion)
+	default:
+		return fmt.Sprintf("agent-platform %s pins them apart: pick a release whose components.kagent range admits only kagent releases on the Substrate release components.substrate installs (`helm show values %s --version <version>`), then `agentlab configure --defaults --chart-version <version> && agentlab platform`.", cfg.Platform.ChartVersion, config.ChartRepository)
+	}
 }
