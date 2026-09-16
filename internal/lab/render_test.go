@@ -15,11 +15,15 @@ import (
 // The umbrella values hand every host model server to the one model-manager:
 // two or more backends render `model-manager.backends` with one endpoint
 // block each; a single one renders the chart's one-backend form.
+// ollamaLabEndpoint is the host Ollama as the kind docker network resolves it
+// in these fixtures.
+const ollamaLabEndpoint = "http://172.21.0.1:11434"
+
 func TestModelManagerValuesRenderBackends(t *testing.T) {
 	cfg := config.Default()
 	cfg.Platform.Enabled, cfg.Platform.Agents = true, true
 	cfg.Platform.ModelManager = config.ModelManager{Enabled: true, Backends: []string{ollama, lemonade}}
-	endpoints := map[string]string{ollama: "http://172.21.0.1:11434", lemonade: "http://172.21.0.1:13305"}
+	endpoints := map[string]string{ollama: ollamaLabEndpoint, lemonade: "http://172.21.0.1:13305"}
 	render := func() string {
 		out, err := renderTemplate(cfg, "agent-platform-values.yaml.tmpl", func(d *tmplData) { d.ModelManagerEndpoints = endpoints })
 		if err != nil {
@@ -131,7 +135,7 @@ func TestPlatformValuesLabShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, err := renderTemplate(cfg, "agent-platform-values.yaml.tmpl", func(d *tmplData) {
-		d.ModelManagerEndpoints = map[string]string{ollama: "http://172.21.0.1:11434"}
+		d.ModelManagerEndpoints = map[string]string{ollama: ollamaLabEndpoint}
 		d.PostRenderers = postRenderers
 	})
 	if err != nil {
@@ -242,7 +246,7 @@ func TestPlatformValuesExtraPostRenderers(t *testing.T) {
 			cfg.Platform.ModelManager = config.ModelManager{Enabled: true, Backends: []string{ollama}}
 			cfg.Platform.VMManager.Enabled = true
 			cfg.Platform.KlausGateway.Enabled = true
-			cfg.Platform.DevImages = map[string]string{componentMuster: devMusterRef, componentBackstage: devBackstageRef, klausGatewayComponent: "klaus-gateway:dev"}
+			cfg.Platform.DevImages = map[string]string{componentMuster: devMusterRef, componentBackstage: devBackstageRef}
 			return cfg
 		}(),
 	} {
@@ -253,7 +257,7 @@ func TestPlatformValuesExtraPostRenderers(t *testing.T) {
 			}
 			out, err := renderTemplate(cfg, platformValuesTemplate, func(d *tmplData) {
 				d.PostRenderers = postRenderers
-				d.ModelManagerEndpoints = map[string]string{ollama: "http://172.21.0.1:11434"}
+				d.ModelManagerEndpoints = map[string]string{ollama: ollamaLabEndpoint}
 			})
 			if err != nil {
 				t.Fatal(err)

@@ -339,7 +339,7 @@ spec:
           args: ["--dex-issuer-url=https://localhost:32000/dex"]
 `,
 		// Another Dex port is another lab's, or a real installation's.
-		"other-port": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: other\nspec:\n  template:\n    spec:\n      containers:\n        - name: x\n          args: [\"--dex-issuer-url=https://localhost:32001/dex\"]\n",
+		"other-port": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: another-lab\nspec:\n  template:\n    spec:\n      containers:\n        - name: x\n          args: [\"--dex-issuer-url=https://localhost:32001/dex\"]\n",
 		// A scalar document, then the object: the scalar is skipped.
 		"scalar-first": "just a string\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: after-scalar\nspec:\n  template:\n    spec:\n      containers:\n        - name: x\n          env:\n            - name: DEX_ISSUER_URL\n              value: https://localhost:32000/dex\n",
 		"empty":        "",
@@ -355,7 +355,7 @@ spec:
 	}
 	// The rule follows the lab's Dex port.
 	cfg.DexPort = 32001
-	if got := dexLocalhostTargets(cfg, renders); !reflect.DeepEqual(got, map[string][]string{"other-port": {"other"}}) {
+	if got := dexLocalhostTargets(cfg, renders); !reflect.DeepEqual(got, map[string][]string{"other-port": {"another-lab"}}) {
 		t.Errorf("dexLocalhostTargets on port 32001 = %v", got)
 	}
 	// Nothing to read, nothing to patch.
