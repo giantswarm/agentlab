@@ -320,7 +320,7 @@ func TestPlatformValuesModelManagerToggle(t *testing.T) {
 		comp, _ := values["components"].(map[string]any)[modelManagerMCPServer].(map[string]any)
 		return comp
 	}
-	for name, chartVersion := range map[string]string{"current line": config.DefaultChartVersion, "3.x line": "3.23.1"} {
+	for name, chartVersion := range map[string]string{"current line": config.DefaultChartVersion, "3.x line": legacyChartVersion} {
 		t.Run(name, func(t *testing.T) {
 			cfg := config.Default()
 			cfg.Platform.Agents = true
