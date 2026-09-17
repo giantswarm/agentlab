@@ -451,15 +451,17 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	if err != nil {
 		return err
 	}
-	sideloadPlatformImages(cfg, images)
 	// The WorkerPool as the chart is about to create it: its CPU feature-set
 	// pin against the node that would run the workers. Read off the render
 	// rather than off the lab's values, so the chart's own default is covered
 	// too — the pool's pods are ate-controller's, so nothing in the install's
-	// wait would ever report them Pending.
+	// wait would ever report them Pending. Before the side-load, like the
+	// sibling preflights: a cluster that cannot run the workers is refused
+	// without pulling the platform's images for it first.
 	if err := preflightWorkerPoolArch(ctx, renders); err != nil {
 		return err
 	}
+	sideloadPlatformImages(cfg, images)
 	// What only the renders could say goes into the values now, rendered
 	// once more: the dex-localhost sidecar's targets (dexLocalhostTargets —
 	// every Deployment the component charts tell the lab Dex's localhost
