@@ -454,6 +454,11 @@ func TestKagentServiceMonitorStaysOff(t *testing.T) {
 // /metrics). Everything else is the current line's render, byte for byte:
 // the legacy values are exactly the 4.x values minus those keys.
 func TestPlatformValuesLegacyChartShape(t *testing.T) {
+	// Only the 4.x line takes the $GITHUB_TOKEN keys (githubtoken.go), so an
+	// exported token separates the shapes in something the chart line has no
+	// part in — that half is TestGitHubTokenLegacyChartTakesNoKeys'.
+	t.Setenv(GitHubTokenEnv, "")
+
 	render := func(cfg *config.Config) (map[string]any, string) {
 		out, err := renderTemplate(cfg, "agent-platform-values.yaml.tmpl", nil)
 		if err != nil {
