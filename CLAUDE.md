@@ -215,13 +215,20 @@ The lab's own e2e checks are the `*-test` subcommands, not `go test`.
   so renders stay byte-identical (no spurious pod rolls).
 - `internal/forms` — the huh configuration form; tests drive it with scripted
   keystrokes.
-- `internal/telemetry` — one anonymous usage signal per user-facing command
-  to TelemetryDeck (giantswarm/telemetrydeck-go, kubectl-gs's signal shape:
-  `GiantSwarm.command` with the command path and the version; the version
-  and commit also as `TelemetryDeck.AppInfo.version`/`.buildNumber`, which
-  the dashboard's standard insights read). `main.go`
+- `internal/telemetry` — anonymous usage signals to TelemetryDeck
+  (giantswarm/telemetrydeck-go). One per user-facing command, kubectl-gs's
+  signal shape: `GiantSwarm.command` with the command path and the version
+  (the version and commit also as `TelemetryDeck.AppInfo.version`/
+  `.buildNumber`, which the dashboard's standard insights read); `main.go`
   wires it as the root `PersistentPreRun`; hidden commands (`__complete`),
-  `completion` and `help` never count. Opt-outs:
+  `completion` and `help` never count. And one per platform install,
+  `GiantSwarm.agentlab.platform`, sent by `platformUp` (so `up` and
+  `platform`, nothing else — a test in `internal/lab` pins the call sites)
+  once the chart is resolved: `chartVersion`, `chartMajor`, `chartChannel`
+  (stable/dev/path), `chartPinned`, `legacyShape` and the feature switches as
+  booleans — never a path (a chart directory reports its Chart.yaml version),
+  host name, user or token. Both signals share one client, so the one
+  `Flush` covers both. Opt-outs:
   `AGENTLAB_TELEMETRY_OPTOUT`, `DO_NOT_TRACK=1`. When iterating on the lab,
   `AGENTLAB_TELEMETRY_TESTMODE=1` keeps the runs out of the production
   numbers (and logs delivery errors). The user identifier is agentlab's own,

@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/giantswarm/agentlab/internal/config"
+	"github.com/giantswarm/agentlab/internal/telemetry"
 )
 
 const platformNamespace = "agent-platform"
@@ -208,6 +209,17 @@ func (c platformChart) remedy() string {
 	}
 }
 
+// installedVersion is the version of the chart this run installs: the pinned
+// or resolved tag of a registry chart; for a chart directory what its
+// Chart.yaml says — empty when that cannot be read, which the install reports
+// properly, later.
+func (c platformChart) installedVersion() string {
+	if c.version != "" {
+		return c.version
+	}
+	return chartDirVersion(c.ref)
+}
+
 // platformChartFor reads the chart source from the config: platform.chartPath
 // wins over the pinned release; on the dev channel the version is the
 // branch's build ResolveChartVersion recorded.
@@ -241,8 +253,13 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 		}
 	}
 	chart := platformChartFor(cfg)
-	step("Installing %s in the lab shape (bundled Flux engine on, self-management off)", chart)
 	ctx := context.Background()
+	// The platform signal, now that the chart is resolved: the meta chart
+	// line this lab installs, once per run (docs/telemetry.md). Ahead of the
+	// install, so a run that fails to install still says which line it was
+	// about to — the way the command signal counts failed runs.
+	telemetry.Platform(ctx, cfg, chart.installedVersion())
+	step("Installing %s in the lab shape (bundled Flux engine on, self-management off)", chart)
 
 	// The cluster-level APIs the lab provides itself (providedapis.go: the
 	// Gateway API, the Cilium policy CRDs) — before anything that renders

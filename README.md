@@ -143,7 +143,7 @@ machine, is in [Getting started](docs/getting-started.md).
 | [Backstage](docs/backstage.md) | The human frontend: the muster plugin, agents and models in the portal, the agent create flow |
 | [Identity](docs/identity.md) | Users and groups, the shared issuer, the Dex version, wiring another app, `trustedPeers` |
 | [Troubleshooting](docs/troubleshooting.md) | The gotchas that cost time |
-| [Usage data](docs/telemetry.md) | The one anonymous signal per command, and how to opt out |
+| [Usage data](docs/telemetry.md) | The anonymous usage signals — one per command, one per platform install naming the chart line — and how to opt out |
 | [Development](docs/development.md) | Repository layout, building and testing, the hack journal |
 
 ## Development

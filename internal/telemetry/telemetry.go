@@ -1,14 +1,16 @@
-// Package telemetry reports one anonymous usage signal per agentlab command
-// to TelemetryDeck, the way kubectl-gs does: which command ran, on which
-// agentlab version, operating system and architecture, under a hashed
+// Package telemetry reports anonymous usage signals to TelemetryDeck, the way
+// kubectl-gs does. One per agentlab command (Command): which command ran, on
+// which agentlab version, operating system and architecture, under a hashed
 // machine identifier that lets Giant Swarm count users without knowing who
-// they are. Nothing about the lab — its configuration, users, clusters,
-// arguments or flags — leaves the machine. See docs/telemetry.md.
+// they are. And one per platform install (Platform): the meta chart line the
+// lab installs and its feature switches, as versions and booleans. Nothing
+// else about the lab — its users, clusters, paths, arguments or flags —
+// leaves the machine. See docs/telemetry.md.
 //
 // Setting AGENTLAB_TELEMETRY_OPTOUT (any value) or the console convention
-// DO_NOT_TRACK=1 disables it. Reporting never fails a command: the signal
-// travels while the command works, and a command that finishes first waits
-// for it at most half a second (Flush) before the process exits.
+// DO_NOT_TRACK=1 disables both. Reporting never fails a command: the signals
+// travel while the command works, and a command that finishes first waits
+// for them at most half a second (Flush) before the process exits.
 package telemetry
 
 import (
@@ -84,7 +86,8 @@ var (
 // server. Empty means the library's default.
 var endpoint string
 
-// sender is the client Command sent through, kept for Flush; nil until then.
+// sender is the client every signal goes through (client), kept for Flush;
+// nil until the first signal.
 var sender *telemetrydeck.Client
 
 // Enabled reports whether this process sends usage signals.
@@ -118,13 +121,12 @@ func Command(cmd *cobra.Command) {
 	if !Enabled() || !UserFacing(cmd) {
 		return
 	}
-	client, err := newClient(testMode())
+	c, err := client()
 	if err != nil {
 		logf("creating the TelemetryDeck client: %s", err)
 		return
 	}
-	sender = client
-	err = client.SendSignal(cmd.Context(), signalType, map[string]interface{}{
+	err = c.SendSignal(cmd.Context(), signalType, map[string]interface{}{
 		"appVersion": project.Version(),
 		"command":    cmd.CommandPath(),
 	})
@@ -133,11 +135,12 @@ func Command(cmd *cobra.Command) {
 	}
 }
 
-// Flush lets the signal Command sent finish its trip before the process
-// exits, waiting at most flushTimeout (and no longer than ctx allows): a
-// sub-second command such as `agentlab version` would otherwise exit before
-// its request has left the machine. Never an error for the caller — a signal
-// that did not make it is dropped, and said so only in test mode.
+// Flush lets the signals sent so far (Command, Platform) finish their trip
+// before the process exits, waiting at most flushTimeout (and no longer than
+// ctx allows): a sub-second command such as `agentlab version` would
+// otherwise exit before its request has left the machine. Never an error for
+// the caller — a signal that did not make it is dropped, and said so only in
+// test mode.
 func Flush(ctx context.Context) {
 	if sender == nil {
 		return
@@ -145,8 +148,21 @@ func Flush(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, flushTimeout)
 	defer cancel()
 	if err := sender.Flush(ctx); err != nil {
-		logf("the usage signal was not delivered within %s: %s", flushTimeout, err)
+		logf("a usage signal was not delivered within %s: %s", flushTimeout, err)
 	}
+}
+
+// client is the process's TelemetryDeck client: created by the first signal,
+// shared by every later one, so one Flush waits for all of them.
+func client() (*telemetrydeck.Client, error) {
+	if sender == nil {
+		c, err := newClient(testMode())
+		if err != nil {
+			return nil, err
+		}
+		sender = c
+	}
+	return sender, nil
 }
 
 // userID identifies one person on one computer: the identifier the OS keeps

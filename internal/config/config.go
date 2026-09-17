@@ -1057,11 +1057,42 @@ func (c *Config) KlausGatewayEnabled() bool {
 	return c.Platform.Enabled && c.Platform.Agents && c.Platform.KlausGateway.Enabled
 }
 
+// The chart channels: where the meta chart the lab installs comes from.
+const (
+	// ChartChannelStable is a released chart, pinned by platform.chartVersion.
+	ChartChannelStable = "stable"
+	// ChartChannelDev is the dev channel: the newest dev build of
+	// platform.chartBranch (or the one platform.chartPinned froze).
+	ChartChannelDev = "dev"
+	// ChartChannelPath is a chart directory, platform.chartPath.
+	ChartChannelPath = "path"
+)
+
+// ChartChannel names where the meta chart comes from: a chart directory wins
+// over a branch, a branch over the pinned release (the same precedence the
+// install applies).
+func (c *Config) ChartChannel() string {
+	switch {
+	case c.Platform.ChartPath != "":
+		return ChartChannelPath
+	case c.Platform.ChartBranch != "":
+		return ChartChannelDev
+	default:
+		return ChartChannelStable
+	}
+}
+
 // ChartMajor is the major version of the meta chart release platform.
 // chartVersion pins (a leading v tolerated); 0 when it is not an exact
 // version — ValidateChartVersion rejects that before anything renders.
 func (c *Config) ChartMajor() uint64 {
-	v, err := semver.NewVersion(c.Platform.ChartVersion)
+	return MajorOf(c.Platform.ChartVersion)
+}
+
+// MajorOf is the major of an exact chart version (a leading v tolerated), 0
+// when the string is not one.
+func MajorOf(version string) uint64 {
+	v, err := semver.NewVersion(version)
 	if err != nil {
 		return 0
 	}
@@ -1077,7 +1108,7 @@ func (c *Config) ChartMajor() uint64 {
 // (platform.chartPath) is always the current line, whatever version its
 // Chart.yaml or resolved tag carries.
 func (c *Config) LegacyChart() bool {
-	if c.Platform.ChartBranch != "" || c.Platform.ChartPath != "" {
+	if c.ChartChannel() != ChartChannelStable {
 		return false
 	}
 	major := c.ChartMajor()
