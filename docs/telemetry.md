@@ -54,19 +54,76 @@ any of this, and would settle the container case. The lab does not do that on
 purpose: reporting usage should not write state to your disk as a side
 effect, and it would fail on a read-only home directory.
 
-Nothing from `agentlab.yaml`, `state/`, `certs/`, the cluster, the users, the
-models or the model servers is ever sent. Help output (`-h`, `--help`) and
-shell completion do not count. The signal goes out in the background while
-the command runs; a command that finishes before the signal has left the
-machine (`agentlab version`, say) waits for it at most half a second, then
-exits regardless. The signal is dropped when the network is unavailable — it
-never fails a command.
+Nothing from `state/`, `certs/`, the cluster, the users, the models or the
+model servers is ever sent, and from `agentlab.yaml` only what the platform
+signal below lists. Help output (`-h`, `--help`) and shell completion do not
+count. The signals go out in the background while the command runs; a command
+that finishes before they have left the machine (`agentlab version`, say)
+waits for them at most half a second, then exits regardless. A signal is
+dropped when the network is unavailable — it never fails a command.
+
+## The platform signal
+
+Since v0.51.0, a lab that installs the platform also reports **which meta
+chart it installs**: `agentlab up` and `agentlab platform` send one
+`GiantSwarm.agentlab.platform` signal per run, once the chart is resolved and
+ahead of the install, so a run that fails to install still counts. It
+carries:
+
+- `chartVersion` — the exact agent-platform chart version the run installs;
+  a chart directory reports the version its `Chart.yaml` carries, never
+  where it is
+- `chartMajor` — its major, `3` or `4`
+- `chartChannel` — `stable` for a pinned release, `dev` for a dev-channel
+  build (`platform.chartBranch`), `path` for a chart directory
+  (`platform.chartPath`)
+- `chartPinned` — whether a dev-channel lab is frozen at its recorded build
+- `legacyShape` — whether the lab renders the 3.x shape of the values
+- the feature switches of `agentlab.yaml` as booleans: `agents`,
+  `observability`, `fakeFleet`, `modelManager`, `vmManager`, `klausGateway`,
+  `backstage` — the effective ones (model-manager and klaus-gateway come with
+  the agents, so they read `false` while the agents are off)
+
+plus the version, platform and user-identifier parameters every signal
+carries. Versions and booleans only: no path, host name, user or token.
+`render`, the proofs and every other command send nothing beyond the command
+signal. The signal exists so that the remaining use of the 3.x chart shape can
+be measured before the lab drops it
+([#211](https://github.com/giantswarm/agentlab/issues/211)); the opt-outs and
+the test mode below apply to it exactly as to the command signal.
+
+In the TelemetryDeck dashboard, labs by chart line and channel is this
+Playground query (Explore → Playground → JSON Editor; the global time range
+and the Test Mode toggle apply):
+
+```json
+{
+  "queryType": "groupBy",
+  "granularity": "all",
+  "baseFilters": "noFilter",
+  "filter": {
+    "type": "and",
+    "fields": [
+      {"type": "selector", "dimension": "appID", "value": "89699F74-9A72-46BF-BF5A-7949901FBB36"},
+      {"type": "selector", "dimension": "type", "value": "GiantSwarm.agentlab.platform"}
+    ]
+  },
+  "dimensions": [
+    {"type": "default", "dimension": "chartMajor", "outputName": "major"},
+    {"type": "default", "dimension": "chartChannel", "outputName": "channel"}
+  ],
+  "aggregations": [{"type": "count", "name": "count"}]
+}
+```
+
+Swap `chartMajor` for `chartVersion` to see the exact versions, or add a
+`legacyShape` dimension to count the labs still rendering the 3.x shape.
 
 Data is stored at [TelemetryDeck](https://telemetrydeck.com/) on servers in
 the EU; see their [privacy FAQ](https://telemetrydeck.com/docs/guides/privacy-faq/).
 
-**Opting out:** set `AGENTLAB_TELEMETRY_OPTOUT` to any value, or the
-cross-tool [`DO_NOT_TRACK=1`](https://consoledonottrack.com/):
+**Opting out** (of both signals): set `AGENTLAB_TELEMETRY_OPTOUT` to any
+value, or the cross-tool [`DO_NOT_TRACK=1`](https://consoledonottrack.com/):
 
 ```bash
 export AGENTLAB_TELEMETRY_OPTOUT=1

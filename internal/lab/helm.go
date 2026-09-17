@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -23,6 +24,7 @@ import (
 	"helm.sh/helm/v4/pkg/chart/loader"
 	chartv2 "helm.sh/helm/v4/pkg/chart/v2"
 	valuesloader "helm.sh/helm/v4/pkg/chart/v2/loader"
+	chartv2util "helm.sh/helm/v4/pkg/chart/v2/util"
 	"helm.sh/helm/v4/pkg/cli"
 	"helm.sh/helm/v4/pkg/cli/values"
 	"helm.sh/helm/v4/pkg/getter"
@@ -569,6 +571,16 @@ func chartVersionOf(ch chart.Charter) string {
 		return c.Metadata.Version
 	}
 	return ""
+}
+
+// chartDirVersion is the version a chart directory's Chart.yaml carries,
+// empty when there is none to read.
+func chartDirVersion(dir string) string {
+	md, err := chartv2util.LoadChartfile(filepath.Join(dir, "Chart.yaml"))
+	if err != nil {
+		return ""
+	}
+	return md.Version
 }
 
 // helmTemplate is `helm template <release> <chart> -n <ns> -f <values>

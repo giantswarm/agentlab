@@ -101,7 +101,7 @@ must stay in agreement.
 main.go                          the CLI (cobra): one subcommand per lifecycle step, no logic
 internal/config/                 agentlab.yaml schema, defaults, validation; the fixed group vocabulary and the static OAuth clients
 internal/forms/                  the interactive configuration form (huh); tests drive it with scripted keystrokes
-internal/telemetry/              the one anonymous usage signal per command (TelemetryDeck)
+internal/telemetry/              the anonymous usage signals (TelemetryDeck): one per command, one per platform install
   machineid/                       the identifier the OS keeps for the computer (kern.uuid / machine-id / MachineGuid)
 internal/update/                 agentlab self-update + the newer-release hint before every command (go-selfupdate)
 pkg/project/                     version, commit, build time: ldflags from make/CI, else Go's VCS build info

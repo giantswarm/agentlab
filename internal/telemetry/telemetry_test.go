@@ -104,84 +104,63 @@ func TestEnabledHonoursTheOptOuts(t *testing.T) {
 // would receive it: one signal, kubectl-gs's type and payload shape, the user
 // hashed, test mode flagged.
 func TestCommandPostsOneSignal(t *testing.T) {
-	withAppID(t, testAppID)
+	got := capture(t)
 	// Pinned, because a CI container has no /etc/machine-id and would take
 	// the fallback path — which TestCommandFallsBackToTheLibraryIdentifier
 	// covers on purpose, and this test must not drift into.
 	withUserIdentity(t, "12a0d395-dbb9-3050-b357-f0f9f3185660", "tester")
-	t.Setenv(OptOutEnv, "")
-	t.Setenv(doNotTrackEnv, "")
-	t.Setenv(TestModeEnv, "1")
-
-	got := make(chan []map[string]any, 1)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		var signals []map[string]any
-		if err := json.Unmarshal(body, &signals); err != nil {
-			t.Errorf("body is not a signal array: %v\n%s", err, body)
-		}
-		got <- signals
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-	endpoint = srv.URL
-	defer func() { endpoint = "" }()
 
 	Command(lab(t, "up"))
 
-	select {
-	case signals := <-got:
-		if len(signals) != 1 {
-			t.Fatalf("got %d signals, want 1", len(signals))
+	signals := received(t, got)
+	if len(signals) != 1 {
+		t.Fatalf("got %d signals, want 1", len(signals))
+	}
+	s := signals[0]
+	if s["appID"] != appID {
+		t.Errorf("appID %v", s["appID"])
+	}
+	if s["type"] != signalType {
+		t.Errorf("type %v, want %s", s["type"], signalType)
+	}
+	if s["isTestMode"] != true {
+		t.Errorf("isTestMode %v, want true under %s", s["isTestMode"], TestModeEnv)
+	}
+	// The library hashes once more over what WithUserID was given, so
+	// this is the assertion that agentlab's own identifier was wired in
+	// at all: without it a missing WithUserID looks identical, the
+	// library's derived digest being 64 hex characters too.
+	//
+	// No salt in the sum below, because agentlab does not call
+	// WithHashSalt and the library's own defaults to "". Adding one
+	// there fails here, and this is the line to change.
+	want, ok := userID()
+	if !ok {
+		t.Fatal("the pinned identity did not reach userID")
+	}
+	sum := sha256.Sum256([]byte(want))
+	if user, _ := s["clientUser"].(string); user != hex.EncodeToString(sum[:]) {
+		t.Errorf("clientUser %q, want sha256 of agentlab's identifier %s", user, hex.EncodeToString(sum[:]))
+	}
+	payload, _ := s["payload"].(map[string]any)
+	if payload["command"] != "agentlab up" {
+		t.Errorf("payload.command %v", payload["command"])
+	}
+	if payload["appVersion"] != project.Version() {
+		t.Errorf("payload.appVersion %v, want %s", payload["appVersion"], project.Version())
+	}
+	// The dashboard's standard "App Versions" insight reads the reserved
+	// parameter, not the payload key the usage report queries.
+	if payload["TelemetryDeck.AppInfo.version"] != project.Version() {
+		t.Errorf("payload[TelemetryDeck.AppInfo.version] %v, want %s", payload["TelemetryDeck.AppInfo.version"], project.Version())
+	}
+	if sha := project.ShortSHA(); sha != "" && payload["TelemetryDeck.AppInfo.buildNumber"] != sha {
+		t.Errorf("payload[TelemetryDeck.AppInfo.buildNumber] %v, want %s", payload["TelemetryDeck.AppInfo.buildNumber"], sha)
+	}
+	for _, k := range []string{"TelemetryDeck.Device.operatingSystem", "TelemetryDeck.Device.architecture", "TelemetryDeck.SDK.nameAndVersion"} {
+		if payload[k] == "" || payload[k] == nil {
+			t.Errorf("payload lacks %s", k)
 		}
-		s := signals[0]
-		if s["appID"] != appID {
-			t.Errorf("appID %v", s["appID"])
-		}
-		if s["type"] != signalType {
-			t.Errorf("type %v, want %s", s["type"], signalType)
-		}
-		if s["isTestMode"] != true {
-			t.Errorf("isTestMode %v, want true under %s", s["isTestMode"], TestModeEnv)
-		}
-		// The library hashes once more over what WithUserID was given, so
-		// this is the assertion that agentlab's own identifier was wired in
-		// at all: without it a missing WithUserID looks identical, the
-		// library's derived digest being 64 hex characters too.
-		//
-		// No salt in the sum below, because agentlab does not call
-		// WithHashSalt and the library's own defaults to "". Adding one
-		// there fails here, and this is the line to change.
-		want, ok := userID()
-		if !ok {
-			t.Fatal("the pinned identity did not reach userID")
-		}
-		sum := sha256.Sum256([]byte(want))
-		if user, _ := s["clientUser"].(string); user != hex.EncodeToString(sum[:]) {
-			t.Errorf("clientUser %q, want sha256 of agentlab's identifier %s", user, hex.EncodeToString(sum[:]))
-		}
-		payload, _ := s["payload"].(map[string]any)
-		if payload["command"] != "agentlab up" {
-			t.Errorf("payload.command %v", payload["command"])
-		}
-		if payload["appVersion"] != project.Version() {
-			t.Errorf("payload.appVersion %v, want %s", payload["appVersion"], project.Version())
-		}
-		// The dashboard's standard "App Versions" insight reads the reserved
-		// parameter, not the payload key the usage report queries.
-		if payload["TelemetryDeck.AppInfo.version"] != project.Version() {
-			t.Errorf("payload[TelemetryDeck.AppInfo.version] %v, want %s", payload["TelemetryDeck.AppInfo.version"], project.Version())
-		}
-		if sha := project.ShortSHA(); sha != "" && payload["TelemetryDeck.AppInfo.buildNumber"] != sha {
-			t.Errorf("payload[TelemetryDeck.AppInfo.buildNumber] %v, want %s", payload["TelemetryDeck.AppInfo.buildNumber"], sha)
-		}
-		for _, k := range []string{"TelemetryDeck.Device.operatingSystem", "TelemetryDeck.Device.architecture", "TelemetryDeck.SDK.nameAndVersion"} {
-			if payload[k] == "" || payload[k] == nil {
-				t.Errorf("payload lacks %s", k)
-			}
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("no signal reached the endpoint")
 	}
 }
 
@@ -189,10 +168,8 @@ func TestCommandSendsNothingWhenOptedOutOrUnconfigured(t *testing.T) {
 	hit := make(chan string, 4)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hit <- r.URL.Path }))
 	defer srv.Close()
-	endpoint = srv.URL
-	defer func() { endpoint = "" }()
+	enable(t, srv)
 
-	withAppID(t, testAppID)
 	t.Setenv(OptOutEnv, "1")
 	t.Setenv(doNotTrackEnv, "")
 	Command(lab(t, "up"))
@@ -214,7 +191,9 @@ func TestCommandSendsNothingWhenOptedOutOrUnconfigured(t *testing.T) {
 	}
 }
 
-// enable turns reporting on for one test, pointed at srv.
+// enable turns reporting on for one test, pointed at srv, with no client
+// left over from an earlier test (the first signal creates one for the
+// process, and every later one rides it).
 func enable(t *testing.T, srv *httptest.Server) {
 	t.Helper()
 	withAppID(t, testAppID)
@@ -222,10 +201,43 @@ func enable(t *testing.T, srv *httptest.Server) {
 	t.Setenv(doNotTrackEnv, "")
 	t.Setenv(TestModeEnv, "1")
 	endpoint = srv.URL
+	sender = nil
 	t.Cleanup(func() {
 		endpoint = ""
 		sender = nil
 	})
+}
+
+// capture enables reporting pointed at an ingest endpoint of the test's own
+// and hands back what it receives, one batch of signals per request, decoded
+// the way TelemetryDeck would see them.
+func capture(t *testing.T) <-chan []map[string]any {
+	t.Helper()
+	got := make(chan []map[string]any, 8)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var signals []map[string]any
+		if err := json.Unmarshal(body, &signals); err != nil {
+			t.Errorf("body is not a signal array: %v\n%s", err, body)
+		}
+		got <- signals
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	enable(t, srv)
+	return got
+}
+
+// received is the next request's signals, or a failed test when none comes.
+func received(t *testing.T, got <-chan []map[string]any) []map[string]any {
+	t.Helper()
+	select {
+	case signals := <-got:
+		return signals
+	case <-time.After(5 * time.Second):
+		t.Fatal("no signal reached the endpoint")
+		return nil
+	}
 }
 
 // TestFlushSeesTheSignalOut: a command that finishes before the endpoint has
@@ -350,37 +362,16 @@ func TestUserIDIsStableSaltedAndDropsWhenUnknown(t *testing.T) {
 // never breaks: a machine that exposes no identifier still reports, under the
 // one the library derives for itself.
 func TestCommandFallsBackToTheLibraryIdentifier(t *testing.T) {
-	withAppID(t, testAppID)
+	got := capture(t)
 	withUserIdentity(t, "", "tester")
-	t.Setenv(OptOutEnv, "")
-	t.Setenv(doNotTrackEnv, "")
-	t.Setenv(TestModeEnv, "1")
-
-	got := make(chan []map[string]any, 1)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		var signals []map[string]any
-		if err := json.Unmarshal(body, &signals); err != nil {
-			t.Errorf("body is not a signal array: %v\n%s", err, body)
-		}
-		got <- signals
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-	endpoint = srv.URL
-	defer func() { endpoint = "" }()
 
 	Command(lab(t, "up"))
 
-	select {
-	case signals := <-got:
-		if len(signals) != 1 {
-			t.Fatalf("got %d signals, want 1", len(signals))
-		}
-		if user, _ := signals[0]["clientUser"].(string); len(user) != 64 {
-			t.Errorf("clientUser %q is not a SHA-256 hex digest", user)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("no signal reached the endpoint")
+	signals := received(t, got)
+	if len(signals) != 1 {
+		t.Fatalf("got %d signals, want 1", len(signals))
+	}
+	if user, _ := signals[0]["clientUser"].(string); len(user) != 64 {
+		t.Errorf("clientUser %q is not a SHA-256 hex digest", user)
 	}
 }
