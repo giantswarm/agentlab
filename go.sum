@@ -222,8 +222,8 @@ github.com/frankban/quicktest v1.14.6 h1:7Xjx+VpznH+oBnejlPUj8oUpdxnVs4f8XU8WnHk
 github.com/frankban/quicktest v1.14.6/go.mod h1:4ptaffx2x8+WTWXmUCuVU6aPUX1/Mz7zb5vbUoiM6w0=
 github.com/fxamacker/cbor/v2 v2.9.1 h1:2rWm8B193Ll4VdjsJY28jxs70IdDsHRWgQYAI80+rMQ=
 github.com/fxamacker/cbor/v2 v2.9.1/go.mod h1:vM4b+DJCtHn+zz7h3FFp/hDAI9WNWCsZj23V5ytsSxQ=
-github.com/giantswarm/klaus-gateway v1.11.0 h1:Hj47x3RUbWwQYRJ/ip+4tEKRMIc/UlQidkgNbTZDJ3o=
-github.com/giantswarm/klaus-gateway v1.11.0/go.mod h1:dLBEhlxPjkXVqTf4sIAgGpP3LX9ZDDhfTkgG+R/8/vg=
+github.com/giantswarm/klaus-gateway v1.13.0 h1:isR4qlB6X804F307CT8azJ4DCugxEX8Xh7EWzaiJK9k=
+github.com/giantswarm/klaus-gateway v1.13.0/go.mod h1:dLBEhlxPjkXVqTf4sIAgGpP3LX9ZDDhfTkgG+R/8/vg=
 github.com/giantswarm/selfupdate-cosign v0.2.0 h1:T77Q41viXAv5uNJ8SoQlJh1Dxsuh8brvvPp8Nt9KlOI=
 github.com/giantswarm/selfupdate-cosign v0.2.0/go.mod h1:CVnryjSRY/xDqJDn+QeivgT8+WkOvVbY/Z+xLaIfZ1w=
 github.com/giantswarm/telemetrydeck-go v0.3.0 h1:hgmySEd5P6D78ZoUcNBKB/xaEBhtF9yGa8xhuQUrc1g=
