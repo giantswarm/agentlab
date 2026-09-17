@@ -382,7 +382,14 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 		return err
 	}
 
-	_, valuesPath, err := renderManifest(cfg, platformValuesTemplate)
+	// The WorkerPool's CPU feature-set pin names the node its workers land on,
+	// which only the cluster can say: the binary's GOARCH — what a render
+	// without a cluster falls back to — is cross-built amd64 by the devctl
+	// Makefile even on an arm64 host. Resolved once, for both renders below.
+	workerArch := clusterWorkerPoolArch(ctx)
+	pinWorkerArch := func(t *tmplData) { t.WorkerPoolArch = workerArch }
+
+	_, valuesPath, err := renderManifestWith(cfg, platformValuesTemplate, pinWorkerArch)
 	if err != nil {
 		return err
 	}
@@ -444,6 +451,16 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	if err != nil {
 		return err
 	}
+	// The WorkerPool as the chart is about to create it: its CPU feature-set
+	// pin against the node that would run the workers. Read off the render
+	// rather than off the lab's values, so the chart's own default is covered
+	// too — the pool's pods are ate-controller's, so nothing in the install's
+	// wait would ever report them Pending. Before the side-load, like the
+	// sibling preflights: a cluster that cannot run the workers is refused
+	// without pulling the platform's images for it first.
+	if err := preflightWorkerPoolArch(ctx, renders); err != nil {
+		return err
+	}
 	sideloadPlatformImages(cfg, images)
 	// What only the renders could say goes into the values now, rendered
 	// once more: the dex-localhost sidecar's targets (dexLocalhostTargets —
@@ -473,6 +490,7 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 		return err
 	}
 	if _, valuesPath, err = renderManifestWith(cfg, platformValuesTemplate, func(t *tmplData) {
+		pinWorkerArch(t)
 		t.PostRenderers = postRenderers
 		if dev != nil {
 			t.HarnessDevImage = dev.harness

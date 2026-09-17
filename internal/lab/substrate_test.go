@@ -2,10 +2,14 @@ package lab
 
 import (
 	"context"
+	"fmt"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -27,6 +31,89 @@ func TestSubstratePreflightWithoutTheAPI(t *testing.T) {
 	err := preflightPodCertificateAPI(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "agentlab down && agentlab up") {
 		t.Errorf("want the recreate hint, got %v", err)
+	}
+}
+
+// archRenders is the kagent component render carrying a WorkerPool pinned to
+// arch — what the preflight reads, since that is the object the chart is
+// about to create. An empty arch renders the pool without a nodeSelector.
+func archRenders(arch string) map[string]string {
+	selector := ""
+	if arch != "" {
+		selector = fmt.Sprintf("\n    nodeSelector:\n      %s: %q", workerPoolArchLabel, arch)
+	}
+	return map[string]string{componentKagent: fmt.Sprintf(`apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kagent-controller
+  namespace: kagent
+---
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: kagent-default
+  namespace: kagent
+spec:
+  replicas: 4
+  template:%s
+    resources:
+      requests:
+        cpu: 250m
+`, selector)}
+}
+
+func archNode(name, arch string) *corev1.Node {
+	return &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{workerPoolArchLabel: arch}}}
+}
+
+// The pool's CPU feature-set pin is checked against the node its workers
+// would land on: a pin no node carries is refused before the install, since
+// the workers would only ever sit Pending and nothing else would say so.
+func TestWorkerPoolArchPreflight(t *testing.T) {
+	ctx := context.Background()
+
+	newFakeLab(t, archNode("agentlab-control-plane", "arm64"))
+	if err := preflightWorkerPoolArch(ctx, archRenders("arm64")); err != nil {
+		t.Errorf("the node carries the pin: %v", err)
+	}
+	// A pool with no pin, and no pool at all — the 3.x line, or a component
+	// whose render failed (noted, not fatal): nothing to check either way.
+	if err := preflightWorkerPoolArch(ctx, archRenders("")); err != nil {
+		t.Errorf("a pool without a pin: %v", err)
+	}
+	if err := preflightWorkerPoolArch(ctx, nil); err != nil {
+		t.Errorf("without the kagent render: %v", err)
+	}
+	// The chart's own default on the pool is caught the same way — the point
+	// of reading the render and not the lab's values.
+	err := preflightWorkerPoolArch(ctx, archRenders("amd64"))
+	if err == nil {
+		t.Fatal("a pin no node carries must be refused")
+	}
+	for _, want := range []string{"amd64", "agentlab-control-plane (arm64)", "platform.valuesFiles"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("want %q in the refusal, got %v", want, err)
+		}
+	}
+
+	// One node that carries it is enough — that is where the workers land.
+	newFakeLab(t, archNode("amd", "amd64"), archNode("arm", "arm64"))
+	if err := preflightWorkerPoolArch(ctx, archRenders("arm64")); err != nil {
+		t.Errorf("a mixed cluster with a matching node: %v", err)
+	}
+}
+
+// The arch the values pin comes from the node, never the binary: the devctl
+// Makefile cross-builds amd64 even on an arm64 host, so GOARCH would pin the
+// very architecture this refuses. Without a cluster it is the fallback.
+func TestClusterWorkerPoolArch(t *testing.T) {
+	newFakeLab(t, archNode("agentlab-control-plane", "arm64"))
+	if got := clusterWorkerPoolArch(context.Background()); got != "arm64" {
+		t.Errorf("clusterWorkerPoolArch() = %s, want the node's arm64", got)
+	}
+	newFakeLab(t)
+	if got := clusterWorkerPoolArch(context.Background()); got != runtime.GOARCH {
+		t.Errorf("without a node: clusterWorkerPoolArch() = %s, want the fallback %s", got, runtime.GOARCH)
 	}
 }
 

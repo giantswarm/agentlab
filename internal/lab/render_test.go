@@ -3,6 +3,7 @@ package lab
 import (
 	"fmt"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -518,6 +519,7 @@ func TestPlatformValuesLegacyChartShape(t *testing.T) {
 	expectedKagent := expected["kagent"].(map[string]any)
 	delete(expectedKagent, fieldHarness)
 	delete(expectedKagent, "database")
+	delete(expectedKagent, "substrateWorkerPool")
 	delete(expectedKagent["controllerRoute"].(map[string]any), "jwtAuthentication")
 	delete(expectedKagent["controller"].(map[string]any), "volumes")
 	delete(expectedKagent["controller"].(map[string]any), "volumeMounts")
@@ -586,8 +588,17 @@ func TestPlatformValuesFourXTopology(t *testing.T) {
 		}
 		return cur
 	}
-	if _, ok := at("kagent", "substrateWorkerPool").(map[string]any); ok {
-		t.Error("kagent.substrateWorkerPool rendered: the chart pins the worker image with its Substrate version, the lab must not")
+	if at("kagent", "substrateWorkerPool", "workerImage") != nil {
+		t.Error("kagent.substrateWorkerPool.workerImage rendered: the chart pins the worker image with its Substrate version, the lab must not")
+	}
+	// The pool's CPU feature-set pin is the lab's one worker-pool value. A
+	// render without a cluster falls back to the binary's architecture; the
+	// node's is what `agentlab platform` renders (clusterWorkerPoolArch).
+	if got := at("kagent", "substrateWorkerPool", "template", "nodeSelector", workerPoolArchLabel); got != runtime.GOARCH {
+		t.Errorf("the WorkerPool's arch pin = %v, want the render's fallback %s", got, runtime.GOARCH)
+	}
+	if at("kagent", "substrateWorkerPool", "template", "resources") != nil {
+		t.Error("kagent.substrateWorkerPool.template.resources rendered: Helm merges the map, so the worker resources stay the chart's")
 	}
 	if at("components", "cloudnative-pg", "enabled") != true || at("postgres", "enabled") != true || at("postgres", "namespace") != kagentNamespace {
 		t.Errorf("the platform Postgres: components.cloudnative-pg.enabled=%v postgres.enabled=%v postgres.namespace=%v", at("components", "cloudnative-pg", "enabled"), at("postgres", "enabled"), at("postgres", "namespace"))
