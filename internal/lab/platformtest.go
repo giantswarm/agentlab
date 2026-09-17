@@ -202,7 +202,7 @@ func PlatformTest(cfg *config.Config, email string) error {
 	for _, s := range servers {
 		serverNames = append(serverNames, s.String())
 	}
-	verdict += fmt.Sprintf("\nPASS: the %s bridge on all %d servers told the lab Dex address (%s) — sidecar present, 0 restarts, MCPServer Connected", dexLocalhostContainer, len(servers), strings.Join(serverNames, ", "))
+	verdict += fmt.Sprintf("\nPASS: the %s bridge on all %d servers told the lab Dex address through a name they dial it by — sidecar present, 0 restarts, MCPServer Connected: %s", dexLocalhostContainer, len(servers), strings.Join(serverNames, ", "))
 
 	// The user's identity, not a ServiceAccount: the same tool as two users
 	// with different RBAC must answer differently — and a forged identity

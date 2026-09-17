@@ -213,22 +213,29 @@ func resolveDevImageNames(cfg *config.Config, renders map[string]string) (map[st
 }
 
 // renderedWorkload is the part of a rendered Deployment the lab reads off a
-// component chart's render: its name and its pod template's host-network
-// flag and containers — names and images (the dev-image swap), arguments and
-// environment (the sidecar rule, dexLocalhostTargets).
+// component chart's render: its name and annotations, and its pod template's
+// annotations, host-network flag and containers — names and images (the
+// dev-image swap), arguments and environment (the sidecar rule,
+// dexLocalhostTargets).
 type renderedWorkload struct {
-	Kind     string `yaml:"kind"`
-	Metadata struct {
-		Name string `yaml:"name"`
-	} `yaml:"metadata"`
-	Spec struct {
+	Kind     string           `yaml:"kind"`
+	Metadata renderedMetadata `yaml:"metadata"`
+	Spec     struct {
 		Template struct {
-			Spec struct {
+			Metadata renderedMetadata `yaml:"metadata"`
+			Spec     struct {
 				HostNetwork bool                `yaml:"hostNetwork"`
 				Containers  []renderedContainer `yaml:"containers"`
 			} `yaml:"spec"`
 		} `yaml:"template"`
 	} `yaml:"spec"`
+}
+
+// renderedMetadata is the name and annotations of a rendered object or its
+// pod template.
+type renderedMetadata struct {
+	Name        string            `yaml:"name"`
+	Annotations map[string]string `yaml:"annotations"`
 }
 
 // renderedContainer is one container of a renderedWorkload.

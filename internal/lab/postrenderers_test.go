@@ -98,11 +98,11 @@ func TestComponentPostRenderers(t *testing.T) {
 	// The controller's name as the kagent line's render says it (devimages.go).
 	names[componentKagent] = lineControllerImage
 	// The sidecar's targets as the rule found them on the renders.
-	sidecars := map[string][]string{
-		componentMCPKubernetes: {componentMCPKubernetes},
-		modelManagerMCPServer:  {modelManagerMCPServer},
-		agentManagerMCPServer:  {agentManagerMCPServer},
-		clusterManager:         {clusterManager},
+	sidecars := map[string][]dexLocalhostTarget{
+		componentMCPKubernetes: {{componentMCPKubernetes, dexIssuerURLVar}},
+		modelManagerMCPServer:  {{modelManagerMCPServer, dexIssuerURLFlag}},
+		agentManagerMCPServer:  {{agentManagerMCPServer, dexIssuerURLFlag}},
+		clusterManager:         {{clusterManager, dexIssuerURLFlag}},
 	}
 	rendered, err := componentPostRenderers(cfg, names, sidecars)
 	if err != nil {
@@ -253,12 +253,17 @@ func TestMissingImages(t *testing.T) {
 
 // The sidecar rule reads the platform's OAuth contract off the component
 // renders: a Deployment whose containers are told the lab Dex's localhost
-// address — as an argument (the managers' --dex-issuer-url) or an environment
-// variable (mcp-kubernetes' DEX_ISSUER_URL) — is a target, whatever its name;
-// one that is not told it is not, nor is one on the host network (the
-// chart's or the lab's), and documents that are not Deployments or not
-// objects are skipped.
+// address through a name they dial it by — the managers' --dex-issuer-url,
+// mcp-kubernetes' DEX_ISSUER_URL, oauth2-proxy's OIDC_ISSUER_URL — is a
+// target, keyed by that name as the Deployment spells it; one told the
+// address under another name only — the authorization-server identity a
+// resource server names in its metadata (OAUTH_AUTHORIZATION_SERVER) — is
+// not, nor is one on the host network (the chart's or the lab's). The
+// annotation decides instead where it is set, on the Deployment or its pod
+// template, and documents that are not Deployments or not objects are
+// skipped.
 func TestDexLocalhostTargets(t *testing.T) {
+	const optedIn = "opted-in"
 	cfg := config.Default()
 	renders := map[string]string{
 		clusterManager: `# Source: cluster-manager/templates/serviceaccount.yaml
@@ -312,6 +317,73 @@ spec:
         - name: helper
           args: ["--nothing"]
 `,
+		// oauth2-proxy (the kagent UI) is told the issuer in a variable its
+		// argument expands.
+		componentKagent: `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kagent-oauth2-proxy
+spec:
+  template:
+    spec:
+      containers:
+        - name: oauth2-proxy
+          args: ["--provider=oidc", "--oidc-issuer-url=$(OIDC_ISSUER_URL)"]
+          env:
+            - name: OIDC_ISSUER_URL
+              value: https://localhost:32000/dex
+`,
+		// A resource server that pins the lab Dex as the authorization
+		// server it names in its metadata never dials it: no target.
+		"repo-manager": `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: repo-manager
+spec:
+  template:
+    spec:
+      containers:
+        - name: repo-manager
+          env:
+            - name: OAUTH_ENABLED
+              value: "true"
+            - name: OAUTH_AUTHORIZATION_SERVER
+              value: https://localhost:32000/dex/apps/repo-manager
+`,
+		// The annotation keeps the sidecar off a Deployment the rule would
+		// select …
+		"opted-out": `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opted-out
+  annotations:
+    agentlab.giantswarm.io/dex-localhost: "false"
+spec:
+  template:
+    spec:
+      containers:
+        - name: x
+          env:
+            - name: DEX_ISSUER_URL
+              value: https://localhost:32000/dex
+`,
+		// … and, on the pod template, puts it on one it would skip.
+		optedIn: `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opted-in
+spec:
+  template:
+    metadata:
+      annotations:
+        agentlab.giantswarm.io/dex-localhost: "true"
+    spec:
+      containers:
+        - name: x
+          env:
+            - name: ISSUER
+              value: https://localhost:32000/dex
+`,
 		// muster is told the address too, and reaches it through the lab's
 		// hostNetwork patch.
 		componentMuster: `apiVersion: apps/v1
@@ -338,28 +410,44 @@ spec:
         - name: x
           args: ["--dex-issuer-url=https://localhost:32000/dex"]
 `,
-		// Another Dex port is another lab's, or a real installation's.
-		"other-port": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: another-lab\nspec:\n  template:\n    spec:\n      containers:\n        - name: x\n          args: [\"--dex-issuer-url=https://localhost:32001/dex\"]\n",
+		// Another Dex port is another lab's, or a real installation's; the
+		// flag and its value as two arguments are read as one.
+		"other-port": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: another-lab\nspec:\n  template:\n    spec:\n      containers:\n        - name: x\n          args: [\"--dex-issuer-url\", \"https://localhost:32001/dex\"]\n",
 		// A scalar document, then the object: the scalar is skipped.
 		"scalar-first": "just a string\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: after-scalar\nspec:\n  template:\n    spec:\n      containers:\n        - name: x\n          env:\n            - name: DEX_ISSUER_URL\n              value: https://localhost:32000/dex\n",
 		"empty":        "",
 	}
-	got := dexLocalhostTargets(cfg, renders)
-	want := map[string][]string{
-		clusterManager:         {clusterManager},
-		componentMCPKubernetes: {componentMCPKubernetes},
-		"scalar-first":         {"after-scalar"},
+	got, err := dexLocalhostTargets(cfg, renders)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string][]dexLocalhostTarget{
+		clusterManager:         {{clusterManager, dexIssuerURLFlag}},
+		componentMCPKubernetes: {{componentMCPKubernetes, dexIssuerURLVar}},
+		componentKagent:        {{"kagent-oauth2-proxy", oidcIssuerURLVar}},
+		optedIn:                {{optedIn, dexLocalhostAnnotation + "=true"}},
+		"scalar-first":         {{"after-scalar", dexIssuerURLVar}},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("dexLocalhostTargets = %v, want %v", got, want)
 	}
-	// The rule follows the lab's Dex port.
+	// The rule follows the lab's Dex port; the annotation selects whatever
+	// the address.
 	cfg.DexPort = 32001
-	if got := dexLocalhostTargets(cfg, renders); !reflect.DeepEqual(got, map[string][]string{"other-port": {"another-lab"}}) {
-		t.Errorf("dexLocalhostTargets on port 32001 = %v", got)
+	got, err = dexLocalhostTargets(cfg, renders)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := map[string][]dexLocalhostTarget{"other-port": {{"another-lab", dexIssuerURLFlag}}, optedIn: want[optedIn]}; !reflect.DeepEqual(got, want) {
+		t.Errorf("dexLocalhostTargets on port 32001 = %v, want %v", got, want)
 	}
 	// Nothing to read, nothing to patch.
-	if got := dexLocalhostTargets(cfg, nil); len(got) != 0 {
-		t.Errorf("dexLocalhostTargets(nil) = %v", got)
+	if got, err := dexLocalhostTargets(cfg, nil); err != nil || len(got) != 0 {
+		t.Errorf("dexLocalhostTargets(nil) = %v, %v", got, err)
+	}
+	// An annotation the rule cannot read is the error, naming the Deployment.
+	renders = map[string]string{"typo": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: typo\n  annotations:\n    agentlab.giantswarm.io/dex-localhost: nope\nspec:\n  template:\n    spec:\n      containers:\n        - name: x\n"}
+	if _, err := dexLocalhostTargets(cfg, renders); err == nil || !strings.Contains(err.Error(), "Deployment typo") || !strings.Contains(err.Error(), `"nope"`) {
+		t.Errorf("dexLocalhostTargets with an unreadable annotation: err = %v", err)
 	}
 }
