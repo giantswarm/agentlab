@@ -346,8 +346,16 @@ lab release — the list had left both crash-looping on the unreachable issuer
 states `components.model-manager.enabled` from `platform.modelManager`, so
 the toggle off is the component off. `agentlab platform-test`
 reads the same rule off the live Deployments and asserts the sidecar, a clean
-rollout with no restart and the MCPServer Connected. Lab-only by construction:
-real installations have a routable issuer.
+rollout with no restart and the MCPServer Connected. Since 2026-09-17 the rule
+keys on the *names* the servers dial the issuer by (`--dex-issuer-url`,
+`DEX_ISSUER_URL`, `OIDC_ISSUER_URL`), not on any value carrying the address:
+a resource server that pins the lab Dex as the authorization server it names
+in its RFC 9728 metadata (`OAUTH_AUTHORIZATION_SERVER`) never dials it and had
+been flagged by platform-test as a server missing its sidecar (agentlab#210).
+The annotation `agentlab.giantswarm.io/dex-localhost: "true"|"false"` on the
+Deployment or its pod template overrides the rule either way, and both
+commands name the key each target was selected by (`docs/platform.md`).
+Lab-only by construction: real installations have a routable issuer.
 
 ### U14. `hostmodels.go`: the further host backends are wired as static ModelConfigs — FIXED upstream
 `platform.modelManager.backends` lists every model server on the lab host

@@ -491,7 +491,10 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	// that refuses a patch or a dev image is refused here and not after the
 	// install's wait. The Harness's state before the install is what the
 	// recompile report afterwards compares against.
-	sidecars := dexLocalhostTargets(cfg, renders)
+	sidecars, err := dexLocalhostTargets(cfg, renders)
+	if err != nil {
+		return err
+	}
 	noteDexLocalhostTargets(roster, sidecars)
 	var dev *devImages
 	var harnessBefore harnessState
@@ -995,24 +998,25 @@ func devImagesHint(cfg *config.Config, dev *devImages) string {
 }
 
 // noteDexLocalhostTargets reports the sidecar rule's outcome in the boot
-// log: which Deployments get the bridge — or, with no component render to
-// read, that none does and what that means.
-func noteDexLocalhostTargets(roster *platformRoster, sidecars map[string][]string) {
+// log: which Deployments get the bridge and by which key — or, with no
+// component render to read, that none does and what that means.
+func noteDexLocalhostTargets(roster *platformRoster, sidecars map[string][]dexLocalhostTarget) {
 	if len(sidecars) == 0 {
 		if roster == nil {
 			note("no component render to read, so no %s sidecar is patched: a server that validates the forwarded token cannot reach the lab Dex", dexLocalhostContainer)
 		} else {
-			note("no component render tells a pod the lab Dex address: no %s sidecar to patch", dexLocalhostContainer)
+			note("no component render tells a pod the lab Dex address through a name it dials it by (%s): no %s sidecar to patch", strings.Join(dexDialNames, ", "), dexLocalhostContainer)
 		}
 		return
 	}
 	var names []string
 	for _, component := range slices.Sorted(maps.Keys(sidecars)) {
-		for _, deployment := range sidecars[component] {
-			if deployment != component {
-				deployment = component + "/" + deployment
+		for _, target := range sidecars[component] {
+			name := target.deployment
+			if name != component {
+				name = component + "/" + name
 			}
-			names = append(names, deployment)
+			names = append(names, name+" ("+target.key+")")
 		}
 	}
 	note("%s sidecar on the %d Deployments told the lab Dex address: %s", dexLocalhostContainer, len(names), strings.Join(names, ", "))
@@ -1023,13 +1027,14 @@ func noteDexLocalhostTargets(roster *platformRoster, sidecars map[string][]strin
 // its Deployment's name — the manager charts render their MCPServer CR that
 // way; the Kubernetes MCP's CR is the connectivity chart's and waited for by
 // the caller. A target without a CR of its name is noted, not waited for.
-func waitSidecarMCPServers(ctx context.Context, cfg *config.Config, sidecars map[string][]string) error {
+func waitSidecarMCPServers(ctx context.Context, cfg *config.Config, sidecars map[string][]dexLocalhostTarget) error {
 	gvr, err := gvrFor(musterMCPServerResource)
 	if err != nil {
 		return err
 	}
 	for _, component := range slices.Sorted(maps.Keys(sidecars)) {
-		for _, name := range sidecars[component] {
+		for _, target := range sidecars[component] {
+			name := target.deployment
 			if name == cfg.MCPServerName() {
 				continue
 			}

@@ -125,11 +125,11 @@ func TestPlatformValuesLabShape(t *testing.T) {
 	// The second render of `agentlab platform`: the sidecar's targets as the
 	// rule found them on the component renders — the servers the lab turns
 	// on and cluster-manager, which only an overlay does.
-	sidecars := map[string][]string{
-		componentMCPKubernetes: {componentMCPKubernetes},
-		modelManagerMCPServer:  {modelManagerMCPServer},
-		agentManagerMCPServer:  {agentManagerMCPServer},
-		clusterManager:         {clusterManager},
+	sidecars := map[string][]dexLocalhostTarget{
+		componentMCPKubernetes: {{componentMCPKubernetes, dexIssuerURLVar}},
+		modelManagerMCPServer:  {{modelManagerMCPServer, dexIssuerURLFlag}},
+		agentManagerMCPServer:  {{agentManagerMCPServer, dexIssuerURLFlag}},
+		clusterManager:         {{clusterManager, dexIssuerURLFlag}},
 	}
 	postRenderers, err := componentPostRenderers(cfg, defaultDevImageNames(cfg), sidecars)
 	if err != nil {
@@ -229,12 +229,12 @@ func TestPlatformValuesLabShape(t *testing.T) {
 // a duplicate mapping key), which is what pins ExtraPostRenderers to the
 // template's conditions.
 func TestPlatformValuesExtraPostRenderers(t *testing.T) {
-	sidecars := map[string][]string{
-		componentMCPKubernetes: {componentMCPKubernetes},
-		modelManagerMCPServer:  {modelManagerMCPServer},
-		agentManagerMCPServer:  {agentManagerMCPServer},
-		vmManagerMCPServer:     {vmManagerMCPServer},
-		clusterManager:         {clusterManager},
+	sidecars := map[string][]dexLocalhostTarget{
+		componentMCPKubernetes: {{componentMCPKubernetes, dexIssuerURLVar}},
+		modelManagerMCPServer:  {{modelManagerMCPServer, dexIssuerURLFlag}},
+		agentManagerMCPServer:  {{agentManagerMCPServer, dexIssuerURLFlag}},
+		vmManagerMCPServer:     {{vmManagerMCPServer, dexIssuerURLFlag}},
+		clusterManager:         {{clusterManager, dexIssuerURLFlag}},
 	}
 	for name, cfg := range map[string]*config.Config{
 		"everything off": func() *config.Config {

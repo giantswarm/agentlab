@@ -2,8 +2,10 @@ package lab
 
 import (
 	"fmt"
+	"iter"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -77,6 +79,40 @@ const dexLocalhostImage = "alpine/socat:1.8.1.3"
 // dexLocalhostContainer is the sidecar's name; a strategic merge keys
 // containers by name, so a re-render replaces it in place.
 const dexLocalhostContainer = "dex-localhost"
+
+// dexLocalhostAnnotation, on a Deployment or its pod template, overrides the
+// sidecar rule (dexLocalhostKey) for that Deployment: "false" keeps the
+// sidecar off one the rule would select, "true" puts it on one the rule
+// would skip — a server that dials the issuer through a name the rule does
+// not know. Any other value is an error.
+const dexLocalhostAnnotation = "agentlab.giantswarm.io/dex-localhost"
+
+// dexDialNames are the names — of an environment variable, or of an argument
+// in its variable spelling (flagVariable: `--dex-issuer-url` is
+// DEX_ISSUER_URL) — through which the platform's OAuth resource servers are
+// told the issuer they dial for OIDC discovery and the JWKS: the managers'
+// `--dex-issuer-url`, the mcp-oauth servers' DEX_ISSUER_URL (mcp-kubernetes,
+// mcp-prometheus), oauth2-proxy's OIDC_ISSUER_URL (the kagent UI). A variable
+// that carries the address as an identity only — the authorization server a
+// resource server names in its RFC 9728 metadata and keys grants by
+// (OAUTH_AUTHORIZATION_SERVER), an issuer a token is checked against — is
+// never dialed and selects nothing, whatever its value.
+var dexDialNames = []string{dexIssuerURLVar, oidcIssuerURLVar}
+
+// dexIssuerURLVar is the mcp-oauth resource servers' issuer variable, and
+// the managers' `--dex-issuer-url` in its variable spelling; oidcIssuerURLVar
+// is oauth2-proxy's.
+const (
+	dexIssuerURLVar  = "DEX_ISSUER_URL"
+	oidcIssuerURLVar = "OIDC_ISSUER_URL"
+)
+
+// dexLocalhostTarget is one Deployment the sidecar rule selected and the key
+// it selected it by: the dial argument or variable as the Deployment spells
+// it, or the annotation.
+type dexLocalhostTarget struct {
+	deployment, key string
+}
 
 // dexServiceAddr is the lab Dex behind its ClusterIP Service (dex.yaml.tmpl):
 // the same HTTPS endpoint the NodePort publishes on the host.
@@ -274,47 +310,111 @@ func dexLocalhostAddr(cfg *config.Config) string {
 
 // dexLocalhostTargets is the rule that picks the sidecar's targets (patch 4)
 // off the component renders (keyed by release name, platformImages): every
-// Deployment whose containers are told the lab Dex's localhost address — the
-// issuer URL in an argument (`--dex-issuer-url=`) or an environment variable
-// (DEX_ISSUER_URL) — has to reach it from inside the pod. That is the
-// platform's OAuth contract as a render shows it (global.identity forwarded
-// into the pod by the chart), so a manager the chart adds is covered the day
-// it is turned on, without a name here. The Deployments the lab puts on the
-// host network (hostNetworkComponents) and any the chart already runs there
-// reach the address as the host does and are left out. Keyed by component,
-// the Deployment names sorted; a component without a target is absent.
-func dexLocalhostTargets(cfg *config.Config, renders map[string]string) map[string][]string {
+// Deployment whose containers are told the lab Dex's localhost address
+// through a name they dial it by (dexLocalhostKey) has to reach it from
+// inside the pod. That is the platform's OAuth contract as a render shows it
+// (global.identity forwarded into the pod by the chart), so a manager the
+// chart adds is covered the day it is turned on, without a name here. The
+// Deployments the lab puts on the host network (hostNetworkComponents) and
+// any the chart already runs there reach the address as the host does and
+// are left out. Keyed by component, the targets sorted by Deployment name; a
+// component without a target is absent. An annotation the rule cannot read
+// is the error.
+func dexLocalhostTargets(cfg *config.Config, renders map[string]string) (map[string][]dexLocalhostTarget, error) {
 	addr := dexLocalhostAddr(cfg)
-	targets := map[string][]string{}
+	targets := map[string][]dexLocalhostTarget{}
 	for _, component := range slices.Sorted(maps.Keys(renders)) {
 		if slices.Contains(hostNetworkComponents, component) {
 			continue
 		}
 		for _, d := range renderedDeployments(renders[component]) {
-			if d.Spec.Template.Spec.HostNetwork || !d.mentions(addr) {
-				continue
+			key, ok, err := dexLocalhostKey(addr, d.Spec.Template.Spec.HostNetwork, d.told(), d.Metadata.Annotations, d.Spec.Template.Metadata.Annotations)
+			if err != nil {
+				return nil, fmt.Errorf("the %s render's Deployment %s: %w", component, d.Metadata.Name, err)
 			}
-			targets[component] = append(targets[component], d.Metadata.Name)
+			if ok {
+				targets[component] = append(targets[component], dexLocalhostTarget{deployment: d.Metadata.Name, key: key})
+			}
 		}
-		slices.Sort(targets[component])
+		slices.SortFunc(targets[component], func(a, b dexLocalhostTarget) int { return strings.Compare(a.deployment, b.deployment) })
 	}
-	return targets
+	return targets, nil
 }
 
-// mentions reports whether any container of the workload's pod template
-// carries the string in an argument or an environment variable's value.
-func (w renderedWorkload) mentions(s string) bool {
-	for _, c := range w.Spec.Template.Spec.Containers {
-		if slices.ContainsFunc(c.Args, func(arg string) bool { return strings.Contains(arg, s) }) {
-			return true
+// dexLocalhostKey is the sidecar rule for one Deployment, the same over a
+// render (dexLocalhostTargets) and a live object (platform-test's
+// deploymentDexLocalhostKey): a pod off the host network whose containers
+// are told the lab Dex's localhost address through a name they dial it by
+// (dexDialNames) is a target, keyed by that argument or variable as the
+// Deployment spells it; one told the address under any other name — an
+// identity, never dialed — is not. The annotation (dexLocalhostAnnotation)
+// on the Deployment or its pod template decides instead when it is there,
+// and is the key of a target it selects. told yields the containers'
+// arguments and environment variables as name/value pairs (toldArgs).
+func dexLocalhostKey(addr string, hostNetwork bool, told iter.Seq2[string, string], annotations ...map[string]string) (string, bool, error) {
+	if hostNetwork {
+		return "", false, nil
+	}
+	for _, a := range annotations {
+		raw, ok := a[dexLocalhostAnnotation]
+		if !ok {
+			continue
 		}
-		for _, env := range c.Env {
-			if strings.Contains(env.Value, s) {
-				return true
+		on, err := strconv.ParseBool(raw)
+		if err != nil {
+			return "", false, fmt.Errorf("annotation %s=%q is neither true nor false", dexLocalhostAnnotation, raw)
+		}
+		if on {
+			return dexLocalhostAnnotation + "=" + raw, true, nil
+		}
+		return "", false, nil
+	}
+	for name, value := range told {
+		if slices.Contains(dexDialNames, flagVariable(name)) && strings.Contains(value, addr) {
+			return name, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+// flagVariable is an argument's flag name in the spelling of the environment
+// variable it stands in for — `--dex-issuer-url` is DEX_ISSUER_URL; a
+// variable's name is its own.
+func flagVariable(name string) string {
+	return strings.ToUpper(strings.ReplaceAll(strings.TrimLeft(name, "-"), "-", "_"))
+}
+
+// toldArgs yields a container's arguments as name/value pairs: `--name=value`
+// split at its first `=`, a bare `--name` paired with the argument after it.
+// It reports whether the yield ran to the end.
+func toldArgs(args []string, yield func(string, string) bool) bool {
+	for i, arg := range args {
+		name, value, ok := strings.Cut(arg, "=")
+		if !ok && i+1 < len(args) {
+			value = args[i+1]
+		}
+		if !yield(name, value) {
+			return false
+		}
+	}
+	return true
+}
+
+// told yields every argument (toldArgs) and environment variable of the
+// workload's containers as name/value pairs — what the sidecar rule reads.
+func (w renderedWorkload) told() iter.Seq2[string, string] {
+	return func(yield func(string, string) bool) {
+		for _, c := range w.Spec.Template.Spec.Containers {
+			if !toldArgs(c.Args, yield) {
+				return
+			}
+			for _, env := range c.Env {
+				if !yield(env.Name, env.Value) {
+					return
+				}
 			}
 		}
 	}
-	return false
 }
 
 // componentPostRenderers renders the lab's postRenderers list per component
@@ -326,7 +426,7 @@ func (w renderedWorkload) mentions(s string) bool {
 // (dexLocalhostTargets) — nil in a render without the component charts
 // (`agentlab render`, the values the roster is rendered from), which patches
 // no sidecar: `agentlab platform` renders the values once more with them.
-func componentPostRenderers(cfg *config.Config, imageNames map[string]string, sidecars map[string][]string) (map[string]string, error) {
+func componentPostRenderers(cfg *config.Config, imageNames map[string]string, sidecars map[string][]dexLocalhostTarget) (map[string]string, error) {
 	patches := map[string][]kustomizePatch{
 		componentKagent: {kagentUINodePortPatch()},
 	}
@@ -334,8 +434,8 @@ func componentPostRenderers(cfg *config.Config, imageNames map[string]string, si
 		patches[component] = []kustomizePatch{hostNetworkPatch(component)}
 	}
 	for _, component := range slices.Sorted(maps.Keys(sidecars)) {
-		for _, deployment := range sidecars[component] {
-			patches[component] = append(patches[component], dexLocalhostPatch(deployment, cfg.DexPort))
+		for _, target := range sidecars[component] {
+			patches[component] = append(patches[component], dexLocalhostPatch(target.deployment, cfg.DexPort))
 		}
 	}
 	images := map[string][]kustomizeImage{}
