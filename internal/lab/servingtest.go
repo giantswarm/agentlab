@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -555,7 +556,9 @@ func completionThroughModelsGateway(ctx context.Context, cfg *config.Config, k *
 			return 0, nil, err
 		}
 		defer func() { _ = resp.Body.Close() }()
-		body, err := readJSONBody(resp)
+		// The status is the verdict here (a 401 is the expected answer to the
+		// first request), so the body is read whatever it is.
+		body, err := io.ReadAll(io.LimitReader(resp.Body, maxProbeBody))
 		return resp.StatusCode, body, err
 	}
 	status, body, err := do("")
