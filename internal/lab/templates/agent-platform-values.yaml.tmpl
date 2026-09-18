@@ -715,6 +715,21 @@ modelManager:
 {{- end }}
 
 {{- if .ServingEnabled }}
+# The KServe control plane's storage-initializer, which downloads a model's
+# weights into its pod before the runtime starts: the memory limit the
+# inferenceservice-config gives it. The chart's 1Gi is what the Hugging Face
+# client's dirty page cache overruns on a download (the initializer was
+# OOM-killed mid-download of a 1 GiB model here); on an installation the
+# connectivity chart's Kyverno policy raises it, and the lab runs no Kyverno
+# mutate policies, so the control plane's own default carries the
+# platform's value.
+kserve-resources:
+  kserve:
+    storage:
+      resources:
+        limits:
+          memory: 8Gi
+
 # The connectivity chart's serving slice in the lab shape (serving.go). No GPU
 # pool, no accelerator RuntimeClass: the kind node is the one node and has no
 # GPU. No cache claim: kind's local-path volume

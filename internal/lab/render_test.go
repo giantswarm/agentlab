@@ -797,6 +797,9 @@ func TestPlatformValuesServing(t *testing.T) {
 	if _, ok := values["kserve-llmisvc-resources"]; ok {
 		t.Error("a kserve-llmisvc-resources block rendered: the meta chart derives the models Gateway onto the KServe control plane itself")
 	}
+	if !strings.Contains(raw, "kserve-resources:\n  kserve:\n    storage:\n      resources:\n        limits:\n          memory: 8Gi") {
+		t.Error("the storage-initializer's memory limit is not raised on the KServe control plane (no Kyverno policy does it here)")
+	}
 	ms, _ := values["modelServing"].(map[string]any)
 	presets, _ := ms["presets"].([]any)
 	if len(presets) != 1 {
