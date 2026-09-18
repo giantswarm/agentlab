@@ -324,8 +324,8 @@ brings it up, `agentlab serving-test` proves it. What the switch installs:
   attaches to. The classic KServe control plane (`kserve-crd`,
   `kserve-resources`) comes along because the chart's llm-d controller still
   reads its `inferenceservice-config` and shares its webhook certificate
-  Issuer; nothing runs on the classic path — no preset composes an
-  `InferenceService` — and both leave with it.
+  Issuer; nothing runs on the classic path — every preset composes onto
+  llm-d — and both leave with it.
 - **model-manager's `kserve` backend**, appended to the backends the one
   model-manager fronts (`backends: [ollama, kserve]` with a host Ollama;
   `backend: kserve` alone without a host server). It composes a published
