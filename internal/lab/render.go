@@ -41,6 +41,7 @@ type tmplData struct {
 	BrowserCallbackPort   int
 	DomainRegex           string // Platform.Domain with dots escaped, for the CoreDNS rewrite
 	AllGroups             []string
+	KubernetesClientID,
 	KubernetesClientSecret,
 	AgentPlatformClientID,
 	AgentPlatformClientSecret string
@@ -190,6 +191,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		BrowserCallbackPort:        config.BrowserCallbackPort,
 		DomainRegex:                strings.ReplaceAll(cfg.Platform.Domain, ".", `\.`),
 		AllGroups:                  config.Groups,
+		KubernetesClientID:         config.KubernetesClientID,
 		KubernetesClientSecret:     config.KubernetesClientSecret,
 		AgentPlatformClientID:      config.AgentPlatformClientID,
 		AgentPlatformClientSecret:  config.AgentPlatformClientSecret,

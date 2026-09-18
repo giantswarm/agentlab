@@ -803,10 +803,12 @@ modelServing:
   # route attaches to, TLS on the lab's wildcard certificate (the chart's
   # default, gatewayApi.gateway.tls.secretName), its JWT policy against the
   # lab Dex like the model-manager route above — the JWKS over TLS at the
-  # issuer path, the lab's login client as the audience. No external-dns in
-  # kind: the data plane's Service is reached in-cluster through the CoreDNS
-  # rewrite of models.<domain> (coredns.yaml.tmpl) and by the proof through
-  # a port-forward.
+  # issuer path, the lab's two login clients as the audiences (the platform
+  # client the portal, muster and the proofs log in with; the kubernetes
+  # client `agentlab login` and kubectl mint their tokens for). No
+  # external-dns in kind: the data plane's Service is reached in-cluster
+  # through the CoreDNS rewrite of models.<domain> (coredns.yaml.tmpl) and by
+  # the proof through a port-forward.
   modelsGateway:
     enabled: true
     name: {{ .Serving.GatewayName }}
@@ -816,6 +818,7 @@ modelServing:
     jwtAuthentication:
       audiences:
         - {{ .AgentPlatformClientID }}
+        - {{ .KubernetesClientID }}
       jwks:
         host: dex.dex.svc.cluster.local
         port: 5556
