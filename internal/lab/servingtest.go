@@ -276,7 +276,7 @@ func ServingTest(cfg *config.Config, email string, opts ServingTestOptions) erro
 
 	step("The served model as model-manager reports it (GET /loaded)")
 	var loaded struct {
-		Models []servedModel `json:"models"`
+		Models []servedModel `json:"loaded"`
 	}
 	if err := api.getJSON("/loaded"+q, &loaded); err != nil {
 		return err
