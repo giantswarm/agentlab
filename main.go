@@ -112,6 +112,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		inGroup(groupTesting, agentsTestCmd()),
 		inGroup(groupTesting, toolsetsTestCmd()),
 		inGroup(groupTesting, modelsTestCmd()),
+		inGroup(groupTesting, servingTestCmd()),
 		inGroup(groupTesting, vmManagerTestCmd()),
 		inGroup(groupTesting, skillsTestCmd()),
 		inGroup(groupTesting, a2aTestCmd()),
@@ -453,6 +454,7 @@ func browserCmd() *cobra.Command {
 func configureCmd() *cobra.Command {
 	var defaults, accessible bool
 	var platform, agents, observability, backstage, modelManager, vmManager, klausGateway bool
+	var serving bool
 	var modelManagerBackends []string
 	var vmManagerImageDir string
 	var chartVersion, chartPath, chartBranch string
@@ -521,6 +523,9 @@ func configureCmd() *cobra.Command {
 			if cmd.Flags().Changed("klaus-gateway") {
 				cfg.Platform.KlausGateway.Enabled = klausGateway
 			}
+			if cmd.Flags().Changed("serving") {
+				cfg.Platform.Serving.Enabled = serving
+			}
 			// Every run discovers the machine — an existing agentlab.yaml
 			// follows the host too: a server that appeared is added, one that
 			// is gone drops out, ports move while no cluster holds them.
@@ -569,12 +574,19 @@ func configureCmd() *cobra.Command {
 			for _, m := range cfg.Platform.ExtraModels {
 				fmt.Printf("  extra model %s (%s %s)\n", m.Name, m.Provider, m.Model)
 			}
-			if cfg.ModelManagerEnabled() {
+			if backends := cfg.ChartBackends(); cfg.ModelManagerEnabled() && len(backends) > 0 {
 				mm := cfg.Platform.ModelManager
-				fmt.Printf("  models     one model-manager fronts the host servers (default backend %s):\n", mm.Primary())
-				for _, b := range mm.Backends {
+				fmt.Printf("  models     one model-manager fronts %d backend(s) (default %s):\n", len(backends), backends[0])
+				for _, b := range backends {
+					if b == config.ModelManagerBackendKServe {
+						fmt.Printf("             the platform's own serving on llm-d (%s backend): the lab preset %s on the CPU runtime\n", b, lab.ServingPresetName)
+						continue
+					}
 					fmt.Printf("             %s (%s backend, %s)\n", config.BackendServerName(b), b, endpointNote(mm, b, disc))
 				}
+			}
+			if cfg.ServingEnabled() {
+				fmt.Printf("  serving    llm-d on the node: the llmisvc controller and its CRDs, the well-known runtime configs, the models Gateway at %s, cert-manager\n", lab.ModelsGatewayHost(cfg))
 			}
 			if cfg.VMManagerEnabled() {
 				fmt.Printf("  vm-manager the platform's VM provisioner as a pod of the node, registered with muster as x_vm-manager_* (%s)\n",
@@ -600,6 +612,7 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&vmManager, "vm-manager", false, "run the platform's VM provisioner (vm-manager) as a pod of the node; --vm-manager=false turns it off (needs /dev/kvm and /dev/vhost-vsock on this machine)")
 	cmd.Flags().StringVar(&vmManagerImageDir, "vm-manager-image-dir", "", "a local guest image build the vm-manager pod boots instead of its release's: a vm-manager checkout's images/build after `make -C images`, pushed into the lab registry at `agentlab platform` (empty for the release's)")
 	cmd.Flags().BoolVar(&klausGateway, "klaus-gateway", false, "run Swarmgeist (klaus-gateway) as the meta chart's in-cluster component: A2A on the in-cluster controller target, the web channel, Slack on a placeholder Secret, the OBO link store in a Secret (needs agents); --klaus-gateway=false turns it off")
+	cmd.Flags().BoolVar(&serving, "serving", false, "serve models on llm-d in the lab: the KServe llmisvc controller and its CRDs, the well-known runtime configs, the connectivity chart's serving slice with the models Gateway, model-manager's kserve backend and one CPU preset of the lab's (needs agents; installs cert-manager); --serving=false turns it off")
 	cmd.Flags().BoolVar(&accessible, "accessible", false, "prompt-per-question form mode (for screen readers and plain terminals)")
 	return cmd
 }
@@ -763,6 +776,30 @@ func modelsTestCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&backend, "backend", "", "the backend to prove, one of platform.modelManager.backends (default: the first — model-manager's default backend)")
 	cmd.Flags().StringVar(&model, "model", "", fmt.Sprintf("the model to pull, small and tool-calling capable (default: %s)", lab.ModelsTestModelDefaults()))
+	return cmd
+}
+
+func servingTestCmd() *cobra.Command {
+	var opts lab.ServingTestOptions
+	cmd := &cobra.Command{
+		Use:   "serving-test [email]",
+		Short: "Headless llm-d serving proof: the llmisvc controller, the well-known template and the models Gateway up -> 401 at the model-manager route without a token -> the lab preset fits the node (CPU, allocatable budget) -> load -> LLMInferenceService Ready on the CPU runtime -> ModelConfig wired at the model's route -> a completion through the models Gateway (401 without a token, 200 with) -> agent turn -> unload",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			email := cfg.AdminUser().Email
+			if len(args) == 1 {
+				email = args[0]
+			}
+			return lab.ServingTest(cfg, email, opts)
+		},
+	}
+	cmd.Flags().StringVar(&opts.Preset, "preset", "", "the published preset to serve (default: the lab's, "+lab.ServingPresetName+")")
+	cmd.Flags().BoolVar(&opts.SkipChat, "skip-chat", false, "skip the agent turn on the wired ModelConfig")
+	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", lab.DefaultServingReadyTimeout, "how long the model may take to serve: the weights download and the runtime's start")
 	return cmd
 }
 

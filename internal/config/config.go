@@ -131,6 +131,11 @@ const DevImageHarness = "harness"
 // with the node-path inputs.
 var vmManagerChartFloor = semver.MustParse("4.15.0")
 
+// servingChartFloor is the agent-platform release the serving switch was
+// verified against: the kserve-runtime-configs component, the models Gateway
+// and the discovery ConfigMap's spec.gateway all present.
+var servingChartFloor = semver.MustParse("4.40.0")
+
 // DefaultDevRegistryPort is the host port of the lab registry when
 // agentlab.yaml sets none: kind's documented local-registry port.
 const DefaultDevRegistryPort = 5001
@@ -296,6 +301,33 @@ type Platform struct {
 	// klaus-gateway-test` proves it next to the host-mode gateway
 	// (klausgateway.go).
 	KlausGateway KlausGateway `yaml:"klausGateway"`
+	// Model serving on llm-d: the serving slice of a Giant Swarm installation
+	// on the kind node (internal/lab/serving.go) — the chart's KServe llmisvc
+	// controller with its CRDs (components.kserve-llmisvc-crd and
+	// -resources), the well-known LLMInferenceServiceConfigs it composes
+	// from (components.kserve-runtime-configs), the connectivity chart's
+	// serving objects behind components.modelServing (the serving namespace,
+	// the published presets and their discovery ConfigMap, the models
+	// Gateway with its JWT policy against the lab Dex) and model-manager's
+	// kserve backend, which composes a preset into an LLMInferenceService.
+	// cert-manager comes with it: the controller's webhook certificate is a
+	// cert-manager Certificate. The node has no GPU, so the lab publishes
+	// one preset of its own — a small instruct model on the llm-d CPU
+	// runtime — and model-manager places it on the node's CPU capacity. Off
+	// by default; --serving turns it on; needs the agents runtime, which the
+	// served model is wired into. `agentlab serving-test` is the proof.
+	Serving Serving `yaml:"serving"`
+}
+
+// Serving configures model serving on llm-d in the lab.
+type Serving struct {
+	// On, `agentlab platform` turns on the chart's kserve-llmisvc-crd,
+	// kserve-llmisvc-resources and kserve-runtime-configs components and the
+	// modelServing switch with the lab's serving values (the values
+	// template's `modelServing:` block: the lab preset, the models Gateway),
+	// adds the kserve backend to the list model-manager fronts and installs
+	// cert-manager before the chart.
+	Enabled bool `yaml:"enabled"`
 }
 
 // KlausGateway configures the chart's klaus-gateway component in the lab.
@@ -369,7 +401,8 @@ type ModelManager struct {
 	// default backend — where a request that names none goes. `agentlab
 	// configure` fills the list from what answers on this machine and can be
 	// reached from pods (Ollama first); --model-manager-backends pins it.
-	// kserve is no lab backend: GPU nodes and a KServe install.
+	// kserve is not a host server: the serving switch (Platform.Serving)
+	// adds it to the list the chart's model-manager fronts (ChartBackends).
 	Backends []string `yaml:"backends,omitempty"`
 	// Per-backend base URL as pods reach it, keyed by backend. Empty
 	// autodetects http://<kind docker network gateway>:<default port> at
@@ -960,6 +993,17 @@ func (c *Config) Validate() error {
 	if c.Platform.KlausGateway.Enabled && c.Platform.Enabled && !c.Platform.Agents {
 		return fmt.Errorf("platform.klausGateway requires platform.agents (klaus-gateway runs its conversations on the kagent controller)")
 	}
+	if c.Platform.Serving.Enabled && c.Platform.Enabled && !c.Platform.Agents {
+		return fmt.Errorf("platform.serving requires platform.agents (model-manager wires a served model into kagent as a ModelConfig)")
+	}
+	// The serving switch turns on the kserve-runtime-configs component and
+	// the models Gateway; a pinned release before servingChartFloor would
+	// take them as unknown keys and fail the install out of sight.
+	if c.Platform.Serving.Enabled && c.Platform.Enabled && c.Platform.ChartPath == "" && c.Platform.ChartBranch == "" {
+		if v, err := semver.NewVersion(c.Platform.ChartVersion); err == nil && v.LessThan(servingChartFloor) {
+			return fmt.Errorf("platform.serving needs agent-platform %s or newer (components.kserve-runtime-configs and modelServing.modelsGateway); platform.chartVersion is %s", servingChartFloor, c.Platform.ChartVersion)
+		}
+	}
 	// The vm-manager component exists from agent-platform 4.11.0; a pinned
 	// release before it would take components.vm-manager as an unknown key
 	// and fail the install out of sight. A local checkout or a branch build
@@ -1015,7 +1059,10 @@ func (m ModelManager) Validate(agents bool) error {
 	}
 	for i, b := range backends {
 		if !slices.Contains(ModelManagerBackends, b) {
-			return fmt.Errorf("backend %q: the lab supports %s (kserve needs GPU nodes and KServe)", b, strings.Join(ModelManagerBackends, ", "))
+			if b == ModelManagerBackendKServe {
+				return fmt.Errorf("backend %q is not a host server: platform.serving adds it to the backends model-manager fronts", b)
+			}
+			return fmt.Errorf("backend %q: the lab supports %s (host model servers)", b, strings.Join(ModelManagerBackends, ", "))
 		}
 		if slices.Contains(backends[:i], b) {
 			return fmt.Errorf("backends: %q listed twice", b)
@@ -1041,7 +1088,29 @@ func (m ModelManager) Validate(agents bool) error {
 
 // ModelManagerEnabled reports whether the platform installs model-manager.
 func (c *Config) ModelManagerEnabled() bool {
-	return c.Platform.Enabled && c.Platform.Agents && c.Platform.ModelManager.Enabled
+	return c.Platform.Enabled && c.Platform.Agents && (c.Platform.ModelManager.Enabled || c.Platform.Serving.Enabled)
+}
+
+// ServingEnabled reports whether the platform serves models on llm-d: the
+// platform with its agents runtime, and the key on.
+func (c *Config) ServingEnabled() bool {
+	return c.Platform.Enabled && c.Platform.Agents && c.Platform.Serving.Enabled
+}
+
+// ChartBackends is the list the chart's model-manager fronts, in order (the
+// first is its default backend): the host model servers of
+// platform.modelManager while it is on, then the platform's own serving
+// (ModelManagerBackendKServe) while platform.serving is. Empty when neither
+// is on.
+func (c *Config) ChartBackends() []string {
+	var backends []string
+	if c.Platform.ModelManager.Enabled {
+		backends = append(backends, c.Platform.ModelManager.Backends...)
+	}
+	if c.Platform.Serving.Enabled {
+		backends = append(backends, ModelManagerBackendKServe)
+	}
+	return backends
 }
 
 // VMManagerEnabled reports whether the platform registers the host

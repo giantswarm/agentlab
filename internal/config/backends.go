@@ -40,6 +40,14 @@ const (
 	ModelManagerBackendLMStudio = "lmstudio"
 )
 
+// ModelManagerBackendKServe is the platform's own serving — KServe's
+// LLMInferenceService on llm-d, composed by model-manager from a published
+// ServingPreset — and no host server: nothing answers on a port of this
+// machine, so it is not in ModelManagerBackends, which `agentlab configure`
+// fills from what does. The serving switch (Platform.Serving) adds it to the
+// list the chart's model-manager fronts (Config.ChartBackends).
+const ModelManagerBackendKServe = "kserve"
+
 // The servers' default API ports, the ones the autodetected endpoints assume.
 const (
 	OllamaPort   = 11434

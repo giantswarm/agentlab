@@ -62,7 +62,10 @@ trusting the same issuer.
   under the same rules.
 - **Models.** An Anthropic default; extra model configs for OpenAI-compatible,
   Gemini and Ollama endpoints; managed models through model-manager fronting
-  the model servers on the host — an Ollama, a Lemonade Server, an LM Studio.
+  the model servers on the host — an Ollama, a Lemonade Server, an LM Studio;
+  and, with `platform.serving`, the platform's own serving on llm-d — the
+  KServe llmisvc controller, the well-known runtime configs, the models
+  Gateway with its JWT policy, one CPU preset served on the node.
 - **VMs.** vm-manager, the platform's VM provisioner, as a pod of the KVM
   node (the chart's `components.vm-manager`) registered with muster as
   `x_vm-manager_*`: VMs with an instance metadata service, a vTPM and
@@ -136,7 +139,7 @@ machine, is in [Getting started](docs/getting-started.md).
 | [The agent platform](docs/platform.md) | muster + mcp-kubernetes: the request path, per-server sign-in, the fake fleet, toolsets, deviations from a real management cluster, the dev channel (a branch's dev builds), Agent Substrate and the platform Postgres from the chart |
 | [Agents](docs/agents.md) | The kagent runtime, the default ModelConfig and the API key Secret |
 | [The migration rehearsal](docs/migration-rehearsal.md) | A 3.x lab with the four fleet shapes upgraded in place to the 4.x line: the command sequence, the timings, what the migrate Job rewrote, refused and deleted, what an installation's cut-over does differently |
-| [Models](docs/models.md) | Extra model configs, model servers on the host, managed models through model-manager |
+| [Models](docs/models.md) | Extra model configs, model servers on the host, managed models through model-manager, model serving on llm-d in the lab |
 | [vm-manager](docs/vm-manager.md) | The platform's VM provisioner as a pod of the node: the KVM devices, the image directory, the dev image, the golden PCR recipe, the proof |
 | [klaus-gateway](docs/klaus-gateway.md) | Swarmgeist as the meta chart's component: the values, the two lab Secrets, the OBO link store in a Secret across a pod loss, the dev image, what a lab without a Slack workspace cannot prove |
 | [Observability](docs/observability.md) | Prometheus + mcp-prometheus, and Backstage's metrics views |

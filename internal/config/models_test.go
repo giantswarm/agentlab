@@ -117,7 +117,7 @@ func TestModelManagerValidate(t *testing.T) {
 		{"on with agents", ModelManager{Enabled: true, Backend: ModelManagerBackendOllama}, true, ""},
 		{"on, endpoint override", ModelManager{Enabled: true, Endpoint: "http://192.168.1.10:11434"}, true, ""},
 		{"on without agents", ModelManager{Enabled: true}, false, "requires platform.agents"},
-		{backendKServe, ModelManager{Enabled: true, Backend: backendKServe}, true, "supports ollama, lemonade, lmstudio"},
+		{backendKServe, ModelManager{Enabled: true, Backend: backendKServe}, true, "is not a host server: platform.serving adds it"},
 		{"lemonade legacy form", ModelManager{Enabled: true, Backend: ModelManagerBackendLemonade, Endpoint: "http://172.21.0.1:13305"}, true, ""},
 		{"both backends", ModelManager{Enabled: true, Backends: []string{ModelManagerBackendOllama, ModelManagerBackendLemonade}}, true, ""},
 		{"lmstudio", ModelManager{Enabled: true, Backends: []string{ModelManagerBackendLMStudio}}, true, ""},

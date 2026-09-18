@@ -384,10 +384,26 @@ var structuredImageRe = regexp.MustCompile(`(?m)image:\s*\n\s*registry:\s*["']?(
 // under the install's wait — the first actor's boot, the Cluster's bootstrap.
 var runtimeImageLineRe = regexp.MustCompile(`(?m)^\s*(?:workerImage|imageName|reference):\s*["']?([^\s"']+)["']?\s*$`)
 
+// yamlDocumentSep splits a multi-document render into its documents.
+var yamlDocumentSep = regexp.MustCompile(`(?m)^---\s*$`)
+
+// templateKindRe matches the documents whose image fields describe no pod of
+// their own — KServe's templates: a well-known LLMInferenceServiceConfig is
+// what the llm-d controller composes an LLMInferenceService's pods from, and
+// which of its images a pod runs is decided per LLMInferenceService — the
+// serving switch's preset names its own runtime (serving.go, servingImages),
+// and the CUDA runtime the template names (17 GB) runs on no kind node; a
+// ClusterServingRuntime or ServingRuntime is the classic path's template,
+// which nothing composes onto (its 21 GB vLLM image would be side-loaded for
+// no pod at all).
+var templateKindRe = regexp.MustCompile(`(?m)^kind:\s*(LLMInferenceServiceConfig|ClusterServingRuntime|ServingRuntime)\s*$`)
+
 // scrapeImages extracts the image refs from rendered manifests. Only refs
 // carrying a tag or digest count: a bare word under some config blob's
-// `image:` key is not pullable and would poison the pull set.
+// `image:` key is not pullable and would poison the pull set. Documents that
+// are templates of pods rather than pods (templateKindRe) are left out whole.
 func scrapeImages(rendered string) []string {
+	rendered = podDocuments(rendered)
 	var imgs []string
 	for _, re := range []*regexp.Regexp{imageLineRe, runtimeImageLineRe} {
 		for _, m := range re.FindAllStringSubmatch(rendered, -1) {
@@ -401,6 +417,21 @@ func scrapeImages(rendered string) []string {
 	}
 	slices.Sort(imgs)
 	return slices.Compact(imgs)
+}
+
+// podDocuments is the render without the documents templateKindRe names.
+func podDocuments(rendered string) string {
+	if !templateKindRe.MatchString(rendered) {
+		return rendered
+	}
+	docs := yamlDocumentSep.Split(rendered, -1)
+	kept := make([]string, 0, len(docs))
+	for _, doc := range docs {
+		if !templateKindRe.MatchString(doc) {
+			kept = append(kept, doc)
+		}
+	}
+	return strings.Join(kept, "\n---\n")
 }
 
 // snapshotPreloadImages records the images the cluster's pods run into the

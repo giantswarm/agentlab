@@ -215,6 +215,37 @@ components:
 {{ . | indent 6 }}
 {{- end }}
 {{- end }}
+{{- if .ServingEnabled }}
+  # Model serving on llm-d (platform.serving; serving.go): the
+  # LLMInferenceService CRDs and their controller, the well-known
+  # LLMInferenceServiceConfigs it composes from, and the modelServing switch
+  # — the connectivity chart's serving namespace, the published presets (the
+  # shipped GPU ones and the lab's CPU preset, `modelServing:` below), their
+  # discovery ConfigMap and the models Gateway. The classic KServe control
+  # plane (kserve-crd, kserve-resources) is on because the chart's llm-d
+  # controller still reads its inferenceservice-config and shares its webhook
+  # certificate Issuer (the connectivity chart refuses the llm-d controller
+  # without it), and the meta chart derives the models Gateway onto it as the
+  # Gateway every LLMInferenceService route attaches to; nothing runs on the
+  # classic path — every preset composes onto llm-d — and both leave
+  # with it (giantswarm/agent-platform#574).
+  kserve-crd:
+    enabled: true
+  kserve-resources:
+    enabled: true
+  kserve-llmisvc-crd:
+    enabled: true
+  kserve-llmisvc-resources:
+    enabled: true
+{{- with index .PostRenderers "kserve-llmisvc-resources" }}
+    postRenderers:
+{{ . | indent 6 }}
+{{- end }}
+  kserve-runtime-configs:
+    enabled: true
+  modelServing:
+    enabled: true
+{{- end }}
 {{- if .VMManagerEnabled }}
   # The VM provisioner (platform.vmManager): vm-manager as a pod of the node
   # — privileged, the node's /dev/kvm and /dev/vhost-vsock, the image
@@ -646,8 +677,13 @@ model-manager:
 {{- end }}
 {{- end }}
 {{- range .ModelManagerBackends }}
+{{- /* The kserve backend is the platform's own serving (`modelServing:`
+       below), no host server: it has no endpoint and takes the chart's
+       kserve defaults — the serving namespace, the discovery ConfigMap. */}}
+{{- if ne . "kserve" }}
   {{ . }}:
     endpoint: {{ index $.ModelManagerEndpoints . | printf "%q" }}
+{{- end }}
 {{- end }}
   muster:
     mcpServer:
@@ -670,6 +706,137 @@ modelManager:
     enabled: true
     jwtAuthentication:
       enabled: true
+      jwks:
+        host: dex.dex.svc.cluster.local
+        port: 5556
+        path: /dex/keys
+        tls:
+          enabled: true
+{{- end }}
+
+{{- if .ServingEnabled }}
+# The KServe control plane's storage-initializer, which downloads a model's
+# weights into its pod before the runtime starts: the memory limit the
+# inferenceservice-config gives it. The chart's 1Gi is what the Hugging Face
+# client's dirty page cache overruns on a download (the initializer was
+# OOM-killed mid-download of a 1 GiB model here, and completed on its retry);
+# on an installation the connectivity chart's Kyverno policy raises it, and
+# the lab runs no Kyverno mutate policies, so the control plane's own value
+# carries the platform's. The KServe charts follow this value from 0.4.1
+# (giantswarm/kserve#86); the 0.2.x charts the meta chart still pins carry
+# the literal, and the initializer retries once until the pin moves
+# (giantswarm/agent-platform#582).
+kserve-resources:
+  kserve:
+    storage:
+      resources:
+        limits:
+          memory: 8Gi
+
+# The connectivity chart's serving slice in the lab shape (serving.go). No GPU
+# pool, no accelerator RuntimeClass: the kind node is the one node and has no
+# GPU. No cache claim: kind's local-path volume
+# keeps a root-owned root the KServe storage-initializer cannot write into,
+# and a preset's weights download into its pod's own storage at every start
+# (a 1 GiB model). No pre-pull DaemonSet: it selects GPU nodes by their
+# label. The shipped GPU presets stay published — the portal lists them, and
+# a fit check says why none fits here — and the lab adds ONE preset of its
+# own, the serving proof's: a small instruct model on the llm-d CPU runtime,
+# requesting no GPU, so model-manager places it on the node's CPU capacity.
+modelServing:
+  serving:
+    runtimeClassName: ""
+  gpuPool:
+    taint:
+      key: ""
+    nodeSelector: {}
+  prepull:
+    enabled: false
+  cache:
+    enabled: false
+  presets:
+    - apiVersion: agent-platform.giantswarm.io/v1alpha1
+      kind: ServingPreset
+      metadata:
+        name: {{ .Serving.PresetName }}
+      spec:
+        displayName: Qwen2.5 0.5B Instruct (CPU)
+        description: |
+          The lab's serving proof: a 0.5B instruct model (~1 GiB of BF16
+          weights) on the llm-d CPU runtime, the CPU build of the llm-d release
+          the well-known template pins, because the kind node has no GPU. Tool
+          calling on (hermes parser), 4k context, eager execution (no compile
+          on start). The template's image is the one exception a preset makes:
+          the well-known LLMInferenceServiceConfig names the CUDA build.
+        model:
+          id: {{ .Serving.Model }}
+          storageUri: hf://{{ .Serving.Model }}
+          format: vLLM
+          contextLength: 4096
+          capabilities: [chat, tools]
+          license: apache-2.0
+        args:
+          - --max-model-len=4096
+          - --enforce-eager
+          - --enable-auto-tool-choice
+          - --tool-call-parser=hermes
+        env:
+          # The KV cache the CPU backend reserves, in GiB.
+          - name: VLLM_CPU_KVCACHE_SPACE
+            value: "2"
+          # The CPU image has no passwd entry for the non-root uid the
+          # template demands, and torch names its compile cache after the
+          # user (getpass.getuser(): $USER first, the passwd database
+          # otherwise — a KeyError on this uid); HOME is the template's
+          # emptyDir already.
+          - name: USER
+            value: vllm
+        resources:
+          gpus: 0
+          requests:
+            cpu: "4"
+            memory: 6Gi
+          limits:
+            cpu: "8"
+            memory: 10Gi
+        requirements:
+          weightsGiB: 1
+          overheadGiB: 5
+        template:
+          containers:
+            - name: main
+              image: {{ .Serving.RuntimeImage }}
+              # The CPU image runs as root by default and the template
+              # demands a non-root user; every path vLLM writes is an
+              # emptyDir the template mounts.
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 1000
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: [ALL]
+                seccompProfile:
+                  type: RuntimeDefault
+  # The models Gateway: the agentgateway Gateway every LLMInferenceService
+  # route attaches to, TLS on the lab's wildcard certificate (the chart's
+  # default, gatewayApi.gateway.tls.secretName), its JWT policy against the
+  # lab Dex like the model-manager route above — the JWKS over TLS at the
+  # issuer path, the lab's two login clients as the audiences (the platform
+  # client the portal, muster and the proofs log in with; the kubernetes
+  # client `agentlab login` and kubectl mint their tokens for). No
+  # external-dns in kind: the data plane's Service is reached in-cluster
+  # through the CoreDNS rewrite of models.<domain> (coredns.yaml.tmpl) and by
+  # the proof through a port-forward.
+  modelsGateway:
+    enabled: true
+    name: {{ .Serving.GatewayName }}
+    hostPrefix: {{ .Serving.GatewayName }}
+    externalDns:
+      enabled: false
+    jwtAuthentication:
+      audiences:
+        - {{ .AgentPlatformClientID }}
+        - {{ .KubernetesClientID }}
       jwks:
         host: dex.dex.svc.cluster.local
         port: 5556

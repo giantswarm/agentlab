@@ -16,9 +16,9 @@ func TestRunTUIDrive(t *testing.T) {
 		"\r", // group 2: customize users? -> keep as is
 		"\r", // group 3: platform + backstage preselected; submit as is
 		// platform group: muster port, chart version, agents confirm, agents ui
-		// port, observability confirm, model-manager confirm, claude model,
-		// extra models confirm
-		"\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r",
+		// port, observability confirm, model-manager confirm, serving confirm,
+		// claude model, extra models confirm
+		"\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r",
 		"\r", // backstage group: port
 	).attach
 	defer func() { testHook = nil }()
@@ -41,6 +41,9 @@ func TestRunTUIDrive(t *testing.T) {
 	}
 	if cfg.Platform.ModelManager.Enabled {
 		t.Errorf("model-manager enabled (the confirm should keep the default off)")
+	}
+	if cfg.Platform.Serving.Enabled {
+		t.Errorf("serving enabled (the confirm should keep the default off)")
 	}
 	if !cfg.Backstage.Enabled {
 		t.Errorf("backstage not enabled by multiselect")
