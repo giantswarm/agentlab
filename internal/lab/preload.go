@@ -51,7 +51,7 @@ const preloadImagesFile = StateDir + "/preload-images.txt"
 // CoreDNS, etcd, the apiserver and its peers, the local-path provisioner —
 // run the images baked into the node image, nothing to preload, so the
 // snapshot skips them.
-var kindNamespaces = []string{"kube-system", "local-path-storage"}
+var kindNamespaces = []string{kubeSystemNamespace, "local-path-storage"}
 
 // preloadResult is what a side-load reports back.
 type preloadResult struct {

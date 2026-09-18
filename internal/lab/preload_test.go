@@ -183,7 +183,7 @@ cat "$FAKE_HOST_IMAGES"`)
 	// What the pods run, spelled as their manifests spell it; the node's
 	// own pods in kind's namespaces run the images baked into the node image.
 	kindnet := podOf("kindnet", "kindest/kindnetd:v20250512-df8de77b", "registry.k8s.io/etcd:3.6.4-0")
-	kindnet.Namespace = "kube-system"
+	kindnet.Namespace = kubeSystemNamespace
 	provisioner := podOf("local-path-provisioner", "kindest/local-path-provisioner:v20250214-acbabc1a")
 	provisioner.Namespace = "local-path-storage"
 	stubLabKube(t, &kubeClients{clientset: kubefake.NewClientset(
@@ -526,7 +526,7 @@ func TestPodImages(t *testing.T) {
 		EphemeralContainerCommon: corev1.EphemeralContainerCommon{Name: "debug", Image: refSocat},
 	}}
 	coredns := podOf("coredns", "registry.k8s.io/coredns/coredns:v1.12.1")
-	coredns.Namespace = "kube-system"
+	coredns.Namespace = kubeSystemNamespace
 	stubLabKube(t, &kubeClients{clientset: kubefake.NewClientset(app,
 		podOf("pinned", "gsoci.azurecr.io/giantswarm/rustfs@sha256:0123abcd", refMusterDev),
 		podOf("again", refMusterDev),
