@@ -56,17 +56,30 @@ func kindVersion() string {
 	return "v" + kindversion.Version()
 }
 
-// kindNodeImage is the embedded kind's default node image — the Kubernetes
-// the lab boots — without its digest: "kindest/node:v1.36.1".
+// kindNodeRepository is where the lab pulls the kind node image from: the
+// gsoci mirror of kindest/node (retagger copies it digest-identically), so
+// every image the lab pulls comes from gsoci.
+const kindNodeRepository = "gsoci.azurecr.io/giantswarm/kind-node"
+
+// kindNodeImage is the node image the lab boots — the Kubernetes the embedded
+// kind pins, at kind's own tag and digest, from the gsoci mirror:
+// "gsoci.azurecr.io/giantswarm/kind-node:v1.37.0@sha256:…".
 func kindNodeImage() string {
-	img, _, _ := strings.Cut(defaults.Image, "@")
+	_, versioned, _ := strings.Cut(defaults.Image, ":")
+	return kindNodeRepository + ":" + versioned
+}
+
+// kindNodeImageTag is kindNodeImage without the digest, for the reports:
+// "gsoci.azurecr.io/giantswarm/kind-node:v1.37.0".
+func kindNodeImageTag() string {
+	img, _, _ := strings.Cut(kindNodeImage(), "@")
 	return img
 }
 
 // kindToolVersion is the kind entry of the discovery report's embedded
-// tools: the release and the node image it boots, "v0.32.0 (kindest/node:v1.36.1)".
+// tools: the release and the node image it boots.
 func kindToolVersion() string {
-	return fmt.Sprintf("%s (%s)", kindVersion(), kindNodeImage())
+	return fmt.Sprintf("%s (%s)", kindVersion(), kindNodeImageTag())
 }
 
 // kindCreateCluster creates the cluster from the rendered kind config, waits
@@ -76,6 +89,7 @@ func kindToolVersion() string {
 // its own summary once everything is up.
 func kindCreateCluster(name string, rawConfig []byte) error {
 	err := kindProvider().Create(name,
+		cluster.CreateWithNodeImage(kindNodeImage()),
 		cluster.CreateWithRawConfig(rawConfig),
 		cluster.CreateWithWaitForReady(kindClusterWait),
 		cluster.CreateWithKubeconfigPath(labKubeconfig()),

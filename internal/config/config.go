@@ -610,8 +610,9 @@ func Default() *Config {
 	return &Config{
 		ClusterName: "agentlab",
 		DexPort:     DefaultDexPort,
-		// groups on staticPasswords requires Dex >= v2.45.0; see docs/identity.md.
-		DexImage: "ghcr.io/dexidp/dex:v2.45.1",
+		// groups on staticPasswords requires Dex >= v2.45.0 (docs/identity.md);
+		// the gsoci mirror of dexidp/dex, digest-identical to upstream's.
+		DexImage: "gsoci.azurecr.io/giantswarm/dex:v2.45.1",
 		// The agent-platform BOM's own default, and the newest model the
 		// pinned Backstage build's thinking-mode handling is known to cover.
 		AIModel: "claude-sonnet-4-6",

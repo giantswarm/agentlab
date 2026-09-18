@@ -61,9 +61,12 @@ import (
 //     new golden snapshot per revision); the boot reports which and waits
 //     for them.
 
-// devRegistryImage is the registry the lab runs for the `harness` dev image:
-// the CNCF Distribution registry, Docker Hub's official image, pinned.
-const devRegistryImage = "registry:3.0.0"
+// devRegistryImage is the registry the lab runs for the `harness` dev image
+// and the vm-manager guest image: zot, the OCI-native registry the fleet's
+// installations run in-cluster too, from its gsoci mirror. Its image serves
+// the distribution API on devRegistryContainerPort over plain HTTP with the
+// configuration it ships; nothing is mounted or configured.
+const devRegistryImage = "gsoci.azurecr.io/giantswarm/zot:v2.1.21"
 
 // devRegistryContainerPort is the port the registry listens on inside its
 // container; the kind-network endpoint atelet dials.
@@ -112,6 +115,9 @@ func prepareDevImages(cfg *config.Config, renders map[string]string) (*devImages
 	// five minutes later as an ImagePullBackOff, helm-controller's upgrade
 	// timeout and a rollback to the chart's image.
 	if refs := devImageRefs(cfg); len(refs) > 0 {
+		if err := tagLocalDevImages(cfg); err != nil {
+			return nil, err
+		}
 		if res := sideloadImages(cfg, hostPullImages(refs)); res.n > 0 {
 			note("side-loaded %d dev images (%s)", res.n, res.d)
 		}
@@ -132,6 +138,26 @@ func prepareDevImages(cfg *config.Config, renders map[string]string) (*devImages
 		note("the platform Harness %s pins %s (atelet reaches the registry as %s)", platformHarness, pinned, devRegistryEndpoint(cfg))
 	}
 	return dev, nil
+}
+
+// tagLocalDevImages gives every Deployment target that names no registry — a
+// build of this host, `muster:dev-1a2b` — its name in the lab's namespace,
+// localhost/<ref> (labImageRef): the tag it is side-loaded under and the
+// override names. The build has to be in the host docker cache for the tag
+// to land; a ref that already names a registry is left alone (podman spells
+// local builds localhost/<name> itself, and the tag is then a no-op).
+func tagLocalDevImages(cfg *config.Config) error {
+	for _, component := range slices.Sorted(maps.Keys(cfg.Platform.DevImages)) {
+		ref := cfg.Platform.DevImages[component]
+		local := labImageRef(ref)
+		if component == config.DevImageHarness || local == ref {
+			continue
+		}
+		if err := runQuiet(dockerBin, "tag", ref, local); err != nil {
+			return fmt.Errorf("platform.devImages.%s: tagging %s as %s: %w (is the build in the host docker cache? `docker image inspect %s`)", component, ref, local, err, ref)
+		}
+	}
+	return nil
 }
 
 // registryFlag is atelet's flag for the lab registry as the substrate values

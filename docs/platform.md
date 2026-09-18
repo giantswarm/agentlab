@@ -146,6 +146,14 @@ distinctive tag per build — kind's containerd keeps running the old bits
 under a reused tag, and a Harness digest that did not change recompiles
 nothing.
 
+A build named without a registry (`muster:dev-1a2b3c`) runs under the lab's
+name for local builds, `localhost/muster:dev-1a2b3c`: `agentlab platform`
+tags it so, side-loads it under that name and writes that name into the
+override, so the pod's ref and the node's copy agree and no pod of the lab
+names a registry that does not have its image (podman spells local builds
+this way itself). A ref that names a registry — the lab registry, gsoci, a
+dev build published to ghcr — is used as written.
+
 ### Deployment targets
 
 `agentlab platform` side-loads the image from the host docker cache into the

@@ -23,10 +23,10 @@ const clusterManager = "cluster-manager"
 // Fixture refs, hoisted so the linter's constant check stays quiet.
 const (
 	devMusterRef        = "muster:dev-1a2b"
-	devMusterName       = "docker.io/library/muster"
+	devMusterName       = "localhost/muster"
 	devMusterFull       = devMusterName + ":dev-1a2b"
 	devBackstageRef     = "backstage-dev:tools-84e5"
-	devBackstageFull    = "docker.io/library/" + devBackstageRef
+	devBackstageFull    = "localhost/" + devBackstageRef
 	chartMusterImage    = "gsoci.azurecr.io/giantswarm/muster"
 	chartBackstageImage = "gsoci.azurecr.io/giantswarm/backstage"
 	devControllerRef    = "kagent-controller:dev-139"
@@ -38,15 +38,16 @@ const (
 	lineControllerImage = "ghcr.io/giantswarm/kagent/controller"
 )
 
-// The dev-image swap spells the ref the way containerd lists a side-loaded
-// image, split into kustomize's newName + newTag (or digest).
+// The dev-image swap names the ref the build is side-loaded under — the lab's
+// localhost namespace for a local build, a registry ref as it is — split into
+// kustomize's newName + newTag (or digest).
 func TestDevImageOverride(t *testing.T) {
 	cases := []struct {
 		ref  string
 		want kustomizeImage
 	}{
 		{devMusterRef, kustomizeImage{Name: chartMusterImage, NewName: devMusterName, NewTag: "dev-1a2b"}},
-		{"giantswarm/muster:dev", kustomizeImage{Name: chartMusterImage, NewName: "docker.io/giantswarm/muster", NewTag: devTag}},
+		{"giantswarm/muster:dev", kustomizeImage{Name: chartMusterImage, NewName: "localhost/giantswarm/muster", NewTag: devTag}},
 		{"localhost:5000/muster:dev", kustomizeImage{Name: chartMusterImage, NewName: "localhost:5000/muster", NewTag: devTag}},
 		{"gsoci.azurecr.io/giantswarm/muster:5.14.1", kustomizeImage{Name: chartMusterImage, NewName: chartMusterImage, NewTag: "5.14.1"}},
 		{"muster@sha256:" + strings.Repeat("a", 64), kustomizeImage{Name: chartMusterImage, NewName: devMusterName, Digest: "sha256:" + strings.Repeat("a", 64)}},
@@ -58,20 +59,21 @@ func TestDevImageOverride(t *testing.T) {
 	}
 }
 
-func TestFullImageRef(t *testing.T) {
+// A build of this host lives in the lab's localhost namespace; a ref that
+// names a registry — a dot, a port, localhost itself — is left alone.
+func TestLabImageRef(t *testing.T) {
 	cases := map[string]string{
 		devMusterRef:                          devMusterFull,
-		"giantswarm/muster:dev":               "docker.io/giantswarm/muster:dev",
-		"docker.io/library/muster:dev":        "docker.io/library/muster:dev",
+		"giantswarm/muster:dev":               "localhost/giantswarm/muster:dev",
 		"gsoci.azurecr.io/giantswarm/x:1":     "gsoci.azurecr.io/giantswarm/x:1",
 		"localhost/muster:dev":                "localhost/muster:dev",
+		"localhost:5001/muster:dev":           "localhost:5001/muster:dev",
 		"registry:5000/team/muster:dev":       "registry:5000/team/muster:dev",
-		"alpine/socat:1.8.1.3":                "docker.io/alpine/socat:1.8.1.3",
 		"ghcr.io/fluxcd/helm-controller:v1.6": "ghcr.io/fluxcd/helm-controller:v1.6",
 	}
 	for ref, want := range cases {
-		if got := fullImageRef(ref); got != want {
-			t.Errorf("fullImageRef(%q) = %q, want %q", ref, got, want)
+		if got := labImageRef(ref); got != want {
+			t.Errorf("labImageRef(%q) = %q, want %q", ref, got, want)
 		}
 	}
 }
@@ -180,7 +182,7 @@ func TestComponentPostRenderers(t *testing.T) {
 	// table's wrapper name, and relaxes the pull policy on container
 	// `controller` of Deployment kagent-controller.
 	kagent := parse(componentKagent)
-	if want := (kustomizeImage{Name: lineControllerImage, NewName: "docker.io/library/kagent-controller", NewTag: "dev-139"}); len(kagent.Kustomize.Images) != 1 || kagent.Kustomize.Images[0] != want {
+	if want := (kustomizeImage{Name: lineControllerImage, NewName: "localhost/kagent-controller", NewTag: "dev-139"}); len(kagent.Kustomize.Images) != 1 || kagent.Kustomize.Images[0] != want {
 		t.Errorf("kagent dev image: got %+v, want %+v", kagent.Kustomize.Images, want)
 	}
 	if got := patchOn(componentKagent, kindDeployment, "kagent-controller"); len(got) != 1 || !strings.Contains(got[0], "name: controller\n          imagePullPolicy: IfNotPresent") {
@@ -188,7 +190,7 @@ func TestComponentPostRenderers(t *testing.T) {
 	}
 	// The side-load list is the Deployment targets: the harness image goes to
 	// the registry instead.
-	if refs := devImageRefs(cfg); len(refs) != 3 || refs[0] != devBackstageFull || refs[1] != "docker.io/library/kagent-controller:dev-139" || refs[2] != devMusterFull {
+	if refs := devImageRefs(cfg); len(refs) != 3 || refs[0] != devBackstageFull || refs[1] != "localhost/kagent-controller:dev-139" || refs[2] != devMusterFull {
 		t.Errorf("devImageRefs = %v", refs)
 	}
 	if got := harnessDevImage(cfg); got != devHarnessRef {

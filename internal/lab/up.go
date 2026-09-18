@@ -71,7 +71,7 @@ func Up(cfg *config.Config, offers Offers) error {
 			return err
 		}
 	} else {
-		step("Creating kind cluster %q (%s)", cfg.ClusterName, kindNodeImage())
+		step("Creating kind cluster %q (%s)", cfg.ClusterName, kindNodeImageTag())
 		if err := kindCreateCluster(cfg.ClusterName, kindCfg); err != nil {
 			return err
 		}

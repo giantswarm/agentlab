@@ -14,7 +14,7 @@ kind is not on it: it is built into `agentlab` as a Go dependency
 (`sigs.k8s.io/kind`), which creates and deletes the cluster and side-loads
 images through kind's own packages. The Kubernetes version the lab boots is
 that kind release's default node image — `agentlab configure` names both
-(`kind v0.32.0 (kindest/node:v1.36.1)`), and a new agentlab release moves them
+(`kind v0.32.0 (gsoci.azurecr.io/giantswarm/kind-node:v1.36.1)`), and a new agentlab release moves them
 together. kind drives the container engine through its CLI, so `docker` (or
 `podman`) is the prerequisite it does not remove.
 
@@ -190,7 +190,7 @@ follows the host instead of freezing the first run's view of it:
 
 ```
 Discovering this machine:
-  tools             docker 29.7.2 — embedded: kind v0.32.0 (kindest/node:v1.36.1), helm v4.2.4, client-go v0.36.1
+  tools             docker 29.7.2 — embedded: kind v0.32.0 (gsoci.azurecr.io/giantswarm/kind-node:v1.36.1), helm v4.2.4, client-go v0.36.1
   cluster           kind "agentlab" exists — its port mappings are fixed at node creation (`agentlab down && agentlab up` to change them)
   Ollama            0.33.2 on :11434 — answers on 172.21.0.1 (the address pods dial): yes; 10 downloaded, 4 tool-calling
   Lemonade Server   11.9.0 on :13305 — answers on 172.21.0.1 (the address pods dial): yes; 4 downloaded, 3 tool-calling
