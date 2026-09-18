@@ -102,6 +102,16 @@ spec:
       - image: gsoci.azurecr.io/giantswarm/llm-d-router-disagg-sidecar:v0.9.0
         name: routing-sidecar
 ---
+# a KServe runtime is the classic path's template of pods, not a pod either
+apiVersion: serving.kserve.io/v1alpha1
+kind: ClusterServingRuntime
+metadata:
+  name: kserve-vllm
+spec:
+  containers:
+    - name: kserve-container
+      image: docker.example/vllm/vllm-openai:v0.29.0
+---
 kind: Deployment
 spec:
   template:

@@ -388,12 +388,15 @@ var runtimeImageLineRe = regexp.MustCompile(`(?m)^\s*(?:workerImage|imageName|re
 var yamlDocumentSep = regexp.MustCompile(`(?m)^---\s*$`)
 
 // templateKindRe matches the documents whose image fields describe no pod of
-// their own: a well-known LLMInferenceServiceConfig is a template the llm-d
-// controller composes an LLMInferenceService's pods from, and which of its
-// images a pod runs is decided per LLMInferenceService — the serving switch's
-// preset names its own runtime (serving.go, servingImages), and the CUDA
-// runtime the template names (17 GB) runs on no kind node.
-var templateKindRe = regexp.MustCompile(`(?m)^kind:\s*LLMInferenceServiceConfig\s*$`)
+// their own — KServe's templates: a well-known LLMInferenceServiceConfig is
+// what the llm-d controller composes an LLMInferenceService's pods from, and
+// which of its images a pod runs is decided per LLMInferenceService — the
+// serving switch's preset names its own runtime (serving.go, servingImages),
+// and the CUDA runtime the template names (17 GB) runs on no kind node; a
+// ClusterServingRuntime or ServingRuntime is the classic path's template,
+// which nothing composes onto (its 21 GB vLLM image would be side-loaded for
+// no pod at all).
+var templateKindRe = regexp.MustCompile(`(?m)^kind:\s*(LLMInferenceServiceConfig|ClusterServingRuntime|ServingRuntime)\s*$`)
 
 // scrapeImages extracts the image refs from rendered manifests. Only refs
 // carrying a tag or digest count: a bare word under some config blob's

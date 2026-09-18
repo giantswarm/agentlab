@@ -766,6 +766,13 @@ modelServing:
           # The KV cache the CPU backend reserves, in GiB.
           - name: VLLM_CPU_KVCACHE_SPACE
             value: "2"
+          # The CPU image has no passwd entry for the non-root uid the
+          # template demands, and torch names its compile cache after the
+          # user (getpass.getuser(): $USER first, the passwd database
+          # otherwise — a KeyError on this uid); HOME is the template's
+          # emptyDir already.
+          - name: USER
+            value: vllm
         resources:
           gpus: 0
           requests:
