@@ -92,7 +92,7 @@ kubeadmConfigPatches:
   # ignores the rest, so this patch has to be in the kubeadm generation the
   # embedded kind emits — kind is a pinned Go dependency (go.mod), and its
   # release decides both the node image and the kubeadm config it renders.
-  # kind v0.32 (kindest/node:v1.36) emits kubeadm.k8s.io/v1beta4, where
+  # kind v0.33 (Kubernetes 1.37) emits kubeadm.k8s.io/v1beta4, where
   # extraArgs is a LIST of name/value pairs. A kind bump that moves kubeadm to
   # a new generation is where this is re-checked: on a mismatch the OIDC flags
   # vanish silently and every token is rejected — verify on a fresh node with
