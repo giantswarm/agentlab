@@ -1,6 +1,8 @@
 package lab
 
 import (
+	"fmt"
+
 	"github.com/giantswarm/agentlab/internal/config"
 )
 
@@ -130,6 +132,18 @@ func certManagerUp(cfg *config.Config) error {
 		return err
 	}
 	return installOCIChart(cfg, certManagerNamespace, certManagerRelease, certManagerChart, certManagerChartVersion, values, ociChartInstallTimeout)
+}
+
+// servingHint is the platform-up summary for the serving switch: what runs,
+// where a served model answers, the proof.
+func servingHint(cfg *config.Config) string {
+	if !cfg.ServingEnabled() {
+		return "  Model serving on llm-d is off (platform.serving in agentlab.yaml; `agentlab configure --serving` turns it on)."
+	}
+	return fmt.Sprintf("  Model serving on llm-d: the llmisvc controller and the well-known runtime configs, the lab preset %s (%s on the CPU\n"+
+		"  runtime, no GPU) among the shipped ones; a served model answers at %s/%s/<preset>/v1 with a Dex token\n"+
+		"  (401 without; in-cluster through the CoreDNS rewrite, from here through a port-forward to the Gateway's data plane). Proof: `agentlab serving-test`.",
+		servingPresetName, servingPresetModel, modelsGatewayURL(cfg), servingNamespace)
 }
 
 // servingImages are the images the serving switch's pods run that no chart

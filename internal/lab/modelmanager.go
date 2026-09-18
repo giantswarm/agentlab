@@ -329,13 +329,17 @@ func modelManagerHint(cfg *config.Config, endpoints map[string]string) string {
 	if !cfg.ModelManagerEnabled() {
 		return "  Model manager is disabled (platform.modelManager in agentlab.yaml)."
 	}
-	mm := cfg.Platform.ModelManager
-	parts := make([]string, 0, len(mm.Backends))
-	for _, b := range mm.Backends {
+	backends := cfg.ChartBackends()
+	parts := make([]string, 0, len(backends))
+	for _, b := range backends {
+		if b == config.ModelManagerBackendKServe {
+			parts = append(parts, fmt.Sprintf("%s (the platform's own serving on llm-d, preset %s)", b, servingPresetName))
+			continue
+		}
 		parts = append(parts, fmt.Sprintf("%s (%s) at %s", b, config.BackendServerName(b), endpoints[b]))
 	}
 	return fmt.Sprintf("  Model manager: one instance fronting %s — default backend %s;\n"+
 		"  REST %s/api/v1 (Dex token required; ?backend= / \"backend\" name a server), MCP tools\n"+
 		"  x_model-manager_* through muster; the portal's Models tab manages the same models.",
-		strings.Join(parts, ", "), mm.Primary(), cfg.ModelManagerBaseURL())
+		strings.Join(parts, ", "), backends[0], cfg.ModelManagerBaseURL())
 }
