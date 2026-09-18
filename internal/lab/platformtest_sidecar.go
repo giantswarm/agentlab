@@ -127,7 +127,10 @@ func checkDexLocalhostDeployment(ctx context.Context, k *kubeClients, d *appsv1.
 		if pod.Status.Phase != corev1.PodRunning {
 			return fmt.Errorf("pod %s/%s of Deployment %s is %s, want Running (%s)", pod.Namespace, pod.Name, d.Name, pod.Status.Phase, podStateSummary(pod))
 		}
-		for _, c := range slices.Concat(pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses) {
+		// The sidecar is the one init container that keeps running; the
+		// chart's own init containers complete and are not looked at.
+		sidecar := slices.DeleteFunc(slices.Clone(pod.Status.InitContainerStatuses), func(c corev1.ContainerStatus) bool { return c.Name != dexLocalhostContainer })
+		for _, c := range slices.Concat(sidecar, pod.Status.ContainerStatuses) {
 			if !c.Ready || c.State.Running == nil {
 				return fmt.Errorf("container %s of pod %s/%s is not running and ready (%s) — with %s the issuer is reachable, so look at `kubectl -n %s logs %s -c %s`",
 					c.Name, pod.Namespace, pod.Name, podStateSummary(pod), dexLocalhostContainer, pod.Namespace, pod.Name, c.Name)
