@@ -3,7 +3,10 @@
 package config
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"path/filepath"
@@ -652,8 +655,8 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	cfg := Default()
-	if err := yaml.Unmarshal(raw, cfg); err != nil {
-		return nil, fmt.Errorf("parsing %s: %w", File, err)
+	if err := decodeStrict(raw, cfg); err != nil {
+		return nil, err
 	}
 	// Earlier versions wrote the one-backend form (backend/endpoint); read
 	// it as the one-item lists so the same lab renders exactly as before.
@@ -671,6 +674,26 @@ func Load() (*Config, error) {
 		}
 	}
 	return cfg, nil
+}
+
+// decodeStrict reads agentlab.yaml into cfg and refuses a field this release
+// does not know. Every run writes the file back (Load re-hashes passwords,
+// configure and platform record what they found), so a lenient decode would
+// drop such a field silently and the next `platform` would uninstall what it
+// configured — a newer release's switch, say. The refusal names the field and
+// the fix: update agentlab, or remove the field. An empty file is the defaults.
+func decodeStrict(raw []byte, cfg *Config) error {
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	dec.KnownFields(true)
+	err := dec.Decode(cfg)
+	switch {
+	case err == nil, errors.Is(err, io.EOF):
+		return nil
+	case strings.Contains(err.Error(), "not found in type"):
+		return fmt.Errorf("%s names a field this agentlab release does not know (%w) — the file was written by a newer release, and this run would drop the field on its next write; update agentlab (https://github.com/giantswarm/agentlab/releases) or remove the field", File, err)
+	default:
+		return fmt.Errorf("parsing %s: %w", File, err)
+	}
 }
 
 func (c *Config) Save() error {

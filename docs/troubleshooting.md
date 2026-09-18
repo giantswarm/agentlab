@@ -85,3 +85,13 @@ plumbing for model servers under
   newer — and imports that archive through the embedded kind, so seeing this
   means an older docker on that store: upgrade it. The boot went on regardless;
   the affected images were pulled by the node.
+
+
+## agentlab.yaml and the release running it
+
+- **`agentlab.yaml names a field this agentlab release does not know`** — the
+  file was written by a newer release (a switch this release lacks, such as
+  `platform.serving`). Every run writes the file back, so a release that did not
+  know the field would drop it silently and the next `platform` would uninstall
+  what it configured; the refusal is deliberate. Update agentlab — a shared lab's
+  checkout carries the release binary its holders run — or remove the field.
