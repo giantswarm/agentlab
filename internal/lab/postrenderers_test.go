@@ -151,8 +151,8 @@ func TestComponentPostRenderers(t *testing.T) {
 	}
 	for _, c := range []string{componentMCPKubernetes, modelManagerMCPServer, agentManagerMCPServer, clusterManager} {
 		got := patchOn(c, kindDeployment, c)
-		if len(got) != 1 || !strings.Contains(got[0], "name: "+dexLocalhostContainer) || !strings.Contains(got[0], "TCP6-LISTEN:32000,fork,reuseaddr") {
-			t.Errorf("%s: want the dex-localhost sidecar patch on the lab Dex port, got %q", c, got)
+		if len(got) != 1 || !strings.Contains(got[0], "name: "+dexLocalhostContainer) || !strings.Contains(got[0], "TCP6-LISTEN:32000,fork,reuseaddr") || !strings.Contains(got[0], "initContainers:") || !strings.Contains(got[0], "restartPolicy: Always") {
+			t.Errorf("%s: want the dex-localhost native-sidecar patch on the lab Dex port, got %q", c, got)
 		}
 		if imgs := parse(c).Kustomize.Images; len(imgs) != 0 {
 			t.Errorf("%s: no dev image configured, want no image override, got %+v", c, imgs)

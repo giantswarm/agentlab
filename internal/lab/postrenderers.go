@@ -218,9 +218,13 @@ spec:
 	}
 }
 
-// dexLocalhostPatch is patch 4 for a Deployment. An IPv6 wildcard listener is
-// dual-stack on Linux (bindv6only=0), so both [::1] — which Go dials first for
-// localhost — and 127.0.0.1 answer.
+// dexLocalhostPatch is patch 4 for a Deployment: the forwarder as a native
+// sidecar — an init container that restarts always, with a startup probe on
+// its listen port — so the kubelet starts the server's own container only once
+// the forwarder listens (a server dialing the issuer at start would otherwise
+// be refused and restart once). An IPv6 wildcard listener is dual-stack on
+// Linux (bindv6only=0), so both [::1] — which Go dials first for localhost —
+// and 127.0.0.1 answer.
 func dexLocalhostPatch(deployment string, dexPort int) kustomizePatch {
 	return kustomizePatch{
 		Target: map[string]string{kindKey: kindDeployment, nameKey: deployment},
@@ -231,17 +235,23 @@ metadata:
 spec:
   template:
     spec:
-      containers:
+      initContainers:
         - name: %s
           image: %s
+          restartPolicy: Always
           args:
             - TCP6-LISTEN:%d,fork,reuseaddr
             - TCP:%s
+          startupProbe:
+            tcpSocket:
+              port: %d
+            periodSeconds: 1
+            failureThreshold: 30
           resources:
             requests:
               cpu: 5m
               memory: 16Mi
-`, deployment, dexLocalhostContainer, dexLocalhostImage, dexPort, dexServiceAddr)),
+`, deployment, dexLocalhostContainer, dexLocalhostImage, dexPort, dexServiceAddr, dexPort)),
 	}
 }
 

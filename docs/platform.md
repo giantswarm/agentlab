@@ -91,6 +91,11 @@ servers **dial** the issuer by — for OIDC discovery and the JWKS:
 | `DEX_ISSUER_URL` | environment variable | the mcp-oauth resource servers (mcp-kubernetes, mcp-prometheus) |
 | `OIDC_ISSUER_URL` | environment variable | oauth2-proxy (the kagent UI) |
 
+The sidecar is a native sidecar: an init container that restarts always, with a
+startup probe on its listen port, so the kubelet starts the server's own
+container only once the forwarder listens and a server that dials the issuer at
+start is never refused.
+
 An argument counts in its variable spelling, so `--oidc-issuer-url=…` is
 `OIDC_ISSUER_URL`. A variable that carries the address as an **identity** only
 is not a dial target and selects nothing, whatever its value: the
