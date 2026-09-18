@@ -719,10 +719,13 @@ modelManager:
 # weights into its pod before the runtime starts: the memory limit the
 # inferenceservice-config gives it. The chart's 1Gi is what the Hugging Face
 # client's dirty page cache overruns on a download (the initializer was
-# OOM-killed mid-download of a 1 GiB model here); on an installation the
-# connectivity chart's Kyverno policy raises it, and the lab runs no Kyverno
-# mutate policies, so the control plane's own default carries the
-# platform's value.
+# OOM-killed mid-download of a 1 GiB model here, and completed on its retry);
+# on an installation the connectivity chart's Kyverno policy raises it, and
+# the lab runs no Kyverno mutate policies, so the control plane's own value
+# carries the platform's. The KServe charts follow this value from 0.4.1
+# (giantswarm/kserve#86); the 0.2.x charts the meta chart still pins carry
+# the literal, and the initializer retries once until the pin moves
+# (giantswarm/agent-platform#582).
 kserve-resources:
   kserve:
     storage:
