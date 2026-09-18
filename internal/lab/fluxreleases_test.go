@@ -492,3 +492,70 @@ func TestExcerptEnds(t *testing.T) {
 		t.Errorf("a short message must come back whole, flattened: %q", short)
 	}
 }
+
+// The roster of a chart directory (platform.chartPath) renders the
+// connectivity release from the checkout's own connectivity chart — the one
+// the lab pushes into the lab registry, whose kind-network name the host
+// cannot resolve — and every other release, and every release of a registry
+// chart, from the registry its OCIRepository names.
+func TestLocalizeConnectivity(t *testing.T) {
+	fresh := func() []fluxRelease {
+		return []fluxRelease{
+			{Name: componentMuster, URL: "oci://gsoci.azurecr.io/charts/giantswarm/muster", Version: ">=5.0.0 <6.0.0"},
+			{Name: config.ConnectivityChartName, URL: "oci://agentlab-registry:5000/charts/agent-platform-connectivity", Version: placeholderChartVersion},
+		}
+	}
+	registry := fresh()
+	localizeConnectivity(registry, platformChart{ref: config.ChartRepository, version: releasedChartVersion})
+	for _, rel := range registry {
+		if rel.LocalChart != "" {
+			t.Errorf("a registry chart's %s release is rendered from a directory: %q", rel.Name, rel.LocalChart)
+		}
+	}
+	local := fresh()
+	localizeConnectivity(local, platformChart{ref: "/src/agent-platform/helm/agent-platform"})
+	if got, want := local[1].LocalChart, "/src/agent-platform/helm/agent-platform-connectivity"; got != want {
+		t.Errorf("the connectivity release renders from %q, want the checkout's %q", got, want)
+	}
+	if local[0].LocalChart != "" {
+		t.Errorf("the muster release of a chart directory is still the registry's: %q", local[0].LocalChart)
+	}
+	if !strings.Contains(local[1].chartLabel(""), local[1].LocalChart) || !strings.Contains(local[1].chartLabel(""), local[1].URL) {
+		t.Errorf("the label of a localized release names neither the directory nor the push: %s", local[1].chartLabel(""))
+	}
+}
+
+// A release with a LocalChart renders from that directory — the registry
+// is not asked for the URL's tags, and the version reported is the
+// directory's — while its values still go through the same render.
+func TestRenderFluxReleaseFromTheLocalChart(t *testing.T) {
+	dir := isolateHelm(t)
+	chartDir := writeClosedSchemaChart(t, dir)
+	listChartTags = func(string) ([]string, error) {
+		t.Fatal("the registry was listed for a chart rendered from a directory")
+		return nil, nil
+	}
+	t.Cleanup(func() { listChartTags = helmChartTags })
+
+	rel := fluxRelease{
+		Name: "closedchart", Namespace: "default",
+		URL: "oci://agentlab-registry:5000/charts/closedchart", Version: placeholderChartVersion, Filter: ".*-dev.*",
+		LocalChart: chartDir,
+		Values:     []byte("known: a\n"),
+	}
+	rendered, version, err := renderFluxRelease(rel, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := chartDirVersion(chartDir); version != want {
+		t.Errorf("version rendered = %q, want the directory's %s", version, want)
+	}
+	if !strings.Contains(rendered, "kind: ConfigMap") {
+		t.Errorf("the directory's template did not render:\n%s", rendered)
+	}
+	// The directory's schema still judges the values.
+	rel.Values = []byte("nosuchkey: 1\n")
+	if _, _, err := renderFluxRelease(rel, nil); err == nil || !isSchemaRejection(err) {
+		t.Errorf("a key the local chart's closed schema forbids rendered: %v", err)
+	}
+}

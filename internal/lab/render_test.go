@@ -534,22 +534,41 @@ func TestPlatformValuesLegacyChartShape(t *testing.T) {
 		t.Errorf("the 3.x values differ from the 4.x values in more than the 4.x keys:\n--- 4.x minus the keys\n%s\n--- 3.x\n%s", mustYAML(t, expected), mustYAML(t, legacyValues))
 	}
 
-	// The current line is unchanged by the switch: a 4.x release, a 5.x one,
-	// the dev channel and a chart directory render the same bytes, and a
-	// 3.x-numbered dev build is still the current line.
+	// The current line is unchanged by the switch: a 4.x release, a 5.x one
+	// and the dev channel render the same bytes, and a 3.x-numbered dev
+	// build is still the current line.
 	for name, mutate := range map[string]func(*config.Config){
 		"4.x release": func(c *config.Config) { c.Platform.ChartVersion = "4.7.11" },
 		"5.x release": func(c *config.Config) { c.Platform.ChartVersion = "5.0.0" },
 		"dev channel on a 3.x-numbered": func(c *config.Config) {
 			c.Platform.ChartVersion, c.Platform.ChartBranch = "3.24.0-dev.main.2026-09-11.08-12-33.h7f841be", testRefMain
 		},
-		"chart directory": func(c *config.Config) { c.Platform.ChartVersion, c.Platform.ChartPath = "3.23.1", t.TempDir() },
 	} {
 		cfg := config.Default()
 		mutate(cfg)
 		if _, out := render(cfg); out != currentOut {
 			t.Errorf("%s: the render differs from the current line's", name)
 		}
+	}
+	// A chart directory is the current line too, whatever version its
+	// Chart.yaml carries, plus its connectivity source
+	// (TestPlatformValuesLocalConnectivityChart) and nothing else.
+	directory := config.Default()
+	directory.Platform.ChartVersion = "3.23.1"
+	directory.Platform.ChartPath = writeChartFiles(t, t.TempDir(), "agent-platform", map[string]string{
+		chartYAML: metaChartYAML,
+	})
+	directoryValues, _ := render(directory)
+	components, _ := directoryValues["components"].(map[string]any)
+	if _, set := components[config.ConnectivityChartName]; !set {
+		t.Error("chart directory: the render names no connectivity source")
+	}
+	delete(components, config.ConnectivityChartName)
+	// Rendered afresh: the comparison above stripped the 4.x keys off the
+	// first render's values.
+	wantValues, _ := render(current)
+	if !reflect.DeepEqual(directoryValues, wantValues) {
+		t.Errorf("chart directory: the render differs from the current line's in more than the connectivity source:\n--- directory\n%s\n--- current\n%s", mustYAML(t, directoryValues), mustYAML(t, wantValues))
 	}
 	if legacyOut == currentOut {
 		t.Error("the 3.x render must differ from the current line's")
@@ -850,5 +869,41 @@ func TestPlatformValuesServing(t *testing.T) {
 	}
 	if !strings.Contains(string(coredns), "agentgateway-edge.agent-platform.svc.cluster.local") {
 		t.Error("CoreDNS lost the wildcard rewrite to the edge")
+	}
+}
+
+// A chartPath lab's values point the connectivity component at the lab
+// registry (the kind-network name pods pull from, plain HTTP) at the meta
+// chart directory's own version — the knobs the meta chart admits on a
+// component released with it for a chart pushed by hand. A registry chart
+// sets nothing for the component: its connectivity is published with it.
+func TestPlatformValuesLocalConnectivityChart(t *testing.T) {
+	cfg := config.Default()
+	cfg.ClusterName = "agentlab-x"
+	components := func() map[string]any {
+		t.Helper()
+		out, err := renderTemplate(cfg, "agent-platform-values.yaml.tmpl", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var values struct {
+			Components map[string]any `yaml:"components"`
+		}
+		if err := yaml.Unmarshal(out, &values); err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		return values.Components
+	}
+	if _, set := components()[config.ConnectivityChartName]; set {
+		t.Error("a registry chart's values name a connectivity source")
+	}
+
+	cfg.Platform.ChartPath = writeChartFiles(t, t.TempDir(), "agent-platform", map[string]string{
+		chartYAML: metaChartYAML,
+	})
+	got := components()[config.ConnectivityChartName]
+	want := map[string]any{"repository": "oci://agentlab-x-registry:5000/charts", "insecure": true, "versionRange": placeholderChartVersion}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("components.%s = %v, want %v", config.ConnectivityChartName, got, want)
 	}
 }

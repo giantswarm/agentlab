@@ -95,15 +95,34 @@ func TestChartSourceValidation(t *testing.T) {
 		t.Errorf("Normalize left chartVersion %q, want the default", cfg.Platform.ChartVersion)
 	}
 
-	cfg.Platform.ChartPath = t.TempDir()
+	// A checkout's helm/ directory: the meta chart and its connectivity
+	// chart side by side.
+	cfg.Platform.ChartPath = filepath.Join(t.TempDir(), "agent-platform")
 	if err := cfg.Validate(); err == nil {
 		t.Error("chartPath without a Chart.yaml: want an error")
 	}
-	if err := os.WriteFile(filepath.Join(cfg.Platform.ChartPath, "Chart.yaml"), []byte("name: agent-platform\n"), 0o600); err != nil {
-		t.Fatal(err)
+	writeChart := func(dir string) {
+		t.Helper()
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, chartFile), []byte("name: "+filepath.Base(dir)+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
+	writeChart(cfg.Platform.ChartPath)
+	// The meta chart alone is refused before anything is created: it
+	// installs its connectivity chart at its own version, which the lab can
+	// only serve by pushing the checkout's sibling directory.
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), ConnectivityChartName) || !strings.Contains(err.Error(), "--chart-branch") {
+		t.Errorf("chartPath without the connectivity chart beside it: want the refusal naming %s and the dev channel, got %v", ConnectivityChartName, err)
+	}
+	if got, want := ConnectivityChartDir(cfg.Platform.ChartPath), filepath.Join(filepath.Dir(cfg.Platform.ChartPath), ConnectivityChartName); got != want {
+		t.Errorf("ConnectivityChartDir = %q, want the sibling %q", got, want)
+	}
+	writeChart(ConnectivityChartDir(cfg.Platform.ChartPath))
 	if err := cfg.Validate(); err != nil {
-		t.Errorf("chartPath with a Chart.yaml: %v", err)
+		t.Errorf("chartPath with both charts: %v", err)
 	}
 
 	cfg.Platform.DevImages = map[string]string{"dex": "dex:dev"}
@@ -221,9 +240,14 @@ func TestChartBranchValidation(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("chartBranch alone: %v", err)
 	}
-	cfg.Platform.ChartPath = t.TempDir()
-	if err := os.WriteFile(filepath.Join(cfg.Platform.ChartPath, "Chart.yaml"), []byte("name: agent-platform\n"), 0o600); err != nil {
-		t.Fatal(err)
+	cfg.Platform.ChartPath = filepath.Join(t.TempDir(), "agent-platform")
+	for _, dir := range []string{cfg.Platform.ChartPath, ConnectivityChartDir(cfg.Platform.ChartPath)} {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, chartFile), []byte("name: "+filepath.Base(dir)+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
 		t.Errorf("chartBranch with chartPath: want the mutual-exclusion error, got %v", err)

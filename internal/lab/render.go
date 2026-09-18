@@ -109,6 +109,12 @@ type tmplData struct {
 	// whenever the agents are, so the flag is in place before any swap.
 	HarnessDevImage       string
 	LocalRegistryEndpoint string
+	// ConnectivityChart is the connectivity component's source when the
+	// meta chart comes from a checkout (platform.chartPath, connectivity.go):
+	// the lab registry as pods reach it and the version the checkout's
+	// chart is pushed as, the meta chart's own. Nil for a registry chart,
+	// whose connectivity is published with it.
+	ConnectivityChart *localConnectivityChart
 	// AteletImageCacheArgs is the lab's atelet image-cache policy
 	// (ateletImageCacheArgs, substrate.go), rendered after the registry flag
 	// in the same substrate.atelet.extraArgs list.
@@ -129,6 +135,10 @@ type tmplData struct {
 
 func newTmplData(cfg *config.Config) (*tmplData, error) {
 	vmManagerGuestImage, err := vmManagerGuestImageFor(cfg)
+	if err != nil {
+		return nil, err
+	}
+	connectivity, err := localConnectivityChartFor(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -161,6 +171,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		MCPPrometheusPostRenderers: strings.TrimRight(string(mcpPrometheus), "\n"),
 		MCPPrometheusChartVersion:  mcpPrometheusChartVersion,
 		LocalRegistryEndpoint:      devRegistryEndpoint(cfg),
+		ConnectivityChart:          connectivity,
 		AteletImageCacheArgs:       ateletImageCacheArgs,
 		WorkerPoolArchLabel:        workerPoolArchLabel,
 		WorkerPoolArch:             workerPoolArch(),

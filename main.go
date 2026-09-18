@@ -560,7 +560,8 @@ func configureCmd() *cobra.Command {
 			fmt.Printf("  platform   %v (agents %v, observability %v)\n", cfg.Platform.Enabled, cfg.Platform.Agents, cfg.Platform.Observability)
 			switch {
 			case cfg.Platform.ChartPath != "":
-				fmt.Printf("  chart      local checkout %s (chartVersion %s ignored while set)\n", cfg.Platform.ChartPath, cfg.Platform.ChartVersion)
+				fmt.Printf("  chart      local checkout %s (chartVersion %s ignored while set); its connectivity chart from %s, pushed into the lab registry\n",
+					cfg.Platform.ChartPath, cfg.Platform.ChartVersion, config.ConnectivityChartDir(cfg.Platform.ChartPath))
 			case cfg.Platform.ChartBranch != "":
 				fmt.Printf("  chart      agent-platform %s (branch %s, dev channel%s)\n", cfg.Platform.ChartVersion, cfg.Platform.ChartBranch, pinnedNote(cfg))
 			default:

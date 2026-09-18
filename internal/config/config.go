@@ -108,6 +108,21 @@ const DefaultChartVersion = "4.28.4"
 // ChartRepository is where the agent-platform chart releases live.
 const ChartRepository = "oci://gsoci.azurecr.io/charts/giantswarm/agent-platform"
 
+// ConnectivityChartName is the meta chart's wiring chart, published off the
+// same tag as the meta chart and installed at its exact version
+// (components.agent-platform-connectivity.releasedWithChart).
+const ConnectivityChartName = "agent-platform-connectivity"
+
+// chartFile is the file that makes a directory a chart.
+const chartFile = "Chart.yaml"
+
+// ConnectivityChartDir is where a checkout keeps the connectivity chart next
+// to the meta chart directory chartPath names: helm/agent-platform's sibling
+// helm/agent-platform-connectivity.
+func ConnectivityChartDir(chartPath string) string {
+	return filepath.Join(filepath.Dir(chartPath), ConnectivityChartName)
+}
+
 // DevImageComponents are the targets platform.devImages can swap: the
 // agent-platform chart's component names (its `components.<name>` entries)
 // for the Deployments the lab's dev loops build from a checkout, plus
@@ -218,7 +233,12 @@ type Platform struct {
 	// ChartPath installs the meta chart from a local directory instead of the
 	// pinned release — an agent-platform checkout's helm/agent-platform, for
 	// chart changes that have no release yet (the lab's chart loop). The
-	// directory is read, never written; chartVersion is ignored while set.
+	// checkout's connectivity chart beside it (ConnectivityChartDir) is
+	// installed with it: the meta chart pins that component to its own
+	// version, which no registry publishes for a checkout, so the lab pushes
+	// the sibling into the lab registry and points the meta chart there
+	// (lab/connectivity.go). Both directories are read, never written;
+	// chartVersion is ignored while set.
 	ChartPath string `yaml:"chartPath,omitempty"`
 	// ChartBranch selects the DEV CHANNEL: the lab follows the newest dev
 	// build of this agent-platform branch — the `X.Y.Z-dev.<branch>.<date>.
@@ -988,8 +1008,11 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("platform.chartVersion %q: %w", c.Platform.ChartVersion, err)
 	}
 	if c.Platform.ChartPath != "" {
-		if _, err := os.Stat(filepath.Join(c.Platform.ChartPath, "Chart.yaml")); err != nil {
+		if _, err := os.Stat(filepath.Join(c.Platform.ChartPath, chartFile)); err != nil {
 			return fmt.Errorf("platform.chartPath: %w (an agent-platform checkout's helm/agent-platform directory)", err)
+		}
+		if _, err := os.Stat(filepath.Join(ConnectivityChartDir(c.Platform.ChartPath), chartFile)); err != nil {
+			return fmt.Errorf("platform.chartPath: no connectivity chart beside it (%w): the meta chart installs its wiring chart %s at its own version, which no registry publishes for a checkout, so the lab pushes the checkout's copy from that sibling directory into the lab registry — point chartPath at a checkout's helm/agent-platform, or follow a branch's dev builds instead (`agentlab configure --chart-path \"\" --chart-branch <branch>`)", err, ConnectivityChartName)
 		}
 	}
 	if err := ValidateChartBranch(c.Platform.ChartBranch); err != nil {

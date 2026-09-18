@@ -220,6 +220,17 @@ func (c platformChart) installedVersion() string {
 	return chartDirVersion(c.ref)
 }
 
+// connectivityDir is the checkout's connectivity chart when this chart is a
+// directory (platform.chartPath): the sibling the lab pushes into the lab
+// registry and renders the connectivity release from (connectivity.go).
+// Empty for a registry chart, whose connectivity is published with it.
+func (c platformChart) connectivityDir() string {
+	if c.version != "" {
+		return ""
+	}
+	return config.ConnectivityChartDir(c.ref)
+}
+
 // platformChartFor reads the chart source from the config: platform.chartPath
 // wins over the pinned release; on the dev channel the version is the
 // branch's build ResolveChartVersion recorded.
@@ -408,6 +419,19 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	if err := removeLegacyVMManagerRegistration(context.Background()); err != nil {
 		return err
 	}
+	// A chart directory's connectivity chart (connectivity.go): the
+	// checkout's copy, into the lab registry at the meta chart's version,
+	// ahead of the renders that point the release at it. The digest is what
+	// the release is waited for after the install.
+	var connectivityDigest string
+	if local, err := localConnectivityChartFor(cfg); err != nil {
+		return err
+	} else if local != nil {
+		step("Pushing the connectivity chart of %s into the lab registry as %s (the meta chart installs it at its own version)", local.Dir, local.Version)
+		if connectivityDigest, err = pushConnectivityChart(cfg, local); err != nil {
+			return err
+		}
+	}
 
 	// The WorkerPool's CPU feature-set pin names the node its workers land on,
 	// which only the cluster can say: the binary's GOARCH — what a render
@@ -582,6 +606,15 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	}
 	if err := waitPlatformReleases(); err != nil {
 		return err
+	}
+	// The connectivity release of a chart directory runs the chart just
+	// pushed before anything reads the platform: a re-push under the meta
+	// chart's version changed the content behind the tag, which the install
+	// above did not touch and Flux would fetch on its interval.
+	if connectivityDigest != "" {
+		if err := waitConnectivityCatchUp(ctx, connectivityDigest); err != nil {
+			return err
+		}
 	}
 	// The two halves of Agent Substrate on one release (proveSubstrateLine):
 	// a chart whose kagent range admits a worker image from another Substrate
