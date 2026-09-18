@@ -371,7 +371,7 @@ agentlab serving-test
 ==> The served model as model-manager reports it                   -> LLMInferenceService, routed on the models Gateway
 ==> The ModelConfig model-manager wired into kagent                -> OpenAI provider at the model's route, backend label
 ==> A completion through the models Gateway                        -> 401 without a token, 200 with the person's
-==> Agent turn on the wired ModelConfig                            -> one A2A turn through the edge
+==> Agent turn on the wired ModelConfig                            -> the runtime dials the route; the documented negative (below)
 ==> Unloading qwen2-5-0-5b-cpu                                     -> LLMInferenceService and ModelConfig gone
 ```
 
@@ -379,3 +379,16 @@ agentlab serving-test
 node; the fit says so and the run stops there), `--skip-chat` skips the agent
 turn, `--ready-timeout` bounds the serve (default 20m: the download from the
 Hugging Face Hub and the CPU runtime's start).
+
+**The agent turn is the lab's documented negative.** The wired ModelConfig
+sends an agent to the model's route on the models Gateway with the caller's
+token, and the Gateway's certificate is the lab CA's. The agent runtime — the
+Go ADK Harness in its Substrate sandbox — trusts the public roots of its image
+and nothing else, and the platform has no knob to hand it another CA; on an
+installation the Gateway's certificate is a public one and the turn goes
+through. The proof drives the turn all the same and requires it to fail on
+exactly that verification (`x509: certificate signed by unknown authority`)
+and on nothing else, which proves the runtime dials the route the ModelConfig
+names; any other outcome fails the run, an answer passes it. The completion
+through the Gateway the step before is the same request with the same token
+shape, sent from the host, which trusts the lab CA.

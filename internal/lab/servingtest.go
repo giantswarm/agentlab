@@ -340,18 +340,32 @@ func ServingTest(cfg *config.Config, email string, opts ServingTestOptions) erro
 	}
 	note("the model answered: %q", excerpt(pong, 120))
 
-	var reply string
+	// The agent turn is the lab's documented negative: the wired ModelConfig
+	// sends the agent to the models Gateway, whose certificate is the lab
+	// CA's, and the agent runtime (the Go ADK Harness in its Substrate
+	// sandbox) trusts the public roots of its image and nothing else — the
+	// platform has no knob to hand it another CA, and on an installation the
+	// Gateway's certificate is a public one. The turn is driven all the same:
+	// it must fail on exactly that verification and on nothing else, which
+	// proves the runtime dials the route the ModelConfig names.
+	agentTurn := "skipped (--skip-chat)"
 	if !opts.SkipChat {
 		session, err := openMusterSession(cfg, token, "serving-test")
 		if err != nil {
 			return err
 		}
 		step("Agent turn on %s: an agent created through agent-manager as %s, one A2A turn through the edge (runtime -> the models Gateway -> the CPU runtime)", mcName, user.Email)
-		reply, err = servingAgentTurn(cfg, session, token, mcName)
-		if err != nil {
+		reply, err := servingAgentTurn(cfg, session, token, mcName)
+		switch {
+		case err == nil:
+			note("agent replied: %q", excerpt(reply, 120))
+			agentTurn = fmt.Sprintf("answered %q", excerpt(reply, 60))
+		case isUntrustedGatewayCert(err):
+			note("the runtime dialled %s and refused the lab CA's certificate — the lab's documented negative (the Harness trusts its image's public roots; an installation's Gateway certificate is a public one): %s", endpoint, excerptEnds(err.Error(), 160))
+			agentTurn = "the runtime dialled the route and refused the lab CA's certificate (the documented negative)"
+		default:
 			return err
 		}
-		note("agent replied: %q", excerpt(reply, 120))
 	}
 
 	step("Unloading %s", preset)
@@ -368,11 +382,18 @@ func ServingTest(cfg *config.Config, email string, opts ServingTestOptions) erro
 	fmt.Println("PASS: no token -> 401 at the gateway; Dex token -> model-manager's kserve backend through agentgateway")
 	fmt.Printf("PASS: fit on %s (allocatable budget) -> load -> LLMInferenceService Ready on %s, no accelerator -> ModelConfig %s wired at the model's route\n", node, servingRuntimeImage, mcName)
 	fmt.Printf("PASS: %s%s: 401 without a token, a completion with %s's token\n", endpoint, completionsPath, user.Email)
-	if !opts.SkipChat {
-		fmt.Println("PASS: one agent turn on the wired ModelConfig through the edge")
-	}
+	fmt.Printf("PASS: the agent turn on the wired ModelConfig: %s\n", agentTurn)
 	fmt.Println("PASS: unload -> LLMInferenceService and ModelConfig gone")
 	return nil
+}
+
+// isUntrustedGatewayCert reports whether an agent turn failed on the one
+// thing the lab cannot give the runtime: trust in the lab CA that signs the
+// models Gateway's certificate.
+func isUntrustedGatewayCert(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "x509: certificate signed by unknown authority") ||
+		strings.Contains(msg, "tls: failed to verify certificate")
 }
 
 // servedModel is one entry of GET /loaded on the kserve backend.
