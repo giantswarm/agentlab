@@ -321,11 +321,12 @@ brings it up, `agentlab serving-test` proves it. What the switch installs:
   lab's wildcard certificate, its JWT policy against the lab Dex (a request
   without a Dex token is answered 401 at the Gateway), which the meta chart
   names to the KServe control plane as the Gateway every model's route
-  attaches to. The classic KServe control plane (`kserve-crd`,
-  `kserve-resources`) comes along because the chart's llm-d controller still
-  reads its `inferenceservice-config` and shares its webhook certificate
-  Issuer; nothing runs on the classic path — every preset composes onto
-  llm-d — and both leave with it.
+  attaches to. The llm-d controller is the platform's one KServe controller:
+  its release renders the control plane's shared objects (the
+  `inferenceservice-config`, the webhook certificate Issuer, the default
+  `ClusterStorageContainer`); the classic KServe control plane (`kserve-crd`,
+  `kserve-resources`) is gone from the chart with the classic
+  `InferenceService` path (giantswarm/agent-platform#574).
 - **model-manager's `kserve` backend**, appended to the backends the one
   model-manager fronts (`backends: [ollama, kserve]` with a host Ollama;
   `backend: kserve` alone without a host server). It composes a published
