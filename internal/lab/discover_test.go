@@ -446,7 +446,7 @@ func TestReportToolsLine(t *testing.T) {
 			line = l
 		}
 	}
-	wants := []string{"tools             docker 29.7.2 — embedded: kind v", " (kindest/node:v", ", helm", ", client-go"}
+	wants := []string{"tools             docker 29.7.2 — embedded: kind v", " (gsoci.azurecr.io/giantswarm/kind-node:v", ", helm", ", client-go"}
 	if buildInfoHasDeps() {
 		wants = append(wants, ", helm v", ", client-go v")
 	}

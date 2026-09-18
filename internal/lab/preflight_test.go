@@ -81,7 +81,7 @@ func TestToolVersionsAreThisBuilds(t *testing.T) {
 			t.Errorf("%s must be reported as embedded", tool.Name)
 		}
 	}
-	if kind := tools[1]; kind.Name != kindToolName || !strings.HasPrefix(kind.Version, "v") || !strings.Contains(kind.Version, "(kindest/node:v") {
+	if kind := tools[1]; kind.Name != kindToolName || !strings.HasPrefix(kind.Version, "v") || !strings.Contains(kind.Version, "(gsoci.azurecr.io/giantswarm/kind-node:v") {
 		t.Errorf("kind entry %+v, want the embedded release and the node image named", kind)
 	}
 	if tools[2].Name != helmToolName || tools[3].Name != clientGoToolName {
