@@ -227,7 +227,7 @@ components:
   # certificate Issuer (the connectivity chart refuses the llm-d controller
   # without it), and the meta chart derives the models Gateway onto it as the
   # Gateway every LLMInferenceService route attaches to; nothing runs on the
-  # classic path — no preset composes an InferenceService — and both leave
+  # classic path — every preset composes onto llm-d — and both leave
   # with it (giantswarm/agent-platform#574).
   kserve-crd:
     enabled: true
