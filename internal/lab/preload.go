@@ -47,9 +47,11 @@ import (
 // ADK runtime images kagent composes at run time).
 const preloadImagesFile = StateDir + "/preload-images.txt"
 
-// infraImagePrefixes are baked into the kindest/node image already — nothing
-// to preload, so the snapshot skips them.
-var infraImagePrefixes = []string{"registry.k8s.io/", "docker.io/kindest/"}
+// kindNamespaces are the namespaces kind creates; their pods — kindnet,
+// CoreDNS, etcd, the apiserver and its peers, the local-path provisioner —
+// run the images baked into the node image, nothing to preload, so the
+// snapshot skips them.
+var kindNamespaces = []string{kubeSystemNamespace, "local-path-storage"}
 
 // preloadResult is what a side-load reports back.
 type preloadResult struct {
@@ -446,9 +448,6 @@ func snapshotPreloadImages() {
 	if err != nil {
 		return
 	}
-	images = slices.DeleteFunc(images, func(img string) bool {
-		return slices.ContainsFunc(infraImagePrefixes, func(p string) bool { return strings.HasPrefix(img, p) })
-	})
 	// Images built here were side-loaded by whoever built them and have no
 	// registry to be pulled from on the next boot. They are remembered as
 	// such, so a later `docker image prune` on the host does not make them
@@ -486,10 +485,16 @@ func snapshotPreloadImages() {
 	_ = os.WriteFile(preloadImagesFile, []byte(b.String()), 0o600)
 }
 
-// podImages lists the images the cluster's pods reference — every namespace,
-// init and ephemeral containers included, finished Job pods too (the hook
-// Jobs' images are the first the next boot needs) — spelled the way the node
-// spells them (fullImageRef), so the node-side skip in sideloadImages matches.
+// podImages lists the images the cluster's pods reference — every namespace
+// but kind's own (kindNamespaces), init and ephemeral containers included,
+// finished Job pods too (the hook Jobs' images are the first the next boot
+// needs) — spelled as the pods spell them: every image the lab loads names
+// its registry (gsoci, ghcr, the lab's localhost namespace for local
+// builds), so the pod, the host cache and the node agree on the name. A
+// bare Docker Hub reference a chart still pins is recorded as written; the
+// node lists it under the registry docker implies, so the skip in
+// sideloadImages does not recognise it and the next boot imports it once
+// more — the cost of the last such image, not a spelling the lab knows.
 // Tagged refs only: a digest-pinned reference is the kubelet's to pull
 // (splitDigestRefs), and a bare name is not a pullable ref (the rule
 // scrapeImages applies).
@@ -506,6 +511,9 @@ func podImages() ([]string, error) {
 	}
 	var images []string
 	for _, pod := range pods.Items {
+		if slices.Contains(kindNamespaces, pod.Namespace) {
+			continue
+		}
 		for _, c := range pod.Spec.InitContainers {
 			images = append(images, c.Image)
 		}
@@ -517,9 +525,6 @@ func podImages() ([]string, error) {
 		}
 	}
 	images = slices.DeleteFunc(images, func(ref string) bool { return !strings.ContainsAny(ref, ":@") })
-	for i, ref := range images {
-		images[i] = fullImageRef(ref)
-	}
 	slices.Sort(images)
 	tagged, _ := splitDigestRefs(slices.Compact(images))
 	return tagged, nil
@@ -536,7 +541,7 @@ const localOnlyMarker = "# local-only: "
 // manifest's memory decides.
 func localOnly(ref string, prov map[string]bool, provOK bool, remembered []string) bool {
 	if provOK {
-		if _, known := prov[shortRef(ref)]; known {
+		if _, known := prov[ref]; known {
 			return !registryBacked(ref, prov)
 		}
 	}
@@ -602,10 +607,11 @@ func nodeImageTags(node string) ([]string, error) {
 // the manifest a pulled image came from, and <none> for an image built or
 // tagged here. A pulled image re-tagged into ANOTHER repository shows <none>
 // too (the digest belongs to the repository it was pulled as); re-tagged within
-// the same repository it keeps the digest, and so still reads as pulled. Refs
-// are spelled the way docker prints them (shortRef). Podman prints a digest
-// for local builds too, but spells them `localhost/<name>`: that name is
-// what marks them local there.
+// the same repository it keeps the digest, and so still reads as pulled. The
+// refs are spelled the way docker prints them, which for every ref that
+// names its registry — all the lab loads — is the ref itself. Podman prints a
+// digest for local builds too, but spells them `localhost/<name>`: that
+// name, the lab's own for local builds (labImageRef), marks them local.
 func hostImageProvenance() (map[string]bool, error) {
 	out, err := outputQuiet("docker", "images", "--digests", "--format", "{{.Repository}}:{{.Tag}}\t{{.Digest}}")
 	if err != nil {
@@ -625,30 +631,20 @@ func parseImageProvenance(out string) map[string]bool {
 			continue
 		}
 		digest = strings.TrimSpace(digest)
-		ref = shortRef(ref)
-		backed := digest != "" && digest != "<none>" && !strings.HasPrefix(ref, "localhost/")
+		backed := digest != "" && digest != "<none>" && !strings.HasPrefix(ref, localhostName+"/")
 		prov[ref] = prov[ref] || backed
 	}
 	return prov
-}
-
-// shortRef spells a fully qualified ref (as crictl lists it) the way docker
-// prints it: the docker.io registry and its library/ namespace are implicit.
-func shortRef(ref string) string {
-	ref = strings.TrimPrefix(ref, "docker.io/library/")
-	return strings.TrimPrefix(ref, "docker.io/")
 }
 
 // registryBacked reports whether a node image can be pulled again on the next
 // boot. A ref the host cache does not know was pulled by the node itself —
 // pullable by construction; one the host knows with a registry digest was
 // pulled on the host. One the host knows WITHOUT a digest was built or tagged
-// here and side-loaded (a dev-image swap): no registry has it —
-// `docker.io/library/backstage-dev:<tag>` is what docker makes of a bare
-// `backstage-dev:<tag>` — and recording it means every boot after the local
-// copy is pruned asks Docker Hub for it and dockerd logs "denied: requested
-// access to the resource is denied" per ref.
+// here and side-loaded (a dev-image swap, `localhost/backstage-dev:<tag>`):
+// no registry has it, and recording it would have every boot after the local
+// copy is pruned try a pull that fails.
 func registryBacked(ref string, prov map[string]bool) bool {
-	backed, known := prov[shortRef(ref)]
+	backed, known := prov[ref]
 	return !known || backed
 }

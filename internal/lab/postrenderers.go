@@ -73,8 +73,8 @@ import (
 // [{target, patch}], images: [{name, newName, newTag}]}}]`.
 
 // dexLocalhostImage is the socat image of the sidecar (side-loaded like every
-// other lab image; Docker Hub).
-const dexLocalhostImage = "alpine/socat:1.8.1.3"
+// other lab image): the gsoci mirror of alpine/socat.
+const dexLocalhostImage = "gsoci.azurecr.io/giantswarm/socat:1.7.4.4"
 
 // dexLocalhostContainer is the sidecar's name; a strategic merge keys
 // containers by name, so a re-render replaces it in place.
@@ -218,9 +218,13 @@ spec:
 	}
 }
 
-// dexLocalhostPatch is patch 4 for a Deployment. An IPv6 wildcard listener is
-// dual-stack on Linux (bindv6only=0), so both [::1] — which Go dials first for
-// localhost — and 127.0.0.1 answer.
+// dexLocalhostPatch is patch 4 for a Deployment: the forwarder as a native
+// sidecar — an init container that restarts always, with a startup probe on
+// its listen port — so the kubelet starts the server's own container only once
+// the forwarder listens (a server dialing the issuer at start would otherwise
+// be refused and restart once). An IPv6 wildcard listener is dual-stack on
+// Linux (bindv6only=0), so both [::1] — which Go dials first for localhost —
+// and 127.0.0.1 answer.
 func dexLocalhostPatch(deployment string, dexPort int) kustomizePatch {
 	return kustomizePatch{
 		Target: map[string]string{kindKey: kindDeployment, nameKey: deployment},
@@ -231,17 +235,23 @@ metadata:
 spec:
   template:
     spec:
-      containers:
+      initContainers:
         - name: %s
           image: %s
+          restartPolicy: Always
           args:
             - TCP6-LISTEN:%d,fork,reuseaddr
             - TCP:%s
+          startupProbe:
+            tcpSocket:
+              port: %d
+            periodSeconds: 1
+            failureThreshold: 30
           resources:
             requests:
               cpu: 5m
               memory: 16Mi
-`, deployment, dexLocalhostContainer, dexLocalhostImage, dexPort, dexServiceAddr)),
+`, deployment, dexLocalhostContainer, dexLocalhostImage, dexPort, dexServiceAddr, dexPort)),
 	}
 }
 
@@ -463,12 +473,11 @@ func componentPostRenderers(cfg *config.Config, imageNames map[string]string, si
 }
 
 // devImageOverride is the kustomize image entry replacing the chart's image
-// (name) with a dev ref: `muster:dev-1a2b` becomes newName
-// docker.io/library/muster + newTag dev-1a2b — the fully qualified spelling
-// kind's containerd lists the side-loaded image under, so the pod's ref and
-// the node's copy agree byte for byte.
+// (name) with a dev ref: `muster:dev-1a2b` becomes newName localhost/muster +
+// newTag dev-1a2b — the name the build is side-loaded under (labImageRef), so
+// the pod's ref and the node's copy agree byte for byte.
 func devImageOverride(name, ref string) kustomizeImage {
-	full := fullImageRef(ref)
+	full := labImageRef(ref)
 	img := kustomizeImage{Name: name}
 	if repo, digest, ok := strings.Cut(full, "@"); ok {
 		img.NewName, img.Digest = repo, digest
@@ -485,16 +494,17 @@ func devImageOverride(name, ref string) kustomizeImage {
 	return img
 }
 
-// devImageRefs lists the dev images to side-load into the node, fully
-// qualified: the Deployment targets. The `harness` image is not among them —
-// nothing on the node's containerd pulls it (pushDevImage).
+// devImageRefs lists the dev images to side-load into the node under the
+// names their pods use (labImageRef): the Deployment targets. The `harness`
+// image is not among them — nothing on the node's containerd pulls it
+// (pushDevImage).
 func devImageRefs(cfg *config.Config) []string {
 	var refs []string
 	for component, ref := range cfg.Platform.DevImages {
 		if component == config.DevImageHarness {
 			continue
 		}
-		refs = append(refs, fullImageRef(ref))
+		refs = append(refs, labImageRef(ref))
 	}
 	slices.Sort(refs)
 	return refs
@@ -510,18 +520,19 @@ func harnessDevImage(cfg *config.Config) string {
 // Harness ref, and one of the lab Dex's names (certs.go).
 const localhostName = "localhost"
 
-// fullImageRef spells a ref the way containerd (and `crictl images`) does:
-// docker's implicit registry and library namespace made explicit, so
-// `muster:dev` is `docker.io/library/muster:dev` and `giantswarm/muster:dev`
-// is `docker.io/giantswarm/muster:dev`. A ref whose first component names a
-// registry (a dot, a port, or localhost) is left alone.
-func fullImageRef(ref string) string {
+// labImageRef is the name a dev image is side-loaded under and its pod names:
+// a ref that names a registry (a dot, a port, or localhost in its first
+// component) as it is; a build of this host — `muster:dev-1a2b`,
+// `giantswarm/muster:dev` — under localhost/, the namespace podman gives
+// local builds and the one no registry answers for. A pod whose side-load
+// went missing then fails on `localhost`, where nothing listens, instead of
+// asking Docker Hub for a repository of that name, which the registry docker
+// implies for a bare ref would have it do. The lab tags the build under that
+// name before the side-load (tagLocalDevImages).
+func labImageRef(ref string) string {
 	first, _, hasPath := strings.Cut(ref, "/")
-	if !hasPath {
-		return "docker.io/library/" + ref
-	}
-	if strings.ContainsAny(first, ".:") || first == localhostName {
+	if hasPath && (strings.ContainsAny(first, ".:") || first == localhostName) {
 		return ref
 	}
-	return "docker.io/" + ref
+	return localhostName + "/" + ref
 }

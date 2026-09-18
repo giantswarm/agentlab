@@ -70,11 +70,11 @@ plumbing for model servers under
 - **The image cache manifest only records what a registry can serve.**
   `state/preload-images.txt` is snapshotted from the node after every boot;
   an image built on the host and side-loaded (a `platform.devImages` swap,
-  `backstage-dev:<tag>`) shows up there as `docker.io/library/backstage-dev:<tag>`
-  — a Docker Hub ref that does not exist — and once the local copy is pruned
-  every boot would ask Docker Hub for it (`denied: requested access to the
-  resource is denied` in the dockerd log, once per ref). Images the host cache
-  knows without a registry digest are therefore left out of the snapshot.
+  `backstage-dev:<tag>`) runs under the lab's own name for local builds,
+  `localhost/backstage-dev:<tag>` — a ref no registry serves — and once the
+  local copy is pruned every boot would try to pull it. Images the host cache
+  knows without a registry digest are therefore left out of the snapshot and
+  remembered as local builds.
 - **`failed to load image: command "docker exec ... ctr ... images import
   --all-platforms ..." failed with error: exit status 1` during `up`** is the
   node's containerd refusing an archive whose multi-platform index names blobs

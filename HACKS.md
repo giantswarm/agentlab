@@ -328,7 +328,7 @@ the user's forwarded Dex id_token themselves (mcp-oauth resource servers against
 the issuer URL — `https://localhost:<dexPort>/dex`, the one URL the browser, the
 apiserver and every pod must share (H-issuer, above). muster and Backstage reach
 it through hostNetwork (U1); these cannot: all listen on :8080 and would collide
-on the single kind node. **Fix:** a `dex-localhost` sidecar (`alpine/socat`) that
+on the single kind node. **Fix:** a `dex-localhost` sidecar (socat, from its gsoci mirror) that
 listens on the pod's own loopback :<dexPort> (IPv6 wildcard, dual-stack) and
 forwards to the Dex ClusterIP Service, so `localhost` resolves inside the pod
 exactly as on the host; Dex's certificate carries `localhost`, TLS verification

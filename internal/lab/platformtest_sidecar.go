@@ -98,11 +98,12 @@ func proveDexLocalhostSidecars(ctx context.Context, cfg *config.Config) ([]dexLo
 }
 
 // checkDexLocalhostDeployment asserts one selected Deployment (key: what the
-// rule selected it by) carries the sidecar, rolled out completely, with
-// every pod Ready, every container running and none restarted.
+// rule selected it by) carries the sidecar — a native sidecar, among the init
+// containers — rolled out completely, with every pod Ready, every container
+// (the sidecar included) running and none restarted.
 func checkDexLocalhostDeployment(ctx context.Context, k *kubeClients, d *appsv1.Deployment, key string) error {
 	where := d.Namespace + "/" + d.Name
-	if !slices.ContainsFunc(d.Spec.Template.Spec.Containers, func(c corev1.Container) bool { return c.Name == dexLocalhostContainer }) {
+	if !slices.ContainsFunc(d.Spec.Template.Spec.InitContainers, func(c corev1.Container) bool { return c.Name == dexLocalhostContainer }) {
 		return fmt.Errorf("the Deployment %s is told the lab Dex address through %s but carries no %s sidecar — the lab did not patch this component; check the `%s sidecar on …` line of `agentlab platform` and components.%s.postRenderers in state/agent-platform-values.yaml; a server that carries the address without dialing it opts out with the annotation %s=false",
 			where, key, dexLocalhostContainer, dexLocalhostContainer, d.Name, dexLocalhostAnnotation)
 	}
@@ -126,7 +127,10 @@ func checkDexLocalhostDeployment(ctx context.Context, k *kubeClients, d *appsv1.
 		if pod.Status.Phase != corev1.PodRunning {
 			return fmt.Errorf("pod %s/%s of Deployment %s is %s, want Running (%s)", pod.Namespace, pod.Name, d.Name, pod.Status.Phase, podStateSummary(pod))
 		}
-		for _, c := range pod.Status.ContainerStatuses {
+		// The sidecar is the one init container that keeps running; the
+		// chart's own init containers complete and are not looked at.
+		sidecar := slices.DeleteFunc(slices.Clone(pod.Status.InitContainerStatuses), func(c corev1.ContainerStatus) bool { return c.Name != dexLocalhostContainer })
+		for _, c := range slices.Concat(sidecar, pod.Status.ContainerStatuses) {
 			if !c.Ready || c.State.Running == nil {
 				return fmt.Errorf("container %s of pod %s/%s is not running and ready (%s) — with %s the issuer is reachable, so look at `kubectl -n %s logs %s -c %s`",
 					c.Name, pod.Namespace, pod.Name, podStateSummary(pod), dexLocalhostContainer, pod.Namespace, pod.Name, c.Name)

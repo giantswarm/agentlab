@@ -18,11 +18,11 @@ import (
 
 // Fixture refs, hoisted so the linter's constant check stays quiet.
 const (
-	refPostgres     = "docker.io/library/postgres:18.3-alpine"
-	refBackstageDev = "docker.io/library/backstage-dev:multi-backend-022f5b7e"
+	refPostgres     = "gsoci.azurecr.io/giantswarm/postgresql-cnpg:18.3"
+	refBackstageDev = "localhost/backstage-dev:multi-backend-022f5b7e"
 	refMusterDev    = "gsoci.azurecr.io/giantswarm/muster:dev"
 	refGolangADK    = "gsoci.azurecr.io/giantswarm/golang-adk:0.10.0"
-	refSocat        = "docker.io/alpine/socat:1.8.1.3"
+	refSocat        = "gsoci.azurecr.io/giantswarm/socat:1.7.4.4"
 )
 
 func TestScrapeImages(t *testing.T) {
@@ -36,7 +36,7 @@ spec:
         - image: gsoci.azurecr.io/giantswarm/muster:5.7.2
         - image: "gsoci.azurecr.io/giantswarm/mcp-kubernetes:1.0.9"
       initContainers:
-        - image: 'docker.io/library/postgres:18.3-alpine'
+        - image: 'gsoci.azurecr.io/giantswarm/postgresql-cnpg:18.3'
 ---
 kind: ConfigMap
 data:
@@ -121,7 +121,6 @@ spec:
 `
 	got := scrapeImages(rendered)
 	want := []string{
-		refPostgres,
 		"ghcr.io/giantswarm/kagent/golang-adk@sha256:a2d23f5eb9c01e1903459a6e742f7d4aaa5e950d7e9aa6f07f8982761be0163a",
 		"ghcr.io/giantswarm/substrate/ateom-gvisor:0.0.27-gs.5",
 		"gsoci.azurecr.io/giantswarm/agentgateway:v1.4.1",
@@ -129,7 +128,7 @@ spec:
 		"gsoci.azurecr.io/giantswarm/mcp-kubernetes:1.0.9",
 		"gsoci.azurecr.io/giantswarm/muster:5.7.2",
 		"gsoci.azurecr.io/giantswarm/pgvector:0.8.2-18-bookworm",
-		"gsoci.azurecr.io/giantswarm/postgresql-cnpg:18.3",
+		refPostgres,
 		"gsoci.azurecr.io/giantswarm/valkey@sha256:abcdef0123456789",
 		"not-yaml-context:but-tagged",
 	}
@@ -141,19 +140,19 @@ spec:
 // TestRegistryBacked: the snapshot keeps what the next boot can pull — refs
 // the host cache does not know (the node pulled them itself) and refs it
 // knows with a registry digest — and drops what it knows without one: images
-// built or tagged here and side-loaded, which docker spells
-// `docker.io/library/<name>` in the node although no registry has them.
+// built or tagged here and side-loaded under the lab's localhost namespace,
+// which no registry serves.
 func TestRegistryBacked(t *testing.T) {
-	prov := parseImageProvenance("backstage-dev:multi-backend-022f5b7e\t<none>\n" +
-		"postgres:18.3-alpine\tsha256:54451ecb8ab38c24c3ec123f2fd501303a3a1856a5c66e98cecf2460d5e1e9d7\n" +
-		"alpine/socat:1.8.1.3\tsha256:5f275aa1b6e9889c851f61097142ee050fc6ac4615b4ea64ac1f2b0e81ff8d7f\n" +
+	prov := parseImageProvenance(refBackstageDev + "\t<none>\n" +
+		refPostgres + "\tsha256:54451ecb8ab38c24c3ec123f2fd501303a3a1856a5c66e98cecf2460d5e1e9d7\n" +
+		refSocat + "\tsha256:5f275aa1b6e9889c851f61097142ee050fc6ac4615b4ea64ac1f2b0e81ff8d7f\n" +
 		"gsoci.azurecr.io/giantswarm/muster:dev\t<none>\n" +
 		"gsoci.azurecr.io/giantswarm/muster:5.10.2\tsha256:b97b80cd922c4aa2b6aa61e3fca50194d211b1b5a90b5931ce1eef5ff74d35a5\n" +
 		"<none>:<none>\t<none>\n")
 	for ref, want := range map[string]bool{
 		refBackstageDev: false, // built here
-		refPostgres:     true,  // pulled from Docker Hub
-		refSocat:        true,  // pulled, non-library namespace
+		refPostgres:     true,  // pulled from gsoci
+		refSocat:        true,  // pulled from gsoci
 		refMusterDev:    false, // a dev build tagged into a registry repo
 		"gsoci.azurecr.io/giantswarm/muster:5.10.2": true,
 		refGolangADK: true, // unknown to the host: the node pulled it
@@ -164,15 +163,6 @@ func TestRegistryBacked(t *testing.T) {
 	}
 	if _, dangling := prov["<none>:<none>"]; dangling {
 		t.Error("untagged rows must not enter the provenance map")
-	}
-	for ref, want := range map[string]string{
-		refPostgres:                  "postgres:18.3-alpine",
-		refSocat:                     "alpine/socat:1.8.1.3",
-		"ghcr.io/dexidp/dex:v2.45.1": "ghcr.io/dexidp/dex:v2.45.1",
-	} {
-		if got := shortRef(ref); got != want {
-			t.Errorf("shortRef(%q) = %q, want %q", ref, got, want)
-		}
 	}
 }
 
@@ -191,13 +181,17 @@ func TestSnapshotPreloadImagesSkipsLocalBuilds(t *testing.T) {
 	installFakeTool(t, dir, "docker", `[ "$1" = images ] || { echo "unexpected docker $*" >&2; exit 2; }
 cat "$FAKE_HOST_IMAGES"`)
 	// What the pods run, spelled as their manifests spell it; the node's
-	// own images (kindnet, etcd) are baked into the node image.
+	// own pods in kind's namespaces run the images baked into the node image.
+	kindnet := podOf("kindnet", "kindest/kindnetd:v20250512-df8de77b", "registry.k8s.io/etcd:3.6.4-0")
+	kindnet.Namespace = kubeSystemNamespace
+	provisioner := podOf("local-path-provisioner", "kindest/local-path-provisioner:v20250214-acbabc1a")
+	provisioner.Namespace = "local-path-storage"
 	stubLabKube(t, &kubeClients{clientset: kubefake.NewClientset(
-		podOf("backstage", "backstage-dev:multi-backend-022f5b7e"),
-		podOf("kagent-pg", "postgres:18.3-alpine"),
+		podOf("backstage", refBackstageDev),
+		podOf("kagent-pg", refPostgres),
 		podOf("harness", refGolangADK),
 		podOf("muster", refMusterDev),
-		podOf("kindnet", "docker.io/kindest/kindnetd:v20250512-df8de77b", "registry.k8s.io/etcd:3.6.4-0"),
+		kindnet, provisioner,
 	)})
 	writeHost := func(rows string) {
 		if err := os.WriteFile(hostImages, []byte(rows), 0o600); err != nil {
@@ -215,38 +209,35 @@ cat "$FAKE_HOST_IMAGES"`)
 		}
 	}
 
-	writeHost("backstage-dev:multi-backend-022f5b7e\t<none>\n" +
-		"postgres:18.3-alpine\tsha256:54451e\n" +
+	writeHost(refBackstageDev + "\t<none>\n" +
+		refPostgres + "\tsha256:54451e\n" +
 		"gsoci.azurecr.io/giantswarm/muster:dev\t<none>\n")
 	check("host knows both local images",
-		[]string{refPostgres, refGolangADK},
-		[]string{refBackstageDev, refMusterDev})
+		[]string{refGolangADK, refPostgres},
+		[]string{refMusterDev, refBackstageDev})
 
-	writeHost("postgres:18.3-alpine\tsha256:54451e\n" +
+	writeHost(refPostgres + "\tsha256:54451e\n" +
 		"gsoci.azurecr.io/giantswarm/muster:dev\tsha256:0ff1ce\n")
 	check("dev image pruned on the host, muster:dev pulled for real",
-		[]string{refPostgres, refGolangADK, refMusterDev},
+		[]string{refGolangADK, refMusterDev, refPostgres},
 		[]string{refBackstageDev})
 }
 
 // Podman gives local builds a digest like any pull but spells them
-// `localhost/<name>`; that name marks them local, and podman's fully
-// qualified rows key the map the way docker spells them.
+// `localhost/<name>` — the lab's own name for them — and that name marks
+// them local.
 func TestParseImageProvenancePodman(t *testing.T) {
 	prov := parseImageProvenance("localhost/backstage-dev:t1\tsha256:0537\n" +
-		"docker.io/library/postgres:18.3-alpine\tsha256:5445\n" +
-		"docker.io/alpine/socat:1.8.1.3\tsha256:5f27\n")
+		refPostgres + "\tsha256:5445\n" +
+		refSocat + "\tsha256:5f27\n")
 	for ref, want := range map[string]bool{
-		"localhost/backstage-dev:t1":             false,
-		"docker.io/library/postgres:18.3-alpine": true,
-		refSocat:                                 true,
+		"localhost/backstage-dev:t1": false,
+		refPostgres:                  true,
+		refSocat:                     true,
 	} {
 		if got := registryBacked(ref, prov); got != want {
 			t.Errorf("registryBacked(%q) = %v, want %v", ref, got, want)
 		}
-	}
-	if _, known := prov["postgres:18.3-alpine"]; !known {
-		t.Error("podman's docker.io/library/ rows must key the map as docker spells them")
 	}
 }
 
@@ -526,23 +517,26 @@ func podOf(name string, images ...string) *corev1.Pod {
 }
 
 // podImages reads what the pods reference — init and ephemeral containers
-// included, across namespaces, each ref once — spelled as the node spells it;
-// a digest-pinned or bare ref is left to the kubelet.
+// included, across namespaces but kind's own, each ref once — spelled as
+// the pods spell it; a digest-pinned or bare ref is left to the kubelet.
 func TestPodImages(t *testing.T) {
 	app := podOf("app", "alpine/k8s:1.37.0", "busybox")
-	app.Spec.InitContainers = []corev1.Container{{Name: "init", Image: "postgres:18.3-alpine"}}
+	app.Spec.InitContainers = []corev1.Container{{Name: "init", Image: refPostgres}}
 	app.Spec.EphemeralContainers = []corev1.EphemeralContainer{{
 		EphemeralContainerCommon: corev1.EphemeralContainerCommon{Name: "debug", Image: refSocat},
 	}}
+	coredns := podOf("coredns", "registry.k8s.io/coredns/coredns:v1.12.1")
+	coredns.Namespace = kubeSystemNamespace
 	stubLabKube(t, &kubeClients{clientset: kubefake.NewClientset(app,
 		podOf("pinned", "gsoci.azurecr.io/giantswarm/rustfs@sha256:0123abcd", refMusterDev),
 		podOf("again", refMusterDev),
+		coredns,
 	)})
 	got, err := podImages()
 	if err != nil {
 		t.Fatalf("podImages: %v", err)
 	}
-	want := []string{"docker.io/alpine/k8s:1.37.0", refSocat, refPostgres, refMusterDev}
+	want := []string{"alpine/k8s:1.37.0", refMusterDev, refPostgres, refSocat}
 	if !slices.Equal(got, want) {
 		t.Errorf("pod images\n got  %v\n want %v", got, want)
 	}

@@ -91,6 +91,11 @@ servers **dial** the issuer by — for OIDC discovery and the JWKS:
 | `DEX_ISSUER_URL` | environment variable | the mcp-oauth resource servers (mcp-kubernetes, mcp-prometheus) |
 | `OIDC_ISSUER_URL` | environment variable | oauth2-proxy (the kagent UI) |
 
+The sidecar is a native sidecar: an init container that restarts always, with a
+startup probe on its listen port, so the kubelet starts the server's own
+container only once the forwarder listens and a server that dials the issuer at
+start is never refused.
+
 An argument counts in its variable spelling, so `--oidc-issuer-url=…` is
 `OIDC_ISSUER_URL`. A variable that carries the address as an **identity** only
 is not a dial target and selects nothing, whatever its value: the
@@ -145,6 +150,14 @@ removing the entry restores the chart's image on the next run. Use a
 distinctive tag per build — kind's containerd keeps running the old bits
 under a reused tag, and a Harness digest that did not change recompiles
 nothing.
+
+A build named without a registry (`muster:dev-1a2b3c`) runs under the lab's
+name for local builds, `localhost/muster:dev-1a2b3c`: `agentlab platform`
+tags it so, side-loads it under that name and writes that name into the
+override, so the pod's ref and the node's copy agree and no pod of the lab
+names a registry that does not have its image (podman spells local builds
+this way itself). A ref that names a registry — the lab registry, gsoci, a
+dev build published to ghcr — is used as written.
 
 ### Deployment targets
 
