@@ -9,7 +9,7 @@ require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/a2aproject/a2a-go/v2 v2.5.0
 	github.com/creativeprojects/go-selfupdate v1.6.0
-	github.com/giantswarm/klaus-gateway v1.13.0
+	github.com/giantswarm/klaus-gateway v1.13.5
 	github.com/giantswarm/selfupdate-cosign v0.2.0
 	github.com/giantswarm/telemetrydeck-go v0.3.0
 	github.com/giantswarm/vm-manager v0.20.4
@@ -19,7 +19,7 @@ require (
 	golang.org/x/crypto v0.57.0
 	golang.org/x/sys v0.48.0
 	golang.org/x/term v0.46.0
-	google.golang.org/grpc v1.83.2
+	google.golang.org/grpc v1.84.0
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
 	helm.sh/helm/v4 v4.2.4
