@@ -56,6 +56,7 @@ const (
 	servingTestAgent        = "agentlab-serving-test"
 	kserveBackend           = config.ModelManagerBackendKServe
 	completionsPath         = "/v1/chat/completions"
+	chatRoleUser            = "user"
 	servingPongPrompt       = "Reply with exactly the word pong and nothing else."
 	llmisvcReadyCondition   = "Ready"
 	gatewayProgrammedCond   = "Programmed"
@@ -537,7 +538,7 @@ func completionThroughModelsGateway(ctx context.Context, cfg *config.Config, k *
 	}
 	payload, _ := json.Marshal(map[string]any{
 		"model":      servingPresetModel,
-		"messages":   []map[string]string{{"role": "user", "content": servingPongPrompt}},
+		"messages":   []map[string]string{{"role": chatRoleUser, "content": servingPongPrompt}},
 		"max_tokens": 16,
 	})
 	do := func(bearer string) (int, []byte, error) {

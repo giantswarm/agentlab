@@ -49,7 +49,7 @@ func TestServingSwitch(t *testing.T) {
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "needs agent-platform 4.40.0 or newer") {
 		t.Errorf("serving on the default pin %s: err = %v, want the chart floor", DefaultChartVersion, err)
 	}
-	cfg.Platform.ChartBranch = "main"
+	cfg.Platform.ChartBranch = mainBranch
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("serving on a branch build: %v, want the floor waived", err)
 	}
