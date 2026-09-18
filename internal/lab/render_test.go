@@ -745,3 +745,107 @@ func TestPlatformValuesKlausGateway(t *testing.T) {
 		t.Errorf("klaus-gateway pull-policy patch: %v", kustomize["patches"])
 	}
 }
+
+// The serving switch's render: the llm-d components and the modelServing
+// switch on, the classic controller off with the llm-d controller rendering
+// the shared objects and naming the models Gateway, the lab's CPU preset on
+// its runtime image, the models Gateway with the lab Dex's JWKS, the kserve
+// backend in model-manager's list (alone, in the one-backend form, when no
+// host server is on), the models host rewritten to the Gateway's data plane
+// inside pods — and none of it while the switch is off.
+func TestPlatformValuesServing(t *testing.T) {
+	render := func(t *testing.T, cfg *config.Config) (map[string]any, string) {
+		t.Helper()
+		out, err := renderTemplate(cfg, platformValuesTemplate, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var values map[string]any
+		if err := yaml.Unmarshal(out, &values); err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		return values, string(out)
+	}
+	components := func(values map[string]any) map[string]any {
+		comps, _ := values["components"].(map[string]any)
+		return comps
+	}
+	cfg := config.Default()
+	cfg.Platform.ChartVersion = "4.40.0"
+	cfg.Platform.ModelManager.Enabled = false
+	values, _ := render(t, cfg)
+	for _, key := range []string{"kserve-crd", "kserve-resources", "kserve-llmisvc-crd", "kserve-llmisvc-resources", "kserve-runtime-configs", "modelServing"} {
+		if _, ok := components(values)[key]; ok {
+			t.Errorf("components.%s rendered while platform.serving is off", key)
+		}
+	}
+	if _, ok := values["modelServing"]; ok {
+		t.Errorf("modelServing block rendered while platform.serving is off: %v", values["modelServing"])
+	}
+
+	cfg.Platform.Serving.Enabled = true
+	values, raw := render(t, cfg)
+	// The classic control plane comes along because the chart's llm-d
+	// controller reads its inferenceservice-config and shares its Issuer;
+	// nothing composes onto it.
+	for _, key := range []string{"kserve-crd", "kserve-resources", "kserve-llmisvc-crd", "kserve-llmisvc-resources", "kserve-runtime-configs", "modelServing"} {
+		comp, _ := components(values)[key].(map[string]any)
+		if comp["enabled"] != true {
+			t.Errorf("components.%s = %v, want enabled: true", key, comp)
+		}
+	}
+	if _, ok := values["kserve-llmisvc-resources"]; ok {
+		t.Error("a kserve-llmisvc-resources block rendered: the meta chart derives the models Gateway onto the KServe control plane itself")
+	}
+	ms, _ := values["modelServing"].(map[string]any)
+	presets, _ := ms["presets"].([]any)
+	if len(presets) != 1 {
+		t.Fatalf("modelServing.presets = %v, want the lab preset alone", presets)
+	}
+	preset := presets[0].(map[string]any)
+	if name := preset["metadata"].(map[string]any)["name"]; name != servingPresetName {
+		t.Errorf("the lab preset is %v, want %s", name, servingPresetName)
+	}
+	spec := preset["spec"].(map[string]any)
+	if gpus := spec["resources"].(map[string]any)["gpus"]; gpus != 0 {
+		t.Errorf("the lab preset requests %v GPUs, want 0", gpus)
+	}
+	if !strings.Contains(raw, "image: "+servingRuntimeImage) {
+		t.Errorf("the lab preset does not name the CPU runtime %s", servingRuntimeImage)
+	}
+	gateway, _ := ms["modelsGateway"].(map[string]any)
+	if gateway["enabled"] != true || gateway["name"] != modelsGatewayName {
+		t.Errorf("modelServing.modelsGateway = %v, want enabled with name %s", gateway, modelsGatewayName)
+	}
+	if !strings.Contains(raw, "host: dex.dex.svc.cluster.local") {
+		t.Error("the models Gateway's JWT policy does not name the lab Dex's JWKS")
+	}
+	mm, _ := values["model-manager"].(map[string]any)
+	if mm["backend"] != "kserve" {
+		t.Errorf("model-manager = %v, want the one-backend form with kserve (no host server)", mm)
+	}
+	if _, ok := mm["kserve"]; ok {
+		t.Error("model-manager.kserve rendered with an endpoint: the kserve backend has none")
+	}
+
+	cfg.Platform.ModelManager = config.ModelManager{Enabled: true, Backends: []string{ollama}}
+	out, err := renderTemplate(cfg, platformValuesTemplate, func(d *tmplData) { d.ModelManagerEndpoints = map[string]string{ollama: ollamaLabEndpoint} })
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "model-manager:\n  backends:\n    - ollama\n    - kserve\n  ollama:\n    endpoint: \"http://172.21.0.1:11434\"\n  muster:"
+	if !strings.Contains(string(out), want) {
+		t.Errorf("a host server and the serving switch: want\n%s\nin\n%s", want, excerptAround(string(out), "model-manager:\n"))
+	}
+
+	coredns, err := renderTemplate(cfg, "coredns.yaml.tmpl", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(coredns), "name exact "+modelsGatewayName+"."+cfg.Platform.Domain+" "+modelsGatewayName+".agent-platform.svc.cluster.local") {
+		t.Errorf("CoreDNS does not rewrite the models host to the Gateway's data plane:\n%s", coredns)
+	}
+	if !strings.Contains(string(coredns), "agentgateway-edge.agent-platform.svc.cluster.local") {
+		t.Error("CoreDNS lost the wildcard rewrite to the edge")
+	}
+}

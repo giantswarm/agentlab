@@ -69,6 +69,7 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 	agentsEnabled := cfg.Platform.Agents
 	observabilityEnabled := cfg.Platform.Observability
 	modelManagerEnabled := cfg.Platform.ModelManager.Enabled
+	servingEnabled := cfg.Platform.Serving.Enabled
 	agentsPort := strconv.Itoa(cfg.Platform.AgentsPort)
 	aiModel := cfg.AIModel
 	customizeModels := false
@@ -169,6 +170,12 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 				Affirmative("Manage").
 				Negative("Skip").
 				Value(&modelManagerEnabled),
+			huh.NewConfirm().
+				Title("Serve models on llm-d in the lab (KServe llmisvc + model-manager's kserve backend)?").
+				Description("Optional, needs the agents runtime: the platform's own serving on the kind node —\nthe LLMInferenceService controller and its CRDs, the well-known runtime configs, the\nmodels Gateway with its JWT policy, cert-manager — and one CPU preset of the lab's, a\nsmall instruct model on the llm-d CPU runtime (the node has no GPU). ~2.5 GB of images;\n`agentlab serving-test` is the proof.").
+				Affirmative("Serve").
+				Negative("Skip").
+				Value(&servingEnabled),
 			huh.NewInput().
 				Title("Claude model").
 				Description("Used by the platform agents' ModelConfig and Backstage's AI chat.\nThe API key comes from $ANTHROPIC_API_KEY at deploy time, never from this file.").
@@ -212,6 +219,8 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 	// Managed models wire into kagent; without the runtime the confirm has
 	// nothing to manage into.
 	cfg.Platform.ModelManager.Enabled = modelManagerEnabled && agentsEnabled
+	// The served model is wired into kagent too.
+	cfg.Platform.Serving.Enabled = servingEnabled && agentsEnabled
 	cfg.Platform.AgentsPort = mustAtoi(agentsPort)
 	cfg.AIModel = aiModel
 	cfg.Backstage.Port = mustAtoi(backstagePort)

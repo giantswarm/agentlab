@@ -83,6 +83,11 @@ type tmplData struct {
 	// `klausGateway:` block needs.
 	KlausGatewayEnabled bool
 	KlausGateway        klausGatewayValues
+	// ServingEnabled mirrors cfg.ServingEnabled(); Serving carries the names
+	// the serving blocks render (serving.go): the lab preset and its
+	// runtime image, the serving namespace, the models Gateway.
+	ServingEnabled bool
+	Serving        servingValues
 	// PostRenderers is the lab's per-component `postRenderers` list as
 	// indented YAML, keyed by agent-platform component name
 	// (postrenderers.go): the hostNetwork, sidecar and nodePort patches plus
@@ -161,7 +166,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		GitHubToken:                gitHubTokenWired(cfg),
 		ModelManagerEnabled:        cfg.ModelManagerEnabled(),
 		LegacyChart:                cfg.LegacyChart(),
-		ModelManagerBackends:       cfg.Platform.ModelManager.Backends,
+		ModelManagerBackends:       cfg.ChartBackends(),
 		ModelManagerEndpoints:      endpoints,
 		ExtraModels:                cfg.Platform.ExtraModels,
 		OAuthFixtureServer:         oauthFixtureServer,
@@ -175,6 +180,8 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		VMManagerGuestImage:        vmManagerGuestImage,
 		KlausGatewayEnabled:        cfg.KlausGatewayEnabled(),
 		KlausGateway:               klausGatewayValuesFor(cfg),
+		ServingEnabled:             cfg.ServingEnabled(),
+		Serving:                    servingValuesFor(),
 		CertsDir:                   certsDir,
 		MusterNodePort:             config.MusterNodePort,
 		KagentUINodePort:           config.KagentUINodePort,
@@ -202,14 +209,15 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 // on) is never extra.
 func (t *tmplData) ExtraPostRenderers() map[string]string {
 	named := map[string]bool{
-		componentMuster:        true,
-		componentMCPKubernetes: true,
-		componentKagent:        true,
-		componentBackstage:     true,
-		modelManagerMCPServer:  true,
-		agentManagerMCPServer:  t.Platform.Agents,
-		vmManagerMCPServer:     t.VMManagerEnabled,
-		klausGatewayComponent:  t.KlausGatewayEnabled,
+		componentMuster:           true,
+		componentMCPKubernetes:    true,
+		componentKagent:           true,
+		componentBackstage:        true,
+		modelManagerMCPServer:     true,
+		agentManagerMCPServer:     t.Platform.Agents,
+		vmManagerMCPServer:        t.VMManagerEnabled,
+		klausGatewayComponent:     t.KlausGatewayEnabled,
+		llmisvcResourcesComponent: t.ServingEnabled,
 	}
 	extra := map[string]string{}
 	for component, postRenderers := range t.PostRenderers {
@@ -287,6 +295,7 @@ var manifests = map[string]struct {
 	"rbac.yaml.tmpl":                         {out: "rbac.yaml"},
 	platformValuesTemplate:                   {out: "agent-platform-values.yaml"},
 	"kube-prometheus-stack-values.yaml.tmpl": {out: "kube-prometheus-stack-values.yaml"},
+	certManagerValuesTemplate:                {out: "cert-manager-values.yaml"},
 	mcpPrometheusTemplate:                    {out: "mcp-prometheus.yaml"},
 	"observability-route.yaml.tmpl":          {out: "observability-route.yaml"},
 	"demo-workflow.yaml.tmpl":                {out: "demo-workflow.yaml"},

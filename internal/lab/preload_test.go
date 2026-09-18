@@ -86,6 +86,28 @@ spec:
     snapshotPolicy:
       # a URL under a scraped key is no image
       location: s3://ate-snapshots/kagent
+---
+# a well-known LLMInferenceServiceConfig is a template the llm-d controller
+# composes pods from, not a pod: which of its images a pod runs is decided per
+# LLMInferenceService, so none of them is in the pull set
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceServiceConfig
+metadata:
+  name: kserve-config-llm-template
+spec:
+  template:
+    containers:
+      - image: gsoci.azurecr.io/giantswarm/llm-d-fast/llm-d-cuda:v0.8.0
+        name: main
+      - image: gsoci.azurecr.io/giantswarm/llm-d-router-disagg-sidecar:v0.9.0
+        name: routing-sidecar
+---
+kind: Deployment
+spec:
+  template:
+    spec:
+      containers:
+        - image: gsoci.azurecr.io/giantswarm/llmisvc-controller:v0.20.0
 `
 	got := scrapeImages(rendered)
 	want := []string{
@@ -93,6 +115,7 @@ spec:
 		"ghcr.io/giantswarm/kagent/golang-adk@sha256:a2d23f5eb9c01e1903459a6e742f7d4aaa5e950d7e9aa6f07f8982761be0163a",
 		"ghcr.io/giantswarm/substrate/ateom-gvisor:0.0.27-gs.5",
 		"gsoci.azurecr.io/giantswarm/agentgateway:v1.4.1",
+		"gsoci.azurecr.io/giantswarm/llmisvc-controller:v0.20.0",
 		"gsoci.azurecr.io/giantswarm/mcp-kubernetes:1.0.9",
 		"gsoci.azurecr.io/giantswarm/muster:5.7.2",
 		"gsoci.azurecr.io/giantswarm/pgvector:0.8.2-18-bookworm",

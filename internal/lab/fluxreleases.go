@@ -436,6 +436,11 @@ func platformImages(cfg *config.Config, roster *platformRoster) ([]string, map[s
 	}
 	note("rendered %d of %d component charts%s", len(releases)-len(errs), len(releases), filteredNote(filtered))
 	images = append(images, componentImages...)
+	// The lab preset's runtime (serving.go): named by no chart render a pod
+	// of it is in — the preset's image is a value the connectivity chart
+	// publishes as data, and the well-known configs' images are templates
+	// (scrapeImages leaves them out).
+	images = append(images, servingImages(cfg)...)
 	slices.Sort(images)
 	images, byDigest := splitDigestRefs(slices.Compact(images))
 	if len(byDigest) > 0 {

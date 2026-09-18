@@ -19,6 +19,16 @@ data:
            lameduck 5s
         }
         ready
+{{- if .ServingEnabled }}
+        # The models Gateway (platform.serving) is a Gateway of its own with
+        # a data plane of its own: its hostname goes to that Service, before
+        # the wildcard sends everything else to the edge. What a served model's
+        # ModelConfig names as baseUrl, so agent pods reach it in-cluster.
+        rewrite stop {
+            name exact {{ .Serving.GatewayName }}.{{ .Platform.Domain }} {{ .Serving.GatewayName }}.agent-platform.svc.cluster.local
+            answer auto
+        }
+{{- end }}
         rewrite stop {
             name regex (.*)\.{{ .DomainRegex }} agentgateway-edge.agent-platform.svc.cluster.local
             answer auto

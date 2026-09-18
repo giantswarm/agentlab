@@ -357,6 +357,16 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 			return err
 		}
 	}
+	// Model serving (serving.go): cert-manager before the platform too —
+	// the llm-d controller's webhook certificate is a cert-manager
+	// Certificate and its webhook configurations take their CA from the
+	// cainjector, so the component's HelmRelease fails on the missing kinds
+	// without it.
+	if cfg.ServingEnabled() {
+		if err := certManagerUp(cfg); err != nil {
+			return err
+		}
+	}
 	// Managed models: every host model server's endpoint is detected from
 	// the kind docker network and proven reachable from inside the cluster
 	// BEFORE the install, so a host-side misconfiguration (bind address,

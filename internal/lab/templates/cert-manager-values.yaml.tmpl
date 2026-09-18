@@ -1,0 +1,33 @@
+# The Giant Swarm cert-manager-app — the fleet's cert-manager, images from
+# gsoci — for the serving switch (serving.go): the llm-d controller's webhook
+# certificate is a cert-manager Certificate from the self-signed Issuer the
+# KServe chart renders, and the cainjector puts the CA on the webhook
+# configurations. Installed before the platform chart, into its own namespace.
+#
+# The Giant Swarm-only objects a kind cluster cannot take are off: the PodLogs
+# (Alloy's CRD, not here), the network policies (kindnetd enforces plain
+# NetworkPolicy, and the lab keeps every component's traffic open), the
+# Let's Encrypt ClusterIssuer of the installation's domain (an ACME Job with
+# nothing to solve against). The ServiceMonitor follows the lab's
+# observability stack; the VPAs guard themselves on the API.
+podLogs:
+  enabled: false
+webhook:
+  podLogs:
+    enabled: false
+cainjector:
+  podLogs:
+    enabled: false
+giantswarmNetworkPolicy:
+  enabled: false
+ciliumNetworkPolicy:
+  enabled: false
+giantSwarmClusterIssuer:
+  install: false
+  acme:
+    http01:
+      enabled: false
+cert-manager:
+  prometheus:
+    servicemonitor:
+      enabled: {{ .Platform.Observability }}

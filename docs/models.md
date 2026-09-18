@@ -3,8 +3,8 @@
 Which models the agents can run on, and how the lab wires them. The default
 is the Anthropic `ModelConfig` the kagent chart renders from `aiModel` (see
 [Agents](agents.md)); this page covers everything beyond it: static extra
-model configs, model servers on the lab host, and the managed mode where
-model-manager fronts those servers.
+model configs, model servers on the lab host, the managed mode where
+model-manager fronts those servers, and the platform's own serving on llm-d.
 
 ## Extra model configs (self-hosted, OpenRouter, Gemini, OpenAI)
 
@@ -295,3 +295,87 @@ section above.
 Both modes coexist: the static `extraModels` entries stay as they are
 (labeled `managed-by: agentlab`), model-manager's ModelConfigs carry
 `managed-by: model-manager`, and neither prunes the other's.
+
+## Model serving on llm-d (`platform.serving`)
+
+The serving slice a Giant Swarm installation runs, on the kind node: the
+platform serves a model itself instead of fronting a server on the host.
+`agentlab configure --serving` turns it on (the form asks too; it needs the
+agents runtime, which the served model is wired into), `agentlab platform`
+brings it up, `agentlab serving-test` proves it. What the switch installs:
+
+- **cert-manager** (the Giant Swarm `cert-manager-app`, images from gsoci),
+  before the platform chart: the llm-d controller's webhook certificate is a
+  cert-manager Certificate from a self-signed Issuer, and the cainjector puts
+  the CA on its webhook configurations. Installed into `cert-manager` the way
+  the observability stack is, with the Giant Swarm-only objects a kind cluster
+  cannot take turned off.
+- **The chart's serving components**: `kserve-llmisvc-crd` (the
+  `LLMInferenceService` CRDs), `kserve-llmisvc-resources` (the llm-d
+  controller), `kserve-runtime-configs` (the well-known
+  `LLMInferenceServiceConfig`s the controller composes a model's pods from,
+  their llm-d images from gsoci) and the `modelServing` switch — the
+  connectivity chart's serving namespace `model-serving`, the published
+  presets and their discovery ConfigMap, and the **models Gateway** `models`:
+  an agentgateway Gateway of its own at `https://models.<domain>`, TLS on the
+  lab's wildcard certificate, its JWT policy against the lab Dex (a request
+  without a Dex token is answered 401 at the Gateway), which the meta chart
+  names to the KServe control plane as the Gateway every model's route
+  attaches to. The classic KServe control plane (`kserve-crd`,
+  `kserve-resources`) comes along because the chart's llm-d controller still
+  reads its `inferenceservice-config` and shares its webhook certificate
+  Issuer; nothing runs on the classic path — no preset composes an
+  `InferenceService` — and both leave with it.
+- **model-manager's `kserve` backend**, appended to the backends the one
+  model-manager fronts (`backends: [ollama, kserve]` with a host Ollama;
+  `backend: kserve` alone without a host server). It composes a published
+  preset into an `LLMInferenceService` as the caller, waits for it and wires
+  the served model into kagent as a `ModelConfig` whose `baseUrl` is the
+  model's route on the models Gateway, the caller's token forwarded (the
+  Gateway admits nothing else).
+- **One preset of the lab's**, `qwen2-5-0-5b-cpu`: the node has no GPU, so
+  the lab publishes a `ServingPreset` next to the chart's shipped ones — Qwen2.5
+  0.5B Instruct (~1 GiB of BF16 weights, tool calling through vLLM's hermes
+  parser) on the **llm-d CPU runtime**, `gsoci.azurecr.io/giantswarm/llm-d-cpu`
+  at the tag the well-known template pins for `llm-d-cuda`, requesting no
+  GPU. The template's image is the one exception a preset makes (the
+  well-known template names the CUDA build a kind node cannot run), and the
+  preset's description says so; model-manager places a preset that requests
+  no GPU on the node's CPU capacity, judged against its allocatable memory.
+  The shipped GPU presets stay published — the portal lists them, and a fit
+  check says why none fits here.
+
+What the lab leaves out: the GPU pool (no taint, no node selector, no
+accelerator RuntimeClass), the pre-pull DaemonSet (it selects GPU nodes by
+label), the cache claim (kind's local-path volume keeps a root-owned root the
+KServe storage-initializer cannot write into; a preset's weights download
+into its pod's own storage at every start, a 1 GiB model) and external-dns
+(the Gateway's data plane is reached in-cluster through a CoreDNS rewrite of
+`models.<domain>`, and by the proof through a port-forward). The images the
+serving pods run are side-loaded like every platform image; the well-known
+templates' own images — the 17 GB CUDA runtime among them — are templates of
+pods, not pods, and stay out of the pull set.
+
+The proof, `agentlab serving-test`, leaves nothing behind:
+
+```
+agentlab serving-test
+==> The serving control plane: the llm-d controller, the well-known template, the models Gateway, the lab preset
+==> Calling the model-manager API without a token                 -> 401 at the gateway
+==> Logging in to Dex as admin@lab.local
+==> The kserve backend through the gateway with the Dex token
+==> The published presets: the lab's qwen2-5-0-5b-cpu among the shipped ones
+==> The fit: qwen2-5-0-5b-cpu against the node's CPU capacity      -> fits, allocatable budget
+==> Loading qwen2-5-0-5b-cpu on kserve                             -> LLMInferenceService composed on the CPU runtime
+==> Waiting for qwen2-5-0-5b-cpu to serve                          -> the weights download, vLLM starts, Ready
+==> The served model as model-manager reports it                   -> LLMInferenceService, routed on the models Gateway
+==> The ModelConfig model-manager wired into kagent                -> OpenAI provider at the model's route, backend label
+==> A completion through the models Gateway                        -> 401 without a token, 200 with the person's
+==> Agent turn on the wired ModelConfig                            -> one A2A turn through the edge
+==> Unloading qwen2-5-0-5b-cpu                                     -> LLMInferenceService and ModelConfig gone
+```
+
+`--preset` serves another published preset (a GPU preset does not fit the
+node; the fit says so and the run stops there), `--skip-chat` skips the agent
+turn, `--ready-timeout` bounds the serve (default 20m: the download from the
+Hugging Face Hub and the CPU runtime's start).

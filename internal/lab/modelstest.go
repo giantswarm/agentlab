@@ -744,27 +744,33 @@ func (a *modelManagerAPI) waitJob(id string, timeout time.Duration) error {
 // drives one turn on it as the same person through the edge and returns the
 // agent's text. The agent is removed on every path.
 func agentTurn(cfg *config.Config, session *musterSession, token, modelConfig, prompt string) (string, error) {
+	return agentTurnNamed(cfg, session, token, modelConfig, prompt, modelsTestAgent)
+}
+
+// agentTurnNamed is agentTurn with the proof's own throwaway agent name
+// (serving-test runs the same turn on the model it served).
+func agentTurnNamed(cfg *config.Config, session *musterSession, token, modelConfig, prompt, agent string) (string, error) {
 	defer func() {
-		if err := removeAgent(modelsTestAgent); err != nil {
+		if err := removeAgent(agent); err != nil {
 			note("cleanup: %v", err)
 		}
 	}()
-	if agentExists(modelsTestAgent) {
-		note("removing the leftover agent %s from an earlier run", modelsTestAgent)
-		if err := removeAgent(modelsTestAgent); err != nil {
+	if agentExists(agent) {
+		note("removing the leftover agent %s from an earlier run", agent)
+		if err := removeAgent(agent); err != nil {
 			return "", err
 		}
 	}
 	// The model itself is loaded by the host server on the first turn (the
 	// turn timeout covers it).
 	if _, _, err := readyAgent(agentManagerWriter{session}, agentSpec{
-		Name: modelsTestAgent, ModelConfig: modelConfig, DisplayName: "agentlab models-test", Toolset: []string{presetNone},
-		Description:   "Throwaway agent of `agentlab models-test` on the model the run pulled; deleted by the same run.",
+		Name: agent, ModelConfig: modelConfig, DisplayName: agent, Toolset: []string{presetNone},
+		Description:   "Throwaway agent of `" + strings.TrimPrefix(agent, "agentlab-") + "` on the model the run served; deleted by the same run.",
 		SystemMessage: "You are a terse assistant. Answer in one short line.",
 	}, agentReadyTimeout); err != nil {
 		return "", err
 	}
-	return firstTurnAs(cfg, modelsTestAgent, token, prompt)
+	return firstTurnAs(cfg, agent, token, prompt)
 }
 
 // modelConfigExists reports whether the ModelConfig is there; a read that
