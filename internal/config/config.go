@@ -103,7 +103,7 @@ const DefaultDexPort = 32000
 // installs) — 4.15.2 left the kagent range open within 0.11.0 and a later
 // kagent moved the worker image to Substrate 0.0.30 under its 0.0.27 atelet,
 // so a fresh lab booted no golden actor (agentlab#187).
-const DefaultChartVersion = "4.28.4"
+const DefaultChartVersion = "4.44.0"
 
 // ChartRepository is where the agent-platform chart releases live.
 const ChartRepository = "oci://gsoci.azurecr.io/charts/giantswarm/agent-platform"
