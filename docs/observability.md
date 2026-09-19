@@ -62,6 +62,28 @@ Only that query API is routed, not Prometheus's own web UI (its absolute asset
 paths would need `/`, and PromQL through muster is the point) — which is why
 `agentlab open` has a portal and an agents target, but no `prometheus` one.
 
+## Querying the lab Prometheus from the host
+
+Two paths reach the lab Prometheus without a local port, and both name the
+lab cluster in the request itself:
+
+- **the edge route** — the endpoint Backstage's metrics views use:
+  `curl -sk "https://observability.<domain>/prometheus/api/v1/query?query=<PromQL>"`
+  (with `:<gatewayPort>` when it is not 443);
+- **the API server's proxy** — before the edge is up, or for the targets page:
+  `kubectl --context kind-<clusterName> get --raw '/api/v1/namespaces/monitoring/services/kps-kube-prometheus-stack-prometheus:9090/proxy/api/v1/targets'`
+  (`…/proxy/api/v1/query?query=<PromQL>` for a query).
+
+A `kubectl port-forward … <port>:9090` to a fixed local port is the path to
+avoid on a machine that talks to more than one cluster. When the port is
+taken — typically by a forward to another cluster's Prometheus that outlived
+the shell that started it — kubectl fails to bind, the failure is easy to lose
+(`>/dev/null 2>&1 &`), and every query to `127.0.0.1:<port>` is answered by
+the other cluster's Prometheus: its targets, its pod names, its empty results.
+The lab's targets are pods in kind's `10.244.0.0/16`, and its scrape pools are
+the monitors the lab renders (`kps-…`, `agent-platform-connectivity-…`,
+`mcp-prometheus`); a Prometheus that shows anything else is not the lab's.
+
 `agentlab platform-test` grows a phase when the component is on: it lists the
 `x_mcp-prometheus_*` tools through muster, runs `execute_query` with `up`,
 asserts the platform itself is being scraped (muster, valkey,
