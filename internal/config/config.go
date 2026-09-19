@@ -263,7 +263,8 @@ type Platform struct {
 	// are the DevImageComponents. For a Deployment target `agentlab platform`
 	// side-loads the ref from the host docker cache, resolves the image name
 	// it replaces from the component chart's render (the kagent controller is
-	// `ghcr.io/giantswarm/kagent/controller` on the 4.x line and
+	// `gsoci.azurecr.io/giantswarm/kagent/controller` on the 4.x line, the
+	// path the kagent line publishes under, and
 	// `gsoci.azurecr.io/giantswarm/kagent-controller` on 3.x — a target that
 	// matches nothing in the render is an error before the install, never a
 	// silently dropped override) and renders it into the component's

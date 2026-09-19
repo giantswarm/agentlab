@@ -343,8 +343,8 @@ func proveSubstrateLine(ctx context.Context, remedy string) ([]substrateImages, 
 
 // substrateReleaseOf is the Substrate release an image is from: its tag's
 // version without the prerelease (0.0.30 from
-// ghcr.io/giantswarm/substrate/atelet:0.0.30-gs.4). An image with no tag or
-// a tag that is no version cannot be placed and is refused by name.
+// gsoci.azurecr.io/giantswarm/substrate/atelet:0.0.30-gs.4). An image with
+// no tag or a tag that is no version cannot be placed and is refused by name.
 func substrateReleaseOf(image string) (string, error) {
 	ref, _, _ := strings.Cut(image, "@")
 	name := ref[strings.LastIndex(ref, "/")+1:]

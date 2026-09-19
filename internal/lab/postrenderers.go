@@ -171,8 +171,8 @@ type devImageTarget struct {
 // devImageTargets maps the Deployment targets of the DevImageComponents to
 // their chart render. The fallback names are the charts' at global.registry
 // gsoci.azurecr.io; the kagent controller's is the 3.x wrapper's — the kagent
-// line publishes it as ghcr.io/giantswarm/kagent/controller, which the render
-// says.
+// line publishes it under its own path,
+// gsoci.azurecr.io/giantswarm/kagent/controller, which the render says.
 var devImageTargets = map[string]devImageTarget{
 	componentMuster:        {componentMuster, componentMuster, "gsoci.azurecr.io/giantswarm/muster"},
 	componentBackstage:     {componentBackstage, componentBackstage, "gsoci.azurecr.io/giantswarm/backstage"},
