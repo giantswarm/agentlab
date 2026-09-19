@@ -258,18 +258,17 @@ func ateletContainer(ds *unstructured.Unstructured) map[string]any {
 // atelet is the chart's `components.substrate`; the WorkerPool's worker image
 // (`spec.workerImage`, ateom-gvisor) is the kagent chart's stamp — kagent's
 // own Substrate pin, forwarded by the meta chart. A meta chart whose kagent
-// range admits a kagent from a newer Substrate release while its substrate
-// range stays installs green and boots no golden actor: agent-platform 4.15.2
-// pinned Substrate 0.0.27-gs.9 and kagent `>=0.11.0-gs.12 <0.11.1-0`, kagent
-// gs.14 moved the worker image to 0.0.30, and Substrate 0.0.30 had renamed
-// the actor's pause bundle (`bundles/pause` → `bundles/_pause`) — every
-// compile the atelet asked of the worker failed on `bundles/_pause/
-// config.json: no such file or directory`, the AgentTemplate sat at
-// ActorTemplatePending ("golden snapshot compiling"), `agentlab up` and the
-// platform releases stayed green, `agents-test` burned its five minutes and
-// only the atelet log said why. The release compared is the image tag without
-// its prerelease (0.0.30 from 0.0.30-gs.4): the line's -gs.N patches share
-// the upstream release's bundle layout, a new upstream release changes it.
+// range admits a kagent from another Substrate release than its substrate
+// range installs green and boots no golden actor: a worker looks for the
+// actor bundles laid out as its own release writes them, the atelet writes
+// its release's layout, every compile the atelet asks of the worker fails
+// inside the worker, the AgentTemplate sits at ActorTemplatePending ("golden
+// snapshot compiling"), `agentlab up` and the platform releases stay green,
+// `agents-test` burns its five minutes and only the atelet log says why. The
+// release compared is the image tag's major.minor: the Substrate line
+// releases stable semver of its own, a patch is carried patches or a rebuild
+// on the same upstream pin and never changes the worker/atelet contract, a
+// re-pin onto another upstream release is at least a minor.
 
 // workerPoolsResource is Substrate's WorkerPool API, resolved through
 // discovery like every custom kind the lab reads (never pinned here).
@@ -342,9 +341,9 @@ func proveSubstrateLine(ctx context.Context, remedy string) ([]substrateImages, 
 }
 
 // substrateReleaseOf is the Substrate release an image is from: its tag's
-// version without the prerelease (0.0.30 from
-// gsoci.azurecr.io/giantswarm/substrate/atelet:0.0.30-gs.4). An image with
-// no tag or a tag that is no version cannot be placed and is refused by name.
+// major.minor (1.0 from gsoci.azurecr.io/giantswarm/substrate/atelet:1.0.3,
+// and from a dev build 1.0.1-dev.… of the line). An image with no tag or a
+// tag that is no version cannot be placed and is refused by name.
 func substrateReleaseOf(image string) (string, error) {
 	ref, _, _ := strings.Cut(image, "@")
 	name := ref[strings.LastIndex(ref, "/")+1:]
@@ -356,7 +355,7 @@ func substrateReleaseOf(image string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("image %s: tag %q is not a version (%v)", image, tag, err)
 	}
-	return fmt.Sprintf("%d.%d.%d", v.Major(), v.Minor(), v.Patch()), nil
+	return fmt.Sprintf("%d.%d", v.Major(), v.Minor()), nil
 }
 
 // substrateSkewRemedy is the fix a skewed lab is told, for the way this lab

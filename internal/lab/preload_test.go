@@ -65,7 +65,7 @@ spec:
 apiVersion: ate.dev/v1alpha1
 kind: WorkerPool
 spec:
-  workerImage: gsoci.azurecr.io/giantswarm/substrate/ateom-gvisor:0.0.27-gs.5
+  workerImage: gsoci.azurecr.io/giantswarm/substrate/ateom-gvisor:1.0.0
 ---
 apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
@@ -128,7 +128,7 @@ spec:
 		"gsoci.azurecr.io/giantswarm/muster:5.7.2",
 		"gsoci.azurecr.io/giantswarm/pgvector:0.8.2-18-bookworm",
 		refPostgres,
-		"gsoci.azurecr.io/giantswarm/substrate/ateom-gvisor:0.0.27-gs.5",
+		"gsoci.azurecr.io/giantswarm/substrate/ateom-gvisor:1.0.0",
 		"gsoci.azurecr.io/giantswarm/valkey@sha256:abcdef0123456789",
 		"not-yaml-context:but-tagged",
 	}

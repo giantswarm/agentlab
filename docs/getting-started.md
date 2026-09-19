@@ -49,7 +49,7 @@ a pod whose CPU *request* does not fit, so a node that is 100m short simply
 leaves pods `Pending` forever. It does not degrade, it stalls.
 
 What a full default lab requests and uses (measured on a live lab on the 4.x
-line — agent-platform 4.15.2, kagent 0.11.0-gs.13, Substrate 0.0.27-gs.9 —
+line — agent-platform 4.15.2 —
 2026-09-14, the use column keeping the higher of that and the 2026-09-11 reading on 4.7.11; the first column is what the kube-scheduler is asked for, the
 second what the containers' memory working sets summed to):
 

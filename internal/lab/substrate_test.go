@@ -125,7 +125,7 @@ const testRegistryFlag = "--localhost-registry-replacement=agentlab-registry:500
 // the Substrate release the proofs' images are from.
 const (
 	testSidecarContainer = "sidecar"
-	testSubstrateRelease = "0.0.30"
+	testSubstrateRelease = "1.0"
 )
 
 // anySlice is a []string as the YAML decoder hands a list back.
@@ -164,16 +164,18 @@ func TestAteletArgsMissing(t *testing.T) {
 	}
 }
 
-// The Substrate release of an image is its tag's version without the
-// prerelease; an image that names no version cannot be placed and is refused
-// by name.
+// The Substrate release of an image is its tag's major.minor — a patch of
+// the line shares it, a dev build of the line reads as the release it derives
+// from; an image that names no version cannot be placed and is refused by
+// name.
 func TestSubstrateReleaseOf(t *testing.T) {
 	for image, want := range map[string]string{
-		"gsoci.azurecr.io/giantswarm/substrate/atelet:0.0.30-gs.4":                                                                         testSubstrateRelease,
-		"gsoci.azurecr.io/giantswarm/substrate/ateom-gvisor:0.0.27-gs.9":                                                                   "0.0.27",
-		"localhost:5000/substrate/ateom-gvisor:0.0.30-gs.1":                                                                                testSubstrateRelease,
-		"gsoci.azurecr.io/giantswarm/substrate/atelet:0.0.30-gs.4@sha256:0000000000000000000000000000000000000000000000000000000000000000": testSubstrateRelease,
-		"gsoci.azurecr.io/giantswarm/substrate/atelet:v1.2.3":                                                                              "1.2.3",
+		"gsoci.azurecr.io/giantswarm/substrate/atelet:1.0.3":                                                                         testSubstrateRelease,
+		"gsoci.azurecr.io/giantswarm/substrate/ateom-gvisor:1.0.0":                                                                   testSubstrateRelease,
+		"gsoci.azurecr.io/giantswarm/substrate/ateom-gvisor:1.1.0":                                                                   "1.1",
+		"localhost:5000/substrate/ateom-gvisor:1.0.1-dev.giantswarm.2026-09-19.10-00-00.h1234567":                                    testSubstrateRelease,
+		"gsoci.azurecr.io/giantswarm/substrate/atelet:1.0.3@sha256:0000000000000000000000000000000000000000000000000000000000000000": testSubstrateRelease,
+		"gsoci.azurecr.io/giantswarm/substrate/atelet:v1.2.3":                                                                        "1.2",
 	} {
 		if got, err := substrateReleaseOf(image); err != nil || got != want {
 			t.Errorf("substrateReleaseOf(%q) = %q, %v; want %q", image, got, err, want)
@@ -216,14 +218,14 @@ func workerPool(name, image string) *unstructured.Unstructured {
 }
 
 // The atelet and the WorkerPool's workers on one Substrate release pass, with
-// both images reported; the line's -gs.N patches may differ. Two releases are
-// refused naming both images, the symptom and the remedy; a lab without a
+// both images reported; the line's patch releases may differ. Two releases
+// are refused naming both images, the symptom and the remedy; a lab without a
 // WorkerPool cannot boot an actor either and says so.
 func TestProveSubstrateLine(t *testing.T) {
 	const (
-		atelet = "gsoci.azurecr.io/giantswarm/substrate/atelet:0.0.30-gs.4"
-		worker = "gsoci.azurecr.io/giantswarm/substrate/ateom-gvisor:0.0.30-gs.2"
-		skewed = "gsoci.azurecr.io/giantswarm/substrate/ateom-gvisor:0.0.27-gs.9"
+		atelet = "gsoci.azurecr.io/giantswarm/substrate/atelet:1.0.3"
+		worker = "gsoci.azurecr.io/giantswarm/substrate/ateom-gvisor:1.0.0"
+		skewed = "gsoci.azurecr.io/giantswarm/substrate/ateom-gvisor:1.1.0"
 		remedy = "agentlab configure --defaults --chart-version 9.9.9 && agentlab platform"
 	)
 	ctx := context.Background()
@@ -237,7 +239,7 @@ func TestProveSubstrateLine(t *testing.T) {
 	if !reflect.DeepEqual(images, want) {
 		t.Errorf("images = %+v, want %+v", images, want)
 	}
-	if got := images[0].String(); !strings.Contains(got, "Substrate 0.0.30") || !strings.Contains(got, atelet) || !strings.Contains(got, worker) {
+	if got := images[0].String(); !strings.Contains(got, "Substrate 1.0") || !strings.Contains(got, atelet) || !strings.Contains(got, worker) {
 		t.Errorf("the report names the release and both images, got %q", got)
 	}
 
@@ -246,7 +248,7 @@ func TestProveSubstrateLine(t *testing.T) {
 	if err == nil {
 		t.Fatal("two releases: want a refusal")
 	}
-	for _, want := range []string{atelet, "Substrate 0.0.30", skewed, "Substrate 0.0.27", kagentNamespace + "/kagent-other", "no golden actor boots", "kubectl -n " + substrateNamespace + " logs ds/" + ateletDaemonSet, remedy} {
+	for _, want := range []string{atelet, "Substrate 1.0", skewed, "Substrate 1.1", kagentNamespace + "/kagent-other", "no golden actor boots", "kubectl -n " + substrateNamespace + " logs ds/" + ateletDaemonSet, remedy} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal lacks %q:\n%v", want, err)
 		}

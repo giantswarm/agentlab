@@ -348,8 +348,8 @@ semverFilter: agent-platform-connectivity 3.22.1-dev…, …)`).
 
 ### Agent Substrate and the platform Postgres — from the chart
 
-kagent API v2 (the 4.x line: `kagent.dev/v1alpha3`, kagent `0.11.0-gs.N`
-from the Giant Swarm kagent line) runs every agent as an actor on
+kagent API v2 (the 4.x line: `kagent.dev/v1alpha3`, kagent `1.x` from the
+Giant Swarm kagent line's own releases) runs every agent as an actor on
 [Agent Substrate](https://github.com/kagent-dev/substrate) — sandboxed
 (gVisor) worker pods of a `WorkerPool`, an API server, a per-node agent
 (`atelet`) and the actors' ingress/egress data plane (`atenet`) — from the
@@ -358,10 +358,10 @@ Giant Swarm line [giantswarm/substrate](https://github.com/giantswarm/substrate)
 versions). **The chart ships it**: `components.substrate-crds` and
 `components.substrate` follow `components.kagent`, both land in `ate-system`
 as component releases of the chart's engine at the version the chart pins
-(`>=0.0.30-gs.1 <0.0.31-0` from agent-platform 4.15.5 — upstream kagent-dev/substrate
-v0.0.29 plus the line's patches; `>=0.0.27-gs.9 <0.0.28-0` through 4.15.2 — the
-range the `WorkerPool`'s worker image `kagent.substrateWorkerPool.workerImage`
-names too, and the release check below holds the two to), the connectivity
+(`>=1.0.0 <1.1.0` from agent-platform 4.49.0 — the line's own stable semver,
+its `FORK.md` naming the upstream release it carries; the range the
+`WorkerPool`'s worker image `kagent.substrateWorkerPool.workerImage` names
+too, and the release check below holds the two to), the connectivity
 release's `pre-install,pre-upgrade` hook Job mints what the substrate chart
 mounts but does not render (the CA/JWT pools, the actor-identity trust
 anchor, ate-api-server's authentication config; a pool that exists is never
@@ -560,32 +560,37 @@ the run — the proof passed on both halves on 2026-09-11 (`Ready after 20s`,
 the turn answered `Skills: agent-self-awareness … klaus-gateway`), which
 proved the Substrate half but gave the authorization up.
 
-The agentgateway line closes the third gate without giving it up: its release
-`v1.5.1-gs.2` (giantswarm/agentgateway-upstream#4) carries upstream
-agentgateway #3237 — every egress CONNECT authorized against ate-api, the
-actor's UID and then its state — and admits `RESUMING` next to `RUNNING`
-(SUSPENDED, PAUSED, CRASHED and DELETING stay refused). giantswarm/substrate#7
-pins it for `atenet-router` and `atenet-egress`, and giantswarm/substrate#9
-declares the actor authorization where that dataplane reads it — #3237 made
-it a frontend policy on the CONNECT, no longer a route policy on the inner
-listener (with the old shape the gs.2 dataplane refused its config and the
-first roll never became ready). The lab's Substrate pin follows that build
-(`0.0.27-dev.giantswarm.2026-09-11.02-07-06.h213d76b`), and the WorkerPool's
-worker image with it. On it the proof passed on both halves with the check in
-place: Ready after 15s on Harness kagent, the turn as admin@lab.local answered "klaus-gateway" from the skill, nothing left behind (revision a8949e0f2c79); platform-test 6/6 and agents-test 5/5 green on the same lab. Every skill-carrying agent of the fleet needs all three
-gates open; the upstream exits of the two patches are tracked on
+The agentgateway line closes the third gate without giving it up: it carries
+upstream agentgateway #3237 (giantswarm/agentgateway-upstream#4) — every
+egress CONNECT authorized against ate-api, the actor's UID and then its state
+— and admits `RESUMING` next to `RUNNING` (SUSPENDED, PAUSED, CRASHED and
+DELETING stay refused). giantswarm/substrate#7 pins it for `atenet-router`
+and `atenet-egress`, and giantswarm/substrate#9 declares the actor
+authorization where that dataplane reads it — #3237 made it a frontend policy
+on the CONNECT, no longer a route policy on the inner listener (with the old
+shape the dataplane refused its config and the first roll never became
+ready). With the check in place the proof passes on both halves: Ready after
+15s on Harness kagent, the turn as admin@lab.local answers "klaus-gateway"
+from the skill, nothing left behind; platform-test and agents-test green on
+the same lab. Every skill-carrying agent of the fleet needs all three gates
+open; the upstream exits of the two patches are tracked on
 giantswarm/giantswarm#37742 (row 8).
 
-Since the 2026-09-14 re-pin the three lines sit on the shape upstream chose:
-the Substrate line on kagent-dev/substrate v0.0.29 (release `v0.0.30-gs.1`),
-whose chart declares the check as agentgateway#3318's
-`substrateEgressActorResolution` frontend policy, and its router and egress
-gateway on the agentgateway line's `v1.5.1-gs.4` — upstream agentgateway
-`main` past `9f9744cf` (the substrate ingress header of #3409 the v0.0.29
-router speaks), still admitting a `RESUMING` actor; the kagent line on upstream
-`main` `800015de` (release `v0.11.0-gs.14`, kagent-dev/kagent#2802: the a2a
-gateway addresses an actor by the `ate-target-actor` header, which only a
-router from v0.0.28 on knows — the three move together).
+The three lines release stable semver of their own, decoupled from the
+upstream versions their `FORK.md`s record — agent-platform 4.49.0 pins kagent
+and Substrate `>=1.0.0 <1.1.0` and the agentgateway line's `2.0.0`, ranges
+without a `-0` bound (Flux's semver evaluates prereleases for the whole range
+once a bound carries one, so `<1.1.0-0` would admit the lines' `-dev.`
+builds). A patch of a line is carried patches or a rebuild on the same
+upstream pin; a re-pin onto another upstream release is at least a minor. The
+Substrate line sits on kagent-dev/substrate v0.0.29, whose chart declares the
+check as agentgateway#3318's `substrateEgressActorResolution` frontend
+policy, and its router and egress gateway on the agentgateway line — upstream
+agentgateway `main` past `9f9744cf` (the substrate ingress header of #3409
+the v0.0.29 router speaks), still admitting a `RESUMING` actor; the kagent
+line on upstream `main` `800015de` (kagent-dev/kagent#2802: the a2a gateway
+addresses an actor by the `ate-target-actor` header, which only a router from
+v0.0.28 on knows — the three move together).
 
 ### The Swarmgeist proof (klaus-gateway on kagent API v2)
 
@@ -1024,21 +1029,20 @@ data the page reads — see [The muster plugin](backstage.md#the-muster-plugin).
   kagent release `components.kagent` resolves to — kagent's own Substrate pin,
   forwarded by the meta chart. A meta chart whose kagent range admits a kagent
   from a newer Substrate release while its substrate range stays installs
-  green and boots no golden actor: agent-platform 4.15.2 pinned Substrate
-  `>=0.0.27-gs.9 <0.0.28-0` under kagent `>=0.11.0-gs.12 <0.11.1-0`, kagent
-  gs.14 moved the worker image to 0.0.30, and Substrate 0.0.30 had renamed the
-  actor's pause bundle (`bundles/pause` → `bundles/_pause`) — every compile
-  the atelet asked of the worker failed inside the worker on
+  green and boots no golden actor: a worker looks for the actor bundles laid
+  out as its own release writes them (a Substrate release renamed the actor's
+  pause bundle, `bundles/pause` → `bundles/_pause`) — every compile the atelet
+  asks of the worker fails inside the worker on
   `bundles/_pause/config.json: no such file or directory`, every
-  `AgentTemplate` sat at `Ready=False ActorTemplatePending` ("golden snapshot
-  compiling"), `agentlab up` and the platform releases stayed green,
-  `agents-test` and `skills-test` burned their five minutes and only
-  `kubectl -n ate-system logs ds/atelet` said why. `agentlab platform` now
+  `AgentTemplate` sits at `Ready=False ActorTemplatePending` ("golden snapshot
+  compiling"), `agentlab up` and the platform releases stay green,
+  `agents-test` and `skills-test` burn their five minutes and only
+  `kubectl -n ate-system logs ds/atelet` says why. `agentlab platform`
   reads the atelet's image off its DaemonSet and the worker image off every
   `WorkerPool` in `kagent` after the install and refuses a lab whose halves
-  are different Substrate releases (the tag's version without its `-gs.N`
-  prerelease: the line's patches share the upstream release's bundle layout),
-  naming both images and the fix — `agentlab configure --defaults
+  are different Substrate releases (the tag's major.minor: a patch of the
+  line never changes the worker/atelet contract, a re-pin onto another
+  upstream release is at least a minor), naming both images and the fix — `agentlab configure --defaults
   --chart-version <a release that pins them together> && agentlab platform`
   for a release pin, the chart's own ranges for a checkout or the dev channel;
   `platform-test` asserts the same pair and prints it. The chart-side

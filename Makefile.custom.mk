@@ -2,7 +2,7 @@
 
 # Commit of giantswarm/kagent-upstream the kagent.api.v1alpha1 protos under
 # hack/kagent-proto/ are copied from: the tag of the kagent line the platform
-# release the lab follows resolves (v0.11.0-gs.3). Bump it, run
+# release the lab follows resolved when they were last copied. Bump it, run
 # `make generate-kagent`, and commit hack/kagent-proto/ and internal/kagent/gen/
 # together.
 KAGENT_PROTO_REPO ?= https://github.com/giantswarm/kagent-upstream.git
