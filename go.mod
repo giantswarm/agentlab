@@ -9,7 +9,7 @@ require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/a2aproject/a2a-go/v2 v2.5.0
 	github.com/creativeprojects/go-selfupdate v1.6.0
-	github.com/giantswarm/klaus-gateway v1.15.0
+	github.com/giantswarm/klaus-gateway v1.15.1
 	github.com/giantswarm/selfupdate-cosign v0.2.0
 	github.com/giantswarm/telemetrydeck-go v0.3.0
 	github.com/giantswarm/vm-manager v0.20.14
@@ -197,7 +197,7 @@ require (
 	golang.org/x/text v0.42.0 // indirect
 	golang.org/x/time v0.16.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260819154853-08b0e4226688 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260917231906-eeb232e0883d // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260918162117-cecb64721679 // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.13.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	howett.net/plist v1.0.0 // indirect
