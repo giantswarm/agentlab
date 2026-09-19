@@ -149,10 +149,13 @@ const DevImageHarness = "harness"
 // with the node-path inputs.
 var vmManagerChartFloor = semver.MustParse("4.15.0")
 
-// servingChartFloor is the agent-platform release the serving switch was
-// verified against: the kserve-runtime-configs component, the models Gateway
-// and the discovery ConfigMap's spec.gateway all present.
-var servingChartFloor = semver.MustParse("4.40.0")
+// servingChartFloor is the first agent-platform release the serving switch
+// works on: the llm-d control plane alone (kserve-llmisvc-resources renders
+// the shared objects itself, no kserve-crd / kserve-resources), the
+// kserve-runtime-configs component, the models Gateway and the discovery
+// ConfigMap's spec.gateway. An older release refuses the llm-d controller's
+// release without kserve-resources.
+var servingChartFloor = semver.MustParse("4.44.0")
 
 // DefaultDevRegistryPort is the host port of the lab registry when
 // agentlab.yaml sets none: kind's documented local-registry port.
@@ -1043,12 +1046,12 @@ func (c *Config) Validate() error {
 	if c.Platform.Serving.Enabled && c.Platform.Enabled && !c.Platform.Agents {
 		return fmt.Errorf("platform.serving requires platform.agents (model-manager wires a served model into kagent as a ModelConfig)")
 	}
-	// The serving switch turns on the kserve-runtime-configs component and
-	// the models Gateway; a pinned release before servingChartFloor would
-	// take them as unknown keys and fail the install out of sight.
+	// The serving switch turns on the llm-d components alone; a pinned
+	// release before servingChartFloor would refuse the llm-d controller's
+	// release without kserve-resources and fail the install out of sight.
 	if c.Platform.Serving.Enabled && c.Platform.Enabled && c.Platform.ChartPath == "" && c.Platform.ChartBranch == "" {
 		if v, err := semver.NewVersion(c.Platform.ChartVersion); err == nil && v.LessThan(servingChartFloor) {
-			return fmt.Errorf("platform.serving needs agent-platform %s or newer (components.kserve-runtime-configs and modelServing.modelsGateway); platform.chartVersion is %s", servingChartFloor, c.Platform.ChartVersion)
+			return fmt.Errorf("platform.serving needs agent-platform %s or newer (the llm-d control plane alone, components.kserve-runtime-configs and modelServing.modelsGateway); platform.chartVersion is %s", servingChartFloor, c.Platform.ChartVersion)
 		}
 	}
 	// The vm-manager component exists from agent-platform 4.11.0; a pinned

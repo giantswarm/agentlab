@@ -12,10 +12,9 @@ import (
 // host server a lab may list by hand.
 func TestServingSwitch(t *testing.T) {
 	cfg := Default()
-	cfg.Platform.ChartVersion = "4.40.0"
 	cfg.Platform.Serving.Enabled = true
 	if err := cfg.Validate(); err != nil {
-		t.Fatalf("serving on with agents on 4.40.0: %v", err)
+		t.Fatalf("serving on with agents on the default pin %s: %v", DefaultChartVersion, err)
 	}
 	if !cfg.ServingEnabled() || !cfg.ModelManagerEnabled() {
 		t.Fatalf("ServingEnabled=%v ModelManagerEnabled=%v, want both on (the switch runs model-manager's kserve backend)", cfg.ServingEnabled(), cfg.ModelManagerEnabled())
@@ -37,7 +36,6 @@ func TestServingSwitch(t *testing.T) {
 	}
 
 	cfg = Default()
-	cfg.Platform.ChartVersion = "4.40.0"
 	cfg.Platform.Serving.Enabled = true
 	cfg.Platform.Agents = false
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "platform.serving requires platform.agents") {
@@ -46,8 +44,12 @@ func TestServingSwitch(t *testing.T) {
 
 	cfg = Default()
 	cfg.Platform.Serving.Enabled = true
-	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "needs agent-platform 4.40.0 or newer") {
-		t.Errorf("serving on the default pin %s: err = %v, want the chart floor", DefaultChartVersion, err)
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("serving on the default pin %s: %v, want the floor cleared", DefaultChartVersion, err)
+	}
+	cfg.Platform.ChartVersion = "4.43.0"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "needs agent-platform 4.44.0 or newer") {
+		t.Errorf("serving on a pin below the floor: err = %v, want the chart floor", err)
 	}
 	cfg.Platform.ChartBranch = mainBranch
 	if err := cfg.Validate(); err != nil {

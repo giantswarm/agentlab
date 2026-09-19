@@ -105,7 +105,7 @@ The flags pin a value regardless of the discovery, with or without
 | `--vm-manager[=false]` | Run the platform's VM provisioner (vm-manager) as a pod of the node, or turn it off; needs `/dev/kvm` and `/dev/vhost-vsock` on this machine (a machine without them turns it off on its own). |
 | `--vm-manager-image-dir <dir>` | The image directory the vm-manager pod boots from: a vm-manager checkout's `images/build` after `make -C images`, mounted into the node at `agentlab up` (`agentlab down && up` after changing it). |
 | `--klaus-gateway[=false]` | Run Swarmgeist (klaus-gateway) as the meta chart's in-cluster component, or turn it off: A2A on the in-cluster controller target, the web channel, Slack on a placeholder Secret, the OBO link store in a Secret (needs agents). See [klaus-gateway](klaus-gateway.md). |
-| `--serving[=false]` | Serve models on llm-d in the lab, or turn it off: the KServe llmisvc controller and its CRDs, the well-known runtime configs, the connectivity chart's serving slice with the models Gateway, model-manager's `kserve` backend and one CPU preset of the lab's (needs agents; installs cert-manager; agent-platform 4.40.0 or newer). See [Model serving on llm-d](models.md#model-serving-on-llm-d-platformserving). |
+| `--serving[=false]` | Serve models on llm-d in the lab, or turn it off: the KServe llmisvc controller and its CRDs, the well-known runtime configs, the connectivity chart's serving slice with the models Gateway, model-manager's `kserve` backend and one CPU preset of the lab's (needs agents; installs cert-manager; agent-platform 4.44.0 or newer). See [Model serving on llm-d](models.md#model-serving-on-llm-d-platformserving). |
 
 ## Environment variables
 
