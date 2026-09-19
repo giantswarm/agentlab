@@ -156,6 +156,18 @@ components:
     enabled: true
   agent-platform-mcps:
     enabled: true
+{{- with .ConnectivityChart }}
+  # The wiring chart of the checkout (platform.chartPath; connectivity.go).
+  # The meta chart installs agent-platform-connectivity at its own version —
+  # for a checkout the placeholder of its Chart.yaml, which no registry
+  # publishes — so the lab pushes the checkout's copy into the lab registry
+  # at that version and points the release there: the two charts of one
+  # working tree, as CI publishes them for a commit.
+  agent-platform-connectivity:
+    repository: {{ .Repository }}
+    insecure: true
+    versionRange: "{{ .Version }}"
+{{- end }}
   # The Kubernetes MCP server (registered with muster by the connectivity
   # chart's MCPServer CR): an OAuth resource server against global.identity;
   # muster forwards the user's Dex id_token, and enableDownstreamOAuth then

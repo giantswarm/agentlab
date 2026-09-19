@@ -55,12 +55,21 @@ type fluxRelease struct {
 	// its values the lab's template, so platform.chartVersion has no say over
 	// what it accepts — a refusal is worded for agentlab, not for the chart.
 	LabOwned bool
+	// LocalChart is the directory the release's chart is pushed into the lab
+	// registry from (the checkout's connectivity chart of a chartPath lab,
+	// connectivity.go): the offline render reads the chart there, since the
+	// URL names the registry by its kind-network name, out of the host's
+	// reach. Empty for a chart the registry serves to the host too.
+	LocalChart string
 }
 
 // chartLabel names the chart a render of the release was for: the
 // OCIRepository's URL and range, and the version the range resolved to where
 // the render got that far.
 func (rel fluxRelease) chartLabel(resolved string) string {
+	if rel.LocalChart != "" {
+		return "the local chart at " + rel.LocalChart + ", pushed as " + rel.URL + ":" + rel.Version
+	}
 	label := rel.URL + " " + rel.Version
 	if resolved != "" && resolved != rel.Version {
 		label += ", resolved to " + resolved
@@ -278,19 +287,23 @@ func fluxReleaseImages(releases []fluxRelease, apiVersions []string) (images, fi
 
 // renderFluxRelease renders one component chart offline as helm-controller
 // is about to: the chart the OCIRepository names at the version it resolves
-// to, with the HelmRelease's inlined values. Reports the version rendered —
-// the loaded chart's, so a range Helm resolved itself comes back as the tag,
-// on a failed render too once the chart was loaded.
+// to — or the directory the lab pushes that chart from (LocalChart) — with
+// the HelmRelease's inlined values. Reports the version rendered — the
+// loaded chart's, so a range Helm resolved itself comes back as the tag, on
+// a failed render too once the chart was loaded.
 func renderFluxRelease(rel fluxRelease, apiVersions []string) (rendered, version string, err error) {
 	vals, err := helmValues(rel.Values)
 	if err != nil {
 		return "", "", err
 	}
-	version, err = resolveComponentVersion(rel.URL, rel.Version, rel.Filter)
-	if err != nil {
-		return "", "", err
+	ref := rel.LocalChart
+	if ref == "" {
+		ref = rel.URL
+		if version, err = resolveComponentVersion(rel.URL, rel.Version, rel.Filter); err != nil {
+			return "", "", err
+		}
 	}
-	rendered, resolved, err := helmTemplate(rel.Namespace, rel.Name, rel.URL, version, vals, apiVersions)
+	rendered, resolved, err := helmTemplate(rel.Namespace, rel.Name, ref, version, vals, apiVersions)
 	if resolved != "" {
 		version = resolved
 	}
@@ -367,7 +380,26 @@ func renderPlatformRoster(chart platformChart, values map[string]any) (*platform
 	if err != nil {
 		return nil, err
 	}
+	localizeConnectivity(releases, chart)
 	return &platformRoster{chart: chart, manifest: meta, releases: releases}, nil
+}
+
+// localizeConnectivity marks the connectivity release of a chart directory
+// (platform.chartPath) as rendered from the checkout's own connectivity
+// chart, the one the lab pushes into the lab registry (connectivity.go):
+// the release's OCIRepository names the registry by its kind-network name,
+// which resolves in pods and nowhere on the host. A registry chart's
+// releases are left alone — its connectivity is published with it.
+func localizeConnectivity(releases []fluxRelease, chart platformChart) {
+	dir := chart.connectivityDir()
+	if dir == "" {
+		return
+	}
+	for i := range releases {
+		if releases[i].Name == config.ConnectivityChartName {
+			releases[i].LocalChart = dir
+		}
+	}
 }
 
 // has reports whether the roster carries a component release of that name.

@@ -123,7 +123,30 @@ platform:
 
 (or `agentlab configure --defaults --chart-path /path/to/agent-platform/helm/agent-platform`;
 `--chart-path ""` clears it). `chartVersion` is ignored while it is set, and
-the boot says which chart it installed. The directory is read, never written.
+the boot says which chart it installed. The directories are read, never
+written.
+
+**Both charts of the checkout are installed.** The meta chart installs its
+wiring chart, `agent-platform-connectivity`, at its own exact version
+(`components.agent-platform-connectivity.releasedWithChart`: the two charts
+are published off one git tag, so an installation's connectivity never lags
+or leads the meta chart). A checkout's meta chart carries the placeholder
+version of its `Chart.yaml`, which no registry publishes — so the lab
+packages the checkout's connectivity chart from the sibling directory
+(`helm/agent-platform-connectivity`, refused when it is not there) at that
+version, pushes it into the lab registry (the `registry` container on the
+kind network the [dev images](#dev-images) go through), and points the meta
+chart at it (`components.agent-platform-connectivity.repository`, `insecure`
+and `versionRange` in the rendered values — the knobs the meta chart admits
+for a chart pushed by hand). An edit to either chart is one `agentlab
+platform` away: the connectivity release is asked to fetch the pushed chart
+and waited for until it runs it (`status.history[0].ociDigest` names the
+pushed manifest). The offline renders of the boot read the connectivity
+chart from the directory too, so a value it refuses is refused before the
+install. A `platform.valuesFiles` overlay that still points the component at
+a branch's dev channel (`versionRange` + `semverFilter`) wins over the lab's
+source and must go — it selected a chart from the registry, not the
+checkout's.
 
 ## Dev images
 
