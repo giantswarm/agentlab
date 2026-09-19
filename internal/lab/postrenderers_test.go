@@ -35,7 +35,7 @@ const (
 	devTag              = "dev"
 	// lineControllerImage is the controller's name on the kagent line, as its
 	// chart renders it (the table's fallback is the 3.x wrapper's).
-	lineControllerImage = "ghcr.io/giantswarm/kagent/controller"
+	lineControllerImage = "gsoci.azurecr.io/giantswarm/kagent/controller"
 )
 
 // The dev-image swap names the ref the build is side-loaded under — the lab's

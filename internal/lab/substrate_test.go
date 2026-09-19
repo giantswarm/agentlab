@@ -169,19 +169,19 @@ func TestAteletArgsMissing(t *testing.T) {
 // by name.
 func TestSubstrateReleaseOf(t *testing.T) {
 	for image, want := range map[string]string{
-		"ghcr.io/giantswarm/substrate/atelet:0.0.30-gs.4":                                                                         testSubstrateRelease,
-		"ghcr.io/giantswarm/substrate/ateom-gvisor:0.0.27-gs.9":                                                                   "0.0.27",
-		"localhost:5000/substrate/ateom-gvisor:0.0.30-gs.1":                                                                       testSubstrateRelease,
-		"ghcr.io/giantswarm/substrate/atelet:0.0.30-gs.4@sha256:0000000000000000000000000000000000000000000000000000000000000000": testSubstrateRelease,
-		"ghcr.io/giantswarm/substrate/atelet:v1.2.3":                                                                              "1.2.3",
+		"gsoci.azurecr.io/giantswarm/substrate/atelet:0.0.30-gs.4":                                                                         testSubstrateRelease,
+		"gsoci.azurecr.io/giantswarm/substrate/ateom-gvisor:0.0.27-gs.9":                                                                   "0.0.27",
+		"localhost:5000/substrate/ateom-gvisor:0.0.30-gs.1":                                                                                testSubstrateRelease,
+		"gsoci.azurecr.io/giantswarm/substrate/atelet:0.0.30-gs.4@sha256:0000000000000000000000000000000000000000000000000000000000000000": testSubstrateRelease,
+		"gsoci.azurecr.io/giantswarm/substrate/atelet:v1.2.3":                                                                              "1.2.3",
 	} {
 		if got, err := substrateReleaseOf(image); err != nil || got != want {
 			t.Errorf("substrateReleaseOf(%q) = %q, %v; want %q", image, got, err, want)
 		}
 	}
 	for _, image := range []string{
-		"ghcr.io/giantswarm/substrate/atelet@sha256:0000000000000000000000000000000000000000000000000000000000000000",
-		"ghcr.io/giantswarm/substrate/atelet:latest",
+		"gsoci.azurecr.io/giantswarm/substrate/atelet@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+		"gsoci.azurecr.io/giantswarm/substrate/atelet:latest",
 		"localhost:5000/atelet",
 	} {
 		if _, err := substrateReleaseOf(image); err == nil || !strings.Contains(err.Error(), image) {
@@ -196,7 +196,7 @@ func ateletDS(image string) *unstructured.Unstructured {
 	ds := &unstructured.Unstructured{Object: map[string]any{
 		fieldSpec: map[string]any{"template": map[string]any{fieldSpec: map[string]any{
 			"containers": []any{
-				map[string]any{nameKey: testSidecarContainer, imageKey: "ghcr.io/giantswarm/substrate/sidecar:9.9.9"},
+				map[string]any{nameKey: testSidecarContainer, imageKey: "gsoci.azurecr.io/giantswarm/substrate/sidecar:9.9.9"},
 				map[string]any{nameKey: ateletDaemonSet, imageKey: image, argsKey: anySlice(ateletImageCacheArgs)},
 			},
 		}}},
@@ -221,9 +221,9 @@ func workerPool(name, image string) *unstructured.Unstructured {
 // WorkerPool cannot boot an actor either and says so.
 func TestProveSubstrateLine(t *testing.T) {
 	const (
-		atelet = "ghcr.io/giantswarm/substrate/atelet:0.0.30-gs.4"
-		worker = "ghcr.io/giantswarm/substrate/ateom-gvisor:0.0.30-gs.2"
-		skewed = "ghcr.io/giantswarm/substrate/ateom-gvisor:0.0.27-gs.9"
+		atelet = "gsoci.azurecr.io/giantswarm/substrate/atelet:0.0.30-gs.4"
+		worker = "gsoci.azurecr.io/giantswarm/substrate/ateom-gvisor:0.0.30-gs.2"
+		skewed = "gsoci.azurecr.io/giantswarm/substrate/ateom-gvisor:0.0.27-gs.9"
 		remedy = "agentlab configure --defaults --chart-version 9.9.9 && agentlab platform"
 	)
 	ctx := context.Background()

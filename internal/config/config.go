@@ -103,7 +103,7 @@ const DefaultDexPort = 32000
 // installs) — 4.15.2 left the kagent range open within 0.11.0 and a later
 // kagent moved the worker image to Substrate 0.0.30 under its 0.0.27 atelet,
 // so a fresh lab booted no golden actor (agentlab#187).
-const DefaultChartVersion = "4.44.0"
+const DefaultChartVersion = "4.44.1"
 
 // ChartRepository is where the agent-platform chart releases live.
 const ChartRepository = "oci://gsoci.azurecr.io/charts/giantswarm/agent-platform"
@@ -263,7 +263,8 @@ type Platform struct {
 	// are the DevImageComponents. For a Deployment target `agentlab platform`
 	// side-loads the ref from the host docker cache, resolves the image name
 	// it replaces from the component chart's render (the kagent controller is
-	// `ghcr.io/giantswarm/kagent/controller` on the 4.x line and
+	// `gsoci.azurecr.io/giantswarm/kagent/controller` on the 4.x line, the
+	// path the kagent line publishes under, and
 	// `gsoci.azurecr.io/giantswarm/kagent-controller` on 3.x — a target that
 	// matches nothing in the render is an error before the install, never a
 	// silently dropped override) and renders it into the component's

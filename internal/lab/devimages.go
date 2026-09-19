@@ -30,7 +30,8 @@ import (
 //     same render the preload scrapes its images from — because it differs
 //     between lines: the kagent controller is
 //     gsoci.azurecr.io/giantswarm/kagent-controller in the 3.x wrapper chart
-//     and ghcr.io/giantswarm/kagent/controller on the kagent line. An
+//     and gsoci.azurecr.io/giantswarm/kagent/controller (the path the line
+//     publishes under) on the kagent line. An
 //     override whose name is in no rendered Deployment matches nothing, and
 //     kustomize drops it without a word; the swap refuses to install such an
 //     override and names the Deployment it looked for.

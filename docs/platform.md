@@ -179,8 +179,8 @@ name for local builds, `localhost/muster:dev-1a2b3c`: `agentlab platform`
 tags it so, side-loads it under that name and writes that name into the
 override, so the pod's ref and the node's copy agree and no pod of the lab
 names a registry that does not have its image (podman spells local builds
-this way itself). A ref that names a registry — the lab registry, gsoci, a
-dev build published to ghcr — is used as written.
+this way itself). A ref that names a registry — the lab registry, a gsoci
+release, a line's dev build on gsoci — is used as written.
 
 ### Deployment targets
 
@@ -205,10 +205,11 @@ The image name the override replaces is read off the component chart's
 render, the one the boot renders anyway to side-load the platform images —
 not from a table, because it differs between lines: the `kagent` target
 replaces `gsoci.azurecr.io/giantswarm/kagent-controller` under the 3.x meta
-chart (the wrapper chart) and `ghcr.io/giantswarm/kagent/controller` under
-4.x (the kagent line's own chart), whatever Deployment `kagent-controller`'s
-`controller` container names. A Kustomize image override whose name is in no
-rendered object matches nothing, and kustomize drops it without a word — so
+chart (the wrapper chart) and `gsoci.azurecr.io/giantswarm/kagent/controller`
+under 4.x (the kagent line's own chart, published under the line's own path),
+whatever Deployment `kagent-controller`'s `controller` container names. A
+Kustomize image override whose name is in no rendered object matches nothing,
+and kustomize drops it without a word — so
 a target whose chart rendered without the Deployment and container the lab
 patches is **refused before the install**, naming both (`platform.devImages.kagent:
 the kagent chart's render has no Deployment kagent-controller with a container
