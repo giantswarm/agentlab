@@ -27,12 +27,11 @@ import (
 // USES (the containers' memory working set, summed from the kubelet's
 // cAdvisor metrics — the column RAM is actually spent on; several groups
 // declare far less than they use, Substrate's WorkerPool reserves far more).
-// The 4.x line was measured on 2026-09-11 (agent-platform 4.7.11: kagent
-// 0.11.0-gs.3, Substrate 0.0.27-gs.5, the full default lab with model-manager
-// on kind v1.37.0, a node up for 19 hours): 3340m / 4388Mi requested — the
-// node's Allocated resources read exactly that — about 4.4 GiB in use. The
-// requests were re-read on 2026-09-14 on agent-platform 4.15.2 (kagent
-// 0.11.0-gs.13, Substrate 0.0.27-gs.9, the same lab): 3340m / 4580Mi — the
+// The 4.x line was measured on 2026-09-11 (agent-platform 4.7.11, the full
+// default lab with model-manager on kind v1.37.0, a node up for 19 hours):
+// 3340m / 4388Mi requested — the node's Allocated resources read exactly
+// that — about 4.4 GiB in use. The requests were re-read on 2026-09-14 on
+// agent-platform 4.15.2 (the same lab): 3340m / 4580Mi — the
 // only mover is muster's valkey (256Mi + its metrics sidecar's 64Mi, the
 // memory bound agent-platform 4.12.1 gave a grown token store); the use
 // figures below keep the higher of the two readings.

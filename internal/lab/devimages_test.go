@@ -23,7 +23,7 @@ spec:
     spec:
       containers:
         - name: ui
-          image: "gsoci.azurecr.io/giantswarm/kagent/ui:0.11.0-gs.3"
+          image: "gsoci.azurecr.io/giantswarm/kagent/ui:1.0.0"
 ---
 # Source: kagent/templates/controller-deployment.yaml
 apiVersion: apps/v1
@@ -35,7 +35,7 @@ spec:
     spec:
       containers:
         - name: controller
-          image: gsoci.azurecr.io/giantswarm/kagent/controller:0.11.0-gs.3
+          image: gsoci.azurecr.io/giantswarm/kagent/controller:1.0.0
           imagePullPolicy: IfNotPresent
 `
 	wrapperKagentRender = `---
@@ -109,10 +109,10 @@ func TestResolveDevImageNames(t *testing.T) {
 }
 
 func TestRenderedContainerImage(t *testing.T) {
-	if img, ok := renderedContainerImage(lineKagentRender, "kagent-controller", "controller"); !ok || img != "gsoci.azurecr.io/giantswarm/kagent/controller:0.11.0-gs.3" {
+	if img, ok := renderedContainerImage(lineKagentRender, "kagent-controller", "controller"); !ok || img != "gsoci.azurecr.io/giantswarm/kagent/controller:1.0.0" {
 		t.Errorf("controller image = %q, %v", img, ok)
 	}
-	if img, ok := renderedContainerImage(lineKagentRender, "kagent-ui", "ui"); !ok || img != "gsoci.azurecr.io/giantswarm/kagent/ui:0.11.0-gs.3" {
+	if img, ok := renderedContainerImage(lineKagentRender, "kagent-ui", "ui"); !ok || img != "gsoci.azurecr.io/giantswarm/kagent/ui:1.0.0" {
 		t.Errorf("quoted image = %q, %v", img, ok)
 	}
 	if _, ok := renderedContainerImage(lineKagentRender, "kagent-controller", "ui"); ok {
@@ -129,7 +129,7 @@ func TestRenderedContainerImage(t *testing.T) {
 
 func TestImageName(t *testing.T) {
 	cases := map[string]string{
-		"gsoci.azurecr.io/giantswarm/kagent/controller:0.11.0-gs.3":       "gsoci.azurecr.io/giantswarm/kagent/controller",
+		"gsoci.azurecr.io/giantswarm/kagent/controller:1.0.0":             "gsoci.azurecr.io/giantswarm/kagent/controller",
 		"gsoci.azurecr.io/giantswarm/kagent-controller:0.10.1":            "gsoci.azurecr.io/giantswarm/kagent-controller",
 		"localhost:5001/golang-adk@sha256:" + strings.Repeat("a", 64):     "localhost:5001/golang-adk",
 		"localhost:5001/golang-adk:dev@sha256:" + strings.Repeat("a", 64): "localhost:5001/golang-adk",
@@ -149,7 +149,7 @@ func TestDevImageRepoTag(t *testing.T) {
 	cases := []struct{ ref, repo, tag string }{
 		{"golang-adk:dev-139-abc1234", devHarnessRepo, "dev-139-abc1234"},
 		{"giantswarm/kagent/golang-adk:dev", "giantswarm/kagent/golang-adk", devTag},
-		{"gsoci.azurecr.io/giantswarm/kagent/golang-adk:0.11.0-gs.3", "giantswarm/kagent/golang-adk", "0.11.0-gs.3"},
+		{"gsoci.azurecr.io/giantswarm/kagent/golang-adk:1.0.0", "giantswarm/kagent/golang-adk", "1.0.0"},
 		{"localhost:5000/golang-adk:dev", devHarnessRepo, devTag},
 		{"registry:5000/team/golang-adk:dev", "team/golang-adk", devTag},
 		{"golang-adk@sha256:" + strings.Repeat("ab", 32), devHarnessRepo, "sha256-abababababab"},
