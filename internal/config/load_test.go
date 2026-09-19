@@ -6,8 +6,9 @@ import (
 	"testing"
 )
 
-// loadTestChart is the chart version the load tests write; any exact version.
-const loadTestChart = "4.41.0"
+// loadTestChart is the chart version the load tests write; any exact version
+// at or above servingChartFloor (one test turns serving on).
+const loadTestChart = "4.44.0"
 
 // A field this release does not know is refused, not dropped: every run
 // writes agentlab.yaml back, and a lenient decode by an older release would

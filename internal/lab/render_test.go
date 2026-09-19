@@ -804,20 +804,25 @@ func TestPlatformValuesServing(t *testing.T) {
 
 	cfg.Platform.Serving.Enabled = true
 	values, raw := render(t, cfg)
-	// The classic control plane comes along because the chart's llm-d
-	// controller reads its inferenceservice-config and shares its Issuer;
-	// nothing composes onto it.
-	for _, key := range []string{"kserve-crd", "kserve-resources", "kserve-llmisvc-crd", "kserve-llmisvc-resources", "kserve-runtime-configs", "modelServing"} {
+	// The llm-d control plane alone: the classic KServe controller went with
+	// the classic InferenceService path (giantswarm/agent-platform#574), and a
+	// roster entry for it fails the chart's render.
+	for _, key := range []string{"kserve-llmisvc-crd", "kserve-llmisvc-resources", "kserve-runtime-configs", "modelServing"} {
 		comp, _ := components(values)[key].(map[string]any)
 		if comp["enabled"] != true {
 			t.Errorf("components.%s = %v, want enabled: true", key, comp)
 		}
 	}
-	if _, ok := values["kserve-llmisvc-resources"]; ok {
-		t.Error("a kserve-llmisvc-resources block rendered: the meta chart derives the models Gateway onto the KServe control plane itself")
+	for _, key := range []string{"kserve-crd", "kserve-resources"} {
+		if _, ok := components(values)[key]; ok {
+			t.Errorf("components.%s rendered: the classic KServe controller is gone from the chart, and the entry is refused", key)
+		}
+		if _, ok := values[key]; ok {
+			t.Errorf("a %s values block rendered: the chart's schema refuses it", key)
+		}
 	}
-	if !strings.Contains(raw, "kserve-resources:\n  kserve:\n    storage:\n      resources:\n        limits:\n          memory: 8Gi") {
-		t.Error("the storage-initializer's memory limit is not raised on the KServe control plane (no Kyverno policy does it here)")
+	if !strings.Contains(raw, "kserve-llmisvc-resources:\n  kserve:\n    storage:\n      resources:\n        limits:\n          memory: 8Gi") {
+		t.Error("the storage-initializer's memory limit is not raised on the llm-d control plane's release (no Kyverno policy does it here)")
 	}
 	ms, _ := values["modelServing"].(map[string]any)
 	presets, _ := ms["presets"].([]any)
