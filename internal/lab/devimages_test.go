@@ -129,7 +129,7 @@ func TestRenderedContainerImage(t *testing.T) {
 
 func TestImageName(t *testing.T) {
 	cases := map[string]string{
-		"gsoci.azurecr.io/giantswarm/kagent/controller:0.11.0-gs.3":                "gsoci.azurecr.io/giantswarm/kagent/controller",
+		"gsoci.azurecr.io/giantswarm/kagent/controller:0.11.0-gs.3":       "gsoci.azurecr.io/giantswarm/kagent/controller",
 		"gsoci.azurecr.io/giantswarm/kagent-controller:0.10.1":            "gsoci.azurecr.io/giantswarm/kagent-controller",
 		"localhost:5001/golang-adk@sha256:" + strings.Repeat("a", 64):     "localhost:5001/golang-adk",
 		"localhost:5001/golang-adk:dev@sha256:" + strings.Repeat("a", 64): "localhost:5001/golang-adk",

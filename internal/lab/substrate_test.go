@@ -171,7 +171,7 @@ func TestSubstrateReleaseOf(t *testing.T) {
 	for image, want := range map[string]string{
 		"gsoci.azurecr.io/giantswarm/substrate/atelet:0.0.30-gs.4":                                                                         testSubstrateRelease,
 		"gsoci.azurecr.io/giantswarm/substrate/ateom-gvisor:0.0.27-gs.9":                                                                   "0.0.27",
-		"localhost:5000/substrate/ateom-gvisor:0.0.30-gs.1":                                                                       testSubstrateRelease,
+		"localhost:5000/substrate/ateom-gvisor:0.0.30-gs.1":                                                                                testSubstrateRelease,
 		"gsoci.azurecr.io/giantswarm/substrate/atelet:0.0.30-gs.4@sha256:0000000000000000000000000000000000000000000000000000000000000000": testSubstrateRelease,
 		"gsoci.azurecr.io/giantswarm/substrate/atelet:v1.2.3":                                                                              "1.2.3",
 	} {
