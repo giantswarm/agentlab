@@ -222,8 +222,8 @@ github.com/frankban/quicktest v1.14.6 h1:7Xjx+VpznH+oBnejlPUj8oUpdxnVs4f8XU8WnHk
 github.com/frankban/quicktest v1.14.6/go.mod h1:4ptaffx2x8+WTWXmUCuVU6aPUX1/Mz7zb5vbUoiM6w0=
 github.com/fxamacker/cbor/v2 v2.9.1 h1:2rWm8B193Ll4VdjsJY28jxs70IdDsHRWgQYAI80+rMQ=
 github.com/fxamacker/cbor/v2 v2.9.1/go.mod h1:vM4b+DJCtHn+zz7h3FFp/hDAI9WNWCsZj23V5ytsSxQ=
-github.com/giantswarm/klaus-gateway v1.19.0 h1:5bn7DPtNakGonra6yT6KVX/vFYuaaGfmEXZs7521BAg=
-github.com/giantswarm/klaus-gateway v1.19.0/go.mod h1:Fvma4/1VMJdqW4aUdRxvOsPaB/rtuiyR228NDr2Gl8o=
+github.com/giantswarm/klaus-gateway v1.19.1 h1:3F8Wlz1NIUwv6oIuigzK/r1pW6PeXqpfYqRtoSZm2rQ=
+github.com/giantswarm/klaus-gateway v1.19.1/go.mod h1:aloyluB8BZMszj7iQ1Ku6YZBZA+lQC6CerEJvzYIHtE=
 github.com/giantswarm/selfupdate-cosign v0.2.0 h1:T77Q41viXAv5uNJ8SoQlJh1Dxsuh8brvvPp8Nt9KlOI=
 github.com/giantswarm/selfupdate-cosign v0.2.0/go.mod h1:CVnryjSRY/xDqJDn+QeivgT8+WkOvVbY/Z+xLaIfZ1w=
 github.com/giantswarm/telemetrydeck-go v0.3.0 h1:hgmySEd5P6D78ZoUcNBKB/xaEBhtF9yGa8xhuQUrc1g=
@@ -720,8 +720,8 @@ google.golang.org/genproto v0.0.0-20260319201613-d00831a3d3e7 h1:XzmzkmB14QhVhgn
 google.golang.org/genproto v0.0.0-20260319201613-d00831a3d3e7/go.mod h1:L43LFes82YgSonw6iTXTxXUX1OlULt4AQtkik4ULL/I=
 google.golang.org/genproto/googleapis/api v0.0.0-20260819154853-08b0e4226688 h1:ax2KzoSRIZU/M0cIxri3pKxy99vniH1PVxWC6si/eZI=
 google.golang.org/genproto/googleapis/api v0.0.0-20260819154853-08b0e4226688/go.mod h1:1RJ9BQGyNdZwkGc1eTqkErfRZ6RJyYPHZo73BZ1vQqI=
-google.golang.org/genproto/googleapis/rpc v0.0.0-20260918162117-cecb64721679 h1:KmqdJU4vrNcxy/6qdg3JduZtalEXrJLspVltnR1cE+8=
-google.golang.org/genproto/googleapis/rpc v0.0.0-20260918162117-cecb64721679/go.mod h1:OaIUM3+LpYcK2GXM4FTmhWoIq371Owdr+Cc7/BsYHHc=
+google.golang.org/genproto/googleapis/rpc v0.0.0-20260921155816-b14227669459 h1:b0xCahf3FK2m2Cv0p4vTozGPWncCvLfwV86UNg8xWU8=
+google.golang.org/genproto/googleapis/rpc v0.0.0-20260921155816-b14227669459/go.mod h1:OaIUM3+LpYcK2GXM4FTmhWoIq371Owdr+Cc7/BsYHHc=
 google.golang.org/grpc v1.84.0 h1:soMyaPJ8pAak5PIQ0DGBUir0XRo2fRoMqhNWMLlLxO0=
 google.golang.org/grpc v1.84.0/go.mod h1:ljCht0DrxQrXBDRTZp52Qxh3Ffk8CdYm2sj4O2QN2C0=
 google.golang.org/protobuf v1.36.12 h1:pJOKDDOyeXErUroCihFAd5LQuwXBSpVnKGrj5o/fwxc=
