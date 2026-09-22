@@ -1107,7 +1107,7 @@ func waitSidecarMCPServers(ctx context.Context, cfg *config.Config, sidecars map
 // Connected that a session already signed in. Every downstream the lab
 // aggregates is such a server now, so this replaced the plain Connected wait.
 func waitMCPServerReachable(name string) error {
-	return waitMCPServerState(name, mcpServerStateConnected, mcpServerStateAuthRequired)
+	return waitMCPServerState(name, mcpServerStateConnected, mcpServerStateAuthRequired, mcpServerStateAwaitingSession)
 }
 
 // waitMCPServerState polls the MCPServer CR's status.state until it reads one

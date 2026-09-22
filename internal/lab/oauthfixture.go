@@ -63,6 +63,9 @@ const (
 	// server that answered 401 — muster's api.StateAuthRequired, spelled the
 	// CRD way.
 	mcpServerStateAuthRequired = "Auth Required"
+	// A per-session server that no session has signed into yet (muster 5.28+,
+	// giantswarm/muster#1301): the server answered muster's probe, like Auth Required.
+	mcpServerStateAwaitingSession = "Awaiting Session"
 	// mcpServerStateConnected is the state once a session signed in to the
 	// server and muster holds a connection to it.
 	mcpServerStateConnected = "Connected"
