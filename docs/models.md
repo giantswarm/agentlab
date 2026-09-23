@@ -34,6 +34,9 @@ platform:
       provider: Gemini
       model: gemini-2.5-flash
       apiKeyEnv: GEMINI_API_KEY
+    # Ollama's native API. A host with less than 24 GiB of VRAM needs
+    # OLLAMA_CONTEXT_LENGTH set, or agent prompts are cut (the
+    # context-length note below).
     - name: local-llama
       provider: Ollama
       model: llama3.3
@@ -121,6 +124,36 @@ and everything that can go wrong is host-side plumbing, not kagent:
   `GET /api/v1/backend` reports the mechanics as `loading` (`onDemand`,
   `idleEviction`, `keepAliveScope: request`) so the portal can say "idle,
   loads on first request" instead of "not loaded".
+- **Context length (Ollama)**: unless told otherwise, Ollama sizes a
+  model's context from the host's VRAM: 4,096 tokens below 24 GiB, 32,768
+  up to 48 GiB, 256k above (capped at the model's own maximum). A host
+  without a GPU has 0 B and gets 4,096, which Ollama logs when it starts:
+  `vram-based default context total_vram="0 B" default_num_ctx=4096`. Apple
+  silicon counts the GPU's share of unified memory, so smaller Macs are in
+  the 4k tier too. Every agent turn sends the system prompt and all tool
+  schemas with each call, and at 4,096 a prompt longer than about 2,000
+  tokens is cut **silently**. The model gets the prompt's first 4 tokens and
+  its tail, so the system prompt and the tool schemas at the front are gone.
+  The agent ignores its instructions or its tools, the API response shows
+  nothing, and the only trace is a warning in the server log:
+
+  ```
+  level=WARN msg="truncating input prompt" limit=2050 prompt=10735 keep=4 new=2050
+  ```
+
+  The fix is on the host, set the same way as the keep-alive:
+  `OLLAMA_CONTEXT_LENGTH=32768` in the Ollama service environment. On a
+  systemd host, run `systemctl edit ollama` and add
+  `Environment="OLLAMA_CONTEXT_LENGTH=32768"` under `[Service]`. On macOS,
+  run `launchctl setenv OLLAMA_CONTEXT_LENGTH 32768`. Then restart Ollama.
+  Once the next turn has loaded the model, `ollama ps` shows `32768` in its
+  `CONTEXT` column. 32,768 holds an agent's prompt plus several turns of tool
+  results. Ollama's docs suggest 64,000 for agent work if the RAM allows:
+  the cache for the whole context is reserved when the model loads. For
+  `extraModels` the host setting is the only fix. An entry carries no
+  per-model context, and the `/v1` alias has no field for one. For the
+  ModelConfigs model-manager wires, see
+  [giantswarm/model-manager#157](https://github.com/giantswarm/model-manager/issues/157).
 
 All three are keyless OpenAI-compatible endpoints, so the entries are
 minimal:
@@ -128,7 +161,9 @@ minimal:
 ```yaml
 platform:
   extraModels:
-    # Ollama on the host, via its OpenAI-compatible /v1 alias.
+    # Ollama on the host, via its OpenAI-compatible /v1 alias. The alias
+    # takes no context size: below 24 GiB of VRAM, set
+    # OLLAMA_CONTEXT_LENGTH on the host (the context-length note above).
     - name: ollama-local
       provider: OpenAI
       model: qwen3.5:9b
@@ -158,6 +193,68 @@ same trap per model (its context is a load-time setting) plus one of its own:
 keep **just-in-time model loading** on (its default), or an agent whose
 ModelConfig names a downloaded-but-unloaded model fails its first turn
 instead of waiting for the load.
+
+### Agent proofs without an Anthropic key
+
+`toolsets-test`, `skills-test` and `klaus-gateway-test` run their agents on
+`default-model-config`, the Anthropic ModelConfig. Without
+`$ANTHROPIC_API_KEY`, pass `--model-config <name>` to run them on a model
+on the host. The agents act only on structured tool calls with exact
+arguments, so the model has to get those right. Measured with five
+tool-calling cases, each run five times against Ollama's `/api/chat` (the
+API kagent's Ollama provider calls), on a 12-core Zen 5 laptop CPU with the
+GPU unused. The cases: pick a tool and its arguments, a three-argument call,
+an enum argument, no call when none is needed, and acting on a tool result.
+
+| Model (Ollama tag) | Download | Passed | Seconds a call (thinking on / off) |
+|---|---|---|---|
+| **`qwen3.5:2b`** | 2.7 GB | 25/25 | 6.9 / 3.0 |
+| `granite4.2:3b` | 2.2 GB | 25/25 | 7.9 / 3.3 |
+| `qwen2.5:0.5b` (`models-test`'s default) | 0.4 GB | 21–22/25 | 1.1 / 0.8 |
+
+- **`qwen3.5:2b` is the one to use.** It missed nothing, and it reads a long
+  prompt fastest from cold, which matters because every proof run starts
+  fresh agents: a 10.7k-token prompt took 64 s, against 119–156 s for
+  `granite4.2:3b`.
+- **`granite4.2:3b` when many sessions share one long prompt.** It is a
+  dense transformer, so Ollama reuses the cached system prompt and tool
+  schemas from one conversation to the next. Qwen3.5 is a hybrid (most of
+  its layers are Gated DeltaNet), and for those llama.cpp reads the whole
+  prompt again in every new conversation.
+- **`qwen2.5:0.5b` is for `models-test` only.** Its turn asks for "pong"
+  and calls no tool. On tool calls the model missed the enum argument in 3
+  of 5 runs.
+- **The seconds** are for prompts of 650–1,100 tokens. kagent sends no
+  `think` field, so both models think by default: the first number applies.
+  A CPU reads about 100–165 tokens a second at this model size, and a longer
+  agent prompt adds its share once per conversation.
+
+The context-length note above comes first: the proofs' agent prompts are
+longer than 2,000 tokens. Then pull the model, add it as an extra model,
+apply it, and name it:
+
+```bash
+ollama pull qwen3.5:2b
+```
+
+```yaml
+platform:
+  extraModels:
+    - name: qwen35-2b
+      provider: Ollama        # the native API the numbers above measured
+      model: qwen3.5:2b
+      baseUrl: http://172.21.0.1:11434
+```
+
+```bash
+agentlab platform
+agentlab skills-test --model-config qwen35-2b
+```
+
+With [managed models](#managed-models-model-manager--the-host-model-servers)
+on, pull it through model-manager instead and pass the ModelConfig it wires
+(`kubectl --kubeconfig state/kubeconfig -n kagent get modelconfigs` lists
+it).
 
 ## Managed models: model-manager + the host model servers
 
