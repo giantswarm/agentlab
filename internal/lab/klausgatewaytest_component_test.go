@@ -22,7 +22,7 @@ func storeDeployment() *appsv1.Deployment {
 	d.Spec.Template.Spec.ServiceAccountName = klausGatewayComponent
 	d.Spec.Template.Spec.Containers = []corev1.Container{{
 		Name:  klausGatewayComponent,
-		Image: "gsoci.azurecr.io/giantswarm/klaus-gateway:1.5.0",
+		Image: KlausGatewayImageDefault,
 		Env: []corev1.EnvVar{
 			{Name: "KLAUS_GATEWAY_OBO_ENABLED", Value: "true"},
 			{Name: oboStoreEnv, Value: oboStoreSecretBackend},
@@ -155,22 +155,24 @@ klaus-gateway-abc {"time":"2026-09-14T12:00:01Z","level":"INFO","msg":"obo link 
 	}
 }
 
-// TestProofLinks: two records under the proof's prefix and the run's suffix,
-// the person's identity in the first; read back they compare equal, a
-// changed field does not.
+// TestProofLinks: two records under the proof's prefix, the person's (the
+// cached id_token and its expiry) filed under the Slack user the in-cluster
+// turn is sent as; read back they compare equal, a changed field does not.
 func TestProofLinks(t *testing.T) {
 	user := config.Default().AdminUser()
-	links := proofLinks(user, "r1")
+	id := linkedIdentity{subject: "CiQ", expiry: time.Now().Add(time.Hour).Truncate(time.Second)}
+	person := slackUserPrefix + "R1C"
+	links := proofLinks(id.link(user.Email, "id-token"), person)
 	if len(links) != 2 {
 		t.Fatalf("%d links", len(links))
 	}
-	first, ok := links[klausGatewayLinkPrefix+"r1-1"]
-	if !ok || first.Email != user.Email || first.Sub != "agentlab:"+user.Username || first.RefreshToken == "" {
-		t.Fatalf("first link %+v (%v)", first, ok)
+	first, ok := links[person]
+	if !ok || first.Email != user.Email || first.Sub != "CiQ" || first.IDToken != "id-token" || !first.Expiry.Equal(id.expiry) {
+		t.Fatalf("the person's link %+v (%v)", first, ok)
 	}
-	for id := range links {
-		if !strings.HasPrefix(id, klausGatewayLinkPrefix) {
-			t.Errorf("id %q lacks the proof's prefix", id)
+	for id, l := range links {
+		if !strings.HasPrefix(id, slackUserPrefix) || l.RefreshToken == "" {
+			t.Errorf("link %q: %+v", id, l)
 		}
 	}
 	mem := musterlink.NewMemStore()
@@ -182,20 +184,24 @@ func TestProofLinks(t *testing.T) {
 	if err := readBackLinks(mem, links); err != nil {
 		t.Fatalf("read back from a store holding them: %v", err)
 	}
-	changed := &musterlink.Link{Sub: first.Sub, Email: first.Email, RefreshToken: "rotated", LinkedAt: first.LinkedAt}
-	if sameLink(first, changed) {
-		t.Error("a rotated refresh token must not compare equal")
+	for name, changed := range map[string]*musterlink.Link{
+		"a rotated refresh token": {Sub: first.Sub, Email: first.Email, RefreshToken: "rotated", LinkedAt: first.LinkedAt, IDToken: first.IDToken, Expiry: first.Expiry},
+		"a refreshed id_token":    {Sub: first.Sub, Email: first.Email, RefreshToken: first.RefreshToken, LinkedAt: first.LinkedAt, IDToken: "new", Expiry: first.Expiry.Add(time.Hour)},
+	} {
+		if sameLink(first, changed) {
+			t.Errorf("%s must not compare equal", name)
+		}
 	}
-	if err := mem.Put(klausGatewayLinkPrefix+"r1-1", changed); err != nil {
+	if err := mem.Put(person, &musterlink.Link{Sub: first.Sub, Email: first.Email, RefreshToken: "rotated", LinkedAt: first.LinkedAt}); err != nil {
 		t.Fatal(err)
 	}
 	if err := readBackLinks(mem, links); err == nil || !strings.Contains(err.Error(), "read back differently") {
 		t.Fatalf("a changed record must be reported, got %v", err)
 	}
-	if err := mem.Put(klausGatewayLinkPrefix+"r1-1", first); err != nil {
+	if err := mem.Put(person, first); err != nil {
 		t.Fatal(err)
 	}
-	if err := mem.Delete(klausGatewayLinkPrefix + "r1-2"); err != nil {
+	if err := mem.Delete(person + "D"); err != nil {
 		t.Fatal(err)
 	}
 	if err := readBackLinks(mem, links); err == nil || !strings.Contains(err.Error(), "not in the store") {
@@ -203,6 +209,28 @@ func TestProofLinks(t *testing.T) {
 	}
 	if !first.LinkedAt.Equal(first.LinkedAt.Truncate(time.Second)) {
 		t.Error("LinkedAt is truncated to the second so the JSON round trip compares equal")
+	}
+}
+
+// TestAssertFakeSlackAPI: the component must call the Slack Web API through
+// the lab's Service; a Deployment without the lab's patch is told to re-run
+// `agentlab platform`, and the patch sets exactly that variable.
+func TestAssertFakeSlackAPI(t *testing.T) {
+	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: klausGatewayComponent}}
+	d.Spec.Template.Spec.Containers = []corev1.Container{{Name: klausGatewayComponent}}
+	if err := assertFakeSlackAPI(d); err == nil || !strings.Contains(err.Error(), "agentlab platform") {
+		t.Errorf("unpatched: %v", err)
+	}
+	d.Spec.Template.Spec.Containers[0].Env = []corev1.EnvVar{{Name: slackAPIBaseEnv, Value: klausGatewaySlackAPIBase}}
+	if err := assertFakeSlackAPI(d); err != nil {
+		t.Error(err)
+	}
+	patch := string(slackAPIPatch().Patch)
+	if !strings.Contains(patch, "name: "+slackAPIBaseEnv) || !strings.Contains(patch, "value: "+klausGatewaySlackAPIBase) || slackAPIPatch().Target[nameKey] != klausGatewayComponent {
+		t.Errorf("patch = %s", patch)
+	}
+	if klausGatewaySlackAPIBase != "http://agentlab-slack-api.agent-platform.svc.cluster.local/api" {
+		t.Errorf("base = %s", klausGatewaySlackAPIBase)
 	}
 }
 

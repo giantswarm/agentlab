@@ -5,6 +5,10 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -22,12 +26,12 @@ import (
 //     token there), AgentTemplates from the kagent namespace, the proof's
 //     fixture as the default agent (the Slack adapter refuses to start
 //     without one; the name is resolved on a turn, never at start);
-//   - the web channel, so the proof can drive the component's facade the way
-//     it drives the host gateway's;
-//   - the Slack adapter in events mode on a placeholder credentials Secret:
-//     the gateway refuses OBO without Slack, and events mode makes no
-//     outbound call at start — no workspace ever answers, which is why a
-//     real OBO sign-in is out of the lab's reach (klausgatewaytest_component.go);
+//   - the Slack adapter — the gateway's only channel — in events mode on a
+//     placeholder credentials Secret, its Web API base patched to the lab's
+//     Service in front of the proof's fake Slack Web API (the chart has no
+//     value for it; postrenderers.go): events mode makes no outbound call at
+//     start, and no workspace ever answers, which is why a real OBO sign-in
+//     is out of the lab's reach (klausgatewaytest_component.go);
 //   - OBO with the link store in a Kubernetes Secret (obo.store: secret, the
 //     store the fleet runs since klaus-gateway 1.3.0): the chart renders the
 //     empty link Secret with a Role scoped to it by resourceNames, and the
@@ -71,6 +75,63 @@ const (
 	oboStateKeyKey      = "state-key"
 	oboStoreKeyKey      = "store-key"
 )
+
+// The component's Slack Web API: the selector-less Service
+// klausGatewaySlackAPIService, which `agentlab klaus-gateway-test` points at
+// its fake on this host (pointFakeSlackService) while it runs. Outside a
+// proof nothing answers behind it, and nothing calls it: the Events API
+// adapter calls the Web API only for a Slack event, and the proof is the
+// only one sending those.
+const (
+	klausGatewaySlackAPIService = "agentlab-slack-api"
+	slackAPIBaseEnv             = "KLAUS_GATEWAY_SLACK_API_BASE"
+	klausGatewaySlackAPIBase    = "http://" + klausGatewaySlackAPIService + "." + platformNamespace + ".svc.cluster.local" + slackAPIPath
+)
+
+// pointFakeSlackService creates the component's Slack Web API Service and the
+// EndpointSlice behind it: the address pods reach this host on and the fake's
+// port. A leftover of an aborted run is replaced; the returned func removes
+// both.
+func pointFakeSlackService(ctx context.Context, k *kubeClients, hostIP string, port int) (func(), error) {
+	services := k.clientset.CoreV1().Services(platformNamespace)
+	endpointSlices := k.clientset.DiscoveryV1().EndpointSlices(platformNamespace)
+	remove := func() {
+		for _, err := range []error{
+			endpointSlices.Delete(context.Background(), klausGatewaySlackAPIService, metav1.DeleteOptions{}),
+			services.Delete(context.Background(), klausGatewaySlackAPIService, metav1.DeleteOptions{}),
+		} {
+			if err != nil && !apierrors.IsNotFound(err) {
+				note("cleanup: the Slack Web API Service %s: %v", klausGatewaySlackAPIService, err)
+			}
+		}
+	}
+	remove()
+	labels := map[string]string{managedByLabel: managedByAgentlabValue}
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: klausGatewaySlackAPIService, Namespace: platformNamespace, Labels: labels},
+		Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{
+			Name: "http", Port: 80, Protocol: corev1.ProtocolTCP, TargetPort: intstr.FromInt32(int32(port)),
+		}}},
+	}
+	if _, err := services.Create(ctx, svc, metav1.CreateOptions{}); err != nil {
+		return nil, fmt.Errorf("creating the Slack Web API Service %s/%s: %w", platformNamespace, klausGatewaySlackAPIService, err)
+	}
+	name, proto, p := "http", corev1.ProtocolTCP, int32(port)
+	ready := true
+	slice := &discoveryv1.EndpointSlice{
+		ObjectMeta: metav1.ObjectMeta{Name: klausGatewaySlackAPIService, Namespace: platformNamespace,
+			Labels: map[string]string{discoveryv1.LabelServiceName: klausGatewaySlackAPIService, managedByLabel: managedByAgentlabValue}},
+		AddressType: discoveryv1.AddressTypeIPv4,
+		Endpoints:   []discoveryv1.Endpoint{{Addresses: []string{hostIP}, Conditions: discoveryv1.EndpointConditions{Ready: &ready}}},
+		Ports:       []discoveryv1.EndpointPort{{Name: &name, Protocol: &proto, Port: &p}},
+	}
+	if _, err := endpointSlices.Create(ctx, slice, metav1.CreateOptions{}); err != nil {
+		remove()
+		return nil, fmt.Errorf("creating the EndpointSlice of %s/%s: %w", platformNamespace, klausGatewaySlackAPIService, err)
+	}
+	note("Service %s/%s → %s:%d (the fake Slack Web API on this host)", platformNamespace, klausGatewaySlackAPIService, hostIP, port)
+	return remove, nil
+}
 
 // klausGatewayLinksSecret is the chart's link Secret of the Secret backend
 // (`<release>-obo-links`, rendered empty with helm.sh/resource-policy: keep)
@@ -165,7 +226,7 @@ func klausGatewayHint(cfg *config.Config) string {
 	if ref, ok := cfg.Platform.DevImages[klausGatewayComponent]; ok {
 		dev = fmt.Sprintf(" running the dev image %s", ref)
 	}
-	return fmt.Sprintf("  klaus-gateway: Swarmgeist as the meta chart's component%s — A2A on %s, the web channel,\n"+
+	return fmt.Sprintf("  klaus-gateway: Swarmgeist as the meta chart's component%s — A2A on %s,\n"+
 		"  Slack on a placeholder Secret, the OBO link store in Secret %s. Proof: `agentlab klaus-gateway-test`.",
 		dev, klausGatewayInClusterTarget, klausGatewayLinksSecret)
 }

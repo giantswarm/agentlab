@@ -594,7 +594,7 @@ func configureCmd() *cobra.Command {
 					vmManagerImagesNote(cfg.Platform.VMManager))
 			}
 			if cfg.KlausGatewayEnabled() {
-				fmt.Println("  klaus-gtw  Swarmgeist as the meta chart's component: A2A on the in-cluster controller, the web channel, Slack on a placeholder Secret, the OBO link store in a Secret")
+				fmt.Println("  klaus-gtw  Swarmgeist as the meta chart's component: A2A on the in-cluster controller, Slack on a placeholder Secret (its Web API the proof's fake), the OBO link store in a Secret")
 			}
 			fmt.Println("\nNext: agentlab up")
 			return nil
@@ -612,7 +612,7 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().StringSliceVar(&modelManagerBackends, "model-manager-backends", nil, fmt.Sprintf("pin the host model servers, in order (%s; the first is model-manager's default backend) instead of the ones the discovery finds", strings.Join(config.ModelManagerBackends, ", ")))
 	cmd.Flags().BoolVar(&vmManager, "vm-manager", false, "run the platform's VM provisioner (vm-manager) as a pod of the node; --vm-manager=false turns it off (needs /dev/kvm and /dev/vhost-vsock on this machine)")
 	cmd.Flags().StringVar(&vmManagerImageDir, "vm-manager-image-dir", "", "a local guest image build the vm-manager pod boots instead of its release's: a vm-manager checkout's images/build after `make -C images`, pushed into the lab registry at `agentlab platform` (empty for the release's)")
-	cmd.Flags().BoolVar(&klausGateway, "klaus-gateway", false, "run Swarmgeist (klaus-gateway) as the meta chart's in-cluster component: A2A on the in-cluster controller target, the web channel, Slack on a placeholder Secret, the OBO link store in a Secret (needs agents); --klaus-gateway=false turns it off")
+	cmd.Flags().BoolVar(&klausGateway, "klaus-gateway", false, "run Swarmgeist (klaus-gateway) as the meta chart's in-cluster component: A2A on the in-cluster controller target, Slack on a placeholder Secret (its Web API the proof's fake), the OBO link store in a Secret (needs agents); --klaus-gateway=false turns it off")
 	cmd.Flags().BoolVar(&serving, "serving", false, "serve models on llm-d in the lab: the KServe llmisvc controller and its CRDs, the well-known runtime configs, the connectivity chart's serving slice with the models Gateway, model-manager's kserve backend and one CPU preset of the lab's (needs agents; installs cert-manager); --serving=false turns it off")
 	cmd.Flags().BoolVar(&accessible, "accessible", false, "prompt-per-question form mode (for screen readers and plain terminals)")
 	return cmd
@@ -925,7 +925,7 @@ func klausGatewayTestCmd() *cobra.Command {
 	var opts lab.KlausGatewayTestOptions
 	cmd := &cobra.Command{
 		Use:   "klaus-gateway-test [email]",
-		Short: "Headless Swarmgeist proof (kagent API v2): klaus-gateway runs on the host against the lab's edge (A2A v1 over gRPC, TLS with the lab CA, JWT at the edge) and its web channel is driven with the user's forwarded Dex id_token — discovery with the template's annotations (a not-admitted template hidden and refused), one turn attributed to the person at muster, a requireApproval round trip, a stop cancelled server-side, a restart on the bolt store that keeps the thread → AgentInstance mapping; with platform.klausGateway on, the meta chart's in-cluster component too — the Role scoped to the OBO link Secret, two links seeded through the store package, the pod deleted and its replacement Ready with the same links, one turn through the pod",
+		Short: "Headless Swarmgeist proof (kagent API v2) through the Slack adapter: klaus-gateway runs on the host against the lab's edge (A2A v1 over gRPC, TLS with the lab CA, JWT at the edge) with a fake Slack Web API, signed Events API messages and Block Kit clicks, the user linked by a record in its OBO link store that carries the user's Dex id_token — `@bot /agent` lists the template (a not-admitted one hidden and refused), an unlinked person is asked to sign in, one branded turn attributed to the person at muster, Approve and Deny on the approval card, /stop cancelled server-side, a restart on the stores that keeps the thread → AgentInstance mapping; with platform.klausGateway on, the meta chart's in-cluster component too — the Role scoped to the OBO link Secret, two links seeded through the store package, the pod deleted and its replacement Ready with the same links, one Slack turn through the pod",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
@@ -939,12 +939,12 @@ func klausGatewayTestCmd() *cobra.Command {
 			return lab.KlausGatewayTest(cfg, email, opts)
 		},
 	}
-	cmd.Flags().StringVar(&opts.GatewayImage, "gateway-image", lab.KlausGatewayImageDefault, "the klaus-gateway image to run on the host network (a 0.x image is the documented negative: it cannot speak the transport)")
+	cmd.Flags().StringVar(&opts.GatewayImage, "gateway-image", lab.KlausGatewayImageDefault, "the klaus-gateway image to run on the host network (a 0.x image is the documented negative: it cannot speak A2A v1 over gRPC)")
 	cmd.Flags().StringVar(&opts.GatewayBinary, "gateway-binary", "", "a local klaus-gateway build to run instead of the image — the proof of a branch")
-	cmd.Flags().IntVar(&opts.Port, "gateway-port", 18090, "host port of the gateway's web channel; the admin endpoints take the next port")
+	cmd.Flags().IntVar(&opts.Port, "gateway-port", 18090, "host port of the gateway's Slack endpoints; the admin endpoints take the next port, the fake Slack Web API the one after")
 	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the fixture runs on (default: default-model-config, the Anthropic one the lab renders)")
 	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", 0, "how long the fixture's golden boot may take to reach Ready on the Harness (default 10m)")
-	cmd.Flags().StringVar(&opts.RunDir, "run-dir", "", "directory for the bolt store and the gateway's log, kept afterwards (default: a temporary directory, removed)")
+	cmd.Flags().StringVar(&opts.RunDir, "run-dir", "", "directory for the gateway's stores, keys and log, kept afterwards (default: a temporary directory, removed)")
 	return cmd
 }
 

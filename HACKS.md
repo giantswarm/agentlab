@@ -597,6 +597,20 @@ Unblocks when `ValidateAgainstSchema` keeps the verdicts' type on the way out
 aggregate); the re-validation then becomes one `errors.As` on the render
 error.
 
+### U26. `postRenderers` patch: the klaus-gateway component's Slack Web API is the proof's fake — ACCEPTED
+klaus-gateway is Slack-only since 2.0 (giantswarm/klaus-gateway#319) and no
+workspace answers the lab, so the component's Slack adapter has nothing to
+talk to, and its chart has no value for the Web API base the gateway reads
+(`KLAUS_GATEWAY_SLACK_API_BASE`, `--slack-api-base`). **Fix:** a
+strategic-merge patch in `components.klaus-gateway.postRenderers`
+(`slackAPIPatch`, `postrenderers.go`) sets it to the selector-less Service
+`agent-platform/agentlab-slack-api`, which `klaus-gateway-test` points at its
+fake Slack Web API on this host (an EndpointSlice to the address pods reach
+the host on) while it runs, and removes afterwards. Outside a proof nothing
+answers there and nothing calls it: the Events API adapter calls the Web API
+only for an event, and the proof is the only sender. `klaus-gateway-test`
+asserts the patch on the live Deployment. Lab-only by construction.
+
 ## Accepted lab trade-offs (not hacks to fix)
 
 - **Checksum stamping via the `REPLACED_AT_APPLY` placeholder** — the standard
