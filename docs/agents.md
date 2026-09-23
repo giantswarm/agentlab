@@ -95,6 +95,8 @@ The same key powers Backstage's AI chat via a second Secret,
 [Backstage gotchas](backstage.md#backstage-gotchas) for its no-key behavior).
 Further models — the host model servers through model-manager,
 `platform.extraModels` — are their own ModelConfigs; see [Models](models.md).
+Without a key, the agent proofs run on a host model through `--model-config`:
+see [Agent proofs without an Anthropic key](models.md#agent-proofs-without-an-anthropic-key).
 
 ## The GitHub token
 

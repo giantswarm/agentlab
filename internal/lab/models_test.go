@@ -18,17 +18,19 @@ import (
 // TestExtraModelsTemplate renders the extra-models template across every
 // provider shape and asserts the provider-specific spec blocks: the OpenAI
 // baseUrl section, the Ollama host mapping, the secret reference wiring, and
-// the tls escape hatch.
+// the tls escape hatch and the reasoning effort.
 func TestExtraModelsTemplate(t *testing.T) {
 	cfg := config.Default()
 	cfg.Platform.ExtraModels = []config.ExtraModel{
-		{Name: "qwen3-8-27b", Provider: "OpenAI", Model: "qwen3-8-27b",
+		{Name: "qwen3-8-27b", Provider: config.ProviderOpenAI, Model: "qwen3-8-27b",
 			BaseURL: "https://qwen.example.com/v1", InsecureTLS: true},
-		{Name: "openrouter-deepseek", Provider: "OpenAI", Model: "deepseek/deepseek-chat",
+		{Name: "openrouter-deepseek", Provider: config.ProviderOpenAI, Model: "deepseek/deepseek-chat",
 			BaseURL: "https://openrouter.ai/api/v1", APIKeyEnv: "OPENROUTER_API_KEY"}, // #nosec G101 -- env var NAME, not a credential
-		{Name: "gemini-flash", Provider: "Gemini", Model: "gemini-2.5-flash", APIKeyEnv: "GEMINI_API_KEY"}, // #nosec G101 -- env var NAME, not a credential
-		{Name: "local-llama", Provider: "Ollama", Model: "llama3.3", BaseURL: "http://192.168.1.10:11434"},
-		{Name: "claude-proxy", Provider: "Anthropic", Model: "claude-haiku-4-5", BaseURL: "https://proxy.example.com"},
+		{Name: "gemini-flash", Provider: config.ProviderGemini, Model: "gemini-2.5-flash", APIKeyEnv: "GEMINI_API_KEY"}, // #nosec G101 -- env var NAME, not a credential
+		{Name: "local-llama", Provider: config.ProviderOllama, Model: "llama3.3", BaseURL: "http://192.168.1.10:11434"},
+		{Name: "claude-proxy", Provider: config.ProviderAnthropic, Model: "claude-haiku-4-5", BaseURL: "https://proxy.example.com"},
+		{Name: "ollama-v1", Provider: config.ProviderOpenAI, Model: "qwen3.5:2b", BaseURL: "http://172.21.0.1:11434/v1", ReasoningEffort: "none"},
+		{Name: "gpt-low", Provider: config.ProviderOpenAI, Model: "gpt-5", ReasoningEffort: "low"},
 	}
 	raw, err := renderTemplate(cfg, "extra-models.yaml.tmpl", nil)
 	if err != nil {
@@ -51,6 +53,9 @@ func TestExtraModelsTemplate(t *testing.T) {
 		"apiKeySecretKey: ANTHROPIC_API_KEY",
 		"baseUrl: https://proxy.example.com",
 		"app.kubernetes.io/managed-by: agentlab",
+		// the reasoning effort under openAI, with and without an endpoint
+		"baseUrl: http://172.21.0.1:11434/v1\n    reasoningEffort: none",
+		"name: gpt-low",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("rendered extra-models missing %q:\n%s", want, out)
@@ -58,6 +63,12 @@ func TestExtraModelsTemplate(t *testing.T) {
 	}
 	if strings.Contains(out, "apiKeySecret: kagent-local-llama") {
 		t.Errorf("Ollama must not reference a secret:\n%s", out)
+	}
+	if !strings.Contains(out, "model: gpt-5\n  apiKeySecret: kagent-gpt-low\n  apiKeySecretKey: OPENAI_API_KEY\n  openAI:\n    reasoningEffort: low") {
+		t.Errorf("an OpenAI entry without baseUrl must still render its reasoningEffort:\n%s", out)
+	}
+	if strings.Count(out, "reasoningEffort:") != 2 {
+		t.Errorf("reasoningEffort rendered for entries that set none:\n%s", out)
 	}
 	if strings.Count(out, "kind: ModelConfig") != len(cfg.Platform.ExtraModels) {
 		t.Errorf("want %d ModelConfigs:\n%s", len(cfg.Platform.ExtraModels), out)
