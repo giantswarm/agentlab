@@ -139,3 +139,40 @@ func TestBackstageOverlayIsLastAppConfig(t *testing.T) {
 		t.Errorf("umbrella app-config agent-platform-backstage-app-config missing before the overlay: %+v", files)
 	}
 }
+
+// TestAgentManagerVerdict pins backstage-test's feature detection to the
+// lab's shape: with agents on, a muster without agent-manager fails the
+// sign-in half (the portal would offer no installation to create agents on);
+// with agents off the lab installs none, so its absence is not a failure and
+// the per-server Sign in path and every user still run.
+func TestAgentManagerVerdict(t *testing.T) {
+	withAM := []string{agentManagerMCPServer, oauthFixtureServer, componentMCPKubernetes}
+	withoutAM := []string{oauthFixtureServer, componentMCPKubernetes}
+	for _, tc := range []struct {
+		name    string
+		servers []string
+		agents  bool
+		wantErr bool
+	}{
+		{"agents on, agent-manager listed", withAM, true, false},
+		{"agents on, agent-manager missing", withoutAM, true, true},
+		{"agents off, agent-manager missing", withoutAM, false, false},
+		{"agents off, agent-manager listed", withAM, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			verdict, err := agentManagerVerdict(tc.servers, tc.agents)
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), agentManagerMCPServer) {
+					t.Fatalf("want an error naming %s, got verdict %q, err %v", agentManagerMCPServer, verdict, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if verdict == "" {
+				t.Error("want a verdict line for the proof's output")
+			}
+		})
+	}
+}
