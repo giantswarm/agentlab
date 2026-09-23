@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -79,5 +80,19 @@ func TestIsAuthRequiredState(t *testing.T) {
 		if isAuthRequiredState(s) {
 			t.Errorf("%q must not read as auth required", s)
 		}
+	}
+}
+
+// A per-session server muster reached reads Awaiting Session from muster
+// 5.28.0 on; the platform's wait must take it as reachable, next to the
+// Auth Required an older muster reports and Connected.
+func TestMCPServerReachableStatesTakeAwaitingSession(t *testing.T) {
+	for _, s := range []string{"Awaiting Session", "Auth Required", "Connected"} {
+		if !slices.Contains(mcpServerReachableStates, s) {
+			t.Errorf("%q is not a reachable state: %v", s, mcpServerReachableStates)
+		}
+	}
+	if slices.Contains(mcpServerReachableStates, "Failed") {
+		t.Errorf("Failed must not count as reachable: %v", mcpServerReachableStates)
 	}
 }
