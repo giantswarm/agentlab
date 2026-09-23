@@ -95,11 +95,11 @@ func backstageSignIn(cfg *config.Config, user *config.User) (*portalSession, err
 		}
 	}
 	fmt.Printf("  muster servers  [%s]\n", strings.Join(pairs, ", "))
-	// The create wizard offers an installation only when its muster lists
-	// agent-manager (useAgentManagerAvailability): the feature detection.
-	if !slices.Contains(names, agentManagerMCPServer) {
-		return nil, fmt.Errorf("muster /servers lists no %s — the portal offers no installation to create agents on", agentManagerMCPServer)
+	verdict, err := agentManagerVerdict(names, cfg.Platform.Agents)
+	if err != nil {
+		return nil, err
 	}
+	fmt.Printf("  agent-manager   %s\n", verdict)
 
 	// The per-server sign-in path behind the portal's Sign in button
 	// (backstage#2203), with this user's own forwarded token: the lab's
@@ -174,6 +174,21 @@ func backstageSignIn(cfg *config.Config, user *config.User) (*portalSession, err
 		fmt.Printf("  muster /core-tools -> %d\n", status)
 	}
 	return ps, nil
+}
+
+// agentManagerVerdict is the create wizard's feature detection
+// (useAgentManagerAvailability): the portal offers an installation to create
+// agents on only when its muster lists agent-manager. A lab with agents off
+// installs no agent-manager and the portal offers no create path, so the
+// check applies only with agents on.
+func agentManagerVerdict(servers []string, agents bool) (string, error) {
+	if !agents {
+		return "not required (platform.agents off: no create path to offer)", nil
+	}
+	if !slices.Contains(servers, agentManagerMCPServer) {
+		return "", fmt.Errorf("muster /servers lists no %s — the portal offers no installation to create agents on", agentManagerMCPServer)
+	}
+	return "listed — the portal offers this installation to create agents on", nil
 }
 
 // proveServerGroups is the MCP servers page's grouping, asserted from the
