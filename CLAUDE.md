@@ -141,8 +141,10 @@ with Dex doing the logins.
   anonymous from inside the cluster, the person's token accepted, the tools
   through muster with annotations, then create_vm → ready → attestation →
   delete_vm (`--skip-vm` boots nothing). The golden PCR values are the pod's
-  OVMF's, recorded once per vm-manager image and guest image inside the pod
-  (`kubectl exec … vm-manager image golden`, docs/vm-manager.md).
+  OVMF's (pinned per vm-manager release, `get_host`'s `firmware`), recorded
+  once per firmware build and guest image inside the pod (`kubectl exec …
+  vm-manager image golden`, `--clear` first over stale values,
+  docs/vm-manager.md).
 - `platform.klausGateway` runs **Swarmgeist (klaus-gateway) as the meta
   chart's in-cluster component** (`components.klaus-gateway`), the shape
   every installation runs next to the host-mode gateway

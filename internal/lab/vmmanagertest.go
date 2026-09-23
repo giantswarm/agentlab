@@ -62,12 +62,38 @@ const (
 
 // vmHostInfo is the part of get_host / GET /api/v1/host the proof reads.
 type vmHostInfo struct {
-	Hostname    string   `json:"hostname"`
-	Kernel      string   `json:"kernel"`
-	CPUs        int      `json:"cpus"`
-	MemoryBytes uint64   `json:"memoryBytes"`
-	Ready       bool     `json:"ready"`
-	Missing     []string `json:"missing"`
+	Hostname    string      `json:"hostname"`
+	Kernel      string      `json:"kernel"`
+	CPUs        int         `json:"cpus"`
+	MemoryBytes uint64      `json:"memoryBytes"`
+	OVMFCode    string      `json:"ovmfCode"`
+	Firmware    *vmFirmware `json:"firmware"`
+	Ready       bool        `json:"ready"`
+	Missing     []string    `json:"missing"`
+}
+
+// vmFirmware is get_host's build of the firmware the pod's VMs boot with,
+// the build the golden value of PCR 0 belongs to (vm-manager 0.22.12 and later).
+type vmFirmware struct {
+	SHA256  string `json:"sha256"`
+	Package string `json:"package"`
+	Version string `json:"version"`
+}
+
+// firmware names the build the VMs boot with, for the notes and the
+// golden-mismatch explanation.
+func (h *vmHostInfo) firmware() string {
+	if h == nil || h.Firmware == nil {
+		return "a build this vm-manager does not report (get_host's `firmware` needs vm-manager 0.22.12 or later)"
+	}
+	sum := h.Firmware.SHA256
+	if len(sum) > 12 {
+		sum = sum[:12] + "…"
+	}
+	if h.Firmware.Package == "" {
+		return fmt.Sprintf("%s (sha256 %s)", h.OVMFCode, sum)
+	}
+	return fmt.Sprintf("%s %s (%s, sha256 %s)", h.Firmware.Package, h.Firmware.Version, h.OVMFCode, sum)
 }
 
 // vmImage is the part of list_images the proof reads.
@@ -249,7 +275,7 @@ func VMManagerTest(cfg *config.Config, email string, opts VMManagerTestOptions) 
 	case len(images) == 0:
 		note("VM lifecycle skipped: no image to boot")
 	default:
-		if err := proveVMLifecycle(session, prefix, images[0], opts.VMTimeout); err != nil {
+		if err := proveVMLifecycle(session, prefix, images[0], direct, opts.VMTimeout); err != nil {
 			return err
 		}
 	}
@@ -341,6 +367,7 @@ func noteHost(h *vmHostInfo) {
 		ready = "NOT ready: missing " + strings.Join(h.Missing, ", ")
 	}
 	note("host %s — kernel %s, %d CPUs, %.1f GiB; %s", h.Hostname, h.Kernel, h.CPUs, float64(h.MemoryBytes)/(1<<30), ready)
+	note("firmware the VMs boot with: %s — the build golden PCR 0 is recorded for", h.firmware())
 }
 
 // proveVMManagerTools asserts muster aggregates the core tool set under the
@@ -430,7 +457,7 @@ func proveVMManagerRegistration() error {
 // the image, the states followed with get_vm until ready, the attestation
 // read when the policy has golden values, the console tailed, delete_vm and
 // list_vms without it. On any failure the VM is deleted before returning.
-func proveVMLifecycle(session *musterSession, prefix string, img vmImage, timeout time.Duration) error {
+func proveVMLifecycle(session *musterSession, prefix string, img vmImage, host *vmHostInfo, timeout time.Duration) error {
 	if err := removeStaleTestVMs(session, prefix); err != nil {
 		return err
 	}
@@ -476,7 +503,7 @@ func proveVMLifecycle(session *musterSession, prefix string, img vmImage, timeou
 
 	if attest {
 		step("%s: both stages verified", vmToolGetAttestation)
-		if err := proveVMAttestation(session, prefix, created.ID); err != nil {
+		if err := proveVMAttestation(session, prefix, created.ID, img, host); err != nil {
 			return err
 		}
 	}
@@ -550,7 +577,7 @@ func followVMBoot(session *musterSession, prefix, id string, timeout time.Durati
 // proveVMAttestation reads the current boot's attestation and wants both
 // quotes verified — the initrd stage that gates user-data and the ready
 // stage with PCR 13.
-func proveVMAttestation(session *musterSession, prefix, id string) error {
+func proveVMAttestation(session *musterSession, prefix, id string, img vmImage, host *vmHostInfo) error {
 	var att struct {
 		Required         bool     `json:"required"`
 		UserDataReleased bool     `json:"userDataReleased"`
@@ -568,7 +595,7 @@ func proveVMAttestation(session *musterSession, prefix, id string) error {
 			return fmt.Errorf("attestation: no %s quote recorded", stage.name)
 		}
 		if !stage.quote.Verified {
-			return fmt.Errorf("attestation: the %s quote did not verify: %s", stage.name, explainQuoteVerdict(orNone(stage.quote.Message)))
+			return fmt.Errorf("attestation: the %s quote did not verify: %s", stage.name, explainQuoteVerdict(orNone(stage.quote.Message), img.ref(), host.firmware()))
 		}
 	}
 	note("initrd and ready quotes verified; user-data released: %v", att.UserDataReleased)
@@ -581,13 +608,13 @@ var goldenMismatchRe = regexp.MustCompile(`golden mismatch: pcr (\d+)`)
 
 // explainQuoteVerdict adds to the verifier's words what a golden mismatch
 // means and what fixes it. The PCR names what changed under the recorded
-// values: the firmware PCRs are the pod's OVMF — the ovmf package of the
-// vm-manager image, installed unpinned, so a vm-manager release can change
-// them while the guest image and its digest stay the same — and PCR 4 and 13
-// are the guest image's. Either way the policy's golden values were recorded
-// for another build and are recorded again (docs/vm-manager.md). Any other
+// values: the firmware PCRs are the pod's OVMF — the build get_host reports,
+// pinned per vm-manager release, so a release that changes it changes them
+// while the guest image and its digest stay the same — and PCR 4 and 13 are
+// the guest image's. Either way the policy's golden values were recorded for
+// another build and are recorded again (docs/vm-manager.md). Any other
 // verdict is returned as it is.
-func explainQuoteVerdict(message string) string {
+func explainQuoteVerdict(message, image, firmware string) string {
 	m := goldenMismatchRe.FindStringSubmatch(message)
 	if m == nil {
 		return message
@@ -595,7 +622,7 @@ func explainQuoteVerdict(message string) string {
 	var changed string
 	switch m[1] {
 	case "0", "2", "3", "6", "7":
-		changed = "PCR " + m[1] + " is measured by the firmware: the OVMF of the vm-manager pod image (an unpinned Ubuntu package, so a vm-manager release changes it with the same guest image; `kubectl -n agent-platform exec deploy/vm-manager -- dpkg-query -W ovmf` names the build this pod boots with)"
+		changed = "PCR " + m[1] + " is measured by the firmware: the OVMF of the vm-manager pod image, " + firmware + ". vm-manager pins it; a release that changes it says `re-record golden PCRs` in its notes, with the same guest image"
 	case "4":
 		changed = "PCR 4 measures the boot loader and the UKI: the guest image changed"
 	case "13":
@@ -603,7 +630,7 @@ func explainQuoteVerdict(message string) string {
 	default:
 		changed = "PCR " + m[1] + " differs from the recorded value"
 	}
-	return message + "\n  " + changed + ".\n  The image policy's golden values were recorded for another build: record them again on this pod with one learn-mode boot and `vm-manager image golden` (docs/vm-manager.md \"Recording the image's golden PCR values\")."
+	return message + "\n  " + changed + ".\n  The image policy's golden values were recorded for another build: record them again on this pod — `vm-manager image golden " + image + " --clear`, one learn-mode boot, `vm-manager image golden " + image + " --from-vm <id>` (docs/vm-manager.md \"Recording the image's golden PCR values\")."
 }
 
 // removeStaleTestVMs deletes VMs an interrupted run left behind.
