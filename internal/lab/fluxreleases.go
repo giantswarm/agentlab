@@ -642,13 +642,15 @@ func renderAttempts() int { return 1 + len(renderRetryDelays) }
 
 // retryUnreachable runs a render until it succeeds, fails for any reason but
 // an unreachable registry, or has spent its retries, and returns its last
-// error. Each retry is noted with the cause (unreachableCause), so the boot
-// log shows the network failing before the boot stops on it.
+// error. A cause the transport has already retried (retriedInTransport: a
+// timeout, a 5xx or 429) is returned at once — its retries are spent. Each
+// retry is noted with the cause (unreachableCause), so the boot log shows
+// the network failing before the boot stops on it.
 func retryUnreachable(what string, render func() error) error {
 	err := render()
 	for i, delay := range renderRetryDelays {
 		cause := unreachableCause(err)
-		if cause == nil {
+		if cause == nil || retriedInTransport(cause) {
 			return err
 		}
 		note("%s: the registry did not answer (%v); retry %d of %d in %s", what, cause, i+1, len(renderRetryDelays), delay)
@@ -665,7 +667,7 @@ func retryUnreachable(what string, render func() error) error {
 // dialer's own words, the cause to act on.
 func unreachableComponentsError(unreachable []renderFailure) error {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%d component chart(s) could not be rendered, the registry did not answer in %d attempts:\n", len(unreachable), renderAttempts())
+	fmt.Fprintf(&b, "%d component chart(s) could not be rendered, the registry did not answer through the retries:\n", len(unreachable))
 	var hosts []string
 	for _, f := range unreachable {
 		fmt.Fprintf(&b, "\n%s\n", indent(strings.TrimSpace(f.err.Error()), "  "))
@@ -682,8 +684,8 @@ func unreachableComponentsError(unreachable []renderFailure) error {
 // the lab's patches are read off, come out of that render. rerun is the
 // command that picks the boot up again where it stopped.
 func chartUnreachableError(chart platformChart, err error, rerun string) error {
-	return fmt.Errorf("cannot render %s, the registry did not answer in %d attempts:\n\n%s\n\nThe install is not started. Check this host's network and DNS for %s, then run `%s` again",
-		chart, renderAttempts(), indent(strings.TrimSpace(err.Error()), "  "), registryHost(chart.ref), rerun)
+	return fmt.Errorf("cannot render %s, the registry did not answer through the retries:\n\n%s\n\nThe install is not started. Check this host's network and DNS for %s, then run `%s` again",
+		chart, indent(strings.TrimSpace(err.Error()), "  "), registryHost(chart.ref), rerun)
 }
 
 // registryHost is the registry an oci:// chart reference names — the host

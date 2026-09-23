@@ -976,9 +976,11 @@ data the page reads — see [The muster plugin](backstage.md#the-muster-plugin).
   image names) are read off them, so a component without its render would be
   installed unpatched — mcp-kubernetes crash-looping on `connection refused`
   to `https://localhost:<dexPort>/dex`, the install failing minutes later on
-  its `HelmRelease`, nothing pointing at the network. Such a render is tried
-  again (three retries over some twenty seconds, each noted with the
-  resolver's or the dialer's words); if the registry still does not answer,
+  its `HelmRelease`, nothing pointing at the network. A name the resolver
+  does not know or a refused dial is tried again (three retries over some
+  twenty seconds, each noted with the resolver's or the dialer's words; a
+  timeout, a 5xx or a 429 the registry client's transport has already
+  retried five times per request); if the registry still does not answer,
   the boot stops before the install, printing each release's render error
   whole and the registry host to check, and `agentlab platform` picks it up
   again once the host resolves. The meta chart's own render is held to the

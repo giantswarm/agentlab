@@ -537,6 +537,23 @@ func unreachableCause(err error) error {
 	return nil
 }
 
+// retriedInTransport reports whether an unreachable cause (unreachableCause)
+// is one the transport under every registry call has already retried: Helm's
+// registry client runs on oras-go's retry.Transport, whose DefaultPolicy
+// retries a timeout and a 5xx or 429 five times per request. It retries
+// neither a name the resolver does not know nor a refused dial — the
+// transient DNS failure a render-level retry is for (retryUnreachable).
+// Retrying the render on top of the transport would multiply a dial timeout
+// (30 s, six times per request) into minutes before the boot stops.
+func retriedInTransport(cause error) bool {
+	var netErr net.Error
+	if errors.As(cause, &netErr) && netErr.Timeout() {
+		return true
+	}
+	var response *errcode.ErrorResponse
+	return errors.As(cause, &response)
+}
+
 // helmSchemaPrefix is the headline Helm puts above every schema failure
 // (ToRenderValuesWithSchemaValidation): a render error carrying it failed at
 // validation and nowhere earlier.

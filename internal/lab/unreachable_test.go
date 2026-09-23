@@ -32,6 +32,13 @@ func closedRegistry(t *testing.T) string {
 	return addr
 }
 
+// gsoci and gsociAPI are the chart registry the fixtures fail to reach, by
+// name and by its OCI distribution API root.
+const (
+	gsoci    = "gsoci.azurecr.io"
+	gsociAPI = "https://" + gsoci + "/v2/"
+)
+
 // dialFailure is a failed TCP dial as net.Dial reports one.
 func dialFailure(err error) *net.OpError { return &net.OpError{Op: opDial, Net: "tcp", Err: err} }
 
@@ -49,9 +56,9 @@ func quickRetries(t *testing.T) {
 // a registry that answered and a chart that failed, by the error's type, and
 // through Helm's own wrapping of a real refused dial.
 func TestRegistryUnreachable(t *testing.T) {
-	dnsErr := &net.DNSError{Err: noSuchHost, Name: "gsoci.azurecr.io", IsNotFound: true}
+	dnsErr := &net.DNSError{Err: noSuchHost, Name: gsoci, IsNotFound: true}
 	dial := dialFailure(dnsErr)
-	get := &url.Error{Op: opGet, URL: "https://gsoci.azurecr.io/v2/charts/giantswarm/mcp-kubernetes/tags/list", Err: dial}
+	get := &url.Error{Op: opGet, URL: gsociAPI + "charts/giantswarm/mcp-kubernetes/tags/list", Err: dial}
 	status := func(code int) error {
 		return fmt.Errorf("failed to perform %q on source: %w", "FetchReference", &errcode.ErrorResponse{Method: "GET", StatusCode: code})
 	}
@@ -62,7 +69,7 @@ func TestRegistryUnreachable(t *testing.T) {
 	}{
 		{"a name the resolver cannot answer, as Helm wraps it", fmt.Errorf("helm template x: %w", get), true},
 		{"a refused dial", dialFailure(os.NewSyscallError("connect", syscall.ECONNREFUSED)), true},
-		{"a timeout", &url.Error{Op: opGet, URL: "https://gsoci.azurecr.io/v2/", Err: os.ErrDeadlineExceeded}, true},
+		{"a timeout", &url.Error{Op: opGet, URL: gsociAPI, Err: os.ErrDeadlineExceeded}, true},
 		{"a registry answering 503", status(503), true},
 		{"a registry answering 429", status(429), true},
 		{"a tag that is not there", status(404), false},
@@ -87,9 +94,10 @@ func TestRegistryUnreachable(t *testing.T) {
 	}
 }
 
-// TestRetryUnreachable: a render the registry did not answer is tried again
-// up to the bound and succeeds once the network is back; any other failure is
-// returned at once, and an outage that outlasts the retries returns its last
+// TestRetryUnreachable: a render the resolver or the dialer refused is tried
+// again up to the bound and succeeds once the network is back; any other
+// failure is returned at once, and so is a timeout or a status the transport
+// has already retried; an outage that outlasts the retries returns its last
 // error, still recognisable as unreachable.
 func TestRetryUnreachable(t *testing.T) {
 	quickRetries(t)
@@ -119,6 +127,19 @@ func TestRetryUnreachable(t *testing.T) {
 	render, calls = counting(renderAttempts()+1, refused)
 	if err := retryUnreachable("rendering component", render); !registryUnreachable(err) || *calls != renderAttempts() {
 		t.Errorf("an outage past the retries: err %v after %d calls, want the refused dial after %d", err, *calls, renderAttempts())
+	}
+
+	// What oras-go's transport already retried five times per request is
+	// not retried again: unreachable, and returned at once.
+	for _, spent := range []error{
+		&url.Error{Op: opGet, URL: gsociAPI, Err: os.ErrDeadlineExceeded},
+		dialFailure(&net.DNSError{Err: "i/o timeout", Name: gsoci, IsTimeout: true}),
+		&errcode.ErrorResponse{Method: "GET", StatusCode: 503},
+	} {
+		render, calls = counting(renderAttempts(), spent)
+		if err := retryUnreachable("rendering component", render); !registryUnreachable(err) || *calls != 1 {
+			t.Errorf("%v: err %v after %d calls, want it unreachable at once after 1", spent, err, *calls)
+		}
 	}
 }
 
@@ -162,7 +183,7 @@ func TestPlatformImagesStopsOnAnUnreachableRegistry(t *testing.T) {
 	}
 	for _, want := range []string{
 		"1 component chart(s) could not be rendered",
-		"in 3 attempts",
+		"through the retries",
 		"mcp-kubernetes (oci://" + registry + "/charts/mcp-kubernetes 0.1.0)",
 		connectionRefused,
 		"the dex-localhost sidecar, platform.devImages",
@@ -209,7 +230,7 @@ func TestRenderPlatformRosterUnreachable(t *testing.T) {
 		t.Fatalf("the meta chart's render against a registry nothing listens on is not unreachable: %v", err)
 	}
 	stop := chartUnreachableError(chart, err, "agentlab up").Error()
-	for _, want := range []string{"cannot render", "4.49.0", "in 3 attempts", connectionRefused, "network and DNS for " + registry, "`agentlab up`"} {
+	for _, want := range []string{"cannot render", "4.49.0", "through the retries", connectionRefused, "network and DNS for " + registry, "`agentlab up`"} {
 		if !strings.Contains(stop, want) {
 			t.Errorf("the stop does not say %q:\n%s", want, stop)
 		}
@@ -219,8 +240,8 @@ func TestRenderPlatformRosterUnreachable(t *testing.T) {
 // TestUnreachableCause: the cause a retry note names is the dialer's or the
 // resolver's own words, not Helm's invocation around them.
 func TestUnreachableCause(t *testing.T) {
-	dnsErr := &net.DNSError{Err: noSuchHost, Name: "gsoci.azurecr.io", IsNotFound: true}
-	err := fmt.Errorf("helm template mcp-kubernetes: %w", &url.Error{Op: opGet, URL: "https://gsoci.azurecr.io/v2/", Err: dialFailure(dnsErr)})
+	dnsErr := &net.DNSError{Err: noSuchHost, Name: gsoci, IsNotFound: true}
+	err := fmt.Errorf("helm template mcp-kubernetes: %w", &url.Error{Op: opGet, URL: gsociAPI, Err: dialFailure(dnsErr)})
 	if got, want := fmt.Sprint(unreachableCause(err)), "dial tcp: lookup gsoci.azurecr.io: no such host"; got != want {
 		t.Errorf("unreachableCause = %q, want %q", got, want)
 	}

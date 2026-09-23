@@ -85,12 +85,12 @@ plumbing for model servers under
   newer — and imports that archive through the embedded kind, so seeing this
   means an older docker on that store: upgrade it. The boot went on regardless;
   the affected images were pulled by the node.
-- **`component chart(s) could not be rendered, the registry did not answer`**
-  (or `cannot render agent-platform …, the registry did not answer`) stops
-  `up` or `platform` before the install: this host could not resolve or reach
-  the chart registry, through three retries (the `rendering …: the registry
-  did not answer (…)` lines above it carry the resolver's or the dialer's
-  words — `lookup gsoci.azurecr.io: no such host` is DNS). The install is not
+- **`component chart(s) could not be rendered, the registry did not answer
+  through the retries`** (or `cannot render agent-platform …`) stops `up` or
+  `platform` before the install: this host could not resolve or reach the
+  chart registry, retries included (the `rendering …: the registry did not
+  answer (…)` lines above it carry the resolver's or the dialer's words —
+  `lookup gsoci.azurecr.io: no such host` is DNS). The install is not
   attempted because the lab's patches (the `dex-localhost` sidecar,
   `platform.devImages`) are read off those renders; without them
   mcp-kubernetes would crash-loop on the lab Dex and the install would fail
