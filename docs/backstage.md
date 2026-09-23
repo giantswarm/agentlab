@@ -93,7 +93,11 @@ servers list with all sections present, never an empty page.
 `agentlab backstage-test` drives the whole sign-in headlessly for every
 configured user and then proves the muster hop with that user's own token —
 including the per-server **Sign in** path (`/api/muster/auth/login`) against
-the lab's `Auth Required` fixture:
+the lab's `Auth Required` fixture. With agents on it also requires muster to
+list agent-manager, the portal's signal to offer the installation in the New
+agent wizard; with `platform.agents` off the lab installs no agent-manager, so
+the sign-in half runs unchanged for every user, reports agent-manager as not
+required, and the Agent Platform proof below is skipped:
 
 ```
 === dev@lab.local ===
@@ -102,6 +106,7 @@ the lab's `Auth Required` fixture:
   backstage user  user:default/dev
   ownership refs  [user:default/dev]
   muster servers  [(agent-manager, Connected), (capi-lab-01, Auth Required), (capi-lab-02, Auth Required), (kubernetes-lab-01, Auth Required), (kubernetes-lab-02, Auth Required), (lab-oauth-fixture, Auth Required), (mcp-kubernetes, Connected), (mcp-prometheus, Connected), (model-manager, Connected), (prometheus-lab-01, Auth Required), (prometheus-lab-02, Auth Required)]
+  agent-manager   listed — the portal offers this installation to create agents on
   sign-in challenge lab-oauth-fixture -> https://muster.127.0.0.1.nip.io/oauth/proxy/start?state=… (client id via preregistered)
   muster workflows [lab-cluster-overview]
   muster core tools 28 exposed
