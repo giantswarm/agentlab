@@ -3,6 +3,7 @@ package lab
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
@@ -85,8 +86,53 @@ const (
 const (
 	klausGatewaySlackAPIService = "agentlab-slack-api"
 	slackAPIBaseEnv             = "KLAUS_GATEWAY_SLACK_API_BASE"
-	klausGatewaySlackAPIBase    = "http://" + klausGatewaySlackAPIService + "." + platformNamespace + ".svc.cluster.local" + slackAPIPath
+	klausGatewaySlackAPIHost    = "http://" + klausGatewaySlackAPIService + "." + platformNamespace + ".svc.cluster.local"
+	klausGatewaySlackAPIBase    = klausGatewaySlackAPIHost + slackAPIPath
 )
+
+// fakeSlackForPods points the component's Slack Web API Service at the fake
+// on this host and proves a pod reaches it through the Service, before the
+// proof starts anything else: pods reach the host on the kind network's
+// gateway like the host model servers, and a default-deny host firewall
+// drops that traffic unless the fake's port is allowed — found here in
+// seconds with its fix, not as a failed turn at the end of the run. The
+// returned func removes the Service.
+func fakeSlackForPods(cfg *config.Config, hostIP string, port int) (func(), error) {
+	ctx, cancel := context.WithTimeout(context.Background(), probePodTimeout)
+	defer cancel()
+	k, err := labKube()
+	if err != nil {
+		return nil, err
+	}
+	remove, err := pointFakeSlackService(ctx, k, hostIP, port)
+	if err != nil {
+		return nil, err
+	}
+	sideloadImages(cfg, hostPullImages([]string{probeImage}))
+	health := klausGatewaySlackAPIHost + slackHealthPath
+	out, err := runProbePod(ctx, platformNamespace, klausGatewaySlackAPIService+"-preflight", probeImage,
+		[]string{"wget", "-qO-", "-T", "5", health}, probePodTimeout)
+	if err == nil && strings.TrimSpace(out) == "ok" {
+		note("a pod reaches the fake Slack Web API through %s (%s:%d on this host)", health, hostIP, port)
+		return remove, nil
+	}
+	remove()
+	return nil, fmt.Errorf("pods cannot reach the fake Slack Web API the klaus-gateway component calls (%s -> %s:%d on this host): %s.\n"+
+		"  Fixes: allow TCP %d from the docker bridge subnets (they fall inside 172.16.0.0/12) through the\n"+
+		"  host firewall — pod->host traffic arrives on the bridge like any other inbound connection, the\n"+
+		"  same rule the host model servers need (docs/models.md) — or move the fake to an allowed port with\n"+
+		"  --gateway-port (the fake listens two ports above it).\n"+
+		"  Probe output: %.300s", health, hostIP, port, probeFailure(err, out), port, strings.TrimSpace(out))
+}
+
+// probeFailure words why a probe pod's fetch failed: its error, or what the
+// fetch printed instead of the answer.
+func probeFailure(err error, out string) string {
+	if err != nil {
+		return err.Error()
+	}
+	return fmt.Sprintf("the fetch answered %q, not ok", excerpt(strings.TrimSpace(out), 80))
+}
 
 // pointFakeSlackService creates the component's Slack Web API Service and the
 // EndpointSlice behind it: the address pods reach this host on and the fake's

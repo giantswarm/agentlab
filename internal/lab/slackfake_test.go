@@ -62,6 +62,14 @@ func startTestFake(t *testing.T, emails map[string]string) *fakeSlack {
 // a person would see it, in order, every message with a distinct ts.
 func TestFakeSlackThread(t *testing.T) {
 	f := startTestFake(t, map[string]string{"UP": testUser})
+	resp, err := http.Get("http://" + f.listener.Addr().String() + slackHealthPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body, _ := io.ReadAll(resp.Body); resp.StatusCode != http.StatusOK || string(body) != "ok" {
+		t.Errorf("GET %s = %d %q", slackHealthPath, resp.StatusCode, body)
+	}
+	_ = resp.Body.Close()
 	if who := callFake(t, f, slackAuthTest, url.Values{}, nil); who["user_id"] != slackFakeBotUser || who[slackKeyTeamID] != slackFakeTeam {
 		t.Errorf("auth.test = %v", who)
 	}

@@ -66,7 +66,12 @@ platform:
   selector-less Service that `klaus-gateway-test` points at its fake on this
   host (an EndpointSlice to the kind network's gateway) while it runs and
   removes afterwards. Nothing calls it otherwise: the Events API adapter
-  calls the Web API only for an event.
+  calls the Web API only for an event. Pods reach the fake the way they
+  reach the host model servers, so on a default-deny host firewall its port
+  (`--gateway-port` + 2, 18092 by default) must be allowed from the docker
+  bridge subnets like theirs ([Local backends](models.md)); the proof
+  fetches the fake through the Service from a probe pod before anything
+  else and names that fix when it fails.
 - **What the chart renders** with `obo.store: secret`: Deployment
   `klaus-gateway` (`KLAUS_GATEWAY_OBO_STORE=secret`, no store volume, the
   default RollingUpdate strategy — a mounted ReadWriteOnce claim is what used

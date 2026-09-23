@@ -609,7 +609,11 @@ fake Slack Web API on this host (an EndpointSlice to the address pods reach
 the host on) while it runs, and removes afterwards. Outside a proof nothing
 answers there and nothing calls it: the Events API adapter calls the Web API
 only for an event, and the proof is the only sender. `klaus-gateway-test`
-asserts the patch on the live Deployment. Lab-only by construction.
+asserts the patch on the live Deployment and fetches the fake through the
+Service from a probe pod first: pods reach the host the way they reach the
+host model servers, so a default-deny host firewall must allow the fake's
+port (18092 by default) from the docker bridge subnets. Lab-only by
+construction.
 
 ## Accepted lab trade-offs (not hacks to fix)
 

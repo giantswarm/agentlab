@@ -48,6 +48,8 @@ const (
 	// slackResponsePath receives what the gateway posts to an interaction's
 	// response_url.
 	slackResponsePath = "/response"
+	// slackHealthPath answers "ok": what the pre-flight from a pod fetches.
+	slackHealthPath = "/healthz"
 )
 
 // The Web API methods the fake keeps a thread of, by name.
@@ -170,6 +172,7 @@ func startFakeSlack(addr string, emails map[string]string) (*fakeSlack, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST "+slackAPIPath+"/{method}", f.serveAPI)
 	mux.HandleFunc("POST "+slackResponsePath, f.serveResponse)
+	mux.HandleFunc("GET "+slackHealthPath, func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok") })
 	f.server = &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	go func() { _ = f.server.Serve(l) }()
 	return f, nil

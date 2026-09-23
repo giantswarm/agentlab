@@ -216,25 +216,10 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	klausGatewayCleanup(api)
 	defer klausGatewayCleanup(api)
 
-	shape := harnessAdmissionLabels()
-	step("Applying the fixtures in namespace %s: AgentTemplate %s (labelled %v, muster carrier %s with %s, requireApproval on the binding) and AgentTemplate %s (no admission label)",
-		kagentNamespace, klausGatewayTestAgent, shape, klausGatewayTestAgent, klausGatewayTestToolset, klausGatewayTestUnadmitted)
-	if _, err := applyManifests(context.Background(), []byte(klausGatewayFixtures(opts.ModelConfig, shape))); err != nil {
-		return err
-	}
-	step("Waiting up to %s for %s Ready on Harness %s (the golden boot)", opts.ReadyTimeout, klausGatewayTestAgent, kagentHarness)
-	boot, err := waitAgentReady(klausGatewayTestAgent, opts.ReadyTimeout)
-	if err != nil {
-		return err
-	}
-	if !boot.ready {
-		return boot.failure(klausGatewayTestAgent, opts.ReadyTimeout)
-	}
-	note("Ready after %s", boot.elapsed.Round(time.Second))
-
 	// The fake workspace: the linked person, a person with no link, and the
 	// component half's linked person (klausgatewaytest_component.go), all
-	// answered by users.info.
+	// answered by users.info. With the component on, its pods call the fake
+	// too, which the pre-flight proves before anything else runs.
 	run := strings.ToUpper(randomSuffix())
 	people := slackPeople{
 		person:    slackUserPrefix + run + "P",
@@ -252,6 +237,30 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 		return err
 	}
 	defer fake.close()
+	if cfg.KlausGatewayEnabled() {
+		step("Pointing the klaus-gateway component's Slack Web API (Service %s/%s) at the fake on this host and checking a pod reaches it", platformNamespace, klausGatewaySlackAPIService)
+		removeService, err := fakeSlackForPods(cfg, podIP, fake.port())
+		if err != nil {
+			return err
+		}
+		defer removeService()
+	}
+
+	shape := harnessAdmissionLabels()
+	step("Applying the fixtures in namespace %s: AgentTemplate %s (labelled %v, muster carrier %s with %s, requireApproval on the binding) and AgentTemplate %s (no admission label)",
+		kagentNamespace, klausGatewayTestAgent, shape, klausGatewayTestAgent, klausGatewayTestToolset, klausGatewayTestUnadmitted)
+	if _, err := applyManifests(context.Background(), []byte(klausGatewayFixtures(opts.ModelConfig, shape))); err != nil {
+		return err
+	}
+	step("Waiting up to %s for %s Ready on Harness %s (the golden boot)", opts.ReadyTimeout, klausGatewayTestAgent, kagentHarness)
+	boot, err := waitAgentReady(klausGatewayTestAgent, opts.ReadyTimeout)
+	if err != nil {
+		return err
+	}
+	if !boot.ready {
+		return boot.failure(klausGatewayTestAgent, opts.ReadyTimeout)
+	}
+	note("Ready after %s", boot.elapsed.Round(time.Second))
 
 	keys, err := writeGatewayFiles(runDir)
 	if err != nil {
@@ -443,7 +452,7 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	// creates is removed by the cleanup.
 	var component *componentOutcome
 	if cfg.KlausGatewayEnabled() {
-		if component, err = klausGatewayComponentProof(token, identity, user, fake, podIP, people.component); err != nil {
+		if component, err = klausGatewayComponentProof(token, identity, user, fake, people.component); err != nil {
 			return err
 		}
 	} else {

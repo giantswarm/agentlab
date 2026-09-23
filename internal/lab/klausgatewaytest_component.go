@@ -94,10 +94,11 @@ type componentOutcome struct {
 
 // klausGatewayComponentProof runs the component half (see the file header)
 // as the signed-in person: the render, the store across a pod loss, one Slack
-// turn through the replacement pod on the proof's fake Web API (podIP is
-// where pods reach it, slackUser the person the turn is sent as). The fixtures of the host-mode half are in
+// turn through the replacement pod on the proof's fake Web API, served to the
+// pod by the Service the host-mode half pointed at it (slackUser is the
+// person the turn is sent as). The fixtures of the host-mode half are in
 // place; nothing here is left behind but what was there before.
-func klausGatewayComponentProof(token string, identity linkedIdentity, user *config.User, fake *fakeSlack, podIP, slackUser string) (*componentOutcome, error) {
+func klausGatewayComponentProof(token string, identity linkedIdentity, user *config.User, fake *fakeSlack, slackUser string) (*componentOutcome, error) {
 	ctx := context.Background()
 	k, err := labKube()
 	if err != nil {
@@ -223,11 +224,6 @@ func klausGatewayComponentProof(token string, identity linkedIdentity, user *con
 	note("pod %s Ready %s after the deletion; %s read %d links from %s at start; both records still read back unchanged", out.replacement, out.elapsed, out.version, out.links, klausGatewayLinksSecret)
 
 	step("9. One Slack turn through the component: a port-forward to pod %s, a signed mention as %s answered in the fake thread over the in-cluster target %s", out.replacement, slackUser, klausGatewayInClusterTarget)
-	removeService, err := pointFakeSlackService(ctx, k, podIP, fake.port())
-	if err != nil {
-		return nil, err
-	}
-	defer removeService()
 	local, stopForward, err := portForwardPod(ctx, platformNamespace, out.replacement, gatewayHTTPPort)
 	if err != nil {
 		return nil, err
