@@ -63,7 +63,7 @@ import (
 // image or binary is named: the current release of the Slack-only line
 // (2.0.0 on) that the 4.x meta chart's `components.klaus-gateway` range
 // resolves to.
-const KlausGatewayImageDefault = "gsoci.azurecr.io/giantswarm/klaus-gateway:3.2.0"
+const KlausGatewayImageDefault = "gsoci.azurecr.io/giantswarm/klaus-gateway:3.3.0"
 
 // Names of what the proof creates in the kagent namespace; all are deleted by
 // the same run, and a leftover of an aborted run is removed first.

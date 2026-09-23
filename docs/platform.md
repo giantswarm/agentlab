@@ -631,7 +631,7 @@ anywhere in the run fails the proof.
 
 **Deployment shape.** The gateway runs **out of cluster, on the host** —
 the released image on the host network by default
-(`--gateway-image`, `gsoci.azurecr.io/giantswarm/klaus-gateway:3.2.0`), or a
+(`--gateway-image`, `gsoci.azurecr.io/giantswarm/klaus-gateway:3.3.0`), or a
 local build (`--gateway-binary`, the proof of a branch) — with `a2a.url` =
 the lab's public gRPC target `grpcs://agentgateway.<domain>:<gatewayPort>`
 (TLS with the lab CA from `certs/ca.crt`; the JWT `Strict` policy of the
