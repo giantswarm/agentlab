@@ -134,19 +134,23 @@ func TestStripANSI(t *testing.T) {
 // 13 — and the recipe that records the values again; any other verdict is
 // returned as it is.
 func TestExplainQuoteVerdict(t *testing.T) {
-	firmware := explainQuoteVerdict("golden mismatch: pcr 0 expected c9894ac4…, got 306be437…")
-	for _, want := range []string{"golden mismatch: pcr 0 expected c9894ac4…, got 306be437…", "OVMF of the vm-manager pod image", "dpkg-query -W ovmf", "vm-manager image golden", "docs/vm-manager.md"} {
+	host := &vmHostInfo{OVMFCode: "/usr/share/OVMF/OVMF_CODE_4M.fd", Firmware: &vmFirmware{SHA256: "50a48d30e35dd0bbba8e78838313ea5b8c9201408ce7fc50495f2f61bc5f12bf", Package: "ovmf-generic", Version: "2025.11-3ubuntu7.2"}}
+	firmware := explainQuoteVerdict("golden mismatch: pcr 0 expected c9894ac4…, got 306be437…", "giantswarm-vm-base_0.1.0", host.firmware())
+	for _, want := range []string{"golden mismatch: pcr 0 expected c9894ac4…, got 306be437…", "OVMF of the vm-manager pod image", "ovmf-generic 2025.11-3ubuntu7.2 (/usr/share/OVMF/OVMF_CODE_4M.fd, sha256 50a48d30e35d…)", "re-record golden PCRs", "vm-manager image golden giantswarm-vm-base_0.1.0 --clear", "docs/vm-manager.md"} {
 		if !strings.Contains(firmware, want) {
 			t.Fatalf("the PCR 0 verdict lacks %q:\n%s", want, firmware)
 		}
 	}
-	if got := explainQuoteVerdict("golden mismatch: pcr 4 expected a, got b"); !strings.Contains(got, "the guest image changed") {
+	if got := explainQuoteVerdict("golden mismatch: pcr 0 expected a, got b", "img", (&vmHostInfo{}).firmware()); !strings.Contains(got, "a build this vm-manager does not report") {
+		t.Fatalf("a vm-manager without get_host's firmware is named as such:\n%s", got)
+	}
+	if got := explainQuoteVerdict("golden mismatch: pcr 4 expected a, got b", "img", ""); !strings.Contains(got, "the guest image changed") {
 		t.Fatalf("the PCR 4 verdict names the guest image:\n%s", got)
 	}
-	if got := explainQuoteVerdict("golden mismatch: pcr 13 expected a, got b"); !strings.Contains(got, "Kubernetes sysext") {
+	if got := explainQuoteVerdict("golden mismatch: pcr 13 expected a, got b", "img", ""); !strings.Contains(got, "Kubernetes sysext") {
 		t.Fatalf("the PCR 13 verdict names the sysext:\n%s", got)
 	}
-	if got := explainQuoteVerdict("nonce mismatch"); got != "nonce mismatch" {
+	if got := explainQuoteVerdict("nonce mismatch", "img", ""); got != "nonce mismatch" {
 		t.Fatalf("another verdict is returned as it is: %q", got)
 	}
 }

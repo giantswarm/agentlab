@@ -97,16 +97,14 @@ curl -s -X DELETE -H "Authorization: Bearer $(cat .token)" http://127.0.0.1:1808
 
 Recording *again*, over values that exist, has one step more: learn mode
 accepts only a PCR the policy has no value for, so a stale value is still a
-`golden mismatch` in the learn boot. Remove the policy's `golden` key on the
-state claim first and restart the pod (it reads the policy at start; the
-artifact digest is unchanged, so the directory stays):
+`golden mismatch` in the learn boot. Clear the image's values on the state
+claim first; the learn-mode `agentlab platform` of step 1 then restarts the
+pod, which reads the policy at start (the artifact digest is unchanged, so
+the directory stays):
 
 ```sh
-pod=$(kubectl --kubeconfig state/kubeconfig -n agent-platform get pods -l app.kubernetes.io/name=vm-manager -o jsonpath='{.items[0].metadata.name}')
-kubectl --kubeconfig state/kubeconfig -n agent-platform cp -c vm-manager "$pod:/var/lib/vm-manager/images/policy.json" policy.json
-jq 'del(.golden)' policy.json > policy.nogolden.json
-kubectl --kubeconfig state/kubeconfig -n agent-platform cp -c vm-manager policy.nogolden.json "$pod:/var/lib/vm-manager/images/policy.json"
-kubectl --kubeconfig state/kubeconfig -n agent-platform rollout restart deploy/vm-manager
+kubectl --kubeconfig state/kubeconfig -n agent-platform exec deploy/vm-manager -- \
+  vm-manager image golden giantswarm-vm-base_0.1.0 --clear
 ```
 
 From then on `list_images` reports the golden values, `agentlab
@@ -120,21 +118,19 @@ back into the checkout's `images/build` (`kubectl cp` from
 inside the artifact.
 
 **The firmware PCRs follow the vm-manager release, not the guest image.**
-PCRs 0, 2, 3 and 7 measure the OVMF the pod boots with — the `ovmf` package
-of the vm-manager image, installed unpinned from the Ubuntu archive — so a
-vm-manager release rebuilt after an Ubuntu firmware update changes PCR 0
-while the guest image, its digest and the values on the state claim stay as
-they were, and every quote then fails with `golden mismatch: pcr 0`
+PCRs 0, 2, 3 and 7 measure the OVMF the pod boots with: `ovmf-generic` of the
+vm-manager image, pinned in its `Dockerfile` since vm-manager 0.22.12. A
+release that moves the pin is a pull request and a release note of its own,
+`update OVMF to <version>, re-record golden PCRs`. It changes PCR 0 while the
+guest image, its digest and the values on the state claim stay as they
+were, and every quote then fails with `golden mismatch: pcr 0`
 (`vm-manager-test` names this at `get_vm_attestation`, with this recipe as
-the fix). A lab that follows vm-manager releases meets it without a change of
-its own: 0.20.2 → 0.21.0 moved `ovmf` from `2025.11-3ubuntu7` to
-`2025.11-3ubuntu7.2` and changed PCR 0 alone (PCRs 2, 3, 4, 7 and 13 kept
-their values). `kubectl --kubeconfig state/kubeconfig -n agent-platform exec
-deploy/vm-manager -- dpkg-query -W ovmf` prints the firmware build the pod
-runs; record the values again after every change of it. Pinning the
-firmware, reporting it in `get_host` and shipping the release's values in the
-guest image artifact are
-[vm-manager#80](https://github.com/giantswarm/vm-manager/issues/80).
+the fix). `get_host` reports the build the pod boots with as `firmware` (the
+code image's SHA-256, the package and version), and `vm-manager-test` prints
+it next to the host; record the values again after every change of it.
+Before the pin, 0.20.2 → 0.21.0 moved the unpinned `ovmf` from
+`2025.11-3ubuntu7` to `2025.11-3ubuntu7.2` and changed PCR 0 alone (PCRs 2,
+3, 4, 7 and 13 kept their values).
 
 ## The proof
 
