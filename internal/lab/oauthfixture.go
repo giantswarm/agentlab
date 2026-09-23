@@ -100,7 +100,7 @@ func ensureOAuthFixture(cfg *config.Config) error {
 // completed sign-in (toolsets-test, the portal's Sign in) connects muster to
 // the endpoint for that session, and the connection outlives the session's
 // sign-out until its next use. Failed is the state that means trouble.
-var oauthFixtureHealthyStates = []string{mcpServerStateAuthRequired, "Connected"}
+var oauthFixtureHealthyStates = []string{mcpServerStateAuthRequired, mcpServerStateConnected}
 
 // isAuthRequiredState accepts both spellings of muster's auth-required state:
 // the CRD's "Auth Required" and the service-state token "auth_required".

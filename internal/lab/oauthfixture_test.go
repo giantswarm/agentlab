@@ -87,7 +87,7 @@ func TestIsAuthRequiredState(t *testing.T) {
 // 5.28.0 on; the platform's wait must take it as reachable, next to the
 // Auth Required an older muster reports and Connected.
 func TestMCPServerReachableStatesTakeAwaitingSession(t *testing.T) {
-	for _, s := range []string{"Awaiting Session", "Auth Required", "Connected"} {
+	for _, s := range []string{"Awaiting Session", mcpServerStateAuthRequired, mcpServerStateConnected} {
 		if !slices.Contains(mcpServerReachableStates, s) {
 			t.Errorf("%q is not a reachable state: %v", s, mcpServerReachableStates)
 		}
