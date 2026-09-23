@@ -66,6 +66,12 @@ const (
 	// mcpServerStateConnected is the state once a session signed in to the
 	// server and muster holds a connection to it.
 	mcpServerStateConnected = "Connected"
+	// mcpServerStateAwaitingSession is the CRD status.state of a server muster
+	// serves per session with the caller's identity (auth.forwardToken or
+	// tokenExchange) while no session is connected: muster's token-less probe
+	// reached it — muster's api.StateAwaitingSession (from muster 5.28.0; such
+	// a server read Auth Required before).
+	mcpServerStateAwaitingSession = "Awaiting Session"
 	// fixtureDeleteWait bounds how long a removed fixture member may take to
 	// go away — kubectl's default delete waits too.
 	fixtureDeleteWait = 2 * time.Minute
@@ -94,7 +100,7 @@ func ensureOAuthFixture(cfg *config.Config) error {
 // completed sign-in (toolsets-test, the portal's Sign in) connects muster to
 // the endpoint for that session, and the connection outlives the session's
 // sign-out until its next use. Failed is the state that means trouble.
-var oauthFixtureHealthyStates = []string{mcpServerStateAuthRequired, "Connected"}
+var oauthFixtureHealthyStates = []string{mcpServerStateAuthRequired, mcpServerStateConnected}
 
 // isAuthRequiredState accepts both spellings of muster's auth-required state:
 // the CRD's "Auth Required" and the service-state token "auth_required".

@@ -652,10 +652,11 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	}
 
 	// Every downstream forwards the user's token (auth.forwardToken), so muster
-	// connects per session, not at startup: until the first session signs in
-	// the CR reads Auth Required, afterwards Connected. Either proves the
-	// server answers (a dead server reads Failed); platform-test and
-	// models-test then drive the sessions that flip them to Connected.
+	// connects per session, not at startup: until the first session uses it
+	// the CR reads Awaiting Session (Auth Required before muster 5.28.0),
+	// afterwards Connected. Each proves the server answers (a dead server
+	// reads Failed); platform-test and models-test then drive the sessions
+	// that flip them to Connected.
 	step("Waiting for muster to reach the Kubernetes MCP")
 	if err := waitMCPServerReachable(cfg.MCPServerName()); err != nil {
 		return err
@@ -1102,13 +1103,18 @@ func waitSidecarMCPServers(ctx context.Context, cfg *config.Config, sidecars map
 // waitMCPServerConnected polls one muster MCPServer CR (in the platform
 // namespace) until muster reports the downstream connection up.
 // waitMCPServerReachable waits for a server muster authenticates to per
-// session (auth.forwardToken): Auth Required means the server answered
-// muster's probe with an OAuth challenge and waits for the first session,
-// Connected that a session already signed in. Every downstream the lab
-// aggregates is such a server now, so this replaced the plain Connected wait.
+// session (auth.forwardToken): Awaiting Session means muster's probe reached
+// it and it waits for the first session (Auth Required on a muster before
+// 5.28.0, which spelled it that way), Connected that a session already uses
+// it. Every downstream the lab aggregates is such a server now, so this
+// replaced the plain Connected wait.
 func waitMCPServerReachable(name string) error {
-	return waitMCPServerState(name, mcpServerStateConnected, mcpServerStateAuthRequired)
+	return waitMCPServerState(name, mcpServerReachableStates...)
 }
+
+// mcpServerReachableStates are the CR states of a per-session server that
+// answers: Failed is the state that means trouble.
+var mcpServerReachableStates = []string{mcpServerStateConnected, mcpServerStateAwaitingSession, mcpServerStateAuthRequired}
 
 // waitMCPServerState polls the MCPServer CR's status.state until it reads one
 // of want.
