@@ -36,7 +36,7 @@ func TestOutputQuietErrorCarriesStderr(t *testing.T) {
 func TestNotReached(t *testing.T) {
 	readErr := errors.New(`Get "https://127.0.0.1:34547/apis/kagent.dev/v1alpha2/namespaces/kagent/modelconfigs/qwen": dial tcp 127.0.0.1:34547: connect: connection refused`)
 	err := notReached("ModelConfig qwen", "Accepted", "", readErr, "check `kubectl -n kagent describe modelconfigs.kagent.dev qwen`")
-	for _, want := range []string{"ModelConfig qwen: the status read failed:", "connection refused", "check `kubectl"} {
+	for _, want := range []string{"ModelConfig qwen: the status read failed:", connectionRefused, "check `kubectl"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("read failure %q lacks %q", err, want)
 		}

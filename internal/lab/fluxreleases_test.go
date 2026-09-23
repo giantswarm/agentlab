@@ -277,8 +277,9 @@ spec:
 }
 
 // TestPlatformImagesRefusesARejectedComponent: a component chart that refuses
-// the values its HelmRelease carries stops the install, while a component the
-// render cannot reach stays a note and the rest of the preload proceeds.
+// the values its HelmRelease carries stops the install, while a component
+// chart that fails otherwise, or is not there, stays a note and the rest of
+// the preload proceeds.
 // These are the two halves of the same step: one predicts the install's
 // outcome, the other only says an image will be pulled in-node. The release's
 // own facts decide the borderline: whose it is changes the advice, a
@@ -343,10 +344,12 @@ func TestPlatformImagesRefusesARejectedComponent(t *testing.T) {
 	// fail, so the preload notes it and carries on.
 	proceeds("an ordinary render failure", rosterFor(closed, "    boom: true\n"))
 
-	// A chart that cannot be reached at all is the same best-effort case.
-	unreachable := rosterFor(closed, "    known: a\n")
-	unreachable.releases[0].URL = filepath.Join(dir, "no-such-chart")
-	proceeds("an unreachable component chart", unreachable)
+	// A chart that is not there is the same best-effort case: the source
+	// answered, no — unlike a registry that does not answer at all, which
+	// stops the install (TestPlatformImagesStopsOnAnUnreachableRegistry).
+	absent := rosterFor(closed, "    known: a\n")
+	absent.releases[0].URL = filepath.Join(dir, "no-such-chart")
+	proceeds("a component chart that is not there", absent)
 
 	// A release the LAB renders, not the meta chart's: refused all the same
 	// — helm-controller installs it and waits for it like any component —

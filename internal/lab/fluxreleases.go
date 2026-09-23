@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"gopkg.in/yaml.v3"
@@ -199,12 +201,13 @@ type renderFailure struct {
 }
 
 // refusesTheInstall reports whether this failure is a chart refusing values
-// helm-controller will put to it the same way — the only class worth
-// refusing an install for — and, where the chart did refuse but the install
-// is not predicted, why.
+// helm-controller will put to it the same way — the one class that predicts
+// the install's outcome (an unreachable registry stops the boot for another
+// reason, judgeRenderFailures) — and, where the chart did refuse but the
+// install is not predicted, why.
 //
 // The chart must have returned a validation verdict (schemaRejection); a
-// render the registry or the network denied says nothing about the install.
+// render the registry denied says nothing about the install.
 // The HelmRelease must not switch helm-controller's validation off
 // (SchemaValidationOff): that verdict is never asked for on the cluster. And
 // a HelmRelease with a valuesFrom was rendered on an incomplete set: Flux
@@ -252,9 +255,10 @@ func onlyAdditionalProperties(rejection *schemaRejection) bool {
 
 // fluxReleaseImages templates every release's chart at the resolved version
 // with its values and scrapes the images, concurrently (one registry pull
-// each). A release that does not render comes back as a failure with its
-// release, for the caller to sort into notes and refusals
-// (refuseRejectedComponents). The versions picked through a semverFilter
+// each; a render the registry did not answer is tried again,
+// retryUnreachable). A release that does not render comes back as a failure
+// with its release, for the caller to sort into notes and stops
+// (judgeRenderFailures). The versions picked through a semverFilter
 // come back as "<name> <version>" lines, sorted — the channel evidence the
 // boot log shows. The renders themselves come back keyed by release name:
 // what the dev-image swap reads a component's image name off
@@ -265,7 +269,11 @@ func fluxReleaseImages(releases []fluxRelease, apiVersions []string) (images, fi
 	renders = map[string]string{}
 	for _, rel := range releases {
 		wg.Go(func() {
-			rendered, version, err := renderFluxRelease(rel, apiVersions)
+			var rendered, version string
+			err := retryUnreachable("rendering "+rel.Name, func() (err error) {
+				rendered, version, err = renderFluxRelease(rel, apiVersions)
+				return err
+			})
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -368,12 +376,18 @@ type platformRoster struct {
 }
 
 // renderPlatformRoster renders the meta chart offline with the values the
-// install is about to use and joins its component releases. An error is the
-// chart's (not found, a values guard) — the callers degrade to notes: the
-// install itself reports the same error, with Helm's wording.
+// install is about to use and joins its component releases; a render the
+// registry did not answer is tried again (retryUnreachable). An error is for
+// the caller to judge: a refusal (isSchemaRejection) and a registry still
+// unreachable (registryUnreachable) stop the boot, anything else of the
+// chart's (not found, a values guard) is a note — the install itself
+// reports the same error, with Helm's wording.
 func renderPlatformRoster(chart platformChart, values map[string]any) (*platformRoster, error) {
-	meta, _, err := helmTemplate(platformNamespace, platformRelease, chart.ref, chart.version, values, nil)
-	if err != nil {
+	var meta string
+	if err := retryUnreachable(fmt.Sprintf("rendering %s", chart), func() (err error) {
+		meta, _, err = helmTemplate(platformNamespace, platformRelease, chart.ref, chart.version, values, nil)
+		return err
+	}); err != nil {
 		return nil, err
 	}
 	releases, err := fluxReleases(meta)
@@ -410,6 +424,23 @@ func (r *platformRoster) has(release string) bool {
 	return slices.ContainsFunc(r.releases, func(rel fluxRelease) bool { return rel.Name == release })
 }
 
+// unrendered names the roster's releases that have no render among renders
+// (keyed by release name, platformImages) — the skipped ones — sorted; none
+// without a roster.
+func (r *platformRoster) unrendered(renders map[string]string) []string {
+	if r == nil {
+		return nil
+	}
+	var names []string
+	for _, rel := range r.releases {
+		if _, ok := renders[rel.Name]; !ok {
+			names = append(names, rel.Name)
+		}
+	}
+	slices.Sort(names)
+	return names
+}
+
 // shipsSubstrate reports whether the chart delivers Agent Substrate itself —
 // the `substrate` component release in its roster (the 4.x line: it follows
 // components.kagent) — read off the render, never off a version string. A
@@ -434,15 +465,18 @@ const cnpgRelease = "cloudnative-pg"
 // mcp-prometheus HelmRelease the same way. The images the engine composes at
 // run time — the FluxInstance's source- and helm-controller — are in no
 // render; the snapshot manifest covers them from the second boot on.
-// Best-effort for what it is for — a render the registry or the network
-// denied is a note, and the node pulls those images itself — with one
-// exception it returns an error for: a chart that REFUSES the values its
-// HelmRelease carries (refusesTheInstall). That is not a preload problem but
-// the install's outcome, known early; refusing here costs seconds instead of
-// the install's whole wait, and nothing is side-loaded for an install that
-// will not start. The component renders come back too, keyed by release name
-// (nil without a roster): the dev-image swap reads its image names off them
-// (resolveDevImageNames).
+// Best-effort for the images — a render that is skipped is a note, and the
+// node pulls those images itself — with two exceptions it returns an error
+// for (judgeRenderFailures): a chart that REFUSES the values its HelmRelease
+// carries (refusesTheInstall), which is not a preload problem but the
+// install's outcome, known early; and a render the registry did not answer
+// through its retries (registryUnreachable), since the renders are more
+// than the images: the lab's patches are read off them. Stopping here costs
+// seconds instead of the install's whole wait, and nothing is side-loaded
+// for an install that will not start. The component renders come back too,
+// keyed by release name (nil without a roster): the dex-localhost sidecar's
+// targets and the dev-image swap's image names are read off them
+// (dexLocalhostTargets, resolveDevImageNames).
 func platformImages(cfg *config.Config, roster *platformRoster) ([]string, map[string]string, error) {
 	if roster == nil {
 		return nil, nil, nil
@@ -463,7 +497,7 @@ func platformImages(cfg *config.Config, roster *platformRoster) ([]string, map[s
 		}
 	}
 	componentImages, filtered, renders, errs := fluxReleaseImages(releases, componentAPIVersions(cfg))
-	if err := refuseRejectedComponents(roster.chart, errs); err != nil {
+	if err := judgeRenderFailures(roster.chart, errs); err != nil {
 		return nil, nil, err
 	}
 	note("rendered %d of %d component charts%s", len(releases)-len(errs), len(releases), filteredNote(filtered))
@@ -481,13 +515,31 @@ func platformImages(cfg *config.Config, roster *platformRoster) ([]string, map[s
 	return images, renders, nil
 }
 
-// refuseRejectedComponents sorts the component render failures into notes
-// and refusals: a failure that does not predict the install is noted — with
-// why, where the chart did refuse — and the refusals, if any, come back as
-// one error naming every refusing release.
-func refuseRejectedComponents(chart platformChart, errs []renderFailure) error {
-	var rejected []renderFailure
+// judgeRenderFailures sorts the component render failures into the three
+// outcomes of a render that produced no manifest. Two stop the boot before
+// the install, each as one error naming every release it holds for:
+//
+//   - unreachable: the registry did not answer through every retry
+//     (registryUnreachable). The lab's patches for a component — the
+//     dex-localhost sidecar, platform.devImages — are read off its render,
+//     so the install would run it unpatched, and the symptom (a server
+//     crash-looping on a Dex it cannot reach, the install failing minutes
+//     later on its HelmRelease) points nowhere near the network.
+//   - refused: the chart refuses the values its HelmRelease carries
+//     (refusesTheInstall), so the install would fail after its wait.
+//
+// Everything else is a skip, noted with why where the chart did refuse: a
+// render the offline render cannot do the way the cluster does (a
+// kubeVersion guard, a verdict helm-controller never asks for or the
+// cluster's values may answer), or a registry that answered no (a tag that
+// is not there), which the install reports in helm-controller's words.
+func judgeRenderFailures(chart platformChart, errs []renderFailure) error {
+	var unreachable, rejected []renderFailure
 	for _, failure := range errs {
+		if registryUnreachable(failure.err) {
+			unreachable = append(unreachable, failure)
+			continue
+		}
 		refuses, reason := failure.refusesTheInstall()
 		switch {
 		case refuses:
@@ -498,11 +550,17 @@ func refuseRejectedComponents(chart platformChart, errs []renderFailure) error {
 			note("component render skipped: %s", excerptEnds(failure.err.Error(), 300))
 		}
 	}
-	if len(rejected) == 0 {
-		return nil
+	byName := func(a, b renderFailure) int { return strings.Compare(a.rel.Name, b.rel.Name) }
+	var stops []error
+	if len(unreachable) > 0 {
+		slices.SortFunc(unreachable, byName)
+		stops = append(stops, unreachableComponentsError(unreachable))
 	}
-	slices.SortFunc(rejected, func(a, b renderFailure) int { return strings.Compare(a.rel.Name, b.rel.Name) })
-	return rejectedComponentsError(chart, rejected)
+	if len(rejected) > 0 {
+		slices.SortFunc(rejected, byName)
+		stops = append(stops, rejectedComponentsError(chart, rejected))
+	}
+	return errors.Join(stops...)
 }
 
 // recheckReleases puts values that changed after the preload's renders (the
@@ -515,6 +573,9 @@ func recheckReleases(cfg *config.Config, chart platformChart, before *platformRo
 	if err != nil {
 		if isSchemaRejection(err) {
 			return chartRefusesValuesError(chart, err)
+		}
+		if registryUnreachable(err) {
+			return chartUnreachableError(chart, err, "agentlab platform")
 		}
 		// Not a verdict: the first pass noted the same failure.
 		return nil
@@ -533,7 +594,7 @@ func recheckReleases(cfg *config.Config, chart platformChart, before *platformRo
 		return nil
 	}
 	_, _, _, errs := fluxReleaseImages(changed, componentAPIVersions(cfg))
-	return refuseRejectedComponents(chart, errs)
+	return judgeRenderFailures(chart, errs)
 }
 
 // rejectedComponentsError words the component charts that refuse the values
@@ -567,6 +628,71 @@ func rejectedComponentsError(chart platformChart, rejected []renderFailure) erro
 		fmt.Fprintf(&b, "\n%s: the lab's own release, outside the meta chart — its chart version and its values are agentlab's, so no chart pin in agentlab.yaml answers this. Update agentlab, or turn platform.observability off.", strings.Join(labOwned, ", "))
 	}
 	return errors.New(b.String())
+}
+
+// renderRetryDelays are the waits before each retry of a render the
+// registry did not answer (registryUnreachable): three retries over some
+// twenty seconds — what a resolver restart or a network change takes to
+// settle — before the boot stops on it. A variable so tests do not sleep.
+var renderRetryDelays = []time.Duration{2 * time.Second, 5 * time.Second, 15 * time.Second}
+
+// renderAttempts is how often a render is tried before the registry counts
+// as unreachable: once, then once per retry delay.
+func renderAttempts() int { return 1 + len(renderRetryDelays) }
+
+// retryUnreachable runs a render until it succeeds, fails for any reason but
+// an unreachable registry, or has spent its retries, and returns its last
+// error. Each retry is noted with the cause (unreachableCause), so the boot
+// log shows the network failing before the boot stops on it.
+func retryUnreachable(what string, render func() error) error {
+	err := render()
+	for i, delay := range renderRetryDelays {
+		cause := unreachableCause(err)
+		if cause == nil {
+			return err
+		}
+		note("%s: the registry did not answer (%v); retry %d of %d in %s", what, cause, i+1, len(renderRetryDelays), delay)
+		time.Sleep(delay)
+		err = render()
+	}
+	return err
+}
+
+// unreachableComponentsError words the component charts the registry did
+// not answer for through every retry, and why that stops the boot: the
+// renders are what the lab reads its patches off (judgeRenderFailures).
+// Printed whole: each release's error ends with the resolver's or the
+// dialer's own words, the cause to act on.
+func unreachableComponentsError(unreachable []renderFailure) error {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d component chart(s) could not be rendered, the registry did not answer in %d attempts:\n", len(unreachable), renderAttempts())
+	var hosts []string
+	for _, f := range unreachable {
+		fmt.Fprintf(&b, "\n%s\n", indent(strings.TrimSpace(f.err.Error()), "  "))
+		hosts = append(hosts, registryHost(f.rel.URL))
+	}
+	slices.Sort(hosts)
+	fmt.Fprintf(&b, "\nThe install is not started: the lab's patches for a component (the %s sidecar, platform.devImages) are read off its render, and without one it would run unpatched. Check this host's network and DNS for %s, then run `agentlab platform` again",
+		dexLocalhostContainer, strings.Join(slices.Compact(hosts), ", "))
+	return errors.New(b.String())
+}
+
+// chartUnreachableError words a meta chart the registry did not answer for
+// through every retry: the component releases, and with them every render
+// the lab's patches are read off, come out of that render. rerun is the
+// command that picks the boot up again where it stopped.
+func chartUnreachableError(chart platformChart, err error, rerun string) error {
+	return fmt.Errorf("cannot render %s, the registry did not answer in %d attempts:\n\n%s\n\nThe install is not started. Check this host's network and DNS for %s, then run `%s` again",
+		chart, renderAttempts(), indent(strings.TrimSpace(err.Error()), "  "), registryHost(chart.ref), rerun)
+}
+
+// registryHost is the registry an oci:// chart reference names — the host
+// to check when it does not answer; the reference itself when it names none.
+func registryHost(ref string) string {
+	if u, err := url.Parse(ref); err == nil && u.Host != "" {
+		return u.Host
+	}
+	return ref
 }
 
 // splitDigestRefs separates the refs a side-load can carry — tagged

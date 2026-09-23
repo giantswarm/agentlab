@@ -214,8 +214,8 @@ func nestedString(values map[string]any, keys ...string) string {
 // rendered but has no such Deployment/container is an error: the override
 // would match nothing and kustomize drops it silently, so the chart's shape
 // changed under the lab's table. A target whose chart did not render at all
-// (a registry hiccup; the preload already reported it) falls back to the
-// table's name, unverified, and says so.
+// (a skipped render; the preload noted why) falls back to the table's name,
+// unverified, and says so.
 func resolveDevImageNames(cfg *config.Config, renders map[string]string) (map[string]string, error) {
 	names := map[string]string{}
 	for _, component := range slices.Sorted(maps.Keys(cfg.Platform.DevImages)) {

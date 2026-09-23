@@ -19,8 +19,14 @@ const (
 	lemonade      = config.ModelManagerBackendLemonade
 	lmstudio      = config.ModelManagerBackendLMStudio
 	capCompletion = "completion"
-	// opDial is net.OpError's Op for a failed dial, as the stubs build one.
+	// opDial is net.OpError's Op for a failed dial, as the stubs build one;
+	// opGet url.Error's for a failed GET.
 	opDial = "dial"
+	opGet  = "Get"
+	// noSuchHost and connectionRefused are the resolver's and the dialer's
+	// words for a name that does not resolve and a port nothing listens on.
+	noSuchHost        = "no such host"
+	connectionRefused = "connection refused"
 	// hostDockerInternal is the container runtime's host alias: this machine
 	// as the cluster can resolve it, and nowhere else.
 	hostDockerInternal = "host.docker.internal"
@@ -392,7 +398,7 @@ func TestNodeDialOnMapsExitCodes(t *testing.T) {
 		wantProbe bool // the probe failed, so there is no verdict
 	}{
 		"server answers":     {0, true, false},
-		"connection refused": {1, false, false},
+		connectionRefused:    {1, false, false},
 		"dial hangs":         {124, false, false},
 		"no bash in node":    {127, false, true},
 		"exec not permitted": {126, false, true},
