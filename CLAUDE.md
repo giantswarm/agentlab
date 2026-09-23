@@ -150,7 +150,8 @@ with Dex doing the logins.
   controller target, the Slack adapter on a placeholder Secret
   (`agentlab-klaus-gateway-slack`; no workspace answers, the lab's
   postRenderer points its Web API at the Service `agentlab-slack-api` the
-  proof aims at its fake), the OBO link store in a Secret
+  proof aims at its fake, a container on the kind network — never a port on
+  the host, whose firewall is the owner's), the OBO link store in a Secret
   (`obo.store: secret`, keys in `agentlab-klaus-gateway-obo`, generated
   once — never regenerate them, the store key seals every link).
   `platform.devImages.klaus-gateway` swaps a build in. The proof's component

@@ -98,7 +98,7 @@ type componentOutcome struct {
 // pod by the Service the host-mode half pointed at it (slackUser is the
 // person the turn is sent as). The fixtures of the host-mode half are in
 // place; nothing here is left behind but what was there before.
-func klausGatewayComponentProof(token string, identity linkedIdentity, user *config.User, fake *fakeSlack, slackUser string) (*componentOutcome, error) {
+func klausGatewayComponentProof(token string, identity linkedIdentity, user *config.User, fake slackWorkspace, slackUser string) (*componentOutcome, error) {
 	ctx := context.Background()
 	k, err := labKube()
 	if err != nil {

@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -271,5 +273,53 @@ func TestSlackReaders(t *testing.T) {
 	}
 	if line := threadLine(nil); !strings.Contains(line, "nothing") {
 		t.Errorf("threadLine(nil) = %q", line)
+	}
+}
+
+// TestSlackFakeReadBack: the proof's view of a fake in a container — the
+// recorded thread read back over the fake's state API equals the in-process
+// view, and its own timestamps stay clear of the fake's.
+func TestSlackFakeReadBack(t *testing.T) {
+	f := startTestFake(t, nil)
+	root := f.nextTS()
+	callFake(t, f, slackPostMessage, url.Values{slackKeyChannel: {"C1"}, slackKeyThreadTS: {root}, slackKeyText: {"hello"}}, nil)
+	c := &slackFakeContainer{hostURL: "http://" + f.listener.Addr().String(), client: http.DefaultClient}
+	if got, want := c.thread("C1", root), f.thread("C1", root); !reflect.DeepEqual(got, want) || len(got) != 1 {
+		t.Errorf("read back %+v, the fake holds %+v", got, want)
+	}
+	if got := c.thread("C1", "no-such-thread"); len(got) != 0 {
+		t.Errorf("an unknown thread read back %+v", got)
+	}
+	if c.baseURL() != f.baseURL() {
+		t.Errorf("baseURL = %s, want %s", c.baseURL(), f.baseURL())
+	}
+	ts := c.nextTS()
+	if _, frac, _ := strings.Cut(ts, "."); frac < "500000" {
+		t.Errorf("the proof's ts %s is in the fake's half", ts)
+	}
+	if (&slackFakeContainer{hostURL: "http://127.0.0.1:1", client: &http.Client{Timeout: time.Second}}).thread("C1", root) != nil {
+		t.Error("an unreachable fake reads as an empty thread")
+	}
+}
+
+// TestSlackFakeContainerParts: `docker port`'s loopback line is the host
+// address; a file that is no Linux executable is refused with the flag to
+// pass; `slack-fake` refuses a person that is not <id>=<e-mail>.
+func TestSlackFakeContainerParts(t *testing.T) {
+	if got := publishedLoopback("0.0.0.0:1234\n127.0.0.1:32768\n"); got != "127.0.0.1:32768" {
+		t.Errorf("publishedLoopback = %q", got)
+	}
+	if got := publishedLoopback("[::]:32768\n"); got != "" {
+		t.Errorf("publishedLoopback without loopback = %q", got)
+	}
+	script := filepath.Join(t.TempDir(), "agentlab")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := linuxStaticBinary(script); err == nil || !strings.Contains(err.Error(), "--slack-fake-binary") {
+		t.Errorf("a script: %v", err)
+	}
+	if err := ServeFakeSlack(t.Context(), "127.0.0.1:0", []string{"UP"}); err == nil || !strings.Contains(err.Error(), "<slack user id>=<e-mail>") {
+		t.Errorf("a person without an e-mail: %v", err)
 	}
 }

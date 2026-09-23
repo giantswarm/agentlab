@@ -5,19 +5,25 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"debug/elf"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/giantswarm/agentlab/internal/config"
 )
 
 // The Slack side of the Swarmgeist proof, headless.
@@ -33,6 +39,15 @@ import (
 // thread the way a person in the channel would see it. slackDriver is the
 // workspace's other half: it signs and posts the messages and the button
 // clicks a person would make.
+//
+// Where the fake runs follows who calls it. A gateway on this host alone (the
+// component off) calls an in-process fake on loopback. The meta chart's
+// component calls it from a pod, and a pod reaches a service on this host
+// only through the host's firewall — a default-deny one drops that traffic —
+// so then the fake runs as a container on the kind network, the proof's own
+// binary (`agentlab slack-fake`) in the lab's probe image: pods reach it
+// container to container, this host through a port published on loopback,
+// and the proof reads the recorded threads back over HTTP.
 
 // The fake workspace's names: the team, the bot user the gateway learns from
 // auth.test (Slack ids are upper-case alphanumerics; the gateway parses
@@ -50,7 +65,20 @@ const (
 	slackResponsePath = "/response"
 	// slackHealthPath answers "ok": what the pre-flight from a pod fetches.
 	slackHealthPath = "/healthz"
+	// slackThreadPath reads one recorded thread back (?channel=&ts=), for
+	// the proof when the fake runs in a container.
+	slackThreadPath = "/state/thread"
 )
+
+// slackWorkspace is the fake Slack of one run as the proof uses it: the Web
+// API base a gateway on this host calls, the threads the fake recorded, fresh
+// timestamps for the people's messages, and its end.
+type slackWorkspace interface {
+	baseURL() string
+	thread(channel, threadTS string) []slackMessage
+	nextTS() string
+	close()
+}
 
 // The Web API methods the fake keeps a thread of, by name.
 const (
@@ -173,13 +201,13 @@ func startFakeSlack(addr string, emails map[string]string) (*fakeSlack, error) {
 	mux.HandleFunc("POST "+slackAPIPath+"/{method}", f.serveAPI)
 	mux.HandleFunc("POST "+slackResponsePath, f.serveResponse)
 	mux.HandleFunc("GET "+slackHealthPath, func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok") })
+	mux.HandleFunc("GET "+slackThreadPath, func(w http.ResponseWriter, r *http.Request) {
+		writeSlackJSON(w, f.thread(r.URL.Query().Get(slackKeyChannel), r.URL.Query().Get(slackKeyTS)))
+	})
 	f.server = &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	go func() { _ = f.server.Serve(l) }()
 	return f, nil
 }
-
-// port is the port the fake listens on.
-func (f *fakeSlack) port() int { return f.listener.Addr().(*net.TCPAddr).Port }
 
 // baseURL is the Web API base as a gateway on the host dials it.
 func (f *fakeSlack) baseURL() string { return "http://" + f.listener.Addr().String() + slackAPIPath }
@@ -229,13 +257,163 @@ func (f *fakeSlack) thread(channel, threadTS string) []slackMessage {
 
 // waitThread polls the thread until pred holds and returns its messages;
 // on the deadline it returns them with false.
-func (f *fakeSlack) waitThread(channel, threadTS string, timeout time.Duration, pred func([]slackMessage) bool) ([]slackMessage, bool) {
+func waitThread(ws slackWorkspace, channel, threadTS string, timeout time.Duration, pred func([]slackMessage) bool) ([]slackMessage, bool) {
 	var msgs []slackMessage
 	ok := waitFor(int(timeout/(250*time.Millisecond))+1, 250*time.Millisecond, func() bool {
-		msgs = f.thread(channel, threadTS)
+		msgs = ws.thread(channel, threadTS)
 		return pred(msgs)
 	})
 	return msgs, ok
+}
+
+// ServeFakeSlack serves the fake Slack Web API on addr until ctx ends:
+// `agentlab slack-fake`, what the proof runs in a container on the kind
+// network. emails are the people's `<slack user id>=<e-mail>` pairs
+// users.info answers.
+func ServeFakeSlack(ctx context.Context, addr string, emails []string) error {
+	people := make(map[string]string, len(emails))
+	for _, pair := range emails {
+		id, email, ok := strings.Cut(pair, "=")
+		if !ok || id == "" {
+			return fmt.Errorf("--email %q is not <slack user id>=<e-mail>", pair)
+		}
+		people[id] = email
+	}
+	f, err := startFakeSlack(addr, people)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("fake Slack Web API on %s (%d people)\n", f.listener.Addr(), len(people))
+	<-ctx.Done()
+	f.close()
+	return nil
+}
+
+// --- the fake in a container on the kind network -----------------------------
+
+// The container's own port and the command it runs.
+const (
+	slackFakeContainerPort = 8080
+	slackFakeCommand       = "slack-fake"
+	slackFakeBinaryPath    = "/agentlab"
+	slackFakeStartWait     = 30 * time.Second
+)
+
+// slackFakeContainer is the fake running as a container on the kind network:
+// pods dial podIP on slackFakeContainerPort, this host the port published on
+// loopback. The people's message timestamps are made here, in the upper half
+// of the microsecond field, so they never meet the ones the fake gives the
+// gateway's messages.
+type slackFakeContainer struct {
+	name    string
+	hostURL string
+	podIP   string
+	client  *http.Client
+
+	mu  sync.Mutex
+	seq int
+}
+
+func (c *slackFakeContainer) baseURL() string { return c.hostURL + slackAPIPath }
+
+func (c *slackFakeContainer) nextTS() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.seq++
+	return fmt.Sprintf("%d.%06d", time.Now().Unix(), 500_000+c.seq%500_000)
+}
+
+// thread reads the recorded thread back; a failed read is an empty thread,
+// which every wait on it outlasts or reports.
+func (c *slackFakeContainer) thread(channel, threadTS string) []slackMessage {
+	q := url.Values{slackKeyChannel: {channel}, slackKeyTS: {threadTS}}
+	resp, err := c.client.Get(c.hostURL + slackThreadPath + "?" + q.Encode())
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var msgs []slackMessage
+	if json.NewDecoder(resp.Body).Decode(&msgs) != nil {
+		return nil
+	}
+	return msgs
+}
+
+func (c *slackFakeContainer) close() { _ = command(dockerBin, "rm", "-f", c.name).Run() }
+
+// startSlackFakeContainer runs `<binary> slack-fake` in the lab's probe image
+// on the kind network, with its port published on loopback, as the caller's
+// uid, and waits for its health; a leftover of an aborted run is replaced.
+func startSlackFakeContainer(cfg *config.Config, binary string, emails map[string]string) (*slackFakeContainer, error) {
+	if err := linuxStaticBinary(binary); err != nil {
+		return nil, err
+	}
+	name := cfg.ClusterName + "-slack-fake"
+	_ = command(dockerBin, "rm", "-f", name).Run()
+	args := dockerRun(name, kindDockerNetwork, "-d", "--rm",
+		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
+		"-p", "127.0.0.1::"+strconv.Itoa(slackFakeContainerPort),
+		"-v", binary+":"+slackFakeBinaryPath+":ro",
+		probeImage, slackFakeBinaryPath, slackFakeCommand, "--listen", "0.0.0.0:"+strconv.Itoa(slackFakeContainerPort))
+	for _, id := range slices.Sorted(maps.Keys(emails)) {
+		args = append(args, "--email", id+"="+emails[id])
+	}
+	if out, err := command(dockerBin, args...).CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("starting the fake Slack Web API container %s: %w: %s", name, err, excerpt(strings.TrimSpace(string(out)), 300))
+	}
+	c := &slackFakeContainer{name: name, client: &http.Client{Timeout: 10 * time.Second}}
+	ip, err := outputQuiet(dockerBin, "inspect", "-f", `{{with index .NetworkSettings.Networks "`+kindDockerNetwork+`"}}{{.IPAddress}}{{end}}`, name)
+	published, perr := outputQuiet(dockerBin, "port", name, strconv.Itoa(slackFakeContainerPort)+"/tcp")
+	c.podIP = firstIPv4(ip)
+	hostPort := publishedLoopback(published)
+	if err != nil || perr != nil || c.podIP == "" || hostPort == "" {
+		logs, _ := outputQuiet(dockerBin, "logs", name)
+		c.close()
+		return nil, fmt.Errorf("the fake Slack Web API container %s has no address on network %s (%q) or no published port (%q): %v %v; its log: %s",
+			name, kindDockerNetwork, strings.TrimSpace(ip), strings.TrimSpace(published), err, perr, excerpt(logs, 300))
+	}
+	c.hostURL = "http://" + hostPort
+	if !waitFor(int(slackFakeStartWait/(250*time.Millisecond)), 250*time.Millisecond, func() bool {
+		resp, err := c.client.Get(c.hostURL + slackHealthPath)
+		if err != nil {
+			return false
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}) {
+		logs, _ := outputQuiet(dockerBin, "logs", name)
+		c.close()
+		return nil, fmt.Errorf("the fake Slack Web API container %s did not answer %s%s within %s; its log: %s", name, c.hostURL, slackHealthPath, slackFakeStartWait, excerpt(logs, 300))
+	}
+	return c, nil
+}
+
+// publishedLoopback is the loopback address `docker port` names for the
+// published port.
+func publishedLoopback(out string) string {
+	for _, line := range strings.Split(out, "\n") {
+		if addr := strings.TrimSpace(line); strings.HasPrefix(addr, "127.0.0.1:") {
+			return addr
+		}
+	}
+	return ""
+}
+
+// linuxStaticBinary refuses a binary the probe image cannot run: one that is
+// not a Linux executable (agentlab built for another OS) or that needs a
+// dynamic loader (a `go build` with cgo; the image carries no glibc).
+func linuxStaticBinary(path string) error {
+	f, err := elf.Open(path)
+	if err != nil {
+		return fmt.Errorf("the fake Slack Web API runs %s in a Linux container, and it is not a Linux executable (%v): pass --slack-fake-binary with a linux/%s agentlab", path, err, runtime.GOARCH)
+	}
+	defer func() { _ = f.Close() }()
+	for _, p := range f.Progs {
+		if p.Type == elf.PT_INTERP {
+			return fmt.Errorf("the fake Slack Web API runs %s in a container on the kind network, and it is dynamically linked: build it with CGO_ENABLED=0 (`make build` does), or pass --slack-fake-binary with a static agentlab", path)
+		}
+	}
+	return nil
 }
 
 // serveAPI answers one Web API call. The gateway sends plain posts
@@ -413,13 +591,13 @@ type slackDriver struct {
 	// base is the gateway's public base URL.
 	base          string
 	signingSecret string
-	fake          *fakeSlack
+	fake          slackWorkspace
 	channel       string
 	client        *http.Client
 	eventSeq      int
 }
 
-func newSlackDriver(base, signingSecret string, fake *fakeSlack, channel string) *slackDriver {
+func newSlackDriver(base, signingSecret string, fake slackWorkspace, channel string) *slackDriver {
 	return &slackDriver{base: base, signingSecret: signingSecret, fake: fake, channel: channel, client: &http.Client{Timeout: 30 * time.Second}}
 }
 

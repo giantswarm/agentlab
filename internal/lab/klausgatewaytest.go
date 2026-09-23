@@ -159,8 +159,13 @@ type KlausGatewayTestOptions struct {
 	GatewayImage  string
 	GatewayBinary string
 	// Port is the host port of the gateway's Slack endpoints; the admin
-	// endpoints take Port+1, the fake Slack Web API Port+2. Default 18090.
+	// endpoints take Port+1, the fake Slack Web API Port+2 when it runs in
+	// this process. Default 18090.
 	Port int
+	// SlackFakeBinary is the static Linux agentlab the fake Slack Web API
+	// container runs when the component's pods call it (default: this
+	// binary).
+	SlackFakeBinary string
 	// ModelConfig is the kagent ModelConfig the fixture runs on (default
 	// default-model-config, the Anthropic one the lab renders).
 	ModelConfig string
@@ -219,31 +224,37 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	// The fake workspace: the linked person, a person with no link, and the
 	// component half's linked person (klausgatewaytest_component.go), all
 	// answered by users.info. With the component on, its pods call the fake
-	// too, which the pre-flight proves before anything else runs.
+	// too: it runs on the kind network then, and a pod's fetch through the
+	// component's Service proves the path before anything else runs.
 	run := strings.ToUpper(randomSuffix())
 	people := slackPeople{
 		person:    slackUserPrefix + run + "P",
 		stranger:  slackUserPrefix + run + "S",
 		component: slackUserPrefix + run + "C",
 	}
-	listen, podIP, err := fakeSlackAddress(cfg, opts.Port+2)
-	if err != nil {
-		return err
-	}
-	fake, err := startFakeSlack(listen, map[string]string{
-		people.person: user.Email, people.stranger: "stranger@lab.local", people.component: user.Email,
-	})
-	if err != nil {
-		return err
-	}
-	defer fake.close()
+	emails := map[string]string{people.person: user.Email, people.stranger: "stranger@lab.local", people.component: user.Email}
+	var fake slackWorkspace
 	if cfg.KlausGatewayEnabled() {
-		step("Pointing the klaus-gateway component's Slack Web API (Service %s/%s) at the fake on this host and checking a pod reaches it", platformNamespace, klausGatewaySlackAPIService)
-		removeService, err := fakeSlackForPods(cfg, podIP, fake.port())
+		step("Starting the fake Slack Web API as a container on the %s network (%s slack-fake, in %s) and pointing the component's Service %s/%s at it",
+			kindDockerNetwork, opts.SlackFakeBinary, probeImage, platformNamespace, klausGatewaySlackAPIService)
+		c, err := startSlackFakeContainer(cfg, opts.SlackFakeBinary, emails)
+		if err != nil {
+			return err
+		}
+		defer c.close()
+		removeService, err := fakeSlackForPods(cfg, c.podIP, slackFakeContainerPort)
 		if err != nil {
 			return err
 		}
 		defer removeService()
+		fake = c
+	} else {
+		f, err := startFakeSlack(net.JoinHostPort("127.0.0.1", strconv.Itoa(opts.Port+2)), emails)
+		if err != nil {
+			return err
+		}
+		defer f.close()
+		fake = f
 	}
 
 	shape := harnessAdmissionLabels()
@@ -505,6 +516,11 @@ func (o KlausGatewayTestOptions) withDefaults() KlausGatewayTestOptions {
 	if o.ReadyTimeout <= 0 {
 		o.ReadyTimeout = klausGatewayReadyTimeout
 	}
+	if o.SlackFakeBinary == "" {
+		if exe, err := os.Executable(); err == nil {
+			o.SlackFakeBinary = exe
+		}
+	}
 	return o
 }
 
@@ -518,26 +534,6 @@ func portsFree(ports ...int) error {
 		_ = l.Close()
 	}
 	return nil
-}
-
-// fakeSlackAddress is where the fake Slack Web API listens and the address
-// pods dial for it. Without the component only the host gateway calls it, so
-// it listens on loopback and podIP is empty. With the component, pods reach
-// the host at the kind network's gateway, so the fake listens there (Docker)
-// — or on loopback under podman, whose host alias pasta maps to it.
-func fakeSlackAddress(cfg *config.Config, port int) (listen, podIP string, err error) {
-	loopback := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
-	if !cfg.KlausGatewayEnabled() {
-		return loopback, "", nil
-	}
-	podIP, err = kindGatewayIP(cfg.ControlPlaneNode())
-	if err != nil {
-		return "", "", fmt.Errorf("the address pods reach this host on (the component's Slack Web API is the proof's fake): %w", err)
-	}
-	if dockerIsPodman() {
-		return loopback, podIP, nil
-	}
-	return net.JoinHostPort(podIP, strconv.Itoa(port)), podIP, nil
 }
 
 // klausGatewayRunDir is where the stores, the keys and the gateway's log live
@@ -990,13 +986,12 @@ func gatewayArgs(f gatewayFlags) []string {
 // sees them), the caller's uid so the stores are writable in the run
 // directory, the run directory and the CA mounted read-write and read-only.
 func dockerRunArgs(image, name, runDir, caFile string, uid, gid int, args []string) []string {
-	return append([]string{
-		"run", "--rm", "--name", name, "--network", "host",
+	return append(dockerRun(name, "host", "--rm",
 		"--user", fmt.Sprintf("%d:%d", uid, gid),
-		"-v", runDir + ":" + gatewayDataPath,
-		"-v", caFile + ":" + gatewayCAPath + ":ro",
+		"-v", runDir+":"+gatewayDataPath,
+		"-v", caFile+":"+gatewayCAPath+":ro",
 		image,
-	}, args...)
+	), args...)
 }
 
 // start launches the gateway and waits for its readiness.
@@ -1206,7 +1201,7 @@ type slackThread struct {
 // over and how it ended.
 type slackProof struct {
 	driver  *slackDriver
-	fake    *fakeSlack
+	fake    slackWorkspace
 	channel string
 	logs    func() (string, error)
 }
@@ -1320,7 +1315,7 @@ func (p *slackProof) roster(user string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	msgs, ok := p.fake.waitThread(p.channel, ts, klausGatewayReplyWait, func(msgs []slackMessage) bool {
+	msgs, ok := waitThread(p.fake, p.channel, ts, klausGatewayReplyWait, func(msgs []slackMessage) bool {
 		_, found := findMessage(msgs, slackRosterHeading)
 		return found
 	})
@@ -1355,7 +1350,7 @@ func (p *slackProof) refusal(user, text string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	msgs, ok := p.fake.waitThread(p.channel, ts, klausGatewayReplyWait, func(msgs []slackMessage) bool {
+	msgs, ok := waitThread(p.fake, p.channel, ts, klausGatewayReplyWait, func(msgs []slackMessage) bool {
 		_, found := findMessage(msgs, slackNotRunnable)
 		return found
 	})
@@ -1380,7 +1375,7 @@ func (p *slackProof) signInPrompt(user, text string) (string, error) {
 		return "", err
 	}
 	var button map[string]any
-	msgs, ok := p.fake.waitThread(p.channel, ts, klausGatewayReplyWait, func(msgs []slackMessage) bool {
+	msgs, ok := waitThread(p.fake, p.channel, ts, klausGatewayReplyWait, func(msgs []slackMessage) bool {
 		if _, found := findMessage(msgs, slackSignInLine); !found {
 			return false
 		}
@@ -1481,7 +1476,7 @@ func (p *slackProof) decideUntilSettled(api *kagentAPI, instanceID string, t *sl
 		if err := p.driver.click(t.user, card.msg, action); err != nil {
 			return nil, fmt.Errorf("decision %d: %w", out.rounds, err)
 		}
-		if _, ok := p.fake.waitThread(p.channel, t.ts, klausGatewayReplyWait, func(msgs []slackMessage) bool {
+		if _, ok := waitThread(p.fake, p.channel, t.ts, klausGatewayReplyWait, func(msgs []slackMessage) bool {
 			for _, m := range msgs {
 				if m.TS == card.msg.TS {
 					return strings.Contains(m.shown(), verdict+t.user+">")
@@ -1513,7 +1508,7 @@ func (p *slackProof) stop(t *slackThread, text string) (*slackTurn, error) {
 	if _, err := p.driver.mention(t.user, t.ts, text); err != nil {
 		return nil, err
 	}
-	msgs, streaming := p.fake.waitThread(p.channel, t.ts, klausGatewayTurnTimeout, func(msgs []slackMessage) bool {
+	msgs, streaming := waitThread(p.fake, p.channel, t.ts, klausGatewayTurnTimeout, func(msgs []slackMessage) bool {
 		if len(p.records(recordTurnDone, t.ts)) > t.turns {
 			return true // over already; reported below
 		}
@@ -1533,7 +1528,7 @@ func (p *slackProof) stop(t *slackThread, text string) (*slackTurn, error) {
 	if turn.record.Outcome != outcomeCanceled {
 		return nil, fmt.Errorf("the turn to stop ended %s, not canceled — it finished before %s arrived, or the stop did not reach it: %s", turn.record.Outcome, slackStopCommand, turnFailure(turn))
 	}
-	if _, ok := p.fake.waitThread(p.channel, t.ts, klausGatewayReplyWait, func(msgs []slackMessage) bool {
+	if _, ok := waitThread(p.fake, p.channel, t.ts, klausGatewayReplyWait, func(msgs []slackMessage) bool {
 		_, found := findMessage(msgs[min(before, len(msgs)):], slackStopped)
 		return found
 	}); !ok {

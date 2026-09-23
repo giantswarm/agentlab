@@ -605,15 +605,16 @@ talk to, and its chart has no value for the Web API base the gateway reads
 strategic-merge patch in `components.klaus-gateway.postRenderers`
 (`slackAPIPatch`, `postrenderers.go`) sets it to the selector-less Service
 `agent-platform/agentlab-slack-api`, which `klaus-gateway-test` points at its
-fake Slack Web API on this host (an EndpointSlice to the address pods reach
-the host on) while it runs, and removes afterwards. Outside a proof nothing
-answers there and nothing calls it: the Events API adapter calls the Web API
-only for an event, and the proof is the only sender. `klaus-gateway-test`
-asserts the patch on the live Deployment and fetches the fake through the
-Service from a probe pod first: pods reach the host the way they reach the
-host model servers, so a default-deny host firewall must allow the fake's
-port (18092 by default) from the docker bridge subnets. Lab-only by
-construction.
+fake Slack Web API while it runs, and removes afterwards. The fake then runs
+as a container on the `kind` network (the proof's own static binary,
+`agentlab slack-fake`, in the lab's probe image) rather than on this host:
+pods reach a container on the kind network directly, while a service on the
+host is behind the host's firewall, which a default-deny one closes to
+them. Outside a proof nothing answers there and nothing calls it: the
+Events API adapter calls the Web API only for an event, and the proof is
+the only sender. `klaus-gateway-test` asserts the patch on the live
+Deployment and fetches the fake through the Service from a probe pod first.
+Lab-only by construction.
 
 ## Accepted lab trade-offs (not hacks to fix)
 

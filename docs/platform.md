@@ -647,9 +647,10 @@ after). This is the leg the meta chart's in-cluster component
 exercise: the public route with TLS and the JWT policy. The component is the
 other shape, `platform.klausGateway` — on a lab that runs it, the proof
 continues on the component (assertions 6–9 below), whose pods call the same
-fake through the Service `agent-platform/agentlab-slack-api` — a probe pod
-fetches it first, and a host firewall that drops pod→host traffic on the
-fake's port fails the proof there with the fix. The gateway forwards the
+fake through the Service `agent-platform/agentlab-slack-api`: then the fake
+runs as a container on the `kind` network (`agentlab slack-fake` in the
+lab's probe image; a static Linux agentlab, `--slack-fake-binary`), and a
+probe pod fetches it through the Service first. The gateway forwards the
 person's token and talks to no Dex, so it needs no `dex-localhost` bridge.
 
 **Fixtures** (in `kagent`, deleted by the same run, leftovers removed first):

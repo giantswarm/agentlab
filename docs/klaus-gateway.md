@@ -63,15 +63,17 @@ platform:
   patch on the component (a `postRenderers` strategic merge, HACKS.md U26)
   sets `KLAUS_GATEWAY_SLACK_API_BASE`, which the chart has no value for, to
   `http://agentlab-slack-api.agent-platform.svc.cluster.local/api` — a
-  selector-less Service that `klaus-gateway-test` points at its fake on this
-  host (an EndpointSlice to the kind network's gateway) while it runs and
-  removes afterwards. Nothing calls it otherwise: the Events API adapter
-  calls the Web API only for an event. Pods reach the fake the way they
-  reach the host model servers, so on a default-deny host firewall its port
-  (`--gateway-port` + 2, 18092 by default) must be allowed from the docker
-  bridge subnets like theirs ([Local backends](models.md)); the proof
-  fetches the fake through the Service from a probe pod before anything
-  else and names that fix when it fails.
+  selector-less Service that `klaus-gateway-test` points at its fake while it
+  runs and removes afterwards. Nothing calls it otherwise: the Events API
+  adapter calls the Web API only for an event. With the component on, the
+  fake runs as a container on the `kind` docker network — the proof's own
+  binary (`agentlab slack-fake`, hidden) in the lab's probe image, the
+  EndpointSlice on its address — so pods reach it container to container and
+  a host firewall never sees the traffic; the proof reaches it through a port
+  published on loopback. The binary must be a static Linux build (`make
+  build`, or `CGO_ENABLED=0 go build`; the releases are), or name one with
+  `--slack-fake-binary`. A probe pod fetches the fake through the Service
+  before anything else runs.
 - **What the chart renders** with `obo.store: secret`: Deployment
   `klaus-gateway` (`KLAUS_GATEWAY_OBO_STORE=secret`, no store volume, the
   default RollingUpdate strategy — a mounted ReadWriteOnce claim is what used

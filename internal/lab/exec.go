@@ -42,6 +42,12 @@ func warn(format string, a ...any) {
 // one tool Preflight (discover.go) asks for.
 const dockerBin = "docker"
 
+// dockerRun is the start of a `docker run` of the named container on a
+// network; the caller's flags follow, then its image and command.
+func dockerRun(name, network string, flags ...string) []string {
+	return append([]string{"run", "--name", name, "--network", network}, flags...)
+}
+
 // command builds the exec.Cmd behind the helpers below. The child inherits
 // the environment untouched: nothing the lab runs reads a kubeconfig, so
 // there is nothing to pin.

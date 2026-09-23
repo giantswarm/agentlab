@@ -79,7 +79,8 @@ const (
 
 // The component's Slack Web API: the selector-less Service
 // klausGatewaySlackAPIService, which `agentlab klaus-gateway-test` points at
-// its fake on this host (pointFakeSlackService) while it runs. Outside a
+// its fake's container on the kind network (pointFakeSlackService) while it
+// runs. Outside a
 // proof nothing answers behind it, and nothing calls it: the Events API
 // adapter calls the Web API only for a Slack event, and the proof is the
 // only one sending those.
@@ -90,21 +91,18 @@ const (
 	klausGatewaySlackAPIBase    = klausGatewaySlackAPIHost + slackAPIPath
 )
 
-// fakeSlackForPods points the component's Slack Web API Service at the fake
-// on this host and proves a pod reaches it through the Service, before the
-// proof starts anything else: pods reach the host on the kind network's
-// gateway like the host model servers, and a default-deny host firewall
-// drops that traffic unless the fake's port is allowed — found here in
-// seconds with its fix, not as a failed turn at the end of the run. The
-// returned func removes the Service.
-func fakeSlackForPods(cfg *config.Config, hostIP string, port int) (func(), error) {
+// fakeSlackForPods points the component's Slack Web API Service at the fake's
+// container and proves a pod reaches it through the Service before the proof
+// starts anything else — found here in seconds, not as a failed turn at the
+// end of the run. The returned func removes the Service.
+func fakeSlackForPods(cfg *config.Config, ip string, port int) (func(), error) {
 	ctx, cancel := context.WithTimeout(context.Background(), probePodTimeout)
 	defer cancel()
 	k, err := labKube()
 	if err != nil {
 		return nil, err
 	}
-	remove, err := pointFakeSlackService(ctx, k, hostIP, port)
+	remove, err := pointFakeSlackService(ctx, k, ip, port)
 	if err != nil {
 		return nil, err
 	}
@@ -113,16 +111,12 @@ func fakeSlackForPods(cfg *config.Config, hostIP string, port int) (func(), erro
 	out, err := runProbePod(ctx, platformNamespace, klausGatewaySlackAPIService+"-preflight", probeImage,
 		[]string{"wget", "-qO-", "-T", "5", health}, probePodTimeout)
 	if err == nil && strings.TrimSpace(out) == "ok" {
-		note("a pod reaches the fake Slack Web API through %s (%s:%d on this host)", health, hostIP, port)
+		note("a pod reaches the fake Slack Web API through %s (%s:%d on the %s network)", health, ip, port, kindDockerNetwork)
 		return remove, nil
 	}
 	remove()
-	return nil, fmt.Errorf("pods cannot reach the fake Slack Web API the klaus-gateway component calls (%s -> %s:%d on this host): %s.\n"+
-		"  Fixes: allow TCP %d from the docker bridge subnets (they fall inside 172.16.0.0/12) through the\n"+
-		"  host firewall — pod->host traffic arrives on the bridge like any other inbound connection, the\n"+
-		"  same rule the host model servers need (docs/models.md) — or move the fake to an allowed port with\n"+
-		"  --gateway-port (the fake listens two ports above it).\n"+
-		"  Probe output: %.300s", health, hostIP, port, probeFailure(err, out), port, strings.TrimSpace(out))
+	return nil, fmt.Errorf("pods cannot reach the fake Slack Web API the klaus-gateway component calls (%s -> %s:%d, a container on the %s network): %s; probe output: %.300s",
+		health, ip, port, kindDockerNetwork, probeFailure(err, out), strings.TrimSpace(out))
 }
 
 // probeFailure words why a probe pod's fetch failed: its error, or what the
@@ -135,8 +129,7 @@ func probeFailure(err error, out string) string {
 }
 
 // pointFakeSlackService creates the component's Slack Web API Service and the
-// EndpointSlice behind it: the address pods reach this host on and the fake's
-// port. A leftover of an aborted run is replaced; the returned func removes
+// EndpointSlice behind it: the fake container's address and port. A leftover of an aborted run is replaced; the returned func removes
 // both.
 func pointFakeSlackService(ctx context.Context, k *kubeClients, hostIP string, port int) (func(), error) {
 	if port <= 0 || port > 65535 {
@@ -179,7 +172,7 @@ func pointFakeSlackService(ctx context.Context, k *kubeClients, hostIP string, p
 		remove()
 		return nil, fmt.Errorf("creating the EndpointSlice of %s/%s: %w", platformNamespace, klausGatewaySlackAPIService, err)
 	}
-	note("Service %s/%s → %s:%d (the fake Slack Web API on this host)", platformNamespace, klausGatewaySlackAPIService, hostIP, port)
+	note("Service %s/%s → %s:%d (the fake Slack Web API)", platformNamespace, klausGatewaySlackAPIService, hostIP, port)
 	return remove, nil
 }
 
