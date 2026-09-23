@@ -22,15 +22,15 @@ import (
 func TestExtraModelsTemplate(t *testing.T) {
 	cfg := config.Default()
 	cfg.Platform.ExtraModels = []config.ExtraModel{
-		{Name: "qwen3-8-27b", Provider: "OpenAI", Model: "qwen3-8-27b",
+		{Name: "qwen3-8-27b", Provider: config.ProviderOpenAI, Model: "qwen3-8-27b",
 			BaseURL: "https://qwen.example.com/v1", InsecureTLS: true},
-		{Name: "openrouter-deepseek", Provider: "OpenAI", Model: "deepseek/deepseek-chat",
+		{Name: "openrouter-deepseek", Provider: config.ProviderOpenAI, Model: "deepseek/deepseek-chat",
 			BaseURL: "https://openrouter.ai/api/v1", APIKeyEnv: "OPENROUTER_API_KEY"}, // #nosec G101 -- env var NAME, not a credential
-		{Name: "gemini-flash", Provider: "Gemini", Model: "gemini-2.5-flash", APIKeyEnv: "GEMINI_API_KEY"}, // #nosec G101 -- env var NAME, not a credential
-		{Name: "local-llama", Provider: "Ollama", Model: "llama3.3", BaseURL: "http://192.168.1.10:11434"},
-		{Name: "claude-proxy", Provider: "Anthropic", Model: "claude-haiku-4-5", BaseURL: "https://proxy.example.com"},
-		{Name: "ollama-v1", Provider: "OpenAI", Model: "qwen3.5:2b", BaseURL: "http://172.21.0.1:11434/v1", ReasoningEffort: "none"},
-		{Name: "gpt-low", Provider: "OpenAI", Model: "gpt-5", ReasoningEffort: "low"},
+		{Name: "gemini-flash", Provider: config.ProviderGemini, Model: "gemini-2.5-flash", APIKeyEnv: "GEMINI_API_KEY"}, // #nosec G101 -- env var NAME, not a credential
+		{Name: "local-llama", Provider: config.ProviderOllama, Model: "llama3.3", BaseURL: "http://192.168.1.10:11434"},
+		{Name: "claude-proxy", Provider: config.ProviderAnthropic, Model: "claude-haiku-4-5", BaseURL: "https://proxy.example.com"},
+		{Name: "ollama-v1", Provider: config.ProviderOpenAI, Model: "qwen3.5:2b", BaseURL: "http://172.21.0.1:11434/v1", ReasoningEffort: "none"},
+		{Name: "gpt-low", Provider: config.ProviderOpenAI, Model: "gpt-5", ReasoningEffort: "low"},
 	}
 	raw, err := renderTemplate(cfg, "extra-models.yaml.tmpl", nil)
 	if err != nil {

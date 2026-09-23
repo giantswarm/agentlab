@@ -58,7 +58,7 @@ func TestExtraModelValidate(t *testing.T) {
 		}, "keyless"},
 		{"bad key env", func(m ExtraModel) ExtraModel { m.APIKeyEnv = "not a var"; return m }, "environment variable"},
 		{"openai reasoning effort none", func(m ExtraModel) ExtraModel { m.ReasoningEffort = "none"; return m }, ""},
-		{"unknown reasoning effort", func(m ExtraModel) ExtraModel { m.ReasoningEffort = "off"; return m }, "unknown reasoningEffort"},
+		{"unknown reasoning effort", func(m ExtraModel) ExtraModel { m.ReasoningEffort = "maximal"; return m }, "unknown reasoningEffort"},
 		{"reasoning effort on ollama", func(m ExtraModel) ExtraModel {
 			m.Provider = ProviderOllama
 			m.BaseURL = "http://h:11434"
