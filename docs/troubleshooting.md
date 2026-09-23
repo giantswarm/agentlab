@@ -87,6 +87,19 @@ plumbing for model servers under
   the affected images were pulled by the node.
 
 
+## vm-manager
+
+- **`vm-manager-test` fails at `get_vm_attestation` with `golden mismatch:
+  pcr 0` after the lab followed a vm-manager release.** The golden values on
+  the pod's state claim were recorded for another firmware: PCR 0 is the OVMF
+  of the vm-manager pod image, an unpinned Ubuntu package that a release can
+  change with the same guest image. Install, boot and `READY=1` all succeed;
+  only the quotes fail. Strip the stale values and record them again inside
+  the pod —
+  [recording the image's golden PCR values](vm-manager.md#recording-the-images-golden-pcr-values);
+  `kubectl --kubeconfig state/kubeconfig -n agent-platform exec deploy/vm-manager -- dpkg-query -W ovmf`
+  names the firmware build the values belong to.
+
 ## agentlab.yaml and the release running it
 
 - **`agentlab.yaml names a field this agentlab release does not know`** — the
