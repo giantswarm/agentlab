@@ -131,15 +131,17 @@ func PlatformUp(cfg *config.Config, offers Offers) error {
 // platformTopologyFor is the topology of the chart the config installs, read
 // off its offline render before the cluster exists (the preflight's input):
 // the lab values rendered as the install will render them, the meta chart
-// templated with them, the roster read out. A render that fails here (no
-// network, an unpublished pin) falls back to the verified line's topology
-// with a note; the install reports the chart's error properly, later.
+// templated with them, the roster read out. A render that fails here (an
+// unpublished pin) falls back to the verified line's topology with a note;
+// the install reports the chart's error properly, later.
 //
-// The exception is a chart that refuses the lab's values: this is the FIRST
+// The exceptions are a chart that refuses the lab's values and a registry
+// that does not answer through the render's retries: this is the FIRST
 // render of a boot, so the verdict is in hand before the certs, the cluster
 // and Dex — the five minutes an install would spend before reaching the same
-// answer. It is returned rather than noted. The caller has resolved the dev
-// channel first (Up), so the chart judged is the one the install will use.
+// answer (the install pulls the same chart from the same registry). They are
+// returned rather than noted. The caller has resolved the dev channel first
+// (Up), so the chart judged is the one the install will use.
 func platformTopologyFor(cfg *config.Config) (platformTopology, error) {
 	var roster *platformRoster
 	if cfg.Platform.Enabled {
@@ -154,6 +156,9 @@ func platformTopologyFor(cfg *config.Config) (platformTopology, error) {
 		if err != nil {
 			if isSchemaRejection(err) {
 				return platformTopology{}, chartRefusesValuesError(chart, err)
+			}
+			if registryUnreachable(err) {
+				return platformTopology{}, chartUnreachableError(chart, err, "agentlab up")
 			}
 			note("cannot render %s ahead of the boot (%v); budgeting for the 4.x line's topology", chart, excerptEnds(err.Error(), 300))
 		}
@@ -466,10 +471,16 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	if err != nil {
 		// A chart that refuses these values refuses them on the cluster too:
 		// the install would carry them to helm-controller and fail there, so
-		// it is not started. Every other render failure stays a note — the
-		// install reports it in Helm's own words if it is real.
+		// it is not started. A registry that did not answer through the
+		// render's retries stops it too: without the roster there are no
+		// component renders, and without those none of the lab's patches.
+		// Every other render failure stays a note — the install reports it
+		// in Helm's own words if it is real.
 		if isSchemaRejection(err) {
 			return chartRefusesValuesError(chart, err)
+		}
+		if registryUnreachable(err) {
+			return chartUnreachableError(chart, err, "agentlab platform")
 		}
 		note("cannot render %s (%v); the node pulls the platform images itself", chart, excerptEnds(err.Error(), 300))
 	}
@@ -529,7 +540,7 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	if err != nil {
 		return err
 	}
-	noteDexLocalhostTargets(roster, sidecars)
+	noteDexLocalhostTargets(roster, renders, sidecars)
 	var dev *devImages
 	var harnessBefore harnessState
 	imageNames := defaultDevImageNames(cfg)
@@ -1044,13 +1055,20 @@ func devImagesHint(cfg *config.Config, dev *devImages) string {
 
 // noteDexLocalhostTargets reports the sidecar rule's outcome in the boot
 // log: which Deployments get the bridge and by which key — or, with no
-// component render to read, that none does and what that means.
-func noteDexLocalhostTargets(roster *platformRoster, sidecars map[string][]dexLocalhostTarget) {
+// component render to read, that none does and what that means. The
+// roster's releases whose render was skipped (judgeRenderFailures) are
+// named too: the rule never read their Deployments, so a server among them
+// runs without the bridge.
+func noteDexLocalhostTargets(roster *platformRoster, renders map[string]string, sidecars map[string][]dexLocalhostTarget) {
+	unread := ""
+	if skipped := roster.unrendered(renders); len(skipped) > 0 {
+		unread = fmt.Sprintf("; not read, their renders were skipped: %s", strings.Join(skipped, ", "))
+	}
 	if len(sidecars) == 0 {
 		if roster == nil {
 			note("no component render to read, so no %s sidecar is patched: a server that validates the forwarded token cannot reach the lab Dex", dexLocalhostContainer)
 		} else {
-			note("no component render tells a pod the lab Dex address through a name it dials it by (%s): no %s sidecar to patch", strings.Join(dexDialNames, ", "), dexLocalhostContainer)
+			note("no component render tells a pod the lab Dex address through a name it dials it by (%s): no %s sidecar to patch%s", strings.Join(dexDialNames, ", "), dexLocalhostContainer, unread)
 		}
 		return
 	}
@@ -1064,7 +1082,7 @@ func noteDexLocalhostTargets(roster *platformRoster, sidecars map[string][]dexLo
 			names = append(names, name+" ("+target.key+")")
 		}
 	}
-	note("%s sidecar on the %d Deployments told the lab Dex address: %s", dexLocalhostContainer, len(names), strings.Join(names, ", "))
+	note("%s sidecar on the %d Deployments told the lab Dex address: %s%s", dexLocalhostContainer, len(names), strings.Join(names, ", "), unread)
 }
 
 // waitSidecarMCPServers waits for muster to reach every server the sidecar

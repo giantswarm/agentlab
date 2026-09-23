@@ -213,8 +213,9 @@ and kustomize drops it without a word — so
 a target whose chart rendered without the Deployment and container the lab
 patches is **refused before the install**, naming both (`platform.devImages.kagent:
 the kagent chart's render has no Deployment kagent-controller with a container
-controller …`); a chart that did not render at all (the preload reports why)
-falls back to the table's name with a note that it is unverified.
+controller …`); a chart whose render was skipped (the preload notes why; a
+registry that does not answer stops the boot instead, see the gotchas) falls
+back to the table's name with a note that it is unverified.
 
 ### The `harness` target
 
@@ -965,9 +966,26 @@ data the page reads — see [The muster plugin](backstage.md#the-muster-plugin).
   boot renders the meta chart and every component chart offline to side-load
   their images — each at the version its `OCIRepository` resolves to, with
   the values its `HelmRelease` carries: the pair helm-controller validates on
-  the cluster. Most render failures there are notes (a registry that will not
-  answer, a chart whose `kubeVersion` an offline render cannot satisfy): the
-  node pulls those images itself and the install proceeds. One is not. When a
+  the cluster. Most render failures there are skips, noted (a chart whose
+  `kubeVersion` an offline render cannot satisfy, a tag the registry does not
+  have): the node pulls those images itself and the install proceeds. Two are
+  not. The first is a registry this host cannot reach — a name the resolver
+  does not answer, a refused or timed-out dial, a 5xx or 429 from the
+  registry. The renders are more than the image list: the lab's patches for
+  a component (the `dex-localhost` sidecar's targets, the `platform.devImages`
+  image names) are read off them, so a component without its render would be
+  installed unpatched — mcp-kubernetes crash-looping on `connection refused`
+  to `https://localhost:<dexPort>/dex`, the install failing minutes later on
+  its `HelmRelease`, nothing pointing at the network. A name the resolver
+  does not know or a refused dial is tried again (three retries over some
+  twenty seconds, each noted with the resolver's or the dialer's words; a
+  timeout, a 5xx or a 429 the registry client's transport has already
+  retried five times per request); if the registry still does not answer,
+  the boot stops before the install, printing each release's render error
+  whole and the registry host to check, and `agentlab platform` picks it up
+  again once the host resolves. The meta chart's own render is held to the
+  same rule — before the certs and the cluster on `agentlab up`. The second
+  is a chart that refuses its values. When a
   `values.schema.json` — the chart's own or a subchart's — *refuses* the
   values, the install would carry them to helm-controller and fail after its
   whole wait, so the lab refuses instead, printing Helm's verdict whole (the

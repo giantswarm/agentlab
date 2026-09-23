@@ -102,7 +102,7 @@ func TestHostInventoryFallsBackToLoopback(t *testing.T) {
 	defer func() { loopbackBaseFn = loopbackRestore }()
 	hostModelsFn = func(backend, base string) ([]HostModel, error) {
 		if base == clusterOnly {
-			return nil, &net.OpError{Op: opDial, Err: &net.DNSError{Err: "no such host", Name: hostDockerInternal, IsNotFound: true}}
+			return nil, &net.OpError{Op: opDial, Err: &net.DNSError{Err: noSuchHost, Name: hostDockerInternal, IsNotFound: true}}
 		}
 		return restore(backend, base)
 	}
@@ -119,7 +119,7 @@ func TestHostInventoryFallsBackToLoopback(t *testing.T) {
 	deadEndpoint := "http://" + hostDockerInternal + ":1"
 	hostModelsFn = func(backend, base string) ([]HostModel, error) {
 		if base == deadEndpoint {
-			return nil, &net.OpError{Op: opDial, Err: &net.DNSError{Err: "no such host", Name: hostDockerInternal, IsNotFound: true}}
+			return nil, &net.OpError{Op: opDial, Err: &net.DNSError{Err: noSuchHost, Name: hostDockerInternal, IsNotFound: true}}
 		}
 		return restore(backend, base)
 	}
@@ -150,7 +150,7 @@ func TestHostInventoryFallsBackOnlyForAnUnresolvableHost(t *testing.T) {
 	const lan = "http://192.0.2.10:11434"
 	hostModelsFn = func(backend, base string) ([]HostModel, error) {
 		if base == lan {
-			return nil, &net.OpError{Op: opDial, Err: errors.New("connection refused")}
+			return nil, &net.OpError{Op: opDial, Err: errors.New(connectionRefused)}
 		}
 		return restore(backend, base)
 	}

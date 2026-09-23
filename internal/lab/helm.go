@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -35,6 +37,7 @@ import (
 	release "helm.sh/helm/v4/pkg/release/v1"
 	"helm.sh/helm/v4/pkg/storage/driver"
 	"k8s.io/klog/v2"
+	"oras.land/oras-go/v2/registry/remote/errcode"
 
 	"github.com/giantswarm/agentlab/pkg/project"
 )
@@ -476,10 +479,10 @@ func lastRevisionUninstalled(revisions []ri.Releaser) (bool, error) {
 // this chart accepts. It is worth a type because it is the one render failure
 // that predicts the install — helm-controller coalesces and validates the
 // same way against the same chart, so what is refused here is refused on the
-// cluster — while every other failure (a registry that will not answer, a
-// tag that is not there, no network) says nothing about whether the install
-// would succeed. err is Helm's own message, whole: every chart's verdict,
-// the offending paths on its last lines.
+// cluster — while every other failure (a tag that is not there, a registry
+// that does not answer — registryUnreachable) says nothing about whether the
+// install would succeed. err is Helm's own message, whole: every chart's
+// verdict, the offending paths on its last lines.
 type schemaRejection struct {
 	err error
 }
@@ -496,6 +499,59 @@ func (e *schemaRejection) Unwrap() error { return e.err }
 func isSchemaRejection(err error) bool {
 	var rejection *schemaRejection
 	return errors.As(err, &rejection)
+}
+
+// registryUnreachable reports whether a render or a tag listing failed
+// because the registry could not be reached or did not answer: a name the
+// resolver could not answer, a dial or a read the network refused, a
+// timeout, or a registry that answered 5xx or 429. That failure says nothing
+// about the chart, only about this host's network at this moment, so it is
+// the one worth trying again (retryUnreachable). A registry that did answer
+// (a tag that is not there, a denied pull) and a chart that fails to render
+// are something else.
+func registryUnreachable(err error) bool { return unreachableCause(err) != nil }
+
+// unreachableCause is the error in err's chain that makes it unreachable
+// (registryUnreachable) — the dialer's or the resolver's own words, the
+// timeout, the registry's status — and nil for any other error. Read off the
+// type chain, which Helm and oras-go keep intact (*url.Error around
+// *net.OpError around *net.DNSError; errcode.ErrorResponse for a status).
+func unreachableCause(err error) error {
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return opErr
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return dnsErr
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return netErr
+	}
+	var response *errcode.ErrorResponse
+	if errors.As(err, &response) &&
+		(response.StatusCode >= http.StatusInternalServerError || response.StatusCode == http.StatusTooManyRequests) {
+		return response
+	}
+	return nil
+}
+
+// retriedInTransport reports whether an unreachable cause (unreachableCause)
+// is one the transport under every registry call has already retried: Helm's
+// registry client runs on oras-go's retry.Transport, whose DefaultPolicy
+// retries a timeout and a 5xx or 429 five times per request. It retries
+// neither a name the resolver does not know nor a refused dial — the
+// transient DNS failure a render-level retry is for (retryUnreachable).
+// Retrying the render on top of the transport would multiply a dial timeout
+// (30 s, six times per request) into minutes before the boot stops.
+func retriedInTransport(cause error) bool {
+	var netErr net.Error
+	if errors.As(cause, &netErr) && netErr.Timeout() {
+		return true
+	}
+	var response *errcode.ErrorResponse
+	return errors.As(cause, &response)
 }
 
 // helmSchemaPrefix is the headline Helm puts above every schema failure
