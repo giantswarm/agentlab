@@ -32,6 +32,13 @@ const (
 	testOldTask  = "old"
 	testThread   = "t-1"
 	toolCallTool = "call_tool"
+	// recordKey names a gateway log record's kind; testSubject is the fake
+	// person's Dex subject.
+	recordKey   = "record"
+	testSubject = "CiQ"
+	// testCardTitle opens an approval card; testApproved is its rewrite.
+	testCardTitle = "*Approval required*"
+	testApproved  = "Approved by <@UP>"
 )
 
 // TestKlausGatewayFixtures: the admitted template carries the Harness's
@@ -155,7 +162,7 @@ func TestMusterAttribution(t *testing.T) {
 		`{"time":"2026-09-11T17:00:04Z","level":"INFO","msg":"tools/call request","subsystem":"MCP-Protocol","subject":"Cg9vdGhl...","tool":"call_tool"}`,
 		`not json at all`,
 	}, "\n")
-	accepted, calls, subjects := musterAttribution(logs, "admin@lab.local", "CiRjNGNlZGFmNS0...", since)
+	accepted, calls, subjects := musterAttribution(logs, testUser, "CiRjNGNlZGFmNS0...", since)
 	if accepted != 1 || calls != 1 || len(subjects) != 2 {
 		t.Errorf("accepted=%d calls=%d subjects=%v", accepted, calls, subjects)
 	}
@@ -248,7 +255,7 @@ func TestGatewayRecords(t *testing.T) {
 	if len(bound) != 1 || bound[0].Instance != "inst-a" {
 		t.Errorf("instance_bound = %+v", bound)
 	}
-	if d := gatewayRecords(logs, recordDispatch); len(d) != 1 || d[0].Subject != "admin@lab.local" || d[0].thread() != "1.1" {
+	if d := gatewayRecords(logs, recordDispatch); len(d) != 1 || d[0].Subject != testUser || d[0].thread() != "1.1" {
 		t.Errorf("turn_dispatch = %+v", d)
 	}
 	if v := gatewayVersion(logs); v != "klaus-gateway 3.2.0 (b1005ed)" {
@@ -277,19 +284,19 @@ func testJWT(claims map[string]any) string {
 // with its expiry next to a placeholder refresh token.
 func TestTokenIdentity(t *testing.T) {
 	now := time.Now()
-	tok := testJWT(map[string]any{"sub": "CiQ", "exp": now.Add(24 * time.Hour).Unix()})
+	tok := testJWT(map[string]any{claimSubject: testSubject, claimExpiry: now.Add(24 * time.Hour).Unix()})
 	id, err := tokenIdentity(tok, now)
-	if err != nil || id.subject != "CiQ" || !id.expiry.Equal(time.Unix(now.Add(24*time.Hour).Unix(), 0)) {
+	if err != nil || id.subject != testSubject || !id.expiry.Equal(time.Unix(now.Add(24*time.Hour).Unix(), 0)) {
 		t.Fatalf("tokenIdentity = %+v %v", id, err)
 	}
-	link := id.link("admin@lab.local", tok)
-	if link.Sub != "CiQ" || link.Email != "admin@lab.local" || link.IDToken != tok || !link.Expiry.Equal(id.expiry) || link.RefreshToken != linkRefreshMarker {
+	link := id.link(testUser, tok)
+	if link.Sub != testSubject || link.Email != testUser || link.IDToken != tok || !link.Expiry.Equal(id.expiry) || link.RefreshToken != linkRefreshMarker {
 		t.Errorf("link = %+v", link)
 	}
-	if _, err := tokenIdentity(testJWT(map[string]any{"sub": "CiQ", "exp": now.Add(10 * time.Minute).Unix()}), now); err == nil || !strings.Contains(err.Error(), "expires in") {
+	if _, err := tokenIdentity(testJWT(map[string]any{claimSubject: testSubject, claimExpiry: now.Add(10 * time.Minute).Unix()}), now); err == nil || !strings.Contains(err.Error(), "expires in") {
 		t.Errorf("a short-lived token: %v", err)
 	}
-	if _, err := tokenIdentity(testJWT(map[string]any{"exp": now.Add(24 * time.Hour).Unix()}), now); err == nil {
+	if _, err := tokenIdentity(testJWT(map[string]any{claimExpiry: now.Add(24 * time.Hour).Unix()}), now); err == nil {
 		t.Error("a token without sub")
 	}
 }
@@ -310,12 +317,12 @@ func TestGatewayFiles(t *testing.T) {
 			t.Errorf("%s: %v %v", name, info, err)
 		}
 	}
-	secrets, _ := os.ReadFile(filepath.Join(dir, gatewaySecrets))
+	secrets, _ := os.ReadFile(filepath.Clean(filepath.Join(dir, gatewaySecrets)))
 	if !strings.Contains(string(secrets), "signing_secret: "+keys.signing) || !strings.Contains(string(secrets), "bot_token: ") {
 		t.Errorf("secrets file = %q", secrets)
 	}
-	id := linkedIdentity{subject: "CiQ", expiry: time.Now().Add(time.Hour).Truncate(time.Second)}
-	link := id.link("admin@lab.local", "id-token")
+	id := linkedIdentity{subject: testSubject, expiry: time.Now().Add(time.Hour).Truncate(time.Second)}
+	link := id.link(testUser, "id-token")
 	path := filepath.Join(dir, gatewayLinksFile)
 	if err := seedBoltLink(path, keys.store, "UP", link); err != nil {
 		t.Fatal(err)
@@ -410,47 +417,47 @@ func (g *scriptedGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (g *scriptedGateway) post(channel, thread, text string, blocks ...any) map[string]any {
-	params := map[string]any{"channel": channel, "thread_ts": thread, "text": text}
+	params := map[string]any{slackKeyChannel: channel, slackKeyThreadTS: thread, slackKeyText: text}
 	if len(blocks) > 0 {
-		params["blocks"] = blocks
+		params[slackKeyBlocks] = blocks
 	}
 	return g.api(slackPostMessage, params)
 }
 
 func (g *scriptedGateway) answer(channel, thread, text string) {
-	s := g.api(slackStartStream, map[string]any{"channel": channel, "thread_ts": thread, "username": klausGatewayTestDisplay, "icon_url": klausGatewayTestIcon,
-		"chunks": []any{map[string]any{"type": "markdown_text", "text": text}}})
-	g.api(slackStopStream, map[string]any{"channel": channel, "ts": s["ts"]})
+	s := g.api(slackStartStream, map[string]any{slackKeyChannel: channel, slackKeyThreadTS: thread, "username": klausGatewayTestDisplay, "icon_url": klausGatewayTestIcon,
+		slackKeyChunks: []any{map[string]any{fieldTypeKey: slackMarkdownChunk, slackKeyText: text}}})
+	g.api(slackStopStream, map[string]any{slackKeyChannel: channel, slackKeyTS: s[slackKeyTS]})
 }
 
 func (g *scriptedGateway) done(thread, outcome, task string) {
-	g.record(map[string]any{"record": recordTurnDone, "thread_id": thread, "outcome": outcome, "task_id": task})
+	g.record(map[string]any{recordKey: recordTurnDone, "thread_id": thread, "outcome": outcome, "task_id": task})
 }
 
 func (g *scriptedGateway) card(channel, thread, task string) {
 	value := `{"t":"` + thread + `","id":"` + task + `"}`
 	g.ctrl.setTaskState(a2a.TaskID(task), a2a.TaskStateInputRequired)
-	g.post(channel, thread, "*Approval required*",
-		map[string]any{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": "*Approval required* · list namespaces"}},
-		map[string]any{"type": "actions", "elements": []any{
-			map[string]any{"type": "button", "action_id": slackActionApprove, "value": value},
-			map[string]any{"type": "button", "action_id": slackActionDeny, "value": value},
+	g.post(channel, thread, testCardTitle,
+		map[string]any{fieldTypeKey: slackBlockSection, slackKeyText: map[string]any{fieldTypeKey: slackMrkdwn, slackKeyText: "*Approval required* · list namespaces"}},
+		map[string]any{fieldTypeKey: slackBlockActions, slackKeyElements: []any{
+			map[string]any{fieldTypeKey: slackButton, slackKeyActionID: slackActionApprove, slackKeyValue: value},
+			map[string]any{fieldTypeKey: slackButton, slackKeyActionID: slackActionDeny, slackKeyValue: value},
 		}})
 	g.done(thread, outcomeInputReq, task)
 }
 
 func (g *scriptedGateway) onMessage(ev map[string]string) {
-	channel, user := ev["channel"], ev["user"]
-	thread := ev["thread_ts"]
+	channel, user := ev[slackKeyChannel], ev[slackKeyUser]
+	thread := ev[slackKeyThreadTS]
 	if thread == "" {
-		thread = ev["ts"]
+		thread = ev[slackKeyTS]
 	}
-	text := strings.TrimPrefix(ev["text"], "<@"+slackFakeBotUser+"> ")
+	text := strings.TrimPrefix(ev[slackKeyText], "<@"+slackFakeBotUser+"> ")
 	switch {
 	case user == g.stranger:
 		g.post(channel, thread, "🔒 "+slackSignInLine+". I've posted the link privately to whoever asked.")
-		g.api(slackPostEphemeral, map[string]any{"channel": channel, "thread_ts": thread, "user": user, "text": "Sign in",
-			"blocks": []any{map[string]any{"type": "actions", "elements": []any{map[string]any{"type": "button", "action_id": slackActionSignIn, "url": "http://gw" + musterlink.LinkPath + "?u=x"}}}}})
+		g.api(slackPostEphemeral, map[string]any{slackKeyChannel: channel, slackKeyThreadTS: thread, slackKeyUser: user, slackKeyText: "Sign in",
+			slackKeyBlocks: []any{map[string]any{fieldTypeKey: slackBlockActions, slackKeyElements: []any{map[string]any{fieldTypeKey: slackButton, slackKeyActionID: slackActionSignIn, slackKeyURL: "http://gw" + musterlink.LinkPath + "?u=x"}}}}})
 		return
 	case text == slackAgentCommand:
 		g.post(channel, thread, slackRosterHeading+" — start a new conversation with `/agent \"<name>\" <question>`:\n• *"+klausGatewayTestDisplay+"* — Throwaway")
@@ -481,10 +488,10 @@ func (g *scriptedGateway) onMessage(ev map[string]string) {
 		g.ctrl.mu.Lock()
 		g.ctrl.instances[instance] = proofInstance(instance, klausGatewayTestAgent)
 		g.ctrl.mu.Unlock()
-		g.record(map[string]any{"record": recordBound, "thread": thread, "instance": instance})
+		g.record(map[string]any{recordKey: recordBound, "thread": thread, "instance": instance})
 	}
-	g.record(map[string]any{"record": recordDispatch, "thread_id": thread, "agent": kagentNamespace + "/" + klausGatewayTestAgent, "agent_source": "default",
-		"slack_user": user, "subject": testUser, "sub": "CiQ"})
+	g.record(map[string]any{recordKey: recordDispatch, "thread_id": thread, "agent": kagentNamespace + "/" + klausGatewayTestAgent, "agent_source": "default",
+		"slack_user": user, "subject": testUser, claimSubject: testSubject})
 	switch text {
 	case klausGatewayToolPrompt:
 		g.card(channel, thread, "task-"+thread)
@@ -494,7 +501,7 @@ func (g *scriptedGateway) onMessage(ev map[string]string) {
 		g.running[thread] = stop
 		g.mu.Unlock()
 		g.ctrl.setTaskState(a2a.TaskID("essay-"+thread), a2a.TaskStateWorking)
-		g.api(slackStartStream, map[string]any{"channel": channel, "thread_ts": thread, "chunks": []any{map[string]any{"type": "markdown_text", "text": "Once upon a time"}}})
+		g.api(slackStartStream, map[string]any{slackKeyChannel: channel, slackKeyThreadTS: thread, slackKeyChunks: []any{map[string]any{fieldTypeKey: slackMarkdownChunk, slackKeyText: "Once upon a time"}}})
 		<-stop
 		g.ctrl.setTaskState(a2a.TaskID("essay-"+thread), a2a.TaskStateCanceled)
 		g.post(channel, thread, slackStopped)
@@ -515,8 +522,8 @@ func (g *scriptedGateway) onClick(user, channel, thread, cardTS, action, value s
 	if action == slackActionApprove {
 		verdict = "Approved by <@" + user + ">"
 	}
-	g.api(slackUpdate, map[string]any{"channel": channel, "ts": cardTS, "text": verdict,
-		"blocks": []any{map[string]any{"type": "context", "elements": []any{map[string]any{"type": "mrkdwn", "text": verdict}}}}})
+	g.api(slackUpdate, map[string]any{slackKeyChannel: channel, slackKeyTS: cardTS, slackKeyText: verdict,
+		slackKeyBlocks: []any{map[string]any{fieldTypeKey: "context", slackKeyElements: []any{map[string]any{fieldTypeKey: slackMrkdwn, slackKeyText: verdict}}}}})
 	if action == slackActionDeny {
 		g.ctrl.setTaskState(a2a.TaskID(v.Task), a2a.TaskStateRejected)
 		g.post(channel, v.Thread, "_(the turn failed; please try again)_")
@@ -583,7 +590,7 @@ func TestSlackProof(t *testing.T) {
 	if err := assertOnlyInstances(api, instance); err != nil {
 		t.Error(err)
 	}
-	if _, err := p.dispatch(main, "CiQ", testUser); err != nil {
+	if _, err := p.dispatch(main, testSubject, testUser); err != nil {
 		t.Error(err)
 	}
 	if _, err := p.dispatch(main, "other-sub", testUser); err == nil {

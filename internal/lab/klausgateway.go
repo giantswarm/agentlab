@@ -93,6 +93,10 @@ const (
 // port. A leftover of an aborted run is replaced; the returned func removes
 // both.
 func pointFakeSlackService(ctx context.Context, k *kubeClients, hostIP string, port int) (func(), error) {
+	if port <= 0 || port > 65535 {
+		return nil, fmt.Errorf("the fake Slack Web API's port %d is no TCP port", port)
+	}
+	p := int32(port)
 	services := k.clientset.CoreV1().Services(platformNamespace)
 	endpointSlices := k.clientset.DiscoveryV1().EndpointSlices(platformNamespace)
 	remove := func() {
@@ -110,13 +114,13 @@ func pointFakeSlackService(ctx context.Context, k *kubeClients, hostIP string, p
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{Name: klausGatewaySlackAPIService, Namespace: platformNamespace, Labels: labels},
 		Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{
-			Name: "http", Port: 80, Protocol: corev1.ProtocolTCP, TargetPort: intstr.FromInt32(int32(port)),
+			Name: "http", Port: 80, Protocol: corev1.ProtocolTCP, TargetPort: intstr.FromInt32(p),
 		}}},
 	}
 	if _, err := services.Create(ctx, svc, metav1.CreateOptions{}); err != nil {
 		return nil, fmt.Errorf("creating the Slack Web API Service %s/%s: %w", platformNamespace, klausGatewaySlackAPIService, err)
 	}
-	name, proto, p := "http", corev1.ProtocolTCP, int32(port)
+	name, proto := "http", corev1.ProtocolTCP
 	ready := true
 	slice := &discoveryv1.EndpointSlice{
 		ObjectMeta: metav1.ObjectMeta{Name: klausGatewaySlackAPIService, Namespace: platformNamespace,

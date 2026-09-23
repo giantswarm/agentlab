@@ -138,6 +138,13 @@ const (
 	klausGatewayTokenBudget = time.Hour
 )
 
+// The id_token claims the person's link carries: the Dex subject and the
+// expiry.
+const (
+	claimSubject = "sub"
+	claimExpiry  = "exp"
+)
+
 // Muster's audit and protocol records the attribution reads.
 const (
 	musterTokenAccepted = "forwarded_id_token_accepted"
@@ -571,8 +578,8 @@ func tokenIdentity(token string, now time.Time) (linkedIdentity, error) {
 	if err != nil {
 		return linkedIdentity{}, err
 	}
-	subject, _ := claims["sub"].(string)
-	exp, _ := claims["exp"].(float64)
+	subject, _ := claims[claimSubject].(string)
+	exp, _ := claims[claimExpiry].(float64)
 	if subject == "" || exp == 0 {
 		return linkedIdentity{}, fmt.Errorf("the token carries no sub or exp claim")
 	}
@@ -1379,7 +1386,7 @@ func (p *slackProof) signInPrompt(user, text string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("the unlinked %s got no sign-in prompt (the %q notice and a %s button) within %s; the thread shows: %s", user, slackSignInLine, slackActionSignIn, klausGatewayReplyWait, threadLine(msgs))
 	}
-	link, _ := button["url"].(string)
+	link, _ := button[slackKeyURL].(string)
 	if !strings.Contains(link, musterlink.LinkPath) {
 		return "", fmt.Errorf("the sign-in button points at %q, not the gateway's %s route", link, musterlink.LinkPath)
 	}

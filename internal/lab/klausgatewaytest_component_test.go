@@ -160,14 +160,14 @@ klaus-gateway-abc {"time":"2026-09-14T12:00:01Z","level":"INFO","msg":"obo link 
 // turn is sent as; read back they compare equal, a changed field does not.
 func TestProofLinks(t *testing.T) {
 	user := config.Default().AdminUser()
-	id := linkedIdentity{subject: "CiQ", expiry: time.Now().Add(time.Hour).Truncate(time.Second)}
+	id := linkedIdentity{subject: testSubject, expiry: time.Now().Add(time.Hour).Truncate(time.Second)}
 	person := slackUserPrefix + "R1C"
 	links := proofLinks(id.link(user.Email, "id-token"), person)
 	if len(links) != 2 {
 		t.Fatalf("%d links", len(links))
 	}
 	first, ok := links[person]
-	if !ok || first.Email != user.Email || first.Sub != "CiQ" || first.IDToken != "id-token" || !first.Expiry.Equal(id.expiry) {
+	if !ok || first.Email != user.Email || first.Sub != testSubject || first.IDToken != "id-token" || !first.Expiry.Equal(id.expiry) {
 		t.Fatalf("the person's link %+v (%v)", first, ok)
 	}
 	for id, l := range links {

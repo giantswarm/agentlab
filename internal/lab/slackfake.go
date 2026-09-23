@@ -28,7 +28,7 @@ import (
 // takes Events API callbacks and Block Kit clicks signed with the configured
 // signing secret. fakeSlack is that Web API for one run: it answers who the
 // bot and the people are (auth.test, users.info), acknowledges every other
-// call the way Slack does ({"ok":true,"ts":…}), and keeps what the gateway
+// call the way Slack does ({"ok":true,slackKeyTS:…}), and keeps what the gateway
 // posted, streamed, rewrote and deleted per thread, so the proof reads the
 // thread the way a person in the channel would see it. slackDriver is the
 // workspace's other half: it signs and posts the messages and the button
@@ -62,6 +62,29 @@ const (
 	slackAuthTest      = "auth.test"
 	slackUsersInfo     = "users.info"
 	slackReplies       = "conversations.replies"
+)
+
+// The fields of Slack's payloads the fake and the driver read and write, and
+// the block and chunk types among their values, named once.
+const (
+	slackKeyChannel    = "channel"
+	slackKeyThreadTS   = "thread_ts"
+	slackKeyTS         = "ts"
+	slackKeyText       = "text"
+	slackKeyBlocks     = "blocks"
+	slackKeyChunks     = "chunks"
+	slackKeyUser       = "user"
+	slackKeyTeamID     = "team_id"
+	slackKeyActionID   = "action_id"
+	slackKeyElements   = "elements"
+	slackKeyValue      = "value"
+	slackKeyURL        = "url"
+	slackKeyMessage    = "message"
+	slackMrkdwn        = "mrkdwn"
+	slackMarkdownChunk = "markdown_text"
+	slackBlockActions  = "actions"
+	slackBlockSection  = "section"
+	slackButton        = "button"
 )
 
 // The gateway's Block Kit action ids and texts the proof reads.
@@ -110,9 +133,9 @@ func (m slackMessage) streamed() bool { return m.Method == slackStartStream }
 // carries one.
 func (m slackMessage) action(id string) (map[string]any, bool) {
 	for _, block := range m.Blocks {
-		elements, _ := block["elements"].([]any)
+		elements, _ := block[slackKeyElements].([]any)
 		for _, e := range elements {
-			if el, ok := e.(map[string]any); ok && el["action_id"] == id {
+			if el, ok := e.(map[string]any); ok && el[slackKeyActionID] == id {
 				return el, true
 			}
 		}
@@ -233,15 +256,15 @@ func (f *fakeSlack) answer(method string, params map[string]any) map[string]any 
 	ok := map[string]any{"ok": true}
 	switch method {
 	case slackAuthTest:
-		return map[string]any{"ok": true, "user_id": slackFakeBotUser, "user": slackFakeBotName, "team_id": slackFakeTeam, "team": "agentlab", "bot_id": "BAGENTLAB"}
+		return map[string]any{"ok": true, "user_id": slackFakeBotUser, slackKeyUser: slackFakeBotName, slackKeyTeamID: slackFakeTeam, "team": "agentlab", "bot_id": "BAGENTLAB"}
 	case slackUsersInfo:
 		id := paramString(params, "user")
 		name := strings.ToLower(id)
 		if id == slackFakeBotUser {
 			name = slackFakeBotName
 		}
-		return map[string]any{"ok": true, "user": map[string]any{
-			"id": id, "name": name, "team_id": slackFakeTeam,
+		return map[string]any{"ok": true, slackKeyUser: map[string]any{
+			"id": id, "name": name, slackKeyTeamID: slackFakeTeam,
 			"profile": map[string]any{"email": f.emails[id], "display_name": name, "real_name": name},
 		}}
 	case slackReplies:
@@ -254,40 +277,40 @@ func (f *fakeSlack) answer(method string, params map[string]any) map[string]any 
 			Channel:   paramString(params, "channel"),
 			ThreadTS:  paramString(params, "thread_ts"),
 			Method:    method,
-			Text:      paramString(params, "text") + chunkText(params["chunks"]),
-			Blocks:    paramBlocks(params["blocks"]),
+			Text:      paramString(params, "text") + chunkText(params[slackKeyChunks]),
+			Blocks:    paramBlocks(params[slackKeyBlocks]),
 			Username:  paramString(params, "username"),
 			IconURL:   paramString(params, "icon_url"),
 			Recipient: paramString(params, "user"),
 		}
 		f.messages = append(f.messages, m)
 		f.byTS[m.TS] = m
-		ok["ts"], ok["channel"] = m.TS, m.Channel
+		ok[slackKeyTS], ok[slackKeyChannel] = m.TS, m.Channel
 		if method == slackPostEphemeral {
 			ok["message_ts"] = m.TS
 		}
 		return ok
 	case slackAppendStream, slackStopStream:
 		if m := f.byTS[paramString(params, "ts")]; m != nil {
-			m.Text += chunkText(params["chunks"])
+			m.Text += chunkText(params[slackKeyChunks])
 		}
-		ok["ts"] = paramString(params, "ts")
+		ok[slackKeyTS] = paramString(params, "ts")
 		return ok
 	case slackUpdate:
 		if m := f.byTS[paramString(params, "ts")]; m != nil {
 			m.Text = paramString(params, "text")
-			m.Blocks = paramBlocks(params["blocks"])
+			m.Blocks = paramBlocks(params[slackKeyBlocks])
 		}
-		ok["ts"] = paramString(params, "ts")
+		ok[slackKeyTS] = paramString(params, "ts")
 		return ok
 	case slackDelete:
 		if m := f.byTS[paramString(params, "ts")]; m != nil {
 			m.Deleted = true
 		}
-		ok["ts"] = paramString(params, "ts")
+		ok[slackKeyTS] = paramString(params, "ts")
 		return ok
 	}
-	ok["ts"] = f.nextTSLocked()
+	ok[slackKeyTS] = f.nextTSLocked()
 	return ok
 }
 
@@ -364,8 +387,8 @@ func chunkText(v any) string {
 	chunks, _ := v.([]any)
 	var b strings.Builder
 	for _, c := range chunks {
-		if m, ok := c.(map[string]any); ok && m["type"] == "markdown_text" {
-			s, _ := m["text"].(string)
+		if m, ok := c.(map[string]any); ok && m[fieldTypeKey] == slackMarkdownChunk {
+			s, _ := m[slackKeyText].(string)
 			b.WriteString(s)
 		}
 	}
@@ -439,7 +462,7 @@ func (d *slackDriver) post(path, contentType string, body []byte) error {
 func (d *slackDriver) event(event map[string]any) error {
 	d.eventSeq++
 	body, err := json.Marshal(map[string]any{
-		"type": "event_callback", "team_id": slackFakeTeam, "api_app_id": "AAGENTLAB",
+		fieldTypeKey: "event_callback", slackKeyTeamID: slackFakeTeam, "api_app_id": "AAGENTLAB",
 		"event_id": fmt.Sprintf("Ev%s%04d", strings.ToUpper(randomSuffix()), d.eventSeq), "event_time": time.Now().Unix(),
 		"event": event,
 	})
@@ -455,11 +478,11 @@ func (d *slackDriver) event(event map[string]any) error {
 func (d *slackDriver) mention(user, threadTS, text string) (string, error) {
 	ts := d.fake.nextTS()
 	ev := map[string]any{
-		"type": "app_mention", "user": user, "channel": d.channel, "channel_type": "channel",
-		"text": "<@" + slackFakeBotUser + "> " + text, "ts": ts, "event_ts": ts,
+		fieldTypeKey: "app_mention", slackKeyUser: user, slackKeyChannel: d.channel, "channel_type": "channel",
+		slackKeyText: "<@" + slackFakeBotUser + "> " + text, slackKeyTS: ts, "event_ts": ts,
 	}
 	if threadTS != "" {
-		ev["thread_ts"] = threadTS
+		ev[slackKeyThreadTS] = threadTS
 	}
 	return ts, d.event(ev)
 }
@@ -469,8 +492,8 @@ func (d *slackDriver) mention(user, threadTS, text string) (string, error) {
 func (d *slackDriver) reply(user, threadTS, text string) (string, error) {
 	ts := d.fake.nextTS()
 	return ts, d.event(map[string]any{
-		"type": "message", "user": user, "channel": d.channel, "channel_type": "channel",
-		"text": text, "ts": ts, "event_ts": ts, "thread_ts": threadTS,
+		fieldTypeKey: slackKeyMessage, slackKeyUser: user, slackKeyChannel: d.channel, "channel_type": "channel",
+		slackKeyText: text, slackKeyTS: ts, "event_ts": ts, slackKeyThreadTS: threadTS,
 	})
 }
 
@@ -482,15 +505,15 @@ func (d *slackDriver) click(user string, msg slackMessage, actionID string) erro
 	if !ok {
 		return fmt.Errorf("message %s carries no %s button", msg.TS, actionID)
 	}
-	value, _ := button["value"].(string)
+	value, _ := button[slackKeyValue].(string)
 	payload, err := json.Marshal(map[string]any{
-		"type": "block_actions", "user": map[string]any{"id": user}, "team": map[string]any{"id": slackFakeTeam},
-		"channel":      map[string]any{"id": msg.Channel},
-		"container":    map[string]any{"type": "message", "message_ts": msg.TS, "channel_id": msg.Channel, "thread_ts": msg.ThreadTS},
-		"message":      map[string]any{"ts": msg.TS, "thread_ts": msg.ThreadTS, "blocks": msg.Blocks},
-		"actions":      []any{map[string]any{"type": "button", "action_id": actionID, "value": value}},
-		"trigger_id":   "trigger-" + randomSuffix(),
-		"response_url": d.responseURL(),
+		fieldTypeKey: "block_actions", slackKeyUser: map[string]any{"id": user}, "team": map[string]any{"id": slackFakeTeam},
+		slackKeyChannel: map[string]any{"id": msg.Channel},
+		"container":     map[string]any{fieldTypeKey: slackKeyMessage, "message_ts": msg.TS, "channel_id": msg.Channel, slackKeyThreadTS: msg.ThreadTS},
+		slackKeyMessage: map[string]any{slackKeyTS: msg.TS, slackKeyThreadTS: msg.ThreadTS, slackKeyBlocks: msg.Blocks},
+		"actions":       []any{map[string]any{fieldTypeKey: slackButton, slackKeyActionID: actionID, slackKeyValue: value}},
+		"trigger_id":    "trigger-" + randomSuffix(),
+		"response_url":  d.responseURL(),
 	})
 	if err != nil {
 		return err
@@ -524,7 +547,7 @@ func openCard(msgs []slackMessage) (hitlCard, bool) {
 		var value struct {
 			Task string `json:"id"`
 		}
-		raw, _ := button["value"].(string)
+		raw, _ := button[slackKeyValue].(string)
 		_ = json.Unmarshal([]byte(raw), &value)
 		return hitlCard{msg: msgs[i], taskID: value.Task}, true
 	}
@@ -536,14 +559,14 @@ func openCard(msgs []slackMessage) (hitlCard, bool) {
 func (m slackMessage) shown() string {
 	parts := []string{m.Text}
 	for _, block := range m.Blocks {
-		if t, ok := block["text"].(map[string]any); ok {
-			s, _ := t["text"].(string)
+		if t, ok := block[slackKeyText].(map[string]any); ok {
+			s, _ := t[slackKeyText].(string)
 			parts = append(parts, s)
 		}
-		elements, _ := block["elements"].([]any)
+		elements, _ := block[slackKeyElements].([]any)
 		for _, e := range elements {
-			if el, ok := e.(map[string]any); ok && el["type"] == "mrkdwn" {
-				s, _ := el["text"].(string)
+			if el, ok := e.(map[string]any); ok && el[fieldTypeKey] == slackMrkdwn {
+				s, _ := el[slackKeyText].(string)
 				parts = append(parts, s)
 			}
 		}

@@ -61,35 +61,35 @@ func startTestFake(t *testing.T, emails map[string]string) *fakeSlack {
 // name and icon, an ephemeral, a rewrite and a delete land in the thread as
 // a person would see it, in order, every message with a distinct ts.
 func TestFakeSlackThread(t *testing.T) {
-	f := startTestFake(t, map[string]string{"UP": "admin@lab.local"})
-	if who := callFake(t, f, slackAuthTest, url.Values{}, nil); who["user_id"] != slackFakeBotUser || who["team_id"] != slackFakeTeam {
+	f := startTestFake(t, map[string]string{"UP": testUser})
+	if who := callFake(t, f, slackAuthTest, url.Values{}, nil); who["user_id"] != slackFakeBotUser || who[slackKeyTeamID] != slackFakeTeam {
 		t.Errorf("auth.test = %v", who)
 	}
-	info := callFake(t, f, slackUsersInfo, url.Values{"user": {"UP"}}, nil)
-	profile, _ := info["user"].(map[string]any)["profile"].(map[string]any)
-	if profile["email"] != "admin@lab.local" {
+	info := callFake(t, f, slackUsersInfo, url.Values{slackKeyUser: {"UP"}}, nil)
+	profile, _ := info[slackKeyUser].(map[string]any)["profile"].(map[string]any)
+	if profile["email"] != testUser {
 		t.Errorf("users.info = %v", info)
 	}
 
 	root := f.nextTS()
-	notice := callFake(t, f, slackPostMessage, url.Values{"channel": {"C1"}, "thread_ts": {root}, "text": {"_thinking…_"}}, nil)
-	stream := callFake(t, f, slackStartStream, nil, map[string]any{"channel": "C1", "thread_ts": root, "username": "Agent", "icon_url": "https://i/x.png",
-		"chunks": []any{map[string]any{"type": "task_update", "id": "step-1", "title": "list"}, map[string]any{"type": "markdown_text", "text": "po"}}})
-	callFake(t, f, slackAppendStream, nil, map[string]any{"channel": "C1", "ts": stream["ts"], "chunks": []any{map[string]any{"type": "markdown_text", "text": "n"}}})
-	callFake(t, f, slackStopStream, nil, map[string]any{"channel": "C1", "ts": stream["ts"], "chunks": []any{map[string]any{"type": "markdown_text", "text": "g"}}})
-	eph := callFake(t, f, slackPostEphemeral, nil, map[string]any{"channel": "C1", "thread_ts": root, "user": "UP", "text": "sign in",
-		"blocks": []any{map[string]any{"type": "actions", "elements": []any{map[string]any{"type": "button", "action_id": slackActionSignIn, "url": "http://gw/auth/slack/link?u=1"}}}}})
-	card := callFake(t, f, slackPostMessage, nil, map[string]any{"channel": "C1", "thread_ts": root, "text": "*Approval required*",
-		"blocks": []any{map[string]any{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": "*Approval required* · list"}}}})
-	callFake(t, f, slackUpdate, nil, map[string]any{"channel": "C1", "ts": card["ts"], "text": "Approved by <@UP>",
-		"blocks": []any{map[string]any{"type": "context", "elements": []any{map[string]any{"type": "mrkdwn", "text": "Approved by <@UP>"}}}}})
-	callFake(t, f, slackDelete, url.Values{"channel": {"C1"}, "ts": {notice["ts"].(string)}}, nil)
+	notice := callFake(t, f, slackPostMessage, url.Values{slackKeyChannel: {"C1"}, slackKeyThreadTS: {root}, slackKeyText: {"_thinking…_"}}, nil)
+	stream := callFake(t, f, slackStartStream, nil, map[string]any{slackKeyChannel: "C1", slackKeyThreadTS: root, "username": "Agent", "icon_url": "https://i/x.png",
+		slackKeyChunks: []any{map[string]any{fieldTypeKey: "task_update", "id": "step-1", "title": "list"}, map[string]any{fieldTypeKey: slackMarkdownChunk, slackKeyText: "po"}}})
+	callFake(t, f, slackAppendStream, nil, map[string]any{slackKeyChannel: "C1", slackKeyTS: stream[slackKeyTS], slackKeyChunks: []any{map[string]any{fieldTypeKey: slackMarkdownChunk, slackKeyText: "n"}}})
+	callFake(t, f, slackStopStream, nil, map[string]any{slackKeyChannel: "C1", slackKeyTS: stream[slackKeyTS], slackKeyChunks: []any{map[string]any{fieldTypeKey: slackMarkdownChunk, slackKeyText: "g"}}})
+	eph := callFake(t, f, slackPostEphemeral, nil, map[string]any{slackKeyChannel: "C1", slackKeyThreadTS: root, slackKeyUser: "UP", slackKeyText: "sign in",
+		slackKeyBlocks: []any{map[string]any{fieldTypeKey: slackBlockActions, slackKeyElements: []any{map[string]any{fieldTypeKey: slackButton, slackKeyActionID: slackActionSignIn, slackKeyURL: "http://gw/auth/slack/link?u=1"}}}}})
+	card := callFake(t, f, slackPostMessage, nil, map[string]any{slackKeyChannel: "C1", slackKeyThreadTS: root, slackKeyText: testCardTitle,
+		slackKeyBlocks: []any{map[string]any{fieldTypeKey: slackBlockSection, slackKeyText: map[string]any{fieldTypeKey: slackMrkdwn, slackKeyText: "*Approval required* · list"}}}})
+	callFake(t, f, slackUpdate, nil, map[string]any{slackKeyChannel: "C1", slackKeyTS: card[slackKeyTS], slackKeyText: testApproved,
+		slackKeyBlocks: []any{map[string]any{fieldTypeKey: "context", slackKeyElements: []any{map[string]any{fieldTypeKey: slackMrkdwn, slackKeyText: testApproved}}}}})
+	callFake(t, f, slackDelete, url.Values{slackKeyChannel: {"C1"}, slackKeyTS: {notice[slackKeyTS].(string)}}, nil)
 
 	msgs := f.thread("C1", root)
 	if len(msgs) != 3 {
 		t.Fatalf("thread = %s", threadLine(msgs))
 	}
-	if !msgs[0].streamed() || msgs[0].Text != "pong" || msgs[0].Username != "Agent" || msgs[0].IconURL != "https://i/x.png" {
+	if !msgs[0].streamed() || msgs[0].Text != klausGatewayWord || msgs[0].Username != "Agent" || msgs[0].IconURL != "https://i/x.png" {
 		t.Errorf("stream = %+v", msgs[0])
 	}
 	if msgs[1].Recipient != "UP" || msgs[1].TS != eph["message_ts"] {
@@ -98,7 +98,7 @@ func TestFakeSlackThread(t *testing.T) {
 	if _, ok := msgs[1].action(slackActionSignIn); !ok {
 		t.Error("the ephemeral's button is not found")
 	}
-	if !strings.Contains(msgs[2].shown(), "Approved by <@UP>") || len(msgs[2].Blocks) != 1 {
+	if !strings.Contains(msgs[2].shown(), testApproved) || len(msgs[2].Blocks) != 1 {
 		t.Errorf("rewritten card = %q", msgs[2].shown())
 	}
 	seen := map[string]bool{root: true}
@@ -111,7 +111,7 @@ func TestFakeSlackThread(t *testing.T) {
 	if f.callCount(slackPostMessage) != 2 || f.callCount(slackStartStream) != 1 {
 		t.Errorf("calls: postMessage %d, startStream %d", f.callCount(slackPostMessage), f.callCount(slackStartStream))
 	}
-	if stream, answer := streamedSince(msgs, 0); answer != "pong" || stream.TS != msgs[0].TS {
+	if stream, answer := streamedSince(msgs, 0); answer != klausGatewayWord || stream.TS != msgs[0].TS {
 		t.Errorf("streamedSince = %q", answer)
 	}
 	if _, answer := streamedSince(msgs, 1); answer != "" {
@@ -150,8 +150,8 @@ func TestSlackDriver(t *testing.T) {
 	if _, err := d.reply("UP", root, slackStopCommand); err != nil {
 		t.Fatal(err)
 	}
-	card := slackMessage{TS: "9.1", Channel: "C1", ThreadTS: root, Blocks: []map[string]any{{"type": "actions", "elements": []any{
-		map[string]any{"type": "button", "action_id": slackActionApprove, "value": `{"t":"` + root + `","id":"task-1"}`},
+	card := slackMessage{TS: "9.1", Channel: "C1", ThreadTS: root, Blocks: []map[string]any{{fieldTypeKey: slackBlockActions, slackKeyElements: []any{
+		map[string]any{fieldTypeKey: slackButton, slackKeyActionID: slackActionApprove, slackKeyValue: `{"t":"` + root + `","id":"task-1"}`},
 	}}}}
 	if err := d.click("UP", card, slackActionApprove); err != nil {
 		t.Fatal(err)
@@ -183,13 +183,13 @@ func TestSlackDriver(t *testing.T) {
 		}
 		return cb.Event
 	}
-	if e := event(0); e["type"] != "app_mention" || e["text"] != "<@"+slackFakeBotUser+"> /agent" || e["ts"] != root || e["thread_ts"] != nil || e["user"] != "UP" || e["channel"] != "C1" {
+	if e := event(0); e[fieldTypeKey] != "app_mention" || e[slackKeyText] != "<@"+slackFakeBotUser+"> /agent" || e[slackKeyTS] != root || e[slackKeyThreadTS] != nil || e[slackKeyUser] != "UP" || e[slackKeyChannel] != "C1" {
 		t.Errorf("root mention = %v", e)
 	}
-	if e := event(1); e["type"] != "app_mention" || e["thread_ts"] != root || e["ts"] == root {
+	if e := event(1); e[fieldTypeKey] != "app_mention" || e[slackKeyThreadTS] != root || e[slackKeyTS] == root {
 		t.Errorf("threaded mention = %v", e)
 	}
-	if e := event(2); e["type"] != "message" || e["text"] != slackStopCommand || e["thread_ts"] != root {
+	if e := event(2); e[fieldTypeKey] != slackKeyMessage || e[slackKeyText] != slackStopCommand || e[slackKeyThreadTS] != root {
 		t.Errorf("reply = %v", e)
 	}
 	form, err := url.ParseQuery(string(got[3].body))
@@ -227,13 +227,13 @@ func TestSlackDriver(t *testing.T) {
 // every needle.
 func TestSlackReaders(t *testing.T) {
 	button := func(task string) []map[string]any {
-		return []map[string]any{{"type": "actions", "elements": []any{map[string]any{"type": "button", "action_id": slackActionApprove, "value": `{"t":"1.1","id":"` + task + `"}`}}}}
+		return []map[string]any{{fieldTypeKey: slackBlockActions, slackKeyElements: []any{map[string]any{fieldTypeKey: slackButton, slackKeyActionID: slackActionApprove, slackKeyValue: `{"t":"1.1","id":"` + task + `"}`}}}}
 	}
 	msgs := []slackMessage{
-		{TS: "1", Text: "*Approval required*", Blocks: button("task-old")},
+		{TS: "1", Text: testCardTitle, Blocks: button("task-old")},
 		{TS: "2", Text: "text"},
-		{TS: "3", Text: "*Approval required*", Blocks: button("task-1")},
-		{TS: "4", Text: "Approved by <@UP>", Blocks: []map[string]any{{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": "*Approval required* · list"}}}},
+		{TS: "3", Text: testCardTitle, Blocks: button("task-1")},
+		{TS: "4", Text: testApproved, Blocks: []map[string]any{{fieldTypeKey: slackBlockSection, slackKeyText: map[string]any{fieldTypeKey: slackMrkdwn, slackKeyText: "*Approval required* · list"}}}},
 	}
 	card, ok := openCard(msgs)
 	if !ok || card.msg.TS != "3" || card.taskID != "task-1" {
