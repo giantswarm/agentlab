@@ -560,16 +560,50 @@ func proveVMAttestation(session *musterSession, prefix, id string) error {
 	if err := callVMTool(session, prefix+vmToolGetAttestation, map[string]any{"id": id}, &att); err != nil {
 		return err
 	}
-	for stage, q := range map[string]*vmQuote{"initrd": att.Initrd, "ready": att.Ready} {
-		if q == nil {
-			return fmt.Errorf("attestation: no %s quote recorded", stage)
+	for _, stage := range []struct {
+		name  string
+		quote *vmQuote
+	}{{"initrd", att.Initrd}, {"ready", att.Ready}} {
+		if stage.quote == nil {
+			return fmt.Errorf("attestation: no %s quote recorded", stage.name)
 		}
-		if !q.Verified {
-			return fmt.Errorf("attestation: the %s quote did not verify: %s", stage, orNone(q.Message))
+		if !stage.quote.Verified {
+			return fmt.Errorf("attestation: the %s quote did not verify: %s", stage.name, explainQuoteVerdict(orNone(stage.quote.Message)))
 		}
 	}
 	note("initrd and ready quotes verified; user-data released: %v", att.UserDataReleased)
 	return nil
+}
+
+// goldenMismatchRe matches the verifier's verdict on a PCR whose quoted value
+// differs from the golden value the image's policy.json carries.
+var goldenMismatchRe = regexp.MustCompile(`golden mismatch: pcr (\d+)`)
+
+// explainQuoteVerdict adds to the verifier's words what a golden mismatch
+// means and what fixes it. The PCR names what changed under the recorded
+// values: the firmware PCRs are the pod's OVMF — the ovmf package of the
+// vm-manager image, installed unpinned, so a vm-manager release can change
+// them while the guest image and its digest stay the same — and PCR 4 and 13
+// are the guest image's. Either way the policy's golden values were recorded
+// for another build and are recorded again (docs/vm-manager.md). Any other
+// verdict is returned as it is.
+func explainQuoteVerdict(message string) string {
+	m := goldenMismatchRe.FindStringSubmatch(message)
+	if m == nil {
+		return message
+	}
+	var changed string
+	switch m[1] {
+	case "0", "2", "3", "6", "7":
+		changed = "PCR " + m[1] + " is measured by the firmware: the OVMF of the vm-manager pod image (an unpinned Ubuntu package, so a vm-manager release changes it with the same guest image; `kubectl -n agent-platform exec deploy/vm-manager -- dpkg-query -W ovmf` names the build this pod boots with)"
+	case "4":
+		changed = "PCR 4 measures the boot loader and the UKI: the guest image changed"
+	case "13":
+		changed = "PCR 13 measures the Kubernetes sysext: the guest image or its Kubernetes version changed"
+	default:
+		changed = "PCR " + m[1] + " differs from the recorded value"
+	}
+	return message + "\n  " + changed + ".\n  The image policy's golden values were recorded for another build: record them again on this pod with one learn-mode boot and `vm-manager image golden` (docs/vm-manager.md \"Recording the image's golden PCR values\")."
 }
 
 // removeStaleTestVMs deletes VMs an interrupted run left behind.

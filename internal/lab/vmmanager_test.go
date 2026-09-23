@@ -128,3 +128,25 @@ func TestStripANSI(t *testing.T) {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 }
+
+// TestExplainQuoteVerdict: a golden mismatch names what the PCR measures —
+// the pod firmware for PCR 0, the guest image for PCR 4, the sysext for PCR
+// 13 — and the recipe that records the values again; any other verdict is
+// returned as it is.
+func TestExplainQuoteVerdict(t *testing.T) {
+	firmware := explainQuoteVerdict("golden mismatch: pcr 0 expected c9894ac4…, got 306be437…")
+	for _, want := range []string{"golden mismatch: pcr 0 expected c9894ac4…, got 306be437…", "OVMF of the vm-manager pod image", "dpkg-query -W ovmf", "vm-manager image golden", "docs/vm-manager.md"} {
+		if !strings.Contains(firmware, want) {
+			t.Fatalf("the PCR 0 verdict lacks %q:\n%s", want, firmware)
+		}
+	}
+	if got := explainQuoteVerdict("golden mismatch: pcr 4 expected a, got b"); !strings.Contains(got, "the guest image changed") {
+		t.Fatalf("the PCR 4 verdict names the guest image:\n%s", got)
+	}
+	if got := explainQuoteVerdict("golden mismatch: pcr 13 expected a, got b"); !strings.Contains(got, "Kubernetes sysext") {
+		t.Fatalf("the PCR 13 verdict names the sysext:\n%s", got)
+	}
+	if got := explainQuoteVerdict("nonce mismatch"); got != "nonce mismatch" {
+		t.Fatalf("another verdict is returned as it is: %q", got)
+	}
+}
