@@ -34,13 +34,18 @@ spec:
 {{- if eq .Provider "Ollama" }}
   ollama:
     host: {{ .BaseURL }}
-{{- else if .BaseURL }}
-{{- if eq .Provider "Anthropic" }}
+{{- else if eq .Provider "Anthropic" }}
+{{- if .BaseURL }}
   anthropic:
     baseUrl: {{ .BaseURL }}
-{{- else }}
+{{- end }}
+{{- else if or .BaseURL .ReasoningEffort }}
   openAI:
+{{- if .BaseURL }}
     baseUrl: {{ .BaseURL }}
+{{- end }}
+{{- if .ReasoningEffort }}
+    reasoningEffort: {{ .ReasoningEffort }}
 {{- end }}
 {{- end }}
 {{- end }}

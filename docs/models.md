@@ -69,7 +69,11 @@ Two practical notes for self-hosted endpoints: the URL must be reachable
 `localhost` would be the pod itself), and a self-signed certificate needs
 `insecureTLS: true` on the entry (rendered as the ModelConfig's
 `tls.disableVerify`). `Gemini` takes no `baseUrl` (the CRD has no endpoint
-field for it), and `Ollama` requires one (its `host`) and is keyless.
+field for it), and `Ollama` requires one (its `host`) and is keyless. An
+`OpenAI` entry may set `reasoningEffort` (`none`, `minimal`, `low`,
+`medium`, `high` or `xhigh`), rendered as the ModelConfig's
+`openAI.reasoningEffort`; `none` switches a local model's thinking off (see
+[Agent proofs without an Anthropic key](#agent-proofs-without-an-anthropic-key)).
 Providers needing more than a model + endpoint + key (AzureOpenAI, Bedrock,
 Vertex) are out of the lab's vocabulary — create their ModelConfigs by hand.
 
@@ -130,12 +134,13 @@ and everything that can go wrong is host-side plumbing, not kagent:
   without a GPU has 0 B and gets 4,096, which Ollama logs when it starts:
   `vram-based default context total_vram="0 B" default_num_ctx=4096`. Apple
   silicon counts the GPU's share of unified memory, so smaller Macs are in
-  the 4k tier too. Every agent turn sends the system prompt and all tool
-  schemas with each call, and at 4,096 a prompt longer than about 2,000
-  tokens is cut **silently**. The model gets the prompt's first 4 tokens and
-  its tail, so the system prompt and the tool schemas at the front are gone.
-  The agent ignores its instructions or its tools, the API response shows
-  nothing, and the only trace is a warning in the server log:
+  the 4k tier too. Every model call of an agent turn sends the system
+  prompt, all tool schemas and the conversation so far, so the prompt grows
+  with each tool result. Once it no longer fits the 4,096, Ollama cuts it
+  **silently** to half the context: the first 4 tokens and the last 2,046.
+  The system prompt and the tool schemas at the front are gone. The agent
+  ignores its instructions or its tools, the API response shows nothing,
+  and the only trace is a warning in the server log:
 
   ```
   level=WARN msg="truncating input prompt" limit=2050 prompt=10735 keep=4 new=2050
@@ -164,10 +169,13 @@ platform:
     # Ollama on the host, via its OpenAI-compatible /v1 alias. The alias
     # takes no context size: below 24 GiB of VRAM, set
     # OLLAMA_CONTEXT_LENGTH on the host (the context-length note above).
+    # reasoningEffort: none keeps a thinking model's answer out of its
+    # thinking (Agent proofs without an Anthropic key, below).
     - name: ollama-local
       provider: OpenAI
       model: qwen3.5:9b
       baseUrl: http://172.21.0.1:11434/v1
+      reasoningEffort: none
     # Lemonade Server (lemonade-server.ai): local inference with NPU
     # acceleration on AMD Ryzen AI (XDNA2) through its FastFlowLM backend,
     # or GPU via llama.cpp. Pick a tool-calling-capable model (the model
@@ -199,39 +207,8 @@ instead of waiting for the load.
 `toolsets-test`, `skills-test` and `klaus-gateway-test` run their agents on
 `default-model-config`, the Anthropic ModelConfig. Without
 `$ANTHROPIC_API_KEY`, pass `--model-config <name>` to run them on a model
-on the host. The agents act only on structured tool calls with exact
-arguments, so the model has to get those right. Measured with five
-tool-calling cases, each run five times against Ollama's `/api/chat` (the
-API kagent's Ollama provider calls), on a 12-core Zen 5 laptop CPU with the
-GPU unused. The cases: pick a tool and its arguments, a three-argument call,
-an enum argument, no call when none is needed, and acting on a tool result.
-
-| Model (Ollama tag) | Download | Passed | Seconds a call (thinking on / off) |
-|---|---|---|---|
-| **`qwen3.5:2b`** | 2.7 GB | 25/25 | 6.9 / 3.0 |
-| `granite4.2:3b` | 2.2 GB | 25/25 | 7.9 / 3.3 |
-| `qwen2.5:0.5b` (`models-test`'s default) | 0.4 GB | 21–22/25 | 1.1 / 0.8 |
-
-- **`qwen3.5:2b` is the one to use.** It missed nothing, and it reads a long
-  prompt fastest from cold, which matters because every proof run starts
-  fresh agents: a 10.7k-token prompt took 64 s, against 119–156 s for
-  `granite4.2:3b`.
-- **`granite4.2:3b` when many sessions share one long prompt.** It is a
-  dense transformer, so Ollama reuses the cached system prompt and tool
-  schemas from one conversation to the next. Qwen3.5 is a hybrid (most of
-  its layers are Gated DeltaNet), and for those llama.cpp reads the whole
-  prompt again in every new conversation.
-- **`qwen2.5:0.5b` is for `models-test` only.** Its turn asks for "pong"
-  and calls no tool. On tool calls the model missed the enum argument in 3
-  of 5 runs.
-- **The seconds** are for prompts of 650–1,100 tokens. kagent sends no
-  `think` field, so both models think by default: the first number applies.
-  A CPU reads about 100–165 tokens a second at this model size, and a longer
-  agent prompt adds its share once per conversation.
-
-The context-length note above comes first: the proofs' agent prompts are
-longer than 2,000 tokens. Then pull the model, add it as an extra model,
-apply it, and name it:
+on the host. A CPU does it with **`qwen3.5:2b`** (2.7 GB) on Ollama's `/v1`
+alias, with the model's thinking switched off:
 
 ```bash
 ollama pull qwen3.5:2b
@@ -241,9 +218,10 @@ ollama pull qwen3.5:2b
 platform:
   extraModels:
     - name: qwen35-2b
-      provider: Ollama        # the native API the numbers above measured
+      provider: OpenAI
       model: qwen3.5:2b
-      baseUrl: http://172.21.0.1:11434
+      baseUrl: http://172.21.0.1:11434/v1
+      reasoningEffort: none     # thinking off, see below
 ```
 
 ```bash
@@ -251,10 +229,48 @@ agentlab platform
 agentlab skills-test --model-config qwen35-2b
 ```
 
-With [managed models](#managed-models-model-manager--the-host-model-servers)
-on, pull it through model-manager instead and pass the ModelConfig it wires
-(`kubectl --kubeconfig state/kubeconfig -n kagent get modelconfigs` lists
-it).
+On a 12-core Zen 5 laptop CPU with no GPU, Ollama limited to 8 cores and
+set to `OLLAMA_CONTEXT_LENGTH=32768`, `skills-test` passes in 41 s. Its turn
+is three model calls of 1.8k, 2.0k and 2.8k tokens: 15 s for the first,
+cold, and 5–10 s for each of the others. The loaded model takes 2.8 GB with
+the 32k context. Apply the context-length note above first. `skills-test`'s
+agent binds no tools and stays under 4,096 tokens, but an agent with
+muster's tools carries their schemas on top, and every tool result makes
+the conversation longer.
+
+- **Thinking has to be off.** Qwen3.5, Qwen3 and Granite 4.2 think by
+  default under Ollama, and kagent's native `Ollama` provider cannot turn
+  that off: it sends no `think` field and drops the model's thinking text.
+  On `skills-test`, `qwen3.5:2b` then calls both tools correctly, but writes
+  its answer only into its thinking, and the agent returns an empty one.
+  `granite4.2:3b` does answer, but it thinks 1,500–2,000 tokens a call,
+  which takes 2–3 minutes each on a CPU and misses the proof's 180 s turn
+  bound. On the `/v1` alias, `reasoningEffort: none` reaches Ollama as
+  `reasoning_effort` and switches thinking off. It needs the kagent line
+  (meta chart 4.x): the 3.x chart's kagent refuses `none`.
+- **The ModelConfigs model-manager wires** use the native `Ollama` provider,
+  so a thinking model answers empty there too. Use the entry above for the
+  proofs.
+- **Why `qwen3.5:2b`.** It passed five tool-calling cases, each run five
+  times against Ollama on the same CPU with thinking off: pick a tool and
+  its arguments, a three-argument call, an enum argument, no call when none
+  is needed, and acting on a tool result.
+
+| Model (Ollama tag) | Download | Passed | Seconds a call |
+|---|---|---|---|
+| **`qwen3.5:2b`** | 2.7 GB | 25/25 | 3.0 |
+| `granite4.2:3b` | 2.2 GB | 25/25 | 3.3 |
+| `qwen2.5:0.5b` (`models-test`'s default) | 0.4 GB | 22/25 | 0.8 |
+
+- **`granite4.2:3b`** is the alternative when many sessions share one long
+  prompt. It passed the cases but has not been run through the proofs. It
+  is a dense transformer, so Ollama reuses the cached system prompt and
+  tool schemas from one conversation to the next. Qwen3.5 is a hybrid (most
+  of its layers are Gated DeltaNet), and for those llama.cpp reads the
+  whole prompt again in every new conversation.
+- **`qwen2.5:0.5b` is for `models-test` only.** Its turn asks for "pong"
+  and calls no tool. On tool calls the model missed the enum argument in 3
+  of 5 runs.
 
 ## Managed models: model-manager + the host model servers
 

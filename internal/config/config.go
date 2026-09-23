@@ -553,6 +553,11 @@ type ExtraModel struct {
 	// Skip TLS verification on the provider connection (ModelConfig spec.tls.
 	// disableVerify) — for self-hosted endpoints with self-signed certs.
 	InsecureTLS bool `yaml:"insecureTLS,omitempty"`
+	// OpenAI provider only: the ModelConfig's openAI.reasoningEffort, sent as
+	// reasoning_effort with every call. `none` switches a thinking model's
+	// reasoning off on Ollama's /v1 alias, which kagent's native Ollama
+	// provider cannot (docs/models.md "Agent proofs without an Anthropic key").
+	ReasoningEffort string `yaml:"reasoningEffort,omitempty"`
 }
 
 // The provider vocabulary for extra models, spelled exactly as the kagent
@@ -579,6 +584,10 @@ var ModelProviders = map[string]string{
 // ModelProviderNames is ModelProviders' keys in a stable order, for the form
 // options and error messages.
 var ModelProviderNames = []string{ProviderOpenAI, ProviderAnthropic, ProviderGemini, ProviderOllama}
+
+// ReasoningEfforts is the ModelConfig CRD's enum for openAI.reasoningEffort on
+// the kagent line (kagent.dev/v1alpha3).
+var ReasoningEfforts = []string{"none", "minimal", "low", "medium", "high", "xhigh"}
 
 // SecretName is the Kubernetes Secret (in ns kagent) holding this model's key.
 func (m ExtraModel) SecretName() string { return "kagent-" + m.Name }
@@ -839,6 +848,14 @@ func (m ExtraModel) Validate() error {
 	}
 	if key == "" && m.APIKeyEnv != "" {
 		return fmt.Errorf("%s: %s is keyless — apiKeyEnv would be silently ignored", m.Name, m.Provider)
+	}
+	if m.ReasoningEffort != "" {
+		if m.Provider != ProviderOpenAI {
+			return fmt.Errorf("%s: reasoningEffort applies to the OpenAI provider only (the ModelConfig's openAI.reasoningEffort)", m.Name)
+		}
+		if !slices.Contains(ReasoningEfforts, m.ReasoningEffort) {
+			return fmt.Errorf("%s: unknown reasoningEffort %q (one of %s)", m.Name, m.ReasoningEffort, strings.Join(ReasoningEfforts, ", "))
+		}
 	}
 	return nil
 }
