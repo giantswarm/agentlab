@@ -10,7 +10,7 @@ require (
 	github.com/a2aproject/a2a-go/v2 v2.5.0
 	github.com/creativeprojects/go-selfupdate v1.6.0
 	github.com/giantswarm/klaus-gateway v1.21.0
-	github.com/giantswarm/selfupdate-cosign v0.3.0
+	github.com/giantswarm/selfupdate-cosign v0.3.1
 	github.com/giantswarm/telemetrydeck-go v0.3.3
 	github.com/giantswarm/vm-manager v0.23.5
 	github.com/google/uuid v1.6.0
