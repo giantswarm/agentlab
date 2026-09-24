@@ -35,6 +35,11 @@ const (
 	fakeContextID     = "ctx-1"
 	fakeTool          = "filter_tools"
 	kindAgentTemplate = "AgentTemplate"
+	testWorkerPool    = "kagent-default"
+	testWorkerPod     = "kagent-default-abc"
+	testWorkerIP      = "10.0.0.7"
+	testTemplateName  = "t-kagent-0"
+	testAteomImage    = "ateom:v0"
 )
 
 // fakeKagent is an in-process kagent API v2 controller behind a fake edge:
@@ -438,7 +443,7 @@ func fakeTemplate(t *testing.T, name string, annotations map[string]any, admitti
 	}
 	value, err := structpb.NewStruct(map[string]any{
 		"apiVersion": agentTemplateAPIVersion, "kind": kindAgentTemplate, fieldMetadata: meta,
-		"spec":      map[string]any{descriptionKey: "Proof agent " + name},
+		fieldSpec:   map[string]any{descriptionKey: "Proof agent " + name},
 		fieldStatus: map[string]any{"harnesses": harnesses},
 	})
 	if err != nil {
@@ -788,8 +793,8 @@ func TestSubstrateState(t *testing.T) {
 	}
 	f := newFakeKagent()
 	f.substrate = &apiv1alpha1.GetSubstrateSummaryResponse{
-		WorkerPools:    []*apiv1alpha1.SubstrateWorkerPool{{Ref: &apiv1alpha1.ResourceReference{Namespace: kagentNamespace, Name: "kagent-default"}}},
-		ActorTemplates: []*ateapi.ActorTemplate{{Metadata: &ateapi.ResourceMetadata{Atespace: kagentNamespace, Name: "t-kagent-0"}}},
+		WorkerPools:    []*apiv1alpha1.SubstrateWorkerPool{{Ref: &apiv1alpha1.ResourceReference{Namespace: kagentNamespace, Name: testWorkerPool}}},
+		ActorTemplates: []*ateapi.ActorTemplate{{Metadata: &ateapi.ResourceMetadata{Atespace: kagentNamespace, Name: testTemplateName}}},
 	}
 	f.actorPages = []*apiv1alpha1.ListSubstrateActorsResponse{
 		{Actors: []*ateapi.Actor{actor("a1")}, Page: &apiv1alpha1.PageResponse{NextPageToken: "p1"}},
@@ -844,11 +849,11 @@ func TestSubstrateState(t *testing.T) {
 func TestSubstrateStateLegacy(t *testing.T) {
 	f := newFakeKagent()
 	f.legacy = &kagentv10.GetSubstrateStatusResponse{
-		WorkerPools:    []*kagentv10.SubstrateWorkerPool{{Namespace: kagentNamespace, Name: "kagent-default", Replicas: 2, AteomImage: "ateom:v0"}},
-		ActorTemplates: []*kagentv10.SubstrateActorTemplate{{Namespace: kagentNamespace, Name: "t-kagent-0", Phase: conditionReady, GoldenSnapshot: "s3://ate-snapshots/kagent/x"}},
+		WorkerPools:    []*kagentv10.SubstrateWorkerPool{{Namespace: kagentNamespace, Name: testWorkerPool, Replicas: 2, AteomImage: testAteomImage}},
+		ActorTemplates: []*kagentv10.SubstrateActorTemplate{{Namespace: kagentNamespace, Name: testTemplateName, Phase: conditionReady, GoldenSnapshot: "s3://ate-snapshots/kagent/x"}},
 		Actors: []*kagentv10.SubstrateActor{{
-			ActorId: "a1", Status: "Resuming", ActorTemplateNamespace: kagentNamespace, ActorTemplateName: "t-kagent-0",
-			AteomPodNamespace: kagentNamespace, AteomPodName: "kagent-default-abc", AteomPodIp: "10.0.0.7",
+			ActorId: "a1", Status: "Resuming", ActorTemplateNamespace: kagentNamespace, ActorTemplateName: testTemplateName,
+			AteomPodNamespace: kagentNamespace, AteomPodName: testWorkerPod, AteomPodIp: testWorkerIP,
 		}},
 		AteApiError: "workers: refused",
 	}
@@ -859,9 +864,9 @@ func TestSubstrateStateLegacy(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := substrateState{
-		pools:        []substratePool{{namespace: kagentNamespace, name: "kagent-default", replicas: 2, image: "ateom:v0"}},
-		templates:    []substrateTemplate{{namespace: kagentNamespace, name: "t-kagent-0", phase: conditionReady, golden: "golden snapshot s3://ate-snapshots/kagent/x"}},
-		actors:       []substrateActor{{id: "a1", templateNamespace: kagentNamespace, templateName: "t-kagent-0", state: "Resuming", workerNamespace: kagentNamespace, workerPod: "kagent-default-abc", workerIP: "10.0.0.7"}},
+		pools:        []substratePool{{namespace: kagentNamespace, name: testWorkerPool, replicas: 2, image: testAteomImage}},
+		templates:    []substrateTemplate{{namespace: kagentNamespace, name: testTemplateName, phase: conditionReady, golden: "golden snapshot s3://ate-snapshots/kagent/x"}},
+		actors:       []substrateActor{{id: "a1", templateNamespace: kagentNamespace, templateName: testTemplateName, state: "Resuming", workerNamespace: kagentNamespace, workerPod: testWorkerPod, workerIP: testWorkerIP}},
 		ateAPIErrors: []string{"workers: refused"},
 	}
 	if !reflect.DeepEqual(state, want) {
@@ -885,10 +890,10 @@ func TestSubstrateConversions(t *testing.T) {
 		t.Fatal(err)
 	}
 	pool := poolOf(&apiv1alpha1.SubstrateWorkerPool{
-		Ref:      &apiv1alpha1.ResourceReference{Namespace: kagentNamespace, Name: "kagent-default"},
+		Ref:      &apiv1alpha1.ResourceReference{Namespace: kagentNamespace, Name: testWorkerPool},
 		Resource: &apiv1alpha1.StructuredObject{Kind: "WorkerPool", Value: spec},
 	})
-	if want := (substratePool{namespace: kagentNamespace, name: "kagent-default", replicas: 4, image: "ateom:v1"}); pool != want {
+	if want := (substratePool{namespace: kagentNamespace, name: testWorkerPool, replicas: 4, image: "ateom:v1"}); pool != want {
 		t.Errorf("pool = %+v", pool)
 	}
 	template := func(golden *ateapi.GoldenSnapshotStatus) substrateTemplate {
@@ -903,7 +908,7 @@ func TestSubstrateConversions(t *testing.T) {
 	}{
 		{nil, substrateTemplate{namespace: kagentNamespace, name: "t", phase: "Pending"}},
 		{&ateapi.GoldenSnapshotStatus{GoldenTag: &ateapi.ObjectRef{Atespace: "ate-golden", Name: "g"}}, substrateTemplate{namespace: kagentNamespace, name: "t", phase: conditionReady, golden: "golden tag ate-golden/g"}},
-		{&ateapi.GoldenSnapshotStatus{ErrorMessage: "git fetch: 401"}, substrateTemplate{namespace: kagentNamespace, name: "t", phase: "Failed", failure: "git fetch: 401"}},
+		{&ateapi.GoldenSnapshotStatus{ErrorMessage: "git fetch: 401"}, substrateTemplate{namespace: kagentNamespace, name: "t", phase: templatePhaseFailed, failure: "git fetch: 401"}},
 	} {
 		if got := template(c.golden); got != c.want {
 			t.Errorf("templateOf(%v) = %+v, want %+v", c.golden, got, c.want)
@@ -913,10 +918,10 @@ func TestSubstrateConversions(t *testing.T) {
 		Metadata:      &ateapi.ResourceMetadata{Atespace: kagentNamespace, Name: "a1"},
 		ActorTemplate: &ateapi.ObjectRef{Atespace: kagentNamespace, Name: "t"},
 		Status: &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapi.WorkerAssignment{
-			WorkerNamespace: kagentNamespace, WorkerPod: "kagent-default-abc", WorkerPodIp: "10.0.0.7",
+			WorkerNamespace: kagentNamespace, WorkerPod: testWorkerPod, WorkerPodIp: testWorkerIP,
 		}},
 	})
-	if want := (substrateActor{id: "a1", templateNamespace: kagentNamespace, templateName: "t", state: "RUNNING", workerNamespace: kagentNamespace, workerPod: "kagent-default-abc", workerIP: "10.0.0.7"}); got != want {
+	if want := (substrateActor{id: "a1", templateNamespace: kagentNamespace, templateName: "t", state: "RUNNING", workerNamespace: kagentNamespace, workerPod: testWorkerPod, workerIP: testWorkerIP}); got != want {
 		t.Errorf("actor = %+v", got)
 	}
 }

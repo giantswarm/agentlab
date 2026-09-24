@@ -398,6 +398,10 @@ func poolOf(p *apiv1alpha1.SubstrateWorkerPool) substratePool {
 	return substratePool{namespace: p.GetRef().GetNamespace(), name: p.GetRef().GetName(), replicas: int(replicas), image: image}
 }
 
+// templatePhaseFailed is the phase of an ActorTemplate whose golden snapshot
+// reported an error.
+const templatePhaseFailed = "Failed"
+
 // templateOf words an ActorTemplate's golden snapshot status as a phase:
 // Failed on an error, Ready once the golden tag is set, Pending before.
 func templateOf(t *ateapi.ActorTemplate) substrateTemplate {
@@ -408,7 +412,7 @@ func templateOf(t *ateapi.ActorTemplate) substrateTemplate {
 		template.golden = "golden tag " + tag.GetAtespace() + "/" + tag.GetName()
 	}
 	if e := golden.GetErrorMessage(); e != "" {
-		template.phase = "Failed"
+		template.phase = templatePhaseFailed
 		template.failure = e
 	}
 	return template

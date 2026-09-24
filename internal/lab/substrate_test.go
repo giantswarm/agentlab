@@ -230,7 +230,7 @@ func TestProveSubstrateLine(t *testing.T) {
 	)
 	ctx := context.Background()
 
-	newFakeLab(t, ateletDS(atelet), workerPool("kagent-default", worker))
+	newFakeLab(t, ateletDS(atelet), workerPool(testWorkerPool, worker))
 	images, err := proveSubstrateLine(ctx, remedy)
 	if err != nil {
 		t.Fatalf("one release: %v", err)
@@ -243,7 +243,7 @@ func TestProveSubstrateLine(t *testing.T) {
 		t.Errorf("the report names the release and both images, got %q", got)
 	}
 
-	newFakeLab(t, ateletDS(atelet), workerPool("kagent-default", worker), workerPool("kagent-other", skewed))
+	newFakeLab(t, ateletDS(atelet), workerPool(testWorkerPool, worker), workerPool("kagent-other", skewed))
 	_, err = proveSubstrateLine(ctx, remedy)
 	if err == nil {
 		t.Fatal("two releases: want a refusal")
@@ -259,7 +259,7 @@ func TestProveSubstrateLine(t *testing.T) {
 		t.Errorf("no WorkerPool: want the refusal, got %v", err)
 	}
 
-	newFakeLab(t, workerPool("kagent-default", worker))
+	newFakeLab(t, workerPool(testWorkerPool, worker))
 	if _, err := proveSubstrateLine(ctx, remedy); err == nil || !strings.Contains(err.Error(), ateletDaemonSet) {
 		t.Errorf("no atelet DaemonSet: want a refusal naming it, got %v", err)
 	}

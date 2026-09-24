@@ -239,14 +239,14 @@ func TestTerminalHarnessFailure(t *testing.T) {
 // carried.
 func TestFootprintOf(t *testing.T) {
 	state := substrateState{
-		pools: []substratePool{{namespace: kagentNamespace, name: "kagent-default", replicas: 2, image: "ateom:v0"}},
+		pools: []substratePool{{namespace: kagentNamespace, name: testWorkerPool, replicas: 2, image: testAteomImage}},
 		templates: []substrateTemplate{
 			{namespace: kagentNamespace, name: skillsTestAgent + "-kagent-3bd7156d4194", phase: "Pending"},
 			{namespace: kagentNamespace, name: skillsTestAgent + "-control-kagent-0a0a0a0a0a0a", phase: conditionReady, golden: "golden tag ate-golden/x"},
-			{namespace: kagentNamespace, name: "agentlab-toolset-ro-kagent-111111111111", phase: "Failed", failure: "golden actor exited"},
+			{namespace: kagentNamespace, name: "agentlab-toolset-ro-kagent-111111111111", phase: templatePhaseFailed, failure: "golden actor exited"},
 		},
 		actors: []substrateActor{
-			{id: "01a0aaaa", templateNamespace: kagentNamespace, templateName: skillsTestAgent + "-kagent-3bd7156d4194", state: "RESUMING", workerNamespace: kagentNamespace, workerPod: "kagent-default-abc", workerIP: "10.0.0.7"},
+			{id: "01a0aaaa", templateNamespace: kagentNamespace, templateName: skillsTestAgent + "-kagent-3bd7156d4194", state: "RESUMING", workerNamespace: kagentNamespace, workerPod: testWorkerPod, workerIP: testWorkerIP},
 			{id: "01a0bbbb", templateNamespace: kagentNamespace, templateName: "agentlab-toolset-ro-kagent-111111111111", state: "PAUSED"},
 		},
 	}
@@ -335,7 +335,7 @@ func TestGrepLines(t *testing.T) {
 // TestLineFactsWording: the facts read as five lines and one summary, an
 // unreadable fact worded as such.
 func TestLineFactsWording(t *testing.T) {
-	facts := lineFacts{metaChart: "3.22.1-dev (branch poc)", kagentChart: "0.11.0-dev", kagentCRDsChart: "0.11.0-dev", substrateChart: "0.0.27-dev", controllerVersion: "0.11.0-dev (c231bd6)", controllerImage: "registry.example/x/controller@sha256:1", harnessImage: "registry.example/x/golang-adk@sha256:2", workerPool: "kagent-default", propagatesToken: true}
+	facts := lineFacts{metaChart: "3.22.1-dev (branch poc)", kagentChart: "0.11.0-dev", kagentCRDsChart: "0.11.0-dev", substrateChart: "0.0.27-dev", controllerVersion: "0.11.0-dev (c231bd6)", controllerImage: "registry.example/x/controller@sha256:1", harnessImage: "registry.example/x/golang-adk@sha256:2", workerPool: testWorkerPool, propagatesToken: true}
 	lines := facts.lines()
 	if len(lines) != 5 || !strings.Contains(lines[4], propagateIdentityEnv+"=true") || !strings.Contains(lines[0], "3.22.1-dev (branch poc)") {
 		t.Errorf("lines = %q", lines)
