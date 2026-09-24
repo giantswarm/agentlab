@@ -62,7 +62,7 @@ func (hitlFixtureWriter) createAgent(spec agentSpec) (*agentWritten, error) {
 	written := &agentWritten{HelmRelease: true}
 	if _, _, _, err := agentChartSource(); apierrors.IsNotFound(err) {
 		written.OCIRepository = true
-		manifest = agentOCIRepositoryManifest() + "---\n" + manifest
+		manifest = agentOCIRepositoryManifest(agentChartRangeInUse()) + "---\n" + manifest
 	} else if err != nil {
 		return nil, err
 	}

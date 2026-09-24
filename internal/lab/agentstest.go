@@ -124,8 +124,8 @@ func AgentsTest(cfg *config.Config, email string) error {
 	if got := info.APIVersions.AgentTemplate; got != agentTemplateAPIVersion {
 		return fmt.Errorf("agent-manager composes apiVersions.agentTemplate=%q, the platform's agents are %s AgentTemplates — this agent-manager does not speak kagent API v2", got, agentTemplateAPIVersion)
 	}
-	if info.Chart.Semver != agentChartRange || info.Chart.OCIURL != agentChartURL {
-		return fmt.Errorf("agent-manager tracks the agent chart %s at %q, wanted %s at %s (Generic chart 1.x)", info.Chart.OCIURL, info.Chart.Semver, agentChartURL, agentChartRange)
+	if !agentChartLine(info.Chart.Semver) || info.Chart.OCIURL != agentChartURL {
+		return fmt.Errorf("agent-manager tracks the agent chart %s at %q, wanted %s on the %s line (Generic chart 1.x, or the meta chart's cap within it)", info.Chart.OCIURL, info.Chart.Semver, agentChartURL, agentChartRange)
 	}
 	if info.Harness.Name != kagentHarness {
 		return fmt.Errorf("agent-manager places agents on Harness %q, the platform Harness is %s", info.Harness.Name, kagentHarness)
@@ -234,8 +234,8 @@ func AgentsTest(cfg *config.Config, email string) error {
 	if err != nil {
 		return fmt.Errorf("the namespace's OCIRepository %s: %w", agentChartOCIRepository, err)
 	}
-	if chartURL != agentChartURL || chartRange != agentChartRange {
-		return fmt.Errorf("OCIRepository %s tracks %s at %q, wanted %s at %s", agentChartOCIRepository, chartURL, chartRange, agentChartURL, agentChartRange)
+	if chartURL != agentChartURL || !agentChartLine(chartRange) {
+		return fmt.Errorf("OCIRepository %s tracks %s at %q, wanted %s on the %s line", agentChartOCIRepository, chartURL, chartRange, agentChartURL, agentChartRange)
 	}
 	logCtx, cancelLogs := context.WithTimeout(context.Background(), 60*time.Second)
 	events, _ := podLogs(logCtx, platformNamespace, "deploy/"+agentManagerMCPServer, agentManagerMCPServer, 5*time.Minute)

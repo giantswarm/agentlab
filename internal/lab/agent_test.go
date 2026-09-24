@@ -79,14 +79,14 @@ func TestCreateAgentArgs(t *testing.T) {
 // toolset renders no toolset key.
 func TestAgentManifests(t *testing.T) {
 	var source map[string]any
-	if err := yaml.Unmarshal([]byte(agentOCIRepositoryManifest()), &source); err != nil {
+	if err := yaml.Unmarshal([]byte(agentOCIRepositoryManifest(agentChartRange)), &source); err != nil {
 		t.Fatal(err)
 	}
 	u := &unstructured.Unstructured{Object: source}
 	url, _, _ := unstructured.NestedString(source, "spec", "url")
 	semver, _, _ := unstructured.NestedString(source, "spec", "ref", "semver")
 	if u.GetAPIVersion() != fluxOCIRepositoryAPIVersion || u.GetKind() != kindOCIRepository || u.GetName() != agentChartOCIRepository || u.GetNamespace() != kagentNamespace || url != agentChartURL || semver != agentChartRange {
-		t.Errorf("OCIRepository:\n%s", agentOCIRepositoryManifest())
+		t.Errorf("OCIRepository:\n%s", agentOCIRepositoryManifest(agentChartRange))
 	}
 
 	spec := testSpec()
