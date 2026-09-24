@@ -487,7 +487,7 @@ answers a fact only its `SKILL.md` has (the Harness re-emits the person's
 bearer on tool calls, `KAGENT_PROPAGATE_TOKEN`, which the proof asserts).
 On a failed boot it prints the evidence — the Harness's conditions and
 warnings; Substrate's ActorTemplate, actor and pinned worker as the
-controller's `GetSubstrateStatus` reports them; the controller's, atenet's
+controller's `GetSubstrateSummary` and `ListSubstrateActors` report them; the controller's, atenet's
 (every container) and the pool's worker pods' log lines about the
 template's actors — boots the same template without the skill as the
 control, and exits non-zero. Either way it leaves nothing behind: the

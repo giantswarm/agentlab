@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -22,6 +23,8 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/types/known/structpb"
 
+	ateapi "github.com/giantswarm/agentlab/internal/kagent/gen"
+	"github.com/giantswarm/agentlab/internal/kagent/gen/agentlab/kagentv10"
 	apiv1alpha1 "github.com/giantswarm/agentlab/internal/kagent/gen/kagent/api/v1alpha1"
 )
 
@@ -32,6 +35,11 @@ const (
 	fakeContextID     = "ctx-1"
 	fakeTool          = "filter_tools"
 	kindAgentTemplate = "AgentTemplate"
+	testWorkerPool    = "kagent-default"
+	testWorkerPod     = "kagent-default-abc"
+	testWorkerIP      = "10.0.0.7"
+	testTemplateName  = "t-kagent-0"
+	testAteomImage    = "ateom:v0"
 )
 
 // fakeKagent is an in-process kagent API v2 controller behind a fake edge:
@@ -60,6 +68,14 @@ type fakeKagent struct {
 	// many times first.
 	compiling int
 
+	// substrate is the summary GetSubstrateSummary answers; actorPages the
+	// pages ListSubstrateActors walks, token "p<n>" naming page n.
+	substrate  *apiv1alpha1.GetSubstrateSummaryResponse
+	actorPages []*apiv1alpha1.ListSubstrateActorsResponse
+	// legacy, when set, makes the fake a kagent 1.0 controller: the 1.1
+	// Substrate RPCs answer Unimplemented and GetSubstrateStatus answers it.
+	legacy *kagentv10.GetSubstrateStatusResponse
+
 	calls    map[string][]metadata.MD
 	sent     []*a2a.Message
 	canceled []a2a.TaskID
@@ -81,7 +97,7 @@ func newFakeKagent() *fakeKagent {
 func (f *fakeKagent) serve(t *testing.T, token string) *kagentAPI {
 	t.Helper()
 	lis := bufconn.Listen(1 << 20)
-	srv := grpc.NewServer()
+	srv := grpc.NewServer(grpc.UnknownServiceHandler(f.legacySubstrateStatus))
 	a2apb.RegisterA2AServiceServer(srv, f)
 	apiv1alpha1.RegisterAgentTemplateServiceServer(srv, f)
 	apiv1alpha1.RegisterAgentInstanceServiceServer(srv, f)
@@ -251,6 +267,54 @@ func (f *fakeKagent) ListAgentTemplates(ctx context.Context, req *apiv1alpha1.Li
 	return &apiv1alpha1.ListAgentTemplatesResponse{AgentTemplates: out}, nil
 }
 
+func (f *fakeKagent) GetSubstrateSummary(ctx context.Context, _ *apiv1alpha1.GetSubstrateSummaryRequest) (*apiv1alpha1.GetSubstrateSummaryResponse, error) {
+	f.record(ctx, "GetSubstrateSummary")
+	if _, err := edge(ctx); err != nil {
+		return nil, err
+	}
+	if f.legacy != nil {
+		return nil, status.Error(codes.Unimplemented, "unknown method GetSubstrateSummary for service kagent.api.v1alpha1.SystemService")
+	}
+	return f.substrate, nil
+}
+
+func (f *fakeKagent) ListSubstrateActors(ctx context.Context, req *apiv1alpha1.ListSubstrateActorsRequest) (*apiv1alpha1.ListSubstrateActorsResponse, error) {
+	f.record(ctx, "ListSubstrateActors")
+	if _, err := edge(ctx); err != nil {
+		return nil, err
+	}
+	if limit := req.GetPage().GetLimit(); limit > 100 {
+		return nil, status.Errorf(codes.InvalidArgument, "page.limit %d above 100", limit)
+	}
+	page := 0
+	if token := req.GetPage().GetPageToken(); token != "" {
+		if _, err := fmt.Sscanf(token, "p%d", &page); err != nil || page >= len(f.actorPages) {
+			return nil, status.Errorf(codes.InvalidArgument, "page token %q", token)
+		}
+	}
+	if len(f.actorPages) == 0 {
+		return &apiv1alpha1.ListSubstrateActorsResponse{}, nil
+	}
+	return f.actorPages[page], nil
+}
+
+// legacySubstrateStatus serves the kagent 1.0 line's GetSubstrateStatus,
+// which the 1.1 SystemService no longer registers, when the fake is legacy.
+func (f *fakeKagent) legacySubstrateStatus(_ any, stream grpc.ServerStream) error {
+	method, _ := grpc.MethodFromServerStream(stream)
+	if method != legacySubstrateStatusMethod || f.legacy == nil {
+		return status.Errorf(codes.Unimplemented, "unknown method %s", method)
+	}
+	f.record(stream.Context(), "GetSubstrateStatus")
+	if _, err := edge(stream.Context()); err != nil {
+		return err
+	}
+	if err := stream.RecvMsg(&kagentv10.GetSubstrateStatusRequest{}); err != nil {
+		return err
+	}
+	return stream.SendMsg(f.legacy)
+}
+
 func (f *fakeKagent) GetCurrentUser(ctx context.Context, _ *apiv1alpha1.GetCurrentUserRequest) (*apiv1alpha1.GetCurrentUserResponse, error) {
 	f.record(ctx, "GetCurrentUser")
 	who, err := edge(ctx)
@@ -379,7 +443,7 @@ func fakeTemplate(t *testing.T, name string, annotations map[string]any, admitti
 	}
 	value, err := structpb.NewStruct(map[string]any{
 		"apiVersion": agentTemplateAPIVersion, "kind": kindAgentTemplate, fieldMetadata: meta,
-		"spec":      map[string]any{descriptionKey: "Proof agent " + name},
+		fieldSpec:   map[string]any{descriptionKey: "Proof agent " + name},
 		fieldStatus: map[string]any{"harnesses": harnesses},
 	})
 	if err != nil {
@@ -716,5 +780,148 @@ func TestKagentTarget(t *testing.T) {
 	}
 	if _, _, err := kagentTargetOf("not a url"); err == nil {
 		t.Error("a base URL without a host must fail")
+	}
+}
+
+// TestSubstrateState: the summary's pools and templates and every page of
+// actors ride the person's bearer; an empty page with a next token is walked
+// through; an ate-api error on either read is carried beside the data; a
+// token answered with itself ends the walk as an error.
+func TestSubstrateState(t *testing.T) {
+	actor := func(id string) *ateapi.Actor {
+		return &ateapi.Actor{Metadata: &ateapi.ResourceMetadata{Atespace: kagentNamespace, Name: id}}
+	}
+	f := newFakeKagent()
+	f.substrate = &apiv1alpha1.GetSubstrateSummaryResponse{
+		WorkerPools:    []*apiv1alpha1.SubstrateWorkerPool{{Ref: &apiv1alpha1.ResourceReference{Namespace: kagentNamespace, Name: testWorkerPool}}},
+		ActorTemplates: []*ateapi.ActorTemplate{{Metadata: &ateapi.ResourceMetadata{Atespace: kagentNamespace, Name: testTemplateName}}},
+	}
+	f.actorPages = []*apiv1alpha1.ListSubstrateActorsResponse{
+		{Actors: []*ateapi.Actor{actor("a1")}, Page: &apiv1alpha1.PageResponse{NextPageToken: "p1"}},
+		{Page: &apiv1alpha1.PageResponse{NextPageToken: "p2"}},
+		{Actors: []*ateapi.Actor{actor("a2")}},
+	}
+	api := f.serve(t, fakeToken)
+
+	state, err := api.substrateState(t.Context(), kagentNamespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.pools) != 1 || len(state.templates) != 1 || len(state.ateAPIErrors) != 0 {
+		t.Errorf("state = %+v", state)
+	}
+	var ids []string
+	for _, a := range state.actors {
+		ids = append(ids, a.id)
+	}
+	if !slices.Equal(ids, []string{"a1", "a2"}) {
+		t.Errorf("actors = %v, want every page's", ids)
+	}
+	if got := len(f.calls["ListSubstrateActors"]); got != 3 {
+		t.Errorf("ListSubstrateActors called %d times, want 3", got)
+	}
+	for _, method := range []string{"GetSubstrateSummary", "ListSubstrateActors"} {
+		if want := []string{"Bearer " + fakeToken}; !slices.Equal(f.lastMD(method).Get(authorizationMetadata), want) {
+			t.Errorf("%s authorization = %v", method, f.lastMD(method).Get(authorizationMetadata))
+		}
+	}
+
+	f.substrate = &apiv1alpha1.GetSubstrateSummaryResponse{AteApiError: "templates: refused"}
+	f.actorPages = []*apiv1alpha1.ListSubstrateActorsResponse{{AteApiError: "actors: refused"}}
+	state, err = api.substrateState(t.Context(), kagentNamespace)
+	if err != nil || !slices.Equal(state.ateAPIErrors, []string{"templates: refused", "actors: refused"}) {
+		t.Errorf("ate-api errors = %v, %v", state.ateAPIErrors, err)
+	}
+
+	f.substrate = &apiv1alpha1.GetSubstrateSummaryResponse{}
+	f.actorPages = []*apiv1alpha1.ListSubstrateActorsResponse{
+		{Page: &apiv1alpha1.PageResponse{NextPageToken: "p1"}},
+		{Page: &apiv1alpha1.PageResponse{NextPageToken: "p1"}},
+	}
+	if _, err := api.substrateState(t.Context(), kagentNamespace); err == nil || !strings.Contains(err.Error(), "with itself") {
+		t.Errorf("a token answered with itself: %v", err)
+	}
+}
+
+// TestSubstrateStateLegacy: a controller of the kagent 1.0 line answers
+// GetSubstrateSummary Unimplemented; the state is read through its
+// GetSubstrateStatus on the same wire path, with the person's bearer.
+func TestSubstrateStateLegacy(t *testing.T) {
+	f := newFakeKagent()
+	f.legacy = &kagentv10.GetSubstrateStatusResponse{
+		WorkerPools:    []*kagentv10.SubstrateWorkerPool{{Namespace: kagentNamespace, Name: testWorkerPool, Replicas: 2, AteomImage: testAteomImage}},
+		ActorTemplates: []*kagentv10.SubstrateActorTemplate{{Namespace: kagentNamespace, Name: testTemplateName, Phase: conditionReady, GoldenSnapshot: "s3://ate-snapshots/kagent/x"}},
+		Actors: []*kagentv10.SubstrateActor{{
+			ActorId: "a1", Status: "Resuming", ActorTemplateNamespace: kagentNamespace, ActorTemplateName: testTemplateName,
+			AteomPodNamespace: kagentNamespace, AteomPodName: testWorkerPod, AteomPodIp: testWorkerIP,
+		}},
+		AteApiError: "workers: refused",
+	}
+	api := f.serve(t, fakeToken)
+
+	state, err := api.substrateState(t.Context(), kagentNamespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := substrateState{
+		pools:        []substratePool{{namespace: kagentNamespace, name: testWorkerPool, replicas: 2, image: testAteomImage}},
+		templates:    []substrateTemplate{{namespace: kagentNamespace, name: testTemplateName, phase: conditionReady, golden: "golden snapshot s3://ate-snapshots/kagent/x"}},
+		actors:       []substrateActor{{id: "a1", templateNamespace: kagentNamespace, templateName: testTemplateName, state: "Resuming", workerNamespace: kagentNamespace, workerPod: testWorkerPod, workerIP: testWorkerIP}},
+		ateAPIErrors: []string{"workers: refused"},
+	}
+	if !reflect.DeepEqual(state, want) {
+		t.Errorf("state = %+v\nwant    %+v", state, want)
+	}
+	if got := f.lastMD("GetSubstrateStatus").Get(authorizationMetadata); !slices.Equal(got, []string{"Bearer " + fakeToken}) {
+		t.Errorf("GetSubstrateStatus authorization = %v", got)
+	}
+	if len(f.calls["ListSubstrateActors"]) != 0 {
+		t.Error("the 1.0 path listed actors on the 1.1 RPC")
+	}
+}
+
+// TestSubstrateConversions: a pool's replicas and image come off the CR; a
+// template is Pending without a golden tag, Ready with one, Failed on
+// Substrate's error; an actor's state loses its enum prefix and keeps its
+// worker.
+func TestSubstrateConversions(t *testing.T) {
+	spec, err := structpb.NewStruct(map[string]any{"spec": map[string]any{"replicas": 4, "workerImage": "ateom:v1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := poolOf(&apiv1alpha1.SubstrateWorkerPool{
+		Ref:      &apiv1alpha1.ResourceReference{Namespace: kagentNamespace, Name: testWorkerPool},
+		Resource: &apiv1alpha1.StructuredObject{Kind: "WorkerPool", Value: spec},
+	})
+	if want := (substratePool{namespace: kagentNamespace, name: testWorkerPool, replicas: 4, image: "ateom:v1"}); pool != want {
+		t.Errorf("pool = %+v", pool)
+	}
+	template := func(golden *ateapi.GoldenSnapshotStatus) substrateTemplate {
+		return templateOf(&ateapi.ActorTemplate{
+			Metadata: &ateapi.ResourceMetadata{Atespace: kagentNamespace, Name: "t"},
+			Status:   &ateapi.ActorTemplateStatus{GoldenSnapshotStatus: golden},
+		})
+	}
+	for _, c := range []struct {
+		golden *ateapi.GoldenSnapshotStatus
+		want   substrateTemplate
+	}{
+		{nil, substrateTemplate{namespace: kagentNamespace, name: "t", phase: "Pending"}},
+		{&ateapi.GoldenSnapshotStatus{GoldenTag: &ateapi.ObjectRef{Atespace: "ate-golden", Name: "g"}}, substrateTemplate{namespace: kagentNamespace, name: "t", phase: conditionReady, golden: "golden tag ate-golden/g"}},
+		{&ateapi.GoldenSnapshotStatus{ErrorMessage: "git fetch: 401"}, substrateTemplate{namespace: kagentNamespace, name: "t", phase: templatePhaseFailed, failure: "git fetch: 401"}},
+	} {
+		if got := template(c.golden); got != c.want {
+			t.Errorf("templateOf(%v) = %+v, want %+v", c.golden, got, c.want)
+		}
+	}
+	got := actorOf(&ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: kagentNamespace, Name: "a1"},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: kagentNamespace, Name: "t"},
+		Status: &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapi.WorkerAssignment{
+			WorkerNamespace: kagentNamespace, WorkerPod: testWorkerPod, WorkerPodIp: testWorkerIP,
+		}},
+	})
+	if want := (substrateActor{id: "a1", templateNamespace: kagentNamespace, templateName: "t", state: "RUNNING", workerNamespace: kagentNamespace, workerPod: testWorkerPod, workerIP: testWorkerIP}); got != want {
+		t.Errorf("actor = %+v", got)
 	}
 }

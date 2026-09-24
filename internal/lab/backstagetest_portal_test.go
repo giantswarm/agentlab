@@ -545,7 +545,7 @@ func TestRoster(t *testing.T) {
 	carriers := map[string]any{"items": []any{map[string]any{
 		fieldAPIVersion: agentTemplateAPIVersion, fieldKind: remoteMCPServerKind,
 		fieldMetadata: map[string]any{nameKey: testRosterRelease, fieldNamespace: kagentNamespace},
-		"spec":        map[string]any{"url": testMusterURL, "headersFrom": []any{map[string]any{nameKey: toolsetHeader, "value": presetReadOnly + "," + workflowIncidentTriage}}},
+		fieldSpec:     map[string]any{"url": testMusterURL, "headersFrom": []any{map[string]any{nameKey: toolsetHeader, "value": presetReadOnly + "," + workflowIncidentTriage}}},
 	}}}
 	fp.mux.HandleFunc(portalKubeProxyAPI+"/apis/"+agentTemplateAPIVersion+"/agenttemplates", func(w http.ResponseWriter, r *http.Request) {
 		fp.headers[r.URL.Path] = r.Header.Clone()

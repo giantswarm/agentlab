@@ -26,6 +26,8 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/giantswarm/agentlab/internal/config"
+	ateapi "github.com/giantswarm/agentlab/internal/kagent/gen"
+	"github.com/giantswarm/agentlab/internal/kagent/gen/agentlab/kagentv10"
 	apiv1alpha1 "github.com/giantswarm/agentlab/internal/kagent/gen/kagent/api/v1alpha1"
 )
 
@@ -70,6 +72,10 @@ const (
 	// the controller converges it synchronously, so the poll only covers a
 	// create that was interrupted and retried.
 	instanceReadyTimeout = 90 * time.Second
+	// substratePageSize is common.proto's cap on a page; substrateMaxPages
+	// bounds a walk the controller's tokens never end.
+	substratePageSize = 100
+	substrateMaxPages = 100
 
 	// The gRPC metadata of the contract (keys lower-case on the wire).
 	authorizationMetadata = "authorization"
@@ -112,6 +118,7 @@ type kagentAPI struct {
 	templates apiv1alpha1.AgentTemplateServiceClient
 	instances apiv1alpha1.AgentInstanceServiceClient
 	system    apiv1alpha1.SystemServiceClient
+	conn      grpc.ClientConnInterface
 	token     string
 	// extra is metadata sent beside the token on every call — the identity
 	// proof's forged x-user-id; nil for everyone else.
@@ -201,6 +208,7 @@ func newKagentAPI(conn grpc.ClientConnInterface, token string) (*kagentAPI, erro
 		templates: apiv1alpha1.NewAgentTemplateServiceClient(conn),
 		instances: apiv1alpha1.NewAgentInstanceServiceClient(conn),
 		system:    apiv1alpha1.NewSystemServiceClient(conn),
+		conn:      conn,
 		token:     token,
 		closeConn: func() error { return nil },
 	}, nil
@@ -268,17 +276,157 @@ func (a *kagentAPI) version(ctx context.Context) (*apiv1alpha1.GetVersionRespons
 	return resp, nil
 }
 
-// substrateStatus is SystemService/GetSubstrateStatus for one namespace: the
-// controller's view of Substrate — the WorkerPools, the ActorTemplates it
-// wrote (phase Pending, Ready or Failed, the golden snapshot), the actors
-// with their state and worker assignment, the pools' workers. What the
-// portal's Substrate page shows; the person needs get on Substrate.
-func (a *kagentAPI) substrateStatus(ctx context.Context, namespace string) (*apiv1alpha1.GetSubstrateStatusResponse, error) {
-	resp, err := a.system.GetSubstrateStatus(a.callCtx(ctx), &apiv1alpha1.GetSubstrateStatusRequest{Namespace: namespace})
-	if err != nil {
-		return nil, fmt.Errorf("GetSubstrateStatus: %w", err)
+// substrateState is the controller's view of Substrate for one namespace:
+// the WorkerPools, every ActorTemplate with its phase and golden snapshot,
+// every actor with its state and worker pod. ateAPIErrors are the reads the
+// controller could not make of ate-api, which it answers beside the data
+// rather than as a failed call. What the portal's Substrate page shows; the
+// person needs get on Substrate.
+type substrateState struct {
+	pools        []substratePool
+	templates    []substrateTemplate
+	actors       []substrateActor
+	ateAPIErrors []string
+}
+
+type substratePool struct {
+	namespace, name string
+	replicas        int
+	image           string
+}
+
+// substrateTemplate's golden is the golden snapshot worded ("golden tag
+// <atespace>/<name>" on 1.1, "golden snapshot <uri>" on 1.0, empty before
+// one exists); failure is Substrate's error when the phase is Failed.
+type substrateTemplate struct {
+	namespace, name, phase, golden, failure string
+}
+
+type substrateActor struct {
+	id, templateNamespace, templateName, state string
+	workerNamespace, workerPod, workerIP       string
+}
+
+// legacySubstrateStatusMethod is the kagent 1.0 line's one Substrate read.
+const legacySubstrateStatusMethod = "/kagent.api.v1alpha1.SystemService/GetSubstrateStatus"
+
+// substrateState reads Substrate through SystemService/GetSubstrateSummary
+// (pools, templates) and ListSubstrateActors (every actor, all pages), in
+// every atespace: an actor's atespace need not be its template's, so the
+// filter is the caller's, on the template ref. A controller of the 1.0 line
+// answers Unimplemented and is read through GetSubstrateStatus instead.
+func (a *kagentAPI) substrateState(ctx context.Context, namespace string) (substrateState, error) {
+	summary, err := a.system.GetSubstrateSummary(a.callCtx(ctx), &apiv1alpha1.GetSubstrateSummaryRequest{Namespace: namespace})
+	if status.Code(err) == codes.Unimplemented {
+		return a.legacySubstrateState(ctx, namespace)
 	}
-	return resp, nil
+	if err != nil {
+		return substrateState{}, fmt.Errorf("GetSubstrateSummary: %w", err)
+	}
+	var state substrateState
+	for _, p := range summary.GetWorkerPools() {
+		state.pools = append(state.pools, poolOf(p))
+	}
+	for _, t := range summary.GetActorTemplates() {
+		state.templates = append(state.templates, templateOf(t))
+	}
+	if e := summary.GetAteApiError(); e != "" {
+		state.ateAPIErrors = append(state.ateAPIErrors, e)
+	}
+	token := ""
+	for range substrateMaxPages {
+		page, err := a.system.ListSubstrateActors(a.callCtx(ctx), &apiv1alpha1.ListSubstrateActorsRequest{
+			Page: &apiv1alpha1.PageRequest{Limit: substratePageSize, PageToken: token},
+		})
+		if err != nil {
+			return substrateState{}, fmt.Errorf("ListSubstrateActors: %w", err)
+		}
+		if e := page.GetAteApiError(); e != "" {
+			state.ateAPIErrors = append(state.ateAPIErrors, e)
+			return state, nil
+		}
+		for _, actor := range page.GetActors() {
+			state.actors = append(state.actors, actorOf(actor))
+		}
+		next := page.GetPage().GetNextPageToken()
+		if next == "" {
+			return state, nil
+		}
+		if next == token {
+			return substrateState{}, fmt.Errorf("ListSubstrateActors: the controller answered page token %q with itself", token)
+		}
+		token = next
+	}
+	return substrateState{}, fmt.Errorf("ListSubstrateActors: still paging after %d pages", substrateMaxPages)
+}
+
+// legacySubstrateState is substrateState on the kagent 1.0 line.
+func (a *kagentAPI) legacySubstrateState(ctx context.Context, namespace string) (substrateState, error) {
+	resp := &kagentv10.GetSubstrateStatusResponse{}
+	if err := a.conn.Invoke(a.callCtx(ctx), legacySubstrateStatusMethod, &kagentv10.GetSubstrateStatusRequest{Namespace: namespace}, resp); err != nil {
+		return substrateState{}, fmt.Errorf("GetSubstrateStatus: %w", err)
+	}
+	var state substrateState
+	for _, p := range resp.GetWorkerPools() {
+		state.pools = append(state.pools, substratePool{namespace: p.GetNamespace(), name: p.GetName(), replicas: int(p.GetReplicas()), image: p.GetAteomImage()})
+	}
+	for _, t := range resp.GetActorTemplates() {
+		template := substrateTemplate{namespace: t.GetNamespace(), name: t.GetName(), phase: t.GetPhase()}
+		if snapshot := t.GetGoldenSnapshot(); snapshot != "" {
+			template.golden = "golden snapshot " + snapshot
+		}
+		state.templates = append(state.templates, template)
+	}
+	for _, actor := range resp.GetActors() {
+		state.actors = append(state.actors, substrateActor{
+			id: actor.GetActorId(), templateNamespace: actor.GetActorTemplateNamespace(), templateName: actor.GetActorTemplateName(), state: actor.GetStatus(),
+			workerNamespace: actor.GetAteomPodNamespace(), workerPod: actor.GetAteomPodName(), workerIP: actor.GetAteomPodIp(),
+		})
+	}
+	if e := resp.GetAteApiError(); e != "" {
+		state.ateAPIErrors = append(state.ateAPIErrors, e)
+	}
+	return state, nil
+}
+
+// poolOf reads a WorkerPool's replicas and worker image off the CR the
+// controller hands back whole.
+func poolOf(p *apiv1alpha1.SubstrateWorkerPool) substratePool {
+	spec, _ := p.GetResource().GetValue().AsMap()["spec"].(map[string]any)
+	replicas, _ := spec["replicas"].(float64)
+	image, _ := spec["workerImage"].(string)
+	return substratePool{namespace: p.GetRef().GetNamespace(), name: p.GetRef().GetName(), replicas: int(replicas), image: image}
+}
+
+// templatePhaseFailed is the phase of an ActorTemplate whose golden snapshot
+// reported an error.
+const templatePhaseFailed = "Failed"
+
+// templateOf words an ActorTemplate's golden snapshot status as a phase:
+// Failed on an error, Ready once the golden tag is set, Pending before.
+func templateOf(t *ateapi.ActorTemplate) substrateTemplate {
+	template := substrateTemplate{namespace: t.GetMetadata().GetAtespace(), name: t.GetMetadata().GetName(), phase: "Pending"}
+	golden := t.GetStatus().GetGoldenSnapshotStatus()
+	if tag := golden.GetGoldenTag(); tag != nil {
+		template.phase = conditionReady
+		template.golden = "golden tag " + tag.GetAtespace() + "/" + tag.GetName()
+	}
+	if e := golden.GetErrorMessage(); e != "" {
+		template.phase = templatePhaseFailed
+		template.failure = e
+	}
+	return template
+}
+
+// actorOf reads an actor's template, state (the ActorState without its enum
+// prefix: RUNNING) and worker assignment.
+func actorOf(actor *ateapi.Actor) substrateActor {
+	worker := actor.GetStatus().GetWorkerAssignment()
+	return substrateActor{
+		id: actor.GetMetadata().GetName(), templateNamespace: actor.GetActorTemplate().GetAtespace(), templateName: actor.GetActorTemplate().GetName(),
+		state:           strings.TrimPrefix(actor.GetStatus().GetState().String(), "ACTOR_STATE_"),
+		workerNamespace: worker.GetWorkerNamespace(), workerPod: worker.GetWorkerPod(), workerIP: worker.GetWorkerPodIp(),
+	}
 }
 
 // listTemplates is AgentTemplateService/ListAgentTemplates of the kagent

@@ -13,7 +13,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/giantswarm/agentlab/internal/config"
-	apiv1alpha1 "github.com/giantswarm/agentlab/internal/kagent/gen/kagent/api/v1alpha1"
 )
 
 // The skills proof: the golden boot under Substrate's egress gate.
@@ -469,7 +468,7 @@ func goldenBootEvidence(api *kagentAPI, name string, harness *harnessStatus, fac
 	// ids and the gate's words.
 	patterns := append([]string(nil), egressGateWords...)
 	for _, actor := range footprint.actors {
-		patterns = append(patterns, actor.GetActorId())
+		patterns = append(patterns, actor.id)
 	}
 	for _, pod := range podsNamed(ctx, substrateNamespace, atenetPodPrefix) {
 		for _, container := range podContainers(ctx, substrateNamespace, pod) {
@@ -607,14 +606,14 @@ func podsNamed(ctx context.Context, ns, prefix string) []string {
 }
 
 // substrateFootprint is what Substrate holds for one AgentTemplate on the
-// Harness, as the controller's GetSubstrateStatus reports it: the
-// ActorTemplates written for its revisions (kagent names them
-// <template>-<harness>-<revision>), the actors booted from them with their
-// state and worker pod. err is the status call's failure, when it failed.
+// Harness, as the controller reports it: the ActorTemplates written for its
+// revisions (kagent names them <template>-<harness>-<revision>), the actors
+// booted from them with their state and worker pod. err is the read's
+// failure, when it failed.
 type substrateFootprint struct {
-	templates []*apiv1alpha1.SubstrateActorTemplate
-	actors    []*apiv1alpha1.SubstrateActor
-	pools     []*apiv1alpha1.SubstrateWorkerPool
+	templates []substrateTemplate
+	actors    []substrateActor
+	pools     []substratePool
 	err       error
 }
 
@@ -623,27 +622,28 @@ type substrateFootprint struct {
 func skillsFootprint(api *kagentAPI, name string) substrateFootprint {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	status, err := api.substrateStatus(ctx, kagentNamespace)
+	state, err := api.substrateState(ctx, kagentNamespace)
 	if err != nil {
 		return substrateFootprint{err: err}
 	}
-	return footprintOf(status, name, kagentHarness)
+	return footprintOf(state, name, kagentHarness)
 }
 
-// footprintOf filters a GetSubstrateStatus answer down to one template's.
-func footprintOf(status *apiv1alpha1.GetSubstrateStatusResponse, agentTemplate, harness string) substrateFootprint {
+// footprintOf filters the controller's view of Substrate down to one
+// template's.
+func footprintOf(state substrateState, agentTemplate, harness string) substrateFootprint {
 	prefix := actorTemplatePrefix(agentTemplate, harness)
-	f := substrateFootprint{pools: status.GetWorkerPools()}
-	if status.GetAteApiError() != "" {
-		f.err = fmt.Errorf("the controller could not list ate-api's state: %s", status.GetAteApiError())
+	f := substrateFootprint{pools: state.pools}
+	if len(state.ateAPIErrors) > 0 {
+		f.err = fmt.Errorf("the controller could not list ate-api's state: %s", strings.Join(state.ateAPIErrors, "; "))
 	}
-	for _, t := range status.GetActorTemplates() {
-		if t.GetNamespace() == kagentNamespace && strings.HasPrefix(t.GetName(), prefix) {
+	for _, t := range state.templates {
+		if t.namespace == kagentNamespace && strings.HasPrefix(t.name, prefix) {
 			f.templates = append(f.templates, t)
 		}
 	}
-	for _, a := range status.GetActors() {
-		if a.GetActorTemplateNamespace() == kagentNamespace && strings.HasPrefix(a.GetActorTemplateName(), prefix) {
+	for _, a := range state.actors {
+		if a.templateNamespace == kagentNamespace && strings.HasPrefix(a.templateName, prefix) {
 			f.actors = append(f.actors, a)
 		}
 	}
@@ -673,24 +673,28 @@ func (f substrateFootprint) lines() []string {
 	}
 	var lines []string
 	for _, p := range f.pools {
-		lines = append(lines, fmt.Sprintf("WorkerPool %s/%s: %d workers (%s)", p.GetNamespace(), p.GetName(), p.GetReplicas(), p.GetAteomImage()))
+		lines = append(lines, fmt.Sprintf("WorkerPool %s/%s: %d workers (%s)", p.namespace, p.name, p.replicas, p.image))
 	}
 	if len(f.templates) == 0 && len(f.actors) == 0 {
 		return append(lines, "Substrate holds no ActorTemplate and no actor of the template")
 	}
 	for _, t := range f.templates {
-		snapshot := t.GetGoldenSnapshot()
-		if snapshot == "" {
-			snapshot = "none"
+		golden := t.golden
+		if golden == "" {
+			golden = "no golden snapshot"
 		}
-		lines = append(lines, fmt.Sprintf("ActorTemplate %s/%s: phase %s, golden snapshot %s, golden actor %s", t.GetNamespace(), t.GetName(), t.GetPhase(), snapshot, t.GetGoldenActorId()))
+		line := fmt.Sprintf("ActorTemplate %s/%s: phase %s, %s", t.namespace, t.name, t.phase, golden)
+		if t.failure != "" {
+			line += ", error: " + t.failure
+		}
+		lines = append(lines, line)
 	}
 	for _, a := range f.actors {
 		worker := "no worker"
-		if a.GetAteomPodName() != "" {
-			worker = fmt.Sprintf("pinned to worker pod %s/%s (%s)", a.GetAteomPodNamespace(), a.GetAteomPodName(), a.GetAteomPodIp())
+		if a.workerPod != "" {
+			worker = fmt.Sprintf("pinned to worker pod %s/%s (%s)", a.workerNamespace, a.workerPod, a.workerIP)
 		}
-		lines = append(lines, fmt.Sprintf("actor %s of %s: %s, %s", a.GetActorId(), a.GetActorTemplateName(), a.GetStatus(), worker))
+		lines = append(lines, fmt.Sprintf("actor %s of %s: %s, %s", a.id, a.templateName, a.state, worker))
 	}
 	return lines
 }
@@ -738,11 +742,11 @@ func skillsCleanup(api *kagentAPI) []string {
 	defer cancel()
 	for _, f := range all {
 		for _, a := range f.actors {
-			if a.GetAteomPodName() == "" {
+			if a.workerPod == "" {
 				continue
 			}
-			note("cleanup: actor %s (%s) is still pinned to worker pod %s/%s — deleting the pod, the WorkerPool replaces it", a.GetActorId(), a.GetStatus(), a.GetAteomPodNamespace(), a.GetAteomPodName())
-			if err := deleteObject(ctx, gvrPods, a.GetAteomPodNamespace(), a.GetAteomPodName(), 0); err != nil {
+			note("cleanup: actor %s (%s) is still pinned to worker pod %s/%s — deleting the pod, the WorkerPool replaces it", a.id, a.state, a.workerNamespace, a.workerPod)
+			if err := deleteObject(ctx, gvrPods, a.workerNamespace, a.workerPod, 0); err != nil {
 				note("cleanup: %v", err)
 			}
 		}
