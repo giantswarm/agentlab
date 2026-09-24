@@ -701,13 +701,13 @@ model-manager:
           - kubernetes
 
 # The connectivity chart's wiring around model-manager: its REST API on the
-# edge at https://agentgateway.{{ .Platform.Domain }}/model-manager — the
-# chart's Backstage app-config points the portal backend there
-# (agentPlatform.modelManager.installations.agent-platform.apiBaseUrl).
-# Unlike the kagent route above, JWT validation is ON: the portal forwards
-# the user's Dex ID token and the gateway is the identity boundary
-# (model-manager checks none itself), so an unauthenticated call answers
-# 401. The lab Dex serves its JWKS over TLS at the issuer path, hence the
+# edge at https://agentgateway.{{ .Platform.Domain }}/model-manager, for REST
+# clients such as models-test (the portal reaches model-manager through
+# muster as the signed-in person, x_model-manager_* tools, and its app-config
+# carries no model-manager block). Unlike the kagent route above, JWT
+# validation is ON: a caller sends the user's Dex ID token and the gateway is
+# the identity boundary (model-manager checks none itself), so an
+# unauthenticated call answers 401. The lab Dex serves its JWKS over TLS at the issuer path, hence the
 # in-cluster host, the /dex/keys path and the TLS origination against the
 # lab CA (jwks.tls.caSecretName defaults to global.identity.ca.secretName).
 modelManager:
