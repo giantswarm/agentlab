@@ -63,7 +63,7 @@ import (
 // image or binary is named: the current release of the Slack-only line
 // (2.0.0 on) that the 4.x meta chart's `components.klaus-gateway` range
 // resolves to.
-const KlausGatewayImageDefault = "gsoci.azurecr.io/giantswarm/klaus-gateway:3.3.0"
+const KlausGatewayImageDefault = "gsoci.azurecr.io/giantswarm/klaus-gateway:3.5.1"
 
 // Names of what the proof creates in the kagent namespace; all are deleted by
 // the same run, and a leftover of an aborted run is removed first.
@@ -1367,8 +1367,9 @@ func (p *slackProof) refusal(user, text string) (string, error) {
 }
 
 // signInPrompt posts a message as a person with no link and returns the
-// sign-in prompt: the thread's notice and the ephemeral Sign in button the
-// person alone sees, pointing at the gateway's link route.
+// sign-in link: the Sign in button (obo_sign_in) the gateway shows that
+// person alone, pointing at its link route. The prose around it is the
+// gateway's to word.
 func (p *slackProof) signInPrompt(user, text string) (string, error) {
 	ts, err := p.driver.mention(user, "", text)
 	if err != nil {
@@ -1376,9 +1377,6 @@ func (p *slackProof) signInPrompt(user, text string) (string, error) {
 	}
 	var button map[string]any
 	msgs, ok := waitThread(p.fake, p.channel, ts, klausGatewayReplyWait, func(msgs []slackMessage) bool {
-		if _, found := findMessage(msgs, slackSignInLine); !found {
-			return false
-		}
 		for _, m := range msgs {
 			if b, found := m.action(slackActionSignIn); found && (m.Recipient == user || m.Method == slackPostMessage) {
 				button = b
@@ -1388,7 +1386,7 @@ func (p *slackProof) signInPrompt(user, text string) (string, error) {
 		return false
 	})
 	if !ok {
-		return "", fmt.Errorf("the unlinked %s got no sign-in prompt (the %q notice and a %s button) within %s; the thread shows: %s", user, slackSignInLine, slackActionSignIn, klausGatewayReplyWait, threadLine(msgs))
+		return "", fmt.Errorf("the unlinked %s got no sign-in prompt (a %s button shown to them) within %s; the thread shows: %s", user, slackActionSignIn, klausGatewayReplyWait, threadLine(msgs))
 	}
 	link, _ := button[slackKeyURL].(string)
 	if !strings.Contains(link, musterlink.LinkPath) {

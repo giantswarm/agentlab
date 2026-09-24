@@ -128,7 +128,6 @@ const (
 	// start a conversation (the reason follows it).
 	slackNotRunnable = "cannot start a conversation right now"
 	slackNotStarted  = "I haven't started anything"
-	slackSignInLine  = "I need a sign-in before I can act here"
 	slackStopped     = "⏹ Stopped."
 	slackApprovedBy  = "Approved by <@"
 	slackDeniedBy    = "Denied by <@"

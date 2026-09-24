@@ -631,7 +631,7 @@ anywhere in the run fails the proof.
 
 **Deployment shape.** The gateway runs **out of cluster, on the host** —
 the released image on the host network by default
-(`--gateway-image`, `gsoci.azurecr.io/giantswarm/klaus-gateway:3.3.0`), or a
+(`--gateway-image`, `gsoci.azurecr.io/giantswarm/klaus-gateway:3.5.1`), or a
 local build (`--gateway-binary`, the proof of a branch) — with `a2a.url` =
 the lab's public gRPC target `grpcs://agentgateway.<domain>:<gatewayPort>`
 (TLS with the lab CA from `certs/ca.crt`; the JWT `Strict` policy of the
@@ -674,9 +674,9 @@ admission label.
    `@bot /agent agentlab-klaus-gateway-test-unadmitted …` is answered with
    `… cannot start a conversation right now: no Harness admits this
    AgentTemplate … I haven't started anything.` and the controller lists no
-   `AgentInstance` of it; a person with no link is answered with the thread's
-   sign-in notice and an ephemeral Sign in button to the gateway's
-   `/auth/slack/link`, and reaches no controller.
+   `AgentInstance` of it; a person with no link is shown a Sign in button
+   (`obo_sign_in`, ephemeral) to the gateway's `/auth/slack/link` and
+   reaches no controller.
 2. **One turn**: the thread's first mention streams the answer
    (`chat.startStream` … `stopStream`) under the template's display name and
    icon; the gateway's `instance_bound` record names the `AgentInstance`, and

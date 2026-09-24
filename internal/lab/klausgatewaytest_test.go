@@ -455,7 +455,7 @@ func (g *scriptedGateway) onMessage(ev map[string]string) {
 	text := strings.TrimPrefix(ev[slackKeyText], "<@"+slackFakeBotUser+"> ")
 	switch {
 	case user == g.stranger:
-		g.post(channel, thread, "🔒 "+slackSignInLine+". I've posted the link privately to whoever asked.")
+		g.post(channel, thread, "Waiting for <@"+user+"> to sign in")
 		g.api(slackPostEphemeral, map[string]any{slackKeyChannel: channel, slackKeyThreadTS: thread, slackKeyUser: user, slackKeyText: "Sign in",
 			slackKeyBlocks: []any{map[string]any{fieldTypeKey: slackBlockActions, slackKeyElements: []any{map[string]any{fieldTypeKey: slackButton, slackKeyActionID: slackActionSignIn, slackKeyURL: "http://gw" + musterlink.LinkPath + "?u=x"}}}}})
 		return
