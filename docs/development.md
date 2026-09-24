@@ -29,7 +29,9 @@ The kagent API v2 client stubs the proofs call (`internal/kagent/gen`,
 controller's protos under `hack/kagent-proto/` (with Agent Substrate's
 `ateapi.proto`, which `system.proto` imports), pinned to a commit of the
 kagent line the platform release resolves (`KAGENT_PROTO_COMMIT` in
-`Makefile.custom.mk`). The
+`Makefile.custom.mk`). `hack/kagent-proto/agentlab/` is the lab's own: the
+kagent 1.0 line's `GetSubstrateStatus` messages, which `skills-test` falls
+back to when a controller answers `GetSubstrateSummary` Unimplemented. The
 A2A v1 service comes from the `a2a-go/v2` module the controller itself is
 built with. To move the pin: set the commit, `make generate-kagent` (needs
 `buf`, `protoc-gen-go`, `protoc-gen-go-grpc` on the PATH), commit the protos

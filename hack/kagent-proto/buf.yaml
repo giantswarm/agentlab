@@ -2,7 +2,8 @@
 # The files under kagent/ and ateapi.proto (Agent Substrate's API, which
 # system.proto imports) are verbatim copies from giantswarm/kagent-upstream
 # at KAGENT_PROTO_COMMIT in ../../Makefile.custom.mk;
-# `make generate-kagent` refreshes both.
+# `make generate-kagent` refreshes both. agentlab/ is the lab's own: the
+# kagent 1.0 line's GetSubstrateStatus messages, which 1.1 no longer ships.
 version: v2
 modules:
   - path: .
@@ -12,6 +13,7 @@ lint:
   use:
     - STANDARD
   ignore:
+    - agentlab
     - ateapi.proto
 breaking:
   use:

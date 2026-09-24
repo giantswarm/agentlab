@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+// SystemService/GetSubstrateStatus as the kagent 1.0 line serves it, which
+// the 1.1 line replaced with GetSubstrateSummary and ListSubstrateActors.
+// Only the messages, under agentlab's own package so they do not collide
+// with kagent.api.v1alpha1's registry names: the client invokes the method
+// by its wire path. Field numbers are the 1.0 line's; fields agentlab does
+// not read are left out.
+package agentlab.kagentv10;
+
+message GetSubstrateStatusRequest {
+  string namespace = 1;
+}
+
+message GetSubstrateStatusResponse {
+  string ate_api_error = 2;
+  repeated SubstrateWorkerPool worker_pools = 3;
+  repeated SubstrateActorTemplate actor_templates = 4;
+  repeated SubstrateActor actors = 5;
+}
+
+message SubstrateWorkerPool {
+  string namespace = 1;
+  string name = 2;
+  int32 replicas = 3;
+  string ateom_image = 4;
+}
+
+message SubstrateActorTemplate {
+  string namespace = 1;
+  string name = 2;
+  string phase = 3;
+  string golden_snapshot = 5;
+}
+
+message SubstrateActor {
+  string actor_id = 1;
+  string status = 3;
+  string actor_template_namespace = 4;
+  string actor_template_name = 5;
+  string ateom_pod_namespace = 6;
+  string ateom_pod_name = 7;
+  string ateom_pod_ip = 8;
+}
