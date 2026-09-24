@@ -63,17 +63,22 @@ same name — and the environment file with it.
 
 ## Recording the image's golden PCR values
 
-A freshly built image's `policy.json` carries PCR 11 (the UKI) and PCR 13
-(the Kubernetes sysext) but no golden values for the firmware PCRs, and
-vm-manager's verifier rejects every quote until they exist — so the proof
-boots its VM with `require_attestation: false` and says so. The firmware is
-the **pod's** OVMF (Ubuntu 26.04's, inside the vm-manager image), not the
-host's: values recorded for another firmware fail every quote (`golden
-mismatch` on PCRs 0 and 7) and the VM never releases its user-data. Record
-them once per guest image and vm-manager image, through the lab's identity,
-inside the pod — the image directory is the pod's state volume, and the
-pod's environment makes `vm-manager image golden` default to the pod's server
-and directory:
+A released guest image artifact (vm-manager 0.23.0 and later, the pod's
+default when `platform.vmManager.imageDir` is unset) carries the golden
+values its release pipeline recorded for the same release's firmware
+(`golden.sha256` and `golden_firmware` in its `policy.json`): the pod
+verifies both quotes of its first VM, nothing to record. A local build
+(`imageDir`) carries PCR 11 (the UKI) and PCR 13 (the Kubernetes sysext) but
+no golden values for the firmware PCRs, and vm-manager's verifier rejects
+every quote until they exist — so the proof boots its VM with
+`require_attestation: false` and says so. The firmware is the **pod's** OVMF
+(Ubuntu 26.04's, inside the vm-manager image), not the host's: values
+recorded for another firmware fail every quote (`golden mismatch` on PCRs 0
+and 7, naming the build they were recorded for) and the VM never releases
+its user-data. For a local build, record them once per guest image and
+vm-manager image, through the lab's identity, inside the pod — the image
+directory is the pod's state volume, and the pod's environment makes
+`vm-manager image golden` default to the pod's server and directory:
 
 ```sh
 # 1. one boot in learn mode: the pod accepts the golden PCRs it has no value for
@@ -127,7 +132,9 @@ were, and every quote then fails with `golden mismatch: pcr 0`
 (`vm-manager-test` names this at `get_vm_attestation`, with this recipe as
 the fix). `get_host` reports the build the pod boots with as `firmware` (the
 code image's SHA-256, the package and version), and `vm-manager-test` prints
-it next to the host; record the values again after every change of it.
+it next to the host. A release that moves the pin ships values for the new
+build in its guest image artifact; a local build's values are recorded again
+after every change of it.
 Before the pin, 0.20.2 → 0.21.0 moved the unpinned `ovmf` from
 `2025.11-3ubuntu7` to `2025.11-3ubuntu7.2` and changed PCR 0 alone (PCRs 2,
 3, 4, 7 and 13 kept their values).
