@@ -31,6 +31,7 @@ func TestExtraModelsTemplate(t *testing.T) {
 		{Name: "claude-proxy", Provider: config.ProviderAnthropic, Model: "claude-haiku-4-5", BaseURL: "https://proxy.example.com"},
 		{Name: "ollama-v1", Provider: config.ProviderOpenAI, Model: "qwen3.5:2b", BaseURL: "http://172.21.0.1:11434/v1", ReasoningEffort: "none"},
 		{Name: "gpt-low", Provider: config.ProviderOpenAI, Model: "gpt-5", ReasoningEffort: "low"},
+		{Name: "ollama-native", Provider: config.ProviderOllama, Model: "qwen3.5:2b", BaseURL: "http://172.21.0.1:11434", Think: new(false)},
 	}
 	raw, err := renderTemplate(cfg, "extra-models.yaml.tmpl", nil)
 	if err != nil {
@@ -69,6 +70,12 @@ func TestExtraModelsTemplate(t *testing.T) {
 	}
 	if strings.Count(out, "reasoningEffort:") != 2 {
 		t.Errorf("reasoningEffort rendered for entries that set none:\n%s", out)
+	}
+	if !strings.Contains(out, "ollama:\n    host: http://172.21.0.1:11434\n    think: false") {
+		t.Errorf("an Ollama entry's think must render under ollama:\n%s", out)
+	}
+	if strings.Count(out, "think:") != 1 {
+		t.Errorf("think rendered for entries that set none:\n%s", out)
 	}
 	if strings.Count(out, "kind: ModelConfig") != len(cfg.Platform.ExtraModels) {
 		t.Errorf("want %d ModelConfigs:\n%s", len(cfg.Platform.ExtraModels), out)

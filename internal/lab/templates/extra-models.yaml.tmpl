@@ -34,6 +34,9 @@ spec:
 {{- if eq .Provider "Ollama" }}
   ollama:
     host: {{ .BaseURL }}
+{{- if .Think }}
+    think: {{ .Think }}
+{{- end }}
 {{- else if eq .Provider "Anthropic" }}
 {{- if .BaseURL }}
   anthropic:
