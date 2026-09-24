@@ -224,8 +224,8 @@ github.com/fxamacker/cbor/v2 v2.9.1 h1:2rWm8B193Ll4VdjsJY28jxs70IdDsHRWgQYAI80+r
 github.com/fxamacker/cbor/v2 v2.9.1/go.mod h1:vM4b+DJCtHn+zz7h3FFp/hDAI9WNWCsZj23V5ytsSxQ=
 github.com/giantswarm/klaus-gateway v1.21.0 h1:sIdKo97SBYCavdAf2jyMpTTtOmep/b6otknbGpeHAVI=
 github.com/giantswarm/klaus-gateway v1.21.0/go.mod h1:aloyluB8BZMszj7iQ1Ku6YZBZA+lQC6CerEJvzYIHtE=
-github.com/giantswarm/selfupdate-cosign v0.2.3 h1:LLGjbTnXLdhA5TZ9QeRYLDPRA7pgVZwZw+cnL+wqBkI=
-github.com/giantswarm/selfupdate-cosign v0.2.3/go.mod h1:CVnryjSRY/xDqJDn+QeivgT8+WkOvVbY/Z+xLaIfZ1w=
+github.com/giantswarm/selfupdate-cosign v0.3.0 h1:2KsmzvqV0QzQsPHXJk48xfLUwv0DNmhZLju++iNgkos=
+github.com/giantswarm/selfupdate-cosign v0.3.0/go.mod h1:CVnryjSRY/xDqJDn+QeivgT8+WkOvVbY/Z+xLaIfZ1w=
 github.com/giantswarm/telemetrydeck-go v0.3.0 h1:hgmySEd5P6D78ZoUcNBKB/xaEBhtF9yGa8xhuQUrc1g=
 github.com/giantswarm/telemetrydeck-go v0.3.0/go.mod h1:BitlH7nTrQmWvVEtnAa8pNM+FjI0+9S7JA9tl1PVvzo=
 github.com/giantswarm/vm-manager v0.23.0 h1:uI9Y7NVNc5VZtpWygfq4Tu017wYl2E+EXQAXPHXEAAw=
