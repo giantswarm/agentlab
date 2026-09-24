@@ -65,6 +65,10 @@ func TestDevTagFilter(t *testing.T) {
 	}
 }
 
+// newestSuperseded is the branch's newest build of the superseded shape
+// among the tags below.
+const newestSuperseded = "3.22.1-dev.poc-kagent-main.2026-09-10.08-12-33.h7f841be"
+
 // Among a repository's tags the newest dev build of the branch wins: a later
 // timestamp beats an earlier one whatever the list order, a higher base
 // version beats a lower one, releases and other branches never count.
@@ -72,7 +76,7 @@ func TestPickDevTag(t *testing.T) {
 	tags := []string{
 		"3.22.0",
 		"3.21.2",
-		"3.22.1-dev.poc-kagent-main.2026-09-10.08-12-33.h7f841be",
+		newestSuperseded,
 		"3.22.1-dev.poc-kagent-main.2026-09-09.20-23-54.h28f7f50",
 		"3.22.1-dev.renovate-axios-1-x.2026-09-11.19-47-39.h4fb8c37",
 		"3.22.1-dev.poc-kagent-main-2.2026-09-12.10-00-00.haaaaaaa",
@@ -80,7 +84,7 @@ func TestPickDevTag(t *testing.T) {
 		"not-a-version",
 	}
 	got, ok := pickDevTag(tags, devChannelBranch)
-	if !ok || got != "3.22.1-dev.poc-kagent-main.2026-09-10.08-12-33.h7f841be" {
+	if !ok || got != newestSuperseded {
 		t.Errorf("pickDevTag = %q, %v; want the 2026-09-10 build", got, ok)
 	}
 	// A newer base version (the branch rebased over a release) beats an
@@ -115,7 +119,7 @@ func TestPickDevTag(t *testing.T) {
 	// its ancestry below the release it used to count from) does not
 	// outrank the superseded build of the higher base: semver order rules,
 	// as it does for Flux.
-	if got, _ := pickDevTag(append(tags, "3.21.3-rd384adaft20260924043558hcde53c0"), devChannelBranch); got != "3.22.1-dev.poc-kagent-main.2026-09-10.08-12-33.h7f841be" {
+	if got, _ := pickDevTag(append(tags, "3.21.3-rd384adaft20260924043558hcde53c0"), devChannelBranch); got != newestSuperseded {
 		t.Errorf("a lower base loses whatever its shape: %q", got)
 	}
 	if _, ok := pickDevTag(tags, "main"); ok {
