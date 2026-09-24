@@ -72,7 +72,10 @@ Two practical notes for self-hosted endpoints: the URL must be reachable
 field for it), and `Ollama` requires one (its `host`) and is keyless. An
 `OpenAI` entry may set `reasoningEffort` (`none`, `minimal`, `low`,
 `medium`, `high` or `xhigh`), rendered as the ModelConfig's
-`openAI.reasoningEffort`; `none` switches a local model's thinking off (see
+`openAI.reasoningEffort`, and an `Ollama` entry may set `think` (`true` or
+`false`, kagent 1.0.3 or newer), rendered as the ModelConfig's
+`ollama.think`; `reasoningEffort: none` and `think: false` switch a local
+model's thinking off (see
 [Agent proofs without an Anthropic key](#agent-proofs-without-an-anthropic-key)).
 Providers needing more than a model + endpoint + key (AzureOpenAI, Bedrock,
 Vertex) are out of the lab's vocabulary — create their ModelConfigs by hand.
@@ -207,8 +210,9 @@ instead of waiting for the load.
 `toolsets-test`, `skills-test` and `klaus-gateway-test` run their agents on
 `default-model-config`, the Anthropic ModelConfig. Without
 `$ANTHROPIC_API_KEY`, pass `--model-config <name>` to run them on a model
-on the host. A CPU does it with **`qwen3.5:2b`** (2.7 GB) on Ollama's `/v1`
-alias, with the model's thinking switched off:
+on the host. A CPU does it with **`qwen3.5:2b`** (2.7 GB) on Ollama, with
+the model's thinking switched off, on kagent's native `Ollama` provider or
+on Ollama's `/v1` alias:
 
 ```bash
 ollama pull qwen3.5:2b
@@ -218,6 +222,11 @@ ollama pull qwen3.5:2b
 platform:
   extraModels:
     - name: qwen35-2b
+      provider: Ollama
+      model: qwen3.5:2b
+      baseUrl: http://172.21.0.1:11434
+      think: false              # thinking off, see below
+    - name: qwen35-2b-v1
       provider: OpenAI
       model: qwen3.5:2b
       baseUrl: http://172.21.0.1:11434/v1
@@ -229,28 +238,39 @@ agentlab platform
 agentlab skills-test --model-config qwen35-2b
 ```
 
-On a 12-core Zen 5 laptop CPU with no GPU, Ollama limited to 8 cores and
-set to `OLLAMA_CONTEXT_LENGTH=32768`, `skills-test` passes in 41 s. Its turn
-is three model calls of 1.8k, 2.0k and 2.8k tokens: 15 s for the first,
-cold, and 5–10 s for each of the others. The loaded model takes 2.8 GB with
-the 32k context. Apply the context-length note above first. `skills-test`'s
-agent binds no tools and stays under 4,096 tokens, but an agent with
-muster's tools carries their schemas on top, and every tool result makes
-the conversation longer.
+On a 12-core Zen 5 laptop CPU with no GPU, Ollama on 8 of its cores with
+8 threads and `OLLAMA_CONTEXT_LENGTH=32768`, `skills-test` passes in under a
+minute. Its turn is three model calls of 1.8k to 2.8k tokens, 3–6 s each
+once the model is loaded, the whole turn 7–13 s. The two entries do equally
+well: five runs each passed 4 on the native provider and 3 on the `/v1`
+alias, and every miss was the 2B model leaving the skill's answer out of a
+reply it did give. The loaded model takes 2.8 GB with the 32k context.
+Apply the context-length note above first. `skills-test`'s agent binds no
+tools and stays under 4,096 tokens, but an agent with muster's tools carries
+their schemas on top, and every tool result makes the conversation longer.
 
 - **Thinking has to be off.** Qwen3.5, Qwen3 and Granite 4.2 think by
-  default under Ollama, and kagent's native `Ollama` provider cannot turn
-  that off: it sends no `think` field and drops the model's thinking text.
-  On `skills-test`, `qwen3.5:2b` then calls both tools correctly, but writes
-  its answer only into its thinking, and the agent returns an empty one.
-  `granite4.2:3b` does answer, but it thinks 1,500–2,000 tokens a call,
-  which takes 2–3 minutes each on a CPU and misses the proof's 180 s turn
-  bound. On the `/v1` alias, `reasoningEffort: none` reaches Ollama as
-  `reasoning_effort` and switches thinking off. It needs the kagent line
-  (meta chart 4.x): the 3.x chart's kagent refuses `none`.
-- **The ModelConfigs model-manager wires** use the native `Ollama` provider,
-  so a thinking model answers empty there too. Use the entry above for the
-  proofs.
+  default under Ollama. With thinking on, `qwen3.5:2b` calls both tools
+  correctly on `skills-test` but writes its answer only into its thinking,
+  and the agent returns an empty reply. `granite4.2:3b` does answer, but it
+  thinks 1,500–2,000 tokens a call, which takes 2–3 minutes each on a CPU
+  and misses the proof's 180 s turn bound. `think: false` on an `Ollama`
+  entry is sent as the chat request's `think` field; it needs kagent 1.0.3
+  or newer, whose ModelConfig CRD has `ollama.think`. `reasoningEffort:
+  none` on the `/v1` alias reaches Ollama as `reasoning_effort`; it needs
+  the kagent line (meta chart 4.x), since the 3.x chart's kagent refuses
+  `none`.
+- **Ollama's threads follow the host, not a core limit.** Ollama starts one
+  thread per physical core of the host, also under `taskset` or in a
+  container with a cpuset. Limited to 8 of 12 cores it still runs 12
+  threads (`n_threads = 12` in its log), and a call of the same turn takes
+  47 s to 2 min instead of 3–6 s. Give it `num_thread` for the cores it
+  has: a Modelfile with `PARAMETER num_thread 8` on top of the model
+  (`ollama create`), which every provider then gets.
+- **The ModelConfigs model-manager wires** use the native `Ollama` provider
+  without `think`, so a thinking model answers empty there
+  ([giantswarm/model-manager#161](https://github.com/giantswarm/model-manager/issues/161)).
+  Use one of the entries above for the proofs.
 - **Why `qwen3.5:2b`.** It passed five tool-calling cases, each run five
   times against Ollama on the same CPU with thinking off: pick a tool and
   its arguments, a three-argument call, an enum argument, no call when none

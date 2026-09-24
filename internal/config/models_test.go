@@ -8,6 +8,12 @@ import (
 func TestExtraModelValidate(t *testing.T) {
 	valid := ExtraModel{Name: "qwen3-8-27b", Provider: ProviderOpenAI, Model: "qwen3-8-27b",
 		BaseURL: "http://192.168.1.10:8000/v1"}
+	// ollama turns the valid entry into a valid Ollama one.
+	ollama := func(m ExtraModel) ExtraModel {
+		m.Provider = ProviderOllama
+		m.BaseURL = "http://h:11434"
+		return m
+	}
 
 	cases := []struct {
 		name    string
@@ -50,21 +56,13 @@ func TestExtraModelValidate(t *testing.T) {
 			m.BaseURL = ""
 			return m
 		}, "requires baseUrl"},
-		{"ollama with key env", func(m ExtraModel) ExtraModel {
-			m.Provider = ProviderOllama
-			m.BaseURL = "http://h:11434"
-			m.APIKeyEnv = "X"
-			return m
-		}, "keyless"},
+		{"ollama with key env", func(m ExtraModel) ExtraModel { m = ollama(m); m.APIKeyEnv = "X"; return m }, "keyless"},
 		{"bad key env", func(m ExtraModel) ExtraModel { m.APIKeyEnv = "not a var"; return m }, "environment variable"},
 		{"openai reasoning effort none", func(m ExtraModel) ExtraModel { m.ReasoningEffort = "none"; return m }, ""},
 		{"unknown reasoning effort", func(m ExtraModel) ExtraModel { m.ReasoningEffort = "maximal"; return m }, "unknown reasoningEffort"},
-		{"reasoning effort on ollama", func(m ExtraModel) ExtraModel {
-			m.Provider = ProviderOllama
-			m.BaseURL = "http://h:11434"
-			m.ReasoningEffort = "none"
-			return m
-		}, "OpenAI provider only"},
+		{"ollama think off", func(m ExtraModel) ExtraModel { m = ollama(m); m.Think = new(false); return m }, ""},
+		{"think on openai", func(m ExtraModel) ExtraModel { m.Think = new(false); return m }, "Ollama provider only"},
+		{"reasoning effort on ollama", func(m ExtraModel) ExtraModel { m = ollama(m); m.ReasoningEffort = "none"; return m }, "OpenAI provider only"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

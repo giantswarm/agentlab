@@ -555,9 +555,14 @@ type ExtraModel struct {
 	InsecureTLS bool `yaml:"insecureTLS,omitempty"`
 	// OpenAI provider only: the ModelConfig's openAI.reasoningEffort, sent as
 	// reasoning_effort with every call. `none` switches a thinking model's
-	// reasoning off on Ollama's /v1 alias, which kagent's native Ollama
-	// provider cannot (docs/models.md "Agent proofs without an Anthropic key").
+	// reasoning off on Ollama's /v1 alias.
 	ReasoningEffort string `yaml:"reasoningEffort,omitempty"`
+	// Ollama provider only: the ModelConfig's ollama.think, sent as the chat
+	// request's think field. false switches a thinking model's reasoning off
+	// on kagent's native Ollama provider (docs/models.md "Agent proofs without
+	// an Anthropic key"); unset leaves Ollama's default, under which a model
+	// with the thinking capability thinks.
+	Think *bool `yaml:"think,omitempty"`
 }
 
 // The provider vocabulary for extra models, spelled exactly as the kagent
@@ -848,6 +853,9 @@ func (m ExtraModel) Validate() error {
 	}
 	if key == "" && m.APIKeyEnv != "" {
 		return fmt.Errorf("%s: %s is keyless — apiKeyEnv would be silently ignored", m.Name, m.Provider)
+	}
+	if m.Think != nil && m.Provider != ProviderOllama {
+		return fmt.Errorf("%s: think applies to the Ollama provider only (the ModelConfig's ollama.think)", m.Name)
 	}
 	if m.ReasoningEffort != "" {
 		if m.Provider != ProviderOpenAI {
