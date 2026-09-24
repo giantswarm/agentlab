@@ -221,6 +221,24 @@ func TestSanitizeBranch(t *testing.T) {
 	}
 }
 
+// The branch fingerprint in a gitsemver 3 dev tag: the CRC32 of the full
+// branch name as eight lowercase hex digits, what `gitsemver branch-hash`
+// prints (the vectors are gitsemver's own and the lines' branches).
+func TestBranchHash(t *testing.T) {
+	for branch, want := range map[string]string{
+		"my-feature": "7b5b4fa7",
+		"renovate/update-all-dependencies-to-latest": "08a93c50",
+		mainBranch:                 "bf28cd64",
+		"giantswarm":               "588f3d76",
+		pocBranch:                  "d384adaf",
+		"Feat/Agent_Workspaces.v2": "93268861", // the raw name, never sanitized
+	} {
+		if got := BranchHash(branch); got != want {
+			t.Errorf("BranchHash(%q) = %q, want %q", branch, got, want)
+		}
+	}
+}
+
 // The dev channel: a branch must leave a name to match tags with, and it
 // excludes a local chart; the pin is meaningless without a branch.
 func TestChartBranchValidation(t *testing.T) {

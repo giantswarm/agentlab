@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"maps"
 	"os"
@@ -245,9 +246,11 @@ type Platform struct {
 	// chartVersion is ignored while set.
 	ChartPath string `yaml:"chartPath,omitempty"`
 	// ChartBranch selects the DEV CHANNEL: the lab follows the newest dev
-	// build of this agent-platform branch — the `X.Y.Z-dev.<branch>.<date>.
-	// <time>.h<sha>` prerelease tags gitsemver publishes for every commit of
-	// a branch with branch publishing on — instead of a release. `configure`,
+	// build of this agent-platform branch — the `X.Y.Z-r<branch-hash>t
+	// <YYYYMMDDHHMMSS>h<sha7>` prerelease tags gitsemver 3 publishes for every
+	// commit of a branch with branch publishing on (BranchHash; builds made
+	// before 2026-09-23 carry the superseded `X.Y.Z-dev.<branch>.<date>.
+	// <time>.h<sha>` shape, which is read too) — instead of a release. `configure`,
 	// `up` and `platform` resolve it against the chart registry's tags and
 	// write the tag they picked into chartVersion, so `render`, the image
 	// preload and a re-run install exactly what was resolved, and the boot
@@ -902,14 +905,15 @@ func (c *Config) Normalize() {
 // free as gitsemver's truncation marker.
 var branchSanitizeRe = regexp.MustCompile(`[^a-z0-9]+`)
 
-// SanitizeBranch spells a git branch the way gitsemver (v2.0.1,
-// sanitizeBranchName) embeds it in a dev version: lowercased, runs of
-// anything but [a-z0-9] collapsed to one hyphen, hyphens trimmed off both
-// ends — `poc/kagent-main` is `poc-kagent-main`. A purely numeric result
-// loses its leading zeros (a semver numeric identifier forbids them); an
-// empty result is gitsemver's "unknown". gitsemver may further shorten the
-// name to fit its 63-character version budget (head`--`tail), which the
-// dev-tag filter accounts for.
+// SanitizeBranch spells a git branch the way gitsemver 2 (sanitizeBranchName)
+// embedded it in the superseded dev shape `X.Y.Z-dev.<branch>.<date>.<time>.
+// h<sha>`, which the registry still holds: lowercased, runs of anything but
+// [a-z0-9] collapsed to one hyphen, hyphens trimmed off both ends —
+// `poc/kagent-main` is `poc-kagent-main`. A purely numeric result loses its
+// leading zeros (a semver numeric identifier forbids them); an empty result
+// is gitsemver's "unknown". gitsemver 2 may further have shortened the name
+// to fit its 63-character version budget (head`--`tail), which the dev-tag
+// filter accounts for. gitsemver 3 embeds BranchHash instead.
 func SanitizeBranch(branch string) string {
 	b := strings.Trim(branchSanitizeRe.ReplaceAllString(strings.ToLower(branch), "-"), "-")
 	if b == "" {
@@ -932,6 +936,15 @@ func allDigits(s string) bool {
 	return s != ""
 }
 
+// BranchHash is gitsemver 3's branch fingerprint, the `r<hash>` field of a
+// dev version: the CRC-32/ISO-HDLC checksum (Go's crc32.ChecksumIEEE) of the
+// full, unsanitized branch name as eight lowercase hex digits — what
+// `gitsemver branch-hash <branch>` prints. `main` is bf28cd64, `giantswarm`
+// 588f3d76.
+func BranchHash(branch string) string {
+	return fmt.Sprintf("%08x", crc32.ChecksumIEEE([]byte(branch)))
+}
+
 // ValidateChartBranch accepts a branch name that leaves something to match
 // a dev tag with; "" is the stable channel and always fine.
 func ValidateChartBranch(s string) error {
@@ -942,7 +955,7 @@ func ValidateChartBranch(s string) error {
 		return fmt.Errorf("must not have surrounding whitespace")
 	}
 	if SanitizeBranch(s) == "unknown" {
-		return fmt.Errorf("must contain a letter or digit (the dev tags carry the branch as a lowercase [a-z0-9-] name)")
+		return fmt.Errorf("must contain a letter or digit (a git branch name has one; the superseded dev tags carry the branch as a lowercase [a-z0-9-] name)")
 	}
 	return nil
 }

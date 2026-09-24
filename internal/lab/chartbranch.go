@@ -14,35 +14,47 @@ import (
 // names an agent-platform branch, and the lab follows that branch's newest
 // dev build — the chart gitsemver publishes for every commit of a branch
 // with branch publishing on (giantswarm/github `gen.ci.branchPublish`), the
-// way a Flux OCIRepository with `semver: "*-*"` and a `semverFilter` on the
-// branch would. Resolution happens where a version is chosen — `configure`,
-// `up`, `platform` — and writes the tag it picked into platform.chartVersion,
-// so everything downstream (the render, the image preload, the install, a
-// re-run, `helm history`) sees one exact version, as on the stable channel.
+// way a Flux OCIRepository with a prerelease-admitting range (`>=0.0.0-0`)
+// and a `semverFilter` on the branch would. Resolution happens where a
+// version is chosen — `configure`, `up`, `platform` — and writes the tag it
+// picked into platform.chartVersion, so everything downstream (the render,
+// the image preload, the install, a re-run, `helm history`) sees one exact
+// version, as on the stable channel.
 
-// devTagRe is the shape of gitsemver's (v2.0.1) dev prerelease:
-// `dev.<branch>.<YYYY-MM-DD>.<HH-MM-SS>[.h<sha7>]`, the branch a lowercase
-// [a-z0-9-] name (config.SanitizeBranch), possibly shortened with a `--`
-// marker in its middle to fit gitsemver's 63-character version budget. The
-// date and time compare lexically per semver identifier, so within a branch
-// the highest version is the newest build.
-var devTagRe = regexp.MustCompile(`^dev\.([a-z0-9-]+)\.\d{4}-\d{2}-\d{2}\.\d{2}-\d{2}-\d{2}(?:\.h[0-9a-f]{7})?$`)
+// devTagRe is the shape of gitsemver 3's dev prerelease, what architect-orb
+// 10.10.0 and later stamp: `r<branch-hash>t<YYYYMMDDHHMMSS>h<sha7>` — the
+// CRC32 of the branch name (config.BranchHash), the committer time in UTC
+// and the short commit; 33 characters, no `.` and no `-`. For one branch
+// the `r<hash>t` prefix is constant, so within a branch the highest version
+// is the newest build.
+var devTagRe = regexp.MustCompile(`^r([0-9a-f]{8})t\d{14}h[0-9a-f]{7}$`)
 
-// devTruncationMarker is what gitsemver puts in place of a long branch
+// supersededDevTagRe is the shape of gitsemver 2's dev prerelease, stamped
+// until 2026-09-23: `dev.<branch>.<YYYY-MM-DD>.<HH-MM-SS>[.h<sha7>]`, the
+// branch a lowercase [a-z0-9-] name (config.SanitizeBranch), possibly
+// shortened with a `--` marker in its middle to fit gitsemver's 63-character
+// version budget. The registry keeps those tags, and a branch not pushed
+// since the move has no others, so the filter still reads them; at one
+// X.Y.Z a current tag sorts above a superseded one (`r` > `d`).
+var supersededDevTagRe = regexp.MustCompile(`^dev\.([a-z0-9-]+)\.\d{4}-\d{2}-\d{2}\.\d{2}-\d{2}-\d{2}(?:\.h[0-9a-f]{7})?$`)
+
+// devTruncationMarker is what gitsemver 2 put in place of a long branch
 // name's dropped middle.
 const devTruncationMarker = "--"
 
 // devTagFilter is THE definition of "a dev build of this branch": the
-// predicate a chart version's prerelease must satisfy. Today it reads
-// gitsemver's `dev.<sanitized branch>.<date>.<time>.h<sha>` schema (the
-// one architect ships); the RFC's successor schema
-// `-b<crc32(branch) 8 hex>t<YYYYMMDDHHMMSS>c<sha7>` is switched here, in
-// this one function, when gitsemver ships it — nothing else in the lab
-// knows what a dev tag looks like.
+// predicate a chart version's prerelease must satisfy — gitsemver 3's
+// `r<branch-hash>t<time>h<sha>` carrying the branch's hash, or the
+// superseded `dev.<sanitized branch>.<date>.<time>.h<sha>` carrying its
+// sanitized name. Nothing else in the lab knows what a dev tag looks like.
 func devTagFilter(branch string) func(prerelease string) bool {
+	hash := config.BranchHash(branch)
 	want := config.SanitizeBranch(branch)
 	return func(prerelease string) bool {
-		m := devTagRe.FindStringSubmatch(prerelease)
+		if m := devTagRe.FindStringSubmatch(prerelease); m != nil {
+			return m[1] == hash
+		}
+		m := supersededDevTagRe.FindStringSubmatch(prerelease)
 		if m == nil {
 			return false
 		}
@@ -50,7 +62,7 @@ func devTagFilter(branch string) func(prerelease string) bool {
 		if got == want {
 			return true
 		}
-		// gitsemver keeps a long branch's head and tail around the marker;
+		// gitsemver 2 kept a long branch's head and tail around the marker;
 		// a sanitized name never contains "--" itself, so the marker is
 		// unambiguous. Either side may be empty when the budget was tight.
 		head, tail, truncated := strings.Cut(got, devTruncationMarker)
@@ -112,10 +124,11 @@ func ResolveChartVersion(cfg *config.Config) (changed bool, err error) {
 	}
 	tag, ok := pickDevTag(tags, branch)
 	if !ok {
-		return false, fmt.Errorf("no dev build of branch %s in %s (no tag of the form X.Y.Z-dev.%s.<date>.<time>.h<sha> among %d);\n"+
+		hash := config.BranchHash(branch)
+		return false, fmt.Errorf("no dev build of branch %s in %s (no tag of the form X.Y.Z-r%st<YYYYMMDDHHMMSS>h<sha7> — gitsemver's dev shape, r%s the hash of the branch name — among %d);\n"+
 			"either the branch's publish has not run yet (agent-platform needs `gen.ci.branchPublish` in giantswarm/github and a commit on the branch),\n"+
 			"or pin a build by hand: `agentlab configure --chart-version <full dev tag>` after `--chart-branch \"\"`",
-			branch, config.ChartRepository, config.SanitizeBranch(branch), len(tags))
+			branch, config.ChartRepository, hash, hash, len(tags))
 	}
 	changed = tag != cfg.Platform.ChartVersion
 	cfg.Platform.ChartVersion = tag

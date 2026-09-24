@@ -8,13 +8,17 @@ import (
 // branch whose meta chart builds carry kagent API v2.
 const devChannelBranch = "poc/kagent-main"
 
-// The dev-channel filter reads gitsemver's dev tags: a branch's own builds,
-// spelled with its sanitized name, in either the full or the `--`-shortened
-// form; never a release, never a sibling branch whose sanitized name shares
-// a prefix, never a renovate branch.
+// The dev-channel filter reads gitsemver's dev tags: a branch's own builds
+// in gitsemver 3's shape, carrying the branch's hash (`gitsemver branch-hash
+// poc/kagent-main` is d384adaf), or in the superseded shape, spelled with
+// its sanitized name in either the full or the `--`-shortened form; never a
+// release, never another branch's hash, never a sibling branch whose
+// sanitized name shares a prefix, never a renovate branch.
 func TestDevTagFilter(t *testing.T) {
 	matches := devTagFilter(devChannelBranch)
 	for _, ok := range []string{
+		"rd384adaft20260924043558hcde53c0",
+		"rd384adaft20260101000000h0000000",
 		"dev.poc-kagent-main.2026-09-09.20-23-54.h28f7f50",
 		"dev.poc-kagent-main.2026-09-10.08-12-33",
 	} {
@@ -25,6 +29,13 @@ func TestDevTagFilter(t *testing.T) {
 	for _, bad := range []string{
 		"",
 		"rc.1",
+		"rbf28cd64t20260924043558hcde53c0",  // main's hash
+		"r15b36cd0t20260924043558hcde53c0",  // renovate/axios-1.x's hash
+		"rD384ADAFt20260924043558hcde53c0",  // gitsemver prints lowercase hex
+		"rd384adaft2026092404355hcde53c0",   // 13 digits: not a time stamp
+		"rd384adaft20260924043558cde53c0",   // no h before the commit
+		"rd384adaft20260924043558hcde53c0x", // nothing after the 7 hex digits
+		"rd384adaf.t20260924043558hcde53c0", // no dots: one identifier
 		"dev.poc-kagent-main-2.2026-09-09.20-23-54.h28f7f50",
 		"dev.poc-kagent.2026-09-09.20-23-54.h28f7f50",
 		"dev.renovate-axios-1-x.2026-09-09.19-47-39.h4fb8c37",
@@ -81,6 +92,31 @@ func TestPickDevTag(t *testing.T) {
 	}
 	if got, ok := pickDevTag(tags, "renovate/axios-1.x"); !ok || got != "3.22.1-dev.renovate-axios-1-x.2026-09-11.19-47-39.h4fb8c37" {
 		t.Errorf("renovate branch: %q, %v", got, ok)
+	}
+
+	// The branch's first build after the move to gitsemver 3 carries the
+	// same base and a prerelease that sorts above every superseded one
+	// (`r` > `d`), so the channel moves onto it; among current builds the
+	// fixed-width time stamps order them, and another branch's hash at a
+	// later time never counts.
+	current := append(tags,
+		"3.22.1-rd384adaft20260923221721h39c3e43",
+		"3.22.1-rd384adaft20260924043558hcde53c0",
+		"3.22.1-rbf28cd64t20260925000000h1111111",
+		"3.22.1-r15b36cd0t20260925000000h2222222",
+	)
+	if got, ok := pickDevTag(current, devChannelBranch); !ok || got != "3.22.1-rd384adaft20260924043558hcde53c0" {
+		t.Errorf("the newest current build must win: %q, %v", got, ok)
+	}
+	if got, ok := pickDevTag(current, "renovate/axios-1.x"); !ok || got != "3.22.1-r15b36cd0t20260925000000h2222222" {
+		t.Errorf("renovate branch, current shape: %q, %v", got, ok)
+	}
+	// A current build of a lower base (the branch's re-pin or rebase moved
+	// its ancestry below the release it used to count from) does not
+	// outrank the superseded build of the higher base: semver order rules,
+	// as it does for Flux.
+	if got, _ := pickDevTag(append(tags, "3.21.3-rd384adaft20260924043558hcde53c0"), devChannelBranch); got != "3.22.1-dev.poc-kagent-main.2026-09-10.08-12-33.h7f841be" {
+		t.Errorf("a lower base loses whatever its shape: %q", got)
 	}
 	if _, ok := pickDevTag(tags, "main"); ok {
 		t.Error("a branch without builds must not resolve")
