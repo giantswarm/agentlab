@@ -269,7 +269,9 @@ The stable channel is the pin above: `platform.chartVersion`, an exact
 release. The **dev channel** follows a branch of agent-platform instead —
 the dev builds gitsemver publishes for every commit of a branch that has
 branch publishing on (`gen.ci.branchPublish` in giantswarm/github): charts
-tagged `X.Y.Z-dev.<branch>.<YYYY-MM-DD>.<HH-MM-SS>.h<sha>` next to the
+tagged `X.Y.Z-r<branch-hash>t<YYYYMMDDHHMMSS>h<sha7>` (gitsemver 3's dev
+shape, since architect-orb 10.10.0 on 2026-09-23; builds before it carry
+`X.Y.Z-dev.<branch>.<YYYY-MM-DD>.<HH-MM-SS>.h<sha>`) next to the
 releases in `oci://gsoci.azurecr.io/charts/giantswarm/agent-platform`, each
 coupled to the images its commit built. That is how a chart change is
 verified before it is released: every lab installs the branch's newest build
@@ -287,7 +289,7 @@ agentlab platform-test && agentlab test && agentlab backstage-test
 `configure` resolves the branch right away and says what it picked:
 
 ```
-  chart      agent-platform 4.7.12-dev.my-feature.2026-09-11.08-12-33.h7f841be (branch my-feature, dev channel)
+  chart      agent-platform 4.66.5-r7b5b4fa7t20260911081233h7f841be (branch my-feature, dev channel)
 ```
 
 and `agentlab.yaml` carries both:
@@ -295,17 +297,23 @@ and `agentlab.yaml` carries both:
 ```yaml
 platform:
   chartBranch: my-feature   # the dev channel: chartVersion follows this branch's newest dev build
-  chartVersion: 4.7.12-dev.my-feature.2026-09-11.08-12-33.h7f841be   # written by the resolver
+  chartVersion: 4.66.5-r7b5b4fa7t20260911081233h7f841be   # written by the resolver
 ```
 
-How the resolution works: the branch is spelled the way gitsemver embeds it
-(lowercased, anything outside `[a-z0-9]` collapsed to one hyphen —
-`my/feature` is `my-feature`; a long name is shortened around a
-`--` marker, which the filter accepts too), the registry's tags are listed
-through the embedded Helm's registry client (anonymously, as pulls are), the
-tags whose prerelease is `dev.<that name>.…` are the branch's builds, and the
-highest semver among them is the newest — the pick a Flux `OCIRepository`
-with `semver: "*-*"` and a `semverFilter` on the branch makes. `up` and
+How the resolution works: the branch is fingerprinted the way gitsemver
+embeds it (the CRC32 of the full branch name as eight hex digits —
+`gitsemver branch-hash my-feature` prints `7b5b4fa7`), the registry's tags
+are listed through the embedded Helm's registry client (anonymously, as
+pulls are), the tags whose prerelease is `r7b5b4fa7t<14 digits>h<7 hex>` are
+the branch's builds — and so are the superseded
+`dev.my-feature.<date>.<time>.h<sha>` tags of builds made before 2026-09-23
+(the branch lowercased, anything outside `[a-z0-9]` one hyphen, a long name
+shortened around a `--` marker), which the registry keeps and a branch not
+pushed since has no others of — and the highest semver among them is the
+newest; at one `X.Y.Z` a current tag sorts above a superseded one. That is
+the pick a Flux `OCIRepository` with a prerelease-admitting range
+(`>=0.0.0-0`) and the branch's `semverFilter`
+(`^.*-r7b5b4fa7t[0-9]{14}h[0-9a-f]{7}$`) makes. `up` and
 `platform` re-resolve on every run, so the lab follows the branch like Flux
 would: a newer build is a new revision of the release on the next
 `agentlab platform`, the build the lab already runs is a no-op (`chart
@@ -325,16 +333,16 @@ proofs never resolve.
   `gen.ci.branchPublish` and a commit on the branch), or pin a tag by hand.
 - **The fallback that needs no resolver**: `platform.chartVersion` accepts a
   full dev tag as it is — `agentlab configure --chart-version
-  4.7.12-dev.my-feature.2026-09-11.08-12-33.h7f841be` validates and
+  4.66.5-r7b5b4fa7t20260911081233h7f841be` validates and
   Helm pulls that exact tag (look it up with `crane ls
-  gsoci.azurecr.io/charts/giantswarm/agent-platform | grep -- -dev.my-feature`).
+  gsoci.azurecr.io/charts/giantswarm/agent-platform | grep -- "-r$(gitsemver branch-hash my-feature)t"`).
   The lab then does not follow the branch.
 - `chartBranch` and `chartPath` are mutually exclusive: a local chart has no
   builds to follow.
 - The dev-tag schema lives in one place, `devTagFilter` in
-  `internal/lab/chartbranch.go`. When gitsemver ships the RFC's successor
-  schema (`X.Y.Z-b<crc32 of the branch>t<timestamp>c<sha>`), that function
-  switches and nothing else changes.
+  `internal/lab/chartbranch.go` (the hash in `config.BranchHash`): the
+  current shape and the superseded one, which goes when no branch's newest
+  build carries it any more.
 
 Component channels: agentlab sets nothing per component. A meta chart's dev
 build may carry a sibling's channel in its own values (the branch's
