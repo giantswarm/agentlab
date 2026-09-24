@@ -1,6 +1,7 @@
 # The kagent API v2 service protos the lab generates its client stubs from.
-# The files under kagent/ are verbatim copies from giantswarm/kagent-upstream
-# at the commit recorded in ../../internal/kagent/gen/README.md;
+# The files under kagent/ and ateapi.proto (Agent Substrate's API, which
+# system.proto imports) are verbatim copies from giantswarm/kagent-upstream
+# at KAGENT_PROTO_COMMIT in ../../Makefile.custom.mk;
 # `make generate-kagent` refreshes both.
 version: v2
 modules:
@@ -10,6 +11,8 @@ deps:
 lint:
   use:
     - STANDARD
+  ignore:
+    - ateapi.proto
 breaking:
   use:
     - FILE

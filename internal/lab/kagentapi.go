@@ -26,6 +26,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/giantswarm/agentlab/internal/config"
+	ateapi "github.com/giantswarm/agentlab/internal/kagent/gen"
 	apiv1alpha1 "github.com/giantswarm/agentlab/internal/kagent/gen/kagent/api/v1alpha1"
 )
 
@@ -70,6 +71,10 @@ const (
 	// the controller converges it synchronously, so the poll only covers a
 	// create that was interrupted and retried.
 	instanceReadyTimeout = 90 * time.Second
+	// substratePageSize is common.proto's cap on a page; substrateMaxPages
+	// bounds a walk the controller's tokens never end.
+	substratePageSize = 100
+	substrateMaxPages = 100
 
 	// The gRPC metadata of the contract (keys lower-case on the wire).
 	authorizationMetadata = "authorization"
@@ -268,17 +273,54 @@ func (a *kagentAPI) version(ctx context.Context) (*apiv1alpha1.GetVersionRespons
 	return resp, nil
 }
 
-// substrateStatus is SystemService/GetSubstrateStatus for one namespace: the
-// controller's view of Substrate — the WorkerPools, the ActorTemplates it
-// wrote (phase Pending, Ready or Failed, the golden snapshot), the actors
-// with their state and worker assignment, the pools' workers. What the
-// portal's Substrate page shows; the person needs get on Substrate.
-func (a *kagentAPI) substrateStatus(ctx context.Context, namespace string) (*apiv1alpha1.GetSubstrateStatusResponse, error) {
-	resp, err := a.system.GetSubstrateStatus(a.callCtx(ctx), &apiv1alpha1.GetSubstrateStatusRequest{Namespace: namespace})
+// substrateState is the controller's view of Substrate for one namespace:
+// the WorkerPools and every ActorTemplate (phase from its golden snapshot
+// status) from SystemService/GetSubstrateSummary, every actor with its state
+// and worker assignment from SystemService/ListSubstrateActors, all pages.
+// ateAPIErrors are the reads the controller could not make of ate-api, which
+// it answers beside the data rather than as a failed call. What the portal's
+// Substrate page shows; the person needs get on Substrate.
+type substrateState struct {
+	pools        []*apiv1alpha1.SubstrateWorkerPool
+	templates    []*ateapi.ActorTemplate
+	actors       []*ateapi.Actor
+	ateAPIErrors []string
+}
+
+// substrateState reads Substrate in every atespace: an actor's atespace need
+// not be its template's, so the filter is the caller's, on the template ref.
+func (a *kagentAPI) substrateState(ctx context.Context, namespace string) (substrateState, error) {
+	summary, err := a.system.GetSubstrateSummary(a.callCtx(ctx), &apiv1alpha1.GetSubstrateSummaryRequest{Namespace: namespace})
 	if err != nil {
-		return nil, fmt.Errorf("GetSubstrateStatus: %w", err)
+		return substrateState{}, fmt.Errorf("GetSubstrateSummary: %w", err)
 	}
-	return resp, nil
+	state := substrateState{pools: summary.GetWorkerPools(), templates: summary.GetActorTemplates()}
+	if e := summary.GetAteApiError(); e != "" {
+		state.ateAPIErrors = append(state.ateAPIErrors, e)
+	}
+	token := ""
+	for range substrateMaxPages {
+		page, err := a.system.ListSubstrateActors(a.callCtx(ctx), &apiv1alpha1.ListSubstrateActorsRequest{
+			Page: &apiv1alpha1.PageRequest{Limit: substratePageSize, PageToken: token},
+		})
+		if err != nil {
+			return substrateState{}, fmt.Errorf("ListSubstrateActors: %w", err)
+		}
+		if e := page.GetAteApiError(); e != "" {
+			state.ateAPIErrors = append(state.ateAPIErrors, e)
+			return state, nil
+		}
+		state.actors = append(state.actors, page.GetActors()...)
+		next := page.GetPage().GetNextPageToken()
+		if next == "" {
+			return state, nil
+		}
+		if next == token {
+			return substrateState{}, fmt.Errorf("ListSubstrateActors: the controller answered page token %q with itself", token)
+		}
+		token = next
+	}
+	return substrateState{}, fmt.Errorf("ListSubstrateActors: still paging after %d pages", substrateMaxPages)
 }
 
 // listTemplates is AgentTemplateService/ListAgentTemplates of the kagent

@@ -22,6 +22,7 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/types/known/structpb"
 
+	ateapi "github.com/giantswarm/agentlab/internal/kagent/gen"
 	apiv1alpha1 "github.com/giantswarm/agentlab/internal/kagent/gen/kagent/api/v1alpha1"
 )
 
@@ -59,6 +60,11 @@ type fakeKagent struct {
 	// compiling makes CreateAgentInstance answer FailedPrecondition that
 	// many times first.
 	compiling int
+
+	// substrate is the summary GetSubstrateSummary answers; actorPages the
+	// pages ListSubstrateActors walks, token "p<n>" naming page n.
+	substrate  *apiv1alpha1.GetSubstrateSummaryResponse
+	actorPages []*apiv1alpha1.ListSubstrateActorsResponse
 
 	calls    map[string][]metadata.MD
 	sent     []*a2a.Message
@@ -249,6 +255,34 @@ func (f *fakeKagent) ListAgentTemplates(ctx context.Context, req *apiv1alpha1.Li
 		}
 	}
 	return &apiv1alpha1.ListAgentTemplatesResponse{AgentTemplates: out}, nil
+}
+
+func (f *fakeKagent) GetSubstrateSummary(ctx context.Context, _ *apiv1alpha1.GetSubstrateSummaryRequest) (*apiv1alpha1.GetSubstrateSummaryResponse, error) {
+	f.record(ctx, "GetSubstrateSummary")
+	if _, err := edge(ctx); err != nil {
+		return nil, err
+	}
+	return f.substrate, nil
+}
+
+func (f *fakeKagent) ListSubstrateActors(ctx context.Context, req *apiv1alpha1.ListSubstrateActorsRequest) (*apiv1alpha1.ListSubstrateActorsResponse, error) {
+	f.record(ctx, "ListSubstrateActors")
+	if _, err := edge(ctx); err != nil {
+		return nil, err
+	}
+	if limit := req.GetPage().GetLimit(); limit > 100 {
+		return nil, status.Errorf(codes.InvalidArgument, "page.limit %d above 100", limit)
+	}
+	page := 0
+	if token := req.GetPage().GetPageToken(); token != "" {
+		if _, err := fmt.Sscanf(token, "p%d", &page); err != nil || page >= len(f.actorPages) {
+			return nil, status.Errorf(codes.InvalidArgument, "page token %q", token)
+		}
+	}
+	if len(f.actorPages) == 0 {
+		return &apiv1alpha1.ListSubstrateActorsResponse{}, nil
+	}
+	return f.actorPages[page], nil
 }
 
 func (f *fakeKagent) GetCurrentUser(ctx context.Context, _ *apiv1alpha1.GetCurrentUserRequest) (*apiv1alpha1.GetCurrentUserResponse, error) {
@@ -716,5 +750,65 @@ func TestKagentTarget(t *testing.T) {
 	}
 	if _, _, err := kagentTargetOf("not a url"); err == nil {
 		t.Error("a base URL without a host must fail")
+	}
+}
+
+// TestSubstrateState: the summary's pools and templates and every page of
+// actors ride the person's bearer; an empty page with a next token is walked
+// through; an ate-api error on either read is carried beside the data; a
+// token answered with itself ends the walk as an error.
+func TestSubstrateState(t *testing.T) {
+	actor := func(id string) *ateapi.Actor {
+		return &ateapi.Actor{Metadata: &ateapi.ResourceMetadata{Atespace: kagentNamespace, Name: id}}
+	}
+	f := newFakeKagent()
+	f.substrate = &apiv1alpha1.GetSubstrateSummaryResponse{
+		WorkerPools:    []*apiv1alpha1.SubstrateWorkerPool{{Ref: &apiv1alpha1.ResourceReference{Namespace: kagentNamespace, Name: "kagent-default"}}},
+		ActorTemplates: []*ateapi.ActorTemplate{{Metadata: &ateapi.ResourceMetadata{Atespace: kagentNamespace, Name: "t-kagent-0"}}},
+	}
+	f.actorPages = []*apiv1alpha1.ListSubstrateActorsResponse{
+		{Actors: []*ateapi.Actor{actor("a1")}, Page: &apiv1alpha1.PageResponse{NextPageToken: "p1"}},
+		{Page: &apiv1alpha1.PageResponse{NextPageToken: "p2"}},
+		{Actors: []*ateapi.Actor{actor("a2")}},
+	}
+	api := f.serve(t, fakeToken)
+
+	state, err := api.substrateState(t.Context(), kagentNamespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.pools) != 1 || len(state.templates) != 1 || len(state.ateAPIErrors) != 0 {
+		t.Errorf("state = %+v", state)
+	}
+	var ids []string
+	for _, a := range state.actors {
+		ids = append(ids, a.GetMetadata().GetName())
+	}
+	if !slices.Equal(ids, []string{"a1", "a2"}) {
+		t.Errorf("actors = %v, want every page's", ids)
+	}
+	if got := len(f.calls["ListSubstrateActors"]); got != 3 {
+		t.Errorf("ListSubstrateActors called %d times, want 3", got)
+	}
+	for _, method := range []string{"GetSubstrateSummary", "ListSubstrateActors"} {
+		if want := []string{"Bearer " + fakeToken}; !slices.Equal(f.lastMD(method).Get(authorizationMetadata), want) {
+			t.Errorf("%s authorization = %v", method, f.lastMD(method).Get(authorizationMetadata))
+		}
+	}
+
+	f.substrate = &apiv1alpha1.GetSubstrateSummaryResponse{AteApiError: "templates: refused"}
+	f.actorPages = []*apiv1alpha1.ListSubstrateActorsResponse{{AteApiError: "actors: refused"}}
+	state, err = api.substrateState(t.Context(), kagentNamespace)
+	if err != nil || !slices.Equal(state.ateAPIErrors, []string{"templates: refused", "actors: refused"}) {
+		t.Errorf("ate-api errors = %v, %v", state.ateAPIErrors, err)
+	}
+
+	f.substrate = &apiv1alpha1.GetSubstrateSummaryResponse{}
+	f.actorPages = []*apiv1alpha1.ListSubstrateActorsResponse{
+		{Page: &apiv1alpha1.PageResponse{NextPageToken: "p1"}},
+		{Page: &apiv1alpha1.PageResponse{NextPageToken: "p1"}},
+	}
+	if _, err := api.substrateState(t.Context(), kagentNamespace); err == nil || !strings.Contains(err.Error(), "with itself") {
+		t.Errorf("a token answered with itself: %v", err)
 	}
 }

@@ -26,9 +26,10 @@ live lab.
 The kagent API v2 client stubs the proofs call (`internal/kagent/gen`,
 `kagent.api.v1alpha1`'s `AgentTemplateService`, `AgentInstanceService`,
 `SystemService`) are generated with `buf` from verbatim copies of the
-controller's protos under `hack/kagent-proto/`, pinned to a commit of the
+controller's protos under `hack/kagent-proto/` (with Agent Substrate's
+`ateapi.proto`, which `system.proto` imports), pinned to a commit of the
 kagent line the platform release resolves (`KAGENT_PROTO_COMMIT` in
-`Makefile.custom.mk`, recorded in `internal/kagent/gen/README.md`). The
+`Makefile.custom.mk`). The
 A2A v1 service comes from the `a2a-go/v2` module the controller itself is
 built with. To move the pin: set the commit, `make generate-kagent` (needs
 `buf`, `protoc-gen-go`, `protoc-gen-go-grpc` on the PATH), commit the protos

@@ -6,9 +6,11 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/types/known/structpb"
 	"gopkg.in/yaml.v3"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	ateapi "github.com/giantswarm/agentlab/internal/kagent/gen"
 	apiv1alpha1 "github.com/giantswarm/agentlab/internal/kagent/gen/kagent/api/v1alpha1"
 )
 
@@ -236,28 +238,52 @@ func TestTerminalHarnessFailure(t *testing.T) {
 
 // TestFootprintOf: Substrate's state is filtered down to the template's own
 // ActorTemplates (named <template>-<harness>-<revision>) and the actors booted
-// from them, other templates' left out; the worded lines name the phase, the
-// snapshot and the pinned worker; an ate-api error is carried.
+// from them, other templates' left out; the worded lines name the pool, the
+// phase, the golden tag and the pinned worker; an ate-api error is carried.
 func TestFootprintOf(t *testing.T) {
-	status := &apiv1alpha1.GetSubstrateStatusResponse{
-		Enabled:     true,
-		WorkerPools: []*apiv1alpha1.SubstrateWorkerPool{{Namespace: kagentNamespace, Name: "kagent-default", Replicas: 2, AteomImage: "ateom:v0"}},
-		ActorTemplates: []*apiv1alpha1.SubstrateActorTemplate{
-			{Namespace: kagentNamespace, Name: skillsTestAgent + "-kagent-3bd7156d4194", Phase: "Pending", HarnessName: kagentHarness},
-			{Namespace: kagentNamespace, Name: skillsTestAgent + "-control-kagent-0a0a0a0a0a0a", Phase: conditionReady, GoldenSnapshot: "s3://ate-snapshots/kagent/x"},
-			{Namespace: kagentNamespace, Name: "agentlab-toolset-ro-kagent-111111111111", Phase: conditionReady},
+	pool, err := structpb.NewStruct(map[string]any{"spec": map[string]any{"replicas": 2, "workerImage": "ateom:v0"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := func(name string, golden *ateapi.GoldenSnapshotStatus) *ateapi.ActorTemplate {
+		return &ateapi.ActorTemplate{
+			Metadata: &ateapi.ResourceMetadata{Atespace: kagentNamespace, Name: name},
+			Status:   &ateapi.ActorTemplateStatus{GoldenSnapshotStatus: golden},
+		}
+	}
+	actor := func(id, templateName string, state ateapi.ActorState, worker *ateapi.WorkerAssignment) *ateapi.Actor {
+		return &ateapi.Actor{
+			Metadata:      &ateapi.ResourceMetadata{Atespace: kagentNamespace, Name: id},
+			ActorTemplate: &ateapi.ObjectRef{Atespace: kagentNamespace, Name: templateName},
+			Status:        &ateapi.ActorStatus{State: state, WorkerAssignment: worker},
+		}
+	}
+	state := substrateState{
+		pools: []*apiv1alpha1.SubstrateWorkerPool{{
+			Ref:      &apiv1alpha1.ResourceReference{Namespace: kagentNamespace, Name: "kagent-default"},
+			Resource: &apiv1alpha1.StructuredObject{Kind: "WorkerPool", Value: pool},
+		}},
+		templates: []*ateapi.ActorTemplate{
+			template(skillsTestAgent+"-kagent-3bd7156d4194", nil),
+			template(skillsTestAgent+"-control-kagent-0a0a0a0a0a0a", &ateapi.GoldenSnapshotStatus{GoldenTag: &ateapi.ObjectRef{Atespace: kagentNamespace, Name: "golden-x"}}),
+			template("agentlab-toolset-ro-kagent-111111111111", &ateapi.GoldenSnapshotStatus{ErrorMessage: "golden actor exited"}),
 		},
-		Actors: []*apiv1alpha1.SubstrateActor{
-			{ActorId: "01a0aaaa", ActorTemplateNamespace: kagentNamespace, ActorTemplateName: skillsTestAgent + "-kagent-3bd7156d4194", Status: "Resuming", AteomPodNamespace: kagentNamespace, AteomPodName: "kagent-default-abc", AteomPodIp: "10.0.0.7"},
-			{ActorId: "01a0bbbb", ActorTemplateNamespace: kagentNamespace, ActorTemplateName: "agentlab-toolset-ro-kagent-111111111111", Status: "Paused"},
+		actors: []*ateapi.Actor{
+			actor("01a0aaaa", skillsTestAgent+"-kagent-3bd7156d4194", ateapi.ActorState_ACTOR_STATE_RESUMING,
+				&ateapi.WorkerAssignment{WorkerNamespace: kagentNamespace, WorkerPod: "kagent-default-abc", WorkerPodIp: "10.0.0.7"}),
+			actor("01a0bbbb", "agentlab-toolset-ro-kagent-111111111111", ateapi.ActorState_ACTOR_STATE_PAUSED, nil),
 		},
 	}
-	f := footprintOf(status, skillsTestAgent, kagentHarness)
+	f := footprintOf(state, skillsTestAgent, kagentHarness)
 	if f.err != nil || len(f.templates) != 1 || len(f.actors) != 1 || f.empty() {
 		t.Fatalf("footprint = %+v", f)
 	}
 	lines := strings.Join(f.lines(), "\n")
-	for _, want := range []string{"WorkerPool kagent/kagent-default: 2 workers", skillsTestAgent + "-kagent-3bd7156d4194: phase Pending, golden snapshot none", "actor 01a0aaaa", "Resuming, pinned to worker pod kagent/kagent-default-abc (10.0.0.7)"} {
+	for _, want := range []string{
+		"WorkerPool kagent/kagent-default: 2 workers (ateom:v0)",
+		skillsTestAgent + "-kagent-3bd7156d4194: phase Pending, golden tag none",
+		"actor 01a0aaaa of " + skillsTestAgent + "-kagent-3bd7156d4194: RESUMING, pinned to worker pod kagent/kagent-default-abc (10.0.0.7)",
+	} {
 		if !strings.Contains(lines, want) {
 			t.Errorf("lines lack %q:\n%s", want, lines)
 		}
@@ -265,17 +291,30 @@ func TestFootprintOf(t *testing.T) {
 	if strings.Contains(lines, "toolset-ro") || strings.Contains(lines, "-control-") {
 		t.Errorf("another template's footprint leaked:\n%s", lines)
 	}
-	control := footprintOf(status, skillsTestControlAgent, kagentHarness)
-	if len(control.templates) != 1 || len(control.actors) != 0 || !strings.Contains(strings.Join(control.lines(), "\n"), "phase Ready, golden snapshot s3://ate-snapshots/kagent/x") {
-		t.Errorf("control footprint = %+v", control)
+
+	control := footprintOf(state, skillsTestControlAgent, kagentHarness)
+	if len(control.templates) != 1 || len(control.actors) != 0 || !strings.Contains(strings.Join(control.lines(), "\n"), "phase Ready, golden tag kagent/golden-x") {
+		t.Errorf("control footprint = %+v %v", control, control.lines())
 	}
-	if none := footprintOf(status, "nobody", kagentHarness); !none.empty() || !strings.Contains(strings.Join(none.lines(), "\n"), "holds no ActorTemplate") {
+
+	failed := footprintOf(state, "agentlab-toolset-ro", kagentHarness)
+	failedLines := strings.Join(failed.lines(), "\n")
+	for _, want := range []string{"phase Failed, golden tag none, error: golden actor exited", "actor 01a0bbbb of agentlab-toolset-ro-kagent-111111111111: PAUSED, no worker"} {
+		if !strings.Contains(failedLines, want) {
+			t.Errorf("failed lines lack %q:\n%s", want, failedLines)
+		}
+	}
+
+	none := footprintOf(state, "nobody", kagentHarness)
+	if !none.empty() || !strings.Contains(strings.Join(none.lines(), "\n"), "holds no ActorTemplate") {
 		t.Errorf("an absent template: %+v %v", none, none.lines())
 	}
-	broken := footprintOf(&apiv1alpha1.GetSubstrateStatusResponse{AteApiError: "dial ate-api: refused"}, skillsTestAgent, kagentHarness)
+
+	broken := footprintOf(substrateState{ateAPIErrors: []string{"dial ate-api: refused"}}, skillsTestAgent, kagentHarness)
 	if broken.err == nil || broken.empty() || !strings.Contains(broken.lines()[0], "dial ate-api: refused") {
 		t.Errorf("an ate-api error: %+v %v", broken, broken.lines())
 	}
+
 	long := strings.Repeat("a", 60)
 	if prefix := actorTemplatePrefix(long, kagentHarness); len(prefix) != actorTemplateNameSize+1 || !strings.HasSuffix(prefix, "-") {
 		t.Errorf("a long name's prefix = %q", prefix)
