@@ -320,9 +320,9 @@ type Platform struct {
 	// Swarmgeist (github.com/giantswarm/klaus-gateway) as the meta chart's
 	// in-cluster component (components.klaus-gateway), the way every
 	// installation runs it: A2A to the kagent controller over the in-cluster
-	// agentgateway target, the web channel, the Slack adapter on a
-	// placeholder credentials Secret (no workspace answers it; the gateway
-	// refuses OBO without Slack), and the OBO link store as a Kubernetes
+	// agentgateway target, the Slack adapter on a placeholder credentials
+	// Secret (no workspace answers it; the lab points its Web API at
+	// klaus-gateway-test's fake), and the OBO link store as a Kubernetes
 	// Secret (obo.store: secret) with keys the lab generates once. Off by
 	// default; --klaus-gateway turns it on; needs the agents runtime. A build
 	// of the checkout swaps in through devImages. `agentlab

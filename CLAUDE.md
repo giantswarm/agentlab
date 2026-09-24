@@ -149,17 +149,20 @@ with Dex doing the logins.
   chart's in-cluster component** (`components.klaus-gateway`), the shape
   every installation runs next to the host-mode gateway
   `klaus-gateway-test` starts for the public leg: A2A on the in-cluster
-  controller target, the web channel, the Slack adapter on a placeholder
-  Secret (`agentlab-klaus-gateway-slack`; the gateway refuses OBO without
-  Slack, no workspace answers), the OBO link store in a Secret
+  controller target, the Slack adapter on a placeholder Secret
+  (`agentlab-klaus-gateway-slack`; no workspace answers, the lab's
+  postRenderer points its Web API at the Service `agentlab-slack-api` the
+  proof aims at its fake, a container on the kind network — never a port on
+  the host, whose firewall is the owner's), the OBO link store in a Secret
   (`obo.store: secret`, keys in `agentlab-klaus-gateway-obo`, generated
   once — never regenerate them, the store key seals every link).
   `platform.devImages.klaus-gateway` swaps a build in. The proof's component
   half: the Role scoped to the link Secret, two links seeded through
   `pkg/auth/musterlink`, the pod deleted and its replacement Ready with the
-  same links, a turn through the pod. A real OBO sign-in is out of reach
-  here (docs/klaus-gateway.md) — never "fix" that with a fake muster
-  identity.
+  same links, a Slack turn through the pod. A real OBO sign-in is out of reach
+  here (docs/klaus-gateway.md): the proof links the person with a record
+  carrying the lab user's own Dex id_token — never "fix" that with a fake
+  muster identity.
 - For verifying RBAC as a specific user, use `./agentlab login <email>` and
   `kubectl --kubeconfig kubeconfig.oidc` — that is the OIDC path.
 - The cluster's admin kubeconfig (`state/kubeconfig`, context `kind-agentlab`)

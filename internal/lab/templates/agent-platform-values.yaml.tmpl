@@ -269,10 +269,11 @@ components:
 {{- if .KlausGatewayEnabled }}
   # Swarmgeist (platform.klausGateway): klaus-gateway as the meta chart's
   # component — A2A to the kagent controller over the in-cluster agentgateway
-  # target, the web channel, Slack on a placeholder Secret, the OBO link
-  # store in a Secret (its own values are in the `klausGateway:` block
-  # below). The lab patches nothing on it; the entry below is the dev-image
-  # override when platform.devImages names one.
+  # target, Slack on a placeholder Secret, the OBO link store in a Secret
+  # (its own values are in the `klausGateway:` block below). The lab's one
+  # patch points its Slack Web API at the Service in front of
+  # klaus-gateway-test's fake; the dev-image override joins it when
+  # platform.devImages names one.
   klaus-gateway:
     enabled: true
 {{- with index .PostRenderers "klaus-gateway" }}
@@ -884,8 +885,8 @@ vm-manager:
 # Swarmgeist's own values, on top of the meta chart's klausGateway block (the
 # static lifecycle driver, no second agentgateway, the disruption guards;
 # klausgateway.go has the reasoning): the in-cluster controller target and
-# the proof's fixture as the default agent, the web channel, the Slack
-# adapter on the lab's placeholder Secret, the OBO link store in a Secret
+# the proof's fixture as the default agent, the Slack adapter on the lab's
+# placeholder Secret, the OBO link store in a Secret
 # with the lab's keys Secret mounted, the ServiceMonitor following the
 # observability switch. The edge route for the channels stays off.
 klausGateway:
@@ -894,8 +895,6 @@ klausGateway:
     url: {{ .KlausGateway.A2ATarget }}
     namespace: {{ .KlausGateway.AgentNamespace }}
     defaultAgent: {{ .KlausGateway.DefaultAgent }}
-  web:
-    enabled: true
   slack:
     enabled: true
     mode: events

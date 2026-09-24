@@ -367,8 +367,8 @@ func ensureDevRegistry(cfg *config.Config) error {
 	switch {
 	case err != nil:
 		hostPullImages([]string{devRegistryImage})
-		args := []string{"run", "-d", "--restart=always", "--name", name, "--network", kindDockerNetwork,
-			"-p", fmt.Sprintf("127.0.0.1:%d:%d", cfg.Platform.DevRegistryPort, devRegistryContainerPort), devRegistryImage}
+		args := dockerRun(name, kindDockerNetwork, "-d", "--restart=always",
+			"-p", fmt.Sprintf("127.0.0.1:%d:%d", cfg.Platform.DevRegistryPort, devRegistryContainerPort), devRegistryImage)
 		if err := runQuiet(dockerBin, args...); err != nil {
 			return fmt.Errorf("creating the lab registry %s: %w\n(another process holding 127.0.0.1:%d? set platform.devRegistryPort to a free port)", name, err, cfg.Platform.DevRegistryPort)
 		}

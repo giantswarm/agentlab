@@ -43,20 +43,24 @@ import (
 //     through the package unchanged; the proof's records removed, and a
 //     leftover of an aborted run removed first;
 //   - the in-cluster a2a leg: through a port-forward to the replacement pod,
-//     the web channel lists the fixture and answers a turn as the person —
-//     the component talks to the controller over the in-cluster plaintext
-//     h2c target, which the host-mode gateway never touches.
+//     one signed Slack mention by the person whose link the store step
+//     wrote (the lab user's id_token as its cached token) is answered in the
+//     proof's fake thread — the component's Slack Web API is the proof's
+//     fake through a selector-less Service the proof points at this host,
+//     and it talks to the controller over the in-cluster plaintext h2c
+//     target, which the host-mode gateway never touches.
 //
-// Not provable here, and stated in docs/klaus-gateway.md: a real OBO sign-in.
-// The linker's callback checks the muster identity's e-mail against the
-// Slack workspace's (users.info), which the placeholder credentials cannot
-// answer, and muster refuses a CIMD client_id on a private-IP hostname.
+// Not provable here, and stated in docs/klaus-gateway.md: a real OBO sign-in
+// and a link's refresh at muster. The linker's callback checks the muster
+// identity's e-mail against the Slack workspace's, and muster refuses a CIMD
+// client_id on a private-IP hostname, so no sign-in completes and no muster
+// refresh token exists for the gateway to spend.
 
-// The proof's link records: the Slack user ids they are filed under carry
-// this prefix, so a leftover of an aborted run is recognisable by its key
-// alone (the keys of the link Secret are the Slack user ids; the values are
-// sealed).
-const klausGatewayLinkPrefix = "agentlab-klaus-gateway-test-"
+// The Slack user ids of the proof's link records (the keys of the link
+// Secret; the values are sealed) carry slackUserPrefix, so a leftover of an
+// aborted run is recognisable by its key alone. legacyLinkPrefix is the
+// prefix earlier agentlab versions filed them under.
+const legacyLinkPrefix = "agentlab-klaus-gateway-test-"
 
 // klausGatewayReplaceWait bounds the pod's replacement after the deletion: a
 // new pod scheduled, the image already on the node, the store read at start,
@@ -89,10 +93,12 @@ type componentOutcome struct {
 }
 
 // klausGatewayComponentProof runs the component half (see the file header)
-// as the signed-in person: the render, the store across a pod loss, one turn
-// through the replacement pod. The fixtures of the host-mode half are in
+// as the signed-in person: the render, the store across a pod loss, one Slack
+// turn through the replacement pod on the proof's fake Web API, served to the
+// pod by the Service the host-mode half pointed at it (slackUser is the
+// person the turn is sent as). The fixtures of the host-mode half are in
 // place; nothing here is left behind but what was there before.
-func klausGatewayComponentProof(cfg *config.Config, token string, user *config.User) (*componentOutcome, error) {
+func klausGatewayComponentProof(token string, identity linkedIdentity, user *config.User, fake slackWorkspace, slackUser string) (*componentOutcome, error) {
 	ctx := context.Background()
 	k, err := labKube()
 	if err != nil {
@@ -100,12 +106,15 @@ func klausGatewayComponentProof(cfg *config.Config, token string, user *config.U
 	}
 	out := &componentOutcome{}
 
-	step("6. The component: Deployment %s runs the OBO link store in Secret %s — the Role scoped to that Secret, no store volume, RollingUpdate", klausGatewayComponent, klausGatewayLinksSecret)
+	step("6. The component: Deployment %s runs the OBO link store in Secret %s — the Role scoped to that Secret, no store volume, RollingUpdate — and calls the Slack Web API at %s", klausGatewayComponent, klausGatewayLinksSecret, klausGatewaySlackAPIBase)
 	deploy, err := k.clientset.AppsV1().Deployments(platformNamespace).Get(ctx, klausGatewayComponent, metav1.GetOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w (platform.klausGateway is on; did `agentlab platform` install the component?)", describe(gvrDeployments, platformNamespace, klausGatewayComponent), err)
 	}
 	if err := assertStoreDeployment(deploy); err != nil {
+		return nil, err
+	}
+	if err := assertFakeSlackAPI(deploy); err != nil {
 		return nil, err
 	}
 	role, err := k.clientset.RbacV1().Roles(platformNamespace).Get(ctx, klausGatewayLinksSecret, metav1.GetOptions{})
@@ -138,7 +147,7 @@ func klausGatewayComponentProof(cfg *config.Config, token string, user *config.U
 		klausGatewayComponent, deploy.Spec.Template.Spec.Containers[0].Image, oboStoreEnv, oboStoreVolume, strategyName(deploy),
 		klausGatewayLinksSecret, ruleLine(role.Rules[0]), deploy.Spec.Template.Spec.ServiceAccountName, klausGatewayLinksSecret, len(links.Data))
 
-	step("7. The link store: two links sealed and written through pkg/auth/musterlink with the lab's store-key (Secret %s), a leftover of an aborted run removed first", klausGatewayOBOKeys)
+	step("7. The link store: two links sealed and written through pkg/auth/musterlink with the lab's store-key (Secret %s) — %s's with the id_token as its cached token — a leftover of an aborted run removed first", klausGatewayOBOKeys, slackUser)
 	key, err := secretDataKey(ctx, platformNamespace, klausGatewayOBOKeys, oboStoreKeyKey)
 	if err != nil {
 		return nil, err
@@ -160,7 +169,7 @@ func klausGatewayComponentProof(cfg *config.Config, token string, user *config.U
 	if err != nil {
 		return nil, fmt.Errorf("the link store: %w", err)
 	}
-	seeded := proofLinks(user, randomSuffix())
+	seeded := proofLinks(identity.link(user.Email, token), slackUser)
 	for _, id := range slices.Sorted(maps.Keys(seeded)) {
 		if err := store.Put(id, seeded[id]); err != nil {
 			return nil, fmt.Errorf("writing link %s through the package: %w", id, err)
@@ -181,7 +190,7 @@ func klausGatewayComponentProof(cfg *config.Config, token string, user *config.U
 	if err := readBackLinks(store, seeded); err != nil {
 		return nil, err
 	}
-	note("%d entries in %s before; %d written and read back through the package (Sub, Email, RefreshToken, LinkedAt unchanged)", out.baseline, klausGatewayLinksSecret, len(seeded))
+	note("%d entries in %s before; %d written and read back through the package (Sub, Email, RefreshToken, LinkedAt, the cached id_token and its expiry unchanged)", out.baseline, klausGatewayLinksSecret, len(seeded))
 
 	step("8. Pod loss: pod %s is deleted; its replacement is Ready and reads the same %d links within %s", out.pod, out.baseline+len(seeded), klausGatewayReplaceWait)
 	old := map[string]bool{}
@@ -214,29 +223,36 @@ func klausGatewayComponentProof(cfg *config.Config, token string, user *config.U
 	}
 	note("pod %s Ready %s after the deletion; %s read %d links from %s at start; both records still read back unchanged", out.replacement, out.elapsed, out.version, out.links, klausGatewayLinksSecret)
 
-	step("9. One turn through the component: a port-forward to pod %s, GET %s lists %s, a turn as %s over the in-cluster target %s", out.replacement, webAgentsPath, klausGatewayTestAgent, user.Email, klausGatewayInClusterTarget)
+	step("9. One Slack turn through the component: a port-forward to pod %s, a signed mention as %s answered in the fake thread over the in-cluster target %s", out.replacement, slackUser, klausGatewayInClusterTarget)
 	local, stopForward, err := portForwardPod(ctx, platformNamespace, out.replacement, gatewayHTTPPort)
 	if err != nil {
 		return nil, err
 	}
 	defer stopForward()
-	web := &webClient{base: fmt.Sprintf("http://127.0.0.1:%d", local), token: token, user: user.Email, thread: "component-" + randomSuffix()}
-	agents, err := web.agents(ctx)
+	signing, err := secretDataKey(ctx, platformNamespace, klausGatewaySlackPlaceholder, slackSigningSecretKey)
 	if err != nil {
-		return nil, fmt.Errorf("discovery through the component: %w", err)
+		return nil, err
 	}
-	if err := assertRoster(agents); err != nil {
-		return nil, fmt.Errorf("discovery through the component: %w", err)
+	channel := "CAGENTLAB" + strings.ToUpper(randomSuffix()) + "K"
+	pod := out.replacement
+	p := &slackProof{
+		driver: newSlackDriver(fmt.Sprintf("http://127.0.0.1:%d", local), string(signing), fake, channel),
+		fake:   fake, channel: channel,
+		logs: func() (string, error) { return podLogs(ctx, platformNamespace, "pod/"+pod, klausGatewayComponent, 0) },
 	}
-	turn, err := web.firstTurn(webMessage{Text: klausGatewayWordPrompt, AgentRef: klausGatewayTestAgent})
+	thread := &slackThread{user: slackUser}
+	turn, err := p.firstTurn(thread, klausGatewayWordPrompt)
 	if err != nil {
 		return nil, fmt.Errorf("the turn through the component: %w", err)
 	}
-	if err := assertTurnSaid(turn, klausGatewayWord); err != nil {
+	if err := assertSlackTurnSaid(turn, klausGatewayWord); err != nil {
 		return nil, fmt.Errorf("the turn through the component: %w", err)
 	}
-	out.answer = turn.Text
-	note("roster through the pod: %s; answered %q", rosterLine(agents), excerpt(turn.Text, 60))
+	if _, err := p.dispatch(thread, identity.subject, user.Email); err != nil {
+		return nil, fmt.Errorf("the turn through the component: %w", err)
+	}
+	out.answer = turn.answer
+	note("answered %q in thread %s as %q; turn_dispatch under %s", excerpt(turn.answer, 60), thread.ts, turn.stream.Username, user.Email)
 
 	for _, id := range slices.Sorted(maps.Keys(seeded)) {
 		if err := store.Delete(id); err != nil {
@@ -287,6 +303,24 @@ func assertStoreDeployment(d *appsv1.Deployment) error {
 		return fmt.Errorf("the Deployment %s uses the Recreate strategy: only a mounted ReadWriteOnce claim needs it", d.Name)
 	}
 	return nil
+}
+
+// assertFakeSlackAPI checks the lab's postRenderer points the component's
+// Slack Web API at the Service in front of the proof's fake — a lab rendered
+// by an agentlab without it answers on slack.com, where the placeholder
+// credentials fail.
+func assertFakeSlackAPI(d *appsv1.Deployment) error {
+	for _, c := range d.Spec.Template.Spec.Containers {
+		if c.Name != klausGatewayComponent {
+			continue
+		}
+		for _, e := range c.Env {
+			if e.Name == slackAPIBaseEnv && e.Value == klausGatewaySlackAPIBase {
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("the Deployment %s does not set %s=%s: run `agentlab platform` to render the lab's patch", d.Name, slackAPIBaseEnv, klausGatewaySlackAPIBase)
 }
 
 // strategyName words the Deployment's strategy.
@@ -354,23 +388,24 @@ func assertLinksRoleBinding(rb *rbacv1.RoleBinding, serviceAccount string) error
 	return fmt.Errorf("the RoleBinding %s binds %v, want the gateway's ServiceAccount %s", rb.Name, rb.Subjects, serviceAccount)
 }
 
-// proofLinks are the two records the proof seeds: the person's identity and
-// a second lab user's, refresh tokens that are plainly fakes, linked now.
-// The ids carry klausGatewayLinkPrefix and the run's suffix.
-func proofLinks(user *config.User, run string) map[string]*musterlink.Link {
+// proofLinks are the two records the proof seeds: the person's link, filed
+// under the Slack user the in-cluster turn is sent as, and a second lab
+// user's whose refresh token is plainly a fake. Both ids carry
+// slackUserPrefix.
+func proofLinks(person *musterlink.Link, slackUser string) map[string]*musterlink.Link {
 	now := time.Now().UTC().Truncate(time.Second)
 	return map[string]*musterlink.Link{
-		klausGatewayLinkPrefix + run + "-1": {Sub: "agentlab:" + user.Username, Email: user.Email, RefreshToken: "rt-agentlab-" + run + "-1", LinkedAt: now},
-		klausGatewayLinkPrefix + run + "-2": {Sub: "agentlab:dev", Email: "dev@lab.local", RefreshToken: "rt-agentlab-" + run + "-2", LinkedAt: now},
+		slackUser:       person,
+		slackUser + "D": {Sub: "agentlab:dev", Email: "dev@lab.local", RefreshToken: linkRefreshMarker + "-dev", LinkedAt: now},
 	}
 }
 
 // removeProofLinks deletes the records of earlier runs — the Secret's keys
-// with the proof's prefix — and reports how many.
+// with the proof's prefixes — and reports how many.
 func removeProofLinks(store *musterlink.SecretStore, data map[string][]byte) (int, error) {
 	removed := 0
 	for id := range data {
-		if strings.HasPrefix(id, klausGatewayLinkPrefix) {
+		if strings.HasPrefix(id, slackUserPrefix) || strings.HasPrefix(id, legacyLinkPrefix) {
 			if err := store.Delete(id); err != nil {
 				return removed, fmt.Errorf("removing leftover link %s: %w", id, err)
 			}
@@ -392,8 +427,9 @@ func readBackLinks(store musterlink.Store, seeded map[string]*musterlink.Link) e
 			return fmt.Errorf("reading link %s back: %w", id, err)
 		}
 		if !sameLink(got, seeded[id]) {
-			return fmt.Errorf("link %s read back differently: got sub=%s email=%s linked=%s, wrote sub=%s email=%s linked=%s", id,
-				got.Sub, got.Email, got.LinkedAt.Format(time.RFC3339), seeded[id].Sub, seeded[id].Email, seeded[id].LinkedAt.Format(time.RFC3339))
+			return fmt.Errorf("link %s read back differently: got sub=%s email=%s linked=%s expiry=%s, wrote sub=%s email=%s linked=%s expiry=%s", id,
+				got.Sub, got.Email, got.LinkedAt.Format(time.RFC3339), got.Expiry.Format(time.RFC3339),
+				seeded[id].Sub, seeded[id].Email, seeded[id].LinkedAt.Format(time.RFC3339), seeded[id].Expiry.Format(time.RFC3339))
 		}
 	}
 	return nil
@@ -401,7 +437,8 @@ func readBackLinks(store musterlink.Store, seeded map[string]*musterlink.Link) e
 
 // sameLink compares what the proof writes and reads.
 func sameLink(a, b *musterlink.Link) bool {
-	return a.Sub == b.Sub && a.Email == b.Email && a.RefreshToken == b.RefreshToken && a.LinkedAt.Equal(b.LinkedAt)
+	return a.Sub == b.Sub && a.Email == b.Email && a.RefreshToken == b.RefreshToken && a.LinkedAt.Equal(b.LinkedAt) &&
+		a.IDToken == b.IDToken && a.Expiry.Equal(b.Expiry)
 }
 
 // deploymentPods lists the Deployment's pods through its selector.

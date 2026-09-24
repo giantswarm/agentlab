@@ -20,7 +20,7 @@ const portForwardWait = 30 * time.Second
 // portForwardPod is `kubectl port-forward pod/<name> :<remotePort>` on the
 // loopback through the embedded client: the pod's port reachable on a local
 // port the kernel picks, for a proof that drives a pod's HTTP surface the lab
-// exposes nowhere else (the klaus-gateway component's web channel,
+// exposes nowhere else (the klaus-gateway component's Slack endpoints,
 // klausgatewaytest_component.go). Returns the local port and a stop that
 // ends the forward and waits for it; the forward also ends with ctx.
 func portForwardPod(ctx context.Context, ns, pod string, remotePort int) (int, func(), error) {

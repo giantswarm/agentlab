@@ -69,6 +69,12 @@ import (
 //     image by digest through the connectivity values (kagent.harness.image,
 //     the values template), served by the lab registry.
 //
+//  6. The Slack Web API base of the klaus-gateway component
+//     (KLAUS_GATEWAY_SLACK_API_BASE, which the chart has no value for): the
+//     selector-less Service `agentlab klaus-gateway-test` points at its fake
+//     Slack Web API on this host while it runs, since no workspace answers
+//     the lab (klausgateway.go). Lab only.
+//
 // The values-side shape is Flux's: `postRenderers: [{kustomize: {patches:
 // [{target, patch}], images: [{name, newName, newTag}]}}]`.
 
@@ -299,6 +305,27 @@ spec:
 	}
 }
 
+// slackAPIPatch is patch 6: the component's Slack Web API is the lab's
+// Service in front of the proof's fake.
+func slackAPIPatch() kustomizePatch {
+	return kustomizePatch{
+		Target: map[string]string{kindKey: kindDeployment, nameKey: klausGatewayComponent},
+		Patch: literalYAML(fmt.Sprintf(`apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: %[1]s
+spec:
+  template:
+    spec:
+      containers:
+        - name: %[1]s
+          env:
+            - name: %[2]s
+              value: %[3]s
+`, klausGatewayComponent, slackAPIBaseEnv, klausGatewaySlackAPIBase)),
+	}
+}
+
 // sidecarPostRenderer is the one-patch postRenderers entry of a release the
 // lab renders itself (mcp-prometheus.yaml.tmpl).
 func sidecarPostRenderer(deployment string, dexPort int) postRenderer {
@@ -442,6 +469,9 @@ func componentPostRenderers(cfg *config.Config, imageNames map[string]string, si
 	}
 	for _, component := range hostNetworkComponents {
 		patches[component] = []kustomizePatch{hostNetworkPatch(component)}
+	}
+	if cfg.KlausGatewayEnabled() {
+		patches[klausGatewayComponent] = append(patches[klausGatewayComponent], slackAPIPatch())
 	}
 	for _, component := range slices.Sorted(maps.Keys(sidecars)) {
 		for _, target := range sidecars[component] {
