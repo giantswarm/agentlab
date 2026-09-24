@@ -208,8 +208,8 @@ func assertManifests(m agentManifests, spec agentSpec, info *agentManagerInfo) e
 	if err := yaml.Unmarshal([]byte(m.OCIRepository), &source); err != nil {
 		return fmt.Errorf("manifests.ociRepository is not YAML: %w\n%.300s", err, m.OCIRepository)
 	}
-	if source.Spec.Ref.Semver != agentChartRange || source.Spec.URL != agentChartURL {
-		return fmt.Errorf("manifests.ociRepository tracks %s at %q, wanted %s at %s (the wizard writes 1.x, never x.x.x)", source.Spec.URL, source.Spec.Ref.Semver, agentChartURL, agentChartRange)
+	if !agentChartLine(source.Spec.Ref.Semver) || source.Spec.URL != agentChartURL {
+		return fmt.Errorf("manifests.ociRepository tracks %s at %q, wanted %s on the %s line (the wizard writes the meta chart's range, never x.x.x)", source.Spec.URL, source.Spec.Ref.Semver, agentChartURL, agentChartRange)
 	}
 	var release struct {
 		Spec struct {
@@ -269,8 +269,8 @@ func assertReleaseIsDryRun(release *agentRelease, m agentManifests, info *agentM
 	if err != nil {
 		return fmt.Errorf("the namespace's OCIRepository %s: %w", agentChartOCIRepository, err)
 	}
-	if chartURL != agentChartURL || chartRange != agentChartRange {
-		return fmt.Errorf("OCIRepository %s tracks %s at %q, wanted %s at %s", agentChartOCIRepository, chartURL, chartRange, agentChartURL, agentChartRange)
+	if chartURL != agentChartURL || !agentChartLine(chartRange) {
+		return fmt.Errorf("OCIRepository %s tracks %s at %q, wanted %s on the %s line", agentChartOCIRepository, chartURL, chartRange, agentChartURL, agentChartRange)
 	}
 	return nil
 }
@@ -360,8 +360,8 @@ func proveCreatePath(primary, viewer *portalSession) (agentSpec, *agentTemplate,
 	if err := portalToolCall(primary, "get_info", nil, &info); err != nil {
 		return fail(err)
 	}
-	if info.Chart.Semver != agentChartRange || info.Harness.Name == "" {
-		return fail(fmt.Errorf("get_info reports chart %q on Harness %q, wanted %s on the platform Harness", info.Chart.Semver, info.Harness.Name, agentChartRange))
+	if !agentChartLine(info.Chart.Semver) || info.Harness.Name == "" {
+		return fail(fmt.Errorf("get_info reports chart %q on Harness %q, wanted the %s line on the platform Harness", info.Chart.Semver, info.Harness.Name, agentChartRange))
 	}
 	var configs struct {
 		ModelConfigs []struct {

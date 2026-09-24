@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	mastersemver "github.com/Masterminds/semver/v3"
 	"net/http"
 	"slices"
 	"strings"
@@ -366,6 +367,35 @@ spec:
   ref:
     semver: %q
 `, fluxOCIRepositoryAPIVersion, agentChartOCIRepository, kagentNamespace, managedByLabel, managedByAgentlabValue, ociRepositoryInterval, agentChartURL, agentChartRange)
+}
+
+// agentChartLine reports whether semver tracks the Generic chart's 1.x line:
+// "1.x" itself, or a constraint whose bounds stay within major 1 — the meta
+// chart caps the line (">=1.0.0 <1.5.0" while the kagent 1.0 line needs the
+// AgentTemplate's own compaction, ">=1.5.0 <2.0.0" once the platform Harness
+// carries it) and agent-manager composes that cap into every namespace's
+// OCIRepository. The major is the API boundary; a range that admits a 0.x or
+// a 2.x chart is another line.
+func agentChartLine(semver string) bool {
+	if semver == agentChartRange {
+		return true
+	}
+	if v, err := mastersemver.StrictNewVersion(semver); err == nil {
+		return v.Major() == 1
+	}
+	c, err := mastersemver.NewConstraint(semver)
+	if err != nil {
+		return false
+	}
+	if c.Check(mastersemver.MustParse("0.999.999")) || c.Check(mastersemver.MustParse("2.0.0")) {
+		return false
+	}
+	for minor := 0; minor < 100; minor++ {
+		if c.Check(mastersemver.MustParse(fmt.Sprintf("1.%d.0", minor))) {
+			return true
+		}
+	}
+	return false
 }
 
 // agentHelmReleaseManifest is the agent's HelmRelease: the chart by its
