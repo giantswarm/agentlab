@@ -11,7 +11,7 @@ require (
 	github.com/creativeprojects/go-selfupdate v1.6.0
 	github.com/giantswarm/klaus-gateway v1.21.0
 	github.com/giantswarm/selfupdate-cosign v0.2.3
-	github.com/giantswarm/telemetrydeck-go v0.3.0
+	github.com/giantswarm/telemetrydeck-go v0.3.3
 	github.com/giantswarm/vm-manager v0.23.0
 	github.com/google/uuid v1.6.0
 	github.com/smallstep/truststore v0.13.0
