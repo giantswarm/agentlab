@@ -332,6 +332,9 @@ type Platform struct {
 	// klaus-gateway-test` proves it next to the host-mode gateway
 	// (klausgateway.go).
 	KlausGateway KlausGateway `yaml:"klausGateway"`
+	// GitHub registers GitHub's hosted MCP server with muster, signed in to
+	// as the person through an OAuth client (internal/lab/githubmcp.go).
+	GitHub GitHub `yaml:"github"`
 	// Model serving on llm-d: the serving slice of a Giant Swarm installation
 	// on the kind node (internal/lab/serving.go) — the chart's KServe llmisvc
 	// controller with its CRDs (components.kserve-llmisvc-crd and
@@ -367,6 +370,16 @@ type KlausGateway struct {
 	// lab's values (the values template's `klausGateway:` block) and creates
 	// the two Secrets the component reads: the placeholder Slack
 	// credentials and the OBO keys.
+	Enabled bool `yaml:"enabled"`
+}
+
+// GitHub configures the MCPServer `github` the lab registers with muster:
+// GitHub's hosted MCP server behind a pinned GitHub authorization server, the
+// shape an installation declares. The OAuth client (an OAuth App, or a
+// GitHub App's client) comes from the host environment at deploy time and
+// lives only in a Secret.
+type GitHub struct {
+	// On, `agentlab platform` registers the server; off, it removes it.
 	Enabled bool `yaml:"enabled"`
 }
 

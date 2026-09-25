@@ -486,7 +486,7 @@ func browserCmd() *cobra.Command {
 func configureCmd() *cobra.Command {
 	var defaults, accessible bool
 	var platform, agents, observability, backstage, modelManager, vmManager, klausGateway bool
-	var serving bool
+	var serving, github bool
 	var modelManagerBackends []string
 	var vmManagerImageDir string
 	var chartVersion, chartPath, chartBranch string
@@ -554,6 +554,9 @@ func configureCmd() *cobra.Command {
 			}
 			if cmd.Flags().Changed("klaus-gateway") {
 				cfg.Platform.KlausGateway.Enabled = klausGateway
+			}
+			if cmd.Flags().Changed("github") {
+				cfg.Platform.GitHub.Enabled = github
 			}
 			if cmd.Flags().Changed("serving") {
 				cfg.Platform.Serving.Enabled = serving
@@ -645,6 +648,7 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&vmManager, "vm-manager", false, "run the platform's VM provisioner (vm-manager) as a pod of the node; --vm-manager=false turns it off (needs /dev/kvm and /dev/vhost-vsock on this machine)")
 	cmd.Flags().StringVar(&vmManagerImageDir, "vm-manager-image-dir", "", "a local guest image build the vm-manager pod boots instead of its release's: a vm-manager checkout's images/build after `make -C images`, pushed into the lab registry at `agentlab platform` (empty for the release's)")
 	cmd.Flags().BoolVar(&klausGateway, "klaus-gateway", false, "run Swarmgeist (klaus-gateway) as the meta chart's in-cluster component: A2A on the in-cluster controller target, Slack on a placeholder Secret (its Web API the proof's fake), the OBO link store in a Secret (needs agents); --klaus-gateway=false turns it off")
+	cmd.Flags().BoolVar(&github, "github", false, "register GitHub's hosted MCP server with muster as MCPServer github, signed in to as the person through an OAuth App or GitHub App client read from $GITHUB_MCP_CLIENT_ID / $GITHUB_MCP_CLIENT_SECRET at deploy time; --github=false removes it")
 	cmd.Flags().BoolVar(&serving, "serving", false, "serve models on llm-d in the lab: the KServe llmisvc controller and its CRDs, the well-known runtime configs, the connectivity chart's serving slice with the models Gateway, model-manager's kserve backend and one CPU preset of the lab's (needs agents; installs cert-manager); --serving=false turns it off")
 	cmd.Flags().BoolVar(&accessible, "accessible", false, "prompt-per-question form mode (for screen readers and plain terminals)")
 	return cmd
