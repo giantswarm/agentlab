@@ -21,8 +21,11 @@ import (
 // creates an AgentInstance on the Harness that admits the template and
 // reports it Ready — the one the portal and Swarmgeist pick — or on the
 // named harness, streams one turn, prints the answer and the terminal task
-// state, and deletes the instance.
-func Turn(cfg *config.Config, email, template, harness, prompt string) error {
+// state, and deletes the instance — unless keep is set, which leaves the
+// instance for a later turn, or instanceID names one to continue — after
+// suspending it to the snapshot store first when suspend is set, so the turn
+// proves the restore.
+func Turn(cfg *config.Config, email, template, harness, prompt, instanceID string, keep, suspend bool) error {
 	user := cfg.FindUser(email)
 	if user == nil {
 		return fmt.Errorf("no lab user %q in agentlab.yaml", email)
@@ -56,33 +59,56 @@ func Turn(cfg *config.Config, email, template, harness, prompt string) error {
 		return nil
 	}
 
-	if harness == "" {
-		templates, err := api.listTemplates(ctx)
+	started := time.Now()
+	created := instanceID == ""
+	if created {
+		if harness == "" {
+			templates, err := api.listTemplates(ctx)
+			if err != nil {
+				return err
+			}
+			if harness, err = admittingHarness(templates, template); err != nil {
+				return err
+			}
+		}
+		instance, err := api.createInstanceOn(ctx, harness, template, uuid.NewString())
 		if err != nil {
 			return err
 		}
-		if harness, err = admittingHarness(templates, template); err != nil {
-			return err
+		instanceID = instance.GetId()
+		fmt.Printf("instance: %s of %s on Harness %s (creator %s, %s)\n", instanceID, template, harness, instance.GetCreator(), instanceState(instance))
+	} else {
+		fmt.Printf("instance: %s (continued)\n", instanceID)
+		if suspend {
+			instance, err := api.suspendInstance(ctx, instanceID)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("suspended: %s (%s)\n", instanceID, instanceState(instance))
+			if instance, err = api.resumeInstance(ctx, instanceID); err != nil {
+				return err
+			}
+			fmt.Printf("resumed: %s (%s)\n", instanceID, instanceState(instance))
 		}
 	}
-	started := time.Now()
-	instance, err := api.createInstanceOn(ctx, harness, template, uuid.NewString())
+	t, err := api.completedTurnOnce(instanceID, prompt)
 	if err != nil {
-		return err
-	}
-	fmt.Printf("instance: %s of %s on Harness %s (creator %s, %s)\n", instance.GetId(), template, harness, instance.GetCreator(), instanceState(instance))
-	t, err := api.completedTurnOnce(instance.GetId(), prompt)
-	if err != nil {
-		api.removeInstance(instance.GetId())
+		if created && !keep {
+			api.removeInstance(instanceID)
+		}
 		return fmt.Errorf("A2A turn on %s: %w", template, err)
 	}
 	fmt.Printf("state: %s (%s)\nelapsed: %s\nanswer: %s\n", stateName(t.state()), t.statesString(), time.Since(started).Round(time.Millisecond), t.text())
+	if keep {
+		fmt.Printf("kept: %s (agentlab turn --instance %s …)\n", instanceID, instanceID)
+		return nil
+	}
 	rmCtx, rmCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer rmCancel()
-	if err := api.deleteInstance(rmCtx, instance.GetId()); err != nil {
+	if err := api.deleteInstance(rmCtx, instanceID); err != nil {
 		return err
 	}
-	fmt.Printf("deleted: %s\n", instance.GetId())
+	fmt.Printf("deleted: %s\n", instanceID)
 	return nil
 }
 

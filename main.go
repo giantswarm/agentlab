@@ -424,8 +424,8 @@ func openCmd() *cobra.Command {
 // turnCmd is `agentlab turn`: one conversation with an agent as a lab user
 // through the edge, or the roster that user sees.
 func turnCmd() *cobra.Command {
-	var user, template, harness string
-	var list bool
+	var user, template, harness, instance string
+	var list, keep, suspend bool
 	cmd := &cobra.Command{
 		Use:   "turn (--list | --template <name> <prompt>)",
 		Short: "One turn with an agent as a lab user through the edge, or the roster that user sees (--list)",
@@ -448,12 +448,18 @@ func turnCmd() *cobra.Command {
 			if len(args) == 1 {
 				prompt = args[0]
 			}
-			return lab.Turn(cfg, user, template, harness, prompt)
+			if suspend && instance == "" {
+				return fmt.Errorf("--suspend needs --instance")
+			}
+			return lab.Turn(cfg, user, template, harness, prompt, instance, keep, suspend)
 		},
 	}
 	cmd.Flags().StringVar(&user, "user", "", "the lab user to act as (default: the first admin in agentlab.yaml)")
 	cmd.Flags().StringVar(&template, "template", "", "the AgentTemplate in the kagent namespace to converse with")
 	cmd.Flags().StringVar(&harness, "harness", "", "the Harness to create the conversation on (default: the admitting Harness that reports the template Ready, as the portal picks it)")
+	cmd.Flags().StringVar(&instance, "instance", "", "continue this AgentInstance instead of creating one (from a previous --keep)")
+	cmd.Flags().BoolVar(&keep, "keep", false, "leave the AgentInstance in place after the turn, for a later --instance turn")
+	cmd.Flags().BoolVar(&suspend, "suspend", false, "with --instance: suspend the instance to the snapshot store before the turn, so the turn restores it")
 	cmd.Flags().BoolVar(&list, "list", false, "print the roster this user sees instead of a turn")
 	return cmd
 }

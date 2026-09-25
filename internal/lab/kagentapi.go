@@ -632,6 +632,47 @@ func (a *kagentAPI) listInstancesOf(ctx context.Context, template *apiv1alpha1.R
 	}
 }
 
+// suspendInstance is AgentInstanceService/SuspendAgentInstance: the Actor is
+// snapshotted to the Harness's store and the instance reported SUSPENDED; the
+// next turn restores it. Returns the instance as the controller reports it
+// after the suspend.
+func (a *kagentAPI) suspendInstance(ctx context.Context, id string) (*apiv1alpha1.AgentInstance, error) {
+	resp, err := a.instances.SuspendAgentInstance(a.callCtx(ctx), &apiv1alpha1.SuspendAgentInstanceRequest{AgentInstanceId: id})
+	if err != nil {
+		return nil, fmt.Errorf("SuspendAgentInstance %s: %w", id, err)
+	}
+	return resp.GetAgentInstance(), nil
+}
+
+// resumeInstance is AgentInstanceService/ResumeAgentInstance on a SUSPENDED
+// instance: the Actor is restored from its snapshot; returns once the
+// instance is READY again. A suspended instance accepts no task until then,
+// which is what the surfaces do before a turn.
+func (a *kagentAPI) resumeInstance(ctx context.Context, id string) (*apiv1alpha1.AgentInstance, error) {
+	resp, err := a.instances.ResumeAgentInstance(a.callCtx(ctx), &apiv1alpha1.ResumeAgentInstanceRequest{AgentInstanceId: id})
+	if err != nil {
+		return nil, fmt.Errorf("ResumeAgentInstance %s: %w", id, err)
+	}
+	instance := resp.GetAgentInstance()
+	deadline := time.Now().Add(instanceReadyTimeout)
+	for instance.GetState() != apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_READY {
+		if time.Now().After(deadline) {
+			return instance, fmt.Errorf("AgentInstance %s is still %s after %s", id, instanceState(instance), instanceReadyTimeout)
+		}
+		select {
+		case <-ctx.Done():
+			return instance, ctx.Err()
+		case <-time.After(pollInterval):
+		}
+		got, err := a.instances.GetAgentInstance(a.callCtx(ctx), &apiv1alpha1.GetAgentInstanceRequest{AgentInstanceId: id})
+		if err != nil {
+			return instance, fmt.Errorf("GetAgentInstance %s: %w", id, err)
+		}
+		instance = got.GetAgentInstance()
+	}
+	return instance, nil
+}
+
 // deleteInstance is AgentInstanceService/DeleteAgentInstance; an instance
 // that is already gone is success.
 func (a *kagentAPI) deleteInstance(ctx context.Context, id string) error {
