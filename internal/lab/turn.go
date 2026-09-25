@@ -2,6 +2,7 @@ package lab
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -99,6 +100,11 @@ func Turn(cfg *config.Config, email, template, harness, prompt, instanceID strin
 		return fmt.Errorf("A2A turn on %s: %w", template, err)
 	}
 	fmt.Printf("state: %s (%s)\nelapsed: %s\nanswer: %s\n", stateName(t.state()), t.statesString(), time.Since(started).Round(time.Millisecond), t.text())
+	if len(t.statusMeta) != 0 {
+		if raw, err := json.Marshal(t.statusMeta); err == nil {
+			fmt.Printf("status metadata: %s\n", raw)
+		}
+	}
 	if keep {
 		fmt.Printf("kept: %s (agentlab turn --instance %s …)\n", instanceID, instanceID)
 		return nil

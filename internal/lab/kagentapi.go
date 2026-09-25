@@ -738,8 +738,10 @@ type turn struct {
 	artifactOrder []a2a.ArtifactID
 	artifactText  map[a2a.ArtifactID]string
 	// statusText is the text of the status message the stream ended on: the
-	// agent's hint on a pause, its words on a failure.
+	// agent's hint on a pause, its words on a failure; statusMeta is that
+	// message's metadata (a harness's usage of the turn, for one).
 	statusText string
+	statusMeta map[string]any
 	// approval is the tool_approval_request the task paused on at
 	// input-required, nil otherwise.
 	approval *toolApprovalRequest
@@ -804,6 +806,9 @@ func (t *turn) setStatus(s a2a.TaskStatus) {
 		t.statusText = messageText(s.Message)
 	case s.State.Terminal():
 		t.statusText = messageText(s.Message)
+		if s.Message != nil {
+			t.statusMeta = s.Message.Metadata
+		}
 	}
 }
 
