@@ -521,16 +521,22 @@ func stringOf(v any) string {
 	return s
 }
 
-// createInstance is AgentInstanceService/CreateAgentInstance for the person:
-// one conversation of the AgentTemplate on the Go ADK Harness, both in the
+// createInstance is createInstanceOn for the proofs' templates, which the
+// platform's Go ADK Harness admits.
+func (a *kagentAPI) createInstance(ctx context.Context, template, requestID string) (*apiv1alpha1.AgentInstance, error) {
+	return a.createInstanceOn(ctx, kagentHarness, template, requestID)
+}
+
+// createInstanceOn is AgentInstanceService/CreateAgentInstance for the person:
+// one conversation of the AgentTemplate on the named Harness, both in the
 // kagent namespace, keyed by requestID — the controller's create is
 // idempotent per (creator, request_id), so a retried first turn gets the
 // same instance back. A template whose golden snapshot is still being taken
 // answers FailedPrecondition; that is waited through, bounded. Returns once
 // the instance is READY (or SUSPENDED: a resumable conversation).
-func (a *kagentAPI) createInstance(ctx context.Context, template, requestID string) (*apiv1alpha1.AgentInstance, error) {
+func (a *kagentAPI) createInstanceOn(ctx context.Context, harness, template, requestID string) (*apiv1alpha1.AgentInstance, error) {
 	req := &apiv1alpha1.CreateAgentInstanceRequest{
-		Harness:       &apiv1alpha1.ResourceReference{Namespace: kagentNamespace, Name: kagentHarness},
+		Harness:       &apiv1alpha1.ResourceReference{Namespace: kagentNamespace, Name: harness},
 		AgentTemplate: &apiv1alpha1.ResourceReference{Namespace: kagentNamespace, Name: template},
 		RequestId:     requestID,
 	}
@@ -541,7 +547,7 @@ func (a *kagentAPI) createInstance(ctx context.Context, template, requestID stri
 		return status.Code(err) != codes.FailedPrecondition
 	})
 	if err != nil {
-		return nil, fmt.Errorf("creating an AgentInstance of %s/%s on Harness %s: %w", kagentNamespace, template, kagentHarness, err)
+		return nil, fmt.Errorf("creating an AgentInstance of %s/%s on Harness %s: %w", kagentNamespace, template, harness, err)
 	}
 	if !created {
 		return nil, fmt.Errorf("AgentTemplate %s has no successful revision after %s (the controller keeps answering FailedPrecondition)", template, templateRevisionTimeout)
@@ -626,6 +632,47 @@ func (a *kagentAPI) listInstancesOf(ctx context.Context, template *apiv1alpha1.R
 	}
 }
 
+// suspendInstance is AgentInstanceService/SuspendAgentInstance: the Actor is
+// snapshotted to the Harness's store and the instance reported SUSPENDED; the
+// next turn restores it. Returns the instance as the controller reports it
+// after the suspend.
+func (a *kagentAPI) suspendInstance(ctx context.Context, id string) (*apiv1alpha1.AgentInstance, error) {
+	resp, err := a.instances.SuspendAgentInstance(a.callCtx(ctx), &apiv1alpha1.SuspendAgentInstanceRequest{AgentInstanceId: id})
+	if err != nil {
+		return nil, fmt.Errorf("SuspendAgentInstance %s: %w", id, err)
+	}
+	return resp.GetAgentInstance(), nil
+}
+
+// resumeInstance is AgentInstanceService/ResumeAgentInstance on a SUSPENDED
+// instance: the Actor is restored from its snapshot; returns once the
+// instance is READY again. A suspended instance accepts no task until then,
+// which is what the surfaces do before a turn.
+func (a *kagentAPI) resumeInstance(ctx context.Context, id string) (*apiv1alpha1.AgentInstance, error) {
+	resp, err := a.instances.ResumeAgentInstance(a.callCtx(ctx), &apiv1alpha1.ResumeAgentInstanceRequest{AgentInstanceId: id})
+	if err != nil {
+		return nil, fmt.Errorf("ResumeAgentInstance %s: %w", id, err)
+	}
+	instance := resp.GetAgentInstance()
+	deadline := time.Now().Add(instanceReadyTimeout)
+	for instance.GetState() != apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_READY {
+		if time.Now().After(deadline) {
+			return instance, fmt.Errorf("AgentInstance %s is still %s after %s", id, instanceState(instance), instanceReadyTimeout)
+		}
+		select {
+		case <-ctx.Done():
+			return instance, ctx.Err()
+		case <-time.After(pollInterval):
+		}
+		got, err := a.instances.GetAgentInstance(a.callCtx(ctx), &apiv1alpha1.GetAgentInstanceRequest{AgentInstanceId: id})
+		if err != nil {
+			return instance, fmt.Errorf("GetAgentInstance %s: %w", id, err)
+		}
+		instance = got.GetAgentInstance()
+	}
+	return instance, nil
+}
+
 // deleteInstance is AgentInstanceService/DeleteAgentInstance; an instance
 // that is already gone is success.
 func (a *kagentAPI) deleteInstance(ctx context.Context, id string) error {
@@ -691,8 +738,10 @@ type turn struct {
 	artifactOrder []a2a.ArtifactID
 	artifactText  map[a2a.ArtifactID]string
 	// statusText is the text of the status message the stream ended on: the
-	// agent's hint on a pause, its words on a failure.
+	// agent's hint on a pause, its words on a failure; statusMeta is that
+	// message's metadata (a harness's usage of the turn, for one).
 	statusText string
+	statusMeta map[string]any
 	// approval is the tool_approval_request the task paused on at
 	// input-required, nil otherwise.
 	approval *toolApprovalRequest
@@ -757,6 +806,9 @@ func (t *turn) setStatus(s a2a.TaskStatus) {
 		t.statusText = messageText(s.Message)
 	case s.State.Terminal():
 		t.statusText = messageText(s.Message)
+		if s.Message != nil {
+			t.statusMeta = s.Message.Metadata
+		}
 	}
 }
 
