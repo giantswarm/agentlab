@@ -424,7 +424,7 @@ func openCmd() *cobra.Command {
 // turnCmd is `agentlab turn`: one conversation with an agent as a lab user
 // through the edge, or the roster that user sees.
 func turnCmd() *cobra.Command {
-	var user, template string
+	var user, template, harness string
 	var list bool
 	cmd := &cobra.Command{
 		Use:   "turn (--list | --template <name> <prompt>)",
@@ -448,11 +448,12 @@ func turnCmd() *cobra.Command {
 			if len(args) == 1 {
 				prompt = args[0]
 			}
-			return lab.Turn(cfg, user, template, prompt)
+			return lab.Turn(cfg, user, template, harness, prompt)
 		},
 	}
 	cmd.Flags().StringVar(&user, "user", "", "the lab user to act as (default: the first admin in agentlab.yaml)")
 	cmd.Flags().StringVar(&template, "template", "", "the AgentTemplate in the kagent namespace to converse with")
+	cmd.Flags().StringVar(&harness, "harness", "", "the Harness to create the conversation on (default: the admitting Harness that reports the template Ready, as the portal picks it)")
 	cmd.Flags().BoolVar(&list, "list", false, "print the roster this user sees instead of a turn")
 	return cmd
 }

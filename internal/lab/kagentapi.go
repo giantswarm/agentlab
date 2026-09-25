@@ -521,16 +521,22 @@ func stringOf(v any) string {
 	return s
 }
 
-// createInstance is AgentInstanceService/CreateAgentInstance for the person:
-// one conversation of the AgentTemplate on the Go ADK Harness, both in the
+// createInstance is createInstanceOn for the proofs' templates, which the
+// platform's Go ADK Harness admits.
+func (a *kagentAPI) createInstance(ctx context.Context, template, requestID string) (*apiv1alpha1.AgentInstance, error) {
+	return a.createInstanceOn(ctx, kagentHarness, template, requestID)
+}
+
+// createInstanceOn is AgentInstanceService/CreateAgentInstance for the person:
+// one conversation of the AgentTemplate on the named Harness, both in the
 // kagent namespace, keyed by requestID — the controller's create is
 // idempotent per (creator, request_id), so a retried first turn gets the
 // same instance back. A template whose golden snapshot is still being taken
 // answers FailedPrecondition; that is waited through, bounded. Returns once
 // the instance is READY (or SUSPENDED: a resumable conversation).
-func (a *kagentAPI) createInstance(ctx context.Context, template, requestID string) (*apiv1alpha1.AgentInstance, error) {
+func (a *kagentAPI) createInstanceOn(ctx context.Context, harness, template, requestID string) (*apiv1alpha1.AgentInstance, error) {
 	req := &apiv1alpha1.CreateAgentInstanceRequest{
-		Harness:       &apiv1alpha1.ResourceReference{Namespace: kagentNamespace, Name: kagentHarness},
+		Harness:       &apiv1alpha1.ResourceReference{Namespace: kagentNamespace, Name: harness},
 		AgentTemplate: &apiv1alpha1.ResourceReference{Namespace: kagentNamespace, Name: template},
 		RequestId:     requestID,
 	}
@@ -541,7 +547,7 @@ func (a *kagentAPI) createInstance(ctx context.Context, template, requestID stri
 		return status.Code(err) != codes.FailedPrecondition
 	})
 	if err != nil {
-		return nil, fmt.Errorf("creating an AgentInstance of %s/%s on Harness %s: %w", kagentNamespace, template, kagentHarness, err)
+		return nil, fmt.Errorf("creating an AgentInstance of %s/%s on Harness %s: %w", kagentNamespace, template, harness, err)
 	}
 	if !created {
 		return nil, fmt.Errorf("AgentTemplate %s has no successful revision after %s (the controller keeps answering FailedPrecondition)", template, templateRevisionTimeout)

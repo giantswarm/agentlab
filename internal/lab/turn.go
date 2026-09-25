@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/giantswarm/agentlab/internal/config"
+	apiv1alpha1 "github.com/giantswarm/agentlab/internal/kagent/gen/kagent/api/v1alpha1"
 )
 
 // Turn is `agentlab turn`: one conversation with an agent as a lab user, the
@@ -17,9 +18,11 @@ import (
 // controller's gRPC route through the edge. With no template it prints the
 // roster the person sees (ListAgentTemplates as that person, or the gRPC
 // status when the controller refuses). With a template and a prompt it
-// creates an AgentInstance on the platform Harness, streams one turn, prints
-// the answer and the terminal task state, and deletes the instance.
-func Turn(cfg *config.Config, email, template, prompt string) error {
+// creates an AgentInstance on the Harness that admits the template and
+// reports it Ready — the one the portal and Swarmgeist pick — or on the
+// named harness, streams one turn, prints the answer and the terminal task
+// state, and deletes the instance.
+func Turn(cfg *config.Config, email, template, harness, prompt string) error {
 	user := cfg.FindUser(email)
 	if user == nil {
 		return fmt.Errorf("no lab user %q in agentlab.yaml", email)
@@ -53,12 +56,21 @@ func Turn(cfg *config.Config, email, template, prompt string) error {
 		return nil
 	}
 
+	if harness == "" {
+		templates, err := api.listTemplates(ctx)
+		if err != nil {
+			return err
+		}
+		if harness, err = admittingHarness(templates, template); err != nil {
+			return err
+		}
+	}
 	started := time.Now()
-	instance, err := api.createInstance(ctx, template, uuid.NewString())
+	instance, err := api.createInstanceOn(ctx, harness, template, uuid.NewString())
 	if err != nil {
 		return err
 	}
-	fmt.Printf("instance: %s of %s (creator %s, %s)\n", instance.GetId(), template, instance.GetCreator(), instanceState(instance))
+	fmt.Printf("instance: %s of %s on Harness %s (creator %s, %s)\n", instance.GetId(), template, harness, instance.GetCreator(), instanceState(instance))
 	t, err := api.completedTurnOnce(instance.GetId(), prompt)
 	if err != nil {
 		api.removeInstance(instance.GetId())
@@ -89,4 +101,22 @@ func rosterEntry(l templateListing) string {
 		line += "  unavailable: " + l.Unavailable
 	}
 	return line
+}
+
+// admittingHarness is the Harness a conversation with the named template is
+// created on: the admitting Harness that reports it Ready, as the roster
+// reads it. A template the person's roster does not list, or one no Harness
+// runs yet, is refused with the roster's reason.
+func admittingHarness(templates []*apiv1alpha1.AgentTemplate, name string) (string, error) {
+	for _, t := range templates {
+		if t.GetRef().GetName() != name {
+			continue
+		}
+		listing := listingOf(t)
+		if listing.Unavailable != "" {
+			return "", fmt.Errorf("AgentTemplate %s cannot start a conversation: %s", name, listing.Unavailable)
+		}
+		return listing.Harness, nil
+	}
+	return "", fmt.Errorf("AgentTemplate %s is not in this user's roster (agentlab turn --list)", name)
 }

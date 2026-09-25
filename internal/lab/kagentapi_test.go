@@ -573,8 +573,12 @@ func TestCreateInstance(t *testing.T) {
 	if err != nil || other.GetId() == first.GetId() {
 		t.Errorf("another request_id: %v %v", other.GetId(), err)
 	}
+	coding, err := api.createInstanceOn(t.Context(), testOtherHarness, a2aTestAgent, "req-3")
+	if err != nil || coding.GetHarness().GetName() != testOtherHarness {
+		t.Errorf("an instance on another Harness: %v %v", coding.GetHarness(), err)
+	}
 	listed, err := api.listInstances(t.Context())
-	if err != nil || len(listed) != 2 {
+	if err != nil || len(listed) != 3 {
 		t.Errorf("listed %d (%v)", len(listed), err)
 	}
 	if err := api.deleteInstance(t.Context(), first.GetId()); err != nil {
