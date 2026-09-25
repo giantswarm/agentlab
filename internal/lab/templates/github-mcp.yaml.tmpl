@@ -1,0 +1,37 @@
+# GitHub's hosted MCP server, signed in to as the person: muster runs the
+# OAuth flow against GitHub itself (GitHub publishes no discovery document and
+# registers no clients dynamically, so the authorization server is pinned) and
+# files the user token under the person's subject. The client is an OAuth App
+# or a GitHub App's client whose callback is muster's proxy callback; its
+# credentials are the Secret below, created from the host environment at
+# deploy time (githubmcp.go), never rendered here.
+apiVersion: muster.giantswarm.io/v1alpha1
+kind: MCPServer
+metadata:
+  name: {{ .GitHubMCPServer }}
+  namespace: agent-platform
+  labels:
+    app.kubernetes.io/managed-by: agentlab
+    muster.giantswarm.io/type: mcp-github
+spec:
+  description: GitHub as the signed-in person (GitHub's hosted MCP server).
+  autoStart: true
+  type: streamable-http
+  url: https://api.githubcopilot.com/mcp/
+  timeout: 120
+  toolPrefix: {{ .GitHubMCPServer }}
+  headers:
+    X-MCP-Toolsets: default,git
+  auth:
+    type: oauth
+    forwardToken: false
+    authorizationServer:
+      issuer: https://github.com/login/oauth
+      authorizationEndpoint: https://github.com/login/oauth/authorize
+      tokenEndpoint: https://github.com/login/oauth/access_token
+      # An OAuth App grants these scopes; a GitHub App ignores them and grants
+      # its own permissions on the repositories it is installed on.
+      scopes: repo read:org
+      clientCredentialsSecretRef:
+        name: {{ .GitHubMCPClientSecret }}
+      grantScope: subject

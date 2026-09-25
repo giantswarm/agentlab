@@ -53,7 +53,7 @@ func TestExtraModelsTemplate(t *testing.T) {
 		// anthropic override endpoint
 		"apiKeySecretKey: ANTHROPIC_API_KEY",
 		"baseUrl: https://proxy.example.com",
-		"app.kubernetes.io/managed-by: agentlab",
+		renderedManagedByAgentlab,
 		// the reasoning effort under openAI, with and without an endpoint
 		"baseUrl: http://172.21.0.1:11434/v1\n    reasoningEffort: none",
 		"name: gpt-low",

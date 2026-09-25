@@ -35,7 +35,7 @@ func TestOAuthFixtureRenderPinsDex(t *testing.T) {
 		"kind: Secret",
 		"client-id: " + config.AgentPlatformClientID,
 		"client-secret: " + config.AgentPlatformClientSecret,
-		"forwardToken: false",
+		renderedNoForwardToken,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("rendered fixture lacks %q:\n%s", want, s)
