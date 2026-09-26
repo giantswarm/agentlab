@@ -424,7 +424,7 @@ func openCmd() *cobra.Command {
 // turnCmd is `agentlab turn`: one conversation with an agent as a lab user
 // through the edge, or the roster that user sees.
 func turnCmd() *cobra.Command {
-	var user, template, harness, instance, decide, reason, events string
+	var user, template, harness, instance, decide, reason, events, shareWith string
 	var list, keep, suspend bool
 	cmd := &cobra.Command{
 		Use:   "turn (--list | --template <name> <prompt>)",
@@ -451,10 +451,13 @@ func turnCmd() *cobra.Command {
 			if suspend && instance == "" {
 				return fmt.Errorf("--suspend needs --instance")
 			}
+			if shareWith != "" && instance == "" {
+				return fmt.Errorf("--share-with needs --instance")
+			}
 			if decide != "" && decide != "approve" && decide != "reject" {
 				return fmt.Errorf("--decide takes approve or reject, not %q", decide)
 			}
-			return lab.Turn(cfg, user, template, harness, prompt, instance, decide, reason, events, keep, suspend)
+			return lab.Turn(cfg, user, template, harness, prompt, instance, decide, reason, events, shareWith, keep, suspend)
 		},
 	}
 	cmd.Flags().StringVar(&user, "user", "", "the lab user to act as (default: the first admin in agentlab.yaml)")
@@ -464,6 +467,7 @@ func turnCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&keep, "keep", false, "leave the AgentInstance in place after the turn, for a later --instance turn")
 	cmd.Flags().BoolVar(&suspend, "suspend", false, "with --instance: suspend the instance to the snapshot store before the turn, so the turn restores it")
 	cmd.Flags().StringVar(&decide, "decide", "", "answer every tool approval the turn pauses for: approve or reject (default: print the paused state and stop)")
+	cmd.Flags().StringVar(&shareWith, "share-with", "", "with --instance: the --user shares the instance read-write with this lab user, the turn runs as that user with the share token, and the share is revoked afterwards")
 	cmd.Flags().StringVar(&events, "events", "", "write every streamed A2A event of the turn to this file, one JSON object per line")
 	cmd.Flags().StringVar(&reason, "reason", "", "with --decide reject: the reason sent with the rejection")
 	cmd.Flags().BoolVar(&list, "list", false, "print the roster this user sees instead of a turn")
