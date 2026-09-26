@@ -339,7 +339,7 @@ func modelManagerHint(cfg *config.Config, endpoints map[string]string) string {
 		parts = append(parts, fmt.Sprintf("%s (%s) at %s", b, config.BackendServerName(b), endpoints[b]))
 	}
 	return fmt.Sprintf("  Model manager: one instance fronting %s — default backend %s;\n"+
-		"  REST %s/api/v1 (Dex token required; ?backend= / \"backend\" name a server), MCP tools\n"+
-		"  x_model-manager_* through muster; the portal's Models tab manages the same models.",
-		strings.Join(parts, ", "), backends[0], cfg.ModelManagerBaseURL())
+		"  MCP tools x_model-manager_* through muster (the \"backend\" argument names a server);\n"+
+		"  the portal's Models tab manages the same models.",
+		strings.Join(parts, ", "), backends[0])
 }

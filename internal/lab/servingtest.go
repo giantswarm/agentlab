@@ -8,7 +8,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -23,8 +22,8 @@ import (
 
 // The serving proof (`agentlab serving-test`): the llm-d path end to end, as
 // a person drives it through the platform — the serving control plane the
-// switch brought up, model-manager's kserve backend behind the JWT-validated
-// route, the lab preset judged against the node and loaded, the
+// switch brought up, model-manager's kserve backend through muster as the
+// person (its x_model-manager_* tools), the lab preset judged against the node and loaded, the
 // LLMInferenceService the controller composes from the well-known template
 // on the CPU runtime, the ModelConfig model-manager wires, a completion
 // answered through the models Gateway with the person's token and refused
@@ -118,22 +117,10 @@ func ServingTest(cfg *config.Config, email string, opts ServingTestOptions) erro
 	note("llm-d controller %s rolled out; well-known %s present; Gateway %s programmed for %s; preset %s published (source %s)",
 		llmisvcControllerDeployment, llmisvcTemplateConfig, modelsGatewayName, modelsGatewayHost(cfg), preset, presetCM.Labels[servingPresetLabel])
 
-	client, err := labHTTPClient(180 * time.Second)
-	if err != nil {
+	onKServe := map[string]any{backendField: kserveBackend}
+	if err := musterRefusesAnonymous(cfg); err != nil {
 		return err
 	}
-	api := modelManagerAPI{client: client, base: cfg.ModelManagerBaseURL() + "/api/v1"}
-	q := "?backend=" + kserveBackend
-
-	step("Calling the model-manager API without a token (%s)", cfg.ModelManagerBaseURL())
-	status, _, header, err := api.do(http.MethodGet, "/backend"+q, nil)
-	if err != nil {
-		return fmt.Errorf("model-manager is not reachable through the edge: %w — run `agentlab platform` first", err)
-	}
-	if status != http.StatusUnauthorized {
-		return fmt.Errorf("unauthenticated GET /api/v1/backend answered %d, wanted 401: the route's JWT policy is not enforcing", status)
-	}
-	note("401 without a token (WWW-Authenticate: %s)", firstNonEmpty(header.Get("WWW-Authenticate"), "-"))
 
 	step("Logging in to Dex as %s", email)
 	token, err := passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret,
@@ -141,17 +128,21 @@ func ServingTest(cfg *config.Config, email string, opts ServingTestOptions) erro
 	if err != nil {
 		return err
 	}
-	api.token = token
 	note("got an id_token")
+	session, err := openMusterSession(cfg, token, "serving-test")
+	if err != nil {
+		return err
+	}
+	api := modelManagerTools{session: session}
 
-	step("The kserve backend through the gateway with the Dex token")
+	step("The kserve backend through muster with the Dex token")
 	var backend struct {
 		Backend      string          `json:"backend"`
 		Version      string          `json:"version"`
 		Healthy      bool            `json:"healthy"`
 		Capabilities map[string]bool `json:"capabilities"`
 	}
-	if err := api.getJSON("/backend"+q, &backend); err != nil {
+	if err := api.getJSON("get_backend", onKServe, &backend); err != nil {
 		return err
 	}
 	if backend.Backend != kserveBackend || !backend.Healthy {
@@ -168,14 +159,16 @@ func ServingTest(cfg *config.Config, email string, opts ServingTestOptions) erro
 			Model  string `json:"model"`
 		} `json:"presets"`
 	}
-	if err := api.getJSON("/presets"+q, &presets); err != nil {
+	if err := api.getJSON("list_presets", onKServe, &presets); err != nil {
 		return err
 	}
 	var shipped []string
 	found := false
+	presetModel := ""
 	for _, p := range presets.Presets {
 		if p.Name == preset {
 			found = true
+			presetModel = p.Model
 			if p.GPUs != 0 {
 				return fmt.Errorf("preset %s requests %d GPU(s); the lab preset requests none (the node has no GPU)", preset, p.GPUs)
 			}
@@ -185,7 +178,7 @@ func ServingTest(cfg *config.Config, email string, opts ServingTestOptions) erro
 		shipped = append(shipped, p.Name)
 	}
 	if !found {
-		return fmt.Errorf("GET /presets does not list %s (the connectivity chart publishes modelServing.presets as ConfigMaps model-manager reads)", preset)
+		return fmt.Errorf("list_presets does not list %s (the connectivity chart publishes modelServing.presets as ConfigMaps model-manager reads)", preset)
 	}
 	slices.Sort(shipped)
 	note("%d other presets published: %s", len(shipped), strings.Join(shipped, ", "))
@@ -199,15 +192,8 @@ func ServingTest(cfg *config.Config, email string, opts ServingTestOptions) erro
 		BudgetBytes   int64  `json:"budgetBytes"`
 		RequiredBytes int64  `json:"requiredBytes"`
 	}
-	status, body, _, err := api.do(http.MethodPost, "/models/fit-check", map[string]any{"preset": preset, backendField: kserveBackend})
-	if err != nil {
+	if err := api.getJSON("check_fit", map[string]any{"preset": preset, backendField: kserveBackend}, &fit); err != nil {
 		return err
-	}
-	if status != http.StatusOK {
-		return fmt.Errorf("POST /models/fit-check answered %d: %.300s", status, body)
-	}
-	if err := json.Unmarshal(body, &fit); err != nil {
-		return fmt.Errorf("fit-check: parsing %.200s: %w", body, err)
 	}
 	if !fit.Fits {
 		return fmt.Errorf("%s does not fit: %s", preset, fit.Reason)
@@ -233,16 +219,36 @@ func ServingTest(cfg *config.Config, email string, opts ServingTestOptions) erro
 
 	step("Loading %s on %s (model-manager composes the LLMInferenceService as %s)", preset, kserveBackend, user.Email)
 	started := time.Now()
-	status, body, _, err = api.do(http.MethodPost, "/models/load", map[string]any{"preset": preset, backendField: kserveBackend})
-	if err != nil {
+	if _, err := api.call("load_model", map[string]any{"preset": preset, backendField: kserveBackend}); err != nil {
 		return err
-	}
-	if status/100 != 2 {
-		return fmt.Errorf("POST /models/load answered %d: %.400s", status, body)
 	}
 	obj, err := getObject(ctx, gvrLLMInferenceServices, servingNamespace, preset)
 	if err != nil {
-		return fmt.Errorf("the load answered %d but %s is not there: %w", status, describe(gvrLLMInferenceServices, servingNamespace, preset), err)
+		return fmt.Errorf("load_model succeeded but %s is not there: %w", describe(gvrLLMInferenceServices, servingNamespace, preset), err)
+	}
+	// A loading model says where it is: get_model carries the served entry's
+	// phase and steps from the first read, not only once it is Ready — asked
+	// by the preset and by the model it serves alike.
+	for _, ref := range []string{preset, presetModel} {
+		if ref == "" {
+			continue
+		}
+		var loading struct {
+			Running *struct {
+				Phase string `json:"phase"`
+				Steps []struct {
+					Name  string `json:"name"`
+					State string `json:"state"`
+				} `json:"steps"`
+			} `json:"running"`
+		}
+		if err := api.getJSON("get_model", map[string]any{modelField: ref, backendField: kserveBackend}, &loading); err != nil {
+			return err
+		}
+		if loading.Running == nil || loading.Running.Phase == "" || len(loading.Running.Steps) == 0 {
+			return fmt.Errorf("get_model %s right after the load reports no running phase and steps: a caller polling for readiness gets no signal", ref)
+		}
+		note("get_model %s while loading: phase %s, %d steps (%s %s first)", ref, loading.Running.Phase, len(loading.Running.Steps), loading.Running.Steps[0].Name, loading.Running.Steps[0].State)
 	}
 	image, _ := llmisvcMainImage(obj)
 	uri, _, _ := unstructured.NestedString(obj.Object, "spec", "model", "uri")
@@ -275,11 +281,11 @@ func ServingTest(cfg *config.Config, email string, opts ServingTestOptions) erro
 	}
 	note("Ready after %s: pod %s on %s, %s, no accelerator requested (%s)", time.Since(started).Round(time.Second), pod.Name, pod.Spec.NodeName, main.Image, imageOrigin(pod, llmisvcMainContainer))
 
-	step("The served model as model-manager reports it (GET /loaded)")
+	step("The served model as model-manager reports it (list_loaded_models)")
 	var loaded struct {
 		Models []servedModel `json:"loaded"`
 	}
-	if err := api.getJSON("/loaded"+q, &loaded); err != nil {
+	if err := api.getJSON("list_loaded_models", onKServe, &loaded); err != nil {
 		return err
 	}
 	var endpoint string
@@ -288,16 +294,16 @@ func ServingTest(cfg *config.Config, email string, opts ServingTestOptions) erro
 			continue
 		}
 		if m.Kind != "LLMInferenceService" {
-			return fmt.Errorf("GET /loaded lists %s as a %s, wanted an LLMInferenceService (the llm-d path)", m.Name, m.Kind)
+			return fmt.Errorf("list_loaded_models lists %s as a %s, wanted an LLMInferenceService (the llm-d path)", m.Name, m.Kind)
 		}
 		if !strings.HasPrefix(m.Endpoint, modelsGatewayURL(cfg)+"/") {
-			return fmt.Errorf("GET /loaded reports the endpoint %s, wanted the model's route on the models Gateway (%s/%s/%s)", m.Endpoint, modelsGatewayURL(cfg), servingNamespace, preset)
+			return fmt.Errorf("list_loaded_models reports the endpoint %s, wanted the model's route on the models Gateway (%s/%s/%s)", m.Endpoint, modelsGatewayURL(cfg), servingNamespace, preset)
 		}
 		endpoint = m.Endpoint
 		note("%s: %s, %s, routed at %s (node %s)", m.Name, m.Kind, m.Status, m.Endpoint, m.Node)
 	}
 	if endpoint == "" {
-		return fmt.Errorf("GET /loaded does not list %s", preset)
+		return fmt.Errorf("list_loaded_models does not list %s", preset)
 	}
 
 	step("The ModelConfig model-manager wired into kagent")
@@ -308,13 +314,13 @@ func ServingTest(cfg *config.Config, email string, opts ServingTestOptions) erro
 				Name string `json:"name"`
 			} `json:"modelConfig"`
 		}
-		if err := api.getJSON("/models/"+url.PathEscape(servedModelName(preset, loaded.Models))+q, &m); err != nil {
+		if err := api.getJSON("get_model", map[string]any{modelField: servedModelName(preset, loaded.Models), backendField: kserveBackend}, &m); err != nil {
 			return false
 		}
 		mcName = m.ModelConfig.Name
 		return mcName != ""
 	}) {
-		return fmt.Errorf("GET /models/%s never reported a wired ModelConfig", preset)
+		return fmt.Errorf("get_model %s never reported a wired ModelConfig", preset)
 	}
 	if err := waitModelConfigAccepted(mcName); err != nil {
 		return err
@@ -350,10 +356,6 @@ func ServingTest(cfg *config.Config, email string, opts ServingTestOptions) erro
 	// proves the runtime dials the route the ModelConfig names.
 	agentTurn := "skipped (--skip-chat)"
 	if !opts.SkipChat {
-		session, err := openMusterSession(cfg, token, "serving-test")
-		if err != nil {
-			return err
-		}
 		step("Agent turn on %s: an agent created through agent-manager as %s, one A2A turn through the edge (runtime -> the models Gateway -> the CPU runtime)", mcName, user.Email)
 		reply, err := servingAgentTurn(cfg, session, token, mcName)
 		switch {
@@ -379,7 +381,7 @@ func ServingTest(cfg *config.Config, email string, opts ServingTestOptions) erro
 
 	fmt.Println()
 	fmt.Printf("PASS: the serving control plane — llm-d controller, well-known %s, models Gateway %s, preset %s published\n", llmisvcTemplateConfig, modelsGatewayHost(cfg), preset)
-	fmt.Println("PASS: no token -> 401 at the gateway; Dex token -> model-manager's kserve backend through agentgateway")
+	fmt.Printf("PASS: no token -> 401 at muster; Dex token -> model-manager's kserve backend as x_%s_* through muster\n", modelManagerMCPServer)
 	fmt.Printf("PASS: fit on %s (allocatable budget) -> load -> LLMInferenceService Ready on %s, no accelerator -> ModelConfig %s wired at the model's route\n", node, servingRuntimeImage, mcName)
 	fmt.Printf("PASS: %s%s: 401 without a token, a completion with %s's token\n", endpoint, completionsPath, user.Email)
 	fmt.Printf("PASS: the agent turn on the wired ModelConfig: %s\n", agentTurn)
@@ -396,7 +398,7 @@ func isUntrustedGatewayCert(err error) bool {
 		strings.Contains(msg, "tls: failed to verify certificate")
 }
 
-// servedModel is one entry of GET /loaded on the kserve backend.
+// servedModel is one entry of list_loaded_models on the kserve backend.
 type servedModel struct {
 	Name     string `json:"name"`
 	Status   string `json:"status"`
@@ -406,7 +408,7 @@ type servedModel struct {
 	Node     string `json:"node"`
 }
 
-// servedModelName is the reference GET /models/{name} takes for the served
+// servedModelName is the reference get_model takes for the served
 // preset: the model id model-manager lists it under, else the preset name.
 func servedModelName(preset string, models []servedModel) string {
 	for _, m := range models {
@@ -510,13 +512,9 @@ func waitLLMInferenceServiceReady(ctx context.Context, k *kubeClients, name stri
 
 // unloadServed unloads the preset through model-manager and waits until its
 // LLMInferenceService is gone.
-func unloadServed(ctx context.Context, api *modelManagerAPI, preset string) error {
-	status, body, _, err := api.do(http.MethodPost, "/models/unload", map[string]any{modelField: preset, backendField: kserveBackend})
-	if err != nil {
+func unloadServed(ctx context.Context, api *modelManagerTools, preset string) error {
+	if _, err := api.call("unload_model", map[string]any{modelField: preset, backendField: kserveBackend}); err != nil && refusalCode(err) != "not_found" {
 		return err
-	}
-	if status/100 != 2 && status != http.StatusNotFound {
-		return fmt.Errorf("POST /models/unload answered %d: %.300s", status, body)
 	}
 	gone := waitFor(60, 2*time.Second, func() bool {
 		exists, err := objectExists(ctx, gvrLLMInferenceServices, servingNamespace, preset)
