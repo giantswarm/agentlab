@@ -820,7 +820,7 @@ func servingTestCmd() *cobra.Command {
 	var opts lab.ServingTestOptions
 	cmd := &cobra.Command{
 		Use:   "serving-test [email]",
-		Short: "Headless llm-d serving proof: the llmisvc controller, the well-known template and the models Gateway up -> 401 at the model-manager route without a token -> the lab preset fits the node (CPU, allocatable budget) -> load -> LLMInferenceService Ready on the CPU runtime -> ModelConfig wired at the model's route -> a completion through the models Gateway (401 without a token, 200 with) -> agent turn -> unload",
+		Short: "Headless llm-d serving proof: the llmisvc controller, the well-known template and the models Gateway up -> 401 at muster without a token -> model-manager's tools through muster -> the lab preset fits the node (CPU, allocatable budget) -> load -> LLMInferenceService Ready on the CPU runtime -> ModelConfig wired at the model's route -> a completion through the models Gateway (401 without a token, 200 with) -> agent turn -> unload",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()

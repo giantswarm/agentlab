@@ -203,9 +203,14 @@ func TestPlatformValuesLabShape(t *testing.T) {
 	// The wiring keys sit where the meta chart reads them (top-level blocks),
 	// not under components.<name> as the standalone umbrella had them.
 	if at(componentMCPKubernetes, "kubernetesAudience") != config.KubernetesClientID || at(componentKagent, "controllerRoute", "enabled") != true ||
-		at("modelManager", "route", "enabled") != true || at(componentBackstage, "extraScopes") == nil {
-		t.Errorf("wiring keys: mcp-kubernetes.kubernetesAudience=%v kagent.controllerRoute.enabled=%v modelManager.route.enabled=%v backstage.extraScopes=%v",
-			at(componentMCPKubernetes, "kubernetesAudience"), at(componentKagent, "controllerRoute", "enabled"), at("modelManager", "route", "enabled"), at(componentBackstage, "extraScopes"))
+		at(componentBackstage, "extraScopes") == nil {
+		t.Errorf("wiring keys: mcp-kubernetes.kubernetesAudience=%v kagent.controllerRoute.enabled=%v backstage.extraScopes=%v",
+			at(componentMCPKubernetes, "kubernetesAudience"), at(componentKagent, "controllerRoute", "enabled"), at(componentBackstage, "extraScopes"))
+	}
+	// model-manager is reached through muster only: the lab renders no REST
+	// route for it.
+	if at("modelManager", "route") != nil {
+		t.Errorf("modelManager.route = %v, want unset (model-manager is reached through muster)", at("modelManager", "route"))
 	}
 	for _, c := range []string{componentMCPKubernetes, componentKagent, componentBackstage, modelManagerMCPServer} {
 		comp := at("components", c).(map[string]any)
@@ -342,10 +347,13 @@ func TestPlatformValuesModelManagerToggle(t *testing.T) {
 			if component(values)["enabled"] != true {
 				t.Errorf("components.model-manager = %v, want enabled: true", component(values))
 			}
-			for _, key := range []string{modelManagerMCPServer, "modelManager"} {
-				if _, ok := values[key]; !ok {
-					t.Errorf("%s: want the block while the component is on", key)
-				}
+			if _, ok := values[modelManagerMCPServer]; !ok {
+				t.Errorf("%s: want the block while the component is on", modelManagerMCPServer)
+			}
+			// The connectivity chart's modelManager block carried the REST
+			// route only; model-manager is reached through muster.
+			if _, ok := values["modelManager"]; ok {
+				t.Errorf("modelManager: want no block (no route), got %v", values["modelManager"])
 			}
 		})
 	}

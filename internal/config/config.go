@@ -1366,16 +1366,9 @@ func (c *Config) ObservabilityBaseURL() string {
 }
 
 // AgentgatewayBaseURL is the agentgateway hostname through the edge: the
-// path-prefixed platform APIs (the kagent controller at /kagent,
-// model-manager at /model-manager) live here, same as the chart's Backstage
-// app-config derives them.
+// path-prefixed platform APIs (the kagent controller at /kagent) live here,
+// same as the chart's Backstage app-config derives them.
 func (c *Config) AgentgatewayBaseURL() string { return c.gatewayURL("agentgateway") }
-
-// ModelManagerBaseURL is the model-manager API through the edge — the
-// umbrella's components.model-manager.route (pathPrefix /model-manager,
-// stripped before the service, so its REST API sits at <base>/api/v1). The
-// route's JWT policy wants a Dex token on every call.
-func (c *Config) ModelManagerBaseURL() string { return c.AgentgatewayBaseURL() + "/model-manager" }
 
 // BackstageDirectURL bypasses the edge (hostNetwork port mapping), kept for
 // debugging.
