@@ -128,9 +128,11 @@ const (
 	// start a conversation (the reason follows it).
 	slackNotRunnable = "cannot start a conversation right now"
 	slackNotStarted  = "I haven't started anything"
-	slackStopped     = "⏹ Stopped."
-	slackApprovedBy  = "Approved by <@"
-	slackDeniedBy    = "Denied by <@"
+	// slackNothingStarted is klaus-gateway 3.8's spelling of slackNotStarted.
+	slackNothingStarted = "Nothing was started"
+	slackStopped        = "Stopped."
+	slackApprovedBy     = "Approved by <@"
+	slackDeniedBy       = "Denied by <@"
 	// slackStopCommand is the thread reply that stops a running turn.
 	slackStopCommand = "/stop"
 	// slackAgentCommand selects an agent in a mention; bare, it lists them.

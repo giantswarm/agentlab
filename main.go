@@ -424,7 +424,7 @@ func openCmd() *cobra.Command {
 // turnCmd is `agentlab turn`: one conversation with an agent as a lab user
 // through the edge, or the roster that user sees.
 func turnCmd() *cobra.Command {
-	var user, template, harness, instance string
+	var user, template, harness, instance, decide, reason, events, shareWith string
 	var list, keep, suspend bool
 	cmd := &cobra.Command{
 		Use:   "turn (--list | --template <name> <prompt>)",
@@ -451,7 +451,13 @@ func turnCmd() *cobra.Command {
 			if suspend && instance == "" {
 				return fmt.Errorf("--suspend needs --instance")
 			}
-			return lab.Turn(cfg, user, template, harness, prompt, instance, keep, suspend)
+			if shareWith != "" && instance == "" {
+				return fmt.Errorf("--share-with needs --instance")
+			}
+			if decide != "" && decide != "approve" && decide != "reject" {
+				return fmt.Errorf("--decide takes approve or reject, not %q", decide)
+			}
+			return lab.Turn(cfg, user, template, harness, prompt, instance, decide, reason, events, shareWith, keep, suspend)
 		},
 	}
 	cmd.Flags().StringVar(&user, "user", "", "the lab user to act as (default: the first admin in agentlab.yaml)")
@@ -460,6 +466,10 @@ func turnCmd() *cobra.Command {
 	cmd.Flags().StringVar(&instance, "instance", "", "continue this AgentInstance instead of creating one (from a previous --keep)")
 	cmd.Flags().BoolVar(&keep, "keep", false, "leave the AgentInstance in place after the turn, for a later --instance turn")
 	cmd.Flags().BoolVar(&suspend, "suspend", false, "with --instance: suspend the instance to the snapshot store before the turn, so the turn restores it")
+	cmd.Flags().StringVar(&decide, "decide", "", "answer every tool approval the turn pauses for: approve or reject (default: print the paused state and stop)")
+	cmd.Flags().StringVar(&shareWith, "share-with", "", "with --instance: the --user shares the instance read-write with this lab user, the turn runs as that user with the share token, and the share is revoked afterwards")
+	cmd.Flags().StringVar(&events, "events", "", "write every streamed A2A event of the turn to this file, one JSON object per line")
+	cmd.Flags().StringVar(&reason, "reason", "", "with --decide reject: the reason sent with the rejection")
 	cmd.Flags().BoolVar(&list, "list", false, "print the roster this user sees instead of a turn")
 	return cmd
 }
@@ -974,6 +984,7 @@ func klausGatewayTestCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.GatewayImage, "gateway-image", lab.KlausGatewayImageDefault, "the klaus-gateway image to run on the host network (a 0.x image is the documented negative: it cannot speak A2A v1 over gRPC)")
 	cmd.Flags().StringVar(&opts.GatewayBinary, "gateway-binary", "", "a local klaus-gateway build to run instead of the image — the proof of a branch")
 	cmd.Flags().IntVar(&opts.Port, "gateway-port", 18090, "host port of the gateway's Slack endpoints; the admin endpoints take the next port, the fake Slack Web API the one after when it runs in this process")
+	cmd.Flags().StringVar(&opts.Harness, "harness", "", "the Harness the fixture is admitted by and booted on, e.g. a coding Harness (default: the platform Harness kagent)")
 	cmd.Flags().StringVar(&opts.SlackFakeBinary, "slack-fake-binary", "", "the static Linux agentlab the fake Slack Web API container runs on the kind network while platform.klausGateway is on (default: this binary)")
 	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the fixture runs on (default: default-model-config, the Anthropic one the lab renders)")
 	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", 0, "how long the fixture's golden boot may take to reach Ready on the Harness (default 10m)")

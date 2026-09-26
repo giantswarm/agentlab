@@ -663,11 +663,16 @@ type agentReadiness struct {
 // (not NotFound) is the error; a template that is not there yet is waited
 // for.
 func waitAgentReady(name string, timeout time.Duration) (agentReadiness, error) {
+	return waitAgentReadyOn(name, kagentHarness, timeout)
+}
+
+// waitAgentReadyOn is waitAgentReady on the named Harness's entry.
+func waitAgentReadyOn(name, harness string, timeout time.Duration) (agentReadiness, error) {
 	started := time.Now()
 	var r agentReadiness
 	var lastErr error
 	waitFor(int(timeout/pollInterval), pollInterval, func() bool {
-		r, lastErr = readAgentReadiness(name)
+		r, lastErr = readAgentReadinessOn(name, harness)
 		return lastErr != nil || r.ready || r.terminal
 	})
 	r.elapsed = time.Since(started)
@@ -682,9 +687,12 @@ func waitAgentReady(name string, timeout time.Duration) (agentReadiness, error) 
 // carry them, so the Harness picks them up whichever label the platform
 // chose — the connectivity chart's agent-platform.giantswarm.io/harness:
 // <name>, or another. A Harness that cannot be read leaves the chart's.
-func harnessAdmissionLabels() map[string]string {
-	fallback := map[string]string{harnessLabel: kagentHarness}
-	h, err := readKagentObject(harnessResource, kagentHarness)
+func harnessAdmissionLabels() map[string]string { return harnessAdmissionLabelsOf(kagentHarness) }
+
+// harnessAdmissionLabelsOf are the labels the named Harness admits.
+func harnessAdmissionLabelsOf(harness string) map[string]string {
+	fallback := map[string]string{harnessLabel: harness}
+	h, err := readKagentObject(harnessResource, harness)
 	if err != nil {
 		return fallback
 	}
@@ -708,6 +716,11 @@ func admits(selector, labels map[string]string) bool {
 // readAgentReadiness is one reading of an agent's state (waitAgentReady's
 // probe): the release first, then the template and its Harness entry.
 func readAgentReadiness(name string) (agentReadiness, error) {
+	return readAgentReadinessOn(name, kagentHarness)
+}
+
+// readAgentReadinessOn is readAgentReadiness on the named Harness's entry.
+func readAgentReadinessOn(name, harness string) (agentReadiness, error) {
 	var r agentReadiness
 	release, err := readAgentRelease(name)
 	switch {
@@ -735,19 +748,19 @@ func readAgentReadiness(name string) (agentReadiness, error) {
 		return r, err
 	}
 	r.template = template
-	h := template.harness(kagentHarness)
+	h := template.harness(harness)
 	if h == nil {
 		switch {
 		case len(template.Status.Harnesses) > 0:
-			r.terminal, r.reason = true, fmt.Sprintf("AgentTemplate %s is admitted by %s only, not by the platform Harness %s", name, strings.Join(template.harnessNames(), ", "), kagentHarness)
+			r.terminal, r.reason = true, fmt.Sprintf("AgentTemplate %s is admitted by %s only, not by the platform Harness %s", name, strings.Join(template.harnessNames(), ", "), harness)
 		case template.Status.ObservedGeneration >= template.Metadata.Generation && template.Status.ObservedGeneration > 0:
 			// Observed, and no entry: a verdict only for a template the platform
 			// Harness's selector does not match. One it matches is between the
 			// controllers' passes — the entry follows.
-			if selector := harnessAdmissionLabels(); admits(selector, template.Metadata.Labels) {
-				r.reason = fmt.Sprintf("AgentTemplate %s carries the labels the platform Harness %s admits (%v); its status.harnesses[] entry is not written yet", name, kagentHarness, selector)
+			if selector := harnessAdmissionLabelsOf(harness); admits(selector, template.Metadata.Labels) {
+				r.reason = fmt.Sprintf("AgentTemplate %s carries the labels the platform Harness %s admits (%v); its status.harnesses[] entry is not written yet", name, harness, selector)
 			} else {
-				r.terminal, r.reason = true, fmt.Sprintf("no Harness admits AgentTemplate %s (labels %v; the platform Harness %s admits %v)", name, template.Metadata.Labels, kagentHarness, selector)
+				r.terminal, r.reason = true, fmt.Sprintf("no Harness admits AgentTemplate %s (labels %v; the platform Harness %s admits %v)", name, template.Metadata.Labels, harness, selector)
 			}
 		default:
 			r.reason = fmt.Sprintf("kagent has not reported on AgentTemplate %s yet", name)
@@ -755,7 +768,7 @@ func readAgentReadiness(name string) (agentReadiness, error) {
 		return r, nil
 	}
 	if text, terminal := terminalHarnessFailure(h); terminal {
-		r.terminal, r.reason = true, fmt.Sprintf("AgentTemplate %s on Harness %s: %s", name, kagentHarness, text)
+		r.terminal, r.reason = true, fmt.Sprintf("AgentTemplate %s on Harness %s: %s", name, harness, text)
 		return r, nil
 	}
 	if status, _ := h.condition(conditionReady); status == conditionTrue && h.DesiredRevision == h.LatestSuccessfulRevision {
@@ -763,7 +776,7 @@ func readAgentReadiness(name string) (agentReadiness, error) {
 		return r, nil
 	}
 	status, message := h.condition(conditionReady)
-	r.reason = fmt.Sprintf("AgentTemplate %s on Harness %s: Ready=%q %s (revision %.12s compiling%s)", name, kagentHarness, status, excerpt(message, 160), h.DesiredRevision, warningsNote(h.Warnings))
+	r.reason = fmt.Sprintf("AgentTemplate %s on Harness %s: Ready=%q %s (revision %.12s compiling%s)", name, harness, status, excerpt(message, 160), h.DesiredRevision, warningsNote(h.Warnings))
 	return r, nil
 }
 

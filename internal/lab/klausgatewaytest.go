@@ -169,6 +169,9 @@ type KlausGatewayTestOptions struct {
 	// ModelConfig is the kagent ModelConfig the fixture runs on (default
 	// default-model-config, the Anthropic one the lab renders).
 	ModelConfig string
+	// Harness is the Harness whose admission labels the fixture carries and
+	// whose entry the golden-boot wait reads (default the platform Harness).
+	Harness string
 	// ReadyTimeout bounds the fixture's golden boot (default 10 min).
 	ReadyTimeout time.Duration
 	// RunDir holds the stores, the keys and the gateway's log; empty picks
@@ -257,14 +260,14 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 		fake = f
 	}
 
-	shape := harnessAdmissionLabels()
+	shape := harnessAdmissionLabelsOf(opts.Harness)
 	step("Applying the fixtures in namespace %s: AgentTemplate %s (labelled %v, muster carrier %s with %s, requireApproval on the binding) and AgentTemplate %s (no admission label)",
 		kagentNamespace, klausGatewayTestAgent, shape, klausGatewayTestAgent, klausGatewayTestToolset, klausGatewayTestUnadmitted)
 	if _, err := applyManifests(context.Background(), []byte(klausGatewayFixtures(opts.ModelConfig, shape))); err != nil {
 		return err
 	}
-	step("Waiting up to %s for %s Ready on Harness %s (the golden boot)", opts.ReadyTimeout, klausGatewayTestAgent, kagentHarness)
-	boot, err := waitAgentReady(klausGatewayTestAgent, opts.ReadyTimeout)
+	step("Waiting up to %s for %s Ready on Harness %s (the golden boot)", opts.ReadyTimeout, klausGatewayTestAgent, opts.Harness)
+	boot, err := waitAgentReadyOn(klausGatewayTestAgent, opts.Harness, opts.ReadyTimeout)
 	if err != nil {
 		return err
 	}
@@ -509,6 +512,9 @@ func (o KlausGatewayTestOptions) withDefaults() KlausGatewayTestOptions {
 	}
 	if o.Port == 0 {
 		o.Port = 18090
+	}
+	if o.Harness == "" {
+		o.Harness = kagentHarness
 	}
 	if o.ModelConfig == "" {
 		o.ModelConfig = defaultModelConfig
@@ -1359,7 +1365,7 @@ func (p *slackProof) refusal(user, text string) (string, error) {
 	}
 	msg, _ := findMessage(msgs, slackNotRunnable)
 	text = msg.shown()
-	if !strings.Contains(text, unadmittedReason) || !strings.Contains(text, slackNotStarted) {
+	if !strings.Contains(text, unadmittedReason) || (!strings.Contains(text, slackNotStarted) && !strings.Contains(text, slackNothingStarted)) {
 		return "", fmt.Errorf("selecting %s was refused without the reason %q or %q: %s", klausGatewayTestUnadmitted, unadmittedReason, slackNotStarted, excerpt(text, 300))
 	}
 	first, _, _ := strings.Cut(text, "\n")
