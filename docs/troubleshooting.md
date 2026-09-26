@@ -99,6 +99,26 @@ plumbing for model servers under
   `agentlab platform` on a running cluster.
 
 
+## The host's network
+
+- **An intermittent 503 or DNS error from the gateway mid-turn is usually the
+  host's network.** Symptom: an agent turn fails with a 503 (or the gateway
+  logs a DNS failure for `api.anthropic.com`), a retry succeeds, and the
+  provider's status page shows no incident. The gateway resolves the provider
+  through CoreDNS, the kind node and then the host's resolver, and connects
+  over the host's routes. A host whose IPv6 route and DNS server come from
+  router advertisements (typical on Wi-Fi) can lose either for a moment, and a
+  resolver or connection that picked the IPv6 path stalls until it falls back.
+  Check the host with `resolvectl status` and `ip -6 route show default`, and
+  the path from the lab with
+  `docker exec <clusterName>-control-plane curl -4 -sS -o /dev/null -w '%{http_code}\n' https://api.anthropic.com/`
+  and the same with `-6` (`404` means reachable). `agents-test`,
+  `skills-test`, `toolsets-test` and `models-test` retry an agent's first
+  turn once, so one transient failure does not turn them red; a second
+  failure is reported. A host that keeps flapping is fixed on the host, not in
+  the lab: prefer IPv4 in `/etc/gai.conf` (`precedence ::ffff:0:0/96  100`) or
+  pin a stable DNS server.
+
 ## vm-manager
 
 - **`vm-manager-test` fails at `get_vm_attestation` with `golden mismatch:
