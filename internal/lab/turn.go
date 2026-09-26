@@ -11,6 +11,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	"github.com/giantswarm/agentlab/internal/config"
@@ -31,7 +32,7 @@ import (
 // proves the restore. A turn that pauses for tool approval prints the request
 // and stops, unless decide is "approve" or "reject": then every request is
 // answered that way until the task settles.
-func Turn(cfg *config.Config, email, template, harness, prompt, instanceID, decide, reason, eventsFile string, keep, suspend bool) error {
+func Turn(cfg *config.Config, email, template, harness, prompt, instanceID, decide, reason, eventsFile, shareWith string, keep, suspend bool) error {
 	user := cfg.FindUser(email)
 	if user == nil {
 		return fmt.Errorf("no lab user %q in agentlab.yaml", email)
@@ -105,7 +106,17 @@ func Turn(cfg *config.Config, email, template, harness, prompt, instanceID, deci
 			fmt.Printf("resumed: %s (%s)\n", instanceID, instanceState(instance))
 		}
 	}
-	t, err := api.decidedTurn(instanceID, prompt, decide, reason)
+	turnAPI := api
+	if shareWith != "" {
+		shared, revoke, err := sharedTurnAPI(ctx, cfg, api, instanceID, shareWith)
+		if err != nil {
+			return err
+		}
+		defer revoke()
+		defer shared.close()
+		turnAPI = shared
+	}
+	t, err := turnAPI.decidedTurn(instanceID, prompt, decide, reason)
 	if err != nil {
 		if created && !keep {
 			api.removeInstance(instanceID)
@@ -195,4 +206,45 @@ func (a *kagentAPI) decidedTurn(instanceID, prompt, decide, reason string) (*tur
 		return nil, err
 	}
 	return settled, nil
+}
+
+// sharedTurnAPI is the kagent client of another lab user on the instance: the
+// owner creates a read-write share, and the other user's calls carry their own
+// bearer plus the share token, which supplements their identity. The revoke
+// func withdraws the share.
+func sharedTurnAPI(ctx context.Context, cfg *config.Config, owner *kagentAPI, instanceID, email string) (*kagentAPI, func(), error) {
+	user := cfg.FindUser(email)
+	if user == nil {
+		return nil, nil, fmt.Errorf("no lab user %q in agentlab.yaml", email)
+	}
+	resp, err := owner.instances.CreateAgentInstanceShare(owner.callCtx(ctx), &apiv1alpha1.CreateAgentInstanceShareRequest{
+		AgentInstanceId: instanceID,
+		Permission:      apiv1alpha1.AgentInstanceSharePermission_AGENT_INSTANCE_SHARE_PERMISSION_READ_WRITE,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("sharing %s: %w", instanceID, err)
+	}
+	shareID := resp.GetShare().GetId()
+	revoke := func() {
+		rctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if _, err := owner.instances.RevokeAgentInstanceShare(owner.callCtx(rctx), &apiv1alpha1.RevokeAgentInstanceShareRequest{ShareId: shareID}); err != nil {
+			note("revoking share %s: %v", shareID, err)
+			return
+		}
+		fmt.Printf("share revoked: %s\n", shareID)
+	}
+	token, err := passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret, user.Email, user.Password, musterLoginScopes)
+	if err != nil {
+		revoke()
+		return nil, nil, err
+	}
+	shared, err := dialKagentAPI(cfg, token)
+	if err != nil {
+		revoke()
+		return nil, nil, err
+	}
+	shared.extra = metadata.Pairs("x-share-token", resp.GetToken())
+	fmt.Printf("shared: %s read-write with %s (share %s)\n", instanceID, user.Email, shareID)
+	return shared, revoke, nil
 }
