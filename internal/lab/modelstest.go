@@ -1,7 +1,6 @@
 package lab
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -58,26 +57,26 @@ func ModelsTestModelDefaults() string {
 // through agent-manager as the person, on the ModelConfig model-manager wired.
 const modelsTestAgent = "agentlab-models-test"
 
-// modelField and backendField are the request fields naming a model and its
-// backend in the model-manager API.
+// modelField and backendField are the tool arguments naming a model and its
+// backend in model-manager's tools.
 const (
 	modelField   = "model"
 	backendField = "backend"
 )
 
 // ModelsTest is the headless end-to-end proof of managed models on ONE of the
-// configured backends, through the platform path only: the model-manager REST
-// API behind the agentgateway route with a lab user's Dex token (and a 401
-// without one), then list -> pull with observable progress -> the auto-created
+// configured backends, through the platform path only: model-manager's
+// x_model-manager_* tools through muster with a lab user's Dex token (and
+// muster's 401 without one), then list -> pull with observable progress -> the auto-created
 // kagent ModelConfig (native keyless Ollama provider on ollama, OpenAI
 // provider against Lemonade's /api/v1 or LM Studio's /v1, carrying the backend
-// label) Accepted -> a kagent agent turn against it -> the MCP tools through
-// muster -> unload -> the teardown the server supports. Every request names
+// label) Accepted -> a kagent agent turn against it -> the tools muster
+// aggregates -> unload -> the teardown the server supports. Every request names
 // the backend — the one model-manager fronting all servers resolves by it.
 //
 // On a server that deletes over its API the teardown is a delete (gone from
 // the host, the ModelConfig gone) and the run leaves nothing behind. On
-// lmstudio LM Studio serves no delete, so the run proves the 501 refusal and
+// lmstudio LM Studio serves no delete, so the run proves the unsupported refusal and
 // unwires instead, and says in its closing note that the model stays
 // downloaded — the one proof that leaves something behind, by design.
 func ModelsTest(cfg *config.Config, email, backendName, model string) error {
@@ -106,24 +105,11 @@ func ModelsTest(cfg *config.Config, email, backendName, model string) error {
 	if model == "" {
 		model = spec.proofModel
 	}
-	// The backend qualifier of every read and write of the proof.
-	q := "?backend=" + url.QueryEscape(backendName)
-	// Generous: the first agent turn loads the model into the host server.
-	client, err := labHTTPClient(180 * time.Second)
-	if err != nil {
+	// The backend every read and write of the proof names.
+	onBackend := map[string]any{backendField: backendName}
+	if err := musterRefusesAnonymous(cfg); err != nil {
 		return err
 	}
-	api := modelManagerAPI{client: client, base: cfg.ModelManagerBaseURL() + "/api/v1"}
-
-	step("Calling the model-manager API without a token (%s)", cfg.ModelManagerBaseURL())
-	status, _, header, err := api.do(http.MethodGet, "/backend", nil)
-	if err != nil {
-		return fmt.Errorf("model-manager is not reachable through the edge: %w — run `agentlab platform` first", err)
-	}
-	if status != http.StatusUnauthorized {
-		return fmt.Errorf("unauthenticated GET /api/v1/backend answered %d, wanted 401: the route's JWT policy is not enforcing", status)
-	}
-	note("401 without a token (WWW-Authenticate: %s)", firstNonEmpty(header.Get("WWW-Authenticate"), "-"))
 
 	step("Logging in to Dex as %s", email)
 	token, err := passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret,
@@ -131,10 +117,14 @@ func ModelsTest(cfg *config.Config, email, backendName, model string) error {
 	if err != nil {
 		return err
 	}
-	api.token = token
 	note("got an id_token")
+	session, err := openMusterSession(cfg, token, "models-test")
+	if err != nil {
+		return err
+	}
+	api := modelManagerTools{session: session}
 
-	step("Backend %s through the gateway with the Dex token", backendName)
+	step("Backend %s through muster with the Dex token (%sget_backend)", backendName, api.toolName(""))
 	var backend struct {
 		Backend      string          `json:"backend"`
 		Version      string          `json:"version"`
@@ -146,7 +136,7 @@ func ModelsTest(cfg *config.Config, email, backendName, model string) error {
 			AutoWire  bool   `json:"autoWire"`
 		} `json:"wiring"`
 	}
-	if err := api.getJSON("/backend"+q, &backend); err != nil {
+	if err := api.getJSON("get_backend", onBackend, &backend); err != nil {
 		return err
 	}
 	if backend.Backend != backendName || !backend.Healthy {
@@ -182,7 +172,7 @@ func ModelsTest(cfg *config.Config, email, backendName, model string) error {
 	note("delete=%v, as %s offers", spec.deleteOverREST, config.BackendServerName(backendName))
 
 	step("Listing models on %s", backendName)
-	names, err := api.modelNames("/models" + q)
+	names, err := api.modelNames("list_models", backendName)
 	if err != nil {
 		return err
 	}
@@ -201,22 +191,18 @@ func ModelsTest(cfg *config.Config, email, backendName, model string) error {
 		}
 	}
 
-	step("Pulling %s on %s (progress via GET /api/v1/jobs/{id})", model, backendName)
+	step("Pulling %s on %s (progress via %sget_job)", model, backendName, api.toolName(""))
 	started := time.Now()
-	status, body, _, err := api.do(http.MethodPost, "/models/pull", map[string]any{modelField: model, backendField: backendName})
-	if err != nil {
-		return err
-	}
-	if status != http.StatusAccepted {
-		return fmt.Errorf("POST /models/pull answered %d, wanted 202: %.300s", status, body)
-	}
 	var pull struct {
 		Job struct {
 			ID string `json:"id"`
 		} `json:"job"`
 	}
-	if err := json.Unmarshal(body, &pull); err != nil || pull.Job.ID == "" {
-		return fmt.Errorf("pull did not return a job id: %.300s", body)
+	if err := api.getJSON("pull_model", map[string]any{modelField: model, backendField: backendName}, &pull); err != nil {
+		return err
+	}
+	if pull.Job.ID == "" {
+		return fmt.Errorf("pull_model did not return a job id")
 	}
 	note("job %s accepted", pull.Job.ID)
 	if err := api.waitJob(pull.Job.ID, 30*time.Minute); err != nil {
@@ -228,7 +214,7 @@ func ModelsTest(cfg *config.Config, email, backendName, model string) error {
 	var job struct {
 		RequestedBy string `json:"requestedBy"`
 	}
-	if err := api.getJSON("/jobs/"+pull.Job.ID, &job); err != nil {
+	if err := api.getJSON("get_job", map[string]any{"id": pull.Job.ID}, &job); err != nil {
 		return err
 	}
 	if job.RequestedBy != user.Email {
@@ -245,7 +231,7 @@ func ModelsTest(cfg *config.Config, email, backendName, model string) error {
 			} `json:"modelConfig"`
 			Capabilities []string `json:"capabilities"`
 		}
-		if err := api.getJSON("/models/"+model+q, &m); err != nil {
+		if err := api.getJSON("get_model", map[string]any{modelField: model, backendField: backendName}, &m); err != nil {
 			return false
 		}
 		mcName = m.ModelConfig.Name
@@ -255,7 +241,7 @@ func ModelsTest(cfg *config.Config, email, backendName, model string) error {
 		return mcName != ""
 	})
 	if !found {
-		return fmt.Errorf("GET /models/%s never reported a wired ModelConfig (autoWire=%v)", model, backend.Wiring.AutoWire)
+		return fmt.Errorf("get_model %s never reported a wired ModelConfig (autoWire=%v)", model, backend.Wiring.AutoWire)
 	}
 	if err := waitModelConfigAccepted(mcName); err != nil {
 		return err
@@ -302,25 +288,22 @@ func ModelsTest(cfg *config.Config, email, backendName, model string) error {
 		if err != nil {
 			return err
 		}
-		viewerAPI := modelManagerAPI{client: client, base: api.base, token: viewerToken}
-		status, body, _, err := viewerAPI.do(http.MethodPost, "/models/wire", map[string]any{modelField: model, backendField: backendName})
+		viewerSession, err := openMusterSession(cfg, viewerToken, "models-test-viewer")
 		if err != nil {
 			return err
 		}
-		if status/100 == 2 {
-			return fmt.Errorf("%s wired %s (HTTP %d) although the view role cannot write ModelConfigs — model-manager is not acting as the caller (ServiceAccount fallback?)", viewer.Email, model, status)
+		viewerAPI := modelManagerTools{session: viewerSession}
+		_, err = viewerAPI.call("wire_model", map[string]any{modelField: model, backendField: backendName})
+		if err == nil {
+			return fmt.Errorf("%s wired %s although the view role cannot write ModelConfigs — model-manager is not acting as the caller (ServiceAccount fallback?)", viewer.Email, model)
 		}
-		if !strings.Contains(strings.ToLower(string(body)), "forbidden") {
-			return fmt.Errorf("POST /models/wire as %s answered %d without the apiserver's Forbidden: %.300s", viewer.Email, status, body)
+		if refusalCode(err) == "" || !strings.Contains(strings.ToLower(err.Error()), "forbidden") {
+			return fmt.Errorf("wire_model as %s failed without the apiserver's Forbidden: %w", viewer.Email, err)
 		}
-		note("%s: HTTP %d, %s", viewer.Email, status, excerpt(string(body), 120))
+		note("%s: %s", viewer.Email, excerpt(err.Error(), 160))
 	}
 
 	const pongPrompt = "Reply with exactly the word pong and nothing else."
-	session, err := openMusterSession(cfg, token, "models-test")
-	if err != nil {
-		return err
-	}
 	step("Agent turn on %s: an agent created through agent-manager as %s, Ready on Harness %s, one A2A turn through the edge (runtime -> host %s)", mcName, user.Email, kagentHarness, config.BackendServerName(backendName))
 	reply, err := agentTurn(cfg, session, token, mcName, pongPrompt)
 	if err != nil {
@@ -355,17 +338,15 @@ func ModelsTest(cfg *config.Config, email, backendName, model string) error {
 	note("%sget_model sees %s (%s)", toolPrefix, model, excerpt(text, 100))
 
 	step("Unloading %s", model)
-	if status, body, _, err := api.do(http.MethodPost, "/models/unload", map[string]any{modelField: model, backendField: backendName}); err != nil {
+	if _, err := api.call("unload_model", map[string]any{modelField: model, backendField: backendName}); err != nil {
 		return err
-	} else if status/100 != 2 {
-		return fmt.Errorf("POST /models/unload answered %d: %.300s", status, body)
 	}
 	unloaded := waitFor(15, 2*time.Second, func() bool {
-		loaded, err := api.modelNames("/loaded" + q)
-		return err == nil && !slices.Contains(loaded, model)
+		loaded, err := api.modelNames("list_loaded_models", backendName)
+		return err == nil && !slices.ContainsFunc(loaded, func(n string) bool { return sameModel(n, model) })
 	})
 	if !unloaded {
-		return fmt.Errorf("%s still listed by GET /loaded after unload", model)
+		return fmt.Errorf("%s still listed by list_loaded_models after unload", model)
 	}
 	note("not loaded any more")
 
@@ -382,7 +363,7 @@ func ModelsTest(cfg *config.Config, email, backendName, model string) error {
 	server := config.BackendServerName(backendName)
 	teardown := "delete"
 	if !spec.deleteOverREST {
-		teardown = fmt.Sprintf("delete refused (%d) -> unwire", http.StatusNotImplemented)
+		teardown = "delete refused (unsupported) -> unwire"
 		if err := proveDeleteRefused(&api, session, backendName, model, mcName, endpoint, toolPrefix); err != nil {
 			return err
 		}
@@ -414,7 +395,7 @@ func ModelsTest(cfg *config.Config, email, backendName, model string) error {
 	}
 
 	fmt.Println()
-	fmt.Println("PASS: no token -> 401 at the gateway; Dex token -> model-manager REST through agentgateway")
+	fmt.Printf("PASS: no token -> 401 at muster; Dex token -> x_%s_* through muster as the person\n", modelManagerMCPServer)
 	fmt.Printf("PASS: %s backend: list -> pull %s (progress) -> ModelConfig %s (%s provider, backend label) Accepted -> agent turn -> unload -> %s\n",
 		backendName, model, mcName, spec.provider, teardown)
 	fmt.Printf("PASS: muster aggregates x_%s_* and calls them (get_model, list_models)\n", modelManagerMCPServer)
@@ -531,30 +512,24 @@ func waitModelConfigGone(mcName string) error {
 // refused delete that removed something would be worse than one that refuses —
 // and the ModelConfig must still come off through the supported route, which
 // shows wiring and inventory are independent.
-func proveDeleteRefused(api *modelManagerAPI, session *musterSession,
+func proveDeleteRefused(api *modelManagerTools, session *musterSession,
 	backendName, model, mcName, endpoint, toolPrefix string) error {
 	server := config.BackendServerName(backendName)
 	step("Deleting %s — expecting the refusal (%s has no delete over its API)", model, server)
-	status, body, _, err := api.do(http.MethodDelete, "/models/"+model+"?backend="+url.QueryEscape(backendName), nil)
-	if err != nil {
-		return err
+	_, err := api.call("delete_model", map[string]any{modelField: model, backendField: backendName})
+	if err == nil {
+		return fmt.Errorf("delete_model %s succeeded: %s cannot delete a model, so the platform must refuse instead of reporting success",
+			model, server)
 	}
-	if status/100 == 2 {
-		return fmt.Errorf("DELETE /models/%s answered %d: %s cannot delete a model, so the platform must refuse instead of reporting success",
-			model, status, server)
+	// The contract is the code, not a word anywhere in the message: unsupported
+	// is what maps the driver's ErrUnsupported, and accepting any failure that
+	// happens to mention it would pass a validation error or a transport
+	// failure while the PASS line went on claiming the refusal.
+	if code := refusalCode(err); code != "unsupported" {
+		return fmt.Errorf("delete_model %s failed with code %q, want unsupported (the platform's mapping of the driver's unsupported delete): %w",
+			model, code, err)
 	}
-	// The contract is the status, not a word in the body: 501 is what maps
-	// the driver's ErrUnsupported, and accepting any non-2xx that happens to
-	// say "unsupported" would pass a 400 validation error or a gateway's 502
-	// while the PASS line went on claiming a 501.
-	if status != http.StatusNotImplemented {
-		return fmt.Errorf("DELETE /models/%s answered %d, want %d (the platform's mapping of the driver's unsupported delete): %.300s",
-			model, status, http.StatusNotImplemented, body)
-	}
-	if !strings.Contains(strings.ToLower(string(body)), "unsupported") {
-		return fmt.Errorf("DELETE /models/%s answered %d but not with the unsupported code: %.300s", model, status, body)
-	}
-	note("HTTP %d, %s", status, excerpt(string(body), 120))
+	note("%s", excerpt(err.Error(), 160))
 
 	// The refusal must have changed nothing: still downloaded, still wired,
 	// still listed.
@@ -584,11 +559,8 @@ func proveDeleteRefused(api *modelManagerAPI, session *musterSession,
 	note("nothing changed: still downloaded on the host, ModelConfig %s still there", mcName)
 
 	step("Unwiring %s — the teardown %s does offer", model, server)
-	if status, body, _, err := api.do(http.MethodPost, "/models/unwire",
-		map[string]any{modelField: model, backendField: backendName}); err != nil {
+	if _, err := api.call("unwire_model", map[string]any{modelField: model, backendField: backendName}); err != nil {
 		return err
-	} else if status/100 != 2 {
-		return fmt.Errorf("POST /models/unwire answered %d: %.300s", status, body)
 	}
 	if err := waitModelConfigGone(mcName); err != nil {
 		return err
@@ -613,129 +585,6 @@ func proveDeleteRefused(api *modelManagerAPI, session *musterSession,
 	}
 	note("%slist_models still lists it (%d models on the host)", toolPrefix, len(remaining))
 	return nil
-}
-
-// modelManagerAPI is a minimal client of the model-manager REST API through
-// the edge, with the Dex token as Bearer once known.
-type modelManagerAPI struct {
-	client *http.Client
-	base   string
-	token  string
-}
-
-func (a *modelManagerAPI) do(method, path string, payload any) (int, []byte, http.Header, error) {
-	var body io.Reader
-	if payload != nil {
-		raw, err := json.Marshal(payload)
-		if err != nil {
-			return 0, nil, nil, err
-		}
-		body = bytes.NewReader(raw)
-	}
-	req, err := http.NewRequest(method, a.base+path, body)
-	if err != nil {
-		return 0, nil, nil, err
-	}
-	if a.token != "" {
-		req.Header.Set("Authorization", "Bearer "+a.token)
-	}
-	if payload != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	req.Header.Set("Accept", "application/json")
-	resp, err := a.client.Do(req)
-	if err != nil {
-		return 0, nil, nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	raw, _ := io.ReadAll(resp.Body)
-	return resp.StatusCode, raw, resp.Header, nil
-}
-
-func (a *modelManagerAPI) getJSON(path string, out any) error {
-	status, body, _, err := a.do(http.MethodGet, path, nil)
-	if err != nil {
-		return err
-	}
-	if status != http.StatusOK {
-		return fmt.Errorf("GET %s answered %d: %.300s", path, status, body)
-	}
-	if err := json.Unmarshal(body, out); err != nil {
-		return fmt.Errorf("GET %s: parsing %.200s: %w", path, body, err)
-	}
-	return nil
-}
-
-// modelNames lists the model names of a /models-shaped response.
-func (a *modelManagerAPI) modelNames(path string) ([]string, error) {
-	var list struct {
-		Models []struct {
-			Name string `json:"name"`
-		} `json:"models"`
-	}
-	if err := a.getJSON(path, &list); err != nil {
-		return nil, err
-	}
-	names := make([]string, 0, len(list.Models))
-	for _, m := range list.Models {
-		names = append(names, m.Name)
-	}
-	slices.Sort(names)
-	return names, nil
-}
-
-// deleteModel deletes a model on a backend (its ModelConfig rides along) and
-// waits until the backend's inventory no longer lists it.
-func (a *modelManagerAPI) deleteModel(model, backend string) error {
-	q := "?backend=" + url.QueryEscape(backend)
-	status, body, _, err := a.do(http.MethodDelete, "/models/"+model+q, nil)
-	if err != nil {
-		return err
-	}
-	if status/100 != 2 && status != http.StatusNotFound {
-		return fmt.Errorf("DELETE /models/%s answered %d: %.300s", model, status, body)
-	}
-	gone := waitFor(15, 2*time.Second, func() bool {
-		names, err := a.modelNames("/models" + q)
-		return err == nil && !slices.ContainsFunc(names, func(n string) bool { return sameModel(n, model) })
-	})
-	if !gone {
-		return fmt.Errorf("%s still listed after the delete", model)
-	}
-	note("deleted (status %d)", status)
-	return nil
-}
-
-// waitJob polls one job until it finishes, printing progress as it crosses
-// each tenth — the observable-progress part of the proof.
-func (a *modelManagerAPI) waitJob(id string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	lastBucket := -1
-	for time.Now().Before(deadline) {
-		var job struct {
-			Phase          string  `json:"phase"`
-			Status         string  `json:"status"`
-			Percent        float64 `json:"percent"`
-			BytesCompleted int64   `json:"bytesCompleted"`
-			BytesTotal     int64   `json:"bytesTotal"`
-			Error          string  `json:"error"`
-		}
-		if err := a.getJSON("/jobs/"+id, &job); err != nil {
-			return err
-		}
-		if bucket := int(job.Percent) / 10; bucket > lastBucket && job.BytesTotal > 0 {
-			note("%3.0f%%  %s / %s  %s", job.Percent, humanBytes(job.BytesCompleted), humanBytes(job.BytesTotal), job.Status)
-			lastBucket = bucket
-		}
-		switch job.Phase {
-		case "succeeded":
-			return nil
-		case "failed", "cancelled":
-			return fmt.Errorf("job %s %s: %s", id, job.Phase, firstNonEmpty(job.Error, job.Status))
-		}
-		time.Sleep(2 * time.Second)
-	}
-	return fmt.Errorf("job %s did not finish within %s", id, timeout)
 }
 
 // agentTurn creates the proof's throwaway agent on the ModelConfig through

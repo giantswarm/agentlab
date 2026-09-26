@@ -487,8 +487,7 @@ kagent:
   # replacing whatever the client sent; the controller re-derives the caller
   # from the same bearer (controller.auth.mode trusted-proxy below).
   # platform-test asserts both halves. The chart's default JWKS source is a
-  # Giant Swarm Dex; the lab Dex serves its keys over TLS at the issuer path
-  # (the model-manager route below uses the same source).
+  # Giant Swarm Dex; the lab Dex serves its keys over TLS at the issuer path.
   controllerRoute:
     enabled: true
     jwtAuthentication:
@@ -700,27 +699,6 @@ model-manager:
         requiredAudiences:
           - kubernetes
 
-# The connectivity chart's wiring around model-manager: its REST API on the
-# edge at https://agentgateway.{{ .Platform.Domain }}/model-manager, for REST
-# clients such as models-test (the portal reaches model-manager through
-# muster as the signed-in person, x_model-manager_* tools, and its app-config
-# carries no model-manager block). Unlike the kagent route above, JWT
-# validation is ON: a caller sends the user's Dex ID token and the gateway is
-# the identity boundary (model-manager checks none itself), so an
-# unauthenticated call answers 401. The lab Dex serves its JWKS over TLS at the issuer path, hence the
-# in-cluster host, the /dex/keys path and the TLS origination against the
-# lab CA (jwks.tls.caSecretName defaults to global.identity.ca.secretName).
-modelManager:
-  route:
-    enabled: true
-    jwtAuthentication:
-      enabled: true
-      jwks:
-        host: dex.dex.svc.cluster.local
-        port: 5556
-        path: /dex/keys
-        tls:
-          enabled: true
 {{- end }}
 
 {{- if .ServingEnabled }}
@@ -831,7 +809,7 @@ modelServing:
   # The models Gateway: the agentgateway Gateway every LLMInferenceService
   # route attaches to, TLS on the lab's wildcard certificate (the chart's
   # default, gatewayApi.gateway.tls.secretName), its JWT policy against the
-  # lab Dex like the model-manager route above — the JWKS over TLS at the
+  # lab Dex like the kagent controller route above — the JWKS over TLS at the
   # issuer path, the lab's two login clients as the audiences (the platform
   # client the portal, muster and the proofs log in with; the kubernetes
   # client `agentlab login` and kubectl mint their tokens for). No

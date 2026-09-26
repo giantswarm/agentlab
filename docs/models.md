@@ -358,20 +358,13 @@ What `agentlab platform` (or `up`) does with it:
 - **The chart's `components.model-manager`** goes on with every listed
   backend (`model-manager.backends` plus one `model-manager.<backend>.endpoint`
   each = the detected addresses; a single entry renders the chart's `backend:`
-  form), its agentgateway **route** at
-  `https://agentgateway.<domain>/model-manager` and, unlike the lab's kagent
-  route, **JWT validation on**: the gateway verifies the caller's Dex token
-  against the lab Dex (JWKS over TLS at
-  `dex.dex.svc.cluster.local:5556/dex/keys`, trusted through the lab CA) and
-  answers 401 without one. model-manager checks no identity itself — the
-  gateway is the boundary, the same trust model as the kagent controller
-  route on real installations.
-- **The portal's service side.** The chart's Backstage app-config gains
-  `agentPlatform.modelManager.installations.agent-platform.apiBaseUrl:
-  https://agentgateway.<domain>/model-manager`; the portal backend forwards
-  the signed-in user's Dex ID token to it. The portal renders one Serving
-  group per backend of the installation (giantswarm/backstage#2264); what
-  else the Models tab shows is the portal's business (giantswarm/backstage#2194).
+  form). model-manager has no route on the edge: the portal, agents and the
+  proofs reach it through muster only, as the signed-in person — muster
+  refuses a call without a Dex token and forwards the person's token to
+  model-manager (`auth.forwardToken`).
+- **The portal** calls the `x_model-manager_*` tools through muster as the
+  signed-in user and renders one Serving group per backend of the
+  installation (giantswarm/backstage#2264, giantswarm/backstage#2294).
 - **muster** registers the MCP endpoint (the chart's own `MCPServer` CR,
   `Connected` is waited for) and the tools surface as
   `x_model-manager_<tool>`: `list_models`, `get_model`, `list_loaded_models`,
@@ -395,11 +388,11 @@ platform path only.
 **On lmstudio the run ends differently, and deliberately so.** LM Studio has
 no delete over its API — removing a model is `lms rm` on the host, which no
 pod can run — so model-manager reports `delete: false` and the proof asserts
-the *refusal* instead of skipping a step: the platform must answer `501
-unsupported`, the model must still be downloaded and still wired afterwards
+the *refusal* instead of skipping a step: `delete_model` must answer with
+the `unsupported` code, the model must still be downloaded and still wired afterwards
 (a refused delete that removed something would be worse than one that
-refuses), and the ModelConfig must then come off through the route that does
-exist, `POST /models/unwire`. The run also cross-checks the advertised
+refuses), and the ModelConfig must then come off through the tool that does
+exist, `unwire_model`. The run also cross-checks the advertised
 `delete` capability against what the server really offers, in both
 directions. It is therefore the one backend that **does** leave something
 behind — the model stays downloaded, and the last line says so.
@@ -408,15 +401,15 @@ The ollama and lemonade runs leave nothing behind:
 
 ```
 agentlab models-test
-==> Calling the model-manager API without a token         -> 401 at the gateway
+==> Calling muster without a token                         -> 401
 ==> Logging in to Dex as admin@lab.local
-==> Backend through the gateway with the Dex token         -> ollama, healthy, capabilities
+==> Backend through muster with the Dex token (get_backend) -> ollama, healthy, capabilities
 ==> Listing models
-==> Pulling qwen2.5:0.5b (progress via GET /api/v1/jobs/{id})
+==> Pulling qwen2.5:0.5b (progress via get_job)
 ==> Auto-created kagent ModelConfig                        -> Ollama provider, Accepted
 ==> Agent turn on qwen2-5-0-5b (kagent Agent, runtime go -> host Ollama)
 ==> MCP tools through muster (x_model-manager_*)           -> get_model
-==> Unloading qwen2.5:0.5b                                 -> gone from /loaded
+==> Unloading qwen2.5:0.5b                                 -> gone from list_loaded_models
 ==> Deleting qwen2.5:0.5b                                  -> gone from Ollama, ModelConfig gone, list_models agrees
 ```
 
@@ -495,9 +488,9 @@ The proof, `agentlab serving-test`, leaves nothing behind:
 ```
 agentlab serving-test
 ==> The serving control plane: the llm-d controller, the well-known template, the models Gateway, the lab preset
-==> Calling the model-manager API without a token                 -> 401 at the gateway
+==> Calling muster without a token                                 -> 401
 ==> Logging in to Dex as admin@lab.local
-==> The kserve backend through the gateway with the Dex token
+==> The kserve backend through muster with the Dex token
 ==> The published presets: the lab's qwen2-5-0-5b-cpu among the shipped ones
 ==> The fit: qwen2-5-0-5b-cpu against the node's CPU capacity      -> fits, allocatable budget
 ==> Loading qwen2-5-0-5b-cpu on kserve                             -> LLMInferenceService composed on the CPU runtime

@@ -163,7 +163,4 @@ func TestModelManagerEnabledNeedsPlatformAndAgents(t *testing.T) {
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "platform.modelManager") {
 		t.Fatalf("validate should reject model-manager without agents, got %v", err)
 	}
-	if cfg.ModelManagerBaseURL() != "https://agentgateway.127.0.0.1.nip.io/model-manager" {
-		t.Fatalf("unexpected model-manager base URL %q", cfg.ModelManagerBaseURL())
-	}
 }
