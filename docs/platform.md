@@ -821,6 +821,21 @@ To drive the UI: **Agent Platform → MCP Servers**, expand `lab-oauth-fixture`,
 **Sign in** — the popup lands on Dex directly. After a muster pod roll the row
 reads `Failed` for about a minute (Reconnect, or wait).
 
+## GitHub as the person (`platform.github`)
+
+Off by default. On (`agentlab configure --github`), `agentlab platform` registers GitHub's hosted MCP server (`https://api.githubcopilot.com/mcp/`) with muster as the MCPServer `github` (`github-mcp.yaml.tmpl`). An installation declares it the same way: a pinned GitHub authorization server, the grant filed per person (`grantScope: subject`), tools under `x_github_`. Off again, the run deletes the MCPServer and its client Secret.
+
+The OAuth client is yours to register, since GitHub registers no clients dynamically:
+
+- an **OAuth App** (Settings, Developer settings, OAuth Apps), the quickest: its token carries the scopes `repo read:org`, so it reaches every repository the person can;
+- or a **GitHub App's** client with user-to-server tokens: rights are the App's permissions on the repositories it is installed on, intersected with the person's. Scopes are ignored.
+
+Either way, the callback URL is muster's proxy callback, `https://muster.<domain>:<gatewayPort>/oauth/proxy/callback` (the run prints it). GitHub only redirects the browser there, so a loopback lab URL works. Export `GITHUB_MCP_CLIENT_ID` and `GITHUB_MCP_CLIENT_SECRET` before `agentlab up` or `agentlab platform`. They land in the Secret `agent-platform/github-oauth-client` only, never in `agentlab.yaml` or `state/`. Without both variables the run skips the server with a note.
+
+Each person signs in once (`core_auth_login` with `server: github` through muster, or the portal's Sign in). An agent calling a GitHub tool before that gets muster's sign-in challenge, which it cannot follow itself. muster keeps one pinned client per issuer string, so a second MCPServer pinning `https://github.com/login/oauth` with another client would take over this one's grants.
+
+A personal access token does not fit: muster sends only literal headers, so the token would sit in the MCPServer spec.
+
 ## The fake fleet and the tool-group label
 
 A real installation federates many management clusters: agent-platform-mcps

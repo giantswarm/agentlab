@@ -704,6 +704,11 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	if err := ensureFleetFixture(cfg); err != nil {
 		return err
 	}
+	// GitHub's hosted MCP server (githubmcp.go), off by default; same CRD
+	// reason.
+	if err := ensureGitHubMCP(cfg); err != nil {
+		return err
+	}
 	// The agents' model key. The default ModelConfig (rendered by the kagent
 	// chart from providers.anthropic) references this secret; agent pods
 	// mount it at run time, so it can land after the install — which it must,
