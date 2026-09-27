@@ -281,30 +281,47 @@ func ServingTest(cfg *config.Config, email string, opts ServingTestOptions) erro
 	}
 	note("Ready after %s: pod %s on %s, %s, no accelerator requested (%s)", time.Since(started).Round(time.Second), pod.Name, pod.Spec.NodeName, main.Image, imageOrigin(pod, llmisvcMainContainer))
 
-	step("The served model as model-manager reports it (list_loaded_models)")
-	var loaded struct {
-		Models []servedModel `json:"loaded"`
-	}
-	if err := api.getJSON("list_loaded_models", onKServe, &loaded); err != nil {
+	// With llmRouting on, the platform release renders the LLM endpoint
+	// document and model-manager puts the Ready model on that endpoint: the
+	// listing reports its public name, and the ModelConfig rides the
+	// endpoint instead of the model's route.
+	llm, err := readLLMEndpoint(ctx, k)
+	if err != nil {
 		return err
 	}
-	var endpoint string
-	for _, m := range loaded.Models {
-		if m.Preset != preset && m.Name != preset {
-			continue
-		}
-		if m.Kind != "LLMInferenceService" {
-			return fmt.Errorf("list_loaded_models lists %s as a %s, wanted an LLMInferenceService (the llm-d path)", m.Name, m.Kind)
-		}
-		if !strings.HasPrefix(m.Endpoint, modelsGatewayURL(cfg)+"/") {
-			return fmt.Errorf("list_loaded_models reports the endpoint %s, wanted the model's route on the models Gateway (%s/%s/%s)", m.Endpoint, modelsGatewayURL(cfg), servingNamespace, preset)
-		}
-		endpoint = m.Endpoint
-		note("%s: %s, %s, routed at %s (node %s)", m.Name, m.Kind, m.Status, m.Endpoint, m.Node)
+	llmEndpoint := llm.Spec.Endpoint
+	route := modelsGatewayURL(cfg) + "/" + servingNamespace + "/" + preset
+	wantEndpoint := route
+	if llmEndpoint != "" {
+		wantEndpoint = llm.reported()
+		note("the LLM endpoint document is published: the model goes on %s", wantEndpoint)
 	}
-	if endpoint == "" {
-		return fmt.Errorf("list_loaded_models does not list %s", preset)
+
+	step("The served model as model-manager reports it (list_loaded_models)")
+	var served *servedModel
+	if !waitFor(30, 2*time.Second, func() bool {
+		var loaded struct {
+			Models []servedModel `json:"loaded"`
+		}
+		if err := api.getJSON("list_loaded_models", onKServe, &loaded); err != nil {
+			return false
+		}
+		served = findServed(preset, loaded.Models)
+		return served != nil && (llmEndpoint == "" || served.PublicName != "")
+	}) {
+		if served == nil {
+			return fmt.Errorf("list_loaded_models does not list %s", preset)
+		}
+		return fmt.Errorf("list_loaded_models never reported a public name for %s on the LLM endpoint %s", preset, llmEndpoint)
 	}
+	if served.Kind != "LLMInferenceService" {
+		return fmt.Errorf("list_loaded_models lists %s as a %s, wanted an LLMInferenceService (the llm-d path)", served.Name, served.Kind)
+	}
+	if served.Endpoint != wantEndpoint {
+		return fmt.Errorf("list_loaded_models reports the endpoint %s, wanted %s", served.Endpoint, wantEndpoint)
+	}
+	endpoint := served.Endpoint
+	note("%s: %s, %s, public name %q, at %s (node %s)", served.Name, served.Kind, served.Status, served.PublicName, served.Endpoint, served.Node)
 
 	step("The ModelConfig model-manager wired into kagent")
 	mcName := ""
@@ -314,7 +331,7 @@ func ServingTest(cfg *config.Config, email string, opts ServingTestOptions) erro
 				Name string `json:"name"`
 			} `json:"modelConfig"`
 		}
-		if err := api.getJSON("get_model", map[string]any{modelField: servedModelName(preset, loaded.Models), backendField: kserveBackend}, &m); err != nil {
+		if err := api.getJSON("get_model", map[string]any{modelField: served.Name, backendField: kserveBackend}, &m); err != nil {
 			return false
 		}
 		mcName = m.ModelConfig.Name
@@ -330,8 +347,12 @@ func ServingTest(cfg *config.Config, email string, opts ServingTestOptions) erro
 		return err
 	}
 	baseURL, _, _ := unstructured.NestedString(mc.Object, "spec", "openAI", "baseUrl")
-	if baseURL != endpoint+"/v1" {
-		return fmt.Errorf("ModelConfig %s points at %q, wanted the served model's route %s/v1", mcName, baseURL, endpoint)
+	model, _, _ := unstructured.NestedString(mc.Object, "spec", "model")
+	switch {
+	case llmEndpoint == "" && baseURL != route+"/v1":
+		return fmt.Errorf("ModelConfig %s points at %q, wanted the served model's route %s/v1", mcName, baseURL, route)
+	case llmEndpoint != "" && (baseURL != llmEndpoint+"/v1" || model != served.PublicName):
+		return fmt.Errorf("ModelConfig %s points at %q for %q, wanted the LLM endpoint %s/v1 for the public name %q", mcName, baseURL, model, llmEndpoint, served.PublicName)
 	}
 	mcSpec := modelConfigSummary(mc)
 	if !strings.Contains(mcSpec, " backend="+kserveBackend+" ") {
@@ -340,33 +361,57 @@ func ServingTest(cfg *config.Config, email string, opts ServingTestOptions) erro
 	note("ModelConfig %s: %s", mcName, strings.TrimSpace(mcSpec))
 
 	step("A completion through the models Gateway (%s): no token refused, the person's token answered", modelsGatewayHost(cfg))
-	pong, err := completionThroughModelsGateway(ctx, cfg, k, endpoint, token)
+	pong, err := completionThroughModelsGateway(ctx, cfg, k, route, token)
 	if err != nil {
 		return err
 	}
 	note("the model answered: %q", excerpt(pong, 120))
 
-	// The agent turn is the lab's documented negative: the wired ModelConfig
-	// sends the agent to the models Gateway, whose certificate is the lab
-	// CA's, and the agent runtime (the Go ADK Harness in its Substrate
-	// sandbox) trusts the public roots of its image and nothing else — the
-	// platform has no knob to hand it another CA, and on an installation the
-	// Gateway's certificate is a public one. The turn is driven all the same:
-	// it must fail on exactly that verification and on nothing else, which
-	// proves the runtime dials the route the ModelConfig names.
+	// Without the LLM endpoint the agent turn is the lab's documented
+	// negative: the wired ModelConfig sends the agent to the models Gateway,
+	// whose certificate is the lab CA's, and the agent runtime (the Go ADK
+	// Harness in its Substrate sandbox) trusts the public roots of its image
+	// and nothing else — the platform has no knob to hand it another CA, and
+	// on an installation the Gateway's certificate is a public one. The turn
+	// is driven all the same: it must fail on exactly that verification and
+	// on nothing else, which proves the runtime dials the route the
+	// ModelConfig names. On the LLM endpoint (the in-cluster listener, plain
+	// HTTP) the turn must answer, and its tokens must show up in the data
+	// plane's per-model token metric under the served model's id.
 	agentTurn := "skipped (--skip-chat)"
 	if !opts.SkipChat {
-		step("Agent turn on %s: an agent created through agent-manager as %s, one A2A turn through the edge (runtime -> the models Gateway -> the CPU runtime)", mcName, user.Email)
+		var tokensBefore float64
+		if llmEndpoint != "" {
+			if tokensBefore, err = llmUsageTokens(cfg, served.Name); err != nil {
+				return err
+			}
+		}
+		step("Agent turn on %s: an agent created through agent-manager as %s, one A2A turn through the edge (runtime -> %s -> the CPU runtime)", mcName, user.Email, strings.TrimSuffix(baseURL, "/v1"))
 		reply, err := servingAgentTurn(cfg, session, token, mcName)
 		switch {
 		case err == nil:
 			note("agent replied: %q", excerpt(reply, 120))
 			agentTurn = fmt.Sprintf("answered %q", excerpt(reply, 60))
-		case isUntrustedGatewayCert(err):
+		case llmEndpoint == "" && isUntrustedGatewayCert(err):
 			note("the runtime dialled %s and refused the lab CA's certificate — the lab's documented negative (the Harness trusts its image's public roots; an installation's Gateway certificate is a public one): %s", endpoint, excerptEnds(err.Error(), 160))
 			agentTurn = "the runtime dialled the route and refused the lab CA's certificate (the documented negative)"
 		default:
 			return err
+		}
+		if llmEndpoint != "" {
+			step("The turn's tokens in the data plane's per-model metric (%s{%s=%q})", llmUsageMetric, llmUsageModelLabel, served.Name)
+			tokensAfter := tokensBefore
+			if !waitFor(24, 5*time.Second, func() bool {
+				v, err := llmUsageTokens(cfg, served.Name)
+				if err == nil {
+					tokensAfter = v
+				}
+				return tokensAfter > tokensBefore
+			}) {
+				return fmt.Errorf("%s for %s stayed at %.0f after the agent turn", llmUsageMetric, served.Name, tokensBefore)
+			}
+			note("%s for %s: %.0f -> %.0f tokens", llmUsageMetric, served.Name, tokensBefore, tokensAfter)
+			agentTurn += fmt.Sprintf(", metered on the LLM endpoint (+%.0f tokens)", tokensAfter-tokensBefore)
 		}
 	}
 
@@ -382,8 +427,8 @@ func ServingTest(cfg *config.Config, email string, opts ServingTestOptions) erro
 	fmt.Println()
 	fmt.Printf("PASS: the serving control plane — llm-d controller, well-known %s, models Gateway %s, preset %s published\n", llmisvcTemplateConfig, modelsGatewayHost(cfg), preset)
 	fmt.Printf("PASS: no token -> 401 at muster; Dex token -> model-manager's kserve backend as x_%s_* through muster\n", modelManagerMCPServer)
-	fmt.Printf("PASS: fit on %s (allocatable budget) -> load -> LLMInferenceService Ready on %s, no accelerator -> ModelConfig %s wired at the model's route\n", node, servingRuntimeImage, mcName)
-	fmt.Printf("PASS: %s%s: 401 without a token, a completion with %s's token\n", endpoint, completionsPath, user.Email)
+	fmt.Printf("PASS: fit on %s (allocatable budget) -> load -> LLMInferenceService Ready on %s, no accelerator -> ModelConfig %s wired at %s\n", node, servingRuntimeImage, mcName, strings.TrimSuffix(baseURL, "/v1"))
+	fmt.Printf("PASS: %s%s: 401 without a token, a completion with %s's token\n", route, completionsPath, user.Email)
 	fmt.Printf("PASS: the agent turn on the wired ModelConfig: %s\n", agentTurn)
 	fmt.Println("PASS: unload -> LLMInferenceService and ModelConfig gone")
 	return nil
@@ -400,23 +445,24 @@ func isUntrustedGatewayCert(err error) bool {
 
 // servedModel is one entry of list_loaded_models on the kserve backend.
 type servedModel struct {
-	Name     string `json:"name"`
-	Status   string `json:"status"`
-	Kind     string `json:"kind"`
-	Endpoint string `json:"endpoint"`
-	Preset   string `json:"preset"`
-	Node     string `json:"node"`
+	Name       string `json:"name"`
+	Status     string `json:"status"`
+	Kind       string `json:"kind"`
+	Endpoint   string `json:"endpoint"`
+	PublicName string `json:"publicName"`
+	Preset     string `json:"preset"`
+	Node       string `json:"node"`
 }
 
-// servedModelName is the reference get_model takes for the served
-// preset: the model id model-manager lists it under, else the preset name.
-func servedModelName(preset string, models []servedModel) string {
-	for _, m := range models {
-		if m.Preset == preset {
-			return m.Name
+// findServed is the listing's entry for the preset: listed under its model
+// id with the preset named, or under the preset name itself.
+func findServed(preset string, models []servedModel) *servedModel {
+	for i, m := range models {
+		if m.Preset == preset || m.Name == preset {
+			return &models[i]
 		}
 	}
-	return preset
+	return nil
 }
 
 // onCapabilities words a capabilities map as the names that are on.

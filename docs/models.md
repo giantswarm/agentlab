@@ -519,3 +519,14 @@ and on nothing else, which proves the runtime dials the route the ModelConfig
 names; any other outcome fails the run, an answer passes it. The completion
 through the Gateway the step before is the same request with the same token
 shape, sent from the host, which trusts the lab CA.
+
+**With the LLM endpoint on** (`llmRouting.enabled: true` in a values file of
+`platform.valuesFiles`), the platform release publishes the LLM endpoint
+document and model-manager puts the Ready model on the endpoint: the listing
+reports its public name (the preset name) at the endpoint, and the ModelConfig
+points at the in-cluster listener (`http://agentgateway.agent-platform.svc:8081/v1`)
+with the public name as `model`. The agent turn then goes over plain HTTP and
+must answer, and its tokens must raise
+`agentgateway_gen_ai_client_token_usage{gen_ai_request_model="<the model's id>"}`
+in the lab's Prometheus: the local model is metered by the same data plane as
+the provider models. The completion through the models Gateway stays as above.
