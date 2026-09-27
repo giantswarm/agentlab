@@ -382,7 +382,7 @@ func ServingTest(cfg *config.Config, email string, opts ServingTestOptions) erro
 	if !opts.SkipChat {
 		var tokensBefore float64
 		if llmEndpoint != "" {
-			if tokensBefore, err = llmTokenUsage(cfg, served.Name); err != nil {
+			if tokensBefore, err = llmUsageTokens(cfg, served.Name); err != nil {
 				return err
 			}
 		}
@@ -399,18 +399,18 @@ func ServingTest(cfg *config.Config, email string, opts ServingTestOptions) erro
 			return err
 		}
 		if llmEndpoint != "" {
-			step("The turn's tokens in the data plane's per-model metric (%s{%s=%q})", llmTokenMetric, llmTokenModelLabel, served.Name)
+			step("The turn's tokens in the data plane's per-model metric (%s{%s=%q})", llmUsageMetric, llmUsageModelLabel, served.Name)
 			tokensAfter := tokensBefore
 			if !waitFor(24, 5*time.Second, func() bool {
-				v, err := llmTokenUsage(cfg, served.Name)
+				v, err := llmUsageTokens(cfg, served.Name)
 				if err == nil {
 					tokensAfter = v
 				}
 				return tokensAfter > tokensBefore
 			}) {
-				return fmt.Errorf("%s for %s stayed at %.0f after the agent turn", llmTokenMetric, served.Name, tokensBefore)
+				return fmt.Errorf("%s for %s stayed at %.0f after the agent turn", llmUsageMetric, served.Name, tokensBefore)
 			}
-			note("%s for %s: %.0f -> %.0f tokens", llmTokenMetric, served.Name, tokensBefore, tokensAfter)
+			note("%s for %s: %.0f -> %.0f tokens", llmUsageMetric, served.Name, tokensBefore, tokensAfter)
 			agentTurn += fmt.Sprintf(", metered on the LLM endpoint (+%.0f tokens)", tokensAfter-tokensBefore)
 		}
 	}

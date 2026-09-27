@@ -27,8 +27,8 @@ const (
 // The data plane's per-model token metric, labelled with the model the
 // request reached (a virtual model's target: the served model's id).
 const (
-	llmTokenMetric     = "agentgateway_gen_ai_client_token_usage"
-	llmTokenModelLabel = "gen_ai_request_model"
+	llmUsageMetric     = "agentgateway_gen_ai_client_token_usage"
+	llmUsageModelLabel = "gen_ai_request_model"
 )
 
 // llmEndpointDoc is the part of the document the proofs read.
@@ -73,22 +73,22 @@ func readLLMEndpoint(ctx context.Context, k *kubeClients) (llmEndpointDoc, error
 	return doc, nil
 }
 
-// llmTokenUsage is the tokens the data plane counted for the model so far,
+// llmUsageTokens is the tokens the data plane counted for the model so far,
 // through the lab's PromQL on the edge; a model never requested counts 0.
-func llmTokenUsage(cfg *config.Config, model string) (float64, error) {
+func llmUsageTokens(cfg *config.Config, model string) (float64, error) {
 	client, err := labHTTPClient(10 * time.Second)
 	if err != nil {
 		return 0, err
 	}
-	query := fmt.Sprintf(`sum(%s_sum{%s=%q})`, llmTokenMetric, llmTokenModelLabel, model)
+	query := fmt.Sprintf(`sum(%s_sum{%s=%q})`, llmUsageMetric, llmUsageModelLabel, model)
 	resp, err := client.Get(cfg.ObservabilityBaseURL() + "/api/v1/query?query=" + url.QueryEscape(query))
 	if err != nil {
-		return 0, fmt.Errorf("querying %s: %w", llmTokenMetric, err)
+		return 0, fmt.Errorf("querying %s: %w", llmUsageMetric, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("querying %s: HTTP %d: %.200s", llmTokenMetric, resp.StatusCode, raw)
+		return 0, fmt.Errorf("querying %s: HTTP %d: %.200s", llmUsageMetric, resp.StatusCode, raw)
 	}
 	return parseInstantScalar(raw)
 }
