@@ -12,7 +12,7 @@ require (
 	github.com/giantswarm/klaus-gateway v1.21.0
 	github.com/giantswarm/selfupdate-cosign v0.3.1
 	github.com/giantswarm/telemetrydeck-go v0.3.4
-	github.com/giantswarm/vm-manager v0.24.0
+	github.com/giantswarm/vm-manager v0.24.1
 	github.com/google/uuid v1.6.0
 	github.com/smallstep/truststore v0.13.0
 	github.com/spf13/cobra v1.10.2
