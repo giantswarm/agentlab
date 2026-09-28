@@ -1,10 +1,32 @@
 # Command reference
 
 `agentlab --help` and `agentlab <command> --help` are authoritative; this page
-is the map. Every command reads `agentlab.yaml` (written by `configure`; on a
-terminal, a missing file starts the form) and talks to the kind cluster
-through the cluster's own exported kubeconfig, `state/kubeconfig` — never
-your shell's current-context.
+is the map. Every command runs against one lab — a directory holding
+`agentlab.yaml` (written by `configure`; on a terminal, a missing file starts
+the form), `certs/` and `state/` — and talks to its kind cluster through the
+cluster's own exported kubeconfig, `state/kubeconfig`, never your shell's
+current-context.
+
+## Which lab
+
+`configure` and `up` register their lab under its `clusterName` in
+`~/.config/agentlab/labs.yaml` (`~/Library/Application Support/agentlab/` on
+macOS), so the other commands find it from any directory, in this order:
+
+1. `--lab <name>` (every command), refused naming the registered labs when no
+   lab of that name is registered;
+2. an `agentlab.yaml` in the current directory, whatever the registry says;
+3. the one registered lab; with several, a picker on a terminal, and off one a
+   refusal that names them and `--lab`.
+
+A lab entered from another directory is named on stderr (`Lab agentlab
+(/path/to/lab)`). `configure` and `up` skip step 3: in a directory without
+`agentlab.yaml` they create a lab there. A `clusterName` another lab
+directory holds is refused, naming both directories — the two would collide
+on the kind cluster and its ports. `down` keeps the registration (the lab
+still exists as a directory); a lab whose directory or `agentlab.yaml` is gone
+drops out of the registry. `self-update`, `completion` and `help` touch no
+lab.
 
 The sections below are the groups `agentlab --help` prints, in the same order.
 
