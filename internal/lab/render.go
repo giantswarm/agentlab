@@ -64,8 +64,10 @@ type tmplData struct {
 	ExtraModels []config.ExtraModel
 	// The per-server OAuth sign-in fixture (oauthfixture.go): the MCPServer
 	// name the proofs sign in to and the protected endpoint it points at.
-	OAuthFixtureServer string
-	OAuthFixtureURL    string
+	OAuthFixtureServer    string
+	GitHubMCPServer       string
+	GitHubMCPClientSecret string
+	OAuthFixtureURL       string
 	// VMManagerEnabled turns the chart's vm-manager component on
 	// (vmmanager.go); VMManagerGuestImage is the chart's guestImage block for
 	// a local build pushed into the lab registry, nil for the release's
@@ -175,6 +177,8 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		ModelManagerEndpoints:      endpoints,
 		ExtraModels:                cfg.Platform.ExtraModels,
 		OAuthFixtureServer:         oauthFixtureServer,
+		GitHubMCPServer:            gitHubMCPServer,
+		GitHubMCPClientSecret:      gitHubMCPClientSecret,
 		OAuthFixtureURL:            oauthFixtureURL,
 		VMManagerEnabled:           cfg.VMManagerEnabled(),
 		VMManagerGuestImage:        vmManagerGuestImage,
@@ -301,6 +305,7 @@ var manifests = map[string]struct {
 	"observability-route.yaml.tmpl":          {out: "observability-route.yaml"},
 	"demo-workflow.yaml.tmpl":                {out: "demo-workflow.yaml"},
 	"oauth-fixture.yaml.tmpl":                {out: "oauth-fixture.yaml"},
+	"github-mcp.yaml.tmpl":                   {out: "github-mcp.yaml"},
 	"extra-models.yaml.tmpl":                 {out: "extra-models.yaml"},
 	"coredns.yaml.tmpl":                      {out: "coredns.yaml"},
 	"gateway-nodeport.yaml.tmpl":             {out: "gateway-nodeport.yaml"},
