@@ -489,8 +489,9 @@ func gitopsHelmRelease(cfg *config.Config, platform map[string]any, fakeIP strin
 		return nil, err
 	}
 	// The post-renderers name the Deployment in their target and in the
-	// patch's metadata; the copy's Deployment is the release's fullname. The
-	// chart reference (the OCIRepository) stays the platform's.
+	// patch's metadata; the copy's Deployment is the release's fullname. Its
+	// container keeps the chart's name, and the chart reference (the
+	// OCIRepository) stays the platform's.
 	if renderers, ok := spec["postRenderers"]; ok {
 		raw, err := json.Marshal(renderers)
 		if err != nil {
@@ -498,7 +499,7 @@ func gitopsHelmRelease(cfg *config.Config, platform map[string]any, fakeIP strin
 		}
 		raw = []byte(strings.NewReplacer(
 			`"`+nameKey+`":"`+modelManagerMCPServer+`"`, `"`+nameKey+`":"`+gitopsModelManager+`"`,
-			`name: `+modelManagerMCPServer+`\n`, `name: `+gitopsModelManager+`\n`,
+			`metadata:\n  name: `+modelManagerMCPServer+`\n`, `metadata:\n  name: `+gitopsModelManager+`\n`,
 		).Replace(string(raw)))
 		var renamed any
 		if err := json.Unmarshal(raw, &renamed); err != nil {

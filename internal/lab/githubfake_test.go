@@ -169,7 +169,7 @@ func TestGitOpsHelmRelease(t *testing.T) {
 	require := `{"apiVersion": "helm.toolkit.fluxcd.io/v2", "kind": "HelmRelease", "metadata": {"name": "model-manager"},
 	  "spec": {"chartRef": {"kind": "OCIRepository", "name": "model-manager"}, "releaseName": "model-manager",
 	    "values": {"backends": ["backend-a"], "networkPolicy": {"enabled": true, "egressCIDRs": ["10.0.0.0/8"]}},
-	    "postRenderers": [{"kustomize": {"patches": [{"target": {"kind": "Deployment", "name": "model-manager"}, "patch": "kind: Deployment\nmetadata:\n  name: model-manager\nspec: {}\n"}]}}]}}`
+	    "postRenderers": [{"kustomize": {"patches": [{"target": {"kind": "Deployment", "name": "model-manager"}, "patch": "kind: Deployment\nmetadata:\n  name: model-manager\nspec:\n  template:\n    spec:\n      containers:\n        - name: model-manager\n"}]}}]}}`
 	if err := json.Unmarshal([]byte(require), &platform); err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,8 @@ func TestGitOpsHelmRelease(t *testing.T) {
 	if got.Metadata.Name != gitopsModelManager || got.Spec.ReleaseName != gitopsModelManager || got.Spec.ChartRef.Name != modelManagerMCPServer {
 		t.Errorf("names: %s, release %s, chartRef %s", got.Metadata.Name, got.Spec.ReleaseName, got.Spec.ChartRef.Name)
 	}
-	if patch.Target.Name != gitopsModelManager || !strings.Contains(patch.Patch, "name: "+gitopsModelManager+"\n") {
+	if patch.Target.Name != gitopsModelManager || !strings.Contains(patch.Patch, "metadata:\n  name: "+gitopsModelManager+"\n") ||
+		!strings.Contains(patch.Patch, "- name: "+modelManagerMCPServer+"\n") {
 		t.Errorf("post-renderer not retargeted: %+v", patch)
 	}
 	v := got.Spec.Values
