@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -448,7 +449,7 @@ func TestKindConfigEtcdSkipsFsync(t *testing.T) {
 		if cc.Kind != "ClusterConfiguration" {
 			continue
 		}
-		if !reflect.DeepEqual(cc.Etcd.Local.ExtraArgs, []arg{{"unsafe-no-fsync", "true"}}) {
+		if !reflect.DeepEqual(cc.Etcd.Local.ExtraArgs, []arg{{"unsafe-no-fsync", strconv.FormatBool(true)}}) {
 			t.Errorf("etcd.local.extraArgs = %v, want unsafe-no-fsync=true", cc.Etcd.Local.ExtraArgs)
 		}
 		return
