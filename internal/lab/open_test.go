@@ -70,7 +70,7 @@ func (s *openStubs) install(t *testing.T) *openStubs {
 
 func TestOpenTargetsFeedValidArgs(t *testing.T) {
 	got := OpenTargets()
-	if want := []string{openTargetAgents, openTargetPortal}; !slices.Equal(got, want) {
+	if want := []string{openTargetAgents, openTargetPortal, openTargetPrometheus}; !slices.Equal(got, want) {
 		t.Fatalf("OpenTargets() = %v, want %v", got, want)
 	}
 	if _, ok := openTargets[openTargetPortal]; !ok {
@@ -85,9 +85,10 @@ func TestOpenTargetURLsFollowTheConfiguration(t *testing.T) {
 		port                  int
 		agentsPort            int
 		wantPortal, wantAgent string
+		wantPrometheus        string
 	}{
-		{443, 8081, "https://backstage.127.0.0.1.nip.io", "http://localhost:8081"},
-		{8443, 9090, "https://backstage.127.0.0.1.nip.io:8443", "http://localhost:9090"},
+		{443, 8081, "https://backstage.127.0.0.1.nip.io", "http://localhost:8081", "https://observability.127.0.0.1.nip.io/prometheus"},
+		{8443, 9090, "https://backstage.127.0.0.1.nip.io:8443", "http://localhost:9090", "https://observability.127.0.0.1.nip.io:8443/prometheus"},
 	} {
 		t.Run(fmt.Sprint(tc.port), func(t *testing.T) {
 			cfg := config.Default()
@@ -98,6 +99,9 @@ func TestOpenTargetURLsFollowTheConfiguration(t *testing.T) {
 			}
 			if got := openTargets[openTargetAgents].url(cfg); got != tc.wantAgent {
 				t.Errorf("agents url = %q, want %q", got, tc.wantAgent)
+			}
+			if got := openTargets[openTargetPrometheus].url(cfg); got != tc.wantPrometheus {
+				t.Errorf("prometheus url = %q, want %q", got, tc.wantPrometheus)
 			}
 		})
 	}
@@ -125,9 +129,9 @@ func TestOpenWithoutATargetNamesThem(t *testing.T) {
 func TestOpenUnknownTarget(t *testing.T) {
 	lab := runningLab()
 	s := lab.install(t)
-	err := Open(config.Default(), "prometheus")
-	if err == nil || !strings.Contains(err.Error(), `"prometheus"`) || !strings.Contains(err.Error(), "portal") {
-		t.Fatalf("Open(cfg, \"prometheus\") = %v, want a refusal naming the target and the valid ones", err)
+	err := Open(config.Default(), "grafana")
+	if err == nil || !strings.Contains(err.Error(), `"grafana"`) || !strings.Contains(err.Error(), "portal") {
+		t.Fatalf("Open(cfg, \"grafana\") = %v, want a refusal naming the target and the valid ones", err)
 	}
 	if len(s.opened) != 0 {
 		t.Errorf("opened %v", s.opened)
@@ -146,6 +150,8 @@ func TestOpenRefusesDisabledTargets(t *testing.T) {
 		{"backstage off", "portal", func(c *config.Config) { c.Backstage.Enabled = false }, "backstage.enabled"},
 		{"platform off", openTargetAgents, func(c *config.Config) { c.Platform.Enabled = false; c.Backstage.Enabled = false }, "platform.enabled"},
 		{"agents off", openTargetAgents, func(c *config.Config) { c.Platform.Agents = false }, "platform.agents"},
+		{"observability off", openTargetPrometheus, func(c *config.Config) { c.Platform.Observability = false }, "platform.observability"},
+		{"platform off, prometheus", openTargetPrometheus, func(c *config.Config) { c.Platform.Enabled = false; c.Backstage.Enabled = false }, "platform.enabled"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			lab := runningLab()

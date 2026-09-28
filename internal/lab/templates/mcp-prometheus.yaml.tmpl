@@ -71,7 +71,7 @@ spec:
         # unlike the release-prefixed ones. Must agree with
         # observabilityNamespace in observability.go.
         - name: PROMETHEUS_URL
-          value: http://prometheus-operated.monitoring.svc.cluster.local:9090
+          value: http://prometheus-operated.monitoring.svc.cluster.local:9090/prometheus
         - name: MCP_OAUTH_ISSUER
           value: https://mcp-prometheus.{{ .Platform.Domain }}
         - name: DEX_ISSUER_URL

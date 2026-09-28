@@ -194,7 +194,7 @@ go test ./internal/forms/ -run TestMinimalFormDrive -count=1 -v   # single test
 ./agentlab configure       # interactive form; --defaults keeps/writes the canonical lab
 ./agentlab up              # certs, kind cluster, Dex, RBAC, the agent platform — verified
                            # on a terminal it ends by offering `trust` and the portal (--trust/--open pre-answer)
-./agentlab open portal     # the portal (Backstage) in the browser; `open agents` the kagent UI
+./agentlab open portal     # the portal (Backstage) in the browser; `open agents` the kagent UI, `open prometheus` the lab Prometheus
 ./agentlab list            # the labs on this machine: state, components, URLs, CA trust
 ./agentlab pods            # the lab's pods (kubectl get pods -A, without kubectl); -n <namespace>
 ./agentlab platform-test   # headless Dex -> muster -> mcp-kubernetes proof

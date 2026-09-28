@@ -101,7 +101,7 @@ func observabilityUp(cfg *config.Config) error {
 		return notReached("the Prometheus CR", "an available replica after the install", replicas, readErr,
 			fmt.Sprintf("check `kubectl -n %s get prometheus,statefulset,pods`", observabilityNamespace))
 	}
-	note("Prometheus is serving (PromQL inside the cluster: http://prometheus-operated.%s:9090)",
+	note("Prometheus is serving (PromQL inside the cluster: http://prometheus-operated.%s:9090/prometheus)",
 		observabilityNamespace)
 
 	// The edge route Backstage's Mimir integration queries
