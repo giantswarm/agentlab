@@ -674,7 +674,7 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	}
 	if cfg.Platform.Observability {
 		step("Waiting for muster to reach the Prometheus MCP")
-		if err := waitMCPServerReachable(mcpPrometheusRelease); err != nil {
+		if err := waitMCPServerReachable(cfg.PrometheusMCPServerName()); err != nil {
 			return err
 		}
 	}
@@ -699,9 +699,9 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	if err := ensureOAuthFixture(cfg); err != nil {
 		return err
 	}
-	// The fake-fleet fixture (fleetfixture.go): the family MCPServers with
-	// the tool-group label the fleet charts stamp — same CRD reason.
-	if err := ensureFleetFixture(cfg); err != nil {
+	// A lab made before the infrastructure families (infrastructure.go)
+	// loses the fake-fleet members an earlier release created.
+	if err := removeRetiredFixture(ctx); err != nil {
 		return err
 	}
 	// The agents' model key. The default ModelConfig (rendered by the kagent
@@ -802,7 +802,7 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	}
 	obsHint := "  Observability is disabled (platform.observability in agentlab.yaml)."
 	if cfg.Platform.Observability {
-		obsHint = "  Observability: Prometheus scrapes the cluster; muster serves it as x_mcp-prometheus_* tools\n" +
+		obsHint = "  Observability: Prometheus scrapes the cluster; muster serves it as x_prometheus_* tools (management_cluster: " + cfg.ClusterName + ")\n" +
 			"  (try asking Claude Code for a pod's CPU or memory)."
 	}
 	if roster.shipsSubstrate() {
@@ -1088,8 +1088,9 @@ func noteDexLocalhostTargets(roster *platformRoster, renders map[string]string, 
 // waitSidecarMCPServers waits for muster to reach every server the sidecar
 // rule selected (dexLocalhostTargets) that registers itself with muster under
 // its Deployment's name — the manager charts render their MCPServer CR that
-// way; the Kubernetes MCP's CR is the connectivity chart's and waited for by
-// the caller. A target without a CR of its name is noted, not waited for.
+// way; mcp-kubernetes is the kubernetes family's member, registered as
+// <cluster>-mcp-kubernetes by the connectivity chart and waited for by the
+// caller. A target without a CR of its name is noted, not waited for.
 func waitSidecarMCPServers(ctx context.Context, cfg *config.Config, sidecars map[string][]dexLocalhostTarget) error {
 	gvr, err := gvrFor(musterMCPServerResource)
 	if err != nil {
@@ -1098,7 +1099,7 @@ func waitSidecarMCPServers(ctx context.Context, cfg *config.Config, sidecars map
 	for _, component := range slices.Sorted(maps.Keys(sidecars)) {
 		for _, target := range sidecars[component] {
 			name := target.deployment
-			if name == cfg.MCPServerName() {
+			if name == componentMCPKubernetes {
 				continue
 			}
 			registered, err := objectExists(ctx, gvr, platformNamespace, name)

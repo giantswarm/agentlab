@@ -821,83 +821,55 @@ To drive the UI: **Agent Platform → MCP Servers**, expand `lab-oauth-fixture`,
 **Sign in** — the popup lands on Dex directly. After a muster pod roll the row
 reads `Failed` for about a minute (Reconnect, or wait).
 
-## The fake fleet and the tool-group label
+## The infrastructure families and the tool-group label
 
-A real installation federates many management clusters: agent-platform-mcps
-renders one MCPServer per cluster and per infrastructure family — `kubernetes`,
-`capi`, `prometheus` — each declaring `spec.family` (so muster exposes the
-family once, `x_kubernetes_<tool>` with a `management_cluster` argument) and
-labelled `muster.giantswarm.io/management-cluster: <cluster>`. The lab has one
-cluster and its bundled `mcp-kubernetes` declares no family, so nothing here
-looks like a fleet — yet the portal's MCP servers page, its dashboard's fleet
-coverage and the agent create flow's Tools step group servers by family and by
-tier. For proofs of those views the lab can ship a **fake fleet**
-(`fleet-fixture.yaml.tmpl`, `fleetfixture.go`): three families × two fake
-management clusters (`lab-01`, `lab-02`), six MCPServers named
-`<family>-<cluster>` in `agent-platform`, each with the family block, the
-management-cluster label, the `muster.giantswarm.io/type` the fleet charts
-stamp, and the tier label:
+An installation registers the servers for the management clusters the
+platform runs on as members of muster's infrastructure families —
+`kubernetes`, `prometheus`, `capi`: agent-platform-mcps renders one MCPServer
+per cluster and family, `<cluster>-mcp-<family>`, each declaring
+`spec.family` (so muster exposes the family once, `x_kubernetes_<tool>` with a
+`management_cluster` argument) and labelled
+`muster.giantswarm.io/management-cluster: <cluster>`. The lab registers its own
+cluster the same way, with `clusterName` (default `agentlab`) as the instance:
 
-```yaml
-agent-platform.giantswarm.io/tool-group: infrastructure
-```
+| Server | Family | Registered by | Tools |
+|---|---|---|---|
+| `<clusterName>-mcp-kubernetes` | `kubernetes` | the connectivity chart (`mcp-kubernetes.mcpServer.managementCluster`) | `x_kubernetes_<tool>` |
+| `<clusterName>-mcp-prometheus` (with `platform.observability`) | `prometheus` | an `agent-platform-mcps.mcpServers` entry (`cluster`, `group: prometheus`) | `x_prometheus_<tool>` |
 
-**Opt-in.** The fixture is off by default and follows one key in `agentlab.yaml`
-(`configure` asks nothing about it):
+Every family tool takes `management_cluster: <clusterName>`. There is no
+family-less registration: the portal's MCP servers page, the agent create
+flow's Tools step and muster's `infrastructure` preset see the shape of an
+installation with one management cluster. `capi` joins when the lab runs
+Cluster API. A lab made by an earlier release loses the six fake-fleet
+MCPServers (`<family>-lab-01`, `<family>-lab-02`) on its next `agentlab
+platform`; the retired `platform.fakeFleet` key still loads and is dropped from
+`agentlab.yaml`. The released chart must be agent-platform 4.92.0 or newer (the
+3.x line, a migration rehearsal's seed, keeps its family-less
+`mcp-kubernetes`).
 
-```yaml
-platform:
-  fakeFleet: true    # default false: a default lab registers only its own MCP servers
-```
-
-A default lab lists only the MCP servers of the lab that runs it — the bundled
-`mcp-kubernetes`, `mcp-prometheus`, the managers, all `Connected` through the
-person's Dex session, plus `lab-oauth-fixture` as the one server requiring
-sign-in. The fake fleet's members stay `Auth Required` by design (below), so
-with it on the portal's Tool explorer greets a person with seven servers
-asking for sign-in, three of them families named after clusters that do not
-exist; that is a proof's shape, not a default lab's. Flip the key and re-run
-`agentlab platform`: on, it creates the six members and waits for
-`Auth Required`; off, it removes every MCPServer carrying
-`agentlab.giantswarm.io/fixture=fake-fleet` in `agent-platform` (a lab created
-while the key was on loses them; nothing to remove is silence). The proofs read
-the same key: `platform-test`, `backstage-test` and `toolsets-test` assert the
-fleet shape while it is on and the single-cluster shape while it is off (the
-tool-group step and the servers page grouping below). The lasting answer — the
-lab's own cluster registered as the infrastructure families, the way an
-installation is, which retires the fixture — is agentlab#168.
-
-**What the label is for.** It is the Agent Platform's tiering of MCP servers —
-three groups the portal's MCP servers page, the Tools step, muster's toolset
-presets and the docs all use under the same names: **Agent Platform**
-(`agent-platform`: agent-manager, model-manager, muster's core tools),
-**Infrastructure** (`infrastructure`: the kubernetes/capi/prometheus families)
-and **Registered servers** (no label: whatever an installation or a user
-registers, including everything the portal's Register server flow creates).
-The chart that ships a server stamps it; every consumer only reads it, e.g.
+**What the label is for.** `agent-platform.giantswarm.io/tool-group` is the
+Agent Platform's tiering of MCP servers — three groups the portal's MCP servers
+page, the Tools step, muster's toolset presets and the docs all use under the
+same names: **Agent Platform** (`agent-platform`: agent-manager,
+model-manager, muster's core tools), **Infrastructure** (`infrastructure`: the
+families) and **Registered servers** (no label: whatever an installation or a
+user registers, including everything the portal's Register server flow
+creates). The chart that ships a server stamps it; every consumer only reads
+it, e.g.
 `kubectl get mcpservers.muster.giantswarm.io -A -l agent-platform.giantswarm.io/tool-group=infrastructure`
-lists the fleet families. Orientation and preset membership, not
+lists the lab's family members. Orientation and preset membership, not
 authorization — that stays with the servers' OAuth and the clusters' RBAC.
-Of the lab's own CRs only the fake fleet carries the label: `lab-oauth-fixture`
-and anything you register by hand stay unlabelled on purpose, so the Registered
-servers group has members; the vendored agent-manager / model-manager /
-component charts bring their own labels (`agent-platform`; `infrastructure` on
-the bundled `mcp-kubernetes`) once bumped to the releases that stamp them — on
-a default lab (fake fleet off) those are the only labelled servers.
+`lab-oauth-fixture` and anything you register by hand stay unlabelled on
+purpose, so the Registered servers group has members.
 
-The members point at muster's own protected `/mcp` with `auth.type: oauth`,
-like the OAuth fixture, and so read `Auth Required` — what an unconnected
-forwardToken fleet member shows on a real installation — at zero cost.
-Pointing them at the lab's single mcp-kubernetes instead makes muster open one
-connection per member per user session; a dozen of those rate-limited
-mcp-kubernetes (429) and took the session's real `mcp-kubernetes` connection
-down with them. The fixture exists to be grouped, listed and selected, not
-called. `agentlab platform-test` asserts the label: with the fake fleet on, the
-`infrastructure` selector lists every member and, of the lab's own CRs,
-nothing else; off, no member exists and no lab-created server carries the
-label at all; either way every value in the cluster is one of the two the
-contract knows and `lab-oauth-fixture` is unlabelled. Servers the vendored
-charts label are reported, not judged.
+`agentlab platform-test` asserts the families and the label: the lab's members
+exist with the family block, the management-cluster label and
+`tool-group: infrastructure`; no family-less `mcp-kubernetes` and no retired
+fake-fleet member exists; nothing the lab creates itself carries the label;
+every value in the cluster is one of the two the contract knows and
+`lab-oauth-fixture` is unlabelled. Servers the vendored charts label are
+reported, not judged.
 
 ## Toolsets (declared tool access)
 
@@ -952,7 +924,9 @@ components, as the admin, and leaves nothing behind (its agents are named
    in one session and from two sessions in parallel — each see their own
    tools; when the platform chart shipped `infrastructure` / `agent-platform`,
    each resolves to the tools of the servers carrying that label (the latter
-   plus `core_*`).
+   plus `core_*`), and `infrastructure` holds the tools of every family the
+   lab's cluster is a member of (`x_kubernetes_*`, and `x_prometheus_*` with
+   observability).
 4. **The runtime path** (skip with `--skip-chat`): an `AgentInstance` and
    one A2A turn through the edge, as the user, the read-only agent lists nothing
    outside `preset:read-only` — read-only core tools may appear, no writer
@@ -999,7 +973,6 @@ data the page reads — see [The muster plugin](backstage.md#the-muster-plugin).
 | The muster/kagent ServiceMonitors, valkey PodMonitor and muster PrometheusRule follow `platform.observability` | Without it there is no Prometheus Operator, so none of those CRDs exist and the releases fail to render. With it they are scraped by the lab Prometheus — whose selectors are opened up (`*NilUsesHelmValues: false`) because upstream's default selects only monitors carrying the kps release label, and the platform's monitors come from other releases. Flipping observability rolls the muster pod once (the toggle changes its metrics-exporter env). |
 | `platform.observability`: the GS kube-prometheus-stack constituent installed directly, Prometheus server re-enabled, instead of the observability-bundle | The bundle is MC-shaped (Flux HelmReleases with a hardcoded remote kubeconfig, Alloy → Mimir, no local PromQL endpoint). See [Observability](observability.md). |
 | `muster.muster.oauth.mcpClient.enabled: true` + the `lab-oauth-fixture` MCPServer | The chart leaves muster's OAuth *client* role — the proxy behind `core_auth_login` and the portal's Sign in — off; real installations turn it on, and without it no per-server sign-in can be exercised. The fixture is the one `Auth Required` downstream to sign in to (muster's own protected `/mcp`); see [Signing in to a downstream server](#signing-in-to-a-downstream-server-muster-as-oauth-client). |
-| The fake-fleet MCPServers (`<family>-lab-01`, `<family>-lab-02`) with `agent-platform.giantswarm.io/tool-group: infrastructure`, opt-in via `platform.fakeFleet` | One cluster and a family-less bundled `mcp-kubernetes` look nothing like the federated fleet the portal's server groups, fleet coverage and Tools step are built for. With the key on, six `Auth Required` family members fake it, carrying the tier label the fleet charts stamp; off (the default) a lab registers only its own servers and the proofs assert that shape. See [The fake fleet and the tool-group label](#the-fake-fleet-and-the-tool-group-label). |
 | `muster.rbac.{mcpServerEditor,workflowEditor}.subjects` → `oidc:platform-admins` | The chart binds muster's editor Roles to Giant Swarm's admin groups, which do not exist here. Rebound to the lab's own admin group (`--oidc-groups-prefix=oidc:`, same spelling as the lab RBAC). Lists replace, so the GS groups are dropped. |
 | muster patched to `hostNetwork` + `maxSurge: 0` | Same issuer trick as the apiserver and Backstage. `maxSurge: 0` because two hostNetwork pods cannot both bind `:8090` on a one-node cluster. A Kustomize strategic-merge patch in `components.muster.postRenderers`, which the chart forwards to muster's `HelmRelease` and the bundled helm-controller applies over the muster chart's render. |
 | The `dex-localhost` sidecar on every Deployment told the lab Dex's address — mcp-kubernetes, the managers (model-manager, agent-manager, vm-manager, cluster-manager) and mcp-prometheus | Those servers validate the forwarded Dex token themselves and must reach the issuer URL `https://localhost:32000/dex`, but all listen on `:8080` and cannot share the host network. A socat sidecar on the pod's own loopback forwards `:32000` to the Dex Service (HACKS.md U13) — a `postRenderers` patch on each component, and on the lab's own mcp-prometheus `HelmRelease`. The targets are a rule over the component renders (a Deployment whose containers are told the address through a name they dial it by — `--dex-issuer-url`, `DEX_ISSUER_URL`, `OIDC_ISSUER_URL` — or that the `agentlab.giantswarm.io/dex-localhost` annotation selects; an identity-only variable such as `OAUTH_AUTHORIZATION_SERVER` selects nothing), not a list: a component the chart turns on by default or an overlay turns on is covered without a lab release, and the roster's trailing range renders `components.<name>.postRenderers` for one the lab names no block for. `agentlab platform-test` asserts the sidecar, a clean rollout with 0 restarts and the MCPServer Connected on every such Deployment, naming the key each was selected by. |
@@ -1192,11 +1165,10 @@ data the page reads — see [The muster plugin](backstage.md#the-muster-plugin).
   creates it ahead of the kagent `HelmRelease`, the connectivity component
   adopts it, and the uninstall (the ordered teardown) removes it with the
   connectivity release. The lab creates no namespace of its own for kagent.
-- **Kubernetes tools carry the server-name prefix.** The chart's bundled
-  `mcp-kubernetes` MCPServer declares no muster *family*, so its tools use
-  per-server prefixing: `call_tool(name=x_mcp-kubernetes_list, arguments={...})`. A default lab has no family server at all, and the fake fleet's
-  members (`platform.fakeFleet`) stay `Auth Required`, so no `x_kubernetes_*` family tools appear in a session either way.
-  (Real fleet installations register per-cluster servers with a `kubernetes`
-  family and a `management_cluster` instance argument instead.)
+- **Kubernetes and Prometheus tools are the families'.** The lab's servers
+  are the `kubernetes` and `prometheus` families' members for its cluster, as
+  on an installation, so a call names the family's tool and the cluster:
+  `call_tool(name=x_kubernetes_list, arguments={management_cluster: agentlab, resourceType: namespaces})`.
+  See [The infrastructure families](#the-infrastructure-families-and-the-tool-group-label).
 - **Tool results are double-wrapped.** `result.content[0].text` is JSON whose
   `content[0].text` is the actual payload — two decode hops.

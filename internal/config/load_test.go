@@ -7,8 +7,9 @@ import (
 )
 
 // loadTestChart is the chart version the load tests write; any exact version
-// at or above servingChartFloor (one test turns serving on).
-const loadTestChart = "4.44.0"
+// at or above servingChartFloor (one test turns serving on) and
+// familiesChartFloor.
+const loadTestChart = "4.92.0"
 
 // A field this release does not know is refused, not dropped: every run
 // writes agentlab.yaml back, and a lenient decode by an older release would
@@ -55,5 +56,48 @@ func TestLoadKnownFieldsAndAnEmptyFile(t *testing.T) {
 	}
 	if _, err := Load(); err != nil {
 		t.Fatalf("an empty %s: %v", File, err)
+	}
+}
+
+// The retired platform.fakeFleet key, which every file an earlier release
+// wrote carries, still loads and is not written back.
+func TestLoadDropsTheRetiredFakeFleet(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := os.WriteFile(File, []byte("platform:\n  chartVersion: "+loadTestChart+"\n  fakeFleet: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(File)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(after), "fakeFleet") {
+		t.Errorf("the retired key was written back:\n%s", after)
+	}
+}
+
+// A released 4.x chart before familiesChartFloor is refused (its connectivity
+// chart would register the family-less mcp-kubernetes); the 3.x line and a
+// branch build are not.
+func TestValidateFamiliesChartFloor(t *testing.T) {
+	cfg := Default()
+	cfg.Platform.ChartVersion = "4.91.0"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), familiesChartFloor.String()) {
+		t.Errorf("4.91.0: want the floor named, got %v", err)
+	}
+	cfg.Platform.ChartVersion = "3.23.1"
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("the 3.x line: %v", err)
+	}
+	cfg.Platform.ChartVersion = "4.91.0"
+	cfg.Platform.ChartBranch = "main"
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("a branch build: %v", err)
 	}
 }

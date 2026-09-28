@@ -160,7 +160,7 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 				Validate(config.ValidatePort),
 			huh.NewConfirm().
 				Title("Install the observability stack (Prometheus + mcp-prometheus)?").
-				Description("Optional: a minimal Prometheus (Giant Swarm kube-prometheus-stack) plus the\nPrometheus MCP server, registered in muster as x_mcp-prometheus_* tools —\nask the platform about pod CPU/memory. ~5 extra pods.").
+				Description("Optional: a minimal Prometheus (Giant Swarm kube-prometheus-stack) plus the\nPrometheus MCP server, registered in muster as x_prometheus_* tools —\nask the platform about pod CPU/memory. ~5 extra pods.").
 				Affirmative("Install").
 				Negative("Skip").
 				Value(&observabilityEnabled),

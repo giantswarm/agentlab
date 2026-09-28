@@ -124,7 +124,7 @@ internal/lab/                    everything operational:
   helm.go restclient.go            the embedded Helm 4 (upgrade-or-install with the kstatus wait, offline renders, probes, uninstalls); the lab kubeconfig as a client-go REST client getter
   resources.go                     docker CPU/memory: the requests table and the floors `up` enforces
   oauthfixture.go                  the Auth Required MCPServer fixture + the per-server sign-in proof
-  fleetfixture.go servergroups.go  the fake-fleet MCPServers (families x fake clusters, tool-group label); the portal's grouping arithmetic
+  infrastructure.go servergroups.go  the lab's cluster as the infrastructure families' member (tool-group label proof); the portal's grouping arithmetic
   agent.go agenttemplate.go        an agent on the platform (the Generic chart 1.x contract: the two writers, the one readiness wait, the cleanup) and the AgentTemplate as the proofs read it
   toolsetstest*.go                 the toolset proof: muster, kagent, the portal
   agentmanager.go agentstest.go    the agent-manager MCPServer + the agents proof

@@ -4,9 +4,11 @@ An **optional component, on by default** (`platform.observability` in
 `agentlab.yaml`; skip it headlessly with `agentlab configure --defaults
 --observability=false`): a minimal Prometheus scraping the cluster plus
 [mcp-prometheus](https://github.com/giantswarm/mcp-prometheus), registered in
-muster as `x_mcp-prometheus_<tool>` — so Claude Code (or a kagent agent) can
-answer "how is the control plane's CPU?" or "how much memory does pod X use?"
-with real PromQL (`x_mcp-prometheus_execute_query`, `…_execute_range_query`,
+muster as the `prometheus` family's member for the lab's cluster
+(`x_prometheus_<tool>` with `management_cluster: <clusterName>`) — so Claude
+Code (or a kagent agent) can answer "how is the control plane's CPU?" or "how
+much memory does pod X use?" with real PromQL (`x_prometheus_execute_query`,
+`…_execute_range_query`,
 label/metadata discovery, and the rest of its 18 read-only tools).
 
 The Prometheus is the Giant Swarm
@@ -28,11 +30,11 @@ no BOM covers them).
 
 mcp-prometheus follows the mcp-kubernetes stance exactly: unauthenticated on
 the cluster network, muster is the single enforcement point. Its MCPServer CR
-comes from the chart's `agent-platform-mcps.mcpServers` values — with a
-`group` deliberately **outside** the chart's `muster.families` (`kubernetes`,
-`prometheus`): a `prometheus`-family entry would surface the tools as
-`x_prometheus_<tool>` with a required `management_cluster` argument, which is
-the multi-cluster UX, not this single-cluster lab's. What the lab exercises is
+comes from the chart's `agent-platform-mcps.mcpServers` values, the entry an
+installation writes for a management cluster: `cluster: <clusterName>`,
+`group: prometheus`, so the chart names it `<clusterName>-mcp-prometheus`,
+labels it `tool-group: infrastructure` and gives it the family block
+(`muster.families.prometheus`). What the lab exercises is
 the mcp-prometheus tool chain against a plain local Prometheus; the GS
 production shape (Alloy → Mimir, `X-Scope-OrgID` tenancy) is out of scope.
 
@@ -85,7 +87,8 @@ the monitors the lab renders (`kps-…`, `agent-platform-connectivity-…`,
 `mcp-prometheus`); a Prometheus that shows anything else is not the lab's.
 
 `agentlab platform-test` grows a phase when the component is on: it lists the
-`x_mcp-prometheus_*` tools through muster, runs `execute_query` with `up`,
+`x_prometheus_*` tools through muster, runs `execute_query` with `up` on the
+lab's cluster (`management_cluster`),
 asserts the platform itself is being scraped (muster, valkey,
 mcp-prometheus, and kagent when agents run all report `up == 1`), and then
 runs the Deployments page's exact workload query against the edge

@@ -401,15 +401,17 @@ type musterToolsetResults struct {
 // carrying the header an agent's runtime would send.
 func proveMusterToolsets(cfg *config.Config, token string) (*musterToolsetResults, error) {
 	out := &musterToolsetResults{}
-	k8sPrefix := "x_" + cfg.MCPServerName() + "_"
+	// The kubernetes family's list tool, on the lab's cluster.
 	// The lab's mcp-kubernetes runs non-destructive, so its writers do not
 	// exist as tools; the destructive call of the proof is agent-manager's
 	// delete_agent, a platform writer annotated as such. Under the read-only
 	// toolset muster refuses it before agent-manager ever sees it.
-	listTool, deleteTool := k8sPrefix+"list", "x_"+agentManagerMCPServer+"_delete_agent"
+	listTool, deleteTool := familyTool(familyKubernetes, "list"), "x_"+agentManagerMCPServer+"_delete_agent"
 	deleteArgs := map[string]any{nameKey: toolsetsTestPrefix + "-nothing"}
 	queryTool, mutatingTool := "workflow_"+toolsetsWorkflowQuery, "workflow_"+toolsetsWorkflowMutating
 	demoTool := "workflow_lab-cluster-overview"
+
+	listArgs := familyArgs(cfg, map[string]any{resourceTypeKey: resourceNamespaces})
 
 	s, err := openMusterSession(cfg, token, "toolsets-test-muster")
 	if err != nil {
@@ -422,14 +424,14 @@ func proveMusterToolsets(cfg *config.Config, token string) (*musterToolsetResult
 			nameKey:        toolsetsWorkflowQuery,
 			descriptionKey: "agentlab toolsets-test: read-only steps only (deleted by the same run)",
 			"steps": []map[string]any{
-				{"id": resourceNamespaces, toolKey: listTool, argsKey: map[string]any{resourceTypeKey: resourceNamespaces}, "store": true},
+				{"id": resourceNamespaces, toolKey: listTool, argsKey: listArgs, "store": true},
 			},
 		},
 		{
 			nameKey:        toolsetsWorkflowMutating,
 			descriptionKey: "agentlab toolsets-test: a destructive step, never executed (deleted by the same run)",
 			"steps": []map[string]any{
-				{"id": resourceNamespaces, toolKey: listTool, argsKey: map[string]any{resourceTypeKey: resourceNamespaces}},
+				{"id": resourceNamespaces, toolKey: listTool, argsKey: listArgs},
 				{"id": "purge", toolKey: deleteTool, argsKey: deleteArgs},
 			},
 		},
@@ -533,7 +535,7 @@ func proveMusterToolsets(cfg *config.Config, token string) (*musterToolsetResult
 	note("%d tools, exactly the readOnlyHint ones of the catalogue (%d workflows, %d read-only core tools, no core write)", len(ro.Tools), countKind(ro.Tools, "workflow"), coreCount)
 
 	step("Under %s: the read-only Kubernetes call succeeds, the destructive call and the mutating workflow are refused naming the toolset", presetReadOnly)
-	text, err := s.callServerTool(listTool, map[string]any{resourceTypeKey: resourceNamespaces})
+	text, err := s.callServerTool(listTool, listArgs)
 	if err != nil {
 		return nil, fmt.Errorf("%s under %s: %w", listTool, presetReadOnly, err)
 	}
@@ -571,7 +573,7 @@ func proveMusterToolsets(cfg *config.Config, token string) (*musterToolsetResult
 	if len(none.Tools) != 0 {
 		return nil, fmt.Errorf("%s resolved to %d tools", presetNone, len(none.Tools))
 	}
-	env, err := s.callToolEnvelope(listTool, map[string]any{resourceTypeKey: resourceNamespaces})
+	env, err := s.callToolEnvelope(listTool, listArgs)
 	if err != nil {
 		return nil, err
 	}
@@ -717,13 +719,20 @@ func proveMusterToolsets(cfg *config.Config, token string) (*musterToolsetResult
 		if !coreSeen {
 			return nil, fmt.Errorf("%s lacks muster's core tools", presetAgentPlatform)
 		}
-		if labels[cfg.MCPServerName()] == toolGroupInfrastructure && !slices.Contains(infra.names(), listTool) {
-			return nil, fmt.Errorf("%s lacks %s although %s carries the infrastructure label", presetInfrastructure, listTool, cfg.MCPServerName())
+		// Infrastructure is the lab's families: every one of them has tools
+		// in the preset, served under the family's name.
+		for _, family := range labFamilies(cfg) {
+			if !slices.ContainsFunc(infra.Tools, func(t toolInfo) bool { return t.Server == family }) {
+				return nil, fmt.Errorf("%s lacks the %s family's tools (%s)", presetInfrastructure, family, familyTool(family, "*"))
+			}
+		}
+		if !slices.Contains(infra.names(), listTool) {
+			return nil, fmt.Errorf("%s lacks %s", presetInfrastructure, listTool)
 		}
 		if labels[agentManagerMCPServer] == toolGroupAgentPlatform && !slices.Contains(platform.names(), "x_"+agentManagerMCPServer+"_create_agent") {
 			return nil, fmt.Errorf("%s lacks agent-manager's tools although its CR carries the agent-platform label", presetAgentPlatform)
 		}
-		note("%s: %d tools, all from infrastructure-labelled servers; %s: %d tools, all from agent-platform-labelled servers plus core_*", presetInfrastructure, len(infra.Tools), presetAgentPlatform, len(platform.Tools))
+		note("%s: %d tools of the %s families, all from infrastructure-labelled servers; %s: %d tools, all from agent-platform-labelled servers plus core_*", presetInfrastructure, len(infra.Tools), strings.Join(labFamilies(cfg), " and "), presetAgentPlatform, len(platform.Tools))
 		out.presetsVerdict = fmt.Sprintf("the shipped presets resolve by the tool-group label: %s -> %d tools of infrastructure servers, %s -> %d tools of agent-platform servers plus core tools", presetInfrastructure, len(infra.Tools), presetAgentPlatform, len(platform.Tools))
 	}
 	return out, nil
@@ -785,7 +794,9 @@ func namesOutside(reported, toolset, catalogue []string) (outside, unknown []str
 }
 
 // mcpServerToolGroups maps every MCPServer of the platform namespace to its
-// tool-group label ("" when unlabelled).
+// tool-group label ("" when unlabelled), and every family to the label of
+// its labelled members: muster reports a family tool under the family's name
+// and a preset's label selects it when a member carries the label.
 func mcpServerToolGroups() (map[string]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	defer cancel()
@@ -796,6 +807,9 @@ func mcpServerToolGroups() (map[string]string, error) {
 	labels := make(map[string]string, len(servers))
 	for _, s := range servers {
 		labels[s.Name] = s.Labels[toolGroupLabel]
+		if g := s.Labels[toolGroupLabel]; s.Family != "" && g != "" {
+			labels[s.Family] = g
+		}
 	}
 	return labels, nil
 }
@@ -827,7 +841,7 @@ func toolNamesInReply(reply string) []string {
 	var names []string
 	for _, field := range strings.FieldsFunc(reply, func(r rune) bool { return r == '\n' || r == ',' || r == ' ' || r == '`' || r == '*' || r == '\t' }) {
 		// List bullets and trailing punctuation around a name, not the
-		// dashes inside one (x_mcp-kubernetes_list).
+		// dashes inside one (x_model-manager_list_backends).
 		field = strings.Trim(field, "-.;:()[]\"'")
 		if strings.HasPrefix(field, "x_") || strings.HasPrefix(field, "workflow_") || strings.HasPrefix(field, "core_") {
 			names = append(names, field)
@@ -851,7 +865,7 @@ func proveAgentRuntimeToolsets(cfg *config.Config, token, modelConfig string, re
 		return err
 	}
 	names := toolNamesInReply(reply)
-	k8sPrefix := "x_" + cfg.MCPServerName() + "_"
+	k8sPrefix := familyTool(familyKubernetes, "")
 	if len(names) == 0 {
 		return fmt.Errorf("%s reported no tools (reply: %s) — the runtime did not reach muster with the user's token, or the model did not follow the instruction", toolsetsAgentReadOnly, excerpt(reply, 300))
 	}

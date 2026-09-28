@@ -105,9 +105,10 @@ func PlatformTest(cfg *config.Config, email string) error {
 	if err := json.Unmarshal([]byte(innerText(res)), &toolList); err != nil {
 		return fmt.Errorf("parsing list_tools payload: %w", err)
 	}
-	// The umbrella's bundled MCPServer CR declares no family, so muster uses
-	// per-server prefixing: x_<server>_<tool>, no management_cluster argument.
-	toolPrefix := "x_" + cfg.MCPServerName() + "_"
+	// The lab's mcp-kubernetes is the kubernetes family's member, so muster
+	// exposes the family's tools: x_kubernetes_<tool>, management_cluster
+	// selecting the lab.
+	toolPrefix := familyTool(familyKubernetes, "")
 	shown := 0
 	for _, t := range toolList.Tools {
 		if strings.HasPrefix(t.Name, toolPrefix) && shown < 8 {
@@ -119,8 +120,8 @@ func PlatformTest(cfg *config.Config, email string) error {
 		return fmt.Errorf("muster aggregates no %s tools", toolPrefix)
 	}
 
-	step("Calling %slist namespaces through muster", toolPrefix)
-	payload := fmt.Sprintf(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"call_tool","arguments":{"name":%q,"arguments":{"resourceType":"namespaces"}}}}`, toolPrefix+"list")
+	step("Calling %slist namespaces on %s through muster", toolPrefix, cfg.ClusterName)
+	payload := fmt.Sprintf(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"call_tool","arguments":{"name":%q,"arguments":{%q:%q,"resourceType":"namespaces"}}}}`, toolPrefix+"list", familyInstanceArg, cfg.ClusterName)
 	res, err = call(payload)
 	if err != nil {
 		return err
@@ -259,25 +260,19 @@ func PlatformTest(cfg *config.Config, email string) error {
 	}
 	verdict += "\nPASS: per-server OAuth sign-in -> muster (OAuth client) -> challenge on " + oauthProxyStartPath +
 		" (fixture " + oauthFixtureServer + ")"
-	// The tool-group label (fleetfixture.go): with the fake fleet on, the
-	// infrastructure value selects its families and nothing else the lab
-	// created; off, no member exists and nothing lab-created is labelled.
-	// The OAuth fixture stays a Registered server either way.
-	if err := proveToolGroupLabels(cfg.Platform.FakeFleet); err != nil {
+	// The infrastructure families (infrastructure.go): the lab's servers are
+	// their members, labelled infrastructure, and nothing family-less or
+	// lab-created is. The OAuth fixture stays a Registered server.
+	if err := proveToolGroupLabels(cfg); err != nil {
 		return err
 	}
-	if cfg.Platform.FakeFleet {
-		verdict += fmt.Sprintf("\nPASS: %s=%s selects the fake-fleet fixture (%d MCPServers); %s unlabelled (Registered servers)",
-			toolGroupLabel, toolGroupInfrastructure, len(fleetFixtureNames()), oauthFixtureServer)
-	} else {
-		verdict += fmt.Sprintf("\nPASS: platform.fakeFleet off — no fake-fleet MCPServer, no lab-created server carries %s; %s unlabelled (Registered servers)",
-			toolGroupLabel, oauthFixtureServer)
-	}
+	verdict += fmt.Sprintf("\nPASS: %s is the member of %s (%s=%s, %s=%s), no family-less mcp-kubernetes; %s unlabelled (Registered servers)",
+		cfg.ClusterName, strings.Join(labFamilies(cfg), ", "), toolGroupLabel, toolGroupInfrastructure, managementClusterLabel, cfg.ClusterName, oauthFixtureServer)
 	if cfg.Platform.Observability {
-		// Same singleton prefixing as mcp-kubernetes: the lab's mcpServers
-		// entry deliberately keeps the server out of muster's families
-		// (see agent-platform-values.yaml.tmpl).
-		promPrefix := "x_" + mcpPrometheusRelease + "_"
+		// The prometheus family's tools, as for mcp-kubernetes: the lab's
+		// mcpServers entry registers the server as the family's member (see
+		// agent-platform-values.yaml.tmpl).
+		promPrefix := familyTool(familyPrometheus, "")
 		step("Prometheus tools muster is aggregating")
 		shown = 0
 		for _, t := range toolList.Tools {
@@ -296,7 +291,7 @@ func PlatformTest(cfg *config.Config, email string) error {
 		// call_tool above).
 		promQL := func(query string) (string, error) {
 			q, _ := json.Marshal(query)
-			payload := fmt.Sprintf(`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"call_tool","arguments":{"name":%q,"arguments":{"query":%s}}}}`, promPrefix+"execute_query", q)
+			payload := fmt.Sprintf(`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"call_tool","arguments":{"name":%q,"arguments":{%q:%q,"query":%s}}}}`, promPrefix+"execute_query", familyInstanceArg, cfg.ClusterName, q)
 			res, err := call(payload)
 			if err != nil {
 				return "", err

@@ -26,7 +26,6 @@ const (
 	keyLegacyShape   = "legacyShape"
 	keyAgents        = "agents"
 	keyObservability = "observability"
-	keyFakeFleet     = "fakeFleet"
 	keyModelManager  = "modelManager"
 	keyVMManager     = "vmManager"
 	keyKlausGateway  = "klausGateway"
@@ -39,7 +38,7 @@ const (
 // library adds: exactly these, every one a version or a bool. A new key is a
 // docs/telemetry.md change too.
 var platformKeys = []string{keyChartVersion, keyChartMajor, keyChartChannel, keyChartPinned, keyLegacyShape,
-	keyAgents, keyObservability, keyFakeFleet, keyModelManager, keyVMManager, keyKlausGateway, keyBackstage}
+	keyAgents, keyObservability, keyModelManager, keyVMManager, keyKlausGateway, keyBackstage}
 
 // versionOrBool is the shape of a payload value: a version (a dev tag has
 // dots, hyphens and a hash), a number, true/false, a channel name. Not a
@@ -66,14 +65,14 @@ func TestPlatformPostsTheChartLine(t *testing.T) {
 			configure:    func(*config.Config) {},
 			chartVersion: config.DefaultChartVersion,
 			want: map[string]string{keyChartVersion: config.DefaultChartVersion, keyChartMajor: "4", keyChartChannel: config.ChartChannelStable,
-				keyChartPinned: off, keyLegacyShape: off, keyAgents: on, keyObservability: on, keyFakeFleet: off,
+				keyChartPinned: off, keyLegacyShape: off, keyAgents: on, keyObservability: on,
 				keyModelManager: off, keyVMManager: off, keyKlausGateway: off, keyBackstage: on},
 		},
 		{
 			name: "a released 3.x chart, the legacy shape, every switch flipped",
 			configure: func(cfg *config.Config) {
 				cfg.Platform.ChartVersion = legacyVersion
-				cfg.Platform.Agents, cfg.Platform.Observability, cfg.Platform.FakeFleet = false, false, true
+				cfg.Platform.Agents, cfg.Platform.Observability = false, false
 				cfg.Platform.ModelManager.Enabled, cfg.Platform.VMManager.Enabled, cfg.Platform.KlausGateway.Enabled = true, true, true
 				cfg.Backstage.Enabled = false
 			},
@@ -81,7 +80,7 @@ func TestPlatformPostsTheChartLine(t *testing.T) {
 			// model-manager and klaus-gateway come with the agents: off while
 			// the agents are — the effective switch, not the file's key.
 			want: map[string]string{keyChartVersion: legacyVersion, keyChartMajor: "3", keyChartChannel: config.ChartChannelStable,
-				keyChartPinned: off, keyLegacyShape: on, keyAgents: off, keyObservability: off, keyFakeFleet: on,
+				keyChartPinned: off, keyLegacyShape: on, keyAgents: off, keyObservability: off,
 				keyModelManager: off, keyVMManager: on, keyKlausGateway: off, keyBackstage: off},
 		},
 		{
