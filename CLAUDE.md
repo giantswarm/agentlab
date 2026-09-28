@@ -189,6 +189,8 @@ go test ./internal/forms/ -run TestMinimalFormDrive -count=1 -v   # single test
 ./agentlab up              # certs, kind cluster, Dex, RBAC, the agent platform — verified
                            # on a terminal it ends by offering `trust` and the portal (--trust/--open pre-answer)
 ./agentlab open portal     # the portal (Backstage) in the browser; `open agents` the kagent UI
+./agentlab list            # the labs on this machine: state, components, URLs, CA trust
+./agentlab pods            # the lab's pods (kubectl get pods -A, without kubectl); -n <namespace>
 ./agentlab platform-test   # headless Dex -> muster -> mcp-kubernetes proof
 ./agentlab models-test     # managed models: 401 -> pull -> ModelConfig -> agent turn -> MCP -> unload -> delete (on lmstudio: the 501 refusal -> unwire, U23)
 ./agentlab serving-test    # platform.serving: llm-d controller + models Gateway up -> 401 -> the lab preset fits the node -> load -> Ready on the CPU runtime -> ModelConfig -> a completion through the models Gateway -> agent turn -> unload

@@ -29,8 +29,10 @@ Nor is `kubectl`: every call the lab makes to the apiserver — applying its
 rendered manifests (server-side, under the field manager `agentlab`), reading
 a status, the rollout waits, the RBAC reviews behind `agentlab test` — goes
 through client-go in the binary, bound to the cluster's own kubeconfig,
-`state/kubeconfig`. kubectl is how *you* look at the lab:
-`KUBECONFIG=state/kubeconfig kubectl -n agent-platform get pods`.
+`state/kubeconfig`. `agentlab pods` (`-n agent-platform` for one namespace)
+is how *you* look at the lab's pods, from any directory; kubectl is the
+optional deeper look (`describe`, events):
+`KUBECONFIG=state/kubeconfig kubectl -n agent-platform describe pod <name>`.
 
 Under **rootless Podman** the lab publishes its ports from your own network
 namespace, which cannot bind anything below

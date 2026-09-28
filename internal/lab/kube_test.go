@@ -711,7 +711,7 @@ func TestWaitDeploymentRolledOut(t *testing.T) {
 	if err == nil {
 		t.Fatal("a pending rollout must hit the deadline")
 	}
-	for _, want := range []string{"deployments demo/slow", "did not roll out within", "0 of 1 updated replicas are available", "kubectl -n demo get pods"} {
+	for _, want := range []string{"deployments demo/slow", "did not roll out within", "0 of 1 updated replicas are available", "agentlab pods -n demo"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("deadline error %q lacks %q", err, want)
 		}

@@ -18,7 +18,8 @@ plumbing for model servers under
   the cluster's admin kubeconfig (the `kind-<cluster>` context) to
   `state/kubeconfig` only, so nothing merges into `~/.kube/config` and your
   current-context stays what it was. The same view from a shell:
-  `KUBECONFIG=state/kubeconfig kubectl -n agent-platform get pods`.
+  `agentlab pods -n agent-platform`; for `describe` and events,
+  `KUBECONFIG=state/kubeconfig kubectl -n agent-platform describe pod <name>`.
   A probe whose status read fails reports the apiserver's message (`the status
   read failed: ... connection refused`), never an empty status.
 - **A client certificate beats a bearer token.** `kubectl --token=...` against

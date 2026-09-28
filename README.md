@@ -112,6 +112,8 @@ agentlab platform-test                # headless proof: Dex -> muster -> mcp-kub
 On a terminal, `up` ends by asking whether to trust the lab CA (one sudo
 prompt, so browsers get a green lock) and whether to open the portal — `open
 portal` is the command for later, and `open agents` opens the kagent UI.
+`agentlab list` shows the labs on this machine and `agentlab pods` a lab's
+pods, from any directory (`--lab <name>` picks one of several).
 
 Then point Claude Code at the platform:
 

@@ -674,7 +674,7 @@ func waitDeploymentRolledOut(ctx context.Context, ns, name string, timeout time.
 		return done, nil
 	})
 	if wait.Interrupted(err) {
-		return fmt.Errorf("%s did not roll out within %s (%s); check `kubectl -n %s get pods`",
+		return fmt.Errorf("%s did not roll out within %s (%s); check `agentlab pods -n %s`",
 			describe(gvrDeployments, ns, name), timeout, last, ns)
 	}
 	return err
