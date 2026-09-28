@@ -2,9 +2,9 @@
 # something to show: its main surface is the workflow list, and a freshly
 # installed muster ships none, leaving the "Workflows" tab empty.
 #
-# Tool names use muster's per-server prefixing for the umbrella's bundled
-# MCPServer CR ({{ .MCPServerName }}): x_{{ .MCPServerName }}_<tool>. The CR
-# declares no family, so there is no management_cluster argument.
+# Tool names are the kubernetes family's (the lab's MCPServer
+# {{ .MCPServerName }} is its member): x_kubernetes_<tool>, the argument
+# management_cluster naming the member.
 apiVersion: muster.giantswarm.io/v1alpha1
 kind: Workflow
 metadata:
@@ -24,14 +24,16 @@ spec:
   steps:
     - id: namespaces
       description: Every namespace in the cluster.
-      tool: x_{{ .MCPServerName }}_list
+      tool: x_kubernetes_list
       output: true
       args:
+        management_cluster: {{ .MCPServerName }}
         resourceType: namespaces
     - id: pods
       description: Pods in the requested namespace.
-      tool: x_{{ .MCPServerName }}_list
+      tool: x_kubernetes_list
       output: true
       args:
+        management_cluster: {{ .MCPServerName }}
         resourceType: pods
         namespace: "{{ "{{ .input.namespace }}" }}"

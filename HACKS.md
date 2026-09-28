@@ -205,8 +205,7 @@ always succeeded.
 mcp-kubernetes itself (`components.mcp-kubernetes`, on by default, registering
 an MCPServer named `mcp-kubernetes`, no muster family), and the lab adopted it
 (#34): the standalone release, its version pin and its values template are
-gone, and the tools renamed `x_kubernetes_*` → `x_mcp-kubernetes_*` with no
-`management_cluster` argument. The two workloads now start concurrently inside
+gone. The two workloads now start concurrently inside
 one release, so a muster pod that wins the race can still eat the reconnect
 backoff before the MCPServer shows Connected — the boot's 120s Connected wait
 absorbs it. The muster-side fix (sweep at the scheduled retry time) would
