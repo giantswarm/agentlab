@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -418,6 +419,42 @@ func TestKindConfigSubstrateGates(t *testing.T) {
 	if len(kindCfg.ContainerdConfigPatches) != 1 || !strings.Contains(kindCfg.ContainerdConfigPatches[0], `config_path = "/etc/containerd/certs.d"`) {
 		t.Errorf("containerdConfigPatches = %q, want the one certs.d config_path patch", kindCfg.ContainerdConfigPatches)
 	}
+}
+
+// etcd skips fsync, so the host's writeback never stalls the lease renewals
+// of every leader-elected controller at once. The flag rides the one
+// ClusterConfiguration patch, in the kubeadm generation's list form.
+func TestKindConfigEtcdSkipsFsync(t *testing.T) {
+	out, err := renderTemplate(config.Default(), "kind-config.yaml.tmpl", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kindCfg v1alpha4.Cluster
+	if err := yaml.Unmarshal(out, &kindCfg); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	type arg struct{ Name, Value string }
+	for _, patch := range kindCfg.KubeadmConfigPatches {
+		var cc struct {
+			Kind string
+			Etcd struct {
+				Local struct {
+					ExtraArgs []arg `yaml:"extraArgs"`
+				}
+			}
+		}
+		if err := yaml.Unmarshal([]byte(patch), &cc); err != nil {
+			t.Fatalf("%v\n%s", err, patch)
+		}
+		if cc.Kind != "ClusterConfiguration" {
+			continue
+		}
+		if !reflect.DeepEqual(cc.Etcd.Local.ExtraArgs, []arg{{"unsafe-no-fsync", strconv.FormatBool(true)}}) {
+			t.Errorf("etcd.local.extraArgs = %v, want unsafe-no-fsync=true", cc.Etcd.Local.ExtraArgs)
+		}
+		return
+	}
+	t.Fatal("no ClusterConfiguration patch rendered")
 }
 
 // The kagent controller ServiceMonitor stays off on every channel — the

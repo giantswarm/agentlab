@@ -97,9 +97,24 @@ kubeadmConfigPatches:
   # a new generation is where this is re-checked: on a mismatch the OIDC flags
   # vanish silently and every token is rejected — verify on a fresh node with
   #   docker exec <cluster>-control-plane grep oidc /etc/kubernetes/manifests/kube-apiserver.yaml
+  #
+  # etcd skips fsync. The node's etcd shares the host's disk with everything
+  # else on the machine, and on ext4's ordered journal one fdatasync waits for
+  # the host's whole writeback — an image import, a build, another lab's boot:
+  # seconds, at worst minutes. Every lease renewal behind it misses its
+  # deadline, and kube-scheduler, kube-controller-manager, Kyverno, Flux, the
+  # agentgateway controller and every other leader-elected controller exit at
+  # once; the fail-closed Kyverno webhook refuses every write until it is back.
+  # A lab is throwaway and single-node: the one thing fsync buys it, the last
+  # writes surviving a host crash, it does not need.
   - |
     apiVersion: kubeadm.k8s.io/v1beta4
     kind: ClusterConfiguration
+    etcd:
+      local:
+        extraArgs:
+          - name: unsafe-no-fsync
+            value: "true"
     apiServer:
       extraArgs:
         - name: oidc-issuer-url
