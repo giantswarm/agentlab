@@ -232,7 +232,7 @@ func read() (*registry, error) {
 		return nil, err
 	}
 	reg := &registry{Labs: map[string]string{}}
-	raw, err := os.ReadFile(p)
+	raw, err := os.ReadFile(p) // #nosec G304 -- the registry under the user config directory, varied only by tests
 	if errors.Is(err, os.ErrNotExist) {
 		return reg, nil
 	}
@@ -255,7 +255,7 @@ func write(reg *registry) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
 		return err
 	}
 	out, err := yaml.Marshal(reg)
@@ -267,9 +267,9 @@ func write(reg *registry) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(tmp.Name())
+	defer func() { _ = os.Remove(tmp.Name()) }() // gone after the rename; a leftover on failure
 	if _, err := tmp.Write(append(header, out...)); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Close(); err != nil {
