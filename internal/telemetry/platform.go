@@ -56,7 +56,6 @@ func platformPayload(cfg *config.Config, chartVersion string) map[string]interfa
 		"legacyShape":   strconv.FormatBool(cfg.LegacyChart()),
 		"agents":        strconv.FormatBool(cfg.Platform.Agents),
 		"observability": strconv.FormatBool(cfg.Platform.Observability),
-		"fakeFleet":     strconv.FormatBool(cfg.Platform.FakeFleet),
 		"modelManager":  strconv.FormatBool(cfg.ModelManagerEnabled()),
 		"vmManager":     strconv.FormatBool(cfg.VMManagerEnabled()),
 		"klausGateway":  strconv.FormatBool(cfg.KlausGatewayEnabled()),

@@ -105,7 +105,7 @@ const DefaultDexPort = 32000
 // image is the major.minor components.substrate installs) — a chart that
 // leaves the kagent range open across a Substrate release boots no golden
 // actor (agentlab#187).
-const DefaultChartVersion = "4.49.0"
+const DefaultChartVersion = "4.93.0"
 
 // ChartRepository is where the agent-platform chart releases live.
 const ChartRepository = "oci://gsoci.azurecr.io/charts/giantswarm/agent-platform"
@@ -159,6 +159,29 @@ var vmManagerChartFloor = semver.MustParse("4.15.0")
 // release without kserve-resources.
 var servingChartFloor = semver.MustParse("4.44.0")
 
+// familiesChartFloor is the first agent-platform release whose connectivity
+// chart registers the bundled mcp-kubernetes as a kubernetes family member
+// (mcp-kubernetes.mcpServer.managementCluster, giantswarm/agent-platform#403).
+// An older release ignores the key and registers the family-less singleton
+// next to the lab's families.
+var familiesChartFloor = semver.MustParse("4.93.0")
+
+// CheckFamiliesChartFloor refuses a released 4.x chart before
+// familiesChartFloor, which would register the family-less mcp-kubernetes
+// next to the lab's families. Checked where the chart is installed, not on
+// load, so `agentlab configure --chart-version` can move an older pin. The
+// 3.x line (a migration rehearsal's seed), a branch build and a chart
+// directory are not checked.
+func (c *Config) CheckFamiliesChartFloor() error {
+	if c.Platform.ChartPath != "" || c.Platform.ChartBranch != "" || c.LegacyChart() {
+		return nil
+	}
+	if v, err := semver.NewVersion(c.Platform.ChartVersion); err == nil && v.LessThan(familiesChartFloor) {
+		return fmt.Errorf("agentlab needs agent-platform %s or newer (the bundled mcp-kubernetes as a kubernetes family member); platform.chartVersion is %s — `agentlab configure --defaults --chart-version %s`", familiesChartFloor, c.Platform.ChartVersion, DefaultChartVersion)
+	}
+	return nil
+}
+
 // DefaultDevRegistryPort is the host port of the lab registry when
 // agentlab.yaml sets none: kind's documented local-registry port.
 const DefaultDevRegistryPort = 5001
@@ -188,21 +211,15 @@ type Platform struct {
 	// Prometheus server re-enabled — the bundle itself is MC-shaped: Alloy
 	// remote-writing to Mimir, no local query endpoint) plus mcp-prometheus
 	// registered in muster, so agents can answer PromQL questions
-	// (x_mcp-prometheus_<tool>). On by default: asking the platform about the
+	// (x_prometheus_<tool> with management_cluster set to the cluster name). On by default: asking the platform about the
 	// cluster's CPU/memory is part of the demo story. Not in the umbrella's
 	// BOM (yet) — the lab pins the two charts itself (observability.go).
 	// Inert when the platform itself is disabled.
 	Observability bool `yaml:"observability"`
-	// The fake fleet (lab/fleetfixture.go): six `Auth Required` MCPServers
-	// (kubernetes/capi/prometheus × two fake management clusters) that give
-	// the portal's server groups, its fleet coverage and the agent Tools
-	// step a federated shape to render on one cluster. Off by default: a
-	// default lab lists only the MCP servers of the lab that runs it, and
-	// the fixture's rows ask a person to sign in to clusters that do not
-	// exist. Switching it off removes the members on the next `agentlab
-	// platform`; the proofs assert the fleet shape only while it is on.
-	// Inert when the platform itself is disabled.
-	FakeFleet bool `yaml:"fakeFleet"`
+	// Retired: the fake fleet. The lab registers its own cluster as the
+	// infrastructure families instead (MCPServerName). Read so a file an
+	// earlier release wrote still loads, never written back.
+	RetiredFakeFleet *bool `yaml:"fakeFleet,omitempty"`
 	// Host-side port for the kagent UI (http://localhost:<port>). The kind
 	// mapping onto KagentUINodePort always exists — like the other mappings,
 	// it is fixed at cluster creation — so agents can be enabled later.
@@ -700,6 +717,7 @@ func Load() (*Config, error) {
 	if err := decodeStrict(raw, cfg); err != nil {
 		return nil, err
 	}
+	cfg.Platform.RetiredFakeFleet = nil
 	// Earlier versions wrote the one-backend form (backend/endpoint); read
 	// it as the one-item lists so the same lab renders exactly as before.
 	cfg.Platform.ModelManager.normalize()
@@ -1329,11 +1347,17 @@ func (c *Config) Issuer() string {
 // ControlPlaneNode is the docker container name kind gives the (only) node.
 func (c *Config) ControlPlaneNode() string { return c.ClusterName + "-control-plane" }
 
-// MCPServerName is the MCPServer CR name the umbrella chart registers for its
-// bundled mcp-kubernetes (templates/mcp-kubernetes/mcpserver.yaml): a fixed
-// name, independent of the cluster. Muster prefixes the server's tools with
-// it: x_mcp-kubernetes_<tool>.
-func (c *Config) MCPServerName() string { return "mcp-kubernetes" }
+// MCPServerName is the MCPServer CR the connectivity chart registers for the
+// bundled mcp-kubernetes (mcp-kubernetes.mcpServer.managementCluster): a
+// member of muster's kubernetes family, named the way agent-platform-mcps
+// names every management cluster's. Muster exposes the family's tools as
+// x_kubernetes_<tool>, the argument management_cluster selecting the lab.
+func (c *Config) MCPServerName() string { return c.ClusterName + "-mcp-kubernetes" }
+
+// PrometheusMCPServerName is the lab's mcp-prometheus as a member of the
+// prometheus family (the agent-platform-mcps entry's default name):
+// x_prometheus_<tool> with management_cluster set to the lab.
+func (c *Config) PrometheusMCPServerName() string { return c.ClusterName + "-mcp-prometheus" }
 
 // gatewayURL builds the public URL of a platform hostname: through the
 // agentgateway edge, port-free when the edge sits on 443. The chart's

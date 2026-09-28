@@ -22,38 +22,34 @@ func fakeServer(name, family, group string) mcpServerCR {
 	return s
 }
 
-// The lab's own shape: the fake fleet (labelled infrastructure, two members
-// per family), the chart-shipped managers (agent-platform), the bundled
-// mcp-kubernetes (infrastructure), an unlabelled prometheus and the OAuth
-// fixture (Registered servers).
+// The lab's own shape: its cluster as the kubernetes and prometheus
+// families' member (labelled infrastructure), the chart-shipped managers
+// (agent-platform) and the OAuth fixture (Registered servers).
 func labServers() []mcpServerCR {
-	var out []mcpServerCR
-	for _, s := range fleetFixtureServers() {
-		out = append(out, fakeServer(s.Name, s.Family, toolGroupInfrastructure))
-	}
-	out = append(out,
+	return []mcpServerCR{
+		fakeServer("agentlab-mcp-kubernetes", familyKubernetes, toolGroupInfrastructure),
+		fakeServer("agentlab-mcp-prometheus", familyPrometheus, toolGroupInfrastructure),
 		fakeServer("model-manager", "", toolGroupAgentPlatform),
 		fakeServer(agentManagerMCPServer, "", toolGroupAgentPlatform),
-		fakeServer(componentMCPKubernetes, "", toolGroupInfrastructure),
-		fakeServer("mcp-prometheus", "", ""),
 		fakeServer(oauthFixtureServer, "", ""),
-	)
-	return out
+	}
 }
+
+var labFamilyRows = []string{familyKubernetes, familyPrometheus}
 
 func TestPartitionServersGroupsByLabelAndFamily(t *testing.T) {
 	groups := partitionServers(labServers())
 	want := map[string][]string{
 		groupAgentPlatform:  {agentManagerMCPServer, "model-manager"},
-		groupInfrastructure: {"capi", "kubernetes", "prometheus", componentMCPKubernetes},
-		groupRegistered:     {oauthFixtureServer, "mcp-prometheus"},
+		groupInfrastructure: labFamilyRows,
+		groupRegistered:     {oauthFixtureServer},
 	}
 	for _, g := range toolGroupOrder {
 		if got := rowNames(groups[g]); !reflect.DeepEqual(got, want[g]) {
 			t.Errorf("%s rows = %v, want %v", g, got, want[g])
 		}
 	}
-	if err := assertServerGroups(labServers(), groups, true); err != nil {
+	if err := assertServerGroups(labServers(), groups, labFamilyRows); err != nil {
 		t.Fatalf("assertServerGroups: %v", err)
 	}
 }
@@ -66,7 +62,7 @@ func TestPartitionServersFallbackWithoutLabels(t *testing.T) {
 	if n := len(groups[groupAgentPlatform]) + len(groups[groupInfrastructure]); n != 0 {
 		t.Errorf("unlabelled servers landed outside Registered servers: %d rows", n)
 	}
-	want := []string{"capi", "kubernetes", "prometheus", agentManagerMCPServer, oauthFixtureServer, componentMCPKubernetes, "mcp-prometheus", "model-manager"}
+	want := []string{familyKubernetes, familyPrometheus, agentManagerMCPServer, oauthFixtureServer, "model-manager"}
 	if got := rowNames(groups[groupRegistered]); !reflect.DeepEqual(got, want) {
 		t.Errorf("Registered rows = %v, want %v", got, want)
 	}
@@ -99,39 +95,21 @@ func TestAssertServerGroupsCatchesMisplacedFixture(t *testing.T) {
 			servers[i].Metadata.Labels[toolGroupLabel] = toolGroupAgentPlatform
 		}
 	}
-	if err := assertServerGroups(servers, partitionServers(servers), true); err == nil {
+	if err := assertServerGroups(servers, partitionServers(servers), labFamilyRows); err == nil {
 		t.Fatal("a labelled OAuth fixture must fail the Registered servers assertion")
 	}
 }
 
-// singleClusterServers is the default lab's shape: labServers() without the
-// fake fleet — no family server at all.
-func singleClusterServers() []mcpServerCR {
-	var out []mcpServerCR
-	for _, s := range labServers() {
-		if s.family() == "" {
-			out = append(out, s)
-		}
+// TestAssertServerGroupsWantsTheFamilies: a lab without one of its families
+// fails naming it, and a family-less mcp-kubernetes row fails wherever it
+// sits.
+func TestAssertServerGroupsWantsTheFamilies(t *testing.T) {
+	servers := labServers()
+	if err := assertServerGroups(servers[1:], partitionServers(servers[1:]), labFamilyRows); err == nil || !strings.Contains(err.Error(), "the kubernetes family") {
+		t.Errorf("a missing family must fail naming it, got %v", err)
 	}
-	return out
-}
-
-// TestAssertServerGroupsFollowsFakeFleet: the judgement reads
-// platform.fakeFleet — the fleet shape passes only with the key on, the
-// single-cluster shape only with it off; each shape under the other key's
-// assertion names the fixture.
-func TestAssertServerGroupsFollowsFakeFleet(t *testing.T) {
-	fleet, single := labServers(), singleClusterServers()
-	if err := assertServerGroups(single, partitionServers(single), false); err != nil {
-		t.Errorf("the single-cluster shape with the fake fleet off: %v", err)
-	}
-	if got := rowNames(partitionServers(single)[groupInfrastructure]); !reflect.DeepEqual(got, []string{componentMCPKubernetes}) {
-		t.Errorf("Infrastructure rows without the fleet = %v, want the bundled mcp-kubernetes only", got)
-	}
-	if err := assertServerGroups(fleet, partitionServers(fleet), false); err == nil || !strings.Contains(err.Error(), "platform.fakeFleet is off") {
-		t.Errorf("fleet members with the fake fleet off must fail naming the key, got %v", err)
-	}
-	if err := assertServerGroups(single, partitionServers(single), true); err == nil || !strings.Contains(err.Error(), "fake-fleet family") {
-		t.Errorf("no fleet with the fake fleet on must fail naming the missing family, got %v", err)
+	withSingleton := append(labServers(), fakeServer(componentMCPKubernetes, "", toolGroupInfrastructure))
+	if err := assertServerGroups(withSingleton, partitionServers(withSingleton), labFamilyRows); err == nil || !strings.Contains(err.Error(), "family-less") {
+		t.Errorf("a family-less mcp-kubernetes must fail, got %v", err)
 	}
 }

@@ -305,6 +305,15 @@ components:
 # agent-platform under the kubernetes client's trustedPeers for this.
 mcp-kubernetes:
   kubernetesAudience: kubernetes
+{{- if not .LegacyChart }}
+  # The lab's cluster as a member of muster's kubernetes family, the shape
+  # every management cluster's mcp-kubernetes has: MCPServer
+  # {{ .ClusterName }}-mcp-kubernetes with spec.family, tools x_kubernetes_<tool>
+  # with management_cluster: {{ .ClusterName }}-mcp-kubernetes. The 3.x line (a migration
+  # rehearsal's seed) registers the family-less singleton mcp-kubernetes.
+  mcpServer:
+    managementCluster: {{ .ClusterName }}
+{{- end }}
   # The chart's own Cilium policy defaults on and the meta chart does not
   # derive it from the cluster shape; no Cilium in kind.
   ciliumNetworkPolicy:
@@ -975,24 +984,23 @@ agent-platform-mcps:
     # pairing with ingress.mode).
     viaMuster: true
   # The Kubernetes MCP server is NOT listed here: the connectivity chart
-  # registers the mcp-kubernetes component's MCPServer CR itself (with the
-  # forward-token auth block, see mcp-kubernetes.kubernetesAudience above).
+  # registers the mcp-kubernetes component's MCPServer CR itself as the
+  # kubernetes family's member (mcp-kubernetes.mcpServer above, with the
+  # forward-token auth block).
 {{- if .Platform.Observability }}
   # The Prometheus MCP server, the lab's own release through the platform's
   # engine (mcp-prometheus.yaml.tmpl); this entry only registers it with
-  # muster. `group` must stay OUTSIDE muster.families (kubernetes,
-  # prometheus): a family entry would surface the tools as
-  # x_prometheus_<tool> with a required management_cluster argument, while
-  # this singleton keeps mcp-kubernetes's UX — x_mcp-prometheus_<tool>, no
-  # extra argument. auth.mode forward: muster forwards the session's Dex
-  # id_token byte-identical and mcp-prometheus validates it against Dex's
-  # JWKS (mcp-prometheus.yaml.tmpl) — the caller's identity reaches the
-  # server. The chart's default audience (dex-k8s-authenticator) rides along;
-  # the lab Dex mints it and nothing downstream needs it.
+  # muster, as a member of the prometheus family the way a management
+  # cluster's is: <cluster>-mcp-prometheus, tool-group infrastructure (the
+  # chart's muster.families.prometheus), tools x_prometheus_<tool> with
+  # management_cluster: {{ .ClusterName }}-mcp-prometheus. auth.mode forward: muster forwards
+  # the session's Dex id_token byte-identical and mcp-prometheus validates it
+  # against Dex's JWKS (mcp-prometheus.yaml.tmpl) — the caller's identity
+  # reaches the server. The chart's default audience (dex-k8s-authenticator)
+  # rides along; the lab Dex mints it and nothing downstream needs it.
   mcpServers:
-    - name: mcp-prometheus
-      cluster: {{ .ClusterName }}
-      group: observability
+    - cluster: {{ .ClusterName }}
+      group: prometheus
       url: http://mcp-prometheus.monitoring.svc.cluster.local:8080/mcp
       auth:
         mode: forward

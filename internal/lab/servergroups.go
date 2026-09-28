@@ -197,26 +197,23 @@ func describeGroups(groups map[string][]serverRow) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// assertServerGroups judges the partition against the lab's own fixtures —
-// with the fake fleet on, its families under Infrastructure; off, no row
-// named after one of them anywhere (the single-cluster shape: no family
-// named after a lab that does not exist); the OAuth fixture under Registered
-// servers either way — and reports the chart-shipped servers: those whose
-// chart already stamps the label must sit under the group it names, the rest
-// under Registered servers (the fallback). Every server the CR list carries
-// must be in exactly one group.
-func assertServerGroups(servers []mcpServerCR, groups map[string][]serverRow, fakeFleet bool) error {
+// assertServerGroups judges the partition against the lab's own shape — the
+// families the lab's servers are members of (labFamilies) each one row under
+// Infrastructure, no family-less mcp-kubernetes row anywhere, the OAuth
+// fixture under Registered servers — and reports the chart-shipped servers:
+// those whose chart already stamps the label must sit under the group it
+// names, the rest under Registered servers (the fallback). Every server the
+// CR list carries must be in exactly one group.
+func assertServerGroups(servers []mcpServerCR, groups map[string][]serverRow, families []string) error {
 	infra := rowNames(groups[groupInfrastructure])
-	for _, f := range familyNames() {
-		if fakeFleet && !slices.Contains(infra, f) {
-			return fmt.Errorf("the fake-fleet family %s is not under %s (rows: %v)", f, toolGroupTitles[groupInfrastructure], infra)
+	for _, f := range families {
+		if !slices.Contains(infra, f) {
+			return fmt.Errorf("the %s family is not under %s (rows: %v)", f, toolGroupTitles[groupInfrastructure], infra)
 		}
-		if !fakeFleet {
-			for _, g := range toolGroupOrder {
-				if rows := rowNames(groups[g]); slices.Contains(rows, f) {
-					return fmt.Errorf("a %s row sits under %s although platform.fakeFleet is off (rows: %v) — `agentlab platform` removes the fixture", f, toolGroupTitles[g], rows)
-				}
-			}
+	}
+	for _, g := range toolGroupOrder {
+		if rows := rowNames(groups[g]); slices.Contains(rows, componentMCPKubernetes) {
+			return fmt.Errorf("a family-less %s row sits under %s (rows: %v) — the lab registers it as the %s family's member", componentMCPKubernetes, toolGroupTitles[g], rows, familyKubernetes)
 		}
 	}
 	registered := rowNames(groups[groupRegistered])

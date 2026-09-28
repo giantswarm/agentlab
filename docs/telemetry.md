@@ -80,7 +80,7 @@ carries:
 - `chartPinned` — whether a dev-channel lab is frozen at its recorded build
 - `legacyShape` — whether the lab renders the 3.x shape of the values
 - the feature switches of `agentlab.yaml` as booleans: `agents`,
-  `observability`, `fakeFleet`, `modelManager`, `vmManager`, `klausGateway`,
+  `observability`, `modelManager`, `vmManager`, `klausGateway`,
   `backstage` — the effective ones (model-manager and klaus-gateway come with
   the agents, so they read `false` while the agents are off)
 

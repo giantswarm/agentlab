@@ -174,8 +174,8 @@ agentlab vm-manager-test [email] [--skip-vm] [--vm-timeout 6m]
 
 The lab's `platform-test` keeps its tool-group check: the chart's servers
 (agent-manager, model-manager, vm-manager) carry the platform group from their
-templates; nothing lab-created may claim it (the fake fleet carries
-`infrastructure`, the OAuth fixture no label).
+templates; nothing lab-created may claim it (the lab's family members carry
+`infrastructure` from their charts, the OAuth fixture no label).
 
 ## Interactive use
 

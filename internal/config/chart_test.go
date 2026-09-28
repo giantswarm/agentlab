@@ -34,15 +34,15 @@ func TestLegacyChart(t *testing.T) {
 		channel                   string
 		legacy                    bool
 	}{
-		{"3.x release", "3.23.1", "", "", 3, ChartChannelStable, true},
+		{"3.x release", legacyChart, "", "", 3, ChartChannelStable, true},
 		{"3.x release with a v", "v3.20.0", "", "", 3, ChartChannelStable, true},
 		{"4.x release", "4.7.11", "", "", 4, ChartChannelStable, false},
 		{"the default", DefaultChartVersion, "", "", 4, ChartChannelStable, false},
 		{"4.0 prerelease", "4.0.0-rc.1", "", "", 4, ChartChannelStable, false},
 		{"5.x release", "5.0.0", "", "", 5, ChartChannelStable, false},
-		{"dev channel resolved to a 3.x-numbered build", "3.24.0-dev.main.2026-09-11.08-12-33.h7f841be", "main", "", 3, ChartChannelDev, false},
-		{"chart directory with a 3.x pin left over", "3.23.1", "", "/tmp/agent-platform", 3, ChartChannelPath, false},
-		{"chart directory and a branch (Validate refuses the pair; the directory wins)", "4.7.11", "main", "/tmp/agent-platform", 4, ChartChannelPath, false},
+		{"dev channel resolved to a 3.x-numbered build", "3.24.0-dev.main.2026-09-11.08-12-33.h7f841be", mainBranch, "", 3, ChartChannelDev, false},
+		{"chart directory with a 3.x pin left over", legacyChart, "", "/tmp/agent-platform", 3, ChartChannelPath, false},
+		{"chart directory and a branch (Validate refuses the pair; the directory wins)", "4.7.11", mainBranch, "/tmp/agent-platform", 4, ChartChannelPath, false},
 		{"unset (rejected by ValidateChartVersion first)", "", "", "", 0, ChartChannelStable, false},
 	} {
 		cfg := Default()
@@ -198,6 +198,9 @@ const (
 	pocBranch  = "poc/kagent-main"
 	mainBranch = "main"
 )
+
+// legacyChart is a released chart of the 3.x line.
+const legacyChart = "3.23.1"
 
 // The branch spelling in a dev tag is gitsemver's: lowercase, runs of
 // anything outside [a-z0-9] collapsed to one hyphen, hyphens trimmed, a
