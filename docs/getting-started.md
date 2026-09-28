@@ -142,8 +142,7 @@ Then bring the lab up:
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...   # optional: powers the agents + Backstage AI chat
 export GITHUB_TOKEN=github_pat_...    # optional: skill discovery/resolution call GitHub authenticated (5000/h, not 60/h)
-./agentlab configure       # interactive form: cluster, users, components
-./agentlab up              # certs, kind cluster, Dex, RBAC, the agent platform — verified
+./agentlab up              # first run: asks one question, then certs, kind cluster, Dex, RBAC, the agent platform — verified
 ./agentlab open portal     # the portal (Backstage) in the browser; `open agents` the kagent UI
 ./agentlab platform-test   # headless proof: Dex -> muster -> mcp-kubernetes -> apiserver, + the per-server OAuth sign-in challenge
 ./agentlab models-test     # with a model server on the host: pull -> ModelConfig -> agent turn -> delete, through the platform
@@ -152,6 +151,13 @@ export GITHUB_TOKEN=github_pat_...    # optional: skill discovery/resolution cal
 ./agentlab toolsets-test   # declared toolsets end to end: agent-manager requires one, the Agent carries the header, muster resolves and refuses per request, agents see their toolset, a per-server sign-in scopes tools to the token, the portal's Tools step and apply path
 ./agentlab a2a-test        # turns over native gRPC through the edge as the surfaces drive them: the route and its JWT policy, no token refused, a forged x-user-id replaced, discovery with annotations, a streamed turn, HITL approve/reject, CancelTask server-side
 ```
+
+In an empty directory `up` runs the same discovery as `configure` (below),
+prints it, and asks one question: use the detected defaults — the agent
+platform with agents, observability and Backstage, three users, the free
+ports it found — or customize every option. *Use the defaults* saves
+`agentlab.yaml` and boots; *Customize* opens the full form first.
+`agentlab configure` is the way to change the lab later.
 
 On a terminal, `up` ends with the two steps its summary used to only describe:
 while the lab CA is untrusted it asks whether to trust it now (one sudo
@@ -176,7 +182,9 @@ The trust step is optional — see [TLS: one lab CA, trusted
 explicitly](tls.md) for what it does, how to
 revert it (`agentlab untrust`), and the untrusted fallback.
 
-`agentlab configure --defaults` skips the form and writes the canonical lab:
+Off a terminal (CI, a coding agent, a script) nothing is asked, and a
+missing `agentlab.yaml` is refused: write it first with `agentlab configure
+--defaults`, which skips every question and writes the canonical lab:
 the **agent platform on** (it is what the lab exists to test) behind the
 agentgateway edge, Backstage on, three users, Dex on 32000.
 `--platform=false` gives a bare kind+Dex OIDC sandbox;

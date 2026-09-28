@@ -28,6 +28,15 @@ still exists as a directory); a lab whose directory or `agentlab.yaml` is gone
 drops out of the registry. `self-update`, `completion` and `help` touch no
 lab.
 
+## Headless use
+
+Nothing asks without a terminal (stdin not a TTY): no first-run question, no
+lab picker, no trust or open offer. A missing `agentlab.yaml` is refused with
+a pointer to `agentlab configure --defaults`, which writes the canonical lab
+without a question; several registered labs and no `agentlab.yaml` here are
+refused naming them and `--lab`; `up --trust`/`--open` pre-answer the end of a
+boot. CI, coding agents and scripts write the config first and name the lab.
+
 The sections below are the groups `agentlab --help` prints, in the same order.
 
 ## Setup
@@ -35,7 +44,7 @@ The sections below are the groups `agentlab --help` prints, in the same order.
 | Command | What it does |
 |---|---|
 | `up` | Check docker's CPUs and memory against this configuration's floors, then create the kind cluster, deploy Dex and the enabled components, and verify the OIDC chain end to end. Idempotent: unchanged re-runs are no-ops. On a terminal it ends by asking what the summary used to only describe: whether to trust the lab CA while it is untrusted, then whether to open the portal. `--trust` and `--open` (or `--trust=false`/`--open=false`) pre-answer both for scripted runs; off a terminal nothing is asked. See [TLS](tls.md). |
-| `configure` | Discover this machine, then ask for the lab configuration (or keep it with `--defaults`) and save `agentlab.yaml`. Flags below. |
+| `configure` | Discover this machine, then ask for the lab configuration (or keep it with `--defaults`) and save `agentlab.yaml`. Without an `agentlab.yaml` yet, on a terminal, it first asks one question — the detected defaults, or customize — and only *Customize* runs the form; `up` (and every command that has to create the file on the way) asks the same. With an existing file the form opens with its values. Flags below. |
 | `trust` | Install the lab CA into the system and browser trust stores (one sudo prompt; reversible). See [TLS](tls.md). |
 
 ## Everyday
