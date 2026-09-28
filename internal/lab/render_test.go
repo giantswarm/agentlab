@@ -529,6 +529,7 @@ func TestPlatformValuesLegacyChartShape(t *testing.T) {
 	delete(expected, "postgres")
 	delete(expected, "substrate")
 	delete(expected["components"].(map[string]any), "cloudnative-pg")
+	delete(expected["mcp-kubernetes"].(map[string]any), "mcpServer")
 	expectedKagent := expected["kagent"].(map[string]any)
 	delete(expectedKagent, fieldHarness)
 	delete(expectedKagent, "database")

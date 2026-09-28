@@ -78,14 +78,14 @@ muster accepts the token because its `aud` carries `muster` — see
 
 The MCP servers page groups servers into **Agent Platform**,
 **Infrastructure** and **Registered servers** by the tool-group label the
-shipping chart stamps on the CR (see [The fake fleet and the tool-group
-label](platform.md#the-fake-fleet-and-the-tool-group-label)); a family's members
+shipping chart stamps on the CR (see [The infrastructure families and the
+tool-group label](platform.md#the-infrastructure-families-and-the-tool-group-label)); a family's members
 (`spec.family.name`) collapse into one row. The page reads the MCPServer CRs
 through Backstage's Kubernetes proxy with the user's own token, and
 `agentlab backstage-test` asserts the grouping from that same data with the
-plugin's arithmetic: the fake-fleet families under Infrastructure while
-`platform.fakeFleet` is on and no row named after them while it is off (the
-default: the sample below is a lab with the fleet on), the OAuth fixture under
+plugin's arithmetic: the lab's families (`kubernetes`, and `prometheus` with
+`platform.observability`) one row each under Infrastructure, no family-less
+`mcp-kubernetes`, the OAuth fixture under
 Registered servers, every chart-labelled server under the group its label
 names, and — with every label removed from the same data — one Registered
 servers list with all sections present, never an empty page.
@@ -105,16 +105,16 @@ required, and the Agent Platform proof below is skipped:
   token audience  [kubernetes muster backstage]
   backstage user  user:default/dev
   ownership refs  [user:default/dev]
-  muster servers  [(agent-manager, Connected), (capi-lab-01, Auth Required), (capi-lab-02, Auth Required), (kubernetes-lab-01, Auth Required), (kubernetes-lab-02, Auth Required), (lab-oauth-fixture, Auth Required), (mcp-kubernetes, Connected), (mcp-prometheus, Connected), (model-manager, Connected), (prometheus-lab-01, Auth Required), (prometheus-lab-02, Auth Required)]
+  muster servers  [(agent-manager, Connected), (agentlab-mcp-kubernetes, Connected), (agentlab-mcp-prometheus, Connected), (lab-oauth-fixture, Auth Required), (model-manager, Connected), (vm-manager, Connected)]
   agent-manager   listed — the portal offers this installation to create agents on
   sign-in challenge lab-oauth-fixture -> https://muster.127.0.0.1.nip.io/oauth/proxy/start?state=… (client id via preregistered)
   muster workflows [lab-cluster-overview]
   muster core tools 28 exposed
-  MCP servers page groups (11 CRs via /api/kubernetes/proxy):
-    Agent Platform      2 rows: agent-manager, model-manager
-    Infrastructure      4 rows: capi, kubernetes, prometheus, mcp-kubernetes
-    Registered servers  2 rows: lab-oauth-fixture, mcp-prometheus
-  fallback without any agent-platform.giantswarm.io/tool-group label: 8 rows, all under Registered servers; 9 of 11 CRs carry the label today
+  MCP servers page groups (6 CRs via /api/kubernetes/proxy):
+    Agent Platform      3 rows: agent-manager, model-manager, vm-manager
+    Infrastructure      2 rows: kubernetes, prometheus
+    Registered servers  1 rows: lab-oauth-fixture
+  fallback without any agent-platform.giantswarm.io/tool-group label: 6 rows, all under Registered servers; 5 of 6 CRs carry the label today
 ```
 
 ## The agent create flow

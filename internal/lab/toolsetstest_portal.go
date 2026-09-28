@@ -331,6 +331,29 @@ func proveToolsetPortal(cfg *config.Config, user *config.User, opts ToolsetsTest
 			return nil, fmt.Errorf("/tools/filter?toolset=%s includes %s without readOnlyHint", presetReadOnly, t.Name)
 		}
 	}
+	// The Infrastructure preset is the lab's families, as on an installation
+	// with one management cluster: every family the lab's cluster is a
+	// member of, and no other server's tools.
+	infraNote := ""
+	if slices.Contains(presetNames, strings.TrimPrefix(presetInfrastructure, "preset:")) {
+		infra, err := portalFilterTools(ps, []string{presetInfrastructure}, false)
+		if err != nil {
+			return nil, err
+		}
+		families := labFamilies(ps.cfg)
+		for _, t := range infra.Tools {
+			if !slices.Contains(families, t.Server) {
+				return nil, fmt.Errorf("/tools/filter?toolset=%s includes %s of %q, not one of the lab's families %v", presetInfrastructure, t.Name, t.Server, families)
+			}
+		}
+		for _, f := range families {
+			if !slices.ContainsFunc(infra.Tools, func(t toolInfo) bool { return t.Server == f }) {
+				return nil, fmt.Errorf("/tools/filter?toolset=%s lacks the %s family's tools", presetInfrastructure, f)
+			}
+		}
+		note("%s -> %d tools of the %s families", presetInfrastructure, len(infra.Tools), strings.Join(families, " and "))
+		infraNote = fmt.Sprintf(", %s to the %s families (%d tools)", presetInfrastructure, strings.Join(families, " and "), len(infra.Tools))
+	}
 	unmatched, err := portalFilterTools(ps, []string{"server:agentlab-no-such-server"}, false)
 	if err != nil {
 		return nil, err
@@ -342,7 +365,7 @@ func proveToolsetPortal(cfg *config.Config, user *config.User, opts ToolsetsTest
 		return nil, fmt.Errorf("/tools/filter with an unknown preset should relay muster's error, got %v", err)
 	}
 	note("%s -> %d read-only tools; an unknown server -> toolset_unmatched; an unknown preset -> muster's error relayed", presetReadOnly, len(ro.Tools))
-	verdicts = append(verdicts, fmt.Sprintf("PASS: the Tools step's backend (/api/muster/tools/filter) offers the presets [%s], resolves %s live (%d read-only tools) and reports unmatched selectors and unknown presets as muster does", strings.Join(presetNames, ", "), presetReadOnly, len(ro.Tools)))
+	verdicts = append(verdicts, fmt.Sprintf("PASS: the Tools step's backend (/api/muster/tools/filter) offers the presets [%s], resolves %s live (%d read-only tools)%s and reports unmatched selectors and unknown presets as muster does", strings.Join(presetNames, ", "), presetReadOnly, len(ro.Tools), infraNote))
 
 	if opts.SkipPortal {
 		note("skipping the portal's create path (--skip-portal): create_agent through the portal's muster backend was not exercised")
