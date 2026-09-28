@@ -20,11 +20,18 @@ import (
 // unsupported, conflict, does_not_fit, …) and comes back as a *toolRefusal.
 type modelManagerTools struct {
 	session *musterSession
+	// server is the MCPServer the tools are aggregated under; empty is the
+	// platform's model-manager.
+	server string
 }
 
 // toolName is the aggregated name muster exposes the model-manager tool as.
 func (m *modelManagerTools) toolName(tool string) string {
-	return "x_" + modelManagerMCPServer + "_" + tool
+	server := m.server
+	if server == "" {
+		server = modelManagerMCPServer
+	}
+	return "x_" + server + "_" + tool
 }
 
 // toolRefusal is a tool's error result: the tool ran and said no.

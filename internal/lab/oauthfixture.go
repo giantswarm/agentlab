@@ -117,14 +117,14 @@ type authChallenge struct {
 	clientIDMethod string
 }
 
-// signInChallenge runs core_auth_login for the fixture on the session and
-// parses the challenge, asserting the sign-in URL is muster's OAuth proxy
+// signInChallenge runs core_auth_login for server on the session and parses
+// the challenge, asserting the sign-in URL is muster's OAuth proxy
 // start endpoint on the public URL, carrying a state.
-func signInChallenge(cfg *config.Config, s *musterSession) (*authChallenge, error) {
+func signInChallenge(cfg *config.Config, s *musterSession, server string) (*authChallenge, error) {
 	// core_auth_login is a core tool: reachable only through muster's
 	// call_tool meta-tool, whose envelope carries the challenge's
 	// structuredContent — the same envelope the portal's backend unwraps.
-	env, err := s.callToolEnvelope("core_auth_login", map[string]any{serverKey: oauthFixtureServer})
+	env, err := s.callToolEnvelope("core_auth_login", map[string]any{serverKey: server})
 	if err != nil {
 		return nil, err
 	}
@@ -200,13 +200,13 @@ func proveOAuthSignIn(cfg *config.Config, token string) error {
 		return fmt.Errorf("list_tools does not list %s under servers_requiring_auth", oauthFixtureServer)
 	}
 
-	first, err := signInChallenge(cfg, s)
+	first, err := signInChallenge(cfg, s, oauthFixtureServer)
 	if err != nil {
 		return err
 	}
 	note("challenge: %s%s?state=%.12s… (client id via %s)",
 		cfg.MusterBaseURL(), oauthProxyStartPath, first.state, first.clientIDMethod)
-	second, err := signInChallenge(cfg, s)
+	second, err := signInChallenge(cfg, s, oauthFixtureServer)
 	if err != nil {
 		return fmt.Errorf("second core_auth_login: %w", err)
 	}

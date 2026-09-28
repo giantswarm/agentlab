@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
-	"debug/elf"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -15,8 +14,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -292,24 +289,15 @@ func ServeFakeSlack(ctx context.Context, addr string, emails []string) error {
 
 // --- the fake in a container on the kind network -----------------------------
 
-// The container's own port and the command it runs.
-const (
-	slackFakeContainerPort = 8080
-	slackFakeCommand       = "slack-fake"
-	slackFakeBinaryPath    = "/agentlab"
-	slackFakeStartWait     = 30 * time.Second
-)
+// slackFakeCommand is the command the container runs.
+const slackFakeCommand = "slack-fake"
 
-// slackFakeContainer is the fake running as a container on the kind network:
-// pods dial podIP on slackFakeContainerPort, this host the port published on
-// loopback. The people's message timestamps are made here, in the upper half
-// of the microsecond field, so they never meet the ones the fake gives the
-// gateway's messages.
+// slackFakeContainer is the fake running as a container on the kind network
+// (fakecontainer.go). The people's message timestamps are made here, in the
+// upper half of the microsecond field, so they never meet the ones the fake
+// gives the gateway's messages.
 type slackFakeContainer struct {
-	name    string
-	hostURL string
-	podIP   string
-	client  *http.Client
+	*fakeContainer
 
 	mu  sync.Mutex
 	seq int
@@ -340,81 +328,20 @@ func (c *slackFakeContainer) thread(channel, threadTS string) []slackMessage {
 	return msgs
 }
 
-func (c *slackFakeContainer) close() { _ = command(dockerBin, "rm", "-f", c.name).Run() }
-
-// startSlackFakeContainer runs `<binary> slack-fake` in the lab's probe image
-// on the kind network, with its port published on loopback, as the caller's
-// uid, and waits for its health; a leftover of an aborted run is replaced.
+// startSlackFakeContainer runs `<binary> slack-fake` on the kind network.
 func startSlackFakeContainer(cfg *config.Config, binary string, emails map[string]string) (*slackFakeContainer, error) {
-	if err := linuxStaticBinary(binary); err != nil {
-		return nil, err
-	}
-	name := cfg.ClusterName + "-slack-fake"
-	_ = command(dockerBin, "rm", "-f", name).Run()
-	args := dockerRun(name, kindDockerNetwork, "-d", "--rm",
-		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
-		"-p", "127.0.0.1::"+strconv.Itoa(slackFakeContainerPort),
-		"-v", binary+":"+slackFakeBinaryPath+":ro",
-		probeImage, slackFakeBinaryPath, slackFakeCommand, "--listen", "0.0.0.0:"+strconv.Itoa(slackFakeContainerPort))
+	var args []string
 	for _, id := range slices.Sorted(maps.Keys(emails)) {
 		args = append(args, "--email", id+"="+emails[id])
 	}
-	if out, err := command(dockerBin, args...).CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("starting the fake Slack Web API container %s: %w: %s", name, err, excerpt(strings.TrimSpace(string(out)), 300))
-	}
-	c := &slackFakeContainer{name: name, client: &http.Client{Timeout: 10 * time.Second}}
-	ip, err := outputQuiet(dockerBin, "inspect", "-f", `{{with index .NetworkSettings.Networks "`+kindDockerNetwork+`"}}{{.IPAddress}}{{end}}`, name)
-	published, perr := outputQuiet(dockerBin, "port", name, strconv.Itoa(slackFakeContainerPort)+"/tcp")
-	c.podIP = firstIPv4(ip)
-	hostPort := publishedLoopback(published)
-	if err != nil || perr != nil || c.podIP == "" || hostPort == "" {
-		logs, _ := outputQuiet(dockerBin, "logs", name)
-		c.close()
-		return nil, fmt.Errorf("the fake Slack Web API container %s has no address on network %s (%q) or no published port (%q): %v %v; its log: %s",
-			name, kindDockerNetwork, strings.TrimSpace(ip), strings.TrimSpace(published), err, perr, excerpt(logs, 300))
-	}
-	c.hostURL = "http://" + hostPort
-	if !waitFor(int(slackFakeStartWait/(250*time.Millisecond)), 250*time.Millisecond, func() bool {
-		resp, err := c.client.Get(c.hostURL + slackHealthPath)
-		if err != nil {
-			return false
-		}
-		_ = resp.Body.Close()
-		return resp.StatusCode == http.StatusOK
-	}) {
-		logs, _ := outputQuiet(dockerBin, "logs", name)
-		c.close()
-		return nil, fmt.Errorf("the fake Slack Web API container %s did not answer %s%s within %s; its log: %s", name, c.hostURL, slackHealthPath, slackFakeStartWait, excerpt(logs, 300))
-	}
-	return c, nil
-}
-
-// publishedLoopback is the loopback address `docker port` names for the
-// published port.
-func publishedLoopback(out string) string {
-	for _, line := range strings.Split(out, "\n") {
-		if addr := strings.TrimSpace(line); strings.HasPrefix(addr, "127.0.0.1:") {
-			return addr
-		}
-	}
-	return ""
-}
-
-// linuxStaticBinary refuses a binary the probe image cannot run: one that is
-// not a Linux executable (agentlab built for another OS) or that needs a
-// dynamic loader (a `go build` with cgo; the image carries no glibc).
-func linuxStaticBinary(path string) error {
-	f, err := elf.Open(path)
+	c, err := startFakeContainer(cfg, binary, fakeContainerSpec{
+		what: "the fake Slack Web API", suffix: "slack-fake", command: slackFakeCommand,
+		binaryFlag: "--slack-fake-binary", healthPath: slackHealthPath, args: args,
+	})
 	if err != nil {
-		return fmt.Errorf("the fake Slack Web API runs %s in a Linux container, and it is not a Linux executable (%v): pass --slack-fake-binary with a linux/%s agentlab", path, err, runtime.GOARCH)
+		return nil, err
 	}
-	defer func() { _ = f.Close() }()
-	for _, p := range f.Progs {
-		if p.Type == elf.PT_INTERP {
-			return fmt.Errorf("the fake Slack Web API runs %s in a container on the kind network, and it is dynamically linked: build it with CGO_ENABLED=0 (`make build` does), or pass --slack-fake-binary with a static agentlab", path)
-		}
-	}
-	return nil
+	return &slackFakeContainer{fakeContainer: c}, nil
 }
 
 // serveAPI answers one Web API call. The gateway sends plain posts
