@@ -98,12 +98,12 @@ func TestCheckFamiliesChartFloor(t *testing.T) {
 	if err := cfg.CheckFamiliesChartFloor(); err == nil || !strings.Contains(err.Error(), familiesChartFloor.String()) || !strings.Contains(err.Error(), "--chart-version") {
 		t.Errorf("4.92.0: want the floor and the fix named, got %v", err)
 	}
-	cfg.Platform.ChartVersion = "3.23.1"
+	cfg.Platform.ChartVersion = legacyChart
 	if err := cfg.CheckFamiliesChartFloor(); err != nil {
 		t.Errorf("the 3.x line: %v", err)
 	}
 	cfg.Platform.ChartVersion = "4.92.0"
-	cfg.Platform.ChartBranch = "main"
+	cfg.Platform.ChartBranch = mainBranch
 	if err := cfg.CheckFamiliesChartFloor(); err != nil {
 		t.Errorf("a branch build: %v", err)
 	}
