@@ -492,7 +492,7 @@ func offersFromFlags(cmd *cobra.Command, trust, open *bool) lab.Offers {
 func openCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:       "open <" + strings.Join(lab.OpenTargets(), "|") + ">",
-		Short:     "Open a lab URL in the browser and print it: the portal, or the kagent UI",
+		Short:     "Open a lab URL in the browser and print it: the portal, the kagent UI or the lab Prometheus",
 		Args:      cobra.MaximumNArgs(1),
 		ValidArgs: lab.OpenTargets(),
 		RunE: func(cmd *cobra.Command, args []string) error {

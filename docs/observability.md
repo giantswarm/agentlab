@@ -48,8 +48,9 @@ Deployments pages query Mimir through gs-backend's `MimirService`, hardcoded
 to `https://observability.<baseDomain>/prometheus/api/v1/query`; the chart
 sets `mimirEnabled: false` because standalone installations have no such
 endpoint. With observability on, the lab provides exactly that endpoint — an
-HTTPRoute on the edge (`observability.<domain>`, `/prometheus` prefix-strip →
-the lab Prometheus, whose query API is what Mimir's is compatible with) — and
+HTTPRoute on the edge (`observability.<domain>`, `/prometheus` → the lab
+Prometheus served under that prefix, whose query API is what Mimir's is
+compatible with) — and
 overrides `mimirEnabled: true` in its app-config overlay. The gs frontend
 attributes samples without Mimir's `cluster_id` label to the installation
 itself, which is exactly right for a single-cluster lab, so the
@@ -58,9 +59,12 @@ unauthenticated read-only PromQL on the (localhost-only) lab edge: a real MC
 fronts it with an auth gateway validating the Bearer token, plain Prometheus
 ignores it — wider than muster's OAuth, accepted for the lab.
 
-Only that query API is routed, not Prometheus's own web UI (its absolute asset
-paths would need `/`, and PromQL through muster is the point) — which is why
-`agentlab open` has a portal and an agents target, but no `prometheus` one.
+Prometheus serves under `/prometheus` itself (`routePrefix` and `externalUrl`
+in its values), so the one public path carries both the query API and the
+web UI: `agentlab open prometheus` opens the UI there (graph, targets,
+alerts), with the same lab-CA trust offer as the portal. In the cluster the
+prefix applies too: mcp-prometheus dials
+`http://prometheus-operated.monitoring.svc.cluster.local:9090/prometheus`.
 
 ## Querying the lab Prometheus from the host
 
@@ -71,8 +75,8 @@ lab cluster in the request itself:
   `curl -sk "https://observability.<domain>/prometheus/api/v1/query?query=<PromQL>"`
   (with `:<gatewayPort>` when it is not 443);
 - **the API server's proxy** — before the edge is up, or for the targets page:
-  `kubectl --context kind-<clusterName> get --raw '/api/v1/namespaces/monitoring/services/kps-kube-prometheus-stack-prometheus:9090/proxy/api/v1/targets'`
-  (`…/proxy/api/v1/query?query=<PromQL>` for a query).
+  `kubectl --context kind-<clusterName> get --raw '/api/v1/namespaces/monitoring/services/kps-kube-prometheus-stack-prometheus:9090/proxy/prometheus/api/v1/targets'`
+  (`…/proxy/prometheus/api/v1/query?query=<PromQL>` for a query).
 
 A `kubectl port-forward … <port>:9090` to a fixed local port is the path to
 avoid on a machine that talks to more than one cluster. When the port is

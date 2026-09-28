@@ -36,8 +36,9 @@ type openTarget struct {
 // The target names. openTargetPortal is also what `up`'s open question opens,
 // so the question and `agentlab open portal` cannot drift apart.
 const (
-	openTargetPortal = "portal"
-	openTargetAgents = "agents"
+	openTargetPortal     = "portal"
+	openTargetAgents     = "agents"
+	openTargetPrometheus = "prometheus"
 )
 
 // openTargets maps each target name to how it is opened; the table also feeds
@@ -78,6 +79,23 @@ var openTargets = map[string]openTarget{
 			return nil
 		},
 		hint: "check `agentlab pods -n " + kagentNamespace + "`",
+	},
+	openTargetPrometheus: {
+		what: "the lab Prometheus",
+		// On the edge under /prometheus (observability-route.yaml.tmpl),
+		// the same URL Backstage queries: the lab CA applies.
+		url: (*config.Config).ObservabilityBaseURL,
+		tls: true,
+		enabled: func(c *config.Config) error {
+			if !c.Platform.Enabled {
+				return fmt.Errorf("the agent platform is disabled in %s (platform.enabled) — the lab Prometheus comes with it", config.File)
+			}
+			if !c.Platform.Observability {
+				return fmt.Errorf("platform.observability is false in %s — enable it (`agentlab configure --defaults --observability`), then run `agentlab up`", config.File)
+			}
+			return nil
+		},
+		hint: "check `agentlab logs prometheus` and `agentlab pods -n " + observabilityNamespace + "`",
 	},
 }
 

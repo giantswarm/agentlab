@@ -70,6 +70,12 @@ kube-prometheus-stack:
     enabled: true
     prometheusSpec:
       retention: 10d
+      # Served under /prometheus, the path the edge publishes it at
+      # (observability-route.yaml.tmpl): the query API Backstage calls and
+      # the web UI, whose links and assets then carry the prefix. The
+      # operator derives the probes and the self-scrape path from it.
+      routePrefix: /prometheus
+      externalUrl: {{ .ObservabilityBaseURL }}
       # Upstream's default (…NilUsesHelmValues: true) makes Prometheus select
       # only monitors/rules carrying THIS release's label — but the platform's
       # own monitors (muster, kagent, valkey, mcp-prometheus) come from other
