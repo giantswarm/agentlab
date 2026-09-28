@@ -839,7 +839,7 @@ cluster the same way, with `clusterName` (default `agentlab`) as the instance:
 
 Every family tool takes `management_cluster`, the member's MCPServer name
 (`<clusterName>-mcp-kubernetes`, `<clusterName>-mcp-prometheus`), the way an
-installation's take `gazelle-mcp-kubernetes`. There is no
+installation's take `<cluster>-mcp-kubernetes`. There is no
 family-less registration: the portal's MCP servers page, the agent create
 flow's Tools step and muster's `infrastructure` preset see the shape of an
 installation with one management cluster. `capi` joins when the lab runs

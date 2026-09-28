@@ -68,7 +68,7 @@ func familyTool(family, tool string) string { return "x_" + family + "_" + tool 
 
 // familyMember is the lab's member of a family — the value of the instance
 // argument selecting the lab: muster offers a family's members by their
-// MCPServer names (an installation's gazelle-mcp-kubernetes, the lab's
+// MCPServer names (an installation's <cluster>-mcp-kubernetes, the lab's
 // <clusterName>-mcp-kubernetes).
 func familyMember(cfg *config.Config, family string) string {
 	return cfg.ClusterName + "-mcp-" + family
