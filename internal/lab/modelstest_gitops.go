@@ -12,6 +12,7 @@ import (
 	chartutil "helm.sh/helm/v4/pkg/chart/common/util"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/giantswarm/agentlab/internal/config"
@@ -65,6 +66,17 @@ const (
 	gitopsReleaseWait   = 5 * time.Minute
 )
 
+// model-manager's argument names and words the proof uses.
+const (
+	dryRunArg     = "dryRun"
+	modeArg       = "mode"
+	modeCommit    = "commit"
+	repositoryArg = "repository"
+	deleteModel   = "delete_model"
+	valuesEnabled = "enabled"
+	musterValues  = "muster"
+)
+
 // ModelsTestOptions are models-test's flags.
 type ModelsTestOptions struct {
 	// Backend is the backend to prove (default: the first of the list).
@@ -86,22 +98,22 @@ func proveDryRuns(api *modelManagerTools, backendName, model, mcName, jobID stri
 	if err != nil {
 		return err
 	}
-	onModel := map[string]any{modelField: model, backendField: backendName, "dryRun": true}
-	for _, tool := range []string{"pull_model", "wire_model", "unwire_model", "load_model", "unload_model", "delete_model"} {
+	onModel := map[string]any{modelField: model, backendField: backendName, dryRunArg: true}
+	for _, tool := range []string{"pull_model", "wire_model", "unwire_model", "load_model", "unload_model", deleteModel} {
 		var answer map[string]any
 		if err := api.getJSON(tool, onModel, &answer); err != nil {
 			return fmt.Errorf("%s dryRun: %w", tool, err)
 		}
-		if answer["dryRun"] != true {
+		if answer[dryRunArg] != true {
 			return fmt.Errorf("%s dryRun answered no dryRun: true: %.300v", tool, answer)
 		}
 		note("%s: %s", tool, dryRunSummary(answer))
 	}
 	var cancel map[string]any
-	if err := api.getJSON("cancel_job", map[string]any{"id": jobID, "dryRun": true}, &cancel); err != nil {
+	if err := api.getJSON("cancel_job", map[string]any{"id": jobID, dryRunArg: true}, &cancel); err != nil {
 		return fmt.Errorf("cancel_job dryRun: %w", err)
 	}
-	if cancel["dryRun"] != true {
+	if cancel[dryRunArg] != true {
 		return fmt.Errorf("cancel_job dryRun answered no dryRun: true: %.300v", cancel)
 	}
 	note("cancel_job: the job it would cancel, %s", jobID)
@@ -115,8 +127,8 @@ func proveDryRuns(api *modelManagerTools, backendName, model, mcName, jobID stri
 	note("unchanged: ModelConfig %s at resourceVersion %s, %d models, loaded [%s], job %s %s",
 		mcName, after.modelConfigVersion, after.models, after.loaded, jobID, after.jobState)
 
-	for _, tool := range []string{"pull_model", "delete_model", "load_model"} {
-		_, err := api.call(tool, map[string]any{modelField: model, backendField: backendName, "mode": "commit", "dryRun": true})
+	for _, tool := range []string{"pull_model", deleteModel, "load_model"} {
+		_, err := api.call(tool, map[string]any{modelField: model, backendField: backendName, modeArg: modeCommit, dryRunArg: true})
 		if refusalCode(err) != "unsupported" {
 			return fmt.Errorf("%s mode commit on %s answered %v, wanted unsupported", tool, backendName, err)
 		}
@@ -162,20 +174,14 @@ func dryRunSummary(answer map[string]any) string {
 		var kinds []string
 		for _, m := range manifests {
 			if obj, ok := m.(map[string]any); ok {
-				kinds = append(kinds, fmt.Sprintf("%v %v", obj["kind"], nestedName(obj)))
+				u := unstructured.Unstructured{Object: obj}
+				kinds = append(kinds, u.GetKind()+" "+u.GetName())
 			}
 		}
 		return "manifests " + strings.Join(kinds, ", ")
 	}
-	keys := slices.DeleteFunc(slices.Sorted(maps.Keys(answer)), func(k string) bool { return k == "manifests" || k == "dryRun" })
+	keys := slices.DeleteFunc(slices.Sorted(maps.Keys(answer)), func(k string) bool { return k == "manifests" || k == dryRunArg })
 	return "plan {" + strings.Join(keys, ", ") + "}"
-}
-
-func nestedName(obj map[string]any) any {
-	if meta, ok := obj["metadata"].(map[string]any); ok {
-		return meta["name"]
-	}
-	return ""
 }
 
 // proveGitOpsOwned puts Flux provenance on the wired ModelConfig — the
@@ -189,7 +195,8 @@ func proveGitOpsOwned(api *modelManagerTools, backendName, model, mcName string)
 		return err
 	}
 	label := func(value any) error {
-		body, _ := json.Marshal(map[string]any{"metadata": map[string]any{"labels": map[string]any{gitopsFluxName: value, gitopsFluxNamespace: value}}})
+		v, _ := json.Marshal(value)
+		body := fmt.Appendf(nil, `{"metadata":{"labels":{%q:%s,%q:%s}}}`, gitopsFluxName, v, gitopsFluxNamespace, v)
 		return patchObject(context.Background(), gvr, kagentNamespace, mcName, types.MergePatchType, body)
 	}
 	if err := label(gitopsFluxFixture); err != nil {
@@ -210,12 +217,12 @@ func proveGitOpsOwned(api *modelManagerTools, backendName, model, mcName string)
 	for _, c := range []struct {
 		tool string
 		args map[string]any
-	}{{"wire_model", onModel}, {"unwire_model", onModel}, {"delete_model", deleting}} {
+	}{{"wire_model", onModel}, {"unwire_model", onModel}, {deleteModel, deleting}} {
 		_, err := api.call(c.tool, c.args)
 		if refusalCode(err) != "gitops_owned" {
 			return fmt.Errorf("%s on the Flux-labelled ModelConfig %s answered %v, wanted gitops_owned", c.tool, mcName, err)
 		}
-		if !strings.Contains(err.Error(), "commit") {
+		if !strings.Contains(err.Error(), modeCommit) {
 			return fmt.Errorf("%s's gitops_owned refusal does not point at mode commit: %v", c.tool, err)
 		}
 		note("%s: %s", c.tool, excerpt(err.Error(), 160))
@@ -301,7 +308,7 @@ func proveCommit(cfg *config.Config, user *config.User, token, binary, backendNa
 	if err := api.getJSON("get_backend", map[string]any{backendField: backendName}, &backend); err != nil {
 		return "", err
 	}
-	if !backend.Capabilities["commit"] {
+	if !backend.Capabilities[modeCommit] {
 		return "", fmt.Errorf("%s reports capabilities.commit=false on %s although it is pinned: %v", gitopsModelManager, backendName, backend.Capabilities)
 	}
 	note("%s: capabilities.commit=true", api.toolName("get_backend"))
@@ -311,8 +318,8 @@ func proveCommit(cfg *config.Config, user *config.User, token, binary, backendNa
 		return "", err
 	}
 	login, _, _ := strings.Cut(user.Email, "@")
-	args := map[string]any{modelField: model, backendField: backendName, "mode": "commit",
-		"repository": gitopsRepository, "branch": gitopsBranch, "path": gitopsPath}
+	args := map[string]any{modelField: model, backendField: backendName, modeArg: modeCommit,
+		repositoryArg: gitopsRepository, "branch": gitopsBranch, "path": gitopsPath}
 	step("%s mode commit, dryRun: the files it would commit to %s@%s under %s", api.toolName("wire_model"), gitopsRepository, gitopsBranch, gitopsPath)
 	dry, err := wireCommit(api, args, true)
 	if err != nil {
@@ -378,7 +385,7 @@ type commitAnswer struct {
 
 func wireCommit(api *modelManagerTools, args map[string]any, dryRun bool) (*commitAnswer, error) {
 	call := maps.Clone(args)
-	call["dryRun"] = dryRun
+	call[dryRunArg] = dryRun
 	var answer struct {
 		Commit *commitAnswer `json:"commit"`
 		Next   string        `json:"next"`
@@ -490,7 +497,7 @@ func gitopsHelmRelease(cfg *config.Config, platform map[string]any, fakeIP strin
 			return nil, err
 		}
 		raw = []byte(strings.NewReplacer(
-			`"name":"`+modelManagerMCPServer+`"`, `"name":"`+gitopsModelManager+`"`,
+			`"`+nameKey+`":"`+modelManagerMCPServer+`"`, `"`+nameKey+`":"`+gitopsModelManager+`"`,
 			`name: `+modelManagerMCPServer+`\n`, `name: `+gitopsModelManager+`\n`,
 		).Replace(string(raw)))
 		var renamed any
@@ -502,13 +509,14 @@ func gitopsHelmRelease(cfg *config.Config, platform map[string]any, fakeIP strin
 	values, _ := spec["values"].(map[string]any)
 	spec["values"] = gitopsModelManagerValues(cfg, values, fakeIP)
 	spec["releaseName"] = gitopsModelManager
-	return json.Marshal(map[string]any{
-		"apiVersion": platform["apiVersion"],
-		"kind":       platform["kind"],
-		"metadata": map[string]any{"name": gitopsModelManager, "namespace": platformNamespace,
-			"labels": map[string]any{managedByLabel: managedByAgentlabValue}},
-		"spec": spec,
-	})
+	src := unstructured.Unstructured{Object: platform}
+	out := unstructured.Unstructured{Object: map[string]any{"spec": spec}}
+	out.SetAPIVersion(src.GetAPIVersion())
+	out.SetKind(src.GetKind())
+	out.SetName(gitopsModelManager)
+	out.SetNamespace(platformNamespace)
+	out.SetLabels(map[string]string{managedByLabel: managedByAgentlabValue})
+	return json.Marshal(out.Object)
 }
 
 // gitopsModelManagerValues are the platform release's values with the
@@ -520,23 +528,23 @@ func gitopsModelManagerValues(cfg *config.Config, platformValues map[string]any,
 	overrides := map[string]any{
 		"fullnameOverride": gitopsModelManager,
 		"kagent":           map[string]any{"autoWire": false},
-		"httpRoute":        map[string]any{"enabled": false},
+		"httpRoute":        map[string]any{valuesEnabled: false},
 		"github": map[string]any{
-			"enabled": true,
-			"apiURL":  githubFakeServiceHost + githubFakeAPIPath,
+			valuesEnabled: true,
+			"apiURL":      githubFakeServiceHost + githubFakeAPIPath,
 			"authorizationServer": map[string]any{
 				"issuer":                     gitopsAppIssuer,
 				"expectedIssuer":             "",
 				"authorizationEndpoint":      cfg.Issuer() + "/auth",
 				"tokenEndpoint":              cfg.Issuer() + "/token",
 				"scopes":                     "openid profile email offline_access",
-				"clientCredentialsSecretRef": map[string]any{"name": oauthFixtureServer + "-client", "namespace": platformNamespace},
+				"clientCredentialsSecretRef": map[string]any{nameKey: oauthFixtureServer + "-client", namespaceKey: platformNamespace},
 			},
 		},
-		"muster": map[string]any{"mcpServer": map[string]any{"enabled": true, "name": gitopsModelManager,
+		musterValues: map[string]any{"mcpServer": map[string]any{valuesEnabled: true, nameKey: gitopsModelManager,
 			"description": "agentlab models-test: model-manager pinned to the fake GitHub, for the commit proof (temporary)"}},
 	}
-	if np, _ := platformValues["networkPolicy"].(map[string]any); np["enabled"] == true {
+	if np, _ := platformValues["networkPolicy"].(map[string]any); np[valuesEnabled] == true {
 		cidrs, _ := np["egressCIDRs"].([]any)
 		overrides["networkPolicy"] = map[string]any{"egressCIDRs": append(slices.Clone(cidrs), fakeIP+"/32")}
 	}

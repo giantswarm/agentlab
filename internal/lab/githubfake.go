@@ -48,6 +48,15 @@ const (
 	githubFakeCommand    = "github-fake"
 )
 
+// Words of git's object model and GitHub's JSON the fake speaks.
+const (
+	gitCommit    = "commit"
+	githubBase64 = "base64"
+	githubLogin  = "login"
+	githubRef    = "ref"
+	githubSHA    = "sha"
+)
+
 // fakeGitHub is the GitHub REST API of one proof run.
 type fakeGitHub struct {
 	listener net.Listener
@@ -191,7 +200,7 @@ func (f *fakeGitHub) putTree(tree map[string]string) string {
 
 func (f *fakeGitHub) putCommit(tree, parent, message string) string {
 	f.seq++
-	sha := gitObjectID("commit", []byte(tree+"\n"+parent+"\n"+message+"\n"+strconv.Itoa(f.seq)))
+	sha := gitObjectID(gitCommit, []byte(tree+"\n"+parent+"\n"+message+"\n"+strconv.Itoa(f.seq)))
 	f.commits[sha] = githubFakeCommit{Tree: tree, Parent: parent, Message: message}
 	return sha
 }
@@ -248,7 +257,7 @@ func (f *fakeGitHub) serveUser(w http.ResponseWriter, r *http.Request) {
 		githubFakeError(w, http.StatusUnauthorized, "Bad credentials")
 		return
 	}
-	writeGitHubJSON(w, http.StatusOK, map[string]any{"login": login, "id": len(login), "type": "User"})
+	writeGitHubJSON(w, http.StatusOK, map[string]any{githubLogin: login, "id": len(login), fieldTypeKey: "User"})
 }
 
 // repoCall admits a call on the fake's repository with a bearer and runs h
@@ -271,7 +280,7 @@ func (f *fakeGitHub) repoCall(h func(w http.ResponseWriter, r *http.Request, log
 }
 
 func refJSON(branch, sha string) map[string]any {
-	return map[string]any{"ref": "refs/heads/" + branch, "object": map[string]string{"sha": sha, "type": "commit"}}
+	return map[string]any{githubRef: "refs/heads/" + branch, "object": map[string]string{githubSHA: sha, fieldTypeKey: gitCommit}}
 }
 
 func (f *fakeGitHub) getRef(w http.ResponseWriter, r *http.Request, _ string) {
@@ -321,7 +330,7 @@ func (f *fakeGitHub) updateRef(w http.ResponseWriter, r *http.Request, _ string)
 }
 
 func (f *fakeGitHub) getCommit(w http.ResponseWriter, r *http.Request, _ string) {
-	sha := r.PathValue("sha")
+	sha := r.PathValue(githubSHA)
 	c, ok := f.commits[sha]
 	if !ok {
 		githubFakeError(w, http.StatusNotFound, "Not Found")
@@ -329,9 +338,9 @@ func (f *fakeGitHub) getCommit(w http.ResponseWriter, r *http.Request, _ string)
 	}
 	var parents []map[string]string
 	if c.Parent != "" {
-		parents = append(parents, map[string]string{"sha": c.Parent})
+		parents = append(parents, map[string]string{githubSHA: c.Parent})
 	}
-	writeGitHubJSON(w, http.StatusOK, map[string]any{"sha": sha, "message": c.Message, "tree": map[string]string{"sha": c.Tree}, "parents": parents})
+	writeGitHubJSON(w, http.StatusOK, map[string]any{githubSHA: sha, "message": c.Message, "tree": map[string]string{githubSHA: c.Tree}, "parents": parents})
 }
 
 func (f *fakeGitHub) createCommit(w http.ResponseWriter, r *http.Request, _ string) {
@@ -353,7 +362,7 @@ func (f *fakeGitHub) createCommit(w http.ResponseWriter, r *http.Request, _ stri
 		return
 	}
 	sha := f.putCommit(in.Tree, in.Parents[0], in.Message)
-	writeGitHubJSON(w, http.StatusCreated, map[string]any{"sha": sha, "tree": map[string]string{"sha": in.Tree}})
+	writeGitHubJSON(w, http.StatusCreated, map[string]any{githubSHA: sha, "tree": map[string]string{githubSHA: in.Tree}})
 }
 
 func (f *fakeGitHub) createTree(w http.ResponseWriter, r *http.Request, _ string) {
@@ -390,7 +399,7 @@ func (f *fakeGitHub) createTree(w http.ResponseWriter, r *http.Request, _ string
 			tree[e.Path] = *e.SHA
 		}
 	}
-	writeGitHubJSON(w, http.StatusCreated, map[string]any{"sha": f.putTree(tree)})
+	writeGitHubJSON(w, http.StatusCreated, map[string]any{githubSHA: f.putTree(tree)})
 }
 
 func (f *fakeGitHub) createBlob(w http.ResponseWriter, r *http.Request, _ string) {
@@ -400,7 +409,7 @@ func (f *fakeGitHub) createBlob(w http.ResponseWriter, r *http.Request, _ string
 		return
 	}
 	content := []byte(in.Content)
-	if in.Encoding == "base64" {
+	if in.Encoding == githubBase64 {
 		raw, err := base64.StdEncoding.DecodeString(in.Content)
 		if err != nil {
 			githubFakeError(w, http.StatusUnprocessableEntity, "content is not base64")
@@ -408,11 +417,11 @@ func (f *fakeGitHub) createBlob(w http.ResponseWriter, r *http.Request, _ string
 		}
 		content = raw
 	}
-	writeGitHubJSON(w, http.StatusCreated, map[string]any{"sha": f.putBlob(content)})
+	writeGitHubJSON(w, http.StatusCreated, map[string]any{githubSHA: f.putBlob(content)})
 }
 
 func (f *fakeGitHub) getBlob(w http.ResponseWriter, r *http.Request, _ string) {
-	content, ok := f.blobs[r.PathValue("sha")]
+	content, ok := f.blobs[r.PathValue(githubSHA)]
 	if !ok {
 		githubFakeError(w, http.StatusNotFound, "Not Found")
 		return
@@ -422,7 +431,14 @@ func (f *fakeGitHub) getBlob(w http.ResponseWriter, r *http.Request, _ string) {
 		_, _ = w.Write(content)
 		return
 	}
-	writeGitHubJSON(w, http.StatusOK, map[string]any{"sha": r.PathValue("sha"), "encoding": "base64", "content": base64.StdEncoding.EncodeToString(content), "size": len(content)})
+	writeGitHubJSON(w, http.StatusOK, blobJSON(map[string]any{}, r.PathValue(githubSHA), content))
+}
+
+// blobJSON adds a blob's sha, size and base64 content to out: the shape of
+// a blob and of a file's contents.
+func blobJSON(out map[string]any, sha string, content []byte) map[string]any {
+	out[githubSHA], out["size"], out["encoding"], out["content"] = sha, len(content), githubBase64, base64.StdEncoding.EncodeToString(content)
+	return out
 }
 
 func (f *fakeGitHub) getContents(w http.ResponseWriter, r *http.Request, _ string) {
@@ -435,9 +451,7 @@ func (f *fakeGitHub) getContents(w http.ResponseWriter, r *http.Request, _ strin
 		return
 	}
 	content := f.blobs[sha]
-	name := p[strings.LastIndex(p, "/")+1:]
-	writeGitHubJSON(w, http.StatusOK, map[string]any{"type": "file", "path": p, "name": name, "sha": sha, "size": len(content),
-		"encoding": "base64", "content": base64.StdEncoding.EncodeToString(content)})
+	writeGitHubJSON(w, http.StatusOK, blobJSON(map[string]any{fieldTypeKey: "file", "path": p}, sha, content))
 }
 
 func (f *fakeGitHub) pullJSON(pr *githubFakePull) map[string]any {
@@ -445,9 +459,8 @@ func (f *fakeGitHub) pullJSON(pr *githubFakePull) map[string]any {
 	return map[string]any{
 		"number": pr.Number, "state": pr.State, "title": pr.Title, "body": pr.Body,
 		"html_url": fmt.Sprintf("https://github.lab.local/%s/pull/%d", f.repo, pr.Number),
-		"head":     map[string]any{"ref": pr.Head, "sha": f.refs[pr.Head], "label": owner + ":" + pr.Head},
-		"base":     map[string]any{"ref": pr.Base, "sha": f.refs[pr.Base]},
-		"user":     map[string]string{"login": pr.Author},
+		"head":     map[string]any{githubRef: pr.Head, githubSHA: f.refs[pr.Head], "label": owner + ":" + pr.Head},
+		"base":     map[string]any{githubRef: pr.Base, githubSHA: f.refs[pr.Base]},
 	}
 }
 

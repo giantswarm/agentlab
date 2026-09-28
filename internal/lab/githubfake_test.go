@@ -13,6 +13,16 @@ import (
 	"github.com/giantswarm/agentlab/internal/config"
 )
 
+// The fake's test fixtures.
+const (
+	testLogin   = "admin"
+	testEmail   = testLogin + "@lab.local"
+	testOldFile = "kagent/old.yaml"
+	testFileA   = "d/a.yaml"
+	testCreate  = "create"
+	testSealed  = "d/secret.yaml"
+)
+
 // fakeBearer is a JWT-shaped token carrying the e-mail the fake's login
 // follows; the signature is not checked.
 func fakeBearer(email string) string {
@@ -25,9 +35,9 @@ func fakeBearer(email string) string {
 // commit (a write and a removal), pull request, the read of a file, and the
 // read-back the proof asserts on.
 func TestFakeGitHubServesTheCommitRemote(t *testing.T) {
-	f, err := startFakeGitHub("127.0.0.1:0", "agentlab/gitops", "main", map[string][]byte{
+	f, err := startFakeGitHub("127.0.0.1:0", "agentlab/gitops", gitopsBranch, map[string][]byte{
 		"kagent/kustomization.yaml": []byte("resources: []\n"),
-		"kagent/old.yaml":           []byte("old\n"),
+		testOldFile:                 []byte("old\n"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -44,7 +54,7 @@ func TestFakeGitHubServesTheCommitRemote(t *testing.T) {
 		t.Fatalf("GET /user without a bearer = %d, want 401", resp.StatusCode)
 	}
 	req, _ := http.NewRequest(http.MethodGet, base+"/user", nil)
-	req.Header.Set("Authorization", "Bearer "+fakeBearer("admin@lab.local"))
+	req.Header.Set("Authorization", "Bearer "+fakeBearer(testEmail))
 	resp, err = http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -52,41 +62,41 @@ func TestFakeGitHubServesTheCommitRemote(t *testing.T) {
 	var user struct{ Login string }
 	_ = json.NewDecoder(resp.Body).Decode(&user)
 	_ = resp.Body.Close()
-	if user.Login != "admin" {
+	if user.Login != testLogin {
 		t.Fatalf("GET /user login = %q, want admin", user.Login)
 	}
 
-	gh, err := commit.NewGitHub(fakeBearer("admin@lab.local"), commit.WithBaseURL(base))
+	gh, err := commit.NewGitHub(fakeBearer(testEmail), commit.WithBaseURL(base))
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx := t.Context()
 	repo := commit.Repository{Owner: "agentlab", Name: "gitops"}
-	if _, err := gh.ReadFile(ctx, repo, "main", "kagent/missing.yaml"); !errors.Is(err, commit.ErrFileNotFound) {
+	if _, err := gh.ReadFile(ctx, repo, gitopsBranch, "kagent/missing.yaml"); !errors.Is(err, commit.ErrFileNotFound) {
 		t.Fatalf("ReadFile of a missing file: %v, want ErrFileNotFound", err)
 	}
-	raw, err := gh.ReadFile(ctx, repo, "main", "kagent/kustomization.yaml")
+	raw, err := gh.ReadFile(ctx, repo, gitopsBranch, "kagent/kustomization.yaml")
 	if err != nil || string(raw) != "resources: []\n" {
 		t.Fatalf("ReadFile = %q, %v", raw, err)
 	}
 	const branch = "model-manager/wire-qwen3"
-	if err := gh.CreateBranch(ctx, repo, branch, "main"); err != nil {
+	if err := gh.CreateBranch(ctx, repo, branch, gitopsBranch); err != nil {
 		t.Fatal(err)
 	}
-	if err := gh.CreateBranch(ctx, repo, branch, "main"); err != nil {
+	if err := gh.CreateBranch(ctx, repo, branch, gitopsBranch); err != nil {
 		t.Fatalf("CreateBranch of an existing branch: %v", err)
 	}
 	if err := gh.Commit(ctx, repo, branch, "wire", map[string][]byte{
 		"kagent/model-manager/modelconfig.yaml": []byte("kind: ModelConfig\n"),
-		"kagent/old.yaml":                       nil,
+		testOldFile:                             nil,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	pr, err := gh.OpenPullRequest(ctx, repo, branch, "main", "feat(model-manager): wire qwen3", "body")
+	pr, err := gh.OpenPullRequest(ctx, repo, branch, gitopsBranch, "feat(model-manager): wire qwen3", "body")
 	if err != nil {
 		t.Fatal(err)
 	}
-	again, err := gh.OpenPullRequest(ctx, repo, branch, "main", "feat(model-manager): wire qwen3", "body")
+	again, err := gh.OpenPullRequest(ctx, repo, branch, gitopsBranch, "feat(model-manager): wire qwen3", "body")
 	if err != nil || again.Number != pr.Number {
 		t.Fatalf("a second OpenPullRequest = #%d, %v; want the open #%d", again.Number, err, pr.Number)
 	}
@@ -102,21 +112,21 @@ func TestFakeGitHubServesTheCommitRemote(t *testing.T) {
 		t.Fatalf("%d pull requests recorded, want 1", len(views))
 	}
 	v := views[0]
-	if v.Author != "admin" || v.Head != branch || v.Base != "main" {
+	if v.Author != testLogin || v.Head != branch || v.Base != gitopsBranch {
 		t.Errorf("recorded %+v", v)
 	}
 	if len(v.Files) != 1 || v.Files["kagent/model-manager/modelconfig.yaml"] != "kind: ModelConfig\n" {
 		t.Errorf("recorded files %v", v.Files)
 	}
-	if len(v.Removed) != 1 || v.Removed[0] != "kagent/old.yaml" {
+	if len(v.Removed) != 1 || v.Removed[0] != testOldFile {
 		t.Errorf("recorded removals %v", v.Removed)
 	}
 
-	other, _ := commit.NewGitHub(fakeBearer("admin@lab.local"), commit.WithBaseURL(base))
-	if _, err := other.ReadFile(ctx, commit.Repository{Owner: "someone", Name: "else"}, "main", "x"); err == nil {
+	other, _ := commit.NewGitHub(fakeBearer(testEmail), commit.WithBaseURL(base))
+	if _, err := other.ReadFile(ctx, commit.Repository{Owner: "someone", Name: "else"}, gitopsBranch, "x"); err == nil {
 		t.Error("a repository the fake does not hold answered a read")
 	}
-	if err := ServeFakeGitHub(ctx, "127.0.0.1:0", "agentlab/gitops", "main", []string{"a.yaml"}); err == nil || !strings.Contains(err.Error(), "<path>=<base64 content>") {
+	if err := ServeFakeGitHub(ctx, "127.0.0.1:0", "agentlab/gitops", gitopsBranch, []string{"a.yaml"}); err == nil || !strings.Contains(err.Error(), "<path>=<base64 content>") {
 		t.Errorf("a file without content: %v", err)
 	}
 }
@@ -129,21 +139,21 @@ func TestSameCommitFiles(t *testing.T) {
 		Action  string `json:"action"`
 		Content string `json:"content"`
 	}
-	pr := githubFakePullView{Files: map[string]string{"d/a.yaml": "a\n", "d/secret.yaml": "data: ENC\nsops:\n  age: []\n"}, Removed: []string{"d/old.yaml"}}
-	dry := []file{{"d/a.yaml", "create", "a\n"}, {"d/secret.yaml", "create", ""}, {"d/old.yaml", "delete", ""}}
+	pr := githubFakePullView{Files: map[string]string{testFileA: "a\n", testSealed: "data: ENC\nsops:\n  age: []\n"}, Removed: []string{"d/old.yaml"}} // #nosec G101 -- a test fixture, no credential
+	dry := []file{{testFileA, testCreate, "a\n"}, {testSealed, testCreate, ""}, {"d/old.yaml", "delete", ""}}
 	if err := sameCommitFiles(dry, pr); err != nil {
 		t.Fatal(err)
 	}
 	for name, bad := range map[string][]file{
-		"content differs":     {{"d/a.yaml", "create", "b\n"}, {"d/secret.yaml", "create", ""}},
-		"file missing":        {{"d/a.yaml", "create", "a\n"}, {"d/secret.yaml", "create", ""}, {"d/c.yaml", "create", "c\n"}},
-		"unnamed file":        {{"d/a.yaml", "create", "a\n"}},
-		"removal kept":        {{"d/a.yaml", "create", "a\n"}, {"d/secret.yaml", "create", ""}, {"d/keep.yaml", "delete", ""}},
-		"secret in the clear": {{"d/a.yaml", "create", "a\n"}, {"d/secret.yaml", "create", ""}},
+		"content differs":     {{testFileA, testCreate, "b\n"}, {testSealed, testCreate, ""}},
+		"file missing":        {{testFileA, testCreate, "a\n"}, {testSealed, testCreate, ""}, {"d/c.yaml", testCreate, "c\n"}},
+		"unnamed file":        {{testFileA, testCreate, "a\n"}},
+		"removal kept":        {{testFileA, testCreate, "a\n"}, {testSealed, testCreate, ""}, {"d/keep.yaml", "delete", ""}},
+		"secret in the clear": {{testFileA, testCreate, "a\n"}, {testSealed, testCreate, ""}},
 	} {
 		view := pr
 		if name == "secret in the clear" {
-			view = githubFakePullView{Files: map[string]string{"d/a.yaml": "a\n", "d/secret.yaml": "stringData: {}\n"}}
+			view = githubFakePullView{Files: map[string]string{testFileA: "a\n", testSealed: "stringData: {}\n"}} // #nosec G101 -- a test fixture's empty Secret, no credential
 		}
 		if err := sameCommitFiles(bad, view); err == nil {
 			t.Errorf("%s: no error", name)
@@ -155,15 +165,13 @@ func TestSameCommitFiles(t *testing.T) {
 // HelmRelease: the post-renderers retargeted at the copy's Deployment, the
 // chart reference kept, the values pinned to the fake and Dex.
 func TestGitOpsHelmRelease(t *testing.T) {
-	platform := map[string]any{
-		"apiVersion": "helm.toolkit.fluxcd.io/v2", "kind": "HelmRelease",
-		"metadata": map[string]any{"name": "model-manager"},
-		"spec": map[string]any{
-			"chartRef":      map[string]any{"kind": "OCIRepository", "name": "model-manager"},
-			"releaseName":   "model-manager",
-			"values":        map[string]any{"backends": []any{"ollama"}, "networkPolicy": map[string]any{"enabled": true, "egressCIDRs": []any{"10.0.0.0/8"}}},
-			"postRenderers": []any{map[string]any{"kustomize": map[string]any{"patches": []any{map[string]any{"target": map[string]any{"kind": "Deployment", "name": "model-manager"}, "patch": "kind: Deployment\nmetadata:\n  name: model-manager\nspec: {}\n"}}}}},
-		},
+	var platform map[string]any
+	require := `{"apiVersion": "helm.toolkit.fluxcd.io/v2", "kind": "HelmRelease", "metadata": {"name": "model-manager"},
+	  "spec": {"chartRef": {"kind": "OCIRepository", "name": "model-manager"}, "releaseName": "model-manager",
+	    "values": {"backends": ["backend-a"], "networkPolicy": {"enabled": true, "egressCIDRs": ["10.0.0.0/8"]}},
+	    "postRenderers": [{"kustomize": {"patches": [{"target": {"kind": "Deployment", "name": "model-manager"}, "patch": "kind: Deployment\nmetadata:\n  name: model-manager\nspec: {}\n"}]}}]}}`
+	if err := json.Unmarshal([]byte(require), &platform); err != nil {
+		t.Fatal(err)
 	}
 	raw, err := gitopsHelmRelease(&config.Config{}, platform, "172.21.0.9")
 	if err != nil {
@@ -189,7 +197,7 @@ func TestGitOpsHelmRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 	patch := got.Spec.PostRenderers[0].Kustomize.Patches[0]
-	if got.Metadata.Name != gitopsModelManager || got.Spec.ReleaseName != gitopsModelManager || got.Spec.ChartRef.Name != "model-manager" {
+	if got.Metadata.Name != gitopsModelManager || got.Spec.ReleaseName != gitopsModelManager || got.Spec.ChartRef.Name != modelManagerMCPServer {
 		t.Errorf("names: %s, release %s, chartRef %s", got.Metadata.Name, got.Spec.ReleaseName, got.Spec.ChartRef.Name)
 	}
 	if patch.Target.Name != gitopsModelManager || !strings.Contains(patch.Patch, "name: "+gitopsModelManager+"\n") {
