@@ -103,7 +103,8 @@ must stay in agreement.
 ```
 main.go                          the CLI (cobra): one subcommand per lifecycle step, no logic
 internal/config/                 agentlab.yaml schema, defaults, validation; the fixed group vocabulary and the static OAuth clients
-internal/forms/                  the interactive configuration form (huh); tests drive it with scripted keystrokes
+internal/forms/                  the interactive configuration form (huh), the lab's confirm and picker; tests drive them with scripted keystrokes
+internal/labs/                   the registry of the labs on this machine and the order a command picks its lab in (--lab, ./agentlab.yaml, the one lab, a picker)
 internal/telemetry/              the anonymous usage signals (TelemetryDeck): one per command, one per platform install
   machineid/                       the identifier the OS keeps for the computer (kern.uuid / machine-id / MachineGuid)
 internal/update/                 agentlab self-update + the newer-release hint before every command (go-selfupdate)

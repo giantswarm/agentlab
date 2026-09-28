@@ -221,6 +221,11 @@ The lab's own e2e checks are the `*-test` subcommands, not `go test`.
   so renders stay byte-identical (no spurious pod rolls).
 - `internal/forms` — the huh configuration form; tests drive it with scripted
   keystrokes.
+- `internal/labs` — the registry of the labs on this machine
+  (`~/.config/agentlab/labs.yaml`, cluster name → lab directory) and the one
+  order every command resolves its lab in: `--lab`, `./agentlab.yaml`, the one
+  registered lab, a picker on a terminal. The command then changes into the
+  lab directory, so the lab's cwd-relative paths hold.
 - `internal/telemetry` — anonymous usage signals to TelemetryDeck
   (giantswarm/telemetrydeck-go). One per user-facing command, kubectl-gs's
   signal shape: `GiantSwarm.command` with the command path and the version
