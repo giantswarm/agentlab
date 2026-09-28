@@ -166,6 +166,22 @@ var servingChartFloor = semver.MustParse("4.44.0")
 // next to the lab's families.
 var familiesChartFloor = semver.MustParse("4.92.0")
 
+// CheckFamiliesChartFloor refuses a released 4.x chart before
+// familiesChartFloor, which would register the family-less mcp-kubernetes
+// next to the lab's families. Checked where the chart is installed, not on
+// load, so `agentlab configure --chart-version` can move an older pin. The
+// 3.x line (a migration rehearsal's seed), a branch build and a chart
+// directory are not checked.
+func (c *Config) CheckFamiliesChartFloor() error {
+	if c.Platform.ChartPath != "" || c.Platform.ChartBranch != "" || c.LegacyChart() {
+		return nil
+	}
+	if v, err := semver.NewVersion(c.Platform.ChartVersion); err == nil && v.LessThan(familiesChartFloor) {
+		return fmt.Errorf("agentlab needs agent-platform %s or newer (the bundled mcp-kubernetes as a kubernetes family member); platform.chartVersion is %s — `agentlab configure --defaults --chart-version %s`", familiesChartFloor, c.Platform.ChartVersion, DefaultChartVersion)
+	}
+	return nil
+}
+
 // DefaultDevRegistryPort is the host port of the lab registry when
 // agentlab.yaml sets none: kind's documented local-registry port.
 const DefaultDevRegistryPort = 5001
@@ -1103,13 +1119,6 @@ func (c *Config) Validate() error {
 	if c.Platform.VMManager.Enabled && c.Platform.Enabled && c.Platform.ChartPath == "" && c.Platform.ChartBranch == "" {
 		if v, err := semver.NewVersion(c.Platform.ChartVersion); err == nil && v.LessThan(vmManagerChartFloor) {
 			return fmt.Errorf("platform.vmManager needs agent-platform %s or newer (components.vm-manager); platform.chartVersion is %s", vmManagerChartFloor, c.Platform.ChartVersion)
-		}
-	}
-	// The infrastructure families need the knob on the 4.x line; the 3.x
-	// line (a migration rehearsal's seed, LegacyChart) keeps its singleton.
-	if c.Platform.Enabled && c.Platform.ChartPath == "" && c.Platform.ChartBranch == "" && !c.LegacyChart() {
-		if v, err := semver.NewVersion(c.Platform.ChartVersion); err == nil && v.LessThan(familiesChartFloor) {
-			return fmt.Errorf("agentlab needs agent-platform %s or newer (the bundled mcp-kubernetes as a kubernetes family member); platform.chartVersion is %s", familiesChartFloor, c.Platform.ChartVersion)
 		}
 	}
 	if c.Platform.DevRegistryPort != 0 {

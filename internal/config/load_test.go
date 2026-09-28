@@ -82,22 +82,34 @@ func TestLoadDropsTheRetiredFakeFleet(t *testing.T) {
 	}
 }
 
-// A released 4.x chart before familiesChartFloor is refused (its connectivity
-// chart would register the family-less mcp-kubernetes); the 3.x line and a
-// branch build are not.
-func TestValidateFamiliesChartFloor(t *testing.T) {
-	cfg := Default()
-	cfg.Platform.ChartVersion = "4.91.0"
-	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), familiesChartFloor.String()) {
-		t.Errorf("4.91.0: want the floor named, got %v", err)
+// A released 4.x chart before familiesChartFloor is refused at the install
+// (its connectivity chart would register the family-less mcp-kubernetes),
+// naming the command that moves the pin; such a file still loads, so that
+// command works. The 3.x line and a branch build are not refused.
+func TestCheckFamiliesChartFloor(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := os.WriteFile(File, []byte("platform:\n  chartVersion: 4.91.0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("a file pinned below the floor must load: %v", err)
+	}
+	if err := cfg.CheckFamiliesChartFloor(); err == nil || !strings.Contains(err.Error(), familiesChartFloor.String()) || !strings.Contains(err.Error(), "--chart-version") {
+		t.Errorf("4.91.0: want the floor and the fix named, got %v", err)
 	}
 	cfg.Platform.ChartVersion = "3.23.1"
-	if err := cfg.Validate(); err != nil {
+	if err := cfg.CheckFamiliesChartFloor(); err != nil {
 		t.Errorf("the 3.x line: %v", err)
 	}
 	cfg.Platform.ChartVersion = "4.91.0"
 	cfg.Platform.ChartBranch = "main"
-	if err := cfg.Validate(); err != nil {
+	if err := cfg.CheckFamiliesChartFloor(); err != nil {
 		t.Errorf("a branch build: %v", err)
+	}
+	cfg.Platform.ChartBranch = ""
+	cfg.Platform.ChartVersion = DefaultChartVersion
+	if err := cfg.CheckFamiliesChartFloor(); err != nil {
+		t.Errorf("the default: %v", err)
 	}
 }

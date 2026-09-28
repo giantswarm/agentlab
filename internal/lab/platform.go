@@ -268,6 +268,9 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 			return err
 		}
 	}
+	if err := cfg.CheckFamiliesChartFloor(); err != nil {
+		return err
+	}
 	chart := platformChartFor(cfg)
 	ctx := context.Background()
 	// The platform signal, now that the chart is resolved: the meta chart
