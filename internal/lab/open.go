@@ -58,7 +58,7 @@ var openTargets = map[string]openTarget{
 			}
 			return fmt.Errorf("backstage.enabled is false in %s — enable it (`agentlab configure --defaults --backstage`), then run `agentlab up`", config.File)
 		},
-		hint: "check `agentlab logs backstage` and `KUBECONFIG=" + labKubeconfigPath + " kubectl -n " + platformNamespace + " get pods`",
+		hint: "check `agentlab logs backstage` and `agentlab pods -n " + platformNamespace + "`",
 		notes: func(c *config.Config) []string {
 			return []string{"Sign In -> Dex; users and passwords are in " + config.File}
 		},
@@ -77,7 +77,7 @@ var openTargets = map[string]openTarget{
 			}
 			return nil
 		},
-		hint: "check `KUBECONFIG=" + labKubeconfigPath + " kubectl -n " + kagentNamespace + " get pods`",
+		hint: "check `agentlab pods -n " + kagentNamespace + "`",
 	},
 }
 

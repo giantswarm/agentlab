@@ -159,7 +159,7 @@ func fleetAdmissionUp(cfg *config.Config) error {
 		return last == nil
 	})
 	if !enforcing {
-		return fmt.Errorf("the %s policy does not enforce after 90 s: %w\ncheck `kubectl -n %s get pods` and `kubectl get validatingwebhookconfigurations`", fleetPolicyName, last, kyvernoNamespace)
+		return fmt.Errorf("the %s policy does not enforce after 90 s: %w\ncheck `agentlab pods -n %s` and `kubectl get validatingwebhookconfigurations`", fleetPolicyName, last, kyvernoNamespace)
 	}
 	results, err := proveFleetAdmission(ctx)
 	if err != nil {

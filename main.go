@@ -107,6 +107,8 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		inGroup(groupSetup, labCmd("trust", "Install the lab CA into the system and browser trust stores (one sudo prompt; reversible)", lab.Trust)),
 
 		inGroup(groupEveryday, openCmd()),
+		inGroup(groupEveryday, listCmd()),
+		inGroup(groupEveryday, podsCmd()),
 		inGroup(groupEveryday, logsCmd()),
 		inGroup(groupEveryday, loginCmd()),
 		inGroup(groupEveryday, turnCmd()),
@@ -492,6 +494,53 @@ func openCmd() *cobra.Command {
 			return lab.Open(cfg, target)
 		},
 	}
+}
+
+// listCmd shows the labs of this machine. It never asks which lab: it is
+// the command that shows them.
+func listCmd() *cobra.Command {
+	var output string
+	cmd := &cobra.Command{
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "List the labs on this machine: cluster state, components, URLs, whether the lab CA is trusted",
+		Args:    cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if output != "" && output != "json" {
+				return fmt.Errorf("--output %q: the one format besides the default is json", output)
+			}
+			registered, err := labs.List()
+			if err != nil {
+				return err
+			}
+			here, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+			return lab.PrintLabs(cmd.OutOrStdout(), lab.ListLabs(registered, here), output == "json")
+		},
+	}
+	cmd.Flags().StringVarP(&output, "output", "o", "", "json: the list as JSON, for scripts")
+	return cmd
+}
+
+// podsCmd lists the lab's pods without kubectl.
+func podsCmd() *cobra.Command {
+	var namespace string
+	cmd := &cobra.Command{
+		Use:   "pods",
+		Short: "List the lab's pods across namespaces (kubectl get pods -A, without kubectl)",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			return lab.Pods(cfg, namespace)
+		},
+	}
+	cmd.Flags().StringVarP(&namespace, "namespace", "n", "", "only this namespace (default: every namespace)")
+	return cmd
 }
 
 // turnCmd is `agentlab turn`: one conversation with an agent as a lab user

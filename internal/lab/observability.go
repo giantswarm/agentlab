@@ -188,7 +188,7 @@ func mcpPrometheusUp(cfg *config.Config) error {
 			last += " (" + status.message + ")"
 		}
 		return notReached("HelmRelease "+mcpPrometheusRelease, conditionReady, last, readErr,
-			fmt.Sprintf("check `kubectl -n %s describe helmrelease %s` and `kubectl -n %s get pods`", platformNamespace, mcpPrometheusRelease, observabilityNamespace))
+			fmt.Sprintf("check `kubectl -n %s describe helmrelease %s` and `agentlab pods -n %s`", platformNamespace, mcpPrometheusRelease, observabilityNamespace))
 	}
 	return nil
 }
