@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"iter"
 	"net"
 	"net/url"
@@ -122,7 +123,9 @@ type kagentAPI struct {
 	token     string
 	// extra is metadata sent beside the token on every call — the identity
 	// proof's forged x-user-id; nil for everyone else.
-	extra     metadata.MD
+	extra metadata.MD
+	// events, when set, receives every streamed A2A event as one JSON line.
+	events    io.Writer
 	closeConn func() error
 }
 
@@ -874,6 +877,11 @@ func (a *kagentAPI) turn(ctx context.Context, instanceID string, msg *a2a.Messag
 	for ev, err := range a.stream(ctx, instanceID, msg) {
 		if err != nil {
 			return t, fmt.Errorf("SendStreamingMessage on %s: %w", instanceID, err)
+		}
+		if a.events != nil {
+			if line, err := json.Marshal(ev); err == nil {
+				_, _ = fmt.Fprintf(a.events, "%s\n", line)
+			}
 		}
 		t.observe(ev)
 	}

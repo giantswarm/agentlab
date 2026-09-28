@@ -4,10 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
+	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	"github.com/giantswarm/agentlab/internal/config"
@@ -25,8 +29,10 @@ import (
 // state, and deletes the instance — unless keep is set, which leaves the
 // instance for a later turn, or instanceID names one to continue — after
 // suspending it to the snapshot store first when suspend is set, so the turn
-// proves the restore.
-func Turn(cfg *config.Config, email, template, harness, prompt, instanceID string, keep, suspend bool) error {
+// proves the restore. A turn that pauses for tool approval prints the request
+// and stops, unless decide is "approve" or "reject": then every request is
+// answered that way until the task settles.
+func Turn(cfg *config.Config, email, template, harness, prompt, instanceID, decide, reason, eventsFile, shareWith string, keep, suspend bool) error {
 	user := cfg.FindUser(email)
 	if user == nil {
 		return fmt.Errorf("no lab user %q in agentlab.yaml", email)
@@ -41,6 +47,14 @@ func Turn(cfg *config.Config, email, template, harness, prompt, instanceID strin
 		return err
 	}
 	defer api.close()
+	if eventsFile != "" {
+		f, err := os.Create(eventsFile) // #nosec G304 -- a path the lab user names
+		if err != nil {
+			return err
+		}
+		defer func() { _ = f.Close() }()
+		api.events = f
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), kagentTurnTimeout)
 	defer cancel()
 
@@ -92,7 +106,17 @@ func Turn(cfg *config.Config, email, template, harness, prompt, instanceID strin
 			fmt.Printf("resumed: %s (%s)\n", instanceID, instanceState(instance))
 		}
 	}
-	t, err := api.completedTurnOnce(instanceID, prompt)
+	turnAPI := api
+	if shareWith != "" {
+		shared, revoke, err := sharedTurnAPI(ctx, cfg, api, instanceID, shareWith)
+		if err != nil {
+			return err
+		}
+		defer revoke()
+		defer shared.close()
+		turnAPI = shared
+	}
+	t, err := turnAPI.decidedTurn(instanceID, prompt, decide, reason)
 	if err != nil {
 		if created && !keep {
 			api.removeInstance(instanceID)
@@ -151,4 +175,76 @@ func admittingHarness(templates []*apiv1alpha1.AgentTemplate, name string) (stri
 		return listing.Harness, nil
 	}
 	return "", fmt.Errorf("AgentTemplate %s is not in this user's roster (agentlab turn --list)", name)
+}
+
+// decidedTurn drives one turn. Paused at input-required with no decision, it
+// prints the approval request and returns the paused turn; with one, it
+// answers until the task settles, which must then be completed.
+func (a *kagentAPI) decidedTurn(instanceID, prompt, decide, reason string) (*turn, error) {
+	paused, err := a.turnOn(instanceID, userMessage(prompt))
+	if err != nil {
+		return nil, err
+	}
+	if paused.state() != a2a.TaskStateInputRequired {
+		if _, err := paused.completedText(); err != nil {
+			return nil, err
+		}
+		return paused.turn, nil
+	}
+	if paused.approval != nil {
+		fmt.Printf("paused for approval: %s\n", strings.Join(paused.approval.toolNames(), ", "))
+	}
+	if decide == "" {
+		return paused.turn, nil
+	}
+	settled, rounds, err := a.decideUntilSettled(instanceID, paused, decide == "approve", reason)
+	if err != nil {
+		return nil, err
+	}
+	fmt.Printf("decisions: %d (%s)\n", rounds, decide)
+	if _, err := settled.completedText(); err != nil {
+		return nil, err
+	}
+	return settled, nil
+}
+
+// sharedTurnAPI is the kagent client of another lab user on the instance: the
+// owner creates a read-write share, and the other user's calls carry their own
+// bearer plus the share token, which supplements their identity. The revoke
+// func withdraws the share.
+func sharedTurnAPI(ctx context.Context, cfg *config.Config, owner *kagentAPI, instanceID, email string) (*kagentAPI, func(), error) {
+	user := cfg.FindUser(email)
+	if user == nil {
+		return nil, nil, fmt.Errorf("no lab user %q in agentlab.yaml", email)
+	}
+	resp, err := owner.instances.CreateAgentInstanceShare(owner.callCtx(ctx), &apiv1alpha1.CreateAgentInstanceShareRequest{
+		AgentInstanceId: instanceID,
+		Permission:      apiv1alpha1.AgentInstanceSharePermission_AGENT_INSTANCE_SHARE_PERMISSION_READ_WRITE,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("sharing %s: %w", instanceID, err)
+	}
+	shareID := resp.GetShare().GetId()
+	revoke := func() {
+		rctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if _, err := owner.instances.RevokeAgentInstanceShare(owner.callCtx(rctx), &apiv1alpha1.RevokeAgentInstanceShareRequest{ShareId: shareID}); err != nil {
+			note("revoking share %s: %v", shareID, err)
+			return
+		}
+		fmt.Printf("share revoked: %s\n", shareID)
+	}
+	token, err := passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret, user.Email, user.Password, musterLoginScopes)
+	if err != nil {
+		revoke()
+		return nil, nil, err
+	}
+	shared, err := dialKagentAPI(cfg, token)
+	if err != nil {
+		revoke()
+		return nil, nil, err
+	}
+	shared.extra = metadata.Pairs("x-share-token", resp.GetToken())
+	fmt.Printf("shared: %s read-write with %s (share %s)\n", instanceID, user.Email, shareID)
+	return shared, revoke, nil
 }
