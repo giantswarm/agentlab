@@ -8,8 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/giantswarm/agentlab/internal/config"
 	"github.com/giantswarm/gitops-commit/commit"
+
+	"github.com/giantswarm/agentlab/internal/config"
 )
 
 // fakeBearer is a JWT-shaped token carrying the e-mail the fake's login
