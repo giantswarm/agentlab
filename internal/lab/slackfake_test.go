@@ -283,7 +283,7 @@ func TestSlackFakeReadBack(t *testing.T) {
 	f := startTestFake(t, nil)
 	root := f.nextTS()
 	callFake(t, f, slackPostMessage, url.Values{slackKeyChannel: {"C1"}, slackKeyThreadTS: {root}, slackKeyText: {"hello"}}, nil)
-	c := &slackFakeContainer{hostURL: "http://" + f.listener.Addr().String(), client: http.DefaultClient}
+	c := &slackFakeContainer{fakeContainer: &fakeContainer{hostURL: "http://" + f.listener.Addr().String(), client: http.DefaultClient}}
 	if got, want := c.thread("C1", root), f.thread("C1", root); !reflect.DeepEqual(got, want) || len(got) != 1 {
 		t.Errorf("read back %+v, the fake holds %+v", got, want)
 	}
@@ -297,7 +297,7 @@ func TestSlackFakeReadBack(t *testing.T) {
 	if _, frac, _ := strings.Cut(ts, "."); frac < "500000" {
 		t.Errorf("the proof's ts %s is in the fake's half", ts)
 	}
-	if (&slackFakeContainer{hostURL: "http://127.0.0.1:1", client: &http.Client{Timeout: time.Second}}).thread("C1", root) != nil {
+	if (&slackFakeContainer{fakeContainer: &fakeContainer{hostURL: "http://127.0.0.1:1", client: &http.Client{Timeout: time.Second}}}).thread("C1", root) != nil {
 		t.Error("an unreachable fake reads as an empty thread")
 	}
 }
@@ -316,7 +316,7 @@ func TestSlackFakeContainerParts(t *testing.T) {
 	if err := os.WriteFile(script, []byte("#!/bin/sh\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := linuxStaticBinary(script); err == nil || !strings.Contains(err.Error(), "--slack-fake-binary") {
+	if err := linuxStaticBinary(script, "the fake Slack Web API", "--slack-fake-binary"); err == nil || !strings.Contains(err.Error(), "--slack-fake-binary") {
 		t.Errorf("a script: %v", err)
 	}
 	if err := ServeFakeSlack(t.Context(), "127.0.0.1:0", []string{"UP"}); err == nil || !strings.Contains(err.Error(), "<slack user id>=<e-mail>") {

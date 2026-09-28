@@ -137,6 +137,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 
 		browserCmd(),
 		slackFakeCmd(),
+		githubFakeCmd(),
 	)
 	return root
 }
@@ -160,6 +161,30 @@ func slackFakeCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&listen, "listen", "0.0.0.0:8080", "address to serve the fake Slack Web API on")
 	cmd.Flags().StringArrayVar(&emails, "email", nil, "a person users.info answers for, as <slack user id>=<e-mail> (repeatable)")
+	return cmd
+}
+
+// githubFakeCmd is the fake GitHub REST API models-test runs in a container
+// on the kind network, where model-manager's pods reach it: plumbing, hidden,
+// never typed by a person.
+func githubFakeCmd() *cobra.Command {
+	var listen, repo, branch string
+	var files []string
+	cmd := &cobra.Command{
+		Use:    "github-fake",
+		Short:  "Serve models-test's fake GitHub REST API (run by the proof, in a container)",
+		Args:   cobra.NoArgs,
+		Hidden: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			return lab.ServeFakeGitHub(ctx, listen, repo, branch, files)
+		},
+	}
+	cmd.Flags().StringVar(&listen, "listen", "0.0.0.0:8080", "address to serve the fake GitHub API on")
+	cmd.Flags().StringVar(&repo, "repo", "", "the one repository the fake holds, owner/name")
+	cmd.Flags().StringVar(&branch, "branch", "main", "its base branch")
+	cmd.Flags().StringArrayVar(&files, "file", nil, "a file of the base branch, as <path>=<base64 content> (repeatable)")
 	return cmd
 }
 
@@ -959,10 +984,10 @@ func platformTestCmd() *cobra.Command {
 }
 
 func modelsTestCmd() *cobra.Command {
-	var backend, model string
+	var opts lab.ModelsTestOptions
 	cmd := &cobra.Command{
 		Use:   "models-test [email]",
-		Short: "Headless managed-models proof: 401 without a token, then pull -> ModelConfig -> agent turn -> MCP via muster -> unload -> delete (a refused delete + unwire where the server has none)",
+		Short: "Headless managed-models proof: 401 without a token, then pull -> ModelConfig -> dry runs, gitops_owned, a commit as the person on a fake GitHub -> agent turn -> MCP via muster -> unload -> delete (a refused delete + unwire where the server has none)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
@@ -973,11 +998,12 @@ func modelsTestCmd() *cobra.Command {
 			if len(args) == 1 {
 				email = args[0]
 			}
-			return lab.ModelsTest(cfg, email, backend, model)
+			return lab.ModelsTest(cfg, email, opts)
 		},
 	}
-	cmd.Flags().StringVar(&backend, "backend", "", "the backend to prove, one of platform.modelManager.backends (default: the first — model-manager's default backend)")
-	cmd.Flags().StringVar(&model, "model", "", fmt.Sprintf("the model to pull, small and tool-calling capable (default: %s)", lab.ModelsTestModelDefaults()))
+	cmd.Flags().StringVar(&opts.Backend, "backend", "", "the backend to prove, one of platform.modelManager.backends (default: the first — model-manager's default backend)")
+	cmd.Flags().StringVar(&opts.Model, "model", "", fmt.Sprintf("the model to pull, small and tool-calling capable (default: %s)", lab.ModelsTestModelDefaults()))
+	cmd.Flags().StringVar(&opts.GitHubFakeBinary, "github-fake-binary", "", "the static Linux agentlab the fake GitHub API container of the commit proof runs on the kind network (default: this binary)")
 	return cmd
 }
 

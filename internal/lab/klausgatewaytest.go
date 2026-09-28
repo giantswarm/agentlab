@@ -245,7 +245,7 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 			return err
 		}
 		defer c.close()
-		removeService, err := fakeSlackForPods(cfg, c.podIP, slackFakeContainerPort)
+		removeService, err := fakeSlackForPods(cfg, c.podIP, fakeContainerPort)
 		if err != nil {
 			return err
 		}
