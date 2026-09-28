@@ -98,6 +98,18 @@ plumbing for model servers under
   on its `HelmRelease` minutes later. Fix the host's network or DNS
   (`getent hosts gsoci.azurecr.io`), then run the command the message names —
   `agentlab platform` on a running cluster.
+- **Restarts everywhere at the same minute are the host's disk.** When
+  kube-scheduler, kube-controller-manager, Kyverno, Flux, the agentgateway
+  controller and kagent all show restarts with the same age, each exited
+  cleanly after `Failed to renew lease … context deadline exceeded`: etcd sat
+  in an fdatasync behind the host's writeback (`slow fdatasync` in
+  `kubectl -n kube-system logs etcd-<cluster>-control-plane`, `waiting for
+  writeback completion` in `journalctl -k`). While they are down, the
+  fail-closed Kyverno webhook refuses writes and a proof's cleanup can fail.
+  A lab created by agentlab v0.67.1 or later runs etcd with `--unsafe-no-fsync` and
+  does not stall this way; an older lab gets it with `agentlab down && agentlab up`
+  (`docker exec <cluster>-control-plane grep unsafe-no-fsync
+  /etc/kubernetes/manifests/etcd.yaml` shows which one you have).
 
 
 ## The host's network
