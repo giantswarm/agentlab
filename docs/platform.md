@@ -837,7 +837,9 @@ cluster the same way, with `clusterName` (default `agentlab`) as the instance:
 | `<clusterName>-mcp-kubernetes` | `kubernetes` | the connectivity chart (`mcp-kubernetes.mcpServer.managementCluster`) | `x_kubernetes_<tool>` |
 | `<clusterName>-mcp-prometheus` (with `platform.observability`) | `prometheus` | an `agent-platform-mcps.mcpServers` entry (`cluster`, `group: prometheus`) | `x_prometheus_<tool>` |
 
-Every family tool takes `management_cluster: <clusterName>`. There is no
+Every family tool takes `management_cluster`, the member's MCPServer name
+(`<clusterName>-mcp-kubernetes`, `<clusterName>-mcp-prometheus`), the way an
+installation's take `gazelle-mcp-kubernetes`. There is no
 family-less registration: the portal's MCP servers page, the agent create
 flow's Tools step and muster's `infrastructure` preset see the shape of an
 installation with one management cluster. `capi` joins when the lab runs
@@ -1168,7 +1170,7 @@ data the page reads — see [The muster plugin](backstage.md#the-muster-plugin).
 - **Kubernetes and Prometheus tools are the families'.** The lab's servers
   are the `kubernetes` and `prometheus` families' members for its cluster, as
   on an installation, so a call names the family's tool and the cluster:
-  `call_tool(name=x_kubernetes_list, arguments={management_cluster: agentlab, resourceType: namespaces})`.
+  `call_tool(name=x_kubernetes_list, arguments={management_cluster: agentlab-mcp-kubernetes, resourceType: namespaces})`.
   See [The infrastructure families](#the-infrastructure-families-and-the-tool-group-label).
 - **Tool results are double-wrapped.** `result.content[0].text` is JSON whose
   `content[0].text` is the actual payload — two decode hops.

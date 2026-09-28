@@ -805,7 +805,7 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	}
 	obsHint := "  Observability is disabled (platform.observability in agentlab.yaml)."
 	if cfg.Platform.Observability {
-		obsHint = "  Observability: Prometheus scrapes the cluster; muster serves it as x_prometheus_* tools (management_cluster: " + cfg.ClusterName + ")\n" +
+		obsHint = "  Observability: Prometheus scrapes the cluster; muster serves it as x_prometheus_* tools (management_cluster: " + cfg.PrometheusMCPServerName() + ")\n" +
 			"  (try asking Claude Code for a pod's CPU or memory)."
 	}
 	if roster.shipsSubstrate() {

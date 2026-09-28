@@ -44,7 +44,7 @@ const (
 	managedByLabel         = "app.kubernetes.io/managed-by"
 	managedByAgentlabValue = "agentlab"
 	// managementClusterLabel is muster's convention for the cluster a family
-	// member serves — the value the family's instanceArg selects.
+	// member serves (the instance argument selects the member by its name).
 	managementClusterLabel = "muster.giantswarm.io/management-cluster"
 	// familyInstanceArg is the required argument every family tool takes.
 	familyInstanceArg = "management_cluster"
@@ -66,19 +66,27 @@ const (
 // familyTool is the name muster exposes a family's tool under.
 func familyTool(family, tool string) string { return "x_" + family + "_" + tool }
 
-// familyArgs adds the instance argument selecting the lab's cluster to a
+// familyMember is the lab's member of a family — the value of the instance
+// argument selecting the lab: muster offers a family's members by their
+// MCPServer names (an installation's gazelle-mcp-kubernetes, the lab's
+// <clusterName>-mcp-kubernetes).
+func familyMember(cfg *config.Config, family string) string {
+	return cfg.ClusterName + "-mcp-" + family
+}
+
+// familyArgs adds the instance argument selecting the lab's member to a
 // family tool's arguments.
-func familyArgs(cfg *config.Config, args map[string]any) map[string]any {
-	out := map[string]any{familyInstanceArg: cfg.ClusterName}
+func familyArgs(cfg *config.Config, family string, args map[string]any) map[string]any {
+	out := map[string]any{familyInstanceArg: familyMember(cfg, family)}
 	maps.Copy(out, args)
 	return out
 }
 
 // labFamilyMembers maps the lab's own family members to their family.
 func labFamilyMembers(cfg *config.Config) map[string]string {
-	members := map[string]string{cfg.MCPServerName(): familyKubernetes}
+	members := map[string]string{familyMember(cfg, familyKubernetes): familyKubernetes}
 	if cfg.Platform.Observability {
-		members[cfg.PrometheusMCPServerName()] = familyPrometheus
+		members[familyMember(cfg, familyPrometheus)] = familyPrometheus
 	}
 	return members
 }

@@ -93,7 +93,9 @@ func PlatformTest(cfg *config.Config, email string) error {
 	}
 
 	step("Kubernetes tools muster is aggregating")
-	res, err := call(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_tools","arguments":{}}}`)
+	// One page with every tool: list_tools pages at 50 by default, and the
+	// family tools sort after the platform servers'.
+	res, err := call(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_tools","arguments":{"limit":1000}}}`)
 	if err != nil {
 		return err
 	}
@@ -107,7 +109,7 @@ func PlatformTest(cfg *config.Config, email string) error {
 	}
 	// The lab's mcp-kubernetes is the kubernetes family's member, so muster
 	// exposes the family's tools: x_kubernetes_<tool>, management_cluster
-	// selecting the lab.
+	// selecting the lab's member by its name.
 	toolPrefix := familyTool(familyKubernetes, "")
 	shown := 0
 	for _, t := range toolList.Tools {
@@ -117,11 +119,15 @@ func PlatformTest(cfg *config.Config, email string) error {
 		}
 	}
 	if shown == 0 {
-		return fmt.Errorf("muster aggregates no %s tools", toolPrefix)
+		names := make([]string, 0, len(toolList.Tools))
+		for _, t := range toolList.Tools {
+			names = append(names, t.Name)
+		}
+		return fmt.Errorf("muster aggregates no %s tools (it lists %s)", toolPrefix, strings.Join(names, ", "))
 	}
 
-	step("Calling %slist namespaces on %s through muster", toolPrefix, cfg.ClusterName)
-	payload := fmt.Sprintf(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"call_tool","arguments":{"name":%q,"arguments":{%q:%q,"resourceType":"namespaces"}}}}`, toolPrefix+"list", familyInstanceArg, cfg.ClusterName)
+	step("Calling %slist namespaces on %s through muster", toolPrefix, cfg.MCPServerName())
+	payload := fmt.Sprintf(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"call_tool","arguments":{"name":%q,"arguments":{%q:%q,"resourceType":"namespaces"}}}}`, toolPrefix+"list", familyInstanceArg, cfg.MCPServerName())
 	res, err = call(payload)
 	if err != nil {
 		return err
@@ -291,7 +297,7 @@ func PlatformTest(cfg *config.Config, email string) error {
 		// call_tool above).
 		promQL := func(query string) (string, error) {
 			q, _ := json.Marshal(query)
-			payload := fmt.Sprintf(`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"call_tool","arguments":{"name":%q,"arguments":{%q:%q,"query":%s}}}}`, promPrefix+"execute_query", familyInstanceArg, cfg.ClusterName, q)
+			payload := fmt.Sprintf(`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"call_tool","arguments":{"name":%q,"arguments":{%q:%q,"query":%s}}}}`, promPrefix+"execute_query", familyInstanceArg, cfg.PrometheusMCPServerName(), q)
 			res, err := call(payload)
 			if err != nil {
 				return "", err
@@ -504,7 +510,7 @@ func proveDownstreamIdentity(cfg *config.Config, toolPrefix string) error {
 		note("skipping the identity proof: %s needs one platform-admins and one viewers user", config.File)
 		return nil
 	}
-	args := map[string]any{"resourceType": "secrets", "namespace": "kube-system"}
+	args := familyArgs(cfg, familyKubernetes, map[string]any{"resourceType": "secrets", "namespace": "kube-system"})
 	for _, tc := range []struct {
 		user      *config.User
 		allowed   bool

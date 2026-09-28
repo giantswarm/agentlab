@@ -4,7 +4,7 @@
 #
 # Tool names are the kubernetes family's (the lab's MCPServer
 # {{ .MCPServerName }} is its member): x_kubernetes_<tool>, the argument
-# management_cluster selecting the lab's cluster.
+# management_cluster naming the member.
 apiVersion: muster.giantswarm.io/v1alpha1
 kind: Workflow
 metadata:
@@ -27,13 +27,13 @@ spec:
       tool: x_kubernetes_list
       output: true
       args:
-        management_cluster: {{ .ClusterName }}
+        management_cluster: {{ .MCPServerName }}
         resourceType: namespaces
     - id: pods
       description: Pods in the requested namespace.
       tool: x_kubernetes_list
       output: true
       args:
-        management_cluster: {{ .ClusterName }}
+        management_cluster: {{ .MCPServerName }}
         resourceType: pods
         namespace: "{{ "{{ .input.namespace }}" }}"

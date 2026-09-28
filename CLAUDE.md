@@ -39,8 +39,8 @@ with Dex doing the logins.
   an installation registers a management cluster: the chart's
   `mcp-kubernetes` component is the MCPServer `<clusterName>-mcp-kubernetes`,
   a member of muster's `kubernetes` family, so the tools are
-  `x_kubernetes_<tool>` with `management_cluster: <clusterName>` (e.g.
-  `x_kubernetes_list` with `management_cluster: agentlab`).
+  `x_kubernetes_<tool>` with `management_cluster: <clusterName>-mcp-kubernetes`
+  (e.g. `x_kubernetes_list` with `management_cluster: agentlab-mcp-kubernetes`).
 - muster's OAuth *client* role is on (`oauth.mcpClient`), and the lab ships
   one `Auth Required` downstream to sign in to: the MCPServer
   `lab-oauth-fixture`, which points muster at its own protected `/mcp`. It
@@ -52,7 +52,8 @@ with Dex doing the logins.
   (the GS kube-prometheus-stack constituent of the observability bundle, with
   the server re-enabled) and mcp-prometheus install too, registered as the
   `prometheus` family's member `<clusterName>-mcp-prometheus`; the tools
-  surface as `x_prometheus_<tool>` with `management_cluster: <clusterName>`
+  surface as `x_prometheus_<tool>` with
+  `management_cluster: <clusterName>-mcp-prometheus`
   (e.g. `x_prometheus_execute_query`) — the way
   to answer CPU/memory questions about the lab. Chart pins are Go consts in
   `internal/lab/observability.go`; the bundle itself is deliberately NOT

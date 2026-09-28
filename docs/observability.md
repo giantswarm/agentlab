@@ -5,7 +5,7 @@ An **optional component, on by default** (`platform.observability` in
 --observability=false`): a minimal Prometheus scraping the cluster plus
 [mcp-prometheus](https://github.com/giantswarm/mcp-prometheus), registered in
 muster as the `prometheus` family's member for the lab's cluster
-(`x_prometheus_<tool>` with `management_cluster: <clusterName>`) — so Claude
+(`x_prometheus_<tool>` with `management_cluster: <clusterName>-mcp-prometheus`) — so Claude
 Code (or a kagent agent) can answer "how is the control plane's CPU?" or "how
 much memory does pod X use?" with real PromQL (`x_prometheus_execute_query`,
 `…_execute_range_query`,

@@ -308,8 +308,8 @@ mcp-kubernetes:
 {{- if not .LegacyChart }}
   # The lab's cluster as a member of muster's kubernetes family, the shape
   # every management cluster's mcp-kubernetes has: MCPServer
-  # <cluster>-mcp-kubernetes with spec.family, tools x_kubernetes_<tool> with
-  # management_cluster: {{ .ClusterName }}. The 3.x line (a migration
+  # {{ .ClusterName }}-mcp-kubernetes with spec.family, tools x_kubernetes_<tool>
+  # with management_cluster: {{ .ClusterName }}-mcp-kubernetes. The 3.x line (a migration
   # rehearsal's seed) registers the family-less singleton mcp-kubernetes.
   mcpServer:
     managementCluster: {{ .ClusterName }}
@@ -993,7 +993,7 @@ agent-platform-mcps:
   # muster, as a member of the prometheus family the way a management
   # cluster's is: <cluster>-mcp-prometheus, tool-group infrastructure (the
   # chart's muster.families.prometheus), tools x_prometheus_<tool> with
-  # management_cluster: {{ .ClusterName }}. auth.mode forward: muster forwards
+  # management_cluster: {{ .ClusterName }}-mcp-prometheus. auth.mode forward: muster forwards
   # the session's Dex id_token byte-identical and mcp-prometheus validates it
   # against Dex's JWKS (mcp-prometheus.yaml.tmpl) — the caller's identity
   # reaches the server. The chart's default audience (dex-k8s-authenticator)

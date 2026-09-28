@@ -53,7 +53,7 @@ func TestLabFamilyMembers(t *testing.T) {
 	if got := labFamilies(cfg); !slices.Equal(got, []string{familyKubernetes}) {
 		t.Errorf("families without observability = %v, want kubernetes", got)
 	}
-	if got := familyArgs(cfg, map[string]any{"resourceType": "pods"}); !reflect.DeepEqual(got, map[string]any{familyInstanceArg: "agentlab-2", "resourceType": "pods"}) {
+	if got := familyArgs(cfg, familyKubernetes, map[string]any{"resourceType": "pods"}); !reflect.DeepEqual(got, map[string]any{familyInstanceArg: "agentlab-2-mcp-kubernetes", "resourceType": "pods"}) {
 		t.Errorf("familyArgs = %v", got)
 	}
 	if got := familyTool(familyKubernetes, "list"); got != "x_kubernetes_list" {
@@ -119,8 +119,8 @@ func TestDemoWorkflowCallsTheFamily(t *testing.T) {
 		t.Fatal("no steps")
 	}
 	for _, s := range wf.Spec.Steps {
-		if s.Tool != "x_kubernetes_list" || s.Args[familyInstanceArg] != cfg.ClusterName {
-			t.Errorf("step %s %v, want x_kubernetes_list with %s=%s", s.Tool, s.Args, familyInstanceArg, cfg.ClusterName)
+		if s.Tool != "x_kubernetes_list" || s.Args[familyInstanceArg] != cfg.MCPServerName() {
+			t.Errorf("step %s %v, want x_kubernetes_list with %s=%s", s.Tool, s.Args, familyInstanceArg, cfg.MCPServerName())
 		}
 	}
 }

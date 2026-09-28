@@ -411,7 +411,7 @@ func proveMusterToolsets(cfg *config.Config, token string) (*musterToolsetResult
 	queryTool, mutatingTool := "workflow_"+toolsetsWorkflowQuery, "workflow_"+toolsetsWorkflowMutating
 	demoTool := "workflow_lab-cluster-overview"
 
-	listArgs := familyArgs(cfg, map[string]any{resourceTypeKey: resourceNamespaces})
+	listArgs := familyArgs(cfg, familyKubernetes, map[string]any{resourceTypeKey: resourceNamespaces})
 
 	s, err := openMusterSession(cfg, token, "toolsets-test-muster")
 	if err != nil {
