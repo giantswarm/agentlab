@@ -8,6 +8,12 @@ import (
 	"github.com/giantswarm/agentlab/internal/config"
 )
 
+// Lines the rendered MCPServer manifests carry, as the template tests assert them.
+const (
+	renderedNoForwardToken    = "forwardToken: false"
+	renderedManagedByAgentlab = "app.kubernetes.io/managed-by: agentlab"
+)
+
 // TestOAuthFixtureTemplate pins the fixture CR to what the proofs look for:
 // the name the Go side asserts on, muster's own protected endpoint as the
 // target, an oauth auth block without SSO (forwardToken off, no token
@@ -26,10 +32,10 @@ func TestOAuthFixtureTemplate(t *testing.T) {
 		"url: " + oauthFixtureURL,
 		"type: streamable-http",
 		"type: oauth",
-		"forwardToken: false",
+		renderedNoForwardToken,
 		"autoStart: true",
 		"agentlab.giantswarm.io/purpose:",
-		"app.kubernetes.io/managed-by: agentlab",
+		renderedManagedByAgentlab,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("rendered fixture missing %q:\n%s", want, out)
