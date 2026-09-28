@@ -1,0 +1,35 @@
+{
+  // Repo-specific Renovate rules for agentlab. This file is owned by the repo
+  // and never touched by `devctl gen renovate`; it is pulled in as the last
+  // `extends` entry of the generated renovate.json5. Class-wide rules belong in
+  // giantswarm/renovate-presets instead.
+  //
+  // config.DefaultChartVersion is the agent-platform release a lab without a
+  // chartVersion installs — what `agentlab up` boots in an empty directory. It
+  // is an exact pin (the lab never floats) and no built-in manager sees a Go
+  // constant, so a stale pin goes unnoticed until a fresh lab cannot boot on
+  // it. The manager below proposes every new release as a PR. The lab's CI
+  // boots no lab, so the PR is never auto-merged: a fresh default lab on the
+  // new version and `agentlab platform-test` come first (the constant's
+  // comment says what else a candidate must satisfy).
+  customManagers: [
+    {
+      customType: 'regex',
+      description: 'config.DefaultChartVersion follows the agent-platform chart releases',
+      managerFilePatterns: ['/^internal/config/config\\.go$/'],
+      matchStrings: ['const DefaultChartVersion = "(?<currentValue>\\d+\\.\\d+\\.\\d+)"'],
+      depNameTemplate: 'gsoci.azurecr.io/charts/giantswarm/agent-platform',
+      datasourceTemplate: 'docker',
+      versioningTemplate: 'semver',
+    },
+  ],
+  packageRules: [
+    {
+      matchPackageNames: ['gsoci.azurecr.io/charts/giantswarm/agent-platform'],
+      automerge: false,
+      prBodyNotes: [
+        'Before merging: a fresh default lab on this version (`agentlab configure --defaults && agentlab up` in an empty directory) and `agentlab platform-test` pass.',
+      ],
+    },
+  ],
+}
