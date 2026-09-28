@@ -103,15 +103,17 @@ go install github.com/giantswarm/agentlab@latest   # or a release binary, or `go
 
 export ANTHROPIC_API_KEY=sk-ant-...   # optional: powers the agents and Backstage's AI chat
 export GITHUB_TOKEN=github_pat_...    # optional: skill discovery/resolution call GitHub authenticated (5000/h, not 60/h)
-agentlab configure --defaults         # drop --defaults for the interactive form
-agentlab up                           # certs, kind cluster, Dex, RBAC, the platform — verified
+agentlab up                           # one question (the detected defaults, or customize), then certs, kind cluster, Dex, RBAC, the platform — verified
 agentlab open portal                  # the portal in your browser (the URL is printed too)
 agentlab platform-test                # headless proof: Dex -> muster -> mcp-kubernetes -> apiserver
 ```
 
-On a terminal, `up` ends by asking whether to trust the lab CA (one sudo
+Headless (CI, a coding agent), write the lab first with `agentlab configure
+--defaults`: nothing asks without a terminal. On a terminal, `up` ends by asking whether to trust the lab CA (one sudo
 prompt, so browsers get a green lock) and whether to open the portal — `open
 portal` is the command for later, and `open agents` opens the kagent UI.
+`agentlab list` shows the labs on this machine and `agentlab pods` a lab's
+pods, from any directory (`--lab <name>` picks one of several).
 
 Then point Claude Code at the platform:
 

@@ -1,10 +1,41 @@
 # Command reference
 
 `agentlab --help` and `agentlab <command> --help` are authoritative; this page
-is the map. Every command reads `agentlab.yaml` (written by `configure`; on a
-terminal, a missing file starts the form) and talks to the kind cluster
-through the cluster's own exported kubeconfig, `state/kubeconfig` — never
-your shell's current-context.
+is the map. Every command runs against one lab — a directory holding
+`agentlab.yaml` (written by `configure`; on a terminal, a missing file starts
+the form), `certs/` and `state/` — and talks to its kind cluster through the
+cluster's own exported kubeconfig, `state/kubeconfig`, never your shell's
+current-context.
+
+## Which lab
+
+`configure` and `up` register their lab under its `clusterName` in
+`~/.config/agentlab/labs.yaml` (`~/Library/Application Support/agentlab/` on
+macOS), so the other commands find it from any directory, in this order:
+
+1. `--lab <name>` (every command), refused naming the registered labs when no
+   lab of that name is registered;
+2. an `agentlab.yaml` in the current directory, whatever the registry says;
+3. the one registered lab; with several, a picker on a terminal, and off one a
+   refusal that names them and `--lab`.
+
+A lab entered from another directory is named on stderr (`Lab agentlab
+(/path/to/lab)`). `configure` and `up` skip step 3: in a directory without
+`agentlab.yaml` they create a lab there. A `clusterName` another lab
+directory holds is refused, naming both directories — the two would collide
+on the kind cluster and its ports. `down` keeps the registration (the lab
+still exists as a directory); a lab whose directory or `agentlab.yaml` is gone
+drops out of the registry. `self-update`, `completion` and `help` touch no
+lab.
+
+## Headless use
+
+Nothing asks without a terminal (stdin not a TTY): no first-run question, no
+lab picker, no trust or open offer. A missing `agentlab.yaml` is refused with
+a pointer to `agentlab configure --defaults`, which writes the canonical lab
+without a question; several registered labs and no `agentlab.yaml` here are
+refused naming them and `--lab`; `up --trust`/`--open` pre-answer the end of a
+boot. CI, coding agents and scripts write the config first and name the lab.
 
 The sections below are the groups `agentlab --help` prints, in the same order.
 
@@ -13,7 +44,7 @@ The sections below are the groups `agentlab --help` prints, in the same order.
 | Command | What it does |
 |---|---|
 | `up` | Check docker's CPUs and memory against this configuration's floors, then create the kind cluster, deploy Dex and the enabled components, and verify the OIDC chain end to end. Idempotent: unchanged re-runs are no-ops. On a terminal it ends by asking what the summary used to only describe: whether to trust the lab CA while it is untrusted, then whether to open the portal. `--trust` and `--open` (or `--trust=false`/`--open=false`) pre-answer both for scripted runs; off a terminal nothing is asked. See [TLS](tls.md). |
-| `configure` | Discover this machine, then ask for the lab configuration (or keep it with `--defaults`) and save `agentlab.yaml`. Flags below. |
+| `configure` | Discover this machine, then ask for the lab configuration (or keep it with `--defaults`) and save `agentlab.yaml`. Without an `agentlab.yaml` yet, on a terminal, it first asks one question — the detected defaults, or customize — and only *Customize* runs the form; `up` (and every command that has to create the file on the way) asks the same. With an existing file the form opens with its values. Flags below. |
 | `trust` | Install the lab CA into the system and browser trust stores (one sudo prompt; reversible). See [TLS](tls.md). |
 
 ## Everyday
@@ -21,6 +52,8 @@ The sections below are the groups `agentlab --help` prints, in the same order.
 | Command | What it does |
 |---|---|
 | `open <portal\|agents>` | Open a lab URL in the browser and print it (so it can be copied where the opener finds no browser — SSH, WSL): `portal` is Backstage, `agents` the kagent UI. The target is required; without one, the refusal names both. Refused when the target is disabled in `agentlab.yaml`, when the cluster is not running, or when the target does not answer yet (a short reachability probe, before any trust question, so a sudo prompt is never spent on a command that then opens nothing) — a plain fact instead of an error page in the browser. While the lab CA is untrusted, `open portal` offers `agentlab trust` first on a terminal and warns off one; `open agents` is plain HTTP on loopback and asks nothing. |
+| `list` (`ls`) | Every lab registered on this machine: its name, directory, cluster state (`running`, `exited`, `not created`), enabled components with the chart, the portal and muster URLs (with the port suffix when the edge is not on 443), and whether its lab CA is trusted here; `*` marks the current directory's. Docker and the files answer, so it works while a lab is down. `-o json` for scripts. It never asks which lab. |
+| `pods [-n <namespace>]` | The lab's pods across namespaces through the embedded client, shaped like `kubectl get pods -A` (NAMESPACE, NAME, READY, STATUS with a waiting reason such as `ImagePullBackOff`, RESTARTS, AGE); `-n` narrows to one namespace. Refused with `agentlab up` when the cluster is not running. |
 | `logs <component>` | Tail a component's logs: `backstage`, `dex`, `klaus-gateway`, `mcp-prometheus`, `muster` or `prometheus`. |
 | `login [email]` | Log in as a lab user: the headless password grant, or `--browser` for the real Dex login page (authorization-code flow, which asks for the user itself). Either way it prints the token claims and writes `.token` and `kubeconfig.oidc` for that user. `--password` overrides the one in `agentlab.yaml`. |
 | `turn (--list \| --template <name> <prompt>)` | One conversation with an agent as a lab user, the way the surfaces drive it: the user's Dex id_token on the kagent controller's gRPC route through the edge. `--list` prints the roster that user sees — `ListAgentTemplates` as that person, or the gRPC status when the controller refuses. With `--template` and one prompt it creates an `AgentInstance` on the Harness that admits the template and reports it Ready (the one the portal picks; `--harness` names another), streams one turn, prints the answer and the terminal task state, and deletes the instance. `--user` picks the lab user (default: the first admin). `--keep` leaves the instance for a later `--instance <id>` turn, and `--instance … --suspend` suspends it to the snapshot store and resumes it before the turn, the proof that a conversation survives the snapshot. The terminal status message's metadata (a harness's usage of the turn) is printed when present. |

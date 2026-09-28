@@ -736,6 +736,22 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
+// Peek reads the agentlab.yaml of the lab in dir without validating,
+// re-hashing or writing anything — `agentlab list`'s look at a lab that is
+// not the one the command runs against.
+func Peek(dir string) (*Config, error) {
+	raw, err := os.ReadFile(filepath.Join(dir, File)) // #nosec G304 -- a registered lab directory
+	if err != nil {
+		return nil, err
+	}
+	cfg := Default()
+	if err := decodeStrict(raw, cfg); err != nil {
+		return nil, err
+	}
+	cfg.Normalize()
+	return cfg, nil
+}
+
 // decodeStrict reads agentlab.yaml into cfg and refuses a field this release
 // does not know. Every run writes the file back (Load re-hashes passwords,
 // configure and platform record what they found), so a lenient decode would

@@ -778,7 +778,7 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 				cfg.BackstageBaseURL(), config.File)
 		} else {
 			backstageHint = fmt.Sprintf(`  Backstage is NOT reachable on %s.
-  Check 'kubectl -n %s get pods' and 'agentlab logs backstage'.`,
+  Check 'agentlab pods -n %s' and 'agentlab logs backstage'.`,
 				cfg.BackstageBaseURL(), platformNamespace)
 		}
 	}
@@ -1009,7 +1009,7 @@ func waitPlatformReleases() error {
 		for _, r := range pending {
 			lines = append(lines, fmt.Sprintf("  %s: Ready=%s %s", r.name, orNone(r.ready), r.message))
 		}
-		return fmt.Errorf("platform HelmReleases not Ready after 5 minutes:\n%s\ncheck `kubectl -n %s describe helmrelease <name>` and `kubectl -n %s get pods`",
+		return fmt.Errorf("platform HelmReleases not Ready after 5 minutes:\n%s\ncheck `kubectl -n %s describe helmrelease <name>` and `agentlab pods -n %s`",
 			strings.Join(lines, "\n"), platformNamespace, platformNamespace)
 	}
 	return nil

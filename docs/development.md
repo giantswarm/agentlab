@@ -103,7 +103,8 @@ must stay in agreement.
 ```
 main.go                          the CLI (cobra): one subcommand per lifecycle step, no logic
 internal/config/                 agentlab.yaml schema, defaults, validation; the fixed group vocabulary and the static OAuth clients
-internal/forms/                  the interactive configuration form (huh); tests drive it with scripted keystrokes
+internal/forms/                  the interactive configuration form (huh), the lab's confirm and picker; tests drive them with scripted keystrokes
+internal/labs/                   the registry of the labs on this machine and the order a command picks its lab in (--lab, ./agentlab.yaml, the one lab, a picker)
 internal/telemetry/              the anonymous usage signals (TelemetryDeck): one per command, one per platform install
   machineid/                       the identifier the OS keeps for the computer (kern.uuid / machine-id / MachineGuid)
 internal/update/                 agentlab self-update + the newer-release hint before every command (go-selfupdate)
@@ -117,6 +118,7 @@ internal/lab/                    everything operational:
   certs.go trust.go                the name-constrained lab CA + 825-day leaf certs; trust/untrust (smallstep/truststore)
   oidc.go login.go browser.go      the lab's Dex clients: password grant, authorization-code flow
   test.go                          RBAC assertions for every configured user
+  list.go pods.go                  `agentlab list` (the registered labs from docker and their files) and `agentlab pods` (kubectl get pods -A's columns)
   platform.go platformtest.go      agent platform install + the headless MCP proof
   postrenderers.go                 the lab's per-component postRenderers patches (hostNetwork, sidecar, nodePort, dev-image overrides)
   devimages.go                     the dev-image swap: image names resolved from the component renders, the lab registry + the digest-pinned Harness image

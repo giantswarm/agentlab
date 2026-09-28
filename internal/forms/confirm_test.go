@@ -30,3 +30,29 @@ func TestConfirmDrive(t *testing.T) {
 		})
 	}
 }
+
+// TestUseDefaultsDrive drives the first-run question: enter takes the
+// defaults, one right arrow moves to Customize.
+func TestUseDefaultsDrive(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		keys []string
+		want bool
+	}{
+		{name: "enter uses the defaults", keys: []string{"\r"}, want: true},
+		{name: "arrow then enter customizes", keys: []string{"\x1b[C", "\r"}, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testHook = newDriver(tc.keys...).attach
+			defer func() { testHook = nil }()
+
+			got, err := UseDefaults(false)
+			if err != nil {
+				t.Fatalf("UseDefaults: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("UseDefaults() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

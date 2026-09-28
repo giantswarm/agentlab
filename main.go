@@ -26,6 +26,7 @@ import (
 	"github.com/giantswarm/agentlab/internal/config"
 	"github.com/giantswarm/agentlab/internal/forms"
 	"github.com/giantswarm/agentlab/internal/lab"
+	"github.com/giantswarm/agentlab/internal/labs"
 	"github.com/giantswarm/agentlab/internal/telemetry"
 	"github.com/giantswarm/agentlab/internal/update"
 	"github.com/giantswarm/agentlab/pkg/project"
@@ -96,6 +97,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		&cobra.Group{ID: groupCleanup, Title: "Cleanup"},
 		&cobra.Group{ID: groupAdvanced, Title: "Advanced"},
 	)
+	root.PersistentFlags().StringVar(&labFlag, "lab", "", "the registered lab to run against (its clusterName), from any directory; default: the agentlab.yaml here, else the one registered lab")
 	root.SetHelpCommandGroupID(groupAdvanced)
 	root.SetCompletionCommandGroupID(groupAdvanced)
 
@@ -105,6 +107,8 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		inGroup(groupSetup, labCmd("trust", "Install the lab CA into the system and browser trust stores (one sudo prompt; reversible)", lab.Trust)),
 
 		inGroup(groupEveryday, openCmd()),
+		inGroup(groupEveryday, listCmd()),
+		inGroup(groupEveryday, podsCmd()),
 		inGroup(groupEveryday, logsCmd()),
 		inGroup(groupEveryday, loginCmd()),
 		inGroup(groupEveryday, turnCmd()),
@@ -194,10 +198,19 @@ func labCmd(use, short string, run func(*config.Config) error) *cobra.Command {
 	}
 }
 
-// loadConfig returns the saved configuration; if none exists yet it runs the
-// interactive form on a terminal, and otherwise refuses with a pointer to
-// `agentlab configure --defaults`.
+// loadConfig enters the lab the command runs against (enterLab) and returns
+// its saved configuration; if none exists yet it runs the interactive form on
+// a terminal, and otherwise refuses with a pointer to `agentlab configure
+// --defaults`.
 func loadConfig() (*config.Config, error) {
+	return loadLab(false)
+}
+
+// loadLab is loadConfig for either kind of command: create is enterLab's.
+func loadLab(create bool) (*config.Config, error) {
+	if err := enterLab(create); err != nil {
+		return nil, err
+	}
 	cfg, err := loadOrCreateConfig()
 	if err != nil {
 		return nil, err
@@ -206,6 +219,63 @@ func loadConfig() (*config.Config, error) {
 	// mappings) so checks never flake on external DNS; see lab.SetDomain.
 	lab.SetDomain(cfg.Platform.Domain)
 	return cfg, nil
+}
+
+// labFlag is --lab, the root's persistent flag: the registered lab a command
+// runs against from any directory (enterLab).
+var labFlag string
+
+// enterLab resolves the lab the command runs against — --lab, an
+// agentlab.yaml in the current directory, the one registered lab, the
+// person's pick among several (labs.Resolve) — and changes into its
+// directory, so every lab path (agentlab.yaml, certs/, state/) resolves there
+// unchanged. create is for the commands that make a lab where they run
+// (`configure`, `up`): without --lab and an agentlab.yaml here they create
+// one here rather than reach for another lab. A lab entered from elsewhere is
+// named on stderr, so the output never leaves the person guessing which lab
+// it came from.
+func enterLab(create bool) error {
+	var pick labs.Picker
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		pick = pickLab
+	}
+	l, err := labs.Resolve(labFlag, create, pick)
+	if err != nil || l.Dir == "" {
+		return err
+	}
+	if err := os.Chdir(l.Dir); err != nil {
+		return fmt.Errorf("entering lab %s: %w", l.Name, err)
+	}
+	fmt.Fprintf(os.Stderr, "Lab %s (%s)\n", l.Name, l.Dir)
+	return nil
+}
+
+// pickLab asks which registered lab to use, on a terminal.
+func pickLab(ls []labs.Lab) (labs.Lab, error) {
+	options := make([]string, len(ls))
+	for i, l := range ls {
+		options[i] = fmt.Sprintf("%-16s %s", l.Name, l.Dir)
+	}
+	i, err := forms.Choose("Which lab?",
+		fmt.Sprintf("There is no %s here; these labs are registered on this machine.\n--lab <name> skips this question.", config.File),
+		options)
+	if err != nil {
+		return labs.Lab{}, err
+	}
+	return ls[i], nil
+}
+
+// saveLab saves a new or changed agentlab.yaml and registers the lab: its
+// clusterName checked first, so a name another lab holds is refused before
+// anything is written.
+func saveLab(cfg *config.Config) error {
+	if err := labs.Check(cfg.ClusterName, "."); err != nil {
+		return err
+	}
+	if err := cfg.Save(); err != nil {
+		return err
+	}
+	return labs.Register(cfg.ClusterName, ".")
 }
 
 func loadOrCreateConfig() (*config.Config, error) {
@@ -219,7 +289,7 @@ func loadOrCreateConfig() (*config.Config, error) {
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
 		return nil, fmt.Errorf("no %s found; run `agentlab configure` (or `agentlab configure --defaults` for the canonical lab)", config.File)
 	}
-	fmt.Printf("No %s yet — let's create one.\n\n", config.File)
+	fmt.Printf("No %s yet — checking this machine first.\n\n", config.File)
 	cfg = config.Default()
 	disc := discoverInto(cfg, nil, nil, nil)
 	// The tools before the questions: a missing tool is refused here, not
@@ -227,11 +297,26 @@ func loadOrCreateConfig() (*config.Config, error) {
 	if err := disc.Preflight(); err != nil {
 		return nil, err
 	}
-	if err := forms.Run(cfg, accessibleMode(), forms.Hints{ModelServers: disc.ModelServersHint()}); err != nil {
+	useDefaults, err := forms.UseDefaults(false)
+	if err != nil {
 		return nil, err
 	}
-	if err := cfg.Save(); err != nil {
+	if useDefaults {
+		err = cfg.Validate()
+	} else {
+		err = forms.Run(cfg, accessibleMode(), forms.Hints{ModelServers: disc.ModelServersHint()})
+	}
+	if err != nil {
 		return nil, err
+	}
+	if err := saveLab(cfg); err != nil {
+		return nil, err
+	}
+	if useDefaults {
+		printSaved(cfg, disc)
+		fmt.Println("  (`agentlab configure` changes any of it)")
+		fmt.Println()
+		return cfg, nil
 	}
 	fmt.Printf("Saved %s.\n\n", config.File)
 	return cfg, nil
@@ -367,9 +452,14 @@ func upCmd() *cobra.Command {
 		Short: "Create the kind cluster, deploy Dex and the enabled components, and verify the OIDC chain",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfig()
+			cfg, err := loadLab(true)
 			if err != nil {
 				return err
+			}
+			// A lab from before the registry registers on its next boot. A
+			// convenience: it never fails the boot.
+			if err := labs.Register(cfg.ClusterName, "."); err != nil {
+				fmt.Fprintf(os.Stderr, "WARNING: not registering this lab: %v\n", err)
 			}
 			return lab.Up(cfg, offersFromFlags(cmd, &trust, &open))
 		},
@@ -419,6 +509,53 @@ func openCmd() *cobra.Command {
 			return lab.Open(cfg, target)
 		},
 	}
+}
+
+// listCmd shows the labs of this machine. It never asks which lab: it is
+// the command that shows them.
+func listCmd() *cobra.Command {
+	var output string
+	cmd := &cobra.Command{
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "List the labs on this machine: cluster state, components, URLs, whether the lab CA is trusted",
+		Args:    cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if output != "" && output != "json" {
+				return fmt.Errorf("--output %q: the one format besides the default is json", output)
+			}
+			registered, err := labs.List()
+			if err != nil {
+				return err
+			}
+			here, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+			return lab.PrintLabs(cmd.OutOrStdout(), lab.ListLabs(registered, here), output == "json")
+		},
+	}
+	cmd.Flags().StringVarP(&output, "output", "o", "", "json: the list as JSON, for scripts")
+	return cmd
+}
+
+// podsCmd lists the lab's pods without kubectl.
+func podsCmd() *cobra.Command {
+	var namespace string
+	cmd := &cobra.Command{
+		Use:   "pods",
+		Short: "List the lab's pods across namespaces (kubectl get pods -A, without kubectl)",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			return lab.Pods(cfg, namespace)
+		},
+	}
+	cmd.Flags().StringVarP(&namespace, "namespace", "n", "", "only this namespace (default: every namespace)")
+	return cmd
 }
 
 // turnCmd is `agentlab turn`: one conversation with an agent as a lab user
@@ -495,8 +632,12 @@ func configureCmd() *cobra.Command {
 		Short: "Discover this machine, then ask for the lab configuration (or keep it with --defaults) and save agentlab.yaml",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := enterLab(true); err != nil {
+				return err
+			}
 			cfg, err := config.Load()
-			if errors.Is(err, os.ErrNotExist) {
+			fresh := errors.Is(err, os.ErrNotExist)
+			if fresh {
 				cfg = config.Default()
 			} else if err != nil {
 				return err
@@ -568,6 +709,14 @@ func configureCmd() *cobra.Command {
 			if err := disc.Preflight(); err != nil {
 				return err
 			}
+			// A first configure on a terminal asks the one question first;
+			// only Customize opens the form. An existing agentlab.yaml opens
+			// the form with its values, as --defaults keeps them.
+			if !defaults && fresh && term.IsTerminal(int(os.Stdin.Fd())) {
+				if defaults, err = forms.UseDefaults(accessible); err != nil {
+					return err
+				}
+			}
 			if defaults {
 				if err := cfg.Validate(); err != nil {
 					return err
@@ -583,51 +732,10 @@ func configureCmd() *cobra.Command {
 			if _, err := lab.ResolveChartVersion(cfg); err != nil {
 				return err
 			}
-			if err := cfg.Save(); err != nil {
+			if err := saveLab(cfg); err != nil {
 				return err
 			}
-			fmt.Printf("Saved %s:\n", config.File)
-			fmt.Printf("  cluster    %s (Dex on %s)\n", cfg.ClusterName, cfg.Issuer())
-			fmt.Printf("  users      %d\n", len(cfg.Users))
-			fmt.Printf("  platform   %v (agents %v, observability %v)\n", cfg.Platform.Enabled, cfg.Platform.Agents, cfg.Platform.Observability)
-			switch {
-			case cfg.Platform.ChartPath != "":
-				fmt.Printf("  chart      local checkout %s (chartVersion %s ignored while set); its connectivity chart from %s, pushed into the lab registry\n",
-					cfg.Platform.ChartPath, cfg.Platform.ChartVersion, config.ConnectivityChartDir(cfg.Platform.ChartPath))
-			case cfg.Platform.ChartBranch != "":
-				fmt.Printf("  chart      agent-platform %s (branch %s, dev channel%s)\n", cfg.Platform.ChartVersion, cfg.Platform.ChartBranch, pinnedNote(cfg))
-			default:
-				fmt.Printf("  chart      agent-platform %s\n", cfg.Platform.ChartVersion)
-			}
-			for _, name := range slices.Sorted(maps.Keys(cfg.Platform.DevImages)) {
-				fmt.Printf("  dev image  %s -> %s\n", name, cfg.Platform.DevImages[name])
-			}
-			fmt.Printf("  backstage  %v\n", cfg.Backstage.Enabled)
-			fmt.Printf("  ai model   %s (key from $%s at deploy time)\n", cfg.AIModel, lab.AnthropicKeyEnv)
-			for _, m := range cfg.Platform.ExtraModels {
-				fmt.Printf("  extra model %s (%s %s)\n", m.Name, m.Provider, m.Model)
-			}
-			if backends := cfg.ChartBackends(); cfg.ModelManagerEnabled() && len(backends) > 0 {
-				mm := cfg.Platform.ModelManager
-				fmt.Printf("  models     one model-manager fronts %d backend(s) (default %s):\n", len(backends), backends[0])
-				for _, b := range backends {
-					if b == config.ModelManagerBackendKServe {
-						fmt.Printf("             the platform's own serving on llm-d (%s backend): the lab preset %s on the CPU runtime\n", b, lab.ServingPresetName)
-						continue
-					}
-					fmt.Printf("             %s (%s backend, %s)\n", config.BackendServerName(b), b, endpointNote(mm, b, disc))
-				}
-			}
-			if cfg.ServingEnabled() {
-				fmt.Printf("  serving    llm-d on the node: the llmisvc controller and its CRDs, the well-known runtime configs, the models Gateway at %s, cert-manager\n", lab.ModelsGatewayHost(cfg))
-			}
-			if cfg.VMManagerEnabled() {
-				fmt.Printf("  vm-manager the platform's VM provisioner as a pod of the node, registered with muster as x_vm-manager_* (%s)\n",
-					vmManagerImagesNote(cfg.Platform.VMManager))
-			}
-			if cfg.KlausGatewayEnabled() {
-				fmt.Println("  klaus-gtw  Swarmgeist as the meta chart's component: A2A on the in-cluster controller, Slack on a placeholder Secret (its Web API the proof's fake), the OBO link store in a Secret")
-			}
+			printSaved(cfg, disc)
 			fmt.Println("\nNext: agentlab up")
 			return nil
 		},
@@ -648,6 +756,53 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&serving, "serving", false, "serve models on llm-d in the lab: the KServe llmisvc controller and its CRDs, the well-known runtime configs, the connectivity chart's serving slice with the models Gateway, model-manager's kserve backend and one CPU preset of the lab's (needs agents; installs cert-manager); --serving=false turns it off")
 	cmd.Flags().BoolVar(&accessible, "accessible", false, "prompt-per-question form mode (for screen readers and plain terminals)")
 	return cmd
+}
+
+// printSaved is the summary of a saved agentlab.yaml: what `configure` and a
+// first run that took the defaults wrote.
+func printSaved(cfg *config.Config, disc *lab.Discovery) {
+	fmt.Printf("Saved %s:\n", config.File)
+	fmt.Printf("  cluster    %s (Dex on %s)\n", cfg.ClusterName, cfg.Issuer())
+	fmt.Printf("  users      %d\n", len(cfg.Users))
+	fmt.Printf("  platform   %v (agents %v, observability %v)\n", cfg.Platform.Enabled, cfg.Platform.Agents, cfg.Platform.Observability)
+	switch {
+	case cfg.Platform.ChartPath != "":
+		fmt.Printf("  chart      local checkout %s (chartVersion %s ignored while set); its connectivity chart from %s, pushed into the lab registry\n",
+			cfg.Platform.ChartPath, cfg.Platform.ChartVersion, config.ConnectivityChartDir(cfg.Platform.ChartPath))
+	case cfg.Platform.ChartBranch != "":
+		fmt.Printf("  chart      agent-platform %s (branch %s, dev channel%s)\n", cfg.Platform.ChartVersion, cfg.Platform.ChartBranch, pinnedNote(cfg))
+	default:
+		fmt.Printf("  chart      agent-platform %s\n", cfg.Platform.ChartVersion)
+	}
+	for _, name := range slices.Sorted(maps.Keys(cfg.Platform.DevImages)) {
+		fmt.Printf("  dev image  %s -> %s\n", name, cfg.Platform.DevImages[name])
+	}
+	fmt.Printf("  backstage  %v\n", cfg.Backstage.Enabled)
+	fmt.Printf("  ai model   %s (key from $%s at deploy time)\n", cfg.AIModel, lab.AnthropicKeyEnv)
+	for _, m := range cfg.Platform.ExtraModels {
+		fmt.Printf("  extra model %s (%s %s)\n", m.Name, m.Provider, m.Model)
+	}
+	if backends := cfg.ChartBackends(); cfg.ModelManagerEnabled() && len(backends) > 0 {
+		mm := cfg.Platform.ModelManager
+		fmt.Printf("  models     one model-manager fronts %d backend(s) (default %s):\n", len(backends), backends[0])
+		for _, b := range backends {
+			if b == config.ModelManagerBackendKServe {
+				fmt.Printf("             the platform's own serving on llm-d (%s backend): the lab preset %s on the CPU runtime\n", b, lab.ServingPresetName)
+				continue
+			}
+			fmt.Printf("             %s (%s backend, %s)\n", config.BackendServerName(b), b, endpointNote(mm, b, disc))
+		}
+	}
+	if cfg.ServingEnabled() {
+		fmt.Printf("  serving    llm-d on the node: the llmisvc controller and its CRDs, the well-known runtime configs, the models Gateway at %s, cert-manager\n", lab.ModelsGatewayHost(cfg))
+	}
+	if cfg.VMManagerEnabled() {
+		fmt.Printf("  vm-manager the platform's VM provisioner as a pod of the node, registered with muster as x_vm-manager_* (%s)\n",
+			vmManagerImagesNote(cfg.Platform.VMManager))
+	}
+	if cfg.KlausGatewayEnabled() {
+		fmt.Println("  klaus-gtw  Swarmgeist as the meta chart's component: A2A on the in-cluster controller, Slack on a placeholder Secret (its Web API the proof's fake), the OBO link store in a Secret")
+	}
 }
 
 // pinnedNote marks a pinned dev-channel lab in the configure summary.
