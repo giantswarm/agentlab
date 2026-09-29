@@ -117,18 +117,19 @@ func TestListUnreadableLab(t *testing.T) {
 // ones; a registered lab's own cluster is not listed twice, also when its
 // clusterName differs from the registry name.
 func TestListUnregisteredCluster(t *testing.T) {
-	reg := writeLab(t, "clusterName: kept\n")
-	renamed := writeLab(t, "clusterName: other\n")
-	stubListProbes(t, map[string]string{"orphan": stateRunning, "kept": stateRunning, "other": stateRunning}, nil)
-	stubKindClusters(t, "orphan", "kept", "other")
+	const lostCluster, keptCluster, renamedCluster = "lost-lab", "kept-lab", "renamed-lab"
+	reg := writeLab(t, "clusterName: "+keptCluster+"\n")
+	renamed := writeLab(t, "clusterName: "+renamedCluster+"\n")
+	stubListProbes(t, map[string]string{lostCluster: stateRunning, keptCluster: stateRunning, renamedCluster: stateRunning}, nil)
+	stubKindClusters(t, lostCluster, keptCluster, renamedCluster)
 
-	listed := ListLabs([]labs.Lab{{Name: "kept", Dir: reg}, {Name: "renamed", Dir: renamed}}, "")
+	listed := ListLabs([]labs.Lab{{Name: keptCluster, Dir: reg}, {Name: "renamed", Dir: renamed}}, "")
 	if len(listed) != 3 {
-		t.Fatalf("ListLabs = %+v, want orphan, kept and renamed", listed)
+		t.Fatalf("ListLabs = %+v, want kept, lost and renamed", listed)
 	}
-	orphan := listed[1] // kept, orphan, renamed
-	if orphan.Name != "orphan" || !orphan.Unregistered || orphan.Dir != "" || orphan.State != stateRunning {
-		t.Errorf("second = %+v, want the running, unregistered orphan", orphan)
+	orphan := listed[1] // kept-lab, lost-lab, renamed
+	if orphan.Name != lostCluster || !orphan.Unregistered || orphan.Dir != "" || orphan.State != stateRunning {
+		t.Errorf("second = %+v, want the running, unregistered lost-lab", orphan)
 	}
 	if listed[0].Unregistered || listed[2].Unregistered {
 		t.Errorf("registered labs marked unregistered: %+v, %+v", listed[0], listed[2])
@@ -138,7 +139,7 @@ func TestListUnregisteredCluster(t *testing.T) {
 	if err := PrintLabs(&out, listed, false); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"  orphan  running  lab directory unknown", "any agentlab command in its directory (`agentlab pods`) registers it again", "  kept  running  " + reg} {
+	for _, want := range []string{"  " + lostCluster + "  running  lab directory unknown", "any agentlab command in its directory (`agentlab pods`) registers it again", "  " + keptCluster + "  running  " + reg} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("PrintLabs output lacks %q:\n%s", want, out.String())
 		}
