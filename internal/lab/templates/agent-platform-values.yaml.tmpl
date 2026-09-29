@@ -467,6 +467,14 @@ substrate:
   # evict the Harness image and the next turn's cold restore overruns the
   # router's budget (ateletImageCacheArgs, substrate.go; docs/platform.md
   # "Platform gotchas"). platform-test asserts the flags on the DaemonSet.
+  # The egress gateway terminates the actors' TLS and dials the upstream
+  # itself, with its image's public roots: the lab CA, which signs the models
+  # Gateway's certificate, is added to them, so an agent's turn on a served
+  # model answers (serving-test) instead of a 503 UnknownIssuer.
+  atenetEgress:
+    upstreamTrust:
+      caBundle: |
+{{ .LabCA | indent 8 }}
   atelet:
     extraArgs:
       - --localhost-registry-replacement={{ .LocalRegistryEndpoint }}

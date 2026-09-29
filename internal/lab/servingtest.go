@@ -320,7 +320,6 @@ func ServingTest(cfg *config.Config, email string, opts ServingTestOptions) erro
 	if served.Endpoint != wantEndpoint {
 		return fmt.Errorf("list_loaded_models reports the endpoint %s, wanted %s", served.Endpoint, wantEndpoint)
 	}
-	endpoint := served.Endpoint
 	note("%s: %s, %s, public name %q, at %s (node %s)", served.Name, served.Kind, served.Status, served.PublicName, served.Endpoint, served.Node)
 
 	step("The ModelConfig model-manager wired into kagent")
@@ -367,17 +366,13 @@ func ServingTest(cfg *config.Config, email string, opts ServingTestOptions) erro
 	}
 	note("the model answered: %q", excerpt(pong, 120))
 
-	// Without the LLM endpoint the agent turn is the lab's documented
-	// negative: the wired ModelConfig sends the agent to the models Gateway,
-	// whose certificate is the lab CA's, and the agent runtime (the Go ADK
-	// Harness in its Substrate sandbox) trusts the public roots of its image
-	// and nothing else — the platform has no knob to hand it another CA, and
-	// on an installation the Gateway's certificate is a public one. The turn
-	// is driven all the same: it must fail on exactly that verification and
-	// on nothing else, which proves the runtime dials the route the
-	// ModelConfig names. On the LLM endpoint (the in-cluster listener, plain
-	// HTTP) the turn must answer, and its tokens must show up in the data
-	// plane's per-model token metric under the served model's id.
+	// The agent turn must answer: the wired ModelConfig sends the agent to
+	// the models Gateway, whose certificate the lab CA signs, and Substrate's
+	// egress gateway, which terminates the actor's TLS and dials the Gateway
+	// itself, trusts the lab CA next to its public roots (the values'
+	// substrate.atenetEgress.upstreamTrust). On the LLM endpoint (the
+	// in-cluster listener, plain HTTP) its tokens must also show up in the
+	// data plane's per-model token metric under the served model's id.
 	agentTurn := "skipped (--skip-chat)"
 	if !opts.SkipChat {
 		var tokensBefore float64
@@ -388,16 +383,11 @@ func ServingTest(cfg *config.Config, email string, opts ServingTestOptions) erro
 		}
 		step("Agent turn on %s: an agent created through agent-manager as %s, one A2A turn through the edge (runtime -> %s -> the CPU runtime)", mcName, user.Email, strings.TrimSuffix(baseURL, "/v1"))
 		reply, err := servingAgentTurn(cfg, session, token, mcName)
-		switch {
-		case err == nil:
-			note("agent replied: %q", excerpt(reply, 120))
-			agentTurn = fmt.Sprintf("answered %q", excerpt(reply, 60))
-		case llmEndpoint == "" && isUntrustedGatewayCert(err):
-			note("the runtime dialled %s and refused the lab CA's certificate — the lab's documented negative (the Harness trusts its image's public roots; an installation's Gateway certificate is a public one): %s", endpoint, excerptEnds(err.Error(), 160))
-			agentTurn = "the runtime dialled the route and refused the lab CA's certificate (the documented negative)"
-		default:
+		if err != nil {
 			return err
 		}
+		note("agent replied: %q", excerpt(reply, 120))
+		agentTurn = fmt.Sprintf("answered %q", excerpt(reply, 60))
 		if llmEndpoint != "" {
 			step("The turn's tokens in the data plane's per-model metric (%s{%s=%q})", llmUsageMetric, llmUsageModelLabel, served.Name)
 			tokensAfter := tokensBefore
@@ -432,15 +422,6 @@ func ServingTest(cfg *config.Config, email string, opts ServingTestOptions) erro
 	fmt.Printf("PASS: the agent turn on the wired ModelConfig: %s\n", agentTurn)
 	fmt.Println("PASS: unload -> LLMInferenceService and ModelConfig gone")
 	return nil
-}
-
-// isUntrustedGatewayCert reports whether an agent turn failed on the one
-// thing the lab cannot give the runtime: trust in the lab CA that signs the
-// models Gateway's certificate.
-func isUntrustedGatewayCert(err error) bool {
-	msg := err.Error()
-	return strings.Contains(msg, "x509: certificate signed by unknown authority") ||
-		strings.Contains(msg, "tls: failed to verify certificate")
 }
 
 // servedModel is one entry of list_loaded_models on the kserve backend.
