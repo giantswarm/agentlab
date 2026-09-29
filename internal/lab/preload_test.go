@@ -38,12 +38,23 @@ spec:
       initContainers:
         - image: 'gsoci.azurecr.io/giantswarm/postgresql-cnpg:18.3'
 ---
-kind: ConfigMap
-data:
+kind: Secret
+stringData:
   # a bare word under an image key is config, not a pullable ref
   image: muster
-  settings: |
-    image: not-yaml-context:but-tagged
+---
+# a ConfigMap's data is text, not a pod: a serving preset names the runtime a
+# served model would run, which the node pulls on demand
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-platform-serving-preset-muse-glimmer-30b
+data:
+  preset.yaml: |
+    template:
+      containers:
+        - name: main
+          image: gsoci.azurecr.io/giantswarm/vllm-openai:v0.30.0
 ---
 kind: Pod
 spec:
@@ -130,7 +141,6 @@ spec:
 		refPostgres,
 		"gsoci.azurecr.io/giantswarm/substrate/ateom-gvisor:1.0.0",
 		"gsoci.azurecr.io/giantswarm/valkey@sha256:abcdef0123456789",
-		"not-yaml-context:but-tagged",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("scrapeImages:\n got  %v\n want %v", got, want)
