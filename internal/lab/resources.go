@@ -395,7 +395,7 @@ func (m runtimeMeasure) engine() string {
 // Linux host with exactly the host's CPU count is misread as native, which
 // only costs the resize hints; the smaller-lab alternative is always printed.
 func (m runtimeMeasure) onHost() bool {
-	return m.GOOS == "linux" && m.CPUs == m.HostCPUs
+	return m.GOOS == goosLinux && m.CPUs == m.HostCPUs
 }
 
 // judgeRuntimeResources compares what the runtime has with what the lab
