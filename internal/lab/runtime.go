@@ -25,6 +25,10 @@ import (
 //     and cannot bind the privileged range, so the gateway's default 443 has
 //     to move (MinPublishablePort, config.ChooseFreePorts).
 
+// goosLinux is runtime.GOOS on Linux, where a native engine's node shares
+// this machine's kernel.
+const goosLinux = "linux"
+
 // dockerIsPodman reports whether the `docker` on PATH is Podman's
 // docker-compatible CLI. Cached for the process: the answer cannot change
 // under a running command.
