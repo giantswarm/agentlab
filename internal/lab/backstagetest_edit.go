@@ -165,7 +165,7 @@ func proveEditPath(primary, viewer *portalSession, spec agentSpec, other string)
 	if _, err := portalAgentStatus(primary, spec.Name, verdictReady, time.Minute); err != nil {
 		return nil, err
 	}
-	note("Ready on Harness %s at revision %.12s; get_agent_status ready", kagentHarness, readiness.template.harness(kagentHarness).LatestSuccessfulRevision)
+	note("Ready on Harness %s at revision %.12s; get_agent_status ready", kagentHarness, readiness.agent.Status.LatestSuccessfulRevision)
 	verdicts = append(verdicts, "PASS: E6 the agent is Ready after the edits and get_agent_status agrees")
 
 	if viewer != nil {

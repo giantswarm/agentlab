@@ -35,9 +35,9 @@ import (
 // public TLS hostname and asserts what the surfaces rely on: the route and
 // its JWT policy exist and are Accepted; a call without a token is refused at
 // the edge (Unauthenticated; a plain HTTP POST gets 401); the identity is the verified token's
-// — a forged x-user-id beside it is replaced; ListAgentTemplates lists the
-// proof's agent with its readiness and the display-name and icon-url
-// annotations; CreateAgentInstance is idempotent on request_id;
+// — a forged x-user-id beside it is replaced; ListAgents lists the proof's
+// Agent with its readiness and the display-name and icon-url annotations;
+// CreateSession is idempotent on request_id;
 // SendStreamingMessage streams an answer and muster logs the turn's tool
 // calls under the person; a tool bound with requireApproval pauses the task
 // at input-required with a tool_approval_request, the person's approval
@@ -164,8 +164,8 @@ func A2ATest(cfg *config.Config, email string, opts A2ATestOptions) error {
 		return err
 	}
 	defer api.close()
-	instances := &instanceSet{api: api}
-	defer instances.removeAll()
+	sessions := &sessionSet{api: api}
+	defer sessions.removeAll()
 
 	step("The fixture: agent %s of the Generic chart — toolset [%s], muster.requireApproval — Ready on Harness %s", a2aTestAgent, presetReadOnly, kagentHarness)
 	if agentExists(a2aTestAgent) {
@@ -185,75 +185,74 @@ func A2ATest(cfg *config.Config, email string, opts A2ATestOptions) error {
 		SystemMessage: a2aTestPrompt, Toolset: []string{presetReadOnly}, RequireApproval: true,
 	}
 	bootStarted := time.Now()
-	template, _, err := readyAgent(helmReleaseWriter{}, spec, opts.ReadyTimeout)
+	readiness, _, err := readyAgent(helmReleaseWriter{}, spec, opts.ReadyTimeout)
 	if err != nil {
 		return err
 	}
-	if h := template.harness(kagentHarness); h != nil {
-		note("Ready after %s: revision %.12s", time.Since(bootStarted).Round(time.Second), h.LatestSuccessfulRevision)
-	}
+	template := readiness.template
+	note("Ready after %s: revision %.12s", time.Since(bootStarted).Round(time.Second), readiness.agent.Status.LatestSuccessfulRevision)
 	if !template.requiresApproval(a2aTestAgent) {
 		return fmt.Errorf("AgentTemplate %s binds RemoteMCPServer %s without requireApproval: the chart did not render muster.requireApproval (chart %s?)", a2aTestAgent, a2aTestAgent, template.chartLabel())
 	}
 	note("spec.tools[0].mcp = {server %s, requireApproval true}", a2aTestAgent)
 
-	step("ListAgentTemplates through the edge lists %s Ready on %s with its display name and icon", a2aTestAgent, kagentHarness)
+	step("ListAgents through the edge lists %s Ready on %s with its display name and icon", a2aTestAgent, kagentHarness)
 	ctx, cancel = context.WithTimeout(context.Background(), kubeReadTimeout)
-	templates, err := api.listTemplates(ctx)
+	agents, templates, err := api.roster(ctx)
 	cancel()
 	if err != nil {
 		return err
 	}
-	listing, err := findListing(templates, a2aTestAgent)
+	listing, err := findListing(agents, templates, a2aTestAgent)
 	if err != nil {
 		return err
 	}
 	if listing.Unavailable != "" || listing.Harness != kagentHarness {
-		return fmt.Errorf("ListAgentTemplates lists %s on Harness %q as unavailable: %s", a2aTestAgent, listing.Harness, listing.Unavailable)
+		return fmt.Errorf("ListAgents lists %s on Harness %q as unavailable: %s", a2aTestAgent, listing.Harness, listing.Unavailable)
 	}
 	if listing.DisplayName != a2aTestDisplayName || listing.IconURL != a2aTestIconURL {
-		return fmt.Errorf("ListAgentTemplates lists %s as %q with icon %q, wanted %q and %q (the annotations %s / %s)", a2aTestAgent, listing.DisplayName, listing.IconURL, a2aTestDisplayName, a2aTestIconURL, displayNameAnnotation, iconURLAnnotation)
+		return fmt.Errorf("ListAgents lists %s as %q with icon %q, wanted %q and %q (the annotations %s / %s)", a2aTestAgent, listing.DisplayName, listing.IconURL, a2aTestDisplayName, a2aTestIconURL, displayNameAnnotation, iconURLAnnotation)
 	}
-	note("%d templates; %s: display name %q, icon %s, Harness %s, selectable", len(templates), listing.Name, listing.DisplayName, listing.IconURL, listing.Harness)
+	note("%d agents; %s: display name %q, icon %s, Harness %s, selectable", len(agents), listing.Name, listing.DisplayName, listing.IconURL, listing.Harness)
 
-	step("CreateAgentInstance as %s, idempotent on request_id", user.Email)
+	step("CreateSession as %s, idempotent on request_id", user.Email)
 	requestID := uuid.NewString()
 	ctx, cancel = context.WithTimeout(context.Background(), kagentTurnTimeout)
-	instance, err := api.createInstance(ctx, a2aTestAgent, requestID)
+	session, err := api.createSession(ctx, a2aTestAgent, requestID)
 	if err != nil {
 		cancel()
 		return err
 	}
-	instances.add(instance.GetId())
-	again, err := api.createInstance(ctx, a2aTestAgent, requestID)
+	sessions.add(session.GetId())
+	again, err := api.createSession(ctx, a2aTestAgent, requestID)
 	cancel()
 	if err != nil {
-		return fmt.Errorf("the second CreateAgentInstance with request_id %s: %w", requestID, err)
+		return fmt.Errorf("the second CreateSession with request_id %s: %w", requestID, err)
 	}
-	if again.GetId() != instance.GetId() {
-		instances.add(again.GetId())
-		return fmt.Errorf("CreateAgentInstance with the same request_id created a second instance %s next to %s", again.GetId(), instance.GetId())
+	if again.GetId() != session.GetId() {
+		sessions.add(again.GetId())
+		return fmt.Errorf("CreateSession with the same request_id created a second session %s next to %s", again.GetId(), session.GetId())
 	}
-	if instance.GetCreator() != user.Email {
-		return fmt.Errorf("AgentInstance %s has creator %q, wanted %s", instance.GetId(), instance.GetCreator(), user.Email)
+	if session.GetCreator() != user.Email {
+		return fmt.Errorf("Session %s has creator %q, wanted %s", session.GetId(), session.GetCreator(), user.Email)
 	}
-	note("AgentInstance %s (creator %s, %s); the same request_id answers the same instance", instance.GetId(), instance.GetCreator(), instanceState(instance))
+	note("Session %s (creator %s, %s); the same request_id answers the same session", session.GetId(), session.GetCreator(), sessionState(session))
 
 	step("SendStreamingMessage as %s (the HITL extension requested): a turn without tools streams its answer", user.Email)
-	pong, err := api.completedTurnOnce(instance.GetId(), pongPrompt)
+	pong, err := api.completedTurnOnce(session, pongPrompt)
 	if err != nil {
 		// The first resume of a cold worker can run into Substrate's
 		// un-retried ResumeActor deadline and wedge the instance; said and
 		// tried once more on a fresh instance, never silently.
-		note("the first turn failed (%s) — one retry on a fresh instance, a cold worker's ResumeActor deadline is not retried by Substrate", excerpt(err.Error(), 200))
+		note("the first turn failed (%s) — one retry on a fresh session, a cold worker's ResumeActor deadline is not retried by Substrate", excerpt(err.Error(), 200))
 		ctx, cancel = context.WithTimeout(context.Background(), kagentTurnTimeout)
-		instance, err = api.createInstance(ctx, a2aTestAgent, uuid.NewString())
+		session, err = api.createSession(ctx, a2aTestAgent, uuid.NewString())
 		cancel()
 		if err != nil {
 			return err
 		}
-		instances.add(instance.GetId())
-		if pong, err = api.completedTurnOnce(instance.GetId(), pongPrompt); err != nil {
+		sessions.add(session.GetId())
+		if pong, err = api.completedTurnOnce(session, pongPrompt); err != nil {
 			return err
 		}
 	}
@@ -264,7 +263,7 @@ func A2ATest(cfg *config.Config, email string, opts A2ATestOptions) error {
 
 	step("HITL: a tool call pauses the task at input-required with a tool_approval_request; the approval resumes it; muster logs the call under %s", user.Email)
 	hitlStarted := time.Now()
-	paused, err := api.turnOn(instance.GetId(), userMessage(a2aToolPrompt))
+	paused, err := api.turnOn(session, userMessage(a2aToolPrompt))
 	if err != nil {
 		return err
 	}
@@ -272,7 +271,7 @@ func A2ATest(cfg *config.Config, email string, opts A2ATestOptions) error {
 		return fmt.Errorf("the tool turn did not pause for approval: task %s ended %s (%s) with no tool_approval_request: %s", paused.taskID, stateName(paused.state()), paused.statesString(), excerpt(paused.text(), 300))
 	}
 	note("task %s paused: %s; tool_approval_request for %s (hint %q)", paused.taskID, paused.statesString(), strings.Join(paused.approval.toolNames(), ", "), excerpt(paused.approval.Hint, 100))
-	approved, decided, err := api.decideUntilSettled(instance.GetId(), paused, true, "")
+	approved, decided, err := api.decideUntilSettled(session, paused, true, "")
 	if err != nil {
 		return err
 	}
@@ -294,20 +293,20 @@ func A2ATest(cfg *config.Config, email string, opts A2ATestOptions) error {
 	// On a fresh instance: the first one's conversation already holds the
 	// count, and a model that answers from it makes no tool call to pause on.
 	ctx, cancel = context.WithTimeout(context.Background(), kagentTurnTimeout)
-	fresh, err := api.createInstance(ctx, a2aTestAgent, uuid.NewString())
+	fresh, err := api.createSession(ctx, a2aTestAgent, uuid.NewString())
 	cancel()
 	if err != nil {
 		return err
 	}
-	instances.add(fresh.GetId())
-	paused, err = api.turnOn(fresh.GetId(), userMessage(a2aToolPrompt))
+	sessions.add(fresh.GetId())
+	paused, err = api.turnOn(fresh, userMessage(a2aToolPrompt))
 	if err != nil {
 		return err
 	}
 	if paused.state() != a2a.TaskStateInputRequired || paused.approval == nil {
-		return fmt.Errorf("the tool turn on the fresh instance %s did not pause for approval: task %s ended %s (%s): %s", fresh.GetId(), paused.taskID, stateName(paused.state()), paused.statesString(), excerpt(paused.text(), 200))
+		return fmt.Errorf("the tool turn on the fresh session %s did not pause for approval: task %s ended %s (%s): %s", fresh.GetId(), paused.taskID, stateName(paused.state()), paused.statesString(), excerpt(paused.text(), 200))
 	}
-	declined, rejected, err := api.decideUntilSettled(fresh.GetId(), paused, false, a2aDeclineReason)
+	declined, rejected, err := api.decideUntilSettled(fresh, paused, false, a2aDeclineReason)
 	if err != nil {
 		return err
 	}
@@ -323,45 +322,45 @@ func A2ATest(cfg *config.Config, email string, opts A2ATestOptions) error {
 	}
 	note("%d rejection(s) (%s) → %s (%s); no tools/call by %s reached muster; the agent said %q", len(rejected), strings.Join(rejected, "; "), stateName(declined.state()), declined.statesString(), user.Email, excerpt(declined.text(), 100))
 
-	step("CancelTask on a running turn ends it server-side; the instance takes a following turn")
-	canceled, err := api.cancelRunningTurn(instance.GetId(), a2aLongPrompt)
+	step("CancelTask on a running turn ends it server-side; the session takes a following turn")
+	canceled, err := api.cancelRunningTurn(session, a2aLongPrompt)
 	if err != nil {
 		return err
 	}
 	note("task %s: %s; CancelTask after %s answered %s; the stream ended %s later; GetTask → %s", canceled.taskID, canceled.statesString(), canceled.canceledAfter.Round(time.Millisecond), stateName(canceled.cancelState), canceled.streamEndedAfter.Round(time.Millisecond), stateName(canceled.finalState))
-	after, err := api.completedTurnOnce(instance.GetId(), pongPrompt)
+	after, err := api.completedTurnOnce(session, pongPrompt)
 	if err != nil {
 		return fmt.Errorf("the turn after the cancel: %w", err)
 	}
 	note("the following turn: task %s %s, answered %q", after.taskID, after.statesString(), excerpt(after.text(), 60))
 
-	step("DeleteAgentInstance; ListAgentInstances lists none of %s's", a2aTestAgent)
-	if err := instances.removeAllNow(); err != nil {
+	step("DeleteSession; ListSessions lists none of %s's", a2aTestAgent)
+	if err := sessions.removeAllNow(); err != nil {
 		return err
 	}
 	ctx, cancel = context.WithTimeout(context.Background(), kubeReadTimeout)
-	left, err := api.listInstances(ctx)
+	left, err := api.listSessions(ctx)
 	cancel()
 	if err != nil {
 		return err
 	}
 	var mine []string
-	for _, inst := range left {
-		if inst.GetAgentTemplate().GetName() == a2aTestAgent {
-			mine = append(mine, inst.GetId())
+	for _, session := range left {
+		if session.GetAgent().GetName() == a2aTestAgent {
+			mine = append(mine, session.GetId())
 		}
 	}
 	if len(mine) > 0 {
-		return fmt.Errorf("ListAgentInstances still lists %v of %s after the delete", mine, a2aTestAgent)
+		return fmt.Errorf("ListSessions still lists %v of %s after the delete", mine, a2aTestAgent)
 	}
-	note("%d instances of %s left (of %d the controller keeps for %s)", len(mine), a2aTestAgent, len(left), user.Email)
+	note("%d sessions of %s left (of %d the controller keeps for %s)", len(mine), a2aTestAgent, len(left), user.Email)
 
 	fmt.Println()
 	fmt.Printf("PASS: GRPCRoute %s (Accepted, ResolvedRefs, %d services) and AgentgatewayPolicy %s (Accepted) carry the controller on the edge; a call without a token is refused there\n", kagentControllerRoute, len(route.services), kagentControllerJWTPolicy)
-	fmt.Printf("PASS: native gRPC through %s as %s — the identity is the verified token's (a forged %s replaced), CreateAgentInstance idempotent on request_id, SendStreamingMessage with the HITL extension streamed %s\n", hostPort, user.Email, userIDHeader, excerpt(pong.text(), 30))
-	fmt.Printf("PASS: ListAgentTemplates lists %s Ready on %s with %s and %s as Swarmgeist reads them\n", a2aTestAgent, kagentHarness, displayNameAnnotation, iconURLAnnotation)
+	fmt.Printf("PASS: native gRPC through %s as %s — the identity is the verified token's (a forged %s replaced), CreateSession idempotent on request_id, SendStreamingMessage with the HITL extension streamed %s\n", hostPort, user.Email, userIDHeader, excerpt(pong.text(), 30))
+	fmt.Printf("PASS: ListAgents lists %s Ready on %s with %s and %s as Swarmgeist reads them\n", a2aTestAgent, kagentHarness, displayNameAnnotation, iconURLAnnotation)
 	fmt.Printf("PASS: HITL — the muster binding with requireApproval paused the task at input-required (tool_approval_request), the approval resumed it to completed with muster logging the call under %s, a rejection ended it without the call\n", user.Email)
-	fmt.Printf("PASS: CancelTask ended the running task server-side (GetTask → %s) and the instance answered a following turn; nothing left behind\n", stateName(canceled.finalState))
+	fmt.Printf("PASS: CancelTask ended the running task server-side (GetTask → %s) and the session answered a following turn; nothing left behind\n", stateName(canceled.finalState))
 	return nil
 }
 
@@ -400,7 +399,7 @@ func readControllerRoute() (*controllerRoute, error) {
 		}
 	}
 	slices.Sort(r.services)
-	for _, want := range []string{a2aService, "kagent.api.v1alpha1.AgentInstanceService", "kagent.api.v1alpha1.AgentTemplateService", "kagent.api.v1alpha1.SystemService"} {
+	for _, want := range []string{a2aService, "kagent.api.v1alpha1.SessionService", "kagent.api.v1alpha1.AgentService", "kagent.api.v1alpha1.AgentTemplateService", "kagent.api.v1alpha1.SystemService"} {
 		if !slices.Contains(r.services, want) {
 			return nil, fmt.Errorf("GRPCRoute %s does not match service %s (it matches %v)", kagentControllerRoute, want, r.services)
 		}
@@ -573,17 +572,18 @@ func edgePostWithoutToken(cfg *config.Config, contentType string, body []byte) (
 	return edgeAnswer{proto: resp.Proto, httpStatus: resp.StatusCode, grpcStatus: trailer("grpc-status"), grpcMessage: message, bodyBytes: n}, nil
 }
 
-// findListing is the roster entry of one template among the listed ones.
-func findListing(templates []*apiv1alpha1.AgentTemplate, name string) (templateListing, error) {
+// findListing is the roster entry of one Agent among the listed ones.
+func findListing(agents []*apiv1alpha1.Agent, templates []*apiv1alpha1.AgentTemplate, name string) (agentListing, error) {
 	var names []string
-	for _, t := range templates {
-		l := listingOf(t)
+	byName := templatesByName(templates)
+	for _, agent := range agents {
+		l := listingOf(agent, byName)
 		if l.Name == name {
 			return l, nil
 		}
 		names = append(names, l.Name)
 	}
-	return templateListing{}, fmt.Errorf("ListAgentTemplates does not list %s (it lists %v)", name, names)
+	return agentListing{}, fmt.Errorf("ListAgents does not list %s (it lists %v)", name, names)
 }
 
 // timedTurn is a turn with how long its stream took.
@@ -592,12 +592,12 @@ type timedTurn struct {
 	elapsed time.Duration
 }
 
-// turnOn drives one turn on the instance, bounded by kagentTurnTimeout.
-func (a *kagentAPI) turnOn(instanceID string, msg *a2a.Message) (*timedTurn, error) {
+// turnOn drives one turn on the session, bounded by kagentTurnTimeout.
+func (a *kagentAPI) turnOn(session *apiv1alpha1.Session, msg *a2a.Message) (*timedTurn, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), kagentTurnTimeout)
 	defer cancel()
 	started := time.Now()
-	t, err := a.turn(ctx, instanceID, msg)
+	t, err := a.turn(ctx, session, msg)
 	if err != nil {
 		return nil, err
 	}
@@ -605,8 +605,8 @@ func (a *kagentAPI) turnOn(instanceID string, msg *a2a.Message) (*timedTurn, err
 }
 
 // completedTurnOnce drives one turn that must end completed.
-func (a *kagentAPI) completedTurnOnce(instanceID, prompt string) (*timedTurn, error) {
-	t, err := a.turnOn(instanceID, userMessage(prompt))
+func (a *kagentAPI) completedTurnOnce(session *apiv1alpha1.Session, prompt string) (*timedTurn, error) {
+	t, err := a.turnOn(session, userMessage(prompt))
 	if err != nil {
 		return nil, err
 	}
@@ -621,7 +621,7 @@ func (a *kagentAPI) completedTurnOnce(instanceID, prompt string) (*timedTurn, er
 // call), bounded by hitlDecisionTimeout rather than a count; a decision the
 // task answers with the same request again did not resume it. Returns the
 // settled turn and the tools decided on, in order.
-func (a *kagentAPI) decideUntilSettled(instanceID string, paused *timedTurn, approve bool, reason string) (*turn, []string, error) {
+func (a *kagentAPI) decideUntilSettled(session *apiv1alpha1.Session, paused *timedTurn, approve bool, reason string) (*turn, []string, error) {
 	current := paused.turn
 	var decided []string
 	deadline := time.Now().Add(hitlDecisionTimeout)
@@ -636,7 +636,7 @@ func (a *kagentAPI) decideUntilSettled(instanceID string, paused *timedTurn, app
 		decided = append(decided, tools)
 		note("decision %d: %s %s", len(decided), map[bool]string{true: "approve", false: "reject"}[approve], tools)
 		ctx, cancel := context.WithTimeout(context.Background(), kagentTurnTimeout)
-		next, err := a.decide(ctx, instanceID, current, approve, reason)
+		next, err := a.decide(ctx, session, current, approve, reason)
 		cancel()
 		if err != nil {
 			return current, decided, err
@@ -680,7 +680,7 @@ type streamed struct {
 // (on its first artifact, or cancelAfterWorking after the working state),
 // drains the stream to its end and reads the task back: CancelTask's answer
 // and GetTask must both say canceled.
-func (a *kagentAPI) cancelRunningTurn(instanceID, prompt string) (*canceledTurn, error) {
+func (a *kagentAPI) cancelRunningTurn(session *apiv1alpha1.Session, prompt string) (*canceledTurn, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), kagentTurnTimeout)
 	defer cancel()
 	events := make(chan streamed)
@@ -688,7 +688,7 @@ func (a *kagentAPI) cancelRunningTurn(instanceID, prompt string) (*canceledTurn,
 		// The consumer may leave early on an error of its own; the context
 		// it cancels on the way out ends the stream and this send alike.
 		defer close(events)
-		for ev, err := range a.stream(ctx, instanceID, userMessage(prompt)) {
+		for ev, err := range a.stream(ctx, session, userMessage(prompt)) {
 			select {
 			case events <- streamed{ev, err}:
 			case <-ctx.Done():
@@ -704,7 +704,7 @@ func (a *kagentAPI) cancelRunningTurn(instanceID, prompt string) (*canceledTurn,
 	var working <-chan time.Time
 	canceled := false
 	cancelNow := func() error {
-		task, err := a.cancelTask(ctx, instanceID, result.taskID)
+		task, err := a.cancelTask(ctx, session, result.taskID)
 		if err != nil {
 			return err
 		}
@@ -757,7 +757,7 @@ func (a *kagentAPI) cancelRunningTurn(instanceID, prompt string) (*canceledTurn,
 	if result.cancelState != a2a.TaskStateCanceled {
 		return nil, fmt.Errorf("CancelTask answered state %s, wanted canceled", stateName(result.cancelState))
 	}
-	task, err := a.getTask(ctx, instanceID, result.taskID)
+	task, err := a.getTask(ctx, session, result.taskID)
 	if err != nil {
 		return nil, err
 	}
@@ -768,38 +768,38 @@ func (a *kagentAPI) cancelRunningTurn(instanceID, prompt string) (*canceledTurn,
 	return result, nil
 }
 
-// instanceSet tracks the instances a run created so every exit path deletes
+// sessionSet tracks the sessions a run created so every exit path deletes
 // them.
-type instanceSet struct {
+type sessionSet struct {
 	api *kagentAPI
 	ids []string
 }
 
-func (s *instanceSet) add(id string) {
+func (s *sessionSet) add(id string) {
 	if !slices.Contains(s.ids, id) {
 		s.ids = append(s.ids, id)
 	}
 }
 
-// removeAllNow deletes every tracked instance and reports what refused.
-func (s *instanceSet) removeAllNow() error {
+// removeAllNow deletes every tracked session and reports what refused.
+func (s *sessionSet) removeAllNow() error {
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout*2)
 	defer cancel()
 	var errs []string
 	for _, id := range s.ids {
-		if err := s.api.deleteInstance(ctx, id); err != nil {
+		if err := s.api.deleteSession(ctx, id); err != nil {
 			errs = append(errs, err.Error())
 		}
 	}
 	s.ids = nil
 	if len(errs) > 0 {
-		return fmt.Errorf("deleting the instances: %s", strings.Join(errs, "; "))
+		return fmt.Errorf("deleting the sessions: %s", strings.Join(errs, "; "))
 	}
 	return nil
 }
 
 // removeAll is removeAllNow on the cleanup paths: said, never fatal.
-func (s *instanceSet) removeAll() {
+func (s *sessionSet) removeAll() {
 	if err := s.removeAllNow(); err != nil {
 		note("cleanup: %v", err)
 	}

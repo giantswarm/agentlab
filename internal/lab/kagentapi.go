@@ -46,33 +46,35 @@ import (
 // CA), so a turn proves the route and the policy as well as the controller.
 //
 // The metadata contract every call carries: `authorization: Bearer <Dex
-// id_token>`; on the A2A calls exactly one `x-kagent-agent-instance-id`
-// naming the AgentInstance that holds the conversation, and the
-// human-in-the-loop extension requested (`A2A-Extensions`, gRPC metadata
-// `a2a-extensions`) so a tool that needs approval pauses the task at
-// input-required with a decidable request instead of a plain notice. The
+// id_token>`, and on the A2A calls the human-in-the-loop extension requested
+// (`A2A-Extensions`, gRPC metadata `a2a-extensions`) so a tool that needs
+// approval pauses the task at input-required with a decidable request
+// instead of a plain notice. An A2A call names the Agent as its tenant
+// (`<namespace>/<name>`, the request's tenant field) and the Session that
+// holds the conversation through the message's context id, which is the
+// Session's id; a message without one starts a new Session of the Agent. The
 // Harness re-emits the person's bearer on every MCP call, so muster logs the
 // tool calls under the person. The messages are kagent's own protos
 // (internal/kagent/gen, generated from the line's proto tree) and the A2A v1
 // package the controller itself is built with.
 
 const (
-	// kagentHarness is the platform's Go ADK Harness: every AgentTemplate the
-	// proofs create is labelled for it (harnessLabel) and every turn runs on it.
+	// kagentHarness is the platform's Go ADK Harness: every Agent the proofs
+	// create references it (spec.harnessRef) and every turn runs on it.
 	kagentHarness = "kagent"
-	// kagentTurnTimeout bounds one turn end to end: the instance create, a
+	// kagentTurnTimeout bounds one turn end to end: the session create, a
 	// cold resume from the golden snapshot, the model's answer with its tool
-	// calls, the instance delete.
+	// calls, the session delete.
 	kagentTurnTimeout = 180 * time.Second
-	// templateRevisionTimeout bounds CreateAgentInstance's wait for a
-	// template whose golden snapshot is still being taken (the controller
-	// answers FailedPrecondition meanwhile; kagent's own e2e polls through it
-	// the same way).
-	templateRevisionTimeout = 60 * time.Second
-	// instanceReadyTimeout bounds a freshly created instance's way to READY:
+	// agentRevisionTimeout bounds CreateSession's wait for an Agent whose
+	// golden snapshot is still being taken (the controller answers
+	// FailedPrecondition meanwhile; kagent's own e2e polls through it the
+	// same way).
+	agentRevisionTimeout = 60 * time.Second
+	// sessionReadyTimeout bounds a freshly created session's way to READY:
 	// the controller converges it synchronously, so the poll only covers a
 	// create that was interrupted and retried.
-	instanceReadyTimeout = 90 * time.Second
+	sessionReadyTimeout = 90 * time.Second
 	// substratePageSize is common.proto's cap on a page; substrateMaxPages
 	// bounds a walk the controller's tokens never end.
 	substratePageSize = 100
@@ -80,7 +82,6 @@ const (
 
 	// The gRPC metadata of the contract (keys lower-case on the wire).
 	authorizationMetadata = "authorization"
-	instanceIDMetadata    = "x-kagent-agent-instance-id"
 	// userIDHeader is the header the edge sets from the verified token's
 	// email claim for the controller's trusted-proxy authenticator. The
 	// identity proof forges it to show the edge replaces it.
@@ -96,6 +97,7 @@ const (
 	// The keys of the CR the controller hands back whole (StructuredObject)
 	// and of the route objects' status, read as maps.
 	crMetadata   = "metadata"
+	crSpec       = "spec"
 	crStatus     = "status"
 	crConditions = "conditions"
 
@@ -117,7 +119,8 @@ const (
 type kagentAPI struct {
 	a2a       *a2aclient.Client
 	templates apiv1alpha1.AgentTemplateServiceClient
-	instances apiv1alpha1.AgentInstanceServiceClient
+	agents    apiv1alpha1.AgentServiceClient
+	sessions  apiv1alpha1.SessionServiceClient
 	system    apiv1alpha1.SystemServiceClient
 	conn      grpc.ClientConnInterface
 	token     string
@@ -209,7 +212,8 @@ func newKagentAPI(conn grpc.ClientConnInterface, token string) (*kagentAPI, erro
 	return &kagentAPI{
 		a2a:       a2aClient,
 		templates: apiv1alpha1.NewAgentTemplateServiceClient(conn),
-		instances: apiv1alpha1.NewAgentInstanceServiceClient(conn),
+		agents:    apiv1alpha1.NewAgentServiceClient(conn),
+		sessions:  apiv1alpha1.NewSessionServiceClient(conn),
 		system:    apiv1alpha1.NewSystemServiceClient(conn),
 		conn:      conn,
 		token:     token,
@@ -232,12 +236,12 @@ func (a *kagentAPI) callCtx(ctx context.Context) context.Context {
 	return metadata.NewOutgoingContext(ctx, md)
 }
 
-// a2aCtx attaches the A2A service parameters of a call on the instance: the
-// person's bearer, exactly one instance route, the HITL extension request
-// (and the extra metadata). The gRPC transport carries them as metadata.
-func (a *kagentAPI) a2aCtx(ctx context.Context, instanceID string) context.Context {
+// a2aCtx attaches the A2A service parameters of a call: the person's bearer,
+// the HITL extension request (and the extra metadata). The gRPC transport
+// carries them as metadata; the Agent and the Session are named in the
+// request itself (agentTenant, the message's context id).
+func (a *kagentAPI) a2aCtx(ctx context.Context) context.Context {
 	params := a2aclient.ServiceParams{
-		instanceIDMetadata:     {instanceID},
 		a2a.SvcParamExtensions: {hitlExtensionURI},
 	}
 	if a.token != "" {
@@ -247,6 +251,12 @@ func (a *kagentAPI) a2aCtx(ctx context.Context, instanceID string) context.Conte
 		params[key] = values
 	}
 	return a2aclient.AttachServiceParams(ctx, params)
+}
+
+// agentTenant is the A2A tenant of an Agent, the way the controller's
+// gateway routes a call: `<namespace>/<name>`.
+func agentTenant(ref *apiv1alpha1.ResourceReference) string {
+	return ref.GetNamespace() + "/" + ref.GetName()
 }
 
 // currentUser is SystemService/GetCurrentUser: the claims the controller
@@ -433,7 +443,7 @@ func actorOf(actor *ateapi.Actor) substrateActor {
 }
 
 // listTemplates is AgentTemplateService/ListAgentTemplates of the kagent
-// namespace — Swarmgeist's roster call.
+// namespace: the portable halves the Agents of the roster pair with a Harness.
 func (a *kagentAPI) listTemplates(ctx context.Context) ([]*apiv1alpha1.AgentTemplate, error) {
 	resp, err := a.templates.ListAgentTemplates(a.callCtx(ctx), &apiv1alpha1.ListAgentTemplatesRequest{Namespace: kagentNamespace})
 	if err != nil {
@@ -442,76 +452,104 @@ func (a *kagentAPI) listTemplates(ctx context.Context) ([]*apiv1alpha1.AgentTemp
 	return resp.GetAgentTemplates(), nil
 }
 
-// templateListing is what a surface reads off one listed AgentTemplate: the
-// technical name, the display name and icon from the chart's annotations,
-// the Harness a conversation is created with, and why the template cannot
-// start one (empty for a selectable template) — klaus-gateway's roster entry.
-type templateListing struct {
-	Name, Namespace, DisplayName, IconURL, Description, Harness, Unavailable string
+// listAgents is AgentService/ListAgents of the kagent namespace, the roster
+// call: every runnable definition (an AgentTemplate paired with a Harness) a
+// Session can be created of.
+func (a *kagentAPI) listAgents(ctx context.Context) ([]*apiv1alpha1.Agent, error) {
+	resp, err := a.agents.ListAgents(a.callCtx(ctx), &apiv1alpha1.ListAgentsRequest{Namespace: kagentNamespace})
+	if err != nil {
+		return nil, fmt.Errorf("ListAgents in %s: %w", kagentNamespace, err)
+	}
+	return resp.GetAgents(), nil
 }
 
-// listingOf derives the roster entry from a listed template: the annotations
-// from the CR's metadata, the readiness from status.harnesses[] of the
-// admitting Harnesses the controller reports — a template is selectable when
-// an admitting Harness reports Ready=True for it.
-func listingOf(t *apiv1alpha1.AgentTemplate) templateListing {
-	resource := t.GetResource().GetValue().AsMap()
+// roster is the two lists a surface joins for its roster: the Agents of the
+// kagent namespace and the AgentTemplates they reference.
+func (a *kagentAPI) roster(ctx context.Context) ([]*apiv1alpha1.Agent, []*apiv1alpha1.AgentTemplate, error) {
+	agents, err := a.listAgents(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	templates, err := a.listTemplates(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	return agents, templates, nil
+}
+
+// agentListing is what a surface reads off one listed Agent: the technical
+// name, the AgentTemplate and the Harness it pairs (empty for one written
+// inline), the display name and icon from the chart's annotations, and why
+// the Agent cannot start a conversation (empty for a selectable one), the
+// roster entry of klaus-gateway and the portal.
+type agentListing struct {
+	Name, Namespace, Template, Harness, DisplayName, IconURL, Description, Unavailable string
+}
+
+// listingOf derives the roster entry from a listed Agent: the references
+// from its spec, the annotations from its metadata (the AgentTemplate's when
+// the Agent carries none, templates being the namespace's by name), the
+// readiness from status.conditions. An Agent is selectable when it reports
+// Ready=True.
+func listingOf(agent *apiv1alpha1.Agent, templates map[string]*apiv1alpha1.AgentTemplate) agentListing {
+	resource := agent.GetResource().GetValue().AsMap()
+	spec := nestedMap(resource, crSpec)
+	l := agentListing{
+		Name:      agent.GetRef().GetName(),
+		Namespace: agent.GetRef().GetNamespace(),
+		Template:  stringOf(nestedMap(spec, "templateRef")[nameKey]),
+		Harness:   stringOf(nestedMap(spec, "harnessRef")[nameKey]),
+	}
 	annotations, _ := nestedMap(resource, crMetadata)["annotations"].(map[string]any)
-	l := templateListing{
-		Name:        t.GetRef().GetName(),
-		Namespace:   t.GetRef().GetNamespace(),
-		DisplayName: stringOf(annotations[displayNameAnnotation]),
-		IconURL:     stringOf(annotations[iconURLAnnotation]),
-		Description: t.GetDescription(),
-	}
-	admitting := t.GetAdmittingHarnesses()
-	if len(admitting) == 0 {
-		l.Unavailable = "no Harness admits this AgentTemplate (it carries no admission label a platform Harness selects)"
-		return l
-	}
-	harnesses, _ := nestedMap(resource, crStatus)["harnesses"].([]any)
-	var firstReason string
-	for _, name := range admitting {
-		ready, reason := readyConditionOf(harnesses, name)
-		if ready {
-			l.Harness = name
-			return l
+	l.DisplayName = stringOf(annotations[displayNameAnnotation])
+	l.IconURL = stringOf(annotations[iconURLAnnotation])
+	if template := templates[l.Template]; template != nil {
+		l.Description = template.GetDescription()
+		templateAnnotations := nestedMap(nestedMap(template.GetResource().GetValue().AsMap(), crMetadata), "annotations")
+		if l.DisplayName == "" {
+			l.DisplayName = stringOf(templateAnnotations[displayNameAnnotation])
 		}
-		if firstReason == "" {
-			firstReason = reason
+		if l.IconURL == "" {
+			l.IconURL = stringOf(templateAnnotations[iconURLAnnotation])
 		}
 	}
-	l.Harness = admitting[0]
-	l.Unavailable = fmt.Sprintf("Harness %s has not compiled a ready revision: %s", admitting[0], firstReason)
+	if l.Description == "" {
+		l.Description = stringOf(nestedMap(spec, "template")[descriptionKey])
+	}
+	conditions, _ := nestedMap(resource, crStatus)[crConditions].([]any)
+	if ready, reason := readyConditionOf(conditions); !ready {
+		l.Unavailable = fmt.Sprintf("Agent %s has not compiled a ready revision: %s", l.Name, reason)
+	}
 	return l
 }
 
-// readyConditionOf reads the Ready condition of one Harness's entry in
-// status.harnesses[]: true, or false with the reason.
-func readyConditionOf(harnesses []any, harness string) (bool, string) {
-	for _, h := range harnesses {
-		entry, ok := h.(map[string]any)
-		if !ok || stringOf(entry["harness"]) != harness {
+// templatesByName indexes listed AgentTemplates by name.
+func templatesByName(templates []*apiv1alpha1.AgentTemplate) map[string]*apiv1alpha1.AgentTemplate {
+	byName := make(map[string]*apiv1alpha1.AgentTemplate, len(templates))
+	for _, t := range templates {
+		byName[t.GetRef().GetName()] = t
+	}
+	return byName
+}
+
+// readyConditionOf reads the Ready condition of an Agent's
+// status.conditions: true, or false with the reason.
+func readyConditionOf(conditions []any) (bool, string) {
+	for _, c := range conditions {
+		cond, ok := c.(map[string]any)
+		if !ok || stringOf(cond[fieldTypeKey]) != conditionReady {
 			continue
 		}
-		conditions, _ := entry[crConditions].([]any)
-		for _, c := range conditions {
-			cond, ok := c.(map[string]any)
-			if !ok || stringOf(cond[fieldTypeKey]) != conditionReady {
-				continue
-			}
-			if stringOf(cond[crStatus]) == conditionTrue {
-				return true, ""
-			}
-			reason := stringOf(cond["message"])
-			if reason == "" {
-				reason = stringOf(cond["reason"])
-			}
-			return false, reason
+		if stringOf(cond[crStatus]) == conditionTrue {
+			return true, ""
 		}
-		return false, "no Ready condition reported yet"
+		reason := stringOf(cond["message"])
+		if reason == "" {
+			reason = stringOf(cond["reason"])
+		}
+		return false, reason
 	}
-	return false, "no status reported yet"
+	return false, "no Ready condition reported yet"
 }
 
 func nestedMap(m map[string]any, key string) map[string]any {
@@ -524,110 +562,109 @@ func stringOf(v any) string {
 	return s
 }
 
-// createInstance is createInstanceOn for the proofs' templates, which the
-// platform's Go ADK Harness admits.
-func (a *kagentAPI) createInstance(ctx context.Context, template, requestID string) (*apiv1alpha1.AgentInstance, error) {
-	return a.createInstanceOn(ctx, kagentHarness, template, requestID)
+// agentRef is the reference of an Agent of the kagent namespace.
+func agentRef(name string) *apiv1alpha1.ResourceReference {
+	return &apiv1alpha1.ResourceReference{Namespace: kagentNamespace, Name: name}
 }
 
-// createInstanceOn is AgentInstanceService/CreateAgentInstance for the person:
-// one conversation of the AgentTemplate on the named Harness, both in the
-// kagent namespace, keyed by requestID — the controller's create is
+// createSession is createSessionOf for an Agent of the kagent namespace.
+func (a *kagentAPI) createSession(ctx context.Context, agent, requestID string) (*apiv1alpha1.Session, error) {
+	return a.createSessionOf(ctx, agentRef(agent), requestID)
+}
+
+// createSessionOf is SessionService/CreateSession for the person: one
+// conversation of the Agent, keyed by requestID. The controller's create is
 // idempotent per (creator, request_id), so a retried first turn gets the
-// same instance back. A template whose golden snapshot is still being taken
+// same session back. An Agent whose golden snapshot is still being taken
 // answers FailedPrecondition; that is waited through, bounded. Returns once
-// the instance is READY (or SUSPENDED: a resumable conversation).
-func (a *kagentAPI) createInstanceOn(ctx context.Context, harness, template, requestID string) (*apiv1alpha1.AgentInstance, error) {
-	req := &apiv1alpha1.CreateAgentInstanceRequest{
-		Harness:       &apiv1alpha1.ResourceReference{Namespace: kagentNamespace, Name: harness},
-		AgentTemplate: &apiv1alpha1.ResourceReference{Namespace: kagentNamespace, Name: template},
-		RequestId:     requestID,
-	}
-	var resp *apiv1alpha1.CreateAgentInstanceResponse
+// the session is READY (or SUSPENDED: a resumable conversation).
+func (a *kagentAPI) createSessionOf(ctx context.Context, agent *apiv1alpha1.ResourceReference, requestID string) (*apiv1alpha1.Session, error) {
+	req := &apiv1alpha1.CreateSessionRequest{Agent: agent, RequestId: requestID}
+	var resp *apiv1alpha1.CreateSessionResponse
 	var err error
-	created := waitFor(int(templateRevisionTimeout/pollInterval), pollInterval, func() bool {
-		resp, err = a.instances.CreateAgentInstance(a.callCtx(ctx), req)
+	created := waitFor(int(agentRevisionTimeout/pollInterval), pollInterval, func() bool {
+		resp, err = a.sessions.CreateSession(a.callCtx(ctx), req)
 		return status.Code(err) != codes.FailedPrecondition
 	})
 	if err != nil {
-		return nil, fmt.Errorf("creating an AgentInstance of %s/%s on Harness %s: %w", kagentNamespace, template, harness, err)
+		return nil, fmt.Errorf("creating a Session of Agent %s: %w", agentTenant(agent), err)
 	}
 	if !created {
-		return nil, fmt.Errorf("AgentTemplate %s has no successful revision after %s (the controller keeps answering FailedPrecondition)", template, templateRevisionTimeout)
+		return nil, fmt.Errorf("Agent %s has no successful revision after %s (the controller keeps answering FailedPrecondition)", agent.GetName(), agentRevisionTimeout)
 	}
-	instance := resp.GetAgentInstance()
-	if instance.GetId() == "" {
-		return nil, fmt.Errorf("CreateAgentInstance of %s answered without an id", template)
+	session := resp.GetSession()
+	if session.GetId() == "" {
+		return nil, fmt.Errorf("CreateSession of %s answered without an id", agent.GetName())
 	}
-	return a.awaitInstanceReady(ctx, instance)
+	return a.awaitSessionReady(ctx, session)
 }
 
-// awaitInstanceReady polls the instance until it is READY or SUSPENDED (a
+// awaitSessionReady polls the session until it is READY or SUSPENDED (a
 // conversation gives its worker back between turns; the next send resumes
 // it), FAILED, or the deadline passes. The common case returns at once.
-func (a *kagentAPI) awaitInstanceReady(ctx context.Context, instance *apiv1alpha1.AgentInstance) (*apiv1alpha1.AgentInstance, error) {
-	deadline := time.Now().Add(instanceReadyTimeout)
+func (a *kagentAPI) awaitSessionReady(ctx context.Context, session *apiv1alpha1.Session) (*apiv1alpha1.Session, error) {
+	deadline := time.Now().Add(sessionReadyTimeout)
 	for {
-		switch instance.GetState() {
-		case apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_READY, apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_SUSPENDED:
-			return instance, nil
-		case apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_FAILED:
-			return instance, fmt.Errorf("AgentInstance %s failed: %s %s", instance.GetId(), instance.GetFailure().GetReason(), instance.GetFailure().GetMessage())
-		case apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_DELETING, apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_DELETED:
-			return instance, fmt.Errorf("AgentInstance %s is %s", instance.GetId(), instanceState(instance))
+		switch session.GetState() {
+		case apiv1alpha1.RuntimeState_RUNTIME_STATE_READY, apiv1alpha1.RuntimeState_RUNTIME_STATE_SUSPENDED:
+			return session, nil
+		case apiv1alpha1.RuntimeState_RUNTIME_STATE_FAILED:
+			return session, fmt.Errorf("Session %s failed: %s %s", session.GetId(), session.GetFailure().GetReason(), session.GetFailure().GetMessage())
+		case apiv1alpha1.RuntimeState_RUNTIME_STATE_DELETING, apiv1alpha1.RuntimeState_RUNTIME_STATE_DELETED:
+			return session, fmt.Errorf("Session %s is %s", session.GetId(), sessionState(session))
 		}
 		if time.Now().After(deadline) {
-			return instance, fmt.Errorf("AgentInstance %s is still %s after %s", instance.GetId(), instanceState(instance), instanceReadyTimeout)
+			return session, fmt.Errorf("Session %s is still %s after %s", session.GetId(), sessionState(session), sessionReadyTimeout)
 		}
 		select {
 		case <-ctx.Done():
-			return instance, ctx.Err()
+			return session, ctx.Err()
 		case <-time.After(pollInterval):
 		}
-		next, err := a.getInstance(ctx, instance.GetId())
+		next, err := a.getSession(ctx, session.GetId())
 		if err != nil {
-			return instance, err
+			return session, err
 		}
-		instance = next
+		session = next
 	}
 }
 
-// instanceState is the state the way the evidence quotes it (READY, not
-// AGENT_INSTANCE_STATE_READY).
-func instanceState(instance *apiv1alpha1.AgentInstance) string {
-	return strings.TrimPrefix(instance.GetState().String(), "AGENT_INSTANCE_STATE_")
+// sessionState is the state the way the evidence quotes it (READY, not
+// RUNTIME_STATE_READY).
+func sessionState(session *apiv1alpha1.Session) string {
+	return strings.TrimPrefix(session.GetState().String(), "RUNTIME_STATE_")
 }
 
-// getInstance is AgentInstanceService/GetAgentInstance.
-func (a *kagentAPI) getInstance(ctx context.Context, id string) (*apiv1alpha1.AgentInstance, error) {
-	resp, err := a.instances.GetAgentInstance(a.callCtx(ctx), &apiv1alpha1.GetAgentInstanceRequest{AgentInstanceId: id})
+// getSession is SessionService/GetSession.
+func (a *kagentAPI) getSession(ctx context.Context, id string) (*apiv1alpha1.Session, error) {
+	resp, err := a.sessions.GetSession(a.callCtx(ctx), &apiv1alpha1.GetSessionRequest{SessionId: id})
 	if err != nil {
-		return nil, fmt.Errorf("GetAgentInstance %s: %w", id, err)
+		return nil, fmt.Errorf("GetSession %s: %w", id, err)
 	}
-	return resp.GetAgentInstance(), nil
+	return resp.GetSession(), nil
 }
 
 // listPageLimit is the largest page the controller's list calls validate
 // (page.limit 0..100).
 const listPageLimit = 100
 
-// listInstances is AgentInstanceService/ListAgentInstances for the person:
-// the instances the controller keeps for them (creator-scoped), every page.
-func (a *kagentAPI) listInstances(ctx context.Context) ([]*apiv1alpha1.AgentInstance, error) {
-	return a.listInstancesOf(ctx, nil)
+// listSessions is SessionService/ListSessions for the person: the sessions
+// the controller keeps for them (creator-scoped), every page.
+func (a *kagentAPI) listSessions(ctx context.Context) ([]*apiv1alpha1.Session, error) {
+	return a.listSessionsOf(ctx, nil)
 }
 
-// listInstancesOf is the listing narrowed to one template's conversations of
-// the caller (nil: all of them), every page.
-func (a *kagentAPI) listInstancesOf(ctx context.Context, template *apiv1alpha1.ResourceReference) ([]*apiv1alpha1.AgentInstance, error) {
-	var all []*apiv1alpha1.AgentInstance
+// listSessionsOf is the listing narrowed to one Agent's conversations of the
+// caller (nil: all of them), every page.
+func (a *kagentAPI) listSessionsOf(ctx context.Context, agent *apiv1alpha1.ResourceReference) ([]*apiv1alpha1.Session, error) {
+	var all []*apiv1alpha1.Session
 	page := &apiv1alpha1.PageRequest{Limit: listPageLimit}
 	for {
-		resp, err := a.instances.ListAgentInstances(a.callCtx(ctx), &apiv1alpha1.ListAgentInstancesRequest{Page: page, AgentTemplate: template})
+		resp, err := a.sessions.ListSessions(a.callCtx(ctx), &apiv1alpha1.ListSessionsRequest{Page: page, Agent: agent})
 		if err != nil {
-			return nil, fmt.Errorf("ListAgentInstances: %w", err)
+			return nil, fmt.Errorf("ListSessions: %w", err)
 		}
-		all = append(all, resp.GetAgentInstances()...)
+		all = append(all, resp.GetSessions()...)
 		if resp.GetPage().GetNextPageToken() == "" {
 			return all, nil
 		}
@@ -635,89 +672,92 @@ func (a *kagentAPI) listInstancesOf(ctx context.Context, template *apiv1alpha1.R
 	}
 }
 
-// suspendInstance is AgentInstanceService/SuspendAgentInstance: the Actor is
-// snapshotted to the Harness's store and the instance reported SUSPENDED; the
-// next turn restores it. Returns the instance as the controller reports it
-// after the suspend.
-func (a *kagentAPI) suspendInstance(ctx context.Context, id string) (*apiv1alpha1.AgentInstance, error) {
-	resp, err := a.instances.SuspendAgentInstance(a.callCtx(ctx), &apiv1alpha1.SuspendAgentInstanceRequest{AgentInstanceId: id})
+// suspendSession is SessionService/SuspendSession: the Actor is snapshotted
+// to the Harness's store and the session reported SUSPENDED; the next turn
+// restores it. Returns the session as the controller reports it after the
+// suspend.
+func (a *kagentAPI) suspendSession(ctx context.Context, id string) (*apiv1alpha1.Session, error) {
+	resp, err := a.sessions.SuspendSession(a.callCtx(ctx), &apiv1alpha1.SuspendSessionRequest{SessionId: id})
 	if err != nil {
-		return nil, fmt.Errorf("SuspendAgentInstance %s: %w", id, err)
+		return nil, fmt.Errorf("SuspendSession %s: %w", id, err)
 	}
-	return resp.GetAgentInstance(), nil
+	return resp.GetSession(), nil
 }
 
-// resumeInstance is AgentInstanceService/ResumeAgentInstance on a SUSPENDED
-// instance: the Actor is restored from its snapshot; returns once the
-// instance is READY again. A suspended instance accepts no task until then,
-// which is what the surfaces do before a turn.
-func (a *kagentAPI) resumeInstance(ctx context.Context, id string) (*apiv1alpha1.AgentInstance, error) {
-	resp, err := a.instances.ResumeAgentInstance(a.callCtx(ctx), &apiv1alpha1.ResumeAgentInstanceRequest{AgentInstanceId: id})
+// resumeSession is SessionService/ResumeSession on a SUSPENDED session: the
+// Actor is restored from its snapshot; returns once the session is READY
+// again. A suspended session accepts no task until then, which is what the
+// surfaces do before a turn.
+func (a *kagentAPI) resumeSession(ctx context.Context, id string) (*apiv1alpha1.Session, error) {
+	resp, err := a.sessions.ResumeSession(a.callCtx(ctx), &apiv1alpha1.ResumeSessionRequest{SessionId: id})
 	if err != nil {
-		return nil, fmt.Errorf("ResumeAgentInstance %s: %w", id, err)
+		return nil, fmt.Errorf("ResumeSession %s: %w", id, err)
 	}
-	instance := resp.GetAgentInstance()
-	deadline := time.Now().Add(instanceReadyTimeout)
-	for instance.GetState() != apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_READY {
+	session := resp.GetSession()
+	deadline := time.Now().Add(sessionReadyTimeout)
+	for session.GetState() != apiv1alpha1.RuntimeState_RUNTIME_STATE_READY {
 		if time.Now().After(deadline) {
-			return instance, fmt.Errorf("AgentInstance %s is still %s after %s", id, instanceState(instance), instanceReadyTimeout)
+			return session, fmt.Errorf("Session %s is still %s after %s", id, sessionState(session), sessionReadyTimeout)
 		}
 		select {
 		case <-ctx.Done():
-			return instance, ctx.Err()
+			return session, ctx.Err()
 		case <-time.After(pollInterval):
 		}
-		got, err := a.instances.GetAgentInstance(a.callCtx(ctx), &apiv1alpha1.GetAgentInstanceRequest{AgentInstanceId: id})
+		got, err := a.getSession(ctx, id)
 		if err != nil {
-			return instance, fmt.Errorf("GetAgentInstance %s: %w", id, err)
+			return session, err
 		}
-		instance = got.GetAgentInstance()
+		session = got
 	}
-	return instance, nil
+	return session, nil
 }
 
-// deleteInstance is AgentInstanceService/DeleteAgentInstance; an instance
-// that is already gone is success.
-func (a *kagentAPI) deleteInstance(ctx context.Context, id string) error {
-	_, err := a.instances.DeleteAgentInstance(a.callCtx(ctx), &apiv1alpha1.DeleteAgentInstanceRequest{AgentInstanceId: id})
+// deleteSession is SessionService/DeleteSession; a session that is already
+// gone is success.
+func (a *kagentAPI) deleteSession(ctx context.Context, id string) error {
+	_, err := a.sessions.DeleteSession(a.callCtx(ctx), &apiv1alpha1.DeleteSessionRequest{SessionId: id})
 	if err != nil && status.Code(err) != codes.NotFound {
-		return fmt.Errorf("DeleteAgentInstance %s: %w", id, err)
+		return fmt.Errorf("DeleteSession %s: %w", id, err)
 	}
 	return nil
 }
 
-// stream is lf.a2a.v1.A2AService/SendStreamingMessage on the instance and
+// stream is lf.a2a.v1.A2AService/SendStreamingMessage on the session and
 // yields the task's events as the SDK types. A message without a TaskID
-// starts a new task; one carrying the id of a paused task resumes it. The
-// message's ContextID stays empty: the controller owns the conversation's
-// context id and rejects any other value.
-func (a *kagentAPI) stream(ctx context.Context, instanceID string, msg *a2a.Message) iter.Seq2[a2a.Event, error] {
-	return a.a2a.SendStreamingMessage(a.a2aCtx(ctx, instanceID), &a2a.SendMessageRequest{Message: msg})
+// starts a new task in the session (its context id is the session's; the
+// controller rejects any other value); one carrying the id of a paused task
+// resumes it and names no context of its own.
+func (a *kagentAPI) stream(ctx context.Context, session *apiv1alpha1.Session, msg *a2a.Message) iter.Seq2[a2a.Event, error] {
+	if msg.TaskID == "" {
+		msg.ContextID = session.GetContextId()
+	}
+	return a.a2a.SendStreamingMessage(a.a2aCtx(ctx), &a2a.SendMessageRequest{Tenant: agentTenant(session.GetAgent()), Message: msg})
 }
 
-// getTask is A2AService/GetTask on the instance.
-func (a *kagentAPI) getTask(ctx context.Context, instanceID string, taskID a2a.TaskID) (*a2a.Task, error) {
-	task, err := a.a2a.GetTask(a.a2aCtx(ctx, instanceID), &a2a.GetTaskRequest{ID: taskID})
+// getTask is A2AService/GetTask on the session's Agent.
+func (a *kagentAPI) getTask(ctx context.Context, session *apiv1alpha1.Session, taskID a2a.TaskID) (*a2a.Task, error) {
+	task, err := a.a2a.GetTask(a.a2aCtx(ctx), &a2a.GetTaskRequest{Tenant: agentTenant(session.GetAgent()), ID: taskID})
 	if err != nil {
 		return nil, fmt.Errorf("GetTask %s: %w", taskID, err)
 	}
 	return task, nil
 }
 
-// listTasks is A2AService/ListTasks on the instance: its tasks, one page of
-// up to 100 (a proof's instance has a handful).
-func (a *kagentAPI) listTasks(ctx context.Context, instanceID string) ([]*a2a.Task, error) {
-	resp, err := a.a2a.ListTasks(a.a2aCtx(ctx, instanceID), &a2a.ListTasksRequest{PageSize: listPageLimit})
+// listTasks is A2AService/ListTasks narrowed to the session (its context
+// id): its tasks, one page of up to 100 (a proof's session has a handful).
+func (a *kagentAPI) listTasks(ctx context.Context, session *apiv1alpha1.Session) ([]*a2a.Task, error) {
+	resp, err := a.a2a.ListTasks(a.a2aCtx(ctx), &a2a.ListTasksRequest{Tenant: agentTenant(session.GetAgent()), ContextID: session.GetContextId(), PageSize: listPageLimit})
 	if err != nil {
 		return nil, fmt.Errorf("ListTasks: %w", err)
 	}
 	return resp.Tasks, nil
 }
 
-// cancelTask is A2AService/CancelTask on the instance: the controller stops
-// the task server-side and answers its final state.
-func (a *kagentAPI) cancelTask(ctx context.Context, instanceID string, taskID a2a.TaskID) (*a2a.Task, error) {
-	task, err := a.a2a.CancelTask(a.a2aCtx(ctx, instanceID), &a2a.CancelTaskRequest{ID: taskID})
+// cancelTask is A2AService/CancelTask on the session's Agent: the controller
+// stops the task server-side and answers its final state.
+func (a *kagentAPI) cancelTask(ctx context.Context, session *apiv1alpha1.Session, taskID a2a.TaskID) (*a2a.Task, error) {
+	task, err := a.a2a.CancelTask(a.a2aCtx(ctx), &a2a.CancelTaskRequest{Tenant: agentTenant(session.GetAgent()), ID: taskID})
 	if err != nil {
 		return nil, fmt.Errorf("CancelTask %s: %w", taskID, err)
 	}
@@ -869,14 +909,14 @@ func partsText(parts a2a.ContentParts) string {
 	return strings.Join(texts, "")
 }
 
-// turn drives one streamed turn on the instance to the end of its stream
+// turn drives one streamed turn on the session to the end of its stream
 // and folds what it said. The state it ended on is the caller's to judge: a
 // completed task is an answer, input-required a pause the caller decides on.
-func (a *kagentAPI) turn(ctx context.Context, instanceID string, msg *a2a.Message) (*turn, error) {
+func (a *kagentAPI) turn(ctx context.Context, session *apiv1alpha1.Session, msg *a2a.Message) (*turn, error) {
 	t := &turn{}
-	for ev, err := range a.stream(ctx, instanceID, msg) {
+	for ev, err := range a.stream(ctx, session, msg) {
 		if err != nil {
-			return t, fmt.Errorf("SendStreamingMessage on %s: %w", instanceID, err)
+			return t, fmt.Errorf("SendStreamingMessage on %s: %w", session.GetId(), err)
 		}
 		if a.events != nil {
 			if line, err := json.Marshal(ev); err == nil {
@@ -1001,7 +1041,7 @@ func decisionMessage(taskID a2a.TaskID, req *toolApprovalRequest, approve bool, 
 
 // decide resumes a task paused on a tool_approval_request with the decision
 // and folds the resumed stream.
-func (a *kagentAPI) decide(ctx context.Context, instanceID string, paused *turn, approve bool, reason string) (*turn, error) {
+func (a *kagentAPI) decide(ctx context.Context, session *apiv1alpha1.Session, paused *turn, approve bool, reason string) (*turn, error) {
 	if paused.approval == nil {
 		return nil, fmt.Errorf("task %s carries no tool_approval_request to decide on (state %s)", paused.taskID, stateName(paused.state()))
 	}
@@ -1009,7 +1049,7 @@ func (a *kagentAPI) decide(ctx context.Context, instanceID string, paused *turn,
 	if err != nil {
 		return nil, err
 	}
-	return a.turn(ctx, instanceID, msg)
+	return a.turn(ctx, session, msg)
 }
 
 // isUnauthenticated reports whether the edge refused the call for want of a
@@ -1046,13 +1086,12 @@ func (t *turn) completedText() (string, error) {
 }
 
 // agentTurnAs sends one turn to the agent as the person whose Dex id_token is
-// given — the way Swarmgeist and the portal drive a message: an AgentInstance
-// of the AgentTemplate on the Go ADK Harness created for the person and
-// deleted afterwards, one SendStreamingMessage carrying the person's bearer,
-// the instance route and the HITL extension request, the answer consumed as
-// a stream — and returns the agent's text. Shared steps of the proofs call
-// this one; a turn that pauses for a decision is an error (their agents bind
-// nothing that requires approval).
+// given — the way Swarmgeist and the portal drive a message: a Session of the
+// Agent created for the person and deleted afterwards, one
+// SendStreamingMessage carrying the person's bearer and the HITL extension
+// request, the answer consumed as a stream — and returns the agent's text.
+// Shared steps of the proofs call this one; a turn that pauses for a
+// decision is an error (their agents bind nothing that requires approval).
 func agentTurnAs(cfg *config.Config, name, token, prompt string) (string, error) {
 	api, err := dialKagentAPI(cfg, token)
 	if err != nil {
@@ -1061,13 +1100,13 @@ func agentTurnAs(cfg *config.Config, name, token, prompt string) (string, error)
 	defer api.close()
 	ctx, cancel := context.WithTimeout(context.Background(), kagentTurnTimeout)
 	defer cancel()
-	instance, err := api.createInstance(ctx, name, uuid.NewString())
+	session, err := api.createSession(ctx, name, uuid.NewString())
 	if err != nil {
 		return "", err
 	}
-	defer api.removeInstance(instance.GetId())
-	note("AgentInstance %s of %s (creator %s, %s)", instance.GetId(), name, instance.GetCreator(), instanceState(instance))
-	t, err := api.turn(ctx, instance.GetId(), userMessage(prompt))
+	defer api.removeSession(session.GetId())
+	note("Session %s of %s (creator %s, %s)", session.GetId(), name, session.GetCreator(), sessionState(session))
+	t, err := api.turn(ctx, session, userMessage(prompt))
 	if err != nil {
 		return "", fmt.Errorf("A2A turn on %s: %w", name, err)
 	}
@@ -1078,12 +1117,12 @@ func agentTurnAs(cfg *config.Config, name, token, prompt string) (string, error)
 	return reply, nil
 }
 
-// removeInstance deletes an instance on the cleanup paths, bounded on its own
+// removeSession deletes a session on the cleanup paths, bounded on its own
 // context, and says when it could not.
-func (a *kagentAPI) removeInstance(id string) {
+func (a *kagentAPI) removeSession(id string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := a.deleteInstance(ctx, id); err != nil {
-		note("deleting AgentInstance %s: %v", id, err)
+	if err := a.deleteSession(ctx, id); err != nil {
+		note("deleting Session %s: %v", id, err)
 	}
 }

@@ -488,7 +488,7 @@ func proveToolsetPortal(cfg *config.Config, user *config.User, opts ToolsetsTest
 	spec := toolsetsSpec(toolsetsAgentPortal, defaultModelConfig, []string{presetReadOnly})
 	spec.Description = "Throwaway agent of `agentlab toolsets-test`, created through the portal's muster backend; deleted by the same run."
 	step("The portal's create path: %s with toolset %v as %s", writer, spec.Toolset, user.Email)
-	t, written, err := readyAgent(writer, spec, agentReadyTimeout)
+	readiness, written, err := readyAgent(writer, spec, agentReadyTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -509,7 +509,7 @@ func proveToolsetPortal(cfg *config.Config, user *config.User, opts ToolsetsTest
 	if !set || !slices.Equal(declared, spec.Toolset) {
 		return nil, fmt.Errorf("HelmRelease %s carries values.toolset=%v, wanted %v", toolsetsAgentPortal, declared, spec.Toolset)
 	}
-	if err := assertAgentRender(t, spec, release.value("muster", "url")); err != nil {
+	if err := assertAgentRender(readiness.template, readiness.agent, spec, release.value("muster", "url")); err != nil {
 		return nil, err
 	}
 	note("requestedBy=%s; HelmRelease managers %q, values.toolset %v; AgentTemplate Ready on Harness %s, binds %s carrying %s=%s", written.RequestedBy, release.managers, declared, kagentHarness, toolsetsAgentPortal, toolsetHeader, presetReadOnly)

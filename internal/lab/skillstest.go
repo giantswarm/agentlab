@@ -114,7 +114,7 @@ func (f SkillsFixture) resolve() (SkillsFixture, error) {
 }
 
 // skillsAgentTemplateCRD is the CRD the fixture's credentialRef must be served by.
-const skillsAgentTemplateCRD = "agenttemplates.kagent.dev"
+const skillsAgentTemplateCRD = agentTemplateResource
 
 // requireCredentialRefServed checks the served AgentTemplate CRD carries
 // skills[].source.git.credentialRef: a kagent line without it prunes the
@@ -187,7 +187,6 @@ var (
 // Resources of kagent API v2 the proof reads beyond the AgentTemplate, and
 // Substrate's worker-pool label.
 const (
-	harnessResource       = "harnesses.kagent.dev"
 	kagentControllerName  = "kagent-controller"
 	propagateIdentityEnv  = "KAGENT_PROPAGATE_TOKEN"
 	substrateWorkerLabel  = "ate.dev/worker-pool"
@@ -268,7 +267,7 @@ func SkillsTest(cfg *config.Config, email string, opts SkillsTestOptions) error 
 	defer cleanup()
 
 	shape := readSkillsTemplateShape()
-	step("Applying AgentTemplate %s on Harness %s: skill %s from %s @ %.12s%s, %s", skillsTestAgent, kagentHarness, fixture.name(), fixture.Repo, fixture.Commit, fixture.credentialNote(), shape.toolsNote())
+	step("Applying AgentTemplate %s and its Agent on Harness %s: skill %s from %s @ %.12s%s, %s", skillsTestAgent, kagentHarness, fixture.name(), fixture.Repo, fixture.Commit, fixture.credentialNote(), shape.toolsNote())
 	if fixture.CredentialSecret != "" {
 		if err := requireCredentialRefServed(); err != nil {
 			return err
@@ -277,7 +276,7 @@ func SkillsTest(cfg *config.Config, email string, opts SkillsTestOptions) error 
 	if _, err := applyManifests(context.Background(), []byte(skillsAgentTemplate(skillsTestAgent, opts.ModelConfig, &fixture, shape))); err != nil {
 		return err
 	}
-	note("accepted by the apiserver (the CRD validates the full commit and the relative path); labelled %v as the Harness admits", shape.admission)
+	note("accepted by the apiserver (the CRD validates the full commit and the relative path); Agent %s references Harness %s", skillsTestAgent, kagentHarness)
 
 	step("Waiting up to %s for Ready on Harness %s — the golden boot: the actor starts, fetches the skill, serves readyz, is snapshotted", opts.ReadyTimeout, kagentHarness)
 	boot, err := waitAgentReady(skillsTestAgent, opts.ReadyTimeout)
@@ -287,7 +286,7 @@ func SkillsTest(cfg *config.Config, email string, opts SkillsTestOptions) error 
 	if !boot.ready {
 		return skillsGoldenBootFailed(cfg, api, opts, boot, facts, shape)
 	}
-	harness := boot.template.harness(kagentHarness)
+	harness := boot.agent.Status
 	note("Ready after %s: revision %.12s%s", boot.elapsed.Round(time.Second), harness.LatestSuccessfulRevision, warningsNote(harness.Warnings))
 	footprint := skillsFootprint(api, skillsTestAgent)
 	for _, line := range footprint.lines() {
@@ -316,24 +315,23 @@ func SkillsTest(cfg *config.Config, email string, opts SkillsTestOptions) error 
 		skillsTestAgent, fixture.name(), fixture.Repo, fixture.Commit, fixture.credentialNote(), kagentHarness, boot.elapsed.Round(time.Second), facts.summary())
 	fmt.Printf("PASS: one turn through the edge as %s named the skill and answered %q from its text; the Harness re-emits the person's bearer on tool calls (%s=true), so muster attributes any tool call of the turn to %s\n",
 		user.Email, fixture.Expect, propagateIdentityEnv, user.Email)
-	fmt.Printf("PASS: nothing left behind — the AgentTemplate, its AgentInstance, Substrate's ActorTemplate and actor are gone\n")
+	fmt.Printf("PASS: nothing left behind — the Agent, its AgentTemplate, its Session, Substrate's ActorTemplate and actor are gone\n")
 	return nil
 }
 
 // skillsTemplateShape is what the lab's platform dictates about the proof's
-// templates: the labels the Harness admits, and whether a shared muster
-// RemoteMCPServer exists to bind as the template's tools (the platform
-// renders one per agent from the agent chart, none shared, so the proof's
-// template carries no tools — the skill is what it proves; an older
-// connectivity chart that renders a shared one gets it bound).
+// templates: whether a shared muster RemoteMCPServer exists to bind as the
+// template's tools (the platform renders one per agent from the agent chart,
+// none shared, so the proof's template carries no tools — the skill is what
+// it proves; an older connectivity chart that renders a shared one gets it
+// bound).
 type skillsTemplateShape struct {
-	admission   map[string]string
 	musterTools bool
 }
 
 // readSkillsTemplateShape reads the shape off the lab.
 func readSkillsTemplateShape() skillsTemplateShape {
-	shape := skillsTemplateShape{admission: harnessAdmissionLabels()}
+	var shape skillsTemplateShape
 	if _, err := readKagentObject(remoteMCPServerResource, componentMuster); err == nil {
 		shape.musterTools = true
 	}
@@ -348,18 +346,14 @@ func (s skillsTemplateShape) toolsNote() string {
 	return "no tools (the platform renders no shared " + componentMuster + " RemoteMCPServer; the skill is what the template carries)"
 }
 
-// skillsAgentTemplate is the proof's AgentTemplate: the Go ADK Harness, the
-// ModelConfig, the terse prompt, the shared muster server as its tools where
-// the platform renders one (the fleet's shape: skills and tools), labelled
-// as agentlab's and as the Harness admits — and, given a fixture (nil is the
-// control), one git skill pinned to its full commit, selected by its
-// directory within the repository, with the fixture's credentialRef when it
-// names a Secret.
+// skillsAgentTemplate is the proof's AgentTemplate and the Agent that pairs
+// it with the Go ADK Harness: the ModelConfig, the terse prompt, the shared
+// muster server as its tools where the platform renders one (the fleet's
+// shape: skills and tools), both labelled as agentlab's — and, given a
+// fixture (nil is the control), one git skill pinned to its full commit,
+// selected by its directory within the repository, with the fixture's
+// credentialRef when it names a Secret.
 func skillsAgentTemplate(name, modelConfig string, fixture *SkillsFixture, shape skillsTemplateShape) string {
-	labels := []string{managedByLabel + ": " + managedByAgentlabValue}
-	for _, key := range slices.Sorted(maps.Keys(shape.admission)) {
-		labels = append(labels, key+": "+shape.admission[key])
-	}
 	tools := ""
 	if shape.musterTools {
 		tools = fmt.Sprintf(`  tools:
@@ -389,19 +383,48 @@ func skillsAgentTemplate(name, modelConfig string, fixture *SkillsFixture, shape
 %s        path: %s
 `, fixture.name(), fixture.Repo, fixture.Commit, credential, fixture.Skill)
 	}
-	return fmt.Sprintf(`apiVersion: %s
+	return fmt.Sprintf(`apiVersion: %[1]s
 kind: AgentTemplate
+metadata:
+  name: %[2]s
+  namespace: %[3]s
+  labels:
+    %[4]s: %[5]s
+spec:
+  description: %[6]q
+  modelConfig:
+    name: %[7]s
+  systemPrompt: %[8]q
+%[9]s%[10]s---
+%[11]s`, agentTemplateAPIVersion, name, kagentNamespace, managedByLabel, managedByAgentlabValue, description, modelConfig, skillsTestSystemPrompt, tools, skills,
+		agentManifest(name, name, kagentHarness, nil))
+}
+
+// agentManifest is an Agent of the kagent namespace pairing the named
+// AgentTemplate with the named Harness by reference, labelled as agentlab's,
+// with the annotations given (nil for none).
+func agentManifest(name, template, harness string, annotations map[string]string) string {
+	var lines []string
+	for _, key := range slices.Sorted(maps.Keys(annotations)) {
+		lines = append(lines, fmt.Sprintf("    %s: %q", key, annotations[key]))
+	}
+	annotated := ""
+	if len(lines) > 0 {
+		annotated = "  annotations:\n" + strings.Join(lines, "\n") + "\n"
+	}
+	return fmt.Sprintf(`apiVersion: %s
+kind: Agent
 metadata:
   name: %s
   namespace: %s
   labels:
-    %s
-spec:
-  description: %q
-  modelConfig:
+    %s: %s
+%sspec:
+  templateRef:
     name: %s
-  systemPrompt: %q
-%s%s`, agentTemplateAPIVersion, name, kagentNamespace, strings.Join(labels, "\n    "), description, modelConfig, skillsTestSystemPrompt, tools, skills)
+  harnessRef:
+    name: %s
+`, kagentAPIVersion, name, kagentNamespace, managedByLabel, managedByAgentlabValue, annotated, template, harness)
 }
 
 // skillsGoldenBootFailed is the negative outcome: the evidence, the control
@@ -413,11 +436,9 @@ func skillsGoldenBootFailed(cfg *config.Config, api *kagentAPI, opts SkillsTestO
 		verdict = "failed for good after " + boot.elapsed.Round(time.Second).String() + ": " + boot.reason
 	}
 	step("The golden boot %s — collecting the evidence", verdict)
-	harness := &harnessStatus{Harness: kagentHarness}
-	if boot.template != nil {
-		if h := boot.template.harness(kagentHarness); h != nil {
-			harness = h
-		}
+	harness := &agentStatus{}
+	if boot.agent != nil {
+		harness = &boot.agent.Status
 	}
 	evidence := goldenBootEvidence(api, skillsTestAgent, harness, facts)
 	for _, line := range evidence {
@@ -445,13 +466,13 @@ func skillsGoldenBootFailed(cfg *config.Config, api *kagentAPI, opts SkillsTestO
 }
 
 // goldenBootEvidence is what a failed golden boot leaves to read, as lines:
-// the Harness's conditions and warnings, Substrate's footprint of the
-// template (ActorTemplates, actors, their worker pods) as the controller
-// reports it, and the log lines of the controller, of atenet (the egress
-// gate) and of the pool's worker pods about the template's actors.
-func goldenBootEvidence(api *kagentAPI, name string, harness *harnessStatus, facts lineFacts) []string {
+// the Agent's conditions and warnings, Substrate's footprint of the Agent
+// (ActorTemplates, actors, their worker pods) as the controller reports it,
+// and the log lines of the controller, of atenet (the egress gate) and of
+// the pool's worker pods about the Agent's actors.
+func goldenBootEvidence(api *kagentAPI, name string, harness *agentStatus, facts lineFacts) []string {
 	var lines []string
-	lines = append(lines, "Harness "+harness.Harness+" conditions:")
+	lines = append(lines, "Agent "+name+" conditions:")
 	for _, c := range harness.Conditions {
 		lines = append(lines, "  "+c.String())
 	}
@@ -482,7 +503,7 @@ func goldenBootEvidence(api *kagentAPI, name string, harness *harnessStatus, fac
 	// that failed may have run on any of them, and be gone by now — and
 	// within those lines for the words of a boot that went wrong.
 	for _, pod := range podsLabelled(ctx, kagentNamespace, substrateWorkerLabel+"="+facts.workerPool) {
-		lines = append(lines, logEvidence(ctx, "worker "+pod, kagentNamespace, "pod/"+pod, "", actorTemplatePrefix(name, harness.Harness), actorBootWords...)...)
+		lines = append(lines, logEvidence(ctx, "worker "+pod, kagentNamespace, "pod/"+pod, "", actorTemplatePrefix(name), actorBootWords...)...)
 	}
 	return lines
 }
@@ -606,11 +627,10 @@ func podsNamed(ctx context.Context, ns, prefix string) []string {
 	return names
 }
 
-// substrateFootprint is what Substrate holds for one AgentTemplate on the
-// Harness, as the controller reports it: the ActorTemplates written for its
-// revisions (kagent names them <template>-<harness>-<revision>), the actors
-// booted from them with their state and worker pod. err is the read's
-// failure, when it failed.
+// substrateFootprint is what Substrate holds for one Agent, as the
+// controller reports it: the ActorTemplates written for its revisions
+// (kagent names them <agent>-<revision>), the actors booted from them with
+// their state and worker pod. err is the read's failure, when it failed.
 type substrateFootprint struct {
 	templates []substrateTemplate
 	actors    []substrateActor
@@ -618,7 +638,7 @@ type substrateFootprint struct {
 	err       error
 }
 
-// skillsFootprint reads the template's footprint in Substrate through the
+// skillsFootprint reads the Agent's footprint in Substrate through the
 // controller's API.
 func skillsFootprint(api *kagentAPI, name string) substrateFootprint {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -627,39 +647,63 @@ func skillsFootprint(api *kagentAPI, name string) substrateFootprint {
 	if err != nil {
 		return substrateFootprint{err: err}
 	}
-	return footprintOf(state, name, kagentHarness)
+	return footprintOf(state, name)
 }
 
 // footprintOf filters the controller's view of Substrate down to one
-// template's.
-func footprintOf(state substrateState, agentTemplate, harness string) substrateFootprint {
-	prefix := actorTemplatePrefix(agentTemplate, harness)
+// Agent's.
+func footprintOf(state substrateState, agent string) substrateFootprint {
+	prefix := actorTemplatePrefix(agent)
 	f := substrateFootprint{pools: state.pools}
 	if len(state.ateAPIErrors) > 0 {
 		f.err = fmt.Errorf("the controller could not list ate-api's state: %s", strings.Join(state.ateAPIErrors, "; "))
 	}
 	for _, t := range state.templates {
-		if t.namespace == kagentNamespace && strings.HasPrefix(t.name, prefix) {
+		if t.namespace == kagentNamespace && isActorTemplateOf(prefix, t.name) {
 			f.templates = append(f.templates, t)
 		}
 	}
 	for _, a := range state.actors {
-		if a.templateNamespace == kagentNamespace && strings.HasPrefix(a.templateName, prefix) {
+		if a.templateNamespace == kagentNamespace && isActorTemplateOf(prefix, a.templateName) {
 			f.actors = append(f.actors, a)
 		}
 	}
 	return f
 }
 
-// actorTemplatePrefix is how kagent names the ActorTemplates of an
-// AgentTemplate on a Harness, up to the revision: `<template>-<harness>`
-// lower-cased, cut to 50 characters, then `-<12 hex of the revision>`.
-func actorTemplatePrefix(agentTemplate, harness string) string {
-	base := strings.ToLower(strings.ReplaceAll(agentTemplate+"-"+harness, "_", "-"))
+// actorTemplatePrefix is how kagent names the ActorTemplates of an Agent, up
+// to the revision: the Agent's name lower-cased, cut to 50 characters, then
+// `-<12 hex of the revision>`.
+func actorTemplatePrefix(agent string) string {
+	base := strings.ToLower(strings.ReplaceAll(agent, "_", "-"))
 	if len(base) > actorTemplateNameSize {
 		base = strings.TrimRight(base[:actorTemplateNameSize], "-")
 	}
 	return base + "-"
+}
+
+// revisionSuffixSize is the length of the revision an ActorTemplate's name
+// ends with: 12 hex characters.
+const revisionSuffixSize = 12
+
+// isActorTemplateOf reports whether name is an ActorTemplate of the Agent
+// whose prefix is given: the prefix, then exactly the revision. An Agent
+// whose name extends another's (`x-control` next to `x`) is told apart by
+// what follows the prefix.
+func isActorTemplateOf(prefix, name string) bool {
+	if !strings.HasPrefix(name, prefix) {
+		return false
+	}
+	revision := name[len(prefix):]
+	if len(revision) != revisionSuffixSize {
+		return false
+	}
+	for _, r := range revision {
+		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // empty reports whether Substrate holds nothing of the template.

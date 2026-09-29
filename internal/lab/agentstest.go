@@ -60,10 +60,11 @@ const baselineServiceAccount = "system:serviceaccount:" + platformNamespace + ":
 // trip succeeds with requestedBy set — the HelmRelease written by
 // agent-manager (its field manager, values.toolset the anchor, the skill
 // pinned to a commit) next to the OCIRepository at 1.x, the render an
-// AgentTemplate carrying the Harness label and the display-name and icon-url
-// annotations, Ready on the platform Harness with its skill, the per-agent
+// AgentTemplate carrying the display-name and icon-url annotations and its
+// skill, the Agent pairing it with the platform Harness, Ready, the per-agent
 // RemoteMCPServer carrying the toolset header; get_agent_status agrees with
-// status.harnesses[] for ready and for a template no Harness admits; a
+// the Agent's status for ready and for an Agent on a Harness that does not
+// exist; a
 // viewers-group user's create is refused by the kind apiserver as
 // User "oidc:viewer@lab.local" (the view role writes no HelmReleases); and the
 // agent-manager ServiceAccount holds nothing beyond API discovery. Leaves
@@ -122,7 +123,7 @@ func AgentsTest(cfg *config.Config, email string) error {
 		return fmt.Errorf("agent-manager reports identity=%q writesAsCaller=%v: it is not running with downstream OAuth (umbrella agent-manager.oauth.downstream)", info.Identity, info.Capabilities["writesAsCaller"])
 	}
 	if got := info.APIVersions.AgentTemplate; got != agentTemplateAPIVersion {
-		return fmt.Errorf("agent-manager composes apiVersions.agentTemplate=%q, the platform's agents are %s AgentTemplates — this agent-manager does not speak kagent API v2", got, agentTemplateAPIVersion)
+		return fmt.Errorf("agent-manager composes apiVersions.agentTemplate=%q, the platform's agents are %s AgentTemplates paired by an Agent — this agent-manager does not speak this kagent API", got, agentTemplateAPIVersion)
 	}
 	if !agentChartLine(info.Chart.Semver) || info.Chart.OCIURL != agentChartURL {
 		return fmt.Errorf("agent-manager tracks the agent chart %s at %q, wanted %s on the %s line (Generic chart 1.x, or the meta chart's cap within it)", info.Chart.OCIURL, info.Chart.Semver, agentChartURL, agentChartRange)
@@ -225,7 +226,7 @@ func AgentsTest(cfg *config.Config, email string) error {
 		return fmt.Errorf("HelmRelease %s carries values.toolset=%v (declared %v), wanted %v", agentsTestAgent, toolset, declared, spec.Toolset)
 	}
 	if got := release.value("agent", "harness"); got != kagentHarness {
-		return fmt.Errorf("HelmRelease %s carries values.agent.harness=%q, wanted %s (the admission label's value)", agentsTestAgent, got, kagentHarness)
+		return fmt.Errorf("HelmRelease %s carries values.agent.harness=%q, wanted %s (the Agent's harnessRef)", agentsTestAgent, got, kagentHarness)
 	}
 	if got := release.skillCommits()[fixture.name()]; got != fixture.Commit {
 		return fmt.Errorf("HelmRelease %s pins skill %s at %q, wanted %s", agentsTestAgent, fixture.name(), got, fixture.Commit)
@@ -246,20 +247,20 @@ func AgentsTest(cfg *config.Config, email string) error {
 	note("HelmRelease managers %q, chartRef OCIRepository/%s, serviceAccountName %q, values.toolset %v, agent.harness %s, skill %s @ %.12s; OCIRepository %s -> %s @ %s (managers %q); agent-manager logged the write with caller=%s",
 		release.managers, release.Spec.ChartRef.Name, release.Spec.ServiceAccountName, toolset, kagentHarness, fixture.name(), fixture.Commit, agentChartOCIRepository, chartURL, chartRange, sourceManagers, user.Email)
 
-	step("The render: AgentTemplate %s with the Harness label and the display-name and icon-url annotations, its RemoteMCPServer %s carrying %s", agentsTestAgent, agentsTestAgent, toolsetHeader)
-	template, err := waitAgentTemplate(agentsTestAgent)
+	step("The render: AgentTemplate %s with the display-name and icon-url annotations, Agent %s pairing it with Harness %s, its RemoteMCPServer %s carrying %s", agentsTestAgent, agentsTestAgent, kagentHarness, agentsTestAgent, toolsetHeader)
+	template, agent, err := waitAgentRender(agentsTestAgent)
 	if err != nil {
 		return err
 	}
-	if err := assertAgentRender(template, spec, musterURL); err != nil {
+	if err := assertAgentRender(template, agent, spec, musterURL); err != nil {
 		return err
 	}
 	skill := template.skill(fixture.name())
 	if skill == nil || skill.Source.Git == nil || skill.Source.Git.URL != fixture.Repo || skill.Source.Git.Commit != fixture.Commit || skill.Source.Path != fixture.Skill {
 		return fmt.Errorf("AgentTemplate %s carries skill %s as %+v, wanted {git: {%s, %s}, path %s}", agentsTestAgent, fixture.name(), skill, fixture.Repo, fixture.Commit, fixture.Skill)
 	}
-	note("%s=%s, %s=%q, %s=%s, ModelConfig %s, skill %s @ %.12s; RemoteMCPServer %s -> %s with %s=%s, %s=%s; both rendered by HelmRelease %s",
-		harnessLabel, kagentHarness, displayNameAnnotation, agentsTestDisplayName, iconURLAnnotation, agentsTestIconURL, modelConfig, fixture.name(), fixture.Commit,
+	note("Agent harnessRef %s, %s=%q, %s=%s, ModelConfig %s, skill %s @ %.12s; RemoteMCPServer %s -> %s with %s=%s, %s=%s; all rendered by HelmRelease %s",
+		kagentHarness, displayNameAnnotation, agentsTestDisplayName, iconURLAnnotation, agentsTestIconURL, modelConfig, fixture.name(), fixture.Commit,
 		agentsTestAgent, musterURL, toolsetHeader, agentsTestToolset, discoveryLabel, discoveryDisabledValue, agentsTestAgent)
 
 	step("Waiting for %s to be Ready on Harness %s (the golden boot fetches the skill)", agentsTestAgent, kagentHarness)
@@ -270,10 +271,10 @@ func AgentsTest(cfg *config.Config, email string) error {
 	if !readiness.ready {
 		return readiness.failure(agentsTestAgent, agentsTestReadyTimeout)
 	}
-	harness := readiness.template.harness(kagentHarness)
+	harness := readiness.agent.Status
 	note("Ready after %s: revision %.12s%s", readiness.elapsed.Round(time.Second), harness.LatestSuccessfulRevision, warningsNote(harness.Warnings))
 
-	step("%sget_agent_status agrees with status.harnesses[]: ready on revision %.12s", agentManagerToolPrefix, harness.LatestSuccessfulRevision)
+	step("%sget_agent_status agrees with the Agent's status: ready on revision %.12s", agentManagerToolPrefix, harness.LatestSuccessfulRevision)
 	status, err := waitAgentVerdict(session, agentsTestAgent, verdictReady)
 	if err != nil {
 		return err
@@ -364,7 +365,7 @@ func AgentsTest(cfg *config.Config, email string) error {
 		if !readiness.ready {
 			return readiness.failure(agentsTestAgent, agentsTestReadyTimeout)
 		}
-		note("Ready again after %s: revision %.12s", readiness.elapsed.Round(time.Second), readiness.template.harness(kagentHarness).LatestSuccessfulRevision)
+		note("Ready again after %s: revision %.12s", readiness.elapsed.Round(time.Second), readiness.agent.Status.LatestSuccessfulRevision)
 	}
 
 	// The user's identity, not a ServiceAccount: a viewer (the view
@@ -415,7 +416,7 @@ func AgentsTest(cfg *config.Config, email string) error {
 	}
 	note("nothing beyond what every ServiceAccount holds (%d rows: discovery, self-subject reviews%s)", len(baseline), bootstrapExtras(baseline))
 
-	step("A template no Harness admits: HelmRelease %s with agent.harness %s applied directly — get_agent_status says failed with the reason", agentsTestUnadmitted, agentsTestNoHarness)
+	step("An Agent on a Harness that does not exist: HelmRelease %s with agent.harness %s applied directly — get_agent_status says failed with the reason", agentsTestUnadmitted, agentsTestNoHarness)
 	unadmittedSpec := agentSpec{
 		Name: agentsTestUnadmitted, ModelConfig: modelConfig, Toolset: []string{presetNone}, Harness: agentsTestNoHarness,
 		Description: "Throwaway agent of `agentlab agents-test` on a Harness that does not exist; deleted by the same run.",
@@ -427,15 +428,15 @@ func AgentsTest(cfg *config.Config, email string) error {
 	if err != nil {
 		return err
 	}
-	if unadmitted.ready || !unadmitted.terminal || !strings.Contains(unadmitted.reason, "no Harness admits") {
-		return fmt.Errorf("the template on Harness %q: ready=%v terminal=%v (%s); wanted the not-admitted verdict from status.harnesses[] (empty, observedGeneration caught up)", agentsTestNoHarness, unadmitted.ready, unadmitted.terminal, unadmitted.reason)
+	if unadmitted.ready || !unadmitted.terminal || !strings.Contains(unadmitted.reason, agentsTestNoHarness) {
+		return fmt.Errorf("the Agent on Harness %q: ready=%v terminal=%v (%s); wanted the terminal verdict from the Agent's status (the Harness reference unresolved, or the Agent pinned to another Harness)", agentsTestNoHarness, unadmitted.ready, unadmitted.terminal, unadmitted.reason)
 	}
 	failed, err := waitAgentVerdict(session, agentsTestUnadmitted, verdictFailed)
 	if err != nil {
 		return err
 	}
-	if !strings.Contains(failed.Summary, "no Harness admits") || !strings.Contains(failed.Summary, kagentHarness) {
-		return fmt.Errorf("get_agent_status says %s — %s; wanted the not-admitted reason naming the Harnesses of the namespace (%s)", failed.Verdict, failed.Summary, kagentHarness)
+	if !strings.Contains(failed.Summary, agentsTestNoHarness) {
+		return fmt.Errorf("get_agent_status says %s — %s; wanted the reason naming the missing Harness %s", failed.Verdict, failed.Summary, agentsTestNoHarness)
 	}
 	note("cluster: %s", unadmitted.reason)
 	note("get_agent_status: %s — %s", failed.Verdict, excerpt(failed.Summary, 240))
@@ -474,9 +475,9 @@ func AgentsTest(cfg *config.Config, email string) error {
 	fmt.Println()
 	fmt.Printf("PASS: muster aggregates %s* and agent-manager reports identity caller on the agent chart %s (Harness %s)\n", agentManagerToolPrefix, agentChartRange, kagentHarness)
 	fmt.Printf("PASS: create_agent without a toolset is refused naming the presets; with [%s] %s created -> Ready on Harness %s -> a turn as the person -> updated -> refreshSkills -> deleted %s through call_tool, every write requestedBy=%s and logged with caller=\n", agentsTestToolset, user.Email, kagentHarness, agentsTestAgent, user.Email)
-	fmt.Printf("PASS: the HelmRelease carries the %s field manager, values.toolset [%s], agent.harness %s and the skill %s pinned to a commit next to OCIRepository %s at %s; its render is the AgentTemplate with %s=%s, %s and %s, the skill entry, and RemoteMCPServer %s carrying %s=%s (%s=%s); delete_agent removes the release and the render\n",
-		agentManagerFieldManager, agentsTestToolset, kagentHarness, fixture.name(), agentChartOCIRepository, agentChartRange, harnessLabel, kagentHarness, displayNameAnnotation, iconURLAnnotation, agentsTestAgent, toolsetHeader, agentsTestToolset, discoveryLabel, discoveryDisabledValue)
-	fmt.Printf("PASS: get_agent_status agrees with status.harnesses[] — ready on revision %.12s, and failed with the not-admitted reason for a template on Harness %q; refreshSkills re-pins %s to %s's head %.12s\n", harness.LatestSuccessfulRevision, agentsTestNoHarness, fixture.name(), fixture.Repo, head)
+	fmt.Printf("PASS: the HelmRelease carries the %s field manager, values.toolset [%s], agent.harness %s and the skill %s pinned to a commit next to OCIRepository %s at %s; its render is the AgentTemplate with %s and %s and the skill entry, the Agent referencing Harness %s, and RemoteMCPServer %s carrying %s=%s (%s=%s); delete_agent removes the release and the render\n",
+		agentManagerFieldManager, agentsTestToolset, kagentHarness, fixture.name(), agentChartOCIRepository, agentChartRange, displayNameAnnotation, iconURLAnnotation, kagentHarness, agentsTestAgent, toolsetHeader, agentsTestToolset, discoveryLabel, discoveryDisabledValue)
+	fmt.Printf("PASS: get_agent_status agrees with the Agent's status — ready on revision %.12s, and failed with the reason for an Agent on Harness %q; refreshSkills re-pins %s to %s's head %.12s\n", harness.LatestSuccessfulRevision, agentsTestNoHarness, fixture.name(), fixture.Repo, head)
 	if viewer != nil {
 		fmt.Printf("PASS: %s's create is Forbidden by the apiserver as User \"oidc:%s\" (user RBAC, not the ServiceAccount's)\n", viewer.Email, viewer.Email)
 	}
@@ -489,15 +490,41 @@ func AgentsTest(cfg *config.Config, email string) error {
 // leaves in place.
 const defaultMusterMCPURL = "http://muster.agent-platform.svc.cluster.local:8090/mcp"
 
-// assertAgentRender checks the two objects the chart renders for a spec: the
-// AgentTemplate (the Harness label, the annotations, the model, the prompt,
-// the provenance label) and, unless the spec is chat-only, the agent's
-// RemoteMCPServer (muster's URL, the toolset header, discovery off) bound as
-// its tools.
-func assertAgentRender(t *agentTemplate, spec agentSpec, musterURL string) error {
+// waitAgentRender waits for the two kagent objects an agent's release
+// renders, the AgentTemplate and the Agent of its name, and returns them.
+func waitAgentRender(name string) (*agentTemplate, *agentObject, error) {
+	template, err := waitAgentTemplate(name)
+	if err != nil {
+		return nil, nil, err
+	}
+	var agent *agentObject
+	var lastErr error
+	found := waitFor(int(time.Minute/pollInterval), pollInterval, func() bool {
+		agent, lastErr = readAgent(name)
+		return lastErr == nil
+	})
+	if !found {
+		return nil, nil, fmt.Errorf("no Agent %s within 1 min of its AgentTemplate (the HelmRelease's render): %w;\ncheck `kubectl -n %s get %s %s -o yaml`", name, lastErr, kagentNamespace, agentResource, name)
+	}
+	return template, agent, nil
+}
+
+// assertAgentRender checks the three objects the chart renders for a spec:
+// the AgentTemplate (the annotations, the model, the prompt, the provenance
+// label), the Agent (pairing that template with the spec's Harness by
+// reference, the provenance label) and, unless the spec is chat-only, the
+// agent's RemoteMCPServer (muster's URL, the toolset header, discovery off)
+// bound as the template's tools.
+func assertAgentRender(t *agentTemplate, agent *agentObject, spec agentSpec, musterURL string) error {
 	name := spec.Name
-	if got := t.Metadata.Labels[harnessLabel]; got != spec.harnessValue() {
-		return fmt.Errorf("AgentTemplate %s carries %s=%q, wanted %q (the Harness admits by it)", name, harnessLabel, got, spec.harnessValue())
+	if got := agent.harnessName(); got != spec.harnessValue() {
+		return fmt.Errorf("Agent %s references Harness %q, wanted %q (agent.harness)", name, got, spec.harnessValue())
+	}
+	if got := agent.templateName(); got != name {
+		return fmt.Errorf("Agent %s references AgentTemplate %q, wanted %s", name, got, name)
+	}
+	if got := agent.Metadata.Labels[fluxHelmReleaseNameLabel]; got != name {
+		return fmt.Errorf("Agent %s carries %s=%q, wanted %s (rendered by the agent's HelmRelease)", name, fluxHelmReleaseNameLabel, got, name)
 	}
 	if got := t.Metadata.Labels[fluxHelmReleaseNameLabel]; got != name {
 		return fmt.Errorf("AgentTemplate %s carries %s=%q, wanted %s (rendered by the agent's HelmRelease)", name, fluxHelmReleaseNameLabel, got, name)

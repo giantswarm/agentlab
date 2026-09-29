@@ -29,12 +29,13 @@ import (
 )
 
 const (
-	fakeInstanceID    = "0192f1c2-7d1e-7a3b-9c4d-000000000001"
+	fakeSessionID     = "0192f1c2-7d1e-7a3b-9c4d-000000000001"
 	fakeToken         = "user-jwt"
 	fakeTaskID        = "task-1"
 	fakeContextID     = "ctx-1"
 	fakeTool          = "filter_tools"
 	kindAgentTemplate = "AgentTemplate"
+	kindAgent         = "Agent"
 	testWorkerPool    = "kagent-default"
 	testWorkerPod     = "kagent-default-abc"
 	testWorkerIP      = "10.0.0.7"
@@ -43,29 +44,31 @@ const (
 )
 
 // fakeKagent is an in-process kagent API v2 controller behind a fake edge:
-// the A2A v1 service and the AgentTemplate, AgentInstance and System
+// the A2A v1 service and the AgentTemplate, Agent, Session and System
 // services on a bufconn. It records the metadata of every call so the tests
 // assert the wire contract, refuses a call without a bearer the way the
 // edge's JWT policy does, and implements the controller's idempotent create
-// and FailedPrecondition while a template compiles.
+// and FailedPrecondition while an Agent compiles.
 type fakeKagent struct {
 	a2apb.UnimplementedA2AServiceServer
 	apiv1alpha1.UnimplementedAgentTemplateServiceServer
-	apiv1alpha1.UnimplementedAgentInstanceServiceServer
+	apiv1alpha1.UnimplementedAgentServiceServer
+	apiv1alpha1.UnimplementedSessionServiceServer
 	apiv1alpha1.UnimplementedSystemServiceServer
 
 	mu sync.Mutex
 
 	templates []*apiv1alpha1.AgentTemplate
-	instances map[string]*apiv1alpha1.AgentInstance
+	agents    []*apiv1alpha1.Agent
+	sessions  map[string]*apiv1alpha1.Session
 	byRequest map[string]string
 	tasks     map[a2a.TaskID]*a2a.Task
 	// events are played back by SendStreamingMessage; eventsByTask when the
 	// message resumes a task.
 	events       []a2a.Event
 	eventsByTask map[a2a.TaskID][]a2a.Event
-	// compiling makes CreateAgentInstance answer FailedPrecondition that
-	// many times first.
+	// compiling makes CreateSession answer FailedPrecondition that many
+	// times first.
 	compiling int
 
 	// substrate is the summary GetSubstrateSummary answers; actorPages the
@@ -78,13 +81,14 @@ type fakeKagent struct {
 
 	calls    map[string][]metadata.MD
 	sent     []*a2a.Message
+	tenants  []string
 	canceled []a2a.TaskID
 	deleted  []string
 }
 
 func newFakeKagent() *fakeKagent {
 	return &fakeKagent{
-		instances:    map[string]*apiv1alpha1.AgentInstance{},
+		sessions:     map[string]*apiv1alpha1.Session{},
 		byRequest:    map[string]string{},
 		tasks:        map[a2a.TaskID]*a2a.Task{},
 		eventsByTask: map[a2a.TaskID][]a2a.Event{},
@@ -100,7 +104,8 @@ func (f *fakeKagent) serve(t *testing.T, token string) *kagentAPI {
 	srv := grpc.NewServer(grpc.UnknownServiceHandler(f.legacySubstrateStatus))
 	a2apb.RegisterA2AServiceServer(srv, f)
 	apiv1alpha1.RegisterAgentTemplateServiceServer(srv, f)
-	apiv1alpha1.RegisterAgentInstanceServiceServer(srv, f)
+	apiv1alpha1.RegisterAgentServiceServer(srv, f)
+	apiv1alpha1.RegisterSessionServiceServer(srv, f)
 	apiv1alpha1.RegisterSystemServiceServer(srv, f)
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
@@ -145,34 +150,55 @@ func edge(ctx context.Context) (string, error) {
 	return strings.TrimPrefix(auth[0], "Bearer "), nil
 }
 
-// routed mirrors the controller's A2A gateway: exactly one instance id, the
-// bearer, an instance the person owns.
-func (f *fakeKagent) routed(ctx context.Context) (*apiv1alpha1.AgentInstance, error) {
+// routed mirrors the controller's A2A gateway: the bearer, and the tenant
+// `<namespace>/<name>` naming an Agent one of the person's sessions is of.
+func (f *fakeKagent) routed(ctx context.Context, tenant string) error {
 	if _, err := edge(ctx); err != nil {
-		return nil, err
+		return err
 	}
-	ids := metadata.ValueFromIncomingContext(ctx, instanceIDMetadata)
-	if len(ids) != 1 {
-		return nil, status.Errorf(codes.InvalidArgument, "exactly one %s header is required", instanceIDMetadata)
+	namespace, name, ok := strings.Cut(tenant, "/")
+	if !ok {
+		return status.Error(codes.InvalidArgument, "Agent tenant must be namespace/name")
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	inst, ok := f.instances[ids[0]]
-	if !ok {
-		return nil, status.Error(codes.PermissionDenied, "not authorized")
+	f.tenants = append(f.tenants, tenant)
+	for _, session := range f.sessions {
+		if session.GetAgent().GetNamespace() == namespace && session.GetAgent().GetName() == name {
+			return nil
+		}
 	}
-	return inst, nil
+	return status.Error(codes.PermissionDenied, "not authorized")
+}
+
+// sessionOf mirrors the gateway's resolution of a message: its context id is
+// the session's, or a paused task's session.
+func (f *fakeKagent) sessionOf(msg *a2a.Message) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if msg.TaskID != "" {
+		return nil
+	}
+	for _, session := range f.sessions {
+		if session.GetContextId() == msg.ContextID {
+			return nil
+		}
+	}
+	return status.Errorf(codes.PermissionDenied, "no session with context %q", msg.ContextID)
 }
 
 func (f *fakeKagent) SendStreamingMessage(req *a2apb.SendMessageRequest, stream grpc.ServerStreamingServer[a2apb.StreamResponse]) error {
 	ctx := stream.Context()
 	f.record(ctx, "SendStreamingMessage")
-	if _, err := f.routed(ctx); err != nil {
+	if err := f.routed(ctx, req.GetTenant()); err != nil {
 		return err
 	}
 	msg, err := pbconv.FromProtoMessage(req.GetMessage())
 	if err != nil {
 		return status.Error(codes.InvalidArgument, err.Error())
+	}
+	if err := f.sessionOf(msg); err != nil {
+		return err
 	}
 	f.mu.Lock()
 	f.sent = append(f.sent, msg)
@@ -195,7 +221,7 @@ func (f *fakeKagent) SendStreamingMessage(req *a2apb.SendMessageRequest, stream 
 
 func (f *fakeKagent) GetTask(ctx context.Context, req *a2apb.GetTaskRequest) (*a2apb.Task, error) {
 	f.record(ctx, "GetTask")
-	if _, err := f.routed(ctx); err != nil {
+	if err := f.routed(ctx, req.GetTenant()); err != nil {
 		return nil, err
 	}
 	f.mu.Lock()
@@ -207,9 +233,9 @@ func (f *fakeKagent) GetTask(ctx context.Context, req *a2apb.GetTaskRequest) (*a
 	return pbconv.ToProtoTask(task)
 }
 
-func (f *fakeKagent) ListTasks(ctx context.Context, _ *a2apb.ListTasksRequest) (*a2apb.ListTasksResponse, error) {
+func (f *fakeKagent) ListTasks(ctx context.Context, req *a2apb.ListTasksRequest) (*a2apb.ListTasksResponse, error) {
 	f.record(ctx, "ListTasks")
-	if _, err := f.routed(ctx); err != nil {
+	if err := f.routed(ctx, req.GetTenant()); err != nil {
 		return nil, err
 	}
 	f.mu.Lock()
@@ -235,7 +261,7 @@ func (f *fakeKagent) setTaskState(id a2a.TaskID, state a2a.TaskState) {
 
 func (f *fakeKagent) CancelTask(ctx context.Context, req *a2apb.CancelTaskRequest) (*a2apb.Task, error) {
 	f.record(ctx, "CancelTask")
-	if _, err := f.routed(ctx); err != nil {
+	if err := f.routed(ctx, req.GetTenant()); err != nil {
 		return nil, err
 	}
 	f.mu.Lock()
@@ -265,6 +291,22 @@ func (f *fakeKagent) ListAgentTemplates(ctx context.Context, req *apiv1alpha1.Li
 		}
 	}
 	return &apiv1alpha1.ListAgentTemplatesResponse{AgentTemplates: out}, nil
+}
+
+func (f *fakeKagent) ListAgents(ctx context.Context, req *apiv1alpha1.ListAgentsRequest) (*apiv1alpha1.ListAgentsResponse, error) {
+	f.record(ctx, "ListAgents")
+	if _, err := edge(ctx); err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []*apiv1alpha1.Agent
+	for _, a := range f.agents {
+		if a.GetRef().GetNamespace() == req.GetNamespace() {
+			out = append(out, a)
+		}
+	}
+	return &apiv1alpha1.ListAgentsResponse{Agents: out}, nil
 }
 
 func (f *fakeKagent) GetSubstrateSummary(ctx context.Context, _ *apiv1alpha1.GetSubstrateSummaryRequest) (*apiv1alpha1.GetSubstrateSummaryResponse, error) {
@@ -335,8 +377,8 @@ func (f *fakeKagent) GetCurrentUser(ctx context.Context, _ *apiv1alpha1.GetCurre
 	return &apiv1alpha1.GetCurrentUserResponse{Claims: value}, nil
 }
 
-func (f *fakeKagent) CreateAgentInstance(ctx context.Context, req *apiv1alpha1.CreateAgentInstanceRequest) (*apiv1alpha1.CreateAgentInstanceResponse, error) {
-	f.record(ctx, "CreateAgentInstance")
+func (f *fakeKagent) CreateSession(ctx context.Context, req *apiv1alpha1.CreateSessionRequest) (*apiv1alpha1.CreateSessionResponse, error) {
+	f.record(ctx, "CreateSession")
 	who, err := edge(ctx)
 	if err != nil {
 		return nil, err
@@ -345,41 +387,42 @@ func (f *fakeKagent) CreateAgentInstance(ctx context.Context, req *apiv1alpha1.C
 	defer f.mu.Unlock()
 	if f.compiling > 0 {
 		f.compiling--
-		return nil, status.Error(codes.FailedPrecondition, "AgentTemplate and Harness do not have a ready prepared revision")
+		return nil, status.Error(codes.FailedPrecondition, "Agent does not have a ready prepared revision")
 	}
 	key := who + "|" + req.GetRequestId()
 	if id, ok := f.byRequest[key]; ok {
-		return &apiv1alpha1.CreateAgentInstanceResponse{AgentInstance: f.instances[id]}, nil
+		return &apiv1alpha1.CreateSessionResponse{Session: f.sessions[id]}, nil
 	}
-	inst := &apiv1alpha1.AgentInstance{
-		Id:            fmt.Sprintf("0192f1c2-7d1e-7a3b-9c4d-%012d", len(f.instances)+1),
-		Creator:       who,
-		Harness:       req.GetHarness(),
-		AgentTemplate: req.GetAgentTemplate(),
-		State:         apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_READY,
-		ContextId:     fmt.Sprintf("ctx-%d", len(f.instances)+1),
+	n := len(f.sessions) + 1
+	session := &apiv1alpha1.Session{
+		Id:        fmt.Sprintf("0192f1c2-7d1e-7a3b-9c4d-%012d", n),
+		Creator:   who,
+		Agent:     req.GetAgent(),
+		State:     apiv1alpha1.RuntimeState_RUNTIME_STATE_READY,
+		Operation: apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_NONE,
 	}
-	f.instances[inst.Id] = inst
-	f.byRequest[key] = inst.Id
-	return &apiv1alpha1.CreateAgentInstanceResponse{AgentInstance: inst}, nil
+	session.ContextId = session.Id
+	f.sessions[session.Id] = session
+	f.byRequest[key] = session.Id
+	return &apiv1alpha1.CreateSessionResponse{Session: session}, nil
 }
 
-func (f *fakeKagent) GetAgentInstance(ctx context.Context, req *apiv1alpha1.GetAgentInstanceRequest) (*apiv1alpha1.GetAgentInstanceResponse, error) {
-	f.record(ctx, "GetAgentInstance")
+func (f *fakeKagent) GetSession(ctx context.Context, req *apiv1alpha1.GetSessionRequest) (*apiv1alpha1.GetSessionResponse, error) {
+	f.record(ctx, "GetSession")
 	if _, err := edge(ctx); err != nil {
 		return nil, err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	inst, ok := f.instances[req.GetAgentInstanceId()]
+	session, ok := f.sessions[req.GetSessionId()]
 	if !ok {
-		return nil, status.Error(codes.NotFound, "AgentInstance not found")
+		return nil, status.Error(codes.NotFound, "Session not found")
 	}
-	return &apiv1alpha1.GetAgentInstanceResponse{AgentInstance: inst}, nil
+	return &apiv1alpha1.GetSessionResponse{Session: session}, nil
 }
 
-func (f *fakeKagent) ListAgentInstances(ctx context.Context, req *apiv1alpha1.ListAgentInstancesRequest) (*apiv1alpha1.ListAgentInstancesResponse, error) {
-	f.record(ctx, "ListAgentInstances")
+func (f *fakeKagent) ListSessions(ctx context.Context, req *apiv1alpha1.ListSessionsRequest) (*apiv1alpha1.ListSessionsResponse, error) {
+	f.record(ctx, "ListSessions")
 	// The controller's validation of the page.
 	if limit := req.GetPage().GetLimit(); limit < 0 || limit > 100 {
 		return nil, status.Errorf(codes.InvalidArgument, "validation error: page.limit: must be greater than or equal to 0 and less than or equal to 100")
@@ -390,52 +433,63 @@ func (f *fakeKagent) ListAgentInstances(ctx context.Context, req *apiv1alpha1.Li
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	var out []*apiv1alpha1.AgentInstance
-	for _, inst := range f.instances {
-		if inst.GetCreator() != who {
+	var out []*apiv1alpha1.Session
+	for _, session := range f.sessions {
+		if session.GetCreator() != who {
 			continue
 		}
-		if tpl := req.GetAgentTemplate(); tpl != nil && (inst.GetAgentTemplate().GetNamespace() != tpl.GetNamespace() || inst.GetAgentTemplate().GetName() != tpl.GetName()) {
+		if agent := req.GetAgent(); agent != nil && (session.GetAgent().GetNamespace() != agent.GetNamespace() || session.GetAgent().GetName() != agent.GetName()) {
 			continue
 		}
-		out = append(out, inst)
+		out = append(out, session)
 	}
-	return &apiv1alpha1.ListAgentInstancesResponse{AgentInstances: out, Page: &apiv1alpha1.PageResponse{}}, nil
+	return &apiv1alpha1.ListSessionsResponse{Sessions: out, Page: &apiv1alpha1.PageResponse{}}, nil
 }
 
-func (f *fakeKagent) DeleteAgentInstance(ctx context.Context, req *apiv1alpha1.DeleteAgentInstanceRequest) (*apiv1alpha1.DeleteAgentInstanceResponse, error) {
-	f.record(ctx, "DeleteAgentInstance")
+func (f *fakeKagent) DeleteSession(ctx context.Context, req *apiv1alpha1.DeleteSessionRequest) (*apiv1alpha1.DeleteSessionResponse, error) {
+	f.record(ctx, "DeleteSession")
 	if _, err := edge(ctx); err != nil {
 		return nil, err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	inst, ok := f.instances[req.GetAgentInstanceId()]
+	session, ok := f.sessions[req.GetSessionId()]
 	if !ok {
-		return nil, status.Error(codes.NotFound, "AgentInstance not found")
+		return nil, status.Error(codes.NotFound, "Session not found")
 	}
-	f.deleted = append(f.deleted, req.GetAgentInstanceId())
-	delete(f.instances, req.GetAgentInstanceId())
-	return &apiv1alpha1.DeleteAgentInstanceResponse{AgentInstance: inst}, nil
+	f.deleted = append(f.deleted, req.GetSessionId())
+	delete(f.sessions, req.GetSessionId())
+	return &apiv1alpha1.DeleteSessionResponse{Session: session}, nil
 }
 
-// readyFake is a fake with one instance of the proof's template, the shape
-// most tests start from.
+// readyFake is a fake with one session of the proof's Agent, the shape most
+// tests start from.
 func readyFake(t *testing.T) *fakeKagent {
 	t.Helper()
 	f := newFakeKagent()
-	f.instances[fakeInstanceID] = &apiv1alpha1.AgentInstance{
-		Id: fakeInstanceID, Creator: fakeToken, ContextId: fakeContextID,
-		Harness:       &apiv1alpha1.ResourceReference{Namespace: kagentNamespace, Name: kagentHarness},
-		AgentTemplate: &apiv1alpha1.ResourceReference{Namespace: kagentNamespace, Name: a2aTestAgent},
-		State:         apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_READY,
-	}
+	f.sessions[fakeSessionID] = fakeSession(fakeSessionID, fakeToken, a2aTestAgent)
 	return f
+}
+
+// fakeSession is one READY session of an Agent of the kagent namespace, as
+// the controller serves it to the person whose bearer is given; its context
+// id is fakeContextID for fakeSessionID and the id itself otherwise.
+func fakeSession(id, creator, agent string) *apiv1alpha1.Session {
+	contextID := id
+	if id == fakeSessionID {
+		contextID = fakeContextID
+	}
+	return &apiv1alpha1.Session{
+		Id: id, Creator: creator, ContextId: contextID,
+		Agent:     &apiv1alpha1.ResourceReference{Namespace: kagentNamespace, Name: agent},
+		State:     apiv1alpha1.RuntimeState_RUNTIME_STATE_READY,
+		Operation: apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_NONE,
+	}
 }
 
 // fakeTemplate builds an AgentTemplate the way the controller serves it: the
 // whole CR as a StructuredObject plus the denormalised fields.
-func fakeTemplate(t *testing.T, name string, annotations map[string]any, admitting []string, harnesses []any) *apiv1alpha1.AgentTemplate {
+func fakeTemplate(t *testing.T, name string, annotations map[string]any) *apiv1alpha1.AgentTemplate {
 	t.Helper()
 	meta := map[string]any{nameKey: name, "namespace": kagentNamespace}
 	if annotations != nil {
@@ -443,31 +497,57 @@ func fakeTemplate(t *testing.T, name string, annotations map[string]any, admitti
 	}
 	value, err := structpb.NewStruct(map[string]any{
 		"apiVersion": agentTemplateAPIVersion, "kind": kindAgentTemplate, fieldMetadata: meta,
-		fieldSpec:   map[string]any{descriptionKey: "Proof agent " + name},
-		fieldStatus: map[string]any{"harnesses": harnesses},
+		fieldSpec: map[string]any{descriptionKey: "Proof agent " + name},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return &apiv1alpha1.AgentTemplate{
-		Ref:                &apiv1alpha1.ResourceReference{Namespace: kagentNamespace, Name: name},
-		Resource:           &apiv1alpha1.StructuredObject{ApiVersion: agentTemplateAPIVersion, Kind: kindAgentTemplate, Value: value},
-		Description:        "Proof agent " + name,
-		AdmittingHarnesses: admitting,
+		Ref:         &apiv1alpha1.ResourceReference{Namespace: kagentNamespace, Name: name},
+		Resource:    &apiv1alpha1.StructuredObject{ApiVersion: agentTemplateAPIVersion, Kind: kindAgentTemplate, Value: value},
+		Description: "Proof agent " + name,
 	}
 }
 
-func fakeHarnessStatus(harness string, ready bool, message string) map[string]any {
+// fakeAgent builds an Agent the way the controller serves it: the whole CR
+// as a StructuredObject, referencing the template and the Harness, with the
+// annotations and the Ready condition given (nil conditions: no status yet).
+func fakeAgent(t *testing.T, name, template, harness string, annotations map[string]any, conditions []any) *apiv1alpha1.Agent {
+	t.Helper()
+	meta := map[string]any{nameKey: name, "namespace": kagentNamespace}
+	if annotations != nil {
+		meta["annotations"] = annotations
+	}
+	status := map[string]any{}
+	if conditions != nil {
+		status[crConditions] = conditions
+	}
+	value, err := structpb.NewStruct(map[string]any{
+		"apiVersion": kagentAPIVersion, "kind": kindAgent, fieldMetadata: meta,
+		fieldSpec:   map[string]any{"templateRef": map[string]any{nameKey: template}, "harnessRef": map[string]any{nameKey: harness}},
+		fieldStatus: status,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &apiv1alpha1.Agent{
+		Ref:      &apiv1alpha1.ResourceReference{Namespace: kagentNamespace, Name: name},
+		Resource: &apiv1alpha1.StructuredObject{ApiVersion: kagentAPIVersion, Kind: kindAgent, Value: value},
+	}
+}
+
+// fakeReady is an Agent's Ready condition as the controller writes it.
+func fakeReady(ready bool, message string) []any {
 	st := condFalseStatus
 	if ready {
 		st = conditionTrue
 	}
-	return map[string]any{"harness": harness, fieldConditions: []any{map[string]any{fieldType: conditionReady, fieldStatus: st, fieldReason: "Compiled", fieldMessage: message}}}
+	return []any{map[string]any{fieldType: conditionReady, fieldStatus: st, fieldReason: "Compiled", fieldMessage: message}}
 }
 
-// TestKagentAPIWireContract: every A2A call rides the person's bearer,
-// exactly one instance route and the HITL extension request as gRPC
-// metadata; the message keeps no context id of its own; the events fold
+// TestKagentAPIWireContract: every A2A call rides the person's bearer and
+// the HITL extension request as gRPC metadata and names the Agent as its
+// tenant; the message carries the session's context id; the events fold
 // into the answer.
 func TestKagentAPIWireContract(t *testing.T) {
 	f := readyFake(t)
@@ -481,7 +561,7 @@ func TestKagentAPIWireContract(t *testing.T) {
 	}
 	api := f.serve(t, fakeToken)
 
-	got, err := api.turn(t.Context(), fakeInstanceID, userMessage("ping"))
+	got, err := api.turn(t.Context(), f.sessions[fakeSessionID], userMessage("ping"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -495,13 +575,13 @@ func TestKagentAPIWireContract(t *testing.T) {
 	if want := []string{"Bearer " + fakeToken}; !slices.Equal(md.Get(authorizationMetadata), want) {
 		t.Errorf("authorization = %v", md.Get(authorizationMetadata))
 	}
-	if want := []string{fakeInstanceID}; !slices.Equal(md.Get(instanceIDMetadata), want) {
-		t.Errorf("exactly one instance route wanted, got %v", md.Get(instanceIDMetadata))
+	if want := []string{kagentNamespace + "/" + a2aTestAgent}; !slices.Equal(f.tenants, want) {
+		t.Errorf("the Agent as the tenant wanted, got %v", f.tenants)
 	}
 	if !slices.Contains(md.Get("a2a-extensions"), hitlExtensionURI) {
 		t.Errorf("the HITL extension is not requested: a2a-extensions = %v", md.Get("a2a-extensions"))
 	}
-	if len(f.sent) != 1 || f.sent[0].ContextID != "" || f.sent[0].Parts[0].Text() != "ping" || f.sent[0].TaskID != "" {
+	if len(f.sent) != 1 || f.sent[0].ContextID != fakeContextID || f.sent[0].Parts[0].Text() != "ping" || f.sent[0].TaskID != "" {
 		t.Errorf("sent %+v", f.sent)
 	}
 }
@@ -518,7 +598,7 @@ func TestKagentAPIWithoutToken(t *testing.T) {
 	if got := f.lastMD("GetCurrentUser").Get(authorizationMetadata); len(got) != 0 {
 		t.Errorf("a client for nobody sent authorization %v", got)
 	}
-	_, err = api.turn(t.Context(), fakeInstanceID, userMessage("ping"))
+	_, err = api.turn(t.Context(), f.sessions[fakeSessionID], userMessage("ping"))
 	if !isUnauthenticated(err) {
 		t.Errorf("SendStreamingMessage without a token: %v", err)
 	}
@@ -538,7 +618,7 @@ func TestKagentAPIForgedUserID(t *testing.T) {
 	if principalOf(claims) != fakeToken || claims["sent_x_user_id"] != a2aTestForgedUser {
 		t.Errorf("claims = %v", claims)
 	}
-	if _, err := api.getTask(t.Context(), fakeInstanceID, "nothing"); !errors.Is(err, a2a.ErrTaskNotFound) {
+	if _, err := api.getTask(t.Context(), f.sessions[fakeSessionID], "nothing"); !errors.Is(err, a2a.ErrTaskNotFound) {
 		t.Fatalf("GetTask: %v", err)
 	}
 	if got := f.lastMD("GetTask").Get(userIDHeader); !slices.Equal(got, []string{a2aTestForgedUser}) {
@@ -549,43 +629,52 @@ func TestKagentAPIForgedUserID(t *testing.T) {
 	}
 }
 
-// TestCreateInstance: the create waits through FailedPrecondition while
-// the template compiles, is idempotent on request_id, lists and deletes.
-func TestCreateInstance(t *testing.T) {
+// TestCreateSession: the create waits through FailedPrecondition while the
+// Agent compiles, is idempotent on request_id, lists (all, or one Agent's)
+// and deletes.
+func TestCreateSession(t *testing.T) {
 	f := newFakeKagent()
 	f.compiling = 1
 	api := f.serve(t, fakeToken)
-	first, err := api.createInstance(t.Context(), a2aTestAgent, "req-1")
+	first, err := api.createSession(t.Context(), a2aTestAgent, "req-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.GetCreator() != fakeToken || first.GetHarness().GetName() != kagentHarness || first.GetAgentTemplate().GetName() != a2aTestAgent || instanceState(first) != "READY" {
+	if first.GetCreator() != fakeToken || first.GetAgent().GetName() != a2aTestAgent || first.GetAgent().GetNamespace() != kagentNamespace || sessionState(first) != "READY" {
 		t.Errorf("created %v", first)
 	}
-	if calls := len(f.calls["CreateAgentInstance"]); calls != 2 {
+	if calls := len(f.calls["CreateSession"]); calls != 2 {
 		t.Errorf("FailedPrecondition was not waited through: %d creates", calls)
 	}
-	again, err := api.createInstance(t.Context(), a2aTestAgent, "req-1")
+	again, err := api.createSession(t.Context(), a2aTestAgent, "req-1")
 	if err != nil || again.GetId() != first.GetId() {
 		t.Errorf("the same request_id: %v %v", again.GetId(), err)
 	}
-	other, err := api.createInstance(t.Context(), a2aTestAgent, "req-2")
+	other, err := api.createSession(t.Context(), a2aTestAgent, "req-2")
 	if err != nil || other.GetId() == first.GetId() {
 		t.Errorf("another request_id: %v %v", other.GetId(), err)
 	}
-	coding, err := api.createInstanceOn(t.Context(), testOtherHarness, a2aTestAgent, "req-3")
-	if err != nil || coding.GetHarness().GetName() != testOtherHarness {
-		t.Errorf("an instance on another Harness: %v %v", coding.GetHarness(), err)
+	coding, err := api.createSession(t.Context(), "coding", "req-3")
+	if err != nil || coding.GetAgent().GetName() != "coding" {
+		t.Errorf("a session of another Agent: %v %v", coding.GetAgent(), err)
 	}
-	listed, err := api.listInstances(t.Context())
+	listed, err := api.listSessions(t.Context())
 	if err != nil || len(listed) != 3 {
 		t.Errorf("listed %d (%v)", len(listed), err)
 	}
-	if err := api.deleteInstance(t.Context(), first.GetId()); err != nil {
+	ofAgent, err := api.listSessionsOf(t.Context(), agentRef(a2aTestAgent))
+	if err != nil || len(ofAgent) != 2 {
+		t.Errorf("listed %d of %s (%v)", len(ofAgent), a2aTestAgent, err)
+	}
+	got, err := api.getSession(t.Context(), first.GetId())
+	if err != nil || got.GetContextId() != first.GetId() {
+		t.Errorf("GetSession: %v %v", got, err)
+	}
+	if err := api.deleteSession(t.Context(), first.GetId()); err != nil {
 		t.Error(err)
 	}
-	if err := api.deleteInstance(t.Context(), first.GetId()); err != nil {
-		t.Errorf("deleting a deleted instance is success: %v", err)
+	if err := api.deleteSession(t.Context(), first.GetId()); err != nil {
+		t.Errorf("deleting a deleted session is success: %v", err)
 	}
 	if !slices.Equal(f.deleted, []string{first.GetId()}) {
 		t.Errorf("deleted %v", f.deleted)
@@ -619,7 +708,8 @@ func TestHITLRoundTrip(t *testing.T) {
 	f.tasks[fakeTaskID] = &a2a.Task{ID: fakeTaskID, ContextID: fakeContextID, Status: a2a.TaskStatus{State: a2a.TaskStateInputRequired, Message: prompt}}
 	api := f.serve(t, fakeToken)
 
-	paused, err := api.turn(t.Context(), fakeInstanceID, userMessage(a2aToolPrompt))
+	session := f.sessions[fakeSessionID]
+	paused, err := api.turn(t.Context(), session, userMessage(a2aToolPrompt))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -630,7 +720,7 @@ func TestHITLRoundTrip(t *testing.T) {
 		t.Errorf("a paused turn is no answer: %v", err)
 	}
 
-	resumed, err := api.decide(t.Context(), fakeInstanceID, paused, true, "")
+	resumed, err := api.decide(t.Context(), session, paused, true, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -666,11 +756,11 @@ func TestHITLRoundTrip(t *testing.T) {
 		t.Errorf("the rejection's transcript line = %q", got)
 	}
 
-	canceled, err := api.cancelTask(t.Context(), fakeInstanceID, fakeTaskID)
+	canceled, err := api.cancelTask(t.Context(), session, fakeTaskID)
 	if err != nil || canceled.Status.State != a2a.TaskStateCanceled || !slices.Equal(f.canceled, []a2a.TaskID{fakeTaskID}) {
 		t.Errorf("CancelTask: %v %v %v", canceled, err, f.canceled)
 	}
-	if got, err := api.getTask(t.Context(), fakeInstanceID, fakeTaskID); err != nil || got.Status.State != a2a.TaskStateCanceled {
+	if got, err := api.getTask(t.Context(), session, fakeTaskID); err != nil || got.Status.State != a2a.TaskStateCanceled {
 		t.Errorf("GetTask after the cancel: %v %v", got, err)
 	}
 	if req := parseToolApprovalRequest(a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart("plain"))); req != nil {
@@ -678,45 +768,55 @@ func TestHITLRoundTrip(t *testing.T) {
 	}
 }
 
-// TestListingOf: the roster entry of a listed template — the annotations,
-// the admitting Harness that is Ready, the reason a template is not
-// selectable.
+// TestListingOf: the roster entry of a listed Agent — the template and the
+// Harness it pairs, the annotations (the Agent's, else its template's), Ready
+// as selectable, the reason an Agent is not.
 func TestListingOf(t *testing.T) {
 	f := newFakeKagent()
+	annotations := map[string]any{displayNameAnnotation: a2aTestDisplayName, iconURLAnnotation: a2aTestIconURL}
 	f.templates = []*apiv1alpha1.AgentTemplate{
-		fakeTemplate(t, a2aTestAgent, map[string]any{displayNameAnnotation: a2aTestDisplayName, iconURLAnnotation: a2aTestIconURL}, []string{kagentHarness}, []any{fakeHarnessStatus(kagentHarness, true, "")}),
-		fakeTemplate(t, "compiling", nil, []string{kagentHarness}, []any{fakeHarnessStatus(kagentHarness, false, "waiting for the ActorTemplate golden snapshot")}),
-		fakeTemplate(t, "orphan", nil, nil, nil),
-		fakeTemplate(t, "no-status-yet", nil, []string{kagentHarness}, nil),
+		fakeTemplate(t, a2aTestAgent, annotations),
+		fakeTemplate(t, "compiling", nil),
+	}
+	f.agents = []*apiv1alpha1.Agent{
+		fakeAgent(t, a2aTestAgent, a2aTestAgent, kagentHarness, nil, fakeReady(true, "")),
+		fakeAgent(t, "compiling", "compiling", kagentHarness, nil, fakeReady(false, "waiting for the ActorTemplate golden snapshot")),
+		fakeAgent(t, "annotated", "compiling", testOtherHarness, annotations, fakeReady(true, "")),
+		fakeAgent(t, "no-status-yet", "compiling", kagentHarness, nil, nil),
 	}
 	api := f.serve(t, fakeToken)
-	templates, err := api.listTemplates(t.Context())
-	if err != nil || len(templates) != 4 {
-		t.Fatalf("listed %d: %v", len(templates), err)
+	agents, templates, err := api.roster(t.Context())
+	if err != nil || len(agents) != 4 || len(templates) != 2 {
+		t.Fatalf("listed %d agents, %d templates: %v", len(agents), len(templates), err)
 	}
-	if got := f.lastMD("ListAgentTemplates").Get(authorizationMetadata); !slices.Equal(got, []string{"Bearer " + fakeToken}) {
-		t.Errorf("ListAgentTemplates carried authorization %v", got)
+	for _, method := range []string{"ListAgents", "ListAgentTemplates"} {
+		if got := f.lastMD(method).Get(authorizationMetadata); !slices.Equal(got, []string{"Bearer " + fakeToken}) {
+			t.Errorf("%s carried authorization %v", method, got)
+		}
 	}
-	ready, err := findListing(templates, a2aTestAgent)
+	ready, err := findListing(agents, templates, a2aTestAgent)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := templateListing{Name: a2aTestAgent, Namespace: kagentNamespace, DisplayName: a2aTestDisplayName, IconURL: a2aTestIconURL, Description: "Proof agent " + a2aTestAgent, Harness: kagentHarness}
+	want := agentListing{Name: a2aTestAgent, Namespace: kagentNamespace, Template: a2aTestAgent, Harness: kagentHarness, DisplayName: a2aTestDisplayName, IconURL: a2aTestIconURL, Description: "Proof agent " + a2aTestAgent}
 	if ready != want {
 		t.Errorf("listing = %+v, want %+v", ready, want)
 	}
+	annotated, err := findListing(agents, templates, "annotated")
+	if err != nil || annotated.Harness != testOtherHarness || annotated.DisplayName != a2aTestDisplayName || annotated.Description != "Proof agent compiling" || annotated.Unavailable != "" {
+		t.Errorf("an Agent's own annotations: %+v %v", annotated, err)
+	}
 	for name, reason := range map[string]string{
 		"compiling":     "has not compiled a ready revision: waiting for the ActorTemplate golden snapshot",
-		"orphan":        "no Harness admits",
-		"no-status-yet": "no status reported yet",
+		"no-status-yet": "no Ready condition reported yet",
 	} {
-		l, err := findListing(templates, name)
+		l, err := findListing(agents, templates, name)
 		if err != nil || !strings.Contains(l.Unavailable, reason) {
 			t.Errorf("%s: %+v %v", name, l, err)
 		}
 	}
-	if _, err := findListing(templates, "nobody"); err == nil || !strings.Contains(err.Error(), "does not list nobody") {
-		t.Errorf("an unknown template: %v", err)
+	if _, err := findListing(agents, templates, "nobody"); err == nil || !strings.Contains(err.Error(), "does not list nobody") {
+		t.Errorf("an unknown Agent: %v", err)
 	}
 }
 
@@ -980,11 +1080,11 @@ func TestDecideUntilSettled(t *testing.T) {
 			f.tasks[fakeTaskID] = &a2a.Task{ID: fakeTaskID, ContextID: fakeContextID, Status: a2a.TaskStatus{State: a2a.TaskStateInputRequired, Message: prompt}}
 			api := f.serve(t, fakeToken)
 
-			paused, err := api.turnOn(fakeInstanceID, userMessage(a2aToolPrompt))
+			paused, err := api.turnOn(f.sessions[fakeSessionID], userMessage(a2aToolPrompt))
 			if err != nil {
 				t.Fatal(err)
 			}
-			settled, decided, err := api.decideUntilSettled(fakeInstanceID, paused, true, "")
+			settled, decided, err := api.decideUntilSettled(f.sessions[fakeSessionID], paused, true, "")
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 					t.Fatalf("err = %v, want %q", err, tc.wantErr)

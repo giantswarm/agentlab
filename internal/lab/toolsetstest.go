@@ -180,7 +180,7 @@ func ToolsetsTest(cfg *config.Config, email string, opts ToolsetsTestOptions) er
 		if err := proveAgentRuntimeToolsets(cfg, token, opts.ModelConfig, res); err != nil {
 			return err
 		}
-		pass("through kagent (an AgentInstance and one A2A SendMessage through the edge as %s) %s lists nothing outside %s — read-only core tools may appear, no writer does; the runtime sends the header and the user's token — and %s answers a chat turn under %s", user.Email, toolsetsAgentReadOnly, presetReadOnly, toolsetsAgentNone, presetNone)
+		pass("through kagent (a Session and one A2A SendMessage through the edge as %s) %s lists nothing outside %s — read-only core tools may appear, no writer does; the runtime sends the header and the user's token — and %s answers a chat turn under %s", user.Email, toolsetsAgentReadOnly, presetReadOnly, toolsetsAgentNone, presetNone)
 	}
 
 	// 5. The OAuth fixture: the sign-in completed in the portal path is what
@@ -314,11 +314,11 @@ func proveRenderedToolsets(s *musterSession, toolPrefix, modelConfig string) err
 		if !set || !slices.Equal(declared, a.toolset) {
 			return fmt.Errorf("HelmRelease %s carries values.toolset=%v (declared %v), wanted %v — the release is the toolset's anchor", a.name, declared, set, a.toolset)
 		}
-		t, err := waitAgentTemplate(a.name)
+		t, agent, err := waitAgentRender(a.name)
 		if err != nil {
 			return err
 		}
-		if err := assertAgentRender(t, toolsetsSpec(a.name, modelConfig, a.toolset), release.value("muster", "url")); err != nil {
+		if err := assertAgentRender(t, agent, toolsetsSpec(a.name, modelConfig, a.toolset), release.value("muster", "url")); err != nil {
 			return err
 		}
 		if bound := t.mcpServer(); bound == "" {
@@ -345,11 +345,11 @@ func proveRenderedToolsets(s *musterSession, toolPrefix, modelConfig string) err
 	if _, err := (helmReleaseWriter{}).createAgent(unscoped); err != nil {
 		return err
 	}
-	t, err := waitAgentTemplate(toolsetsAgentUnscoped)
+	t, agent, err := waitAgentRender(toolsetsAgentUnscoped)
 	if err != nil {
 		return err
 	}
-	if err := assertAgentRender(t, unscoped, ""); err != nil && !strings.Contains(err.Error(), "points at") {
+	if err := assertAgentRender(t, agent, unscoped, ""); err != nil && !strings.Contains(err.Error(), "points at") {
 		return err
 	}
 	header, found, err := toolsetHeaderOf(t)

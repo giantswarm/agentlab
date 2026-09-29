@@ -222,7 +222,7 @@ func TestParseMCPResponsePicksTheResponseFrame(t *testing.T) {
 // agentTemplateBinding seeds an agent's AgentTemplate binding one
 // RemoteMCPServer ("" for a template without tools).
 func agentTemplateBinding(name, server string) *unstructured.Unstructured {
-	template := customObject(gvkAgentTemplate, kagentNamespace, name, map[string]string{harnessLabel: kagentHarness})
+	template := customObject(gvkAgentTemplate, kagentNamespace, name, nil)
 	if server != "" {
 		_ = unstructured.SetNestedSlice(template.Object, []any{map[string]any{
 			"mcp": map[string]any{"server": map[string]any{fieldKind: remoteMCPServerKind, nameKey: server}},
@@ -278,9 +278,6 @@ func TestToolsetHeaderOf(t *testing.T) {
 		template, err := waitAgentTemplate(tc.agent)
 		if err != nil {
 			t.Fatal(err)
-		}
-		if got := template.Metadata.Labels[harnessLabel]; got != kagentHarness {
-			t.Errorf("%s: label %s=%q", tc.agent, harnessLabel, got)
 		}
 		header, found, err := toolsetHeaderOf(template)
 		switch {

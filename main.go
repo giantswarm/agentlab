@@ -647,7 +647,8 @@ func podsCmd() *cobra.Command {
 // turnCmd is `agentlab turn`: one conversation with an agent as a lab user
 // through the edge, or the roster that user sees.
 func turnCmd() *cobra.Command {
-	var user, template, harness, instance, decide, reason, events, shareWith string
+	var user, template, harness, session, decide, reason, events, shareWith string
+	var shareTTL time.Duration
 	var list, keep, suspend bool
 	cmd := &cobra.Command{
 		Use:   "turn (--list | --template <name> <prompt>)",
@@ -671,26 +672,32 @@ func turnCmd() *cobra.Command {
 			if len(args) == 1 {
 				prompt = args[0]
 			}
-			if suspend && instance == "" {
-				return fmt.Errorf("--suspend needs --instance")
+			if suspend && session == "" {
+				return fmt.Errorf("--suspend needs --session")
 			}
-			if shareWith != "" && instance == "" {
-				return fmt.Errorf("--share-with needs --instance")
+			if shareWith != "" && session == "" {
+				return fmt.Errorf("--share-with needs --session")
+			}
+			if shareTTL != 0 && shareWith == "" {
+				return fmt.Errorf("--share-ttl needs --share-with")
 			}
 			if decide != "" && decide != "approve" && decide != "reject" {
 				return fmt.Errorf("--decide takes approve or reject, not %q", decide)
 			}
-			return lab.Turn(cfg, user, template, harness, prompt, instance, decide, reason, events, shareWith, keep, suspend)
+			return lab.Turn(cfg, user, template, harness, prompt, session, decide, reason, events, shareWith, shareTTL, keep, suspend)
 		},
 	}
 	cmd.Flags().StringVar(&user, "user", "", "the lab user to act as (default: the first admin in agentlab.yaml)")
-	cmd.Flags().StringVar(&template, "template", "", "the AgentTemplate in the kagent namespace to converse with")
-	cmd.Flags().StringVar(&harness, "harness", "", "the Harness to create the conversation on (default: the admitting Harness that reports the template Ready, as the portal picks it)")
-	cmd.Flags().StringVar(&instance, "instance", "", "continue this AgentInstance instead of creating one (from a previous --keep)")
-	cmd.Flags().BoolVar(&keep, "keep", false, "leave the AgentInstance in place after the turn, for a later --instance turn")
-	cmd.Flags().BoolVar(&suspend, "suspend", false, "with --instance: suspend the instance to the snapshot store before the turn, so the turn restores it")
+	cmd.Flags().StringVar(&template, "template", "", "the AgentTemplate in the kagent namespace to converse with (the Session is created of the Agent that pairs it with a Harness)")
+	cmd.Flags().StringVar(&harness, "harness", "", "the Harness the Agent must reference: the conversation runs on the Agent pairing the template with it (default: the Agent of the template that reports Ready, as the portal picks it)")
+	cmd.Flags().StringVar(&session, "session", "", "continue this Session instead of creating one (from a previous --keep)")
+	cmd.Flags().StringVar(&session, "instance", "", "the former name of --session")
+	_ = cmd.Flags().MarkDeprecated("instance", "use --session")
+	cmd.Flags().BoolVar(&keep, "keep", false, "leave the Session in place after the turn, for a later --session turn")
+	cmd.Flags().BoolVar(&suspend, "suspend", false, "with --session: suspend the session to the snapshot store before the turn, so the turn restores it")
 	cmd.Flags().StringVar(&decide, "decide", "", "answer every tool approval the turn pauses for: approve or reject (default: print the paused state and stop)")
-	cmd.Flags().StringVar(&shareWith, "share-with", "", "with --instance: the --user shares the instance read-write with this lab user, the turn runs as that user with the share token, and the share is revoked afterwards")
+	cmd.Flags().StringVar(&shareWith, "share-with", "", "with --session: the --user shares the session read-write with this lab user, the turn runs as that user with the share token, and the share is revoked afterwards")
+	cmd.Flags().DurationVar(&shareTTL, "share-ttl", 0, "with --share-with: how long the share's token grants access (default: until it is revoked)")
 	cmd.Flags().StringVar(&events, "events", "", "write every streamed A2A event of the turn to this file, one JSON object per line")
 	cmd.Flags().StringVar(&reason, "reason", "", "with --decide reject: the reason sent with the rejection")
 	cmd.Flags().BoolVar(&list, "list", false, "print the roster this user sees instead of a turn")
@@ -1163,7 +1170,7 @@ func a2aTestCmd() *cobra.Command {
 	var readyTimeout time.Duration
 	cmd := &cobra.Command{
 		Use:   "a2a-test [email]",
-		Short: "Headless A2A proof: native gRPC through the edge as the surfaces drive it — the GRPCRoute and its JWT policy, no token refused, a forged x-user-id replaced, ListAgentTemplates with annotations, CreateAgentInstance idempotent, a streamed turn, HITL pause → approve / reject, CancelTask server-side",
+		Short: "Headless A2A proof: native gRPC through the edge as the surfaces drive it — the GRPCRoute and its JWT policy, no token refused, a forged x-user-id replaced, ListAgents with annotations, CreateSession idempotent, a streamed turn, HITL pause → approve / reject, CancelTask server-side",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
@@ -1238,7 +1245,7 @@ func klausGatewayTestCmd() *cobra.Command {
 	var opts lab.KlausGatewayTestOptions
 	cmd := &cobra.Command{
 		Use:   "klaus-gateway-test [email]",
-		Short: "Headless Swarmgeist proof (kagent API v2) through the Slack adapter: klaus-gateway runs on the host against the lab's edge (A2A v1 over gRPC, TLS with the lab CA, JWT at the edge) with a fake Slack Web API, signed Events API messages and Block Kit clicks, the user linked by a record in its OBO link store that carries the user's Dex id_token — `@bot agents` lists the template (a not-admitted one hidden there and in the picker its Select button opens, and refused), an unlinked person is asked to sign in, one branded turn attributed to the person at muster, Approve and Deny on the approval card, `stop` cancelled server-side, a restart on the stores that keeps the thread → AgentInstance mapping, a restart mid-turn with the edge out of reach for 45 s whose answer is still posted, a restart mid-sign-in that replays the parked message and one mid-approval whose Approve resumes the paused task; with platform.klausGateway on, the meta chart's in-cluster component too — the Role scoped to the OBO link Secret, two links seeded through the store package, the pod deleted and its replacement Ready with the same links, one Slack turn through the pod",
+		Short: "Headless Swarmgeist proof (kagent API v2) through the Slack adapter: klaus-gateway runs on the host against the lab's edge (A2A v1 over gRPC, TLS with the lab CA, JWT at the edge) with a fake Slack Web API, signed Events API messages and Block Kit clicks, the user linked by a record in its OBO link store that carries the user's Dex id_token — `@bot agents` lists the Agent (one on a Harness that does not exist hidden there and in the picker its Select button opens, and refused), an unlinked person is asked to sign in, one branded turn attributed to the person at muster, Approve and Deny on the approval card, `stop` cancelled server-side, a restart on the stores that keeps the thread → Session mapping, a restart mid-turn with the edge out of reach for 45 s whose answer is still posted, a restart mid-sign-in that replays the parked message and one mid-approval whose Approve resumes the paused task; with platform.klausGateway on, the meta chart's in-cluster component too — the Role scoped to the OBO link Secret, two links seeded through the store package, the pod deleted and its replacement Ready with the same links, one Slack turn through the pod",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()

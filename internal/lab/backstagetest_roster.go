@@ -11,26 +11,25 @@ import (
 )
 
 // The agents list (the roster) as the Dev Portal reads it: the AgentTemplates
-// and the RemoteMCPServers of the installation through Backstage's Kubernetes
-// proxy with the person's own token (AgentsDataProvider: useResources(Agent)
-// and useResources(RemoteMCPServer), cluster-wide, discovery off), joined per
-// row — the display name from the annotation, the readiness from
-// status.harnesses[] by the portal's own derivation, the toolset off the
-// carrier the template's gateway binding names, the owning release from the
-// Flux provenance label. The apiserver decides who reads it: the lab's RBAC
-// grants kagent.dev to platform-admins only (rbac.yaml.tmpl: cluster-admin;
-// viewers hold the view ClusterRole and developers edit in `demo`, neither
-// of which aggregates kagent.dev), so a non-admin's roster read is the
-// apiserver's 403 and the portal shows the installation as unreadable — the
-// lab's shape on the 0.10 line already, asserted as such.
+// the AgentTemplates and the RemoteMCPServers of the installation through
+// Backstage's Kubernetes proxy with the person's own token
+// (AgentsDataProvider, cluster-wide, discovery off), joined per row — the
+// display name from the annotation, the readiness from the Agent's
+// conditions by the portal's own derivation, the toolset off the carrier the
+// template's gateway binding names, the owning release from the Flux
+// provenance label. The apiserver decides who reads it: the lab's RBAC
+// grants api.kagent.dev to platform-admins only (rbac.yaml.tmpl:
+// cluster-admin; viewers hold the view ClusterRole and developers edit in
+// `demo`, neither of which aggregates api.kagent.dev), so a non-admin's
+// roster read is the apiserver's 403 and the portal shows the installation
+// as unreadable — the lab's shape on the 0.10 line already, asserted as such.
 
-// The readiness a row shows (kubernetes-react's deriveAgentReadiness): the
-// deciding Harness is the platform one named by the admission label.
+// The readiness a row shows (kubernetes-react's deriveAgentReadiness), from
+// the Agent's conditions.
 const (
 	rosterReady       = "ready"
 	rosterNotReady    = "notReady"
 	rosterNotAccepted = "notAccepted"
-	rosterNotAdmitted = "notAdmitted"
 	rosterPending     = "pending"
 )
 
@@ -52,66 +51,94 @@ type rosterRow struct {
 	OwningRelease string
 }
 
-// listRoster reads the two resources the agents page lists through the
-// Kubernetes proxy as the user and joins them into rows; the status is the
-// apiserver's on the templates read (403 for a person without the read).
+// listRoster reads the three resources the agents page lists through the
+// Kubernetes proxy as the user and joins them into rows, one per Agent; the
+// status is the apiserver's on the agents read (403 for a person without
+// the read).
 func listRoster(ps *portalSession) (int, []rosterRow, error) {
-	status, raw, err := ps.kubeProxyGet("/apis/" + agentTemplateAPIVersion + "/agenttemplates")
+	status, raw, err := ps.kubeProxyGet("/apis/" + kagentAPIVersion + "/agents")
 	if err != nil {
 		return 0, nil, err
 	}
 	if status != http.StatusOK {
 		return status, nil, nil
 	}
-	var templates struct {
+	var agentList struct {
 		Items []json.RawMessage `json:"items"`
 	}
-	if err := json.Unmarshal(raw, &templates); err != nil {
-		return status, nil, fmt.Errorf("the proxy's agenttemplates list is not the expected JSON: %w\n%.300s", err, raw)
+	if err := json.Unmarshal(raw, &agentList); err != nil {
+		return status, nil, fmt.Errorf("the proxy's agents list is not the expected JSON: %w\n%.300s", err, raw)
 	}
-	status, raw, err = ps.kubeProxyGet("/apis/" + agentTemplateAPIVersion + "/remotemcpservers")
+	templates, err := ps.kubeProxyList("agenttemplates")
 	if err != nil {
-		return 0, nil, err
+		return status, nil, err
 	}
-	if status != http.StatusOK {
-		return status, nil, fmt.Errorf("the proxy lists agenttemplates but answers %d for remotemcpservers: %.300s", status, raw)
+	carriers, err := ps.kubeProxyList("remotemcpservers")
+	if err != nil {
+		return status, nil, err
 	}
-	var carrierList struct {
-		Items []map[string]any `json:"items"`
-	}
-	if err := json.Unmarshal(raw, &carrierList); err != nil {
-		return status, nil, fmt.Errorf("the proxy's remotemcpservers list is not the expected JSON: %w\n%.300s", err, raw)
-	}
-	carriers := make([]unstructured.Unstructured, 0, len(carrierList.Items))
-	for _, item := range carrierList.Items {
-		carriers = append(carriers, unstructured.Unstructured{Object: item})
-	}
-	rows := make([]rosterRow, 0, len(templates.Items))
-	for _, item := range templates.Items {
-		var t agentTemplate
+	rows := make([]rosterRow, 0, len(agentList.Items))
+	for _, item := range agentList.Items {
+		var a agentObject
 		var meta struct {
 			Metadata struct {
 				Namespace string `json:"namespace"`
 			} `json:"metadata"`
 		}
-		if err := json.Unmarshal(item, &t); err != nil {
-			return status, nil, fmt.Errorf("an agenttemplates item is not an AgentTemplate: %w\n%.300s", err, item)
+		if err := json.Unmarshal(item, &a); err != nil {
+			return status, nil, fmt.Errorf("an agents item is not an Agent: %w\n%.300s", err, item)
 		}
 		_ = json.Unmarshal(item, &meta)
-		rows = append(rows, rosterRowOf(&t, meta.Metadata.Namespace, carriers))
+		rows = append(rows, rosterRowOf(&a, meta.Metadata.Namespace, templates, carriers))
 	}
 	return http.StatusOK, rows, nil
 }
 
-// rosterRowOf joins one template (of the namespace) with the carrier its
-// gateway binding names.
-func rosterRowOf(t *agentTemplate, namespace string, carriers []unstructured.Unstructured) rosterRow {
-	row := rosterRow{
-		Name: t.Metadata.Name, Namespace: namespace, DisplayName: firstNonEmpty(t.Metadata.Annotations[displayNameAnnotation], t.Metadata.Name),
-		Harness: t.Metadata.Labels[harnessLabel], OwningRelease: t.Metadata.Labels[fluxHelmReleaseNameLabel],
+// kubeProxyList reads one kagent resource of every namespace through the
+// proxy; a status other than 200 is an error, since the agents read passed.
+func (ps *portalSession) kubeProxyList(resource string) ([]unstructured.Unstructured, error) {
+	status, raw, err := ps.kubeProxyGet("/apis/" + kagentAPIVersion + "/" + resource)
+	if err != nil {
+		return nil, err
 	}
-	row.Readiness = rosterReadiness(t)
-	if bound := t.mcpServer(); bound != "" {
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("the proxy lists agents but answers %d for %s: %.300s", status, resource, raw)
+	}
+	var list struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &list); err != nil {
+		return nil, fmt.Errorf("the proxy's %s list is not the expected JSON: %w\n%.300s", resource, err, raw)
+	}
+	items := make([]unstructured.Unstructured, 0, len(list.Items))
+	for _, item := range list.Items {
+		items = append(items, unstructured.Unstructured{Object: item})
+	}
+	return items, nil
+}
+
+// rosterRowOf joins one Agent (of the namespace) with the template it
+// references and the carrier that template's gateway binding names.
+func rosterRowOf(a *agentObject, namespace string, templates, carriers []unstructured.Unstructured) rosterRow {
+	row := rosterRow{
+		Name: a.Metadata.Name, Namespace: namespace, DisplayName: firstNonEmpty(a.Metadata.Annotations[displayNameAnnotation], a.Metadata.Name),
+		Harness: a.harnessName(), OwningRelease: a.Metadata.Labels[fluxHelmReleaseNameLabel],
+	}
+	row.Readiness = rosterReadiness(a)
+	var template *agentTemplate
+	for i := range templates {
+		if templates[i].GetName() != a.templateName() || templates[i].GetNamespace() != namespace {
+			continue
+		}
+		template, _ = agentTemplateFrom(&templates[i])
+	}
+	if template == nil {
+		return row
+	}
+	if row.DisplayName == a.Metadata.Name {
+		row.DisplayName = firstNonEmpty(template.Metadata.Annotations[displayNameAnnotation], a.Metadata.Name)
+	}
+	if bound := template.mcpServer(); bound != "" {
 		for i := range carriers {
 			c := &carriers[i]
 			if c.GetName() != bound || c.GetNamespace() != namespace {
@@ -126,49 +153,23 @@ func rosterRowOf(t *agentTemplate, namespace string, carriers []unstructured.Uns
 }
 
 // rosterReadiness is the portal's derivation (kubernetes-react Agent.ts,
-// deriveAgentReadiness) from the deciding Harness — the platform one named
-// by the admission label when it reports, else the readiest of the others:
-// ready on Ready=True; notAccepted on Accepted=False or Compatible=False;
-// notReady while accepted and not ready; notAdmitted when harnesses[] is
-// empty with observedGeneration caught up; pending otherwise.
-func rosterReadiness(t *agentTemplate) string {
-	if len(t.Status.Harnesses) == 0 {
-		if t.Status.ObservedGeneration > 0 && t.Status.ObservedGeneration >= t.Metadata.Generation {
-			return rosterNotAdmitted
-		}
-		return rosterPending
-	}
-	deciding := t.harness(t.Metadata.Labels[harnessLabel])
-	if deciding == nil {
-		verdicts := make([]string, 0, len(t.Status.Harnesses))
-		for i := range t.Status.Harnesses {
-			verdicts = append(verdicts, harnessVerdict(&t.Status.Harnesses[i]))
-		}
-		slices.SortFunc(verdicts, func(a, b string) int { return readinessRank(a) - readinessRank(b) })
-		return verdicts[0]
-	}
-	return harnessVerdict(deciding)
-}
-
-func harnessVerdict(h *harnessStatus) string {
-	if status, _ := h.condition(conditionReady); status == conditionTrue {
+// deriveAgentReadiness) from the Agent's conditions: ready on Ready=True;
+// notAccepted on Accepted=False, ResolvedRefs=False or Compatible=False;
+// notReady while accepted and not ready; pending otherwise.
+func rosterReadiness(a *agentObject) string {
+	s := &a.Status
+	if status, _ := s.condition(conditionReady); status == conditionTrue {
 		return rosterReady
 	}
-	if accepted, _ := h.condition(conditionAccepted); accepted == condFalseStatus {
-		return rosterNotAccepted
+	for _, condType := range []string{conditionAccepted, conditionResolvedRefs, conditionCompatible} {
+		if status, _ := s.condition(condType); status == condFalseStatus {
+			return rosterNotAccepted
+		}
 	}
-	if compatible, _ := h.condition(conditionCompatible); compatible == condFalseStatus {
-		return rosterNotAccepted
-	}
-	if accepted, _ := h.condition(conditionAccepted); accepted == conditionTrue {
+	if accepted, _ := s.condition(conditionAccepted); accepted == conditionTrue {
 		return rosterNotReady
 	}
 	return rosterPending
-}
-
-// readinessRank orders verdicts readiest first.
-func readinessRank(v string) int {
-	return slices.Index([]string{rosterReady, rosterNotReady, rosterPending, rosterNotAccepted, rosterNotAdmitted}, v)
 }
 
 // splitToolset splits the header back into selectors.
@@ -200,12 +201,12 @@ func proveRoster(sessions []*portalSession, spec agentSpec) ([]string, error) {
 		case admin && status != http.StatusOK:
 			return nil, fmt.Errorf("%s (%s) reads the roster as %d, wanted 200", ps.user.Email, platformAdminsGroup, status)
 		case !admin && status == http.StatusOK:
-			return nil, fmt.Errorf("%s reads the roster (%d rows) although the lab's RBAC grants kagent.dev to %s only — if the lab's grants changed, update this proof and docs/backstage.md", ps.user.Email, len(rows), platformAdminsGroup)
+			return nil, fmt.Errorf("%s reads the roster (%d rows) although the lab's RBAC grants %s to %s only — if the lab's grants changed, update this proof and docs/backstage.md", ps.user.Email, len(rows), kagentAPIGroup, platformAdminsGroup)
 		case !admin && status != http.StatusForbidden:
 			return nil, fmt.Errorf("%s reads the roster as %d, wanted the apiserver's 403 (the lab's RBAC)", ps.user.Email, status)
 		case !admin:
 			note("403: the apiserver refuses %s (groups %v) the agenttemplates read; the portal shows installation %s as unreadable for this person", ps.user.Email, ps.user.Groups, platformRelease)
-			verdicts = append(verdicts, fmt.Sprintf("PASS: %s's roster read is the apiserver's 403 (the lab grants kagent.dev to %s only; the portal shows the installation as unreadable)", ps.user.Email, platformAdminsGroup))
+			verdicts = append(verdicts, fmt.Sprintf("PASS: %s's roster read is the apiserver's 403 (the lab grants %s to %s only; the portal shows the installation as unreadable)", ps.user.Email, kagentAPIGroup, platformAdminsGroup))
 			continue
 		}
 		idx := slices.IndexFunc(rows, func(r rosterRow) bool { return r.Name == spec.Name && r.Namespace == kagentNamespace })
@@ -229,7 +230,7 @@ func proveRoster(sessions []*portalSession, spec agentSpec) ([]string, error) {
 			}
 		}
 		note("%d agents (%d ready): %s is %q, %s on Harness %s, toolset %v, rendered by HelmRelease %s", len(rows), ready, spec.Name, row.DisplayName, row.Readiness, row.Harness, row.Toolset, row.OwningRelease)
-		verdicts = append(verdicts, fmt.Sprintf("PASS: %s's roster (agenttemplates + remotemcpservers through %s) shows %s %s on Harness %s with toolset %v, owned by HelmRelease %s", ps.user.Email, portalKubeProxyAPI, spec.Name, row.Readiness, row.Harness, row.Toolset, row.OwningRelease))
+		verdicts = append(verdicts, fmt.Sprintf("PASS: %s's roster (agents + agenttemplates + remotemcpservers through %s) shows %s %s on Harness %s with toolset %v, owned by HelmRelease %s", ps.user.Email, portalKubeProxyAPI, spec.Name, row.Readiness, row.Harness, row.Toolset, row.OwningRelease))
 	}
 	return verdicts, nil
 }

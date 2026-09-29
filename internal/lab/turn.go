@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/durationpb"
 
 	"github.com/giantswarm/agentlab/internal/config"
 	apiv1alpha1 "github.com/giantswarm/agentlab/internal/kagent/gen/kagent/api/v1alpha1"
@@ -21,18 +22,18 @@ import (
 // Turn is `agentlab turn`: one conversation with an agent as a lab user, the
 // way the surfaces drive it — the person's Dex id_token on the kagent
 // controller's gRPC route through the edge. With no template it prints the
-// roster the person sees (ListAgentTemplates as that person, or the gRPC
-// status when the controller refuses). With a template and a prompt it
-// creates an AgentInstance on the Harness that admits the template and
-// reports it Ready — the one the portal and Swarmgeist pick — or on the
-// named harness, streams one turn, prints the answer and the terminal task
-// state, and deletes the instance — unless keep is set, which leaves the
-// instance for a later turn, or instanceID names one to continue — after
-// suspending it to the snapshot store first when suspend is set, so the turn
-// proves the restore. A turn that pauses for tool approval prints the request
-// and stops, unless decide is "approve" or "reject": then every request is
+// roster the person sees (ListAgents as that person, or the gRPC status when
+// the controller refuses). With a template and a prompt it creates a Session
+// of the Agent that pairs the template with a Harness — the Agent named after
+// the template, or with harness set the one pairing the template with that
+// Harness — streams one turn, prints the answer and the terminal task state,
+// and deletes the session — unless keep is set, which leaves the session for
+// a later turn, or sessionID names one to continue — after suspending it to
+// the snapshot store first when suspend is set, so the turn proves the
+// restore. A turn that pauses for tool approval prints the request and
+// stops, unless decide is "approve" or "reject": then every request is
 // answered that way until the task settles.
-func Turn(cfg *config.Config, email, template, harness, prompt, instanceID, decide, reason, eventsFile, shareWith string, keep, suspend bool) error {
+func Turn(cfg *config.Config, email, template, harness, prompt, sessionID, decide, reason, eventsFile, shareWith string, shareTTL time.Duration, keep, suspend bool) error {
 	user := cfg.FindUser(email)
 	if user == nil {
 		return fmt.Errorf("no lab user %q in agentlab.yaml", email)
@@ -59,7 +60,7 @@ func Turn(cfg *config.Config, email, template, harness, prompt, instanceID, deci
 	defer cancel()
 
 	if template == "" {
-		templates, err := api.listTemplates(ctx)
+		agents, templates, err := api.roster(ctx)
 		if code := status.Code(err); err != nil && code != codes.Unknown {
 			fmt.Printf("roster refused for %s: %s: %s\n", user.Email, code, status.Convert(err).Message())
 			return nil
@@ -67,48 +68,51 @@ func Turn(cfg *config.Config, email, template, harness, prompt, instanceID, deci
 		if err != nil {
 			return err
 		}
-		fmt.Printf("roster for %s (%d templates):\n", user.Email, len(templates))
-		for _, t := range templates {
-			fmt.Println(rosterEntry(listingOf(t)))
+		fmt.Printf("roster for %s (%d agents):\n", user.Email, len(agents))
+		byName := templatesByName(templates)
+		for _, agent := range agents {
+			fmt.Println(rosterEntry(listingOf(agent, byName)))
 		}
 		return nil
 	}
 
 	started := time.Now()
-	created := instanceID == ""
+	var session *apiv1alpha1.Session
+	created := sessionID == ""
 	if created {
-		if harness == "" {
-			templates, err := api.listTemplates(ctx)
-			if err != nil {
-				return err
-			}
-			if harness, err = admittingHarness(templates, template); err != nil {
-				return err
-			}
-		}
-		instance, err := api.createInstanceOn(ctx, harness, template, uuid.NewString())
+		agents, templates, err := api.roster(ctx)
 		if err != nil {
 			return err
 		}
-		instanceID = instance.GetId()
-		fmt.Printf("instance: %s of %s on Harness %s (creator %s, %s)\n", instanceID, template, harness, instance.GetCreator(), instanceState(instance))
+		agent, err := selectAgent(agents, templates, template, harness)
+		if err != nil {
+			return err
+		}
+		if session, err = api.createSession(ctx, agent.Name, uuid.NewString()); err != nil {
+			return err
+		}
+		sessionID = session.GetId()
+		fmt.Printf("session: %s of Agent %s on Harness %s (creator %s, %s)\n", sessionID, agent.Name, agent.Harness, session.GetCreator(), sessionState(session))
 	} else {
-		fmt.Printf("instance: %s (continued)\n", instanceID)
+		if session, err = api.getSession(ctx, sessionID); err != nil {
+			return err
+		}
+		fmt.Printf("session: %s of Agent %s (continued)\n", sessionID, session.GetAgent().GetName())
 		if suspend {
-			instance, err := api.suspendInstance(ctx, instanceID)
+			suspended, err := api.suspendSession(ctx, sessionID)
 			if err != nil {
 				return err
 			}
-			fmt.Printf("suspended: %s (%s)\n", instanceID, instanceState(instance))
-			if instance, err = api.resumeInstance(ctx, instanceID); err != nil {
+			fmt.Printf("suspended: %s (%s)\n", sessionID, sessionState(suspended))
+			if session, err = api.resumeSession(ctx, sessionID); err != nil {
 				return err
 			}
-			fmt.Printf("resumed: %s (%s)\n", instanceID, instanceState(instance))
+			fmt.Printf("resumed: %s (%s)\n", sessionID, sessionState(session))
 		}
 	}
 	turnAPI := api
 	if shareWith != "" {
-		shared, revoke, err := sharedTurnAPI(ctx, cfg, api, instanceID, shareWith)
+		shared, revoke, err := sharedTurnAPI(ctx, cfg, api, sessionID, shareWith, shareTTL)
 		if err != nil {
 			return err
 		}
@@ -116,10 +120,10 @@ func Turn(cfg *config.Config, email, template, harness, prompt, instanceID, deci
 		defer shared.close()
 		turnAPI = shared
 	}
-	t, err := turnAPI.decidedTurn(instanceID, prompt, decide, reason)
+	t, err := turnAPI.decidedTurn(session, prompt, decide, reason)
 	if err != nil {
 		if created && !keep {
-			api.removeInstance(instanceID)
+			api.removeSession(sessionID)
 		}
 		return fmt.Errorf("A2A turn on %s: %w", template, err)
 	}
@@ -130,23 +134,26 @@ func Turn(cfg *config.Config, email, template, harness, prompt, instanceID, deci
 		}
 	}
 	if keep {
-		fmt.Printf("kept: %s (agentlab turn --instance %s …)\n", instanceID, instanceID)
+		fmt.Printf("kept: %s (agentlab turn --session %s …)\n", sessionID, sessionID)
 		return nil
 	}
 	rmCtx, rmCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer rmCancel()
-	if err := api.deleteInstance(rmCtx, instanceID); err != nil {
+	if err := api.deleteSession(rmCtx, sessionID); err != nil {
 		return err
 	}
-	fmt.Printf("deleted: %s\n", instanceID)
+	fmt.Printf("deleted: %s\n", sessionID)
 	return nil
 }
 
 // rosterEntry is one roster entry as `turn --list` prints it: the technical
-// name, the admitting Harness, the display name, and why the template cannot
-// start a conversation when it cannot.
-func rosterEntry(l templateListing) string {
+// name, the template and the Harness the Agent pairs, the display name, and
+// why the Agent cannot start a conversation when it cannot.
+func rosterEntry(l agentListing) string {
 	line := fmt.Sprintf("  %s/%s", l.Namespace, l.Name)
+	if l.Template != "" {
+		line += "  template=" + l.Template
+	}
 	if l.Harness != "" {
 		line += "  harness=" + l.Harness
 	}
@@ -159,29 +166,57 @@ func rosterEntry(l templateListing) string {
 	return line
 }
 
-// admittingHarness is the Harness a conversation with the named template is
-// created on: the admitting Harness that reports it Ready, as the roster
-// reads it. A template the person's roster does not list, or one no Harness
-// runs yet, is refused with the roster's reason.
-func admittingHarness(templates []*apiv1alpha1.AgentTemplate, name string) (string, error) {
-	for _, t := range templates {
-		if t.GetRef().GetName() != name {
-			continue
+// selectAgent is the Agent a conversation with the named template is created
+// of: among the Agents referencing the template (or named after it), the one
+// referencing the named Harness, else the one that reports Ready, as the
+// roster reads it — the one the portal and Swarmgeist pick. A template the
+// person's roster does not list, or one no Harness runs yet, is refused with
+// the roster's reason.
+func selectAgent(agents []*apiv1alpha1.Agent, templates []*apiv1alpha1.AgentTemplate, template, harness string) (agentListing, error) {
+	byName := templatesByName(templates)
+	var candidates []agentListing
+	for _, agent := range agents {
+		l := listingOf(agent, byName)
+		if l.Template == template || (l.Template == "" && l.Name == template) {
+			candidates = append(candidates, l)
 		}
-		listing := listingOf(t)
-		if listing.Unavailable != "" {
-			return "", fmt.Errorf("AgentTemplate %s cannot start a conversation: %s", name, listing.Unavailable)
-		}
-		return listing.Harness, nil
 	}
-	return "", fmt.Errorf("AgentTemplate %s is not in this user's roster (agentlab turn --list)", name)
+	if len(candidates) == 0 {
+		return agentListing{}, fmt.Errorf("AgentTemplate %s is not in this user's roster: no Agent pairs it with a Harness (agentlab turn --list)", template)
+	}
+	if harness != "" {
+		for _, l := range candidates {
+			if l.Harness == harness {
+				if l.Unavailable != "" {
+					return agentListing{}, fmt.Errorf("Agent %s cannot start a conversation: %s", l.Name, l.Unavailable)
+				}
+				return l, nil
+			}
+		}
+		return agentListing{}, fmt.Errorf("no Agent pairs AgentTemplate %s with Harness %s (the roster has %s)", template, harness, agentNames(candidates))
+	}
+	for _, l := range candidates {
+		if l.Unavailable == "" {
+			return l, nil
+		}
+	}
+	return agentListing{}, fmt.Errorf("Agent %s cannot start a conversation: %s", candidates[0].Name, candidates[0].Unavailable)
+}
+
+// agentNames words the candidates as `name (harness)`.
+func agentNames(listings []agentListing) string {
+	names := make([]string, 0, len(listings))
+	for _, l := range listings {
+		names = append(names, fmt.Sprintf("%s (Harness %s)", l.Name, l.Harness))
+	}
+	return strings.Join(names, ", ")
 }
 
 // decidedTurn drives one turn. Paused at input-required with no decision, it
 // prints the approval request and returns the paused turn; with one, it
 // answers until the task settles, which must then be completed.
-func (a *kagentAPI) decidedTurn(instanceID, prompt, decide, reason string) (*turn, error) {
-	paused, err := a.turnOn(instanceID, userMessage(prompt))
+func (a *kagentAPI) decidedTurn(session *apiv1alpha1.Session, prompt, decide, reason string) (*turn, error) {
+	paused, err := a.turnOn(session, userMessage(prompt))
 	if err != nil {
 		return nil, err
 	}
@@ -197,7 +232,7 @@ func (a *kagentAPI) decidedTurn(instanceID, prompt, decide, reason string) (*tur
 	if decide == "" {
 		return paused.turn, nil
 	}
-	settled, decided, err := a.decideUntilSettled(instanceID, paused, decide == "approve", reason)
+	settled, decided, err := a.decideUntilSettled(session, paused, decide == "approve", reason)
 	if err != nil {
 		return nil, err
 	}
@@ -208,27 +243,31 @@ func (a *kagentAPI) decidedTurn(instanceID, prompt, decide, reason string) (*tur
 	return settled, nil
 }
 
-// sharedTurnAPI is the kagent client of another lab user on the instance: the
-// owner creates a read-write share, and the other user's calls carry their own
-// bearer plus the share token, which supplements their identity. The revoke
-// func withdraws the share.
-func sharedTurnAPI(ctx context.Context, cfg *config.Config, owner *kagentAPI, instanceID, email string) (*kagentAPI, func(), error) {
+// sharedTurnAPI is the kagent client of another lab user on the session: the
+// owner creates a read-write share (expiring after ttl when one is given),
+// and the other user's calls carry their own bearer plus the share token,
+// which supplements their identity. The revoke func withdraws the share.
+func sharedTurnAPI(ctx context.Context, cfg *config.Config, owner *kagentAPI, sessionID, email string, ttl time.Duration) (*kagentAPI, func(), error) {
 	user := cfg.FindUser(email)
 	if user == nil {
 		return nil, nil, fmt.Errorf("no lab user %q in agentlab.yaml", email)
 	}
-	resp, err := owner.instances.CreateAgentInstanceShare(owner.callCtx(ctx), &apiv1alpha1.CreateAgentInstanceShareRequest{
-		AgentInstanceId: instanceID,
-		Permission:      apiv1alpha1.AgentInstanceSharePermission_AGENT_INSTANCE_SHARE_PERMISSION_READ_WRITE,
-	})
+	req := &apiv1alpha1.CreateSessionShareRequest{
+		SessionId:  sessionID,
+		Permission: apiv1alpha1.SessionSharePermission_SESSION_SHARE_PERMISSION_READ_WRITE,
+	}
+	if ttl > 0 {
+		req.Ttl = durationpb.New(ttl)
+	}
+	resp, err := owner.sessions.CreateSessionShare(owner.callCtx(ctx), req)
 	if err != nil {
-		return nil, nil, fmt.Errorf("sharing %s: %w", instanceID, err)
+		return nil, nil, fmt.Errorf("sharing %s: %w", sessionID, err)
 	}
 	shareID := resp.GetShare().GetId()
 	revoke := func() {
 		rctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		if _, err := owner.instances.RevokeAgentInstanceShare(owner.callCtx(rctx), &apiv1alpha1.RevokeAgentInstanceShareRequest{ShareId: shareID}); err != nil {
+		if _, err := owner.sessions.RevokeSessionShare(owner.callCtx(rctx), &apiv1alpha1.RevokeSessionShareRequest{ShareId: shareID}); err != nil {
 			note("revoking share %s: %v", shareID, err)
 			return
 		}
@@ -245,6 +284,10 @@ func sharedTurnAPI(ctx context.Context, cfg *config.Config, owner *kagentAPI, in
 		return nil, nil, err
 	}
 	shared.extra = metadata.Pairs("x-share-token", resp.GetToken())
-	fmt.Printf("shared: %s read-write with %s (share %s)\n", instanceID, user.Email, shareID)
+	expiry := "no expiry"
+	if at := resp.GetShare().GetExpiresAt(); at != nil {
+		expiry = "expires " + at.AsTime().UTC().Format(time.RFC3339)
+	}
+	fmt.Printf("shared: %s read-write with %s (share %s, %s)\n", sessionID, user.Email, shareID, expiry)
 	return shared, revoke, nil
 }

@@ -244,11 +244,11 @@ func proveAgentPlatform(cfg *config.Config, sessions []*portalSession) error {
 	}
 	writer := hitlFixtureWriter{}
 	step("The HITL fixture %s: %s", hitlSpec.Name, writer)
-	hitlTemplate, _, err := readyAgent(writer, hitlSpec, agentReadyTimeout)
+	hitl, _, err := readyAgent(writer, hitlSpec, agentReadyTimeout)
 	if err != nil {
 		return err
 	}
-	if err := assertAgentRender(hitlTemplate, hitlSpec, firstNonEmpty(info.Muster.URL, defaultMusterMCPURL)); err != nil {
+	if err := assertAgentRender(hitl.template, hitl.agent, hitlSpec, firstNonEmpty(info.Muster.URL, defaultMusterMCPURL)); err != nil {
 		return err
 	}
 	if approval, err := templateRequiresApproval(hitlSpec.Name, hitlSpec.Name); err != nil {

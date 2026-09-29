@@ -27,7 +27,7 @@ const placeholderAPIKey = "agentlab-placeholder"
 // modelConfigResource is fully qualified on purpose: like MCPServer (muster
 // vs kagent.dev), a bare kind is one CRD collision away from resolving into
 // the wrong API group.
-const modelConfigResource = "modelconfigs.kagent.dev"
+const modelConfigResource = "modelconfigs." + kagentAPIGroup
 
 // managedByAgentlab labels the extra ModelConfigs so pruning can be scoped to
 // lab-owned CRs — the chart-rendered default ModelConfig is never touched.

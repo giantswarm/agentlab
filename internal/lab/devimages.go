@@ -532,53 +532,47 @@ func readHarnessState(ctx context.Context) (harnessState, error) {
 		return st, nil
 	}
 	st.image, _, _ = unstructured.NestedString(harness.Object, "spec", "workload", "image")
-	templates, err := admittedTemplates(ctx, harness)
+	agents, err := harnessAgents(ctx, harness)
 	if err != nil {
 		return st, err
 	}
-	for name, t := range templates {
-		if h := t.harness(platformHarness); h != nil {
-			st.revisions[name] = h.DesiredRevision
-		}
+	for name, a := range agents {
+		st.revisions[name] = a.Status.DesiredRevision
 	}
 	return st, nil
 }
 
-// admittedTemplates lists the AgentTemplates the Harness admits — those its
-// allowedAgentTemplates selector matches, in its namespace — by name.
-func admittedTemplates(ctx context.Context, harness *unstructured.Unstructured) (map[string]*agentTemplate, error) {
-	labels, _, _ := unstructured.NestedStringMap(harness.Object, "spec", "allowedAgentTemplates", "selector", "matchLabels")
-	var terms []string
-	for _, k := range slices.Sorted(maps.Keys(labels)) {
-		terms = append(terms, k+"="+labels[k])
-	}
-	gvr, err := gvrFor(agentTemplateResource)
+// harnessAgents lists the Agents of the Harness's namespace that reference
+// it (spec.harnessRef), by name.
+func harnessAgents(ctx context.Context, harness *unstructured.Unstructured) (map[string]*agentObject, error) {
+	gvr, err := gvrFor(agentResource)
 	if err != nil {
 		return nil, err
 	}
-	objs, err := listObjects(ctx, gvr, harness.GetNamespace(), strings.Join(terms, ","))
+	objs, err := listObjects(ctx, gvr, harness.GetNamespace(), "")
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]*agentTemplate{}
+	out := map[string]*agentObject{}
 	for i := range objs {
-		t, err := agentTemplateFrom(&objs[i])
+		a, err := agentFrom(&objs[i])
 		if err != nil {
 			return nil, err
 		}
-		out[objs[i].GetName()] = t
+		if a.harnessName() == harness.GetName() {
+			out[objs[i].GetName()] = a
+		}
 	}
 	return out, nil
 }
 
 // reportHarnessDevImage checks, after the install, that the platform Harness
-// runs the dev image and waits for the templates it admits to recompile on
-// it: a Harness image change moves every admitted template's desired
-// revision, and the template is back once its latest successful revision is
-// that one and Ready holds. A Harness that already ran the image (a re-run)
-// changed nothing, so its templates only have to be Ready. The wait is a
-// note when it runs out — the proofs are where a template that never comes
-// back fails.
+// runs the dev image and waits for the Agents that reference it to recompile
+// on it: a Harness image change moves every such Agent's desired revision,
+// and the Agent is back once its latest successful revision is that one and
+// Ready holds. A Harness that already ran the image (a re-run) changed
+// nothing, so its Agents only have to be Ready. The wait is a note when it
+// runs out — the proofs are where an Agent that never comes back fails.
 func reportHarnessDevImage(ctx context.Context, dev *devImages, before harnessState) error {
 	gvr, err := gvrFor(harnessResource)
 	if err != nil {
@@ -594,21 +588,21 @@ func reportHarnessDevImage(ctx context.Context, dev *devImages, before harnessSt
 	}
 	changed := before.image != image
 	if changed {
-		step("Waiting for the templates Harness %s admits to recompile on %s", platformHarness, image)
+		step("Waiting for the Agents on Harness %s to recompile on %s", platformHarness, image)
 	}
 	var pending []string
 	var done []string
 	deadline := time.Now().Add(harnessRecompileTimeout)
 	for {
-		templates, err := admittedTemplates(ctx, harness)
+		agents, err := harnessAgents(ctx, harness)
 		if err != nil {
 			return err
 		}
 		pending, done = pending[:0], done[:0]
-		for _, name := range slices.Sorted(maps.Keys(templates)) {
-			h := templates[name].harness(platformHarness)
-			if h == nil {
-				pending = append(pending, name+" (no status for the Harness yet)")
+		for _, name := range slices.Sorted(maps.Keys(agents)) {
+			h := &agents[name].Status
+			if len(h.Conditions) == 0 {
+				pending = append(pending, name+" (no status yet)")
 				continue
 			}
 			ready, message := h.condition("Ready")

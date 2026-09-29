@@ -32,7 +32,7 @@ import (
 //
 // klaus-gateway (Swarmgeist, the fleet's Slack bridge) runs its
 // conversations on the kagent controller: A2A v1 over gRPC through the
-// agentgateway edge, the roster from ListAgentTemplates, one AgentInstance
+// agentgateway edge, the roster from ListAgents, one Session
 // per Slack thread kept in the gateway's routing store, human-in-the-loop as
 // kagent's HITL extension, a stop as CancelTask — every call made as the
 // person behind the turn, whose Dex id_token the gateway forwards and
@@ -59,7 +59,7 @@ import (
 // call bound with requireApproval pauses the task at input-required, Approve
 // resumes it in place and Deny ends another without the call; `stop` cancels
 // the task at the controller and the thread goes on; a gateway restart on
-// the same stores continues the same AgentInstance; and a restart in the
+// the same stores continues the same Session; and a restart in the
 // middle of a turn, the edge out of reach for a while after it, still posts
 // the answer in its thread. docs/platform.md "The
 // Swarmgeist proof".
@@ -74,9 +74,9 @@ const KlausGatewayImageDefault = "gsoci.azurecr.io/giantswarm/klaus-gateway:4.1.
 // the same run, and a leftover of an aborted run is removed first.
 const (
 	klausGatewayTestAgent = "agentlab-klaus-gateway-test"
-	// klausGatewayTestUnadmitted is the template no Harness admits: it lacks
-	// the admission label, so the roster must hide it and a selection of it
-	// must be refused with the reason.
+	// klausGatewayTestUnadmitted is the Agent no Harness runs: its harnessRef
+	// names a Harness that does not exist, so the roster must hide it and a
+	// selection of it must be refused with the reason.
 	klausGatewayTestUnadmitted        = klausGatewayTestAgent + "-unadmitted"
 	klausGatewayTestDisplay           = "agentlab Swarmgeist proof"
 	klausGatewayTestUnadmittedDisplay = "agentlab unadmitted template"
@@ -187,8 +187,8 @@ type KlausGatewayTestOptions struct {
 	// ModelConfig is the kagent ModelConfig the fixture runs on (default
 	// default-model-config, the Anthropic one the lab renders).
 	ModelConfig string
-	// Harness is the Harness whose admission labels the fixture carries and
-	// whose entry the golden-boot wait reads (default the platform Harness).
+	// Harness is the Harness the fixture's Agent references and whose Ready
+	// the golden-boot wait reads (default the platform Harness).
 	Harness string
 	// ReadyTimeout bounds the fixture's golden boot (default 10 min).
 	ReadyTimeout time.Duration
@@ -278,10 +278,9 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 		fake = f
 	}
 
-	shape := harnessAdmissionLabelsOf(opts.Harness)
-	step("Applying the fixtures in namespace %s: AgentTemplate %s (labelled %v, muster carrier %s with %s, requireApproval on the binding) and AgentTemplate %s (no admission label)",
-		kagentNamespace, klausGatewayTestAgent, shape, klausGatewayTestAgent, klausGatewayTestToolset, klausGatewayTestUnadmitted)
-	if _, err := applyManifests(context.Background(), []byte(klausGatewayFixtures(opts.ModelConfig, shape))); err != nil {
+	step("Applying the fixtures in namespace %s: Agent %s on Harness %s (muster carrier %s with %s, requireApproval on the binding) and Agent %s on a Harness that does not exist (%s)",
+		kagentNamespace, klausGatewayTestAgent, opts.Harness, klausGatewayTestAgent, klausGatewayTestToolset, klausGatewayTestUnadmitted, klausGatewayNoHarness)
+	if _, err := applyManifests(context.Background(), []byte(klausGatewayFixtures(opts.ModelConfig, opts.Harness))); err != nil {
 		return err
 	}
 	step("Waiting up to %s for %s Ready on Harness %s (the golden boot)", opts.ReadyTimeout, klausGatewayTestAgent, opts.Harness)
@@ -347,20 +346,20 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	if err != nil {
 		return err
 	}
-	if err := assertNoInstances(api, klausGatewayTestUnadmitted); err != nil {
+	if err := assertNoSessions(api, klausGatewayTestUnadmitted); err != nil {
 		return err
 	}
 	signIn, err := p.signInPrompt(people.stranger, klausGatewayWordPrompt)
 	if err != nil {
 		return err
 	}
-	if err := assertNoInstances(api, klausGatewayTestAgent); err != nil {
+	if err := assertNoSessions(api, klausGatewayTestAgent); err != nil {
 		return fmt.Errorf("after the unlinked person's message: %w", err)
 	}
-	note("roster: %s; %s refused: %q; %s asked to sign in (%s), no AgentInstance of either template",
+	note("roster: %s; %s refused: %q; %s asked to sign in (%s), no Session of either Agent",
 		strings.Join(names, ", "), klausGatewayTestUnadmitted, excerpt(refusal, 160), people.stranger, excerpt(signIn, 80))
 
-	step("2. One streamed turn as %s: the thread's first turn creates the AgentInstance, the answer carries the template's display name and icon", user.Email)
+	step("2. One streamed turn as %s: the thread's first turn creates the Session, the answer carries the Agent's display name and icon", user.Email)
 	main := &slackThread{user: people.person}
 	turn, err := p.firstTurn(main, klausGatewayWordPrompt)
 	if err != nil {
@@ -372,19 +371,20 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	if err := assertBranded(turn); err != nil {
 		return err
 	}
-	instanceID, err := p.boundInstance(main)
+	session, err := p.boundSession(api, main)
 	if err != nil {
 		return err
 	}
-	if err := assertOnlyInstances(api, instanceID); err != nil {
+	sessionID := session.GetId()
+	if err := assertOnlySessions(api, sessionID); err != nil {
 		return err
 	}
 	dispatch, err := p.dispatch(main, identity.subject, user.Email)
 	if err != nil {
 		return err
 	}
-	note("answered %q as %q (icon %s); thread bound to AgentInstance %s, the only instance of the template; turn_dispatch: agent %s (%s), subject %s, sub %.8s…",
-		excerpt(turn.answer, 60), turn.stream.Username, turn.stream.IconURL, instanceID, dispatch.Agent, dispatch.AgentSource, dispatch.Subject, dispatch.Sub)
+	note("answered %q as %q (icon %s); thread bound to Session %s, the only session of the Agent; turn_dispatch: agent %s (%s), subject %s, sub %.8s…",
+		excerpt(turn.answer, 60), turn.stream.Username, turn.stream.IconURL, sessionID, dispatch.Agent, dispatch.AgentSource, dispatch.Subject, dispatch.Sub)
 
 	step("3. Human in the loop: a tool call pauses the task at input-required; Approve on the approval card resumes it in place")
 	toolTurnStart := time.Now()
@@ -392,17 +392,17 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	if err != nil {
 		return fmt.Errorf("the tool-using turn: %w", err)
 	}
-	approved, err := p.decideUntilSettled(api, instanceID, main, turn, true)
+	approved, err := p.decideUntilSettled(api, session, main, turn, true)
 	if err != nil {
 		return err
 	}
 	if approved.finalState != a2a.TaskStateCompleted {
 		return fmt.Errorf("the approved task %s ended %s at the controller, not completed", approved.taskID, approved.finalState)
 	}
-	if err := assertNothingWaiting(api, instanceID); err != nil {
+	if err := assertNothingWaiting(api, session); err != nil {
 		return err
 	}
-	note("%d approval(s) on task %s (%s); GetTask=%s; nothing of the instance left at input-required; answered %q",
+	note("%d approval(s) on task %s (%s); GetTask=%s; nothing of the session left at input-required; answered %q",
 		approved.rounds, approved.taskID, strings.Join(approved.cards, "; "), approved.finalState, excerpt(approved.answer, 80))
 
 	step("The turn is attributed to %s at muster (the forwarded id_token accepted, the tool calls under that subject)", user.Email)
@@ -418,11 +418,11 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	if err != nil {
 		return fmt.Errorf("the tool-using turn to deny: %w", err)
 	}
-	deniedInstance, err := p.boundInstance(denied)
+	deniedSession, err := p.boundSession(api, denied)
 	if err != nil {
 		return err
 	}
-	declined, err := p.decideUntilSettled(api, deniedInstance, denied, turn, false)
+	declined, err := p.decideUntilSettled(api, deniedSession, denied, turn, false)
 	if err != nil {
 		return err
 	}
@@ -440,7 +440,7 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 		declined.rounds, declined.taskID, declined.finalState, declined.outcome, user.Email, excerpt(declined.answer, 80))
 
 	step("4. `stop`: a long turn is stopped from the thread; the gateway cancels the task at the controller and the thread takes a following turn")
-	tasksBefore, err := api.taskIDs(context.Background(), instanceID)
+	tasksBefore, err := api.taskIDs(context.Background(), session)
 	if err != nil {
 		return err
 	}
@@ -448,7 +448,7 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	if err != nil {
 		return err
 	}
-	canceled, err := api.waitCanceledTask(instanceID, tasksBefore, klausGatewayCancelWait)
+	canceled, err := api.waitCanceledTask(session, tasksBefore, klausGatewayCancelWait)
 	if err != nil {
 		return err
 	}
@@ -462,7 +462,7 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	note("stopped after %d streamed characters with %q; task %s TASK_STATE_CANCELED at the controller; the following turn answered %q",
 		len(stopped.answer), slackStopped, canceled, excerpt(turn.answer, 40))
 
-	step("5. Restart on the stores: the thread → AgentInstance mapping survives, the next turn continues %s", instanceID)
+	step("5. Restart on the stores: the thread → Session mapping survives, the next turn continues %s", sessionID)
 	boundBefore := len(gatewayRecords(gw.logs(), recordBound))
 	if err := gw.stop(); err != nil {
 		return err
@@ -480,13 +480,13 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	if after := len(gatewayRecords(gw.logs(), recordBound)); after != boundBefore {
 		return fmt.Errorf("the restarted gateway bound a thread anew (%d instance_bound records before, %d after): the bolt store did not carry the mapping", boundBefore, after)
 	}
-	if err := assertOnlyInstances(api, instanceID, deniedInstance); err != nil {
+	if err := assertOnlySessions(api, sessionID, deniedSession.GetId()); err != nil {
 		return fmt.Errorf("after the restart: %w", err)
 	}
 	if refreshes := gatewayRecords(gw.logs(), recordRefresh); len(refreshes) > 0 {
 		return fmt.Errorf("the gateway refreshed a link %d time(s) (trigger %s): every turn must have forwarded the seeded id_token, and the refresh leg is out of the lab's reach", len(refreshes), refreshes[0].Trigger)
 	}
-	note("no new binding, still AgentInstance %s next to the denied thread's %s; the agent recalled %q; no token_refresh in the run", instanceID, deniedInstance, excerpt(turn.answer, 40))
+	note("no new binding, still Session %s next to the denied thread's %s; the agent recalled %q; no token_refresh in the run", sessionID, deniedSession.GetId(), excerpt(turn.answer, 40))
 
 	step("5b. Restart mid-turn with the controller out of reach for %s: the turn left running is posted in its thread when it ends, without a reply", klausGatewayGateClosed)
 	resumed, err := p.restartMidTurn(gw, gate, main, klausGatewayCountPrompt)
@@ -517,7 +517,7 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 
 	// The component half (klausgatewaytest_component.go) while the meta
 	// chart's klaus-gateway runs in this lab: its fixtures are the ones
-	// above, its Slack Web API the same fake, and the instance its turn
+	// above, its Slack Web API the same fake, and the session its turn
 	// creates is removed by the cleanup.
 	var component *componentOutcome
 	if cfg.KlausGatewayEnabled() {
@@ -528,7 +528,7 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 		note("the meta chart's klaus-gateway component is off in this lab (platform.klausGateway; `agentlab configure --klaus-gateway` turns it on): the host-mode assertions alone")
 	}
 
-	step("Deleting the fixtures, the AgentInstances and the gateway")
+	step("Deleting the fixtures, the Sessions and the gateway")
 	if err := gw.stop(); err != nil {
 		return err
 	}
@@ -545,11 +545,11 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	fmt.Println()
 	fmt.Printf("PASS: klaus-gateway %s ran on the host against %s (TLS with the lab CA, JWT validated at the edge) with Slack in events mode on a fake Web API; `@bot agents` as %s listed %q and hid %s, as did the picker its Select button opened, and a selection of it was refused with the reason; a person with no link was asked to sign in and reached no controller\n",
 		gw.describe(), target, user.Email, klausGatewayTestDisplay, klausGatewayTestUnadmitted)
-	fmt.Printf("PASS: one streamed turn in a Slack thread, answered as %q with the template's icon, bound the thread to AgentInstance %s, the only instance of the template; the gateway forwarded %s's linked id_token and muster ran the agent's tool calls under that subject\n", klausGatewayTestDisplay, instanceID, user.Email)
+	fmt.Printf("PASS: one streamed turn in a Slack thread, answered as %q with the Agent's icon, bound the thread to Session %s, the only session of the Agent; the gateway forwarded %s's linked id_token and muster ran the agent's tool calls under that subject\n", klausGatewayTestDisplay, sessionID, user.Email)
 	fmt.Printf("PASS: the requireApproval binding paused task %s at input-required; %d Approve click(s) on the card resumed it in place to %s; in a second thread %d Deny click(s) ended task %s (%s) without the call reaching muster\n",
 		approved.taskID, approved.rounds, approved.finalState, declined.rounds, declined.taskID, declined.finalState)
 	fmt.Printf("PASS: `stop` in the thread had the gateway cancel task %s at the controller (TASK_STATE_CANCELED); the thread took a following turn\n", canceled)
-	fmt.Printf("PASS: a gateway restart on the bolt stores kept the thread → AgentInstance mapping: the next turn continued %s and recalled the earlier word; no link refresh in the run\n", instanceID)
+	fmt.Printf("PASS: a gateway restart on the bolt stores kept the thread → Session mapping: the next turn continued %s and recalled the earlier word; no link refresh in the run\n", sessionID)
 	fmt.Printf("PASS: a restart in the middle of a turn, the controller out of reach for %s after it: the restarted gateway kept retrying and posted task %s's answer into its thread %s later, without a reply\n", klausGatewayGateClosed, resumed.taskID, resumed.after.Round(time.Second))
 	if signedIn != nil {
 		fmt.Printf("PASS: a restart between the sign-in prompt and the sign-in lost nothing: the restarted gateway replayed %s's parked message, answered %q\n", people.stranger, excerpt(signedIn.answer, 40))
@@ -561,7 +561,7 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 			component.pod, component.replacement, component.elapsed, component.links, component.baseline)
 		fmt.Printf("PASS: one Slack turn through the component (%s, the in-cluster target %s) as %s answered %q in the fake thread\n", component.version, klausGatewayInClusterTarget, user.Email, excerpt(component.answer, 40))
 	}
-	fmt.Printf("PASS: nothing left behind — the AgentTemplates, the RemoteMCPServer, the AgentInstances, the gateway process and its stores are gone\n")
+	fmt.Printf("PASS: nothing left behind — the Agents, the AgentTemplates, the RemoteMCPServer, the Sessions, the gateway process and its stores are gone\n")
 	return nil
 }
 
@@ -736,17 +736,15 @@ func seedBoltLink(path string, key []byte, slackUser string, link *musterlink.Li
 
 // --- the fixtures -------------------------------------------------------------
 
-// klausGatewayFixtures renders the proof's objects: the admitted AgentTemplate
-// with the display-name and icon annotations the Generic chart 1.x writes,
-// its muster carrier (the per-agent RemoteMCPServer the chart renders:
-// muster's in-cluster URL, X-Muster-Toolset, discovery off, never an
-// Authorization header) bound with requireApproval so every muster call pauses
-// for a decision — and the template no Harness admits.
-func klausGatewayFixtures(modelConfig string, admission map[string]string) string {
-	labels := []string{managedByLabel + ": " + managedByAgentlabValue}
-	for _, key := range slices.Sorted(maps.Keys(admission)) {
-		labels = append(labels, key+": "+admission[key])
-	}
+// klausGatewayFixtures renders the proof's objects: the AgentTemplate with
+// the display-name and icon annotations the Generic chart writes, its muster
+// carrier (the per-agent RemoteMCPServer the chart renders: muster's
+// in-cluster URL, X-Muster-Toolset, discovery off, never an Authorization
+// header) bound with requireApproval so every muster call pauses for a
+// decision, the Agent pairing the template with the named Harness — and a
+// second template and Agent whose Harness does not exist, so no Harness
+// runs it.
+func klausGatewayFixtures(modelConfig, harness string) string {
 	return fmt.Sprintf(`apiVersion: %[1]s
 kind: RemoteMCPServer
 metadata:
@@ -769,22 +767,23 @@ metadata:
   name: %[2]s
   namespace: %[3]s
   labels:
-    %[8]s
+    %[4]s: %[5]s
   annotations:
-    ui.giantswarm.io/display-name: %[9]q
-    ui.giantswarm.io/icon-url: %[10]q
+    ui.giantswarm.io/display-name: %[8]q
+    ui.giantswarm.io/icon-url: %[9]q
 spec:
   description: "Throwaway agent of agentlab klaus-gateway-test (the Swarmgeist proof); deleted by the same run."
   modelConfig:
-    name: %[11]s
-  systemPrompt: %[12]q
+    name: %[10]s
+  systemPrompt: %[11]q
   tools:
     - mcp:
         server:
-          kind: %[13]s
+          kind: %[12]s
           name: %[2]s
         requireApproval: true
 ---
+%[13]s---
 apiVersion: %[1]s
 kind: AgentTemplate
 metadata:
@@ -795,24 +794,33 @@ metadata:
   annotations:
     ui.giantswarm.io/display-name: %[15]q
 spec:
-  description: "Throwaway agent of agentlab klaus-gateway-test that no Harness admits; deleted by the same run."
+  description: "Throwaway agent of agentlab klaus-gateway-test on a Harness that does not exist; deleted by the same run."
   modelConfig:
-    name: %[11]s
+    name: %[10]s
   systemPrompt: "Never runs."
-`, agentTemplateAPIVersion, klausGatewayTestAgent, kagentNamespace, managedByLabel, managedByAgentlabValue,
-		klausGatewayTestToolset, klausGatewayMusterURL, strings.Join(labels, "\n    "), klausGatewayTestDisplay, klausGatewayTestIcon,
-		modelConfig, klausGatewayTestPrompt, remoteMCPServerKind, klausGatewayTestUnadmitted, klausGatewayTestUnadmittedDisplay)
+---
+%[16]s`, agentTemplateAPIVersion, klausGatewayTestAgent, kagentNamespace, managedByLabel, managedByAgentlabValue,
+		klausGatewayTestToolset, klausGatewayMusterURL, klausGatewayTestDisplay, klausGatewayTestIcon,
+		modelConfig, klausGatewayTestPrompt, remoteMCPServerKind,
+		agentManifest(klausGatewayTestAgent, klausGatewayTestAgent, harness, map[string]string{displayNameAnnotation: klausGatewayTestDisplay, iconURLAnnotation: klausGatewayTestIcon}),
+		klausGatewayTestUnadmitted, klausGatewayTestUnadmittedDisplay,
+		agentManifest(klausGatewayTestUnadmitted, klausGatewayTestUnadmitted, klausGatewayNoHarness, map[string]string{displayNameAnnotation: klausGatewayTestUnadmittedDisplay}))
 }
 
-// klausGatewayCleanup removes what the proof creates: the AgentInstances of
-// the fixture (the controller's, listed as the person), the AgentTemplates and
-// the RemoteMCPServer. Best effort; klausGatewayLeftovers reports what stayed.
+// klausGatewayNoHarness is the Harness the unadmitted fixture's Agent
+// references: none of that name exists, so the Agent never becomes Ready.
+const klausGatewayNoHarness = "agentlab-no-such-harness"
+
+// klausGatewayCleanup removes what the proof creates: the Sessions of the
+// fixture (the controller's, listed as the person), the Agents, the
+// AgentTemplates and the RemoteMCPServer. Best effort; klausGatewayLeftovers
+// reports what stayed.
 func klausGatewayCleanup(api *kagentAPI) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if instances, err := templateInstances(ctx, api); err == nil {
-		for _, inst := range instances {
-			api.removeInstance(inst.GetId())
+	if sessions, err := fixtureSessions(ctx, api); err == nil {
+		for _, session := range sessions {
+			api.removeSession(session.GetId())
 		}
 	}
 	for _, obj := range klausGatewayObjects() {
@@ -830,6 +838,8 @@ func klausGatewayCleanup(api *kagentAPI) {
 // order they are deleted.
 func klausGatewayObjects() []struct{ resource, name string } {
 	return []struct{ resource, name string }{
+		{agentResource, klausGatewayTestAgent},
+		{agentResource, klausGatewayTestUnadmitted},
 		{agentTemplateResource, klausGatewayTestAgent},
 		{agentTemplateResource, klausGatewayTestUnadmitted},
 		{remoteMCPServerResource, klausGatewayTestAgent},
@@ -841,8 +851,8 @@ func klausGatewayLeftovers(api *kagentAPI) []string {
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	defer cancel()
 	var left []string
-	if instances, err := templateInstances(ctx, api); err == nil && len(instances) > 0 {
-		left = append(left, fmt.Sprintf("%d AgentInstance(s) of %s: %s", len(instances), klausGatewayTestAgent, instanceIDs(instances)))
+	if sessions, err := fixtureSessions(ctx, api); err == nil && len(sessions) > 0 {
+		left = append(left, fmt.Sprintf("%d Session(s) of %s: %s", len(sessions), klausGatewayTestAgent, sessionIDs(sessions)))
 	}
 	for _, obj := range klausGatewayObjects() {
 		gvr, err := gvrFor(obj.resource)
@@ -857,87 +867,87 @@ func klausGatewayLeftovers(api *kagentAPI) []string {
 }
 
 // instanceIDs joins the ids of instances for a message.
-func instanceIDs(instances []*apiv1alpha1.AgentInstance) string {
-	ids := make([]string, 0, len(instances))
-	for _, inst := range instances {
-		ids = append(ids, inst.GetId())
+func sessionIDs(sessions []*apiv1alpha1.Session) string {
+	ids := make([]string, 0, len(sessions))
+	for _, session := range sessions {
+		ids = append(ids, session.GetId())
 	}
 	return strings.Join(ids, ", ")
 }
 
 // --- the controller, read as the person through the edge --------------------
 
-// templateInstances is the caller's conversations of the fixture:
-// ListAgentInstances narrowed to the template.
-func templateInstances(ctx context.Context, api *kagentAPI) ([]*apiv1alpha1.AgentInstance, error) {
-	return instancesOf(ctx, api, klausGatewayTestAgent)
+// fixtureSessions is the caller's conversations of the fixture:
+// ListSessions narrowed to the Agent.
+func fixtureSessions(ctx context.Context, api *kagentAPI) ([]*apiv1alpha1.Session, error) {
+	return sessionsOf(ctx, api, klausGatewayTestAgent)
 }
 
 // instancesOf is the caller's conversations of one template.
-func instancesOf(ctx context.Context, api *kagentAPI, template string) ([]*apiv1alpha1.AgentInstance, error) {
-	instances, err := api.listInstancesOf(ctx, &apiv1alpha1.ResourceReference{Namespace: kagentNamespace, Name: template})
+func sessionsOf(ctx context.Context, api *kagentAPI, agent string) ([]*apiv1alpha1.Session, error) {
+	sessions, err := api.listSessionsOf(ctx, agentRef(agent))
 	if err != nil {
-		return nil, fmt.Errorf("listing the AgentInstances of %s: %w", template, err)
+		return nil, fmt.Errorf("listing the Sessions of %s: %w", agent, err)
 	}
-	return instances, nil
+	return sessions, nil
 }
 
-// assertNoInstances checks the controller lists no conversation of the
+// assertNoSessions checks the controller lists no conversation of the
 // template: a refused or unauthenticated message started nothing.
-func assertNoInstances(api *kagentAPI, template string) error {
+func assertNoSessions(api *kagentAPI, agent string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	defer cancel()
-	instances, err := instancesOf(ctx, api, template)
+	sessions, err := sessionsOf(ctx, api, agent)
 	if err != nil {
 		return err
 	}
-	if len(instances) > 0 {
-		return fmt.Errorf("the controller lists %d AgentInstance(s) of %s (%s), wanted none", len(instances), template, instanceIDs(instances))
+	if len(sessions) > 0 {
+		return fmt.Errorf("the controller lists %d Session(s) of %s (%s), wanted none", len(sessions), agent, sessionIDs(sessions))
 	}
 	return nil
 }
 
-// assertOnlyInstances checks the fixture's conversations are exactly the
+// assertOnlySessions checks the fixture's conversations are exactly the
 // given ones: each thread bound once, nothing created behind them.
-func assertOnlyInstances(api *kagentAPI, ids ...string) error {
+func assertOnlySessions(api *kagentAPI, ids ...string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	defer cancel()
-	instances, err := templateInstances(ctx, api)
+	sessions, err := fixtureSessions(ctx, api)
 	if err != nil {
 		return err
 	}
-	got := make([]string, 0, len(instances))
-	for _, inst := range instances {
-		got = append(got, inst.GetId())
+	got := make([]string, 0, len(sessions))
+	for _, session := range sessions {
+		got = append(got, session.GetId())
 	}
 	slices.Sort(got)
 	want := slices.Sorted(slices.Values(ids))
 	if !slices.Equal(got, want) {
-		return fmt.Errorf("the controller lists the AgentInstance(s) [%s] of %s, wanted exactly [%s]", strings.Join(got, ", "), klausGatewayTestAgent, strings.Join(want, ", "))
+		return fmt.Errorf("the controller lists the Session(s) [%s] of %s, wanted exactly [%s]", strings.Join(got, ", "), klausGatewayTestAgent, strings.Join(want, ", "))
 	}
 	return nil
 }
 
-// assertNothingWaiting checks no task of the instance is left at
+// assertNothingWaiting checks no task of the session is left at
 // input-required.
-func assertNothingWaiting(api *kagentAPI, instanceID string) error {
+func assertNothingWaiting(api *kagentAPI, session *apiv1alpha1.Session) error {
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	defer cancel()
-	tasks, err := api.listTasks(ctx, instanceID)
+	tasks, err := api.listTasks(ctx, session)
 	if err != nil {
 		return err
 	}
 	for _, t := range tasks {
 		if t.Status.State == a2a.TaskStateInputRequired {
-			return fmt.Errorf("task %s of AgentInstance %s is still at input-required after the decisions", t.ID, instanceID)
+			return fmt.Errorf("task %s of Session %s is still at input-required after the decisions", t.ID, session.GetId())
 		}
 	}
 	return nil
 }
 
-// taskIDs is the set of an instance's task ids.
-func (a *kagentAPI) taskIDs(ctx context.Context, instanceID string) (map[a2a.TaskID]bool, error) {
-	tasks, err := a.listTasks(ctx, instanceID)
+// taskIDs is the set of a session's task ids.
+func (a *kagentAPI) taskIDs(ctx context.Context, session *apiv1alpha1.Session) (map[a2a.TaskID]bool, error) {
+	tasks, err := a.listTasks(ctx, session)
 	if err != nil {
 		return nil, err
 	}
@@ -948,16 +958,16 @@ func (a *kagentAPI) taskIDs(ctx context.Context, instanceID string) (map[a2a.Tas
 	return ids, nil
 }
 
-// waitCanceledTask polls the instance's tasks until one not in before is
+// waitCanceledTask polls the session's tasks until one not in before is
 // TASK_STATE_CANCELED and returns its id; what the new tasks say otherwise is
 // the error.
-func (a *kagentAPI) waitCanceledTask(instanceID string, before map[a2a.TaskID]bool, timeout time.Duration) (string, error) {
+func (a *kagentAPI) waitCanceledTask(session *apiv1alpha1.Session, before map[a2a.TaskID]bool, timeout time.Duration) (string, error) {
 	var canceled string
 	var seen []string
 	waitFor(int(timeout/pollInterval), pollInterval, func() bool {
 		ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 		defer cancel()
-		tasks, err := a.listTasks(ctx, instanceID)
+		tasks, err := a.listTasks(ctx, session)
 		if err != nil {
 			return false
 		}
@@ -975,7 +985,7 @@ func (a *kagentAPI) waitCanceledTask(instanceID string, before map[a2a.TaskID]bo
 		return canceled != ""
 	})
 	if canceled == "" {
-		return "", fmt.Errorf("no task of AgentInstance %s reached TASK_STATE_CANCELED within %s after stop (new tasks: %s)", instanceID, timeout, strings.Join(seen, ", "))
+		return "", fmt.Errorf("no task of Session %s reached TASK_STATE_CANCELED within %s after stop (new tasks: %s)", session, timeout, strings.Join(seen, ", "))
 	}
 	return canceled, nil
 }
@@ -1225,7 +1235,7 @@ func (g *gatewayProcess) logs() string {
 }
 
 // gatewayRecord is one of the gateway's structured log records the proof
-// reads: the thread bound to an AgentInstance (instance_bound), a turn
+// reads: the thread bound to a Session (instance_bound), a turn
 // dispatched (turn_dispatch) and completed (turn_complete), a link's
 // id_token refreshed (token_refresh).
 type gatewayRecord struct {
@@ -1449,7 +1459,7 @@ func (p *slackProof) roster(user string) (slackMessage, error) {
 // display name and not the unadmitted one.
 func assertSlackRoster(names []string) error {
 	if slices.Contains(names, klausGatewayTestUnadmittedDisplay) {
-		return fmt.Errorf("the roster lists %q, which no Harness admits (%s)", klausGatewayTestUnadmittedDisplay, strings.Join(names, ", "))
+		return fmt.Errorf("the roster lists %q, which no Harness runs (%s)", klausGatewayTestUnadmittedDisplay, strings.Join(names, ", "))
 	}
 	if !slices.Contains(names, klausGatewayTestDisplay) {
 		return fmt.Errorf("the roster does not list %q (%s)", klausGatewayTestDisplay, strings.Join(names, ", "))
@@ -1572,15 +1582,17 @@ func (p *slackProof) signInPrompt(user, text string) (string, error) {
 	return link, nil
 }
 
-// boundInstance is the AgentInstance the gateway bound the thread to (its
-// instance_bound record).
-func (p *slackProof) boundInstance(t *slackThread) (string, error) {
+// boundSession is the Session the gateway bound the thread to (its
+// instance_bound record), read back from the controller.
+func (p *slackProof) boundSession(api *kagentAPI, t *slackThread) (*apiv1alpha1.Session, error) {
 	bound := p.records(recordBound, t.ts)
 	if len(bound) == 0 || bound[len(bound)-1].Instance == "" {
 		logs, _ := p.logs()
-		return "", fmt.Errorf("the gateway's log carries no instance_bound record for thread %s (the turn ran without binding the thread to an AgentInstance); its log ends:\n%s", t.ts, tailLines(logs, 8))
+		return nil, fmt.Errorf("the gateway's log carries no instance_bound record for thread %s (the turn ran without binding the thread to a Session); its log ends:\n%s", t.ts, tailLines(logs, 8))
 	}
-	return bound[len(bound)-1].Instance, nil
+	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
+	defer cancel()
+	return api.getSession(ctx, bound[len(bound)-1].Instance)
 }
 
 // dispatch checks the thread's first turn_dispatch record: the fixture as
@@ -1616,7 +1628,7 @@ type decisionOutcome struct {
 // input-required at the controller, and each decision must rewrite its card
 // to name the person. The task's state at the controller once it settles is
 // the outcome.
-func (p *slackProof) decideUntilSettled(api *kagentAPI, instanceID string, t *slackThread, turn *slackTurn, approve bool) (*decisionOutcome, error) {
+func (p *slackProof) decideUntilSettled(api *kagentAPI, session *apiv1alpha1.Session, t *slackThread, turn *slackTurn, approve bool) (*decisionOutcome, error) {
 	action, verdict := slackActionDeny, slackDeniedBy
 	if approve {
 		action, verdict = slackActionApprove, slackApprovedBy
@@ -1639,7 +1651,7 @@ func (p *slackProof) decideUntilSettled(api *kagentAPI, instanceID string, t *sl
 		out.rounds++
 		out.cards = append(out.cards, excerpt(strings.ReplaceAll(card.msg.shown(), "\n", " "), 80))
 		ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
-		task, err := api.getTask(ctx, instanceID, a2a.TaskID(out.taskID))
+		task, err := api.getTask(ctx, session, a2a.TaskID(out.taskID))
 		cancel()
 		if err != nil {
 			return nil, err
@@ -1668,7 +1680,7 @@ func (p *slackProof) decideUntilSettled(api *kagentAPI, instanceID string, t *sl
 	out.outcome, out.answer = turn.record.Outcome, turn.answer
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	defer cancel()
-	task, err := api.getTask(ctx, instanceID, a2a.TaskID(out.taskID))
+	task, err := api.getTask(ctx, session, a2a.TaskID(out.taskID))
 	if err != nil {
 		return nil, err
 	}
