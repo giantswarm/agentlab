@@ -117,28 +117,28 @@ func TestListUnreadableLab(t *testing.T) {
 // ones; a registered lab's own cluster is not listed twice, also when its
 // clusterName differs from the registry name.
 func TestListUnregisteredCluster(t *testing.T) {
-	reg := writeLab(t, "clusterName: agentlab-2\n")
+	reg := writeLab(t, "clusterName: kept\n")
 	renamed := writeLab(t, "clusterName: other\n")
-	stubListProbes(t, map[string]string{"agentlab": stateRunning, "agentlab-2": stateRunning, "other": stateRunning}, nil)
-	stubKindClusters(t, "agentlab", "agentlab-2", "other")
+	stubListProbes(t, map[string]string{"orphan": stateRunning, "kept": stateRunning, "other": stateRunning}, nil)
+	stubKindClusters(t, "orphan", "kept", "other")
 
-	listed := ListLabs([]labs.Lab{{Name: "agentlab-2", Dir: reg}, {Name: "renamed", Dir: renamed}}, "")
+	listed := ListLabs([]labs.Lab{{Name: "kept", Dir: reg}, {Name: "renamed", Dir: renamed}}, "")
 	if len(listed) != 3 {
-		t.Fatalf("ListLabs = %+v, want agentlab, agentlab-2 and renamed", listed)
+		t.Fatalf("ListLabs = %+v, want orphan, kept and renamed", listed)
 	}
-	orphan := listed[0]
-	if orphan.Name != "agentlab" || !orphan.Unregistered || orphan.Dir != "" || orphan.State != stateRunning {
-		t.Errorf("first = %+v, want the running, unregistered agentlab", orphan)
+	orphan := listed[1] // kept, orphan, renamed
+	if orphan.Name != "orphan" || !orphan.Unregistered || orphan.Dir != "" || orphan.State != stateRunning {
+		t.Errorf("second = %+v, want the running, unregistered orphan", orphan)
 	}
-	if listed[1].Unregistered || listed[2].Unregistered {
-		t.Errorf("registered labs marked unregistered: %+v", listed[1:])
+	if listed[0].Unregistered || listed[2].Unregistered {
+		t.Errorf("registered labs marked unregistered: %+v, %+v", listed[0], listed[2])
 	}
 
 	var out bytes.Buffer
 	if err := PrintLabs(&out, listed, false); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"  agentlab  running  lab directory unknown", "any agentlab command in its directory (`agentlab pods`) registers it again", "  agentlab-2  running  " + reg} {
+	for _, want := range []string{"  orphan  running  lab directory unknown", "any agentlab command in its directory (`agentlab pods`) registers it again", "  kept  running  " + reg} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("PrintLabs output lacks %q:\n%s", want, out.String())
 		}
