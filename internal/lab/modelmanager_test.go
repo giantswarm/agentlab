@@ -257,9 +257,9 @@ func TestResolveBackendEndpointFollowsWhatAnswers(t *testing.T) {
 		want    string
 		wantErr string
 	}{
-		"gateway answers": {
+		"gateway answers, named by the lab host name": {
 			dial: "exit 0",
-			want: "http://" + gateway + ":1234",
+			want: "http://" + labHostName + ":1234",
 		},
 		"only the alias answers": {
 			dial: `case "$*" in *host.docker.internal*) exit 0 ;; *) exit 1 ;; esac`,
@@ -271,7 +271,7 @@ func TestResolveBackendEndpointFollowsWhatAnswers(t *testing.T) {
 		},
 		"the probe cannot run keeps the gateway": {
 			dial: "exit 127", // no bash in the node: not a verdict
-			want: "http://" + gateway + ":1234",
+			want: "http://" + labHostName + ":1234",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
