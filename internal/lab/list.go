@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/giantswarm/agentlab/internal/config"
@@ -31,6 +32,9 @@ type ListedLab struct {
 	// Error is set when the lab's agentlab.yaml cannot be read; the other
 	// fields past Dir are empty then.
 	Error string `json:"error,omitempty"`
+	// Unregistered marks a kind cluster no registered lab names: its lab
+	// directory is unknown (Dir empty), so only its State is known.
+	Unregistered bool `json:"unregistered,omitempty"`
 }
 
 // The CA column's values.
@@ -59,6 +63,10 @@ var labClusterState = func(cluster string) string {
 	return cs[0].state
 }
 
+// listKindClusters names the kind clusters on this machine, running or not
+// (kindClusters). A variable so tests can stand in for docker.
+var listKindClusters = kindClusters
+
 // labCAState is whether the lab CA in dir is in the system trust store. A
 // variable so tests can stand in for the trust store.
 var labCAState = func(dir string) string {
@@ -73,11 +81,16 @@ var labCAState = func(dir string) string {
 	}
 }
 
-// ListLabs describes every registered lab; here is the current directory
-// (absolute), whose lab is marked. Nothing here needs a cluster to answer.
+// ListLabs describes every registered lab and every kind cluster no
+// registered lab names (Unregistered: a lab whose registry entry or directory
+// is gone still holds its cluster, ports and memory), sorted by name; here is
+// the current directory (absolute), whose lab is marked. Nothing here needs
+// a cluster to answer.
 func ListLabs(registered []labs.Lab, here string) []ListedLab {
 	out := make([]ListedLab, 0, len(registered))
+	known := map[string]bool{}
 	for _, l := range registered {
+		known[l.Name] = true
 		ll := ListedLab{Name: l.Name, Dir: l.Dir, Current: l.Dir == here}
 		cfg, err := config.Peek(l.Dir)
 		if err != nil {
@@ -85,12 +98,21 @@ func ListLabs(registered []labs.Lab, here string) []ListedLab {
 			out = append(out, ll)
 			continue
 		}
+		known[cfg.ClusterName] = true
 		ll.State = labClusterState(cfg.ClusterName)
 		ll.Components = listComponents(cfg)
 		ll.URLs = listURLs(cfg)
 		ll.CA = labCAState(l.Dir)
 		out = append(out, ll)
 	}
+	// Without docker the registered labs still list, each State "unknown".
+	clusters, _ := listKindClusters()
+	for _, c := range clusters {
+		if !known[c] {
+			out = append(out, ListedLab{Name: c, State: labClusterState(c), Unregistered: true})
+		}
+	}
+	slices.SortFunc(out, func(a, b ListedLab) int { return strings.Compare(a.Name, b.Name) })
 	return out
 }
 
@@ -149,6 +171,11 @@ func PrintLabs(w io.Writer, listed []ListedLab, asJSON bool) error {
 		mark := " "
 		if l.Current {
 			mark, current = "*", true
+		}
+		if l.Unregistered {
+			fmt.Fprintf(&b, "%s %s  %s  lab directory unknown\n", mark, l.Name, l.State)
+			b.WriteString("    registry    no registered lab names this kind cluster; `agentlab up` in its directory registers it again\n")
+			continue
 		}
 		if l.Error != "" {
 			fmt.Fprintf(&b, "%s %s  %s\n    error       %s\n", mark, l.Name, l.Dir, l.Error)
