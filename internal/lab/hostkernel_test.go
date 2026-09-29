@@ -97,6 +97,7 @@ func TestWriteNodeFiles(t *testing.T) {
 // Only a watched key read both times with a different value is a change, in
 // sysctl(8)'s spelling.
 func TestHostKernelChanges(t *testing.T) {
+	const coreInCwd = "core" // the node image's Debian default
 	before := map[string]string{
 		"kernel/panic":         "0",
 		"kernel/panic_on_oops": "0",
@@ -106,12 +107,12 @@ func TestHostKernelChanges(t *testing.T) {
 	after := map[string]string{
 		"kernel/panic":         "10",
 		"kernel/panic_on_oops": "0",
-		"kernel/core_pattern":  "core",
+		"kernel/core_pattern":  coreInCwd,
 		"kernel/pid_max":       "4194304",
 	}
 	want := []hostKernelChange{
 		{"kernel.panic", "0", "10"},
-		{"kernel.core_pattern", "|/usr/lib/systemd/systemd-coredump %P", "core"},
+		{"kernel.core_pattern", "|/usr/lib/systemd/systemd-coredump %P", coreInCwd},
 	}
 	if got := hostKernelChanges(before, after); !reflect.DeepEqual(got, want) {
 		t.Errorf("hostKernelChanges = %v, want %v", got, want)

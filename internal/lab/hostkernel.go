@@ -121,7 +121,7 @@ func writeNodeFiles() error {
 // hostKernelSettings reads the watched sysctls on a Linux host; nil
 // elsewhere, where the engine's VM is the node's "host", not this machine.
 func hostKernelSettings() map[string]string {
-	if runtime.GOOS != "linux" {
+	if runtime.GOOS != goosLinux {
 		return nil
 	}
 	settings := map[string]string{}
@@ -170,7 +170,7 @@ func warnHostKernelChanges(before map[string]string) {
 // warnUnguardedNode warns when an existing lab's node was created without
 // the guard: it rewrites the host's kernel settings at every start.
 func warnUnguardedNode(node string) {
-	if runtime.GOOS != "linux" {
+	if runtime.GOOS != goosLinux {
 		return
 	}
 	out, err := outputQuiet("docker", "inspect", "-f", "{{range .Mounts}}{{.Destination}}\n{{end}}", node)
