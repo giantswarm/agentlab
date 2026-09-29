@@ -34,6 +34,7 @@ const checksumPlaceholder = "REPLACED_AT_APPLY"
 type tmplData struct {
 	*config.Config
 	CertsDir              string // absolute, for the kind extraMount
+	NodeFilesDir          string // absolute, the node's host-kernel guard (hostkernel.go)
 	MusterNodePort        int
 	KagentUINodePort      int
 	GatewayNodePort       int
@@ -141,6 +142,10 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 	if err != nil {
 		return nil, err
 	}
+	nodeFiles, err := nodeFilesDir()
+	if err != nil {
+		return nil, err
+	}
 	endpoints := map[string]string{}
 	if cfg.ModelManagerEnabled() {
 		if endpoints, err = resolveBackendEndpoints(cfg); err != nil {
@@ -187,6 +192,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		ServingEnabled:             cfg.ServingEnabled(),
 		Serving:                    servingValuesFor(),
 		CertsDir:                   certsDir,
+		NodeFilesDir:               nodeFiles,
 		MusterNodePort:             config.MusterNodePort,
 		KagentUINodePort:           config.KagentUINodePort,
 		GatewayNodePort:            config.GatewayNodePort,
@@ -362,6 +368,9 @@ func renderManifestWith(cfg *config.Config, tmplName string, mutate func(*tmplDa
 // servers answer (best effort: the platform run is where a failure counts).
 func RenderAll(cfg *config.Config) error {
 	if err := GenCerts(cfg.Platform.Domain, false); err != nil {
+		return err
+	}
+	if err := writeNodeFiles(); err != nil {
 		return err
 	}
 	extraModels := cfg.Platform.ExtraModels

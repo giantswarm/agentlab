@@ -70,11 +70,17 @@ func Up(cfg *config.Config, offers Offers) error {
 		if err := ensureNodeRunning(cfg); err != nil {
 			return err
 		}
+		warnUnguardedNode(cfg.ControlPlaneNode())
 	} else {
+		if err := writeNodeFiles(); err != nil {
+			return err
+		}
+		hostKernel := hostKernelSettings()
 		step("Creating kind cluster %q (%s)", cfg.ClusterName, kindNodeImageTag())
 		if err := kindCreateCluster(cfg.ClusterName, kindCfg); err != nil {
 			return err
 		}
+		warnHostKernelChanges(hostKernel)
 	}
 	// From here on the embedded Helm and the Kubernetes client run against
 	// the cluster's exported kubeconfig (restclient.go, kube.go), the one

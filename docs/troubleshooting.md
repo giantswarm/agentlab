@@ -131,6 +131,18 @@ plumbing for model servers under
   failure is reported. A host that keeps flapping is fixed on the host, not in
   the lab: prefer IPv4 in `/etc/gai.conf` (`precedence ::ffff:0:0/96  100`) or
   pin a stable DNS server.
+- **The host's kernel settings changed after a lab boot.** A lab node
+  created before agentlab's host-kernel guard (HACKS.md U27) sets
+  `kernel.panic=10`, `kernel.panic_on_oops=1` and `vm.overcommit_memory=1`
+  on the host, plus `kernel.core_pattern=core`, which switches off
+  systemd-coredump. This happens under a rootful engine, at every node start,
+  including every host boot. `agentlab up` warns about such a node;
+  `agentlab down && agentlab up` recreates it with the guard. Then put the
+  host's own values back:
+  `sudo sysctl --system && sudo sysctl -w kernel.panic=0 kernel.panic_on_oops=0 vm.overcommit_memory=0`
+  (the three kubelet keys are kernel defaults a host's sysctl.d rarely sets).
+  A new node leaves them alone; if `up` still reports a change, the warning
+  names the key and the command that restores it.
 
 ## vm-manager
 
