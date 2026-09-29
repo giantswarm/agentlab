@@ -109,7 +109,10 @@ with Dex doing the logins.
   the `docker network inspect kind` gateway, or the container runtime's host
   alias (`host.docker.internal`, podman's `host.containers.internal`) where
   that gateway is a bridge inside the runtime's VM, whichever answers when
-  dialled from inside the node — and a server pods cannot reach on either is
+  dialled from inside the node; the gateway is wired by the name
+  `host.agentlab.internal` (a CoreDNS hosts entry), because kagent injects
+  an OpenAI-provider ModelConfig's key only for a DNS hostname — and a
+  server pods cannot reach on either is
   reported and left out of the backends list. Every server is proven reachable
   from a pod before the install; the API
   sits behind the agentgateway route

@@ -64,6 +64,9 @@ const (
 const (
 	kubeSystemNamespace = "kube-system"
 	corednsDeployment   = "coredns"
+	// corednsRolloutTimeout bounds the wait for a restarted CoreDNS: two
+	// small pods, seconds on a healthy node.
+	corednsRolloutTimeout = 2 * time.Minute
 )
 
 // musterMCPServerResource is muster's MCPServer as kubectl's resource
@@ -343,8 +346,14 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	step("Pointing in-cluster *.%s at the edge (CoreDNS rewrite)", cfg.Platform.Domain)
 	if coredns, _, err := renderManifest(cfg, "coredns.yaml.tmpl"); err != nil {
 		return err
-	} else if _, err := applyRestartingOnChange(ctx, coredns, kubeSystemNamespace, corednsDeployment); err != nil {
+	} else if restarted, err := applyRestartingOnChange(ctx, coredns, kubeSystemNamespace, corednsDeployment); err != nil {
 		return err
+	} else if restarted {
+		// The model-server preflight below resolves the lab host name from
+		// a pod: the old CoreDNS pods do not know it.
+		if err := waitDeploymentRolledOut(ctx, kubeSystemNamespace, corednsDeployment, corednsRolloutTimeout); err != nil {
+			return err
+		}
 	}
 	if nodeport, _, err := renderManifest(cfg, "gateway-nodeport.yaml.tmpl"); err != nil {
 		return err

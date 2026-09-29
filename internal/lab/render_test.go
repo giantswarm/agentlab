@@ -965,3 +965,26 @@ func TestPlatformValuesLocalConnectivityChart(t *testing.T) {
 		t.Errorf("components.%s = %v, want %v", config.ConnectivityChartName, got, want)
 	}
 }
+
+// Pods reach this machine by the lab host name (agentlab#299): the Corefile
+// carries its hosts entry once the kind gateway is known, and none before.
+func TestCoreDNSLabHostEntry(t *testing.T) {
+	cfg := config.Default()
+	coredns, err := renderTemplate(cfg, "coredns.yaml.tmpl", func(d *tmplData) { d.LabHostIP = "172.21.0.1" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(coredns), "hosts {\n            172.21.0.1 "+labHostName+"\n            fallthrough\n        }") {
+		t.Errorf("CoreDNS does not resolve %s to the gateway:\n%s", labHostName, coredns)
+	}
+	coredns, err = renderTemplate(cfg, "coredns.yaml.tmpl", func(d *tmplData) { d.LabHostIP = "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(coredns), labHostName) {
+		t.Errorf("a hosts entry with no gateway known:\n%s", coredns)
+	}
+	if strings.HasSuffix(labHostName, "."+cfg.Platform.Domain) {
+		t.Errorf("%s is under the lab domain, so the wildcard rewrite to the edge takes it", labHostName)
+	}
+}

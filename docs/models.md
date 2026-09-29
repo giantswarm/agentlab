@@ -87,7 +87,13 @@ and everything that can go wrong is host-side plumbing, not kagent:
 
 - **Address**: pods reach the host only through the kind docker network's
   gateway — `docker network inspect kind` names it, typically `172.21.0.1`.
-  That IP goes in `baseUrl`; `localhost` would be the agent pod itself.
+  Pods resolve **`host.agentlab.internal`** to it (a hosts entry in the lab's
+  CoreDNS), and that name goes in `baseUrl`; `localhost` would be the agent
+  pod itself. Use the name, not the IP: kagent injects an OpenAI-provider
+  ModelConfig's API key only for a DNS hostname, so an IP-literal `baseUrl`
+  leaves the agent `Compatible=False` (`credential injection requires an
+  exact DNS hostname`). The name resolves only inside the cluster; from the
+  host, the server is on `127.0.0.1`.
 - **Docker in a VM (Docker Desktop on macOS or Windows, Colima, a podman
   machine)**: the kind gateway is a bridge address *inside that VM*, so it is
   not the machine your model server runs on and no bind address can make it
@@ -177,7 +183,7 @@ platform:
     - name: ollama-local
       provider: OpenAI
       model: qwen3.5:9b
-      baseUrl: http://172.21.0.1:11434/v1
+      baseUrl: http://host.agentlab.internal:11434/v1
       reasoningEffort: none
     # Lemonade Server (lemonade-server.ai): local inference with NPU
     # acceleration on AMD Ryzen AI (XDNA2) through its FastFlowLM backend,
@@ -186,7 +192,7 @@ platform:
     - name: lemonade-npu
       provider: OpenAI
       model: qwen3-it-4b-FLM
-      baseUrl: http://172.21.0.1:13305/v1
+      baseUrl: http://host.agentlab.internal:13305/v1
     # LM Studio (lmstudio.ai) on the host: llama.cpp on GPU/CPU, MLX on
     # Apple silicon. The model is LM Studio's own key (`lms ls`), and it
     # must be one trained for tool use — LM Studio accepts `tools` for any
@@ -194,7 +200,7 @@ platform:
     - name: lmstudio-local
       provider: OpenAI
       model: ibm/granite-4-micro
-      baseUrl: http://172.21.0.1:1234/v1
+      baseUrl: http://host.agentlab.internal:1234/v1
 ```
 
 One Lemonade-specific note: its FastFlowLM models default to a 4096-token
@@ -224,12 +230,12 @@ platform:
     - name: qwen35-2b
       provider: Ollama
       model: qwen3.5:2b
-      baseUrl: http://172.21.0.1:11434
+      baseUrl: http://host.agentlab.internal:11434
       think: false              # thinking off, see below
     - name: qwen35-2b-v1
       provider: OpenAI
       model: qwen3.5:2b
-      baseUrl: http://172.21.0.1:11434/v1
+      baseUrl: http://host.agentlab.internal:11434/v1
       reasoningEffort: none     # thinking off, see below
 ```
 
@@ -336,7 +342,9 @@ the lab would only crash-loop on the Dex localhost address. Each endpoint is **a
 docker network's gateway (`docker network inspect kind`, the same address the
 section above documents for `extraModels`), or the container runtime's host
 alias where that gateway is inside its VM — whichever answers when dialled
-from inside the node. So nobody types `172.21.0.1`. Set `endpoints.<backend>`
+from inside the node. The gateway is wired as `host.agentlab.internal` (the
+name above), so a Lemonade or LM Studio ModelConfig gets its key injected. So
+nobody types `172.21.0.1`. Set `endpoints.<backend>`
 for a server the lab cannot find that way, such as one elsewhere on the LAN;
 such a backend is kept whether or not one answers locally.
 
