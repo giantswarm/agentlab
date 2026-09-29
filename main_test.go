@@ -6,9 +6,10 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/spf13/cobra"
+
 	"github.com/giantswarm/agentlab/internal/config"
 	"github.com/giantswarm/agentlab/internal/labs"
-	"github.com/spf13/cobra"
 )
 
 // Every command a person can discover belongs to one of the help groups —
