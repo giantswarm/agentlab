@@ -138,7 +138,7 @@ func TestListUnregisteredCluster(t *testing.T) {
 	if err := PrintLabs(&out, listed, false); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"  agentlab  running  lab directory unknown", "`agentlab up` in its directory registers it again", "  agentlab-2  running  " + reg} {
+	for _, want := range []string{"  agentlab  running  lab directory unknown", "any agentlab command in its directory (`agentlab pods`) registers it again", "  agentlab-2  running  " + reg} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("PrintLabs output lacks %q:\n%s", want, out.String())
 		}

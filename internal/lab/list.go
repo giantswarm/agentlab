@@ -174,7 +174,7 @@ func PrintLabs(w io.Writer, listed []ListedLab, asJSON bool) error {
 		}
 		if l.Unregistered {
 			fmt.Fprintf(&b, "%s %s  %s  lab directory unknown\n", mark, l.Name, l.State)
-			b.WriteString("    registry    no registered lab names this kind cluster; `agentlab up` in its directory registers it again\n")
+			b.WriteString("    registry    no registered lab names this kind cluster; any agentlab command in its directory (`agentlab pods`) registers it again\n")
 			continue
 		}
 		if l.Error != "" {

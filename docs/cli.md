@@ -27,8 +27,8 @@ on the kind cluster and its ports. `down` keeps the registration (the lab
 still exists as a directory); a lab whose directory or `agentlab.yaml` is gone
 is neither offered nor listed, and back once its `agentlab.yaml` is (the next
 registration drops the entries still gone). `agentlab list` also shows every
-kind cluster no registered lab names, marked `lab directory unknown`: `up` in
-its directory registers it again. `self-update`, `completion` and `help` touch
+kind cluster no registered lab names, marked `lab directory unknown`: any
+command run in a lab's directory (`agentlab pods`) registers the lab. `self-update`, `completion` and `help` touch
 no lab.
 
 ## Headless use
