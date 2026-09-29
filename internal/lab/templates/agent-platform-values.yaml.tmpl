@@ -763,23 +763,25 @@ modelServing:
           The lab's serving proof: a 0.5B instruct model (~1 GiB of BF16
           weights) on the llm-d CPU runtime, the CPU build of the llm-d release
           the well-known template pins, because the kind node has no GPU. Tool
-          calling on (hermes parser), 4k context, eager execution (no compile
-          on start). The template's image is the one exception a preset makes:
+          calling on (hermes parser), the model's own 32k context (room for
+          kubernetes-cka-v2's 16k-token answer budget), eager execution (no
+          compile on start). The template's image is the one exception a preset makes:
           the well-known LLMInferenceServiceConfig names the CUDA build.
         model:
           id: {{ .Serving.Model }}
           storageUri: hf://{{ .Serving.Model }}
           format: vLLM
-          contextLength: 4096
+          contextLength: 32768
           capabilities: [chat, tools]
           license: apache-2.0
         args:
-          - --max-model-len=4096
+          - --max-model-len=32768
           - --enforce-eager
           - --enable-auto-tool-choice
           - --tool-call-parser=hermes
         env:
-          # The KV cache the CPU backend reserves, in GiB.
+          # The KV cache the CPU backend reserves, in GiB: ~12 KiB per token
+          # of this model, a full 32k context is ~384 MiB of it.
           - name: VLLM_CPU_KVCACHE_SPACE
             value: "2"
           # The CPU image has no passwd entry for the non-root uid the
