@@ -1,10 +1,15 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 
 	"github.com/spf13/cobra"
+
+	"github.com/giantswarm/agentlab/internal/config"
+	"github.com/giantswarm/agentlab/internal/labs"
 )
 
 // Every command a person can discover belongs to one of the help groups —
@@ -94,4 +99,27 @@ func find(root *cobra.Command, name string) *cobra.Command {
 		}
 	}
 	return nil
+}
+
+// A command run in a lab directory the registry does not know registers it:
+// a lab from before the registry, or one whose entry is gone, is found from
+// any directory again.
+func TestEnterLabRegistersTheLabHere(t *testing.T) {
+	regDir := t.TempDir()
+	prev := labs.Dir
+	labs.Dir = func() (string, error) { return regDir, nil }
+	t.Cleanup(func() { labs.Dir = prev })
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, config.File), []byte("clusterName: unregistered\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+
+	if err := enterLab(false); err != nil {
+		t.Fatal(err)
+	}
+	got, err := labs.List()
+	if err != nil || len(got) != 1 || got[0].Name != "unregistered" || got[0].Dir != dir {
+		t.Fatalf("labs.List() = %+v, %v; want unregistered in %s", got, err, dir)
+	}
 }

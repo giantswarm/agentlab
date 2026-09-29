@@ -3,6 +3,7 @@ package lab
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,10 +25,19 @@ func writeLab(t *testing.T, yaml string) string {
 
 func stubListProbes(t *testing.T, states map[string]string, ca map[string]string) {
 	t.Helper()
+	stubKindClusters(t)
 	prevState, prevCA := labClusterState, labCAState
 	labClusterState = func(cluster string) string { return states[cluster] }
 	labCAState = func(dir string) string { return ca[dir] }
 	t.Cleanup(func() { labClusterState, labCAState = prevState, prevCA })
+}
+
+// stubKindClusters stands in for docker's kind clusters.
+func stubKindClusters(t *testing.T, names ...string) {
+	t.Helper()
+	prev := listKindClusters
+	listKindClusters = func() ([]string, error) { return names, nil }
+	t.Cleanup(func() { listKindClusters = prev })
 }
 
 // TestListLabs: two labs, one up on 443 and one down on 8443, the current
@@ -99,5 +109,56 @@ func TestListUnreadableLab(t *testing.T) {
 	listed := ListLabs([]labs.Lab{{Name: "bad", Dir: bad}}, "")
 	if len(listed) != 1 || listed[0].Error == "" {
 		t.Fatalf("ListLabs = %+v, want the parse error", listed)
+	}
+}
+
+// A kind cluster no registered lab names — its registry entry or lab
+// directory gone — is listed, marked, in name order among the registered
+// ones; a registered lab's own cluster is not listed twice, also when its
+// clusterName differs from the registry name.
+func TestListUnregisteredCluster(t *testing.T) {
+	const lostCluster, keptCluster, renamedCluster = "lost-lab", "kept-lab", "renamed-lab"
+	reg := writeLab(t, "clusterName: "+keptCluster+"\n")
+	renamed := writeLab(t, "clusterName: "+renamedCluster+"\n")
+	stubListProbes(t, map[string]string{lostCluster: stateRunning, keptCluster: stateRunning, renamedCluster: stateRunning}, nil)
+	stubKindClusters(t, lostCluster, keptCluster, renamedCluster)
+
+	listed := ListLabs([]labs.Lab{{Name: keptCluster, Dir: reg}, {Name: "renamed", Dir: renamed}}, "")
+	if len(listed) != 3 {
+		t.Fatalf("ListLabs = %+v, want kept, lost and renamed", listed)
+	}
+	orphan := listed[1] // kept-lab, lost-lab, renamed
+	if orphan.Name != lostCluster || !orphan.Unregistered || orphan.Dir != "" || orphan.State != stateRunning {
+		t.Errorf("second = %+v, want the running, unregistered lost-lab", orphan)
+	}
+	if listed[0].Unregistered || listed[2].Unregistered {
+		t.Errorf("registered labs marked unregistered: %+v, %+v", listed[0], listed[2])
+	}
+
+	var out bytes.Buffer
+	if err := PrintLabs(&out, listed, false); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"  " + lostCluster + "  running  lab directory unknown", "any agentlab command in its directory (`agentlab pods`) registers it again", "  " + keptCluster + "  running  " + reg} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("PrintLabs output lacks %q:\n%s", want, out.String())
+		}
+	}
+	var js bytes.Buffer
+	if err := PrintLabs(&js, listed, true); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(js.String(), `"unregistered": true`) {
+		t.Errorf("-o json lacks the unregistered mark:\n%s", js.String())
+	}
+}
+
+// Without docker the registered labs still list.
+func TestListWithoutDocker(t *testing.T) {
+	lab := writeLab(t, "clusterName: a\n")
+	stubListProbes(t, map[string]string{"a": "unknown"}, nil)
+	listKindClusters = func() ([]string, error) { return nil, errors.New("docker: not found") }
+	if listed := ListLabs([]labs.Lab{{Name: "a", Dir: lab}}, ""); len(listed) != 1 || listed[0].State != "unknown" {
+		t.Fatalf("ListLabs = %+v, want a alone, state unknown", listed)
 	}
 }

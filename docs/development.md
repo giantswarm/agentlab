@@ -118,7 +118,7 @@ internal/lab/                    everything operational:
   certs.go trust.go                the name-constrained lab CA + 825-day leaf certs; trust/untrust (smallstep/truststore)
   oidc.go login.go browser.go      the lab's Dex clients: password grant, authorization-code flow
   test.go                          RBAC assertions for every configured user
-  list.go pods.go                  `agentlab list` (the registered labs from docker and their files) and `agentlab pods` (kubectl get pods -A's columns)
+  list.go pods.go                  `agentlab list` (the registered labs from docker and their files, and every kind cluster no registered lab names) and `agentlab pods` (kubectl get pods -A's columns)
   platform.go platformtest.go      agent platform install + the headless MCP proof
   postrenderers.go                 the lab's per-component postRenderers patches (hostNetwork, sidecar, nodePort, dev-image overrides)
   devimages.go                     the dev-image swap: image names resolved from the component renders, the lab registry + the digest-pinned Harness image

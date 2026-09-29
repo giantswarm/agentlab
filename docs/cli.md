@@ -25,8 +25,11 @@ A lab entered from another directory is named on stderr (`Lab agentlab
 directory holds is refused, naming both directories — the two would collide
 on the kind cluster and its ports. `down` keeps the registration (the lab
 still exists as a directory); a lab whose directory or `agentlab.yaml` is gone
-drops out of the registry. `self-update`, `completion` and `help` touch no
-lab.
+is neither offered nor listed, and back once its `agentlab.yaml` is (the next
+registration drops the entries still gone). `agentlab list` also shows every
+kind cluster no registered lab names, marked `lab directory unknown`: any
+command run in a lab's directory (`agentlab pods`) registers the lab. `self-update`, `completion` and `help` touch
+no lab.
 
 ## Headless use
 

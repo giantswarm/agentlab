@@ -48,26 +48,20 @@ type registry struct {
 }
 
 // List returns the registered labs sorted by name. Entries whose directory or
-// agentlab.yaml is gone are dropped — neither offered nor listed — and the
-// file is rewritten without them (best effort: a registry that cannot be
-// written still answers).
+// agentlab.yaml is gone are left out — neither offered nor listed — but kept
+// in the file: a read never writes, so a lab whose agentlab.yaml is away for a
+// moment (moved aside, being rewritten) is back once the file is. Register
+// drops the stale entries when it writes.
 func List() ([]Lab, error) {
 	reg, err := read()
 	if err != nil {
 		return nil, err
 	}
 	var labs []Lab
-	pruned := false
 	for name, dir := range reg.Labs {
-		if !isLab(dir) {
-			delete(reg.Labs, name)
-			pruned = true
-			continue
+		if isLab(dir) {
+			labs = append(labs, Lab{Name: name, Dir: dir})
 		}
-		labs = append(labs, Lab{Name: name, Dir: dir})
-	}
-	if pruned {
-		_ = write(reg)
 	}
 	slices.SortFunc(labs, func(a, b Lab) int { return strings.Compare(a.Name, b.Name) })
 	return labs, nil
@@ -111,7 +105,8 @@ func (reg *registry) taken(name, dir string) error {
 }
 
 // Register records dir as the lab of that name, dropping any other name the
-// directory was registered under (a changed clusterName). A name registered
+// directory was registered under (a changed clusterName) and the entries
+// whose directory no longer holds a lab. A name registered
 // to another existing lab directory is refused with a *TakenError.
 func Register(name, dir string) error {
 	dir, err := filepath.Abs(dir)
@@ -128,8 +123,10 @@ func Register(name, dir string) error {
 	if reg.Labs[name] == dir && len(namesOf(reg, dir)) == 1 {
 		return nil // already recorded: no write on every `up`
 	}
-	for _, n := range namesOf(reg, dir) {
-		delete(reg.Labs, n)
+	for n, d := range reg.Labs {
+		if d == dir || !isLab(d) {
+			delete(reg.Labs, n)
+		}
 	}
 	reg.Labs[name] = dir
 	return write(reg)
