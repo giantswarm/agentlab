@@ -1,0 +1,2 @@
+# OSS Index matches the patched v1.84.0 (GHSA-2v4p-qf9q-27wj: vulnerable <= 1.83.1), https://github.com/giantswarm/gitops-commit/issues/17
+CVE-2026-84445 until=2026-10-29 # google.golang.org/grpc@v1.84.0
