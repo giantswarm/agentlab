@@ -111,6 +111,11 @@ type tmplData struct {
 	// whenever the agents are, so the flag is in place before any swap.
 	HarnessDevImage       string
 	LocalRegistryEndpoint string
+	// LabCA is the lab CA's certificate (PEM), rendered as the extra upstream
+	// trust of Substrate's egress gateway: it terminates the actors' TLS and
+	// dials the models Gateway, whose certificate the lab CA signs, itself.
+	// Read only when the agents, and so Substrate, render.
+	LabCA string
 	// ConnectivityChart is the connectivity component's source when the
 	// meta chart comes from a checkout (platform.chartPath, connectivity.go):
 	// the lab registry as pods reach it and the version the checkout's
@@ -134,6 +139,10 @@ type tmplData struct {
 	// migrate Job's githubToken. Only ever the Secret's name, never the token.
 	GitHubToken bool
 }
+
+// labCAFile is the CA certificate newTmplData renders as LabCA; the tests
+// point it at a fixture.
+var labCAFile = caCertPath
 
 func newTmplData(cfg *config.Config) (*tmplData, error) {
 	vmManagerGuestImage, err := vmManagerGuestImageFor(cfg)
@@ -179,8 +188,17 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 	if err != nil {
 		return nil, err
 	}
+	var labCA string
+	if cfg.Platform.Agents && !cfg.LegacyChart() {
+		raw, err := os.ReadFile(labCAFile) // #nosec G304 -- the lab's own CA certificate
+		if err != nil {
+			return nil, fmt.Errorf("the lab CA for Substrate's egress trust: %w", err)
+		}
+		labCA = strings.TrimRight(string(raw), "\n")
+	}
 	return &tmplData{
 		Config:                     cfg,
+		LabCA:                      labCA,
 		PostRenderers:              postRenderers,
 		MCPPrometheusPostRenderers: strings.TrimRight(string(mcpPrometheus), "\n"),
 		MCPPrometheusChartVersion:  mcpPrometheusChartVersion,
