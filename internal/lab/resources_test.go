@@ -171,8 +171,6 @@ func TestCeilCPUs(t *testing.T) {
 	}
 }
 
-const goosLinux = "linux"
-
 // measure is a docker VM on a Mac unless a test says otherwise: the case the
 // resize hints are written for.
 func measure(cpus, memMiB int) runtimeMeasure {

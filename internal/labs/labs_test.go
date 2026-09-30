@@ -145,6 +145,38 @@ func TestPruning(t *testing.T) {
 	}
 }
 
+// A read never drops an entry: a lab whose agentlab.yaml is away for a
+// moment is listed again once it is back; a Register drops the stale ones.
+func TestListKeepsAnEntryWhoseFileReturns(t *testing.T) {
+	setup(t)
+	dir := newLab(t, "away")
+	f := filepath.Join(dir, config.File)
+	if err := os.Rename(f, f+".aside"); err != nil {
+		t.Fatal(err)
+	}
+	if labs, err := List(); err != nil || len(labs) != 0 {
+		t.Fatalf("List() while away = %+v, %v; want none", labs, err)
+	}
+	if err := os.Rename(f+".aside", f); err != nil {
+		t.Fatal(err)
+	}
+	if labs, err := List(); err != nil || len(labs) != 1 || labs[0].Dir != dir {
+		t.Fatalf("List() once back = %+v, %v; want away in %s", labs, err, dir)
+	}
+
+	if err := os.Remove(f); err != nil {
+		t.Fatal(err)
+	}
+	newLab(t, "other")
+	reg, err := read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := reg.Labs["away"]; ok || len(reg.Labs) != 1 {
+		t.Errorf("registry after Register = %v, want only other", reg.Labs)
+	}
+}
+
 func TestNameCollision(t *testing.T) {
 	setup(t)
 	a := newLab(t, "agentlab")

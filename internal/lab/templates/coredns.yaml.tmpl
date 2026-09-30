@@ -19,6 +19,15 @@ data:
            lameduck 5s
         }
         ready
+{{- if .LabHostIP }}
+        # This machine by name (the kind network's gateway), the host of the
+        # autodetected model-server endpoints: kagent injects a ModelConfig's
+        # API key only for a DNS hostname, never for an IP literal.
+        hosts {
+            {{ .LabHostIP }} {{ .LabHostName }}
+            fallthrough
+        }
+{{- end }}
 {{- if .ServingEnabled }}
         # The models Gateway (platform.serving) is a Gateway of its own with
         # a data plane of its own: its hostname goes to that Service, before

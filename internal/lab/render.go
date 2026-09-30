@@ -34,6 +34,7 @@ const checksumPlaceholder = "REPLACED_AT_APPLY"
 type tmplData struct {
 	*config.Config
 	CertsDir              string // absolute, for the kind extraMount
+	NodeFilesDir          string // absolute, the node's host-kernel guard (hostkernel.go)
 	MusterNodePort        int
 	KagentUINodePort      int
 	GatewayNodePort       int
@@ -54,6 +55,12 @@ type tmplData struct {
 	ModelManagerEnabled   bool
 	ModelManagerBackends  []string
 	ModelManagerEndpoints map[string]string
+	// LabHostName and LabHostIP are the CoreDNS hosts entry that lets pods
+	// reach this machine by name (labHostName, the autodetected endpoints'
+	// host); LabHostIP is empty, and the entry left out, while the kind
+	// network does not exist yet.
+	LabHostName string
+	LabHostIP   string
 	// LegacyChart mirrors cfg.LegacyChart(): the lab installs a released
 	// 3.x meta chart, and agent-platform-values.yaml.tmpl renders the 3.x
 	// lab shape (kagent 0.10 with its bundled Postgres, no Substrate, no
@@ -150,6 +157,18 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 	if err != nil {
 		return nil, err
 	}
+	nodeFiles, err := nodeFilesDir()
+	if err != nil {
+		return nil, err
+	}
+	// Only for a lab that names host model servers (the managed ones or
+	// extraModels), best effort like the endpoints below: a pre-boot render
+	// has no kind network, and `agentlab platform` renders again once it
+	// exists.
+	var labHostIP string
+	if cfg.ModelManagerEnabled() || len(cfg.Platform.ExtraModels) > 0 {
+		labHostIP, _ = kindGatewayIPFn(cfg.ControlPlaneNode())
+	}
 	endpoints := map[string]string{}
 	if cfg.ModelManagerEnabled() {
 		if endpoints, err = resolveBackendEndpoints(cfg); err != nil {
@@ -205,12 +224,15 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		ServingEnabled:             cfg.ServingEnabled(),
 		Serving:                    servingValuesFor(),
 		CertsDir:                   certsDir,
+		NodeFilesDir:               nodeFiles,
 		MusterNodePort:             config.MusterNodePort,
 		KagentUINodePort:           config.KagentUINodePort,
 		GatewayNodePort:            config.GatewayNodePort,
 		GatewayPublicNodePort:      config.GatewayPublicNodePort,
 		BrowserCallbackPort:        config.BrowserCallbackPort,
 		DomainRegex:                strings.ReplaceAll(cfg.Platform.Domain, ".", `\.`),
+		LabHostName:                labHostName,
+		LabHostIP:                  labHostIP,
 		AllGroups:                  config.Groups,
 		KubernetesClientID:         config.KubernetesClientID,
 		KubernetesClientSecret:     config.KubernetesClientSecret,
@@ -380,6 +402,9 @@ func renderManifestWith(cfg *config.Config, tmplName string, mutate func(*tmplDa
 // servers answer (best effort: the platform run is where a failure counts).
 func RenderAll(cfg *config.Config) error {
 	if err := GenCerts(cfg.Platform.Domain, false); err != nil {
+		return err
+	}
+	if err := writeNodeFiles(); err != nil {
 		return err
 	}
 	extraModels := cfg.Platform.ExtraModels

@@ -125,6 +125,9 @@ func loopbackBase(backend string) string {
 	return fmt.Sprintf("http://127.0.0.1:%d", config.BackendPort(backend))
 }
 
+// kindGatewayIPFn is kindGatewayIP; a variable so render tests need no docker.
+var kindGatewayIPFn = kindGatewayIP
+
 // kindGatewayIP returns the address pods dial to reach services on the host:
 // the IPv4 gateway of the kind docker network. Under rootless podman the
 // bridge gateway is not the host (pasta routes host traffic through
@@ -176,7 +179,7 @@ func resolveBackendEndpoint(cfg *config.Config, backend string) (string, error) 
 		return strings.TrimSuffix(ep, "/"), nil
 	}
 	node := cfg.ControlPlaneNode()
-	gw, err := kindGatewayIP(node)
+	gw, err := kindGatewayIPFn(node)
 	if err != nil {
 		return "", gatewayDetectionErr(backend, err)
 	}
@@ -190,6 +193,16 @@ func gatewayDetectionErr(backend string, err error) error {
 		config.BackendServerName(backend), err, backend)
 }
 
+// labHostName is the name pods resolve to the kind gateway (the CoreDNS
+// hosts entry coredns.yaml.tmpl renders): an autodetected endpoint names the
+// host by it rather than by the gateway IP, because kagent injects an
+// OpenAI-provider ModelConfig's API key only for an exact DNS hostname — an
+// IP-literal base URL makes the AgentTemplate Compatible=False (agentlab#299).
+// Outside the lab domain on purpose, so the wildcard rewrite to the edge
+// never takes it; it resolves only inside the cluster, like the runtimes'
+// host aliases, and host-side readers fall back to loopback (hostInventory).
+const labHostName = "host.agentlab.internal"
+
 // backendEndpointVia is resolveBackendEndpoint for a caller that holds the
 // gateway already, so a whole backend list costs one `docker network inspect`.
 func backendEndpointVia(node, backend, gw string) (string, error) {
@@ -201,7 +214,7 @@ func backendEndpointVia(node, backend, gw string) (string, error) {
 	case err != nil:
 		// The probe could not run, so there is no verdict: the gateway is the
 		// documented default, and a busy node cannot move the rendered values.
-		return fmt.Sprintf("http://%s:%d", gw, port), nil
+		return fmt.Sprintf("http://%s:%d", labHostName, port), nil
 	case host == "":
 		// Both causes get their own remedy: a server that is not running
 		// answers nowhere, and binding is the fix only where the gateway is
@@ -210,6 +223,9 @@ func backendEndpointVia(node, backend, gw string) (string, error) {
 		return "", fmt.Errorf("no address reaches the host %s from pods: neither %s (the container runtime's gateway) nor %s (its host alias) answers — start the server if it is stopped, bind it to every interface if %s is this machine, or set platform.modelManager.endpoints.%s",
 			config.BackendServerName(backend), net.JoinHostPort(gw, strconv.Itoa(port)),
 			net.JoinHostPort(hostAlias(), strconv.Itoa(port)), gw, backend)
+	}
+	if host == gw {
+		host = labHostName
 	}
 	return fmt.Sprintf("http://%s:%d", host, port), nil
 }
@@ -235,7 +251,7 @@ func resolveBackendEndpoints(cfg *config.Config) (map[string]string, error) {
 		return endpoints, nil
 	}
 	node := cfg.ControlPlaneNode()
-	gw, err := kindGatewayIP(node)
+	gw, err := kindGatewayIPFn(node)
 	if err != nil {
 		return nil, gatewayDetectionErr(probe[0], err)
 	}

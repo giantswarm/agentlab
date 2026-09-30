@@ -615,6 +615,30 @@ the only sender. `klaus-gateway-test` asserts the patch on the live
 Deployment and fetches the fake through the Service from a probe pod first.
 Lab-only by construction.
 
+### U27. `hostkernel.go`: the node's kubelet and systemd-sysctl would rewrite the host's kernel settings — BLOCKED UPSTREAM
+The kind node is a privileged container, and under a rootful engine its root
+is the host's root, so a kernel-global sysctl written in the node lands on
+the host (giantswarm/agentlab#309). At every node start (`up` and every host
+boot) kubelet's `setupKernelTunables` sets `vm.overcommit_memory=1`,
+`vm.panic_on_oom=0`, `kernel.panic=10`, `kernel.panic_on_oops=1` and the
+root key quotas, so a kernel oops reboots the workstation. The node's
+systemd-sysctl applies the node image's Debian `/usr/lib/sysctl.d`, where
+`kernel.core_pattern=core` switches off the host's systemd-coredump. kubelet
+has no mode that leaves the host alone: `protectKernelDefaults` refuses to
+start on any host whose values differ. **Fix:** the kind config mounts a
+kubelet drop-in whose `ExecStartPre` bind-mounts a shadow file carrying
+kubelet's value over each of its six `/proc/sys` keys inside the node, so
+kubelet reads what it wants and writes nothing. It also mounts an empty
+directory over `/usr/lib/sysctl.d`, which leaves systemd-sysctl only kind's
+own `/etc/sysctl.d` (per-network-namespace `net.*` keys). Pods mount their
+own `/proc` and see the host's values. `up` compares the host's values
+before and after it creates the node and warns with the restore command.
+On an existing node created without the mounts it says to recreate the node.
+Unblocks when kind stops applying the image's sysctl.d
+(kubernetes-sigs/kind, as with its `systemd-binfmt` mask) and kubelet gains a
+mode that neither writes nor refuses. A rootless engine needs none of it, since
+the kernel refuses kernel-global writes from a user namespace.
+
 ## Accepted lab trade-offs (not hacks to fix)
 
 - **Checksum stamping via the `REPLACED_AT_APPLY` placeholder** — the standard

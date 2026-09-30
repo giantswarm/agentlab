@@ -265,14 +265,31 @@ func enterLab(create bool) error {
 		pick = pickLab
 	}
 	l, err := labs.Resolve(labFlag, create, pick)
-	if err != nil || l.Dir == "" {
+	if err != nil {
 		return err
+	}
+	if l.Dir == "" {
+		registerHere()
+		return nil
 	}
 	if err := os.Chdir(l.Dir); err != nil {
 		return fmt.Errorf("entering lab %s: %w", l.Name, err)
 	}
 	fmt.Fprintf(os.Stderr, "Lab %s (%s)\n", l.Name, l.Dir)
 	return nil
+}
+
+// registerHere registers the lab of the current directory, if there is one:
+// a lab from before the registry, or one whose entry is gone, is found from
+// any directory again after any command run in it. A convenience: silent,
+// it never fails the command, and a name another lab holds stays refused
+// (`up` and `configure` say so).
+func registerHere() {
+	cfg, err := config.Peek(".")
+	if err != nil {
+		return
+	}
+	_ = labs.Register(cfg.ClusterName, ".")
 }
 
 // pickLab asks which registered lab to use, on a terminal.
