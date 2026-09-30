@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -162,9 +163,17 @@ func TestChartSourceValidation(t *testing.T) {
 	}
 	cfg.Platform.Agents = true
 
-	cfg.Platform.ValuesFiles = []string{filepath.Join(t.TempDir(), "missing.yaml")}
-	if err := cfg.Validate(); err == nil {
-		t.Error("valuesFiles with a missing file: want an error")
+	missing := filepath.Join(t.TempDir(), "missing.yaml")
+	cfg.Platform.ValuesFiles = []string{missing}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("valuesFiles with a missing file: Validate must leave it to CheckValuesFiles, got %v", err)
+	}
+	err := cfg.CheckValuesFiles()
+	if want := "platform.valuesFiles[0]: " + missing + ": no such file or directory"; err == nil || err.Error() != want {
+		t.Errorf("CheckValuesFiles with a missing file: want %q, got %v", want, err)
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		t.Error("CheckValuesFiles must not wrap os.ErrNotExist: Load's callers read it as a missing agentlab.yaml")
 	}
 	cfg.Platform.ValuesFiles = []string{""}
 	if err := cfg.Validate(); err == nil {
@@ -177,6 +186,9 @@ func TestChartSourceValidation(t *testing.T) {
 	cfg.Platform.ValuesFiles = []string{overlay}
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("valuesFiles with an existing file: %v", err)
+	}
+	if err := cfg.CheckValuesFiles(); err != nil {
+		t.Errorf("CheckValuesFiles with an existing file: %v", err)
 	}
 	cfg.Platform.ValuesFiles = []string{}
 	cfg.Normalize()
