@@ -70,9 +70,11 @@ const (
 	// task while it is working, without any tool call (the binding would
 	// pause one).
 	a2aLongPrompt = "Write a detailed essay of at least 1500 words on the history of container networking in Kubernetes: CNI, kube-proxy, network policies, service meshes, gateway API. Section by section, no summary, do not stop early."
-	// hitlDecisionRounds bounds the decisions one task may ask for (the Go
-	// ADK pauses on filter_tools first, then on call_tool).
-	hitlDecisionRounds = 4
+	// hitlDecisionTimeout bounds the time one task may keep asking for
+	// decisions: the Go ADK pauses once per tool call, and how many calls the
+	// model needs (filter_tools, describe_tool, call_tool retries over
+	// muster's family addressing) is the model's, not the platform's.
+	hitlDecisionTimeout = 5 * time.Minute
 	// cancelAfterWorking is how long after the task reports working the
 	// proof cancels it when no artifact arrived earlier.
 	cancelAfterWorking = 3 * time.Second
@@ -270,14 +272,14 @@ func A2ATest(cfg *config.Config, email string, opts A2ATestOptions) error {
 		return fmt.Errorf("the tool turn did not pause for approval: task %s ended %s (%s) with no tool_approval_request: %s", paused.taskID, stateName(paused.state()), paused.statesString(), excerpt(paused.text(), 300))
 	}
 	note("task %s paused: %s; tool_approval_request for %s (hint %q)", paused.taskID, paused.statesString(), strings.Join(paused.approval.toolNames(), ", "), excerpt(paused.approval.Hint, 100))
-	approved, rounds, err := api.decideUntilSettled(instance.GetId(), paused, true, "")
+	approved, decided, err := api.decideUntilSettled(instance.GetId(), paused, true, "")
 	if err != nil {
 		return err
 	}
 	if approved.state() != a2a.TaskStateCompleted {
-		return fmt.Errorf("after %d approval(s) task %s ended %s (%s): %s", rounds, approved.taskID, stateName(approved.state()), approved.statesString(), excerpt(approved.text(), 300))
+		return fmt.Errorf("after %d approval(s) (%s) task %s ended %s (%s): %s", len(decided), strings.Join(decided, "; "), approved.taskID, stateName(approved.state()), approved.statesString(), excerpt(approved.text(), 300))
 	}
-	note("%d approval(s) → %s in %s; answered %q", rounds, stateName(approved.state()), time.Since(hitlStarted).Round(time.Millisecond), excerpt(approved.text(), 100))
+	note("%d approval(s) (%s) → %s in %s; answered %q", len(decided), strings.Join(decided, "; "), stateName(approved.state()), time.Since(hitlStarted).Round(time.Millisecond), excerpt(approved.text(), 100))
 	calls, err := musterCallsSince(hitlStarted, user.Email, subject)
 	if err != nil {
 		return err
@@ -305,12 +307,12 @@ func A2ATest(cfg *config.Config, email string, opts A2ATestOptions) error {
 	if paused.state() != a2a.TaskStateInputRequired || paused.approval == nil {
 		return fmt.Errorf("the tool turn on the fresh instance %s did not pause for approval: task %s ended %s (%s): %s", fresh.GetId(), paused.taskID, stateName(paused.state()), paused.statesString(), excerpt(paused.text(), 200))
 	}
-	declined, rounds, err := api.decideUntilSettled(fresh.GetId(), paused, false, a2aDeclineReason)
+	declined, rejected, err := api.decideUntilSettled(fresh.GetId(), paused, false, a2aDeclineReason)
 	if err != nil {
 		return err
 	}
 	if !declined.state().Terminal() {
-		return fmt.Errorf("after %d rejection(s) task %s is still %s (%s)", rounds, declined.taskID, stateName(declined.state()), declined.statesString())
+		return fmt.Errorf("after %d rejection(s) task %s is still %s (%s)", len(rejected), declined.taskID, stateName(declined.state()), declined.statesString())
 	}
 	calls, err = musterCallsSince(declineStarted, user.Email, subject)
 	if err != nil {
@@ -319,7 +321,7 @@ func A2ATest(cfg *config.Config, email string, opts A2ATestOptions) error {
 	if calls.calls != 0 {
 		return fmt.Errorf("muster logged %d tools/call by %s during the declined task — the rejected tool ran anyway", calls.calls, user.Email)
 	}
-	note("%d rejection(s) → %s (%s); no tools/call by %s reached muster; the agent said %q", rounds, stateName(declined.state()), declined.statesString(), user.Email, excerpt(declined.text(), 100))
+	note("%d rejection(s) (%s) → %s (%s); no tools/call by %s reached muster; the agent said %q", len(rejected), strings.Join(rejected, "; "), stateName(declined.state()), declined.statesString(), user.Email, excerpt(declined.text(), 100))
 
 	step("CancelTask on a running turn ends it server-side; the instance takes a following turn")
 	canceled, err := api.cancelRunningTurn(instance.GetId(), a2aLongPrompt)
@@ -616,29 +618,47 @@ func (a *kagentAPI) completedTurnOnce(instanceID, prompt string) (*timedTurn, er
 
 // decideUntilSettled answers a paused task's requests with the same decision
 // until the task leaves input-required (the Go ADK may pause once per tool
-// call), bounded by hitlDecisionRounds; returns the settled turn and the
-// number of decisions.
-func (a *kagentAPI) decideUntilSettled(instanceID string, paused *timedTurn, approve bool, reason string) (*turn, int, error) {
+// call), bounded by hitlDecisionTimeout rather than a count; a decision the
+// task answers with the same request again did not resume it. Returns the
+// settled turn and the tools decided on, in order.
+func (a *kagentAPI) decideUntilSettled(instanceID string, paused *timedTurn, approve bool, reason string) (*turn, []string, error) {
 	current := paused.turn
-	rounds := 0
+	var decided []string
+	deadline := time.Now().Add(hitlDecisionTimeout)
 	for current.state() == a2a.TaskStateInputRequired {
 		if current.approval == nil {
-			return current, rounds, fmt.Errorf("task %s paused at input-required without a tool_approval_request (%s): %s", current.taskID, current.statesString(), excerpt(current.statusText, 200))
+			return current, decided, fmt.Errorf("task %s paused at input-required without a tool_approval_request (%s): %s", current.taskID, current.statesString(), excerpt(current.statusText, 200))
 		}
-		if rounds == hitlDecisionRounds {
-			return current, rounds, fmt.Errorf("task %s still asks for a decision after %d (%s)", current.taskID, rounds, strings.Join(current.approval.toolNames(), ", "))
+		if time.Now().After(deadline) {
+			return current, decided, fmt.Errorf("task %s still asks for a decision after %d in %s (%s; decided %s)", current.taskID, len(decided), hitlDecisionTimeout, strings.Join(current.approval.toolNames(), ", "), strings.Join(decided, ", "))
 		}
-		rounds++
-		note("decision %d: %s %s", rounds, map[bool]string{true: "approve", false: "reject"}[approve], strings.Join(current.approval.toolNames(), ", "))
+		tools := strings.Join(current.approval.toolNames(), ", ")
+		decided = append(decided, tools)
+		note("decision %d: %s %s", len(decided), map[bool]string{true: "approve", false: "reject"}[approve], tools)
 		ctx, cancel := context.WithTimeout(context.Background(), kagentTurnTimeout)
 		next, err := a.decide(ctx, instanceID, current, approve, reason)
 		cancel()
 		if err != nil {
-			return current, rounds, err
+			return current, decided, err
+		}
+		if next.state() == a2a.TaskStateInputRequired && next.approval != nil && sameToolCalls(current.approval, next.approval) {
+			return next, decided, fmt.Errorf("task %s asks for the same decision again after decision %d (%s): the decision did not resume it", next.taskID, len(decided), tools)
 		}
 		current = next
 	}
-	return current, rounds, nil
+	return current, decided, nil
+}
+
+// sameToolCalls reports whether two requests ask about the same tool calls.
+func sameToolCalls(a, b *toolApprovalRequest) bool {
+	ids := func(r *toolApprovalRequest) []string {
+		var out []string
+		for _, t := range r.decidedTools() {
+			out = append(out, t.ID+"/"+t.CallID)
+		}
+		return out
+	}
+	return slices.Equal(ids(a), ids(b))
 }
 
 // canceledTurn is the evidence of the cancel step.

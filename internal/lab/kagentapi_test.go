@@ -929,3 +929,74 @@ func TestSubstrateConversions(t *testing.T) {
 		t.Errorf("actor = %+v", got)
 	}
 }
+
+// TestDecideUntilSettled: the decisions loop counts no budget of its own —
+// a task resumed to completed settles, one that answers a decision with the
+// same request again did not resume and fails.
+func TestDecideUntilSettled(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		resumed  func(info a2a.TaskInfo, prompt *a2a.Message) []a2a.Event
+		wantErr  string
+		wantDone bool
+	}{
+		{
+			name: "resumed to completed",
+			resumed: func(info a2a.TaskInfo, _ *a2a.Message) []a2a.Event {
+				return []a2a.Event{
+					a2a.NewStatusUpdateEvent(info, a2a.TaskStateWorking, nil),
+					a2a.NewArtifactEvent(info, a2a.NewTextPart("7 namespaces")),
+					a2a.NewStatusUpdateEvent(info, a2a.TaskStateCompleted, nil),
+				}
+			},
+			wantDone: true,
+		},
+		{
+			name: "the same request again",
+			resumed: func(info a2a.TaskInfo, prompt *a2a.Message) []a2a.Event {
+				return []a2a.Event{
+					a2a.NewStatusUpdateEvent(info, a2a.TaskStateWorking, nil),
+					a2a.NewStatusUpdateEvent(info, a2a.TaskStateInputRequired, prompt),
+				}
+			},
+			wantErr: "did not resume",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := readyFake(t)
+			info := a2a.TaskInfo{TaskID: fakeTaskID, ContextID: fakeContextID}
+			prompt := a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart("Approve "+fakeTool+"?"))
+			var request map[string]any
+			if err := json.Unmarshal([]byte(`{"type":"tool_approval_request","tools":[{"id":"adk-1","call_id":"toolu_1","name":"filter_tools","args":{}}]}`), &request); err != nil {
+				t.Fatal(err)
+			}
+			prompt.SetMeta(hitlExtensionURI, request)
+			prompt.Extensions = []string{hitlExtensionURI}
+			f.events = []a2a.Event{
+				&a2a.Task{ID: fakeTaskID, ContextID: fakeContextID, Status: a2a.TaskStatus{State: a2a.TaskStateSubmitted}},
+				a2a.NewStatusUpdateEvent(info, a2a.TaskStateInputRequired, prompt),
+			}
+			f.eventsByTask[fakeTaskID] = tc.resumed(info, prompt)
+			f.tasks[fakeTaskID] = &a2a.Task{ID: fakeTaskID, ContextID: fakeContextID, Status: a2a.TaskStatus{State: a2a.TaskStateInputRequired, Message: prompt}}
+			api := f.serve(t, fakeToken)
+
+			paused, err := api.turnOn(fakeInstanceID, userMessage(a2aToolPrompt))
+			if err != nil {
+				t.Fatal(err)
+			}
+			settled, decided, err := api.decideUntilSettled(fakeInstanceID, paused, true, "")
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err = %v, want %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if settled.state() != a2a.TaskStateCompleted || !slices.Equal(decided, []string{fakeTool}) {
+				t.Errorf("settled = %s, decided %v", settled.state(), decided)
+			}
+		})
+	}
+}
