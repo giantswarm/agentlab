@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -749,6 +750,24 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
+// CheckValuesFiles refuses a platform.valuesFiles entry that cannot be read.
+// It is not part of Validate: only the platform install merges the overlays,
+// so `down`, `status` and `configure` work on a lab whose overlay is gone. The
+// error names the entry and never wraps fs.ErrNotExist, which Load's callers
+// read as "no agentlab.yaml".
+func (c *Config) CheckValuesFiles() error {
+	for i, path := range c.Platform.ValuesFiles {
+		if _, err := os.Stat(path); err != nil {
+			reason := err.Error()
+			if pathErr := (*fs.PathError)(nil); errors.As(err, &pathErr) {
+				reason = pathErr.Err.Error()
+			}
+			return fmt.Errorf("platform.valuesFiles[%d]: %s: %s", i, path, reason)
+		}
+	}
+	return nil
+}
+
 // Peek reads the agentlab.yaml of the lab in dir without validating,
 // re-hashing or writing anything — `agentlab list`'s look at a lab that is
 // not the one the command runs against.
@@ -1155,12 +1174,9 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("platform.devRegistryPort: %w", err)
 		}
 	}
-	for _, path := range c.Platform.ValuesFiles {
+	for i, path := range c.Platform.ValuesFiles {
 		if path == "" {
-			return fmt.Errorf("platform.valuesFiles: an empty path")
-		}
-		if _, err := os.Stat(path); err != nil {
-			return fmt.Errorf("platform.valuesFiles: %w", err)
+			return fmt.Errorf("platform.valuesFiles[%d]: an empty path", i)
 		}
 	}
 	seenModels := map[string]bool{}

@@ -35,6 +35,11 @@ func Up(cfg *config.Config, offers Offers) error {
 			}
 		}
 	}
+	if cfg.Platform.Enabled {
+		if err := cfg.CheckValuesFiles(); err != nil {
+			return err
+		}
+	}
 	topology, err := platformTopologyFor(cfg)
 	if err != nil {
 		return err

@@ -260,6 +260,9 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	if err := refuseOlderLabShape(); err != nil {
 		return err
 	}
+	if err := cfg.CheckValuesFiles(); err != nil {
+		return err
+	}
 	// The dev channel follows its branch on every run, like Flux would: a
 	// newer build is a new revision of the release below. The pick lands in
 	// agentlab.yaml so the next command — or a colleague reading the file —

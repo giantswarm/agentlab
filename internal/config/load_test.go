@@ -113,3 +113,21 @@ func TestCheckFamiliesChartFloor(t *testing.T) {
 		t.Errorf("the default: %v", err)
 	}
 }
+
+// A lab whose values overlay is gone still loads: `down` and `configure` need
+// no overlay, and the missing file must not read as a missing agentlab.yaml
+// (os.ErrNotExist), which sent `down` to "no agentlab.yaml found" and would
+// let `configure` start over from the defaults.
+func TestLoadWithAMissingValuesFile(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := os.WriteFile(File, []byte("platform:\n  chartVersion: "+loadTestChart+"\n  valuesFiles:\n    - gone/overlay.yaml\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("a missing values file failed Load: %v", err)
+	}
+	if err := cfg.CheckValuesFiles(); err == nil || !strings.Contains(err.Error(), "platform.valuesFiles[0]: gone/overlay.yaml: no such file") {
+		t.Fatalf("CheckValuesFiles: want the entry named, got %v", err)
+	}
+}
