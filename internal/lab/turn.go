@@ -197,11 +197,11 @@ func (a *kagentAPI) decidedTurn(instanceID, prompt, decide, reason string) (*tur
 	if decide == "" {
 		return paused.turn, nil
 	}
-	settled, rounds, err := a.decideUntilSettled(instanceID, paused, decide == "approve", reason)
+	settled, decided, err := a.decideUntilSettled(instanceID, paused, decide == "approve", reason)
 	if err != nil {
 		return nil, err
 	}
-	fmt.Printf("decisions: %d (%s)\n", rounds, decide)
+	fmt.Printf("decisions: %d %s (%s)\n", len(decided), decide, strings.Join(decided, "; "))
 	if _, err := settled.completedText(); err != nil {
 		return nil, err
 	}

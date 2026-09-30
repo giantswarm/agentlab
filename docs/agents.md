@@ -223,7 +223,10 @@ idempotent; a turn streams its answer; on the proof's agent — the Generic
 chart with `toolset: [preset:read-only]` and `muster.requireApproval: true`
 (chart ≥ 1.1.0) — a tool call pauses the task, the person's approval
 resumes it to completed with muster logging the call under the person, a
-rejection ends it without the call; `CancelTask` on a running turn ends it
+rejection ends it without the call (every request is decided until the task
+settles, within five minutes: how many tool calls the model needs is its
+own; a request asked again after its decision fails the step, the decision
+did not resume the task); `CancelTask` on a running turn ends it
 server-side (`GetTask` reports it canceled) and the instance takes a
 following turn. It leaves nothing behind: the instances over gRPC
 (`ListAgentInstances` lists none of its), the agent's release and render on
