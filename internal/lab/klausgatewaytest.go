@@ -93,22 +93,23 @@ const (
 const (
 	// gatewayCAPath is where the image shape mounts the lab CA (the chart's
 	// own mount path for a2a.caSecret).
-	gatewayCAPath    = "/etc/klaus-gateway/a2a/ca.crt"
-	gatewayDataPath  = "/var/lib/klaus-gateway"
-	gatewayBoltFile  = "routes.bolt"
-	gatewayLinksFile = "links.bolt"
-	gatewayLogFile   = "klaus-gateway.log"
-	gatewaySecrets   = "slack-secrets.yaml"
-	gatewayStateKey  = "obo-state.key"
-	gatewayStoreKey  = "obo-store.key"
-	gatewayReadyPath = "/readyz"
-	gatewayContainer = "agentlab-klaus-gateway-test"
-	gatewayLogLevel  = "info"
-	recordBound      = "instance_bound"
-	recordTurnDone   = "turn_complete"
-	recordDispatch   = "turn_dispatch"
-	recordRefresh    = "token_refresh"
-	recordTurnResume = "turn_resume"
+	gatewayCAPath     = "/etc/klaus-gateway/a2a/ca.crt"
+	gatewayDataPath   = "/var/lib/klaus-gateway"
+	gatewayBoltFile   = "routes.bolt"
+	gatewayLinksFile  = "links.bolt"
+	gatewayLogFile    = "klaus-gateway.log"
+	gatewaySecrets    = "slack-secrets.yaml"
+	gatewayStateKey   = "obo-state.key"
+	gatewayStoreKey   = "obo-store.key"
+	gatewayReadyPath  = "/readyz"
+	gatewayContainer  = "agentlab-klaus-gateway-test"
+	gatewayLogLevel   = "info"
+	recordBound       = "instance_bound"
+	recordTurnDone    = "turn_complete"
+	recordDispatch    = "turn_dispatch"
+	recordRefresh     = "token_refresh"
+	recordTurnResume  = "turn_resume"
+	recordLeftRunning = "task_left_running"
 	// gatewayResubscribeFailed is the warning of a recovery attempt whose
 	// resubscription did not reach the controller.
 	gatewayResubscribeFailed = "resubscribe to a turn left running failed"
@@ -482,7 +483,7 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	note("no new binding, still AgentInstance %s next to the denied thread's %s; the agent recalled %q; no token_refresh in the run", instanceID, deniedInstance, excerpt(turn.answer, 40))
 
 	step("5b. Restart mid-turn with the controller out of reach for %s: the turn left running is posted in its thread when it ends, without a reply", klausGatewayGateClosed)
-	resumed, err := p.restartMidTurn(gw, gate, &slackThread{user: people.person}, klausGatewayCountPrompt)
+	resumed, err := p.restartMidTurn(gw, gate, main, klausGatewayCountPrompt)
 	if err != nil {
 		return err
 	}
@@ -1597,19 +1598,19 @@ type resumedTurn struct {
 	after          time.Duration
 }
 
-// restartMidTurn opens a thread with a long question and, once its answer
-// streams, restarts the gateway with the gate closed: the stopping process
+// restartMidTurn asks a long question in the thread (one whose AgentInstance
+// is warm, so the answer streams soon) and, once its answer streams, restarts
+// the gateway with the gate closed: the stopping process
 // leaves the task running and promises the post, the new one cannot reach the
 // controller for klausGatewayGateClosed. Once the gate opens again, the
 // thread must get the rest of the answer with no message from the person.
 func (p *slackProof) restartMidTurn(gw *gatewayProcess, gate *tcpGate, t *slackThread, text string) (*resumedTurn, error) {
-	ts, err := p.driver.mention(t.user, "", text)
-	if err != nil {
+	asked := len(p.fake.thread(p.channel, t.ts))
+	if _, err := p.driver.mention(t.user, t.ts, text); err != nil {
 		return nil, err
 	}
-	t.ts = ts
 	msgs, streaming := waitThread(p.fake, p.channel, t.ts, klausGatewayTurnTimeout, func(msgs []slackMessage) bool {
-		_, answer := streamedSince(msgs, 0)
+		_, answer := streamedSince(msgs, asked)
 		return answer != ""
 	})
 	if !streaming {
@@ -1618,8 +1619,11 @@ func (p *slackProof) restartMidTurn(gw *gatewayProcess, gate *tcpGate, t *slackT
 	if err := gw.stop(); err != nil {
 		return nil, err
 	}
+	if len(p.records(recordLeftRunning, t.ts)) == 0 {
+		return nil, fmt.Errorf("the stopping gateway left no task running for thread %s (no %s record)", t.ts, recordLeftRunning)
+	}
 	msgs = p.fake.thread(p.channel, t.ts)
-	if _, ok := findMessage(msgs, slackRestartPromise); !ok {
+	if _, ok := findMessage(msgs[asked:], slackRestartPromise); !ok {
 		return nil, fmt.Errorf("the stopping gateway did not promise the post (%q): %s", slackRestartPromise, threadLine(msgs))
 	}
 	before := len(msgs)
