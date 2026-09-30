@@ -194,8 +194,15 @@ func TestGatewayArgs(t *testing.T) {
 	if !reflect.DeepEqual(docker, wantDocker) {
 		t.Errorf("dockerRunArgs =\n%q\nwant\n%q", docker, wantDocker)
 	}
-	if got := grpcsTarget("https://agentgateway.127.0.0.1.nip.io:8445"); got != "grpcs://agentgateway.127.0.0.1.nip.io:8445" {
-		t.Errorf("grpcsTarget = %q", got)
+	edge, err := edgeHostPort("https://agentgateway.127.0.0.1.nip.io:8445")
+	if err != nil || edge != "agentgateway.127.0.0.1.nip.io:8445" {
+		t.Errorf("edgeHostPort = %q, %v", edge, err)
+	}
+	if edge, _ := edgeHostPort("https://agentgateway.example.io"); edge != "agentgateway.example.io:443" {
+		t.Errorf("edgeHostPort without a port = %q", edge)
+	}
+	if got := gatedTarget(edge, 18093); got != "grpcs://agentgateway.127.0.0.1.nip.io:18093" {
+		t.Errorf("gatedTarget = %q", got)
 	}
 	opts := KlausGatewayTestOptions{}.withDefaults()
 	if opts.GatewayImage != KlausGatewayImageDefault || opts.Port != 18090 || opts.ModelConfig != defaultModelConfig || opts.ReadyTimeout != klausGatewayReadyTimeout {

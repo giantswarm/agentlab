@@ -128,6 +128,11 @@ const (
 	// slackNothingStarted is klaus-gateway 3.8's spelling of slackNotStarted.
 	slackNothingStarted = "Nothing was started"
 	slackStopped        = "Stopped."
+	// slackRestartPromise is the restart notice's promise that the turn left
+	// running is posted in the thread when it is done; slackReplyToGetIt the
+	// note of a restarted gateway that gave up on keeping it.
+	slackRestartPromise = "it is posted here when it is done"
+	slackReplyToGetIt   = "Reply in this thread to get it"
 	slackApprovedBy     = "Approved by <@"
 	slackDeniedBy       = "Denied by <@"
 	// slackStopCommand is the thread reply that stops a running turn.
