@@ -176,3 +176,34 @@ component no longer mounts; the lab proves the store the fleet ends up on.
 **The egress policy** of the connectivity chart (the gateway's route to the
 kube-apiserver for the Secret store, giantswarm/agent-platform#443): the lab
 runs no Cilium and cannot see it.
+
+## Decisions
+
+`agentlab decisions-test` proves klaus-gateway's decisions: a service puts a
+question to a person or a team through `POST /decisions`, and the answer calls
+a muster tool as the person who gave it. The gateway runs on the host as in
+`klaus-gateway-test`, with `--reviews-enabled` and the proof's ServiceAccount
+(`agent-platform/agentlab-decisions`, created and deleted by the run) as the
+one allowed caller; its token has the audience `klaus-gateway` and the gateway
+verifies it with a TokenReview through the lab's kubeconfig. The gateway
+trusts the lab CA (`SSL_CERT_FILE`), since every answer is a call to muster.
+
+1. No token is 401; a person no member of the fake workspace has the email
+   of is 422.
+2. A team decision renders its question as a header and a Choose button per
+   option, the recommended one primary; a click answers it, the message is
+   rewritten to `Answered by <@…>`, and muster's log shows the forwarded
+   id_token accepted and the tool call under the user's subject.
+3. A decision for the user by email goes to a direct message (the fake names
+   it D… as Slack does); the own-words button opens the modal, and its
+   submission with an option and text is the answer.
+4. A reply in a team decision's thread is the answer.
+5. An answer tool muster does not have is refused: the refusal is the status
+   line under the buttons and the decision stays open.
+6. `POST /decisions/{id}/close` with `defaulted` removes the buttons; a
+   click on the old message is told privately that it was not answered in
+   time.
+
+How Slack renders the message and the modal, and the `users:read.email`
+scope a person's decision needs, are verified with the installation's Slack
+app, per the agentlab-first exception.

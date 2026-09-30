@@ -88,6 +88,8 @@ const (
 	slackStopStream    = "chat.stopStream"
 	slackAuthTest      = "auth.test"
 	slackUsersInfo     = "users.info"
+	slackUsersByEmail  = "users.lookupByEmail"
+	slackViewsOpen     = "views.open"
 	slackReplies       = "conversations.replies"
 )
 
@@ -107,6 +109,10 @@ const (
 	slackKeyValue      = "value"
 	slackKeyURL        = "url"
 	slackKeyMessage    = "message"
+	slackKeyChanType   = "channel_type"
+	slackKeyEventTS    = "event_ts"
+	slackKeyState      = "state"
+	slackKeyTeam       = "team"
 	slackMrkdwn        = "mrkdwn"
 	slackMarkdownChunk = "markdown_text"
 	slackBlockActions  = "actions"
@@ -163,9 +169,12 @@ type slackMessage struct {
 func (m slackMessage) streamed() bool { return m.Method == slackStartStream }
 
 // action returns the Block Kit button with the action id, if the message
-// carries one.
+// carries one: in an actions block, or as a section's accessory.
 func (m slackMessage) action(id string) (map[string]any, bool) {
 	for _, block := range m.Blocks {
+		if acc, ok := block["accessory"].(map[string]any); ok && acc[slackKeyActionID] == id {
+			return acc, true
+		}
 		elements, _ := block[slackKeyElements].([]any)
 		for _, e := range elements {
 			if el, ok := e.(map[string]any); ok && el[slackKeyActionID] == id {
@@ -190,6 +199,8 @@ type fakeSlack struct {
 	calls    map[string]int
 	// responses are the bodies posted to response_url.
 	responses []string
+	// views are the modals views.open was asked for, in order.
+	views []map[string]any
 }
 
 // startFakeSlack serves the fake Web API on addr (host:port; port 0 picks
@@ -370,7 +381,7 @@ func (f *fakeSlack) answer(method string, params map[string]any) map[string]any 
 	ok := map[string]any{"ok": true}
 	switch method {
 	case slackAuthTest:
-		return map[string]any{"ok": true, "user_id": slackFakeBotUser, slackKeyUser: slackFakeBotName, slackKeyTeamID: slackFakeTeam, "team": "agentlab", "bot_id": "BAGENTLAB"}
+		return map[string]any{"ok": true, "user_id": slackFakeBotUser, slackKeyUser: slackFakeBotName, slackKeyTeamID: slackFakeTeam, slackKeyTeam: "agentlab", "bot_id": "BAGENTLAB"}
 	case slackUsersInfo:
 		id := paramString(params, "user")
 		name := strings.ToLower(id)
@@ -381,6 +392,19 @@ func (f *fakeSlack) answer(method string, params map[string]any) map[string]any 
 			"id": id, "name": name, slackKeyTeamID: slackFakeTeam,
 			"profile": map[string]any{"email": f.emails[id], "display_name": name, "real_name": name},
 		}}
+	case slackUsersByEmail:
+		email := paramString(params, "email")
+		for id, e := range f.emails {
+			if e == email {
+				return map[string]any{"ok": true, slackKeyUser: map[string]any{"id": id, slackKeyTeamID: slackFakeTeam}}
+			}
+		}
+		return map[string]any{"ok": false, "error": "users_not_found"}
+	case slackViewsOpen:
+		if view, ok := params["view"].(map[string]any); ok {
+			f.views = append(f.views, view)
+		}
+		return ok
 	case slackReplies:
 		// The proof's threads start with the mention itself, so a thread
 		// holds nothing the gateway did not see.
@@ -388,7 +412,7 @@ func (f *fakeSlack) answer(method string, params map[string]any) map[string]any 
 	case slackPostMessage, slackPostEphemeral, slackStartStream:
 		m := &slackMessage{
 			TS:        f.nextTSLocked(),
-			Channel:   paramString(params, "channel"),
+			Channel:   directChannel(paramString(params, "channel")),
 			ThreadTS:  paramString(params, "thread_ts"),
 			Method:    method,
 			Text:      paramString(params, "text") + chunkText(params[slackKeyChunks]),
@@ -426,6 +450,23 @@ func (f *fakeSlack) answer(method string, params map[string]any) map[string]any 
 	}
 	ok[slackKeyTS] = f.nextTSLocked()
 	return ok
+}
+
+// directChannel is the conversation a post lands in: a post addressed to a
+// person's user ID is their direct message with the app, D… for U…, as
+// Slack names it in the response.
+func directChannel(channel string) string {
+	if strings.HasPrefix(channel, "U") {
+		return "D" + channel[1:]
+	}
+	return channel
+}
+
+// openedViews are the modals the gateway opened, in order.
+func (f *fakeSlack) openedViews() []map[string]any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]map[string]any(nil), f.views...)
 }
 
 // serveResponse keeps what the gateway posts to an interaction's
@@ -592,8 +633,8 @@ func (d *slackDriver) event(event map[string]any) error {
 func (d *slackDriver) mention(user, threadTS, text string) (string, error) {
 	ts := d.fake.nextTS()
 	ev := map[string]any{
-		fieldTypeKey: "app_mention", slackKeyUser: user, slackKeyChannel: d.channel, "channel_type": "channel",
-		slackKeyText: "<@" + slackFakeBotUser + "> " + text, slackKeyTS: ts, "event_ts": ts,
+		fieldTypeKey: "app_mention", slackKeyUser: user, slackKeyChannel: d.channel, slackKeyChanType: slackKeyChannel,
+		slackKeyText: "<@" + slackFakeBotUser + "> " + text, slackKeyTS: ts, slackKeyEventTS: ts,
 	}
 	if threadTS != "" {
 		ev[slackKeyThreadTS] = threadTS
@@ -606,8 +647,8 @@ func (d *slackDriver) mention(user, threadTS, text string) (string, error) {
 func (d *slackDriver) reply(user, threadTS, text string) (string, error) {
 	ts := d.fake.nextTS()
 	return ts, d.event(map[string]any{
-		fieldTypeKey: slackKeyMessage, slackKeyUser: user, slackKeyChannel: d.channel, "channel_type": "channel",
-		slackKeyText: text, slackKeyTS: ts, "event_ts": ts, slackKeyThreadTS: threadTS,
+		fieldTypeKey: slackKeyMessage, slackKeyUser: user, slackKeyChannel: d.channel, slackKeyChanType: slackKeyChannel,
+		slackKeyText: text, slackKeyTS: ts, slackKeyEventTS: ts, slackKeyThreadTS: threadTS,
 	})
 }
 
@@ -621,13 +662,30 @@ func (d *slackDriver) click(user string, msg slackMessage, actionID string) erro
 	}
 	value, _ := button[slackKeyValue].(string)
 	payload, err := json.Marshal(map[string]any{
-		fieldTypeKey: "block_actions", slackKeyUser: map[string]any{"id": user}, "team": map[string]any{"id": slackFakeTeam},
+		fieldTypeKey: "block_actions", slackKeyUser: map[string]any{"id": user}, slackKeyTeam: map[string]any{"id": slackFakeTeam},
 		slackKeyChannel: map[string]any{"id": msg.Channel},
 		"container":     map[string]any{fieldTypeKey: slackKeyMessage, "message_ts": msg.TS, "channel_id": msg.Channel, slackKeyThreadTS: msg.ThreadTS},
 		slackKeyMessage: map[string]any{slackKeyTS: msg.TS, slackKeyThreadTS: msg.ThreadTS, slackKeyBlocks: msg.Blocks},
 		"actions":       []any{map[string]any{fieldTypeKey: slackButton, slackKeyActionID: actionID, slackKeyValue: value}},
 		"trigger_id":    "trigger-" + randomSuffix(),
 		"response_url":  d.responseURL(),
+	})
+	if err != nil {
+		return err
+	}
+	return d.post(slackInteractionsPath, "application/x-www-form-urlencoded", []byte(url.Values{"payload": {string(payload)}}.Encode()))
+}
+
+// submitView is a person submitting a modal the gateway opened: a
+// view_submission payload carrying the view's callback and private metadata
+// and the inputs' values as Slack reports them (state.values[block][action]).
+func (d *slackDriver) submitView(user string, view map[string]any, values map[string]any) error {
+	payload, err := json.Marshal(map[string]any{
+		fieldTypeKey: "view_submission", slackKeyUser: map[string]any{"id": user}, slackKeyTeam: map[string]any{"id": slackFakeTeam},
+		"view": map[string]any{
+			"id": "V" + strings.ToUpper(randomSuffix()), "callback_id": view["callback_id"], "private_metadata": view["private_metadata"],
+			slackKeyState: map[string]any{"values": values},
+		},
 	})
 	if err != nil {
 		return err

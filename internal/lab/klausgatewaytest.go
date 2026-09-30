@@ -95,23 +95,24 @@ const (
 const (
 	// gatewayCAPath is where the image shape mounts the lab CA (the chart's
 	// own mount path for a2a.caSecret).
-	gatewayCAPath     = "/etc/klaus-gateway/a2a/ca.crt"
-	gatewayDataPath   = "/var/lib/klaus-gateway"
-	gatewayBoltFile   = "routes.bolt"
-	gatewayLinksFile  = "links.bolt"
-	gatewayLogFile    = "klaus-gateway.log"
-	gatewaySecrets    = "slack-secrets.yaml"
-	gatewayStateKey   = "obo-state.key"
-	gatewayStoreKey   = "obo-store.key"
-	gatewayReadyPath  = "/readyz"
-	gatewayContainer  = "agentlab-klaus-gateway-test"
-	gatewayLogLevel   = "info"
-	recordBound       = "instance_bound"
-	recordTurnDone    = "turn_complete"
-	recordDispatch    = "turn_dispatch"
-	recordRefresh     = "token_refresh"
-	recordTurnResume  = "turn_resume"
-	recordLeftRunning = "task_left_running"
+	gatewayCAPath         = "/etc/klaus-gateway/a2a/ca.crt"
+	gatewayDataPath       = "/var/lib/klaus-gateway"
+	gatewayKubeconfigPath = "/etc/klaus-gateway/kubeconfig"
+	gatewayBoltFile       = "routes.bolt"
+	gatewayLinksFile      = "links.bolt"
+	gatewayLogFile        = "klaus-gateway.log"
+	gatewaySecrets        = "slack-secrets.yaml"
+	gatewayStateKey       = "obo-state.key"
+	gatewayStoreKey       = "obo-store.key"
+	gatewayReadyPath      = "/readyz"
+	gatewayContainer      = "agentlab-klaus-gateway-test"
+	gatewayLogLevel       = "info"
+	recordBound           = "instance_bound"
+	recordTurnDone        = "turn_complete"
+	recordDispatch        = "turn_dispatch"
+	recordRefresh         = "token_refresh"
+	recordTurnResume      = "turn_resume"
+	recordLeftRunning     = "task_left_running"
 	// gatewayResubscribeFailed is the warning of a recovery attempt whose
 	// resubscription did not reach the controller.
 	gatewayResubscribeFailed = "resubscribe to a turn left running failed"
@@ -960,8 +961,17 @@ type gatewayProcess struct {
 	target    string
 	slackAPI  string
 	musterURL string
-	cmd       *exec.Cmd
-	logFile   *os.File
+	// extraArgs are flags beyond gatewayArgs, and kubeconfig a kubeconfig
+	// the gateway reads the API server through (the reviews endpoint's
+	// TokenReview), mounted read-only in the image shape; empty, none.
+	extraArgs  []string
+	kubeconfig string
+	// trustLabCA makes the lab CA the gateway's trust store for every TLS
+	// call it makes itself (SSL_CERT_FILE): muster, for a proof whose clicks
+	// call a tool through it.
+	trustLabCA bool
+	cmd        *exec.Cmd
+	logFile    *os.File
 	// exited is closed once the process has ended; exitErr is its Wait result.
 	// A closed channel satisfies every later wait, so a gateway that died
 	// before serving is noticed by the readiness probe and stop() still
@@ -1058,11 +1068,29 @@ func (g *gatewayProcess) start() error {
 	g.logFile = logFile
 	flags := gatewayFlags{port: g.opts.Port, dataDir: g.runDir, caFile: g.caFile, target: g.target, slackAPI: g.slackAPI, musterURL: g.musterURL}
 	if g.opts.GatewayBinary != "" {
-		g.cmd = command(g.opts.GatewayBinary, gatewayArgs(flags)...)
+		g.cmd = command(g.opts.GatewayBinary, append(gatewayArgs(flags), g.extraArgs...)...)
+		g.cmd.Env = os.Environ()
+		if g.kubeconfig != "" {
+			g.cmd.Env = append(g.cmd.Env, "KUBECONFIG="+g.kubeconfig)
+		}
+		if g.trustLabCA {
+			g.cmd.Env = append(g.cmd.Env, "SSL_CERT_FILE="+g.caFile)
+		}
 	} else {
 		_ = command(dockerBin, "rm", "-f", gatewayContainer).Run()
 		flags.dataDir, flags.caFile = gatewayDataPath, gatewayCAPath
-		g.cmd = command(dockerBin, dockerRunArgs(g.opts.GatewayImage, gatewayContainer, g.runDir, g.caFile, os.Getuid(), os.Getgid(), gatewayArgs(flags))...)
+		args := dockerRunArgs(g.opts.GatewayImage, gatewayContainer, g.runDir, g.caFile, os.Getuid(), os.Getgid(), append(gatewayArgs(flags), g.extraArgs...))
+		// The mounts and the variables go before the image, which
+		// dockerRunArgs puts right after its own flags.
+		var extra []string
+		if g.kubeconfig != "" {
+			extra = append(extra, "-v", g.kubeconfig+":"+gatewayKubeconfigPath+":ro", "-e", "KUBECONFIG="+gatewayKubeconfigPath)
+		}
+		if g.trustLabCA {
+			extra = append(extra, "-e", "SSL_CERT_FILE="+gatewayCAPath)
+		}
+		args = slices.Insert(args, slices.Index(args, g.opts.GatewayImage), extra...)
+		g.cmd = command(dockerBin, args...)
 	}
 	g.cmd.Stdout, g.cmd.Stderr = logFile, logFile
 	if err := g.cmd.Start(); err != nil {
