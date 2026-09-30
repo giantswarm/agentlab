@@ -714,6 +714,16 @@ admission label.
    the next mention recalls the first turn's word, no new `instance_bound`
    record is written, and the controller lists the thread's `AgentInstance`
    and the Deny thread's, nothing else. No `token_refresh` record in the run.
+   **5b. Restart mid-turn**: in the same thread a long answer (every number
+   to five hundred in words) starts streaming; the gateway is stopped (it
+   records `task_left_running` and the thread gets the notice that the answer
+   is posted when it is done) and started again while a loopback gate in
+   front of the edge refuses connections for 45 s. The restarted gateway's
+   resubscriptions fail while the gate is closed, and once it opens the
+   thread gets the rest of the answer (`turn_resume`) with no reply from the
+   person and no "reply in this thread" note. The host gateway always reaches
+   the edge through that gate (`--gateway-port` + 3), under the edge's own
+   hostname, so TLS verifies as usual.
 
 With `platform.klausGateway` on, the meta chart's `klaus-gateway` component
 follows (the in-cluster shape, the OBO link store in a Secret, its Slack Web

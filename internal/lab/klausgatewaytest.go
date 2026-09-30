@@ -56,8 +56,10 @@ import (
 // template's display name and icon, attributed to the person at muster; a tool
 // call bound with requireApproval pauses the task at input-required, Approve
 // resumes it in place and Deny ends another without the call; /stop cancels
-// the task at the controller and the thread goes on; and a gateway restart on
-// the same stores continues the same AgentInstance. docs/platform.md "The
+// the task at the controller and the thread goes on; a gateway restart on
+// the same stores continues the same AgentInstance; and a restart in the
+// middle of a turn, the edge out of reach for a while after it, still posts
+// the answer in its thread. docs/platform.md "The
 // Swarmgeist proof".
 
 // KlausGatewayImageDefault is the released gateway the proof runs when no
