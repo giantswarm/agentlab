@@ -44,6 +44,9 @@ const (
 	decisionsRefusedTool = "core_agentlab_no_such_tool"
 	decisionsWait        = 60 * time.Second
 	decisionsTokenTTL    = 20 * time.Minute
+	// decisionsNote marks what the proof puts to the gateway as the lab's.
+	decisionsNote     = "agentlab"
+	decisionsKeyLabel = "label"
 )
 
 // The gateway's decision action ids and what its messages say.
@@ -219,7 +222,7 @@ func decisionsCallerToken() (string, func(), error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	sas := k.clientset.CoreV1().ServiceAccounts(platformNamespace)
-	sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: decisionsServiceAccount, Labels: map[string]string{"app.kubernetes.io/managed-by": "agentlab"}}}
+	sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: decisionsServiceAccount, Labels: map[string]string{"app.kubernetes.io/managed-by": managedByAgentlabValue}}}
 	if _, err := sas.Create(ctx, sa, metav1.CreateOptions{}); err != nil && !strings.Contains(err.Error(), "already exists") {
 		return "", nil, fmt.Errorf("creating ServiceAccount %s: %w", decisionsServiceAccount, err)
 	}
@@ -293,18 +296,18 @@ func (a *decisionsAPI) post(body map[string]any) (decisionReceipt, error) {
 // answered with tool; addressee is {"team", "channel"} or {"person"}.
 func decisionBody(addressee map[string]any, question, tool string) map[string]any {
 	body := map[string]any{
-		"note":      "agentlab",
+		"note":      decisionsNote,
 		"question":  question,
 		"statusQuo": "graveler and glean run the release since Tuesday without a restart.",
 		"options": []any{
-			map[string]any{"label": "Roll tonight", "consequence": "The lane clears at 22:00."},
-			map[string]any{"label": "Wait for Monday", "consequence": "Nothing rolls before Monday."},
+			map[string]any{decisionsKeyLabel: "Roll tonight", "consequence": "The lane clears at 22:00."},
+			map[string]any{decisionsKeyLabel: "Wait for Monday", "consequence": "Nothing rolls before Monday."},
 		},
 		"recommend": 2,
 		"due":       time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
 		"default":   "Wait for Monday.",
 		"askedBy":   "agentlab decisions-test",
-		"answer":    map[string]any{"tool": tool, "arguments": map[string]any{"note": "agentlab"}},
+		"answer":    map[string]any{"tool": tool, "arguments": map[string]any{"note": decisionsNote}},
 	}
 	for k, v := range addressee {
 		body[k] = v
@@ -320,7 +323,7 @@ type decisionsProof struct {
 }
 
 func (p *decisionsProof) team() map[string]any {
-	return map[string]any{"team": "team-agentlab", "channel": p.channel}
+	return map[string]any{slackKeyTeam: "team-agentlab", slackKeyChannel: p.channel}
 }
 
 // message waits until the decision's message satisfies pred.
@@ -471,8 +474,8 @@ func (p *decisionsProof) replyInThread() error {
 	}
 	ts := p.fake.nextTS()
 	if err := p.driver.event(map[string]any{
-		fieldTypeKey: slackKeyMessage, slackKeyUser: p.person, slackKeyChannel: r.Channel, "channel_type": "channel",
-		slackKeyText: decisionThreadReply, slackKeyTS: ts, "event_ts": ts, slackKeyThreadTS: r.TS, "parent_user_id": slackFakeBotUser,
+		fieldTypeKey: slackKeyMessage, slackKeyUser: p.person, slackKeyChannel: r.Channel, slackKeyChanType: slackKeyChannel,
+		slackKeyText: decisionThreadReply, slackKeyTS: ts, slackKeyEventTS: ts, slackKeyThreadTS: r.TS, "parent_user_id": slackFakeBotUser,
 	}); err != nil {
 		return err
 	}

@@ -109,6 +109,10 @@ const (
 	slackKeyValue      = "value"
 	slackKeyURL        = "url"
 	slackKeyMessage    = "message"
+	slackKeyChanType   = "channel_type"
+	slackKeyEventTS    = "event_ts"
+	slackKeyState      = "state"
+	slackKeyTeam       = "team"
 	slackMrkdwn        = "mrkdwn"
 	slackMarkdownChunk = "markdown_text"
 	slackBlockActions  = "actions"
@@ -377,7 +381,7 @@ func (f *fakeSlack) answer(method string, params map[string]any) map[string]any 
 	ok := map[string]any{"ok": true}
 	switch method {
 	case slackAuthTest:
-		return map[string]any{"ok": true, "user_id": slackFakeBotUser, slackKeyUser: slackFakeBotName, slackKeyTeamID: slackFakeTeam, "team": "agentlab", "bot_id": "BAGENTLAB"}
+		return map[string]any{"ok": true, "user_id": slackFakeBotUser, slackKeyUser: slackFakeBotName, slackKeyTeamID: slackFakeTeam, slackKeyTeam: "agentlab", "bot_id": "BAGENTLAB"}
 	case slackUsersInfo:
 		id := paramString(params, "user")
 		name := strings.ToLower(id)
@@ -629,8 +633,8 @@ func (d *slackDriver) event(event map[string]any) error {
 func (d *slackDriver) mention(user, threadTS, text string) (string, error) {
 	ts := d.fake.nextTS()
 	ev := map[string]any{
-		fieldTypeKey: "app_mention", slackKeyUser: user, slackKeyChannel: d.channel, "channel_type": "channel",
-		slackKeyText: "<@" + slackFakeBotUser + "> " + text, slackKeyTS: ts, "event_ts": ts,
+		fieldTypeKey: "app_mention", slackKeyUser: user, slackKeyChannel: d.channel, slackKeyChanType: slackKeyChannel,
+		slackKeyText: "<@" + slackFakeBotUser + "> " + text, slackKeyTS: ts, slackKeyEventTS: ts,
 	}
 	if threadTS != "" {
 		ev[slackKeyThreadTS] = threadTS
@@ -643,8 +647,8 @@ func (d *slackDriver) mention(user, threadTS, text string) (string, error) {
 func (d *slackDriver) reply(user, threadTS, text string) (string, error) {
 	ts := d.fake.nextTS()
 	return ts, d.event(map[string]any{
-		fieldTypeKey: slackKeyMessage, slackKeyUser: user, slackKeyChannel: d.channel, "channel_type": "channel",
-		slackKeyText: text, slackKeyTS: ts, "event_ts": ts, slackKeyThreadTS: threadTS,
+		fieldTypeKey: slackKeyMessage, slackKeyUser: user, slackKeyChannel: d.channel, slackKeyChanType: slackKeyChannel,
+		slackKeyText: text, slackKeyTS: ts, slackKeyEventTS: ts, slackKeyThreadTS: threadTS,
 	})
 }
 
@@ -658,7 +662,7 @@ func (d *slackDriver) click(user string, msg slackMessage, actionID string) erro
 	}
 	value, _ := button[slackKeyValue].(string)
 	payload, err := json.Marshal(map[string]any{
-		fieldTypeKey: "block_actions", slackKeyUser: map[string]any{"id": user}, "team": map[string]any{"id": slackFakeTeam},
+		fieldTypeKey: "block_actions", slackKeyUser: map[string]any{"id": user}, slackKeyTeam: map[string]any{"id": slackFakeTeam},
 		slackKeyChannel: map[string]any{"id": msg.Channel},
 		"container":     map[string]any{fieldTypeKey: slackKeyMessage, "message_ts": msg.TS, "channel_id": msg.Channel, slackKeyThreadTS: msg.ThreadTS},
 		slackKeyMessage: map[string]any{slackKeyTS: msg.TS, slackKeyThreadTS: msg.ThreadTS, slackKeyBlocks: msg.Blocks},
@@ -677,10 +681,10 @@ func (d *slackDriver) click(user string, msg slackMessage, actionID string) erro
 // and the inputs' values as Slack reports them (state.values[block][action]).
 func (d *slackDriver) submitView(user string, view map[string]any, values map[string]any) error {
 	payload, err := json.Marshal(map[string]any{
-		fieldTypeKey: "view_submission", slackKeyUser: map[string]any{"id": user}, "team": map[string]any{"id": slackFakeTeam},
+		fieldTypeKey: "view_submission", slackKeyUser: map[string]any{"id": user}, slackKeyTeam: map[string]any{"id": slackFakeTeam},
 		"view": map[string]any{
 			"id": "V" + strings.ToUpper(randomSuffix()), "callback_id": view["callback_id"], "private_metadata": view["private_metadata"],
-			"state": map[string]any{"values": values},
+			slackKeyState: map[string]any{"values": values},
 		},
 	})
 	if err != nil {
