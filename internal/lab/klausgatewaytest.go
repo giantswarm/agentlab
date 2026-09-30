@@ -9,6 +9,7 @@ import (
 	"maps"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -55,15 +56,17 @@ import (
 // template's display name and icon, attributed to the person at muster; a tool
 // call bound with requireApproval pauses the task at input-required, Approve
 // resumes it in place and Deny ends another without the call; /stop cancels
-// the task at the controller and the thread goes on; and a gateway restart on
-// the same stores continues the same AgentInstance. docs/platform.md "The
+// the task at the controller and the thread goes on; a gateway restart on
+// the same stores continues the same AgentInstance; and a restart in the
+// middle of a turn, the edge out of reach for a while after it, still posts
+// the answer in its thread. docs/platform.md "The
 // Swarmgeist proof".
 
 // KlausGatewayImageDefault is the released gateway the proof runs when no
 // image or binary is named: the current release of the Slack-only line
 // (2.0.0 on) that the 4.x meta chart's `components.klaus-gateway` range
 // resolves to.
-const KlausGatewayImageDefault = "gsoci.azurecr.io/giantswarm/klaus-gateway:3.5.1"
+const KlausGatewayImageDefault = "gsoci.azurecr.io/giantswarm/klaus-gateway:3.12.0"
 
 // Names of what the proof creates in the kagent namespace; all are deleted by
 // the same run, and a leftover of an aborted run is removed first.
@@ -107,26 +110,38 @@ const (
 	recordTurnDone    = "turn_complete"
 	recordDispatch    = "turn_dispatch"
 	recordRefresh     = "token_refresh"
-	outcomeCompleted  = "completed"
-	outcomeInputReq   = "input_required"
-	outcomeCanceled   = "canceled"
-	linkRefreshMarker = "agentlab-placeholder-refresh-token"
+	recordTurnResume  = "turn_resume"
+	recordLeftRunning = "task_left_running"
+	// gatewayResubscribeFailed is the warning of a recovery attempt whose
+	// resubscription did not reach the controller.
+	gatewayResubscribeFailed = "resubscribe to a turn left running failed"
+	outcomeCompleted         = "completed"
+	outcomeInputReq          = "input_required"
+	outcomeCanceled          = "canceled"
+	linkRefreshMarker        = "agentlab-placeholder-refresh-token"
 )
 
 // The turns and their words: the first turn's word, recalled after the
 // restart; the tool-using question that pauses on approval; the long answer
 // /stop interrupts.
 const (
-	klausGatewayWord          = "pong"
-	klausGatewayWordPrompt    = "Reply with exactly the word " + klausGatewayWord + "."
-	klausGatewayRecallPrompt  = "Which single word did I ask you to reply with earlier in this conversation? Answer with just that word."
-	klausGatewayToolPrompt    = "How many namespaces does the cluster have? Use your tools to list them."
-	klausGatewayEssayPrompt   = "Write a long essay of at least 1500 words about the history of container orchestration, without using any tools."
-	klausGatewayTurnTimeout   = 4 * time.Minute
-	klausGatewayReplyWait     = 90 * time.Second
-	klausGatewayCancelWait    = 90 * time.Second
-	klausGatewayStartWait     = 30 * time.Second
-	klausGatewayStopWait      = 20 * time.Second
+	klausGatewayWord         = "pong"
+	klausGatewayWordPrompt   = "Reply with exactly the word " + klausGatewayWord + "."
+	klausGatewayRecallPrompt = "Which single word did I ask you to reply with earlier in this conversation? Answer with just that word."
+	klausGatewayToolPrompt   = "How many namespaces does the cluster have? Use your tools to list them."
+	klausGatewayEssayPrompt  = "Write a long essay of at least 1500 words about the history of container orchestration, without using any tools."
+	// klausGatewayCountPrompt is step 5b's long turn: plain text that streams
+	// from its first line and runs for minutes, on a small local model too.
+	klausGatewayCountPrompt = "Without using any tools, write out every number from one to five hundred in English words, one number per line, and nothing else."
+	klausGatewayTurnTimeout = 4 * time.Minute
+	klausGatewayReplyWait   = 90 * time.Second
+	klausGatewayCancelWait  = 90 * time.Second
+	klausGatewayStartWait   = 30 * time.Second
+	klausGatewayStopWait    = 20 * time.Second
+	// klausGatewayGateClosed is how long the controller stays out of the
+	// restarted gateway's reach in step 5b: longer than a few quick retries,
+	// so only a recovery that keeps trying delivers the turn.
+	klausGatewayGateClosed    = 45 * time.Second
 	klausGatewayHITLRounds    = 6
 	klausGatewayLogSince      = 30 * time.Minute
 	klausGatewayReadyTimeout  = 10 * time.Minute
@@ -194,7 +209,7 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 		return fmt.Errorf("no user %q in %s", email, config.File)
 	}
 	opts = opts.withDefaults()
-	if err := portsFree(opts.Port, opts.Port+1); err != nil {
+	if err := portsFree(opts.Port, opts.Port+1, opts.Port+3); err != nil {
 		return err
 	}
 	runDir, cleanRunDir, err := klausGatewayRunDir(opts.RunDir)
@@ -286,15 +301,24 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 		return err
 	}
 
-	target := grpcsTarget(cfg.AgentgatewayBaseURL())
+	edge, err := edgeHostPort(cfg.AgentgatewayBaseURL())
+	if err != nil {
+		return err
+	}
+	gate, err := startTCPGate(net.JoinHostPort("127.0.0.1", strconv.Itoa(opts.Port+3)), edge)
+	if err != nil {
+		return fmt.Errorf("the gate in front of the edge: %w", err)
+	}
+	defer gate.stop()
+	target := gatedTarget(edge, opts.Port+3)
 	caFile, err := filepath.Abs(caCertPath)
 	if err != nil {
 		return err
 	}
 	gw := newGatewayProcess(opts, runDir, caFile, target, fake.baseURL(), cfg.MusterBaseURL())
 	defer func() { _ = gw.stop() }()
-	step("Starting klaus-gateway %s on the host: Slack in events mode at %s, its Web API the fake at %s, a2a target %s (TLS with the lab CA, the person's token forwarded), OBO with the bolt link store, routing store %s",
-		gw.describe(), gw.baseURL(), fake.baseURL(), target, filepath.Join(runDir, gatewayBoltFile))
+	step("Starting klaus-gateway %s on the host: Slack in events mode at %s, its Web API the fake at %s, a2a target %s (TLS with the lab CA, the person's token forwarded; a loopback gate in front of the edge %s), OBO with the bolt link store, routing store %s",
+		gw.describe(), gw.baseURL(), fake.baseURL(), target, edge, filepath.Join(runDir, gatewayBoltFile))
 	if err := gw.start(); err != nil {
 		return err
 	}
@@ -460,6 +484,14 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	}
 	note("no new binding, still AgentInstance %s next to the denied thread's %s; the agent recalled %q; no token_refresh in the run", instanceID, deniedInstance, excerpt(turn.answer, 40))
 
+	step("5b. Restart mid-turn with the controller out of reach for %s: the turn left running is posted in its thread when it ends, without a reply", klausGatewayGateClosed)
+	resumed, err := p.restartMidTurn(gw, gate, main, klausGatewayCountPrompt)
+	if err != nil {
+		return err
+	}
+	note("the restart notice promised the post; %d recovery attempt(s) failed while the gate was closed; task %s posted %d characters into the thread %s after the restart, no reply sent",
+		resumed.failedAttempts, resumed.taskID, len(resumed.answer), resumed.after.Round(time.Second))
+
 	// The component half (klausgatewaytest_component.go) while the meta
 	// chart's klaus-gateway runs in this lab: its fixtures are the ones
 	// above, its Slack Web API the same fake, and the instance its turn
@@ -495,6 +527,7 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 		approved.taskID, approved.rounds, approved.finalState, declined.rounds, declined.taskID, declined.finalState)
 	fmt.Printf("PASS: /stop in the thread had the gateway cancel task %s at the controller (TASK_STATE_CANCELED); the thread took a following turn\n", canceled)
 	fmt.Printf("PASS: a gateway restart on the bolt stores kept the thread → AgentInstance mapping: the next turn continued %s and recalled the earlier word; no link refresh in the run\n", instanceID)
+	fmt.Printf("PASS: a restart in the middle of a turn, the controller out of reach for %s after it: the restarted gateway kept retrying and posted task %s's answer into its thread %s later, without a reply\n", klausGatewayGateClosed, resumed.taskID, resumed.after.Round(time.Second))
 	if component != nil {
 		fmt.Printf("PASS: the meta chart's %s component runs the OBO link store in Secret %s — Role %s grants get/update/patch on that Secret alone, no store volume, RollingUpdate\n", klausGatewayComponent, klausGatewayLinksSecret, klausGatewayLinksSecret)
 		fmt.Printf("PASS: two links written through pkg/auth/musterlink with the lab's store-key survived the loss of pod %s: %s was Ready %s after the deletion and read %d links (%d before the proof), both read back unchanged, the proof's records removed\n",
@@ -560,10 +593,26 @@ func klausGatewayRunDir(dir string) (string, func(), error) {
 	return tmp, func() { _ = os.RemoveAll(tmp) }, nil
 }
 
-// grpcsTarget turns the edge's https base URL into the gateway's grpcs://
-// target (the same host and port: the GRPCRoute shares the public listener).
-func grpcsTarget(httpsBase string) string {
-	return "grpcs://" + strings.TrimPrefix(httpsBase, "https://")
+// edgeHostPort is the host:port of the edge's https base URL (the GRPCRoute
+// shares the public listener), 443 when the URL names no port.
+func edgeHostPort(httpsBase string) (string, error) {
+	u, err := url.Parse(httpsBase)
+	if err != nil || u.Hostname() == "" {
+		return "", fmt.Errorf("the edge URL %q: not an https URL with a host", httpsBase)
+	}
+	port := u.Port()
+	if port == "" {
+		port = "443"
+	}
+	return net.JoinHostPort(u.Hostname(), port), nil
+}
+
+// gatedTarget is the gateway's grpcs:// target through the gate on port: the
+// edge's own hostname, so TLS verifies against the lab CA as usual — the
+// lab's domain resolves to loopback, where the gate listens.
+func gatedTarget(edge string, port int) string {
+	host, _, _ := net.SplitHostPort(edge)
+	return "grpcs://" + net.JoinHostPort(host, strconv.Itoa(port))
 }
 
 // randomSuffix is a short per-run id.
@@ -1539,6 +1588,91 @@ func (p *slackProof) stop(t *slackThread, text string) (*slackTurn, error) {
 		return nil, fmt.Errorf("the thread was not told %q: %s", slackStopped, threadLine(p.fake.thread(p.channel, t.ts)))
 	}
 	return turn, nil
+}
+
+// resumedTurn is what step 5b saw: the task the restarted gateway delivered,
+// how many recovery attempts failed while the gate was closed, the answer the
+// thread got after the restart and how long after the restart it landed.
+type resumedTurn struct {
+	taskID         string
+	failedAttempts int
+	answer         string
+	after          time.Duration
+}
+
+// restartMidTurn asks a long question in the thread (one whose AgentInstance
+// is warm, so the answer streams soon) and, once its answer streams, restarts
+// the gateway with the gate closed: the stopping process
+// leaves the task running and promises the post, the new one cannot reach the
+// controller for klausGatewayGateClosed. Once the gate opens again, the
+// thread must get the rest of the answer with no message from the person.
+func (p *slackProof) restartMidTurn(gw *gatewayProcess, gate *tcpGate, t *slackThread, text string) (*resumedTurn, error) {
+	asked := len(p.fake.thread(p.channel, t.ts))
+	if _, err := p.driver.mention(t.user, t.ts, text); err != nil {
+		return nil, err
+	}
+	msgs, streaming := waitThread(p.fake, p.channel, t.ts, klausGatewayTurnTimeout, func(msgs []slackMessage) bool {
+		_, answer := streamedSince(msgs, asked)
+		return answer != ""
+	})
+	if !streaming {
+		return nil, fmt.Errorf("the turn to restart under streamed nothing within %s: %s", klausGatewayTurnTimeout, threadLine(msgs))
+	}
+	if err := gw.stop(); err != nil {
+		return nil, err
+	}
+	if len(p.records(recordLeftRunning, t.ts)) == 0 {
+		return nil, fmt.Errorf("the stopping gateway left no task running for thread %s (no %s record)", t.ts, recordLeftRunning)
+	}
+	msgs = p.fake.thread(p.channel, t.ts)
+	if _, ok := findMessage(msgs[asked:], slackRestartPromise); !ok {
+		return nil, fmt.Errorf("the stopping gateway did not promise the post (%q): %s", slackRestartPromise, threadLine(msgs))
+	}
+	before := len(msgs)
+	gate.setOpen(false)
+	restarted := time.Now()
+	if err := gw.start(); err != nil {
+		gate.setOpen(true)
+		return nil, fmt.Errorf("restarting the gateway: %w", err)
+	}
+	time.Sleep(klausGatewayGateClosed)
+	failed := len(p.recoveryFailures(t.ts))
+	gate.setOpen(true)
+	if failed == 0 {
+		return nil, fmt.Errorf("no recovery attempt failed while the gate was closed: the proof did not take the controller out of reach")
+	}
+	var resume []gatewayRecord
+	msgs, delivered := waitThread(p.fake, p.channel, t.ts, klausGatewayTurnTimeout, func(msgs []slackMessage) bool {
+		resume = p.records(recordTurnResume, t.ts)
+		_, answer := streamedSince(msgs, before)
+		return len(resume) > 0 && answer != ""
+	})
+	if !delivered {
+		logs, _ := p.logs()
+		return nil, fmt.Errorf("the turn left running was not posted within %s of the gate opening: %s; the gateway's log ends:\n%s",
+			klausGatewayTurnTimeout, threadLine(msgs), tailLines(logs, 8))
+	}
+	if _, gaveUp := findMessage(msgs[before:], slackReplyToGetIt); gaveUp {
+		return nil, fmt.Errorf("the restarted gateway gave up on the turn (%q) before delivering it: %s", slackReplyToGetIt, threadLine(msgs))
+	}
+	_, answer := streamedSince(msgs, before)
+	return &resumedTurn{taskID: resume[0].TaskID, failedAttempts: failed, answer: answer, after: time.Since(restarted)}, nil
+}
+
+// recoveryFailures is the restarted gateway's warnings about a turn of thread
+// it could not resubscribe to yet.
+func (p *slackProof) recoveryFailures(thread string) []string {
+	logs, err := p.logs()
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, line := range strings.Split(logs, "\n") {
+		if strings.Contains(line, gatewayResubscribeFailed) && strings.Contains(line, thread) {
+			out = append(out, line)
+		}
+	}
+	return out
 }
 
 // assertMusterAttribution reads muster's log since the tool-using turn began:
