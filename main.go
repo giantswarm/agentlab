@@ -123,6 +123,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		inGroup(groupTesting, skillsTestCmd()),
 		inGroup(groupTesting, a2aTestCmd()),
 		inGroup(groupTesting, klausGatewayTestCmd()),
+		inGroup(groupTesting, decisionsTestCmd()),
 		inGroup(groupTesting, backstageTestCmd()),
 
 		inGroup(groupCleanup, labCmd("down", "Destroy the kind cluster", lab.Down)),
@@ -1190,6 +1191,31 @@ func klausGatewayTestCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.SlackFakeBinary, "slack-fake-binary", "", "the static Linux agentlab the fake Slack Web API container runs on the kind network while platform.klausGateway is on (default: this binary)")
 	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the fixture runs on (default: default-model-config, the Anthropic one the lab renders)")
 	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", 0, "how long the fixture's golden boot may take to reach Ready on the Harness (default 10m)")
+	cmd.Flags().StringVar(&opts.RunDir, "run-dir", "", "directory for the gateway's stores, keys and log, kept afterwards (default: a temporary directory, removed)")
+	return cmd
+}
+
+func decisionsTestCmd() *cobra.Command {
+	var opts lab.DecisionsTestOptions
+	cmd := &cobra.Command{
+		Use:   "decisions-test [email]",
+		Short: "Headless proof of klaus-gateway's decisions (POST /decisions): the gateway on the host with its reviews endpoint, a ServiceAccount token the lab's API server vouches for, a fake Slack Web API; a team decision answered by a Choose click, a person's (found by email, a direct message) in the modal with an option and own words, a team decision by a reply in its thread, each answer a muster tool call as the linked user; a refused answer as a status line, a decision closed as defaulted refusing a late click",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			email := cfg.AdminUser().Email
+			if len(args) == 1 {
+				email = args[0]
+			}
+			return lab.DecisionsTest(cfg, email, opts)
+		},
+	}
+	cmd.Flags().StringVar(&opts.GatewayImage, "gateway-image", lab.DecisionsGatewayImageDefault, "the klaus-gateway image to run on the host network")
+	cmd.Flags().StringVar(&opts.GatewayBinary, "gateway-binary", "", "a local klaus-gateway build to run instead of the image — the proof of a branch")
+	cmd.Flags().IntVar(&opts.Port, "gateway-port", 18090, "host port of the gateway's endpoints; the admin endpoints take the next port, the fake Slack Web API the one after")
 	cmd.Flags().StringVar(&opts.RunDir, "run-dir", "", "directory for the gateway's stores, keys and log, kept afterwards (default: a temporary directory, removed)")
 	return cmd
 }
