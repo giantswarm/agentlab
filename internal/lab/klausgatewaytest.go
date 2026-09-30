@@ -127,11 +127,14 @@ const (
 	klausGatewayRecallPrompt = "Which single word did I ask you to reply with earlier in this conversation? Answer with just that word."
 	klausGatewayToolPrompt   = "How many namespaces does the cluster have? Use your tools to list them."
 	klausGatewayEssayPrompt  = "Write a long essay of at least 1500 words about the history of container orchestration, without using any tools."
-	klausGatewayTurnTimeout  = 4 * time.Minute
-	klausGatewayReplyWait    = 90 * time.Second
-	klausGatewayCancelWait   = 90 * time.Second
-	klausGatewayStartWait    = 30 * time.Second
-	klausGatewayStopWait     = 20 * time.Second
+	// klausGatewayCountPrompt is step 5b's long turn: plain text that streams
+	// from its first line and runs for minutes, on a small local model too.
+	klausGatewayCountPrompt = "Without using any tools, write out every number from one to five hundred in English words, one number per line, and nothing else."
+	klausGatewayTurnTimeout = 4 * time.Minute
+	klausGatewayReplyWait   = 90 * time.Second
+	klausGatewayCancelWait  = 90 * time.Second
+	klausGatewayStartWait   = 30 * time.Second
+	klausGatewayStopWait    = 20 * time.Second
 	// klausGatewayGateClosed is how long the controller stays out of the
 	// restarted gateway's reach in step 5b: longer than a few quick retries,
 	// so only a recovery that keeps trying delivers the turn.
@@ -479,7 +482,7 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	note("no new binding, still AgentInstance %s next to the denied thread's %s; the agent recalled %q; no token_refresh in the run", instanceID, deniedInstance, excerpt(turn.answer, 40))
 
 	step("5b. Restart mid-turn with the controller out of reach for %s: the turn left running is posted in its thread when it ends, without a reply", klausGatewayGateClosed)
-	resumed, err := p.restartMidTurn(gw, gate, &slackThread{user: people.person}, klausGatewayEssayPrompt)
+	resumed, err := p.restartMidTurn(gw, gate, &slackThread{user: people.person}, klausGatewayCountPrompt)
 	if err != nil {
 		return err
 	}
