@@ -58,10 +58,13 @@ The lab installs it in its **lab shape**:
   in its local-dev auth mode, the controller ServiceMonitor following
   observability. This is what a migration rehearsal seeds before upgrading
   in place to the 4.x line, and what a fix on the 3.x maintenance line is
-  proven on; the switch is `config.LegacyChart`. `platform-test` on it skips
-  the controller identity proof and says why (the 3.x connectivity chart
-  renders no `GRPCRoute` for the controller; the muster and mcp-kubernetes
-  identity proofs cover the edge). `platform.serving` and
+  proven on; the switch is `config.LegacyChart`. Its connectivity chart
+  registers the family-less MCPServer `mcp-kubernetes` (tools
+  `x_mcp-kubernetes_<tool>`, no `management_cluster`), which the boot and the
+  proofs address on that line. `platform-test` on it skips the controller
+  identity proof and the infrastructure families proof and says why (the 3.x
+  connectivity chart renders no `GRPCRoute` for the controller and no family
+  member; the muster and mcp-kubernetes identity proofs cover the edge). `platform.serving` and
   `platform.vmManager` came with the 4.x line and are refused on it, with
   the switch that turns them off. The
   rehearsal — the four fleet shapes, the in-place upgrade, the migrate Job's
