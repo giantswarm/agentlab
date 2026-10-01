@@ -1155,18 +1155,18 @@ func (c *Config) Validate() error {
 	// The serving switch turns on the llm-d components alone; a pinned
 	// release before servingChartFloor would refuse the llm-d controller's
 	// release without kserve-resources and fail the install out of sight.
-	if c.Platform.Serving.Enabled && c.Platform.Enabled && c.Platform.ChartPath == "" && c.Platform.ChartBranch == "" {
-		if v, err := semver.NewVersion(c.Platform.ChartVersion); err == nil && v.LessThan(servingChartFloor) {
-			return fmt.Errorf("platform.serving needs agent-platform %s or newer (the llm-d control plane alone, components.kserve-runtime-configs and modelServing.modelsGateway); platform.chartVersion is %s", servingChartFloor, c.Platform.ChartVersion)
+	if c.Platform.Serving.Enabled && c.Platform.Enabled {
+		if chart, below := c.chartBelow(servingChartFloor); below {
+			return fmt.Errorf("platform.serving needs agent-platform %s or newer (the llm-d control plane alone, components.kserve-runtime-configs and modelServing.modelsGateway); %s — `agentlab configure --serving=false`", servingChartFloor, chart)
 		}
 	}
 	// The vm-manager component exists from agent-platform 4.11.0; a pinned
 	// release before it would take components.vm-manager as an unknown key
 	// and fail the install out of sight. A local checkout or a branch build
 	// carries its own answer.
-	if c.Platform.VMManager.Enabled && c.Platform.Enabled && c.Platform.ChartPath == "" && c.Platform.ChartBranch == "" {
-		if v, err := semver.NewVersion(c.Platform.ChartVersion); err == nil && v.LessThan(vmManagerChartFloor) {
-			return fmt.Errorf("platform.vmManager needs agent-platform %s or newer (components.vm-manager); platform.chartVersion is %s", vmManagerChartFloor, c.Platform.ChartVersion)
+	if c.Platform.VMManager.Enabled && c.Platform.Enabled {
+		if chart, below := c.chartBelow(vmManagerChartFloor); below {
+			return fmt.Errorf("platform.vmManager needs agent-platform %s or newer (components.vm-manager); %s — `agentlab configure --vm-manager=false`", vmManagerChartFloor, chart)
 		}
 	}
 	if c.Platform.DevRegistryPort != 0 {
@@ -1336,6 +1336,26 @@ func (c *Config) LegacyChart() bool {
 	}
 	major := c.ChartMajor()
 	return major > 0 && major < 4
+}
+
+// chartBelow reports whether the chart the lab installs predates floor, a
+// 4.x release, and names that chart for the refusal: a release below it, or
+// the 3.x line however it is installed (a dev build of a 3.x-line branch, a
+// chart directory with the 3.x roster). A dev build or a chart directory of
+// the current line is not checked.
+func (c *Config) chartBelow(floor *semver.Version) (string, bool) {
+	switch {
+	case c.LegacyChart() && c.Platform.ChartPath != "":
+		return "platform.chartPath " + c.Platform.ChartPath + " is the 3.x line", true
+	case c.LegacyChart():
+		return "platform.chartVersion is " + c.Platform.ChartVersion, true
+	case c.Platform.ChartPath != "" || c.Platform.ChartBranch != "":
+		return "", false
+	}
+	if v, err := semver.NewVersion(c.Platform.ChartVersion); err == nil && v.LessThan(floor) {
+		return "platform.chartVersion is " + c.Platform.ChartVersion, true
+	}
+	return "", false
 }
 
 // valuesFile is a chart's default values.
