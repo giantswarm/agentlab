@@ -61,7 +61,9 @@ The lab installs it in its **lab shape**:
   proven on; the switch is `config.LegacyChart`. `platform-test` on it skips
   the controller identity proof and says why (the 3.x connectivity chart
   renders no `GRPCRoute` for the controller; the muster and mcp-kubernetes
-  identity proofs cover the edge). The
+  identity proofs cover the edge). `platform.serving` and
+  `platform.vmManager` came with the 4.x line and are refused on it, with
+  the switch that turns them off. The
   rehearsal — the four fleet shapes, the in-place upgrade, the migrate Job's
   three phases, the timings — is [The migration rehearsal](migration-rehearsal.md).
 

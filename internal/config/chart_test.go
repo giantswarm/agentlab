@@ -331,3 +331,58 @@ func TestChartBranchValidation(t *testing.T) {
 		t.Error("Normalize must drop the pin without a chartBranch")
 	}
 }
+
+// Serving and vm-manager came with the 4.x line: the 3.x line is refused
+// with the switch to turn off however it is installed, as is a 4.x release
+// below the floor; a dev build or a chart directory of the current line is
+// not checked.
+func TestFeatureChartFloors(t *testing.T) {
+	chartDir := func(values string) string {
+		dir := filepath.Join(t.TempDir(), "agent-platform")
+		for _, d := range []string{dir, ConnectivityChartDir(dir)} {
+			if err := os.MkdirAll(d, 0o750); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(d, chartFile), []byte("name: "+filepath.Base(d)+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.WriteFile(filepath.Join(dir, valuesFile), []byte(values), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+	dir3x, dir4x := chartDir("components:\n  kagent: {}\n"), chartDir("components:\n  kagent: {}\n  substrate: {}\n")
+	for _, tc := range []struct {
+		name                       string
+		version, branch, chartPath string
+		refused                    string
+	}{
+		{"3.x release", legacyChart, "", "", "platform.chartVersion is " + legacyChart},
+		{"4.x release below the floor", "4.14.0", "", "", "platform.chartVersion is 4.14.0"},
+		{"3.x dev build", "3.23.5-r1f2e3d4ct20261001120000h7f841be", "fix-v3-gateway", "", "platform.chartVersion is 3.23.5"},
+		{"3.x chart directory", DefaultChartVersion, "", dir3x, "platform.chartPath " + dir3x + " is the 3.x line"},
+		{"the default", DefaultChartVersion, "", "", ""},
+		{"4.x dev build", "4.106.1-rbf28cd64t20261001120000h7f841be", mainBranch, "", ""},
+		{"4.x chart directory", legacyChart, "", dir4x, ""},
+	} {
+		for _, feature := range []struct {
+			name, off string
+			on        func(*Config)
+		}{
+			{"platform.serving", "--serving=false", func(c *Config) { c.Platform.Serving.Enabled = true }},
+			{"platform.vmManager", "--vm-manager=false", func(c *Config) { c.Platform.VMManager.Enabled = true }},
+		} {
+			cfg := Default()
+			cfg.Platform.ChartVersion, cfg.Platform.ChartBranch, cfg.Platform.ChartPath = tc.version, tc.branch, tc.chartPath
+			feature.on(cfg)
+			err := cfg.Validate()
+			switch {
+			case tc.refused == "" && err != nil:
+				t.Errorf("%s, %s: %v", tc.name, feature.name, err)
+			case tc.refused != "" && (err == nil || !strings.HasPrefix(err.Error(), feature.name+" needs") || !strings.Contains(err.Error(), tc.refused) || !strings.Contains(err.Error(), feature.off)):
+				t.Errorf("%s, %s: want the refusal naming %q and %s, got %v", tc.name, feature.name, tc.refused, feature.off, err)
+			}
+		}
+	}
+}
