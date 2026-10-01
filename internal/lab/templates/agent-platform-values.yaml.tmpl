@@ -68,6 +68,13 @@ global:
       # not exist.
       serviceMonitor:
         enabled: {{ .Platform.Observability }}
+    traces:
+      # No OTLP gateway in kind, with or without platform.observability (the
+      # Prometheus stack): the empty endpoint turns every `auto` exporter off
+      # (Substrate's, kagent's, muster's), where the chart's default
+      # kube-system otlp-gateway would only log resolver errors.
+      otlp:
+        endpoint: ""
 
 gitops:
   # Self-management OFF — the lab shape (see the header). Never drop this on
