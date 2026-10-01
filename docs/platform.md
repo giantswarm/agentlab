@@ -28,8 +28,10 @@ The lab installs it in its **lab shape**:
   holds. So Helm keeps owning the release: `agentlab platform` is one
   idempotent upgrade-or-install with the kstatus wait through the **embedded
   Helm** — Helm 4's SDK in the binary, no `helm` on the machine required; the
-  same `helm upgrade --install … --wait`, no post-renderer, no
-  `--force-conflicts` — and the release it writes is a regular one, so `helm
+  same `helm upgrade --install … --wait --force-conflicts`, no post-renderer
+  (forcing conflicts takes over the fields an earlier install's field manager
+  owns, so a lab brought up by an older release keeps upgrading) — and the
+  release it writes is a regular one, so `helm
   upgrade` from a shell (`KUBECONFIG=state/kubeconfig`) stays the day-2 tool.
   A re-run that would install the same chart version with the same values
   writes no revision (`chart agent-platform <version> already installed with
