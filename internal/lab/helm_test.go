@@ -2,15 +2,21 @@ package lab
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"helm.sh/helm/v4/pkg/action"
 	chart "helm.sh/helm/v4/pkg/chart/v2"
+	"helm.sh/helm/v4/pkg/kube"
 	ri "helm.sh/helm/v4/pkg/release"
 	releasecommon "helm.sh/helm/v4/pkg/release/common"
 	release "helm.sh/helm/v4/pkg/release/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // isolateHelm keeps a test's embedded Helm off the machine's Helm state: its
@@ -222,6 +228,51 @@ func TestHelmValuesLoaders(t *testing.T) {
 	}
 	if _, err := helmValuesFile(filepath.Join(t.TempDir(), "missing.yaml")); err == nil {
 		t.Error("a missing values file must be an error")
+	}
+}
+
+// TestLabUpgradeTakesFieldsOver: the lab's install and upgrade force
+// server-side apply conflicts, so a release whose fields another manager owns
+// (Helm's client-side apply, manager "helm") upgrades instead of failing on
+// every field the chart sets differently; an upgrade-or-install, waited on,
+// with the options passed through.
+func TestLabUpgradeTakesFieldsOver(t *testing.T) {
+	cfg := &action.Configuration{}
+	opts := helmInstallOptions{CreateNamespace: true, TakeOwnership: true}
+
+	upgrade := newLabUpgrade(cfg, observabilityNamespace, time.Minute, 10, opts)
+	if !upgrade.ForceConflicts {
+		t.Error("the upgrade must force conflicts")
+	}
+	if !upgrade.Install || upgrade.Namespace != observabilityNamespace || upgrade.Timeout != time.Minute || upgrade.WaitStrategy != kube.StatusWatcherStrategy || !upgrade.TakeOwnership || upgrade.MaxHistory != 10 {
+		t.Errorf("upgrade = %+v", upgrade)
+	}
+
+	install := newLabInstall(cfg, observabilityNamespace, kpsRelease, time.Minute, true, opts)
+	if !install.ForceConflicts {
+		t.Error("the install must force conflicts")
+	}
+	if install.ReleaseName != kpsRelease || install.Namespace != observabilityNamespace || !install.CreateNamespace || !install.TakeOwnership || !install.Replace || install.WaitStrategy != kube.StatusWatcherStrategy {
+		t.Errorf("install = %+v", install)
+	}
+}
+
+// TestWithConflictRemedy: a conflict server-side apply could not resolve
+// ends in the one line naming the remedy, however Helm wraps and joins it;
+// any other error passes unchanged.
+func TestWithConflictRemedy(t *testing.T) {
+	conflict := apierrors.NewApplyConflict([]metav1.StatusCause{{Type: metav1.CauseTypeFieldManagerConflict, Message: `conflict with "helm"`, Field: ".spec.ingress"}}, "Apply failed with 1 conflict")
+	helmErr := errors.Join(
+		fmt.Errorf("conflict occurred while applying object monitoring/kps-operator networking.k8s.io/v1, Kind=NetworkPolicy: %w", conflict),
+		errors.New("another object failed"),
+	)
+	got := withConflictRemedy(helmErr)
+	if !errors.Is(got, errFieldConflict) || strings.Contains(got.Error(), "\n") || !strings.Contains(got.Error(), "agentlab down && agentlab up") {
+		t.Errorf("conflict: %v", got)
+	}
+	other := errors.New("context deadline exceeded")
+	if got := withConflictRemedy(other); got != other {
+		t.Errorf("other error: %v, want it unchanged", got)
 	}
 }
 

@@ -165,3 +165,10 @@ plumbing for model servers under
   know the field would drop it silently and the next `platform` would uninstall
   what it configured; the refusal is deliberate. Update agentlab — a shared lab's
   checkout carries the release binary its holders run — or remove the field.
+- **`a field of the release is owned by another field manager and could not be
+  taken over`** — an install or upgrade of one of the lab's releases (the
+  platform, kube-prometheus-stack) was refused by server-side apply although the
+  lab forces conflicts, which takes over the fields an earlier install's field
+  manager owns (`helm` from a client-side install, or a binary of another name).
+  The conflicting objects and fields are in the Helm log printed above the
+  line. What is left cannot be resolved by an upgrade: recreate the lab.

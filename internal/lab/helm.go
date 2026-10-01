@@ -36,6 +36,7 @@ import (
 	releasecommon "helm.sh/helm/v4/pkg/release/common"
 	release "helm.sh/helm/v4/pkg/release/v1"
 	"helm.sh/helm/v4/pkg/storage/driver"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/klog/v2"
 	"oras.land/oras-go/v2/registry/remote/errcode"
 
@@ -361,47 +362,77 @@ func helmUpgradeInstall(namespace, releaseName, ref, version string, vals map[st
 	defer stop()
 
 	if notFound || uninstalled {
-		install := action.NewInstall(h.cfg)
-		install.ReleaseName = releaseName
-		install.Namespace = namespace
-		install.CreateNamespace = opts.CreateNamespace
-		install.TakeOwnership = opts.TakeOwnership
-		install.Timeout = timeout
-		install.WaitStrategy = kube.StatusWatcherStrategy
-		install.ForceConflicts = true
-		// The last revision is an uninstalled one kept in history: the name
-		// is reused, as the CLI does.
-		install.Replace = uninstalled
+		install := newLabInstall(h.cfg, namespace, releaseName, timeout, uninstalled, opts)
 		ch, err := h.loadChart(&install.ChartPathOptions, ref, version)
 		if err != nil {
 			return h.fail(invocation, err)
 		}
 		if _, err := install.RunWithContext(ctx, ch, vals); err != nil {
-			return h.fail(invocation, fmt.Errorf("INSTALL FAILED: %w", err))
+			return h.fail(invocation, fmt.Errorf("INSTALL FAILED: %w", withConflictRemedy(err)))
 		}
 		return nil
 	}
 
-	upgrade := action.NewUpgrade(h.cfg)
-	upgrade.Install = true
-	upgrade.Namespace = namespace
-	upgrade.Timeout = timeout
-	upgrade.WaitStrategy = kube.StatusWatcherStrategy
-	// The CLI's --force-conflicts: fields another manager owns are taken over
-	// rather than refused — the release of a lab installed before the manager
-	// was pinned (owned by the binary's name then) upgrades instead of
-	// failing on every zero-valued field of the chart.
-	upgrade.ForceConflicts = true
-	upgrade.TakeOwnership = opts.TakeOwnership
-	upgrade.MaxHistory = h.settings.MaxHistory
+	upgrade := newLabUpgrade(h.cfg, namespace, timeout, h.settings.MaxHistory, opts)
 	ch, err := h.loadChart(&upgrade.ChartPathOptions, ref, version)
 	if err != nil {
 		return h.fail(invocation, err)
 	}
 	if _, err := upgrade.RunWithContext(ctx, releaseName, ch, vals); err != nil {
-		return h.fail(invocation, fmt.Errorf("UPGRADE FAILED: %w", err))
+		return h.fail(invocation, fmt.Errorf("UPGRADE FAILED: %w", withConflictRemedy(err)))
 	}
 	return nil
+}
+
+// newLabInstall is the install half of helmUpgradeInstall: `helm install`
+// with --wait and --force-conflicts; replace reuses the name of a release
+// whose last revision is an uninstalled one kept in history, as the CLI does.
+func newLabInstall(cfg *action.Configuration, namespace, releaseName string, timeout time.Duration, replace bool, opts helmInstallOptions) *action.Install {
+	install := action.NewInstall(cfg)
+	install.ReleaseName = releaseName
+	install.Namespace = namespace
+	install.CreateNamespace = opts.CreateNamespace
+	install.TakeOwnership = opts.TakeOwnership
+	install.Timeout = timeout
+	install.WaitStrategy = kube.StatusWatcherStrategy
+	install.ForceConflicts = true
+	install.Replace = replace
+	return install
+}
+
+// newLabUpgrade is the upgrade half of helmUpgradeInstall: `helm upgrade
+// --install` with --wait and --force-conflicts. Forcing conflicts is what
+// keeps an existing lab upgradable: server-side apply refuses to change a
+// field another manager owns, and a chart's zero-valued fields (hostIPC:
+// false, initialDelaySeconds: 0) count as changed on every re-apply, so a
+// release whose objects Helm's client-side apply wrote (manager "helm",
+// operation Update), or a binary of another name, failed on every such field
+// instead of taking it over.
+func newLabUpgrade(cfg *action.Configuration, namespace string, timeout time.Duration, maxHistory int, opts helmInstallOptions) *action.Upgrade {
+	upgrade := action.NewUpgrade(cfg)
+	upgrade.Install = true
+	upgrade.Namespace = namespace
+	upgrade.Timeout = timeout
+	upgrade.WaitStrategy = kube.StatusWatcherStrategy
+	upgrade.ForceConflicts = true
+	upgrade.TakeOwnership = opts.TakeOwnership
+	upgrade.MaxHistory = maxHistory
+	return upgrade
+}
+
+// errFieldConflict is what an install or upgrade ends in when the API server
+// still refuses a field another manager owns: forcing conflicts takes such
+// fields over, so what is left cannot be resolved from here.
+var errFieldConflict = errors.New("a field of the release is owned by another field manager and could not be taken over; recreate the lab: agentlab down && agentlab up")
+
+// withConflictRemedy replaces a server-side apply conflict (Helm joins one
+// line per conflicting object) with errFieldConflict; the objects and fields
+// stay in the Helm log the failure prints. Any other error is returned as is.
+func withConflictRemedy(err error) error {
+	if apierrors.IsConflict(err) {
+		return errFieldConflict
+	}
+	return err
 }
 
 // helmDeployedRevision is the check `helm upgrade` itself never makes: the
