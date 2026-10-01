@@ -34,9 +34,10 @@ func TestLegacyLabProofs(t *testing.T) {
 		if got := familiesSkip(cfg); (got != "") != tc.skip {
 			t.Errorf("%s: familiesSkip() = %q, want a reason: %v", tc.name, got, tc.skip)
 		}
-		server, tool, args := cfg.ClusterName+"-mcp-kubernetes", "x_kubernetes_list", map[string]any{familyInstanceArg: cfg.ClusterName + "-mcp-kubernetes", "resourceType": "pods"}
+		member := cfg.ClusterName + "-mcp-kubernetes"
+		server, tool, args := member, "x_"+familyKubernetes+"_list", map[string]any{familyInstanceArg: member, resourceTypeKey: resourceNamespaces}
 		if tc.skip {
-			server, tool, args = componentMCPKubernetes, "x_mcp-kubernetes_list", map[string]any{"resourceType": "pods"}
+			server, tool, args = componentMCPKubernetes, "x_"+componentMCPKubernetes+"_list", map[string]any{resourceTypeKey: resourceNamespaces}
 		}
 		if got := cfg.MCPServerName(); got != server {
 			t.Errorf("%s: MCPServerName() = %q, want %q", tc.name, got, server)
@@ -44,7 +45,7 @@ func TestLegacyLabProofs(t *testing.T) {
 		if got := kubernetesTool(cfg, "list"); got != tool {
 			t.Errorf("%s: kubernetesTool(list) = %q, want %q", tc.name, got, tool)
 		}
-		if got := kubernetesArgs(cfg, map[string]any{"resourceType": "pods"}); !reflect.DeepEqual(got, args) {
+		if got := kubernetesArgs(cfg, map[string]any{resourceTypeKey: resourceNamespaces}); !reflect.DeepEqual(got, args) {
 			t.Errorf("%s: kubernetesArgs = %v, want %v", tc.name, got, args)
 		}
 	}
