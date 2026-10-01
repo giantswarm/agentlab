@@ -240,19 +240,19 @@ func TestLabUpgradeTakesFieldsOver(t *testing.T) {
 	cfg := &action.Configuration{}
 	opts := helmInstallOptions{CreateNamespace: true, TakeOwnership: true}
 
-	upgrade := newLabUpgrade(cfg, "monitoring", time.Minute, 10, opts)
+	upgrade := newLabUpgrade(cfg, observabilityNamespace, time.Minute, 10, opts)
 	if !upgrade.ForceConflicts {
 		t.Error("the upgrade must force conflicts")
 	}
-	if !upgrade.Install || upgrade.Namespace != "monitoring" || upgrade.Timeout != time.Minute || upgrade.WaitStrategy != kube.StatusWatcherStrategy || !upgrade.TakeOwnership || upgrade.MaxHistory != 10 {
+	if !upgrade.Install || upgrade.Namespace != observabilityNamespace || upgrade.Timeout != time.Minute || upgrade.WaitStrategy != kube.StatusWatcherStrategy || !upgrade.TakeOwnership || upgrade.MaxHistory != 10 {
 		t.Errorf("upgrade = %+v", upgrade)
 	}
 
-	install := newLabInstall(cfg, "monitoring", "kps", time.Minute, true, opts)
+	install := newLabInstall(cfg, observabilityNamespace, kpsRelease, time.Minute, true, opts)
 	if !install.ForceConflicts {
 		t.Error("the install must force conflicts")
 	}
-	if install.ReleaseName != "kps" || install.Namespace != "monitoring" || !install.CreateNamespace || !install.TakeOwnership || !install.Replace || install.WaitStrategy != kube.StatusWatcherStrategy {
+	if install.ReleaseName != kpsRelease || install.Namespace != observabilityNamespace || !install.CreateNamespace || !install.TakeOwnership || !install.Replace || install.WaitStrategy != kube.StatusWatcherStrategy {
 		t.Errorf("install = %+v", install)
 	}
 }
