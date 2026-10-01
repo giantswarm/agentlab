@@ -490,6 +490,36 @@ func TestKagentServiceMonitorStaysOff(t *testing.T) {
 	}
 }
 
+// The lab runs no OTLP gateway, so the platform values empty the chart's
+// default collector endpoint whether or not platform.observability brings the
+// Prometheus stack: every `auto` exporter (Substrate's included) resolves off
+// instead of logging resolver errors for the kube-system otlp-gateway.
+func TestPlatformValuesExportNoOTLP(t *testing.T) {
+	for _, observability := range []bool{true, false} {
+		cfg := config.Default()
+		cfg.Platform.Observability = observability
+		out, err := renderTemplate(cfg, "agent-platform-values.yaml.tmpl", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var values struct {
+			Global struct {
+				Observability struct {
+					Traces struct {
+						OTLP map[string]any `yaml:"otlp"`
+					} `yaml:"traces"`
+				} `yaml:"observability"`
+			} `yaml:"global"`
+		}
+		if err := yaml.Unmarshal(out, &values); err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		if got, ok := values.Global.Observability.Traces.OTLP["endpoint"]; !ok || got != "" {
+			t.Errorf("observability=%v: global.observability.traces.otlp.endpoint = %v (set: %v), want \"\"", observability, got, ok)
+		}
+	}
+}
+
 // A released 3.x meta chart (platform.chartVersion below 4.0.0 on the stable
 // channel) gets the 3.x lab shape: the chart's closed root schema and the
 // kagent 0.10 wrapper it resolves refuse every key of the current line, so
