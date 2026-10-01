@@ -45,8 +45,11 @@ The lab installs it in its **lab shape**:
   The one exception is deliberate too: the [dev channel](#dev-channel),
   where `platform.chartBranch` follows a branch's newest dev build — and
   still installs an exact version, written into `chartVersion`.
-- A **released 3.x meta chart** (`chartVersion` below `4.0.0`, no
-  `chartBranch`, no `chartPath`) renders the **3.x lab shape**: that line's
+- A **3.x meta chart** renders the **3.x lab shape**: a release or a dev
+  build (`chartVersion` below `4.0.0`, on the dev channel the resolved
+  build of a `release-v3.x` branch) or a chart directory whose `values.yaml`
+  roster has no `components.substrate` (a checkout of the maintenance line;
+  its `Chart.yaml` version is a placeholder on both lines). That line's
   root schema is closed and the kagent 0.10 wrapper it resolves refuses the
   current line's keys, so the lab values carry no platform Postgres
   (`postgres`, `components.cloudnative-pg`), no `substrate`, and a `kagent`
@@ -54,11 +57,13 @@ The lab installs it in its **lab shape**:
   or the CNPG DSN mount — kagent 0.10 on its bundled Postgres, the controller
   in its local-dev auth mode, the controller ServiceMonitor following
   observability. This is what a migration rehearsal seeds before upgrading
-  in place to the 4.x line; the switch is `config.LegacyChart`. The
+  in place to the 4.x line, and what a fix on the 3.x maintenance line is
+  proven on; the switch is `config.LegacyChart`. `platform-test` on it skips
+  the controller identity proof and says why (the 3.x connectivity chart
+  renders no `GRPCRoute` for the controller; the muster and mcp-kubernetes
+  identity proofs cover the edge). The
   rehearsal — the four fleet shapes, the in-place upgrade, the migrate Job's
-  three phases, the timings — is [The migration rehearsal](migration-rehearsal.md). The dev
-  channel and a chart directory always render the current line's shape,
-  whatever version they carry.
+  three phases, the timings — is [The migration rehearsal](migration-rehearsal.md).
 
 The platform installs as part of `agentlab up` (it is enabled in the default
 configuration); on an already-running cluster the steps are also standalone:

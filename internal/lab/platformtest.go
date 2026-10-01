@@ -221,10 +221,15 @@ func PlatformTest(cfg *config.Config, email string) error {
 	if cfg.Platform.Agents {
 		// The kagent controller behind the JWT policy on its route, and
 		// agent-manager writing as the caller: the same forged header.
-		if err := proveControllerIdentity(cfg, user, token); err != nil {
-			return err
+		if reason := controllerIdentitySkip(cfg); reason != "" {
+			note("skipping the controller identity proof: %s", reason)
+			verdict += "\nSKIP: the kagent controller route — " + reason
+		} else {
+			if err := proveControllerIdentity(cfg, user, token); err != nil {
+				return err
+			}
+			verdict += "\nPASS: the kagent controller route — no token refused at the edge (JWT Strict); a valid token with a forged x-user-id attributed to the token's subject"
 		}
-		verdict += "\nPASS: the kagent controller route — no token refused at the edge (JWT Strict); a valid token with a forged x-user-id attributed to the token's subject"
 		if err := proveAgentManagerIdentity(cfg); err != nil {
 			return err
 		}

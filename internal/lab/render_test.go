@@ -547,7 +547,7 @@ func TestPlatformValuesLegacyChartShape(t *testing.T) {
 	}
 	current := config.Default()
 	legacy := config.Default()
-	legacy.Platform.ChartVersion = "3.23.1"
+	legacy.Platform.ChartVersion = legacyChartVersion
 	if !legacy.LegacyChart() || current.LegacyChart() {
 		t.Fatalf("LegacyChart(): 3.23.1=%v %s=%v", legacy.LegacyChart(), current.Platform.ChartVersion, current.LegacyChart())
 	}
@@ -610,41 +610,60 @@ func TestPlatformValuesLegacyChartShape(t *testing.T) {
 		t.Errorf("the 3.x values differ from the 4.x values in more than the 4.x keys:\n--- 4.x minus the keys\n%s\n--- 3.x\n%s", mustYAML(t, expected), mustYAML(t, legacyValues))
 	}
 
-	// The current line is unchanged by the switch: a 4.x release, a 5.x one
-	// and the dev channel render the same bytes, and a 3.x-numbered dev
-	// build is still the current line.
-	for name, mutate := range map[string]func(*config.Config){
-		"4.x release": func(c *config.Config) { c.Platform.ChartVersion = "4.7.11" },
-		"5.x release": func(c *config.Config) { c.Platform.ChartVersion = "5.0.0" },
-		"dev channel on a 3.x-numbered": func(c *config.Config) {
-			c.Platform.ChartVersion, c.Platform.ChartBranch = "3.24.0-dev.main.2026-09-11.08-12-33.h7f841be", testRefMain
-		},
+	// The switch follows the chart, not the channel: a 4.x release, a 5.x
+	// one and a 4.x dev build render the current line's bytes, a dev build
+	// of a 3.x-line branch the 3.x line's.
+	for name, tc := range map[string]struct {
+		mutate func(*config.Config)
+		want   string
+	}{
+		"4.x release": {func(c *config.Config) { c.Platform.ChartVersion = "4.7.11" }, currentOut},
+		"5.x release": {func(c *config.Config) { c.Platform.ChartVersion = "5.0.0" }, currentOut},
+		"dev build of main": {func(c *config.Config) {
+			c.Platform.ChartVersion, c.Platform.ChartBranch = "4.106.1-rbf28cd64t20261001120000h7f841be", testRefMain
+		}, currentOut},
+		"dev build of a 3.x-line branch": {func(c *config.Config) {
+			c.Platform.ChartVersion, c.Platform.ChartBranch = "3.23.5-r1f2e3d4ct20261001120000h7f841be", "fix-v3-gateway"
+		}, legacyOut},
 	} {
 		cfg := config.Default()
-		mutate(cfg)
-		if _, out := render(cfg); out != currentOut {
-			t.Errorf("%s: the render differs from the current line's", name)
+		tc.mutate(cfg)
+		if _, out := render(cfg); out != tc.want {
+			t.Errorf("%s: the render is not its line's", name)
 		}
 	}
-	// A chart directory is the current line too, whatever version its
-	// Chart.yaml carries, plus its connectivity source
-	// (TestPlatformValuesLocalConnectivityChart) and nothing else.
-	directory := config.Default()
-	directory.Platform.ChartVersion = "3.23.1"
-	directory.Platform.ChartPath = writeChartFiles(t, t.TempDir(), "agent-platform", map[string]string{
-		chartYAML: metaChartYAML,
-	})
-	directoryValues, _ := render(directory)
-	components, _ := directoryValues["components"].(map[string]any)
-	if _, set := components[config.ConnectivityChartName]; !set {
-		t.Error("chart directory: the render names no connectivity source")
-	}
-	delete(components, config.ConnectivityChartName)
-	// Rendered afresh: the comparison above stripped the 4.x keys off the
-	// first render's values.
-	wantValues, _ := render(current)
-	if !reflect.DeepEqual(directoryValues, wantValues) {
-		t.Errorf("chart directory: the render differs from the current line's in more than the connectivity source:\n--- directory\n%s\n--- current\n%s", mustYAML(t, directoryValues), mustYAML(t, wantValues))
+	// A chart directory renders its roster's line, whatever pin is left
+	// over, plus its connectivity source
+	// (TestPlatformValuesLocalConnectivityChart) and nothing else: Substrate
+	// in the roster is the current line, none the 3.x line.
+	for name, tc := range map[string]struct {
+		roster string
+		want   *config.Config
+	}{
+		"4.x chart directory": {"components:\n  kagent: {}\n  substrate: {}\n", current},
+		"3.x chart directory": {"components:\n  kagent: {}\n", legacy},
+	} {
+		directory := config.Default()
+		directory.Platform.ChartVersion = legacyChartVersion
+		if tc.want == legacy {
+			directory.Platform.ChartVersion = config.DefaultChartVersion
+		}
+		directory.Platform.ChartPath = writeChartFiles(t, t.TempDir(), "agent-platform", map[string]string{
+			chartYAML:     metaChartYAML,
+			"values.yaml": tc.roster,
+		})
+		directoryValues, _ := render(directory)
+		components, _ := directoryValues["components"].(map[string]any)
+		if _, set := components[config.ConnectivityChartName]; !set {
+			t.Errorf("%s: the render names no connectivity source", name)
+		}
+		delete(components, config.ConnectivityChartName)
+		// Rendered afresh: the comparison above stripped the 4.x keys off
+		// the first render's values.
+		wantValues, _ := render(tc.want)
+		if !reflect.DeepEqual(directoryValues, wantValues) {
+			t.Errorf("%s: the render differs from its line's in more than the connectivity source:\n--- directory\n%s\n--- want\n%s", name, mustYAML(t, directoryValues), mustYAML(t, wantValues))
+		}
 	}
 	if legacyOut == currentOut {
 		t.Error("the 3.x render must differ from the current line's")

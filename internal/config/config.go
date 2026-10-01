@@ -171,8 +171,8 @@ var familiesChartFloor = semver.MustParse("4.93.0")
 // familiesChartFloor, which would register the family-less mcp-kubernetes
 // next to the lab's families. Checked where the chart is installed, not on
 // load, so `agentlab configure --chart-version` can move an older pin. The
-// 3.x line (a migration rehearsal's seed), a branch build and a chart
-// directory are not checked.
+// 3.x line (a migration rehearsal's seed, a maintenance-line fix), a branch
+// build and a chart directory are not checked.
 func (c *Config) CheckFamiliesChartFloor() error {
 	if c.Platform.ChartPath != "" || c.Platform.ChartBranch != "" || c.LegacyChart() {
 		return nil
@@ -1321,20 +1321,44 @@ func MajorOf(version string) uint64 {
 	return v.Major()
 }
 
-// LegacyChart reports whether the lab installs a released meta chart of the
-// 3.x line: an exact platform.chartVersion below 4.0.0 on the stable
-// channel. The 3.x line's values are a different shape (kagent 0.10 with
-// its bundled Postgres, no Agent Substrate, no platform Postgres, a closed
-// root schema that refuses the 4.x keys), so the lab values render in that
-// shape for it; a dev channel (platform.chartBranch) or a chart directory
-// (platform.chartPath) is always the current line, whatever version its
-// Chart.yaml or resolved tag carries.
+// LegacyChart reports whether the lab installs a meta chart of the 3.x line.
+// The 3.x line's values are a different shape (kagent 0.10 with its bundled
+// Postgres, no Agent Substrate, no platform Postgres, a closed root schema
+// that refuses the 4.x keys), so the lab values render in that shape for it.
+// The chart the lab installs decides, not the channel: a release or a dev
+// build (platform.chartBranch, the resolved build in chartVersion) by its
+// major below 4, a chart directory (platform.chartPath) by its roster
+// (legacyChartDir) — a branch of the 3.x maintenance line is as legacy as
+// its releases.
 func (c *Config) LegacyChart() bool {
-	if c.ChartChannel() != ChartChannelStable {
-		return false
+	if c.ChartChannel() == ChartChannelPath {
+		return legacyChartDir(c.Platform.ChartPath)
 	}
 	major := c.ChartMajor()
 	return major > 0 && major < 4
+}
+
+// valuesFile is a chart's default values.
+const valuesFile = "values.yaml"
+
+// legacyChartDir reports whether the chart directory carries the 3.x
+// roster: a components block without components.substrate, the component
+// the 4.x line added. A checkout's Chart.yaml version is the placeholder the
+// release replaces on both lines, so the roster is what tells them apart; a
+// directory without a readable components block is the current line.
+func legacyChartDir(dir string) bool {
+	data, err := os.ReadFile(filepath.Join(dir, valuesFile)) // #nosec G304 -- the chart directory agentlab.yaml names
+	if err != nil {
+		return false
+	}
+	var values struct {
+		Components map[string]yaml.Node `yaml:"components"`
+	}
+	if yaml.Unmarshal(data, &values) != nil || values.Components == nil {
+		return false
+	}
+	_, substrate := values.Components["substrate"]
+	return !substrate
 }
 
 // AdminUser returns the first user in platform-admins: the identity the up

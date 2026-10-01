@@ -23,17 +23,40 @@ func TestValidateChartVersion(t *testing.T) {
 	}
 }
 
-// A released 3.x meta chart is the legacy shape; the current line is every
-// 4.x release, and the dev channel and a chart directory whatever their
-// version says. The channel follows the install's precedence: a chart
+// The 3.x meta chart is the legacy shape, whichever way the lab installs
+// it: a 3.x release, a dev build of a 3.x-line branch, a chart directory with
+// the 3.x roster (no components.substrate). The current line is every 4.x
+// release and build and a directory with Substrate in its roster, whatever
+// pin is left over. The channel follows the install's precedence: a chart
 // directory over a branch over the pinned release.
 func TestLegacyChart(t *testing.T) {
+	const (
+		roster3x = "components:\n  muster: {}\n  kagent: {}\n"
+		roster4x = "components:\n  muster: {}\n  kagent: {}\n  substrate: {}\n"
+		noRoster = "global: {}\n"
+		noValues = "-"
+	)
+	chartDir := func(values string) string {
+		dir := filepath.Join(t.TempDir(), "agent-platform")
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, chartFile), []byte("name: agent-platform\nversion: 1.1.35\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if values != noValues {
+			if err := os.WriteFile(filepath.Join(dir, valuesFile), []byte(values), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return dir
+	}
 	for _, tc := range []struct {
-		name                      string
-		version, branch, chartDir string
-		major                     uint64
-		channel                   string
-		legacy                    bool
+		name                    string
+		version, branch, values string
+		major                   uint64
+		channel                 string
+		legacy                  bool
 	}{
 		{"3.x release", legacyChart, "", "", 3, ChartChannelStable, true},
 		{"3.x release with a v", "v3.20.0", "", "", 3, ChartChannelStable, true},
@@ -41,13 +64,23 @@ func TestLegacyChart(t *testing.T) {
 		{"the default", DefaultChartVersion, "", "", 4, ChartChannelStable, false},
 		{"4.0 prerelease", "4.0.0-rc.1", "", "", 4, ChartChannelStable, false},
 		{"5.x release", "5.0.0", "", "", 5, ChartChannelStable, false},
-		{"dev channel resolved to a 3.x-numbered build", "3.24.0-dev.main.2026-09-11.08-12-33.h7f841be", mainBranch, "", 3, ChartChannelDev, false},
-		{"chart directory with a 3.x pin left over", legacyChart, "", "/tmp/agent-platform", 3, ChartChannelPath, false},
-		{"chart directory and a branch (Validate refuses the pair; the directory wins)", "4.7.11", mainBranch, "/tmp/agent-platform", 4, ChartChannelPath, false},
+		{"dev build of a 3.x-line branch", "3.23.5-r1f2e3d4ct20261001120000h7f841be", "fix-v3-gateway", "", 3, ChartChannelDev, true},
+		{"dev build of a 3.x-line branch, the superseded shape", "3.24.0-dev.main.2026-09-11.08-12-33.h7f841be", mainBranch, "", 3, ChartChannelDev, true},
+		{"dev build of main", "4.106.1-rbf28cd64t20261001120000h7f841be", mainBranch, "", 4, ChartChannelDev, false},
+		{"3.x chart directory", "", "", roster3x, 0, ChartChannelPath, true},
+		{"3.x chart directory with a 4.x pin left over", DefaultChartVersion, "", roster3x, 4, ChartChannelPath, true},
+		{"4.x chart directory", "", "", roster4x, 0, ChartChannelPath, false},
+		{"4.x chart directory with a 3.x pin left over", legacyChart, "", roster4x, 3, ChartChannelPath, false},
+		{"chart directory without a roster", "", "", noRoster, 0, ChartChannelPath, false},
+		{"chart directory without values.yaml", "", "", noValues, 0, ChartChannelPath, false},
+		{"chart directory and a branch (Validate refuses the pair; the directory wins)", legacyChart, mainBranch, roster4x, 3, ChartChannelPath, false},
 		{"unset (rejected by ValidateChartVersion first)", "", "", "", 0, ChartChannelStable, false},
 	} {
 		cfg := Default()
-		cfg.Platform.ChartVersion, cfg.Platform.ChartBranch, cfg.Platform.ChartPath = tc.version, tc.branch, tc.chartDir
+		cfg.Platform.ChartVersion, cfg.Platform.ChartBranch, cfg.Platform.ChartPath = tc.version, tc.branch, ""
+		if tc.values != "" {
+			cfg.Platform.ChartPath = chartDir(tc.values)
+		}
 		if got := cfg.ChartMajor(); got != tc.major {
 			t.Errorf("%s: ChartMajor() = %d, want %d", tc.name, got, tc.major)
 		}

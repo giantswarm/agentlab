@@ -88,10 +88,11 @@ and `REPORT_RUN1=<saved report>` when the Job ran again since);
 `contract.sh` resumes at `START_STEP=1..6`. Each script appends its stage to
 the lock owner file; the lock is released by hand when the rehearsal ends.
 
-The proofs are **4.x-only** (they exercise the platform Harness, the Generic
-chart 1.x, agent-manager 1.x): on the 3.x lab `platform-test` is not
-applicable (its muster chain passes, the agent checks do not apply), and the
-3.x lab is verified by the seed's own assertions — the chart versions of every
+The agent proofs are **4.x-only** (they exercise the platform Harness, the
+Generic chart 1.x, agent-manager 1.x): on the 3.x lab `platform-test` runs
+with the controller identity proof skipped (the 3.x connectivity chart
+renders no controller `GRPCRoute`), and the 3.x lab is verified by the
+seed's own assertions — the chart versions of every
 component release, the four `Agent`s Accepted with their Deployments rolled
 out, the labels the ownership shapes carry.
 
@@ -263,7 +264,8 @@ Everything the run taught that a cut-over must know:
   `contract.sh` takes that file as its second argument to assert the skill
   pin; `REPORT_RUN1` lets a resumed `upgrade.sh` assert from the copy).
 - **A 3.x lab is verified by the seed's assertions**, because agentlab's
-  proofs are 4.x-only (`platform-test` is not applicable on 3.x).
+  agent proofs are 4.x-only (`platform-test` skips the controller identity
+  proof on 3.x).
 - **The bundled example needs its tool server**: `kagent.k8s-agent.enabled`
   alone leaves the `Agent` waiting for `RemoteMCPServer kagent-tool-server`;
   `kagent.kagent-tools.enabled` beside it. It took 165 s to Accepted, the

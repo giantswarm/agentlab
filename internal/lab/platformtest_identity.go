@@ -26,6 +26,18 @@ import (
 // forgedIdentity is the identity a forging client claims in the header.
 const forgedIdentity = "attacker@lab.local"
 
+// controllerIdentitySkip is why platform-test leaves the controller
+// identity proof out, "" when it runs it: the 3.x connectivity chart renders
+// no GRPCRoute for the kagent controller (the 4.x line added it), so a 3.x
+// lab has no controller route on the edge to prove. The muster and
+// mcp-kubernetes identity proofs before it cover the edge on that line.
+func controllerIdentitySkip(cfg *config.Config) string {
+	if cfg.LegacyChart() {
+		return "the 3.x connectivity chart renders no GRPCRoute for the kagent controller; the muster and mcp-kubernetes identity proofs cover the edge"
+	}
+	return ""
+}
+
 // proveControllerIdentity drives SystemService/GetCurrentUser through the
 // edge over native gRPC: without a token (refused at the edge — the JWT
 // policy's Unauthenticated), then with the person's token and a forged
