@@ -18,7 +18,7 @@ func TestControllerIdentitySkip(t *testing.T) {
 		version, chartPath string
 		skip               bool
 	}{
-		{"3.x release", "3.23.1", "", true},
+		{"3.x release", legacyChartVersion, "", true},
 		{"3.x checkout", "", checkout("components:\n  kagent: {}\n"), true},
 		{"the default", config.DefaultChartVersion, "", false},
 		{"4.x checkout", "", checkout("components:\n  kagent: {}\n  substrate: {}\n"), false},

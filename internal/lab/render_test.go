@@ -547,7 +547,7 @@ func TestPlatformValuesLegacyChartShape(t *testing.T) {
 	}
 	current := config.Default()
 	legacy := config.Default()
-	legacy.Platform.ChartVersion = "3.23.1"
+	legacy.Platform.ChartVersion = legacyChartVersion
 	if !legacy.LegacyChart() || current.LegacyChart() {
 		t.Fatalf("LegacyChart(): 3.23.1=%v %s=%v", legacy.LegacyChart(), current.Platform.ChartVersion, current.LegacyChart())
 	}
@@ -644,7 +644,7 @@ func TestPlatformValuesLegacyChartShape(t *testing.T) {
 		"3.x chart directory": {"components:\n  kagent: {}\n", legacy},
 	} {
 		directory := config.Default()
-		directory.Platform.ChartVersion = "3.23.1"
+		directory.Platform.ChartVersion = legacyChartVersion
 		if tc.want == legacy {
 			directory.Platform.ChartVersion = config.DefaultChartVersion
 		}
