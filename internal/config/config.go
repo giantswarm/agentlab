@@ -1347,7 +1347,7 @@ const valuesFile = "values.yaml"
 // release replaces on both lines, so the roster is what tells them apart; a
 // directory without a readable components block is the current line.
 func legacyChartDir(dir string) bool {
-	data, err := os.ReadFile(filepath.Join(dir, valuesFile))
+	data, err := os.ReadFile(filepath.Join(dir, valuesFile)) // #nosec G304 -- the chart directory agentlab.yaml names
 	if err != nil {
 		return false
 	}
