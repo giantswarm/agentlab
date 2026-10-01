@@ -109,8 +109,9 @@ func PlatformTest(cfg *config.Config, email string) error {
 	}
 	// The lab's mcp-kubernetes is the kubernetes family's member, so muster
 	// exposes the family's tools: x_kubernetes_<tool>, management_cluster
-	// selecting the lab's member by its name.
-	toolPrefix := familyTool(familyKubernetes, "")
+	// selecting the lab's member by its name (kubernetesTool: the server's
+	// own tools on the 3.x line).
+	toolPrefix := kubernetesTool(cfg, "")
 	shown := 0
 	for _, t := range toolList.Tools {
 		if strings.HasPrefix(t.Name, toolPrefix) && shown < 8 {
@@ -127,7 +128,11 @@ func PlatformTest(cfg *config.Config, email string) error {
 	}
 
 	step("Calling %slist namespaces on %s through muster", toolPrefix, cfg.MCPServerName())
-	payload := fmt.Sprintf(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"call_tool","arguments":{"name":%q,"arguments":{%q:%q,"resourceType":"namespaces"}}}}`, toolPrefix+"list", familyInstanceArg, cfg.MCPServerName())
+	listArgs, err := json.Marshal(kubernetesArgs(cfg, map[string]any{"resourceType": "namespaces"}))
+	if err != nil {
+		return err
+	}
+	payload := fmt.Sprintf(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"call_tool","arguments":{"name":%q,"arguments":%s}}}`, toolPrefix+"list", listArgs)
 	res, err = call(payload)
 	if err != nil {
 		return err
@@ -274,11 +279,16 @@ func PlatformTest(cfg *config.Config, email string) error {
 	// The infrastructure families (infrastructure.go): the lab's servers are
 	// their members, labelled infrastructure, and nothing family-less or
 	// lab-created is. The OAuth fixture stays a Registered server.
-	if err := proveToolGroupLabels(cfg); err != nil {
-		return err
+	if reason := familiesSkip(cfg); reason != "" {
+		note("skipping the infrastructure families proof: %s", reason)
+		verdict += "\nSKIP: the infrastructure families — " + reason
+	} else {
+		if err := proveToolGroupLabels(cfg); err != nil {
+			return err
+		}
+		verdict += fmt.Sprintf("\nPASS: %s is the member of %s (%s=%s, %s=%s), no family-less mcp-kubernetes; %s unlabelled (Registered servers)",
+			cfg.ClusterName, strings.Join(labFamilies(cfg), ", "), toolGroupLabel, toolGroupInfrastructure, managementClusterLabel, cfg.ClusterName, oauthFixtureServer)
 	}
-	verdict += fmt.Sprintf("\nPASS: %s is the member of %s (%s=%s, %s=%s), no family-less mcp-kubernetes; %s unlabelled (Registered servers)",
-		cfg.ClusterName, strings.Join(labFamilies(cfg), ", "), toolGroupLabel, toolGroupInfrastructure, managementClusterLabel, cfg.ClusterName, oauthFixtureServer)
 	if cfg.Platform.Observability {
 		// The prometheus family's tools, as for mcp-kubernetes: the lab's
 		// mcpServers entry registers the server as the family's member (see
@@ -515,7 +525,7 @@ func proveDownstreamIdentity(cfg *config.Config, toolPrefix string) error {
 		note("skipping the identity proof: %s needs one platform-admins and one viewers user", config.File)
 		return nil
 	}
-	args := familyArgs(cfg, familyKubernetes, map[string]any{"resourceType": "secrets", "namespace": "kube-system"})
+	args := kubernetesArgs(cfg, map[string]any{"resourceType": "secrets", "namespace": "kube-system"})
 	for _, tc := range []struct {
 		user      *config.User
 		allowed   bool

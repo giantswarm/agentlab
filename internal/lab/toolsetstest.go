@@ -406,12 +406,12 @@ func proveMusterToolsets(cfg *config.Config, token string) (*musterToolsetResult
 	// exist as tools; the destructive call of the proof is agent-manager's
 	// delete_agent, a platform writer annotated as such. Under the read-only
 	// toolset muster refuses it before agent-manager ever sees it.
-	listTool, deleteTool := familyTool(familyKubernetes, "list"), "x_"+agentManagerMCPServer+"_delete_agent"
+	listTool, deleteTool := kubernetesTool(cfg, "list"), "x_"+agentManagerMCPServer+"_delete_agent"
 	deleteArgs := map[string]any{nameKey: toolsetsTestPrefix + "-nothing"}
 	queryTool, mutatingTool := "workflow_"+toolsetsWorkflowQuery, "workflow_"+toolsetsWorkflowMutating
 	demoTool := "workflow_lab-cluster-overview"
 
-	listArgs := familyArgs(cfg, familyKubernetes, map[string]any{resourceTypeKey: resourceNamespaces})
+	listArgs := kubernetesArgs(cfg, map[string]any{resourceTypeKey: resourceNamespaces})
 
 	s, err := openMusterSession(cfg, token, "toolsets-test-muster")
 	if err != nil {

@@ -1425,7 +1425,14 @@ func (c *Config) ControlPlaneNode() string { return c.ClusterName + "-control-pl
 // member of muster's kubernetes family, named the way agent-platform-mcps
 // names every management cluster's. Muster exposes the family's tools as
 // x_kubernetes_<tool>, the argument management_cluster selecting the lab.
-func (c *Config) MCPServerName() string { return c.ClusterName + "-mcp-kubernetes" }
+// The 3.x line's connectivity chart registers the family-less
+// mcp-kubernetes instead, its tools x_mcp-kubernetes_<tool>.
+func (c *Config) MCPServerName() string {
+	if c.LegacyChart() {
+		return "mcp-kubernetes"
+	}
+	return c.ClusterName + "-mcp-kubernetes"
+}
 
 // PrometheusMCPServerName is the lab's mcp-prometheus as a member of the
 // prometheus family (the agent-platform-mcps entry's default name):

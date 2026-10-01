@@ -82,6 +82,27 @@ func familyArgs(cfg *config.Config, family string, args map[string]any) map[stri
 	return out
 }
 
+// kubernetesTool is the name muster exposes a tool of the lab's
+// mcp-kubernetes under: the kubernetes family's on the current line, the
+// server's own on the 3.x line, whose connectivity chart registers the
+// family-less mcp-kubernetes (cfg.MCPServerName).
+func kubernetesTool(cfg *config.Config, tool string) string {
+	if cfg.LegacyChart() {
+		return "x_" + cfg.MCPServerName() + "_" + tool
+	}
+	return familyTool(familyKubernetes, tool)
+}
+
+// kubernetesArgs are a kubernetesTool call's arguments: with the instance
+// argument selecting the lab's family member on the current line, as they
+// are for the family-less server of the 3.x line.
+func kubernetesArgs(cfg *config.Config, args map[string]any) map[string]any {
+	if cfg.LegacyChart() {
+		return args
+	}
+	return familyArgs(cfg, familyKubernetes, args)
+}
+
 // labFamilyMembers maps the lab's own family members to their family.
 func labFamilyMembers(cfg *config.Config) map[string]string {
 	members := map[string]string{familyMember(cfg, familyKubernetes): familyKubernetes}

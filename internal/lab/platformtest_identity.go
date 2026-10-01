@@ -38,6 +38,17 @@ func controllerIdentitySkip(cfg *config.Config) string {
 	return ""
 }
 
+// familiesSkip is why platform-test leaves the infrastructure families proof
+// out, "" when it runs it: the 3.x connectivity chart registers the
+// family-less mcp-kubernetes (the families came with the 4.x line), so a 3.x
+// lab has no family member to prove.
+func familiesSkip(cfg *config.Config) string {
+	if cfg.LegacyChart() {
+		return "the 3.x connectivity chart registers the family-less " + cfg.MCPServerName() + ", no family member"
+	}
+	return ""
+}
+
 // proveControllerIdentity drives SystemService/GetCurrentUser through the
 // edge over native gRPC: without a token (refused at the edge — the JWT
 // policy's Unauthenticated), then with the person's token and a forged
