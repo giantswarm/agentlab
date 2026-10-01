@@ -700,11 +700,10 @@ func registryHost(ref string) string {
 // splitDigestRefs separates the refs a side-load can carry — tagged
 // references, which `docker save` writes with their name — from the
 // digest-pinned ones (<repository>@sha256:…, no tag). A `docker save` of a
-// digest-only reference writes an archive without a name; `ctr images import`
-// records it as `import-<date>@sha256:…` and the kubelet, asked for the pod's
-// <repository>@sha256 reference, fails the container with "failed to check if
-// this is a checkpoint image … not found" (seen on Substrate's RustFS after a
-// reinstall). Those refs are left to the kubelet: a digest pull is
+// digest-only reference can write an archive without a name (the classic
+// graph driver does), which the import leaves unrecorded (loadNodeArchive):
+// saving it would only cost the stream.
+// Those refs are left to the kubelet: a digest pull is
 // deterministic and small (RustFS, the bucket-init CLI); the Go ADK Harness
 // image is pulled by atelet into its own cache, never by the kubelet.
 func splitDigestRefs(images []string) (tagged, byDigest []string) {
