@@ -8,9 +8,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"sigs.k8s.io/kind/pkg/apis/config/defaults"
 	"sigs.k8s.io/kind/pkg/cluster"
-	"sigs.k8s.io/kind/pkg/cluster/nodeutils"
+	"sigs.k8s.io/kind/pkg/cluster/nodes"
 	"sigs.k8s.io/kind/pkg/cmd"
 	kindversion "sigs.k8s.io/kind/pkg/cmd/kind/version"
 	kindexec "sigs.k8s.io/kind/pkg/exec"
@@ -125,8 +126,9 @@ var kindKubeconfigRaw = func(name string) ([]byte, error) {
 }
 
 // kindLoadArchive streams an image archive into every node of the cluster:
-// `ctr images import` over the engine's exec, what `kind load image-archive`
-// runs (preload.go says why the archive, HACKS.md U21), reading the stream as
+// `ctr images import` over the engine's exec (loadNodeArchive), what `kind
+// load image-archive` runs minus its digest records (preload.go says why the
+// archive, HACKS.md U21), reading the stream as
 // it comes — never a file. The lab is a single-node cluster
 // (config.ControlPlaneNode); a cluster with more nodes gets the one stream
 // fanned out to each of them, a node whose import stopped dropping out
@@ -140,7 +142,7 @@ var kindLoadArchive = func(clusterName string, archive io.Reader) error {
 		return fmt.Errorf("kind: cluster %q has no nodes to load images into", clusterName)
 	}
 	if len(nodes) == 1 {
-		return kindError("loading images into "+nodes[0].String(), nodeutils.LoadImageArchive(nodes[0], archive))
+		return kindError("loading images into "+nodes[0].String(), loadNodeArchive(nodes[0], archive))
 	}
 	sinks := make([]*nodeSink, len(nodes))
 	writers := make([]io.Writer, len(nodes))
@@ -151,7 +153,7 @@ var kindLoadArchive = func(clusterName string, archive io.Reader) error {
 		sinks[i] = &nodeSink{w: w}
 		writers[i] = sinks[i]
 		wg.Go(func() {
-			errs[i] = kindError("loading images into "+node.String(), nodeutils.LoadImageArchive(node, r))
+			errs[i] = kindError("loading images into "+node.String(), loadNodeArchive(node, r))
 			_ = r.Close() // the sink's next write fails and it goes quiet
 		})
 	}
@@ -194,4 +196,56 @@ func kindError(what string, err error) error {
 		}
 	}
 	return fmt.Errorf("kind: %s: %w", what, err)
+}
+
+// loadNodeArchive imports an image archive into one node's containerd: the
+// `ctr images import` of kind's nodeutils.LoadImageArchive without its
+// `--digests`. That flag records every manifest a second time as
+// `import-<date>@sha256:…`, a name without a registry: the CRI lists it as
+// docker.io/library/import-…, which containerd does not have, and an image
+// whose containers resolve to that name (one saved by digest, whose archive
+// carries no other) fails every container create with "failed to check if
+// this is a checkpoint image … not found", after a node restart too. Without
+// it the images land under the names they were saved as, the references the
+// manifests use; an entry without a name is left unrecorded and the kubelet
+// pulls it. The snapshotter is the CRI's, read the way kind reads it.
+func loadNodeArchive(node nodes.Node, archive io.Reader) error {
+	dump, err := kindexec.Output(node.Command("containerd", "config", "dump"))
+	if err != nil {
+		return fmt.Errorf("detecting the containerd snapshotter: %w", err)
+	}
+	snapshotter, err := criSnapshotter(dump)
+	if err != nil {
+		return err
+	}
+	return node.Command("ctr", "--namespace=k8s.io", "images", "import", "--all-platforms", "--snapshotter="+snapshotter, "-").SetStdin(archive).Run()
+}
+
+// criSnapshotter reads the CRI's snapshotter off `containerd config dump`:
+// config version 2 (containerd 1.3 on) names it under the CRI plugin, 3 and 4
+// (containerd 2.0, 2.1) under the CRI images plugin.
+func criSnapshotter(dump []byte) (string, error) {
+	var cfg map[string]any
+	if _, err := toml.Decode(string(dump), &cfg); err != nil {
+		return "", fmt.Errorf("detecting the containerd snapshotter: %w", err)
+	}
+	var path []string
+	switch version := cfg["version"]; version {
+	case int64(2):
+		path = []string{"plugins", "io.containerd.grpc.v1.cri", "containerd", "snapshotter"}
+	case int64(3), int64(4):
+		path = []string{"plugins", "io.containerd.cri.v1.images", "snapshotter"}
+	default:
+		return "", fmt.Errorf("detecting the containerd snapshotter: unknown containerd config version %v (2, 3 and 4 are known)", version)
+	}
+	var v any = cfg
+	for _, key := range path {
+		table, _ := v.(map[string]any)
+		v = table[key]
+	}
+	snapshotter, _ := v.(string)
+	if snapshotter == "" {
+		return "", fmt.Errorf("detecting the containerd snapshotter: no %s in the containerd config", strings.Join(path, "."))
+	}
+	return snapshotter, nil
 }

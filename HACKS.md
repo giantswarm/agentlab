@@ -503,8 +503,12 @@ The lab does exactly that, with kind embedded (`kind.go`): the load path of
 kind's `load docker-image` command is not used at all — `dockerLoadImages`
 asks `docker image inspect` which platform the host holds each ref in, runs
 one `docker save --platform <p>` per platform and streams its stdout into
-`nodeutils.LoadImageArchive`, the library call behind `kind load
-image-archive`. Streamed, not staged: `kind load docker-image` writes the
+the node's `ctr images import` — the command of `nodeutils.LoadImageArchive`,
+the library call behind `kind load image-archive`, minus its `--digests`
+(`loadNodeArchive`): that flag names every imported manifest a second time
+`import-<date>@sha256:…`, which the CRI lists as `docker.io/library/import-…`,
+a name containerd does not have, and a container resolved to it fails with
+"failed to check if this is a checkpoint image". Streamed, not staged: `kind load docker-image` writes the
 archive to the temp dir first, and the archive of everything a lab ran is
 tens of GiB — on `/tmp`, a tmpfs on many Linux hosts, that is RAM for the
 length of the import, and for good when the boot is interrupted (a 20 GiB
