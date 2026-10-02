@@ -510,7 +510,7 @@ type beekeeperProof struct {
 // add files a decision through muster as the asker and returns its number.
 func (p *beekeeperProof) add(forWho, question, due string) (int, error) {
 	text, err := p.s.callServerTool(beekeeperNoteAdd, map[string]any{
-		"text": question, "for": forWho, beekeeperKeyKind: "decision", "agent": "beekeeper-decisions-test", "host": "agentlab",
+		slackKeyText: question, "for": forWho, beekeeperKeyKind: "decision", "agent": "beekeeper-decisions-test", "host": "agentlab",
 		"status_quo": "The lab's merge lane takes one release a night.",
 		"why":        "Only the lab's owners pick what rolls.",
 		"options":    []any{"Roll tonight: the lane clears at 22:00", "Wait for Monday: nothing rolls before Monday"},
@@ -612,7 +612,7 @@ func (p *beekeeperProof) teamByThreadReply() error {
 	ts := p.fake.nextTS()
 	if err := p.driver.event(map[string]any{
 		fieldTypeKey: slackKeyMessage, slackKeyUser: p.otherSlack, slackKeyChannel: p.channel, slackKeyChanType: slackKeyChannel,
-		slackKeyText: decisionThreadReply, slackKeyTS: ts, slackKeyEventTS: ts, slackKeyThreadTS: m.TS, "parent_user_id": slackFakeBotUser,
+		slackKeyText: decisionThreadReply, slackKeyTS: ts, slackKeyEventTS: ts, slackKeyThreadTS: m.TS, slackKeyParentUser: slackFakeBotUser,
 	}); err != nil {
 		return err
 	}

@@ -47,8 +47,9 @@ const (
 	decisionsWait        = 60 * time.Second
 	decisionsTokenTTL    = 20 * time.Minute
 	// decisionsNote marks what the proof puts to the gateway as the lab's.
-	decisionsNote     = "agentlab"
-	decisionsKeyLabel = "label"
+	decisionsNote      = "agentlab"
+	decisionsKeyLabel  = "label"
+	decisionsKeyPerson = "person"
 )
 
 // The gateway's decision action ids and what its messages say.
@@ -236,10 +237,10 @@ func DecisionsTest(cfg *config.Config, email string, opts DecisionsTestOptions) 
 // conversationBody opens a conversation with person whose replies call tool.
 func conversationBody(person, tool string) map[string]any {
 	return map[string]any{
-		"person": person,
-		"from":   conversationFrom,
-		"text":   "The supervisor asks whether the release rolls onto the lab **tonight**.",
-		"reply":  map[string]any{"tool": tool, "arguments": map[string]any{"to": "local:agentlab/Guide"}},
+		decisionsKeyPerson: person,
+		"from":             conversationFrom,
+		slackKeyText:       "The supervisor asks whether the release rolls onto the lab **tonight**.",
+		"reply":            map[string]any{"tool": tool, "arguments": map[string]any{"to": "local:agentlab/Guide"}},
 	}
 }
 
@@ -275,7 +276,7 @@ func (p *decisionsProof) replyInConversation(r decisionReceipt, text string) err
 	ts := p.fake.nextTS()
 	return p.driver.event(map[string]any{
 		fieldTypeKey: slackKeyMessage, slackKeyUser: p.person, slackKeyChannel: r.Channel, slackKeyChanType: "im",
-		slackKeyText: text, slackKeyTS: ts, slackKeyEventTS: ts, slackKeyThreadTS: r.TS, "parent_user_id": slackFakeBotUser,
+		slackKeyText: text, slackKeyTS: ts, slackKeyEventTS: ts, slackKeyThreadTS: r.TS, slackKeyParentUser: slackFakeBotUser,
 	})
 }
 
@@ -318,7 +319,7 @@ func (p *decisionsProof) conversation(email string) error {
 		}
 	}
 	note("the reply was delivered: reaction, no note")
-	status, out, err := p.api.call("/conversations/"+url.PathEscape(r.ID)+"/messages", p.api.token, map[string]any{"text": conversationAnswer})
+	status, out, err := p.api.call("/conversations/"+url.PathEscape(r.ID)+"/messages", p.api.token, map[string]any{slackKeyText: conversationAnswer})
 	if err != nil {
 		return err
 	}
@@ -328,7 +329,7 @@ func (p *decisionsProof) conversation(email string) error {
 	if err := p.threadText(r, "the service's answer", conversationAnswer); err != nil {
 		return err
 	}
-	status, _, err = p.api.call("/conversations/"+url.PathEscape(r.Channel+"-1.000001")+"/messages", p.api.token, map[string]any{"text": "anyone?"})
+	status, _, err = p.api.call("/conversations/"+url.PathEscape(r.Channel+"-1.000001")+"/messages", p.api.token, map[string]any{slackKeyText: "anyone?"})
 	if err != nil {
 		return err
 	}
@@ -522,7 +523,7 @@ func (p *decisionsProof) refusals() error {
 	if status != http.StatusUnauthorized {
 		return fmt.Errorf("POST /decisions without a token answered HTTP %d, want 401", status)
 	}
-	status, out, err := p.api.call("/decisions", p.api.token, decisionBody(map[string]any{"person": "nobody@lab.local"}, "Nobody there?", decisionsAnswerTool))
+	status, out, err := p.api.call("/decisions", p.api.token, decisionBody(map[string]any{decisionsKeyPerson: "nobody@lab.local"}, "Nobody there?", decisionsAnswerTool))
 	if err != nil {
 		return err
 	}
@@ -575,7 +576,7 @@ func assertDecisionMessage(m slackMessage) error {
 }
 
 func (p *decisionsProof) ownWordsInModal(email string) error {
-	r, m, err := p.posted(decisionBody(map[string]any{"person": email}, "Roll the release onto the lab tonight, you decide?", decisionsAnswerTool))
+	r, m, err := p.posted(decisionBody(map[string]any{decisionsKeyPerson: email}, "Roll the release onto the lab tonight, you decide?", decisionsAnswerTool))
 	if err != nil {
 		return err
 	}
@@ -617,7 +618,7 @@ func (p *decisionsProof) replyInThread() error {
 	ts := p.fake.nextTS()
 	if err := p.driver.event(map[string]any{
 		fieldTypeKey: slackKeyMessage, slackKeyUser: p.person, slackKeyChannel: r.Channel, slackKeyChanType: slackKeyChannel,
-		slackKeyText: decisionThreadReply, slackKeyTS: ts, slackKeyEventTS: ts, slackKeyThreadTS: r.TS, "parent_user_id": slackFakeBotUser,
+		slackKeyText: decisionThreadReply, slackKeyTS: ts, slackKeyEventTS: ts, slackKeyThreadTS: r.TS, slackKeyParentUser: slackFakeBotUser,
 	}); err != nil {
 		return err
 	}
