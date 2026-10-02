@@ -124,6 +124,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		inGroup(groupTesting, a2aTestCmd()),
 		inGroup(groupTesting, klausGatewayTestCmd()),
 		inGroup(groupTesting, decisionsTestCmd()),
+		inGroup(groupTesting, beekeeperDecisionsTestCmd()),
 		inGroup(groupTesting, backstageTestCmd()),
 
 		inGroup(groupCleanup, labCmd("down", "Destroy the kind cluster", lab.Down)),
@@ -1218,6 +1219,29 @@ func decisionsTestCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.GatewayBinary, "gateway-binary", "", "a local klaus-gateway build to run instead of the image — the proof of a branch")
 	cmd.Flags().IntVar(&opts.Port, "gateway-port", 18090, "host port of the gateway's endpoints; the admin endpoints take the next port, the fake Slack Web API the one after")
 	cmd.Flags().StringVar(&opts.RunDir, "run-dir", "", "directory for the gateway's stores, keys and log, kept afterwards (default: a temporary directory, removed)")
+	return cmd
+}
+
+func beekeeperDecisionsTestCmd() *cobra.Command {
+	var opts lab.BeekeeperDecisionsTestOptions
+	cmd := &cobra.Command{
+		Use:   "beekeeper-decisions-test",
+		Short: "Headless proof of beekeeper's decisions in Slack: beekeeper serve on the host over the lab's beekeeper resources, behind muster with the person's token forwarded, klaus-gateway and the fake Slack Web API; a decision for a person answered by their Choose click after another user's click was refused, a team's answered by a thread reply, one closed with its default at its due time refusing a late click, one withdrawn, each outcome an Event",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			return lab.BeekeeperDecisionsTest(cfg, opts)
+		},
+	}
+	cmd.Flags().StringVar(&opts.Version, "beekeeper-version", lab.BeekeeperDecisionsVersionDefault, "the beekeeper release whose binary and CRDs run")
+	cmd.Flags().StringVar(&opts.Binary, "beekeeper-binary", "", "a local linux beekeeper build to run instead of the release's binary — the proof of a branch")
+	cmd.Flags().StringVar(&opts.GatewayImage, "gateway-image", lab.DecisionsGatewayImageDefault, "the klaus-gateway image to run on the host network")
+	cmd.Flags().StringVar(&opts.GatewayBinary, "gateway-binary", "", "a local klaus-gateway build to run instead of the image")
+	cmd.Flags().IntVar(&opts.Port, "gateway-port", 18090, "host port of the gateway's endpoints; the next four take its admin endpoints, the fake Slack Web API, beekeeper serve and its Postgres")
+	cmd.Flags().StringVar(&opts.RunDir, "run-dir", "", "directory for the stores, keys, serve's configuration and the logs, kept afterwards (default: a temporary directory, removed)")
 	return cmd
 }
 

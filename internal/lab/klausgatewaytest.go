@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -970,8 +971,11 @@ type gatewayProcess struct {
 	// call it makes itself (SSL_CERT_FILE): muster, for a proof whose clicks
 	// call a tool through it.
 	trustLabCA bool
-	cmd        *exec.Cmd
-	logFile    *os.File
+	// network is the container's docker network (default host); host the
+	// address the proof reaches its endpoints on (default 127.0.0.1).
+	network, host string
+	cmd           *exec.Cmd
+	logFile       *os.File
 	// exited is closed once the process has ended; exitErr is its Wait result.
 	// A closed channel satisfies every later wait, so a gateway that died
 	// before serving is noticed by the readiness probe and stop() still
@@ -993,11 +997,11 @@ func (g *gatewayProcess) describe() string {
 }
 
 func (g *gatewayProcess) baseURL() string {
-	return fmt.Sprintf("http://127.0.0.1:%d", g.opts.Port)
+	return fmt.Sprintf("http://%s:%d", cmp.Or(g.host, "127.0.0.1"), g.opts.Port)
 }
 
 func (g *gatewayProcess) adminURL() string {
-	return fmt.Sprintf("http://127.0.0.1:%d", g.opts.Port+1)
+	return fmt.Sprintf("http://%s:%d", cmp.Or(g.host, "127.0.0.1"), g.opts.Port+1)
 }
 
 func (g *gatewayProcess) logPath() string { return filepath.Join(g.runDir, gatewayLogFile) }
@@ -1050,8 +1054,8 @@ func gatewayArgs(f gatewayFlags) []string {
 // (the loopback ports, the fake and the edge's public hostname as the host
 // sees them), the caller's uid so the stores are writable in the run
 // directory, the run directory and the CA mounted read-write and read-only.
-func dockerRunArgs(image, name, runDir, caFile string, uid, gid int, args []string) []string {
-	return append(dockerRun(name, "host", "--rm",
+func dockerRunArgs(image, name, network, runDir, caFile string, uid, gid int, args []string) []string {
+	return append(dockerRun(name, cmp.Or(network, "host"), "--rm",
 		"--user", fmt.Sprintf("%d:%d", uid, gid),
 		"-v", runDir+":"+gatewayDataPath,
 		"-v", caFile+":"+gatewayCAPath+":ro",
@@ -1079,7 +1083,7 @@ func (g *gatewayProcess) start() error {
 	} else {
 		_ = command(dockerBin, "rm", "-f", gatewayContainer).Run()
 		flags.dataDir, flags.caFile = gatewayDataPath, gatewayCAPath
-		args := dockerRunArgs(g.opts.GatewayImage, gatewayContainer, g.runDir, g.caFile, os.Getuid(), os.Getgid(), append(gatewayArgs(flags), g.extraArgs...))
+		args := dockerRunArgs(g.opts.GatewayImage, gatewayContainer, g.network, g.runDir, g.caFile, os.Getuid(), os.Getgid(), append(gatewayArgs(flags), g.extraArgs...))
 		// The mounts and the variables go before the image, which
 		// dockerRunArgs puts right after its own flags.
 		var extra []string

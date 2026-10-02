@@ -188,7 +188,7 @@ func TestGatewayArgs(t *testing.T) {
 	if !reflect.DeepEqual(args, want) {
 		t.Errorf("gatewayArgs =\n%q\nwant\n%q", args, want)
 	}
-	docker := dockerRunArgs("img:1", "ctr", "/run/x", "/lab/certs/ca.crt", 1000, 100, []string{"--flag"})
+	docker := dockerRunArgs("img:1", "ctr", "", "/run/x", "/lab/certs/ca.crt", 1000, 100, []string{"--flag"})
 	wantDocker := []string{"run", "--name", "ctr", "--network", "host", "--rm", "--user", "1000:100",
 		"-v", "/run/x:" + gatewayDataPath, "-v", "/lab/certs/ca.crt:" + gatewayCAPath + ":ro", "img:1", "--flag"}
 	if !reflect.DeepEqual(docker, wantDocker) {
