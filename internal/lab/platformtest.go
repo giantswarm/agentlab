@@ -266,6 +266,19 @@ func PlatformTest(cfg *config.Config, email string) error {
 				note("%s", s)
 			}
 			verdict += fmt.Sprintf("\nPASS: Agent Substrate is one release (%s) on the atelet and the WorkerPool's workers — golden actors can boot", substrate[0].release)
+			// The workers themselves (proveWorkerPoolsRunning): images that
+			// agree say nothing about pods that never schedule.
+			step("Verifying the WorkerPool's workers are Running on a node that carries the pool's node selector")
+			ctx, cancel = context.WithTimeout(context.Background(), workerPoolRunningTimeout+kubeReadTimeout)
+			pools, err := proveWorkerPoolsRunning(ctx, workerPoolRunningTimeout)
+			cancel()
+			if err != nil {
+				return err
+			}
+			for _, p := range pools {
+				note("%s", p)
+				verdict += fmt.Sprintf("\nPASS: WorkerPool %s has %d workers Running on %s", p.pool, p.running, strings.Join(p.nodes, ", "))
+			}
 		}
 	}
 

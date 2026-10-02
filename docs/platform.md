@@ -1146,7 +1146,13 @@ data the page reads — see [The muster plugin](backstage.md#the-muster-plugin).
   `amd64` default on the pool — then `agentlab platform`. `up`/`platform`
   refuse the install when the `WorkerPool` they are about to create names an
   architecture no node carries, so this only bites a cluster whose values or
-  chart changed underneath it.
+  chart changed underneath it. `platform-test` catches every other cause too
+  (a taint, a resource request no node fits, a pin changed after the
+  install): it waits up to two minutes for every worker of every pool in
+  `kagent` to be Running and Ready, at least the pool's `spec.replicas` of
+  them, each on a node that carries the pool's node selector, and fails
+  naming each worker that is not and why — the scheduler's reason and
+  message for a Pending one.
 - **A WorkerPool outlives a Substrate database it never knew.** When
   Agent Substrate's control-plane database is replaced under a running
   `WorkerPool` — a lab moving from the substrate chart's bundled Postgres to
