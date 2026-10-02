@@ -2,12 +2,14 @@ package lab
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"slices"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -108,23 +110,23 @@ var agentManagerGitHubEnv = []string{GitHubTokenEnv, "AGENT_MANAGER_SKILLS_GITHU
 func agentManagerGitHubAuthenticated() (bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	d, err := getObject(ctx, gvrDeployments, platformNamespace, agentManagerMCPServer)
+	obj, err := getObject(ctx, gvrDeployments, platformNamespace, agentManagerMCPServer)
 	if err != nil {
 		return false, err
 	}
-	return deploymentSetsEnv(d, agentManagerGitHubEnv), nil
+	var d appsv1.Deployment
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(obj.Object, &d); err != nil {
+		return false, fmt.Errorf("reading %s: %w", describe(gvrDeployments, platformNamespace, agentManagerMCPServer), err)
+	}
+	return deploymentSetsEnv(&d, agentManagerGitHubEnv), nil
 }
 
 // deploymentSetsEnv reports whether any container of the Deployment sets one
 // of the env vars by name (the value, a Secret reference, is never read).
-func deploymentSetsEnv(d *unstructured.Unstructured, names []string) bool {
-	containers, _, _ := unstructured.NestedSlice(d.Object, "spec", "template", "spec", "containers")
-	for _, c := range containers {
-		container, _ := c.(map[string]any)
-		env, _, _ := unstructured.NestedSlice(container, "env")
-		for _, e := range env {
-			entry, _ := e.(map[string]any)
-			if name, _ := entry["name"].(string); slices.Contains(names, name) {
+func deploymentSetsEnv(d *appsv1.Deployment, names []string) bool {
+	for _, c := range d.Spec.Template.Spec.Containers {
+		for _, e := range c.Env {
+			if slices.Contains(names, e.Name) {
 				return true
 			}
 		}
