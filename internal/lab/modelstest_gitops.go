@@ -11,6 +11,7 @@ import (
 
 	chartutil "helm.sh/helm/v4/pkg/chart/common/util"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -63,6 +64,11 @@ const (
 	gitopsFluxName      = "kustomize.toolkit.fluxcd.io/name"
 	gitopsFluxNamespace = "kustomize.toolkit.fluxcd.io/namespace"
 	gitopsFluxFixture   = "agentlab-gitops-fixture"
+	// gitopsHelmName/Namespace are the labels a HelmRelease stamps on what it
+	// renders; gitopsStaleRelease is a release that never exists.
+	gitopsHelmName      = "helm.toolkit.fluxcd.io/name"
+	gitopsHelmNamespace = "helm.toolkit.fluxcd.io/namespace"
+	gitopsStaleRelease  = "agentlab-gone-release"
 	gitopsReleaseWait   = 5 * time.Minute
 )
 
@@ -261,7 +267,10 @@ func gitopsSeed() map[string][]byte {
 // App-pinned model-manager-gitops, the person signed in to it through muster,
 // wire_model mode commit as a dry run and for real against the fake's
 // repository, and the pull request read back from the fake — opened as the
-// person, its files the dry run's, the live ModelConfig untouched.
+// person, its files the dry run's, nothing written live. The pinned release
+// is a model-manager instance of its own, and only the instance that created
+// a ModelConfig writes it, so the caller unwires the platform's ModelConfig
+// first and wires it again after.
 func proveCommit(cfg *config.Config, user *config.User, token, binary, backendName, model, mcName string) (string, error) {
 	step("Commit mode: the fake GitHub API as a container on the %s network (%s %s, in %s) holding %s@%s",
 		kindDockerNetwork, binary, githubFakeCommand, probeImage, gitopsRepository, gitopsBranch)
@@ -315,9 +324,8 @@ func proveCommit(cfg *config.Config, user *config.User, token, binary, backendNa
 	}
 	note("%s: capabilities.commit=true", api.toolName("get_backend"))
 
-	live, err := readKagentObject(modelConfigResource, mcName)
-	if err != nil {
-		return "", err
+	if _, err := readKagentObject(modelConfigResource, mcName); !apierrors.IsNotFound(err) {
+		return "", fmt.Errorf("ModelConfig %s is live before the commit (%v): the platform's model-manager unwires it first", mcName, err)
 	}
 	login, _, _ := strings.Cut(user.Email, "@")
 	args := map[string]any{modelField: model, backendField: backendName, modeArg: modeCommit,
@@ -360,16 +368,63 @@ func proveCommit(cfg *config.Config, user *config.User, token, binary, backendNa
 		return "", err
 	}
 	note("#%d %q by %s: %d files, byte-identical to the dry run", pr.Number, pr.Title, pr.Author, len(pr.Files))
-	after, err := readKagentObject(modelConfigResource, mcName)
-	if err != nil {
+	if _, err := readKagentObject(modelConfigResource, mcName); !apierrors.IsNotFound(err) {
+		return "", fmt.Errorf("ModelConfig %s is live after the commit (%v): commit mode writes git only", mcName, err)
+	}
+	note("no ModelConfig %s live: commit mode writes git only", mcName)
+	if err := proveStaleProvenance(api, backendName, model); err != nil {
 		return "", err
 	}
-	if after.GetResourceVersion() != live.GetResourceVersion() {
-		return "", fmt.Errorf("the commit changed the live ModelConfig %s (resourceVersion %s -> %s): commit mode writes git only", mcName, live.GetResourceVersion(), after.GetResourceVersion())
-	}
-	note("the live ModelConfig %s is untouched: commit mode writes git only", mcName)
-	return fmt.Sprintf("wire_model mode commit as %s -> pull request #%d on the fake GitHub (%s -> %s, %d files, equal to the dry run), the live ModelConfig untouched",
+	return fmt.Sprintf("wire_model mode commit as %s -> pull request #%d on the fake GitHub (%s -> %s, %d files, equal to the dry run), nothing written live; a stale namespace provenance answers invalid_request",
 		login, pr.Number, pr.Head, pr.Base, len(pr.Files)), nil
+}
+
+// proveStaleProvenance gives the kagent namespace the Flux labels of a
+// HelmRelease that does not exist — what a namespace left behind by a removed
+// release carries — and asserts a commit following the namespace's provenance
+// (no explicit target) answers invalid_request naming the gone release, before
+// anything is written. The namespace's own labels come back on every exit path.
+func proveStaleProvenance(api *modelManagerTools, backendName, model string) error {
+	step("A namespace whose Flux owner is gone: %s labelled %s=%s, %s=%s, then %s mode commit without a target", kagentNamespace, gitopsHelmName, gitopsStaleRelease, gitopsHelmNamespace, gitopsFluxFixture, api.toolName("wire_model"))
+	gvr := corev1.SchemeGroupVersion.WithResource("namespaces")
+	ns, err := getObject(context.Background(), gvr, "", kagentNamespace)
+	if err != nil {
+		return err
+	}
+	own := ns.GetLabels()
+	label := func(values map[string]any) error {
+		body, err := json.Marshal(map[string]any{crMetadata: map[string]any{"labels": values}})
+		if err != nil {
+			return err
+		}
+		return patchObject(context.Background(), gvr, "", kagentNamespace, types.MergePatchType, body)
+	}
+	restore := map[string]any{}
+	for _, key := range []string{gitopsFluxName, gitopsFluxNamespace, gitopsHelmName, gitopsHelmNamespace} {
+		restore[key] = nil
+		if v, ok := own[key]; ok {
+			restore[key] = v
+		}
+	}
+	if err := label(map[string]any{gitopsFluxName: nil, gitopsFluxNamespace: nil, gitopsHelmName: gitopsStaleRelease, gitopsHelmNamespace: gitopsFluxFixture}); err != nil {
+		return err
+	}
+	defer func() {
+		if err := label(restore); err != nil {
+			note("cleanup: restoring the Flux labels of namespace %s: %v", kagentNamespace, err)
+		}
+	}()
+	_, err = api.call("wire_model", map[string]any{modelField: model, backendField: backendName, modeArg: modeCommit, dryRunArg: true})
+	if refusalCode(err) != "invalid_request" {
+		return fmt.Errorf("wire_model mode commit on namespace %s labelled by the gone HelmRelease %s/%s answered %v, wanted invalid_request", kagentNamespace, gitopsFluxFixture, gitopsStaleRelease, err)
+	}
+	for _, want := range []string{"HelmRelease " + gitopsFluxFixture + "/" + gitopsStaleRelease, "does not exist"} {
+		if !strings.Contains(err.Error(), want) {
+			return fmt.Errorf("the stale-provenance refusal does not say %q: %v", want, err)
+		}
+	}
+	note("wire_model: %s", excerpt(err.Error(), 200))
+	return nil
 }
 
 // commitAnswer is the commit part of a wire in mode commit.

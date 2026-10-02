@@ -464,9 +464,16 @@ auto-wire off and two pins of its own:
 `wire_model mode: commit` against that repository, first as a dry run (the
 files, the author, no pull request, nothing reaching the fake), then for real,
 must open exactly one pull request authored by the person whose files are the
-dry run's byte for byte (a Secret file SOPS-encrypted), while the live
-ModelConfig stays untouched. The HelmRelease, the Service and the container
-go away at the end of the run.
+dry run's byte for byte (a Secret file SOPS-encrypted), with nothing written
+live. The pinned release is a model-manager instance of its own, and only the
+instance that created a ModelConfig writes it, so the platform's model-manager
+unwires the model before the commit proof and wires it again after. Then the `kagent` namespace gets the Flux labels
+of a HelmRelease that does not exist, what a namespace left behind by a removed
+release carries, for the length of one step: `wire_model mode: commit` without
+an explicit target must answer `invalid_request` naming the gone release and
+asking for `repository`, `branch` and `path`; the namespace's own labels come
+back. The HelmRelease, the Service and the container go away at the end of the
+run.
 
 Load and unload through model-manager (or the portal's Load) pre-warm and
 evict; they do not change how long agent traffic keeps a model resident —
