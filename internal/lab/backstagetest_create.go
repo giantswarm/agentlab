@@ -335,6 +335,13 @@ func agentManagerLoggedCaller(email string, since time.Duration) error {
 // the same name refused as a conflict, a viewer's refused as forbidden.
 // Returns the spec the agent was created from, its template, and the verdict
 // lines; the caller removes the agent on every path.
+// backstageTestGitHubRequests is what one backstage-test run spends of the
+// GitHub window: the portal's discovery of the agent-skills repository (its
+// tree and one read per skill) and agent-manager's create_agent pin — about
+// 24 requests measured on the 20-skill repository, with headroom for a few
+// more skills. E4/E5 spend theirs only on an authenticated agent-manager.
+const backstageTestGitHubRequests = 30
+
 func proveCreatePath(primary, viewer *portalSession) (agentSpec, *agentTemplate, *agentManagerInfo, []string, error) {
 	var verdicts []string
 	email := primary.user.Email
@@ -343,10 +350,11 @@ func proveCreatePath(primary, viewer *portalSession) (agentSpec, *agentTemplate,
 	}
 
 	step("Skill discovery through the portal: GET %s for %s, every skill pinned to the head commit", portalSkillsPath, skillsTestRepo)
-	// The portal reads GitHub for this; its window is this machine's
-	// (githubwindow.go) — printed, and waited for once when exhausted, rather
-	// than failing on the truncated listing below.
-	if err := awaitGitHubWindow("the portal's skill discovery"); err != nil {
+	// The portal reads GitHub for this, and agent-manager for the create_agent
+	// pin; their window is this machine's (githubwindow.go) — printed, and
+	// waited for once when it holds less than the run spends, rather than
+	// failing on the truncated listing below.
+	if err := awaitGitHubWindow("backstage-test's skill discovery and pinning", backstageTestGitHubRequests); err != nil {
 		return fail(err)
 	}
 	discovery, err := discoverSkills(primary, skillsTestRepo)

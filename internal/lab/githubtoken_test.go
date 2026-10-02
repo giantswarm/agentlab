@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -221,6 +223,40 @@ func TestEnsureGitHubTokenSecrets(t *testing.T) {
 	for _, ns := range []string{platformNamespace, kagentNamespace} {
 		if !exists(ns) {
 			t.Errorf("a run without $%s removed %s/%s", GitHubTokenEnv, ns, gitHubTokenSecret)
+		}
+	}
+}
+
+// TestDeploymentSetsEnv: E4/E5 run only when agent-manager's Deployment
+// carries a GitHub credential, the lab's token or the skills App, in any
+// container; anything else is the anonymous window and skips them.
+func TestDeploymentSetsEnv(t *testing.T) {
+	const podNameEnv = "K8S_POD_NAME"
+	deployment := func(containers ...[]string) *appsv1.Deployment {
+		d := &appsv1.Deployment{}
+		for _, names := range containers {
+			c := corev1.Container{}
+			for _, n := range names {
+				c.Env = append(c.Env, corev1.EnvVar{Name: n})
+			}
+			d.Spec.Template.Spec.Containers = append(d.Spec.Template.Spec.Containers, c)
+		}
+		return d
+	}
+	for _, tc := range []struct {
+		name string
+		d    *appsv1.Deployment
+		want bool
+	}{
+		{"the lab's token", deployment([]string{podNameEnv, GitHubTokenEnv}), true},
+		{"the skills App", deployment([]string{"AGENT_MANAGER_SKILLS_GITHUB_APP_ID", "AGENT_MANAGER_SKILLS_GITHUB_APP_INSTALLATION_ID"}), true},
+		{"in a second container", deployment([]string{podNameEnv}, []string{GitHubTokenEnv}), true},
+		{"no credential", deployment([]string{podNameEnv}), false},
+		{"no env at all", deployment(nil), false},
+		{"no containers", deployment(), false},
+	} {
+		if got := deploymentSetsEnv(tc.d, agentManagerGitHubEnv); got != tc.want {
+			t.Errorf("%s: deploymentSetsEnv = %v, want %v", tc.name, got, tc.want)
 		}
 	}
 }

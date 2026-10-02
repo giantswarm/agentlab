@@ -161,8 +161,8 @@ what the proof checks is what the portal shows.
   entry carries the listing's head commit as a full id. The portal reads
   GitHub for this, so the proof first prints the GitHub API window it shares
   with this machine (authenticated when `$GITHUB_TOKEN` is set — see
-  [The GitHub token](agents.md#the-github-token)) and, when the window is
-  exhausted, waits once for its reset; a listing GitHub truncated is refused
+  [The GitHub token](agents.md#the-github-token)) and, when the window holds
+  less than the run spends, waits once for its reset; a listing GitHub truncated is refused
   by name, never asserted on;
 - `get_info` and `list_model_configs` through the portal;
 - the dry run (`validate_agent`): valid, mode `create`, the `OCIRepository` at
@@ -223,7 +223,9 @@ the pins written at create; `validate_agent{update}` and `update_agent` with a
 new description change exactly `agent.description`; `validate_agent{update,
 refreshSkills}` and `update_agent{refreshSkills}` pin every git skill to
 `list_skills`' head of the repository and nothing else (discovery read the
-same head, so the pin stays); the agent is Ready after; a viewer's
+same head, so the pin stays) — skipped with a verdict naming GitHub's
+anonymous rate limit when agent-manager runs without a GitHub token; the agent
+is Ready after; a viewer's
 `update_agent`/`delete_agent` are `forbidden: …`; `delete_agent` of the agent
 while the fixture still needs the chart keeps `OCIRepository/agent` and says
 which release for; `delete_agent` of the fixture, the last release the proof

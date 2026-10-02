@@ -2,9 +2,14 @@ package lab
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"slices"
+	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -92,4 +97,39 @@ func ensureGitHubTokenSecret(_ context.Context, ns string) error {
 	}
 	note("secret %s/%s from $%s — skill discovery and resolution call GitHub authenticated", ns, gitHubTokenSecret, GitHubTokenEnv)
 	return nil
+}
+
+// agentManagerGitHubEnv are the env vars of agent-manager's Deployment that
+// carry its GitHub credential for skill resolution: the static token the lab
+// wires (skills.github.tokenSecret) or the skills GitHub App's id.
+var agentManagerGitHubEnv = []string{GitHubTokenEnv, "AGENT_MANAGER_SKILLS_GITHUB_APP_ID"}
+
+// agentManagerGitHubAuthenticated reports whether the lab's agent-manager
+// calls GitHub with a credential — read off its Deployment, since the render
+// followed the environment of the `agentlab platform` run, not this one's.
+func agentManagerGitHubAuthenticated() (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	obj, err := getObject(ctx, gvrDeployments, platformNamespace, agentManagerMCPServer)
+	if err != nil {
+		return false, err
+	}
+	var d appsv1.Deployment
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(obj.Object, &d); err != nil {
+		return false, fmt.Errorf("reading %s: %w", describe(gvrDeployments, platformNamespace, agentManagerMCPServer), err)
+	}
+	return deploymentSetsEnv(&d, agentManagerGitHubEnv), nil
+}
+
+// deploymentSetsEnv reports whether any container of the Deployment sets one
+// of the env vars by name (the value, a Secret reference, is never read).
+func deploymentSetsEnv(d *appsv1.Deployment, names []string) bool {
+	for _, c := range d.Spec.Template.Spec.Containers {
+		for _, e := range c.Env {
+			if slices.Contains(names, e.Name) {
+				return true
+			}
+		}
+	}
+	return false
 }

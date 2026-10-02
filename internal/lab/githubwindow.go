@@ -86,37 +86,38 @@ func readGitHubWindow() (gitHubWindow, error) {
 
 // awaitGitHubWindow prints the GitHub API window before a proof step that
 // resolves skills through GitHub (the portal's discovery, agent-manager's
-// list_skills and create_agent) and, when the window is exhausted, waits once
-// — bounded — until it resets rather than letting the step fail on a
-// truncated listing. The consumers in the cluster share this machine's egress
-// address, so an unauthenticated read here is their window; with
-// $GITHUB_TOKEN set on the host the lab handed them the same token
-// (githubtoken.go), so the read is authenticated as theirs are. An endpoint
-// that cannot be read is a note, never a failure; a window still exhausted
-// after the wait is.
-func awaitGitHubWindow(what string) error {
+// list_skills and create_agent) and, when fewer than need requests are left,
+// waits once — bounded — until it resets rather than letting the step fail on
+// a truncated listing. need is what the proof spends of the window; a run
+// that starts with less would fail part-way. The consumers in the cluster
+// share this machine's egress address, so an unauthenticated read here is
+// their window; with $GITHUB_TOKEN set on the host the lab handed them the
+// same token (githubtoken.go), so the read is authenticated as theirs are. An
+// endpoint that cannot be read is a note, never a failure; a window still
+// short after the wait is.
+func awaitGitHubWindow(what string, need int) error {
 	w, err := readGitHubWindow()
 	if err != nil {
 		note("GitHub API window not read (%v); %s proceeds without it", err, what)
 		return nil
 	}
 	note("%s", w)
-	if w.Remaining > 0 {
+	if w.Remaining >= need {
 		return nil
 	}
 	wait := max(w.Reset.Sub(gitHubNow())+5*time.Second, 0)
 	if wait > gitHubWindowMaxWait {
 		wait = gitHubWindowMaxWait
 	}
-	note("the window is exhausted — waiting %s for it to reset at %s before %s (one bounded wait; export $%s to lift it to 5000 an hour)", wait.Round(time.Second), w.Reset.Local().Format("15:04:05 MST"), what, GitHubTokenEnv)
+	note("the window holds fewer than the %d requests %s spends — waiting %s for it to reset at %s (one bounded wait; export $%s to lift it to 5000 an hour)", need, what, wait.Round(time.Second), w.Reset.Local().Format("15:04:05 MST"), GitHubTokenEnv)
 	gitHubSleep(wait)
 	if w, err = readGitHubWindow(); err != nil {
 		note("GitHub API window not re-read after the wait (%v); %s proceeds", err, what)
 		return nil
 	}
 	note("%s", w)
-	if w.Remaining == 0 {
-		return fmt.Errorf("GitHub API window still exhausted after waiting for its reset (%s): %s cannot resolve skills — export $%s or try again after %s", w.Reset.Local().Format("15:04:05 MST"), what, GitHubTokenEnv, w.Reset.Local().Format("15:04:05 MST"))
+	if w.Remaining < need {
+		return fmt.Errorf("GitHub API window still short after waiting for its reset (%s): %d of the %d requests %s spends — export $%s or try again after %s", w.Reset.Local().Format("15:04:05 MST"), w.Remaining, need, what, GitHubTokenEnv, w.Reset.Local().Format("15:04:05 MST"))
 	}
 	return nil
 }
