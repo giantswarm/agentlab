@@ -358,7 +358,7 @@ func ModelsTest(cfg *config.Config, email string, opts ModelsTestOptions) error 
 	note("%sget_model sees %s (%s)", toolPrefix, model, excerpt(text, 100))
 
 	step("Unloading %s", model)
-	if _, err := api.call("unload_model", map[string]any{modelField: model, backendField: backendName}); err != nil {
+	if _, err := api.call(unloadModel, map[string]any{modelField: model, backendField: backendName}); err != nil {
 		return err
 	}
 	unloaded := waitFor(15, 2*time.Second, func() bool {

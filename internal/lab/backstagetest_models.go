@@ -97,10 +97,10 @@ func proveModelsPage(cfg *config.Config, primary, viewer *portalSession) ([]stri
 
 	step("The Models page's write: %sload_model and unload_model of %s on %s through the portal as %s (loaded before: %v)", modelManagerToolPrefix, model.Name, backend, email, model.Loaded)
 	started = time.Now()
-	order := []string{"load_model", "unload_model"}
+	order := []string{loadModel, unloadModel}
 	if model.Loaded {
 		// Left as found: a loaded model ends loaded.
-		order = []string{"unload_model", "load_model"}
+		order = []string{unloadModel, loadModel}
 	}
 	args := map[string]any{backendField: backend, modelField: model.Name}
 	for _, tool := range order {
