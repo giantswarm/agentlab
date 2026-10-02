@@ -95,19 +95,15 @@ func proveModelsPage(cfg *config.Config, primary, viewer *portalSession) ([]stri
 		return verdicts, nil
 	}
 
-	step("The Models page's write: %sload_model and unload_model of %s on %s through the portal as %s (loaded before: %v)", modelManagerToolPrefix, model.Name, backend, email, model.Loaded)
+	order := writeTools(model.Loaded)
+	step("The Models page's write: %s of %s on %s through the portal as %s (loaded before: %v)", strings.Join(order, " + "), model.Name, backend, email, model.Loaded)
 	started = time.Now()
-	order := []string{loadModel, unloadModel}
-	if model.Loaded {
-		// Left as found: a loaded model ends loaded.
-		order = []string{unloadModel, loadModel}
-	}
 	args := map[string]any{backendField: backend, modelField: model.Name}
 	for _, tool := range order {
-		if err := portalMusterCall(primary, modelManagerToolPrefix+tool, args, nil); err != nil {
+		if err := portalMusterCall(primary, tool, args, nil); err != nil {
 			return verdicts, err
 		}
-		note("%s%s answered", modelManagerToolPrefix, tool)
+		note("%s answered", tool)
 	}
 	if model.ModelConfig == nil {
 		// The load wired the model (model-manager's auto-wire); a model that
@@ -123,8 +119,8 @@ func proveModelsPage(cfg *config.Config, primary, viewer *portalSession) ([]stri
 		return verdicts, err
 	}
 	note("muster attributes the calls to %s; model-manager logged the load and the unload with caller=%s", email, email)
-	verdicts = append(verdicts, fmt.Sprintf("PASS: the Models page's write (POST /api/muster/call %s %s of %s on %s as %s) answers, attributed at muster and in model-manager's log (caller=%s); the model is left %s",
-		modelManagerToolPrefix, strings.Join(order, " + "), model.Name, backend, email, email, loadedWord(model.Loaded)))
+	verdicts = append(verdicts, fmt.Sprintf("PASS: the Models page's write (POST /api/muster/call %s of %s on %s as %s) answers, attributed at muster and in model-manager's log (caller=%s); the model is left %s",
+		strings.Join(order, " + "), model.Name, backend, email, email, loadedWord(model.Loaded)))
 
 	if viewer == nil {
 		return verdicts, nil
@@ -180,6 +176,20 @@ func proofModelOf(models []portalModelInfo, preferred string) (portalModelInfo, 
 		}
 	}
 	return picked, found
+}
+
+// writeTools is the write's model-manager tools in call order, each named in
+// full: load then unload, or unload then load for a loaded model, so the
+// model is left as it was found.
+func writeTools(loaded bool) []string {
+	order := []string{loadModel, unloadModel}
+	if loaded {
+		order = []string{unloadModel, loadModel}
+	}
+	for i, tool := range order {
+		order[i] = modelManagerToolPrefix + tool
+	}
+	return order
 }
 
 // loadedWord says how the write left the model.
