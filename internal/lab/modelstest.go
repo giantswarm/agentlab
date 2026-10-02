@@ -318,9 +318,20 @@ func ModelsTest(cfg *config.Config, email string, opts ModelsTestOptions) error 
 	if err := proveGitOpsOwned(&api, backendName, model, mcName); err != nil {
 		return err
 	}
+	step("Unwiring %s through %s for the commit proof, whose model-manager is an instance of its own", mcName, modelManagerMCPServer)
+	if _, err := api.call("unwire_model", map[string]any{modelField: model, backendField: backendName}); err != nil {
+		return err
+	}
 	commitVerdict, err := proveCommit(cfg, user, token, opts.GitHubFakeBinary, backendName, model, mcName)
 	if err != nil {
 		return err
+	}
+	step("Wiring %s again through %s", mcName, modelManagerMCPServer)
+	if _, err := api.call("wire_model", map[string]any{modelField: model, backendField: backendName}); err != nil {
+		return err
+	}
+	if _, err := readKagentObject(modelConfigResource, mcName); err != nil {
+		return fmt.Errorf("ModelConfig %s after wiring it again: %w", mcName, err)
 	}
 
 	const pongPrompt = "Reply with exactly the word pong and nothing else."
