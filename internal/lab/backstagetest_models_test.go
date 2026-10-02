@@ -110,3 +110,17 @@ func TestLoggedFor(t *testing.T) {
 		t.Error("another model's load counted")
 	}
 }
+
+// TestWriteTools: both tools named in full, the model left as found.
+func TestWriteTools(t *testing.T) {
+	load, unload := modelManagerToolPrefix+"load_model", modelManagerToolPrefix+"unload_model"
+	if got := writeTools(false); !reflect.DeepEqual(got, []string{load, unload}) {
+		t.Errorf("unloaded: %v", got)
+	}
+	if got := writeTools(true); !reflect.DeepEqual(got, []string{unload, load}) {
+		t.Errorf("loaded: %v", got)
+	}
+	if got := strings.Join(writeTools(false), " + "); got != "x_model-manager_load_model + x_model-manager_unload_model" {
+		t.Errorf("verdict wording: %q", got)
+	}
+}
