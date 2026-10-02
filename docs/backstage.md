@@ -231,7 +231,7 @@ holds, records the source's fate. A GitOps-owned release (refused as
 `conflict: …`) has no fixture in the lab and is not asserted.
 
 **The Models page** (with `platform.modelManager` or `platform.serving`, as
-the admin, a viewer as the boundary): the portal reaches model-manager through
+the admin, a viewer as the boundary; first, as it needs no agent): the portal reaches model-manager through
 the installation's muster as the person, `x_model-manager_*` over the same
 `POST /api/muster/call` hop as agent-manager's tools — it has no
 model-manager REST proxy. `list_backends`, the Serving page's first read,
