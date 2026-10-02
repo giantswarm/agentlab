@@ -475,6 +475,7 @@ func goldenBootEvidence(api *kagentAPI, name string, harness *harnessStatus, fac
 			lines = append(lines, logEvidence(ctx, pod+"/"+container, substrateNamespace, "pod/"+pod, container, "", patterns...)...)
 		}
 	}
+	lines = append(lines, egressFindings()...)
 	// The actor's own output: Substrate's worker pods write it as JSON lines
 	// labelled with the ActorTemplate (ate.template.name) and the actor, so
 	// every worker of the pool is read for the template's name — the actor

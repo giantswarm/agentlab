@@ -825,7 +825,14 @@ func (r agentReadiness) failure(name string, timeout time.Duration) error {
 	if r.terminal {
 		verdict = fmt.Sprintf("failed for good after %s", r.elapsed.Round(time.Second))
 	}
-	return fmt.Errorf("agent %s %s: %s;\ncheck `kubectl -n %s get %s,%s,%s %s -o yaml`", name, verdict, r.reason, kagentNamespace, fluxHelmReleaseResource, agentTemplateResource, remoteMCPServerResource, name)
+	// A golden boot that cannot reach what it fetches fails its readiness
+	// for a reason only Substrate's egress gateway knows: its refusals are
+	// part of the verdict.
+	egress := ""
+	if lines := egressFindings(); len(lines) > 0 {
+		egress = "\n" + strings.Join(lines, "\n")
+	}
+	return fmt.Errorf("agent %s %s: %s;%s\ncheck `kubectl -n %s get %s,%s,%s %s -o yaml`", name, verdict, r.reason, egress, kagentNamespace, fluxHelmReleaseResource, agentTemplateResource, remoteMCPServerResource, name)
 }
 
 // agentResources are the three resources an agent is on the cluster: its

@@ -181,6 +181,17 @@ the golden boot, which Substrate's egress gate has to let through;
 `agentlab skills-test` is that proof, see [The skills
 proof](platform.md#the-skills-proof-the-golden-boot).
 
+An agent that never becomes Ready names what Substrate's egress gateway
+refused in the verdict of every proof that waits for it: each distinct
+refusal (status, method, destination, the gateway's reason), and, when the
+gateway answered from a failed call to the control plane (`actor egress
+policy …`, `actor identity check …`, `credential provider …`) rather than
+from the destination, the endpoints of the control plane's Service
+`ate-system/api` that are no pod of Deployment `ate-api-server`. A pod in
+`ate-system` that carries the api-server's selector labels and serves
+nothing takes a share of those calls and refuses them; the git fetch of the
+golden boot then reads as a 403 from github.com.
+
 ## Turns through the edge: native gRPC, as the surfaces drive them
 
 The controller serves gRPC only (`kagent.api.v1alpha1` for the control
