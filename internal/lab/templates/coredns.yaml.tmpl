@@ -33,8 +33,11 @@ data:
         # a data plane of its own: its hostname goes to that Service, before
         # the wildcard sends everything else to the edge. What a served model's
         # ModelConfig names as baseUrl, so agent pods reach it in-cluster.
+        # Anchored at the start like the Dex issuer below: a pod's resolver
+        # tries the search domains first (ndots:5), and the expansions get
+        # the models Gateway too.
         rewrite stop {
-            name exact {{ .Serving.GatewayName }}.{{ .Platform.Domain }} {{ .Serving.GatewayName }}.agent-platform.svc.cluster.local
+            name regex ^{{ .Serving.GatewayName }}\.{{ .DomainRegex }}\. {{ .Serving.GatewayName }}.agent-platform.svc.cluster.local
             answer auto
         }
 {{- end }}
@@ -49,8 +52,12 @@ data:
             answer auto
         }
 {{- end }}
+        # The wildcard matches the absolute name only: a search expansion
+        # (<host>.<domain>.<namespace>.svc.cluster.local) falls through to
+        # the kubernetes plugin's NXDOMAIN, and the resolver's last try, the
+        # name itself, lands here.
         rewrite stop {
-            name regex (.*)\.{{ .DomainRegex }} agentgateway-edge.agent-platform.svc.cluster.local
+            name regex ^(.*)\.{{ .DomainRegex }}\.$ agentgateway-edge.agent-platform.svc.cluster.local
             answer auto
         }
         kubernetes cluster.local in-addr.arpa ip6.arpa {
