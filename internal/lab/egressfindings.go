@@ -25,6 +25,10 @@ const (
 	substrateAPIDeployment  = "ate-api-server"
 	egressFindingsMaxLines  = 5
 	egressFindingsReadLimit = 30 * time.Second
+	// The access log's level of a request answered with an error, and the
+	// field that carries the gateway's reason.
+	egressLogErrorLevel = "error"
+	egressLogErrorField = "error"
 )
 
 // substratePolicyCallWords are the gateway's words for a request it answered
@@ -88,11 +92,11 @@ func egressRefusals(logs string) []egressRefusal {
 	for _, line := range strings.Split(logs, "\n") {
 		// <time>\t<level>\trequest <key=value …>
 		fields := strings.SplitN(line, "\t", 3)
-		if len(fields) < 3 || fields[1] != "error" || !strings.HasPrefix(fields[2], "request ") {
+		if len(fields) < 3 || fields[1] != egressLogErrorLevel || !strings.HasPrefix(fields[2], "request ") {
 			continue
 		}
 		kv := logfmtFields(strings.TrimPrefix(fields[2], "request "))
-		r := egressRefusal{method: kv["http.method"], host: kv["http.host"], path: kv["http.path"], status: kv["http.status"], reason: kv["error"], count: 1}
+		r := egressRefusal{method: kv["http.method"], host: kv["http.host"], path: kv["http.path"], status: kv["http.status"], reason: kv[egressLogErrorField], count: 1}
 		if i := slices.IndexFunc(refusals, func(o egressRefusal) bool {
 			return o.status == r.status && o.host == r.host && o.path == r.path && o.reason == r.reason
 		}); i >= 0 {

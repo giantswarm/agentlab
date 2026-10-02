@@ -63,7 +63,7 @@ func TestLogfmtFieldsKeepQuotedValuesWhole(t *testing.T) {
 func apiServerPod(name, hash string) corev1.Pod {
 	return corev1.Pod{ObjectMeta: metav1.ObjectMeta{
 		Name:            name,
-		Labels:          map[string]string{"app": substrateAPIDeployment, "pod-template-hash": hash},
+		Labels:          map[string]string{appLabel: substrateAPIDeployment, "pod-template-hash": hash},
 		OwnerReferences: []metav1.OwnerReference{{Kind: "ReplicaSet", Name: substrateAPIDeployment + "-" + hash}},
 	}}
 }
@@ -75,7 +75,7 @@ func apiEndpoint(pod, ip string) discoveryv1.Endpoint {
 // A pod that carries the api-server's selector labels but serves nothing
 // joins the control plane's Service: the finding names it.
 func TestForeignAPIEndpointsNameAPodThatIsNoAPIServer(t *testing.T) {
-	probe := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "probe-api", Labels: map[string]string{"app": substrateAPIDeployment}}}
+	probe := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "probe-api", Labels: map[string]string{appLabel: substrateAPIDeployment}}}
 	pods := []corev1.Pod{apiServerPod("ate-api-server-68cdbb59f9-n2rph", "68cdbb59f9"), apiServerPod("ate-api-server-68cdbb59f9-r92mq", "68cdbb59f9"), probe}
 	endpoints := []discoveryv1.EndpointSlice{{Endpoints: []discoveryv1.Endpoint{
 		apiEndpoint("ate-api-server-68cdbb59f9-n2rph", "10.244.0.207"),
