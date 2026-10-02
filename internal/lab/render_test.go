@@ -971,11 +971,16 @@ func TestPlatformValuesServing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(coredns), "name exact "+modelsGatewayName+"."+cfg.Platform.Domain+" "+modelsGatewayName+".agent-platform.svc.cluster.local") {
-		t.Errorf("CoreDNS does not rewrite the models host to the Gateway's data plane:\n%s", coredns)
+	// Anchored at the start, ahead of the wildcard: a pod's search
+	// expansions of the models host reach the Gateway, never the edge.
+	domain := strings.ReplaceAll(cfg.Platform.Domain, ".", `\.`)
+	models := strings.Index(string(coredns), "name regex ^"+modelsGatewayName+`\.`+domain+`\. `+modelsGatewayName+".agent-platform.svc.cluster.local")
+	wildcard := strings.Index(string(coredns), `name regex ^(.*)\.`+domain+`\.$ agentgateway-edge.agent-platform.svc.cluster.local`)
+	if wildcard < 0 {
+		t.Errorf("CoreDNS lost the anchored wildcard rewrite to the edge:\n%s", coredns)
 	}
-	if !strings.Contains(string(coredns), "agentgateway-edge.agent-platform.svc.cluster.local") {
-		t.Error("CoreDNS lost the wildcard rewrite to the edge")
+	if models < 0 || models > wildcard {
+		t.Errorf("CoreDNS does not rewrite the models host to the Gateway's data plane ahead of the edge wildcard:\n%s", coredns)
 	}
 }
 
