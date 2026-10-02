@@ -50,6 +50,10 @@ const (
 	beekeeperConfigFile = "beekeeper.yaml"
 	beekeeperKubeconfig = "kubeconfig"
 	beekeeperCAFile     = "ca.crt"
+	// The note tools' argument names the proof sets.
+	beekeeperKeyKind    = "kind"
+	beekeeperKeyDefault = "default"
+	beekeeperKeyNote    = "note"
 	// musterNodePort is muster's plain listener in the node's network.
 	musterNodePort      = 8090
 	beekeeperDefaultDue = "1m"
@@ -351,7 +355,7 @@ func ensureBeekeeperNamespace() (func(), error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: beekeeperNamespace, Labels: map[string]string{"app.kubernetes.io/managed-by": managedByAgentlabValue}}}
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: beekeeperNamespace, Labels: map[string]string{managedByLabel: managedByAgentlabValue}}}
 	if _, err := k.clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{}); err != nil && !strings.Contains(err.Error(), "already exists") {
 		return nil, fmt.Errorf("creating namespace %s: %w", beekeeperNamespace, err)
 	}
@@ -365,13 +369,13 @@ func ensureBeekeeperNamespace() (func(), error) {
 // nodeKubeconfig is the lab kubeconfig for a process in the node's network:
 // the API server on 127.0.0.1:6443 there, not the host's published port.
 func nodeKubeconfig(runDir string) (string, error) {
-	raw, err := os.ReadFile(labKubeconfig())
+	raw, err := os.ReadFile(labKubeconfig()) //nolint:gosec // the lab's own kubeconfig
 	if err != nil {
 		return "", err
 	}
 	out := regexp.MustCompile(`server: https://127\.0\.0\.1:\d+`).ReplaceAll(raw, []byte("server: https://127.0.0.1:6443"))
 	path := filepath.Join(runDir, beekeeperKubeconfig)
-	return path, os.WriteFile(path, out, 0o600)
+	return path, os.WriteFile(path, out, 0o600) //nolint:gosec // the run directory
 }
 
 func copyFile(from, to string) error {
@@ -379,7 +383,7 @@ func copyFile(from, to string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(to, b, 0o600)
+	return os.WriteFile(to, b, 0o600) //nolint:gosec // the run directory
 }
 
 // startBeekeeperPostgres runs the mailboxes' Postgres in network on port;
@@ -506,11 +510,11 @@ type beekeeperProof struct {
 // add files a decision through muster as the asker and returns its number.
 func (p *beekeeperProof) add(forWho, question, due string) (int, error) {
 	text, err := p.s.callServerTool(beekeeperNoteAdd, map[string]any{
-		"text": question, "for": forWho, "kind": "decision", "agent": "beekeeper-decisions-test", "host": "agentlab",
+		"text": question, "for": forWho, beekeeperKeyKind: "decision", "agent": "beekeeper-decisions-test", "host": "agentlab",
 		"status_quo": "The lab's merge lane takes one release a night.",
 		"why":        "Only the lab's owners pick what rolls.",
 		"options":    []any{"Roll tonight: the lane clears at 22:00", "Wait for Monday: nothing rolls before Monday"},
-		"recommend":  2, "due": due, "default": beekeeperDefault,
+		"recommend":  2, "due": due, beekeeperKeyDefault: beekeeperDefault,
 	})
 	if err != nil {
 		return 0, err
@@ -657,7 +661,7 @@ func (p *beekeeperProof) withdrawn() error {
 	if _, err := p.message(p.channel, q, "the team's message", decisionsWait, func(slackMessage) bool { return true }); err != nil {
 		return err
 	}
-	if _, err := p.s.callServerTool(beekeeperNoteDone, map[string]any{"note": id}); err != nil {
+	if _, err := p.s.callServerTool(beekeeperNoteDone, map[string]any{beekeeperKeyNote: id}); err != nil {
 		return err
 	}
 	if _, err := p.message(p.channel, q, "the withdrawn rewrite", decisionsWait, func(m slackMessage) bool {
@@ -679,7 +683,7 @@ func beekeeperOutcomes() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	evs, err := k.clientset.CoreV1().Events(beekeeperNamespace).List(ctx, metav1.ListOptions{LabelSelector: "app.kubernetes.io/managed-by=beekeeper"})
+	evs, err := k.clientset.CoreV1().Events(beekeeperNamespace).List(ctx, metav1.ListOptions{LabelSelector: managedByLabel + "=beekeeper"})
 	if err != nil {
 		return err
 	}
