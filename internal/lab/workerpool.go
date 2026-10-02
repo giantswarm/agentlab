@@ -53,25 +53,37 @@ func (p poolWorkers) String() string {
 func proveWorkerPoolsRunning(ctx context.Context, timeout time.Duration) ([]poolWorkers, error) {
 	var (
 		found   []poolWorkers
-		lastErr error
+		refusal error // the last verdict on the workers, once there is one
 	)
-	waitErr := wait.PollUntilContextTimeout(ctx, 2*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
-		found, lastErr = readWorkerPools(ctx)
+	waitErr := wait.PollUntilContextTimeout(ctx, workerPoolPollInterval, timeout, true, func(ctx context.Context) (bool, error) {
+		pools, err := readWorkerPools(ctx)
 		var refused workerPoolRefusal
 		switch {
-		case lastErr == nil:
+		case err == nil:
+			found, refusal = pools, nil
 			return true, nil
-		case errors.As(lastErr, &refused):
+		case errors.As(err, &refused):
+			found, refusal = pools, err
 			return false, nil // the workers may still settle
+		case refusal != nil:
+			// A read cut short (the deadline landing mid-list) after the
+			// workers were judged: that verdict stands.
+			return false, refusal
 		default:
-			return false, lastErr // a read that failed is not a verdict
+			return false, err // a read that failed is not a verdict
 		}
 	})
-	if waitErr != nil && lastErr == nil {
-		lastErr = waitErr
+	switch {
+	case refusal != nil:
+		return found, refusal
+	case waitErr != nil:
+		return found, waitErr
 	}
-	return found, lastErr
+	return found, nil
 }
+
+// workerPoolPollInterval is how often the workers are read while they settle.
+var workerPoolPollInterval = 2 * time.Second
 
 // workerPoolRefusal is the verdict on a pool whose workers are not all
 // Running where they belong.
