@@ -27,11 +27,13 @@ import (
 // the "Answer in my own words" modal, a reply in the message's thread — each
 // answer calling a real muster tool as the linked person. It needs no agent:
 // the gateway runs on the host as klaus-gateway-test runs it, Slack is the
-// in-process fake.
+// in-process fake. With them it holds a conversation with the person through
+// POST /conversations: their reply in its thread calls a muster tool as them,
+// and the service's answer lands in the same thread.
 
 // DecisionsGatewayImageDefault is the first klaus-gateway release that
-// serves POST /decisions.
-const DecisionsGatewayImageDefault = "gsoci.azurecr.io/giantswarm/klaus-gateway:3.13.0"
+// serves POST /decisions and POST /conversations.
+const DecisionsGatewayImageDefault = "gsoci.azurecr.io/giantswarm/klaus-gateway:4.1.0-rc.12"
 
 // The proof's caller, the tool its answers call, and how long it waits.
 const (
@@ -45,8 +47,9 @@ const (
 	decisionsWait        = 60 * time.Second
 	decisionsTokenTTL    = 20 * time.Minute
 	// decisionsNote marks what the proof puts to the gateway as the lab's.
-	decisionsNote     = "agentlab"
-	decisionsKeyLabel = "label"
+	decisionsNote      = "agentlab"
+	decisionsKeyLabel  = "label"
+	decisionsKeyPerson = "person"
 )
 
 // The gateway's decision action ids and what its messages say.
@@ -61,6 +64,11 @@ const (
 	decisionLateRefusal   = "not answered in time"
 	decisionOwnWordsReply = "Roll, but only after the 21:00 backup."
 	decisionThreadReply   = "Wait for Monday; the backup runs on Sunday."
+
+	conversationFrom         = "agentlab decisions-test"
+	conversationAnswer       = "Noted; I hand it to the supervisor."
+	conversationNotDelivered = "Not delivered to *" + conversationFrom + "*"
+	slackReactionsAdd        = "reactions.add"
 )
 
 // DecisionsTestOptions tunes the decisions proof.
@@ -208,7 +216,142 @@ func DecisionsTest(cfg *config.Config, email string, opts DecisionsTestOptions) 
 	if err := p.closedAsDefaulted(); err != nil {
 		return err
 	}
-	note("all decisions proven")
+	step("6. A conversation with %s: a direct message whose thread replies go to a muster tool as the person, and the service's answers into the thread", user.Email)
+	since = time.Now()
+	if err := p.conversation(user.Email); err != nil {
+		return err
+	}
+	step("   The reply ran at muster as %s: the forwarded id_token accepted, %s called under that subject", user.Email, decisionsAnswerTool)
+	if err := assertMusterAttribution(user.Email, identity.subject, since); err != nil {
+		return err
+	}
+
+	step("7. A conversation reply the tool refuses is a note in the thread saying it was not delivered")
+	if err := p.refusedConversationReply(user.Email); err != nil {
+		return err
+	}
+	note("all decisions and conversations proven")
+	return nil
+}
+
+// conversationBody opens a conversation with person whose replies call tool.
+func conversationBody(person, tool string) map[string]any {
+	return map[string]any{
+		decisionsKeyPerson: person,
+		"from":             conversationFrom,
+		slackKeyText:       "The supervisor asks whether the release rolls onto the lab **tonight**.",
+		"reply":            map[string]any{"tool": tool, "arguments": map[string]any{"to": "local:agentlab/Guide"}},
+	}
+}
+
+// openConversation opens a conversation and waits for its opening message.
+func (p *decisionsProof) openConversation(person, tool string) (decisionReceipt, error) {
+	status, out, err := p.api.call("/conversations", p.api.token, conversationBody(person, tool))
+	if err != nil {
+		return decisionReceipt{}, err
+	}
+	if status != http.StatusCreated {
+		return decisionReceipt{}, fmt.Errorf("POST /conversations answered HTTP %d: %s", status, excerpt(string(out), 200))
+	}
+	var r decisionReceipt
+	if err := json.Unmarshal(out, &r); err != nil {
+		return r, err
+	}
+	if !strings.HasPrefix(r.Channel, "D") {
+		return r, fmt.Errorf("the conversation with %s went to %s, not to a direct message", person, r.Channel)
+	}
+	m, err := p.message(r, "the opening message", func(slackMessage) bool { return true })
+	if err != nil {
+		return r, err
+	}
+	if len(m.Blocks) == 0 || m.Blocks[0][fieldTypeKey] != "markdown" || !strings.Contains(m.shown(), conversationFrom+" · reply in this thread") {
+		return r, fmt.Errorf("the opening message is not the text as markdown with %q under it: %s", conversationFrom, excerpt(m.shown(), 300))
+	}
+	return r, nil
+}
+
+// replyInConversation sends the person's reply into the conversation's
+// thread, as Slack delivers a direct message.
+func (p *decisionsProof) replyInConversation(r decisionReceipt, text string) error {
+	ts := p.fake.nextTS()
+	return p.driver.event(map[string]any{
+		fieldTypeKey: slackKeyMessage, slackKeyUser: p.person, slackKeyChannel: r.Channel, slackKeyChanType: "im",
+		slackKeyText: text, slackKeyTS: ts, slackKeyEventTS: ts, slackKeyThreadTS: r.TS, slackKeyParentUser: slackFakeBotUser,
+	})
+}
+
+// threadText waits until a message of the conversation's thread contains
+// text.
+func (p *decisionsProof) threadText(r decisionReceipt, what, text string) error {
+	var last []slackMessage
+	if !waitFor(int(decisionsWait/(500*time.Millisecond)), 500*time.Millisecond, func() bool {
+		last = p.fake.thread(r.Channel, r.TS)
+		for _, m := range last {
+			if strings.Contains(m.shown(), text) {
+				return true
+			}
+		}
+		return false
+	}) {
+		return fmt.Errorf("conversation %s: %s did not appear within %s; the thread holds %d messages", r.ID, what, decisionsWait, len(last))
+	}
+	return nil
+}
+
+func (p *decisionsProof) conversation(email string) error {
+	r, err := p.openConversation(email, decisionsAnswerTool)
+	if err != nil {
+		return err
+	}
+	note("direct message %s, conversation %s", r.Channel, r.ID)
+	before := p.fake.callCount(slackReactionsAdd)
+	if err := p.replyInConversation(r, "Roll it, after the backup."); err != nil {
+		return err
+	}
+	if !waitFor(int(decisionsWait/(500*time.Millisecond)), 500*time.Millisecond, func() bool {
+		return p.fake.callCount(slackReactionsAdd) > before
+	}) {
+		return fmt.Errorf("the reply in conversation %s was not marked delivered within %s", r.ID, decisionsWait)
+	}
+	for _, m := range p.fake.thread(r.Channel, r.TS) {
+		if strings.Contains(m.shown(), conversationNotDelivered) {
+			return fmt.Errorf("the delivered reply got a note: %s", excerpt(m.shown(), 200))
+		}
+	}
+	note("the reply was delivered: reaction, no note")
+	status, out, err := p.api.call("/conversations/"+url.PathEscape(r.ID)+"/messages", p.api.token, map[string]any{slackKeyText: conversationAnswer})
+	if err != nil {
+		return err
+	}
+	if status != http.StatusCreated {
+		return fmt.Errorf("POST /conversations/%s/messages answered HTTP %d: %s", r.ID, status, excerpt(string(out), 200))
+	}
+	if err := p.threadText(r, "the service's answer", conversationAnswer); err != nil {
+		return err
+	}
+	status, _, err = p.api.call("/conversations/"+url.PathEscape(r.Channel+"-1.000001")+"/messages", p.api.token, map[string]any{slackKeyText: "anyone?"})
+	if err != nil {
+		return err
+	}
+	if status != http.StatusNotFound {
+		return fmt.Errorf("a message into an unknown conversation answered HTTP %d, want 404", status)
+	}
+	note("the answer is in the thread; an unknown conversation is 404")
+	return nil
+}
+
+func (p *decisionsProof) refusedConversationReply(email string) error {
+	r, err := p.openConversation(email, decisionsRefusedTool)
+	if err != nil {
+		return err
+	}
+	if err := p.replyInConversation(r, "Are you there?"); err != nil {
+		return err
+	}
+	if err := p.threadText(r, "the not-delivered note", conversationNotDelivered); err != nil {
+		return err
+	}
+	note("%s: the refused reply has its note", r.ID)
 	return nil
 }
 
@@ -380,7 +523,7 @@ func (p *decisionsProof) refusals() error {
 	if status != http.StatusUnauthorized {
 		return fmt.Errorf("POST /decisions without a token answered HTTP %d, want 401", status)
 	}
-	status, out, err := p.api.call("/decisions", p.api.token, decisionBody(map[string]any{"person": "nobody@lab.local"}, "Nobody there?", decisionsAnswerTool))
+	status, out, err := p.api.call("/decisions", p.api.token, decisionBody(map[string]any{decisionsKeyPerson: "nobody@lab.local"}, "Nobody there?", decisionsAnswerTool))
 	if err != nil {
 		return err
 	}
@@ -433,7 +576,7 @@ func assertDecisionMessage(m slackMessage) error {
 }
 
 func (p *decisionsProof) ownWordsInModal(email string) error {
-	r, m, err := p.posted(decisionBody(map[string]any{"person": email}, "Roll the release onto the lab tonight, you decide?", decisionsAnswerTool))
+	r, m, err := p.posted(decisionBody(map[string]any{decisionsKeyPerson: email}, "Roll the release onto the lab tonight, you decide?", decisionsAnswerTool))
 	if err != nil {
 		return err
 	}
@@ -475,7 +618,7 @@ func (p *decisionsProof) replyInThread() error {
 	ts := p.fake.nextTS()
 	if err := p.driver.event(map[string]any{
 		fieldTypeKey: slackKeyMessage, slackKeyUser: p.person, slackKeyChannel: r.Channel, slackKeyChanType: slackKeyChannel,
-		slackKeyText: decisionThreadReply, slackKeyTS: ts, slackKeyEventTS: ts, slackKeyThreadTS: r.TS, "parent_user_id": slackFakeBotUser,
+		slackKeyText: decisionThreadReply, slackKeyTS: ts, slackKeyEventTS: ts, slackKeyThreadTS: r.TS, slackKeyParentUser: slackFakeBotUser,
 	}); err != nil {
 		return err
 	}

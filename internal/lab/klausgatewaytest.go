@@ -583,10 +583,16 @@ func portsFree(ports ...int) error {
 // needs no wider mode.
 func klausGatewayRunDir(dir string) (string, func(), error) {
 	if dir != "" {
-		if err := os.MkdirAll(dir, 0o750); err != nil {
+		// Absolute, or `docker run -v` takes it for a named volume the
+		// gateway's container cannot write.
+		abs, err := filepath.Abs(dir)
+		if err != nil {
 			return "", nil, err
 		}
-		return dir, func() {}, nil
+		if err := os.MkdirAll(abs, 0o750); err != nil {
+			return "", nil, err
+		}
+		return abs, func() {}, nil
 	}
 	tmp, err := os.MkdirTemp("", "agentlab-klaus-gateway-test-")
 	if err != nil {

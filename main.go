@@ -1201,7 +1201,7 @@ func decisionsTestCmd() *cobra.Command {
 	var opts lab.DecisionsTestOptions
 	cmd := &cobra.Command{
 		Use:   "decisions-test [email]",
-		Short: "Headless proof of klaus-gateway's decisions (POST /decisions): the gateway on the host with its reviews endpoint, a ServiceAccount token the lab's API server vouches for, a fake Slack Web API; a team decision answered by a Choose click, a person's (found by email, a direct message) in the modal with an option and own words, a team decision by a reply in its thread, each answer a muster tool call as the linked user; a refused answer as a status line, a decision closed as defaulted refusing a late click",
+		Short: "Headless proof of klaus-gateway's decisions (POST /decisions): the gateway on the host with its reviews endpoint, a ServiceAccount token the lab's API server vouches for, a fake Slack Web API; a team decision answered by a Choose click, a person's (found by email, a direct message) in the modal with an option and own words, a team decision by a reply in its thread, each answer a muster tool call as the linked user; a refused answer as a status line, a decision closed as defaulted refusing a late click; a conversation (POST /conversations) whose thread reply calls a muster tool as the person and whose service answer lands in the thread, a refused reply noted as not delivered",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()

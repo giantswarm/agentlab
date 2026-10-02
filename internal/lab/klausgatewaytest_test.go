@@ -661,3 +661,20 @@ func TestSlackProof(t *testing.T) {
 		t.Errorf("stopping a turn that completes: %v", err)
 	}
 }
+
+// A relative --run-dir is made absolute: docker run -v takes a bare name
+// for a named volume, which the gateway's container cannot write.
+func TestKlausGatewayRunDirIsAbsolute(t *testing.T) {
+	t.Chdir(t.TempDir())
+	dir, cleanup, err := klausGatewayRunDir("run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if !filepath.IsAbs(dir) {
+		t.Fatalf("run dir %q is not absolute", dir)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("run dir not created: %v", err)
+	}
+}

@@ -110,6 +110,7 @@ const (
 	slackKeyURL        = "url"
 	slackKeyMessage    = "message"
 	slackKeyChanType   = "channel_type"
+	slackKeyParentUser = "parent_user_id"
 	slackKeyEventTS    = "event_ts"
 	slackKeyState      = "state"
 	slackKeyTeam       = "team"

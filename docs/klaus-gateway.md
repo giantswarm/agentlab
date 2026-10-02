@@ -179,7 +179,7 @@ runs no Cilium and cannot see it.
 
 ## Decisions
 
-`agentlab decisions-test` proves klaus-gateway's decisions: a service puts a
+`agentlab decisions-test` proves klaus-gateway's decisions and conversations: a service puts a
 question to a person or a team through `POST /decisions`, and the answer calls
 a muster tool as the person who gave it. The gateway runs on the host as in
 `klaus-gateway-test`, with `--reviews-enabled` and the proof's ServiceAccount
@@ -203,6 +203,15 @@ trusts the lab CA (`SSL_CERT_FILE`), since every answer is a call to muster.
 6. `POST /decisions/{id}/close` with `defaulted` removes the buttons; a
    click on the old message is told privately that it was not answered in
    time.
+7. `POST /conversations` opens a conversation with the user: a direct message
+   whose opening text is a markdown block with `<from> · reply in this
+   thread` under it. The user's reply in its thread calls a muster tool as
+   them (muster's log shows the forwarded id_token and the call under the
+   user's subject), is marked delivered with a reaction and gets no note;
+   `POST /conversations/{id}/messages` lands in the same thread, and an
+   unknown conversation is 404.
+8. A reply whose tool muster does not have gets a note in the thread:
+   `Not delivered to <from>: <reason>`.
 
 How Slack renders the message and the modal, and the `users:read.email`
 scope a person's decision needs, are verified with the installation's Slack
