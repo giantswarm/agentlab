@@ -197,7 +197,7 @@ func writeIssuerFiles(cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(trustBundlePath, append(ca, chain...), 0o644); err != nil { // #nosec G306 -- public certificates
+	if err := os.WriteFile(trustBundlePath, append(ca, chain...), 0o644); err != nil { // #nosec G306 G703 -- public certificates, to a lab-owned path constant
 		return err
 	}
 	hosts := fmt.Sprintf("127.0.0.1 localhost %s\n::1 localhost\n", cfg.DexHost())
