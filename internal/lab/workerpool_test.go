@@ -4,11 +4,13 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	clienttesting "k8s.io/client-go/testing"
 )
 
 // The fakes' node and the pool's node selector.
@@ -139,6 +141,23 @@ func TestProveWorkerPoolsRunning(t *testing.T) {
 	nodes := map[string]map[string]string{testWorkerNode: node.Labels}
 	if _, refusal := judgeWorkerPool(pinnedPool(1, pin), []corev1.Pod{*workerPod("w-a", testWorkerNode), *leaving}, nodes); refusal != "" {
 		t.Errorf("a terminating worker: %s", refusal)
+	}
+
+	// A read that fails after the workers were judged — the deadline landing
+	// mid-list — leaves the verdict naming the Pending worker, not the read.
+	workerPoolPollInterval = time.Millisecond
+	t.Cleanup(func() { workerPoolPollInterval = 2 * time.Second })
+	f := newFakeLab(t, node, pinnedPool(1, pin), unschedulable("w-a"))
+	lists := 0
+	f.dyn.PrependReactor("list", "workerpools", func(clienttesting.Action) (bool, runtime.Object, error) {
+		lists++
+		if lists > 1 {
+			return true, nil, context.DeadlineExceeded
+		}
+		return false, nil, nil
+	})
+	if _, err := proveWorkerPoolsRunning(ctx, time.Minute); err == nil || !strings.Contains(err.Error(), "worker w-a is Pending (Unschedulable") {
+		t.Errorf("a read cut short after the verdict: want the Pending worker named, got %v", err)
 	}
 
 	newFakeLab(t, node)
