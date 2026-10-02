@@ -22,7 +22,8 @@ var handlerPayloadRe = regexp.MustCompile(`decodeURIComponent\('([^']+)'\)`)
 // person does (backstagetest_agents.go): the wizard's create path through
 // agent-manager as the person, the agents list per user, a streamed and a
 // resumed conversation, HITL and Stop, the detail page's edit, skills update
-// and delete.
+// and delete — and with managed models the Models page's model-manager read
+// and write through the same muster hop (backstagetest_models.go).
 func BackstageTest(cfg *config.Config, emails []string) error {
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err

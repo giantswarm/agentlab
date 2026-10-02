@@ -114,10 +114,10 @@ with Dex doing the logins.
   an OpenAI-provider ModelConfig's key only for a DNS hostname — and a
   server pods cannot reach on either is
   reported and left out of the backends list. Every server is proven reachable
-  from a pod before the install; the API
-  sits behind the agentgateway route
-  `https://agentgateway.<domain>/model-manager` with JWT validation on (a Dex
-  token is required; 401 without). Proof: `./agentlab models-test` (see
+  from a pod before the install; every
+  client — the portal, the proofs, an agent — calls its tools through muster
+  as the signed-in person (no edge route of its own; muster answers 401
+  without a Dex token). Proof: `./agentlab models-test` (see
   docs/models.md "Managed models"), one backend per run — `--backend <kind>` picks
   it, the default is the first of the list.
 - The `lmstudio` backend is the one that cannot delete: LM Studio has no
@@ -207,7 +207,7 @@ go test ./internal/forms/ -run TestMinimalFormDrive -count=1 -v   # single test
 ./agentlab klaus-gateway-test # Swarmgeist on the host against the edge, and with platform.klausGateway the in-cluster component: the OBO link store in a Secret across a pod loss
 ./agentlab decisions-test  # klaus-gateway's POST /decisions as a ServiceAccount: answered by click, modal and thread reply, each a muster tool call as the user; a refusal, a close as defaulted
 ./agentlab test            # RBAC assertions for every configured user
-./agentlab backstage-test  # headless Backstage sign-in for every user
+./agentlab backstage-test  # headless Backstage sign-in for every user, the portal's Agent Platform and Models pages
 ./agentlab skills-test     # kagent API v2: an AgentTemplate with a git-pinned skill boots (the golden boot) and answers from the skill
 ./agentlab down            # delete the cluster (certs/ kept, trust stores untouched)
 ./agentlab trust           # install the lab CA into the system + NSS trust stores (sudo)

@@ -58,21 +58,27 @@ const (
 // (`<code>: <message>`); that message is the error, so callers judge the code
 // by its marker.
 func portalToolCall(ps *portalSession, tool string, args map[string]any, out any) error {
+	return portalMusterCall(ps, agentManagerToolPrefix+tool, args, out)
+}
+
+// portalMusterCall is the same hop for any aggregated muster tool, named in
+// full (x_<server>_<tool>): the Models page's model-manager calls take it too.
+func portalMusterCall(ps *portalSession, name string, args map[string]any, out any) error {
 	if args == nil {
 		args = map[string]any{}
 	}
-	status, raw, err := ps.musterPost("/call"+installationQuery, map[string]any{nameKey: agentManagerToolPrefix + tool, argumentsKey: args})
+	status, raw, err := ps.musterPost("/call"+installationQuery, map[string]any{nameKey: name, argumentsKey: args})
 	if err != nil {
 		return err
 	}
 	if status != http.StatusOK {
-		return fmt.Errorf("POST /api/muster/call %s%s answered %d: %s", agentManagerToolPrefix, tool, status, excerpt(strings.TrimSpace(backstageErrorMessage(raw)), 300))
+		return fmt.Errorf("POST /api/muster/call %s answered %d: %s", name, status, excerpt(strings.TrimSpace(backstageErrorMessage(raw)), 300))
 	}
 	if out == nil {
 		return nil
 	}
 	if err := json.Unmarshal(raw, out); err != nil {
-		return fmt.Errorf("%s%s through the portal: payload is not the expected JSON: %w\n%.300s", agentManagerToolPrefix, tool, err, raw)
+		return fmt.Errorf("%s through the portal: payload is not the expected JSON: %w\n%.300s", name, err, raw)
 	}
 	return nil
 }

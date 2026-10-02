@@ -175,8 +175,9 @@ func chartVersionBelow(version, floor string) bool {
 // sessions: the create path as the first platform-admin (the wizard needs
 // one), the roster as every user, the chat as the admin with every other
 // user as the boundary, HITL and Stop on the fixture, the edit path, and
-// both agents deleted through agent-manager. Every verdict line is printed
-// at the end.
+// both agents deleted through agent-manager, and with managed models the
+// Models page's read and write (backstagetest_models.go). Every verdict line
+// is printed at the end.
 func proveAgentPlatform(cfg *config.Config, sessions []*portalSession) error {
 	primary := adminSession(sessions)
 	if primary == nil {
@@ -257,6 +258,14 @@ func proveAgentPlatform(cfg *config.Config, sessions []*portalSession) error {
 	verdicts = append(verdicts, edited...)
 	if err != nil {
 		return err
+	}
+
+	if cfg.ModelManagerEnabled() {
+		models, err := proveModelsPage(cfg, primary, viewer)
+		verdicts = append(verdicts, models...)
+		if err != nil {
+			return err
+		}
 	}
 
 	fmt.Println()

@@ -230,6 +230,24 @@ which release for; `delete_agent` of the fixture, the last release the proof
 holds, records the source's fate. A GitOps-owned release (refused as
 `conflict: …`) has no fixture in the lab and is not asserted.
 
+**The Models page** (with `platform.modelManager` or `platform.serving`, as
+the admin, a viewer as the boundary): the portal reaches model-manager through
+the installation's muster as the person, `x_model-manager_*` over the same
+`POST /api/muster/call` hop as agent-manager's tools — it has no
+model-manager REST proxy. `list_backends`, the Serving page's first read,
+lists every backend the lab fronts; on the first host model server with a
+downloaded model (its `models-test` model when downloaded, the smallest
+otherwise) `load_model` and `unload_model`, the model left loaded or unloaded
+as found, and unwired again when the load wired it. muster's log attributes
+the calls to the person (the forwarded id_token accepted, the `tools/call`
+requests under the Dex subject) and model-manager's log carries the load and
+the unload with `caller=<person>`. A viewer's `wire_model` of the same model
+answers `forbidden: …`: the ModelConfig is model-manager's one Kubernetes
+write as the caller. A host server's load and unload write no Kubernetes
+object, so no RBAC stands in front of them and the viewer's refusal is not
+asserted there. No host server, or none with a downloaded model, skips the
+write and says so.
+
 Both agents and every session are removed on every path, leftovers of an
 aborted run first. Not provable headlessly and out of scope: the browser's
 versioned persisted query cache (a stale v1alpha2 entry never renders) — that
