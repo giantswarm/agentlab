@@ -74,7 +74,14 @@ func proveDexLocalhostSidecars(ctx context.Context, cfg *config.Config) ([]dexLo
 			if !ok {
 				continue
 			}
-			if err := checkDexLocalhostDeployment(ctx, k, d, key); err != nil {
+			if !dexLocalhostBridged(cfg) {
+				// Under the platform domain the issuer is cluster DNS's
+				// to answer: a leftover bridge would hide a pod that
+				// cannot resolve it.
+				if hasDexLocalhostSidecar(d) {
+					return nil, fmt.Errorf("deployment %s/%s (%s) still carries the %s sidecar, though the issuer %s is answered by cluster DNS", ns, d.Name, key, dexLocalhostContainer, cfg.Issuer())
+				}
+			} else if err := checkDexLocalhostDeployment(ctx, k, d, key); err != nil {
 				return nil, err
 			}
 			server := dexLocalhostServer{namespace: ns, deployment: d.Name, key: key}
@@ -97,13 +104,19 @@ func proveDexLocalhostSidecars(ctx context.Context, cfg *config.Config) ([]dexLo
 	return proven, nil
 }
 
+// hasDexLocalhostSidecar reports whether a Deployment's pods carry the
+// bridge (an init container, restartPolicy Always).
+func hasDexLocalhostSidecar(d *appsv1.Deployment) bool {
+	return slices.ContainsFunc(d.Spec.Template.Spec.InitContainers, func(c corev1.Container) bool { return c.Name == dexLocalhostContainer })
+}
+
 // checkDexLocalhostDeployment asserts one selected Deployment (key: what the
 // rule selected it by) carries the sidecar — a native sidecar, among the init
 // containers — rolled out completely, with every pod Ready, every container
 // (the sidecar included) running and none restarted.
 func checkDexLocalhostDeployment(ctx context.Context, k *kubeClients, d *appsv1.Deployment, key string) error {
 	where := d.Namespace + "/" + d.Name
-	if !slices.ContainsFunc(d.Spec.Template.Spec.InitContainers, func(c corev1.Container) bool { return c.Name == dexLocalhostContainer }) {
+	if !hasDexLocalhostSidecar(d) {
 		return fmt.Errorf("the Deployment %s is told the lab Dex address through %s but carries no %s sidecar — the lab did not patch this component; check the `%s sidecar on …` line of `agentlab platform` and components.%s.postRenderers in state/agent-platform-values.yaml; a server that carries the address without dialing it opts out with the annotation %s=false",
 			where, key, dexLocalhostContainer, dexLocalhostContainer, d.Name, dexLocalhostAnnotation)
 	}

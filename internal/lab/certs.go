@@ -14,6 +14,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/giantswarm/agentlab/internal/config"
 )
 
 // Paths of the minted certs, shared by every consumer in the package
@@ -25,6 +27,14 @@ const (
 	tlsKeyPath      = "certs/tls.key"
 	gatewayCertPath = "certs/gateway-tls.crt"
 	gatewayKeyPath  = "certs/gateway-tls.key"
+	// trustBundlePath is what the lab's consumers trust with an externally
+	// provisioned pair (platform.tls): the lab CA plus the pair's chain,
+	// which Dex and the edge then serve (writeIssuerFiles).
+	trustBundlePath = "certs/trust-bundle.crt"
+	// apiserverHostsPath is the kube-apiserver's /etc/hosts with an
+	// externally provisioned pair: dex.<domain> on loopback, where the Dex
+	// NodePort answers (kind-config.yaml.tmpl).
+	apiserverHostsPath = "certs/apiserver-hosts"
 	// replacedCADir stashes CAs that a re-mint replaced: the trust stores
 	// index roots by name+serial, so removing one later needs the very
 	// certificate that was installed. `agentlab trust`/`untrust` sweep this
@@ -155,6 +165,72 @@ func GenCerts(domain string, force bool) error {
 	fmt.Printf("Generated %s (%s; %d-day leaf, SAN: IP:127.0.0.1, DNS:%s)\n",
 		tlsCertPath, leafReason, leafValidityDays, strings.Join(dexSANNames, ","))
 	return nil
+}
+
+// trustBundleFile is the CA bundle every consumer of the lab trusts (the
+// dex-ca Secrets, the apiserver's OIDC CA, Substrate's egress, the lab's own
+// clients): the lab CA, or with an externally provisioned pair the bundle
+// writeIssuerFiles adds its chain to.
+func trustBundleFile(cfg *config.Config) string {
+	if cfg.Platform.TLS.Set() {
+		return trustBundlePath
+	}
+	return caCertPath
+}
+
+// writeIssuerFiles writes what the issuer under the platform domain needs
+// with an externally provisioned pair (platform.tls): the trust bundle —
+// the lab CA plus every certificate of the pair's cert file, so a private
+// or self-signed pair verifies wherever the lab CA did, and a public one
+// where only the lab CA is trusted (the apiserver's oidc-ca-file replaces
+// the system roots) — and the apiserver's hosts file. Without a pair there
+// is nothing to write.
+func writeIssuerFiles(cfg *config.Config) error {
+	if !cfg.Platform.TLS.Set() {
+		return nil
+	}
+	ca, err := os.ReadFile(caCertPath)
+	if err != nil {
+		return fmt.Errorf("reading lab CA (run `agentlab certs` first?): %w", err)
+	}
+	chain, err := pemCertificates(cfg.Platform.TLS.CertFile)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(trustBundlePath, append(ca, chain...), 0o644); err != nil { // #nosec G306 -- public certificates
+		return err
+	}
+	hosts := fmt.Sprintf("127.0.0.1 localhost %s\n::1 localhost\n", cfg.DexHost())
+	return os.WriteFile(apiserverHostsPath, []byte(hosts), 0o644) // #nosec G306 -- read in the node like ca.crt
+}
+
+// dexServingPair is the certificate pair Dex serves: the lab-CA leaf for
+// localhost, or the externally provisioned pair its issuer then lives
+// under (config.Issuer).
+func dexServingPair(cfg *config.Config) (cert, key string) {
+	if cfg.Platform.TLS.Set() {
+		return cfg.Platform.TLS.CertFile, cfg.Platform.TLS.KeyFile
+	}
+	return tlsCertPath, tlsKeyPath
+}
+
+// pemCertificates returns the CERTIFICATE blocks of a PEM file, re-encoded,
+// so a bundle never carries anything else the file holds.
+func pemCertificates(path string) ([]byte, error) {
+	raw, err := os.ReadFile(path) // #nosec G304 -- the configured platform.tls.certFile
+	if err != nil {
+		return nil, err
+	}
+	var out []byte
+	for block, rest := pem.Decode(raw); block != nil; block, rest = pem.Decode(rest) {
+		if block.Type == pemTypeCert {
+			out = append(out, pem.EncodeToMemory(block)...)
+		}
+	}
+	if out == nil {
+		return nil, fmt.Errorf("%s holds no PEM certificate", path)
+	}
+	return out, nil
 }
 
 // ensureGatewayCert mints the wildcard certificate the agentgateway edge

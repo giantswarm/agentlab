@@ -242,8 +242,9 @@ func loadLab(create bool) (*config.Config, error) {
 		return nil, err
 	}
 	// The lab's HTTP clients dial *.<domain> on loopback (the kind port
-	// mappings) so checks never flake on external DNS; see lab.SetDomain.
-	lab.SetDomain(cfg.Platform.Domain)
+	// mappings) so checks never flake on external DNS, and trust the lab's
+	// CA bundle; see lab.SetPlatform.
+	lab.SetPlatform(cfg)
 	return cfg, nil
 }
 

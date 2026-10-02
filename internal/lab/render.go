@@ -184,13 +184,21 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 	if err != nil {
 		return nil, err
 	}
-	mcpPrometheus, err := yaml.Marshal([]postRenderer{sidecarPostRenderer(mcpPrometheusRelease, cfg.DexPort)})
+	var mcpPrometheusRenderers []postRenderer
+	if dexLocalhostBridged(cfg) {
+		mcpPrometheusRenderers = []postRenderer{sidecarPostRenderer(mcpPrometheusRelease, cfg.DexPort)}
+	}
+	mcpPrometheus, err := yaml.Marshal(mcpPrometheusRenderers)
 	if err != nil {
 		return nil, err
 	}
 	var labCA string
 	if cfg.Platform.Agents && !cfg.LegacyChart() {
-		raw, err := os.ReadFile(labCAFile) // #nosec G304 -- the lab's own CA certificate
+		caFile := labCAFile
+		if cfg.Platform.TLS.Set() {
+			caFile = trustBundleFile(cfg)
+		}
+		raw, err := os.ReadFile(caFile) // #nosec G304 -- the lab's own CA bundle
 		if err != nil {
 			return nil, fmt.Errorf("the lab CA for Substrate's egress trust: %w", err)
 		}
@@ -239,6 +247,32 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		AgentPlatformClientID:      config.AgentPlatformClientID,
 		AgentPlatformClientSecret:  config.AgentPlatformClientSecret,
 	}, nil
+}
+
+// dexIssuerService is the ClusterIP Service pods reach the issuer under the
+// platform domain through (platform.tls; dex.yaml.tmpl, coredns.yaml.tmpl).
+const dexIssuerService = "dex-issuer"
+
+// DexIssuerService is dexIssuerService for the templates.
+func (t *tmplData) DexIssuerService() string { return dexIssuerService }
+
+// DexJWKSHost and DexJWKSPort are where the agentgateway routes fetch the
+// lab Dex's keys over TLS: its Service by the in-cluster name the lab-CA
+// leaf carries, or — with an externally provisioned pair, which carries no
+// in-cluster name — the issuer's own host and port.
+func (t *tmplData) DexJWKSHost() string {
+	if t.Platform.TLS.Set() {
+		return t.DexHost()
+	}
+	return dexServiceHost
+}
+
+// DexJWKSPort: see DexJWKSHost.
+func (t *tmplData) DexJWKSPort() int {
+	if t.Platform.TLS.Set() {
+		return t.DexPort
+	}
+	return 5556
 }
 
 // ExtraPostRenderers is the part of PostRenderers the values template's
@@ -334,7 +368,7 @@ func renderTemplate(cfg *config.Config, name string, mutate func(*tmplData)) ([]
 // applies.
 var manifests = map[string]struct {
 	out         string
-	extraInputs []string
+	extraInputs func(*config.Config) []string
 }{
 	"kind-config.yaml.tmpl":                  {out: "kind-config.yaml"},
 	"rbac.yaml.tmpl":                         {out: "rbac.yaml"},
@@ -350,7 +384,15 @@ var manifests = map[string]struct {
 	"coredns.yaml.tmpl":                      {out: "coredns.yaml"},
 	"gateway-nodeport.yaml.tmpl":             {out: "gateway-nodeport.yaml"},
 	"backstage-catalog.yaml.tmpl":            {out: "backstage-catalog.yaml"},
-	"dex.yaml.tmpl":                          {out: "dex.yaml", extraInputs: []string{tlsCertPath}},
+	"dex.yaml.tmpl":                          {out: "dex.yaml", extraInputs: dexCertInputs},
+}
+
+// dexCertInputs is the certificate Dex serves (dexServingPair), so a
+// rotated pair — a re-mint, or an externally provisioned one renewed — rolls
+// the pod.
+func dexCertInputs(cfg *config.Config) []string {
+	cert, _ := dexServingPair(cfg)
+	return []string{cert}
 }
 
 // renderManifest renders one embedded template into state/ per the manifests
@@ -376,7 +418,11 @@ func renderManifestWith(cfg *config.Config, tmplName string, mutate func(*tmplDa
 	if bytes.Contains(content, []byte(checksumPlaceholder)) {
 		h := sha256.New()
 		h.Write(content)
-		for _, path := range spec.extraInputs {
+		var inputs []string
+		if spec.extraInputs != nil {
+			inputs = spec.extraInputs(cfg)
+		}
+		for _, path := range inputs {
 			raw, err := os.ReadFile(path) // #nosec G304 -- lab-owned cert paths from the manifests table
 			if err != nil {
 				return nil, "", fmt.Errorf("checksum input %s: %w", path, err)
@@ -402,6 +448,9 @@ func renderManifestWith(cfg *config.Config, tmplName string, mutate func(*tmplDa
 // servers answer (best effort: the platform run is where a failure counts).
 func RenderAll(cfg *config.Config) error {
 	if err := GenCerts(cfg.Platform.Domain, false); err != nil {
+		return err
+	}
+	if err := writeIssuerFiles(cfg); err != nil {
 		return err
 	}
 	if err := writeNodeFiles(); err != nil {

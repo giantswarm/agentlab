@@ -4,6 +4,8 @@ package config
 
 import (
 	"bytes"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"hash/crc32"
@@ -244,8 +246,9 @@ type Platform struct {
 	// TLS optionally hands the edge an externally provisioned certificate
 	// pair (PEM) instead of the minted lab-CA wildcard — for users who own a
 	// real domain (wildcard record -> 127.0.0.1) and run their own ACME
-	// tooling. Both fields set or both empty. The Dex issuer still serves
-	// the lab CA either way; see docs/tls.md.
+	// tooling. Both fields set or both empty. With a pair the Dex issuer
+	// moves under the domain too (Issuer: dex.<domain>) and serves the same
+	// pair, which must therefore cover that name; see docs/tls.md.
 	TLS PlatformTLS `yaml:"tls"`
 	// The agent-platform chart release the lab installs
 	// (oci://gsoci.azurecr.io/charts/giantswarm/agent-platform): an exact
@@ -648,6 +651,27 @@ type PlatformTLS struct {
 // Set reports whether an external edge certificate is configured.
 func (t PlatformTLS) Set() bool { return t.CertFile != "" }
 
+// covers checks that the pair's leaf (the first certificate of CertFile)
+// is valid for host: Dex serves the same pair under dex.<domain>.
+func (t PlatformTLS) covers(host string) error {
+	raw, err := os.ReadFile(t.CertFile)
+	if err != nil {
+		return err
+	}
+	block, _ := pem.Decode(raw)
+	if block == nil || block.Type != "CERTIFICATE" {
+		return fmt.Errorf("%s holds no PEM certificate", t.CertFile)
+	}
+	leaf, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return fmt.Errorf("%s: %w", t.CertFile, err)
+	}
+	if err := leaf.VerifyHostname(host); err != nil {
+		return fmt.Errorf("%s does not cover %s, the Dex issuer's host under platform.domain (SAN: %s): mint the pair for *.<domain> and the apex", t.CertFile, host, strings.Join(leaf.DNSNames, ", "))
+	}
+	return nil
+}
+
 type Backstage struct {
 	Enabled bool `yaml:"enabled"`
 	// Backstage binds this port on the node (hostNetwork) and kind maps the
@@ -662,7 +686,7 @@ type Config struct {
 	// Kind cluster name; also prefixes RBAC bindings and names the muster
 	// installation surfaced in Backstage.
 	ClusterName string `yaml:"clusterName"`
-	// Dex NodePort == host port: the issuer https://localhost:<port>/dex must
+	// Dex NodePort == host port: the issuer (Issuer) must
 	// be the same URL from the Mac and from inside the node, so both sides
 	// use one number. Must sit in the NodePort range (30000-32767).
 	DexPort  int    `yaml:"dexPort"`
@@ -1109,6 +1133,9 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("platform.tls: %w", err)
 			}
 		}
+		if err := c.Platform.TLS.covers(c.DexHost()); err != nil {
+			return fmt.Errorf("platform.tls: %w", err)
+		}
 	}
 	if err := ValidatePort(strconv.Itoa(c.Platform.AgentsPort)); err != nil {
 		return fmt.Errorf("platform.agentsPort: %w", err)
@@ -1413,8 +1440,21 @@ func (c *Config) FindUserInGroup(group string) *User {
 	return nil
 }
 
+// Issuer is the Dex issuer URL, one URL on both sides of the kind boundary:
+// https://localhost:<DexPort>/dex, or with an externally provisioned pair
+// (platform.tls) https://dex.<domain>:<DexPort>/dex, served with that pair.
 func (c *Config) Issuer() string {
-	return fmt.Sprintf("https://localhost:%d/dex", c.DexPort)
+	return fmt.Sprintf("https://%s:%d/dex", c.DexHost(), c.DexPort)
+}
+
+// DexHost is the issuer's host: localhost, or dex.<domain> with an
+// externally provisioned pair. A name either way, never an IP literal:
+// muster refuses an issuer whose host is one.
+func (c *Config) DexHost() string {
+	if c.Platform.TLS.Set() {
+		return "dex." + c.Platform.Domain
+	}
+	return "localhost"
 }
 
 // ControlPlaneNode is the docker container name kind gives the (only) node.

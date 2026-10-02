@@ -643,6 +643,23 @@ Unblocks when kind stops applying the image's sysctl.d
 mode that neither writes nor refuses. A rootless engine needs none of it, since
 the kernel refuses kernel-global writes from a user namespace.
 
+### U28. The BYO issuer: an `/etc/hosts` of its own for the apiserver, a CoreDNS rewrite for the pods — ACCEPTED
+With an externally provisioned pair (`platform.tls`) the issuer is
+`https://dex.<domain>:<dexPort>/dex` (giantswarm/agentlab#20), and the name
+must reach Dex from the apiserver, which reads the issuer at boot and
+resolves through the node's resolver, and from every pod. kind exposes no
+`--add-host` for its node, and the kubelet copies the node's `/etc/hosts`
+into a hostNetwork pod at its start, so an entry written into the node after
+`kind create` misses the apiserver. **Fix:** `certs/apiserver-hosts`
+(`dex.<domain>` on loopback, where the Dex NodePort answers) mounted over the
+apiserver's `/etc/hosts` through the ClusterConfiguration's `extraVolumes`
+— a container that mounts `/etc/hosts` gets no kubelet-made one — and, for
+the pods, a CoreDNS `rewrite` of `dex.<domain>` to the `dex-issuer` ClusterIP
+Service on the issuer's port, ahead of the wildcard to the edge. The pair
+covers no in-cluster name, so the agentgateway JWKS sources dial the issuer's
+host too, and the `dex-localhost` sidecar (U13) is not patched. Inherent to
+one issuer URL on a single-node kind cluster; nothing upstream to wait for.
+
 ## Accepted lab trade-offs (not hacks to fix)
 
 - **Checksum stamping via the `REPLACED_AT_APPLY` placeholder** — the standard

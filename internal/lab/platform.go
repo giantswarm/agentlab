@@ -304,8 +304,11 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	// muster appends this to its system trust pool so it can talk to the lab's
 	// self-signed Dex over TLS (values: muster.muster.extraCaFile); Backstage
 	// mounts the same Secret through global.identity.ca (NODE_EXTRA_CA_CERTS).
+	if err := writeIssuerFiles(cfg); err != nil {
+		return err
+	}
 	if err := ensureSecretFromFiles(platformNamespace, "dex-ca", map[string]string{
-		caCertKey: caCertPath,
+		caCertKey: trustBundleFile(cfg),
 	}); err != nil {
 		return err
 	}
@@ -555,7 +558,11 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	if err != nil {
 		return err
 	}
-	noteDexLocalhostTargets(roster, renders, sidecars)
+	if dexLocalhostBridged(cfg) {
+		noteDexLocalhostTargets(roster, renders, sidecars)
+	} else {
+		note("issuer %s: pods resolve it to the %s Service through cluster DNS, no %s sidecar", cfg.Issuer(), dexIssuerService, dexLocalhostContainer)
+	}
 	var dev *devImages
 	var harnessBefore harnessState
 	imageNames := defaultDevImageNames(cfg)

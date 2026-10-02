@@ -203,7 +203,11 @@ func PlatformTest(cfg *config.Config, email string) error {
 	// restart and reads Connected in muster (platformtest_sidecar.go) — the
 	// chart's default-on managers and an overlay's included, not only the
 	// servers the lab turns on itself.
-	step("Verifying the %s sidecar on every server told the lab Dex address", dexLocalhostContainer)
+	if dexLocalhostBridged(cfg) {
+		step("Verifying the %s sidecar on every server told the lab Dex address", dexLocalhostContainer)
+	} else {
+		step("Verifying every server told the issuer %s reaches it without a sidecar", cfg.Issuer())
+	}
 	sidecarCtx, cancelSidecar := context.WithTimeout(context.Background(), kubeReadTimeout)
 	servers, err := proveDexLocalhostSidecars(sidecarCtx, cfg)
 	cancelSidecar()
@@ -214,7 +218,11 @@ func PlatformTest(cfg *config.Config, email string) error {
 	for _, s := range servers {
 		serverNames = append(serverNames, s.String())
 	}
-	verdict += fmt.Sprintf("\nPASS: the %s bridge on all %d servers told the lab Dex address through a name they dial it by — sidecar present, 0 restarts, MCPServer Connected: %s", dexLocalhostContainer, len(servers), strings.Join(serverNames, ", "))
+	if dexLocalhostBridged(cfg) {
+		verdict += fmt.Sprintf("\nPASS: the %s bridge on all %d servers told the lab Dex address through a name they dial it by — sidecar present, 0 restarts, MCPServer Connected: %s", dexLocalhostContainer, len(servers), strings.Join(serverNames, ", "))
+	} else {
+		verdict += fmt.Sprintf("\nPASS: all %d servers told the issuer %s reach it through cluster DNS (the %s Service) — no sidecar, MCPServer Connected: %s", len(servers), cfg.Issuer(), dexIssuerService, strings.Join(serverNames, ", "))
+	}
 
 	// The user's identity, not a ServiceAccount: the same tool as two users
 	// with different RBAC must answer differently — and a forged identity

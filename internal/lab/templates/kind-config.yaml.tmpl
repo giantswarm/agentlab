@@ -138,7 +138,11 @@ kubeadmConfigPatches:
         - name: oidc-client-id
           value: kubernetes
         - name: oidc-ca-file
+{{- if .Platform.TLS.Set }}
+          value: /etc/kubernetes/pki/dex/trust-bundle.crt
+{{- else }}
           value: /etc/kubernetes/pki/dex/ca.crt
+{{- end }}
         - name: oidc-username-claim
           value: email
         - name: oidc-username-prefix
@@ -147,3 +151,17 @@ kubeadmConfigPatches:
           value: groups
         - name: oidc-groups-prefix
           value: "oidc:"
+{{- if .Platform.TLS.Set }}
+      # The issuer lives under the platform domain (platform.tls), and the
+      # apiserver resolves through the node's resolver, which knows nothing
+      # of dex.{{ .Platform.Domain }}: its own /etc/hosts puts the name on
+      # loopback, where the Dex NodePort answers — the URL the browser dials
+      # on the host. A container that mounts /etc/hosts gets no kubelet-made
+      # one, so the entry is there from the apiserver's first start.
+      extraVolumes:
+        - name: issuer-hosts
+          hostPath: /etc/kubernetes/pki/dex/apiserver-hosts
+          mountPath: /etc/hosts
+          readOnly: true
+          pathType: File
+{{- end }}

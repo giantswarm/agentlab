@@ -122,7 +122,11 @@ type dexLocalhostTarget struct {
 
 // dexServiceAddr is the lab Dex behind its ClusterIP Service (dex.yaml.tmpl):
 // the same HTTPS endpoint the NodePort publishes on the host.
-const dexServiceAddr = "dex.dex.svc.cluster.local:5556"
+const dexServiceAddr = dexServiceHost + ":5556"
+
+// dexServiceHost is the Dex Service's in-cluster name, one the lab-CA leaf
+// carries (dexSANNames).
+const dexServiceHost = "dex.dex.svc.cluster.local"
 
 // The target selector keys and kinds of the patches below.
 const (
@@ -342,8 +346,14 @@ var hostNetworkComponents = []string{componentMuster, componentBackstage}
 // dexLocalhostAddr is the lab Dex as the pods are told it — the host:port of
 // the issuer URL (config.Issuer) — the address the sidecar answers on.
 func dexLocalhostAddr(cfg *config.Config) string {
-	return fmt.Sprintf("%s:%d", localhostName, cfg.DexPort)
+	return fmt.Sprintf("%s:%d", cfg.DexHost(), cfg.DexPort)
 }
+
+// dexLocalhostBridged reports whether pods reach the issuer through the
+// sidecar: only while it is spelled localhost. Under the platform domain
+// (platform.tls) cluster DNS answers its name with Dex's own Service
+// (coredns.yaml.tmpl), from every pod, and no sidecar is patched.
+func dexLocalhostBridged(cfg *config.Config) bool { return !cfg.Platform.TLS.Set() }
 
 // dexLocalhostTargets is the rule that picks the sidecar's targets (patch 4)
 // off the component renders (keyed by release name, platformImages): every
@@ -360,6 +370,9 @@ func dexLocalhostAddr(cfg *config.Config) string {
 func dexLocalhostTargets(cfg *config.Config, renders map[string]string) (map[string][]dexLocalhostTarget, error) {
 	addr := dexLocalhostAddr(cfg)
 	targets := map[string][]dexLocalhostTarget{}
+	if !dexLocalhostBridged(cfg) {
+		return targets, nil
+	}
 	for _, component := range slices.Sorted(maps.Keys(renders)) {
 		if slices.Contains(hostNetworkComponents, component) {
 			continue

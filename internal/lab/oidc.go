@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -20,22 +21,28 @@ import (
 )
 
 // labDomain is the platform's public domain, set once at command start
-// (SetDomain from main's config load). The lab's contract is that
+// (SetPlatform from main's config load). The lab's contract is that
 // *.<domain> reaches this host's loopback — the kind port mappings — and
 // public DNS merely agrees (the nip.io wildcard). The lab's own HTTP clients
 // therefore dial loopback directly for those names, so health checks and
 // smoke tests never flake on external DNS resolving a name that was always
 // going to mean 127.0.0.1.
+//
+// trust is the CA bundle those clients add to the system roots
+// (trustBundleFile): the lab CA, plus an externally provisioned pair's chain
+// when platform.tls is set; empty means the lab CA.
 var labDomain struct {
 	sync.Mutex
-	domain string
+	domain, trust string
 }
 
-// SetDomain registers the platform domain for the loopback dialer.
-func SetDomain(domain string) {
+// SetPlatform registers the platform domain for the loopback dialer and the
+// CA bundle for the lab's clients (labCertPool).
+func SetPlatform(cfg *config.Config) {
 	labDomain.Lock()
 	defer labDomain.Unlock()
-	labDomain.domain = domain
+	labDomain.domain = cfg.Platform.Domain
+	labDomain.trust = trustBundleFile(cfg)
 }
 
 // dialLabAddr rewrites a *.<domain> (or apex) dial target to loopback.
@@ -89,7 +96,10 @@ func labTLSTransport() (*http.Transport, error) {
 // the system roots plus the lab CA (certs/ca.crt). Read on every call; the
 // callers cache what they build on it.
 func labCertPool() (*x509.CertPool, error) {
-	caPEM, err := os.ReadFile(caCertPath)
+	labDomain.Lock()
+	trust := cmp.Or(labDomain.trust, caCertPath)
+	labDomain.Unlock()
+	caPEM, err := os.ReadFile(trust) // #nosec G304 -- the lab's own CA bundle (trustBundleFile)
 	if err != nil {
 		return nil, fmt.Errorf("reading lab CA (run `agentlab up` first?): %w", err)
 	}
@@ -98,7 +108,7 @@ func labCertPool() (*x509.CertPool, error) {
 		pool = x509.NewCertPool()
 	}
 	if !pool.AppendCertsFromPEM(caPEM) {
-		return nil, fmt.Errorf("certs/ca.crt contains no usable certificate")
+		return nil, fmt.Errorf("%s contains no usable certificate", trust)
 	}
 	return pool, nil
 }

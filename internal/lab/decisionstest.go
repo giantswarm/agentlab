@@ -146,7 +146,7 @@ func DecisionsTest(cfg *config.Config, email string, opts DecisionsTestOptions) 
 	if err != nil {
 		return err
 	}
-	caFile, err := filepath.Abs(caCertPath)
+	caFile, err := filepath.Abs(trustBundleFile(cfg))
 	if err != nil {
 		return err
 	}

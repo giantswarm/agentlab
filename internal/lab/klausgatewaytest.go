@@ -312,7 +312,7 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	}
 	defer gate.stop()
 	target := gatedTarget(edge, opts.Port+3)
-	caFile, err := filepath.Abs(caCertPath)
+	caFile, err := filepath.Abs(trustBundleFile(cfg))
 	if err != nil {
 		return err
 	}
