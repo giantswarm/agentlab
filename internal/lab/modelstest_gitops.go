@@ -73,6 +73,8 @@ const (
 	modeCommit    = "commit"
 	repositoryArg = "repository"
 	deleteModel   = "delete_model"
+	loadModel     = "load_model"
+	unloadModel   = "unload_model"
 	valuesEnabled = "enabled"
 	musterValues  = "muster"
 )
@@ -99,7 +101,7 @@ func proveDryRuns(api *modelManagerTools, backendName, model, mcName, jobID stri
 		return err
 	}
 	onModel := map[string]any{modelField: model, backendField: backendName, dryRunArg: true}
-	for _, tool := range []string{"pull_model", "wire_model", "unwire_model", "load_model", "unload_model", deleteModel} {
+	for _, tool := range []string{"pull_model", "wire_model", "unwire_model", loadModel, unloadModel, deleteModel} {
 		var answer map[string]any
 		if err := api.getJSON(tool, onModel, &answer); err != nil {
 			return fmt.Errorf("%s dryRun: %w", tool, err)
@@ -127,7 +129,7 @@ func proveDryRuns(api *modelManagerTools, backendName, model, mcName, jobID stri
 	note("unchanged: ModelConfig %s at resourceVersion %s, %d models, loaded [%s], job %s %s",
 		mcName, after.modelConfigVersion, after.models, after.loaded, jobID, after.jobState)
 
-	for _, tool := range []string{"pull_model", deleteModel, "load_model"} {
+	for _, tool := range []string{"pull_model", deleteModel, loadModel} {
 		_, err := api.call(tool, map[string]any{modelField: model, backendField: backendName, modeArg: modeCommit, dryRunArg: true})
 		if refusalCode(err) != "unsupported" {
 			return fmt.Errorf("%s mode commit on %s answered %v, wanted unsupported", tool, backendName, err)

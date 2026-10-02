@@ -219,7 +219,7 @@ func ServingTest(cfg *config.Config, email string, opts ServingTestOptions) erro
 
 	step("Loading %s on %s (model-manager composes the LLMInferenceService as %s)", preset, kserveBackend, user.Email)
 	started := time.Now()
-	if _, err := api.call("load_model", map[string]any{"preset": preset, backendField: kserveBackend}); err != nil {
+	if _, err := api.call(loadModel, map[string]any{"preset": preset, backendField: kserveBackend}); err != nil {
 		return err
 	}
 	obj, err := getObject(ctx, gvrLLMInferenceServices, servingNamespace, preset)
@@ -540,7 +540,7 @@ func waitLLMInferenceServiceReady(ctx context.Context, k *kubeClients, name stri
 // unloadServed unloads the preset through model-manager and waits until its
 // LLMInferenceService is gone.
 func unloadServed(ctx context.Context, api *modelManagerTools, preset string) error {
-	if _, err := api.call("unload_model", map[string]any{modelField: preset, backendField: kserveBackend}); err != nil && refusalCode(err) != "not_found" {
+	if _, err := api.call(unloadModel, map[string]any{modelField: preset, backendField: kserveBackend}); err != nil && refusalCode(err) != "not_found" {
 		return err
 	}
 	gone := waitFor(60, 2*time.Second, func() bool {

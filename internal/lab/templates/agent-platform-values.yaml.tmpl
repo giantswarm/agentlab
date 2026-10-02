@@ -126,10 +126,9 @@ kyvernoPolicies:
   enabled: false
 
 gateway:
-  # The JWT policies on the kagent controller route and the model-manager
-  # route make the data plane fetch Dex's JWKS on 5556; the chart guards that
-  # this egress is declared (it only renders a network-policy rule, and the
-  # lab runs no policies).
+  # The JWT policy on the kagent controller route makes the data plane fetch
+  # Dex's JWKS on 5556; the chart guards that this egress is declared (it
+  # only renders a network-policy rule, and the lab runs no policies).
   jwksEgress:
     enabled: true
     namespace: dex
@@ -220,7 +219,9 @@ components:
 {{- end }}
   # Managed models (platform.modelManager): model-manager in front of every
   # host model server of the list (its own values are in the `model-manager:`
-  # block below, its edge route in `modelManager:`). The flag is always
+  # block below). It has no edge route: the Dev Portal, the proofs and agents
+  # call its x_model-manager_* tools through muster as the signed-in person,
+  # and the portal carries no model-manager configuration. The flag is always
   # stated: the chart runs the component by default since agent-platform
   # 4.24.0 (with no backend), and in the lab that pod would only do OIDC
   # discovery against the lab Dex's localhost address without a backend to
