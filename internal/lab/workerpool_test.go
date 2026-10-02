@@ -77,7 +77,7 @@ func TestProveWorkerPoolsRunning(t *testing.T) {
 	notReady.Status.Conditions[1].Status = corev1.ConditionFalse
 	waiting := workerPod("w-b", testWorkerNode)
 	waiting.Status.Phase = corev1.PodPending
-	waiting.Status.ContainerStatuses = []corev1.ContainerStatus{{State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ImagePullBackOff", Message: "pull refused"}}}}
+	waiting.Status.ContainerStatuses = []corev1.ContainerStatus{{State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ErrImagePull", Message: "pull refused"}}}}
 	for _, tc := range []struct {
 		name string
 		pool *unstructured.Unstructured
@@ -86,7 +86,7 @@ func TestProveWorkerPoolsRunning(t *testing.T) {
 	}{
 		{
 			name: "a worker the scheduler cannot place",
-			pool: pinnedPool(2, map[string]string{"agentlab.giantswarm.io/impossible": "true"}),
+			pool: pinnedPool(2, map[string]string{"agentlab.giantswarm.io/impossible": testPoolArch}),
 			pods: []*corev1.Pod{workerPod("w-a", testWorkerNode), unschedulable("w-b")},
 			want: []string{"WorkerPool " + kagentNamespace + "/" + testWorkerPool, "worker w-b is Pending (Unschedulable: 0/1 nodes are available", "kubectl -n " + kagentNamespace + " describe pod"},
 		},
@@ -106,7 +106,7 @@ func TestProveWorkerPoolsRunning(t *testing.T) {
 			name: "a worker whose container waits",
 			pool: pinnedPool(2, pin),
 			pods: []*corev1.Pod{workerPod("w-a", testWorkerNode), waiting},
-			want: []string{"worker w-b is Pending: ImagePullBackOff: pull refused"},
+			want: []string{"worker w-b is Pending: ErrImagePull: pull refused"},
 		},
 		{
 			name: "fewer workers than replicas",
