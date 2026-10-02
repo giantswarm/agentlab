@@ -30,12 +30,15 @@
 # muster and Backstage, per the chart's global.identity convention.
 #
 # Differences from a real management cluster:
-#   * the issuer stays https://localhost:{{ .DexPort }}/dex — the apiserver's
-#     OIDC flags need an issuer reachable at boot from the node, which only the
-#     Dex NodePort trick provides. muster and Backstage reach it the same way:
-#     both run hostNetwork, exactly like the kube-apiserver static pod — a
+#   * the issuer is {{ .Issuer }} — the apiserver's OIDC flags need an
+#     issuer reachable at boot from the node, which only the Dex NodePort
+#     trick provides. muster and Backstage reach it the same way: both run
+#     hostNetwork, exactly like the kube-apiserver static pod — a
 #     per-component `postRenderers` patch below (not a chart value in either
 #     chart); the MCP servers get a `dex-localhost` sidecar the same way.
+#     With an externally provisioned pair (platform.tls) the issuer lives
+#     under the domain instead, and inside pods its name is Dex's own
+#     Service (the CoreDNS rewrite): no sidecar.
 #   * no Cilium, and Kyverno only for the fleet's flux-multi-tenancy policy
 #     (admission.go): the chart's own Kyverno objects are pinned off below —
 #     the `auto` knob would render them once kyverno.io/v1 is served — and
@@ -519,8 +522,8 @@ kagent:
       enabled: true
       mode: Strict
       jwks:
-        host: dex.dex.svc.cluster.local
-        port: 5556
+        host: {{ .DexJWKSHost }}
+        port: {{ .DexJWKSPort }}
         path: /dex/keys
         tls:
           enabled: true
@@ -854,8 +857,8 @@ modelServing:
         - {{ .AgentPlatformClientID }}
         - {{ .KubernetesClientID }}
       jwks:
-        host: dex.dex.svc.cluster.local
-        port: 5556
+        host: {{ .DexJWKSHost }}
+        port: {{ .DexJWKSPort }}
         path: /dex/keys
         tls:
           enabled: true

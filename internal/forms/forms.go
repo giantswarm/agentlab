@@ -103,7 +103,7 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 				Validate(config.ValidateClusterName),
 			huh.NewInput().
 				Title("Dex port").
-				Description("The issuer becomes https://localhost:<port>/dex on BOTH sides of the\nkind boundary — one URL for the browser and the apiserver. NodePort range (30000-32767).").
+				Description("The issuer becomes https://localhost:<port>/dex (dex.<domain> with platform.tls) on BOTH\nsides of the kind boundary — one URL for the browser and the apiserver. NodePort range (30000-32767).").
 				Value(&dexPort).
 				Validate(config.ValidateNodePort),
 			huh.NewInput().

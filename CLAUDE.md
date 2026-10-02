@@ -315,6 +315,11 @@ Load-bearing invariants (details in docs/):
   works from the Mac, inside the node, and inside hostNetwork pods because the
   Dex NodePort equals the kind host port. The issuer must be spelled
   `localhost`, not `127.0.0.1` — muster rejects IP-literal loopback issuers.
+  With an externally provisioned pair (`platform.tls`) it is
+  `https://dex.<domain>:<dexPort>/dex` instead, served with that pair: the
+  apiserver resolves it through its own hosts file, pods through a CoreDNS
+  rewrite to the `dex-issuer` Service (no sidecar) — docs/tls.md "Bring your
+  own certificate".
 - **The lab shape of the agent-platform chart**: the bundled Flux engine ON
   (`components.flux.enabled: true` — the lab has no Flux of its own, and the
   chart refuses a second one) and self-management OFF (`gitops.self.enabled:

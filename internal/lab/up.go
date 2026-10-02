@@ -40,15 +40,19 @@ func Up(cfg *config.Config, offers Offers) error {
 			return err
 		}
 	}
+	// The certificates first: the pre-boot render reads the CA bundle
+	// (trustBundleFile) the platform values carry.
+	if err := GenCerts(cfg.Platform.Domain, false); err != nil {
+		return err
+	}
+	if err := writeIssuerFiles(cfg); err != nil {
+		return err
+	}
 	topology, err := platformTopologyFor(cfg)
 	if err != nil {
 		return err
 	}
 	if err := preflightRuntimeResources(cfg, topology); err != nil {
-		return err
-	}
-
-	if err := GenCerts(cfg.Platform.Domain, false); err != nil {
 		return err
 	}
 
@@ -76,6 +80,9 @@ func Up(cfg *config.Config, offers Offers) error {
 			return err
 		}
 		warnUnguardedNode(cfg.ControlPlaneNode())
+		if err := checkClusterIssuer(cfg); err != nil {
+			return err
+		}
 	} else {
 		if err := writeNodeFiles(); err != nil {
 			return err
@@ -103,9 +110,10 @@ func Up(cfg *config.Config, offers Offers) error {
 	if err := ensureNamespace(componentDex); err != nil {
 		return err
 	}
+	dexCert, dexKey := dexServingPair(cfg)
 	if err := ensureSecretFromFiles(componentDex, "dex-tls", map[string]string{
-		"tls.crt": tlsCertPath,
-		"tls.key": "certs/tls.key",
+		"tls.crt": dexCert,
+		"tls.key": dexKey,
 	}); err != nil {
 		return err
 	}
@@ -281,4 +289,37 @@ func ApplyDex(cfg *config.Config) error {
 func kindClusterExists(name string) bool {
 	clusters, err := kindClusters()
 	return err == nil && slices.Contains(clusters, name)
+}
+
+// checkClusterIssuer refuses an existing cluster whose apiserver pins
+// another issuer than the configuration's: the OIDC flags are fixed at
+// `kind create`, so a platform.tls or dexPort change on a running lab would
+// leave every token rejected behind a Dex that answers fine.
+func checkClusterIssuer(cfg *config.Config) error {
+	node := cfg.ControlPlaneNode()
+	manifest, err := outputQuiet(dockerBin, "exec", node, "cat", "/etc/kubernetes/manifests/kube-apiserver.yaml")
+	if err != nil {
+		return fmt.Errorf("reading the apiserver's OIDC flags off node %s: %w", node, err)
+	}
+	issuer, ok := apiserverIssuer(manifest)
+	if !ok {
+		return fmt.Errorf("node %s's apiserver manifest carries no %s flag", node, oidcIssuerFlag)
+	}
+	if issuer != cfg.Issuer() {
+		return fmt.Errorf("cluster %q was created for the issuer %s, the configuration's is %s (platform.tls moves it under platform.domain): the apiserver reads it only at creation, so recreate the lab (`agentlab down`, then `agentlab up`)", cfg.ClusterName, issuer, cfg.Issuer())
+	}
+	return nil
+}
+
+const oidcIssuerFlag = "--oidc-issuer-url="
+
+// apiserverIssuer is the --oidc-issuer-url value of a kube-apiserver
+// static pod manifest.
+func apiserverIssuer(manifest string) (string, bool) {
+	for line := range strings.Lines(manifest) {
+		if _, issuer, ok := strings.Cut(strings.TrimSpace(line), oidcIssuerFlag); ok {
+			return issuer, true
+		}
+	}
+	return "", false
 }

@@ -90,8 +90,30 @@ platform:
     keyFile: /path/to/privkey.pem
 ```
 
-The edge then serves your certificate instead of a minted wildcard (renewals:
-re-run `agentlab platform` after the files change). Caveat: the Dex login
-page still serves the lab-CA cert — the issuer cannot move under your domain
-yet ([#20](https://github.com/giantswarm/agentlab/issues/20)) — so
-the login hop keeps warning until you `agentlab trust`.
+The edge then serves your certificate instead of a minted wildcard, and the
+Dex issuer moves under your domain: `https://dex.lab.example.com:32000/dex`
+(the `dexPort`), served with the same pair — so the pair must cover
+`dex.<domain>` (a `*.<domain>` wildcard does; `configure` and `up` refuse a
+pair that does not). The login hop then shows your certificate too: no lab-CA
+trust anywhere in the browser flow. Renewals: re-run `agentlab platform`
+after the files change (Dex rolls on the new certificate).
+
+The one issuer URL holds from every vantage point, as with `localhost`:
+
+- **the host** resolves `dex.<domain>` through your wildcard record, to
+  loopback, where the Dex port is mapped;
+- **the apiserver** in the kind node reads its own hosts file
+  (`certs/apiserver-hosts`, mounted over its `/etc/hosts`): `dex.<domain>` on
+  loopback, the Dex NodePort — there from its first start, since it reads the
+  issuer at boot;
+- **every pod**, hostNetwork muster and Backstage included, gets
+  `dex.<domain>` from cluster DNS as the `dex-issuer` Service on the same
+  port, ahead of the rewrite that sends the rest of the domain to the edge —
+  so no `dex-localhost` sidecar is patched.
+
+Every consumer that trusted the lab CA trusts `certs/trust-bundle.crt`
+instead: the lab CA plus the certificates of your `certFile`, so a private
+or self-signed pair verifies too, and a public one where the system roots are
+not consulted (the apiserver's `oidc-ca-file`). The issuer is fixed when the
+cluster is created: switching `platform.tls` on or off on an existing lab is
+refused by `up` until you recreate it (`agentlab down`, then `agentlab up`).

@@ -213,3 +213,23 @@ spec:
       port: 5556
       targetPort: 5556
       nodePort: {{ .DexPort }}
+{{- if .Platform.TLS.Set }}
+---
+# The issuer under platform.domain (platform.tls): inside pods
+# {{ .DexHost }} is this Service (the CoreDNS rewrite, coredns.yaml.tmpl), on
+# the issuer URL's port, so every pod dials the one issuer URL straight to
+# Dex — the host reaches the same port through the NodePort above. A
+# ClusterIP of its own: a second NodePort port would take a random node port
+# the lab may pin later.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .DexIssuerService }}
+  namespace: dex
+spec:
+  selector: { app: dex }
+  ports:
+    - name: https
+      port: {{ .DexPort }}
+      targetPort: 5556
+{{- end }}
