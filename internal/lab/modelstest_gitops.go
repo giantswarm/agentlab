@@ -394,7 +394,7 @@ func proveStaleProvenance(api *modelManagerTools, backendName, model string) err
 	}
 	own := ns.GetLabels()
 	label := func(values map[string]any) error {
-		body, err := json.Marshal(map[string]any{"metadata": map[string]any{"labels": values}})
+		body, err := json.Marshal(map[string]any{crMetadata: map[string]any{"labels": values}})
 		if err != nil {
 			return err
 		}
