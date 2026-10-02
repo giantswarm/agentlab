@@ -148,59 +148,13 @@ func proveEditPath(primary, viewer *portalSession, spec agentSpec, other string)
 	note("changed %v, requestedBy=%s; HelmRelease agent.description updated, skill still @ %.12s", updated.Changed, updated.RequestedBy, skill.Git.Commit)
 	verdicts = append(verdicts, fmt.Sprintf("PASS: E2/E3 validate_agent{update} and update_agent{description} through the portal change exactly %s (requestedBy=%s), the skill pin untouched", agentDescriptionPath, email))
 
-	step("E4/E5 Update skills: the dry run and the write with refreshSkills re-pin to %s's head", skillsTestRepo)
-	head, err := portalSkillHead(primary, skill.Git.URL)
+	refreshed, err := proveRefreshSkills(primary, spec)
 	if err != nil {
 		return nil, err
 	}
-	var refreshDry validateReport
-	if err := portalToolCall(primary, "validate_agent", map[string]any{nameKey: spec.Name, namespaceKey: kagentNamespace, "update": true, refreshSkillsKey: true}, &refreshDry); err != nil {
-		return nil, err
-	}
-	if !refreshDry.Valid || refreshDry.Mode != validateModeUpdate || skillCommits(refreshDry.Manifests.Values)[skill.Name] != head {
-		return nil, fmt.Errorf("validate_agent{update, refreshSkills}: valid=%v mode=%q pins %s at %q, wanted the head %s", refreshDry.Valid, refreshDry.Mode, skill.Name, skillCommits(refreshDry.Manifests.Values)[skill.Name], head)
-	}
-	if got := agentValue(refreshDry.Manifests.Values, descriptionKey); got != editedDescription {
-		return nil, fmt.Errorf("the refreshSkills dry run changes agent.description to %q — it must change nothing but the pins", got)
-	}
-	refreshed, err := portalUpdateAgent(primary, map[string]any{nameKey: spec.Name, refreshSkillsKey: true})
-	if err != nil {
-		return nil, err
-	}
-	for _, path := range refreshed.Changed {
-		if !strings.HasPrefix(path, skillsKey) {
-			return nil, fmt.Errorf("update_agent{refreshSkills} changed %v — every changed path must be under %s", refreshed.Changed, skillsKey)
-		}
-	}
-	moved := head != skill.Git.Commit
-	if skillsChanged := len(refreshed.Changed) > 0; moved != skillsChanged {
-		return nil, fmt.Errorf("update_agent{refreshSkills} reported changed=%v although the head %.12s %s the pin %.12s", refreshed.Changed, head, map[bool]string{true: "differs from", false: "equals"}[moved], skill.Git.Commit)
-	}
-	if release, err = readAgentRelease(spec.Name); err != nil {
-		return nil, err
-	}
-	if got := release.skillCommits()[skill.Name]; got != head {
-		return nil, fmt.Errorf("HelmRelease %s pins skill %s at %q after refreshSkills, wanted the head %s", spec.Name, skill.Name, got, head)
-	}
-	repinned := waitFor(int(time.Minute/pollInterval), pollInterval, func() bool {
-		t, err := readAgentTemplate(spec.Name)
-		if err != nil {
-			return false
-		}
-		s := t.skill(skill.Name)
-		return s != nil && s.Source.Git != nil && s.Source.Git.Commit == head
-	})
-	if !repinned {
-		return nil, fmt.Errorf("AgentTemplate %s does not carry the re-pinned commit %.12s a minute after refreshSkills", spec.Name, head)
-	}
-	if moved {
-		note("re-pinned %.12s -> %.12s (changed %v)", skill.Git.Commit, head, refreshed.Changed)
-	} else {
-		note("the head %.12s is the pin discovery showed: nothing changed (changed %v), the pin stays", head, refreshed.Changed)
-	}
-	verdicts = append(verdicts, fmt.Sprintf("PASS: E4/E5 validate_agent{update, refreshSkills} and update_agent{refreshSkills} through the portal pin %s at %s's head %.12s (list_skills) and change nothing else (changed %v)", skill.Name, skill.Git.URL, head, refreshed.Changed))
+	verdicts = append(verdicts, refreshed)
 
-	step("E6 readiness after the skills update")
+	step("E6 readiness after the edits")
 	readiness, err := waitAgentReady(spec.Name, backstageTestReadyTimeout)
 	if err != nil {
 		return nil, err
@@ -212,7 +166,7 @@ func proveEditPath(primary, viewer *portalSession, spec agentSpec, other string)
 		return nil, err
 	}
 	note("Ready on Harness %s at revision %.12s; get_agent_status ready", kagentHarness, readiness.template.harness(kagentHarness).LatestSuccessfulRevision)
-	verdicts = append(verdicts, "PASS: E6 the agent is Ready after the skills update and get_agent_status agrees")
+	verdicts = append(verdicts, "PASS: E6 the agent is Ready after the edits and get_agent_status agrees")
 
 	if viewer != nil {
 		step("E8 %s's update_agent and delete_agent through the portal are forbidden", viewer.user.Email)
@@ -290,4 +244,76 @@ func agentValue(values map[string]any, key string) string {
 	agent, _ := values["agent"].(map[string]any)
 	s, _ := agent[key].(string)
 	return s
+}
+
+// proveRefreshSkills is E4/E5, the Update skills action: the dry run and the
+// write with refreshSkills re-pin every git skill to its repository's head
+// (list_skills) and change nothing else. agent-manager resolves that head
+// through GitHub, so without a credential in its Deployment the steps would
+// prove GitHub's anonymous rate limit rather than the product: they are
+// skipped with a verdict that says so.
+func proveRefreshSkills(primary *portalSession, spec agentSpec) (string, error) {
+	authenticated, err := agentManagerGitHubAuthenticated()
+	if err != nil {
+		return "", err
+	}
+	if !authenticated {
+		step("E4/E5 Update skills: skipped, agent-manager calls GitHub without a token")
+		note("deployment %s/%s carries no GitHub credential (%s): refreshSkills would resolve %s's head on the anonymous window this machine shares", platformNamespace, agentManagerMCPServer, strings.Join(agentManagerGitHubEnv, ", "), skillsTestRepo)
+		return fmt.Sprintf("SKIP: E4/E5 validate_agent{update, refreshSkills} and update_agent{refreshSkills} — agent-manager calls GitHub unauthenticated, on GitHub's anonymous rate limit (60 requests an hour, shared by this machine); export $%s before `agentlab platform` to prove them", GitHubTokenEnv), nil
+	}
+	skill := spec.Skills[0]
+
+	step("E4/E5 Update skills: the dry run and the write with refreshSkills re-pin to %s's head", skillsTestRepo)
+	head, err := portalSkillHead(primary, skill.Git.URL)
+	if err != nil {
+		return "", err
+	}
+	var refreshDry validateReport
+	if err := portalToolCall(primary, "validate_agent", map[string]any{nameKey: spec.Name, namespaceKey: kagentNamespace, "update": true, refreshSkillsKey: true}, &refreshDry); err != nil {
+		return "", err
+	}
+	if !refreshDry.Valid || refreshDry.Mode != validateModeUpdate || skillCommits(refreshDry.Manifests.Values)[skill.Name] != head {
+		return "", fmt.Errorf("validate_agent{update, refreshSkills}: valid=%v mode=%q pins %s at %q, wanted the head %s", refreshDry.Valid, refreshDry.Mode, skill.Name, skillCommits(refreshDry.Manifests.Values)[skill.Name], head)
+	}
+	if got := agentValue(refreshDry.Manifests.Values, descriptionKey); got != editedDescription {
+		return "", fmt.Errorf("the refreshSkills dry run changes agent.description to %q — it must change nothing but the pins", got)
+	}
+	refreshed, err := portalUpdateAgent(primary, map[string]any{nameKey: spec.Name, refreshSkillsKey: true})
+	if err != nil {
+		return "", err
+	}
+	for _, path := range refreshed.Changed {
+		if !strings.HasPrefix(path, skillsKey) {
+			return "", fmt.Errorf("update_agent{refreshSkills} changed %v — every changed path must be under %s", refreshed.Changed, skillsKey)
+		}
+	}
+	moved := head != skill.Git.Commit
+	if skillsChanged := len(refreshed.Changed) > 0; moved != skillsChanged {
+		return "", fmt.Errorf("update_agent{refreshSkills} reported changed=%v although the head %.12s %s the pin %.12s", refreshed.Changed, head, map[bool]string{true: "differs from", false: "equals"}[moved], skill.Git.Commit)
+	}
+	release, err := readAgentRelease(spec.Name)
+	if err != nil {
+		return "", err
+	}
+	if got := release.skillCommits()[skill.Name]; got != head {
+		return "", fmt.Errorf("HelmRelease %s pins skill %s at %q after refreshSkills, wanted the head %s", spec.Name, skill.Name, got, head)
+	}
+	repinned := waitFor(int(time.Minute/pollInterval), pollInterval, func() bool {
+		t, err := readAgentTemplate(spec.Name)
+		if err != nil {
+			return false
+		}
+		s := t.skill(skill.Name)
+		return s != nil && s.Source.Git != nil && s.Source.Git.Commit == head
+	})
+	if !repinned {
+		return "", fmt.Errorf("AgentTemplate %s does not carry the re-pinned commit %.12s a minute after refreshSkills", spec.Name, head)
+	}
+	if moved {
+		note("re-pinned %.12s -> %.12s (changed %v)", skill.Git.Commit, head, refreshed.Changed)
+	} else {
+		note("the head %.12s is the pin discovery showed: nothing changed (changed %v), the pin stays", head, refreshed.Changed)
+	}
+	return fmt.Sprintf("PASS: E4/E5 validate_agent{update, refreshSkills} and update_agent{refreshSkills} through the portal pin %s at %s's head %.12s (list_skills) and change nothing else (changed %v)", skill.Name, skill.Git.URL, head, refreshed.Changed), nil
 }

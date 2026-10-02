@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -221,6 +222,39 @@ func TestEnsureGitHubTokenSecrets(t *testing.T) {
 	for _, ns := range []string{platformNamespace, kagentNamespace} {
 		if !exists(ns) {
 			t.Errorf("a run without $%s removed %s/%s", GitHubTokenEnv, ns, gitHubTokenSecret)
+		}
+	}
+}
+
+// TestDeploymentSetsEnv: E4/E5 run only when agent-manager's Deployment
+// carries a GitHub credential, the lab's token or the skills App, in any
+// container; anything else is the anonymous window and skips them.
+func TestDeploymentSetsEnv(t *testing.T) {
+	deployment := func(containers ...[]string) *unstructured.Unstructured {
+		var cs []any
+		for _, names := range containers {
+			var env []any
+			for _, n := range names {
+				env = append(env, map[string]any{"name": n, "valueFrom": map[string]any{"secretKeyRef": map[string]any{"name": gitHubTokenSecret, "key": gitHubTokenSecretKey}}})
+			}
+			cs = append(cs, map[string]any{"name": "c", "env": env})
+		}
+		return &unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{"template": map[string]any{"spec": map[string]any{"containers": cs}}}}}
+	}
+	for _, tc := range []struct {
+		name string
+		d    *unstructured.Unstructured
+		want bool
+	}{
+		{"the lab's token", deployment([]string{"K8S_POD_NAME", GitHubTokenEnv}), true},
+		{"the skills App", deployment([]string{"AGENT_MANAGER_SKILLS_GITHUB_APP_ID", "AGENT_MANAGER_SKILLS_GITHUB_APP_INSTALLATION_ID"}), true},
+		{"in a second container", deployment([]string{"K8S_POD_NAME"}, []string{GitHubTokenEnv}), true},
+		{"no credential", deployment([]string{"K8S_POD_NAME"}), false},
+		{"no env at all", deployment(nil), false},
+		{"no containers", &unstructured.Unstructured{Object: map[string]any{}}, false},
+	} {
+		if got := deploymentSetsEnv(tc.d, agentManagerGitHubEnv); got != tc.want {
+			t.Errorf("%s: deploymentSetsEnv = %v, want %v", tc.name, got, tc.want)
 		}
 	}
 }

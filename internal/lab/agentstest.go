@@ -162,7 +162,7 @@ func AgentsTest(cfg *config.Config, email string) error {
 	// agent-manager reads GitHub for this and for the create_agent pin
 	// below; its window is this machine's (githubwindow.go) — printed, and
 	// waited for once when exhausted.
-	if err := awaitGitHubWindow("agent-manager's skill resolution"); err != nil {
+	if err := awaitGitHubWindow("agent-manager's skill resolution", 1); err != nil {
 		return err
 	}
 	head, err := agentManagerSkillHead(session, fixture)
