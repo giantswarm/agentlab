@@ -464,8 +464,10 @@ auto-wire off and two pins of its own:
 `wire_model mode: commit` against that repository, first as a dry run (the
 files, the author, no pull request, nothing reaching the fake), then for real,
 must open exactly one pull request authored by the person whose files are the
-dry run's byte for byte (a Secret file SOPS-encrypted), while the live
-ModelConfig stays untouched. Then the `kagent` namespace gets the Flux labels
+dry run's byte for byte (a Secret file SOPS-encrypted), with nothing written
+live. The pinned release is a model-manager instance of its own, and only the
+instance that created a ModelConfig writes it, so the platform's model-manager
+unwires the model before the commit proof and wires it again after. Then the `kagent` namespace gets the Flux labels
 of a HelmRelease that does not exist, what a namespace left behind by a removed
 release carries, for the length of one step: `wire_model mode: commit` without
 an explicit target must answer `invalid_request` naming the gone release and
