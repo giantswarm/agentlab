@@ -63,6 +63,11 @@ const (
 	gitopsFluxName      = "kustomize.toolkit.fluxcd.io/name"
 	gitopsFluxNamespace = "kustomize.toolkit.fluxcd.io/namespace"
 	gitopsFluxFixture   = "agentlab-gitops-fixture"
+	// gitopsHelmName/Namespace are the labels a HelmRelease stamps on what it
+	// renders; gitopsStaleRelease is a release that never exists.
+	gitopsHelmName      = "helm.toolkit.fluxcd.io/name"
+	gitopsHelmNamespace = "helm.toolkit.fluxcd.io/namespace"
+	gitopsStaleRelease  = "agentlab-gone-release"
 	gitopsReleaseWait   = 5 * time.Minute
 )
 
@@ -368,8 +373,59 @@ func proveCommit(cfg *config.Config, user *config.User, token, binary, backendNa
 		return "", fmt.Errorf("the commit changed the live ModelConfig %s (resourceVersion %s -> %s): commit mode writes git only", mcName, live.GetResourceVersion(), after.GetResourceVersion())
 	}
 	note("the live ModelConfig %s is untouched: commit mode writes git only", mcName)
-	return fmt.Sprintf("wire_model mode commit as %s -> pull request #%d on the fake GitHub (%s -> %s, %d files, equal to the dry run), the live ModelConfig untouched",
+	if err := proveStaleProvenance(api, backendName, model); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("wire_model mode commit as %s -> pull request #%d on the fake GitHub (%s -> %s, %d files, equal to the dry run), the live ModelConfig untouched; a stale namespace provenance answers invalid_request",
 		login, pr.Number, pr.Head, pr.Base, len(pr.Files)), nil
+}
+
+// proveStaleProvenance gives the kagent namespace the Flux labels of a
+// HelmRelease that does not exist — what a namespace left behind by a removed
+// release carries — and asserts a commit following the namespace's provenance
+// (no explicit target) answers invalid_request naming the gone release, before
+// anything is written. The namespace's own labels come back on every exit path.
+func proveStaleProvenance(api *modelManagerTools, backendName, model string) error {
+	step("A namespace whose Flux owner is gone: %s labelled %s=%s/%s, then %s mode commit without a target", kagentNamespace, gitopsHelmName, gitopsFluxFixture, gitopsStaleRelease, api.toolName("wire_model"))
+	gvr := corev1.SchemeGroupVersion.WithResource("namespaces")
+	ns, err := getObject(context.Background(), gvr, "", kagentNamespace)
+	if err != nil {
+		return err
+	}
+	own := ns.GetLabels()
+	label := func(values map[string]any) error {
+		body, err := json.Marshal(map[string]any{"metadata": map[string]any{"labels": values}})
+		if err != nil {
+			return err
+		}
+		return patchObject(context.Background(), gvr, "", kagentNamespace, types.MergePatchType, body)
+	}
+	restore := map[string]any{}
+	for _, key := range []string{gitopsFluxName, gitopsFluxNamespace, gitopsHelmName, gitopsHelmNamespace} {
+		restore[key] = nil
+		if v, ok := own[key]; ok {
+			restore[key] = v
+		}
+	}
+	if err := label(map[string]any{gitopsFluxName: nil, gitopsFluxNamespace: nil, gitopsHelmName: gitopsStaleRelease, gitopsHelmNamespace: gitopsFluxFixture}); err != nil {
+		return err
+	}
+	defer func() {
+		if err := label(restore); err != nil {
+			note("cleanup: restoring the Flux labels of namespace %s: %v", kagentNamespace, err)
+		}
+	}()
+	_, err = api.call("wire_model", map[string]any{modelField: model, backendField: backendName, modeArg: modeCommit, dryRunArg: true})
+	if refusalCode(err) != "invalid_request" {
+		return fmt.Errorf("wire_model mode commit on namespace %s labelled by the gone HelmRelease %s/%s answered %v, wanted invalid_request", kagentNamespace, gitopsFluxFixture, gitopsStaleRelease, err)
+	}
+	for _, want := range []string{"HelmRelease " + gitopsFluxFixture + "/" + gitopsStaleRelease, "does not exist", "pass repository, branch and path"} {
+		if !strings.Contains(err.Error(), want) {
+			return fmt.Errorf("the stale-provenance refusal does not say %q: %v", want, err)
+		}
+	}
+	note("wire_model: %s", excerpt(err.Error(), 200))
+	return nil
 }
 
 // commitAnswer is the commit part of a wire in mode commit.
