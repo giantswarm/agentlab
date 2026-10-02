@@ -1,14 +1,15 @@
 package lab
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -42,7 +43,16 @@ const (
 	beekeeperNamespace     = "beekeeper-" + beekeeperTeam
 	beekeeperPostgresImage = "gsoci.azurecr.io/giantswarm/postgres:18.6-alpine"
 	beekeeperTokenFile     = "klaus-gateway-token"
-	beekeeperDefaultDue    = "1m"
+	beekeeperImage         = "gsoci.azurecr.io/giantswarm/beekeeper"
+	// beekeeperMount is where the run directory is mounted into serve's
+	// container, beside its configuration, kubeconfig and the lab CA.
+	beekeeperMount      = "/run/agentlab"
+	beekeeperConfigFile = "beekeeper.yaml"
+	beekeeperKubeconfig = "kubeconfig"
+	beekeeperCAFile     = "ca.crt"
+	// musterNodePort is muster's plain listener in the node's network.
+	musterNodePort      = 8090
+	beekeeperDefaultDue = "1m"
 	// beekeeperDefaultWait covers the due time and serve's default loop,
 	// which looks every 30 seconds.
 	beekeeperDefaultWait = 3 * time.Minute
@@ -59,14 +69,15 @@ var beekeeperCRDs = []string{"environments", "holds", "mergelanes", "notes", "ro
 
 // BeekeeperDecisionsTestOptions tunes the beekeeper decisions proof.
 type BeekeeperDecisionsTestOptions struct {
-	// Version is the beekeeper release whose binary and CRDs run (default
-	// BeekeeperDecisionsVersionDefault); Binary, a local linux build, takes
-	// precedence for the binary — the proof of a branch.
+	// Version is the beekeeper release whose image and CRDs run (default
+	// BeekeeperDecisionsVersionDefault); Binary, a local linux build mounted
+	// into that image, takes precedence — the proof of a branch.
 	Version string
 	Binary  string
-	// The gateway and the fake Slack as decisions-test runs them: Port is
-	// the gateway's, Port+1 its admin endpoints, Port+2 the fake Slack Web
-	// API, Port+3 beekeeper serve, Port+4 its Postgres. Default 18090.
+	// The gateway: Port is its endpoints' in the node's network, Port+1
+	// its admin endpoints, Port+3 beekeeper serve's, Port+4 its Postgres'.
+	// Default 18090. GatewayBinary is not used: the gateway runs in the
+	// node's network, as a container.
 	DecisionsTestOptions
 }
 
@@ -116,10 +127,26 @@ func BeekeeperDecisionsTest(cfg *config.Config, opts BeekeeperDecisionsTestOptio
 		tokens[u.Email], ids[u.Email] = tok, id
 	}
 
+	node := cfg.ControlPlaneNode()
+	nodeIP, err := outputQuiet(dockerBin, "inspect", "-f", `{{with index .NetworkSettings.Networks "`+kindDockerNetwork+`"}}{{.IPAddress}}{{end}}`, node)
+	if err != nil || strings.TrimSpace(nodeIP) == "" {
+		return fmt.Errorf("the address of node %s on network %s: %v", node, kindDockerNetwork, err)
+	}
+	nodeIP = strings.TrimSpace(nodeIP)
+	// Everything beekeeper talks to and everything that talks to it runs in
+	// the node's network namespace, where muster listens (hostNetwork):
+	// the host's firewall may drop what pods send to the host.
+	inNode := "container:" + node
+
 	run := strings.ToUpper(randomSuffix())
 	askerSlack, otherSlack := slackUserPrefix+run+"A", slackUserPrefix+run+"B"
 	channel := "CAGENTLAB" + run
-	fake, err := startFakeSlack(net.JoinHostPort("127.0.0.1", strconv.Itoa(opts.Port+2)), map[string]string{askerSlack: asker.Email, otherSlack: other.Email})
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	step("Starting the fake Slack Web API in a container on the kind network")
+	fake, err := startSlackFakeContainer(cfg, self, map[string]string{askerSlack: asker.Email, otherSlack: other.Email})
 	if err != nil {
 		return err
 	}
@@ -142,12 +169,10 @@ func BeekeeperDecisionsTest(cfg *config.Config, opts BeekeeperDecisionsTestOptio
 		return err
 	}
 	defer removeSA()
-	tokenPath := filepath.Join(runDir, beekeeperTokenFile)
-	if err := os.WriteFile(tokenPath, []byte(saToken), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(runDir, beekeeperTokenFile), []byte(saToken), 0o600); err != nil {
 		return err
 	}
-
-	kubeconfig, err := filepath.Abs(labKubeconfigPath)
+	kubeconfig, err := nodeKubeconfig(runDir)
 	if err != nil {
 		return err
 	}
@@ -155,65 +180,55 @@ func BeekeeperDecisionsTest(cfg *config.Config, opts BeekeeperDecisionsTestOptio
 	if err != nil {
 		return err
 	}
-	edge, err := edgeHostPort(cfg.AgentgatewayBaseURL())
-	if err != nil {
+	if err := copyFile(caFile, filepath.Join(runDir, beekeeperCAFile)); err != nil {
 		return err
 	}
-	gw := newGatewayProcess(KlausGatewayTestOptions{GatewayImage: opts.GatewayImage, GatewayBinary: opts.GatewayBinary, Port: opts.Port},
-		runDir, caFile, "grpcs://"+edge, fake.baseURL(), cfg.MusterBaseURL())
-	gw.extraArgs = []string{"--reviews-enabled=true", "--reviews-allowed-callers=" + caller}
+
+	musterURL := "http://127.0.0.1:" + strconv.Itoa(musterNodePort)
+	slackAPI := "http://" + net.JoinHostPort(fake.podIP, strconv.Itoa(fakeContainerPort)) + slackAPIPath
+	gw := newGatewayProcess(KlausGatewayTestOptions{GatewayImage: opts.GatewayImage, Port: opts.Port}, runDir, caFile, "grpcs://127.0.0.1:1", slackAPI, musterURL)
+	gw.extraArgs = []string{"--reviews-enabled=true", "--reviews-allowed-callers=" + caller,
+		"--listen-address=" + net.JoinHostPort("0.0.0.0", strconv.Itoa(opts.Port)),
+		"--admin-address=" + net.JoinHostPort("0.0.0.0", strconv.Itoa(opts.Port+1))}
 	gw.kubeconfig = kubeconfig
-	gw.trustLabCA = true
+	gw.network, gw.host = inNode, nodeIP
 	defer func() { _ = gw.stop() }()
-	step("Starting klaus-gateway %s on the host, Slack on the fake at %s", gw.describe(), fake.baseURL())
+	step("Starting klaus-gateway %s in node %s's network, Slack on the fake at %s, muster at %s", gw.describe(), node, slackAPI, musterURL)
 	if err := gw.start(); err != nil {
 		return err
 	}
 	note("ready: %s", gw.version())
 
 	step("Applying beekeeper %s's CRDs and the team namespace %s", opts.Version, beekeeperNamespace)
-	if err := applyBeekeeperCRDs(opts.Version); err != nil {
+	removeCRDs, err := applyBeekeeperCRDs(opts.Version)
+	if err != nil {
 		return err
 	}
+	defer removeCRDs()
 	removeNS, err := ensureBeekeeperNamespace()
 	if err != nil {
 		return err
 	}
 	defer removeNS()
 
-	step("Starting Postgres for serve's mailboxes on 127.0.0.1:%d (%s)", pgPort, beekeeperPostgresImage)
-	stopPG, err := startBeekeeperPostgres(run, pgPort)
+	step("Starting Postgres for serve's mailboxes in node %s's network on :%d (%s)", node, pgPort, beekeeperPostgresImage)
+	stopPG, err := startBeekeeperPostgres(run, inNode, pgPort)
 	if err != nil {
 		return err
 	}
 	defer stopPG()
 
-	bin := opts.Binary
-	if bin == "" {
-		if bin, err = downloadBeekeeper(opts.Version, runDir); err != nil {
-			return err
-		}
-	}
-	serveCfg := beekeeperServeConfig(cfg, group, map[string]string{"asker": asker.Email, "other": other.Email}, channel, gw.baseURL(), tokenPath)
-	step("Starting beekeeper serve (%s) on :%d: issuer %s, team %s of group %s, decisions through %s", bin, servePort, cfg.Issuer(), beekeeperTeam, group, gw.baseURL())
-	stopServe, err := startBeekeeperServe(bin, runDir, serveCfg, kubeconfig, caFile, servePort, pgPort)
+	serveCfg := beekeeperServeConfig(cfg, group, map[string]string{"asker": asker.Email, "other": other.Email}, channel,
+		"http://127.0.0.1:"+strconv.Itoa(opts.Port), beekeeperMount+"/"+beekeeperTokenFile)
+	image := beekeeperImage + ":" + strings.TrimPrefix(opts.Version, "v")
+	step("Starting beekeeper serve (%s) in node %s's network on :%d: issuer %s, team %s of group %s", cmp.Or(opts.Binary, image), node, servePort, cfg.Issuer(), beekeeperTeam, group)
+	stopServe, err := startBeekeeperServe(image, opts.Binary, run, inNode, runDir, serveCfg, nodeIP, servePort, pgPort)
 	if err != nil {
 		return err
 	}
 	defer stopServe()
-	gateway, err := kindGatewayIP(cfg.ControlPlaneNode())
-	if err != nil {
-		return err
-	}
-	host, err := podReachableHost(cfg.ControlPlaneNode(), gateway, servePort)
-	if err != nil {
-		return err
-	}
-	if host == "" {
-		return fmt.Errorf("pods reach beekeeper serve on :%d neither on the kind gateway %s nor on %s: the host's firewall drops it", servePort, gateway, hostAlias())
-	}
 
-	url := "http://" + net.JoinHostPort(host, strconv.Itoa(servePort)) + "/mcp"
+	url := "http://127.0.0.1:" + strconv.Itoa(servePort) + "/mcp"
 	step("Registering MCPServer %s at %s in muster, the person's token forwarded", beekeeperServer, url)
 	removeServer, err := registerBeekeeperServer(url)
 	if err != nil {
@@ -292,25 +307,39 @@ func beekeeperServeConfig(cfg *config.Config, group string, people map[string]st
 	return b.String()
 }
 
-// applyBeekeeperCRDs applies the release's CRDs from its tag.
-func applyBeekeeperCRDs(version string) error {
+// applyBeekeeperCRDs applies the release's CRDs from its tag; the returned
+// func deletes those the lab did not have before.
+func applyBeekeeperCRDs(version string) (func(), error) {
+	var created []string
+	remove := func() {
+		for _, name := range created {
+			_ = deleteObject(context.Background(), gvrCRDs, "", name, 30*time.Second)
+		}
+	}
 	client := &http.Client{Timeout: 30 * time.Second}
 	for _, name := range beekeeperCRDs {
+		crd := name + ".beekeeper.giantswarm.io"
+		if _, err := getObject(context.Background(), gvrCRDs, "", crd); err != nil {
+			created = append(created, crd)
+		}
 		u := fmt.Sprintf("https://raw.githubusercontent.com/giantswarm/beekeeper/%s/config/crd/beekeeper.giantswarm.io_%s.yaml", version, name)
 		resp, err := client.Get(u) //nolint:gosec // a fixed GitHub URL of the release
 		if err != nil {
-			return fmt.Errorf("fetching %s: %w", u, err)
+			remove()
+			return nil, fmt.Errorf("fetching %s: %w", u, err)
 		}
 		body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		_ = resp.Body.Close()
 		if err != nil || resp.StatusCode != http.StatusOK {
-			return fmt.Errorf("fetching %s: HTTP %d %v", u, resp.StatusCode, err)
+			remove()
+			return nil, fmt.Errorf("fetching %s: HTTP %d %v", u, resp.StatusCode, err)
 		}
 		if _, err := applyManifests(context.Background(), body); err != nil {
-			return err
+			remove()
+			return nil, err
 		}
 	}
-	return nil
+	return remove, nil
 }
 
 // ensureBeekeeperNamespace creates the team namespace serve keeps the
@@ -333,89 +362,86 @@ func ensureBeekeeperNamespace() (func(), error) {
 	}, nil
 }
 
-// startBeekeeperPostgres runs the mailboxes' Postgres in a container of its
-// own; the returned func removes it.
-func startBeekeeperPostgres(run string, port int) (func(), error) {
+// nodeKubeconfig is the lab kubeconfig for a process in the node's network:
+// the API server on 127.0.0.1:6443 there, not the host's published port.
+func nodeKubeconfig(runDir string) (string, error) {
+	raw, err := os.ReadFile(labKubeconfig())
+	if err != nil {
+		return "", err
+	}
+	out := regexp.MustCompile(`server: https://127\.0\.0\.1:\d+`).ReplaceAll(raw, []byte("server: https://127.0.0.1:6443"))
+	path := filepath.Join(runDir, beekeeperKubeconfig)
+	return path, os.WriteFile(path, out, 0o600)
+}
+
+func copyFile(from, to string) error {
+	b, err := os.ReadFile(from) //nolint:gosec // the lab's own files
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(to, b, 0o600)
+}
+
+// startBeekeeperPostgres runs the mailboxes' Postgres in network on port;
+// the returned func removes it.
+func startBeekeeperPostgres(run, network string, port int) (func(), error) {
 	name := "agentlab-beekeeper-pg-" + strings.ToLower(run)
-	if err := runQuiet("docker", "run", "-d", "--rm", "--name", name, "-e", "POSTGRES_HOST_AUTH_METHOD=trust",
-		"-p", fmt.Sprintf("127.0.0.1:%d:5432", port), beekeeperPostgresImage); err != nil {
+	p := strconv.Itoa(port)
+	if err := runQuiet(dockerBin, dockerRun(name, network, "-d", "--rm", "-e", "POSTGRES_HOST_AUTH_METHOD=trust",
+		beekeeperPostgresImage, "postgres", "-p", p)...); err != nil {
 		return nil, fmt.Errorf("starting Postgres: %w", err)
 	}
-	stop := func() { _ = runQuiet("docker", "rm", "-f", name) }
-	if !waitFor(60, time.Second, func() bool { return runQuiet("docker", "exec", name, "pg_isready", "-U", "postgres") == nil }) {
+	stop := func() { _ = runQuiet(dockerBin, "rm", "-f", name) }
+	if !waitFor(60, time.Second, func() bool { return runQuiet(dockerBin, "exec", name, "pg_isready", "-U", "postgres", "-p", p) == nil }) {
 		stop()
 		return nil, fmt.Errorf("the Postgres container %s was not ready within a minute", name)
 	}
 	return stop, nil
 }
 
-// downloadBeekeeper fetches the release's linux binary into dir.
-func downloadBeekeeper(version, dir string) (string, error) {
-	u := fmt.Sprintf("https://github.com/giantswarm/beekeeper/releases/download/%s/beekeeper-linux-amd64", version)
-	step("Downloading beekeeper %s", version)
-	client := &http.Client{Timeout: 2 * time.Minute}
-	resp, err := client.Get(u) //nolint:gosec // a fixed GitHub URL of the release
-	if err != nil {
-		return "", fmt.Errorf("downloading %s: %w", u, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("downloading %s: HTTP %d", u, resp.StatusCode)
-	}
-	path := filepath.Join(dir, "beekeeper")
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o700) //nolint:gosec // the run directory
-	if err != nil {
-		return "", err
-	}
-	if _, err := io.Copy(f, resp.Body); err != nil {
-		_ = f.Close()
-		return "", err
-	}
-	return path, f.Close()
-}
-
-// startBeekeeperServe runs serve with its configuration over the lab's
-// kubeconfig, the lab CA trusted for the Dex issuer, and waits for its
-// /healthz; the returned func stops it. Its log is beekeeper.log in runDir.
-func startBeekeeperServe(bin, runDir, serveCfg, kubeconfig, caFile string, port, pgPort int) (func(), error) {
-	cfgPath := filepath.Join(runDir, "beekeeper.yaml")
-	if err := os.WriteFile(cfgPath, []byte(serveCfg), 0o600); err != nil {
+// startBeekeeperServe runs serve from image (or binary, mounted into it) in
+// network as the caller's uid, the run directory mounted with its
+// configuration, token, kubeconfig and the lab CA, and waits for its
+// /healthz on nodeIP; the returned func removes the container. Its log is
+// beekeeper.log in runDir.
+func startBeekeeperServe(image, binary, run, network, runDir, serveCfg, nodeIP string, port, pgPort int) (func(), error) {
+	if err := os.WriteFile(filepath.Join(runDir, beekeeperConfigFile), []byte(serveCfg), 0o600); err != nil {
 		return nil, err
 	}
-	logFile, err := os.Create(filepath.Join(runDir, "beekeeper.log")) //nolint:gosec // the run directory
-	if err != nil {
-		return nil, err
+	name := "agentlab-beekeeper-" + strings.ToLower(run)
+	mount := func(f string) string { return beekeeperMount + "/" + f }
+	args := dockerRun(name, network, "-d", "--rm", "--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
+		"-v", runDir+":"+beekeeperMount,
+		"-e", "BEEKEEPER_CONFIG="+mount(beekeeperConfigFile),
+		"-e", fmt.Sprintf("BEEKEEPER_DATABASE_URL=postgres://postgres@127.0.0.1:%d/postgres?sslmode=disable", pgPort),
+		"-e", "KUBECONFIG="+mount(beekeeperKubeconfig),
+		"-e", "SSL_CERT_FILE="+mount(beekeeperCAFile),
+		"-e", "HOME=/tmp", "-e", "XDG_STATE_HOME=/tmp")
+	if binary != "" {
+		args = append(args, "-v", binary+":/beekeeper:ro")
 	}
-	cmd := exec.Command(bin, "serve", fmt.Sprintf("--http=:%d", port)) //nolint:gosec // the release binary or the operator's build
-	cmd.Env = append(os.Environ(),
-		"BEEKEEPER_CONFIG="+cfgPath,
-		"BEEKEEPER_DATABASE_URL="+fmt.Sprintf("postgres://postgres@127.0.0.1:%d/postgres?sslmode=disable", pgPort),
-		"KUBECONFIG="+kubeconfig,
-		"SSL_CERT_FILE="+caFile,
-		"XDG_STATE_HOME="+runDir,
-	)
-	cmd.Stdout, cmd.Stderr = logFile, logFile
-	if err := cmd.Start(); err != nil {
-		_ = logFile.Close()
-		return nil, fmt.Errorf("starting %s: %w", bin, err)
+	args = append(args, image, "serve", fmt.Sprintf("--http=:%d", port))
+	if out, err := command(dockerBin, args...).CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("starting beekeeper serve: %w: %s", err, excerpt(string(out), 300))
 	}
+	logs := func() string { out, _ := outputQuiet(dockerBin, "logs", name); return out }
 	stop := func() {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		_ = logFile.Close()
+		_ = os.WriteFile(filepath.Join(runDir, "beekeeper.log"), []byte(logs()), 0o600)
+		_ = runQuiet(dockerBin, "rm", "-f", name)
 	}
-	health := fmt.Sprintf("http://127.0.0.1:%d/healthz", port)
+	health := fmt.Sprintf("http://%s:%d/healthz", nodeIP, port)
+	client := &http.Client{Timeout: 2 * time.Second}
 	if !waitFor(60, 500*time.Millisecond, func() bool {
-		resp, err := http.Get(health) //nolint:gosec,noctx // the local serve
+		resp, err := client.Get(health) //nolint:noctx // the proof's own serve
 		if err != nil {
 			return false
 		}
 		_ = resp.Body.Close()
 		return resp.StatusCode == http.StatusOK
 	}) {
+		l := logs()
 		stop()
-		log, _ := os.ReadFile(filepath.Join(runDir, "beekeeper.log")) //nolint:gosec // the run directory
-		return nil, fmt.Errorf("beekeeper serve did not answer %s within 30s: %s", health, excerptEnds(string(log), 600))
+		return nil, fmt.Errorf("beekeeper serve did not answer %s within 30s: %s", health, excerptEnds(l, 600))
 	}
 	return stop, nil
 }
@@ -472,7 +498,7 @@ func waitBeekeeperTools(s *musterSession) error {
 
 type beekeeperProof struct {
 	s                                      *musterSession
-	fake                                   *fakeSlack
+	fake                                   *slackFakeContainer
 	driver                                 *slackDriver
 	asker, askerSlack, otherSlack, channel string
 }
@@ -497,26 +523,28 @@ func (p *beekeeperProof) add(forWho, question, due string) (int, error) {
 	return id, nil
 }
 
-// message waits for the decision of note id in channel to satisfy pred.
-func (p *beekeeperProof) message(channel string, id int, what string, wait time.Duration, pred func(slackMessage) bool) (slackMessage, error) {
-	tag := fmt.Sprintf("note #%d", id)
+// message waits for the latest decision asking question in channel to
+// satisfy pred: the question names it, since serve may hand a closed note's
+// number out again (giantswarm/beekeeper#352).
+func (p *beekeeperProof) message(channel, question, what string, wait time.Duration, pred func(slackMessage) bool) (slackMessage, error) {
 	var last slackMessage
 	if !waitFor(int(wait/(500*time.Millisecond)), 500*time.Millisecond, func() bool {
-		for _, m := range p.fake.thread(channel, "") {
-			if strings.Contains(m.shown(), tag) {
-				last = m
-				return pred(m)
+		msgs := p.fake.thread(channel, "")
+		for i := len(msgs) - 1; i >= 0; i-- {
+			if strings.Contains(msgs[i].shown(), question) {
+				last = msgs[i]
+				return pred(last)
 			}
 		}
 		return false
 	}) {
-		return last, fmt.Errorf("%s: %s did not happen within %s; the message reads: %s", tag, what, wait, excerpt(last.shown(), 400))
+		return last, fmt.Errorf("%q: %s did not happen within %s; the message reads: %s", question, what, wait, excerpt(last.shown(), 400))
 	}
 	return last, nil
 }
 
-func (p *beekeeperProof) answeredBy(channel string, id int, slackUser string, texts ...string) error {
-	_, err := p.message(channel, id, "the answer's rewrite", decisionsWait, func(m slackMessage) bool {
+func (p *beekeeperProof) answeredBy(channel, question string, id int, slackUser string, texts ...string) error {
+	_, err := p.message(channel, question, "the answer's rewrite", decisionsWait, func(m slackMessage) bool {
 		shown := m.shown()
 		if _, open := m.action(decisionOwnWords); open || !strings.Contains(shown, decisionAnsweredBy+slackUser+">") {
 			return false
@@ -535,22 +563,26 @@ func (p *beekeeperProof) answeredBy(channel string, id int, slackUser string, te
 }
 
 func (p *beekeeperProof) personByClick() error {
-	id, err := p.add("asker", "Roll the release onto the lab tonight?", "2h")
+	const q = "Roll the release onto the lab tonight?"
+	id, err := p.add("asker", q, "2h")
 	if err != nil {
 		return err
 	}
 	dm := directChannel(p.askerSlack)
-	m, err := p.message(dm, id, "the direct message", decisionsWait, func(slackMessage) bool { return true })
+	m, err := p.message(dm, q, "the direct message", decisionsWait, func(slackMessage) bool { return true })
 	if err != nil {
 		return err
 	}
 	if err := assertDecisionMessage(m); err != nil {
 		return err
 	}
+	if tag := fmt.Sprintf("note #%d", id); !strings.Contains(m.shown(), tag) || strings.Contains(m.shown(), "note #note") {
+		return fmt.Errorf("the decision's context line does not name %s once: %s", tag, excerpt(m.shown(), 300))
+	}
 	if err := p.driver.click(p.otherSlack, m, decisionChoose); err != nil {
 		return err
 	}
-	if _, err := p.message(dm, id, "the refusal of a click by someone else", decisionsWait, func(m slackMessage) bool {
+	if _, err := p.message(dm, q, "the refusal of a click by someone else", decisionsWait, func(m slackMessage) bool {
 		_, open := m.action(decisionOwnWords)
 		return open && strings.Contains(m.shown(), "<@"+p.otherSlack+">")
 	}); err != nil {
@@ -560,15 +592,16 @@ func (p *beekeeperProof) personByClick() error {
 	if err := p.driver.click(p.askerSlack, m, decisionChoose); err != nil {
 		return err
 	}
-	return p.answeredBy(dm, id, p.askerSlack, "Roll tonight")
+	return p.answeredBy(dm, q, id, p.askerSlack, "Roll tonight")
 }
 
 func (p *beekeeperProof) teamByThreadReply() error {
-	id, err := p.add("team:"+beekeeperTeam, "Roll the release onto the lab on Monday instead?", "2h")
+	const q = "Roll the release onto the lab on Monday instead?"
+	id, err := p.add("team:"+beekeeperTeam, q, "2h")
 	if err != nil {
 		return err
 	}
-	m, err := p.message(p.channel, id, "the team's message", decisionsWait, func(slackMessage) bool { return true })
+	m, err := p.message(p.channel, q, "the team's message", decisionsWait, func(slackMessage) bool { return true })
 	if err != nil {
 		return err
 	}
@@ -579,19 +612,20 @@ func (p *beekeeperProof) teamByThreadReply() error {
 	}); err != nil {
 		return err
 	}
-	return p.answeredBy(p.channel, id, p.otherSlack, decisionThreadReply)
+	return p.answeredBy(p.channel, q, id, p.otherSlack, decisionThreadReply)
 }
 
 func (p *beekeeperProof) defaulted() error {
-	id, err := p.add("team:"+beekeeperTeam, "Nobody answers this one?", beekeeperDefaultDue)
+	const q = "Nobody answers this one?"
+	id, err := p.add("team:"+beekeeperTeam, q, beekeeperDefaultDue)
 	if err != nil {
 		return err
 	}
-	open, err := p.message(p.channel, id, "the team's message", decisionsWait, func(slackMessage) bool { return true })
+	open, err := p.message(p.channel, q, "the team's message", decisionsWait, func(slackMessage) bool { return true })
 	if err != nil {
 		return err
 	}
-	if _, err := p.message(p.channel, id, "the default at the due time", beekeeperDefaultWait, func(m slackMessage) bool {
+	if _, err := p.message(p.channel, q, "the default at the due time", beekeeperDefaultWait, func(m slackMessage) bool {
 		_, buttons := m.action(decisionOwnWords)
 		return !buttons && strings.Contains(m.shown(), decisionDefaulted) && strings.Contains(m.shown(), beekeeperDefault)
 	}); err != nil {
@@ -615,17 +649,18 @@ func (p *beekeeperProof) defaulted() error {
 }
 
 func (p *beekeeperProof) withdrawn() error {
-	id, err := p.add("team:"+beekeeperTeam, "Withdraw this one again?", "2h")
+	const q = "Withdraw this one again?"
+	id, err := p.add("team:"+beekeeperTeam, q, "2h")
 	if err != nil {
 		return err
 	}
-	if _, err := p.message(p.channel, id, "the team's message", decisionsWait, func(slackMessage) bool { return true }); err != nil {
+	if _, err := p.message(p.channel, q, "the team's message", decisionsWait, func(slackMessage) bool { return true }); err != nil {
 		return err
 	}
 	if _, err := p.s.callServerTool(beekeeperNoteDone, map[string]any{"note": id}); err != nil {
 		return err
 	}
-	if _, err := p.message(p.channel, id, "the withdrawn rewrite", decisionsWait, func(m slackMessage) bool {
+	if _, err := p.message(p.channel, q, "the withdrawn rewrite", decisionsWait, func(m slackMessage) bool {
 		_, buttons := m.action(decisionOwnWords)
 		return !buttons
 	}); err != nil {
