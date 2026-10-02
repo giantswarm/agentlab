@@ -130,8 +130,12 @@ export never deletes a credential; `kubectl -n agent-platform delete secret
 agentlab-github-token` does). `backstage-test`, `agents-test` and the
 rehearsal print the window before their first skill-resolving step
 (`GitHub API window (unauthenticated: this machine's shared window): 12 of 60
-requests remaining, resets 14:32:10 CEST`) and, when it is exhausted, wait once
-until the reset instead of failing on a truncated listing.
+requests remaining, resets 14:32:10 CEST`) and, when it holds fewer requests
+than the run spends (`backstage-test`: 30, its discovery and the create pin),
+wait once until the reset instead of failing on a truncated listing.
+`backstage-test` runs its `refreshSkills` steps (E4/E5) only when
+agent-manager's Deployment carries a GitHub credential; without one it skips
+them with a verdict naming the anonymous rate limit.
 
 ## The UI and the controller's route
 
