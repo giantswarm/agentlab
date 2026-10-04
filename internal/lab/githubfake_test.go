@@ -66,6 +66,19 @@ func TestFakeGitHubServesTheCommitRemote(t *testing.T) {
 		t.Fatalf("GET /user login = %q, want admin", user.Login)
 	}
 
+	for path, want := range map[string]int{"/repos/agentlab/gitops": http.StatusOK, "/repos/agentlab/app-not-installed": http.StatusNotFound} {
+		req, _ := http.NewRequest(http.MethodGet, base+path, nil)
+		req.Header.Set("Authorization", "Bearer "+fakeBearer(testEmail))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != want {
+			t.Fatalf("GET %s = %d, want %d", path, resp.StatusCode, want)
+		}
+	}
+
 	gh, err := commit.NewGitHub(fakeBearer(testEmail), commit.WithBaseURL(base))
 	if err != nil {
 		t.Fatal(err)

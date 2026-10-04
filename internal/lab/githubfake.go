@@ -125,6 +125,7 @@ func startFakeGitHub(addr, repo, branch string, files map[string][]byte) (*fakeG
 	mux.HandleFunc("GET "+githubFakeHealthPath, func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok") })
 	mux.HandleFunc("GET "+githubFakePullsPath, f.servePulls)
 	mux.HandleFunc("GET "+githubFakeAPIPath+"/user", f.serveUser)
+	mux.HandleFunc("GET "+repoPath, f.repoCall(f.getRepository))
 	mux.HandleFunc("GET "+repoPath+"/git/ref/heads/{branch...}", f.repoCall(f.getRef))
 	mux.HandleFunc("POST "+repoPath+"/git/refs", f.repoCall(f.createRef))
 	mux.HandleFunc("PATCH "+repoPath+"/git/refs/heads/{branch...}", f.repoCall(f.updateRef))
@@ -281,6 +282,13 @@ func (f *fakeGitHub) repoCall(h func(w http.ResponseWriter, r *http.Request, log
 
 func refJSON(branch, sha string) map[string]any {
 	return map[string]any{githubRef: "refs/heads/" + branch, "object": map[string]string{githubSHA: sha, fieldTypeKey: gitCommit}}
+}
+
+// getRepository is GET /repos/{owner}/{repo}: model-manager's check that the
+// App's token reaches the repository before a commit; every other repository
+// answers 404, as GitHub does for one the App is not installed on.
+func (f *fakeGitHub) getRepository(w http.ResponseWriter, _ *http.Request, _ string) {
+	writeGitHubJSON(w, http.StatusOK, map[string]any{"full_name": f.repo})
 }
 
 func (f *fakeGitHub) getRef(w http.ResponseWriter, r *http.Request, _ string) {

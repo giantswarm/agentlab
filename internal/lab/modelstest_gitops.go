@@ -70,6 +70,9 @@ const (
 	gitopsHelmNamespace = "helm.toolkit.fluxcd.io/namespace"
 	gitopsStaleRelease  = "agentlab-gone-release"
 	gitopsReleaseWait   = 5 * time.Minute
+	// gitopsUnreachable is a repository the fake GitHub does not hold: one
+	// the App is not installed on.
+	gitopsUnreachable = "agentlab/app-not-installed"
 )
 
 // model-manager's argument names and words the proof uses.
@@ -372,11 +375,46 @@ func proveCommit(cfg *config.Config, user *config.User, token, binary, backendNa
 		return "", fmt.Errorf("ModelConfig %s is live after the commit (%v): commit mode writes git only", mcName, err)
 	}
 	note("no ModelConfig %s live: commit mode writes git only", mcName)
+	if err := proveUnreachableRepository(api, fake, args); err != nil {
+		return "", err
+	}
 	if err := proveStaleProvenance(api, backendName, model); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("wire_model mode commit as %s -> pull request #%d on the fake GitHub (%s -> %s, %d files, equal to the dry run), nothing written live; a stale namespace provenance answers invalid_request",
+	return fmt.Sprintf("wire_model mode commit as %s -> pull request #%d on the fake GitHub (%s -> %s, %d files, equal to the dry run), nothing written live; a repository the App does not reach answers repository_unavailable; a stale namespace provenance answers invalid_request",
 		login, pr.Number, pr.Head, pr.Base, len(pr.Files)), nil
+}
+
+// proveUnreachableRepository commits to a repository the fake does not hold
+// — what GitHub answers 404 for when the App is not installed on it — and
+// asserts the dry run reports it as commit.unavailable and the live call
+// answers repository_unavailable naming the repository, with no pull
+// request opened.
+func proveUnreachableRepository(api *modelManagerTools, fake *githubFakeContainer, args map[string]any) error {
+	step("%s mode commit to %s, a repository the App is not installed on", api.toolName("wire_model"), gitopsUnreachable)
+	call := maps.Clone(args)
+	call[repositoryArg] = gitopsUnreachable
+	dry, err := wireCommit(api, call, true)
+	if err != nil {
+		return err
+	}
+	if !strings.Contains(dry.Unavailable, gitopsUnreachable) || len(dry.Files) != 0 {
+		return fmt.Errorf("the dry run to %s answered unavailable %q and %d files, wanted the refusal naming the repository and no files", gitopsUnreachable, dry.Unavailable, len(dry.Files))
+	}
+	note("dryRun: commit.unavailable: %s", excerpt(dry.Unavailable, 200))
+	before, err := fake.pulls()
+	if err != nil {
+		return err
+	}
+	_, err = wireCommit(api, call, false)
+	if refusalCode(err) != "repository_unavailable" || !strings.Contains(err.Error(), gitopsUnreachable) {
+		return fmt.Errorf("wire_model mode commit to %s answered %v, wanted repository_unavailable naming the repository", gitopsUnreachable, err)
+	}
+	note("wire_model: %s", excerpt(err.Error(), 200))
+	if after, err := fake.pulls(); err != nil || len(after) != len(before) {
+		return fmt.Errorf("the refused commit reached the fake GitHub: %d pull requests before, %d after (%v)", len(before), len(after), err)
+	}
+	return nil
 }
 
 // proveStaleProvenance gives the kagent namespace the Flux labels of a
@@ -430,6 +468,7 @@ func proveStaleProvenance(api *modelManagerTools, backendName, model string) err
 // commitAnswer is the commit part of a wire in mode commit.
 type commitAnswer struct {
 	Branch      string `json:"branch"`
+	Unavailable string `json:"unavailable"`
 	PullRequest string `json:"pullRequest"`
 	Number      int    `json:"number"`
 	Author      string `json:"author"`
