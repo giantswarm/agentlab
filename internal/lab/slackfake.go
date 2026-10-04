@@ -65,14 +65,17 @@ const (
 	// slackThreadPath reads one recorded thread back (?channel=&ts=), for
 	// the proof when the fake runs in a container.
 	slackThreadPath = "/state/thread"
+	// slackViewsPath reads the opened modals back, likewise.
+	slackViewsPath = "/state/views"
 )
 
 // slackWorkspace is the fake Slack of one run as the proof uses it: the Web
-// API base a gateway on this host calls, the threads the fake recorded, fresh
-// timestamps for the people's messages, and its end.
+// API base a gateway on this host calls, the threads and modals the fake
+// recorded, fresh timestamps for the people's messages, and its end.
 type slackWorkspace interface {
 	baseURL() string
 	thread(channel, threadTS string) []slackMessage
+	openedViews() []map[string]any
 	nextTS() string
 	close()
 }
@@ -126,15 +129,17 @@ const (
 	slackActionApprove = "hitl_approve"
 	slackActionDeny    = "hitl_deny"
 	slackActionSignIn  = "obo_sign_in"
-	// slackRosterHeading opens the roster `@bot /agent` posts.
+	// slackRosterHeading opens the roster's text that `@bot agents` posts.
 	slackRosterHeading = "*Available agents*"
+	// slackActionAgentSelect is a roster row's Select button: its value is
+	// the agent's ref, and it opens the agent picker with that agent
+	// preselected.
+	slackActionAgentSelect = "agent_select"
 	// slackNotRunnable is the refusal of an agent that exists but cannot
 	// start a conversation (the reason follows it).
 	slackNotRunnable = "cannot start a conversation right now"
-	slackNotStarted  = "I haven't started anything"
-	// slackNothingStarted is klaus-gateway 3.8's spelling of slackNotStarted.
-	slackNothingStarted = "Nothing was started"
-	slackStopped        = "Stopped."
+	slackNotStarted  = "Nothing was started"
+	slackStopped     = "Stopped."
 	// slackRestartPromise is the restart notice's promise that the turn left
 	// running is posted in the thread when it is done; slackReplyToGetIt the
 	// note of a restarted gateway that gave up on keeping it.
@@ -142,10 +147,22 @@ const (
 	slackReplyToGetIt   = "Reply in this thread to get it"
 	slackApprovedBy     = "Approved by <@"
 	slackDeniedBy       = "Denied by <@"
-	// slackStopCommand is the thread reply that stops a running turn.
-	slackStopCommand = "/stop"
-	// slackAgentCommand selects an agent in a mention; bare, it lists them.
-	slackAgentCommand = "/agent"
+	// slackStopWord is the thread reply that stops a running turn.
+	slackStopWord = "stop"
+	// slackAgentsWord lists the agents, a row per agent with its Select
+	// button.
+	slackAgentsWord = "agents"
+)
+
+// The agent picker the gateway opens (views.open): its callback, and the
+// blocks and actions of its agent select and question box, as a submission
+// reports them in state.values.
+const (
+	slackPickerCallback       = "ask_agent"
+	slackPickerAgentBlock     = "ask_agent_agent"
+	slackPickerAgentAction    = "agent"
+	slackPickerQuestionBlock  = "ask_agent_question"
+	slackPickerQuestionAction = "question"
 )
 
 // slackMessage is one message of a fake thread as it stands: posted,
@@ -172,18 +189,29 @@ func (m slackMessage) streamed() bool { return m.Method == slackStartStream }
 // action returns the Block Kit button with the action id, if the message
 // carries one: in an actions block, or as a section's accessory.
 func (m slackMessage) action(id string) (map[string]any, bool) {
+	buttons := m.actions(id)
+	if len(buttons) == 0 {
+		return nil, false
+	}
+	return buttons[0], true
+}
+
+// actions returns every Block Kit button of the message with the action id,
+// in block order: a roster carries one Select button per row.
+func (m slackMessage) actions(id string) []map[string]any {
+	var buttons []map[string]any
 	for _, block := range m.Blocks {
 		if acc, ok := block["accessory"].(map[string]any); ok && acc[slackKeyActionID] == id {
-			return acc, true
+			buttons = append(buttons, acc)
 		}
 		elements, _ := block[slackKeyElements].([]any)
 		for _, e := range elements {
 			if el, ok := e.(map[string]any); ok && el[slackKeyActionID] == id {
-				return el, true
+				buttons = append(buttons, el)
 			}
 		}
 	}
-	return nil, false
+	return buttons
 }
 
 // fakeSlack is the Slack Web API of one proof run.
@@ -219,6 +247,7 @@ func startFakeSlack(addr string, emails map[string]string) (*fakeSlack, error) {
 	mux.HandleFunc("GET "+slackThreadPath, func(w http.ResponseWriter, r *http.Request) {
 		writeSlackJSON(w, f.thread(r.URL.Query().Get(slackKeyChannel), r.URL.Query().Get(slackKeyTS)))
 	})
+	mux.HandleFunc("GET "+slackViewsPath, func(w http.ResponseWriter, _ *http.Request) { writeSlackJSON(w, f.openedViews()) })
 	f.server = &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	go func() { _ = f.server.Serve(l) }()
 	return f, nil
@@ -333,16 +362,27 @@ func (c *slackFakeContainer) nextTS() string {
 // which every wait on it outlasts or reports.
 func (c *slackFakeContainer) thread(channel, threadTS string) []slackMessage {
 	q := url.Values{slackKeyChannel: {channel}, slackKeyTS: {threadTS}}
-	resp, err := c.client.Get(c.hostURL + slackThreadPath + "?" + q.Encode())
+	var msgs []slackMessage
+	c.read(slackThreadPath+"?"+q.Encode(), &msgs)
+	return msgs
+}
+
+// openedViews reads the opened modals back; a failed read is none.
+func (c *slackFakeContainer) openedViews() []map[string]any {
+	var views []map[string]any
+	c.read(slackViewsPath, &views)
+	return views
+}
+
+// read decodes what the fake serves at path into v, leaving v as it is when
+// the read fails.
+func (c *slackFakeContainer) read(path string, v any) {
+	resp, err := c.client.Get(c.hostURL + path)
 	if err != nil {
-		return nil
+		return
 	}
 	defer func() { _ = resp.Body.Close() }()
-	var msgs []slackMessage
-	if json.NewDecoder(resp.Body).Decode(&msgs) != nil {
-		return nil
-	}
-	return msgs
+	_ = json.NewDecoder(resp.Body).Decode(v)
 }
 
 // startSlackFakeContainer runs `<binary> slack-fake` on the kind network.
@@ -662,6 +702,12 @@ func (d *slackDriver) click(user string, msg slackMessage, actionID string) erro
 		return fmt.Errorf("message %s carries no %s button", msg.TS, actionID)
 	}
 	value, _ := button[slackKeyValue].(string)
+	return d.press(user, msg, actionID, value)
+}
+
+// press is a block_actions payload for the button of msg with the action id
+// and value: click for a message with several buttons of one action.
+func (d *slackDriver) press(user string, msg slackMessage, actionID, value string) error {
 	payload, err := json.Marshal(map[string]any{
 		fieldTypeKey: "block_actions", slackKeyUser: map[string]any{"id": user}, slackKeyTeam: map[string]any{"id": slackFakeTeam},
 		slackKeyChannel: map[string]any{"id": msg.Channel},

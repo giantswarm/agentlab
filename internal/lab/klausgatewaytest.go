@@ -51,23 +51,24 @@ import (
 // no service-account fallback for it), and the link's cached token is what a
 // linked person's turn forwards until its refresh is due, so the gateway runs
 // unmodified; a real sign-in cannot complete in the lab (docs/klaus-gateway.md).
-// The proof: `@bot /agent` lists the proof's AgentTemplate and hides one no
-// Harness admits, whose selection is refused with the reason; a person with no
+// The proof: `@bot agents` lists the proof's AgentTemplate and hides one no
+// Harness admits, which the agent picker its Select button opens hides too, and
+// a selection of it is refused with the reason; a person with no
 // link is asked to sign in and reaches no controller; a turn streams under the
 // template's display name and icon, attributed to the person at muster; a tool
 // call bound with requireApproval pauses the task at input-required, Approve
-// resumes it in place and Deny ends another without the call; /stop cancels
+// resumes it in place and Deny ends another without the call; `stop` cancels
 // the task at the controller and the thread goes on; a gateway restart on
 // the same stores continues the same AgentInstance; and a restart in the
 // middle of a turn, the edge out of reach for a while after it, still posts
 // the answer in its thread. docs/platform.md "The
 // Swarmgeist proof".
 
-// KlausGatewayImageDefault is the released gateway the proof runs when no
-// image or binary is named: the current release of the Slack-only line
-// (2.0.0 on) that the 4.x meta chart's `components.klaus-gateway` range
-// resolves to.
-const KlausGatewayImageDefault = "gsoci.azurecr.io/giantswarm/klaus-gateway:3.12.0"
+// KlausGatewayImageDefault is the gateway the proof runs when no image or
+// binary is named: the current release candidate of the 4.1 line, the first
+// that serves the command words alone (`agents`, `stop`) and keeps a parked
+// message and a paused approval across a restart (steps 5c and 5d).
+const KlausGatewayImageDefault = "gsoci.azurecr.io/giantswarm/klaus-gateway:4.1.0-rc.15"
 
 // Names of what the proof creates in the kagent namespace; all are deleted by
 // the same run, and a leftover of an aborted run is removed first.
@@ -125,7 +126,7 @@ const (
 
 // The turns and their words: the first turn's word, recalled after the
 // restart; the tool-using question that pauses on approval; the long answer
-// /stop interrupts.
+// `stop` interrupts.
 const (
 	klausGatewayWord         = "pong"
 	klausGatewayWordPrompt   = "Reply with exactly the word " + klausGatewayWord + "."
@@ -332,16 +333,17 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 		logs: func() (string, error) { return gw.logs(), nil },
 	}
 
-	step("1. Discovery: `@bot %s` as %s lists %q and hides %s; `%s %s` is refused with the reason and starts nothing; %s, who has no link, is asked to sign in and reaches no controller",
-		slackAgentCommand, user.Email, klausGatewayTestDisplay, klausGatewayTestUnadmitted, slackAgentCommand, klausGatewayTestUnadmitted, people.stranger)
-	names, err := p.roster(people.person)
+	step("1. Discovery: `@bot %s` as %s lists %q and hides %s; its Select button opens the picker, which hides it too, and a submitted selection of it is refused with the reason and starts nothing; %s, who has no link, is asked to sign in and reaches no controller",
+		slackAgentsWord, user.Email, klausGatewayTestDisplay, klausGatewayTestUnadmitted, people.stranger)
+	roster, err := p.roster(people.person)
 	if err != nil {
 		return fmt.Errorf("discovery: %w", err)
 	}
+	names := rosterNames(roster.shown())
 	if err := assertSlackRoster(names); err != nil {
 		return fmt.Errorf("discovery: %w", err)
 	}
-	refusal, err := p.refusal(people.person, slackAgentCommand+" "+klausGatewayTestUnadmitted+" "+klausGatewayWordPrompt)
+	refusal, err := p.refusal(people.person, roster, klausGatewayWordPrompt)
 	if err != nil {
 		return err
 	}
@@ -437,7 +439,7 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	note("%d denial(s) on task %s → %s at the controller (turn outcome %s); no tools/call by %s reached muster; the thread shows %q",
 		declined.rounds, declined.taskID, declined.finalState, declined.outcome, user.Email, excerpt(declined.answer, 80))
 
-	step("4. /stop: a long turn is stopped from the thread; the gateway cancels the task at the controller and the thread takes a following turn")
+	step("4. `stop`: a long turn is stopped from the thread; the gateway cancels the task at the controller and the thread takes a following turn")
 	tasksBefore, err := api.taskIDs(context.Background(), instanceID)
 	if err != nil {
 		return err
@@ -452,10 +454,10 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	}
 	turn, err = p.say(main, klausGatewayWordPrompt)
 	if err != nil {
-		return fmt.Errorf("the turn after /stop: %w", err)
+		return fmt.Errorf("the turn after stop: %w", err)
 	}
 	if err := assertSlackTurnSaid(turn, klausGatewayWord); err != nil {
-		return fmt.Errorf("the turn after /stop: %w", err)
+		return fmt.Errorf("the turn after stop: %w", err)
 	}
 	note("stopped after %d streamed characters with %q; task %s TASK_STATE_CANCELED at the controller; the following turn answered %q",
 		len(stopped.answer), slackStopped, canceled, excerpt(turn.answer, 40))
@@ -541,12 +543,12 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	note("nothing left in the kagent namespace; gateway stopped, run directory %s", runDirFate)
 
 	fmt.Println()
-	fmt.Printf("PASS: klaus-gateway %s ran on the host against %s (TLS with the lab CA, JWT validated at the edge) with Slack in events mode on a fake Web API; `@bot /agent` as %s listed %q, hid %s and refused its selection with the reason; a person with no link was asked to sign in and reached no controller\n",
+	fmt.Printf("PASS: klaus-gateway %s ran on the host against %s (TLS with the lab CA, JWT validated at the edge) with Slack in events mode on a fake Web API; `@bot agents` as %s listed %q and hid %s, as did the picker its Select button opened, and a selection of it was refused with the reason; a person with no link was asked to sign in and reached no controller\n",
 		gw.describe(), target, user.Email, klausGatewayTestDisplay, klausGatewayTestUnadmitted)
 	fmt.Printf("PASS: one streamed turn in a Slack thread, answered as %q with the template's icon, bound the thread to AgentInstance %s, the only instance of the template; the gateway forwarded %s's linked id_token and muster ran the agent's tool calls under that subject\n", klausGatewayTestDisplay, instanceID, user.Email)
 	fmt.Printf("PASS: the requireApproval binding paused task %s at input-required; %d Approve click(s) on the card resumed it in place to %s; in a second thread %d Deny click(s) ended task %s (%s) without the call reaching muster\n",
 		approved.taskID, approved.rounds, approved.finalState, declined.rounds, declined.taskID, declined.finalState)
-	fmt.Printf("PASS: /stop in the thread had the gateway cancel task %s at the controller (TASK_STATE_CANCELED); the thread took a following turn\n", canceled)
+	fmt.Printf("PASS: `stop` in the thread had the gateway cancel task %s at the controller (TASK_STATE_CANCELED); the thread took a following turn\n", canceled)
 	fmt.Printf("PASS: a gateway restart on the bolt stores kept the thread → AgentInstance mapping: the next turn continued %s and recalled the earlier word; no link refresh in the run\n", instanceID)
 	fmt.Printf("PASS: a restart in the middle of a turn, the controller out of reach for %s after it: the restarted gateway kept retrying and posted task %s's answer into its thread %s later, without a reply\n", klausGatewayGateClosed, resumed.taskID, resumed.after.Round(time.Second))
 	if signedIn != nil {
@@ -973,7 +975,7 @@ func (a *kagentAPI) waitCanceledTask(instanceID string, before map[a2a.TaskID]bo
 		return canceled != ""
 	})
 	if canceled == "" {
-		return "", fmt.Errorf("no task of AgentInstance %s reached TASK_STATE_CANCELED within %s after /stop (new tasks: %s)", instanceID, timeout, strings.Join(seen, ", "))
+		return "", fmt.Errorf("no task of AgentInstance %s reached TASK_STATE_CANCELED within %s after stop (new tasks: %s)", instanceID, timeout, strings.Join(seen, ", "))
 	}
 	return canceled, nil
 }
@@ -1424,22 +1426,23 @@ func assertBranded(turn *slackTurn) error {
 	return nil
 }
 
-// roster posts a bare `@bot /agent` in a new thread and returns the display
-// names the roster post lists.
-func (p *slackProof) roster(user string) ([]string, error) {
-	ts, err := p.driver.mention(user, "", slackAgentCommand)
+// roster posts `@bot agents` in a new thread and returns the roster post:
+// a row per agent, each with its Select button, its text listing the display
+// names.
+func (p *slackProof) roster(user string) (slackMessage, error) {
+	ts, err := p.driver.mention(user, "", slackAgentsWord)
 	if err != nil {
-		return nil, err
+		return slackMessage{}, err
 	}
 	msgs, ok := waitThread(p.fake, p.channel, ts, klausGatewayReplyWait, func(msgs []slackMessage) bool {
 		_, found := findMessage(msgs, slackRosterHeading)
 		return found
 	})
 	if !ok {
-		return nil, fmt.Errorf("`@bot %s` got no roster within %s; the thread shows: %s", slackAgentCommand, klausGatewayReplyWait, threadLine(msgs))
+		return slackMessage{}, fmt.Errorf("`@bot %s` got no roster within %s; the thread shows: %s", slackAgentsWord, klausGatewayReplyWait, threadLine(msgs))
 	}
 	post, _ := findMessage(msgs, slackRosterHeading)
-	return rosterNames(post.shown()), nil
+	return post, nil
 }
 
 // assertSlackRoster checks the roster lists the admitted fixture by its
@@ -1458,28 +1461,86 @@ func assertSlackRoster(names []string) error {
 // admits (pkg/a2a's discovery).
 const unadmittedReason = "no Harness admits"
 
-// refusal posts a message selecting the unadmitted template in a new thread
-// and returns the refusal, which must name the reason and say nothing
-// started.
-func (p *slackProof) refusal(user, text string) (string, error) {
-	ts, err := p.driver.mention(user, "", text)
-	if err != nil {
+// refusal presses the Select button of the fixture's roster row, which opens
+// the agent picker in the roster's thread, checks the picker offers the
+// fixture and not the unadmitted template, and submits it with the
+// unadmitted template selected — a template that left the roster between
+// the listing and the submit. It returns the refusal, which must name the
+// reason and say nothing started.
+func (p *slackProof) refusal(user string, roster slackMessage, question string) (string, error) {
+	var ref string
+	for _, b := range roster.actions(slackActionAgentSelect) {
+		if v, _ := b[slackKeyValue].(string); strings.HasSuffix(v, klausGatewayTestAgent) {
+			ref = v
+		}
+	}
+	if ref == "" {
+		return "", fmt.Errorf("the roster carries no %s button for %s: %s", slackActionAgentSelect, klausGatewayTestAgent, threadLine([]slackMessage{roster}))
+	}
+	before := len(p.fake.openedViews())
+	if err := p.driver.press(user, roster, slackActionAgentSelect, ref); err != nil {
 		return "", err
 	}
-	msgs, ok := waitThread(p.fake, p.channel, ts, klausGatewayReplyWait, func(msgs []slackMessage) bool {
-		_, found := findMessage(msgs, slackNotRunnable)
+	var picker map[string]any
+	if !waitFor(int(klausGatewayReplyWait/(250*time.Millisecond)), 250*time.Millisecond, func() bool {
+		if views := p.fake.openedViews(); len(views) > before {
+			picker = views[len(views)-1]
+		}
+		return picker != nil
+	}) {
+		return "", fmt.Errorf("the Select button of %s opened no picker within %s; the thread shows: %s", klausGatewayTestAgent, klausGatewayReplyWait, threadLine(p.fake.thread(p.channel, roster.ThreadTS)))
+	}
+	if picker["callback_id"] != slackPickerCallback {
+		return "", fmt.Errorf("the Select button opened modal %v, not the agent picker %s", picker["callback_id"], slackPickerCallback)
+	}
+	offered := pickerOptions(picker)
+	unadmitted := strings.TrimSuffix(ref, klausGatewayTestAgent) + klausGatewayTestUnadmitted
+	if !slices.Contains(offered, ref) || slices.Contains(offered, unadmitted) {
+		return "", fmt.Errorf("the picker offers %s; wanted %s and not %s", strings.Join(offered, ", "), ref, unadmitted)
+	}
+	shown := len(p.fake.thread(p.channel, roster.ThreadTS))
+	if err := p.driver.submitView(user, picker, map[string]any{
+		slackPickerAgentBlock:    map[string]any{slackPickerAgentAction: map[string]any{fieldTypeKey: "static_select", "selected_option": map[string]any{slackKeyValue: unadmitted}}},
+		slackPickerQuestionBlock: map[string]any{slackPickerQuestionAction: map[string]any{fieldTypeKey: "plain_text_input", slackKeyValue: question}},
+	}); err != nil {
+		return "", err
+	}
+	msgs, ok := waitThread(p.fake, p.channel, roster.ThreadTS, klausGatewayReplyWait, func(msgs []slackMessage) bool {
+		_, found := findMessage(msgs[min(shown, len(msgs)):], slackNotRunnable)
 		return found
 	})
 	if !ok {
-		return "", fmt.Errorf("selecting %s got no refusal within %s; the thread shows: %s", klausGatewayTestUnadmitted, klausGatewayReplyWait, threadLine(msgs))
+		return "", fmt.Errorf("selecting %s in the picker got no refusal within %s; the thread shows: %s", klausGatewayTestUnadmitted, klausGatewayReplyWait, threadLine(msgs))
 	}
-	msg, _ := findMessage(msgs, slackNotRunnable)
-	text = msg.shown()
-	if !strings.Contains(text, unadmittedReason) || (!strings.Contains(text, slackNotStarted) && !strings.Contains(text, slackNothingStarted)) {
-		return "", fmt.Errorf("selecting %s was refused without the reason %q or %q: %s", klausGatewayTestUnadmitted, unadmittedReason, slackNotStarted, excerpt(text, 300))
+	msg, _ := findMessage(msgs[min(shown, len(msgs)):], slackNotRunnable)
+	text := msg.shown()
+	if msg.Recipient != user || !strings.Contains(text, unadmittedReason) || !strings.Contains(text, slackNotStarted) {
+		return "", fmt.Errorf("selecting %s was refused without the reason %q or %q, or not to %s alone: %s", klausGatewayTestUnadmitted, unadmittedReason, slackNotStarted, user, excerpt(text, 300))
 	}
 	first, _, _ := strings.Cut(text, "\n")
 	return first, nil
+}
+
+// pickerOptions are the agent refs the picker's agent select offers.
+func pickerOptions(view map[string]any) []string {
+	var refs []string
+	blocks, _ := view["blocks"].([]any)
+	for _, b := range blocks {
+		block, _ := b.(map[string]any)
+		if block["block_id"] != slackPickerAgentBlock {
+			continue
+		}
+		element, _ := block["element"].(map[string]any)
+		options, _ := element["options"].([]any)
+		for _, o := range options {
+			if opt, ok := o.(map[string]any); ok {
+				if v, ok := opt[slackKeyValue].(string); ok {
+					refs = append(refs, v)
+				}
+			}
+		}
+	}
+	return refs
 }
 
 // signInPrompt posts a message as a person with no link and returns the
@@ -1616,7 +1677,7 @@ func (p *slackProof) decideUntilSettled(api *kagentAPI, instanceID string, t *sl
 }
 
 // stop posts a long question in the thread, and once its answer streams,
-// `/stop` as a reply: the turn must end canceled with the thread told so.
+// `stop` as a reply: the turn must end canceled with the thread told so.
 func (p *slackProof) stop(t *slackThread, text string) (*slackTurn, error) {
 	before := len(p.fake.thread(p.channel, t.ts))
 	if _, err := p.driver.mention(t.user, t.ts, text); err != nil {
@@ -1632,15 +1693,15 @@ func (p *slackProof) stop(t *slackThread, text string) (*slackTurn, error) {
 	if !streaming {
 		return nil, fmt.Errorf("the turn to stop streamed nothing within %s: %s", klausGatewayTurnTimeout, threadLine(msgs))
 	}
-	if _, err := p.driver.reply(t.user, t.ts, slackStopCommand); err != nil {
+	if _, err := p.driver.reply(t.user, t.ts, slackStopWord); err != nil {
 		return nil, err
 	}
 	turn, err := p.awaitTurn(t, before)
 	if err != nil {
-		return nil, fmt.Errorf("the turn after %s: %w", slackStopCommand, err)
+		return nil, fmt.Errorf("the turn after %s: %w", slackStopWord, err)
 	}
 	if turn.record.Outcome != outcomeCanceled {
-		return nil, fmt.Errorf("the turn to stop ended %s, not canceled — it finished before %s arrived, or the stop did not reach it: %s", turn.record.Outcome, slackStopCommand, turnFailure(turn))
+		return nil, fmt.Errorf("the turn to stop ended %s, not canceled — it finished before %s arrived, or the stop did not reach it: %s", turn.record.Outcome, slackStopWord, turnFailure(turn))
 	}
 	if _, ok := waitThread(p.fake, p.channel, t.ts, klausGatewayReplyWait, func(msgs []slackMessage) bool {
 		_, found := findMessage(msgs[min(before, len(msgs)):], slackStopped)

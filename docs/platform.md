@@ -681,8 +681,9 @@ The token must have an hour left at the start, and a `token_refresh` record
 anywhere in the run fails the proof.
 
 **Deployment shape.** The gateway runs **out of cluster, on the host** —
-the released image on the host network by default
-(`--gateway-image`, `gsoci.azurecr.io/giantswarm/klaus-gateway:3.12.0`), or a
+the image on the host network by default
+(`--gateway-image`, `gsoci.azurecr.io/giantswarm/klaus-gateway:4.1.0-rc.15`,
+the 4.1 line that serves the command words alone), or a
 local build (`--gateway-binary`, the proof of a branch) — with `a2a.url` =
 the lab's public gRPC target `grpcs://agentgateway.<domain>:<gatewayPort>`
 (TLS with the lab CA from `certs/ca.crt`; the JWT `Strict` policy of the
@@ -720,11 +721,15 @@ admission label.
 
 **Assertions**:
 
-1. **Discovery**: a bare `@bot /agent` posts the roster, which lists the
-   fixture's display name and not the unadmitted template's;
-   `@bot /agent agentlab-klaus-gateway-test-unadmitted …` is answered with
+1. **Discovery**: `@bot agents` posts the roster, which lists the
+   fixture's display name and not the unadmitted template's; the fixture
+   row's Select button (`agent_select`) opens the agent picker
+   (`views.open`, callback `ask_agent`) in the roster's thread, which offers
+   the fixture and not the unadmitted template; the picker submitted with
+   the unadmitted template selected (one that left the roster between the
+   listing and the submit) is answered, to the submitter alone, with
    `… cannot start a conversation right now: no Harness admits this
-   AgentTemplate … I haven't started anything.` and the controller lists no
+   AgentTemplate. Nothing was started.` and the controller lists no
    `AgentInstance` of it; a person with no link is shown a Sign in button
    (`obo_sign_in`, ephemeral) to the gateway's `/auth/slack/link` and
    reaches no controller.
@@ -749,8 +754,8 @@ admission label.
    one's conversation already holds the count) each Deny click
    (`hitl_deny`) rewrites the card to `Denied by <@…>`; the task ends in a
    terminal state and no `tools/call` by the person reaches muster.
-4. **/stop**: once a long answer streams, a `/stop` reply in the thread ends
-   the turn `canceled`, the thread is told `⏹ Stopped.`, the new task is
+4. **stop**: once a long answer streams, a `stop` reply in the thread ends
+   the turn `canceled`, the thread is told `Stopped.`, the new task is
    `TASK_STATE_CANCELED` at the controller, and the thread takes a following
    turn.
 5. **Restart**: the gateway is stopped and started again on the same stores;
