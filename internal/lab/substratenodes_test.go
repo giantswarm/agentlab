@@ -11,6 +11,9 @@ import (
 	"github.com/giantswarm/agentlab/internal/config"
 )
 
+// substrateNodeLabelValue is the value of the substrateNodes label and taint.
+const substrateNodeLabelValue = "true"
+
 // renderKindConfig decodes the rendered kind config into kind's own type,
 // so the field names are the ones the embedded kind reads.
 func renderKindConfig(t *testing.T, cfg *config.Config) v1alpha4.Cluster {
@@ -78,7 +81,7 @@ func TestKindConfigSubstrateNodes(t *testing.T) {
 		if worker.Role != v1alpha4.WorkerRole {
 			t.Errorf("role = %s, want worker", worker.Role)
 		}
-		if worker.Labels[config.SubstrateNodeKey] != "true" {
+		if worker.Labels[config.SubstrateNodeKey] != substrateNodeLabelValue {
 			t.Errorf("labels = %v, want %s=true", worker.Labels, config.SubstrateNodeKey)
 		}
 		if len(worker.ExtraPortMappings) != 0 {
@@ -91,7 +94,7 @@ func TestKindConfigSubstrateNodes(t *testing.T) {
 		if len(patches) != 1 || patches[0].Kind != "JoinConfiguration" || patches[0].NodeRegistration.Taints == nil {
 			t.Fatalf("worker patches = %+v, want one JoinConfiguration with the taint", patches)
 		}
-		want := []struct{ Key, Value, Effect string }{{config.SubstrateNodeKey, "true", "NoSchedule"}}
+		want := []struct{ Key, Value, Effect string }{{config.SubstrateNodeKey, substrateNodeLabelValue, "NoSchedule"}}
 		if got := *patches[0].NodeRegistration.Taints; !reflect.DeepEqual(got, want) {
 			t.Errorf("worker taints = %+v, want %+v", got, want)
 		}
@@ -101,7 +104,7 @@ func TestKindConfigSubstrateNodes(t *testing.T) {
 // The values pin atelet and the WorkerPool's workers to the substrateNodes
 // workers with the matching toleration, and leave both alone by default.
 func TestPlatformValuesSubstrateNodes(t *testing.T) {
-	toleration := []any{map[string]any{"key": config.SubstrateNodeKey, "operator": "Equal", "value": "true", "effect": "NoSchedule"}}
+	toleration := []any{map[string]any{"key": config.SubstrateNodeKey, "operator": "Equal", "value": substrateNodeLabelValue, "effect": "NoSchedule"}}
 	for _, n := range []int{0, 2} {
 		cfg := config.Default()
 		cfg.SubstrateNodes = n
@@ -122,10 +125,10 @@ func TestPlatformValuesSubstrateNodes(t *testing.T) {
 			}
 			continue
 		}
-		if !reflect.DeepEqual(atelet["nodeSelector"], map[string]any{config.SubstrateNodeKey: "true"}) || !reflect.DeepEqual(atelet["tolerations"], toleration) {
+		if !reflect.DeepEqual(atelet["nodeSelector"], map[string]any{config.SubstrateNodeKey: substrateNodeLabelValue}) || !reflect.DeepEqual(atelet["tolerations"], toleration) {
 			t.Errorf("atelet = %v, want the substrateNodes selector and toleration", atelet)
 		}
-		if selector[config.SubstrateNodeKey] != "true" || selector[workerPoolArchLabel] == nil || !reflect.DeepEqual(pool["tolerations"], toleration) {
+		if selector[config.SubstrateNodeKey] != substrateNodeLabelValue || selector[workerPoolArchLabel] == nil || !reflect.DeepEqual(pool["tolerations"], toleration) {
 			t.Errorf("WorkerPool template = %v, want the arch pin, the substrateNodes selector and toleration", pool)
 		}
 	}
@@ -138,13 +141,14 @@ func TestCheckClusterNodes(t *testing.T) {
 	t.Cleanup(func() { kindNodeNames = prev })
 	cfg := config.Default()
 	cfg.SubstrateNodes = 2
+	cp := cfg.ControlPlaneNode()
 	for _, tc := range []struct {
 		nodes []string
 		ok    bool
 	}{
-		{[]string{"agentlab-worker2", "agentlab-control-plane", "agentlab-worker"}, true},
-		{[]string{"agentlab-control-plane"}, false},
-		{[]string{"agentlab-control-plane", "agentlab-worker"}, false},
+		{[]string{"agentlab-worker2", cp, "agentlab-worker"}, true},
+		{[]string{cp}, false},
+		{[]string{cp, "agentlab-worker"}, false},
 	} {
 		kindNodeNames = func(string) ([]string, error) { return tc.nodes, nil }
 		err := checkClusterNodes(cfg)
