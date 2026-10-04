@@ -150,14 +150,14 @@ func TestSlackDriver(t *testing.T) {
 	f := startTestFake(t, nil)
 	d := newSlackDriver(srv.URL, "sekrit", f, "C1")
 
-	root, err := d.mention("UP", "", slackAgentCommand)
+	root, err := d.mention("UP", "", slackAgentsWord)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := d.mention("UP", root, "again"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.reply("UP", root, slackStopCommand); err != nil {
+	if _, err := d.reply("UP", root, slackStopWord); err != nil {
 		t.Fatal(err)
 	}
 	card := slackMessage{TS: "9.1", Channel: "C1", ThreadTS: root, Blocks: []map[string]any{{fieldTypeKey: slackBlockActions, slackKeyElements: []any{
@@ -193,13 +193,13 @@ func TestSlackDriver(t *testing.T) {
 		}
 		return cb.Event
 	}
-	if e := event(0); e[fieldTypeKey] != "app_mention" || e[slackKeyText] != "<@"+slackFakeBotUser+"> /agent" || e[slackKeyTS] != root || e[slackKeyThreadTS] != nil || e[slackKeyUser] != "UP" || e[slackKeyChannel] != "C1" {
+	if e := event(0); e[fieldTypeKey] != "app_mention" || e[slackKeyText] != "<@"+slackFakeBotUser+"> agents" || e[slackKeyTS] != root || e[slackKeyThreadTS] != nil || e[slackKeyUser] != "UP" || e[slackKeyChannel] != "C1" {
 		t.Errorf("root mention = %v", e)
 	}
 	if e := event(1); e[fieldTypeKey] != "app_mention" || e[slackKeyThreadTS] != root || e[slackKeyTS] == root {
 		t.Errorf("threaded mention = %v", e)
 	}
-	if e := event(2); e[fieldTypeKey] != slackKeyMessage || e[slackKeyText] != slackStopCommand || e[slackKeyThreadTS] != root {
+	if e := event(2); e[fieldTypeKey] != slackKeyMessage || e[slackKeyText] != slackStopWord || e[slackKeyThreadTS] != root {
 		t.Errorf("reply = %v", e)
 	}
 	form, err := url.ParseQuery(string(got[3].body))
@@ -252,7 +252,7 @@ func TestSlackReaders(t *testing.T) {
 	if _, ok := openCard(msgs[3:]); ok {
 		t.Error("a decided card has no buttons left")
 	}
-	roster := slackRosterHeading + " — start a new conversation with `/agent \"<name>\" <question>`:\n• *agentlab Swarmgeist proof* — Throwaway\n• *Other*"
+	roster := slackRosterHeading + ":\n• *agentlab Swarmgeist proof* — Throwaway\n• *Other*"
 	if names := rosterNames(roster); !reflect.DeepEqual(names, []string{"agentlab Swarmgeist proof", "Other"}) {
 		t.Errorf("rosterNames = %q", names)
 	}
@@ -321,5 +321,22 @@ func TestSlackFakeContainerParts(t *testing.T) {
 	}
 	if err := ServeFakeSlack(t.Context(), "127.0.0.1:0", []string{"UP"}); err == nil || !strings.Contains(err.Error(), "<slack user id>=<e-mail>") {
 		t.Errorf("a person without an e-mail: %v", err)
+	}
+}
+
+// The proof reads the fake's modals the same way whether the fake runs in this
+// process or in a container: over HTTP from the container, in views.open order.
+func TestSlackFakeContainerReadsViews(t *testing.T) {
+	f := startTestFake(t, nil)
+	c := &slackFakeContainer{fakeContainer: &fakeContainer{hostURL: strings.TrimSuffix(f.baseURL(), slackAPIPath), client: http.DefaultClient}}
+	if views := c.openedViews(); len(views) != 0 {
+		t.Fatalf("views before any views.open = %v", views)
+	}
+	for _, id := range []string{"picker", "decision"} {
+		callFake(t, f, slackViewsOpen, nil, map[string]any{"trigger_id": "t", "view": map[string]any{"callback_id": id}})
+	}
+	views := c.openedViews()
+	if len(views) != 2 || views[0]["callback_id"] != "picker" || views[1]["callback_id"] != "decision" {
+		t.Errorf("views read from the container = %v", views)
 	}
 }
