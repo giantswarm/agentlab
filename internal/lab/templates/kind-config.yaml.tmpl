@@ -116,8 +116,7 @@ nodes:
   # the WorkerPool's workers here (agent-platform-values.yaml.tmpl), the taint
   # keeps every other pod off, so `docker stop {{ . }}` loses exactly what a
   # spot interruption loses — this node's workers, their local snapshots and
-  # its atelet. kubeadm hands the taint to kubelet's --register-with-taints,
-  # so a node that comes back registers tainted again.
+  # its atelet.
   - role: worker
     labels:
       {{ $.SubstrateNodeKey }}: "true"
