@@ -125,6 +125,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		inGroup(groupTesting, klausGatewayTestCmd()),
 		inGroup(groupTesting, decisionsTestCmd()),
 		inGroup(groupTesting, beekeeperDecisionsTestCmd()),
+		inGroup(groupTesting, beekeeperCentralTestCmd()),
 		inGroup(groupTesting, backstageTestCmd()),
 
 		inGroup(groupCleanup, labCmd("down", "Destroy the kind cluster", lab.Down)),
@@ -1242,6 +1243,27 @@ func beekeeperDecisionsTestCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.GatewayBinary, "gateway-binary", "", "a local klaus-gateway build to run instead of the image")
 	cmd.Flags().IntVar(&opts.Port, "gateway-port", 18090, "host port of the gateway's endpoints; the next four take its admin endpoints, the fake Slack Web API, beekeeper serve and its Postgres")
 	cmd.Flags().StringVar(&opts.RunDir, "run-dir", "", "directory for the stores, keys, serve's configuration and the logs, kept afterwards (default: a temporary directory, removed)")
+	return cmd
+}
+
+func beekeeperCentralTestCmd() *cobra.Command {
+	var opts lab.BeekeeperCentralTestOptions
+	cmd := &cobra.Command{
+		Use:   "beekeeper-central-test",
+		Short: "Headless proof of beekeeper's central resources: beekeeper serve on the host behind muster, two local beekeepers as two lab users through it; a lease one claims refused to the other with its holder, a central lane hold stopping the other's merges, two merges into one lane taking turns, a machine's agent on the central roster, an unreachable central instance refused with exit 69",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			return lab.BeekeeperCentralTest(cfg, opts)
+		},
+	}
+	cmd.Flags().StringVar(&opts.Version, "beekeeper-version", lab.BeekeeperCentralVersionDefault, "the beekeeper release whose binary and CRDs run")
+	cmd.Flags().StringVar(&opts.Binary, "beekeeper-binary", "", "a local static linux beekeeper build for serve and both machines instead of the release's binary — the proof of a branch")
+	cmd.Flags().IntVar(&opts.Port, "port", 18093, "beekeeper serve's port in the node's network; the next one takes its Postgres")
+	cmd.Flags().StringVar(&opts.RunDir, "run-dir", "", "directory for serve's configuration, the two machines and the logs, kept afterwards (default: a temporary directory, removed)")
 	return cmd
 }
 
