@@ -332,11 +332,11 @@ func TestSlackFakeContainerReadsViews(t *testing.T) {
 	if views := c.openedViews(); len(views) != 0 {
 		t.Fatalf("views before any views.open = %v", views)
 	}
-	for _, id := range []string{"first", "second"} {
+	for _, id := range []string{"picker", "decision"} {
 		callFake(t, f, slackViewsOpen, nil, map[string]any{"trigger_id": "t", "view": map[string]any{"callback_id": id}})
 	}
 	views := c.openedViews()
-	if len(views) != 2 || views[0]["callback_id"] != "first" || views[1]["callback_id"] != "second" {
+	if len(views) != 2 || views[0]["callback_id"] != "picker" || views[1]["callback_id"] != "decision" {
 		t.Errorf("views read from the container = %v", views)
 	}
 }
