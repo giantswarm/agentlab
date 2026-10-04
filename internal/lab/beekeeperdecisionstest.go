@@ -16,6 +16,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -28,11 +29,17 @@ import (
 // the answers — a Choose click, a thread reply — come back through muster
 // as the person who answered, beekeeper checks them against the addressee
 // and closes the message; a decision nobody answers closes with its default
-// at its due time, and a withdrawn one loses its buttons.
+// at its due time, and a withdrawn one loses its buttons. The person's guide
+// converses with them: its message opens a direct message, their reply in
+// its thread reaches the guide's mailbox through muster as them, and the
+// guide's answer lands in the same thread; another person cannot reach the
+// guide, and with the guide off the roster the thread says the reply was
+// not delivered.
 
 // BeekeeperDecisionsVersionDefault is the first beekeeper release that puts
-// decisions to people through klaus-gateway.
-const BeekeeperDecisionsVersionDefault = "v0.77.0"
+// decisions to people through klaus-gateway and lets their guide converse
+// with them there.
+const BeekeeperDecisionsVersionDefault = "v0.79.0-rc.1"
 
 // The proof's names: the MCPServer muster aggregates beekeeper under (its
 // tools are x_beekeeper_*), the team the lab users decide as, and the due
@@ -65,6 +72,12 @@ const (
 	beekeeperNoteAdd     = "x_beekeeper_note_add"
 	beekeeperNoteDone    = "x_beekeeper_note_done"
 	beekeeperNoteList    = "x_beekeeper_note_list"
+	beekeeperRegister    = "x_beekeeper_agents_register"
+	beekeeperConverse    = "x_beekeeper_converse"
+	beekeeperSend        = "x_beekeeper_send_message"
+	beekeeperReceive     = "x_beekeeper_receive_messages"
+	beekeeperAck         = "x_beekeeper_ack_messages"
+	beekeeperSendTool    = beekeeperSend
 )
 
 // beekeeperCRDs are the CustomResourceDefinitions serve's store needs, as
@@ -247,7 +260,11 @@ func BeekeeperDecisionsTest(cfg *config.Config, opts BeekeeperDecisionsTestOptio
 	if err := waitBeekeeperTools(askerS); err != nil {
 		return err
 	}
-	p := &beekeeperProof{s: askerS, fake: fake, driver: newSlackDriver(gw.baseURL(), keys.signing, fake, channel),
+	otherS, err := openMusterSession(cfg, tokens[other.Email], "agentlab-beekeeper-decisions-other")
+	if err != nil {
+		return err
+	}
+	p := &beekeeperProof{s: askerS, otherS: otherS, fake: fake, driver: newSlackDriver(gw.baseURL(), keys.signing, fake, channel),
 		asker: asker.Email, askerSlack: askerSlack, otherSlack: otherSlack, channel: channel}
 
 	step("1. A decision for %s, filed through muster: a direct message; %s's click is refused, %s's answers it", asker.Email, other.Email, asker.Email)
@@ -270,7 +287,20 @@ func BeekeeperDecisionsTest(cfg *config.Config, opts BeekeeperDecisionsTestOptio
 	if err := beekeeperOutcomes(); err != nil {
 		return err
 	}
-	note("all beekeeper decisions proven")
+	step("6. The guide in Slack: %s's guide writes to them, their reply in the thread reaches the guide's mailbox from Slack, the guide's answer lands in the same thread", asker.Email)
+	r, err := p.guideConversation()
+	if err != nil {
+		return err
+	}
+	step("7. Another person's message to %s's guide is refused", asker.Email)
+	if err := p.otherRefused(); err != nil {
+		return err
+	}
+	step("8. With the guide off the roster, a reply in its thread is not delivered and the thread says why")
+	if err := p.guideNotRunning(r); err != nil {
+		return err
+	}
+	note("all beekeeper decisions and the guide's conversation proven")
 	return nil
 }
 
@@ -306,8 +336,8 @@ func beekeeperServeConfig(cfg *config.Config, group string, people map[string]st
 	for name, email := range people {
 		fmt.Fprintf(&b, "    %s: %q\n", name, email)
 	}
-	fmt.Fprintf(&b, "  channels: {%q: %q}\n  gateway:\n    url: %q\n    tokenFile: %q\n    answerTool: %q\n",
-		beekeeperTeam, channel, gateway, tokenFile, beekeeperAnswerTool)
+	fmt.Fprintf(&b, "  channels: {%q: %q}\n  gateway:\n    url: %q\n    tokenFile: %q\n    answerTool: %q\n    sendTool: %q\n",
+		beekeeperTeam, channel, gateway, tokenFile, beekeeperAnswerTool, beekeeperSendTool)
 	return b.String()
 }
 
@@ -501,7 +531,7 @@ func waitBeekeeperTools(s *musterSession) error {
 }
 
 type beekeeperProof struct {
-	s                                      *musterSession
+	s, otherS                              *musterSession
 	fake                                   *slackFakeContainer
 	driver                                 *slackDriver
 	asker, askerSlack, otherSlack, channel string
@@ -700,5 +730,163 @@ func beekeeperOutcomes() error {
 		return fmt.Errorf("%s holds %d note.answered via slack and %d note.defaulted Events, want 2 and 1", beekeeperNamespace, answered, defaulted)
 	}
 	note("2 note.answered via slack, 1 note.defaulted")
+	return nil
+}
+
+// The guide of the conversation steps, its address and what it says.
+const (
+	guideName      = "Guide"
+	guideHost      = "agentlab"
+	guideAddress   = "local:" + guideHost + "/" + guideName
+	guideQuestion  = "Shall the release roll onto the lab tonight?"
+	guideReply     = "Yes, after the 21:00 backup."
+	guideAnswer    = "Noted; I hand it to the supervisor."
+	guideNotRunMsg = "Not delivered to *" + guideName + " on " + guideHost + "*"
+)
+
+// guideThread is the guide's conversation: the gateway's id, the direct
+// message and the opening message's ts.
+type guideThread struct{ id, channel, ts string }
+
+// guide calls a beekeeper tool as the asker's guide.
+func (p *beekeeperProof) guide(tool string, args map[string]any) (string, error) {
+	args["agent"], args["host"] = guideName, guideHost
+	return p.s.callServerTool(tool, args)
+}
+
+// replyInThread sends slackUser's reply into the guide's thread, as Slack
+// delivers a direct message.
+func (p *beekeeperProof) replyInThread(r guideThread, slackUser, text string) error {
+	ts := p.fake.nextTS()
+	return p.driver.event(map[string]any{
+		fieldTypeKey: slackKeyMessage, slackKeyUser: slackUser, slackKeyChannel: r.channel, slackKeyChanType: "im",
+		slackKeyText: text, slackKeyTS: ts, slackKeyEventTS: ts, slackKeyThreadTS: r.ts, slackKeyParentUser: slackFakeBotUser,
+	})
+}
+
+// inThread waits until a message of the guide's thread contains text.
+func (p *beekeeperProof) inThread(r guideThread, what, text string) error {
+	var last []slackMessage
+	if !waitFor(int(decisionsWait/(500*time.Millisecond)), 500*time.Millisecond, func() bool {
+		last = p.fake.thread(r.channel, r.ts)
+		for _, m := range last {
+			if strings.Contains(m.shown(), text) {
+				return true
+			}
+		}
+		return false
+	}) {
+		return fmt.Errorf("conversation %s: %s did not appear within %s; the thread holds %d messages", r.id, what, decisionsWait, len(last))
+	}
+	return nil
+}
+
+func (p *beekeeperProof) guideConversation() (guideThread, error) {
+	r := guideThread{channel: directChannel(p.askerSlack)}
+	if _, err := p.guide(beekeeperRegister, map[string]any{}); err != nil {
+		return r, err
+	}
+	text, err := p.guide(beekeeperConverse, map[string]any{slackKeyText: guideQuestion})
+	if err != nil {
+		return r, err
+	}
+	if _, err := fmt.Sscanf(text, "converse: opened conversation %s", &r.id); err != nil {
+		return r, fmt.Errorf("%s answered %q, not an opened conversation", beekeeperConverse, excerpt(text, 200))
+	}
+	m, err := p.message(r.channel, guideQuestion, "the guide's direct message", decisionsWait, func(slackMessage) bool { return true })
+	if err != nil {
+		return r, err
+	}
+	r.ts = m.TS
+	note("conversation %s: the guide's question in %s", r.id, r.channel)
+
+	if err := p.replyInThread(r, p.askerSlack, guideReply); err != nil {
+		return r, err
+	}
+	var got string
+	if !waitFor(int(decisionsWait/time.Second), time.Second, func() bool {
+		got, err = p.guide(beekeeperReceive, map[string]any{})
+		return err == nil && strings.Contains(got, "from "+p.asker+" via slack: slack-")
+	}) {
+		return r, fmt.Errorf("the reply did not reach the guide's mailbox from %s via slack within %s: %s %v", p.asker, decisionsWait, excerpt(got, 300), err)
+	}
+	var id int
+	if _, err := fmt.Sscanf(got, "%d message", &id); err != nil {
+		return r, fmt.Errorf("%s answered %q, no delivery id", beekeeperReceive, excerpt(got, 200))
+	}
+	for _, msg := range p.fake.thread(r.channel, r.ts) {
+		if strings.Contains(msg.shown(), guideNotRunMsg) {
+			return r, fmt.Errorf("the delivered reply got a note: %s", excerpt(msg.shown(), 200))
+		}
+	}
+	note("the reply is in the guide's mailbox: %s", strings.TrimSpace(got))
+	if _, err := p.guide(beekeeperAck, map[string]any{"ids": []any{id}}); err != nil {
+		return r, err
+	}
+
+	text, err = p.guide(beekeeperConverse, map[string]any{slackKeyText: guideAnswer})
+	if err != nil {
+		return r, err
+	}
+	if !strings.Contains(text, "posted to conversation "+r.id) {
+		return r, fmt.Errorf("the guide's answer went elsewhere: %s", excerpt(text, 200))
+	}
+	if err := p.inThread(r, "the guide's answer", guideAnswer); err != nil {
+		return r, err
+	}
+	note("the guide's answer is in the same thread")
+	return r, nil
+}
+
+func (p *beekeeperProof) otherRefused() error {
+	_, err := p.otherS.callServerTool(beekeeperSend, map[string]any{"to": guideAddress,
+		"message": map[string]any{"messageId": "agentlab-other-" + randomSuffix(), "role": "user", "parts": []any{map[string]any{"kind": "text", slackKeyText: "hello"}}}})
+	if err == nil || !strings.Contains(err.Error(), "is not running") {
+		return fmt.Errorf("another person's send_message to %s was not refused: %v", guideAddress, err)
+	}
+	note("refused: %s", excerpt(err.Error(), 200))
+	return nil
+}
+
+// guideNotRunning takes the guide off the roster, as its local beekeeper
+// does when the session ends, and replies in its thread.
+func (p *beekeeperProof) guideNotRunning(r guideThread) error {
+	gvr, err := gvrFor("rosterentries.beekeeper.giantswarm.io")
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	entries, err := listObjects(ctx, gvr, beekeeperNamespace, "")
+	if err != nil {
+		return err
+	}
+	removed := false
+	for _, e := range entries {
+		if addr, _, _ := unstructured.NestedString(e.Object, "spec", "address"); addr == guideAddress {
+			if err := deleteObject(ctx, gvr, beekeeperNamespace, e.GetName(), 30*time.Second); err != nil {
+				return err
+			}
+			removed = true
+		}
+	}
+	if !removed {
+		return fmt.Errorf("no RosterEntry of %s in %s", guideAddress, beekeeperNamespace)
+	}
+	if err := p.replyInThread(r, p.askerSlack, "Are you still there?"); err != nil {
+		return err
+	}
+	if err := p.inThread(r, "the not-delivered note", guideNotRunMsg); err != nil {
+		return err
+	}
+	for _, m := range p.fake.thread(r.channel, r.ts) {
+		if strings.Contains(m.shown(), guideNotRunMsg) {
+			if !strings.Contains(m.shown(), "is not running") {
+				return fmt.Errorf("the note does not say the guide is not running: %s", excerpt(m.shown(), 300))
+			}
+			note("the thread says: %s", excerpt(m.shown(), 200))
+			return nil
+		}
+	}
 	return nil
 }
