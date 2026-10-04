@@ -494,6 +494,25 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	note("the restart notice promised the post; %d recovery attempt(s) failed while the gate was closed; task %s posted %d characters into the thread %s after the restart, no reply sent",
 		resumed.failedAttempts, resumed.taskID, len(resumed.answer), resumed.after.Round(time.Second))
 
+	var signedIn *slackTurn
+	var approvedAfter *decisionOutcome
+	if gatewayKeepsHeld(gw.version()) {
+		step("5c. Restart mid-sign-in: %s, who has no link, asks in a new thread and is prompted to sign in; the gateway stops, the link a completed sign-in leaves is written, the gateway starts — the parked message is answered without being sent again", people.stranger)
+		if signedIn, err = p.restartMidSignIn(gw, filepath.Join(runDir, gatewayLinksFile), keys.store, people.stranger, identity.link(user.Email, token)); err != nil {
+			return err
+		}
+		note("the restarted gateway replayed the message parked before the restart: answered %q", excerpt(signedIn.answer, 40))
+
+		step("5d. Restart mid-approval: a tool call pauses a new thread's task on the approval card; after a restart Approve on that card resumes the task in place")
+		if approvedAfter, err = p.restartMidApproval(api, gw, people.person); err != nil {
+			return err
+		}
+		note("%d approval(s) on task %s after the restart; GetTask=%s; answered %q",
+			approvedAfter.rounds, approvedAfter.taskID, approvedAfter.finalState, excerpt(approvedAfter.answer, 80))
+	} else {
+		note("%s predates klaus-gateway %s, which keeps a parked message and a paused approval across a restart: steps 5c and 5d skipped", gw.version(), klausGatewayHeldSince)
+	}
+
 	// The component half (klausgatewaytest_component.go) while the meta
 	// chart's klaus-gateway runs in this lab: its fixtures are the ones
 	// above, its Slack Web API the same fake, and the instance its turn
@@ -530,6 +549,10 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	fmt.Printf("PASS: /stop in the thread had the gateway cancel task %s at the controller (TASK_STATE_CANCELED); the thread took a following turn\n", canceled)
 	fmt.Printf("PASS: a gateway restart on the bolt stores kept the thread → AgentInstance mapping: the next turn continued %s and recalled the earlier word; no link refresh in the run\n", instanceID)
 	fmt.Printf("PASS: a restart in the middle of a turn, the controller out of reach for %s after it: the restarted gateway kept retrying and posted task %s's answer into its thread %s later, without a reply\n", klausGatewayGateClosed, resumed.taskID, resumed.after.Round(time.Second))
+	if signedIn != nil {
+		fmt.Printf("PASS: a restart between the sign-in prompt and the sign-in lost nothing: the restarted gateway replayed %s's parked message, answered %q\n", people.stranger, excerpt(signedIn.answer, 40))
+		fmt.Printf("PASS: a restart while task %s waited on its approval card lost nothing: %d Approve click(s) after the restart resumed it in place to %s\n", approvedAfter.taskID, approvedAfter.rounds, approvedAfter.finalState)
+	}
 	if component != nil {
 		fmt.Printf("PASS: the meta chart's %s component runs the OBO link store in Secret %s — Role %s grants get/update/patch on that Secret alone, no store volume, RollingUpdate\n", klausGatewayComponent, klausGatewayLinksSecret, klausGatewayLinksSecret)
 		fmt.Printf("PASS: two links written through pkg/auth/musterlink with the lab's store-key survived the loss of pod %s: %s was Ready %s after the deletion and read %d links (%d before the proof), both read back unchanged, the proof's records removed\n",

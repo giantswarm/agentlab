@@ -678,3 +678,18 @@ func TestKlausGatewayRunDirIsAbsolute(t *testing.T) {
 		t.Fatalf("run dir not created: %v", err)
 	}
 }
+
+func TestGatewayKeepsHeld(t *testing.T) {
+	for described, want := range map[string]bool{
+		"klaus-gateway 3.12.0 (abc123)":      false,
+		"klaus-gateway 4.1.0-rc.14 (abc123)": false,
+		"klaus-gateway 4.1.0-rc.15 (abc123)": true,
+		"klaus-gateway 4.1.0 (abc123)":       true,
+		"klaus-gateway (devel) (abc123)":     true,
+		"klaus-gateway (version not logged)": true,
+	} {
+		if got := gatewayKeepsHeld(described); got != want {
+			t.Errorf("gatewayKeepsHeld(%q) = %v, want %v", described, got, want)
+		}
+	}
+}
