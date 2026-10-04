@@ -141,14 +141,14 @@ func TestCheckClusterNodes(t *testing.T) {
 	t.Cleanup(func() { kindNodeNames = prev })
 	cfg := config.Default()
 	cfg.SubstrateNodes = 2
-	cp := cfg.ControlPlaneNode()
+	cp, workers := cfg.ControlPlaneNode(), cfg.SubstrateNodeNames()
 	for _, tc := range []struct {
 		nodes []string
 		ok    bool
 	}{
-		{[]string{"agentlab-worker2", cp, "agentlab-worker"}, true},
+		{[]string{workers[1], cp, workers[0]}, true},
 		{[]string{cp}, false},
-		{[]string{cp, "agentlab-worker"}, false},
+		{[]string{cp, workers[0]}, false},
 	} {
 		kindNodeNames = func(string) ([]string, error) { return tc.nodes, nil }
 		err := checkClusterNodes(cfg)
