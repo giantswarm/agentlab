@@ -288,9 +288,7 @@ func refJSON(branch, sha string) map[string]any {
 // App's token reaches the repository before a commit; every other repository
 // answers 404, as GitHub does for one the App is not installed on.
 func (f *fakeGitHub) getRepository(w http.ResponseWriter, _ *http.Request, _ string) {
-	owner, name, _ := strings.Cut(f.repo, "/")
-	writeGitHubJSON(w, http.StatusOK, map[string]any{"full_name": f.repo, "name": name, "owner": map[string]any{githubLogin: owner},
-		"permissions": map[string]bool{"pull": true, "push": true}})
+	writeGitHubJSON(w, http.StatusOK, map[string]any{"full_name": f.repo})
 }
 
 func (f *fakeGitHub) getRef(w http.ResponseWriter, r *http.Request, _ string) {
