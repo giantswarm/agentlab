@@ -492,6 +492,18 @@ substrate:
 {{- range .AteletImageCacheArgs }}
       - {{ . }}
 {{- end }}
+{{- if .SubstrateNodes }}
+    # substrateNodes: atelet runs on the reserved workers only, beside the
+    # WorkerPool's workers (kagent.substrateWorkerPool below), so losing one
+    # of those nodes loses its atelet with it, as on an installation.
+    nodeSelector:
+      {{ .SubstrateNodeKey }}: "true"
+    tolerations:
+      - key: {{ .SubstrateNodeKey }}
+        operator: Equal
+        value: "true"
+        effect: NoSchedule
+{{- end }}
 {{- end }}
 
 kagent:
@@ -546,11 +558,12 @@ kagent:
     # above).
     image: {{ .HarnessDevImage }}
 {{- end }}
-  # The WorkerPool the chart creates runs its gVisor workers on the one node
-  # this lab has, so the chart's CPU feature-set pin must name that node's
-  # architecture — the fleet's default is amd64, and on an Apple Silicon host
-  # it leaves every worker Pending and every agent turn waiting for one. The
-  # arch key alone: Helm merges the map, so the chart keeps the worker
+  # The WorkerPool the chart creates runs its gVisor workers on the lab's
+  # node (the substrateNodes workers when set), so the chart's CPU
+  # feature-set pin must name that node's architecture — the fleet's
+  # default is amd64, and on an Apple Silicon host it leaves every worker
+  # Pending and every agent turn waiting for one. The arch key alone (and
+  # the substrateNodes pin): Helm merges the map, so the chart keeps the worker
   # resources resources.go budgets for, and workerImage stays the stamp the
   # chart carries from its own Substrate version (the lab never names it).
   # Quoted: a nodeSelector value is a string (the chart's validateWorkerPool
@@ -560,6 +573,16 @@ kagent:
     template:
       nodeSelector:
         {{ .WorkerPoolArchLabel }}: "{{ .WorkerPoolArch }}"
+{{- if .SubstrateNodes }}
+        # substrateNodes: the workers land on the reserved nodes only and
+        # tolerate their taint (the kind config), the platform stays off them.
+        {{ .SubstrateNodeKey }}: "true"
+      tolerations:
+        - key: {{ .SubstrateNodeKey }}
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+{{- end }}
   # The controller's database is the platform Postgres (postgres.enabled
   # below, the fleet shape): kagent's `kagent_v2` database on the CNPG
   # Cluster, its connection Secret <clusterName>-kagent-v2-app derived by

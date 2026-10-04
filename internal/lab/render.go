@@ -132,6 +132,10 @@ type tmplData struct {
 	// and an arm64 lab whose pool keeps it never schedules a worker.
 	WorkerPoolArchLabel string
 	WorkerPoolArch      string
+	// SubstrateNodeKey is the label and taint key of the substrateNodes
+	// workers (config.SubstrateNodeKey): the kind config puts it on the
+	// nodes, the values pin atelet and the WorkerPool to them.
+	SubstrateNodeKey string
 	// GitHubToken mirrors gitHubTokenWired(cfg): $GITHUB_TOKEN is set on the
 	// host (githubtoken.go), so the values name the Secret the lab creates
 	// from it — the portal's extraEnvVarsSecrets and the overlay's
@@ -215,6 +219,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		AteletImageCacheArgs:       ateletImageCacheArgs,
 		WorkerPoolArchLabel:        workerPoolArchLabel,
 		WorkerPoolArch:             workerPoolArch(),
+		SubstrateNodeKey:           config.SubstrateNodeKey,
 		GitHubToken:                gitHubTokenWired(cfg),
 		ModelManagerEnabled:        cfg.ModelManagerEnabled(),
 		LegacyChart:                cfg.LegacyChart(),

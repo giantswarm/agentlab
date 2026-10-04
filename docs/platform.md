@@ -432,6 +432,37 @@ what the lab asked for — and refuse a cluster no node of which carries it.
 That is the only warning there is: the pool's workers are ate-controller's,
 so the Helm release goes Ready while they sit `Pending`.
 
+**Substrate worker nodes (`substrateNodes`)** are for the proofs a single
+node cannot run: losing the node that holds a paused actor's local snapshot,
+which is what a spot interruption or a node roll does on an installation.
+`substrateNodes: N` in `agentlab.yaml` (0 to 3; the default 0 is the
+single-node lab, rendered unchanged) adds N kind workers
+`<cluster>-worker`, `<cluster>-worker2`, … labelled and tainted
+`agentlab.giantswarm.io/substrate-worker=true` (`NoSchedule`). The values pin
+the atelet DaemonSet (`substrate.atelet.nodeSelector`/`tolerations`) and the
+`WorkerPool`'s workers (`kagent.substrateWorkerPool.template`, beside the
+architecture pin) to them, and the control plane keeps no taint, so everything
+else stays there. Stopping a worker therefore removes exactly that node's
+ateom workers and its atelet. The setting needs the 4.x agents
+(`platform.agents`) and is fixed at `kind create`: `up` refuses an existing
+cluster whose nodes differ, and `agentlab down && agentlab up` applies a
+change. Every worker is another kubelet and containerd on the host's memory.
+
+The node-loss recipe, on a lab with `substrateNodes: 2`:
+
+1. Park a turn on a decision: a Generic-chart agent with
+   `muster.requireApproval: true` (the shape `a2a-test` writes) pauses its task
+   at `input-required` on its first tool call. ate-api logs `Pause snapshot is
+   durable` once the atelet has uploaded the copy. The atelet that logs
+   `UploadPausedCheckpoint` names the node.
+2. Lose that node: `docker stop <cluster>-worker2 && kubectl delete node
+   <cluster>-worker2` (`KUBECONFIG=state/kubeconfig`). Within about a minute
+   Substrate deregisters the node's workers and the pool rebuilds them on the
+   remaining worker. The platform stays up.
+3. Answer the decision. The actor resumes on the other node, and its atelet's
+   `Restore` RPC carries `type: 2` with `ExternalConfig.snapshot_uri` naming
+   the pause snapshot: the durable copy, restored off the dead node.
+
 **The platform Postgres** is the fleet's shape too: `components.cloudnative-pg`
 (the upstream CloudNativePG operator, the chart's optional component — a
 management cluster runs it as its own app) and `postgres.enabled` render one

@@ -83,6 +83,9 @@ func Up(cfg *config.Config, offers Offers) error {
 		if err := checkClusterIssuer(cfg); err != nil {
 			return err
 		}
+		if err := checkClusterNodes(cfg); err != nil {
+			return err
+		}
 	} else {
 		if err := writeNodeFiles(); err != nil {
 			return err
@@ -307,6 +310,25 @@ func checkClusterIssuer(cfg *config.Config) error {
 	}
 	if issuer != cfg.Issuer() {
 		return fmt.Errorf("cluster %q was created for the issuer %s, the configuration's is %s (platform.tls moves it under platform.domain): the apiserver reads it only at creation, so recreate the lab (`agentlab down`, then `agentlab up`)", cfg.ClusterName, issuer, cfg.Issuer())
+	}
+	return nil
+}
+
+// checkClusterNodes refuses an existing cluster whose nodes are not the
+// configuration's — a substrateNodes change on a running lab: kind fixes the
+// nodes at `kind create`, and a values render pinning Substrate to workers
+// the cluster lacks would leave atelet and every worker Pending.
+func checkClusterNodes(cfg *config.Config) error {
+	have, err := kindNodeNames(cfg.ClusterName)
+	if err != nil {
+		return err
+	}
+	want := append([]string{cfg.ControlPlaneNode()}, cfg.SubstrateNodeNames()...)
+	slices.Sort(have)
+	slices.Sort(want)
+	if !slices.Equal(have, want) {
+		return fmt.Errorf("cluster %q has the nodes %s, substrateNodes: %d wants %s: kind fixes the nodes at creation, so recreate the lab (`agentlab down`, then `agentlab up`)",
+			cfg.ClusterName, strings.Join(have, ", "), cfg.SubstrateNodes, strings.Join(want, ", "))
 	}
 	return nil
 }
