@@ -767,6 +767,16 @@ admission label.
    person and no "reply in this thread" note. The host gateway always reaches
    the edge through that gate (`--gateway-port` + 3), under the edge's own
    hostname, so TLS verifies as usual.
+   **5c. Restart mid-sign-in**: the person with no link asks in a new thread
+   and is prompted to sign in; the gateway stops, the link a completed
+   sign-in leaves is written to its link store, and the gateway starts again.
+   The parked message is answered without being sent again: the restarted
+   gateway read it back from its routing store and replayed it.
+   **5d. Restart mid-approval**: a tool call pauses a new thread's task on the
+   approval card; after a restart, Approve on that card resumes the same task
+   in place to `TASK_STATE_COMPLETED`. Steps 5c and 5d run on a gateway that
+   keeps held state (klaus-gateway 4.1.0-rc.15 and later, or a dev build) and
+   are skipped, with a note, on an earlier release.
 
 With `platform.klausGateway` on, the meta chart's `klaus-gateway` component
 follows (the in-cluster shape, the OBO link store in a Secret, its Slack Web
