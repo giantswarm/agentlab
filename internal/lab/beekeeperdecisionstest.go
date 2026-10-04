@@ -840,7 +840,7 @@ func (p *beekeeperProof) guideConversation() (guideThread, error) {
 
 func (p *beekeeperProof) otherRefused() error {
 	_, err := p.otherS.callServerTool(beekeeperSend, map[string]any{"to": guideAddress,
-		"message": map[string]any{"messageId": "agentlab-other-" + randomSuffix(), "role": "user", "parts": []any{map[string]any{"kind": "text", slackKeyText: "hello"}}}})
+		slackKeyMessage: map[string]any{"messageId": "agentlab-other-" + randomSuffix(), "role": chatRoleUser, "parts": []any{map[string]any{beekeeperKeyKind: "text", slackKeyText: "hello"}}}})
 	if err == nil || !strings.Contains(err.Error(), "is not running") {
 		return fmt.Errorf("another person's send_message to %s was not refused: %v", guideAddress, err)
 	}
