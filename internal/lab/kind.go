@@ -114,6 +114,20 @@ func kindClusters() ([]string, error) {
 	return clusters, kindError("listing clusters", err)
 }
 
+// kindNodeNames lists the node containers of a cluster, running or not. A
+// variable so tests can stand in for the cluster.
+var kindNodeNames = func(clusterName string) ([]string, error) {
+	nodes, err := kindProvider().ListInternalNodes(clusterName)
+	if err != nil {
+		return nil, kindError("listing the nodes of cluster "+clusterName, err)
+	}
+	names := make([]string, len(nodes))
+	for i, node := range nodes {
+		names[i] = node.String()
+	}
+	return names, nil
+}
+
 // kindKubeconfigRaw reads the cluster's admin kubeconfig off its
 // control-plane node, with the host-side endpoint — independent of any
 // kubeconfig on the host. A variable so tests can stand in for the cluster.
@@ -129,8 +143,8 @@ var kindKubeconfigRaw = func(name string) ([]byte, error) {
 // `ctr images import` over the engine's exec (loadNodeArchive), what `kind
 // load image-archive` runs minus its digest records (preload.go says why the
 // archive, HACKS.md U21), reading the stream as
-// it comes — never a file. The lab is a single-node cluster
-// (config.ControlPlaneNode); a cluster with more nodes gets the one stream
+// it comes — never a file. The lab is a single-node cluster unless
+// substrateNodes adds workers; a cluster with more nodes gets the one stream
 // fanned out to each of them, a node whose import stopped dropping out
 // without stalling the rest. A variable so tests can stand in for the node.
 var kindLoadArchive = func(clusterName string, archive io.Reader) error {

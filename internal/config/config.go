@@ -692,6 +692,14 @@ type Config struct {
 	DexPort  int    `yaml:"dexPort"`
 	DexImage string `yaml:"dexImage"`
 
+	// SubstrateNodes adds that many kind worker nodes reserved for Agent
+	// Substrate: labelled and tainted SubstrateNodeKey, they carry the atelet
+	// DaemonSet and the WorkerPool's workers and nothing else, so stopping one
+	// removes exactly what a spot interruption removes — the node-loss proofs
+	// of paused actors' snapshots. 0, the default, is the single-node lab.
+	// Fixed at `kind create`, like every node of the cluster.
+	SubstrateNodes int `yaml:"substrateNodes,omitempty"`
+
 	// The Claude model both AI consumers use: the platform agents' default
 	// ModelConfig (kagent) and Backstage's ai-chat. The API key is NOT config:
 	// it is read from $ANTHROPIC_API_KEY at deploy time and lands only in
@@ -1091,6 +1099,12 @@ func (c *Config) Validate() error {
 	if err := ValidateAIModel(c.AIModel); err != nil {
 		return fmt.Errorf("aiModel %q: %w", c.AIModel, err)
 	}
+	if c.SubstrateNodes < 0 || c.SubstrateNodes > MaxSubstrateNodes {
+		return fmt.Errorf("substrateNodes: %d, want 0 (the single-node lab) to %d", c.SubstrateNodes, MaxSubstrateNodes)
+	}
+	if c.SubstrateNodes > 0 && (!c.Platform.Agents || c.LegacyChart()) {
+		return fmt.Errorf("substrateNodes: %d needs Agent Substrate, which only the agents of the 4.x line run (platform.agents on, no 3.x chart)", c.SubstrateNodes)
+	}
 	if len(c.Users) == 0 {
 		return fmt.Errorf("at least one user is required")
 	}
@@ -1459,6 +1473,28 @@ func (c *Config) DexHost() string {
 
 // ControlPlaneNode is the docker container name kind gives the (only) node.
 func (c *Config) ControlPlaneNode() string { return c.ClusterName + "-control-plane" }
+
+// SubstrateNodeKey is the label and the NoSchedule taint (value "true") of
+// the substrateNodes workers.
+const SubstrateNodeKey = "agentlab.giantswarm.io/substrate-worker"
+
+// MaxSubstrateNodes bounds substrateNodes: every node is a container running
+// its own kubelet and containerd on the host's memory, and a node-loss proof
+// needs one node to lose and one to land on.
+const MaxSubstrateNodes = 3
+
+// SubstrateNodeNames are the container (and Node) names kind gives the
+// substrateNodes workers: <cluster>-worker, <cluster>-worker2, …
+func (c *Config) SubstrateNodeNames() []string {
+	names := make([]string, c.SubstrateNodes)
+	for i := range names {
+		names[i] = c.ClusterName + "-worker"
+		if i > 0 {
+			names[i] += strconv.Itoa(i + 1)
+		}
+	}
+	return names
+}
 
 // MCPServerName is the MCPServer CR the connectivity chart registers for the
 // bundled mcp-kubernetes (mcp-kubernetes.mcpServer.managementCluster): a
