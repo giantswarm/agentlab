@@ -7,17 +7,15 @@
 package apiv1alpha1
 
 import (
-	reflect "reflect"
-	sync "sync"
-	unsafe "unsafe"
-
 	_ "buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go/buf/validate"
+	gen "github.com/giantswarm/agentlab/internal/kagent/gen"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	structpb "google.golang.org/protobuf/types/known/structpb"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
-
-	gen "github.com/giantswarm/agentlab/internal/kagent/gen"
+	reflect "reflect"
+	sync "sync"
+	unsafe "unsafe"
 )
 
 const (
