@@ -1,5 +1,14 @@
 # The migration rehearsal (3.x → 4.x in place)
 
+> **Scope.** This rehearsal covers the 3.x → 4.x line (kagent 0.10 → kagent
+> 1.x) and its migrate Job. The kagent line after 1.x rewrites its baseline
+> database schema in place and refuses a 1.x database at startup, so the next
+> cut-over is not an in-place upgrade: the kagent database is dropped and
+> recreated (every Session and share is lost), the `kagent.dev` CRDs are
+> replaced by `api.kagent.dev`, and the agents are re-rendered as `Agent`
+> objects. The scripts below stay as the record of the 3.x → 4.x run; they do
+> not drive that cut-over.
+
 A lab on a **released 3.x meta chart** — kagent 0.10 (`kagent.dev/v1alpha2`
 `Agent`s) — seeded with the four shapes agents take on an installation,
 upgraded **in place** with `agentlab platform` to the 4.x line (kagent API

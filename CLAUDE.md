@@ -321,8 +321,9 @@ Load-bearing invariants (details in docs/):
   kind and the RBAC exist to serve it; muster is the single auth enforcement
   point, and `mcp-kubernetes` is deliberately unauthenticated on the cluster
   network. kagent (the agents runtime) is an optional part of the platform
-  install (on by default), with `controller.auth.mode: unsecure` because the
-  lab runs no JWT-validating front proxy.
+  install (on by default); its controller runs in `trusted-proxy` mode behind
+  the edge's JWT policy on the current line (`unsecure` on the released 3.x
+  line, which runs no JWT-validating front proxy).
 - **One issuer URL from every vantage point**: `https://localhost:<dexPort>/dex`
   works from the Mac, inside the node, and inside hostNetwork pods because the
   Dex NodePort equals the kind host port. The issuer must be spelled

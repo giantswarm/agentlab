@@ -19,7 +19,7 @@ func TestRosterLine(t *testing.T) {
 			want: `  kagent/sre  template=sre  harness=kagent  "SRE"`,
 		},
 		{
-			in:   agentListing{Namespace: kagentNamespace, Name: "narrow", Template: "narrow", Harness: platformHarness, Unavailable: "Agent narrow has not compiled a ready revision: booting"},
+			in:   agentListing{Namespace: kagentNamespace, Name: fakeNarrowAgent, Template: fakeNarrowAgent, Harness: platformHarness, Unavailable: "Agent narrow has not compiled a ready revision: booting"},
 			want: "  kagent/narrow  template=narrow  harness=kagent  unavailable: Agent narrow has not compiled a ready revision: booting",
 		},
 		{
@@ -38,27 +38,27 @@ func TestRosterLine(t *testing.T) {
 // template without an Agent, an Agent that is not Ready, and a Harness no
 // Agent pairs the template with are refused with the reason.
 func TestSelectAgent(t *testing.T) {
-	templates := []*apiv1alpha1.AgentTemplate{fakeTemplate(t, a2aTestAgent, nil), fakeTemplate(t, "coding", nil)}
+	templates := []*apiv1alpha1.AgentTemplate{fakeTemplate(t, a2aTestAgent, nil), fakeTemplate(t, fakeCodingAgent, nil)}
 	agents := []*apiv1alpha1.Agent{
 		fakeAgent(t, a2aTestAgent, a2aTestAgent, kagentHarness, nil, fakeReady(true, "")),
-		fakeAgent(t, "coding", "coding", testOtherHarness, nil, fakeReady(true, "")),
-		fakeAgent(t, "coding-snapshotting", "coding", "snapshotting", nil, fakeReady(false, "waiting for the golden snapshot")),
-		fakeAgent(t, "narrow", "narrow", kagentHarness, nil, fakeReady(false, "booting")),
+		fakeAgent(t, fakeCodingAgent, fakeCodingAgent, testOtherHarness, nil, fakeReady(true, "")),
+		fakeAgent(t, "coding-snapshotting", fakeCodingAgent, "snapshotting", nil, fakeReady(false, "waiting for the golden snapshot")),
+		fakeAgent(t, fakeNarrowAgent, fakeNarrowAgent, kagentHarness, nil, fakeReady(false, "booting")),
 	}
-	for name, want := range map[string]string{a2aTestAgent: a2aTestAgent, "coding": "coding"} {
+	for name, want := range map[string]string{a2aTestAgent: a2aTestAgent, fakeCodingAgent: fakeCodingAgent} {
 		if got, err := selectAgent(agents, templates, name, ""); err != nil || got.Name != want {
 			t.Errorf("selectAgent(%s) = %q, %v; want %q", name, got.Name, err, want)
 		}
 	}
-	if _, err := selectAgent(agents, templates, "coding", "snapshotting"); err == nil || !strings.Contains(err.Error(), "waiting for the golden snapshot") {
+	if _, err := selectAgent(agents, templates, fakeCodingAgent, "snapshotting"); err == nil || !strings.Contains(err.Error(), "waiting for the golden snapshot") {
 		t.Errorf("an Agent pinned by Harness that is not Ready: %v", err)
 	}
-	if got, err := selectAgent(agents, templates, "coding", testOtherHarness); err != nil || got.Name != "coding" {
+	if got, err := selectAgent(agents, templates, fakeCodingAgent, testOtherHarness); err != nil || got.Name != fakeCodingAgent {
 		t.Errorf("the Agent of the named Harness: %q, %v", got.Name, err)
 	}
 	for name, reason := range map[string]string{
-		"narrow": "booting",
-		"nobody": "not in this user's roster",
+		fakeNarrowAgent: "booting",
+		"nobody":        "not in this user's roster",
 	} {
 		if _, err := selectAgent(agents, templates, name, ""); err == nil || !strings.Contains(err.Error(), reason) {
 			t.Errorf("selectAgent(%s) error = %v, want %q", name, err, reason)

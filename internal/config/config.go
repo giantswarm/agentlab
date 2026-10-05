@@ -747,7 +747,7 @@ var ModelProviders = map[string]string{
 var ModelProviderNames = []string{ProviderOpenAI, ProviderAnthropic, ProviderGemini, ProviderOllama}
 
 // ReasoningEfforts is the ModelConfig CRD's enum for openAI.reasoningEffort on
-// the kagent line (kagent.dev/v1alpha3).
+// the kagent line (api.kagent.dev/v1alpha3).
 var ReasoningEfforts = []string{"none", "minimal", "low", "medium", "high", "xhigh"}
 
 // SecretName is the Kubernetes Secret (in ns kagent) holding this model's key.

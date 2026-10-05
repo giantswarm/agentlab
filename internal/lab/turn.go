@@ -188,7 +188,7 @@ func selectAgent(agents []*apiv1alpha1.Agent, templates []*apiv1alpha1.AgentTemp
 		for _, l := range candidates {
 			if l.Harness == harness {
 				if l.Unavailable != "" {
-					return agentListing{}, fmt.Errorf("Agent %s cannot start a conversation: %s", l.Name, l.Unavailable)
+					return agentListing{}, fmt.Errorf("agent %s cannot start a conversation: %s", l.Name, l.Unavailable)
 				}
 				return l, nil
 			}
@@ -200,7 +200,7 @@ func selectAgent(agents []*apiv1alpha1.Agent, templates []*apiv1alpha1.AgentTemp
 			return l, nil
 		}
 	}
-	return agentListing{}, fmt.Errorf("Agent %s cannot start a conversation: %s", candidates[0].Name, candidates[0].Unavailable)
+	return agentListing{}, fmt.Errorf("agent %s cannot start a conversation: %s", candidates[0].Name, candidates[0].Unavailable)
 }
 
 // agentNames words the candidates as `name (harness)`.

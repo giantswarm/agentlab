@@ -518,13 +518,13 @@ func waitAgentRender(name string) (*agentTemplate, *agentObject, error) {
 func assertAgentRender(t *agentTemplate, agent *agentObject, spec agentSpec, musterURL string) error {
 	name := spec.Name
 	if got := agent.harnessName(); got != spec.harnessValue() {
-		return fmt.Errorf("Agent %s references Harness %q, wanted %q (agent.harness)", name, got, spec.harnessValue())
+		return fmt.Errorf("agent %s references Harness %q, wanted %q (agent.harness)", name, got, spec.harnessValue())
 	}
 	if got := agent.templateName(); got != name {
-		return fmt.Errorf("Agent %s references AgentTemplate %q, wanted %s", name, got, name)
+		return fmt.Errorf("agent %s references AgentTemplate %q, wanted %s", name, got, name)
 	}
 	if got := agent.Metadata.Labels[fluxHelmReleaseNameLabel]; got != name {
-		return fmt.Errorf("Agent %s carries %s=%q, wanted %s (rendered by the agent's HelmRelease)", name, fluxHelmReleaseNameLabel, got, name)
+		return fmt.Errorf("agent %s carries %s=%q, wanted %s (rendered by the agent's HelmRelease)", name, fluxHelmReleaseNameLabel, got, name)
 	}
 	if got := t.Metadata.Labels[fluxHelmReleaseNameLabel]; got != name {
 		return fmt.Errorf("AgentTemplate %s carries %s=%q, wanted %s (rendered by the agent's HelmRelease)", name, fluxHelmReleaseNameLabel, got, name)

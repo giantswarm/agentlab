@@ -234,7 +234,7 @@ func A2ATest(cfg *config.Config, email string, opts A2ATestOptions) error {
 		return fmt.Errorf("CreateSession with the same request_id created a second session %s next to %s", again.GetId(), session.GetId())
 	}
 	if session.GetCreator() != user.Email {
-		return fmt.Errorf("Session %s has creator %q, wanted %s", session.GetId(), session.GetCreator(), user.Email)
+		return fmt.Errorf("session %s has creator %q, wanted %s", session.GetId(), session.GetCreator(), user.Email)
 	}
 	note("Session %s (creator %s, %s); the same request_id answers the same session", session.GetId(), session.GetCreator(), sessionState(session))
 

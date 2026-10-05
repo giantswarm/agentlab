@@ -34,6 +34,7 @@ const (
 	testHarnessName   = "kagent"
 	testRosterRelease = "probe"
 	testOtherHarness  = "claude"
+	listItemsKey      = "items"
 	testRefMain       = "main"
 	testArtifactID    = "a-1"
 	testSkillPath     = "plugins/gs-base/skills/runbooks"
@@ -549,17 +550,17 @@ func rosterAgent(name, harness string, ready, unresolved bool) map[string]any {
 // platform-admin reads it, anyone else meets the apiserver's 403.
 func TestRoster(t *testing.T) {
 	fp := newFakePortal(t)
-	agents := map[string]any{"items": []any{
+	agents := map[string]any{listItemsKey: []any{
 		rosterAgent(testRosterRelease, testHarnessName, true, false),
 		rosterAgent("compiling", testHarnessName, false, false),
 		rosterAgent("orphan", "nowhere", false, true),
 	}}
-	templates := map[string]any{"items": []any{
+	templates := map[string]any{listItemsKey: []any{
 		rosterTemplate(testRosterRelease, testRosterRelease),
 		rosterTemplate("compiling", "compiling"),
 		rosterTemplate("orphan", ""),
 	}}
-	carriers := map[string]any{"items": []any{map[string]any{
+	carriers := map[string]any{listItemsKey: []any{map[string]any{
 		fieldAPIVersion: agentTemplateAPIVersion, fieldKind: remoteMCPServerKind,
 		fieldMetadata: map[string]any{nameKey: testRosterRelease, fieldNamespace: kagentNamespace},
 		fieldSpec:     map[string]any{"url": testMusterURL, "headersFrom": []any{map[string]any{nameKey: toolsetHeader, "value": presetReadOnly + "," + workflowIncidentTriage}}},

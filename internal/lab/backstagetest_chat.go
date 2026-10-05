@@ -16,8 +16,8 @@ import (
 // the agent-platform backend serves the browser (plugins/agent-platform-backend
 // router.ts), every call carrying the user's forwarded Dex id_token in
 // backstage-kagent-authorization, which the backend forwards to the
-// controller as the person's bearer. A session is the person's AgentInstance
-// of the agent's template on the platform Harness: created on the first
+// controller as the person's bearer. A session is the person's kagent
+// Session of the Agent: created on the first
 // message with the browser's requestId (idempotent on (creator, requestId)),
 // listed for its creator only, renamed, deleted. A turn is A2A v1
 // SendStreamingMessage relayed as SSE frames of proto3 JSON (one
@@ -39,11 +39,11 @@ const (
 	kagentSessionUsagePath  = "/session-usage"
 )
 
-// The AgentInstance states the controller reports (proto3 JSON enum names)
+// The Session runtime states the controller reports (proto3 JSON enum names)
 // and the A2A task states, as the frames spell them.
 const (
-	instanceStateReady     = "AGENT_INSTANCE_STATE_READY"
-	instanceStateSuspended = "AGENT_INSTANCE_STATE_SUSPENDED"
+	instanceStateReady     = "RUNTIME_STATE_READY"
+	instanceStateSuspended = "RUNTIME_STATE_SUSPENDED"
 	taskStateCompleted     = "TASK_STATE_COMPLETED"
 	taskStateCanceled      = "TASK_STATE_CANCELED"
 	taskStateInputRequired = "TASK_STATE_INPUT_REQUIRED"
@@ -275,8 +275,8 @@ type portalInstallation struct {
 	Reason    string `json:"reason"`
 }
 
-// portalInstance is an AgentInstance as the sessions routes return it (the
-// controller's AgentInstance in proto3 JSON, under agentInstance).
+// portalInstance is a Session as the sessions routes return it (the
+// controller's Session in proto3 JSON, under the routes' agentInstance key).
 type portalInstance struct {
 	ID            string `json:"id"`
 	Creator       string `json:"creator"`
@@ -299,7 +299,7 @@ func (a portalAgentRef) body() map[string]any {
 	return map[string]any{"agentNamespace": a.Namespace, "agentName": a.Name}
 }
 
-// createSession is POST /kagent/sessions: the person's AgentInstance of the
+// createSession is POST /kagent/sessions: the person's Session of the
 // agent, titled, keyed by requestId. Returns the status too, so a 409 for a
 // reused requestId with other parameters is judged by the caller.
 func (ps *portalSession) createSession(agent portalAgentRef, name, requestID string) (int, *portalInstance, []byte, error) {
@@ -616,7 +616,7 @@ func proveChat(primary *portalSession, others []*portalSession, agent portalAgen
 		return nil, fmt.Errorf("GET %s for %s does not list the session %s just created", kagentSessionsPath, email, sessionID)
 	}
 	note("session %s (creator %s, state %s, title %q); the repeat answered the same id; listed among %d of %s's", sessionID, instance.Creator, instance.State, instance.Name, len(mine), email)
-	verdicts = append(verdicts, fmt.Sprintf("PASS: POST %s creates the person's AgentInstance (%s, creator %s) and answers the same instance for the same requestId", kagentSessionsPath, sessionID, email))
+	verdicts = append(verdicts, fmt.Sprintf("PASS: POST %s creates the person's Session (%s, creator %s) and answers the same instance for the same requestId", kagentSessionsPath, sessionID, email))
 
 	word := codeword()
 	step("Turn 1 streams (SSE) and the agent's tool call reaches muster as %s", email)

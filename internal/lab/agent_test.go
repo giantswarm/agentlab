@@ -64,7 +64,7 @@ func TestCreateAgentArgs(t *testing.T) {
 	if !reflect.DeepEqual(bare, map[string]any{nameKey: testAgentName, modelConfigKey: defaultModelConfig}) {
 		t.Errorf("a bare spec composes %v", bare)
 	}
-	if _, err := createAgentArgs(agentSpec{Name: testAgentName, ModelConfig: defaultModelConfig, Harness: "claude"}); err == nil || !strings.Contains(err.Error(), "direct HelmRelease writer") {
+	if _, err := createAgentArgs(agentSpec{Name: testAgentName, ModelConfig: defaultModelConfig, Harness: testOtherHarness}); err == nil || !strings.Contains(err.Error(), "direct HelmRelease writer") {
 		t.Errorf("another Harness through agent-manager: %v", err)
 	}
 	if _, err := createAgentArgs(agentSpec{Name: testAgentName, ModelConfig: defaultModelConfig, Harness: kagentHarness}); err != nil {
@@ -515,7 +515,7 @@ func TestAgentManagerWriter(t *testing.T) {
 	if _, err := (agentManagerWriter{&musterSession{client: refusing.Client(), url: refusing.URL, token: testToken}}).createAgent(testSpec()); err == nil || !strings.Contains(err.Error(), "toolset is required") {
 		t.Errorf("a refusal: %v", err)
 	}
-	if _, err := writer.createAgent(agentSpec{Name: testAgentName, Harness: "claude"}); err == nil {
+	if _, err := writer.createAgent(agentSpec{Name: testAgentName, Harness: testOtherHarness}); err == nil {
 		t.Error("another Harness must be refused before any call")
 	}
 }

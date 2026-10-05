@@ -36,6 +36,8 @@ const (
 	fakeTool          = "filter_tools"
 	kindAgentTemplate = "AgentTemplate"
 	kindAgent         = "Agent"
+	fakeCodingAgent   = "coding"
+	fakeNarrowAgent   = "narrow"
 	testWorkerPool    = "kagent-default"
 	testWorkerPod     = "kagent-default-abc"
 	testWorkerIP      = "10.0.0.7"
@@ -654,8 +656,8 @@ func TestCreateSession(t *testing.T) {
 	if err != nil || other.GetId() == first.GetId() {
 		t.Errorf("another request_id: %v %v", other.GetId(), err)
 	}
-	coding, err := api.createSession(t.Context(), "coding", "req-3")
-	if err != nil || coding.GetAgent().GetName() != "coding" {
+	coding, err := api.createSession(t.Context(), fakeCodingAgent, "req-3")
+	if err != nil || coding.GetAgent().GetName() != fakeCodingAgent {
 		t.Errorf("a session of another Agent: %v %v", coding.GetAgent(), err)
 	}
 	listed, err := api.listSessions(t.Context())

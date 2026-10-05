@@ -590,7 +590,7 @@ func (a *kagentAPI) createSessionOf(ctx context.Context, agent *apiv1alpha1.Reso
 		return nil, fmt.Errorf("creating a Session of Agent %s: %w", agentTenant(agent), err)
 	}
 	if !created {
-		return nil, fmt.Errorf("Agent %s has no successful revision after %s (the controller keeps answering FailedPrecondition)", agent.GetName(), agentRevisionTimeout)
+		return nil, fmt.Errorf("agent %s has no successful revision after %s (the controller keeps answering FailedPrecondition)", agent.GetName(), agentRevisionTimeout)
 	}
 	session := resp.GetSession()
 	if session.GetId() == "" {
@@ -609,12 +609,12 @@ func (a *kagentAPI) awaitSessionReady(ctx context.Context, session *apiv1alpha1.
 		case apiv1alpha1.RuntimeState_RUNTIME_STATE_READY, apiv1alpha1.RuntimeState_RUNTIME_STATE_SUSPENDED:
 			return session, nil
 		case apiv1alpha1.RuntimeState_RUNTIME_STATE_FAILED:
-			return session, fmt.Errorf("Session %s failed: %s %s", session.GetId(), session.GetFailure().GetReason(), session.GetFailure().GetMessage())
+			return session, fmt.Errorf("session %s failed: %s %s", session.GetId(), session.GetFailure().GetReason(), session.GetFailure().GetMessage())
 		case apiv1alpha1.RuntimeState_RUNTIME_STATE_DELETING, apiv1alpha1.RuntimeState_RUNTIME_STATE_DELETED:
-			return session, fmt.Errorf("Session %s is %s", session.GetId(), sessionState(session))
+			return session, fmt.Errorf("session %s is %s", session.GetId(), sessionState(session))
 		}
 		if time.Now().After(deadline) {
-			return session, fmt.Errorf("Session %s is still %s after %s", session.GetId(), sessionState(session), sessionReadyTimeout)
+			return session, fmt.Errorf("session %s is still %s after %s", session.GetId(), sessionState(session), sessionReadyTimeout)
 		}
 		select {
 		case <-ctx.Done():
@@ -697,7 +697,7 @@ func (a *kagentAPI) resumeSession(ctx context.Context, id string) (*apiv1alpha1.
 	deadline := time.Now().Add(sessionReadyTimeout)
 	for session.GetState() != apiv1alpha1.RuntimeState_RUNTIME_STATE_READY {
 		if time.Now().After(deadline) {
-			return session, fmt.Errorf("Session %s is still %s after %s", id, sessionState(session), sessionReadyTimeout)
+			return session, fmt.Errorf("session %s is still %s after %s", id, sessionState(session), sessionReadyTimeout)
 		}
 		select {
 		case <-ctx.Done():
