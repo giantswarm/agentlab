@@ -35,6 +35,7 @@ const (
 	testRosterRelease = "probe"
 	testOtherHarness  = "claude"
 	listItemsKey      = "items"
+	fieldSession      = "session"
 	testRefMain       = "main"
 	testArtifactID    = "a-1"
 	testSkillPath     = "plugins/gs-base/skills/runbooks"
@@ -447,7 +448,7 @@ func TestHITLRequestOf(t *testing.T) {
 func TestSessionsRoutes(t *testing.T) {
 	fp := newFakePortal(t)
 	instance := map[string]any{"id": testSessionID, "creator": testPortalUser, fieldState: instanceStateReady, nameKey: portalSessionName, fieldContextID: testContextID,
-		"agentTemplate": map[string]any{fieldNamespace: kagentNamespace, nameKey: testAgentName}}
+		"agent": map[string]any{fieldNamespace: kagentNamespace, nameKey: testAgentName}}
 	var createBody map[string]any
 	deleted := false
 	fp.mux.HandleFunc(portalKagentAPI+kagentSessionsPath, func(w http.ResponseWriter, r *http.Request) {
@@ -456,9 +457,9 @@ func TestSessionsRoutes(t *testing.T) {
 		case http.MethodPost:
 			raw, _ := io.ReadAll(r.Body)
 			_ = json.Unmarshal(raw, &createBody)
-			writeJSON(w, http.StatusCreated, map[string]any{"agentInstance": instance})
+			writeJSON(w, http.StatusCreated, map[string]any{fieldSession: instance})
 		default:
-			writeJSON(w, http.StatusOK, map[string]any{"agentInstances": []any{instance}})
+			writeJSON(w, http.StatusOK, map[string]any{"sessions": []any{instance}})
 		}
 	})
 	fp.mux.HandleFunc(portalKagentAPI+kagentSessionsPath+"/"+testSessionID, func(w http.ResponseWriter, r *http.Request) {
@@ -475,13 +476,13 @@ func TestSessionsRoutes(t *testing.T) {
 		case deleted:
 			writeJSON(w, http.StatusNotFound, map[string]any{fieldError: map[string]any{fieldMessage: "gone"}})
 		default:
-			writeJSON(w, http.StatusOK, map[string]any{"agentInstance": instance})
+			writeJSON(w, http.StatusOK, map[string]any{fieldSession: instance})
 		}
 	})
 	ps := fp.session(testPortalUser, platformAdminsGroup)
 	agent := portalAgentRef{Namespace: kagentNamespace, Name: testAgentName}
 	status, created, _, err := ps.createSession(agent, portalSessionName, "req-1")
-	if err != nil || status != http.StatusCreated || created.ID != testSessionID || created.Creator != testPortalUser || created.AgentTemplate.Name != testAgentName {
+	if err != nil || status != http.StatusCreated || created.ID != testSessionID || created.Creator != testPortalUser || created.Agent.Name != testAgentName {
 		t.Fatalf("create: %d %+v %v", status, created, err)
 	}
 	if createBody["requestId"] != "req-1" || createBody["agentName"] != testAgentName || createBody[nameKey] != portalSessionName {

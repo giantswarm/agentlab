@@ -238,12 +238,12 @@ func TestGatewayProcessExitsBeforeReady(t *testing.T) {
 }
 
 // TestGatewayRecords: the records of one kind come off the log in order,
-// pod prefix or not, narrowed to a thread by thread_id or (instance_bound)
+// pod prefix or not, narrowed to a thread by thread_id or (session_bound)
 // thread; the version comes from the starting record.
 func TestGatewayRecords(t *testing.T) {
 	logs := strings.Join([]string{
 		`{"time":"t","level":"INFO","msg":"klaus-gateway starting","version":"3.2.0","git_sha":"b1005ed"}`,
-		`{"time":"t","msg":"channels: thread bound to agent instance","record":"instance_bound","thread":"1.1","instance":"inst-a"}`,
+		`{"time":"t","msg":"channels: thread bound to session","record":"session_bound","thread":"1.1","session":"inst-a"}`,
 		`[pod/x] {"time":"t","msg":"slack: dispatching turn","record":"turn_dispatch","thread_id":"1.1","agent":"kagent/agentlab-klaus-gateway-test","subject":"admin@lab.local","sub":"CiQ"}`,
 		`{"time":"t","msg":"slack: turn complete","record":"turn_complete","thread_id":"1.1","outcome":"completed","task_id":"t1"}`,
 		`{"time":"t","msg":"slack: turn complete","record":"turn_complete","thread_id":"2.2","outcome":"input_required","task_id":"t2"}`,
@@ -258,8 +258,8 @@ func TestGatewayRecords(t *testing.T) {
 		t.Errorf("thread 2.2 = %+v", got)
 	}
 	bound := threadRecords(gatewayRecords(logs, recordBound), "1.1")
-	if len(bound) != 1 || bound[0].Instance != "inst-a" {
-		t.Errorf("instance_bound = %+v", bound)
+	if len(bound) != 1 || bound[0].Session != "inst-a" {
+		t.Errorf("session_bound = %+v", bound)
 	}
 	if d := gatewayRecords(logs, recordDispatch); len(d) != 1 || d[0].Subject != testUser || d[0].thread() != "1.1" {
 		t.Errorf("turn_dispatch = %+v", d)
@@ -510,7 +510,7 @@ func (g *scriptedGateway) onMessage(ev map[string]string) {
 		g.ctrl.mu.Lock()
 		g.ctrl.sessions[instance] = fakeSession(instance, testToken, klausGatewayTestAgent)
 		g.ctrl.mu.Unlock()
-		g.record(map[string]any{recordKey: recordBound, "thread": thread, "instance": instance})
+		g.record(map[string]any{recordKey: recordBound, "thread": thread, fieldSession: instance})
 	}
 	g.record(map[string]any{recordKey: recordDispatch, "thread_id": thread, "agent": kagentNamespace + "/" + klausGatewayTestAgent, "agent_source": "default",
 		"slack_user": user, "subject": testUser, claimSubject: testSubject})

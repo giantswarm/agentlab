@@ -726,7 +726,7 @@ Events API callbacks to `POST /channels/slack/events` and their button
 clicks Block Kit payloads to `POST /channels/slack/interactions`, signed with
 the run's signing secret (`v0=` HMAC-SHA256 over `v0:<ts>:<body>`). When a
 turn is over the gateway's log says so (`turn_complete`, with its outcome and
-task), next to `instance_bound` and `turn_dispatch`.
+task), next to `session_bound` and `turn_dispatch`.
 
 **The person's identity.** The Slack channel forwards only a linked person's
 token — there is no service-account fallback for it — and a real sign-in
@@ -797,7 +797,7 @@ directly so it depends on no chart release resolving in the lab); and
    reaches no controller.
 2. **One turn**: the thread's first mention streams the answer
    (`chat.startStream` … `stopStream`) under the Agent's display name and
-   icon; the gateway's `instance_bound` record names the `Session`, and the
+   icon; the gateway's `session_bound` record names the `Session`, and the
    controller (`ListSessions` narrowed to the Agent, as the user) lists
    exactly that one; `turn_dispatch` names the fixture, the
    person's e-mail and the link's subject. A cold worker's first resume may
@@ -821,7 +821,7 @@ directly so it depends on no chart release resolving in the lab); and
    `TASK_STATE_CANCELED` at the controller, and the thread takes a following
    turn.
 5. **Restart**: the gateway is stopped and started again on the same stores;
-   the next mention recalls the first turn's word, no new `instance_bound`
+   the next mention recalls the first turn's word, no new `session_bound`
    record is written, and the controller lists the thread's `Session`
    and the Deny thread's, nothing else. No `token_refresh` record in the run.
    **5b. Restart mid-turn**: in the same thread a long answer (every number

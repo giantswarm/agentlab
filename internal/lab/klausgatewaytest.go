@@ -109,7 +109,7 @@ const (
 	gatewayReadyPath      = "/readyz"
 	gatewayContainer      = "agentlab-klaus-gateway-test"
 	gatewayLogLevel       = "info"
-	recordBound           = "instance_bound"
+	recordBound           = "session_bound"
 	recordTurnDone        = "turn_complete"
 	recordDispatch        = "turn_dispatch"
 	recordRefresh         = "token_refresh"
@@ -478,7 +478,7 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 		return fmt.Errorf("the turn after the restart did not continue the conversation: %w", err)
 	}
 	if after := len(gatewayRecords(gw.logs(), recordBound)); after != boundBefore {
-		return fmt.Errorf("the restarted gateway bound a thread anew (%d instance_bound records before, %d after): the bolt store did not carry the mapping", boundBefore, after)
+		return fmt.Errorf("the restarted gateway bound a thread anew (%d session_bound records before, %d after): the bolt store did not carry the mapping", boundBefore, after)
 	}
 	if err := assertOnlySessions(api, sessionID, deniedSession.GetId()); err != nil {
 		return fmt.Errorf("after the restart: %w", err)
@@ -1235,7 +1235,7 @@ func (g *gatewayProcess) logs() string {
 }
 
 // gatewayRecord is one of the gateway's structured log records the proof
-// reads: the thread bound to a Session (instance_bound), a turn
+// reads: the thread bound to a Session (session_bound), a turn
 // dispatched (turn_dispatch) and completed (turn_complete), a link's
 // id_token refreshed (token_refresh).
 type gatewayRecord struct {
@@ -1251,10 +1251,10 @@ type gatewayRecord struct {
 	Subject     string `json:"subject"`
 	Sub         string `json:"sub"`
 	Resume      bool   `json:"resume"`
-	// Thread and Instance are the instance_bound record's.
-	Thread   string `json:"thread"`
-	Instance string `json:"instance"`
-	Trigger  string `json:"trigger"`
+	// Thread and Session are the session_bound record's.
+	Thread  string `json:"thread"`
+	Session string `json:"session"`
+	Trigger string `json:"trigger"`
 }
 
 // thread is the Slack thread a record is about.
@@ -1583,16 +1583,16 @@ func (p *slackProof) signInPrompt(user, text string) (string, error) {
 }
 
 // boundSession is the Session the gateway bound the thread to (its
-// instance_bound record), read back from the controller.
+// session_bound record), read back from the controller.
 func (p *slackProof) boundSession(api *kagentAPI, t *slackThread) (*apiv1alpha1.Session, error) {
 	bound := p.records(recordBound, t.ts)
-	if len(bound) == 0 || bound[len(bound)-1].Instance == "" {
+	if len(bound) == 0 || bound[len(bound)-1].Session == "" {
 		logs, _ := p.logs()
-		return nil, fmt.Errorf("the gateway's log carries no instance_bound record for thread %s (the turn ran without binding the thread to a Session); its log ends:\n%s", t.ts, tailLines(logs, 8))
+		return nil, fmt.Errorf("the gateway's log carries no session_bound record for thread %s (the turn ran without binding the thread to a Session); its log ends:\n%s", t.ts, tailLines(logs, 8))
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	defer cancel()
-	return api.getSession(ctx, bound[len(bound)-1].Instance)
+	return api.getSession(ctx, bound[len(bound)-1].Session)
 }
 
 // dispatch checks the thread's first turn_dispatch record: the fixture as
@@ -1734,7 +1734,7 @@ type resumedTurn struct {
 	after          time.Duration
 }
 
-// restartMidTurn asks a long question in the thread (one whose AgentInstance
+// restartMidTurn asks a long question in the thread (one whose Session
 // is warm, so the answer streams soon) and, once its answer streams, restarts
 // the gateway with the gate closed: the stopping process
 // leaves the task running and promises the post, the new one cannot reach the
