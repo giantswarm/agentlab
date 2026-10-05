@@ -417,6 +417,9 @@ func applyPorts(cfg *config.Config, disc *lab.Discovery) {
 		reportPortChanges(cfg.ChooseFreePorts(disc.ClusterPorts, lab.MinPublishablePort()))
 		return
 	}
+	if !disc.ClusterPorts[cfg.APIServerPort] {
+		fmt.Printf("The existing cluster's API server is not on apiServerPort %d: it keeps its port until it is recreated (`agentlab down`, then `agentlab up`).\n\n", cfg.APIServerPort)
+	}
 	conflicts := cfg.PortConflicts(disc.ClusterPorts)
 	if len(conflicts) == 0 {
 		return

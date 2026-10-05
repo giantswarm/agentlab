@@ -33,6 +33,10 @@ through client-go in the binary, bound to the cluster's own kubeconfig,
 is how *you* look at the lab's pods, from any directory; kubectl is the
 optional deeper look (`describe`, events):
 `KUBECONFIG=state/kubeconfig kubectl -n agent-platform describe pod <name>`.
+The API server listens on `127.0.0.1:<apiServerPort>` (`agentlab.yaml`,
+6443 by default; a second lab on the machine takes its own), fixed at node
+creation, so a recreated lab keeps its address and an agent sandbox's
+egress allow list can name it.
 
 Under **rootless Podman** the lab publishes its ports from your own network
 namespace, which cannot bind anything below

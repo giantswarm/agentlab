@@ -88,6 +88,11 @@ func (c *Config) ports() []labPort {
 		}, func(to int) string {
 			return fmt.Sprintf("public URLs gain :%d", to)
 		}},
+		{"apiServerPort", "the Kubernetes API server", &c.APIServerPort, func(scan func(int, int) (int, bool)) (int, bool) {
+			return scan(c.APIServerPort+1, 65535)
+		}, func(to int) string {
+			return fmt.Sprintf("an agent sandbox's allow list needs 127.0.0.1:%d", to)
+		}},
 		{"backstage.port", "Backstage's direct debug access", &c.Backstage.Port, func(scan func(int, int) (int, bool)) (int, bool) {
 			return scan(c.Backstage.Port+1, 65535)
 		}, nil},
@@ -145,6 +150,7 @@ func (c *Config) chooseFreePorts(taken func(int) bool, minPublishable int) []Por
 		c.Platform.MusterPort:  true,
 		c.Platform.AgentsPort:  true,
 		c.Platform.GatewayPort: true,
+		c.APIServerPort:        true,
 		BrowserCallbackPort:    true,
 	}
 	for _, p := range PinnedNodePorts {

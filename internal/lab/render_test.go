@@ -421,6 +421,24 @@ func TestKindConfigSubstrateGates(t *testing.T) {
 	}
 }
 
+// The API server's host address is fixed, so a recreated lab keeps the
+// 127.0.0.1:<port> an agent sandbox's allow list names.
+func TestKindConfigPinsAPIServer(t *testing.T) {
+	cfg := config.Default()
+	cfg.APIServerPort = 6543
+	out, err := renderTemplate(cfg, "kind-config.yaml.tmpl", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kindCfg v1alpha4.Cluster
+	if err := yaml.Unmarshal(out, &kindCfg); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if got := kindCfg.Networking; got.APIServerAddress != "127.0.0.1" || got.APIServerPort != 6543 {
+		t.Errorf("networking = %s:%d, want 127.0.0.1:6543", got.APIServerAddress, got.APIServerPort)
+	}
+}
+
 // etcd skips fsync, so the host's writeback never stalls the lease renewals
 // of every leader-elected controller at once. The flag rides the one
 // ClusterConfiguration patch, in the kubeadm generation's list form.
