@@ -97,6 +97,10 @@ var PinnedNodePorts = []int{MusterNodePort, KagentUINodePort, GatewayNodePort, G
 // DefaultDexPort is the lab Dex NodePort when agentlab.yaml sets none.
 const DefaultDexPort = 32000
 
+// DefaultAPIServerPort is the host port of the lab's Kubernetes API server
+// when agentlab.yaml sets none.
+const DefaultAPIServerPort = 6443
+
 // DefaultChartVersion is the agent-platform release the lab installs when
 // agentlab.yaml pins none — the release this agentlab was verified with: the
 // 4.x line (kagent API v2 with Agent Substrate and the platform Postgres
@@ -691,6 +695,11 @@ type Config struct {
 	// use one number. Must sit in the NodePort range (30000-32767).
 	DexPort  int    `yaml:"dexPort"`
 	DexImage string `yaml:"dexImage"`
+	// APIServerPort is the host port (on 127.0.0.1) of the cluster's
+	// Kubernetes API server. Fixed, so a recreated lab keeps its address:
+	// an agent sandbox's allow list names it as 127.0.0.1:<port>, and kind
+	// would otherwise pick a random one at every `kind create`.
+	APIServerPort int `yaml:"apiServerPort"`
 
 	// SubstrateNodes adds that many kind worker nodes reserved for Agent
 	// Substrate: labelled and tainted SubstrateNodeKey, they carry the atelet
@@ -716,8 +725,9 @@ type Config struct {
 // real platform topology — three users, and Dex on 32000.
 func Default() *Config {
 	return &Config{
-		ClusterName: "agentlab",
-		DexPort:     DefaultDexPort,
+		ClusterName:   "agentlab",
+		DexPort:       DefaultDexPort,
+		APIServerPort: DefaultAPIServerPort,
 		// groups on staticPasswords requires Dex >= v2.45.0 (docs/identity.md);
 		// the gsoci mirror of dexidp/dex, digest-identical to upstream's.
 		DexImage: "gsoci.azurecr.io/giantswarm/dex:v2.45.1",
@@ -1095,6 +1105,9 @@ func (c *Config) Validate() error {
 	}
 	if slices.Contains(PinnedNodePorts, c.DexPort) {
 		return fmt.Errorf("dexPort: %d is a NodePort the lab already pins, and the apiserver rejects the second Service that claims it", c.DexPort)
+	}
+	if c.APIServerPort < 1 || c.APIServerPort > 65535 {
+		return fmt.Errorf("apiServerPort: %d is not a TCP port", c.APIServerPort)
 	}
 	if err := ValidateAIModel(c.AIModel); err != nil {
 		return fmt.Errorf("aiModel %q: %w", c.AIModel, err)

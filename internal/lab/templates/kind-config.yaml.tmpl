@@ -26,6 +26,12 @@ name: {{ .ClusterName }}
 # these its WorkerPools cannot start a single pod. Feature gates are fixed
 # at `kind create`, so they are always on — turning them on later means
 # `agentlab down && agentlab up`.
+# The API server's host address is fixed (apiServerPort), so a recreated lab
+# keeps it: an agent sandbox's egress allow list names 127.0.0.1:<port>, and
+# kind's default is a random port at every create.
+networking:
+  apiServerAddress: "127.0.0.1"
+  apiServerPort: {{ .APIServerPort }}
 featureGates:
   ClusterTrustBundle: true
   ClusterTrustBundleProjection: true

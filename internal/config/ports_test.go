@@ -39,10 +39,13 @@ func TestChooseFreePortsMovesEveryTakenPort(t *testing.T) {
 	cfg := Default()
 	changes := cfg.chooseFreePorts(takenSet(
 		cfg.DexPort, cfg.Platform.MusterPort, cfg.Platform.AgentsPort,
-		cfg.Platform.GatewayPort, cfg.Backstage.Port,
+		cfg.Platform.GatewayPort, cfg.Backstage.Port, cfg.APIServerPort,
 	), everyPortPublishable)
-	if len(changes) != 5 {
-		t.Fatalf("expected 5 changes, got %d: %v", len(changes), changes)
+	if len(changes) != 6 {
+		t.Fatalf("expected 6 changes, got %d: %v", len(changes), changes)
+	}
+	if cfg.APIServerPort != 6444 {
+		t.Errorf("apiServerPort = %d, want 6444", cfg.APIServerPort)
 	}
 	if cfg.DexPort != 32001 {
 		t.Errorf("dexPort = %d, want 32001", cfg.DexPort)
