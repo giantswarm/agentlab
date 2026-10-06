@@ -275,6 +275,39 @@ default 8090) — no port-forward. Port mappings are fixed at node-creation time
 so changing the port means `agentlab down && agentlab up`; the stopgap on an old
 cluster is `kubectl -n agent-platform port-forward svc/muster 8090:8090`.
 
+## Upgrade proofs from an older line
+
+agentlab refuses a released chart below agent-platform 4.93.0, the first
+release whose connectivity chart registers the bundled mcp-kubernetes as a
+kubernetes family member. A proof that something survives an upgrade from an
+older 4.x line (a conversation started on the kagent 1.0 line, agent-platform
+4.49 to 4.70, moving to the current one) needs a lab on that line first:
+`platform.upgradeSeed` (`agentlab configure --upgrade-seed`) lifts the
+refusal. The seed installs the release in the shape of its line, as the 3.x
+lab shape does: its connectivity chart registers the family-less MCPServer
+`mcp-kubernetes`, which the boot and the proofs address
+(`x_mcp-kubernetes_<tool>`), and `platform-test` skips the infrastructure
+families proof and says why. Everything else is the current lab: the same
+agentlab release, the same `agentlab.yaml`.
+
+```bash
+agentlab configure --defaults --upgrade-seed --chart-version 4.66.5
+agentlab up                  # or `agentlab platform` on a fresh cluster
+agentlab platform-test       # the seed's baseline
+# … create the agents and conversations the proof upgrades …
+agentlab configure --defaults --upgrade-seed=false --chart-version <the default>
+agentlab platform            # helm upgrade in place, then every component's health
+agentlab platform-test       # the families proof runs again
+```
+
+The upgrade is the lab's ordinary path: `agentlab platform` upgrades the
+release to the new pin, the components' HelmReleases follow, and the
+family-less `mcp-kubernetes` gives way to `<clusterName>-mcp-kubernetes`. The
+switch has no effect on a chart at or above the floor; clearing it returns
+the lab to the standard configuration and the refusal to its place. Seed a
+fresh cluster: installing an older line over a lab that ran a newer one is a
+downgrade, which no proof is about.
+
 ## Dev channel
 
 The stable channel is the pin above: `platform.chartVersion`, an exact
@@ -930,7 +963,8 @@ Cluster API. A lab made by an earlier release loses the six fake-fleet
 MCPServers (`<family>-lab-01`, `<family>-lab-02`) on its next `agentlab
 platform`; the retired `platform.fakeFleet` key still loads and is dropped from
 `agentlab.yaml`. The released chart must be agent-platform 4.93.0 or newer (the
-3.x line, a migration rehearsal's seed, keeps its family-less
+3.x line, a migration rehearsal's seed, and an [upgrade
+seed](#upgrade-proofs-from-an-older-line) keep their family-less
 `mcp-kubernetes`).
 
 **What the label is for.** `agent-platform.giantswarm.io/tool-group` is the

@@ -114,6 +114,32 @@ func TestCheckFamiliesChartFloor(t *testing.T) {
 	}
 }
 
+// An upgrade seed installs a released 4.x chart below the floor in the
+// family-less shape of its line; the refusal without it names the switch.
+// Upgraded to the current line, the same file is the family shape again.
+func TestUpgradeSeed(t *testing.T) {
+	cfg := Default()
+	cfg.Platform.ChartVersion = "4.66.5"
+	if err := cfg.CheckFamiliesChartFloor(); err == nil || !strings.Contains(err.Error(), "--upgrade-seed") {
+		t.Errorf("without the switch: want the switch named, got %v", err)
+	}
+	cfg.Platform.UpgradeSeed = true
+	if err := cfg.CheckFamiliesChartFloor(); err != nil {
+		t.Errorf("an upgrade seed: %v", err)
+	}
+	if !cfg.FamilylessChart() || cfg.MCPServerName() != "mcp-kubernetes" {
+		t.Errorf("an upgrade seed on 4.66.5: want the family-less mcp-kubernetes, got familyless=%v %s", cfg.FamilylessChart(), cfg.MCPServerName())
+	}
+	cfg.Platform.ChartVersion = DefaultChartVersion
+	if cfg.FamilylessChart() || cfg.MCPServerName() != cfg.ClusterName+"-mcp-kubernetes" {
+		t.Errorf("upgraded to %s: want the family member, got familyless=%v %s", DefaultChartVersion, cfg.FamilylessChart(), cfg.MCPServerName())
+	}
+	cfg.Platform.ChartVersion = legacyChart
+	if !cfg.FamilylessChart() {
+		t.Error("the 3.x line is family-less")
+	}
+}
+
 // A lab whose values overlay is gone still loads: `down` and `configure` need
 // no overlay, and the missing file must not read as a missing agentlab.yaml
 // (os.ErrNotExist), which sent `down` to "no agentlab.yaml found" and would

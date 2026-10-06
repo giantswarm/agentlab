@@ -178,15 +178,36 @@ var familiesChartFloor = semver.MustParse("4.93.0")
 // next to the lab's families. Checked where the chart is installed, not on
 // load, so `agentlab configure --chart-version` can move an older pin. The
 // 3.x line (a migration rehearsal's seed, a maintenance-line fix), a branch
-// build and a chart directory are not checked.
+// build, a chart directory and an upgrade proof's seed (platform.upgradeSeed)
+// are not checked.
 func (c *Config) CheckFamiliesChartFloor() error {
-	if c.Platform.ChartPath != "" || c.Platform.ChartBranch != "" || c.LegacyChart() {
+	if c.Platform.ChartPath != "" || c.Platform.ChartBranch != "" || c.LegacyChart() || c.Platform.UpgradeSeed {
 		return nil
 	}
-	if v, err := semver.NewVersion(c.Platform.ChartVersion); err == nil && v.LessThan(familiesChartFloor) {
-		return fmt.Errorf("agentlab needs agent-platform %s or newer (the bundled mcp-kubernetes as a kubernetes family member); platform.chartVersion is %s — `agentlab configure --defaults --chart-version %s`", familiesChartFloor, c.Platform.ChartVersion, DefaultChartVersion)
+	if c.belowFamiliesFloor() {
+		return fmt.Errorf("agentlab needs agent-platform %s or newer (the bundled mcp-kubernetes as a kubernetes family member); platform.chartVersion is %s — `agentlab configure --defaults --chart-version %s`, or `--upgrade-seed` to seed an upgrade proof on this line (docs/platform.md \"Upgrade proofs from an older line\")", familiesChartFloor, c.Platform.ChartVersion, DefaultChartVersion)
 	}
 	return nil
+}
+
+// belowFamiliesFloor reports whether the lab pins a released 4.x chart
+// before familiesChartFloor. A chart directory and the dev channel are the
+// current line.
+func (c *Config) belowFamiliesFloor() bool {
+	if c.Platform.ChartPath != "" || c.Platform.ChartBranch != "" {
+		return false
+	}
+	v, err := semver.NewVersion(c.Platform.ChartVersion)
+	return err == nil && v.LessThan(familiesChartFloor)
+}
+
+// FamilylessChart reports whether the lab's connectivity chart registers the
+// bundled mcp-kubernetes as the family-less MCPServer `mcp-kubernetes`
+// instead of a kubernetes family member: the 3.x line, and a released 4.x
+// chart before familiesChartFloor (an upgrade proof's seed). The boot and the
+// proofs address that server, and platform-test skips the families proof.
+func (c *Config) FamilylessChart() bool {
+	return c.LegacyChart() || c.belowFamiliesFloor()
 }
 
 // DefaultDevRegistryPort is the host port of the lab registry when
@@ -287,6 +308,14 @@ type Platform struct {
 	// keeps running the build under test until `agentlab platform --pin=false`
 	// (or the key is dropped). Meaningless without chartBranch.
 	ChartPinned bool `yaml:"chartPinned,omitempty"`
+	// UpgradeSeed marks the lab as an upgrade proof's seed: a released 4.x
+	// chart before the lab's floor (familiesChartFloor) installs in the shape
+	// that line takes (FamilylessChart), so a lab can start on an older line
+	// and be upgraded in place to the current one (`agentlab configure
+	// --chart-version`, then `agentlab platform`). No effect on a chart at
+	// or above the floor. See docs/platform.md "Upgrade proofs from an older
+	// line".
+	UpgradeSeed bool `yaml:"upgradeSeed,omitempty"`
 	// DevImages swaps a component's image for a build of your own (the lab's
 	// dev-image loop): target -> image ref (`muster: muster:dev-1a2b`). Keys
 	// are the DevImageComponents. For a Deployment target `agentlab platform`
@@ -1514,10 +1543,11 @@ func (c *Config) SubstrateNodeNames() []string {
 // member of muster's kubernetes family, named the way agent-platform-mcps
 // names every management cluster's. Muster exposes the family's tools as
 // x_kubernetes_<tool>, the argument management_cluster selecting the lab.
-// The 3.x line's connectivity chart registers the family-less
-// mcp-kubernetes instead, its tools x_mcp-kubernetes_<tool>.
+// The 3.x line's and an upgrade seed's connectivity chart (FamilylessChart)
+// registers the family-less mcp-kubernetes instead, its tools
+// x_mcp-kubernetes_<tool>.
 func (c *Config) MCPServerName() string {
-	if c.LegacyChart() {
+	if c.FamilylessChart() {
 		return "mcp-kubernetes"
 	}
 	return c.ClusterName + "-mcp-kubernetes"

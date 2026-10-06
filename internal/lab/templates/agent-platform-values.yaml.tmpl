@@ -316,12 +316,13 @@ components:
 # agent-platform under the kubernetes client's trustedPeers for this.
 mcp-kubernetes:
   kubernetesAudience: kubernetes
-{{- if not .LegacyChart }}
+{{- if not .FamilylessChart }}
   # The lab's cluster as a member of muster's kubernetes family, the shape
   # every management cluster's mcp-kubernetes has: MCPServer
   # {{ .ClusterName }}-mcp-kubernetes with spec.family, tools x_kubernetes_<tool>
   # with management_cluster: {{ .ClusterName }}-mcp-kubernetes. The 3.x line (a migration
-  # rehearsal's seed) registers the family-less singleton mcp-kubernetes.
+  # rehearsal's seed) and an upgrade seed's 4.x line register the family-less
+  # singleton mcp-kubernetes, and their mcp-kubernetes chart refuses the key.
   mcpServer:
     managementCluster: {{ .ClusterName }}
 {{- end }}

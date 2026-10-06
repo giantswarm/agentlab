@@ -66,6 +66,10 @@ type tmplData struct {
 	// lab shape (kagent 0.10 with its bundled Postgres, no Substrate, no
 	// platform Postgres) instead of the current line's.
 	LegacyChart bool
+	// FamilylessChart mirrors cfg.FamilylessChart(): the connectivity chart
+	// registers the family-less mcp-kubernetes (the 3.x line, an upgrade
+	// seed's 4.x line), whose mcp-kubernetes chart refuses mcpServer.
+	FamilylessChart bool
 	// ExtraModels is what extra-models.yaml.tmpl renders: the
 	// platform.extraModels entries.
 	ExtraModels []config.ExtraModel
@@ -223,6 +227,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		GitHubToken:                gitHubTokenWired(cfg),
 		ModelManagerEnabled:        cfg.ModelManagerEnabled(),
 		LegacyChart:                cfg.LegacyChart(),
+		FamilylessChart:            cfg.FamilylessChart(),
 		ModelManagerBackends:       cfg.ChartBackends(),
 		ModelManagerEndpoints:      endpoints,
 		ExtraModels:                cfg.Platform.ExtraModels,
