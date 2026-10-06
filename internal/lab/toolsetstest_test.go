@@ -158,6 +158,42 @@ func TestSessionIDInChallenge(t *testing.T) {
 	}
 }
 
+// Before the sign-in, the fixture's toolset must point at the sign-in: the
+// server under toolset_requiring_auth and its tool answering auth_required
+// with the link; the old "outside the toolset" refusal fails the proof.
+func TestJudgeSignedOutFixture(t *testing.T) {
+	pending := &filterToolsResponse{ToolsetRequiringAuth: []pendingServer{{Name: oauthFixtureServer, ToolPrefix: "x_" + oauthFixtureServer + "_"}}}
+	challenge := func(status, server, authURL string) *toolEnvelope {
+		env := &toolEnvelope{IsError: true, StructuredContent: map[string]any{"status": status, "server": server, "authUrl": authURL}}
+		env.Content = append(env.Content, struct {
+			Text string `json:"text"`
+		}{Text: "auth_required: server '" + server + "' requires authentication"})
+		return env
+	}
+	link := "https://muster.127.0.0.1.nip.io" + oauthProxyStartPath + "?state=x"
+	if err := judgeSignedOutFixture(pending, challenge("auth_required", oauthFixtureServer, link)); err != nil {
+		t.Errorf("the sign-in answer must pass: %v", err)
+	}
+	refused := &toolEnvelope{IsError: true}
+	refused.Content = append(refused.Content, struct {
+		Text string `json:"text"`
+	}{Text: `tool "` + fixtureSignedOutTool + `" is outside the toolset [` + toolsetFixtureSelector + `]`})
+	for name, tc := range map[string]struct {
+		r   *filterToolsResponse
+		env *toolEnvelope
+	}{
+		"outside the toolset":      {pending, refused},
+		"not listed as pending":    {&filterToolsResponse{}, challenge("auth_required", oauthFixtureServer, link)},
+		"another server's sign-in": {pending, challenge("auth_required", "other", link)},
+		"no sign-in link":          {pending, challenge("auth_required", oauthFixtureServer, "")},
+		"a status other than auth": {pending, challenge("connected", oauthFixtureServer, link)},
+	} {
+		if err := judgeSignedOutFixture(tc.r, tc.env); err == nil {
+			t.Errorf("%s must fail the proof", name)
+		}
+	}
+}
+
 // A streamed MCP answer may carry a notification frame before the response;
 // the response frame is the one that counts.
 func TestParseMCPResponsePicksTheResponseFrame(t *testing.T) {

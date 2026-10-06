@@ -59,6 +59,52 @@ func fixtureToolsFor(cfg *config.Config, token, clientName string) ([]string, []
 	return r.names(), r.ToolsetUnmatched, nil
 }
 
+// fixtureSignInAnswerFor opens a fresh MCP session with the token and the
+// fixture's toolset header before any sign-in, and checks that the toolset
+// points at the sign-in instead of hiding it: filter_tools lists the fixture
+// under toolset_requiring_auth, and a call to one of its tools answers
+// auth_required with the sign-in link rather than "outside the toolset".
+func fixtureSignInAnswerFor(cfg *config.Config, token, clientName string) error {
+	s, err := openMusterSession(cfg, token, clientName)
+	if err != nil {
+		return err
+	}
+	s.setHeader(toolsetHeader, toolsetFixtureSelector)
+	r, err := s.filterTools(nil)
+	if err != nil {
+		return err
+	}
+	env, err := s.callToolEnvelope(fixtureSignedOutTool, nil)
+	if err != nil {
+		return err
+	}
+	return judgeSignedOutFixture(r, env)
+}
+
+// fixtureSignedOutTool is the fixture tool the signed-out call names: one
+// muster serves itself, so it exists under the fixture's prefix once signed in.
+const fixtureSignedOutTool = "x_" + oauthFixtureServer + "_list_core_tools"
+
+// judgeSignedOutFixture is fixtureSignInAnswerFor's verdict on muster's two
+// answers for a session that has not signed in to the fixture.
+func judgeSignedOutFixture(r *filterToolsResponse, env *toolEnvelope) error {
+	want := pendingServer{Name: oauthFixtureServer, ToolPrefix: "x_" + oauthFixtureServer + "_"}
+	if !slices.Contains(r.ToolsetRequiringAuth, want) {
+		return fmt.Errorf("filter_tools under %s lists toolset_requiring_auth %+v, not %s with prefix x_%s_", toolsetFixtureSelector, r.ToolsetRequiringAuth, oauthFixtureServer, oauthFixtureServer)
+	}
+	text := ""
+	if len(env.Content) > 0 {
+		text = env.Content[0].Text
+	}
+	status, _ := env.StructuredContent["status"].(string)
+	server, _ := env.StructuredContent["server"].(string)
+	authURL, _ := env.StructuredContent["authUrl"].(string)
+	if !env.IsError || status != "auth_required" || server != oauthFixtureServer || !strings.Contains(authURL, oauthProxyStartPath) {
+		return fmt.Errorf("call_tool %s under %s should answer auth_required for %s with a sign-in link, got isError=%t status=%q server=%q authUrl=%q: %.300s", fixtureSignedOutTool, toolsetFixtureSelector, oauthFixtureServer, env.IsError, status, server, authURL, text)
+	}
+	return nil
+}
+
 // sessionIDInChallenge decodes the muster session the challenge's state is
 // bound to (the state is base64url JSON carrying session_id, the `ext-…`
 // identifier muster derives from a forwarded bearer's principal).
@@ -88,7 +134,10 @@ func sessionIDInChallenge(challengeURL string) string {
 // sign-in can complete headlessly:
 //
 //   - before any sign-in, a toolset naming the fixture resolves to nothing for
-//     everyone (toolset_unmatched names the selector);
+//     everyone (toolset_unmatched names the selector), yet points at the
+//     sign-in: filter_tools lists the fixture under toolset_requiring_auth,
+//     and a call to its tool answers auth_required with the sign-in link,
+//     never "outside the toolset";
 //   - the portal's Sign in (POST /api/muster/auth/login with the portal's own
 //     Dex id_token) yields the challenge, completed as the browser would;
 //   - an agent-shaped session on the same id_token then resolves the fixture's
@@ -127,7 +176,10 @@ func proveSignInScopedToolset(cfg *config.Config, user, other *config.User, tool
 		if len(names) != 0 || !slices.Contains(unmatched, toolsetFixtureSelector) {
 			return nil, fmt.Errorf("%s resolves %s to %d tools (unmatched %v) before any sign-in — a leftover grant? run core_auth_logout for %s", tc.who, toolsetFixtureSelector, len(names), unmatched, oauthFixtureServer)
 		}
-		note("%s: 0 tools, toolset_unmatched=%v", tc.who, unmatched)
+		if err := fixtureSignInAnswerFor(cfg, tc.token, "toolsets-test-g6-signed-out"); err != nil {
+			return nil, fmt.Errorf("%s: %w", tc.who, err)
+		}
+		note("%s: 0 tools, toolset_unmatched=%v; toolset_requiring_auth names %s and %s answers auth_required with the sign-in link", tc.who, unmatched, oauthFixtureServer, fixtureSignedOutTool)
 	}
 
 	step("The portal's Sign in for %s as %s, completed headlessly", oauthFixtureServer, user.Email)

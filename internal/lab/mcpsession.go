@@ -270,19 +270,29 @@ type presetInfo struct {
 	BuiltIn     bool   `json:"built_in"`
 }
 
+// pendingServer is the part of muster's ServerAuthInfo the proofs read: a
+// server awaiting the session's sign-in and the prefix its tools will carry.
+type pendingServer struct {
+	Name       string `json:"name"`
+	ToolPrefix string `json:"tool_prefix"`
+}
+
 // filterToolsResponse is muster's FilterToolsResponse as the toolset feature
 // extended it: the tools resolved for the caller, the selectors echoed back,
 // the selectors that matched nothing for this caller, the presets when asked
 // for, and the size of the catalogue the filter ran over (within the
 // toolset, when one applies).
 type filterToolsResponse struct {
-	Tools            []toolInfo   `json:"tools"`
-	Toolset          []string     `json:"toolset"`
-	ToolsetUnmatched []string     `json:"toolset_unmatched"`
-	Presets          []presetInfo `json:"presets"`
-	TotalTools       int          `json:"total_tools"`
-	FilteredCount    int          `json:"filtered_count"`
-	Truncated        bool         `json:"truncated"`
+	Tools            []toolInfo `json:"tools"`
+	Toolset          []string   `json:"toolset"`
+	ToolsetUnmatched []string   `json:"toolset_unmatched"`
+	// ToolsetRequiringAuth names the servers awaiting the session's sign-in
+	// whose tools the toolset could select once listed.
+	ToolsetRequiringAuth []pendingServer `json:"toolset_requiring_auth"`
+	Presets              []presetInfo    `json:"presets"`
+	TotalTools           int             `json:"total_tools"`
+	FilteredCount        int             `json:"filtered_count"`
+	Truncated            bool            `json:"truncated"`
 }
 
 // names returns the tool names, sorted.
