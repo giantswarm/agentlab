@@ -184,8 +184,9 @@ func ToolsetsTest(cfg *config.Config, email string, opts ToolsetsTestOptions) er
 	}
 
 	// 5. The OAuth fixture: the sign-in completed in the portal path is what
-	//    makes the server's tools resolve for the agent under the same
-	//    forwarded token (ground-truth v3, G6), and only for that token.
+	//    makes the server's tools resolve for the agent under the person's
+	//    forwarded token (ground-truth v3, G6), for that person and client
+	//    only, until the sign-out.
 	g6, err := proveSignInScopedToolset(cfg, user, other, toolPrefix, admin, opts)
 	if err != nil {
 		return err
