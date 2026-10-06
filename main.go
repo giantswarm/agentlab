@@ -1123,7 +1123,7 @@ func toolsetsTestCmd() *cobra.Command {
 	var opts lab.ToolsetsTestOptions
 	cmd := &cobra.Command{
 		Use:   "toolsets-test [email]",
-		Short: "Headless toolset proof: agent-manager requires a toolset; the Agent carries the X-Muster-Toolset header; muster resolves and refuses per request; agents through kagent see their toolset; the OAuth-fixture sign-in scopes a server's tools to the token (G6); the portal's Tools step endpoints and apply path",
+		Short: "Headless toolset proof: agent-manager requires a toolset; the Agent carries the X-Muster-Toolset header; muster resolves and refuses per request; agents through kagent see their toolset; the OAuth-fixture sign-in scopes a server's tools to the person and client until the sign-out (G6); the portal's Tools step endpoints and apply path",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()

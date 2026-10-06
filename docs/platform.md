@@ -1025,12 +1025,15 @@ components, as the admin, and leaves nothing behind (its agents are named
    the challenge, which the proof completes as the browser would; an
    agent-shaped session on the **same** id_token then resolves the fixture's
    tools and calls one; the real agent, driven through kagent with that token,
-   reports them too. A second user, and the same user under a **fresh**
-   id_token, still resolve nothing: muster keys a forwarded bearer's session by
-   the token (`ext-<hash>`), the grant belongs to that session
-   (`grantScope: session`), and the portal forwards one and the same
-   id_token to muster and to kagent — which is why the claim holds in the
-   portal and only there.
+   reports them too. muster keys a forwarded bearer's session by its
+   principal (`ext-<hash>` of iss, sub, azp or aud and the act chain), and the
+   grant belongs to that session (`grantScope: session`): the same user under
+   a **fresh** id_token of the same client resolves the same tools (a
+   refreshed token keeps its session), while a second user and the same user
+   through **another client** (`kubernetes`) resolve nothing. After
+   `core_auth_logout` on the portal's token, the user's fresh id_token
+   resolves nothing either. The portal forwards one and the same id_token to
+   muster and to kagent, so the agent sees what the person signed in to.
 6. **The portal** (skip the create with `--skip-portal`): the Tools step's
    backend calls (`/api/muster/tools/filter` with `include_presets`, a
    `toolset=` resolution, an unmatched selector, an unknown preset relayed as

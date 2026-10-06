@@ -60,8 +60,8 @@ func fixtureToolsFor(cfg *config.Config, token, clientName string) ([]string, []
 }
 
 // sessionIDInChallenge decodes the muster session the challenge's state is
-// bound to (the state is base64url JSON carrying session_id, the token-derived
-// `ext-…` identifier for a forwarded bearer).
+// bound to (the state is base64url JSON carrying session_id, the `ext-…`
+// identifier muster derives from a forwarded bearer's principal).
 func sessionIDInChallenge(challengeURL string) string {
 	u, err := url.Parse(challengeURL)
 	if err != nil {
@@ -81,21 +81,24 @@ func sessionIDInChallenge(challengeURL string) string {
 
 // proveSignInScopedToolset settles ground-truth v3's G6: a sign-in the human
 // completes in the portal is what makes that server's tools available to an
-// agent request carrying the same forwarded token — because muster keys the
-// session of a forwarded bearer by the token itself, and the portal forwards
-// one id_token to muster and to kagent alike. Proven against the lab's OAuth
-// fixture, pinned to Dex so the sign-in can complete headlessly:
+// agent request carrying the person's forwarded token — because muster keys
+// the session of a forwarded bearer by its principal (iss, sub, azp or aud,
+// the act chain), and the portal forwards one id_token to muster and to
+// kagent alike. Proven against the lab's OAuth fixture, pinned to Dex so the
+// sign-in can complete headlessly:
 //
 //   - before any sign-in, a toolset naming the fixture resolves to nothing for
 //     everyone (toolset_unmatched names the selector);
 //   - the portal's Sign in (POST /api/muster/auth/login with the portal's own
 //     Dex id_token) yields the challenge, completed as the browser would;
-//   - an agent-shaped session on the SAME id_token then resolves the fixture's
+//   - an agent-shaped session on the same id_token then resolves the fixture's
 //     tools and can call them; the real agent, driven through kagent with that
 //     token, reports them too;
-//   - a second user without the sign-in, and even the same user under a
-//     different id_token (a fresh login), still resolve nothing — the grant is
-//     the session's, and the session is the token's (grantScope: session).
+//   - the same person under a fresh id_token of the same client resolves them
+//     too (the session is the principal's, so a refreshed token keeps it);
+//     a second user, and the same person through another client, resolve
+//     nothing (grantScope: session);
+//   - after core_auth_logout, the person's fresh id_token resolves nothing.
 func proveSignInScopedToolset(cfg *config.Config, user, other *config.User, toolPrefix string, admin *musterSession, opts ToolsetsTestOptions) ([]string, error) {
 	var verdicts []string
 	step("The OAuth sign-in fixture %s, pinned to Dex so the sign-in can complete", oauthFixtureServer)
@@ -141,11 +144,12 @@ func proveSignInScopedToolset(cfg *config.Config, user, other *config.User, tool
 	// forgets it, but the pooled connection to the fixture lingers until its
 	// next use and keeps the CR at Connected — where an older binary's
 	// platform-test waits for Auth Required. A one-shot restart request on
-	// the CR (spec.restartRequestedAt) drops the connection right away.
+	// the CR (spec.restartRequestedAt) drops the connection right away. The
+	// sign-out is the proof's last step; on an earlier failure it runs here.
+	signedOut := false
 	defer func() {
-		s, err := openMusterSession(cfg, ps.dexIDToken, "toolsets-test-g6-logout")
-		if err == nil {
-			_, _ = s.callToolEnvelope("core_auth_logout", map[string]any{serverKey: oauthFixtureServer})
+		if !signedOut {
+			_ = signOutOfFixture(cfg, ps.dexIDToken)
 		}
 		restartOAuthFixture()
 	}()
@@ -194,38 +198,96 @@ func proveSignInScopedToolset(cfg *config.Config, user, other *config.User, tool
 	note("%d tools (%s…); x_%s_list_core_tools answered (%s)", len(names), names[0], oauthFixtureServer, excerpt(fixtureText, 60))
 	verdicts = append(verdicts, fmt.Sprintf("PASS: G6 — the sign-in completed through the portal (POST /api/muster/auth/login, muster session %s) makes %s resolve to the fixture's %d tools for an agent-shaped request on the same forwarded id_token, callable through it", portalSessionID, toolsetFixtureSelector, len(names)))
 
-	step("The same user under a different id_token, and %s without a sign-in: nothing", other.Email)
+	step("The session is the principal's: %s under a fresh id_token of the same client has the fixture's tools; %s and %s through another client have none", user.Email, other.Email, user.Email)
 	freshToken, err := passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret,
 		user.Email, user.Password, musterLoginScopes)
 	if err != nil {
 		return nil, err
 	}
-	for _, tc := range []struct {
-		who   string
-		token string
-	}{{user.Email + " (fresh id_token)", freshToken}, {other.Email, otherToken}} {
-		names, unmatched, err := fixtureToolsFor(cfg, tc.token, "toolsets-test-g6-other")
-		if err != nil {
-			return nil, err
-		}
-		if len(names) != 0 || !slices.Contains(unmatched, toolsetFixtureSelector) {
-			return nil, fmt.Errorf("%s resolves %s to %d tools (unmatched %v) although that token never signed in", tc.who, toolsetFixtureSelector, len(names), unmatched)
-		}
-		note("%s: 0 tools, toolset_unmatched=%v", tc.who, unmatched)
+	freshNames, _, err := fixtureToolsFor(cfg, freshToken, "toolsets-test-g6-fresh")
+	if err != nil {
+		return nil, err
 	}
-	verdicts = append(verdicts, fmt.Sprintf("PASS: G6 boundary — %s lacks the fixture's tools (toolset_unmatched names %s), and so does %s under a fresh id_token: the grant is the token-derived session's, not the person's (grantScope: session)", other.Email, toolsetFixtureSelector, user.Email))
+	if len(freshNames) != len(names) {
+		return nil, fmt.Errorf("%s under a fresh id_token of client %s resolves %s to %d tools, the signed-in token to %d — muster keys a forwarded bearer's session by its principal, so a fresh token of the same person and client shares it", user.Email, config.AgentPlatformClientID, toolsetFixtureSelector, len(freshNames), len(names))
+	}
+	note("%s (fresh id_token, client %s): %d tools", user.Email, config.AgentPlatformClientID, len(freshNames))
+	otherClientToken, err := passwordGrant(cfg, config.KubernetesClientID, config.KubernetesClientSecret,
+		user.Email, user.Password, "openid email groups profile")
+	if err != nil {
+		return nil, err
+	}
+	if err := expectNoFixtureTools(cfg, otherToken, other.Email, "toolsets-test-g6-other"); err != nil {
+		return nil, err
+	}
+	if err := expectNoFixtureTools(cfg, otherClientToken, user.Email+" (client "+config.KubernetesClientID+")", "toolsets-test-g6-client"); err != nil {
+		return nil, err
+	}
+	verdicts = append(verdicts, fmt.Sprintf("PASS: G6 boundary — the grant is the principal's session (grantScope: session): %s under a fresh id_token of client %s resolves %s to the same %d tools, %s and %s through client %s resolve none (toolset_unmatched names the selector)", user.Email, config.AgentPlatformClientID, toolsetFixtureSelector, len(freshNames), other.Email, user.Email, config.KubernetesClientID))
 
 	if opts.SkipChat {
 		note("skipping the model turns (--skip-chat): the real agent's view of the fixture was not exercised")
-		return verdicts, nil
+	} else {
+		v, err := proveAgentSeesFixture(cfg, user, other, ps.dexIDToken, otherToken)
+		if err != nil {
+			return nil, err
+		}
+		verdicts = append(verdicts, v)
 	}
+
+	step("core_auth_logout on the portal's token ends the principal's sign-in: %s's fresh id_token resolves nothing", user.Email)
+	if err := signOutOfFixture(cfg, ps.dexIDToken); err != nil {
+		return nil, err
+	}
+	signedOut = true
+	if err := expectNoFixtureTools(cfg, freshToken, user.Email+" (fresh id_token, after sign-out)", "toolsets-test-g6-logout-check"); err != nil {
+		return nil, err
+	}
+	verdicts = append(verdicts, fmt.Sprintf("PASS: G6 sign-out — after core_auth_logout for %s on the portal's token, %s's fresh id_token resolves %s to nothing", oauthFixtureServer, user.Email, toolsetFixtureSelector))
+	return verdicts, nil
+}
+
+// expectNoFixtureTools asserts the token resolves the fixture's selector to
+// nothing, with toolset_unmatched naming it.
+func expectNoFixtureTools(cfg *config.Config, token, who, clientName string) error {
+	names, unmatched, err := fixtureToolsFor(cfg, token, clientName)
+	if err != nil {
+		return err
+	}
+	if len(names) != 0 || !slices.Contains(unmatched, toolsetFixtureSelector) {
+		return fmt.Errorf("%s resolves %s to %d tools (unmatched %v) without a sign-in of its own", who, toolsetFixtureSelector, len(names), unmatched)
+	}
+	note("%s: 0 tools, toolset_unmatched=%v", who, unmatched)
+	return nil
+}
+
+// signOutOfFixture signs the token's muster session out of the OAuth fixture.
+func signOutOfFixture(cfg *config.Config, token string) error {
+	s, err := openMusterSession(cfg, token, "toolsets-test-g6-logout")
+	if err != nil {
+		return err
+	}
+	r, err := s.callToolEnvelope("core_auth_logout", map[string]any{serverKey: oauthFixtureServer})
+	if err != nil {
+		return err
+	}
+	if r.IsError {
+		return fmt.Errorf("core_auth_logout for %s answered an error: %v", oauthFixtureServer, r.StructuredContent)
+	}
+	return nil
+}
+
+// proveAgentSeesFixture drives the real agent through kagent: with the
+// signed-in person's token it reports the fixture's tools, with another
+// person's none.
+func proveAgentSeesFixture(cfg *config.Config, user, other *config.User, userToken, otherToken string) (string, error) {
 	step("The real agent %s through kagent: as %s (the portal's token) it reports the fixture's tools, as %s none", toolsetsAgentOAuth, user.Email, other.Email)
 	if err := awaitAgentsReady(toolsetsAgentOAuth); err != nil {
-		return nil, err
+		return "", err
 	}
-	reply, err := firstTurnAs(cfg, toolsetsAgentOAuth, ps.dexIDToken, toolListingPrompt)
+	reply, err := firstTurnAs(cfg, toolsetsAgentOAuth, userToken, toolListingPrompt)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	reported := toolNamesInReply(reply)
 	fixtureTools := 0
@@ -233,23 +295,22 @@ func proveSignInScopedToolset(cfg *config.Config, user, other *config.User, tool
 		if strings.HasPrefix(n, "x_"+oauthFixtureServer+"_") {
 			fixtureTools++
 		} else {
-			return nil, fmt.Errorf("%s reported %s, outside %s", toolsetsAgentOAuth, n, toolsetFixtureSelector)
+			return "", fmt.Errorf("%s reported %s, outside %s", toolsetsAgentOAuth, n, toolsetFixtureSelector)
 		}
 	}
 	if fixtureTools == 0 {
-		return nil, fmt.Errorf("%s as %s reported no fixture tools (reply: %s)", toolsetsAgentOAuth, user.Email, excerpt(reply, 300))
+		return "", fmt.Errorf("%s as %s reported no fixture tools (reply: %s)", toolsetsAgentOAuth, user.Email, excerpt(reply, 300))
 	}
 	note("as %s: %d fixture tools reported", user.Email, fixtureTools)
 	reply, err = agentTurnAs(cfg, toolsetsAgentOAuth, otherToken, toolListingPrompt)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	if reported := toolNamesInReply(reply); len(reported) != 0 {
-		return nil, fmt.Errorf("%s as %s reported %v although %s never signed in to %s", toolsetsAgentOAuth, other.Email, reported, other.Email, oauthFixtureServer)
+		return "", fmt.Errorf("%s as %s reported %v although %s never signed in to %s", toolsetsAgentOAuth, other.Email, reported, other.Email, oauthFixtureServer)
 	}
 	note("as %s: %s", other.Email, excerpt(reply, 80))
-	verdicts = append(verdicts, fmt.Sprintf("PASS: G6 end to end — the agent %s (toolset %s), driven through kagent with the portal's token, reports the fixture's tools; driven by %s it reports none", toolsetsAgentOAuth, toolsetFixtureSelector, other.Email))
-	return verdicts, nil
+	return fmt.Sprintf("PASS: G6 end to end — the agent %s (toolset %s), driven through kagent with the portal's token, reports the fixture's tools; driven by %s it reports none", toolsetsAgentOAuth, toolsetFixtureSelector, other.Email), nil
 }
 
 // portalFilterTools calls the muster backend route the Tools step uses:
