@@ -6,7 +6,7 @@
 # `make generate-kagent`, and commit hack/kagent-proto/ and internal/kagent/gen/
 # together.
 KAGENT_PROTO_REPO ?= https://github.com/giantswarm/kagent-upstream.git
-KAGENT_PROTO_COMMIT ?= a8353a0ace648252e4d0886795406c121117839f
+KAGENT_PROTO_COMMIT ?= f7bf3dafd6a8c21e084015a9310f4692778ebaeb
 KAGENT_PROTO_FILES := common agent_templates agents sessions runtime system
 
 .PHONY: generate-kagent
