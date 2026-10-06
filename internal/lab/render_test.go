@@ -635,7 +635,7 @@ func TestPlatformValuesLegacyChartShape(t *testing.T) {
 		mutate func(*config.Config)
 		want   string
 	}{
-		"4.x release": {func(c *config.Config) { c.Platform.ChartVersion = "4.7.11" }, currentOut},
+		"4.x release": {func(c *config.Config) { c.Platform.ChartVersion = "4.93.0" }, currentOut},
 		"5.x release": {func(c *config.Config) { c.Platform.ChartVersion = "5.0.0" }, currentOut},
 		"dev build of main": {func(c *config.Config) {
 			c.Platform.ChartVersion, c.Platform.ChartBranch = "4.106.1-rbf28cd64t20261001120000h7f841be", testRefMain
@@ -649,6 +649,17 @@ func TestPlatformValuesLegacyChartShape(t *testing.T) {
 		if _, out := render(cfg); out != tc.want {
 			t.Errorf("%s: the render is not its line's", name)
 		}
+	}
+	// An upgrade seed's 4.x release below the families floor renders the
+	// current line's values without mcp-kubernetes.mcpServer, which its
+	// mcp-kubernetes chart refuses.
+	seed := config.Default()
+	seed.Platform.ChartVersion, seed.Platform.UpgradeSeed = "4.66.5", true
+	seedValues, _ := render(seed)
+	seedExpected, _ := render(current)
+	delete(seedExpected["mcp-kubernetes"].(map[string]any), "mcpServer")
+	if !reflect.DeepEqual(seedExpected, seedValues) {
+		t.Errorf("the upgrade seed's values differ from the 4.x values in more than mcp-kubernetes.mcpServer:\n--- 4.x minus the key\n%s\n--- seed\n%s", mustYAML(t, seedExpected), mustYAML(t, seedValues))
 	}
 	// A chart directory renders its roster's line, whatever pin is left
 	// over, plus its connectivity source
