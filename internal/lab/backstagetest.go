@@ -133,7 +133,7 @@ func backstageSignIn(cfg *config.Config, user *config.User) (*portalSession, err
 	if err := json.Unmarshal(raw, &login); err != nil {
 		return nil, fmt.Errorf("parsing /auth/login answer: %w\n%.200s", err, raw)
 	}
-	if login.Status != "auth_required" {
+	if login.Status != statusAuthRequired {
 		return nil, fmt.Errorf("/auth/login for %s answered status %q, not auth_required: %.300s", oauthFixtureServer, login.Status, login.Message)
 	}
 	if want := cfg.MusterBaseURL() + oauthProxyStartPath + "?state="; !strings.HasPrefix(login.AuthURL, want) {

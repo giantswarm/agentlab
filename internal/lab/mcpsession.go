@@ -19,6 +19,9 @@ const (
 	modelConfigKey = "modelConfig"
 	descriptionKey = "description"
 	serverKey      = "server"
+	// statusAuthRequired is muster's status of an answer that waits for a
+	// sign-in (auth_required), in a tool result and in /auth/login's answer.
+	statusAuthRequired = "auth_required"
 	// argumentsKey is the tool arguments of a tools/call and of call_tool.
 	argumentsKey    = "arguments"
 	resourceTypeKey = "resourceType"

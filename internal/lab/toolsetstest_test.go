@@ -164,14 +164,14 @@ func TestSessionIDInChallenge(t *testing.T) {
 func TestJudgeSignedOutFixture(t *testing.T) {
 	pending := &filterToolsResponse{ToolsetRequiringAuth: []pendingServer{{Name: oauthFixtureServer, ToolPrefix: "x_" + oauthFixtureServer + "_"}}}
 	challenge := func(status, server, authURL string) *toolEnvelope {
-		env := &toolEnvelope{IsError: true, StructuredContent: map[string]any{"status": status, "server": server, "authUrl": authURL}}
+		env := &toolEnvelope{IsError: true, StructuredContent: map[string]any{"status": status, serverKey: server, "authUrl": authURL}}
 		env.Content = append(env.Content, struct {
 			Text string `json:"text"`
 		}{Text: "auth_required: server '" + server + "' requires authentication"})
 		return env
 	}
 	link := "https://muster.127.0.0.1.nip.io" + oauthProxyStartPath + "?state=x"
-	if err := judgeSignedOutFixture(pending, challenge("auth_required", oauthFixtureServer, link)); err != nil {
+	if err := judgeSignedOutFixture(pending, challenge(statusAuthRequired, oauthFixtureServer, link)); err != nil {
 		t.Errorf("the sign-in answer must pass: %v", err)
 	}
 	refused := &toolEnvelope{IsError: true}
@@ -183,9 +183,9 @@ func TestJudgeSignedOutFixture(t *testing.T) {
 		env *toolEnvelope
 	}{
 		"outside the toolset":      {pending, refused},
-		"not listed as pending":    {&filterToolsResponse{}, challenge("auth_required", oauthFixtureServer, link)},
-		"another server's sign-in": {pending, challenge("auth_required", "other", link)},
-		"no sign-in link":          {pending, challenge("auth_required", oauthFixtureServer, "")},
+		"not listed as pending":    {&filterToolsResponse{}, challenge(statusAuthRequired, oauthFixtureServer, link)},
+		"another server's sign-in": {pending, challenge(statusAuthRequired, "other", link)},
+		"no sign-in link":          {pending, challenge(statusAuthRequired, oauthFixtureServer, "")},
 		"a status other than auth": {pending, challenge("connected", oauthFixtureServer, link)},
 	} {
 		if err := judgeSignedOutFixture(tc.r, tc.env); err == nil {

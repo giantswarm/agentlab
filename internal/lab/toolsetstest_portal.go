@@ -37,7 +37,7 @@ func signInChallengeViaPortal(ps *portalSession, server string) (string, error) 
 	if err := json.Unmarshal(raw, &login); err != nil {
 		return "", fmt.Errorf("parsing /auth/login answer: %w\n%.200s", err, raw)
 	}
-	if login.Status != "auth_required" || login.AuthURL == "" {
+	if login.Status != statusAuthRequired || login.AuthURL == "" {
 		return "", fmt.Errorf("/auth/login for %s answered status %q, not auth_required: %.300s", server, login.Status, login.Message)
 	}
 	return login.AuthURL, nil
@@ -97,9 +97,9 @@ func judgeSignedOutFixture(r *filterToolsResponse, env *toolEnvelope) error {
 		text = env.Content[0].Text
 	}
 	status, _ := env.StructuredContent["status"].(string)
-	server, _ := env.StructuredContent["server"].(string)
+	server, _ := env.StructuredContent[serverKey].(string)
 	authURL, _ := env.StructuredContent["authUrl"].(string)
-	if !env.IsError || status != "auth_required" || server != oauthFixtureServer || !strings.Contains(authURL, oauthProxyStartPath) {
+	if !env.IsError || status != statusAuthRequired || server != oauthFixtureServer || !strings.Contains(authURL, oauthProxyStartPath) {
 		return fmt.Errorf("call_tool %s under %s should answer auth_required for %s with a sign-in link, got isError=%t status=%q server=%q authUrl=%q: %.300s", fixtureSignedOutTool, toolsetFixtureSelector, oauthFixtureServer, env.IsError, status, server, authURL, text)
 	}
 	return nil
