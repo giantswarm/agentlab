@@ -39,12 +39,15 @@ func controllerIdentitySkip(cfg *config.Config) string {
 }
 
 // familiesSkip is why platform-test leaves the infrastructure families proof
-// out, "" when it runs it: the 3.x connectivity chart registers the
-// family-less mcp-kubernetes (the families came with the 4.x line), so a 3.x
-// lab has no family member to prove.
+// out, "" when it runs it: the 3.x connectivity chart, and a 4.x one before
+// the families (an upgrade seed's), registers the family-less
+// mcp-kubernetes, so such a lab has no family member to prove.
 func familiesSkip(cfg *config.Config) string {
-	if cfg.LegacyChart() {
+	switch {
+	case cfg.LegacyChart():
 		return "the 3.x connectivity chart registers the family-less " + cfg.MCPServerName() + ", no family member"
+	case cfg.FamilylessChart():
+		return "agent-platform " + cfg.Platform.ChartVersion + " (an upgrade seed) registers the family-less " + cfg.MCPServerName() + ", no family member"
 	}
 	return ""
 }

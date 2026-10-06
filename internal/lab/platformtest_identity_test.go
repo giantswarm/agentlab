@@ -11,7 +11,9 @@ import (
 // families proof a family member, which only the 4.x connectivity chart
 // renders: a 3.x lab — a release, or a checkout of the maintenance line —
 // skips both with the reason and calls the family-less mcp-kubernetes by its
-// own tools; the current line runs both and calls the family's.
+// own tools; an upgrade seed's 4.x line before the families has the
+// controller's route but no family member; the current line runs both and
+// calls the family's.
 func TestLegacyLabProofs(t *testing.T) {
 	checkout := func(values string) string {
 		return writeChartFiles(t, t.TempDir(), "agent-platform", map[string]string{chartYAML: metaChartYAML, "values.yaml": values})
@@ -19,24 +21,25 @@ func TestLegacyLabProofs(t *testing.T) {
 	for _, tc := range []struct {
 		name               string
 		version, chartPath string
-		skip               bool
+		skip, familyless   bool
 	}{
-		{"3.x release", legacyChartVersion, "", true},
-		{"3.x checkout", "", checkout("components:\n  kagent: {}\n"), true},
-		{"the default", config.DefaultChartVersion, "", false},
-		{"4.x checkout", "", checkout("components:\n  kagent: {}\n  substrate: {}\n"), false},
+		{"3.x release", legacyChartVersion, "", true, true},
+		{"3.x checkout", "", checkout("components:\n  kagent: {}\n"), true, true},
+		{"4.x upgrade seed", "4.66.5", "", false, true},
+		{"the default", config.DefaultChartVersion, "", false, false},
+		{"4.x checkout", "", checkout("components:\n  kagent: {}\n  substrate: {}\n"), false, false},
 	} {
 		cfg := config.Default()
 		cfg.Platform.ChartVersion, cfg.Platform.ChartPath = tc.version, tc.chartPath
 		if got := controllerIdentitySkip(cfg); (got != "") != tc.skip {
 			t.Errorf("%s: controllerIdentitySkip() = %q, want a reason: %v", tc.name, got, tc.skip)
 		}
-		if got := familiesSkip(cfg); (got != "") != tc.skip {
-			t.Errorf("%s: familiesSkip() = %q, want a reason: %v", tc.name, got, tc.skip)
+		if got := familiesSkip(cfg); (got != "") != tc.familyless {
+			t.Errorf("%s: familiesSkip() = %q, want a reason: %v", tc.name, got, tc.familyless)
 		}
 		member := cfg.ClusterName + "-mcp-kubernetes"
 		server, tool, args := member, "x_"+familyKubernetes+"_list", map[string]any{familyInstanceArg: member, resourceTypeKey: resourceNamespaces}
-		if tc.skip {
+		if tc.familyless {
 			server, tool, args = componentMCPKubernetes, "x_"+componentMCPKubernetes+"_list", map[string]any{resourceTypeKey: resourceNamespaces}
 		}
 		if got := cfg.MCPServerName(); got != server {

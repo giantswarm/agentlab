@@ -686,6 +686,7 @@ func configureCmd() *cobra.Command {
 	var modelManagerBackends []string
 	var vmManagerImageDir string
 	var chartVersion, chartPath, chartBranch string
+	var upgradeSeed bool
 	cmd := &cobra.Command{
 		Use:   "configure",
 		Short: "Discover this machine, then ask for the lab configuration (or keep it with --defaults) and save agentlab.yaml",
@@ -729,6 +730,9 @@ func configureCmd() *cobra.Command {
 			}
 			if cmd.Flags().Changed("chart-path") {
 				cfg.Platform.ChartPath = chartPath
+			}
+			if cmd.Flags().Changed("upgrade-seed") {
+				cfg.Platform.UpgradeSeed = upgradeSeed
 			}
 			if cmd.Flags().Changed("chart-branch") {
 				// A new branch (or none) starts unpinned: the pin froze a
@@ -810,6 +814,7 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&modelManager, "model-manager", false, "pin managed models on/off instead of following the host model servers the discovery finds (needs agents)")
 	cmd.Flags().StringVar(&chartVersion, "chart-version", "", "the agent-platform chart release to install (an exact version; default "+config.DefaultChartVersion+")")
 	cmd.Flags().StringVar(&chartPath, "chart-path", "", "install the agent-platform chart from this local directory (an agent-platform checkout's helm/agent-platform) instead of the pinned release; \"\" clears it")
+	cmd.Flags().BoolVar(&upgradeSeed, "upgrade-seed", false, "seed an upgrade proof: install a released agent-platform chart below agentlab's floor in the shape of its line, to upgrade it in place later with --chart-version and `agentlab platform`; --upgrade-seed=false clears it")
 	cmd.Flags().StringVar(&chartBranch, "chart-branch", "", "the dev channel: follow this agent-platform branch's newest dev build (resolved now and on every up/platform, written to chartVersion); \"\" returns to the stable channel")
 	cmd.Flags().StringSliceVar(&modelManagerBackends, "model-manager-backends", nil, fmt.Sprintf("pin the host model servers, in order (%s; the first is model-manager's default backend) instead of the ones the discovery finds", strings.Join(config.ModelManagerBackends, ", ")))
 	cmd.Flags().BoolVar(&vmManager, "vm-manager", false, "run the platform's VM provisioner (vm-manager) as a pod of the node; --vm-manager=false turns it off (needs /dev/kvm and /dev/vhost-vsock on this machine)")
@@ -834,6 +839,8 @@ func printSaved(cfg *config.Config, disc *lab.Discovery) {
 			cfg.Platform.ChartPath, cfg.Platform.ChartVersion, config.ConnectivityChartDir(cfg.Platform.ChartPath))
 	case cfg.Platform.ChartBranch != "":
 		fmt.Printf("  chart      agent-platform %s (branch %s, dev channel%s)\n", cfg.Platform.ChartVersion, cfg.Platform.ChartBranch, pinnedNote(cfg))
+	case cfg.Platform.UpgradeSeed:
+		fmt.Printf("  chart      agent-platform %s (upgrade seed: a release below agentlab's floor installs)\n", cfg.Platform.ChartVersion)
 	default:
 		fmt.Printf("  chart      agent-platform %s\n", cfg.Platform.ChartVersion)
 	}
