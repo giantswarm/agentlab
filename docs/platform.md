@@ -1020,7 +1020,10 @@ components, as the admin, and leaves nothing behind (its agents are named
    `default-model-config` (`--model-config` to pick another).
 5. **The sign-in claim (ground-truth G6)**: before any sign-in,
    `server:lab-oauth-fixture` resolves to nothing for everyone
-   (`toolset_unmatched` names the selector); the portal's Sign in (`POST
+   (`toolset_unmatched` names the selector), yet points at the sign-in:
+   `filter_tools` lists the fixture under `toolset_requiring_auth`, and a call
+   to `x_lab-oauth-fixture_list_core_tools` answers `auth_required` with the
+   sign-in link, never `outside the toolset`; the portal's Sign in (`POST
    /api/muster/auth/login` with the portal's own forwarded Dex id_token) yields
    the challenge, which the proof completes as the browser would; an
    agent-shaped session on the **same** id_token then resolves the fixture's
