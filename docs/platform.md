@@ -147,7 +147,7 @@ platform:
 the boot says which chart it installed. The directories are read, never
 written. Clearing it and re-running `agentlab platform` puts the pinned
 release back in place, the boot saying so (`the cluster runs a dev chart
-left in place: agent-platform 1.1.35, a chart directory's build (…); 
+left in place: agent-platform 1.1.35, a chart directory's build (…);
 agent-platform 4.116.0 replaces it`); `agentlab status` says which chart a
 lab runs before anything is installed on it.
 
