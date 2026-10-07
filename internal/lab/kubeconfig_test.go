@@ -3,6 +3,8 @@ package lab
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -121,5 +123,79 @@ func TestUseClusterKubeconfig(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("missing-cluster error %q lacks %q", err, want)
 		}
+	}
+}
+
+// TestUseClusterKubeconfigRefreshesTheLabsCopies is the lease after `down`
+// and `up`: a copy of the lab's admin kubeconfig taken before the cluster was
+// recreated (a lab lease holds one) carries the previous cluster's CA, and
+// the export of the new cluster rewrites it through the shell's KUBECONFIG —
+// no manual step, and owner-only as before. Everything else KUBECONFIG names
+// stays as it is: a copy that already is the new cluster's (additions
+// included — the sandbox's proxy-url), a kubeconfig that is not this lab's,
+// ~/.kube/config even as a stale copy, and a path that is gone.
+func TestUseClusterKubeconfigRefreshesTheLabsCopies(t *testing.T) {
+	t.Chdir(t.TempDir())
+	stubKindKubeconfig(t)
+	resetKindKubeconfigCache(t)
+	t.Cleanup(resetLabKube)
+
+	// Zm9v is the new cluster's CA and certificates (fakeKindKubeconfig),
+	// b2xk the previous cluster's.
+	previous := strings.ReplaceAll(fakeKindKubeconfig, "Zm9v", "b2xk")
+	proxied := strings.Replace(fakeKindKubeconfig, "    server:", "    proxy-url: socks5://127.0.0.1:1080\n    server:", 1)
+	foreign := strings.ReplaceAll(fakeKindKubeconfig, "kind-agentlab", "prod")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	lease := filepath.Join(t.TempDir(), "lease", "kubeconfig")
+	files := map[string]string{
+		lease: previous,
+		filepath.Join(t.TempDir(), "sandbox", "kubeconfig"): proxied,
+		filepath.Join(t.TempDir(), "prod.yaml"):             foreign,
+		filepath.Join(home, ".kube", "config"):              previous,
+	}
+	var paths []string
+	for path, content := range files {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, path)
+	}
+	gone := filepath.Join(t.TempDir(), "released", "kubeconfig")
+	paths = append(paths, gone)
+	slices.Sort(paths)
+	t.Setenv("KUBECONFIG", strings.Join(paths, string(os.PathListSeparator)))
+
+	if err := useClusterKubeconfig(config.Default()); err != nil {
+		t.Fatal(err)
+	}
+	for path, before := range files {
+		raw, err := os.ReadFile(path) // #nosec G304 -- the test's own temporary files
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := before
+		if before == previous && !strings.HasPrefix(path, home) {
+			want = fakeKindKubeconfig
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.Mode().Perm() != 0o600 {
+				t.Errorf("the refreshed copy %s has mode %v, want owner-only 0600", path, info.Mode().Perm())
+			}
+		}
+		if string(raw) != want {
+			t.Errorf("%s after the export:\n%s\nwant:\n%s", path, raw, want)
+		}
+	}
+	if _, err := os.Stat(gone); !os.IsNotExist(err) {
+		t.Errorf("a released lease's path must not come back: %v", err)
+	}
+	if entries, _ := os.ReadDir(filepath.Dir(lease)); len(entries) != 1 {
+		t.Errorf("the refresh left %d entries in the lease, want the copy alone (no .tmp)", len(entries))
 	}
 }

@@ -50,7 +50,10 @@ command exports the kind cluster's kubeconfig to `state/kubeconfig`, and its
 embedded Helm and Kubernetes client are built from that file alone (the REST
 client getter in `restclient.go`). `KUBECONFIG=state/kubeconfig kubectl ...`
 and `KUBECONFIG=state/kubeconfig helm -n agent-platform status agent-platform`
-are how a person looks at the same cluster from a shell.
+are how a person looks at the same cluster from a shell. A copy of that file
+the shell's `KUBECONFIG` names (a lab lease's, say) is refreshed by the same
+export once the cluster behind it was recreated (`kubeconfig.go`,
+`refreshKubeconfigCopies`); nothing else in `KUBECONFIG` is ever written.
 
 The Kubernetes client is embedded: `internal/lab/kube.go` is the vocabulary
 the package speaks to the apiserver through client-go — server-side apply of

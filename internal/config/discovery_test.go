@@ -39,36 +39,50 @@ func TestModelManagerNormalizeEnabledDefaultsToOllama(t *testing.T) {
 	}
 }
 
+// TestApplyDiscovered: on a first configure the flag follows the discovery;
+// a later one (first false, an agentlab.yaml in place) keeps the recorded
+// choice whatever answers — `configure --defaults` on a lab configured
+// without managed models leaves them off — while the backends list follows
+// the host either way and a pin decides over both.
 func TestApplyDiscovered(t *testing.T) {
 	cases := []struct {
 		name         string
 		start        ModelManager
 		found        []string
 		agents       bool
+		first        bool
 		pinEnabled   *bool
 		pinBackends  []string
 		wantBackends []string
 		wantEnabled  bool
 	}{
-		{"both answer", ModelManager{}, []string{ModelManagerBackendOllama, ModelManagerBackendLemonade}, true, nil, nil, []string{ModelManagerBackendOllama, ModelManagerBackendLemonade}, true},
-		{"canonical order whatever the probe order", ModelManager{}, []string{ModelManagerBackendLemonade, ModelManagerBackendOllama}, true, nil, nil, []string{ModelManagerBackendOllama, ModelManagerBackendLemonade}, true},
-		{"only lemonade", ModelManager{}, []string{ModelManagerBackendLemonade}, true, nil, nil, []string{ModelManagerBackendLemonade}, true},
-		{"only lmstudio", ModelManager{}, []string{ModelManagerBackendLMStudio}, true, nil, nil, []string{ModelManagerBackendLMStudio}, true},
-		{"every server answers, canonical order", ModelManager{}, []string{ModelManagerBackendLMStudio, ModelManagerBackendLemonade, ModelManagerBackendOllama}, true, nil, nil, []string{ModelManagerBackendOllama, ModelManagerBackendLemonade, ModelManagerBackendLMStudio}, true},
-		{"pinned lmstudio replaces the discovery", ModelManager{}, []string{ModelManagerBackendOllama}, true, nil, []string{ModelManagerBackendLMStudio}, []string{ModelManagerBackendLMStudio}, true},
-		{"none answers turns it off", ModelManager{Enabled: true, Backends: []string{ModelManagerBackendOllama}}, nil, true, nil, nil, nil, false},
-		{"a server that vanished drops out", ModelManager{Enabled: true, Backends: []string{ModelManagerBackendOllama, ModelManagerBackendLemonade}}, []string{ModelManagerBackendOllama}, true, nil, nil, []string{ModelManagerBackendOllama}, true},
-		{"an explicit endpoint keeps its backend", ModelManager{Enabled: true, Backends: []string{ModelManagerBackendLemonade}, Endpoints: map[string]string{ModelManagerBackendLemonade: "http://lan:13305"}}, nil, true, nil, nil, []string{ModelManagerBackendLemonade}, true},
-		{"agents off keeps managed models off", ModelManager{}, []string{ModelManagerBackendOllama}, false, nil, nil, []string{ModelManagerBackendOllama}, false},
-		{"pinned off", ModelManager{}, []string{ModelManagerBackendOllama}, true, boolPtr(false), nil, []string{ModelManagerBackendOllama}, false},
-		{"pinned on without a server falls back to ollama", ModelManager{}, nil, true, boolPtr(true), nil, []string{ModelManagerBackendOllama}, true},
-		{"pinned backends replace the discovery", ModelManager{}, []string{ModelManagerBackendOllama, ModelManagerBackendLemonade}, true, nil, []string{ModelManagerBackendLemonade}, []string{ModelManagerBackendLemonade}, true},
-		{"legacy form folds first", ModelManager{Enabled: true, Backend: ModelManagerBackendOllama, Endpoint: "http://lan:11434"}, nil, true, nil, nil, []string{ModelManagerBackendOllama}, true},
+		{"both answer", ModelManager{}, []string{ModelManagerBackendOllama, ModelManagerBackendLemonade}, true, true, nil, nil, []string{ModelManagerBackendOllama, ModelManagerBackendLemonade}, true},
+		{"canonical order whatever the probe order", ModelManager{}, []string{ModelManagerBackendLemonade, ModelManagerBackendOllama}, true, true, nil, nil, []string{ModelManagerBackendOllama, ModelManagerBackendLemonade}, true},
+		{"only lemonade", ModelManager{}, []string{ModelManagerBackendLemonade}, true, true, nil, nil, []string{ModelManagerBackendLemonade}, true},
+		{"only lmstudio", ModelManager{}, []string{ModelManagerBackendLMStudio}, true, true, nil, nil, []string{ModelManagerBackendLMStudio}, true},
+		{"every server answers, canonical order", ModelManager{}, []string{ModelManagerBackendLMStudio, ModelManagerBackendLemonade, ModelManagerBackendOllama}, true, true, nil, nil, []string{ModelManagerBackendOllama, ModelManagerBackendLemonade, ModelManagerBackendLMStudio}, true},
+		{"pinned lmstudio replaces the discovery", ModelManager{}, []string{ModelManagerBackendOllama}, true, true, nil, []string{ModelManagerBackendLMStudio}, []string{ModelManagerBackendLMStudio}, true},
+		{"none answers on a first configure leaves it off", ModelManager{Enabled: true, Backends: []string{ModelManagerBackendOllama}}, nil, true, true, nil, nil, nil, false},
+		{"a server that vanished drops out", ModelManager{Enabled: true, Backends: []string{ModelManagerBackendOllama, ModelManagerBackendLemonade}}, []string{ModelManagerBackendOllama}, true, true, nil, nil, []string{ModelManagerBackendOllama}, true},
+		{"an explicit endpoint keeps its backend", ModelManager{Enabled: true, Backends: []string{ModelManagerBackendLemonade}, Endpoints: map[string]string{ModelManagerBackendLemonade: "http://lan:13305"}}, nil, true, true, nil, nil, []string{ModelManagerBackendLemonade}, true},
+		{"agents off keeps managed models off", ModelManager{}, []string{ModelManagerBackendOllama}, false, true, nil, nil, []string{ModelManagerBackendOllama}, false},
+		{"pinned off", ModelManager{}, []string{ModelManagerBackendOllama}, true, true, boolPtr(false), nil, []string{ModelManagerBackendOllama}, false},
+		{"pinned on without a server falls back to ollama", ModelManager{}, nil, true, true, boolPtr(true), nil, []string{ModelManagerBackendOllama}, true},
+		{"pinned backends replace the discovery", ModelManager{}, []string{ModelManagerBackendOllama, ModelManagerBackendLemonade}, true, true, nil, []string{ModelManagerBackendLemonade}, []string{ModelManagerBackendLemonade}, true},
+		{"legacy form folds first", ModelManager{Enabled: true, Backend: ModelManagerBackendOllama, Endpoint: "http://lan:11434"}, nil, true, true, nil, nil, []string{ModelManagerBackendOllama}, true},
+		// A lab configured without managed models stays without them on a
+		// later configure, however many servers answer; the list still
+		// follows the host.
+		{"a later configure keeps managed models off though servers answer", ModelManager{Enabled: false, Backends: []string{ModelManagerBackendOllama}}, []string{ModelManagerBackendOllama, ModelManagerBackendLemonade}, true, false, nil, nil, []string{ModelManagerBackendOllama, ModelManagerBackendLemonade}, false},
+		{"a later configure keeps managed models on when every server is gone", ModelManager{Enabled: true, Backends: []string{ModelManagerBackendOllama}}, nil, true, false, nil, nil, []string{ModelManagerBackendOllama}, true},
+		{"a later configure with the agents runtime off turns them off", ModelManager{Enabled: true, Backends: []string{ModelManagerBackendOllama}}, []string{ModelManagerBackendOllama}, false, false, nil, nil, []string{ModelManagerBackendOllama}, false},
+		{"a later configure follows the pin over the recorded choice", ModelManager{Enabled: false, Backends: []string{ModelManagerBackendOllama}}, []string{ModelManagerBackendOllama}, true, false, boolPtr(true), nil, []string{ModelManagerBackendOllama}, true},
+		{"a later configure pinned off stays off", ModelManager{Enabled: true, Backends: []string{ModelManagerBackendOllama}}, []string{ModelManagerBackendOllama}, true, false, boolPtr(false), nil, []string{ModelManagerBackendOllama}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			mm := tc.start
-			mm.ApplyDiscovered(tc.found, tc.agents, tc.pinEnabled, tc.pinBackends)
+			mm.ApplyDiscovered(tc.found, tc.agents, tc.first, tc.pinEnabled, tc.pinBackends)
 			if !slices.Equal(mm.Backends, tc.wantBackends) {
 				t.Errorf("backends = %v, want %v", mm.Backends, tc.wantBackends)
 			}
@@ -90,7 +104,7 @@ func TestApplyDiscovered(t *testing.T) {
 func TestApplyDiscoveredPrunesEndpointsOfDroppedBackends(t *testing.T) {
 	mm := ModelManager{Enabled: true, Backends: []string{ModelManagerBackendOllama, ModelManagerBackendLemonade},
 		Endpoints: map[string]string{ModelManagerBackendOllama: "http://lan:11434"}}
-	mm.ApplyDiscovered(nil, true, nil, []string{ModelManagerBackendLemonade})
+	mm.ApplyDiscovered(nil, true, true, nil, []string{ModelManagerBackendLemonade})
 	if _, kept := mm.Endpoints[ModelManagerBackendOllama]; kept {
 		t.Fatalf("endpoint of the dropped backend survived: %v", mm.Endpoints)
 	}

@@ -333,9 +333,12 @@ that names none goes; the REST API takes `?backend=` (reads) or `"backend"`
 versions wrote (`backend:` + `endpoint:`) still reads as the one-item list.
 
 `agentlab configure` detects an Ollama on `:11434`, a Lemonade Server on
-`:13305` and an LM Studio on `:1234` on every run (`--model-manager[=false]`
-pins the flag, `--model-manager-backends` the list; the interactive form shows
-what was found). The flag off is the chart's component off: the rendered
+`:13305` and an LM Studio on `:1234` on every run and keeps `backends`
+current; whether managed models are on follows the discovery on the first
+`configure` only — a later one, `--defaults` included, keeps the lab's
+recorded choice (`--model-manager[=false]` pins the flag,
+`--model-manager-backends` the list; the interactive form shows what was
+found). The flag off is the chart's component off: the rendered
 values state `components.model-manager.enabled: false`, because the meta
 chart runs model-manager by default since 4.24.0 — with no backend, which in
 the lab would only crash-loop on the Dex localhost address. Each endpoint is **autodetected at platform time**: the kind
