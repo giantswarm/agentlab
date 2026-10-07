@@ -68,7 +68,9 @@ func kindKubeconfig(clusterName string) ([]byte, error) {
 // about the cluster (the one agentlab.yaml names), and a lab that is not
 // running fails right here, by name — never as a call against whatever
 // cluster the shell's own kubeconfig happens to point at. The user's
-// kubeconfig and current-context are never read or changed.
+// kubeconfig and current-context are never read or changed; a copy of the
+// lab's own file the shell's KUBECONFIG names is refreshed with it
+// (refreshKubeconfigCopies).
 func useClusterKubeconfig(cfg *config.Config) error {
 	raw, err := kindKubeconfig(cfg.ClusterName)
 	if err != nil {
@@ -80,10 +82,113 @@ func useClusterKubeconfig(cfg *config.Config) error {
 	if err := os.WriteFile(labKubeconfigPath, raw, 0o600); err != nil {
 		return err
 	}
+	refreshKubeconfigCopies(cfg.ClusterName, raw)
 	// The embedded client (kube.go) is built from this file: a bundle built
 	// before the rewrite must not outlive it.
 	resetLabKube()
 	return nil
+}
+
+// refreshKubeconfigCopies brings the copies of this lab's admin kubeconfig
+// that the shell's KUBECONFIG names up to date with the cluster. A copy taken
+// before `down` and `up` (a lab lease's, say) still carries the previous
+// cluster's CA and fails every call against the new one until it is
+// rewritten — kind would have written the new cluster into KUBECONFIG, and
+// this keeps that one promise for the copies of the lab's own file. A file
+// counts as a copy when every cluster, context and user in it is this lab's
+// kind entry: the shell's own kubeconfig, ~/.kube/config and another lab's
+// are never written. A copy that already carries the cluster's address and
+// CA stays as it is, additions included (a proxy-url, say); one that cannot
+// be refreshed is noted, never fatal — the lab itself is fine.
+func refreshKubeconfigCopies(clusterName string, fresh []byte) {
+	want, ok := readKubeconfigCopy(fresh)
+	if !ok || !want.ofLab(clusterName) {
+		return
+	}
+	own := labKubeconfig()
+	home, _ := os.UserHomeDir()
+	for _, path := range filepath.SplitList(os.Getenv("KUBECONFIG")) {
+		abs, err := filepath.Abs(path)
+		if path == "" || err != nil || abs == own || (home != "" && abs == filepath.Join(home, ".kube", "config")) {
+			continue
+		}
+		raw, err := os.ReadFile(abs)
+		if err != nil {
+			continue
+		}
+		got, ok := readKubeconfigCopy(raw)
+		if !ok || !got.ofLab(clusterName) || got.endpoint() == want.endpoint() {
+			continue
+		}
+		// The same directory, one rename: a kubectl reading the copy sees the
+		// previous cluster's or the new one, never half a file.
+		tmp := abs + ".tmp"
+		if err := os.WriteFile(tmp, fresh, 0o600); err == nil {
+			err = os.Rename(tmp, abs)
+		}
+		if err != nil {
+			_ = os.Remove(tmp)
+			note("the copy of the lab kubeconfig at %s is the previous cluster's and could not be refreshed: %v", abs, err)
+			continue
+		}
+		note("refreshed the copy of the lab kubeconfig at %s for the new cluster", abs)
+	}
+}
+
+// kubeconfigCopy is what the refresh reads of a kubeconfig: the names of its
+// entries, and the cluster's address and CA.
+type kubeconfigCopy struct {
+	Clusters []struct {
+		Name    string `yaml:"name"`
+		Cluster struct {
+			Server string `yaml:"server"`
+			CA     string `yaml:"certificate-authority-data"`
+		} `yaml:"cluster"`
+	} `yaml:"clusters"`
+	Contexts []struct {
+		Name string `yaml:"name"`
+	} `yaml:"contexts"`
+	Users []struct {
+		Name string `yaml:"name"`
+	} `yaml:"users"`
+}
+
+func readKubeconfigCopy(raw []byte) (kubeconfigCopy, bool) {
+	var k kubeconfigCopy
+	err := yaml.Unmarshal(raw, &k)
+	return k, err == nil && len(k.Clusters) > 0
+}
+
+// ofLab reports whether every cluster, context and user is the lab's kind
+// entry (kind-<clusterName>, as kind names all three): the admin kubeconfig
+// as kind emits it, or a copy of it.
+func (k kubeconfigCopy) ofLab(clusterName string) bool {
+	entry := "kind-" + clusterName
+	if len(k.Clusters) == 0 || len(k.Contexts) == 0 || len(k.Users) == 0 {
+		return false
+	}
+	for _, c := range k.Clusters {
+		if c.Name != entry {
+			return false
+		}
+	}
+	for _, c := range k.Contexts {
+		if c.Name != entry {
+			return false
+		}
+	}
+	for _, u := range k.Users {
+		if u.Name != entry {
+			return false
+		}
+	}
+	return true
+}
+
+// endpoint is the cluster's address and CA: the same pair is the same
+// cluster, a different one the cluster that replaced it.
+func (k kubeconfigCopy) endpoint() [2]string {
+	return [2]string{k.Clusters[0].Cluster.Server, k.Clusters[0].Cluster.CA}
 }
 
 // kindClusterEntry is the cluster entry (name and server/CA) of the kind

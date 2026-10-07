@@ -92,9 +92,11 @@ with Dex doing the logins.
   `/api/v1`, Ollama's `/api/version` included, and reports no version
   anywhere — its discovery line reads `api v1`), a standalone `flm serve`
   (report-only), and `$ANTHROPIC_API_KEY`. What answers becomes
-  `platform.modelManager.backends` (Ollama first); `--model-manager[=false]`
-  and `--model-manager-backends` pin it. Never hand-edit that list to
-  describe the machine — re-run `configure --defaults`.
+  `platform.modelManager.backends` (Ollama first); whether managed models
+  are on follows that on the first configure only — a later `configure`,
+  `--defaults` included, keeps the lab's recorded choice — and
+  `--model-manager[=false]` and `--model-manager-backends` pin both. Never
+  hand-edit that list to describe the machine — re-run `configure --defaults`.
 - `platform.modelManager` installs the chart's model-manager component in
   front of EVERY backend of the list — and off states
   `components.model-manager.enabled: false` in the rendered values (the chart
@@ -185,7 +187,11 @@ with Dex doing the logins.
   from a shell. Your own `~/.kube/config` is never touched: kind is embedded
   (`internal/lab/kind.go`, `sigs.k8s.io/kind` as a pinned Go dependency — the
   Kubernetes version is its release's default node image), and it writes the
-  admin kubeconfig to `state/kubeconfig` only.
+  admin kubeconfig to `state/kubeconfig` only. The one other file the lab
+  writes is a copy of that kubeconfig the shell's `KUBECONFIG` names (every
+  entry `kind-<clusterName>` — a lab lease holds one): the export refreshes
+  it once the cluster behind it was recreated, so a copy taken before `down`
+  and `up` reaches the new cluster without a manual step.
 
 ## Commands
 

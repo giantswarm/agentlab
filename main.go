@@ -338,7 +338,7 @@ func loadOrCreateConfig() (*config.Config, error) {
 	}
 	fmt.Printf("No %s yet — checking this machine first.\n\n", config.File)
 	cfg = config.Default()
-	disc := discoverInto(cfg, nil, nil, nil)
+	disc := discoverInto(cfg, true, nil, nil, nil)
 	// The tools before the questions: a missing tool is refused here, not
 	// after the form and a cluster boot.
 	if err := disc.Preflight(); err != nil {
@@ -375,15 +375,17 @@ func loadOrCreateConfig() (*config.Config, error) {
 // holds them (an existing cluster's mappings are fixed, so conflicts are
 // reported instead), and platform.modelManager.backends becomes the host
 // model servers that answer (pins from the --model-manager flags win).
+// Whether managed models are on follows the discovery on a first configure
+// only (first: no agentlab.yaml yet); a later run keeps the recorded choice.
 // Reachability from pods (bind address, firewall) is checked at platform
 // time, with the fixes.
-func discoverInto(cfg *config.Config, pinEnabled *bool, pinBackends []string, pinVMManager *bool) *lab.Discovery {
+func discoverInto(cfg *config.Config, first bool, pinEnabled *bool, pinBackends []string, pinVMManager *bool) *lab.Discovery {
 	disc := lab.Discover(cfg)
 	fmt.Print(disc.Report(cfg))
 	fmt.Println()
 	applyPorts(cfg, disc)
 	before := cfg.Platform.ModelManager
-	cfg.Platform.ModelManager.ApplyDiscovered(disc.Backends(), cfg.Platform.Agents, pinEnabled, pinBackends)
+	cfg.Platform.ModelManager.ApplyDiscovered(disc.Backends(), cfg.Platform.Agents, first, pinEnabled, pinBackends)
 	vmBefore := cfg.Platform.VMManager.Enabled
 	cfg.Platform.VMManager.ApplyDiscovered(disc.KVMReady(), pinVMManager)
 	reportModelManager(before, cfg.Platform.ModelManager, disc, cfg.Platform.Agents)
@@ -473,7 +475,7 @@ func reportModelManager(before, after config.ModelManager, disc *lab.Discovery, 
 		fmt.Printf("  %s\n", l)
 	}
 	if len(disc.Servers) > 0 && !after.Enabled && agents {
-		fmt.Println("  (managed models pinned off — `agentlab configure --defaults --model-manager` turns them on)")
+		fmt.Println("  (managed models stay off — `agentlab configure --defaults --model-manager` turns them on)")
 	}
 	fmt.Println()
 }
@@ -810,7 +812,7 @@ func configureCmd() *cobra.Command {
 			// Every run discovers the machine — an existing agentlab.yaml
 			// follows the host too: a server that appeared is added, one that
 			// is gone drops out, ports move while no cluster holds them.
-			disc := discoverInto(cfg, pinEnabled, pinBackends, pinVMManager)
+			disc := discoverInto(cfg, fresh, pinEnabled, pinBackends, pinVMManager)
 			// The tools before the questions (or, with --defaults, before
 			// the file): what `agentlab up` would refuse is refused here,
 			// with the install hints, instead of after the whole form.
@@ -853,7 +855,7 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&agents, "agents", false, "enable/disable the agents runtime (kagent, part of the platform install)")
 	cmd.Flags().BoolVar(&observability, "observability", false, "enable/disable the observability stack (Prometheus + mcp-prometheus)")
 	cmd.Flags().BoolVar(&backstage, "backstage", false, "enable/disable Backstage (implies the platform)")
-	cmd.Flags().BoolVar(&modelManager, "model-manager", false, "pin managed models on/off instead of following the host model servers the discovery finds (needs agents)")
+	cmd.Flags().BoolVar(&modelManager, "model-manager", false, "pin managed models on/off (needs agents); without it a first configure follows the host model servers the discovery finds and a later one keeps the recorded choice")
 	cmd.Flags().StringVar(&chartVersion, "chart-version", "", "the agent-platform chart release to install (an exact version; default "+config.DefaultChartVersion+")")
 	cmd.Flags().StringVar(&chartPath, "chart-path", "", "install the agent-platform chart from this local directory (an agent-platform checkout's helm/agent-platform) instead of the pinned release; \"\" clears it")
 	cmd.Flags().BoolVar(&upgradeSeed, "upgrade-seed", false, "seed an upgrade proof: install a released agent-platform chart below agentlab's floor in the shape of its line, to upgrade it in place later with --chart-version and `agentlab platform`; --upgrade-seed=false clears it")

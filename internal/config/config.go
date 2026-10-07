@@ -522,8 +522,11 @@ type ModelManager struct {
 	// On, `agentlab platform` enables components.model-manager in front of
 	// every listed backend, its agentgateway route (JWT-validated: the portal
 	// backend forwards the user's Dex token) and the muster registration.
-	// `agentlab configure` turns it on whenever a host model server answers
-	// (and off when none does), unless --model-manager pins it.
+	// A first `agentlab configure` turns it on when a host model server
+	// answers (and leaves it off when none does); from then on the recorded
+	// choice stands — a lab configured without managed models stays without
+	// them however many servers answer — until --model-manager pins it or
+	// the form changes it. Off whenever the agents runtime is off.
 	Enabled bool `yaml:"enabled"`
 	// The host model servers, in order; backends.go names them and owns the
 	// list, so this comment cannot go stale as servers are added. ONE
@@ -594,13 +597,17 @@ func (m *ModelManager) normalize() {
 
 // ApplyDiscovered merges what `agentlab configure` found on this machine into
 // the block: the backends are the servers that answer plus every backend kept
-// by an explicit endpoint (a server elsewhere on the LAN), in canonical order;
-// managed models go on when there is at least one and the agents runtime is
-// on, and off otherwise. pinBackends (--model-manager-backends) replaces the
-// list outright; pinEnabled (--model-manager) decides the flag instead of the
-// discovery — a pinned-on block without a backend falls back to the Ollama
-// default, so the platform preflight reports the real reachability error.
-func (m *ModelManager) ApplyDiscovered(found []string, agents bool, pinEnabled *bool, pinBackends []string) {
+// by an explicit endpoint (a server elsewhere on the LAN), in canonical order.
+// The flag follows the discovery on a first configure only (first: no
+// agentlab.yaml yet): managed models go on when there is at least one backend
+// and the agents runtime is on. A later configure keeps the recorded choice,
+// so `configure --defaults` never turns on what the lab was configured
+// without — except that the agents runtime off turns them off, since
+// model-manager wires models into it. pinBackends (--model-manager-backends)
+// replaces the list outright; pinEnabled (--model-manager) decides the flag
+// over both — a block on without a backend falls back to the Ollama default,
+// so the platform preflight reports the real reachability error.
+func (m *ModelManager) ApplyDiscovered(found []string, agents, first bool, pinEnabled *bool, pinBackends []string) {
 	m.normalize()
 	var backends []string
 	switch {
@@ -622,10 +629,13 @@ func (m *ModelManager) ApplyDiscovered(found []string, agents bool, pinEnabled *
 	if len(m.Endpoints) == 0 {
 		m.Endpoints = nil
 	}
-	if pinEnabled != nil {
+	switch {
+	case pinEnabled != nil:
 		m.Enabled = *pinEnabled
-	} else {
+	case first:
 		m.Enabled = agents && len(m.Backends) > 0
+	default:
+		m.Enabled = m.Enabled && agents
 	}
 	if m.Enabled && len(m.Backends) == 0 {
 		m.Backends = []string{ModelManagerBackendOllama}
