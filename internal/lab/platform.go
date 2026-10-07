@@ -153,6 +153,9 @@ func platformTopologyFor(cfg *config.Config) (platformTopology, error) {
 		if err == nil {
 			var values map[string]any
 			if values, err = helmValuesFiles(append([]string{valuesPath}, cfg.Platform.ValuesFiles...)...); err == nil {
+				if err := refuseUnreleasedComponents(chart, values); err != nil {
+					return platformTopology{}, err
+				}
 				roster, err = renderPlatformRoster(chart, values)
 			}
 		}
@@ -278,6 +281,16 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 		return err
 	}
 	chart := platformChartFor(cfg)
+	// A dev build that waits for a component release is refused before the
+	// first object is applied (unreleased.go): `up` judged it before the
+	// cluster already, `agentlab platform` judges it here.
+	if _, valuesPath, err := renderManifest(cfg, platformValuesTemplate); err != nil {
+		return err
+	} else if values, err := helmValuesFiles(append([]string{valuesPath}, cfg.Platform.ValuesFiles...)...); err != nil {
+		return err
+	} else if err := refuseUnreleasedComponents(chart, values); err != nil {
+		return err
+	}
 	ctx := context.Background()
 	// The platform signal, now that the chart is resolved: the meta chart
 	// line this lab installs, once per run (docs/telemetry.md). Ahead of the
