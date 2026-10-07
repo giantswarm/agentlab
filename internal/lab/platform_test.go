@@ -153,12 +153,12 @@ func TestPlatformReleases(t *testing.T) {
 	}
 	got := map[string]platformReleaseStatus{}
 	for _, r := range releases {
-		got[r.name] = r
+		got[r.Name] = r
 	}
 	want := map[string]platformReleaseStatus{
-		componentMuster: {name: componentMuster, ready: conditionTrue, message: "Helm install succeeded"},
-		componentKagent: {name: componentKagent, ready: condFalse, message: retriesExhausted},
-		"fresh":         {name: "fresh"},
+		componentMuster: {Name: componentMuster, Ready: conditionTrue, Message: "Helm install succeeded"},
+		componentKagent: {Name: componentKagent, Ready: condFalse, Message: retriesExhausted},
+		"fresh":         {Name: "fresh"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("platformReleases = %v, want %v", got, want)
@@ -258,7 +258,7 @@ func TestPlatformChartRemedy(t *testing.T) {
 		want, never string
 	}{
 		{platformChart{ref: "/src/agent-platform"}, "/src/agent-platform", chartVersionKnob},
-		{platformChart{ref: config.ChartRepository, version: "4.0.0-dev.feat.x.20260915.h1", branch: "feat/x"}, "feat/x", chartVersionKnob},
+		{platformChart{ref: config.ChartRepository, version: "4.0.0-dev.feat.x.20260915.h1", branch: devBranch}, devBranch, chartVersionKnob},
 		{platformChart{ref: config.ChartRepository, version: "4.15.2"}, chartVersionKnob, "branch"},
 	} {
 		got := c.chart.remedy()
