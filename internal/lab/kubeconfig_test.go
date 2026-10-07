@@ -159,7 +159,7 @@ func TestUseClusterKubeconfigRefreshesTheLabsCopies(t *testing.T) {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		paths = append(paths, path)
@@ -173,7 +173,7 @@ func TestUseClusterKubeconfigRefreshesTheLabsCopies(t *testing.T) {
 		t.Fatal(err)
 	}
 	for path, before := range files {
-		raw, err := os.ReadFile(path)
+		raw, err := os.ReadFile(path) // #nosec G304 -- the test's own temporary files
 		if err != nil {
 			t.Fatal(err)
 		}

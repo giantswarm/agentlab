@@ -112,7 +112,7 @@ func refreshKubeconfigCopies(clusterName string, fresh []byte) {
 		if path == "" || err != nil || abs == own || (home != "" && abs == filepath.Join(home, ".kube", "config")) {
 			continue
 		}
-		raw, err := os.ReadFile(abs)
+		raw, err := os.ReadFile(abs) // #nosec G304 -- a file the shell's KUBECONFIG names, read to see whether it is the lab's own
 		if err != nil {
 			continue
 		}
@@ -120,19 +120,27 @@ func refreshKubeconfigCopies(clusterName string, fresh []byte) {
 		if !ok || !got.ofLab(clusterName) || got.endpoint() == want.endpoint() {
 			continue
 		}
-		// The same directory, one rename: a kubectl reading the copy sees the
-		// previous cluster's or the new one, never half a file.
-		tmp := abs + ".tmp"
-		if err := os.WriteFile(tmp, fresh, 0o600); err == nil {
-			err = os.Rename(tmp, abs)
-		}
-		if err != nil {
-			_ = os.Remove(tmp)
+		if err := replaceFile(abs, fresh); err != nil {
 			note("the copy of the lab kubeconfig at %s is the previous cluster's and could not be refreshed: %v", abs, err)
 			continue
 		}
 		note("refreshed the copy of the lab kubeconfig at %s for the new cluster", abs)
 	}
+}
+
+// replaceFile writes data over path owner-only, through a temporary file in
+// the same directory and one rename: a reader of the file sees the previous
+// content or the new one, never half a file.
+func replaceFile(path string, data []byte) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 // kubeconfigCopy is what the refresh reads of a kubeconfig: the names of its
