@@ -66,7 +66,7 @@ func TestUnreleasedWaits(t *testing.T) {
 // TestUnreleasedWaitsMalformed: an annotation that is not the check's JSON is
 // an error naming it, never a silent pass.
 func TestUnreleasedWaitsMalformed(t *testing.T) {
-	_, err := unreleasedWaits(true, "1.0.0", map[string]string{unreleasedAnnotation: "agent-manager"}, nil)
+	_, err := unreleasedWaits(true, "1.0.0", map[string]string{unreleasedAnnotation: waitingComponent}, nil)
 	if err == nil || !strings.Contains(err.Error(), unreleasedAnnotation) {
 		t.Errorf("err = %v, want one naming %s", err, unreleasedAnnotation)
 	}
