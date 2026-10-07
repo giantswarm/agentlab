@@ -36,7 +36,16 @@ The lab installs it in its **lab shape**:
   A re-run that would install the same chart version with the same values
   writes no revision (`chart agent-platform <version> already installed with
   these values — nothing to do`) and only re-reads every component's health;
-  a changed value, version or a chart directory upgrades.
+  a changed value, version or a chart directory upgrades. A chart in place
+  that is not the one being installed — a dev chart an earlier run left
+  behind, a checkout's build or a branch's dev build — is named before the
+  upgrade replaces it (`the cluster runs a dev chart left in place: …`), and
+  `agentlab status` names it without installing anything: every revision
+  the lab writes carries the chart's channel as the release label
+  `agentlab.giantswarm.io/chart-channel` (`stable`, `dev` or `path`) and a
+  `helm history` description saying which agentlab installed what from
+  where — the only way to tell a checkout's build, whose `Chart.yaml`
+  version is a placeholder, from a release.
   Never drop the value on a lab: the first upgrade without it makes the
   release self-managed.
 - The chart is **pinned** to an exact release, `platform.chartVersion` in
@@ -136,7 +145,11 @@ platform:
 (or `agentlab configure --defaults --chart-path /path/to/agent-platform/helm/agent-platform`;
 `--chart-path ""` clears it). `chartVersion` is ignored while it is set, and
 the boot says which chart it installed. The directories are read, never
-written.
+written. Clearing it and re-running `agentlab platform` puts the pinned
+release back in place, the boot saying so (`the cluster runs a dev chart
+left in place: agent-platform 1.1.35, a chart directory's build (…); 
+agent-platform 4.116.0 replaces it`); `agentlab status` says which chart a
+lab runs before anything is installed on it.
 
 **Both charts of the checkout are installed.** The meta chart installs its
 wiring chart, `agent-platform-connectivity`, at its own exact version
@@ -372,7 +385,10 @@ proofs never resolve.
   `platform.chartPinned: true` and stops re-resolving, so the lab keeps the
   build under test; `--pin=false` follows the branch again. A new
   `--chart-branch` (or `""`, back to the stable channel) always starts
-  unpinned.
+  unpinned, and `""` also puts the default release in place of the branch's
+  build the resolver wrote into `chartVersion` — unless `--chart-version`
+  names one in the same call — so the next `agentlab platform` installs a
+  release, never the dev build the branch left behind for the next person.
 - **No build yet**: a branch without dev builds is refused with the two ways
   out — the branch's publish has not run (agent-platform needs
   `gen.ci.branchPublish` and a commit on the branch), or pin a tag by hand.

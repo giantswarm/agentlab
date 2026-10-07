@@ -172,9 +172,9 @@ func mcpPrometheusUp(cfg *config.Config) error {
 			return false
 		}
 		for _, r := range releases {
-			if r.name == mcpPrometheusRelease {
+			if r.Name == mcpPrometheusRelease {
 				status = r
-				return r.ready == conditionTrue
+				return r.Ready == conditionTrue
 			}
 		}
 		return false
@@ -183,9 +183,9 @@ func mcpPrometheusUp(cfg *config.Config) error {
 		// The Ready condition's message is the controller's own account of
 		// why (a failed chart pull, a timed-out install): part of the last
 		// status, not a failure of the read.
-		last := status.ready
-		if status.message != "" {
-			last += " (" + status.message + ")"
+		last := status.Ready
+		if status.Message != "" {
+			last += " (" + status.Message + ")"
 		}
 		return notReached("HelmRelease "+mcpPrometheusRelease, conditionReady, last, readErr,
 			fmt.Sprintf("check `kubectl -n %s describe helmrelease %s` and `agentlab pods -n %s`", platformNamespace, mcpPrometheusRelease, observabilityNamespace))

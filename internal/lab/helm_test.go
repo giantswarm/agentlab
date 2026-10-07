@@ -17,6 +17,8 @@ import (
 	release "helm.sh/helm/v4/pkg/release/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/giantswarm/agentlab/internal/config"
 )
 
 // isolateHelm keeps a test's embedded Helm off the machine's Helm state: its
@@ -238,7 +240,7 @@ func TestHelmValuesLoaders(t *testing.T) {
 // with the options passed through.
 func TestLabUpgradeTakesFieldsOver(t *testing.T) {
 	cfg := &action.Configuration{}
-	opts := helmInstallOptions{CreateNamespace: true, TakeOwnership: true}
+	opts := helmInstallOptions{CreateNamespace: true, TakeOwnership: true, Labels: map[string]string{chartChannelLabel: config.ChartChannelPath}, Description: "agentlab dev: the chart directory /src"}
 
 	upgrade := newLabUpgrade(cfg, observabilityNamespace, time.Minute, 10, opts)
 	if !upgrade.ForceConflicts {
@@ -247,6 +249,9 @@ func TestLabUpgradeTakesFieldsOver(t *testing.T) {
 	if !upgrade.Install || upgrade.Namespace != observabilityNamespace || upgrade.Timeout != time.Minute || upgrade.WaitStrategy != kube.StatusWatcherStrategy || !upgrade.TakeOwnership || upgrade.MaxHistory != 10 {
 		t.Errorf("upgrade = %+v", upgrade)
 	}
+	if upgrade.Labels[chartChannelLabel] != config.ChartChannelPath || upgrade.Description != opts.Description {
+		t.Errorf("the upgrade must carry the release's marks: labels %v, description %q", upgrade.Labels, upgrade.Description)
+	}
 
 	install := newLabInstall(cfg, observabilityNamespace, kpsRelease, time.Minute, true, opts)
 	if !install.ForceConflicts {
@@ -254,6 +259,9 @@ func TestLabUpgradeTakesFieldsOver(t *testing.T) {
 	}
 	if install.ReleaseName != kpsRelease || install.Namespace != observabilityNamespace || !install.CreateNamespace || !install.TakeOwnership || !install.Replace || install.WaitStrategy != kube.StatusWatcherStrategy {
 		t.Errorf("install = %+v", install)
+	}
+	if install.Labels[chartChannelLabel] != config.ChartChannelPath || install.Description != opts.Description {
+		t.Errorf("the install must carry the release's marks: labels %v, description %q", install.Labels, install.Description)
 	}
 }
 
@@ -276,22 +284,23 @@ func TestWithConflictRemedy(t *testing.T) {
 	}
 }
 
-// TestLastRevisionUninstalled: an upgrade-or-install installs afresh when the
-// newest revision in the history is an uninstalled one, and upgrades otherwise.
-func TestLastRevisionUninstalled(t *testing.T) {
+// TestRevisionUninstalled: an upgrade-or-install installs afresh when the
+// newest revision in the history is an uninstalled one, and upgrades
+// otherwise; the release behind the SDK's interface is the v1 release.
+func TestRevisionUninstalled(t *testing.T) {
 	rel := func(status releasecommon.Status) *release.Release {
 		return &release.Release{Name: "r", Info: &release.Info{Status: status}}
 	}
-	if got, err := lastRevisionUninstalled(nil); err != nil || got {
-		t.Errorf("no history: %v, %v; want false", got, err)
+	if revisionUninstalled(rel(releasecommon.StatusDeployed)) {
+		t.Error("deployed: want false")
 	}
-	if got, err := lastRevisionUninstalled([]ri.Releaser{rel(releasecommon.StatusDeployed)}); err != nil || got {
-		t.Errorf("deployed: %v, %v; want false", got, err)
+	if !revisionUninstalled(rel(releasecommon.StatusUninstalled)) {
+		t.Error("uninstalled: want true")
 	}
-	if got, err := lastRevisionUninstalled([]ri.Releaser{rel(releasecommon.StatusDeployed), rel(releasecommon.StatusUninstalled)}); err != nil || !got {
-		t.Errorf("uninstalled last: %v, %v; want true", got, err)
+	if revisionUninstalled(&release.Release{Name: "r"}) {
+		t.Error("no info: want false")
 	}
-	if _, err := lastRevisionUninstalled([]ri.Releaser{"not a release"}); err == nil {
+	if _, err := asV1Release(ri.Releaser("not a release")); err == nil {
 		t.Error("an unexpected release type must be an error")
 	}
 }
@@ -385,6 +394,9 @@ func TestHelmReleaseProbesWithoutCluster(t *testing.T) {
 	}
 	if _, err := helmDeployedRevision(platformNamespace, platformRelease, "3.22.2", nil); err == nil {
 		t.Error("helmDeployedRevision must fail without a lab kubeconfig")
+	}
+	if _, err := helmReleaseNewest(platformNamespace, platformRelease); err == nil {
+		t.Error("helmReleaseNewest must fail without a lab kubeconfig")
 	}
 }
 

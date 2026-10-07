@@ -108,6 +108,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 
 		inGroup(groupEveryday, openCmd()),
 		inGroup(groupEveryday, listCmd()),
+		inGroup(groupEveryday, statusCmd()),
 		inGroup(groupEveryday, podsCmd()),
 		inGroup(groupEveryday, logsCmd()),
 		inGroup(groupEveryday, loginCmd()),
@@ -560,6 +561,9 @@ func openCmd() *cobra.Command {
 	}
 }
 
+// outputJSON is the one `--output` format besides the default, for scripts.
+const outputJSON = "json"
+
 // listCmd shows the labs of this machine. It never asks which lab: it is
 // the command that shows them.
 func listCmd() *cobra.Command {
@@ -570,7 +574,7 @@ func listCmd() *cobra.Command {
 		Short:   "List the labs on this machine: cluster state, components, URLs, whether the lab CA is trusted",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if output != "" && output != "json" {
+			if output != "" && output != outputJSON {
 				return fmt.Errorf("--output %q: the one format besides the default is json", output)
 			}
 			registered, err := labs.List()
@@ -581,10 +585,41 @@ func listCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return lab.PrintLabs(cmd.OutOrStdout(), lab.ListLabs(registered, here), output == "json")
+			return lab.PrintLabs(cmd.OutOrStdout(), lab.ListLabs(registered, here), output == outputJSON)
 		},
 	}
 	cmd.Flags().StringVarP(&output, "output", "o", "", "json: the list as JSON, for scripts")
+	return cmd
+}
+
+// statusCmd shows the lab's live state: the chart the cluster runs against
+// the one agentlab.yaml installs, and the platform's HelmReleases.
+func statusCmd() *cobra.Command {
+	var output string
+	cmd := &cobra.Command{
+		Use:   "status",
+		Short: "The lab's live state: the chart in place (a dev chart named as such) against agentlab.yaml's, and the platform HelmReleases",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if output != "" && output != outputJSON {
+				return fmt.Errorf("--output %q: the one format besides the default is json", output)
+			}
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			dir, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+			status, err := lab.LabStatus(cfg, dir)
+			if err != nil {
+				return err
+			}
+			return lab.PrintStatus(cmd.OutOrStdout(), status, output == outputJSON)
+		},
+	}
+	cmd.Flags().StringVarP(&output, "output", "o", "", "json: the status as JSON, for scripts")
 	return cmd
 }
 
@@ -739,6 +774,13 @@ func configureCmd() *cobra.Command {
 				// build of the previous one.
 				cfg.Platform.ChartBranch = chartBranch
 				cfg.Platform.ChartPinned = false
+				// Back to the stable channel: the build the branch left in
+				// chartVersion goes with it, unless this call pins a version.
+				if chartBranch == "" && !cmd.Flags().Changed("chart-version") {
+					if old := lab.ResetDevBuildPin(cfg); old != "" {
+						fmt.Printf("  chartVersion %s was the branch's dev build; on the stable channel the lab pins %s (--chart-version picks another release)\n", old, cfg.Platform.ChartVersion)
+					}
+				}
 			}
 			cfg.Normalize()
 			var pinEnabled *bool
@@ -815,7 +857,7 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().StringVar(&chartVersion, "chart-version", "", "the agent-platform chart release to install (an exact version; default "+config.DefaultChartVersion+")")
 	cmd.Flags().StringVar(&chartPath, "chart-path", "", "install the agent-platform chart from this local directory (an agent-platform checkout's helm/agent-platform) instead of the pinned release; \"\" clears it")
 	cmd.Flags().BoolVar(&upgradeSeed, "upgrade-seed", false, "seed an upgrade proof: install a released agent-platform chart below agentlab's floor in the shape of its line, to upgrade it in place later with --chart-version and `agentlab platform`; --upgrade-seed=false clears it")
-	cmd.Flags().StringVar(&chartBranch, "chart-branch", "", "the dev channel: follow this agent-platform branch's newest dev build (resolved now and on every up/platform, written to chartVersion); \"\" returns to the stable channel")
+	cmd.Flags().StringVar(&chartBranch, "chart-branch", "", "the dev channel: follow this agent-platform branch's newest dev build (resolved now and on every up/platform, written to chartVersion); \"\" returns to the stable channel and, unless --chart-version pins one, the default release takes the branch's build's place in chartVersion")
 	cmd.Flags().StringSliceVar(&modelManagerBackends, "model-manager-backends", nil, fmt.Sprintf("pin the host model servers, in order (%s; the first is model-manager's default backend) instead of the ones the discovery finds", strings.Join(config.ModelManagerBackends, ", ")))
 	cmd.Flags().BoolVar(&vmManager, "vm-manager", false, "run the platform's VM provisioner (vm-manager) as a pod of the node; --vm-manager=false turns it off (needs /dev/kvm and /dev/vhost-vsock on this machine)")
 	cmd.Flags().StringVar(&vmManagerImageDir, "vm-manager-image-dir", "", "a local guest image build the vm-manager pod boots instead of its release's: a vm-manager checkout's images/build after `make -C images`, pushed into the lab registry at `agentlab platform` (empty for the release's)")

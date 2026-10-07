@@ -2,7 +2,45 @@ package lab
 
 import (
 	"testing"
+
+	"github.com/giantswarm/agentlab/internal/config"
 )
+
+// TestIsDevBuild: a dev build is a version whose prerelease carries either
+// dev shape, of whatever branch; a release, a release candidate, a range and
+// a non-version are not.
+func TestIsDevBuild(t *testing.T) {
+	for _, dev := range []string{
+		"4.66.5-rd384adaft20260924043558hcde53c0",
+		"4.66.5-dev.poc-kagent-main.2026-09-09.20-23-54.h28f7f50",
+		"v4.66.5-dev.poc-kagent-main.2026-09-10.08-12-33",
+	} {
+		if !IsDevBuild(dev) {
+			t.Errorf("%q must be a dev build", dev)
+		}
+	}
+	for _, other := range []string{"", releaseInPlace, "v" + releaseInPlace, rcInPlace, ">=4.0.0 <5.0.0", "a-branch", "4.66.5-rd384adaf"} {
+		if IsDevBuild(other) {
+			t.Errorf("%q must not be a dev build", other)
+		}
+	}
+}
+
+// TestResetDevBuildPin: leaving the dev channel puts the default pin in
+// place of the dev build the resolver wrote and reports it; a release pinned
+// by hand stays.
+func TestResetDevBuildPin(t *testing.T) {
+	cfg := &config.Config{}
+	const build = "4.66.5-rd384adaft20260924043558hcde53c0"
+	cfg.Platform.ChartVersion = build
+	if old := ResetDevBuildPin(cfg); old != build || cfg.Platform.ChartVersion != config.DefaultChartVersion {
+		t.Errorf("after the dev build: replaced %q, chartVersion %q; want %q replaced by %q", old, cfg.Platform.ChartVersion, build, config.DefaultChartVersion)
+	}
+	cfg.Platform.ChartVersion = releaseInPlace
+	if old := ResetDevBuildPin(cfg); old != "" || cfg.Platform.ChartVersion != releaseInPlace {
+		t.Errorf("a release: replaced %q, chartVersion %q; want the release kept", old, cfg.Platform.ChartVersion)
+	}
+}
 
 // devChannelBranch is the dev channel the tests follow: the agent-platform
 // branch whose meta chart builds carry kagent API v2.
