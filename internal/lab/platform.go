@@ -629,11 +629,25 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	// directory (platform.chartPath) always does, its content is not
 	// versioned. `helm -n agent-platform upgrade` from a shell stays the way
 	// to force a revision.
+	//
+	// A chart in place that is not the one being installed — a dev chart an
+	// earlier run left behind, say — is named first (replacingNote), so the
+	// boot says what the lab ran and that this run replaces it; and every
+	// revision the lab writes is stamped with the chart's channel and the run
+	// that wrote it (platformInstallOptions), which is how a later run and
+	// `agentlab status` know a checkout's build from a release.
+	installed, err := installedPlatformChart()
+	if err != nil {
+		return err
+	}
+	if line := replacingNote(installed, chart); line != "" {
+		note("%s", line)
+	}
 	if rev, err := helmDeployedRevision(platformNamespace, platformRelease, chart.version, values); err != nil {
 		return err
 	} else if rev > 0 {
 		note("chart agent-platform %s already installed with these values — nothing to do (Helm revision %d stays)", chart.version, rev)
-	} else if err := helmUpgradeInstall(platformNamespace, platformRelease, chart.ref, chart.version, values, helmInstallTimeout, helmInstallOptions{}); err != nil {
+	} else if err := helmUpgradeInstall(platformNamespace, platformRelease, chart.ref, chart.version, values, helmInstallTimeout, platformInstallOptions(cfg)); err != nil {
 		reportPlatformReleases()
 		return err
 	}
@@ -969,9 +983,11 @@ func removeLegacyArtifacts() {
 
 // platformReleaseStatus is one platform HelmRelease as helm-controller
 // reports it: the Ready condition's status ("True", "False" or "" before the
-// first reconcile) and its message.
+// first reconcile) and its message. Also `agentlab status`'s -o json shape.
 type platformReleaseStatus struct {
-	name, ready, message string
+	Name    string `json:"name"`
+	Ready   string `json:"ready"`
+	Message string `json:"message,omitempty"`
 }
 
 // platformReleases lists the HelmReleases in the platform namespace — the
@@ -989,9 +1005,9 @@ func platformReleases() ([]platformReleaseStatus, error) {
 	releases := make([]platformReleaseStatus, 0, len(items))
 	for i := range items {
 		releases = append(releases, platformReleaseStatus{
-			name:    items[i].GetName(),
-			ready:   conditionStatus(&items[i], conditionReady),
-			message: conditionMessage(&items[i], conditionReady),
+			Name:    items[i].GetName(),
+			Ready:   conditionStatus(&items[i], conditionReady),
+			Message: conditionMessage(&items[i], conditionReady),
 		})
 	}
 	return releases, nil
@@ -1013,13 +1029,13 @@ func waitPlatformReleases() error {
 		}
 		pending = pending[:0]
 		for _, r := range releases {
-			if r.ready != conditionTrue {
+			if r.Ready != conditionTrue {
 				pending = append(pending, r)
 			}
 			// helm-controller gave up on this one: no point waiting out the
 			// clock, the message says why.
-			if r.ready == condFalseStatus && strings.Contains(r.message, "retries exhausted") {
-				readErr = fmt.Errorf("HelmRelease %s failed: %s", r.name, r.message)
+			if r.Ready == condFalseStatus && strings.Contains(r.Message, "retries exhausted") {
+				readErr = fmt.Errorf("HelmRelease %s failed: %s", r.Name, r.Message)
 				return true
 			}
 		}
@@ -1031,7 +1047,7 @@ func waitPlatformReleases() error {
 	if !ready {
 		var lines []string
 		for _, r := range pending {
-			lines = append(lines, fmt.Sprintf("  %s: Ready=%s %s", r.name, orNone(r.ready), r.message))
+			lines = append(lines, fmt.Sprintf("  %s: Ready=%s %s", r.Name, orNone(r.Ready), r.Message))
 		}
 		return fmt.Errorf("platform HelmReleases not Ready after 5 minutes:\n%s\ncheck `kubectl -n %s describe helmrelease <name>` and `agentlab pods -n %s`",
 			strings.Join(lines, "\n"), platformNamespace, platformNamespace)
@@ -1048,8 +1064,8 @@ func reportPlatformReleases() {
 		return
 	}
 	for _, r := range releases {
-		if r.ready != conditionTrue {
-			note("HelmRelease %s: Ready=%s %s", r.name, orNone(r.ready), r.message)
+		if r.Ready != conditionTrue {
+			note("HelmRelease %s: Ready=%s %s", r.Name, orNone(r.Ready), r.Message)
 		}
 	}
 }

@@ -89,6 +89,14 @@ const helmDriver = "secret"
 // `helm upgrade` from a shell keeps the release upgradable by both.
 const helmFieldManager = "helm"
 
+// The field manager is a process-wide setting of Helm's kube client, set
+// once here rather than per operation: the component renders run several
+// operations at once (fluxreleases.go), and a write per operation is a data
+// race the race detector reports.
+func init() {
+	kube.ManagedFieldsManager = helmFieldManager
+}
+
 // helmDebugEnv streams the SDK's log to stderr as it happens (the CLI's
 // --debug); without it the log is kept and printed only when an operation
 // fails. The CLI's own variable, so one habit covers both.
@@ -191,7 +199,6 @@ func newHelmOp(namespace string) (*helmOp, error) {
 	log := newHelmLog()
 	quietKlog(log.live)
 	settings := helmSettings()
-	kube.ManagedFieldsManager = helmFieldManager
 	cfg := action.NewConfiguration(action.ConfigurationSetLogger(log.handler()))
 	if err := cfg.Init(labRESTClientGetter(namespace), namespace, helmDriver); err != nil {
 		return nil, fmt.Errorf("initialising the embedded Helm: %w", err)
@@ -326,6 +333,13 @@ type helmInstallOptions struct {
 	// refused — a namespace the lab had to create ahead of the chart to seed
 	// Secrets into (Substrate's podcertificate-controller-system).
 	TakeOwnership bool
+	// Labels is `--labels`: release labels, kept on the release's storage
+	// Secret; an upgrade merges them over the ones the release carries, so a
+	// label set once stays until a later run sets it again.
+	Labels map[string]string
+	// Description is `--description`: the revision's log line in `helm
+	// history`, in place of Helm's "Install complete"/"Upgrade complete".
+	Description string
 }
 
 // helmUpgradeInstall is `helm upgrade --install <release> <chart> -n <ns> -f
@@ -346,14 +360,7 @@ func helmUpgradeInstall(namespace, releaseName, ref, version string, vals map[st
 		return err
 	}
 	invocation := fmt.Sprintf("upgrade --install %s %s -n %s", releaseName, helmChartLabel(ref, version), namespace)
-	history := action.NewHistory(h.cfg)
-	history.Max = 1
-	revisions, err := history.Run(releaseName)
-	notFound := errors.Is(err, driver.ErrReleaseNotFound)
-	if err != nil && !notFound {
-		return h.fail(invocation, err)
-	}
-	uninstalled, err := lastRevisionUninstalled(revisions)
+	newest, err := h.newestRevision(releaseName)
 	if err != nil {
 		return h.fail(invocation, err)
 	}
@@ -361,8 +368,8 @@ func helmUpgradeInstall(namespace, releaseName, ref, version string, vals map[st
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if notFound || uninstalled {
-		install := newLabInstall(h.cfg, namespace, releaseName, timeout, uninstalled, opts)
+	if newest == nil || revisionUninstalled(newest) {
+		install := newLabInstall(h.cfg, namespace, releaseName, timeout, newest != nil, opts)
 		ch, err := h.loadChart(&install.ChartPathOptions, ref, version)
 		if err != nil {
 			return h.fail(invocation, err)
@@ -397,6 +404,8 @@ func newLabInstall(cfg *action.Configuration, namespace, releaseName string, tim
 	install.WaitStrategy = kube.StatusWatcherStrategy
 	install.ForceConflicts = true
 	install.Replace = replace
+	install.Labels = opts.Labels
+	install.Description = opts.Description
 	return install
 }
 
@@ -417,6 +426,8 @@ func newLabUpgrade(cfg *action.Configuration, namespace string, timeout time.Dur
 	upgrade.ForceConflicts = true
 	upgrade.TakeOwnership = opts.TakeOwnership
 	upgrade.MaxHistory = maxHistory
+	upgrade.Labels = opts.Labels
+	upgrade.Description = opts.Description
 	return upgrade
 }
 
@@ -451,23 +462,55 @@ func helmDeployedRevision(namespace, releaseName, version string, vals map[strin
 	if err != nil {
 		return 0, err
 	}
-	history := action.NewHistory(h.cfg)
-	history.Max = 1
-	revisions, err := history.Run(releaseName)
-	if errors.Is(err, driver.ErrReleaseNotFound) || (err == nil && len(revisions) == 0) {
-		return 0, nil
-	}
+	rel, err := h.newestRevision(releaseName)
 	if err != nil {
 		return 0, h.fail(fmt.Sprintf("history %s -n %s", releaseName, namespace), err)
 	}
-	rel, err := asV1Release(revisions[len(revisions)-1])
-	if err != nil {
-		return 0, err
-	}
-	if !releaseDeployedAs(rel, version, vals) {
+	if rel == nil || !releaseDeployedAs(rel, version, vals) {
 		return 0, nil
 	}
 	return rel.Version, nil
+}
+
+// newestRevision is the release's newest revision whatever its status — the
+// last line of `helm history` — and nil when the namespace holds no such
+// release. The highest revision number, found by looking: the storage lists
+// a release's revisions in no particular order (the secrets driver in the
+// order of the Secrets' names, where `.v10` sorts before `.v9`), and the
+// history action applies no order and no Max of its own.
+func (h *helmOp) newestRevision(releaseName string) (*release.Release, error) {
+	revisions, err := action.NewHistory(h.cfg).Run(releaseName)
+	if errors.Is(err, driver.ErrReleaseNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var newest *release.Release
+	for _, r := range revisions {
+		rel, err := asV1Release(r)
+		if err != nil {
+			return nil, err
+		}
+		if newest == nil || rel.Version > newest.Version {
+			newest = rel
+		}
+	}
+	return newest, nil
+}
+
+// helmReleaseNewest is newestRevision for a caller without an operation in
+// hand: the release's newest revision, nil when there is none.
+func helmReleaseNewest(namespace, releaseName string) (*release.Release, error) {
+	h, err := newHelmOp(namespace)
+	if err != nil {
+		return nil, err
+	}
+	rel, err := h.newestRevision(releaseName)
+	if err != nil {
+		return nil, h.fail(fmt.Sprintf("history %s -n %s", releaseName, namespace), err)
+	}
+	return rel, nil
 }
 
 // releaseDeployedAs reports whether a revision is deployed from the chart
@@ -491,18 +534,11 @@ func sameValues(a, b map[string]any) bool {
 	return errA == nil && errB == nil && bytes.Equal(ja, jb)
 }
 
-// lastRevisionUninstalled reports whether the newest revision in a release's
-// history is an uninstalled one (kept with --keep-history), which an
-// upgrade-or-install treats as no release: it installs, reusing the name.
-func lastRevisionUninstalled(revisions []ri.Releaser) (bool, error) {
-	if len(revisions) == 0 {
-		return false, nil
-	}
-	last, err := asV1Release(revisions[len(revisions)-1])
-	if err != nil {
-		return false, err
-	}
-	return last.Info != nil && last.Info.Status == releasecommon.StatusUninstalled, nil
+// revisionUninstalled reports whether a release's newest revision is an
+// uninstalled one (kept with --keep-history), which an upgrade-or-install
+// treats as no release: it installs, reusing the name.
+func revisionUninstalled(rel *release.Release) bool {
+	return rel.Info != nil && rel.Info.Status == releasecommon.StatusUninstalled
 }
 
 // schemaRejection is a render a values.schema.json refused — the chart's own

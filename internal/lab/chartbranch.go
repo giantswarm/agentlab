@@ -42,6 +42,35 @@ var supersededDevTagRe = regexp.MustCompile(`^dev\.([a-z0-9-]+)\.\d{4}-\d{2}-\d{
 // name's dropped middle.
 const devTruncationMarker = "--"
 
+// isDevTag reports whether a prerelease is a dev build's, of whatever
+// branch: either shape above. A release candidate (`rc.1`) is not one.
+func isDevTag(prerelease string) bool {
+	return devTagRe.MatchString(prerelease) || supersededDevTagRe.MatchString(prerelease)
+}
+
+// IsDevBuild reports whether a chart version is a dev build of some branch —
+// what the dev channel resolves to, or a tag pinned by hand in
+// platform.chartVersion — as opposed to a release.
+func IsDevBuild(version string) bool {
+	v, err := semver.NewVersion(version)
+	return err == nil && isDevTag(v.Prerelease())
+}
+
+// ResetDevBuildPin returns a config that left the dev channel to a release:
+// a chartVersion that is a dev build — what the resolver wrote while the
+// branch was followed — gives way to the default pin, so the next platform
+// run installs a release rather than the build the branch left behind. A
+// release pinned by hand stays. Reports the version it replaced, "" when it
+// replaced none.
+func ResetDevBuildPin(cfg *config.Config) string {
+	if !IsDevBuild(cfg.Platform.ChartVersion) {
+		return ""
+	}
+	old := cfg.Platform.ChartVersion
+	cfg.Platform.ChartVersion = config.DefaultChartVersion
+	return old
+}
+
 // devTagFilter is THE definition of "a dev build of this branch": the
 // predicate a chart version's prerelease must satisfy — gitsemver 3's
 // `r<branch-hash>t<time>h<sha>` carrying the branch's hash, or the
