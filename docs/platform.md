@@ -940,14 +940,23 @@ reads `Failed` for about a minute (Reconnect, or wait).
 
 ## GitHub as the person (`platform.github`)
 
-Off by default. On (`agentlab configure --github`), `agentlab platform` registers GitHub's hosted MCP server (`https://api.githubcopilot.com/mcp/`) with muster as the MCPServer `github` (`github-mcp.yaml.tmpl`). An installation declares it the same way: a pinned GitHub authorization server, the grant filed per person (`grantScope: subject`), tools under `x_github_`. Off again, the run deletes the MCPServer and its client Secret.
+Off by default. On (`agentlab configure --github`), `agentlab platform` registers GitHub's hosted MCP server (`https://api.githubcopilot.com/mcp/`) with muster as the MCPServer `github` (`github-mcp.yaml.tmpl`). An installation declares it the same way: a pinned GitHub authorization server, the grant filed per person (`grantScope: subject`), tools under `x_github_`. Off again, the run deletes the MCPServer; the client Secret is yours and stays.
 
 The OAuth client is yours to register, since GitHub registers no clients dynamically:
 
 - an **OAuth App** (Settings, Developer settings, OAuth Apps), the quickest: its token carries the scopes `repo read:org`, so it reaches every repository the person can;
 - or a **GitHub App's** client with user-to-server tokens: rights are the App's permissions on the repositories it is installed on, intersected with the person's. Scopes are ignored.
 
-Either way, the callback URL is muster's proxy callback, `https://muster.<domain>:<gatewayPort>/oauth/proxy/callback` (the run prints it). GitHub only redirects the browser there, so a loopback lab URL works. Export `GITHUB_MCP_CLIENT_ID` and `GITHUB_MCP_CLIENT_SECRET` before `agentlab up` or `agentlab platform`. They land in the Secret `agent-platform/github-oauth-client` only, never in `agentlab.yaml` or `state/`. Without both variables the run skips the server with a note.
+Either way, the callback URL is muster's proxy callback, `https://muster.<domain>:<gatewayPort>/oauth/proxy/callback` (the run prints it). GitHub only redirects the browser there, so a loopback lab URL works.
+
+The client lives in one Kubernetes Secret in the lab, keys `client-id` and `client-secret`: `agent-platform/github-oauth-client` unless `platform.github.secret` names another (`name`, `namespace`). agentlab never reads, writes or deletes the values; it reads which keys the Secret carries and points the MCPServer at it (`clientCredentialsSecretRef`). The operator's secret tooling places it, one key per call, straight from the vault into the lab's apiserver, so the values pass through no shell, file or agent session:
+
+```sh
+beekeeper secret copy op://<vault>/<item>/client-id --to-secret kind-agentlab/agent-platform/github-oauth-client/client-id
+beekeeper secret copy op://<vault>/<item>/client-secret --to-secret kind-agentlab/agent-platform/github-oauth-client/client-secret
+```
+
+(A person without that tooling creates the Secret with `kubectl --context kind-agentlab -n agent-platform create secret generic github-oauth-client --from-file=client-id=… --from-file=client-secret=…`.) Then `agentlab platform`. Without the Secret, or with a key missing, the run skips the server with a warning naming the Secret, the keys and the command, and goes on.
 
 Each person signs in once (`core_auth_login` with `server: github` through muster, or the portal's Sign in). An agent calling a GitHub tool before that gets muster's sign-in challenge, which it cannot follow itself. muster keeps one pinned client per issuer string, so a second MCPServer pinning `https://github.com/login/oauth` with another client would take over this one's grants.
 

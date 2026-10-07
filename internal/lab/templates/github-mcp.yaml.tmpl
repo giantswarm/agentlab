@@ -3,8 +3,8 @@
 # registers no clients dynamically, so the authorization server is pinned) and
 # files the user token under the person's subject. The client is an OAuth App
 # or a GitHub App's client whose callback is muster's proxy callback; its
-# credentials are the Secret below, created from the host environment at
-# deploy time (githubmcp.go), never rendered here.
+# credentials are the Secret below, placed by the operator's secret tooling
+# (githubmcp.go), never by agentlab and never rendered here.
 apiVersion: muster.giantswarm.io/v1alpha1
 kind: MCPServer
 metadata:
@@ -33,5 +33,6 @@ spec:
       # its own permissions on the repositories it is installed on.
       scopes: repo read:org
       clientCredentialsSecretRef:
-        name: {{ .GitHubMCPClientSecret }}
+        name: {{ .GitHubMCPClientSecret.Name }}
+        namespace: {{ .GitHubMCPClientSecret.Namespace }}
       grantScope: subject

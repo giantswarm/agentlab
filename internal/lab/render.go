@@ -75,9 +75,11 @@ type tmplData struct {
 	ExtraModels []config.ExtraModel
 	// The per-server OAuth sign-in fixture (oauthfixture.go): the MCPServer
 	// name the proofs sign in to and the protected endpoint it points at.
-	OAuthFixtureServer    string
-	GitHubMCPServer       string
-	GitHubMCPClientSecret string
+	OAuthFixtureServer string
+	GitHubMCPServer    string
+	// GitHubMCPClientSecret is the OAuth client Secret the MCPServer
+	// references, platform.github.secret resolved (githubmcp.go).
+	GitHubMCPClientSecret config.SecretRef
 	OAuthFixtureURL       string
 	// VMManagerEnabled turns the chart's vm-manager component on
 	// (vmmanager.go); VMManagerGuestImage is the chart's guestImage block for
@@ -233,7 +235,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		ExtraModels:                cfg.Platform.ExtraModels,
 		OAuthFixtureServer:         oauthFixtureServer,
 		GitHubMCPServer:            gitHubMCPServer,
-		GitHubMCPClientSecret:      gitHubMCPClientSecret,
+		GitHubMCPClientSecret:      cfg.Platform.GitHub.ClientSecret(),
 		OAuthFixtureURL:            oauthFixtureURL,
 		VMManagerEnabled:           cfg.VMManagerEnabled(),
 		VMManagerGuestImage:        vmManagerGuestImage,
