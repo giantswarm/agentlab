@@ -472,19 +472,31 @@ func helmDeployedRevision(namespace, releaseName, version string, vals map[strin
 	return rel.Version, nil
 }
 
-// newestRevision is the release's newest revision whatever its status —
-// `helm history --max 1` — and nil when the namespace holds no such release.
+// newestRevision is the release's newest revision whatever its status — the
+// last line of `helm history` — and nil when the namespace holds no such
+// release. The highest revision number, found by looking: the storage lists
+// a release's revisions in no particular order (the secrets driver in the
+// order of the Secrets' names, where `.v10` sorts before `.v9`), and the
+// history action applies no order and no Max of its own.
 func (h *helmOp) newestRevision(releaseName string) (*release.Release, error) {
-	history := action.NewHistory(h.cfg)
-	history.Max = 1
-	revisions, err := history.Run(releaseName)
-	if errors.Is(err, driver.ErrReleaseNotFound) || (err == nil && len(revisions) == 0) {
+	revisions, err := action.NewHistory(h.cfg).Run(releaseName)
+	if errors.Is(err, driver.ErrReleaseNotFound) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	return asV1Release(revisions[len(revisions)-1])
+	var newest *release.Release
+	for _, r := range revisions {
+		rel, err := asV1Release(r)
+		if err != nil {
+			return nil, err
+		}
+		if newest == nil || rel.Version > newest.Version {
+			newest = rel
+		}
+	}
+	return newest, nil
 }
 
 // helmReleaseNewest is newestRevision for a caller without an operation in

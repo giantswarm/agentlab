@@ -3,6 +3,7 @@ package lab
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,9 +13,12 @@ import (
 	"helm.sh/helm/v4/pkg/action"
 	chart "helm.sh/helm/v4/pkg/chart/v2"
 	"helm.sh/helm/v4/pkg/kube"
+	kubefake "helm.sh/helm/v4/pkg/kube/fake"
 	ri "helm.sh/helm/v4/pkg/release"
 	releasecommon "helm.sh/helm/v4/pkg/release/common"
 	release "helm.sh/helm/v4/pkg/release/v1"
+	"helm.sh/helm/v4/pkg/storage"
+	"helm.sh/helm/v4/pkg/storage/driver"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -281,6 +285,27 @@ func TestWithConflictRemedy(t *testing.T) {
 	other := errors.New("context deadline exceeded")
 	if got := withConflictRemedy(other); got != other {
 		t.Errorf("other error: %v, want it unchanged", got)
+	}
+}
+
+// TestNewestRevision: the newest revision is the highest revision number,
+// whatever order the storage lists a release's revisions in — the secrets
+// driver lists `.v10` ahead of `.v9` — and nil before the first.
+func TestNewestRevision(t *testing.T) {
+	cfg := &action.Configuration{Releases: storage.Init(driver.NewMemory()), KubeClient: &kubefake.PrintingKubeClient{Out: io.Discard}}
+	h := &helmOp{cfg: cfg}
+	if rel, err := h.newestRevision(platformRelease); err != nil || rel != nil {
+		t.Errorf("no release: %v, %v; want nil, nil", rel, err)
+	}
+	for _, v := range []int{10, 1, 9, 2} {
+		rel := &release.Release{Name: platformRelease, Namespace: platformNamespace, Version: v, Info: &release.Info{Status: releasecommon.StatusSuperseded}}
+		if err := cfg.Releases.Create(rel); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rel, err := h.newestRevision(platformRelease)
+	if err != nil || rel == nil || rel.Version != 10 {
+		t.Errorf("newest = %+v, %v; want revision 10", rel, err)
 	}
 }
 
