@@ -11,6 +11,7 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"helm.sh/helm/v4/pkg/action"
 	chartutil "helm.sh/helm/v4/pkg/chart/common/util"
+	"helm.sh/helm/v4/pkg/chart/loader"
 	chartv2 "helm.sh/helm/v4/pkg/chart/v2"
 )
 
@@ -74,7 +75,9 @@ func refuseUnreleasedComponents(chart platformChart, values map[string]any) erro
 
 // loadPlatformChart loads the meta chart the install would: the directory,
 // or the registry tag (pulled into Helm's content cache once per digest);
-// nil for a chart that is not apiVersion v2.
+// nil for a chart that is not apiVersion v2. Unlike helmOp.loadChart it does
+// not insist on a directory's built charts/: the annotation and the defaults
+// are the chart's own, and a missing dependency is the render's to report.
 func loadPlatformChart(chart platformChart) (*chartv2.Chart, error) {
 	h, err := newHelmOp(platformNamespace)
 	if err != nil {
@@ -83,7 +86,12 @@ func loadPlatformChart(chart platformChart) (*chartv2.Chart, error) {
 	install := action.NewInstall(h.cfg)
 	var c *chartv2.Chart
 	err = retryUnreachable(fmt.Sprintf("loading %s", chart), func() error {
-		ch, err := h.loadChart(&install.ChartPathOptions, chart.ref, chart.version)
+		install.Version = chart.version
+		path, err := install.LocateChart(chart.ref, h.settings)
+		if err != nil {
+			return err
+		}
+		ch, err := loader.Load(path)
 		c, _ = ch.(*chartv2.Chart)
 		return err
 	})
