@@ -2,29 +2,28 @@ package lab
 
 import (
 	"context"
-	"os"
+	"strings"
 
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
 
-// The OAuth client of the MCPServer `github` (github-mcp.yaml.tmpl): an OAuth
-// App, or a GitHub App's client, whose callback URL is muster's proxy
-// callback. Real credentials: host environment -> Kubernetes Secret only,
-// never agentlab.yaml, state/, a log line or a process's argv.
-const (
-	GitHubMCPClientIDEnv     = "GITHUB_MCP_CLIENT_ID"     // #nosec G101 -- env var NAME, not a credential
-	GitHubMCPClientSecretEnv = "GITHUB_MCP_CLIENT_SECRET" // #nosec G101 -- env var NAME, not a credential
-)
+// The MCPServer `github` (github-mcp.yaml.tmpl) reads its OAuth client — an
+// OAuth App, or a GitHub App's client, whose callback URL is muster's proxy
+// callback — from the Secret platform.github.secret names. The operator's
+// secret tooling places it (`beekeeper secret copy <ref> --to-secret
+// <context>/<namespace>/<name>/<key>`, one call per key); agentlab reads
+// which keys it carries and never a value: nothing of the client reaches
+// agentlab.yaml, state/, a log line, a process's argv or the environment of
+// whoever runs the lab.
+const gitHubMCPServer = "github"
 
-const (
-	gitHubMCPServer       = "github"
-	gitHubMCPClientSecret = "github-oauth-client" // #nosec G101 -- Secret NAME, not a credential
-)
+// gitHubMCPClientKeys are the keys the Secret must carry, muster's
+// clientCredentialsSecretRef defaults.
+var gitHubMCPClientKeys = []string{config.GitHubClientIDKey, config.GitHubClientSecretKey}
 
 // gitHubMCPHealthyStates: Auth Required until a session signs in, Connected
 // while one is.
@@ -34,34 +33,29 @@ var gitHubMCPHealthyStates = []string{mcpServerStateAuthRequired, mcpServerState
 // platform.github is on and removes it while it is off. After the umbrella
 // install: the MCPServer CRD ships with muster.
 //
-// Without both variables nothing is applied: a server whose client Secret is
-// missing could never complete a sign-in, and a run that merely lacks an
-// export leaves an earlier run's Secret and MCPServer as they are.
+// Without the Secret, or with a key missing, nothing is applied: a server
+// whose client is incomplete could never complete a sign-in. The run says
+// which Secret and keys it looked for and how to place them, and goes on.
 func ensureGitHubMCP(cfg *config.Config) error {
 	ctx := context.Background()
 	if !cfg.Platform.GitHub.Enabled {
 		return removeGitHubMCP(ctx)
 	}
-	clientID, clientSecret := os.Getenv(GitHubMCPClientIDEnv), os.Getenv(GitHubMCPClientSecretEnv)
-	if clientID == "" || clientSecret == "" {
-		note("platform.github is on but $%s / $%s are not both set -- skipping MCPServer %s", GitHubMCPClientIDEnv, GitHubMCPClientSecretEnv, gitHubMCPServer)
-		note("  register an OAuth App (or GitHub App) with callback URL %s%s, export both and re-run", cfg.MusterBaseURL(), oauthProxyCallbackPath)
-		return nil
-	}
-	step("Registering GitHub's hosted MCP server with muster (MCPServer %s)", gitHubMCPServer)
-	// Applied in-process, so the client secret never appears in a process's
-	// argv or in a file; server-side apply creates or rotates it.
-	if _, err := applyTyped(ctx, &corev1.Secret{
-		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: kindSecret},
-		ObjectMeta: metav1.ObjectMeta{
-			Name: gitHubMCPClientSecret, Namespace: platformNamespace,
-			Labels: map[string]string{managedByLabel: managedByAgentlabValue},
-		},
-		Type: corev1.SecretTypeOpaque,
-		Data: map[string][]byte{"client-id": []byte(clientID), "client-secret": []byte(clientSecret)},
-	}); err != nil {
+	ref := cfg.Platform.GitHub.ClientSecret()
+	missing, err := gitHubMCPClientMissing(ctx, ref.Namespace, ref.Name)
+	if err != nil {
 		return err
 	}
+	if len(missing) > 0 {
+		warn("platform.github is on but Secret %s/%s lacks %s -- skipping MCPServer %s", ref.Namespace, ref.Name, strings.Join(missing, " and "), gitHubMCPServer)
+		warn("  register an OAuth App (or GitHub App) with callback URL %s%s and place its client, one key per call:", cfg.MusterBaseURL(), oauthProxyCallbackPath)
+		for _, key := range gitHubMCPClientKeys {
+			warn("  beekeeper secret copy <ref to the %s> --to-secret kind-%s/%s/%s/%s", key, cfg.ClusterName, ref.Namespace, ref.Name, key)
+		}
+		warn("  then re-run; agentlab never reads the values")
+		return nil
+	}
+	step("Registering GitHub's hosted MCP server with muster (MCPServer %s, client Secret %s/%s)", gitHubMCPServer, ref.Namespace, ref.Name)
 	rendered, _, err := renderManifest(cfg, "github-mcp.yaml.tmpl")
 	if err != nil {
 		return err
@@ -73,18 +67,43 @@ func ensureGitHubMCP(cfg *config.Config) error {
 	return waitMCPServerState(gitHubMCPServer, gitHubMCPHealthyStates...)
 }
 
-// removeGitHubMCP deletes the MCPServer and its client Secret when agentlab
-// created them; an object of that name without the lab's managed-by label is
-// someone else's and stays. Idempotent.
+// gitHubMCPClientMissing reads the client Secret and answers what it lacks:
+// the Secret itself, or the keys without a value. The values stay in the
+// apiserver's answer; nothing of them is kept, compared or printed.
+func gitHubMCPClientMissing(ctx context.Context, ns, name string) ([]string, error) {
+	obj, err := getObject(ctx, gvrSecrets, ns, name)
+	if apierrors.IsNotFound(err) {
+		return []string{"the Secret itself"}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return missingSecretKeys(obj, gitHubMCPClientKeys...), nil
+}
+
+// missingSecretKeys lists the keys of a Secret that are absent or empty, by
+// name, in the order asked for.
+func missingSecretKeys(secret *unstructured.Unstructured, keys ...string) []string {
+	data, _, _ := unstructured.NestedMap(secret.Object, "data")
+	var missing []string
+	for _, key := range keys {
+		if value, ok := data[key].(string); !ok || value == "" {
+			missing = append(missing, "key "+key)
+		}
+	}
+	return missing
+}
+
+// removeGitHubMCP deletes the MCPServer when agentlab created it; an object
+// of that name without the lab's managed-by label is someone else's and
+// stays. The client Secret is the operator's and is never touched.
+// Idempotent.
 func removeGitHubMCP(ctx context.Context) error {
 	gvr, err := gvrFor(musterMCPServerResource)
 	if err != nil {
 		return err
 	}
-	if err := deleteIfLabManaged(ctx, gvr, gitHubMCPServer); err != nil {
-		return err
-	}
-	return deleteIfLabManaged(ctx, gvrSecrets, gitHubMCPClientSecret)
+	return deleteIfLabManaged(ctx, gvr, gitHubMCPServer)
 }
 
 func deleteIfLabManaged(ctx context.Context, gvr schema.GroupVersionResource, name string) error {

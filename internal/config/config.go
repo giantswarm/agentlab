@@ -430,11 +430,44 @@ type KlausGateway struct {
 // GitHub configures the MCPServer `github` the lab registers with muster:
 // GitHub's hosted MCP server behind a pinned GitHub authorization server, the
 // shape an installation declares. The OAuth client (an OAuth App, or a
-// GitHub App's client) comes from the host environment at deploy time and
-// lives only in a Secret.
+// GitHub App's client) is a Kubernetes Secret in the lab the operator's
+// secret tooling places; agentlab reads its key names only, never a value.
 type GitHub struct {
 	// On, `agentlab platform` registers the server; off, it removes it.
 	Enabled bool `yaml:"enabled"`
+	// Secret is the OAuth client's Secret, keys GitHubClientIDKey and
+	// GitHubClientSecretKey. Empty fields mean DefaultGitHubSecretName in
+	// DefaultGitHubSecretNamespace (the MCPServer's own namespace).
+	Secret SecretRef `yaml:"secret,omitempty"`
+}
+
+// SecretRef names a Kubernetes Secret.
+type SecretRef struct {
+	Name      string `yaml:"name,omitempty"`
+	Namespace string `yaml:"namespace,omitempty"`
+}
+
+// The OAuth client Secret platform.github reads by default, and the keys
+// muster's clientCredentialsSecretRef reads it by (its own defaults).
+const (
+	DefaultGitHubSecretName      = "github-oauth-client" // #nosec G101 -- Secret NAME, not a credential
+	DefaultGitHubSecretNamespace = "agent-platform"
+	GitHubClientIDKey            = "client-id"
+	GitHubClientSecretKey        = "client-secret" // #nosec G101 -- Secret KEY name, not a credential
+)
+
+// ClientSecret is the OAuth client Secret the lab looks for and the
+// MCPServer references: platform.github.secret, the defaults filling what
+// it leaves empty.
+func (g GitHub) ClientSecret() SecretRef {
+	ref := g.Secret
+	if ref.Name == "" {
+		ref.Name = DefaultGitHubSecretName
+	}
+	if ref.Namespace == "" {
+		ref.Namespace = DefaultGitHubSecretNamespace
+	}
+	return ref
 }
 
 // VMManager configures the chart's vm-manager component in the lab.
@@ -1182,6 +1215,13 @@ func (c *Config) Validate() error {
 	}
 	if (c.Platform.TLS.CertFile == "") != (c.Platform.TLS.KeyFile == "") {
 		return fmt.Errorf("platform.tls: certFile and keyFile must be set together")
+	}
+	ghSecret := c.Platform.GitHub.ClientSecret()
+	if err := ValidateClusterName(ghSecret.Name); err != nil {
+		return fmt.Errorf("platform.github.secret.name %q: %w", ghSecret.Name, err)
+	}
+	if err := ValidateClusterName(ghSecret.Namespace); err != nil {
+		return fmt.Errorf("platform.github.secret.namespace %q: %w", ghSecret.Namespace, err)
 	}
 	if c.Platform.TLS.Set() {
 		for _, p := range []string{c.Platform.TLS.CertFile, c.Platform.TLS.KeyFile} {
