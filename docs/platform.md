@@ -1114,6 +1114,23 @@ data the page reads — see [The muster plugin](backstage.md#the-muster-plugin).
 
 ## Platform gotchas
 
+- **A dev build that waits for a component release is refused before
+  anything is applied.** A branch of agent-platform may raise a component's
+  `versionRange` past every published chart; its dev build records each such
+  component in the `Chart.yaml` annotation
+  `agent-platform.giantswarm.io/unreleased` (component → `versionRange`,
+  `waitsFor`). Flux would find no tag in that range minutes into the
+  install, after the components ahead of it are up. `agentlab up` (before
+  the certs and the cluster) and `agentlab platform` (before the namespace)
+  read the annotation of the chart they install — the pulled build on the
+  dev channel or a pin, the checkout under `platform.chartPath` — and stop,
+  naming every component and the version it waits for, when the component is
+  enabled, its `versionRange` in the values is still the recorded one, it
+  sets no `semverFilter`, and the chart is a development build (not `X.Y.Z`
+  or `X.Y.Z-rc.N`; a chart directory always counts as one). Point the
+  component at a published range or a dev channel in `platform.valuesFiles`,
+  or install a build whose ranges are published. A chart without the
+  annotation installs as before.
 - **A chart that refuses its values stops the install before it starts.** The
   boot renders the meta chart and every component chart offline to side-load
   their images — each at the version its `OCIRepository` resolves to, with
