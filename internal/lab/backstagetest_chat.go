@@ -853,7 +853,7 @@ func approveUntilSettled(task *a2aTask, a hitlApprover, timeout time.Duration) (
 // "round 1: filter_tools; round 2: call_tool+call_tool".
 func approvalRounds(approved [][]string) string {
 	if len(approved) == 0 {
-		return "none"
+		return "no rounds"
 	}
 	rounds := make([]string, len(approved))
 	for i, tools := range approved {

@@ -62,11 +62,11 @@ func TestApproveUntilSettled(t *testing.T) {
 		chain []*a2aTask
 		want  [][]string
 	}{
-		"one approval": {pausedTask("filter_tools"), []*a2aTask{completed}, [][]string{{"filter_tools"}}},
-		"chained approvals": {pausedTask("filter_tools"), []*a2aTask{
-			pausedTask("call_tool"), pausedTask("call_tool", "call_tool"), pausedTask("describe_tool"),
-			pausedTask("call_tool"), pausedTask("call_tool"), pausedTask("call_tool"), completed,
-		}, [][]string{{"filter_tools"}, {"call_tool"}, {"call_tool", "call_tool"}, {"describe_tool"}, {"call_tool"}, {"call_tool"}, {"call_tool"}}},
+		"one approval": {pausedTask(fakeTool), []*a2aTask{completed}, [][]string{{fakeTool}}},
+		"chained approvals": {pausedTask(fakeTool), []*a2aTask{
+			pausedTask(toolCallTool), pausedTask(toolCallTool, toolCallTool), pausedTask("describe_tool"),
+			pausedTask(toolCallTool), pausedTask(toolCallTool), pausedTask(toolCallTool), completed,
+		}, [][]string{{fakeTool}, {toolCallTool}, {toolCallTool, toolCallTool}, {"describe_tool"}, {toolCallTool}, {toolCallTool}, {toolCallTool}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := &chainedApprovals{chain: tc.chain, clock: time.Unix(0, 0), step: 20 * time.Second}
@@ -87,14 +87,14 @@ func TestApproveUntilSettled(t *testing.T) {
 func TestApproveUntilSettledFailures(t *testing.T) {
 	endless := make([]*a2aTask, 100)
 	for i := range endless {
-		endless[i] = pausedTask("call_tool")
+		endless[i] = pausedTask(toolCallTool)
 	}
 	c := &chainedApprovals{chain: endless, clock: time.Unix(0, 0), step: 3 * time.Minute}
-	_, approved, err := approveUntilSettled(pausedTask("filter_tools"), c.approver(), portalHITLTimeout)
+	_, approved, err := approveUntilSettled(pausedTask(fakeTool), c.approver(), portalHITLTimeout)
 	if err == nil {
 		t.Fatal("an endless chain must fail at the timeout")
 	}
-	for _, want := range []string{"round 1: filter_tools", "round 2: call_tool", "round 3: call_tool", portalHITLTimeout.String()} {
+	for _, want := range []string{"round 1: " + fakeTool, "round 2: " + toolCallTool, "round 3: " + toolCallTool, portalHITLTimeout.String()} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not name %q", err, want)
 		}
@@ -104,25 +104,25 @@ func TestApproveUntilSettledFailures(t *testing.T) {
 	}
 
 	failed := &a2aTask{ID: testTaskID, Status: a2aTaskStatus{State: taskStateRejected}}
-	c = &chainedApprovals{chain: []*a2aTask{pausedTask("call_tool", "describe_tool"), failed}, clock: time.Unix(0, 0), step: time.Second}
-	if _, _, err := approveUntilSettled(pausedTask("filter_tools"), c.approver(), portalHITLTimeout); err == nil ||
-		!strings.Contains(err.Error(), "ended "+taskStateRejected+" after 2 approval round(s) (round 1: filter_tools; round 2: call_tool+describe_tool)") {
+	c = &chainedApprovals{chain: []*a2aTask{pausedTask(toolCallTool, "describe_tool"), failed}, clock: time.Unix(0, 0), step: time.Second}
+	if _, _, err := approveUntilSettled(pausedTask(fakeTool), c.approver(), portalHITLTimeout); err == nil ||
+		!strings.Contains(err.Error(), "ended "+taskStateRejected+" after 2 approval round(s) (round 1: "+fakeTool+"; round 2: "+toolCallTool+"+describe_tool)") {
 		t.Errorf("a failed task: %v", err)
 	}
 
 	bare := &a2aTask{ID: testTaskID, Status: a2aTaskStatus{State: taskStateInputRequired, Message: &a2aMessage{}}}
 	c = &chainedApprovals{chain: []*a2aTask{bare}, clock: time.Unix(0, 0), step: time.Second}
-	if _, _, err := approveUntilSettled(pausedTask("filter_tools"), c.approver(), portalHITLTimeout); err == nil ||
-		!strings.Contains(err.Error(), "after 1 approval round(s) (round 1: filter_tools)") {
+	if _, _, err := approveUntilSettled(pausedTask(fakeTool), c.approver(), portalHITLTimeout); err == nil ||
+		!strings.Contains(err.Error(), "after 1 approval round(s) (round 1: "+fakeTool+")") {
 		t.Errorf("a pause without a request: %v", err)
 	}
 }
 
 func TestApprovalRounds(t *testing.T) {
-	if got := approvalRounds(nil); got != "none" {
+	if got := approvalRounds(nil); got != "no rounds" {
 		t.Errorf("no rounds = %q", got)
 	}
-	if got := approvalRounds([][]string{{"filter_tools"}, {"call_tool", "call_tool"}}); got != "round 1: filter_tools; round 2: call_tool+call_tool" {
+	if got := approvalRounds([][]string{{fakeTool}, {toolCallTool, toolCallTool}}); got != "round 1: "+fakeTool+"; round 2: "+toolCallTool+"+"+toolCallTool {
 		t.Errorf("rounds = %q", got)
 	}
 }
