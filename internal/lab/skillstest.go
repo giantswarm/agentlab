@@ -843,10 +843,7 @@ type lineFacts struct {
 // skillsLineFacts reads the facts, each best effort: a fact the lab cannot
 // read is reported as such, never a failed proof.
 func skillsLineFacts(cfg *config.Config, api *kagentAPI) lineFacts {
-	facts := lineFacts{metaChart: cfg.Platform.ChartVersion}
-	if cfg.Platform.ChartBranch != "" {
-		facts.metaChart += " (branch " + cfg.Platform.ChartBranch + ")"
-	}
+	facts := lineFacts{metaChart: metaChartFact(cfg)}
 	facts.kagentChart = fluxHelmReleaseVersion(componentKagent)
 	facts.kagentCRDsChart = fluxHelmReleaseVersion(componentKagent + "-crds")
 	if v, err := helmReleaseVersion(substrateNamespace, substrateRelease); err == nil && v != "" {
@@ -874,6 +871,26 @@ func skillsLineFacts(cfg *config.Config, api *kagentAPI) lineFacts {
 		facts.harnessImage = unreadable(err)
 	}
 	return facts
+}
+
+// metaChartFact is the meta chart the line runs, read from the cluster — the
+// chart in place, never agentlab.yaml's pin, which names another chart after
+// a restore that put an older config back (chartdrift.go): then the pin is
+// said beside it, so the verdict claims the release under test and shows
+// the drift. The branch the lab follows on the dev channel is named.
+func metaChartFact(cfg *config.Config) string {
+	installed, err := installedPlatformChart()
+	if err != nil || installed == nil {
+		return unreadable(err)
+	}
+	fact := installed.Version
+	if cfg.Platform.ChartBranch != "" {
+		fact += " (branch " + cfg.Platform.ChartBranch + ")"
+	}
+	if drift := driftBetween(installed, platformChartFor(cfg)); drift != nil {
+		fact += fmt.Sprintf(" (%s names %s)", config.File, drift.configured)
+	}
+	return fact
 }
 
 // unreadable words a fact the lab could not read.

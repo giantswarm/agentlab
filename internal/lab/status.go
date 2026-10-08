@@ -118,7 +118,14 @@ func replacingNote(installed *installedChart, chart platformChart) string {
 	if installed.Dev() {
 		return fmt.Sprintf("the cluster runs a dev chart left in place: %s (%s); %s replaces it", installed, installed.Description, chart)
 	}
-	return fmt.Sprintf("the cluster runs %s; %s replaces it", installed, chart)
+	line := fmt.Sprintf("the cluster runs %s; %s replaces it", installed, chart)
+	// A pin behind the cluster — an agentlab.yaml put back from a copy —
+	// installs an older release over a newer one: said, so the boot's reader
+	// knows this run was the downgrade (chartdrift.go).
+	if drift := driftBetween(installed, chart); drift != nil && drift.direction() == configBehind {
+		line += " (a downgrade)"
+	}
+	return line
 }
 
 // Status is the lab's live state as `agentlab status` reports it, and its
@@ -136,6 +143,9 @@ type Status struct {
 	// Replaces reports that `agentlab platform` would replace the chart in
 	// place: the configured chart is not it.
 	Replaces bool `json:"replaces"`
+	// Drift words that disagreement (chartDrift): both charts, which side is
+	// behind and the ways to end it; "" when the two agree.
+	Drift string `json:"drift,omitempty"`
 	// Releases are the platform HelmReleases with their Ready condition; none
 	// without a platform release.
 	Releases []platformReleaseStatus `json:"releases,omitempty"`
@@ -162,7 +172,10 @@ func LabStatus(cfg *config.Config, dir string) (*Status, error) {
 	if cfg.Platform.Enabled {
 		chart := platformChartFor(cfg)
 		s.Configured = chart.String()
-		s.Replaces = installed != nil && installed.Version != chart.installedVersion()
+		if drift := driftBetween(installed, chart); drift != nil {
+			s.Replaces = true
+			s.Drift = drift.String()
+		}
 	}
 	if installed != nil {
 		if s.Releases, err = platformReleases(); err != nil {
@@ -217,16 +230,16 @@ func chartLine(s *Status) string {
 	return line
 }
 
-// configLine is what agentlab.yaml installs, and whether a platform run
-// would replace the chart in place with it.
+// configLine is what agentlab.yaml installs, and, when that is not the chart
+// in place, the drift: both charts and the ways to end it.
 func configLine(s *Status) string {
 	switch {
 	case s.Configured == "":
 		return "the platform is disabled (platform.enabled in agentlab.yaml)"
 	case s.Chart == nil:
 		return s.Configured + "; `agentlab platform` installs it"
-	case s.Replaces:
-		return s.Configured + "; `agentlab platform` replaces the chart in place with it"
+	case s.Drift != "":
+		return s.Drift
 	default:
 		return s.Configured + ", the chart in place"
 	}
