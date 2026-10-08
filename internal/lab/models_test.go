@@ -93,10 +93,11 @@ func TestExtraModelsTemplate(t *testing.T) {
 	}
 }
 
-// The extra ModelConfigs render at the kagent.dev version the chart line
-// serves: v1alpha3 on the kagent line (meta chart >= 4.0), v1alpha2 on a
-// released 3.x chart (kagent 0.10) — the ModelConfig spec is the same in
-// both, so nothing but the apiVersion moves between the two renders.
+// The extra ModelConfigs render at the version the chart line serves:
+// api.kagent.dev/v1alpha3 on the kagent line (meta chart >= 4.0),
+// kagent.dev/v1alpha2 on a released 3.x chart (kagent 0.10) — the
+// ModelConfig spec is the same in both, so nothing but the apiVersion moves
+// between the two renders.
 func TestExtraModelsAPIVersionFollowsChartLine(t *testing.T) {
 	render := func(cfg *config.Config) map[string]any {
 		out, err := renderTemplate(cfg, extraModelsTemplate, nil)
@@ -131,8 +132,8 @@ func TestExtraModelsAPIVersionFollowsChartLine(t *testing.T) {
 	}
 	currentMC, legacyMC := render(current), render(legacy)
 
-	if got := currentMC["apiVersion"]; got != "kagent.dev/v1alpha3" {
-		t.Errorf("4.7.15: apiVersion = %v, want kagent.dev/v1alpha3", got)
+	if got := currentMC["apiVersion"]; got != kagentAPIVersion {
+		t.Errorf("4.7.15: apiVersion = %v, want %s", got, kagentAPIVersion)
 	}
 	if got := legacyMC["apiVersion"]; got != "kagent.dev/v1alpha2" {
 		t.Errorf("3.24.0: apiVersion = %v, want kagent.dev/v1alpha2", got)

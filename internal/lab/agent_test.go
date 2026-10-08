@@ -64,7 +64,7 @@ func TestCreateAgentArgs(t *testing.T) {
 	if !reflect.DeepEqual(bare, map[string]any{nameKey: testAgentName, modelConfigKey: defaultModelConfig}) {
 		t.Errorf("a bare spec composes %v", bare)
 	}
-	if _, err := createAgentArgs(agentSpec{Name: testAgentName, ModelConfig: defaultModelConfig, Harness: "claude"}); err == nil || !strings.Contains(err.Error(), "direct HelmRelease writer") {
+	if _, err := createAgentArgs(agentSpec{Name: testAgentName, ModelConfig: defaultModelConfig, Harness: testOtherHarness}); err == nil || !strings.Contains(err.Error(), "direct HelmRelease writer") {
 		t.Errorf("another Harness through agent-manager: %v", err)
 	}
 	if _, err := createAgentArgs(agentSpec{Name: testAgentName, ModelConfig: defaultModelConfig, Harness: kagentHarness}); err != nil {
@@ -217,48 +217,50 @@ func TestReadAgentRelease(t *testing.T) {
 // unadmittedTemplate seeds a template kagent has reported on (observed
 // generation caught up) with no Harness admitting it.
 func unadmittedTemplate(name string) *unstructured.Unstructured {
-	template := customObject(gvkAgentTemplate, kagentNamespace, name, map[string]string{harnessLabel: testNoHarness})
+	template := customObject(gvkAgentTemplate, kagentNamespace, name, nil)
 	template.SetGeneration(1)
-	_ = unstructured.SetNestedField(template.Object, int64(1), fieldStatus, "observedGeneration")
-	_ = unstructured.SetNestedSlice(template.Object, []any{}, fieldStatus, "harnesses")
 	return template
 }
 
+// unresolvedAgent seeds an Agent on a Harness that does not exist, the way
+// the controller reports it: ResolvedRefs False, Ready False.
+func unresolvedAgent(name, harness string) *unstructured.Unstructured {
+	agent := agentObjectSeed(name, harness)
+	_ = unstructured.SetNestedField(agent.Object, int64(1), fieldStatus, "observedGeneration")
+	_ = unstructured.SetNestedSlice(agent.Object, []any{
+		map[string]any{fieldType: conditionResolvedRefs, fieldStatus: condFalse, fieldReason: "HarnessNotFound", fieldMessage: `Harness "` + harness + `" not found`},
+		map[string]any{fieldType: condReady, fieldStatus: condFalse, fieldReason: "Blocked", fieldMessage: "blocked by ResolvedRefs"},
+	}, fieldStatus, fieldConditions)
+	return agent
+}
+
 // TestWaitAgentReady: the one wait ends Ready on the platform Harness's
-// desired revision; terminal — with the reason — for a template no Harness
-// admits, one another Harness admits, a Harness condition the controller will
-// not retry, and a release Helm gave up on; and keeps waiting (naming what it
-// saw last) while a revision compiles, while the release has not rendered
-// yet, while an admitted template's Harness entry is not written yet, and
-// while nothing is there.
+// desired revision; terminal — with the reason — for an Agent on a Harness
+// that does not exist, one referencing another Harness, an Agent condition
+// the controller will not retry, and a release Helm gave up on; and keeps
+// waiting (naming what it saw last) while a revision compiles, while the
+// release has not rendered yet, while the template's Agent is not rendered
+// yet, while the Agent has no status yet, and while nothing is there.
 func TestWaitAgentReady(t *testing.T) {
 	// A new revision compiling: Ready still True on the last successful
 	// revision, the desired one ahead of it.
-	compiling := readyTemplate("compiling", kagentHarness, conditionTrue, "ActorTemplate golden snapshot is ready")
-	harnesses, _, _ := unstructured.NestedSlice(compiling.Object, fieldStatus, "harnesses")
-	harnesses[0].(map[string]any)[fieldDesiredRevision] = "abc123"
-	_ = unstructured.SetNestedSlice(compiling.Object, harnesses, fieldStatus, "harnesses")
-	blocked := bootTemplate("blocked", condFalse, readyReasonPending, "waiting")
-	_ = unstructured.SetNestedSlice(blocked.Object, []any{map[string]any{
-		fieldHarness: kagentHarness, fieldDesiredRevision: testRevision,
-		fieldConditions: []any{
-			map[string]any{fieldType: conditionResolvedRefs, fieldStatus: condFalse, fieldReason: "ModelConfigNotFound", fieldMessage: `ModelConfig "nope" not found`},
-			map[string]any{fieldType: condReady, fieldStatus: condFalse, fieldReason: readyReasonPending, fieldMessage: "waiting"},
-		},
-	}}, fieldStatus, "harnesses")
-	// Observed with the platform Harness's admission labels and no entry yet:
-	// the controllers' first pass, not a verdict.
-	labelledTemplate := unadmittedTemplate("labelled")
-	labelledTemplate.SetLabels(map[string]string{harnessLabel: kagentHarness})
+	compiling := readyAgentObject("compiling", kagentHarness, conditionTrue, "ActorTemplate golden snapshot is ready")
+	_ = unstructured.SetNestedField(compiling.Object, "abc123", fieldStatus, fieldDesiredRevision)
+	blocked := bootAgent("blocked", condFalse, readyReasonPending, "waiting")
+	_ = unstructured.SetNestedSlice(blocked.Object, []any{
+		map[string]any{fieldType: conditionResolvedRefs, fieldStatus: condFalse, fieldReason: "ModelConfigNotFound", fieldMessage: `ModelConfig "nope" not found`},
+		map[string]any{fieldType: condReady, fieldStatus: condFalse, fieldReason: readyReasonPending, fieldMessage: "waiting"},
+	}, fieldStatus, fieldConditions)
 	newFakeLab(t,
-		readyTemplate(testReadyName, kagentHarness, conditionTrue, "ActorTemplate golden snapshot is ready"),
+		readyTemplate(testReadyName), readyAgentObject(testReadyName, kagentHarness, conditionTrue, "ActorTemplate golden snapshot is ready"),
 		helmRelease(testReadyName, agentValues(testSpec()), conditionTrue, "InstallSucceeded", ""),
-		unadmittedTemplate("unadmitted"),
-		labelledTemplate,
-		readyTemplate("elsewhere", "claude", conditionTrue, "ready"),
-		bootTemplate("pending", condFalse, readyReasonPending, "waiting for the ActorTemplate golden snapshot"),
-		compiling,
-		blocked,
+		unadmittedTemplate("unadmitted"), unresolvedAgent("unadmitted", testNoHarness),
+		unadmittedTemplate("unpaired"),
+		unadmittedTemplate("unobserved"), agentObjectSeed("unobserved", kagentHarness),
+		readyTemplate("elsewhere"), readyAgentObject("elsewhere", "claude", conditionTrue, "ready"),
+		unadmittedTemplate("pending"), bootAgent("pending", condFalse, readyReasonPending, "waiting for the ActorTemplate golden snapshot"),
+		unadmittedTemplate("compiling"), compiling,
+		unadmittedTemplate("blocked"), blocked,
 		helmRelease("refused", nil, condFalse, helmInstallFailed, "values don't meet the specifications of the schema(s)"),
 		helmRelease("rendering", nil, conditionTrue, "InstallSucceeded", ""),
 	)
@@ -271,9 +273,10 @@ func TestWaitAgentReady(t *testing.T) {
 		terminal bool
 		reason   string
 	}{
-		{"unadmitted", true, "no Harness admits"},
-		{"labelled", false, "entry is not written yet"},
-		{"elsewhere", true, "admitted by claude only"},
+		{"unadmitted", true, "ResolvedRefs=False HarnessNotFound"},
+		{"unpaired", false, "no Agent unpaired pairs it"},
+		{"unobserved", false, "has not reported on Agent unobserved yet"},
+		{"elsewhere", true, `references Harness "claude"`},
 		{"blocked", true, "ResolvedRefs=False ModelConfigNotFound"},
 		{"refused", true, "InstallFailed"},
 		{"pending", false, "Ready=\"False\""},
@@ -305,6 +308,7 @@ func TestRemoveAgent(t *testing.T) {
 	f := newFakeLab(t,
 		helmRelease(testAgentName, agentValues(testSpec()), conditionTrue, "", ""),
 		agentTemplateBinding(testAgentName, testAgentName),
+		agentObjectSeed(testAgentName, kagentHarness),
 		agentServer(testAgentName, presetReadOnly),
 		agentServer("orphan", ""),
 	)
@@ -323,6 +327,9 @@ func TestRemoveAgent(t *testing.T) {
 	if _, err := f.dyn.Tracker().Get(gvrAgentTemplates, kagentNamespace, testAgentName); !apierrors.IsNotFound(err) {
 		t.Errorf("AgentTemplate still there: %v", err)
 	}
+	if _, err := f.dyn.Tracker().Get(gvrAgents, kagentNamespace, testAgentName); !apierrors.IsNotFound(err) {
+		t.Errorf("Agent still there: %v", err)
+	}
 	if _, err := f.dyn.Tracker().Get(gvrRemoteMCPServers, kagentNamespace, testAgentName); !apierrors.IsNotFound(err) {
 		t.Errorf("RemoteMCPServer still there: %v", err)
 	}
@@ -335,64 +342,80 @@ func TestRemoveAgent(t *testing.T) {
 }
 
 // renderedTemplate seeds what the chart renders for a spec: the template
-// with the Harness label, the provenance label, the annotations, the model,
-// the prompt and the binding of the agent's own server.
+// with the provenance label, the annotations, the model, the prompt and the
+// binding of the agent's own server.
 func renderedTemplate(spec agentSpec, server string) *unstructured.Unstructured {
 	template := agentTemplateBinding(spec.Name, server)
-	template.SetLabels(map[string]string{harnessLabel: spec.harnessValue(), fluxHelmReleaseNameLabel: spec.Name})
+	template.SetLabels(map[string]string{fluxHelmReleaseNameLabel: spec.Name})
 	template.SetAnnotations(map[string]string{displayNameAnnotation: spec.DisplayName, iconURLAnnotation: spec.IconURL})
 	_ = unstructured.SetNestedField(template.Object, spec.ModelConfig, "spec", modelConfigKey, nameKey)
 	_ = unstructured.SetNestedField(template.Object, spec.SystemMessage, "spec", "systemPrompt")
 	return template
 }
 
+// renderedAgent seeds the Agent the chart renders for a spec: the template
+// of the spec's name paired with the spec's Harness, the provenance label.
+func renderedAgent(spec agentSpec) *unstructured.Unstructured {
+	agent := agentObjectSeed(spec.Name, spec.harnessValue())
+	agent.SetLabels(map[string]string{fluxHelmReleaseNameLabel: spec.Name})
+	return agent
+}
+
 // TestAssertAgentRender: the render passes for a bound agent whose server
 // points at muster with the header and discovery off, and for a chat-only
-// agent with neither; it fails naming the Harness label, a missing header, a
-// header on an unscoped release, and an Authorization header.
+// agent with neither; it fails naming the Agent's Harness, a missing header,
+// a header on an unscoped release, and an Authorization header.
 func TestAssertAgentRender(t *testing.T) {
 	spec := testSpec()
 	chatOnly := agentSpec{Name: "chat", ModelConfig: defaultModelConfig, DisplayName: "Chat", Toolset: []string{presetNone}}
 	unscoped := agentSpec{Name: "unscoped", ModelConfig: defaultModelConfig}
+	authzSpec := agentSpec{Name: "authz", ModelConfig: defaultModelConfig, Toolset: []string{presetReadOnly}}
 	server := agentServer(spec.Name, strings.Join(spec.Toolset, ","))
 	authz := agentServer("authz", presetReadOnly)
 	_ = unstructured.SetNestedSlice(authz.Object, []any{map[string]any{nameKey: toolsetHeader, fieldValue: presetReadOnly}, map[string]any{nameKey: "Authorization", fieldValue: "Bearer static"}}, "spec", "headersFrom")
-	mislabelled := renderedTemplate(spec, spec.Name)
-	mislabelled.SetName("mislabelled")
-	mislabelled.SetLabels(map[string]string{"kagent.dev/harness": kagentHarness, fluxHelmReleaseNameLabel: "mislabelled"})
+	mispaired := spec
+	mispaired.Name, mispaired.Harness = "mispaired", "claude"
 	newFakeLab(t,
-		renderedTemplate(spec, spec.Name), server,
-		renderedTemplate(chatOnly, ""),
-		renderedTemplate(unscoped, unscoped.Name), agentServer(unscoped.Name, presetReadOnly),
-		renderedTemplate(agentSpec{Name: "authz", ModelConfig: defaultModelConfig, Toolset: []string{presetReadOnly}}, "authz"), authz,
-		mislabelled,
+		renderedTemplate(spec, spec.Name), renderedAgent(spec), server,
+		renderedTemplate(chatOnly, ""), renderedAgent(chatOnly),
+		renderedTemplate(unscoped, unscoped.Name), renderedAgent(unscoped), agentServer(unscoped.Name, presetReadOnly),
+		renderedTemplate(authzSpec, "authz"), renderedAgent(authzSpec), authz,
+		renderedTemplate(mispaired, "mispaired"), renderedAgent(mispaired),
 	)
-	read := func(name string) *agentTemplate {
+	read := func(name string) (*agentTemplate, *agentObject) {
 		t.Helper()
 		template, err := readAgentTemplate(name)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return template
+		agent, err := readAgent(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return template, agent
 	}
-	if err := assertAgentRender(read(spec.Name), spec, testMusterURL); err != nil {
+	check := func(name string, spec agentSpec, musterURL string) error {
+		template, agent := read(name)
+		return assertAgentRender(template, agent, spec, musterURL)
+	}
+	if err := check(spec.Name, spec, testMusterURL); err != nil {
 		t.Errorf("a bound agent: %v", err)
 	}
-	if err := assertAgentRender(read(chatOnly.Name), chatOnly, testMusterURL); err != nil {
+	if err := check(chatOnly.Name, chatOnly, testMusterURL); err != nil {
 		t.Errorf("a chat-only agent: %v", err)
 	}
-	if err := assertAgentRender(read(unscoped.Name), unscoped, testMusterURL); err == nil || !strings.Contains(err.Error(), "although the release declares no toolset") {
+	if err := check(unscoped.Name, unscoped, testMusterURL); err == nil || !strings.Contains(err.Error(), "although the release declares no toolset") {
 		t.Errorf("a header on an unscoped release: %v", err)
 	}
-	if err := assertAgentRender(read("authz"), agentSpec{Name: "authz", ModelConfig: defaultModelConfig, Toolset: []string{presetReadOnly}}, testMusterURL); err == nil || !strings.Contains(err.Error(), "Authorization") {
+	if err := check("authz", authzSpec, testMusterURL); err == nil || !strings.Contains(err.Error(), "Authorization") {
 		t.Errorf("an Authorization header: %v", err)
 	}
 	mis := spec
-	mis.Name = "mislabelled"
-	if err := assertAgentRender(read("mislabelled"), mis, testMusterURL); err == nil || !strings.Contains(err.Error(), harnessLabel) {
-		t.Errorf("the wrong admission label: %v", err)
+	mis.Name = "mispaired"
+	if err := check("mispaired", mis, testMusterURL); err == nil || !strings.Contains(err.Error(), `references Harness "claude"`) {
+		t.Errorf("the wrong Harness: %v", err)
 	}
-	if err := assertAgentRender(read(spec.Name), spec, "http://elsewhere/mcp"); err == nil || !strings.Contains(err.Error(), "points at") {
+	if err := check(spec.Name, spec, "http://elsewhere/mcp"); err == nil || !strings.Contains(err.Error(), "points at") {
 		t.Errorf("another muster URL: %v", err)
 	}
 }
@@ -492,7 +515,7 @@ func TestAgentManagerWriter(t *testing.T) {
 	if _, err := (agentManagerWriter{&musterSession{client: refusing.Client(), url: refusing.URL, token: testToken}}).createAgent(testSpec()); err == nil || !strings.Contains(err.Error(), "toolset is required") {
 		t.Errorf("a refusal: %v", err)
 	}
-	if _, err := writer.createAgent(agentSpec{Name: testAgentName, Harness: "claude"}); err == nil {
+	if _, err := writer.createAgent(agentSpec{Name: testAgentName, Harness: testOtherHarness}); err == nil {
 		t.Error("another Harness must be refused before any call")
 	}
 }

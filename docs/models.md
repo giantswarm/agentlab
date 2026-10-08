@@ -47,7 +47,7 @@ platform:
 confirm in the platform group); `agentlab platform` (or `agentlab up`)
 applies them and waits for the kagent controller to accept each one. The CRs
 are rendered at the kagent API version the chart line serves —
-`kagent.dev/v1alpha3` on the 4.x line, `kagent.dev/v1alpha2` on a released
+`api.kagent.dev/v1alpha3` on the 4.x line, `kagent.dev/v1alpha2` on a released
 3.x chart (kagent 0.10); the ModelConfig spec is the same in both. Entries
 removed from `agentlab.yaml` are **pruned** on the next run — the managed-by
 label scopes the pruning to lab-created ModelConfigs, so the chart's default

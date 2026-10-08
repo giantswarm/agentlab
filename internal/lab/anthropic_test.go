@@ -229,7 +229,7 @@ func TestClassifyAnthropicKey(t *testing.T) {
 		for k, v := range data {
 			raw[k] = base64.StdEncoding.EncodeToString(v)
 		}
-		u := &unstructured.Unstructured{Object: map[string]any{"metadata": map[string]any{"name": anthropicSecret, "namespace": kagentNamespace}}}
+		u := &unstructured.Unstructured{Object: map[string]any{fieldMetadata: map[string]any{nameKey: anthropicSecret, fieldNamespace: kagentNamespace}}}
 		if data != nil {
 			u.Object["data"] = raw
 		}

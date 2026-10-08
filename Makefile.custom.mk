@@ -6,8 +6,8 @@
 # `make generate-kagent`, and commit hack/kagent-proto/ and internal/kagent/gen/
 # together.
 KAGENT_PROTO_REPO ?= https://github.com/giantswarm/kagent-upstream.git
-KAGENT_PROTO_COMMIT ?= 75121f3d541f56b0181d8f65af829f14aa3a01e8
-KAGENT_PROTO_FILES := common agent_instances agent_templates system
+KAGENT_PROTO_COMMIT ?= f7bf3dafd6a8c21e084015a9310f4692778ebaeb
+KAGENT_PROTO_FILES := common agent_templates agents sessions runtime system
 
 .PHONY: generate-kagent
 generate-kagent: ## Refresh the kagent protos from KAGENT_PROTO_COMMIT and regenerate internal/kagent/gen.

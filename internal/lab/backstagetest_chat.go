@@ -16,8 +16,8 @@ import (
 // the agent-platform backend serves the browser (plugins/agent-platform-backend
 // router.ts), every call carrying the user's forwarded Dex id_token in
 // backstage-kagent-authorization, which the backend forwards to the
-// controller as the person's bearer. A session is the person's AgentInstance
-// of the agent's template on the platform Harness: created on the first
+// controller as the person's bearer. A session is the person's kagent
+// Session of the Agent: created on the first
 // message with the browser's requestId (idempotent on (creator, requestId)),
 // listed for its creator only, renamed, deleted. A turn is A2A v1
 // SendStreamingMessage relayed as SSE frames of proto3 JSON (one
@@ -39,11 +39,11 @@ const (
 	kagentSessionUsagePath  = "/session-usage"
 )
 
-// The AgentInstance states the controller reports (proto3 JSON enum names)
+// The Session runtime states the controller reports (proto3 JSON enum names)
 // and the A2A task states, as the frames spell them.
 const (
-	instanceStateReady     = "AGENT_INSTANCE_STATE_READY"
-	instanceStateSuspended = "AGENT_INSTANCE_STATE_SUSPENDED"
+	instanceStateReady     = "RUNTIME_STATE_READY"
+	instanceStateSuspended = "RUNTIME_STATE_SUSPENDED"
 	taskStateCompleted     = "TASK_STATE_COMPLETED"
 	taskStateCanceled      = "TASK_STATE_CANCELED"
 	taskStateInputRequired = "TASK_STATE_INPUT_REQUIRED"
@@ -275,18 +275,18 @@ type portalInstallation struct {
 	Reason    string `json:"reason"`
 }
 
-// portalInstance is an AgentInstance as the sessions routes return it (the
-// controller's AgentInstance in proto3 JSON, under agentInstance).
+// portalInstance is a Session as the sessions routes return it (the
+// controller's Session in proto3 JSON, the SessionService response).
 type portalInstance struct {
-	ID            string `json:"id"`
-	Creator       string `json:"creator"`
-	State         string `json:"state"`
-	Name          string `json:"name"`
-	ContextID     string `json:"contextId"`
-	AgentTemplate struct {
+	ID        string `json:"id"`
+	Creator   string `json:"creator"`
+	State     string `json:"state"`
+	Name      string `json:"name"`
+	ContextID string `json:"contextId"`
+	Agent     struct {
 		Namespace string `json:"namespace"`
 		Name      string `json:"name"`
-	} `json:"agentTemplate"`
+	} `json:"agent"`
 }
 
 // portalAgentRef names the agent a session or a message is for, the way the
@@ -299,7 +299,7 @@ func (a portalAgentRef) body() map[string]any {
 	return map[string]any{"agentNamespace": a.Namespace, "agentName": a.Name}
 }
 
-// createSession is POST /kagent/sessions: the person's AgentInstance of the
+// createSession is POST /kagent/sessions: the person's Session of the
 // agent, titled, keyed by requestId. Returns the status too, so a 409 for a
 // reused requestId with other parameters is judged by the caller.
 func (ps *portalSession) createSession(agent portalAgentRef, name, requestID string) (int, *portalInstance, []byte, error) {
@@ -307,22 +307,22 @@ func (ps *portalSession) createSession(agent portalAgentRef, name, requestID str
 	body[nameKey] = name
 	body["requestId"] = requestID
 	var out struct {
-		AgentInstance *portalInstance `json:"agentInstance"`
+		Session *portalInstance `json:"session"`
 	}
 	status, raw, err := ps.kagentJSON(http.MethodPost, kagentSessionsPath, body, &out)
 	if err != nil || status != http.StatusCreated {
 		return status, nil, raw, err
 	}
-	if out.AgentInstance == nil || out.AgentInstance.ID == "" {
-		return status, nil, raw, fmt.Errorf("POST %s answered %d without an agentInstance.id: %.300s", kagentSessionsPath, status, raw)
+	if out.Session == nil || out.Session.ID == "" {
+		return status, nil, raw, fmt.Errorf("POST %s answered %d without a session.id: %.300s", kagentSessionsPath, status, raw)
 	}
-	return status, out.AgentInstance, raw, nil
+	return status, out.Session, raw, nil
 }
 
 // listSessions is GET /kagent/sessions: the caller's instances.
 func (ps *portalSession) listSessions() ([]portalInstance, error) {
 	var out struct {
-		AgentInstances []portalInstance `json:"agentInstances"`
+		Sessions []portalInstance `json:"sessions"`
 	}
 	status, raw, err := ps.kagentJSON(http.MethodGet, kagentSessionsPath, nil, &out)
 	if err != nil {
@@ -331,23 +331,23 @@ func (ps *portalSession) listSessions() ([]portalInstance, error) {
 	if status != http.StatusOK {
 		return nil, fmt.Errorf("GET %s answered %d: %.300s", kagentSessionsPath, status, raw)
 	}
-	return out.AgentInstances, nil
+	return out.Sessions, nil
 }
 
 // getSession is GET /kagent/sessions/:id: the instance, or the status the
 // route answered (404 for another person's or a deleted one).
 func (ps *portalSession) getSession(id string) (int, *portalInstance, error) {
 	var out struct {
-		AgentInstance *portalInstance `json:"agentInstance"`
+		Session *portalInstance `json:"session"`
 	}
 	status, raw, err := ps.kagentJSON(http.MethodGet, kagentSessionsPath+"/"+id, nil, &out)
 	if err != nil {
 		return status, nil, err
 	}
-	if status == http.StatusOK && out.AgentInstance == nil {
-		return status, nil, fmt.Errorf("GET %s/%s answered 200 without an agentInstance: %.300s", kagentSessionsPath, id, raw)
+	if status == http.StatusOK && out.Session == nil {
+		return status, nil, fmt.Errorf("GET %s/%s answered 200 without a session: %.300s", kagentSessionsPath, id, raw)
 	}
-	return status, out.AgentInstance, nil
+	return status, out.Session, nil
 }
 
 // renameSession is PUT /kagent/sessions/:id {name}.
@@ -598,8 +598,8 @@ func proveChat(primary *portalSession, others []*portalSession, agent portalAgen
 	if instance.Creator != email {
 		return nil, fmt.Errorf("the instance's creator is %q, not the person %s", instance.Creator, email)
 	}
-	if instance.AgentTemplate.Name != agent.Name || instance.AgentTemplate.Namespace != agent.Namespace {
-		return nil, fmt.Errorf("the instance binds %s/%s, not %s/%s", instance.AgentTemplate.Namespace, instance.AgentTemplate.Name, agent.Namespace, agent.Name)
+	if instance.Agent.Name != agent.Name || instance.Agent.Namespace != agent.Namespace {
+		return nil, fmt.Errorf("the instance binds %s/%s, not %s/%s", instance.Agent.Namespace, instance.Agent.Name, agent.Namespace, agent.Name)
 	}
 	status, repeat, raw, err := primary.createSession(agent, portalSessionName, requestID)
 	if err != nil {
@@ -616,7 +616,7 @@ func proveChat(primary *portalSession, others []*portalSession, agent portalAgen
 		return nil, fmt.Errorf("GET %s for %s does not list the session %s just created", kagentSessionsPath, email, sessionID)
 	}
 	note("session %s (creator %s, state %s, title %q); the repeat answered the same id; listed among %d of %s's", sessionID, instance.Creator, instance.State, instance.Name, len(mine), email)
-	verdicts = append(verdicts, fmt.Sprintf("PASS: POST %s creates the person's AgentInstance (%s, creator %s) and answers the same instance for the same requestId", kagentSessionsPath, sessionID, email))
+	verdicts = append(verdicts, fmt.Sprintf("PASS: POST %s creates the person's Session (%s, creator %s) and answers the same instance for the same requestId", kagentSessionsPath, sessionID, email))
 
 	word := codeword()
 	step("Turn 1 streams (SSE) and the agent's tool call reaches muster as %s", email)

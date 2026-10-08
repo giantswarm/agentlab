@@ -415,7 +415,7 @@ func proveCreatePath(primary, viewer *portalSession) (agentSpec, *agentTemplate,
 	writer := portalAgentManagerWriter{primary}
 	step("Deploy: %s, then the shared readiness wait", writer)
 	started := time.Now()
-	template, written, err := readyAgent(writer, spec, backstageTestReadyTimeout)
+	readiness, written, err := readyAgent(writer, spec, backstageTestReadyTimeout)
 	if err != nil {
 		return fail(err)
 	}
@@ -435,18 +435,19 @@ func proveCreatePath(primary, viewer *portalSession) (agentSpec, *agentTemplate,
 	if err := agentManagerLoggedCaller(email, time.Since(started)); err != nil {
 		return fail(err)
 	}
-	if err := assertAgentRender(template, spec, firstNonEmpty(info.Muster.URL, defaultMusterMCPURL)); err != nil {
+	template := readiness.template
+	if err := assertAgentRender(template, readiness.agent, spec, firstNonEmpty(info.Muster.URL, defaultMusterMCPURL)); err != nil {
 		return fail(err)
 	}
 	rendered := template.skill(skill.Name)
 	if rendered == nil || rendered.Source.Git == nil || rendered.Source.Git.Commit != skill.Commit || rendered.Source.Path != skill.Path {
 		return fail(fmt.Errorf("AgentTemplate %s carries skill %s as %+v, wanted {git: {%s, %s}, path %s}", spec.Name, skill.Name, rendered, skill.RepoURL, skill.Commit, skill.Path))
 	}
-	harness := template.harness(kagentHarness)
-	note("requestedBy=%s (OCIRepository created: %v); HelmRelease managers %q, serviceAccountName %s, values == the dry run's; OCIRepository %s at %s; agent-manager logged caller=%s; AgentTemplate Ready on Harness %s at revision %.12s with %s=%s, %s=%q, skill %s @ %.12s; RemoteMCPServer %s carries %s=%s",
-		written.RequestedBy, written.OCIRepository, release.managers, release.Spec.ServiceAccountName, agentChartOCIRepository, agentChartRange, email, kagentHarness, harness.LatestSuccessfulRevision, harnessLabel, kagentHarness, displayNameAnnotation, spec.DisplayName, skill.Name, skill.Commit, spec.Name, toolsetHeader, backstageTestToolset)
-	verdicts = append(verdicts, fmt.Sprintf("PASS: Deploy through the portal (POST /api/muster/call %screate_agent as %s) lands HelmRelease %s with exactly the dry run's values as %s next to OCIRepository %s at %s (requestedBy=%s, agent-manager logged caller=%s); the render is the AgentTemplate on Harness %s (%s, %s, %s, skill %s @ %.12s) and RemoteMCPServer %s with %s=%s, Ready in %s",
-		agentManagerToolPrefix, email, spec.Name, kagentFluxServiceAccount, agentChartOCIRepository, agentChartRange, written.RequestedBy, email, kagentHarness, harnessLabel, displayNameAnnotation, iconURLAnnotation, skill.Name, skill.Commit, spec.Name, toolsetHeader, backstageTestToolset, time.Since(started).Round(time.Second)))
+	harness := readiness.agent.Status
+	note("requestedBy=%s (OCIRepository created: %v); HelmRelease managers %q, serviceAccountName %s, values == the dry run's; OCIRepository %s at %s; agent-manager logged caller=%s; Agent Ready on Harness %s at revision %.12s, AgentTemplate with %s=%q, skill %s @ %.12s; RemoteMCPServer %s carries %s=%s",
+		written.RequestedBy, written.OCIRepository, release.managers, release.Spec.ServiceAccountName, agentChartOCIRepository, agentChartRange, email, kagentHarness, harness.LatestSuccessfulRevision, displayNameAnnotation, spec.DisplayName, skill.Name, skill.Commit, spec.Name, toolsetHeader, backstageTestToolset)
+	verdicts = append(verdicts, fmt.Sprintf("PASS: Deploy through the portal (POST /api/muster/call %screate_agent as %s) lands HelmRelease %s with exactly the dry run's values as %s next to OCIRepository %s at %s (requestedBy=%s, agent-manager logged caller=%s); the render is the AgentTemplate (%s, %s, skill %s @ %.12s), the Agent on Harness %s and RemoteMCPServer %s with %s=%s, Ready in %s",
+		agentManagerToolPrefix, email, spec.Name, kagentFluxServiceAccount, agentChartOCIRepository, agentChartRange, written.RequestedBy, email, displayNameAnnotation, iconURLAnnotation, skill.Name, skill.Commit, kagentHarness, spec.Name, toolsetHeader, backstageTestToolset, time.Since(started).Round(time.Second)))
 
 	step("The detail page's poll: %sget_agent_status through the portal says ready on Harness %s", agentManagerToolPrefix, kagentHarness)
 	status, err := portalAgentStatus(primary, spec.Name, verdictReady, time.Minute)
@@ -454,10 +455,10 @@ func proveCreatePath(primary, viewer *portalSession) (agentSpec, *agentTemplate,
 		return fail(err)
 	}
 	if len(status.Template.Harnesses) == 0 || status.Template.Harnesses[0].Harness != info.Harness.Name || status.Template.Harnesses[0].Ready == nil || !*status.Template.Harnesses[0].Ready {
-		return fail(fmt.Errorf("get_agent_status says %s — %s (template %+v), which is not Ready on Harness %s as the AgentTemplate's status.harnesses[] reports", status.Verdict, status.Summary, status.Template, info.Harness.Name))
+		return fail(fmt.Errorf("get_agent_status says %s — %s (template %+v), which is not Ready on Harness %s as the Agent's status reports", status.Verdict, status.Summary, status.Template, info.Harness.Name))
 	}
 	note("%s: %s", status.Verdict, excerpt(status.Summary, 160))
-	verdicts = append(verdicts, fmt.Sprintf("PASS: get_agent_status through the portal agrees with status.harnesses[] — %s on Harness %s", status.Verdict, info.Harness.Name))
+	verdicts = append(verdicts, fmt.Sprintf("PASS: get_agent_status through the portal agrees with the Agent's status — %s on Harness %s", status.Verdict, info.Harness.Name))
 
 	step("A second create of %s is refused as a conflict; %s's create as forbidden", spec.Name, viewerEmail(viewer))
 	if _, err := writer.createAgent(spec); err == nil {

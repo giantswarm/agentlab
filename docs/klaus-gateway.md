@@ -3,7 +3,7 @@
 Swarmgeist ([giantswarm/klaus-gateway](https://github.com/giantswarm/klaus-gateway)),
 the fleet's Slack bridge, in the lab. It runs its conversations on the kagent
 controller — A2A v1 over gRPC through agentgateway, the roster from
-`ListAgentTemplates`, one `AgentInstance` per Slack thread, human in the
+`ListAgents`, one `Session` per Slack thread, human in the
 loop as kagent's HITL extension — every call made as the person behind the
 turn, whose Dex id_token the gateway forwards. Slack is its only channel
 (since 2.0, giantswarm/klaus-gateway#319), and no workspace answers the lab,
@@ -137,7 +137,7 @@ and, on a lab with the component, continues on it:
    target, which the host-mode gateway never touches.
 
 Then the proof's records are removed (the count is back where it was), and
-the host-mode cleanup takes the fixtures and the AgentInstances with it. On a
+the host-mode cleanup takes the fixtures and the Sessions with it. On a
 lab without the component the proof says so and passes on the host-mode
 assertions alone.
 

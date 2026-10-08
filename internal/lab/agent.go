@@ -23,18 +23,17 @@ import (
 // One agent is one Flux HelmRelease of the `agent` chart in the kagent
 // namespace, rendering from the namespace's shared OCIRepository `agent`
 // that tracks the chart at 1.x. The platform chart's bundled engine renders
-// it as the tenant ServiceAccount kagent-flux into one kagent.dev/v1alpha3
-// AgentTemplate named after the release — labelled
-// agent-platform.giantswarm.io/harness=<agent.harness> for the platform
-// Harness's admission selector, annotated ui.giantswarm.io/display-name and
-// ui.giantswarm.io/icon-url — and, unless the toolset is exactly
+// it as the tenant ServiceAccount kagent-flux into one api.kagent.dev/v1alpha3
+// AgentTemplate named after the release — annotated
+// ui.giantswarm.io/display-name and ui.giantswarm.io/icon-url — one Agent of
+// the same name pairing it with the Harness `agent.harness` names
+// (spec.templateRef, spec.harnessRef) and, unless the toolset is exactly
 // [preset:none], one RemoteMCPServer named after the agent that points at
 // muster and carries the toolset as the X-Muster-Toolset header; the
 // template binds it as its tools. The HelmRelease's `values.toolset` is the
 // stable anchor of the toolset; skills are `{name, git: {url, commit}, path}`
-// or `{name, oci}` entries pinned at write time. Readiness is the platform
-// Harness's entry in the template's status.harnesses[]: Ready once the golden
-// snapshot exists.
+// or `{name, oci}` entries pinned at write time. Readiness is the Agent's
+// status: Ready once the golden snapshot exists.
 //
 // Two writers put the same two Flux objects there: agent-manager as the
 // signed-in person (the platform path — muster's x_agent-manager_create_agent,
@@ -51,10 +50,6 @@ const (
 	agentChartOCIRepository = "agent"
 	agentChartURL           = "oci://gsoci.azurecr.io/charts/giantswarm/agent"
 	agentChartRange         = "1.x"
-	// harnessLabel selects the Harness that admits an AgentTemplate
-	// (allowedAgentTemplates.selector.matchLabels): the chart renders it from
-	// agent.harness, the connectivity chart's Harness matches its own name.
-	harnessLabel = "agent-platform.giantswarm.io/harness"
 	// displayNameAnnotation and iconURLAnnotation carry the agent's friendly
 	// name and avatar on the AgentTemplate (agent.displayName, agent.iconUrl).
 	displayNameAnnotation = "ui.giantswarm.io/display-name"
@@ -110,10 +105,10 @@ const (
 	verdictFailed = "failed"
 )
 
-// The condition types kagent reports per Harness on an AgentTemplate (next
-// to conditionReady and conditionResolvedRefs), the Ready reason it writes
-// while the golden snapshot is pending, and the HelmRelease reasons
-// helm-controller gives up with.
+// The condition types kagent reports on an Agent (next to conditionReady
+// and conditionResolvedRefs), the Ready reason it writes while the golden
+// snapshot is pending, and the HelmRelease reasons helm-controller gives up
+// with.
 const (
 	conditionAccepted   = "Accepted"
 	conditionCompatible = "Compatible"
@@ -140,9 +135,9 @@ type agentSpec struct {
 	// Skills the agent mounts, pinned (agent-manager pins a ref for the
 	// platform path; the direct writer takes a commit).
 	Skills []agentSkill
-	// Harness is the value of the admission label (agent.harness); "" is the
-	// platform Harness. Another name places the template on no Harness — the
-	// direct writer's way to a template nothing admits.
+	// Harness is the Harness the Agent references (agent.harness); "" is the
+	// platform Harness. A name no Harness has leaves the Agent unresolved —
+	// the direct writer's way to an agent nothing runs.
 	Harness string
 	// RequireApproval gates every tool call through the agent's muster
 	// binding behind the person's approval (the chart's
@@ -172,7 +167,7 @@ type gitSkill struct {
 	Commit string `json:"commit,omitempty"`
 }
 
-// harnessValue is the admission label value the spec renders.
+// harnessValue is the Harness the spec's Agent references (agent.harness).
 func (s agentSpec) harnessValue() string {
 	if s.Harness == "" {
 		return kagentHarness
@@ -644,11 +639,12 @@ func agentChartSource() (url, semver string, managers []string, err error) {
 
 // agentReadiness is how waiting on an agent ended: Ready on the platform
 // Harness, a failure the platform will not get past on its own (terminal:
-// the release's render refused, a Harness condition False for good, no
-// Harness admitting the template), or the timeout — with the last reads and
-// the reason, worded, and the time it took.
+// the release's render refused, an Agent condition False for good, the
+// Agent referencing another Harness), or the timeout — with the last reads
+// and the reason, worded, and the time it took.
 type agentReadiness struct {
 	template *agentTemplate
+	agent    *agentObject
 	release  *agentRelease
 	ready    bool
 	terminal bool
@@ -657,16 +653,17 @@ type agentReadiness struct {
 }
 
 // waitAgentReady is the one wait every proof shares: it polls an agent's
-// HelmRelease (when it has one) and its AgentTemplate until the platform
-// Harness reports Ready on the desired revision — the golden snapshot — or
-// until a terminal failure, or until the timeout. A read that keeps failing
-// (not NotFound) is the error; a template that is not there yet is waited
-// for.
+// HelmRelease (when it has one), its AgentTemplate and its Agent until the
+// Agent, on the platform Harness, reports Ready on the desired revision —
+// the golden snapshot — or until a terminal failure, or until the timeout.
+// A read that keeps failing (not NotFound) is the error; a template or an
+// Agent that is not there yet is waited for.
 func waitAgentReady(name string, timeout time.Duration) (agentReadiness, error) {
 	return waitAgentReadyOn(name, kagentHarness, timeout)
 }
 
-// waitAgentReadyOn is waitAgentReady on the named Harness's entry.
+// waitAgentReadyOn is waitAgentReady for an Agent that must reference the
+// named Harness.
 func waitAgentReadyOn(name, harness string, timeout time.Duration) (agentReadiness, error) {
 	started := time.Now()
 	var r agentReadiness
@@ -682,40 +679,9 @@ func waitAgentReadyOn(name, harness string, timeout time.Duration) (agentReadine
 	return r, nil
 }
 
-// harnessAdmissionLabels are the labels the platform Harness admits
-// (spec.allowedAgentTemplates.selector.matchLabels): the proof's templates
-// carry them, so the Harness picks them up whichever label the platform
-// chose — the connectivity chart's agent-platform.giantswarm.io/harness:
-// <name>, or another. A Harness that cannot be read leaves the chart's.
-func harnessAdmissionLabels() map[string]string { return harnessAdmissionLabelsOf(kagentHarness) }
-
-// harnessAdmissionLabelsOf are the labels the named Harness admits.
-func harnessAdmissionLabelsOf(harness string) map[string]string {
-	fallback := map[string]string{harnessLabel: harness}
-	h, err := readKagentObject(harnessResource, harness)
-	if err != nil {
-		return fallback
-	}
-	labels, found, _ := unstructured.NestedStringMap(h.Object, "spec", "allowedAgentTemplates", "selector", "matchLabels")
-	if !found || len(labels) == 0 {
-		return fallback
-	}
-	return labels
-}
-
-// admits reports whether labels satisfy a matchLabels selector.
-func admits(selector, labels map[string]string) bool {
-	for key, want := range selector {
-		if labels[key] != want {
-			return false
-		}
-	}
-	return true
-}
-
 // readAgentReadinessOn is one reading of an agent's state (waitAgentReady's
-// probe): the release first, then the template and its entry on the named
-// Harness.
+// probe): the release first, then the template, then the Agent, which must
+// reference the named Harness.
 func readAgentReadinessOn(name, harness string) (agentReadiness, error) {
 	var r agentReadiness
 	release, err := readAgentRelease(name)
@@ -744,46 +710,48 @@ func readAgentReadinessOn(name, harness string) (agentReadiness, error) {
 		return r, err
 	}
 	r.template = template
-	h := template.harness(harness)
-	if h == nil {
-		switch {
-		case len(template.Status.Harnesses) > 0:
-			r.terminal, r.reason = true, fmt.Sprintf("AgentTemplate %s is admitted by %s only, not by the platform Harness %s", name, strings.Join(template.harnessNames(), ", "), harness)
-		case template.Status.ObservedGeneration >= template.Metadata.Generation && template.Status.ObservedGeneration > 0:
-			// Observed, and no entry: a verdict only for a template the platform
-			// Harness's selector does not match. One it matches is between the
-			// controllers' passes — the entry follows.
-			if selector := harnessAdmissionLabelsOf(harness); admits(selector, template.Metadata.Labels) {
-				r.reason = fmt.Sprintf("AgentTemplate %s carries the labels the platform Harness %s admits (%v); its status.harnesses[] entry is not written yet", name, harness, selector)
-			} else {
-				r.terminal, r.reason = true, fmt.Sprintf("no Harness admits AgentTemplate %s (labels %v; the platform Harness %s admits %v)", name, template.Metadata.Labels, harness, selector)
-			}
-		default:
-			r.reason = fmt.Sprintf("kagent has not reported on AgentTemplate %s yet", name)
-		}
+	agent, err := readAgent(name)
+	switch {
+	case apierrors.IsNotFound(err):
+		r.reason = fmt.Sprintf("AgentTemplate %s is there but no Agent %s pairs it with a Harness yet", name, name)
+		return r, nil
+	case err != nil:
+		return r, err
+	}
+	r.agent = agent
+	if text, terminal := terminalAgentFailure(&agent.Status); terminal {
+		r.terminal, r.reason = true, fmt.Sprintf("Agent %s on Harness %s: %s", name, agent.harnessName(), text)
 		return r, nil
 	}
-	if text, terminal := terminalHarnessFailure(h); terminal {
-		r.terminal, r.reason = true, fmt.Sprintf("AgentTemplate %s on Harness %s: %s", name, harness, text)
+	if got := agent.harnessName(); got != harness {
+		r.terminal, r.reason = true, fmt.Sprintf("Agent %s references Harness %q, not the platform Harness %s", name, got, harness)
 		return r, nil
 	}
-	if status, _ := h.condition(conditionReady); status == conditionTrue && h.DesiredRevision == h.LatestSuccessfulRevision {
+	if got := agent.templateName(); got != name {
+		r.terminal, r.reason = true, fmt.Sprintf("Agent %s references AgentTemplate %q, not %s", name, got, name)
+		return r, nil
+	}
+	if agent.Status.ObservedGeneration < agent.Metadata.Generation || len(agent.Status.Conditions) == 0 {
+		r.reason = fmt.Sprintf("kagent has not reported on Agent %s yet", name)
+		return r, nil
+	}
+	if status, _ := agent.Status.condition(conditionReady); status == conditionTrue && agent.Status.DesiredRevision == agent.Status.LatestSuccessfulRevision {
 		r.ready = true
 		return r, nil
 	}
-	status, message := h.condition(conditionReady)
-	r.reason = fmt.Sprintf("AgentTemplate %s on Harness %s: Ready=%q %s (revision %.12s compiling%s)", name, harness, status, excerpt(message, 160), h.DesiredRevision, warningsNote(h.Warnings))
+	status, message := agent.Status.condition(conditionReady)
+	r.reason = fmt.Sprintf("Agent %s on Harness %s: Ready=%q %s (revision %.12s compiling%s)", name, harness, status, excerpt(message, 160), agent.Status.DesiredRevision, warningsNote(agent.Status.Warnings))
 	return r, nil
 }
 
-// terminalHarnessFailure reads a Harness's conditions for a failure the
+// terminalAgentFailure reads an Agent's conditions for a failure the
 // controller will not retry: ResolvedRefs or Compatible False, or Ready False
 // for a reason other than the golden snapshot still pending
 // (ActorTemplatePending). ActorTemplateFailed carries Substrate's own error
 // for the boot, ActorTemplateConflict an immutable-template clash. The text
 // is the condition as the evidence quotes it.
-func terminalHarnessFailure(h *harnessStatus) (string, bool) {
-	for _, c := range h.Conditions {
+func terminalAgentFailure(s *agentStatus) (string, bool) {
+	for _, c := range s.Conditions {
 		if c.Status != condFalseStatus {
 			continue
 		}
@@ -802,20 +770,21 @@ func terminalHarnessFailure(h *harnessStatus) (string, bool) {
 // readyAgent is the one helper behind every proof's agent: the spec written
 // by the writer, then waited for until it is Ready on the platform Harness.
 // The caller removes the agent (removeAgent) on every path. The error of a
-// failed or timed-out boot carries the reason and where to look.
-func readyAgent(w agentWriter, spec agentSpec, timeout time.Duration) (*agentTemplate, *agentWritten, error) {
+// failed or timed-out boot carries the reason and where to look; the
+// readiness carries the template and the Agent as last read.
+func readyAgent(w agentWriter, spec agentSpec, timeout time.Duration) (agentReadiness, *agentWritten, error) {
 	written, err := w.createAgent(spec)
 	if err != nil {
-		return nil, nil, fmt.Errorf("creating agent %s through %s: %w", spec.Name, w, err)
+		return agentReadiness{}, nil, fmt.Errorf("creating agent %s through %s: %w", spec.Name, w, err)
 	}
 	r, err := waitAgentReady(spec.Name, timeout)
 	if err != nil {
-		return nil, written, err
+		return r, written, err
 	}
 	if !r.ready {
-		return nil, written, r.failure(spec.Name, timeout)
+		return r, written, r.failure(spec.Name, timeout)
 	}
-	return r.template, written, nil
+	return r, written, nil
 }
 
 // failure words a readiness that did not end Ready: what was seen last and
@@ -832,18 +801,20 @@ func (r agentReadiness) failure(name string, timeout time.Duration) error {
 	if lines := egressFindings(); len(lines) > 0 {
 		egress = "\n" + strings.Join(lines, "\n")
 	}
-	return fmt.Errorf("agent %s %s: %s;%s\ncheck `kubectl -n %s get %s,%s,%s %s -o yaml`", name, verdict, r.reason, egress, kagentNamespace, fluxHelmReleaseResource, agentTemplateResource, remoteMCPServerResource, name)
+	return fmt.Errorf("agent %s %s: %s;%s\ncheck `kubectl -n %s get %s,%s,%s,%s %s -o yaml`", name, verdict, r.reason, egress, kagentNamespace, fluxHelmReleaseResource, agentResource, agentTemplateResource, remoteMCPServerResource, name)
 }
 
-// agentResources are the three resources an agent is on the cluster: its
-// HelmRelease and the two objects the release renders.
-var agentResources = []string{fluxHelmReleaseResource, agentTemplateResource, remoteMCPServerResource}
+// agentResources are the four resources an agent is on the cluster: its
+// HelmRelease and the three objects the release renders. The Agent goes
+// before the template it references.
+var agentResources = []string{fluxHelmReleaseResource, agentResource, agentTemplateResource, remoteMCPServerResource}
 
 // removeAgent deletes everything an agent is on the cluster and waits for
 // it to be gone, bounded: the HelmRelease (helm-controller uninstalls the
-// render), then whatever is left directly — a bare AgentTemplate and the
-// RemoteMCPServer of the agent's name — ignoring what is not there. For the
-// cleanup paths and the leftovers of aborted runs; the error says what stays.
+// render), then whatever is left directly — a bare Agent, its AgentTemplate
+// and the RemoteMCPServer of the agent's name — ignoring what is not there.
+// For the cleanup paths and the leftovers of aborted runs; the error says
+// what stays.
 func removeAgent(name string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), agentGoneTimeout+kubeReadTimeout)
 	defer cancel()
@@ -865,7 +836,8 @@ func removeAgent(name string) error {
 }
 
 // waitAgentRemoved waits, bounded, for nothing of the agent to be left on the
-// cluster: no HelmRelease, no AgentTemplate, no RemoteMCPServer of its name.
+// cluster: no HelmRelease, no Agent, no AgentTemplate, no RemoteMCPServer of
+// its name.
 func waitAgentRemoved(name string) error {
 	gvrs := make([]schema.GroupVersionResource, 0, len(agentResources))
 	for _, resource := range agentResources {
@@ -894,7 +866,7 @@ func waitAgentRemoved(name string) error {
 }
 
 // agentExists reports whether anything of the agent is on the cluster: its
-// HelmRelease, its AgentTemplate or its RemoteMCPServer.
+// HelmRelease, its Agent, its AgentTemplate or its RemoteMCPServer.
 func agentExists(name string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	defer cancel()
