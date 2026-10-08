@@ -200,13 +200,17 @@ var (
 // passes.
 func waitDefaultModelConfigResolved() error {
 	name := defaultModelConfig
+	gvr, err := modelConfigGVR()
+	if err != nil {
+		return err
+	}
 	var status string
 	var readErr error
 	accepted := waitFor(10, modelConfigAcceptedPoll, func() bool {
 		status, _, readErr = modelConfigCondition(name, "Accepted")
 		return readErr == nil && status == conditionTrue
 	})
-	hint := fmt.Sprintf("check `kubectl -n %s describe %s %s`", kagentNamespace, modelConfigResource, name)
+	hint := fmt.Sprintf("check `kubectl -n %s describe %s %s`", kagentNamespace, modelConfigResourceName(gvr), name)
 	if !accepted {
 		return notReached("ModelConfig "+name, "Accepted", status, readErr, hint)
 	}

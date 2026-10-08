@@ -8,12 +8,13 @@
 # The managed-by label scopes pruning: entries removed from agentlab.yaml
 # are deleted on the next run; the chart's default ModelConfig is never
 # touched.
-# The apiVersion is the version the chart line serves: api.kagent.dev/v1alpha3
-# on the kagent line (meta chart >= 4.0), kagent.dev/v1alpha2 on a released
-# 3.x chart (kagent 0.10) — the ModelConfig spec is the same in both.
+# The apiVersion is the ModelConfig group and version the lab's chart line
+# serves, read from discovery: api.kagent.dev/v1alpha3 on the kagent API v2
+# line, kagent.dev/v1alpha3 on 4.x, kagent.dev/v1alpha2 on a released 3.x
+# chart (kagent 0.10) — the ModelConfig spec is the same in all three.
 {{- range .ExtraModels }}
 ---
-apiVersion: {{ if $.LegacyChart }}kagent.dev/v1alpha2{{ else }}api.kagent.dev/v1alpha3{{ end }}
+apiVersion: {{ $.ModelConfigAPIVersion }}
 kind: ModelConfig
 metadata:
   name: {{ .Name }}

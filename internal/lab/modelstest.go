@@ -255,7 +255,7 @@ func ModelsTest(cfg *config.Config, email string, opts ModelsTestOptions) error 
 	if err := waitModelConfigAccepted(mcName); err != nil {
 		return err
 	}
-	mc, err := readKagentObject(modelConfigResource, mcName)
+	mc, err := readModelConfig(mcName)
 	if err != nil {
 		return err
 	}
@@ -330,7 +330,7 @@ func ModelsTest(cfg *config.Config, email string, opts ModelsTestOptions) error 
 	if _, err := api.call("wire_model", map[string]any{modelField: model, backendField: backendName}); err != nil {
 		return err
 	}
-	if _, err := readKagentObject(modelConfigResource, mcName); err != nil {
+	if _, err := readModelConfig(mcName); err != nil {
 		return fmt.Errorf("ModelConfig %s after wiring it again: %w", mcName, err)
 	}
 
@@ -518,7 +518,7 @@ func loopbackFor(backend, endpoint string) string {
 // would turn an apiserver restart or a lost context during the teardown into
 // a PASS for an object that is still there.
 func waitModelConfigGone(mcName string) error {
-	gvr, err := gvrFor(modelConfigResource)
+	gvr, err := modelConfigGVR()
 	if err != nil {
 		return err
 	}
@@ -578,7 +578,7 @@ func proveDeleteRefused(api *modelManagerTools, session *musterSession,
 	// shell's kubeconfig and current-context, not state/kubeconfig, so its
 	// answer is about whichever cluster that names. objectExists separates
 	// "not there" from "could not read".
-	gvr, err := gvrFor(modelConfigResource)
+	gvr, err := modelConfigGVR()
 	if err != nil {
 		return err
 	}
@@ -659,7 +659,7 @@ func agentTurnNamed(cfg *config.Config, session *musterSession, token, modelConf
 // modelConfigExists reports whether the ModelConfig is there; a read that
 // fails counts as absent, as the CLI probe's non-zero exit did.
 func modelConfigExists(name string) bool {
-	_, err := readKagentObject(modelConfigResource, name)
+	_, err := readModelConfig(name)
 	return err == nil
 }
 

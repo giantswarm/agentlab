@@ -341,7 +341,7 @@ func ServingTest(cfg *config.Config, email string, opts ServingTestOptions) erro
 	if err := waitModelConfigAccepted(mcName); err != nil {
 		return err
 	}
-	mc, err := readKagentObject(modelConfigResource, mcName)
+	mc, err := readModelConfig(mcName)
 	if err != nil {
 		return err
 	}

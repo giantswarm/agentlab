@@ -73,6 +73,9 @@ type tmplData struct {
 	// ExtraModels is what extra-models.yaml.tmpl renders: the
 	// platform.extraModels entries.
 	ExtraModels []config.ExtraModel
+	// ModelConfigAPIVersion is the ModelConfig apiVersion the lab serves
+	// (modelConfigGVR), e.g. api.kagent.dev/v1alpha3.
+	ModelConfigAPIVersion string
 	// The per-server OAuth sign-in fixture (oauthfixture.go): the MCPServer
 	// name the proofs sign in to and the protected endpoint it points at.
 	OAuthFixtureServer string

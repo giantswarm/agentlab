@@ -8,6 +8,8 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -24,10 +26,43 @@ const kagentNamespace = "kagent"
 // never checks the value.
 const placeholderAPIKey = "agentlab-placeholder"
 
-// modelConfigResource is fully qualified on purpose: like MCPServer (muster
-// vs kagent.dev), a bare kind is one CRD collision away from resolving into
-// the wrong API group.
-const modelConfigResource = "modelconfigs." + kagentAPIGroup
+// modelConfigResources are the ModelConfig resources the kagent chart lines
+// serve, newest first: api.kagent.dev on the kagent API v2 line, kagent.dev
+// before it. Fully qualified on purpose: like MCPServer (muster vs
+// kagent.dev), a bare kind is one CRD collision away from resolving into the
+// wrong API group.
+var modelConfigResources = []string{"modelconfigs." + kagentAPIGroup, "modelconfigs.kagent.dev"}
+
+// modelConfigGVR resolves the ModelConfig resource the lab's chart line
+// serves, at its preferred version, through discovery.
+func modelConfigGVR() (schema.GroupVersionResource, error) {
+	k, err := labKube()
+	if err != nil {
+		return schema.GroupVersionResource{}, err
+	}
+	gvr, err := k.firstServed(modelConfigResources...)
+	if err != nil {
+		return schema.GroupVersionResource{}, fmt.Errorf("the apiserver serves no ModelConfig (neither %s): is the agents runtime (kagent) installed?", strings.Join(modelConfigResources, " nor "))
+	}
+	return gvr, nil
+}
+
+// modelConfigResourceName is the fully qualified resource kubectl takes for
+// the served ModelConfig, e.g. "modelconfigs.api.kagent.dev".
+func modelConfigResourceName(gvr schema.GroupVersionResource) string {
+	return gvr.Resource + "." + gvr.Group
+}
+
+// readModelConfig reads one ModelConfig of the kagent namespace.
+func readModelConfig(name string) (*unstructured.Unstructured, error) {
+	gvr, err := modelConfigGVR()
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
+	defer cancel()
+	return getObject(ctx, gvr, kagentNamespace, name)
+}
 
 // managedByAgentlab labels the extra ModelConfigs so pruning can be scoped to
 // lab-owned CRs — the chart-rendered default ModelConfig is never touched.
@@ -56,7 +91,14 @@ const modelDeleteWait = 2 * time.Minute
 // ModelConfigs itself, for every backend it fronts.
 func ensureExtraModels(cfg *config.Config) error {
 	models := cfg.Platform.ExtraModels
-	rendered, _, err := renderManifestWith(cfg, extraModelsTemplate, func(d *tmplData) { d.ExtraModels = models })
+	gvr, err := modelConfigGVR()
+	if err != nil {
+		return err
+	}
+	rendered, _, err := renderManifestWith(cfg, extraModelsTemplate, func(d *tmplData) {
+		d.ExtraModels = models
+		d.ModelConfigAPIVersion = gvr.GroupVersion().String()
+	})
 	if err != nil {
 		return err
 	}
@@ -132,7 +174,7 @@ func ensureModelKeySecret(m config.ExtraModel) error {
 // removal on the next run.
 func pruneExtraModels(want []config.ExtraModel) error {
 	ctx := context.Background()
-	gvr, err := gvrFor(modelConfigResource)
+	gvr, err := modelConfigGVR()
 	if err != nil {
 		return nil // no CRD: nothing lab-owned to prune
 	}
@@ -185,6 +227,10 @@ func extraModelsHint(models []config.ExtraModel) string {
 // read that fails is reported as such, with the apiserver's words, never as
 // an empty status.
 func waitModelConfigAccepted(name string) error {
+	gvr, err := modelConfigGVR()
+	if err != nil {
+		return err
+	}
 	var status string
 	var readErr error
 	accepted := waitFor(10, modelConfigAcceptedPoll, func() bool {
@@ -193,14 +239,14 @@ func waitModelConfigAccepted(name string) error {
 	})
 	if !accepted {
 		return notReached("ModelConfig "+name, "Accepted", status, readErr,
-			fmt.Sprintf("check `kubectl -n %s describe %s %s`", kagentNamespace, modelConfigResource, name))
+			fmt.Sprintf("check `kubectl -n %s describe %s %s`", kagentNamespace, modelConfigResourceName(gvr), name))
 	}
 	resolved, message, err := modelConfigCondition(name, conditionResolvedRefs)
 	if err != nil {
 		return err
 	}
 	if resolved == condFalseStatus {
-		return fmt.Errorf("ModelConfig %s is Accepted but %s=False: %s;\ncheck `kubectl -n %s describe %s %s`", name, conditionResolvedRefs, message, kagentNamespace, modelConfigResource, name)
+		return fmt.Errorf("ModelConfig %s is Accepted but %s=False: %s;\ncheck `kubectl -n %s describe %s %s`", name, conditionResolvedRefs, message, kagentNamespace, modelConfigResourceName(gvr), name)
 	}
 	note("ModelConfig %s: Accepted%s", name, resolvedNote(resolved))
 	return nil
@@ -225,13 +271,7 @@ const condFalseStatus = "False"
 // modelConfigCondition reads one condition's status and message off a
 // ModelConfig ("" while the controller has not written it).
 func modelConfigCondition(name, condType string) (status, message string, err error) {
-	gvr, err := gvrFor(modelConfigResource)
-	if err != nil {
-		return "", "", err
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
-	defer cancel()
-	obj, err := getObject(ctx, gvr, kagentNamespace, name)
+	obj, err := readModelConfig(name)
 	if err != nil {
 		return "", "", err
 	}
