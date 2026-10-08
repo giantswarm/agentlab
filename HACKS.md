@@ -673,7 +673,9 @@ bumped to the master commit that drops both (the Trillian v1.8.0 bump,
 2026-09-21), the one upstream version without them, so the graph is clean
 with no `.nancy-ignore`; `gomod_test.go` fails on any replace/exclude in
 go.mod, so the next remediation of that shape goes red instead of merging.
-Unblocks when certificate-transparency-go releases after v1.3.3: pin the tag.
+Unblocks when certificate-transparency-go releases after v1.3.3: a rule in
+`renovate-custom.json5` proposes that tag as the bump PR, which removes this
+entry.
 
 ## Accepted lab trade-offs (not hacks to fix)
 

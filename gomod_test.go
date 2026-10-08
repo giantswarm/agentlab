@@ -24,3 +24,23 @@ func TestGoModHasNoReplaceOrExcludeDirectives(t *testing.T) {
 		}
 	}
 }
+
+// Renovate's gomod manager reads a require line only when its trailing
+// comment is a single word (`// indirect`); a longer comment hides the module
+// from every update, including the renovate-custom.json5 rules. Explanations
+// belong in HACKS.md.
+func TestGoModRequireCommentsAreOneWord(t *testing.T) {
+	data, err := os.ReadFile("go.mod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, line := range strings.Split(string(data), "\n") {
+		code, comment, found := strings.Cut(line, "//")
+		if !found || strings.TrimSpace(code) == "" {
+			continue
+		}
+		if len(strings.Fields(comment)) > 1 {
+			t.Errorf("go.mod:%d: %q: Renovate skips a module whose comment is more than one word", i+1, strings.TrimSpace(line))
+		}
+	}
+}
