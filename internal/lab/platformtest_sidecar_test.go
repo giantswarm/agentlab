@@ -130,13 +130,12 @@ func TestRestartedSinceRelease(t *testing.T) {
 
 // The release time is the HelmRelease's newest revision.
 func TestHelmReleaseLastDeployed(t *testing.T) {
-	hr := &unstructured.Unstructured{Object: map[string]any{
-		"metadata": map[string]any{"namespace": "flux-system", "name": "mcp-kubernetes"},
-		crStatus: map[string]any{"history": []any{
-			map[string]any{"lastDeployed": "2026-10-08T11:30:00Z"},
-			map[string]any{"lastDeployed": "2026-10-07T09:00:00Z"},
-		}},
-	}}
+	hr := &unstructured.Unstructured{Object: map[string]any{crStatus: map[string]any{"history": []any{
+		map[string]any{"lastDeployed": "2026-10-08T11:30:00Z"},
+		map[string]any{"lastDeployed": "2026-10-07T09:00:00Z"},
+	}}}}
+	hr.SetNamespace("flux-system")
+	hr.SetName("mcp-kubernetes")
 	got, err := helmReleaseLastDeployed(hr)
 	if err != nil || !got.Equal(time.Date(2026, 10, 8, 11, 30, 0, 0, time.UTC)) {
 		t.Errorf("helmReleaseLastDeployed = %v, %v", got, err)
