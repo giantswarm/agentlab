@@ -38,7 +38,7 @@ const (
 // answers the value's length, never the value; agentlab prints that answer.
 // The second subprocess of the lab next to the container engine (exec.go),
 // run only while agentlab.yaml records a source.
-const secretTool = "beekeeper"
+const secretTool = "beekeeper" // #nosec G101 -- a tool's NAME, not a credential
 
 // runSecretTool runs the tooling and answers its stdout; the seam the tests
 // replace with a fake that records the call.

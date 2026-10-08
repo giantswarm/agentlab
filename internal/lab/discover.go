@@ -567,7 +567,7 @@ func kindNodePublishedPorts(node string) (exists bool, ports map[int]bool) {
 }
 
 // secretToolInstall is where the secret tooling comes from.
-const secretToolInstall = "https://github.com/giantswarm/beekeeper/releases"
+const secretToolInstall = "https://github.com/giantswarm/beekeeper/releases" // #nosec G101 -- a URL, not a credential
 
 // secretToolVersion is the secret tooling's version (`beekeeper version`
 // answers `beekeeper vX.Y.Z (commit …)`; the second word), "" when it is not
