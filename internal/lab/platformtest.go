@@ -219,7 +219,7 @@ func PlatformTest(cfg *config.Config, email string) error {
 		serverNames = append(serverNames, s.String())
 	}
 	if dexLocalhostBridged(cfg) {
-		verdict += fmt.Sprintf("\nPASS: the %s bridge on all %d servers told the lab Dex address through a name they dial it by — sidecar present, 0 restarts, MCPServer Connected: %s", dexLocalhostContainer, len(servers), strings.Join(serverNames, ", "))
+		verdict += fmt.Sprintf("\nPASS: the %s bridge on all %d servers told the lab Dex address through a name they dial it by — sidecar present, 0 restarts since the release, MCPServer Connected: %s", dexLocalhostContainer, len(servers), strings.Join(serverNames, ", "))
 	} else {
 		verdict += fmt.Sprintf("\nPASS: all %d servers told the issuer %s reach it through cluster DNS (the %s Service) — no sidecar, MCPServer Connected: %s", len(servers), cfg.Issuer(), dexIssuerService, strings.Join(serverNames, ", "))
 	}

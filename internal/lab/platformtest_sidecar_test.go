@@ -4,10 +4,12 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 // platform-test reads the sidecar rule off the live Deployments: one told the
@@ -93,5 +95,54 @@ func TestFlagVariable(t *testing.T) {
 		if got := flagVariable(in); got != want {
 			t.Errorf("flagVariable(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// platform-test dates a restart against the component's release: one before
+// it (a node restart during the bring-up) is history, one after it fails
+// until the container has run through kubelet's crash-loop reset.
+func TestRestartedSinceRelease(t *testing.T) {
+	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	released := now.Add(-30 * time.Minute)
+	running := func(restarts int32, startedAgo time.Duration) corev1.ContainerStatus {
+		return corev1.ContainerStatus{RestartCount: restarts, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(now.Add(-startedAgo))}}}
+	}
+	for _, tc := range []struct {
+		name     string
+		c        corev1.ContainerStatus
+		released time.Time
+		want     bool
+	}{
+		{"never restarted", running(0, time.Minute), released, false},
+		{"restart before the release", running(3, 40*time.Minute), released, false},
+		{"restart after the release", running(1, 2*time.Minute), released, true},
+		{"restart after the release, settled since", running(1, 20*time.Minute), released, false},
+		{"no HelmRelease, fresh restart", running(2, time.Minute), time.Time{}, true},
+		{"not running", corev1.ContainerStatus{RestartCount: 4}, released, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := restartedSinceRelease(tc.c, tc.released, now); got != tc.want {
+				t.Errorf("restartedSinceRelease = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// The release time is the HelmRelease's newest revision.
+func TestHelmReleaseLastDeployed(t *testing.T) {
+	hr := &unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{"namespace": "flux-system", "name": "mcp-kubernetes"},
+		"status": map[string]any{"history": []any{
+			map[string]any{"lastDeployed": "2026-10-08T11:30:00Z"},
+			map[string]any{"lastDeployed": "2026-10-07T09:00:00Z"},
+		}},
+	}}
+	got, err := helmReleaseLastDeployed(hr)
+	if err != nil || !got.Equal(time.Date(2026, 10, 8, 11, 30, 0, 0, time.UTC)) {
+		t.Errorf("helmReleaseLastDeployed = %v, %v", got, err)
+	}
+	unstructured.RemoveNestedField(hr.Object, "status")
+	if _, err := helmReleaseLastDeployed(hr); err == nil || !strings.Contains(err.Error(), "flux-system/mcp-kubernetes") {
+		t.Errorf("no history: err = %v", err)
 	}
 }

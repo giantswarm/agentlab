@@ -6,10 +6,12 @@ import (
 	"iter"
 	"slices"
 	"strings"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -38,8 +40,8 @@ func (s dexLocalhostServer) String() string {
 // is not on the host network must carry the dex-localhost container; its
 // rollout
 // must be complete with every pod Ready, every container running and none
-// ever restarted — an unreachable issuer is a crash loop, and that is what
-// this catches; and the MCPServer of its name, when it registers one, must
+// restarted since the release (restartedSinceRelease) — an unreachable
+// issuer is a crash loop, and that is what this catches; and the MCPServer of its name, when it registers one, must
 // read Connected: muster reached it through the bridge with this session's
 // token. A server the rule finds without the sidecar is the lab's gap — a
 // component turned on by the chart or an overlay that `agentlab platform`
@@ -113,7 +115,7 @@ func hasDexLocalhostSidecar(d *appsv1.Deployment) bool {
 // checkDexLocalhostDeployment asserts one selected Deployment (key: what the
 // rule selected it by) carries the sidecar — a native sidecar, among the init
 // containers — rolled out completely, with every pod Ready, every container
-// (the sidecar included) running and none restarted.
+// (the sidecar included) running and none restarted since the release.
 func checkDexLocalhostDeployment(ctx context.Context, k *kubeClients, d *appsv1.Deployment, key string) error {
 	where := d.Namespace + "/" + d.Name
 	if !hasDexLocalhostSidecar(d) {
@@ -131,7 +133,12 @@ func checkDexLocalhostDeployment(ctx context.Context, k *kubeClients, d *appsv1.
 	if err != nil {
 		return err
 	}
-	var restarts []string
+	released, err := deploymentReleasedAt(ctx, d)
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	var restarts, settled []string
 	for i := range pods {
 		pod := &pods[i]
 		if pod.DeletionTimestamp != nil {
@@ -148,17 +155,89 @@ func checkDexLocalhostDeployment(ctx context.Context, k *kubeClients, d *appsv1.
 				return fmt.Errorf("container %s of pod %s/%s is not running and ready (%s) — with %s the issuer is reachable, so look at `kubectl -n %s logs %s -c %s`",
 					c.Name, pod.Namespace, pod.Name, podStateSummary(pod), dexLocalhostContainer, pod.Namespace, pod.Name, c.Name)
 			}
-			if c.RestartCount > 0 {
-				restarts = append(restarts, fmt.Sprintf("%s/%s %s ×%d", pod.Namespace, pod.Name, c.Name, c.RestartCount))
+			if c.RestartCount == 0 {
+				continue
+			}
+			restart := fmt.Sprintf("%s/%s %s ×%d (running since %s)", pod.Namespace, pod.Name, c.Name, c.RestartCount, c.State.Running.StartedAt.UTC().Format(time.RFC3339))
+			if restartedSinceRelease(c, released, now) {
+				restarts = append(restarts, restart)
+			} else {
+				settled = append(settled, restart)
 			}
 		}
 	}
 	if len(restarts) > 0 {
-		return fmt.Errorf("the Deployment %s: containers restarted — %s; a server that could not reach the issuer crash-loops until the sidecar is there, so read the previous container's log (`kubectl -n %s logs -p …`)",
+		return fmt.Errorf("the Deployment %s: containers restarted since the release — %s; a server that could not reach the issuer crash-loops until the sidecar is there, so read the previous container's log (`kubectl -n %s logs -p …`)",
 			where, strings.Join(restarts, ", "), d.Namespace)
 	}
-	note("%s (%s): %s sidecar, %d pods Running, 0 restarts", where, key, dexLocalhostContainer, len(pods))
+	if len(settled) > 0 {
+		note("%s: restarts before the release (%s) or running steadily for %s since, not a crash loop: %s", where, releasedLabel(released), crashLoopSettle, strings.Join(settled, ", "))
+	}
+	note("%s (%s): %s sidecar, %d pods Running, 0 restarts since the release", where, key, dexLocalhostContainer, len(pods))
 	return nil
+}
+
+// crashLoopSettle is how long a container runs before kubelet resets its
+// crash-loop back-off: one that has run this long since its last restart is
+// out of the loop.
+const crashLoopSettle = 10 * time.Minute
+
+// restartedSinceRelease reports whether a running container restarted in a
+// way platform-test fails on: its current run started after the release
+// (a restart before it — a node restart during the bring-up, an earlier
+// revision's — is history) and less than crashLoopSettle ago (a restart the
+// container has since run steadily through — a host suspend — is no crash
+// loop). A zero release counts every restart the settle allows.
+func restartedSinceRelease(c corev1.ContainerStatus, released, now time.Time) bool {
+	if c.RestartCount == 0 || c.State.Running == nil {
+		return false
+	}
+	started := c.State.Running.StartedAt.Time
+	return started.After(released) && now.Sub(started) < crashLoopSettle
+}
+
+// deploymentReleasedAt is when the Flux HelmRelease that renders the
+// Deployment (its helm.toolkit.fluxcd.io labels) last deployed it
+// (status.history[0].lastDeployed); zero for a Deployment no HelmRelease
+// renders.
+func deploymentReleasedAt(ctx context.Context, d *appsv1.Deployment) (time.Time, error) {
+	name, ns := d.Labels[fluxHelmReleaseNameLabel], d.Labels[gitopsHelmNamespace]
+	if name == "" || ns == "" {
+		return time.Time{}, nil
+	}
+	gvr, err := gvrFor(fluxHelmReleaseResource)
+	if err != nil {
+		return time.Time{}, err
+	}
+	hr, err := getObject(ctx, gvr, ns, name)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("the Deployment %s/%s: %w", d.Namespace, d.Name, err)
+	}
+	return helmReleaseLastDeployed(hr)
+}
+
+// helmReleaseLastDeployed reads status.history[0].lastDeployed off a Flux
+// HelmRelease: the time of the revision running now.
+func helmReleaseLastDeployed(hr *unstructured.Unstructured) (time.Time, error) {
+	history, _, _ := unstructured.NestedSlice(hr.Object, "status", "history")
+	if len(history) == 0 {
+		return time.Time{}, fmt.Errorf("HelmRelease %s/%s has no revision in status.history", hr.GetNamespace(), hr.GetName())
+	}
+	snapshot, _ := history[0].(map[string]any)
+	raw, _, _ := unstructured.NestedString(snapshot, "lastDeployed")
+	t, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("HelmRelease %s/%s: status.history[0].lastDeployed %q: %w", hr.GetNamespace(), hr.GetName(), raw, err)
+	}
+	return t, nil
+}
+
+// releasedLabel names a release time for a note.
+func releasedLabel(released time.Time) string {
+	if released.IsZero() {
+		return "no HelmRelease"
+	}
+	return "released " + released.UTC().Format(time.RFC3339)
 }
 
 // deploymentDexLocalhostKey is the sidecar rule (dexLocalhostKey) over a live
