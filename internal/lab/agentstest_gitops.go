@@ -118,7 +118,7 @@ func AgentsGitOpsTest(cfg *config.Config, email string, opts AgentsGitOpsTestOpt
 		return err
 	}
 	var composed validateReport
-	spec := map[string]any{nameKey: agentsGitOpsAgent, "modelConfig": modelConfig, "toolset": []string{agentsTestToolset}, "displayName": "Agentlab GitOps agent", "description": "applied from git"}
+	spec := map[string]any{nameKey: agentsGitOpsAgent, "modelConfig": modelConfig, "toolset": []string{agentsTestToolset}, "displayName": "Agentlab GitOps agent", descriptionKey: "applied from git"}
 	if err := platform.getJSON("validate_agent", spec, &composed); err != nil {
 		return err
 	}
@@ -135,7 +135,7 @@ func AgentsGitOpsTest(cfg *config.Config, email string, opts AgentsGitOpsTestOpt
 		return err
 	}
 
-	edit := map[string]any{nameKey: agentsGitOpsAgent, "update": true, "description": agentsGitOpsDescription}
+	edit := map[string]any{nameKey: agentsGitOpsAgent, validateModeUpdate: true, descriptionKey: agentsGitOpsDescription}
 	withCommit := maps.Clone(edit)
 	withCommit[modeArg] = modeCommit
 	step("%s of the change on the platform's agent-manager, which offers no commit mode: gitops_owned in mode apply, unsupported in mode commit — as its writes answer", platform.toolName("validate_agent"))
@@ -213,7 +213,7 @@ func AgentsGitOpsTest(cfg *config.Config, email string, opts AgentsGitOpsTestOpt
 	if err := api.getJSON("validate_agent", withCommit, &dry); err != nil {
 		return fmt.Errorf("the dry run of a change to an agent applied from git is refused in mode commit, so a Commit button can never be enabled for it: %w", err)
 	}
-	if !dry.Valid || dry.Mode != "update" {
+	if !dry.Valid || dry.Mode != validateModeUpdate {
 		return fmt.Errorf("the dry run answered valid=%v mode=%q with %v, wanted a valid update", dry.Valid, dry.Mode, dry.Errors)
 	}
 	if !strings.Contains(dry.Manifests.HelmRelease, "description: "+agentsGitOpsDescription) {
@@ -229,8 +229,8 @@ func AgentsGitOpsTest(cfg *config.Config, email string, opts AgentsGitOpsTestOpt
 	note("valid, mode %s, no violation; the HelmRelease carries %q; no pull request, the release at resourceVersion %s", dry.Mode, agentsGitOpsDescription, live.GetResourceVersion())
 
 	step("%s mode commit: the edit's pull request, opened as %s in %s@%s", api.toolName("update_agent"), login, gitopsRepository, gitopsBranch)
-	write := map[string]any{nameKey: agentsGitOpsAgent, "description": agentsGitOpsDescription, modeArg: modeCommit,
-		repositoryArg: gitopsRepository, "branch": gitopsBranch, "path": gitopsPath}
+	write := map[string]any{nameKey: agentsGitOpsAgent, descriptionKey: agentsGitOpsDescription, modeArg: modeCommit,
+		repositoryArg: gitopsRepository, "branch": gitopsBranch, pathArg: gitopsPath}
 	var done struct {
 		Changed   []string       `json:"changed"`
 		Manifests agentManifests `json:"manifests"`
@@ -274,7 +274,7 @@ func AgentsGitOpsTest(cfg *config.Config, email string, opts AgentsGitOpsTestOpt
 	updated := false
 	for _, f := range done.Commit.Files {
 		switch {
-		case f.Path == file && f.Action == "update":
+		case f.Path == file && f.Action == validateModeUpdate:
 			updated = true
 		case f.Action != "unchanged":
 			return fmt.Errorf("update_agent reports %s %s, wanted an update of %s alone", f.Action, f.Path, file)
@@ -296,7 +296,7 @@ func AgentsGitOpsTest(cfg *config.Config, email string, opts AgentsGitOpsTestOpt
 	if after.GetResourceVersion() != live.GetResourceVersion() {
 		return fmt.Errorf("the commit changed the live HelmRelease %s (resourceVersion %s -> %s): commit mode writes git only", agentsGitOpsAgent, live.GetResourceVersion(), after.GetResourceVersion())
 	}
-	if err := expectRefusal(api, "update_agent", map[string]any{nameKey: agentsGitOpsAgent, "description": agentsGitOpsDescription}, "gitops_owned", "mode commit"); err != nil {
+	if err := expectRefusal(api, "update_agent", map[string]any{nameKey: agentsGitOpsAgent, descriptionKey: agentsGitOpsDescription}, "gitops_owned", "mode commit"); err != nil {
 		return err
 	}
 	note("HelmRelease %s at resourceVersion %s, as before", agentsGitOpsAgent, after.GetResourceVersion())
@@ -360,7 +360,7 @@ func gitopsAgentManagerValues(cfg *config.Config, platformValues map[string]any,
 		"httpRoute":        map[string]any{valuesEnabled: false},
 		"github":           gitopsAppPin(cfg, gitopsAgentManagerIssuer),
 		musterValues: map[string]any{"mcpServer": map[string]any{valuesEnabled: true, nameKey: gitopsAgentManager,
-			"description": "agentlab agents-gitops-test: agent-manager pinned to the fake GitHub, for the commit proof (temporary)"}},
+			descriptionKey: "agentlab agents-gitops-test: agent-manager pinned to the fake GitHub, for the commit proof (temporary)"}},
 	}
 	if egress := gitopsEgress(platformValues, fakeIP); egress != nil {
 		overrides["networkPolicy"] = egress

@@ -81,6 +81,7 @@ const (
 	modeArg       = "mode"
 	modeCommit    = "commit"
 	repositoryArg = "repository"
+	pathArg       = "path"
 	deleteModel   = "delete_model"
 	loadModel     = "load_model"
 	unloadModel   = "unload_model"
@@ -332,7 +333,7 @@ func proveCommit(cfg *config.Config, user *config.User, token, binary, backendNa
 	}
 	login, _, _ := strings.Cut(user.Email, "@")
 	args := map[string]any{modelField: model, backendField: backendName, modeArg: modeCommit,
-		repositoryArg: gitopsRepository, "branch": gitopsBranch, "path": gitopsPath}
+		repositoryArg: gitopsRepository, "branch": gitopsBranch, pathArg: gitopsPath}
 	step("%s mode commit, dryRun: the files it would commit to %s@%s under %s", api.toolName("wire_model"), gitopsRepository, gitopsBranch, gitopsPath)
 	dry, err := wireCommit(api, args, true)
 	if err != nil {
@@ -684,7 +685,7 @@ func gitopsModelManagerValues(cfg *config.Config, platformValues map[string]any,
 		"httpRoute":        map[string]any{valuesEnabled: false},
 		"github":           gitopsAppPin(cfg, gitopsAppIssuer),
 		musterValues: map[string]any{"mcpServer": map[string]any{valuesEnabled: true, nameKey: gitopsModelManager,
-			"description": "agentlab models-test: model-manager pinned to the fake GitHub, for the commit proof (temporary)"}},
+			descriptionKey: "agentlab models-test: model-manager pinned to the fake GitHub, for the commit proof (temporary)"}},
 	}
 	if egress := gitopsEgress(platformValues, fakeIP); egress != nil {
 		overrides["networkPolicy"] = egress
