@@ -271,17 +271,27 @@ func tryItBlock(cfg *config.Config) string {
 // template, applies them, and waits for the rollout. The checksum covers the
 // rendered manifest AND the served cert, so editing the config or regenerating
 // certs rolls the pod, while an unchanged re-apply is a pure no-op (no
-// throwaway ReplicaSet). Shared by Up and `agentlab reload`.
+// throwaway ReplicaSet). The GitHub connector renders once its client Secret
+// is in place (githubsignin.go), its version in the render, so placing or
+// rotating the client secret rolls the pod too. Shared by Up, `agentlab
+// platform` and `agentlab reload`.
 func ApplyDex(cfg *config.Config) error {
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
 	}
-	stamped, _, err := renderManifest(cfg, "dex.yaml.tmpl")
+	signIn, err := gitHubSignInFor(cfg)
+	if err != nil {
+		return err
+	}
+	stamped, _, err := renderManifestWith(cfg, "dex.yaml.tmpl", func(d *tmplData) { d.GitHubSignIn = signIn })
 	if err != nil {
 		return err
 	}
 	if _, err := applyManifests(context.Background(), stamped); err != nil {
 		return err
+	}
+	if signIn != nil {
+		note("GitHub sign-in on: connector %s with client %s; the App's callback URL is %s", signIn.ConnectorID, signIn.ClientID, signIn.RedirectURI)
 	}
 	step("Waiting for Dex to become ready")
 	return waitDeploymentRolledOut(context.Background(), componentDex, componentDex, 120*time.Second)

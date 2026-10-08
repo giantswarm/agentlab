@@ -389,6 +389,11 @@ type Platform struct {
 	// GitHub registers GitHub's hosted MCP server with muster, signed in to
 	// as the person through an OAuth client (internal/lab/githubmcp.go).
 	GitHub GitHub `yaml:"github"`
+	// GitHubSignIn adds a GitHub connector to the lab Dex, so a person signs
+	// in to the lab as their GitHub self next to the local users
+	// (internal/lab/githubsignin.go). Its App is a sign-in App and nothing
+	// else: the github MCP server above has a client of its own.
+	GitHubSignIn GitHubSignIn `yaml:"githubSignIn"`
 	// Model serving on llm-d: the serving slice of a Giant Swarm installation
 	// on the kind node (internal/lab/serving.go) — the chart's KServe llmisvc
 	// controller with its CRDs (components.kserve-llmisvc-crd and
@@ -468,6 +473,91 @@ func (g GitHub) ClientSecret() SecretRef {
 		ref.Namespace = DefaultGitHubSecretNamespace
 	}
 	return ref
+}
+
+// GitHubSignIn configures the `github` connector of the lab Dex: GitHub as a
+// second identity source next to the static users, through a GitHub App (or
+// OAuth App) whose callback is the lab Dex's own callback URL and whose
+// permissions are what a sign-in reads (the person's profile, email and
+// organization membership; no repository permission). The client id is
+// public and lives here; the client secret is a Kubernetes Secret in the
+// dex namespace the operator's secret tooling places, which the Dex pod
+// reads as an environment variable — agentlab reads the Secret's key names
+// only, never a value, and renders no literal.
+type GitHubSignIn struct {
+	// On, `agentlab up`, `platform` and `reload` render the connector into
+	// the Dex config once the client Secret is in place; off, the lab's Dex
+	// knows its local users only.
+	Enabled bool `yaml:"enabled"`
+	// ClientID is the App's client id, as GitHub shows it on the App's
+	// settings page. Required while on.
+	ClientID string `yaml:"clientId,omitempty"`
+	// Secret names the Secret in GitHubSignInSecretNamespace that carries the
+	// client secret under GitHubClientSecretKey. Empty means
+	// DefaultGitHubSignInSecretName.
+	Secret string `yaml:"secret,omitempty"`
+	// Orgs restricts the sign-in to members of these GitHub organizations
+	// and puts the person's teams in them on the token as groups
+	// (`<org>:<team-slug>`). Empty: any GitHub account signs in, with no
+	// groups.
+	Orgs []string `yaml:"orgs,omitempty"`
+}
+
+// The client Secret platform.githubSignIn reads by default. It lives in the
+// Dex namespace: the Dex pod reads it as an environment variable, which a
+// pod can only do from a Secret of its own namespace.
+const (
+	DefaultGitHubSignInSecretName = "github-signin-client" // #nosec G101 -- Secret NAME, not a credential
+	GitHubSignInSecretNamespace   = "dex"
+	// GitHubSignInSecretEnv is the environment variable the Dex pod reads
+	// the client secret as; the rendered connector references it
+	// (`clientSecret: $GITHUB_SIGNIN_CLIENT_SECRET`), and Dex expands it.
+	GitHubSignInSecretEnv = "GITHUB_SIGNIN_CLIENT_SECRET" // #nosec G101 -- env var NAME, not a credential
+)
+
+// ClientSecret is the client Secret the lab looks for and the Dex pod
+// references: platform.githubSignIn.secret in the Dex namespace, the default
+// name filling an empty one.
+func (g GitHubSignIn) ClientSecret() SecretRef {
+	name := g.Secret
+	if name == "" {
+		name = DefaultGitHubSignInSecretName
+	}
+	return SecretRef{Name: name, Namespace: GitHubSignInSecretNamespace}
+}
+
+// GitHubSignInEnabled reports whether the lab Dex gets the GitHub connector.
+// Dex is part of every lab, so nothing else gates it.
+func (c *Config) GitHubSignInEnabled() bool { return c.Platform.GitHubSignIn.Enabled }
+
+// GitHubSignInCallbackURL is the connector's redirect URI, the lab Dex's own
+// callback — the URL registered on the App. A loopback URL works there
+// because GitHub only redirects the browser to it; the App's callback list
+// (ten entries) is how one App serves several labs.
+func (c *Config) GitHubSignInCallbackURL() string { return c.Issuer() + "/callback" }
+
+// gitHubOrgRe is a GitHub organization login: alphanumerics and single
+// hyphens, no leading or trailing hyphen.
+var gitHubOrgRe = regexp.MustCompile(`^[A-Za-z0-9]+(-[A-Za-z0-9]+)*$`)
+
+// Validate checks the sign-in block: a client id while on, a Secret name
+// the apiserver accepts, organization logins GitHub accepts.
+func (g GitHubSignIn) Validate() error {
+	if g.Enabled && strings.TrimSpace(g.ClientID) == "" {
+		return fmt.Errorf("clientId is required while enabled (the App's client id, from its settings page)")
+	}
+	if g.ClientID != strings.TrimSpace(g.ClientID) || strings.ContainsAny(g.ClientID, " \t\n") {
+		return fmt.Errorf("clientId %q: must not contain whitespace", g.ClientID)
+	}
+	if err := ValidateClusterName(g.ClientSecret().Name); err != nil {
+		return fmt.Errorf("secret %q: %w", g.Secret, err)
+	}
+	for _, org := range g.Orgs {
+		if !gitHubOrgRe.MatchString(org) {
+			return fmt.Errorf("orgs: %q is not a GitHub organization login", org)
+		}
+	}
+	return nil
 }
 
 // VMManager configures the chart's vm-manager component in the lab.
@@ -1232,6 +1322,9 @@ func (c *Config) Validate() error {
 	}
 	if err := ValidateClusterName(ghSecret.Namespace); err != nil {
 		return fmt.Errorf("platform.github.secret.namespace %q: %w", ghSecret.Namespace, err)
+	}
+	if err := c.Platform.GitHubSignIn.Validate(); err != nil {
+		return fmt.Errorf("platform.githubSignIn: %w", err)
 	}
 	if c.Platform.TLS.Set() {
 		for _, p := range []string{c.Platform.TLS.CertFile, c.Platform.TLS.KeyFile} {

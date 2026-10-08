@@ -144,6 +144,11 @@ the apiserver (`--oidc-client-id=kubernetes`), by muster
 
 ## If you outgrow static passwords
 
+To sign in as a real account — yourself, for a demo or for using the portal as
+you — turn on the [GitHub sign-in](github-signin.md): a `github` connector on
+this same Dex, rendered from `agentlab.yaml` with the App's client secret
+placed as a Secret, next to the local users.
+
 `staticPasswords` means editing `agentlab.yaml` and reloading. If a demo needs
 users created live, put a lightweight LDAP behind Dex's `ldap` connector
 instead:
