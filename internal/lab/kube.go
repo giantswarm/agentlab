@@ -263,6 +263,25 @@ func (k *kubeClients) gvrFor(resourceArg string) (schema.GroupVersionResource, e
 	return gvr, nil
 }
 
+// firstServed resolves the first of the resource arguments the apiserver
+// serves, in their order, resetting the cached discovery once when none is
+// (see gvrFor).
+func (k *kubeClients) firstServed(resourceArgs ...string) (schema.GroupVersionResource, error) {
+	var err error
+	for attempt := 0; attempt < 2; attempt++ {
+		if attempt > 0 {
+			k.resetMapper()
+		}
+		for _, arg := range resourceArgs {
+			var gvr schema.GroupVersionResource
+			if gvr, err = k.resourcesFor(arg); err == nil {
+				return gvr, nil
+			}
+		}
+	}
+	return schema.GroupVersionResource{}, err
+}
+
 // resourcesFor is one lookup of a resource argument against the mapper as it
 // is cached now.
 func (k *kubeClients) resourcesFor(resourceArg string) (schema.GroupVersionResource, error) {

@@ -9,8 +9,10 @@ import (
 	"gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -93,13 +95,20 @@ func TestExtraModelsTemplate(t *testing.T) {
 	}
 }
 
-// The extra ModelConfigs render at the kagent.dev version the chart line
-// serves: v1alpha3 on the kagent line (meta chart >= 4.0), v1alpha2 on a
-// released 3.x chart (kagent 0.10) — the ModelConfig spec is the same in
-// both, so nothing but the apiVersion moves between the two renders.
+// The extra ModelConfigs render at the apiVersion the lab serves
+// (modelConfigGVR): api.kagent.dev/v1alpha3 on the kagent API v2 line,
+// kagent.dev/v1alpha3 on 4.x, kagent.dev/v1alpha2 on a released 3.x chart —
+// the ModelConfig spec is the same in all, so nothing but the apiVersion
+// moves between the renders.
 func TestExtraModelsAPIVersionFollowsChartLine(t *testing.T) {
-	render := func(cfg *config.Config) map[string]any {
-		out, err := renderTemplate(cfg, extraModelsTemplate, nil)
+	model := config.ExtraModel{Name: "local-vllm", Provider: config.ProviderOpenAI, Model: "mistral-small-3.2", BaseURL: "https://vllm.example.internal/v1"}
+	cfg := config.Default()
+	cfg.Platform.ExtraModels = []config.ExtraModel{model}
+	render := func(apiVersion string) map[string]any {
+		out, err := renderTemplate(cfg, extraModelsTemplate, func(d *tmplData) {
+			d.ExtraModels = cfg.Platform.ExtraModels
+			d.ModelConfigAPIVersion = apiVersion
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -119,24 +128,16 @@ func TestExtraModelsAPIVersionFollowsChartLine(t *testing.T) {
 		}
 		return docs[0]
 	}
-	model := config.ExtraModel{Name: "local-vllm", Provider: config.ProviderOpenAI, Model: "mistral-small-3.2", BaseURL: "https://vllm.example.internal/v1"}
-	current := config.Default()
-	current.Platform.ChartVersion = "4.7.15"
-	current.Platform.ExtraModels = []config.ExtraModel{model}
-	legacy := config.Default()
-	legacy.Platform.ChartVersion = "3.24.0"
-	legacy.Platform.ExtraModels = []config.ExtraModel{model}
-	if !legacy.LegacyChart() || current.LegacyChart() {
-		t.Fatalf("LegacyChart(): 3.24.0=%v 4.7.15=%v", legacy.LegacyChart(), current.LegacyChart())
+	lines := []string{"api.kagent.dev/v1alpha3", "kagent.dev/v1alpha3", "kagent.dev/v1alpha2"}
+	rendered := make([]map[string]any, 0, len(lines))
+	for _, apiVersion := range lines {
+		mc := render(apiVersion)
+		if got := mc["apiVersion"]; got != apiVersion {
+			t.Errorf("apiVersion = %v, want %s", got, apiVersion)
+		}
+		rendered = append(rendered, mc)
 	}
-	currentMC, legacyMC := render(current), render(legacy)
-
-	if got := currentMC["apiVersion"]; got != "kagent.dev/v1alpha3" {
-		t.Errorf("4.7.15: apiVersion = %v, want kagent.dev/v1alpha3", got)
-	}
-	if got := legacyMC["apiVersion"]; got != "kagent.dev/v1alpha2" {
-		t.Errorf("3.24.0: apiVersion = %v, want kagent.dev/v1alpha2", got)
-	}
+	currentMC := rendered[0]
 	if got := currentMC["kind"]; got != "ModelConfig" {
 		t.Errorf("kind = %v, want ModelConfig", got)
 	}
@@ -149,11 +150,14 @@ func TestExtraModelsAPIVersionFollowsChartLine(t *testing.T) {
 		t.Errorf("spec = %v, want provider %s, model %s, openAI.baseUrl %s", spec, model.Provider, model.Model, model.BaseURL)
 	}
 
-	// Nothing but the apiVersion differs between the two lines.
-	delete(currentMC, "apiVersion")
-	delete(legacyMC, "apiVersion")
-	if !reflect.DeepEqual(currentMC, legacyMC) {
-		t.Errorf("the 3.x ModelConfig differs from the 4.x one beyond the apiVersion:\n--- 4.x\n%s\n--- 3.x\n%s", mustYAML(t, currentMC), mustYAML(t, legacyMC))
+	// Nothing but the apiVersion differs between the lines.
+	for _, mc := range rendered {
+		delete(mc, "apiVersion")
+	}
+	for i, mc := range rendered[1:] {
+		if !reflect.DeepEqual(currentMC, mc) {
+			t.Errorf("the %s ModelConfig differs from the %s one beyond the apiVersion:\n--- %s\n%s\n--- %s\n%s", lines[i+1], lines[0], lines[0], mustYAML(t, currentMC), lines[i+1], mustYAML(t, mc))
+		}
 	}
 }
 
@@ -257,5 +261,34 @@ func TestEnsureModelKeySecret(t *testing.T) {
 	}
 	if _, err := f.dyn.Tracker().Get(gvrSecrets, kagentNamespace, "kagent-ollama"); !apierrors.IsNotFound(err) {
 		t.Errorf("a keyless provider must get no Secret: %v", err)
+	}
+}
+
+// TestModelConfigGVR: the ModelConfig resolves to the group the lab's chart
+// line serves — api.kagent.dev on the kagent API v2 line, ahead of
+// kagent.dev — and a lab serving neither is refused by both names.
+func TestModelConfigGVR(t *testing.T) {
+	f := newFakeLab(t)
+	if got, err := modelConfigGVR(); err != nil || got != gvrModelConfigs {
+		t.Errorf("kagent.dev lab: %v, %v; want %v", got, err, gvrModelConfigs)
+	}
+	v2 := schema.GroupVersion{Group: "api.kagent.dev", Version: "v1alpha3"}
+	f.mapper.Add(v2.WithKind("ModelConfig"), meta.RESTScopeNamespace)
+	if got, err := modelConfigGVR(); err != nil || got != v2.WithResource("modelconfigs") {
+		t.Errorf("api.kagent.dev lab: %v, %v; want %v", got, err, v2.WithResource("modelconfigs"))
+	}
+	if got := modelConfigResourceName(v2.WithResource("modelconfigs")); got != "modelconfigs.api.kagent.dev" {
+		t.Errorf("modelConfigResourceName = %q", got)
+	}
+
+	f.kubeClients.mapper = meta.NewDefaultRESTMapper(nil)
+	_, err := modelConfigGVR()
+	for _, want := range modelConfigResources {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("a lab serving no ModelConfig: %v, want an error naming %s", err, want)
+		}
+	}
+	if f.resets == 0 {
+		t.Error("a miss must reset the cached discovery once before refusing")
 	}
 }
