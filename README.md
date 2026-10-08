@@ -161,6 +161,7 @@ machine, is in [Getting started](docs/getting-started.md).
 ```bash
 make build     # go build -o agentlab .
 make test      # go test ./...
+make lint      # golangci-lint as CI's pre-commit runs it: its pinned version, linters and config
 ```
 
 The lab's end-to-end checks are its own `*-test` subcommands, not `go test`.

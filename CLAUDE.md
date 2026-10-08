@@ -202,6 +202,7 @@ with Dex doing the logins.
 ```bash
 make build                 # go build -o agentlab .
 make test                  # go test ./...
+make lint                  # golangci-lint as CI's pre-commit runs it (pinned version, .golangci.yaml, test files included)
 go test ./internal/forms/ -run TestMinimalFormDrive -count=1 -v   # single test
 
 ./agentlab configure       # interactive form; --defaults keeps/writes the canonical lab

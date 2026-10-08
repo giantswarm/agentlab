@@ -1,5 +1,24 @@
 # Repo-specific make targets. The generated Makefile.gen.*.mk are owned by devctl.
 
+# golangci-lint as CI runs it. goconst and gosec run in the generated pre-commit
+# workflow (.github/workflows/zz_generated.pre-commit.yaml): it installs a pinned
+# golangci-lint and runs the golangci-lint hook over the whole module, test files
+# included, so another version or linter set on a laptop passes what CI fails.
+# The version is read from that workflow, so the two cannot drift; the binary is
+# installed under bin/ on first use by golangci-lint's install script of the same
+# tag (checksum-verified). `lint` stays the generated target: this adds the binary
+# as its prerequisite and puts it first on the recipe's PATH.
+GOLANGCI_LINT_VERSION := $(shell awk '/binary: golangci-lint/ { want = 1 } want && /version:/ { gsub(/"/, "", $$2); print $$2; exit }' .github/workflows/zz_generated.pre-commit.yaml)
+GOLANGCI_LINT_DIR := $(CURDIR)/bin/golangci-lint-v$(GOLANGCI_LINT_VERSION)
+
+$(GOLANGCI_LINT_DIR)/golangci-lint:
+	@test -n "$(GOLANGCI_LINT_VERSION)" || { echo "no golangci-lint version in .github/workflows/zz_generated.pre-commit.yaml" >&2; exit 1; }
+	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/v$(GOLANGCI_LINT_VERSION)/install.sh \
+	  | sh -s -- -b $(GOLANGCI_LINT_DIR) v$(GOLANGCI_LINT_VERSION)
+
+lint: $(GOLANGCI_LINT_DIR)/golangci-lint
+lint: export PATH := $(GOLANGCI_LINT_DIR):$(PATH)
+
 # Commit of giantswarm/kagent-upstream the kagent.api.v1alpha1 protos under
 # hack/kagent-proto/ are copied from: the tag of the kagent line the platform
 # release the lab follows resolved when they were last copied. Bump it, run
