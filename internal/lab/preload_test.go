@@ -88,7 +88,7 @@ spec:
         image:
           reference: gsoci.azurecr.io/giantswarm/pgvector:0.8.2-18-bookworm
 ---
-apiVersion: kagent.dev/v1alpha3
+apiVersion: api.kagent.dev/v1alpha3
 kind: Harness
 spec:
   workload:

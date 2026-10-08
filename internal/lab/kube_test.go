@@ -167,6 +167,8 @@ func newFakeLab(t *testing.T, objects ...runtime.Object) *fakeLab {
 		serviceMonitorGVR:    "ServiceMonitorList",
 		gvrModelConfigs:      "ModelConfigList",
 		gvrAgentTemplates:    "AgentTemplateList",
+		gvrAgents:            "AgentList",
+		gvrHarnesses:         "HarnessList",
 		gvrRemoteMCPServers:  "RemoteMCPServerList",
 		gvrWorkerPools:       "WorkerPoolList",
 	}, seeds...)
@@ -191,10 +193,12 @@ func newFakeLab(t *testing.T, objects ...runtime.Object) *fakeLab {
 		musterMCPServerGVK,
 		prometheusGVK,
 		serviceMonitorGVK,
-		// kagent's ModelConfig, AgentTemplate and RemoteMCPServer, which the
-		// proofs read and write (crds_test.go).
+		// kagent's ModelConfig, AgentTemplate, Agent, Harness and
+		// RemoteMCPServer, which the proofs read and write (crds_test.go).
 		gvkModelConfig,
 		gvkAgentTemplate,
+		gvkAgent,
+		gvkHarness,
 		gvkRemoteMCPServer,
 		// Substrate's WorkerPool, which the Substrate release check reads.
 		gvkWorkerPool,
@@ -803,7 +807,7 @@ func TestGvrFor(t *testing.T) {
 		gvrDeployments.Resource + "." + gvrDeployments.Group: gvrDeployments,
 		fluxHelmReleaseResource:                              fluxHelmReleaseGVR,
 		musterMCPServerResource:                              musterMCPServerGVR,
-		modelConfigResource:                                  gvrModelConfigs,
+		modelConfigResources[0]:                              gvrModelConfigs,
 		agentTemplateResource:                                gvrAgentTemplates,
 		remoteMCPServerResource:                              gvrRemoteMCPServers,
 		workerPoolsResource:                                  gvrWorkerPools,

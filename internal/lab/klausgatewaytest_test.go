@@ -20,8 +20,6 @@ import (
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/giantswarm/klaus-gateway/pkg/auth/musterlink"
-
-	apiv1alpha1 "github.com/giantswarm/agentlab/internal/kagent/gen/kagent/api/v1alpha1"
 )
 
 // Fixed names of the fakes.
@@ -47,15 +45,15 @@ const (
 // in-cluster URL, X-Muster-Toolset, discovery off, no Authorization header);
 // the unadmitted template carries no admission label.
 func TestKlausGatewayFixtures(t *testing.T) {
-	manifests := klausGatewayFixtures("my-model", map[string]string{"agent-platform.giantswarm.io/harness": kagentHarness})
+	manifests := klausGatewayFixtures("my-model", testOtherHarness)
 	objs, err := decodeManifests([]byte(manifests))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(objs) != 3 {
-		t.Fatalf("%d objects, wanted the carrier and two templates", len(objs))
+	if len(objs) != 5 {
+		t.Fatalf("%d objects, wanted the carrier, two templates and their Agents", len(objs))
 	}
-	carrier, admitted, unadmitted := objs[0], objs[1], objs[2]
+	carrier, admitted, admittedAgent, unadmitted, unadmittedAgent := objs[0], objs[1], objs[2], objs[3], objs[4]
 	if carrier.GetKind() != remoteMCPServerKind || carrier.GetName() != klausGatewayTestAgent || carrier.GetNamespace() != kagentNamespace {
 		t.Errorf("carrier = %s %s/%s", carrier.GetKind(), carrier.GetNamespace(), carrier.GetName())
 	}
@@ -75,13 +73,21 @@ func TestKlausGatewayFixtures(t *testing.T) {
 	if admitted.GetKind() != kindAgentTemplate || admitted.GetName() != klausGatewayTestAgent {
 		t.Errorf("admitted = %s %s", admitted.GetKind(), admitted.GetName())
 	}
-	labels := admitted.GetLabels()
-	if labels["agent-platform.giantswarm.io/harness"] != kagentHarness || labels[managedByLabel] != managedByAgentlabValue {
-		t.Errorf("admitted labels = %v", labels)
+	if admitted.GetLabels()[managedByLabel] != managedByAgentlabValue {
+		t.Errorf("admitted labels = %v", admitted.GetLabels())
 	}
 	ann := admitted.GetAnnotations()
 	if ann["ui.giantswarm.io/display-name"] != klausGatewayTestDisplay || ann["ui.giantswarm.io/icon-url"] != klausGatewayTestIcon {
 		t.Errorf("admitted annotations = %v", ann)
+	}
+	if admittedAgent.GetKind() != kindAgent || admittedAgent.GetName() != klausGatewayTestAgent || admittedAgent.GetAPIVersion() != kagentAPIVersion {
+		t.Errorf("admitted Agent = %s %s %s", admittedAgent.GetAPIVersion(), admittedAgent.GetKind(), admittedAgent.GetName())
+	}
+	if nestedString(admittedAgent.Object, "spec", "templateRef", "name") != klausGatewayTestAgent || nestedString(admittedAgent.Object, "spec", "harnessRef", "name") != testOtherHarness {
+		t.Errorf("admitted Agent spec = %v", admittedAgent.Object["spec"])
+	}
+	if got := admittedAgent.GetAnnotations(); got["ui.giantswarm.io/display-name"] != klausGatewayTestDisplay || got["ui.giantswarm.io/icon-url"] != klausGatewayTestIcon || admittedAgent.GetLabels()[managedByLabel] != managedByAgentlabValue {
+		t.Errorf("admitted Agent metadata = %v %v", admittedAgent.GetLabels(), got)
 	}
 	if model := nestedString(admitted.Object, "spec", "modelConfig", "name"); model != "my-model" {
 		t.Errorf("admitted modelConfig = %q", model)
@@ -99,51 +105,44 @@ func TestKlausGatewayFixtures(t *testing.T) {
 		t.Errorf("the binding names %v, wanted the carrier %s", server, klausGatewayTestAgent)
 	}
 
-	if unadmitted.GetName() != klausGatewayTestUnadmitted {
-		t.Errorf("unadmitted = %s", unadmitted.GetName())
+	if unadmitted.GetName() != klausGatewayTestUnadmitted || unadmitted.GetLabels()[managedByLabel] != managedByAgentlabValue {
+		t.Errorf("unadmitted = %s %v", unadmitted.GetName(), unadmitted.GetLabels())
 	}
-	if _, ok := unadmitted.GetLabels()["agent-platform.giantswarm.io/harness"]; ok {
-		t.Error("the unadmitted template carries the admission label")
+	if unadmittedAgent.GetKind() != kindAgent || unadmittedAgent.GetName() != klausGatewayTestUnadmitted || nestedString(unadmittedAgent.Object, "spec", "harnessRef", "name") != klausGatewayNoHarness {
+		t.Errorf("the unadmitted Agent = %s %s %v", unadmittedAgent.GetKind(), unadmittedAgent.GetName(), unadmittedAgent.Object["spec"])
 	}
-	if unadmitted.GetLabels()[managedByLabel] != managedByAgentlabValue {
-		t.Error("the unadmitted template is not labelled as agentlab's")
+	if got := unadmittedAgent.GetAnnotations()["ui.giantswarm.io/display-name"]; got != klausGatewayTestUnadmittedDisplay {
+		t.Errorf("the unadmitted Agent's display name = %q", got)
 	}
 }
 
-// proofInstance is the fixture's one AgentInstance as the fake serves it to
-// the person whose bearer is testToken.
-func proofInstance(id, template string) *apiv1alpha1.AgentInstance {
-	return &apiv1alpha1.AgentInstance{Id: id, Creator: testToken,
-		Harness:       &apiv1alpha1.ResourceReference{Namespace: kagentNamespace, Name: kagentHarness},
-		AgentTemplate: &apiv1alpha1.ResourceReference{Namespace: kagentNamespace, Name: template}}
-}
-
-// TestControllerReads: the listing is narrowed to the fixture's template, taskIDs
-// is the set of the instance's tasks, and waitCanceledTask finds the task new
+// TestControllerReads: the listing is narrowed to the fixture's Agent, taskIDs
+// is the set of the session's tasks, and waitCanceledTask finds the task new
 // since the snapshot that reached TASK_STATE_CANCELED — or says what the new
 // tasks are.
 func TestControllerReads(t *testing.T) {
 	ctrl := newFakeKagent()
-	ctrl.instances[testInstance] = proofInstance(testInstance, klausGatewayTestAgent)
-	ctrl.instances["other"] = proofInstance("other", "another-template")
+	ctrl.sessions[testInstance] = fakeSession(testInstance, testToken, klausGatewayTestAgent)
+	ctrl.sessions["other"] = fakeSession("other", testToken, "another-agent")
 	ctrl.setTaskState(testOldTask, a2a.TaskStateCompleted)
 	ctrl.setTaskState("new", a2a.TaskStateCanceled)
 	api := ctrl.serve(t, testToken)
 
-	instances, err := templateInstances(context.Background(), api)
-	if err != nil || len(instances) != 1 || instances[0].GetId() != testInstance {
-		t.Errorf("templateInstances = %v %v (the other template's instance must not be listed)", instanceIDs(instances), err)
+	sessions, err := fixtureSessions(context.Background(), api)
+	if err != nil || len(sessions) != 1 || sessions[0].GetId() != testInstance {
+		t.Errorf("fixtureSessions = %v %v (the other Agent's session must not be listed)", sessionIDs(sessions), err)
 	}
-	ids, err := api.taskIDs(context.Background(), testInstance)
+	session := ctrl.sessions[testInstance]
+	ids, err := api.taskIDs(context.Background(), session)
 	if err != nil || !ids[testOldTask] || !ids["new"] {
 		t.Errorf("taskIDs = %v %v", ids, err)
 	}
-	canceled, err := api.waitCanceledTask(testInstance, map[a2a.TaskID]bool{testOldTask: true}, 3*time.Second)
+	canceled, err := api.waitCanceledTask(session, map[a2a.TaskID]bool{testOldTask: true}, 3*time.Second)
 	if err != nil || canceled != "new" {
 		t.Errorf("waitCanceledTask = %q %v", canceled, err)
 	}
 	ctrl.setTaskState("new", a2a.TaskStateWorking)
-	if _, err := api.waitCanceledTask(testInstance, map[a2a.TaskID]bool{testOldTask: true}, 2*pollInterval); err == nil || !strings.Contains(err.Error(), "new TASK_STATE_WORKING") {
+	if _, err := api.waitCanceledTask(session, map[a2a.TaskID]bool{testOldTask: true}, 2*pollInterval); err == nil || !strings.Contains(err.Error(), "new TASK_STATE_WORKING") {
 		t.Errorf("no cancel: %v", err)
 	}
 }
@@ -239,12 +238,12 @@ func TestGatewayProcessExitsBeforeReady(t *testing.T) {
 }
 
 // TestGatewayRecords: the records of one kind come off the log in order,
-// pod prefix or not, narrowed to a thread by thread_id or (instance_bound)
+// pod prefix or not, narrowed to a thread by thread_id or (session_bound)
 // thread; the version comes from the starting record.
 func TestGatewayRecords(t *testing.T) {
 	logs := strings.Join([]string{
 		`{"time":"t","level":"INFO","msg":"klaus-gateway starting","version":"3.2.0","git_sha":"b1005ed"}`,
-		`{"time":"t","msg":"channels: thread bound to agent instance","record":"instance_bound","thread":"1.1","instance":"inst-a"}`,
+		`{"time":"t","msg":"channels: thread bound to session","record":"session_bound","thread":"1.1","session":"inst-a"}`,
 		`[pod/x] {"time":"t","msg":"slack: dispatching turn","record":"turn_dispatch","thread_id":"1.1","agent":"kagent/agentlab-klaus-gateway-test","subject":"admin@lab.local","sub":"CiQ"}`,
 		`{"time":"t","msg":"slack: turn complete","record":"turn_complete","thread_id":"1.1","outcome":"completed","task_id":"t1"}`,
 		`{"time":"t","msg":"slack: turn complete","record":"turn_complete","thread_id":"2.2","outcome":"input_required","task_id":"t2"}`,
@@ -259,8 +258,8 @@ func TestGatewayRecords(t *testing.T) {
 		t.Errorf("thread 2.2 = %+v", got)
 	}
 	bound := threadRecords(gatewayRecords(logs, recordBound), "1.1")
-	if len(bound) != 1 || bound[0].Instance != "inst-a" {
-		t.Errorf("instance_bound = %+v", bound)
+	if len(bound) != 1 || bound[0].Session != "inst-a" {
+		t.Errorf("session_bound = %+v", bound)
 	}
 	if d := gatewayRecords(logs, recordDispatch); len(d) != 1 || d[0].Subject != testUser || d[0].thread() != "1.1" {
 		t.Errorf("turn_dispatch = %+v", d)
@@ -509,9 +508,9 @@ func (g *scriptedGateway) onMessage(ev map[string]string) {
 	g.mu.Unlock()
 	if !known {
 		g.ctrl.mu.Lock()
-		g.ctrl.instances[instance] = proofInstance(instance, klausGatewayTestAgent)
+		g.ctrl.sessions[instance] = fakeSession(instance, testToken, klausGatewayTestAgent)
 		g.ctrl.mu.Unlock()
-		g.record(map[string]any{recordKey: recordBound, "thread": thread, "instance": instance})
+		g.record(map[string]any{recordKey: recordBound, "thread": thread, fieldSession: instance})
 	}
 	g.record(map[string]any{recordKey: recordDispatch, "thread_id": thread, "agent": kagentNamespace + "/" + klausGatewayTestAgent, "agent_source": "default",
 		"slack_user": user, "subject": testUser, claimSubject: testSubject})
@@ -620,7 +619,7 @@ func TestSlackProof(t *testing.T) {
 	if link, err := p.signInPrompt("US", "hi"); err != nil || !strings.Contains(link, musterlink.LinkPath) {
 		t.Fatalf("signInPrompt = %q %v", link, err)
 	}
-	if err := assertNoInstances(api, klausGatewayTestAgent); err != nil {
+	if err := assertNoSessions(api, klausGatewayTestAgent); err != nil {
 		t.Fatal(err)
 	}
 
@@ -635,11 +634,11 @@ func TestSlackProof(t *testing.T) {
 	if err := assertBranded(turn); err != nil {
 		t.Error(err)
 	}
-	instance, err := p.boundInstance(main)
-	if err != nil || instance != "inst-"+main.ts {
-		t.Fatalf("boundInstance = %q %v", instance, err)
+	session, err := p.boundSession(api, main)
+	if err != nil || session.GetId() != "inst-"+main.ts {
+		t.Fatalf("boundSession = %v %v", session, err)
 	}
-	if err := assertOnlyInstances(api, instance); err != nil {
+	if err := assertOnlySessions(api, session.GetId()); err != nil {
 		t.Error(err)
 	}
 	if _, err := p.dispatch(main, testSubject, testUser); err != nil {
@@ -653,14 +652,14 @@ func TestSlackProof(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	approved, err := p.decideUntilSettled(api, instance, main, turn, true)
+	approved, err := p.decideUntilSettled(api, session, main, turn, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if approved.rounds != 2 || approved.finalState != a2a.TaskStateCompleted || approved.taskID != "task-"+main.ts || !strings.Contains(approved.answer, "12 namespaces") {
 		t.Errorf("approved = %+v", approved)
 	}
-	if err := assertNothingWaiting(api, instance); err != nil {
+	if err := assertNothingWaiting(api, session); err != nil {
 		t.Error(err)
 	}
 
@@ -669,19 +668,22 @@ func TestSlackProof(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deniedInstance, _ := p.boundInstance(denied)
-	declined, err := p.decideUntilSettled(api, deniedInstance, denied, turn, false)
+	deniedSession, err := p.boundSession(api, denied)
+	if err != nil {
+		t.Fatal(err)
+	}
+	declined, err := p.decideUntilSettled(api, deniedSession, denied, turn, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if declined.rounds != 1 || !declined.finalState.Terminal() || declined.outcome != "failed" {
 		t.Errorf("declined = %+v", declined)
 	}
-	if err := assertOnlyInstances(api, instance, deniedInstance); err != nil {
+	if err := assertOnlySessions(api, session.GetId(), deniedSession.GetId()); err != nil {
 		t.Error(err)
 	}
 
-	before, _ := api.taskIDs(context.Background(), instance)
+	before, _ := api.taskIDs(context.Background(), session)
 	stopped, err := p.stop(main, klausGatewayEssayPrompt)
 	if err != nil {
 		t.Fatal(err)
@@ -689,7 +691,7 @@ func TestSlackProof(t *testing.T) {
 	if !strings.Contains(stopped.answer, "Once upon") {
 		t.Errorf("stopped answer = %q", stopped.answer)
 	}
-	if canceled, err := api.waitCanceledTask(instance, before, 3*time.Second); err != nil || canceled != "essay-"+main.ts {
+	if canceled, err := api.waitCanceledTask(session, before, 3*time.Second); err != nil || canceled != "essay-"+main.ts {
 		t.Errorf("waitCanceledTask = %q %v", canceled, err)
 	}
 	turn, err = p.say(main, klausGatewayRecallPrompt)
@@ -699,7 +701,7 @@ func TestSlackProof(t *testing.T) {
 
 	// A turn that does not pause cannot be decided; one that ends before
 	// `stop` is not a stop.
-	if _, err := p.decideUntilSettled(api, instance, main, turn, true); err == nil || !strings.Contains(err.Error(), "did not pause") {
+	if _, err := p.decideUntilSettled(api, session, main, turn, true); err == nil || !strings.Contains(err.Error(), "did not pause") {
 		t.Errorf("deciding a completed turn: %v", err)
 	}
 	if _, err := p.stop(main, klausGatewayWordPrompt); err == nil || !strings.Contains(err.Error(), "not canceled") {

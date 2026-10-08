@@ -85,7 +85,7 @@ func (p *slackProof) restartMidApproval(api *kagentAPI, gw *gatewayProcess, user
 	if turn.record.Outcome != outcomeInputReq {
 		return nil, fmt.Errorf("the tool-using turn did not pause for approval (%s)", turnFailure(turn))
 	}
-	instanceID, err := p.boundInstance(t)
+	session, err := p.boundSession(api, t)
 	if err != nil {
 		return nil, err
 	}
@@ -95,7 +95,7 @@ func (p *slackProof) restartMidApproval(api *kagentAPI, gw *gatewayProcess, user
 	if err := gw.start(); err != nil {
 		return nil, fmt.Errorf("restarting the gateway: %w", err)
 	}
-	out, err := p.decideUntilSettled(api, instanceID, t, turn, true)
+	out, err := p.decideUntilSettled(api, session, t, turn, true)
 	if err != nil {
 		return nil, fmt.Errorf("approving after the restart: %w", err)
 	}

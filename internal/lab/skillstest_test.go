@@ -16,26 +16,24 @@ const fieldReason = "reason"
 // condAccepted is the Harness's admission condition.
 const condAccepted = "Accepted"
 
-// bootTemplate seeds an AgentTemplate with the controller's status for the Go
-// ADK Harness the way a golden boot leaves it: Accepted, ResolvedRefs and
+// bootAgent seeds an Agent on the Go ADK Harness with the controller's
+// status the way a golden boot leaves it: Accepted, ResolvedRefs and
 // Compatible True, Ready as given.
-func bootTemplate(name, readyStatus, reason, message string) *unstructured.Unstructured {
-	template := customObject(gvkAgentTemplate, kagentNamespace, name, map[string]string{harnessLabel: kagentHarness})
-	_ = unstructured.SetNestedSlice(template.Object, []any{map[string]any{
-		fieldHarness:         kagentHarness,
-		fieldDesiredRevision: testRevision,
-		fieldConditions: []any{
-			map[string]any{fieldType: condAccepted, fieldStatus: conditionTrue, fieldReason: condAccepted, fieldMessage: "Harness admission selector matches the AgentTemplate"},
-			map[string]any{fieldType: "ResolvedRefs", fieldStatus: conditionTrue, fieldReason: "Resolved", fieldMessage: "All runtime references resolved"},
-			map[string]any{fieldType: "Compatible", fieldStatus: conditionTrue, fieldReason: "Compatible", fieldMessage: "Resolved configuration is compatible with the Harness"},
-			map[string]any{fieldType: condReady, fieldStatus: readyStatus, fieldReason: reason, fieldMessage: message},
-		},
-	}}, fieldStatus, "harnesses")
-	return template
+func bootAgent(name, readyStatus, reason, message string) *unstructured.Unstructured {
+	agent := agentObjectSeed(name, kagentHarness)
+	_ = unstructured.SetNestedField(agent.Object, int64(1), fieldStatus, "observedGeneration")
+	_ = unstructured.SetNestedField(agent.Object, testRevision, fieldStatus, fieldDesiredRevision)
+	_ = unstructured.SetNestedSlice(agent.Object, []any{
+		map[string]any{fieldType: condAccepted, fieldStatus: conditionTrue, fieldReason: condAccepted, fieldMessage: "Agent accepted"},
+		map[string]any{fieldType: "ResolvedRefs", fieldStatus: conditionTrue, fieldReason: "Resolved", fieldMessage: "All runtime references resolved"},
+		map[string]any{fieldType: "Compatible", fieldStatus: conditionTrue, fieldReason: "Compatible", fieldMessage: "Resolved configuration is compatible with the Harness"},
+		map[string]any{fieldType: condReady, fieldStatus: readyStatus, fieldReason: reason, fieldMessage: message},
+	}, fieldStatus, fieldConditions)
+	return agent
 }
 
-// TestSkillsAgentTemplate: the proof's template is a v1alpha3 AgentTemplate on
-// the Go ADK Harness binding the shared muster server, with the one git skill
+// TestSkillsAgentTemplate: the proof's template is a v1alpha3 AgentTemplate
+// binding the shared muster server, with the one git skill
 // pinned to the fixture's full commit and selected by its directory; the
 // control carries no skills at all.
 func TestSkillsAgentTemplate(t *testing.T) {
@@ -43,14 +41,23 @@ func TestSkillsAgentTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var obj map[string]any
-	if err := yaml.Unmarshal([]byte(skillsAgentTemplate(skillsTestAgent, defaultModelConfig, &fixture, kagentAdmission)), &obj); err != nil {
+	objs, err := decodeManifests([]byte(skillsAgentTemplate(skillsTestAgent, defaultModelConfig, &fixture, kagentAdmission)))
+	if err != nil {
 		t.Fatal(err)
 	}
-	u := &unstructured.Unstructured{Object: obj}
-	if u.GetAPIVersion() != agentTemplateAPIVersion || u.GetKind() != "AgentTemplate" || u.GetNamespace() != kagentNamespace ||
-		u.GetLabels()[harnessLabel] != kagentHarness || u.GetLabels()[managedByLabel] != managedByAgentlabValue {
+	if len(objs) != 2 {
+		t.Fatalf("%d objects, wanted the template and its Agent", len(objs))
+	}
+	u, agent := objs[0], objs[1]
+	obj := u.Object
+	if u.GetAPIVersion() != agentTemplateAPIVersion || u.GetKind() != kindAgentTemplate || u.GetNamespace() != kagentNamespace || u.GetLabels()[managedByLabel] != managedByAgentlabValue {
 		t.Errorf("template head:\n%s", skillsAgentTemplate(skillsTestAgent, defaultModelConfig, &fixture, kagentAdmission))
+	}
+	if agent.GetAPIVersion() != kagentAPIVersion || agent.GetKind() != kindAgent || agent.GetName() != skillsTestAgent || agent.GetNamespace() != kagentNamespace || agent.GetLabels()[managedByLabel] != managedByAgentlabValue {
+		t.Errorf("Agent head: %s %s %s/%s %v", agent.GetAPIVersion(), agent.GetKind(), agent.GetNamespace(), agent.GetName(), agent.GetLabels())
+	}
+	if paired, err := agentFrom(agent); err != nil || paired.templateName() != skillsTestAgent || paired.harnessName() != kagentHarness {
+		t.Errorf("the Agent pairs %v: %v", agent.Object["spec"], err)
 	}
 	template, err := agentTemplateFrom(u)
 	if err != nil {
@@ -75,10 +82,11 @@ func TestSkillsAgentTemplate(t *testing.T) {
 		t.Errorf("the fixture commit is not a full SHA: %q", commit)
 	}
 
-	var control map[string]any
-	if err := yaml.Unmarshal([]byte(skillsAgentTemplate(skillsTestControlAgent, defaultModelConfig, nil, kagentAdmission)), &control); err != nil {
-		t.Fatal(err)
+	controls, err := decodeManifests([]byte(skillsAgentTemplate(skillsTestControlAgent, defaultModelConfig, nil, kagentAdmission)))
+	if err != nil || len(controls) != 2 {
+		t.Fatalf("the control: %d objects, %v", len(controls), err)
 	}
+	control := controls[0].Object
 	if _, found, _ := unstructured.NestedSlice(control, "spec", "skills"); found {
 		t.Error("the control carries skills")
 	}
@@ -87,38 +95,30 @@ func TestSkillsAgentTemplate(t *testing.T) {
 	}
 }
 
-// kagentAdmission is the platform's admission label (the connectivity
-// chart's Harness selects on it), what the tests render unless they test
-// another Harness's own; legacyHarnessLabel is kagent's default, which a
-// Harness of another chart might still select on; the fixture names below
+// kagentAdmission is the shape with the shared muster server, what the tests
+// render unless they test a platform without one; the fixture names below
 // are the test's.
-var kagentAdmission = skillsTemplateShape{admission: map[string]string{harnessLabel: kagentHarness}, musterTools: true}
+var kagentAdmission = skillsTemplateShape{musterTools: true}
 
 const (
-	legacyHarnessLabel = "kagent.dev/harness"
-	exampleRepo        = "https://example.com/x"
-	gitAuthObject      = "skills-git-auth"
+	exampleRepo   = "https://example.com/x"
+	gitAuthObject = "skills-git-auth"
 )
 
-// TestSkillsAgentTemplateAdmissionLabels: the template carries the labels the
-// Harness admits — kagent's default label here — and not the platform's when
-// the Harness does not select on it; agentlab's managed-by label stays.
-func TestSkillsAgentTemplateAdmissionLabels(t *testing.T) {
+// TestSkillsAgentTemplateWithoutMuster: a platform without a shared muster
+// server renders a template without tools; the Agent still pairs it with the
+// Go ADK Harness.
+func TestSkillsAgentTemplateWithoutMuster(t *testing.T) {
 	fixture, _ := SkillsFixture{}.resolve()
-	var obj map[string]any
-	if err := yaml.Unmarshal([]byte(skillsAgentTemplate(skillsTestAgent, defaultModelConfig, &fixture, skillsTemplateShape{admission: map[string]string{legacyHarnessLabel: kagentHarness}})), &obj); err != nil {
-		t.Fatal(err)
+	objs, err := decodeManifests([]byte(skillsAgentTemplate(skillsTestAgent, defaultModelConfig, &fixture, skillsTemplateShape{})))
+	if err != nil || len(objs) != 2 {
+		t.Fatalf("%d objects, %v", len(objs), err)
 	}
-	u := &unstructured.Unstructured{Object: obj}
-	labels := u.GetLabels()
-	if labels[legacyHarnessLabel] != kagentHarness || labels[managedByLabel] != managedByAgentlabValue {
-		t.Errorf("labels = %v", labels)
+	if _, found, _ := unstructured.NestedSlice(objs[0].Object, "spec", "tools"); found {
+		t.Errorf("tools rendered although the platform has no shared muster server: %v", objs[0].Object["spec"])
 	}
-	if _, has := labels[harnessLabel]; has {
-		t.Errorf("the platform's label rendered although the Harness does not select on it: %v", labels)
-	}
-	if _, found, _ := unstructured.NestedSlice(obj, "spec", "tools"); found {
-		t.Errorf("tools rendered although the platform has no shared muster server: %v", obj["spec"])
+	if got := nestedString(objs[1].Object, "spec", "harnessRef", "name"); got != kagentHarness {
+		t.Errorf("the Agent references Harness %q", got)
 	}
 }
 
@@ -206,28 +206,28 @@ func TestSkillsFixtureResolve(t *testing.T) {
 // TestTerminalHarnessFailure: the golden boot is waited through while Ready
 // is False for ActorTemplatePending; Substrate's error (ActorTemplateFailed),
 // a conflict, or an earlier stage False end the wait, quoting the condition.
-func TestTerminalHarnessFailure(t *testing.T) {
-	pending := &harnessStatus{Conditions: []templateCondition{
+func TestTerminalAgentFailure(t *testing.T) {
+	pending := &agentStatus{Conditions: []templateCondition{
 		{Type: condAccepted, Status: conditionTrue, Reason: condAccepted},
 		{Type: condReady, Status: condFalseStatus, Reason: "ActorTemplatePending", Message: "waiting for the ActorTemplate golden snapshot"},
 	}}
-	if text, terminal := terminalHarnessFailure(pending); terminal {
+	if text, terminal := terminalAgentFailure(pending); terminal {
 		t.Errorf("pending is terminal: %s", text)
 	}
-	failed := &harnessStatus{Conditions: []templateCondition{
+	failed := &agentStatus{Conditions: []templateCondition{
 		{Type: condReady, Status: condFalseStatus, Reason: "ActorTemplateFailed", Message: "golden actor exited: git fetch: Broken pipe"},
 	}}
-	if text, terminal := terminalHarnessFailure(failed); !terminal || !strings.Contains(text, "Ready=False ActorTemplateFailed: golden actor exited") {
+	if text, terminal := terminalAgentFailure(failed); !terminal || !strings.Contains(text, "Ready=False ActorTemplateFailed: golden actor exited") {
 		t.Errorf("failed = %q %v", text, terminal)
 	}
-	blocked := &harnessStatus{Conditions: []templateCondition{
+	blocked := &agentStatus{Conditions: []templateCondition{
 		{Type: "ResolvedRefs", Status: condFalseStatus, Reason: "ModelConfigNotFound", Message: "ModelConfig nope not found"},
 		{Type: condReady, Status: condFalseStatus, Reason: "Blocked", Message: "blocked by ResolvedRefs"},
 	}}
-	if text, terminal := terminalHarnessFailure(blocked); !terminal || !strings.HasPrefix(text, "ResolvedRefs=False ModelConfigNotFound") {
+	if text, terminal := terminalAgentFailure(blocked); !terminal || !strings.HasPrefix(text, "ResolvedRefs=False ModelConfigNotFound") {
 		t.Errorf("blocked = %q %v", text, terminal)
 	}
-	if text, terminal := terminalHarnessFailure(&harnessStatus{}); terminal || text != "" {
+	if text, terminal := terminalAgentFailure(&agentStatus{}); terminal || text != "" {
 		t.Errorf("no conditions = %q %v", text, terminal)
 	}
 }
@@ -241,24 +241,24 @@ func TestFootprintOf(t *testing.T) {
 	state := substrateState{
 		pools: []substratePool{{namespace: kagentNamespace, name: testWorkerPool, replicas: 2, image: testAteomImage}},
 		templates: []substrateTemplate{
-			{namespace: kagentNamespace, name: skillsTestAgent + "-kagent-3bd7156d4194", phase: "Pending"},
-			{namespace: kagentNamespace, name: skillsTestAgent + "-control-kagent-0a0a0a0a0a0a", phase: conditionReady, golden: "golden tag ate-golden/x"},
-			{namespace: kagentNamespace, name: "agentlab-toolset-ro-kagent-111111111111", phase: templatePhaseFailed, failure: "golden actor exited"},
+			{namespace: kagentNamespace, name: skillsTestAgent + "-3bd7156d4194", phase: "Pending"},
+			{namespace: kagentNamespace, name: skillsTestAgent + "-control-0a0a0a0a0a0a", phase: conditionReady, golden: "golden tag ate-golden/x"},
+			{namespace: kagentNamespace, name: "agentlab-toolset-ro-111111111111", phase: templatePhaseFailed, failure: "golden actor exited"},
 		},
 		actors: []substrateActor{
-			{id: "01a0aaaa", templateNamespace: kagentNamespace, templateName: skillsTestAgent + "-kagent-3bd7156d4194", state: "RESUMING", workerNamespace: kagentNamespace, workerPod: testWorkerPod, workerIP: testWorkerIP},
-			{id: "01a0bbbb", templateNamespace: kagentNamespace, templateName: "agentlab-toolset-ro-kagent-111111111111", state: "PAUSED"},
+			{id: "01a0aaaa", templateNamespace: kagentNamespace, templateName: skillsTestAgent + "-3bd7156d4194", state: "RESUMING", workerNamespace: kagentNamespace, workerPod: testWorkerPod, workerIP: testWorkerIP},
+			{id: "01a0bbbb", templateNamespace: kagentNamespace, templateName: "agentlab-toolset-ro-111111111111", state: "PAUSED"},
 		},
 	}
-	f := footprintOf(state, skillsTestAgent, kagentHarness)
+	f := footprintOf(state, skillsTestAgent)
 	if f.err != nil || len(f.templates) != 1 || len(f.actors) != 1 || f.empty() {
 		t.Fatalf("footprint = %+v", f)
 	}
 	lines := strings.Join(f.lines(), "\n")
 	for _, want := range []string{
 		"WorkerPool kagent/kagent-default: 2 workers (ateom:v0)",
-		skillsTestAgent + "-kagent-3bd7156d4194: phase Pending, no golden snapshot",
-		"actor 01a0aaaa of " + skillsTestAgent + "-kagent-3bd7156d4194: RESUMING, pinned to worker pod kagent/kagent-default-abc (10.0.0.7)",
+		skillsTestAgent + "-3bd7156d4194: phase Pending, no golden snapshot",
+		"actor 01a0aaaa of " + skillsTestAgent + "-3bd7156d4194: RESUMING, pinned to worker pod kagent/kagent-default-abc (10.0.0.7)",
 	} {
 		if !strings.Contains(lines, want) {
 			t.Errorf("lines lack %q:\n%s", want, lines)
@@ -267,28 +267,28 @@ func TestFootprintOf(t *testing.T) {
 	if strings.Contains(lines, "toolset-ro") || strings.Contains(lines, "-control-") {
 		t.Errorf("another template's footprint leaked:\n%s", lines)
 	}
-	control := footprintOf(state, skillsTestControlAgent, kagentHarness)
+	control := footprintOf(state, skillsTestControlAgent)
 	if len(control.templates) != 1 || len(control.actors) != 0 || !strings.Contains(strings.Join(control.lines(), "\n"), "phase Ready, golden tag ate-golden/x") {
 		t.Errorf("control footprint = %+v %v", control, control.lines())
 	}
-	failedLines := strings.Join(footprintOf(state, "agentlab-toolset-ro", kagentHarness).lines(), "\n")
-	for _, want := range []string{"phase Failed, no golden snapshot, error: golden actor exited", "actor 01a0bbbb of agentlab-toolset-ro-kagent-111111111111: PAUSED, no worker"} {
+	failedLines := strings.Join(footprintOf(state, "agentlab-toolset-ro").lines(), "\n")
+	for _, want := range []string{"phase Failed, no golden snapshot, error: golden actor exited", "actor 01a0bbbb of agentlab-toolset-ro-111111111111: PAUSED, no worker"} {
 		if !strings.Contains(failedLines, want) {
 			t.Errorf("failed lines lack %q:\n%s", want, failedLines)
 		}
 	}
-	if none := footprintOf(state, "nobody", kagentHarness); !none.empty() || !strings.Contains(strings.Join(none.lines(), "\n"), "holds no ActorTemplate") {
+	if none := footprintOf(state, "nobody"); !none.empty() || !strings.Contains(strings.Join(none.lines(), "\n"), "holds no ActorTemplate") {
 		t.Errorf("an absent template: %+v %v", none, none.lines())
 	}
-	broken := footprintOf(substrateState{ateAPIErrors: []string{"dial ate-api: refused"}}, skillsTestAgent, kagentHarness)
+	broken := footprintOf(substrateState{ateAPIErrors: []string{"dial ate-api: refused"}}, skillsTestAgent)
 	if broken.err == nil || broken.empty() || !strings.Contains(broken.lines()[0], "dial ate-api: refused") {
 		t.Errorf("an ate-api error: %+v %v", broken, broken.lines())
 	}
 	long := strings.Repeat("a", 60)
-	if prefix := actorTemplatePrefix(long, kagentHarness); len(prefix) != actorTemplateNameSize+1 || !strings.HasSuffix(prefix, "-") {
+	if prefix := actorTemplatePrefix(long); len(prefix) != actorTemplateNameSize+1 || !strings.HasSuffix(prefix, "-") {
 		t.Errorf("a long name's prefix = %q", prefix)
 	}
-	if prefix := actorTemplatePrefix("My_Agent", kagentHarness); prefix != "my-agent-kagent-" {
+	if prefix := actorTemplatePrefix("My_Agent"); prefix != "my-agent-" {
 		t.Errorf("prefix = %q", prefix)
 	}
 }

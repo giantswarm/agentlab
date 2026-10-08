@@ -24,8 +24,9 @@ its own `*-test` subcommands — see [Testing](cli.md#testing) — run against a
 live lab.
 
 The kagent API v2 client stubs the proofs call (`internal/kagent/gen`,
-`kagent.api.v1alpha1`'s `AgentTemplateService`, `AgentInstanceService`,
-`SystemService`) are generated with `buf` from verbatim copies of the
+`kagent.api.v1alpha1`'s `AgentTemplateService`, `AgentService`,
+`SessionService`, `SystemService`) are generated with `buf` from verbatim
+copies of the
 controller's protos under `hack/kagent-proto/` (with Agent Substrate's
 `ateapi.proto`, which `system.proto` imports), pinned to a commit of the
 kagent line the platform release resolves (`KAGENT_PROTO_COMMIT` in

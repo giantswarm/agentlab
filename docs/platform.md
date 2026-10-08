@@ -64,6 +64,14 @@ The lab installs it in its **lab shape**:
 - The chart is **pinned** to an exact release, `platform.chartVersion` in
   `agentlab.yaml` (the default is the release this agentlab was verified
   with). The lab never floats; bump the pin deliberately, with a lab run.
+  The pin and the cluster drift apart when an `agentlab.yaml` is put back
+  from a copy without the `agentlab platform` that would install it (a
+  holder restoring a shared lab as found): `agentlab status` then names
+  both charts and which side is behind, every proof opens with the chart
+  in place (`Proving agent-platform <version>`) and warns of the drift
+  instead of quoting the pin, and `agentlab configure --adopt-chart`
+  writes the chart in place into the pin — or `agentlab platform` installs
+  the pin over the cluster, the boot naming the downgrade.
   The one exception is deliberate too: the [dev channel](#dev-channel),
   where `platform.chartBranch` follows a branch's newest dev build — and
   still installs an exact version, written into `chartVersion`.
@@ -431,7 +439,7 @@ semverFilter: agent-platform-connectivity 3.22.1-dev…, …)`).
 
 ### Agent Substrate and the platform Postgres — from the chart
 
-kagent API v2 (the 4.x line: `kagent.dev/v1alpha3`, kagent `1.x` from the
+kagent API v2 (the 4.x line: `api.kagent.dev/v1alpha3`, kagent `1.x` from the
 Giant Swarm kagent line's own releases) runs every agent as an actor on
 [Agent Substrate](https://github.com/kagent-dev/substrate) — sandboxed
 (gVisor) worker pods of a `WorkerPool`, an API server, a per-node agent
@@ -451,8 +459,8 @@ anchor, ate-api-server's authentication config; a pool that exists is never
 touched), the kagent chart creates the `WorkerPool kagent-default` and the
 connectivity chart renders the one platform `Harness kagent` (the Go ADK
 image by digest, `KAGENT_PROPAGATE_TOKEN`, the WorkerPool, the snapshot
-location; admission by the label `agent-platform.giantswarm.io/harness:
-kagent`). The lab installs **nothing** of it — one Helm owner, the objects an
+location; an `Agent` runs on it by naming it in `spec.harnessRef`). The lab
+installs **nothing** of it — one Helm owner, the objects an
 installation has (the [agent-platform README](https://github.com/giantswarm/agent-platform#agent-substrate)).
 What the lab brings is what the chart cannot: the kind cluster carries the
 apiserver gates Substrate needs (`ClusterTrustBundle`,
@@ -563,8 +571,8 @@ agent proofs — `agents-test`, `toolsets-test`, `models-test`'s agent turn,
 `backstage-test`'s agents pages, `skills-test`, `a2a-test` — drive kagent API
 v2: every
 agent a HelmRelease of the Generic agent chart (1.x) whose render is an
-`AgentTemplate` admitted by the platform `Harness` and run as a Substrate
-actor, a turn an `AgentInstance` driven over native gRPC through the edge as
+`AgentTemplate` and the `Agent` pairing it with the platform `Harness`, run
+as a Substrate actor, a turn a `Session` driven over native gRPC through the edge as
 the signed-in user (`a2a-test` asserts that path as the surfaces drive it), the
 toolset on the agent's own `RemoteMCPServer` the template binds; see
 [Agents](agents.md).
@@ -580,9 +588,8 @@ materialises the template's skills when it starts (a git skill is
 `git fetch --depth 1 origin <commit>` of a full commit into `/plugins`,
 copied to `/skills`), before it serves readyz; and atenet refuses outbound
 connections from an actor that is not `RUNNING`. The proof creates an
-`AgentTemplate` on the platform's Go ADK Harness (`kagent`) — labelled as
-that Harness's `allowedAgentTemplates` selector admits, read from the
-Harness itself — with one skill
+`AgentTemplate` and the `Agent` pairing it with the platform's Go ADK
+Harness (`kagent`, by `spec.harnessRef`) with one skill
 pinned to a full commit of a public repository — `agent-self-awareness` of
 giantswarm/agent-skills, the repository most of the fleet's skills come
 from — and the shared muster server as its tools, waits for `Ready` on the
@@ -590,7 +597,7 @@ Harness (`--ready-timeout`, 10 min by default) and, on success, drives one
 turn through the edge as the signed-in user that names the skill and
 answers a fact only its `SKILL.md` has (the Harness re-emits the person's
 bearer on tool calls, `KAGENT_PROPAGATE_TOKEN`, which the proof asserts).
-On a failed boot it prints the evidence — the Harness's conditions and
+On a failed boot it prints the evidence — the Agent's conditions and
 warnings; Substrate's ActorTemplate, actor and pinned worker as the
 controller's `GetSubstrateSummary` and `ListSubstrateActors` report them; the controller's, atenet's
 (every container) and the pool's worker pods' log lines about the
@@ -711,8 +718,8 @@ v0.0.28 on knows — the three move together).
 `agentlab klaus-gateway-test` is the lab carrier of
 [klaus-gateway](https://github.com/giantswarm/klaus-gateway) (Swarmgeist,
 the fleet's Slack bridge) on kagent API v2: A2A v1 over gRPC through the
-agentgateway edge, the roster from `ListAgentTemplates`, one `AgentInstance`
-per Slack thread kept in the gateway's routing store, human-in-the-loop as
+agentgateway edge, the roster from `ListAgents`, one `Session` per Slack
+thread kept in the gateway's routing store, human-in-the-loop as
 kagent's HITL extension, a stop as `CancelTask` — every call made as the
 person behind the turn, whose Dex id_token the gateway forwards and validates
 nowhere itself. Slack is the gateway's only channel and no workspace answers
@@ -727,7 +734,7 @@ Events API callbacks to `POST /channels/slack/events` and their button
 clicks Block Kit payloads to `POST /channels/slack/interactions`, signed with
 the run's signing secret (`v0=` HMAC-SHA256 over `v0:<ts>:<body>`). When a
 turn is over the gateway's log says so (`turn_complete`, with its outcome and
-task), next to `instance_bound` and `turn_dispatch`.
+task), next to `session_bound` and `turn_dispatch`.
 
 **The person's identity.** The Slack channel forwards only a linked person's
 token — there is no service-account fallback for it — and a real sign-in
@@ -768,18 +775,19 @@ probe pod fetches it through the Service first. The gateway forwards the
 person's token and talks to no Dex, so it needs no `dex-localhost` bridge.
 
 **Fixtures** (in `kagent`, deleted by the same run, leftovers removed first):
-`AgentTemplate agentlab-klaus-gateway-test` in the Generic chart 1.x shape —
-the Harness's admission label read from the Harness itself, the
+`AgentTemplate agentlab-klaus-gateway-test` in the Generic chart shape — the
 `ui.giantswarm.io/display-name` and `ui.giantswarm.io/icon-url` annotations,
-`default-model-config` (`--model-config`), and its own muster carrier
+`default-model-config` (`--model-config`) — with the `Agent` of the same name
+pairing it with the Harness (`--harness`, the annotations repeated on the
+Agent), and its own muster carrier
 `RemoteMCPServer agentlab-klaus-gateway-test` (muster's in-cluster URL,
 `X-Muster-Toolset: preset:read-only`, discovery off, never an Authorization
 header) bound with **`requireApproval: true`**, so every muster call pauses
 for a decision (the Generic chart renders the same binding from
 `muster.requireApproval` since agent 1.1.0; the proof applies the pair
 directly so it depends on no chart release resolving in the lab); and
-`AgentTemplate agentlab-klaus-gateway-test-unadmitted`, which carries no
-admission label.
+`AgentTemplate agentlab-klaus-gateway-test-unadmitted` with an `Agent` whose
+`harnessRef` names a Harness that does not exist, so no Harness runs it.
 
 **Assertions**:
 
@@ -792,14 +800,14 @@ admission label.
    listing and the submit) is answered, to the submitter alone, with
    `… cannot start a conversation right now: no Harness admits this
    AgentTemplate. Nothing was started.` and the controller lists no
-   `AgentInstance` of it; a person with no link is shown a Sign in button
+   `Session` of it; a person with no link is shown a Sign in button
    (`obo_sign_in`, ephemeral) to the gateway's `/auth/slack/link` and
    reaches no controller.
 2. **One turn**: the thread's first mention streams the answer
-   (`chat.startStream` … `stopStream`) under the template's display name and
-   icon; the gateway's `instance_bound` record names the `AgentInstance`, and
-   the controller (`ListAgentInstances` narrowed to the template, as the
-   user) lists exactly that one; `turn_dispatch` names the fixture, the
+   (`chat.startStream` … `stopStream`) under the Agent's display name and
+   icon; the gateway's `session_bound` record names the `Session`, and the
+   controller (`ListSessions` narrowed to the Agent, as the user) lists
+   exactly that one; `turn_dispatch` names the fixture, the
    person's e-mail and the link's subject. A cold worker's first resume may
    hit Substrate's ResumeActor deadline once; a thread's first turn is
    retried once, visibly.
@@ -809,10 +817,10 @@ admission label.
    card's buttons name, each Approve click (`hitl_approve`) rewrites the card
    to `Approved by <@…>` and resumes the same task (`filter_tools`, then
    `call_tool`), the task ends `TASK_STATE_COMPLETED` and `ListTasks` shows
-   nothing of the instance left at input-required. **Attribution**: muster's
+   nothing of the session left at input-required. **Attribution**: muster's
    log since the turn began carries the `forwarded_id_token_accepted` audit
    record with the user's email and `tools/call request` lines under the
-   token's subject. **Deny**: in a second thread (a fresh instance: the first
+   token's subject. **Deny**: in a second thread (a fresh session: the first
    one's conversation already holds the count) each Deny click
    (`hitl_deny`) rewrites the card to `Denied by <@…>`; the task ends in a
    terminal state and no `tools/call` by the person reaches muster.
@@ -821,8 +829,8 @@ admission label.
    `TASK_STATE_CANCELED` at the controller, and the thread takes a following
    turn.
 5. **Restart**: the gateway is stopped and started again on the same stores;
-   the next mention recalls the first turn's word, no new `instance_bound`
-   record is written, and the controller lists the thread's `AgentInstance`
+   the next mention recalls the first turn's word, no new `session_bound`
+   record is written, and the controller lists the thread's `Session`
    and the Deny thread's, nothing else. No `token_refresh` record in the run.
    **5b. Restart mid-turn**: in the same thread a long answer (every number
    to five hundred in words) starts streaming; the gateway is stopped (it
@@ -1086,7 +1094,7 @@ components, as the admin, and leaves nothing behind (its agents are named
    plus `core_*`), and `infrastructure` holds the tools of every family the
    lab's cluster is a member of (`x_kubernetes_*`, and `x_prometheus_*` with
    observability).
-4. **The runtime path** (skip with `--skip-chat`): an `AgentInstance` and
+4. **The runtime path** (skip with `--skip-chat`): a `Session` and
    one A2A turn through the edge, as the user, the read-only agent lists nothing
    outside `preset:read-only` — read-only core tools may appear, no writer
    does (so kagent sends the header and the user's token) — and the

@@ -235,6 +235,21 @@ func loadConfig() (*config.Config, error) {
 	return loadLab(false)
 }
 
+// loadProofLab is loadConfig for the proofs: before a proof's first step,
+// the chart it runs against is named from the cluster, with the drift from
+// agentlab.yaml's pin when there is one (lab.NoteChartUnderTest) — a verdict
+// quotes the release under test, never a pin a restore left behind.
+func loadProofLab() (*config.Config, error) {
+	cfg, err := loadConfig()
+	if err != nil {
+		return nil, err
+	}
+	if _, err := lab.NoteChartUnderTest(cfg); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
 // loadLab is loadConfig for either kind of command: create is enterLab's.
 func loadLab(create bool) (*config.Config, error) {
 	if err := enterLab(create); err != nil {
@@ -647,7 +662,8 @@ func podsCmd() *cobra.Command {
 // turnCmd is `agentlab turn`: one conversation with an agent as a lab user
 // through the edge, or the roster that user sees.
 func turnCmd() *cobra.Command {
-	var user, template, harness, instance, decide, reason, events, shareWith string
+	var user, template, harness, session, decide, reason, events, shareWith string
+	var shareTTL time.Duration
 	var list, keep, suspend bool
 	cmd := &cobra.Command{
 		Use:   "turn (--list | --template <name> <prompt>)",
@@ -671,26 +687,32 @@ func turnCmd() *cobra.Command {
 			if len(args) == 1 {
 				prompt = args[0]
 			}
-			if suspend && instance == "" {
-				return fmt.Errorf("--suspend needs --instance")
+			if suspend && session == "" {
+				return fmt.Errorf("--suspend needs --session")
 			}
-			if shareWith != "" && instance == "" {
-				return fmt.Errorf("--share-with needs --instance")
+			if shareWith != "" && session == "" {
+				return fmt.Errorf("--share-with needs --session")
+			}
+			if shareTTL != 0 && shareWith == "" {
+				return fmt.Errorf("--share-ttl needs --share-with")
 			}
 			if decide != "" && decide != "approve" && decide != "reject" {
 				return fmt.Errorf("--decide takes approve or reject, not %q", decide)
 			}
-			return lab.Turn(cfg, user, template, harness, prompt, instance, decide, reason, events, shareWith, keep, suspend)
+			return lab.Turn(cfg, user, template, harness, prompt, session, decide, reason, events, shareWith, shareTTL, keep, suspend)
 		},
 	}
 	cmd.Flags().StringVar(&user, "user", "", "the lab user to act as (default: the first admin in agentlab.yaml)")
-	cmd.Flags().StringVar(&template, "template", "", "the AgentTemplate in the kagent namespace to converse with")
-	cmd.Flags().StringVar(&harness, "harness", "", "the Harness to create the conversation on (default: the admitting Harness that reports the template Ready, as the portal picks it)")
-	cmd.Flags().StringVar(&instance, "instance", "", "continue this AgentInstance instead of creating one (from a previous --keep)")
-	cmd.Flags().BoolVar(&keep, "keep", false, "leave the AgentInstance in place after the turn, for a later --instance turn")
-	cmd.Flags().BoolVar(&suspend, "suspend", false, "with --instance: suspend the instance to the snapshot store before the turn, so the turn restores it")
+	cmd.Flags().StringVar(&template, "template", "", "the AgentTemplate in the kagent namespace to converse with (the Session is created of the Agent that pairs it with a Harness)")
+	cmd.Flags().StringVar(&harness, "harness", "", "the Harness the Agent must reference: the conversation runs on the Agent pairing the template with it (default: the Agent of the template that reports Ready, as the portal picks it)")
+	cmd.Flags().StringVar(&session, "session", "", "continue this Session instead of creating one (from a previous --keep)")
+	cmd.Flags().StringVar(&session, "instance", "", "the former name of --session")
+	_ = cmd.Flags().MarkDeprecated("instance", "use --session")
+	cmd.Flags().BoolVar(&keep, "keep", false, "leave the Session in place after the turn, for a later --session turn")
+	cmd.Flags().BoolVar(&suspend, "suspend", false, "with --session: suspend the session to the snapshot store before the turn, so the turn restores it")
 	cmd.Flags().StringVar(&decide, "decide", "", "answer every tool approval the turn pauses for: approve or reject (default: print the paused state and stop)")
-	cmd.Flags().StringVar(&shareWith, "share-with", "", "with --instance: the --user shares the instance read-write with this lab user, the turn runs as that user with the share token, and the share is revoked afterwards")
+	cmd.Flags().StringVar(&shareWith, "share-with", "", "with --session: the --user shares the session read-write with this lab user, the turn runs as that user with the share token, and the share is revoked afterwards")
+	cmd.Flags().DurationVar(&shareTTL, "share-ttl", 0, "with --share-with: how long the share's token grants access (default: until it is revoked)")
 	cmd.Flags().StringVar(&events, "events", "", "write every streamed A2A event of the turn to this file, one JSON object per line")
 	cmd.Flags().StringVar(&reason, "reason", "", "with --decide reject: the reason sent with the rejection")
 	cmd.Flags().BoolVar(&list, "list", false, "print the roster this user sees instead of a turn")
@@ -722,9 +744,9 @@ func configureCmd() *cobra.Command {
 	var serving, github, githubSignIn bool
 	var githubSignInClientID string
 	var githubSignInOrgs, modelManagerBackends []string
-	var vmManagerImageDir string
+	var vmManagerImageDir, aiKeySource string
 	var chartVersion, chartPath, chartBranch string
-	var upgradeSeed bool
+	var upgradeSeed, adoptChart bool
 	cmd := &cobra.Command{
 		Use:   "configure",
 		Short: "Discover this machine, then ask for the lab configuration (or keep it with --defaults) and save agentlab.yaml",
@@ -785,6 +807,18 @@ func configureCmd() *cobra.Command {
 					}
 				}
 			}
+			// The restore step for a config put back apart from its
+			// cluster: the chart in place becomes the pin (chartdrift.go).
+			if adoptChart {
+				if cmd.Flags().Changed("chart-version") || cmd.Flags().Changed("chart-path") || cmd.Flags().Changed("chart-branch") {
+					return fmt.Errorf("--adopt-chart takes the chart from the cluster; --chart-version, --chart-path and --chart-branch choose one by hand — one or the other")
+				}
+				installed, err := lab.AdoptInstalledChart(cfg)
+				if err != nil {
+					return err
+				}
+				fmt.Printf("  chartVersion %s adopted from the cluster: %s, Helm revision %d\n", cfg.Platform.ChartVersion, installed, installed.Revision)
+			}
 			cfg.Normalize()
 			var pinEnabled *bool
 			if cmd.Flags().Changed("model-manager") {
@@ -822,6 +856,9 @@ func configureCmd() *cobra.Command {
 			}
 			if cmd.Flags().Changed("serving") {
 				cfg.Platform.Serving.Enabled = serving
+			}
+			if cmd.Flags().Changed("ai-key-source") {
+				cfg.AIKey.Source = aiKeySource
 			}
 			// Every run discovers the machine — an existing agentlab.yaml
 			// follows the host too: a server that appeared is added, one that
@@ -873,6 +910,7 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().StringVar(&chartVersion, "chart-version", "", "the agent-platform chart release to install (an exact version; default "+config.DefaultChartVersion+")")
 	cmd.Flags().StringVar(&chartPath, "chart-path", "", "install the agent-platform chart from this local directory (an agent-platform checkout's helm/agent-platform) instead of the pinned release; \"\" clears it")
 	cmd.Flags().BoolVar(&upgradeSeed, "upgrade-seed", false, "seed an upgrade proof: install a released agent-platform chart below agentlab's floor in the shape of its line, to upgrade it in place later with --chart-version and `agentlab platform`; --upgrade-seed=false clears it")
+	cmd.Flags().BoolVar(&adoptChart, "adopt-chart", false, "write the agent-platform chart the running lab cluster carries into chartVersion, so agentlab.yaml says what the cluster runs — the restore step for a config put back from a copy apart from its cluster (`agentlab status` names the drift); a release puts the lab on the stable channel at that release, a dev build of the followed branch pins it; refused for a chart directory's build, whose version is a placeholder; not with --chart-version, --chart-path or --chart-branch")
 	cmd.Flags().StringVar(&chartBranch, "chart-branch", "", "the dev channel: follow this agent-platform branch's newest dev build (resolved now and on every up/platform, written to chartVersion); \"\" returns to the stable channel and, unless --chart-version pins one, the default release takes the branch's build's place in chartVersion")
 	cmd.Flags().StringSliceVar(&modelManagerBackends, "model-manager-backends", nil, fmt.Sprintf("pin the host model servers, in order (%s; the first is model-manager's default backend) instead of the ones the discovery finds", strings.Join(config.ModelManagerBackends, ", ")))
 	cmd.Flags().BoolVar(&vmManager, "vm-manager", false, "run the platform's VM provisioner (vm-manager) as a pod of the node; --vm-manager=false turns it off (needs /dev/kvm and /dev/vhost-vsock on this machine)")
@@ -883,6 +921,7 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&githubSignIn, "github-signin", false, "turn the GitHub sign-in on (needs --github-signin-client-id once) or, with =false, off; the client Secret stays")
 	cmd.Flags().StringSliceVar(&githubSignInOrgs, "github-signin-orgs", nil, "GitHub sign-in: admit members of these GitHub organizations only, their teams as groups (`<org>:<team-slug>`); empty admits any GitHub account")
 	cmd.Flags().BoolVar(&serving, "serving", false, "serve models on llm-d in the lab: the KServe llmisvc controller and its CRDs, the well-known runtime configs, the connectivity chart's serving slice with the models Gateway, model-manager's kserve backend and one CPU preset of the lab's (needs agents; installs cert-manager); --serving=false turns it off")
+	cmd.Flags().StringVar(&aiKeySource, "ai-key-source", "", "where the Anthropic key of the agents' default ModelConfig lives, a reference `beekeeper secret copy` resolves (op://<vault>/<item>/<field>, or <file>#<path> of a SOPS file), never a value: every up and platform place it into the Secret kagent/kagent-anthropic through beekeeper, so a recreated lab carries it without a manual step; \"\" clears it (the key then comes from $ANTHROPIC_API_KEY, else a placeholder)")
 	cmd.Flags().BoolVar(&accessible, "accessible", false, "prompt-per-question form mode (for screen readers and plain terminals)")
 	return cmd
 }
@@ -909,7 +948,14 @@ func printSaved(cfg *config.Config, disc *lab.Discovery) {
 		fmt.Printf("  dev image  %s -> %s\n", name, cfg.Platform.DevImages[name])
 	}
 	fmt.Printf("  backstage  %v\n", cfg.Backstage.Enabled)
-	fmt.Printf("  ai model   %s (key from $%s at deploy time)\n", cfg.AIModel, lab.AnthropicKeyEnv)
+	switch {
+	case cfg.AIKey.Source != "":
+		fmt.Printf("  ai model   %s (key placed from %s through beekeeper at deploy time)\n", cfg.AIModel, cfg.AIKey.Source)
+	case disc.AnthropicKey:
+		fmt.Printf("  ai model   %s (key from $%s at deploy time)\n", cfg.AIModel, lab.AnthropicKeyEnv)
+	default:
+		fmt.Printf("  ai model   %s (no key source and $%s not set: a placeholder key at deploy time, agent turns fail until one is placed)\n", cfg.AIModel, lab.AnthropicKeyEnv)
+	}
 	for _, m := range cfg.Platform.ExtraModels {
 		fmt.Printf("  extra model %s (%s %s)\n", m.Name, m.Provider, m.Model)
 	}
@@ -1081,7 +1127,7 @@ func platformTestCmd() *cobra.Command {
 		Short: "Headless Dex -> muster -> Kubernetes MCP proof",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfig()
+			cfg, err := loadProofLab()
 			if err != nil {
 				return err
 			}
@@ -1101,7 +1147,7 @@ func modelsTestCmd() *cobra.Command {
 		Short: "Headless managed-models proof: 401 without a token, then pull -> ModelConfig -> dry runs, gitops_owned, a commit as the person on a fake GitHub -> agent turn -> MCP via muster -> unload -> delete (a refused delete + unwire where the server has none)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfig()
+			cfg, err := loadProofLab()
 			if err != nil {
 				return err
 			}
@@ -1125,7 +1171,7 @@ func servingTestCmd() *cobra.Command {
 		Short: "Headless llm-d serving proof: the llmisvc controller, the well-known template and the models Gateway up -> 401 at muster without a token -> model-manager's tools through muster -> the lab preset fits the node (CPU, allocatable budget) -> load -> LLMInferenceService Ready on the CPU runtime -> ModelConfig wired at the model's route -> a completion through the models Gateway (401 without a token, 200 with) -> agent turn -> unload",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfig()
+			cfg, err := loadProofLab()
 			if err != nil {
 				return err
 			}
@@ -1149,7 +1195,7 @@ func vmManagerTestCmd() *cobra.Command {
 		Short: "Headless vm-manager proof (the VM provisioner as a pod of the node): 401 anonymous -> the person's token accepted -> x_vm-manager_* through muster (annotations, get_host, images, networks) -> create_vm -> ready -> attestation -> delete_vm",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfig()
+			cfg, err := loadProofLab()
 			if err != nil {
 				return err
 			}
@@ -1171,7 +1217,7 @@ func agentsTestCmd() *cobra.Command {
 		Short: "Headless agent-manager proof through muster: get_info (caller) -> create -> ready -> update -> delete as the admin, a viewer's create Forbidden by the apiserver, the ServiceAccount without RBAC",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfig()
+			cfg, err := loadProofLab()
 			if err != nil {
 				return err
 			}
@@ -1188,10 +1234,10 @@ func a2aTestCmd() *cobra.Command {
 	var readyTimeout time.Duration
 	cmd := &cobra.Command{
 		Use:   "a2a-test [email]",
-		Short: "Headless A2A proof: native gRPC through the edge as the surfaces drive it — the GRPCRoute and its JWT policy, no token refused, a forged x-user-id replaced, ListAgentTemplates with annotations, CreateAgentInstance idempotent, a streamed turn, HITL pause → approve / reject, CancelTask server-side",
+		Short: "Headless A2A proof: native gRPC through the edge as the surfaces drive it — the GRPCRoute and its JWT policy, no token refused, a forged x-user-id replaced, ListAgents with annotations, CreateSession idempotent, a streamed turn, HITL pause → approve / reject, CancelTask server-side",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfig()
+			cfg, err := loadProofLab()
 			if err != nil {
 				return err
 			}
@@ -1213,7 +1259,7 @@ func toolsetsTestCmd() *cobra.Command {
 		Short: "Headless toolset proof: agent-manager requires a toolset; the Agent carries the X-Muster-Toolset header; muster resolves and refuses per request; agents through kagent see their toolset; the OAuth-fixture sign-in scopes a server's tools to the person and client until the sign-out (G6); the portal's Tools step endpoints and apply path",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfig()
+			cfg, err := loadProofLab()
 			if err != nil {
 				return err
 			}
@@ -1237,7 +1283,7 @@ func skillsTestCmd() *cobra.Command {
 		Short: "Headless skills proof (kagent API v2): an AgentTemplate with a git skill pinned to a full commit boots on the Go ADK Harness — the golden boot fetches the skill under Substrate's egress gate — and one turn as the user answers from the skill; a failed boot prints the evidence for the line's upstream issue",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfig()
+			cfg, err := loadProofLab()
 			if err != nil {
 				return err
 			}
@@ -1263,10 +1309,10 @@ func klausGatewayTestCmd() *cobra.Command {
 	var opts lab.KlausGatewayTestOptions
 	cmd := &cobra.Command{
 		Use:   "klaus-gateway-test [email]",
-		Short: "Headless Swarmgeist proof (kagent API v2) through the Slack adapter: klaus-gateway runs on the host against the lab's edge (A2A v1 over gRPC, TLS with the lab CA, JWT at the edge) with a fake Slack Web API, signed Events API messages and Block Kit clicks, the user linked by a record in its OBO link store that carries the user's Dex id_token — `@bot agents` lists the template (a not-admitted one hidden there and in the picker its Select button opens, and refused), an unlinked person is asked to sign in, one branded turn attributed to the person at muster, Approve and Deny on the approval card, `stop` cancelled server-side, a restart on the stores that keeps the thread → AgentInstance mapping, a restart mid-turn with the edge out of reach for 45 s whose answer is still posted, a restart mid-sign-in that replays the parked message and one mid-approval whose Approve resumes the paused task; with platform.klausGateway on, the meta chart's in-cluster component too — the Role scoped to the OBO link Secret, two links seeded through the store package, the pod deleted and its replacement Ready with the same links, one Slack turn through the pod",
+		Short: "Headless Swarmgeist proof (kagent API v2) through the Slack adapter: klaus-gateway runs on the host against the lab's edge (A2A v1 over gRPC, TLS with the lab CA, JWT at the edge) with a fake Slack Web API, signed Events API messages and Block Kit clicks, the user linked by a record in its OBO link store that carries the user's Dex id_token — `@bot agents` lists the Agent (one on a Harness that does not exist hidden there and in the picker its Select button opens, and refused), an unlinked person is asked to sign in, one branded turn attributed to the person at muster, Approve and Deny on the approval card, `stop` cancelled server-side, a restart on the stores that keeps the thread → Session mapping, a restart mid-turn with the edge out of reach for 45 s whose answer is still posted, a restart mid-sign-in that replays the parked message and one mid-approval whose Approve resumes the paused task; with platform.klausGateway on, the meta chart's in-cluster component too — the Role scoped to the OBO link Secret, two links seeded through the store package, the pod deleted and its replacement Ready with the same links, one Slack turn through the pod",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfig()
+			cfg, err := loadProofLab()
 			if err != nil {
 				return err
 			}
@@ -1295,7 +1341,7 @@ func decisionsTestCmd() *cobra.Command {
 		Short: "Headless proof of klaus-gateway's decisions (POST /decisions): the gateway on the host with its reviews endpoint, a ServiceAccount token the lab's API server vouches for, a fake Slack Web API; a team decision answered by a Choose click, a person's (found by email, a direct message) in the modal with an option and own words, a team decision by a reply in its thread, each answer a muster tool call as the linked user; a refused answer as a status line, a decision closed as defaulted refusing a late click; a conversation (POST /conversations) whose thread reply calls a muster tool as the person and whose service answer lands in the thread, a refused reply noted as not delivered",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfig()
+			cfg, err := loadProofLab()
 			if err != nil {
 				return err
 			}
@@ -1362,7 +1408,7 @@ func backstageTestCmd() *cobra.Command {
 		Use:   "backstage-test [email...]",
 		Short: "Headless Backstage sign-in + muster proof (default: every user)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfig()
+			cfg, err := loadProofLab()
 			if err != nil {
 				return err
 			}

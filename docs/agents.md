@@ -3,16 +3,16 @@
 The platform's agent runtime is an **optional component**, on by default
 (`platform.agents` in `agentlab.yaml`; headlessly:
 `agentlab configure --defaults --agents=false`). When enabled, the chart's
-**kagent** component installs kagent API v2 (`kagent.dev/v1alpha3`) with the
-platform's Substrate: every agent is an `AgentTemplate` admitted by the
-platform's Go ADK **Harness** `kagent` (the connectivity chart renders it,
-digest-pinned runtime image, `KAGENT_PROPAGATE_TOKEN` on), compiled by the
-controller into a golden snapshot and run as a Substrate actor; a
-conversation is an `AgentInstance`, its turns A2A messages through the edge
-as the signed-in person (`docs/platform.md` "Dev channel" and "Substrate").
-There is no per-agent Deployment or pod, and no `agents.kagent.dev`: the 0.x
-Agent CR, its runtime-image heal and its CRD patch are gone with the line
-that had them.
+**kagent** component installs kagent API v2 (`api.kagent.dev/v1alpha3`) with
+the platform's Substrate: every agent is an `AgentTemplate` paired by an
+`Agent` of the same name with the platform's Go ADK **Harness** `kagent`
+(`spec.templateRef`, `spec.harnessRef`; the connectivity chart renders the
+Harness, digest-pinned runtime image, `KAGENT_PROPAGATE_TOKEN` on), compiled
+by the controller into a golden snapshot and run as a Substrate actor; a
+conversation is a `Session` of the Agent, its turns A2A messages through the
+edge as the signed-in person (`docs/platform.md` "Dev channel" and
+"Substrate"). There is no per-agent Deployment or pod; the `Agent` of this
+line is a pairing, not the 0.x runtime CR of the same kind name.
 
 ## One agent = one HelmRelease of the agent chart (1.x)
 
@@ -25,10 +25,11 @@ connectivity chart's `kagent.fluxServiceAccountName`). One release renders:
 
 - the `AgentTemplate` named after the release — `spec.description`,
   `spec.systemPrompt`, `spec.modelConfig.name`, `spec.skills[]`, the
-  annotations `ui.giantswarm.io/display-name` and `ui.giantswarm.io/icon-url`,
-  and the admission label `agent-platform.giantswarm.io/harness: <agent.harness>`
-  (default `kagent`) the Harness's `allowedAgentTemplates` selector matches;
-  a template no Harness admits is created and never becomes Ready;
+  annotations `ui.giantswarm.io/display-name` and `ui.giantswarm.io/icon-url`;
+- the `Agent` named after the release, pairing that template
+  (`spec.templateRef`) with the Harness `agent.harness` names
+  (`spec.harnessRef`, default `kagent`); an Agent whose Harness does not
+  exist is created and never becomes Ready (`ResolvedRefs=False`);
 - unless the toolset is exactly `["preset:none"]`, one `RemoteMCPServer`
   named after the agent that points at muster (`muster.url`) and carries the
   toolset as the static `X-Muster-Toolset` header (`spec.headersFrom`, the
@@ -50,9 +51,8 @@ Two writers put the same two Flux objects there, and the proofs use both:
   against the chart's `values.schema.json`, writes the HelmRelease (and the
   OCIRepository when the namespace has none) with the field manager
   `agent-manager` as the caller (`requestedBy`), and reads readiness back from
-  `status.harnesses[]` (`get_agent_status`: `ready | progressing | failed` —
-  the last with the condition's message, or the Harnesses of the namespace
-  and what they admit when none admits the template).
+  the Agent's status (`get_agent_status`: `ready | progressing | failed` —
+  the last with the condition's message).
 - **a HelmRelease applied directly** — the operator's kubectl path, the same
   objects by hand.
 
@@ -60,38 +60,59 @@ In the lab both are one helper (`internal/lab/agent.go`): `readyAgent`
 writes an `agentSpec` through an `agentWriter` (`agentManagerWriter` on a
 muster session, `portalAgentManagerWriter` through the portal's muster
 backend, `helmReleaseWriter` directly) and waits with `waitAgentReady` until
-the platform Harness reports Ready on the desired revision — or fails fast
-with the reason when the release's render is refused, a Harness condition is
-False for good, or no Harness admits the template. `removeAgent` takes the
-release and whatever render is left. Every agent proof — `agents-test`,
-`toolsets-test`, `models-test`'s turn, `backstage-test`'s own agent — creates
-its agents this way; `skills-test` alone writes a raw `AgentTemplate`, on
-purpose: it is the golden-boot diagnostic below the chart (a private
-fixture's `credentialRef`, the control boot without the skill).
+the Agent, on the platform Harness, reports Ready on the desired revision —
+or fails fast with the reason when the release's render is refused, an Agent
+condition is False for good, or the Agent references another Harness.
+`removeAgent` takes the release and whatever render is left. Every agent
+proof — `agents-test`, `toolsets-test`, `models-test`'s turn,
+`backstage-test`'s own agent — creates its agents this way; `skills-test`
+alone writes a raw `AgentTemplate` and its `Agent`, on purpose: it is the
+golden-boot diagnostic below the chart (a private fixture's `credentialRef`,
+the control boot without the skill).
 
 ## The model
 
 Agents run against a **default `ModelConfig`** that the connectivity chart
 renders from the lab's `aiModel` setting (`agentlab.yaml`, default
 `claude-sonnet-4-6` — the BOM's own default), referencing the Secret
-`kagent/kagent-anthropic`. The API key is a **real credential**, so unlike
-the lab's throwaway passwords it never enters `agentlab.yaml` or the rendered
-`state/` files: `agentlab platform` creates the Secret from
-`$ANTHROPIC_API_KEY` on the host (created once, left alone; delete it and
-re-run to rotate). Without the env var the install still succeeds — the
-ModelConfig then points at a Secret that does not exist yet, which is
-harmless until an agent is created: its template's `ResolvedRefs` stays
-False on the Harness until the Secret lands. To supply the key later, either
-export it and re-run `agentlab platform` (idempotent — it only fills the
-gap), or create the Secret directly:
+`kagent/kagent-anthropic` (key `ANTHROPIC_API_KEY`). The API key is a **real
+credential**, so unlike the lab's throwaway passwords it never enters
+`agentlab.yaml` or the rendered `state/` files. The Secret exists after every
+`agentlab up` and `agentlab platform`, so the ModelConfig resolves on a fresh
+lab too (the run waits for `ResolvedRefs`), from the first of:
 
-```bash
-kubectl -n kagent create secret generic kagent-anthropic \
-  --from-literal=ANTHROPIC_API_KEY=sk-ant-...
-```
+- **A recorded source** (`aiKey.source` in `agentlab.yaml`; `agentlab
+  configure --ai-key-source op://<vault>/<item>/<field>`, or
+  `<file>#<path>` of a SOPS file): a *reference*, never a value. Every `up`
+  and `platform` hand it to the operator's secret tooling, `beekeeper secret
+  copy <source> --to-secret kind-<clusterName>/kagent/kagent-anthropic/ANTHROPIC_API_KEY`
+  ([beekeeper](https://github.com/giantswarm/beekeeper), on PATH; `configure`
+  refuses a source without it), which reads the value in its own process and
+  writes it straight into the lab's apiserver — agentlab sees the value's
+  length, never the value. A recreated lab (`down`, `up`) carries the key
+  again without a manual step; a Secret already holding a real key is left
+  alone (delete it and re-run to place the source again). A source that
+  cannot be placed — the tooling missing, the vault not answering, no lease
+  on the lab — fails the run naming the Secret and the source: a lab whose
+  configuration says where the key is never runs on a placeholder.
+- **`$ANTHROPIC_API_KEY`** on the host, when no source is recorded: the
+  Secret is created from it in-process (left alone once it holds a real key;
+  delete it and re-run to rotate).
+- **A placeholder** otherwise, as for an [extra model](models.md) without a
+  key: the ModelConfig resolves and agents start, but every turn on it fails
+  at Anthropic until the key is placed — the run says so, loudly, with the
+  three ways: the `beekeeper secret copy … --to-secret` call above (it
+  replaces the placeholder; the next run leaves the real key alone), the
+  source recorded, or the variable exported and `agentlab platform` re-run.
+  Without any of those, run the agent proofs on a host model:
+  [Agent proofs without an Anthropic key](models.md#agent-proofs-without-an-anthropic-key).
 
-The same key powers Backstage's AI chat via a second Secret,
-`backstage/backstage-anthropic` (see
+A person without the tooling places the key with
+`kubectl --context kind-<clusterName> -n kagent create secret generic
+kagent-anthropic --from-file=ANTHROPIC_API_KEY=…` (over the placeholder:
+`delete secret` first).
+
+The same key powers Backstage's AI chat (see
 [Backstage gotchas](backstage.md#backstage-gotchas) for its no-key behavior).
 Further models — the host model servers through model-manager,
 `platform.extraModels` — are their own ModelConfigs; see [Models](models.md).
@@ -164,8 +185,8 @@ fleet's `auth.mode: trusted-proxy`, re-deriving the caller from the same
 bearer; `agentlab platform-test` asserts both (a call without a token refused
 at the edge; a forged header attributed to the token's subject), and the
 proofs' turns take that path as the person (`internal/lab/kagentapi.go`).
-Every agent is an `AgentTemplate` admitted by the platform `Harness kagent`
-(labelled `agent-platform.giantswarm.io/harness: kagent`) and runs as an actor
+Every agent is an `AgentTemplate` paired by its `Agent` with the platform
+`Harness kagent` (`spec.harnessRef`) and runs as an actor
 on Agent Substrate — the `WorkerPool kagent-default`'s gVisor workers in the
 kagent namespace, the control plane in `ate-system` — which the chart ships
 and the lab installs nothing of; kagent's `kagent_v2` database lives on the
@@ -201,7 +222,7 @@ golden boot then reads as a 403 from github.com.
 The controller serves gRPC only (`kagent.api.v1alpha1` for the control
 plane, `lf.a2a.v1` for the turns) behind the connectivity chart's
 `GRPCRoute` `kagent-controller` on the edge — native gRPC over HTTP/2, the
-five services matched by name — with the `AgentgatewayPolicy`
+services matched by name — with the `AgentgatewayPolicy`
 `kagent-controller-jwt` validating the person's Dex id_token (JWT `Strict`)
 and rewriting `x-user-id` from the token's email claim for the controller's
 `trusted-proxy` authenticator; whatever `x-user-id` a caller sent is
@@ -212,11 +233,11 @@ transport (`agentgateway.<domain>:<gateway port>`, the lab CA trusted), the
 `a2a-go/v2` client on its gRPC transport for the turns and the stubs
 generated from kagent's protos (`internal/kagent/gen`, see
 [development.md](development.md)) for the rest. Every call carries
-`authorization: Bearer <id_token>`; every A2A call exactly one
-`x-kagent-agent-instance-id` — the `AgentInstance` that holds the
-conversation, created for the person with `CreateAgentInstance`
-(idempotent on `request_id`) and deleted afterwards — and the
-human-in-the-loop extension request (`A2A-Extensions:
+`authorization: Bearer <id_token>`; every A2A call names the Agent as its
+tenant (`<namespace>/<name>`) and the `Session` that holds the conversation
+through the message's context id (the Session's id; created for the person
+with `CreateSession`, idempotent on `request_id`, and deleted afterwards),
+and carries the human-in-the-loop extension request (`A2A-Extensions:
 https://kagent.dev/extensions/hitl/v1`), so a tool bound with
 `requireApproval` pauses the task at `input-required` with a decidable
 `tool_approval_request` instead of a plain notice. The answer is consumed
@@ -231,10 +252,10 @@ surfaces rely on: the route and its policy exist and are Accepted; a call
 without a token is refused at the edge (`Unauthenticated` — on a raw
 HTTP/2 POST the gRPC frame gets the trailers-only `grpc-status 16`, a plain
 POST gets 401); a forged `x-user-id` beside a valid token is replaced
-(`GetCurrentUser` names the token's person); `ListAgentTemplates` lists the
-proof's agent Ready on the platform Harness with the display-name and
-icon-url annotations as Swarmgeist reads them; `CreateAgentInstance` is
-idempotent; a turn streams its answer; on the proof's agent — the Generic
+(`GetCurrentUser` names the token's person); `ListAgents` lists the proof's
+Agent Ready on the platform Harness with the display-name and icon-url
+annotations as Swarmgeist reads them; `CreateSession` is idempotent; a turn
+streams its answer; on the proof's agent — the Generic
 chart with `toolset: [preset:read-only]` and `muster.requireApproval: true`
 (chart ≥ 1.1.0) — a tool call pauses the task, the person's approval
 resumes it to completed with muster logging the call under the person, a
@@ -242,7 +263,7 @@ rejection ends it without the call (every request is decided until the task
 settles, within five minutes: how many tool calls the model needs is its
 own; a request asked again after its decision fails the step, the decision
 did not resume the task); `CancelTask` on a running turn ends it
-server-side (`GetTask` reports it canceled) and the instance takes a
-following turn. It leaves nothing behind: the instances over gRPC
-(`ListAgentInstances` lists none of its), the agent's release and render on
+server-side (`GetTask` reports it canceled) and the session takes a
+following turn. It leaves nothing behind: the sessions over gRPC
+(`ListSessions` lists none of its), the agent's release and render on
 the cluster.

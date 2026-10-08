@@ -34,6 +34,8 @@ const (
 	testHarnessName   = "kagent"
 	testRosterRelease = "probe"
 	testOtherHarness  = "claude"
+	listItemsKey      = "items"
+	fieldSession      = "session"
 	testRefMain       = "main"
 	testArtifactID    = "a-1"
 	testSkillPath     = "plugins/gs-base/skills/runbooks"
@@ -446,7 +448,7 @@ func TestHITLRequestOf(t *testing.T) {
 func TestSessionsRoutes(t *testing.T) {
 	fp := newFakePortal(t)
 	instance := map[string]any{"id": testSessionID, "creator": testPortalUser, fieldState: instanceStateReady, nameKey: portalSessionName, fieldContextID: testContextID,
-		"agentTemplate": map[string]any{fieldNamespace: kagentNamespace, nameKey: testAgentName}}
+		"agent": map[string]any{fieldNamespace: kagentNamespace, nameKey: testAgentName}}
 	var createBody map[string]any
 	deleted := false
 	fp.mux.HandleFunc(portalKagentAPI+kagentSessionsPath, func(w http.ResponseWriter, r *http.Request) {
@@ -455,9 +457,9 @@ func TestSessionsRoutes(t *testing.T) {
 		case http.MethodPost:
 			raw, _ := io.ReadAll(r.Body)
 			_ = json.Unmarshal(raw, &createBody)
-			writeJSON(w, http.StatusCreated, map[string]any{"agentInstance": instance})
+			writeJSON(w, http.StatusCreated, map[string]any{fieldSession: instance})
 		default:
-			writeJSON(w, http.StatusOK, map[string]any{"agentInstances": []any{instance}})
+			writeJSON(w, http.StatusOK, map[string]any{"sessions": []any{instance}})
 		}
 	})
 	fp.mux.HandleFunc(portalKagentAPI+kagentSessionsPath+"/"+testSessionID, func(w http.ResponseWriter, r *http.Request) {
@@ -474,13 +476,13 @@ func TestSessionsRoutes(t *testing.T) {
 		case deleted:
 			writeJSON(w, http.StatusNotFound, map[string]any{fieldError: map[string]any{fieldMessage: "gone"}})
 		default:
-			writeJSON(w, http.StatusOK, map[string]any{"agentInstance": instance})
+			writeJSON(w, http.StatusOK, map[string]any{fieldSession: instance})
 		}
 	})
 	ps := fp.session(testPortalUser, platformAdminsGroup)
 	agent := portalAgentRef{Namespace: kagentNamespace, Name: testAgentName}
 	status, created, _, err := ps.createSession(agent, portalSessionName, "req-1")
-	if err != nil || status != http.StatusCreated || created.ID != testSessionID || created.Creator != testPortalUser || created.AgentTemplate.Name != testAgentName {
+	if err != nil || status != http.StatusCreated || created.ID != testSessionID || created.Creator != testPortalUser || created.Agent.Name != testAgentName {
 		t.Fatalf("create: %d %+v %v", status, created, err)
 	}
 	if createBody["requestId"] != "req-1" || createBody["agentName"] != testAgentName || createBody[nameKey] != portalSessionName {
@@ -508,60 +510,78 @@ func TestSessionsRoutes(t *testing.T) {
 }
 
 // rosterTemplate is one AgentTemplate as the Kubernetes proxy lists it.
-func rosterTemplate(name, harness string, ready bool, binds string) map[string]any {
-	status := map[string]any{"observedGeneration": 1, "harnesses": []any{}}
-	if harness != "" {
-		conditions := []map[string]any{{fieldType: conditionAccepted, fieldStatus: conditionTrue}, {fieldType: conditionReady, fieldStatus: condFalseStatus, "reason": readyReasonPending}}
-		if ready {
-			conditions[1] = map[string]any{fieldType: conditionReady, fieldStatus: conditionTrue}
-		}
-		status["harnesses"] = []any{map[string]any{fieldHarness: harness, "desiredRevision": "r1", "latestSuccessfulRevision": "r1", fieldConditions: conditions}}
-	}
+func rosterTemplate(name, binds string) map[string]any {
 	spec := map[string]any{"modelConfig": map[string]any{nameKey: defaultModelConfig}}
 	if binds != "" {
 		spec["tools"] = []any{map[string]any{"mcp": map[string]any{"server": map[string]any{fieldKind: remoteMCPServerKind, nameKey: binds}}}}
 	}
 	return map[string]any{
-		fieldAPIVersion: agentTemplateAPIVersion, fieldKind: "AgentTemplate",
+		fieldAPIVersion: agentTemplateAPIVersion, fieldKind: kindAgentTemplate,
 		fieldMetadata: map[string]any{nameKey: name, fieldNamespace: kagentNamespace, "generation": 1,
-			"labels":      map[string]any{harnessLabel: testHarnessName, fluxHelmReleaseNameLabel: name},
+			"labels":      map[string]any{fluxHelmReleaseNameLabel: name},
 			"annotations": map[string]any{displayNameAnnotation: "Display " + name}},
-		fieldSpec: spec, fieldStatus: status,
+		fieldSpec: spec,
 	}
 }
 
-// TestRoster: the roster joins the templates with their carriers the way
-// the portal does — readiness by the deciding Harness, the toolset off the
-// carrier's header, the owning release off the provenance label — and the
-// per-user rule: a platform-admin reads it, anyone else meets the
-// apiserver's 403.
+// rosterAgent is one Agent as the Kubernetes proxy lists it: the template of
+// its name paired with the Harness, Accepted, Ready as given; unresolved
+// makes the Harness reference fail to resolve instead.
+func rosterAgent(name, harness string, ready, unresolved bool) map[string]any {
+	conditions := []any{map[string]any{fieldType: conditionAccepted, fieldStatus: conditionTrue}, map[string]any{fieldType: conditionReady, fieldStatus: condFalseStatus, "reason": readyReasonPending}}
+	switch {
+	case ready:
+		conditions[1] = map[string]any{fieldType: conditionReady, fieldStatus: conditionTrue}
+	case unresolved:
+		conditions = []any{map[string]any{fieldType: conditionResolvedRefs, fieldStatus: condFalseStatus, "reason": "HarnessNotFound"}, conditions[1]}
+	}
+	return map[string]any{
+		fieldAPIVersion: kagentAPIVersion, fieldKind: kindAgent,
+		fieldMetadata: map[string]any{nameKey: name, fieldNamespace: kagentNamespace, "generation": 1,
+			"labels": map[string]any{fluxHelmReleaseNameLabel: name}},
+		fieldSpec:   map[string]any{"templateRef": map[string]any{nameKey: name}, "harnessRef": map[string]any{nameKey: harness}},
+		fieldStatus: map[string]any{"observedGeneration": 1, "desiredRevision": "r1", "latestSuccessfulRevision": "r1", fieldConditions: conditions},
+	}
+}
+
+// TestRoster: the roster joins the Agents with their templates and carriers
+// the way the portal does — readiness by the Agent's conditions, the display
+// name off the template, the toolset off the carrier's header, the owning
+// release off the provenance label — and the per-user rule: a
+// platform-admin reads it, anyone else meets the apiserver's 403.
 func TestRoster(t *testing.T) {
 	fp := newFakePortal(t)
-	templates := map[string]any{"items": []any{
-		rosterTemplate(testRosterRelease, testHarnessName, true, testRosterRelease),
-		rosterTemplate("compiling", testHarnessName, false, "compiling"),
-		rosterTemplate("orphan", "", false, ""),
+	agents := map[string]any{listItemsKey: []any{
+		rosterAgent(testRosterRelease, testHarnessName, true, false),
+		rosterAgent("compiling", testHarnessName, false, false),
+		rosterAgent("orphan", "nowhere", false, true),
 	}}
-	carriers := map[string]any{"items": []any{map[string]any{
+	templates := map[string]any{listItemsKey: []any{
+		rosterTemplate(testRosterRelease, testRosterRelease),
+		rosterTemplate("compiling", "compiling"),
+		rosterTemplate("orphan", ""),
+	}}
+	carriers := map[string]any{listItemsKey: []any{map[string]any{
 		fieldAPIVersion: agentTemplateAPIVersion, fieldKind: remoteMCPServerKind,
 		fieldMetadata: map[string]any{nameKey: testRosterRelease, fieldNamespace: kagentNamespace},
 		fieldSpec:     map[string]any{"url": testMusterURL, "headersFrom": []any{map[string]any{nameKey: toolsetHeader, "value": presetReadOnly + "," + workflowIncidentTriage}}},
 	}}}
-	fp.mux.HandleFunc(portalKubeProxyAPI+"/apis/"+agentTemplateAPIVersion+"/agenttemplates", func(w http.ResponseWriter, r *http.Request) {
+	fp.mux.HandleFunc(portalKubeProxyAPI+"/apis/"+kagentAPIVersion+"/agents", func(w http.ResponseWriter, r *http.Request) {
 		fp.headers[r.URL.Path] = r.Header.Clone()
 		if r.Header.Get(portalKubeAuthHeader) == "viewer-token" {
 			writeJSON(w, http.StatusForbidden, map[string]any{fieldMessage: "forbidden"})
 			return
 		}
-		writeJSON(w, http.StatusOK, templates)
+		writeJSON(w, http.StatusOK, agents)
 	})
-	fp.handle(portalKubeProxyAPI+"/apis/"+agentTemplateAPIVersion+"/remotemcpservers", http.StatusOK, carriers)
+	fp.handle(portalKubeProxyAPI+"/apis/"+kagentAPIVersion+"/agenttemplates", http.StatusOK, templates)
+	fp.handle(portalKubeProxyAPI+"/apis/"+kagentAPIVersion+"/remotemcpservers", http.StatusOK, carriers)
 	admin := fp.session(testPortalUser, platformAdminsGroup)
 	status, rows, err := listRoster(admin)
 	if err != nil || status != http.StatusOK || len(rows) != 3 {
 		t.Fatalf("roster: %d %v %v", status, rows, err)
 	}
-	if got := fp.headers[portalKubeProxyAPI+"/apis/"+agentTemplateAPIVersion+"/agenttemplates"]; got.Get(portalKubeClusterHeader) != platformRelease || got.Get(portalKubeAuthHeader) != testDexToken {
+	if got := fp.headers[portalKubeProxyAPI+"/apis/"+kagentAPIVersion+"/agents"]; got.Get(portalKubeClusterHeader) != platformRelease || got.Get(portalKubeAuthHeader) != testDexToken {
 		t.Errorf("proxy headers = %v", got)
 	}
 	want := rosterRow{Name: testRosterRelease, Namespace: kagentNamespace, DisplayName: "Display " + testRosterRelease, Readiness: rosterReady, Harness: testHarnessName,
@@ -569,7 +589,7 @@ func TestRoster(t *testing.T) {
 	if !reflect.DeepEqual(rows[0], want) {
 		t.Errorf("row = %+v, want %+v", rows[0], want)
 	}
-	if rows[1].Readiness != rosterNotReady || rows[1].Declared || rows[2].Readiness != rosterNotAdmitted {
+	if rows[1].Readiness != rosterNotReady || rows[1].Declared || rows[2].Readiness != rosterNotAccepted || rows[2].Harness != "nowhere" {
 		t.Errorf("rows = %+v", rows[1:])
 	}
 	spec := agentSpec{Name: testRosterRelease, DisplayName: "Display " + testRosterRelease, Toolset: []string{presetReadOnly, workflowIncidentTriage}}
@@ -581,7 +601,7 @@ func TestRoster(t *testing.T) {
 	}
 	// A developer who can read is a change of the lab's grants, reported.
 	dev := fp.session("dev@lab.local", "developers")
-	if _, err := proveRoster([]*portalSession{dev}, spec); err == nil || !strings.Contains(err.Error(), "grants kagent.dev") {
+	if _, err := proveRoster([]*portalSession{dev}, spec); err == nil || !strings.Contains(err.Error(), "grants "+kagentAPIGroup) {
 		t.Errorf("a readable roster for a non-admin: %v", err)
 	}
 }

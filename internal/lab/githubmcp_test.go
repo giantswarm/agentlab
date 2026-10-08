@@ -69,7 +69,7 @@ func TestGitHubMCPTemplateNamesTheConfiguredSecret(t *testing.T) {
 // order asked for, and nothing of the values.
 func TestMissingSecretKeys(t *testing.T) {
 	secret := func(data map[string]any) *unstructured.Unstructured {
-		obj := &unstructured.Unstructured{Object: map[string]any{"kind": kindSecret}}
+		obj := &unstructured.Unstructured{Object: map[string]any{fieldKind: kindSecret}}
 		if data != nil {
 			obj.Object["data"] = data
 		}

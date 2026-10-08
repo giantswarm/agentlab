@@ -144,9 +144,10 @@ What lands is a Flux `HelmRelease` per agent in the ModelConfig's namespace
 by the platform chart's bundled engine as `kagent-flux` (a ServiceAccount and
 RoleBinding the connectivity component renders from
 `kagent.fluxServiceAccountName`, named into agent-manager's
-`flux.helmReleaseServiceAccount`); the render is a `kagent.dev/v1alpha3`
-`AgentTemplate` the platform Harness admits and compiles into a golden
-snapshot, plus the agent's own `RemoteMCPServer` carrying its toolset — see
+`flux.helmReleaseServiceAccount`); the render is an `api.kagent.dev/v1alpha3`
+`AgentTemplate`, the `Agent` pairing it with the platform Harness, which the
+controller compiles into a golden snapshot, plus the agent's own
+`RemoteMCPServer` carrying its toolset — see
 [Agents](agents.md). RBAC applies to the write as the person: `platform-admins`
 deploy, a `viewers`-group user gets agent-manager's `forbidden: …`.
 
@@ -176,23 +177,23 @@ what the proof checks is what the portal shows.
   wait of [Agents](agents.md): `requestedBy` is the person, agent-manager's log
   says `caller=<person>`, the `HelmRelease` carries **exactly** the dry run's
   values as `kagent-flux` next to `OCIRepository/agent` at `1.x`, the
-  `AgentTemplate` is Ready on the platform Harness with the admission label,
-  the display-name and icon-url annotations and the skill, its
-  `RemoteMCPServer` carries `X-Muster-Toolset`;
+  `Agent` is Ready on the platform Harness, the `AgentTemplate` carries the
+  display-name and icon-url annotations and the skill, its `RemoteMCPServer`
+  carries `X-Muster-Toolset`;
 - `get_agent_status` through the portal says `ready` on that Harness (the
   detail page's poll); a second create of the name answers `conflict: …`, a
   viewer's create `forbidden: …`.
 
 **The agents list** (as every user), read as the portal reads it — the
-`agenttemplates` and `remotemcpservers` of the installation through
+`agents`, `agenttemplates` and `remotemcpservers` of the installation through
 `/api/kubernetes/proxy` with the person's token: a `platform-admins` user sees
-the agent with its readiness (the portal's derivation from
-`status.harnesses[]`), its toolset off the carrier and the owning
+the agent with its readiness (the portal's derivation from the Agent's
+conditions), its toolset off the carrier and the owning
 `HelmRelease` (the Flux provenance label). A developer or viewer meets the
 apiserver's **403** and the portal shows the installation as unreadable —
 the lab's RBAC (`rbac.yaml.tmpl`) binds `platform-admins` to `cluster-admin`,
 `viewers` to `view` and `developers` to `edit` in `demo`, none of which reads
-`kagent.dev`; the 0.10 line's `agents.kagent.dev` was never readable for them
+`api.kagent.dev`; the 0.10 line's `agents.kagent.dev` was never readable for them
 either, so this is no loss of the migration and the proof asserts it as it is
 (a change of the lab's grants fails here by name). Fleet installations grant
 reads differently; what a non-admin sees there is the migration rehearsal's
@@ -200,7 +201,7 @@ question, not this lab's.
 
 **The chat** (as the admin, every other user as the boundary):
 `GET /kagent/installations` offers the installation and `GET /kagent/me`
-resolves the person; a session (the person's `AgentInstance`) is created on
+resolves the person; a session (the person's `Session`) is created on
 the first message with a `requestId` and a repeat answers the same instance;
 the turn streams (`…/messages/stream`, SSE frames of A2A v1 events) and the
 agent's tool call reaches muster as the person (muster's
