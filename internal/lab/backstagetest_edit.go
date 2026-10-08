@@ -113,7 +113,7 @@ func proveEditPath(primary, viewer *portalSession, spec agentSpec, other string)
 
 	step("E2 the edit dialog's dry run: %svalidate_agent{update} with a new description", agentManagerToolPrefix)
 	var dry validateReport
-	if err := portalToolCall(primary, "validate_agent", map[string]any{nameKey: spec.Name, namespaceKey: kagentNamespace, "update": true, descriptionKey: editedDescription}, &dry); err != nil {
+	if err := portalToolCall(primary, "validate_agent", map[string]any{nameKey: spec.Name, namespaceKey: kagentNamespace, validateModeUpdate: true, descriptionKey: editedDescription}, &dry); err != nil {
 		return nil, err
 	}
 	if !dry.Valid || len(dry.Errors) > 0 || dry.Mode != validateModeUpdate {
@@ -270,7 +270,7 @@ func proveRefreshSkills(primary *portalSession, spec agentSpec) (string, error) 
 		return "", err
 	}
 	var refreshDry validateReport
-	if err := portalToolCall(primary, "validate_agent", map[string]any{nameKey: spec.Name, namespaceKey: kagentNamespace, "update": true, refreshSkillsKey: true}, &refreshDry); err != nil {
+	if err := portalToolCall(primary, "validate_agent", map[string]any{nameKey: spec.Name, namespaceKey: kagentNamespace, validateModeUpdate: true, refreshSkillsKey: true}, &refreshDry); err != nil {
 		return "", err
 	}
 	if !refreshDry.Valid || refreshDry.Mode != validateModeUpdate || skillCommits(refreshDry.Manifests.Values)[skill.Name] != head {

@@ -158,6 +158,39 @@ wait once until the reset instead of failing on a truncated listing.
 agent-manager's Deployment carries a GitHub credential; without one it skips
 them with a verdict naming the anonymous rate limit.
 
+## Editing an agent applied from git
+
+An agent whose HelmRelease a Flux Kustomization applies carries the
+Kustomization's provenance labels (`kustomize.toolkit.fluxcd.io/name` and
+`/namespace`); agent-manager reports it `managed: gitops` and refuses every
+live write with `gitops_owned`, because the next reconciliation would undo
+it. Such an agent is changed with a pull request: `update_agent` in
+`mode: commit` rewrites the release's file in agent-manager's directory of the
+owning repository and opens the pull request as the person. The portal's edit
+page dry-runs every change with `validate_agent` (`update: true`) first and
+offers the write only once the dry run is valid, so the dry run takes `mode`
+too and answers as the write would: `gitops_owned` in mode apply, valid with
+the composed manifests in mode commit.
+
+`./agentlab agents-gitops-test` is that edit, headless and as the person: the
+platform's agent-manager composes a release, the proof applies it with the
+Flux labels and reads it back `managed: gitops`; the platform's own
+agent-manager (not pinned to a GitHub App) answers the change's dry run
+`gitops_owned` in mode apply and `unsupported` in mode commit, as its writes
+do; then, against a temporary copy of the agent-manager release pinned to the
+lab Dex as its GitHub App and to the fake GitHub API (the shape `models-test`
+uses, see [Models](models.md) "Dry runs, GitOps-owned objects and commit
+mode"), `validate_agent` in mode apply still answers `gitops_owned`, `force`
+or not, `validate_agent` in mode commit answers a valid update whose
+HelmRelease carries the change and opens nothing, and `update_agent` in mode
+commit opens exactly one pull request authored by the person whose file is
+the dry run's manifest byte for byte, while the live release's
+`resourceVersion` stays as it was and a mode apply write is still refused.
+The commit target is named (`repository`, `branch`, `path`): the lab's
+engine runs no kustomize-controller, so no Kustomization resolves it from
+the release's labels here. The agent, the copy, the fake and its Service go
+away at the end of the run.
+
 ## The UI and the controller's route
 
 The kagent UI is host-published like the other components:

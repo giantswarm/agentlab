@@ -117,6 +117,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		inGroup(groupTesting, labCmd("test", "Assert RBAC for every configured user (token from Dex, kubectl auth can-i)", lab.Test)),
 		inGroup(groupTesting, platformTestCmd()),
 		inGroup(groupTesting, agentsTestCmd()),
+		inGroup(groupTesting, agentsGitOpsTestCmd()),
 		inGroup(groupTesting, toolsetsTestCmd()),
 		inGroup(groupTesting, modelsTestCmd()),
 		inGroup(groupTesting, servingTestCmd()),
@@ -1172,6 +1173,28 @@ func vmManagerTestCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&opts.SkipVM, "skip-vm", false, "prove the registration, the identity boundary and the read tools only; boot no VM")
 	cmd.Flags().DurationVar(&opts.VMTimeout, "vm-timeout", lab.DefaultVMManagerTestVMTimeout, "how long the proof's VM may take to reach ready (installer boot + installed boot to READY=1)")
+	return cmd
+}
+
+func agentsGitOpsTestCmd() *cobra.Command {
+	var opts lab.AgentsGitOpsTestOptions
+	cmd := &cobra.Command{
+		Use:   "agents-gitops-test [email]",
+		Short: "Headless proof of editing an agent applied from git, as the portal does it: validate_agent refuses mode apply (gitops_owned) and validates mode commit, update_agent mode commit opens the pull request as the person on a fake GitHub, the live release untouched",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			email := cfg.AdminUser().Email
+			if len(args) == 1 {
+				email = args[0]
+			}
+			return lab.AgentsGitOpsTest(cfg, email, opts)
+		},
+	}
+	cmd.Flags().StringVar(&opts.GitHubFakeBinary, "github-fake-binary", "", "the static Linux agentlab the fake GitHub API container runs on the kind network (default: this binary)")
 	return cmd
 }
 

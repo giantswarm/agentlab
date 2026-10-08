@@ -459,7 +459,7 @@ func (f *fakeGitHub) getContents(w http.ResponseWriter, r *http.Request, _ strin
 		return
 	}
 	content := f.blobs[sha]
-	writeGitHubJSON(w, http.StatusOK, blobJSON(map[string]any{fieldTypeKey: "file", "path": p}, sha, content))
+	writeGitHubJSON(w, http.StatusOK, blobJSON(map[string]any{fieldTypeKey: "file", pathArg: p}, sha, content))
 }
 
 func (f *fakeGitHub) pullJSON(pr *githubFakePull) map[string]any {
