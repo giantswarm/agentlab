@@ -5,10 +5,19 @@
 ```bash
 make build                 # go build -o agentlab .
 make test                  # go test ./...
+make lint                  # golangci-lint as CI's pre-commit runs it
 go test ./internal/forms/ -run TestMinimalFormDrive -count=1 -v   # one test
 
 GOOS=windows go vet ./...  # and GOOS=linux, GOOS=darwin
 ```
+
+`make lint` is the lint CI runs, not an approximation of it: the golangci-lint
+version the generated pre-commit workflow pins (installed under `bin/` on first
+use), the linters `.golangci.yaml` enables (goconst and gosec on top of the
+defaults), over the whole module with its test files. A string literal repeated
+across a package's test files fails it on your machine exactly as it fails in
+CI; a bare `golangci-lint run` reads the same config, with whatever version is
+on your PATH.
 
 The release builds six OS/architecture pairs, so anything with a per-OS
 implementation (`internal/telemetry/machineid/`) has to compile on all of

@@ -24,5 +24,8 @@ kubeconfig.oidc
 .ldflags
 .platforms
 
+# Tools `make` installs for itself: the pinned golangci-lint (Makefile.custom.mk).
+/bin/
+
 # graphify knowledge graph (regenerable, rebuilt by the post-commit hook)
 graphify-out/

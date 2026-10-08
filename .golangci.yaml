@@ -1,0 +1,13 @@
+# Read by every golangci-lint run on this module: the pre-commit hook CI runs
+# (the generated workflow, over the whole module with its test files), the
+# architect CI's gosec-only pass, `make lint` and a bare `golangci-lint run`.
+# The linters live here, not in a hook's or a Makefile's flags, so all of them
+# report the same findings.
+version: "2"
+linters:
+  enable:
+    - goconst
+    - gosec
+issues:
+  # Every finding, as CI prints it (the hook's --max-same-issues=0).
+  max-same-issues: 0
