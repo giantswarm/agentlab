@@ -32,14 +32,16 @@ func warn(format string, a ...any) {
 	fmt.Fprintf(os.Stderr, "    WARNING: "+format+"\n", a...)
 }
 
-// dockerBin is the one CLI the lab shells out to — docker, or Podman's
+// dockerBin is the one CLI the lab always shells out to — docker, or Podman's
 // docker-compatible CLI (runtime.go) — for the node container, the image
-// pulls and saves, and the probes run inside the node. It is the lab's only
-// subprocess: kind (kind.go) and Helm (helm.go) are embedded, and every call
-// to the apiserver goes through the embedded Kubernetes client (kube.go),
-// bound to the lab-owned kubeconfig by labRESTClientGetter (restclient.go).
-// The container engine is therefore what a machine needs installed, and the
-// one tool Preflight (discover.go) asks for.
+// pulls and saves, and the probes run inside the node. kind (kind.go) and
+// Helm (helm.go) are embedded, and every call to the apiserver goes through
+// the embedded Kubernetes client (kube.go), bound to the lab-owned kubeconfig
+// by labRESTClientGetter (restclient.go). The container engine is therefore
+// what a machine needs installed, and the one tool Preflight (discover.go)
+// asks for unconditionally; the operator's secret tooling (secretTool,
+// anthropic.go) is the other subprocess, asked for only while agentlab.yaml
+// records a key source.
 const dockerBin = "docker"
 
 // dockerRun is the start of a `docker run` of the named container on a

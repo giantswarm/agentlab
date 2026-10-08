@@ -32,8 +32,9 @@ const (
 	agentTemplateAPIVersion = "kagent.dev/v1alpha3"
 	// remoteMCPServerKind is the kind an AgentTemplate's MCP tool binding names.
 	remoteMCPServerKind = "RemoteMCPServer"
-	// defaultModelConfig is the ModelConfig the lab renders from
-	// $ANTHROPIC_API_KEY (`agentlab up`), the throwaway agents' default.
+	// defaultModelConfig is the ModelConfig the kagent chart renders from
+	// providers.<default>, referencing the Secret `agentlab up` fills
+	// (anthropic.go): the throwaway agents' default.
 	defaultModelConfig = "default-model-config"
 )
 
