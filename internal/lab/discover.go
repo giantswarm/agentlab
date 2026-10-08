@@ -25,10 +25,16 @@ import (
 // they never count as conflicts), the kind docker network's gateway (the
 // address pods reach the host on), the model servers answering on their
 // default ports with their downloaded models, a standalone FastFlowLM server
-// (report-only), and whether the Anthropic key is in the environment.
+// (report-only), and where the Anthropic key comes from.
 type Discovery struct {
-	Tools         []ToolVersion
-	AnthropicKey  bool
+	Tools        []ToolVersion
+	AnthropicKey bool
+	// KeySource is the reference agentlab.yaml records for the Anthropic key
+	// (aiKey.source), "" when none; SecretTool the version of the tooling
+	// that places it (secretTool, anthropic.go), "" when it is not on PATH or
+	// does not answer — probed only while a source is recorded.
+	KeySource     string
+	SecretTool    string
 	GitHubToken   bool
 	ClusterExists bool
 	ClusterPorts  map[int]bool
@@ -100,8 +106,11 @@ const flmOwner = "FastFlowLM"
 // Discover probes this machine. Nothing here needs the cluster; every probe
 // is loopback or a local CLI and degrades to "not found".
 func Discover(cfg *config.Config) *Discovery {
-	d := &Discovery{AnthropicKey: os.Getenv(AnthropicKeyEnv) != "", GitHubToken: gitHubTokenSet()}
+	d := &Discovery{AnthropicKey: os.Getenv(AnthropicKeyEnv) != "", KeySource: cfg.AIKey.Source, GitHubToken: gitHubTokenSet()}
 	d.Tools = toolVersions(dockerVersion())
+	if d.KeySource != "" {
+		d.SecretTool = secretToolVersion()
+	}
 	d.ClusterExists, d.ClusterPorts = kindNodePublishedPorts(cfg.ControlPlaneNode())
 	if gw, err := kindGatewayIP(cfg.ControlPlaneNode()); err == nil {
 		d.KindGateway = gw
@@ -277,8 +286,9 @@ var toolRequirements = []toolRequirement{
 // asks its first question (or, with --defaults, writes anything): an error
 // naming every tool `agentlab up` would fail on — not on PATH — with why and
 // where to get it. So nobody walks through the whole form to be refused at
-// boot time. The container engine is the one tool asked for; everything else
-// the lab runs is in the binary.
+// boot time. The container engine is the one tool always asked for; the
+// secret tooling only while agentlab.yaml records a key source; everything
+// else the lab runs is in the binary.
 func (d *Discovery) Preflight() error {
 	var problems []string
 	for _, req := range toolRequirements {
@@ -286,6 +296,10 @@ func (d *Discovery) Preflight() error {
 			continue
 		}
 		problems = append(problems, fmt.Sprintf("%s is not on PATH (or does not answer) — %s\n    install: %s", req.name, req.why, req.install))
+	}
+	if d.KeySource != "" && d.SecretTool == "" {
+		problems = append(problems, fmt.Sprintf("%s is not on PATH (or does not answer) — aiKey.source %s is placed into the Secret %s/%s by `%s secret copy --to-secret` at every up and platform\n    install: %s (or clear the source: agentlab configure --ai-key-source \"\")",
+			secretTool, d.KeySource, kagentNamespace, anthropicSecret, secretTool, secretToolInstall))
 	}
 	if len(problems) == 0 {
 		return nil
@@ -384,10 +398,16 @@ func (d *Discovery) Report(cfg *config.Config) string {
 		line("FastFlowLM", "standalone `flm serve` on :%d (%d catalog entries) — no management API and loopback by default; the lab drives FLM through Lemonade Server", d.FLM.Port, d.FLM.Models)
 	}
 	line("KVM", "%s", d.kvmLine(cfg))
-	if d.AnthropicKey {
+	switch {
+	case d.KeySource != "" && d.SecretTool != "":
+		line("Anthropic key", "aiKey.source %s — %s %s places it into the Secret %s/%s at every up and platform; agentlab never reads the value", d.KeySource, secretTool, d.SecretTool, kagentNamespace, anthropicSecret)
+	case d.KeySource != "":
+		line("Anthropic key", "aiKey.source %s — but %s is not on PATH (or does not answer), so up and platform cannot place it", d.KeySource, secretTool)
+	case d.AnthropicKey:
 		line("Anthropic key", "$%s is set — the agents' default ModelConfig and Backstage's AI chat get the real key at deploy time", AnthropicKeyEnv)
-	} else {
-		line("Anthropic key", "$%s is not set — the default ModelConfig and Backstage's AI chat get a placeholder until it is exported and `agentlab platform` re-runs", AnthropicKeyEnv)
+	default:
+		line("Anthropic key", "no aiKey.source and $%s is not set — the default ModelConfig gets a placeholder (it resolves, agent turns fail at Anthropic) until the key is placed: `%s secret copy <ref> --to-secret kind-%s/%s/%s/%s`, or the source recorded (`agentlab configure --ai-key-source <ref>`), or the variable exported and `agentlab platform` re-run",
+			AnthropicKeyEnv, secretTool, cfg.ClusterName, kagentNamespace, anthropicSecret, anthropicSecretKey)
 	}
 	if d.GitHubToken {
 		line("GitHub token", "$%s is set — the portal's skill discovery and agent-manager's skill resolution call GitHub authenticated (5000 requests an hour) from deploy time", GitHubTokenEnv)
@@ -544,6 +564,23 @@ func kindNodePublishedPorts(node string) (exists bool, ports map[int]bool) {
 		}
 	}
 	return true, ports
+}
+
+// secretToolInstall is where the secret tooling comes from.
+const secretToolInstall = "https://github.com/giantswarm/beekeeper/releases"
+
+// secretToolVersion is the secret tooling's version (`beekeeper version`
+// answers `beekeeper vX.Y.Z (commit …)`; the second word), "" when it is not
+// on PATH or does not answer.
+func secretToolVersion() string {
+	out, err := outputQuiet(secretTool, "version")
+	if err != nil {
+		return ""
+	}
+	if fields := strings.Fields(out); len(fields) >= 2 {
+		return fields[1]
+	}
+	return strings.TrimSpace(out)
 }
 
 // dockerVersion is the engine version, naming podman when its

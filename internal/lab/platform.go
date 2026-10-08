@@ -773,10 +773,17 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	// The agents' model key. The default ModelConfig (rendered by the kagent
 	// chart from providers.anthropic) references this secret; agent pods
 	// mount it at run time, so it can land after the install — which it must,
-	// since the chart itself creates the kagent namespace.
+	// since the chart itself creates the kagent namespace. The Secret always
+	// exists after this (anthropic.go: the recorded source, the host
+	// environment, else the placeholder), and the ModelConfig is waited for
+	// until it resolves it: an agent's Harness refuses every template on a
+	// reference it cannot resolve.
 	if cfg.Platform.Agents {
-		step("Wiring the agents to Anthropic (ModelConfig model: %s)", cfg.AIModel)
-		if _, err := ensureAnthropicSecret(kagentNamespace, "kagent-anthropic"); err != nil {
+		step("Wiring the agents to Anthropic (ModelConfig %s, model %s)", defaultModelConfig, cfg.AIModel)
+		if _, err := ensureAnthropicSecret(cfg); err != nil {
+			return err
+		}
+		if err := waitDefaultModelConfigResolved(); err != nil {
 			return err
 		}
 		// The migrate Job's copy of the GitHub token (githubtoken.go) — the
