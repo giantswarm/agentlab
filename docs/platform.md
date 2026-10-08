@@ -64,6 +64,14 @@ The lab installs it in its **lab shape**:
 - The chart is **pinned** to an exact release, `platform.chartVersion` in
   `agentlab.yaml` (the default is the release this agentlab was verified
   with). The lab never floats; bump the pin deliberately, with a lab run.
+  The pin and the cluster drift apart when an `agentlab.yaml` is put back
+  from a copy without the `agentlab platform` that would install it (a
+  holder restoring a shared lab as found): `agentlab status` then names
+  both charts and which side is behind, every proof opens with the chart
+  in place (`Proving agent-platform <version>`) and warns of the drift
+  instead of quoting the pin, and `agentlab configure --adopt-chart`
+  writes the chart in place into the pin — or `agentlab platform` installs
+  the pin over the cluster, the boot naming the downgrade.
   The one exception is deliberate too: the [dev channel](#dev-channel),
   where `platform.chartBranch` follows a branch's newest dev build — and
   still installs an exact version, written into `chartVersion`.

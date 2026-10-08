@@ -40,7 +40,7 @@ func TestInstalledChartWording(t *testing.T) {
 	}{
 		{installedChart{Version: releaseInPlace, Channel: config.ChartChannelStable}, false, "agent-platform " + releaseInPlace},
 		{installedChart{Version: rcInPlace}, false, "agent-platform " + rcInPlace},
-		{installedChart{Version: placeholderInPlace, Channel: config.ChartChannelPath}, true, "a chart directory's build"},
+		{installedChart{Version: placeholderInPlace, Channel: config.ChartChannelPath}, true, aDirectoryBuild},
 		{installedChart{Version: devBuildInPlace, Channel: config.ChartChannelDev}, true, aDevBuild},
 		{installedChart{Version: devBuildInPlace}, true, aDevBuild},
 		{installedChart{Version: devBuildInPlace, Channel: config.ChartChannelStable}, true, aDevBuild},
@@ -64,7 +64,7 @@ func TestReplacingNote(t *testing.T) {
 	release := platformChart{ref: config.ChartRepository, version: releaseInPlace}
 	dir := writeChartFiles(t, t.TempDir(), "agent-platform", map[string]string{chartYAML: "apiVersion: v2\nname: agent-platform\nversion: " + placeholderInPlace + "\n"})
 	local := platformChart{ref: dir}
-	devChart := &installedChart{Version: placeholderInPlace, Channel: config.ChartChannelPath, Description: "agentlab v0.82.0: the chart directory /src/helm/agent-platform"}
+	devChart := &installedChart{Version: placeholderInPlace, Channel: config.ChartChannelPath, Description: "agentlab v0.82.0: the chart directory " + srcChartDir}
 
 	for _, c := range []struct {
 		name      string
@@ -73,12 +73,13 @@ func TestReplacingNote(t *testing.T) {
 		want      []string
 		never     string
 	}{
-		{"nothing in place", nil, release, nil, replacesWord},
+		{nothingInPlace, nil, release, nil, replacesWord},
 		{"the release in place", &installedChart{Version: releaseInPlace, Channel: config.ChartChannelStable}, release, nil, replacesWord},
-		{"a dev chart under the release", devChart, release, []string{"a dev chart left in place", placeholderInPlace, "a chart directory's build", devChart.Description, "agent-platform " + releaseInPlace + " replaces it"}, ""},
+		{"a dev chart under the release", devChart, release, []string{"a dev chart left in place", placeholderInPlace, aDirectoryBuild, devChart.Description, "agent-platform " + releaseInPlace + " replaces it"}, ""},
 		{"a dev build under the release", &installedChart{Version: devBuildInPlace}, release, []string{"a dev chart left in place", devBuildInPlace, aDevBuild, "replaces it"}, ""},
 		{"the directory over its own build", devChart, local, nil, replacesWord},
-		{"an older release under the release", &installedChart{Version: "4.110.0", Channel: config.ChartChannelStable}, release, []string{"the cluster runs agent-platform 4.110.0", "agent-platform " + releaseInPlace + " replaces it"}, aDevChart},
+		{"an older release under the release", &installedChart{Version: "4.110.0", Channel: config.ChartChannelStable}, release, []string{"the cluster runs agent-platform 4.110.0", "agent-platform " + releaseInPlace + " replaces it"}, "downgrade"},
+		{"a restored pin under a newer release", &installedChart{Version: "4.120.0", Channel: config.ChartChannelStable}, release, []string{"the cluster runs agent-platform 4.120.0", "agent-platform " + releaseInPlace + " replaces it (a downgrade)"}, aDevChart},
 		{"the release under the directory", &installedChart{Version: releaseInPlace, Channel: config.ChartChannelStable}, local, []string{"the cluster runs agent-platform " + releaseInPlace, "the local chart at " + dir + " replaces it"}, aDevChart},
 	} {
 		got := replacingNote(c.installed, c.chart)
@@ -110,7 +111,7 @@ func TestInstallDescription(t *testing.T) {
 		{func() {}, "the pinned release"},
 		{func() { cfg.Platform.ChartVersion = devBuildInPlace }, "the dev build pinned in platform.chartVersion"},
 		{func() { cfg.Platform.ChartBranch = devBranch }, "a dev build of branch " + devBranch},
-		{func() { cfg.Platform.ChartBranch, cfg.Platform.ChartPath = "", "/src/helm/agent-platform" }, "the chart directory /src/helm/agent-platform"},
+		{func() { cfg.Platform.ChartBranch, cfg.Platform.ChartPath = "", srcChartDir }, "the chart directory " + srcChartDir},
 	} {
 		c.setup()
 		opts := platformInstallOptions(cfg)
@@ -138,6 +139,7 @@ func TestPrintStatus(t *testing.T) {
 			Description: "agentlab v0.82.0: a dev build of branch " + devBranch,
 		},
 		Configured: "agent-platform " + releaseInPlace, Replaces: true,
+		Drift: config.File + " installs agent-platform " + releaseInPlace + ", the cluster runs agent-platform " + devBuildInPlace + ", a dev build (Helm revision 2) — `agentlab platform` installs the configured chart over it, `agentlab configure --adopt-chart` writes " + devBuildInPlace + " into " + config.File,
 		Releases: []platformReleaseStatus{
 			{Name: componentMuster, Ready: conditionTrue, Message: "Helm install succeeded"},
 			{Name: "agent-manager", Ready: condFalse, Message: "no match found for semver: >=1.10.0 <2.0.0"},
@@ -153,7 +155,7 @@ func TestPrintStatus(t *testing.T) {
 		"agentlab  /labs/agentlab",
 		"chart       agent-platform " + devBuildInPlace + ", a dev build (a dev chart) — Helm revision 2 " + deployed,
 		devBuild.Chart.Description,
-		"config      agent-platform " + releaseInPlace + "; `agentlab platform` replaces the chart in place with it",
+		"config      " + devBuild.Drift,
 		"releases    1 of 2 Ready; agent-manager Ready=False no match found for semver",
 		"app-config  drifted: " + labAppConfigMap + " differs from the lab's render",
 	} {
@@ -169,12 +171,13 @@ func TestPrintStatus(t *testing.T) {
 	var decoded struct {
 		Chart    struct{ Version, Channel string }
 		Replaces bool
+		Drift    string
 		Releases []struct{ Name, Ready string }
 	}
 	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
 		t.Fatalf("json: %v\n%s", err, out.String())
 	}
-	if decoded.Chart.Version != devBuildInPlace || decoded.Chart.Channel != config.ChartChannelDev || !decoded.Replaces || len(decoded.Releases) != 2 || decoded.Releases[1].Name != "agent-manager" {
+	if decoded.Chart.Version != devBuildInPlace || decoded.Chart.Channel != config.ChartChannelDev || !decoded.Replaces || decoded.Drift != devBuild.Drift || len(decoded.Releases) != 2 || decoded.Releases[1].Name != "agent-manager" {
 		t.Errorf("json = %+v", decoded)
 	}
 
@@ -186,6 +189,7 @@ func TestPrintStatus(t *testing.T) {
 		{&Status{Name: "unprovisioned", Dir: "/labs/unprovisioned", Configured: "agent-platform " + releaseInPlace}, []string{"chart       none installed", "`agentlab platform` installs it"}, "releases"},
 		{&Status{Name: "sandbox", Dir: "/labs/sandbox"}, []string{"none installed", "the platform is disabled"}, replacesWord},
 		{&Status{Name: "same", Dir: "/labs/same", Chart: &installedChart{Version: releaseInPlace, Channel: config.ChartChannelStable, Status: deployed, Revision: 3}, Configured: "agent-platform " + releaseInPlace}, []string{"chart       agent-platform " + releaseInPlace + " — Helm revision 3 " + deployed, "agent-platform " + releaseInPlace + ", the chart in place", "releases    0 of 0 Ready"}, aDevChart},
+		{&Status{Name: "restored", Dir: "/labs/restored", Chart: &installedChart{Version: "4.114.0", Channel: config.ChartChannelStable, Status: deployed, Revision: 7}, Configured: "agent-platform 4.93.0", Replaces: true, Drift: "agentlab.yaml installs agent-platform 4.93.0, the cluster runs agent-platform 4.114.0 (Helm revision 7): the config is behind the cluster — `agentlab platform` downgrades the cluster to the configured release, `agentlab configure --adopt-chart` writes 4.114.0 into agentlab.yaml"}, []string{"config      agentlab.yaml installs agent-platform 4.93.0, the cluster runs agent-platform 4.114.0", "the config is behind the cluster", "--adopt-chart` writes 4.114.0"}, replacesWord},
 	} {
 		out.Reset()
 		if err := PrintStatus(&out, c.status, false); err != nil {
