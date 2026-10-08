@@ -126,7 +126,7 @@ require (
 	github.com/gobwas/glob v0.2.3 // indirect
 	github.com/gofrs/flock v0.13.0 // indirect
 	github.com/google/btree v1.1.3 // indirect
-	github.com/google/certificate-transparency-go v1.3.4-0.20261001183712-569ba82b542b // indirect; master until the release after v1.3.3: it drops prometheus/prometheus and etcd/v3 from the module graph (nancy), where a replace would break go install (HACKS.md)
+	github.com/google/certificate-transparency-go v1.3.4-0.20261001183712-569ba82b542b // indirect
 	github.com/google/gnostic-models v0.7.0 // indirect
 	github.com/google/go-containerregistry v0.22.1 // indirect
 	github.com/google/go-github/v86 v86.0.0 // indirect
