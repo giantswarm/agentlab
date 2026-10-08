@@ -807,7 +807,7 @@ func TestGvrFor(t *testing.T) {
 		gvrDeployments.Resource + "." + gvrDeployments.Group: gvrDeployments,
 		fluxHelmReleaseResource:                              fluxHelmReleaseGVR,
 		musterMCPServerResource:                              musterMCPServerGVR,
-		modelConfigResource:                                  gvrModelConfigs,
+		modelConfigResources[0]:                              gvrModelConfigs,
 		agentTemplateResource:                                gvrAgentTemplates,
 		remoteMCPServerResource:                              gvrRemoteMCPServers,
 		workerPoolsResource:                                  gvrWorkerPools,

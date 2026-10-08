@@ -157,7 +157,7 @@ type modelsState struct {
 }
 
 func modelsSnapshot(api *modelManagerTools, backendName, mcName, jobID string) (modelsState, error) {
-	mc, err := readKagentObject(modelConfigResource, mcName)
+	mc, err := readModelConfig(mcName)
 	if err != nil {
 		return modelsState{}, err
 	}
@@ -201,7 +201,7 @@ func dryRunSummary(answer map[string]any) string {
 // and the model untouched; the labels go again on every exit path.
 func proveGitOpsOwned(api *modelManagerTools, backendName, model, mcName string) error {
 	step("A ModelConfig Flux applies from git is never written live: %s labelled %s=%s, then wire, unwire and delete", mcName, gitopsFluxName, gitopsFluxFixture)
-	gvr, err := gvrFor(modelConfigResource)
+	gvr, err := modelConfigGVR()
 	if err != nil {
 		return err
 	}
@@ -218,7 +218,7 @@ func proveGitOpsOwned(api *modelManagerTools, backendName, model, mcName string)
 			note("cleanup: removing the Flux labels from ModelConfig %s: %v", mcName, err)
 		}
 	}()
-	owned, err := readKagentObject(modelConfigResource, mcName)
+	owned, err := readModelConfig(mcName)
 	if err != nil {
 		return err
 	}
@@ -238,7 +238,7 @@ func proveGitOpsOwned(api *modelManagerTools, backendName, model, mcName string)
 		}
 		note("%s: %s", c.tool, excerpt(err.Error(), 160))
 	}
-	after, err := readKagentObject(modelConfigResource, mcName)
+	after, err := readModelConfig(mcName)
 	if err != nil {
 		return fmt.Errorf("ModelConfig %s after the refusals: %w", mcName, err)
 	}
@@ -327,7 +327,7 @@ func proveCommit(cfg *config.Config, user *config.User, token, binary, backendNa
 	}
 	note("%s: capabilities.commit=true", api.toolName("get_backend"))
 
-	if _, err := readKagentObject(modelConfigResource, mcName); !apierrors.IsNotFound(err) {
+	if _, err := readModelConfig(mcName); !apierrors.IsNotFound(err) {
 		return "", fmt.Errorf("ModelConfig %s is live before the commit (%v): the platform's model-manager unwires it first", mcName, err)
 	}
 	login, _, _ := strings.Cut(user.Email, "@")
@@ -371,7 +371,7 @@ func proveCommit(cfg *config.Config, user *config.User, token, binary, backendNa
 		return "", err
 	}
 	note("#%d %q by %s: %d files, byte-identical to the dry run", pr.Number, pr.Title, pr.Author, len(pr.Files))
-	if _, err := readKagentObject(modelConfigResource, mcName); !apierrors.IsNotFound(err) {
+	if _, err := readModelConfig(mcName); !apierrors.IsNotFound(err) {
 		return "", fmt.Errorf("ModelConfig %s is live after the commit (%v): commit mode writes git only", mcName, err)
 	}
 	note("no ModelConfig %s live: commit mode writes git only", mcName)
