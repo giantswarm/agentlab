@@ -493,12 +493,12 @@ func fakeSession(id, creator, agent string) *apiv1alpha1.Session {
 // whole CR as a StructuredObject plus the denormalised fields.
 func fakeTemplate(t *testing.T, name string, annotations map[string]any) *apiv1alpha1.AgentTemplate {
 	t.Helper()
-	meta := map[string]any{nameKey: name, "namespace": kagentNamespace}
+	meta := map[string]any{nameKey: name, fieldNamespace: kagentNamespace}
 	if annotations != nil {
 		meta["annotations"] = annotations
 	}
 	value, err := structpb.NewStruct(map[string]any{
-		"apiVersion": agentTemplateAPIVersion, "kind": kindAgentTemplate, fieldMetadata: meta,
+		fieldAPIVersion: agentTemplateAPIVersion, fieldKind: kindAgentTemplate, fieldMetadata: meta,
 		fieldSpec: map[string]any{descriptionKey: "Proof agent " + name},
 	})
 	if err != nil {
@@ -516,7 +516,7 @@ func fakeTemplate(t *testing.T, name string, annotations map[string]any) *apiv1a
 // annotations and the Ready condition given (nil conditions: no status yet).
 func fakeAgent(t *testing.T, name, template, harness string, annotations map[string]any, conditions []any) *apiv1alpha1.Agent {
 	t.Helper()
-	meta := map[string]any{nameKey: name, "namespace": kagentNamespace}
+	meta := map[string]any{nameKey: name, fieldNamespace: kagentNamespace}
 	if annotations != nil {
 		meta["annotations"] = annotations
 	}
@@ -525,7 +525,7 @@ func fakeAgent(t *testing.T, name, template, harness string, annotations map[str
 		status[crConditions] = conditions
 	}
 	value, err := structpb.NewStruct(map[string]any{
-		"apiVersion": kagentAPIVersion, "kind": kindAgent, fieldMetadata: meta,
+		fieldAPIVersion: kagentAPIVersion, fieldKind: kindAgent, fieldMetadata: meta,
 		fieldSpec:   map[string]any{"templateRef": map[string]any{nameKey: template}, "harnessRef": map[string]any{nameKey: harness}},
 		fieldStatus: status,
 	})
