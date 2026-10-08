@@ -184,9 +184,10 @@ func classifyAnthropicKey(secret *unstructured.Unstructured) anthropicKeyState {
 // modelConfigResolvedPoll is the cadence of waitDefaultModelConfigResolved's
 // looks at ResolvedRefs, modelConfigResolvedLooks of them: the kagent
 // controller resolves a Secret that appeared after the ModelConfig on its
-// own resync, about a minute later, not on a Secret watch — a stale False
-// right after the Secret landed is the normal state, not the verdict. A
-// variable so the tests need not wait it out.
+// own schedule — within the second on one lab, some 80 seconds later on
+// another (a backed-off requeue after the misses) — so a False right after
+// the Secret landed is the normal state, not the verdict. Variables so the
+// tests need not wait it out.
 var (
 	modelConfigResolvedPoll  = 2 * time.Second
 	modelConfigResolvedLooks = 150
