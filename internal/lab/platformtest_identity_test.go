@@ -25,7 +25,7 @@ func TestLegacyLabProofs(t *testing.T) {
 	}{
 		{"3.x release", legacyChartVersion, "", true, true},
 		{"3.x checkout", "", checkout("components:\n  kagent: {}\n"), true, true},
-		{"4.x upgrade seed", "4.66.5", "", false, true},
+		{"4.x upgrade seed", upgradeSeedVersion, "", false, true},
 		{"the default", config.DefaultChartVersion, "", false, false},
 		{"4.x checkout", "", checkout("components:\n  kagent: {}\n  substrate: {}\n"), false, false},
 	} {

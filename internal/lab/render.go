@@ -148,6 +148,13 @@ type tmplData struct {
 	// integrations.github, agent-manager's skills.github.tokenSecret, the
 	// migrate Job's githubToken. Only ever the Secret's name, never the token.
 	GitHubToken bool
+	// BackstageAppConfigChecksum is the data checksum of the lab's app-config
+	// overlay (appconfig.go): stamped on the overlay ConfigMap, where
+	// `agentlab status` reads a hand edit against it, and carried in the
+	// overlay's backstage.extraAppConfig entry, whose checksum the chart folds
+	// into the pod template, so a changed overlay rolls Backstage through
+	// helm-controller. Empty while Backstage is off.
+	BackstageAppConfigChecksum string
 }
 
 // labCAFile is the CA certificate newTmplData renders as LabCA; the tests
@@ -361,6 +368,16 @@ func renderTemplate(cfg *config.Config, name string, mutate func(*tmplData)) ([]
 	if mutate != nil {
 		mutate(data)
 	}
+	if cfg.Backstage.Enabled && (name == platformValuesTemplate || name == backstageOverlayTemplate) {
+		if data.BackstageAppConfigChecksum, err = overlayDataChecksum(data); err != nil {
+			return nil, err
+		}
+	}
+	return executeTemplate(name, data)
+}
+
+// executeTemplate renders one embedded template with the data as it is.
+func executeTemplate(name string, data *tmplData) ([]byte, error) {
 	t, err := template.New(name).Funcs(tmplFuncs).Option("missingkey=error").
 		ParseFS(templatesFS, "templates/"+name)
 	if err != nil {

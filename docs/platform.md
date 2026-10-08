@@ -48,6 +48,19 @@ The lab installs it in its **lab shape**:
   version is a placeholder, from a release.
   Never drop the value on a lab: the first upgrade without it makes the
   release self-managed.
+- **Backstage's app-config is put back on every run.** The portal reads
+  two app-config ConfigMaps at start only: the chart's
+  (`agent-platform-backstage-app-config`, rendered by the connectivity
+  release) and the lab's overlay (`agentlab-backstage-app-config`). Every
+  `agentlab platform` (and `up`) server-side applies the overlay as the
+  lab renders it (field manager `agentlab`, forced) and restores the
+  chart's ConfigMap to its Helm release's manifest, dropping data keys
+  neither render carries. Backstage rolls once when a restore changed what
+  it reads, and a changed overlay render rolls it through the chart (the
+  overlay's `extraAppConfig` `checksum`, the data checksum the ConfigMap also
+  carries as `agentlab.giantswarm.io/data-checksum`); a run without drift
+  restarts nothing. `agentlab status` names a drifted ConfigMap on its
+  `app-config` line.
 - The chart is **pinned** to an exact release, `platform.chartVersion` in
   `agentlab.yaml` (the default is the release this agentlab was verified
   with). The lab never floats; bump the pin deliberately, with a lab run.

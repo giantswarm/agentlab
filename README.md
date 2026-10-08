@@ -114,7 +114,8 @@ prompt, so browsers get a green lock) and whether to open the portal — `open
 portal` is the command for later, `open agents` opens the kagent UI and `open
 prometheus` the lab Prometheus.
 `agentlab list` shows the labs on this machine, `agentlab status` the chart a
-lab runs (a dev chart named as such) and its platform releases, and
+lab runs (a dev chart named as such), its platform releases and whether
+Backstage's app-config drifted from the render, and
 `agentlab pods` a lab's pods, from any directory (`--lab <name>` picks one
 of several).
 

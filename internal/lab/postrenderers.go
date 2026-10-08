@@ -133,6 +133,7 @@ const (
 	kindKey        = "kind"
 	kindDeployment = "Deployment"
 	kindService    = "Service"
+	kindConfigMap  = "ConfigMap"
 )
 
 // kustomizePatch is one Flux postRenderers kustomize patch: a strategic merge

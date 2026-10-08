@@ -21,6 +21,10 @@ import (
 // in these fixtures.
 const ollamaLabEndpoint = "http://172.21.0.1:11434"
 
+// upgradeSeedVersion is a 4.x release below the families floor, the line an
+// upgrade proof seeds.
+const upgradeSeedVersion = "4.66.5"
+
 func TestModelManagerValuesRenderBackends(t *testing.T) {
 	cfg := config.Default()
 	cfg.Platform.Enabled, cfg.Platform.Agents = true, true
@@ -624,8 +628,9 @@ func TestPlatformValuesLegacyChartShape(t *testing.T) {
 	delete(expectedKagent["controller"].(map[string]any), "volumeMounts")
 	expectedKagent["controller"].(map[string]any)["auth"].(map[string]any)["mode"] = "unsecure"
 	expectedKagent["serviceMonitor"].(map[string]any)["enabled"] = legacy.Platform.Observability
+	dropOverlayChecksum(t, expected)
 	if !reflect.DeepEqual(expected, legacyValues) {
-		t.Errorf("the 3.x values differ from the 4.x values in more than the 4.x keys:\n--- 4.x minus the keys\n%s\n--- 3.x\n%s", mustYAML(t, expected), mustYAML(t, legacyValues))
+		t.Errorf("the 3.x values differ from the 4.x values in more than the 4.x keys and the overlay's checksum:\n--- 4.x minus the keys\n%s\n--- 3.x\n%s", mustYAML(t, expected), mustYAML(t, legacyValues))
 	}
 
 	// The switch follows the chart, not the channel: a 4.x release, a 5.x
@@ -654,12 +659,13 @@ func TestPlatformValuesLegacyChartShape(t *testing.T) {
 	// current line's values without mcp-kubernetes.mcpServer, which its
 	// mcp-kubernetes chart refuses.
 	seed := config.Default()
-	seed.Platform.ChartVersion, seed.Platform.UpgradeSeed = "4.66.5", true
+	seed.Platform.ChartVersion, seed.Platform.UpgradeSeed = upgradeSeedVersion, true
 	seedValues, _ := render(seed)
 	seedExpected, _ := render(current)
 	delete(seedExpected["mcp-kubernetes"].(map[string]any), "mcpServer")
+	dropOverlayChecksum(t, seedExpected)
 	if !reflect.DeepEqual(seedExpected, seedValues) {
-		t.Errorf("the upgrade seed's values differ from the 4.x values in more than mcp-kubernetes.mcpServer:\n--- 4.x minus the key\n%s\n--- seed\n%s", mustYAML(t, seedExpected), mustYAML(t, seedValues))
+		t.Errorf("the upgrade seed's values differ from the 4.x values in more than mcp-kubernetes.mcpServer and the overlay's checksum:\n--- 4.x minus the key\n%s\n--- seed\n%s", mustYAML(t, seedExpected), mustYAML(t, seedValues))
 	}
 	// A chart directory renders its roster's line, whatever pin is left
 	// over, plus its connectivity source
@@ -1070,4 +1076,16 @@ func TestCoreDNSLabHostEntry(t *testing.T) {
 	if strings.HasSuffix(labHostName, "."+cfg.Platform.Domain) {
 		t.Errorf("%s is under the lab domain, so the wildcard rewrite to the edge takes it", labHostName)
 	}
+}
+
+// dropOverlayChecksum removes the checksum of the lab overlay's
+// extraAppConfig entry, which the backstage chart of an older line refuses.
+func dropOverlayChecksum(t *testing.T, values map[string]any) {
+	t.Helper()
+	entries := values["backstage"].(map[string]any)["backstage"].(map[string]any)["extraAppConfig"].([]any)
+	overlay := entries[len(entries)-1].(map[string]any)
+	if overlay["configMapRef"] != labAppConfigMap || overlay["checksum"] == "" {
+		t.Fatalf("the last extraAppConfig entry is not the overlay with its checksum: %v", overlay)
+	}
+	delete(overlay, "checksum")
 }

@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -138,6 +139,9 @@ type Status struct {
 	// Releases are the platform HelmReleases with their Ready condition; none
 	// without a platform release.
 	Releases []platformReleaseStatus `json:"releases,omitempty"`
+	// AppConfigDrift names Backstage's app-config ConfigMaps whose data is not
+	// what the lab or the chart rendered (appconfig.go); none in sync.
+	AppConfigDrift []string `json:"appConfigDrift,omitempty"`
 }
 
 // LabStatus reads the lab's live state. A lab that is not running is refused
@@ -164,6 +168,11 @@ func LabStatus(cfg *config.Config, dir string) (*Status, error) {
 		if s.Releases, err = platformReleases(); err != nil {
 			return nil, err
 		}
+		if cfg.Backstage.Enabled {
+			if s.AppConfigDrift, err = appConfigDrift(context.Background()); err != nil {
+				return nil, err
+			}
+		}
 	}
 	return s, nil
 }
@@ -182,6 +191,7 @@ func PrintStatus(w io.Writer, s *Status, asJSON bool) error {
 	fmt.Fprintf(&b, "    config      %s\n", configLine(s))
 	if s.Chart != nil {
 		fmt.Fprintf(&b, "    releases    %s\n", releasesLine(s.Releases))
+		fmt.Fprintf(&b, "    app-config  %s\n", appConfigLine(s.AppConfigDrift))
 	}
 	_, err := io.WriteString(w, b.String())
 	return err
