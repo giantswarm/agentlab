@@ -142,6 +142,7 @@ func TestPrintStatus(t *testing.T) {
 			{Name: componentMuster, Ready: conditionTrue, Message: "Helm install succeeded"},
 			{Name: "agent-manager", Ready: condFalse, Message: "no match found for semver: >=1.10.0 <2.0.0"},
 		},
+		AppConfigDrift: []string{labAppConfigMap + " differs from the lab's render"},
 	}
 	var out bytes.Buffer
 	if err := PrintStatus(&out, devBuild, false); err != nil {
@@ -154,6 +155,7 @@ func TestPrintStatus(t *testing.T) {
 		devBuild.Chart.Description,
 		"config      agent-platform " + releaseInPlace + "; `agentlab platform` replaces the chart in place with it",
 		"releases    1 of 2 Ready; agent-manager Ready=False no match found for semver",
+		"app-config  drifted: " + labAppConfigMap + " differs from the lab's render",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("status lacks %q:\n%s", want, text)

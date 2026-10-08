@@ -380,17 +380,16 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 		return err
 	}
 
+	// Catalog entities + the agent create flow's scaffolder Template and the
+	// app-config overlay, mounted into the chart's Backstage; must exist
+	// before the pod starts. Applied on every run, which also puts back a
+	// hand edit (appconfig.go); the roll that a restore or a changed catalog
+	// needs waits for the install, together with the chart's app-config.
+	var rollBackstageAfterInstall bool
 	if cfg.Backstage.Enabled {
-		// Catalog entities + the agent create flow's scaffolder Template,
-		// mounted into the chart's Backstage; must exist before the pod starts.
-		// Backstage reads app-config at startup only, so a changed overlay
-		// (e.g. flipping platform.observability toggles mimirEnabled) needs a
-		// pod roll on re-runs: started here and absorbed by the install's wait
-		// right below; on a fresh install the deployment does not exist yet and
-		// the first pod reads the final config.
-		if catalog, _, err := renderManifest(cfg, "backstage-catalog.yaml.tmpl"); err != nil {
+		if overlay, _, err := renderManifest(cfg, backstageOverlayTemplate); err != nil {
 			return err
-		} else if _, err := applyRestartingOnChange(ctx, catalog, platformNamespace, componentBackstage); err != nil {
+		} else if rollBackstageAfterInstall, err = applyBackstageOverlay(ctx, overlay, !cfg.FamilylessChart()); err != nil {
 			return err
 		}
 	}
@@ -676,6 +675,19 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 			return err
 		}
 	}
+	// The chart's app-config ConfigMap put back to its release's render
+	// (appconfig.go), then one Backstage roll for whatever the lab restored.
+	if cfg.Backstage.Enabled {
+		restored, err := restoreChartAppConfig(ctx)
+		if err != nil {
+			return err
+		}
+		if restored || rollBackstageAfterInstall {
+			if err := rollBackstage(ctx); err != nil {
+				return err
+			}
+		}
+	}
 	// The two halves of Agent Substrate on one release (proveSubstrateLine):
 	// a chart whose kagent range admits a worker image from another Substrate
 	// release than its atelet installs green and boots no golden actor —
@@ -926,7 +938,7 @@ func ensurePlatformSecrets(ctx context.Context) error {
 
 // applyRestartingOnChange applies a manifest and, when the apply created or
 // changed anything, restarts the Deployment that reads the result at startup
-// only — CoreDNS its Corefile, Backstage its app-config overlay — so a re-run
+// only — CoreDNS its Corefile — so a re-run
 // with a changed render rolls the pod exactly once and an unchanged one
 // leaves it alone. A Deployment that does not exist yet is not an error: a
 // fresh install's first pod reads the final config. Reports whether it

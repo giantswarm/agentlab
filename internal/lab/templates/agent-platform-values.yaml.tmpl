@@ -977,6 +977,13 @@ backstage:
         configMapRef: agent-platform-backstage-app-config
       - filename: app-config.agentlab.yaml
         configMapRef: agentlab-backstage-app-config
+{{- if not .FamilylessChart }}
+        # The overlay's data checksum (appconfig.go): the chart folds it into
+        # the pod template, so a changed overlay rolls Backstage once, and an
+        # unchanged one never. The backstage chart of an older line refuses
+        # the key.
+        checksum: "{{ .BackstageAppConfigChecksum }}"
+{{- end }}
 {{- if .GitHubToken }}
     # $GITHUB_TOKEN into the portal's environment from the Secret the lab
     # creates (githubtoken.go); the overlay's integrations.github reads it

@@ -52,6 +52,10 @@ kind: ConfigMap
 metadata:
   name: agentlab-backstage-app-config
   namespace: agent-platform
+  annotations:
+    # The checksum of data below as the lab rendered it (appconfig.go):
+    # `agentlab status` reads a hand edit against it.
+    agentlab.giantswarm.io/data-checksum: "{{ .BackstageAppConfigChecksum }}"
 data:
   app-config.agentlab.yaml: |
     # Backstage's public URL. The umbrella's app-config renders these three

@@ -41,7 +41,10 @@ What the lab adds on top of the chart's own app-config
   rewrite still routes `https://muster.127.0.0.1.nip.io/mcp` to the edge.
 - **The lab catalog overlay** (`agentlab-backstage-app-config` +
   `agentlab-backstage-catalog`): the users/groups entities and an in-memory
-  sqlite database — no Postgres needed for a lab portal.
+  sqlite database — no Postgres needed for a lab portal. Applied on every
+  platform run, so a hand edit of it (or of the chart's app-config) is put
+  back and the portal rolled once (docs/platform.md, "Backstage's app-config
+  is put back on every run").
 - **The shared `agent-platform` Dex client** carries Backstage's callback
   (`/api/auth/oidc-agent-platform/handler/frame` — the chart's provider name),
   and the `kubernetes` client trusts it as a peer so the Kubernetes plugin can
