@@ -72,6 +72,7 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 	servingEnabled := cfg.Platform.Serving.Enabled
 	agentsPort := strconv.Itoa(cfg.Platform.AgentsPort)
 	aiModel := cfg.AIModel
+	aiKeySource := cfg.AIKey.Source
 	customizeModels := false
 	backstagePort := strconv.Itoa(cfg.Backstage.Port)
 
@@ -178,9 +179,14 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 				Value(&servingEnabled),
 			huh.NewInput().
 				Title("Claude model").
-				Description("Used by the platform agents' ModelConfig and Backstage's AI chat.\nThe API key comes from $ANTHROPIC_API_KEY at deploy time, never from this file.").
+				Description("Used by the platform agents' ModelConfig and Backstage's AI chat.\nThe API key never enters this file: see the next question.").
 				Value(&aiModel).
 				Validate(config.ValidateAIModel),
+			huh.NewInput().
+				Title("Anthropic key source").
+				Description("Optional: a reference `beekeeper secret copy` resolves — op://<vault>/<item>/<field>, or\n<file>#<path> of a SOPS file — never the key itself. Every up and platform place it into the\nSecret kagent/kagent-anthropic through beekeeper, so a recreated lab carries the key without\na manual step. Empty: the key comes from $ANTHROPIC_API_KEY at deploy time, else a placeholder.").
+				Value(&aiKeySource).
+				Validate(func(s string) error { return config.AIKey{Source: s}.Validate() }),
 			huh.NewConfirm().
 				Title("Customize extra model configs?").
 				DescriptionFunc(func() string {
@@ -223,6 +229,7 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 	cfg.Platform.Serving.Enabled = servingEnabled && agentsEnabled
 	cfg.Platform.AgentsPort = mustAtoi(agentsPort)
 	cfg.AIModel = aiModel
+	cfg.AIKey.Source = aiKeySource
 	cfg.Backstage.Port = mustAtoi(backstagePort)
 
 	if customizeUsers {

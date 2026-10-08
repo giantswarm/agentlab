@@ -441,6 +441,49 @@ type GitHub struct {
 	Secret SecretRef `yaml:"secret,omitempty"`
 }
 
+// AIKey is where the Anthropic key of the default ModelConfig comes from:
+// never this file. Source names where the operator's secret tooling finds
+// it; `agentlab up` and `platform` hand the reference to that tooling, which
+// writes the value from there straight into the lab's Secret in its own
+// process (internal/lab/anthropic.go), so the lab carries the key after
+// every recreate without a manual step and agentlab never reads a value.
+type AIKey struct {
+	// Source is a reference `beekeeper secret copy` resolves: a field of the
+	// shared vault (op://<vault>/<item>/<field>) or one value of a SOPS file
+	// (<file>#<dotted.path>, sops:// in front optional). Empty means the key
+	// comes from $ANTHROPIC_API_KEY at deploy time, else a placeholder.
+	Source string `yaml:"source,omitempty"`
+}
+
+// Validate refuses a source that is not a reference: a value pasted into
+// the file (a key, or anything that is neither an op:// field nor a SOPS
+// path) must never reach agentlab.yaml.
+func (k AIKey) Validate() error {
+	if k.Source == "" {
+		return nil
+	}
+	return ValidateSecretSource(k.Source)
+}
+
+// ValidateSecretSource is the one home of the secret-reference rule; the huh
+// form uses it directly as an input validator.
+func ValidateSecretSource(s string) error {
+	if strings.ContainsAny(s, " \t\n") {
+		return fmt.Errorf("a reference carries no whitespace")
+	}
+	if rest, ok := strings.CutPrefix(s, "op://"); ok {
+		if parts := strings.Split(rest, "/"); len(parts) != 3 || slices.Contains(parts, "") {
+			return fmt.Errorf("an op:// reference is op://<vault>/<item>/<field>")
+		}
+		return nil
+	}
+	file, path, ok := strings.Cut(strings.TrimPrefix(s, "sops://"), "#")
+	if !ok || file == "" || path == "" {
+		return fmt.Errorf("a reference, never a value: op://<vault>/<item>/<field> or <file>#<dotted.path>")
+	}
+	return nil
+}
+
 // SecretRef names a Kubernetes Secret.
 type SecretRef struct {
 	Name      string `yaml:"name,omitempty"`
@@ -783,9 +826,12 @@ type Config struct {
 
 	// The Claude model both AI consumers use: the platform agents' default
 	// ModelConfig (kagent) and Backstage's ai-chat. The API key is NOT config:
-	// it is read from $ANTHROPIC_API_KEY at deploy time and lands only in
-	// Kubernetes Secrets, never in this file or in rendered manifests.
+	// it lands only in Kubernetes Secrets, never in this file or in rendered
+	// manifests — from the source AIKey records, else $ANTHROPIC_API_KEY at
+	// deploy time, else a placeholder.
 	AIModel string `yaml:"aiModel"`
+	// AIKey is where the key of the default ModelConfig comes from.
+	AIKey AIKey `yaml:"aiKey,omitempty"`
 
 	Users     []User    `yaml:"users"`
 	Platform  Platform  `yaml:"platform"`
@@ -1183,6 +1229,9 @@ func (c *Config) Validate() error {
 	}
 	if err := ValidateAIModel(c.AIModel); err != nil {
 		return fmt.Errorf("aiModel %q: %w", c.AIModel, err)
+	}
+	if err := c.AIKey.Validate(); err != nil {
+		return fmt.Errorf("aiKey.source %q: %w", c.AIKey.Source, err)
 	}
 	if c.SubstrateNodes < 0 || c.SubstrateNodes > MaxSubstrateNodes {
 		return fmt.Errorf("substrateNodes: %d, want 0 (the single-node lab) to %d", c.SubstrateNodes, MaxSubstrateNodes)

@@ -73,10 +73,14 @@ with Dex doing the logins.
   reconciles the HelmRelease — nothing watches git, and the lab installs no
   Flux of its own. Its default
   ModelConfig and Backstage's ai-chat both use `aiModel` from `agentlab.yaml`
-  (Anthropic only); the API key comes from `$ANTHROPIC_API_KEY` on the host at
-  deploy time and lives only in the Secrets `kagent/kagent-anthropic` and
-  `backstage/backstage-anthropic` — never in `agentlab.yaml` or `state/`.
-  Never inline a real key in config, templates, or rendered values.
+  (Anthropic only); the API key lives only in the Secret
+  `kagent/kagent-anthropic` — never in `agentlab.yaml` or `state/` — which
+  every `up`/`platform` fills (anthropic.go): from the reference
+  `aiKey.source` records through `beekeeper secret copy --to-secret`
+  (agentlab never reads the value; a source that cannot be placed fails the
+  run), else from `$ANTHROPIC_API_KEY` on the host, else with a placeholder
+  so the ModelConfig resolves (agent turns then fail until the key is
+  placed). Never inline a real key in config, templates, or rendered values.
   `platform.extraModels` adds further ModelConfigs (self-hosted
   OpenAI-compatible endpoints, OpenRouter, Gemini, Ollama) with the same
   env-var -> Secret key handling; entries removed from the config are pruned

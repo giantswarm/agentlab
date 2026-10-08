@@ -144,7 +144,7 @@ an outdated agentlab keeps working (see [Keeping agentlab current](cli.md#keepin
 Then bring the lab up:
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...   # optional: powers the agents + Backstage AI chat
+export ANTHROPIC_API_KEY=sk-ant-...   # optional: powers the agents + Backstage AI chat (or record a vault reference: agents.md "The model")
 export GITHUB_TOKEN=github_pat_...    # optional: skill discovery/resolution call GitHub authenticated (5000/h, not 60/h)
 ./agentlab up              # first run: asks one question, then certs, kind cluster, Dex, RBAC, the agent platform — verified
 ./agentlab open portal     # the portal (Backstage) in the browser; `open agents` the kagent UI
@@ -262,8 +262,10 @@ Applied to the configuration:
   Without them `platform.vmManager.enabled` goes off; with them the key stays
   what the file says (`--vm-manager` turns it on) — see
   [vm-manager](vm-manager.md).
-- **`$ANTHROPIC_API_KEY`**: whether it is exported, since the agents'
-  default ModelConfig and Backstage's AI chat take it at deploy time.
+- **The Anthropic key**: the source `agentlab.yaml` records (`aiKey.source`,
+  placed through beekeeper, which must then answer on PATH), else whether
+  `$ANTHROPIC_API_KEY` is exported, else the placeholder the agents' default
+  ModelConfig gets at deploy time. See [Agents](agents.md#the-model).
 - **`$GITHUB_TOKEN`**: whether it is exported, since the portal's skill
   discovery and agent-manager's skill resolution take it at deploy time and
   otherwise share this machine's unauthenticated GitHub window (60 requests

@@ -1240,13 +1240,18 @@ func secretDataKey(ctx context.Context, ns, name, key string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	return secretDataValue(secret, key)
+}
+
+// secretDataValue decodes one data key of a Secret already read.
+func secretDataValue(secret *unstructured.Unstructured, key string) ([]byte, error) {
 	encoded, found, _ := unstructured.NestedString(secret.Object, "data", key)
 	if !found {
-		return nil, fmt.Errorf("secret %s/%s has no data key %s", ns, name, key)
+		return nil, fmt.Errorf("secret %s/%s has no data key %s", secret.GetNamespace(), secret.GetName(), key)
 	}
 	raw, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
-		return nil, fmt.Errorf("secret %s/%s key %s: %w", ns, name, key, err)
+		return nil, fmt.Errorf("secret %s/%s key %s: %w", secret.GetNamespace(), secret.GetName(), key, err)
 	}
 	return raw, nil
 }

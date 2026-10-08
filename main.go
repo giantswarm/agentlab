@@ -721,7 +721,7 @@ func configureCmd() *cobra.Command {
 	var platform, agents, observability, backstage, modelManager, vmManager, klausGateway bool
 	var serving, github bool
 	var modelManagerBackends []string
-	var vmManagerImageDir string
+	var vmManagerImageDir, aiKeySource string
 	var chartVersion, chartPath, chartBranch string
 	var upgradeSeed bool
 	cmd := &cobra.Command{
@@ -809,6 +809,9 @@ func configureCmd() *cobra.Command {
 			if cmd.Flags().Changed("serving") {
 				cfg.Platform.Serving.Enabled = serving
 			}
+			if cmd.Flags().Changed("ai-key-source") {
+				cfg.AIKey.Source = aiKeySource
+			}
 			// Every run discovers the machine — an existing agentlab.yaml
 			// follows the host too: a server that appeared is added, one that
 			// is gone drops out, ports move while no cluster holds them.
@@ -866,6 +869,7 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&klausGateway, "klaus-gateway", false, "run Swarmgeist (klaus-gateway) as the meta chart's in-cluster component: A2A on the in-cluster controller target, Slack on a placeholder Secret (its Web API the proof's fake), the OBO link store in a Secret (needs agents); --klaus-gateway=false turns it off")
 	cmd.Flags().BoolVar(&github, "github", false, "register GitHub's hosted MCP server with muster as MCPServer github, signed in to as the person through an OAuth App or GitHub App client whose client-id and client-secret are the Secret platform.github.secret names (default agent-platform/github-oauth-client), placed with `beekeeper secret copy --to-secret`, never read by agentlab; --github=false removes the server")
 	cmd.Flags().BoolVar(&serving, "serving", false, "serve models on llm-d in the lab: the KServe llmisvc controller and its CRDs, the well-known runtime configs, the connectivity chart's serving slice with the models Gateway, model-manager's kserve backend and one CPU preset of the lab's (needs agents; installs cert-manager); --serving=false turns it off")
+	cmd.Flags().StringVar(&aiKeySource, "ai-key-source", "", "where the Anthropic key of the agents' default ModelConfig lives, a reference `beekeeper secret copy` resolves (op://<vault>/<item>/<field>, or <file>#<path> of a SOPS file), never a value: every up and platform place it into the Secret kagent/kagent-anthropic through beekeeper, so a recreated lab carries it without a manual step; \"\" clears it (the key then comes from $ANTHROPIC_API_KEY, else a placeholder)")
 	cmd.Flags().BoolVar(&accessible, "accessible", false, "prompt-per-question form mode (for screen readers and plain terminals)")
 	return cmd
 }
@@ -892,7 +896,14 @@ func printSaved(cfg *config.Config, disc *lab.Discovery) {
 		fmt.Printf("  dev image  %s -> %s\n", name, cfg.Platform.DevImages[name])
 	}
 	fmt.Printf("  backstage  %v\n", cfg.Backstage.Enabled)
-	fmt.Printf("  ai model   %s (key from $%s at deploy time)\n", cfg.AIModel, lab.AnthropicKeyEnv)
+	switch {
+	case cfg.AIKey.Source != "":
+		fmt.Printf("  ai model   %s (key placed from %s through beekeeper at deploy time)\n", cfg.AIModel, cfg.AIKey.Source)
+	case disc.AnthropicKey:
+		fmt.Printf("  ai model   %s (key from $%s at deploy time)\n", cfg.AIModel, lab.AnthropicKeyEnv)
+	default:
+		fmt.Printf("  ai model   %s (no key source and $%s not set: a placeholder key at deploy time, agent turns fail until one is placed)\n", cfg.AIModel, lab.AnthropicKeyEnv)
+	}
 	for _, m := range cfg.Platform.ExtraModels {
 		fmt.Printf("  extra model %s (%s %s)\n", m.Name, m.Provider, m.Model)
 	}

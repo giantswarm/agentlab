@@ -74,24 +74,44 @@ fixture's `credentialRef`, the control boot without the skill).
 Agents run against a **default `ModelConfig`** that the connectivity chart
 renders from the lab's `aiModel` setting (`agentlab.yaml`, default
 `claude-sonnet-4-6` — the BOM's own default), referencing the Secret
-`kagent/kagent-anthropic`. The API key is a **real credential**, so unlike
-the lab's throwaway passwords it never enters `agentlab.yaml` or the rendered
-`state/` files: `agentlab platform` creates the Secret from
-`$ANTHROPIC_API_KEY` on the host (created once, left alone; delete it and
-re-run to rotate). Without the env var the install still succeeds — the
-ModelConfig then points at a Secret that does not exist yet, which is
-harmless until an agent is created: its template's `ResolvedRefs` stays
-False on the Harness until the Secret lands. To supply the key later, either
-export it and re-run `agentlab platform` (idempotent — it only fills the
-gap), or create the Secret directly:
+`kagent/kagent-anthropic` (key `ANTHROPIC_API_KEY`). The API key is a **real
+credential**, so unlike the lab's throwaway passwords it never enters
+`agentlab.yaml` or the rendered `state/` files. The Secret exists after every
+`agentlab up` and `agentlab platform`, so the ModelConfig resolves on a fresh
+lab too (the run waits for `ResolvedRefs`), from the first of:
 
-```bash
-kubectl -n kagent create secret generic kagent-anthropic \
-  --from-literal=ANTHROPIC_API_KEY=sk-ant-...
-```
+- **A recorded source** (`aiKey.source` in `agentlab.yaml`; `agentlab
+  configure --ai-key-source op://<vault>/<item>/<field>`, or
+  `<file>#<path>` of a SOPS file): a *reference*, never a value. Every `up`
+  and `platform` hand it to the operator's secret tooling, `beekeeper secret
+  copy <source> --to-secret kind-<clusterName>/kagent/kagent-anthropic/ANTHROPIC_API_KEY`
+  ([beekeeper](https://github.com/giantswarm/beekeeper), on PATH; `configure`
+  refuses a source without it), which reads the value in its own process and
+  writes it straight into the lab's apiserver — agentlab sees the value's
+  length, never the value. A recreated lab (`down`, `up`) carries the key
+  again without a manual step; a Secret already holding a real key is left
+  alone (delete it and re-run to place the source again). A source that
+  cannot be placed — the tooling missing, the vault not answering, no lease
+  on the lab — fails the run naming the Secret and the source: a lab whose
+  configuration says where the key is never runs on a placeholder.
+- **`$ANTHROPIC_API_KEY`** on the host, when no source is recorded: the
+  Secret is created from it in-process (left alone once it holds a real key;
+  delete it and re-run to rotate).
+- **A placeholder** otherwise, as for an [extra model](models.md) without a
+  key: the ModelConfig resolves and agents start, but every turn on it fails
+  at Anthropic until the key is placed — the run says so, loudly, with the
+  three ways: the `beekeeper secret copy … --to-secret` call above (it
+  replaces the placeholder; the next run leaves the real key alone), the
+  source recorded, or the variable exported and `agentlab platform` re-run.
+  Without any of those, run the agent proofs on a host model:
+  [Agent proofs without an Anthropic key](models.md#agent-proofs-without-an-anthropic-key).
 
-The same key powers Backstage's AI chat via a second Secret,
-`backstage/backstage-anthropic` (see
+A person without the tooling places the key with
+`kubectl --context kind-<clusterName> -n kagent create secret generic
+kagent-anthropic --from-file=ANTHROPIC_API_KEY=…` (over the placeholder:
+`delete secret` first).
+
+The same key powers Backstage's AI chat (see
 [Backstage gotchas](backstage.md#backstage-gotchas) for its no-key behavior).
 Further models — the host model servers through model-manager,
 `platform.extraModels` — are their own ModelConfigs; see [Models](models.md).
