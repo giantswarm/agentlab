@@ -6,13 +6,28 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	clienttesting "k8s.io/client-go/testing"
 
 	"github.com/giantswarm/agentlab/internal/config"
+)
+
+// The keys the tests seed and expect: a real one, the vault's, the
+// variable's — test values, no credential.
+const (
+	testRealKey  = "sk-ant-real"  // #nosec G101 -- a test value, not a credential
+	testVaultKey = "sk-ant-vault" // #nosec G101 -- a test value, not a credential
+	testEnvKey   = "sk-ant-env"   // #nosec G101 -- a test value, not a credential
+	// testKeySource is the reference the tests record as aiKey.source.
+	testKeySource = "op://lab/anthropic/credential"
+	// testToolVersion is what the fake tooling reports.
+	testToolVersion = "v0.108.3"
 )
 
 // anthropicSecretWith is a kagent/kagent-anthropic seed carrying value under
@@ -74,12 +89,12 @@ func TestEnsureAnthropicSecretPlaceholder(t *testing.T) {
 		t.Errorf("no source, no tooling call: %v", *calls)
 	}
 
-	real := newFakeLab(t, anthropicSecretWith("sk-ant-real"))
+	real := newFakeLab(t, anthropicSecretWith(testRealKey))
 	wrote, err = ensureAnthropicSecret(cfg)
 	if err != nil || wrote {
 		t.Errorf("a real key is left alone: wrote %v, %v", wrote, err)
 	}
-	if storedAnthropicKey(t, real) != "sk-ant-real" {
+	if storedAnthropicKey(t, real) != testRealKey {
 		t.Errorf("the real key was rewritten")
 	}
 }
@@ -87,7 +102,7 @@ func TestEnsureAnthropicSecretPlaceholder(t *testing.T) {
 // TestEnsureAnthropicSecretFromEnv: the variable creates the Secret, replaces
 // the placeholder, and never overwrites a real key.
 func TestEnsureAnthropicSecretFromEnv(t *testing.T) {
-	t.Setenv(AnthropicKeyEnv, "sk-ant-env")
+	t.Setenv(AnthropicKeyEnv, testEnvKey)
 	fakeSecretTool(t, nil)
 	cfg := config.Default()
 	for _, tc := range []struct {
@@ -96,9 +111,9 @@ func TestEnsureAnthropicSecretFromEnv(t *testing.T) {
 		wantWrote bool
 		wantKey   string
 	}{
-		{name: "absent", wantWrote: true, wantKey: "sk-ant-env"},
-		{name: "placeholder", seed: anthropicSecretWith(placeholderAPIKey), wantWrote: true, wantKey: "sk-ant-env"},
-		{name: "real", seed: anthropicSecretWith("sk-ant-real"), wantKey: "sk-ant-real"},
+		{name: "no Secret", wantWrote: true, wantKey: testEnvKey},
+		{name: "over the placeholder", seed: anthropicSecretWith(placeholderAPIKey), wantWrote: true, wantKey: testEnvKey},
+		{name: "a real key stays", seed: anthropicSecretWith(testRealKey), wantKey: testRealKey},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var f *fakeLab
@@ -125,8 +140,8 @@ func TestEnsureAnthropicSecretFromEnv(t *testing.T) {
 // writes nothing itself; a real key already there is left alone without a
 // call; the variable is ignored while a source is recorded.
 func TestEnsureAnthropicSecretFromSource(t *testing.T) {
-	t.Setenv(AnthropicKeyEnv, "sk-ant-env")
-	const source = "op://lab/anthropic/credential"
+	t.Setenv(AnthropicKeyEnv, testEnvKey)
+	const source = testKeySource
 	cfg := config.Default()
 	cfg.ClusterName = "agentlab-2"
 	cfg.AIKey.Source = source
@@ -137,7 +152,7 @@ func TestEnsureAnthropicSecretFromSource(t *testing.T) {
 		seed *corev1.Secret
 	}{
 		{name: "fresh lab"},
-		{name: "placeholder", seed: anthropicSecretWith(placeholderAPIKey)},
+		{name: "over the placeholder", seed: anthropicSecretWith(placeholderAPIKey)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var f *fakeLab
@@ -147,7 +162,7 @@ func TestEnsureAnthropicSecretFromSource(t *testing.T) {
 				f = newFakeLab(t)
 			}
 			calls := fakeSecretTool(t, func() error {
-				return ensureSecret(kagentNamespace, anthropicSecret, corev1.SecretTypeOpaque, map[string][]byte{anthropicSecretKey: []byte("sk-ant-vault")})
+				return ensureSecret(kagentNamespace, anthropicSecret, corev1.SecretTypeOpaque, map[string][]byte{anthropicSecretKey: []byte(testVaultKey)})
 			})
 			wrote, err := ensureAnthropicSecret(cfg)
 			if err != nil {
@@ -159,20 +174,20 @@ func TestEnsureAnthropicSecretFromSource(t *testing.T) {
 			if len(*calls) != 1 || !reflect.DeepEqual((*calls)[0], wantArgs) {
 				t.Errorf("tooling calls %v, want one: %v", *calls, wantArgs)
 			}
-			if got := storedAnthropicKey(t, f); got != "sk-ant-vault" {
+			if got := storedAnthropicKey(t, f); got != testVaultKey {
 				t.Errorf("key %q, want the one the tooling placed (never the variable's)", got)
 			}
 		})
 	}
 
 	t.Run("real key stays", func(t *testing.T) {
-		f := newFakeLab(t, anthropicSecretWith("sk-ant-real"))
+		f := newFakeLab(t, anthropicSecretWith(testRealKey))
 		calls := fakeSecretTool(t, nil)
 		wrote, err := ensureAnthropicSecret(cfg)
 		if err != nil || wrote {
 			t.Errorf("wrote %v, %v", wrote, err)
 		}
-		if len(*calls) != 0 || storedAnthropicKey(t, f) != "sk-ant-real" {
+		if len(*calls) != 0 || storedAnthropicKey(t, f) != testRealKey {
 			t.Errorf("a real key is left alone, the tooling not called: %v", *calls)
 		}
 	})
@@ -185,7 +200,7 @@ func TestEnsureAnthropicSecretFromSource(t *testing.T) {
 func TestEnsureAnthropicSecretSourceFailureIsNoPlaceholder(t *testing.T) {
 	t.Setenv(AnthropicKeyEnv, "")
 	cfg := config.Default()
-	cfg.AIKey.Source = "op://lab/anthropic/credential"
+	cfg.AIKey.Source = testKeySource
 
 	f := newFakeLab(t)
 	fakeSecretTool(t, nil)
@@ -227,9 +242,9 @@ func TestClassifyAnthropicKey(t *testing.T) {
 	}{
 		{name: "no data", want: anthropicKeyMissing},
 		{name: "other key", data: map[string][]byte{"OPENAI_API_KEY": []byte("x")}, want: anthropicKeyMissing},
-		{name: "empty", data: map[string][]byte{anthropicSecretKey: nil}, want: anthropicKeyMissing},
-		{name: "placeholder", data: map[string][]byte{anthropicSecretKey: []byte(placeholderAPIKey)}, want: anthropicKeyPlaceholder},
-		{name: "real", data: map[string][]byte{anthropicSecretKey: []byte("sk-ant-x")}, want: anthropicKeyReal},
+		{name: "the key empty", data: map[string][]byte{anthropicSecretKey: nil}, want: anthropicKeyMissing},
+		{name: "the placeholder", data: map[string][]byte{anthropicSecretKey: []byte(placeholderAPIKey)}, want: anthropicKeyPlaceholder},
+		{name: "a value", data: map[string][]byte{anthropicSecretKey: []byte(testRealKey)}, want: anthropicKeyReal},
 	} {
 		if got := classifyAnthropicKey(seed(tc.data)); got != tc.want {
 			t.Errorf("%s: %v, want %v", tc.name, got, tc.want)
@@ -241,14 +256,14 @@ func TestClassifyAnthropicKey(t *testing.T) {
 // the tooling to the verdict when it is missing, naming the source, the
 // Secret and the way out; without a source it is never asked for.
 func TestPreflightAsksForTheSecretToolOnlyWithASource(t *testing.T) {
-	d := &Discovery{Tools: toolVersions("29.7.2"), KeySource: "op://lab/anthropic/credential"}
+	d := &Discovery{Tools: toolVersions("29.7.2"), KeySource: testKeySource}
 	err := d.Preflight()
-	for _, want := range []string{"beekeeper is not on PATH", "op://lab/anthropic/credential", "kagent/kagent-anthropic", "giantswarm/beekeeper", `--ai-key-source ""`} {
+	for _, want := range []string{"beekeeper is not on PATH", testKeySource, "kagent/kagent-anthropic", "giantswarm/beekeeper", `--ai-key-source ""`} {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("want the refusal naming %q, got %v", want, err)
 		}
 	}
-	d.SecretTool = "v0.108.3"
+	d.SecretTool = testToolVersion
 	if err := d.Preflight(); err != nil {
 		t.Errorf("with the tooling answering: %v", err)
 	}
@@ -271,10 +286,10 @@ func TestReportAnthropicKeyLine(t *testing.T) {
 		return ""
 	}
 	tools := toolVersions("29.7.2")
-	if line := keyLine(&Discovery{Tools: tools, KeySource: "op://lab/anthropic/credential", SecretTool: "v0.108.3"}); !strings.Contains(line, "aiKey.source op://lab/anthropic/credential — beekeeper v0.108.3 places it into the Secret kagent/kagent-anthropic") {
+	if line := keyLine(&Discovery{Tools: tools, KeySource: testKeySource, SecretTool: testToolVersion}); !strings.Contains(line, "aiKey.source "+testKeySource+" — beekeeper "+testToolVersion+" places it into the Secret kagent/kagent-anthropic") {
 		t.Errorf("source line %q", line)
 	}
-	if line := keyLine(&Discovery{Tools: tools, KeySource: "op://lab/anthropic/credential"}); !strings.Contains(line, "beekeeper is not on PATH") {
+	if line := keyLine(&Discovery{Tools: tools, KeySource: testKeySource}); !strings.Contains(line, "beekeeper is not on PATH") {
 		t.Errorf("source without the tooling %q", line)
 	}
 	if line := keyLine(&Discovery{Tools: tools, AnthropicKey: true}); !strings.Contains(line, "$ANTHROPIC_API_KEY is set") {
@@ -285,5 +300,49 @@ func TestReportAnthropicKeyLine(t *testing.T) {
 		if !strings.Contains(line, want) {
 			t.Errorf("placeholder line %q lacks %q", line, want)
 		}
+	}
+}
+
+// TestWaitDefaultModelConfigResolved: the wait outlives the controller's
+// resync — a ResolvedRefs that turns True on a later look passes, one that
+// stays False fails with its message after the looks, a status without the
+// condition (the 0.x line) passes at once.
+func TestWaitDefaultModelConfigResolved(t *testing.T) {
+	prevAccepted, prevResolved, prevLooks := modelConfigAcceptedPoll, modelConfigResolvedPoll, modelConfigResolvedLooks
+	modelConfigAcceptedPoll, modelConfigResolvedPoll, modelConfigResolvedLooks = time.Millisecond, time.Millisecond, 5
+	t.Cleanup(func() {
+		modelConfigAcceptedPoll, modelConfigResolvedPoll, modelConfigResolvedLooks = prevAccepted, prevResolved, prevLooks
+	})
+	accepted := func() *unstructured.Unstructured {
+		return withCondition(customObject(gvkModelConfig, kagentNamespace, defaultModelConfig, nil), "Accepted", conditionTrue, "")
+	}
+	resolvedRefs := func(mc *unstructured.Unstructured, status, message string) *unstructured.Unstructured {
+		conds, _, _ := unstructured.NestedSlice(mc.Object, fieldStatus, "conditions")
+		_ = unstructured.SetNestedSlice(mc.Object, append(conds, map[string]any{fieldType: conditionResolvedRefs, fieldStatus: status, fieldMessage: message}), fieldStatus, "conditions")
+		return mc
+	}
+
+	newFakeLab(t, accepted())
+	if err := waitDefaultModelConfigResolved(); err != nil {
+		t.Errorf("no ResolvedRefs condition (the 0.x line): %v", err)
+	}
+
+	f := newFakeLab(t, resolvedRefs(accepted(), condFalseStatus, "secret kagent-anthropic not found"))
+	err := waitDefaultModelConfigResolved()
+	if err == nil || !strings.Contains(err.Error(), "ResolvedRefs=False after 5ms: secret kagent-anthropic not found") {
+		t.Errorf("a False that stays: %v", err)
+	}
+
+	// Stale right after the Secret landed, True on a later look — the
+	// controller's resync, played by a reactor on the third read.
+	looks := 0
+	f.dyn.PrependReactor("get", "modelconfigs", func(clienttesting.Action) (bool, runtime.Object, error) {
+		if looks++; looks == 3 {
+			_ = f.dyn.Tracker().Update(gvrModelConfigs, resolvedRefs(accepted(), conditionTrue, "All referenced secrets resolved"), kagentNamespace)
+		}
+		return false, nil, nil
+	})
+	if err := waitDefaultModelConfigResolved(); err != nil {
+		t.Errorf("a False that turns True within the looks: %v", err)
 	}
 }

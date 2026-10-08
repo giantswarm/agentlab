@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -180,10 +181,45 @@ func classifyAnthropicKey(secret *unstructured.Unstructured) anthropicKeyState {
 	return anthropicKeyReal
 }
 
+// modelConfigResolvedPoll is the cadence of waitDefaultModelConfigResolved's
+// looks at ResolvedRefs, modelConfigResolvedLooks of them: the kagent
+// controller resolves a Secret that appeared after the ModelConfig on its
+// own resync, about a minute later, not on a Secret watch — a stale False
+// right after the Secret landed is the normal state, not the verdict. A
+// variable so the tests need not wait it out.
+var (
+	modelConfigResolvedPoll  = 2 * time.Second
+	modelConfigResolvedLooks = 150
+)
+
 // waitDefaultModelConfigResolved is the proof the Secret was for: the
 // chart's default ModelConfig Accepted and, on a line that reports it, its
 // Secret reference resolved — the condition an agent's Harness refuses a
-// template on otherwise.
+// template on otherwise. A status without the condition (the 0.x line)
+// passes.
 func waitDefaultModelConfigResolved() error {
-	return waitModelConfigAccepted(defaultModelConfig)
+	name := defaultModelConfig
+	var status string
+	var readErr error
+	accepted := waitFor(10, modelConfigAcceptedPoll, func() bool {
+		status, _, readErr = modelConfigCondition(name, "Accepted")
+		return readErr == nil && status == conditionTrue
+	})
+	hint := fmt.Sprintf("check `kubectl -n %s describe %s %s`", kagentNamespace, modelConfigResource, name)
+	if !accepted {
+		return notReached("ModelConfig "+name, "Accepted", status, readErr, hint)
+	}
+	var message string
+	resolved := waitFor(modelConfigResolvedLooks, modelConfigResolvedPoll, func() bool {
+		status, message, readErr = modelConfigCondition(name, conditionResolvedRefs)
+		return readErr == nil && status != condFalseStatus
+	})
+	if !resolved {
+		if readErr != nil {
+			return notReached("ModelConfig "+name, conditionResolvedRefs+"=True", status, readErr, hint)
+		}
+		return fmt.Errorf("ModelConfig %s is Accepted but %s=False after %s: %s;\n%s", name, conditionResolvedRefs, time.Duration(modelConfigResolvedLooks)*modelConfigResolvedPoll, message, hint)
+	}
+	note("ModelConfig %s: Accepted%s", name, resolvedNote(status))
+	return nil
 }
