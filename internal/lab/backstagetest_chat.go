@@ -71,7 +71,7 @@ const (
 	portalStopPrompt         = "Count slowly from 1 to 400, one number per line, no other text, and do not stop early."
 	portalTurnTimeout        = 4 * time.Minute
 	portalQuiescentTimeout   = 3 * time.Minute
-	portalHITLRounds         = 5
+	portalHITLTimeout        = 8 * time.Minute
 	portalHITLResumeTimeout  = 2 * time.Minute
 	portalStopSettleTimeout  = time.Minute
 	portalSessionGoneTimeout = 30 * time.Second
@@ -765,29 +765,18 @@ func proveHITLAndStop(primary *portalSession, agent portalAgentRef) ([]string, e
 	if err != nil {
 		return nil, err
 	}
-	rounds := 0
-	var approved []string
-	for task.Status.State == taskStateInputRequired {
-		req := hitlRequestOf(task)
-		if req == nil || req.Type != hitlToolApprovalType || len(req.Tools) == 0 {
-			return nil, fmt.Errorf("task %s is paused (%s) but carries no %s under %s: %+v", task.ID, task.Status.State, hitlToolApprovalType, hitlExtensionURI, task.Status.Message)
-		}
-		if rounds++; rounds > portalHITLRounds {
-			return nil, fmt.Errorf("task %s still asks for approval after %d rounds (%v)", task.ID, portalHITLRounds, approved)
-		}
-		approved = append(approved, strings.Join(req.Tools, "+"))
-		if err := primary.answer(sessionID, agent, task.ID, hitlDecisionApprove); err != nil {
-			return nil, err
-		}
-		if task, err = primary.waitTaskSettled(sessionID, task.ID, portalHITLResumeTimeout); err != nil {
-			return nil, err
-		}
+	task, approved, err := approveUntilSettled(task, hitlApprover{
+		approve: func(taskID string) error { return primary.answer(sessionID, agent, taskID, hitlDecisionApprove) },
+		settle: func(taskID string, timeout time.Duration) (*a2aTask, error) {
+			return primary.waitTaskSettled(sessionID, taskID, timeout)
+		},
+		now: time.Now,
+	}, portalHITLTimeout)
+	if err != nil {
+		return nil, err
 	}
-	if task.Status.State != taskStateCompleted {
-		return nil, fmt.Errorf("task %s ended %s after %d approvals (%v): %s", task.ID, task.Status.State, rounds, approved, excerpt(taskReplyText(task), 200))
-	}
-	note("task %s paused on %s; approved %d round(s) (%s) through …/answer; completed: %q", task.ID, hitlToolApprovalType, rounds, strings.Join(approved, " → "), excerpt(taskReplyText(task), 80))
-	verdicts = append(verdicts, fmt.Sprintf("PASS: HITL — the tool call pauses the task (%s, %s) and POST %s/:id/answer approving it (%d round(s): %s) resumes the same task to %s", taskStateInputRequired, hitlToolApprovalType, kagentSessionsPath, rounds, strings.Join(approved, " → "), taskStateCompleted))
+	note("task %s paused on %s; approved %d round(s) (%s) through …/answer; completed: %q", task.ID, hitlToolApprovalType, len(approved), approvalRounds(approved), excerpt(taskReplyText(task), 80))
+	verdicts = append(verdicts, fmt.Sprintf("PASS: HITL — the tool call pauses the task (%s, %s) and POST %s/:id/answer approving it (%d round(s): %s) resumes the same task to %s", taskStateInputRequired, hitlToolApprovalType, kagentSessionsPath, len(approved), approvalRounds(approved), taskStateCompleted))
 
 	step("Stop: a long turn cancelled server-side from the task the stream named, then a following turn completes")
 	var cancelled *a2aTask
@@ -818,6 +807,59 @@ func proveHITLAndStop(primary *portalSession, agent portalAgentRef) ([]string, e
 	note("task %s cancelled (the cancel answered %s, the task settled %s; stream ended %v after %d frames); the next turn completed with %q", turn.TaskID, cancelled.Status.State, settled.Status.State, turn.States, frameCount(turn), excerpt(after.reply(), 40))
 	verdicts = append(verdicts, fmt.Sprintf("PASS: Stop — POST %s/:id/tasks/:taskId/cancel leaves the task %s and the session takes the next turn", kagentSessionsPath, taskStateCanceled))
 	return verdicts, nil
+}
+
+// hitlApprover is what the approval loop does to a paused task: approve the
+// tools it asks for, wait until it settles again, and read the clock.
+type hitlApprover struct {
+	approve func(taskID string) error
+	settle  func(taskID string, timeout time.Duration) (*a2aTask, error)
+	now     func() time.Time
+}
+
+// approveUntilSettled approves a paused task until it leaves input-required,
+// however many approval-gated calls the model chains, within timeout. It
+// returns the settled task and the tools approved per round; it fails unless
+// the task completes, naming every round with its tools.
+func approveUntilSettled(task *a2aTask, a hitlApprover, timeout time.Duration) (*a2aTask, [][]string, error) {
+	deadline := a.now().Add(timeout)
+	var approved [][]string
+	for task.Status.State == taskStateInputRequired {
+		req := hitlRequestOf(task)
+		if req == nil || req.Type != hitlToolApprovalType || len(req.Tools) == 0 {
+			return nil, approved, fmt.Errorf("task %s is paused (%s) but carries no %s under %s after %d approval round(s) (%s): %+v", task.ID, task.Status.State, hitlToolApprovalType, hitlExtensionURI, len(approved), approvalRounds(approved), task.Status.Message)
+		}
+		remaining := deadline.Sub(a.now())
+		if remaining <= 0 {
+			return nil, approved, fmt.Errorf("task %s still asks for approval of %s after %s and %d approval round(s) (%s)", task.ID, strings.Join(req.Tools, "+"), timeout, len(approved), approvalRounds(approved))
+		}
+		approved = append(approved, req.Tools)
+		if err := a.approve(task.ID); err != nil {
+			return nil, approved, fmt.Errorf("approving round %d of task %s (%s): %w", len(approved), task.ID, approvalRounds(approved), err)
+		}
+		next, err := a.settle(task.ID, min(remaining, portalHITLResumeTimeout))
+		if err != nil {
+			return nil, approved, fmt.Errorf("task %s after approval round %d (%s): %w", task.ID, len(approved), approvalRounds(approved), err)
+		}
+		task = next
+	}
+	if task.Status.State != taskStateCompleted {
+		return nil, approved, fmt.Errorf("task %s ended %s after %d approval round(s) (%s): %s", task.ID, task.Status.State, len(approved), approvalRounds(approved), excerpt(taskReplyText(task), 200))
+	}
+	return task, approved, nil
+}
+
+// approvalRounds names every approval round with its tools:
+// "round 1: filter_tools; round 2: call_tool+call_tool".
+func approvalRounds(approved [][]string) string {
+	if len(approved) == 0 {
+		return "no rounds"
+	}
+	rounds := make([]string, len(approved))
+	for i, tools := range approved {
+		rounds[i] = fmt.Sprintf("round %d: %s", i+1, strings.Join(tools, "+"))
+	}
+	return strings.Join(rounds, "; ")
 }
 
 // taskReplyText is the text of a task's last agent message: its status
