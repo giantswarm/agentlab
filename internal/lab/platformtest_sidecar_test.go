@@ -132,7 +132,7 @@ func TestRestartedSinceRelease(t *testing.T) {
 func TestHelmReleaseLastDeployed(t *testing.T) {
 	hr := &unstructured.Unstructured{Object: map[string]any{
 		"metadata": map[string]any{"namespace": "flux-system", "name": "mcp-kubernetes"},
-		"status": map[string]any{"history": []any{
+		crStatus: map[string]any{"history": []any{
 			map[string]any{"lastDeployed": "2026-10-08T11:30:00Z"},
 			map[string]any{"lastDeployed": "2026-10-07T09:00:00Z"},
 		}},
@@ -141,7 +141,7 @@ func TestHelmReleaseLastDeployed(t *testing.T) {
 	if err != nil || !got.Equal(time.Date(2026, 10, 8, 11, 30, 0, 0, time.UTC)) {
 		t.Errorf("helmReleaseLastDeployed = %v, %v", got, err)
 	}
-	unstructured.RemoveNestedField(hr.Object, "status")
+	unstructured.RemoveNestedField(hr.Object, crStatus)
 	if _, err := helmReleaseLastDeployed(hr); err == nil || !strings.Contains(err.Error(), "flux-system/mcp-kubernetes") {
 		t.Errorf("no history: err = %v", err)
 	}
