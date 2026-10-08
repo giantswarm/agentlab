@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -280,6 +282,17 @@ func completeSignIn(challengeURL string, user *config.User) error {
 	body, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
 	landed := resp.Request.URL.String()
+	if local := localConnectorLink(resp.Request.URL, body); resp.StatusCode == http.StatusOK && local != "" && !strings.Contains(landed, "/auth/local") {
+		// A Dex with more than one connector (platform.githubSignIn) shows
+		// its chooser first; the local connector's link leads to the form.
+		resp, err = browser.Get(local)
+		if err != nil {
+			return err
+		}
+		body, _ = io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		landed = resp.Request.URL.String()
+	}
 	if resp.StatusCode != http.StatusOK || !strings.Contains(landed, "/auth/local") {
 		return fmt.Errorf("the sign-in did not reach Dex's login form (landed on %s with %d):\n%.300s",
 			landed, resp.StatusCode, strings.TrimSpace(string(body)))
@@ -296,6 +309,24 @@ func completeSignIn(challengeURL string, user *config.User) error {
 			final, resp.StatusCode, excerpt(string(body), 300))
 	}
 	return nil
+}
+
+// localConnectorLinkPattern is the local connector's link on Dex's connector
+// chooser (`/auth/local?req=…`, relative or absolute).
+var localConnectorLinkPattern = regexp.MustCompile(`href="([^"]*/auth/local\?[^"]*)"`)
+
+// localConnectorLink is the local connector's link on Dex's connector
+// chooser page, resolved against the page's URL; "" when the page has none.
+func localConnectorLink(page *url.URL, body []byte) string {
+	m := localConnectorLinkPattern.FindSubmatch(body)
+	if m == nil {
+		return ""
+	}
+	ref, err := url.Parse(html.UnescapeString(string(m[1])))
+	if err != nil {
+		return ""
+	}
+	return page.ResolveReference(ref).String()
 }
 
 // restartOAuthFixture asks muster for a one-shot restart of the fixture's

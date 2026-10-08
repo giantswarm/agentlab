@@ -18,6 +18,8 @@ import (
 // path the portal and agents take. model-manager's answers are the JSON its
 // REST API would return; a refusal is "<code>: <message>" (not_found,
 // unsupported, conflict, does_not_fit, …) and comes back as a *toolRefusal.
+// agent-manager speaks the same contract, so with server naming one of its
+// registrations the client is agent-manager's too.
 type modelManagerTools struct {
 	session *musterSession
 	// server is the MCPServer the tools are aggregated under; empty is the

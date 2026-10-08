@@ -531,51 +531,78 @@ func sameCommitFiles(dry []struct {
 }
 
 // installGitOpsModelManager applies model-manager-gitops as a copy of the
-// platform's model-manager HelmRelease — its chart, values and the lab's
-// post-renderers (the dex-localhost sidecar, a dev image), retargeted at the
-// copy's Deployment — pinned to Dex and the fake, and waits for it Ready;
-// the returned func deletes it, and helm-controller uninstalls the release.
+// platform's model-manager HelmRelease pinned to Dex and the fake (see
+// gitopsCopy.install).
 func installGitOpsModelManager(cfg *config.Config, fakeIP string) (func(), error) {
+	return gitopsCopy{platform: modelManagerMCPServer, name: gitopsModelManager, values: func(v map[string]any) map[string]any {
+		return gitopsModelManagerValues(cfg, v, fakeIP)
+	}}.install()
+}
+
+// helmReleaseResource is Flux's HelmRelease, as gvrFor takes it.
+const helmReleaseResource = "helmreleases.helm.toolkit.fluxcd.io"
+
+// gitopsCopy is a temporary copy of a platform component's HelmRelease the
+// commit proofs pin to the lab Dex as its GitHub App and to the fake GitHub
+// API: the platform release it copies (also the chart reference it keeps),
+// the copy's name — its release, fullname, Service and MCPServer, so its
+// tools are x_<name>_* — and the copy's values from the platform's.
+type gitopsCopy struct {
+	platform string
+	name     string
+	values   func(platformValues map[string]any) map[string]any
+}
+
+// install applies the copy — the platform release's chart, values and the
+// lab's post-renderers (the dex-localhost sidecar, a dev image), retargeted
+// at the copy's Deployment — and waits for it Ready; the returned func
+// deletes it, and helm-controller uninstalls the release.
+func (c gitopsCopy) install() (func(), error) {
 	gvr, err := gvrFor(helmReleaseResource)
 	if err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), gitopsReleaseWait+time.Minute)
 	defer cancel()
-	platform, err := getObject(ctx, gvr, platformNamespace, modelManagerMCPServer)
+	platform, err := getObject(ctx, gvr, platformNamespace, c.platform)
 	if err != nil {
-		return nil, fmt.Errorf("the platform's model-manager HelmRelease: %w", err)
+		return nil, fmt.Errorf("the platform's %s HelmRelease: %w", c.platform, err)
 	}
-	copied, err := gitopsHelmRelease(cfg, platform.Object, fakeIP)
+	copied, err := c.helmRelease(platform.Object)
 	if err != nil {
 		return nil, err
 	}
 	remove := func() {
-		if err := deleteObject(context.Background(), gvr, platformNamespace, gitopsModelManager, gitopsReleaseWait); err != nil {
-			note("cleanup: deleting the HelmRelease %s: %v", gitopsModelManager, err)
+		if err := deleteObject(context.Background(), gvr, platformNamespace, c.name, gitopsReleaseWait); err != nil {
+			note("cleanup: deleting the HelmRelease %s: %v", c.name, err)
 		}
 	}
 	remove() // a leftover of an aborted run
 	if _, err := applyManifests(ctx, copied); err != nil {
 		return nil, err
 	}
-	if err := waitCondition(ctx, gvr, platformNamespace, gitopsModelManager, "Ready", "True", gitopsReleaseWait); err != nil {
-		gitopsPodDiagnosis()
+	if err := waitCondition(ctx, gvr, platformNamespace, c.name, "Ready", "True", gitopsReleaseWait); err != nil {
+		gitopsPodDiagnosis(c.name)
 		remove()
-		return nil, fmt.Errorf("HelmRelease %s/%s not Ready: %w", platformNamespace, gitopsModelManager, err)
+		return nil, fmt.Errorf("HelmRelease %s/%s not Ready: %w", platformNamespace, c.name, err)
 	}
-	note("HelmRelease %s Ready (the chart and values of %s, its post-renderers)", gitopsModelManager, modelManagerMCPServer)
+	note("HelmRelease %s Ready (the chart and values of %s, its post-renderers)", c.name, c.platform)
 	return remove, nil
 }
 
-// helmReleaseResource is Flux's HelmRelease, as gvrFor takes it.
-const helmReleaseResource = "helmreleases.helm.toolkit.fluxcd.io"
-
 // gitopsHelmRelease is the copy of the platform's model-manager HelmRelease
-// (its object) as a manifest: the release named model-manager-gitops, the
-// values gitopsModelManagerValues makes, the post-renderers' Deployment
-// target and patch renamed.
+// (its object) as a manifest: the release named model-manager-gitops with
+// the values gitopsModelManagerValues makes.
 func gitopsHelmRelease(cfg *config.Config, platform map[string]any, fakeIP string) ([]byte, error) {
+	return gitopsCopy{platform: modelManagerMCPServer, name: gitopsModelManager, values: func(v map[string]any) map[string]any {
+		return gitopsModelManagerValues(cfg, v, fakeIP)
+	}}.helmRelease(platform)
+}
+
+// helmRelease is the copy of the platform release (its object) as a
+// manifest: the release under the copy's name, its values, the
+// post-renderers' Deployment target and patch renamed.
+func (c gitopsCopy) helmRelease(platform map[string]any) ([]byte, error) {
 	raw, err := json.Marshal(platform["spec"])
 	if err != nil {
 		return nil, err
@@ -594,8 +621,8 @@ func gitopsHelmRelease(cfg *config.Config, platform map[string]any, fakeIP strin
 			return nil, err
 		}
 		raw = []byte(strings.NewReplacer(
-			`"`+nameKey+`":"`+modelManagerMCPServer+`"`, `"`+nameKey+`":"`+gitopsModelManager+`"`,
-			`metadata:\n  name: `+modelManagerMCPServer+`\n`, `metadata:\n  name: `+gitopsModelManager+`\n`,
+			`"`+nameKey+`":"`+c.platform+`"`, `"`+nameKey+`":"`+c.name+`"`,
+			`metadata:\n  name: `+c.platform+`\n`, `metadata:\n  name: `+c.name+`\n`,
 		).Replace(string(raw)))
 		var renamed any
 		if err := json.Unmarshal(raw, &renamed); err != nil {
@@ -604,16 +631,45 @@ func gitopsHelmRelease(cfg *config.Config, platform map[string]any, fakeIP strin
 		spec["postRenderers"] = renamed
 	}
 	values, _ := spec["values"].(map[string]any)
-	spec["values"] = gitopsModelManagerValues(cfg, values, fakeIP)
-	spec["releaseName"] = gitopsModelManager
+	spec["values"] = c.values(values)
+	spec["releaseName"] = c.name
 	src := unstructured.Unstructured{Object: platform}
 	out := unstructured.Unstructured{Object: map[string]any{"spec": spec}}
 	out.SetAPIVersion(src.GetAPIVersion())
 	out.SetKind(src.GetKind())
-	out.SetName(gitopsModelManager)
+	out.SetName(c.name)
 	out.SetNamespace(platformNamespace)
 	out.SetLabels(map[string]string{managedByLabel: managedByAgentlabValue})
 	return json.Marshal(out.Object)
+}
+
+// gitopsAppPin is the GitHub pin of a copy: Dex's endpoints with the
+// platform client (the OAuth fixture's Secret, whose client lists muster's
+// proxy callback) as the App under issuer, the fake as the API.
+func gitopsAppPin(cfg *config.Config, issuer string) map[string]any {
+	return map[string]any{
+		valuesEnabled: true,
+		"apiURL":      githubFakeServiceHost + githubFakeAPIPath,
+		"authorizationServer": map[string]any{
+			"issuer":                     issuer,
+			"expectedIssuer":             "",
+			"authorizationEndpoint":      cfg.Issuer() + "/auth",
+			"tokenEndpoint":              cfg.Issuer() + "/token",
+			"scopes":                     "openid profile email offline_access",
+			"clientCredentialsSecretRef": map[string]any{nameKey: oauthFixtureServer + "-client", namespaceKey: platformNamespace},
+		},
+	}
+}
+
+// gitopsEgress is the platform release's network policy with the fake's
+// address allowed, when the policy is on; nil when it is off.
+func gitopsEgress(platformValues map[string]any, fakeIP string) map[string]any {
+	np, _ := platformValues["networkPolicy"].(map[string]any)
+	if np[valuesEnabled] != true {
+		return nil
+	}
+	cidrs, _ := np["egressCIDRs"].([]any)
+	return map[string]any{"egressCIDRs": append(slices.Clone(cidrs), fakeIP+"/32")}
 }
 
 // gitopsModelManagerValues are the platform release's values with the
@@ -626,24 +682,12 @@ func gitopsModelManagerValues(cfg *config.Config, platformValues map[string]any,
 		"fullnameOverride": gitopsModelManager,
 		"kagent":           map[string]any{"autoWire": false},
 		"httpRoute":        map[string]any{valuesEnabled: false},
-		"github": map[string]any{
-			valuesEnabled: true,
-			"apiURL":      githubFakeServiceHost + githubFakeAPIPath,
-			"authorizationServer": map[string]any{
-				"issuer":                     gitopsAppIssuer,
-				"expectedIssuer":             "",
-				"authorizationEndpoint":      cfg.Issuer() + "/auth",
-				"tokenEndpoint":              cfg.Issuer() + "/token",
-				"scopes":                     "openid profile email offline_access",
-				"clientCredentialsSecretRef": map[string]any{nameKey: oauthFixtureServer + "-client", namespaceKey: platformNamespace},
-			},
-		},
+		"github":           gitopsAppPin(cfg, gitopsAppIssuer),
 		musterValues: map[string]any{"mcpServer": map[string]any{valuesEnabled: true, nameKey: gitopsModelManager,
 			"description": "agentlab models-test: model-manager pinned to the fake GitHub, for the commit proof (temporary)"}},
 	}
-	if np, _ := platformValues["networkPolicy"].(map[string]any); np[valuesEnabled] == true {
-		cidrs, _ := np["egressCIDRs"].([]any)
-		overrides["networkPolicy"] = map[string]any{"egressCIDRs": append(slices.Clone(cidrs), fakeIP+"/32")}
+	if egress := gitopsEgress(platformValues, fakeIP); egress != nil {
+		overrides["networkPolicy"] = egress
 	}
 	if platformValues == nil {
 		return overrides
@@ -651,16 +695,17 @@ func gitopsModelManagerValues(cfg *config.Config, platformValues map[string]any,
 	return chartutil.MergeTables(overrides, platformValues)
 }
 
-// gitopsPodDiagnosis prints the release's pods and the tail of their logs:
-// why an install did not become ready, read before the uninstall removes it.
-func gitopsPodDiagnosis() {
+// gitopsPodDiagnosis prints the pods of the release instance and the tail of
+// their logs: why an install did not become ready, read before the uninstall
+// removes it.
+func gitopsPodDiagnosis(instance string) {
 	k, err := labKube()
 	if err != nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	defer cancel()
-	pods, err := k.clientset.CoreV1().Pods(platformNamespace).List(ctx, metav1.ListOptions{LabelSelector: "app.kubernetes.io/instance=" + gitopsModelManager})
+	pods, err := k.clientset.CoreV1().Pods(platformNamespace).List(ctx, metav1.ListOptions{LabelSelector: "app.kubernetes.io/instance=" + instance})
 	if err != nil {
 		return
 	}
