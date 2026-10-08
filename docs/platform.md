@@ -968,6 +968,8 @@ The OAuth client is yours to register, since GitHub registers no clients dynamic
 - an **OAuth App** (Settings, Developer settings, OAuth Apps), the quickest: its token carries the scopes `repo read:org`, so it reaches every repository the person can;
 - or a **GitHub App's** client with user-to-server tokens: rights are the App's permissions on the repositories it is installed on, intersected with the person's. Scopes are ignored.
 
+Either way it is an App of its own, named for this server: the App behind the lab's [GitHub sign-in](github-signin.md) reads a profile and nothing on repositories, and never serves an MCP server — the client here needs repository rights, which a sign-in App must not have.
+
 Either way, the callback URL is muster's proxy callback, `https://muster.<domain>:<gatewayPort>/oauth/proxy/callback` (the run prints it). GitHub only redirects the browser there, so a loopback lab URL works.
 
 The client lives in one Kubernetes Secret in the lab, keys `client-id` and `client-secret`: `agent-platform/github-oauth-client` unless `platform.github.secret` names another (`name`, `namespace`). agentlab never reads, writes or deletes the values; it reads which keys the Secret carries and points the MCPServer at it (`clientCredentialsSecretRef`). The operator's secret tooling places it, one key per call, straight from the vault into the lab's apiserver, so the values pass through no shell, file or agent session:

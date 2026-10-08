@@ -83,7 +83,12 @@ type tmplData struct {
 	// GitHubMCPClientSecret is the OAuth client Secret the MCPServer
 	// references, platform.github.secret resolved (githubmcp.go).
 	GitHubMCPClientSecret config.SecretRef
-	OAuthFixtureURL       string
+	// GitHubSignIn is the lab Dex's GitHub connector as agentlab.yaml
+	// configures it, nil while the sign-in is off (githubsignin.go);
+	// ApplyDex renders what the cluster allows instead: the connector once
+	// its client Secret is in place, with the Secret's version.
+	GitHubSignIn    *gitHubSignInValues
+	OAuthFixtureURL string
 	// VMManagerEnabled turns the chart's vm-manager component on
 	// (vmmanager.go); VMManagerGuestImage is the chart's guestImage block for
 	// a local build pushed into the lab registry, nil for the release's
@@ -246,6 +251,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		OAuthFixtureServer:         oauthFixtureServer,
 		GitHubMCPServer:            gitHubMCPServer,
 		GitHubMCPClientSecret:      cfg.Platform.GitHub.ClientSecret(),
+		GitHubSignIn:               gitHubSignInValuesFor(cfg),
 		OAuthFixtureURL:            oauthFixtureURL,
 		VMManagerEnabled:           cfg.VMManagerEnabled(),
 		VMManagerGuestImage:        vmManagerGuestImage,

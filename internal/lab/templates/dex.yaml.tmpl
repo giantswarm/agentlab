@@ -42,6 +42,30 @@ stringData:
 
     frontend:
       issuer: Dex Lab
+{{- with .GitHubSignIn }}
+
+    # GitHub as a second identity source (docs/github-signin.md): the person
+    # signs in as their GitHub self, next to the local users below. The client
+    # secret is the pod's environment variable, expanded by Dex — never a
+    # literal here (githubsignin.go).
+    connectors:
+      - type: github
+        id: {{ .ConnectorID }}
+        name: GitHub
+        config:
+          clientID: {{ .ClientID }}
+          clientSecret: ${{ .SecretEnv }}
+          redirectURI: {{ .RedirectURI }}
+          teamNameField: slug
+{{- if .Orgs }}
+          # Members of these organizations only; their teams in them become
+          # groups (`<org>:<team-slug>`), which the lab's RBAC binds nothing to.
+          orgs:
+{{- range .Orgs }}
+            - name: {{ . }}
+{{- end }}
+{{- end }}
+{{- end }}
 
     # ---------------------------------------------------------------------
     # The whole point: users that exist ONLY here. No GitHub, no GitLab, no
@@ -164,12 +188,28 @@ spec:
         # Roll the pod whenever the config or served cert changes (stamped by
         # `agentlab reload` / `agentlab up` over this manifest + certs/tls.crt).
         checksum/config: "REPLACED_AT_APPLY"
+{{- with .GitHubSignIn }}{{ with .SecretVersion }}
+        # The GitHub client Secret's version: a placed or rotated client
+        # secret rolls the pod, which reads it at start (githubsignin.go).
+        agentlab.giantswarm.io/github-signin-client-version: "{{ . }}"
+{{- end }}{{ end }}
     spec:
       serviceAccountName: dex
       containers:
         - name: dex
           image: {{ .DexImage }}
           args: ["dex", "serve", "/etc/dex/cfg/config.yaml"]
+{{- with .GitHubSignIn }}
+          env:
+            # The GitHub connector's client secret, from the Secret the
+            # operator placed; the config references the variable
+            # (githubsignin.go).
+            - name: {{ .SecretEnv }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .SecretName }}
+                  key: {{ .SecretKey }}
+{{- end }}
           ports:
             - { name: https, containerPort: 5556 }
             - { name: telemetry, containerPort: 5558 }

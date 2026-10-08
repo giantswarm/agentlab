@@ -742,8 +742,9 @@ func browserCmd() *cobra.Command {
 func configureCmd() *cobra.Command {
 	var defaults, accessible bool
 	var platform, agents, observability, backstage, modelManager, vmManager, klausGateway bool
-	var serving, github bool
-	var modelManagerBackends []string
+	var serving, github, githubSignIn bool
+	var githubSignInClientID string
+	var githubSignInOrgs, modelManagerBackends []string
 	var vmManagerImageDir, aiKeySource string
 	var chartVersion, chartPath, chartBranch string
 	var upgradeSeed, adoptChart bool
@@ -841,6 +842,19 @@ func configureCmd() *cobra.Command {
 			if cmd.Flags().Changed("github") {
 				cfg.Platform.GitHub.Enabled = github
 			}
+			// The client id turns the sign-in on by itself: it is the one
+			// value the lab needs from the App, the secret being placed on
+			// the cluster.
+			if cmd.Flags().Changed("github-signin-client-id") {
+				cfg.Platform.GitHubSignIn.ClientID = githubSignInClientID
+				cfg.Platform.GitHubSignIn.Enabled = githubSignInClientID != ""
+			}
+			if cmd.Flags().Changed("github-signin") {
+				cfg.Platform.GitHubSignIn.Enabled = githubSignIn
+			}
+			if cmd.Flags().Changed("github-signin-orgs") {
+				cfg.Platform.GitHubSignIn.Orgs = githubSignInOrgs
+			}
 			if cmd.Flags().Changed("serving") {
 				cfg.Platform.Serving.Enabled = serving
 			}
@@ -904,6 +918,9 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().StringVar(&vmManagerImageDir, "vm-manager-image-dir", "", "a local guest image build the vm-manager pod boots instead of its release's: a vm-manager checkout's images/build after `make -C images`, pushed into the lab registry at `agentlab platform` (empty for the release's)")
 	cmd.Flags().BoolVar(&klausGateway, "klaus-gateway", false, "run Swarmgeist (klaus-gateway) as the meta chart's in-cluster component: A2A on the in-cluster controller target, Slack on a placeholder Secret (its Web API the proof's fake), the OBO link store in a Secret (needs agents); --klaus-gateway=false turns it off")
 	cmd.Flags().BoolVar(&github, "github", false, "register GitHub's hosted MCP server with muster as MCPServer github, signed in to as the person through an OAuth App or GitHub App client whose client-id and client-secret are the Secret platform.github.secret names (default agent-platform/github-oauth-client), placed with `beekeeper secret copy --to-secret`, never read by agentlab; --github=false removes the server")
+	cmd.Flags().StringVar(&githubSignInClientID, "github-signin-client-id", "", "GitHub sign-in through the lab Dex: the GitHub App's client id (turns the sign-in on; \"\" turns it off); the App's callback URL is the lab Dex's own, <issuer>/callback, and its client secret is the Secret platform.githubSignIn.secret names in the dex namespace (default github-signin-client, key client-secret), placed with `beekeeper secret copy --to-secret`, never read by agentlab")
+	cmd.Flags().BoolVar(&githubSignIn, "github-signin", false, "turn the GitHub sign-in on (needs --github-signin-client-id once) or, with =false, off; the client Secret stays")
+	cmd.Flags().StringSliceVar(&githubSignInOrgs, "github-signin-orgs", nil, "GitHub sign-in: admit members of these GitHub organizations only, their teams as groups (`<org>:<team-slug>`); empty admits any GitHub account")
 	cmd.Flags().BoolVar(&serving, "serving", false, "serve models on llm-d in the lab: the KServe llmisvc controller and its CRDs, the well-known runtime configs, the connectivity chart's serving slice with the models Gateway, model-manager's kserve backend and one CPU preset of the lab's (needs agents; installs cert-manager); --serving=false turns it off")
 	cmd.Flags().StringVar(&aiKeySource, "ai-key-source", "", "where the Anthropic key of the agents' default ModelConfig lives, a reference `beekeeper secret copy` resolves (op://<vault>/<item>/<field>, or <file>#<path> of a SOPS file), never a value: every up and platform place it into the Secret kagent/kagent-anthropic through beekeeper, so a recreated lab carries it without a manual step; \"\" clears it (the key then comes from $ANTHROPIC_API_KEY, else a placeholder)")
 	cmd.Flags().BoolVar(&accessible, "accessible", false, "prompt-per-question form mode (for screen readers and plain terminals)")
@@ -964,6 +981,19 @@ func printSaved(cfg *config.Config, disc *lab.Discovery) {
 	if cfg.KlausGatewayEnabled() {
 		fmt.Println("  klaus-gtw  Swarmgeist as the meta chart's component: A2A on the in-cluster controller, Slack on a placeholder Secret (its Web API the proof's fake), the OBO link store in a Secret")
 	}
+	if cfg.GitHubSignInEnabled() {
+		s := cfg.Platform.GitHubSignIn
+		fmt.Printf("  github     sign-in through the lab Dex as client %s (callback URL %s; the client secret from Secret %s/%s, key %s)%s\n",
+			s.ClientID, cfg.GitHubSignInCallbackURL(), config.GitHubSignInSecretNamespace, s.ClientSecret().Name, config.GitHubClientSecretKey, gitHubSignInOrgsNote(s.Orgs))
+	}
+}
+
+// gitHubSignInOrgsNote says who the GitHub sign-in admits.
+func gitHubSignInOrgsNote(orgs []string) string {
+	if len(orgs) == 0 {
+		return ", any GitHub account"
+	}
+	return ", members of " + strings.Join(orgs, ", ")
 }
 
 // pinnedNote marks a pinned dev-channel lab in the configure summary.
@@ -996,6 +1026,12 @@ func platformCmd() *cobra.Command {
 				if err := cfg.Save(); err != nil {
 					return err
 				}
+			}
+			// The lab Dex first, so agentlab.yaml's identity (the users, the
+			// GitHub sign-in) applies with the platform in one run; an
+			// unchanged Dex is a no-op.
+			if err := lab.ApplyDex(cfg); err != nil {
+				return err
 			}
 			return lab.PlatformUp(cfg, offersFromFlags(cmd, &trust, &open))
 		},
