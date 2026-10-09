@@ -10,6 +10,7 @@ import (
 	"crypto/x509/pkix"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"net/url"
@@ -447,6 +448,11 @@ func workspacesProxyRefusal(ctx context.Context, addr string, c *tls.Config) (st
 	if errors.As(err, &netErr) && netErr.Timeout() {
 		return "", fmt.Errorf("no verdict within 5s: the proxy neither refused nor answered")
 	}
+	if errors.Is(err, io.EOF) {
+		// The alert did not make it through the port-forward: the proxy
+		// closed the connection right after the handshake.
+		return "the proxy closed the connection after the handshake (EOF)", nil
+	}
 	return err.Error(), nil
 }
 
@@ -495,19 +501,22 @@ func workspacesActorTemplate(pool string) *ateapi.ActorTemplate {
 			ExternalVolumeTemplate: &ateapi.ExternalVolumeTemplate{Capacity: workspacesTestCapacity, StorageClassName: workspacesStorageClass},
 		}},
 		SandboxConfig: &ateapi.SandboxConfig{SandboxClass: ateapi.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: substrateGVisorConfig},
+		// No on_resume: ate-api-server 1.6 refuses the field it does not
+		// know ("unknown field with protobuf tag 3"), and a newer one
+		// defaults it on create.
 		SnapshotConfig: &ateapi.SnapshotConfig{
 			OnPause:         ateapi.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 			OnCommit:        ateapi.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-			OnResume:        &ateapi.OnResumeConfig{FromData: ateapi.ResumeSource_RESUME_SOURCE_COLD_BOOT},
 			StorageLocation: workspacesTestSnapshotLocation,
 		},
 	}
 }
 
 const (
-	// substrateWorkerPoolLabel is the label Substrate's workers carry with
-	// their pool's name, what a template's worker selector matches.
-	substrateWorkerPoolLabel = "ate.dev/worker-pool"
+	// substrateWorkerPoolLabel is the label the kagent chart's workers carry
+	// with their pool's name (the WorkerPool's pod labels become the
+	// worker's), what a template's worker selector matches.
+	substrateWorkerPoolLabel = "kagent.dev/worker-pool"
 	// substrateGVisorConfig is the chart's gVisor sandbox configuration.
 	substrateGVisorConfig = "gvisor-default"
 )
@@ -530,7 +539,7 @@ func firstWorkerPool(ctx context.Context) (string, error) {
 }
 
 // workspacesActorProof drives an actor whose workspace is an external
-// volume on the class: created and RUNNING -> its heartbeat on the node
+// volume on the class: created SUSPENDED and resumed to RUNNING -> its heartbeat on the node
 // grows -> PAUSED, the heartbeat stands still -> RUNNING again, the paused
 // lines kept and growing -> deleted, the volume's directory gone.
 func workspacesActorProof(ctx context.Context, node string, timeout time.Duration) error {
@@ -557,6 +566,13 @@ func workspacesActorProof(ctx context.Context, node string, timeout time.Duratio
 
 	if _, err := api.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{Metadata: &ateapi.ResourceMetadata{Atespace: workspacesTestAtespace, Name: workspacesTestName}, ActorTemplate: ref}}); err != nil {
 		return fmt.Errorf("creating the actor %s/%s: %w", workspacesTestAtespace, workspacesTestName, err)
+	}
+	// An actor is created SUSPENDED; ResumeActor boots it.
+	if _, err := waitActorState(ctx, api, ref, ateapi.ActorState_ACTOR_STATE_SUSPENDED, timeout); err != nil {
+		return err
+	}
+	if _, err := api.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: ref}); err != nil {
+		return fmt.Errorf("resuming the new actor: %w", err)
 	}
 	actor, err := waitActorState(ctx, api, ref, ateapi.ActorState_ACTOR_STATE_RUNNING, timeout)
 	if err != nil {
