@@ -257,6 +257,21 @@ var (
 // valuesWorkspaces is the chart's workspaces key.
 const valuesWorkspaces = "workspaces"
 
+// workspacesChartCarries is chartCarriesWorkspaces for the configured chart
+// when the switch is on, false otherwise; a chart that cannot be probed is a
+// note and false, so the lab registers the driver with Substrate itself.
+func workspacesChartCarries(cfg *config.Config) bool {
+	if !cfg.WorkspacesEnabled() {
+		return false
+	}
+	carries, err := chartCarriesWorkspaces(platformChartFor(cfg))
+	if err != nil {
+		note("the platform chart's workspaces values could not be probed (%v): the lab registers the driver with Substrate itself", err)
+		return false
+	}
+	return carries
+}
+
 // chartValuesCarry reports whether a chart's values schema names key among
 // its root properties, or its default values carry it.
 func chartValuesCarry(schema []byte, values map[string]any, key string) bool {

@@ -105,6 +105,14 @@ type tmplData struct {
 	// runtime image, the serving namespace, the models Gateway.
 	ServingEnabled bool
 	Serving        servingValues
+	// WorkspacesEnabled mirrors cfg.WorkspacesEnabled(); WorkspacesChart
+	// says the platform chart takes the `workspaces:` block the values
+	// template renders (workspaces.go: chartCarriesWorkspaces), and
+	// Workspaces carries the names workspaces.yaml.tmpl and that block
+	// render.
+	WorkspacesEnabled bool
+	WorkspacesChart   bool
+	Workspaces        workspacesValues
 	// PostRenderers is the lab's per-component `postRenderers` list as
 	// indented YAML, keyed by agent-platform component name
 	// (postrenderers.go): the hostNetwork, sidecar and nodePort patches plus
@@ -260,6 +268,9 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		KlausGateway:               klausGatewayValuesFor(cfg),
 		ServingEnabled:             cfg.ServingEnabled(),
 		Serving:                    servingValuesFor(),
+		WorkspacesEnabled:          cfg.WorkspacesEnabled(),
+		WorkspacesChart:            workspacesChartCarries(cfg),
+		Workspaces:                 workspacesValuesFor(cfg),
 		CertsDir:                   certsDir,
 		NodeFilesDir:               nodeFiles,
 		MusterNodePort:             config.MusterNodePort,
@@ -424,6 +435,7 @@ var manifests = map[string]struct {
 	"gateway-nodeport.yaml.tmpl":             {out: "gateway-nodeport.yaml"},
 	"backstage-catalog.yaml.tmpl":            {out: "backstage-catalog.yaml"},
 	"dex.yaml.tmpl":                          {out: "dex.yaml", extraInputs: dexCertInputs},
+	workspacesTemplate:                       {out: "workspaces.yaml"},
 }
 
 // dexCertInputs is the certificate Dex serves (dexServingPair), so a

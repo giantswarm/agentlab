@@ -1057,3 +1057,29 @@ agent-platform-mcps:
       auth:
         mode: forward
 {{- end }}
+{{- if and .WorkspacesEnabled .WorkspacesChart }}
+
+# Workspace storage (platform.workspaces; workspaces.go): the chart's
+# CSIDriverConfig registers the lab's CSI hostpath driver with Agent
+# Substrate, whose ate-api-server drives the driver's controller through the
+# lab's mTLS proxy with its pod-identity certificate; the lab installs the
+# driver, the snapshot controller and both classes itself (workspaces.yaml),
+# so the chart creates no VolumeSnapshotClass. Rendered only for a chart
+# whose values take the key: the schema's root refuses unknown keys.
+workspaces:
+  enabled: true
+  storage:
+    storageClassName: {{ .Workspaces.StorageClass }}
+    volumeSnapshotClassName: {{ .Workspaces.SnapshotClass }}
+    volumeSnapshotClass:
+      create: false
+  substrate:
+    csiDriver:
+      name: {{ .Workspaces.Driver }}
+      controllerEndpoint: {{ .Workspaces.ControllerEndpoint }}
+      nodeSocketOverride: {{ .Workspaces.NodeSocket }}
+      tls:
+        enabled: true
+        usePodIdentity: true
+        serverName: {{ .Workspaces.ServerName }}
+{{- end }}

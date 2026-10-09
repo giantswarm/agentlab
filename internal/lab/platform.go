@@ -413,6 +413,25 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 			return err
 		}
 	}
+	// Workspace storage (workspaces.go): the snapshot controller, the CSI
+	// hostpath driver and the classes before the platform, so Substrate's
+	// CSIDriverConfig finds its driver; the driver's mTLS proxy is waited
+	// for after the install, since its certificates come from Substrate.
+	// A chart that carries the workspaces values registers the driver
+	// itself; the lab's own CSIDriverConfig from an earlier install goes.
+	workspacesChart := workspacesChartCarries(cfg)
+	if cfg.WorkspacesEnabled() {
+		if workspacesChart {
+			if err := removeLabWorkspacesCSIDriverConfig(ctx); err != nil {
+				return err
+			}
+		}
+		if err := workspacesUp(cfg); err != nil {
+			return err
+		}
+	} else if err := workspacesDown(ctx); err != nil {
+		return err
+	}
 	// Managed models: every host model server's endpoint is detected from
 	// the kind docker network and proven reachable from inside the cluster
 	// BEFORE the install, so a host-side misconfiguration (bind address,
@@ -703,6 +722,14 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 			return err
 		}
 	}
+	if cfg.WorkspacesEnabled() {
+		if err := waitWorkspacesProxy(ctx); err != nil {
+			return err
+		}
+		if err := ensureWorkspacesCSIDriverConfig(ctx, workspacesChart); err != nil {
+			return err
+		}
+	}
 	if dev != nil && dev.harness != "" {
 		if err := reportHarnessDevImage(ctx, dev, harnessBefore); err != nil {
 			return err
@@ -903,7 +930,8 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 %s
 %s
 %s
-%s%s`, header, reach, usersBlock(cfg), backstageHint, claudeCodeHint(cfg), agentsHint, modelManagerHint(cfg, backendEndpoints), servingHint(cfg), vmManagerHint(cfg), klausGatewayHint(cfg), obsHint, devImagesHint(cfg, dev), tryItBlock(cfg))
+%s
+%s%s`, header, reach, usersBlock(cfg), backstageHint, claudeCodeHint(cfg), agentsHint, modelManagerHint(cfg, backendEndpoints), servingHint(cfg), workspacesHint(cfg, workspacesChart), vmManagerHint(cfg), klausGatewayHint(cfg), obsHint, devImagesHint(cfg, dev), tryItBlock(cfg))
 	// Everything the platform runs is in the node now — record it so the next
 	// boot side-loads instead of pulling.
 	snapshotPreloadImages()

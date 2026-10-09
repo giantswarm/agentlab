@@ -70,6 +70,7 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 	observabilityEnabled := cfg.Platform.Observability
 	modelManagerEnabled := cfg.Platform.ModelManager.Enabled
 	servingEnabled := cfg.Platform.Serving.Enabled
+	workspacesEnabled := cfg.Platform.Workspaces.Enabled
 	agentsPort := strconv.Itoa(cfg.Platform.AgentsPort)
 	aiModel := cfg.AIModel
 	aiKeySource := cfg.AIKey.Source
@@ -178,6 +179,12 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 				Affirmative("Serve").
 				Negative("Skip").
 				Value(&servingEnabled),
+			huh.NewConfirm().
+				Title("Install workspace storage for the actors' external volumes?").
+				Description("Optional, needs the agents runtime: the CSI snapshot controller, a CSI hostpath driver on\nthe node behind an mTLS proxy only Agent Substrate's API server may reach, and the\nStorageClass and VolumeSnapshotClass agentlab-workspaces. ~250 MB of images;\n`agentlab workspaces-test --storage-only` is the proof.").
+				Affirmative("Install").
+				Negative("Skip").
+				Value(&workspacesEnabled),
 			huh.NewInput().
 				Title("Claude model").
 				Description("Used by the platform agents' ModelConfig and Backstage's AI chat.\nThe API key never enters this file: see the next question.").
@@ -233,6 +240,8 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 	cfg.Platform.ModelManager.Enabled = modelManagerEnabled && agentsEnabled
 	// The served model is wired into kagent too.
 	cfg.Platform.Serving.Enabled = servingEnabled && agentsEnabled
+	// The workspace storage serves Substrate's actors.
+	cfg.Platform.Workspaces.Enabled = workspacesEnabled && agentsEnabled
 	cfg.Platform.AgentsPort = mustAtoi(agentsPort)
 	cfg.AIModel = aiModel
 	cfg.AIKey.Source = aiKeySource
