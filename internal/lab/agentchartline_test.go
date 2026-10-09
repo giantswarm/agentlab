@@ -150,9 +150,9 @@ func TestAgentTemplateOnBothLines(t *testing.T) {
 // AgentTemplate API's per-Harness report.
 func TestAgentManagerStatusShapes(t *testing.T) {
 	for raw, wantReady := range map[string]bool{
-		`{"verdict": "ready", "agent": {"harness": "kagent", "ready": true}}`:                    true,
+		`{"verdict": "ready", "agent": {"harness": "kagent", "ready": true}}`:                     true,
 		`{"verdict": "ready", "template": {"harnesses": [{"harness": "kagent", "ready": true}]}}`: true,
-		`{"verdict": "progressing", "agent": {"harness": "kagent", "ready": false}}`:             false,
+		`{"verdict": "progressing", "agent": {"harness": "kagent", "ready": false}}`:              false,
 	} {
 		var s agentManagerStatus
 		if err := json.Unmarshal([]byte(raw), &s); err != nil {
