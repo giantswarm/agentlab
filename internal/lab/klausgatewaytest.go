@@ -68,7 +68,7 @@ import (
 // binary is named: the current release candidate of the 4.1 line, the first
 // that serves the command words alone (`agents`, `stop`) and keeps a parked
 // message and a paused approval across a restart (steps 5c and 5d).
-const KlausGatewayImageDefault = "gsoci.azurecr.io/giantswarm/klaus-gateway:4.1.0-rc.15"
+const KlausGatewayImageDefault = "gsoci.azurecr.io/giantswarm/klaus-gateway:4.1.1-rc.5"
 
 // Names of what the proof creates in the kagent namespace; all are deleted by
 // the same run, and a leftover of an aborted run is removed first.
