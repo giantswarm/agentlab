@@ -134,7 +134,7 @@ type workspacesValues struct {
 	ControllerPort, ProxyPort                      int
 	// ControllerEndpoint, ServerName and NodeSocket are the CSIDriverConfig's
 	// controllerEndpoint, tls.serverName and nodeSocketOverride.
-	ControllerEndpoint, ServerName, NodeSocket string
+	ControllerEndpoint, ServerName, NodeSocket  string
 	NodeSocketDir, SubstrateDir, ClientSPIFFEID string
 	// Node is the control plane, where the NFS server and the controller
 	// run: the export is a directory of that node.
@@ -317,7 +317,7 @@ func workspacesHostPreflight() error {
 		if err != nil {
 			return nil
 		}
-		if out, err := exec.Command(modprobe, "-n", "-q", module).CombinedOutput(); err != nil {
+		if out, err := exec.Command(modprobe, "-n", "-q", module).CombinedOutput(); err != nil { // #nosec G204 -- modprobe from PATH with the two fixed module names
 			return fmt.Errorf("the host kernel has no %s module (%v%s): the lab's NFS server and the driver's mounts run on the host's kernel; install the kernel's NFS modules (on Debian and Ubuntu the kernel's `linux-modules-extra`, nfs-kernel-server brings the tools) or reboot into a kernel that has them", module, err, strings.TrimSpace(" "+string(out)))
 		}
 	}

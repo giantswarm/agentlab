@@ -6,8 +6,8 @@ import (
 )
 
 // The workspaces switch: it needs the agents runtime (Substrate's signers
-// certify the driver's endpoint), and the CSI hostpath driver serves one
-// node, so at most one reserved substrate worker.
+// certify the driver's endpoint); the NFS driver's node plugin runs on every
+// node, so any number of reserved substrate workers is accepted.
 func TestWorkspacesSwitch(t *testing.T) {
 	cfg := Default()
 	if cfg.WorkspacesEnabled() {
@@ -20,13 +20,9 @@ func TestWorkspacesSwitch(t *testing.T) {
 	if !cfg.WorkspacesEnabled() {
 		t.Fatal("WorkspacesEnabled false with the platform, the agents and the key on")
 	}
-	cfg.SubstrateNodes = 1
-	if err := cfg.Validate(); err != nil {
-		t.Errorf("workspaces with one substrate node: %v, want accepted (the driver is pinned to it)", err)
-	}
 	cfg.SubstrateNodes = 2
-	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "substrateNodes 0 or 1") {
-		t.Errorf("workspaces with two substrate nodes: err = %v, want the one-node limit", err)
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("workspaces with two substrate nodes: %v, want accepted (the node plugin runs on every node)", err)
 	}
 
 	cfg = Default()

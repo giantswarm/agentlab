@@ -55,6 +55,8 @@ const (
 	workspacesTestSessions = "sessions"
 	workspacesTestRepo     = "repo.git"
 	workspacesTestVolume   = "workspace"
+	// workspacesTestMountPath is where a proof pod sees its part of the volume.
+	workspacesTestMountPath = "/workspace"
 	// workspacesSharedMountIssue is why the actor-level mount is skipped.
 	workspacesSharedMountIssue = "giantswarm/substrate#227"
 )
@@ -115,7 +117,7 @@ func WorkspacesTest(cfg *config.Config, opts WorkspacesTestOptions) error {
 	note("Bound (a directory of the export on %s, mounted NFSv4.1)", node)
 
 	step("A bare mirror seeded on the volume, from a repository with an executable and a symbolic link")
-	out, err := runPod(ctx, workspacesTestNamespace, workspacesTestPod("seed", workspacesSeedScript, []corev1.VolumeMount{{Name: workspacesTestVolume, MountPath: "/workspace"}}, false), timeout)
+	out, err := runPod(ctx, workspacesTestNamespace, workspacesTestPod("seed", workspacesSeedScript, []corev1.VolumeMount{{Name: workspacesTestVolume, MountPath: workspacesTestMountPath}}, false), timeout)
 	if err != nil {
 		return fmt.Errorf("the seed pod: %w\n%s", err, out)
 	}
@@ -136,7 +138,7 @@ func WorkspacesTest(cfg *config.Config, opts WorkspacesTestOptions) error {
 	note("%s", indent(strings.TrimSpace(out), "  "))
 
 	step("The whole volume mounted read-only: both sessions' directories visible, a write refused")
-	out, err = runPod(ctx, workspacesTestNamespace, workspacesTestPod("reader", workspacesReaderScript, []corev1.VolumeMount{{Name: workspacesTestVolume, MountPath: "/workspace", ReadOnly: true}}, true), timeout)
+	out, err = runPod(ctx, workspacesTestNamespace, workspacesTestPod("reader", workspacesReaderScript, []corev1.VolumeMount{{Name: workspacesTestVolume, MountPath: workspacesTestMountPath, ReadOnly: true}}, true), timeout)
 	if err != nil {
 		return fmt.Errorf("the reader pod: %w\n%s", err, out)
 	}
@@ -226,7 +228,7 @@ func workspacesTestPod(name, script string, mounts []corev1.VolumeMount, readOnl
 // mirrors read-only beside it.
 func workspacesSessionMounts(session string) []corev1.VolumeMount {
 	return []corev1.VolumeMount{
-		{Name: workspacesTestVolume, MountPath: "/workspace", SubPath: workspacesTestSessions + "/" + session},
+		{Name: workspacesTestVolume, MountPath: workspacesTestMountPath, SubPath: workspacesTestSessions + "/" + session},
 		{Name: workspacesTestVolume, MountPath: "/mirrors", SubPath: workspacesTestMirrors, ReadOnly: true},
 	}
 }
