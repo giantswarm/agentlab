@@ -410,6 +410,23 @@ type Platform struct {
 	// by default; --serving turns it on; needs the agents runtime, which the
 	// served model is wired into. `agentlab serving-test` is the proof.
 	Serving Serving `yaml:"serving"`
+	// Workspace storage: the read-write-many StorageClass a workspace's
+	// volume is claimed from (internal/lab/workspaces.go) — an in-cluster
+	// NFS server, the NFS CSI driver with an mTLS proxy in front of its
+	// controller that admits ate-api-server's pod identity alone, and the
+	// StorageClass the chart's workspaces values name. Off by default;
+	// --workspaces turns it on; needs the agents runtime. `agentlab
+	// workspaces-test --storage-only` is the proof.
+	Workspaces Workspaces `yaml:"workspaces"`
+}
+
+// Workspaces configures the workspace storage in the lab.
+type Workspaces struct {
+	// On, `agentlab platform` installs the NFS server, the NFS CSI driver
+	// behind its mTLS proxy and the StorageClass before the chart, and
+	// renders the chart's `workspaces:` block when the chart carries the
+	// key.
+	Enabled bool `yaml:"enabled"`
 }
 
 // Serving configures model serving on llm-d in the lab.
@@ -1440,6 +1457,13 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("platform.serving needs agent-platform %s or newer (the llm-d control plane alone, components.kserve-runtime-configs and modelServing.modelsGateway); %s — `agentlab configure --serving=false`", servingChartFloor, chart)
 		}
 	}
+	// The driver's controller endpoint is certified by Substrate's service-DNS
+	// signer and admits ate-api-server's pod identity alone, and the clones
+	// are Substrate volume mounts: without the runtime there is nothing to
+	// sign the endpoint or to mount a volume.
+	if c.Platform.Workspaces.Enabled && c.Platform.Enabled && !c.Platform.Agents {
+		return fmt.Errorf("platform.workspaces requires platform.agents (Substrate's signers certify the driver's endpoint, and a Session's workspace is a Substrate volume mount)")
+	}
 	// The vm-manager component exists from agent-platform 4.11.0; a pinned
 	// release before it would take components.vm-manager as an unknown key
 	// and fail the install out of sight. A local checkout or a branch build
@@ -1557,6 +1581,12 @@ func (c *Config) VMManagerEnabled() bool {
 // component: the platform with its agents runtime, and the key on.
 func (c *Config) KlausGatewayEnabled() bool {
 	return c.Platform.Enabled && c.Platform.Agents && c.Platform.KlausGateway.Enabled
+}
+
+// WorkspacesEnabled reports whether the lab installs the workspace storage:
+// the platform with its agents runtime, and the key on.
+func (c *Config) WorkspacesEnabled() bool {
+	return c.Platform.Enabled && c.Platform.Agents && c.Platform.Workspaces.Enabled
 }
 
 // The chart channels: where the meta chart the lab installs comes from.

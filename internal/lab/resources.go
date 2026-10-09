@@ -143,6 +143,14 @@ const (
 	reqSubstrateCPU = 1000
 	reqSubstrateMem = 2048
 	useSubstrateMem = 480
+	// The workspace storage (workspaces.go): the NFS server, the NFS CSI
+	// controller's pod (the driver, two sidecars, the liveness probe and
+	// the Envoy mTLS proxy) and the node plugin's pod declare nothing. In
+	// use, idle: the server 10Mi, the controller pod 80Mi, the node pod
+	// 40Mi.
+	reqWorkspacesCPU = 0
+	reqWorkspacesMem = 0
+	useWorkspacesMem = 150
 	// The platform Postgres (the 4.x line, from the chart): the CloudNativePG
 	// operator and the one-instance Cluster the lab renders declare nothing.
 	// In use, right after the bootstrap: the operator 63Mi, the instance
@@ -226,6 +234,8 @@ var labResourceGroups = []resourceGroup{
 		func(c *config.Config, t platformTopology) bool {
 			return c.Platform.Enabled && c.Platform.Agents && t.Substrate
 		}},
+	{"workspace storage", resourceRequests{reqWorkspacesCPU, reqWorkspacesMem}, useWorkspacesMem,
+		func(c *config.Config, _ platformTopology) bool { return c.WorkspacesEnabled() }},
 	{"platform Postgres", resourceRequests{reqCNPGCPU, reqCNPGMem}, useCNPGMem,
 		func(c *config.Config, t platformTopology) bool {
 			return c.Platform.Enabled && c.Platform.Agents && t.CNPG

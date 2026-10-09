@@ -13,6 +13,14 @@ import (
 // regenerating deliberately (agentlab certs --force), and keeping it means an
 // immediate `agentlab up` reuses the same trust chain.
 func Down(cfg *config.Config) error {
+	// The workspace storage's mounts on the nodes (workspaces.go): the CSI
+	// driver's bind mounts under Substrate's volumes directory keep a kind
+	// node from exiting cleanly; best effort, the delete follows anyway.
+	if cfg.WorkspacesEnabled() {
+		for _, node := range append([]string{cfg.ControlPlaneNode()}, cfg.SubstrateNodeNames()...) {
+			cleanWorkspacesNode(node)
+		}
+	}
 	if err := kindDeleteCluster(cfg.ClusterName); err != nil {
 		// kind's delete is `docker rm -f` of the node, and docker gives up
 		// on a node that does not exit within ten seconds of SIGKILL ("could
@@ -101,6 +109,14 @@ func PlatformDown(cfg *config.Config) error {
 	_ = deleteNamespace(ctx, observabilityNamespace)
 	if err := deleteNamespace(ctx, platformNamespace); err != nil {
 		return err
+	}
+	// The workspace storage (workspaces.go), after the platform: Substrate's
+	// CSIDriverConfig and its volumes are finalized by the running chart.
+	if err := workspacesDown(ctx); err != nil {
+		return err
+	}
+	for _, node := range append([]string{cfg.ControlPlaneNode()}, cfg.SubstrateNodeNames()...) {
+		cleanWorkspacesNode(node)
 	}
 	// What an earlier agentlab installed next to the umbrella: its own Flux
 	// controllers for the agent create flow. The chart brings the engine now

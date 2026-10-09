@@ -1,0 +1,632 @@
+# Workspace storage (platform.workspaces; internal/lab/workspaces.go): a
+# read-write-many StorageClass that serves git, for the workspaces' volumes
+# — one per workspace, shared by its sync and every Session on it. An
+# in-cluster NFS server on the control plane exports a directory of the node;
+# the NFS CSI driver (kubernetes-csi/csi-driver-nfs {{ .Workspaces.DriverVersion }})
+# provisions a sub-directory of that export per volume and mounts it where a
+# pod, or Agent Substrate's atelet, asks. Substrate drives the driver itself
+# (no PVC): ate-api-server calls the controller through the mTLS proxy that
+# sits beside it in its pod, atelet the node plugin's socket; both are found
+# through the cluster-scoped CSIDriverConfig the chart (or, until the chart
+# carries the values, the lab) registers. No snapshots: a Session is a
+# directory on the workspace's volume, not a clone of it.
+#
+# Order matters twice: the controller's Service comes before its Deployment,
+# since Substrate's service-DNS signer certifies a pod for the Service that
+# selects it; the NFS server comes before the driver, whose provisioner mounts
+# the export.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Workspaces.Namespace }}
+  labels:
+    app.kubernetes.io/managed-by: agentlab
+    # The NFS server and the driver's plugins are privileged (mounts in the
+    # node's namespaces): the namespace admits them.
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: privileged
+    pod-security.kubernetes.io/warn: privileged
+---
+# The NFS server: the kernel's nfsd (the kind node shares the host's kernel,
+# whose nfsd module it loads on the first export), exporting
+# {{ .Workspaces.ExportDir }} of the control plane, kept on the node across
+# the pod's restarts. NFSv4.1 alone, no rpcbind: one TCP port. The image is
+# the csi-driver-nfs project's own kind fixture, pinned by digest.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Workspaces.NFSServer }}
+  namespace: {{ .Workspaces.Namespace }}
+spec:
+  selector:
+    app.kubernetes.io/name: {{ .Workspaces.NFSServer }}
+  ports:
+    - name: nfs
+      port: 2049
+      targetPort: 2049
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Workspaces.NFSServer }}
+  namespace: {{ .Workspaces.Namespace }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Workspaces.NFSServer }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Workspaces.NFSServer }}
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: {{ .Workspaces.Node }}
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: nfs-server
+          image: {{ .Workspaces.Images.NFSServer }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: SHARED_DIRECTORY
+              value: /export
+          securityContext:
+            privileged: true
+          ports:
+            - name: nfs
+              containerPort: 2049
+              protocol: TCP
+          readinessProbe:
+            tcpSocket:
+              port: 2049
+            periodSeconds: 2
+          volumeMounts:
+            - name: export
+              mountPath: /export
+      volumes:
+        - name: export
+          hostPath:
+            path: {{ .Workspaces.ExportDir }}
+            type: DirectoryOrCreate
+---
+# The driver's accounts and roles (csi-driver-nfs deploy/rbac-csi-nfs.yaml,
+# without the snapshot rules: the lab installs no snapshot CRDs).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: csi-nfs-controller
+  namespace: {{ .Workspaces.Namespace }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: csi-nfs-node
+  namespace: {{ .Workspaces.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: agentlab-workspaces-csi-nfs-provisioner
+rules:
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["get", "list", "watch", "create", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "update"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["csinodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: agentlab-workspaces-csi-nfs-provisioner
+subjects:
+  - kind: ServiceAccount
+    name: csi-nfs-controller
+    namespace: {{ .Workspaces.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: agentlab-workspaces-csi-nfs-provisioner
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: agentlab-workspaces-csi-nfs-resizer
+rules:
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims/status"]
+    verbs: ["update", "patch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["list", "watch", "create", "update", "patch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: agentlab-workspaces-csi-nfs-resizer
+subjects:
+  - kind: ServiceAccount
+    name: csi-nfs-controller
+    namespace: {{ .Workspaces.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: agentlab-workspaces-csi-nfs-resizer
+  apiGroup: rbac.authorization.k8s.io
+---
+# The driver's registration with the cluster (deploy/csi-nfs-driverinfo.yaml):
+# no attach step, POSIX permissions applied by the driver.
+apiVersion: storage.k8s.io/v1
+kind: CSIDriver
+metadata:
+  name: {{ .Workspaces.Driver }}
+spec:
+  attachRequired: false
+  volumeLifecycleModes:
+    - Persistent
+  fsGroupPolicy: File
+---
+# The mTLS proxy's Envoy configuration (Substrate's docs/csi-deployment.md):
+# a TLS listener that requires a client certificate from Substrate's
+# pod-identity CA bearing ate-api-server's SPIFFE ID, forwarding the gRPC
+# stream to the controller's socket in the shared socket directory. Its own
+# certificate is the pod's service-DNS credential bundle and the client trust
+# the pod-identity CA's live ClusterTrustBundle, both projected volumes
+# Envoy's SDS re-reads as they rotate.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: csi-nfs-proxy
+  namespace: {{ .Workspaces.Namespace }}
+data:
+  envoy.yaml: |
+    node:
+      id: csi-nfs-proxy
+      cluster: csi-nfs-proxy
+    static_resources:
+      listeners:
+        - name: csi_tls_listener
+          address:
+            socket_address: { address: 0.0.0.0, port_value: {{ .Workspaces.ProxyPort }} }
+          filter_chains:
+            - transport_socket:
+                name: envoy.transport_sockets.tls
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+                  require_client_certificate: true
+                  common_tls_context:
+                    alpn_protocols:
+                      - h2
+                    tls_certificate_sds_secret_configs:
+                      - name: servicedns_serving_cert
+                        sds_config:
+                          resource_api_version: V3
+                          path_config_source:
+                            path: /etc/envoy/sds-servicedns-cert.yaml
+                    combined_validation_context:
+                      default_validation_context:
+                        match_typed_subject_alt_names:
+                          - san_type: URI
+                            matcher:
+                              exact: "{{ .Workspaces.ClientSPIFFEID }}"
+                      validation_context_sds_secret_config:
+                        name: podidentity_validation_context
+                        sds_config:
+                          resource_api_version: V3
+                          path_config_source:
+                            path: /etc/envoy/sds-podidentity-validation.yaml
+              filters:
+                - name: envoy.filters.network.tcp_proxy
+                  typed_config:
+                    "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
+                    stat_prefix: csi_proxy
+                    cluster: csi_unix_socket
+      clusters:
+        - name: csi_unix_socket
+          connect_timeout: 0.25s
+          type: STATIC
+          load_assignment:
+            cluster_name: csi_unix_socket
+            endpoints:
+              - lb_endpoints:
+                  - endpoint:
+                      address:
+                        pipe:
+                          path: /csi/csi.sock
+  sds-servicedns-cert.yaml: |
+    resources:
+      - "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.Secret
+        name: servicedns_serving_cert
+        tls_certificate:
+          certificate_chain: { filename: /run/servicedns/credential-bundle.pem }
+          private_key: { filename: /run/servicedns/credential-bundle.pem }
+          watched_directory: { path: /run/servicedns }
+  sds-podidentity-validation.yaml: |
+    resources:
+      - "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.Secret
+        name: podidentity_validation_context
+        validation_context:
+          trusted_ca: { filename: /run/podidentity-ca/trust-bundle.pem }
+          watched_directory: { path: /run/podidentity-ca }
+---
+# The controller endpoint Substrate's CSIDriverConfig names: the Service in
+# front of the proxy, before the pod it selects (the signer's condition).
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Workspaces.ControllerService }}
+  namespace: {{ .Workspaces.Namespace }}
+spec:
+  selector:
+    app.kubernetes.io/name: {{ .Workspaces.Controller }}
+  ports:
+    - name: grpc
+      port: {{ .Workspaces.ControllerPort }}
+      targetPort: {{ .Workspaces.ProxyPort }}
+      protocol: TCP
+---
+# The controller (deploy/csi-nfs-controller.yaml without the snapshotter):
+# the provisioner and resizer sidecars for the cluster's PVCs, the liveness
+# probe, the driver, and the mTLS proxy for Substrate's direct calls. On the
+# node's network like upstream, since the driver mounts the export itself to
+# create a volume's directory; beside the NFS server on the control plane.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Workspaces.Controller }}
+  namespace: {{ .Workspaces.Namespace }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Workspaces.Controller }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Workspaces.Controller }}
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      serviceAccountName: csi-nfs-controller
+      priorityClassName: system-cluster-critical
+      nodeSelector:
+        kubernetes.io/hostname: {{ .Workspaces.Node }}
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: csi-provisioner
+          image: {{ .Workspaces.Images.Provisioner }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - "-v=2"
+            - "--csi-address=$(ADDRESS)"
+            - "--leader-election"
+            - "--leader-election-namespace=$(POD_NAMESPACE)"
+            - "--extra-create-metadata=true"
+            - "--feature-gates=VolumeAttributesClass=false"
+            - "--timeout=1200s"
+            - "--retry-interval-max=30m"
+          env:
+            - name: ADDRESS
+              value: /csi/csi.sock
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          volumeMounts:
+            - mountPath: /csi
+              name: socket-dir
+          securityContext:
+            capabilities:
+              drop:
+                - ALL
+        - name: csi-resizer
+          image: {{ .Workspaces.Images.Resizer }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - "-csi-address=$(ADDRESS)"
+            - "-v=2"
+            - "-leader-election"
+            - "--leader-election-namespace=$(POD_NAMESPACE)"
+            - "-handle-volume-inuse-error=false"
+          env:
+            - name: ADDRESS
+              value: /csi/csi.sock
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+          securityContext:
+            capabilities:
+              drop:
+                - ALL
+        - name: liveness-probe
+          image: {{ .Workspaces.Images.LivenessProbe }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - --csi-address=/csi/csi.sock
+            - --probe-timeout=3s
+            - --http-endpoint=localhost:29652
+            - --v=2
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+          securityContext:
+            capabilities:
+              drop:
+                - ALL
+        - name: nfs
+          image: {{ .Workspaces.Images.NFSPlugin }}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            privileged: true
+            capabilities:
+              add: ["SYS_ADMIN"]
+            allowPrivilegeEscalation: true
+          env:
+            - name: NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: CSI_ENDPOINT
+              value: unix:///csi/csi.sock
+          args:
+            - "-v=5"
+            - "--nodeid=$(NODE_ID)"
+            - "--endpoint=$(CSI_ENDPOINT)"
+          livenessProbe:
+            failureThreshold: 5
+            httpGet:
+              host: localhost
+              path: /healthz
+              port: 29652
+            initialDelaySeconds: 30
+            timeoutSeconds: 10
+            periodSeconds: 30
+          volumeMounts:
+            - name: pods-mount-dir
+              mountPath: /var/lib/kubelet/pods
+              mountPropagation: "Bidirectional"
+            - mountPath: /csi
+              name: socket-dir
+        - name: envoy
+          image: {{ .Workspaces.Images.Proxy }}
+          imagePullPolicy: IfNotPresent
+          command:
+            - /usr/local/bin/envoy
+          args:
+            - -c
+            - /etc/envoy/envoy.yaml
+          securityContext:
+            # The driver's socket is root-owned; the proxy connects to it as
+            # root and needs nothing else of the node.
+            runAsUser: 0
+          ports:
+            - containerPort: {{ .Workspaces.ProxyPort }}
+              name: grpc
+              protocol: TCP
+          volumeMounts:
+            - mountPath: /etc/envoy
+              name: envoy-config
+              readOnly: true
+            - mountPath: /csi
+              name: socket-dir
+            - mountPath: /run/servicedns
+              name: servicedns-certs
+              readOnly: true
+            - mountPath: /run/podidentity-ca
+              name: podidentity-ca
+              readOnly: true
+      volumes:
+        - name: pods-mount-dir
+          hostPath:
+            path: /var/lib/kubelet/pods
+            type: Directory
+        - name: socket-dir
+          emptyDir: {}
+        - name: envoy-config
+          configMap:
+            name: csi-nfs-proxy
+        - name: servicedns-certs
+          projected:
+            sources:
+              - podCertificate:
+                  signerName: servicedns.podcert.ate.dev/identity
+                  keyType: ECDSAP256
+                  credentialBundlePath: credential-bundle.pem
+        - name: podidentity-ca
+          projected:
+            sources:
+              - clusterTrustBundle:
+                  signerName: podidentity.podcert.ate.dev/identity
+                  labelSelector:
+                    matchLabels:
+                      podcert.ate.dev/canarying: live
+                  path: trust-bundle.pem
+---
+# The node plugin (deploy/csi-nfs-node.yaml) on every node: registered with
+# the kubelet at {{ .Workspaces.NodeSocketDir }}, and with Substrate's
+# directory {{ .Workspaces.SubstrateDir }} mounted Bidirectional, so a mount
+# the plugin makes for atelet's target path is one the actor's sandbox sees.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ .Workspaces.NodePlugin }}
+  namespace: {{ .Workspaces.Namespace }}
+spec:
+  updateStrategy:
+    rollingUpdate:
+      maxUnavailable: 1
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Workspaces.NodePlugin }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Workspaces.NodePlugin }}
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      serviceAccountName: csi-nfs-node
+      priorityClassName: system-node-critical
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      nodeSelector:
+        kubernetes.io/os: linux
+      tolerations:
+        - operator: "Exists"
+      containers:
+        - name: liveness-probe
+          image: {{ .Workspaces.Images.LivenessProbe }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - --csi-address=/csi/csi.sock
+            - --probe-timeout=3s
+            - --http-endpoint=localhost:29653
+            - --v=2
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+          securityContext:
+            capabilities:
+              drop:
+                - ALL
+        - name: node-driver-registrar
+          image: {{ .Workspaces.Images.Registrar }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - --v=2
+            - --csi-address=/csi/csi.sock
+            - --kubelet-registration-path=$(DRIVER_REG_SOCK_PATH)
+          env:
+            - name: DRIVER_REG_SOCK_PATH
+              value: {{ .Workspaces.NodeSocketDir }}/csi.sock
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+            - name: registration-dir
+              mountPath: /registration
+          securityContext:
+            capabilities:
+              drop:
+                - ALL
+        - name: nfs
+          image: {{ .Workspaces.Images.NFSPlugin }}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            privileged: true
+            capabilities:
+              add: ["SYS_ADMIN"]
+            allowPrivilegeEscalation: true
+          env:
+            - name: NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: CSI_ENDPOINT
+              value: unix:///csi/csi.sock
+          args:
+            - "-v=5"
+            - "--nodeid=$(NODE_ID)"
+            - "--endpoint=$(CSI_ENDPOINT)"
+          livenessProbe:
+            failureThreshold: 5
+            httpGet:
+              host: localhost
+              path: /healthz
+              port: 29653
+            initialDelaySeconds: 30
+            timeoutSeconds: 10
+            periodSeconds: 30
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+            - name: pods-mount-dir
+              mountPath: /var/lib/kubelet/pods
+              mountPropagation: "Bidirectional"
+            - name: substrate-dir
+              mountPath: {{ .Workspaces.SubstrateDir }}
+              mountPropagation: "Bidirectional"
+      volumes:
+        - name: socket-dir
+          hostPath:
+            path: {{ .Workspaces.NodeSocketDir }}
+            type: DirectoryOrCreate
+        - name: pods-mount-dir
+          hostPath:
+            path: /var/lib/kubelet/pods
+            type: Directory
+        - name: registration-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins_registry
+            type: Directory
+        - name: substrate-dir
+          hostPath:
+            path: {{ .Workspaces.SubstrateDir }}
+            type: DirectoryOrCreate
+---
+# The class the chart's workspaces values name: a directory of the export
+# per volume, mounted NFSv4.1; read-write-many, POSIX modes and symbolic links
+# as git needs them (no root squash on the export). Expandable in name — the
+# export has no quota, a volume's size is what the claim says — so the
+# chart's resize path can run in the lab.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ .Workspaces.StorageClass }}
+provisioner: {{ .Workspaces.Driver }}
+parameters:
+  server: {{ .Workspaces.NFSServerHost }}
+  share: /
+  mountPermissions: "0777"
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+mountOptions:
+  - nfsvers=4.1
+  - hard

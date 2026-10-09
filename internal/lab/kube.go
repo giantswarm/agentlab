@@ -1136,23 +1136,13 @@ func podStateSummary(pod *corev1.Pod) string {
 // output is returned with the error too: a probe's diagnosis is in what it
 // printed.
 func runProbePod(ctx context.Context, ns, name, image string, command []string, timeout time.Duration) (string, error) {
-	k, err := labKube()
-	if err != nil {
-		return "", err
-	}
-	pods := k.clientset.CoreV1().Pods(ns)
-	propagation := metav1.DeletePropagationBackground
-	deleteOpts := metav1.DeleteOptions{PropagationPolicy: &propagation}
-	if err := pods.Delete(ctx, name, deleteOpts); err != nil && !apierrors.IsNotFound(err) {
-		return "", fmt.Errorf("removing the leftover probe pod %s/%s: %w", ns, name, err)
-	}
-	if err := wait.PollUntilContextTimeout(ctx, time.Second, timeout, true, func(ctx context.Context) (bool, error) {
-		_, err := pods.Get(ctx, name, metav1.GetOptions{})
-		return apierrors.IsNotFound(err), nil
-	}); err != nil {
-		return "", fmt.Errorf("the leftover probe pod %s/%s is still there %s after its deletion was requested", ns, name, timeout)
-	}
-	pod := &corev1.Pod{
+	return runPod(ctx, ns, probePod(name, image, command), timeout)
+}
+
+// probePod is the pod runProbePod runs: one container of the image running
+// the command once.
+func probePod(name, image string, command []string) *corev1.Pod {
+	return &corev1.Pod{
 		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Pod"},
 		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{"app.kubernetes.io/managed-by": applyFieldManager}},
 		Spec: corev1.PodSpec{
@@ -1165,6 +1155,30 @@ func runProbePod(ctx context.Context, ns, name, image string, command []string, 
 			}},
 		},
 	}
+}
+
+// runPod is runProbePod for a pod the caller shaped (a volume, a security
+// context): created in ns, waited for until its first container ran to its
+// end, that container's log returned, the pod deleted afterwards.
+func runPod(ctx context.Context, ns string, pod *corev1.Pod, timeout time.Duration) (string, error) {
+	k, err := labKube()
+	if err != nil {
+		return "", err
+	}
+	name := pod.Name
+	pods := k.clientset.CoreV1().Pods(ns)
+	propagation := metav1.DeletePropagationBackground
+	deleteOpts := metav1.DeleteOptions{PropagationPolicy: &propagation}
+	if err := pods.Delete(ctx, name, deleteOpts); err != nil && !apierrors.IsNotFound(err) {
+		return "", fmt.Errorf("removing the leftover probe pod %s/%s: %w", ns, name, err)
+	}
+	if err := wait.PollUntilContextTimeout(ctx, time.Second, timeout, true, func(ctx context.Context) (bool, error) {
+		_, err := pods.Get(ctx, name, metav1.GetOptions{})
+		return apierrors.IsNotFound(err), nil
+	}); err != nil {
+		return "", fmt.Errorf("the leftover probe pod %s/%s is still there %s after its deletion was requested", ns, name, timeout)
+	}
+	container := pod.Spec.Containers[0].Name
 	if _, err := pods.Create(ctx, pod, metav1.CreateOptions{FieldManager: applyFieldManager}); err != nil {
 		return "", fmt.Errorf("creating probe pod %s/%s: %w", ns, name, err)
 	}
@@ -1184,7 +1198,7 @@ func runProbePod(ctx context.Context, ns, name, image string, command []string, 
 		return p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed, nil
 	})
 	out := ""
-	if rc, err := pods.GetLogs(name, &corev1.PodLogOptions{Container: probeContainer}).Stream(ctx); err == nil {
+	if rc, err := pods.GetLogs(name, &corev1.PodLogOptions{Container: container}).Stream(ctx); err == nil {
 		raw, _ := io.ReadAll(rc)
 		_ = rc.Close()
 		out = string(raw)

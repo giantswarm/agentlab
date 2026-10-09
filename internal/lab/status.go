@@ -152,6 +152,9 @@ type Status struct {
 	// AppConfigDrift names Backstage's app-config ConfigMaps whose data is not
 	// what the lab or the chart rendered (appconfig.go); none in sync.
 	AppConfigDrift []string `json:"appConfigDrift,omitempty"`
+	// Workspaces is the workspace storage in place (workspaces.go); nil
+	// without a platform release.
+	Workspaces *WorkspacesStatus `json:"workspaces,omitempty"`
 }
 
 // LabStatus reads the lab's live state. A lab that is not running is refused
@@ -186,6 +189,9 @@ func LabStatus(cfg *config.Config, dir string) (*Status, error) {
 				return nil, err
 			}
 		}
+		if s.Workspaces, err = readWorkspacesStatus(context.Background()); err != nil {
+			return nil, err
+		}
 	}
 	return s, nil
 }
@@ -205,6 +211,9 @@ func PrintStatus(w io.Writer, s *Status, asJSON bool) error {
 	if s.Chart != nil {
 		fmt.Fprintf(&b, "    releases    %s\n", releasesLine(s.Releases))
 		fmt.Fprintf(&b, "    app-config  %s\n", appConfigLine(s.AppConfigDrift))
+	}
+	if s.Workspaces != nil {
+		fmt.Fprintf(&b, "    workspaces  %s\n", s.Workspaces)
 	}
 	_, err := io.WriteString(w, b.String())
 	return err
