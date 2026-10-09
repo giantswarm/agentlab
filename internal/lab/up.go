@@ -261,7 +261,7 @@ func tryItBlock(cfg *config.Config) string {
 		cmds = append(cmds, [2]string{"agentlab agents-test", "agent-manager as the caller: create -> ready -> update -> delete, a viewer refused, the ServiceAccount without RBAC"})
 	}
 	if cfg.WorkspacesEnabled() {
-		cmds = append(cmds, [2]string{"agentlab workspaces-test --storage-only", "PVC -> snapshot -> restore, the controller endpoint refused without Substrate's certificate, an actor's volume across pause and resume"})
+		cmds = append(cmds, [2]string{"agentlab workspaces-test --storage-only", "a read-write-many claim, a shared clone per session sub-path, the sessions isolated, the read-only mounts refusing writes, the controller endpoint refused without Substrate's certificate"})
 	}
 	width := 0
 	for _, c := range cmds {

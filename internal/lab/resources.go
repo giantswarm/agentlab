@@ -143,10 +143,11 @@ const (
 	reqSubstrateCPU = 1000
 	reqSubstrateMem = 2048
 	useSubstrateMem = 480
-	// The workspace storage (workspaces.go): the snapshot controller, the
-	// CSI hostpath driver's pod (the plugin and its five sidecars) and the
-	// Envoy mTLS proxy declare nothing. In use, idle: the snapshot
-	// controller 20Mi, the driver pod 90Mi, the proxy 30Mi.
+	// The workspace storage (workspaces.go): the NFS server, the NFS CSI
+	// controller's pod (the driver, two sidecars, the liveness probe and
+	// the Envoy mTLS proxy) and the node plugin's pod declare nothing. In
+	// use, idle: the server 10Mi, the controller pod 80Mi, the node pod
+	// 40Mi.
 	reqWorkspacesCPU = 0
 	reqWorkspacesMem = 0
 	useWorkspacesMem = 150

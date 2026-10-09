@@ -180,8 +180,8 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 				Negative("Skip").
 				Value(&servingEnabled),
 			huh.NewConfirm().
-				Title("Install workspace storage for the actors' external volumes?").
-				Description("Optional, needs the agents runtime: the CSI snapshot controller, a CSI hostpath driver on\nthe node behind an mTLS proxy only Agent Substrate's API server may reach, and the\nStorageClass and VolumeSnapshotClass agentlab-workspaces. ~250 MB of images;\n`agentlab workspaces-test --storage-only` is the proof.").
+				Title("Install workspace storage (a read-write-many StorageClass that serves git)?").
+				Description("Optional, needs the agents runtime: an in-cluster NFS server, the NFS CSI driver behind an\nmTLS proxy only Agent Substrate's API server may reach, and the StorageClass\nagentlab-workspaces. ~250 MB of images; the host kernel's NFS modules;\n`agentlab workspaces-test --storage-only` is the proof.").
 				Affirmative("Install").
 				Negative("Skip").
 				Value(&workspacesEnabled),

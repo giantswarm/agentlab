@@ -931,7 +931,7 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().StringVar(&githubSignInClientID, "github-signin-client-id", "", "GitHub sign-in through the lab Dex: the GitHub App's client id (turns the sign-in on; \"\" turns it off); the App's callback URL is the lab Dex's own, <issuer>/callback, and its client secret is the Secret platform.githubSignIn.secret names in the dex namespace (default github-signin-client, key client-secret), placed with `beekeeper secret copy --to-secret`, never read by agentlab")
 	cmd.Flags().BoolVar(&githubSignIn, "github-signin", false, "turn the GitHub sign-in on (needs --github-signin-client-id once) or, with =false, off; the client Secret stays")
 	cmd.Flags().StringSliceVar(&githubSignInOrgs, "github-signin-orgs", nil, "GitHub sign-in: admit members of these GitHub organizations only, their teams as groups (`<org>:<team-slug>`); empty admits any GitHub account")
-	cmd.Flags().BoolVar(&workspaces, "workspaces", false, "workspace storage for the actors' external volumes: the CSI snapshot controller, a CSI hostpath driver on the node behind an mTLS proxy only Agent Substrate's API server may reach, and the StorageClass and VolumeSnapshotClass "+lab.WorkspacesStorageClass+" (needs agents, at most one substrate node); --workspaces=false turns it off")
+	cmd.Flags().BoolVar(&workspaces, "workspaces", false, "workspace storage: a read-write-many StorageClass that serves git — an in-cluster NFS server, the NFS CSI driver behind an mTLS proxy only Agent Substrate's API server may reach, and the StorageClass "+lab.WorkspacesStorageClass+" (needs agents); --workspaces=false turns it off")
 	cmd.Flags().BoolVar(&serving, "serving", false, "serve models on llm-d in the lab: the KServe llmisvc controller and its CRDs, the well-known runtime configs, the connectivity chart's serving slice with the models Gateway, model-manager's kserve backend and one CPU preset of the lab's (needs agents; installs cert-manager); --serving=false turns it off")
 	cmd.Flags().StringVar(&aiKeySource, "ai-key-source", "", "where the Anthropic key of the agents' default ModelConfig lives, a reference `beekeeper secret copy` resolves (op://<vault>/<item>/<field>, or <file>#<path> of a SOPS file), never a value: every up and platform place it into the Secret kagent/kagent-anthropic through beekeeper, so a recreated lab carries it without a manual step; \"\" clears it (the key then comes from $ANTHROPIC_API_KEY, else a placeholder)")
 	cmd.Flags().StringVar(&gitHubTokenSource, "github-token-source", "", "where the GitHub token of the portal's skill discovery and agent-manager's skill resolution lives, a reference `beekeeper secret copy` resolves (op://<vault>/<item>/<field>, or <file>#<path> of a SOPS file), never a value: every up and platform place it into the Secret agentlab-github-token through beekeeper, lifting GitHub's anonymous 60 requests an hour this machine shares; \"\" clears it (the token then comes from $GITHUB_TOKEN, else GitHub is called unauthenticated)")
@@ -987,7 +987,7 @@ func printSaved(cfg *config.Config, disc *lab.Discovery) {
 		fmt.Printf("  serving    llm-d on the node: the llmisvc controller and its CRDs, the well-known runtime configs, the models Gateway at %s, cert-manager\n", lab.ModelsGatewayHost(cfg))
 	}
 	if cfg.WorkspacesEnabled() {
-		fmt.Printf("  workspaces the CSI snapshot controller and the CSI hostpath driver on %s behind its mTLS proxy; StorageClass and VolumeSnapshotClass %s\n", lab.WorkspacesNode(cfg), lab.WorkspacesStorageClass)
+		fmt.Printf("  workspaces an NFS server on %s and the NFS CSI driver behind its mTLS proxy; the read-write-many StorageClass %s\n", lab.WorkspacesNode(cfg), lab.WorkspacesStorageClass)
 	}
 	if cfg.VMManagerEnabled() {
 		fmt.Printf("  vm-manager the platform's VM provisioner as a pod of the node, registered with muster as x_vm-manager_* (%s)\n",
@@ -1234,7 +1234,7 @@ func workspacesTestCmd() *cobra.Command {
 	var opts lab.WorkspacesTestOptions
 	cmd := &cobra.Command{
 		Use:   "workspaces-test",
-		Short: "Headless workspace storage proof: the snapshot controller, the CSI driver and the classes in place -> a PVC written -> a VolumeSnapshot ready -> a PVC restored from it with matching files -> the controller endpoint refused without Substrate's client certificate -> an actor with an external volume on the class: its content kept across pause and resume, gone with the actor",
+		Short: "Headless workspace storage proof: the NFS server, the CSI driver and the class in place -> a read-write-many claim bound -> a bare mirror seeded -> two pods on their own session sub-paths with a shared clone each, modes and links intact, isolated, the mirrors read-only -> the whole volume read-only -> the controller endpoint refused without Substrate's client certificate -> the actor-level mount (skipped until the Substrate line carries it) -> everything removed",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadProofLab()
@@ -1244,8 +1244,8 @@ func workspacesTestCmd() *cobra.Command {
 			return lab.WorkspacesTest(cfg, opts)
 		},
 	}
-	cmd.Flags().BoolVar(&opts.StorageOnly, "storage-only", false, "prove the storage and an actor's external volume, with no harness turn against the workspace (the only mode so far; required)")
-	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", lab.DefaultWorkspacesReadyTimeout, "how long each wait may take: a PVC bound, a snapshot ready, a pod finished, an actor's state")
+	cmd.Flags().BoolVar(&opts.StorageOnly, "storage-only", false, "prove the storage, with no harness turn against a workspace (the only mode so far; required)")
+	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", lab.DefaultWorkspacesReadyTimeout, "how long each wait may take: the storage's rollouts, a claim bound, a pod finished, a volume gone")
 	return cmd
 }
 

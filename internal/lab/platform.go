@@ -413,10 +413,11 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 			return err
 		}
 	}
-	// Workspace storage (workspaces.go): the snapshot controller, the CSI
-	// hostpath driver and the classes before the platform, so Substrate's
-	// CSIDriverConfig finds its driver; the driver's mTLS proxy is waited
-	// for after the install, since its certificates come from Substrate.
+	// Workspace storage (workspaces.go): the NFS server, the NFS CSI driver
+	// and the class before the platform, so Substrate's CSIDriverConfig
+	// finds its driver; the driver's controller with its mTLS proxy is
+	// waited for after the install, since its certificates come from
+	// Substrate.
 	// A chart that carries the workspaces values registers the driver
 	// itself; the lab's own CSIDriverConfig from an earlier install goes.
 	workspacesChart := workspacesChartCarries(cfg)

@@ -2,191 +2,175 @@ package lab
 
 import (
 	"context"
-	_ "embed"
 	"encoding/json"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
 
-// Workspace storage in the lab (platform.workspaces): what a Session's clone
-// of a workspace is made of on an installation, on the kind node. A
-// workspace is a volume, snapshotted with CSI VolumeSnapshots, and each
-// Session gets a clone of the latest snapshot as an Agent Substrate external
-// volume — no PVC: ate-api-server calls the driver's controller service over
-// the network and atelet the node plugin's socket, both found through a
-// cluster-scoped CSIDriverConfig. The kind cluster has the local-path
-// provisioner alone: no CSI driver, no snapshot CRDs, no snapshot
-// controller, no VolumeSnapshotClass. The switch installs them before the
-// platform chart (workspaces.yaml.tmpl, volumesnapshot-crds.yaml), the way
-// agent-substrate/substrate's own kind setup does:
+// Workspace storage in the lab (platform.workspaces): a read-write-many
+// StorageClass that serves git, what a workspace's volume is made of on an
+// installation (EFS, Azure Files over NFS), on the kind cluster. A workspace
+// is one volume shared by its sync and every Session on it: bare mirrors of
+// its repositories and a directory per Session, which the Session's actor
+// mounts at a sub-path through Agent Substrate — its own directory
+// read-write, the mirrors read-only. Substrate uses no PVC for that mount:
+// ate-api-server calls the driver's controller over the network and atelet
+// the node plugin's socket, both found through a cluster-scoped
+// CSIDriverConfig. The kind cluster has the local-path provisioner alone,
+// read-write-once and no CSI driver. The switch installs, before the platform
+// chart (workspaces.yaml.tmpl), the way agent-substrate/substrate's own kind
+// setup does for its driver:
 //
-//   - the external-snapshotter's CRDs and its snapshot controller;
-//   - the CSI hostpath driver on ONE node (the hostpath driver keeps a
-//     volume's bytes on the node it runs on, so the node that mounts them
-//     for an actor must be the same: the single-node lab's control plane,
-//     or the one substrateNodes worker the WorkerPool's workers land on —
-//     substrateNodes above one is refused, config.Validate), with
-//     Substrate's directory /var/lib/ate mounted Bidirectional so atelet
-//     sees the mounts the node plugin makes;
-//   - an mTLS proxy in front of the driver's controller socket, behind the
-//     Service whose DNS name Substrate's service-DNS signer certifies, which
-//     admits ate-api-server's pod identity alone;
-//   - the StorageClass and VolumeSnapshotClass `agentlab-workspaces`.
+//   - an in-cluster NFS server on the control plane, exporting a directory of
+//     the node;
+//   - the NFS CSI driver (kubernetes-csi/csi-driver-nfs): the controller
+//     beside the server, the node plugin on every node with Substrate's
+//     directory /var/lib/ate mounted Bidirectional so atelet sees the mounts
+//     the plugin makes;
+//   - an mTLS proxy in the controller's pod, behind the Service whose DNS
+//     name Substrate's service-DNS signer certifies, which admits
+//     ate-api-server's pod identity alone;
+//   - the StorageClass `agentlab-workspaces`: a directory of the export per
+//     volume, NFSv4.1, no snapshots (a Session is a directory on the
+//     workspace's volume, not a clone of it).
 //
-// The platform values name them (the `workspaces:` block of
-// agent-platform-values.yaml.tmpl) once the chart carries the key
+// The platform values name the class and the driver (the `workspaces:`
+// block of agent-platform-values.yaml.tmpl) once the chart carries the key
 // (chartCarriesWorkspaces): the chart then renders the CSIDriverConfig that
 // registers the driver with Substrate. Until it does, the lab applies that
-// one object itself after the install (ensureWorkspacesCSIDriverConfig), so
-// the actor half of `agentlab workspaces-test` runs; the lab's copy goes the
-// moment a chart that renders its own is installed. docs/workspaces.md is
-// the human account.
+// one object itself after the install (ensureWorkspacesCSIDriverConfig); the
+// lab's copy goes the moment a chart that renders its own is installed.
+// docs/workspaces.md is the human account.
 
 const (
-	// workspacesNamespace holds the snapshot controller, the driver and its
-	// proxy. `agentlab workspaces-test` creates its own next to it.
+	// workspacesNamespace holds the NFS server and the driver.
 	workspacesNamespace = "agentlab-workspaces"
-	// workspacesStorageClass and workspacesSnapshotClass are the classes
-	// the chart's workspaces values name: the workspace volume, its
-	// snapshots and a Session's clone all on one driver, so a snapshot
-	// handle is always restorable by the clone's driver.
-	workspacesStorageClass  = "agentlab-workspaces"
-	workspacesSnapshotClass = "agentlab-workspaces"
-	// workspacesCSIDriver is the CSI hostpath driver's name: the
-	// StorageClass's provisioner, the CSIDriver object, the
-	// CSIDriverConfig's name and driverName.
-	workspacesCSIDriver = "hostpath.csi.k8s.io"
-	// workspacesControllerService fronts the proxy: its DNS name is the
-	// CSIDriverConfig's controllerEndpoint and, as <service>.<namespace>.svc,
-	// the one DNS name the service-DNS signer puts on the proxy's
-	// certificate — the tls.serverName ate-api-server verifies.
-	workspacesControllerService = "csi-hostpath-controller"
+	// workspacesStorageClass is the read-write-many class the chart's
+	// workspaces values name.
+	workspacesStorageClass = "agentlab-workspaces"
+	// workspacesCSIDriver is the driver's name: csi-driver-nfs's.
+	workspacesCSIDriver = "nfs.csi.k8s.io"
+	// workspacesDriverVersion is the csi-driver-nfs release the manifests
+	// follow (deploy/<version>/) and the driver image's tag.
+	workspacesDriverVersion = "v4.13.4"
+	// workspacesNFSServer is the NFS server's Deployment and Service.
+	workspacesNFSServer = "nfs-server"
+	// workspacesExportDir is the directory of the control plane the server
+	// exports: every volume is a directory under it.
+	workspacesExportDir = "/var/lib/agentlab-workspaces"
+	// workspacesControllerService fronts the controller's mTLS proxy; the
+	// CSIDriverConfig's controllerEndpoint is its DNS name and port.
+	workspacesControllerService = "csi-nfs-controller"
 	workspacesControllerPort    = 50051
-	// workspacesProxyPort is the proxy's mTLS listener, the Service's target.
+	// workspacesProxyPort is the proxy's listener: on the node's network,
+	// like the controller pod it sits in.
 	workspacesProxyPort = 10000
-	// The workloads: the driver's StatefulSet with its sidecars, the proxy's
-	// StatefulSet, the snapshot controller's Deployment.
-	workspacesPluginStatefulSet  = "csi-hostpathplugin"
-	workspacesProxyStatefulSet   = "csi-hostpath-proxy"
-	snapshotControllerDeployment = "snapshot-controller"
-	// workspacesNodeSocket is the node plugin's socket on the node, the
-	// CSIDriverConfig's nodeSocketOverride: the registrar's
-	// kubelet-registration-path.
-	workspacesNodeSocket = "unix:///var/lib/kubelet/plugins/csi-hostpath/csi.sock"
-	// workspacesDataDir is where the driver keeps a volume's bytes on the
-	// node, <dir>/<volume id>; the proof reads an actor's file there.
-	workspacesDataDir = "/var/lib/csi-hostpath-data"
-	// substrateVolumesDir is Substrate's directory on the node, which
-	// atelet bind-mounts a published volume from into the actor's sandbox.
+	// workspacesController and workspacesNodePlugin are the driver's
+	// Deployment and DaemonSet.
+	workspacesController = "csi-nfs-controller"
+	workspacesNodePlugin = "csi-nfs-node"
+	// workspacesNodeSocketDir is where the node plugin registers with the
+	// kubelet; the CSIDriverConfig's nodeSocketOverride is its socket.
+	workspacesNodeSocketDir = "/var/lib/kubelet/plugins/csi-nfsplugin"
+	// substrateVolumesDir is where atelet asks the node plugin to publish an
+	// actor's volume: the node plugin mounts it Bidirectional.
 	substrateVolumesDir = "/var/lib/ate"
-	// ateAPIServerSPIFFEID is the pod identity Substrate's pod-identity
-	// signer gives ate-api-server (spiffe://<trust domain>/ns/<ns>/sa/<sa>),
-	// the one client the proxy admits.
+	// ateAPIServerSPIFFEID is the client identity the proxy admits.
 	ateAPIServerSPIFFEID = "spiffe://cluster.local/ns/ate-system/sa/ate-api-server"
-	// workspacesTemplate renders everything but the CRDs.
+	// workspacesTemplate renders everything.
 	workspacesTemplate = "workspaces.yaml.tmpl"
-	// csiDriverConfigResource is Substrate's CSIDriverConfig API, resolved
-	// through discovery like every custom kind the lab reads.
+	// csiDriverConfigResource is Substrate's registration of a driver.
 	csiDriverConfigResource = "csidriverconfigs.ate.dev"
-	// workspacesRolloutTimeout bounds each workload's rollout: the images
-	// are side-loaded, so a rollout that takes longer is stuck.
+	// workspacesRolloutTimeout bounds each workload's rollout.
 	workspacesRolloutTimeout = 5 * time.Minute
 )
 
-// The image pins (bumped deliberately, like the observability charts'): the
-// external-snapshotter line's controller and csi-snapshotter at one release,
-// the hostpath driver with the sidecars its upstream deploy pins, Envoy for
-// the proxy. gsoci carries every image but the hostpath driver's, which
-// comes from registry.k8s.io; all are side-loaded host cache -> node like
-// every platform image (preload.go).
+// The images, every one pinned. The sidecars and Envoy are gsoci mirrors;
+// the driver is csi-driver-nfs's own image on gsoci; the NFS server is the
+// csi-driver-nfs project's kind fixture (a kernel nfsd on Alpine), pinned by
+// digest since its tags move.
 const (
-	snapshotControllerImage = "gsoci.azurecr.io/giantswarm/snapshot-controller:v8.6.0"
-	csiSnapshotterImage     = "gsoci.azurecr.io/giantswarm/csi-snapshotter:v8.6.0"
-	csiHostPathImage        = "registry.k8s.io/sig-storage/hostpathplugin:v1.17.1"
-	csiRegistrarImage       = "gsoci.azurecr.io/giantswarm/csi-node-driver-registrar:v2.17.0"
-	csiLivenessProbeImage   = "gsoci.azurecr.io/giantswarm/livenessprobe:v2.19.0"
-	csiAttacherImage        = "gsoci.azurecr.io/giantswarm/csi-attacher:v4.12.0"
-	csiProvisionerImage     = "gsoci.azurecr.io/giantswarm/csi-provisioner:v6.3.0"
-	csiResizerImage         = "gsoci.azurecr.io/giantswarm/csi-resizer:v2.2.1"
-	csiProxyImage           = "gsoci.azurecr.io/giantswarm/envoy:v1.35.9"
+	nfsServerImage        = "docker.io/itsthenetwork/nfs-server-alpine:latest@sha256:7fa99ae65c23c5af87dd4300e543a86b119ed15ba61422444207efc7abd0ba20"
+	nfsPluginImage        = "gsoci.azurecr.io/giantswarm/nfsplugin:" + workspacesDriverVersion
+	csiRegistrarImage     = "gsoci.azurecr.io/giantswarm/csi-node-driver-registrar:v2.17.0"
+	csiLivenessProbeImage = "gsoci.azurecr.io/giantswarm/livenessprobe:v2.19.0"
+	csiProvisionerImage   = "gsoci.azurecr.io/giantswarm/csi-provisioner:v6.3.0"
+	csiResizerImage       = "gsoci.azurecr.io/giantswarm/csi-resizer:v2.2.1"
+	csiProxyImage         = "gsoci.azurecr.io/giantswarm/envoy:v1.35.9"
 )
 
-// WorkspacesStorageClass and WorkspacesSnapshotClass are the classes for the
-// configure summary.
+// WorkspacesStorageClass is the class for the configure summary.
+const WorkspacesStorageClass = workspacesStorageClass
+
+// stateNotRead and stateMissing word a status that could not be read and
+// an object that is not there.
 const (
-	WorkspacesStorageClass  = workspacesStorageClass
-	WorkspacesSnapshotClass = workspacesSnapshotClass
+	stateNotRead = "not read"
+	stateMissing = "missing"
 )
 
-//go:embed templates/volumesnapshot-crds.yaml
-var volumeSnapshotCRDs []byte
-
-// workspacesImages are the pins as the template renders them.
 type workspacesImages struct {
-	SnapshotController, HostPath, Registrar, LivenessProbe, Attacher, Provisioner, Resizer, Snapshotter, Proxy string
+	NFSServer, NFSPlugin, Registrar, LivenessProbe, Provisioner, Resizer, Proxy string
 }
 
 // workspacesValues are the names workspaces.yaml.tmpl and the values
 // template's `workspaces:` block render.
 type workspacesValues struct {
-	Namespace, Driver, StorageClass, SnapshotClass       string
-	ControllerService, Plugin, Proxy, SnapshotController string
-	ControllerPort, ProxyPort                            int
+	Namespace, Driver, DriverVersion, StorageClass string
+	NFSServer, NFSServerHost, ExportDir            string
+	ControllerService, Controller, NodePlugin      string
+	ControllerPort, ProxyPort                      int
 	// ControllerEndpoint, ServerName and NodeSocket are the CSIDriverConfig's
 	// controllerEndpoint, tls.serverName and nodeSocketOverride.
 	ControllerEndpoint, ServerName, NodeSocket string
-	DataDir, SubstrateDir, ClientSPIFFEID      string
-	// Node is the node the driver and its proxy are pinned to;
-	// OnSubstrateWorker says it is the substrateNodes worker, whose taint
-	// they tolerate.
-	Node              string
-	OnSubstrateWorker bool
-	Images            workspacesImages
+	NodeSocketDir, SubstrateDir, ClientSPIFFEID string
+	// Node is the control plane, where the NFS server and the controller
+	// run: the export is a directory of that node.
+	Node   string
+	Images workspacesImages
 }
 
 func workspacesValuesFor(cfg *config.Config) workspacesValues {
-	node, onWorker := workspacesNode(cfg)
 	return workspacesValues{
 		Namespace:          workspacesNamespace,
 		Driver:             workspacesCSIDriver,
+		DriverVersion:      workspacesDriverVersion,
 		StorageClass:       workspacesStorageClass,
-		SnapshotClass:      workspacesSnapshotClass,
+		NFSServer:          workspacesNFSServer,
+		NFSServerHost:      workspacesNFSServer + "." + workspacesNamespace + ".svc.cluster.local",
+		ExportDir:          workspacesExportDir,
 		ControllerService:  workspacesControllerService,
-		Plugin:             workspacesPluginStatefulSet,
-		Proxy:              workspacesProxyStatefulSet,
-		SnapshotController: snapshotControllerDeployment,
+		Controller:         workspacesController,
+		NodePlugin:         workspacesNodePlugin,
 		ControllerPort:     workspacesControllerPort,
 		ProxyPort:          workspacesProxyPort,
 		ControllerEndpoint: fmt.Sprintf("tcp://%s.%s.svc.cluster.local:%d", workspacesControllerService, workspacesNamespace, workspacesControllerPort),
 		ServerName:         workspacesControllerServerName(),
-		NodeSocket:         workspacesNodeSocket,
-		DataDir:            workspacesDataDir,
+		NodeSocket:         "unix://" + workspacesNodeSocketDir + "/csi.sock",
+		NodeSocketDir:      workspacesNodeSocketDir,
 		SubstrateDir:       substrateVolumesDir,
 		ClientSPIFFEID:     ateAPIServerSPIFFEID,
-		Node:               node,
-		OnSubstrateWorker:  onWorker,
+		Node:               WorkspacesNode(cfg),
 		Images: workspacesImages{
-			SnapshotController: snapshotControllerImage,
-			HostPath:           csiHostPathImage,
-			Registrar:          csiRegistrarImage,
-			LivenessProbe:      csiLivenessProbeImage,
-			Attacher:           csiAttacherImage,
-			Provisioner:        csiProvisionerImage,
-			Resizer:            csiResizerImage,
-			Snapshotter:        csiSnapshotterImage,
-			Proxy:              csiProxyImage,
+			NFSServer:     nfsServerImage,
+			NFSPlugin:     nfsPluginImage,
+			Registrar:     csiRegistrarImage,
+			LivenessProbe: csiLivenessProbeImage,
+			Provisioner:   csiProvisionerImage,
+			Resizer:       csiResizerImage,
+			Proxy:         csiProxyImage,
 		},
 	}
 }
@@ -200,21 +184,11 @@ func workspacesControllerServerName() string {
 	return workspacesControllerService + "." + workspacesNamespace + ".svc"
 }
 
-// workspacesNode is the node the driver is pinned to: the one substrateNodes
-// worker, where the WorkerPool's workers (and so the actors) land, else the
-// control plane of the single-node lab. The second value says it is the
-// worker, whose NoSchedule taint the driver's pods then tolerate.
-func workspacesNode(cfg *config.Config) (string, bool) {
-	if names := cfg.SubstrateNodeNames(); len(names) == 1 {
-		return names[0], true
-	}
-	return cfg.ControlPlaneNode(), false
-}
-
-// WorkspacesNode is workspacesNode for the configure summary.
+// WorkspacesNode is the node the NFS server and the driver's controller run
+// on: the control plane, whose disk holds the export. The node plugin runs on
+// every node, so the actors' workers may be anywhere.
 func WorkspacesNode(cfg *config.Config) string {
-	node, _ := workspacesNode(cfg)
-	return node
+	return cfg.ControlPlaneNode()
 }
 
 // chartCarriesWorkspaces reports whether the meta chart about to be installed
@@ -292,19 +266,19 @@ func chartValuesCarry(schema []byte, values map[string]any, key string) bool {
 	return ok
 }
 
-// workspacesUp installs the workspace storage: the snapshot CRDs, then the
-// rendered manifest (the snapshot controller, the driver, its proxy, the
-// classes), its images side-loaded first like every platform image; the
-// controller's and the driver's rollouts are waited for. The proxy's pod is
-// not: its certificate comes from Substrate's signers, which the platform
-// install brings — waitWorkspacesProxy, after the install. An idempotent
-// re-apply on a lab that has it.
+// workspacesUp installs the workspace storage: the rendered manifest (the
+// NFS server, the driver, its proxy, the class), its images side-loaded
+// first like every platform image; the server's and the node plugin's
+// rollouts are waited for. The controller's is not: its proxy's certificate
+// comes from Substrate's signers, which the platform install brings —
+// waitWorkspacesProxy, after the install. An idempotent re-apply on a lab
+// that has it.
 func workspacesUp(cfg *config.Config) error {
 	ctx := context.Background()
-	node, _ := workspacesNode(cfg)
-	step("Installing the workspace storage (the CSI snapshot controller, the CSI hostpath driver on %s behind its mTLS proxy, the classes %s)", node, workspacesStorageClass)
-	if _, err := applyManifests(ctx, volumeSnapshotCRDs); err != nil {
-		return fmt.Errorf("the CSI snapshot CRDs: %w", err)
+	node := WorkspacesNode(cfg)
+	step("Installing the workspace storage (an NFS server on %s, the NFS CSI driver %s behind its mTLS proxy, the read-write-many StorageClass %s)", node, workspacesDriverVersion, workspacesStorageClass)
+	if err := workspacesHostPreflight(); err != nil {
+		return err
 	}
 	manifest, _, err := renderManifest(cfg, workspacesTemplate)
 	if err != nil {
@@ -318,30 +292,52 @@ func workspacesUp(cfg *config.Config) error {
 	if _, err := applyManifests(ctx, manifest); err != nil {
 		return fmt.Errorf("the workspace storage: %w", err)
 	}
-	if err := waitDeploymentRolledOut(ctx, workspacesNamespace, snapshotControllerDeployment, workspacesRolloutTimeout); err != nil {
-		return fmt.Errorf("the snapshot controller: %w", err)
+	if err := waitDeploymentRolledOut(ctx, workspacesNamespace, workspacesNFSServer, workspacesRolloutTimeout); err != nil {
+		return fmt.Errorf("the NFS server: %w (the kind node loads the host kernel's nfsd for it; `kubectl -n %s logs deploy/%s`)", err, workspacesNamespace, workspacesNFSServer)
 	}
-	if err := waitStatefulSetReady(ctx, workspacesNamespace, workspacesPluginStatefulSet, workspacesRolloutTimeout); err != nil {
-		return fmt.Errorf("the CSI hostpath driver: %w", err)
+	if err := waitDaemonSetReady(ctx, workspacesNamespace, workspacesNodePlugin, workspacesRolloutTimeout); err != nil {
+		return fmt.Errorf("the NFS CSI node plugin: %w", err)
 	}
-	note("snapshot controller rolled out; CSI driver %s Ready on %s (volumes under %s, Substrate's %s mounted Bidirectional); StorageClass and VolumeSnapshotClass %s",
-		workspacesCSIDriver, node, workspacesDataDir, substrateVolumesDir, workspacesStorageClass)
+	note("NFS server exporting %s of %s; node plugin %s Ready on every node (Substrate's %s mounted Bidirectional); StorageClass %s (read-write-many, NFSv4.1)",
+		workspacesExportDir, node, workspacesCSIDriver, substrateVolumesDir, workspacesStorageClass)
 	return nil
 }
 
-// waitWorkspacesProxy waits for the mTLS proxy's pod after the platform
-// install: its serving certificate is a PodCertificateRequest the
-// service-DNS signer of Substrate's podcertificate-controller answers, and
-// its client trust the pod-identity CA's live ClusterTrustBundle — neither
-// exists before the chart.
-func waitWorkspacesProxy(ctx context.Context) error {
-	step("Waiting for the workspace storage's mTLS proxy (its certificate from Substrate's service-DNS signer)")
-	if err := waitStatefulSetReady(ctx, workspacesNamespace, workspacesProxyStatefulSet, workspacesRolloutTimeout); err != nil {
-		return fmt.Errorf("the CSI controller proxy: %w (the signer issues a certificate only to a pod the Service %s selects; `agentlab pods -n %s`, `kubectl -n %s describe pod %s-0`)",
-			err, workspacesControllerService, workspacesNamespace, workspacesNamespace, workspacesProxyStatefulSet)
+// workspacesHostPreflight checks the host kernel can serve NFS: the kind node
+// shares it, and the NFS server in the cluster is the kernel's nfsd, loaded
+// on the first export; the client side is the kernel's nfs module. A module
+// already loaded passes; else modprobe's dry run must find it. A host
+// without modprobe is left to the rollout's own verdict.
+func workspacesHostPreflight() error {
+	for _, module := range []string{"nfsd", "nfs"} {
+		if _, err := os.Stat("/sys/module/" + module); err == nil {
+			continue
+		}
+		modprobe, err := exec.LookPath("modprobe")
+		if err != nil {
+			return nil
+		}
+		if out, err := exec.Command(modprobe, "-n", "-q", module).CombinedOutput(); err != nil {
+			return fmt.Errorf("the host kernel has no %s module (%v%s): the lab's NFS server and the driver's mounts run on the host's kernel; install the kernel's NFS modules (on Debian and Ubuntu the kernel's `linux-modules-extra`, nfs-kernel-server brings the tools) or reboot into a kernel that has them", module, err, strings.TrimSpace(" "+string(out)))
+		}
 	}
-	note("proxy Ready: %s serves %s:%d with the certificate of %s, admitting %s alone",
-		workspacesProxyStatefulSet, workspacesControllerService, workspacesControllerPort, workspacesControllerServerName(), ateAPIServerSPIFFEID)
+	return nil
+}
+
+// waitWorkspacesProxy waits for the driver's controller after the platform
+// install: its mTLS proxy's serving certificate is a PodCertificateRequest
+// the service-DNS signer of Substrate's podcertificate-controller answers,
+// and its client trust the pod-identity CA's live ClusterTrustBundle —
+// neither exists before the chart, and the kubelet holds the pod until they
+// do.
+func waitWorkspacesProxy(ctx context.Context) error {
+	step("Waiting for the workspace storage's controller and its mTLS proxy (their certificate from Substrate's service-DNS signer)")
+	if err := waitDeploymentRolledOut(ctx, workspacesNamespace, workspacesController, workspacesRolloutTimeout); err != nil {
+		return fmt.Errorf("the NFS CSI controller: %w (the signer issues a certificate only to a pod the Service %s selects; `agentlab pods -n %s`, `kubectl -n %s describe deploy/%s`)",
+			err, workspacesControllerService, workspacesNamespace, workspacesNamespace, workspacesController)
+	}
+	note("controller Ready: its proxy serves %s:%d with the certificate of %s, admitting %s alone",
+		workspacesControllerService, workspacesControllerPort, workspacesControllerServerName(), ateAPIServerSPIFFEID)
 	return nil
 }
 
@@ -376,8 +372,7 @@ func ensureWorkspacesCSIDriverConfig(ctx context.Context, chartCarries bool) err
 	if chartCarries {
 		return nil
 	}
-	gvr, err := gvrFor(csiDriverConfigResource)
-	if err != nil {
+	if _, err := gvrFor(csiDriverConfigResource); err != nil {
 		return fmt.Errorf("the CSIDriverConfig API of Substrate is not served (%v): the agents runtime brings it; is platform.agents on and the substrate-crds component installed?", err)
 	}
 	k, err := labKube()
@@ -390,7 +385,6 @@ func ensureWorkspacesCSIDriverConfig(ctx context.Context, chartCarries bool) err
 	}
 	note("%s (the chart carries no workspaces values yet, so the lab registers the driver with Substrate itself: controllerEndpoint %s, tls.serverName %s)",
 		res, workspacesValuesFor(config.Default()).ControllerEndpoint, workspacesControllerServerName())
-	_ = gvr
 	return nil
 }
 
@@ -410,39 +404,37 @@ func removeLabWorkspacesCSIDriverConfig(ctx context.Context) error {
 		}
 		return err
 	}
-	if obj.GetLabels()["app.kubernetes.io/managed-by"] != managedByAgentlabValue {
+	if obj.GetLabels()[managedByLabel] != managedByAgentlabValue {
 		return nil
 	}
 	note("removing the CSIDriverConfig %s the lab applied (the chart renders its own now)", workspacesCSIDriver)
 	return deleteObject(ctx, gvr, "", workspacesCSIDriver, fixtureDeleteWait)
 }
 
-// The cluster-scoped objects of the workspace storage besides the CRDs, as
-// kubectl resource arguments and names: what workspacesDown removes after
-// the namespace. The classes go before the CRDs that define them.
+// The cluster-scoped objects of the workspace storage, as kubectl resource
+// arguments and names: what workspacesDown removes after the namespace.
 var workspacesClusterObjects = []struct{ resource, name string }{
-	{"volumesnapshotclasses.snapshot.storage.k8s.io", workspacesSnapshotClass},
 	{"storageclasses.storage.k8s.io", workspacesStorageClass},
 	{"csidrivers.storage.k8s.io", workspacesCSIDriver},
-	{"clusterrolebindings.rbac.authorization.k8s.io", "agentlab-workspaces-csi-hostpathplugin"},
-	{"clusterroles.rbac.authorization.k8s.io", "agentlab-workspaces-csi-hostpathplugin"},
-	{"clusterrolebindings.rbac.authorization.k8s.io", "agentlab-workspaces-snapshot-controller"},
-	{"clusterroles.rbac.authorization.k8s.io", "agentlab-workspaces-snapshot-controller"},
+	{"clusterrolebindings.rbac.authorization.k8s.io", "agentlab-workspaces-csi-nfs-provisioner"},
+	{"clusterroles.rbac.authorization.k8s.io", "agentlab-workspaces-csi-nfs-provisioner"},
+	{"clusterrolebindings.rbac.authorization.k8s.io", "agentlab-workspaces-csi-nfs-resizer"},
+	{"clusterroles.rbac.authorization.k8s.io", "agentlab-workspaces-csi-nfs-resizer"},
 }
 
 // workspacesDown removes the workspace storage from a lab that has it: the
-// lab's CSIDriverConfig, the namespace with everything in it, the
-// cluster-scoped objects and the snapshot CRDs, so a lab with the switch off
-// carries nothing of it. Quiet on a lab that never had it. A volume the
-// driver still publishes keeps the namespace Terminating until its pod is
-// gone: `agentlab workspaces-test` removes its own.
+// lab's CSIDriverConfig, the namespace with everything in it and the
+// cluster-scoped objects, so a lab with the switch off carries nothing of
+// it. Quiet on a lab that never had it. A volume a pod still mounts keeps
+// the namespace Terminating until the pod is gone: `agentlab
+// workspaces-test` removes its own. The export's bytes on the node go with
+// cleanWorkspacesNode.
 func workspacesDown(ctx context.Context) error {
 	exists, err := objectExists(ctx, gvrNamespaces, "", workspacesNamespace)
 	if err != nil {
 		return err
 	}
-	crds := workspacesCRDNames()
-	if !exists && !anyObjectExists(ctx, "customresourcedefinitions.apiextensions.k8s.io", crds) {
+	if !exists && !clusterObjectExists(ctx, "storageclasses.storage.k8s.io", workspacesStorageClass) {
 		return nil
 	}
 	step("Removing the workspace storage (platform.workspaces is off)")
@@ -455,127 +447,80 @@ func workspacesDown(ctx context.Context) error {
 	for _, o := range workspacesClusterObjects {
 		gvr, err := gvrFor(o.resource)
 		if err != nil {
-			continue // the CRD is gone already, and so is everything of its kind
+			continue
 		}
 		if err := deleteObject(ctx, gvr, "", o.name, fixtureDeleteWait); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("removing %s %s: %w", o.resource, o.name, err)
 		}
 	}
-	gvr, err := gvrFor("customresourcedefinitions.apiextensions.k8s.io")
-	if err != nil {
-		return err
-	}
-	for _, name := range crds {
-		if err := deleteObject(ctx, gvr, "", name, fixtureDeleteWait); err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("removing the CRD %s: %w (a VolumeSnapshot left behind holds it; delete it first)", name, err)
-		}
-	}
-	note("workspace storage removed: namespace %s, the classes, the CSIDriver and the snapshot CRDs", workspacesNamespace)
+	note("workspace storage removed: namespace %s, the StorageClass, the CSIDriver and the driver's roles", workspacesNamespace)
 	return nil
 }
 
-// workspacesCRDNames are the snapshot CRDs' names, read off the bundle.
-func workspacesCRDNames() []string {
-	objs, err := decodeManifests(volumeSnapshotCRDs)
-	if err != nil {
-		return nil
-	}
-	var names []string
-	for _, o := range objs {
-		names = append(names, o.GetName())
-	}
-	return names
-}
-
-// anyObjectExists reports whether any of the named cluster-scoped objects of
-// a resource exists; a resource the apiserver does not serve has none.
-func anyObjectExists(ctx context.Context, resource string, names []string) bool {
-	gvr, err := gvrFor(resource)
-	if err != nil {
-		return false
-	}
-	for _, name := range names {
-		if exists, err := objectExists(ctx, gvr, "", name); err == nil && exists {
-			return true
-		}
-	}
-	return false
-}
-
 // cleanWorkspacesNode unmounts what the driver published under Substrate's
-// directory on a node and removes the volumes' bytes — on `agentlab down`
-// before the node is deleted (a bind mount the node still holds can keep the
-// container from being removed) and on `agentlab platform-down`. Best
-// effort through `docker exec`; a node that is not running has nothing to
-// clean.
+// directory on a node and removes the export's bytes — on `agentlab down`
+// before the node is deleted (a mount the node still holds can keep the
+// container from being removed), on `agentlab platform-down` and when the
+// switch goes off. Best effort through `docker exec`; a node that is not
+// running, or has no export, has nothing to clean.
 func cleanWorkspacesNode(node string) {
-	script := fmt.Sprintf(`for m in $(awk '$2 ~ "^%s/" {print $2}' /proc/mounts | sort -r); do umount -f "$m" 2>/dev/null; done; rm -rf %s/* 2>/dev/null; true`,
-		substrateVolumesDir, workspacesDataDir)
-	if _, err := outputQuiet(dockerBin, "exec", node, "sh", "-c", script); err != nil {
-		return
-	}
+	script := fmt.Sprintf(`for m in $(awk '$2 ~ "^%s/" {print $2}' /proc/mounts | sort -r); do umount -f "$m" 2>/dev/null; done; rm -rf %s 2>/dev/null; true`,
+		substrateVolumesDir, workspacesExportDir)
+	_, _ = outputQuiet(dockerBin, "exec", node, "sh", "-c", script)
 }
 
-// waitStatefulSetReady is `kubectl rollout status statefulset/<name>`: every
-// replica of the current revision Ready, bounded by timeout; the last read
-// state is in the error.
-func waitStatefulSetReady(ctx context.Context, ns, name string, timeout time.Duration) error {
+// waitDaemonSetReady is `kubectl rollout status daemonset/<name>`: every
+// scheduled pod of the current generation Ready, bounded by timeout; the
+// last read's state is in the error.
+func waitDaemonSetReady(ctx context.Context, ns, name string, timeout time.Duration) error {
 	k, err := labKube()
 	if err != nil {
 		return err
 	}
-	var last *appsv1.StatefulSet
-	var readErr error
-	waitErr := wait.PollUntilContextTimeout(ctx, 2*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
-		last, readErr = k.clientset.AppsV1().StatefulSets(ns).Get(ctx, name, metav1.GetOptions{})
-		if readErr != nil {
+	var last *appsv1.DaemonSet
+	if err := wait.PollUntilContextTimeout(ctx, 2*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
+		ds, err := k.clientset.AppsV1().DaemonSets(ns).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
 			return false, nil
 		}
-		return statefulSetReady(last), nil
-	})
-	if waitErr == nil {
-		return nil
+		last = ds
+		return daemonSetReady(ds), nil
+	}); err != nil {
+		return fmt.Errorf("daemonset %s/%s is not ready after %s (%s): `agentlab pods -n %s`", ns, name, timeout, daemonSetStatus(last), ns)
 	}
-	if readErr != nil {
-		return fmt.Errorf("statefulset %s/%s: %w", ns, name, readErr)
-	}
-	return fmt.Errorf("statefulset %s/%s is not Ready after %s (%s)", ns, name, timeout, statefulSetStatus(last))
+	return nil
 }
 
-// statefulSetReady reports whether a StatefulSet has rolled out: the status
-// current, every replica on the update revision and Ready.
-func statefulSetReady(s *appsv1.StatefulSet) bool {
-	if s == nil || s.Status.ObservedGeneration < s.Generation {
+// daemonSetReady reports every desired pod of the current generation
+// scheduled, updated and Ready.
+func daemonSetReady(ds *appsv1.DaemonSet) bool {
+	if ds.Generation > ds.Status.ObservedGeneration {
 		return false
 	}
-	replicas := int32(1)
-	if s.Spec.Replicas != nil {
-		replicas = *s.Spec.Replicas
-	}
-	return s.Status.UpdatedReplicas >= replicas && s.Status.ReadyReplicas >= replicas &&
-		(s.Status.UpdateRevision == "" || s.Status.CurrentRevision == s.Status.UpdateRevision)
+	desired := ds.Status.DesiredNumberScheduled
+	return desired > 0 && ds.Status.UpdatedNumberScheduled >= desired && ds.Status.NumberReady >= desired
 }
 
-// statefulSetStatus words a StatefulSet's rollout state for an error.
-func statefulSetStatus(s *appsv1.StatefulSet) string {
-	if s == nil {
+// daemonSetStatus words a DaemonSet's rollout state.
+func daemonSetStatus(ds *appsv1.DaemonSet) string {
+	if ds == nil {
 		return stateNotRead
 	}
-	return fmt.Sprintf("%d of %d replicas ready, %d updated", s.Status.ReadyReplicas, s.Status.Replicas, s.Status.UpdatedReplicas)
+	return fmt.Sprintf("%d of %d pods ready, %d updated", ds.Status.NumberReady, ds.Status.DesiredNumberScheduled, ds.Status.UpdatedNumberScheduled)
 }
 
 // WorkspacesStatus is the workspace storage as `agentlab status` reports it.
 type WorkspacesStatus struct {
-	// SnapshotController, Driver and Proxy are the workloads' rollout states
-	// in a word: Ready, or what is not.
-	SnapshotController string `json:"snapshotController"`
-	Driver             string `json:"driver"`
-	Proxy              string `json:"proxy"`
-	// Node is the node the driver is pinned to.
+	// NFSServer, Controller and NodePlugin are the workloads' rollout states
+	// in a word: Ready, or what is not. The controller carries the mTLS
+	// proxy.
+	NFSServer  string `json:"nfsServer"`
+	Controller string `json:"controller"`
+	NodePlugin string `json:"nodePlugin"`
+	// Node is the node the server and the controller run on.
 	Node string `json:"node,omitempty"`
-	// StorageClass and SnapshotClass report whether the classes exist.
-	StorageClass  bool `json:"storageClass"`
-	SnapshotClass bool `json:"volumeSnapshotClass"`
+	// StorageClass reports whether the class exists.
+	StorageClass bool `json:"storageClass"`
 	// CSIDriverConfig says who registered the driver with Substrate: "the
 	// lab", "the chart", or "" when nothing did.
 	CSIDriverConfig string `json:"csiDriverConfig,omitempty"`
@@ -593,34 +538,37 @@ func readWorkspacesStatus(ctx context.Context) (*WorkspacesStatus, error) {
 		return nil, err
 	}
 	s := &WorkspacesStatus{}
-	if d, err := k.clientset.AppsV1().Deployments(workspacesNamespace).Get(ctx, snapshotControllerDeployment, metav1.GetOptions{}); err != nil {
-		s.SnapshotController = readState(err)
-	} else if _, done, _ := deploymentRolloutStatus(d); done {
-		s.SnapshotController = conditionReady
-	} else {
-		s.SnapshotController = fmt.Sprintf("%d of %d replicas available", d.Status.AvailableReplicas, d.Status.Replicas)
-	}
 	for _, w := range []struct {
 		name string
 		into *string
-	}{{workspacesPluginStatefulSet, &s.Driver}, {workspacesProxyStatefulSet, &s.Proxy}} {
-		ss, err := k.clientset.AppsV1().StatefulSets(workspacesNamespace).Get(ctx, w.name, metav1.GetOptions{})
+	}{{workspacesNFSServer, &s.NFSServer}, {workspacesController, &s.Controller}} {
+		d, err := k.clientset.AppsV1().Deployments(workspacesNamespace).Get(ctx, w.name, metav1.GetOptions{})
 		switch {
 		case err != nil:
 			*w.into = readState(err)
-		case statefulSetReady(ss):
-			*w.into = conditionReady
-			s.Node = ss.Spec.Template.Spec.NodeSelector["kubernetes.io/hostname"]
 		default:
-			*w.into = statefulSetStatus(ss)
+			if _, done, _ := deploymentRolloutStatus(d); done {
+				*w.into = conditionReady
+			} else {
+				*w.into = fmt.Sprintf("%d of %d replicas available", d.Status.AvailableReplicas, d.Status.Replicas)
+			}
+			s.Node = d.Spec.Template.Spec.NodeSelector["kubernetes.io/hostname"]
 		}
 	}
+	ds, err := k.clientset.AppsV1().DaemonSets(workspacesNamespace).Get(ctx, workspacesNodePlugin, metav1.GetOptions{})
+	switch {
+	case err != nil:
+		s.NodePlugin = readState(err)
+	case daemonSetReady(ds):
+		s.NodePlugin = fmt.Sprintf("%s on %d node(s)", conditionReady, ds.Status.NumberReady)
+	default:
+		s.NodePlugin = daemonSetStatus(ds)
+	}
 	s.StorageClass = clusterObjectExists(ctx, "storageclasses.storage.k8s.io", workspacesStorageClass)
-	s.SnapshotClass = clusterObjectExists(ctx, "volumesnapshotclasses.snapshot.storage.k8s.io", workspacesSnapshotClass)
 	if gvr, err := gvrFor(csiDriverConfigResource); err == nil {
 		if obj, err := getObject(ctx, gvr, "", workspacesCSIDriver); err == nil {
 			s.CSIDriverConfig = "the chart"
-			if obj.GetLabels()["app.kubernetes.io/managed-by"] == managedByAgentlabValue {
+			if obj.GetLabels()[managedByLabel] == managedByAgentlabValue {
 				s.CSIDriverConfig = "the lab"
 			}
 		}
@@ -649,27 +597,16 @@ func clusterObjectExists(ctx context.Context, resource, name string) bool {
 
 // String words the status in one line, for `agentlab status` and `list`.
 func (s *WorkspacesStatus) String() string {
-	classes := []string{}
+	class := "no StorageClass"
 	if s.StorageClass {
-		classes = append(classes, "StorageClass "+workspacesStorageClass)
-	}
-	if s.SnapshotClass {
-		classes = append(classes, "VolumeSnapshotClass "+workspacesSnapshotClass)
+		class = "StorageClass " + workspacesStorageClass
 	}
 	registered := "not registered with Substrate (no CSIDriverConfig)"
 	if s.CSIDriverConfig != "" {
 		registered = "CSIDriverConfig " + workspacesCSIDriver + " by " + s.CSIDriverConfig
 	}
-	return fmt.Sprintf("snapshot controller %s; CSI driver %s %s on %s; mTLS proxy %s; %s; %s",
-		s.SnapshotController, workspacesCSIDriver, s.Driver, orNone(s.Node), s.Proxy, orNoneOf(strings.Join(classes, ", "), "no class"), registered)
-}
-
-// orNoneOf is s, or the given word when s is empty.
-func orNoneOf(s, none string) string {
-	if s == "" {
-		return none
-	}
-	return s
+	return fmt.Sprintf("NFS server %s on %s; CSI controller %s %s with its mTLS proxy; node plugin %s; %s; %s",
+		s.NFSServer, orNone(s.Node), workspacesCSIDriver, s.Controller, s.NodePlugin, class, registered)
 }
 
 // workspacesHint is the platform-up summary for the workspaces switch.
@@ -677,30 +614,10 @@ func workspacesHint(cfg *config.Config, chartCarries bool) string {
 	if !cfg.WorkspacesEnabled() {
 		return "  Workspace storage is off (platform.workspaces in agentlab.yaml; `agentlab configure --workspaces` turns it on)."
 	}
-	node, _ := workspacesNode(cfg)
 	registered := "registered with Substrate by the lab's CSIDriverConfig (the chart carries no workspaces values yet)"
 	if chartCarries {
 		registered = "registered with Substrate by the chart's CSIDriverConfig (the lab's workspaces values)"
 	}
-	return fmt.Sprintf("  Workspace storage: the CSI snapshot controller and the CSI hostpath driver on %s behind its mTLS proxy, %s;\n"+
-		"  StorageClass and VolumeSnapshotClass %s. Proof: `agentlab workspaces-test --storage-only`.", node, registered, workspacesStorageClass)
+	return fmt.Sprintf("  Workspace storage: an NFS server on %s and the NFS CSI driver behind its mTLS proxy, %s;\n"+
+		"  the read-write-many StorageClass %s. Proof: `agentlab workspaces-test --storage-only`.", WorkspacesNode(cfg), registered, workspacesStorageClass)
 }
-
-// stateNotRead and stateMissing word a status that could not be read and
-// an object that is not there.
-const (
-	stateNotRead = "not read"
-	stateMissing = "missing"
-)
-
-// substrateNodeTaintValue is the value of the substrate workers' taint and
-// label (config.SubstrateNodeKey), what a pod on them tolerates.
-const substrateNodeTaintValue = "true"
-
-// substrateNodeToleration tolerates the substrate workers' taint.
-func substrateNodeToleration() corev1.Toleration {
-	return corev1.Toleration{Key: config.SubstrateNodeKey, Operator: corev1.TolerationOpEqual, Value: substrateNodeTaintValue, Effect: corev1.TaintEffectNoSchedule}
-}
-
-// gvrVolumeSnapshots is the snapshot API the proof drives.
-var gvrVolumeSnapshots = schema.GroupVersionResource{Group: "snapshot.storage.k8s.io", Version: "v1", Resource: "volumesnapshots"}
