@@ -58,6 +58,18 @@ const (
 	githubRef     = "ref"
 	githubSHA     = "sha"
 	gitTree       = "tree"
+	githubAll     = "all"
+	githubBase    = "base"
+	githubState   = "state"
+	githubTitle   = "title"
+	githubUserKey = "user"
+	githubBody    = "body"
+	githubHTMLURL = "html_url"
+	githubNumber  = "number"
+	githubOpen    = "open"
+	githubPrivate = "private"
+	githubPush    = "push"
+	githubURL     = "url"
 )
 
 // fakeGitHub is the GitHub REST API of one proof run.
@@ -588,10 +600,10 @@ func (f *fakeGitHub) getContents(w http.ResponseWriter, r *http.Request, _ strin
 func (f *fakeGitHub) pullJSON(pr *githubFakePull) map[string]any {
 	owner, _, _ := strings.Cut(f.repo, "/")
 	return map[string]any{
-		"number": pr.Number, "state": pr.State, "title": pr.Title, "body": pr.Body,
-		"html_url": fmt.Sprintf("https://github.lab.local/%s/pull/%d", f.repo, pr.Number),
-		"head":     map[string]any{githubRef: pr.Head, githubSHA: f.refs[pr.Head], "label": owner + ":" + pr.Head},
-		"base":     map[string]any{githubRef: pr.Base, githubSHA: f.refs[pr.Base]},
+		githubNumber: pr.Number, githubState: pr.State, githubTitle: pr.Title, githubBody: pr.Body,
+		githubHTMLURL: fmt.Sprintf("https://github.lab.local/%s/pull/%d", f.repo, pr.Number),
+		"head":        map[string]any{githubRef: pr.Head, githubSHA: f.refs[pr.Head], "label": owner + ":" + pr.Head},
+		githubBase:    map[string]any{githubRef: pr.Base, githubSHA: f.refs[pr.Base]},
 	}
 }
 
@@ -608,12 +620,12 @@ func (f *fakeGitHub) createPull(w http.ResponseWriter, r *http.Request, login st
 		return
 	}
 	for _, pr := range f.pulls {
-		if pr.Head == in.Head && pr.State == "open" {
+		if pr.Head == in.Head && pr.State == githubOpen {
 			githubFakeError(w, http.StatusUnprocessableEntity, "A pull request already exists for "+in.Head)
 			return
 		}
 	}
-	pr := &githubFakePull{Number: len(f.pulls) + 1, Title: in.Title, Body: in.Body, Head: in.Head, Base: in.Base, Author: login, State: "open"}
+	pr := &githubFakePull{Number: len(f.pulls) + 1, Title: in.Title, Body: in.Body, Head: in.Head, Base: in.Base, Author: login, State: githubOpen}
 	f.pulls = append(f.pulls, pr)
 	writeGitHubJSON(w, http.StatusCreated, f.pullJSON(pr))
 }
@@ -623,7 +635,7 @@ func (f *fakeGitHub) listPulls(w http.ResponseWriter, r *http.Request, _ string)
 	state := r.URL.Query().Get("state")
 	out := []map[string]any{}
 	for _, pr := range f.pulls {
-		if (head == "" || pr.Head == head) && (state == "" || state == "all" || pr.State == state) {
+		if (head == "" || pr.Head == head) && (state == "" || state == githubAll || pr.State == state) {
 			out = append(out, f.pullJSON(pr))
 		}
 	}

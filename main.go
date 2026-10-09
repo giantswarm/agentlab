@@ -176,14 +176,23 @@ func slackFakeCmd() *cobra.Command {
 func githubFakeCmd() *cobra.Command {
 	var listen, repo, branch string
 	var files []string
+	var workspaces bool
+	var ws lab.WorkspaceGitHubOptions
 	cmd := &cobra.Command{
 		Use:    "github-fake",
-		Short:  "Serve models-test's fake GitHub REST API (run by the proof, in a container)",
+		Short:  "Serve a fake GitHub: models-test's REST API, or with --workspaces the workspace proofs' GitHub (run by the proofs, in a container)",
 		Args:   cobra.NoArgs,
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
+			if workspaces {
+				if repo != "" || len(files) > 0 {
+					return fmt.Errorf("--workspaces serves its fixture's repositories: drop --repo and --file")
+				}
+				ws.Listen = listen
+				return lab.ServeWorkspaceGitHub(ctx, ws)
+			}
 			return lab.ServeFakeGitHub(ctx, listen, repo, branch, files)
 		},
 	}
@@ -191,6 +200,19 @@ func githubFakeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&repo, "repo", "", "the one repository the fake holds, owner/name")
 	cmd.Flags().StringVar(&branch, "branch", "main", "its base branch")
 	cmd.Flags().StringArrayVar(&files, "file", nil, "a file of the base branch, as <path>=<base64 content> (repeatable)")
+	cmd.Flags().BoolVar(&workspaces, "workspaces", false, "serve the workspace proofs' GitHub over TLS: App, OAuth, listings, git and pull requests (docs/workspaces.md)")
+	cmd.Flags().StringVar(&ws.Fixture, "fixture", "", "with --workspaces: the fixture file (default: the embedded one)")
+	cmd.Flags().StringVar(&ws.Credentials, "credentials", "", "with --workspaces: the directory `agentlab github-fake credentials` generated")
+	cmd.Flags().StringVar(&ws.DataDir, "data-dir", "", "with --workspaces: where the bare repositories live (default: a temporary directory)")
+	cmd.Flags().IntVar(&ws.LargeRepoMiB, "large-repo-mib", 0, "with --workspaces: the size of the fixture's generated repositories in MiB (default: the fixture's)")
+	cmd.AddCommand(labCmd("credentials", "Generate the workspace fake's TLS pair, App key pair and OAuth client secret under certs/github-fake",
+		func(cfg *config.Config) error {
+			dir, err := lab.EnsureGitHubFakeCredentials(cfg.Platform.Domain)
+			if err == nil {
+				fmt.Println(dir)
+			}
+			return err
+		}))
 	return cmd
 }
 

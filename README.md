@@ -66,12 +66,13 @@ trusting the same issuer.
   and, with `platform.serving`, the platform's own serving on llm-d — the
   KServe llmisvc controller, the well-known runtime configs, the models
   Gateway with its JWT policy, one CPU preset served on the node.
-- **Workspaces.** With `platform.workspaces`, storage for the actors'
-  external volumes: the CSI snapshot controller, a CSI hostpath driver on
-  the node behind an mTLS proxy only Agent Substrate's API server may reach,
-  and the StorageClass and VolumeSnapshotClass `agentlab-workspaces`;
-  `agentlab workspaces-test --storage-only` proves a snapshot's restore and
-  an actor's volume across pause, resume and deletion.
+- **Workspaces.** With `platform.workspaces`, the read-write-many storage a
+  workspace's volume is claimed from: an in-cluster NFS server and the NFS
+  CSI driver, its controller behind an mTLS proxy only Agent Substrate's API
+  server may reach, and the StorageClass `agentlab-workspaces`;
+  `agentlab workspaces-test --storage-only` proves sub-path mounts per
+  Session, read-only mirrors and git on the volume. `agentlab github-fake
+  --workspaces` serves the lab's own GitHub for the workspace proofs.
 - **VMs.** vm-manager, the platform's VM provisioner, as a pod of the KVM
   node (the chart's `components.vm-manager`) registered with muster as
   `x_vm-manager_*`: VMs with an instance metadata service, a vTPM and
@@ -153,12 +154,12 @@ machine, is in [Getting started](docs/getting-started.md).
 | [Agents](docs/agents.md) | The kagent runtime, the default ModelConfig and the API key Secret |
 | [The migration rehearsal](docs/migration-rehearsal.md) | A 3.x lab with the four fleet shapes upgraded in place to the 4.x line: the command sequence, the timings, what the migrate Job rewrote, refused and deleted, what an installation's cut-over does differently |
 | [Models](docs/models.md) | Extra model configs, model servers on the host, managed models through model-manager, model serving on llm-d in the lab |
-| [Workspaces](docs/workspaces.md) | The workspace storage switch: the CSI hostpath driver and snapshot controller, the classes, the mTLS proxy to the controller endpoint, and the proof |
 | [vm-manager](docs/vm-manager.md) | The platform's VM provisioner as a pod of the node: the KVM devices, the image directory, the dev image, the golden PCR recipe, the proof |
 | [klaus-gateway](docs/klaus-gateway.md) | Swarmgeist as the meta chart's component: the values, the two lab Secrets, the OBO link store in a Secret across a pod loss, the dev image, what a lab without a Slack workspace cannot prove |
 | [Observability](docs/observability.md) | Prometheus + mcp-prometheus, and Backstage's metrics views |
 | [Backstage](docs/backstage.md) | The human frontend: the muster plugin, agents and models in the portal, the agent create flow |
 | [Identity](docs/identity.md) | Users and groups, the shared issuer, the Dex version, wiring another app, `trustedPeers` |
+| [Workspaces](docs/workspaces.md) | The workspace storage switch (the NFS server, the NFS CSI driver behind its mTLS proxy, the read-write-many class, the proof) and the lab's GitHub for the workspace proofs: the fixture's App, repositories and users, OAuth with PKCE and rotating refresh tokens, git over smart HTTP, `gh pr create`, the request log |
 | [GitHub sign-in](docs/github-signin.md) | GitHub as a second way into the lab: the App and its callback, the client secret placed as a Secret, what a GitHub user is in the lab |
 | [Troubleshooting](docs/troubleshooting.md) | The gotchas that cost time |
 | [Usage data](docs/telemetry.md) | The anonymous usage signals — one per command, one per platform install naming the chart line — and how to opt out |

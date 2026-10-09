@@ -681,14 +681,14 @@ Unblocks when certificate-transparency-go releases after v1.3.3: a rule in
 entry.
 
 ### U30. `workspaces.go`: the lab applies Substrate's `CSIDriverConfig` itself — BLOCKED UPSTREAM
-Agent Substrate registers a CSI driver for the actors' external volumes
-through its `CSIDriverConfig` (the controller endpoint, the node socket
+Agent Substrate registers the CSI driver that mounts a workspace's volume
+into an actor through its `CSIDriverConfig` (the controller endpoint, the node socket
 override, the mTLS settings), which the agent-platform chart is to render
 from a `workspaces:` values block. The chart release the lab pins carries no
 such block yet — its values schema refuses unknown root keys, so the lab
-cannot pass one — and the actors' volumes need the registration. **Fix:**
+cannot pass one — and the actors' mounts need the registration. **Fix:**
 `ensureWorkspacesCSIDriverConfig` applies the lab's own `CSIDriverConfig`
-`hostpath.csi.k8s.io` (labelled `app.kubernetes.io/managed-by=agentlab`)
+`nfs.csi.k8s.io` (labelled `app.kubernetes.io/managed-by=agentlab`)
 after the platform install when the chart carries no `workspaces` key
 (`chartCarriesWorkspaces` probes the chart's schema and values once per
 chart); the values template renders the `workspaces:` block only for a chart

@@ -1,38 +1,43 @@
 # Workspaces
 
-Storage for the actors' external volumes in the lab: with `platform.workspaces`
-on, `agentlab up` installs a CSI driver with snapshots next to the platform,
-and Agent Substrate provisions each actor's workspace from it, so a Session's
-clone of a Workspace is a volume restored from a snapshot the way it is on an
-installation. The switch is off by default; `agentlab configure --workspaces`
-turns it on (the form asks too), and it needs the agents runtime: Substrate's
-signers certify the driver's endpoint, and the volumes are Substrate's.
+A workspace is one read-write-many volume shared by its sync and every Session
+on it: bare mirrors of its repositories and a directory per Session. Each
+Session's actor mounts its own directory read-write and the mirrors read-only,
+at sub-paths, through Agent Substrate. The lab brings two things the workspace
+proofs need and a kind cluster lacks: the [storage](#storage) and
+[a GitHub of its own](#the-labs-github).
 
-## What the lab installs
+## Storage
 
-Everything but the CSIDriverConfig lives in the namespace `agentlab-workspaces`:
+Substrate mounts a workspace's volume without a PVC: ate-api-server calls the
+CSI driver's controller over the network (mTLS with Substrate's pod identity)
+and atelet calls the node plugin's socket, both found through a cluster-scoped
+`CSIDriverConfig`. The kind cluster's local-path provisioner is
+read-write-once and no CSI driver. So with `platform.workspaces` on,
+`agentlab up` (and `agentlab platform`) installs, before the platform chart,
+the lab's stand-in for an installation's read-write-many class (EFS, Azure
+Files over NFS), set up for Substrate the way Substrate's own kind setup sets
+up a driver:
 
-| Piece | What it is |
+| Piece | What |
 |---|---|
-| The CSI snapshot CRDs and the `snapshot-controller` Deployment | The `VolumeSnapshot`, `VolumeSnapshotContent` and `VolumeSnapshotClass` kinds and the controller that binds them, from kubernetes-csi/external-snapshotter |
-| The `csi-hostpathplugin` StatefulSet | The CSI hostpath driver `hostpath.csi.k8s.io` with its sidecars (provisioner, attacher, resizer, snapshotter, node-driver-registrar, livenessprobe): one pod on one node, its volumes under `/var/lib/csi-hostpath-data` of that node, Substrate's volumes directory `/var/lib/ate` mounted `Bidirectional` so the actors see what the driver publishes |
-| The `csi-hostpath-controller` Service and the `csi-hostpath-proxy` StatefulSet | The controller endpoint: an Envoy in front of the driver's socket that requires a client certificate from Substrate's pod-identity CA with ate-api-server's SPIFFE ID, its own serving certificate a `PodCertificateRequest` the service-DNS signer answers (both come from the chart's podcertificate-controller, so the proxy is waited for after the platform install) |
-| The StorageClass and VolumeSnapshotClass `agentlab-workspaces` | Both delete-reclaiming, `Immediate` binding; the StorageClass with `allowVolumeExpansion` (the driver's resizer sidecar and `ControllerExpandVolume` grow a volume online, since a workspace is sized from its repositories and expanded after a sync, never shrunk; no size is fixed anywhere in the lab) and with the driver's topology, so a pod using a volume lands on the driver's node |
-| The `CSIDriverConfig` `hostpath.csi.k8s.io` | Substrate's registration of the driver: the controller endpoint through the proxy, the node socket override, mTLS with the pod identity. The chart renders it from the lab's `workspaces:` values once its release takes the key; until then the lab applies its own after the install (`HACKS.md` U30) |
+| The `nfs-server` Deployment and Service (namespace `agentlab-workspaces`) | An NFS server on the control plane (the host kernel's nfsd), exporting the node's `/var/lib/agentlab-workspaces`; every volume is a directory under it |
+| The NFS CSI driver `nfs.csi.k8s.io` | kubernetes-csi/csi-driver-nfs v4.13.4: the `csi-nfs-controller` Deployment (provisioner and resizer) beside the server, and the `csi-nfs-node` DaemonSet on every node with Substrate's `/var/lib/ate` mounted `Bidirectional`, so atelet sees the mounts the plugin publishes there |
+| The controller endpoint | An Envoy in the controller's pod behind the Service `csi-nfs-controller` (port 50051). It requires a client certificate from Substrate's pod-identity CA with ate-api-server's SPIFFE ID. Its own serving certificate is a `PodCertificateRequest` the service-DNS signer answers for `csi-nfs-controller.agentlab-workspaces.svc`, the TLS server name the registration sets explicitly (an unset name would skip verification) |
+| The StorageClass `agentlab-workspaces` | Read-write-many, NFSv4.1, `Immediate` binding, delete-reclaiming, expandable; POSIX modes and symbolic links as on a local disk, so git works on it. No snapshots: a Session is a directory on the workspace's volume, not a clone of it |
+| The `CSIDriverConfig` `nfs.csi.k8s.io` | Substrate's registration of the driver: the controller endpoint, the node socket override, mTLS with the pod identity. The chart renders it from the lab's `workspaces:` values (the class with `storageClass.create: false`, the driver, the Substrate preview gate) once its release takes the key; until then the lab applies its own after the install (`HACKS.md` U30) |
 
-The driver serves one node. Without reserved substrate workers it runs on the
-control plane; with `substrateNodes: 1` it runs on the worker, tolerating its
-taint, since the actors run there; two or more workers are refused by
-`agentlab configure`. The actors' volumes, snapshots and the grants Substrate
-needs live in the `kagent` namespace with the actors: per-tenant placement
-waits for the platform's permissions model.
+Every image is pinned and preloaded into the lab like the platform's. The NFS
+server and the driver's mounts run on the host's kernel, so the install checks
+first that the host has the `nfsd` and `nfs` modules.
 
-`agentlab status` prints a `workspaces` line (the snapshot controller, the
-driver and its proxy on their node, the classes, whose CSIDriverConfig
-registers the driver); `agentlab platform-down` and `agentlab down` remove the
-pieces and clean the driver's mounts and volume bytes off the node.
+`agentlab status` prints a `workspaces` line: the NFS server and its node, the
+controller with its proxy, the node plugin, the class, and whose
+CSIDriverConfig registers the driver. `agentlab platform-down` and
+`agentlab down` remove the pieces and clean the node: the mounts under
+`/var/lib/ate` and the export's bytes.
 
-## Turning it on
+### Turning it on
 
 ```sh
 agentlab configure --workspaces   # needs --agents (on by default)
@@ -43,63 +48,147 @@ agentlab workspaces-test --storage-only
 With the switch off, nothing of it is installed, and `agentlab platform` on a
 lab that had it removes it.
 
-## The proof
+### The proof
 
 `agentlab workspaces-test --storage-only` is headless:
 
-1. The storage in place: the classes, the CSIDriver, the snapshot controller
-   rolled out, the driver and its proxy Ready.
-2. A 100Mi PVC from the StorageClass, written by a pod: two random files and a
-   text file, their sha256 sums printed.
-3. A VolumeSnapshot of it from the VolumeSnapshotClass, `readyToUse`.
-4. A PVC restored from the snapshot, read by a pod: the sums equal the
-   source's.
-5. The source PVC expanded online from 100Mi to 200Mi and mounted by a pod:
-   the claim reports the new capacity and the files are intact.
-6. The controller endpoint through the proxy, as a client without Substrate's
-   identity: with no certificate and with a self-signed one that claims
-   ate-api-server's SPIFFE ID, both refused (the TLS alert quoted).
-7. Through ate-api-server as the `ate-client` ServiceAccount: an atespace, an
-   actor template whose workspace is an external volume on the class, and an
-   actor appending the date to `/workspace/heartbeat` every second. The
-   volume's directory on the node grows; after `PauseActor` it stands still;
-   after `ResumeActor` the paused lines are kept and the file grows again;
-   after `DeleteActor` the actor is NotFound and the directory is gone.
+1. The storage in place: the NFS server, the controller with its proxy, the
+   node plugin Ready, the class and the registration.
+2. A read-write-many claim of 1Gi from the class, bound.
+3. A bare mirror seeded on the volume under `mirrors/`, from a repository with
+   an executable and a symbolic link.
+4. Session a: a pod with `sessions/a` mounted read-write and `mirrors/`
+   read-only, both sub-paths of the one claim. A `git clone --shared` of the
+   mirror and its checkout keep the executable bit and the link, a commit
+   works, and a write into the mirrors is refused.
+5. Session b: `sessions/b` likewise. Nothing of session a is visible, and its
+   own shared clone works.
+6. The whole volume mounted read-only: both sessions' directories visible, a
+   write refused.
+7. The controller endpoint without Substrate's client certificate: refused
+   (the TLS alert quoted).
+8. The actor-level mount, a session directory through ate-api-server: skipped
+   with its reason until the Substrate line carries the mount of an existing
+   read-write-many volume at a sub-path.
+9. Everything removed: the proof's namespace `agentlab-workspaces-test` with
+   its claim, and the volume's directory gone from the export.
 
-The proof's PVCs, snapshot and pods live in the namespace
-`agentlab-workspaces-test`, its template and actor in the atespace of the same
-name; both are removed before the proof starts and when it ends.
 `--storage-only` is required: a harness turn against a workspace is not part
-of the proof yet. `--ready-timeout` bounds each wait (default 5m).
+of the proof yet. `--ready-timeout` bounds each wait (default 5m). A resume on
+another node is proven on a cloud installation, not in the lab: the lab's
+export is one node's disk.
 
-## By hand
+## The lab's GitHub
 
-The same template through `kubectl ate` (Substrate's CLI against
-ate-api-server, which port-forwards by itself), with the lab's kubeconfig in
-`KUBECONFIG`; the manifest is the protojson shape of an `ActorTemplate` (the
-proof's: one busybox container, pinned by digest as Substrate requires,
-appending the date to `/workspace/heartbeat`; a `workspace` volume with an
-`externalVolumeTemplate` of `100Mi` on `agentlab-workspaces`; the worker
-selector `kagent.dev/worker-pool: kagent-default`; `sandboxConfig`
-`SANDBOX_CLASS_GVISOR` / `gvisor-default`; `snapshotConfig` `onPause` and
-`onCommit` `SNAPSHOT_CONTENT_SCOPE_FULL` with a `storageLocation` under the
-lab's snapshot bucket). An actor is created suspended; `resume` boots it.
 
-```sh
-kubectl ate create atespace scratch
-kubectl ate create actor-template -f template.yaml      # metadata.atespace: scratch, metadata.name: heartbeat
-kubectl ate create actor heartbeat --template=heartbeat -a scratch
-kubectl ate resume actor heartbeat -a scratch           # ACTOR_STATE_RUNNING, the worker pod named
-kubectl ate get actor heartbeat -a scratch -o json      # status.actorVolumes[0].storageVolumeId
-kubectl ate pause actor heartbeat -a scratch            # ACTOR_STATE_PAUSED
-kubectl ate resume actor heartbeat -a scratch
-kubectl ate delete actor heartbeat -a scratch --any-state
-kubectl ate delete actor-template heartbeat -a scratch
-kubectl ate delete atespace scratch
+A workspace is a git repository a Session works in, cloned, pushed and turned
+into a pull request as the signed-in person. Proving that end to end needs a
+GitHub with an App, OAuth sign-in for several people with different access, a
+private repository, real pushes and pull requests. Against github.com that
+means browser consent per account and real accounts; the lab instead serves a
+GitHub of its own, `agentlab github-fake --workspaces`, headless and the same
+on every machine. A workspace provider instance points at it the way it points
+at a GitHub Enterprise Server: API base `https://<fake>/api/v3`, git base
+`https://<fake>`.
+
+### The fixture
+
+What the fake holds is a fixture file; the embedded default is
+[`internal/lab/templates/github-fixture.yaml`](../internal/lab/templates/github-fixture.yaml)
+and `--fixture <file>` replaces it.
+
+**The App**: id `1`, slug `agentlab-workspaces`, client id
+`Iv1.agentlab-workspaces`, installed on both owners (installation `1` on
+`agentlab-org`, `2` on `agentlab-oss`), with contents and pull request write.
+
+**The repositories**, each one commit on `main`:
+
+| Repository | Visibility | Language | Topics | Archived | Fork | `pushed_at` |
+|---|---|---|---|---|---|---|
+| `agentlab-org/platform-api` | public | Go | api, go | | | 2026-09-01 |
+| `agentlab-org/platform-infra` | **private** | HCL | infrastructure | | | 2026-08-15 |
+| `agentlab-org/monorepo` | public, **large** | Go | monorepo | | | 2026-09-20 |
+| `agentlab-org/legacy-tool` | public | Python | legacy | yes | | 2025-01-10 |
+| `agentlab-oss/kagent` | public | Go | agents, kubernetes | | yes | 2026-09-25 |
+| `agentlab-oss/docs` | public | MDX | docs | | | 2026-07-01 |
+
+`monorepo` carries 64 MiB of incompressible content (seeded by its name, so
+every lab clones the same bytes) for the measurements; `--large-repo-mib <n>`
+sets another size. Its `size` field is the repository's size on disk in KiB,
+as GitHub reports it.
+
+**The users** are the lab's Dex users (`agentlab.yaml`'s `users`):
+
+| Login | Reads | Pushes to |
+|---|---|---|
+| `admin` | everything | everything (the archived repository refuses every push) |
+| `dev` | everything but `agentlab-org/platform-infra` | `platform-api`, `monorepo`, `agentlab-oss/*` |
+| `viewer` | the public repositories | nothing |
+
+A public repository is read by everyone, a signed-out caller included; a
+private one by the users that name it and by the App's installation on its
+owner. `dev` is the member without access, `viewer` the one who cannot push.
+
+### What it serves
+
+| Area | Endpoints |
+|---|---|
+| The App | `GET /app`, `/app/installations`, `/orgs/{o}/installation`, `/users/{u}/installation`, `/repos/{o}/{r}/installation`; `POST /app/installations/{id}/access_tokens` (optionally limited to `repositories`). The App's JWT is RS256, signed by the key the lab generated, issued by the App id, valid for at most ten minutes. |
+| Listings | `GET /orgs/{o}/repos`, `/users/{u}/repos` (`type`), `/user/repos` (`visibility`), `/installation/repositories`, `/repos/{o}/{r}`: `language`, `topics`, `archived`, `fork`, `pushed_at`, `size`, `permissions`; `sort` (`full_name`, `pushed`, `updated`), `direction`, `per_page`, `page` with the `Link` header. |
+| OAuth | `GET /login/oauth/authorize` consents at once for the lab user its `login` parameter names and requires PKCE (`S256`); `POST /login/oauth/access_token` answers access tokens valid eight hours and refresh tokens that **rotate**: each redeems once, a second redemption answers `bad_refresh_token`. `DELETE /api/v3/applications/{client_id}/grant` revokes every token of the person, `/token` the one access token (Basic auth with the client id and secret). `GET /user`. |
+| git | Smart HTTP at `https://<fake>/<owner>/<repo>[.git]`, served by git's own `upload-pack` and `receive-pack` in stateless RPC mode (what `git http-backend` runs; protocol v0 to v2): clone, fetch and push, the token as the Basic auth password. A private repository answers 401 without a credential and "not found" to a user who does not read it; a push needs write, 401 without a credential, 403 naming the user otherwise. A push moves `pushed_at`. |
+| Pull requests | `POST` and `GET /repos/{o}/{r}/pulls`, and the GraphQL operations of `gh pr create` on `/api/graphql`; `GET /api/v3/meta` reports a GitHub Enterprise version, as gh expects. |
+
+A credential the fake did not issue (the sandbox's placeholder that the egress
+gateway did not replace) and one it issued that expired or was revoked answer
+GitHub's 401 `Bad credentials` wherever they are presented.
+
+### The request log
+
+Every request is a line of the container's log and an entry of
+`GET /_fake/requests`: time, method, path, status, the user (a login, or
+`installation/<id>`) and the kind of credential: `none`, `placeholder`,
+`revoked-token`, `app-jwt`, `installation-token`, `user-token` or
+`oauth-client`. Only the path is logged: no token, OAuth code or verifier
+reaches it. `GET /_fake/pulls` lists every pull request with its author.
+
+### Running it
+
+The fake serves TLS with a leaf from the lab CA, for
+`github.<platform.domain>` and `127.0.0.1` (the CA's name constraints admit
+nothing else), so every lab client and Substrate's egress gateway, which
+trusts the lab's trust bundle, trust it. `agentlab github-fake credentials`
+generates what it reads into `certs/github-fake/`, next to the CA, never
+leaving the machine:
+
+| File | What |
+|---|---|
+| `tls.crt`, `tls.key` | the fake's TLS pair, re-minted when the CA or the domain changes |
+| `app.pem` | the App's private key (PKCS #1, as GitHub hands it out), for the provider |
+| `app.pub` | its public key, for the fake |
+| `client-secret` | the OAuth client secret |
+
+The fake needs `git` on its PATH (any git; the optional `http-backend` is not
+used). On the kind network it runs in an image that carries git, as the lab's own user, with the credentials mounted:
+
+```bash
+./agentlab github-fake credentials
+docker run -d --rm --name agentlab-github --network kind --user "$(id -u):$(id -g)" \
+  -v "$PWD/agentlab:/agentlab:ro" -v "$PWD/certs/github-fake:/credentials:ro" \
+  -p 127.0.0.1:8443:8443 gsoci.azurecr.io/giantswarm/golang:1.25.3 \
+  /agentlab github-fake --workspaces --credentials /credentials --listen 0.0.0.0:8443 --data-dir /tmp/github
 ```
 
-The volume's bytes are on the driver's node under
-`/var/lib/csi-hostpath-data/<storageVolumeId>/` (`docker exec
-agentlab-control-plane wc -l /var/lib/csi-hostpath-data/<id>/heartbeat` grows
-while the actor runs, stands still while it is paused, and the directory is
-gone once the actor is deleted).
+A pod reaches it as `github.<platform.domain>` through a host alias to the
+container's address on the kind network; on this host the published port does:
+
+```bash
+host=github.127.0.0.1.nip.io:8443
+git -c http.sslCAInfo=certs/ca.crt clone "https://x-access-token:$TOKEN@$host/agentlab-org/platform-api.git"
+SSL_CERT_FILE=certs/ca.crt GH_HOST=$host GH_ENTERPRISE_TOKEN=$TOKEN \
+  gh pr create -R "$host/agentlab-org/platform-api" --head my-branch --base main --title "…" --body "…"
+```
+
+`$TOKEN` is a user token from the OAuth flow above (authorize with `login=dev`
+and a PKCE challenge, then redeem the code with the client secret and the
+verifier).
