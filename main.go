@@ -122,6 +122,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		inGroup(groupTesting, modelsTestCmd()),
 		inGroup(groupTesting, servingTestCmd()),
 		inGroup(groupTesting, vmManagerTestCmd()),
+		inGroup(groupTesting, workspacesTestCmd()),
 		inGroup(groupTesting, skillsTestCmd()),
 		inGroup(groupTesting, a2aTestCmd()),
 		inGroup(groupTesting, klausGatewayTestCmd()),
@@ -1226,6 +1227,25 @@ func vmManagerTestCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&opts.SkipVM, "skip-vm", false, "prove the registration, the identity boundary and the read tools only; boot no VM")
 	cmd.Flags().DurationVar(&opts.VMTimeout, "vm-timeout", lab.DefaultVMManagerTestVMTimeout, "how long the proof's VM may take to reach ready (installer boot + installed boot to READY=1)")
+	return cmd
+}
+
+func workspacesTestCmd() *cobra.Command {
+	var opts lab.WorkspacesTestOptions
+	cmd := &cobra.Command{
+		Use:   "workspaces-test",
+		Short: "Headless workspace storage proof: the snapshot controller, the CSI driver and the classes in place -> a PVC written -> a VolumeSnapshot ready -> a PVC restored from it with matching files -> the controller endpoint refused without Substrate's client certificate -> an actor with an external volume on the class: its content kept across pause and resume, gone with the actor",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadProofLab()
+			if err != nil {
+				return err
+			}
+			return lab.WorkspacesTest(cfg, opts)
+		},
+	}
+	cmd.Flags().BoolVar(&opts.StorageOnly, "storage-only", false, "prove the storage and an actor's external volume, with no harness turn against the workspace (the only mode so far; required)")
+	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", lab.DefaultWorkspacesReadyTimeout, "how long each wait may take: a PVC bound, a snapshot ready, a pod finished, an actor's state")
 	return cmd
 }
 
