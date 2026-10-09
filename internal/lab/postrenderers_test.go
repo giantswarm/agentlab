@@ -241,6 +241,57 @@ func mapKeysSorted(m map[string]string) []string {
 	return keys
 }
 
+// The dex-localhost sidecar meets PodSecurity `restricted`: no privilege
+// escalation, every capability dropped, the runtime's seccomp profile — on
+// the component patch and on the lab's own mcp-prometheus release alike, so a
+// rollout of an OAuth resource server prints no PodSecurity warning.
+func TestDexLocalhostPatchRestricted(t *testing.T) {
+	type sidecar struct {
+		Name            string `yaml:"name"`
+		SecurityContext struct {
+			AllowPrivilegeEscalation *bool `yaml:"allowPrivilegeEscalation"`
+			Capabilities             struct {
+				Drop []string `yaml:"drop"`
+			} `yaml:"capabilities"`
+			SeccompProfile struct {
+				Type string `yaml:"type"`
+			} `yaml:"seccompProfile"`
+		} `yaml:"securityContext"`
+	}
+	patches := map[string]kustomizePatch{
+		componentMCPKubernetes: dexLocalhostPatch(componentMCPKubernetes, config.Default().DexPort),
+		"mcp-prometheus":       sidecarPostRenderer("mcp-prometheus", config.Default().DexPort).Kustomize.Patches[0],
+	}
+	for name, p := range patches {
+		var d struct {
+			Spec struct {
+				Template struct {
+					Spec struct {
+						InitContainers []sidecar `yaml:"initContainers"`
+					} `yaml:"spec"`
+				} `yaml:"template"`
+			} `yaml:"spec"`
+		}
+		if err := yaml.Unmarshal([]byte(p.Patch), &d); err != nil {
+			t.Fatalf("%s: %v\n%s", name, err, p.Patch)
+		}
+		containers := d.Spec.Template.Spec.InitContainers
+		if len(containers) != 1 || containers[0].Name != dexLocalhostContainer {
+			t.Fatalf("%s: want the one %s init container, got %+v", name, dexLocalhostContainer, containers)
+		}
+		sc := containers[0].SecurityContext
+		if sc.AllowPrivilegeEscalation == nil || *sc.AllowPrivilegeEscalation {
+			t.Errorf("%s: want allowPrivilegeEscalation: false, got %v", name, sc.AllowPrivilegeEscalation)
+		}
+		if !reflect.DeepEqual(sc.Capabilities.Drop, []string{"ALL"}) {
+			t.Errorf("%s: want capabilities.drop [ALL], got %v", name, sc.Capabilities.Drop)
+		}
+		if sc.SeccompProfile.Type != "RuntimeDefault" {
+			t.Errorf("%s: want seccompProfile RuntimeDefault, got %q", name, sc.SeccompProfile.Type)
+		}
+	}
+}
+
 // The node check compares fully qualified refs as crictl lists them.
 func TestMissingImages(t *testing.T) {
 	have := []string{devMusterFull, "gsoci.azurecr.io/giantswarm/backstage:0.243.1"}

@@ -235,7 +235,10 @@ spec:
 // the forwarder listens (a server dialing the issuer at start would otherwise
 // be refused and restart once). An IPv6 wildcard listener is dual-stack on
 // Linux (bindv6only=0), so both [::1] — which Go dials first for localhost —
-// and 127.0.0.1 answer.
+// and 127.0.0.1 answer. Its securityContext meets PodSecurity `restricted`
+// (no privilege escalation, every capability dropped, the runtime's seccomp
+// profile): socat listens on an unprivileged port and needs none of them, and
+// the user it runs as is the pod's, which the component chart sets.
 func dexLocalhostPatch(deployment string, dexPort int) kustomizePatch {
 	return kustomizePatch{
 		Target: map[string]string{kindKey: kindDeployment, nameKey: deployment},
@@ -258,6 +261,13 @@ spec:
               port: %d
             periodSeconds: 1
             failureThreshold: 30
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
           resources:
             requests:
               cpu: 5m
