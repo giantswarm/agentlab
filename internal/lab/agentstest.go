@@ -348,46 +348,9 @@ func AgentsTest(cfg *config.Config, email string) error {
 	}
 	note("changed %v, requestedBy=%s", updated.Changed, updated.RequestedBy)
 
-	step("%supdate_agent refreshSkills — the skill re-pins to %s's head %.12s", agentManagerToolPrefix, fixture.Repo, head)
-	refreshed, err := agentManagerUpdate(session, map[string]any{nameKey: agentsTestAgent, refreshSkillsKey: true})
+	refreshVerdict, err := proveAgentsTestRefreshSkills(session, fixture, head)
 	if err != nil {
 		return err
-	}
-	if got := skillCommits(refreshed.After)[fixture.name()]; got != head {
-		return fmt.Errorf("update_agent refreshSkills pinned %s at %q, wanted the head %s", fixture.name(), got, head)
-	}
-	skillsChanged := slices.ContainsFunc(refreshed.Changed, func(p string) bool { return strings.HasPrefix(p, skillsKey) })
-	if moved := head != fixture.Commit; moved != skillsChanged {
-		return fmt.Errorf("update_agent refreshSkills reported changed=%v although the head %.12s %s the pin %.12s", refreshed.Changed, head, map[bool]string{true: "differs from", false: "equals"}[moved], fixture.Commit)
-	}
-	if release, err = readAgentRelease(agentsTestAgent); err != nil {
-		return err
-	}
-	if got := release.skillCommits()[fixture.name()]; got != head {
-		return fmt.Errorf("HelmRelease %s pins skill %s at %q after refreshSkills, wanted %s", agentsTestAgent, fixture.name(), got, head)
-	}
-	repinned := waitFor(int(time.Minute/pollInterval), pollInterval, func() bool {
-		t, err := readAgentTemplate(agentsTestAgent)
-		if err != nil {
-			return false
-		}
-		s := t.skill(fixture.name())
-		return s != nil && s.Source.Git != nil && s.Source.Git.Commit == head
-	})
-	if !repinned {
-		return fmt.Errorf("AgentTemplate %s does not carry the re-pinned commit %.12s a minute after refreshSkills", agentsTestAgent, head)
-	}
-	if head == fixture.Commit {
-		note("the head is the pin: nothing changed (changed %v), the commit stays %.12s", refreshed.Changed, head)
-	} else {
-		note("re-pinned %.12s -> %.12s (changed %v); waiting for the new revision's golden boot", fixture.Commit, head, refreshed.Changed)
-		if readiness, err = waitAgentReady(agentsTestAgent, agentsTestReadyTimeout); err != nil {
-			return err
-		}
-		if !readiness.ready {
-			return readiness.failure(agentsTestAgent, agentsTestReadyTimeout)
-		}
-		note("Ready again after %s: revision %.12s", readiness.elapsed.Round(time.Second), readiness.agent.Status.LatestSuccessfulRevision)
 	}
 
 	// The user's identity, not a ServiceAccount: a viewer (the view
@@ -496,10 +459,11 @@ func AgentsTest(cfg *config.Config, email string) error {
 
 	fmt.Println()
 	fmt.Printf("PASS: muster aggregates %s* and agent-manager reports identity caller on the agent chart %s (Harness %s)\n", agentManagerToolPrefix, chartLine, kagentHarness)
-	fmt.Printf("PASS: create_agent without a toolset is refused naming the presets; with [%s] %s created -> Ready on Harness %s -> a turn as the person -> updated -> refreshSkills -> deleted %s through call_tool, every write requestedBy=%s and logged with caller=\n", agentsTestToolset, user.Email, kagentHarness, agentsTestAgent, user.Email)
+	fmt.Printf("PASS: create_agent without a toolset is refused naming the presets; with [%s] %s created -> Ready on Harness %s -> a turn as the person -> updated -> deleted %s through call_tool, every write requestedBy=%s and logged with caller=\n", agentsTestToolset, user.Email, kagentHarness, agentsTestAgent, user.Email)
 	fmt.Printf("PASS: the HelmRelease carries the %s field manager, values.toolset [%s], agent.harness %s and the skill %s pinned to a commit next to OCIRepository %s at %s; its render is the AgentTemplate with %s and %s and the skill entry, the Agent referencing Harness %s, and RemoteMCPServer %s carrying %s=%s (%s=%s); delete_agent removes the release and the render\n",
 		agentManagerFieldManager, agentsTestToolset, kagentHarness, fixture.name(), agentChartOCIRepository, chartLine, displayNameAnnotation, iconURLAnnotation, kagentHarness, agentsTestAgent, toolsetHeader, agentsTestToolset, discoveryLabel, discoveryDisabledValue)
-	fmt.Printf("PASS: get_agent_status agrees with the Agent's status — ready on revision %.12s, and failed with the reason for an Agent on Harness %q; refreshSkills re-pins %s to %s's head %.12s\n", harness.LatestSuccessfulRevision, agentsTestNoHarness, fixture.name(), fixture.Repo, head)
+	fmt.Printf("PASS: get_agent_status agrees with the Agent's status — ready on revision %.12s, and failed with the reason for an Agent on Harness %q\n", harness.LatestSuccessfulRevision, agentsTestNoHarness)
+	fmt.Println(refreshVerdict)
 	if viewer != nil {
 		fmt.Printf("PASS: %s's create is Forbidden by the apiserver as User \"oidc:%s\" (user RBAC, not the ServiceAccount's)\n", viewer.Email, viewer.Email)
 	}
@@ -897,4 +861,66 @@ func (s *musterSession) callServerJSON(name string, args map[string]any, into an
 		return fmt.Errorf("%s: payload is not the expected JSON: %w\n%.300s", name, err, text)
 	}
 	return nil
+}
+
+// proveAgentsTestRefreshSkills is update_agent with refreshSkills: the skill
+// re-pins to its repository's head and the agent boots that revision.
+// agent-manager resolves the head through GitHub at that moment, so without a
+// credential in its Deployment the step would prove GitHub's anonymous rate
+// limit, which this machine shares and spends, rather than the product: it is
+// skipped with a verdict that says so, as backstage-test's E4/E5 are.
+func proveAgentsTestRefreshSkills(session *musterSession, fixture SkillsFixture, head string) (string, error) {
+	authenticated, err := agentManagerGitHubAuthenticated()
+	if err != nil {
+		return "", err
+	}
+	if !authenticated {
+		step("%supdate_agent refreshSkills: skipped, agent-manager calls GitHub without a token", agentManagerToolPrefix)
+		note("deployment %s/%s carries no GitHub credential (%s): refreshSkills would resolve %s's head on the anonymous window this machine shares", platformNamespace, agentManagerMCPServer, strings.Join(agentManagerGitHubEnv, ", "), fixture.Repo)
+		return fmt.Sprintf("SKIP: update_agent{refreshSkills} — agent-manager calls GitHub unauthenticated, on GitHub's anonymous rate limit (60 requests an hour, shared by this machine); record githubToken.source (`agentlab configure --github-token-source <ref>`) or export $%s, then `agentlab platform`, to prove it", GitHubTokenEnv), nil
+	}
+	step("%supdate_agent refreshSkills — the skill re-pins to %s's head %.12s", agentManagerToolPrefix, fixture.Repo, head)
+	refreshed, err := agentManagerUpdate(session, map[string]any{nameKey: agentsTestAgent, refreshSkillsKey: true})
+	if err != nil {
+		return "", err
+	}
+	if got := skillCommits(refreshed.After)[fixture.name()]; got != head {
+		return "", fmt.Errorf("update_agent refreshSkills pinned %s at %q, wanted the head %s", fixture.name(), got, head)
+	}
+	skillsChanged := slices.ContainsFunc(refreshed.Changed, func(p string) bool { return strings.HasPrefix(p, skillsKey) })
+	if moved := head != fixture.Commit; moved != skillsChanged {
+		return "", fmt.Errorf("update_agent refreshSkills reported changed=%v although the head %.12s %s the pin %.12s", refreshed.Changed, head, map[bool]string{true: "differs from", false: "equals"}[moved], fixture.Commit)
+	}
+	release, err := readAgentRelease(agentsTestAgent)
+	if err != nil {
+		return "", err
+	}
+	if got := release.skillCommits()[fixture.name()]; got != head {
+		return "", fmt.Errorf("HelmRelease %s pins skill %s at %q after refreshSkills, wanted %s", agentsTestAgent, fixture.name(), got, head)
+	}
+	repinned := waitFor(int(time.Minute/pollInterval), pollInterval, func() bool {
+		t, err := readAgentTemplate(agentsTestAgent)
+		if err != nil {
+			return false
+		}
+		s := t.skill(fixture.name())
+		return s != nil && s.Source.Git != nil && s.Source.Git.Commit == head
+	})
+	if !repinned {
+		return "", fmt.Errorf("AgentTemplate %s does not carry the re-pinned commit %.12s a minute after refreshSkills", agentsTestAgent, head)
+	}
+	if head == fixture.Commit {
+		note("the head is the pin: nothing changed (changed %v), the commit stays %.12s", refreshed.Changed, head)
+	} else {
+		note("re-pinned %.12s -> %.12s (changed %v); waiting for the new revision's golden boot", fixture.Commit, head, refreshed.Changed)
+		readiness, err := waitAgentReady(agentsTestAgent, agentsTestReadyTimeout)
+		if err != nil {
+			return "", err
+		}
+		if !readiness.ready {
+			return "", readiness.failure(agentsTestAgent, agentsTestReadyTimeout)
+		}
+		note("Ready again after %s: revision %.12s", readiness.elapsed.Round(time.Second), readiness.agent.Status.LatestSuccessfulRevision)
+	}
+	return fmt.Sprintf("PASS: update_agent{refreshSkills} re-pins %s to %s's head %.12s", fixture.name(), fixture.Repo, head), nil
 }
