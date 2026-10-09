@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"os"
 	"path"
 	"regexp"
 	"slices"
@@ -204,6 +205,13 @@ type SkillsTestOptions struct {
 	// Fixture is the skill to boot and ask about; the zero value is the
 	// public fixture, a private repository's names its Secret.
 	Fixture SkillsFixture
+	// SkillHost boots the skill from the lab's own private git host instead
+	// (skillhost.go): a Secret the proof creates, a record of what the
+	// golden boot and the Session's sandbox sent. Excludes Fixture.
+	SkillHost bool
+	// SkillHostBinary is the static Linux agentlab the fixture's container
+	// runs (default: this binary).
+	SkillHostBinary string
 }
 
 // SkillsTest is the headless proof that a Go ADK AgentTemplate with a git skill
@@ -228,6 +236,16 @@ func SkillsTest(cfg *config.Config, email string, opts SkillsTestOptions) error 
 	}
 	if opts.ReadyTimeout <= 0 {
 		opts.ReadyTimeout = SkillsTestReadyTimeout
+	}
+	if opts.SkillHost && opts.Fixture != (SkillsFixture{}) {
+		return fmt.Errorf("--skill-fixture is the lab's own private git host: it takes none of --skill-repo, --skill-commit, --skill-path, --skill-question, --skill-expect and --skill-secret")
+	}
+	if opts.SkillHost && opts.SkillHostBinary == "" {
+		exe, err := os.Executable()
+		if err != nil {
+			return fmt.Errorf("locating this binary for the skill host fixture's container: %w (pass --skill-host-binary)", err)
+		}
+		opts.SkillHostBinary = exe
 	}
 	fixture, err := opts.Fixture.resolve()
 	if err != nil {
@@ -254,6 +272,23 @@ func SkillsTest(cfg *config.Config, email string, opts SkillsTestOptions) error 
 	}
 	if !facts.propagatesToken {
 		note("Harness %s does not set %s=true: muster would see the agent, not the person, on the turn's tool calls", kagentHarness, propagateIdentityEnv)
+	}
+
+	// The fixture goes in before the template and after it on every exit
+	// path: the agents' cleanup below is deferred later, so it runs first.
+	var host *skillHostFixture
+	if opts.SkillHost {
+		step("The skill host fixture: a private git host behind the edge as %s, its credential a Secret the proof creates (%s/%s), in the Harness's runtime image %s", skillHostURL(cfg), kagentNamespace, skillHostSecret, facts.harnessImage)
+		if host, err = startSkillHost(cfg, opts.SkillHostBinary, facts.harnessImage); err != nil {
+			return err
+		}
+		defer host.close()
+		fixture = SkillsFixture{
+			Repo: host.url, Commit: host.commit, Skill: skillHostSkillPath, Question: skillHostQuestion, Expect: skillHostFact,
+			CredentialSecret: skillHostSecret,
+		}
+		opts.Fixture = fixture
+		note("serving %s @ %.12s: 401 to any request without the Secret's credential, each request recorded with the kind of its Authorization (never a value)", fixture.Repo, fixture.Commit)
 	}
 
 	// Leftovers of an aborted run first, and everything this run creates on
@@ -292,6 +327,20 @@ func SkillsTest(cfg *config.Config, email string, opts SkillsTestOptions) error 
 	for _, line := range footprint.lines() {
 		note("%s", line)
 	}
+	// The fixture's record up to Ready is the golden boot's.
+	var golden string
+	goldenSeen := 0
+	if host != nil {
+		requests, err := host.requests()
+		if err != nil {
+			return err
+		}
+		goldenSeen = len(requests)
+		if golden, err = goldenFetchVerdict(requests); err != nil {
+			return fmt.Errorf("the golden boot reached Ready, but %w", err)
+		}
+		note("%s", golden)
+	}
 
 	step("One A2A turn through the edge as %s: the agent names its skills and answers from the skill's text", user.Email)
 	reply, err := firstTurnAs(cfg, skillsTestAgent, token, fixture.prompt())
@@ -302,6 +351,21 @@ func SkillsTest(cfg *config.Config, email string, opts SkillsTestOptions) error 
 		return fmt.Errorf("the skill was not in effect on the turn: %w", err)
 	}
 	note("answered: %s", excerpt(reply, 200))
+
+	step("A second turn in a new Session as %s: the agent's bash tool runs git ls-remote of %s from the sandbox, without Authorization and with the placeholder %q", user.Email, fixture.Repo, "Basic "+credentialPlaceholder)
+	session, finding, err := skillsSessionRequest(cfg, token, host, goldenSeen, fixture)
+	if err != nil {
+		return err
+	}
+	if finding != "" {
+		fmt.Println()
+		if golden != "" {
+			fmt.Printf("PASS: %s\n", golden)
+		}
+		fmt.Printf("FINDING: %s\n", finding)
+		return fmt.Errorf("a Session's sandbox reached %s with the golden boot's credential: the line under test (%s) compiles the source's binding into the Session's egress policy (docs/platform.md \"The skills proof (the golden boot)\")", fixture.Repo, facts.summary())
+	}
+	note("%s", session)
 
 	step("Deleting %s — the template, Substrate's ActorTemplate and its actor go", skillsTestAgent)
 	leftovers := skillsCleanup(api)
@@ -315,6 +379,10 @@ func SkillsTest(cfg *config.Config, email string, opts SkillsTestOptions) error 
 		skillsTestAgent, fixture.name(), fixture.Repo, fixture.Commit, fixture.credentialNote(), kagentHarness, boot.elapsed.Round(time.Second), facts.summary())
 	fmt.Printf("PASS: one turn through the edge as %s named the skill and answered %q from its text; the Harness re-emits the person's bearer on tool calls (%s=true), so muster attributes any tool call of the turn to %s\n",
 		user.Email, fixture.Expect, propagateIdentityEnv, user.Email)
+	if golden != "" {
+		fmt.Printf("PASS: %s\n", golden)
+	}
+	fmt.Printf("PASS: %s\n", session)
 	fmt.Printf("PASS: nothing left behind — the Agent, its AgentTemplate, its Session, Substrate's ActorTemplate and actor are gone\n")
 	return nil
 }
@@ -970,4 +1038,51 @@ func harnessEnvTrue(h *unstructured.Unstructured, name string) bool {
 		return v == "true"
 	}
 	return false
+}
+
+// skillsSessionRequest drives the second turn and judges it: on the fixture
+// from its record since the golden boot's goldenSeen requests, elsewhere
+// from the exit codes the turn relayed. A non-empty finding is the Session
+// carrying the credential, worded with the request that carried it.
+func skillsSessionRequest(cfg *config.Config, token string, host *skillHostFixture, goldenSeen int, fixture SkillsFixture) (verdict, finding string, err error) {
+	reply, err := agentTurnAs(cfg, skillsTestAgent, token, sandboxProbePrompt(fixture.Repo))
+	if err != nil {
+		return "", "", err
+	}
+	probe, perr := parseSandboxProbe(reply)
+	if perr == nil {
+		note("the sandbox ran it: %s", probe)
+	}
+	if host == nil {
+		if perr != nil {
+			return "", "", perr
+		}
+		verdict, credentialSent, err := hostProbeVerdict(fixture.Repo, fixture.CredentialSecret != "", probe)
+		if credentialSent {
+			return "", sessionCredentialFinding + ": " + verdict, err
+		}
+		return verdict, "", err
+	}
+	// The exit codes judged as --skill-secret judges a host it cannot read:
+	// a second view of the same requests, the record decides.
+	if perr != nil {
+		note("%v — the fixture's record decides", perr)
+	} else if byExit, credentialSent, err := hostProbeVerdict(fixture.Repo, true, probe); err != nil {
+		note("judged by the exit codes alone (--skill-secret's verdict): %v", err)
+	} else {
+		note("judged by the exit codes alone (--skill-secret's verdict): credential sent %v — %s", credentialSent, byExit)
+	}
+	requests, err := host.requests()
+	if err != nil {
+		return "", "", err
+	}
+	session := requests[min(goldenSeen, len(requests)):]
+	verdict, offending, err := sessionRequestVerdict(session)
+	if err != nil {
+		return "", "", err
+	}
+	if offending != nil {
+		return "", fmt.Sprintf("%s: %s, recorded after Ready (%d session requests: %s)", sessionCredentialFinding, offending, len(session), requestKinds(session)), nil
+	}
+	return verdict, "", nil
 }

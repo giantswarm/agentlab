@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"cmp"
 	"context"
 	"debug/elf"
 	"fmt"
@@ -50,29 +51,40 @@ func (c *fakeContainer) close() { _ = command(dockerBin, "rm", "-f", c.name).Run
 
 // fakeContainerSpec is one fake: what it is (for messages), the container
 // name's suffix, the agentlab command it runs and its arguments, the flag
-// that names another binary, and the path its health answers 200 on.
+// that names another binary, and the path its health answers 200 on; the
+// image it runs in ("" is the lab's probe image) and NAME=value pairs of its
+// environment, handed to docker by name so no value is on a command line.
 type fakeContainerSpec struct {
-	what, suffix, command, binaryFlag, healthPath string
-	args                                          []string
+	what, suffix, command, binaryFlag, healthPath, image string
+	args, env                                            []string
 }
 
 // startFakeContainer runs `<binary> <command> --listen 0.0.0.0:8080 <args>`
-// in the lab's probe image on the kind network, with its port published on
-// loopback, as the caller's uid, and waits for its health; a leftover of an
-// aborted run is replaced.
+// as the image's entrypoint (the lab's probe image unless the spec names
+// one) on the kind network, with its port published on loopback, as the
+// caller's uid, and waits for its health; a leftover of an aborted run is
+// replaced.
 func startFakeContainer(cfg *config.Config, binary string, spec fakeContainerSpec) (*fakeContainer, error) {
 	if err := linuxStaticBinary(binary, spec.what, spec.binaryFlag); err != nil {
 		return nil, err
 	}
 	name := cfg.ClusterName + "-" + spec.suffix
 	_ = command(dockerBin, "rm", "-f", name).Run()
-	args := dockerRun(name, kindDockerNetwork, "-d", "--rm",
+	flags := []string{"-d", "--rm",
 		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
-		"-p", "127.0.0.1::"+strconv.Itoa(fakeContainerPort),
-		"-v", binary+":"+fakeBinaryPath+":ro",
-		probeImage, fakeBinaryPath, spec.command, "--listen", "0.0.0.0:"+strconv.Itoa(fakeContainerPort))
+		"-p", "127.0.0.1::" + strconv.Itoa(fakeContainerPort),
+		"-v", binary + ":" + fakeBinaryPath + ":ro",
+		"--entrypoint", fakeBinaryPath}
+	for _, pair := range spec.env {
+		key, _, _ := strings.Cut(pair, "=")
+		flags = append(flags, "-e", key)
+	}
+	args := dockerRun(name, kindDockerNetwork, flags...)
+	args = append(args, cmp.Or(spec.image, probeImage), spec.command, "--listen", "0.0.0.0:"+strconv.Itoa(fakeContainerPort))
 	args = append(args, spec.args...)
-	if out, err := command(dockerBin, args...).CombinedOutput(); err != nil {
+	run := command(dockerBin, args...)
+	run.Env = append(os.Environ(), spec.env...)
+	if out, err := run.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("starting the container of %s, %s: %w: %s", spec.what, name, err, excerpt(strings.TrimSpace(string(out)), 300))
 	}
 	c := &fakeContainer{name: name, client: &http.Client{Timeout: 10 * time.Second}}

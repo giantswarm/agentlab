@@ -616,7 +616,9 @@ repository, its last element the skill's name), `--skill-question` and
 `--skill-expect` (the answer only the skill's text has, matched
 case-insensitively in the reply together with the skill's name). A private
 repository adds `--skill-secret`: a Secret in the kagent namespace whose
-`token` key holds a read token for the repository's host, rendered as the
+`token` key holds the base64 of `<user>:<token>` for the repository's host
+(git's Basic credential, which kagent's egress gateway puts after `Basic `;
+`x-access-token` is the user for a GitHub token), rendered as the
 source's `skills[].source.git.credentialRef` (`{name, key: token}`) — the
 proof refuses to run it against a kagent whose served `AgentTemplate` CRD
 lacks the field, since that kagent would prune it and fetch anonymously. The
@@ -624,6 +626,70 @@ Secret is yours to create; the proof never reads its value. A Secret that
 does not exist shows as `ResolvedRefs=False` on the Harness before any
 actor boots; a wrong token as a failed golden boot whose worker log carries
 git's authentication error.
+
+#### What a Session sends to the skill's host
+
+kagent binds a credentialed source's Secret to the source's host as
+`Authorization`: the golden boot sends the header with an inert placeholder
+(`Basic kagent-credential-injected`) and Substrate's egress gateway
+replaces the value with the Secret's. The gateway replaces only a header a
+request carries, and only where the actor's egress policy holds the
+binding. Whether a Session's actor holds it too, so any request its sandbox
+sends to that host with an `Authorization` header leaves with the source's
+token, is what the proof's second turn shows: after the skill's turn, a new
+Session's agent runs, with its `bash` tool, `git ls-remote` of the source
+twice from the sandbox — without `Authorization`, as git does before a
+challenge, and with the placeholder — and relays the exit codes.
+
+`--skill-fixture` puts the lab's own private git host in the path, so the
+private case needs no GitHub token: the proof generates a credential,
+creates the Secret `kagent/agentlab-skills-test-credential` with it, and
+runs this binary (`agentlab skill-host`, hidden) in a container on the kind
+network in the Harness's runtime image, which carries git. The fixture
+serves one repository, `agentlab/skill.git`, with a `skills/agentlab-skill-host`
+skill whose codeword the first turn asks for, over git's smart HTTP
+protocol (`upload-pack` in stateless RPC mode); it answers 401 to every
+request without the credential and records each request's method, path and
+the kind of its `Authorization` (`none`, `secret`, `placeholder`, `other`)
+and the names of any header carrying the Secret value or the placeholder —
+never a value. The proof routes `skillhost.<domain>/agentlab/skill.git` to it on the
+edge (an HTTPRoute in the platform namespace; pods reach the name through
+the CoreDNS rewrite), whose lab-CA certificate the egress gateway trusts
+(`substrate.atenetEgress.upstreamTrust`), and reads the record from this
+host. The run removes the Secret, the route, the Service and the
+container. Two verdict lines come of the record:
+
+- `golden fetch: credential sent` — the requests recorded before the Agent
+  was Ready carried the Secret value: the gateway bound the credential for
+  the golden boot.
+- `session request: no credential` — every request recorded from Ready on
+  carried the Secret value in no header, and the sandbox's placeholder
+  request arrived with the placeholder, not replaced: the Session's egress
+  policy is compiled without the source's credential. On a kagent line that
+  binds it to every actor the proof prints `FINDING: session request:
+  credential sent` with the first request that carried it and exits
+  non-zero; a record without the placeholder request (the gateway denied
+  it, or the turn did not run it) fails the run as inconclusive.
+
+```bash
+agentlab skills-test --skill-fixture
+```
+
+The fixture run is also the `--skill-secret` path with a credential the lab
+generates: the template names the proof's Secret as the source's
+`credentialRef` exactly as `--skill-secret` names yours, and the run notes
+the verdict `--skill-secret` reaches from the exit codes next to the
+record's. No person's GitHub token enters the lab for it.
+
+On the public default and with `--skill-secret` the fixture is not in the
+path, and the second turn probes the source's own host (GitHub). Its status
+line reports both exit codes and git's error line of the placeholder
+request. For a public source nothing is bound, so the status is all it
+says. With `--skill-secret` an accepted placeholder request is the same
+finding, and the host refusing it for its credential (`Authentication
+failed`) is `session request: no credential`. Any other failure, such as the
+gateway refusing the connection, says nothing about the credential and fails
+the run.
 
 This repository ships a second fixture for the loader itself:
 `fixtures/skills/frontmatter-fields`, a skill whose frontmatter carries
