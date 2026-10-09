@@ -60,8 +60,8 @@ const (
 	// expansion: a workspace grows with its repositories, never shrinks.
 	workspacesTestExpanded   = "200Mi"
 	workspacesTestDataVolume = "data"
-	workspacesTestMountPath   = "/workspace"
-	workspacesTestHeartbeat   = "heartbeat"
+	workspacesTestMountPath  = "/workspace"
+	workspacesTestHeartbeat  = "heartbeat"
 	// workspacesTestHeartbeatImage is the actor's container, pinned by digest
 	// as Substrate requires (a changed image invalidates its snapshots).
 	workspacesTestHeartbeatImage = "gsoci.azurecr.io/giantswarm/busybox:1.38.0@sha256:b6762ddf4a50aabb5f4d21aa6f447d05d5633fb09f09c08b33f22356a2f98be0"

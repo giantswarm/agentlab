@@ -141,8 +141,8 @@ type workspacesImages struct {
 // workspacesValues are the names workspaces.yaml.tmpl and the values
 // template's `workspaces:` block render.
 type workspacesValues struct {
-	Namespace, Driver, StorageClass, SnapshotClass string
-	ControllerService, Plugin, Proxy, SnapshotController  string
+	Namespace, Driver, StorageClass, SnapshotClass       string
+	ControllerService, Plugin, Proxy, SnapshotController string
 	ControllerPort, ProxyPort                            int
 	// ControllerEndpoint, ServerName and NodeSocket are the CSIDriverConfig's
 	// controllerEndpoint, tls.serverName and nodeSocketOverride.
