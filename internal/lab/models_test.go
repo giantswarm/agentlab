@@ -12,7 +12,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -276,7 +275,7 @@ func TestModelConfigGVR(t *testing.T) {
 		t.Errorf("modelConfigResourceName = %q", got)
 	}
 
-	released := schema.GroupVersion{Group: "kagent.dev", Version: "v1alpha3"}
+	released := releasedKagentGroupVersion
 	mapper := meta.NewDefaultRESTMapper(nil)
 	mapper.Add(released.WithKind("ModelConfig"), meta.RESTScopeNamespace)
 	f.kubeClients.mapper = mapper
@@ -303,7 +302,7 @@ func TestModelConfigGVR(t *testing.T) {
 // that fails names the group read and the groups served.
 func TestModelConfigGVRAfterCrossing(t *testing.T) {
 	f := newFakeLab(t)
-	released := schema.GroupVersion{Group: "kagent.dev", Version: "v1alpha3"}
+	released := releasedKagentGroupVersion
 	stale := meta.NewDefaultRESTMapper(nil)
 	stale.Add(released.WithKind("ModelConfig"), meta.RESTScopeNamespace)
 	both := meta.NewDefaultRESTMapper(nil)
