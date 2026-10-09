@@ -666,6 +666,10 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	if err := waitPlatformReleases(); err != nil {
 		return err
 	}
+	// The roll can change the APIs the apiserver serves (the kagent line's
+	// ModelConfig moves from kagent.dev to api.kagent.dev): the discovery
+	// cached before it is not asked again.
+	resetLabDiscovery()
 	// The connectivity release of a chart directory runs the chart just
 	// pushed before anything reads the platform: a re-push under the meta
 	// chart's version changed the content behind the tag, which the install

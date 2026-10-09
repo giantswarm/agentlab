@@ -53,7 +53,10 @@ func modelConfigResourceName(gvr schema.GroupVersionResource) string {
 	return gvr.Resource + "." + gvr.Group
 }
 
-// readModelConfig reads one ModelConfig of the kagent namespace.
+// readModelConfig reads one ModelConfig of the kagent namespace. A read that
+// fails names the group it read and the groups the apiserver serves the
+// ModelConfig under now, so a read under a group the apiserver stopped
+// serving reads as that.
 func readModelConfig(name string) (*unstructured.Unstructured, error) {
 	gvr, err := modelConfigGVR()
 	if err != nil {
@@ -61,7 +64,17 @@ func readModelConfig(name string) (*unstructured.Unstructured, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	defer cancel()
-	return getObject(ctx, gvr, kagentNamespace, name)
+	obj, err := getObject(ctx, gvr, kagentNamespace, name)
+	if err != nil {
+		served := "none of " + strings.Join(modelConfigResources, ", ")
+		if k, kerr := labKube(); kerr == nil {
+			if names := k.served(modelConfigResources...); len(names) > 0 {
+				served = strings.Join(names, ", ")
+			}
+		}
+		return nil, fmt.Errorf("read as %s/%s, the apiserver serves the ModelConfig as %s: %w", modelConfigResourceName(gvr), gvr.Version, served, err)
+	}
+	return obj, nil
 }
 
 // managedByAgentlab labels the extra ModelConfigs so pruning can be scoped to

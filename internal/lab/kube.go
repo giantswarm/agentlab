@@ -264,22 +264,51 @@ func (k *kubeClients) gvrFor(resourceArg string) (schema.GroupVersionResource, e
 }
 
 // firstServed resolves the first of the resource arguments the apiserver
-// serves, in their order, resetting the cached discovery once when none is
-// (see gvrFor).
+// serves, in their order. The cached discovery answers alone only for the
+// first, the preferred one: when it misses there, the cache is reset once
+// before a later argument is taken (see gvrFor), so a cache filled before the
+// apiserver began serving the preferred resource — a platform roll within
+// the run that moved the kind to a newer group — never answers the older one.
 func (k *kubeClients) firstServed(resourceArgs ...string) (schema.GroupVersionResource, error) {
+	if gvr, err := k.resourcesFor(resourceArgs[0]); err == nil {
+		return gvr, nil
+	}
+	k.resetMapper()
 	var err error
-	for attempt := 0; attempt < 2; attempt++ {
-		if attempt > 0 {
-			k.resetMapper()
-		}
-		for _, arg := range resourceArgs {
-			var gvr schema.GroupVersionResource
-			if gvr, err = k.resourcesFor(arg); err == nil {
-				return gvr, nil
-			}
+	for _, arg := range resourceArgs {
+		var gvr schema.GroupVersionResource
+		if gvr, err = k.resourcesFor(arg); err == nil {
+			return gvr, nil
 		}
 	}
 	return schema.GroupVersionResource{}, err
+}
+
+// served is the subset of the resource arguments the apiserver serves now,
+// read off fresh discovery, each as resource.group — what an error about a
+// read under one of them names next to the group it read.
+func (k *kubeClients) served(resourceArgs ...string) []string {
+	k.resetMapper()
+	var names []string
+	for _, arg := range resourceArgs {
+		if gvr, err := k.resourcesFor(arg); err == nil {
+			names = append(names, gvr.Resource+"."+gvr.Group)
+		}
+	}
+	return names
+}
+
+// resetLabDiscovery drops the lab bundle's cached discovery: after a platform
+// roll, which can move a kind to another API group (the kagent line's
+// ModelConfig from kagent.dev to api.kagent.dev), the next lookup asks the
+// apiserver again.
+func resetLabDiscovery() {
+	labKubeMu.Lock()
+	k := labKubeCache
+	labKubeMu.Unlock()
+	if k != nil {
+		k.resetMapper()
+	}
 }
 
 // resourcesFor is one lookup of a resource argument against the mapper as it
