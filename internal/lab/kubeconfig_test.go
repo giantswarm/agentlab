@@ -199,3 +199,78 @@ func TestUseClusterKubeconfigRefreshesTheLabsCopies(t *testing.T) {
 		t.Errorf("the refresh left %d entries in the lease, want the copy alone (no .tmp)", len(entries))
 	}
 }
+
+// TestDropStaleKindContext: the default kubeconfig's kind-<lab> context that
+// carries a previous cluster's CA goes (context, cluster, unused user, and the
+// current-context pointing at it) while every other entry stays; one that
+// carries the live cluster's address and CA, a pure copy of the lab's file
+// and a missing file are left alone.
+func TestDropStaleKindContext(t *testing.T) {
+	t.Chdir(t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("KUBECONFIG", "")
+
+	const other = `apiVersion: v1
+kind: Config
+clusters:
+- cluster:
+    server: https://prod.example:6443
+  name: prod
+- cluster:
+    certificate-authority-data: b2xk
+    server: https://127.0.0.1:34547
+  name: kind-agentlab
+contexts:
+- context:
+    cluster: prod
+    user: prod
+  name: prod
+- context:
+    cluster: kind-agentlab
+    user: kind-agentlab
+  name: kind-agentlab
+current-context: kind-agentlab
+users:
+- name: prod
+  user: {}
+- name: kind-agentlab
+  user:
+    client-certificate-data: b2xk
+`
+	path := filepath.Join(home, ".kube", "config")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(other), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	dropStaleKindContext("agentlab", []byte(fakeKindKubeconfig))
+
+	raw, err := os.ReadFile(path) // #nosec G304 -- the test's own temporary file
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(raw)
+	for _, gone := range []string{"kind-agentlab", "b2xk"} {
+		if strings.Contains(got, gone) {
+			t.Errorf("the stale %q entry survived:\n%s", gone, got)
+		}
+	}
+	for _, kept := range []string{"name: prod", "https://prod.example:6443"} {
+		if !strings.Contains(got, kept) {
+			t.Errorf("the unrelated %q entry was lost:\n%s", kept, got)
+		}
+	}
+
+	// The live cluster's entry stays, and a second run changes nothing.
+	live := strings.Replace(other, "b2xk", "Zm9v", 2)
+	if err := os.WriteFile(path, []byte(live), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dropStaleKindContext("agentlab", []byte(fakeKindKubeconfig))
+	if raw, _ := os.ReadFile(path); string(raw) != live { // #nosec G304 -- the test's own temporary file
+		t.Errorf("an entry with the live CA was rewritten:\n%s", raw)
+	}
+}

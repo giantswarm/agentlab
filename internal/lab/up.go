@@ -106,6 +106,11 @@ func Up(cfg *config.Config, offers Offers) error {
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
 	}
+	// A kind-<lab> context an earlier kind left in the default kubeconfig
+	// carries the previous cluster's CA once the lab is recreated.
+	if fresh, err := kindKubeconfig(cfg.ClusterName); err == nil {
+		dropStaleKindContext(cfg.ClusterName, fresh)
+	}
 
 	step("Deploying Dex")
 	// Namespace and TLS secret land before the Deployment so the pod never

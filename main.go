@@ -626,6 +626,9 @@ func statusCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := lab.RequireLabCerts(cfg); err != nil {
+				return err
+			}
 			dir, err := os.Getwd()
 			if err != nil {
 				return err
@@ -1016,6 +1019,9 @@ func platformCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
 			if err != nil {
+				return err
+			}
+			if err := lab.RequireLabCerts(cfg); err != nil {
 				return err
 			}
 			if cmd.Flags().Changed("pin") {

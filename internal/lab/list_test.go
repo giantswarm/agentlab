@@ -162,3 +162,42 @@ func TestListWithoutDocker(t *testing.T) {
 		t.Fatalf("ListLabs = %+v, want a alone, state unknown", listed)
 	}
 }
+
+// TestRequireLabCerts: a checkout without certs/ whose clusterName is an
+// existing lab is refused with the lab's registered directory and --lab; a
+// checkout with certs, and a lab not created yet, pass.
+func TestRequireLabCerts(t *testing.T) {
+	real := writeLab(t, "clusterName: lab-1\n")
+	registry := t.TempDir()
+	prevDir := labs.Dir
+	labs.Dir = func() (string, error) { return registry, nil }
+	t.Cleanup(func() { labs.Dir = prevDir })
+	if err := labs.Register("lab-1", real); err != nil {
+		t.Fatal(err)
+	}
+	stubListProbes(t, map[string]string{"lab-1": stateRunning, "fresh": "not created"}, nil)
+
+	t.Chdir(t.TempDir())
+	err := RequireLabCerts(&config.Config{ClusterName: "lab-1"})
+	if err == nil {
+		t.Fatal("a checkout without certs/ for an existing lab was accepted")
+	}
+	for _, want := range []string{real, "--lab lab-1", "certs/ca.crt"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal %q does not name %q", err, want)
+		}
+	}
+	if err := RequireLabCerts(&config.Config{ClusterName: "fresh"}); err != nil {
+		t.Errorf("a lab that is not created yet is refused: %v", err)
+	}
+
+	if err := os.MkdirAll("certs", 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(caCertPath, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RequireLabCerts(&config.Config{ClusterName: "lab-1"}); err != nil {
+		t.Errorf("a checkout with certs/ is refused: %v", err)
+	}
+}

@@ -254,3 +254,124 @@ func writeTokenKubeconfig(cfg *config.Config, token, outPath string) error {
 	}
 	return os.WriteFile(outPath, data, 0o600)
 }
+
+// dropStaleKindContext removes the kind-<clusterName> context, cluster and
+// user from the kubeconfigs a shell reads by default (~/.kube/config and the
+// files KUBECONFIG names, the lab's own and its pure copies aside — those are
+// refreshed) when they point at a cluster that is gone: an earlier kind
+// wrote the entry, the host rebooted or the lab was recreated, and the entry
+// still carries the old CA, so `kubectl --context kind-<lab>` fails with an
+// unknown-authority error that reads like a lab outage. An entry that
+// carries the live cluster's address and CA stays; so does every entry that
+// is not the lab's. The lab's own kubeconfig (state/kubeconfig, or the
+// lease's copy) is the one to use. Never fatal.
+func dropStaleKindContext(clusterName string, fresh []byte) {
+	want, ok := readKubeconfigCopy(fresh)
+	if !ok {
+		return
+	}
+	own := labKubeconfig()
+	var paths []string
+	if home, err := os.UserHomeDir(); err == nil {
+		paths = append(paths, filepath.Join(home, ".kube", "config"))
+	}
+	paths = append(paths, filepath.SplitList(os.Getenv("KUBECONFIG"))...)
+	seen := map[string]bool{}
+	for _, path := range paths {
+		abs, err := filepath.Abs(path)
+		if path == "" || err != nil || abs == own || seen[abs] {
+			continue
+		}
+		seen[abs] = true
+		raw, err := os.ReadFile(abs) // #nosec G304 -- a kubeconfig the shell reads by default, read to see whether it holds this lab's stale entry
+		if err != nil {
+			continue
+		}
+		if got, ok := readKubeconfigCopy(raw); ok && got.ofLab(clusterName) {
+			continue // a pure copy of the lab's file: refreshKubeconfigCopies' to keep current
+		}
+		pruned, ok := pruneStaleKindEntries(raw, "kind-"+clusterName, want.endpoint())
+		if !ok {
+			continue
+		}
+		if err := replaceFile(abs, pruned); err != nil {
+			note("the stale kind-%s context in %s could not be removed: %v", clusterName, abs, err)
+			continue
+		}
+		note("removed the stale kind-%s context from %s (use the lab's own kubeconfig)", clusterName, abs)
+	}
+}
+
+// pruneStaleKindEntries drops the entries named entry from a kubeconfig whose
+// cluster of that name is not the live endpoint (server, CA); ok is false
+// when there was nothing to drop or the file is not a kubeconfig. The
+// current-context goes with its context, and the user stays while another
+// context uses it.
+func pruneStaleKindEntries(raw []byte, entry string, live [2]string) (pruned []byte, ok bool) {
+	var kc map[string]any
+	if err := yaml.Unmarshal(raw, &kc); err != nil || kc == nil {
+		return nil, false
+	}
+	stale := false
+	clusters := filterEntries(kc["clusters"], func(m map[string]any) bool {
+		if m[nameKey] != entry {
+			return true
+		}
+		c, _ := m["cluster"].(map[string]any)
+		server, _ := c["server"].(string)
+		ca, _ := c["certificate-authority-data"].(string)
+		if [2]string{server, ca} == live {
+			return true
+		}
+		stale = true
+		return false
+	})
+	if !stale {
+		return nil, false
+	}
+	kc["clusters"] = clusters
+	kc["contexts"] = filterEntries(kc["contexts"], func(m map[string]any) bool {
+		c, _ := m["context"].(map[string]any)
+		return m[nameKey] != entry && c["cluster"] != entry
+	})
+	usedUsers := map[any]bool{}
+	for _, c := range asEntries(kc["contexts"]) {
+		ctx, _ := c["context"].(map[string]any)
+		usedUsers[ctx["user"]] = true
+	}
+	kc["users"] = filterEntries(kc["users"], func(m map[string]any) bool {
+		return m[nameKey] != entry || usedUsers[entry]
+	})
+	if kc["current-context"] == entry {
+		kc["current-context"] = ""
+	}
+	out, err := yaml.Marshal(kc)
+	if err != nil {
+		return nil, false
+	}
+	return out, true
+}
+
+// asEntries reads a kubeconfig's clusters, contexts or users list as maps.
+func asEntries(v any) []map[string]any {
+	list, _ := v.([]any)
+	out := make([]map[string]any, 0, len(list))
+	for _, e := range list {
+		if m, ok := e.(map[string]any); ok {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// filterEntries keeps the entries of a kubeconfig list that keep returns true
+// for.
+func filterEntries(v any, keep func(map[string]any) bool) []any {
+	out := []any{}
+	for _, m := range asEntries(v) {
+		if keep(m) {
+			out = append(out, m)
+		}
+	}
+	return out
+}
