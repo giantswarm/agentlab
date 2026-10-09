@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/agentlab/internal/config"
+	"github.com/giantswarm/agentlab/internal/labs"
 )
 
 // Paths of the minted certs, shared by every consumer in the package
@@ -439,4 +440,31 @@ func randomSerial() *big.Int {
 		panic(err)
 	}
 	return n
+}
+
+// RequireLabCerts refuses a lab directory that has no certs/ while its
+// cluster exists: the cluster was made from certs that live in the lab's own
+// directory (the registered one, under the state directory
+// ~/.local/state/<lab> for a leased lab), so a checkout whose agentlab.yaml
+// merely names that clusterName reports the lab and then fails on the first
+// certificate it reads. The refusal names the lab's directory and --lab.
+func RequireLabCerts(cfg *config.Config) error {
+	if _, err := os.Stat(caCertPath); err == nil {
+		return nil
+	}
+	switch labClusterState(cfg.ClusterName) {
+	case stateNotCreated, stateUnknown:
+		return nil // a lab not up yet mints its certs on `up`; docker silent: its own errors follow
+	}
+	here, _ := os.Getwd()
+	dir := "~/.local/state/" + cfg.ClusterName
+	if registered, err := labs.List(); err == nil {
+		for _, l := range registered {
+			if l.Name == cfg.ClusterName && l.Dir != here {
+				dir = l.Dir
+			}
+		}
+	}
+	return fmt.Errorf("the kind cluster %q exists, but %s has no %s: the lab's certificates are in its own lab directory, %s — run the command there or with `--lab %s`",
+		cfg.ClusterName, here, caCertPath, dir, cfg.ClusterName)
 }
