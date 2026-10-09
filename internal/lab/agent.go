@@ -88,9 +88,11 @@ const (
 	// reconciled, the template compiled, the golden snapshot taken (≈ 10 s
 	// with the runtime image cached, minutes cold or with a skill to fetch).
 	agentReadyTimeout = 4 * time.Minute
-	// agentGoneTimeout bounds a delete: helm-controller's uninstall and the
-	// controller letting go of the template.
-	agentGoneTimeout = time.Minute
+	// agentGoneTimeout bounds a delete: helm-controller finishing the action
+	// it runs (the 2.x chart's install waits on the Agent's Ready, up to
+	// helm-controller's default 5m timeout for an agent that never becomes
+	// Ready), its uninstall and the controller letting go of the template.
+	agentGoneTimeout = 6 * time.Minute
 )
 
 // The agent-manager tool arguments and report fields the proofs share, next
