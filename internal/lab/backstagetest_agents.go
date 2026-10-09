@@ -109,7 +109,7 @@ func ensureAgentChartCarriesApproval() error {
 		return err
 	}
 	if !exists {
-		note("no OCIRepository %s in %s yet: the first create makes it, tracking the newest %s release", agentChartOCIRepository, kagentNamespace, agentChartRange)
+		note("no OCIRepository %s in %s yet: the first create makes it, tracking the newest %s release", agentChartOCIRepository, kagentNamespace, agentChartRangeInUse())
 		return nil
 	}
 	if !chartVersionBelow(version, agentChartWithApproval) {

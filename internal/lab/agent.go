@@ -45,7 +45,8 @@ import (
 const (
 	// agentChartOCIRepository is the shared OCIRepository of the chart in the
 	// namespace (kindOCIRepository); agentChartURL and agentChartRange what it
-	// tracks.
+	// tracks; agentChartRange is the range without an agent-manager to
+	// declare one (agentChartDeclared).
 	kindOCIRepository       = "OCIRepository"
 	agentChartOCIRepository = "agent"
 	agentChartURL           = "oci://gsoci.azurecr.io/charts/giantswarm/agent"
@@ -363,33 +364,53 @@ func agentChartSourceRange(ctx context.Context, gvr schema.GroupVersionResource)
 }
 
 // agentChartRangeInUse is the Generic chart range the platform composes into
-// every agent namespace's OCIRepository: agent-manager's --agent-chart-semver,
-// which the meta chart sets from agent-manager.agentChart.semver (1.x, or a
-// cap within the line). The lab's own fixtures track the same range, so a
+// every agent namespace's OCIRepository: the range agent-manager declares
+// (agentChartDeclared). The lab's own fixtures track the same range, so a
 // fixture and an agent-manager agent resolve the same chart; without an
-// agent-manager to ask, the line's default.
+// agent-manager to ask, the default range.
 func agentChartRangeInUse() string {
+	if declared, err := agentChartDeclared(); err == nil {
+		return declared
+	}
+	return agentChartRange
+}
+
+// agentChartDeclared is the Generic chart range the lab's agent-manager
+// declares: its --agent-chart-semver, which the meta chart sets from
+// agent-manager.agentChart.semver (a line such as ">=2.0.0 <3.0.0", or a cap
+// within it). The proofs assert every chart fact against this line.
+func agentChartDeclared() (string, error) {
 	gvr, err := gvrFor("deployments.apps")
 	if err != nil {
-		return agentChartRange
+		return "", err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	defer cancel()
 	deploy, err := getObject(ctx, gvr, platformNamespace, agentManagerFieldManager)
 	if err != nil {
-		return agentChartRange
+		return "", fmt.Errorf("the agent-manager Deployment in %s: %w", platformNamespace, err)
 	}
+	semver, ok := agentChartSemverArg(deploy)
+	if !ok {
+		return "", fmt.Errorf("the agent-manager Deployment in %s declares no --agent-chart-semver", platformNamespace)
+	}
+	return semver, nil
+}
+
+// agentChartSemverArg is the --agent-chart-semver of a Deployment's
+// containers, and whether one sets it.
+func agentChartSemverArg(deploy *unstructured.Unstructured) (string, bool) {
 	containers, _, _ := unstructured.NestedSlice(deploy.Object, "spec", "template", "spec", "containers")
 	for _, c := range containers {
 		container, _ := c.(map[string]any)
 		args, _, _ := unstructured.NestedStringSlice(container, "args")
 		for _, arg := range args {
 			if semver, ok := strings.CutPrefix(arg, "--agent-chart-semver="); ok && semver != "" {
-				return semver
+				return semver, true
 			}
 		}
 	}
-	return agentChartRange
+	return "", false
 }
 
 // agentOCIRepositoryManifest is the namespace's shared chart source, as
@@ -410,30 +431,60 @@ spec:
 `, fluxOCIRepositoryAPIVersion, agentChartOCIRepository, kagentNamespace, managedByLabel, managedByAgentlabValue, ociRepositoryInterval, agentChartURL, semver)
 }
 
-// agentChartLine reports whether semver tracks the Generic chart's 1.x line:
-// "1.x" itself, or a constraint whose bounds stay within major 1 — the meta
-// chart caps the line (">=1.0.0 <1.5.0" while the kagent 1.0 line needs the
-// AgentTemplate's own compaction, ">=1.5.0 <2.0.0" once the platform Harness
-// carries it) and agent-manager composes that cap into every namespace's
-// OCIRepository. The major is the API boundary; a range that admits a 0.x or
-// a 2.x chart is another line.
-func agentChartLine(semver string) bool {
-	if semver == agentChartRange {
-		return true
+// agentChartLine reports whether semver (a range, or a chart version) stays
+// on the line agent-manager declares: both admit exactly one major, the same
+// one. The meta chart caps the line (">=1.5.0 <2.0.0", ">=2.0.0 <3.0.0") and
+// agent-manager composes that cap into every namespace's OCIRepository. The
+// major is the API boundary; a range that admits two majors is no line.
+func agentChartLine(semver, declared string) bool {
+	want, ok := agentChartMajor(declared)
+	if !ok {
+		return false
 	}
+	got, ok := agentChartMajor(semver)
+	return ok && got == want
+}
+
+// checkAgentChartLine is agentChartLine as the proofs' error: what tracks
+// which chart off the declared line, naming both.
+func checkAgentChartLine(what, semver, declared string) error {
+	if agentChartLine(semver, declared) {
+		return nil
+	}
+	return fmt.Errorf("%s is the agent chart at %q, off the line agent-manager declares (--agent-chart-semver %q)", what, semver, declared)
+}
+
+// agentChartMajor is the one major semver admits: a version's own, or the
+// only major whose releases a constraint lets through ("2.x", ">=2.0.0
+// <3.0.0"). A constraint that admits none or several has none.
+func agentChartMajor(semver string) (uint64, bool) {
 	if v, err := mastersemver.StrictNewVersion(semver); err == nil {
-		return v.Major() == 1
+		return v.Major(), true
 	}
 	c, err := mastersemver.NewConstraint(semver)
 	if err != nil {
-		return false
+		return 0, false
 	}
-	if c.Check(mastersemver.MustParse("0.999.999")) || c.Check(mastersemver.MustParse("2.0.0")) {
-		return false
+	var majors []uint64
+	for major := uint64(0); major < 100; major++ {
+		if agentChartMajorAdmitted(c, major) {
+			majors = append(majors, major)
+		}
 	}
-	for minor := 0; minor < 100; minor++ {
-		if c.Check(mastersemver.MustParse(fmt.Sprintf("1.%d.0", minor))) {
-			return true
+	if len(majors) != 1 {
+		return 0, false
+	}
+	return majors[0], true
+}
+
+// agentChartMajorAdmitted reports whether c lets any release of major
+// through, probing the first and a late patch of each minor.
+func agentChartMajorAdmitted(c *mastersemver.Constraints, major uint64) bool {
+	for minor := uint64(0); minor < 100; minor++ {
+		for _, patch := range []uint64{0, 999} {
+			if c.Check(mastersemver.New(major, minor, patch, "", "")) {
+				return true
+			}
 		}
 	}
 	return false
