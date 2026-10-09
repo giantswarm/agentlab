@@ -2,12 +2,12 @@ package lab
 
 import (
 	"bytes"
-	"cmp"
+	"compress/gzip"
 	"fmt"
+	"io"
 	"io/fs"
 	"math/rand/v2"
 	"net/http"
-	"net/http/cgi" // #nosec G504 -- Go 1.26: the Httpoxy fix has been in since 1.6.3
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,11 +15,17 @@ import (
 )
 
 // The workspace fake's repositories are bare git repositories on disk, served
-// by `git http-backend` (git's own smart HTTP), so a clone, a fetch and a
-// push are git's, byte for byte; the fake only checks the credential first.
+// over git's smart HTTP by git's own upload-pack and receive-pack in their
+// stateless RPC mode — what `git http-backend` runs, without needing that
+// optional program (Alpine's git leaves it to another package) — so a
+// clone, a fetch and a push are git's, byte for byte; the fake only checks
+// the credential first.
 
-// gitReceivePack is the service of a push.
-const gitReceivePack = "git-receive-pack"
+// The services of git's smart HTTP: a clone or fetch, and a push.
+const (
+	gitUploadPack  = "git-upload-pack"
+	gitReceivePack = "git-receive-pack"
+)
 
 // githubGit holds the bare repositories under root/<owner>/<name>.git.
 type githubGit struct {
@@ -141,37 +147,39 @@ func (g *githubGit) branchSHA(fullName, branch string) string {
 }
 
 // gitService splits a smart HTTP path, /<owner>/<repo>[.git]/<rest>, into
-// the repository and whether the request pushes; ok false for a path that is
-// not git's.
-func gitService(r *http.Request) (fullName, rest string, push, ok bool) {
+// the repository, the service and whether the request is the service's
+// advertisement (GET info/refs) rather than its RPC (POST /<service>); ok
+// false for a path that is not git's.
+func gitService(r *http.Request) (fullName, service string, advertise, ok bool) {
 	parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/"), "/", 3)
 	if len(parts) != 3 {
 		return "", "", false, false
 	}
-	switch parts[2] {
-	case "info/refs":
-		push = r.URL.Query().Get("service") == gitReceivePack
-	case "git-upload-pack":
-	case gitReceivePack:
-		push = true
-	default:
+	switch {
+	case parts[2] == "info/refs" && r.Method == http.MethodGet:
+		service, advertise = r.URL.Query().Get("service"), true
+	case r.Method == http.MethodPost:
+		service = parts[2]
+	}
+	if service != gitUploadPack && service != gitReceivePack {
 		return "", "", false, false
 	}
-	return parts[0] + "/" + strings.TrimSuffix(parts[1], ".git"), parts[2], push, true
+	return parts[0] + "/" + strings.TrimSuffix(parts[1], ".git"), service, advertise, true
 }
 
-// serveGit admits a smart HTTP request as GitHub does and hands it to `git
-// http-backend`: a public repository is cloned by anyone; a private one
-// answers 401 (git then asks for credentials) without a credential and 404
-// to one that does not read it (an invalid credential got its 401 already); a push needs write — 401 without a
-// credential, 403 naming the repository and the user otherwise. A push
-// that went through moves pushed_at.
+// serveGit admits a smart HTTP request as GitHub does and hands it to git:
+// a public repository is cloned by anyone; a private one answers 401 (git
+// then asks for credentials) without a credential and 404 to one that does
+// not read it (an invalid credential got its 401 already); a push needs
+// write — 401 without a credential, 403 naming the repository and the user
+// otherwise. A push that went through moves pushed_at.
 func (g *workspaceGitHub) serveGit(w http.ResponseWriter, r *http.Request) {
-	fullName, rest, push, ok := gitService(r)
+	fullName, service, advertise, ok := gitService(r)
 	if !ok {
 		githubFakeError(w, http.StatusNotFound, "Not Found")
 		return
 	}
+	push := service == gitReceivePack
 	c := callerOf(r)
 	g.mu.Lock()
 	repo, known := g.repos[fullName]
@@ -197,17 +205,61 @@ func (g *workspaceGitHub) serveGit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Permission to %s.git denied to %s.", fullName, c.name()), http.StatusForbidden)
 		return
 	}
-	backend := &cgi.Handler{
-		Path: g.git.binary, Args: []string{"http-backend"}, Dir: g.git.root,
-		Env: g.git.env("GIT_PROJECT_ROOT="+g.git.root, "GIT_HTTP_EXPORT_ALL=1", "REMOTE_USER="+cmp.Or(c.name(), "anonymous")),
+	err := g.git.serveService(w, r, fullName, service, advertise)
+	if err != nil {
+		fmt.Printf("git %s %s: %v\n", service, fullName, err)
+		return
 	}
-	backendReq := r.Clone(r.Context())
-	backendReq.URL.Path = "/" + fullName + ".git/" + rest
-	sw := &statusWriter{ResponseWriter: w}
-	backend.ServeHTTP(sw, backendReq)
-	if push && rest == gitReceivePack && sw.status == http.StatusOK {
+	if push && !advertise {
 		g.mu.Lock()
 		repo.pushedAt = g.now().UTC()
 		g.mu.Unlock()
 	}
 }
+
+// serveService runs `git <service> --stateless-rpc` on the repository the
+// way git http-backend does: the advertisement of its refs, opened by the
+// service line in protocol v0 and v1, or the RPC with the request body
+// (gzip-encoded when the client says so) on its stdin. The client's
+// Git-Protocol header reaches git as GIT_PROTOCOL.
+func (g *githubGit) serveService(w http.ResponseWriter, r *http.Request, fullName, service string, advertise bool) error {
+	args := []string{strings.TrimPrefix(service, "git-"), "--stateless-rpc"}
+	var stdin io.Reader = http.NoBody
+	if advertise {
+		args = append(args, "--advertise-refs")
+	} else {
+		stdin = r.Body
+		if r.Header.Get("Content-Encoding") == "gzip" {
+			gz, err := gzip.NewReader(r.Body)
+			if err != nil {
+				http.Error(w, "the request body is not gzip", http.StatusBadRequest)
+				return err
+			}
+			defer func() { _ = gz.Close() }()
+			stdin = gz
+		}
+	}
+	cmd := exec.CommandContext(r.Context(), g.binary, append(args, g.path(fullName))...) // #nosec G204 -- git with the fake's own arguments
+	cmd.Env = g.env("GIT_PROTOCOL=" + r.Header.Get("Git-Protocol"))
+	cmd.Stdin = stdin
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	w.Header().Set("Cache-Control", "no-cache")
+	if advertise {
+		w.Header().Set("Content-Type", "application/x-"+service+"-advertisement")
+		if !strings.Contains(r.Header.Get("Git-Protocol"), "version=2") {
+			_, _ = io.WriteString(w, pktLine("# service="+service+"\n")+"0000")
+		}
+	} else {
+		w.Header().Set("Content-Type", "application/x-"+service+"-result")
+	}
+	cmd.Stdout = w
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("%w: %s", err, excerpt(stderr.String(), 300))
+	}
+	return nil
+}
+
+// pktLine is s as one of git's pkt-lines: its length in four hex digits,
+// the length included, then s.
+func pktLine(s string) string { return fmt.Sprintf("%04x%s", len(s)+4, s) }
