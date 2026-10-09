@@ -12,17 +12,20 @@ import (
 // lab itself resolves every custom kind through discovery (gvrFor) and pins
 // none.
 var (
-	kagentGroupVersion  = schema.GroupVersion{Group: kagentAPIGroup, Version: "v1alpha3"}
-	gvkModelConfig      = kagentGroupVersion.WithKind("ModelConfig")
-	gvrModelConfigs     = kagentGroupVersion.WithResource("modelconfigs")
-	gvkAgentTemplate    = kagentGroupVersion.WithKind(kindAgentTemplate)
-	gvrAgentTemplates   = kagentGroupVersion.WithResource("agenttemplates")
-	gvkAgent            = kagentGroupVersion.WithKind(kindAgent)
-	gvrAgents           = kagentGroupVersion.WithResource("agents")
-	gvkHarness          = kagentGroupVersion.WithKind("Harness")
-	gvrHarnesses        = kagentGroupVersion.WithResource("harnesses")
-	gvkRemoteMCPServer  = kagentGroupVersion.WithKind(remoteMCPServerKind)
-	gvrRemoteMCPServers = kagentGroupVersion.WithResource("remotemcpservers")
+	kagentGroupVersion = schema.GroupVersion{Group: kagentAPIGroup, Version: "v1alpha3"}
+	// releasedKagentGroupVersion is the ModelConfig's group on the kagent
+	// line before the api.kagent.dev crossing.
+	releasedKagentGroupVersion = schema.GroupVersion{Group: "kagent.dev", Version: kagentGroupVersion.Version}
+	gvkModelConfig             = kagentGroupVersion.WithKind("ModelConfig")
+	gvrModelConfigs            = kagentGroupVersion.WithResource("modelconfigs")
+	gvkAgentTemplate           = kagentGroupVersion.WithKind(kindAgentTemplate)
+	gvrAgentTemplates          = kagentGroupVersion.WithResource("agenttemplates")
+	gvkAgent                   = kagentGroupVersion.WithKind(kindAgent)
+	gvrAgents                  = kagentGroupVersion.WithResource("agents")
+	gvkHarness                 = kagentGroupVersion.WithKind("Harness")
+	gvrHarnesses               = kagentGroupVersion.WithResource("harnesses")
+	gvkRemoteMCPServer         = kagentGroupVersion.WithKind(remoteMCPServerKind)
+	gvrRemoteMCPServers        = kagentGroupVersion.WithResource("remotemcpservers")
 )
 
 // customObject builds a seed for the dynamic fake: an object of the given

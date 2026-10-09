@@ -12,7 +12,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -276,7 +275,7 @@ func TestModelConfigGVR(t *testing.T) {
 		t.Errorf("modelConfigResourceName = %q", got)
 	}
 
-	released := schema.GroupVersion{Group: "kagent.dev", Version: "v1alpha3"}
+	released := releasedKagentGroupVersion
 	mapper := meta.NewDefaultRESTMapper(nil)
 	mapper.Add(released.WithKind("ModelConfig"), meta.RESTScopeNamespace)
 	f.kubeClients.mapper = mapper
@@ -293,5 +292,63 @@ func TestModelConfigGVR(t *testing.T) {
 	}
 	if f.resets == 0 {
 		t.Error("a miss must reset the cached discovery once before refusing")
+	}
+}
+
+// TestModelConfigGVRAfterCrossing: a discovery cache filled while the
+// apiserver served kagent.dev only, before a platform roll moved the kagent
+// line to api.kagent.dev, is not trusted for the older group — the mapper
+// learns api.kagent.dev on its reset, and that is the group resolved. A read
+// that fails names the group read and the groups served.
+func TestModelConfigGVRAfterCrossing(t *testing.T) {
+	f := newFakeLab(t)
+	released := releasedKagentGroupVersion
+	stale := meta.NewDefaultRESTMapper(nil)
+	stale.Add(released.WithKind("ModelConfig"), meta.RESTScopeNamespace)
+	both := meta.NewDefaultRESTMapper(nil)
+	both.Add(released.WithKind("ModelConfig"), meta.RESTScopeNamespace)
+	both.Add(gvkModelConfig, meta.RESTScopeNamespace)
+	f.kubeClients.mapper = stale
+	f.onReset = func(f *fakeLab) { f.kubeClients.mapper = both }
+
+	if got, err := modelConfigGVR(); err != nil || got != gvrModelConfigs {
+		t.Fatalf("after the crossing: %v, %v; want %v", got, err, gvrModelConfigs)
+	}
+	if f.resets != 1 {
+		t.Errorf("resets = %d, want 1: a cache without the preferred group is reset once", f.resets)
+	}
+
+	resets := f.resets
+	if got, err := modelConfigGVR(); err != nil || got != gvrModelConfigs {
+		t.Errorf("a cache holding the preferred group: %v, %v", got, err)
+	}
+	if f.resets != resets {
+		t.Error("a cache holding the preferred group must answer without a reset")
+	}
+
+	_, err := readModelConfig("default-model-config")
+	if err == nil {
+		t.Fatal("reading a ModelConfig that does not exist must fail")
+	}
+	for _, want := range []string{"read as modelconfigs.api.kagent.dev/" + gvrModelConfigs.Version, "serves the ModelConfig as modelconfigs.api.kagent.dev, modelconfigs.kagent.dev"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("read error %q, want it to name %q", err, want)
+		}
+	}
+}
+
+// TestResetLabDiscovery: a platform roll drops the bundle's cached discovery.
+func TestResetLabDiscovery(t *testing.T) {
+	f := newFakeLab(t)
+	resetLabDiscovery()
+	if f.resets != 0 {
+		t.Errorf("no bundle built yet: resets = %d, want 0", f.resets)
+	}
+	if _, err := labKube(); err != nil {
+		t.Fatal(err)
+	}
+	resetLabDiscovery()
+	if f.resets != 1 {
+		t.Errorf("resets = %d, want 1", f.resets)
 	}
 }
