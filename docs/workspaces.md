@@ -73,9 +73,22 @@ lab that had it removes it.
    write refused.
 7. The controller endpoint without Substrate's client certificate: refused
    (the TLS alert quoted).
-8. The actor-level mount, a session directory through ate-api-server: skipped
-   with its reason until the Substrate line carries the mount of an existing
-   read-write-many volume at a sub-path.
+8. The actor-level mount through ate-api-server, on the Substrate chart
+   version it names: an `ActorTemplate` (atespace `kagent`, the worker pool,
+   sandbox and snapshot storage of a kagent template there) declaring two
+   existing volumes, `session` read-write at `/workspace` and `mirrors`
+   read-only at `/mirrors`; two actors on the lab's alpine supply both from the
+   claim's one PersistentVolume (driver `nfs.csi.k8s.io`, its volume handle),
+   `session` read-write-many at `sessions/a` and `sessions/b`, `mirrors`
+   read-only-many at `mirrors`. A reference with an unknown driver and one
+   with a handle no PersistentVolume holds are refused at create, with
+   ate-api-server's reason. Each actor reports through the volume: its own
+   session's files and nothing of the other's, the mirrors readable and a
+   write into them refused, a file of its own written. Actor a is paused and
+   resumed: its heartbeat carries on with the same boot id, still reading its
+   file and the mirrors. Both actors are deleted; the PersistentVolume and
+   every file stay. A Substrate without existing volumes refuses the
+   template, and the step reports the skip with that refusal.
 9. Everything removed: the proof's namespace `agentlab-workspaces-test` with
    its claim, and the volume's directory gone from the export.
 

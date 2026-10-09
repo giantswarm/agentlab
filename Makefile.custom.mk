@@ -35,13 +35,22 @@ KAGENT_PROTO_REPO ?= https://github.com/giantswarm/kagent-upstream.git
 KAGENT_PROTO_COMMIT ?= f7bf3dafd6a8c21e084015a9310f4692778ebaeb
 KAGENT_PROTO_FILES := common agent_templates agents sessions runtime system
 
+# Tag of giantswarm/substrate whose ate-api-server protocol (ateapi.proto) the
+# proofs that drive actors directly speak: the Substrate line's own copy, which
+# carries the line's fields ahead of kagent's. The oldest release whose fields
+# a proof uses; a server without one of them refuses it, and the proof says so.
+SUBSTRATE_PROTO_REPO ?= https://github.com/giantswarm/substrate.git
+SUBSTRATE_PROTO_TAG ?= v1.7.0-rc.1
+
 .PHONY: generate-kagent
-generate-kagent: ## Refresh the kagent protos from KAGENT_PROTO_COMMIT and regenerate internal/kagent/gen.
+generate-kagent: ## Refresh the kagent protos from KAGENT_PROTO_COMMIT, ateapi.proto from SUBSTRATE_PROTO_TAG, and regenerate internal/kagent/gen.
 	@tmp=$$(mktemp -d) && git clone -q --filter=blob:none --no-checkout $(KAGENT_PROTO_REPO) $$tmp \
 	  && git -C $$tmp checkout -q $(KAGENT_PROTO_COMMIT) -- proto/kagent/api/v1alpha1 \
-	  && git -C $$tmp checkout -q $(KAGENT_PROTO_COMMIT) -- proto/ateapi.proto \
 	  && for f in $(KAGENT_PROTO_FILES); do cp $$tmp/proto/kagent/api/v1alpha1/$$f.proto hack/kagent-proto/kagent/api/v1alpha1/; done \
-	  && cp $$tmp/proto/ateapi.proto hack/kagent-proto/ \
+	  && rm -rf $$tmp
+	@tmp=$$(mktemp -d) && git clone -q --filter=blob:none --no-checkout --depth 1 --branch $(SUBSTRATE_PROTO_TAG) $(SUBSTRATE_PROTO_REPO) $$tmp \
+	  && git -C $$tmp checkout -q $(SUBSTRATE_PROTO_TAG) -- pkg/proto/ateapipb/ateapi.proto \
+	  && cp $$tmp/pkg/proto/ateapipb/ateapi.proto hack/kagent-proto/ \
 	  && rm -rf $$tmp
 	cd hack/kagent-proto && PATH="$$(go env GOPATH)/bin:$$PATH" buf generate
 	# The repo's pre-commit runs goimports over every Go file; protoc-gen-go
