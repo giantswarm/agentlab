@@ -28,7 +28,8 @@ import (
 // GET /user on the same API. fakeGitHub is that API for one run, in memory:
 // one repository with a base branch the proof seeds, git's object model as
 // far as the remote uses it (refs, commits, trees, blobs, the contents
-// read), pull requests, and GET /user. The login it answers is the local
+// read, the merge of one branch into another that brings an existing branch
+// up to date), pull requests, and GET /user. The login it answers is the local
 // part of the e-mail the bearer carries: the lab's Dex access token, which
 // muster obtained for the person through the registration's pinned
 // authorization server — the same token model-manager then opens the pull
@@ -50,11 +51,13 @@ const (
 
 // Words of git's object model and GitHub's JSON the fake speaks.
 const (
-	gitCommit    = "commit"
-	githubBase64 = "base64"
-	githubLogin  = "login"
-	githubRef    = "ref"
-	githubSHA    = "sha"
+	gitCommit     = "commit"
+	githubBase64  = "base64"
+	githubLogin   = "login"
+	githubMessage = "message"
+	githubRef     = "ref"
+	githubSHA     = "sha"
+	gitTree       = "tree"
 )
 
 // fakeGitHub is the GitHub REST API of one proof run.
@@ -72,8 +75,10 @@ type fakeGitHub struct {
 	pulls   []*githubFakePull
 }
 
+// githubFakeCommit is one commit; MergeParent is the second parent of a
+// merge commit, "" otherwise.
 type githubFakeCommit struct {
-	Tree, Parent, Message string
+	Tree, Parent, MergeParent, Message string
 }
 
 type githubFakePull struct {
@@ -135,6 +140,7 @@ func startFakeGitHub(addr, repo, branch string, files map[string][]byte) (*fakeG
 	mux.HandleFunc("POST "+repoPath+"/git/blobs", f.repoCall(f.createBlob))
 	mux.HandleFunc("GET "+repoPath+"/git/blobs/{sha}", f.repoCall(f.getBlob))
 	mux.HandleFunc("GET "+repoPath+"/contents/{path...}", f.repoCall(f.getContents))
+	mux.HandleFunc("POST "+repoPath+"/merges", f.repoCall(f.mergeBranch))
 	mux.HandleFunc("POST "+repoPath+"/pulls", f.repoCall(f.createPull))
 	mux.HandleFunc("GET "+repoPath+"/pulls", f.repoCall(f.listPulls))
 	f.server = &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
@@ -194,7 +200,7 @@ func (f *fakeGitHub) putTree(tree map[string]string) string {
 	for _, p := range slices.Sorted(maps.Keys(tree)) {
 		b.WriteString(p + "\x00" + tree[p] + "\n")
 	}
-	sha := gitObjectID("tree", []byte(b.String()))
+	sha := gitObjectID(gitTree, []byte(b.String()))
 	f.trees[sha] = tree
 	return sha
 }
@@ -206,6 +212,48 @@ func (f *fakeGitHub) putCommit(tree, parent, message string) string {
 	return sha
 }
 
+// ancestors is every commit reachable from sha, sha included, nearest
+// first: the first parent and a merge's second parent alike.
+func (f *fakeGitHub) ancestors(sha string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for queue := []string{sha}; len(queue) > 0; queue = queue[1:] {
+		c := queue[0]
+		if c == "" || seen[c] {
+			continue
+		}
+		seen[c] = true
+		out = append(out, c)
+		queue = append(queue, f.commits[c].Parent, f.commits[c].MergeParent)
+	}
+	return out
+}
+
+// mergeTrees is the three-way merge of ours and theirs from their merge base
+// ancestor; ok false when both sides changed one path differently.
+func mergeTrees(ancestor, ours, theirs map[string]string) (map[string]string, bool) {
+	out := map[string]string{}
+	paths := maps.Clone(ours)
+	maps.Copy(paths, theirs)
+	maps.Copy(paths, ancestor)
+	for p := range paths {
+		o, t, a := ours[p], theirs[p], ancestor[p]
+		var merged string
+		switch {
+		case o == t, t == a:
+			merged = o
+		case o == a:
+			merged = t
+		default:
+			return nil, false
+		}
+		if merged != "" {
+			out[p] = merged
+		}
+	}
+	return out, true
+}
+
 // headTree is the tree at the head of branch; ok false for no such branch.
 func (f *fakeGitHub) headTree(branch string) (map[string]string, bool) {
 	sha, ok := f.refs[branch]
@@ -213,6 +261,19 @@ func (f *fakeGitHub) headTree(branch string) (map[string]string, bool) {
 		return nil, false
 	}
 	return f.trees[f.commits[sha].Tree], true
+}
+
+// refTree is the tree at ref, a branch or a commit sha as GitHub's ref
+// query takes it; ok false for neither.
+func (f *fakeGitHub) refTree(ref string) (map[string]string, bool) {
+	if tree, ok := f.headTree(ref); ok {
+		return tree, true
+	}
+	c, ok := f.commits[ref]
+	if !ok {
+		return nil, false
+	}
+	return f.trees[c.Tree], true
 }
 
 // --- the REST API -----------------------------------------------------------
@@ -249,7 +310,7 @@ func writeGitHubJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func githubFakeError(w http.ResponseWriter, status int, message string) {
-	writeGitHubJSON(w, status, map[string]string{"message": message})
+	writeGitHubJSON(w, status, map[string]string{githubMessage: message})
 }
 
 func (f *fakeGitHub) serveUser(w http.ResponseWriter, r *http.Request) {
@@ -344,11 +405,74 @@ func (f *fakeGitHub) getCommit(w http.ResponseWriter, r *http.Request, _ string)
 		githubFakeError(w, http.StatusNotFound, "Not Found")
 		return
 	}
+	writeGitHubJSON(w, http.StatusOK, map[string]any{githubSHA: sha, githubMessage: c.Message, gitTree: map[string]string{githubSHA: c.Tree}, "parents": parentsJSON(c)})
+}
+
+func parentsJSON(c githubFakeCommit) []map[string]string {
 	var parents []map[string]string
-	if c.Parent != "" {
-		parents = append(parents, map[string]string{githubSHA: c.Parent})
+	for _, p := range []string{c.Parent, c.MergeParent} {
+		if p != "" {
+			parents = append(parents, map[string]string{githubSHA: p})
+		}
 	}
-	writeGitHubJSON(w, http.StatusOK, map[string]any{githubSHA: sha, "message": c.Message, "tree": map[string]string{githubSHA: c.Tree}, "parents": parents})
+	return parents
+}
+
+// mergeBranch is POST /repos/{owner}/{repo}/merges: head (a branch or a
+// commit) merged into the branch base, as GitHub answers it — 201 with the
+// merge commit, 204 when base contains head already, 409 when both changed
+// one path differently, 404 for an unknown base or head.
+func (f *fakeGitHub) mergeBranch(w http.ResponseWriter, r *http.Request, _ string) {
+	var in struct {
+		Base, Head    string
+		CommitMessage string `json:"commit_message"`
+	}
+	if json.NewDecoder(r.Body).Decode(&in) != nil {
+		githubFakeError(w, http.StatusBadRequest, "Problems parsing JSON")
+		return
+	}
+	baseSHA, ok := f.refs[in.Base]
+	if !ok {
+		githubFakeError(w, http.StatusNotFound, "Base does not exist")
+		return
+	}
+	headSHA, ok := f.refs[in.Head]
+	if _, known := f.commits[in.Head]; !ok && known {
+		headSHA, ok = in.Head, true
+	}
+	if !ok {
+		githubFakeError(w, http.StatusNotFound, "Head does not exist")
+		return
+	}
+	ofBase := f.ancestors(baseSHA)
+	if slices.Contains(ofBase, headSHA) {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	mergeBase := ""
+	for _, c := range f.ancestors(headSHA) {
+		if slices.Contains(ofBase, c) {
+			mergeBase = c
+			break
+		}
+	}
+	tree, ok := mergeTrees(f.trees[f.commits[mergeBase].Tree], f.trees[f.commits[baseSHA].Tree], f.trees[f.commits[headSHA].Tree])
+	if !ok {
+		githubFakeError(w, http.StatusConflict, "Merge conflict")
+		return
+	}
+	message := in.CommitMessage
+	if message == "" {
+		message = "Merge " + in.Head + " into " + in.Base
+	}
+	sha := f.putCommit(f.putTree(tree), baseSHA, message)
+	c := f.commits[sha]
+	c.MergeParent = headSHA
+	f.commits[sha] = c
+	f.refs[in.Base] = sha
+	writeGitHubJSON(w, http.StatusCreated, map[string]any{
+		githubSHA: sha, "commit": map[string]any{githubMessage: message, gitTree: map[string]string{githubSHA: c.Tree}}, "parents": parentsJSON(c),
+	})
 }
 
 func (f *fakeGitHub) createCommit(w http.ResponseWriter, r *http.Request, _ string) {
@@ -370,7 +494,7 @@ func (f *fakeGitHub) createCommit(w http.ResponseWriter, r *http.Request, _ stri
 		return
 	}
 	sha := f.putCommit(in.Tree, in.Parents[0], in.Message)
-	writeGitHubJSON(w, http.StatusCreated, map[string]any{githubSHA: sha, "tree": map[string]string{githubSHA: in.Tree}})
+	writeGitHubJSON(w, http.StatusCreated, map[string]any{githubSHA: sha, gitTree: map[string]string{githubSHA: in.Tree}})
 }
 
 func (f *fakeGitHub) createTree(w http.ResponseWriter, r *http.Request, _ string) {
@@ -450,8 +574,7 @@ func blobJSON(out map[string]any, sha string, content []byte) map[string]any {
 }
 
 func (f *fakeGitHub) getContents(w http.ResponseWriter, r *http.Request, _ string) {
-	ref := r.URL.Query().Get("ref")
-	tree, ok := f.headTree(ref)
+	tree, ok := f.refTree(r.URL.Query().Get("ref"))
 	p := r.PathValue("path")
 	sha, found := tree[p]
 	if !ok || !found {
