@@ -27,9 +27,15 @@ up a driver:
 | The StorageClass `agentlab-workspaces` | Read-write-many, NFSv4.1, `Immediate` binding, delete-reclaiming, expandable; POSIX modes and symbolic links as on a local disk, so git works on it. No snapshots: a Session is a directory on the workspace's volume, not a clone of it |
 | The `CSIDriverConfig` `nfs.csi.k8s.io` | Substrate's registration of the driver: the controller endpoint, the node socket override, mTLS with the pod identity. The chart renders it from the lab's `workspaces:` values (the class with `storageClass.create: false`, the driver, the Substrate preview gate) once its release takes the key; until then the lab applies its own after the install (`HACKS.md` U30) |
 
-Every image is pinned and preloaded into the lab like the platform's. The NFS
-server and the driver's mounts run on the host's kernel, so the install checks
-first that the host has the `nfsd` and `nfs` modules.
+Every image is pinned and preloaded into the lab like the platform's.
+
+**Host prerequisite:** the kind nodes share the host's kernel, so the NFS
+server is the host's nfsd and every mount the host's NFS client. The host
+must have the `nfsd` and `nfs` kernel modules available (loaded, or found by
+`modprobe`); the kernel loads them by itself when the server starts and at
+the first mount, with no `modprobe` by hand. The install checks first and
+names a missing module (on Debian and Ubuntu the kernel's
+`linux-modules-extra` package carries them).
 
 `agentlab status` prints a `workspaces` line: the NFS server and its node, the
 controller with its proxy, the node plugin, the class, and whose
