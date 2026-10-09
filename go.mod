@@ -14,7 +14,7 @@ require (
 	github.com/giantswarm/klaus-gateway v1.21.0
 	github.com/giantswarm/selfupdate-cosign v0.3.2
 	github.com/giantswarm/telemetrydeck-go v0.3.4
-	github.com/giantswarm/vm-manager v0.24.7
+	github.com/giantswarm/vm-manager v0.24.8
 	github.com/google/uuid v1.6.0
 	github.com/smallstep/truststore v0.13.0
 	github.com/spf13/cobra v1.10.2
@@ -42,7 +42,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.3 // indirect
 	github.com/google/pprof v0.0.0-20260906184651-6331bc6350fe // indirect
 	github.com/klauspost/compress v1.20.0 // indirect
-	github.com/prometheus/common v0.71.0 // indirect
 	golang.org/x/exp v0.0.0-20260709172345-9ea1abe57597 // indirect
 	google.golang.org/api v0.297.0 // indirect
 )
@@ -199,7 +198,7 @@ require (
 	gitlab.com/gitlab-org/api/client-go v1.46.0 // indirect
 	go.etcd.io/bbolt v1.5.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
-	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.71.0 // indirect
+	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.72.0 // indirect
 	go.opentelemetry.io/otel v1.47.0 // indirect
 	go.opentelemetry.io/otel/log v1.47.0 // indirect
 	go.opentelemetry.io/otel/metric v1.47.0 // indirect
