@@ -143,6 +143,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		browserCmd(),
 		slackFakeCmd(),
 		githubFakeCmd(),
+		skillHostCmd(),
 	)
 	return root
 }
@@ -190,6 +191,26 @@ func githubFakeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&repo, "repo", "", "the one repository the fake holds, owner/name")
 	cmd.Flags().StringVar(&branch, "branch", "main", "its base branch")
 	cmd.Flags().StringArrayVar(&files, "file", nil, "a file of the base branch, as <path>=<base64 content> (repeatable)")
+	return cmd
+}
+
+// skillHostCmd is the private git host `skills-test --skill-fixture` runs in
+// a container on the kind network: plumbing, hidden, never typed by a
+// person.
+func skillHostCmd() *cobra.Command {
+	var listen string
+	cmd := &cobra.Command{
+		Use:    "skill-host",
+		Short:  "Serve skills-test's private git host fixture (run by the proof, in a container)",
+		Args:   cobra.NoArgs,
+		Hidden: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			return lab.ServeSkillHost(ctx, listen)
+		},
+	}
+	cmd.Flags().StringVar(&listen, "listen", "0.0.0.0:8080", "address to serve the git host on")
 	return cmd
 }
 
@@ -1334,7 +1355,9 @@ func skillsTestCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.Fixture.Skill, "skill-path", "", "the skill's directory within the repository; its last element is the skill's name")
 	cmd.Flags().StringVar(&opts.Fixture.Question, "skill-question", "", "the question the turn asks the agent to answer from the skill's text only")
 	cmd.Flags().StringVar(&opts.Fixture.Expect, "skill-expect", "", "the answer only the skill's text has; the turn passes when the reply names the skill and carries it (case-insensitive)")
-	cmd.Flags().StringVar(&opts.Fixture.CredentialSecret, "skill-secret", "", "a private repository: the Secret in the kagent namespace whose `token` key holds a read token for the repository's host, referenced as skills[].source.git.credentialRef; the Secret is yours to create, the proof never reads it")
+	cmd.Flags().StringVar(&opts.Fixture.CredentialSecret, "skill-secret", "", "a private repository: the Secret in the kagent namespace whose `token` key holds the base64 of \"<user>:<token>\" for the repository's host (git's Basic credential; x-access-token as the user for a GitHub token), referenced as skills[].source.git.credentialRef; the Secret is yours to create, the proof never reads it")
+	cmd.Flags().BoolVar(&opts.SkillHost, "skill-fixture", false, "boot the skill from the lab's own private git host instead (no GitHub token): a Secret the proof creates, and the host's record of every request — `golden fetch: credential sent` when the golden boot's fetch carried it, `session request: no credential` when the Session's sandbox reaches the host without it")
+	cmd.Flags().StringVar(&opts.SkillHostBinary, "skill-host-binary", "", "the static Linux agentlab the skill host fixture's container runs on the kind network (default: this binary)")
 	return cmd
 }
 

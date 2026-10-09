@@ -1766,6 +1766,10 @@ func (c *Config) gatewayURL(prefix string) string {
 	return fmt.Sprintf("https://%s.%s:%d", prefix, c.Platform.Domain, c.Platform.GatewayPort)
 }
 
+// GatewayURL is the public URL of the platform hostname <prefix>.<domain>
+// through the edge, from this host (a proof's own fixture behind the edge).
+func (c *Config) GatewayURL(prefix string) string { return c.gatewayURL(prefix) }
+
 // MusterBaseURL is muster's public URL: client -> agentgateway edge -> muster,
 // the real platform topology. What Claude Code dials and what muster's OAuth
 // server advertises.
