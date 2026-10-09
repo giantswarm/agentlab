@@ -152,6 +152,7 @@ machine, is in [Getting started](docs/getting-started.md).
 | [Observability](docs/observability.md) | Prometheus + mcp-prometheus, and Backstage's metrics views |
 | [Backstage](docs/backstage.md) | The human frontend: the muster plugin, agents and models in the portal, the agent create flow |
 | [Identity](docs/identity.md) | Users and groups, the shared issuer, the Dex version, wiring another app, `trustedPeers` |
+| [Workspaces](docs/workspaces.md) | The lab's GitHub for the workspace proofs: the fixture's App, repositories and users, OAuth with PKCE and rotating refresh tokens, git over smart HTTP, `gh pr create`, the request log |
 | [GitHub sign-in](docs/github-signin.md) | GitHub as a second way into the lab: the App and its callback, the client secret placed as a Secret, what a GitHub user is in the lab |
 | [Troubleshooting](docs/troubleshooting.md) | The gotchas that cost time |
 | [Usage data](docs/telemetry.md) | The anonymous usage signals — one per command, one per platform install naming the chart line — and how to opt out |
