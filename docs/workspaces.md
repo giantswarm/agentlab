@@ -74,8 +74,9 @@ lab that had it removes it.
 7. The controller endpoint without Substrate's client certificate: refused
    (the TLS alert quoted).
 8. The actor-level mount through ate-api-server, on the Substrate chart
-   version it names: an `ActorTemplate` (atespace `kagent`, the worker pool,
-   sandbox and snapshot storage of a kagent template there) declaring two
+   version it names: an `ActorTemplate` (atespace `kagent`, on the worker pool and
+   snapshot storage of the Harness `kagent/kagent`, the chart's gVisor
+   sandbox, the lab's alpine pinned by digest) declaring two
    existing volumes, `session` read-write at `/workspace` and `mirrors`
    read-only at `/mirrors`; two actors on the lab's alpine supply both from the
    claim's one PersistentVolume (driver `nfs.csi.k8s.io`, its volume handle),

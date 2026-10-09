@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/wait"
 
 	ateapi "github.com/giantswarm/agentlab/internal/kagent/gen"
@@ -36,6 +37,10 @@ const (
 	workspacesActorSessionVolume = "session"
 	workspacesActorMirrorsVolume = "mirrors"
 	workspacesActorMirrorsPath   = "/mirrors"
+	// workspacesActorImage runs the actors: the lab's alpine, pinned by
+	// digest as Substrate requires of a template's image (a snapshot is of
+	// one image).
+	workspacesActorImage = probeImage + "@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1"
 	// workspacesActorRefused names the actor the bad references are tried on.
 	workspacesActorRefused = workspacesActorPrefix + "refused"
 	// workspacesActorReport is the actor's report in its session directory,
@@ -50,8 +55,8 @@ var workspacesActorSessions = []string{"a", "b"}
 
 // proveWorkspacesActorMount is the actor-level step: ate-api-server reached
 // as the ate-client ServiceAccount; an ActorTemplate with the existing
-// volumes, its worker pool, sandbox and snapshot storage taken from a kagent
-// template of the atespace — refused by a Substrate without the field, which
+// volumes on the platform Harness's worker pool and snapshot storage —
+// refused by a Substrate without the field, which
 // is the skip; references with an unknown driver or a missing handle refused
 // at create; two actors on the claim's volume at their own session
 // directories, each seeing only its own session read-write and the mirrors
@@ -77,14 +82,14 @@ func proveWorkspacesActorMount(ctx context.Context, timeout time.Duration) (bool
 	}
 	note("ate-api-server reached as the ate-client ServiceAccount, atespace %s read; the driver registered with Substrate (CSIDriverConfig %s)", kagentNamespace, workspacesCSIDriver)
 
-	base, err := workspacesActorBaseTemplate(ctx, api)
+	rt, err := readWorkspacesActorRuntime(ctx)
 	if err != nil {
 		return false, err
 	}
 	removeWorkspacesActors(ctx, api, timeout)
 	defer removeWorkspacesActors(context.Background(), api, timeout)
 
-	tmpl := workspacesActorTemplateFrom(base)
+	tmpl := workspacesActorTemplateFrom(rt)
 	if _, err := api.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{ActorTemplate: tmpl}); err != nil {
 		if reason, ok := existingVolumesUnsupported(err); ok {
 			note("skipped: ate-api-server on Substrate chart %s refuses an ActorTemplate with an existing volume: %s", version, reason)
@@ -95,7 +100,7 @@ func proveWorkspacesActorMount(ctx context.Context, timeout time.Duration) (bool
 	if err := waitActorTemplateGolden(ctx, api, timeout); err != nil {
 		return false, err
 	}
-	note("ActorTemplate %s/%s with the existing volumes %s (read-write at %s) and %s (read-only at %s), golden snapshot built; worker pool, sandbox and snapshot storage of %s", kagentNamespace, workspacesActorTemplate, workspacesActorSessionVolume, workspacesTestMountPath, workspacesActorMirrorsVolume, workspacesActorMirrorsPath, base.GetMetadata().GetName())
+	note("ActorTemplate %s/%s with the existing volumes %s (read-write at %s) and %s (read-only at %s), golden snapshot built; on the worker pool %s with the snapshot storage %s of the Harness %s", kagentNamespace, workspacesActorTemplate, workspacesActorSessionVolume, workspacesTestMountPath, workspacesActorMirrorsVolume, workspacesActorMirrorsPath, rt.workerPool, rt.snapshotLocation, rt.harness)
 
 	pv, err := workspacesClaimVolume(ctx)
 	if err != nil {
@@ -144,58 +149,75 @@ func proveWorkspacesActorMount(ctx context.Context, timeout time.Duration) (bool
 }
 
 // existingVolumesUnsupported tells a Substrate without existing volumes from
-// any other refusal: such a server does not know Volume.existing_volume, so
-// the template's volumes carry no source it knows and it refuses them as
-// invalid. The server's words are the reason.
+// any other refusal: such a server refuses the field it does not know on the
+// template's volumes (Volume.existing_volume is field 10001) as invalid. The
+// server's words are the reason.
 func existingVolumesUnsupported(err error) (string, bool) {
 	st, ok := status.FromError(err)
 	if !ok || st.Code() != codes.InvalidArgument {
 		return "", false
 	}
 	msg := st.Message()
-	for _, v := range []string{workspacesActorSessionVolume, workspacesActorMirrorsVolume} {
-		if strings.Contains(msg, "volumes") && strings.Contains(msg, v) {
-			return msg, true
-		}
+	if strings.Contains(msg, "actor_template.volumes[") && strings.Contains(msg, "unknown field with protobuf tag 10001") {
+		return msg, true
 	}
 	return "", false
 }
 
-// workspacesActorBaseTemplate is the kagent template of the atespace whose
-// golden snapshot exists: the proof's template runs on its worker pool, in
-// its sandbox, with its snapshot storage.
-func workspacesActorBaseTemplate(ctx context.Context, api *ateAPI) (*ateapi.ActorTemplate, error) {
-	req := &ateapi.ListActorTemplatesRequest{Atespace: kagentNamespace}
-	for {
-		resp, err := api.ListActorTemplates(ctx, req)
-		if err != nil {
-			return nil, fmt.Errorf("ListActorTemplates in %s: %w", kagentNamespace, err)
-		}
-		for _, t := range resp.GetActorTemplates() {
-			if t.GetMetadata().GetName() != workspacesActorTemplate && t.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag().GetName() != "" {
-				return t, nil
-			}
-		}
-		if resp.GetNextPageToken() == "" {
-			return nil, fmt.Errorf("no ActorTemplate with a golden snapshot in the atespace %s to take the worker pool, sandbox and snapshot storage from: the platform's Agents create them, `agentlab platform-test` proves one", kagentNamespace)
-		}
-		req.PageToken = resp.GetNextPageToken()
-	}
+// workspacesActorRuntime is where the proof's actors run: the worker pool
+// and snapshot storage of the platform's Harness, the way kagent places an
+// Agent's actors.
+type workspacesActorRuntime struct {
+	harness, workerPool, snapshotLocation string
 }
 
-// workspacesActorTemplateFrom is the proof's template: base's worker
-// selector, sandbox, snapshot storage and resources, one container on the
-// lab's alpine running workspacesActorScript, and the two existing volumes.
-func workspacesActorTemplateFrom(base *ateapi.ActorTemplate) *ateapi.ActorTemplate {
+// workspacesKagentWorkerPoolLabel is the label kagent selects a Harness's
+// workers by: the WorkerPool's name.
+const workspacesKagentWorkerPoolLabel = "kagent.dev/worker-pool"
+
+// workspacesSandboxConfig is the gVisor SandboxConfig the substrate chart
+// ships and kagent's actors run in.
+const workspacesSandboxConfig = "gvisor-default"
+
+// readWorkspacesActorRuntime reads the platform Harness's Substrate
+// placement: spec.substrate.workerPoolRef.name and snapshotPolicy.location.
+func readWorkspacesActorRuntime(ctx context.Context) (workspacesActorRuntime, error) {
+	rt := workspacesActorRuntime{harness: kagentNamespace + "/" + platformHarness}
+	gvr, err := gvrFor(harnessResource)
+	if err != nil {
+		return rt, fmt.Errorf("the Harness API is not served (%v): the agents runtime installs with `agentlab platform`", err)
+	}
+	harness, err := getObject(ctx, gvr, kagentNamespace, platformHarness)
+	if err != nil {
+		return rt, fmt.Errorf("reading the Harness %s: %w", rt.harness, err)
+	}
+	rt.workerPool, _, _ = unstructured.NestedString(harness.Object, "spec", "substrate", "workerPoolRef", "name")
+	rt.snapshotLocation, _, _ = unstructured.NestedString(harness.Object, "spec", "substrate", "snapshotPolicy", "location")
+	if rt.workerPool == "" || rt.snapshotLocation == "" {
+		return rt, fmt.Errorf("the Harness %s names no Substrate worker pool or snapshot location (spec.substrate)", rt.harness)
+	}
+	return rt, nil
+}
+
+// workspacesActorTemplateFrom is the proof's template: on the runtime's
+// worker pool, in the chart's gVisor sandbox, with its snapshot storage, one
+// container on the lab's alpine (by digest) running workspacesActorScript, and the two
+// existing volumes.
+func workspacesActorTemplateFrom(rt workspacesActorRuntime) *ateapi.ActorTemplate {
 	return &ateapi.ActorTemplate{
 		Metadata:       &ateapi.ResourceMetadata{Atespace: kagentNamespace, Name: workspacesActorTemplate},
-		WorkerSelector: base.GetWorkerSelector(),
-		SandboxConfig:  base.GetSandboxConfig(),
-		SnapshotConfig: base.GetSnapshotConfig(),
-		Resources:      base.GetResources(),
+		WorkerSelector: &ateapi.Selector{MatchLabels: map[string]string{workspacesKagentWorkerPoolLabel: rt.workerPool}},
+		SandboxConfig:  &ateapi.SandboxConfig{SandboxClass: ateapi.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: workspacesSandboxConfig},
+		// FULL on both: a DATA snapshot is of durable-dir volumes, which the
+		// proof's actors have none of — their state is on the existing volume.
+		SnapshotConfig: &ateapi.SnapshotConfig{
+			StorageLocation: rt.snapshotLocation,
+			OnPause:         ateapi.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+			OnCommit:        ateapi.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+		},
 		Containers: []*ateapi.Container{{
 			Name:    "session",
-			Image:   probeImage,
+			Image:   workspacesActorImage,
 			Command: []string{"sh", "-c", workspacesActorScript},
 			VolumeMounts: []*ateapi.VolumeMount{
 				{Name: workspacesActorSessionVolume, MountPath: workspacesTestMountPath},

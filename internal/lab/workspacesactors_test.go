@@ -12,27 +12,25 @@ import (
 	ateapi "github.com/giantswarm/agentlab/internal/kagent/gen"
 )
 
-// TestWorkspacesActorTemplateFrom: the proof's template runs where the base
-// template runs and declares the two existing volumes, the mirrors mounted
-// read-only; nothing of the base's containers or volumes comes along.
+// TestWorkspacesActorTemplateFrom: the proof's template runs on the
+// Harness's worker pool and snapshot storage in the chart's gVisor sandbox,
+// and declares the two existing volumes, the mirrors mounted read-only.
 func TestWorkspacesActorTemplateFrom(t *testing.T) {
-	base := &ateapi.ActorTemplate{
-		Metadata:       &ateapi.ResourceMetadata{Atespace: kagentNamespace, Name: "kagent-agent-template"},
-		WorkerSelector: &ateapi.Selector{MatchLabels: map[string]string{"pool": "kagent"}},
-		SandboxConfig:  &ateapi.SandboxConfig{SandboxClass: ateapi.SandboxClass(1), ConfigName: "gvisor"},
-		SnapshotConfig: &ateapi.SnapshotConfig{StorageLocation: "s3://snapshots/"},
-		Containers:     []*ateapi.Container{{Name: "harness", Image: "registry.example/harness"}},
-		Volumes:        []*ateapi.Volume{{Name: "info", SystemInfo: &ateapi.SystemInfoVolumeSource{}}},
-	}
-	got := workspacesActorTemplateFrom(base)
+	got := workspacesActorTemplateFrom(workspacesActorRuntime{harness: "kagent/kagent", workerPool: "kagent-default", snapshotLocation: "s3://ate-snapshots/kagent"})
 	if got.GetMetadata().GetName() != workspacesActorTemplate || got.GetMetadata().GetAtespace() != kagentNamespace {
 		t.Errorf("metadata = %v", got.GetMetadata())
 	}
-	if got.GetWorkerSelector() != base.GetWorkerSelector() || got.GetSandboxConfig() != base.GetSandboxConfig() || got.GetSnapshotConfig() != base.GetSnapshotConfig() {
-		t.Error("worker selector, sandbox or snapshot storage not the base's")
+	if got.GetWorkerSelector().GetMatchLabels()[workspacesKagentWorkerPoolLabel] != "kagent-default" {
+		t.Errorf("worker selector = %v", got.GetWorkerSelector())
 	}
-	if len(got.GetContainers()) != 1 || got.GetContainers()[0].GetImage() != probeImage {
-		t.Fatalf("containers = %v, want one on %s", got.GetContainers(), probeImage)
+	if got.GetSandboxConfig().GetSandboxClass() != ateapi.SandboxClass_SANDBOX_CLASS_GVISOR || got.GetSandboxConfig().GetConfigName() != workspacesSandboxConfig {
+		t.Errorf("sandbox = %v", got.GetSandboxConfig())
+	}
+	if got.GetSnapshotConfig().GetStorageLocation() != "s3://ate-snapshots/kagent" {
+		t.Errorf("snapshot config = %v", got.GetSnapshotConfig())
+	}
+	if len(got.GetContainers()) != 1 || got.GetContainers()[0].GetImage() != workspacesActorImage {
+		t.Fatalf("containers = %v, want one on %s", got.GetContainers(), workspacesActorImage)
 	}
 	mounts := map[string]*ateapi.VolumeMount{}
 	for _, m := range got.GetContainers()[0].GetVolumeMounts() {
@@ -45,7 +43,7 @@ func TestWorkspacesActorTemplateFrom(t *testing.T) {
 		t.Errorf("mirrors mount = %v, want read-only at %s", m, workspacesActorMirrorsPath)
 	}
 	if len(got.GetVolumes()) != 2 {
-		t.Fatalf("volumes = %v, want the two existing volumes only", got.GetVolumes())
+		t.Fatalf("volumes = %v, want the two existing volumes", got.GetVolumes())
 	}
 	for _, v := range got.GetVolumes() {
 		if v.GetExistingVolume() == nil {
@@ -76,17 +74,18 @@ func TestWorkspacesActorVolumes(t *testing.T) {
 	}
 }
 
-// TestExistingVolumesUnsupported: only an InvalidArgument about the
-// template's volumes is the skip; any other refusal fails the proof.
+// TestExistingVolumesUnsupported: only an InvalidArgument refusing the
+// template volumes' unknown field is the skip; any other refusal fails the proof.
 func TestExistingVolumesUnsupported(t *testing.T) {
 	for _, c := range []struct {
 		err  error
 		skip bool
 	}{
-		{status.Error(codes.InvalidArgument, `actorTemplate.volumes[0]: Invalid value: "session": exactly one of durable_dir, external_volume_template, system_info, image must be set`), true},
-		{status.Error(codes.InvalidArgument, "actorTemplate.snapshotConfig.onResume: Required value"), false},
-		{status.Error(codes.PermissionDenied, "volumes session: denied"), false},
-		{errors.New("volumes session"), false},
+		// Substrate 1.6.3's words.
+		{status.Error(codes.InvalidArgument, "[actor_template.containers[0].volume_mounts[1]: Invalid value: unknown field with protobuf tag 10002, actor_template.volumes[0]: Invalid value: unknown field with protobuf tag 10001, actor_template.volumes[1]: Invalid value: unknown field with protobuf tag 10001]"), true},
+		{status.Error(codes.InvalidArgument, "actor_template.snapshot_config.on_resume: Required value"), false},
+		{status.Error(codes.PermissionDenied, "actor_template.volumes[0]: unknown field with protobuf tag 10001"), false},
+		{errors.New("actor_template.volumes[0]: unknown field with protobuf tag 10001"), false},
 	} {
 		if _, got := existingVolumesUnsupported(c.err); got != c.skip {
 			t.Errorf("existingVolumesUnsupported(%v) = %t, want %t", c.err, got, c.skip)
