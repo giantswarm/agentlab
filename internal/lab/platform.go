@@ -344,8 +344,8 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	}
 	// The GitHub token (githubtoken.go) — before the install: the portal's
 	// envFrom and agent-manager's env reference the Secret without
-	// `optional`, and the values just rendered name it whenever $GITHUB_TOKEN
-	// is set.
+	// `optional`, and the values just rendered name it whenever a token is
+	// configured (githubToken.source or $GITHUB_TOKEN).
 	if err := ensureGitHubTokenSecrets(ctx, cfg); err != nil {
 		return err
 	}
@@ -793,7 +793,7 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 		// The migrate Job's copy of the GitHub token (githubtoken.go) — the
 		// chart created the kagent namespace by now; a no-op when the
 		// pre-install pass already found the namespace, or without the token.
-		if err := ensureGitHubTokenSecret(ctx, kagentNamespace); err != nil {
+		if err := ensureGitHubTokenSecret(ctx, cfg, kagentNamespace); err != nil {
 			return err
 		}
 		// The extra ModelConfigs from platform.extraModels (self-hosted

@@ -29,8 +29,9 @@ func newFakeGitHubRateLimit(t *testing.T, reset time.Time) *fakeGitHubRateLimit 
 		f.auth = append(f.auth, r.Header.Get("Authorization"))
 		_, _ = fmt.Fprintf(w, `{"resources":{"core":{"limit":60,"remaining":%d,"reset":%d}}}`, f.remaining, f.reset.Unix())
 	}))
-	prevEndpoint, prevNow, prevSleep := gitHubRateLimitEndpoint, gitHubNow, gitHubSleep
+	prevEndpoint, prevNow, prevSleep, prevLab := gitHubRateLimitEndpoint, gitHubNow, gitHubSleep, labGitHubAuthenticated
 	gitHubRateLimitEndpoint = srv.URL
+	labGitHubAuthenticated = func() (bool, error) { return false, nil }
 	gitHubNow = func() time.Time { return reset.Add(-30 * time.Minute) }
 	// The reset refills the window, as GitHub's does.
 	gitHubSleep = func(d time.Duration) {
@@ -41,7 +42,7 @@ func newFakeGitHubRateLimit(t *testing.T, reset time.Time) *fakeGitHubRateLimit 
 	}
 	t.Cleanup(func() {
 		srv.Close()
-		gitHubRateLimitEndpoint, gitHubNow, gitHubSleep = prevEndpoint, prevNow, prevSleep
+		gitHubRateLimitEndpoint, gitHubNow, gitHubSleep, labGitHubAuthenticated = prevEndpoint, prevNow, prevSleep, prevLab
 	})
 	return f
 }
@@ -105,6 +106,20 @@ func TestAwaitGitHubWindow(t *testing.T) {
 		}
 		if len(auth) != 2 {
 			t.Errorf("%d reads, want the read and the re-read after the wait", len(auth))
+		}
+	})
+
+	t.Run("a lab with its own token never waits on the host's window", func(t *testing.T) {
+		t.Setenv(GitHubTokenEnv, "")
+		prev := labGitHubAuthenticated
+		labGitHubAuthenticated = func() (bool, error) { return true, nil }
+		t.Cleanup(func() { labGitHubAuthenticated = prev })
+		f.set(0)
+		if err := awaitGitHubWindow("the proof", 1); err != nil {
+			t.Fatal(err)
+		}
+		if _, slept := f.seen(); len(slept) != 0 {
+			t.Errorf("waited %v on the host's window although the lab's consumers carry a token", slept)
 		}
 	})
 

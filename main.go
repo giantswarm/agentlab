@@ -748,7 +748,7 @@ func configureCmd() *cobra.Command {
 	var serving, github, githubSignIn bool
 	var githubSignInClientID string
 	var githubSignInOrgs, modelManagerBackends []string
-	var vmManagerImageDir, aiKeySource string
+	var vmManagerImageDir, aiKeySource, gitHubTokenSource string
 	var chartVersion, chartPath, chartBranch string
 	var upgradeSeed, adoptChart bool
 	cmd := &cobra.Command{
@@ -864,6 +864,9 @@ func configureCmd() *cobra.Command {
 			if cmd.Flags().Changed("ai-key-source") {
 				cfg.AIKey.Source = aiKeySource
 			}
+			if cmd.Flags().Changed("github-token-source") {
+				cfg.GitHubToken.Source = gitHubTokenSource
+			}
 			// Every run discovers the machine — an existing agentlab.yaml
 			// follows the host too: a server that appeared is added, one that
 			// is gone drops out, ports move while no cluster holds them.
@@ -926,6 +929,7 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().StringSliceVar(&githubSignInOrgs, "github-signin-orgs", nil, "GitHub sign-in: admit members of these GitHub organizations only, their teams as groups (`<org>:<team-slug>`); empty admits any GitHub account")
 	cmd.Flags().BoolVar(&serving, "serving", false, "serve models on llm-d in the lab: the KServe llmisvc controller and its CRDs, the well-known runtime configs, the connectivity chart's serving slice with the models Gateway, model-manager's kserve backend and one CPU preset of the lab's (needs agents; installs cert-manager); --serving=false turns it off")
 	cmd.Flags().StringVar(&aiKeySource, "ai-key-source", "", "where the Anthropic key of the agents' default ModelConfig lives, a reference `beekeeper secret copy` resolves (op://<vault>/<item>/<field>, or <file>#<path> of a SOPS file), never a value: every up and platform place it into the Secret kagent/kagent-anthropic through beekeeper, so a recreated lab carries it without a manual step; \"\" clears it (the key then comes from $ANTHROPIC_API_KEY, else a placeholder)")
+	cmd.Flags().StringVar(&gitHubTokenSource, "github-token-source", "", "where the GitHub token of the portal's skill discovery and agent-manager's skill resolution lives, a reference `beekeeper secret copy` resolves (op://<vault>/<item>/<field>, or <file>#<path> of a SOPS file), never a value: every up and platform place it into the Secret agentlab-github-token through beekeeper, lifting GitHub's anonymous 60 requests an hour this machine shares; \"\" clears it (the token then comes from $GITHUB_TOKEN, else GitHub is called unauthenticated)")
 	cmd.Flags().BoolVar(&accessible, "accessible", false, "prompt-per-question form mode (for screen readers and plain terminals)")
 	return cmd
 }

@@ -260,3 +260,60 @@ func TestDeploymentSetsEnv(t *testing.T) {
 		}
 	}
 }
+
+// gitHubTokenTestSource is a reference of the form githubToken.source takes;
+// nothing resolves it, the fake secret tooling stands in.
+const gitHubTokenTestSource = "op://lab/github-token/credential" // #nosec G101 -- a reference, not a credential
+
+// TestGitHubTokenSourceWiresBothConsumers: a recorded githubToken.source
+// wires the consumers without $GITHUB_TOKEN on the host — the lab started by
+// an agent, whose environment never carries the token — and the render
+// carries the Secret's name, never the reference's value.
+func TestGitHubTokenSourceWiresBothConsumers(t *testing.T) {
+	t.Setenv(GitHubTokenEnv, "")
+	cfg := gitHubTokenTestConfig()
+	cfg.GitHubToken.Source = gitHubTokenTestSource
+	s := renderGitHubTokenSurfaces(t, cfg)
+	if got := dig(s.values, agentManagerValuesKey, "skills", "github", "tokenSecret", nameKey); got != gitHubTokenSecret {
+		t.Errorf("agent-manager.skills.github.tokenSecret.name = %v with githubToken.source, want %s", got, gitHubTokenSecret)
+	}
+	if got := dig(s.values, componentBackstage, componentBackstage, "extraEnvVarsSecrets"); !reflect.DeepEqual(got, []any{gitHubTokenSecret}) {
+		t.Errorf("backstage.backstage.extraEnvVarsSecrets = %v with githubToken.source, want [%s]", got, gitHubTokenSecret)
+	}
+}
+
+// TestEnsureGitHubTokenSecretsFromSource: a recorded source is handed to the
+// secret tooling for each namespace, the source winning over $GITHUB_TOKEN;
+// a placement that fails fails the run, since the values already name the
+// Secret.
+func TestEnsureGitHubTokenSecretsFromSource(t *testing.T) {
+	newFakeLab(t)
+	ctx := context.Background()
+	cfg := gitHubTokenTestConfig()
+	cfg.GitHubToken.Source = gitHubTokenTestSource
+	t.Setenv(GitHubTokenEnv, gitHubTestToken)
+	if err := ensureNamespace(kagentNamespace); err != nil {
+		t.Fatal(err)
+	}
+
+	calls := fakeSecretTool(t, func() error { return nil })
+	if err := ensureGitHubTokenSecrets(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{
+		secretCopyArgs(gitHubTokenTestSource, secretTarget(cfg, platformNamespace, gitHubTokenSecret, gitHubTokenSecretKey)),
+		secretCopyArgs(gitHubTokenTestSource, secretTarget(cfg, kagentNamespace, gitHubTokenSecret, gitHubTokenSecretKey)),
+	}
+	if !reflect.DeepEqual(*calls, want) {
+		t.Errorf("secret tooling calls = %q, want %q", *calls, want)
+	}
+	if exists, err := objectExists(ctx, gvrSecrets, platformNamespace, gitHubTokenSecret); err != nil || exists {
+		t.Errorf("agentlab wrote %s/%s itself (exists=%v, err=%v); the source is the tooling's to place", platformNamespace, gitHubTokenSecret, exists, err)
+	}
+
+	fakeSecretTool(t, nil)
+	err := ensureGitHubTokenSecrets(ctx, cfg)
+	if err == nil || !strings.Contains(err.Error(), "githubToken.source") {
+		t.Errorf("err = %v, want the failed placement naming githubToken.source", err)
+	}
+}

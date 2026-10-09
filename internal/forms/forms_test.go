@@ -17,8 +17,8 @@ func TestRunTUIDrive(t *testing.T) {
 		"\r", // group 3: platform + backstage preselected; submit as is
 		// platform group: muster port, chart version, agents confirm, agents ui
 		// port, observability confirm, model-manager confirm, serving confirm,
-		// claude model, key source, extra models confirm
-		"\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r",
+		// claude model, key source, GitHub token source, extra models confirm
+		"\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r",
 		"\r", // backstage group: port
 	).attach
 	defer func() { testHook = nil }()

@@ -73,6 +73,7 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 	agentsPort := strconv.Itoa(cfg.Platform.AgentsPort)
 	aiModel := cfg.AIModel
 	aiKeySource := cfg.AIKey.Source
+	gitHubTokenSource := cfg.GitHubToken.Source
 	customizeModels := false
 	backstagePort := strconv.Itoa(cfg.Backstage.Port)
 
@@ -187,6 +188,11 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 				Description("Optional: a reference `beekeeper secret copy` resolves — op://<vault>/<item>/<field>, or\n<file>#<path> of a SOPS file — never the key itself. Every up and platform place it into the\nSecret kagent/kagent-anthropic through beekeeper, so a recreated lab carries the key without\na manual step. Empty: the key comes from $ANTHROPIC_API_KEY at deploy time, else a placeholder.").
 				Value(&aiKeySource).
 				Validate(func(s string) error { return config.AIKey{Source: s}.Validate() }),
+			huh.NewInput().
+				Title("GitHub token source").
+				Description("Optional: a reference `beekeeper secret copy` resolves, as above — never the token itself.\nEvery up and platform place it into the Secret agentlab-github-token, so the portal's skill\ndiscovery and agent-manager's skill resolution call GitHub authenticated. Empty: the token\ncomes from $GITHUB_TOKEN at deploy time, else GitHub is called unauthenticated (60 an hour).").
+				Value(&gitHubTokenSource).
+				Validate(func(s string) error { return config.GitHubToken{Source: s}.Validate() }),
 			huh.NewConfirm().
 				Title("Customize extra model configs?").
 				DescriptionFunc(func() string {
@@ -230,6 +236,7 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 	cfg.Platform.AgentsPort = mustAtoi(agentsPort)
 	cfg.AIModel = aiModel
 	cfg.AIKey.Source = aiKeySource
+	cfg.GitHubToken.Source = gitHubTokenSource
 	cfg.Backstage.Port = mustAtoi(backstagePort)
 
 	if customizeUsers {

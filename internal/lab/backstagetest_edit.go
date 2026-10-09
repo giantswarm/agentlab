@@ -260,7 +260,7 @@ func proveRefreshSkills(primary *portalSession, spec agentSpec) (string, error) 
 	if !authenticated {
 		step("E4/E5 Update skills: skipped, agent-manager calls GitHub without a token")
 		note("deployment %s/%s carries no GitHub credential (%s): refreshSkills would resolve %s's head on the anonymous window this machine shares", platformNamespace, agentManagerMCPServer, strings.Join(agentManagerGitHubEnv, ", "), skillsTestRepo)
-		return fmt.Sprintf("SKIP: E4/E5 validate_agent{update, refreshSkills} and update_agent{refreshSkills} — agent-manager calls GitHub unauthenticated, on GitHub's anonymous rate limit (60 requests an hour, shared by this machine); export $%s before `agentlab platform` to prove them", GitHubTokenEnv), nil
+		return fmt.Sprintf("SKIP: E4/E5 validate_agent{update, refreshSkills} and update_agent{refreshSkills} — agent-manager calls GitHub unauthenticated, on GitHub's anonymous rate limit (60 requests an hour, shared by this machine); record githubToken.source (`agentlab configure --github-token-source <ref>`) or export $%s, then `agentlab platform`, to prove them", GitHubTokenEnv), nil
 	}
 	skill := spec.Skills[0]
 

@@ -33,14 +33,18 @@ type Discovery struct {
 	// (aiKey.source), "" when none; SecretTool the version of the tooling
 	// that places it (secretTool, anthropic.go), "" when it is not on PATH or
 	// does not answer — probed only while a source is recorded.
-	KeySource     string
-	SecretTool    string
-	GitHubToken   bool
-	ClusterExists bool
-	ClusterPorts  map[int]bool
-	KindGateway   string
-	Servers       []HostServer
-	FLM           *FLMServer
+	KeySource  string
+	SecretTool string
+	// GitHubTokenSource is the reference recorded for the GitHub token
+	// (githubToken.source), "" when none; GitHubToken whether $GITHUB_TOKEN
+	// is set on the host.
+	GitHubTokenSource string
+	GitHubToken       bool
+	ClusterExists     bool
+	ClusterPorts      map[int]bool
+	KindGateway       string
+	Servers           []HostServer
+	FLM               *FLMServer
 	// KVMMissing names the KVM devices this machine lacks (vmmanager.go):
 	// empty when the platform's VM provisioner can run as a pod of the node.
 	KVMMissing []string
@@ -106,9 +110,9 @@ const flmOwner = "FastFlowLM"
 // Discover probes this machine. Nothing here needs the cluster; every probe
 // is loopback or a local CLI and degrades to "not found".
 func Discover(cfg *config.Config) *Discovery {
-	d := &Discovery{AnthropicKey: os.Getenv(AnthropicKeyEnv) != "", KeySource: cfg.AIKey.Source, GitHubToken: gitHubTokenSet()}
+	d := &Discovery{AnthropicKey: os.Getenv(AnthropicKeyEnv) != "", KeySource: cfg.AIKey.Source, GitHubTokenSource: cfg.GitHubToken.Source, GitHubToken: os.Getenv(GitHubTokenEnv) != ""}
 	d.Tools = toolVersions(dockerVersion())
-	if d.KeySource != "" {
+	if d.KeySource != "" || d.GitHubTokenSource != "" {
 		d.SecretTool = secretToolVersion()
 	}
 	d.ClusterExists, d.ClusterPorts = kindNodePublishedPorts(cfg.ControlPlaneNode())
@@ -301,6 +305,10 @@ func (d *Discovery) Preflight() error {
 		problems = append(problems, fmt.Sprintf("%s is not on PATH (or does not answer) — aiKey.source %s is placed into the Secret %s/%s by `%s secret copy --to-secret` at every up and platform\n    install: %s (or clear the source: agentlab configure --ai-key-source \"\")",
 			secretTool, d.KeySource, kagentNamespace, anthropicSecret, secretTool, secretToolInstall))
 	}
+	if d.GitHubTokenSource != "" && d.SecretTool == "" {
+		problems = append(problems, fmt.Sprintf("%s is not on PATH (or does not answer) — githubToken.source %s is placed into the Secret %s/%s by `%s secret copy --to-secret` at every up and platform\n    install: %s (or clear the source: agentlab configure --github-token-source \"\")",
+			secretTool, d.GitHubTokenSource, platformNamespace, gitHubTokenSecret, secretTool, secretToolInstall))
+	}
 	if len(problems) == 0 {
 		return nil
 	}
@@ -409,10 +417,13 @@ func (d *Discovery) Report(cfg *config.Config) string {
 		line("Anthropic key", "no aiKey.source and $%s is not set — the default ModelConfig gets a placeholder (it resolves, agent turns fail at Anthropic) until the key is placed: `%s secret copy <ref> --to-secret kind-%s/%s/%s/%s`, or the source recorded (`agentlab configure --ai-key-source <ref>`), or the variable exported and `agentlab platform` re-run",
 			AnthropicKeyEnv, secretTool, cfg.ClusterName, kagentNamespace, anthropicSecret, anthropicSecretKey)
 	}
-	if d.GitHubToken {
+	switch {
+	case d.GitHubTokenSource != "":
+		line("GitHub token", "githubToken.source %s — %s places it into the Secret %s/%s at every up and platform: the portal's skill discovery and agent-manager's skill resolution call GitHub authenticated (5000 requests an hour); agentlab never reads the value", d.GitHubTokenSource, secretTool, platformNamespace, gitHubTokenSecret)
+	case d.GitHubToken:
 		line("GitHub token", "$%s is set — the portal's skill discovery and agent-manager's skill resolution call GitHub authenticated (5000 requests an hour) from deploy time", GitHubTokenEnv)
-	} else {
-		line("GitHub token", "$%s is not set — skill discovery and resolution share this machine's unauthenticated GitHub window (60 requests an hour) until it is exported and `agentlab platform` re-runs", GitHubTokenEnv)
+	default:
+		line("GitHub token", "no githubToken.source and $%s is not set — skill discovery and resolution share this machine's unauthenticated GitHub window (60 requests an hour) until the source is recorded (`agentlab configure --github-token-source <ref>`) or the variable exported, and `agentlab platform` re-runs", GitHubTokenEnv)
 	}
 	return b.String()
 }

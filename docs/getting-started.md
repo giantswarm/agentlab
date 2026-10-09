@@ -266,9 +266,10 @@ Applied to the configuration:
   placed through beekeeper, which must then answer on PATH), else whether
   `$ANTHROPIC_API_KEY` is exported, else the placeholder the agents' default
   ModelConfig gets at deploy time. See [Agents](agents.md#the-model).
-- **`$GITHUB_TOKEN`**: whether it is exported, since the portal's skill
-  discovery and agent-manager's skill resolution take it at deploy time and
-  otherwise share this machine's unauthenticated GitHub window (60 requests
+- **The GitHub token**: the source `agentlab.yaml` records
+  (`githubToken.source`, placed through beekeeper), else whether
+  `$GITHUB_TOKEN` is exported, since the portal's skill discovery and
+  agent-manager's skill resolution take it at deploy time and otherwise share this machine's unauthenticated GitHub window (60 requests
   an hour). See [Agents](agents.md#the-github-token).
 
 Pins override the discovery for that run: `--model-manager[=false]` decides
