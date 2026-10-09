@@ -410,6 +410,24 @@ type Platform struct {
 	// by default; --serving turns it on; needs the agents runtime, which the
 	// served model is wired into. `agentlab serving-test` is the proof.
 	Serving Serving `yaml:"serving"`
+	// Workspace storage: the CSI driver with snapshots Substrate's external
+	// volumes clone from (internal/lab/workspaces.go) — the snapshot
+	// controller with its CRDs, the CSI hostpath driver on one node, an
+	// mTLS proxy in front of its controller socket that admits
+	// ate-api-server's pod identity alone, and the StorageClass and
+	// VolumeSnapshotClass the chart's workspaces values name. Off by default;
+	// --workspaces turns it on; needs the agents runtime. `agentlab
+	// workspaces-test --storage-only` is the proof.
+	Workspaces Workspaces `yaml:"workspaces"`
+}
+
+// Workspaces configures the workspace storage in the lab.
+type Workspaces struct {
+	// On, `agentlab platform` installs the snapshot controller, the CSI
+	// hostpath driver behind its mTLS proxy and the two classes before the
+	// chart, and renders the chart's `workspaces:` block when the chart
+	// carries the key.
+	Enabled bool `yaml:"enabled"`
 }
 
 // Serving configures model serving on llm-d in the lab.
@@ -1440,6 +1458,19 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("platform.serving needs agent-platform %s or newer (the llm-d control plane alone, components.kserve-runtime-configs and modelServing.modelsGateway); %s — `agentlab configure --serving=false`", servingChartFloor, chart)
 		}
 	}
+	// The driver's controller endpoint is certified by Substrate's service-DNS
+	// signer and admits ate-api-server's pod identity alone, and the clones
+	// are Substrate external volumes: without the runtime there is nothing to
+	// sign the endpoint or to attach a volume.
+	if c.Platform.Workspaces.Enabled && c.Platform.Enabled && !c.Platform.Agents {
+		return fmt.Errorf("platform.workspaces requires platform.agents (Substrate's signers certify the driver's endpoint, and a Session's clone is a Substrate external volume)")
+	}
+	// The hostpath driver serves the one node it runs on: with one reserved
+	// worker it runs there, beside the WorkerPool; with more, an actor on
+	// the other worker would find no node plugin for its volume.
+	if c.Platform.Workspaces.Enabled && c.Platform.Enabled && c.SubstrateNodes > 1 {
+		return fmt.Errorf("platform.workspaces with substrateNodes: %d — the CSI hostpath driver serves one node, so the lab pins it to a single reserved worker or to the control plane; use substrateNodes 0 or 1", c.SubstrateNodes)
+	}
 	// The vm-manager component exists from agent-platform 4.11.0; a pinned
 	// release before it would take components.vm-manager as an unknown key
 	// and fail the install out of sight. A local checkout or a branch build
@@ -1557,6 +1588,12 @@ func (c *Config) VMManagerEnabled() bool {
 // component: the platform with its agents runtime, and the key on.
 func (c *Config) KlausGatewayEnabled() bool {
 	return c.Platform.Enabled && c.Platform.Agents && c.Platform.KlausGateway.Enabled
+}
+
+// WorkspacesEnabled reports whether the lab installs the workspace storage:
+// the platform with its agents runtime, and the key on.
+func (c *Config) WorkspacesEnabled() bool {
+	return c.Platform.Enabled && c.Platform.Agents && c.Platform.Workspaces.Enabled
 }
 
 // The chart channels: where the meta chart the lab installs comes from.

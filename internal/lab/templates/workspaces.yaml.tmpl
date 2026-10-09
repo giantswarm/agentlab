@@ -1,0 +1,636 @@
+# The workspace storage (platform.workspaces; workspaces.go): what a Session's
+# clone of a workspace is made of on an installation, on the kind node — the
+# CSI snapshot controller, the CSI hostpath driver behind an mTLS proxy that
+# admits ate-api-server's pod identity alone, and the StorageClass and
+# VolumeSnapshotClass the chart's workspaces values name. The snapshot CRDs
+# are applied first from volumesnapshot-crds.yaml. The driver and its proxy
+# are pinned to one node ({{ .Workspaces.Node }}): the hostpath driver keeps
+# a volume's bytes on the node it runs on, so the node that mounts them for an
+# actor must be the same one — the single-node lab, or the one substrateNodes
+# worker where the WorkerPool's workers land.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Workspaces.Namespace }}
+  labels:
+    app.kubernetes.io/managed-by: agentlab
+---
+# The snapshot controller (kubernetes-csi/external-snapshotter v8.6.0,
+# deploy/kubernetes/snapshot-controller): the control loop of VolumeSnapshot
+# and VolumeSnapshotContent, which asks the driver's csi-snapshotter sidecar
+# for the snapshot itself. One replica; the group-snapshot gate off, its CRDs
+# are not installed (the lab needs none).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: snapshot-controller
+  namespace: {{ .Workspaces.Namespace }}
+---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: agentlab-workspaces-snapshot-controller
+rules:
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "update"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["list", "watch", "create", "update", "patch"]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshotclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshotcontents"]
+    verbs: ["create", "get", "list", "watch", "update", "delete", "patch"]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshotcontents/status"]
+    verbs: ["patch"]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshots"]
+    verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshots/status"]
+    verbs: ["update", "patch"]
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: agentlab-workspaces-snapshot-controller
+subjects:
+  - kind: ServiceAccount
+    name: snapshot-controller
+    namespace: {{ .Workspaces.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: agentlab-workspaces-snapshot-controller
+  apiGroup: rbac.authorization.k8s.io
+---
+kind: Role
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: snapshot-controller-leaderelection
+  namespace: {{ .Workspaces.Namespace }}
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "watch", "list", "delete", "update", "create"]
+---
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: snapshot-controller-leaderelection
+  namespace: {{ .Workspaces.Namespace }}
+subjects:
+  - kind: ServiceAccount
+    name: snapshot-controller
+roleRef:
+  kind: Role
+  name: snapshot-controller-leaderelection
+  apiGroup: rbac.authorization.k8s.io
+---
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  name: {{ .Workspaces.SnapshotController }}
+  namespace: {{ .Workspaces.Namespace }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: snapshot-controller
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: snapshot-controller
+    spec:
+      serviceAccountName: snapshot-controller
+      containers:
+        - name: snapshot-controller
+          image: {{ .Workspaces.Images.SnapshotController }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - "--v=2"
+            - "--leader-election=true"
+            - "--feature-gates=CSIVolumeGroupSnapshot=false"
+---
+# The CSI hostpath driver (kubernetes-csi/csi-driver-host-path, as
+# agent-substrate/substrate's own kind setup deploys it): one StatefulSet
+# carrying the driver and its sidecars, pinned to the node the volumes live
+# on. One ServiceAccount for all of them, with the union of the sidecars'
+# upstream RBAC (csi-provisioner-rbac, csi-attacher-rbac,
+# csi-snapshotter-rbac, csi-resizer-rbac).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: csi-hostpathplugin
+  namespace: {{ .Workspaces.Namespace }}
+---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: agentlab-workspaces-csi-hostpathplugin
+rules:
+  # external-provisioner
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["get", "list", "watch", "create", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "update"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims/status"]
+    verbs: ["patch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["list", "watch", "create", "update", "patch"]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshots"]
+    verbs: ["get", "list", "watch", "update"]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshotclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshotcontents"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshotcontents/status"]
+    verbs: ["update", "patch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["csinodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+  # external-attacher
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["volumeattachments"]
+    verbs: ["get", "list", "watch", "patch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["volumeattachments/status"]
+    verbs: ["patch"]
+  # external-resizer
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["volumeattributesclasses"]
+    verbs: ["get", "list", "watch"]
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: agentlab-workspaces-csi-hostpathplugin
+subjects:
+  - kind: ServiceAccount
+    name: csi-hostpathplugin
+    namespace: {{ .Workspaces.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: agentlab-workspaces-csi-hostpathplugin
+  apiGroup: rbac.authorization.k8s.io
+---
+kind: Role
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: csi-hostpathplugin
+  namespace: {{ .Workspaces.Namespace }}
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "watch", "list", "delete", "update", "create"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["csistoragecapacities"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["get"]
+---
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: csi-hostpathplugin
+  namespace: {{ .Workspaces.Namespace }}
+subjects:
+  - kind: ServiceAccount
+    name: csi-hostpathplugin
+roleRef:
+  kind: Role
+  name: csi-hostpathplugin
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: storage.k8s.io/v1
+kind: CSIDriver
+metadata:
+  name: {{ .Workspaces.Driver }}
+spec:
+  attachRequired: true
+  podInfoOnMount: true
+  volumeLifecycleModes:
+    - Persistent
+  fsGroupPolicy: File
+---
+# The controller endpoint ate-api-server dials (CSIDriverConfig
+# .spec.controllerEndpoint): the proxy's mTLS listener behind a Service.
+# Applied before the proxy on purpose — Substrate's service-DNS signer issues
+# a certificate only to a pod some Service selects, and the name it certifies
+# is <service>.<namespace>.svc, the CSIDriverConfig's tls.serverName.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Workspaces.ControllerService }}
+  namespace: {{ .Workspaces.Namespace }}
+spec:
+  selector:
+    app.kubernetes.io/name: csi-hostpath-proxy
+  ports:
+    - name: grpc
+      port: {{ .Workspaces.ControllerPort }}
+      targetPort: {{ .Workspaces.ProxyPort }}
+---
+kind: StatefulSet
+apiVersion: apps/v1
+metadata:
+  name: {{ .Workspaces.Plugin }}
+  namespace: {{ .Workspaces.Namespace }}
+spec:
+  serviceName: {{ .Workspaces.Plugin }}
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: csi-hostpathplugin
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: csi-hostpathplugin
+    spec:
+      serviceAccountName: csi-hostpathplugin
+      nodeSelector:
+        kubernetes.io/hostname: {{ .Workspaces.Node }}
+{{- if .Workspaces.OnSubstrateWorker }}
+      tolerations:
+        - key: {{ .SubstrateNodeKey }}
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+{{- end }}
+      containers:
+        - name: hostpath
+          image: {{ .Workspaces.Images.HostPath }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - "--drivername={{ .Workspaces.Driver }}"
+            - "--v=2"
+            - "--endpoint=$(CSI_ENDPOINT)"
+            - "--nodeid=$(KUBE_NODE_NAME)"
+          env:
+            - name: CSI_ENDPOINT
+              value: unix:///csi/csi.sock
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: spec.nodeName
+          securityContext:
+            privileged: true
+          ports:
+            - containerPort: 9898
+              name: healthz
+              protocol: TCP
+          livenessProbe:
+            failureThreshold: 5
+            httpGet:
+              path: /healthz
+              port: healthz
+            initialDelaySeconds: 10
+            timeoutSeconds: 3
+            periodSeconds: 2
+          volumeMounts:
+            - mountPath: /csi
+              name: socket-dir
+            - mountPath: /var/lib/kubelet/pods
+              mountPropagation: Bidirectional
+              name: mountpoint-dir
+            - mountPath: /var/lib/kubelet/plugins
+              mountPropagation: Bidirectional
+              name: plugins-dir
+            - mountPath: /csi-data-dir
+              name: csi-data-dir
+            - mountPath: /dev
+              name: dev-dir
+            # Substrate's directory: atelet bind-mounts a published volume
+            # from here into the actor's sandbox, so the mount the node
+            # plugin makes must propagate to the host (Bidirectional).
+            - mountPath: {{ .Workspaces.SubstrateDir }}
+              mountPropagation: Bidirectional
+              name: substrate-dir
+        - name: node-driver-registrar
+          image: {{ .Workspaces.Images.Registrar }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - --v=2
+            - --csi-address=/csi/csi.sock
+            - --kubelet-registration-path=/var/lib/kubelet/plugins/csi-hostpath/csi.sock
+            - --http-endpoint=:9809
+          securityContext:
+            privileged: true
+          env:
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: spec.nodeName
+          ports:
+            - containerPort: 9809
+              name: healthz
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: healthz
+            initialDelaySeconds: 30
+            timeoutSeconds: 15
+            periodSeconds: 10
+            failureThreshold: 3
+          volumeMounts:
+            - mountPath: /csi
+              name: socket-dir
+            - mountPath: /registration
+              name: registration-dir
+            - mountPath: /csi-data-dir
+              name: csi-data-dir
+        - name: liveness-probe
+          image: {{ .Workspaces.Images.LivenessProbe }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - --csi-address=/csi/csi.sock
+            - --health-port=9898
+          volumeMounts:
+            - mountPath: /csi
+              name: socket-dir
+        - name: csi-attacher
+          image: {{ .Workspaces.Images.Attacher }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - --v=2
+            - --csi-address=/csi/csi.sock
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - mountPath: /csi
+              name: socket-dir
+        - name: csi-provisioner
+          image: {{ .Workspaces.Images.Provisioner }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - -v=2
+            - --csi-address=/csi/csi.sock
+            - --feature-gates=Topology=true
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - mountPath: /csi
+              name: socket-dir
+        - name: csi-resizer
+          image: {{ .Workspaces.Images.Resizer }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - -v=2
+            - -csi-address=/csi/csi.sock
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - mountPath: /csi
+              name: socket-dir
+        - name: csi-snapshotter
+          image: {{ .Workspaces.Images.Snapshotter }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - -v=2
+            - --csi-address=/csi/csi.sock
+            - --feature-gates=CSIVolumeGroupSnapshot=false
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - mountPath: /csi
+              name: socket-dir
+      volumes:
+        - hostPath:
+            path: /var/lib/kubelet/plugins/csi-hostpath
+            type: DirectoryOrCreate
+          name: socket-dir
+        - hostPath:
+            path: /var/lib/kubelet/pods
+            type: DirectoryOrCreate
+          name: mountpoint-dir
+        - hostPath:
+            path: /var/lib/kubelet/plugins_registry
+            type: Directory
+          name: registration-dir
+        - hostPath:
+            path: /var/lib/kubelet/plugins
+            type: Directory
+          name: plugins-dir
+        - hostPath:
+            # Where the driver keeps a volume's bytes on the node:
+            # <dir>/<volume id>. `agentlab platform-down` clears it.
+            path: {{ .Workspaces.DataDir }}
+            type: DirectoryOrCreate
+          name: csi-data-dir
+        - hostPath:
+            path: /dev
+            type: Directory
+          name: dev-dir
+        - hostPath:
+            path: {{ .Workspaces.SubstrateDir }}
+            type: DirectoryOrCreate
+          name: substrate-dir
+---
+# The mTLS proxy in front of the driver's controller socket (Substrate's
+# docs/csi-deployment.md, the shape of its own kind setup): Envoy terminates
+# TLS on the service-DNS certificate the signer projects into the pod
+# (podCertificate volume, rotated in place through filesystem SDS) and
+# admits a client only with a certificate of Substrate's pod-identity CA
+# (the live ClusterTrustBundle) whose SPIFFE id is ate-api-server's, then
+# pipes the bytes to the socket. Anything else — no client certificate, a
+# certificate of another identity — is refused at the handshake, which
+# `agentlab workspaces-test` asserts.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: csi-hostpath-proxy
+  namespace: {{ .Workspaces.Namespace }}
+data:
+  envoy.yaml: |
+    node:
+      id: csi-hostpath-proxy
+      cluster: csi-hostpath-proxy
+    static_resources:
+      listeners:
+        - name: csi_tls_listener
+          address:
+            socket_address: { address: 0.0.0.0, port_value: {{ .Workspaces.ProxyPort }} }
+          filter_chains:
+            - transport_socket:
+                name: envoy.transport_sockets.tls
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+                  require_client_certificate: true
+                  common_tls_context:
+                    alpn_protocols:
+                      - h2
+                    tls_certificate_sds_secret_configs:
+                      - name: servicedns_serving_cert
+                        sds_config:
+                          resource_api_version: V3
+                          path_config_source:
+                            path: /etc/envoy/sds-servicedns-cert.yaml
+                    combined_validation_context:
+                      default_validation_context:
+                        match_typed_subject_alt_names:
+                          - san_type: URI
+                            matcher:
+                              exact: "{{ .Workspaces.ClientSPIFFEID }}"
+                      validation_context_sds_secret_config:
+                        name: podidentity_validation_context
+                        sds_config:
+                          resource_api_version: V3
+                          path_config_source:
+                            path: /etc/envoy/sds-podidentity-validation.yaml
+              filters:
+                - name: envoy.filters.network.tcp_proxy
+                  typed_config:
+                    "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
+                    stat_prefix: csi_proxy
+                    cluster: csi_unix_socket
+      clusters:
+        - name: csi_unix_socket
+          connect_timeout: 0.25s
+          type: STATIC
+          load_assignment:
+            cluster_name: csi_unix_socket
+            endpoints:
+              - lb_endpoints:
+                  - endpoint:
+                      address:
+                        pipe:
+                          path: /csi/csi.sock
+  sds-servicedns-cert.yaml: |
+    resources:
+      - "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.Secret
+        name: servicedns_serving_cert
+        tls_certificate:
+          certificate_chain: { filename: /run/servicedns/credential-bundle.pem }
+          private_key: { filename: /run/servicedns/credential-bundle.pem }
+          watched_directory: { path: /run/servicedns }
+  sds-podidentity-validation.yaml: |
+    resources:
+      - "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.Secret
+        name: podidentity_validation_context
+        validation_context:
+          trusted_ca: { filename: /run/podidentity-ca/trust-bundle.pem }
+          watched_directory: { path: /run/podidentity-ca }
+---
+kind: StatefulSet
+apiVersion: apps/v1
+metadata:
+  name: {{ .Workspaces.Proxy }}
+  namespace: {{ .Workspaces.Namespace }}
+spec:
+  serviceName: {{ .Workspaces.ControllerService }}
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: csi-hostpath-proxy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: csi-hostpath-proxy
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: {{ .Workspaces.Node }}
+{{- if .Workspaces.OnSubstrateWorker }}
+      tolerations:
+        - key: {{ .SubstrateNodeKey }}
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+{{- end }}
+      containers:
+        - name: envoy
+          image: {{ .Workspaces.Images.Proxy }}
+          imagePullPolicy: IfNotPresent
+          command:
+            - /usr/local/bin/envoy
+          args:
+            - -c
+            - /etc/envoy/envoy.yaml
+          securityContext:
+            # The driver's socket is root-owned; the proxy connects to it as
+            # root and needs nothing else of the node.
+            runAsUser: 0
+          ports:
+            - containerPort: {{ .Workspaces.ProxyPort }}
+              name: grpc
+              protocol: TCP
+          volumeMounts:
+            - mountPath: /etc/envoy
+              name: envoy-config
+              readOnly: true
+            - mountPath: /csi
+              name: socket-dir
+            - mountPath: /run/servicedns
+              name: servicedns-certs
+              readOnly: true
+            - mountPath: /run/podidentity-ca
+              name: podidentity-ca
+              readOnly: true
+      volumes:
+        - hostPath:
+            path: /var/lib/kubelet/plugins/csi-hostpath
+            type: DirectoryOrCreate
+          name: socket-dir
+        - name: envoy-config
+          configMap:
+            name: csi-hostpath-proxy
+        - name: servicedns-certs
+          projected:
+            sources:
+              - podCertificate:
+                  signerName: servicedns.podcert.ate.dev/identity
+                  keyType: ECDSAP256
+                  credentialBundlePath: credential-bundle.pem
+        - name: podidentity-ca
+          projected:
+            sources:
+              - clusterTrustBundle:
+                  signerName: podidentity.podcert.ate.dev/identity
+                  labelSelector:
+                    matchLabels:
+                      podcert.ate.dev/canarying: live
+                  path: trust-bundle.pem
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ .Workspaces.StorageClass }}
+provisioner: {{ .Workspaces.Driver }}
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+---
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshotClass
+metadata:
+  name: {{ .Workspaces.SnapshotClass }}
+driver: {{ .Workspaces.Driver }}
+deletionPolicy: Delete
