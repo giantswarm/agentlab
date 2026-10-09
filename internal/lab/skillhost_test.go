@@ -24,7 +24,7 @@ func TestSkillHostRequiresTheCredential(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h, err := newSkillHost(t.Context(), t.TempDir(), "Basic "+credential)
+	h, err := newSkillHost(t.TempDir(), "Basic "+credential)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestSkillHostRequiresTheCredential(t *testing.T) {
 func gitCommand(dir string, args ...string) *exec.Cmd {
 	cmd := exec.Command("git", args...) // #nosec G204 -- the test's own git commands
 	cmd.Dir = dir
-	cmd.Env = skillHostGitEnv()
+	cmd.Env = []string{"HOME=" + os.TempDir(), "GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0", "PATH=" + os.Getenv("PATH")}
 	return cmd
 }
 

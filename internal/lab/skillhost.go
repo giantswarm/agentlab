@@ -1,7 +1,6 @@
 package lab
 
 import (
-	"compress/gzip"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -14,7 +13,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"slices"
@@ -49,11 +47,12 @@ import (
 
 // What the fixture serves and how the proof names it.
 const (
-	skillHostCommand    = "skill-host"
-	skillHostRepository = "skill.git"
-	skillHostSkillPath  = "skills/agentlab-skill-host"
-	skillHostFact       = "periwinkle-lighthouse"
-	skillHostQuestion   = "what is the codeword of the skill host fixture?"
+	skillHostCommand        = "skill-host"
+	skillHostRepositoryName = "agentlab/skill"
+	skillHostRepository     = skillHostRepositoryName + ".git"
+	skillHostSkillPath      = "skills/agentlab-skill-host"
+	skillHostFact           = "periwinkle-lighthouse"
+	skillHostQuestion       = "what is the codeword of the skill host fixture?"
 	// skillHostAuthorizationEnv carries the Authorization the fixture
 	// requires ("Basic <base64 of user:token>") into its container.
 	skillHostAuthorizationEnv = "AGENTLAB_SKILL_HOST_AUTHORIZATION"
@@ -112,7 +111,8 @@ func (r skillHostRequest) String() string {
 // skillHost is the fixture's server: the repository's directory and commit,
 // the Authorization it requires, the record.
 type skillHost struct {
-	root, commit, authorization, credential string
+	git                               *githubGit
+	commit, authorization, credential string
 
 	mu       sync.Mutex
 	requests []skillHostRequest
@@ -130,7 +130,7 @@ func ServeSkillHost(ctx context.Context, addr string) error {
 		return err
 	}
 	defer func() { _ = os.RemoveAll(root) }()
-	h, err := newSkillHost(ctx, root, authorization)
+	h, err := newSkillHost(root, authorization)
 	if err != nil {
 		return err
 	}
@@ -152,8 +152,13 @@ func ServeSkillHost(ctx context.Context, addr string) error {
 
 // newSkillHost creates the repository under root — one commit with the
 // fixture's SKILL.md, a bare copy that serves any full commit a client wants
-// — and the handler requiring authorization.
-func newSkillHost(ctx context.Context, root, authorization string) (*skillHost, error) {
+// — and the handler requiring authorization. git runs as the workspace
+// GitHub fake runs it (githubfake_git.go).
+func newSkillHost(root, authorization string) (*skillHost, error) {
+	g, err := newGitHubGit(root)
+	if err != nil {
+		return nil, err
+	}
 	work := filepath.Join(root, "work")
 	skillDir := filepath.Join(work, filepath.FromSlash(skillHostSkillPath))
 	if err := os.MkdirAll(skillDir, 0o750); err != nil {
@@ -167,45 +172,25 @@ func newSkillHost(ctx context.Context, root, authorization string) (*skillHost, 
 	for _, args := range [][]string{
 		{"init", "--quiet", "--initial-branch=main"},
 		{"add", "."},
-		{"-c", "user.name=agentlab", "-c", "user.email=agentlab@lab.local", "commit", "--quiet", "--message", "The skill host fixture"},
+		{"-c", "user.name=agentlab", "-c", "user.email=agentlab@lab.local", gitCommit, "--quiet", "--message", "The skill host fixture"},
 	} {
-		if _, err := runSkillHostGit(ctx, work, nil, args...); err != nil {
+		if _, err := g.run(work, args...); err != nil {
 			return nil, err
 		}
 	}
-	commit, err := runSkillHostGit(ctx, work, nil, "rev-parse", "HEAD")
+	commit, err := g.run(work, "rev-parse", "HEAD")
 	if err != nil {
 		return nil, err
 	}
-	bare := filepath.Join(root, skillHostRepository)
-	if _, err := runSkillHostGit(ctx, root, nil, "clone", "--quiet", "--bare", work, bare); err != nil {
+	bare := g.path(skillHostRepositoryName)
+	if _, err := g.run(root, "clone", "--quiet", "--bare", work, bare); err != nil {
 		return nil, err
 	}
 	// The runtime fetches its pinned commit by id, not by ref.
-	if _, err := runSkillHostGit(ctx, bare, nil, "config", "uploadpack.allowAnySHA1InWant", "true"); err != nil {
+	if _, err := g.run(bare, "config", "uploadpack.allowAnySHA1InWant", "true"); err != nil {
 		return nil, err
 	}
-	return &skillHost{
-		root: root, commit: strings.TrimSpace(commit), authorization: authorization,
-		credential: strings.TrimPrefix(authorization, "Basic "),
-	}, nil
-}
-
-// skillHostGitEnv keeps the container's git configuration out of the
-// fixture's commands.
-func skillHostGitEnv(extra ...string) []string {
-	return append([]string{"HOME=" + os.TempDir(), "GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0", "PATH=" + os.Getenv("PATH")}, extra...)
-}
-
-func runSkillHostGit(ctx context.Context, dir string, env []string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", args...) // #nosec G204 -- fixed git subcommands of the fixture
-	cmd.Dir = dir
-	cmd.Env = skillHostGitEnv(env...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
-	}
-	return string(out), nil
+	return &skillHost{git: g, commit: commit, authorization: authorization, credential: strings.TrimPrefix(authorization, "Basic ")}, nil
 }
 
 func (h *skillHost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -230,13 +215,14 @@ func (h *skillHost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "credential required", http.StatusUnauthorized)
 		return
 	}
-	switch {
-	case r.Method == http.MethodGet && r.URL.Path == "/"+skillHostRepository+"/info/refs" && r.URL.Query().Get("service") == "git-upload-pack":
-		h.advertise(w, r)
-	case r.Method == http.MethodPost && r.URL.Path == "/"+skillHostRepository+"/git-upload-pack":
-		h.uploadPack(w, r)
-	default:
+	// Fetches only: the fixture takes no push.
+	fullName, service, advertise, ok := gitService(r)
+	if !ok || fullName != skillHostRepositoryName || service != gitUploadPack {
 		http.NotFound(w, r)
+		return
+	}
+	if err := h.git.serveService(w, r, fullName, service, advertise); err != nil {
+		note("skill host: %s %s: %v", r.Method, r.URL.Path, err)
 	}
 }
 
@@ -276,74 +262,6 @@ func (h *skillHost) authorizationKind(values []string) string {
 	}
 	return authOther
 }
-
-// gitProtocol is the GIT_PROTOCOL a client asked for, as git http-backend
-// passes it on: protocol v2 or nothing (v0).
-func gitProtocol(r *http.Request) []string {
-	if r.Header.Get("Git-Protocol") == gitProtocolV2 {
-		return []string{"GIT_PROTOCOL=" + gitProtocolV2}
-	}
-	return nil
-}
-
-const gitProtocolV2 = "version=2"
-
-// advertise answers info/refs: the service line (protocol v0 only, as git
-// http-backend does), then upload-pack's advertisement.
-func (h *skillHost) advertise(w http.ResponseWriter, r *http.Request) {
-	env := gitProtocol(r)
-	out, err := runSkillHostGitOutput(r.Context(), env, nil, "upload-pack", "--stateless-rpc", "--advertise-refs", filepath.Join(h.root, skillHostRepository))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/x-git-upload-pack-advertisement")
-	w.Header().Set("Cache-Control", "no-cache")
-	if len(env) == 0 {
-		_, _ = io.WriteString(w, pktLine("# service=git-upload-pack\n")+"0000")
-	}
-	_, _ = w.Write(out)
-}
-
-// uploadPack answers a fetch: the request body (gzip when the client says
-// so) into upload-pack in stateless RPC mode, its output back.
-func (h *skillHost) uploadPack(w http.ResponseWriter, r *http.Request) {
-	body := io.Reader(r.Body)
-	if r.Header.Get("Content-Encoding") == "gzip" {
-		gz, err := gzip.NewReader(r.Body)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		defer func() { _ = gz.Close() }()
-		body = gz
-	}
-	out, err := runSkillHostGitOutput(r.Context(), gitProtocol(r), body, "upload-pack", "--stateless-rpc", filepath.Join(h.root, skillHostRepository))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/x-git-upload-pack-result")
-	w.Header().Set("Cache-Control", "no-cache")
-	_, _ = w.Write(out)
-}
-
-// runSkillHostGitOutput is git's stdout alone (stderr in the error).
-func runSkillHostGitOutput(ctx context.Context, env []string, stdin io.Reader, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "git", args...) // #nosec G204 G702 -- fixed git subcommands of the fixture; the environment is gitProtocol's constant
-	cmd.Env = skillHostGitEnv(env...)
-	cmd.Stdin = stdin
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("git %s: %w: %s", args[0], err, strings.TrimSpace(stderr.String()))
-	}
-	return out, nil
-}
-
-// pktLine frames s as one git pkt-line.
-func pktLine(s string) string { return fmt.Sprintf("%04x%s", len(s)+4, s) }
 
 // --- the proof's side ---------------------------------------------------------
 

@@ -646,13 +646,13 @@ private case needs no GitHub token: the proof generates a credential,
 creates the Secret `kagent/agentlab-skills-test-credential` with it, and
 runs this binary (`agentlab skill-host`, hidden) in a container on the kind
 network in the Harness's runtime image, which carries git. The fixture
-serves one repository, `skill.git`, with a `skills/agentlab-skill-host`
+serves one repository, `agentlab/skill.git`, with a `skills/agentlab-skill-host`
 skill whose codeword the first turn asks for, over git's smart HTTP
 protocol (`upload-pack` in stateless RPC mode); it answers 401 to every
 request without the credential and records each request's method, path and
 the kind of its `Authorization` (`none`, `secret`, `placeholder`, `other`)
 and the names of any header carrying the Secret value or the placeholder —
-never a value. The proof routes `skillhost.<domain>/skill.git` to it on the
+never a value. The proof routes `skillhost.<domain>/agentlab/skill.git` to it on the
 edge (an HTTPRoute in the platform namespace; pods reach the name through
 the CoreDNS rewrite), whose lab-CA certificate the egress gateway trusts
 (`substrate.atenetEgress.upstreamTrust`), and reads the record from this
