@@ -16,7 +16,7 @@ import (
 // Harness's worker pool and snapshot storage in the chart's gVisor sandbox,
 // and declares the two existing volumes, the mirrors mounted read-only.
 func TestWorkspacesActorTemplateFrom(t *testing.T) {
-	got := workspacesActorTemplateFrom(workspacesActorRuntime{harness: "kagent/kagent", workerPool: "kagent-default", snapshotLocation: "s3://ate-snapshots/kagent"})
+	got := workspacesActorTemplateFrom(workspacesActorRuntime{harness: "kagent/kagent", workerPool: "kagent-default", snapshotLocation: "s3://snapshots/proof"})
 	if got.GetMetadata().GetName() != workspacesActorTemplate || got.GetMetadata().GetAtespace() != kagentNamespace {
 		t.Errorf("metadata = %v", got.GetMetadata())
 	}
@@ -26,7 +26,7 @@ func TestWorkspacesActorTemplateFrom(t *testing.T) {
 	if got.GetSandboxConfig().GetSandboxClass() != ateapi.SandboxClass_SANDBOX_CLASS_GVISOR || got.GetSandboxConfig().GetConfigName() != workspacesSandboxConfig {
 		t.Errorf("sandbox = %v", got.GetSandboxConfig())
 	}
-	if got.GetSnapshotConfig().GetStorageLocation() != "s3://ate-snapshots/kagent" {
+	if got.GetSnapshotConfig().GetStorageLocation() != "s3://snapshots/proof" {
 		t.Errorf("snapshot config = %v", got.GetSnapshotConfig())
 	}
 	if len(got.GetContainers()) != 1 || got.GetContainers()[0].GetImage() != workspacesActorImage {
