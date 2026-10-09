@@ -147,6 +147,10 @@ func TestHostProbeVerdict(t *testing.T) {
 	if got, finding, err := hostProbeVerdict(source, true, refused); err != nil || finding || !strings.HasPrefix(got, sessionNoCredential) {
 		t.Fatalf("refused: %q %v %v", got, finding, err)
 	}
+	malformed := sandboxProbe{bare: 128, placeholder: 128, err: "fatal: unable to access 'https://github.com/o/r/': The requested URL returned error: 400"}
+	if got, finding, err := hostProbeVerdict(source, true, malformed); err != nil || finding || !strings.HasPrefix(got, sessionNoCredential) {
+		t.Fatalf("GitHub's 400 to the placeholder: %q %v %v", got, finding, err)
+	}
 	if _, finding, err := hostProbeVerdict(source, true, sandboxProbe{bare: 128, placeholder: 0}); err != nil || !finding {
 		t.Fatalf("accepted: finding %v, err %v", finding, err)
 	}

@@ -82,11 +82,12 @@ func (p sandboxProbe) String() string {
 }
 
 // gitAuthRefusal reports whether git's error line is the host refusing the
-// request for its credential — not the gateway denying it or a failed TLS
-// handshake, which would tell nothing about the credential.
+// request for its credential — 401, or GitHub's 400 to the placeholder,
+// which is no valid Basic credential — not the gateway denying it or a
+// failed TLS handshake, which would tell nothing about the credential.
 func gitAuthRefusal(line string) bool {
 	lower := strings.ToLower(line)
-	for _, words := range []string{"authentication failed", "could not read username", "invalid username or password", "invalid credentials", "401", "repository not found"} {
+	for _, words := range []string{"authentication failed", "could not read username", "invalid username or password", "invalid credentials", "returned error: 401", "returned error: 400", "repository not found"} {
 		if strings.Contains(lower, words) {
 			return true
 		}
