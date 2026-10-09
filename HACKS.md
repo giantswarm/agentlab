@@ -354,7 +354,10 @@ been flagged by platform-test as a server missing its sidecar (agentlab#210).
 The annotation `agentlab.giantswarm.io/dex-localhost: "true"|"false"` on the
 Deployment or its pod template overrides the rule either way, and both
 commands name the key each target was selected by (`docs/platform.md`).
-Lab-only by construction: real installations have a routable issuer.
+The sidecar's securityContext meets PodSecurity `restricted`
+(`allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`,
+`seccompProfile: RuntimeDefault`), so a rollout of a server prints no
+PodSecurity warning. Lab-only by construction: real installations have a routable issuer.
 
 ### U14. `hostmodels.go`: the further host backends are wired as static ModelConfigs — FIXED upstream
 `platform.modelManager.backends` lists every model server on the lab host
