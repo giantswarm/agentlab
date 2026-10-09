@@ -560,7 +560,7 @@ func (g *scriptedGateway) onPick(user, metadata, ref string) {
 		return
 	}
 	g.api(slackPostEphemeral, map[string]any{slackKeyChannel: pm.C, slackKeyThreadTS: pm.T, slackKeyUser: user,
-		slackKeyText: "*" + klausGatewayTestUnadmittedDisplay + "* is installed but " + slackNotRunnable + ": " + unadmittedReason + " this AgentTemplate. " + slackNotStarted + ".\n\n" + slackRosterHeading + ":\n• *" + klausGatewayTestDisplay + "*"})
+		slackKeyText: "*" + klausGatewayTestUnadmittedDisplay + "* is installed but " + slackNotRunnable + ": Agent x " + unadmittedReason + ": blocked by ResolvedRefs. " + slackNotStarted + ".\n\n" + slackRosterHeading + ":\n• *" + klausGatewayTestDisplay + "*"})
 }
 
 func (g *scriptedGateway) onClick(user, channel, thread, cardTS, action, value string) {
