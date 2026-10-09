@@ -429,8 +429,13 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 		if err := workspacesUp(cfg); err != nil {
 			return err
 		}
-	} else if err := workspacesDown(ctx); err != nil {
-		return err
+	} else {
+		if err := workspacesDown(ctx); err != nil {
+			return err
+		}
+		for _, node := range append([]string{cfg.ControlPlaneNode()}, cfg.SubstrateNodeNames()...) {
+			cleanWorkspacesNode(node)
+		}
 	}
 	// Managed models: every host model server's endpoint is detected from
 	// the kind docker network and proven reachable from inside the cluster
