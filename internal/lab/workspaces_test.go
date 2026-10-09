@@ -167,15 +167,21 @@ func TestWorkspacesManifest(t *testing.T) {
 			t.Errorf("no %s %s", kind, name)
 		}
 	}
+	if class, _ := named(rendered, "StorageClass", workspacesStorageClass); class["allowVolumeExpansion"] != true {
+		t.Errorf("StorageClass %s allowVolumeExpansion = %v, want true: a workspace grows with its repositories", workspacesStorageClass, class["allowVolumeExpansion"])
+	}
 
 	plugin, _ := named(rendered, "StatefulSet", workspacesPluginStatefulSet)
 	if plugin == nil {
 		t.Fatalf("no StatefulSet %s", workspacesPluginStatefulSet)
 	}
 	pod := podSpec(t, plugin)
-	bidirectional := false
+	bidirectional, resizer := false, false
 	for _, c := range pod["containers"].([]any) {
 		container, _ := c.(map[string]any)
+		if container["image"] == csiResizerImage {
+			resizer = true
+		}
 		mounts, _ := container["volumeMounts"].([]any)
 		for _, m := range mounts {
 			mount, _ := m.(map[string]any)
@@ -183,6 +189,9 @@ func TestWorkspacesManifest(t *testing.T) {
 				bidirectional = true
 			}
 		}
+	}
+	if !resizer {
+		t.Errorf("the driver pod carries no csi-resizer sidecar (%s): no volume expansion", csiResizerImage)
 	}
 	if !bidirectional {
 		t.Errorf("the driver mounts %s without mountPropagation Bidirectional: Substrate's actors would not see the published volumes", substrateVolumesDir)
@@ -214,14 +223,14 @@ func TestWorkspacesManifest(t *testing.T) {
 
 // The status line words the pieces in place.
 func TestWorkspacesStatusString(t *testing.T) {
-	s := &WorkspacesStatus{SnapshotController: "rolled out", Driver: "Ready", Proxy: "Ready", Node: "agentlab-control-plane", StorageClass: true, SnapshotClass: true, CSIDriverConfig: "the lab"}
+	s := &WorkspacesStatus{SnapshotController: "rolled out", Driver: conditionReady, Proxy: conditionReady, Node: "agentlab-control-plane", StorageClass: true, SnapshotClass: true, CSIDriverConfig: "the lab"}
 	got := s.String()
 	for _, want := range []string{"snapshot controller rolled out", "CSI driver " + workspacesCSIDriver + " Ready on agentlab-control-plane", "mTLS proxy Ready", "StorageClass " + workspacesStorageClass, "VolumeSnapshotClass " + workspacesSnapshotClass, "CSIDriverConfig " + workspacesCSIDriver + " by the lab"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("status %q lacks %q", got, want)
 		}
 	}
-	bare := (&WorkspacesStatus{SnapshotController: "missing", Driver: "missing", Proxy: "missing"}).String()
+	bare := (&WorkspacesStatus{SnapshotController: stateMissing, Driver: stateMissing, Proxy: stateMissing}).String()
 	for _, want := range []string{"no class", "not registered with Substrate"} {
 		if !strings.Contains(bare, want) {
 			t.Errorf("status %q lacks %q", bare, want)

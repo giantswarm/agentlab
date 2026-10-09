@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/giantswarm/agentlab/internal/config"
@@ -54,6 +55,10 @@ const (
 	workspacesTestRestoredPVC = "restored"
 	workspacesTestSnapshot    = "source"
 	workspacesTestCapacity    = "100Mi"
+	// workspacesTestExpanded is the source claim's size after its online
+	// expansion: a workspace grows with its repositories, never shrinks.
+	workspacesTestExpanded   = "200Mi"
+	workspacesTestDataVolume = "data"
 	workspacesTestMountPath   = "/workspace"
 	workspacesTestHeartbeat   = "heartbeat"
 	// workspacesTestHeartbeatImage is the actor's container, pinned by digest
@@ -126,6 +131,16 @@ func WorkspacesTest(cfg *config.Config, opts WorkspacesTestOptions) error {
 	}
 	note("the restored PVC's files match the source's (sha256)")
 
+	step("The source PVC expanded online from %s to %s (allowVolumeExpansion, ControllerExpandVolume), read again", workspacesTestCapacity, workspacesTestExpanded)
+	capacity, expanded, err := workspacesExpandSource(ctx, node, onWorker, timeout)
+	if err != nil {
+		return err
+	}
+	if expanded != sums {
+		return fmt.Errorf("the expanded PVC's files differ from what was written:\nwritten:\n%s\nexpanded:\n%s", indent(sums, "  "), indent(expanded, "  "))
+	}
+	note("the claim reports %s and its files are intact (sha256)", capacity)
+
 	step("The controller endpoint without Substrate's client certificate (the proxy %s-0:%d, server name %s)", workspacesProxyStatefulSet, workspacesProxyPort, workspacesControllerServerName())
 	if err := proveWorkspacesProxyRefuses(ctx); err != nil {
 		return err
@@ -136,7 +151,7 @@ func WorkspacesTest(cfg *config.Config, opts WorkspacesTestOptions) error {
 		return err
 	}
 
-	fmt.Println("\nWorkspaces proof passed: PVC -> snapshot -> restore with matching files, the controller endpoint refused without Substrate's certificate, an actor's external volume kept across pause and resume and gone with the actor.")
+	fmt.Println("\nWorkspaces proof passed: PVC -> snapshot -> restore with matching files -> online expansion with the files intact, the controller endpoint refused without Substrate's certificate, an actor's external volume kept across pause and resume and gone with the actor.")
 	return nil
 }
 
@@ -210,13 +225,13 @@ func workspacesTestPVC(name, fromSnapshot string) *corev1.PersistentVolumeClaim 
 // substrate worker's taint needs the toleration).
 func workspacesTestPod(name, pvc, node string, onWorker bool, script string) *corev1.Pod {
 	pod := probePod(name, probeImage, []string{"sh", "-ec", script})
-	pod.Spec.Volumes = []corev1.Volume{{Name: "data", VolumeSource: corev1.VolumeSource{
+	pod.Spec.Volumes = []corev1.Volume{{Name: workspacesTestDataVolume, VolumeSource: corev1.VolumeSource{
 		PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: pvc},
 	}}}
-	pod.Spec.Containers[0].VolumeMounts = []corev1.VolumeMount{{Name: "data", MountPath: "/data"}}
+	pod.Spec.Containers[0].VolumeMounts = []corev1.VolumeMount{{Name: workspacesTestDataVolume, MountPath: "/data"}}
 	pod.Spec.NodeSelector = map[string]string{"kubernetes.io/hostname": node}
 	if onWorker {
-		pod.Spec.Tolerations = []corev1.Toleration{{Key: config.SubstrateNodeKey, Operator: corev1.TolerationOpEqual, Value: "true", Effect: corev1.TaintEffectNoSchedule}}
+		pod.Spec.Tolerations = []corev1.Toleration{substrateNodeToleration()}
 	}
 	return pod
 }
@@ -260,6 +275,48 @@ func workspacesReadRestored(ctx context.Context, node string, onWorker bool, tim
 		return "", fmt.Errorf("the reader pod: %w\n%s", err, out)
 	}
 	return strings.TrimSpace(out), nil
+}
+
+// workspacesExpandSource raises the source claim's request to the expanded
+// size and mounts it in a pod: the driver's controller expands the volume,
+// the node side follows at the mount, and the claim's reported capacity is
+// the expanded size afterwards. Returns that capacity and the files' sums
+// read after the expansion.
+func workspacesExpandSource(ctx context.Context, node string, onWorker bool, timeout time.Duration) (string, string, error) {
+	k, err := labKube()
+	if err != nil {
+		return "", "", err
+	}
+	claims := k.clientset.CoreV1().PersistentVolumeClaims(workspacesTestNamespace)
+	patch := fmt.Sprintf(`{"spec":{"resources":{"requests":{"storage":%q}}}}`, workspacesTestExpanded)
+	if _, err := claims.Patch(ctx, workspacesTestSourcePVC, types.MergePatchType, []byte(patch), metav1.PatchOptions{FieldManager: applyFieldManager}); err != nil {
+		return "", "", fmt.Errorf("expanding the PVC %s/%s to %s: %w", workspacesTestNamespace, workspacesTestSourcePVC, workspacesTestExpanded, err)
+	}
+	out, err := runPod(ctx, workspacesTestNamespace, workspacesTestPod("expanded", workspacesTestSourcePVC, node, onWorker, "cd /data && sha256sum a.bin b.bin c.txt"), timeout)
+	if err != nil {
+		return "", "", fmt.Errorf("the pod on the expanded PVC: %w\n%s", err, out)
+	}
+	want := resource.MustParse(workspacesTestExpanded)
+	var last *corev1.PersistentVolumeClaim
+	if err := wait.PollUntilContextTimeout(ctx, time.Second, timeout, true, func(ctx context.Context) (bool, error) {
+		pvc, err := claims.Get(ctx, workspacesTestSourcePVC, metav1.GetOptions{})
+		if err != nil {
+			return false, nil
+		}
+		last = pvc
+		got, ok := pvc.Status.Capacity[corev1.ResourceStorage]
+		return ok && got.Cmp(want) >= 0, nil
+	}); err != nil {
+		reported := stateNotRead
+		if last != nil {
+			reported = last.Status.Capacity.Storage().String()
+			for _, c := range last.Status.Conditions {
+				reported += fmt.Sprintf("; %s=%s %s", c.Type, c.Status, c.Message)
+			}
+		}
+		return "", "", fmt.Errorf("the PVC %s/%s does not report %s after %s (%s): the resizer's log in %s", workspacesTestNamespace, workspacesTestSourcePVC, workspacesTestExpanded, timeout, reported, workspacesNamespace)
+	}
+	return last.Status.Capacity.Storage().String(), strings.TrimSpace(out), nil
 }
 
 // waitPVCBound waits for a claim of the proof's namespace to be Bound.

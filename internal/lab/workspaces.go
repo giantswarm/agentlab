@@ -10,6 +10,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -352,11 +353,11 @@ func workspacesCSIDriverConfig() *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "ate.dev/v1alpha1",
 		"kind":       "CSIDriverConfig",
-		"metadata": map[string]any{
-			"name":   workspacesCSIDriver,
-			"labels": map[string]any{"app.kubernetes.io/managed-by": managedByAgentlabValue},
+		crMetadata: map[string]any{
+			nameKey:  workspacesCSIDriver,
+			"labels": map[string]any{managedByLabel: managedByAgentlabValue},
 		},
-		"spec": map[string]any{
+		crSpec: map[string]any{
 			"driverName":         workspacesCSIDriver,
 			"controllerEndpoint": v.ControllerEndpoint,
 			"nodeSocketOverride": v.NodeSocket,
@@ -632,7 +633,7 @@ func readWorkspacesStatus(ctx context.Context) (*WorkspacesStatus, error) {
 // readState words a workload read's failure: missing, or the error.
 func readState(err error) string {
 	if apierrors.IsNotFound(err) {
-		return "missing"
+		return stateMissing
 	}
 	return "unreadable: " + err.Error()
 }
@@ -687,8 +688,21 @@ func workspacesHint(cfg *config.Config, chartCarries bool) string {
 		"  StorageClass and VolumeSnapshotClass %s. Proof: `agentlab workspaces-test --storage-only`.", node, registered, workspacesStorageClass)
 }
 
-// stateNotRead words a status that could not be read.
-const stateNotRead = "not read"
+// stateNotRead and stateMissing word a status that could not be read and
+// an object that is not there.
+const (
+	stateNotRead = "not read"
+	stateMissing = "missing"
+)
+
+// substrateNodeTaintValue is the value of the substrate workers' taint and
+// label (config.SubstrateNodeKey), what a pod on them tolerates.
+const substrateNodeTaintValue = "true"
+
+// substrateNodeToleration tolerates the substrate workers' taint.
+func substrateNodeToleration() corev1.Toleration {
+	return corev1.Toleration{Key: config.SubstrateNodeKey, Operator: corev1.TolerationOpEqual, Value: substrateNodeTaintValue, Effect: corev1.TaintEffectNoSchedule}
+}
 
 // gvrVolumeSnapshots is the snapshot API the proof drives.
 var gvrVolumeSnapshots = schema.GroupVersionResource{Group: "snapshot.storage.k8s.io", Version: "v1", Resource: "volumesnapshots"}
