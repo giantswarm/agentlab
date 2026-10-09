@@ -19,6 +19,13 @@ $(GOLANGCI_LINT_DIR)/golangci-lint:
 lint: $(GOLANGCI_LINT_DIR)/golangci-lint
 lint: export PATH := $(GOLANGCI_LINT_DIR):$(PATH)
 
+# The generated `install` links with -extldflags -static on linux but leaves cgo
+# on, so the net package resolves hosts through glibc's getaddrinfo, whose NSS
+# modules cannot load into a static binary: every command that resolves a host
+# crashes with SIGSEGV. The build-* targets and the release binaries are built
+# with CGO_ENABLED=0 and use the pure-Go resolver; `install` does the same.
+install: export CGO_ENABLED := 0
+
 # Commit of giantswarm/kagent-upstream the kagent.api.v1alpha1 protos under
 # hack/kagent-proto/ are copied from: the tag of the kagent line the platform
 # release the lab follows resolved when they were last copied. Bump it, run
