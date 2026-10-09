@@ -379,7 +379,7 @@ func ensureWorkspacesCSIDriverConfig(ctx context.Context, chartCarries bool) err
 	}
 	gvr, err := gvrFor(csiDriverConfigResource)
 	if err != nil {
-		return fmt.Errorf("Substrate's CSIDriverConfig API is not served (%v): the agents runtime brings it; is platform.agents on and the substrate-crds component installed?", err)
+		return fmt.Errorf("the CSIDriverConfig API of Substrate is not served (%v): the agents runtime brings it; is platform.agents on and the substrate-crds component installed?", err)
 	}
 	k, err := labKube()
 	if err != nil {
@@ -560,7 +560,7 @@ func statefulSetReady(s *appsv1.StatefulSet) bool {
 // statefulSetStatus words a StatefulSet's rollout state for an error.
 func statefulSetStatus(s *appsv1.StatefulSet) string {
 	if s == nil {
-		return "not read"
+		return stateNotRead
 	}
 	return fmt.Sprintf("%d of %d replicas ready, %d updated", s.Status.ReadyReplicas, s.Status.Replicas, s.Status.UpdatedReplicas)
 }
@@ -686,6 +686,9 @@ func workspacesHint(cfg *config.Config, chartCarries bool) string {
 	return fmt.Sprintf("  Workspace storage: the CSI snapshot controller and the CSI hostpath driver on %s behind its mTLS proxy, %s;\n"+
 		"  StorageClass and VolumeSnapshotClass %s. Proof: `agentlab workspaces-test --storage-only`.", node, registered, workspacesStorageClass)
 }
+
+// stateNotRead words a status that could not be read.
+const stateNotRead = "not read"
 
 // gvrVolumeSnapshots is the snapshot API the proof drives.
 var gvrVolumeSnapshots = schema.GroupVersionResource{Group: "snapshot.storage.k8s.io", Version: "v1", Resource: "volumesnapshots"}

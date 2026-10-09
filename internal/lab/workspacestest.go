@@ -277,7 +277,7 @@ func waitPVCBound(ctx context.Context, name string, timeout time.Duration) error
 		last = pvc
 		return pvc.Status.Phase == corev1.ClaimBound, nil
 	}); err != nil {
-		phase := "not read"
+		phase := stateNotRead
 		if last != nil {
 			phase = string(last.Status.Phase)
 		}
@@ -293,15 +293,17 @@ func workspacesSnapshotSource(ctx context.Context, timeout time.Duration) error 
 	if err != nil {
 		return err
 	}
-	snapshot := &unstructured.Unstructured{Object: map[string]any{
-		"apiVersion": gvrVolumeSnapshots.Group + "/" + gvrVolumeSnapshots.Version,
-		"kind":       "VolumeSnapshot",
-		"metadata":   map[string]any{"name": workspacesTestSnapshot, "namespace": workspacesTestNamespace},
-		"spec": map[string]any{
-			"volumeSnapshotClassName": workspacesSnapshotClass,
-			"source":                  map[string]any{"persistentVolumeClaimName": workspacesTestSourcePVC},
-		},
-	}}
+	snapshot := &unstructured.Unstructured{Object: map[string]any{}}
+	snapshot.SetAPIVersion(gvrVolumeSnapshots.Group + "/" + gvrVolumeSnapshots.Version)
+	snapshot.SetKind("VolumeSnapshot")
+	snapshot.SetNamespace(workspacesTestNamespace)
+	snapshot.SetName(workspacesTestSnapshot)
+	if err := unstructured.SetNestedMap(snapshot.Object, map[string]any{
+		"volumeSnapshotClassName": workspacesSnapshotClass,
+		"source":                  map[string]any{"persistentVolumeClaimName": workspacesTestSourcePVC},
+	}, crSpec); err != nil {
+		return err
+	}
 	snapshots := k.dynamic.Resource(gvrVolumeSnapshots).Namespace(workspacesTestNamespace)
 	if _, err := snapshots.Create(ctx, snapshot, metav1.CreateOptions{FieldManager: applyFieldManager}); err != nil {
 		return fmt.Errorf("creating the VolumeSnapshot %s/%s: %w", workspacesTestNamespace, workspacesTestSnapshot, err)
@@ -595,7 +597,7 @@ func waitActorState(ctx context.Context, api *ateAPI, ref *ateapi.ObjectRef, wan
 		return nil, crash
 	}
 	if err != nil {
-		state := "not read"
+		state := stateNotRead
 		if last != nil {
 			state = last.GetStatus().GetState().String()
 		}
