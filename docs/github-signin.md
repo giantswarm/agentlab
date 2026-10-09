@@ -113,6 +113,14 @@ a demo or for using the portal as yourself.
   GitHub account; an account without one is refused at the connector with
   that reason.
 
+## Changing the App's permissions
+
+A GitHub App's permission change does not reach authorizations people already
+gave it: Dex's `GET /user/emails` keeps answering 403 for them until they
+re-authorize. Every signed-in person revokes the App (GitHub → Settings →
+Applications → Authorized GitHub Apps → revoke) and signs in again, which
+asks for consent with the new permissions.
+
 ## Rotating or removing
 
 - A rotated client secret: place the new value into the same Secret key and
