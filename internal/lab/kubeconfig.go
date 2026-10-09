@@ -112,7 +112,7 @@ func refreshKubeconfigCopies(clusterName string, fresh []byte) {
 		if path == "" || err != nil || abs == own || (home != "" && abs == filepath.Join(home, ".kube", "config")) {
 			continue
 		}
-		raw, err := os.ReadFile(abs) // #nosec G304 -- a file the shell's KUBECONFIG names, read to see whether it is the lab's own
+		raw, err := os.ReadFile(abs) // #nosec G304 G703 -- a file the shell's KUBECONFIG names, read to see whether it is the lab's own
 		if err != nil {
 			continue
 		}
@@ -132,12 +132,14 @@ func refreshKubeconfigCopies(clusterName string, fresh []byte) {
 // the same directory and one rename: a reader of the file sees the previous
 // content or the new one, never half a file.
 func replaceFile(path string, data []byte) error {
+	// path is a kubeconfig the shell's KUBECONFIG names, the
+	// person's own file, rewritten only when it is a copy of the lab's.
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	if err := os.WriteFile(tmp, data, 0o600); err != nil { // #nosec G703 -- see above
 		return err
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
+	if err := os.Rename(tmp, path); err != nil { // #nosec G703 -- see above
+		_ = os.Remove(tmp) // #nosec G703 -- see above
 		return err
 	}
 	return nil
@@ -283,7 +285,7 @@ func dropStaleKindContext(clusterName string, fresh []byte) {
 			continue
 		}
 		seen[abs] = true
-		raw, err := os.ReadFile(abs) // #nosec G304 -- a kubeconfig the shell reads by default, read to see whether it holds this lab's stale entry
+		raw, err := os.ReadFile(abs) // #nosec G304 G703 -- a kubeconfig the shell reads by default, read to see whether it holds this lab's stale entry
 		if err != nil {
 			continue
 		}
