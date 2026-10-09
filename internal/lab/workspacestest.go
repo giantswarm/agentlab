@@ -24,7 +24,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/giantswarm/agentlab/internal/config"
-	ateapi "github.com/giantswarm/agentlab/internal/kagent/gen"
 )
 
 // WorkspacesTestOptions tunes the workspaces proof.
@@ -57,8 +56,6 @@ const (
 	workspacesTestVolume   = "workspace"
 	// workspacesTestMountPath is where a proof pod sees its part of the volume.
 	workspacesTestMountPath = "/workspace"
-	// workspacesSharedMountIssue is why the actor-level mount is skipped.
-	workspacesSharedMountIssue = "giantswarm/substrate#227"
 )
 
 // WorkspacesTest is the headless workspaces proof: the storage in place -> a
@@ -68,8 +65,8 @@ const (
 // links intact, the mirrors mount refusing writes, nothing of the other
 // session visible -> a read-only mount of the whole volume refusing writes ->
 // the controller endpoint refused without Substrate's client certificate ->
-// the actor-level mount, skipped until the Substrate line carries it ->
-// everything removed, the volume's directory gone from the export.
+// two actors through ate-api-server on the volume at their own session
+// directories (workspacesactors.go) -> everything removed, the volume's directory gone from the export.
 func WorkspacesTest(cfg *config.Config, opts WorkspacesTestOptions) error {
 	if !cfg.WorkspacesEnabled() {
 		return fmt.Errorf("platform.workspaces is off in %s — `agentlab configure --workspaces` turns it on, then `agentlab platform`", config.File)
@@ -149,8 +146,9 @@ func WorkspacesTest(cfg *config.Config, opts WorkspacesTestOptions) error {
 		return err
 	}
 
-	step("An actor mounting a session directory of the volume through ate-api-server")
-	if err := noteWorkspacesActorMountSkipped(ctx); err != nil {
+	step("Two actors through ate-api-server on the volume at their own session directories, the mirrors read-only")
+	actors, err := proveWorkspacesActorMount(ctx, timeout)
+	if err != nil {
 		return err
 	}
 
@@ -161,7 +159,11 @@ func WorkspacesTest(cfg *config.Config, opts WorkspacesTestOptions) error {
 	}
 	note("no PersistentVolume of the proof left; nothing of it under %s on %s", workspacesExportDir, node)
 
-	fmt.Println("\nWorkspaces proof passed: a read-write-many claim, a shared clone per session sub-path with modes and links intact, the sessions isolated, the read-only mounts refusing writes, the controller endpoint refused without Substrate's certificate, everything removed.")
+	actorLevel := "the actor-level mount skipped (the Substrate line refuses existing volumes)"
+	if actors {
+		actorLevel = "two actors on the volume at their own session directories through ate-api-server"
+	}
+	fmt.Printf("\nWorkspaces proof passed: a read-write-many claim, a shared clone per session sub-path with modes and links intact, the sessions isolated, the read-only mounts refusing writes, the controller endpoint refused without Substrate's certificate, %s, everything removed.\n", actorLevel)
 	return nil
 }
 
@@ -467,27 +469,4 @@ func selfSignedClientCert(spiffeID string) (tls.Certificate, error) {
 		return tls.Certificate{}, err
 	}
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, nil
-}
-
-// noteWorkspacesActorMountSkipped is the actor-level half until the
-// Substrate line mounts an existing read-write-many volume at a sub-path for
-// an actor: ate-api-server is reached as the ate-client ServiceAccount (the
-// client half the mount will use), the driver's registration is read, and
-// the mount itself is skipped with its reason.
-func noteWorkspacesActorMountSkipped(ctx context.Context) error {
-	api, err := dialAteAPI(ctx)
-	if err != nil {
-		return err
-	}
-	defer api.Close()
-	if _, err := api.GetAtespace(ctx, &ateapi.GetAtespaceRequest{Atespace: &ateapi.ObjectRef{Name: kagentNamespace}}); err != nil {
-		return fmt.Errorf("reading the atespace %s through ate-api-server: %w", kagentNamespace, err)
-	}
-	registered := "not registered with Substrate: no CSIDriverConfig " + workspacesCSIDriver
-	if clusterObjectExists(ctx, csiDriverConfigResource, workspacesCSIDriver) {
-		registered = "registered with Substrate (CSIDriverConfig " + workspacesCSIDriver + ")"
-	}
-	note("ate-api-server reached as the ate-client ServiceAccount, atespace %s read; the driver is %s", kagentNamespace, registered)
-	note("skipped: the Substrate line carries no mount of an existing read-write-many volume at a sub-path yet (%s); the actor-level mount runs once it does", workspacesSharedMountIssue)
-	return nil
 }

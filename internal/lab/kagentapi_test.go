@@ -1024,7 +1024,7 @@ func TestSubstrateConversions(t *testing.T) {
 		Metadata:      &ateapi.ResourceMetadata{Atespace: kagentNamespace, Name: "a1"},
 		ActorTemplate: &ateapi.ObjectRef{Atespace: kagentNamespace, Name: "t"},
 		Status: &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapi.WorkerAssignment{
-			WorkerNamespace: kagentNamespace, WorkerPod: testWorkerPod, WorkerPodIp: testWorkerIP,
+			WorkerNamespace: kagentNamespace, WorkerPod: testWorkerPod, WorkerPodIps: []string{testWorkerIP, "fd00::1"},
 		}},
 	})
 	if want := (substrateActor{id: "a1", templateNamespace: kagentNamespace, templateName: "t", state: "RUNNING", workerNamespace: kagentNamespace, workerPod: testWorkerPod, workerIP: testWorkerIP}); got != want {

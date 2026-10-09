@@ -432,13 +432,18 @@ func templateOf(t *ateapi.ActorTemplate) substrateTemplate {
 }
 
 // actorOf reads an actor's template, state (the ActorState without its enum
-// prefix: RUNNING) and worker assignment.
+// prefix: RUNNING) and worker assignment, the worker pod's IP in the
+// cluster's primary family.
 func actorOf(actor *ateapi.Actor) substrateActor {
 	worker := actor.GetStatus().GetWorkerAssignment()
+	var workerIP string
+	if ips := worker.GetWorkerPodIps(); len(ips) > 0 {
+		workerIP = ips[0]
+	}
 	return substrateActor{
 		id: actor.GetMetadata().GetName(), templateNamespace: actor.GetActorTemplate().GetAtespace(), templateName: actor.GetActorTemplate().GetName(),
 		state:           strings.TrimPrefix(actor.GetStatus().GetState().String(), "ACTOR_STATE_"),
-		workerNamespace: worker.GetWorkerNamespace(), workerPod: worker.GetWorkerPod(), workerIP: worker.GetWorkerPodIp(),
+		workerNamespace: worker.GetWorkerNamespace(), workerPod: worker.GetWorkerPod(), workerIP: workerIP,
 	}
 }
 
