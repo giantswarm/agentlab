@@ -45,7 +45,7 @@ func stubKindClusters(t *testing.T, names ...string) {
 func TestListLabs(t *testing.T) {
 	up := writeLab(t, "clusterName: up\n")
 	down := writeLab(t, "clusterName: down\nplatform:\n  enabled: true\n  gatewayPort: 8443\n  observability: false\nbackstage:\n  enabled: false\n")
-	stubListProbes(t, map[string]string{"up": stateRunning, "down": "not created"}, map[string]string{up: caTrusted, down: caNone})
+	stubListProbes(t, map[string]string{"up": stateRunning, "down": stateNotCreated}, map[string]string{up: caTrusted, down: caNone})
 
 	listed := ListLabs([]labs.Lab{{Name: "down", Dir: down}, {Name: "up", Dir: up}}, up)
 	if len(listed) != 2 {
@@ -55,7 +55,7 @@ func TestListLabs(t *testing.T) {
 	if d.Current || !u.Current {
 		t.Errorf("Current = %v/%v, want only up", d.Current, u.Current)
 	}
-	if u.State != stateRunning || d.State != "not created" {
+	if u.State != stateRunning || d.State != stateNotCreated {
 		t.Errorf("states = %q/%q", u.State, d.State)
 	}
 	if got := d.URLs["muster"]; !strings.HasSuffix(got, ":8443/mcp") {
@@ -167,27 +167,28 @@ func TestListWithoutDocker(t *testing.T) {
 // existing lab is refused with the lab's registered directory and --lab; a
 // checkout with certs, and a lab not created yet, pass.
 func TestRequireLabCerts(t *testing.T) {
-	real := writeLab(t, "clusterName: lab-1\n")
+	const existing = "lab-1"
+	real := writeLab(t, "clusterName: "+existing+"\n")
 	registry := t.TempDir()
 	prevDir := labs.Dir
 	labs.Dir = func() (string, error) { return registry, nil }
 	t.Cleanup(func() { labs.Dir = prevDir })
-	if err := labs.Register("lab-1", real); err != nil {
+	if err := labs.Register(existing, real); err != nil {
 		t.Fatal(err)
 	}
-	stubListProbes(t, map[string]string{"lab-1": stateRunning, "fresh": "not created"}, nil)
+	stubListProbes(t, map[string]string{existing: stateRunning, "newlab": stateNotCreated}, nil)
 
 	t.Chdir(t.TempDir())
-	err := RequireLabCerts(&config.Config{ClusterName: "lab-1"})
+	err := RequireLabCerts(&config.Config{ClusterName: existing})
 	if err == nil {
 		t.Fatal("a checkout without certs/ for an existing lab was accepted")
 	}
-	for _, want := range []string{real, "--lab lab-1", "certs/ca.crt"} {
+	for _, want := range []string{real, "--lab " + existing, "certs/ca.crt"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal %q does not name %q", err, want)
 		}
 	}
-	if err := RequireLabCerts(&config.Config{ClusterName: "fresh"}); err != nil {
+	if err := RequireLabCerts(&config.Config{ClusterName: "newlab"}); err != nil {
 		t.Errorf("a lab that is not created yet is refused: %v", err)
 	}
 
@@ -197,7 +198,7 @@ func TestRequireLabCerts(t *testing.T) {
 	if err := os.WriteFile(caCertPath, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := RequireLabCerts(&config.Config{ClusterName: "lab-1"}); err != nil {
+	if err := RequireLabCerts(&config.Config{ClusterName: existing}); err != nil {
 		t.Errorf("a checkout with certs/ is refused: %v", err)
 	}
 }

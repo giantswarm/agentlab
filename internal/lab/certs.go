@@ -453,7 +453,7 @@ func RequireLabCerts(cfg *config.Config) error {
 		return nil
 	}
 	switch labClusterState(cfg.ClusterName) {
-	case "not created", "unknown":
+	case stateNotCreated, stateUnknown:
 		return nil // a lab not up yet mints its certs on `up`; docker silent: its own errors follow
 	}
 	here, _ := os.Getwd()

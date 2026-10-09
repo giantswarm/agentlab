@@ -14,6 +14,9 @@ import (
 // fakeKindKubeconfig is what the stand-in for kind's kubeconfig read answers:
 // the shape of the real output, with the admin client certificate a token
 // kubeconfig must not inherit.
+// kindAgentlabEntry is the fake kubeconfig's context, cluster and user name.
+const kindAgentlabEntry = "kind-agentlab"
+
 const fakeKindKubeconfig = `apiVersion: v1
 kind: Config
 clusters:
@@ -98,7 +101,7 @@ func TestUseClusterKubeconfig(t *testing.T) {
 	if got := loader.ConfigAccess().GetExplicitFile(); got != labKubeconfig() {
 		t.Errorf("the clients read %q, want the exported %q", got, labKubeconfig())
 	}
-	if kc, err := loader.RawConfig(); err != nil || kc.CurrentContext != "kind-agentlab" {
+	if kc, err := loader.RawConfig(); err != nil || kc.CurrentContext != kindAgentlabEntry {
 		t.Errorf("the clients see current-context %q (%v), want kind's from the exported file", kc.CurrentContext, err)
 	}
 
@@ -106,7 +109,7 @@ func TestUseClusterKubeconfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if name != "kind-agentlab" || cluster["server"] != fakeKindServer {
+	if name != kindAgentlabEntry || cluster["server"] != fakeKindServer {
 		t.Errorf("cluster entry = %q %v", name, cluster)
 	}
 	if *calls != 1 {
@@ -253,7 +256,7 @@ users:
 		t.Fatal(err)
 	}
 	got := string(raw)
-	for _, gone := range []string{"kind-agentlab", "b2xk"} {
+	for _, gone := range []string{kindAgentlabEntry, "b2xk"} {
 		if strings.Contains(got, gone) {
 			t.Errorf("the stale %q entry survived:\n%s", gone, got)
 		}

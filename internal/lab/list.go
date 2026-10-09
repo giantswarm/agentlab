@@ -37,6 +37,12 @@ type ListedLab struct {
 	Unregistered bool `json:"unregistered,omitempty"`
 }
 
+// The cluster states `list` reports besides the containers' own.
+const (
+	stateNotCreated = "not created"
+	stateUnknown    = "unknown"
+)
+
 // The CA column's values.
 const (
 	caTrusted   = "trusted"
@@ -51,9 +57,9 @@ var labClusterState = func(cluster string) string {
 	cs, err := clusterContainers(cluster)
 	switch {
 	case err != nil:
-		return "unknown"
+		return stateUnknown
 	case len(cs) == 0:
-		return "not created"
+		return stateNotCreated
 	}
 	for _, c := range cs {
 		if c.state == stateRunning {
