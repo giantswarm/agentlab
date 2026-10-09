@@ -675,6 +675,12 @@ container. Two verdict lines come of the record:
 agentlab skills-test --skill-fixture
 ```
 
+The fixture run is also the `--skill-secret` path with a credential the lab
+generates: the template names the proof's Secret as the source's
+`credentialRef` exactly as `--skill-secret` names yours, and the run notes
+the verdict `--skill-secret` reaches from the exit codes next to the
+record's. No person's GitHub token enters the lab for it.
+
 On the public default and with `--skill-secret` the fixture is not in the
 path, and the second turn probes the source's own host (GitHub). Its status
 line reports both exit codes and git's error line of the placeholder

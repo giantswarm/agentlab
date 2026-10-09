@@ -1063,8 +1063,14 @@ func skillsSessionRequest(cfg *config.Config, token string, host *skillHostFixtu
 		}
 		return verdict, "", err
 	}
+	// The exit codes judged as --skill-secret judges a host it cannot read:
+	// a second view of the same requests, the record decides.
 	if perr != nil {
 		note("%v — the fixture's record decides", perr)
+	} else if byExit, credentialSent, err := hostProbeVerdict(fixture.Repo, true, probe); err != nil {
+		note("judged by the exit codes alone (--skill-secret's verdict): %v", err)
+	} else {
+		note("judged by the exit codes alone (--skill-secret's verdict): credential sent %v — %s", credentialSent, byExit)
 	}
 	requests, err := host.requests()
 	if err != nil {
