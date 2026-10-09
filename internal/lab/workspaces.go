@@ -350,24 +350,22 @@ func waitWorkspacesProxy(ctx context.Context) error {
 // values render it: the lab applies it while the chart cannot.
 func workspacesCSIDriverConfig() *unstructured.Unstructured {
 	v := workspacesValuesFor(config.Default())
-	return &unstructured.Unstructured{Object: map[string]any{
-		"apiVersion": "ate.dev/v1alpha1",
-		"kind":       "CSIDriverConfig",
-		crMetadata: map[string]any{
-			nameKey:  workspacesCSIDriver,
-			"labels": map[string]any{managedByLabel: managedByAgentlabValue},
+	u := &unstructured.Unstructured{Object: map[string]any{}}
+	u.SetAPIVersion("ate.dev/v1alpha1")
+	u.SetKind("CSIDriverConfig")
+	u.SetName(workspacesCSIDriver)
+	u.SetLabels(map[string]string{managedByLabel: managedByAgentlabValue})
+	u.Object[crSpec] = map[string]any{
+		"driverName":         workspacesCSIDriver,
+		"controllerEndpoint": v.ControllerEndpoint,
+		"nodeSocketOverride": v.NodeSocket,
+		"tls": map[string]any{
+			"enabled":        true,
+			"usePodIdentity": true,
+			"serverName":     v.ServerName,
 		},
-		crSpec: map[string]any{
-			"driverName":         workspacesCSIDriver,
-			"controllerEndpoint": v.ControllerEndpoint,
-			"nodeSocketOverride": v.NodeSocket,
-			"tls": map[string]any{
-				"enabled":        true,
-				"usePodIdentity": true,
-				"serverName":     v.ServerName,
-			},
-		},
-	}}
+	}
+	return u
 }
 
 // ensureWorkspacesCSIDriverConfig applies the lab's CSIDriverConfig after

@@ -434,7 +434,7 @@ func workspacesProxyRefusal(ctx context.Context, addr string, c *tls.Config) (st
 	if err != nil {
 		return err.Error(), nil
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 	if _, err := conn.Write([]byte("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")); err != nil {
 		return err.Error(), nil

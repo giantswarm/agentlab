@@ -75,18 +75,31 @@ of the proof yet. `--ready-timeout` bounds each wait (default 5m).
 ## By hand
 
 The same template through `kubectl ate` (Substrate's CLI against
-ate-api-server), once `agentlab login` gave you the lab's kubeconfig:
+ate-api-server, which port-forwards by itself), with the lab's kubeconfig in
+`KUBECONFIG`; the manifest is the protojson shape of an `ActorTemplate` (the
+proof's: one busybox container, pinned by digest as Substrate requires,
+appending the date to `/workspace/heartbeat`; a `workspace` volume with an
+`externalVolumeTemplate` of `100Mi` on `agentlab-workspaces`; the worker
+selector `kagent.dev/worker-pool: kagent-default`; `sandboxConfig`
+`SANDBOX_CLASS_GVISOR` / `gvisor-default`; `snapshotConfig` `onPause` and
+`onCommit` `SNAPSHOT_CONTENT_SCOPE_FULL` with a `storageLocation` under the
+lab's snapshot bucket). An actor is created suspended; `resume` boots it.
 
 ```sh
 kubectl ate create atespace scratch
-kubectl ate create actortemplate scratch/heartbeat -f template.yaml   # the proof's template
-kubectl ate create actor scratch/heartbeat --template heartbeat
-kubectl ate get actor scratch/heartbeat          # RUNNING, the volume id in its status
-kubectl ate pause actor scratch/heartbeat
-kubectl ate resume actor scratch/heartbeat
-kubectl ate delete actor scratch/heartbeat
+kubectl ate create actor-template -f template.yaml      # metadata.atespace: scratch, metadata.name: heartbeat
+kubectl ate create actor heartbeat --template=heartbeat -a scratch
+kubectl ate resume actor heartbeat -a scratch           # ACTOR_STATE_RUNNING, the worker pod named
+kubectl ate get actor heartbeat -a scratch -o json      # status.actorVolumes[0].storageVolumeId
+kubectl ate pause actor heartbeat -a scratch            # ACTOR_STATE_PAUSED
+kubectl ate resume actor heartbeat -a scratch
+kubectl ate delete actor heartbeat -a scratch --any-state
+kubectl ate delete actor-template heartbeat -a scratch
+kubectl ate delete atespace scratch
 ```
 
 The volume's bytes are on the driver's node under
-`/var/lib/csi-hostpath-data/<volume id>/` (`docker exec agentlab-control-plane
-ls /var/lib/csi-hostpath-data`).
+`/var/lib/csi-hostpath-data/<storageVolumeId>/` (`docker exec
+agentlab-control-plane wc -l /var/lib/csi-hostpath-data/<id>/heartbeat` grows
+while the actor runs, stands still while it is paused, and the directory is
+gone once the actor is deleted).

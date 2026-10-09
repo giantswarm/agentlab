@@ -223,9 +223,10 @@ func TestWorkspacesManifest(t *testing.T) {
 
 // The status line words the pieces in place.
 func TestWorkspacesStatusString(t *testing.T) {
-	s := &WorkspacesStatus{SnapshotController: "rolled out", Driver: conditionReady, Proxy: conditionReady, Node: "agentlab-control-plane", StorageClass: true, SnapshotClass: true, CSIDriverConfig: "the lab"}
+	node := config.Default().ControlPlaneNode()
+	s := &WorkspacesStatus{SnapshotController: "rolled out", Driver: conditionReady, Proxy: conditionReady, Node: node, StorageClass: true, SnapshotClass: true, CSIDriverConfig: "the lab"}
 	got := s.String()
-	for _, want := range []string{"snapshot controller rolled out", "CSI driver " + workspacesCSIDriver + " Ready on agentlab-control-plane", "mTLS proxy Ready", "StorageClass " + workspacesStorageClass, "VolumeSnapshotClass " + workspacesSnapshotClass, "CSIDriverConfig " + workspacesCSIDriver + " by the lab"} {
+	for _, want := range []string{"snapshot controller rolled out", "CSI driver " + workspacesCSIDriver + " Ready on " + node, "mTLS proxy Ready", "StorageClass " + workspacesStorageClass, "VolumeSnapshotClass " + workspacesSnapshotClass, "CSIDriverConfig " + workspacesCSIDriver + " by the lab"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("status %q lacks %q", got, want)
 		}
