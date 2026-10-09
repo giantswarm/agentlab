@@ -18,18 +18,19 @@ const (
 // agentChartMajors is every range or version the tests probe and the one
 // major it admits, -1 for none or several.
 var agentChartMajors = map[string]int{
-	agentChartRange:    1,
-	">=1.0.0 <1.5.0":   1,
-	testChartLine1:     1,
-	"1.4.4":            1,
-	"2.x":              2,
-	testChartLine2:     2,
-	"2.1.0":            2,
-	"3.0.0":            3,
-	">=0.2.1 <1.0.0":   0,
-	"x.x.x":            -1,
-	">=1.0.0 <3.0.0":   -1,
-	"not a constraint": -1,
+	agentChartRange:      1,
+	">=1.0.0 <1.5.0":     1,
+	testChartLine1:       1,
+	"1.4.4":              1,
+	"2.x":                2,
+	testChartLine2:       2,
+	">=2.0.0-0 <3.0.0-0": 2,
+	"2.1.0":              2,
+	"3.0.0":              3,
+	">=0.2.1 <1.0.0":     0,
+	"x.x.x":              -1,
+	">=1.0.0 <3.0.0":     -1,
+	"not a constraint":   -1,
 }
 
 func TestAgentChartMajor(t *testing.T) {
