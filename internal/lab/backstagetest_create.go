@@ -236,7 +236,7 @@ func assertManifests(m agentManifests, spec agentSpec, info *agentManagerInfo) e
 		return fmt.Errorf("manifests.values.agent.harness is %q, wanted get_info's Harness %s", got, info.Harness.Name)
 	}
 	if runtime, found := agent["runtime"]; found {
-		return fmt.Errorf("manifests.values.agent.runtime=%v is set: chart 1.x has no runtime (the platform Harness runs every agent)", runtime)
+		return fmt.Errorf("manifests.values.agent.runtime=%v is set: the agent chart has no runtime (the platform Harness runs every agent)", runtime)
 	}
 	if got, _ := agent[nameKey].(string); got != spec.Name {
 		return fmt.Errorf("manifests.values.agent.name is %q, wanted %s", got, spec.Name)
@@ -457,8 +457,8 @@ func proveCreatePath(primary, viewer *portalSession) (agentSpec, *agentTemplate,
 	if err != nil {
 		return fail(err)
 	}
-	if len(status.Template.Harnesses) == 0 || status.Template.Harnesses[0].Harness != info.Harness.Name || status.Template.Harnesses[0].Ready == nil || !*status.Template.Harnesses[0].Ready {
-		return fail(fmt.Errorf("get_agent_status says %s — %s (template %+v), which is not Ready on Harness %s as the Agent's status reports", status.Verdict, status.Summary, status.Template, info.Harness.Name))
+	if on, ready := status.readyOn(); on != info.Harness.Name || !ready {
+		return fail(fmt.Errorf("get_agent_status says %s — %s (Ready=%v on Harness %q), which is not Ready on Harness %s as the Agent's status reports", status.Verdict, status.Summary, ready, on, info.Harness.Name))
 	}
 	note("%s: %s", status.Verdict, excerpt(status.Summary, 160))
 	verdicts = append(verdicts, fmt.Sprintf("PASS: get_agent_status through the portal agrees with the Agent's status — %s on Harness %s", status.Verdict, info.Harness.Name))

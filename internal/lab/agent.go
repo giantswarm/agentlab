@@ -754,7 +754,7 @@ func readAgentReadinessOn(name, harness string) (agentReadiness, error) {
 		if r.release == nil {
 			r.reason = "neither a HelmRelease nor an AgentTemplate " + name + " yet"
 		} else if r.reason == "" {
-			r.reason = fmt.Sprintf("HelmRelease %s is Ready but the AgentTemplate is not rendered yet", name)
+			r.reason = fmt.Sprintf("HelmRelease %s is Ready but its template is not rendered yet (no AgentTemplate, no Agent carrying it inline)", name)
 		}
 		return r, nil
 	case err != nil:
@@ -778,8 +778,8 @@ func readAgentReadinessOn(name, harness string) (agentReadiness, error) {
 		r.terminal, r.reason = true, fmt.Sprintf("Agent %s references Harness %q, not the platform Harness %s", name, got, harness)
 		return r, nil
 	}
-	if got := agent.templateName(); got != name {
-		r.terminal, r.reason = true, fmt.Sprintf("Agent %s references AgentTemplate %q, not %s", name, got, name)
+	if !agent.rendersTemplate(name) {
+		r.terminal, r.reason = true, fmt.Sprintf("Agent %s references AgentTemplate %q, not %s or its template inline", name, agent.templateName(), name)
 		return r, nil
 	}
 	if agent.Status.ObservedGeneration < agent.Metadata.Generation || len(agent.Status.Conditions) == 0 {

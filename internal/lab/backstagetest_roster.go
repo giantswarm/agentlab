@@ -125,7 +125,7 @@ func rosterRowOf(a *agentObject, namespace string, templates, carriers []unstruc
 		Harness: a.harnessName(), OwningRelease: a.Metadata.Labels[fluxHelmReleaseNameLabel],
 	}
 	row.Readiness = rosterReadiness(a)
-	var template *agentTemplate
+	template, _, _ := a.inlineTemplate()
 	for i := range templates {
 		if templates[i].GetName() != a.templateName() || templates[i].GetNamespace() != namespace {
 			continue

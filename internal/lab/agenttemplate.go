@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -145,6 +146,39 @@ func (a *agentObject) templateName() string {
 	return a.Spec.TemplateRef.Name
 }
 
+// rendersTemplate reports whether the Agent carries the agent's template:
+// the AgentTemplate of that name by reference (the Generic chart 1.x render),
+// or the template inline in spec.template (the 2.x render, no AgentTemplate).
+func (a *agentObject) rendersTemplate(name string) bool {
+	if a.Spec.TemplateRef != nil {
+		return a.Spec.TemplateRef.Name == name
+	}
+	return a.Spec.Template != nil
+}
+
+// inlineTemplate is the template an Agent carries inline (spec.template),
+// read as an AgentTemplate with the Agent's metadata — the Generic chart 2.x
+// stamps its labels and annotations on the Agent — and false for an Agent
+// that references its template.
+func (a *agentObject) inlineTemplate() (*agentTemplate, bool, error) {
+	if a.Spec.TemplateRef != nil || a.Spec.Template == nil {
+		return nil, false, nil
+	}
+	var t agentTemplate
+	raw, err := json.Marshal(a.Spec.Template)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := json.Unmarshal(raw, &t.Spec); err != nil {
+		return nil, false, fmt.Errorf("parsing Agent %s's spec.template: %w", a.Metadata.Name, err)
+	}
+	t.Metadata.Name = a.Metadata.Name
+	t.Metadata.Generation = a.Metadata.Generation
+	t.Metadata.Labels = a.Metadata.Labels
+	t.Metadata.Annotations = a.Metadata.Annotations
+	return &t, true, nil
+}
+
 // harnessName is the Harness the Agent references, "" for a Harness written
 // inline.
 func (a *agentObject) harnessName() string {
@@ -232,10 +266,26 @@ func decodeObject(obj *unstructured.Unstructured, into any) error {
 	return json.Unmarshal(raw, into)
 }
 
-// readAgentTemplate reads one AgentTemplate of the kagent namespace; a
-// missing one is the apiserver's NotFound.
+// readAgentTemplate reads an agent's template in the kagent namespace: its
+// AgentTemplate (the Generic chart 1.x render), else the template its Agent
+// carries inline (the 2.x render); neither is the apiserver's NotFound of the
+// AgentTemplate.
 func readAgentTemplate(name string) (*agentTemplate, error) {
 	obj, err := readKagentObject(agentTemplateResource, name)
+	if apierrors.IsNotFound(err) {
+		agent, agentErr := readAgent(name)
+		if agentErr != nil {
+			return nil, err
+		}
+		t, inline, inlineErr := agent.inlineTemplate()
+		switch {
+		case inlineErr != nil:
+			return nil, inlineErr
+		case inline:
+			return t, nil
+		}
+		return nil, err
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -272,14 +322,14 @@ func readKagentObject(resourceArg, name string) (*unstructured.Unstructured, err
 	return getObject(ctx, gvr, kagentNamespace, name)
 }
 
-// agentTemplateExists reports whether an agent's AgentTemplate is there; a
-// read that fails counts as absent.
+// agentTemplateExists reports whether an agent's template is there, as an
+// AgentTemplate or inline in its Agent; a read that fails counts as absent.
 func agentTemplateExists(name string) bool {
-	_, err := readKagentObject(agentTemplateResource, name)
+	_, err := readAgentTemplate(name)
 	return err == nil
 }
 
-// waitAgentTemplate waits for an agent's AgentTemplate to exist — the
+// waitAgentTemplate waits for an agent's template to exist (readAgentTemplate) — the
 // render of its HelmRelease, seconds after the release is written — and
 // returns it.
 func waitAgentTemplate(name string) (*agentTemplate, error) {
@@ -290,7 +340,7 @@ func waitAgentTemplate(name string) (*agentTemplate, error) {
 		return lastErr == nil
 	})
 	if !found {
-		return nil, fmt.Errorf("no AgentTemplate %s within 1 min (the HelmRelease's render): %w;\ncheck `kubectl -n %s get %s %s -o yaml`", name, lastErr, kagentNamespace, fluxHelmReleaseResource, name)
+		return nil, fmt.Errorf("no AgentTemplate %s and no Agent carrying it inline within 1 min (the HelmRelease's render): %w;\ncheck `kubectl -n %s get %s %s -o yaml`", name, lastErr, kagentNamespace, fluxHelmReleaseResource, name)
 	}
 	return t, nil
 }
