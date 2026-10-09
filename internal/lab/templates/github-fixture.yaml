@@ -1,0 +1,99 @@
+# The GitHub the workspace proofs run against (`agentlab github-fake
+# --workspaces`, docs/workspaces.md): one App installed on two owners, their
+# repositories, and the lab's Dex users with the repositories each can read
+# or push to. A public repository is readable by everyone, a signed-out
+# caller included; a private one only by the users that name it and by the
+# App's installation on its owner.
+app:
+  id: 1
+  slug: agentlab-workspaces
+  clientID: Iv1.agentlab-workspaces
+
+owners:
+  - login: agentlab-org
+    type: Organization
+    installation: 1
+  - login: agentlab-oss
+    type: Organization
+    installation: 2
+
+repositories:
+  - owner: agentlab-org
+    name: platform-api
+    language: Go
+    topics: [api, go]
+    pushedAt: 2026-09-01T10:00:00Z
+    files:
+      README.md: "# platform-api\n\nThe lab's service repository.\n"
+      go.mod: "module github.com/agentlab-org/platform-api\n\ngo 1.26\n"
+      main.go: "package main\n\nfunc main() {}\n"
+  - owner: agentlab-org
+    name: platform-infra
+    private: true
+    language: HCL
+    topics: [infrastructure]
+    pushedAt: 2026-08-15T10:00:00Z
+    files:
+      README.md: "# platform-infra\n\nPrivate: only admin reads it.\n"
+      main.tf: "terraform {}\n"
+  # The repository the measurements clone: generatedMiB of incompressible
+  # content, overridden by `--large-repo-mib`.
+  - owner: agentlab-org
+    name: monorepo
+    language: Go
+    topics: [monorepo]
+    pushedAt: 2026-09-20T10:00:00Z
+    generatedMiB: 64
+    files:
+      README.md: "# monorepo\n\nThe large repository of the measurements.\n"
+  - owner: agentlab-org
+    name: legacy-tool
+    archived: true
+    language: Python
+    topics: [legacy]
+    pushedAt: 2025-01-10T10:00:00Z
+    files:
+      README.md: "# legacy-tool\n\nArchived.\n"
+  - owner: agentlab-oss
+    name: kagent
+    fork: true
+    language: Go
+    topics: [agents, kubernetes]
+    pushedAt: 2026-09-25T10:00:00Z
+    files:
+      README.md: "# kagent\n\nA fork.\n"
+  - owner: agentlab-oss
+    name: docs
+    language: MDX
+    topics: [docs]
+    pushedAt: 2026-07-01T10:00:00Z
+    files:
+      README.md: "# docs\n"
+
+# The lab's Dex users (agentlab.yaml's users); a login hint names one.
+users:
+  - login: admin
+    name: Lab Admin
+    email: admin@lab.local
+    repositories:
+      agentlab-org/platform-api: write
+      agentlab-org/platform-infra: write
+      agentlab-org/monorepo: write
+      agentlab-org/legacy-tool: write
+      agentlab-oss/kagent: write
+      agentlab-oss/docs: write
+  # The member without access: agentlab-org/platform-infra is refused.
+  - login: dev
+    name: Lab Developer
+    email: dev@lab.local
+    repositories:
+      agentlab-org/platform-api: write
+      agentlab-org/monorepo: write
+      agentlab-org/legacy-tool: read
+      agentlab-oss/kagent: write
+      agentlab-oss/docs: write
+  # Reads the public repositories, pushes nowhere.
+  - login: viewer
+    name: Lab Viewer
+    email: viewer@lab.local
+    repositories: {}
