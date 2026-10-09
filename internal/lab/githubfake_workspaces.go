@@ -38,7 +38,7 @@ import (
 //     for the lab user a login hint names, expiring access tokens, refresh
 //     tokens that rotate (a second redemption is refused), grant and token
 //     revocation, GET /user;
-//   - git's smart HTTP through `git http-backend`, Basic auth checked per
+//   - git's smart HTTP served by git itself, Basic auth checked per
 //     user and repository, a push moving pushed_at (githubfake_git.go);
 //   - pull requests over REST and the GraphQL calls of `gh pr create`
 //     (githubfake_pulls.go);

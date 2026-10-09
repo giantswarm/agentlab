@@ -65,7 +65,7 @@ type wsFake struct {
 func startWorkspaceFake(t *testing.T) *wsFake {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("the workspace fake serves git through git http-backend; git is not on PATH")
+		t.Skip("the workspace fake serves git with git itself; git is not on PATH")
 	}
 	t.Chdir(t.TempDir())
 	if err := GenCerts(wsDomain, false); err != nil {

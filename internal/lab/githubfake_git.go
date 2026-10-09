@@ -35,7 +35,7 @@ type githubGit struct {
 func newGitHubGit(dataDir string) (*githubGit, error) {
 	binary, err := exec.LookPath("git")
 	if err != nil {
-		return nil, fmt.Errorf("the fake GitHub serves git through `git http-backend`, and git is not on PATH: %w", err)
+		return nil, fmt.Errorf("the fake GitHub serves git with git itself, and git is not on PATH: %w", err)
 	}
 	g := &githubGit{binary: binary, root: filepath.Join(dataDir, "repositories"), home: filepath.Join(dataDir, "home")}
 	for _, dir := range []string{g.root, g.home} {
