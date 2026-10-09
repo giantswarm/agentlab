@@ -109,7 +109,7 @@ func ensureAgentChartCarriesApproval() error {
 		return err
 	}
 	if !exists {
-		note("no OCIRepository %s in %s yet: the first create makes it, tracking the newest %s release", agentChartOCIRepository, kagentNamespace, agentChartRange)
+		note("no OCIRepository %s in %s yet: the first create makes it, tracking the newest %s release", agentChartOCIRepository, kagentNamespace, agentChartRangeInUse())
 		return nil
 	}
 	if !chartVersionBelow(version, agentChartWithApproval) {
@@ -276,27 +276,15 @@ func proveAgentPlatform(cfg *config.Config, sessions []*portalSession) error {
 	return nil
 }
 
-// templateRequiresApproval reports whether the AgentTemplate's binding of the
+// templateRequiresApproval reports whether the agent's template's binding of the
 // named MCP server carries spec.tools[].mcp.requireApproval, read off the
 // object as the apiserver holds it.
 func templateRequiresApproval(template, server string) (bool, error) {
-	obj, err := readKagentObject(agentTemplateResource, template)
+	t, err := readAgentTemplate(template)
 	if err != nil {
 		return false, err
 	}
-	tools, _, _ := unstructured.NestedSlice(obj.Object, "spec", "tools")
-	for _, tool := range tools {
-		m, ok := tool.(map[string]any)
-		if !ok {
-			continue
-		}
-		if bound, _, _ := unstructured.NestedString(m, "mcp", "server", nameKey); bound != server {
-			continue
-		}
-		approval, _, _ := unstructured.NestedBool(m, "mcp", "requireApproval")
-		return approval, nil
-	}
-	return false, nil
+	return t.requiresApproval(server), nil
 }
 
 // sessionEmails lists the sessions' users.

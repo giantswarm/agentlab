@@ -214,8 +214,11 @@ func assertManifests(m agentManifests, spec agentSpec, info *agentManagerInfo) e
 	if err := yaml.Unmarshal([]byte(m.OCIRepository), &source); err != nil {
 		return fmt.Errorf("manifests.ociRepository is not YAML: %w\n%.300s", err, m.OCIRepository)
 	}
-	if !agentChartLine(source.Spec.Ref.Semver) || source.Spec.URL != agentChartURL {
-		return fmt.Errorf("manifests.ociRepository tracks %s at %q, wanted %s on the %s line (the wizard writes the meta chart's range, never x.x.x)", source.Spec.URL, source.Spec.Ref.Semver, agentChartURL, agentChartRange)
+	if source.Spec.URL != agentChartURL {
+		return fmt.Errorf("manifests.ociRepository tracks %s, wanted %s", source.Spec.URL, agentChartURL)
+	}
+	if err := checkAgentChartLine("manifests.ociRepository (the wizard writes the meta chart's range, never x.x.x)", source.Spec.Ref.Semver, info.Chart.Semver); err != nil {
+		return err
 	}
 	var release struct {
 		Spec struct {
@@ -233,7 +236,7 @@ func assertManifests(m agentManifests, spec agentSpec, info *agentManagerInfo) e
 		return fmt.Errorf("manifests.values.agent.harness is %q, wanted get_info's Harness %s", got, info.Harness.Name)
 	}
 	if runtime, found := agent["runtime"]; found {
-		return fmt.Errorf("manifests.values.agent.runtime=%v is set: chart 1.x has no runtime (the platform Harness runs every agent)", runtime)
+		return fmt.Errorf("manifests.values.agent.runtime=%v is set: the agent chart has no runtime (the platform Harness runs every agent)", runtime)
 	}
 	if got, _ := agent[nameKey].(string); got != spec.Name {
 		return fmt.Errorf("manifests.values.agent.name is %q, wanted %s", got, spec.Name)
@@ -260,7 +263,7 @@ func assertManifests(m agentManifests, spec agentSpec, info *agentManagerInfo) e
 // assertReleaseIsDryRun checks the HelmRelease that landed carries exactly the
 // values the dry run rendered (the Deploy applies the reviewed manifests, no
 // more), runs as the tenant ServiceAccount and renders from the namespace's
-// OCIRepository of the chart at 1.x.
+// OCIRepository of the chart on the line agent-manager declares.
 func assertReleaseIsDryRun(release *agentRelease, m agentManifests, info *agentManagerInfo) error {
 	if !reflect.DeepEqual(jsonRoundTrip(release.Spec.Values), jsonRoundTrip(m.Values)) {
 		return fmt.Errorf("HelmRelease %s carries values %v, the dry run rendered %v — Deploy applied something else than the review showed", release.Metadata.Name, release.Spec.Values, m.Values)
@@ -275,10 +278,10 @@ func assertReleaseIsDryRun(release *agentRelease, m agentManifests, info *agentM
 	if err != nil {
 		return fmt.Errorf("the namespace's OCIRepository %s: %w", agentChartOCIRepository, err)
 	}
-	if chartURL != agentChartURL || !agentChartLine(chartRange) {
-		return fmt.Errorf("OCIRepository %s tracks %s at %q, wanted %s on the %s line", agentChartOCIRepository, chartURL, chartRange, agentChartURL, agentChartRange)
+	if chartURL != agentChartURL {
+		return fmt.Errorf("OCIRepository %s tracks %s, wanted %s", agentChartOCIRepository, chartURL, agentChartURL)
 	}
-	return nil
+	return checkAgentChartLine("OCIRepository "+agentChartOCIRepository, chartRange, info.Chart.Semver)
 }
 
 // jsonRoundTrip is v as JSON decodes it — one shape whatever Go types
@@ -374,8 +377,8 @@ func proveCreatePath(primary, viewer *portalSession) (agentSpec, *agentTemplate,
 	if err := portalToolCall(primary, "get_info", nil, &info); err != nil {
 		return fail(err)
 	}
-	if !agentChartLine(info.Chart.Semver) || info.Harness.Name == "" {
-		return fail(fmt.Errorf("get_info reports chart %q on Harness %q, wanted the %s line on the platform Harness", info.Chart.Semver, info.Harness.Name, agentChartRange))
+	if _, ok := agentChartMajor(info.Chart.Semver); !ok || info.Harness.Name == "" {
+		return fail(fmt.Errorf("get_info reports chart %q on Harness %q, wanted one major line of the agent chart on the platform Harness", info.Chart.Semver, info.Harness.Name))
 	}
 	var configs struct {
 		ModelConfigs []struct {
@@ -409,8 +412,8 @@ func proveCreatePath(primary, viewer *portalSession) (agentSpec, *agentTemplate,
 	if err := assertDryRun(report, spec, &info); err != nil {
 		return fail(err)
 	}
-	note("valid (mode %s, schema %s from %s): OCIRepository at %s, HelmRelease as %s, values.agent.harness=%s, no runtime, skill pinned at %.12s", report.Mode, report.SchemaVersion, report.SchemaSource, agentChartRange, kagentFluxServiceAccount, info.Harness.Name, skill.Commit)
-	verdicts = append(verdicts, fmt.Sprintf("PASS: validate_agent through the portal renders the reviewed manifests — OCIRepository %s at %s, HelmRelease as %s, values on Harness %s without a runtime, skill %s pinned at %.12s", agentChartOCIRepository, agentChartRange, kagentFluxServiceAccount, info.Harness.Name, skill.Name, skill.Commit))
+	note("valid (mode %s, schema %s from %s): OCIRepository at %s, HelmRelease as %s, values.agent.harness=%s, no runtime, skill pinned at %.12s", report.Mode, report.SchemaVersion, report.SchemaSource, info.Chart.Semver, kagentFluxServiceAccount, info.Harness.Name, skill.Commit)
+	verdicts = append(verdicts, fmt.Sprintf("PASS: validate_agent through the portal renders the reviewed manifests — OCIRepository %s at %s, HelmRelease as %s, values on Harness %s without a runtime, skill %s pinned at %.12s", agentChartOCIRepository, info.Chart.Semver, kagentFluxServiceAccount, info.Harness.Name, skill.Name, skill.Commit))
 
 	writer := portalAgentManagerWriter{primary}
 	step("Deploy: %s, then the shared readiness wait", writer)
@@ -445,17 +448,17 @@ func proveCreatePath(primary, viewer *portalSession) (agentSpec, *agentTemplate,
 	}
 	harness := readiness.agent.Status
 	note("requestedBy=%s (OCIRepository created: %v); HelmRelease managers %q, serviceAccountName %s, values == the dry run's; OCIRepository %s at %s; agent-manager logged caller=%s; Agent Ready on Harness %s at revision %.12s, AgentTemplate with %s=%q, skill %s @ %.12s; RemoteMCPServer %s carries %s=%s",
-		written.RequestedBy, written.OCIRepository, release.managers, release.Spec.ServiceAccountName, agentChartOCIRepository, agentChartRange, email, kagentHarness, harness.LatestSuccessfulRevision, displayNameAnnotation, spec.DisplayName, skill.Name, skill.Commit, spec.Name, toolsetHeader, backstageTestToolset)
+		written.RequestedBy, written.OCIRepository, release.managers, release.Spec.ServiceAccountName, agentChartOCIRepository, info.Chart.Semver, email, kagentHarness, harness.LatestSuccessfulRevision, displayNameAnnotation, spec.DisplayName, skill.Name, skill.Commit, spec.Name, toolsetHeader, backstageTestToolset)
 	verdicts = append(verdicts, fmt.Sprintf("PASS: Deploy through the portal (POST /api/muster/call %screate_agent as %s) lands HelmRelease %s with exactly the dry run's values as %s next to OCIRepository %s at %s (requestedBy=%s, agent-manager logged caller=%s); the render is the AgentTemplate (%s, %s, skill %s @ %.12s), the Agent on Harness %s and RemoteMCPServer %s with %s=%s, Ready in %s",
-		agentManagerToolPrefix, email, spec.Name, kagentFluxServiceAccount, agentChartOCIRepository, agentChartRange, written.RequestedBy, email, displayNameAnnotation, iconURLAnnotation, skill.Name, skill.Commit, kagentHarness, spec.Name, toolsetHeader, backstageTestToolset, time.Since(started).Round(time.Second)))
+		agentManagerToolPrefix, email, spec.Name, kagentFluxServiceAccount, agentChartOCIRepository, info.Chart.Semver, written.RequestedBy, email, displayNameAnnotation, iconURLAnnotation, skill.Name, skill.Commit, kagentHarness, spec.Name, toolsetHeader, backstageTestToolset, time.Since(started).Round(time.Second)))
 
 	step("The detail page's poll: %sget_agent_status through the portal says ready on Harness %s", agentManagerToolPrefix, kagentHarness)
 	status, err := portalAgentStatus(primary, spec.Name, verdictReady, time.Minute)
 	if err != nil {
 		return fail(err)
 	}
-	if len(status.Template.Harnesses) == 0 || status.Template.Harnesses[0].Harness != info.Harness.Name || status.Template.Harnesses[0].Ready == nil || !*status.Template.Harnesses[0].Ready {
-		return fail(fmt.Errorf("get_agent_status says %s — %s (template %+v), which is not Ready on Harness %s as the Agent's status reports", status.Verdict, status.Summary, status.Template, info.Harness.Name))
+	if on, ready := status.readyOn(); on != info.Harness.Name || !ready {
+		return fail(fmt.Errorf("get_agent_status says %s — %s (Ready=%v on Harness %q), which is not Ready on Harness %s as the Agent's status reports", status.Verdict, status.Summary, ready, on, info.Harness.Name))
 	}
 	note("%s: %s", status.Verdict, excerpt(status.Summary, 160))
 	verdicts = append(verdicts, fmt.Sprintf("PASS: get_agent_status through the portal agrees with the Agent's status — %s on Harness %s", status.Verdict, info.Harness.Name))

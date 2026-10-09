@@ -59,7 +59,8 @@ const baselineServiceAccount = "system:serviceaccount:" + platformNamespace + ":
 // admin's create -> ready -> turn -> update -> refreshSkills -> delete round
 // trip succeeds with requestedBy set — the HelmRelease written by
 // agent-manager (its field manager, values.toolset the anchor, the skill
-// pinned to a commit) next to the OCIRepository at 1.x, the render an
+// pinned to a commit) next to the OCIRepository on the chart line agent-manager declares (its
+// --agent-chart-semver), the installed chart on that line, the render an
 // AgentTemplate carrying the display-name and icon-url annotations and its
 // skill, the Agent pairing it with the platform Harness, Ready, the per-agent
 // RemoteMCPServer carrying the toolset header; get_agent_status agrees with
@@ -114,7 +115,11 @@ func AgentsTest(cfg *config.Config, email string) error {
 	slices.Sort(amTools)
 	note("%d tools: %s", len(amTools), strings.Join(amTools, ", "))
 
-	step("%sget_info — expecting identity caller on the agent chart %s and Harness %s", agentManagerToolPrefix, agentChartRange, kagentHarness)
+	chartLine, err := agentChartDeclared()
+	if err != nil {
+		return err
+	}
+	step("%sget_info — expecting identity caller on the agent chart %s (agent-manager's --agent-chart-semver) and Harness %s", agentManagerToolPrefix, chartLine, kagentHarness)
 	info, err := readAgentManagerInfo(session)
 	if err != nil {
 		return err
@@ -125,8 +130,11 @@ func AgentsTest(cfg *config.Config, email string) error {
 	if got := info.APIVersions.AgentTemplate; got != agentTemplateAPIVersion {
 		return fmt.Errorf("agent-manager composes apiVersions.agentTemplate=%q, the platform's agents are %s AgentTemplates paired by an Agent — this agent-manager does not speak this kagent API", got, agentTemplateAPIVersion)
 	}
-	if !agentChartLine(info.Chart.Semver) || info.Chart.OCIURL != agentChartURL {
-		return fmt.Errorf("agent-manager tracks the agent chart %s at %q, wanted %s on the %s line (Generic chart 1.x, or the meta chart's cap within it)", info.Chart.OCIURL, info.Chart.Semver, agentChartURL, agentChartRange)
+	if info.Chart.OCIURL != agentChartURL {
+		return fmt.Errorf("agent-manager tracks the agent chart %s, wanted %s", info.Chart.OCIURL, agentChartURL)
+	}
+	if err := checkAgentChartLine("get_info's chart", info.Chart.Semver, chartLine); err != nil {
+		return err
 	}
 	if info.Harness.Name != kagentHarness {
 		return fmt.Errorf("agent-manager places agents on Harness %q, the platform Harness is %s", info.Harness.Name, kagentHarness)
@@ -207,7 +215,7 @@ func AgentsTest(cfg *config.Config, email string) error {
 	}
 	note("HelmRelease written (OCIRepository created: %v), requestedBy=%s", written.OCIRepository, written.RequestedBy)
 
-	step("The HelmRelease is agent-manager's write (field manager %s) on the chart at %s; values.toolset is the anchor, the skill is pinned", agentManagerFieldManager, agentChartRange)
+	step("The HelmRelease is agent-manager's write (field manager %s) on the chart at %s; values.toolset is the anchor, the skill is pinned", agentManagerFieldManager, chartLine)
 	release, err := readAgentRelease(agentsTestAgent)
 	if err != nil {
 		return err
@@ -235,8 +243,11 @@ func AgentsTest(cfg *config.Config, email string) error {
 	if err != nil {
 		return fmt.Errorf("the namespace's OCIRepository %s: %w", agentChartOCIRepository, err)
 	}
-	if chartURL != agentChartURL || !agentChartLine(chartRange) {
-		return fmt.Errorf("OCIRepository %s tracks %s at %q, wanted %s on the %s line", agentChartOCIRepository, chartURL, chartRange, agentChartURL, agentChartRange)
+	if chartURL != agentChartURL {
+		return fmt.Errorf("OCIRepository %s tracks %s, wanted %s", agentChartOCIRepository, chartURL, agentChartURL)
+	}
+	if err := checkAgentChartLine("OCIRepository "+agentChartOCIRepository, chartRange, chartLine); err != nil {
+		return err
 	}
 	logCtx, cancelLogs := context.WithTimeout(context.Background(), 60*time.Second)
 	events, _ := podLogs(logCtx, platformNamespace, "deploy/"+agentManagerMCPServer, agentManagerMCPServer, 5*time.Minute)
@@ -271,7 +282,15 @@ func AgentsTest(cfg *config.Config, email string) error {
 	if !readiness.ready {
 		return readiness.failure(agentsTestAgent, agentsTestReadyTimeout)
 	}
+	if readiness.release == nil {
+		return fmt.Errorf("%s is Ready without a HelmRelease read", agentsTestAgent)
+	}
+	installed := readiness.release.chartVersion()
+	if err := checkAgentChartLine("HelmRelease "+agentsTestAgent+" installed", installed, chartLine); err != nil {
+		return err
+	}
 	harness := readiness.agent.Status
+	note("installed agent chart %s on the declared line %s", installed, chartLine)
 	note("Ready after %s: revision %.12s%s", readiness.elapsed.Round(time.Second), harness.LatestSuccessfulRevision, warningsNote(harness.Warnings))
 
 	step("%sget_agent_status agrees with the Agent's status: ready on revision %.12s", agentManagerToolPrefix, harness.LatestSuccessfulRevision)
@@ -279,8 +298,8 @@ func AgentsTest(cfg *config.Config, email string) error {
 	if err != nil {
 		return err
 	}
-	if !strings.Contains(status.Summary, harness.LatestSuccessfulRevision) || len(status.Template.Harnesses) == 0 || status.Template.Harnesses[0].Harness != kagentHarness || status.Template.Harnesses[0].Ready == nil || !*status.Template.Harnesses[0].Ready {
-		return fmt.Errorf("get_agent_status says %s — %s (template %+v), which is not the cluster's Ready revision %s on Harness %s", status.Verdict, status.Summary, status.Template, harness.LatestSuccessfulRevision, kagentHarness)
+	if on, ready := status.readyOn(); !strings.Contains(status.Summary, harness.LatestSuccessfulRevision) || on != kagentHarness || !ready {
+		return fmt.Errorf("get_agent_status says %s — %s (Ready=%v on Harness %q), which is not the cluster's Ready revision %s on Harness %s", status.Verdict, status.Summary, ready, on, harness.LatestSuccessfulRevision, kagentHarness)
 	}
 	note("%s: %s", status.Verdict, excerpt(status.Summary, 160))
 
@@ -295,14 +314,17 @@ func AgentsTest(cfg *config.Config, email string) error {
 	if len(got.Tools) != 1 || got.Tools[0].Server != agentsTestAgent {
 		return fmt.Errorf("get_agent reports tools=%+v, wanted the one binding of RemoteMCPServer %s", got.Tools, agentsTestAgent)
 	}
-	if got.Ready == nil || !*got.Ready || len(got.Harnesses) != 1 || got.Harnesses[0].Harness != kagentHarness {
-		return fmt.Errorf("get_agent reports ready=%v harnesses=%+v, wanted Ready on %s", got.Ready, got.Harnesses, kagentHarness)
+	if got.Ready == nil || !*got.Ready || got.harness() != kagentHarness {
+		return fmt.Errorf("get_agent reports ready=%v on Harness %q (harnesses %+v), wanted Ready on %s", got.Ready, got.Harness, got.Harnesses, kagentHarness)
 	}
 	if len(got.Skills) != 1 || got.Skills[0].Git == nil || got.Skills[0].Git.Commit != fixture.Commit {
 		return fmt.Errorf("get_agent reports skills=%+v, wanted %s pinned at %s", got.Skills, fixture.name(), fixture.Commit)
 	}
-	if got.Managed != "helmrelease" || got.HelmRelease == nil || !strings.HasPrefix(got.HelmRelease.ChartVersion, "1.") {
-		return fmt.Errorf("get_agent reports managed=%q helmRelease=%+v, wanted helmrelease on a 1.x chart", got.Managed, got.HelmRelease)
+	if got.Managed != "helmrelease" || got.HelmRelease == nil {
+		return fmt.Errorf("get_agent reports managed=%q helmRelease=%+v, wanted helmrelease", got.Managed, got.HelmRelease)
+	}
+	if err := checkAgentChartLine("get_agent's helmRelease", got.HelmRelease.ChartVersion, chartLine); err != nil {
+		return err
 	}
 	note("toolset %v on Harness %s (ready), binding %s, skill %s @ %.12s, managed %s, chart %s", got.Toolset, kagentHarness, got.Tools[0].Server, got.Skills[0].Name, got.Skills[0].Git.Commit, got.Managed, got.HelmRelease.ChartVersion)
 
@@ -473,10 +495,10 @@ func AgentsTest(cfg *config.Config, email string) error {
 	note("HelmRelease, AgentTemplate and RemoteMCPServer %s are gone, %s, requestedBy=%s; list_agents agrees", agentsTestAgent, source, deleted.RequestedBy)
 
 	fmt.Println()
-	fmt.Printf("PASS: muster aggregates %s* and agent-manager reports identity caller on the agent chart %s (Harness %s)\n", agentManagerToolPrefix, agentChartRange, kagentHarness)
+	fmt.Printf("PASS: muster aggregates %s* and agent-manager reports identity caller on the agent chart %s (Harness %s)\n", agentManagerToolPrefix, chartLine, kagentHarness)
 	fmt.Printf("PASS: create_agent without a toolset is refused naming the presets; with [%s] %s created -> Ready on Harness %s -> a turn as the person -> updated -> refreshSkills -> deleted %s through call_tool, every write requestedBy=%s and logged with caller=\n", agentsTestToolset, user.Email, kagentHarness, agentsTestAgent, user.Email)
 	fmt.Printf("PASS: the HelmRelease carries the %s field manager, values.toolset [%s], agent.harness %s and the skill %s pinned to a commit next to OCIRepository %s at %s; its render is the AgentTemplate with %s and %s and the skill entry, the Agent referencing Harness %s, and RemoteMCPServer %s carrying %s=%s (%s=%s); delete_agent removes the release and the render\n",
-		agentManagerFieldManager, agentsTestToolset, kagentHarness, fixture.name(), agentChartOCIRepository, agentChartRange, displayNameAnnotation, iconURLAnnotation, kagentHarness, agentsTestAgent, toolsetHeader, agentsTestToolset, discoveryLabel, discoveryDisabledValue)
+		agentManagerFieldManager, agentsTestToolset, kagentHarness, fixture.name(), agentChartOCIRepository, chartLine, displayNameAnnotation, iconURLAnnotation, kagentHarness, agentsTestAgent, toolsetHeader, agentsTestToolset, discoveryLabel, discoveryDisabledValue)
 	fmt.Printf("PASS: get_agent_status agrees with the Agent's status — ready on revision %.12s, and failed with the reason for an Agent on Harness %q; refreshSkills re-pins %s to %s's head %.12s\n", harness.LatestSuccessfulRevision, agentsTestNoHarness, fixture.name(), fixture.Repo, head)
 	if viewer != nil {
 		fmt.Printf("PASS: %s's create is Forbidden by the apiserver as User \"oidc:%s\" (user RBAC, not the ServiceAccount's)\n", viewer.Email, viewer.Email)
@@ -520,8 +542,8 @@ func assertAgentRender(t *agentTemplate, agent *agentObject, spec agentSpec, mus
 	if got := agent.harnessName(); got != spec.harnessValue() {
 		return fmt.Errorf("agent %s references Harness %q, wanted %q (agent.harness)", name, got, spec.harnessValue())
 	}
-	if got := agent.templateName(); got != name {
-		return fmt.Errorf("agent %s references AgentTemplate %q, wanted %s", name, got, name)
+	if !agent.rendersTemplate(name) {
+		return fmt.Errorf("agent %s references AgentTemplate %q, wanted %s or its template inline", name, agent.templateName(), name)
 	}
 	if got := agent.Metadata.Labels[fluxHelmReleaseNameLabel]; got != name {
 		return fmt.Errorf("agent %s carries %s=%q, wanted %s (rendered by the agent's HelmRelease)", name, fluxHelmReleaseNameLabel, got, name)
@@ -693,6 +715,9 @@ type agentManagerAgent struct {
 	Tools              []struct {
 		Server string `json:"server"`
 	} `json:"tools"`
+	// Harness is the Harness that runs the agent (agent-manager on the
+	// Agent API); Harnesses the per-Harness report of the AgentTemplate API.
+	Harness   string `json:"harness"`
 	Harnesses []struct {
 		Harness string `json:"harness"`
 		Ready   *bool  `json:"ready"`
@@ -710,6 +735,18 @@ func readAgentManagerAgent(s *musterSession, name string) (*agentManagerAgent, e
 		return nil, err
 	}
 	return &got, nil
+}
+
+// harness is the one Harness get_agent reports the agent on, in either
+// agent-manager shape; "" for none or several.
+func (a *agentManagerAgent) harness() string {
+	if a.Harness != "" {
+		return a.Harness
+	}
+	if len(a.Harnesses) == 1 {
+		return a.Harnesses[0].Harness
+	}
+	return ""
 }
 
 // agentManagerUpdateResult is update_agent's result: the values after, the
@@ -730,14 +767,33 @@ func agentManagerUpdate(s *musterSession, args map[string]any) (*agentManagerUpd
 
 // agentManagerStatus is get_agent_status as the proofs read it.
 type agentManagerStatus struct {
-	Verdict  string `json:"verdict"`
-	Summary  string `json:"summary"`
+	Verdict string `json:"verdict"`
+	Summary string `json:"summary"`
+	// Agent is the Agent object's status (agent-manager on the Agent API);
+	// Template the per-Harness report of the AgentTemplate API.
+	Agent *struct {
+		Harness string `json:"harness"`
+		Ready   *bool  `json:"ready"`
+	} `json:"agent"`
 	Template struct {
 		Harnesses []struct {
 			Harness string `json:"harness"`
 			Ready   *bool  `json:"ready"`
 		} `json:"harnesses"`
 	} `json:"template"`
+}
+
+// readyOn is the Harness get_agent_status reports the agent on and whether
+// it reports it Ready there, in either agent-manager shape.
+func (s *agentManagerStatus) readyOn() (harness string, ready bool) {
+	if s.Agent != nil {
+		return s.Agent.Harness, s.Agent.Ready != nil && *s.Agent.Ready
+	}
+	if len(s.Template.Harnesses) == 0 {
+		return "", false
+	}
+	h := s.Template.Harnesses[0]
+	return h.Harness, h.Ready != nil && *h.Ready
 }
 
 // waitAgentVerdict polls get_agent_status until the verdict is the wanted
