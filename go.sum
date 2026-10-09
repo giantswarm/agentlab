@@ -222,8 +222,8 @@ github.com/frankban/quicktest v1.14.6 h1:7Xjx+VpznH+oBnejlPUj8oUpdxnVs4f8XU8WnHk
 github.com/frankban/quicktest v1.14.6/go.mod h1:4ptaffx2x8+WTWXmUCuVU6aPUX1/Mz7zb5vbUoiM6w0=
 github.com/fxamacker/cbor/v2 v2.9.1 h1:2rWm8B193Ll4VdjsJY28jxs70IdDsHRWgQYAI80+rMQ=
 github.com/fxamacker/cbor/v2 v2.9.1/go.mod h1:vM4b+DJCtHn+zz7h3FFp/hDAI9WNWCsZj23V5ytsSxQ=
-github.com/giantswarm/gitops-commit v0.11.0 h1:pzfWP7q7Q71zUcS5uniRrCDabK8DMGCqnxqlrx3MDl4=
-github.com/giantswarm/gitops-commit v0.11.0/go.mod h1:WBHKZ6UyQC0ghHLbmv+kR1GdLGqJciysQeb7w2iEm7o=
+github.com/giantswarm/gitops-commit v0.11.1 h1:6FvT3OM3ltSConbW4gz+dgxTuF5RE3KCcojbFuUI2Fg=
+github.com/giantswarm/gitops-commit v0.11.1/go.mod h1:y+vnZsWYIa5j4Pk0vrGM+iLXRAdyq2JRlUL0ygvuxOU=
 github.com/giantswarm/klaus-gateway v1.21.0 h1:sIdKo97SBYCavdAf2jyMpTTtOmep/b6otknbGpeHAVI=
 github.com/giantswarm/klaus-gateway v1.21.0/go.mod h1:aloyluB8BZMszj7iQ1Ku6YZBZA+lQC6CerEJvzYIHtE=
 github.com/giantswarm/selfupdate-cosign v0.3.2 h1:ItfeMJP0dD33apqIUiwDPu08S4Lfnhzi4XSA9u6dHmY=
