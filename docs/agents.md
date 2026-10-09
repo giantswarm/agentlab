@@ -130,8 +130,18 @@ address**, and the kind cluster shares this machine's — a handful of
 `backstage-test` runs within an hour exhaust it, after which discovery comes
 back truncated (the proof refuses that by name) until the window resets.
 
-`$GITHUB_TOKEN` on the host lifts that: `agentlab up`/`platform` create **or
-update** the Secret `agentlab-github-token` (key `GITHUB_TOKEN`) in
+A token lifts that, from one of two places, the first that is set:
+
+- **A recorded source** (`githubToken.source` in `agentlab.yaml`; `agentlab
+  configure --github-token-source op://<vault>/<item>/<field>`, or
+  `<file>#<path>` of a SOPS file): every `up` and `platform` hand it to
+  `beekeeper secret copy --to-secret`, which writes the token into the Secret
+  in its own process; agentlab never reads the value, and a placement that
+  fails fails the run. A lab started from an environment without the token,
+  an agent's, is authenticated this way.
+- **`$GITHUB_TOKEN`** on the host.
+
+Either way `agentlab up`/`platform` create **or update** the Secret `agentlab-github-token` (key `GITHUB_TOKEN`) in
 `agent-platform` — the portal takes it through `extraEnvVarsSecrets` and the
 lab's app-config overlay (`integrations.github[].token: ${GITHUB_TOKEN}`),
 agent-manager through the chart's `skills.github.tokenSecret` — and in
@@ -144,7 +154,7 @@ environment -> Secret and never enters `agentlab.yaml`, `state/` (the
 rendered values carry the Secret's *name*), a log line or a process's argv.
 Re-running with a new token rotates the Secret.
 
-Without the variable the lab is as before: the values name no Secret, the
+Without either the lab is as before: the values name no Secret, the
 consumers call GitHub unauthenticated, and a Secret an earlier run created
 stays — unreferenced — until `agentlab down` (a run that merely lacks the
 export never deletes a credential; `kubectl -n agent-platform delete secret

@@ -922,6 +922,8 @@ type Config struct {
 	AIModel string `yaml:"aiModel"`
 	// AIKey is where the key of the default ModelConfig comes from.
 	AIKey AIKey `yaml:"aiKey,omitempty"`
+	// GitHubToken is where the token of the lab's GitHub calls comes from.
+	GitHubToken GitHubToken `yaml:"githubToken,omitempty"`
 
 	Users     []User    `yaml:"users"`
 	Platform  Platform  `yaml:"platform"`
@@ -1322,6 +1324,9 @@ func (c *Config) Validate() error {
 	}
 	if err := c.AIKey.Validate(); err != nil {
 		return fmt.Errorf("aiKey.source %q: %w", c.AIKey.Source, err)
+	}
+	if err := c.GitHubToken.Validate(); err != nil {
+		return fmt.Errorf("githubToken.source %q: %w", c.GitHubToken.Source, err)
 	}
 	if c.SubstrateNodes < 0 || c.SubstrateNodes > MaxSubstrateNodes {
 		return fmt.Errorf("substrateNodes: %d, want 0 (the single-node lab) to %d", c.SubstrateNodes, MaxSubstrateNodes)

@@ -21,11 +21,13 @@ const gitHubRateLimitURL = "https://api.github.com/rate_limit"
 // not something to sleep through.
 const gitHubWindowMaxWait = 65 * time.Minute
 
-// Seams the tests replace: the endpoint, the clock and the wait.
+// Seams the tests replace: the endpoint, the clock, the wait and the look at
+// whether the lab's consumers carry a token of their own.
 var (
 	gitHubRateLimitEndpoint = gitHubRateLimitURL
 	gitHubNow               = time.Now
 	gitHubSleep             = time.Sleep
+	labGitHubAuthenticated  = agentManagerGitHubAuthenticated
 )
 
 // gitHubWindow is the core REST API window as /rate_limit reports it.
@@ -92,9 +94,11 @@ func readGitHubWindow() (gitHubWindow, error) {
 // that starts with less would fail part-way. The consumers in the cluster
 // share this machine's egress address, so an unauthenticated read here is
 // their window; with $GITHUB_TOKEN set on the host the lab handed them the
-// same token (githubtoken.go), so the read is authenticated as theirs are. An
-// endpoint that cannot be read is a note, never a failure; a window still
-// short after the wait is.
+// same token (githubtoken.go), so the read is authenticated as theirs are.
+// Without a host token, a lab whose consumers carry one from
+// githubToken.source never waits on the host's anonymous window: it is not
+// theirs. An endpoint that cannot be read is a note, never a failure; a
+// window still short after the wait is.
 func awaitGitHubWindow(what string, need int) error {
 	w, err := readGitHubWindow()
 	if err != nil {
@@ -104,6 +108,16 @@ func awaitGitHubWindow(what string, need int) error {
 	note("%s", w)
 	if w.Remaining >= need {
 		return nil
+	}
+	if !w.Authenticated {
+		authenticated, err := labGitHubAuthenticated()
+		if err != nil {
+			note("whether the lab's consumers carry a GitHub token was not read (%v); the host's window decides", err)
+		}
+		if authenticated {
+			note("the lab's consumers call GitHub with the token in secret %s/%s, not on this window; %s proceeds", platformNamespace, gitHubTokenSecret, what)
+			return nil
+		}
 	}
 	wait := max(w.Reset.Sub(gitHubNow())+5*time.Second, 0)
 	if wait > gitHubWindowMaxWait {

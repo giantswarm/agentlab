@@ -683,8 +683,8 @@ kagent:
 agent-manager:
 {{- if .GitHubToken }}
   # The token agent-manager resolves skills with (list_skills, the
-  # create_agent pin, refreshSkills): the Secret the lab creates from
-  # $GITHUB_TOKEN (githubtoken.go), lifting the unauthenticated 60-an-hour
+  # create_agent pin, refreshSkills): the Secret the lab places from
+  # githubToken.source or $GITHUB_TOKEN (githubtoken.go), lifting the unauthenticated 60-an-hour
   # window this machine's egress address shares. The chart renders it as the
   # Deployment's GITHUB_TOKEN; the repositories list stays the chart's.
   skills:

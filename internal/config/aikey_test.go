@@ -28,3 +28,17 @@ func TestAIKeySourceIsAReference(t *testing.T) {
 		}
 	}
 }
+
+// TestGitHubTokenSourceIsAReference: githubToken.source takes the references
+// aiKey.source does and refuses a pasted value.
+func TestGitHubTokenSourceIsAReference(t *testing.T) {
+	cfg := Default()
+	cfg.GitHubToken.Source = "op://lab/github-token/credential"
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("an op:// reference refused: %v", err)
+	}
+	cfg.GitHubToken.Source = "ghp_pasted_value"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "githubToken.source") {
+		t.Errorf("a pasted value must be refused naming githubToken.source, got %v", err)
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -31,23 +32,26 @@ const GitHubTokenEnv = "GITHUB_TOKEN" // #nosec G101 -- env var NAME, not a cred
 //     (agentManager.migration.githubToken).
 //
 // The values (agent-platform-values.yaml.tmpl, backstage-catalog.yaml.tmpl)
-// name the Secret only when the variable is set at render time, so a render
-// and the Secret always agree on one environment.
+// name the Secret only when a token is configured at render time, so a
+// render and the Secret always agree on one configuration.
 const (
 	gitHubTokenSecret    = "agentlab-github-token" // #nosec G101 -- Secret NAME, not a credential
 	gitHubTokenSecretKey = GitHubTokenEnv
 )
 
-// gitHubTokenSet reports whether the host environment carries a GitHub token
-// — the one input the render and the Secret creation decide on.
-func gitHubTokenSet() bool { return os.Getenv(GitHubTokenEnv) != "" }
+// gitHubTokenSet reports whether the lab has a GitHub token to place — the
+// one input the render and the Secret creation decide on: the reference
+// githubToken.source records, else $GITHUB_TOKEN in the host environment.
+func gitHubTokenSet(cfg *config.Config) bool {
+	return cfg.GitHubToken.Source != "" || os.Getenv(GitHubTokenEnv) != ""
+}
 
-// gitHubTokenWired is the render's answer: the token is set and the chart
+// gitHubTokenWired is the render's answer: a token is set and the chart
 // line takes the keys (the 4.x agent-manager chart's skills.github.tokenSecret
 // and the connectivity chart's agentManager.migration.githubToken; the 3.x
 // line the rehearsal seeds has neither, and its portal has no discovery to
 // authenticate).
-func gitHubTokenWired(cfg *config.Config) bool { return gitHubTokenSet() && !cfg.LegacyChart() }
+func gitHubTokenWired(cfg *config.Config) bool { return gitHubTokenSet(cfg) && !cfg.LegacyChart() }
 
 // ensureGitHubTokenSecrets is the deploy-time half, run before the install:
 // agent-platform/ always (the portal's envFrom and agent-manager's env
@@ -56,20 +60,20 @@ func gitHubTokenWired(cfg *config.Config) bool { return gitHubTokenSet() && !cfg
 // rehearsal's upgrade of a seeded lab; a first install gets it after the
 // chart created the namespace (platform.go, next to kagent-anthropic).
 //
-// Without the variable nothing is written: the values rendered from the same
-// environment reference no Secret, so the consumers call GitHub
-// unauthenticated — the lab's behaviour before the token — and a Secret an
-// earlier run created stays, unreferenced, until `agentlab down`: a run that
-// merely lacks an export never destroys a credential. The proofs' window
-// print (githubwindow.go) is where the difference shows.
+// Without a token nothing is written: the values rendered from the same
+// configuration reference no Secret, so the consumers call GitHub
+// unauthenticated, and a Secret an earlier run created stays, unreferenced,
+// until `agentlab down`: a run that merely lacks an export never destroys a
+// credential. The proofs' window print (githubwindow.go) is where the
+// difference shows.
 func ensureGitHubTokenSecrets(ctx context.Context, cfg *config.Config) error {
-	if !gitHubTokenSet() {
+	if !gitHubTokenSet(cfg) {
 		if exists, err := objectExists(ctx, gvrSecrets, platformNamespace, gitHubTokenSecret); err == nil && exists {
-			note("$%s is not set — secret %s/%s from an earlier run stays, but nothing references it: GitHub is called unauthenticated (60 requests an hour, shared by this machine)", GitHubTokenEnv, platformNamespace, gitHubTokenSecret)
+			note("no githubToken.source and $%s is not set — secret %s/%s from an earlier run stays, but nothing references it: GitHub is called unauthenticated (60 requests an hour, shared by this machine)", GitHubTokenEnv, platformNamespace, gitHubTokenSecret)
 		}
 		return nil
 	}
-	if err := ensureGitHubTokenSecret(ctx, platformNamespace); err != nil {
+	if err := ensureGitHubTokenSecret(ctx, cfg, platformNamespace); err != nil {
 		return err
 	}
 	if !cfg.Platform.Agents {
@@ -79,13 +83,24 @@ func ensureGitHubTokenSecrets(ctx context.Context, cfg *config.Config) error {
 	if err != nil || !exists {
 		return err
 	}
-	return ensureGitHubTokenSecret(ctx, kagentNamespace)
+	return ensureGitHubTokenSecret(ctx, cfg, kagentNamespace)
 }
 
-// ensureGitHubTokenSecret creates or updates ns/gitHubTokenSecret from the
-// host environment — an update, unlike the Anthropic Secret, so a re-run with
-// a new token rotates it; a no-op without the variable.
-func ensureGitHubTokenSecret(_ context.Context, ns string) error {
+// ensureGitHubTokenSecret writes ns/gitHubTokenSecret on every run, so a
+// rotated token reaches the lab with the next `up` or `platform`; a no-op
+// without a token. A recorded source is placed by the secret tooling and its
+// failure fails the run — the values already name the Secret, so a lab whose
+// configuration says where the token is never deploys without it.
+func ensureGitHubTokenSecret(_ context.Context, cfg *config.Config, ns string) error {
+	if source := cfg.GitHubToken.Source; source != "" {
+		answer, err := runSecretTool(secretCopyArgs(source, secretTarget(cfg, ns, gitHubTokenSecret, gitHubTokenSecretKey))...)
+		if err != nil {
+			return fmt.Errorf("secret %s/%s key %s from githubToken.source %s: %w\n  the portal and agent-manager reference it; when %s answers, re-run `agentlab platform`",
+				ns, gitHubTokenSecret, gitHubTokenSecretKey, source, err, secretTool)
+		}
+		note("secret %s/%s key %s placed from %s by %s (%s); agentlab never read the value — skill discovery and resolution call GitHub authenticated", ns, gitHubTokenSecret, gitHubTokenSecretKey, source, secretTool, strings.TrimSpace(answer))
+		return nil
+	}
 	token := os.Getenv(GitHubTokenEnv)
 	if token == "" {
 		return nil
