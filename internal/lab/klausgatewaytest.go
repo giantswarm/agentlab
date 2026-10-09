@@ -1467,9 +1467,9 @@ func assertSlackRoster(names []string) error {
 	return nil
 }
 
-// unadmittedReason is the reason the gateway gives for a template no Harness
-// admits (pkg/a2a's discovery).
-const unadmittedReason = "no Harness admits"
+// unadmittedReason is the reason the gateway gives for an Agent that is not
+// Ready (its condition follows: "Agent <name> is not ready: blocked by ...").
+const unadmittedReason = "is not ready"
 
 // refusal presses the Select button of the fixture's roster row, which opens
 // the agent picker in the roster's thread, checks the picker offers the
