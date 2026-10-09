@@ -407,7 +407,7 @@ func removeLabWorkspacesCSIDriverConfig(ctx context.Context) error {
 	if obj.GetLabels()[managedByLabel] != managedByAgentlabValue {
 		return nil
 	}
-	note("removing the CSIDriverConfig %s the lab applied (the chart renders its own now)", workspacesCSIDriver)
+	note("removing the CSIDriverConfig %s the lab applied", workspacesCSIDriver)
 	return deleteObject(ctx, gvr, "", workspacesCSIDriver, fixtureDeleteWait)
 }
 
