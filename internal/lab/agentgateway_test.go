@@ -45,9 +45,9 @@ func TestAgentgatewayDevImage(t *testing.T) {
 		t.Fatalf("without the target: %+v", got)
 	}
 	cases := map[string]agentgatewayProxyImage{
-		"agentgateway:dev-9e0f":                      {Registry: localhostName, Repository: agentgatewayComponent, Tag: "dev-9e0f"},
-		"giantswarm/agentgateway:dev":                {Registry: localhostName, Repository: "giantswarm/agentgateway", Tag: devTag},
-		"localhost:5001/agentgateway:dev":            {Registry: "localhost:5001", Repository: agentgatewayComponent, Tag: devTag},
+		"agentgateway:dev-9e0f":                                                {Registry: localhostName, Repository: agentgatewayComponent, Tag: "dev-9e0f"},
+		"giantswarm/agentgateway:dev":                                          {Registry: localhostName, Repository: "giantswarm/agentgateway", Tag: devTag},
+		"localhost:5001/agentgateway:dev":                                      {Registry: "localhost:5001", Repository: agentgatewayComponent, Tag: devTag},
 		"gsoci.azurecr.io/giantswarm/agentgateway-upstream/agentgateway:2.3.3": {Registry: "gsoci.azurecr.io", Repository: "giantswarm/agentgateway-upstream/agentgateway", Tag: "2.3.3"},
 	}
 	for ref, want := range cases {
