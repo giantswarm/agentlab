@@ -1040,6 +1040,8 @@ type Config struct {
 	AIKey AIKey `yaml:"aiKey,omitempty"`
 	// GitHubToken is where the token of the lab's GitHub calls comes from.
 	GitHubToken GitHubToken `yaml:"githubToken,omitempty"`
+	// GitHubApp is the skills GitHub App agent-manager resolves skills with.
+	GitHubApp GitHubApp `yaml:"githubApp,omitempty"`
 
 	Users     []User    `yaml:"users"`
 	Platform  Platform  `yaml:"platform"`
@@ -1450,6 +1452,12 @@ func (c *Config) Validate() error {
 	}
 	if err := c.GitHubToken.Validate(); err != nil {
 		return fmt.Errorf("githubToken.source %q: %w", c.GitHubToken.Source, err)
+	}
+	if err := c.GitHubApp.Validate(); err != nil {
+		return fmt.Errorf("githubApp: %w", err)
+	}
+	if c.GitHubApp.Configured() && c.GitHubToken.Source != "" {
+		return errors.New("githubApp and githubToken.source both set: agent-manager takes one GitHub credential, its chart refuses both — clear one (`agentlab configure --github-token-source \"\"`)")
 	}
 	if c.SubstrateNodes < 0 || c.SubstrateNodes > MaxSubstrateNodes {
 		return fmt.Errorf("substrateNodes: %d, want 0 (the single-node lab) to %d", c.SubstrateNodes, MaxSubstrateNodes)

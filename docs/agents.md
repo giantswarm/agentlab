@@ -154,6 +154,8 @@ environment -> Secret and never enters `agentlab.yaml`, `state/` (the
 rendered values carry the Secret's *name*), a log line or a process's argv.
 Re-running with a new token rotates the Secret.
 
+**A skills GitHub App** is the way a lab reaches GitHub without any token: agent-manager's chart takes a read-only App (`skills.github.app.secretName`) and resolves skills with its installation tokens, at the App's rate limit. `agentlab configure --github-app-id <id> --github-app-installation-id <id> --github-app-private-key-source op://<vault>/<item>/<field>` records it as `githubApp` in `agentlab.yaml` (the ids are public; the key is a reference). Every `up` and `platform` apply the ids to the Secret `agentlab-github-app` in `agent-platform` and hand the key to `beekeeper secret copy --to-secret` (key `private-key`, never read by agentlab; a failed placement fails the run), and the values name the Secret for agent-manager. The chart refuses the App together with `tokenSecret`, so `githubApp` and `githubToken.source` are not recorded together; a `$GITHUB_TOKEN` still reaches the portal and the migrate Job, which take a token only.
+
 Without either the lab is as before: the values name no Secret, the
 consumers call GitHub unauthenticated, and a Secret an earlier run created
 stays — unreferenced — until `agentlab down` (a run that merely lacks the
