@@ -215,6 +215,7 @@ go test ./internal/forms/ -run TestMinimalFormDrive -count=1 -v   # single test
 ./agentlab platform-test   # headless Dex -> muster -> mcp-kubernetes proof
 ./agentlab models-test     # managed models: 401 -> pull -> ModelConfig -> dry runs, gitops_owned, commit on a fake GitHub -> agent turn -> MCP -> unload -> delete (on lmstudio: the 501 refusal -> unwire, U23)
 ./agentlab serving-test    # platform.serving: llm-d controller + models Gateway up -> 401 -> the lab preset fits the node -> load -> Ready on the CPU runtime -> ModelConfig -> a completion through the models Gateway -> agent turn -> unload
+./agentlab pm-test         # platform.platformManager: the released platform manager plans the lab's workspaces-on installation fixture (dry run: the Dex /signin redirect URI, the kept workspace-manager values)
 ./agentlab vm-manager-test # the vm-manager pod as the person: 401 anonymous -> tools via muster -> create_vm -> ready -> attestation -> delete_vm
 ./agentlab klaus-gateway-test # Swarmgeist on the host against the edge, and with platform.klausGateway the in-cluster component: the OBO link store in a Secret across a pod loss
 ./agentlab decisions-test  # klaus-gateway's POST /decisions as a ServiceAccount: answered by click, modal and thread reply, each a muster tool call as the user; a refusal, a close as defaulted

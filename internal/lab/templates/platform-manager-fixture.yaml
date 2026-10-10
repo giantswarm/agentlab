@@ -1,0 +1,241 @@
+# The platform manager's registry for pm-test (docs/platform-manager.md): an
+# invented installation, ember of the invented customer labco, that runs the
+# agent platform on the 4 chart line with workspaces on in its own values, and
+# is the hub the manager runs on. The shape is the manager's own e2e registry
+# (giantswarm-platform-manager internal/e2e): the installations catalog, the
+# installation's management-clusters and configs repositories, the fleet's
+# shared configs and collection base. Invented names, placeholder values; no
+# real installation's definition.
+repositories:
+  agentlab/registry:
+    catalog/installations.yaml: |
+      ---
+      apiVersion: backstage.io/v1alpha1
+      kind: Group
+      metadata:
+          name: labco
+      spec:
+          type: customer
+      ---
+      apiVersion: backstage.io/v1alpha1
+      kind: Resource
+      metadata:
+          name: ember
+          labels:
+              giantswarm.io/customer: labco
+              giantswarm.io/pipeline: stable
+              giantswarm.io/provider: capa
+              giantswarm.io/region: eu-central-1
+          annotations:
+              giantswarm.io/account-engineer: Ada Example
+              giantswarm.io/base: agentlab.test
+          links:
+              - url: https://github.com/agentlab/labco-management-clusters
+                type: CMC
+              - url: https://github.com/agentlab/labco-configs
+                type: CCR
+      spec:
+          owner: labco
+          type: installation
+  agentlab/labco-management-clusters:
+    management-clusters/ember/cluster-app-manifests.yaml: |
+      ---
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: ember-userconfig
+        namespace: org-giantswarm
+      data:
+        values: |
+          global:
+            metadata:
+              name: ember
+          cluster:
+            internal:
+              advancedConfiguration:
+                controlPlane:
+                  apiServer:
+                    featureGates:
+                      - name: PodCertificateRequest
+                        enabled: true
+                      - name: ClusterTrustBundle
+                        enabled: true
+                      - name: ClusterTrustBundleProjection
+                        enabled: true
+                  controllerManager:
+                    featureGates:
+                      - name: PodCertificateRequest
+                        enabled: true
+                      - name: ClusterTrustBundle
+                        enabled: true
+                      - name: ClusterTrustBundleProjection
+                        enabled: true
+                kubelet:
+                  featureGates:
+                    - name: PodCertificateRequest
+                      enabled: true
+                    - name: ClusterTrustBundle
+                      enabled: true
+                    - name: ClusterTrustBundleProjection
+                      enabled: true
+      ---
+      apiVersion: application.giantswarm.io/v1alpha1
+      kind: App
+      metadata:
+        name: ember
+        namespace: org-giantswarm
+      spec:
+        catalog: cluster
+        name: cluster-aws
+        version: 10.2.0
+        userConfig:
+          configMap:
+            name: ember-userconfig
+            namespace: org-giantswarm
+    # The collection pins a dex-app that takes the extra redirect URIs (3.3.0 or later).
+    management-clusters/ember/collections/kustomization.yaml: |
+      resources:
+        - https://github.com/agentlab/management-cluster-bases//bases/collections/capa/stages/stable?ref=main
+      patches:
+        - target:
+            kind: App
+            name: dex-app
+            namespace: giantswarm
+          patch: |
+            - op: replace
+              path: /spec/version
+              value: 3.3.0
+    management-clusters/ember/extras/kustomization.yaml: |
+      apiVersion: kustomize.config.k8s.io/v1beta1
+      kind: Kustomization
+      resources:
+        - ./monitoring/
+        - ./agent-platform/
+        - ./mcp-capi/
+        - ./mcp-kubernetes/
+        - ./mcp-prometheus/
+    management-clusters/ember/extras/backstage/kustomization.yaml: |
+      apiVersion: kustomize.config.k8s.io/v1beta1
+      kind: Kustomization
+      resources:
+        - ./backstage/
+    management-clusters/ember/extras/backstage/backstage/kustomization.yaml: |
+      resources:
+        - https://github.com/agentlab/management-cluster-bases/extras/backstage/main?ref=main
+        - app-config.yaml
+      patches:
+        - patch: |
+            - op: remove
+              path: /spec/ref/tag
+            - op: add
+              path: /spec/ref/semver
+              value: '>=2.1.0 <3.0.0'
+          target: {kind: OCIRepository, name: backstage, namespace: flux-giantswarm}
+    # The hub's Dev Portal: the registry's second source, and the portal the platform's fragment joins.
+    management-clusters/ember/extras/backstage/backstage/app-config.yaml: |
+      apiVersion: v1
+      kind: ConfigMap
+      data:
+        values: |
+          backstage:
+            appConfig: |
+              app:
+                baseUrl: https://portal.ember.agentlab.test
+              organization:
+                name: Labco
+              gs:
+                installations:
+                  ember:
+                    authProvider: oidc
+                    baseDomain: ember.agentlab.test
+                    providers:
+                      - capa
+              kubernetes:
+                clusterLocatorMethods:
+                  - type: config
+                    clusters:
+                      - name: ember
+                        url: https://happaapi.ember.agentlab.test
+    # Stand-ins of the portal's encrypted Secrets: no value, a reconcile keeps them.
+    management-clusters/ember/extras/backstage/backstage/dex-client-backstage-secret.enc.yaml: |
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: dex-client-backstage
+        namespace: giantswarm
+      type: Opaque
+      stringData:
+        secret: ENC[AES256_GCM,data:c3RhbmQtaW4=,type:str]
+      sops: {}
+    management-clusters/ember/extras/backstage/backstage/user-secrets.enc.yaml: |
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: user-secrets-backstage
+        namespace: flux-giantswarm
+      type: Opaque
+      stringData:
+        values: ENC[AES256_GCM,data:c3RhbmQtaW4=,type:str]
+      sops: {}
+  agentlab/labco-configs:
+    installations/ember/config.yaml.patch: |
+      codename: ember
+      base: agentlab.test
+      customer: labco
+      managementCluster:
+        private: false
+      agentPlatform:
+        kagentApiV2: true
+      services:
+        muster:
+          clientId: muster-ember
+    # The agent platform on record (the capability's marker) with workspaces on: the switch and
+    # the workspace-manager block are the installation's own, kept by the definition.
+    installations/ember/apps/agent-platform/configmap-values.yaml.patch: |
+      muster:
+        muster:
+          oauth:
+            server:
+              trustedAudiences:
+                - dex-k8s-authenticator
+                - backstage
+      workspaces:
+        enabled: true
+      workspace-manager:
+        providers:
+          instances:
+            - name: github
+              kind: github
+    installations/ember/apps/dex-app/configmap-values.yaml.patch: |
+      oidc:
+        staticClients:
+          dexK8SAuthenticator:
+            trustedPeers:
+              - backstage
+        extraStaticClients:
+          - id: backstage
+            name: Dev Portal
+            redirectURIs:
+              - https://portal.ember.agentlab.test/api/auth/oidc-ember/handler/frame
+            secretRef: {name: dex-client-backstage, key: secret}
+  agentlab/shared-configs:
+    default/config.yaml: |
+      services:
+        muster:
+          clientId: muster-shared
+      gatewayApi:
+        clusterIssuer: letsencrypt-example
+  agentlab/management-cluster-bases:
+    bases/collections/shared/base/dex-app.yaml: |
+      apiVersion: application.giantswarm.io/v1alpha1
+      kind: App
+      metadata:
+        name: dex-app
+        namespace: giantswarm
+      spec:
+        catalog: control-plane-catalog
+        kubeConfig:
+          inCluster: true
+        name: dex-app
+        namespace: giantswarm
+        version: 2.2.3
