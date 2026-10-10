@@ -63,6 +63,29 @@ type fluxRelease struct {
 	// URL names the registry by its kind-network name, out of the host's
 	// reach. Empty for a chart the registry serves to the host too.
 	LocalChart string
+	// HostURL is the chart repository as this host reaches it when the
+	// OCIRepository names the lab registry by its kind-network name — an
+	// overlay's components.<name>.repository pointing at a chart pushed
+	// there (localizeLabRegistry): the same repository through the port the
+	// registry container publishes on the host loopback. The HelmRelease
+	// keeps the kind-network URL, the one source-controller reaches. Empty
+	// for a chart the host reaches as the URL names it.
+	HostURL string
+	// LabRegistry is the lab registry's container when HostURL is set, for
+	// the refusal of a registry that does not answer.
+	LabRegistry string
+	// PlainHTTP is the OCIRepository's spec.insecure: the registry speaks
+	// plain HTTP, to the host's render as to source-controller.
+	PlainHTTP bool
+}
+
+// hostURL is the chart repository the host renders from: HostURL where the
+// URL names a registry only the cluster resolves, the URL otherwise.
+func (rel fluxRelease) hostURL() string {
+	if rel.HostURL != "" {
+		return rel.HostURL
+	}
+	return rel.URL
 }
 
 // chartLabel names the chart a render of the release was for: the
@@ -73,6 +96,9 @@ func (rel fluxRelease) chartLabel(resolved string) string {
 		return "the local chart at " + rel.LocalChart + ", pushed as " + rel.URL + ":" + rel.Version
 	}
 	label := rel.URL + " " + rel.Version
+	if rel.HostURL != "" {
+		label += ", read on this host as " + rel.HostURL
+	}
 	if resolved != "" && resolved != rel.Version {
 		label += ", resolved to " + resolved
 	}
@@ -93,6 +119,7 @@ type fluxDoc struct {
 			SemverFilter string `yaml:"semverFilter"`
 			Tag          string `yaml:"tag"`
 		} `yaml:"ref"`
+		Insecure        bool        `yaml:"insecure"`
 		ReleaseName     string      `yaml:"releaseName"`
 		ValuesFrom      []yaml.Node `yaml:"valuesFrom"`
 		TargetNamespace string      `yaml:"targetNamespace"`
@@ -117,7 +144,10 @@ type fluxDoc struct {
 // resolve offline.
 func fluxReleases(manifests string) ([]fluxRelease, error) {
 	dec := yaml.NewDecoder(strings.NewReader(manifests))
-	type source struct{ url, version, filter string }
+	type source struct {
+		url, version, filter string
+		insecure             bool
+	}
 	sources := map[string]source{}
 	var releases []fluxDoc
 	for {
@@ -134,7 +164,7 @@ func fluxReleases(manifests string) ([]fluxRelease, error) {
 			if version == "" {
 				version = doc.Spec.Ref.Tag
 			}
-			sources[doc.Metadata.Namespace+"/"+doc.Metadata.Name] = source{doc.Spec.URL, version, doc.Spec.Ref.SemverFilter}
+			sources[doc.Metadata.Namespace+"/"+doc.Metadata.Name] = source{doc.Spec.URL, version, doc.Spec.Ref.SemverFilter, doc.Spec.Insecure}
 		case "HelmRelease":
 			releases = append(releases, doc)
 		}
@@ -152,7 +182,7 @@ func fluxReleases(manifests string) ([]fluxRelease, error) {
 		if !ok {
 			continue
 		}
-		rel := fluxRelease{Name: hr.Spec.ReleaseName, Namespace: hr.Spec.TargetNamespace, URL: src.url, Version: src.version, Filter: src.filter}
+		rel := fluxRelease{Name: hr.Spec.ReleaseName, Namespace: hr.Spec.TargetNamespace, URL: src.url, Version: src.version, Filter: src.filter, PlainHTTP: src.insecure}
 		if rel.Name == "" {
 			rel.Name = hr.Metadata.Name
 		}
@@ -306,12 +336,12 @@ func renderFluxRelease(rel fluxRelease, apiVersions []string) (rendered, version
 	}
 	ref := rel.LocalChart
 	if ref == "" {
-		ref = rel.URL
-		if version, err = resolveComponentVersion(rel.URL, rel.Version, rel.Filter); err != nil {
+		ref = rel.hostURL()
+		if version, err = resolveComponentVersion(ref, rel.Version, rel.Filter, rel.PlainHTTP); err != nil {
 			return "", "", err
 		}
 	}
-	rendered, resolved, err := helmTemplate(rel.Namespace, rel.Name, ref, version, vals, apiVersions)
+	rendered, resolved, err := helmTemplateFrom(rel.Namespace, rel.Name, ref, version, rel.PlainHTTP, vals, apiVersions)
 	if resolved != "" {
 		version = resolved
 	}
@@ -319,8 +349,9 @@ func renderFluxRelease(rel fluxRelease, apiVersions []string) (rendered, version
 }
 
 // listChartTags lists a chart repository's tags for the component
-// resolution (helmChartTags); a variable so tests answer for the registry.
-var listChartTags = helmChartTags
+// resolution (helmChartTagsFrom); a variable so tests answer for the
+// registry.
+var listChartTags = helmChartTagsFrom
 
 // resolveComponentVersion is the version a component chart is rendered at,
 // resolved the way source-controller resolves the OCIRepository. Without a
@@ -331,11 +362,11 @@ var listChartTags = helmChartTags
 // pick is made here: the repository's tags, those the filter's regexp
 // matches, those the range admits, the highest. No such tag is an error the
 // caller reports and skips: the node pulls that component's images itself.
-func resolveComponentVersion(url, versionRange, filter string) (string, error) {
+func resolveComponentVersion(url, versionRange, filter string, plainHTTP bool) (string, error) {
 	if filter == "" {
 		return versionRange, nil
 	}
-	tags, err := listChartTags(url)
+	tags, err := listChartTags(url, plainHTTP)
 	if err != nil {
 		return "", err
 	}
@@ -395,6 +426,7 @@ func renderPlatformRoster(chart platformChart, values map[string]any) (*platform
 		return nil, err
 	}
 	localizeConnectivity(releases, chart)
+	localizeLabRegistry(releases, chart.labRegistry)
 	return &platformRoster{chart: chart, manifest: meta, releases: releases}, nil
 }
 
@@ -413,6 +445,43 @@ func localizeConnectivity(releases []fluxRelease, chart platformChart) {
 		if releases[i].Name == config.ConnectivityChartName {
 			releases[i].LocalChart = dir
 		}
+	}
+}
+
+// labRegistryAddress is the lab registry (devimages.go) under its two
+// names: the kind-network endpoint pods and source-controller reach it by
+// (<cluster>-registry:5000), which no resolver on the host knows, and the
+// port its container publishes on the host loopback
+// (platform.devRegistryPort) — the address the host pushes charts and
+// images through.
+type labRegistryAddress struct {
+	container, endpoint, host string
+}
+
+func labRegistryAddressFor(cfg *config.Config) labRegistryAddress {
+	return labRegistryAddress{container: devRegistryName(cfg), endpoint: devRegistryEndpoint(cfg), host: devRegistryHost(cfg)}
+}
+
+// localizeLabRegistry points the host's render of every release whose
+// OCIRepository names the lab registry by its kind-network name at the
+// registry's host-published port, over plain HTTP — the registry speaks
+// nothing else — the way the connectivity chart of a chartPath lab is pushed
+// (connectivity.go). That is how an unreleased component chart is proven: an
+// overlay's components.<name>.repository naming
+// oci://<cluster>-registry:5000/charts with insecure: true, the chart pushed
+// there. The release's URL stays as it is, the HelmRelease's.
+func localizeLabRegistry(releases []fluxRelease, registry labRegistryAddress) {
+	if registry.endpoint == "" {
+		return
+	}
+	for i := range releases {
+		rel := &releases[i]
+		if rel.LocalChart != "" || registryHost(rel.URL) != registry.endpoint {
+			continue
+		}
+		rel.HostURL = strings.Replace(rel.URL, registry.endpoint, registry.host, 1)
+		rel.LabRegistry = registry.container
+		rel.PlainHTTP = true
 	}
 }
 
@@ -668,14 +737,25 @@ func retryUnreachable(what string, render func() error) error {
 func unreachableComponentsError(unreachable []renderFailure) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%d component chart(s) could not be rendered, the registry did not answer through the retries:\n", len(unreachable))
-	var hosts []string
+	var hosts, labRegistries []string
 	for _, f := range unreachable {
 		fmt.Fprintf(&b, "\n%s\n", indent(strings.TrimSpace(f.err.Error()), "  "))
+		if f.rel.LabRegistry != "" {
+			labRegistries = append(labRegistries, fmt.Sprintf("%s (read on this host as %s)", f.rel.LabRegistry, registryHost(f.rel.HostURL)))
+			continue
+		}
 		hosts = append(hosts, registryHost(f.rel.URL))
 	}
-	slices.Sort(hosts)
-	fmt.Fprintf(&b, "\nThe install is not started: the lab's patches for a component (the %s sidecar, platform.devImages) are read off its render, and without one it would run unpatched. Check this host's network and DNS for %s, then run `agentlab platform` again",
-		dexLocalhostContainer, strings.Join(slices.Compact(hosts), ", "))
+	fmt.Fprintf(&b, "\nThe install is not started: the lab's patches for a component (the %s sidecar, platform.devImages) are read off its render, and without one it would run unpatched.", dexLocalhostContainer)
+	if len(hosts) > 0 {
+		slices.Sort(hosts)
+		fmt.Fprintf(&b, " Check this host's network and DNS for %s.", strings.Join(slices.Compact(hosts), ", "))
+	}
+	if len(labRegistries) > 0 {
+		slices.Sort(labRegistries)
+		fmt.Fprintf(&b, " The lab registry %s does not answer: check that its container runs (`docker ps -a --filter name=<container>`) and publishes platform.devRegistryPort, and that the chart was pushed there.", strings.Join(slices.Compact(labRegistries), ", "))
+	}
+	b.WriteString(" Then run `agentlab platform` again")
 	return errors.New(b.String())
 }
 

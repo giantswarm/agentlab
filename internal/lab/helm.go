@@ -203,7 +203,7 @@ func newHelmOp(namespace string) (*helmOp, error) {
 	if err := cfg.Init(labRESTClientGetter(namespace), namespace, helmDriver); err != nil {
 		return nil, fmt.Errorf("initialising the embedded Helm: %w", err)
 	}
-	rc, err := newHelmRegistryClient(settings, log)
+	rc, err := newHelmRegistryClient(settings, log, false)
 	if err != nil {
 		return nil, err
 	}
@@ -215,13 +215,19 @@ func newHelmOp(namespace string) (*helmOp, error) {
 // registry cache on, credentials from Helm's registry config file (anonymous
 // where there are none — gsoci and ghcr hand out pull and tag-list tokens
 // without any).
-func newHelmRegistryClient(settings *cli.EnvSettings, log *helmLog) (*registry.Client, error) {
-	rc, err := registry.NewClient(
+// A plain-HTTP client is for a registry without TLS (an OCIRepository's
+// spec.insecure, the lab registry).
+func newHelmRegistryClient(settings *cli.EnvSettings, log *helmLog, plainHTTP bool) (*registry.Client, error) {
+	opts := []registry.ClientOption{
 		registry.ClientOptDebug(settings.Debug),
 		registry.ClientOptEnableCache(true),
 		registry.ClientOptWriter(log),
 		registry.ClientOptCredentialsFile(settings.RegistryConfig),
-	)
+	}
+	if plainHTTP {
+		opts = append(opts, registry.ClientOptPlainHTTP())
+	}
+	rc, err := registry.NewClient(opts...)
 	if err != nil {
 		return nil, fmt.Errorf("creating the OCI registry client: %w", err)
 	}
@@ -233,10 +239,14 @@ func newHelmRegistryClient(settings *cli.EnvSettings, log *helmLog) (*registry.C
 // does for an OCIRepository too): every tag that parses as a semver version,
 // highest first — a `+` build metadata separator spelled `_` in the registry
 // comes back as `+`. Needs no cluster: only the registry is contacted.
-func helmChartTags(ref string) ([]string, error) {
+func helmChartTags(ref string) ([]string, error) { return helmChartTagsFrom(ref, false) }
+
+// helmChartTagsFrom is helmChartTags, over plain HTTP where the registry
+// speaks no TLS.
+func helmChartTagsFrom(ref string, plainHTTP bool) ([]string, error) {
 	log := newHelmLog()
 	settings := helmSettings()
-	rc, err := newHelmRegistryClient(settings, log)
+	rc, err := newHelmRegistryClient(settings, log, plainHTTP)
 	if err != nil {
 		return nil, err
 	}
@@ -713,9 +723,20 @@ func chartDirVersion(dir string) string {
 // version reported is the loaded chart's — the tag a range resolved to —
 // known from the moment the chart is loaded, so a failed render names it too.
 func helmTemplate(namespace, releaseName, ref, version string, vals map[string]any, apiVersions []string) (rendered, resolved string, err error) {
+	return helmTemplateFrom(namespace, releaseName, ref, version, false, vals, apiVersions)
+}
+
+// helmTemplateFrom is helmTemplate, pulling the chart over plain HTTP where
+// the registry speaks no TLS (`--plain-http`).
+func helmTemplateFrom(namespace, releaseName, ref, version string, plainHTTP bool, vals map[string]any, apiVersions []string) (rendered, resolved string, err error) {
 	h, err := newHelmOp(namespace)
 	if err != nil {
 		return "", "", err
+	}
+	if plainHTTP {
+		if h.cfg.RegistryClient, err = newHelmRegistryClient(h.settings, h.log, true); err != nil {
+			return "", "", err
+		}
 	}
 	invocation := fmt.Sprintf("template %s %s -n %s", releaseName, helmChartLabel(ref, version), namespace)
 	install := action.NewInstall(h.cfg)
