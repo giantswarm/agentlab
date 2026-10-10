@@ -126,6 +126,12 @@ stringData:
           # exactly, no DNS lookups -- unlike muster's own authorization
           # server, whose SSRF guards reject every lab hostname.
           - {{ .MusterBaseURL }}/oauth/proxy/callback
+          {{- if .WorkspaceGitHubProvider }}
+          # The workspace-manager's browser sign-in (platform.workspaces
+          # provider github): it signs the person in with this client before
+          # a provider connect, and Dex returns the browser to <base>/signin.
+          - {{ .WorkspaceManagerSignInURL }}
+          {{- end }}
       # Cross-client audience target. Backstage's GS auth provider requests
       # the scope audience:server:client_id:dex-k8s-authenticator by default
       # (components.backstage.extraScopes); Dex only honors that when the

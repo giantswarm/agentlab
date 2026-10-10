@@ -113,6 +113,11 @@ type tmplData struct {
 	WorkspacesEnabled bool
 	WorkspacesChart   bool
 	Workspaces        workspacesValues
+	// WorkspaceGitHub is the workspace-manager's provider instance github,
+	// nil while it is not rendered (workspaceprovider.go): agentlab.yaml's
+	// in a render without a cluster, what the cluster allows in the
+	// install's.
+	WorkspaceGitHub *workspaceGitHubValues
 	// PostRenderers is the lab's per-component `postRenderers` list as
 	// indented YAML, keyed by agent-platform component name
 	// (postrenderers.go): the hostNetwork, sidecar and nodePort patches plus
@@ -271,6 +276,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		WorkspacesEnabled:          cfg.WorkspacesEnabled(),
 		WorkspacesChart:            workspacesChartCarries(cfg),
 		Workspaces:                 workspacesValuesFor(cfg),
+		WorkspaceGitHub:            workspaceGitHubValuesFor(cfg),
 		CertsDir:                   certsDir,
 		NodeFilesDir:               nodeFiles,
 		MusterNodePort:             config.MusterNodePort,

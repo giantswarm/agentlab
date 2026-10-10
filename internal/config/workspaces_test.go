@@ -46,3 +46,26 @@ func TestWorkspacesSwitch(t *testing.T) {
 		t.Error("WorkspacesEnabled true with the platform off")
 	}
 }
+
+// The provider is github or nothing, and counts only with workspaces on.
+func TestWorkspacesProvider(t *testing.T) {
+	cfg := Default()
+	cfg.Platform.Workspaces.Provider = WorkspaceProviderGitHub
+	if cfg.WorkspaceGitHubProvider() {
+		t.Error("WorkspaceGitHubProvider true with workspaces off")
+	}
+	cfg.Platform.Workspaces.Enabled = true
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("provider github: %v", err)
+	}
+	if !cfg.WorkspaceGitHubProvider() {
+		t.Error("WorkspaceGitHubProvider false with workspaces on and provider github")
+	}
+	if got, want := cfg.WorkspaceManagerSignInURL(), "https://workspace-manager.127.0.0.1.nip.io/signin"; got != want {
+		t.Errorf("sign-in URL %s, want %s (port-free on 443)", got, want)
+	}
+	cfg.Platform.Workspaces.Provider = "gitlab"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "platform.workspaces.provider") {
+		t.Errorf("provider gitlab: err = %v, want refused", err)
+	}
+}
