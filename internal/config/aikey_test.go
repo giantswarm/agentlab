@@ -56,7 +56,7 @@ func TestGitHubAppValidate(t *testing.T) {
 	for name, mutate := range map[string]func(*Config){
 		"partial":     func(c *Config) { c.GitHubApp.InstallationID = "" },
 		"non-numeric": func(c *Config) { c.GitHubApp.AppID = "skills-app" },
-		"pasted key":  func(c *Config) { c.GitHubApp.PrivateKeySource = "-----BEGIN RSA PRIVATE KEY-----" },
+		"pasted key":  func(c *Config) { c.GitHubApp.PrivateKeySource = "pasted value" },
 		"with token":  func(c *Config) { c.GitHubToken.Source = "op://lab/github-token/credential" },
 	} {
 		cfg := Default()
