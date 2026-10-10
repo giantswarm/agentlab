@@ -1082,23 +1082,38 @@ workspaces:
         enabled: true
         usePodIdentity: true
         serverName: {{ .Workspaces.ServerName }}
-{{- if .WorkspaceGitHubProvider }}
 
-# The workspace-manager's provider instance github (platform.workspaces
-# provider github; workspaceprovider.go). The base URL carries the gateway
-# port, which the chart's derivation from global.domain drops: the chart
-# routes its host (/signin, /connect/<instance>, /callback/<instance>) and
-# forwards it, and the lab Dex's agent-platform client lists <base>/signin.
-# The instance renders once the App's ids are in agentlab.yaml and its
-# Secret carries both keys; the values name the Secret, never a value.
+# The workspace-manager's provider instances (platform.workspaces.provider;
+# workspaceprovider.go), each of the chart's github kind: fake, the lab's own
+# GitHub at its URL (a GitHub Enterprise-shaped instance, its API under
+# /api/v3), and github, github.com. The base URL carries the gateway port,
+# which the chart's derivation from global.domain drops: the chart routes its
+# host (/signin, /connect/<instance>, /callback/<instance>) and forwards it,
+# and the lab Dex's agent-platform client lists <base>/signin. The github
+# instance renders once the App's ids are in agentlab.yaml and its Secret
+# carries both keys; the values name each instance's Secret, never a value.
 workspace-manager:
   oauth:
     baseURL: {{ .WorkspaceManagerBaseURL }}
-{{- with .WorkspaceGitHub }}
+{{- if .WorkspaceFake }}
+  # The lab's GitHub serves TLS with a leaf of the lab CA, and the manager's
+  # HTTP client takes the system roots: the lab CA file the chart mounts for
+  # Dex (global.identity.ca) is named for them too. The image's own roots
+  # stay, read from its certificate directory regardless, so a github
+  # instance beside the fake still verifies github.com.
+  extraEnv:
+    - name: SSL_CERT_FILE
+      value: /etc/workspace-manager/idp-ca/ca.crt
+{{- end }}
+{{- with .WorkspaceProviders }}
   providers:
+{{- range . }}
     - name: {{ .Name }}
       kind: github
       values:
+{{- with .URL }}
+        url: {{ . }}
+{{- end }}
         app:
           id: {{ .AppID | printf "%q" }}
           privateKey: {name: {{ .Secret }}, key: {{ .PrivateKeyKey }}}

@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/giantswarm/agentlab/internal/config"
 )
 
 // The workspace proofs' GitHub (githubfake_workspaces.go) holds what its
@@ -168,9 +170,10 @@ const (
 	githubFakeClientSecret = "client-secret"
 )
 
-// githubFakeHost is the fake's name under the platform domain: the lab CA's
-// name constraints admit nothing outside it but loopback.
-func githubFakeHost(domain string) string { return "github." + domain }
+// githubFakeHost is the fake's name under the platform domain
+// (config.GitHubFakeHost): the lab CA's name constraints admit nothing
+// outside it but loopback.
+func githubFakeHost(domain string) string { return config.GitHubFakeHost(domain) }
 
 // EnsureGitHubFakeCredentials generates githubFakeCredentialsDir for the
 // platform domain: the TLS leaf re-minted whenever leaf policy says so (the

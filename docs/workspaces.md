@@ -5,8 +5,9 @@ on it: bare mirrors of its repositories and a directory per Session. Each
 Session's actor mounts its own directory read-write and the mirrors read-only,
 at sub-paths, through Agent Substrate. The lab brings two things the workspace
 proofs need and a kind cluster lacks: the [storage](#storage) and
-[a GitHub of its own](#the-labs-github); and it wires the workspace-manager to
-[a real GitHub App](#the-provider-instance-github).
+[a GitHub of its own](#the-labs-github), which it gives the workspace-manager
+as its [provider instance `fake`](#the-provider-instance-fake); a
+[real GitHub App](#the-provider-instance-github) is the other instance.
 
 ## Storage
 
@@ -99,15 +100,55 @@ of the proof yet. `--ready-timeout` bounds each wait (default 5m). A resume on
 another node is proven on a cloud installation, not in the lab: the lab's
 export is one node's disk.
 
-## The provider instance github
+## The provider instances
 
-`agentlab configure --workspaces-provider github` wires the workspace-manager
-for a real GitHub: its public base URL
-`https://workspace-manager.<domain>:<gatewayPort>`, the route the chart
-renders for it, and the lab Dex's redirect URI `<base URL>/signin`. The
-instance renders once a GitHub App of the lab's own is in place (the ids in
-`agentlab.yaml`, the keys in the Secret `agent-platform/workspace-github`:
-[Platform](platform.md#the-workspace-managers-github-app-platformworkspacesprovider)).
+With workspaces on, the workspace-manager gets the provider instances
+`platform.workspaces.provider` names: `fake`, the default while the key is
+empty; `github`; or both, `fake,github` (`agentlab configure
+--workspaces-provider …`). Each is an instance of the chart's `github` kind
+with a Secret of its own that the rendered values reference and nothing else
+reads. The wiring every instance shares is in place with the switch alone:
+the manager's public base URL `https://workspace-manager.<domain>:<gatewayPort>`,
+the route the chart renders for it, and the lab Dex's redirect URI
+`<base URL>/signin`
+([Platform](platform.md#the-workspace-managers-provider-instances-platformworkspacesprovider)).
+`platform-test` proves the manager registered with muster and Connected,
+rolled out, and `list_providers` as the admin naming every configured
+instance and nothing else.
+
+### The provider instance fake
+
+[The lab's GitHub](#the-labs-github) as a GitHub Enterprise-shaped instance,
+nothing to register and no account needed. `agentlab up` and `agentlab
+platform` run it (`agentlab github-fake --workspaces`) in a container on the
+kind network beside the nodes, the way a proof's fake runs; a running one is
+replaced, so the fixture is its state, and `agentlab platform-down` and
+`agentlab down` remove it. Pods reach it as `https://github.<domain>`: CoreDNS
+sends the name to the selector-less Service `agent-platform/agentlab-github`
+(port 443 onto the container), the answer keeps the name, and the fake's TLS
+leaf (the lab CA's) carries it. This host reaches it on the loopback port the
+container publishes, printed by the run with its request log.
+
+The instance is `url: https://github.<domain>` (the API under `/api/v3`, the
+kind's own derivation), the fixture's App (id `1`, client
+`Iv1.agentlab-workspaces`) and its credentials: the App's private key and the
+client secret the lab generated once under `certs/github-fake/`, placed ahead
+of the install as the Secret `agent-platform/workspace-fake` (keys
+`private-key`, `client-secret`) and referenced from the values. The manager's
+HTTP client takes the system roots, so the values name the lab CA file the
+chart mounts for Dex as its `SSL_CERT_FILE`; the image's own roots stay, read
+from its certificate directory regardless, so a `github` instance beside the
+fake still verifies github.com. The App's callback URL,
+`<base URL>/callback/fake`, is any absolute URL to the fake, and the sign-in
+consents at once for the lab user the `login` parameter names.
+
+### The provider instance github
+
+`agentlab configure --workspaces-provider github` (or `fake,github`) gives the
+workspace-manager a real GitHub. The instance renders once a GitHub App of
+the lab's own is in place (the ids in `agentlab.yaml`, the keys in the Secret
+`agent-platform/workspace-github`:
+[Platform](platform.md#the-workspace-managers-provider-instances-platformworkspacesprovider)).
 
 The App is registered once, by an owner of the organization that holds it,
 in GitHub's UI (Settings, Developer settings, GitHub Apps), and serves every
@@ -216,7 +257,10 @@ leaving the machine:
 | `client-secret` | the OAuth client secret |
 
 The fake needs `git` on its PATH (any git; the optional `http-backend` is not
-used). On the kind network it runs in an image that carries git, as the lab's own user, with the credentials mounted:
+used). With the [provider instance `fake`](#the-provider-instance-fake) the
+lab runs it this way itself, in the Debian golang image the storage proof's
+git runs in, as the lab's own user, with the credentials mounted — the same
+run by hand, for a fake of one's own:
 
 ```bash
 ./agentlab github-fake credentials

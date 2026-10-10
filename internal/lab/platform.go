@@ -438,6 +438,20 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 			cleanWorkspacesNode(node)
 		}
 	}
+	// The lab's GitHub for the workspace-manager's provider instance fake
+	// (workspacefake.go): its container, Service and Secret before the
+	// install, which references the Secret; gone when the instance is not
+	// configured, with the Service, so nothing resolves to it.
+	if cfg.WorkspaceFakeProvider() {
+		if err := githubFakeUp(cfg); err != nil {
+			return err
+		}
+	} else {
+		githubFakeDown(cfg)
+		if err := githubFakeServiceDown(ctx); err != nil {
+			return err
+		}
+	}
 	// Managed models: every host model server's endpoint is detected from
 	// the kind docker network and proven reachable from inside the cluster
 	// BEFORE the install, so a host-side misconfiguration (bind address,
@@ -498,16 +512,16 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	// without a cluster falls back to — is cross-built amd64 by the devctl
 	// Makefile even on an arm64 host. Resolved once, for both renders below.
 	workerArch := clusterWorkerPoolArch(ctx)
-	// The workspace-manager's provider instance github, once its App and
-	// Secret are in place (workspaceprovider.go); resolved once, for both
-	// renders below, like the arch pin.
-	workspaceGitHub, err := workspaceGitHubFor(ctx, cfg)
+	// The workspace-manager's provider instances, the github one once its
+	// App and Secret are in place (workspaceprovider.go); resolved once, for
+	// both renders below, like the arch pin.
+	workspaceProviders, err := workspaceProvidersInstall(ctx, cfg)
 	if err != nil {
 		return err
 	}
 	clusterPins := func(t *tmplData) {
 		t.WorkerPoolArch = workerArch
-		t.WorkspaceGitHub = workspaceGitHub
+		t.WorkspaceProviders = workspaceProviders
 	}
 
 	_, valuesPath, err := renderManifestWith(cfg, platformValuesTemplate, clusterPins)

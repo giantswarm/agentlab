@@ -283,7 +283,7 @@ func proveCommit(cfg *config.Config, user *config.User, token, binary, backendNa
 		return "", err
 	}
 	defer fake.close()
-	removeService, err := fakeServiceForPods(cfg, githubFakeService, "the fake GitHub API", fake.podIP, fakeContainerPort, githubFakeServiceHost+githubFakeHealthPath)
+	removeService, err := fakeServiceForPods(cfg, githubFakeService, "the fake GitHub API", fake.podIP, fakeContainerPort, fakeServicePort, githubFakeServiceHost+githubFakeHealthPath)
 	if err != nil {
 		return "", err
 	}

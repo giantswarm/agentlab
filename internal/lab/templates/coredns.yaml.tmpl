@@ -52,6 +52,17 @@ data:
             answer auto
         }
 {{- end }}
+{{- if .WorkspaceFake }}
+        # The lab's GitHub (platform.workspaces provider fake) is a container
+        # on the kind network behind the selector-less Service agentlab-github
+        # (workspacefake.go): its name goes there, before the wildcard sends
+        # everything else to the edge, and the answer keeps the name its TLS
+        # leaf carries. Anchored like the Dex issuer below.
+        rewrite stop {
+            name regex ^github\.{{ .DomainRegex }}\. agentlab-github.agent-platform.svc.cluster.local
+            answer auto
+        }
+{{- end }}
         # The wildcard matches the absolute name only: a search expansion
         # (<host>.<domain>.<namespace>.svc.cluster.local) falls through to
         # the kubernetes plugin's NXDOMAIN, and the resolver's last try, the

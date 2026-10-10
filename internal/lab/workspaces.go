@@ -618,6 +618,14 @@ func workspacesHint(cfg *config.Config, chartCarries bool) string {
 	if chartCarries {
 		registered = "registered with Substrate by the chart's CSIDriverConfig (the lab's workspaces values)"
 	}
-	return fmt.Sprintf("  Workspace storage: an NFS server on %s and the NFS CSI driver behind its mTLS proxy, %s;\n"+
+	hint := fmt.Sprintf("  Workspace storage: an NFS server on %s and the NFS CSI driver behind its mTLS proxy, %s;\n"+
 		"  the read-write-many StorageClass %s. Proof: `agentlab workspaces-test --storage-only`.", WorkspacesNode(cfg), registered, workspacesStorageClass)
+	if chartCarries {
+		hint += fmt.Sprintf("\n  The workspace-manager's provider instances: %s (the base URL %s; `agentlab platform-test` lists them as the admin).",
+			strings.Join(cfg.WorkspaceProviders(), ", "), cfg.WorkspaceManagerBaseURL())
+		if cfg.WorkspaceFakeProvider() {
+			hint += fmt.Sprintf("\n  The lab's GitHub serves the instance %s at %s, its credentials the lab's own.", config.WorkspaceProviderFake, cfg.GitHubFakeURL())
+		}
+	}
+	return hint
 }

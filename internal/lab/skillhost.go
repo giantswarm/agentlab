@@ -339,7 +339,7 @@ func startSkillHost(cfg *config.Config, binary, image string) (_ *skillHostFixtu
 		return nil, err
 	}
 
-	removeService, err := fakeServiceForPods(cfg, skillHostService, "the skill host fixture", f.container.podIP, fakeContainerPort,
+	removeService, err := fakeServiceForPods(cfg, skillHostService, "the skill host fixture", f.container.podIP, fakeContainerPort, fakeServicePort,
 		"http://"+skillHostService+"."+platformNamespace+".svc.cluster.local"+skillHostHealthPath)
 	if err != nil {
 		return nil, err
