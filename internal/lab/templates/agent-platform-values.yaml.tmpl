@@ -1082,4 +1082,29 @@ workspaces:
         enabled: true
         usePodIdentity: true
         serverName: {{ .Workspaces.ServerName }}
+{{- if .WorkspaceGitHubProvider }}
+
+# The workspace-manager's provider instance github (platform.workspaces
+# provider github; workspaceprovider.go). The base URL carries the gateway
+# port, which the chart's derivation from global.domain drops: the chart
+# routes its host (/signin, /connect/<instance>, /callback/<instance>) and
+# forwards it, and the lab Dex's agent-platform client lists <base>/signin.
+# The instance renders once the App's ids are in agentlab.yaml and its
+# Secret carries both keys; the values name the Secret, never a value.
+workspace-manager:
+  oauth:
+    baseURL: {{ .WorkspaceManagerBaseURL }}
+{{- with .WorkspaceGitHub }}
+  providers:
+    - name: {{ .Name }}
+      kind: github
+      values:
+        app:
+          id: {{ .AppID | printf "%q" }}
+          privateKey: {name: {{ .Secret }}, key: {{ .PrivateKeyKey }}}
+        oauth:
+          clientID: {{ .ClientID | printf "%q" }}
+          clientSecret: {name: {{ .Secret }}, key: {{ .SecretKey }}}
+{{- end }}
+{{- end }}
 {{- end }}

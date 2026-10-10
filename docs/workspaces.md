@@ -5,7 +5,8 @@ on it: bare mirrors of its repositories and a directory per Session. Each
 Session's actor mounts its own directory read-write and the mirrors read-only,
 at sub-paths, through Agent Substrate. The lab brings two things the workspace
 proofs need and a kind cluster lacks: the [storage](#storage) and
-[a GitHub of its own](#the-labs-github).
+[a GitHub of its own](#the-labs-github); and it wires the workspace-manager to
+[a real GitHub App](#the-provider-instance-github).
 
 ## Storage
 
@@ -97,6 +98,32 @@ lab that had it removes it.
 of the proof yet. `--ready-timeout` bounds each wait (default 5m). A resume on
 another node is proven on a cloud installation, not in the lab: the lab's
 export is one node's disk.
+
+## The provider instance github
+
+`agentlab configure --workspaces-provider github` wires the workspace-manager
+for a real GitHub: its public base URL
+`https://workspace-manager.<domain>:<gatewayPort>`, the route the chart
+renders for it, and the lab Dex's redirect URI `<base URL>/signin`. The
+instance renders once a GitHub App of the lab's own is in place (the ids in
+`agentlab.yaml`, the keys in the Secret `agent-platform/workspace-github`:
+[Platform](platform.md#the-workspace-managers-github-app-platformworkspacesprovider)).
+
+The App is registered once, by an owner of the organization that holds it,
+in GitHub's UI (Settings, Developer settings, GitHub Apps), and serves every
+lab:
+
+- **Callback URLs**: each lab's `https://workspace-manager.<domain>:<gatewayPort>/callback/github`
+  (`agentlab configure` prints it; a GitHub App takes up to ten).
+- **User-to-server tokens with expiry** on; no device flow, no webhook.
+- **Repository permissions**: Metadata read; Contents, Pull requests and
+  Issues read and write; Checks read.
+- Installed on the organizations whose repositories the lab's workspaces
+  mirror.
+
+It is an App of its own: the lab Dex's [sign-in App](github-signin.md) reads a
+profile and nothing on repositories, and muster's `github` server has its own
+client with muster's callback.
 
 ## The lab's GitHub
 

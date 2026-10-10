@@ -498,9 +498,19 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	// without a cluster falls back to — is cross-built amd64 by the devctl
 	// Makefile even on an arm64 host. Resolved once, for both renders below.
 	workerArch := clusterWorkerPoolArch(ctx)
-	pinWorkerArch := func(t *tmplData) { t.WorkerPoolArch = workerArch }
+	// The workspace-manager's provider instance github, once its App and
+	// Secret are in place (workspaceprovider.go); resolved once, for both
+	// renders below, like the arch pin.
+	workspaceGitHub, err := workspaceGitHubFor(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	clusterPins := func(t *tmplData) {
+		t.WorkerPoolArch = workerArch
+		t.WorkspaceGitHub = workspaceGitHub
+	}
 
-	_, valuesPath, err := renderManifestWith(cfg, platformValuesTemplate, pinWorkerArch)
+	_, valuesPath, err := renderManifestWith(cfg, platformValuesTemplate, clusterPins)
 	if err != nil {
 		return err
 	}
@@ -614,7 +624,7 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 		return err
 	}
 	if _, valuesPath, err = renderManifestWith(cfg, platformValuesTemplate, func(t *tmplData) {
-		pinWorkerArch(t)
+		clusterPins(t)
 		t.PostRenderers = postRenderers
 		if dev != nil {
 			t.HarnessDevImage = dev.harness

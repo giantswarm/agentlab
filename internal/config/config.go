@@ -427,7 +427,36 @@ type Workspaces struct {
 	// renders the chart's `workspaces:` block when the chart carries the
 	// key.
 	Enabled bool `yaml:"enabled"`
+	// Provider is the workspace-manager's provider instance: empty for none,
+	// WorkspaceProviderGitHub for a GitHub App of the lab's own. With it
+	// set, the workspace-manager's public base URL carries the gateway port
+	// (WorkspaceManagerBaseURL), the chart routes its host, and the lab
+	// Dex's agent-platform client lists <base URL>/signin.
+	Provider string `yaml:"provider,omitempty"`
+	// GitHub is the App behind the provider instance github.
+	GitHub WorkspaceGitHub `yaml:"github,omitempty"`
 }
+
+// WorkspaceGitHub is the lab's GitHub App for the workspace-manager's
+// provider instance github: an App of its own, apart from the lab Dex's
+// sign-in App and muster's github server client. Its App id and client id
+// are public and live here, empty until the App is registered; its private
+// key and client secret are the Secret WorkspaceGitHubSecretName in the
+// platform namespace (keys WorkspaceGitHubPrivateKeyKey and
+// GitHubClientSecretKey), which the operator's secret tooling places and
+// agentlab only references: it reads which keys the Secret carries, never
+// a value.
+type WorkspaceGitHub struct {
+	AppID    string `yaml:"appId,omitempty"`
+	ClientID string `yaml:"clientId,omitempty"`
+}
+
+// The workspace providers, and the Secret of the github instance's App.
+const (
+	WorkspaceProviderGitHub      = "github"
+	WorkspaceGitHubSecretName    = "workspace-github" // #nosec G101 -- Secret NAME, not a credential
+	WorkspaceGitHubPrivateKeyKey = "private-key"      // #nosec G101 -- Secret KEY name, not a credential
+)
 
 // Serving configures model serving on llm-d in the lab.
 type Serving struct {
@@ -1471,6 +1500,9 @@ func (c *Config) Validate() error {
 	if c.Platform.Workspaces.Enabled && c.Platform.Enabled && !c.Platform.Agents {
 		return fmt.Errorf("platform.workspaces requires platform.agents (Substrate's signers certify the driver's endpoint, and a Session's workspace is a Substrate volume mount)")
 	}
+	if p := c.Platform.Workspaces.Provider; p != "" && p != WorkspaceProviderGitHub {
+		return fmt.Errorf("platform.workspaces.provider %q: want %q or empty", p, WorkspaceProviderGitHub)
+	}
 	// The vm-manager component exists from agent-platform 4.11.0; a pinned
 	// release before it would take components.vm-manager as an unknown key
 	// and fail the install out of sight. A local checkout or a branch build
@@ -1594,6 +1626,28 @@ func (c *Config) KlausGatewayEnabled() bool {
 // the platform with its agents runtime, and the key on.
 func (c *Config) WorkspacesEnabled() bool {
 	return c.Platform.Enabled && c.Platform.Agents && c.Platform.Workspaces.Enabled
+}
+
+// WorkspaceGitHubProvider reports whether the workspace-manager gets the
+// provider instance github: workspaces on with platform.workspaces.provider
+// github.
+func (c *Config) WorkspaceGitHubProvider() bool {
+	return c.WorkspacesEnabled() && c.Platform.Workspaces.Provider == WorkspaceProviderGitHub
+}
+
+// WorkspaceManagerBaseURL is the workspace-manager's public base URL through
+// the edge: the browser's sign-in at <base>/signin, each provider instance's
+// <base>/connect/<name> and <base>/callback/<name>.
+func (c *Config) WorkspaceManagerBaseURL() string { return c.gatewayURL("workspace-manager") }
+
+// WorkspaceManagerSignInURL is the redirect URI the lab Dex's agent-platform
+// client lists for the workspace-manager's browser sign-in.
+func (c *Config) WorkspaceManagerSignInURL() string { return c.WorkspaceManagerBaseURL() + "/signin" }
+
+// WorkspaceGitHubCallbackURL is the callback URL the GitHub App behind the
+// provider instance github is registered with.
+func (c *Config) WorkspaceGitHubCallbackURL() string {
+	return c.WorkspaceManagerBaseURL() + "/callback/" + WorkspaceProviderGitHub
 }
 
 // The chart channels: where the meta chart the lab installs comes from.

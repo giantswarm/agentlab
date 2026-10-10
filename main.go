@@ -791,6 +791,7 @@ func configureCmd() *cobra.Command {
 	var platform, agents, observability, backstage, modelManager, vmManager, klausGateway bool
 	var serving, workspaces, github, githubSignIn bool
 	var githubSignInClientID string
+	var workspacesProvider, workspacesGitHubAppID, workspacesGitHubClientID string
 	var githubSignInOrgs, modelManagerBackends []string
 	var vmManagerImageDir, aiKeySource, gitHubTokenSource string
 	var chartVersion, chartPath, chartBranch string
@@ -908,6 +909,15 @@ func configureCmd() *cobra.Command {
 			if cmd.Flags().Changed("workspaces") {
 				cfg.Platform.Workspaces.Enabled = workspaces
 			}
+			if cmd.Flags().Changed("workspaces-provider") {
+				cfg.Platform.Workspaces.Provider = workspacesProvider
+			}
+			if cmd.Flags().Changed("workspaces-github-app-id") {
+				cfg.Platform.Workspaces.GitHub.AppID = workspacesGitHubAppID
+			}
+			if cmd.Flags().Changed("workspaces-github-client-id") {
+				cfg.Platform.Workspaces.GitHub.ClientID = workspacesGitHubClientID
+			}
 			if cmd.Flags().Changed("ai-key-source") {
 				cfg.AIKey.Source = aiKeySource
 			}
@@ -975,6 +985,9 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&githubSignIn, "github-signin", false, "turn the GitHub sign-in on (needs --github-signin-client-id once) or, with =false, off; the client Secret stays")
 	cmd.Flags().StringSliceVar(&githubSignInOrgs, "github-signin-orgs", nil, "GitHub sign-in: admit members of these GitHub organizations only, their teams as groups (`<org>:<team-slug>`); empty admits any GitHub account")
 	cmd.Flags().BoolVar(&workspaces, "workspaces", false, "workspace storage: a read-write-many StorageClass that serves git — an in-cluster NFS server, the NFS CSI driver behind an mTLS proxy only Agent Substrate's API server may reach, and the StorageClass "+lab.WorkspacesStorageClass+" (needs agents); --workspaces=false turns it off")
+	cmd.Flags().StringVar(&workspacesProvider, "workspaces-provider", "", "the workspace-manager's provider instance: github (a GitHub App of the lab's own, docs/workspaces.md) or \"\" for none")
+	cmd.Flags().StringVar(&workspacesGitHubAppID, "workspaces-github-app-id", "", "the App id of the workspaces GitHub App (public; its private key and client secret go into the Secret agent-platform/"+config.WorkspaceGitHubSecretName+")")
+	cmd.Flags().StringVar(&workspacesGitHubClientID, "workspaces-github-client-id", "", "the client id of the workspaces GitHub App (public)")
 	cmd.Flags().BoolVar(&serving, "serving", false, "serve models on llm-d in the lab: the KServe llmisvc controller and its CRDs, the well-known runtime configs, the connectivity chart's serving slice with the models Gateway, model-manager's kserve backend and one CPU preset of the lab's (needs agents; installs cert-manager); --serving=false turns it off")
 	cmd.Flags().StringVar(&aiKeySource, "ai-key-source", "", "where the Anthropic key of the agents' default ModelConfig lives, a reference `beekeeper secret copy` resolves (op://<vault>/<item>/<field>, or <file>#<path> of a SOPS file), never a value: every up and platform place it into the Secret kagent/kagent-anthropic through beekeeper, so a recreated lab carries it without a manual step; \"\" clears it (the key then comes from $ANTHROPIC_API_KEY, else a placeholder)")
 	cmd.Flags().StringVar(&gitHubTokenSource, "github-token-source", "", "where the GitHub token of the portal's skill discovery and agent-manager's skill resolution lives, a reference `beekeeper secret copy` resolves (op://<vault>/<item>/<field>, or <file>#<path> of a SOPS file), never a value: every up and platform place it into the Secret agentlab-github-token through beekeeper, lifting GitHub's anonymous 60 requests an hour this machine shares; \"\" clears it (the token then comes from $GITHUB_TOKEN, else GitHub is called unauthenticated)")
@@ -1032,6 +1045,12 @@ func printSaved(cfg *config.Config, disc *lab.Discovery) {
 	if cfg.WorkspacesEnabled() {
 		fmt.Printf("  workspaces an NFS server on %s and the NFS CSI driver behind its mTLS proxy; the read-write-many StorageClass %s\n", lab.WorkspacesNode(cfg), lab.WorkspacesStorageClass)
 	}
+	if cfg.WorkspaceGitHubProvider() {
+		gh := cfg.Platform.Workspaces.GitHub
+		fmt.Printf("  ws-github  the workspace-manager's provider instance github: App id %s, client id %s, the App's callback URL %s, Dex redirect URI %s; private key and client secret from Secret %s/%s (keys %s, %s)\n",
+			orUnset(gh.AppID), orUnset(gh.ClientID), cfg.WorkspaceGitHubCallbackURL(), cfg.WorkspaceManagerSignInURL(),
+			config.DefaultGitHubSecretNamespace, config.WorkspaceGitHubSecretName, config.WorkspaceGitHubPrivateKeyKey, config.GitHubClientSecretKey)
+	}
 	if cfg.VMManagerEnabled() {
 		fmt.Printf("  vm-manager the platform's VM provisioner as a pod of the node, registered with muster as x_vm-manager_* (%s)\n",
 			vmManagerImagesNote(cfg.Platform.VMManager))
@@ -1044,6 +1063,14 @@ func printSaved(cfg *config.Config, disc *lab.Discovery) {
 		fmt.Printf("  github     sign-in through the lab Dex as client %s (callback URL %s; the client secret from Secret %s/%s, key %s)%s\n",
 			s.ClientID, cfg.GitHubSignInCallbackURL(), config.GitHubSignInSecretNamespace, s.ClientSecret().Name, config.GitHubClientSecretKey, gitHubSignInOrgsNote(s.Orgs))
 	}
+}
+
+// orUnset is a configured value as the summary prints it.
+func orUnset(v string) string {
+	if v == "" {
+		return "(unset)"
+	}
+	return v
 }
 
 // gitHubSignInOrgsNote says who the GitHub sign-in admits.
