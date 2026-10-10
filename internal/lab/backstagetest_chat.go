@@ -126,10 +126,23 @@ type (
 	}
 )
 
+// The kinds of lf.a2a.v1.StreamResponse frame the proof reads, as the wire
+// names them, and the backend's {error} frame.
+const (
+	frameKindTask           = "task"
+	frameKindStatusUpdate   = "statusUpdate"
+	frameKindArtifactUpdate = "artifactUpdate"
+	frameKindMessage        = "message"
+	frameKindError          = "error"
+)
+
 // streamFrame is one SSE data frame of the streaming route: one
 // lf.a2a.v1.StreamResponse (exactly one of the four set), or the {error}
-// frame the backend writes when the upstream stream broke mid-turn.
+// frame the backend writes when the upstream stream broke mid-turn. kind is
+// the frame's top-level keys as the wire names them, so a kind the proof
+// does not read is still counted by name.
 type streamFrame struct {
+	kind           string
 	Task           *a2aTask           `json:"task"`
 	StatusUpdate   *a2aStatusUpdate   `json:"statusUpdate"`
 	ArtifactUpdate *a2aArtifactUpdate `json:"artifactUpdate"`
@@ -180,49 +193,62 @@ func hitlRequestOf(task *a2aTask) *hitlRequest {
 }
 
 // streamedTurn is what the proof keeps of one streamed turn: the task the
-// first frame named, the states seen in order, the frames counted by kind,
-// the reply text, and the terminal status update.
+// first frame named, the states seen in order, the frames counted by kind and
+// in the order they came, the reply text, and the terminal state.
 type streamedTurn struct {
 	TaskID  string
 	States  []string
 	Frames  map[string]int
 	Reply   string
-	Final   *a2aStatusUpdate
+	Final   string
 	Error   string
 	elapsed time.Duration
+	// kinds is every frame's kind in order, with the state it carried.
+	kinds []string
 	// chunks accumulates the streamed text between complete artifacts.
 	chunks strings.Builder
 }
 
-// absorb folds one frame into the turn. The reply is the text of the
-// complete artifact (the Go ADK's lastChunk with the whole text), else the
-// terminal status message's text, else the streamed chunks joined.
+// absorb folds one frame into the turn. The turn ends on a status update
+// flagged final or in a terminal state, or on a task snapshot in a terminal
+// state (the relay's closing frame on some paths). The reply is the text of
+// the complete artifact (the Go ADK's lastChunk with the whole text), else
+// the terminal status message's or task's text, else the streamed chunks
+// joined.
 func (t *streamedTurn) absorb(f streamFrame) {
 	if t.Frames == nil {
 		t.Frames = map[string]int{}
 	}
+	kind, carried := f.kind, ""
 	state := func(s string) {
+		carried = s
 		if s != "" && (len(t.States) == 0 || t.States[len(t.States)-1] != s) {
 			t.States = append(t.States, s)
 		}
 	}
 	switch {
 	case f.Task != nil:
-		t.Frames["task"]++
+		kind = frameKindTask
 		t.TaskID = firstNonEmpty(t.TaskID, f.Task.ID)
 		state(f.Task.Status.State)
+		if streamEndsOn(f.Task.Status.State) {
+			t.Final = f.Task.Status.State
+			if t.Reply == "" {
+				t.Reply = taskReplyText(f.Task)
+			}
+		}
 	case f.StatusUpdate != nil:
-		t.Frames["statusUpdate"]++
+		kind = frameKindStatusUpdate
 		t.TaskID = firstNonEmpty(t.TaskID, f.StatusUpdate.TaskID)
 		state(f.StatusUpdate.Status.State)
 		if f.StatusUpdate.Final || streamEndsOn(f.StatusUpdate.Status.State) {
-			t.Final = f.StatusUpdate
+			t.Final = f.StatusUpdate.Status.State
 			if t.Reply == "" && f.StatusUpdate.Status.Message != nil {
 				t.Reply = wireText(f.StatusUpdate.Status.Message.Parts)
 			}
 		}
 	case f.ArtifactUpdate != nil:
-		t.Frames["artifactUpdate"]++
+		kind = frameKindArtifactUpdate
 		text := wireText(f.ArtifactUpdate.Artifact.Parts)
 		if f.ArtifactUpdate.LastChunk {
 			t.Reply = text
@@ -230,14 +256,40 @@ func (t *streamedTurn) absorb(f streamFrame) {
 			t.chunks.WriteString(text)
 		}
 	case f.Message != nil:
-		t.Frames["message"]++
+		kind = frameKindMessage
 		if t.Reply == "" {
 			t.Reply = wireText(f.Message.Parts)
 		}
 	case f.Error != nil:
-		t.Frames["error"]++
+		kind = frameKindError
 		t.Error = f.Error.Code + ": " + f.Error.Message
 	}
+	kind = firstNonEmpty(kind, "empty")
+	t.Frames[kind]++
+	if carried != "" {
+		kind += "(" + strings.TrimPrefix(carried, "TASK_STATE_") + ")"
+	}
+	t.kinds = append(t.kinds, kind)
+}
+
+// frameKinds is the frames in the order they came, a run of one kind
+// collapsed to kind×n: "task(SUBMITTED) statusUpdate(WORKING)
+// artifactUpdate×10 statusUpdate(COMPLETED)".
+func (t *streamedTurn) frameKinds() string {
+	var runs []string
+	for i := 0; i < len(t.kinds); {
+		j := i
+		for j < len(t.kinds) && t.kinds[j] == t.kinds[i] {
+			j++
+		}
+		if j-i > 1 {
+			runs = append(runs, fmt.Sprintf("%s×%d", t.kinds[i], j-i))
+		} else {
+			runs = append(runs, t.kinds[i])
+		}
+		i = j
+	}
+	return fmt.Sprintf("%d frames: %s", len(t.kinds), strings.Join(runs, " "))
 }
 
 // reply is the reply text, falling back to the streamed chunks.
@@ -260,10 +312,7 @@ func streamEndsOn(state string) bool {
 // finalState is the terminal state the stream ended in, "" when it ended
 // without a terminal status update.
 func (t *streamedTurn) finalState() string {
-	if t.Final == nil {
-		return ""
-	}
-	return t.Final.Status.State
+	return t.Final
 }
 
 // portalInstallation is one entry of GET /kagent/installations: the
@@ -422,17 +471,9 @@ func (ps *portalSession) streamTurn(id string, agent portalAgentRef, text string
 		return turn, err
 	}
 	if turn.TaskID == "" {
-		return turn, fmt.Errorf("the stream on session %s ended after %d frames without a task frame", id, frameCount(turn))
+		return turn, fmt.Errorf("the stream on session %s ended after %s without a task frame", id, turn.frameKinds())
 	}
 	return turn, nil
-}
-
-func frameCount(t *streamedTurn) int {
-	n := 0
-	for _, c := range t.Frames {
-		n += c
-	}
-	return n
 }
 
 // answer is POST /kagent/sessions/:id/answer: the decision on the
@@ -628,16 +669,16 @@ func proveChat(primary *portalSession, others []*portalSession, agent portalAgen
 		}
 	}
 	if turn1.finalState() != taskStateCompleted {
-		return nil, fmt.Errorf("turn 1 ended %q after %d frames (states %v, error %q): %s", turn1.finalState(), frameCount(turn1), turn1.States, turn1.Error, excerpt(turn1.reply(), 200))
+		return nil, fmt.Errorf("turn 1 ended %q after %s (error %q): %s", turn1.finalState(), turn1.frameKinds(), turn1.Error, excerpt(turn1.reply(), 200))
 	}
 	if turn1.reply() == "" {
-		return nil, fmt.Errorf("turn 1 completed without a reply text (frames %v)", turn1.Frames)
+		return nil, fmt.Errorf("turn 1 completed without a reply text after %s", turn1.frameKinds())
 	}
 	if err := musterAttributedTurn(email, turn1.elapsed); err != nil {
 		return nil, err
 	}
-	note("task %s: %d frames (%v), states %v, %s; reply %q; muster: %s for %s", turn1.TaskID, frameCount(turn1), turn1.Frames, turn1.States, turn1.elapsed.Round(time.Second), excerpt(turn1.reply(), 80), musterTokenAcceptedLog, email)
-	verdicts = append(verdicts, fmt.Sprintf("PASS: the turn streams through POST %s/:id/messages/stream (%d frames: task, %d status updates, %d artifact updates) and muster attributes the agent's tool call to %s (%s)", kagentSessionsPath, frameCount(turn1), turn1.Frames["statusUpdate"], turn1.Frames["artifactUpdate"], email, musterTokenAcceptedLog))
+	note("task %s: %s, %s; reply %q; muster: %s for %s", turn1.TaskID, turn1.frameKinds(), turn1.elapsed.Round(time.Second), excerpt(turn1.reply(), 80), musterTokenAcceptedLog, email)
+	verdicts = append(verdicts, fmt.Sprintf("PASS: the turn streams through POST %s/:id/messages/stream (%s) and muster attributes the agent's tool call to %s (%s)", kagentSessionsPath, turn1.frameKinds(), email, musterTokenAcceptedLog))
 
 	// The gateway gives the worker back at the end of every turn — the
 	// runtime is quiesced into a snapshot — while the instance's logical
@@ -656,7 +697,7 @@ func proveChat(primary *portalSession, others []*portalSession, agent portalAgen
 		return nil, err
 	}
 	if turn2.finalState() != taskStateCompleted {
-		return nil, fmt.Errorf("turn 2 ended %q (states %v, error %q): %s", turn2.finalState(), turn2.States, turn2.Error, excerpt(turn2.reply(), 200))
+		return nil, fmt.Errorf("turn 2 ended %q after %s (error %q): %s", turn2.finalState(), turn2.frameKinds(), turn2.Error, excerpt(turn2.reply(), 200))
 	}
 	if !strings.Contains(turn2.reply(), word) {
 		return nil, fmt.Errorf("turn 2 answered %q — the codeword %s of turn 1 is not in it: the resumed instance lost its context", excerpt(turn2.reply(), 200), word)
@@ -759,7 +800,7 @@ func proveHITLAndStop(primary *portalSession, agent portalAgentRef) ([]string, e
 		}
 	}
 	if turn.finalState() != taskStateInputRequired {
-		return nil, fmt.Errorf("the tool prompt on %s ended %q (states %v), wanted %s — the binding did not pause the tool call for approval: %s", agent.Name, turn.finalState(), turn.States, taskStateInputRequired, excerpt(turn.reply(), 200))
+		return nil, fmt.Errorf("the tool prompt on %s ended %q after %s, wanted %s — the binding did not pause the tool call for approval: %s", agent.Name, turn.finalState(), turn.frameKinds(), taskStateInputRequired, excerpt(turn.reply(), 200))
 	}
 	task, err := primary.waitTaskSettled(sessionID, turn.TaskID, kubeReadTimeout)
 	if err != nil {
@@ -795,16 +836,16 @@ func proveHITLAndStop(primary *portalSession, agent portalAgentRef) ([]string, e
 		return nil, err
 	}
 	if settled.Status.State != taskStateCanceled {
-		return nil, fmt.Errorf("task %s is %s after the cancel (the cancel answered %s; stream states %v), wanted %s", turn.TaskID, settled.Status.State, cancelled.Status.State, turn.States, taskStateCanceled)
+		return nil, fmt.Errorf("task %s is %s after the cancel (the cancel answered %s; the stream ended after %s), wanted %s", turn.TaskID, settled.Status.State, cancelled.Status.State, turn.frameKinds(), taskStateCanceled)
 	}
 	after, err := primary.streamTurn(sessionID, agent, portalPongPrompt, nil)
 	if err != nil {
 		return nil, err
 	}
 	if after.finalState() != taskStateCompleted || !strings.Contains(strings.ToLower(after.reply()), "pong") {
-		return nil, fmt.Errorf("the turn after the Stop ended %q with %q, wanted a completed pong", after.finalState(), excerpt(after.reply(), 80))
+		return nil, fmt.Errorf("the turn after the Stop ended %q after %s with %q, wanted a completed pong", after.finalState(), after.frameKinds(), excerpt(after.reply(), 80))
 	}
-	note("task %s cancelled (the cancel answered %s, the task settled %s; stream ended %v after %d frames); the next turn completed with %q", turn.TaskID, cancelled.Status.State, settled.Status.State, turn.States, frameCount(turn), excerpt(after.reply(), 40))
+	note("task %s cancelled (the cancel answered %s, the task settled %s; the stream ended after %s); the next turn completed with %q", turn.TaskID, cancelled.Status.State, settled.Status.State, turn.frameKinds(), excerpt(after.reply(), 40))
 	verdicts = append(verdicts, fmt.Sprintf("PASS: Stop — POST %s/:id/tasks/:taskId/cancel leaves the task %s and the session takes the next turn", kagentSessionsPath, taskStateCanceled))
 	return verdicts, nil
 }
