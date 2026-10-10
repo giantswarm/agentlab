@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -134,20 +135,33 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 		return parsed, nil
 	}
 
+	// listTools is the session's tool names: one page with every tool, since
+	// list_tools pages at 50 by default and the family tools sort after the
+	// platform servers'.
+	listTools := func() ([]string, error) {
+		res, err := call(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_tools","arguments":{"limit":1000}}}`)
+		if err != nil {
+			return nil, err
+		}
+		var toolList struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		}
+		if err := json.Unmarshal([]byte(innerText(res)), &toolList); err != nil {
+			return nil, fmt.Errorf("parsing list_tools payload: %w", err)
+		}
+		names := make([]string, 0, len(toolList.Tools))
+		for _, t := range toolList.Tools {
+			names = append(names, t.Name)
+		}
+		return names, nil
+	}
+
 	p.begin(stageKubernetesTools, "Kubernetes tools muster is aggregating")
-	// One page with every tool: list_tools pages at 50 by default, and the
-	// family tools sort after the platform servers'.
-	res, err := call(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_tools","arguments":{"limit":1000}}}`)
+	toolNames, err := listTools()
 	if err != nil {
 		return "", err
-	}
-	var toolList struct {
-		Tools []struct {
-			Name string `json:"name"`
-		} `json:"tools"`
-	}
-	if err := json.Unmarshal([]byte(innerText(res)), &toolList); err != nil {
-		return "", fmt.Errorf("parsing list_tools payload: %w", err)
 	}
 	// The lab's mcp-kubernetes is the kubernetes family's member, so muster
 	// exposes the family's tools: x_kubernetes_<tool>, management_cluster
@@ -155,18 +169,14 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 	// own tools on the 3.x line).
 	toolPrefix := kubernetesTool(cfg, "")
 	shown := 0
-	for _, t := range toolList.Tools {
-		if strings.HasPrefix(t.Name, toolPrefix) && shown < 8 {
-			note("%s", t.Name)
+	for _, name := range toolNames {
+		if strings.HasPrefix(name, toolPrefix) && shown < 8 {
+			note("%s", name)
 			shown++
 		}
 	}
 	if shown == 0 {
-		names := make([]string, 0, len(toolList.Tools))
-		for _, t := range toolList.Tools {
-			names = append(names, t.Name)
-		}
-		return "", fmt.Errorf("muster aggregates no %s tools (it lists %s)", toolPrefix, strings.Join(names, ", "))
+		return "", fmt.Errorf("muster aggregates no %s tools (it lists %s)", toolPrefix, strings.Join(toolNames, ", "))
 	}
 
 	p.begin(stageMCPToolCall, "Calling %slist namespaces on %s through muster", toolPrefix, cfg.MCPServerName())
@@ -175,7 +185,7 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 		return "", err
 	}
 	payload := fmt.Sprintf(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"call_tool","arguments":{"name":%q,"arguments":%s}}}`, toolPrefix+"list", listArgs)
-	res, err = call(payload)
+	res, err := call(payload)
 	if err != nil {
 		return "", err
 	}
@@ -264,6 +274,23 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 		verdict += fmt.Sprintf("\nPASS: the %s bridge on all %d servers told the lab Dex address through a name they dial it by — sidecar present, 0 restarts since the release, MCPServer Connected: %s", dexLocalhostContainer, len(servers), strings.Join(serverNames, ", "))
 	} else {
 		verdict += fmt.Sprintf("\nPASS: all %d servers told the issuer %s reach it through cluster DNS (the %s Service) — no sidecar, MCPServer Connected: %s", len(servers), cfg.Issuer(), dexIssuerService, strings.Join(serverNames, ", "))
+	}
+	// cluster-manager, when it is on (platform.devImages.cluster-manager, or
+	// an overlay): Connected is not enough — its downstream OAuth needs the
+	// `kubernetes` audience the lab renders for it, and without it the
+	// session sees no tool of its while the CR reads Connected.
+	if slices.ContainsFunc(servers, func(s dexLocalhostServer) bool { return s.mcpServer == clusterManager }) {
+		names, err := listTools()
+		if err != nil {
+			return "", err
+		}
+		prefix := "x_" + clusterManager + "_"
+		tools := slices.DeleteFunc(names, func(name string) bool { return !strings.HasPrefix(name, prefix) })
+		if len(tools) == 0 {
+			return "", fmt.Errorf("muster lists no %s* tool for this session although MCPServer %s reads Connected: the forwarded token lacks the audience cluster-manager's downstream OAuth presents to the apiserver (%s.muster.mcpServer.auth.requiredAudiences in the rendered values; `agentlab logs %s`)", prefix, clusterManager, clusterManager, clusterManager)
+		}
+		note("%s lists %d tools for this session: %s", clusterManager, len(tools), strings.Join(tools, ", "))
+		verdict += fmt.Sprintf("\nPASS: %s's %d tools reach the session through muster (the lab's %s audience): %s", clusterManager, len(tools), config.KubernetesClientID, strings.Join(tools, ", "))
 	}
 
 	// The user's identity, not a ServiceAccount: the same tool as two users
@@ -402,9 +429,9 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 	promPrefix := familyTool(familyPrometheus, "")
 	p.begin(stagePrometheusTools, "Prometheus tools muster is aggregating")
 	shown = 0
-	for _, t := range toolList.Tools {
-		if strings.HasPrefix(t.Name, promPrefix) && shown < 8 {
-			note("%s", t.Name)
+	for _, name := range toolNames {
+		if strings.HasPrefix(name, promPrefix) && shown < 8 {
+			note("%s", name)
 			shown++
 		}
 	}

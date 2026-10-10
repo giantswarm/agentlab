@@ -135,6 +135,7 @@ internal/lab/                    everything operational:
   platform.go platformtest.go      agent platform install + the headless MCP proof
   postrenderers.go                 the lab's per-component postRenderers patches (hostNetwork, sidecar, nodePort, dev-image overrides)
   devimages.go                     the dev-image swap: image names resolved from the component renders, the lab registry + the digest-pinned Harness image
+  agentgateway.go                  the agentgateway proxy's dev image as the chart's proxy.image values, and the wait for the controller to roll it
   fluxreleases.go                  image preload from the chart's rendered OCIRepositories/HelmReleases, each at the version Flux would pull (semverFilter included)
   helm.go restclient.go            the embedded Helm 4 (upgrade-or-install with the kstatus wait, offline renders, probes, uninstalls); the lab kubeconfig as a client-go REST client getter
   resources.go                     docker CPU/memory: the requests table and the floors `up` enforces

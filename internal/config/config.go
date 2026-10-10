@@ -135,14 +135,37 @@ func ConnectivityChartDir(chartPath string) string {
 
 // DevImageComponents are the targets platform.devImages can swap: the
 // agent-platform chart's component names (its `components.<name>` entries)
-// for the Deployments the lab's dev loops build from a checkout, plus
+// for the Deployments the lab's dev loops build from a checkout — the
+// agentgateway component's two Deployments under their own names — plus
 // DevImageHarness for the platform Harness's runtime image.
-var DevImageComponents = []string{"muster", "backstage", "kagent", "mcp-kubernetes", "model-manager", "agent-manager", "vm-manager", DevImageKlausGateway, DevImageHarness}
+var DevImageComponents = []string{"muster", "backstage", "kagent", "mcp-kubernetes", "model-manager", "agent-manager", "vm-manager", DevImageKlausGateway, DevImageClusterManager, DevImageAgentgateway, DevImageAgentgatewayController, DevImageHarness}
 
 // DevImageKlausGateway is the devImages key of the klaus-gateway component
 // (platform.klausGateway): the Deployment `klaus-gateway`, container
 // `klaus-gateway`. Meaningful only while the component is on.
 const DevImageKlausGateway = "klaus-gateway"
+
+// DevImageClusterManager is the devImages key of the cluster-manager
+// component: the Deployment `cluster-manager`, container `cluster-manager`.
+// The meta chart ships the component off, and the lab has no other switch
+// for it: naming its image here turns it on (ClusterManagerEnabled), with
+// the lab's own values for it (the `kubernetes` audience its MCP server
+// requires of the forwarded token).
+const DevImageClusterManager = "cluster-manager"
+
+// DevImageAgentgateway is the devImages key of the agentgateway data plane:
+// the Deployment `agentgateway`, container `agentgateway` — the proxy the
+// agentgateway controller runs for the lab's Gateway. The controller creates
+// that Deployment at run time from the image its chart hands it as registry,
+// repository and tag (the chart's proxy.image values), so the lab forwards
+// the ref through those values rather than as a post-renderer, and a digest
+// ref — which the three fields cannot carry — is refused.
+const DevImageAgentgateway = "agentgateway"
+
+// DevImageAgentgatewayController is the devImages key of the agentgateway
+// controller: the Deployment `agentgateway-controller`, container
+// `controller`, rendered by the agentgateway component's chart.
+const DevImageAgentgatewayController = "agentgateway-controller"
 
 // DevImageHarness is the devImages key of the platform Harness's workload
 // image — the Go ADK runtime every agent runs on under kagent API v2. Not a
@@ -1555,6 +1578,11 @@ func (c *Config) Validate() error {
 	if _, ok := c.Platform.DevImages[DevImageKlausGateway]; ok && !c.Platform.KlausGateway.Enabled {
 		return fmt.Errorf("platform.devImages.%s: the component is off (platform.klausGateway.enabled: true, or `agentlab configure --klaus-gateway`) — the override would swap the image of nothing", DevImageKlausGateway)
 	}
+	// The agentgateway controller runs its proxies from registry, repository
+	// and tag: a digest has no field to travel in.
+	if ref, ok := c.Platform.DevImages[DevImageAgentgateway]; ok && strings.Contains(ref, "@") {
+		return fmt.Errorf("platform.devImages.%s %q: the agentgateway controller names its proxies' image by registry, repository and tag (the chart's proxy.image values), so a digest ref cannot be forwarded — name a tag", DevImageAgentgateway, ref)
+	}
 	// Swarmgeist is a client of the kagent controller: without the agents
 	// runtime the component has nothing to talk to.
 	if c.Platform.KlausGateway.Enabled && c.Platform.Enabled && !c.Platform.Agents {
@@ -1698,6 +1726,16 @@ func (c *Config) VMManagerEnabled() bool {
 // component: the platform with its agents runtime, and the key on.
 func (c *Config) KlausGatewayEnabled() bool {
 	return c.Platform.Enabled && c.Platform.Agents && c.Platform.KlausGateway.Enabled
+}
+
+// ClusterManagerEnabled reports whether the lab turns the chart's
+// cluster-manager component on: the platform, with a dev image named for it
+// (DevImageClusterManager) — the lab's one switch for a component the meta
+// chart ships off. An overlay that enables it is the chart's business, not
+// this lab's.
+func (c *Config) ClusterManagerEnabled() bool {
+	_, ok := c.Platform.DevImages[DevImageClusterManager]
+	return c.Platform.Enabled && ok
 }
 
 // WorkspacesEnabled reports whether the lab installs the workspace storage:

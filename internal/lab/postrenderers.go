@@ -64,10 +64,17 @@ import (
 //     The name the override replaces is the component chart's, read from its
 //     render (devimages.go) — the kagent controller's differs between the
 //     lines — and an override that would match nothing in the render is an
-//     error before the install, because kustomize drops it silently. The
-//     `harness` target is not a post-renderer: the platform Harness pins its
-//     image by digest through the connectivity values (kagent.harness.image,
-//     the values template), served by the lab registry.
+//     error before the install, because kustomize drops it silently. A
+//     target's patch lands on the release whose chart renders the Deployment:
+//     the agentgateway controller's on the agentgateway component. Two
+//     targets are no post-renderer: the `harness` target, since the platform
+//     Harness pins its image by digest through the connectivity values
+//     (kagent.harness.image, the values template), served by the lab
+//     registry; and the `agentgateway` target, the data-plane proxy, whose
+//     Deployment the agentgateway controller creates at run time from the
+//     image its chart hands it as registry, repository and tag — forwarded
+//     through those values (agentgateway.proxy.image, agentgateway.go),
+//     side-loaded like every Deployment target.
 //
 //  6. The Slack Web API base of the klaus-gateway component
 //     (KLAUS_GATEWAY_SLACK_API_BASE, which the chart has no value for): the
@@ -168,15 +175,27 @@ type postRenderer struct {
 	} `yaml:"kustomize"`
 }
 
-// devImageTarget is what the dev-image swap of one Deployment component has
-// to know about the component chart's render: the Deployment/container whose
+// devImageTarget is what the dev-image swap of one Deployment target has to
+// know about the component chart's render: the Deployment/container whose
 // image it replaces and whose pull policy it relaxes, and the image name the
 // chart renders there when the render itself cannot be asked (`agentlab
 // render`, a component chart that failed to render) — what kustomize matches
 // on (the name without tag). `agentlab platform` resolves the live name from
-// the render instead (resolveDevImageNames).
+// the render instead (resolveDevImageNames). release names the component
+// whose chart renders the Deployment — whose render the name is read off and
+// whose postRenderers carry the patch — when it is not the target's own key.
 type devImageTarget struct {
 	deployment, container, image string
+	release                      string
+}
+
+// releaseOf is the component release a target's patch lands on: the named
+// one, else the target's own key.
+func (t devImageTarget) releaseOf(target string) string {
+	if t.release != "" {
+		return t.release
+	}
+	return target
 }
 
 // devImageTargets maps the Deployment targets of the DevImageComponents to
@@ -185,14 +204,18 @@ type devImageTarget struct {
 // line publishes it under its own path,
 // gsoci.azurecr.io/giantswarm/kagent/controller, which the render says.
 var devImageTargets = map[string]devImageTarget{
-	componentMuster:        {componentMuster, componentMuster, "gsoci.azurecr.io/giantswarm/muster"},
-	componentBackstage:     {componentBackstage, componentBackstage, "gsoci.azurecr.io/giantswarm/backstage"},
-	componentKagent:        {"kagent-controller", "controller", "gsoci.azurecr.io/giantswarm/kagent-controller"},
-	componentMCPKubernetes: {componentMCPKubernetes, componentMCPKubernetes, "gsoci.azurecr.io/giantswarm/mcp-kubernetes"},
-	modelManagerMCPServer:  {modelManagerMCPServer, modelManagerMCPServer, "gsoci.azurecr.io/giantswarm/model-manager"},
-	agentManagerMCPServer:  {agentManagerMCPServer, agentManagerMCPServer, "gsoci.azurecr.io/giantswarm/agent-manager"},
-	vmManagerMCPServer:     {vmManagerMCPServer, vmManagerMCPServer, "gsoci.azurecr.io/giantswarm/vm-manager"},
-	klausGatewayComponent:  {klausGatewayComponent, klausGatewayComponent, "gsoci.azurecr.io/giantswarm/klaus-gateway"},
+	componentMuster:        {deployment: componentMuster, container: componentMuster, image: "gsoci.azurecr.io/giantswarm/muster"},
+	componentBackstage:     {deployment: componentBackstage, container: componentBackstage, image: "gsoci.azurecr.io/giantswarm/backstage"},
+	componentKagent:        {deployment: "kagent-controller", container: "controller", image: "gsoci.azurecr.io/giantswarm/kagent-controller"},
+	componentMCPKubernetes: {deployment: componentMCPKubernetes, container: componentMCPKubernetes, image: "gsoci.azurecr.io/giantswarm/mcp-kubernetes"},
+	modelManagerMCPServer:  {deployment: modelManagerMCPServer, container: modelManagerMCPServer, image: "gsoci.azurecr.io/giantswarm/model-manager"},
+	agentManagerMCPServer:  {deployment: agentManagerMCPServer, container: agentManagerMCPServer, image: "gsoci.azurecr.io/giantswarm/agent-manager"},
+	vmManagerMCPServer:     {deployment: vmManagerMCPServer, container: vmManagerMCPServer, image: "gsoci.azurecr.io/giantswarm/vm-manager"},
+	klausGatewayComponent:  {deployment: klausGatewayComponent, container: klausGatewayComponent, image: "gsoci.azurecr.io/giantswarm/klaus-gateway"},
+	clusterManager:         {deployment: clusterManager, container: clusterManager, image: "gsoci.azurecr.io/giantswarm/cluster-manager"},
+	// The agentgateway controller is the one Deployment its component's
+	// chart renders; the proxy is the controller's (agentgateway.go).
+	config.DevImageAgentgatewayController: {deployment: config.DevImageAgentgatewayController, container: "controller", image: "gsoci.azurecr.io/giantswarm/agentgateway-upstream/controller", release: agentgatewayComponent},
 }
 
 // defaultDevImageNames is the image name per configured Deployment target as
@@ -509,8 +532,9 @@ func componentPostRenderers(cfg *config.Config, imageNames map[string]string, si
 		if !ok || name == "" {
 			continue
 		}
-		images[component] = append(images[component], devImageOverride(name, cfg.Platform.DevImages[component]))
-		patches[component] = append(patches[component], pullPolicyPatch(target))
+		release := target.releaseOf(component)
+		images[release] = append(images[release], devImageOverride(name, cfg.Platform.DevImages[component]))
+		patches[release] = append(patches[release], pullPolicyPatch(target))
 	}
 	out := map[string]string{}
 	for component, list := range patches {

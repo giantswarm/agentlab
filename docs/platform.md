@@ -224,8 +224,11 @@ under `platform.devImages`. The targets are the chart's component names for
 the Deployments the lab can swap — `muster`, `backstage`, `kagent` (the
 controller), `mcp-kubernetes`, `model-manager`, `agent-manager`,
 `vm-manager` (with `platform.vmManager`), `klaus-gateway` (with
-`platform.klausGateway`) — and `harness`, the platform Harness's runtime
-image (the Go ADK every agent runs on under kagent API v2):
+`platform.klausGateway`), `cluster-manager` (which the entry turns on, see
+below), the agentgateway component's two Deployments under their own names,
+`agentgateway` (the data-plane proxy) and `agentgateway-controller` — and
+`harness`, the platform Harness's runtime image (the Go ADK every agent runs
+on under kagent API v2):
 
 ```yaml
 platform:
@@ -234,6 +237,9 @@ platform:
     backstage: backstage-dev:my-feature-4d5e6f
     kagent: kagent-controller:dev-7e8f9a      # the line's controller, built from go/ of giantswarm/kagent-upstream
     harness: golang-adk:dev-7e8f9a            # the Go ADK, same checkout, BUILD_PACKAGE=adk/cmd/main.go
+    cluster-manager: cluster-manager:dev-3e4f  # turns the component on, with the lab's audience for it
+    agentgateway: agentgateway:dev-7c8d       # the proxy, built from giantswarm/agentgateway-upstream
+    agentgateway-controller: agentgateway-controller:dev-7c8d
 ```
 
 Either way the swap is part of the release: `agentlab platform` renders it
@@ -284,7 +290,51 @@ patches is **refused before the install**, naming both (`platform.devImages.kage
 the kagent chart's render has no Deployment kagent-controller with a container
 controller …`); a chart whose render was skipped (the preload notes why; a
 registry that does not answer stops the boot instead, see the gotchas) falls
-back to the table's name with a note that it is unverified.
+back to the table's name with a note that it is unverified. A target's patch
+lands on the release whose chart renders the Deployment: the
+`agentgateway-controller` target (Deployment `agentgateway-controller`,
+container `controller`) rides the `agentgateway` component's
+`postRenderers`.
+
+### The `cluster-manager` target
+
+The meta chart ships cluster-manager off, and the lab has no other switch
+for it: naming its image under `platform.devImages.cluster-manager` turns
+the component on (`components.cluster-manager.enabled: true` in the rendered
+values) with the lab's patches on it — the `dex-localhost` sidecar the rule
+finds on its render, the image override, the pull policy — and the lab's
+own values for it: `cluster-manager.muster.mcpServer.auth.requiredAudiences:
+[kubernetes]`, the same audience story as mcp-kubernetes, agent-manager and
+model-manager. cluster-manager's downstream OAuth presents the forwarded
+token to the kind apiserver as the caller, so without that audience a
+headless session sees no `x_cluster-manager_*` tool while the MCPServer reads
+Connected. The audience block renders whatever turns the component on — the
+meta chart forwards it only while the component is enabled — so a
+`platform.valuesFiles` overlay that enables `components.cluster-manager`
+itself needs no audience of its own either. Removing the entry turns the
+component off again on the next `agentlab platform`. A released image works
+as a target too (`gsoci.azurecr.io/giantswarm/cluster-manager:0.33.5`): the
+lab side-loads it and the chart's Deployment runs it as written.
+
+### The `agentgateway` target
+
+The agentgateway chart renders one Deployment, the controller. The
+data-plane proxy — Deployment `agentgateway`, the edge every lab URL and MCP
+call passes — is the controller's: it creates it at run time for the lab's
+Gateway from the image its chart hands it as three values,
+`proxy.image.registry`, `.repository` and `.tag` (the controller's
+`AGW_PROXY_IMAGE_*` environment), so no post-renderer on the component's
+release can reach that Deployment. `platform.devImages.agentgateway`
+therefore travels as those values — the side-loaded name split into
+registry, repository and tag (`localhost` / `agentgateway` / `dev-7c8d` for
+a build of this host), which is why a digest ref is refused for this target
+— side-loaded into the node like every Deployment target; the controller's
+proxies pull `IfNotPresent`, so the build is used as is. After the install
+the boot waits for the controller to roll the proxy onto the image and
+reports it (`the agentgateway proxy (Deployment agentgateway) runs
+localhost/agentgateway:dev-7c8d`). A `platform.valuesFiles` overlay that
+sets `agentgateway.proxy.image` itself is refused while the target is
+configured, like the harness's pin.
 
 ### The `harness` target
 
