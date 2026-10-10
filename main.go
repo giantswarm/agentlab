@@ -802,6 +802,7 @@ func configureCmd() *cobra.Command {
 	var workspacesProvider, workspacesGitHubAppID, workspacesGitHubClientID string
 	var githubSignInOrgs, modelManagerBackends []string
 	var vmManagerImageDir, aiKeySource, gitHubTokenSource string
+	var gitHubAppID, gitHubAppInstallationID, gitHubAppPrivateKeySource string
 	var chartVersion, chartPath, chartBranch string
 	var upgradeSeed, adoptChart bool
 	cmd := &cobra.Command{
@@ -932,6 +933,15 @@ func configureCmd() *cobra.Command {
 			if cmd.Flags().Changed("github-token-source") {
 				cfg.GitHubToken.Source = gitHubTokenSource
 			}
+			if cmd.Flags().Changed("github-app-id") {
+				cfg.GitHubApp.AppID = gitHubAppID
+			}
+			if cmd.Flags().Changed("github-app-installation-id") {
+				cfg.GitHubApp.InstallationID = gitHubAppInstallationID
+			}
+			if cmd.Flags().Changed("github-app-private-key-source") {
+				cfg.GitHubApp.PrivateKeySource = gitHubAppPrivateKeySource
+			}
 			// Every run discovers the machine — an existing agentlab.yaml
 			// follows the host too: a server that appeared is added, one that
 			// is gone drops out, ports move while no cluster holds them.
@@ -999,6 +1009,9 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&serving, "serving", false, "serve models on llm-d in the lab: the KServe llmisvc controller and its CRDs, the well-known runtime configs, the connectivity chart's serving slice with the models Gateway, model-manager's kserve backend and one CPU preset of the lab's (needs agents; installs cert-manager); --serving=false turns it off")
 	cmd.Flags().StringVar(&aiKeySource, "ai-key-source", "", "where the Anthropic key of the agents' default ModelConfig lives, a reference `beekeeper secret copy` resolves (op://<vault>/<item>/<field>, or <file>#<path> of a SOPS file), never a value: every up and platform place it into the Secret kagent/kagent-anthropic through beekeeper, so a recreated lab carries it without a manual step; \"\" clears it (the key then comes from $ANTHROPIC_API_KEY, else a placeholder)")
 	cmd.Flags().StringVar(&gitHubTokenSource, "github-token-source", "", "where the GitHub token of the portal's skill discovery and agent-manager's skill resolution lives, a reference `beekeeper secret copy` resolves (op://<vault>/<item>/<field>, or <file>#<path> of a SOPS file), never a value: every up and platform place it into the Secret agentlab-github-token through beekeeper, lifting GitHub's anonymous 60 requests an hour this machine shares; \"\" clears it (the token then comes from $GITHUB_TOKEN, else GitHub is called unauthenticated)")
+	cmd.Flags().StringVar(&gitHubAppID, "github-app-id", "", "the skills GitHub App agent-manager resolves skills with (installation tokens at the App's rate limit instead of a token or GitHub's anonymous window): its numeric App id (public); set with --github-app-installation-id and --github-app-private-key-source, \"\" on all three clears it")
+	cmd.Flags().StringVar(&gitHubAppInstallationID, "github-app-installation-id", "", "the skills GitHub App: the numeric id of its installation (public)")
+	cmd.Flags().StringVar(&gitHubAppPrivateKeySource, "github-app-private-key-source", "", "the skills GitHub App: where its private key lives, a reference `beekeeper secret copy` resolves (op://<vault>/<item>/<field>, or <file>#<path> of a SOPS file), never a value: every up and platform place it into the Secret agentlab-github-app through beekeeper")
 	cmd.Flags().BoolVar(&accessible, "accessible", false, "prompt-per-question form mode (for screen readers and plain terminals)")
 	return cmd
 }
