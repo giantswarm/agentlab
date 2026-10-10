@@ -108,6 +108,29 @@ configuration); on an already-running cluster the steps are also standalone:
 ./agentlab platform-test  # headless proof of the whole chain
 ```
 
+`platform-test` runs in stages — the Dex token, the muster session, the MCP
+tool call, then every further proof — and ends with a summary that names
+each stage with its outcome and duration before the verdict: on a warm lab
+the whole proof takes about a second, which the whole-second stamps on the
+step lines cannot show. A stage the lab's live state cannot run never
+passes silently: a fixture user missing from `agentlab.yaml`, a release the
+chart renders but did not install, a read that failed each fail the proof,
+naming the stage (`Error: muster session: muster is not reachable …`). The
+one allowance is the configuration: the stages `platform.agents: false` or
+`platform.observability: false` leave without a subject, and the ones the
+3.x line has no route or family member for, are listed as `SKIP` with that
+reason and the proof still passes.
+
+```
+==> [00:01] 19 stages in 1.1s
+    PASS    78ms  Dex token
+    PASS    41ms  muster session
+    PASS   102ms  Kubernetes tools
+    PASS    95ms  MCP tool call
+    …
+    SKIP     0ms  controller identity  (the 3.x connectivity chart renders no GRPCRoute …)
+```
+
 The lab's patches on the component charts — `hostNetwork` on muster and
 Backstage, the `dex-localhost` sidecar on every server told the lab Dex's
 address, the kagent UI NodePort, and the dev images below — are per-component
