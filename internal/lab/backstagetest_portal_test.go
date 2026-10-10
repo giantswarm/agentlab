@@ -406,6 +406,36 @@ func TestStreamTurn(t *testing.T) {
 	if broken.TaskID != "t" || broken.Error != "Unavailable: drained" || broken.finalState() != "" {
 		t.Errorf("broken = %+v", broken)
 	}
+	if got := broken.frameKinds(); got != "2 frames: task error" {
+		t.Errorf("broken.frameKinds() = %q", got)
+	}
+
+	// A stream that closes on a task snapshot in a terminal state, the reply
+	// on the task only, and a frame kind the proof does not read: the turn
+	// completes with the task's text, and the kinds name every frame.
+	var snapshot streamedTurn
+	closing := `data: {"task":{"id":"t","status":{"state":"TASK_STATE_SUBMITTED"}}}
+
+data: {"statusUpdate":{"taskId":"t","status":{"state":"TASK_STATE_WORKING"}}}
+
+data: {"artifactUpdate":{"taskId":"t","artifact":{"parts":[{"text":"14 "}]}}}
+
+data: {"artifactUpdate":{"taskId":"t","artifact":{"parts":[{"text":"namespaces"}]}}}
+
+data: {"heartbeat":{}}
+
+data: {"task":{"id":"t","status":{"state":"TASK_STATE_COMPLETED"},"artifacts":[{"parts":[{"text":"14 namespaces."}]}]}}
+
+`
+	if err := readSSE(strings.NewReader(closing), func(f streamFrame) bool { snapshot.absorb(f); return true }); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.finalState() != taskStateCompleted || snapshot.reply() != "14 namespaces." {
+		t.Errorf("snapshot final %q reply %q", snapshot.finalState(), snapshot.reply())
+	}
+	if got, want := snapshot.frameKinds(), "6 frames: task(SUBMITTED) statusUpdate(WORKING) artifactUpdate×2 heartbeat task(COMPLETED)"; got != want {
+		t.Errorf("snapshot.frameKinds() = %q, want %q", got, want)
+	}
 	if err := readSSE(strings.NewReader("data: not json\n\n"), func(streamFrame) bool { return true }); err == nil {
 		t.Error("a non-JSON frame must fail")
 	}

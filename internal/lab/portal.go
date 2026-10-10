@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -341,6 +343,9 @@ func readSSE(r io.Reader, onFrame func(streamFrame) bool) error {
 		if err := json.Unmarshal([]byte(payload), &frame); err != nil {
 			return false, fmt.Errorf("an SSE frame is not JSON: %w\n%.300s", err, payload)
 		}
+		var keys map[string]json.RawMessage
+		_ = json.Unmarshal([]byte(payload), &keys)
+		frame.kind = strings.Join(slices.Sorted(maps.Keys(keys)), "+")
 		return onFrame(frame), nil
 	}
 	for scanner.Scan() {
