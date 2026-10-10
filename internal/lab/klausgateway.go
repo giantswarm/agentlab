@@ -89,7 +89,7 @@ const (
 // fakeSlackForPods points the component's Slack Web API Service at the fake's
 // container (fakecontainer.go). The returned func removes the Service.
 func fakeSlackForPods(cfg *config.Config, ip string, port int) (func(), error) {
-	return fakeServiceForPods(cfg, klausGatewaySlackAPIService, "the fake Slack Web API", ip, port, klausGatewaySlackAPIHost+slackHealthPath)
+	return fakeServiceForPods(cfg, klausGatewaySlackAPIService, "the fake Slack Web API", ip, port, fakeServicePort, klausGatewaySlackAPIHost+slackHealthPath)
 }
 
 // klausGatewayLinksSecret is the chart's link Secret of the Secret backend

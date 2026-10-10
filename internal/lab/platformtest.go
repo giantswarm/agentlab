@@ -29,6 +29,7 @@ const (
 	stageAteletPolicy         = "atelet image-cache policy"
 	stageSubstrateLine        = "Substrate line"
 	stageWorkerPools          = "WorkerPool workers"
+	stageWorkspaceManager     = "workspace-manager providers"
 	stageOAuthSignIn          = "per-server OAuth sign-in"
 	stageFamilies             = "infrastructure families"
 	stagePrometheusTools      = "Prometheus tools"
@@ -352,6 +353,20 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 		}
 	} else {
 		p.leaveOut("platform.agents is off in "+config.File, stageControllerIdentity, stageAgentManagerIdentity, stageAteletPolicy, stageSubstrateLine, stageWorkerPools)
+	}
+
+	// The workspace-manager (workspacemanagertest.go): registered with muster
+	// and Connected, rolled out, and listing every configured provider
+	// instance to the admin through muster.
+	if reason := workspaceManagerSkip(cfg); reason != "" {
+		p.leaveOut(reason, stageWorkspaceManager)
+	} else {
+		p.begin(stageWorkspaceManager, "The workspace-manager: registered with muster, Ready, list_providers as the admin")
+		providers, err := proveWorkspaceManager(cfg)
+		if err != nil {
+			return "", err
+		}
+		verdict += fmt.Sprintf("\nPASS: the workspace-manager is registered with muster (MCPServer %s Connected) and lists its %d provider instances to the admin: %s", workspaceManagerMCPServer, len(providers), strings.Join(providers, ", "))
 	}
 
 	// The per-server sign-in path: muster as OAuth client, challenged by the

@@ -152,7 +152,7 @@ func AgentsGitOpsTest(cfg *config.Config, email string, opts AgentsGitOpsTestOpt
 		return err
 	}
 	defer fake.close()
-	removeService, err := fakeServiceForPods(cfg, githubFakeService, "the fake GitHub API", fake.podIP, fakeContainerPort, githubFakeServiceHost+githubFakeHealthPath)
+	removeService, err := fakeServiceForPods(cfg, githubFakeService, "the fake GitHub API", fake.podIP, fakeContainerPort, fakeServicePort, githubFakeServiceHost+githubFakeHealthPath)
 	if err != nil {
 		return err
 	}

@@ -21,6 +21,8 @@ func Down(cfg *config.Config) error {
 			cleanWorkspacesNode(node)
 		}
 	}
+	// The lab's GitHub (workspacefake.go), a container beside the nodes.
+	githubFakeDown(cfg)
 	if err := kindDeleteCluster(cfg.ClusterName); err != nil {
 		// kind's delete is `docker rm -f` of the node, and docker gives up
 		// on a node that does not exit within ten seconds of SIGKILL ("could
@@ -115,6 +117,9 @@ func PlatformDown(cfg *config.Config) error {
 	if err := workspacesDown(ctx); err != nil {
 		return err
 	}
+	// The lab's GitHub (workspacefake.go); its Service and Secret went with
+	// the namespace.
+	githubFakeDown(cfg)
 	for _, node := range append([]string{cfg.ControlPlaneNode()}, cfg.SubstrateNodeNames()...) {
 		cleanWorkspacesNode(node)
 	}

@@ -112,7 +112,7 @@ const DefaultAPIServerPort = 6443
 // image is the major.minor components.substrate installs) — a chart that
 // leaves the kagent range open across a Substrate release boots no golden
 // actor (agentlab#187).
-const DefaultChartVersion = "4.123.0"
+const DefaultChartVersion = "4.124.0"
 
 // ChartRepository is where the agent-platform chart releases live.
 const ChartRepository = "oci://gsoci.azurecr.io/charts/giantswarm/agent-platform"
@@ -427,9 +427,12 @@ type Workspaces struct {
 	// renders the chart's `workspaces:` block when the chart carries the
 	// key.
 	Enabled bool `yaml:"enabled"`
-	// Provider is the workspace-manager's provider instance: empty for none,
-	// WorkspaceProviderGitHub for a GitHub App of the lab's own. With it
-	// set, the workspace-manager's public base URL carries the gateway port
+	// Provider names the workspace-manager's provider instances:
+	// WorkspaceProviderFake (the lab's own GitHub, served for the lab as a
+	// GitHub Enterprise-shaped instance; the default while empty),
+	// WorkspaceProviderGitHub (a GitHub App of the lab's own on github.com),
+	// or both, comma-separated ("fake,github"). With workspaces on, the
+	// workspace-manager's public base URL carries the gateway port
 	// (WorkspaceManagerBaseURL), the chart routes its host, and the lab
 	// Dex's agent-platform client lists <base URL>/signin.
 	Provider string `yaml:"provider,omitempty"`
@@ -451,12 +454,51 @@ type WorkspaceGitHub struct {
 	ClientID string `yaml:"clientId,omitempty"`
 }
 
-// The workspace providers, and the Secret of the github instance's App.
+// The workspace providers, and the Secrets of their Apps: the fake's holds
+// the key pair and client secret the lab generated itself (certs/github-fake),
+// the github instance's what the operator's secret tooling placed. Both carry
+// the same keys, and the values only ever reference them.
 const (
+	WorkspaceProviderFake        = "fake"
 	WorkspaceProviderGitHub      = "github"
+	WorkspaceFakeSecretName      = "workspace-fake"   // #nosec G101 -- Secret NAME, not a credential
 	WorkspaceGitHubSecretName    = "workspace-github" // #nosec G101 -- Secret NAME, not a credential
 	WorkspaceGitHubPrivateKeyKey = "private-key"      // #nosec G101 -- Secret KEY name, not a credential
 )
+
+// workspaceProviderNames are the instances platform.workspaces.provider may
+// name, in the order the workspace-manager gets them.
+var workspaceProviderNames = []string{WorkspaceProviderFake, WorkspaceProviderGitHub}
+
+// parseWorkspaceProviders reads platform.workspaces.provider: the fake alone
+// for "", else the comma-separated set of known instances, each at most
+// once, in workspaceProviderNames order.
+func parseWorkspaceProviders(value string) ([]string, error) {
+	if strings.TrimSpace(value) == "" {
+		return []string{WorkspaceProviderFake}, nil
+	}
+	var names []string
+	for raw := range strings.SplitSeq(value, ",") {
+		name := strings.TrimSpace(raw)
+		if !slices.Contains(workspaceProviderNames, name) {
+			return nil, fmt.Errorf("platform.workspaces.provider %q: want %s or both comma-separated, %q is neither", value, strings.Join(workspaceProviderNames, " or "), name)
+		}
+		if slices.Contains(names, name) {
+			return nil, fmt.Errorf("platform.workspaces.provider %q names %s twice", value, name)
+		}
+		names = append(names, name)
+	}
+	slices.SortFunc(names, func(a, b string) int {
+		return slices.Index(workspaceProviderNames, a) - slices.Index(workspaceProviderNames, b)
+	})
+	return names, nil
+}
+
+// GitHubFakeHost is the lab's GitHub's name under the platform domain
+// (`agentlab github-fake --workspaces`, docs/workspaces.md): the one the
+// lab CA's name constraints admit, pods resolve to the fake and its TLS
+// leaf carries.
+func GitHubFakeHost(domain string) string { return "github." + domain }
 
 // Serving configures model serving on llm-d in the lab.
 type Serving struct {
@@ -1500,8 +1542,8 @@ func (c *Config) Validate() error {
 	if c.Platform.Workspaces.Enabled && c.Platform.Enabled && !c.Platform.Agents {
 		return fmt.Errorf("platform.workspaces requires platform.agents (Substrate's signers certify the driver's endpoint, and a Session's workspace is a Substrate volume mount)")
 	}
-	if p := c.Platform.Workspaces.Provider; p != "" && p != WorkspaceProviderGitHub {
-		return fmt.Errorf("platform.workspaces.provider %q: want %q or empty", p, WorkspaceProviderGitHub)
+	if _, err := parseWorkspaceProviders(c.Platform.Workspaces.Provider); err != nil {
+		return err
 	}
 	// The vm-manager component exists from agent-platform 4.11.0; a pinned
 	// release before it would take components.vm-manager as an unknown key
@@ -1628,12 +1670,40 @@ func (c *Config) WorkspacesEnabled() bool {
 	return c.Platform.Enabled && c.Platform.Agents && c.Platform.Workspaces.Enabled
 }
 
+// WorkspaceProviders names the workspace-manager's provider instances, in
+// the order it gets them: what platform.workspaces.provider names, the fake
+// alone while it is empty; none with workspaces off. A value Validate
+// refused yields none too.
+func (c *Config) WorkspaceProviders() []string {
+	if !c.WorkspacesEnabled() {
+		return nil
+	}
+	names, err := parseWorkspaceProviders(c.Platform.Workspaces.Provider)
+	if err != nil {
+		return nil
+	}
+	return names
+}
+
+// WorkspaceFakeProvider reports whether the workspace-manager gets the
+// provider instance fake, the lab's own GitHub: workspaces on and
+// platform.workspaces.provider naming it or empty.
+func (c *Config) WorkspaceFakeProvider() bool {
+	return slices.Contains(c.WorkspaceProviders(), WorkspaceProviderFake)
+}
+
 // WorkspaceGitHubProvider reports whether the workspace-manager gets the
 // provider instance github: workspaces on with platform.workspaces.provider
-// github.
+// naming it.
 func (c *Config) WorkspaceGitHubProvider() bool {
-	return c.WorkspacesEnabled() && c.Platform.Workspaces.Provider == WorkspaceProviderGitHub
+	return slices.Contains(c.WorkspaceProviders(), WorkspaceProviderGitHub)
 }
+
+// GitHubFakeURL is the lab's GitHub as its provider instance names it, the
+// git host; the REST API is under /api/v3 of it, as on a GitHub Enterprise
+// Server. Pods reach it on 443 (CoreDNS sends the name to the fake's
+// Service); this host reaches the fake on the port its container publishes.
+func (c *Config) GitHubFakeURL() string { return "https://" + GitHubFakeHost(c.Platform.Domain) }
 
 // WorkspaceManagerBaseURL is the workspace-manager's public base URL through
 // the edge: the browser's sign-in at <base>/signin, each provider instance's
@@ -1644,10 +1714,17 @@ func (c *Config) WorkspaceManagerBaseURL() string { return c.gatewayURL("workspa
 // client lists for the workspace-manager's browser sign-in.
 func (c *Config) WorkspaceManagerSignInURL() string { return c.WorkspaceManagerBaseURL() + "/signin" }
 
+// WorkspaceCallbackURL is the callback URL a provider instance's OAuth client
+// is registered with: where the provider returns the browser after the
+// person's sign-in.
+func (c *Config) WorkspaceCallbackURL(instance string) string {
+	return c.WorkspaceManagerBaseURL() + "/callback/" + instance
+}
+
 // WorkspaceGitHubCallbackURL is the callback URL the GitHub App behind the
 // provider instance github is registered with.
 func (c *Config) WorkspaceGitHubCallbackURL() string {
-	return c.WorkspaceManagerBaseURL() + "/callback/" + WorkspaceProviderGitHub
+	return c.WorkspaceCallbackURL(WorkspaceProviderGitHub)
 }
 
 // The chart channels: where the meta chart the lab installs comes from.

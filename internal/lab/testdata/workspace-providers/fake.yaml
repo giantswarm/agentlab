@@ -1,0 +1,20 @@
+extraEnv:
+    - name: SSL_CERT_FILE
+      value: /etc/workspace-manager/idp-ca/ca.crt
+oauth:
+    baseURL: https://workspace-manager.127.0.0.1.nip.io:8443
+providers:
+    - kind: github
+      name: fake
+      values:
+        app:
+            id: "1"
+            privateKey:
+                key: private-key
+                name: workspace-fake
+        oauth:
+            clientID: Iv1.agentlab-workspaces
+            clientSecret:
+                key: client-secret
+                name: workspace-fake
+        url: https://github.127.0.0.1.nip.io

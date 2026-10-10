@@ -1,0 +1,16 @@
+oauth:
+    baseURL: https://workspace-manager.127.0.0.1.nip.io:8443
+providers:
+    - kind: github
+      name: github
+      values:
+        app:
+            id: "123456"
+            privateKey:
+                key: private-key
+                name: workspace-github
+        oauth:
+            clientID: Iv23liWorkspaceLab
+            clientSecret:
+                key: client-secret
+                name: workspace-github

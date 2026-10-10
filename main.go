@@ -985,7 +985,7 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&githubSignIn, "github-signin", false, "turn the GitHub sign-in on (needs --github-signin-client-id once) or, with =false, off; the client Secret stays")
 	cmd.Flags().StringSliceVar(&githubSignInOrgs, "github-signin-orgs", nil, "GitHub sign-in: admit members of these GitHub organizations only, their teams as groups (`<org>:<team-slug>`); empty admits any GitHub account")
 	cmd.Flags().BoolVar(&workspaces, "workspaces", false, "workspace storage: a read-write-many StorageClass that serves git — an in-cluster NFS server, the NFS CSI driver behind an mTLS proxy only Agent Substrate's API server may reach, and the StorageClass "+lab.WorkspacesStorageClass+" (needs agents); --workspaces=false turns it off")
-	cmd.Flags().StringVar(&workspacesProvider, "workspaces-provider", "", "the workspace-manager's provider instance: github (a GitHub App of the lab's own, docs/workspaces.md) or \"\" for none")
+	cmd.Flags().StringVar(&workspacesProvider, "workspaces-provider", "", "the workspace-manager's provider instances: fake (the lab's own GitHub, the default), github (a GitHub App of the lab's own, docs/workspaces.md) or both, fake,github")
 	cmd.Flags().StringVar(&workspacesGitHubAppID, "workspaces-github-app-id", "", "the App id of the workspaces GitHub App (public; its private key and client secret go into the Secret agent-platform/"+config.WorkspaceGitHubSecretName+")")
 	cmd.Flags().StringVar(&workspacesGitHubClientID, "workspaces-github-client-id", "", "the client id of the workspaces GitHub App (public)")
 	cmd.Flags().BoolVar(&serving, "serving", false, "serve models on llm-d in the lab: the KServe llmisvc controller and its CRDs, the well-known runtime configs, the connectivity chart's serving slice with the models Gateway, model-manager's kserve backend and one CPU preset of the lab's (needs agents; installs cert-manager); --serving=false turns it off")
@@ -1044,6 +1044,10 @@ func printSaved(cfg *config.Config, disc *lab.Discovery) {
 	}
 	if cfg.WorkspacesEnabled() {
 		fmt.Printf("  workspaces an NFS server on %s and the NFS CSI driver behind its mTLS proxy; the read-write-many StorageClass %s\n", lab.WorkspacesNode(cfg), lab.WorkspacesStorageClass)
+	}
+	if cfg.WorkspaceFakeProvider() {
+		fmt.Printf("  ws-fake    the workspace-manager's provider instance fake: the lab's own GitHub at %s (its App, key pair and client secret the lab's; Secret %s/%s), the App's callback URL %s, Dex redirect URI %s\n",
+			cfg.GitHubFakeURL(), config.DefaultGitHubSecretNamespace, config.WorkspaceFakeSecretName, cfg.WorkspaceCallbackURL(config.WorkspaceProviderFake), cfg.WorkspaceManagerSignInURL())
 	}
 	if cfg.WorkspaceGitHubProvider() {
 		gh := cfg.Platform.Workspaces.GitHub
