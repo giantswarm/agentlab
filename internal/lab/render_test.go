@@ -171,7 +171,7 @@ func TestPlatformValuesLabShape(t *testing.T) {
 	if at("components", "flux", "enabled") != true {
 		t.Errorf("components.flux.enabled = %v, want true", at("components", "flux", "enabled"))
 	}
-	for _, c := range []string{"agentgateway", "agent-platform-mcps", componentMCPKubernetes, componentKagent, agentManagerMCPServer, componentBackstage, modelManagerMCPServer} {
+	for _, c := range []string{agentgatewayComponent, "agent-platform-mcps", componentMCPKubernetes, componentKagent, agentManagerMCPServer, componentBackstage, modelManagerMCPServer} {
 		if at("components", c, "enabled") != true {
 			t.Errorf("components.%s.enabled = %v, want true", c, at("components", c, "enabled"))
 		}
@@ -184,11 +184,24 @@ func TestPlatformValuesLabShape(t *testing.T) {
 			t.Errorf("components.%s.postRenderers missing: %v", c, at("components", c))
 		}
 	}
-	// cluster-manager has no block in the roster: its patch renders through
-	// the trailing range, and nothing but the patch — the chart's default and
-	// the overlay decide `enabled`.
+	// cluster-manager has no block in the roster without its dev image: its
+	// patch renders through the trailing range, and nothing but the patch —
+	// the chart's default and the overlay decide `enabled`. Its audience is
+	// in place either way: the meta chart forwards the block only while the
+	// component is on.
 	if comp, _ := at("components", clusterManager).(map[string]any); len(comp) != 1 {
 		t.Errorf("components.%s: want the postRenderers only, got %v", clusterManager, comp)
+	}
+	if got, _ := at(clusterManager, "muster", "mcpServer", "auth", "requiredAudiences").([]any); len(got) != 1 || got[0] != config.KubernetesClientID {
+		t.Errorf("%s.muster.mcpServer.auth.requiredAudiences = %v, want [%s] whatever turns the component on", clusterManager, got, config.KubernetesClientID)
+	}
+	// agentgateway carries no patch without a dev image of its controller,
+	// and no proxy values without one of its proxy.
+	if comp, _ := at("components", agentgatewayComponent).(map[string]any); len(comp) != 1 {
+		t.Errorf("components.%s: want `enabled` only, got %v", agentgatewayComponent, comp)
+	}
+	if at(agentgatewayComponent) != nil {
+		t.Errorf("%s block rendered without a proxy dev image: %v", agentgatewayComponent, at(agentgatewayComponent))
 	}
 	// The dev image rides the component's postRenderers as a kustomize image.
 	kagent := at("components", componentKagent, "postRenderers").([]any)[0].(map[string]any)["kustomize"].(map[string]any)
@@ -258,7 +271,7 @@ func TestPlatformValuesExtraPostRenderers(t *testing.T) {
 			cfg.Platform.ModelManager = config.ModelManager{Enabled: true, Backends: []string{ollama}}
 			cfg.Platform.VMManager.Enabled = true
 			cfg.Platform.KlausGateway.Enabled = true
-			cfg.Platform.DevImages = map[string]string{componentMuster: devMusterRef, componentBackstage: devBackstageRef}
+			cfg.Platform.DevImages = map[string]string{componentMuster: devMusterRef, componentBackstage: devBackstageRef, clusterManager: "cluster-manager:dev", config.DevImageAgentgatewayController: "agentgateway-controller:dev"}
 			return cfg
 		}(),
 	} {
@@ -293,6 +306,18 @@ func TestPlatformValuesExtraPostRenderers(t *testing.T) {
 					t.Errorf("components.%s.postRenderers: want the one entry, got %v", component, comp)
 				}
 			}
+			// cluster-manager's block is the roster's with its dev image
+			// (enabled, patched) and the range's without (the patch alone).
+			if _, on := cfg.Platform.DevImages[clusterManager]; (values.Components[clusterManager]["enabled"] == true) != on {
+				t.Errorf("components.%s.enabled with the dev image %v: got %v", clusterManager, on, values.Components[clusterManager])
+			}
+			// The controller's patch lands on the roster's agentgateway block,
+			// which the range never doubles.
+			if _, on := cfg.Platform.DevImages[config.DevImageAgentgatewayController]; on {
+				if list, ok := values.Components[agentgatewayComponent]["postRenderers"].([]any); !ok || len(list) != 1 {
+					t.Errorf("components.%s.postRenderers with a controller dev image: want the one entry, got %v", agentgatewayComponent, values.Components[agentgatewayComponent])
+				}
+			}
 			// The blocks that are always there render their patches only
 			// while their toggle is on; the range never doubles them.
 			for _, component := range []string{componentKagent, componentBackstage} {
@@ -302,6 +327,94 @@ func TestPlatformValuesExtraPostRenderers(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The dev-image targets the roster turns on or patches by name:
+// platform.devImages.cluster-manager turns the component the chart ships off
+// on, with the sidecar the rule found, the image override and the pull-policy
+// patch in its roster block (not the range), next to the lab's audience for
+// it; platform.devImages.agentgateway renders the proxy image as the chart's
+// proxy.image values, no patch; platform.devImages.agentgateway-controller
+// rides the agentgateway component's postRenderers.
+func TestPlatformValuesDevImageTargets(t *testing.T) {
+	cfg := config.Default()
+	cfg.Platform.DevImages = map[string]string{
+		clusterManager:                        "cluster-manager:dev-3e4f",
+		agentgatewayComponent:                 "agentgateway:dev-7c8d",
+		config.DevImageAgentgatewayController: "gsoci.azurecr.io/giantswarm/agentgateway-upstream/controller:2.3.3",
+	}
+	sidecars := map[string][]dexLocalhostTarget{
+		componentMCPKubernetes: {{componentMCPKubernetes, dexIssuerURLVar}},
+		clusterManager:         {{clusterManager, dexIssuerURLFlag}},
+	}
+	postRenderers, err := componentPostRenderers(cfg, defaultDevImageNames(cfg), sidecars)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := renderTemplate(cfg, platformValuesTemplate, func(d *tmplData) { d.PostRenderers = postRenderers })
+	if err != nil {
+		t.Fatal(err)
+	}
+	var values map[string]any
+	if err := yaml.Unmarshal(out, &values); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	at := func(path ...string) any {
+		var cur any = values
+		for _, key := range path {
+			m, ok := cur.(map[string]any)
+			if !ok {
+				return nil
+			}
+			cur = m[key]
+		}
+		return cur
+	}
+	kustomize := func(component string) map[string]any {
+		t.Helper()
+		prs, _ := at("components", component, "postRenderers").([]any)
+		if len(prs) != 1 {
+			t.Fatalf("components.%s.postRenderers: want the one entry, got %v", component, at("components", component))
+		}
+		return prs[0].(map[string]any)["kustomize"].(map[string]any)
+	}
+
+	if at("components", clusterManager, "enabled") != true {
+		t.Errorf("components.%s.enabled = %v, want true with its dev image", clusterManager, at("components", clusterManager, "enabled"))
+	}
+	cm := kustomize(clusterManager)
+	if imgs, _ := cm["images"].([]any); len(imgs) != 1 || imgs[0].(map[string]any)["name"] != "gsoci.azurecr.io/giantswarm/cluster-manager" || imgs[0].(map[string]any)["newName"] != "localhost/cluster-manager" || imgs[0].(map[string]any)["newTag"] != "dev-3e4f" {
+		t.Errorf("cluster-manager dev image override: %v", cm["images"])
+	}
+	if patches, _ := cm["patches"].([]any); len(patches) != 2 || !strings.Contains(fmt.Sprint(patches[0]), dexLocalhostContainer) || !strings.Contains(fmt.Sprint(patches[1]), "imagePullPolicy: IfNotPresent") {
+		t.Errorf("cluster-manager: want the sidecar and the pull-policy patch, got %v", cm["patches"])
+	}
+	if got, _ := at(clusterManager, "muster", "mcpServer", "auth", "requiredAudiences").([]any); len(got) != 1 || got[0] != config.KubernetesClientID {
+		t.Errorf("%s audience = %v", clusterManager, got)
+	}
+
+	proxy, _ := at(agentgatewayComponent, "proxy", "image").(map[string]any)
+	if proxy["registry"] != localhostName || proxy["repository"] != "agentgateway" || proxy["tag"] != "dev-7c8d" {
+		t.Errorf("agentgateway.proxy.image = %v, want the side-loaded name split into the chart's three values", proxy)
+	}
+	agw := kustomize(agentgatewayComponent)
+	if imgs, _ := agw["images"].([]any); len(imgs) != 1 || imgs[0].(map[string]any)["name"] != chartAgentgatewayControllerImage || imgs[0].(map[string]any)["newTag"] != "2.3.3" {
+		t.Errorf("agentgateway controller override: %v", agw["images"])
+	}
+	if patches, _ := agw["patches"].([]any); len(patches) != 1 || !strings.Contains(fmt.Sprint(patches[0]), "name: agentgateway-controller") || !strings.Contains(fmt.Sprint(patches[0]), "name: controller") {
+		t.Errorf("agentgateway: want the controller's pull-policy patch alone, got %v", agw["patches"])
+	}
+	// The roster block carries cluster-manager now, so the range must not:
+	// the parse above would have failed on a doubled key; the data says so
+	// too.
+	data, err := newTmplData(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data.PostRenderers = postRenderers
+	if extra := data.ExtraPostRenderers(); len(extra) != 0 {
+		t.Errorf("ExtraPostRenderers = %v, want none: every patched component has a roster block", extra)
 	}
 }
 

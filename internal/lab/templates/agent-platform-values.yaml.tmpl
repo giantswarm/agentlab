@@ -161,8 +161,15 @@ components:
     postRenderers:
 {{ . | indent 6 }}
 {{- end }}
+  # The edge and MCP data plane; its one patch is a dev image of the
+  # controller (platform.devImages.agentgateway-controller). The proxy's dev
+  # image is a value of the chart (`agentgateway:` below), not a patch.
   agentgateway:
     enabled: true
+{{- with index .PostRenderers "agentgateway" }}
+    postRenderers:
+{{ . | indent 6 }}
+{{- end }}
   agent-platform-mcps:
     enabled: true
 {{- with .ConnectivityChart }}
@@ -288,6 +295,20 @@ components:
   klaus-gateway:
     enabled: true
 {{- with index .PostRenderers "klaus-gateway" }}
+    postRenderers:
+{{ . | indent 6 }}
+{{- end }}
+{{- end }}
+{{- if .ClusterManagerEnabled }}
+  # The cluster write surface (cluster-manager), which the chart ships off:
+  # on while platform.devImages names its image — the lab's one switch for
+  # it — with the lab's patches (the dex-localhost sidecar, the dev-image
+  # override; its own values are in the `cluster-manager:` block below). An
+  # overlay turns it on otherwise, and its patches come from the range at
+  # the roster's end.
+  cluster-manager:
+    enabled: true
+{{- with index .PostRenderers "cluster-manager" }}
     postRenderers:
 {{ . | indent 6 }}
 {{- end }}
@@ -763,6 +784,23 @@ model-manager:
 
 {{- end }}
 
+# The cluster-manager chart's own values (the chart pins the Service name,
+# the muster registration and OAuth against global.identity), rendered
+# whether or not the component is on: the meta chart forwards the block only
+# while components.cluster-manager is enabled — by platform.devImages
+# .cluster-manager above, or by a platform.valuesFiles overlay — and either
+# way the lab's audience is in place. Same audience story as mcp-kubernetes
+# above: cluster-manager's downstream OAuth presents the forwarded token to
+# the kind apiserver as the caller, so without the `kubernetes` audience a
+# headless session's x_cluster-manager_* tools do not exist while the
+# MCPServer reads Connected.
+cluster-manager:
+  muster:
+    mcpServer:
+      auth:
+        requiredAudiences:
+          - kubernetes
+
 {{- if .ServingEnabled }}
 # The KServe control plane's storage-initializer, which downloads a model's
 # weights into its pod before the runtime starts: the memory limit the
@@ -1038,6 +1076,23 @@ valkey:
       aclUsers:
         default:
           passwordKey: valkey-password
+
+{{- with .AgentgatewayDevImage }}
+# The `agentgateway` dev image (platform.devImages.agentgateway,
+# agentgateway.go): the data-plane proxy, side-loaded into the node under
+# this ref. The agentgateway chart hands the controller the proxy image as
+# registry, repository and tag (its AGW_PROXY_IMAGE_* environment) and the
+# controller creates the `agentgateway` Deployment from them at run time —
+# the Deployment is in no chart render, so no post-renderer could reach it —
+# pulling IfNotPresent, so the side-loaded build is used as is.
+agentgateway:
+  proxy:
+    image:
+      registry: {{ .Registry }}
+      repository: {{ .Repository }}
+      tag: {{ .Tag | printf "%q" }}
+
+{{- end }}
 
 agent-platform-mcps:
   agentgateway:

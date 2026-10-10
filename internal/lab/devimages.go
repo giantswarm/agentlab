@@ -87,7 +87,8 @@ const platformHarness = "kagent"
 const harnessRecompileTimeout = 5 * time.Minute
 
 // devImages is the swap of one run: what the values need that the config
-// alone cannot say.
+// alone cannot say, and the one value swap the merged values are checked
+// against with the harness's.
 type devImages struct {
 	// names is the chart image name each configured Deployment target
 	// replaces, from the component render.
@@ -95,6 +96,9 @@ type devImages struct {
 	// harness is the `harness` dev image as the platform Harness pins it —
 	// the lab registry's ref by digest; "" without the target.
 	harness string
+	// proxy is the `agentgateway` dev image as the chart's proxy.image
+	// values carry it (agentgateway.go); nil without the target.
+	proxy *agentgatewayProxyImage
 }
 
 // prepareDevImages resolves and stages the configured dev images before the
@@ -108,13 +112,14 @@ func prepareDevImages(cfg *config.Config, renders map[string]string) (*devImages
 	if err != nil {
 		return nil, err
 	}
-	dev := &devImages{names: names}
-	// The Deployment targets are builds of this host: never pullable, always
-	// side-loaded, so their pods find them under imagePullPolicy IfNotPresent
-	// — which is why each ref is then verified in the node's own image list
-	// before the install (ensureNodeImages): a missing one would surface
-	// five minutes later as an ImagePullBackOff, helm-controller's upgrade
-	// timeout and a rollback to the chart's image.
+	dev := &devImages{names: names, proxy: agentgatewayDevImage(cfg)}
+	// The Deployment targets (the agentgateway proxy among them) are builds
+	// of this host: never pullable, always side-loaded, so their pods find
+	// them under imagePullPolicy IfNotPresent — which is why each ref is then
+	// verified in the node's own image list before the install
+	// (ensureNodeImages): a missing one would surface five minutes later as
+	// an ImagePullBackOff, helm-controller's upgrade timeout and a rollback
+	// to the chart's image.
 	if refs := devImageRefs(cfg); len(refs) > 0 {
 		if err := tagLocalDevImages(cfg); err != nil {
 			return nil, err
@@ -167,12 +172,17 @@ func registryFlag(cfg *config.Config) string {
 	return "--localhost-registry-replacement=" + devRegistryEndpoint(cfg)
 }
 
-// checkValues asserts the merged values still carry the swap's two keys: a
-// platform.valuesFiles overlay that sets kagent.harness.image itself (the
-// way a lab pins a published build) wins the merge and the swap would be a
-// silent no-op; one that sets substrate.atelet.extraArgs replaces the list
-// (Helm merges maps, not lists) and atelet could not reach the registry.
+// checkValues asserts the merged values still carry the swaps that travel
+// as values: the agentgateway proxy image (agentgateway.go), and the
+// harness's two keys — a platform.valuesFiles overlay that sets
+// kagent.harness.image itself (the way a lab pins a published build) wins
+// the merge and the swap would be a silent no-op; one that sets
+// substrate.atelet.extraArgs replaces the list (Helm merges maps, not
+// lists) and atelet could not reach the registry.
 func (d *devImages) checkValues(cfg *config.Config, values map[string]any) error {
+	if err := d.proxy.checkValues(values); err != nil {
+		return err
+	}
 	if d.harness == "" {
 		return nil
 	}
@@ -210,12 +220,12 @@ func nestedString(values map[string]any, keys ...string) string {
 // resolveDevImageNames reads, for every configured Deployment target, the
 // image name the component chart renders on its Deployment/container off
 // the component renders (keyed by release name — the meta chart names a
-// component's HelmRelease after the component). A target whose chart
-// rendered but has no such Deployment/container is an error: the override
-// would match nothing and kustomize drops it silently, so the chart's shape
-// changed under the lab's table. A target whose chart did not render at all
-// (a skipped render; the preload noted why) falls back to the table's name,
-// unverified, and says so.
+// component's HelmRelease after the component; the target's releaseOf). A
+// target whose chart rendered but has no such Deployment/container is an
+// error: the override would match nothing and kustomize drops it silently,
+// so the chart's shape changed under the lab's table. A target whose chart
+// did not render at all (a skipped render; the preload noted why) falls back
+// to the table's name, unverified, and says so.
 func resolveDevImageNames(cfg *config.Config, renders map[string]string) (map[string]string, error) {
 	names := map[string]string{}
 	for _, component := range slices.Sorted(maps.Keys(cfg.Platform.DevImages)) {
@@ -223,18 +233,19 @@ func resolveDevImageNames(cfg *config.Config, renders map[string]string) (map[st
 		if !ok {
 			continue
 		}
-		rendered, ok := renders[component]
+		release := target.releaseOf(component)
+		rendered, ok := renders[release]
 		if !ok {
-			note("platform.devImages.%s: the %s chart did not render here, so the override targets the table's image name %s unverified", component, component, target.image)
+			note("platform.devImages.%s: the %s chart did not render here, so the override targets the table's image name %s unverified", component, release, target.image)
 			names[component] = target.image
 			continue
 		}
 		image, ok := renderedContainerImage(rendered, target.deployment, target.container)
 		if !ok {
-			return nil, fmt.Errorf("platform.devImages.%s: the %s chart's render has no Deployment %s with a container %s — the image override would match nothing and kustomize would drop it silently; the chart's shape changed (compare `helm template` of the component with devImageTargets)", component, component, target.deployment, target.container)
+			return nil, fmt.Errorf("platform.devImages.%s: the %s chart's render has no Deployment %s with a container %s — the image override would match nothing and kustomize would drop it silently; the chart's shape changed (compare `helm template` of the component with devImageTargets)", component, release, target.deployment, target.container)
 		}
 		names[component] = imageName(image)
-		note("platform.devImages.%s replaces %s (Deployment %s, container %s in the %s chart's render)", component, names[component], target.deployment, target.container, component)
+		note("platform.devImages.%s replaces %s (Deployment %s, container %s in the %s chart's render)", component, names[component], target.deployment, target.container, release)
 	}
 	return names, nil
 }

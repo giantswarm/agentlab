@@ -2,6 +2,7 @@ package lab
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -14,11 +15,6 @@ import (
 // agent-platform-connectivity chart, also its release name — named here only
 // to assert the lab renders no patch for it.
 const connectivityComponent = "agent-platform-connectivity"
-
-// clusterManager is the meta chart's cluster-manager component — a release
-// the lab has no toggle for (an overlay turns it on) and no name for: the
-// sidecar rule finds it on its render like any other.
-const clusterManager = "cluster-manager"
 
 // Fixture refs, hoisted so the linter's constant check stays quiet.
 const (
@@ -91,10 +87,12 @@ func TestComponentPostRenderers(t *testing.T) {
 	cfg.Platform.Observability = true
 	cfg.Platform.ModelManager = config.ModelManager{Enabled: true, Backends: []string{ollama}}
 	cfg.Platform.DevImages = map[string]string{
-		componentMuster:        devMusterRef,
-		componentBackstage:     devBackstageRef,
-		componentKagent:        devControllerRef,
-		config.DevImageHarness: devHarnessRef,
+		componentMuster:                       devMusterRef,
+		componentBackstage:                    devBackstageRef,
+		componentKagent:                       devControllerRef,
+		config.DevImageHarness:                devHarnessRef,
+		agentgatewayComponent:                 "agentgateway:dev-7c8d",
+		config.DevImageAgentgatewayController: "agentgateway-controller:dev-7c8d",
 	}
 	names := defaultDevImageNames(cfg)
 	// The controller's name as the kagent line's render says it (devimages.go).
@@ -188,9 +186,22 @@ func TestComponentPostRenderers(t *testing.T) {
 	if got := patchOn(componentKagent, kindDeployment, "kagent-controller"); len(got) != 1 || !strings.Contains(got[0], "name: controller\n          imagePullPolicy: IfNotPresent") {
 		t.Errorf("kagent: want the pull-policy patch on container controller, got %q", got)
 	}
-	// The side-load list is the Deployment targets: the harness image goes to
-	// the registry instead.
-	if refs := devImageRefs(cfg); len(refs) != 3 || refs[0] != devBackstageFull || refs[1] != "localhost/kagent-controller:dev-139" || refs[2] != devMusterFull {
+	// The agentgateway controller's override lands on its component's
+	// release, the agentgateway postRenderers, and that is the component's
+	// only override: the proxy target is a value of the chart, no patch.
+	agentgateway := parse(agentgatewayComponent)
+	if want := (kustomizeImage{Name: chartAgentgatewayControllerImage, NewName: "localhost/agentgateway-controller", NewTag: "dev-7c8d"}); len(agentgateway.Kustomize.Images) != 1 || agentgateway.Kustomize.Images[0] != want {
+		t.Errorf("agentgateway controller dev image: got %+v, want %+v", agentgateway.Kustomize.Images, want)
+	}
+	if got := patchOn(agentgatewayComponent, kindDeployment, config.DevImageAgentgatewayController); len(got) != 1 || !strings.Contains(got[0], "name: controller\n          imagePullPolicy: IfNotPresent") {
+		t.Errorf("agentgateway: want the pull-policy patch on the controller's container, got %q", got)
+	}
+	if len(agentgateway.Kustomize.Patches) != 1 {
+		t.Errorf("agentgateway: want the controller's one patch, got %+v", agentgateway.Kustomize.Patches)
+	}
+	// The side-load list is the Deployment targets, the proxy among them:
+	// the harness image goes to the registry instead.
+	if refs := devImageRefs(cfg); len(refs) != 5 || refs[0] != "localhost/agentgateway-controller:dev-7c8d" || refs[1] != "localhost/agentgateway:dev-7c8d" || refs[2] != devBackstageFull || refs[3] != "localhost/kagent-controller:dev-139" || refs[4] != devMusterFull {
 		t.Errorf("devImageRefs = %v", refs)
 	}
 	if got := harnessDevImage(cfg); got != devHarnessRef {
@@ -221,15 +232,22 @@ func TestComponentPostRenderers(t *testing.T) {
 		}
 	}
 	// Every Deployment target of the config's list has a render target — the
-	// list and the lab's table cannot drift apart; the harness is the one
-	// key that is no Deployment.
+	// list and the lab's table cannot drift apart; the harness and the
+	// agentgateway proxy are the two keys that travel as values.
 	for _, c := range config.DevImageComponents {
-		if _, ok := devImageTargets[c]; !ok && c != config.DevImageHarness {
+		if _, ok := devImageTargets[c]; !ok && c != config.DevImageHarness && c != agentgatewayComponent {
 			t.Errorf("config.DevImageComponents names %s, but devImageTargets has no render target for it", c)
 		}
 	}
-	if _, ok := devImageTargets[config.DevImageHarness]; ok {
-		t.Errorf("the harness target is no Deployment; devImageTargets must not list it")
+	for _, c := range []string{config.DevImageHarness, agentgatewayComponent} {
+		if _, ok := devImageTargets[c]; ok {
+			t.Errorf("the %s target is in no chart render; devImageTargets must not list it", c)
+		}
+	}
+	for c := range devImageTargets {
+		if !slices.Contains(config.DevImageComponents, c) {
+			t.Errorf("devImageTargets names %s, which config.DevImageComponents does not accept", c)
+		}
 	}
 }
 

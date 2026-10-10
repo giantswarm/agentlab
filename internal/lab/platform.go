@@ -30,13 +30,17 @@ const platformNamespace = "agent-platform"
 const platformRelease = "agent-platform"
 
 // Component names, shared by the log targets, the cert SANs, the deploy
-// steps and the dev-image table.
+// steps and the dev-image table. clusterManager is the meta chart's
+// cluster-manager component, which it ships off: the lab turns it on with a
+// dev image (config.DevImageClusterManager), an overlay otherwise, and the
+// sidecar rule finds it on its render either way.
 const (
 	componentDex           = "dex"
 	componentMuster        = "muster"
 	componentBackstage     = "backstage"
 	componentKagent        = "kagent"
 	componentMCPKubernetes = "mcp-kubernetes"
+	clusterManager         = config.DevImageClusterManager
 )
 
 // A Kubernetes object's Ready condition, and a condition's status when it
@@ -770,6 +774,14 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 			return err
 		}
 	}
+	// The agentgateway proxy is the controller's to roll, after its own
+	// release: the swap is proven on the Deployment it creates
+	// (agentgateway.go).
+	if dev != nil && dev.proxy != nil {
+		if err := reportAgentgatewayDevImage(ctx, dev.proxy); err != nil {
+			return err
+		}
+	}
 
 	// The fleet's admission (admission.go): Kyverno with the
 	// flux-multi-tenancy policy in Enforce, the platform namespace exempt
@@ -1178,7 +1190,8 @@ func orNone(s string) string {
 
 // devImagesHint lists the dev images in the boot summary, so a lab running a
 // build of yours says so where you look first: the harness target with the
-// registry ref the platform Harness pins.
+// registry ref the platform Harness pins, the agentgateway target with the
+// ref the controller's proxies run.
 func devImagesHint(cfg *config.Config, dev *devImages) string {
 	if len(cfg.Platform.DevImages) == 0 {
 		return ""
@@ -1187,10 +1200,13 @@ func devImagesHint(cfg *config.Config, dev *devImages) string {
 	b.WriteString("\n  Dev images (platform.devImages; remove the entry and re-run `agentlab platform` to restore the chart's):\n")
 	for _, name := range slices.Sorted(maps.Keys(cfg.Platform.DevImages)) {
 		ref := cfg.Platform.DevImages[name]
-		if name == config.DevImageHarness && dev != nil && dev.harness != "" {
+		switch {
+		case name == config.DevImageHarness && dev != nil && dev.harness != "":
 			ref += "  (Harness " + platformHarness + " pins " + dev.harness + ")"
+		case name == agentgatewayComponent && dev != nil && dev.proxy != nil:
+			ref += "  (the controller's proxies run " + dev.proxy.ref() + ")"
 		}
-		fmt.Fprintf(&b, "    %-16s %s\n", name, ref)
+		fmt.Fprintf(&b, "    %-24s %s\n", name, ref)
 	}
 	return b.String()
 }

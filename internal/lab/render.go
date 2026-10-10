@@ -100,6 +100,13 @@ type tmplData struct {
 	// `klausGateway:` block needs.
 	KlausGatewayEnabled bool
 	KlausGateway        klausGatewayValues
+	// ClusterManagerEnabled mirrors cfg.ClusterManagerEnabled(): the chart's
+	// cluster-manager component on, because platform.devImages names its
+	// image — the roster block renders then, with its patches.
+	ClusterManagerEnabled bool
+	// AgentgatewayDevImage is the `agentgateway` dev image as the chart's
+	// proxy.image values carry it (agentgateway.go), nil without the target.
+	AgentgatewayDevImage *agentgatewayProxyImage
 	// ServingEnabled mirrors cfg.ServingEnabled(); Serving carries the names
 	// the serving blocks render (serving.go): the lab preset and its
 	// runtime image, the serving namespace, the models Gateway.
@@ -284,6 +291,8 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		VMManagerGuestImage:        vmManagerGuestImage,
 		KlausGatewayEnabled:        cfg.KlausGatewayEnabled(),
 		KlausGateway:               klausGatewayValuesFor(cfg),
+		ClusterManagerEnabled:      cfg.ClusterManagerEnabled(),
+		AgentgatewayDevImage:       agentgatewayDevImage(cfg),
 		ServingEnabled:             cfg.ServingEnabled(),
 		Serving:                    servingValuesFor(),
 		WorkspacesEnabled:          cfg.WorkspacesEnabled(),
@@ -337,18 +346,20 @@ func (t *tmplData) DexJWKSPort() int {
 
 // ExtraPostRenderers is the part of PostRenderers the values template's
 // roster does not render under these settings: the components it names no
-// block for — cluster-manager, which only an overlay turns on — and the ones
-// whose block it renders only while the lab's own toggle is on (vm-manager,
-// klaus-gateway, agent-manager with the agents). The template's trailing
-// range renders these as `<component>: {postRenderers: …}` so every patch
-// the rule found reaches its release and no component key renders twice.
-// Mirrors the template's conditions: a block that is always there (muster,
-// mcp-kubernetes, kagent, model-manager, backstage — the last three carry
-// their `enabled` from a toggle and render their patches only while it is
-// on) is never extra.
+// block for — cluster-manager while only an overlay turns it on — and the
+// ones whose block it renders only while the lab's own toggle is on
+// (vm-manager, klaus-gateway, cluster-manager with its dev image,
+// agent-manager with the agents). The template's trailing range renders
+// these as `<component>: {postRenderers: …}` so every patch the rule found
+// reaches its release and no component key renders twice. Mirrors the
+// template's conditions: a block that is always there (muster,
+// agentgateway, mcp-kubernetes, kagent, model-manager, backstage — the last
+// three carry their `enabled` from a toggle and render their patches only
+// while it is on) is never extra.
 func (t *tmplData) ExtraPostRenderers() map[string]string {
 	named := map[string]bool{
 		componentMuster:           true,
+		agentgatewayComponent:     true,
 		componentMCPKubernetes:    true,
 		componentKagent:           true,
 		componentBackstage:        true,
@@ -356,6 +367,7 @@ func (t *tmplData) ExtraPostRenderers() map[string]string {
 		agentManagerMCPServer:     t.Platform.Agents,
 		vmManagerMCPServer:        t.VMManagerEnabled,
 		klausGatewayComponent:     t.KlausGatewayEnabled,
+		clusterManager:            t.ClusterManagerEnabled,
 		llmisvcResourcesComponent: t.ServingEnabled,
 	}
 	extra := map[string]string{}
