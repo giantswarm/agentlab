@@ -195,6 +195,10 @@ type platformChart struct {
 	// branch is the dev channel's branch when the version is one of its
 	// builds (platform.chartBranch); empty on the stable channel.
 	branch string
+	// labRegistry is the lab registry as the component releases name it and
+	// as this host reaches it (localizeLabRegistry); zero in tests that need
+	// no such mapping.
+	labRegistry labRegistryAddress
 }
 
 func (c platformChart) String() string {
@@ -250,10 +254,11 @@ func (c platformChart) connectivityDir() string {
 // wins over the pinned release; on the dev channel the version is the
 // branch's build ResolveChartVersion recorded.
 func platformChartFor(cfg *config.Config) platformChart {
+	registry := labRegistryAddressFor(cfg)
 	if cfg.Platform.ChartPath != "" {
-		return platformChart{ref: cfg.Platform.ChartPath}
+		return platformChart{ref: cfg.Platform.ChartPath, labRegistry: registry}
 	}
-	return platformChart{ref: config.ChartRepository, version: cfg.Platform.ChartVersion, branch: cfg.Platform.ChartBranch}
+	return platformChart{ref: config.ChartRepository, version: cfg.Platform.ChartVersion, branch: cfg.Platform.ChartBranch, labRegistry: registry}
 }
 
 // platformUp installs and verifies the platform, then prints the boot's one

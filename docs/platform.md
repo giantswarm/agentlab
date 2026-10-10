@@ -217,6 +217,36 @@ a branch's dev channel (`versionRange` + `semverFilter`) wins over the lab's
 source and must go — it selected a chart from the registry, not the
 checkout's.
 
+### An unreleased component chart
+
+Any other component's chart (kagent, Substrate, muster, …) is proven the
+same way by hand: push it into the lab registry through its host port and
+point the component at it with a `platform.valuesFiles` overlay.
+
+```sh
+helm package /path/to/kagent/helm/kagent --version 0.9.0-dev.1
+helm push kagent-0.9.0-dev.1.tgz oci://localhost:5001/charts --plain-http
+```
+
+```yaml
+components:
+  kagent:
+    repository: oci://agentlab-registry:5000/charts   # <clusterName>-registry, its kind-network name
+    insecure: true
+    versionRange: "0.9.0-dev.1"
+```
+
+The HelmRelease keeps the kind-network name, the one source-controller
+reaches. The boot's offline render of the chart, which no resolver on the
+host can name that way, goes through the port the registry publishes on the
+host loopback (`platform.devRegistryPort`, 5001 by default) over plain HTTP,
+and the boot log names both (`read on this host as
+oci://localhost:5001/charts/kagent`). A registry that does not answer there
+stops the boot before the install, naming the container to check. The lab
+registry exists once a chartPath or a dev image created it, and goes with
+`agentlab down`. Removing the overlay and re-running `agentlab platform`
+puts the released chart back.
+
 ## Dev images
 
 To run a component from a build of your own, build the image, and name it

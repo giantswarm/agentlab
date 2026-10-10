@@ -156,8 +156,8 @@ func TestResolveComponentVersion(t *testing.T) {
 		"not-a-version",
 	}
 	var listed []string
-	t.Cleanup(func() { listChartTags = helmChartTags })
-	listChartTags = func(url string) ([]string, error) {
+	t.Cleanup(func() { listChartTags = helmChartTagsFrom })
+	listChartTags = func(url string, _ bool) ([]string, error) {
 		listed = append(listed, url)
 		if strings.HasSuffix(url, "/unreachable") {
 			return nil, errors.New("registry down")
@@ -180,7 +180,7 @@ func TestResolveComponentVersion(t *testing.T) {
 		{name: "the registry cannot be listed", url: repo + "/unreachable", versionRange: devRange, filter: filter, wantErr: "registry down"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := resolveComponentVersion(tc.url, tc.versionRange, tc.filter)
+			got, err := resolveComponentVersion(tc.url, tc.versionRange, tc.filter, false)
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 					t.Fatalf("got %q, %v; want an error containing %q", got, err, tc.wantErr)
@@ -534,11 +534,11 @@ func TestLocalizeConnectivity(t *testing.T) {
 func TestRenderFluxReleaseFromTheLocalChart(t *testing.T) {
 	dir := isolateHelm(t)
 	chartDir := writeClosedSchemaChart(t, dir)
-	listChartTags = func(string) ([]string, error) {
+	listChartTags = func(string, bool) ([]string, error) {
 		t.Fatal("the registry was listed for a chart rendered from a directory")
 		return nil, nil
 	}
-	t.Cleanup(func() { listChartTags = helmChartTags })
+	t.Cleanup(func() { listChartTags = helmChartTagsFrom })
 
 	rel := fluxRelease{
 		Name: "closedchart", Namespace: "default",
