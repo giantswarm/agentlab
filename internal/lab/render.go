@@ -173,6 +173,11 @@ type tmplData struct {
 	// agent-manager's skills.github.tokenSecret, the migrate Job's
 	// githubToken. Only ever the Secret's name, never the token.
 	GitHubToken bool
+	// GitHubApp mirrors gitHubAppWired(cfg): githubApp is recorded
+	// (githubapp.go), so agent-manager's skills.github.app names the Secret
+	// agentlab-github-app instead of the token, which its chart refuses
+	// together with the App. Only ever the Secret's name.
+	GitHubApp bool
 	// BackstageAppConfigChecksum is the data checksum of the lab's app-config
 	// overlay (appconfig.go): stamped on the overlay ConfigMap, where
 	// `agentlab status` reads a hand edit against it, and carried in the
@@ -263,6 +268,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		WorkerPoolArch:             workerPoolArch(),
 		SubstrateNodeKey:           config.SubstrateNodeKey,
 		GitHubToken:                gitHubTokenWired(cfg),
+		GitHubApp:                  gitHubAppWired(cfg),
 		ModelManagerEnabled:        cfg.ModelManagerEnabled(),
 		LegacyChart:                cfg.LegacyChart(),
 		FamilylessChart:            cfg.FamilylessChart(),

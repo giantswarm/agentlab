@@ -349,6 +349,11 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	if err := ensureGitHubTokenSecrets(ctx, cfg); err != nil {
 		return err
 	}
+	// The skills GitHub App (githubapp.go) — before the install too:
+	// agent-manager's env reads its Secret without `optional`.
+	if err := ensureGitHubAppSecret(ctx, cfg); err != nil {
+		return err
+	}
 	// The klaus-gateway component's Secrets (klausgateway.go) — before the
 	// install too: the chart mounts obo.existingSecret and reads
 	// slack.secretName without `optional`.
