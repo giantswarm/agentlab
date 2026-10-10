@@ -121,7 +121,9 @@ instance and nothing else.
 [The lab's GitHub](#the-labs-github) as a GitHub Enterprise-shaped instance,
 nothing to register and no account needed. `agentlab up` and `agentlab
 platform` run it (`agentlab github-fake --workspaces`) in a container on the
-kind network beside the nodes, the way a proof's fake runs; a running one is
+kind network beside the nodes, the way a proof's fake runs, from a copy of
+the binary under `state/` (a mounted executable stays busy while its
+container runs, and a rebuild over it would be refused); a running one is
 replaced, so the fixture is its state, and `agentlab platform-down` and
 `agentlab down` remove it. Pods reach it as `https://github.<domain>`: CoreDNS
 sends the name to the selector-less Service `agent-platform/agentlab-github`

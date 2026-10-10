@@ -172,6 +172,12 @@ func anotherBinary(flag, verb string) string {
 	return "pass " + flag + " with"
 }
 
+// fakePreflightTries is how often the preflight pod reads the health URL,
+// two seconds apart: a Service made a moment ago is reachable once kube-proxy
+// programmed its ClusterIP and the resolver's cache let go of the name, a
+// few seconds on a node whose probe image is already there.
+const fakePreflightTries = 15
+
 // fakeServiceForPods points the selector-less Service at the fake's
 // container, on servicePort, and proves a pod reaches it through the Service
 // before the proof starts anything else — found here in seconds, not as a
@@ -192,12 +198,15 @@ func fakeServiceForPods(cfg *config.Config, service, what, ip string, port, serv
 		return nil, err
 	}
 	sideloadImages(cfg, hostPullImages([]string{probeImage}))
-	fetch := []string{"wget", "-qO-", "-T", "5"}
+	fetch := "wget -qO- -T 5"
 	if strings.HasPrefix(healthURL, "https://") {
-		fetch = append(fetch, "--no-check-certificate")
+		fetch += " --no-check-certificate"
 	}
+	// The last read's output is the pod's: "ok", or what the fetch said.
+	script := fmt.Sprintf("for i in $(seq %d); do out=$(%s %q 2>&1) && [ \"$out\" = ok ] && echo ok && exit 0; sleep 2; done; echo \"$out\"; exit 1",
+		fakePreflightTries, fetch, healthURL)
 	out, err := runProbePod(ctx, platformNamespace, service+"-preflight", probeImage,
-		append(fetch, healthURL), probePodTimeout)
+		[]string{"sh", "-c", script}, probePodTimeout)
 	if err == nil && strings.TrimSpace(out) == "ok" {
 		note("a pod reaches %s through %s (%s:%d on the %s network)", what, healthURL, ip, port, kindDockerNetwork)
 		return remove, nil

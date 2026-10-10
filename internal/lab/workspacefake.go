@@ -58,9 +58,9 @@ func githubFakeUp(cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
-	binary, err := os.Executable()
+	binary, err := labGitHubBinary()
 	if err != nil {
-		return fmt.Errorf("locating this binary for the lab's GitHub container: %w", err)
+		return err
 	}
 	c, err := startFakeContainer(cfg, binary, fakeContainerSpec{
 		what:       "the lab's GitHub",
@@ -86,6 +86,36 @@ func githubFakeUp(cfg *config.Config) error {
 		config.WorkspaceGitHubPrivateKeyKey: filepath.Join(credentials, githubFakeAppKey),
 		config.GitHubClientSecretKey:        filepath.Join(credentials, githubFakeClientSecret),
 	})
+}
+
+// labGitHubBinary is the binary the lab's GitHub container runs: a copy of
+// this one under state/, written beside its name and renamed into place.
+// The container keeps the executable it mounts busy for as long as it runs,
+// and the lab's binary is often the build output in the lab's directory:
+// mounted as it is, `make build` would be refused (text file busy) while the
+// lab is up. The rename leaves a running container its own inode.
+func labGitHubBinary() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("locating this binary for the lab's GitHub container: %w", err)
+	}
+	dir := filepath.Join(StateDir, labGitHubContainerSuffix)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return "", err
+	}
+	raw, err := os.ReadFile(exe) // #nosec G304 -- this binary
+	if err != nil {
+		return "", err
+	}
+	tmp := filepath.Join(dir, "agentlab.next")
+	if err := os.WriteFile(tmp, raw, 0o750); err != nil { // #nosec G306 G703 -- an executable, to a lab-owned path under state/
+		return "", err
+	}
+	binary := filepath.Join(dir, "agentlab")
+	if err := os.Rename(tmp, binary); err != nil {
+		return "", err
+	}
+	return filepath.Abs(binary)
 }
 
 // githubFakeDown removes the lab's GitHub container; the Service and the
