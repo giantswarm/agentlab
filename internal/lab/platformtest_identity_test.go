@@ -2,6 +2,8 @@ package lab
 
 import (
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/giantswarm/agentlab/internal/config"
@@ -50,6 +52,34 @@ func TestLegacyLabProofs(t *testing.T) {
 		}
 		if got := kubernetesArgs(cfg, map[string]any{resourceTypeKey: resourceNamespaces}); !reflect.DeepEqual(got, args) {
 			t.Errorf("%s: kubernetesArgs = %v, want %v", tc.name, got, args)
+		}
+	}
+}
+
+// TestIdentityProofUsers: the identity proofs act as one platform-admins and
+// one viewers user; a configuration without either has no proof to run and
+// fails it with the need, never a silent pass.
+func TestIdentityProofUsers(t *testing.T) {
+	cfg := config.Default()
+	admin, viewer, err := identityProofUsers(cfg)
+	if err != nil || admin == nil || viewer == nil {
+		t.Fatalf("identityProofUsers(default) = %v, %v, %v; want the two users", admin, viewer, err)
+	}
+	if admin.Email == viewer.Email {
+		t.Errorf("one user for both roles: %s", admin.Email)
+	}
+	for _, missing := range []string{"platform-admins", "viewers"} {
+		without := config.Default()
+		users := without.Users[:0]
+		for _, u := range without.Users {
+			if !slices.Contains(u.Groups, missing) {
+				users = append(users, u)
+			}
+		}
+		without.Users = users
+		_, _, err := identityProofUsers(without)
+		if err == nil || !strings.Contains(err.Error(), "needs one platform-admins and one viewers user") {
+			t.Errorf("without a %s user: identityProofUsers() = %v, want the need named", missing, err)
 		}
 	}
 }

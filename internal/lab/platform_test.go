@@ -197,16 +197,16 @@ func TestMCPServerState(t *testing.T) {
 // other components or namespaces do not count.
 func TestKagentControllerMonitored(t *testing.T) {
 	newFakeLab(t, customObject(serviceMonitorGVK, platformNamespace, "agent-platform-connectivity-kagent-controller", nil))
-	if kagentControllerMonitored() {
-		t.Error("a monitor in another namespace counted")
+	if monitored, err := kagentControllerMonitored(); err != nil || monitored {
+		t.Errorf("a monitor in another namespace counted: %v, %v", monitored, err)
 	}
 	newFakeLab(t, customObject(serviceMonitorGVK, kagentNamespace, "kagent-ui", nil))
-	if kagentControllerMonitored() {
-		t.Error("a monitor of another component counted")
+	if monitored, err := kagentControllerMonitored(); err != nil || monitored {
+		t.Errorf("a monitor of another component counted: %v, %v", monitored, err)
 	}
 	newFakeLab(t, customObject(serviceMonitorGVK, kagentNamespace, "agent-platform-connectivity-kagent-controller", nil))
-	if !kagentControllerMonitored() {
-		t.Error("the connectivity chart's controller monitor not seen")
+	if monitored, err := kagentControllerMonitored(); err != nil || !monitored {
+		t.Errorf("the connectivity chart's controller monitor not seen: %v, %v", monitored, err)
 	}
 }
 

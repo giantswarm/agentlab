@@ -16,9 +16,15 @@ var stepClock = time.Now()
 // step prints a top-level progress line, matching the ==> style the shell
 // scripts used, stamped with the elapsed time since the process started.
 func step(format string, a ...any) {
+	fmt.Printf("==> %s "+format+"\n", append([]any{elapsedStamp()}, a...)...)
+}
+
+// elapsedStamp is the [mm:ss] since the process started that step lines
+// carry: whole seconds, the scale of a boot — a proof's stages, which pass
+// in milliseconds on a warm lab, time themselves (proofStages).
+func elapsedStamp() string {
 	e := time.Since(stepClock).Round(time.Second)
-	fmt.Printf("==> [%02d:%02d] "+format+"\n",
-		append([]any{int(e.Minutes()), int(e.Seconds()) % 60}, a...)...)
+	return fmt.Sprintf("[%02d:%02d]", int(e.Minutes()), int(e.Seconds())%60)
 }
 
 func note(format string, a ...any) {

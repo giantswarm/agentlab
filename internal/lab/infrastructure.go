@@ -158,7 +158,6 @@ func (s labelledServer) key() string { return s.Namespace + "/" + s.Name }
 // the lab creates itself is labelled and the OAuth fixture is a Registered
 // server. Servers the vendored charts label are reported, not judged.
 func proveToolGroupLabels(cfg *config.Config) error {
-	step("Infrastructure families: %s is the member of %s, %s=%s", cfg.ClusterName, strings.Join(labFamilies(cfg), ", "), toolGroupLabel, toolGroupInfrastructure)
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	defer cancel()
 	all, err := listMCPServers(ctx, platformNamespace, "")

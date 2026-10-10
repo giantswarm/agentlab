@@ -117,11 +117,9 @@ const identityProofAgent = "agentlab-platform-test-identity"
 // bearer's person (downstream OAuth), so the apiserver refuses the create as
 // User "oidc:<viewer>" — the header bought nothing, no AgentTemplate exists.
 func proveAgentManagerIdentity(cfg *config.Config) error {
-	admin := cfg.FindUserInGroup("platform-admins")
-	viewer := cfg.FindUserInGroup("viewers")
-	if admin == nil || viewer == nil {
-		note("skipping the agent-manager identity proof: %s needs one platform-admins and one viewers user", config.File)
-		return nil
+	admin, viewer, err := identityProofUsers(cfg)
+	if err != nil {
+		return err
 	}
 	toolPrefix := "x_" + agentManagerMCPServer + "_"
 	step("%screate_agent as %s with x-user-id forged to %s — expecting the apiserver's Forbidden for User \"oidc:%s\"", toolPrefix, viewer.Email, admin.Email, viewer.Email)
