@@ -120,6 +120,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		inGroup(groupTesting, agentsGitOpsTestCmd()),
 		inGroup(groupTesting, toolsetsTestCmd()),
 		inGroup(groupTesting, modelsTestCmd()),
+		inGroup(groupTesting, pmTestCmd()),
 		inGroup(groupTesting, servingTestCmd()),
 		inGroup(groupTesting, vmManagerTestCmd()),
 		inGroup(groupTesting, workspacesTestCmd()),
@@ -177,7 +178,7 @@ func slackFakeCmd() *cobra.Command {
 func githubFakeCmd() *cobra.Command {
 	var listen, repo, branch string
 	var files []string
-	var workspaces bool
+	var workspaces, platformManager bool
 	var ws lab.WorkspaceGitHubOptions
 	cmd := &cobra.Command{
 		Use:    "github-fake",
@@ -187,6 +188,12 @@ func githubFakeCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
+			if platformManager {
+				if workspaces || repo != "" || len(files) > 0 {
+					return fmt.Errorf("--platform-manager serves the registry fixture's repositories: drop --workspaces, --repo and --file")
+				}
+				return lab.ServeRegistryGitHub(ctx, listen)
+			}
 			if workspaces {
 				if repo != "" || len(files) > 0 {
 					return fmt.Errorf("--workspaces serves its fixture's repositories: drop --repo and --file")
@@ -202,6 +209,7 @@ func githubFakeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&branch, "branch", "main", "its base branch")
 	cmd.Flags().StringArrayVar(&files, "file", nil, "a file of the base branch, as <path>=<base64 content> (repeatable)")
 	cmd.Flags().BoolVar(&workspaces, "workspaces", false, "serve the workspace proofs' GitHub over TLS: App, OAuth, listings, git and pull requests (docs/workspaces.md)")
+	cmd.Flags().BoolVar(&platformManager, "platform-manager", false, "serve pm-test's registry fixture to the platform manager, read-only (docs/platform-manager.md)")
 	cmd.Flags().StringVar(&ws.Fixture, "fixture", "", "with --workspaces: the fixture file (default: the embedded one)")
 	cmd.Flags().StringVar(&ws.Credentials, "credentials", "", "with --workspaces: the directory `agentlab github-fake credentials` generated")
 	cmd.Flags().StringVar(&ws.DataDir, "data-dir", "", "with --workspaces: where the bare repositories live (default: a temporary directory)")
@@ -1278,6 +1286,28 @@ func servingTestCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.Preset, "preset", "", "the published preset to serve (default: the lab's, "+lab.ServingPresetName+")")
 	cmd.Flags().BoolVar(&opts.SkipChat, "skip-chat", false, "skip the agent turn on the wired ModelConfig")
 	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", lab.DefaultServingReadyTimeout, "how long the model may take to serve: the weights download and the runtime's start")
+	return cmd
+}
+
+func pmTestCmd() *cobra.Command {
+	var opts lab.PMTestOptions
+	cmd := &cobra.Command{
+		Use:   "pm-test [email]",
+		Short: "Headless platform-manager proof (platform.platformManager): the released giantswarm-platform-manager on the lab's registry fixture -> signed in through muster -> reconcile_capability's dry run of an installation with workspaces on -> the Dex /signin redirect URI and the kept workspace-manager values",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadProofLab()
+			if err != nil {
+				return err
+			}
+			email := cfg.AdminUser().Email
+			if len(args) == 1 {
+				email = args[0]
+			}
+			return lab.PMTest(cfg, email, opts)
+		},
+	}
+	cmd.Flags().StringVar(&opts.GitHubFakeBinary, "github-fake-binary", "", "the static Linux agentlab the registry's container runs on the kind network (default: this binary)")
 	return cmd
 }
 

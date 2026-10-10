@@ -4,6 +4,7 @@ package config
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
@@ -418,6 +419,33 @@ type Platform struct {
 	// --workspaces turns it on; needs the agents runtime. `agentlab
 	// workspaces-test --storage-only` is the proof.
 	Workspaces Workspaces `yaml:"workspaces"`
+	// The platform-manager fixture: an invented installation with the agent
+	// platform and workspaces on, in a registry the lab serves, that the
+	// released giantswarm-platform-manager plans against
+	// (internal/lab/pmtest.go). Off by default; `agentlab pm-test` is the
+	// proof and refuses while it is off.
+	PlatformManager PlatformManager `yaml:"platformManager"`
+}
+
+// DefaultPlatformManagerVersion is the giantswarm-platform-manager release
+// pm-test installs while platform.platformManager.version is empty: a stable
+// release of the chart and image on gsoci.
+const DefaultPlatformManagerVersion = "0.69.0"
+
+// PlatformManager configures the platform-manager fixture.
+type PlatformManager struct {
+	// On, `agentlab pm-test` runs: the manager's chart at Version as a
+	// temporary HelmRelease against the lab's registry fixture.
+	Enabled bool `yaml:"enabled"`
+	// Version is the giantswarm-platform-manager chart (and image) version,
+	// a release or a release candidate; empty is
+	// DefaultPlatformManagerVersion.
+	Version string `yaml:"version,omitempty"`
+}
+
+// PlatformManagerVersion is the manager release pm-test installs.
+func (c *Config) PlatformManagerVersion() string {
+	return cmp.Or(strings.TrimPrefix(strings.TrimSpace(c.Platform.PlatformManager.Version), "v"), DefaultPlatformManagerVersion)
 }
 
 // Workspaces configures the workspace storage in the lab.

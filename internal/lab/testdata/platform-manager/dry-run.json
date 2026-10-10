@@ -1,0 +1,181 @@
+{
+  "caller": "admin",
+  "tool": "reconcile_capability",
+  "capability": "agent-platform",
+  "hub": "ember",
+  "dryRun": true,
+  "order": [
+    "ember"
+  ],
+  "pullRequests": [
+    {
+      "order": 1,
+      "repository": "agentlab/labco-management-clusters",
+      "installations": [
+        "ember"
+      ],
+      "files": [
+        "management-clusters/ember/extras/agent-platform/kustomization.yaml",
+        "management-clusters/ember/extras/agent-platform/secrets/dex-client-kagent-secret.yaml",
+        "management-clusters/ember/extras/agent-platform/secrets/dex-client-muster-secret.yaml",
+        "management-clusters/ember/extras/agent-platform/secrets/kagent-credentials-revision.yaml",
+        "management-clusters/ember/extras/agent-platform/secrets/kagent-oauth2-proxy-credentials.yaml",
+        "management-clusters/ember/extras/agent-platform/secrets/kustomization.yaml",
+        "management-clusters/ember/extras/agent-platform/secrets/muster-credentials-revision.yaml",
+        "management-clusters/ember/extras/agent-platform/secrets/muster-oauth-credentials.yaml",
+        "management-clusters/ember/extras/agent-platform/secrets/muster-valkey-credentials.yaml",
+        "management-clusters/ember/extras/backstage/agent-platform/app-config.yaml",
+        "management-clusters/ember/extras/backstage/agent-platform/kustomization.yaml",
+        "management-clusters/ember/extras/backstage/agent-platform/values.yaml",
+        "management-clusters/ember/extras/backstage/kustomization.yaml",
+        "management-clusters/ember/extras/mcp-capi/credentials-revision.enc.yaml",
+        "management-clusters/ember/extras/mcp-capi/dex-client-mcp-capi-secret.yaml",
+        "management-clusters/ember/extras/mcp-capi/kustomization.yaml",
+        "management-clusters/ember/extras/mcp-capi/oauth-credentials.enc.yaml",
+        "management-clusters/ember/extras/mcp-capi/valkey-credentials.enc.yaml",
+        "management-clusters/ember/extras/mcp-kubernetes/credentials-revision.enc.yaml",
+        "management-clusters/ember/extras/mcp-kubernetes/dex-client-mcp-kubernetes-secret.yaml",
+        "management-clusters/ember/extras/mcp-kubernetes/kustomization.yaml",
+        "management-clusters/ember/extras/mcp-kubernetes/oauth-credentials.enc.yaml",
+        "management-clusters/ember/extras/mcp-kubernetes/valkey-credentials.enc.yaml",
+        "management-clusters/ember/extras/mcp-prometheus/credentials-revision.enc.yaml",
+        "management-clusters/ember/extras/mcp-prometheus/dex-client-mcp-prometheus-secret.yaml",
+        "management-clusters/ember/extras/mcp-prometheus/kustomization.yaml",
+        "management-clusters/ember/extras/mcp-prometheus/oauth-credentials.enc.yaml",
+        "management-clusters/ember/extras/mcp-prometheus/valkey-credentials.enc.yaml"
+      ],
+      "changes": 28,
+      "generatedSecrets": [
+        "ember-kagent-cookie-secret",
+        "ember-kagent-credentials-revision",
+        "ember-kagent-dex-client-secret",
+        "ember-mcp-capi-credentials-revision",
+        "ember-mcp-capi-dex-client-secret",
+        "ember-mcp-capi-oauth-encryption-key",
+        "ember-mcp-capi-valkey-password",
+        "ember-mcp-kubernetes-credentials-revision",
+        "ember-mcp-kubernetes-dex-client-secret",
+        "ember-mcp-kubernetes-oauth-encryption-key",
+        "ember-mcp-kubernetes-valkey-password",
+        "ember-mcp-prometheus-credentials-revision",
+        "ember-mcp-prometheus-dex-client-secret",
+        "ember-mcp-prometheus-oauth-encryption-key",
+        "ember-mcp-prometheus-valkey-password",
+        "ember-muster-credentials-revision",
+        "ember-muster-dex-client-secret",
+        "ember-muster-oauth-encryption-key",
+        "ember-muster-registration-token",
+        "ember-muster-valkey-password"
+      ]
+    },
+    {
+      "order": 2,
+      "repository": "agentlab/labco-configs",
+      "installations": [
+        "ember"
+      ],
+      "files": [
+        "installations/ember/apps/agent-platform/configmap-values.yaml.patch",
+        "installations/ember/apps/dex-app/configmap-values.yaml.patch"
+      ],
+      "changes": 2,
+      "generatedSecrets": [],
+      "after": [
+        {
+          "repository": "agentlab/labco-management-clusters",
+          "objects": [
+            "Secret/dex-client-kagent",
+            "Secret/dex-client-mcp-capi",
+            "Secret/dex-client-mcp-kubernetes",
+            "Secret/dex-client-mcp-prometheus",
+            "Secret/dex-client-muster",
+            "Secret/kagent-oauth2-proxy-credentials",
+            "Secret/muster-oauth-credentials",
+            "Secret/muster-valkey-credentials"
+          ]
+        }
+      ]
+    }
+  ],
+  "skipped": [],
+  "installations": [
+    {
+      "name": "ember",
+      "inputs": {
+        "installation": {
+          "name": "ember",
+          "workspaces": {
+            "enabled": true
+          },
+          "dexAppVersion": "3.3.0"
+        }
+      },
+      "files": [
+        {
+          "repository": "agentlab/labco-configs",
+          "path": "installations/ember/apps/agent-platform/configmap-values.yaml.patch",
+          "change": "update",
+          "content": "# Rendered by giantswarm-platform-manager, agent-platform definition. Do not edit by hand:\n# the next reconcile writes it again from the installation's inputs.\nglobal:\n  domain: ember.agentlab.test\ncomponents:\n  kagent:\n    enabled: true\n    valuesFromRefs:\n      - kind: Secret\n        name: kagent-credentials-revision\n        valuesKey: revision\n        targetPath: oauth2-proxy.podAnnotations.kagent-credentials-revision\n  agent-manager:\n    enabled: true\n    valuesFromRefs:\n      - kind: Secret\n        name: muster-credentials-revision\n        valuesKey: revision\n        targetPath: podAnnotations.muster-credentials-revision\n  muster:\n    valuesFromRefs:\n      - kind: Secret\n        name: muster-credentials-revision\n        valuesKey: revision\n        targetPath: muster.oauth.server.existingSecretChecksum\n      - kind: Secret\n        name: muster-credentials-revision\n        valuesKey: revision\n        targetPath: muster.oauth.server.storage.valkey.existingSecretChecksum\n  valkey:\n    valuesFromRefs:\n      - kind: Secret\n        name: muster-credentials-revision\n        valuesKey: revision\n        targetPath: valkey.auth.usersExistingSecretChecksum\n  model-manager:\n    valuesFromRefs:\n      - kind: Secret\n        name: muster-credentials-revision\n        valuesKey: revision\n        targetPath: podAnnotations.muster-credentials-revision\npostgres:\n  enabled: true\nllmRouting:\n  enabled: true\nkagent:\n  providers:\n    anthropic:\n      apiKeySecretRef: kagent-anthropic-key\n      config:\n        baseUrl: http://agentgateway.agent-platform.svc:8081\n        maxTokens: 32000\n  oauth2-proxy:\n    config:\n      existingSecret: kagent-oauth2-proxy-credentials\n    extraArgs:\n      oidc-extra-audience: dex-k8s-authenticator,kagent,backstage # gitleaks:allow\nmuster:\n  muster:\n    oauth:\n      server:\n        existingSecret: muster-oauth-credentials\n        storage:\n          valkey:\n            existingSecret: muster-valkey-credentials\n        trustedAudiences:\n          - dex-k8s-authenticator\n          - kagent\n          - backstage\ngateway:\n  jwksEgress:\n    enabled: true\nextraObjects:\n  - apiVersion: gateway.networking.k8s.io/v1beta1\n    kind: ReferenceGrant\n    metadata:\n      name: agentgateway-jwks-dex\n      namespace: giantswarm\n    spec:\n      from:\n        - group: agentgateway.dev\n          kind: AgentgatewayPolicy\n          namespace: agent-platform\n      to:\n        - group: \"\"\n          kind: Service\n          name: dex\nagent-platform-mcps:\n  agentgateway:\n    jwt:\n      extraProviders:\n        - issuer: https://dex.ember.agentlab.test\n          audiences:\n            - backstage\n          jwks:\n            remote:\n              backendRef:\n                name: dex\n                namespace: giantswarm\n                port: 5556\n              jwksPath: /keys\n              cacheDuration: 5m\nvalkey:\n  valkey:\n    auth:\n      usersExistingSecret: muster-valkey-credentials\n      aclUsers:\n        default:\n          passwordKey: valkey-password\nworkspaces:\n  enabled: true\nworkspace-manager:\n  providers:\n    instances:\n      - name: github\n        kind: github\n",
+          "current": "muster:\n  muster:\n    oauth:\n      server:\n        trustedAudiences:\n          - dex-k8s-authenticator\n          - backstage\nworkspaces:\n  enabled: true\nworkspace-manager:\n  providers:\n    instances:\n      - name: github\n        kind: github\n"
+        },
+        {
+          "repository": "agentlab/labco-configs",
+          "path": "installations/ember/apps/dex-app/configmap-values.yaml.patch",
+          "change": "update",
+          "content": "# Rendered by giantswarm-platform-manager, agent-platform definition. Do not edit by hand:\n# the next reconcile writes it again from the installation's inputs.\noidc:\n  staticClients:\n    muster:\n      clientSecretRef:\n        name: dex-client-muster\n        key: secret\n      extraRedirectURIs:\n        - https://workspace-manager.ember.agentlab.test/signin\n    mcpKubernetes:\n      clientSecretRef:\n        name: dex-client-mcp-kubernetes\n        key: secret\n    mcpPrometheus:\n      clientSecretRef:\n        name: dex-client-mcp-prometheus\n        key: secret\n    mcpCapi:\n      clientSecretRef:\n        name: dex-client-mcp-capi\n        key: secret\n    dexK8SAuthenticator:\n      trustedPeers:\n        - backstage\n  extraStaticClients:\n    - id: kagent\n      name: kagent-ui\n      secretRef:\n        name: dex-client-kagent\n        key: secret\n      redirectURIs:\n        - https://kagent.ember.agentlab.test/oauth2/callback\n    - id: backstage\n      name: Dev Portal\n      redirectURIs:\n        - https://portal.ember.agentlab.test/api/auth/oidc-ember/handler/frame\n      secretRef:\n        name: dex-client-backstage\n        key: secret\n",
+          "current": "oidc:\n  staticClients:\n    dexK8SAuthenticator:\n      trustedPeers:\n        - backstage\n  extraStaticClients:\n    - id: backstage\n      name: Dev Portal\n      redirectURIs:\n        - https://portal.ember.agentlab.test/api/auth/oidc-ember/handler/frame\n      secretRef: {name: dex-client-backstage, key: secret}\n"
+        }
+      ],
+      "dexClients": [
+        {
+          "id": "muster-ember",
+          "client": "muster",
+          "secretRef": "dex-client-muster",
+          "extraRedirectURIs": [
+            "https://workspace-manager.ember.agentlab.test/signin"
+          ]
+        },
+        {
+          "client": "mcpKubernetes",
+          "secretRef": "dex-client-mcp-kubernetes"
+        },
+        {
+          "client": "mcpPrometheus",
+          "secretRef": "dex-client-mcp-prometheus"
+        },
+        {
+          "client": "mcpCapi",
+          "secretRef": "dex-client-mcp-capi"
+        },
+        {
+          "id": "dex-k8s-authenticator",
+          "client": "dexK8SAuthenticator",
+          "trustedPeers": [
+            "backstage"
+          ]
+        },
+        {
+          "id": "kagent",
+          "name": "kagent-ui",
+          "secretRef": "dex-client-kagent",
+          "redirectURIs": [
+            "https://kagent.ember.agentlab.test/oauth2/callback"
+          ]
+        },
+        {
+          "id": "backstage",
+          "name": "Dev Portal",
+          "secretRef": "dex-client-backstage",
+          "redirectURIs": [
+            "https://portal.ember.agentlab.test/api/auth/oidc-ember/handler/frame"
+          ]
+        }
+      ],
+      "diff": {
+        "create": 27,
+        "unchanged": 1,
+        "update": 3
+      }
+    }
+  ]
+}
