@@ -163,7 +163,6 @@ func signInChallenge(cfg *config.Config, s *musterSession, server string) (*auth
 // authorization server (muster's own /oauth/authorize here) instead of
 // rejecting the state.
 func proveOAuthSignIn(cfg *config.Config, token string) error {
-	step("Per-server OAuth sign-in: core_auth_login for the %s fixture", oauthFixtureServer)
 	// The challenge itself does not depend on the CR state, but right after a
 	// muster restart the CR reads Failed until muster's retry finds its own
 	// listener — and a Failed fixture is what the portal would show. Connected

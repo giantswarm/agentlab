@@ -356,7 +356,7 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 
 	// The per-server sign-in path: muster as OAuth client, challenged by the
 	// lab's Auth Required fixture (oauthfixture.go).
-	p.begin(stageOAuthSignIn, "Per-server OAuth sign-in: muster as the OAuth client of the %s fixture", oauthFixtureServer)
+	p.begin(stageOAuthSignIn, "Per-server OAuth sign-in: core_auth_login for the %s fixture", oauthFixtureServer)
 	if err := proveOAuthSignIn(cfg, token); err != nil {
 		return "", err
 	}
@@ -365,7 +365,7 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 	// The infrastructure families (infrastructure.go): the lab's servers are
 	// their members, labelled infrastructure, and nothing family-less or
 	// lab-created is. The OAuth fixture stays a Registered server.
-	p.begin(stageFamilies, "Infrastructure families: the lab's servers are their members")
+	p.begin(stageFamilies, "Infrastructure families: %s is the member of %s, %s=%s", cfg.ClusterName, strings.Join(labFamilies(cfg), ", "), toolGroupLabel, toolGroupInfrastructure)
 	if reason := familiesSkip(cfg); reason != "" {
 		p.skip("%s", reason)
 		verdict += "\nSKIP: the infrastructure families — " + reason
