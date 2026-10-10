@@ -38,10 +38,11 @@ func TestLoadRefusesAFieldThisReleaseDoesNotKnow(t *testing.T) {
 	}
 }
 
-// The fields this release knows load as before; an empty file is the defaults.
-func TestLoadKnownFieldsAndAnEmptyFile(t *testing.T) {
+// The fields this release knows load as before; a file without clusterName,
+// an empty one included, is refused: no lab is the default.
+func TestLoadKnownFieldsAndANamelessFile(t *testing.T) {
 	t.Chdir(t.TempDir())
-	if err := os.WriteFile(File, []byte("platform:\n  chartVersion: "+loadTestChart+"\n  serving:\n    enabled: true\n"), 0o600); err != nil {
+	if err := os.WriteFile(File, []byte("clusterName: lab\nplatform:\n  chartVersion: "+loadTestChart+"\n  serving:\n    enabled: true\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := Load()
@@ -51,11 +52,13 @@ func TestLoadKnownFieldsAndAnEmptyFile(t *testing.T) {
 	if !cfg.Platform.Serving.Enabled || cfg.Platform.ChartVersion != loadTestChart {
 		t.Fatalf("known fields not loaded: %+v", cfg.Platform)
 	}
-	if err := os.WriteFile(File, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Load(); err != nil {
-		t.Fatalf("an empty %s: %v", File, err)
+	for _, raw := range []string{"", "platform:\n  chartVersion: " + loadTestChart + "\n"} {
+		if err := os.WriteFile(File, []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "clusterName") {
+			t.Errorf("%q: want a refusal naming clusterName, got %v", raw, err)
+		}
 	}
 }
 
@@ -63,7 +66,7 @@ func TestLoadKnownFieldsAndAnEmptyFile(t *testing.T) {
 // wrote carries, still loads and is not written back.
 func TestLoadDropsTheRetiredFakeFleet(t *testing.T) {
 	t.Chdir(t.TempDir())
-	if err := os.WriteFile(File, []byte("platform:\n  chartVersion: "+loadTestChart+"\n  fakeFleet: true\n"), 0o600); err != nil {
+	if err := os.WriteFile(File, []byte("clusterName: lab\nplatform:\n  chartVersion: "+loadTestChart+"\n  fakeFleet: true\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := Load()
@@ -88,7 +91,7 @@ func TestLoadDropsTheRetiredFakeFleet(t *testing.T) {
 // command works. The 3.x line and a branch build are not refused.
 func TestCheckFamiliesChartFloor(t *testing.T) {
 	t.Chdir(t.TempDir())
-	if err := os.WriteFile(File, []byte("platform:\n  chartVersion: 4.92.0\n"), 0o600); err != nil {
+	if err := os.WriteFile(File, []byte("clusterName: lab\nplatform:\n  chartVersion: 4.92.0\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := Load()
@@ -146,7 +149,7 @@ func TestUpgradeSeed(t *testing.T) {
 // let `configure` start over from the defaults.
 func TestLoadWithAMissingValuesFile(t *testing.T) {
 	t.Chdir(t.TempDir())
-	if err := os.WriteFile(File, []byte("platform:\n  chartVersion: "+loadTestChart+"\n  valuesFiles:\n    - gone/overlay.yaml\n"), 0o600); err != nil {
+	if err := os.WriteFile(File, []byte("clusterName: lab\nplatform:\n  chartVersion: "+loadTestChart+"\n  valuesFiles:\n    - gone/overlay.yaml\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := Load()

@@ -71,7 +71,7 @@ func TestGitHubSignInIsValidated(t *testing.T) {
 // its keys, and a key the schema does not know is refused like any other.
 func TestGitHubSignInDecodesStrictly(t *testing.T) {
 	cfg := Default()
-	raw := []byte("platform:\n  githubSignIn:\n    enabled: true\n    clientId: Iv23liLabClientId\n    secret: lab-github-signin\n    orgs: [giantswarm]\n")
+	raw := []byte("clusterName: lab\nplatform:\n  githubSignIn:\n    enabled: true\n    clientId: Iv23liLabClientId\n    secret: lab-github-signin\n    orgs: [giantswarm]\n")
 	if err := decodeStrict(raw, cfg); err != nil {
 		t.Fatalf("decode: %v", err)
 	}

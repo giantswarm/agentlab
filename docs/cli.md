@@ -15,15 +15,19 @@ macOS), so the other commands find it from any directory, in this order:
 
 1. `--lab <name>` (every command), refused naming the registered labs when no
    lab of that name is registered;
-2. an `agentlab.yaml` in the current directory, whatever the registry says;
-3. the one registered lab; with several, a picker on a terminal, and off one a
-   refusal that names them and `--lab`.
+2. the `agentlab.yaml` in the current directory: the lab its `clusterName`
+   names (a copy of a registered lab's file enters that lab's directory), else
+   this directory;
+3. a picker among the registered labs on a terminal, and off one a refusal
+   that names them and `--lab`.
+
+No lab is a default, not even the only one registered: a command runs against
+the lab `--lab`, the directory or the person names, or refuses. An
+`agentlab.yaml` without a `clusterName` is refused too: the file names its lab.
 
 A lab's directory is where its `agentlab.yaml`, `certs/` and `state/` live: the
 checkout for a lab you made there, `~/.local/state/<lab>` for a leased lab
-(`agentlab-1`, `agentlab-2`). A directory whose `agentlab.yaml` only names the
-`clusterName` of an existing lab has none of its certs: `status` and `platform`
-refuse it, naming the lab's directory and `--lab <name>`.
+(`agentlab-1`, `agentlab-2`).
 
 A lab entered from another directory is named on stderr (`Lab agentlab
 (/path/to/lab)`). `configure` and `up` skip step 3: in a directory without
@@ -42,8 +46,8 @@ no lab.
 Nothing asks without a terminal (stdin not a TTY): no first-run question, no
 lab picker, no trust or open offer. A missing `agentlab.yaml` is refused with
 a pointer to `agentlab configure --defaults`, which writes the canonical lab
-without a question; several registered labs and no `agentlab.yaml` here are
-refused naming them and `--lab`; `up --trust`/`--open` pre-answer the end of a
+without a question; registered labs and no `agentlab.yaml` here are refused
+naming them and `--lab`; `up --trust`/`--open` pre-answer the end of a
 boot. CI, coding agents and scripts write the config first and name the lab.
 
 The sections below are the groups `agentlab --help` prints, in the same order.

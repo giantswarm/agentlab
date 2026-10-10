@@ -97,7 +97,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		&cobra.Group{ID: groupCleanup, Title: "Cleanup"},
 		&cobra.Group{ID: groupAdvanced, Title: "Advanced"},
 	)
-	root.PersistentFlags().StringVar(&labFlag, "lab", "", "the registered lab to run against (its clusterName), from any directory; default: the agentlab.yaml here, else the one registered lab")
+	root.PersistentFlags().StringVar(&labFlag, "lab", "", "the registered lab to run against (its clusterName), from any directory; default: the lab the agentlab.yaml here names; no lab is ever implied")
 	root.SetHelpCommandGroupID(groupAdvanced)
 	root.SetCompletionCommandGroupID(groupAdvanced)
 
@@ -315,9 +315,9 @@ func loadLab(create bool) (*config.Config, error) {
 // runs against from any directory (enterLab).
 var labFlag string
 
-// enterLab resolves the lab the command runs against — --lab, an
-// agentlab.yaml in the current directory, the one registered lab, the
-// person's pick among several (labs.Resolve) — and changes into its
+// enterLab resolves the lab the command runs against — --lab, the lab the
+// agentlab.yaml in the current directory names, the person's pick on a
+// terminal; never a default (labs.Resolve) — and changes into its
 // directory, so every lab path (agentlab.yaml, certs/, state/) resolves there
 // unchanged. create is for the commands that make a lab where they run
 // (`configure`, `up`): without --lab and an agentlab.yaml here they create

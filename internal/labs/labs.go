@@ -138,31 +138,35 @@ type Picker func(labs []Lab) (Lab, error)
 // Resolve decides which lab directory a command runs against, in one order:
 //
 //  1. --lab <name> (flag), refused naming the registered labs when unknown;
-//  2. an agentlab.yaml in the current directory, whatever the registry says;
-//  3. unless create: the one registered lab, or on a terminal (pick non-nil)
-//     the person's choice among several, or off one a refusal naming them
-//     and --lab.
+//  2. the agentlab.yaml in the current directory: the lab its clusterName
+//     names, registered elsewhere (a copy of that lab's file), or else this
+//     directory;
+//  3. unless create: on a terminal (pick non-nil) the person's choice among
+//     the registered labs, off one a refusal naming them and --lab.
 //
-// dir is "" for the current directory — also when nothing is registered, so
-// the caller's missing-agentlab.yaml path (the first run, or its refusal)
-// stays what it is. create is for the commands that make a lab where they
-// run (`configure`, `up`): in a directory without agentlab.yaml they create
-// one there instead of reaching for another lab.
+// No lab is ever the default: a command runs against the lab the flag, the
+// directory or the person names, or not at all. dir is "" for the current
+// directory — also when nothing is registered, so the caller's
+// missing-agentlab.yaml path (the first run, or its refusal) stays what it
+// is. create is for the commands that make a lab where they run
+// (`configure`, `up`): in the current directory they stay there instead of
+// reaching for another lab.
 func Resolve(flag string, create bool, pick Picker) (lab Lab, err error) {
 	if flag != "" {
 		labs, err := List()
 		if err != nil {
 			return Lab{}, err
 		}
-		for _, l := range labs {
-			if l.Name == flag {
-				return l, nil
-			}
+		if l, ok := named(labs, flag); ok {
+			return l, nil
 		}
 		return Lab{}, fmt.Errorf("no lab named %q is registered on this machine (%s); a lab registers itself on `agentlab configure` and `agentlab up` in its directory", flag, names(labs))
 	}
 	if _, err := os.Stat(config.File); err == nil {
-		return Lab{}, nil
+		if create {
+			return Lab{}, nil
+		}
+		return here()
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return Lab{}, err
 	}
@@ -176,13 +180,47 @@ func Resolve(flag string, create bool, pick Picker) (lab Lab, err error) {
 	switch {
 	case len(labs) == 0:
 		return Lab{}, nil
-	case len(labs) == 1:
-		return labs[0], nil
 	case pick != nil:
 		return pick(labs)
 	default:
-		return Lab{}, fmt.Errorf("no %s here, and %d labs are registered on this machine (%s): pick one with --lab <name>, or run the command in its directory", config.File, len(labs), names(labs))
+		return Lab{}, fmt.Errorf("no %s here and no --lab: pick one of the labs registered on this machine (%s) with --lab <name>, or run the command in its directory", config.File, names(labs))
 	}
+}
+
+// here resolves the agentlab.yaml in the current directory: the registered
+// lab of its clusterName when that lab lives in another directory, else the
+// current directory ("" Dir).
+func here() (Lab, error) {
+	cfg, err := config.Peek(".")
+	if err != nil {
+		return Lab{}, err
+	}
+	labs, err := List()
+	if err != nil {
+		return Lab{}, err
+	}
+	l, ok := named(labs, cfg.ClusterName)
+	if !ok {
+		return Lab{}, nil
+	}
+	cwd, err := filepath.Abs(".")
+	if err != nil {
+		return Lab{}, err
+	}
+	if l.Dir == cwd {
+		return Lab{}, nil
+	}
+	return l, nil
+}
+
+// named returns the lab of that name among labs.
+func named(labs []Lab, name string) (Lab, bool) {
+	for _, l := range labs {
+		if l.Name == name {
+			return l, true
+		}
+	}
+	return Lab{}, false
 }
 
 // names lists the labs for a refusal: "a (/dir/a), b (/dir/b)", or "none".

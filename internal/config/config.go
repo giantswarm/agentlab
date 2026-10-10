@@ -1058,13 +1058,20 @@ func Peek(dir string) (*Config, error) {
 // configure and platform record what they found), so a lenient decode would
 // drop such a field silently and the next `platform` would uninstall what it
 // configured — a newer release's switch, say. The refusal names the field and
-// the fix: update agentlab, or remove the field. An empty file is the defaults.
+// the fix: update agentlab, or remove the field. Every other field defaults;
+// clusterName never does.
 func decodeStrict(raw []byte, cfg *Config) error {
+	// The file names its lab: Default's clusterName is the first lab's, and
+	// a file without one would silently act on that lab's cluster.
+	cfg.ClusterName = ""
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	dec.KnownFields(true)
 	err := dec.Decode(cfg)
 	switch {
 	case err == nil, errors.Is(err, io.EOF):
+		if cfg.ClusterName == "" {
+			return fmt.Errorf("%s names no clusterName, the lab it belongs to: add `clusterName: <the lab's name>` (`agentlab list` shows the labs on this machine)", File)
+		}
 		return nil
 	case strings.Contains(err.Error(), "not found in type"):
 		return fmt.Errorf("%s names a field this agentlab release does not know (%w) — the file was written by a newer release, and this run would drop the field on its next write; update agentlab (https://github.com/giantswarm/agentlab/releases) or remove the field", File, err)
