@@ -1,6 +1,6 @@
 // Package update keeps the agentlab binary current. `agentlab self-update`
 // installs the newest GitHub release over the running executable, the way
-// muster and mcp-kubernetes do it (creativeprojects/go-selfupdate against the
+// muster and mcp-kubernetes do it (giantswarm/go-selfupdate against the
 // repository's releases; a development build is refused) — and only after the
 // release's cosign Sigstore bundle verifies: architect signs every binary it
 // publishes in CircleCI, keyless, and the shared validator
@@ -29,7 +29,7 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
-	"github.com/creativeprojects/go-selfupdate"
+	"github.com/giantswarm/go-selfupdate"
 	selfupdatecosign "github.com/giantswarm/selfupdate-cosign"
 
 	"github.com/giantswarm/agentlab/pkg/project"

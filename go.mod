@@ -9,10 +9,10 @@ require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/a2aproject/a2a-go/v2 v2.6.0
-	github.com/creativeprojects/go-selfupdate v1.6.0
 	github.com/giantswarm/gitops-commit v0.11.1
+	github.com/giantswarm/go-selfupdate v1.6.1
 	github.com/giantswarm/klaus-gateway v1.21.0
-	github.com/giantswarm/selfupdate-cosign v0.3.2
+	github.com/giantswarm/selfupdate-cosign v0.3.4
 	github.com/giantswarm/telemetrydeck-go v0.3.4
 	github.com/giantswarm/vm-manager v0.24.8
 	github.com/google/uuid v1.6.0

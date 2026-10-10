@@ -167,8 +167,6 @@ github.com/coreos/go-systemd/v22 v22.7.0/go.mod h1:xNUYtjHu2EDXbsxz1i41wouACIwT7
 github.com/cpuguy83/go-md2man/v2 v2.0.6/go.mod h1:oOW0eioCTA6cOiMLiUPZOpcVxMig6NIQQ7OS05n1F4g=
 github.com/creack/pty v1.1.24 h1:bJrF4RRfyJnbTJqzRLHzcGaZK1NeM5kTC9jGgovnR1s=
 github.com/creack/pty v1.1.24/go.mod h1:08sCNb52WyoAwi2QDyzUCTgcvVFhUzewun7wtTfvcwE=
-github.com/creativeprojects/go-selfupdate v1.6.0 h1:Bu3cIgdyfI1Pg8XsL8nbaT2uMjfZ8HIoxnBmPJbN0sw=
-github.com/creativeprojects/go-selfupdate v1.6.0/go.mod h1:Ids8O474XGQG0jZ5vpBIhWffcGYjUP6ccOI0mMcvQbI=
 github.com/cyberphone/json-canonicalization v0.0.0-20241213102144-19d51d7fe467 h1:uX1JmpONuD549D73r6cgnxyUu18Zb7yHAy5AYU0Pm4Q=
 github.com/cyberphone/json-canonicalization v0.0.0-20241213102144-19d51d7fe467/go.mod h1:uzvlm1mxhHkdfqitSA92i7Se+S9ksOn3a3qmv/kyOCw=
 github.com/cyphar/filepath-securejoin v0.6.1 h1:5CeZ1jPXEiYt3+Z6zqprSAgSWiggmpVyciv8syjIpVE=
@@ -224,10 +222,12 @@ github.com/fxamacker/cbor/v2 v2.9.1 h1:2rWm8B193Ll4VdjsJY28jxs70IdDsHRWgQYAI80+r
 github.com/fxamacker/cbor/v2 v2.9.1/go.mod h1:vM4b+DJCtHn+zz7h3FFp/hDAI9WNWCsZj23V5ytsSxQ=
 github.com/giantswarm/gitops-commit v0.11.1 h1:6FvT3OM3ltSConbW4gz+dgxTuF5RE3KCcojbFuUI2Fg=
 github.com/giantswarm/gitops-commit v0.11.1/go.mod h1:y+vnZsWYIa5j4Pk0vrGM+iLXRAdyq2JRlUL0ygvuxOU=
+github.com/giantswarm/go-selfupdate v1.6.1 h1:RFmqWt7xjTReWocxuiW6uSD4Fsfp57P0SKsfrskx5bQ=
+github.com/giantswarm/go-selfupdate v1.6.1/go.mod h1:AafABggDiXjWkAeF1LFJOx3A+Q9vPyrQcg5JdGLLLOE=
 github.com/giantswarm/klaus-gateway v1.21.0 h1:sIdKo97SBYCavdAf2jyMpTTtOmep/b6otknbGpeHAVI=
 github.com/giantswarm/klaus-gateway v1.21.0/go.mod h1:aloyluB8BZMszj7iQ1Ku6YZBZA+lQC6CerEJvzYIHtE=
-github.com/giantswarm/selfupdate-cosign v0.3.2 h1:ItfeMJP0dD33apqIUiwDPu08S4Lfnhzi4XSA9u6dHmY=
-github.com/giantswarm/selfupdate-cosign v0.3.2/go.mod h1:Lzm9L7291a9HLg3KzEclSKoaSt/qUEAr87mD10oh2s4=
+github.com/giantswarm/selfupdate-cosign v0.3.4 h1:JytcotX4WxQPXhJUmeJ70Dz/cKHsv+WtxY+nT95S5JI=
+github.com/giantswarm/selfupdate-cosign v0.3.4/go.mod h1:IbcSMJJIErhK4ioKVGJUAnc4ikBcDG43v70IZByHQs0=
 github.com/giantswarm/telemetrydeck-go v0.3.4 h1:eV3BZsmQZVc+2r8HGbSZ0N5z7YrpcxdiWqHFqYgMP0U=
 github.com/giantswarm/telemetrydeck-go v0.3.4/go.mod h1:BitlH7nTrQmWvVEtnAa8pNM+FjI0+9S7JA9tl1PVvzo=
 github.com/giantswarm/vm-manager v0.24.8 h1:YfuxCILmEZ2VXNqfsoV9NXUDedb3lLiSTjT3zH2Gvy4=
