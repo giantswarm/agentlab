@@ -138,7 +138,7 @@ func ConnectivityChartDir(chartPath string) string {
 // for the Deployments the lab's dev loops build from a checkout — the
 // agentgateway component's two Deployments under their own names — plus
 // DevImageHarness for the platform Harness's runtime image.
-var DevImageComponents = []string{"muster", "backstage", "kagent", "mcp-kubernetes", "model-manager", "agent-manager", "vm-manager", DevImageKlausGateway, DevImageClusterManager, DevImageWorkspaceManager, DevImageAgentgateway, DevImageAgentgatewayController, DevImageHarness}
+var DevImageComponents = []string{"muster", "backstage", "kagent", "mcp-kubernetes", "model-manager", "agent-manager", "vm-manager", DevImageKlausGateway, DevImageClusterManager, DevImageWorkspaceManager, DevImageAgentgateway, DevImageAgentgatewayController, DevImageSubstrateAPI, DevImageHarness}
 
 // DevImageKlausGateway is the devImages key of the klaus-gateway component
 // (platform.klausGateway): the Deployment `klaus-gateway`, container
@@ -172,6 +172,13 @@ const DevImageAgentgateway = "agentgateway"
 // controller: the Deployment `agentgateway-controller`, container
 // `controller`, rendered by the agentgateway component's chart.
 const DevImageAgentgatewayController = "agentgateway-controller"
+
+// DevImageSubstrateAPI is the devImages key of Agent Substrate's control
+// plane API: the Deployment `ate-api-server`, container `ate-api-server`,
+// rendered by the `substrate` component's chart — where the ActorTemplate
+// reconciler and its golden snapshots live. Meaningful only with the agents,
+// which bring Substrate.
+const DevImageSubstrateAPI = "ate-api-server"
 
 // DevImageHarness is the devImages key of the platform Harness's workload
 // image — the Go ADK runtime every agent runs on under kagent API v2. Not a
@@ -1580,6 +1587,9 @@ func (c *Config) Validate() error {
 	}
 	if _, ok := c.Platform.DevImages[DevImageHarness]; ok && !c.Platform.Agents {
 		return fmt.Errorf("platform.devImages.%s: the platform Harness comes with the agents (platform.agents: true)", DevImageHarness)
+	}
+	if _, ok := c.Platform.DevImages[DevImageSubstrateAPI]; ok && !c.Platform.Agents {
+		return fmt.Errorf("platform.devImages.%s: Agent Substrate comes with the agents (platform.agents: true)", DevImageSubstrateAPI)
 	}
 	if _, ok := c.Platform.DevImages[DevImageKlausGateway]; ok && !c.Platform.KlausGateway.Enabled {
 		return fmt.Errorf("platform.devImages.%s: the component is off (platform.klausGateway.enabled: true, or `agentlab configure --klaus-gateway`) — the override would swap the image of nothing", DevImageKlausGateway)

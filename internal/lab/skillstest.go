@@ -812,15 +812,19 @@ func (f substrateFootprint) lines() []string {
 	return lines
 }
 
-// skillsCleanup removes everything the proof creates and waits for Substrate
-// to let go of it: the AgentTemplates (and any carrier), then their
+// skillsCleanup removes everything the proof creates (proofAgentsCleanup).
+func skillsCleanup(api *kagentAPI) []string {
+	return proofAgentsCleanup(api, skillsTestAgent, skillsTestControlAgent)
+}
+
+// proofAgentsCleanup removes a proof's agents and waits for Substrate to let
+// go of them: the AgentTemplates (and any carrier), then their
 // ActorTemplates and actors, which kagent's revision garbage collector
 // deletes once nothing references them. An actor still pinned to a worker
 // after that is freed the documented way — its worker pod deleted, the
 // WorkerPool replaces it — and whatever is still there is returned, worded,
-// for the verdict.
-func skillsCleanup(api *kagentAPI) []string {
-	names := []string{skillsTestAgent, skillsTestControlAgent}
+// for the verdict. names[0] names the agents in the notes.
+func proofAgentsCleanup(api *kagentAPI, names ...string) []string {
 	removed := false
 	for _, name := range names {
 		if !agentExists(name) {
@@ -846,7 +850,7 @@ func skillsCleanup(api *kagentAPI) []string {
 	var clean bool
 	if waitFor(int(substrateReleaseWait/goldenBootPoll), goldenBootPoll, func() bool { all, clean = footprints(); return clean }) {
 		if removed {
-			note("cleanup: %s* removed, Substrate holds nothing of them", skillsTestAgent)
+			note("cleanup: %s* removed, Substrate holds nothing of them", names[0])
 		}
 		return nil
 	}
@@ -865,7 +869,7 @@ func skillsCleanup(api *kagentAPI) []string {
 		}
 	}
 	if waitFor(int(substrateRecoveryWait/goldenBootPoll), goldenBootPoll, func() bool { all, clean = footprints(); return clean }) {
-		note("cleanup: Substrate let go of %s* after the worker pods were replaced", skillsTestAgent)
+		note("cleanup: Substrate let go of %s* after the worker pods were replaced", names[0])
 		return nil
 	}
 	var leftovers []string

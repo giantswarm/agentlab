@@ -217,6 +217,9 @@ var devImageTargets = map[string]devImageTarget{
 	// The agentgateway controller is the one Deployment its component's
 	// chart renders; the proxy is the controller's (agentgateway.go).
 	config.DevImageAgentgatewayController: {deployment: config.DevImageAgentgatewayController, container: "controller", image: "gsoci.azurecr.io/giantswarm/agentgateway-upstream/controller", release: agentgatewayComponent},
+	// Substrate's API server, where the ActorTemplate reconciler takes the
+	// golden snapshots, rides the substrate component's postRenderers.
+	config.DevImageSubstrateAPI: {deployment: substrateAPIDeployment, container: substrateAPIDeployment, image: "gsoci.azurecr.io/giantswarm/substrate/ateapi", release: substrateRelease},
 }
 
 // defaultDevImageNames is the image name per configured Deployment target as

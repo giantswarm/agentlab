@@ -271,7 +271,9 @@ the Deployments the lab can swap — `muster`, `backstage`, `kagent` (the
 controller), `mcp-kubernetes`, `model-manager`, `agent-manager`,
 `vm-manager` (with `platform.vmManager`), `klaus-gateway` (with
 `platform.klausGateway`), `cluster-manager` (which the entry turns on, see
-below), `workspace-manager` (with `platform.workspaces`), the agentgateway component's two Deployments under their own names,
+below), `workspace-manager` (with `platform.workspaces`), `ate-api-server` (Agent
+Substrate's API server, where the golden snapshots are taken; with the
+agents), the agentgateway component's two Deployments under their own names,
 `agentgateway` (the data-plane proxy) and `agentgateway-controller` — and
 `harness`, the platform Harness's runtime image (the Go ADK every agent runs
 on under kagent API v2):
@@ -898,6 +900,70 @@ the v0.0.29 router speaks), still admitting a `RESUMING` actor; the kagent
 line on upstream `main` `800015de` (kagent-dev/kagent#2802: the a2a gateway
 addresses an actor by the `ate-target-actor` header, which only a router from
 v0.0.28 on knows — the three move together).
+
+### The Substrate step proof (conversations across a Substrate release)
+
+`agentlab substrate-step-test --to <release>` proves that agents keep their
+conversations and their durable volumes when the lab steps from the
+Substrate release the chart installs to a newer one under them — the step a
+release that changes the snapshot layout has to survive (1.7 to 1.8: one tar
+per durable volume instead of one for all). A Session's actor is suspended to
+a snapshot between turns and resumed from it; every new Session starts from
+its template's golden snapshot. Both are written by the release before the
+step and read by the one after it. One headless run, four steps, each judged
+`PASS` or `FAIL` with its cause:
+
+1. **before** — the Substrate the lab runs: the atelet's, the WorkerPool's
+   worker and `ate-api-server`'s images, the release the atelet's tag is. A
+   lab already on `--to`'s release (or a newer one) is refused: the proof
+   starts on the chart's Substrate range as released.
+2. **agent** — an `AgentTemplate` on the platform Harness and its `Agent`
+   boot (a golden in the old layout); a conversation of three turns: a
+   random codeword, the agent's `bash` tool writing a random marker to
+   `/data/agentlab-substrate-step/marker` (`/data` is the actor's durable
+   directory), the codeword asked back; then the Session is suspended and
+   the template's golden tag recorded.
+3. **step** — `state/substrate-step-values.yaml` pins the `substrate` and
+   `substrate-crds` components to `--to` exactly (which moves the control
+   plane, the atelet and the WorkerPool's worker image together), added after
+   the lab's own `platform.valuesFiles` for this run only, with the
+   `--step-dev-image <target>=<image>` entries over the lab's `devImages`
+   (an `ate-api-server` build of a change no release carries yet); the
+   platform is upgraded in place as `agentlab platform` does, and the proof
+   waits for every worker pod to run the new worker image. `agentlab.yaml`
+   is never written.
+4. **resume** — the suspended Session resumes; its next turn must answer the
+   codeword of the first turn (the conversation) and `cat` the marker back
+   (the volume). A failed resume names its cause from the Session's failure
+   and the crash messages of the agent's actors in ate-api; Substrate 1.8.0's
+   refusal of a snapshot in the old layout is named as the restore refusal.
+   **golden** — the template's golden tag must change within
+   `--retake-timeout` (default 10m): the golden taken again on the new
+   release; then a new Session of the same agent answers one turn.
+
+The agent is removed, and the lab returns to the chart's Substrate (`--stay`
+leaves it on `--to`) — on a failure too, so the next run starts where this
+one did. The verdict names the Substrate versions before and after, the
+resumed conversation and the volume check:
+
+```bash
+agentlab substrate-step-test --to 1.8.0         # 1.8.0 as released: FAIL at resume, the restore refusal
+agentlab substrate-step-test --to 1.8.1-rc.4    # the conversion and the re-take: PASS
+```
+
+The run on the release before a fix is the regression check: it must fail at
+step 4 with its cause, or the check would not catch the fix's loss.
+
+**Where it runs.** The proof is the first step of the lab round of every
+Substrate and kagent release candidate that moves the Substrate the platform
+pins: the candidate becomes `--to` (its kagent counterpart through
+`platform.valuesFiles` or `platform.devImages`), on a lab on the platform's
+current release. It is not a CircleCI job of this repository: its turns are
+model turns (the conversation and the file are the agent's work), which a
+pipeline could only run with a model key in a CircleCI context this
+repository's pipeline does not have, and its subject is a release of another
+line, not a change of agentlab. The unit tests of every piece it adds run in
+`make test`.
 
 ### The Swarmgeist proof (klaus-gateway on kagent API v2)
 
