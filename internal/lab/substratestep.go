@@ -13,6 +13,8 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/google/uuid"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"gopkg.in/yaml.v3"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
@@ -193,7 +195,7 @@ func (r *substrateStepRun) prove(user *config.User) error {
 	defer r.api.close()
 	cleanup := func() {
 		r.removeSession()
-		for _, left := range proofAgentsCleanup(r.api, substrateStepAgent) {
+		for _, left := range append(proofAgentsCleanup(r.api, substrateStepAgent), removeAteLeftovers(substrateStepAgent)...) {
 			note("cleanup: still in Substrate: %s", left)
 		}
 	}
@@ -222,7 +224,7 @@ func (r *substrateStepRun) prove(user *config.User) error {
 
 	r.stages.begin("cleanup", "Removing %s", substrateStepAgent)
 	r.removeSession()
-	if left := proofAgentsCleanup(r.api, substrateStepAgent); len(left) > 0 {
+	if left := append(proofAgentsCleanup(r.api, substrateStepAgent), removeAteLeftovers(substrateStepAgent)...); len(left) > 0 {
 		return fmt.Errorf("the deleted agent left this in Substrate: %s", strings.Join(left, "; "))
 	}
 	return nil
@@ -430,29 +432,108 @@ func actorCrashes(ctx context.Context, agent string) []string {
 		return []string{"ate-api: " + err.Error()}
 	}
 	defer api.Close()
+	actors, err := agentAteActors(ctx, api, agent)
+	lines := make([]string, 0, len(actors)+1)
+	for _, actor := range actors {
+		lines = append(lines, actorLine(actor))
+	}
+	if err != nil {
+		lines = append(lines, "ate-api: "+err.Error())
+	}
+	return lines
+}
+
+// actorLine words an actor's state and crash message.
+func actorLine(actor *ateapi.Actor) string {
+	line := fmt.Sprintf("actor %s: %s", actor.GetMetadata().GetName(), strings.TrimPrefix(actor.GetStatus().GetState().String(), "ACTOR_STATE_"))
+	if msg := actor.GetStatus().GetCrash().GetMessage(); msg != "" {
+		line += ", crash: " + msg
+	}
+	return line
+}
+
+// agentAteActors is every actor in ate-api of the agent's ActorTemplates,
+// all pages.
+func agentAteActors(ctx context.Context, api *ateAPI, agent string) ([]*ateapi.Actor, error) {
 	prefix := actorTemplatePrefix(agent)
-	var lines []string
+	var actors []*ateapi.Actor
 	token := ""
 	for range substrateMaxPages {
 		resp, err := api.ListActors(ctx, &ateapi.ListActorsRequest{Atespace: kagentNamespace, PageToken: token})
 		if err != nil {
-			return append(lines, "ate-api ListActors: "+err.Error())
+			return actors, fmt.Errorf("ListActors: %w", err)
 		}
 		for _, actor := range resp.GetActors() {
-			if !isActorTemplateOf(prefix, actor.GetActorTemplate().GetName()) {
-				continue
+			if isActorTemplateOf(prefix, actor.GetActorTemplate().GetName()) {
+				actors = append(actors, actor)
 			}
-			line := fmt.Sprintf("actor %s: %s", actor.GetMetadata().GetName(), strings.TrimPrefix(actor.GetStatus().GetState().String(), "ACTOR_STATE_"))
-			if msg := actor.GetStatus().GetCrash().GetMessage(); msg != "" {
-				line += ", crash: " + msg
-			}
-			lines = append(lines, line)
 		}
 		if token = resp.GetNextPageToken(); token == "" {
-			break
+			return actors, nil
 		}
 	}
-	return lines
+	return actors, fmt.Errorf("ListActors: still paging after %d pages", substrateMaxPages)
+}
+
+// agentAteTemplates is every ActorTemplate in ate-api of the agent, all
+// pages.
+func agentAteTemplates(ctx context.Context, api *ateAPI, agent string) ([]*ateapi.ActorTemplate, error) {
+	prefix := actorTemplatePrefix(agent)
+	var templates []*ateapi.ActorTemplate
+	token := ""
+	for range substrateMaxPages {
+		resp, err := api.ListActorTemplates(ctx, &ateapi.ListActorTemplatesRequest{Atespace: kagentNamespace, PageToken: token})
+		if err != nil {
+			return templates, fmt.Errorf("ListActorTemplates: %w", err)
+		}
+		for _, t := range resp.GetActorTemplates() {
+			if isActorTemplateOf(prefix, t.GetMetadata().GetName()) {
+				templates = append(templates, t)
+			}
+		}
+		if token = resp.GetNextPageToken(); token == "" {
+			return templates, nil
+		}
+	}
+	return templates, fmt.Errorf("ListActorTemplates: still paging after %d pages", substrateMaxPages)
+}
+
+// removeAteLeftovers deletes, in ate-api itself, what is left of the agent
+// after kagent let go of it: an actor that crashed on a restore stays in
+// ate-api, in any state, with its template, while the controller's view of
+// Substrate no longer lists it. Returns what could not be removed, worded.
+func removeAteLeftovers(agent string) []string {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	api, err := dialAteAPI(ctx)
+	if err != nil {
+		return []string{"ate-api: " + err.Error()}
+	}
+	defer api.Close()
+	var left []string
+	actors, err := agentAteActors(ctx, api, agent)
+	if err != nil {
+		left = append(left, err.Error())
+	}
+	for _, actor := range actors {
+		note("cleanup: %s is still in ate-api — deleting it there", actorLine(actor))
+		ref := &ateapi.ObjectRef{Atespace: kagentNamespace, Name: actor.GetMetadata().GetName()}
+		if _, err := api.DeleteActor(ctx, &ateapi.DeleteActorRequest{Actor: ref, AnyState: true}); err != nil && status.Code(err) != codes.NotFound {
+			left = append(left, fmt.Sprintf("actor %s: %v", ref.GetName(), err))
+		}
+	}
+	templates, err := agentAteTemplates(ctx, api, agent)
+	if err != nil {
+		left = append(left, err.Error())
+	}
+	for _, t := range templates {
+		ref := &ateapi.ObjectRef{Atespace: kagentNamespace, Name: t.GetMetadata().GetName()}
+		note("cleanup: ActorTemplate %s/%s is still in ate-api — deleting it there", ref.GetAtespace(), ref.GetName())
+		if _, err := api.DeleteActorTemplate(ctx, &ateapi.DeleteActorTemplateRequest{ActorTemplate: ref}); err != nil && status.Code(err) != codes.NotFound {
+			left = append(left, fmt.Sprintf("ActorTemplate %s: %v", ref.GetName(), err))
+		}
+	}
+	return left
 }
 
 // newConversation waits for the template's golden to be taken again on the

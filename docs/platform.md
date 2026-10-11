@@ -941,7 +941,9 @@ step and read by the one after it. One headless run, four steps, each judged
    `--retake-timeout` (default 10m): the golden taken again on the new
    release; then a new Session of the same agent answers one turn.
 
-The agent is removed, and the lab returns to the chart's Substrate (`--stay`
+The agent is removed — through kagent, then in ate-api itself, where an actor
+that crashed on a restore stays with its template after the controller's view
+of Substrate no longer lists it — and the lab returns to the chart's Substrate (`--stay`
 leaves it on `--to`) — on a failure too, so the next run starts where this
 one did. The verdict names the Substrate versions before and after, the
 resumed conversation and the volume check:

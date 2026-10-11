@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/giantswarm/agentlab/internal/config"
+	ateapi "github.com/giantswarm/agentlab/internal/kagent/gen"
 )
 
 // The releases and builds the tests step to.
@@ -321,5 +322,24 @@ func TestSubstrateAPIDevImage(t *testing.T) {
 	data := &tmplData{Config: cfg, PostRenderers: postRenderers}
 	if _, ok := data.ExtraPostRenderers()[substrateRelease]; !ok {
 		t.Errorf("the substrate component has no roster block: its postRenderers must render as an extra one")
+	}
+}
+
+// TestActorLine words an actor's state without the enum prefix, with the
+// crash message when there is one.
+func TestActorLine(t *testing.T) {
+	crashed := &ateapi.Actor{
+		Metadata: &ateapi.ResourceMetadata{Name: "session-1"},
+		Status:   &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_CRASHED, Crash: &ateapi.ActorCrash{Message: "snapshot " + legacyLayoutRefusal}},
+	}
+	if got := actorLine(crashed); got != "actor session-1: CRASHED, crash: snapshot "+legacyLayoutRefusal {
+		t.Errorf("actorLine = %q", got)
+	}
+	if got := restoreVerdict([]string{actorLine(crashed)}); !strings.HasPrefix(got, "the restore refusal:") {
+		t.Errorf("a crashed actor's line must read as the restore refusal, got %q", got)
+	}
+	running := &ateapi.Actor{Metadata: &ateapi.ResourceMetadata{Name: "session-2"}, Status: &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_RUNNING}}
+	if got := actorLine(running); got != "actor session-2: RUNNING" {
+		t.Errorf("actorLine = %q", got)
 	}
 }
