@@ -8,9 +8,10 @@
 # installation runs. Turned off here what a one-node lab has no API or use
 # for: the CiliumNetworkPolicy, the VerticalPodAutoscalers, the PodLogs, the
 # app's PolicyExceptions and policies for the fleet's own components, the
-# HPA, the ServiceMonitor, API priority and fairness, and every controller
-# but admission. policy-reporter is a dependency without a condition: its
-# one Deployment stays, its UI, plugins and monitoring off.
+# HPA, the ServiceMonitor, API priority and fairness, the installation's
+# PriorityClass giantswarm-critical, and every controller but admission.
+# policy-reporter is a dependency without a condition: its one Deployment
+# stays, its UI, plugins and monitoring off.
 ciliumNetworkPolicy:
   enabled: false
 verticalPodAutoscaler:
@@ -44,6 +45,7 @@ policyExceptions:
 kyverno:
   admissionController:
     replicas: 1
+    priorityClassName: ""
     autoscaling:
       enabled: false
     apiPriorityAndFairness: false
