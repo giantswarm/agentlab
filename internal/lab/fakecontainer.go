@@ -147,8 +147,9 @@ func publishedLoopback(out string) string {
 
 // linuxStaticBinary refuses a binary the probe image cannot run: one that is
 // not a Linux executable (agentlab built for another OS) or that needs a
-// dynamic loader (a `go build` with cgo; the image carries no glibc). flag is
-// the proof's flag naming another binary, "" for a command without one.
+// dynamic loader (a `go build` with cgo, which the PT_INTERP program header
+// asks for; the image carries no glibc). flag is the proof's flag naming
+// another binary, "" for a command without one.
 func linuxStaticBinary(path, what, flag string) error {
 	f, err := elf.Open(path)
 	if err != nil {
@@ -157,7 +158,7 @@ func linuxStaticBinary(path, what, flag string) error {
 	defer func() { _ = f.Close() }()
 	for _, p := range f.Progs {
 		if p.Type == elf.PT_INTERP {
-			return fmt.Errorf("%s runs %s in a container on the kind network, and it is dynamically linked: build it with CGO_ENABLED=0 (`make build` does), or %s a static agentlab", what, path, anotherBinary(flag, "run"))
+			return fmt.Errorf("%s runs %s in a container on the kind network, and it is dynamically linked: build it with `CGO_ENABLED=0 go build` (`make build` does), or %s a static agentlab", what, path, anotherBinary(flag, "run"))
 		}
 	}
 	return nil

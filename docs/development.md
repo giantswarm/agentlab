@@ -3,13 +3,22 @@
 ## Building and testing
 
 ```bash
-make build                 # go build -o agentlab .
+make build                 # CGO_ENABLED=0 go build -o agentlab .: a static binary
 make test                  # go test ./...
 make lint                  # golangci-lint as CI's pre-commit runs it
 go test ./internal/forms/ -run TestMinimalFormDrive -count=1 -v   # one test
 
 GOOS=windows go vet ./...  # and GOOS=linux, GOOS=darwin
 ```
+
+`make build` and `make install` build with `CGO_ENABLED=0`, as the releases
+are built: a static binary with the pure-Go resolver. A plain `go build` on a
+glibc host links the binary dynamically, and the lab runs copies of its own
+binary in containers on the kind network — the lab's GitHub for the
+workspace-manager's [provider instance `fake`](workspaces.md#the-provider-instance-fake),
+the proofs' fakes — whose image has no dynamic loader: `agentlab up` and
+`agentlab platform` refuse such a binary before their first step, naming the
+build. (A static link with cgo left on crashes instead, in glibc's resolver.)
 
 `make lint` is the lint CI runs, not an approximation of it: the golangci-lint
 version the generated pre-commit workflow pins (installed under `bin/` on first

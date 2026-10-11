@@ -125,7 +125,11 @@ kind network beside the nodes, the way a proof's fake runs, from a copy of
 the binary under `state/` (a mounted executable stays busy while its
 container runs, and a rebuild over it would be refused); a running one is
 replaced, so the fixture is its state, and `agentlab platform-down` and
-`agentlab down` remove it. Pods reach it as `https://github.<domain>`: CoreDNS
+`agentlab down` remove it. The binary must be a static Linux build (`make
+build`, or `CGO_ENABLED=0 go build`; the releases are): the container's image
+has no dynamic loader, so `up` and `platform` refuse a dynamically linked one
+before their first step, naming the build, rather than after the storage
+install when the container would start. Pods reach it as `https://github.<domain>`: CoreDNS
 sends the name to the selector-less Service `agent-platform/agentlab-github`
 (port 443 onto the container), the answer keeps the name, and the fake's TLS
 leaf (the lab CA's) carries it. This host reaches it on the loopback port the

@@ -124,6 +124,12 @@ const helmInstallTimeout = 15 * time.Minute
 // release is the Helm CLI's too — `helm upgrade` from a shell stays the lab's
 // day-2 tool.
 func PlatformUp(cfg *config.Config, offers Offers) error {
+	// A binary the lab's GitHub container cannot run is refused before the
+	// preload and the installs (workspacefake.go), not when the container
+	// starts after the storage install; `up` judges it before the cluster.
+	if err := checkLabGitHubBinary(cfg); err != nil {
+		return err
+	}
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
 	}
