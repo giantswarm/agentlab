@@ -195,7 +195,7 @@ func (r *substrateStepRun) prove(user *config.User) error {
 	defer r.api.close()
 	cleanup := func() {
 		r.removeSession()
-		for _, left := range append(proofAgentsCleanup(r.api, substrateStepAgent), removeAteLeftovers(substrateStepAgent)...) {
+		for _, left := range substrateStepCleanup(r.api) {
 			note("cleanup: still in Substrate: %s", left)
 		}
 	}
@@ -224,7 +224,7 @@ func (r *substrateStepRun) prove(user *config.User) error {
 
 	r.stages.begin("cleanup", "Removing %s", substrateStepAgent)
 	r.removeSession()
-	if left := append(proofAgentsCleanup(r.api, substrateStepAgent), removeAteLeftovers(substrateStepAgent)...); len(left) > 0 {
+	if left := substrateStepCleanup(r.api); len(left) > 0 {
 		return fmt.Errorf("the deleted agent left this in Substrate: %s", strings.Join(left, "; "))
 	}
 	return nil
@@ -498,10 +498,25 @@ func agentAteTemplates(ctx context.Context, api *ateAPI, agent string) ([]*ateap
 	return templates, fmt.Errorf("ListActorTemplates: still paging after %d pages", substrateMaxPages)
 }
 
-// removeAteLeftovers deletes, in ate-api itself, what is left of the agent
-// after kagent let go of it: an actor that crashed on a restore stays in
-// ate-api, in any state, with its template, while the controller's view of
-// Substrate no longer lists it. Returns what could not be removed, worded.
+// substrateStepCleanup removes the proof's agent through kagent and, when
+// kagent leaves something in Substrate — an actor that crashed on a restore
+// and its template, which kagent's revision garbage collector keeps —
+// deletes that in ate-api itself and reads the footprint again. Returns what
+// is still there, worded.
+func substrateStepCleanup(api *kagentAPI) []string {
+	left := proofAgentsCleanup(api, substrateStepAgent)
+	if len(left) == 0 {
+		return nil
+	}
+	left = removeAteLeftovers(substrateStepAgent)
+	if f := skillsFootprint(api, substrateStepAgent); !f.empty() {
+		left = append(left, f.lines()...)
+	}
+	return left
+}
+
+// removeAteLeftovers deletes, in ate-api itself, every actor (in any state)
+// and ActorTemplate of the agent. Returns what could not be removed, worded.
 func removeAteLeftovers(agent string) []string {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
