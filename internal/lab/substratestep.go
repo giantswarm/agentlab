@@ -569,6 +569,13 @@ func (r *substrateStepRun) newConversation() error {
 		if readErr != nil {
 			cause = readErr.Error()
 		}
+		// The reconciler's own account, read before the lab steps back and
+		// ate-api-server's pod with its log is replaced.
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		for _, line := range logEvidence(ctx, substrateAPIDeployment, substrateNamespace, "deploy/"+substrateAPIDeployment, "", actorTemplatePrefix(substrateStepAgent), goldenRetakeWords...) {
+			note("%s", line)
+		}
 		return fmt.Errorf("the golden was not taken again on Substrate %s within %s (%s): a new conversation would start from the snapshot of the release before", r.after.version, r.opts.RetakeTimeout, cause)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), kagentTurnTimeout)
@@ -804,6 +811,10 @@ func failureNote(failure string) string {
 	}
 	return ", error: " + failure
 }
+
+// goldenRetakeWords are the words of ate-api's template reconciler about a
+// golden's re-take: its errors and requeues, the swap of the tag.
+var goldenRetakeWords = []string{"Failed to reconcile", "requeue", "golden", "Replaced", "layout", "ERROR"}
 
 // The restore refusal of Substrate 1.8.0: a snapshot in the layout before the
 // per-volume one is refused instead of restored (FailedPrecondition, the
