@@ -2,10 +2,15 @@ package lab
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -196,5 +201,148 @@ func TestWorkspacesStatusString(t *testing.T) {
 		if !strings.Contains(bare, want) {
 			t.Errorf("status %q lacks %q", bare, want)
 		}
+	}
+}
+
+// The hand-over to the chart is decided by what its components render: a
+// connectivity render that takes the workspaces values and carries no
+// CSIDriverConfig of the driver (agent-platform 4.125.0 to 4.127.0-rc.2)
+// leaves the registration to the lab, one that carries it to the chart.
+func TestRendersWorkspacesCSIDriverConfig(t *testing.T) {
+	const none = `apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-platform-workspaces
+data:
+  storageClassName: agentlab-workspaces
+---
+apiVersion: ate.dev/v1alpha1
+kind: CSIDriverConfig
+metadata:
+  name: efs.csi.aws.com
+`
+	const registers = none + `---
+# Source: agent-platform-connectivity/templates/workspaces/csidriverconfig.yaml
+apiVersion: ate.dev/v1alpha1
+kind: CSIDriverConfig
+metadata:
+  name: nfs.csi.k8s.io
+  labels:
+    app.kubernetes.io/managed-by: Helm
+spec:
+  driverName: nfs.csi.k8s.io
+`
+	for _, tc := range []struct {
+		name    string
+		renders map[string]string
+		want    bool
+	}{
+		{"no renders", nil, false},
+		{"values taken, nothing rendered", map[string]string{config.ConnectivityChartName: none, substrateRelease: "kind: Deployment\nmetadata:\n  name: ate-api-server\n"}, false},
+		{"the chart renders it", map[string]string{config.ConnectivityChartName: registers}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := rendersWorkspacesCSIDriverConfig(tc.renders); got != tc.want {
+				t.Errorf("rendersWorkspacesCSIDriverConfig = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+var (
+	gvkCSIDriverConfig = substrateGroupVersion.WithKind(kindCSIDriverConfig)
+	gvrCSIDriverConfig = gvkCSIDriverConfig.GroupVersion().WithResource("csidriverconfigs")
+)
+
+// csiDriverConfigObject is a live CSIDriverConfig of the lab's driver with
+// the given managed-by label ("" for none).
+func csiDriverConfigObject(managedBy string) *unstructured.Unstructured {
+	u := &unstructured.Unstructured{}
+	u.SetGroupVersionKind(gvkCSIDriverConfig)
+	u.SetName(workspacesCSIDriver)
+	if managedBy != "" {
+		u.SetLabels(map[string]string{managedByLabel: managedBy})
+	}
+	return u
+}
+
+// The lab applies its CSIDriverConfig whenever the chart renders none — a
+// hand-applied object becomes the lab's, an earlier chart's is waited out
+// while its upgrade removes it — and leaves the registration alone when the
+// chart renders one or a Helm-managed object outlasts the wait.
+func TestEnsureWorkspacesCSIDriverConfig(t *testing.T) {
+	prev := csiDriverConfigHandoverTimeout
+	csiDriverConfigHandoverTimeout = 3 * time.Second
+	t.Cleanup(func() { csiDriverConfigHandoverTimeout = prev })
+	for _, tc := range []struct {
+		name         string
+		live         *unstructured.Unstructured
+		chartRenders bool
+		// helmRemoves deletes the live object during the wait, as
+		// helm-controller's upgrade to a chart that renders none does.
+		helmRemoves bool
+		want        string
+	}{
+		{"chart renders none, nothing live", nil, false, false, registrantLab},
+		{"chart renders none, applied by hand", csiDriverConfigObject(""), false, false, registrantLab},
+		{"chart renders none, the lab's from before", csiDriverConfigObject(managedByAgentlabValue), false, false, registrantLab},
+		{"chart renders none, an earlier chart's removed by its upgrade", csiDriverConfigObject("Helm"), false, true, registrantLab},
+		{"chart renders none, Helm's outlasts the wait", csiDriverConfigObject("Helm"), false, false, registrantChart},
+		{"chart renders one", csiDriverConfigObject("Helm"), true, false, registrantChart},
+		{"chart renders one, not live yet", nil, true, false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var f *fakeLab
+			if tc.live != nil {
+				f = newFakeLab(t, tc.live)
+			} else {
+				f = newFakeLab(t)
+			}
+			f.mapper.Add(gvkCSIDriverConfig, meta.RESTScopeRoot)
+			ctx := context.Background()
+			if tc.helmRemoves {
+				go func() {
+					time.Sleep(500 * time.Millisecond)
+					_ = f.dyn.Resource(gvrCSIDriverConfig).Delete(ctx, workspacesCSIDriver, metav1.DeleteOptions{})
+				}()
+			}
+			if err := ensureWorkspacesCSIDriverConfig(ctx, tc.chartRenders); err != nil {
+				t.Fatal(err)
+			}
+			if got := readWorkspacesRegistrant(ctx); got != tc.want {
+				t.Errorf("registrant = %q, want %q", got, tc.want)
+			}
+			if tc.want != registrantLab {
+				return
+			}
+			obj, err := f.dyn.Resource(gvrCSIDriverConfig).Get(ctx, workspacesCSIDriver, metav1.GetOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			endpoint, _, _ := unstructured.NestedString(obj.Object, crSpec, "controllerEndpoint")
+			if want := workspacesValuesFor(config.Default()).ControllerEndpoint; endpoint != want {
+				t.Errorf("spec.controllerEndpoint = %q, want %q", endpoint, want)
+			}
+		})
+	}
+}
+
+// The platform summary and status word the registration from one source,
+// the live registrant: "not registered" while nothing registered the driver,
+// whatever the chart's values take.
+func TestWorkspacesHintRegistration(t *testing.T) {
+	cfg := config.Default()
+	cfg.Platform.Workspaces.Enabled = true
+	for _, registrant := range []string{"", registrantLab, registrantChart} {
+		want := workspacesRegistration(registrant)
+		if hint := workspacesHint(cfg, true, registrant); !strings.Contains(hint, want) {
+			t.Errorf("summary %q lacks %q", hint, want)
+		}
+		if status := (&WorkspacesStatus{CSIDriverConfig: registrant}).String(); !strings.Contains(status, want) {
+			t.Errorf("status %q lacks %q", status, want)
+		}
+	}
+	if got := workspacesRegistration(""); !strings.Contains(got, "not registered") {
+		t.Errorf("no registrant worded %q", got)
 	}
 }
