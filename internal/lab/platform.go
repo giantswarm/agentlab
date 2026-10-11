@@ -469,6 +469,14 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 			return err
 		}
 	}
+	// The workspace grant's signing key (workspacegrant.go): generated once
+	// and placed as the manager's Secret ahead of the install, which names
+	// it in workspace-manager.grant.signingKey.
+	if workspaceAdmissionValuesFor(cfg, workspacesChart) != nil {
+		if err := workspaceGrantKeyUp(); err != nil {
+			return err
+		}
+	}
 	// Managed models: every host model server's endpoint is detected from
 	// the kind docker network and proven reachable from inside the cluster
 	// BEFORE the install, so a host-side misconfiguration (bind address,

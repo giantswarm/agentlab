@@ -584,7 +584,13 @@ func (a *kagentAPI) createSession(ctx context.Context, agent, requestID string) 
 // answers FailedPrecondition; that is waited through, bounded. Returns once
 // the session is READY (or SUSPENDED: a resumable conversation).
 func (a *kagentAPI) createSessionOf(ctx context.Context, agent *apiv1alpha1.ResourceReference, requestID string) (*apiv1alpha1.Session, error) {
-	req := &apiv1alpha1.CreateSessionRequest{Agent: agent, RequestId: requestID}
+	return a.createSessionWith(ctx, &apiv1alpha1.CreateSessionRequest{Agent: agent, RequestId: requestID})
+}
+
+// createSessionWith is createSessionOf for a request of the caller's own,
+// such as one that names a workspace volume and carries its grant.
+func (a *kagentAPI) createSessionWith(ctx context.Context, req *apiv1alpha1.CreateSessionRequest) (*apiv1alpha1.Session, error) {
+	agent := req.GetAgent()
 	var resp *apiv1alpha1.CreateSessionResponse
 	var err error
 	created := waitFor(int(agentRevisionTimeout/pollInterval), pollInterval, func() bool {

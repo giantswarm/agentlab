@@ -636,6 +636,10 @@ type WorkspacesStatus struct {
 	// CSIDriverConfig says who registered the driver with Substrate: "the
 	// lab", "the chart", "hand", or "" when nothing did.
 	CSIDriverConfig string `json:"csiDriverConfig,omitempty"`
+	// SessionAdmission words the rig a Session on a workspace volume is
+	// admitted with (workspacegrant.go): kagent's jwt admission, the
+	// manager's grant key and the claude Harness.
+	SessionAdmission string `json:"sessionAdmission,omitempty"`
 }
 
 // readWorkspacesStatus reads the workspace storage's live state; nil when
@@ -678,6 +682,7 @@ func readWorkspacesStatus(ctx context.Context) (*WorkspacesStatus, error) {
 	}
 	s.StorageClass = clusterObjectExists(ctx, "storageclasses.storage.k8s.io", workspacesStorageClass)
 	s.CSIDriverConfig = readWorkspacesRegistrant(ctx)
+	s.SessionAdmission = readSessionAdmission(ctx)
 	return s, nil
 }
 
@@ -706,8 +711,12 @@ func (s *WorkspacesStatus) String() string {
 	if s.StorageClass {
 		class = "StorageClass " + workspacesStorageClass
 	}
-	return fmt.Sprintf("NFS server %s on %s; CSI controller %s %s with its mTLS proxy; node plugin %s; %s; %s",
+	line := fmt.Sprintf("NFS server %s on %s; CSI controller %s %s with its mTLS proxy; node plugin %s; %s; %s",
 		s.NFSServer, orNone(s.Node), workspacesCSIDriver, s.Controller, s.NodePlugin, class, workspacesRegistration(s.CSIDriverConfig))
+	if s.SessionAdmission != "" {
+		line += "; " + s.SessionAdmission
+	}
+	return line
 }
 
 // workspacesHint is the platform-up summary for the workspaces switch. The
@@ -720,6 +729,9 @@ func workspacesHint(cfg *config.Config, chartCarries bool, registrant string) st
 	}
 	hint := fmt.Sprintf("  Workspace storage: an NFS server on %s and the NFS CSI driver behind its mTLS proxy, %s;\n"+
 		"  the read-write-many StorageClass %s. Proof: `agentlab workspaces-test --storage-only`.", WorkspacesNode(cfg), workspacesRegistration(registrant), workspacesStorageClass)
+	if rig := workspaceAdmissionValuesFor(cfg, chartCarries); rig != nil {
+		hint += "\n" + rig.hint()
+	}
 	if chartCarries {
 		hint += fmt.Sprintf("\n  The workspace-manager's provider instances: %s (the base URL %s; `agentlab platform-test` lists them as the admin).",
 			strings.Join(cfg.WorkspaceProviders(), ", "), cfg.WorkspaceManagerBaseURL())

@@ -128,6 +128,12 @@ type tmplData struct {
 	// workspace-manager trusts the lab CA its leaf is from.
 	WorkspaceProviders []workspaceProviderValues
 	WorkspaceFake      bool
+	// WorkspaceAdmission is the rig a Session on a workspace volume is
+	// admitted with (workspacegrant.go): the manager's grant signing key,
+	// kagent's jwt admission of its key set and the claude Harness; nil
+	// unless the workspaces and the agents are on and the chart takes the
+	// workspaces values.
+	WorkspaceAdmission *workspaceAdmissionValues
 	// PostRenderers is the lab's per-component `postRenderers` list as
 	// indented YAML, keyed by agent-platform component name
 	// (postrenderers.go): the hostNetwork, sidecar and nodePort patches plus
@@ -262,6 +268,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 	if err != nil {
 		return nil, err
 	}
+	workspacesChart := workspacesChartCarries(cfg)
 	return &tmplData{
 		Config:                     cfg,
 		LabCA:                      labCA,
@@ -296,10 +303,11 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		ServingEnabled:             cfg.ServingEnabled(),
 		Serving:                    servingValuesFor(),
 		WorkspacesEnabled:          cfg.WorkspacesEnabled(),
-		WorkspacesChart:            workspacesChartCarries(cfg),
+		WorkspacesChart:            workspacesChart,
 		Workspaces:                 workspacesValuesFor(cfg),
 		WorkspaceProviders:         workspaceProviders,
 		WorkspaceFake:              cfg.WorkspaceFakeProvider(),
+		WorkspaceAdmission:         workspaceAdmissionValuesFor(cfg, workspacesChart),
 		CertsDir:                   certsDir,
 		NodeFilesDir:               nodeFiles,
 		MusterNodePort:             config.MusterNodePort,

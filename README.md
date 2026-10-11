@@ -70,8 +70,9 @@ trusting the same issuer.
   workspace's volume is claimed from: an in-cluster NFS server and the NFS
   CSI driver, its controller behind an mTLS proxy only Agent Substrate's API
   server may reach, and the StorageClass `agentlab-workspaces`;
-  `agentlab workspaces-test --storage-only` proves sub-path mounts per
-  Session, read-only mirrors and git on the volume. `agentlab github-fake
+  `agentlab workspaces-test` proves sub-path mounts per Session, read-only
+  mirrors and git on the volume, and a claude Session admitted on it with a
+  workspace grant the workspace-manager's key set verifies. `agentlab github-fake
   --workspaces` serves the lab's own GitHub for the workspace proofs.
 - **Platform manager.** With `platform.platformManager` (off by default), a
   fixture for giantswarm-platform-manager: an invented installation with the
