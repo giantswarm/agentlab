@@ -659,6 +659,20 @@ kagent:
         mountPath: /etc/cnpg
         readOnly: true
 {{- end }}
+{{- with .WorkspaceAdmission }}
+    # A Session on a workspace volume (platform.workspaces; workspacegrant.go,
+    # HACKS.md U31): kagent's jwt Session admission verifies the grant a
+    # create carries against the workspace-manager's key set, read in-cluster
+    # through its Service, with the manager's base URL as the issuer and
+    # kagent as the audience. Unset, every create that names a volume is
+    # refused.
+    session:
+      admission:
+        jwt:
+          jwksURL: {{ .JWKSURL }}
+          issuer: {{ .Issuer }}
+          audience: {{ .Audience }}
+{{- end }}
   # Publish the UI on the host through the kind port mapping. NodePort is a
   # chart value, but the chart's ui-service template renders no `nodePort`
   # field (a random one would be useless to kind's fixed mappings), so the
@@ -685,6 +699,23 @@ kagent:
   # serves them.
   serviceMonitor:
     enabled: false
+{{- end }}
+{{- with .WorkspaceAdmission }}
+  # The coding Harness a Session on a workspace runs on (the kagent chart's
+  # harnesses[]): Claude Code run headless by the chart's claude-harness image
+  # at its published digest, its snapshots beside the platform Harness's in
+  # the lab's in-cluster store. The workspaces proof's claude Session turns
+  # on it.
+  harnesses:
+    - name: {{ .ClaudeHarness }}
+      runtime: claude
+      snapshotLocation: {{ .ClaudeHarnessSnapshotStore }}
+      env:
+        - name: KAGENT_PROPAGATE_TOKEN
+          value: "true"
+      limits:
+        budgetUSD: "1.00"
+        maxTurns: 10
 {{- end }}
   # No OTLP gateway in kind; the exporters would only log dial errors.
   otel:
@@ -1160,6 +1191,14 @@ workspaces:
 workspace-manager:
   oauth:
     baseURL: {{ .WorkspaceManagerBaseURL }}
+{{- with .WorkspaceAdmission }}
+  # The key the workspace grant a Session carries is signed with: the lab's
+  # own EC P-256 key (certs/workspace-grant), placed as this Secret ahead of
+  # the install; the manager publishes its public half at
+  # /.well-known/jwks.json, which kagent's admission above trusts.
+  grant:
+    signingKey: {name: {{ .Secret }}, key: {{ .SecretKey }}}
+{{- end }}
 {{- if .WorkspaceFake }}
   # The lab's GitHub serves TLS with a leaf of the lab CA, and the manager's
   # HTTP client takes the system roots: the lab CA file the chart mounts for

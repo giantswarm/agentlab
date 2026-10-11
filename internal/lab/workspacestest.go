@@ -28,9 +28,8 @@ import (
 
 // WorkspacesTestOptions tunes the workspaces proof.
 type WorkspacesTestOptions struct {
-	// StorageOnly proves the storage, with no harness turn against a
-	// workspace: the only mode so far, named so the command keeps its shape
-	// once the turn is part of it.
+	// StorageOnly proves the storage alone, without the harness stage: no
+	// claude Session admitted on the volume (workspacesharness.go).
 	StorageOnly bool
 	// ReadyTimeout bounds each wait: the storage's rollouts, a claim bound,
 	// a pod finished, a volume gone.
@@ -66,13 +65,13 @@ const (
 // session visible -> a read-only mount of the whole volume refusing writes ->
 // the controller endpoint refused without Substrate's client certificate ->
 // two actors through ate-api-server on the volume at their own session
-// directories (workspacesactors.go) -> everything removed, the volume's directory gone from the export.
+// directories (workspacesactors.go) -> unless StorageOnly, a claude Session
+// admitted on the volume with a workspace grant running one headless turn
+// (workspacesharness.go) -> everything removed, the volume's directory gone
+// from the export.
 func WorkspacesTest(cfg *config.Config, opts WorkspacesTestOptions) error {
 	if !cfg.WorkspacesEnabled() {
 		return fmt.Errorf("platform.workspaces is off in %s — `agentlab configure --workspaces` turns it on, then `agentlab platform`", config.File)
-	}
-	if !opts.StorageOnly {
-		return errors.New("the proof covers the storage so far; a harness turn against a workspace is not part of it: `agentlab workspaces-test --storage-only`")
 	}
 	if opts.ReadyTimeout <= 0 {
 		opts.ReadyTimeout = DefaultWorkspacesReadyTimeout
@@ -152,6 +151,13 @@ func WorkspacesTest(cfg *config.Config, opts WorkspacesTestOptions) error {
 		return err
 	}
 
+	harness := ""
+	if !opts.StorageOnly {
+		if harness, err = proveWorkspacesHarnessSession(cfg, timeout); err != nil {
+			return err
+		}
+	}
+
 	step("Removing the proof's namespace: the claim's volume goes with it")
 	cleanupWorkspacesTest(ctx, node)
 	if err := proveWorkspacesVolumeGone(ctx, node, timeout); err != nil {
@@ -162,6 +168,9 @@ func WorkspacesTest(cfg *config.Config, opts WorkspacesTestOptions) error {
 	actorLevel := "the actor-level mount skipped (the Substrate line refuses existing volumes)"
 	if actors {
 		actorLevel = "two actors on the volume at their own session directories through ate-api-server"
+	}
+	if harness != "" {
+		actorLevel += ", " + harness
 	}
 	fmt.Printf("\nWorkspaces proof passed: a read-write-many claim, a shared clone per session sub-path with modes and links intact, the sessions isolated, the read-only mounts refusing writes, the controller endpoint refused without Substrate's certificate, %s, everything removed.\n", actorLevel)
 	return nil

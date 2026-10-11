@@ -32,7 +32,7 @@ install: export CGO_ENABLED := 0
 # `make generate-kagent`, and commit hack/kagent-proto/ and internal/kagent/gen/
 # together.
 KAGENT_PROTO_REPO ?= https://github.com/giantswarm/kagent-upstream.git
-KAGENT_PROTO_COMMIT ?= f7bf3dafd6a8c21e084015a9310f4692778ebaeb
+KAGENT_PROTO_COMMIT ?= 2d985278ba11a7f1de66be10f04af26cf5c53a4a
 KAGENT_PROTO_FILES := common agent_templates agents sessions runtime system
 
 # Tag of giantswarm/substrate whose ate-api-server protocol (ateapi.proto) the
