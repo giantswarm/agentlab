@@ -40,7 +40,7 @@ func TestWorkspaceAdmissionValues(t *testing.T) {
 	for key, want := range map[string]string{
 		"jwksURL":  "http://workspace-manager.agent-platform.svc:8080/.well-known/jwks.json",
 		"issuer":   "https://workspace-manager.127.0.0.1.nip.io:8443",
-		"audience": "kagent",
+		"audience": workspaceGrantAudience,
 	} {
 		if jwt[key] != want {
 			t.Errorf("kagent.controller.session.admission.jwt.%s = %v, want %s", key, jwt[key], want)
@@ -126,7 +126,7 @@ func TestEnsureWorkspaceGrantKey(t *testing.T) {
 		t.Error("a second call replaced the key")
 	}
 	raw, _ := os.ReadFile(filepath.Clean(path))
-	if block, _ := pem.Decode(raw); block == nil || block.Type != "PRIVATE KEY" {
+	if block, _ := pem.Decode(raw); block == nil || block.Type != pemTypeKey {
 		t.Errorf("the key is not a PKCS #8 PEM: %q", raw)
 	}
 }
@@ -196,7 +196,7 @@ func TestSignWorkspaceGrant(t *testing.T) {
 	if claims["iss"] != "https://wm.example" || claims["sub"] != "admin@lab.local" || claims["exp"] != float64(now.Add(5*time.Minute).Unix()) {
 		t.Errorf("claims = %v", claims)
 	}
-	if aud, _ := claims["aud"].([]any); len(aud) != 1 || aud[0] != "kagent" {
+	if aud, _ := claims["aud"].([]any); len(aud) != 1 || aud[0] != workspaceGrantAudience {
 		t.Errorf("aud = %v, want [kagent]", claims["aud"])
 	}
 	if v, _ := claims["volume"].(map[string]any); v["driver"] != "nfs.csi.k8s.io" || v["handle"] != "h#1" {
@@ -220,12 +220,12 @@ func TestSignWorkspaceGrant(t *testing.T) {
 // The kagent controller's admission settings match the rig's, or every
 // difference is named.
 func TestAdmissionMatches(t *testing.T) {
-	rig := &workspaceAdmissionValues{JWKSURL: "http://wm/.well-known/jwks.json", Issuer: "https://wm", Audience: "kagent"}
+	rig := &workspaceAdmissionValues{JWKSURL: "http://wm/.well-known/jwks.json", Issuer: "https://wm", Audience: workspaceGrantAudience}
 	good := map[string]string{admissionJWKSURLKey: rig.JWKSURL, admissionIssuerKey: rig.Issuer, admissionAudienceKey: rig.Audience}
 	if err := admissionMatches(good, rig); err != nil {
 		t.Fatal(err)
 	}
-	if err := admissionMatches(map[string]string{admissionAudienceKey: "kagent"}, rig); err == nil ||
+	if err := admissionMatches(map[string]string{admissionAudienceKey: workspaceGrantAudience}, rig); err == nil ||
 		!strings.Contains(err.Error(), admissionJWKSURLKey) || !strings.Contains(err.Error(), admissionIssuerKey) {
 		t.Errorf("err = %v, want both unset keys named", err)
 	}
@@ -280,7 +280,7 @@ func testGrantKey(t *testing.T) *ecdsa.PrivateKey {
 	if err != nil {
 		t.Fatal(err)
 	}
-	parsed, err := parseWorkspaceGrantKey(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
+	parsed, err := parseWorkspaceGrantKey(pem.EncodeToMemory(&pem.Block{Type: pemTypeKey, Bytes: der}))
 	if err != nil {
 		t.Fatal(err)
 	}

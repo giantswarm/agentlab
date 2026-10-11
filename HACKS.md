@@ -703,6 +703,34 @@ every chart that takes it (`chartCarriesWorkspaces`). Unblocks when the
 oldest chart the lab supports renders the `CSIDriverConfig`: the
 lab-applied object and this entry go.
 
+### U31. `workspacegrant.go`: the lab signs the workspace grants and wires kagent's admission — BLOCKED UPSTREAM
+A Session on a workspace volume is admitted by kagent's jwt Session
+admission against the workspace-manager's key set, with a grant the manager
+signs. The platform renders neither half: the manager's `grant.signingKey`
+names a Secret nothing creates, so it serves no `authorize_workspace` and no
+`/.well-known/jwks.json`, and kagent's `controller.session.admission.jwt` is
+unset, so every Session that names a volume is refused. **Fix:** with the
+workspaces and the agents on, the lab generates an EC P-256 key once
+(`certs/workspace-grant/grant.pem`), places it as the Secret
+`agent-platform/workspace-manager-grant` ahead of the install and names it in
+`workspace-manager.grant.signingKey`. It points kagent's admission at the
+manager's key set through its Service, with the manager's base URL as the
+issuer and `kagent` as the audience, and adds the claude Harness the proof's
+Session runs on (`kagent.harnesses`). `workspaces-test` signs its grants with
+the same key in the manager's claims, so they verify through the key set the
+manager publishes. Unblocks when the platform creates the signing key
+([agent-platform#935](https://github.com/giantswarm/agent-platform/issues/935))
+and wires kagent's admission to it
+([agent-platform#890](https://github.com/giantswarm/agent-platform/issues/890)).
+Then the values template drops the lab's key and admission, and the proof's
+grant comes from `authorize_workspace` once the manager signs the identity
+kagent admits
+([workspace-manager#36](https://github.com/giantswarm/workspace-manager/issues/36)).
+A claude Session works in its volume directory from kagent 1.9.0
+([agent-platform#936](https://github.com/giantswarm/agent-platform/issues/936)).
+On an older kagent line, the proof's Session on the volume reports its default
+directory and fails.
+
 ## Accepted lab trade-offs (not hacks to fix)
 
 - **Checksum stamping via the `REPLACED_AT_APPLY` placeholder** — the standard

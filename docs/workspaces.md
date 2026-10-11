@@ -50,7 +50,7 @@ CSIDriverConfig registers the driver. `agentlab platform-down` and
 ```sh
 agentlab configure --workspaces   # needs --agents (on by default)
 agentlab up                       # or `agentlab platform` on a running lab
-agentlab workspaces-test --storage-only
+agentlab workspaces-test          # --storage-only: the storage alone
 ```
 
 With the switch off, nothing of it is installed, and `agentlab platform` on a
@@ -58,7 +58,7 @@ lab that had it removes it.
 
 ### The proof
 
-`agentlab workspaces-test --storage-only` is headless:
+`agentlab workspaces-test` is headless:
 
 1. The storage in place: the NFS server, the controller with its proxy, the
    node plugin Ready, the class and the registration.
@@ -92,13 +92,70 @@ lab that had it removes it.
    file and the mirrors. Both actors are deleted; the PersistentVolume and
    every file stay. A Substrate without existing volumes refuses the
    template, and the step reports the skip with that refusal.
-9. Everything removed: the proof's namespace `agentlab-workspaces-test` with
-   its claim, and the volume's directory gone from the export.
+9. A claude Session admitted on the volume ([the Session admission](#the-session-admission)),
+   left out with `--storage-only`:
+   - The rig: the workspace-manager's `/.well-known/jwks.json` publishes the
+     lab's grant key (its key id quoted), kagent's jwt admission names that
+     key set, the manager's issuer and the audience, and the Harness `claude`
+     is Ready.
+   - The mirror laid out the way the workspace sync lays it out:
+     `mirrors/agentlab-org/platform-api.git`.
+   - A claude Agent `agentlab-workspaces-claude` Ready on the Harness
+     `claude`.
+   - A Session without a volume, as the admin: its turn, a Bash probe, runs in
+     `/data/workspace` and sees no `/mirrors`. Its creator is the person the
+     grants name.
+   - Refused at create, each with kagent's reason: a volume without a grant,
+     a grant signed by a key the manager does not publish, and a grant for
+     another person.
+   - A Session with the volume source the manager's grant allows
+     (`sessions/${SESSION_ID}` read-write at `/workspace`, `mirrors`
+     read-only at `/mirrors`) and a grant signed with the lab's key: its turn
+     runs in `/workspace`, sees `agentlab-org/platform-api.git` under
+     `/mirrors` and the clone `agentlab-org/platform-api` in its directory,
+     is refused a write into the mirrors, and writes a file that a pod then
+     reads on the volume at `sessions/<Session id>`.
+   - The Sessions and the Agent removed.
+10. Everything removed: the proof's namespace `agentlab-workspaces-test` with
+    its claim, and the volume's directory gone from the export.
 
-`--storage-only` is required: a harness turn against a workspace is not part
-of the proof yet. `--ready-timeout` bounds each wait (default 5m). A resume on
+`--ready-timeout` bounds each wait (default 5m). A resume on
 another node is proven on a cloud installation, not in the lab: the lab's
 export is one node's disk.
+
+## The Session admission
+
+kagent admits a Session that names a workspace volume only with a workspace
+grant: a short-lived JWT the workspace-manager signs, which kagent's jwt
+Session admission verifies against the manager's published key set. It checks
+the issuer, the audience, the person (the grant's `sub` against the Session's
+creator), the volume and the mounts. The platform renders neither half yet
+(`HACKS.md` U31). With the workspaces and the agents on, the lab adds them:
+
+| Piece | What |
+|---|---|
+| The signing key | An EC P-256 key generated once under `certs/workspace-grant/grant.pem`, placed as the Secret `agent-platform/workspace-manager-grant` (key `grant`) ahead of the install and named in `workspace-manager.grant.signingKey`. The manager publishes its public half at `/.well-known/jwks.json` (workspace-manager 0.2.0 and newer), under its RFC 7638 thumbprint |
+| kagent's admission | `kagent.controller.session.admission.jwt`: the key set through the manager's Service (`http://workspace-manager.agent-platform.svc:8080/.well-known/jwks.json`), the manager's base URL as the issuer, `kagent` as the audience |
+| The claude Harness | `kagent.harnesses`: the Harness `claude` on the chart's claude-harness image, its snapshots at `s3://ate-snapshots/claude`, a turn limited to $1 and 10 model turns |
+
+`agentlab status` adds a `Session admission:` part to its workspaces line: what
+kagent trusts, the key's Secret and the Harness's readiness.
+
+The proof signs its grants itself, with the lab's key, in the manager's
+claims (`iss`, `sub`, `aud`, `exp`, `nbf`, `iat`, `jti`, `workspace`, `volume`,
+`mounts`). A grant verifies only through the key set the manager publishes. It
+does not call `authorize_workspace`, for two reasons:
+
+- The manager signs the person's Dex subject, and kagent on the platform
+  admits the creator's email
+  ([workspace-manager#36](https://github.com/giantswarm/workspace-manager/issues/36)).
+  The proof warns with both.
+- A grant needs a synced workspace.
+
+A claude Session works in its volume directory, with a clone of each mirror,
+from kagent 1.9.0. On an older line its turn reports `/data/workspace`, and
+the step fails
+([agent-platform#936](https://github.com/giantswarm/agent-platform/issues/936)).
 
 ## The provider instances
 

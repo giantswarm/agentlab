@@ -132,7 +132,7 @@ func EnsureWorkspaceGrantKey() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := writePEM(path, "PRIVATE KEY", der, 0o600); err != nil {
+	if err := writePEM(path, pemTypeKey, der, 0o600); err != nil {
 		return "", err
 	}
 	fmt.Printf("Generated the workspace grant signing key in %s\n", workspaceGrantDir)
@@ -185,11 +185,12 @@ type ecJWK struct {
 // workspaceGrantJWK is the public half of key with its RFC 7638 thumbprint
 // as the key id, the id the manager publishes it under.
 func workspaceGrantJWK(key *ecdsa.PublicKey) ecJWK {
-	size := (key.Curve.Params().BitSize + 7) / 8
+	// The uncompressed point: 0x04, then x and y of 32 bytes each.
+	point, _ := key.Bytes()
 	jwk := ecJWK{
 		Kty: "EC", Crv: "P-256",
-		X: base64.RawURLEncoding.EncodeToString(key.X.FillBytes(make([]byte, size))),
-		Y: base64.RawURLEncoding.EncodeToString(key.Y.FillBytes(make([]byte, size))),
+		X: base64.RawURLEncoding.EncodeToString(point[1:33]),
+		Y: base64.RawURLEncoding.EncodeToString(point[33:65]),
 	}
 	// The thumbprint's input: the required members in lexicographic order,
 	// no whitespace.
@@ -256,7 +257,7 @@ func newWorkspaceGrant(issuer, subject, workspace string, volume workspaceVolume
 		Issuer: issuer, Subject: subject, Audience: []string{workspaceGrantAudience},
 		IssuedAt: issued.Unix(), NotBefore: issued.Unix(), Expiry: issued.Add(ttl).Unix(),
 		ID:        randomHex(16),
-		Workspace: map[string]string{"namespace": kagentNamespace, "name": workspace},
+		Workspace: map[string]string{"namespace": kagentNamespace, nameKey: workspace},
 		Volume:    volume,
 		Mounts: []workspaceMount{
 			{SubPath: workspaceGrantSessionDirectory},

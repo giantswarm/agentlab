@@ -168,7 +168,9 @@ func proveWorkspacesHarnessSession(cfg *config.Config, timeout time.Duration) (s
 	ctx := context.Background()
 	rig := workspaceAdmissionValuesFor(cfg, workspacesChartCarries(cfg))
 	if rig == nil {
-		return "", fmt.Errorf("the lab carries no Session admission rig: it needs platform.agents and a chart that takes the workspaces values (%s)", config.File)
+		const skipped = "the claude Session skipped (no Session admission: the chart takes no workspaces values)"
+		step("The claude Session on the volume: %s", skipped)
+		return skipped, nil
 	}
 
 	step("The rig: the workspace-manager publishes the lab's grant key, kagent's admission trusts its key set, the claude Harness is Ready")
@@ -248,6 +250,14 @@ func proveWorkspacesHarnessSession(cfg *config.Config, timeout time.Duration) (s
 	}
 	person := plain.GetCreator()
 	note("Session %s (creator %s): %s", plain.GetId(), person, probe)
+	// kagent's admission compares the grant's sub with the Session's
+	// creator; the manager's authorize_workspace signs the Dex subject. The
+	// proof's grants name the creator, and say so where the two differ.
+	if claims, err := decodeJWTClaims(token); err == nil {
+		if subject, _ := claims["sub"].(string); subject != "" && subject != person {
+			warn("the grants name the Session's creator %s; the workspace-manager's authorize_workspace signs the Dex subject %.12s…, which kagent's admission refuses as another person", person, subject)
+		}
+	}
 
 	step("Refused at create: a volume without a grant, a grant the manager's key set does not verify, a grant for another person")
 	source := workspacesHarnessVolumeSource(volume)
