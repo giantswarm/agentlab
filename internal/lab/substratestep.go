@@ -756,7 +756,10 @@ func resumedReplyProves(reply, codeword, marker string) (conversation, volume bo
 }
 
 // substrateStepTemplate is the proof's AgentTemplate on the platform
-// Harness, no tools and no skills, and its Agent.
+// Harness and its Agent. The template carries the skills proof's public
+// skill for its side effect: the Go ADK gives an agent its execution tools —
+// bash, which writes and reads the file on the durable volume — only with
+// skills.
 func substrateStepTemplate(modelConfig string) string {
 	return fmt.Sprintf(`apiVersion: %[1]s
 kind: AgentTemplate
@@ -770,7 +773,15 @@ spec:
   modelConfig:
     name: %[6]s
   systemPrompt: %[7]q
+  skills:
+    - name: %[8]s
+      source:
+        git:
+          url: %[9]s
+          commit: %[10]s
+        path: %[8]s
 ---
-%[8]s`, agentTemplateAPIVersion, substrateStepAgent, kagentNamespace, managedByLabel, managedByAgentlabValue, modelConfig, substrateStepSystemMsg,
+%[11]s`, agentTemplateAPIVersion, substrateStepAgent, kagentNamespace, managedByLabel, managedByAgentlabValue, modelConfig, substrateStepSystemMsg,
+		skillsTestSkill, skillsTestRepo, skillsTestCommit,
 		agentManifest(substrateStepAgent, substrateStepAgent, kagentHarness, nil))
 }

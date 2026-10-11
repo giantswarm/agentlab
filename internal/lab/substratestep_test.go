@@ -240,8 +240,8 @@ func TestSubstrateStepPrompts(t *testing.T) {
 }
 
 // TestSubstrateStepTemplate: the proof's agent is an AgentTemplate labelled
-// as agentlab's on the given ModelConfig and the Agent pairing it with the
-// platform Harness.
+// as agentlab's on the given ModelConfig, with a skill, and the Agent pairing
+// it with the platform Harness.
 func TestSubstrateStepTemplate(t *testing.T) {
 	manifest := substrateStepTemplate(defaultModelConfig)
 	objs, err := decodeManifests([]byte(manifest))
@@ -258,6 +258,10 @@ func TestSubstrateStepTemplate(t *testing.T) {
 	}
 	if got, _, _ := unstructured.NestedString(objs[0].Object, "spec", "modelConfig", "name"); got != defaultModelConfig {
 		t.Errorf("modelConfig = %q", got)
+	}
+	skills, _, _ := unstructured.NestedSlice(objs[0].Object, "spec", "skills")
+	if len(skills) != 1 {
+		t.Errorf("the template must carry one skill, the Go ADK's condition for its bash tool: %v", skills)
 	}
 	if got, _, _ := unstructured.NestedString(objs[1].Object, "spec", "harnessRef", "name"); got != kagentHarness {
 		t.Errorf("harnessRef = %q, want %s", got, kagentHarness)

@@ -2,11 +2,13 @@ package lab
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -245,8 +247,8 @@ func TestProveSubstrateLine(t *testing.T) {
 
 	newFakeLab(t, ateletDS(atelet), workerPool(testWorkerPool, worker), workerPool("kagent-other", skewed))
 	_, err = proveSubstrateLine(ctx, remedy)
-	if err == nil {
-		t.Fatal("two releases: want a refusal")
+	if !errors.Is(err, errSubstrateSkew) {
+		t.Fatalf("two releases: want the skew refusal, got %v", err)
 	}
 	for _, want := range []string{atelet, "Substrate 1.0", skewed, "Substrate 1.1", kagentNamespace + "/kagent-other", "no golden actor boots", "kubectl -n " + substrateNamespace + " logs ds/" + ateletDaemonSet, remedy} {
 		if !strings.Contains(err.Error(), want) {
@@ -260,8 +262,28 @@ func TestProveSubstrateLine(t *testing.T) {
 	}
 
 	newFakeLab(t, workerPool(testWorkerPool, worker))
-	if _, err := proveSubstrateLine(ctx, remedy); err == nil || !strings.Contains(err.Error(), ateletDaemonSet) {
-		t.Errorf("no atelet DaemonSet: want a refusal naming it, got %v", err)
+	if _, err := proveSubstrateLine(ctx, remedy); err == nil || !strings.Contains(err.Error(), ateletDaemonSet) || errors.Is(err, errSubstrateSkew) {
+		t.Errorf("no atelet DaemonSet: want a refusal naming it, no skew, got %v", err)
+	}
+}
+
+// TestSettleSubstrateLine: after an install, one release answers at once and
+// a failure other than the skew is not waited through — only a skew, which a
+// changed range leaves until the atelet's release follows, is read again.
+func TestSettleSubstrateLine(t *testing.T) {
+	const atelet, worker = "gsoci.azurecr.io/giantswarm/substrate/atelet:1.0.3", "gsoci.azurecr.io/giantswarm/substrate/ateom-gvisor:1.0.0"
+	ctx := context.Background()
+	newFakeLab(t, ateletDS(atelet), workerPool(testWorkerPool, worker))
+	if images, err := settleSubstrateLine(ctx, ""); err != nil || len(images) != 1 {
+		t.Errorf("one release: %v, %v", images, err)
+	}
+	newFakeLab(t, workerPool(testWorkerPool, worker))
+	started := time.Now()
+	if _, err := settleSubstrateLine(ctx, ""); err == nil || errors.Is(err, errSubstrateSkew) {
+		t.Errorf("no atelet: want its refusal, got %v", err)
+	}
+	if waited := time.Since(started); waited > pollInterval {
+		t.Errorf("a refusal other than the skew waited %s", waited)
 	}
 }
 

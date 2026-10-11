@@ -917,7 +917,7 @@ step and read by the one after it. One headless run, four steps, each judged
    worker and `ate-api-server`'s images, the release the atelet's tag is. A
    lab already on `--to`'s release (or a newer one) is refused: the proof
    starts on the chart's Substrate range as released.
-2. **agent** — an `AgentTemplate` on the platform Harness and its `Agent`
+2. **agent** — an `AgentTemplate` on the platform Harness (with the skills proof's public skill: the Go ADK gives an agent its `bash` tool only with skills) and its `Agent`
    boot (a golden in the old layout); a conversation of three turns: a
    random codeword, the agent's `bash` tool writing a random marker to
    `/data/agentlab-substrate-step/marker` (`/data` is the actor's durable
