@@ -437,10 +437,23 @@ contract. Every write tool (`pull_model`, `wire_model`, `unwire_model`,
 `dryRun` and must answer its manifests or plan while the ModelConfig's
 resourceVersion, the backend's models and loaded models and the pull job stay
 as they were; `mode: commit` on a tool that never commits answers
-`unsupported`. Then the wired ModelConfig gets the Flux provenance a
-Kustomization stamps (`kustomize.toolkit.fluxcd.io/name|namespace`) for the
-length of one step: wire, unwire and delete (`unwire=true`) must answer
-`gitops_owned` pointing at mode commit, the object and the model untouched.
+`unsupported`. Then, for the length of one step, the wired ModelConfig is
+one Flux applies from git: the **GitOps fixture** is the Flux Kustomization
+`agent-platform/agentlab-gitops-fixture` whose `status.inventory` lists the
+ModelConfig (entry `kagent_<name>_<group>_ModelConfig`, as
+kustomize-controller records an applied object), and the ModelConfig carries
+the provenance that Kustomization stamps
+(`kustomize.toolkit.fluxcd.io/name|namespace`). model-manager holds the labels
+to the Kustomization's inventory — an object whose Kustomization is gone, or
+no longer lists it, is applied by nothing and written live — so the labels
+alone are not enough. The lab's Flux engine runs no kustomize-controller and
+serves no Kustomization API: where none is served the fixture brings a
+`kustomize.toolkit.fluxcd.io/v1` CustomResourceDefinition of its own
+(labelled `app.kubernetes.io/managed-by: agentlab`, every field kept), applies
+the Kustomization suspended and writes the inventory itself; the step removes
+the labels, the Kustomization and that CustomResourceDefinition again. Wire,
+unwire and delete (`unwire=true`) must answer `gitops_owned` pointing at mode
+commit, the object and the model untouched.
 
 Commit mode opens a pull request as the person, so model-manager has to be
 pinned to a GitHub App (the chart's `github.enabled`): the bearer of every call
