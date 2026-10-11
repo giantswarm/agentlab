@@ -48,6 +48,7 @@ const (
 	// tracks; agentChartRange is the range without an agent-manager to
 	// declare one (agentChartDeclared).
 	kindOCIRepository       = "OCIRepository"
+	kindHelmRelease         = "HelmRelease"
 	agentChartOCIRepository = "agent"
 	agentChartURL           = "oci://gsoci.azurecr.io/charts/giantswarm/agent"
 	agentChartRange         = "1.x"
