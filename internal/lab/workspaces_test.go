@@ -11,7 +11,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -239,7 +238,7 @@ spec:
 		want    bool
 	}{
 		{"no renders", nil, false},
-		{"values taken, nothing rendered", map[string]string{config.ConnectivityChartName: none, "substrate": "kind: Deployment\nmetadata:\n  name: ate-api-server\n"}, false},
+		{"values taken, nothing rendered", map[string]string{config.ConnectivityChartName: none, substrateRelease: "kind: Deployment\nmetadata:\n  name: ate-api-server\n"}, false},
 		{"the chart renders it", map[string]string{config.ConnectivityChartName: registers}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -251,7 +250,7 @@ spec:
 }
 
 var (
-	gvkCSIDriverConfig = schema.GroupVersionKind{Group: "ate.dev", Version: "v1alpha1", Kind: kindCSIDriverConfig}
+	gvkCSIDriverConfig = substrateGroupVersion.WithKind(kindCSIDriverConfig)
 	gvrCSIDriverConfig = gvkCSIDriverConfig.GroupVersion().WithResource("csidriverconfigs")
 )
 
