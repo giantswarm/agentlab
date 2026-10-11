@@ -13,7 +13,7 @@ require (
 	github.com/giantswarm/go-selfupdate v1.6.3
 	github.com/giantswarm/klaus-gateway v1.21.0
 	github.com/giantswarm/selfupdate-cosign v0.3.4
-	github.com/giantswarm/telemetrydeck-go v0.3.4
+	github.com/giantswarm/telemetrydeck-go v0.3.5
 	github.com/giantswarm/vm-manager v0.24.9
 	github.com/google/uuid v1.6.0
 	github.com/smallstep/truststore v0.13.0
