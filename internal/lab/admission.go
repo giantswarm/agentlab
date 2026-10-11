@@ -295,7 +295,7 @@ func (c admissionCase) release() *unstructured.Unstructured {
 	}
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "helm.toolkit.fluxcd.io/v2",
-		"kind":       "HelmRelease",
+		"kind":       kindHelmRelease,
 		"metadata": map[string]any{
 			nameKey:      admissionProbeName,
 			namespaceKey: orgNamespace,

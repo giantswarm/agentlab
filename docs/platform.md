@@ -48,6 +48,22 @@ The lab installs it in its **lab shape**:
   version is a placeholder, from a release.
   Never drop the value on a lab: the first upgrade without it makes the
   release self-managed.
+- **The component set is the deployed revision's.** Helm diffs an upgrade
+  against the last *deployed* revision, so the `HelmRelease` and
+  `OCIRepository` of a component that a failed upgrade added stay in the
+  cluster after the next successful one, owned by the release and rendered by
+  none of its revisions. After every run that leaves a deployed revision —
+  an upgrade or a "nothing to do" — `agentlab platform` deletes every
+  `HelmRelease` and `OCIRepository` carrying the release's Helm annotations
+  that the deployed revision (manifest and hooks) does not render, the
+  `HelmRelease` first and waited for (helm-controller finishes the action it
+  is running, then uninstalls the component, each within the release's own
+  timeout), and names each one (`removed HelmRelease
+  agent-platform/<name>: release agent-platform owns it, its deployed
+  revision does not render it`). Objects of other owners — the lab's own
+  `mcp-prometheus`, the agents' sources — are never touched; while the
+  newest revision is a failed one nothing is removed, the
+  next deployed run cleans up.
 - **Backstage's app-config is put back on every run.** The portal reads
   two app-config ConfigMaps at start only: the chart's
   (`agent-platform-backstage-app-config`, rendered by the connectivity

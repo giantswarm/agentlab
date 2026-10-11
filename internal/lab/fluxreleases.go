@@ -165,7 +165,7 @@ func fluxReleases(manifests string) ([]fluxRelease, error) {
 				version = doc.Spec.Ref.Tag
 			}
 			sources[doc.Metadata.Namespace+"/"+doc.Metadata.Name] = source{doc.Spec.URL, version, doc.Spec.Ref.SemverFilter, doc.Spec.Insecure}
-		case "HelmRelease":
+		case kindHelmRelease:
 			releases = append(releases, doc)
 		}
 	}

@@ -726,6 +726,18 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 		reportPlatformReleases()
 		return err
 	}
+	// The component set the deployed revision renders is the lab's: a
+	// HelmRelease or OCIRepository of the release that it does not render — a
+	// component a failed upgrade added, which Helm's diff against the last
+	// deployed revision never removes — goes, named, before the wait below
+	// would read it as part of the platform (platformorphans.go).
+	removed, err := removePlatformOrphans(ctx)
+	for _, obj := range removed {
+		note("removed %s: release %s owns it, its deployed revision does not render it", obj, platformRelease)
+	}
+	if err != nil {
+		return err
+	}
 	if err := waitPlatformReleases(); err != nil {
 		return err
 	}
