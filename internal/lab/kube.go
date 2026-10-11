@@ -1136,7 +1136,41 @@ func podStateSummary(pod *corev1.Pod) string {
 // output is returned with the error too: a probe's diagnosis is in what it
 // printed.
 func runProbePod(ctx context.Context, ns, name, image string, command []string, timeout time.Duration) (string, error) {
-	return runPod(ctx, ns, probePod(name, image, command), timeout)
+	pod := probePod(name, image, command)
+	restrictPodSecurity(pod)
+	return runPod(ctx, ns, pod, timeout)
+}
+
+// probeRunAsUser is the non-root user a restricted probe pod runs as: the
+// conventional "nobody", which the probe image's wget and sh need nothing
+// more than.
+const probeRunAsUser int64 = 65534
+
+// restrictPodSecurity gives every container of the pod the PodSecurity
+// `restricted` profile (runAsNonRoot, no privilege escalation, all
+// capabilities dropped, the RuntimeDefault seccomp profile) and the pod a
+// non-root user, so a probe pod in a namespace enforcing the profile starts
+// without a PodSecurity warning. A container or pod that sets a user of its
+// own keeps it.
+func restrictPodSecurity(pod *corev1.Pod) {
+	if pod.Spec.SecurityContext == nil {
+		pod.Spec.SecurityContext = &corev1.PodSecurityContext{}
+	}
+	yes, no, user := true, false, probeRunAsUser
+	psc := pod.Spec.SecurityContext
+	psc.RunAsNonRoot = &yes
+	if psc.RunAsUser == nil {
+		psc.RunAsUser = &user
+	}
+	psc.SeccompProfile = &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}
+	for i := range pod.Spec.Containers {
+		c := &pod.Spec.Containers[i]
+		if c.SecurityContext == nil {
+			c.SecurityContext = &corev1.SecurityContext{}
+		}
+		c.SecurityContext.AllowPrivilegeEscalation = &no
+		c.SecurityContext.Capabilities = &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}
+	}
 }
 
 // probePod is the pod runProbePod runs: one container of the image running

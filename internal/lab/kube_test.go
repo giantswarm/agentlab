@@ -1068,6 +1068,38 @@ func TestPodLogs(t *testing.T) {
 	}
 }
 
+// TestRunProbePodIsRestricted: the pod runProbePod creates carries the
+// PodSecurity `restricted` profile, so a namespace enforcing it admits the
+// probe without a warning.
+func TestRunProbePodIsRestricted(t *testing.T) {
+	f := newFakeLab(t)
+	var created *corev1.Pod
+	f.cs.PrependReactor("create", "pods", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		pod := action.(clienttesting.CreateAction).GetObject().(*corev1.Pod)
+		created = pod.DeepCopy()
+		pod.Status.Phase = corev1.PodSucceeded
+		return false, nil, nil
+	})
+	if _, err := runProbePod(context.Background(), testNS, "probe", "busybox", []string{"echo", "ok"}, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if created == nil {
+		t.Fatal("no probe pod was created")
+	}
+	psc := created.Spec.SecurityContext
+	if psc == nil || psc.RunAsNonRoot == nil || !*psc.RunAsNonRoot || psc.RunAsUser == nil || *psc.RunAsUser == 0 ||
+		psc.SeccompProfile == nil || psc.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault {
+		t.Errorf("pod securityContext = %+v, want runAsNonRoot, a non-root runAsUser and the RuntimeDefault seccomp profile", psc)
+	}
+	for _, c := range created.Spec.Containers {
+		sc := c.SecurityContext
+		if sc == nil || sc.AllowPrivilegeEscalation == nil || *sc.AllowPrivilegeEscalation ||
+			sc.Capabilities == nil || !reflect.DeepEqual(sc.Capabilities.Drop, []corev1.Capability{"ALL"}) {
+			t.Errorf("container %s securityContext = %+v, want allowPrivilegeEscalation false and capabilities drop [ALL]", c.Name, sc)
+		}
+	}
+}
+
 // TestRunProbePod: the pod is created with restartPolicy Never, waited for
 // until it finishes, its log returned, and it is deleted afterwards; a
 // failed pod returns its log with the failure.
