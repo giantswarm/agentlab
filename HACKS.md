@@ -757,16 +757,20 @@ directory and fails.
   for the sake of policies the lab never tests; the CRDs alone let the charts
   install and validate their policies against the real schema, and enforce
   nothing. Named as a lab-only difference in docs/platform.md.
-- **The fleet's `flux-multi-tenancy` policy on an upstream Kyverno chart, the
-  platform namespace exempt in code** (`internal/lab/admission.go`,
+- **The fleet's `flux-multi-tenancy` policy on the fleet's Kyverno charts
+  reduced to the admission controller, the platform namespace exempt in
+  code** (`internal/lab/admission.go`,
   `templates/flux-multi-tenancy.yaml` byte-identical to
   management-cluster-bases, `templates/kyverno-values.yaml`,
-  `templates/org-fixture.yaml`) — the fleet's own Kyverno wrapper chart
-  (giantswarm/kyverno) renders policy-reporter, a ServiceMonitor and
-  VerticalPodAutoscalers unconditionally, objects for an installation, so
-  the lab pins the upstream chart at the subchart version the wrapper wraps
-  (3.7.2 = v1.17.2) with the fleet's images, reduced to the admission
-  controller. The exemption of `agent-platform` is the lab's one deviation
+  `templates/org-fixture.yaml`) — the lab installs what security-bundle
+  installs, `kyverno-crds` 1.17.0 and the kyverno app 0.24.2 (the upstream
+  chart 3.7.2 = v1.17.2 and policy-reporter) from
+  `gsoci.azurecr.io/charts/giantswarm`, with values that turn off what a
+  one-node kind cluster has no API or use for (CiliumNetworkPolicy,
+  VerticalPodAutoscalers, PodLogs, ServiceMonitor, HPA, the app's own
+  policies and PolicyExceptions, every controller but admission).
+  policy-reporter is a dependency without a condition, so its one
+  Deployment runs too. The exemption of `agent-platform` is the lab's one deviation
   from the policy text: on an installation the platform's child HelmReleases
   live in the exempt `flux-giantswarm`, in the lab shape in the platform
   namespace, and rewriting the fleet's YAML by hand would hide that the file

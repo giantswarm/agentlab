@@ -353,7 +353,8 @@ Load-bearing invariants (details in docs/):
   apiserver gates for and preload. Never emit `gitops.namespace` with the
   engine on.
 - **The fleet's admission is in the lab**: `agentlab up` installs Kyverno
-  (the upstream chart at the fleet's version, admission controller only)
+  (the fleet's kyverno-crds and kyverno app charts from gsoci, Kyverno
+  3.7.2, admission controller only)
   with the fleet's `flux-multi-tenancy` ClusterPolicy in Enforce, verbatim
   from management-cluster-bases (`internal/lab/templates/flux-multi-tenancy.yaml`),
   the platform namespace exempt in code next to the fleet's three, and the

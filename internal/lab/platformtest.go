@@ -248,7 +248,7 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 		note("%s", c)
 		caseLines = append(caseLines, c.String())
 	}
-	verdict += fmt.Sprintf("\nPASS: the fleet's %s policy (Enforce, Kyverno %s) answers as an installation does for %d HelmRelease shapes in %s — %s", fleetPolicyName, kyvernoChartVersion, len(cases), orgNamespace, strings.Join(caseLines, "; "))
+	verdict += fmt.Sprintf("\nPASS: the fleet's %s policy (Enforce, Kyverno %s) answers as an installation does for %d HelmRelease shapes in %s — %s", fleetPolicyName, kyvernoVersion, len(cases), orgNamespace, strings.Join(caseLines, "; "))
 
 	// The lab's Dex bridge: every OAuth resource server the rule selects on
 	// the live Deployments carries the dex-localhost sidecar, runs without a

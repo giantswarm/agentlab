@@ -1,66 +1,108 @@
-# The lab's Kyverno: the admission controller alone, in the shape a kind
-# cluster can carry, from the upstream kyverno chart (3.7.2, appVersion
-# v1.17.2 — the very subchart the fleet's giantswarm/kyverno 0.24.2 wraps;
-# admission.go pins the chart, this file its values). One replica, no
-# background, cleanup or reports controllers, no reports of any kind, no
-# policy exceptions, no metrics scraping, no CRD-migration hook: what a
-# validate-only policy on a one-node cluster needs and nothing it does not.
-# The images are the fleet's builds of the same version on gsoci, so the
-# node pulls what an installation runs. The fleet's wrapper chart is not
-# used on purpose: it renders policy-reporter (three Deployments), a
-# ServiceMonitor and VerticalPodAutoscalers unconditionally — objects for
-# an installation, not a kind cluster.
-admissionController:
-  replicas: 1
-  podDisruptionBudget:
-    enabled: false
-  container:
-    image:
-      registry: gsoci.azurecr.io
-      repository: giantswarm/kyverno
-    resources:
-      requests:
-        cpu: 100m
-        memory: 128Mi
-      limits:
-        memory: 384Mi
-  initContainer:
-    image:
-      registry: gsoci.azurecr.io
-      repository: giantswarm/kyvernopre
-    resources:
-      requests:
-        cpu: 10m
-        memory: 64Mi
-      limits:
-        memory: 256Mi
-backgroundController:
+# The lab's Kyverno: the fleet's kyverno app (gsoci.azurecr.io/charts/
+# giantswarm/kyverno 0.24.2, the chart security-bundle installs on every
+# installation; it wraps the upstream kyverno chart 3.7.2, appVersion
+# v1.17.2, and policy-reporter) reduced to the admission controller in the
+# shape a kind cluster can carry. admission.go pins the chart and the
+# kyverno-crds chart beside it, this file the values. The app's defaults
+# are an installation's: its images on gsoci, so the node pulls what an
+# installation runs. Turned off here what a one-node lab has no API or use
+# for: the CiliumNetworkPolicy, the VerticalPodAutoscalers, the PodLogs, the
+# app's PolicyExceptions and policies for the fleet's own components, the
+# HPA, the ServiceMonitor, API priority and fairness, and every controller
+# but admission. policy-reporter is a dependency without a condition: its
+# one Deployment stays, its UI, plugins and monitoring off.
+ciliumNetworkPolicy:
   enabled: false
-cleanupController:
-  enabled: false
-reportsController:
-  enabled: false
-features:
-  admissionReports:
+verticalPodAutoscaler:
+  admissionController:
     enabled: false
-  aggregateReports:
+  backgroundController:
     enabled: false
-  policyReports:
+  cleanupController:
     enabled: false
-  validatingAdmissionPolicyReports:
+  reportsController:
     enabled: false
-  backgroundScan:
+  kyvernoPlugin:
     enabled: false
-  generateValidatingAdmissionPolicy:
+  policyReporter:
     enabled: false
-  policyExceptions:
+  ui:
     enabled: false
-crds:
-  migration:
+monitoring:
+  podLogs:
     enabled: false
-webhooksCleanup:
-  enabled: false
-policyReportsCleanup:
-  enabled: false
-grafana:
-  enabled: false
+policyExceptions:
+  enablePolexPolicy: false
+  enableChartOperatorPolex: false
+  enableCiliumPolex: false
+  enableWildcardMatchPolicy: false
+  enableNoisyContextsPolicy: false
+  enableAwsCloudControllerManagerPolex: false
+  enableAwsEbsCsiDriverPolex: false
+  enableAzureCloudControllerManagerPolex: false
+  enableAzureCloudNodeManagerPolex: false
+kyverno:
+  admissionController:
+    replicas: 1
+    autoscaling:
+      enabled: false
+    apiPriorityAndFairness: false
+    serviceMonitor:
+      enabled: false
+    podDisruptionBudget:
+      enabled: false
+    container:
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          memory: 384Mi
+    initContainer:
+      resources:
+        requests:
+          cpu: 10m
+          memory: 64Mi
+        limits:
+          memory: 256Mi
+  backgroundController:
+    enabled: false
+  cleanupController:
+    enabled: false
+  reportsController:
+    enabled: false
+    apiPriorityAndFairness: false
+  features:
+    admissionReports:
+      enabled: false
+    aggregateReports:
+      enabled: false
+    policyReports:
+      enabled: false
+    validatingAdmissionPolicyReports:
+      enabled: false
+    backgroundScan:
+      enabled: false
+    generateValidatingAdmissionPolicy:
+      enabled: false
+    policyExceptions:
+      enabled: false
+  crds:
+    migration:
+      enabled: false
+  webhooksCleanup:
+    enabled: false
+  policyReportsCleanup:
+    enabled: false
+  grafana:
+    enabled: false
+policy-reporter:
+  ui:
+    enabled: false
+  plugin:
+    kyverno:
+      enabled: false
+    trivy:
+      enabled: false
+  monitoring:
+    enabled: false

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	chartv2 "helm.sh/helm/v4/pkg/chart/v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -29,8 +30,9 @@ import (
 // releases passed every lab proof and were denied on an installation
 // (agentlab#192). So `agentlab up` carries the policy — verbatim
 // (templates/flux-multi-tenancy.yaml, the ClusterPolicy and the aggregated
-// ClusterRole its rules read with), in Enforce, on a Kyverno of the fleet's
-// version reduced to its admission controller (templates/kyverno-values.yaml)
+// ClusterRole its rules read with), in Enforce, on the fleet's Kyverno charts
+// from gsoci (kyverno-crds and the kyverno app, the pair security-bundle
+// installs) reduced to the admission controller (templates/kyverno-values.yaml)
 // — with one lab addition made here: the platform namespace joins each
 // rule's exclude list, standing in for flux-giantswarm. On an installation
 // the platform's child HelmReleases live there, exempt; in the lab they live
@@ -66,16 +68,24 @@ import (
 // it cannot resolve) — a warning, not a refusal, and the boot log shows it.
 
 const (
-	// kyvernoNamespace and kyvernoRelease: the engine's Helm release.
-	kyvernoNamespace = "kyverno"
-	kyvernoRelease   = "kyverno"
-	// kyvernoChartRef and kyvernoChartVersion pin the upstream chart at the
-	// subchart version the fleet's wrapper (giantswarm/kyverno 0.24.2) wraps:
-	// 3.7.2 is Kyverno v1.17.2, the release every installation runs.
-	kyvernoChartRef     = "oci://ghcr.io/kyverno/charts/kyverno"
-	kyvernoChartVersion = "3.7.2"
-	// kyvernoInstallTimeout bounds the chart's upgrade-or-install and its
-	// wait (one Deployment and its CRDs).
+	// kyvernoNamespace and kyvernoRelease: the engine's Helm release,
+	// kyvernoCRDsRelease the release of its CRDs beside it.
+	kyvernoNamespace   = "kyverno"
+	kyvernoRelease     = "kyverno"
+	kyvernoCRDsRelease = "kyverno-crds"
+	// kyvernoChartRef and kyvernoChartVersion pin the fleet's kyverno app
+	// as security-bundle installs it on every installation: the chart
+	// wraps the upstream Kyverno chart kyvernoVersion (v1.17.2) and
+	// policy-reporter. kyvernoCRDsChartRef and kyvernoCRDsChartVersion pin
+	// the kyverno-crds app it depends on, since the wrapper installs no
+	// CRDs itself.
+	kyvernoChartRef         = "oci://gsoci.azurecr.io/charts/giantswarm/kyverno"
+	kyvernoChartVersion     = "0.24.2"
+	kyvernoVersion          = "3.7.2"
+	kyvernoCRDsChartRef     = "oci://gsoci.azurecr.io/charts/giantswarm/kyverno-crds"
+	kyvernoCRDsChartVersion = "1.17.0"
+	// kyvernoInstallTimeout bounds each chart's upgrade-or-install and its
+	// wait (the CRDs; two Deployments).
 	kyvernoInstallTimeout = 5 * time.Minute
 
 	// fleetPolicyName is the ClusterPolicy the fleet enforces.
@@ -115,10 +125,16 @@ const clusterPolicyResource = "clusterpolicies.kyverno.io"
 // policy names Flux kinds, which the platform's bundled engine brings.
 func fleetAdmissionUp(cfg *config.Config) error {
 	ctx := context.Background()
-	step("Installing the fleet's admission: Kyverno %s (chart %s) with the %s policy in Enforce", kyvernoChartVersion, kyvernoChartRef, fleetPolicyName)
+	step("Installing the fleet's admission: Kyverno %s (chart %s:%s, CRDs %s:%s) with the %s policy in Enforce", kyvernoVersion, kyvernoChartRef, kyvernoChartVersion, kyvernoCRDsChartRef, kyvernoCRDsChartVersion, fleetPolicyName)
 	values, err := helmValues(kyvernoValues)
 	if err != nil {
 		return fmt.Errorf("kyverno-values.yaml: %w", err)
+	}
+	if err := uninstallUpstreamKyverno(); err != nil {
+		return err
+	}
+	if err := installOCIChart(cfg, kyvernoNamespace, kyvernoCRDsRelease, kyvernoCRDsChartRef, kyvernoCRDsChartVersion, nil, kyvernoInstallTimeout); err != nil {
+		return err
 	}
 	if err := installOCIChart(cfg, kyvernoNamespace, kyvernoRelease, kyvernoChartRef, kyvernoChartVersion, values, kyvernoInstallTimeout); err != nil {
 		return err
@@ -169,6 +185,31 @@ func fleetAdmissionUp(cfg *config.Config) error {
 		note("%s", r)
 	}
 	return nil
+}
+
+// kyvernoAppHome is the home of the fleet's kyverno app chart; the upstream
+// chart, also named kyverno, carries kyverno.io.
+const kyvernoAppHome = "https://github.com/giantswarm/kyverno-app"
+
+// uninstallUpstreamKyverno takes away the release an earlier agentlab
+// installed from the upstream Kyverno chart. That release owns the CRDs,
+// which the kyverno app does not render: upgrading it in place would delete
+// them, and with them the policy, once the kyverno-crds release had taken
+// them over. The uninstall drops CRDs, policy and engine together; the step
+// installs all three again right after.
+func uninstallUpstreamKyverno() error {
+	meta, err := helmReleaseMeta(kyvernoNamespace, kyvernoRelease)
+	if err != nil || !installedFromUpstreamKyverno(meta) {
+		return err
+	}
+	note("release %s in %s runs the upstream chart %s %s: uninstalling it for the fleet's charts", kyvernoRelease, kyvernoNamespace, meta.Name, meta.Version)
+	return helmUninstall(kyvernoNamespace, kyvernoRelease, true, kyvernoInstallTimeout)
+}
+
+// installedFromUpstreamKyverno reports whether a release's chart is the
+// upstream Kyverno chart rather than the fleet's kyverno app.
+func installedFromUpstreamKyverno(meta *chartv2.Metadata) bool {
+	return meta != nil && meta.Name == "kyverno" && meta.Home != kyvernoAppHome
 }
 
 // labFleetPolicy decodes the fleet's bundle and adds the platform namespace
