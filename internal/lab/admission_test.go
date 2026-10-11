@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	chartv2 "helm.sh/helm/v4/pkg/chart/v2"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -182,5 +183,49 @@ flux-multi-tenancy:
 	}
 	if got := admit.String(); !strings.HasSuffix(got, ": admitted") {
 		t.Errorf("String() = %q", got)
+	}
+}
+
+// TestKyvernoChartsAreTheFleetsOnGsoci: the engine and its CRDs come from
+// the fleet's charts on gsoci, the kyverno app pinned at the release that
+// wraps Kyverno 3.7.2, and the values point no image elsewhere.
+func TestKyvernoChartsAreTheFleetsOnGsoci(t *testing.T) {
+	for _, ref := range []string{kyvernoChartRef, kyvernoCRDsChartRef} {
+		if !strings.HasPrefix(ref, "oci://gsoci.azurecr.io/charts/giantswarm/") {
+			t.Errorf("chart %s is not one of the fleet's charts on gsoci", ref)
+		}
+	}
+	if kyvernoChartVersion != "0.24.2" || kyvernoVersion != "3.7.2" {
+		t.Errorf("kyverno app %s wraps Kyverno %s, want 0.24.2 wrapping 3.7.2", kyvernoChartVersion, kyvernoVersion)
+	}
+	if strings.Contains(string(kyvernoValues), "ghcr.io") {
+		t.Error("kyverno-values.yaml names ghcr.io")
+	}
+	values, err := helmValues(kyvernoValues)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := values["kyverno"].(map[string]any); !ok {
+		t.Error("kyverno-values.yaml has no kyverno: block, the kyverno app's values for the upstream chart it wraps")
+	}
+}
+
+// TestInstalledFromUpstreamKyverno: a release of the upstream chart is the
+// one an earlier agentlab installed and goes; the kyverno app's stays.
+func TestInstalledFromUpstreamKyverno(t *testing.T) {
+	cases := []struct {
+		name string
+		meta *chartv2.Metadata
+		want bool
+	}{
+		{"no release", nil, false},
+		{"upstream chart", &chartv2.Metadata{Name: "kyverno", Version: "3.7.2", Home: "https://kyverno.io/"}, true},
+		{"kyverno app", &chartv2.Metadata{Name: "kyverno", Version: "0.24.2", Home: kyvernoAppHome}, false},
+		{"another chart", &chartv2.Metadata{Name: "kyverno-crds", Version: "1.17.0"}, false},
+	}
+	for _, c := range cases {
+		if got := installedFromUpstreamKyverno(c.meta); got != c.want {
+			t.Errorf("%s: installedFromUpstreamKyverno = %v, want %v", c.name, got, c.want)
+		}
 	}
 }

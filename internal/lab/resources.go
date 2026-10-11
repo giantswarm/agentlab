@@ -181,12 +181,14 @@ const (
 	useObservabilityMem = 710
 	// The fleet's admission (admission.go): Kyverno reduced to its admission
 	// controller, 100m/128Mi (limit 384Mi; its init container's 10m/64Mi
-	// runs before it and is not scheduled beside it). In use, idle with the
-	// one policy: 66Mi (measured 2026-09-16 on a 4.28.4 lab). Installed with
-	// the platform, after its releases.
-	reqKyvernoCPU = 100
-	reqKyvernoMem = 128
-	useKyvernoMem = 66
+	// runs before it and is not scheduled beside it), and the kyverno app's
+	// policy-reporter, 5m/30Mi. In use, idle with the one policy: the
+	// admission controller 66Mi (measured on a 4.28.4 lab), policy-reporter
+	// counted at its request. Installed with the platform, after its
+	// releases.
+	reqKyvernoCPU = 105
+	reqKyvernoMem = 158
+	useKyvernoMem = 96
 
 	// The run-time headroom the CPU floor keeps free beyond the requests, for
 	// what the platform runs AFTER the boot. On the 4.x line an agent is an
