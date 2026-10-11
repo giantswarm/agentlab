@@ -10,10 +10,12 @@ import (
 	"sync"
 	"time"
 
+	"gopkg.in/yaml.v3"
 	appsv1 "k8s.io/api/apps/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/giantswarm/agentlab/internal/config"
@@ -48,11 +50,13 @@ import (
 //
 // The platform values name the class and the driver (the `workspaces:`
 // block of agent-platform-values.yaml.tmpl) once the chart carries the key
-// (chartCarriesWorkspaces): the chart then renders the CSIDriverConfig that
-// registers the driver with Substrate. Until it does, the lab applies that
-// one object itself after the install (ensureWorkspacesCSIDriverConfig); the
-// lab's copy goes the moment a chart that renders its own is installed.
-// docs/workspaces.md is the human account.
+// (chartCarriesWorkspaces). Taking the key is not registering the driver:
+// whether the chart renders the CSIDriverConfig that registers it with
+// Substrate is read off the component renders the install is about to
+// apply (rendersWorkspacesCSIDriverConfig). While none does, the lab applies
+// that one object itself after the install (ensureWorkspacesCSIDriverConfig);
+// the lab's copy goes before the install of a chart whose render carries
+// its own. docs/workspaces.md is the human account.
 
 const (
 	// workspacesNamespace holds the NFS server and the driver.
@@ -364,16 +368,61 @@ func workspacesCSIDriverConfig() *unstructured.Unstructured {
 	return u
 }
 
+// rendersWorkspacesCSIDriverConfig reports whether the component renders the
+// install is about to apply (keyed by release name, platformImages) carry a
+// CSIDriverConfig of the lab's driver: the chart registers it with Substrate
+// itself. A chart can take the workspaces values and render none from them,
+// so the values schema does not decide it; no renders (the offline render
+// failed) is none, and the lab keeps its own.
+func rendersWorkspacesCSIDriverConfig(renders map[string]string) bool {
+	for _, rendered := range renders {
+		dec := yaml.NewDecoder(strings.NewReader(rendered))
+		for {
+			var doc struct {
+				Kind     string `yaml:"kind"`
+				Metadata struct {
+					Name string `yaml:"name"`
+				} `yaml:"metadata"`
+			}
+			// The end of the render, or a document Helm rendered that the
+			// decoder cannot read, ends this render's scan.
+			if err := dec.Decode(&doc); err != nil {
+				break
+			}
+			if doc.Kind == kindCSIDriverConfig && doc.Metadata.Name == workspacesCSIDriver {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// kindCSIDriverConfig is Substrate's driver registration kind.
+const kindCSIDriverConfig = "CSIDriverConfig"
+
 // ensureWorkspacesCSIDriverConfig applies the lab's CSIDriverConfig after
-// the install, on a chart that does not render one; the CRD comes with the
-// chart's substrate-crds component. A chart that carries the key renders
-// the object itself from the lab's values: nothing to apply.
-func ensureWorkspacesCSIDriverConfig(ctx context.Context, chartCarries bool) error {
-	if chartCarries {
+// the install while the chart renders none (rendersWorkspacesCSIDriverConfig);
+// the CRD comes with the chart's substrate-crds component. A chart that
+// renders one registers the driver from the lab's values: nothing to apply.
+// A Helm-managed object live while the renders carry none is an earlier
+// chart's that helm-controller's upgrade is about to remove: the lab waits
+// for it to go (an apply over it would go with it) and applies its own; one
+// that outlasts the wait stays the chart's. One applied by hand becomes the
+// lab's.
+func ensureWorkspacesCSIDriverConfig(ctx context.Context, chartRenders bool) error {
+	if chartRenders {
 		return nil
 	}
-	if _, err := gvrFor(csiDriverConfigResource); err != nil {
+	gvr, err := gvrFor(csiDriverConfigResource)
+	if err != nil {
 		return fmt.Errorf("the CSIDriverConfig API of Substrate is not served (%v): the agents runtime brings it; is platform.agents on and the substrate-crds component installed?", err)
+	}
+	if obj, err := getObject(ctx, gvr, "", workspacesCSIDriver); err == nil && csiDriverConfigRegistrant(obj) == registrantChart {
+		if !waitChartCSIDriverConfigGone(ctx, gvr, csiDriverConfigHandoverTimeout) {
+			note("CSIDriverConfig %s is the chart's and stayed through %s although the chart renders none: the lab applies none", workspacesCSIDriver, csiDriverConfigHandoverTimeout)
+			return nil
+		}
+		note("the earlier chart's CSIDriverConfig %s is gone with its upgrade", workspacesCSIDriver)
 	}
 	k, err := labKube()
 	if err != nil {
@@ -383,9 +432,72 @@ func ensureWorkspacesCSIDriverConfig(ctx context.Context, chartCarries bool) err
 	if err != nil {
 		return fmt.Errorf("the CSIDriverConfig %s: %w", workspacesCSIDriver, err)
 	}
-	note("%s (the chart carries no workspaces values yet, so the lab registers the driver with Substrate itself: controllerEndpoint %s, tls.serverName %s)",
-		res, workspacesValuesFor(config.Default()).ControllerEndpoint, workspacesControllerServerName())
+	note("%s (the chart renders no CSIDriverConfig for %s, so the lab registers the driver with Substrate itself: controllerEndpoint %s, tls.serverName %s)",
+		res, workspacesCSIDriver, workspacesValuesFor(config.Default()).ControllerEndpoint, workspacesControllerServerName())
 	return nil
+}
+
+// csiDriverConfigHandoverTimeout bounds the wait for an earlier chart's
+// CSIDriverConfig to go: helm-controller's upgrade of the connectivity
+// release, bounded by its action timeout. A variable so tests shorten it.
+var csiDriverConfigHandoverTimeout = fluxActionTimeout
+
+// waitChartCSIDriverConfigGone waits until no Helm-managed CSIDriverConfig
+// of the driver is live; false when one still is after timeout.
+func waitChartCSIDriverConfigGone(ctx context.Context, gvr schema.GroupVersionResource, timeout time.Duration) bool {
+	err := wait.PollUntilContextTimeout(ctx, 2*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
+		obj, err := getObject(ctx, gvr, "", workspacesCSIDriver)
+		if apierrors.IsNotFound(err) {
+			return true, nil
+		}
+		return err == nil && csiDriverConfigRegistrant(obj) != registrantChart, nil
+	})
+	return err == nil
+}
+
+// Who registered the driver with Substrate, as status and the platform
+// summary word it.
+const (
+	registrantLab   = "the lab"
+	registrantChart = "the chart"
+	registrantHand  = "hand"
+)
+
+// csiDriverConfigRegistrant words who manages a live CSIDriverConfig: the
+// lab's label, Helm's (a chart's release), or neither (applied by hand).
+func csiDriverConfigRegistrant(obj *unstructured.Unstructured) string {
+	switch obj.GetLabels()[managedByLabel] {
+	case managedByAgentlabValue:
+		return registrantLab
+	case "Helm":
+		return registrantChart
+	default:
+		return registrantHand
+	}
+}
+
+// readWorkspacesRegistrant reads who registered the lab's driver with
+// Substrate: a registrant word, or "" when no CSIDriverConfig of it exists
+// or the API is not served.
+func readWorkspacesRegistrant(ctx context.Context) string {
+	gvr, err := gvrFor(csiDriverConfigResource)
+	if err != nil {
+		return ""
+	}
+	obj, err := getObject(ctx, gvr, "", workspacesCSIDriver)
+	if err != nil {
+		return ""
+	}
+	return csiDriverConfigRegistrant(obj)
+}
+
+// workspacesRegistration words the driver's registration with Substrate,
+// one line for `agentlab status` and the platform summary alike.
+func workspacesRegistration(registrant string) string {
+	if registrant == "" {
+		return "not registered with Substrate (no CSIDriverConfig)"
+	}
+	return "registered with Substrate (CSIDriverConfig " + workspacesCSIDriver + " by " + registrant + ")"
 }
 
 // removeLabWorkspacesCSIDriverConfig deletes the CSIDriverConfig the lab
@@ -522,7 +634,7 @@ type WorkspacesStatus struct {
 	// StorageClass reports whether the class exists.
 	StorageClass bool `json:"storageClass"`
 	// CSIDriverConfig says who registered the driver with Substrate: "the
-	// lab", "the chart", or "" when nothing did.
+	// lab", "the chart", "hand", or "" when nothing did.
 	CSIDriverConfig string `json:"csiDriverConfig,omitempty"`
 	// SessionAdmission words the rig a Session on a workspace volume is
 	// admitted with (workspacegrant.go): kagent's jwt admission, the
@@ -569,14 +681,7 @@ func readWorkspacesStatus(ctx context.Context) (*WorkspacesStatus, error) {
 		s.NodePlugin = daemonSetStatus(ds)
 	}
 	s.StorageClass = clusterObjectExists(ctx, "storageclasses.storage.k8s.io", workspacesStorageClass)
-	if gvr, err := gvrFor(csiDriverConfigResource); err == nil {
-		if obj, err := getObject(ctx, gvr, "", workspacesCSIDriver); err == nil {
-			s.CSIDriverConfig = "the chart"
-			if obj.GetLabels()[managedByLabel] == managedByAgentlabValue {
-				s.CSIDriverConfig = "the lab"
-			}
-		}
-	}
+	s.CSIDriverConfig = readWorkspacesRegistrant(ctx)
 	s.SessionAdmission = readSessionAdmission(ctx)
 	return s, nil
 }
@@ -606,29 +711,24 @@ func (s *WorkspacesStatus) String() string {
 	if s.StorageClass {
 		class = "StorageClass " + workspacesStorageClass
 	}
-	registered := "not registered with Substrate (no CSIDriverConfig)"
-	if s.CSIDriverConfig != "" {
-		registered = "CSIDriverConfig " + workspacesCSIDriver + " by " + s.CSIDriverConfig
-	}
 	line := fmt.Sprintf("NFS server %s on %s; CSI controller %s %s with its mTLS proxy; node plugin %s; %s; %s",
-		s.NFSServer, orNone(s.Node), workspacesCSIDriver, s.Controller, s.NodePlugin, class, registered)
+		s.NFSServer, orNone(s.Node), workspacesCSIDriver, s.Controller, s.NodePlugin, class, workspacesRegistration(s.CSIDriverConfig))
 	if s.SessionAdmission != "" {
 		line += "; " + s.SessionAdmission
 	}
 	return line
 }
 
-// workspacesHint is the platform-up summary for the workspaces switch.
-func workspacesHint(cfg *config.Config, chartCarries bool) string {
+// workspacesHint is the platform-up summary for the workspaces switch. The
+// registration is the live one (readWorkspacesRegistrant), worded as
+// `agentlab status` words it; chartCarries is whether the chart takes the
+// workspaces values, which bring the workspace-manager's providers.
+func workspacesHint(cfg *config.Config, chartCarries bool, registrant string) string {
 	if !cfg.WorkspacesEnabled() {
 		return "  Workspace storage is off (platform.workspaces in agentlab.yaml; `agentlab configure --workspaces` turns it on)."
 	}
-	registered := "registered with Substrate by the lab's CSIDriverConfig (the chart carries no workspaces values yet)"
-	if chartCarries {
-		registered = "registered with Substrate by the chart's CSIDriverConfig (the lab's workspaces values)"
-	}
 	hint := fmt.Sprintf("  Workspace storage: an NFS server on %s and the NFS CSI driver behind its mTLS proxy, %s;\n"+
-		"  the read-write-many StorageClass %s. Proof: `agentlab workspaces-test --storage-only`.", WorkspacesNode(cfg), registered, workspacesStorageClass)
+		"  the read-write-many StorageClass %s. Proof: `agentlab workspaces-test --storage-only`.", WorkspacesNode(cfg), workspacesRegistration(registrant), workspacesStorageClass)
 	if rig := workspaceAdmissionValuesFor(cfg, chartCarries); rig != nil {
 		hint += "\n" + rig.hint()
 	}

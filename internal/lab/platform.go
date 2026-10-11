@@ -440,15 +440,10 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	// finds its driver; the driver's controller with its mTLS proxy is
 	// waited for after the install, since its certificates come from
 	// Substrate.
-	// A chart that carries the workspaces values registers the driver
-	// itself; the lab's own CSIDriverConfig from an earlier install goes.
+	// Whether the chart registers the driver itself is read off the
+	// component renders below (rendersWorkspacesCSIDriverConfig).
 	workspacesChart := workspacesChartCarries(cfg)
 	if cfg.WorkspacesEnabled() {
-		if workspacesChart {
-			if err := removeLabWorkspacesCSIDriverConfig(ctx); err != nil {
-				return err
-			}
-		}
 		if err := workspacesUp(cfg); err != nil {
 			return err
 		}
@@ -632,6 +627,16 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	if err := preflightWorkerPoolArch(ctx, renders); err != nil {
 		return err
 	}
+	// A chart whose render carries the workspace driver's CSIDriverConfig
+	// registers it with Substrate: the lab's own from an earlier install goes
+	// first, since Helm adopts no object another manager created. One that
+	// takes the workspaces values and renders none leaves the lab's in place.
+	workspacesChartRegisters := cfg.WorkspacesEnabled() && rendersWorkspacesCSIDriverConfig(renders)
+	if workspacesChartRegisters {
+		if err := removeLabWorkspacesCSIDriverConfig(ctx); err != nil {
+			return err
+		}
+	}
 	sideloadPlatformImages(cfg, images)
 	// What only the renders could say goes into the values now, rendered
 	// once more: the dex-localhost sidecar's targets (dexLocalhostTargets —
@@ -794,13 +799,16 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 			return err
 		}
 	}
+	// The summary words the registration as it is live, like status does.
+	var workspacesRegistrant string
 	if cfg.WorkspacesEnabled() {
 		if err := waitWorkspacesProxy(ctx); err != nil {
 			return err
 		}
-		if err := ensureWorkspacesCSIDriverConfig(ctx, workspacesChart); err != nil {
+		if err := ensureWorkspacesCSIDriverConfig(ctx, workspacesChartRegisters); err != nil {
 			return err
 		}
+		workspacesRegistrant = readWorkspacesRegistrant(ctx)
 	}
 	if dev != nil && dev.harness != "" {
 		if err := reportHarnessDevImage(ctx, dev, harnessBefore); err != nil {
@@ -1011,7 +1019,7 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 %s
 %s
 %s
-%s%s`, header, reach, usersBlock(cfg), backstageHint, claudeCodeHint(cfg), agentsHint, modelManagerHint(cfg, backendEndpoints), servingHint(cfg), workspacesHint(cfg, workspacesChart), vmManagerHint(cfg), klausGatewayHint(cfg), obsHint, devImagesHint(cfg, dev), tryItBlock(cfg))
+%s%s`, header, reach, usersBlock(cfg), backstageHint, claudeCodeHint(cfg), agentsHint, modelManagerHint(cfg, backendEndpoints), servingHint(cfg), workspacesHint(cfg, workspacesChart, workspacesRegistrant), vmManagerHint(cfg), klausGatewayHint(cfg), obsHint, devImagesHint(cfg, dev), tryItBlock(cfg))
 	// Everything the platform runs is in the node now — record it so the next
 	// boot side-loads instead of pulling.
 	snapshotPreloadImages()

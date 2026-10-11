@@ -683,20 +683,25 @@ entry.
 ### U30. `workspaces.go`: the lab applies Substrate's `CSIDriverConfig` itself — BLOCKED UPSTREAM
 Agent Substrate registers the CSI driver that mounts a workspace's volume
 into an actor through its `CSIDriverConfig` (the controller endpoint, the node socket
-override, the mTLS settings), which the agent-platform chart is to render
-from a `workspaces:` values block. The chart release the lab pins carries no
-such block yet — its values schema refuses unknown root keys, so the lab
-cannot pass one — and the actors' mounts need the registration. **Fix:**
-`ensureWorkspacesCSIDriverConfig` applies the lab's own `CSIDriverConfig`
-`nfs.csi.k8s.io` (labelled `app.kubernetes.io/managed-by=agentlab`)
-after the platform install when the chart carries no `workspaces` key
-(`chartCarriesWorkspaces` probes the chart's schema and values once per
-chart); the values template renders the `workspaces:` block only for a chart
-that takes it, and the lab's object is removed on the first install of such
-a chart (`removeLabWorkspacesCSIDriverConfig`). Unblocks when the chart
-renders the `CSIDriverConfig` from its workspaces values: the probe turns
-true, the block carries the lab's names, and the lab-applied object and this
-entry go.
+override, the mTLS settings), which the agent-platform chart renders from
+its `workspaces.substrate.csiDriver` values — agent-platform 4.127.0 and
+newer. Releases before take no `workspaces` block, and 4.125.0 to
+4.127.0-rc.2 take the block and render nothing from it, so taking the key is
+not registering the driver. **Fix:** `ensureWorkspacesCSIDriverConfig`
+applies the lab's own `CSIDriverConfig` `nfs.csi.k8s.io` (labelled
+`app.kubernetes.io/managed-by=agentlab`) after the platform install whenever
+the component renders the install applies carry none
+(`rendersWorkspacesCSIDriverConfig` reads them, the render that failed
+counts as none); a Helm-managed object still live is an earlier chart's
+that helm-controller's upgrade removes, waited out before the lab applies
+its own (one that outlasts the wait stays the chart's), and one applied by
+hand becomes the lab's. Before the install of a chart
+whose render carries it, the lab's object is removed
+(`removeLabWorkspacesCSIDriverConfig`: Helm adopts no object another
+manager created). The values template renders the `workspaces:` block for
+every chart that takes it (`chartCarriesWorkspaces`). Unblocks when the
+oldest chart the lab supports renders the `CSIDriverConfig`: the
+lab-applied object and this entry go.
 
 ## Accepted lab trade-offs (not hacks to fix)
 
