@@ -202,11 +202,8 @@ func (h *skillHost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, h.commit)
 		return
 	case skillHostRequestsPath:
-		h.mu.Lock()
-		requests := slices.Clone(h.requests)
-		h.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(requests)
+		_ = json.NewEncoder(w).Encode(h.recorded())
 		return
 	}
 	h.record(r)
@@ -249,6 +246,14 @@ func (h *skillHost) record(r *http.Request) {
 	entry.Seq = len(h.requests) + 1
 	h.requests = append(h.requests, entry)
 	h.mu.Unlock()
+}
+
+// recorded is a copy of the requests kept so far, read under the lock the
+// handlers record under.
+func (h *skillHost) recorded() []skillHostRequest {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return slices.Clone(h.requests)
 }
 
 func (h *skillHost) authorizationKind(values []string) string {

@@ -58,9 +58,10 @@ const (
 	// kept, so a placeholder Secret the commit writes (the OpenAI-provider
 	// wirings) is encrypted as on a real repository and decrypted nowhere.
 	gitopsAgeRecipient = "age13z6rzrnc2xd009m6l94jz2q734dlx8r33p0jj0rpzxl20ndhpvkqe4q4ax"
-	// gitopsFluxLabel is the Flux provenance the gitops_owned fixture puts
-	// on the wired ModelConfig: what a Kustomization stamps on every object
-	// it applies.
+	// gitopsFluxName/Namespace are the Flux provenance a Kustomization stamps
+	// on every object it applies; gitopsFluxFixture is the Kustomization the
+	// gitops_owned fixture applies in the platform namespace, its inventory
+	// listing the wired ModelConfig (gitopsfixture.go).
 	gitopsFluxName      = "kustomize.toolkit.fluxcd.io/name"
 	gitopsFluxNamespace = "kustomize.toolkit.fluxcd.io/namespace"
 	gitopsFluxFixture   = "agentlab-gitops-fixture"
@@ -196,26 +197,40 @@ func dryRunSummary(answer map[string]any) string {
 	return "plan {" + strings.Join(keys, ", ") + "}"
 }
 
-// proveGitOpsOwned puts Flux provenance on the wired ModelConfig — the
-// labels a Kustomization stamps, next to model-manager's own — and asserts
-// wire, unwire and delete (unwire=true) refuse with gitops_owned, the object
-// and the model untouched; the labels go again on every exit path.
+// proveGitOpsOwned makes the wired ModelConfig one Flux applies from git —
+// the Kustomization agentlab-gitops-fixture with the ModelConfig in its
+// inventory (applyGitOpsFixture), and on the ModelConfig the labels that
+// Kustomization stamps, next to model-manager's own — and asserts wire,
+// unwire and delete (unwire=true) refuse with gitops_owned, the object and
+// the model untouched; the labels and the Kustomization go again on every
+// exit path.
 func proveGitOpsOwned(api *modelManagerTools, backendName, model, mcName string) error {
-	step("A ModelConfig Flux applies from git is never written live: %s labelled %s=%s, then wire, unwire and delete", mcName, gitopsFluxName, gitopsFluxFixture)
+	step("A ModelConfig Flux applies from git is never written live: the Kustomization %s/%s lists %s in its inventory, %s labelled %s=%s, then wire, unwire and delete",
+		platformNamespace, gitopsFluxFixture, mcName, mcName, gitopsFluxName, gitopsFluxFixture)
 	gvr, err := modelConfigGVR()
 	if err != nil {
 		return err
 	}
-	label := func(value any) error {
-		v, _ := json.Marshal(value)
-		body := fmt.Appendf(nil, `{"metadata":{"labels":{%q:%s,%q:%s}}}`, gitopsFluxName, v, gitopsFluxNamespace, v)
+	wired, err := readModelConfig(mcName)
+	if err != nil {
+		return err
+	}
+	removeFixture, err := applyGitOpsFixture(wired)
+	if err != nil {
+		return err
+	}
+	defer removeFixture()
+	label := func(name, namespace any) error {
+		n, _ := json.Marshal(name)
+		ns, _ := json.Marshal(namespace)
+		body := fmt.Appendf(nil, `{"metadata":{"labels":{%q:%s,%q:%s}}}`, gitopsFluxName, n, gitopsFluxNamespace, ns)
 		return patchObject(context.Background(), gvr, kagentNamespace, mcName, types.MergePatchType, body)
 	}
-	if err := label(gitopsFluxFixture); err != nil {
+	if err := label(gitopsFluxFixture, platformNamespace); err != nil {
 		return err
 	}
 	defer func() {
-		if err := label(nil); err != nil {
+		if err := label(nil, nil); err != nil {
 			note("cleanup: removing the Flux labels from ModelConfig %s: %v", mcName, err)
 		}
 	}()

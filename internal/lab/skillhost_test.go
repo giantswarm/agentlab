@@ -41,7 +41,7 @@ func TestSkillHostRequiresTheCredential(t *testing.T) {
 		{name: "credential", header: "Basic " + credential, kind: authSecret, fetches: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			before := len(h.requests)
+			before := len(h.recorded())
 			dir := t.TempDir()
 			gitIn(t, dir, "init", "--quiet")
 			args := []string{"fetch", "--quiet", "--depth", "1", source, h.commit}
@@ -59,7 +59,7 @@ func TestSkillHostRequiresTheCredential(t *testing.T) {
 					t.Fatalf("the fetched SKILL.md: %v %q", err, skill)
 				}
 			}
-			recorded := h.requests[before:]
+			recorded := h.recorded()[before:]
 			if len(recorded) == 0 {
 				t.Fatal("nothing recorded")
 			}
