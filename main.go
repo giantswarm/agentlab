@@ -125,6 +125,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		inGroup(groupTesting, vmManagerTestCmd()),
 		inGroup(groupTesting, workspacesTestCmd()),
 		inGroup(groupTesting, skillsTestCmd()),
+		inGroup(groupTesting, substrateStepTestCmd()),
 		inGroup(groupTesting, a2aTestCmd()),
 		inGroup(groupTesting, klausGatewayTestCmd()),
 		inGroup(groupTesting, decisionsTestCmd()),
@@ -1481,6 +1482,34 @@ func skillsTestCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.Fixture.CredentialSecret, "skill-secret", "", "a private repository: the Secret in the kagent namespace whose `token` key holds the base64 of \"<user>:<token>\" for the repository's host (git's Basic credential; x-access-token as the user for a GitHub token), referenced as skills[].source.git.credentialRef; the Secret is yours to create, the proof never reads it")
 	cmd.Flags().BoolVar(&opts.SkillHost, "skill-fixture", false, "boot the skill from the lab's own private git host instead (no GitHub token): a Secret the proof creates, and the host's record of every request — `golden fetch: credential sent` when the golden boot's fetch carried it, `session request: no credential` when the Session's sandbox reaches the host without it")
 	cmd.Flags().StringVar(&opts.SkillHostBinary, "skill-host-binary", "", "the static Linux agentlab the skill host fixture's container runs on the kind network (default: this binary)")
+	return cmd
+}
+
+func substrateStepTestCmd() *cobra.Command {
+	var opts lab.SubstrateStepOptions
+	cmd := &cobra.Command{
+		Use:   "substrate-step-test [email]",
+		Short: "Headless Substrate step proof: an agent on the chart's Substrate with a conversation of three turns and a known file on its durable volume, suspended -> the substrate components pinned to --to and the platform upgraded in place under it -> the conversation resumes with its earlier turns and the file, and a new conversation starts from a golden taken again on the new release; the Substrate versions before and after and PASS or FAIL with the cause per step, then the lab back on the chart's Substrate",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadProofLab()
+			if err != nil {
+				return err
+			}
+			email := cfg.AdminUser().Email
+			if len(args) == 1 {
+				email = args[0]
+			}
+			return lab.SubstrateStepTest(cfg, email, opts)
+		},
+	}
+	cmd.Flags().StringVar(&opts.To, "to", "", "the Substrate release to step to, exact (1.8.0, 1.8.1-rc.4); the lab must run an older release before it")
+	cmd.Flags().StringToStringVar(&opts.DevImages, "step-dev-image", nil, "a platform.devImages entry for the step alone, <target>=<image> (repeatable), e.g. "+config.DevImageSubstrateAPI+"=<a local build of a change no release carries yet>")
+	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the agent runs on (default: default-model-config, the Anthropic one the lab renders)")
+	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", lab.SubstrateStepReadyTimeout, "how long the agent's golden boot before the step may take")
+	cmd.Flags().DurationVar(&opts.RetakeTimeout, "retake-timeout", lab.SubstrateStepRetakeTimeout, "how long the golden's re-take on the new release may take before the new conversation step fails")
+	cmd.Flags().BoolVar(&opts.Stay, "stay", false, "leave the lab on the --to release instead of returning it to the chart's Substrate")
+	_ = cmd.MarkFlagRequired("to")
 	return cmd
 }
 

@@ -69,3 +69,18 @@ func TestDevImagesKnowWorkspaceManager(t *testing.T) {
 		t.Fatalf("workspace-manager must be a devImages target with the workspaces on: %v", err)
 	}
 }
+
+// TestDevImagesKnowSubstrateAPI: Substrate's API server is a devImages
+// target while the agents, which bring Substrate, are on, and refused
+// without them.
+func TestDevImagesKnowSubstrateAPI(t *testing.T) {
+	cfg := Default()
+	cfg.Platform.DevImages = map[string]string{DevImageSubstrateAPI: "ateapi:dev"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("ate-api-server must be a devImages target with the agents on: %v", err)
+	}
+	cfg.Platform.Agents = false
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "platform.agents") {
+		t.Errorf("without the agents the target must be refused naming the key, got %v", err)
+	}
+}

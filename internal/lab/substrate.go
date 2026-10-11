@@ -2,10 +2,12 @@ package lab
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -286,6 +288,33 @@ func (s substrateImages) String() string {
 	return fmt.Sprintf("Substrate %s: atelet %s, WorkerPool %s workers %s", s.release, s.atelet, s.pool, s.worker)
 }
 
+// errSubstrateSkew is proveSubstrateLine's refusal of two halves on
+// different releases.
+var errSubstrateSkew = errors.New("the two halves of Agent Substrate are different releases")
+
+// substrateLineSettle bounds how long a platform run waits for the two
+// halves to converge after an install: a changed Substrate range reaches the
+// WorkerPool's worker image with the kagent release and the atelet one Flux
+// reconcile of the substrate component later, while both HelmReleases read
+// Ready.
+const substrateLineSettle = 5 * time.Minute
+
+// settleSubstrateLine is proveSubstrateLine after an install: a skew is
+// read again until it converges or substrateLineSettle passes, then refused
+// as it stands; any other failure is returned at once.
+func settleSubstrateLine(ctx context.Context, remedy string) ([]substrateImages, error) {
+	var images []substrateImages
+	var err error
+	settled := waitFor(int(substrateLineSettle/pollInterval), pollInterval, func() bool {
+		images, err = proveSubstrateLine(ctx, remedy)
+		return !errors.Is(err, errSubstrateSkew)
+	})
+	if !settled {
+		note("the atelet and the workers stayed on different Substrate releases for %s after the install", substrateLineSettle)
+	}
+	return images, err
+}
+
 // proveSubstrateLine reads the atelet's image off its DaemonSet and the
 // worker image off every WorkerPool in the kagent namespace and refuses a
 // lab whose halves are different Substrate releases, naming both images and
@@ -331,9 +360,9 @@ func proveSubstrateLine(ctx context.Context, remedy string) ([]substrateImages, 
 			return nil, fmt.Errorf("WorkerPool %s: %w", name, err)
 		}
 		if release != ateletRelease {
-			return nil, fmt.Errorf("the two halves of Agent Substrate are different releases: atelet %s (Substrate %s, the chart's components.substrate) and the workers of WorkerPool %s %s (Substrate %s, the worker image the kagent chart stamps) — "+
+			return nil, fmt.Errorf("%w: atelet %s (Substrate %s, the chart's components.substrate) and the workers of WorkerPool %s %s (Substrate %s, the worker image the kagent chart stamps) — "+
 				"a worker from another release than its atelet looks for actor bundles the atelet does not write, so no golden actor boots and every AgentTemplate stays ActorTemplatePending (`kubectl -n %s logs ds/%s` has the failing compiles). %s",
-				atelet, ateletRelease, name, worker, release, substrateNamespace, ateletDaemonSet, remedy)
+				errSubstrateSkew, atelet, ateletRelease, name, worker, release, substrateNamespace, ateletDaemonSet, remedy)
 		}
 		images = append(images, substrateImages{atelet: atelet, pool: name, worker: worker, release: release})
 	}

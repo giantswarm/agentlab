@@ -795,7 +795,7 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	// first agents proof.
 	var substrate []substrateImages
 	if roster.shipsSubstrate() {
-		if substrate, err = proveSubstrateLine(ctx, substrateSkewRemedy(cfg)); err != nil {
+		if substrate, err = settleSubstrateLine(ctx, substrateSkewRemedy(cfg)); err != nil {
 			return err
 		}
 	}
