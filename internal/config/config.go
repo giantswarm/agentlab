@@ -138,7 +138,7 @@ func ConnectivityChartDir(chartPath string) string {
 // for the Deployments the lab's dev loops build from a checkout — the
 // agentgateway component's two Deployments under their own names — plus
 // DevImageHarness for the platform Harness's runtime image.
-var DevImageComponents = []string{"muster", "backstage", "kagent", "mcp-kubernetes", "model-manager", "agent-manager", "vm-manager", DevImageKlausGateway, DevImageClusterManager, DevImageAgentgateway, DevImageAgentgatewayController, DevImageHarness}
+var DevImageComponents = []string{"muster", "backstage", "kagent", "mcp-kubernetes", "model-manager", "agent-manager", "vm-manager", DevImageKlausGateway, DevImageClusterManager, DevImageWorkspaceManager, DevImageAgentgateway, DevImageAgentgatewayController, DevImageHarness}
 
 // DevImageKlausGateway is the devImages key of the klaus-gateway component
 // (platform.klausGateway): the Deployment `klaus-gateway`, container
@@ -152,6 +152,12 @@ const DevImageKlausGateway = "klaus-gateway"
 // the lab's own values for it (the `kubernetes` audience its MCP server
 // requires of the forwarded token).
 const DevImageClusterManager = "cluster-manager"
+
+// DevImageWorkspaceManager is the devImages key of the workspace-manager
+// component: the Deployment `workspace-manager`, container
+// `workspace-manager`. The component follows platform.workspaces.enabled,
+// so the target is meaningful only while the workspaces are on.
+const DevImageWorkspaceManager = "workspace-manager"
 
 // DevImageAgentgateway is the devImages key of the agentgateway data plane:
 // the Deployment `agentgateway`, container `agentgateway` — the proxy the
@@ -1577,6 +1583,9 @@ func (c *Config) Validate() error {
 	}
 	if _, ok := c.Platform.DevImages[DevImageKlausGateway]; ok && !c.Platform.KlausGateway.Enabled {
 		return fmt.Errorf("platform.devImages.%s: the component is off (platform.klausGateway.enabled: true, or `agentlab configure --klaus-gateway`) — the override would swap the image of nothing", DevImageKlausGateway)
+	}
+	if _, ok := c.Platform.DevImages[DevImageWorkspaceManager]; ok && !c.Platform.Workspaces.Enabled {
+		return fmt.Errorf("platform.devImages.%s: the component is off (platform.workspaces.enabled: true, or `agentlab configure --workspaces`) — the override would swap the image of nothing", DevImageWorkspaceManager)
 	}
 	// The agentgateway controller runs its proxies from registry, repository
 	// and tag: a digest has no field to travel in.

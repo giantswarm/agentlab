@@ -54,3 +54,18 @@ func TestDevImagesKnowClusterManagerAndAgentgateway(t *testing.T) {
 		t.Errorf("the controller is a Deployment target and takes a digest: %v", err)
 	}
 }
+
+// TestDevImagesKnowWorkspaceManager: the dev-image loop swaps the
+// workspace-manager build in while the workspaces are on — the component's
+// one switch — and refuses the target while they are off.
+func TestDevImagesKnowWorkspaceManager(t *testing.T) {
+	cfg := Default()
+	cfg.Platform.DevImages = map[string]string{DevImageWorkspaceManager: "workspace-manager:dev"}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "platform.workspaces.enabled") {
+		t.Fatalf("without the workspaces the target must be refused naming the key, got %v", err)
+	}
+	cfg.Platform.Workspaces.Enabled = true
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("workspace-manager must be a devImages target with the workspaces on: %v", err)
+	}
+}

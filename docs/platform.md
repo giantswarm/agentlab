@@ -271,7 +271,7 @@ the Deployments the lab can swap — `muster`, `backstage`, `kagent` (the
 controller), `mcp-kubernetes`, `model-manager`, `agent-manager`,
 `vm-manager` (with `platform.vmManager`), `klaus-gateway` (with
 `platform.klausGateway`), `cluster-manager` (which the entry turns on, see
-below), the agentgateway component's two Deployments under their own names,
+below), `workspace-manager` (with `platform.workspaces`), the agentgateway component's two Deployments under their own names,
 `agentgateway` (the data-plane proxy) and `agentgateway-controller` — and
 `harness`, the platform Harness's runtime image (the Go ADK every agent runs
 on under kagent API v2):
@@ -284,6 +284,7 @@ platform:
     kagent: kagent-controller:dev-7e8f9a      # the line's controller, built from go/ of giantswarm/kagent-upstream
     harness: golang-adk:dev-7e8f9a            # the Go ADK, same checkout, BUILD_PACKAGE=adk/cmd/main.go
     cluster-manager: cluster-manager:dev-3e4f  # turns the component on, with the lab's audience for it
+    workspace-manager: workspace-manager:dev-5a6b  # with platform.workspaces on
     agentgateway: agentgateway:dev-7c8d       # the proxy, built from giantswarm/agentgateway-upstream
     agentgateway-controller: agentgateway-controller:dev-7c8d
 ```
