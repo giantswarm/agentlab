@@ -498,17 +498,16 @@ func agentAteTemplates(ctx context.Context, api *ateAPI, agent string) ([]*ateap
 	return templates, fmt.Errorf("ListActorTemplates: still paging after %d pages", substrateMaxPages)
 }
 
-// substrateStepCleanup removes the proof's agent through kagent and, when
-// kagent leaves something in Substrate — an actor that crashed on a restore
-// and its template, which kagent's revision garbage collector keeps —
-// deletes that in ate-api itself and reads the footprint again. Returns what
-// is still there, worded.
+// substrateStepCleanup removes the proof's agent through kagent, then
+// whatever of it ate-api still holds, deleted there: kagent's view of
+// Substrate can read empty while ate-api keeps the agent's ActorTemplate (and
+// an actor that crashed on a restore), and the next run's agent, the same
+// spec, compiles to the same template name — on the release before a step,
+// with a golden in the newer layout. Returns what is still there, worded.
 func substrateStepCleanup(api *kagentAPI) []string {
-	left := proofAgentsCleanup(api, substrateStepAgent)
-	if len(left) == 0 {
-		return nil
-	}
-	left = removeAteLeftovers(substrateStepAgent)
+	// What kagent leaves is read again below, after the sweep.
+	_ = proofAgentsCleanup(api, substrateStepAgent)
+	left := removeAteLeftovers(substrateStepAgent)
 	if f := skillsFootprint(api, substrateStepAgent); !f.empty() {
 		left = append(left, f.lines()...)
 	}
