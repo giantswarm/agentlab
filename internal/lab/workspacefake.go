@@ -41,7 +41,26 @@ const (
 	// repositories (the image's /tmp: the container runs as the caller).
 	githubFakeCredentialsMount = "/credentials"
 	githubFakeDataDir          = "/tmp/github-fake"
+	// labGitHubWhat names the container in the refusal of a binary it cannot
+	// run: the instance's name, so a reader finds the knob in agentlab.yaml.
+	labGitHubWhat = "the lab's GitHub for the workspace-manager's provider instance " + config.WorkspaceProviderFake
 )
+
+// checkLabGitHubBinary refuses this binary ahead of the first install step
+// when the lab's GitHub is to run it: startFakeContainer reaches the same
+// verdict on the copy labGitHubBinary makes, but only after the storage
+// install, and the minutes before it would be lost to a rebuild. Nothing to
+// judge without the instance.
+func checkLabGitHubBinary(cfg *config.Config) error {
+	if !cfg.WorkspaceFakeProvider() {
+		return nil
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locating this binary for the lab's GitHub container: %w", err)
+	}
+	return linuxStaticBinary(exe, labGitHubWhat, "")
+}
 
 // githubFakeUp runs the lab's GitHub for the provider instance fake: the
 // credentials generated, the container started (a running one replaced: its
@@ -63,7 +82,7 @@ func githubFakeUp(cfg *config.Config) error {
 		return err
 	}
 	c, err := startFakeContainer(cfg, binary, fakeContainerSpec{
-		what:       "the lab's GitHub",
+		what:       labGitHubWhat,
 		suffix:     labGitHubContainerSuffix,
 		command:    githubFakeCommand,
 		healthPath: githubFakeHealthPath,

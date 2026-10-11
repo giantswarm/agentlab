@@ -40,6 +40,11 @@ func Up(cfg *config.Config, offers Offers) error {
 			return err
 		}
 	}
+	// The binary the lab's GitHub container will run (workspacefake.go) is
+	// judged before the cluster boots, not after it when the container starts.
+	if err := checkLabGitHubBinary(cfg); err != nil {
+		return err
+	}
 	// The certificates first: the pre-boot render reads the CA bundle
 	// (trustBundleFile) the platform values carry.
 	if err := GenCerts(cfg.Platform.Domain, false); err != nil {

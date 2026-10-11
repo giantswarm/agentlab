@@ -200,7 +200,7 @@ with Dex doing the logins.
 ## Commands
 
 ```bash
-make build                 # go build -o agentlab .
+make build                 # CGO_ENABLED=0 go build -o agentlab .: a static binary, which the lab's containers need
 make test                  # go test ./...
 make lint                  # golangci-lint as CI's pre-commit runs it (pinned version, .golangci.yaml, test files included)
 go test ./internal/forms/ -run TestMinimalFormDrive -count=1 -v   # single test
