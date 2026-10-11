@@ -5,6 +5,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -267,21 +268,29 @@ func csiDriverConfigObject(managedBy string) *unstructured.Unstructured {
 }
 
 // The lab applies its CSIDriverConfig whenever the chart renders none — a
-// hand-applied object becomes the lab's — and leaves the registration alone
-// when the chart renders one or a Helm-managed object is already there.
+// hand-applied object becomes the lab's, an earlier chart's is waited out
+// while its upgrade removes it — and leaves the registration alone when the
+// chart renders one or a Helm-managed object outlasts the wait.
 func TestEnsureWorkspacesCSIDriverConfig(t *testing.T) {
+	prev := csiDriverConfigHandoverTimeout
+	csiDriverConfigHandoverTimeout = 3 * time.Second
+	t.Cleanup(func() { csiDriverConfigHandoverTimeout = prev })
 	for _, tc := range []struct {
 		name         string
 		live         *unstructured.Unstructured
 		chartRenders bool
-		want         string
+		// helmRemoves deletes the live object during the wait, as
+		// helm-controller's upgrade to a chart that renders none does.
+		helmRemoves bool
+		want        string
 	}{
-		{"chart renders none, nothing live", nil, false, registrantLab},
-		{"chart renders none, applied by hand", csiDriverConfigObject(""), false, registrantLab},
-		{"chart renders none, the lab's from before", csiDriverConfigObject(managedByAgentlabValue), false, registrantLab},
-		{"chart renders none, Helm's live", csiDriverConfigObject("Helm"), false, registrantChart},
-		{"chart renders one", csiDriverConfigObject("Helm"), true, registrantChart},
-		{"chart renders one, not live yet", nil, true, ""},
+		{"chart renders none, nothing live", nil, false, false, registrantLab},
+		{"chart renders none, applied by hand", csiDriverConfigObject(""), false, false, registrantLab},
+		{"chart renders none, the lab's from before", csiDriverConfigObject(managedByAgentlabValue), false, false, registrantLab},
+		{"chart renders none, an earlier chart's removed by its upgrade", csiDriverConfigObject("Helm"), false, true, registrantLab},
+		{"chart renders none, Helm's outlasts the wait", csiDriverConfigObject("Helm"), false, false, registrantChart},
+		{"chart renders one", csiDriverConfigObject("Helm"), true, false, registrantChart},
+		{"chart renders one, not live yet", nil, true, false, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var f *fakeLab
@@ -292,6 +301,12 @@ func TestEnsureWorkspacesCSIDriverConfig(t *testing.T) {
 			}
 			f.mapper.Add(gvkCSIDriverConfig, meta.RESTScopeRoot)
 			ctx := context.Background()
+			if tc.helmRemoves {
+				go func() {
+					time.Sleep(500 * time.Millisecond)
+					_ = f.dyn.Resource(gvrCSIDriverConfig).Delete(ctx, workspacesCSIDriver, metav1.DeleteOptions{})
+				}()
+			}
 			if err := ensureWorkspacesCSIDriverConfig(ctx, tc.chartRenders); err != nil {
 				t.Fatal(err)
 			}

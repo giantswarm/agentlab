@@ -15,6 +15,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/giantswarm/agentlab/internal/config"
@@ -403,8 +404,11 @@ const kindCSIDriverConfig = "CSIDriverConfig"
 // the install while the chart renders none (rendersWorkspacesCSIDriverConfig);
 // the CRD comes with the chart's substrate-crds component. A chart that
 // renders one registers the driver from the lab's values: nothing to apply.
-// A Helm-managed object the renders did not predict is the chart's and stays;
-// one applied by hand becomes the lab's.
+// A Helm-managed object live while the renders carry none is an earlier
+// chart's that helm-controller's upgrade is about to remove: the lab waits
+// for it to go (an apply over it would go with it) and applies its own; one
+// that outlasts the wait stays the chart's. One applied by hand becomes the
+// lab's.
 func ensureWorkspacesCSIDriverConfig(ctx context.Context, chartRenders bool) error {
 	if chartRenders {
 		return nil
@@ -414,8 +418,11 @@ func ensureWorkspacesCSIDriverConfig(ctx context.Context, chartRenders bool) err
 		return fmt.Errorf("the CSIDriverConfig API of Substrate is not served (%v): the agents runtime brings it; is platform.agents on and the substrate-crds component installed?", err)
 	}
 	if obj, err := getObject(ctx, gvr, "", workspacesCSIDriver); err == nil && csiDriverConfigRegistrant(obj) == registrantChart {
-		note("CSIDriverConfig %s is the chart's: the lab applies none", workspacesCSIDriver)
-		return nil
+		if !waitChartCSIDriverConfigGone(ctx, gvr, csiDriverConfigHandoverTimeout) {
+			note("CSIDriverConfig %s is the chart's and stayed through %s although the chart renders none: the lab applies none", workspacesCSIDriver, csiDriverConfigHandoverTimeout)
+			return nil
+		}
+		note("the earlier chart's CSIDriverConfig %s is gone with its upgrade", workspacesCSIDriver)
 	}
 	k, err := labKube()
 	if err != nil {
@@ -428,6 +435,24 @@ func ensureWorkspacesCSIDriverConfig(ctx context.Context, chartRenders bool) err
 	note("%s (the chart renders no CSIDriverConfig for %s, so the lab registers the driver with Substrate itself: controllerEndpoint %s, tls.serverName %s)",
 		res, workspacesCSIDriver, workspacesValuesFor(config.Default()).ControllerEndpoint, workspacesControllerServerName())
 	return nil
+}
+
+// csiDriverConfigHandoverTimeout bounds the wait for an earlier chart's
+// CSIDriverConfig to go: helm-controller's upgrade of the connectivity
+// release, bounded by its action timeout. A variable so tests shorten it.
+var csiDriverConfigHandoverTimeout = fluxActionTimeout
+
+// waitChartCSIDriverConfigGone waits until no Helm-managed CSIDriverConfig
+// of the driver is live; false when one still is after timeout.
+func waitChartCSIDriverConfigGone(ctx context.Context, gvr schema.GroupVersionResource, timeout time.Duration) bool {
+	err := wait.PollUntilContextTimeout(ctx, 2*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
+		obj, err := getObject(ctx, gvr, "", workspacesCSIDriver)
+		if apierrors.IsNotFound(err) {
+			return true, nil
+		}
+		return err == nil && csiDriverConfigRegistrant(obj) != registrantChart, nil
+	})
+	return err == nil
 }
 
 // Who registered the driver with Substrate, as status and the platform

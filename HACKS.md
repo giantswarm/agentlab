@@ -692,8 +692,10 @@ applies the lab's own `CSIDriverConfig` `nfs.csi.k8s.io` (labelled
 `app.kubernetes.io/managed-by=agentlab`) after the platform install whenever
 the component renders the install applies carry none
 (`rendersWorkspacesCSIDriverConfig` reads them, the render that failed
-counts as none); a Helm-managed object already live is the chart's and
-stays, one applied by hand becomes the lab's. Before the install of a chart
+counts as none); a Helm-managed object still live is an earlier chart's
+that helm-controller's upgrade removes, waited out before the lab applies
+its own (one that outlasts the wait stays the chart's), and one applied by
+hand becomes the lab's. Before the install of a chart
 whose render carries it, the lab's object is removed
 (`removeLabWorkspacesCSIDriverConfig`: Helm adopts no object another
 manager created). The values template renders the `workspaces:` block for
