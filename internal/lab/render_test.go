@@ -1202,3 +1202,43 @@ func dropOverlayChecksum(t *testing.T, values map[string]any) {
 	}
 	delete(overlay, "checksum")
 }
+
+// platform.devImages.workspace-manager rides the roster's trailing range:
+// the component follows platform.workspaces (the chart's workspaces.enabled)
+// and the roster names no block for it, so its entry carries the image
+// override and the pull-policy patch on Deployment workspace-manager and no
+// `enabled` the chart would refuse.
+func TestPlatformValuesWorkspaceManagerDevImage(t *testing.T) {
+	cfg := config.Default()
+	cfg.Platform.Workspaces.Enabled = true
+	cfg.Platform.DevImages = map[string]string{workspaceManager: "workspace-manager:dev-5a6b"}
+	postRenderers, err := componentPostRenderers(cfg, defaultDevImageNames(cfg), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := renderTemplate(cfg, platformValuesTemplate, func(d *tmplData) { d.PostRenderers = postRenderers })
+	if err != nil {
+		t.Fatal(err)
+	}
+	var values struct {
+		Components map[string]map[string]any `yaml:"components"`
+	}
+	if err := yaml.Unmarshal(out, &values); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	wm := values.Components[workspaceManager]
+	if _, ok := wm["enabled"]; ok {
+		t.Errorf("components.%s.enabled = %v: the component follows workspaces.enabled, the roster sets none", workspaceManager, wm["enabled"])
+	}
+	prs, _ := wm["postRenderers"].([]any)
+	if len(prs) != 1 {
+		t.Fatalf("components.%s.postRenderers: want the one entry, got %v", workspaceManager, wm)
+	}
+	k := prs[0].(map[string]any)["kustomize"].(map[string]any)
+	if imgs, _ := k["images"].([]any); len(imgs) != 1 || imgs[0].(map[string]any)["name"] != "gsoci.azurecr.io/giantswarm/workspace-manager" || imgs[0].(map[string]any)["newName"] != "localhost/workspace-manager" || imgs[0].(map[string]any)["newTag"] != "dev-5a6b" {
+		t.Errorf("workspace-manager dev image override: %v", k["images"])
+	}
+	if patches, _ := k["patches"].([]any); len(patches) != 1 || !strings.Contains(fmt.Sprint(patches[0]), "name: workspace-manager\n          imagePullPolicy: IfNotPresent") {
+		t.Errorf("workspace-manager: want the pull-policy patch on container workspace-manager, got %v", k["patches"])
+	}
+}

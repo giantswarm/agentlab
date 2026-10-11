@@ -33,7 +33,8 @@ const platformRelease = "agent-platform"
 // steps and the dev-image table. clusterManager is the meta chart's
 // cluster-manager component, which it ships off: the lab turns it on with a
 // dev image (config.DevImageClusterManager), an overlay otherwise, and the
-// sidecar rule finds it on its render either way.
+// sidecar rule finds it on its render either way. workspaceManager is the
+// component platform.workspaces turns on (config.DevImageWorkspaceManager).
 const (
 	componentDex           = "dex"
 	componentMuster        = "muster"
@@ -41,6 +42,7 @@ const (
 	componentKagent        = "kagent"
 	componentMCPKubernetes = "mcp-kubernetes"
 	clusterManager         = config.DevImageClusterManager
+	workspaceManager       = config.DevImageWorkspaceManager
 )
 
 // A Kubernetes object's Ready condition, and a condition's status when it

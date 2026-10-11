@@ -213,6 +213,7 @@ var devImageTargets = map[string]devImageTarget{
 	vmManagerMCPServer:     {deployment: vmManagerMCPServer, container: vmManagerMCPServer, image: "gsoci.azurecr.io/giantswarm/vm-manager"},
 	klausGatewayComponent:  {deployment: klausGatewayComponent, container: klausGatewayComponent, image: "gsoci.azurecr.io/giantswarm/klaus-gateway"},
 	clusterManager:         {deployment: clusterManager, container: clusterManager, image: "gsoci.azurecr.io/giantswarm/cluster-manager"},
+	workspaceManager:       {deployment: workspaceManager, container: workspaceManager, image: "gsoci.azurecr.io/giantswarm/workspace-manager"},
 	// The agentgateway controller is the one Deployment its component's
 	// chart renders; the proxy is the controller's (agentgateway.go).
 	config.DevImageAgentgatewayController: {deployment: config.DevImageAgentgatewayController, container: "controller", image: "gsoci.azurecr.io/giantswarm/agentgateway-upstream/controller", release: agentgatewayComponent},
