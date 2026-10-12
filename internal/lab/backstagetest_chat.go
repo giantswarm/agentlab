@@ -37,6 +37,9 @@ const (
 	kagentSessionsPath      = "/sessions"
 	kagentSessionStatesPath = "/session-states"
 	kagentSessionUsagePath  = "/session-usage"
+	// startSessionTool is agent-manager's tool that starts every session:
+	// the portal has no create route of its own.
+	startSessionTool = "start_session"
 )
 
 // The Session runtime states the controller reports (proto3 JSON enum names)
@@ -348,24 +351,64 @@ func (a portalAgentRef) body() map[string]any {
 	return map[string]any{"agentNamespace": a.Namespace, "agentName": a.Name}
 }
 
-// createSession is POST /kagent/sessions: the person's Session of the
-// agent, titled, keyed by requestId. Returns the status too, so a 409 for a
-// reused requestId with other parameters is judged by the caller.
-func (ps *portalSession) createSession(agent portalAgentRef, name, requestID string) (int, *portalInstance, []byte, error) {
-	body := agent.body()
-	body[nameKey] = name
-	body["requestId"] = requestID
+// startSession starts the person's Session of the agent the way the portal
+// does: agent-manager's start_session through the portal's muster proxy
+// (POST /api/muster/call), titled and keyed by requestId. agent-manager
+// creates the Session and sends message as its first turn; the answer names
+// the session and the task of that turn, which keeps running.
+func (ps *portalSession) startSession(agent portalAgentRef, name, requestID, message string) (*portalInstance, string, error) {
 	var out struct {
 		Session *portalInstance `json:"session"`
+		Turn    struct {
+			Task *struct {
+				ID string `json:"id"`
+			} `json:"task"`
+			StatusUpdate *struct {
+				TaskID string `json:"taskId"`
+			} `json:"statusUpdate"`
+		} `json:"turn"`
 	}
-	status, raw, err := ps.kagentJSON(http.MethodPost, kagentSessionsPath, body, &out)
-	if err != nil || status != http.StatusCreated {
-		return status, nil, raw, err
+	args := map[string]any{
+		namespaceKey:  agent.Namespace,
+		nameKey:       agent.Name,
+		"message":     message,
+		"requestId":   requestID,
+		"sessionName": name,
+	}
+	if err := portalToolCall(ps, startSessionTool, args, &out); err != nil {
+		return nil, "", err
 	}
 	if out.Session == nil || out.Session.ID == "" {
-		return status, nil, raw, fmt.Errorf("POST %s answered %d without a session.id: %.300s", kagentSessionsPath, status, raw)
+		return nil, "", fmt.Errorf("%s%s answered without a session.id", agentManagerToolPrefix, startSessionTool)
 	}
-	return status, out.Session, raw, nil
+	taskID := ""
+	switch {
+	case out.Turn.Task != nil:
+		taskID = out.Turn.Task.ID
+	case out.Turn.StatusUpdate != nil:
+		taskID = out.Turn.StatusUpdate.TaskID
+	}
+	if taskID == "" {
+		return nil, "", fmt.Errorf("%s%s started session %s without naming the task of its first turn", agentManagerToolPrefix, startSessionTool, out.Session.ID)
+	}
+	return out.Session, taskID, nil
+}
+
+// agentManagerStarted finds agent-manager's "session started" log line for
+// the session since the start began, the call's evidence on the server.
+func agentManagerStarted(sessionID string, since time.Duration) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
+	defer cancel()
+	logs, err := podLogs(ctx, platformNamespace, "deploy/"+agentManagerMCPServer, agentManagerMCPServer, since+5*time.Second)
+	if err != nil {
+		return "", fmt.Errorf("reading agent-manager's log: %w", err)
+	}
+	for _, line := range strings.Split(logs, "\n") {
+		if strings.Contains(line, "session started") && strings.Contains(line, sessionID) {
+			return strings.TrimSpace(line), nil
+		}
+	}
+	return "", fmt.Errorf("agent-manager logged no \"session started\" for session %s — the session was not started through start_session", sessionID)
 }
 
 // listSessions is GET /kagent/sessions: the caller's instances.
@@ -586,11 +629,11 @@ func codeword() string {
 
 // proveChat drives the Sessions pages for the primary user on the agent, and
 // the boundary for the others: the installation is offered, the identity
-// probe names the person, a session is created on the first message with a
-// requestId (a repeat answers the same instance), the turn streams and the
-// agent's tool call is attributed to the person by muster, the instance
-// suspends after the turn and the next message resumes the conversation with
-// its context, rename and the tasks/states/usage reads work, another user
+// probe names the person, a session is started through agent-manager's
+// start_session with its first message (agent-manager logs the start), that
+// turn completes and the agent's tool call is attributed to the person by
+// muster, the instance suspends after the turn and the next message, streamed,
+// resumes the conversation with its context, rename and the tasks/states/usage reads work, another user
 // sees none of it, and the delete leaves nothing. Returns the verdict lines.
 func proveChat(primary *portalSession, others []*portalSession, agent portalAgentRef) ([]string, error) {
 	var verdicts []string
@@ -619,14 +662,13 @@ func proveChat(primary *portalSession, others []*portalSession, agent portalAgen
 	}
 	note("installation %s reachable=%v; %s resolves to %s", platformRelease, installations.Installations[idx].Reachable, kagentMePath, email)
 
-	step("A session on %s/%s is created on the first message with a requestId — the repeat answers the same instance", agent.Namespace, agent.Name)
-	requestID := uuid.NewString()
-	status, instance, raw, err := primary.createSession(agent, portalSessionName, requestID)
+	word := codeword()
+	firstMessage := fmt.Sprintf("The codeword of this conversation is %s. %s", word, portalToolPrompt)
+	step("A session on %s/%s is started through %s%s with the first message, and its first turn's tool call reaches muster as %s", agent.Namespace, agent.Name, agentManagerToolPrefix, startSessionTool, email)
+	started := time.Now()
+	instance, taskID, err := primary.startSession(agent, portalSessionName, uuid.NewString(), firstMessage)
 	if err != nil {
 		return nil, err
-	}
-	if status != http.StatusCreated {
-		return nil, fmt.Errorf("POST %s answered %d: %.300s", kagentSessionsPath, status, raw)
 	}
 	sessionID := instance.ID
 	defer func() {
@@ -642,43 +684,41 @@ func proveChat(primary *portalSession, others []*portalSession, agent portalAgen
 	if instance.Agent.Name != agent.Name || instance.Agent.Namespace != agent.Namespace {
 		return nil, fmt.Errorf("the instance binds %s/%s, not %s/%s", instance.Agent.Namespace, instance.Agent.Name, agent.Namespace, agent.Name)
 	}
-	status, repeat, raw, err := primary.createSession(agent, portalSessionName, requestID)
+	logLine, err := agentManagerStarted(sessionID, time.Since(started))
 	if err != nil {
 		return nil, err
 	}
-	if status != http.StatusCreated || repeat.ID != sessionID {
-		return nil, fmt.Errorf("the repeat with requestId %s answered %d with instance %q, wanted the same %s (idempotent create): %.200s", requestID, status, repeat.ID, sessionID, raw)
+	turn1, err := primary.waitTaskSettled(sessionID, taskID, portalTurnTimeout)
+	if err != nil {
+		return nil, err
+	}
+	reply := taskReplyText(turn1)
+	if turn1.Status.State != taskStateCompleted {
+		note("the first turn ended %s (%s) — one retry over the stream, a cold worker's ResumeActor deadline is not retried by Substrate", turn1.Status.State, excerpt(reply, 200))
+		retried, err := primary.streamTurn(sessionID, agent, firstMessage, nil)
+		if err != nil {
+			return nil, err
+		}
+		if retried.finalState() != taskStateCompleted {
+			return nil, fmt.Errorf("turn 1 ended %q after %s (error %q): %s", retried.finalState(), retried.frameKinds(), retried.Error, excerpt(retried.reply(), 200))
+		}
+		reply = retried.reply()
+	}
+	if reply == "" {
+		return nil, fmt.Errorf("turn 1 (task %s) completed without a reply text", turn1.ID)
+	}
+	if err := musterAttributedTurn(email, time.Since(started)); err != nil {
+		return nil, err
 	}
 	mine, err := primary.listSessions()
 	if err != nil {
 		return nil, err
 	}
 	if !slices.ContainsFunc(mine, func(i portalInstance) bool { return i.ID == sessionID }) {
-		return nil, fmt.Errorf("GET %s for %s does not list the session %s just created", kagentSessionsPath, email, sessionID)
+		return nil, fmt.Errorf("GET %s for %s does not list the session %s just started", kagentSessionsPath, email, sessionID)
 	}
-	note("session %s (creator %s, state %s, title %q); the repeat answered the same id; listed among %d of %s's", sessionID, instance.Creator, instance.State, instance.Name, len(mine), email)
-	verdicts = append(verdicts, fmt.Sprintf("PASS: POST %s creates the person's Session (%s, creator %s) and answers the same instance for the same requestId", kagentSessionsPath, sessionID, email))
-
-	word := codeword()
-	step("Turn 1 streams (SSE) and the agent's tool call reaches muster as %s", email)
-	turn1, err := primary.streamTurn(sessionID, agent, fmt.Sprintf("The codeword of this conversation is %s. %s", word, portalToolPrompt), nil)
-	if err != nil {
-		note("the first turn failed (%s) — one retry, a cold worker's ResumeActor deadline is not retried by Substrate", excerpt(err.Error(), 200))
-		if turn1, err = primary.streamTurn(sessionID, agent, fmt.Sprintf("The codeword of this conversation is %s. %s", word, portalToolPrompt), nil); err != nil {
-			return nil, err
-		}
-	}
-	if turn1.finalState() != taskStateCompleted {
-		return nil, fmt.Errorf("turn 1 ended %q after %s (error %q): %s", turn1.finalState(), turn1.frameKinds(), turn1.Error, excerpt(turn1.reply(), 200))
-	}
-	if turn1.reply() == "" {
-		return nil, fmt.Errorf("turn 1 completed without a reply text after %s", turn1.frameKinds())
-	}
-	if err := musterAttributedTurn(email, turn1.elapsed); err != nil {
-		return nil, err
-	}
-	note("task %s: %s, %s; reply %q; muster: %s for %s", turn1.TaskID, turn1.frameKinds(), turn1.elapsed.Round(time.Second), excerpt(turn1.reply(), 80), musterTokenAcceptedLog, email)
-	verdicts = append(verdicts, fmt.Sprintf("PASS: the turn streams through POST %s/:id/messages/stream (%s) and muster attributes the agent's tool call to %s (%s)", kagentSessionsPath, turn1.frameKinds(), email, musterTokenAcceptedLog))
+	note("session %s (creator %s, title %q); task %s %s, reply %q; agent-manager: %s; muster: %s for %s; listed among %d of %s's", sessionID, instance.Creator, instance.Name, turn1.ID, turn1.Status.State, excerpt(reply, 80), excerpt(logLine, 300), musterTokenAcceptedLog, email, len(mine), email)
+	verdicts = append(verdicts, fmt.Sprintf("PASS: POST /api/muster/call %s%s starts the person's Session (%s, creator %s) with its first message, agent-manager logs \"session started\" for it, the turn completes and muster attributes the agent's tool call to %s (%s)", agentManagerToolPrefix, startSessionTool, sessionID, email, email, musterTokenAcceptedLog))
 
 	// The gateway gives the worker back at the end of every turn — the
 	// runtime is quiesced into a snapshot — while the instance's logical
@@ -779,12 +819,12 @@ func proveChat(primary *portalSession, others []*portalSession, agent portalAgen
 func proveHITLAndStop(primary *portalSession, agent portalAgentRef) ([]string, error) {
 	var verdicts []string
 	step("HITL on %s: a session, a tool prompt that pauses on approval, the answer through …/answer", agent.Name)
-	status, instance, raw, err := primary.createSession(agent, portalSessionName+" hitl", uuid.NewString())
+	// The session starts as the portal starts it, on a turn that needs no
+	// approval; the paused tool call is the next turn, streamed with the HITL
+	// extension the session page requests.
+	instance, taskID, err := primary.startSession(agent, portalSessionName+" hitl", uuid.NewString(), portalPongPrompt)
 	if err != nil {
 		return nil, err
-	}
-	if status != http.StatusCreated {
-		return nil, fmt.Errorf("POST %s answered %d: %.300s", kagentSessionsPath, status, raw)
 	}
 	sessionID := instance.ID
 	defer func() {
@@ -792,6 +832,9 @@ func proveHITLAndStop(primary *portalSession, agent portalAgentRef) ([]string, e
 			note("cleanup: %v", err)
 		}
 	}()
+	if _, err := primary.waitTaskSettled(sessionID, taskID, portalTurnTimeout); err != nil {
+		return nil, err
+	}
 	turn, err := primary.streamTurn(sessionID, agent, portalToolPrompt, nil)
 	if err != nil {
 		note("the first turn failed (%s) — one retry, a cold worker's ResumeActor deadline is not retried by Substrate", excerpt(err.Error(), 200))
