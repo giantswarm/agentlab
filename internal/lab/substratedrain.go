@@ -401,6 +401,8 @@ type ateRPC struct {
 	Resp    ateRPCActor `json:"resp"`
 	Err     string      `json:"err"`
 	Elapsed string      `json:"elapsed-time"`
+	// raw is the line as logged, the evidence a run's output quotes.
+	raw string
 }
 
 // ateRPCActor is the actor a request names and a response carries.
@@ -443,6 +445,7 @@ func ateRPCs(logs string) []ateRPC {
 		if err := json.Unmarshal([]byte(line[i:]), &rpc); err != nil || rpc.Method == "" {
 			continue
 		}
+		rpc.raw = line[i:]
 		rpcs = append(rpcs, rpc)
 	}
 	return rpcs

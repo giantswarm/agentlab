@@ -497,6 +497,11 @@ func substrateActorName(session string) string {
 	return "session-" + session
 }
 
+// ateRPCExcerpt is how much of a logged RPC the restore step quotes: the
+// time, method, actor, answer and elapsed time come first on the line, the
+// principal and trace after.
+const ateRPCExcerpt = 400
+
 // restoreDuringDrain judges the drain case's resume by the candidate's own
 // account, read before the lab steps back and the pods are replaced: the
 // ResumeActor of the Session's actor in the RPC log of the ate-api-server
@@ -526,6 +531,9 @@ func (r *substrateStepRun) restoreDuringDrain() error {
 		}
 		a, d := actorResumes(ateRPCs(logs), actor, start, end)
 		all, during = append(all, a...), append(during, d...)
+		for _, rpc := range a {
+			note("%s logged: %s", pod, excerpt(rpc.raw, ateRPCExcerpt))
+		}
 	}
 	window := fmt.Sprintf("ate-api-server %s, the drain from %sZ for %s", wordedPods(candidates), start.UTC().Format(time.TimeOnly), end.Sub(start).Round(time.Second))
 	if len(during) == 0 {

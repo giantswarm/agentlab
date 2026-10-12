@@ -166,6 +166,9 @@ func TestActorResumes(t *testing.T) {
 	if got := during[0].began(); !got.Equal(start.Add(10 * time.Second)) {
 		t.Errorf("the restore arrived at %s, want +10s (12.5s less 2.5s)", got)
 	}
+	if raw := all[1].raw; !strings.HasPrefix(raw, `{"time":"2026-10-12T04:01:30`) || strings.Contains(raw, "[ate-api-server-b") {
+		t.Errorf("the line is kept as logged, its stream prefix skipped, got %q", raw)
+	}
 	if got := resumesWorded(during, start); got != "at +10s RUNNING" {
 		t.Errorf("resumesWorded(during) = %q", got)
 	}
