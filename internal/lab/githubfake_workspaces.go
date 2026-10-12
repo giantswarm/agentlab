@@ -3,6 +3,7 @@ package lab
 import (
 	"context"
 	"crypto"
+	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -224,6 +225,8 @@ func (g *workspaceGitHub) handler() http.Handler {
 	mux.HandleFunc("GET "+api+"/users/{owner}/repos", g.ownerRepositories)
 	mux.HandleFunc("GET "+api+"/user/repos", g.userRepositories)
 	mux.HandleFunc("GET "+api+"/repos/{owner}/{repo}", g.getRepository)
+	mux.HandleFunc("GET "+api+"/repos/{owner}/{repo}/topics", g.getTopics)
+	mux.HandleFunc("PUT "+api+"/repos/{owner}/{repo}/topics", g.replaceTopics)
 
 	mux.HandleFunc("POST "+api+"/repos/{owner}/{repo}/pulls", g.createPull)
 	mux.HandleFunc("GET "+api+"/repos/{owner}/{repo}/pulls", g.listPulls)
@@ -379,6 +382,29 @@ func (g *workspaceGitHub) verifyAppJWT(token string) bool {
 	iat, exp := time.Unix(claims.Iat, 0), time.Unix(claims.Exp, 0)
 	return iss == strconv.FormatInt(g.fixture.App.ID, 10) &&
 		!iat.After(now.Add(githubClockSkew)) && exp.After(now) && exp.Sub(iat) <= githubAppJWTMaxTTL+githubClockSkew
+}
+
+// githubAppJWT is the App's credential as GitHub takes it: RS256 signed by
+// key, issued by the App's id at iat, valid for ttl.
+func githubAppJWT(key *rsa.PrivateKey, appID int64, iat time.Time, ttl time.Duration) (string, error) {
+	enc := func(v any) (string, error) {
+		raw, err := json.Marshal(v)
+		return base64.RawURLEncoding.EncodeToString(raw), err
+	}
+	header, err := enc(map[string]string{"alg": "RS256", "typ": "JWT"})
+	if err != nil {
+		return "", err
+	}
+	claims, err := enc(map[string]any{"iss": strconv.FormatInt(appID, 10), "iat": iat.Unix(), "exp": iat.Add(ttl).Unix()})
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256([]byte(header + "." + claims))
+	sig, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, digest[:])
+	if err != nil {
+		return "", err
+	}
+	return header + "." + claims + "." + base64.RawURLEncoding.EncodeToString(sig), nil
 }
 
 func decodeJWTPart(part string, v any) error {
@@ -845,7 +871,7 @@ func (g *workspaceGitHub) installationRepositories(w http.ResponseWriter, r *htt
 		return
 	}
 	g.listRepos(w, r, func(repo *workspaceRepo) bool { return g.permission(c, repo) != "" }, func(out []map[string]any, total int) any {
-		return map[string]any{"total_count": total, "repositories": out}
+		return map[string]any{"total_count": total, repositoriesKey: out}
 	})
 }
 
@@ -867,6 +893,48 @@ func (g *workspaceGitHub) getRepository(w http.ResponseWriter, r *http.Request) 
 	if repo := g.readableRepo(w, r); repo != nil {
 		writeGitHubJSON(w, http.StatusOK, g.repoJSON(r, callerOf(r), repo))
 	}
+}
+
+// githubTopics is the body of GitHub's topics endpoints.
+type githubTopics struct {
+	Names []string `json:"names"`
+}
+
+func (g *workspaceGitHub) getTopics(w http.ResponseWriter, r *http.Request) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if repo := g.readableRepo(w, r); repo != nil {
+		writeGitHubJSON(w, http.StatusOK, githubTopics{Names: append([]string{}, repo.Topics...)})
+	}
+}
+
+// replaceTopics is PUT /repos/{owner}/{repo}/topics: the repository's
+// topics replaced by the body's names, lower-cased as GitHub keeps them, by
+// a caller that writes to it. Like on GitHub, it is no push: pushed_at stays.
+func (g *workspaceGitHub) replaceTopics(w http.ResponseWriter, r *http.Request) {
+	var in githubTopics
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Names == nil {
+		githubFakeError(w, http.StatusUnprocessableEntity, "names is required: an array of topics")
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	repo := g.readableRepo(w, r)
+	if repo == nil {
+		return
+	}
+	if !g.canWrite(callerOf(r), repo) {
+		githubFakeError(w, http.StatusForbidden, "Resource not accessible by integration")
+		return
+	}
+	topics := make([]string, 0, len(in.Names))
+	for _, name := range in.Names {
+		if name = strings.ToLower(strings.TrimSpace(name)); name != "" && !slices.Contains(topics, name) {
+			topics = append(topics, name)
+		}
+	}
+	repo.Topics = topics
+	writeGitHubJSON(w, http.StatusOK, githubTopics{Names: append([]string{}, topics...)})
 }
 
 // --- serving ------------------------------------------------------------------
