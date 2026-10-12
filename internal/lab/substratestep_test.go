@@ -129,29 +129,31 @@ func TestImageTag(t *testing.T) {
 // TestWorkersOff: a worker on another image, one not Ready and one
 // terminating are each named; Ready workers on the image are none; no
 // worker at all is one entry.
+// stepPod is a pod of one container on the image, Ready or not.
+func stepPod(name, img string, ready bool) unstructured.Unstructured {
+	status := "False"
+	if ready {
+		status = "True"
+	}
+	return unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{nameKey: name},
+		"spec":     map[string]any{podContainersKey: []any{map[string]any{nameKey: "worker", imageKey: img}}},
+		crStatus:   map[string]any{crConditions: []any{map[string]any{"type": conditionReady, crStatus: status}}},
+	}}
+}
+
 func TestWorkersOff(t *testing.T) {
 	const image = "gsoci.azurecr.io/giantswarm/substrate/ateom-gvisor:1.8.0"
-	pod := func(name, img string, ready bool) unstructured.Unstructured {
-		status := "False"
-		if ready {
-			status = "True"
-		}
-		return unstructured.Unstructured{Object: map[string]any{
-			"metadata": map[string]any{nameKey: name},
-			"spec":     map[string]any{podContainersKey: []any{map[string]any{nameKey: "worker", imageKey: img}}},
-			crStatus:   map[string]any{crConditions: []any{map[string]any{"type": conditionReady, crStatus: status}}},
-		}}
-	}
-	if off := workersOff([]unstructured.Unstructured{pod("w1", image, true), pod("w2", image, true)}, image); len(off) != 0 {
+	if off := workersOff([]unstructured.Unstructured{stepPod("w1", image, true), stepPod("w2", image, true)}, image); len(off) != 0 {
 		t.Errorf("Ready workers on the image: %v, want none", off)
 	}
-	terminating := pod("w4", image, true)
+	terminating := stepPod("w4", image, true)
 	now := metav1.Now()
 	terminating.SetDeletionTimestamp(&now)
 	off := workersOff([]unstructured.Unstructured{
-		pod("w1", image, true),
-		pod("w2", "gsoci.azurecr.io/giantswarm/substrate/ateom-gvisor:1.7.0", true),
-		pod("w3", image, false),
+		stepPod("w1", image, true),
+		stepPod("w2", "gsoci.azurecr.io/giantswarm/substrate/ateom-gvisor:1.7.0", true),
+		stepPod("w3", image, false),
 		terminating,
 	}, image)
 	want := []string{"w2 runs gsoci.azurecr.io/giantswarm/substrate/ateom-gvisor:1.7.0", "w3 is not Ready", "w4 is terminating"}

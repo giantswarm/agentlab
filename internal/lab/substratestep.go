@@ -86,6 +86,9 @@ type SubstrateStepOptions struct {
 	// Stay leaves the lab on To instead of returning it to the chart's
 	// Substrate.
 	Stay bool
+	// NoDrain skips the drain case: the step without its workers deleted
+	// under the golden re-take and the resume.
+	NoDrain bool
 }
 
 // SubstrateStepTest is `agentlab substrate-step-test`. The verdict is one
@@ -153,6 +156,12 @@ type substrateStepRun struct {
 	goldenBefore  string
 	stepTaken     bool
 	lines         []string // the PASS lines, in step order
+
+	// The drain case (substratedrain.go): every golden of the lab before
+	// the step, the drain and the resume issued during it.
+	goldensBefore goldenSet
+	drain         *workerDrain
+	drainResume   *drainResume
 }
 
 // substrateRunning is the Substrate a lab runs, as the proof names it: the
@@ -172,7 +181,7 @@ func (r *substrateStepRun) pass(format string, a ...any) {
 	r.lines = append(r.lines, line)
 }
 
-// prove runs the four steps up to the first failure.
+// prove runs the steps up to the first failure.
 func (r *substrateStepRun) prove(user *config.User) error {
 	r.stages.begin("before", "Step 1: the Substrate the lab runs before the step")
 	before, err := readSubstrateRelease(r.cfg)
@@ -207,9 +216,16 @@ func (r *substrateStepRun) prove(user *config.User) error {
 		return err
 	}
 
-	r.stages.begin("step", "Step 3: the step to Substrate %s under the suspended conversation", r.to)
+	r.stages.begin("step", "Step 3: the step to Substrate %s under the suspended conversation%s", r.to, r.drainTitle())
 	if err := r.step(); err != nil {
 		return err
+	}
+
+	if !r.opts.NoDrain {
+		r.stages.begin("retake", "Step 3b: every golden of the lab taken again on Substrate %s after the drain, no terminal error", r.after.version)
+		if err := r.goldensAfterDrain(); err != nil {
+			return err
+		}
 	}
 
 	r.stages.begin("resume", "Step 4a: the suspended conversation resumes on Substrate %s with its earlier turns and the file", r.after.version)
@@ -289,6 +305,11 @@ func (r *substrateStepRun) seed(email string) error {
 		return err
 	}
 	r.goldenBefore = golden
+	if !r.opts.NoDrain {
+		if r.goldensBefore, err = readGoldens(); err != nil {
+			return err
+		}
+	}
 	r.pass("on %s: three turns (codeword %s, %s holding %q on the durable volume, the codeword answered back), Session %s %s, the template's %s",
 		r.before.version, r.codeword, substrateStepFile, r.marker, r.session, sessionState(suspended), golden)
 	return nil
@@ -361,15 +382,23 @@ func (r *substrateStepRun) step() error {
 	}
 	note("the overlay %s pins %s and %s to %s%s", filepath.Join(StateDir, substrateStepValues), substrateCRDsRelease, substrateRelease, r.to, devImagesNote(r.opts.DevImages))
 	r.stepTaken = true
-	if err := PlatformUp(r.stepped, Offers{}); err != nil {
-		return fmt.Errorf("the platform upgrade to Substrate %s: %w", r.to, err)
+	if !r.opts.NoDrain {
+		r.drain = startWorkerDrain(r.before.api, r.opts.ReadyTimeout)
+		r.drainResume = r.resumeDuringDrain(r.drain)
 	}
-	after, err := readSubstrateRelease(r.stepped)
+	after, err := r.upgrade()
+	if r.drain != nil {
+		if err != nil {
+			r.drain.stop()
+			return err
+		}
+		if err := r.drain.wait(); err != nil {
+			return err
+		}
+		r.pass("drain: %s", r.drain)
+	}
 	if err != nil {
 		return err
-	}
-	if after.version != r.to.String() {
-		return fmt.Errorf("the platform upgrade finished, but the atelet runs %s, not %s: %s", after.version, r.to, after)
 	}
 	if err := waitWorkersOn(after.worker, substrateStepWorkersTimeout); err != nil {
 		return err
@@ -379,12 +408,37 @@ func (r *substrateStepRun) step() error {
 	return nil
 }
 
-// resume resumes the suspended conversation and asks it for the codeword of
-// its first turn and the file it wrote.
+// upgrade upgrades the platform onto the step's configuration and reads the
+// Substrate it runs then.
+func (r *substrateStepRun) upgrade() (substrateRunning, error) {
+	if err := PlatformUp(r.stepped, Offers{}); err != nil {
+		return substrateRunning{}, fmt.Errorf("the platform upgrade to Substrate %s: %w", r.to, err)
+	}
+	after, err := readSubstrateRelease(r.stepped)
+	if err != nil {
+		return after, err
+	}
+	if after.version != r.to.String() {
+		return after, fmt.Errorf("the platform upgrade finished, but the atelet runs %s, not %s: %s", after.version, r.to, after)
+	}
+	return after, nil
+}
+
+// drainTitle words the drain case for the step's title.
+func (r *substrateStepRun) drainTitle() string {
+	if r.opts.NoDrain {
+		return ""
+	}
+	return fmt.Sprintf(", its worker pods deleted every %s for %s from the candidate's ate-api-server Ready (the drain case)", substrateDrainEvery, substrateDrainFor)
+}
+
+// resume resumes the suspended conversation — in the drain case the resume
+// issued during the drain — and asks it for the codeword of its first turn
+// and the file it wrote.
 func (r *substrateStepRun) resume() error {
 	ctx, cancel := context.WithTimeout(context.Background(), kagentTurnTimeout+sessionReadyTimeout)
 	defer cancel()
-	session, err := r.api.resumeSession(ctx, r.session)
+	session, err := r.resumeNow(ctx)
 	if err != nil {
 		return fmt.Errorf("%s: %w", r.restoreCause(session), err)
 	}
@@ -400,9 +454,33 @@ func (r *substrateStepRun) resume() error {
 	if !volume {
 		return fmt.Errorf("the durable volume lost its file: %s does not hold %q after the resume: %s", substrateStepFile, r.marker, excerpt(reply, 200))
 	}
-	r.pass("resumed conversation: Session %s answered the codeword %s of its first turn on %s", r.session, r.codeword, r.after.version)
+	r.pass("resumed conversation: Session %s answered the codeword %s of its first turn on %s%s", r.session, r.codeword, r.after.version, r.resumedDuring())
 	r.pass("volume check: %s holds %q, written on %s, read on %s", substrateStepFile, r.marker, r.before.version, r.after.version)
 	return nil
+}
+
+// resumeNow is the resume: the one issued during the drain, or one issued
+// now without the drain case.
+func (r *substrateStepRun) resumeNow(ctx context.Context) (*apiv1alpha1.Session, error) {
+	if r.drainResume == nil {
+		return r.api.resumeSession(ctx, r.session)
+	}
+	<-r.drainResume.done
+	if r.drainResume.err != nil {
+		return r.drainResume.session, fmt.Errorf("the resume issued during the drain: %w", r.drainResume.err)
+	}
+	if !r.drainResume.inDrain {
+		return r.drainResume.session, fmt.Errorf("the resume was issued after the drain ended, not during it")
+	}
+	return r.drainResume.session, nil
+}
+
+// resumedDuring words when the drain case's resume was issued.
+func (r *substrateStepRun) resumedDuring() string {
+	if r.drainResume == nil {
+		return ""
+	}
+	return fmt.Sprintf(", resumed during the drain (issued %s after it began)", r.drainResume.issuedAt.Sub(r.drain.start).Round(time.Second))
 }
 
 // restoreCause words why a resume failed, from the session's failure and the
@@ -479,6 +557,12 @@ func agentAteActors(ctx context.Context, api *ateAPI, agent string) ([]*ateapi.A
 // pages.
 func agentAteTemplates(ctx context.Context, api *ateAPI, agent string) ([]*ateapi.ActorTemplate, error) {
 	prefix := actorTemplatePrefix(agent)
+	return ateTemplates(ctx, api, func(name string) bool { return isActorTemplateOf(prefix, name) })
+}
+
+// ateTemplates is every ActorTemplate in ate-api of the kagent atespace whose
+// name keep accepts, all pages.
+func ateTemplates(ctx context.Context, api *ateAPI, keep func(name string) bool) ([]*ateapi.ActorTemplate, error) {
 	var templates []*ateapi.ActorTemplate
 	token := ""
 	for range substrateMaxPages {
@@ -487,7 +571,7 @@ func agentAteTemplates(ctx context.Context, api *ateAPI, agent string) ([]*ateap
 			return templates, fmt.Errorf("ListActorTemplates: %w", err)
 		}
 		for _, t := range resp.GetActorTemplates() {
-			if isActorTemplateOf(prefix, t.GetMetadata().GetName()) {
+			if keep(t.GetMetadata().GetName()) {
 				templates = append(templates, t)
 			}
 		}
@@ -568,13 +652,7 @@ func (r *substrateStepRun) newConversation() error {
 		if readErr != nil {
 			cause = readErr.Error()
 		}
-		// The reconciler's own account, read before the lab steps back and
-		// ate-api-server's pod with its log is replaced.
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		defer cancel()
-		for _, line := range logEvidence(ctx, substrateAPIDeployment, substrateNamespace, "deploy/"+substrateAPIDeployment, "", actorTemplatePrefix(substrateStepAgent), goldenRetakeWords...) {
-			note("%s", line)
-		}
+		r.retakeEvidence(actorTemplatePrefix(substrateStepAgent))
 		return fmt.Errorf("the golden was not taken again on Substrate %s within %s (%s): a new conversation would start from the snapshot of the release before", r.after.version, r.opts.RetakeTimeout, cause)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), kagentTurnTimeout)
@@ -593,6 +671,31 @@ func (r *substrateStepRun) newConversation() error {
 	}
 	r.pass("new conversation: Session %s answered on the golden taken again on %s (%s, was %s)", session.GetId(), r.after.version, golden, r.goldenBefore)
 	return nil
+}
+
+// goldensAfterDrain waits for every golden of the lab before the step to be
+// taken again on the candidate with no terminal error: the drain case's
+// verdict on the re-take, judged before the resume so that a failed resume
+// still leaves it in the output.
+func (r *substrateStepRun) goldensAfterDrain() error {
+	after, err := awaitGoldensRetaken(r.goldensBefore, r.opts.RetakeTimeout)
+	if err != nil {
+		r.retakeEvidence("")
+		return err
+	}
+	r.pass("every golden taken again after the drain, no terminal error: %s", goldensWorded(r.goldensBefore, after))
+	return nil
+}
+
+// retakeEvidence notes the reconciler's own account of the re-takes (of the
+// templates whose lines carry must), read before the lab steps back and
+// ate-api-server's pod with its log is replaced.
+func (r *substrateStepRun) retakeEvidence(must string) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	for _, line := range logEvidence(ctx, substrateAPIDeployment, substrateNamespace, "deploy/"+substrateAPIDeployment, "", must, goldenRetakeWords...) {
+		note("%s", line)
+	}
 }
 
 // removeSession deletes the proof's conversation, once.

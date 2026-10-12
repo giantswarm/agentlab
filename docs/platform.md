@@ -931,7 +931,15 @@ step and read by the one after it. One headless run, four steps, each judged
    (an `ate-api-server` build of a change no release carries yet); the
    platform is upgraded in place as `agentlab platform` does, and the proof
    waits for every worker pod to run the new worker image. `agentlab.yaml`
-   is never written.
+   is never written. **The drain case** (on by default, `--no-drain` skips
+   it) forces the roll of a multi-worker pool, which a one-node lab is too
+   quick to meet: from the moment an `ate-api-server` pod of the candidate is
+   Ready, every worker pod of the WorkerPool is deleted every 8 s for a
+   minute, so the golden re-take and the resume land on workers that drain,
+   go away or have no ateom socket yet; the suspended Session's resume is
+   issued as soon as the drain begins. The `drain:` line names the
+   `ate-api-server` pod that began it, its rounds and every worker pod it
+   deleted.
 4. **resume** — the suspended Session resumes; its next turn must answer the
    codeword of the first turn (the conversation) and `cat` the marker back
    (the volume). A failed resume names its cause from the Session's failure
@@ -940,6 +948,13 @@ step and read by the one after it. One headless run, four steps, each judged
    **golden** — the template's golden tag must change within
    `--retake-timeout` (default 10m): the golden taken again on the new
    release; then a new Session of the same agent answers one turn.
+
+In the drain case a stage `retake` runs between the step and the resume, so
+a failed resume still leaves its verdict in the output: every ActorTemplate
+of the lab that had a golden before the step must hold another one within
+`--retake-timeout`, and none may record a terminal `GoldenSnapshotStatus`
+error — the `GoldenActorCrashed` a drain leaves on every template of a
+Substrate without the golden take retry.
 
 The agent is removed — through kagent, then whatever of it ate-api still
 holds (its ActorTemplate, an actor that crashed on a restore), deleted in

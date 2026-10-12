@@ -1489,7 +1489,7 @@ func substrateStepTestCmd() *cobra.Command {
 	var opts lab.SubstrateStepOptions
 	cmd := &cobra.Command{
 		Use:   "substrate-step-test [email]",
-		Short: "Headless Substrate step proof: an agent on the chart's Substrate with a conversation of three turns and a known file on its durable volume, suspended -> the substrate components pinned to --to and the platform upgraded in place under it -> the conversation resumes with its earlier turns and the file, and a new conversation starts from a golden taken again on the new release; the Substrate versions before and after and PASS or FAIL with the cause per step, then the lab back on the chart's Substrate",
+		Short: "Headless Substrate step proof: an agent on the chart's Substrate with a conversation of three turns and a known file on its durable volume, suspended -> the substrate components pinned to --to and the platform upgraded in place under it -> the conversation resumes with its earlier turns and the file, and a new conversation starts from a golden taken again on the new release; by default under a drain (the WorkerPool's worker pods deleted every 8s for a minute from the candidate's ate-api-server Ready, the resume issued during it, every golden of the lab taken again with no terminal error); the Substrate versions before and after and PASS or FAIL with the cause per step, then the lab back on the chart's Substrate",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadProofLab()
@@ -1509,6 +1509,7 @@ func substrateStepTestCmd() *cobra.Command {
 	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", lab.SubstrateStepReadyTimeout, "how long the agent's golden boot before the step may take")
 	cmd.Flags().DurationVar(&opts.RetakeTimeout, "retake-timeout", lab.SubstrateStepRetakeTimeout, "how long the golden's re-take on the new release may take before the new conversation step fails")
 	cmd.Flags().BoolVar(&opts.Stay, "stay", false, "leave the lab on the --to release instead of returning it to the chart's Substrate")
+	cmd.Flags().BoolVar(&opts.NoDrain, "no-drain", false, "skip the drain case: by default every worker pod of the WorkerPool is deleted every 8s for a minute from the candidate's ate-api-server Ready, the suspended conversation is resumed during that drain, and every golden of the lab must be taken again with no terminal error")
 	_ = cmd.MarkFlagRequired("to")
 	return cmd
 }
