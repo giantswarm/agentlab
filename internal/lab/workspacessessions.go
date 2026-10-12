@@ -137,7 +137,10 @@ type sessionRun struct {
 	// write into the mirrors.
 	Seen         []string `json:"seen"`
 	MirrorsWrite string   `json:"mirrorsWrite"`
-	err          error
+	// Notices are the first turn's status messages: the setup's word on
+	// what it could not clone or fetch.
+	Notices []string `json:"notices,omitempty"`
+	err     error
 }
 
 // sessionsReport is the part's report file.
@@ -285,6 +288,7 @@ func (sp *sessionsProof) preconditions(adminUser *config.User) error {
 		return err
 	}
 	note("the manager publishes the lab's grant key as %s; kagent's admission trusts %s", kid, rig.JWKSURL)
+	note("the Agents list the provider's origin %s as their egress: a Session fetches what moved since the sync from it", cfg.GitHubFakeURL())
 	if sp.admin, err = openWorkspacePerson(cfg, adminUser); err != nil {
 		return err
 	}
@@ -304,7 +308,7 @@ func (sp *sessionsProof) preconditions(adminUser *config.User) error {
 				return err
 			}
 		}
-		if _, err := applyManifests(ctx, []byte(workspacesAgentManifest(h.agent, h.harness))); err != nil {
+		if _, err := applyManifests(ctx, []byte(sessionsAgentManifest(h.agent, h.harness, cfg.GitHubFakeURL()))); err != nil {
 			return fmt.Errorf("applying the Agent %s: %w", h.agent, err)
 		}
 		boot, err := waitAgentReadyOn(h.agent, h.harness, sp.timeout)
@@ -317,6 +321,15 @@ func (sp *sessionsProof) preconditions(adminUser *config.User) error {
 		note("the Agent %s Ready on Harness %s in %s", h.agent, h.harness, boot.elapsed.Round(time.Second))
 	}
 	return nil
+}
+
+// sessionsAgentManifest is a workspaces proof's Agent that may reach the
+// provider's origin: the egress gateway lets an actor reach only the
+// origins its Agent lists besides what its revision compiles, and a Session
+// fetches the repositories that moved since the sync from the provider
+// before its first turn.
+func sessionsAgentManifest(name, harness, providerOrigin string) string {
+	return workspacesAgentManifest(name, harness) + fmt.Sprintf("  egress:\n    - %q\n", providerOrigin)
 }
 
 // createWorkspace defines the sync part's filter workspace as the admin and
@@ -399,11 +412,11 @@ func (sp *sessionsProof) startAll() error {
 		}
 		note("%s on %s: works in %s; %s; first turn sent %s after start_session answered, ended in %s",
 			r.ID, r.Harness, r.Directory, headsLine(r.Heads), r.FirstTurnSent.Sub(r.StartAnswered).Round(time.Millisecond), r.FirstTurnEnded.Sub(r.FirstTurnSent).Round(time.Second))
+		if setup := setupNotices(r.Notices); setup != "" {
+			note("  the setup said: %s", setup)
+		}
 	}
-	if err := errors.Join(errs...); err != nil {
-		return err
-	}
-	return judgeFirstTurns(runs, sp.wantHeads())
+	return errors.Join(errs...)
 }
 
 // wantHeads are the heads every clone must name: the provider's for each
@@ -456,8 +469,9 @@ func (sp *sessionsProof) startOne(r *sessionRun) error {
 	if vs := ks.GetVolumeSource().GetVolume(); vs.GetVolumeHandle() != sp.volume.Handle {
 		return fmt.Errorf("on volume %q, want the workspace's %s", vs.GetVolumeHandle(), sp.volume.Handle)
 	}
-	values, _, sent, err := sp.probeTurn(ctx, ks, sessionsFirstTurnCommand(r.Token))
+	values, first, sent, err := sp.probeTurn(ctx, ks, sessionsFirstTurnCommand(r.Token))
 	r.FirstTurnSent, r.FirstTurnEnded = sent, time.Now()
+	r.Notices = firstNotices(first)
 	if err != nil {
 		return err
 	}
@@ -663,9 +677,13 @@ type sessionDirectory struct {
 
 // workspaceState is the setup's record, .kagent/workspace.json.
 type workspaceState struct {
-	SetUp   time.Time `json:"setUp"`
-	Cloned  []string  `json:"cloned"`
-	Fetched []string  `json:"fetched"`
+	SetUp    time.Time `json:"setUp"`
+	Cloned   []string  `json:"cloned"`
+	Fetched  []string  `json:"fetched"`
+	Problems []struct {
+		Repository string `json:"repository"`
+		Reason     string `json:"reason"`
+	} `json:"problems"`
 }
 
 // sessionsDirectoriesScript lists every session directory on the volume:
@@ -755,7 +773,17 @@ func (sp *sessionsProof) directories(mark int) error {
 	}
 	for _, r := range runs {
 		note("%s/%s (%s): set up %s, %.1fs after the first turn was sent; cloned %s; fetched %s", workspacesTestSessions, r.ID, r.Harness,
-			r.DirectorySetUp.UTC().Format(time.RFC3339), r.SetupSeconds, strings.Join(r.Cloned, ", "), strings.Join(r.Fetched, ", "))
+			r.DirectorySetUp.UTC().Format(time.RFC3339), r.SetupSeconds, strings.Join(r.Cloned, ", "), cmp.Or(strings.Join(r.Fetched, ", "), "nothing"))
+		if d := dirs[r.ID]; d.state != nil {
+			for _, problem := range d.state.Problems {
+				note("  the setup's problem: %s: %s", problem.Repository, excerpt(problem.Reason, 300))
+			}
+		}
+	}
+	// The heads the first turns relayed, judged with the directories'
+	// evidence in view.
+	if err := judgeFirstTurns(runs, sp.wantHeads()); err != nil {
+		problems = append(problems, err.Error())
 	}
 	note("%d distinct session directories on volume %s; the request log since the push: %s", len(dirs), sp.volume.Handle, fetchesLine(sp.report.Fetches))
 	if len(problems) > 0 {
@@ -1059,6 +1087,17 @@ func (sp *sessionsProof) cleanupCycle() error {
 		}
 	}
 	return nil
+}
+
+// setupNotices are the notices of a workspace setup, joined.
+func setupNotices(notices []string) string {
+	var out []string
+	for _, n := range notices {
+		if strings.Contains(n, "Workspace setup") {
+			out = append(out, excerpt(n, 400))
+		}
+	}
+	return strings.Join(out, " | ")
 }
 
 func firstNotices(t *turn) []string {

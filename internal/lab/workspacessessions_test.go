@@ -217,3 +217,10 @@ func TestWorkspacesTestOptionsSessions(t *testing.T) {
 		}
 	}
 }
+
+func TestSessionsAgentManifest(t *testing.T) {
+	m := sessionsAgentManifest(sessionsKagentAgent, kagentHarness, "https://github.127.0.0.1.nip.io")
+	if !strings.HasSuffix(m, "  harnessRef:\n    name: "+kagentHarness+"\n  egress:\n    - \"https://github.127.0.0.1.nip.io\"\n") {
+		t.Fatalf("the Agent's spec ends:\n%s", m[max(0, len(m)-200):])
+	}
+}
