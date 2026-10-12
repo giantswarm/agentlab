@@ -907,11 +907,12 @@ v0.0.28 on knows — the three move together).
 conversations and their durable volumes when the lab steps from the
 Substrate release the chart installs to a newer one under them — the step a
 release that changes the snapshot layout has to survive (1.7 to 1.8: one tar
-per durable volume instead of one for all). A Session's actor is suspended to
-a snapshot between turns and resumed from it; every new Session starts from
-its template's golden snapshot. Both are written by the release before the
-step and read by the one after it. One headless run, four steps, each judged
-`PASS` or `FAIL` with its cause:
+per durable volume instead of one for all), and the step a release that keeps
+the layout takes with its goldens kept (1.8.1 to 1.8.2). A Session's actor is
+suspended to a snapshot between turns and resumed from it; every new Session
+starts from its template's golden snapshot. Both are written by the release
+before the step and read by the one after it. One headless run, four steps,
+each judged `PASS` or `FAIL` with its cause:
 
 1. **before** — the Substrate the lab runs: the atelet's, the WorkerPool's
    worker and `ate-api-server`'s images, the release the atelet's tag is. A
@@ -945,16 +946,21 @@ step and read by the one after it. One headless run, four steps, each judged
    (the volume). A failed resume names its cause from the Session's failure
    and the crash messages of the agent's actors in ate-api; Substrate 1.8.0's
    refusal of a snapshot in the old layout is named as the restore refusal.
-   **golden** — the template's golden tag must change within
-   `--retake-timeout` (default 10m): the golden taken again on the new
-   release; then a new Session of the same agent answers one turn.
+   **golden** — the template's golden must be in the snapshot layout the new
+   release writes within `--retake-timeout` (default 10m): taken again on a
+   layout change, kept otherwise — Substrate records the layout a golden was
+   written in (`GoldenSnapshotStatus.snapshot_layout`, from 1.8.1-rc.4 on)
+   and takes a golden again only in an older one, and the proof knows the
+   layout each release writes (`currentSnapshotLayout`, a table Substrate
+   exposes on no API; a release with a new layout is added there); then a new
+   Session of the same agent answers one turn.
 
 In the drain case a stage `retake` runs between the step and the resume, so
 a failed resume still leaves its verdict in the output: every ActorTemplate
-of the lab that had a golden before the step must hold another one within
-`--retake-timeout`, and none may record a terminal `GoldenSnapshotStatus`
-error — the `GoldenActorCrashed` a drain leaves on every template of a
-Substrate without the golden take retry.
+of the lab that had a golden before the step must hold one in that layout
+within `--retake-timeout` — its own, kept, or one taken again — and none may
+record a terminal `GoldenSnapshotStatus` error — the `GoldenActorCrashed` a
+drain leaves on every template of a Substrate without the golden take retry.
 
 The agent is removed — through kagent, then whatever of it ate-api still
 holds (its ActorTemplate, an actor that crashed on a restore), deleted in
@@ -967,6 +973,7 @@ resumed conversation and the volume check:
 ```bash
 agentlab substrate-step-test --to 1.8.0         # 1.8.0 as released: FAIL at resume, the restore refusal
 agentlab substrate-step-test --to 1.8.1-rc.4    # the conversion and the re-take: PASS
+agentlab substrate-step-test --to 1.8.2         # the patch step: the goldens kept, the resume during the drain: PASS
 ```
 
 The run on the release before a fix is the regression check: it must fail at

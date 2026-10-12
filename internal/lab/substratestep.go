@@ -24,23 +24,27 @@ import (
 )
 
 // The Substrate step proof: agents keep their conversation and their durable
-// volume across a Substrate release that changes the snapshot layout.
+// volume across a Substrate release, one that changes the snapshot layout and
+// one that keeps it alike.
 //
 // A Session's actor is suspended to a snapshot between turns, and every new
 // Session starts from its template's golden snapshot. A Substrate release
 // that lays a snapshot out differently (1.7 to 1.8: one tar per durable
 // volume instead of one for all) must read what the release before it wrote:
 // the suspended conversation is restored from the old layout, and the golden
-// is taken again in the new one. The proof drives exactly that on the lab, in
-// one run: an agent on the Substrate release the chart installs, a
-// conversation of a few turns that writes a known file to the actor's durable
-// directory, suspended; the step under it (the substrate and substrate-crds
-// components pinned to the target release through a values overlay, dev
-// images of the step's own, the meta chart upgraded in place); then the
-// suspended conversation resumed — it must still know the earlier turns and
-// read the file back — and a new conversation on the same agent, which must
-// start from a golden taken again on the new release. The lab returns to the
-// chart's Substrate afterwards. docs/platform.md "The Substrate step proof".
+// is taken again in the new one. A release that keeps the layout (1.8.1 to
+// 1.8.2) keeps the goldens, and a new Session starts from the one taken
+// before the step. The proof drives exactly that on the lab, in one run: an
+// agent on the Substrate release the chart installs, a conversation of a few
+// turns that writes a known file to the actor's durable directory, suspended;
+// the step under it (the substrate and substrate-crds components pinned to
+// the target release through a values overlay, dev images of the step's own,
+// the meta chart upgraded in place); then the suspended conversation resumed
+// — it must still know the earlier turns and read the file back — and a new
+// conversation on the same agent, which must start from a golden in the
+// layout the new release writes (currentSnapshotLayout): taken again on a
+// layout change, kept otherwise. The lab returns to the chart's Substrate
+// afterwards. docs/platform.md "The Substrate step proof".
 
 // What the proof creates and checks; all of it is removed by the same run.
 const (
@@ -81,7 +85,7 @@ type SubstrateStepOptions struct {
 	// default-model-config).
 	ModelConfig string
 	// ReadyTimeout bounds the golden boot before the step, RetakeTimeout the
-	// golden's re-take after it.
+	// goldens' re-take after it on a layout change.
 	ReadyTimeout, RetakeTimeout time.Duration
 	// Stay leaves the lab on To instead of returning it to the chart's
 	// Substrate.
@@ -126,7 +130,7 @@ func SubstrateStepTest(cfg *config.Config, email string, opts SubstrateStepOptio
 		opts.RetakeTimeout = SubstrateStepRetakeTimeout
 	}
 
-	run := &substrateStepRun{cfg: cfg, stepped: stepped, to: to, opts: opts, stages: newProofStages()}
+	run := &substrateStepRun{cfg: cfg, stepped: stepped, to: to, layout: currentSnapshotLayout(to), opts: opts, stages: newProofStages()}
 	err = run.prove(user)
 	// The way back runs on every exit once the step was taken, after the
 	// proof's agent is gone: no snapshot of the proof is left to read.
@@ -145,6 +149,7 @@ func SubstrateStepTest(cfg *config.Config, email string, opts SubstrateStepOptio
 type substrateStepRun struct {
 	cfg, stepped *config.Config
 	to           *semver.Version
+	layout       int32 // the snapshot layout the candidate writes (currentSnapshotLayout)
 	opts         SubstrateStepOptions
 	stages       *proofStages
 
@@ -153,12 +158,15 @@ type substrateStepRun struct {
 	session       string
 	codeword      string
 	marker        string
-	goldenBefore  string
+	templateName  string // the agent's ActorTemplate before the step
+	goldenBefore  string // its golden, worded by kagent
 	stepTaken     bool
 	lines         []string // the PASS lines, in step order
 
-	// The drain case (substratedrain.go): every golden of the lab before
-	// the step, the drain and the resume issued during it.
+	// Every golden of the lab before the step, read from ate-api with its
+	// layout (substratedrain.go): the drain case judges every one of them
+	// after the step, the new conversation the proof's own. The drain and
+	// the resume issued during it.
 	goldensBefore goldenSet
 	drain         *workerDrain
 	drainResume   *drainResume
@@ -222,7 +230,7 @@ func (r *substrateStepRun) prove(user *config.User) error {
 	}
 
 	if !r.opts.NoDrain {
-		r.stages.begin("retake", "Step 3b: every golden of the lab taken again on Substrate %s after the drain, no terminal error", r.after.version)
+		r.stages.begin("retake", "Step 3b: every golden of the lab in the snapshot layout Substrate %s writes (%d) after the drain — kept, or taken again on a layout change — no terminal error", r.after.version, r.layout)
 		if err := r.goldensAfterDrain(); err != nil {
 			return err
 		}
@@ -233,7 +241,7 @@ func (r *substrateStepRun) prove(user *config.User) error {
 		return err
 	}
 
-	r.stages.begin("golden", "Step 4b: a new conversation on the same agent starts from a golden taken again on Substrate %s", r.after.version)
+	r.stages.begin("golden", "Step 4b: a new conversation on the same agent starts from %s", r.goldenExpected())
 	if err := r.newConversation(); err != nil {
 		return err
 	}
@@ -300,18 +308,16 @@ func (r *substrateStepRun) seed(email string) error {
 	if suspended, err = r.awaitSuspended(ctx, suspended); err != nil {
 		return err
 	}
-	golden, err := r.golden(revision)
+	t, err := r.template(revision)
 	if err != nil {
 		return err
 	}
-	r.goldenBefore = golden
-	if !r.opts.NoDrain {
-		if r.goldensBefore, err = readGoldens(); err != nil {
-			return err
-		}
+	r.templateName, r.goldenBefore = t.name, t.golden
+	if r.goldensBefore, err = readGoldens(); err != nil {
+		return err
 	}
-	r.pass("on %s: three turns (codeword %s, %s holding %q on the durable volume, the codeword answered back), Session %s %s, the template's %s",
-		r.before.version, r.codeword, substrateStepFile, r.marker, r.session, sessionState(suspended), golden)
+	r.pass("on %s: three turns (codeword %s, %s holding %q on the durable volume, the codeword answered back), Session %s %s, the template's %s (layout %d)",
+		r.before.version, r.codeword, substrateStepFile, r.marker, r.session, sessionState(suspended), t.golden, r.goldensBefore.layout[t.name])
 	return nil
 }
 
@@ -349,21 +355,21 @@ func (r *substrateStepRun) awaitSuspended(ctx context.Context, session *apiv1alp
 	return session, nil
 }
 
-// golden is the golden snapshot of the agent's ActorTemplate of the given
-// revision, worded as the controller reports it.
-func (r *substrateStepRun) golden(revision string) (string, error) {
+// template is the agent's ActorTemplate of the given revision, with its
+// golden snapshot worded as the controller reports it.
+func (r *substrateStepRun) template(revision string) (substrateTemplate, error) {
 	f := skillsFootprint(r.api, substrateStepAgent)
 	if f.err != nil {
-		return "", f.err
+		return substrateTemplate{}, f.err
 	}
 	t, err := templateOfRevision(f.templates, substrateStepAgent, revision)
 	if err != nil {
-		return "", err
+		return substrateTemplate{}, err
 	}
 	if t.golden == "" {
-		return "", fmt.Errorf("ActorTemplate %s/%s has no golden snapshot (phase %s%s)", t.namespace, t.name, t.phase, failureNote(t.failure))
+		return substrateTemplate{}, fmt.Errorf("ActorTemplate %s/%s has no golden snapshot (phase %s%s)", t.namespace, t.name, t.phase, failureNote(t.failure))
 	}
-	return t.golden, nil
+	return t, nil
 }
 
 // step pins the substrate components to the target release (and the step's
@@ -634,26 +640,47 @@ func removeAteLeftovers(agent string) []string {
 	return left
 }
 
-// newConversation waits for the template's golden to be taken again on the
-// new release, then has one turn on a new conversation of the same agent.
-func (r *substrateStepRun) newConversation() error {
-	revision := ""
-	if agent, err := readAgent(substrateStepAgent); err == nil {
-		revision = agent.Status.LatestSuccessfulRevision
+// goldenExpected words the golden the new conversation starts from: the one
+// from before the step when the candidate writes the layout it is in, else
+// one taken again in the candidate's layout.
+func (r *substrateStepRun) goldenExpected() string {
+	was := r.goldensBefore.layout[r.templateName]
+	if was == r.layout {
+		return fmt.Sprintf("the golden kept across the step: Substrate %s writes the layout %d it is in", r.after.version, r.layout)
 	}
-	var golden string
+	return fmt.Sprintf("a golden taken again on Substrate %s in its layout %d (the golden before the step is in layout %d)", r.after.version, r.layout, was)
+}
+
+// newConversation waits for the template's golden to be in the layout the
+// new release writes — the one from before the step when it was in it
+// already, one taken again otherwise (goldenOff) — then has one turn on a
+// new conversation of the same agent.
+func (r *substrateStepRun) newConversation() error {
+	name := r.templateName
+	if agent, err := readAgent(substrateStepAgent); err == nil && len(agent.Status.LatestSuccessfulRevision) >= revisionSuffixSize {
+		name = templateNameOf(substrateStepAgent, agent.Status.LatestSuccessfulRevision)
+	}
+	was := r.goldensBefore.golden[name]
+	if was == "" {
+		was = r.goldenBefore // a golden before golden tags, as kagent words it
+	}
+	var after goldenSet
 	var readErr error
-	retaken := waitFor(int(r.opts.RetakeTimeout/substrateStepPoll), substrateStepPoll, func() bool {
-		golden, readErr = r.golden(revision)
-		return readErr == nil && golden != r.goldenBefore
+	var off string
+	current := waitFor(int(r.opts.RetakeTimeout/substrateStepPoll), substrateStepPoll, func() bool {
+		if after, readErr = readGoldens(); readErr != nil {
+			return false
+		}
+		off = goldenOff(was, after.golden[name], after.layout[name], r.layout)
+		return off == ""
 	})
-	if !retaken {
-		cause := fmt.Sprintf("still %s, taken on %s", r.goldenBefore, r.before.version)
+	if !current {
+		cause := name + " " + off + failureNote(after.failure[name])
 		if readErr != nil {
 			cause = readErr.Error()
 		}
 		r.retakeEvidence(actorTemplatePrefix(substrateStepAgent))
-		return fmt.Errorf("the golden was not taken again on Substrate %s within %s (%s): a new conversation would start from the snapshot of the release before", r.after.version, r.opts.RetakeTimeout, cause)
+		return fmt.Errorf("the golden is not in the snapshot layout Substrate %s writes within %s (%s): a new conversation would start from a golden in another layout", r.after.version, r.opts.RetakeTimeout, cause)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), kagentTurnTimeout)
 	defer cancel()
@@ -669,21 +696,27 @@ func (r *substrateStepRun) newConversation() error {
 	if !strings.Contains(strings.ToUpper(reply), newConversationAnswer) {
 		return fmt.Errorf("the new conversation answered %q, not %s", excerpt(reply, 200), newConversationAnswer)
 	}
-	r.pass("new conversation: Session %s answered on the golden taken again on %s (%s, was %s)", session.GetId(), r.after.version, golden, r.goldenBefore)
+	now, layout := after.golden[name], after.layout[name]
+	if now == was {
+		r.pass("new conversation: Session %s answered on the golden kept across the step (%s, in layout %d on %s and %s alike)", session.GetId(), now, layout, r.before.version, r.after.version)
+		return nil
+	}
+	r.pass("new conversation: Session %s answered on the golden taken again on %s (%s in layout %d, was %s in layout %d)", session.GetId(), r.after.version, now, layout, was, r.goldensBefore.layout[name])
 	return nil
 }
 
 // goldensAfterDrain waits for every golden of the lab before the step to be
-// taken again on the candidate with no terminal error: the drain case's
-// verdict on the re-take, judged before the resume so that a failed resume
-// still leaves it in the output.
+// in the layout the candidate writes — kept, or taken again on a layout
+// change — with no terminal error: the drain case's verdict on the re-take,
+// judged before the resume so that a failed resume still leaves it in the
+// output.
 func (r *substrateStepRun) goldensAfterDrain() error {
-	after, err := awaitGoldensRetaken(r.goldensBefore, r.opts.RetakeTimeout)
+	after, err := awaitGoldensCurrent(r.goldensBefore, r.layout, r.opts.RetakeTimeout)
 	if err != nil {
 		r.retakeEvidence("")
 		return err
 	}
-	r.pass("every golden taken again after the drain, no terminal error: %s", goldensWorded(r.goldensBefore, after))
+	r.pass("every golden in the layout %s writes (%d) after the drain, no terminal error: %s", r.after.version, r.layout, goldensWorded(r.goldensBefore, after))
 	return nil
 }
 
@@ -787,6 +820,37 @@ func stepFrom(before string, to *semver.Version) error {
 		return fmt.Errorf("the lab runs Substrate %s, and %s is no step to a newer release: the proof starts on the release before the step — the chart's Substrate range as released (drop any platform.valuesFiles overlay that pins substrate, then `agentlab platform`)", before, to)
 	}
 	return nil
+}
+
+// Substrate's snapshot layouts, as a golden records the one it was written in
+// (GoldenSnapshotStatus.snapshot_layout; internal/snapshotlayout in
+// giantswarm/substrate numbers them).
+const (
+	// snapshotLayoutUnrecorded is what a golden recorded by a release before
+	// the field reads; 1.8.1-rc.4 is the first release to record one.
+	snapshotLayoutUnrecorded int32 = 0
+	// snapshotLayoutPerVolume is one rootfs-upper tar per container and one
+	// durable-dir-<volume>.tar per durable volume.
+	snapshotLayoutPerVolume int32 = 2
+)
+
+// snapshotLayoutRecordedFrom is the first Substrate release that records the
+// layout on the goldens it takes.
+var snapshotLayoutRecordedFrom = semver.MustParse("1.8.1-rc.4")
+
+// currentSnapshotLayout is the snapshot layout a Substrate release writes and
+// records on the goldens it takes (the release's snapshotlayout.Current): a
+// golden in an older layout, or recorded without one, it takes again; a
+// golden in this layout it keeps, so a step that keeps the layout (1.8.1 to
+// 1.8.2) keeps its goldens. Substrate exposes the constant on no API, so the
+// proof keeps it per release: PerVolume from 1.8.1-rc.4 on, none recorded
+// before. A release that writes a new layout is added here; until then the
+// proof reports its goldens taken again into a layout it does not expect.
+func currentSnapshotLayout(release *semver.Version) int32 {
+	if release.LessThan(snapshotLayoutRecordedFrom) {
+		return snapshotLayoutUnrecorded
+	}
+	return snapshotLayoutPerVolume
 }
 
 // substrateStepOverlay is the step's values overlay: the substrate and
@@ -895,7 +959,7 @@ func workersOff(pods []unstructured.Unstructured, image string) []string {
 // to match, the agent's one template.
 func templateOfRevision(templates []substrateTemplate, agent, revision string) (substrateTemplate, error) {
 	if len(revision) >= revisionSuffixSize {
-		want := actorTemplatePrefix(agent) + strings.ToLower(revision[:revisionSuffixSize])
+		want := templateNameOf(agent, revision)
 		for _, t := range templates {
 			if t.name == want {
 				return t, nil
@@ -907,6 +971,12 @@ func templateOfRevision(templates []substrateTemplate, agent, revision string) (
 		return templates[0], nil
 	}
 	return substrateTemplate{}, fmt.Errorf("agent %s has %d ActorTemplates in Substrate and no revision to tell them apart", agent, len(templates))
+}
+
+// templateNameOf is the name of the agent's ActorTemplate of the revision:
+// the agent's prefix, then the revision's first twelve characters.
+func templateNameOf(agent, revision string) string {
+	return actorTemplatePrefix(agent) + strings.ToLower(revision[:revisionSuffixSize])
 }
 
 // failureNote words a template's failure for a line, "" without one.
