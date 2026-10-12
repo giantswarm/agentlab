@@ -700,22 +700,25 @@ kagent:
   serviceMonitor:
     enabled: false
 {{- end }}
-{{- with .WorkspaceAdmission }}
-  # The coding Harness a Session on a workspace runs on (the kagent chart's
-  # harnesses[]): Claude Code run headless by the chart's claude-harness image
-  # at its published digest, its snapshots beside the platform Harness's in
-  # the lab's in-cluster store. The workspaces proof's claude Session turns
-  # on it.
+{{- with .CodingHarnesses }}
+  # The coding Harnesses (the kagent chart's harnesses[], coding.go): Claude
+  # Code run headless by the chart's claude-harness image at its published
+  # digest, calling muster as the person who sent the turn, its snapshots
+  # beside the platform Harness's in the lab's in-cluster store, the
+  # platform's limits on every turn. The workspaces proof's claude Session
+  # and coding-test's agents turn on them.
   harnesses:
-    - name: {{ .ClaudeHarness }}
+{{- range . }}
+    - name: {{ .Name }}
       runtime: claude
-      snapshotLocation: {{ .ClaudeHarnessSnapshotStore }}
+      snapshotLocation: {{ .SnapshotLocation }}
       env:
         - name: KAGENT_PROPAGATE_TOKEN
           value: "true"
       limits:
-        budgetUSD: "1.00"
-        maxTurns: 10
+        budgetUSD: "{{ .BudgetUSD }}"
+        maxTurns: {{ .MaxTurns }}
+{{- end }}
 {{- end }}
   # No OTLP gateway in kind; the exporters would only log dial errors.
   otel:

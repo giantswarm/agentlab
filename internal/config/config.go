@@ -206,6 +206,10 @@ var vmManagerChartFloor = semver.MustParse("4.15.0")
 // release without kserve-resources.
 var servingChartFloor = semver.MustParse("4.44.0")
 
+// codingChartFloor is the first agent-platform release that forwards
+// kagent.harnesses, the kagent chart's further Harnesses.
+var codingChartFloor = semver.MustParse("4.110.0")
+
 // familiesChartFloor is the first agent-platform release whose connectivity
 // chart registers the bundled mcp-kubernetes as a kubernetes family member
 // (mcp-kubernetes.mcpServer.managementCluster, giantswarm/agent-platform#403).
@@ -458,6 +462,13 @@ type Platform struct {
 	// --workspaces turns it on; needs the agents runtime. `agentlab
 	// workspaces-test --storage-only` is the proof.
 	Workspaces Workspaces `yaml:"workspaces"`
+	// Coding agents: the chart's kagent.harnesses renders the lab's coding
+	// Harnesses (internal/lab/coding.go) — claude, Claude Code run headless
+	// with the platform's limits, and claude-capped, the same runtime on a
+	// tiny budget the cap proof ends a turn on. Off by default; --coding
+	// turns it on; needs the agents runtime. `agentlab coding-test` is the
+	// proof.
+	Coding Coding `yaml:"coding"`
 	// The platform-manager fixture: an invented installation with the agent
 	// platform and workspaces on, in a registry the lab serves, that the
 	// released giantswarm-platform-manager plans against
@@ -485,6 +496,13 @@ type PlatformManager struct {
 // PlatformManagerVersion is the manager release pm-test installs.
 func (c *Config) PlatformManagerVersion() string {
 	return cmp.Or(strings.TrimPrefix(strings.TrimSpace(c.Platform.PlatformManager.Version), "v"), DefaultPlatformManagerVersion)
+}
+
+// Coding configures the lab's coding Harnesses.
+type Coding struct {
+	// On, `agentlab platform` renders the coding Harnesses through the
+	// chart's kagent.harnesses.
+	Enabled bool `yaml:"enabled"`
 }
 
 // Workspaces configures the workspace storage in the lab.
@@ -1753,6 +1771,16 @@ func (c *Config) Validate() error {
 	if c.Platform.KlausGateway.Enabled && c.Platform.Enabled && !c.Platform.Agents {
 		return fmt.Errorf("platform.klausGateway requires platform.agents (klaus-gateway runs its conversations on the kagent controller)")
 	}
+	if c.Platform.Coding.Enabled && c.Platform.Enabled && !c.Platform.Agents {
+		return fmt.Errorf("platform.coding requires platform.agents (a coding Harness is a kagent Harness)")
+	}
+	// kagent.harnesses reaches the kagent chart from codingChartFloor on; an
+	// older release drops the key and renders no coding Harness.
+	if c.Platform.Coding.Enabled && c.Platform.Enabled {
+		if chart, below := c.chartBelow(codingChartFloor); below {
+			return fmt.Errorf("platform.coding needs agent-platform %s or newer (kagent.harnesses forwarded to the kagent chart); %s — `agentlab configure --coding=false`", codingChartFloor, chart)
+		}
+	}
 	if c.Platform.Serving.Enabled && c.Platform.Enabled && !c.Platform.Agents {
 		return fmt.Errorf("platform.serving requires platform.agents (model-manager wires a served model into kagent as a ModelConfig)")
 	}
@@ -1907,6 +1935,12 @@ func (c *Config) KlausGatewayEnabled() bool {
 func (c *Config) ClusterManagerEnabled() bool {
 	_, ok := c.Platform.DevImages[DevImageClusterManager]
 	return c.Platform.Enabled && ok
+}
+
+// CodingEnabled reports whether the lab renders its coding Harnesses: the
+// platform with its agents runtime, and the key on.
+func (c *Config) CodingEnabled() bool {
+	return c.Platform.Enabled && c.Platform.Agents && c.Platform.Coding.Enabled
 }
 
 // WorkspacesEnabled reports whether the lab installs the workspace storage:

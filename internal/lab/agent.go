@@ -292,9 +292,6 @@ func (r createAgentReport) written() *agentWritten {
 // is set, so the chart's defaults apply to the rest. agent-manager places
 // every agent on the platform Harness and requires a toolset.
 func createAgentArgs(spec agentSpec) (map[string]any, error) {
-	if spec.Harness != "" && spec.Harness != kagentHarness {
-		return nil, fmt.Errorf("agent %s: agent-manager places every agent on the platform Harness %s; a template for Harness %q is the direct HelmRelease writer's", spec.Name, kagentHarness, spec.Harness)
-	}
 	if spec.RequireApproval {
 		return nil, fmt.Errorf("agent %s: agent-manager's create_agent takes no requireApproval; a HITL-gated muster binding is the direct HelmRelease writer's", spec.Name)
 	}
@@ -305,6 +302,11 @@ func createAgentArgs(spec agentSpec) (map[string]any, error) {
 		if value != "" {
 			args[key] = value
 		}
+	}
+	// The platform Harness is agent-manager's default; another Harness of
+	// the namespace is named, such as a coding Harness.
+	if spec.Harness != "" && spec.Harness != kagentHarness {
+		args[harnessKey] = spec.Harness
 	}
 	if spec.Toolset != nil {
 		args[toolsetKey] = spec.Toolset

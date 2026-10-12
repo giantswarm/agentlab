@@ -124,6 +124,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		inGroup(groupTesting, servingTestCmd()),
 		inGroup(groupTesting, vmManagerTestCmd()),
 		inGroup(groupTesting, workspacesTestCmd()),
+		inGroup(groupTesting, codingTestCmd()),
 		inGroup(groupTesting, workspacesSignInTestCmd()),
 		inGroup(groupTesting, skillsTestCmd()),
 		inGroup(groupTesting, substrateStepTestCmd()),
@@ -799,7 +800,7 @@ func browserCmd() *cobra.Command {
 func configureCmd() *cobra.Command {
 	var defaults, accessible bool
 	var platform, agents, observability, backstage, modelManager, vmManager, klausGateway bool
-	var serving, workspaces, github, githubSignIn bool
+	var serving, workspaces, coding, github, githubSignIn bool
 	var githubSignInClientID string
 	var workspacesProvider, workspacesGitHubAppID, workspacesGitHubClientID string
 	var workspacesGitHubPrivateKeySource, workspacesGitHubClientSecretSource string
@@ -921,6 +922,9 @@ func configureCmd() *cobra.Command {
 			if cmd.Flags().Changed("workspaces") {
 				cfg.Platform.Workspaces.Enabled = workspaces
 			}
+			if cmd.Flags().Changed("coding") {
+				cfg.Platform.Coding.Enabled = coding
+			}
 			if cmd.Flags().Changed("workspaces-provider") {
 				cfg.Platform.Workspaces.Provider = workspacesProvider
 			}
@@ -1012,6 +1016,7 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&githubSignIn, "github-signin", false, "turn the GitHub sign-in on (needs --github-signin-client-id once) or, with =false, off; the client Secret stays")
 	cmd.Flags().StringSliceVar(&githubSignInOrgs, "github-signin-orgs", nil, "GitHub sign-in: admit members of these GitHub organizations only, their teams as groups (`<org>:<team-slug>`); empty admits any GitHub account")
 	cmd.Flags().BoolVar(&workspaces, "workspaces", false, "workspace storage: a read-write-many StorageClass that serves git — an in-cluster NFS server, the NFS CSI driver behind an mTLS proxy only Agent Substrate's API server may reach, and the StorageClass "+lab.WorkspacesStorageClass+" (needs agents); --workspaces=false turns it off")
+	cmd.Flags().BoolVar(&coding, "coding", false, "coding agents: the chart's kagent.harnesses renders the Harnesses claude (Claude Code with the platform's limits) and claude-capped (the same on a tiny budget), which `agentlab coding-test` proves (needs agents); --coding=false turns it off")
 	cmd.Flags().StringVar(&workspacesProvider, "workspaces-provider", "", "the workspace-manager's provider instances: fake (the lab's own GitHub, the default), github (a GitHub App of the lab's own, docs/workspaces.md), gitlab (a GitLab's OAuth application, docs/workspaces.md) or several, such as fake,github,gitlab")
 	cmd.Flags().StringVar(&workspacesGitHubAppID, "workspaces-github-app-id", "", "the App id of the workspaces GitHub App (public; its private key and client secret go into the Secret agent-platform/"+config.WorkspaceGitHubSecretName+")")
 	cmd.Flags().StringVar(&workspacesGitHubClientID, "workspaces-github-client-id", "", "the client id of the workspaces GitHub App (public)")
@@ -1364,6 +1369,27 @@ func vmManagerTestCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&opts.SkipVM, "skip-vm", false, "prove the registration, the identity boundary and the read tools only; boot no VM")
 	cmd.Flags().DurationVar(&opts.VMTimeout, "vm-timeout", lab.DefaultVMManagerTestVMTimeout, "how long the proof's VM may take to reach ready (installer boot + installed boot to READY=1)")
+	return cmd
+}
+
+func codingTestCmd() *cobra.Command {
+	var opts lab.CodingTestOptions
+	cmd := &cobra.Command{
+		Use:   "coding-test [email]",
+		Short: "Headless coding agents proof (platform.coding): the coding Harnesses claude and claude-capped Ready from the platform values -> validate_agent refusing a toolset with tools that are not read-only and an origin outside the Harness's list -> a coding agent created through agent-manager as [email] (default the admin), Ready on claude -> one turn probing its sandbox: Claude Code as uid 65532 cannot read the root harness's environment or memory, the caller forwarder refuses dot segments and encoded slashes, muster refuses a write tool outside the toolset through it, no forge token or bearer in the environment or /data, a DNS canary recorded, a host outside the Agent's origins denied at the egress gate -> a repository's instruction files written, the next turn records what Claude Code loaded -> suspend and resume keeping the file and the conversation -> a turn on claude-capped stopped by its budget -> a share of the claude Session refused",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadProofLab()
+			if err != nil {
+				return err
+			}
+			if len(args) == 1 {
+				opts.Email = args[0]
+			}
+			return lab.CodingTest(cfg, opts)
+		},
+	}
+	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", lab.DefaultCodingReadyTimeout, "how long each agent's boot and each turn may take")
 	return cmd
 }
 
