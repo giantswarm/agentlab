@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -42,7 +43,10 @@ import (
 //  6. A Session admitted with a grant on the volume: its turn works in its
 //     own directory, sees the mirror at <owner>/<repository>.git read-only,
 //     writes a file of its own, and that file is on the volume at
-//     sessions/<Session id>.
+//     sessions/<Session id>. On a kagent line that sends the session
+//     directory, the directory holds the runtime's setup clone of the mirror
+//     and the agent's own git clone of the mirror succeeds as the harness
+//     user; a line before it skips both readings and says why.
 //  7. The Sessions and the Agent removed.
 
 const (
@@ -72,18 +76,34 @@ const (
 	admissionAudienceKey      = "KAGENT_SESSION_ADMISSION_JWT_AUDIENCE"
 	// kagentDefaultWorkingDirectory is where a Session without a volume works.
 	kagentDefaultWorkingDirectory = "/data/workspace"
+	// kagentSessionDirectoryFrom is the first kagent line whose dispatch
+	// names the Session's directory and its mirrors, so that the runtime
+	// clones every mirror into the directory before the first turn and the
+	// agent's git trusts the mirrors. Its prereleases count.
+	kagentSessionDirectoryFrom = "1.9.0-0"
+	// workspacesHarnessOwnClone is the directory the turn clones the mirror
+	// into itself.
+	workspacesHarnessOwnClone = "agentlab-own-clone"
 )
 
 // workspacesHarnessProbeCommand is the turn's Bash command: the working
 // directory, the mirrors it sees as <owner>/<repository>.git, the clones in
 // its directory as <owner>/<repository> (a kagent line that sets the
 // directory up clones every mirror), whether the mirrors take a write, and
-// a file of its own written and read back.
+// a file of its own written and read back. Where the mirrors are mounted it
+// also reads its uid and gid, clones the seeded mirror itself (the exit code,
+// the clone's HEAD and git's output) and reads the setup clone's origin/HEAD.
 func workspacesHarnessProbeCommand() string {
 	return `echo "` + probeMarker + ` pwd=$(pwd)"; ` +
 		`echo "` + probeMarker + ` mirrors=$(cd /mirrors 2>/dev/null && find . -mindepth 2 -maxdepth 2 -name '*.git' | sed 's|^\./||' | sort | tr '\n' ' ')"; ` +
 		`echo "` + probeMarker + ` clones=$(find . -mindepth 3 -maxdepth 3 -name .git 2>/dev/null | sed 's|^\./||;s|/\.git$||' | sort | tr '\n' ' ')"; ` +
 		`if [ ! -d /mirrors ]; then echo "` + probeMarker + ` mirrors-write=absent"; elif touch /mirrors/` + workspacesHarnessOwnFile + ` 2>/dev/null; then echo "` + probeMarker + ` mirrors-write=accepted"; else echo "` + probeMarker + ` mirrors-write=refused"; fi; ` +
+		`if [ -d /mirrors ]; then ` +
+		`echo "` + probeMarker + ` id=$(id -u):$(id -g)"; ` +
+		`out=$(git clone /mirrors/` + workspacesHarnessRepository + `.git ./` + workspacesHarnessOwnClone + ` 2>&1); rc=$?; ` +
+		`echo "` + probeMarker + ` own-clone=rc$rc head=$(git -C ./` + workspacesHarnessOwnClone + ` rev-parse --short HEAD 2>/dev/null) $(echo "$out" | tr '\n' ' ')"; ` +
+		`echo "` + probeMarker + ` setup-clone=$(git -C ./` + workspacesHarnessRepository + ` rev-parse --short origin/HEAD 2>&1 | tr '\n' ' ')"; ` +
+		`fi; ` +
 		`echo session > ./` + workspacesHarnessOwnFile + ` && echo "` + probeMarker + ` own-write=$(cat ./` + workspacesHarnessOwnFile + `)"`
 }
 
@@ -98,9 +118,17 @@ func workspacesHarnessProbePrompt() string {
 type workspacesHarnessProbe struct {
 	pwd, mirrorsWrite, ownWrite string
 	mirrors, clones             []string
+	// id is the turn's uid:gid; ownClone the agent's own clone of the
+	// mirror as rc<exit> head=<HEAD> <git's output>; setupClone the setup
+	// clone's origin/HEAD, or git's error.
+	id, ownClone, setupClone string
 }
 
-var probeLine = regexp.MustCompile(probeMarker + ` ([a-z-]+)=([^\n]*)`)
+var (
+	probeLine     = regexp.MustCompile(probeMarker + ` ([a-z-]+)=([^\n]*)`)
+	ownCloneLine  = regexp.MustCompile(`^rc(\d+) head=(\S*) ?(.*)$`)
+	shortRevision = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
+)
 
 // parseWorkspacesHarnessProbe reads the marker lines out of the reply.
 func parseWorkspacesHarnessProbe(reply string) (workspacesHarnessProbe, error) {
@@ -114,12 +142,17 @@ func parseWorkspacesHarnessProbe(reply string) (workspacesHarnessProbe, error) {
 	return workspacesHarnessProbe{
 		pwd: values["pwd"], mirrorsWrite: values["mirrors-write"], ownWrite: values["own-write"],
 		mirrors: strings.Fields(values["mirrors"]), clones: strings.Fields(values["clones"]),
+		id: values["id"], ownClone: values["own-clone"], setupClone: values["setup-clone"],
 	}, nil
 }
 
 func (p workspacesHarnessProbe) String() string {
-	return fmt.Sprintf("pwd %s, mirrors [%s], clones [%s], a write into the mirrors %s, its own file %q",
+	s := fmt.Sprintf("pwd %s, mirrors [%s], clones [%s], a write into the mirrors %s, its own file %q",
 		p.pwd, strings.Join(p.mirrors, " "), strings.Join(p.clones, " "), p.mirrorsWrite, p.ownWrite)
+	if p.id != "" {
+		s += fmt.Sprintf(", uid:gid %s, its own clone %q, the setup clone %q", p.id, p.ownClone, p.setupClone)
+	}
+	return s
 }
 
 // checkOnVolume is the verdict on a Session admitted on the volume: its own
@@ -143,6 +176,39 @@ func (p workspacesHarnessProbe) checkOnVolume() error {
 		return fmt.Errorf("the Session on the volume %s (%s)", strings.Join(problems, "; "), p)
 	}
 	return nil
+}
+
+// checkClones is the verdict on the session directory of a kagent line that
+// sends it: the agent's own git clone of the seeded mirror succeeds, and the
+// runtime's setup clone of it is in the directory. Its reading names both
+// HEADs and the uid the agent cloned as.
+func (p workspacesHarnessProbe) checkClones() (string, error) {
+	var problems []string
+	own := ownCloneLine.FindStringSubmatch(p.ownClone)
+	switch {
+	case own == nil:
+		problems = append(problems, fmt.Sprintf("relayed no reading of its own clone of /mirrors/%s.git (%q)", workspacesHarnessRepository, p.ownClone))
+	case own[1] != "0" || !shortRevision.MatchString(own[2]):
+		problems = append(problems, fmt.Sprintf("its own git clone /mirrors/%s.git as uid:gid %s failed with exit %s: %s", workspacesHarnessRepository, p.id, own[1], strings.TrimSpace(own[3])))
+	}
+	if !shortRevision.MatchString(p.setupClone) {
+		problems = append(problems, fmt.Sprintf("holds no setup clone of the mirror at ./%s (%s)", workspacesHarnessRepository, p.setupClone))
+	}
+	if len(problems) > 0 {
+		return "", fmt.Errorf("the Session's directory: %s (%s)", strings.Join(problems, "; "), p)
+	}
+	return fmt.Sprintf("its own git clone of /mirrors/%s.git as uid:gid %s at %s, the setup clone ./%s at %s", workspacesHarnessRepository, p.id, own[2], workspacesHarnessRepository, p.setupClone), nil
+}
+
+// sendsSessionDirectory reports whether a kagent controller of version sends
+// the session directory: its line is kagentSessionDirectoryFrom or later, or
+// its version does not parse (a dev build is held to the newest behaviour).
+func sendsSessionDirectory(version string) bool {
+	v, err := semver.NewVersion(version)
+	if err != nil {
+		return true
+	}
+	return !v.LessThan(semver.MustParse(kagentSessionDirectoryFrom))
 }
 
 // checkWithoutVolume is the verdict on a Session without a volume: its
@@ -239,6 +305,13 @@ func proveWorkspacesHarnessSession(cfg *config.Config, timeout time.Duration) (s
 	defer api.close()
 	sessions := &sessionSet{api: api}
 	defer sessions.removeAll()
+	controller := "unknown"
+	if v, err := api.version(ctx); err == nil {
+		controller = v.GetKagentVersion()
+	} else {
+		warn("the controller's version: %v; the proof holds it to the session directory", err)
+	}
+	directory := sendsSessionDirectory(controller)
 
 	step("A Session without a volume, as %s: its turn works in %s and sees no mirrors", user.Email, kagentDefaultWorkingDirectory)
 	plain, probe, err := workspacesHarnessTurn(ctx, api, sessions, &apiv1alpha1.CreateSessionRequest{}, timeout)
@@ -301,9 +374,15 @@ func proveWorkspacesHarnessSession(cfg *config.Config, timeout time.Duration) (s
 	if err := probe.checkOnVolume(); err != nil {
 		return "", err
 	}
-	if len(probe.clones) == 0 {
-		note("no clone in the Session's directory: this kagent line sets no session directory up (the mirrors are its <owner>/<repository> view)")
+	var clones string
+	if directory {
+		if clones, err = probe.checkClones(); err != nil {
+			return "", fmt.Errorf("kagent %s sends the session directory: %w", controller, err)
+		}
+	} else {
+		clones = fmt.Sprintf("its own clone and the setup clone skipped: kagent %s sends no session directory (from %s on it does), so the runtime clones no mirror and the agent's git does not trust them", controller, strings.TrimSuffix(kagentSessionDirectoryFrom, "-0"))
 	}
+	note("%s", clones)
 
 	step("The Session's file on the volume at %s/%s", workspacesTestSessions, onVolume.GetId())
 	out, err = runPod(ctx, workspacesTestNamespace, workspacesTestPod("session-file", workspacesHarnessReadScript(onVolume.GetId()), []corev1.VolumeMount{{Name: workspacesTestVolume, MountPath: workspacesTestMountPath, ReadOnly: true}}, true), timeout)
@@ -319,7 +398,7 @@ func proveWorkspacesHarnessSession(cfg *config.Config, timeout time.Duration) (s
 	if len(probe.clones) > 0 {
 		view = "its clones " + strings.Join(probe.clones, " ")
 	}
-	return fmt.Sprintf("a claude Session admitted on the volume with the manager-verified grant (key %s) answered in its own directory with %s, the refusals named", kid, view), nil
+	return fmt.Sprintf("a claude Session admitted on the volume with the manager-verified grant (key %s) answered in its own directory with %s; %s; the refusals named", kid, view, clones), nil
 }
 
 // workspacesHarnessMirrorScript lays the mirror out under
