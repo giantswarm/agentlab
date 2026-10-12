@@ -871,7 +871,7 @@ func (g *workspaceGitHub) installationRepositories(w http.ResponseWriter, r *htt
 		return
 	}
 	g.listRepos(w, r, func(repo *workspaceRepo) bool { return g.permission(c, repo) != "" }, func(out []map[string]any, total int) any {
-		return map[string]any{"total_count": total, "repositories": out}
+		return map[string]any{"total_count": total, repositoriesKey: out}
 	})
 }
 

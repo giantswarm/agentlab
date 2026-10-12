@@ -94,6 +94,9 @@ const (
 	wmSourcesArg      = "sources"
 	wmProviderArg     = "provider"
 	gitAdd            = "add"
+	// repositoriesKey is the "repositories" key of a workspace source and of
+	// GitHub's installation repository listing the fake serves.
+	repositoriesKey = "repositories"
 )
 
 // syncFilters are the filter workspace's filters, the same on each owner: a
@@ -130,7 +133,7 @@ func syncNamedSources(repos ...string) []map[string]any {
 	}
 	out := make([]map[string]any, 0, len(owners))
 	for _, owner := range owners {
-		out = append(out, map[string]any{wmProviderArg: config.WorkspaceProviderFake, wmOwnerArg: owner, "repositories": byOwner[owner]})
+		out = append(out, map[string]any{wmProviderArg: config.WorkspaceProviderFake, wmOwnerArg: owner, repositoriesKey: byOwner[owner]})
 	}
 	return out
 }
