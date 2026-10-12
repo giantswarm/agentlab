@@ -500,7 +500,7 @@ func substrateActorName(session string) string {
 // ateRPCExcerpt is how much of a logged RPC the restore step quotes: the
 // time, method, actor, answer and elapsed time come first on the line, the
 // principal and trace after.
-const ateRPCExcerpt = 400
+const ateRPCExcerpt = 1000
 
 // restoreDuringDrain judges the drain case's resume by the candidate's own
 // account, read before the lab steps back and the pods are replaced: the
