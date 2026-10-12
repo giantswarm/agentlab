@@ -181,7 +181,7 @@ func (r *substrateStepRun) pass(format string, a ...any) {
 	r.lines = append(r.lines, line)
 }
 
-// prove runs the four steps up to the first failure.
+// prove runs the steps up to the first failure.
 func (r *substrateStepRun) prove(user *config.User) error {
 	r.stages.begin("before", "Step 1: the Substrate the lab runs before the step")
 	before, err := readSubstrateRelease(r.cfg)
@@ -219,6 +219,13 @@ func (r *substrateStepRun) prove(user *config.User) error {
 	r.stages.begin("step", "Step 3: the step to Substrate %s under the suspended conversation%s", r.to, r.drainTitle())
 	if err := r.step(); err != nil {
 		return err
+	}
+
+	if !r.opts.NoDrain {
+		r.stages.begin("retake", "Step 3b: every golden of the lab taken again on Substrate %s after the drain, no terminal error", r.after.version)
+		if err := r.goldensAfterDrain(); err != nil {
+			return err
+		}
 	}
 
 	r.stages.begin("resume", "Step 4a: the suspended conversation resumes on Substrate %s with its earlier turns and the file", r.after.version)
@@ -630,14 +637,6 @@ func removeAteLeftovers(agent string) []string {
 // newConversation waits for the template's golden to be taken again on the
 // new release, then has one turn on a new conversation of the same agent.
 func (r *substrateStepRun) newConversation() error {
-	if !r.opts.NoDrain {
-		after, err := awaitGoldensRetaken(r.goldensBefore, r.opts.RetakeTimeout)
-		if err != nil {
-			r.retakeEvidence("")
-			return err
-		}
-		r.pass("every golden taken again after the drain, no terminal error: %s", goldensWorded(r.goldensBefore, after))
-	}
 	revision := ""
 	if agent, err := readAgent(substrateStepAgent); err == nil {
 		revision = agent.Status.LatestSuccessfulRevision
@@ -671,6 +670,20 @@ func (r *substrateStepRun) newConversation() error {
 		return fmt.Errorf("the new conversation answered %q, not %s", excerpt(reply, 200), newConversationAnswer)
 	}
 	r.pass("new conversation: Session %s answered on the golden taken again on %s (%s, was %s)", session.GetId(), r.after.version, golden, r.goldenBefore)
+	return nil
+}
+
+// goldensAfterDrain waits for every golden of the lab before the step to be
+// taken again on the candidate with no terminal error: the drain case's
+// verdict on the re-take, judged before the resume so that a failed resume
+// still leaves it in the output.
+func (r *substrateStepRun) goldensAfterDrain() error {
+	after, err := awaitGoldensRetaken(r.goldensBefore, r.opts.RetakeTimeout)
+	if err != nil {
+		r.retakeEvidence("")
+		return err
+	}
+	r.pass("every golden taken again after the drain, no terminal error: %s", goldensWorded(r.goldensBefore, after))
 	return nil
 }
 

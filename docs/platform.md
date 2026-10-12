@@ -947,11 +947,14 @@ step and read by the one after it. One headless run, four steps, each judged
    refusal of a snapshot in the old layout is named as the restore refusal.
    **golden** — the template's golden tag must change within
    `--retake-timeout` (default 10m): the golden taken again on the new
-   release; then a new Session of the same agent answers one turn. In the
-   drain case every ActorTemplate of the lab that had a golden before the
-   step must hold another one, and none may record a terminal
-   `GoldenSnapshotStatus` error — the `GoldenActorCrashed` a drain leaves on
-   every template of a Substrate without the golden take retry.
+   release; then a new Session of the same agent answers one turn.
+
+In the drain case a stage `retake` runs between the step and the resume, so
+a failed resume still leaves its verdict in the output: every ActorTemplate
+of the lab that had a golden before the step must hold another one within
+`--retake-timeout`, and none may record a terminal `GoldenSnapshotStatus`
+error — the `GoldenActorCrashed` a drain leaves on every template of a
+Substrate without the golden take retry.
 
 The agent is removed — through kagent, then whatever of it ate-api still
 holds (its ActorTemplate, an actor that crashed on a restore), deleted in
