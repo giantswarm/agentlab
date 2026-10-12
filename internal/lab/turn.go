@@ -137,7 +137,7 @@ func Turn(cfg *config.Config, email, template, harness, prompt, sessionID, decid
 		fmt.Printf("kept: %s (agentlab turn --session %s …)\n", sessionID, sessionID)
 		return nil
 	}
-	rmCtx, rmCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	rmCtx, rmCancel := context.WithTimeout(context.Background(), sessionDeleteTimeout)
 	defer rmCancel()
 	if err := api.deleteSession(rmCtx, sessionID); err != nil {
 		return err

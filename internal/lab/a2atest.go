@@ -783,11 +783,12 @@ func (s *sessionSet) add(id string) {
 
 // removeAllNow deletes every tracked session and reports what refused.
 func (s *sessionSet) removeAllNow() error {
-	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout*2)
-	defer cancel()
 	var errs []string
 	for _, id := range s.ids {
-		if err := s.api.deleteSession(ctx, id); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), sessionDeleteTimeout)
+		err := s.api.deleteSession(ctx, id)
+		cancel()
+		if err != nil {
 			errs = append(errs, err.Error())
 		}
 	}

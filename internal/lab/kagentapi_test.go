@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	a2apb "github.com/a2aproject/a2a-go/v2/a2apb/v1"
@@ -72,6 +73,9 @@ type fakeKagent struct {
 	// compiling makes CreateSession answer FailedPrecondition that many
 	// times first.
 	compiling int
+	// settling makes DeleteSession answer FailedPrecondition that many
+	// times first, as for a session whose runtime cleanup is still running.
+	settling int
 
 	// substrate is the summary GetSubstrateSummary answers; actorPages the
 	// pages ListSubstrateActors walks, token "p<n>" naming page n.
@@ -459,6 +463,10 @@ func (f *fakeKagent) DeleteSession(ctx context.Context, req *apiv1alpha1.DeleteS
 	if !ok {
 		return nil, status.Error(codes.NotFound, "Session not found")
 	}
+	if f.settling > 0 {
+		f.settling--
+		return nil, status.Error(codes.FailedPrecondition, "runtime cleanup or lifecycle work is not yet settled")
+	}
 	f.deleted = append(f.deleted, req.GetSessionId())
 	delete(f.sessions, req.GetSessionId())
 	return &apiv1alpha1.DeleteSessionResponse{Session: session}, nil
@@ -680,6 +688,60 @@ func TestCreateSession(t *testing.T) {
 	}
 	if !slices.Equal(f.deleted, []string{first.GetId()}) {
 		t.Errorf("deleted %v", f.deleted)
+	}
+}
+
+// TestDeleteSessionWaitsForSettle: DeleteSession on a session whose runtime
+// work is not yet settled is retried until it succeeds; one that never
+// settles fails after the deadline with the controller's last answer, and
+// the session is still there.
+func TestDeleteSessionWaitsForSettle(t *testing.T) {
+	timeout, backoff := sessionSettleTimeout, sessionSettleBackoff
+	t.Cleanup(func() { sessionSettleTimeout, sessionSettleBackoff = timeout, backoff })
+	sessionSettleTimeout, sessionSettleBackoff = 500*time.Millisecond, 10*time.Millisecond
+
+	f := newFakeKagent()
+	api := f.serve(t, fakeToken)
+	settles, err := api.createSession(t.Context(), a2aTestAgent, "req-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.settling = 3
+	if err := api.deleteSession(t.Context(), settles.GetId()); err != nil {
+		t.Fatalf("a session that settles: %v", err)
+	}
+	if calls := len(f.calls["DeleteSession"]); calls != 4 {
+		t.Errorf("FailedPrecondition was not retried through: %d deletes", calls)
+	}
+	if !slices.Equal(f.deleted, []string{settles.GetId()}) {
+		t.Errorf("deleted %v", f.deleted)
+	}
+
+	stuck, err := api.createSession(t.Context(), a2aTestAgent, "req-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.settling = 1000
+	started := time.Now()
+	err = api.deleteSession(t.Context(), stuck.GetId())
+	if err == nil {
+		t.Fatal("a session that never settles was reported deleted")
+	}
+	if elapsed := time.Since(started); elapsed > 2*sessionSettleTimeout {
+		t.Errorf("the retry ran %s, past its %s deadline", elapsed, sessionSettleTimeout)
+	}
+	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "did not settle within 500ms") || !strings.Contains(err.Error(), "not yet settled") {
+		t.Errorf("the error names neither the deadline nor the last answer: %v", err)
+	}
+	if listed, _ := api.listSessions(t.Context()); len(listed) != 1 || listed[0].GetId() != stuck.GetId() {
+		t.Errorf("left %v", listed)
+	}
+
+	f.settling = 1000
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := api.deleteSession(ctx, stuck.GetId()); err == nil {
+		t.Error("a canceled context did not end the retry")
 	}
 }
 

@@ -75,6 +75,9 @@ const (
 	// the controller converges it synchronously, so the poll only covers a
 	// create that was interrupted and retried.
 	sessionReadyTimeout = 90 * time.Second
+	// sessionSettleMaxBackoff caps the pause between two DeleteSession
+	// attempts on a session that is not yet settled.
+	sessionSettleMaxBackoff = 15 * time.Second
 	// substratePageSize is common.proto's cap on a page; substrateMaxPages
 	// bounds a walk the controller's tokens never end.
 	substratePageSize = 100
@@ -111,6 +114,19 @@ const (
 	// ones (lf.a2a.v1.A2AService).
 	a2aService = "lf.a2a.v1.A2AService"
 )
+
+// sessionSettleTimeout bounds deleteSession's retries on a session whose
+// runtime cleanup or lifecycle work is still running (the controller answers
+// FailedPrecondition meanwhile); sessionSettleBackoff is the first pause.
+// Variables so the tests wait in milliseconds.
+var (
+	sessionSettleTimeout = 3 * time.Minute
+	sessionSettleBackoff = time.Second
+)
+
+// sessionDeleteTimeout is the context a cleanup path gives deleteSession:
+// the settle wait plus one call's margin.
+var sessionDeleteTimeout = sessionSettleTimeout + 30*time.Second
 
 // kagentAPI is one person's client of the controller through the edge: one
 // gRPC connection, the person's token on every call, the surfaces' metadata
@@ -725,13 +741,32 @@ func (a *kagentAPI) resumeSession(ctx context.Context, id string) (*apiv1alpha1.
 }
 
 // deleteSession is SessionService/DeleteSession; a session that is already
-// gone is success.
+// gone is success. A session whose runtime cleanup or lifecycle work is still
+// running answers FailedPrecondition: that is retried with a growing pause
+// until sessionSettleTimeout, and the error then names the deadline and the
+// controller's last answer.
 func (a *kagentAPI) deleteSession(ctx context.Context, id string) error {
-	_, err := a.sessions.DeleteSession(a.callCtx(ctx), &apiv1alpha1.DeleteSessionRequest{SessionId: id})
-	if err != nil && status.Code(err) != codes.NotFound {
-		return fmt.Errorf("DeleteSession %s: %w", id, err)
+	deadline := time.Now().Add(sessionSettleTimeout)
+	pause := sessionSettleBackoff
+	for attempt := 1; ; attempt++ {
+		_, err := a.sessions.DeleteSession(a.callCtx(ctx), &apiv1alpha1.DeleteSessionRequest{SessionId: id})
+		switch status.Code(err) {
+		case codes.OK, codes.NotFound:
+			return nil
+		case codes.FailedPrecondition:
+		default:
+			return fmt.Errorf("DeleteSession %s: %w", id, err)
+		}
+		if !time.Now().Add(pause).Before(deadline) {
+			return fmt.Errorf("DeleteSession %s: the Session did not settle within %s (%d attempts), last answer: %w", id, sessionSettleTimeout, attempt, err)
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("DeleteSession %s: %w after %d attempts, last answer: %w", id, ctx.Err(), attempt, err)
+		case <-time.After(pause):
+		}
+		pause = min(2*pause, sessionSettleMaxBackoff)
 	}
-	return nil
 }
 
 // stream is lf.a2a.v1.A2AService/SendStreamingMessage on the session and
@@ -1131,7 +1166,7 @@ func agentTurnAs(cfg *config.Config, name, token, prompt string) (string, error)
 // removeSession deletes a session on the cleanup paths, bounded on its own
 // context, and says when it could not.
 func (a *kagentAPI) removeSession(id string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), sessionDeleteTimeout)
 	defer cancel()
 	if err := a.deleteSession(ctx, id); err != nil {
 		note("deleting Session %s: %v", id, err)
