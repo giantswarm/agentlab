@@ -1,0 +1,41 @@
+extraEnv:
+    - name: SSL_CERT_FILE
+      value: /etc/workspace-manager/idp-ca/ca.crt
+grant:
+    signingKey:
+        key: grant
+        name: workspace-manager-grant
+oauth:
+    baseURL: https://workspace-manager.127.0.0.1.nip.io:8443
+providers:
+    - kind: github
+      name: fake
+      values:
+        app:
+            id: "1"
+            privateKey:
+                key: private-key
+                name: workspace-fake
+        oauth:
+            clientID: Iv1.agentlab-workspaces
+            clientSecret:
+                key: client-secret
+                name: workspace-fake
+        url: https://github.127.0.0.1.nip.io
+    - kind: gitlab
+      name: gitlab
+      values:
+        oauth:
+            clientID: Iv23liWorkspaceLab
+            clientSecret:
+                key: client-secret
+                name: workspace-gitlab
+        token:
+            key: token
+            name: workspace-gitlab
+        url: https://gitlab.example.com
+tokenExchange:
+    clientID: kagent
+    clientSecret:
+        key: client-secret
+        name: workspace-manager-token-exchange

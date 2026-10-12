@@ -122,8 +122,8 @@ func proveWorkspaceManager(cfg *config.Config) ([]string, error) {
 	for _, p := range listed.Providers {
 		got = append(got, p.Name)
 		worded = append(worded, p.String())
-		if p.Kind != config.WorkspaceProviderGitHub {
-			return nil, fmt.Errorf("list_providers lists %s with kind %q, want the chart's %s kind", p.Name, p.Kind, config.WorkspaceProviderGitHub)
+		if i := slices.IndexFunc(configured, func(c workspaceProviderValues) bool { return c.Name == p.Name }); i >= 0 && p.Kind != configured[i].Kind {
+			return nil, fmt.Errorf("list_providers lists %s with kind %q, want the chart's %s kind", p.Name, p.Kind, configured[i].Kind)
 		}
 		if p.ConnectURL == "" {
 			return nil, fmt.Errorf("list_providers lists %s without a connect link", p.Name)

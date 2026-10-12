@@ -35,12 +35,13 @@ type WorkspacesTestOptions struct {
 	// a pod finished, a volume gone, a sync cycle.
 	ReadyTimeout time.Duration
 	// Part runs one part instead of the storage proof: WorkspacesPartSync
-	// (workspacessync.go) or WorkspacesPartAccess (workspacesaccess.go). ""
-	// is the storage proof.
+	// (workspacessync.go), WorkspacesPartAccess (workspacesaccess.go) or
+	// WorkspacesPartGitLab (workspacesgitlab.go). "" is the storage proof.
 	Part string
 	// Email is the lab user a part signs in as, a member of the lab's
 	// Organization: the sync part's member (default the admin), the access
-	// part's second user beside the admin (default dev@lab.local).
+	// and GitLab parts' second user beside the admin (default
+	// dev@lab.local).
 	Email string
 }
 
@@ -52,7 +53,7 @@ func (o WorkspacesTestOptions) validate() error {
 		if o.Email != "" {
 			return fmt.Errorf("the storage proof signs in as nobody: [email] names the user of a part (--part %s)", strings.Join(WorkspacesParts, ", "))
 		}
-	case WorkspacesPartSync, WorkspacesPartAccess:
+	case WorkspacesPartSync, WorkspacesPartAccess, WorkspacesPartGitLab:
 		if o.StorageOnly {
 			return fmt.Errorf("--storage-only is the storage proof's; --part %s proves no storage", o.Part)
 		}
@@ -119,6 +120,9 @@ func WorkspacesTest(cfg *config.Config, opts WorkspacesTestOptions) error {
 	}
 	if opts.Part == WorkspacesPartAccess {
 		return workspacesAccessPart(cfg, opts.Email, opts.ReadyTimeout)
+	}
+	if opts.Part == WorkspacesPartGitLab {
+		return workspacesGitLabPart(cfg, opts.Email, opts.ReadyTimeout)
 	}
 	ctx := context.Background()
 	timeout := opts.ReadyTimeout

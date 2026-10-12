@@ -41,6 +41,12 @@ import (
 // the edge's loopback port (dialLab), Dex on its issuer URL, and the lab's
 // GitHub, whose name pods resolve to its Service (coredns.yaml.tmpl), on the
 // loopback port its container publishes: the edge has no route for it.
+//
+// A GitLab instance is a real GitLab: its link leads a new browser to
+// GitLab's sign-in form, which takes the provider person's GitLab login and
+// password (providerLogin), then to the OAuth application's consent form,
+// whose Authorize the walk submits; GitLab then redirects to the callback as
+// above.
 
 // The workspace-manager tools' argument names the walk and the proof pass.
 const (
@@ -49,10 +55,11 @@ const (
 	workspaceOwnerArg    = "owner"
 )
 
-// workspaceSignInMaxHops bounds the walk: the provider, the callback, Dex's
-// authorize, its connector and login pages, the login's return, /signin and
-// the callback again, with room for a Dex that adds a hop.
-const workspaceSignInMaxHops = 16
+// workspaceSignInMaxHops bounds the walk: the provider (a GitLab's
+// authorization, sign-in form, its post and consent included), the callback,
+// Dex's authorize, its connector and login pages, the login's return,
+// /signin and the callback again, with room for a Dex that adds a hop.
+const workspaceSignInMaxHops = 24
 
 // dexPasswordField is the password input of Dex's local login form, how the
 // walk recognizes the form among the pages it is handed.
@@ -66,6 +73,86 @@ var dexLocalConnectorRe = regexp.MustCompile(`href="([^"]*/auth/local[^"]*)"`)
 // pageHeadingRe is the heading of the workspace-manager's pages, its verdict
 // on a sign-in in a few words.
 var pageHeadingRe = regexp.MustCompile(`(?s)<h1>(.*?)</h1>`)
+
+// GitLab's pages the walk recognizes: the sign-in form (its password field
+// and action) and the OAuth application's consent (the form posting to the
+// authorization endpoint; its Deny is the same action with a hidden
+// `_method=delete`).
+const (
+	gitlabPasswordField = `name="user[password]"`
+	gitlabSignInAction  = "/users/sign_in"
+	gitlabAuthorizePath = "/oauth/authorize"
+	railsMethodField    = "_method"
+)
+
+var (
+	htmlFormRe  = regexp.MustCompile(`(?is)<form\b([^>]*)>(.*?)</form>`)
+	htmlInputRe = regexp.MustCompile(`(?is)<input\b([^>]*)>`)
+	htmlAttrRe  = regexp.MustCompile(`(?is)([a-z_:-]+)\s*=\s*"([^"]*)"`)
+)
+
+// htmlForm is one form of a page: its action, method and the named inputs'
+// values, unescaped.
+type htmlForm struct {
+	action, method string
+	fields         url.Values
+}
+
+// htmlForms reads a page's forms, enough for the server-rendered sign-in
+// and consent pages the walk submits.
+func htmlForms(page []byte) []htmlForm {
+	attrs := func(raw string) map[string]string {
+		out := map[string]string{}
+		for _, m := range htmlAttrRe.FindAllStringSubmatch(raw, -1) {
+			out[strings.ToLower(m[1])] = html.UnescapeString(m[2])
+		}
+		return out
+	}
+	var forms []htmlForm
+	for _, m := range htmlFormRe.FindAllSubmatch(page, -1) {
+		a := attrs(string(m[1]))
+		f := htmlForm{action: a["action"], method: strings.ToLower(cmp.Or(a["method"], http.MethodGet)), fields: url.Values{}}
+		for _, in := range htmlInputRe.FindAllSubmatch(m[2], -1) {
+			ia := attrs(string(in[1]))
+			if ia["name"] != "" {
+				f.fields.Set(ia["name"], ia["value"])
+			}
+		}
+		forms = append(forms, f)
+	}
+	return forms
+}
+
+// providerLogin is the person's own login at a provider whose sign-in is a
+// real login form (a GitLab), nil for the lab's GitHub, which consents for
+// the login its link names.
+type providerLogin struct {
+	login, password string
+}
+
+// gitlabFormStep answers the walk's next request on a GitLab page: the
+// sign-in form filled with the person's GitLab login, or the consent's
+// Authorize. ok is false on any other page.
+func gitlabFormStep(page []byte, login *providerLogin, posted bool) (action string, form url.Values, ok bool, err error) {
+	for _, f := range htmlForms(page) {
+		switch {
+		case f.method == "post" && strings.HasSuffix(f.action, gitlabSignInAction) && strings.Contains(string(page), gitlabPasswordField):
+			if login == nil {
+				return "", nil, true, fmt.Errorf("GitLab asks for a sign-in, and the walk has no GitLab login for the person")
+			}
+			if posted {
+				return "", nil, true, fmt.Errorf("GitLab answered the sign-in with its form again: it refused %s's credentials", login.login)
+			}
+			f.fields.Set("user[login]", login.login)
+			f.fields.Set("user[password]", login.password)
+			f.fields.Set("user[remember_me]", "0")
+			return f.action, f.fields, true, nil
+		case f.method == "post" && strings.HasSuffix(f.action, gitlabAuthorizePath) && f.fields.Get(railsMethodField) == "":
+			return f.action, f.fields, true, nil
+		}
+	}
+	return "", nil, false, nil
+}
 
 // signInHop is one request of the walk: the method, where it went without
 // the query (a code and a state are nobody's to read in a log) and the
@@ -97,7 +184,7 @@ var errSignInStopped = errors.New("the provider sign-in stopped")
 // follows no redirect itself and keeps the cookies. It returns the hops;
 // an error names the hop the walk stopped at, its status and the page's
 // heading.
-func walkProviderSignIn(client *http.Client, link, instance, email, password string) ([]signInHop, error) {
+func walkProviderSignIn(client *http.Client, link, instance, email, password string, login *providerLogin) ([]signInHop, error) {
 	var hops []signInHop
 	stopped := func(h signInHop, why string) error {
 		return fmt.Errorf("%w at %s: %s\n  hops: %s", errSignInStopped, h, why, signInHops(hops))
@@ -132,6 +219,14 @@ func walkProviderSignIn(client *http.Client, link, instance, email, password str
 		_ = resp.Body.Close()
 		hop.Status = resp.StatusCode
 		hops = append(hops, hop)
+		// A GitLab page answers with its sign-in or its consent form.
+		var glAction string
+		var glFields url.Values
+		var glForm bool
+		var glErr error
+		if login != nil && resp.StatusCode == http.StatusOK && next.Path != callback {
+			glAction, glFields, glForm, glErr = gitlabFormStep(page, login, method == http.MethodPost && strings.HasSuffix(next.Path, gitlabSignInAction))
+		}
 		switch {
 		case resp.StatusCode >= 300 && resp.StatusCode < 400:
 			location, err := next.Parse(resp.Header.Get("Location"))
@@ -143,6 +238,14 @@ func walkProviderSignIn(client *http.Client, link, instance, email, password str
 			return hops, stopped(hop, pageHeading(page))
 		case next.Path == callback:
 			return hops, nil
+		case glErr != nil:
+			return hops, stopped(hop, glErr.Error())
+		case glForm:
+			location, err := next.Parse(glAction)
+			if err != nil {
+				return hops, stopped(hop, "the form's action: "+err.Error())
+			}
+			next, form = location, glFields
 		case strings.Contains(string(page), dexPasswordField) && method == http.MethodPost:
 			return hops, stopped(hop, "Dex answered the login with its form again: it refused "+email+"'s credentials")
 		case strings.Contains(string(page), dexPasswordField):
@@ -244,6 +347,14 @@ func openWorkspacePerson(cfg *config.Config, user *config.User) (*workspacePerso
 // connected person call it (workspaces-signin-test, workspaces-test's
 // access part).
 func connectWorkspaceProvider(cfg *config.Config, p *workspacePerson, instance string) (string, error) {
+	return connectWorkspaceProviderAs(cfg, p, instance, nil)
+}
+
+// connectWorkspaceProviderAs is connectWorkspaceProvider at a provider whose
+// sign-in is a real login form: login is the person's account there (a
+// GitLab's). Without one the walk adds the person's fixture login for the
+// lab's GitHub.
+func connectWorkspaceProviderAs(cfg *config.Config, p *workspacePerson, instance string, login *providerLogin) (string, error) {
 	var started struct {
 		AuthorizationURL string `json:"authorizationURL"`
 	}
@@ -256,16 +367,21 @@ func connectWorkspaceProvider(cfg *config.Config, p *workspacePerson, instance s
 	}
 	// The lab's GitHub consents for the fixture user the login parameter
 	// names, as GitHub would for the browser's signed-in account.
-	q := link.Query()
-	q.Set(githubLogin, p.login)
-	link.RawQuery = q.Encode()
+	account := p.login
+	if login == nil {
+		q := link.Query()
+		q.Set(githubLogin, p.login)
+		link.RawQuery = q.Encode()
+	} else {
+		account = login.login
+	}
 	client, err := workspaceSignInClient(cfg)
 	if err != nil {
 		return "", err
 	}
-	hops, err := walkProviderSignIn(client, link.String(), instance, p.user.Email, p.user.Password)
+	hops, err := walkProviderSignIn(client, link.String(), instance, p.user.Email, p.user.Password, login)
 	if err != nil {
-		return "", fmt.Errorf("%s connecting %s as fixture user %s: %w", p.user.Email, instance, p.login, err)
+		return "", fmt.Errorf("%s connecting %s as %s: %w", p.user.Email, instance, account, err)
 	}
 	status, err := p.providerStatus(instance)
 	if err != nil {

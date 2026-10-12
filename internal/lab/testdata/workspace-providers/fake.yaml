@@ -22,3 +22,8 @@ providers:
                 key: client-secret
                 name: workspace-fake
         url: https://github.127.0.0.1.nip.io
+tokenExchange:
+    clientID: kagent
+    clientSecret:
+        key: client-secret
+        name: workspace-manager-token-exchange

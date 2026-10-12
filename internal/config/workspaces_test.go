@@ -67,6 +67,8 @@ func TestWorkspacesProvider(t *testing.T) {
 		{"github", []string{WorkspaceProviderGitHub}},
 		{"fake,github", []string{WorkspaceProviderFake, WorkspaceProviderGitHub}},
 		{" github , fake ", []string{WorkspaceProviderFake, WorkspaceProviderGitHub}},
+		{"gitlab", []string{WorkspaceProviderGitLab}},
+		{"gitlab,fake,github", []string{WorkspaceProviderFake, WorkspaceProviderGitHub, WorkspaceProviderGitLab}},
 	} {
 		cfg.Platform.Workspaces.Provider = tc.provider
 		if err := cfg.Validate(); err != nil {
@@ -75,11 +77,12 @@ func TestWorkspacesProvider(t *testing.T) {
 		if got := cfg.WorkspaceProviders(); !slices.Equal(got, tc.want) {
 			t.Errorf("provider %q: instances %v, want %v", tc.provider, got, tc.want)
 		}
-		if cfg.WorkspaceFakeProvider() != slices.Contains(tc.want, WorkspaceProviderFake) || cfg.WorkspaceGitHubProvider() != slices.Contains(tc.want, WorkspaceProviderGitHub) {
-			t.Errorf("provider %q: fake %v, github %v, want %v", tc.provider, cfg.WorkspaceFakeProvider(), cfg.WorkspaceGitHubProvider(), tc.want)
+		if cfg.WorkspaceFakeProvider() != slices.Contains(tc.want, WorkspaceProviderFake) || cfg.WorkspaceGitHubProvider() != slices.Contains(tc.want, WorkspaceProviderGitHub) ||
+			cfg.WorkspaceGitLabProvider() != slices.Contains(tc.want, WorkspaceProviderGitLab) {
+			t.Errorf("provider %q: fake %v, github %v, gitlab %v, want %v", tc.provider, cfg.WorkspaceFakeProvider(), cfg.WorkspaceGitHubProvider(), cfg.WorkspaceGitLabProvider(), tc.want)
 		}
 	}
-	for _, provider := range []string{"gitlab", "fake,gitlab", "fake,fake", "github,"} {
+	for _, provider := range []string{"gitea", "fake,gitea", "fake,fake", "github,"} {
 		cfg.Platform.Workspaces.Provider = provider
 		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "platform.workspaces.provider") {
 			t.Errorf("provider %q: err = %v, want refused", provider, err)
@@ -101,5 +104,39 @@ func TestWorkspacesProvider(t *testing.T) {
 	cfg.Platform.GatewayPort = 8443
 	if got, want := cfg.GitHubFakeURL(), "https://github.127.0.0.1.nip.io"; got != want {
 		t.Errorf("the fake's URL %s, want %s: pods reach it on 443 whatever the gateway port", got, want)
+	}
+}
+
+// The gitlab instance's settings: an https URL of a host, sources that are
+// references, never values.
+func TestWorkspaceGitLabValidate(t *testing.T) {
+	ok := WorkspaceGitLab{ // #nosec G101 -- references and ids, no credential
+		URL: "https://gitlab.example.com", ClientID: "abc", Group: "workspaces", Project: "proof", Person: "someone",
+		TokenSource: "secrets.sops.yaml#stringData.token", ClientSecretSource: "op://Lab/gitlab/client-secret", PasswordSource: "p.sops.yaml#stringData.password",
+	}
+	if err := ok.Validate(); err != nil {
+		t.Fatalf("a complete instance: %v", err)
+	}
+	for name, mutate := range map[string]func(*WorkspaceGitLab){
+		"an http URL":            func(g *WorkspaceGitLab) { g.URL = "http://gitlab.example.com" },
+		"a URL with a path":      func(g *WorkspaceGitLab) { g.URL = "https://gitlab.example.com/gitlab" },
+		"a URL without a host":   func(g *WorkspaceGitLab) { g.URL = "https://" },
+		"a token value":          func(g *WorkspaceGitLab) { g.TokenSource = "glpat-abcdef" },
+		"a client secret value":  func(g *WorkspaceGitLab) { g.ClientSecretSource = "gloas-abc" },
+		"a password with spaces": func(g *WorkspaceGitLab) { g.PasswordSource = "my password" },
+	} {
+		g := ok
+		mutate(&g)
+		if err := g.Validate(); err == nil || !strings.Contains(err.Error(), "platform.workspaces.gitlab.") {
+			t.Errorf("%s: err = %v, want refused naming the key", name, err)
+		}
+	}
+	cfg := Default()
+	cfg.Platform.Workspaces.Enabled = true
+	cfg.Platform.Workspaces.Provider = "fake,gitlab"
+	cfg.Platform.Workspaces.GitLab = ok
+	cfg.Platform.Workspaces.GitLab.URL = "ftp://gitlab.example.com"
+	if err := cfg.Validate(); err == nil {
+		t.Error("the configuration validates a gitlab instance with a bad URL")
 	}
 }
