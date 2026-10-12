@@ -482,7 +482,7 @@ func TestSessionsRoutes(t *testing.T) {
 		"agent": map[string]any{fieldNamespace: kagentNamespace, nameKey: testAgentName}}
 	deleted := false
 	fp.tools[startSessionTool] = func(map[string]any) (string, bool) {
-		raw, _ := json.Marshal(map[string]any{fieldSession: instance, "turn": map[string]any{"task": map[string]any{"id": "task-1"}}})
+		raw, _ := json.Marshal(map[string]any{fieldSession: instance, "turn": map[string]any{"task": map[string]any{"id": fakeTaskID}}})
 		return string(raw), false
 	}
 	fp.mux.HandleFunc(portalKagentAPI+kagentSessionsPath, func(w http.ResponseWriter, r *http.Request) {
@@ -512,11 +512,11 @@ func TestSessionsRoutes(t *testing.T) {
 	ps := fp.session(testPortalUser, platformAdminsGroup)
 	agent := portalAgentRef{Namespace: kagentNamespace, Name: testAgentName}
 	created, taskID, err := ps.startSession(agent, portalSessionName, "req-1", "hello")
-	if err != nil || created.ID != testSessionID || created.Creator != testPortalUser || created.Agent.Name != testAgentName || taskID != "task-1" {
+	if err != nil || created.ID != testSessionID || created.Creator != testPortalUser || created.Agent.Name != testAgentName || taskID != fakeTaskID {
 		t.Fatalf("start: %+v %q %v", created, taskID, err)
 	}
 	args := fp.captured[startSessionTool][0]
-	if args["requestId"] != "req-1" || args[nameKey] != testAgentName || args["namespace"] != kagentNamespace || args["sessionName"] != portalSessionName || args["message"] != "hello" {
+	if args["requestId"] != "req-1" || args[nameKey] != testAgentName || args[namespaceKey] != kagentNamespace || args["sessionName"] != portalSessionName || args["message"] != "hello" {
 		t.Errorf("start_session arguments = %v", args)
 	}
 	if got := fp.headers[portalMusterAPI+"/call"].Get(portalMusterAuthHeader); got != testDexToken {

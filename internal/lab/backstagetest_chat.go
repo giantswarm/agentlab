@@ -369,8 +369,8 @@ func (ps *portalSession) startSession(agent portalAgentRef, name, requestID, mes
 		} `json:"turn"`
 	}
 	args := map[string]any{
-		"namespace":   agent.Namespace,
-		"name":        agent.Name,
+		namespaceKey:  agent.Namespace,
+		nameKey:       agent.Name,
 		"message":     message,
 		"requestId":   requestID,
 		"sessionName": name,
