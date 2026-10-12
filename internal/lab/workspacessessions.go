@@ -137,6 +137,9 @@ type sessionRun struct {
 	// write into the mirrors.
 	Seen         []string `json:"seen"`
 	MirrorsWrite string   `json:"mirrorsWrite"`
+	// Deleted is the Session the part deleted: its timings stay in the
+	// report, the cleanup cycle no longer waits on it.
+	Deleted bool `json:"deleted,omitempty"`
 	// Notices are the first turn's status messages: the setup's word on
 	// what it could not clone or fetch.
 	Notices []string `json:"notices,omitempty"`
@@ -934,7 +937,7 @@ func (sp *sessionsProof) deleteOne() error {
 		return fmt.Errorf("the workspace changed with the Session's delete: deleting %t, volume %v", after.Workspace.Deleting, after.Workspace.Volume)
 	}
 	sp.set.ids = slices.DeleteFunc(sp.set.ids, func(id string) bool { return id == victim.ID })
-	sp.report.Sessions = runs[:len(runs)-1]
+	victim.Deleted = true
 	note("deleted %s (%s): its directory gone %s after DeleteSession, with the cycle %s (trigger %s); the %d other directories and the mirrors' heads untouched, the workspace on volume %s",
 		victim.ID, victim.Harness, time.Since(deletedAt).Round(time.Second), after.Workspace.LastSync.Result, after.Workspace.LastSync.Trigger, len(dirs), sp.volume.Handle)
 	return nil
@@ -1013,7 +1016,7 @@ func (sp *sessionsProof) noWorkspace() error {
 // cycle, checks every directory went and the condition, then resumes one
 // Session per Harness in a fresh directory.
 func (sp *sessionsProof) cleanupCycle() error {
-	runs := sp.report.Sessions
+	runs := liveSessions(sp.report.Sessions)
 	ctx, cancel := context.WithTimeout(context.Background(), sp.timeout+sp.window+sessionsWindowMargin)
 	defer cancel()
 	for _, r := range runs {
@@ -1087,6 +1090,11 @@ func (sp *sessionsProof) cleanupCycle() error {
 		}
 	}
 	return nil
+}
+
+// liveSessions are the runs the part has not deleted.
+func liveSessions(runs []*sessionRun) []*sessionRun {
+	return slices.DeleteFunc(slices.Clone(runs), func(r *sessionRun) bool { return r.Deleted })
 }
 
 // setupNotices are the notices of a workspace setup, joined.

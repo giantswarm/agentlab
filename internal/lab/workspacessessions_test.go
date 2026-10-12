@@ -224,3 +224,17 @@ func TestSessionsAgentManifest(t *testing.T) {
 		t.Fatalf("the Agent's spec ends:\n%s", m[max(0, len(m)-200):])
 	}
 }
+
+func TestLiveSessionsKeepsTheDeletedInTheReport(t *testing.T) {
+	runs := []*sessionRun{{ID: "a"}, {ID: "b", Deleted: true}, {ID: "c"}}
+	live := liveSessions(runs)
+	if len(live) != 2 || live[0].ID != "a" || live[1].ID != "c" {
+		t.Fatalf("live Sessions %v, want a and c", live)
+	}
+	if len(runs) != 3 || runs[1].ID != "b" {
+		t.Fatalf("the report's Sessions changed: %v", runs)
+	}
+	if lines := sessionsTimingLines(runs); len(lines) != 3 {
+		t.Fatalf("%d timing lines, want one per Session started (3)", len(lines))
+	}
+}
