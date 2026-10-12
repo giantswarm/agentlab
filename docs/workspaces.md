@@ -301,13 +301,10 @@ kagent trusts, the key's Secret and the Harness's readiness.
 The proof signs its grants itself, with the lab's key, in the manager's
 claims (`iss`, `sub`, `aud`, `exp`, `nbf`, `iat`, `jti`, `workspace`, `volume`,
 `mounts`). A grant verifies only through the key set the manager publishes. It
-does not call `authorize_workspace`, for two reasons:
-
-- The manager signs the person's Dex subject, and kagent on the platform
-  admits the creator's email
-  ([workspace-manager#36](https://github.com/giantswarm/workspace-manager/issues/36)).
-  The proof warns with both.
-- A grant needs a synced workspace.
+does not call `authorize_workspace`: a grant needs a synced workspace and a
+person signed in to its provider, which [the access part](#the-access-part)
+sets up. There, the manager's grant names the person by email, the Session's
+creator as kagent's admission compares it, and admits the Session.
 
 A claude Session works in its volume directory, with a clone of each mirror,
 from kagent 1.9.0; its agent's own clone of a mirror needs kagent 1.10.0,

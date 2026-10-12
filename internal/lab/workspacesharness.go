@@ -301,15 +301,10 @@ func proveWorkspacesHarnessSession(cfg *config.Config, timeout time.Duration) (s
 		return "", err
 	}
 	person := plain.GetCreator()
-	note("Session %s (creator %s): %s", plain.GetId(), person, probe)
 	// kagent's admission compares the grant's sub with the Session's
-	// creator; the manager's authorize_workspace signs the Dex subject. The
-	// proof's grants name the creator, and say so where the two differ.
-	if claims, err := decodeJWTClaims(token); err == nil {
-		if subject, _ := claims["sub"].(string); subject != "" && subject != person {
-			warn("the grants name the Session's creator %s; the workspace-manager's authorize_workspace signs the Dex subject %.12s…, which kagent's admission refuses as another person", person, subject)
-		}
-	}
+	// creator, the person's email, which the manager's authorize_workspace
+	// signs too (--part access proves its grant admitted).
+	note("Session %s (creator %s): %s", plain.GetId(), person, probe)
 
 	step("Refused at create: a volume without a grant, a grant the manager's key set does not verify, a grant for another person")
 	source := workspacesHarnessVolumeSource(volume)
