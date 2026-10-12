@@ -516,7 +516,40 @@ type Workspaces struct {
 type WorkspaceGitHub struct {
 	AppID    string `yaml:"appId,omitempty"`
 	ClientID string `yaml:"clientId,omitempty"`
+	// PrivateKeySource and ClientSecretSource are references `beekeeper
+	// secret copy` resolves to the App's private key and client secret, in
+	// the form AIKey.Source takes. Set, every up and platform places them
+	// into the Secret, so a recreated lab carries the instance without a
+	// manual step; empty, the Secret is placed by hand.
+	PrivateKeySource   string `yaml:"privateKeySource,omitempty"`
+	ClientSecretSource string `yaml:"clientSecretSource,omitempty"`
 }
+
+// Validate checks the two sources: each a secret reference when set.
+func (g WorkspaceGitHub) Validate() error {
+	for _, s := range []struct{ name, source string }{
+		{"privateKeySource", g.PrivateKeySource},
+		{"clientSecretSource", g.ClientSecretSource},
+	} {
+		if s.source == "" {
+			continue
+		}
+		if err := ValidateSecretSource(s.source); err != nil {
+			return fmt.Errorf("platform.workspaces.github.%s %q: %w", s.name, s.source, err)
+		}
+	}
+	return nil
+}
+
+// WorkspaceOrganization is the lab's one workspace-manager Organization, the
+// owner of every workspace a lab user creates (the namespace org-<name> is
+// the fleet-shaped org namespace the lab also carries).
+// WorkspaceOrganizationGroups are the lab Dex groups whose users are its
+// members: the platform admins and the developers. The viewers stay outside,
+// so the workspace tools refuse them as not a member.
+const WorkspaceOrganization = "lab"
+
+var WorkspaceOrganizationGroups = []string{groupPlatformAdmins, groupDevelopers}
 
 // The workspace providers, and the Secrets of their Apps: the fake's holds
 // the key pair and client secret the lab generated itself (certs/github-fake),
@@ -1626,6 +1659,9 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("platform.workspaces requires platform.agents (Substrate's signers certify the driver's endpoint, and a Session's workspace is a Substrate volume mount)")
 	}
 	if _, err := parseWorkspaceProviders(c.Platform.Workspaces.Provider); err != nil {
+		return err
+	}
+	if err := c.Platform.Workspaces.GitHub.Validate(); err != nil {
 		return err
 	}
 	// The vm-manager component exists from agent-platform 4.11.0; a pinned

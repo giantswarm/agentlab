@@ -388,12 +388,12 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 	if reason := workspaceManagerSkip(cfg); reason != "" {
 		p.leaveOut(reason, stageWorkspaceManager)
 	} else {
-		p.begin(stageWorkspaceManager, "The workspace-manager: registered with muster, Ready, list_providers as the admin")
+		p.begin(stageWorkspaceManager, "The workspace-manager: registered with muster, Ready, list_providers as the admin, the lab's Organization")
 		providers, err := proveWorkspaceManager(cfg)
 		if err != nil {
 			return "", err
 		}
-		verdict += fmt.Sprintf("\nPASS: the workspace-manager is registered with muster (MCPServer %s Connected) and lists its %d provider instances to the admin: %s", workspaceManagerMCPServer, len(providers), strings.Join(providers, ", "))
+		verdict += fmt.Sprintf("\nPASS: the workspace-manager is registered with muster (MCPServer %s Connected) and lists its %d provider instances to the admin: %s; list_workspaces for Organization %s answers a member and refuses a viewer", workspaceManagerMCPServer, len(providers), strings.Join(providers, ", "), config.WorkspaceOrganization)
 	}
 
 	// The per-server sign-in path: muster as OAuth client, challenged by the

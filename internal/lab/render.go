@@ -114,12 +114,15 @@ type tmplData struct {
 	Serving        servingValues
 	// WorkspacesEnabled mirrors cfg.WorkspacesEnabled(); WorkspacesChart
 	// says the platform chart takes the `workspaces:` block the values
-	// template renders (workspaces.go: chartCarriesWorkspaces), and
-	// Workspaces carries the names workspaces.yaml.tmpl and that block
-	// render.
-	WorkspacesEnabled bool
-	WorkspacesChart   bool
-	Workspaces        workspacesValues
+	// template renders (workspaces.go: chartWorkspaces), and Workspaces
+	// carries the names workspaces.yaml.tmpl and that block render.
+	// WorkspacesOrganizationsChart says the chart takes the lab's
+	// Organization as workspaces.organizations; without it the block gives
+	// it to the workspace-manager subchart directly.
+	WorkspacesEnabled            bool
+	WorkspacesChart              bool
+	WorkspacesOrganizationsChart bool
+	Workspaces                   workspacesValues
 	// WorkspaceProviders are the workspace-manager's provider instances
 	// (workspaceprovider.go), none while none is rendered: agentlab.yaml's
 	// in a render without a cluster, what the cluster allows in the
@@ -268,61 +271,62 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 	if err != nil {
 		return nil, err
 	}
-	workspacesChart := workspacesChartCarries(cfg)
+	workspacesChart := workspacesChartFor(cfg)
 	return &tmplData{
-		Config:                     cfg,
-		LabCA:                      labCA,
-		PostRenderers:              postRenderers,
-		MCPPrometheusPostRenderers: strings.TrimRight(string(mcpPrometheus), "\n"),
-		MCPPrometheusChartVersion:  mcpPrometheusChartVersion,
-		LocalRegistryEndpoint:      devRegistryEndpoint(cfg),
-		ConnectivityChart:          connectivity,
-		AteletImageCacheArgs:       ateletImageCacheArgs,
-		WorkerPoolArchLabel:        workerPoolArchLabel,
-		WorkerPoolArch:             workerPoolArch(),
-		SubstrateNodeKey:           config.SubstrateNodeKey,
-		GitHubToken:                gitHubTokenWired(cfg),
-		GitHubApp:                  gitHubAppWired(cfg),
-		ModelManagerEnabled:        cfg.ModelManagerEnabled(),
-		LegacyChart:                cfg.LegacyChart(),
-		FamilylessChart:            cfg.FamilylessChart(),
-		ModelManagerBackends:       cfg.ChartBackends(),
-		ModelManagerEndpoints:      endpoints,
-		ExtraModels:                cfg.Platform.ExtraModels,
-		OAuthFixtureServer:         oauthFixtureServer,
-		GitHubMCPServer:            gitHubMCPServer,
-		GitHubMCPClientSecret:      cfg.Platform.GitHub.ClientSecret(),
-		GitHubSignIn:               gitHubSignInValuesFor(cfg),
-		OAuthFixtureURL:            oauthFixtureURL,
-		VMManagerEnabled:           cfg.VMManagerEnabled(),
-		VMManagerGuestImage:        vmManagerGuestImage,
-		KlausGatewayEnabled:        cfg.KlausGatewayEnabled(),
-		KlausGateway:               klausGatewayValuesFor(cfg),
-		ClusterManagerEnabled:      cfg.ClusterManagerEnabled(),
-		AgentgatewayDevImage:       agentgatewayDevImage(cfg),
-		ServingEnabled:             cfg.ServingEnabled(),
-		Serving:                    servingValuesFor(),
-		WorkspacesEnabled:          cfg.WorkspacesEnabled(),
-		WorkspacesChart:            workspacesChart,
-		Workspaces:                 workspacesValuesFor(cfg),
-		WorkspaceProviders:         workspaceProviders,
-		WorkspaceFake:              cfg.WorkspaceFakeProvider(),
-		WorkspaceAdmission:         workspaceAdmissionValuesFor(cfg, workspacesChart),
-		CertsDir:                   certsDir,
-		NodeFilesDir:               nodeFiles,
-		MusterNodePort:             config.MusterNodePort,
-		KagentUINodePort:           config.KagentUINodePort,
-		GatewayNodePort:            config.GatewayNodePort,
-		GatewayPublicNodePort:      config.GatewayPublicNodePort,
-		BrowserCallbackPort:        config.BrowserCallbackPort,
-		DomainRegex:                strings.ReplaceAll(cfg.Platform.Domain, ".", `\.`),
-		LabHostName:                labHostName,
-		LabHostIP:                  labHostIP,
-		AllGroups:                  config.Groups,
-		KubernetesClientID:         config.KubernetesClientID,
-		KubernetesClientSecret:     config.KubernetesClientSecret,
-		AgentPlatformClientID:      config.AgentPlatformClientID,
-		AgentPlatformClientSecret:  config.AgentPlatformClientSecret,
+		Config:                       cfg,
+		LabCA:                        labCA,
+		PostRenderers:                postRenderers,
+		MCPPrometheusPostRenderers:   strings.TrimRight(string(mcpPrometheus), "\n"),
+		MCPPrometheusChartVersion:    mcpPrometheusChartVersion,
+		LocalRegistryEndpoint:        devRegistryEndpoint(cfg),
+		ConnectivityChart:            connectivity,
+		AteletImageCacheArgs:         ateletImageCacheArgs,
+		WorkerPoolArchLabel:          workerPoolArchLabel,
+		WorkerPoolArch:               workerPoolArch(),
+		SubstrateNodeKey:             config.SubstrateNodeKey,
+		GitHubToken:                  gitHubTokenWired(cfg),
+		GitHubApp:                    gitHubAppWired(cfg),
+		ModelManagerEnabled:          cfg.ModelManagerEnabled(),
+		LegacyChart:                  cfg.LegacyChart(),
+		FamilylessChart:              cfg.FamilylessChart(),
+		ModelManagerBackends:         cfg.ChartBackends(),
+		ModelManagerEndpoints:        endpoints,
+		ExtraModels:                  cfg.Platform.ExtraModels,
+		OAuthFixtureServer:           oauthFixtureServer,
+		GitHubMCPServer:              gitHubMCPServer,
+		GitHubMCPClientSecret:        cfg.Platform.GitHub.ClientSecret(),
+		GitHubSignIn:                 gitHubSignInValuesFor(cfg),
+		OAuthFixtureURL:              oauthFixtureURL,
+		VMManagerEnabled:             cfg.VMManagerEnabled(),
+		VMManagerGuestImage:          vmManagerGuestImage,
+		KlausGatewayEnabled:          cfg.KlausGatewayEnabled(),
+		KlausGateway:                 klausGatewayValuesFor(cfg),
+		ClusterManagerEnabled:        cfg.ClusterManagerEnabled(),
+		AgentgatewayDevImage:         agentgatewayDevImage(cfg),
+		ServingEnabled:               cfg.ServingEnabled(),
+		Serving:                      servingValuesFor(),
+		WorkspacesEnabled:            cfg.WorkspacesEnabled(),
+		WorkspacesChart:              workspacesChart.Carries,
+		WorkspacesOrganizationsChart: workspacesChart.Organizations,
+		Workspaces:                   workspacesValuesFor(cfg),
+		WorkspaceProviders:           workspaceProviders,
+		WorkspaceFake:                cfg.WorkspaceFakeProvider(),
+		WorkspaceAdmission:           workspaceAdmissionValuesFor(cfg, workspacesChart.Carries),
+		CertsDir:                     certsDir,
+		NodeFilesDir:                 nodeFiles,
+		MusterNodePort:               config.MusterNodePort,
+		KagentUINodePort:             config.KagentUINodePort,
+		GatewayNodePort:              config.GatewayNodePort,
+		GatewayPublicNodePort:        config.GatewayPublicNodePort,
+		BrowserCallbackPort:          config.BrowserCallbackPort,
+		DomainRegex:                  strings.ReplaceAll(cfg.Platform.Domain, ".", `\.`),
+		LabHostName:                  labHostName,
+		LabHostIP:                    labHostIP,
+		AllGroups:                    config.Groups,
+		KubernetesClientID:           config.KubernetesClientID,
+		KubernetesClientSecret:       config.KubernetesClientSecret,
+		AgentPlatformClientID:        config.AgentPlatformClientID,
+		AgentPlatformClientSecret:    config.AgentPlatformClientSecret,
 	}, nil
 }
 

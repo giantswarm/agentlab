@@ -179,8 +179,24 @@ the route the chart renders for it, and the lab Dex's redirect URI
 `<base URL>/signin`
 ([Platform](platform.md#the-workspace-managers-provider-instances-platformworkspacesprovider)).
 `platform-test` proves the manager registered with muster and Connected,
-rolled out, and `list_providers` as the admin naming every configured
-instance and nothing else.
+rolled out, `list_providers` as the admin naming every configured
+instance and nothing else, and [the lab's Organization](#the-labs-organization).
+
+### The lab's Organization
+
+The workspace tools act only for a member of a workspace's Organization, and
+an Organization the manager is not given has no members. With workspaces on,
+the values give it one, `lab`, whose members are the lab Dex's
+`platform-admins` and `developers`; the `viewers` stay outside. On a chart
+that forwards `workspaces.organizations` (agent-platform 4.127.0 and newer)
+it is rendered there, `[{name: lab, memberGroups: [platform-admins,
+developers]}]`, which the chart turns into the manager's
+`--organization=lab=platform-admins,developers`; on an older chart that takes
+the workspaces values, as the subchart's own
+`workspace-manager.organizations` map. `platform-test` calls
+`list_workspaces` for `lab` as the admin, which answers, and as the viewer,
+which is refused as not a member. A workspace a lab user creates names
+`organization: lab`.
 
 ### The provider instance fake
 
@@ -221,6 +237,10 @@ workspace-manager a real GitHub. The instance renders once a GitHub App of
 the lab's own is in place (the ids in `agentlab.yaml`, the keys in the Secret
 `agent-platform/workspace-github`:
 [Platform](platform.md#the-workspace-managers-provider-instances-platformworkspacesprovider)).
+With `platform.workspaces.github.privateKeySource` and `clientSecretSource`
+recorded, every `up` and `platform` places the two keys through the
+operator's secret tooling, so a recreated lab keeps the instance; without
+them the Secret is placed by hand, and a lab without it lists only `fake`.
 
 The App is registered once, by an owner of the organization that holds it,
 in GitHub's UI (Settings, Developer settings, GitHub Apps), and serves every

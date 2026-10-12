@@ -2,6 +2,7 @@ package lab
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -24,8 +25,11 @@ import (
 //     client id in agentlab.yaml, its private key and client secret in the
 //     Secret agent-platform/workspace-github, which the operator's secret
 //     tooling places (`beekeeper secret copy <ref> --to-secret
-//     <context>/agent-platform/workspace-github/<key>`, one call per key).
-//     agentlab reads which keys it carries and never a value.
+//     <context>/agent-platform/workspace-github/<key>`, one call per key):
+//     every up and platform from platform.workspaces.github's
+//     privateKeySource and clientSecretSource when agentlab.yaml records
+//     them (ensureWorkspaceGitHubSecret), by hand otherwise. agentlab reads
+//     which keys it carries and never a value.
 
 // workspaceGitHubKeys are the keys an instance's Secret must carry: the
 // App's private key (the mirrors' sync) and the OAuth client's secret (the
@@ -122,6 +126,34 @@ func workspaceProviderNames(providers []workspaceProviderValues) []string {
 	return names
 }
 
+// ensureWorkspaceGitHubSecret is the deploy-time placement of the github
+// instance's Secret, run before workspaceGitHubFor reads it: each key whose
+// source agentlab.yaml records is placed by the secret tooling, and a
+// placement that fails fails the run, so a lab whose configuration says
+// where the App's keys are never comes up without the instance. A key
+// without a source is left as it is, for a placement by hand.
+func ensureWorkspaceGitHubSecret(cfg *config.Config) error {
+	if !cfg.WorkspaceGitHubProvider() {
+		return nil
+	}
+	gh := cfg.Platform.Workspaces.GitHub
+	for _, k := range []struct{ key, field, source string }{
+		{config.WorkspaceGitHubPrivateKeyKey, "privateKeySource", gh.PrivateKeySource},
+		{config.GitHubClientSecretKey, "clientSecretSource", gh.ClientSecretSource},
+	} {
+		if k.source == "" {
+			continue
+		}
+		answer, err := runSecretTool(secretCopyArgs(k.source, secretTarget(cfg, platformNamespace, config.WorkspaceGitHubSecretName, k.key))...)
+		if err != nil {
+			return fmt.Errorf("secret %s/%s key %s from platform.workspaces.github.%s %s: %w\n  the workspace-manager's provider instance %s references it; when %s answers, re-run `agentlab platform`",
+				platformNamespace, config.WorkspaceGitHubSecretName, k.key, k.field, k.source, err, config.WorkspaceProviderGitHub, secretTool)
+		}
+		note("secret %s/%s key %s placed from %s by %s (%s); agentlab never read the value", platformNamespace, config.WorkspaceGitHubSecretName, k.key, k.source, secretTool, strings.TrimSpace(answer))
+	}
+	return nil
+}
+
 // workspaceGitHubFor is the instance github the install renders: the
 // configured one once the App's ids are set and its Secret carries both
 // keys. Otherwise nil, with a warning that names what is missing, the
@@ -156,9 +188,9 @@ func workspaceGitHubFor(ctx context.Context, cfg *config.Config) (*workspaceProv
 		return workspaceGitHubValuesFor(cfg), nil
 	}
 	warn("platform.workspaces.provider names github but %s missing -- the workspace-manager gets no provider instance %s", strings.Join(missing, ", "), config.WorkspaceProviderGitHub)
-	warn("  register a GitHub App with callback URL %s, record its App id and client id in agentlab.yaml and place its keys, one per call:", cfg.WorkspaceGitHubCallbackURL())
+	warn("  register a GitHub App with callback URL %s, record its App id and client id in agentlab.yaml and where its keys are (platform.workspaces.github.privateKeySource and clientSecretSource: every up and platform places them), or place them by hand, one per call:", cfg.WorkspaceGitHubCallbackURL())
 	for _, key := range workspaceGitHubKeys {
-		warn("  beekeeper secret copy <ref to the %s> --to-secret kind-%s/%s/%s/%s", key, cfg.ClusterName, platformNamespace, config.WorkspaceGitHubSecretName, key)
+		warn("  %s secret copy <ref to the %s> --to-secret %s", secretTool, key, secretTarget(cfg, platformNamespace, config.WorkspaceGitHubSecretName, key))
 	}
 	warn("  then re-run; agentlab never reads the values (docs/workspaces.md)")
 	return nil, nil

@@ -144,6 +144,10 @@ type workspacesValues struct {
 	// run: the export is a directory of that node.
 	Node   string
 	Images workspacesImages
+	// Organization and OrganizationGroups are the lab's workspace-manager
+	// Organization and its member groups (config.WorkspaceOrganization).
+	Organization       string
+	OrganizationGroups []string
 }
 
 func workspacesValuesFor(cfg *config.Config) workspacesValues {
@@ -167,6 +171,8 @@ func workspacesValuesFor(cfg *config.Config) workspacesValues {
 		SubstrateDir:       substrateVolumesDir,
 		ClientSPIFFEID:     ateAPIServerSPIFFEID,
 		Node:               WorkspacesNode(cfg),
+		Organization:       config.WorkspaceOrganization,
+		OrganizationGroups: config.WorkspaceOrganizationGroups,
 		Images: workspacesImages{
 			NFSServer:     nfsServerImage,
 			NFSPlugin:     nfsPluginImage,
@@ -195,79 +201,127 @@ func WorkspacesNode(cfg *config.Config) string {
 	return cfg.ControlPlaneNode()
 }
 
-// chartCarriesWorkspaces reports whether the meta chart about to be installed
-// takes a `workspaces` key: its values schema names it at the root (the
-// schema's root refuses unknown keys, so a block on a chart without it fails
-// the install at render), or its default values carry it. Memoized per
-// chart, since a registry chart is pulled once per digest; a test points
+// chartWorkspaces is what the meta chart about to be installed takes of the
+// lab's workspaces values: Carries, a `workspaces` key — its values schema
+// names it at the root (the schema's root refuses unknown keys, so a block
+// on a chart without it fails the install at render), or its default values
+// carry it; Organizations, the list `workspaces.organizations` beneath it,
+// which the chart forwards as the workspace-manager's organizations map and
+// from which it refuses a `workspace-manager.organizations` of its own (from
+// agent-platform 4.127.0). A chart that carries the key without the list
+// takes the map on the subchart.
+type chartWorkspaces struct {
+	Carries, Organizations bool
+}
+
+// chartWorkspacesOf probes the chart once: memoized per chart, since a
+// registry chart is pulled once per digest; a test points
 // chartWorkspacesProbe at a stub.
-func chartCarriesWorkspaces(chart platformChart) (bool, error) {
+func chartWorkspacesOf(chart platformChart) (chartWorkspaces, error) {
 	chartWorkspacesMu.Lock()
 	defer chartWorkspacesMu.Unlock()
 	key := chart.String()
-	if carries, ok := chartWorkspacesCache[key]; ok {
-		return carries, nil
+	if w, ok := chartWorkspacesCache[key]; ok {
+		return w, nil
 	}
-	carries, err := chartWorkspacesProbe(chart)
+	w, err := chartWorkspacesProbe(chart)
 	if err != nil {
-		return false, err
+		return chartWorkspaces{}, err
 	}
-	chartWorkspacesCache[key] = carries
-	return carries, nil
+	chartWorkspacesCache[key] = w
+	return w, nil
 }
 
 var (
 	chartWorkspacesMu    sync.Mutex
-	chartWorkspacesCache = map[string]bool{}
+	chartWorkspacesCache = map[string]chartWorkspaces{}
 	// chartWorkspacesProbe loads the chart and reads its schema and values;
 	// the tests replace it.
-	chartWorkspacesProbe = func(chart platformChart) (bool, error) {
+	chartWorkspacesProbe = func(chart platformChart) (chartWorkspaces, error) {
 		c, err := loadPlatformChart(chart)
 		if err != nil {
-			return false, err
+			return chartWorkspaces{}, err
 		}
 		if c == nil {
-			return false, nil
+			return chartWorkspaces{}, nil
 		}
-		return chartValuesCarry(c.Schema, c.Values, valuesWorkspaces), nil
+		return chartWorkspaces{
+			Carries:       chartValuesCarry(c.Schema, c.Values, valuesWorkspaces),
+			Organizations: chartValuesCarry(c.Schema, c.Values, valuesWorkspaces, valuesWorkspacesOrganizations),
+		}, nil
 	}
 )
 
-// valuesWorkspaces is the chart's workspaces key.
-const valuesWorkspaces = "workspaces"
+// valuesWorkspaces is the chart's workspaces key, valuesWorkspacesOrganizations
+// the Organizations' list beneath it.
+const (
+	valuesWorkspaces              = "workspaces"
+	valuesWorkspacesOrganizations = "organizations"
+)
 
-// workspacesChartCarries is chartCarriesWorkspaces for the configured chart
-// when the switch is on, false otherwise; a chart that cannot be probed is a
-// note and false, so the lab registers the driver with Substrate itself.
-func workspacesChartCarries(cfg *config.Config) bool {
+// workspacesChartFor is chartWorkspacesOf for the configured chart when the
+// switch is on, nothing otherwise; a chart that cannot be probed is a note
+// and nothing, so the lab registers the driver with Substrate itself.
+func workspacesChartFor(cfg *config.Config) chartWorkspaces {
 	if !cfg.WorkspacesEnabled() {
-		return false
+		return chartWorkspaces{}
 	}
-	carries, err := chartCarriesWorkspaces(platformChartFor(cfg))
+	w, err := chartWorkspacesOf(platformChartFor(cfg))
 	if err != nil {
 		note("the platform chart's workspaces values could not be probed (%v): the lab registers the driver with Substrate itself", err)
-		return false
+		return chartWorkspaces{}
 	}
-	return carries
+	return w
 }
 
-// chartValuesCarry reports whether a chart's values schema names key among
-// its root properties, or its default values carry it.
-func chartValuesCarry(schema []byte, values map[string]any, key string) bool {
-	if _, ok := values[key]; ok {
+// workspacesChartCarries is whether the configured chart takes the lab's
+// workspaces block (workspacesChartFor).
+func workspacesChartCarries(cfg *config.Config) bool {
+	return workspacesChartFor(cfg).Carries
+}
+
+// chartValuesCarry reports whether a chart's values schema names the key
+// path (each key a property of the one before, from the root), or its
+// default values carry it.
+func chartValuesCarry(schema []byte, values map[string]any, path ...string) bool {
+	if valuesCarry(values, path) {
 		return true
 	}
 	if len(schema) == 0 {
 		return false
 	}
-	var s struct {
-		Properties map[string]json.RawMessage `json:"properties"`
+	raw := json.RawMessage(schema)
+	for _, key := range path {
+		var s struct {
+			Properties map[string]json.RawMessage `json:"properties"`
+		}
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return false
+		}
+		next, ok := s.Properties[key]
+		if !ok {
+			return false
+		}
+		raw = next
 	}
-	if err := json.Unmarshal(schema, &s); err != nil {
-		return false
+	return true
+}
+
+// valuesCarry reports whether values hold the key path, each key a mapping's.
+func valuesCarry(values map[string]any, path []string) bool {
+	for i, key := range path {
+		v, ok := values[key]
+		if !ok {
+			return false
+		}
+		if i == len(path)-1 {
+			return true
+		}
+		if values, ok = v.(map[string]any); !ok {
+			return false
+		}
 	}
-	_, ok := s.Properties[key]
-	return ok
+	return false
 }
 
 // workspacesUp installs the workspace storage: the rendered manifest (the

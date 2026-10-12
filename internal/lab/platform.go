@@ -540,6 +540,9 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	// The workspace-manager's provider instances, the github one once its
 	// App and Secret are in place (workspaceprovider.go); resolved once, for
 	// both renders below, like the arch pin.
+	if err := ensureWorkspaceGitHubSecret(cfg); err != nil {
+		return err
+	}
 	workspaceProviders, err := workspaceProvidersInstall(ctx, cfg)
 	if err != nil {
 		return err

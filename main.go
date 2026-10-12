@@ -801,6 +801,7 @@ func configureCmd() *cobra.Command {
 	var serving, workspaces, github, githubSignIn bool
 	var githubSignInClientID string
 	var workspacesProvider, workspacesGitHubAppID, workspacesGitHubClientID string
+	var workspacesGitHubPrivateKeySource, workspacesGitHubClientSecretSource string
 	var githubSignInOrgs, modelManagerBackends []string
 	var vmManagerImageDir, aiKeySource, gitHubTokenSource string
 	var gitHubAppID, gitHubAppInstallationID, gitHubAppPrivateKeySource string
@@ -928,6 +929,12 @@ func configureCmd() *cobra.Command {
 			if cmd.Flags().Changed("workspaces-github-client-id") {
 				cfg.Platform.Workspaces.GitHub.ClientID = workspacesGitHubClientID
 			}
+			if cmd.Flags().Changed("workspaces-github-private-key-source") {
+				cfg.Platform.Workspaces.GitHub.PrivateKeySource = workspacesGitHubPrivateKeySource
+			}
+			if cmd.Flags().Changed("workspaces-github-client-secret-source") {
+				cfg.Platform.Workspaces.GitHub.ClientSecretSource = workspacesGitHubClientSecretSource
+			}
 			if cmd.Flags().Changed("ai-key-source") {
 				cfg.AIKey.Source = aiKeySource
 			}
@@ -1007,6 +1014,8 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().StringVar(&workspacesProvider, "workspaces-provider", "", "the workspace-manager's provider instances: fake (the lab's own GitHub, the default), github (a GitHub App of the lab's own, docs/workspaces.md) or both, fake,github")
 	cmd.Flags().StringVar(&workspacesGitHubAppID, "workspaces-github-app-id", "", "the App id of the workspaces GitHub App (public; its private key and client secret go into the Secret agent-platform/"+config.WorkspaceGitHubSecretName+")")
 	cmd.Flags().StringVar(&workspacesGitHubClientID, "workspaces-github-client-id", "", "the client id of the workspaces GitHub App (public)")
+	cmd.Flags().StringVar(&workspacesGitHubPrivateKeySource, "workspaces-github-private-key-source", "", "where the workspaces GitHub App's private key is: a reference `beekeeper secret copy` resolves (op://<vault>/<item>/<field>, or <file>#<path> of a SOPS file), never the key; every up and platform place it into the Secret agent-platform/"+config.WorkspaceGitHubSecretName)
+	cmd.Flags().StringVar(&workspacesGitHubClientSecretSource, "workspaces-github-client-secret-source", "", "where the workspaces GitHub App's client secret is, in the form --workspaces-github-private-key-source takes; placed the same way")
 	cmd.Flags().BoolVar(&serving, "serving", false, "serve models on llm-d in the lab: the KServe llmisvc controller and its CRDs, the well-known runtime configs, the connectivity chart's serving slice with the models Gateway, model-manager's kserve backend and one CPU preset of the lab's (needs agents; installs cert-manager); --serving=false turns it off")
 	cmd.Flags().StringVar(&aiKeySource, "ai-key-source", "", "where the Anthropic key of the agents' default ModelConfig lives, a reference `beekeeper secret copy` resolves (op://<vault>/<item>/<field>, or <file>#<path> of a SOPS file), never a value: every up and platform place it into the Secret kagent/kagent-anthropic through beekeeper, so a recreated lab carries it without a manual step; \"\" clears it (the key then comes from $ANTHROPIC_API_KEY, else a placeholder)")
 	cmd.Flags().StringVar(&gitHubTokenSource, "github-token-source", "", "where the GitHub token of the portal's skill discovery and agent-manager's skill resolution lives, a reference `beekeeper secret copy` resolves (op://<vault>/<item>/<field>, or <file>#<path> of a SOPS file), never a value: every up and platform place it into the Secret agentlab-github-token through beekeeper, lifting GitHub's anonymous 60 requests an hour this machine shares; \"\" clears it (the token then comes from $GITHUB_TOKEN, else GitHub is called unauthenticated)")
@@ -1073,9 +1082,10 @@ func printSaved(cfg *config.Config, disc *lab.Discovery) {
 	}
 	if cfg.WorkspaceGitHubProvider() {
 		gh := cfg.Platform.Workspaces.GitHub
-		fmt.Printf("  ws-github  the workspace-manager's provider instance github: App id %s, client id %s, the App's callback URL %s, Dex redirect URI %s; private key and client secret from Secret %s/%s (keys %s, %s)\n",
+		fmt.Printf("  ws-github  the workspace-manager's provider instance github: App id %s, client id %s, the App's callback URL %s, Dex redirect URI %s; private key and client secret from Secret %s/%s (keys %s from %s, %s from %s)\n",
 			orUnset(gh.AppID), orUnset(gh.ClientID), cfg.WorkspaceGitHubCallbackURL(), cfg.WorkspaceManagerSignInURL(),
-			config.DefaultGitHubSecretNamespace, config.WorkspaceGitHubSecretName, config.WorkspaceGitHubPrivateKeyKey, config.GitHubClientSecretKey)
+			config.DefaultGitHubSecretNamespace, config.WorkspaceGitHubSecretName,
+			config.WorkspaceGitHubPrivateKeyKey, orByHand(gh.PrivateKeySource), config.GitHubClientSecretKey, orByHand(gh.ClientSecretSource))
 	}
 	if cfg.VMManagerEnabled() {
 		fmt.Printf("  vm-manager the platform's VM provisioner as a pod of the node, registered with muster as x_vm-manager_* (%s)\n",
@@ -1089,6 +1099,14 @@ func printSaved(cfg *config.Config, disc *lab.Discovery) {
 		fmt.Printf("  github     sign-in through the lab Dex as client %s (callback URL %s; the client secret from Secret %s/%s, key %s)%s\n",
 			s.ClientID, cfg.GitHubSignInCallbackURL(), config.GitHubSignInSecretNamespace, s.ClientSecret().Name, config.GitHubClientSecretKey, gitHubSignInOrgsNote(s.Orgs))
 	}
+}
+
+// orByHand is a recorded secret source as the summary prints it.
+func orByHand(source string) string {
+	if source == "" {
+		return "a placement by hand"
+	}
+	return source
 }
 
 // orUnset is a configured value as the summary prints it.
