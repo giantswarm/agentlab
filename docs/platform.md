@@ -938,9 +938,28 @@ each judged `PASS` or `FAIL` with its cause:
    Ready, every worker pod of the WorkerPool is deleted every 8 s for a
    minute, so the golden re-take and the resume land on workers that drain,
    go away or have no ateom socket yet; the suspended Session's resume is
-   issued as soon as the drain begins. The `drain:` line names the
-   `ate-api-server` pod that began it, its rounds and every worker pod it
-   deleted.
+   issued during the drain, as soon as no `ate-api-server` pod of the release
+   before is left: the kagent controller holds one connection to the ate-api
+   Service for its lifetime, which the rollout moves only when the pod behind
+   it goes, and a resume issued while the release before's pods still serve
+   restores under the release before. A drain that ends with them still there
+   fails, naming them. The resume is issued again, as a client would, while
+   kagent answers `Unavailable` (its connection moving, a resume still
+   deferred at the controller's own bound) or `Aborted` (the operation still
+   pending); `FailedPrecondition`, the runtime lost, ends it. The `drain:`
+   lines name the `ate-api-server` pod that began it, its rounds and every
+   worker pod it deleted, when the release before's pods were gone and each
+   resume attempt's answer.
+   **restore** — the candidate's own account, read before the lab steps back:
+   the RPC log of every `ate-api-server` pod of the candidate must show a
+   `ResumeActor` of the Session's actor that arrived while the drain ran (the
+   line's `time` less its `elapsed-time`); the `PASS` line names each one by
+   its offset from the drain's start and how it ended (`RUNNING`, or the
+   error — a restore the drain cut answers `Unavailable` and comes back as
+   another), then the resume's own account (issued when, attempts, answered
+   `READY`). None during the drain fails the stage, naming the ones outside
+   it or none at all; a resume that reached the candidate and ended in an
+   error fails it with the actor's state and crash.
 4. **resume** — the suspended Session resumes; its next turn must answer the
    codeword of the first turn (the conversation) and `cat` the marker back
    (the volume). A failed resume names its cause from the Session's failure
@@ -955,8 +974,9 @@ each judged `PASS` or `FAIL` with its cause:
    exposes on no API; a release with a new layout is added there); then a new
    Session of the same agent answers one turn.
 
-In the drain case a stage `retake` runs between the step and the resume, so
-a failed resume still leaves its verdict in the output: every ActorTemplate
+In the drain case the stages `restore` and `retake` run between the step and
+the resume, so a failed resume still leaves their verdicts in the output;
+`retake`: every ActorTemplate
 of the lab that had a golden before the step must hold one in that layout
 within `--retake-timeout` — its own, kept, or one taken again — and none may
 record a terminal `GoldenSnapshotStatus` error — the `GoldenActorCrashed` a

@@ -2,6 +2,7 @@ package lab
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -10,8 +11,11 @@ import (
 	"sync"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	ateapi "github.com/giantswarm/agentlab/internal/kagent/gen"
 	apiv1alpha1 "github.com/giantswarm/agentlab/internal/kagent/gen/kagent/api/v1alpha1"
 )
 
@@ -24,13 +28,20 @@ import (
 // moment the candidate's ate-api-server pod is Ready, every worker pod of the
 // pool is deleted every substrateDrainEvery for substrateDrainFor (the way
 // the race was reproduced by hand), and the suspended conversation's resume
-// is issued while the drain runs. The proof then requires every golden of
-// the lab taken again on the candidate with no terminal error, and the
+// is issued while the drain runs — once the release before's ate-api-server
+// pods are gone, so that it reaches the candidate (drainResume), which the
+// candidate's RPC log must show. The proof then requires every golden of the
+// lab in the layout the candidate writes with no terminal error, and the
 // conversation resumed intact.
 
 const (
 	substrateDrainEvery = 8 * time.Second
 	substrateDrainFor   = time.Minute
+	// substrateDrainHandoverPoll is how often the resume looks for the
+	// release before's ate-api-server pods to be gone, substrateDrainRetry
+	// the wait before a resume is issued again.
+	substrateDrainHandoverPoll = time.Second
+	substrateDrainRetry        = 2 * time.Second
 )
 
 // workerDrain is one drain under a step: started by the candidate's
@@ -147,6 +158,13 @@ func (d *workerDrain) running() bool {
 	return !d.start.IsZero() && d.end.IsZero()
 }
 
+// window is when the drain began and ended (the zero time while it runs).
+func (d *workerDrain) window() (start, end time.Time) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.start, d.end
+}
+
 // wait blocks until the drain has ended (or given up) and returns its
 // verdict: an error when it deleted no worker pod.
 func (d *workerDrain) wait() error {
@@ -192,12 +210,17 @@ func wordedPods(names []string) string {
 	return strings.Join(names, ", ")
 }
 
+// apiPods is every pod of the ate-api-server Deployment.
+func apiPods(ctx context.Context) ([]unstructured.Unstructured, error) {
+	rctx, cancel := context.WithTimeout(ctx, kubeReadTimeout)
+	defer cancel()
+	return listObjects(rctx, gvrPods, substrateNamespace, "app="+substrateAPIDeployment)
+}
+
 // readyAPIPodOff is the name of a Ready ate-api-server pod that runs another
 // image than before (the candidate's), "" while there is none.
 func readyAPIPodOff(ctx context.Context, before string) (string, error) {
-	rctx, cancel := context.WithTimeout(ctx, kubeReadTimeout)
-	defer cancel()
-	pods, err := listObjects(rctx, gvrPods, substrateNamespace, "app="+substrateAPIDeployment)
+	pods, err := apiPods(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -208,12 +231,7 @@ func readyAPIPodOff(ctx context.Context, before string) (string, error) {
 // first container runs another image than before.
 func podReadyOff(pods []unstructured.Unstructured, before string) string {
 	for _, pod := range pods {
-		containers, _, _ := unstructured.NestedSlice(pod.Object, "spec", podContainersKey)
-		if len(containers) == 0 || pod.GetDeletionTimestamp() != nil {
-			continue
-		}
-		c, _ := containers[0].(map[string]any)
-		if img, _ := c[imageKey].(string); img == before {
+		if img := podImage(pod); img == "" || img == before || pod.GetDeletionTimestamp() != nil {
 			continue
 		}
 		conditions, _, _ := unstructured.NestedSlice(pod.Object, crStatus, crConditions)
@@ -224,18 +242,61 @@ func podReadyOff(pods []unstructured.Unstructured, before string) string {
 	return ""
 }
 
-// drainResume is the suspended conversation's resume, issued once the drain
-// has begun; its outcome is read by the resume step.
-type drainResume struct {
-	done     chan struct{}
-	session  *apiv1alpha1.Session
-	err      error
-	issuedAt time.Time
-	inDrain  bool
+// podImage is the image of a pod's first container, "" without one.
+func podImage(pod unstructured.Unstructured) string {
+	containers, _, _ := unstructured.NestedSlice(pod.Object, "spec", podContainersKey)
+	if len(containers) == 0 {
+		return ""
+	}
+	c, _ := containers[0].(map[string]any)
+	img, _ := c[imageKey].(string)
+	return img
 }
 
-// resumeDuringDrain issues the resume as soon as the drain begins (or gives
-// up), in the background.
+// podsOn is the names of the pods whose first container runs image,
+// terminating ones included: a pod of the release before that is still
+// there still serves the connections it holds. podsOff is the others.
+func podsOn(pods []unstructured.Unstructured, image string) []string {
+	return podsWhere(pods, func(img string) bool { return img == image })
+}
+
+func podsOff(pods []unstructured.Unstructured, image string) []string {
+	return podsWhere(pods, func(img string) bool { return img != image })
+}
+
+func podsWhere(pods []unstructured.Unstructured, keep func(image string) bool) []string {
+	var names []string
+	for _, pod := range pods {
+		if keep(podImage(pod)) {
+			names = append(names, pod.GetName())
+		}
+	}
+	return names
+}
+
+// drainResume is the suspended conversation's resume during the drain. It
+// is issued once the release before's ate-api-server pods are gone, so that
+// it reaches the candidate: the kagent controller holds one connection to the
+// ate-api Service for its lifetime, which the rollout moves only when the pod
+// behind it goes, and the candidate's first pod is Ready while the release
+// before's still serve — a resume issued then restores under the release
+// before, which the candidate's RPC log never shows. It is issued again, as a
+// client would, while kagent answers that it could not now (resumeAgain).
+// Its outcome is read by the resume step, the candidate's RPC log by the
+// restore step.
+type drainResume struct {
+	done    chan struct{}
+	session *apiv1alpha1.Session
+	err     error
+	// handover is when the release before's pods were gone, issuedAt the
+	// first attempt, answered the last answer; attempts counts them.
+	handover, issuedAt, answered time.Time
+	attempts                     int
+}
+
+// resumeDuringDrain issues the resume in the background once the drain has
+// begun and the release before's ate-api-server pods are gone; a drain that
+// ends with them still there is the error.
 func (r *substrateStepRun) resumeDuringDrain(d *workerDrain) *drainResume {
 	res := &drainResume{done: make(chan struct{})}
 	go func() {
@@ -246,14 +307,182 @@ func (r *substrateStepRun) resumeDuringDrain(d *workerDrain) *drainResume {
 			res.err = fmt.Errorf("the drain never began, so the resume was not issued during one")
 			return
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), sessionReadyTimeout+kagentTurnTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), substrateDrainFor+sessionReadyTimeout+kagentTurnTimeout)
 		defer cancel()
-		res.issuedAt = time.Now()
-		res.inDrain = d.running()
-		note("drain: resuming Session %s during the drain", r.session)
-		res.session, res.err = r.api.resumeSession(ctx, r.session)
+		if res.err = awaitAPIHandover(ctx, d, r.before.api); res.err != nil {
+			return
+		}
+		res.handover = time.Now()
+		start, _ := d.window()
+		note("drain: no ate-api-server pod of the release before is left at +%s; resuming Session %s during the drain", res.handover.Sub(start).Round(time.Second), r.session)
+		for {
+			res.attempts++
+			if res.issuedAt.IsZero() {
+				res.issuedAt = time.Now()
+			}
+			res.session, res.err = r.api.resumeSession(ctx, r.session)
+			res.answered = time.Now()
+			if res.err == nil || !resumeAgain(res.err) {
+				return
+			}
+			note("drain: resume attempt %d answered at +%s: %v", res.attempts, res.answered.Sub(start).Round(time.Second), res.err)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(substrateDrainRetry):
+			}
+		}
 	}()
 	return res
+}
+
+// worded is the resume's own account: when it was issued relative to the
+// drain's start (and the release before's pods' going), its attempts and
+// how it ended.
+func (res *drainResume) worded(start time.Time) string {
+	if res.issuedAt.IsZero() {
+		return "the resume was not issued: " + res.err.Error()
+	}
+	outcome := "answered " + sessionState(res.session)
+	if res.err != nil {
+		outcome = "ended: " + res.err.Error()
+	}
+	return fmt.Sprintf("the resume issued at +%s (the release before's ate-api-server pods gone at +%s), %d attempt(s), %s at +%s",
+		res.issuedAt.Sub(start).Round(time.Second), res.handover.Sub(start).Round(time.Second), res.attempts, outcome, res.answered.Sub(start).Round(time.Second))
+}
+
+// resumeAgain reports an answer to ResumeSession a client issues the resume
+// again on: Unavailable (the controller's connection to ate-api moving with
+// the rollout, or a resume Substrate still deferred at the controller's own
+// bound) and Aborted (the operation pending from the attempt before, which
+// the next one continues). Any other — FailedPrecondition, the runtime lost —
+// is final.
+func resumeAgain(err error) bool {
+	switch status.Code(err) {
+	case codes.Unavailable, codes.Aborted:
+		return true
+	}
+	return false
+}
+
+// awaitAPIHandover waits until no ate-api-server pod runs the release
+// before's image, terminating ones included, looking every
+// substrateDrainHandoverPoll while the drain runs: from then on every call
+// reaches the candidate. A drain that ends with one still there is the
+// error, naming it.
+func awaitAPIHandover(ctx context.Context, d *workerDrain, before string) error {
+	for {
+		pods, err := apiPods(ctx)
+		if err != nil {
+			return fmt.Errorf("reading ate-api-server's pods for the handover: %w", err)
+		}
+		left := podsOn(pods, before)
+		if len(left) == 0 {
+			return nil
+		}
+		if !d.running() {
+			return fmt.Errorf("the drain ended with ate-api-server %s of the release before still there, so no resume could reach the candidate during it: the kagent controller keeps its connection to the ate-api Service until the pod behind it goes", strings.Join(left, ", "))
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(substrateDrainHandoverPoll):
+		}
+	}
+}
+
+// ateRPC is one RPC as ate-api-server logs it ("Handle RPC"), the fields the
+// proof reads: the line is written when the handling ends, at time, after
+// elapsed-time.
+type ateRPC struct {
+	Time    time.Time   `json:"time"`
+	Method  string      `json:"method"`
+	Req     ateRPCActor `json:"req"`
+	Resp    ateRPCActor `json:"resp"`
+	Err     string      `json:"err"`
+	Elapsed string      `json:"elapsed-time"`
+}
+
+// ateRPCActor is the actor a request names and a response carries.
+type ateRPCActor struct {
+	Actor struct {
+		Name   string `json:"name"`
+		Status struct {
+			State int32 `json:"state"`
+		} `json:"status"`
+	} `json:"actor"`
+}
+
+// began is when the RPC arrived.
+func (rpc ateRPC) began() time.Time {
+	elapsed, err := time.ParseDuration(rpc.Elapsed)
+	if err != nil {
+		return rpc.Time
+	}
+	return rpc.Time.Add(-elapsed)
+}
+
+// outcome words how the RPC ended: the error, or the actor's state.
+func (rpc ateRPC) outcome() string {
+	if rpc.Err != "" {
+		return rpc.Err
+	}
+	return strings.TrimPrefix(ateapi.ActorState(rpc.Resp.Actor.Status.State).String(), "ACTOR_STATE_")
+}
+
+// ateRPCs is every "Handle RPC" line of an ate-api-server log, a stream's
+// prefix before the JSON skipped; other lines are left out.
+func ateRPCs(logs string) []ateRPC {
+	var rpcs []ateRPC
+	for _, line := range strings.Split(logs, "\n") {
+		i := strings.IndexByte(line, '{')
+		if i < 0 {
+			continue
+		}
+		var rpc ateRPC
+		if err := json.Unmarshal([]byte(line[i:]), &rpc); err != nil || rpc.Method == "" {
+			continue
+		}
+		rpcs = append(rpcs, rpc)
+	}
+	return rpcs
+}
+
+// actorResumes is every ResumeActor of the actor among the RPCs, in the
+// order they arrived, and those of them that arrived from from to to.
+func actorResumes(rpcs []ateRPC, actor string, from, to time.Time) (all, during []ateRPC) {
+	for _, rpc := range rpcs {
+		if rpc.Method != ateapi.Control_ResumeActor_FullMethodName || rpc.Req.Actor.Name != actor {
+			continue
+		}
+		all = append(all, rpc)
+	}
+	slices.SortFunc(all, func(a, b ateRPC) int { return a.began().Compare(b.began()) })
+	for _, rpc := range all {
+		if at := rpc.began(); !at.Before(from) && !at.After(to) {
+			during = append(during, rpc)
+		}
+	}
+	return all, during
+}
+
+// resumesWorded words ResumeActors by when they arrived relative to start
+// and how each ended: "at +3s Unavailable …; at +12s RUNNING".
+func resumesWorded(rpcs []ateRPC, start time.Time) string {
+	parts := make([]string, 0, len(rpcs))
+	for _, rpc := range rpcs {
+		parts = append(parts, fmt.Sprintf("at %s %s", offsetWorded(rpc.began().Sub(start)), excerpt(rpc.outcome(), 200)))
+	}
+	return strings.Join(parts, "; ")
+}
+
+// offsetWorded is a duration from a start, signed: +12s, -3s.
+func offsetWorded(d time.Duration) string {
+	d = d.Round(time.Second)
+	if d < 0 {
+		return d.String()
+	}
+	return "+" + d.String()
 }
 
 // goldenSet is the golden of every ActorTemplate of the lab in ate-api, by

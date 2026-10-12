@@ -166,7 +166,7 @@ type substrateStepRun struct {
 	// Every golden of the lab before the step, read from ate-api with its
 	// layout (substratedrain.go): the drain case judges every one of them
 	// after the step, the new conversation the proof's own. The drain and
-	// the resume issued during it.
+	// the resume issued during it, once the candidate alone serves ate-api.
 	goldensBefore goldenSet
 	drain         *workerDrain
 	drainResume   *drainResume
@@ -230,6 +230,10 @@ func (r *substrateStepRun) prove(user *config.User) error {
 	}
 
 	if !r.opts.NoDrain {
+		r.stages.begin("restore", "Step 3a: the resume issued during the drain reached Substrate %s: a ResumeActor of the Session's actor in the candidate's ate-api-server RPC log while the drain ran", r.after.version)
+		if err := r.restoreDuringDrain(); err != nil {
+			return err
+		}
 		r.stages.begin("retake", "Step 3b: every golden of the lab in the snapshot layout Substrate %s writes (%d) after the drain — kept, or taken again on a layout change — no terminal error", r.after.version, r.layout)
 		if err := r.goldensAfterDrain(); err != nil {
 			return err
@@ -435,12 +439,12 @@ func (r *substrateStepRun) drainTitle() string {
 	if r.opts.NoDrain {
 		return ""
 	}
-	return fmt.Sprintf(", its worker pods deleted every %s for %s from the candidate's ate-api-server Ready (the drain case)", substrateDrainEvery, substrateDrainFor)
+	return fmt.Sprintf(", its worker pods deleted every %s for %s from the candidate's ate-api-server Ready and the Session resumed during that drain, once the release before's ate-api-server pods are gone (the drain case)", substrateDrainEvery, substrateDrainFor)
 }
 
 // resume resumes the suspended conversation — in the drain case the resume
-// issued during the drain — and asks it for the codeword of its first turn
-// and the file it wrote.
+// issued during the drain, judged by the restore step already — and asks it
+// for the codeword of its first turn and the file it wrote.
 func (r *substrateStepRun) resume() error {
 	ctx, cancel := context.WithTimeout(context.Background(), kagentTurnTimeout+sessionReadyTimeout)
 	defer cancel()
@@ -475,9 +479,6 @@ func (r *substrateStepRun) resumeNow(ctx context.Context) (*apiv1alpha1.Session,
 	if r.drainResume.err != nil {
 		return r.drainResume.session, fmt.Errorf("the resume issued during the drain: %w", r.drainResume.err)
 	}
-	if !r.drainResume.inDrain {
-		return r.drainResume.session, fmt.Errorf("the resume was issued after the drain ended, not during it")
-	}
 	return r.drainResume.session, nil
 }
 
@@ -486,7 +487,59 @@ func (r *substrateStepRun) resumedDuring() string {
 	if r.drainResume == nil {
 		return ""
 	}
-	return fmt.Sprintf(", resumed during the drain (issued %s after it began)", r.drainResume.issuedAt.Sub(r.drain.start).Round(time.Second))
+	start, _ := r.drain.window()
+	return fmt.Sprintf(", resumed during the drain (issued at %s, the release before's ate-api-server pods gone at %s)",
+		offsetWorded(r.drainResume.issuedAt.Sub(start)), offsetWorded(r.drainResume.handover.Sub(start)))
+}
+
+// substrateActorName is the name kagent gives a Session's actor in Substrate.
+func substrateActorName(session string) string {
+	return "session-" + session
+}
+
+// restoreDuringDrain judges the drain case's resume by the candidate's own
+// account, read before the lab steps back and the pods are replaced: the
+// ResumeActor of the Session's actor in the RPC log of the ate-api-server
+// pods that ran the candidate (every pod not on the release before's image)
+// that arrived while the drain ran — kagent's resume reached the candidate
+// under the drain, whatever each answered (a restore the drain cut comes
+// back as another, retried) — and the resume answered. A drain that ended
+// before one arrived is the failure, with where the resume went instead; a
+// resume that reached the candidate and ended in an error names it, with the
+// actor's state and crash.
+func (r *substrateStepRun) restoreDuringDrain() error {
+	<-r.drainResume.done
+	start, end := r.drain.window()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	pods, err := apiPods(ctx)
+	if err != nil {
+		return err
+	}
+	candidates := podsOff(pods, r.before.api)
+	actor := substrateActorName(r.session)
+	var all, during []ateRPC
+	for _, pod := range candidates {
+		logs, err := podLogs(ctx, substrateNamespace, "pod/"+pod, "", time.Since(start)+time.Minute)
+		if err != nil {
+			return fmt.Errorf("the candidate's RPC log: %w", err)
+		}
+		a, d := actorResumes(ateRPCs(logs), actor, start, end)
+		all, during = append(all, a...), append(during, d...)
+	}
+	window := fmt.Sprintf("ate-api-server %s, the drain from %sZ for %s", wordedPods(candidates), start.UTC().Format(time.TimeOnly), end.Sub(start).Round(time.Second))
+	if len(during) == 0 {
+		where := "none at all"
+		if len(all) > 0 {
+			where = fmt.Sprintf("%d outside it (%s)", len(all), resumesWorded(all, start))
+		}
+		return fmt.Errorf("no ResumeActor of %s reached the candidate while the drain ran (%s): %s; %s", actor, window, where, r.drainResume.worded(start))
+	}
+	if r.drainResume.err != nil {
+		return fmt.Errorf("the resume issued during the drain reached the candidate (%d ResumeActor of %s: %s) and ended: %w (%s)", len(during), actor, resumesWorded(during, start), r.drainResume.err, r.restoreCause(r.drainResume.session))
+	}
+	r.pass("restore under the drain: %d ResumeActor of %s reached the candidate (%s): %s; %s", len(during), actor, window, resumesWorded(during, start), r.drainResume.worded(start))
+	return nil
 }
 
 // restoreCause words why a resume failed, from the session's failure and the
