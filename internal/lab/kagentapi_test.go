@@ -76,6 +76,9 @@ type fakeKagent struct {
 	// settling makes DeleteSession answer FailedPrecondition that many
 	// times first, as for a session whose runtime cleanup is still running.
 	settling int
+	// shares are the session shares RevokeSessionShare withdraws, by id: the
+	// id of the session each one shares.
+	shares map[string]string
 
 	// substrate is the summary GetSubstrateSummary answers; actorPages the
 	// pages ListSubstrateActors walks, token "p<n>" naming page n.
@@ -85,7 +88,10 @@ type fakeKagent struct {
 	// Substrate RPCs answer Unimplemented and GetSubstrateStatus answers it.
 	legacy *kagentv10.GetSubstrateStatusResponse
 
-	calls    map[string][]metadata.MD
+	calls map[string][]metadata.MD
+	// order is every recorded call's method in the order they came, and
+	// whatever else a test records beside them.
+	order    []string
 	sent     []*a2a.Message
 	tenants  []string
 	canceled []a2a.TaskID
@@ -99,6 +105,7 @@ func newFakeKagent() *fakeKagent {
 		tasks:        map[a2a.TaskID]*a2a.Task{},
 		eventsByTask: map[a2a.TaskID][]a2a.Event{},
 		calls:        map[string][]metadata.MD{},
+		shares:       map[string]string{},
 	}
 }
 
@@ -134,6 +141,7 @@ func (f *fakeKagent) record(ctx context.Context, method string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls[method] = append(f.calls[method], md)
+	f.order = append(f.order, method)
 }
 
 func (f *fakeKagent) lastMD(method string) metadata.MD {
@@ -470,6 +478,23 @@ func (f *fakeKagent) DeleteSession(ctx context.Context, req *apiv1alpha1.DeleteS
 	f.deleted = append(f.deleted, req.GetSessionId())
 	delete(f.sessions, req.GetSessionId())
 	return &apiv1alpha1.DeleteSessionResponse{Session: session}, nil
+}
+
+// RevokeSessionShare withdraws a share; one unknown, or of a session gone,
+// is NotFound, as the controller answers.
+func (f *fakeKagent) RevokeSessionShare(ctx context.Context, req *apiv1alpha1.RevokeSessionShareRequest) (*apiv1alpha1.RevokeSessionShareResponse, error) {
+	f.record(ctx, "RevokeSessionShare")
+	if _, err := edge(ctx); err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	sessionID, ok := f.shares[req.GetShareId()]
+	if _, live := f.sessions[sessionID]; !ok || !live {
+		return nil, status.Error(codes.NotFound, "SessionShare not found")
+	}
+	delete(f.shares, req.GetShareId())
+	return &apiv1alpha1.RevokeSessionShareResponse{}, nil
 }
 
 // readyFake is a fake with one session of the proof's Agent, the shape most

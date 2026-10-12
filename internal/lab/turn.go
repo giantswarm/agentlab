@@ -111,19 +111,17 @@ func Turn(cfg *config.Config, email, template, harness, prompt, sessionID, decid
 		}
 	}
 	turnAPI := api
+	var share *sessionShare
 	if shareWith != "" {
-		shared, revoke, err := sharedTurnAPI(ctx, cfg, api, sessionID, shareWith, shareTTL)
-		if err != nil {
+		if share, err = shareSession(ctx, cfg, api, sessionID, shareWith, shareTTL); err != nil {
 			return err
 		}
-		defer revoke()
-		defer shared.close()
-		turnAPI = shared
+		turnAPI = share.client
 	}
 	t, err := turnAPI.decidedTurn(session, prompt, decide, reason)
 	if err != nil {
-		if created && !keep {
-			api.removeSession(sessionID)
+		if rerr := endTurn(api, share, sessionID, created && !keep); rerr != nil {
+			note("%v", rerr)
 		}
 		return fmt.Errorf("A2A turn on %s: %w", template, err)
 	}
@@ -133,13 +131,26 @@ func Turn(cfg *config.Config, email, template, harness, prompt, sessionID, decid
 			fmt.Printf("status metadata: %s\n", raw)
 		}
 	}
+	if err := endTurn(api, share, sessionID, !keep); err != nil {
+		return err
+	}
 	if keep {
 		fmt.Printf("kept: %s (agentlab turn --session %s …)\n", sessionID, sessionID)
+	}
+	return nil
+}
+
+// endTurn cleans up after a turn in the order the controller needs: the
+// share, when there is one, is revoked while its Session still exists and
+// the shared client closed, then the Session is deleted when remove is set.
+func endTurn(api *kagentAPI, share *sessionShare, sessionID string, remove bool) error {
+	share.end()
+	if !remove {
 		return nil
 	}
-	rmCtx, rmCancel := context.WithTimeout(context.Background(), sessionDeleteTimeout)
-	defer rmCancel()
-	if err := api.deleteSession(rmCtx, sessionID); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), sessionDeleteTimeout)
+	defer cancel()
+	if err := api.deleteSession(ctx, sessionID); err != nil {
 		return err
 	}
 	fmt.Printf("deleted: %s\n", sessionID)
@@ -243,14 +254,23 @@ func (a *kagentAPI) decidedTurn(session *apiv1alpha1.Session, prompt, decide, re
 	return settled, nil
 }
 
-// sharedTurnAPI is the kagent client of another lab user on the session: the
-// owner creates a read-write share (expiring after ttl when one is given),
-// and the other user's calls carry their own bearer plus the share token,
-// which supplements their identity. The revoke func withdraws the share.
-func sharedTurnAPI(ctx context.Context, cfg *config.Config, owner *kagentAPI, sessionID, email string, ttl time.Duration) (*kagentAPI, func(), error) {
+// sessionShare is a read-write share of a session with another lab user:
+// the client whose calls turn as that user, and the share the owner
+// withdraws after the turn.
+type sessionShare struct {
+	owner  *kagentAPI
+	client *kagentAPI
+	id     string
+}
+
+// shareSession shares the session with another lab user: the owner creates
+// a read-write share (expiring after ttl when one is given), and the other
+// user's calls carry their own bearer plus the share token, which
+// supplements their identity.
+func shareSession(ctx context.Context, cfg *config.Config, owner *kagentAPI, sessionID, email string, ttl time.Duration) (*sessionShare, error) {
 	user := cfg.FindUser(email)
 	if user == nil {
-		return nil, nil, fmt.Errorf("no lab user %q in agentlab.yaml", email)
+		return nil, fmt.Errorf("no lab user %q in agentlab.yaml", email)
 	}
 	req := &apiv1alpha1.CreateSessionShareRequest{
 		SessionId:  sessionID,
@@ -261,33 +281,47 @@ func sharedTurnAPI(ctx context.Context, cfg *config.Config, owner *kagentAPI, se
 	}
 	resp, err := owner.sessions.CreateSessionShare(owner.callCtx(ctx), req)
 	if err != nil {
-		return nil, nil, fmt.Errorf("sharing %s: %w", sessionID, err)
+		return nil, fmt.Errorf("sharing %s: %w", sessionID, err)
 	}
-	shareID := resp.GetShare().GetId()
-	revoke := func() {
-		rctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if _, err := owner.sessions.RevokeSessionShare(owner.callCtx(rctx), &apiv1alpha1.RevokeSessionShareRequest{ShareId: shareID}); err != nil {
-			note("revoking share %s: %v", shareID, err)
-			return
-		}
-		fmt.Printf("share revoked: %s\n", shareID)
-	}
+	share := &sessionShare{owner: owner, id: resp.GetShare().GetId()}
 	token, err := passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret, user.Email, user.Password, musterLoginScopes)
 	if err != nil {
-		revoke()
-		return nil, nil, err
+		share.revoke()
+		return nil, err
 	}
-	shared, err := dialKagentAPI(cfg, token)
-	if err != nil {
-		revoke()
-		return nil, nil, err
+	if share.client, err = dialKagentAPI(cfg, token); err != nil {
+		share.revoke()
+		return nil, err
 	}
-	shared.extra = metadata.Pairs("x-share-token", resp.GetToken())
+	share.client.extra = metadata.Pairs("x-share-token", resp.GetToken())
 	expiry := "no expiry"
 	if at := resp.GetShare().GetExpiresAt(); at != nil {
 		expiry = "expires " + at.AsTime().UTC().Format(time.RFC3339)
 	}
-	fmt.Printf("shared: %s read-write with %s (share %s, %s)\n", sessionID, user.Email, shareID, expiry)
-	return shared, revoke, nil
+	fmt.Printf("shared: %s read-write with %s (share %s, %s)\n", sessionID, user.Email, share.id, expiry)
+	return share, nil
+}
+
+// end withdraws the share and closes the shared client; no share, nothing.
+func (s *sessionShare) end() {
+	if s == nil {
+		return
+	}
+	s.revoke()
+	s.client.close()
+}
+
+// revoke withdraws the share. One the controller no longer knows (it
+// expired, or its Session is gone) is withdrawn already.
+func (s *sessionShare) revoke() {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	_, err := s.owner.sessions.RevokeSessionShare(s.owner.callCtx(ctx), &apiv1alpha1.RevokeSessionShareRequest{ShareId: s.id})
+	switch status.Code(err) {
+	case codes.OK:
+		fmt.Printf("share revoked: %s\n", s.id)
+	case codes.NotFound:
+	default:
+		note("revoking share %s: %v", s.id, err)
+	}
 }
