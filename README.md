@@ -195,7 +195,7 @@ jq -r .verificationMaterial.certificate.rawBytes dl/agentlab-linux-amd64.bundle 
 ```
 
 ```text
-            1.3.6.1.4.1.57264.1.12: 
+            1.3.6.1.4.1.57264.1.12:
                 ..github.com/giantswarm/agentlab
 ```
 
