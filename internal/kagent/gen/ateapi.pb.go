@@ -2921,9 +2921,19 @@ type GoldenSnapshotStatus struct {
 	//
 	// +k8s:optional
 	// +k8s:maxLength=4096
-	ErrorMessage  string `protobuf:"bytes,3,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	ErrorMessage string `protobuf:"bytes,3,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	// snapshot_layout is the layout the golden tag's snapshot was written in:
+	// the snapshotlayout version the workers wrote when the tag was recorded.
+	// A golden recorded without it, by a release before the field, or in a
+	// layout older than the one the workers write now is taken again in the
+	// current layout; golden_tag names the old one until the new one is
+	// recorded.
+	//
+	// +k8s:optional
+	// +k8s:minimum=1
+	SnapshotLayout int32 `protobuf:"varint,4,opt,name=snapshot_layout,json=snapshotLayout,proto3" json:"snapshot_layout,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *GoldenSnapshotStatus) Reset() {
@@ -2975,6 +2985,13 @@ func (x *GoldenSnapshotStatus) GetErrorMessage() string {
 		return x.ErrorMessage
 	}
 	return ""
+}
+
+func (x *GoldenSnapshotStatus) GetSnapshotLayout() int32 {
+	if x != nil {
+		return x.SnapshotLayout
+	}
+	return 0
 }
 
 type ActorTemplateStatus struct {
@@ -4269,9 +4286,10 @@ type VolumeMount struct {
 	// sub_path is the directory of the volume to mount, relative to its root;
 	// empty mounts the root. It must be a clean relative path: no leading '/',
 	// no '.' or '..' element, no '//', no trailing '/' and no control
-	// characters. Only an existing volume's mount may set it. The directory
-	// must exist, and no element of it may be a symbolic link: a mount that
-	// would need either fails.
+	// characters. Only an existing volume's mount may set it. No element of
+	// the directory may be a symbolic link. A read-write mount's directory is
+	// created when its last component is missing; its parent and a read-only
+	// mount's directory must exist. A mount that would need more fails.
 	//
 	// +k8s:optional
 	// +k8s:maxLength=4096
@@ -4617,7 +4635,7 @@ type CreateActorTemplateRequest struct {
 	// version, timestamps) is ignored, as are the status fields.
 	//
 	// +k8s:required
-	// +k8s:customValidation # volume_mounts must reference declared volumes
+	// +k8s:customValidation # volume references, mount options, DATA scopes need a mounted durable-dir
 	ActorTemplate *ActorTemplate `protobuf:"bytes,1,opt,name=actor_template,json=actorTemplate,proto3" json:"actor_template,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -8724,12 +8742,13 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x06limits\x18\x01 \x03(\v2\x0e.ateapi.LimitsR\x06limits\"8\n" +
 	"\x06Limits\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1a\n" +
-	"\bquantity\x18\x02 \x01(\tR\bquantity\"\xc0\x01\n" +
+	"\bquantity\x18\x02 \x01(\tR\bquantity\"\xe9\x01\n" +
 	"\x14GoldenSnapshotStatus\x120\n" +
 	"\n" +
 	"golden_tag\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\tgoldenTag\x12Q\n" +
 	"\x17take_golden_snapshot_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x14takeGoldenSnapshotAt\x12#\n" +
-	"\rerror_message\x18\x03 \x01(\tR\ferrorMessage\"i\n" +
+	"\rerror_message\x18\x03 \x01(\tR\ferrorMessage\x12'\n" +
+	"\x0fsnapshot_layout\x18\x04 \x01(\x05R\x0esnapshotLayout\"i\n" +
 	"\x13ActorTemplateStatus\x12R\n" +
 	"\x16golden_snapshot_status\x18\x01 \x01(\v2\x1c.ateapi.GoldenSnapshotStatusR\x14goldenSnapshotStatus\"k\n" +
 	"\rSandboxConfig\x129\n" +

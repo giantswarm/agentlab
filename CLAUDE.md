@@ -223,7 +223,7 @@ go test ./internal/forms/ -run TestMinimalFormDrive -count=1 -v   # single test
 ./agentlab test            # RBAC assertions for every configured user
 ./agentlab backstage-test  # headless Backstage sign-in for every user, the portal's Agent Platform and Models pages
 ./agentlab skills-test     # kagent API v2: an AgentTemplate with a git-pinned skill boots (the golden boot) and answers from the skill
-./agentlab substrate-step-test --to <release>  # a suspended conversation and its /data file survive the step to a newer Substrate; a new one starts from a re-taken golden
+./agentlab substrate-step-test --to <release>  # a suspended conversation and its /data file survive the step to a newer Substrate; a new one starts from a golden in the layout it writes (taken again on a layout change, kept otherwise)
 ./agentlab down            # delete the cluster (certs/ kept, trust stores untouched)
 ./agentlab trust           # install the lab CA into the system + NSS trust stores (sudo)
 ./agentlab untrust         # remove exactly the lab CA from those stores

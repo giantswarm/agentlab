@@ -40,7 +40,7 @@ KAGENT_PROTO_FILES := common agent_templates agents sessions runtime system
 # carries the line's fields ahead of kagent's. The oldest release whose fields
 # a proof uses; a server without one of them refuses it, and the proof says so.
 SUBSTRATE_PROTO_REPO ?= https://github.com/giantswarm/substrate.git
-SUBSTRATE_PROTO_TAG ?= v1.7.0-rc.1
+SUBSTRATE_PROTO_TAG ?= v1.8.1
 
 .PHONY: generate-kagent
 generate-kagent: ## Refresh the kagent protos from KAGENT_PROTO_COMMIT, ateapi.proto from SUBSTRATE_PROTO_TAG, and regenerate internal/kagent/gen.

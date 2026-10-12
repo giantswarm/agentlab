@@ -257,9 +257,11 @@ func (r *substrateStepRun) resumeDuringDrain(d *workerDrain) *drainResume {
 }
 
 // goldenSet is the golden of every ActorTemplate of the lab in ate-api, by
-// template, and the terminal error a template records.
+// template: its tag, the snapshot layout it records (currentSnapshotLayout),
+// and the terminal error a template records.
 type goldenSet struct {
 	golden, failure map[string]string
+	layout          map[string]int32
 }
 
 // readGoldens reads every ActorTemplate of the kagent atespace in ate-api.
@@ -272,12 +274,13 @@ func readGoldens() (goldenSet, error) {
 	}
 	defer api.Close()
 	templates, err := ateTemplates(ctx, api, func(string) bool { return true })
-	set := goldenSet{golden: map[string]string{}, failure: map[string]string{}}
+	set := goldenSet{golden: map[string]string{}, failure: map[string]string{}, layout: map[string]int32{}}
 	for _, t := range templates {
 		name := t.GetMetadata().GetName()
 		status := t.GetStatus().GetGoldenSnapshotStatus()
 		if tag := status.GetGoldenTag(); tag.GetName() != "" {
 			set.golden[name] = tag.GetAtespace() + "/" + tag.GetName()
+			set.layout[name] = status.GetSnapshotLayout()
 		}
 		if msg := status.GetErrorMessage(); msg != "" {
 			set.failure[name] = msg
@@ -286,18 +289,15 @@ func readGoldens() (goldenSet, error) {
 	return set, err
 }
 
-// goldensRetaken words what keeps the goldens after a step from passing:
-// every template that had a golden before must hold another one, and no
-// template may record a terminal error. Empty when they pass.
-func goldensRetaken(before, after goldenSet) []string {
+// goldensOff words what keeps the goldens after a step from passing: every
+// template that had a golden before must hold one in the layout the
+// candidate writes (goldenOff), and no template may record a terminal error.
+// Empty when they pass.
+func goldensOff(before, after goldenSet, want int32) []string {
 	var off []string
 	for _, name := range slices.Sorted(maps.Keys(before.golden)) {
-		now, was := after.golden[name], before.golden[name]
-		switch now {
-		case "":
-			off = append(off, fmt.Sprintf("%s has no golden (was %s)", name, was))
-		case was:
-			off = append(off, fmt.Sprintf("%s still holds %s, taken before the step", name, now))
+		if o := goldenOff(before.golden[name], after.golden[name], after.layout[name], want); o != "" {
+			off = append(off, name+" "+o)
 		}
 	}
 	for _, name := range slices.Sorted(maps.Keys(after.failure)) {
@@ -306,15 +306,33 @@ func goldensRetaken(before, after goldenSet) []string {
 	return off
 }
 
-// awaitGoldensRetaken polls ate-api until every golden of before is taken
-// again with no terminal error, or the timeout passes.
-func awaitGoldensRetaken(before goldenSet, timeout time.Duration) (goldenSet, error) {
+// goldenOff words what keeps one template's golden after a step from
+// passing, "" when it passes: the golden must be in the layout the candidate
+// writes — the one from before the step when it was in that layout already
+// (a step that keeps the layout keeps its goldens), a new one otherwise
+// (Substrate takes a golden in an older layout again).
+func goldenOff(was, now string, layout, want int32) string {
+	switch {
+	case now == "":
+		return fmt.Sprintf("has no golden (was %s)", was)
+	case layout == want:
+		return ""
+	case now == was:
+		return fmt.Sprintf("still holds %s, taken before the step in layout %d, not the layout %d the candidate writes", now, layout, want)
+	default:
+		return fmt.Sprintf("was taken again as %s in layout %d, not the layout %d the candidate writes", now, layout, want)
+	}
+}
+
+// awaitGoldensCurrent polls ate-api until every golden of before is in the
+// layout the candidate writes with no terminal error, or the timeout passes.
+func awaitGoldensCurrent(before goldenSet, want int32, timeout time.Duration) (goldenSet, error) {
 	var after goldenSet
 	var off []string
 	var readErr error
 	done := waitFor(int(timeout/substrateStepPoll), substrateStepPoll, func() bool {
 		after, readErr = readGoldens()
-		off = goldensRetaken(before, after)
+		off = goldensOff(before, after, want)
 		return readErr == nil && len(off) == 0
 	})
 	if done {
@@ -323,11 +341,11 @@ func awaitGoldensRetaken(before goldenSet, timeout time.Duration) (goldenSet, er
 	if readErr != nil {
 		off = append(off, readErr.Error())
 	}
-	return after, fmt.Errorf("after the drain, not every golden was taken again within %s: %s", timeout, strings.Join(off, "; "))
+	return after, fmt.Errorf("after the drain, not every golden is in the snapshot layout the candidate writes within %s: %s", timeout, strings.Join(off, "; "))
 }
 
-// goldensWorded words the goldens taken again: each template's golden before
-// and after the step.
+// goldensWorded words the goldens after the step: each template's golden
+// kept in its layout, or the one before and the one taken again.
 func goldensWorded(before, after goldenSet) string {
 	names := slices.Sorted(maps.Keys(before.golden))
 	if len(names) == 0 {
@@ -335,7 +353,12 @@ func goldensWorded(before, after goldenSet) string {
 	}
 	pairs := make([]string, 0, len(names))
 	for _, name := range names {
-		pairs = append(pairs, fmt.Sprintf("%s %s -> %s", name, before.golden[name], after.golden[name]))
+		was, now := before.golden[name], after.golden[name]
+		if now == was {
+			pairs = append(pairs, fmt.Sprintf("%s keeps %s (layout %d)", name, now, after.layout[name]))
+			continue
+		}
+		pairs = append(pairs, fmt.Sprintf("%s %s -> %s (layout %d -> %d)", name, was, now, before.layout[name], after.layout[name]))
 	}
 	return fmt.Sprintf("%d templates (%s)", len(names), strings.Join(pairs, "; "))
 }
