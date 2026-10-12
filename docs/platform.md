@@ -901,6 +901,57 @@ line on upstream `main` `800015de` (kagent-dev/kagent#2802: the a2a gateway
 addresses an actor by the `ate-target-actor` header, which only a router from
 v0.0.28 on knows — the three move together).
 
+### The coding agents proof
+
+A coding agent is an agent whose Agent names a Harness with the `claude`
+runtime: Claude Code run headless in a Substrate actor by the kagent line's
+`claude-harness` image, calling muster as the person who sent the turn. An
+installation turns coding agents on through the meta chart's
+`kagent.harnesses` alone, and the lab does the same: with
+`platform.coding` (`agentlab configure --coding`, agent-platform 4.110.0 or
+newer) `agentlab platform` renders two coding Harnesses into the values,
+
+- `claude`: budgetUSD 1.00 and 10 model turns per turn, `KAGENT_PROPAGATE_TOKEN`
+  on (the caller's bearer reaches MCP servers through the harness's loopback
+  forwarder, never the process environment), snapshots under
+  `s3://ate-snapshots/claude`;
+- `claude-capped`: the same on budgetUSD 0.01, which no turn stays under.
+
+The workspaces proof's claude Session runs on the same `claude` Harness;
+with the workspaces on and coding off the lab renders `claude` alone.
+
+`agentlab coding-test [email]` is the proof, and the floor a coding agent
+rests on. Every stage runs on the lines the lab pins, so it repeats on every
+release candidate:
+
+| Stage | What passes |
+|---|---|
+| harnesses | both Harnesses Ready, their `spec.claude.limits` the values' |
+| write-time guards | agent-manager's `validate_agent` on `claude` refuses `preset:full` (tools without `readOnlyHint`) and an origin outside the Harness's list |
+| create | `create_agent` on `claude` with `preset:read-only` as the person; Ready; the Agent's `spec.egress` is the Harness's origin list agent-manager writes |
+| uid split | the agent's commands run as uid 65532; the root harness's `/proc/<pid>/environ` and `mem` refuse it |
+| forwarder paths | the forwarder answers 400 to `../..`, `%2e%2e` and `..%2f`, 404 for a server it does not front, 401 without its token |
+| write tool refused | `x_agent-manager_delete_agent`, called through the forwarder with the turn's bearer, refused by muster as outside the toolset |
+| credentials | no forge token or bearer in the environment or `/data`; the model key kagent's placeholder |
+| dns canary | a recorded state, not a gate: `example.org` through the cluster resolver and directly at 1.1.1.1 |
+| egress | `proxy.golang.org` denied 403 at the egress gate; `api.github.com`, one of the Agent's origins, reached |
+| instruction fixture | a record: what Claude Code loads from a repository's `CLAUDE.md`, `AGENTS.md`, `.claude/` settings, hook, skill, subagent and command and `.mcp.json` on the pinned release |
+| suspend and resume | the Session's file and conversation survive the snapshot |
+| budget cap | a turn on `claude-capped` completes with `stopped_by: budget` and its usage |
+| share refused | a read-write share of the claude Session is refused: a collaborator's turn would run under what the first sender's turns left behind (git hooks, Makefiles, background processes) |
+
+The sandbox stages read one turn: the agent's Bash tool runs a POSIX script
+and relays its `AGENTLAB_PROBE` lines, and each stage judges its own. The
+script never prints a credential: the forwarder's loopback token stays in a
+shell variable, and the token search prints counts. The DNS canary and the
+instruction fixture are records because the floor accepts both as known
+residuals: DNS leaves through the cluster resolver until a resolver answers
+only the allowlist's names, and a workspace is an instruction source for
+Claude Code, as on a developer's laptop. Writing to a forge with `git` and
+`gh` from a workspace, as the person, is the workspaces proof's
+(`workspaces-test`), once the line carries the person's forge credential in
+the Session.
+
 ### The Substrate step proof (conversations across a Substrate release)
 
 `agentlab substrate-step-test --to <release>` proves that agents keep their

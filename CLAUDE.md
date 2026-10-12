@@ -222,6 +222,7 @@ go test ./internal/forms/ -run TestMinimalFormDrive -count=1 -v   # single test
 ./agentlab beekeeper-decisions-test  # beekeeper serve behind muster puts decisions to people through klaus-gateway: a click (another user's refused), a thread reply, a default at the due time, a withdrawal; the guide conversing with its person in a direct message
 ./agentlab test            # RBAC assertions for every configured user
 ./agentlab backstage-test  # headless Backstage sign-in for every user, the portal's Agent Platform and Models pages
+./agentlab coding-test     # platform.coding: the coding Harnesses from the values, agent-manager's guards, a coding agent's sandbox floor (uid split, forwarder paths, a write tool refused, no credentials, DNS canary, egress), the instruction fixture, suspend/resume, the budget cap, a share refused
 ./agentlab skills-test     # kagent API v2: an AgentTemplate with a git-pinned skill boots (the golden boot) and answers from the skill
 ./agentlab substrate-step-test --to <release>  # a suspended conversation and its /data file survive the step to a newer Substrate; a new one starts from a golden in the layout it writes (taken again on a layout change, kept otherwise)
 ./agentlab down            # delete the cluster (certs/ kept, trust stores untouched)

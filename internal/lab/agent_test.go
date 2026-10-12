@@ -64,11 +64,13 @@ func TestCreateAgentArgs(t *testing.T) {
 	if !reflect.DeepEqual(bare, map[string]any{nameKey: testAgentName, modelConfigKey: defaultModelConfig}) {
 		t.Errorf("a bare spec composes %v", bare)
 	}
-	if _, err := createAgentArgs(agentSpec{Name: testAgentName, ModelConfig: defaultModelConfig, Harness: testOtherHarness}); err == nil || !strings.Contains(err.Error(), "direct HelmRelease writer") {
-		t.Errorf("another Harness through agent-manager: %v", err)
+	other, err := createAgentArgs(agentSpec{Name: testAgentName, ModelConfig: defaultModelConfig, Harness: testOtherHarness})
+	if err != nil || other[harnessKey] != testOtherHarness {
+		t.Errorf("another Harness through agent-manager: %v, %v", other, err)
 	}
-	if _, err := createAgentArgs(agentSpec{Name: testAgentName, ModelConfig: defaultModelConfig, Harness: kagentHarness}); err != nil {
-		t.Errorf("the platform Harness named explicitly: %v", err)
+	platform, err := createAgentArgs(agentSpec{Name: testAgentName, ModelConfig: defaultModelConfig, Harness: kagentHarness})
+	if _, named := platform[harnessKey]; err != nil || named {
+		t.Errorf("the platform Harness named explicitly composes %v, %v: agent-manager's default needs no argument", platform, err)
 	}
 }
 
@@ -514,9 +516,6 @@ func TestAgentManagerWriter(t *testing.T) {
 	refusing, _ := fakeMuster(t, agentManagerToolPrefix+"create_agent", "invalid_request: toolset is required", true)
 	if _, err := (agentManagerWriter{&musterSession{client: refusing.Client(), url: refusing.URL, token: testToken}}).createAgent(testSpec()); err == nil || !strings.Contains(err.Error(), "toolset is required") {
 		t.Errorf("a refusal: %v", err)
-	}
-	if _, err := writer.createAgent(agentSpec{Name: testAgentName, Harness: testOtherHarness}); err == nil {
-		t.Error("another Harness must be refused before any call")
 	}
 }
 

@@ -13,6 +13,8 @@ const (
 	displayNameKey   = "displayName"
 	systemMessageKey = "systemMessage"
 	toolsetKey       = "toolset"
+	harnessKey       = "harness"
+	egressKey        = "egress"
 	// verdictReady is get_agent_status's verdict for an agent that runs.
 	verdictReady = "ready"
 	// agentsTestDisplayName is the display name of agents-test's throwaway agent.

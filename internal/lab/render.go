@@ -137,6 +137,9 @@ type tmplData struct {
 	// unless the workspaces and the agents are on and the chart takes the
 	// workspaces values.
 	WorkspaceAdmission *workspaceAdmissionValues
+	// CodingHarnesses are the lab's coding Harnesses (coding.go), rendered
+	// as kagent.harnesses; none with coding agents and the workspaces off.
+	CodingHarnesses []codingHarness
 	// PostRenderers is the lab's per-component `postRenderers` list as
 	// indented YAML, keyed by agent-platform component name
 	// (postrenderers.go): the hostNetwork, sidecar and nodePort patches plus
@@ -312,6 +315,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		WorkspaceProviders:           workspaceProviders,
 		WorkspaceFake:                cfg.WorkspaceFakeProvider(),
 		WorkspaceAdmission:           workspaceAdmissionValuesFor(cfg, workspacesChart.Carries),
+		CodingHarnesses:              codingHarnessesFor(cfg, workspaceAdmissionValuesFor(cfg, workspacesChart.Carries)),
 		CertsDir:                     certsDir,
 		NodeFilesDir:                 nodeFiles,
 		MusterNodePort:               config.MusterNodePort,
