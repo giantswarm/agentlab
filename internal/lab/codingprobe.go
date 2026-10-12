@@ -71,7 +71,7 @@ if [ -n "$url" ]; then
   }
   call '{"jsonrpc":"2.0","method":"notifications/initialized"}' >/dev/null
   out=$(call '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"` + codingTestWriteTool + `","arguments":{"name":"` + codingTestAbsentAgent + `"}}}')
-  r=$(echo "$out" | grep -o '` + codingTestOutsideToolset + `[^"\\]*' | head -1)
+  r=$(echo "$out" | tr '\n' ' ' | sed -n 's/.*"error":{[^}]*"message":"\([^"]*\)".*/\1/p' | head -c 200)
   echo "$P write-tool=${r:-answered: $(echo "$out" | tr '\n' ' ' | head -c 200)}"
 else
   echo "$P forwarder="
@@ -140,8 +140,11 @@ func (p codingProbe) forwarderPaths([]string) (string, error) {
 // writeToolRefused: muster refuses the write tool through the forwarder,
 // naming the toolset.
 func (p codingProbe) writeToolRefused([]string) (string, error) {
-	if !strings.Contains(p["write-tool"], codingTestOutsideToolset) {
-		return "", fmt.Errorf("%s through the forwarder was not refused as outside the toolset: %q", codingTestWriteTool, p["write-tool"])
+	// Under the toolset muster resolves the agent's endpoint to the
+	// toolset's tools alone: a tool outside it is refused as outside the
+	// toolset, or not found where muster hides it.
+	if got := p["write-tool"]; !strings.Contains(got, codingTestOutsideToolset) && !strings.Contains(got, "not found") {
+		return "", fmt.Errorf("%s through the forwarder was not refused under the toolset: %q", codingTestWriteTool, got)
 	}
 	return fmt.Sprintf("%s: %s", codingTestWriteTool, p["write-tool"]), nil
 }

@@ -184,6 +184,16 @@ func (p *codingProof) run() error {
 	}
 	note("Agent %s Ready on %s, egress [%s]", codingTestAgent, claudeHarness, strings.Join(egress, " "))
 
+	// The write tool the sandbox calls must exist for the person: its
+	// refusal through the agent's endpoint is then the toolset's.
+	tools, err := p.muster.listTools()
+	if err != nil {
+		return err
+	}
+	if !slices.Contains(tools, codingTestWriteTool) {
+		return fmt.Errorf("%s is not in %s's muster catalogue: the sandbox's write-tool refusal would prove nothing", codingTestWriteTool, p.user.Email)
+	}
+
 	p.stages.begin("sandbox turn", "A Session of %s as %s, one turn whose Bash tool probes the sandbox", codingTestAgent, p.user.Email)
 	session, err := p.createSession(ctx, codingTestAgent)
 	if err != nil {
@@ -278,7 +288,7 @@ func (p *codingProof) proveGuards(spec agentSpec) error {
 		what, want string
 		mutate     func(args map[string]any)
 	}{
-		{"toolset [" + presetFull + "]", "not marked read-only", func(args map[string]any) { args[toolsetKey] = []string{presetFull} }},
+		{"toolset [" + presetFull + "]", "read-only", func(args map[string]any) { args[toolsetKey] = []string{presetFull} }},
 		{"egress [" + codingTestRefusedOrigin + "]", "is not one of Harness", func(args map[string]any) {
 			args[toolsetKey] = []string{codingTestToolset}
 			args[egressKey] = []string{codingTestRefusedOrigin}

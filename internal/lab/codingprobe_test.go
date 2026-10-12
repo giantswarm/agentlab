@@ -57,6 +57,7 @@ func TestCodingProbeFailures(t *testing.T) {
 		{"dots forwarded", "fwd-dots=400", "fwd-dots=200", codingProbe.forwarderPaths},
 		{"encoded slash forwarded", "fwd-encoded-slash=400", "fwd-encoded-slash=404", codingProbe.forwarderPaths},
 		{"no forwarder", "forwarder=agentlab-coding", "forwarder=", codingProbe.forwarderPaths},
+		{"write tool other error", "write-tool=outside the toolset [preset:read-only]", "write-tool=unauthorized", codingProbe.writeToolRefused},
 		{"write tool answered", "write-tool=outside the toolset [preset:read-only]", "write-tool=answered: {\"result\":{}}", codingProbe.writeToolRefused},
 		{"token in env", "env-tokens=0", "env-tokens=1", codingProbe.credentials},
 		{"token in data", "data-tokens=0", "data-tokens=2", codingProbe.credentials},
@@ -79,6 +80,14 @@ func TestCodingProbeFailures(t *testing.T) {
 
 // An Agent without api.github.com among its origins has no origin to reach:
 // the denial alone is judged.
+// muster hiding the tool under the toolset is the refusal too.
+func TestCodingProbeWriteToolNotFound(t *testing.T) {
+	reply := strings.Replace(codingReply, "write-tool=outside the toolset [preset:read-only]", "write-tool=tool 'x_agent-manager_delete_agent' not found: tool not found", 1)
+	if _, err := parseCodingProbe(reply).writeToolRefused(nil); err != nil {
+		t.Error(err)
+	}
+}
+
 func TestCodingProbeEgressWithoutOrigin(t *testing.T) {
 	got, err := parseCodingProbe(codingReply).egress(nil)
 	if err != nil || !strings.Contains(got, "no api.github.com origin") {
