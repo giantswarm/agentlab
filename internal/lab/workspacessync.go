@@ -369,8 +369,9 @@ echo "%s bare=true head=$(git -C $m rev-parse HEAD) branches=$(git -C $m for-eac
 	return b.String()
 }
 
-// syncSessionDir is the session directory's clone of the moving repository
-// on the volume, syncMirrorDir its mirror.
+// syncSessionDir is the session directory on the volume, syncSessionClone
+// its clone of the moving repository, syncMirrorDir that repository's
+// mirror.
 const (
 	syncSessionDir   = "/workspace/" + workspacesTestSessions + "/" + syncSession
 	syncSessionClone = syncSessionDir + "/docs"
