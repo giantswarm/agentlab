@@ -1369,19 +1369,23 @@ func vmManagerTestCmd() *cobra.Command {
 func workspacesTestCmd() *cobra.Command {
 	var opts lab.WorkspacesTestOptions
 	cmd := &cobra.Command{
-		Use:   "workspaces-test",
-		Short: "Headless workspace storage proof: the NFS server, the CSI driver and the class in place -> a read-write-many claim bound -> a bare mirror seeded -> two pods on their own session sub-paths with a shared clone each, modes and links intact, isolated, the mirrors read-only -> the whole volume read-only -> the controller endpoint refused without Substrate's client certificate -> the actor-level mount (skipped until the Substrate line carries it) -> a claude Harness Session admitted on the volume with a workspace grant the manager's key set verifies, one headless turn in its own directory (not with --storage-only) -> everything removed",
-		Args:  cobra.NoArgs,
+		Use:   "workspaces-test [email]",
+		Short: "Headless workspace storage proof: the NFS server, the CSI driver and the class in place -> a read-write-many claim bound -> a bare mirror seeded -> two pods on their own session sub-paths with a shared clone each, modes and links intact, isolated, the mirrors read-only -> the whole volume read-only -> the controller endpoint refused without Substrate's client certificate -> the actor-level mount (skipped until the Substrate line carries it) -> a claude Harness Session admitted on the volume with a workspace grant the manager's key set verifies, one headless turn in its own directory (not with --storage-only) -> everything removed. --part sync instead defines workspaces through the workspace-manager as [email] and proves their mirrors: preview, create, the Organization's boundary, the first cycle, a no-op cycle, a push and a force-push fetched alone, a dropped repository's mirror kept while borrowed, update, delete",
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadProofLab()
 			if err != nil {
 				return err
 			}
+			if len(args) == 1 {
+				opts.Email = args[0]
+			}
 			return lab.WorkspacesTest(cfg, opts)
 		},
 	}
 	cmd.Flags().BoolVar(&opts.StorageOnly, "storage-only", false, "prove the storage alone, without the claude Session admitted on the volume")
-	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", lab.DefaultWorkspacesReadyTimeout, "how long each wait may take: the storage's rollouts, a claim bound, a pod finished, a volume gone")
+	cmd.Flags().StringVar(&opts.Part, "part", "", "run one part instead of the storage proof: "+strings.Join(lab.WorkspacesParts, ", ")+" (the workspaces defined through the workspace-manager and their mirrors, as [email], default the admin)")
+	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", lab.DefaultWorkspacesReadyTimeout, "how long each wait may take: the storage's rollouts, a claim bound, a pod finished, a volume gone, a sync cycle")
 	return cmd
 }
 

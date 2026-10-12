@@ -138,7 +138,7 @@ func proveWorkspaceManager(cfg *config.Config) ([]string, error) {
 		note("%s", w)
 	}
 
-	org := map[string]any{"organization": config.WorkspaceOrganization}
+	org := map[string]any{wmOrganizationArg: config.WorkspaceOrganization}
 	step("Calling %slist_workspaces for Organization %s as %s (a member) and as %s (not one)", workspaceManagerToolPrefix, config.WorkspaceOrganization, admin.Email, viewer.Email)
 	var workspaces struct {
 		Workspaces []struct {
