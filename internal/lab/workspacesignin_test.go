@@ -94,7 +94,7 @@ func (l *signInLab) link() string {
 func TestWalkProviderSignIn(t *testing.T) {
 	for _, chooser := range []bool{false, true} {
 		l := newSignInLab(t, chooser)
-		hops, err := walkProviderSignIn(l.client(t), l.link(), "fake", testPortalUser, "password")
+		hops, err := walkProviderSignIn(l.client(t), l.link(), "fake", testPortalUser, "password", nil)
 		if err != nil {
 			t.Fatalf("chooser %v: %v", chooser, err)
 		}
@@ -116,22 +116,50 @@ func TestWalkProviderSignIn(t *testing.T) {
 func TestWalkProviderSignInStops(t *testing.T) {
 	l := newSignInLab(t, false)
 	link := strings.Replace(l.link(), "login=admin", "login=", 1)
-	_, err := walkProviderSignIn(l.client(t), link, "fake", testPortalUser, "password")
+	_, err := walkProviderSignIn(l.client(t), link, "fake", testPortalUser, "password", nil)
 	if !errors.Is(err, errSignInStopped) || !strings.Contains(err.Error(), "/login/oauth/authorize 400") {
 		t.Fatalf("a refused consent: got %v, want the walk stopped at the authorize hop with 400", err)
 	}
 
 	l = newSignInLab(t, false)
 	l.password = "other"
-	_, err = walkProviderSignIn(l.client(t), l.link(), "fake", testPortalUser, "password")
+	_, err = walkProviderSignIn(l.client(t), l.link(), "fake", testPortalUser, "password", nil)
 	if !errors.Is(err, errSignInStopped) || !strings.Contains(err.Error(), "refused admin@lab.local's credentials") {
 		t.Fatalf("wrong credentials: got %v, want the walk stopped at Dex's login", err)
 	}
 
 	l = newSignInLab(t, false)
 	l.server.Close()
-	_, err = walkProviderSignIn(l.client(t), l.link(), "fake", testPortalUser, "password")
+	_, err = walkProviderSignIn(l.client(t), l.link(), "fake", testPortalUser, "password", nil)
 	if !errors.Is(err, errSignInStopped) || !strings.Contains(err.Error(), "/login/oauth/authorize 0") {
 		t.Fatalf("an unreachable provider: got %v, want the walk stopped at the authorize hop", err)
+	}
+}
+
+// The walk's GitLab steps: the sign-in form filled with the person's login,
+// a second sign-in form a refusal, the consent's Authorize (not its Deny,
+// which Rails posts as a DELETE), and any other page not GitLab's.
+func TestGitLabFormStep(t *testing.T) {
+	signIn := []byte(`<form class="new_user" action="/users/sign_in" accept-charset="UTF-8" method="post"><input type="hidden" name="authenticity_token" value="tok&amp;en" /><input name="user[login]" /><input type="password" name="user[password]" /></form>`)
+	consent := []byte(`<form action="/oauth/authorize" method="post"><input type="hidden" name="_method" value="delete" /><input name="state" value="s" /></form>` +
+		`<form action="/oauth/authorize" method="post"><input name="authenticity_token" value="t" /><input name="state" value="s" /></form>`)
+	login := &providerLogin{login: testGitLabPerson, password: "pw"}
+
+	action, form, ok, err := gitlabFormStep(signIn, login, false)
+	if err != nil || !ok || action != "/users/sign_in" || form.Get("user[login]") != testGitLabPerson || form.Get("user[password]") != "pw" || form.Get("authenticity_token") != "tok&en" {
+		t.Errorf("sign-in: %q %v %v %v", action, form, ok, err)
+	}
+	if _, _, ok, err := gitlabFormStep(signIn, login, true); !ok || err == nil {
+		t.Errorf("the sign-in form again after posting: ok %v, err %v, want a refusal", ok, err)
+	}
+	if _, _, ok, err := gitlabFormStep(signIn, nil, false); !ok || err == nil {
+		t.Errorf("a sign-in without a login: ok %v, err %v, want an error", ok, err)
+	}
+	action, form, ok, err = gitlabFormStep(consent, login, true)
+	if err != nil || !ok || action != "/oauth/authorize" || form.Get(railsMethodField) != "" || form.Get("authenticity_token") != "t" {
+		t.Errorf("consent: %q %v %v %v", action, form, ok, err)
+	}
+	if _, _, ok, err := gitlabFormStep([]byte(`<html><form action="/search" method="get"></form></html>`), login, false); ok || err != nil {
+		t.Errorf("another page: ok %v, err %v", ok, err)
 	}
 }

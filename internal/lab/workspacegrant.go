@@ -15,6 +15,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -44,6 +45,14 @@ import (
 // The workspaces proof signs its grants with the same key, in the manager's
 // claims, so a grant it presents verifies exactly where a manager's would:
 // through the key set the manager serves.
+//
+// The manager's token exchange (POST /token, RFC 8693) answers one client,
+// the installation's kagent, which the platform does not wire yet (kagent's
+// token broker). The lab registers that client in kagent's name with a
+// secret of its own, generated once beside the grant key and placed as the
+// Secret agent-platform/workspace-manager-token-exchange, so the proofs
+// exchange a person's Dex token for their provider token the way kagent
+// will (workspaces-test --part gitlab).
 
 const (
 	// workspaceGrantDir holds the lab's grant signing key, next to the CA.
@@ -68,6 +77,16 @@ const (
 	// creates, and the mirrors read-only.
 	workspaceGrantSessionDirectory = "sessions/${SESSION_ID}"
 	workspaceGrantMirrors          = "mirrors"
+	// The token exchange's client: kagent's name, the lab's secret
+	// (a file beside the grant key) and the Secret the manager reads it
+	// from.
+	workspaceTokenExchangeClientID   = "kagent"
+	workspaceTokenExchangeSecretFile = "token-exchange-client-secret"                    // #nosec G101 -- a file name, not a credential
+	WorkspaceTokenExchangeSecretName = "workspace-manager-token-exchange"                // #nosec G101 -- Secret NAME, not a credential
+	workspaceTokenExchangeSecretKey  = "client-secret"                                   // #nosec G101 -- Secret KEY name, not a credential
+	workspaceTokenExchangePath       = "/token"                                          // the manager's RFC 8693 endpoint
+	workspaceTokenExchangeGrantType  = "urn:ietf:params:oauth:grant-type:token-exchange" // #nosec G101 -- a grant type, not a credential
+	workspaceTokenExchangeIDToken    = "urn:ietf:params:oauth:token-type:id_token"       // #nosec G101 -- a token type, not a credential
 )
 
 // workspaceAdmissionValues is what the values template renders for the
@@ -78,6 +97,8 @@ type workspaceAdmissionValues struct {
 	JWKSURL, Issuer, Audience  string
 	ClaudeHarness              string
 	ClaudeHarnessSnapshotStore string
+	// The token exchange's client and the Secret of its secret.
+	TokenExchangeClientID, TokenExchangeSecret, TokenExchangeSecretKey string
 }
 
 // workspaceAdmissionValuesFor is the rig for a lab with the workspaces and
@@ -95,6 +116,9 @@ func workspaceAdmissionValuesFor(cfg *config.Config, workspacesChart bool) *work
 		Audience:                   workspaceGrantAudience,
 		ClaudeHarness:              claudeHarness,
 		ClaudeHarnessSnapshotStore: claudeHarnessSnapshotLocation,
+		TokenExchangeClientID:      workspaceTokenExchangeClientID,
+		TokenExchangeSecret:        WorkspaceTokenExchangeSecretName,
+		TokenExchangeSecretKey:     workspaceTokenExchangeSecretKey,
 	}
 }
 
@@ -137,6 +161,34 @@ func EnsureWorkspaceGrantKey() (string, error) {
 	}
 	fmt.Printf("Generated the workspace grant signing key in %s\n", workspaceGrantDir)
 	return path, nil
+}
+
+// ensureWorkspaceTokenExchangeSecret generates the token exchange client's
+// secret once and returns its path; an existing one is kept.
+func ensureWorkspaceTokenExchangeSecret() (string, error) {
+	path := filepath.Join(workspaceGrantDir, workspaceTokenExchangeSecretFile)
+	if _, err := os.Stat(path); err == nil {
+		return path, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	if err := os.MkdirAll(workspaceGrantDir, 0o750); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(path, []byte(randomHex(32)), 0o600); err != nil {
+		return "", err
+	}
+	fmt.Printf("Generated the workspace token exchange client's secret in %s\n", workspaceGrantDir)
+	return path, nil
+}
+
+// readWorkspaceTokenExchangeSecret reads the token exchange client's secret.
+func readWorkspaceTokenExchangeSecret() (string, error) {
+	raw, err := os.ReadFile(filepath.Join(workspaceGrantDir, workspaceTokenExchangeSecretFile)) // #nosec G304 -- the lab's own credentials directory
+	if err != nil {
+		return "", fmt.Errorf("reading the workspace token exchange client's secret: %w (`agentlab platform` generates it with the workspaces on)", err)
+	}
+	return strings.TrimSpace(string(raw)), nil
 }
 
 // readWorkspaceGrantKey reads the lab's grant signing key.
@@ -297,14 +349,21 @@ func fixedBytes(n *big.Int, size int) []byte {
 	return n.FillBytes(make([]byte, size))
 }
 
-// workspaceGrantKeyUp places the lab's grant signing key, generated once, as
-// the manager's Secret.
+// workspaceGrantKeyUp places the lab's grant signing key and the token
+// exchange client's secret, each generated once, as the manager's Secrets.
 func workspaceGrantKeyUp() error {
 	path, err := EnsureWorkspaceGrantKey()
 	if err != nil {
 		return err
 	}
-	return ensureSecretFromFiles(platformNamespace, WorkspaceGrantSecretName, map[string]string{workspaceGrantSecretKey: path})
+	if err := ensureSecretFromFiles(platformNamespace, WorkspaceGrantSecretName, map[string]string{workspaceGrantSecretKey: path}); err != nil {
+		return err
+	}
+	secret, err := ensureWorkspaceTokenExchangeSecret()
+	if err != nil {
+		return err
+	}
+	return ensureSecretFromFiles(platformNamespace, WorkspaceTokenExchangeSecretName, map[string]string{workspaceTokenExchangeSecretKey: secret})
 }
 
 // hint is the platform-up summary of the rig.

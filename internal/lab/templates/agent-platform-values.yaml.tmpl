@@ -1213,6 +1213,13 @@ workspace-manager:
   # /.well-known/jwks.json, which kagent's admission above trusts.
   grant:
     signingKey: {name: {{ .Secret }}, key: {{ .SecretKey }}}
+  # The token exchange (POST /token) answers kagent's client, which the
+  # platform does not wire yet: the lab registers it with a secret of its own
+  # (certs/workspace-grant), so the proofs exchange a person's Dex token for
+  # their provider token the way kagent will.
+  tokenExchange:
+    clientID: {{ .TokenExchangeClientID }}
+    clientSecret: {name: {{ .TokenExchangeSecret }}, key: {{ .TokenExchangeSecretKey }}}
 {{- end }}
 {{- if .WorkspaceFake }}
   # The lab's GitHub serves TLS with a leaf of the lab CA, and the manager's
@@ -1228,14 +1235,18 @@ workspace-manager:
   providers:
 {{- range . }}
     - name: {{ .Name }}
-      kind: github
+      kind: {{ .Kind }}
       values:
 {{- with .URL }}
         url: {{ . }}
 {{- end }}
+{{- if eq .Kind "gitlab" }}
+        token: {name: {{ .Secret }}, key: {{ .TokenKey }}}
+{{- else }}
         app:
           id: {{ .AppID | printf "%q" }}
           privateKey: {name: {{ .Secret }}, key: {{ .PrivateKeyKey }}}
+{{- end }}
         oauth:
           clientID: {{ .ClientID | printf "%q" }}
           clientSecret: {name: {{ .Secret }}, key: {{ .SecretKey }}}

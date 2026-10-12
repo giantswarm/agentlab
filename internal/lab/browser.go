@@ -78,7 +78,7 @@ func BrowserLogin(cfg *config.Config) error {
 	}
 
 	token, err := dexToken(cfg, config.KubernetesClientID, config.KubernetesClientSecret, url.Values{
-		"grant_type":   {"authorization_code"},
+		grantTypeParam: {"authorization_code"},
 		"code":         {code},
 		"redirect_uri": {redirect},
 	})

@@ -1284,7 +1284,7 @@ A personal access token does not fit: muster sends only literal headers, so the 
 
 ## The workspace-manager's provider instances (`platform.workspaces.provider`)
 
-With workspaces on, the workspace-manager gets the provider instances `platform.workspaces.provider` names — `fake` (the default while the key is empty), `github`, or both as `fake,github` (`agentlab configure --workspaces-provider …`) — each of the chart's `github` kind, through which the person connects their account to the platform and the workspace mirrors sync with the instance's App. Three pieces follow from the switch alone, whatever the instances:
+With workspaces on, the workspace-manager gets the provider instances `platform.workspaces.provider` names — `fake` (the default while the key is empty), `github`, `gitlab`, or several such as `fake,github,gitlab` (`agentlab configure --workspaces-provider …`) — `fake` and `github` of the chart's `github` kind, `gitlab` of its `gitlab` kind, through which the person connects their account to the platform and the workspace mirrors sync with the instance's App. Three pieces follow from the switch alone, whatever the instances:
 
 - `workspace-manager.oauth.baseURL` is `https://workspace-manager.<domain>:<gatewayPort>` (port-free on 443), which the chart's own derivation from `global.domain` would drop the port from. The chart routes that host's `/signin`, `/connect/<instance>` and `/callback/<instance>` and forwards the URL.
 - The lab Dex's `agent-platform` client lists `<base URL>/signin`, where the manager signs the browser in before a connect.
@@ -1298,6 +1298,8 @@ With workspaces on, the workspace-manager gets the provider instances `platform.
 beekeeper secret copy op://<vault>/<item>/private-key --to-secret kind-agentlab/agent-platform/workspace-github/private-key
 beekeeper secret copy op://<vault>/<item>/client-secret --to-secret kind-agentlab/agent-platform/workspace-github/client-secret
 ```
+
+**`gitlab`** is a GitLab's OAuth application with a group access token ([Workspaces](workspaces.md#the-provider-instance-gitlab) names GitLab's side). Its URL and client id are public and live in `agentlab.yaml` (`platform.workspaces.gitlab.url` and `clientId`); the token and the application's secret are the Secret `agent-platform/workspace-gitlab` (keys `token`, `client-secret`), placed from `tokenSource` and `clientSecretSource` on every `up` and `platform`. The instance renders once all four are in place.
 
 (A person without that tooling creates the Secret with `kubectl --context kind-agentlab -n agent-platform create secret generic workspace-github --from-file=private-key=… --from-file=client-secret=…`.) Then `agentlab platform`. While an id is empty, the Secret is missing or a key lacks a value, the run renders no `github` instance (the workspace-manager refuses one without them at start-up), warns with what is missing, the callback URL and the commands, and goes on with the base URL, the route, the redirect URI and the other instance in place.
 

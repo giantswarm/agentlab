@@ -13,6 +13,7 @@ import (
 	"io"
 	"io/fs"
 	"maps"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -495,13 +496,71 @@ type Workspaces struct {
 	// WorkspaceProviderFake (the lab's own GitHub, served for the lab as a
 	// GitHub Enterprise-shaped instance; the default while empty),
 	// WorkspaceProviderGitHub (a GitHub App of the lab's own on github.com),
-	// or both, comma-separated ("fake,github"). With workspaces on, the
+	// WorkspaceProviderGitLab (a GitLab the lab reaches, its OAuth
+	// application and group access token), or several, comma-separated
+	// ("fake,github,gitlab"). With workspaces on, the
 	// workspace-manager's public base URL carries the gateway port
 	// (WorkspaceManagerBaseURL), the chart routes its host, and the lab
 	// Dex's agent-platform client lists <base URL>/signin.
 	Provider string `yaml:"provider,omitempty"`
 	// GitHub is the App behind the provider instance github.
 	GitHub WorkspaceGitHub `yaml:"github,omitempty"`
+	// GitLab is the GitLab behind the provider instance gitlab.
+	GitLab WorkspaceGitLab `yaml:"gitlab,omitempty"`
+}
+
+// WorkspaceGitLab is the GitLab behind the workspace-manager's provider
+// instance gitlab: its URL and the OAuth application's client id are public
+// and live here; the group access token the sync mirrors with, the OAuth
+// application's secret and the proof person's GitLab password are the
+// Secret WorkspaceGitLabSecretName in the platform namespace (keys
+// WorkspaceGitLabTokenKey, GitHubClientSecretKey and
+// WorkspaceGitLabPasswordKey), which the operator's secret tooling places
+// and agentlab only references. The instance renders once the URL, the
+// client id and the first two keys are in place; the person is what
+// `workspaces-test --part gitlab` signs in to GitLab as.
+type WorkspaceGitLab struct {
+	URL      string `yaml:"url,omitempty"`
+	ClientID string `yaml:"clientId,omitempty"`
+	// Group is the GitLab group the proof's workspace mirrors (a top-level
+	// group the token reads); Project one of its projects the person pushes
+	// to.
+	Group   string `yaml:"group,omitempty"`
+	Project string `yaml:"project,omitempty"`
+	// Person is the GitLab username the proof signs in to GitLab as,
+	// connecting the lab's admin; its password is the Secret's
+	// WorkspaceGitLabPasswordKey.
+	Person string `yaml:"person,omitempty"`
+	// TokenSource, ClientSecretSource and PasswordSource are references
+	// `beekeeper secret copy` resolves, in the form AIKey.Source takes. Set,
+	// every up and platform places them into the Secret; empty, the Secret
+	// is placed by hand.
+	TokenSource        string `yaml:"tokenSource,omitempty"`
+	ClientSecretSource string `yaml:"clientSecretSource,omitempty"`
+	PasswordSource     string `yaml:"passwordSource,omitempty"`
+}
+
+// Validate checks the URL and the sources.
+func (g WorkspaceGitLab) Validate() error {
+	if g.URL != "" {
+		u, err := url.Parse(g.URL)
+		if err != nil || u.Scheme != "https" || u.Host == "" || (u.Path != "" && u.Path != "/") {
+			return fmt.Errorf("platform.workspaces.gitlab.url %q: want https://<host>[:<port>]", g.URL)
+		}
+	}
+	for _, s := range []struct{ name, source string }{
+		{"tokenSource", g.TokenSource},
+		{"clientSecretSource", g.ClientSecretSource},
+		{"passwordSource", g.PasswordSource},
+	} {
+		if s.source == "" {
+			continue
+		}
+		if err := ValidateSecretSource(s.source); err != nil {
+			return fmt.Errorf("platform.workspaces.gitlab.%s %q: %w", s.name, s.source, err)
+		}
+	}
+	return nil
 }
 
 // WorkspaceGitHub is the lab's GitHub App for the workspace-manager's
@@ -558,14 +617,18 @@ var WorkspaceOrganizationGroups = []string{groupPlatformAdmins, groupDevelopers}
 const (
 	WorkspaceProviderFake        = "fake"
 	WorkspaceProviderGitHub      = "github"
+	WorkspaceProviderGitLab      = "gitlab"
 	WorkspaceFakeSecretName      = "workspace-fake"   // #nosec G101 -- Secret NAME, not a credential
 	WorkspaceGitHubSecretName    = "workspace-github" // #nosec G101 -- Secret NAME, not a credential
 	WorkspaceGitHubPrivateKeyKey = "private-key"      // #nosec G101 -- Secret KEY name, not a credential
+	WorkspaceGitLabSecretName    = "workspace-gitlab" // #nosec G101 -- Secret NAME, not a credential
+	WorkspaceGitLabTokenKey      = "token"            // #nosec G101 -- Secret KEY name, not a credential
+	WorkspaceGitLabPasswordKey   = "person-password"  // #nosec G101 -- Secret KEY name, not a credential
 )
 
 // workspaceProviderNames are the instances platform.workspaces.provider may
 // name, in the order the workspace-manager gets them.
-var workspaceProviderNames = []string{WorkspaceProviderFake, WorkspaceProviderGitHub}
+var workspaceProviderNames = []string{WorkspaceProviderFake, WorkspaceProviderGitHub, WorkspaceProviderGitLab}
 
 // parseWorkspaceProviders reads platform.workspaces.provider: the fake alone
 // for "", else the comma-separated set of known instances, each at most
@@ -578,7 +641,7 @@ func parseWorkspaceProviders(value string) ([]string, error) {
 	for raw := range strings.SplitSeq(value, ",") {
 		name := strings.TrimSpace(raw)
 		if !slices.Contains(workspaceProviderNames, name) {
-			return nil, fmt.Errorf("platform.workspaces.provider %q: want %s or both comma-separated, %q is neither", value, strings.Join(workspaceProviderNames, " or "), name)
+			return nil, fmt.Errorf("platform.workspaces.provider %q: want %s, several comma-separated; %q is none of them", value, strings.Join(workspaceProviderNames, ", "), name)
 		}
 		if slices.Contains(names, name) {
 			return nil, fmt.Errorf("platform.workspaces.provider %q names %s twice", value, name)
@@ -1664,6 +1727,9 @@ func (c *Config) Validate() error {
 	if err := c.Platform.Workspaces.GitHub.Validate(); err != nil {
 		return err
 	}
+	if err := c.Platform.Workspaces.GitLab.Validate(); err != nil {
+		return err
+	}
 	// The vm-manager component exists from agent-platform 4.11.0; a pinned
 	// release before it would take components.vm-manager as an unknown key
 	// and fail the install out of sight. A local checkout or a branch build
@@ -1826,6 +1892,13 @@ func (c *Config) WorkspaceFakeProvider() bool {
 // naming it.
 func (c *Config) WorkspaceGitHubProvider() bool {
 	return slices.Contains(c.WorkspaceProviders(), WorkspaceProviderGitHub)
+}
+
+// WorkspaceGitLabProvider reports whether the workspace-manager gets the
+// provider instance gitlab: workspaces on with platform.workspaces.provider
+// naming it.
+func (c *Config) WorkspaceGitLabProvider() bool {
+	return slices.Contains(c.WorkspaceProviders(), WorkspaceProviderGitLab)
 }
 
 // GitHubFakeURL is the lab's GitHub as its provider instance names it, the

@@ -430,7 +430,7 @@ func TestWorkspaceGitHubForReadsTheSecretsKeys(t *testing.T) {
 func TestEnsureWorkspaceGitHubSecret(t *testing.T) {
 	cfg := workspaceGitHubLab()
 	calls := fakeSecretTool(t, func() error { return nil })
-	if err := ensureWorkspaceGitHubSecret(cfg); err != nil {
+	if err := ensureWorkspaceSecrets(cfg); err != nil {
 		t.Fatal(err)
 	}
 	if len(*calls) != 0 {
@@ -445,7 +445,7 @@ func TestEnsureWorkspaceGitHubSecret(t *testing.T) {
 		AppID: testWorkspaceAppID, ClientID: testWorkspaceClientID,
 		PrivateKeySource: keySource, ClientSecretSource: secretSource,
 	}
-	if err := ensureWorkspaceGitHubSecret(cfg); err != nil {
+	if err := ensureWorkspaceSecrets(cfg); err != nil {
 		t.Fatal(err)
 	}
 	target := "kind-" + cfg.ClusterName + "/agent-platform/" + config.WorkspaceGitHubSecretName + "/"
@@ -458,13 +458,43 @@ func TestEnsureWorkspaceGitHubSecret(t *testing.T) {
 	}
 
 	fakeSecretTool(t, nil)
-	if err := ensureWorkspaceGitHubSecret(cfg); err == nil || !strings.Contains(err.Error(), "privateKeySource") {
+	if err := ensureWorkspaceSecrets(cfg); err == nil || !strings.Contains(err.Error(), "privateKeySource") {
 		t.Errorf("a failed placement answered %v, want the run failed naming the source", err)
 	}
 
 	cfg.Platform.Workspaces.Provider = config.WorkspaceProviderFake
 	calls = fakeSecretTool(t, func() error { return nil })
-	if err := ensureWorkspaceGitHubSecret(cfg); err != nil || len(*calls) != 0 {
+	if err := ensureWorkspaceSecrets(cfg); err != nil || len(*calls) != 0 {
 		t.Errorf("placed %v (%v) without the github instance", *calls, err)
+	}
+}
+
+// The gitlab instance names its Secret for the sync token and the client
+// secret: references only, its URL and client id as agentlab.yaml has them.
+func TestWorkspaceGitLabProviderInstance(t *testing.T) {
+	stubWorkspacesProbe(t, true)
+	cfg := workspaceLab("fake,gitlab")
+	cfg.Platform.Workspaces.GitLab = config.WorkspaceGitLab{URL: "https://gitlab.example.com/", ClientID: testWorkspaceClientID, Group: "proof-group", Project: "proof", Person: testGitLabPerson}
+	values, _, _, _ := renderWorkspaceTemplates(t, cfg, nil)
+	wm, providers := workspaceManagerBlock(t, values)
+	if len(providers) != 2 || providers[1]["name"] != config.WorkspaceProviderGitLab || providers[1]["kind"] != config.WorkspaceProviderGitLab {
+		t.Fatalf("providers %v, want fake then gitlab", wm["providers"])
+	}
+	v, _ := providers[1]["values"].(map[string]any)
+	oauth, _ := v["oauth"].(map[string]any)
+	if v["url"] != "https://gitlab.example.com" || oauth["clientID"] != testWorkspaceClientID {
+		t.Errorf("url %v, oauth %v", v["url"], oauth)
+	}
+	if _, set := v["app"]; set {
+		t.Errorf("a GitHub App rendered for the gitlab kind: %v", v["app"])
+	}
+	wantSecretRef(t, "token", v["token"], config.WorkspaceGitLabSecretName, config.WorkspaceGitLabTokenKey)
+	wantSecretRef(t, "oauth.clientSecret", oauth["clientSecret"], config.WorkspaceGitLabSecretName, config.GitHubClientSecretKey)
+	checkGolden(t, "gitlab", wm)
+
+	cfg.Platform.Workspaces.GitLab.ClientID = ""
+	values, _, _, _ = renderWorkspaceTemplates(t, cfg, nil)
+	if _, providers = workspaceManagerBlock(t, values); len(providers) != 1 {
+		t.Errorf("providers %v without the client id, want the fake alone", providers)
 	}
 }

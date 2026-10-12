@@ -182,7 +182,11 @@ func dexToken(cfg *config.Config, clientID, clientSecret string, form url.Values
 }
 
 // grantTypePassword is the OAuth2 Resource Owner Password Credentials grant.
-const grantTypePassword = "password"
+const (
+	grantTypePassword = "password"
+	// grantTypeParam is OAuth's token request parameter naming the grant.
+	grantTypeParam = "grant_type"
+)
 
 // passwordParam is the password field name shared by Dex's token endpoint
 // (ROPC form) and its login form.
@@ -193,10 +197,10 @@ const passwordParam = "password"
 // id_token. This is what makes headless/CI testing a single HTTP call.
 func passwordGrant(cfg *config.Config, clientID, clientSecret, email, password, scope string) (string, error) {
 	token, err := dexToken(cfg, clientID, clientSecret, url.Values{
-		"grant_type":  {grantTypePassword},
-		"username":    {email},
-		passwordParam: {password},
-		"scope":       {scope},
+		grantTypeParam: {grantTypePassword},
+		"username":     {email},
+		passwordParam:  {password},
+		"scope":        {scope},
 	})
 	if err != nil {
 		return "", fmt.Errorf("dex login failed for %s: %w", email, err)

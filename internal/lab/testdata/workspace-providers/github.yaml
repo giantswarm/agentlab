@@ -18,3 +18,8 @@ providers:
             clientSecret:
                 key: client-secret
                 name: workspace-github
+tokenExchange:
+    clientID: kagent
+    clientSecret:
+        key: client-secret
+        name: workspace-manager-token-exchange

@@ -53,6 +53,7 @@ agentlab up                       # or `agentlab platform` on a running lab
 agentlab workspaces-test          # --storage-only: the storage alone
 agentlab workspaces-test --part sync   # workspaces defined through the manager, their mirrors
 agentlab workspaces-test --part access # provider sign-in and the access check at a Session's start
+agentlab workspaces-test --part gitlab # the provider instance gitlab, end to end (skips without one)
 ```
 
 With the switch off, nothing of it is installed, and `agentlab platform` on a
@@ -280,6 +281,56 @@ the admitted one: its first message is a one-word reply on the default
 ModelConfig. On the instance `github`, the same steps need one recorded
 browser sign-in of a person's account; the headless part does not run them.
 
+### The GitLab part
+
+`agentlab workspaces-test --part gitlab [email]` proves
+[the provider instance `gitlab`](#the-provider-instance-gitlab) end to end
+against a real GitLab, as the admin (connected to GitLab as
+`platform.workspaces.gitlab.person`) and `[email]` (default `dev@lab.local`,
+never connected). Without the instance, or without any of its settings, every
+stage skips with the reason and the part passes: it never fails for a lab
+that has no GitLab.
+
+1. **Preconditions**: the workspace-manager connected to muster with the
+   instance `gitlab` in `list_providers`, the token exchange's client in
+   place, the [Session admission](#the-session-admission), the claude Agent
+   Ready, both people signed in.
+2. **Picker**: `list_repositories` for the group as the admin lists its
+   projects, what the Dev Portal's workspace editor shows, with no
+   provider-specific request.
+3. **Not connected**: the token exchange (`POST /token` as kagent's client)
+   for `[email]` and the audience `gitlab` answers `invalid_target` with the
+   connect link as `error_uri`.
+4. **Connect**: `connect_provider` as the admin, walked headlessly through
+   GitLab's sign-in form, the OAuth application's consent and the manager's
+   callback; `list_providers` reads connected.
+5. **Token**: the exchange releases the admin's GitLab token for the audience
+   `gitlab` and refuses an unknown audience. GitLab's API names the person
+   with it (Bearer), git's smart HTTP lists the project with it (Basic, user
+   `oauth2`), and the person writes a branch, a commit and a merge request
+   with it from the host, all removed again.
+6. **Workspace**: `create_workspace` over the project, its first cycle: the
+   bare mirror at GitLab's head and the manifest naming it.
+7. **Start**: `authorize_workspace` grants, naming GitLab's host for the
+   audience `gitlab` and no token; `start_session` through agent-manager
+   creates the Session on the volume, whose turn works in its directory with
+   the clone at GitLab's head and holds no credential beyond the platform's
+   own variables.
+8. **Push from the Session**: the Session pushes an empty commit to a proof
+   branch as the person. It reaches GitLab only through kagent's token
+   broker, which exchanges the turn caller's token at the workspace-manager
+   for each host the grant names; until the platform wires that broker, and
+   while GitLab's API (Bearer) and git (Basic) on one host need two
+   credentials where the egress binds one per host, the stage reports the
+   push's answer and skips.
+9. **No workspace**: a Session started without a workspace works in the
+   default directory, holds no credential beyond the platform's own, and
+   `git ls-remote` of the private project is refused.
+10. **Disconnect**: `disconnect_provider`: the exchange answers with the
+    connect link again, and GitLab refuses the token released before.
+11. **Restore**: the Sessions, the Agent, the workspace, its volume, the proof
+    branches and merge requests removed.
+
 ## The Session admission
 
 kagent admits a Session that names a workspace volume only with a workspace
@@ -319,8 +370,9 @@ and on 1.9.x the agent's own clone fails on git's dubious-ownership check.
 
 With workspaces on, the workspace-manager gets the provider instances
 `platform.workspaces.provider` names: `fake`, the default while the key is
-empty; `github`; or both, `fake,github` (`agentlab configure
---workspaces-provider …`). Each is an instance of the chart's `github` kind
+empty; `github`; `gitlab`; or several, such as `fake,github,gitlab`
+(`agentlab configure --workspaces-provider …`). `fake` and `github` are
+instances of the chart's `github` kind, `gitlab` of its `gitlab` kind, each
 with a Secret of its own that the rendered values reference and nothing else
 reads. The wiring every instance shares is in place with the switch alone:
 the manager's public base URL `https://workspace-manager.<domain>:<gatewayPort>`,
@@ -431,6 +483,48 @@ lab:
 It is an App of its own: the lab Dex's [sign-in App](github-signin.md) reads a
 profile and nothing on repositories, and muster's `github` server has its own
 client with muster's callback.
+
+### The provider instance gitlab
+
+`agentlab configure --workspaces-provider fake,gitlab` (or any list naming
+`gitlab`) gives the workspace-manager a GitLab, CE or EE, self-managed or
+gitlab.com, of the `gitlab` kind. `agentlab.yaml` records what is public:
+
+```yaml
+platform:
+  workspaces:
+    provider: fake,gitlab
+    gitlab:
+      url: https://gitlab.example.com   # https, no path
+      clientId: <the OAuth application's application id>
+      group: workspaces                 # the group the proof's workspace mirrors
+      project: workspace-proof          # one of its projects
+      person: <a GitLab username>       # who the proof signs in to GitLab as
+      tokenSource: <reference>          # the group access token
+      clientSecretSource: <reference>   # the OAuth application's secret
+      passwordSource: <reference>       # the person's GitLab password
+```
+
+The three values are the Secret `agent-platform/workspace-gitlab` (keys
+`token`, `client-secret`, `person-password`). With the sources recorded, every
+`up` and `platform` places them through the operator's secret tooling;
+agentlab never reads a value. The instance renders once the URL, the client
+id and the first two keys are in place; the part's person needs the third.
+
+GitLab's side, set up once by an administrator of the instance:
+
+- An instance-wide **OAuth application** (Admin Area, Applications), scopes
+  `api read_user read_repository write_repository`, redirect URI each lab's
+  `https://workspace-manager.<domain>:<gatewayPort>/callback/gitlab`
+  (`agentlab configure` prints it), confidential.
+- A **group access token** of the group, role Reporter, scopes `read_api
+  read_repository`: the sync lists the group's projects and mirrors them over
+  HTTPS with it.
+- The **person**: a GitLab user with Developer on the project, signing in
+  with a password (no second factor), so the part walks GitLab's sign-in form
+  headlessly.
+- The lab's node reaches the GitLab host over HTTPS, and the host's
+  certificate chains to a public root.
 
 ## The lab's GitHub
 
