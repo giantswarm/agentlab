@@ -1,11 +1,18 @@
 package lab
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	apiv1alpha1 "github.com/giantswarm/agentlab/internal/kagent/gen/kagent/api/v1alpha1"
 )
 
 // TestPodReadyOff: the drain begins with the first ate-api-server pod that
@@ -105,5 +112,115 @@ func TestGoldensWorded(t *testing.T) {
 	}
 	if got := goldensWorded(goldenSet{}, after); !strings.Contains(got, "no template") {
 		t.Errorf("goldensWorded without goldens = %q", got)
+	}
+}
+
+// TestPodsOnImage: the release before's ate-api-server pods are those on its
+// image, a terminating one included (it serves the connections it holds
+// until it is gone); the candidate's are the others.
+func TestPodsOnImage(t *testing.T) {
+	const before, candidate = "gsoci.azurecr.io/giantswarm/substrate/ateapi:1.8.1", "gsoci.azurecr.io/giantswarm/substrate/ateapi:1.8.2-rc.6"
+	terminating := stepPod("api-old-2", before, true)
+	now := metav1.Now()
+	terminating.SetDeletionTimestamp(&now)
+	pods := []unstructured.Unstructured{stepPod("api-old-1", before, true), terminating, stepPod("api-new-1", candidate, true), stepPod("api-new-2", candidate, false)}
+	if got := strings.Join(podsOn(pods, before), ","); got != "api-old-1,api-old-2" {
+		t.Errorf("podsOn = %s, want the release before's two, the terminating one included", got)
+	}
+	if got := strings.Join(podsOff(pods, before), ","); got != "api-new-1,api-new-2" {
+		t.Errorf("podsOff = %s, want the candidate's two", got)
+	}
+	if got := podsOn(nil, before); got != nil {
+		t.Errorf("podsOn of no pods = %v", got)
+	}
+}
+
+// The RPC log lines of ate-api-server as it writes them, the fields the
+// proof reads kept: a ResumeActor that restored the actor, one the drain cut,
+// one of another actor, a GetWorker, a line prefixed by its stream, and lines
+// that are no RPC.
+const ateAPILog = `{"time":"2026-10-12T04:00:12.500000000Z","level":"INFO","msg":"ateapi starting","version":"dev"}
+{"time":"2026-10-12T04:00:12.500000000Z","level":"INFO","msg":"Handle RPC","method":"/ateapi.Control/ResumeActor","req":{"actor":{"atespace":"kagent","name":"session-s1"},"fencing_token":{"holder":"h","generation":3}},"resp":{"actor":{"metadata":{"atespace":"kagent","name":"session-s1","uid":"u1"},"status":{"state":2}}},"err":null,"elapsed-time":"2.5s","principal":{"ID":"system:serviceaccount:kagent:kagent-controller","Kind":"jwt","Issuer":""}}
+[ate-api-server-b/ate-api-server] {"time":"2026-10-12T04:01:30.000000000Z","level":"INFO","msg":"Handle RPC","method":"/ateapi.Control/ResumeActor","req":{"actor":{"atespace":"kagent","name":"session-s1"}},"resp":null,"err":"rpc error: code = Unavailable desc = resume failed: assigned worker is draining","elapsed-time":"1.2s","principal":{"ID":"system:serviceaccount:kagent:kagent-controller","Kind":"jwt","Issuer":""}}
+{"time":"2026-10-12T04:00:20.000000000Z","level":"INFO","msg":"Handle RPC","method":"/ateapi.Control/ResumeActor","req":{"actor":{"atespace":"kagent","name":"session-s2"}},"resp":{"actor":{"status":{"state":2}}},"err":null,"elapsed-time":"729.694µs"}
+{"time":"2026-10-12T04:00:21.000000000Z","level":"INFO","msg":"Handle RPC","method":"/ateapi.Control/GetWorker","req":{"worker":{"name":"w"}},"resp":null,"err":"rpc error: code = NotFound desc = Worker w not found","elapsed-time":"359.267µs"}
+not json at all
+`
+
+// TestActorResumes: the ResumeActors of the actor are read off the RPC log
+// in the order they arrived (the line's time less its elapsed-time), the
+// stream prefix and the lines that are no RPC skipped; those that arrived
+// while the drain ran are told apart from the ones outside it, and each is
+// worded by its offset from the drain's start and how it ended.
+func TestActorResumes(t *testing.T) {
+	rpcs := ateRPCs(ateAPILog)
+	if len(rpcs) != 4 {
+		t.Fatalf("ateRPCs read %d RPCs, want 4:\n%+v", len(rpcs), rpcs)
+	}
+	start := time.Date(2026, 10, 12, 4, 0, 0, 0, time.UTC)
+	end := start.Add(64 * time.Second)
+	all, during := actorResumes(rpcs, "session-s1", start, end)
+	if len(all) != 2 || len(during) != 1 {
+		t.Fatalf("actorResumes = %d all, %d during, want 2 and 1", len(all), len(during))
+	}
+	if got := during[0].began(); !got.Equal(start.Add(10 * time.Second)) {
+		t.Errorf("the restore arrived at %s, want +10s (12.5s less 2.5s)", got)
+	}
+	if raw := all[1].raw; !strings.HasPrefix(raw, `{"time":"2026-10-12T04:01:30`) || strings.Contains(raw, "[ate-api-server-b") {
+		t.Errorf("the line is kept as logged, its stream prefix skipped, got %q", raw)
+	}
+	if got := resumesWorded(during, start); got != "at +10s RUNNING" {
+		t.Errorf("resumesWorded(during) = %q", got)
+	}
+	if got := resumesWorded(all, start); got != "at +10s RUNNING; at +1m29s rpc error: code = Unavailable desc = resume failed: assigned worker is draining" {
+		t.Errorf("resumesWorded(all) = %q", got)
+	}
+	if got := offsetWorded(-3 * time.Second); got != "-3s" {
+		t.Errorf("offsetWorded(-3s) = %q", got)
+	}
+	if _, during := actorResumes(rpcs, "session-s3", start, end); len(during) != 0 {
+		t.Errorf("an actor without a resume has %d", len(during))
+	}
+}
+
+// TestResumeAgain: a client issues the resume again on Unavailable and
+// Aborted, wrapped or not; a FailedPrecondition, the runtime lost, and an
+// answer that is no status are final.
+func TestResumeAgain(t *testing.T) {
+	for _, tc := range []struct {
+		err   error
+		again bool
+	}{
+		{status.Error(codes.Unavailable, "Failed to resume Session"), true},
+		{fmt.Errorf("ResumeSession s1: %w", status.Error(codes.Unavailable, "Failed to resume Session")), true},
+		{status.Error(codes.Aborted, "lifecycle operation is pending"), true},
+		{status.Error(codes.FailedPrecondition, "session runtime is lost"), false},
+		{status.Error(codes.NotFound, "Session not found"), false},
+		{errors.New("session s1 is still SUSPENDED after 1m30s"), false},
+		{nil, false},
+	} {
+		if got := resumeAgain(tc.err); got != tc.again {
+			t.Errorf("resumeAgain(%v) = %v, want %v", tc.err, got, tc.again)
+		}
+	}
+}
+
+// TestDrainResumeWorded: the resume's account names when it was issued and
+// the release before's pods were gone, its attempts and how it ended; one
+// never issued says why.
+func TestDrainResumeWorded(t *testing.T) {
+	start := time.Date(2026, 10, 12, 4, 0, 0, 0, time.UTC)
+	res := &drainResume{handover: start.Add(9 * time.Second), issuedAt: start.Add(9 * time.Second), answered: start.Add(31 * time.Second), attempts: 2,
+		session: &apiv1alpha1.Session{State: apiv1alpha1.RuntimeState_RUNTIME_STATE_READY}}
+	if got, want := res.worded(start), "the resume issued at +9s (the release before's ate-api-server pods gone at +9s), 2 attempt(s), answered READY at +31s"; got != want {
+		t.Errorf("worded = %q, want %q", got, want)
+	}
+	res.err = errors.New("ResumeSession s1: rpc error: code = FailedPrecondition desc = session runtime is lost")
+	if got := res.worded(start); !strings.Contains(got, "ended: ResumeSession s1") {
+		t.Errorf("a resume that ended in an error must say so, got %q", got)
+	}
+	never := &drainResume{err: errors.New("the drain ended with ate-api-server api-old still there")}
+	if got := never.worded(start); !strings.HasPrefix(got, "the resume was not issued: the drain ended") {
+		t.Errorf("a resume never issued = %q", got)
 	}
 }
