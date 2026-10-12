@@ -3,6 +3,7 @@ package lab
 import (
 	"bytes"
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -15,19 +16,27 @@ import (
 	"github.com/giantswarm/agentlab/internal/config"
 )
 
-// stubWorkspacesProbe points the chart probe at a fixed answer for the test
-// and clears the memo, restored afterwards.
+// stubWorkspacesProbe points the chart probe at a fixed answer for the test:
+// a current chart, which takes the workspaces block and its Organizations'
+// list, or one without either.
 func stubWorkspacesProbe(t *testing.T, carries bool) {
+	t.Helper()
+	stubWorkspacesChart(t, chartWorkspaces{Carries: carries, Organizations: carries})
+}
+
+// stubWorkspacesChart points the chart probe at w for the test and clears
+// the memo, restored afterwards.
+func stubWorkspacesChart(t *testing.T, w chartWorkspaces) {
 	t.Helper()
 	prev := chartWorkspacesProbe
 	chartWorkspacesMu.Lock()
-	chartWorkspacesCache = map[string]bool{}
+	chartWorkspacesCache = map[string]chartWorkspaces{}
 	chartWorkspacesMu.Unlock()
-	chartWorkspacesProbe = func(platformChart) (bool, error) { return carries, nil }
+	chartWorkspacesProbe = func(platformChart) (chartWorkspaces, error) { return w, nil }
 	t.Cleanup(func() {
 		chartWorkspacesProbe = prev
 		chartWorkspacesMu.Lock()
-		chartWorkspacesCache = map[string]bool{}
+		chartWorkspacesCache = map[string]chartWorkspaces{}
 		chartWorkspacesMu.Unlock()
 	})
 }
@@ -87,6 +96,68 @@ func TestPlatformValuesWorkspaces(t *testing.T) {
 	tls, _ := driver["tls"].(map[string]any)
 	if tls["enabled"] != true || tls["usePodIdentity"] != true || tls["serverName"] != "csi-nfs-controller.agentlab-workspaces.svc" {
 		t.Errorf("workspaces.substrate.csiDriver.tls = %v, want enabled with the pod identity and the service-DNS name", tls)
+	}
+}
+
+// The lab's Organization: on a chart that forwards workspaces.organizations
+// the list form there and nothing on the subchart (the chart refuses a
+// workspace-manager.organizations of its own); on a chart without the list
+// the subchart's map. Either way the platform admins and the developers,
+// never the viewers.
+func TestPlatformValuesWorkspaceOrganization(t *testing.T) {
+	cfg := workspaceLab(config.WorkspaceProviderFake)
+	wantGroups := []any{"platform-admins", "developers"}
+
+	stubWorkspacesChart(t, chartWorkspaces{Carries: true, Organizations: true})
+	values, _, _, _ := renderWorkspaceTemplates(t, cfg, nil)
+	block, _ := values["workspaces"].(map[string]any)
+	orgs, _ := block["organizations"].([]any)
+	if len(orgs) != 1 {
+		t.Fatalf("workspaces.organizations = %v, want the lab's one", block["organizations"])
+	}
+	org, _ := orgs[0].(map[string]any)
+	if org["name"] != config.WorkspaceOrganization || !reflect.DeepEqual(org["memberGroups"], wantGroups) {
+		t.Errorf("workspaces.organizations[0] = %v, want %s with %v", org, config.WorkspaceOrganization, wantGroups)
+	}
+	wm, _ := workspaceManagerBlock(t, values)
+	if _, ok := wm["organizations"]; ok {
+		t.Errorf("workspace-manager.organizations rendered beside workspaces.organizations, which the chart refuses: %v", wm["organizations"])
+	}
+
+	stubWorkspacesChart(t, chartWorkspaces{Carries: true})
+	values, _, _, _ = renderWorkspaceTemplates(t, cfg, nil)
+	block, _ = values["workspaces"].(map[string]any)
+	if _, ok := block["organizations"]; ok {
+		t.Errorf("workspaces.organizations rendered for a chart without the list: %v", block["organizations"])
+	}
+	wm, _ = workspaceManagerBlock(t, values)
+	byName, _ := wm["organizations"].(map[string]any)
+	lab, _ := byName[config.WorkspaceOrganization].(map[string]any)
+	if !reflect.DeepEqual(lab["memberGroups"], wantGroups) {
+		t.Errorf("workspace-manager.organizations = %v, want %s with %v", wm["organizations"], config.WorkspaceOrganization, wantGroups)
+	}
+}
+
+// The probe reads a key path off the schema's nested properties or the
+// default values.
+func TestChartValuesCarry(t *testing.T) {
+	schema := []byte(`{"properties":{"workspaces":{"properties":{"organizations":{"type":"array"}}}}}`)
+	if !chartValuesCarry(schema, nil, valuesWorkspaces, valuesWorkspacesOrganizations) {
+		t.Error("the schema's workspaces.organizations not found")
+	}
+	if !chartValuesCarry(schema, nil, valuesWorkspaces) {
+		t.Error("the schema's workspaces not found")
+	}
+	old := []byte(`{"properties":{"workspaces":{"properties":{"enabled":{}}}}}`)
+	if chartValuesCarry(old, nil, valuesWorkspaces, valuesWorkspacesOrganizations) {
+		t.Error("workspaces.organizations found on a schema without it")
+	}
+	values := map[string]any{"workspaces": map[string]any{"organizations": []any{}}}
+	if !chartValuesCarry(nil, values, valuesWorkspaces, valuesWorkspacesOrganizations) {
+		t.Error("the values' workspaces.organizations not found")
+	}
+	if chartValuesCarry(nil, map[string]any{"workspaces": true}, valuesWorkspaces, valuesWorkspacesOrganizations) {
+		t.Error("a key path through a scalar found")
 	}
 }
 

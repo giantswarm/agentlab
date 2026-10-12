@@ -1165,6 +1165,14 @@ agent-platform-mcps:
 # the key: the schema's root refuses unknown keys.
 workspaces:
   enabled: true
+{{- if .WorkspacesOrganizationsChart }}
+  # The lab's Organization (config.WorkspaceOrganization): its members, the
+  # lab Dex's platform admins and developers, manage its workspaces; the
+  # chart forwards it as the workspace-manager's organizations map.
+  organizations:
+    - name: {{ .Workspaces.Organization }}
+      memberGroups: [{{ join .Workspaces.OrganizationGroups ", " }}]
+{{- end }}
   storage:
     storageClassName: {{ .Workspaces.StorageClass }}
     storageClass:
@@ -1191,6 +1199,13 @@ workspaces:
 workspace-manager:
   oauth:
     baseURL: {{ .WorkspaceManagerBaseURL }}
+{{- if not .WorkspacesOrganizationsChart }}
+  # The lab's Organization on a chart that does not forward
+  # workspaces.organizations: the subchart's own map.
+  organizations:
+    {{ .Workspaces.Organization }}:
+      memberGroups: [{{ join .Workspaces.OrganizationGroups ", " }}]
+{{- end }}
 {{- with .WorkspaceAdmission }}
   # The key the workspace grant a Session carries is signed with: the lab's
   # own EC P-256 key (certs/workspace-grant), placed as this Secret ahead of

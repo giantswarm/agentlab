@@ -16,6 +16,9 @@ import (
 // list_providers, called through muster as the admin, names every provider
 // instance the lab configured (workspaceprovider.go) and nothing else — the
 // fake, the github instance once its App and Secret are in place, or both.
+// list_workspaces for the lab's Organization (config.WorkspaceOrganization)
+// answers the admin, a member, and refuses the viewer as not a member: the
+// values gave the manager the Organization and its member groups.
 
 // workspaceManagerMCPServer is the chart's MCPServer CR for the component,
 // whose tools muster exposes as x_workspace-manager_<tool>.
@@ -95,7 +98,7 @@ func proveWorkspaceManager(cfg *config.Config) ([]string, error) {
 		return nil, fmt.Errorf("the lab configured no provider instance (platform.workspaces.provider %q): nothing for list_providers to list", cfg.Platform.Workspaces.Provider)
 	}
 
-	admin, _, err := identityProofUsers(cfg)
+	admin, viewer, err := identityProofUsers(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -134,6 +137,35 @@ func proveWorkspaceManager(cfg *config.Config) ([]string, error) {
 	for _, w := range worded {
 		note("%s", w)
 	}
+
+	org := map[string]any{"organization": config.WorkspaceOrganization}
+	step("Calling %slist_workspaces for Organization %s as %s (a member) and as %s (not one)", workspaceManagerToolPrefix, config.WorkspaceOrganization, admin.Email, viewer.Email)
+	var workspaces struct {
+		Workspaces []struct {
+			Name string `json:"name"`
+		} `json:"workspaces"`
+	}
+	if err := session.callServerStructured(workspaceManagerToolPrefix+"list_workspaces", org, &workspaces); err != nil {
+		return nil, fmt.Errorf("%w\n  the values give the workspace-manager the Organization %s with the member groups %s; check its --organization flag", err, config.WorkspaceOrganization, strings.Join(config.WorkspaceOrganizationGroups, ", "))
+	}
+	note("list_workspaces for %s as %s: %d workspaces", config.WorkspaceOrganization, admin.Email, len(workspaces.Workspaces))
+	viewerToken, err := passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret,
+		viewer.Email, viewer.Password, musterLoginScopes)
+	if err != nil {
+		return nil, err
+	}
+	viewerSession, err := openMusterSession(cfg, viewerToken, "platform-test-workspaces-viewer")
+	if err != nil {
+		return nil, err
+	}
+	env, err := viewerSession.callToolEnvelope(workspaceManagerToolPrefix+"list_workspaces", org)
+	if err != nil {
+		return nil, err
+	}
+	if !env.IsError || !strings.Contains(env.Content[0].Text, "not a member") {
+		return nil, fmt.Errorf("list_workspaces for %s as %s answered %.300q, want a refusal as not a member: the viewers are outside the lab's Organization", config.WorkspaceOrganization, viewer.Email, env.Content[0].Text)
+	}
+	note("list_workspaces for %s as %s refused: %.200s", config.WorkspaceOrganization, viewer.Email, env.Content[0].Text)
 	return worded, nil
 }
 

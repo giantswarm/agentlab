@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -420,5 +421,47 @@ func TestWorkspaceGitHubForReadsTheSecretsKeys(t *testing.T) {
 	noIDs := workspaceGitHubLab()
 	if got, err := workspaceGitHubFor(ctx, noIDs); err != nil || got != nil {
 		t.Errorf("with the App's ids empty: %v, %v; want no instance", got, err)
+	}
+}
+
+// The github instance's Secret from the recorded sources: one placement per
+// recorded key into agent-platform/workspace-github, none without a source
+// or without the instance, and a placement that fails fails the run.
+func TestEnsureWorkspaceGitHubSecret(t *testing.T) {
+	cfg := workspaceGitHubLab()
+	calls := fakeSecretTool(t, func() error { return nil })
+	if err := ensureWorkspaceGitHubSecret(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("placed without a source: %v", *calls)
+	}
+
+	cfg.Platform.Workspaces.GitHub = config.WorkspaceGitHub{
+		AppID: testWorkspaceAppID, ClientID: testWorkspaceClientID,
+		PrivateKeySource:   "op://Lab/workspaces-app/private-key",
+		ClientSecretSource: "op://Lab/workspaces-app/client-secret",
+	}
+	if err := ensureWorkspaceGitHubSecret(cfg); err != nil {
+		t.Fatal(err)
+	}
+	target := "kind-" + cfg.ClusterName + "/agent-platform/" + config.WorkspaceGitHubSecretName + "/"
+	want := [][]string{
+		{"secret", "copy", "op://Lab/workspaces-app/private-key", "--to-secret", target + config.WorkspaceGitHubPrivateKeyKey},
+		{"secret", "copy", "op://Lab/workspaces-app/client-secret", "--to-secret", target + config.GitHubClientSecretKey},
+	}
+	if !reflect.DeepEqual(*calls, want) {
+		t.Errorf("placements %v, want %v", *calls, want)
+	}
+
+	fakeSecretTool(t, nil)
+	if err := ensureWorkspaceGitHubSecret(cfg); err == nil || !strings.Contains(err.Error(), "privateKeySource") {
+		t.Errorf("a failed placement answered %v, want the run failed naming the source", err)
+	}
+
+	cfg.Platform.Workspaces.Provider = config.WorkspaceProviderFake
+	calls = fakeSecretTool(t, func() error { return nil })
+	if err := ensureWorkspaceGitHubSecret(cfg); err != nil || len(*calls) != 0 {
+		t.Errorf("placed %v (%v) without the github instance", *calls, err)
 	}
 }
