@@ -385,7 +385,7 @@ func WorkspacesSignInTest(cfg *config.Config, opts WorkspacesSignInTestOptions) 
 		"sources": []map[string]any{{
 			"provider":        instance,
 			workspaceOwnerArg: workspaceSignInOwner,
-			"repositories":    []string{workspaceSignInReadable, workspaceSignInPrivate},
+			repositoriesKey:   []string{workspaceSignInReadable, workspaceSignInPrivate},
 		}},
 	}
 	if env, err := admin.session.callToolEnvelope(workspaceManagerToolPrefix+"create_workspace", create); err != nil {
