@@ -774,13 +774,16 @@ func imageTag(image string) (string, error) {
 }
 
 // stepFrom refuses a step that is none: the lab must run an older Substrate
-// release (major.minor) than the one it steps to.
+// release than the one it steps to, compared in full, prerelease included —
+// a minor step, a patch step (1.8.1 to 1.8.2) and a prerelease of the next
+// patch (1.8.1 to 1.8.2-rc.5) are steps; the same release or an older one is
+// none.
 func stepFrom(before string, to *semver.Version) error {
 	from, err := semver.NewVersion(before)
 	if err != nil {
 		return fmt.Errorf("the lab's Substrate %q is not a version: %v", before, err)
 	}
-	if from.Major() > to.Major() || (from.Major() == to.Major() && from.Minor() >= to.Minor()) {
+	if !from.LessThan(to) {
 		return fmt.Errorf("the lab runs Substrate %s, and %s is no step to a newer release: the proof starts on the release before the step — the chart's Substrate range as released (drop any platform.valuesFiles overlay that pins substrate, then `agentlab platform`)", before, to)
 	}
 	return nil

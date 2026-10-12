@@ -79,28 +79,38 @@ func TestSubstrateStepConfig(t *testing.T) {
 }
 
 // TestStepFrom: the proof starts on an older Substrate release than it
-// steps to; the same release, a patch of it and a newer one are refused.
+// steps to, compared in full — a minor step, a patch step and a prerelease
+// of the next patch are steps; the same release, a newer one and what is no
+// version are refused.
 func TestStepFrom(t *testing.T) {
-	to := semver.MustParse("1.8.0")
+	minor, patch, rc := semver.MustParse("1.8.0"), semver.MustParse("1.8.2"), semver.MustParse("1.8.2-rc.5")
 	for _, tc := range []struct {
 		before string
+		to     *semver.Version
 		ok     bool
 	}{
-		{"1.7.0", true},
-		{"1.7.3", true},
-		{"0.9.0", true},
-		{"1.8.0", false},
-		{"1.8.1-rc.3", false},
-		{"1.9.0", false},
-		{"2.0.0", false},
-		{"latest", false},
+		{"1.7.0", minor, true}, // a minor step
+		{"1.7.3", minor, true},
+		{"0.9.0", minor, true},
+		{"1.8.1", patch, true},      // a patch step
+		{"1.8.2-rc.4", patch, true}, // a prerelease to its release
+		{"1.8.1", rc, true},         // a prerelease of the next patch
+		{"1.8.2-rc.4", rc, true},    // the prerelease before it
+		{"1.8.0", minor, false},     // the same release
+		{"1.8.2-rc.5", rc, false},
+		{"1.8.1-rc.3", minor, false}, // a newer one
+		{"1.8.2", rc, false},
+		{"1.8.3", patch, false},
+		{"1.9.0", minor, false},
+		{"2.0.0", minor, false},
+		{"latest", minor, false}, // no version
 	} {
-		err := stepFrom(tc.before, to)
+		err := stepFrom(tc.before, tc.to)
 		if (err == nil) != tc.ok {
-			t.Errorf("stepFrom(%s, %s) = %v, want ok %v", tc.before, to, err, tc.ok)
+			t.Errorf("stepFrom(%s, %s) = %v, want ok %v", tc.before, tc.to, err, tc.ok)
 		}
 	}
-	if err := stepFrom("1.8.0", to); err == nil || !strings.Contains(err.Error(), "agentlab platform") {
+	if err := stepFrom("1.8.0", minor); err == nil || !strings.Contains(err.Error(), "agentlab platform") {
 		t.Errorf("the refusal must name the way back to the chart's Substrate, got %v", err)
 	}
 }
