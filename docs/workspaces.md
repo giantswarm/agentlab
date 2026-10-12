@@ -114,13 +114,12 @@ lab that had it removes it.
      runs in `/workspace`, sees `agentlab-org/platform-api.git` under
      `/mirrors`, is refused a write into the mirrors, and writes a file that
      a pod then reads on the volume at `sessions/<Session id>`.
-   - The session directory, on a kagent line that sends it (the controller's
-     version, 1.9.0 or later): the turn's own
+   - The session directory: the turn's own
      `git clone /mirrors/agentlab-org/platform-api.git` succeeds as the
      harness user (its uid:gid quoted), and the runtime's setup clone
      `agentlab-org/platform-api` is in its directory (its `origin/HEAD`
-     quoted). Either failing fails the step with git's message. On an older
-     line the step names the controller's version and skips both readings.
+     quoted). Either failing fails the step with git's message and the
+     controller's version.
    - The Sessions and the Agent removed.
 10. Everything removed: the proof's namespace `agentlab-workspaces-test` with
     its claim, and the volume's directory gone from the export.
@@ -162,10 +161,10 @@ A claude Session works in its volume directory, with a clone of each mirror,
 from kagent 1.9.0; its agent's own clone of a mirror needs kagent 1.10.0,
 whose harness trusts the mirrors in the agent's git
 ([kagent-upstream#409](https://github.com/giantswarm/kagent-upstream/issues/409)).
-The proof skips both clone readings below 1.9.0, where the runtime sends no
-session directory; it is not a skip on 1.9.0, so a 1.9.x controller fails
-the agent's own clone. A controller whose version does not parse (a dev
-build) is held to the session directory.
+On an older line the step fails: below 1.9.0 the turn reports
+`/data/workspace` with no setup clone
+([agent-platform#936](https://github.com/giantswarm/agent-platform/issues/936)),
+and on 1.9.x the agent's own clone fails on git's dubious-ownership check.
 
 ## The provider instances
 

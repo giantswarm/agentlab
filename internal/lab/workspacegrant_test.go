@@ -332,19 +332,6 @@ func TestWorkspacesHarnessProbeClones(t *testing.T) {
 	}
 }
 
-// The session directory arrived with kagent 1.9.0, its prereleases
-// included; a version that does not parse is held to it.
-func TestSendsSessionDirectory(t *testing.T) {
-	for version, want := range map[string]bool{
-		"v1.8.1": false, "1.8.2-rc.1": false, "v1.9.0-rc.1": true, "v1.9.0": true,
-		"v1.10.0": true, "v1.10.0-rc.8": true, "": true, "dev": true,
-	} {
-		if got := sendsSessionDirectory(version); got != want {
-			t.Errorf("sendsSessionDirectory(%q) = %t, want %t", version, got, want)
-		}
-	}
-}
-
 func testGrantKey(t *testing.T) *ecdsa.PrivateKey {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
