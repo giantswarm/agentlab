@@ -592,9 +592,9 @@ var workspacesClusterObjects = []struct{ resource, name string }{
 // lab's CSIDriverConfig, the namespace with everything in it and the
 // cluster-scoped objects, so a lab with the switch off carries nothing of
 // it. Quiet on a lab that never had it. A volume a pod still mounts keeps
-// the namespace Terminating until the pod is gone: `agentlab
-// workspaces-test` removes its own. The export's bytes on the node go with
-// cleanWorkspacesNode.
+// the namespace Terminating until the pod is gone, and a node still
+// mounting the server once it stops cannot be stopped: callers run it as a
+// step of workspacesTeardown (teardown.go), after the volumes are released.
 func workspacesDown(ctx context.Context) error {
 	exists, err := objectExists(ctx, gvrNamespaces, "", workspacesNamespace)
 	if err != nil {
@@ -621,18 +621,6 @@ func workspacesDown(ctx context.Context) error {
 	}
 	note("workspace storage removed: namespace %s, the StorageClass, the CSIDriver and the driver's roles", workspacesNamespace)
 	return nil
-}
-
-// cleanWorkspacesNode unmounts what the driver published under Substrate's
-// directory on a node and removes the export's bytes — on `agentlab down`
-// before the node is deleted (a mount the node still holds can keep the
-// container from being removed), on `agentlab platform-down` and when the
-// switch goes off. Best effort through `docker exec`; a node that is not
-// running, or has no export, has nothing to clean.
-func cleanWorkspacesNode(node string) {
-	script := fmt.Sprintf(`for m in $(awk '$2 ~ "^%s/" {print $2}' /proc/mounts | sort -r); do umount -f "$m" 2>/dev/null; done; rm -rf %s 2>/dev/null; true`,
-		substrateVolumesDir, workspacesExportDir)
-	_, _ = outputQuiet(dockerBin, "exec", node, "sh", "-c", script)
 }
 
 // waitDaemonSetReady is `kubectl rollout status daemonset/<name>`: every
