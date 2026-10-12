@@ -41,9 +41,15 @@ names a missing module (on Debian and Ubuntu the kernel's
 
 `agentlab status` prints a `workspaces` line: the NFS server and its node, the
 controller with its proxy, the node plugin, the class, and whose
-CSIDriverConfig registers the driver. `agentlab platform-down` and
-`agentlab down` remove the pieces and clean the node: the mounts under
-`/var/lib/ate` and the export's bytes.
+CSIDriverConfig registers the driver. `agentlab platform-down`, `agentlab
+down` and `agentlab platform` with the switch off take it apart in one order:
+the workspace claims are deleted, the pods that mount a workspace volume are
+deleted and waited for, the volumes are deleted, and every NFS mount and the
+driver's publishes under `/var/lib/ate` are unmounted inside the nodes, all
+while the NFS server still runs; only then the server goes (with its
+namespace, or with the cluster on `down`) and the export's bytes with it. A
+server that stopped first would leave a node's NFS client waiting on it for
+good, a node that can then be neither stopped nor removed.
 
 ### Turning it on
 

@@ -136,7 +136,7 @@ esac`)
 	if err == nil {
 		t.Fatal("a node that never exits must fail the wait")
 	}
-	for _, want := range []string{"agentlab-control-plane (running)", "still alive", "journalctl -u docker", "agentlab down"} {
+	for _, want := range []string{"broken: agentlab-control-plane did not stop within 20ms; needs a host-level fix", "agentlab-control-plane (running)", "still alive", "journalctl -u docker"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("timeout error %q lacks %q", err, want)
 		}

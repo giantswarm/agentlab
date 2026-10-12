@@ -448,11 +448,9 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 			return err
 		}
 	} else {
-		if err := workspacesDown(ctx); err != nil {
+		// The volumes released before the NFS server goes (teardown.go).
+		if err := workspacesTeardown(ctx, cfg); err != nil {
 			return err
-		}
-		for _, node := range append([]string{cfg.ControlPlaneNode()}, cfg.SubstrateNodeNames()...) {
-			cleanWorkspacesNode(node)
 		}
 	}
 	// The lab's GitHub for the workspace-manager's provider instance fake

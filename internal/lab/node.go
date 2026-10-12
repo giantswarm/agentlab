@@ -2,6 +2,7 @@ package lab
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -53,6 +54,49 @@ const (
 // nodeExitTimeout bounds how long Down waits for a node docker could not kill
 // in time; the one observed case took 44 s.
 const nodeExitTimeout = 90 * time.Second
+
+// nodeStopTimeout bounds one call that stops, removes or starts a node
+// container (kind's delete, docker start and unpause, a docker exec into the
+// node). A node whose kernel waits on a mount nobody serves any more answers
+// none of them; past the bound the lab is reported broken (brokenNodeError)
+// instead of waited on.
+const nodeStopTimeout = 2 * time.Minute
+
+// brokenNodeError is the verdict on a node that did not stop or start within
+// its bound: a lab only a host-level fix recovers (the mount it waits on
+// lazily unmounted on the host, then the container removed). The holder
+// reads it as the command's last words, which exits non-zero.
+type brokenNodeError struct {
+	node   string
+	verb   string // stop, or start for a node brought back
+	bound  time.Duration
+	reason string
+}
+
+func (e *brokenNodeError) Error() string {
+	verb := e.verb
+	if verb == "" {
+		verb = "stop"
+	}
+	return fmt.Sprintf("broken: %s did not %s within %s; needs a host-level fix (%s; `docker ps -a` shows the node, `journalctl -u docker` docker's side)",
+		e.node, verb, e.bound, e.reason)
+}
+
+// withinBound runs fn and returns its error, or a brokenNodeError for node
+// once bound passes with fn still running — the call is left behind, since
+// a process in an uninterruptible wait cannot be killed either.
+func withinBound(node string, bound time.Duration, fn func() error) error {
+	done := make(chan error, 1)
+	go func() { done <- fn() }()
+	timer := time.NewTimer(bound)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		return err
+	case <-timer.C:
+		return &brokenNodeError{node: node, bound: bound, reason: "the call to docker did not return"}
+	}
+}
 
 // containerState is one `docker ps -a` row of a cluster's node containers.
 type containerState struct {
@@ -149,8 +193,8 @@ func waitForNodeExit(cluster string, timeout, interval time.Duration) error {
 			}
 		}
 		if time.Since(start) >= timeout {
-			return fmt.Errorf("%s still alive %s after docker gave up killing it; see `journalctl -u docker`, and run `agentlab down` again once `docker ps -a` shows it exited",
-				containerNames(live), timeout)
+			return &brokenNodeError{node: live[0].name, bound: timeout,
+				reason: containerNames(live) + " still alive after docker gave up killing it"}
 		}
 		time.Sleep(interval)
 	}
@@ -190,7 +234,15 @@ func ensureNodeRunning(cfg *config.Config) error {
 	start := time.Now()
 	// outputQuiet, so the error carries docker's words ("is restarting", "no
 	// such container") instead of leaving them on the terminal.
-	if _, err := outputQuiet("docker", verb, node); err != nil {
+	if err := withinBound(node, nodeStopTimeout, func() error {
+		_, err := outputQuiet("docker", verb, node)
+		return err
+	}); err != nil {
+		var broken *brokenNodeError
+		if errors.As(err, &broken) {
+			broken.verb = verbStart
+			return err
+		}
 		return fmt.Errorf("node container %s is %s and could not be started: %w;\nrun `agentlab up` again once `docker ps -a` shows it settled, or `agentlab down` to start over", node, state, err)
 	}
 	// Only a running node has a kubeconfig to export (kind reads it off the

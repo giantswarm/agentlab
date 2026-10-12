@@ -77,6 +77,14 @@ plumbing for model servers under
   reads the kubeconfig off the node, with a runc `nsexec ... No such file or
   directory` or `container ... is not running`. Do not run `down` while another `agentlab`
   process is using the cluster (`ps -eo pid,args | grep '[a]gentlab '`).
+- **A node that does not stop is reported broken, not waited on.** Every
+  call that stops, removes or starts the node is bounded (two minutes; the
+  wait for a dying node above, 90 s): a node whose kernel waits on a mount
+  nobody serves answers none of them, and `agentlab down` or `agentlab up`
+  then exits non-zero with `broken: <node> did not stop within <bound>; needs
+  a host-level fix`. Such a node comes back only after the mount it waits on
+  is lazily unmounted on the host (as root) and the container removed; the
+  lab's workspace teardown order (docs/workspaces.md) keeps it from happening.
 - **The image cache manifest only records what a registry can serve.**
   `state/preload-images.txt` is snapshotted from the node after every boot;
   an image built on the host and side-loaded (a `platform.devImages` swap,

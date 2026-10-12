@@ -2,6 +2,7 @@ package lab
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -13,28 +14,38 @@ import (
 // regenerating deliberately (agentlab certs --force), and keeping it means an
 // immediate `agentlab up` reuses the same trust chain.
 func Down(cfg *config.Config) error {
-	// The workspace storage's mounts on the nodes (workspaces.go): the CSI
-	// driver's bind mounts under Substrate's volumes directory keep a kind
-	// node from exiting cleanly; best effort, the delete follows anyway.
-	if cfg.WorkspacesEnabled() {
-		for _, node := range append([]string{cfg.ControlPlaneNode()}, cfg.SubstrateNodeNames()...) {
-			cleanWorkspacesNode(node)
+	// The workspace volumes (teardown.go) released while the NFS server still
+	// runs: the cluster's deletion stops the server, and a node still holding
+	// a mount of it then cannot be stopped. Best effort on a cluster whose
+	// apiserver answers; the delete follows anyway.
+	if workspacesMountable(cfg) {
+		ctx := context.Background()
+		if err := releaseWorkspaceVolumes(ctx, cfg); err != nil {
+			note("releasing the workspace volumes: %v", err)
 		}
 	}
 	// The lab's GitHub (workspacefake.go), a container beside the nodes.
 	githubFakeDown(cfg)
-	if err := kindDeleteCluster(cfg.ClusterName); err != nil {
+	if err := deleteClusterWithinBound(cfg.ClusterName, cfg.ControlPlaneNode()); err != nil {
+		var broken *brokenNodeError
+		if errors.As(err, &broken) {
+			return err
+		}
 		// kind's delete is `docker rm -f` of the node, and docker gives up
 		// on a node that does not exit within ten seconds of SIGKILL ("could
 		// not kill container: ... did not receive an exit event"), leaving
 		// the container in `docker ps -a` and the cluster listed by kind.
 		// The node is dying, not surviving (node.go): wait for it, then
-		// delete again — now a plain rm of an exited container.
+		// delete again — now a plain rm of an exited container. One that
+		// never exits is a broken lab (brokenNodeError).
 		if werr := waitForNodeExit(cfg.ClusterName, nodeExitTimeout, 2*time.Second); werr != nil {
+			if errors.As(werr, &broken) {
+				return werr
+			}
 			return fmt.Errorf("%w (%v)", werr, err)
 		}
 		step("Retrying the cluster deletion")
-		if err := kindDeleteCluster(cfg.ClusterName); err != nil {
+		if err := deleteClusterWithinBound(cfg.ClusterName, cfg.ControlPlaneNode()); err != nil {
 			return err
 		}
 	}
@@ -113,16 +124,14 @@ func PlatformDown(cfg *config.Config) error {
 		return err
 	}
 	// The workspace storage (workspaces.go), after the platform: Substrate's
-	// CSIDriverConfig and its volumes are finalized by the running chart.
-	if err := workspacesDown(ctx); err != nil {
+	// CSIDriverConfig and its volumes are finalized by the running chart. The
+	// volumes are released before the NFS server goes (teardown.go).
+	if err := workspacesTeardown(ctx, cfg); err != nil {
 		return err
 	}
 	// The lab's GitHub (workspacefake.go); its Service and Secret went with
 	// the namespace.
 	githubFakeDown(cfg)
-	for _, node := range append([]string{cfg.ControlPlaneNode()}, cfg.SubstrateNodeNames()...) {
-		cleanWorkspacesNode(node)
-	}
 	// What an earlier agentlab installed next to the umbrella: its own Flux
 	// controllers for the agent create flow. The chart brings the engine now
 	// and refuses a second Flux (refuseOlderLabShape), so they go with the
@@ -168,4 +177,27 @@ func deleteNamespace(ctx context.Context, ns string) error {
 	}
 	note("namespace %s deleted", ns)
 	return nil
+}
+
+// deleteClusterWithinBound is kind's delete of the cluster, bounded by
+// nodeStopTimeout: a node that never answers docker's kill is a broken lab.
+func deleteClusterWithinBound(cluster, node string) error {
+	return withinBound(node, nodeStopTimeout, func() error { return kindDeleteCluster(cluster) })
+}
+
+// workspacesMountable reports whether the lab's nodes may hold a mount of
+// the workspace storage: the switch on, or its namespace still there from a
+// run with it on, on a cluster whose apiserver answers — a node that does
+// not run holds no mount.
+func workspacesMountable(cfg *config.Config) bool {
+	if err := useClusterKubeconfig(cfg); err != nil {
+		return false
+	}
+	if cfg.WorkspacesEnabled() {
+		return true
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	exists, err := objectExists(ctx, gvrNamespaces, "", workspacesNamespace)
+	return err == nil && exists
 }
