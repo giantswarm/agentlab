@@ -1052,12 +1052,14 @@ func (sp *syncProof) printManifest(d *syncDetail) {
 }
 
 // push commits a file to the moving repository's default branch and pushes
-// it, returning the new head.
+// it, returning the new head. The commit may be empty: a run interrupted
+// after its push leaves the same file on the branch, and the push must still
+// move the head.
 func (sp *syncProof) push() (string, error) {
 	if err := os.WriteFile(filepath.Join(sp.work, syncPushedFile), []byte("# pushed by agentlab workspaces-test --part sync\n"), 0o600); err != nil {
 		return "", err
 	}
-	for _, args := range [][]string{{gitAdd, syncPushedFile}, {gitCommit, "-qm", "workspaces-test: a push"}, {githubPush, "-q", "origin", "HEAD:refs/heads/" + syncMainBranch}} {
+	for _, args := range [][]string{{gitAdd, syncPushedFile}, {gitCommit, "-q", "--allow-empty", "-m", "workspaces-test: a push"}, {githubPush, "-q", "origin", "HEAD:refs/heads/" + syncMainBranch}} {
 		if _, err := sp.gh.git(sp.work, sp.tokens[syncOSS], args...); err != nil {
 			return "", err
 		}
