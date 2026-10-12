@@ -51,6 +51,7 @@ CSIDriverConfig registers the driver. `agentlab platform-down` and
 agentlab configure --workspaces   # needs --agents (on by default)
 agentlab up                       # or `agentlab platform` on a running lab
 agentlab workspaces-test          # --storage-only: the storage alone
+agentlab workspaces-test --part sync   # workspaces defined through the manager, their mirrors
 ```
 
 With the switch off, nothing of it is installed, and `agentlab platform` on a
@@ -127,6 +128,78 @@ lab that had it removes it.
 `--ready-timeout` bounds each wait (default 5m). A resume on
 another node is proven on a cloud installation, not in the lab: the lab's
 export is one node's disk.
+
+### The sync part
+
+`agentlab workspaces-test --part sync [email]` defines workspaces through the
+workspace-manager's tools, through muster as `[email]` (default the admin; a
+member of [the lab's Organization](#the-labs-organization)), and proves what
+the sync keeps on their volumes. It runs on [the provider instance
+`fake`](#the-provider-instance-fake), which it drives as an owner would: a
+push, a force-push and a topic removed, as the App's installation, with the
+key the lab generated. Without the workspace-manager registered with muster,
+or without the instance `fake`, it fails at once with the reason. It runs no
+Session and no model.
+
+1. **Preview**: `preview_workspace` for two drafts. The filter draft has the
+   languages `HCL` and `MDX` and the topics `infrastructure` and `docs` on
+   both owners, `agentlab-org` and `agentlab-oss`, and selects the private
+   `agentlab-org/platform-infra` and the public `agentlab-oss/docs`. The
+   list draft names `agentlab-org/platform-api` and `agentlab-oss/kagent` (a
+   fork, which a name selects). Each repository is printed with the selector
+   that takes it. Where the App is not installed on `agentlab-org`, the
+   private repository's step is skipped with that reason and the filter
+   covers `agentlab-oss` alone.
+2. **Create**: `create_workspace` for both, `agentlab-sync-filter` and
+   `agentlab-sync-list`; `list_workspaces` for `lab` lists both and
+   `get_workspace` answers each.
+3. **Outside the Organization**: the viewer is refused `list_workspaces` for
+   `lab` as not a member, its own listing is empty, and `get_workspace` of
+   each answers permission denied.
+4. **The first cycle**, which the create starts: a bare mirror of each
+   repository at `mirrors/<owner>/<name>.git` on the workspace's volume, read
+   by a pod: bare, its `HEAD`, branches and tags, `gc.auto=0` and
+   `gc.pruneExpire=never`. Each head is the provider's (`git ls-remote`) and
+   the manifest's. The request log holds a fetch of each of the four
+   repositories.
+5. **No-op**: `sync_workspace` with nothing changed. The cycle ends
+   `NoChange` without a sync job, the request log holds listings and no git
+   request, and the manifest (the ConfigMap the sync writes) is byte for byte
+   the one before.
+6. **Push**: a commit pushed to `agentlab-oss/docs`, then a cycle. The
+   request log holds git requests for `docs` alone, the manifest carries its
+   new head, and the other head is unchanged.
+7. **Force-push**: a session directory `sessions/agentlab-sync-proof` with a
+   `git clone --shared` of the mirror (its objects borrowed through git
+   alternates, none of its own), then a force-push of `docs` and a cycle that
+   fetches only it. The mirror's branch is at the new head, the overwritten
+   commit stays in the mirror unreachable (repacked with
+   `--keep-unreachable` while a session directory borrows from it), and the
+   clone reads every object it reaches: none missing, `git fsck
+   --connectivity-only` clean, the overwritten commit's file readable.
+   `get_workspace` lists the session directory.
+8. **Topic removed**: the topic `docs` taken off `agentlab-oss/docs`. The next
+   cycle drops it from the selection (`droppedAt` in the manifest, one
+   repository selected), fetches nothing, and its mirror stays on the volume
+   with its borrower.
+9. **Borrower gone**: the session directory removed, as its Session's end
+   would remove it. The next cycle, `NoChange` with a sync job that looks
+   after the volume, deletes the dropped mirror and its manifest entry.
+10. **Update**: `update_workspace` replaces `kagent` with `docs` by name in
+    the list workspace. Its cycle mirrors `docs` and deletes `kagent`'s
+    mirror, which no session directory borrows.
+11. **Delete**: `delete_workspace` for both. Each workspace, its claim and its
+    PersistentVolume go, nothing of it is left under the export, no session
+    directory being left.
+12. **Restore**: `agentlab-oss/docs` back to the fixture's topics and the head
+    it had, and this host's clone removed. A failed run removes the same.
+
+The workspace-manager answers an owner's listing from its cache for a
+minute: a cycle that must see a change at the provider is requested once a
+minute has passed since the last listing, and the part starts a minute after
+the provider's last change in the request log. The no-op is shown by the
+request log and the manifest, never by timing. The run takes about six
+minutes; `--ready-timeout` bounds each cycle.
 
 ## The Session admission
 
@@ -315,6 +388,7 @@ owner. `dev` is the member without access, `viewer` the one who cannot push.
 |---|---|
 | The App | `GET /app`, `/app/installations`, `/orgs/{o}/installation`, `/users/{u}/installation`, `/repos/{o}/{r}/installation`; `POST /app/installations/{id}/access_tokens` (optionally limited to `repositories`). The App's JWT is RS256, signed by the key the lab generated, issued by the App id, valid for at most ten minutes. |
 | Listings | `GET /orgs/{o}/repos`, `/users/{u}/repos` (`type`), `/user/repos` (`visibility`), `/installation/repositories`, `/repos/{o}/{r}`: `language`, `topics`, `archived`, `fork`, `pushed_at`, `size`, `permissions`; `sort` (`full_name`, `pushed`, `updated`), `direction`, `per_page`, `page` with the `Link` header. |
+| Topics | `GET /repos/{o}/{r}/topics`; `PUT /repos/{o}/{r}/topics` with `names` replaces them, lower-cased, for a caller that writes to the repository (an installation token on its owner, a user with write). It is no push: `pushed_at` stays. |
 | OAuth | `GET /login/oauth/authorize` consents at once for the lab user its `login` parameter names and requires PKCE (`S256`); `POST /login/oauth/access_token` answers access tokens valid eight hours and refresh tokens that **rotate**: each redeems once, a second redemption answers `bad_refresh_token`. `DELETE /api/v3/applications/{client_id}/grant` revokes every token of the person, `/token` the one access token (Basic auth with the client id and secret). `GET /user`. |
 | git | Smart HTTP at `https://<fake>/<owner>/<repo>[.git]`, served by git's own `upload-pack` and `receive-pack` in stateless RPC mode (what `git http-backend` runs; protocol v0 to v2): clone, fetch and push, the token as the Basic auth password. A private repository answers 401 without a credential and "not found" to a user who does not read it; a push needs write, 401 without a credential, 403 naming the user otherwise. A push moves `pushed_at`. |
 | Pull requests | `POST` and `GET /repos/{o}/{r}/pulls`, and the GraphQL operations of `gh pr create` on `/api/graphql`; `GET /api/v3/meta` reports a GitHub Enterprise version, as gh expects. |

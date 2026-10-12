@@ -32,8 +32,32 @@ type WorkspacesTestOptions struct {
 	// claude Session admitted on the volume (workspacesharness.go).
 	StorageOnly bool
 	// ReadyTimeout bounds each wait: the storage's rollouts, a claim bound,
-	// a pod finished, a volume gone.
+	// a pod finished, a volume gone, a sync cycle.
 	ReadyTimeout time.Duration
+	// Part runs one part instead of the storage proof: WorkspacesPartSync
+	// (workspacessync.go). "" is the storage proof.
+	Part string
+	// Email is the lab user a part signs in as, a member of the lab's
+	// Organization.
+	Email string
+}
+
+// validate refuses a part workspaces-test does not have, and the flags and
+// argument of one run given to the other.
+func (o WorkspacesTestOptions) validate() error {
+	switch o.Part {
+	case "":
+		if o.Email != "" {
+			return fmt.Errorf("the storage proof signs in as nobody: [email] names the user of a part (--part %s)", strings.Join(WorkspacesParts, ", "))
+		}
+	case WorkspacesPartSync:
+		if o.StorageOnly {
+			return fmt.Errorf("--storage-only is the storage proof's; --part %s runs no Session", WorkspacesPartSync)
+		}
+	default:
+		return fmt.Errorf("no part %q of workspaces-test: --part takes %s", o.Part, strings.Join(WorkspacesParts, ", "))
+	}
+	return nil
 }
 
 // DefaultWorkspacesReadyTimeout is the proof's default wait.
@@ -76,8 +100,20 @@ func WorkspacesTest(cfg *config.Config, opts WorkspacesTestOptions) error {
 	if opts.ReadyTimeout <= 0 {
 		opts.ReadyTimeout = DefaultWorkspacesReadyTimeout
 	}
+	if err := opts.validate(); err != nil {
+		return err
+	}
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
+	}
+	if opts.Part == WorkspacesPartSync {
+		email := opts.Email
+		if email == "" {
+			if admin := cfg.AdminUser(); admin != nil {
+				email = admin.Email
+			}
+		}
+		return workspacesSyncPart(cfg, email, opts.ReadyTimeout)
 	}
 	ctx := context.Background()
 	timeout := opts.ReadyTimeout

@@ -1,7 +1,6 @@
 package lab
 
 import (
-	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -142,12 +141,8 @@ func (f *wsFake) call(t *testing.T, method, path, credential string, body any, o
 
 // appJWT is a JWT of the App signed by key, issued at iat, living ttl.
 func (f *wsFake) appJWT(key *rsa.PrivateKey, iat time.Time, ttl time.Duration) string {
-	enc := func(v any) string { raw, _ := json.Marshal(v); return base64.RawURLEncoding.EncodeToString(raw) }
-	signing := enc(map[string]string{"alg": "RS256", "typ": "JWT"}) + "." +
-		enc(map[string]any{"iss": fmt.Sprint(f.g.fixture.App.ID), "iat": iat.Unix(), "exp": iat.Add(ttl).Unix()})
-	digest := sha256.Sum256([]byte(signing))
-	sig, _ := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, digest[:])
-	return signing + "." + base64.RawURLEncoding.EncodeToString(sig)
+	jwt, _ := githubAppJWT(key, f.g.fixture.App.ID, iat, ttl)
+	return jwt
 }
 
 func fullNames(repos []map[string]any) []string {
@@ -248,6 +243,42 @@ func TestWorkspaceGitHubListing(t *testing.T) {
 	}
 	if resp := f.call(t, http.MethodGet, "/api/v3/orgs/nobody/repos", "", nil, nil); resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("an unknown owner = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestWorkspaceGitHubReplaceTopics(t *testing.T) {
+	f := startWorkspaceFake(t)
+	viewer := f.signIn(t, "viewer")[wsAccess].(string)
+	dev := f.signIn(t, wsDev)[wsAccess].(string)
+	path := "/api/v3/repos/" + wsPublic + "/topics"
+	before := f.g.repos[wsPublic].pushedAt
+
+	if resp := f.call(t, http.MethodPut, path, viewer, map[string]any{"names": []string{}}, nil); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("viewer's PUT topics = %d, want 403: viewer pushes nowhere", resp.StatusCode)
+	}
+	if resp := f.call(t, http.MethodPut, path, dev, map[string]any{}, nil); resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("PUT topics without names = %d, want 422", resp.StatusCode)
+	}
+	var topics githubTopics
+	if resp := f.call(t, http.MethodPut, path, dev, map[string]any{"names": []string{"Go", "go", " sync "}}, &topics); resp.StatusCode != http.StatusOK || !slices.Equal(topics.Names, []string{"go", "sync"}) {
+		t.Fatalf("dev's PUT topics = %d %v, want [go sync]", resp.StatusCode, topics.Names)
+	}
+	var repos []map[string]any
+	f.call(t, http.MethodGet, "/api/v3/orgs/"+wsOrg+"/repos", "", nil, &repos)
+	for _, r := range repos {
+		if r[wsFullName] == wsPublic && fmt.Sprint(r["topics"]) != "[go sync]" {
+			t.Fatalf("the listing after the change carries topics %v", r["topics"])
+		}
+	}
+	f.call(t, http.MethodGet, path, "", nil, &topics)
+	if !slices.Equal(topics.Names, []string{"go", "sync"}) {
+		t.Fatalf("GET topics = %v", topics.Names)
+	}
+	if !f.g.repos[wsPublic].pushedAt.Equal(before) {
+		t.Fatal("a topic change moved pushed_at: it is no push")
+	}
+	if resp := f.call(t, http.MethodGet, "/api/v3/repos/"+wsPrivate+"/topics", dev, nil, nil); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("dev's GET of %s's topics = %d, want 404: dev does not read it", wsPrivate, resp.StatusCode)
 	}
 }
 
