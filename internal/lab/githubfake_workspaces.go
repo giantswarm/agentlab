@@ -32,7 +32,10 @@ import (
 // repositories, owners and users of a fixture (githubfake_fixture.go):
 //
 //   - the App: its installation per owner and installation tokens, the App's
-//     JWT checked against the public key the lab generated;
+//     JWT checked against the public key the lab generated; an installation
+//     suspended and unsuspended as an organization owner does it, after
+//     which the installation's tokens and the App's user tokens act on none
+//     of the owner's repositories (public ones stay readable);
 //   - repository listings with the fields their filters read (language,
 //     topics, archived, fork, pushed_at), per caller's visibility;
 //   - the user-to-server OAuth flow: authorize with PKCE consenting at once
@@ -67,6 +70,11 @@ const (
 // githubPermissions is the key of an installation's and a repository's
 // permissions.
 const githubPermissions = "permissions"
+
+// githubFakeSuspender is who the fake names as having suspended an
+// installation: on GitHub an owner of the organization, here the call with
+// the App's JWT that stands in for the owner's click.
+const githubFakeSuspender = "lab-owner"
 
 // The kinds of credential a request carries, as the request log names them:
 // none; the App's JWT; an installation token; a user's token; the App's
@@ -148,6 +156,11 @@ type workspaceGitHub struct {
 	git          *githubGit
 	now          func() time.Time
 
+	// suspended is when each suspended installation was suspended, under
+	// its own lock: installationJSON reads it with mu held and without.
+	suspendMu sync.Mutex
+	suspended map[int64]time.Time
+
 	mu       sync.Mutex
 	repos    map[string]*workspaceRepo // owner/name → repository
 	tokens   map[string]*githubToken
@@ -173,7 +186,7 @@ type WorkspaceGitHubOptions struct {
 // returns the fake, its handler not yet served.
 func newWorkspaceGitHub(fixture *githubFixture, appKey *rsa.PublicKey, clientSecret, dataDir string, largeRepoMiB int) (*workspaceGitHub, error) {
 	g := &workspaceGitHub{fixture: fixture, appKey: appKey, clientSecret: clientSecret, now: time.Now,
-		repos: map[string]*workspaceRepo{}, tokens: map[string]*githubToken{}, codes: map[string]*oauthCode{}}
+		repos: map[string]*workspaceRepo{}, tokens: map[string]*githubToken{}, codes: map[string]*oauthCode{}, suspended: map[int64]time.Time{}}
 	git, err := newGitHubGit(dataDir)
 	if err != nil {
 		return nil, err
@@ -219,6 +232,8 @@ func (g *workspaceGitHub) handler() http.Handler {
 	mux.HandleFunc("GET "+api+"/users/{owner}/installation", g.appCall(g.ownerInstallation))
 	mux.HandleFunc("GET "+api+"/repos/{owner}/{repo}/installation", g.appCall(g.ownerInstallation))
 	mux.HandleFunc("POST "+api+"/app/installations/{id}/access_tokens", g.appCall(g.installationToken))
+	mux.HandleFunc("PUT "+api+"/app/installations/{id}/suspended", g.appCall(g.suspend(true)))
+	mux.HandleFunc("DELETE "+api+"/app/installations/{id}/suspended", g.appCall(g.suspend(false)))
 
 	mux.HandleFunc("GET "+api+"/installation/repositories", g.installationRepositories)
 	mux.HandleFunc("GET "+api+"/orgs/{owner}/repos", g.ownerRepositories)
@@ -268,9 +283,12 @@ func (g *workspaceGitHub) logged(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c := g.caller(r)
 		sw := &statusWriter{ResponseWriter: w}
-		if c.invalid() {
+		switch {
+		case c.invalid():
 			badCredentials(sw)
-		} else {
+		case c.kind == credInstallation && g.isSuspended(c.installation):
+			installationSuspended(sw)
+		default:
 			next.ServeHTTP(sw, r.WithContext(context.WithValue(r.Context(), callerKey{}, c)))
 		}
 		if r.URL.Path == githubFakeHealthPath || strings.HasPrefix(r.URL.Path, "/_fake/") {
@@ -438,6 +456,9 @@ func (g *workspaceGitHub) canWrite(c githubCaller, repo *workspaceRepo) bool {
 // writes to every repository of its owner (or of its list), a user what the
 // fixture grants.
 func (g *workspaceGitHub) permission(c githubCaller, repo *workspaceRepo) string {
+	if g.isSuspended(g.installationOf(repo.Owner)) {
+		return ""
+	}
 	switch c.kind {
 	case credInstallation:
 		if g.installationOf(repo.Owner) == c.installation && (len(c.repos) == 0 || slices.Contains(c.repos, repo.Name)) {
@@ -472,6 +493,21 @@ func badCredentials(w http.ResponseWriter) {
 	githubFakeError(w, http.StatusUnauthorized, "Bad credentials")
 }
 
+// installationSuspended is GitHub's answer to an installation token of a
+// suspended installation, and to a new token for one.
+func installationSuspended(w http.ResponseWriter) {
+	githubFakeError(w, http.StatusForbidden, "This installation has been suspended")
+}
+
+// isSuspended says whether installation id is suspended; 0, no
+// installation, never is.
+func (g *workspaceGitHub) isSuspended(id int64) bool {
+	g.suspendMu.Lock()
+	defer g.suspendMu.Unlock()
+	_, ok := g.suspended[id]
+	return ok && id != 0
+}
+
 // --- the App ------------------------------------------------------------------
 
 // appCall admits a call with the App's JWT only.
@@ -492,11 +528,42 @@ func (g *workspaceGitHub) getApp(w http.ResponseWriter, r *http.Request) {
 }
 
 func (g *workspaceGitHub) installationJSON(o githubFixtureOwner) map[string]any {
-	return map[string]any{
+	out := map[string]any{
 		"id": o.Installation, "app_id": g.fixture.App.ID, "app_slug": g.fixture.App.Slug, "target_type": o.Type,
 		"account":              map[string]any{githubLogin: o.Login, fieldTypeKey: o.Type},
 		"repository_selection": githubAll,
 		githubPermissions:      map[string]string{"contents": githubPermWrite, "pull_requests": githubPermWrite},
+		"suspended_at":         nil,
+		"suspended_by":         nil,
+	}
+	g.suspendMu.Lock()
+	defer g.suspendMu.Unlock()
+	if at, ok := g.suspended[o.Installation]; ok {
+		out["suspended_at"] = at.UTC().Format(time.RFC3339)
+		out["suspended_by"] = map[string]any{githubLogin: githubFakeSuspender, fieldTypeKey: githubUser}
+	}
+	return out
+}
+
+// suspend is PUT (true) and DELETE (false) of
+// /app/installations/{id}/suspended: 204 either way, 404 for an unknown
+// installation. Suspending keeps the first suspension's time, as GitHub
+// does for a second PUT.
+func (g *workspaceGitHub) suspend(on bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if id == 0 || !slices.ContainsFunc(g.fixture.Owners, func(o githubFixtureOwner) bool { return o.Installation == id }) {
+			githubFakeError(w, http.StatusNotFound, "Not Found")
+			return
+		}
+		g.suspendMu.Lock()
+		if _, ok := g.suspended[id]; on && !ok {
+			g.suspended[id] = g.now()
+		} else if !on {
+			delete(g.suspended, id)
+		}
+		g.suspendMu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
@@ -535,6 +602,10 @@ func (g *workspaceGitHub) installationToken(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	owner := g.fixture.Owners[i]
+	if g.isSuspended(id) {
+		installationSuspended(w)
+		return
+	}
 	var in struct {
 		Repositories []string `json:"repositories"`
 	}

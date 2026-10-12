@@ -526,3 +526,87 @@ func TestWorkspaceGitHubPushMovesPushedAt(t *testing.T) {
 		}
 	}
 }
+
+// TestWorkspaceGitHubSuspendedInstallation suspends the App's installation
+// on agentlab-org as an organization owner would: the listing names the
+// suspension, no new token is issued, the installation's token and the App's
+// user tokens act on none of the owner's repositories while the public ones
+// stay readable, the installation on agentlab-oss is untouched, and
+// unsuspending gives everything back.
+func TestWorkspaceGitHubSuspendedInstallation(t *testing.T) {
+	f := startWorkspaceFake(t)
+	jwt := f.appJWT(f.appKey, time.Now(), 9*time.Minute)
+	var tok struct {
+		Token string `json:"token"`
+	}
+	f.call(t, http.MethodPost, "/api/v3/app/installations/1/access_tokens", jwt, nil, &tok)
+	admin := f.signIn(t, testLogin)[wsAccess].(string)
+	work := t.TempDir()
+	if out, err := f.git(t, work, "clone", "-q", f.remote(admin, wsPublic), "api"); err != nil {
+		t.Fatalf("clone of %s: %v: %s", wsPublic, err, out)
+	}
+	if out, err := f.git(t, work, "clone", "-q", f.remote(admin, "agentlab-oss/kagent"), "kagent"); err != nil {
+		t.Fatalf("clone of agentlab-oss/kagent: %v: %s", err, out)
+	}
+	push := func(dir, name string) error {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(work, dir, name), []byte(name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if out, err := f.git(t, filepath.Join(work, dir), "add", "."); err != nil {
+			t.Fatalf("add: %v: %s", err, out)
+		}
+		if out, err := f.git(t, filepath.Join(work, dir), "commit", "-q", "-m", name); err != nil {
+			t.Fatalf("commit: %v: %s", err, out)
+		}
+		_, err := f.git(t, filepath.Join(work, dir), "push", "-q", "origin", "HEAD:"+wsMain)
+		return err
+	}
+
+	if resp := f.call(t, http.MethodPut, "/api/v3/app/installations/1/suspended", admin, nil, nil); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("a suspension with a user's token = %d, want 401", resp.StatusCode)
+	}
+	if resp := f.call(t, http.MethodPut, "/api/v3/app/installations/99/suspended", jwt, nil, nil); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("suspending an unknown installation = %d, want 404", resp.StatusCode)
+	}
+	if resp := f.call(t, http.MethodPut, "/api/v3/app/installations/1/suspended", jwt, nil, nil); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("suspend = %d, want 204", resp.StatusCode)
+	}
+
+	var installations []map[string]any
+	f.call(t, http.MethodGet, "/api/v3/app/installations", jwt, nil, &installations)
+	for _, i := range installations {
+		suspended := i["suspended_at"] != nil
+		if want := i["id"] == float64(1); suspended != want {
+			t.Errorf("installation %v: suspended_at = %v, want set %v", i["id"], i["suspended_at"], want)
+		}
+	}
+	if resp := f.call(t, http.MethodPost, "/api/v3/app/installations/1/access_tokens", jwt, nil, nil); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("a token of the suspended installation = %d, want 403", resp.StatusCode)
+	}
+	if resp := f.call(t, http.MethodGet, "/api/v3/installation/repositories", tok.Token, nil, nil); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("the suspended installation's token = %d, want 403", resp.StatusCode)
+	}
+	if err := push("api", "while-suspended"); err == nil {
+		t.Fatalf("the admin's user token pushed to %s while the installation on its owner is suspended", wsPublic)
+	}
+	if out, err := f.git(t, work, "clone", "-q", f.remote(admin, wsPrivate), "infra"); err == nil {
+		t.Fatalf("the admin's user token cloned the private %s while suspended: %s", wsPrivate, out)
+	}
+	if out, err := f.git(t, work, "clone", "-q", f.remote("", wsPublic), "api-anon"); err != nil {
+		t.Fatalf("the public %s is no longer readable while suspended: %v: %s", wsPublic, err, out)
+	}
+	if err := push("kagent", "other-owner"); err != nil {
+		t.Fatalf("a push to agentlab-oss, whose installation is not suspended: %v", err)
+	}
+
+	if resp := f.call(t, http.MethodDelete, "/api/v3/app/installations/1/suspended", jwt, nil, nil); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("unsuspend = %d, want 204", resp.StatusCode)
+	}
+	if resp := f.call(t, http.MethodGet, "/api/v3/installation/repositories", tok.Token, nil, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("the installation's token after unsuspending = %d, want 200", resp.StatusCode)
+	}
+	if _, err := f.git(t, filepath.Join(work, "api"), "push", "-q", "origin", "HEAD:"+wsMain); err != nil {
+		t.Fatalf("the admin's push after unsuspending: %v", err)
+	}
+}

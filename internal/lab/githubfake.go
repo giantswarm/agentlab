@@ -331,7 +331,7 @@ func (f *fakeGitHub) serveUser(w http.ResponseWriter, r *http.Request) {
 		githubFakeError(w, http.StatusUnauthorized, "Bad credentials")
 		return
 	}
-	writeGitHubJSON(w, http.StatusOK, map[string]any{githubLogin: login, "id": len(login), fieldTypeKey: "User"})
+	writeGitHubJSON(w, http.StatusOK, map[string]any{githubLogin: login, "id": len(login), fieldTypeKey: githubUser})
 }
 
 // repoCall admits a call on the fake's repository with a bearer and runs h

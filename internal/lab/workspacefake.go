@@ -251,34 +251,141 @@ func (g *labGitHubClient) requests() ([]githubRequest, error) {
 	return out, nil
 }
 
-// installationToken is a token of the App's installation on owner, which
-// writes to the owner's repositories; errNoInstallation where the App is not
-// installed.
-func (g *labGitHubClient) installationToken(owner string) (string, error) {
-	jwt, err := githubAppJWT(g.appKey, g.appID, time.Now().Add(-githubClockSkew/2), githubAppJWTMaxTTL-githubClockSkew)
-	if err != nil {
-		return "", err
-	}
+// appJWT is a fresh JWT of the App, for the calls GitHub admits with it only.
+func (g *labGitHubClient) appJWT() (string, error) {
+	return githubAppJWT(g.appKey, g.appID, time.Now().Add(-githubClockSkew/2), githubAppJWTMaxTTL-githubClockSkew)
+}
+
+// installationID is the id of the App's installation on owner;
+// errNoInstallation where the App is not installed.
+func (g *labGitHubClient) installationID(owner, jwt string) (int64, error) {
 	var installation struct {
 		ID int64 `json:"id"`
 	}
 	status, err := g.do(http.MethodGet, githubFakeAPIPath+"/orgs/"+owner+"/installation", jwt, nil, &installation)
 	switch {
 	case err != nil:
-		return "", err
+		return 0, err
 	case status == http.StatusNotFound:
-		return "", fmt.Errorf("%w %s", errNoInstallation, owner)
+		return 0, fmt.Errorf("%w %s", errNoInstallation, owner)
 	case status != http.StatusOK:
-		return "", fmt.Errorf("the App's installation on %s answered %d", owner, status)
+		return 0, fmt.Errorf("the App's installation on %s answered %d", owner, status)
+	}
+	return installation.ID, nil
+}
+
+// installationToken is a token of the App's installation on owner, which
+// writes to the owner's repositories; errNoInstallation where the App is not
+// installed.
+func (g *labGitHubClient) installationToken(owner string) (string, error) {
+	jwt, err := g.appJWT()
+	if err != nil {
+		return "", err
+	}
+	id, err := g.installationID(owner, jwt)
+	if err != nil {
+		return "", err
 	}
 	var token struct {
 		Token string `json:"token"`
 	}
-	status, err = g.do(http.MethodPost, fmt.Sprintf("%s/app/installations/%d/access_tokens", githubFakeAPIPath, installation.ID), jwt, nil, &token)
+	status, err := g.do(http.MethodPost, fmt.Sprintf("%s/app/installations/%d/access_tokens", githubFakeAPIPath, id), jwt, nil, &token)
 	if err != nil || status != http.StatusCreated || token.Token == "" {
 		return "", fmt.Errorf("a token of the App's installation on %s (%d): %v", owner, status, err)
 	}
 	return token.Token, nil
+}
+
+// setSuspended suspends (on) or unsuspends the App's installation on owner,
+// as GitHub's PUT and DELETE /app/installations/{id}/suspended do.
+func (g *labGitHubClient) setSuspended(owner string, on bool) error {
+	jwt, err := g.appJWT()
+	if err != nil {
+		return err
+	}
+	id, err := g.installationID(owner, jwt)
+	if err != nil {
+		return err
+	}
+	method := http.MethodPut
+	if !on {
+		method = http.MethodDelete
+	}
+	status, err := g.do(method, fmt.Sprintf("%s/app/installations/%d/suspended", githubFakeAPIPath, id), jwt, nil, nil)
+	if err != nil || status != http.StatusNoContent {
+		return fmt.Errorf("%s of the App's installation on %s answered %d: %v", method, owner, status, err)
+	}
+	return nil
+}
+
+// labGitHubInstallation is one of the App's installations as GET
+// /app/installations answers it.
+type labGitHubInstallation struct {
+	ID      int64 `json:"id"`
+	Account struct {
+		Login string `json:"login"`
+	} `json:"account"`
+	SuspendedAt *string `json:"suspended_at"`
+	SuspendedBy *struct {
+		Login string `json:"login"`
+	} `json:"suspended_by"`
+}
+
+// installations are the App's installations.
+func (g *labGitHubClient) installations() ([]labGitHubInstallation, error) {
+	jwt, err := g.appJWT()
+	if err != nil {
+		return nil, err
+	}
+	var out []labGitHubInstallation
+	if status, err := g.do(http.MethodGet, githubFakeAPIPath+"/app/installations", jwt, nil, &out); err != nil || status != http.StatusOK {
+		return nil, fmt.Errorf("the App's installations answered %d: %v", status, err)
+	}
+	return out, nil
+}
+
+// SuspendLabGitHubInstallation suspends (on) or unsuspends the App's
+// installation on owner in the lab's GitHub: the lab's stand-in for an
+// organization owner's Suspend on the App's installation page, the
+// kill-switch runbook's first switch. Afterwards it prints the
+// installations, which show it.
+func SuspendLabGitHubInstallation(cfg *config.Config, owner string, on bool) error {
+	g, err := openLabGitHub(cfg)
+	if err != nil {
+		return err
+	}
+	if err := g.setSuspended(owner, on); err != nil {
+		return err
+	}
+	return printLabGitHubInstallations(g)
+}
+
+// LabGitHubInstallations prints the App's installations in the lab's
+// GitHub: id, owner, and when and by whom each suspended one was.
+func LabGitHubInstallations(cfg *config.Config) error {
+	g, err := openLabGitHub(cfg)
+	if err != nil {
+		return err
+	}
+	return printLabGitHubInstallations(g)
+}
+
+func printLabGitHubInstallations(g *labGitHubClient) error {
+	installations, err := g.installations()
+	if err != nil {
+		return err
+	}
+	for _, i := range installations {
+		state := "active"
+		if i.SuspendedAt != nil {
+			state = "suspended at " + *i.SuspendedAt
+			if i.SuspendedBy != nil {
+				state += " by " + i.SuspendedBy.Login
+			}
+		}
+		fmt.Printf("%d\t%s\t%s\n", i.ID, i.Account.Login, state)
+	}
+	return nil
 }
 
 // topics are the repository's topics.
