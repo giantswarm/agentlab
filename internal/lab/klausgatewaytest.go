@@ -816,13 +816,16 @@ const klausGatewayNoHarness = "agentlab-no-such-harness"
 // AgentTemplates and the RemoteMCPServer. Best effort; klausGatewayLeftovers
 // reports what stayed.
 func klausGatewayCleanup(api *kagentAPI) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	if sessions, err := fixtureSessions(ctx, api); err == nil {
+	listCtx, listCancel := context.WithTimeout(context.Background(), kubeReadTimeout)
+	sessions, err := fixtureSessions(listCtx, api)
+	listCancel()
+	if err == nil {
 		for _, session := range sessions {
 			api.removeSession(session.GetId())
 		}
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
 	for _, obj := range klausGatewayObjects() {
 		gvr, err := gvrFor(obj.resource)
 		if err != nil {
