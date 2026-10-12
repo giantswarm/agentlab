@@ -318,6 +318,10 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 		return err
 	}
 	gw := newGatewayProcess(opts, runDir, caFile, target, fake.baseURL(), cfg.MusterBaseURL())
+	// The gateway starts a thread's Session through agent-manager's
+	// start_session, a muster call it makes itself as the person, so it
+	// trusts the lab CA for muster as it does for the a2a target.
+	gw.trustLabCA = true
 	defer func() { _ = gw.stop() }()
 	step("Starting klaus-gateway %s on the host: Slack in events mode at %s, its Web API the fake at %s, a2a target %s (TLS with the lab CA, the person's token forwarded; a loopback gate in front of the edge %s), OBO with the bolt link store, routing store %s",
 		gw.describe(), gw.baseURL(), fake.baseURL(), target, edge, filepath.Join(runDir, gatewayBoltFile))
