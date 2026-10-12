@@ -372,7 +372,7 @@ func (ps *portalSession) startSession(agent portalAgentRef, name, requestID, mes
 		namespaceKey:  agent.Namespace,
 		nameKey:       agent.Name,
 		"message":     message,
-		"requestId":   requestID,
+		startSessionRequestIDArg: requestID,
 		"sessionName": name,
 	}
 	if err := portalToolCall(ps, startSessionTool, args, &out); err != nil {

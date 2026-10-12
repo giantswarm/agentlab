@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -16,6 +17,9 @@ import (
 // list_providers, called through muster as the admin, names every provider
 // instance the lab configured (workspaceprovider.go) and nothing else — the
 // fake, the github instance once its App and Secret are in place, or both.
+// The manager runs with kagent's address: without it no session directory
+// is ever cleaned up (every Workspace reads SessionsCleanedUp=False
+// KagentNotConfigured).
 // list_workspaces for the lab's Organization (config.WorkspaceOrganization)
 // answers the admin, a member, and refuses the viewer as not a member: the
 // values gave the manager the Organization and its member groups.
@@ -85,6 +89,14 @@ func proveWorkspaceManager(cfg *config.Config) ([]string, error) {
 		return nil, fmt.Errorf("the workspace-manager is not rolled out: %w", err)
 	}
 	note("deployment %s/%s rolled out", platformNamespace, workspaceManagerMCPServer)
+	flags, err := workspaceManagerFlags(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	if err := judgeKagentAddress(flags); err != nil {
+		return nil, err
+	}
+	note("the session directories' cleanup lists kagent's Sessions at %s, a directory going %s after its last turn", flagValue(flags, sessionsKagentArg), cmp.Or(flagValue(flags, sessionsCleanupArg), "the manager's default"))
 
 	// What the install configured: the instances the values rendered, read
 	// the way the install reads them (the github instance's Secret keys

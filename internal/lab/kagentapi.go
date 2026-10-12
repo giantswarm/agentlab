@@ -831,6 +831,10 @@ type turn struct {
 	// message's metadata (a harness's usage of the turn, for one).
 	statusText string
 	statusMeta map[string]any
+	// notices are the texts of the status messages the turn reported while
+	// working, in order: a runtime's word before the answer, such as the
+	// workspace setup's.
+	notices []string
 	// approval is the tool_approval_request the task paused on at
 	// input-required, nil otherwise.
 	approval *toolApprovalRequest
@@ -897,6 +901,10 @@ func (t *turn) setStatus(s a2a.TaskStatus) {
 		t.statusText = messageText(s.Message)
 		if s.Message != nil {
 			t.statusMeta = s.Message.Metadata
+		}
+	default:
+		if text := messageText(s.Message); text != "" {
+			t.notices = append(t.notices, text)
 		}
 	}
 }

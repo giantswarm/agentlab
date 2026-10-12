@@ -20,6 +20,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"golang.org/x/crypto/bcrypt"
@@ -527,6 +528,11 @@ type Workspaces struct {
 	GitHub WorkspaceGitHub `yaml:"github,omitempty"`
 	// GitLab is the GitLab behind the provider instance gitlab.
 	GitLab WorkspaceGitLab `yaml:"gitlab,omitempty"`
+	// SessionsCleanupAfter is how long a Session's directory outlives its
+	// last turn, a Go duration the workspace-manager takes as its
+	// sessions.cleanupAfter; empty keeps the chart's 30 days. A short window
+	// is a proof's: `workspaces-test --part sessions` waits it out once.
+	SessionsCleanupAfter string `yaml:"sessionsCleanupAfter,omitempty"`
 }
 
 // WorkspaceGitLab is the GitLab behind the workspace-manager's provider
@@ -1801,6 +1807,11 @@ func (c *Config) Validate() error {
 	}
 	if _, err := parseWorkspaceProviders(c.Platform.Workspaces.Provider); err != nil {
 		return err
+	}
+	if after := c.Platform.Workspaces.SessionsCleanupAfter; after != "" {
+		if d, err := time.ParseDuration(after); err != nil || d <= 0 {
+			return fmt.Errorf("platform.workspaces.sessionsCleanupAfter %q is no positive Go duration (such as 3m, or 720h for the chart's 30 days)", after)
+		}
 	}
 	if err := c.Platform.Workspaces.GitHub.Validate(); err != nil {
 		return err

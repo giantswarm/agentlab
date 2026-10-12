@@ -159,7 +159,7 @@ func (p workspacesHarnessProbe) checkOnVolume() error {
 	if !containsString(p.mirrors, workspacesHarnessRepository+".git") {
 		problems = append(problems, fmt.Sprintf("sees no mirror %s.git under /mirrors", workspacesHarnessRepository))
 	}
-	if p.mirrorsWrite != "refused" {
+	if p.mirrorsWrite != probeRefused {
 		problems = append(problems, "the mirrors are not read-only ("+p.mirrorsWrite+")")
 	}
 	if p.ownWrite != "session" {
@@ -196,7 +196,7 @@ func (p workspacesHarnessProbe) checkClones() (string, error) {
 // checkWithoutVolume is the verdict on a Session without a volume: its
 // default directory, no mirrors.
 func (p workspacesHarnessProbe) checkWithoutVolume() error {
-	if p.pwd != kagentDefaultWorkingDirectory || len(p.mirrors) > 0 || p.mirrorsWrite != "absent" {
+	if p.pwd != kagentDefaultWorkingDirectory || len(p.mirrors) > 0 || p.mirrorsWrite != probeAbsent {
 		return fmt.Errorf("the Session without a volume should work in %s with no /mirrors (%s)", kagentDefaultWorkingDirectory, p)
 	}
 	return nil
@@ -404,6 +404,13 @@ func workspacesHarnessVolumeSource(volume workspaceVolume) *apiv1alpha1.SessionV
 // workspacesHarnessAgentManifest is the proof's claude AgentTemplate on the
 // default ModelConfig and its Agent on the claude Harness.
 func workspacesHarnessAgentManifest(harness string) string {
+	return workspacesAgentManifest(workspacesHarnessAgent, harness)
+}
+
+// workspacesAgentManifest is a workspaces proof's AgentTemplate on the
+// default ModelConfig with the probe's system prompt, and its Agent of the
+// same name on the Harness.
+func workspacesAgentManifest(name, harness string) string {
 	return fmt.Sprintf(`apiVersion: %[1]s
 kind: AgentTemplate
 metadata:
@@ -412,13 +419,13 @@ metadata:
   labels:
     %[4]s: %[5]s
 spec:
-  description: "Throwaway claude agent of agentlab workspaces-test; deleted by the same run."
+  description: "Throwaway agent of agentlab workspaces-test; deleted by the same run."
   modelConfig:
     name: %[6]s
   systemPrompt: %[7]q
 ---
-%[8]s`, agentTemplateAPIVersion, workspacesHarnessAgent, kagentNamespace, managedByLabel, managedByAgentlabValue, defaultModelConfig, workspacesHarnessSystemPrompt,
-		agentManifest(workspacesHarnessAgent, workspacesHarnessAgent, harness, nil))
+%[8]s`, agentTemplateAPIVersion, name, kagentNamespace, managedByLabel, managedByAgentlabValue, defaultModelConfig, workspacesHarnessSystemPrompt,
+		agentManifest(name, name, harness, nil))
 }
 
 // workspacesHarnessTurn creates a Session of the proof's Agent from req and

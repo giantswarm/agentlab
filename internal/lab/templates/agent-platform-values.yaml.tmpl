@@ -1202,6 +1202,14 @@ workspaces:
 workspace-manager:
   oauth:
     baseURL: {{ .WorkspaceManagerBaseURL }}
+{{- with .Platform.Workspaces.SessionsCleanupAfter }}
+  # How long a Session's directory outlives its last turn
+  # (platform.workspaces.sessionsCleanupAfter): a proof's short window, so
+  # workspaces-test --part sessions sees a directory cleaned up and its
+  # Session resume in a fresh one. Unset, the chart's 30 days.
+  sessions:
+    cleanupAfter: {{ . }}
+{{- end }}
 {{- if not .WorkspacesOrganizationsChart }}
   # The lab's Organization on a chart that does not forward
   # workspaces.organizations: the subchart's own map.
