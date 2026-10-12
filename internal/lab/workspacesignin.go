@@ -303,10 +303,19 @@ func (p *workspacePerson) disconnect(instance string) {
 // workspaceAuthorization is authorize_workspace's answer, the fields a proof
 // judges.
 type workspaceAuthorization struct {
-	Outcome    string   `json:"outcome"`
-	Reason     string   `json:"reason"`
-	Grant      string   `json:"grant"`
-	Unreadable []string `json:"unreadable"`
+	Outcome      string     `json:"outcome"`
+	Reason       string     `json:"reason"`
+	Grant        string     `json:"grant"`
+	ExpiresAt    *time.Time `json:"expiresAt"`
+	Repositories []string   `json:"repositories"`
+	Changed      []string   `json:"changed"`
+	Unreadable   []string   `json:"unreadable"`
+	// Connect are the providers the person signs in to first, each with the
+	// link that starts it.
+	Connect []struct {
+		Provider string `json:"provider"`
+		URL      string `json:"url"`
+	} `json:"connect"`
 }
 
 // authorizeWorkspace calls authorize_workspace on the workspace as the person.

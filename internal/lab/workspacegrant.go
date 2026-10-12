@@ -268,11 +268,17 @@ func newWorkspaceGrant(issuer, subject, workspace string, volume workspaceVolume
 
 // signWorkspaceGrant signs the grant with ES256 under kid, as a compact JWS.
 func signWorkspaceGrant(key *ecdsa.PrivateKey, kid string, grant workspaceGrant) (string, error) {
+	return signWorkspaceClaims(key, kid, grant)
+}
+
+// signWorkspaceClaims signs any claims with ES256 under kid, as a compact
+// JWS: a grant of the proof's, or a manager's grant with a claim changed.
+func signWorkspaceClaims(key *ecdsa.PrivateKey, kid string, claims any) (string, error) {
 	header, err := json.Marshal(map[string]string{"alg": "ES256", "typ": "JWT", "kid": kid})
 	if err != nil {
 		return "", err
 	}
-	payload, err := json.Marshal(grant)
+	payload, err := json.Marshal(claims)
 	if err != nil {
 		return "", err
 	}
