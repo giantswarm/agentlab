@@ -124,6 +124,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		inGroup(groupTesting, servingTestCmd()),
 		inGroup(groupTesting, vmManagerTestCmd()),
 		inGroup(groupTesting, workspacesTestCmd()),
+		inGroup(groupTesting, workspacesSignInTestCmd()),
 		inGroup(groupTesting, skillsTestCmd()),
 		inGroup(groupTesting, substrateStepTestCmd()),
 		inGroup(groupTesting, a2aTestCmd()),
@@ -1382,6 +1383,25 @@ func workspacesTestCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&opts.StorageOnly, "storage-only", false, "prove the storage alone, without the claude Session admitted on the volume")
 	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", lab.DefaultWorkspacesReadyTimeout, "how long each wait may take: the storage's rollouts, a claim bound, a pod finished, a volume gone")
+	return cmd
+}
+
+func workspacesSignInTestCmd() *cobra.Command {
+	var opts lab.WorkspacesSignInTestOptions
+	cmd := &cobra.Command{
+		Use:   "workspaces-signin-test",
+		Short: "Headless workspace-manager provider sign-in proof: a workspace over agentlab-org/platform-api and platform-infra created and synced -> the admin and a developer connected to the lab's GitHub by the browser's walk (connect_provider's link -> the fake's consent -> the manager's callback -> Dex's login -> /signin -> the callback), list_providers showing each connected -> authorize_workspace granted for the admin and refused naming platform-infra for the developer -> the workspace deleted, both disconnected",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadProofLab()
+			if err != nil {
+				return err
+			}
+			return lab.WorkspacesSignInTest(cfg, opts)
+		},
+	}
+	cmd.Flags().StringVar(&opts.Provider, "provider", "fake", "the provider instance the people connect to (the lab's GitHub)")
+	cmd.Flags().DurationVar(&opts.SyncTimeout, "sync-timeout", lab.DefaultWorkspacesSignInSyncTimeout, "how long the workspace's first sync may take")
 	return cmd
 }
 

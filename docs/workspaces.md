@@ -230,6 +230,31 @@ fake still verifies github.com. The App's callback URL,
 `<base URL>/callback/fake`, is any absolute URL to the fake, and the sign-in
 consents at once for the lab user the `login` parameter names.
 
+#### A person's sign-in, headlessly
+
+`agentlab workspaces-signin-test` connects people to the instance the way a
+browser does and proves what only a connected person sees. A workspace of the
+lab's Organization over `agentlab-org/platform-api` and `platform-infra` is
+created and synced as the admin. The admin and `dev@lab.local` then each
+connect: `connect_provider` through muster as the person, its link walked with
+the person's fixture login added, the fake's consent (302) to the manager's
+`/callback/fake`, which sends a browser without the manager's page session to
+Dex (303), Dex's local login with the person's lab credentials (a connector
+chooser in front of it is passed through), `/signin` setting the page session
+and returning to the callback, which completes the sign-in (200), and
+`list_providers` showing the person connected. `authorize_workspace` then
+answers `granted` for the admin and `refused` naming
+`agentlab-org/platform-infra` for the developer, who cannot read it. The
+workspace is deleted and both people disconnected at the end.
+
+The walk runs on this host: the platform's names on the edge's loopback port,
+Dex on its issuer URL, and `github.<domain>`, which the edge has no route for,
+on the loopback port the fake's container publishes. Each hop is printed as
+method, URL without its query, and status, and a walk that stops says at which
+hop, with which status and the page's heading. The walk is
+`connectWorkspaceProvider` in `internal/lab/workspacesignin.go`, which any
+proof that needs a connected person calls.
+
 ### The provider instance github
 
 `agentlab configure --workspaces-provider github` (or `fake,github`) gives the
