@@ -2,6 +2,7 @@ package lab
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -64,7 +65,7 @@ func (d *workerDrain) run(ctx context.Context) {
 	defer close(d.done)
 	for {
 		pod, err := readyAPIPodOff(ctx, d.apiBefore)
-		if err != nil {
+		if err != nil && ctx.Err() == nil {
 			d.fail("reading ate-api-server's pods: %v", err)
 		}
 		if pod != "" {
@@ -77,7 +78,11 @@ func (d *workerDrain) run(ctx context.Context) {
 		}
 		select {
 		case <-ctx.Done():
-			d.fail("no ate-api-server pod of the candidate became Ready: %v", ctx.Err())
+			if errors.Is(ctx.Err(), context.Canceled) {
+				d.fail("stopped before it began: the step failed first")
+			} else {
+				d.fail("no ate-api-server pod of the candidate became Ready: %v", ctx.Err())
+			}
 			return
 		case <-time.After(substrateStepPoll):
 		}
