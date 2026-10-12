@@ -369,11 +369,11 @@ func (ps *portalSession) startSession(agent portalAgentRef, name, requestID, mes
 		} `json:"turn"`
 	}
 	args := map[string]any{
-		namespaceKey:  agent.Namespace,
-		nameKey:       agent.Name,
-		"message":     message,
+		namespaceKey:             agent.Namespace,
+		nameKey:                  agent.Name,
+		"message":                message,
 		startSessionRequestIDArg: requestID,
-		"sessionName": name,
+		"sessionName":            name,
 	}
 	if err := portalToolCall(ps, startSessionTool, args, &out); err != nil {
 		return nil, "", err
