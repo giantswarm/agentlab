@@ -112,9 +112,14 @@ lab that had it removes it.
      (`sessions/${SESSION_ID}` read-write at `/workspace`, `mirrors`
      read-only at `/mirrors`) and a grant signed with the lab's key: its turn
      runs in `/workspace`, sees `agentlab-org/platform-api.git` under
-     `/mirrors` and the clone `agentlab-org/platform-api` in its directory,
-     is refused a write into the mirrors, and writes a file that a pod then
-     reads on the volume at `sessions/<Session id>`.
+     `/mirrors`, is refused a write into the mirrors, and writes a file that
+     a pod then reads on the volume at `sessions/<Session id>`.
+   - The session directory: the turn's own
+     `git clone /mirrors/agentlab-org/platform-api.git` succeeds as the
+     harness user (its uid:gid quoted), and the runtime's setup clone
+     `agentlab-org/platform-api` is in its directory (its `origin/HEAD`
+     quoted). Either failing fails the step with git's message and the
+     controller's version.
    - The Sessions and the Agent removed.
 10. Everything removed: the proof's namespace `agentlab-workspaces-test` with
     its claim, and the volume's directory gone from the export.
@@ -153,9 +158,13 @@ does not call `authorize_workspace`, for two reasons:
 - A grant needs a synced workspace.
 
 A claude Session works in its volume directory, with a clone of each mirror,
-from kagent 1.9.0. On an older line its turn reports `/data/workspace`, and
-the step fails
-([agent-platform#936](https://github.com/giantswarm/agent-platform/issues/936)).
+from kagent 1.9.0; its agent's own clone of a mirror needs kagent 1.10.0,
+whose harness trusts the mirrors in the agent's git
+([kagent-upstream#409](https://github.com/giantswarm/kagent-upstream/issues/409)).
+On an older line the step fails: below 1.9.0 the turn reports
+`/data/workspace` with no setup clone
+([agent-platform#936](https://github.com/giantswarm/agent-platform/issues/936)),
+and on 1.9.x the agent's own clone fails on git's dubious-ownership check.
 
 ## The provider instances
 

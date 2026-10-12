@@ -250,6 +250,9 @@ func TestWorkspacesHarnessProbe(t *testing.T) {
 	if err := p.checkWithoutVolume(); err == nil {
 		t.Error("a Session on the volume passed as one without")
 	}
+	if _, err := p.checkClones(); err == nil {
+		t.Error("a reply without the clone readings passed the session directory")
+	}
 	plain, err := parseWorkspacesHarnessProbe("AGENTLAB_PROBE pwd=/data/workspace\nAGENTLAB_PROBE mirrors=\nAGENTLAB_PROBE clones=\nAGENTLAB_PROBE mirrors-write=absent\nAGENTLAB_PROBE own-write=session")
 	if err != nil {
 		t.Fatal(err)
@@ -267,6 +270,65 @@ func TestWorkspacesHarnessProbe(t *testing.T) {
 	}
 	if _, err := parseWorkspacesHarnessProbe("I could not run the command."); err == nil {
 		t.Error("a reply without marker lines parsed")
+	}
+}
+
+// The session directory's verdict: the agent's own clone of the mirror and
+// the setup clone, each failure named with what git said.
+func TestWorkspacesHarnessProbeClones(t *testing.T) {
+	const base = "AGENTLAB_PROBE pwd=/workspace\nAGENTLAB_PROBE mirrors=agentlab-org/platform-api.git\nAGENTLAB_PROBE clones=agentlab-org/platform-api\n" +
+		"AGENTLAB_PROBE mirrors-write=refused\nAGENTLAB_PROBE id=65532:65532\n"
+	for _, tc := range []struct {
+		name, lines string
+		want        []string // in the reading, or in the error
+		fails       bool
+	}{
+		{
+			name:  "both clones",
+			lines: "AGENTLAB_PROBE own-clone=rc0 head=ec17e3f Cloning into './agentlab-own-clone'... done.\nAGENTLAB_PROBE setup-clone=ec17e3f \n",
+			want:  []string{"as uid:gid 65532:65532 at ec17e3f", "the setup clone ./agentlab-org/platform-api at ec17e3f"},
+		},
+		{
+			name:  "own clone refused",
+			lines: "AGENTLAB_PROBE own-clone=rc128 head= Cloning into './agentlab-own-clone'... fatal: detected dubious ownership in repository at '/mirrors/agentlab-org/platform-api.git'\nAGENTLAB_PROBE setup-clone=ec17e3f\n",
+			want:  []string{"failed with exit 128", "dubious ownership", "65532:65532"},
+			fails: true,
+		},
+		{
+			name:  "no setup clone",
+			lines: "AGENTLAB_PROBE own-clone=rc0 head=ec17e3f Cloning into './agentlab-own-clone'... done.\nAGENTLAB_PROBE setup-clone=fatal: cannot change to './agentlab-org/platform-api': No such file or directory\n",
+			want:  []string{"holds no setup clone", "cannot change to"},
+			fails: true,
+		},
+		{
+			name:  "no readings",
+			lines: "",
+			want:  []string{"relayed no reading of its own clone", "holds no setup clone"},
+			fails: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := parseWorkspacesHarnessProbe(base + tc.lines + "AGENTLAB_PROBE own-write=session")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := p.checkOnVolume(); err != nil {
+				t.Fatal(err)
+			}
+			reading, err := p.checkClones()
+			got := reading
+			if err != nil {
+				got = err.Error()
+			}
+			if (err != nil) != tc.fails {
+				t.Fatalf("checkClones() = %q, %v; want a failure %t", reading, err, tc.fails)
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(got, w) {
+					t.Errorf("%q does not name %q", got, w)
+				}
+			}
+		})
 	}
 }
 
