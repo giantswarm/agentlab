@@ -104,7 +104,7 @@ func (g *registryGitHub) handler() http.Handler {
 			githubFakeError(w, http.StatusUnauthorized, "Bad credentials")
 			return
 		}
-		writeGitHubJSON(w, http.StatusOK, map[string]any{githubLogin: login, "id": len(login), fieldTypeKey: "User"})
+		writeGitHubJSON(w, http.StatusOK, map[string]any{githubLogin: login, "id": len(login), fieldTypeKey: githubUser})
 	})
 	mux.HandleFunc("GET "+repoPath, g.repoCall(func(w http.ResponseWriter, _ *http.Request, name string, _ registryRepo) {
 		writeGitHubJSON(w, http.StatusOK, map[string]any{githubFullName: name, "default_branch": registryFakeBranch, githubPrivate: true})

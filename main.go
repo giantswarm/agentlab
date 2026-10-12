@@ -217,6 +217,23 @@ func githubFakeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&ws.Credentials, "credentials", "", "with --workspaces: the directory `agentlab github-fake credentials` generated")
 	cmd.Flags().StringVar(&ws.DataDir, "data-dir", "", "with --workspaces: where the bare repositories live (default: a temporary directory)")
 	cmd.Flags().IntVar(&ws.LargeRepoMiB, "large-repo-mib", 0, "with --workspaces: the size of the fixture's generated repositories in MiB (default: the fixture's)")
+	for _, on := range []bool{true, false} {
+		use, short := "suspend <owner>", "Suspend the App's installation on <owner> in the lab's GitHub, as an organization owner's Suspend on github.com does (the kill-switch runbook's first switch)"
+		if !on {
+			use, short = "unsuspend <owner>", "Unsuspend the App's installation on <owner> in the lab's GitHub"
+		}
+		cmd.AddCommand(&cobra.Command{
+			Use: use, Short: short, Args: cobra.ExactArgs(1),
+			RunE: func(cmd *cobra.Command, args []string) error {
+				cfg, err := loadConfig()
+				if err != nil {
+					return err
+				}
+				return lab.SuspendLabGitHubInstallation(cfg, args[0], on)
+			},
+		})
+	}
+	cmd.AddCommand(labCmd("installations", "List the App's installations in the lab's GitHub, with when each suspended one was suspended", lab.LabGitHubInstallations))
 	cmd.AddCommand(labCmd("credentials", "Generate the workspace fake's TLS pair, App key pair and OAuth client secret under certs/github-fake",
 		func(cfg *config.Config) error {
 			dir, err := lab.EnsureGitHubFakeCredentials(cfg.Platform.Domain)
