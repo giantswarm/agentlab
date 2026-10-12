@@ -40,8 +40,9 @@ names a missing module (on Debian and Ubuntu the kernel's
 `linux-modules-extra` package carries them).
 
 `agentlab status` prints a `workspaces` line: the NFS server and its node, the
-controller with its proxy, the node plugin, the class, and whose
-CSIDriverConfig registers the driver. `agentlab platform-down`, `agentlab
+controller with its proxy, the node plugin, the class, whose
+CSIDriverConfig registers the driver, and the chart's CSI companion when it
+runs ([The CSI companion](#the-csi-companion)). `agentlab platform-down`, `agentlab
 down` and `agentlab platform` with the switch off take it apart in one order:
 the workspace claims are deleted, the pods that mount a workspace volume are
 deleted and waited for, the volumes are deleted, and every NFS mount and the
@@ -66,6 +67,45 @@ agentlab workspaces-test --part sessions # ten parallel Sessions in their sessio
 
 With the switch off, nothing of it is installed, and `agentlab platform` on a
 lab that had it removes it.
+
+### The CSI companion
+
+On an installation the workspace volumes come from the cluster's own file
+driver (Amazon EFS, Azure Files over NFS), and Substrate mounts them through
+the connectivity chart's CSI companion (`workspaces.substrate.csiCompanion`,
+agent-platform 4.128.0 and newer): the driver's image run a second time by
+the platform — a controller behind an Envoy mTLS proxy that admits
+ate-api-server alone, a node plugin on the Substrate workers with
+`/var/lib/ate` mounted `Bidirectional` — and the `CSIDriverConfig` the chart
+derives from it. `platform.workspaces.csiCompanion` is the lab's one path for
+proving a change to the companion before merge:
+
+```sh
+agentlab configure --workspaces --workspaces-csi-companion
+agentlab up                             # or `agentlab platform` on a running lab
+agentlab workspaces-test --storage-only # the actors mount through the companion
+```
+
+| Piece | What |
+|---|---|
+| The lab's NFS driver | Unchanged but for its name: it serves the volumes as `efs.csi.aws.com` (csi-driver-nfs's `--drivername`), the driver of the companion's `efs` preset, and the StorageClass `agentlab-workspaces` provisions with it. Substrate mounts a volume through the driver that provisioned it, and the chart registers its preset's driver only |
+| The companion | The chart's `efs` preset with the lab's NFS plugin in place of the EFS driver, which crashloops without EFS: `image.repository: giantswarm/nfsplugin`, `image.tag` the lab's csi-driver-nfs release, csi-driver-nfs's arguments in each mode under the preset's driver name. Everything else is the chart's own render: the `csi-companion-controller` Deployment and Service with the proxy, the `csi-companion-node` DaemonSet, their policies, and the `CSIDriverConfig` `efs.csi.aws.com` pointing at them. The lab sets no `csiDriver` and applies no registration of its own |
+
+`agentlab platform` waits for the companion's controller and node plugin
+after the install and names them in the summary; `agentlab status` adds the
+companion's state to the `workspaces` line. The proof then runs against the
+companion: its controller endpoint refuses a connection without Substrate's
+client certificate, and the actors mount their session and mirror sub-paths
+of the claim's volume through it. A companion chart change is proven with
+the change's chart (`platform.chartPath` to a checkout, or its dev build's
+version): `helm template` of the connectivity chart for the render, the
+proof for the mount.
+
+A chart without the companion's values is refused before anything changes.
+Switching between the lab's own registration and the companion renames the
+driver: a StorageClass's provisioner cannot change in place, so `agentlab
+platform` takes the workspace storage apart in its one order first, the
+workspace volumes with it, and installs it under the new name.
 
 ### The proof
 

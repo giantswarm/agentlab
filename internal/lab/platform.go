@@ -443,6 +443,9 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	// Whether the chart registers the driver itself is read off the
 	// component renders below (rendersWorkspacesCSIDriverConfig).
 	workspacesChart := workspacesChartCarries(cfg)
+	if err := checkWorkspacesCSICompanion(cfg); err != nil {
+		return err
+	}
 	if cfg.WorkspacesEnabled() {
 		if err := workspacesUp(cfg); err != nil {
 			return err
@@ -632,7 +635,7 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	// registers it with Substrate: the lab's own from an earlier install goes
 	// first, since Helm adopts no object another manager created. One that
 	// takes the workspaces values and renders none leaves the lab's in place.
-	workspacesChartRegisters := cfg.WorkspacesEnabled() && rendersWorkspacesCSIDriverConfig(renders)
+	workspacesChartRegisters := cfg.WorkspacesEnabled() && rendersWorkspacesCSIDriverConfig(renders, workspacesCSIDriverFor(cfg))
 	if workspacesChartRegisters {
 		if err := removeLabWorkspacesCSIDriverConfig(ctx); err != nil {
 			return err
@@ -803,13 +806,13 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	// The summary words the registration as it is live, like status does.
 	var workspacesRegistrant string
 	if cfg.WorkspacesEnabled() {
-		if err := waitWorkspacesProxy(ctx); err != nil {
+		if err := waitWorkspacesProxy(ctx, cfg); err != nil {
 			return err
 		}
-		if err := ensureWorkspacesCSIDriverConfig(ctx, workspacesChartRegisters); err != nil {
+		if err := ensureWorkspacesCSIDriverConfig(ctx, cfg, workspacesChartRegisters); err != nil {
 			return err
 		}
-		workspacesRegistrant = readWorkspacesRegistrant(ctx)
+		workspacesRegistrant = readWorkspacesRegistrant(ctx, workspacesCSIDriverFor(cfg))
 	}
 	if dev != nil && dev.harness != "" {
 		if err := reportHarnessDevImage(ctx, dev, harnessBefore); err != nil {

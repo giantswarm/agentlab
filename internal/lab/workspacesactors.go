@@ -62,7 +62,7 @@ var workspacesActorSessions = []string{"a", "b"}
 // directories, each seeing only its own session read-write and the mirrors
 // read-only; a pause and resume keeping the process and the content; both
 // deleted, the volume and its files left. False is the skip.
-func proveWorkspacesActorMount(ctx context.Context, timeout time.Duration) (bool, error) {
+func proveWorkspacesActorMount(ctx context.Context, driver string, timeout time.Duration) (bool, error) {
 	version, verr := helmReleaseVersion(substrateNamespace, substrateRelease)
 	if verr != nil || version == "" {
 		version = unreadable(verr)
@@ -77,10 +77,10 @@ func proveWorkspacesActorMount(ctx context.Context, timeout time.Duration) (bool
 	if _, err := api.GetAtespace(ctx, &ateapi.GetAtespaceRequest{Atespace: &ateapi.ObjectRef{Name: kagentNamespace}}); err != nil {
 		return false, fmt.Errorf("reading the atespace %s through ate-api-server: %w", kagentNamespace, err)
 	}
-	if !clusterObjectExists(ctx, csiDriverConfigResource, workspacesCSIDriver) {
-		return false, fmt.Errorf("the driver %s is not registered with Substrate: no CSIDriverConfig %s; `agentlab platform` registers it with the workspace storage", workspacesCSIDriver, workspacesCSIDriver)
+	if !clusterObjectExists(ctx, csiDriverConfigResource, driver) {
+		return false, fmt.Errorf("the driver %s is not registered with Substrate: no CSIDriverConfig %s; `agentlab platform` registers it with the workspace storage", driver, driver)
 	}
-	note("ate-api-server reached as the ate-client ServiceAccount, atespace %s read; the driver registered with Substrate (CSIDriverConfig %s)", kagentNamespace, workspacesCSIDriver)
+	note("ate-api-server reached as the ate-client ServiceAccount, atespace %s read; the driver registered with Substrate (CSIDriverConfig %s)", kagentNamespace, driver)
 
 	rt, err := readWorkspacesActorRuntime(ctx)
 	if err != nil {
@@ -102,19 +102,19 @@ func proveWorkspacesActorMount(ctx context.Context, timeout time.Duration) (bool
 	}
 	note("ActorTemplate %s/%s with the existing volumes %s (read-write at %s) and %s (read-only at %s), golden snapshot built; on the worker pool %s with the snapshot storage %s of the Harness %s", kagentNamespace, workspacesActorTemplate, workspacesActorSessionVolume, workspacesTestMountPath, workspacesActorMirrorsVolume, workspacesActorMirrorsPath, rt.workerPool, rt.snapshotLocation, rt.harness)
 
-	pv, err := workspacesClaimVolume(ctx)
+	pv, err := workspacesClaimVolume(ctx, driver)
 	if err != nil {
 		return false, err
 	}
-	handle := pv.Spec.CSI.VolumeHandle
-	note("the claim's PersistentVolume %s: driver %s, volume handle %s", pv.Name, pv.Spec.CSI.Driver, handle)
+	volume := workspaceVolume{Driver: pv.Spec.CSI.Driver, Handle: pv.Spec.CSI.VolumeHandle}
+	note("the claim's PersistentVolume %s: driver %s, volume handle %s", pv.Name, volume.Driver, volume.Handle)
 
-	if err := proveWorkspacesBadReferencesRefused(ctx, api, handle); err != nil {
+	if err := proveWorkspacesBadReferencesRefused(ctx, api, volume); err != nil {
 		return false, err
 	}
 
 	for _, s := range workspacesActorSessions {
-		if err := startWorkspacesActor(ctx, api, s, handle, timeout); err != nil {
+		if err := startWorkspacesActor(ctx, api, s, volume, timeout); err != nil {
 			return false, err
 		}
 	}
@@ -232,12 +232,12 @@ func workspacesActorTemplateFrom(rt workspacesActorRuntime) *ateapi.ActorTemplat
 }
 
 // workspacesActorVolumes supply both of the template's existing volumes from
-// the claim's one handle: the session's directory read-write, the mirrors
+// the claim's one volume: the session's directory read-write, the mirrors
 // read-only.
-func workspacesActorVolumes(handle, session string) []*ateapi.ExistingVolume {
+func workspacesActorVolumes(v workspaceVolume, session string) []*ateapi.ExistingVolume {
 	return []*ateapi.ExistingVolume{
-		{Name: workspacesActorSessionVolume, Driver: workspacesCSIDriver, VolumeHandle: handle, AccessMode: ateapi.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_MANY, SubPath: workspacesTestSessions + "/" + session},
-		{Name: workspacesActorMirrorsVolume, Driver: workspacesCSIDriver, VolumeHandle: handle, AccessMode: ateapi.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_ONLY_MANY, SubPath: workspacesTestMirrors},
+		{Name: workspacesActorSessionVolume, Driver: v.Driver, VolumeHandle: v.Handle, AccessMode: ateapi.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_MANY, SubPath: workspacesTestSessions + "/" + session},
+		{Name: workspacesActorMirrorsVolume, Driver: v.Driver, VolumeHandle: v.Handle, AccessMode: ateapi.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_ONLY_MANY, SubPath: workspacesTestMirrors},
 	}
 }
 
@@ -293,7 +293,7 @@ done
 // proveWorkspacesBadReferencesRefused tries an actor with an unknown driver
 // and one with a handle no PersistentVolume holds: ate-api-server refuses
 // both at create, before any resume.
-func proveWorkspacesBadReferencesRefused(ctx context.Context, api *ateAPI, handle string) error {
+func proveWorkspacesBadReferencesRefused(ctx context.Context, api *ateAPI, volume workspaceVolume) error {
 	for _, c := range []struct {
 		what string
 		mod  func(*ateapi.ExistingVolume)
@@ -301,7 +301,7 @@ func proveWorkspacesBadReferencesRefused(ctx context.Context, api *ateAPI, handl
 		{"an unknown driver", func(ev *ateapi.ExistingVolume) { ev.Driver = "unknown.csi.agentlab.local" }},
 		{"a handle no PersistentVolume holds", func(ev *ateapi.ExistingVolume) { ev.VolumeHandle = "agentlab-no-such-volume" }},
 	} {
-		evs := workspacesActorVolumes(handle, "a")
+		evs := workspacesActorVolumes(volume, "a")
 		c.mod(evs[0])
 		_, err := api.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: workspacesActor(workspacesActorRefused, evs)})
 		if err == nil {
@@ -327,9 +327,9 @@ func workspacesActor(name string, evs []*ateapi.ExistingVolume) *ateapi.Actor {
 
 // startWorkspacesActor creates the session's actor and resumes it until it
 // runs.
-func startWorkspacesActor(ctx context.Context, api *ateAPI, session, handle string, timeout time.Duration) error {
+func startWorkspacesActor(ctx context.Context, api *ateAPI, session string, volume workspaceVolume, timeout time.Duration) error {
 	name := workspacesActorPrefix + session
-	if _, err := api.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: workspacesActor(name, workspacesActorVolumes(handle, session))}); err != nil {
+	if _, err := api.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: workspacesActor(name, workspacesActorVolumes(volume, session))}); err != nil {
 		return fmt.Errorf("CreateActor %s/%s: %w", kagentNamespace, name, err)
 	}
 	if err := resumeWorkspacesActor(ctx, api, name, timeout); err != nil {
@@ -499,7 +499,7 @@ func waitActorTemplateGolden(ctx context.Context, api *ateAPI, timeout time.Dura
 
 // workspacesClaimVolume is the proof claim's PersistentVolume, a volume of
 // the driver.
-func workspacesClaimVolume(ctx context.Context) (*corev1.PersistentVolume, error) {
+func workspacesClaimVolume(ctx context.Context, driver string) (*corev1.PersistentVolume, error) {
 	k, err := labKube()
 	if err != nil {
 		return nil, err
@@ -512,8 +512,8 @@ func workspacesClaimVolume(ctx context.Context) (*corev1.PersistentVolume, error
 	if err != nil {
 		return nil, fmt.Errorf("reading the PersistentVolume %s: %w", pvc.Spec.VolumeName, err)
 	}
-	if pv.Spec.CSI == nil || pv.Spec.CSI.Driver != workspacesCSIDriver {
-		return nil, fmt.Errorf("the PersistentVolume %s is not a volume of %s", pv.Name, workspacesCSIDriver)
+	if pv.Spec.CSI == nil || pv.Spec.CSI.Driver != driver {
+		return nil, fmt.Errorf("the PersistentVolume %s is not a volume of %s", pv.Name, driver)
 	}
 	return pv, nil
 }

@@ -72,8 +72,11 @@ trusting the same issuer.
   server may reach, and the StorageClass `agentlab-workspaces`;
   `agentlab workspaces-test` proves sub-path mounts per Session, read-only
   mirrors and git on the volume, and a claude Session admitted on it with a
-  workspace grant the workspace-manager's key set verifies. `agentlab github-fake
-  --workspaces` serves the lab's own GitHub for the workspace proofs.
+  workspace grant the workspace-manager's key set verifies. With
+  `platform.workspaces.csiCompanion` the connectivity chart's CSI companion
+  mounts the volumes for Substrate instead, the lab's path for proving a
+  companion change. `agentlab github-fake --workspaces` serves the lab's own
+  GitHub for the workspace proofs.
 - **Platform manager.** With `platform.platformManager` (off by default), a
   fixture for giantswarm-platform-manager: an invented installation with the
   agent platform and workspaces on, in a registry the lab serves; `agentlab

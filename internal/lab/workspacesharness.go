@@ -246,7 +246,7 @@ func proveWorkspacesHarnessSession(cfg *config.Config, timeout time.Duration) (s
 		return "", fmt.Errorf("the mirror pod: %w\n%s", err, out)
 	}
 	note("%s", indent(strings.TrimSpace(out), "  "))
-	pv, err := workspacesClaimVolume(ctx)
+	pv, err := workspacesClaimVolume(ctx, workspacesCSIDriverFor(cfg))
 	if err != nil {
 		return "", err
 	}

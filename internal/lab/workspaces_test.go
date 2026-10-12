@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -335,14 +336,17 @@ spec:
 	for _, tc := range []struct {
 		name    string
 		renders map[string]string
+		driver  string
 		want    bool
 	}{
-		{"no renders", nil, false},
-		{"values taken, nothing rendered", map[string]string{config.ConnectivityChartName: none, substrateRelease: "kind: Deployment\nmetadata:\n  name: ate-api-server\n"}, false},
-		{"the chart renders it", map[string]string{config.ConnectivityChartName: registers}, true},
+		{"no renders", nil, workspacesCSIDriver, false},
+		{"values taken, nothing rendered", map[string]string{config.ConnectivityChartName: none, substrateRelease: "kind: Deployment\nmetadata:\n  name: ate-api-server\n"}, workspacesCSIDriver, false},
+		{"the chart renders it", map[string]string{config.ConnectivityChartName: registers}, workspacesCSIDriver, true},
+		{"the companion's, the chart renders it", map[string]string{config.ConnectivityChartName: none}, companionCSIDriver, true},
+		{"the companion's, no renders", nil, companionCSIDriver, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := rendersWorkspacesCSIDriverConfig(tc.renders); got != tc.want {
+			if got := rendersWorkspacesCSIDriverConfig(tc.renders, tc.driver); got != tc.want {
 				t.Errorf("rendersWorkspacesCSIDriverConfig = %v, want %v", got, tc.want)
 			}
 		})
@@ -406,10 +410,10 @@ func TestEnsureWorkspacesCSIDriverConfig(t *testing.T) {
 					_ = f.dyn.Resource(gvrCSIDriverConfig).Delete(ctx, workspacesCSIDriver, metav1.DeleteOptions{})
 				}()
 			}
-			if err := ensureWorkspacesCSIDriverConfig(ctx, tc.chartRenders); err != nil {
+			if err := ensureWorkspacesCSIDriverConfig(ctx, config.Default(), tc.chartRenders); err != nil {
 				t.Fatal(err)
 			}
-			if got := readWorkspacesRegistrant(ctx); got != tc.want {
+			if got := readWorkspacesRegistrant(ctx, workspacesCSIDriver); got != tc.want {
 				t.Errorf("registrant = %q, want %q", got, tc.want)
 			}
 			if tc.want != registrantLab {
@@ -434,7 +438,7 @@ func TestWorkspacesHintRegistration(t *testing.T) {
 	cfg := config.Default()
 	cfg.Platform.Workspaces.Enabled = true
 	for _, registrant := range []string{"", registrantLab, registrantChart} {
-		want := workspacesRegistration(registrant)
+		want := workspacesRegistration(workspacesCSIDriver, registrant)
 		if hint := workspacesHint(cfg, true, registrant); !strings.Contains(hint, want) {
 			t.Errorf("summary %q lacks %q", hint, want)
 		}
@@ -442,7 +446,177 @@ func TestWorkspacesHintRegistration(t *testing.T) {
 			t.Errorf("status %q lacks %q", status, want)
 		}
 	}
-	if got := workspacesRegistration(""); !strings.Contains(got, "not registered") {
+	if got := workspacesRegistration(workspacesCSIDriver, ""); !strings.Contains(got, "not registered") {
 		t.Errorf("no registrant worded %q", got)
+	}
+}
+
+// companionConfig is a lab with workspaces on and the chart's CSI companion
+// as Substrate's driver.
+func companionConfig() *config.Config {
+	cfg := config.Default()
+	cfg.Platform.Workspaces.Enabled = true
+	cfg.Platform.Workspaces.CSICompanion = true
+	return cfg
+}
+
+// With the companion on, the values hand Substrate's registration to the
+// chart's companion: no csiDriver (the chart refuses one beside a preset of
+// another driver), the efs preset with the lab's NFS plugin, its arguments
+// in both modes under the preset's driver name.
+func TestPlatformValuesCSICompanion(t *testing.T) {
+	stubWorkspacesChart(t, chartWorkspaces{Carries: true, Organizations: true, CSICompanion: true})
+	out, err := renderTemplate(companionConfig(), platformValuesTemplate, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var values struct {
+		Workspaces struct {
+			Substrate map[string]any `yaml:"substrate"`
+		} `yaml:"workspaces"`
+	}
+	if err := yaml.Unmarshal(out, &values); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if driver, ok := values.Workspaces.Substrate["csiDriver"]; ok {
+		t.Errorf("workspaces.substrate.csiDriver = %v beside the companion: the registration is the companion's", driver)
+	}
+	raw, err := yaml.Marshal(values.Workspaces.Substrate["csiCompanion"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var companion struct {
+		Enabled bool   `yaml:"enabled"`
+		Preset  string `yaml:"preset"`
+		Image   struct {
+			Repository string `yaml:"repository"`
+			Tag        string `yaml:"tag"`
+		} `yaml:"image"`
+		Controller struct {
+			Args []string `yaml:"args"`
+		} `yaml:"controller"`
+		Node struct {
+			Args []string `yaml:"args"`
+		} `yaml:"node"`
+	}
+	if err := yaml.Unmarshal(raw, &companion); err != nil {
+		t.Fatal(err)
+	}
+	if !companion.Enabled || companion.Preset != companionPreset {
+		t.Errorf("csiCompanion enabled %v preset %q, want enabled with %s", companion.Enabled, companion.Preset, companionPreset)
+	}
+	if got := "gsoci.azurecr.io/" + companion.Image.Repository + ":" + companion.Image.Tag; got != nfsPluginImage {
+		t.Errorf("csiCompanion image = %s, want the lab's NFS plugin %s", got, nfsPluginImage)
+	}
+	for mode, args := range map[string][]string{"controller": companion.Controller.Args, "node": companion.Node.Args} {
+		for _, want := range []string{"--endpoint=$(CSI_ENDPOINT)", "--drivername=" + companionCSIDriver} {
+			if !slices.Contains(args, want) {
+				t.Errorf("csiCompanion.%s.args = %v, want %s", mode, args, want)
+			}
+		}
+	}
+	if !slices.Contains(companion.Node.Args, "--nodeid=$(KUBE_NODE_NAME)") || !slices.Contains(companion.Controller.Args, "--nodeid=$(CSI_NODE_NAME)") {
+		t.Errorf("csiCompanion args %v / %v: want each mode's node name from the preset's environment", companion.Controller.Args, companion.Node.Args)
+	}
+}
+
+// The lab's NFS driver serves its volumes under the driver name the
+// registration names: its own, or the companion preset's.
+func TestWorkspacesManifestDriverName(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  *config.Config
+		want string
+	}{
+		{"the lab's own registration", func() *config.Config {
+			cfg := config.Default()
+			cfg.Platform.Workspaces.Enabled = true
+			return cfg
+		}(), workspacesCSIDriver},
+		{"the chart's companion", companionConfig(), companionCSIDriver},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := renderTemplate(tc.cfg, workspacesTemplate, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var csiDriver, provisioner string
+			dec := yaml.NewDecoder(bytes.NewReader(out))
+			for {
+				var doc struct {
+					Kind     string `yaml:"kind"`
+					Metadata struct {
+						Name string `yaml:"name"`
+					} `yaml:"metadata"`
+					Provisioner string `yaml:"provisioner"`
+				}
+				if err := dec.Decode(&doc); err != nil {
+					break
+				}
+				switch doc.Kind {
+				case "CSIDriver":
+					csiDriver = doc.Metadata.Name
+				case "StorageClass":
+					provisioner = doc.Provisioner
+				}
+			}
+			drivernames := strings.Count(string(out), `"--drivername=`+tc.want+`"`)
+			if csiDriver != tc.want || provisioner != tc.want || drivernames != 2 {
+				t.Errorf("CSIDriver %q, StorageClass provisioner %q, %d driver containers with --drivername=%s; want %s throughout, both containers", csiDriver, provisioner, drivernames, tc.want, tc.want)
+			}
+		})
+	}
+}
+
+// A companion is refused on a chart without its values, before anything of
+// the storage changes; off, or on a chart that has them, nothing is.
+func TestCheckWorkspacesCSICompanion(t *testing.T) {
+	stubWorkspacesChart(t, chartWorkspaces{Carries: true, Organizations: true})
+	if err := checkWorkspacesCSICompanion(companionConfig()); err == nil || !strings.Contains(err.Error(), "workspaces.substrate.csiCompanion") {
+		t.Errorf("a chart without the companion's values: %v, want a refusal naming the key", err)
+	}
+	off := companionConfig()
+	off.Platform.Workspaces.CSICompanion = false
+	if err := checkWorkspacesCSICompanion(off); err != nil {
+		t.Errorf("the switch off: %v", err)
+	}
+	stubWorkspacesChart(t, chartWorkspaces{Carries: true, Organizations: true, CSICompanion: true})
+	if err := checkWorkspacesCSICompanion(companionConfig()); err != nil {
+		t.Errorf("a chart with the companion's values: %v", err)
+	}
+}
+
+// The companion's registration is the chart's alone: a render without it is
+// refused, since the lab's own would name the other driver.
+func TestEnsureWorkspacesCSIDriverConfigCompanion(t *testing.T) {
+	f := newFakeLab(t)
+	f.mapper.Add(gvkCSIDriverConfig, meta.RESTScopeRoot)
+	ctx := context.Background()
+	if err := ensureWorkspacesCSIDriverConfig(ctx, companionConfig(), false); err == nil {
+		t.Error("the companion with a render that registers nothing: no error")
+	}
+	if err := ensureWorkspacesCSIDriverConfig(ctx, companionConfig(), true); err != nil {
+		t.Errorf("the companion registered by the chart: %v", err)
+	}
+	if got := readWorkspacesRegistrant(ctx, workspacesCSIDriver); got != "" {
+		t.Errorf("the lab applied its own registration (%q) beside the companion", got)
+	}
+}
+
+// The status names the driver the class serves and the companion's state,
+// and the hint the companion's path.
+func TestWorkspacesCompanionWording(t *testing.T) {
+	s := &WorkspacesStatus{NFSServer: conditionReady, Controller: conditionReady, NodePlugin: conditionReady, StorageClass: true, Driver: companionCSIDriver, Companion: conditionReady, CSIDriverConfig: registrantChart}
+	got := s.String()
+	for _, want := range []string{"CSI controller " + companionCSIDriver, "CSIDriverConfig " + companionCSIDriver + " by the chart", "CSI companion (efs preset, the lab's NFS plugin) Ready"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("status %q lacks %q", got, want)
+		}
+	}
+	if hint := workspacesHint(companionConfig(), true, registrantChart); !strings.Contains(hint, "CSI companion") || !strings.Contains(hint, "CSIDriverConfig "+companionCSIDriver) {
+		t.Errorf("summary %q lacks the companion", hint)
+	}
+	if e := substrateDriverEndpointFor(companionConfig()); e.serverName != "csi-companion-controller.agent-platform.svc" || e.namespace != platformNamespace {
+		t.Errorf("the companion's endpoint = %+v", e)
 	}
 }

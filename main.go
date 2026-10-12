@@ -817,7 +817,7 @@ func browserCmd() *cobra.Command {
 func configureCmd() *cobra.Command {
 	var defaults, accessible bool
 	var platform, agents, observability, backstage, modelManager, vmManager, klausGateway bool
-	var serving, workspaces, coding, github, githubSignIn bool
+	var serving, workspaces, workspacesCSICompanion, coding, github, githubSignIn bool
 	var githubSignInClientID string
 	var workspacesProvider, workspacesGitHubAppID, workspacesGitHubClientID, workspacesCleanupAfter string
 	var workspacesGitHubPrivateKeySource, workspacesGitHubClientSecretSource string
@@ -948,6 +948,9 @@ func configureCmd() *cobra.Command {
 			if cmd.Flags().Changed("workspaces-cleanup-after") {
 				cfg.Platform.Workspaces.SessionsCleanupAfter = workspacesCleanupAfter
 			}
+			if cmd.Flags().Changed("workspaces-csi-companion") {
+				cfg.Platform.Workspaces.CSICompanion = workspacesCSICompanion
+			}
 			if cmd.Flags().Changed("workspaces-github-app-id") {
 				cfg.Platform.Workspaces.GitHub.AppID = workspacesGitHubAppID
 			}
@@ -1038,6 +1041,7 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&workspaces, "workspaces", false, "workspace storage: a read-write-many StorageClass that serves git — an in-cluster NFS server, the NFS CSI driver behind an mTLS proxy only Agent Substrate's API server may reach, and the StorageClass "+lab.WorkspacesStorageClass+" (needs agents); --workspaces=false turns it off")
 	cmd.Flags().BoolVar(&coding, "coding", false, "coding agents: the chart's kagent.harnesses renders the Harnesses claude (Claude Code with the platform's limits) and claude-capped (the same on a tiny budget), which `agentlab coding-test` proves (needs agents); --coding=false turns it off")
 	cmd.Flags().StringVar(&workspacesProvider, "workspaces-provider", "", "the workspace-manager's provider instances: fake (the lab's own GitHub, the default), github (a GitHub App of the lab's own, docs/workspaces.md), gitlab (a GitLab's OAuth application, docs/workspaces.md) or several, such as fake,github,gitlab")
+	cmd.Flags().BoolVar(&workspacesCSICompanion, "workspaces-csi-companion", false, "with workspaces on, the connectivity chart's CSI companion is Substrate's workspace driver: its efs preset running the lab's NFS plugin, the lab's NFS driver serving the volumes under the preset's driver name — the lab path for proving a companion chart change (docs/workspaces.md); --workspaces-csi-companion=false returns to the lab's own registration")
 	cmd.Flags().StringVar(&workspacesCleanupAfter, "workspaces-cleanup-after", "", "how long a Session's directory on a workspace volume outlives its last turn, a Go duration (the workspace-manager's sessions.cleanupAfter): a short window such as 3m for `workspaces-test --part sessions`; \"\" returns to the chart's 30 days")
 	cmd.Flags().StringVar(&workspacesGitHubAppID, "workspaces-github-app-id", "", "the App id of the workspaces GitHub App (public; its private key and client secret go into the Secret agent-platform/"+config.WorkspaceGitHubSecretName+")")
 	cmd.Flags().StringVar(&workspacesGitHubClientID, "workspaces-github-client-id", "", "the client id of the workspaces GitHub App (public)")

@@ -147,11 +147,18 @@ func WorkspacesTest(cfg *config.Config, opts WorkspacesTestOptions) error {
 	timeout := opts.ReadyTimeout
 	node := WorkspacesNode(cfg)
 
+	driver := workspacesCSIDriverFor(cfg)
+	endpoint := substrateDriverEndpointFor(cfg)
 	step("The workspace storage in place (namespace %s)", workspacesNamespace)
-	if err := proveWorkspacesInstalled(ctx, timeout); err != nil {
+	if err := proveWorkspacesInstalled(ctx, driver, timeout); err != nil {
 		return err
 	}
-	note("NFS server, controller with its mTLS proxy and node plugin Ready; StorageClass %s (%s)", workspacesStorageClass, workspacesCSIDriver)
+	note("NFS server, controller with its mTLS proxy and node plugin Ready; StorageClass %s (%s)", workspacesStorageClass, driver)
+	if cfg.WorkspacesCSICompanion() {
+		if err := waitWorkspacesCompanion(ctx); err != nil {
+			return err
+		}
+	}
 
 	step("Removing what an interrupted run left (namespace %s)", workspacesTestNamespace)
 	cleanupWorkspacesTest(ctx, node)
@@ -204,13 +211,13 @@ func WorkspacesTest(cfg *config.Config, opts WorkspacesTestOptions) error {
 	}
 	note("%s", indent(strings.TrimSpace(out), "  "))
 
-	step("The controller endpoint without Substrate's client certificate (the proxy in the %s pod, port %d, server name %s)", workspacesController, workspacesProxyPort, workspacesControllerServerName())
-	if err := proveWorkspacesProxyRefuses(ctx); err != nil {
+	step("The controller endpoint without Substrate's client certificate (the proxy in the %s pod, port %d, server name %s)", endpoint.controller, endpoint.proxyPort, endpoint.serverName)
+	if err := proveWorkspacesProxyRefuses(ctx, endpoint); err != nil {
 		return err
 	}
 
 	step("Two actors through ate-api-server on the volume at their own session directories, the mirrors read-only")
-	actors, err := proveWorkspacesActorMount(ctx, timeout)
+	actors, err := proveWorkspacesActorMount(ctx, driver, timeout)
 	if err != nil {
 		return err
 	}
@@ -243,10 +250,10 @@ func WorkspacesTest(cfg *config.Config, opts WorkspacesTestOptions) error {
 // proveWorkspacesInstalled is the precondition: the class, the CSIDriver,
 // the NFS server, the controller and the node plugin, each waited for
 // briefly.
-func proveWorkspacesInstalled(ctx context.Context, timeout time.Duration) error {
+func proveWorkspacesInstalled(ctx context.Context, driver string, timeout time.Duration) error {
 	for _, o := range []struct{ resource, name, what string }{
 		{"storageclasses.storage.k8s.io", workspacesStorageClass, "StorageClass"},
-		{"csidrivers.storage.k8s.io", workspacesCSIDriver, "CSIDriver"},
+		{csiDriversResource, driver, "CSIDriver"},
 	} {
 		if !clusterObjectExists(ctx, o.resource, o.name) {
 			return fmt.Errorf("no %s %s: `agentlab platform` installs the workspace storage", o.what, o.name)
@@ -429,22 +436,22 @@ func proveWorkspacesVolumeGone(ctx context.Context, node string, timeout time.Du
 // Substrate's identity, twice: with no certificate, and with a self-signed
 // one that claims ate-api-server's SPIFFE ID. Both must be refused — the
 // controller endpoint is Substrate's alone.
-func proveWorkspacesProxyRefuses(ctx context.Context) error {
+func proveWorkspacesProxyRefuses(ctx context.Context, e substrateDriverEndpoint) error {
 	roots, err := signerTrustPool(ctx, serviceDNSSignerName)
 	if err != nil {
 		return err
 	}
-	pod, err := readyPodOf(ctx, workspacesNamespace, "app.kubernetes.io/name="+workspacesController)
+	pod, err := readyPodOf(ctx, e.namespace, e.selector)
 	if err != nil {
 		return err
 	}
-	port, stop, err := portForwardPod(ctx, workspacesNamespace, pod, workspacesProxyPort)
+	port, stop, err := portForwardPod(ctx, e.namespace, pod, e.proxyPort)
 	if err != nil {
 		return err
 	}
 	defer stop()
 	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
-	base := &tls.Config{RootCAs: roots, ServerName: workspacesControllerServerName(), MinVersion: tls.VersionTLS13, NextProtos: []string{"h2"}}
+	base := &tls.Config{RootCAs: roots, ServerName: e.serverName, MinVersion: tls.VersionTLS13, NextProtos: []string{"h2"}}
 
 	refusal, err := workspacesProxyRefusal(ctx, addr, base.Clone())
 	if err != nil {
