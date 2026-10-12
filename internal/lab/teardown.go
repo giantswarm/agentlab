@@ -132,7 +132,7 @@ func isWorkspaceVolume(pv *corev1.PersistentVolume) bool {
 	if pv.Spec.StorageClassName == workspacesStorageClass {
 		return true
 	}
-	return pv.Spec.CSI != nil && pv.Spec.CSI.Driver == workspacesCSIDriver
+	return pv.Spec.CSI != nil && isWorkspacesCSIDriver(pv.Spec.CSI.Driver)
 }
 
 // workspaceVolumeClaims is the "<namespace>/<name>" of every claim a
@@ -228,7 +228,7 @@ func mountsWorkspace(pod *corev1.Pod, claims map[string]bool) bool {
 		switch {
 		case v.PersistentVolumeClaim != nil && claims[pod.Namespace+"/"+v.PersistentVolumeClaim.ClaimName]:
 			return true
-		case v.CSI != nil && v.CSI.Driver == workspacesCSIDriver:
+		case v.CSI != nil && isWorkspacesCSIDriver(v.CSI.Driver):
 			return true
 		case v.HostPath != nil && (v.HostPath.Path == substrateVolumesDir || strings.HasPrefix(v.HostPath.Path, substrateVolumesDir+"/")):
 			return true

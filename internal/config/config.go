@@ -533,6 +533,13 @@ type Workspaces struct {
 	// sessions.cleanupAfter; empty keeps the chart's 30 days. A short window
 	// is a proof's: `workspaces-test --part sessions` waits it out once.
 	SessionsCleanupAfter string `yaml:"sessionsCleanupAfter,omitempty"`
+	// CSICompanion runs the connectivity chart's CSI companion
+	// (workspaces.substrate.csiCompanion) as Substrate's driver in place of
+	// the lab's own registration: its efs preset with the lab's NFS plugin
+	// image and arguments, the lab's NFS driver serving the volumes under
+	// the preset's driver name. The lab path for proving a companion chart
+	// change (docs/workspaces.md); needs a chart that carries the key.
+	CSICompanion bool `yaml:"csiCompanion,omitempty"`
 }
 
 // WorkspaceGitLab is the GitLab behind the workspace-manager's provider
@@ -1958,6 +1965,12 @@ func (c *Config) CodingEnabled() bool {
 // the platform with its agents runtime, and the key on.
 func (c *Config) WorkspacesEnabled() bool {
 	return c.Platform.Enabled && c.Platform.Agents && c.Platform.Workspaces.Enabled
+}
+
+// WorkspacesCSICompanion reports whether the chart's CSI companion is
+// Substrate's workspace driver: workspaces on and the key on.
+func (c *Config) WorkspacesCSICompanion() bool {
+	return c.WorkspacesEnabled() && c.Platform.Workspaces.CSICompanion
 }
 
 // WorkspaceProviders names the workspace-manager's provider instances, in

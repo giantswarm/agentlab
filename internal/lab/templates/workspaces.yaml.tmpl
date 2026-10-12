@@ -10,6 +10,10 @@
 # through the cluster-scoped CSIDriverConfig the chart (or, until the chart
 # carries the values, the lab) registers. No snapshots: a Session is a
 # directory on the workspace's volume, not a clone of it.
+# The driver serves its volumes as {{ .Workspaces.Driver }} (--drivername):
+# csi-driver-nfs's own name, or the driver of the CSI companion's preset while
+# the chart's companion is Substrate's driver (platform.workspaces.csiCompanion),
+# so the volumes are the ones the companion mounts.
 #
 # Order matters twice: the controller's Service comes before its Deployment,
 # since Substrate's service-DNS signer certifies a pod for the Service that
@@ -413,6 +417,7 @@ spec:
             - "-v=5"
             - "--nodeid=$(NODE_ID)"
             - "--endpoint=$(CSI_ENDPOINT)"
+            - "--drivername={{ .Workspaces.Driver }}"
           livenessProbe:
             failureThreshold: 5
             httpGet:
@@ -574,6 +579,7 @@ spec:
             - "-v=5"
             - "--nodeid=$(NODE_ID)"
             - "--endpoint=$(CSI_ENDPOINT)"
+            - "--drivername={{ .Workspaces.Driver }}"
           livenessProbe:
             failureThreshold: 5
             httpGet:

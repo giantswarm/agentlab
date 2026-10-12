@@ -55,7 +55,7 @@ func TestWorkspacesActorTemplateFrom(t *testing.T) {
 // TestWorkspacesActorVolumes: both volumes from the one handle, the session
 // read-write-many at its directory, the mirrors read-only-many.
 func TestWorkspacesActorVolumes(t *testing.T) {
-	evs := workspacesActorVolumes("server#share#pvc-1##", "b")
+	evs := workspacesActorVolumes(workspaceVolume{Driver: companionCSIDriver, Handle: "server#share#pvc-1##"}, "b")
 	want := map[string]struct {
 		mode ateapi.VolumeAccessMode
 		sub  string
@@ -68,7 +68,7 @@ func TestWorkspacesActorVolumes(t *testing.T) {
 	}
 	for _, ev := range evs {
 		w, ok := want[ev.GetName()]
-		if !ok || ev.GetAccessMode() != w.mode || ev.GetSubPath() != w.sub || ev.GetDriver() != workspacesCSIDriver || ev.GetVolumeHandle() != "server#share#pvc-1##" {
+		if !ok || ev.GetAccessMode() != w.mode || ev.GetSubPath() != w.sub || ev.GetDriver() != companionCSIDriver || ev.GetVolumeHandle() != "server#share#pvc-1##" {
 			t.Errorf("existing volume %v", ev)
 		}
 	}

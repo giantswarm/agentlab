@@ -1,11 +1,13 @@
 package lab
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -57,6 +59,20 @@ import (
 // that one object itself after the install (ensureWorkspacesCSIDriverConfig);
 // the lab's copy goes before the install of a chart whose render carries
 // its own. docs/workspaces.md is the human account.
+//
+// With platform.workspaces.csiCompanion the chart's CSI companion
+// (workspaces.substrate.csiCompanion of the connectivity chart) is
+// Substrate's driver instead: the path that proves a companion chart change
+// in the lab. The companion stands in for an installation's file driver
+// through one of its presets, and the CSIDriverConfig it derives names that
+// preset's driver, which Substrate mounts a volume with only when the volume
+// is that driver's. So the lab's NFS driver serves the volumes under the efs
+// preset's driver name (csi-driver-nfs's --drivername), and the companion
+// runs the efs preset with the lab's NFS plugin image and arguments in place
+// of the EFS driver, which crashloops without EFS: the companion's own
+// controller behind its mTLS proxy, its node plugin on the Substrate workers
+// and its registration, all from the chart's templates, mount the lab's
+// NFS volumes (companionValuesFor).
 
 const (
 	// workspacesNamespace holds the NFS server and the driver.
@@ -66,6 +82,18 @@ const (
 	workspacesStorageClass = "agentlab-workspaces"
 	// workspacesCSIDriver is the driver's name: csi-driver-nfs's.
 	workspacesCSIDriver = "nfs.csi.k8s.io"
+	// companionCSIDriver is the driver of the CSI companion's preset
+	// companionPreset, the name the lab's NFS driver serves the volumes
+	// under while the companion is Substrate's driver.
+	companionCSIDriver = "efs.csi.aws.com"
+	companionPreset    = "efs"
+	// companionController and companionNode are the companion's Deployment
+	// and DaemonSet in the connectivity release's namespace.
+	companionController = "csi-companion-controller"
+	companionNode       = "csi-companion-node"
+	// companionProxyPort is the companion's mTLS proxy listener, the
+	// chart's default.
+	companionProxyPort = 10000
 	// workspacesDriverVersion is the csi-driver-nfs release the manifests
 	// follow (deploy/<version>/) and the driver image's tag.
 	workspacesDriverVersion = "v4.13.4"
@@ -95,6 +123,8 @@ const (
 	ateAPIServerSPIFFEID = "spiffe://cluster.local/ns/ate-system/sa/ate-api-server"
 	// workspacesTemplate renders everything.
 	workspacesTemplate = "workspaces.yaml.tmpl"
+	// csiDriversResource is the cluster's registration of a CSI driver.
+	csiDriversResource = "csidrivers.storage.k8s.io"
 	// csiDriverConfigResource is Substrate's registration of a driver.
 	csiDriverConfigResource = "csidriverconfigs.ate.dev"
 	// workspacesRolloutTimeout bounds each workload's rollout.
@@ -113,7 +143,53 @@ const (
 	csiProvisionerImage   = "gsoci.azurecr.io/giantswarm/csi-provisioner:v6.3.0"
 	csiResizerImage       = "gsoci.azurecr.io/giantswarm/csi-resizer:v2.2.1"
 	csiProxyImage         = "gsoci.azurecr.io/giantswarm/envoy:v1.35.9"
+	// nfsPluginRepository is nfsPluginImage's repository on gsoci, the
+	// companion's image.repository.
+	nfsPluginRepository = "giantswarm/nfsplugin"
 )
+
+// workspacesCSIDrivers are the names the lab's NFS driver serves volumes
+// under: its own, and the companion preset's.
+var workspacesCSIDrivers = []string{workspacesCSIDriver, companionCSIDriver}
+
+// isWorkspacesCSIDriver reports whether a CSI driver name is one the lab's
+// NFS driver serves volumes under.
+func isWorkspacesCSIDriver(name string) bool {
+	return slices.Contains(workspacesCSIDrivers, name)
+}
+
+// workspacesCSIDriverFor is the name the lab's NFS driver serves the
+// volumes under: the companion preset's driver while the companion is
+// Substrate's driver, csi-driver-nfs's own otherwise.
+func workspacesCSIDriverFor(cfg *config.Config) string {
+	if cfg.WorkspacesCSICompanion() {
+		return companionCSIDriver
+	}
+	return workspacesCSIDriver
+}
+
+// companionValues are the connectivity chart's
+// workspaces.substrate.csiCompanion values the lab renders: the efs preset
+// with the lab's NFS plugin in place of the EFS driver, csi-driver-nfs's
+// arguments in each mode under the preset's driver name. The preset's
+// environment brings the node's name to both pods (CSI_NODE_NAME in the
+// controller, KUBE_NODE_NAME in the node plugin); the socket is the
+// chart's CSI_ENDPOINT.
+type companionValues struct {
+	Preset, ImageRepository, ImageTag string
+	ControllerArgs, NodeArgs          []string
+}
+
+func companionValuesFor() companionValues {
+	drivername := "--drivername=" + companionCSIDriver
+	return companionValues{
+		Preset:          companionPreset,
+		ImageRepository: nfsPluginRepository,
+		ImageTag:        workspacesDriverVersion,
+		ControllerArgs:  []string{"--v=2", "--nodeid=$(CSI_NODE_NAME)", "--endpoint=$(CSI_ENDPOINT)", drivername},
+		NodeArgs:        []string{"--v=2", "--nodeid=$(KUBE_NODE_NAME)", "--endpoint=$(CSI_ENDPOINT)", drivername},
+	}
+}
 
 // WorkspacesStorageClass is the class for the configure summary.
 const WorkspacesStorageClass = workspacesStorageClass
@@ -148,12 +224,16 @@ type workspacesValues struct {
 	// Organization and its member groups (config.WorkspaceOrganization).
 	Organization       string
 	OrganizationGroups []string
+	// Companion is the chart's CSI companion as Substrate's driver
+	// (platform.workspaces.csiCompanion); nil while the lab registers its
+	// own driver.
+	Companion *companionValues
 }
 
 func workspacesValuesFor(cfg *config.Config) workspacesValues {
 	return workspacesValues{
 		Namespace:          workspacesNamespace,
-		Driver:             workspacesCSIDriver,
+		Driver:             workspacesCSIDriverFor(cfg),
 		DriverVersion:      workspacesDriverVersion,
 		StorageClass:       workspacesStorageClass,
 		NFSServer:          workspacesNFSServer,
@@ -173,6 +253,7 @@ func workspacesValuesFor(cfg *config.Config) workspacesValues {
 		Node:               WorkspacesNode(cfg),
 		Organization:       config.WorkspaceOrganization,
 		OrganizationGroups: config.WorkspaceOrganizationGroups,
+		Companion:          companionFor(cfg),
 		Images: workspacesImages{
 			NFSServer:     nfsServerImage,
 			NFSPlugin:     nfsPluginImage,
@@ -182,6 +263,46 @@ func workspacesValuesFor(cfg *config.Config) workspacesValues {
 			Resizer:       csiResizerImage,
 			Proxy:         csiProxyImage,
 		},
+	}
+}
+
+// companionFor is the companion's values while it is Substrate's driver.
+func companionFor(cfg *config.Config) *companionValues {
+	if !cfg.WorkspacesCSICompanion() {
+		return nil
+	}
+	v := companionValuesFor()
+	return &v
+}
+
+// substrateDriverEndpoint is the controller endpoint Substrate's
+// registration names, as the proof reaches its mTLS proxy: the proxy's pod
+// (namespace, label selector, the controller's name), its listener and the
+// TLS server name the registration verifies.
+type substrateDriverEndpoint struct {
+	namespace, selector, controller, serverName string
+	proxyPort                                   int
+}
+
+// substrateDriverEndpointFor is the lab's own controller behind its proxy,
+// or the chart's CSI companion's (its Service <name>.<namespace>.svc, the
+// chart's default proxy port).
+func substrateDriverEndpointFor(cfg *config.Config) substrateDriverEndpoint {
+	if cfg.WorkspacesCSICompanion() {
+		return substrateDriverEndpoint{
+			namespace:  platformNamespace,
+			selector:   "app.kubernetes.io/name=csi-companion,app.kubernetes.io/component=controller",
+			controller: companionController,
+			serverName: companionController + "." + platformNamespace + ".svc",
+			proxyPort:  companionProxyPort,
+		}
+	}
+	return substrateDriverEndpoint{
+		namespace:  workspacesNamespace,
+		selector:   "app.kubernetes.io/name=" + workspacesController,
+		controller: workspacesController,
+		serverName: workspacesControllerServerName(),
+		proxyPort:  workspacesProxyPort,
 	}
 }
 
@@ -210,8 +331,11 @@ func WorkspacesNode(cfg *config.Config) string {
 // from which it refuses a `workspace-manager.organizations` of its own (from
 // agent-platform 4.127.0). A chart that carries the key without the list
 // takes the map on the subchart.
+// CSICompanion, the CSI companion's block `workspaces.substrate.csiCompanion`
+// (agent-platform 4.128.0 and newer), which platform.workspaces.csiCompanion
+// needs.
 type chartWorkspaces struct {
-	Carries, Organizations bool
+	Carries, Organizations, CSICompanion bool
 }
 
 // chartWorkspacesOf probes the chart once: memoized per chart, since a
@@ -248,15 +372,19 @@ var (
 		return chartWorkspaces{
 			Carries:       chartValuesCarry(c.Schema, c.Values, valuesWorkspaces),
 			Organizations: chartValuesCarry(c.Schema, c.Values, valuesWorkspaces, valuesWorkspacesOrganizations),
+			CSICompanion:  chartValuesCarry(c.Schema, c.Values, valuesWorkspaces, valuesWorkspacesSubstrate, valuesWorkspacesCSICompanion),
 		}, nil
 	}
 )
 
 // valuesWorkspaces is the chart's workspaces key, valuesWorkspacesOrganizations
-// the Organizations' list beneath it.
+// the Organizations' list beneath it, valuesWorkspacesSubstrate and
+// valuesWorkspacesCSICompanion the path of the CSI companion's block.
 const (
 	valuesWorkspaces              = "workspaces"
 	valuesWorkspacesOrganizations = "organizations"
+	valuesWorkspacesSubstrate     = "substrate"
+	valuesWorkspacesCSICompanion  = "csiCompanion"
 )
 
 // workspacesChartFor is chartWorkspacesOf for the configured chart when the
@@ -272,6 +400,16 @@ func workspacesChartFor(cfg *config.Config) chartWorkspaces {
 		return chartWorkspaces{}
 	}
 	return w
+}
+
+// checkWorkspacesCSICompanion refuses platform.workspaces.csiCompanion on a
+// chart without the companion's values, before anything of the storage
+// changes: the schema's root would refuse the block at render.
+func checkWorkspacesCSICompanion(cfg *config.Config) error {
+	if !cfg.WorkspacesCSICompanion() || workspacesChartFor(cfg).CSICompanion {
+		return nil
+	}
+	return fmt.Errorf("platform.workspaces.csiCompanion is on but the platform chart %s carries no workspaces.substrate.csiCompanion (agent-platform 4.128.0 and newer): pin a chart that does (platform.chartVersion or platform.chartPath), or `agentlab configure --workspaces-csi-companion=false`", platformChartFor(cfg))
 }
 
 // workspacesChartCarries is whether the configured chart takes the lab's
@@ -334,9 +472,20 @@ func valuesCarry(values map[string]any, path []string) bool {
 func workspacesUp(cfg *config.Config) error {
 	ctx := context.Background()
 	node := WorkspacesNode(cfg)
-	step("Installing the workspace storage (an NFS server on %s, the NFS CSI driver %s behind its mTLS proxy, the read-write-many StorageClass %s)", node, workspacesDriverVersion, workspacesStorageClass)
+	driver := workspacesCSIDriverFor(cfg)
+	step("Installing the workspace storage (an NFS server on %s, the NFS CSI driver %s as %s behind its mTLS proxy, the read-write-many StorageClass %s)", node, workspacesDriverVersion, driver, workspacesStorageClass)
 	if err := workspacesHostPreflight(); err != nil {
 		return err
+	}
+	// A class of the other driver name (platform.workspaces.csiCompanion
+	// switched) cannot be changed in place: a StorageClass's provisioner is
+	// immutable, and the volumes are the other driver's. The storage goes
+	// in the one order first (teardown.go), its volumes with it.
+	if live := liveWorkspacesCSIDriver(ctx); live != "" && live != driver {
+		note("the workspace storage serves its volumes as %s, the configuration as %s: removing it with its volumes first", live, driver)
+		if err := workspacesTeardown(ctx, cfg); err != nil {
+			return err
+		}
 	}
 	manifest, _, err := renderManifest(cfg, workspacesTemplate)
 	if err != nil {
@@ -357,7 +506,7 @@ func workspacesUp(cfg *config.Config) error {
 		return fmt.Errorf("the NFS CSI node plugin: %w", err)
 	}
 	note("NFS server exporting %s of %s; node plugin %s Ready on every node (Substrate's %s mounted Bidirectional); StorageClass %s (read-write-many, NFSv4.1)",
-		workspacesExportDir, node, workspacesCSIDriver, substrateVolumesDir, workspacesStorageClass)
+		workspacesExportDir, node, driver, substrateVolumesDir, workspacesStorageClass)
 	return nil
 }
 
@@ -388,7 +537,7 @@ func workspacesHostPreflight() error {
 // and its client trust the pod-identity CA's live ClusterTrustBundle —
 // neither exists before the chart, and the kubelet holds the pod until they
 // do.
-func waitWorkspacesProxy(ctx context.Context) error {
+func waitWorkspacesProxy(ctx context.Context, cfg *config.Config) error {
 	step("Waiting for the workspace storage's controller and its mTLS proxy (their certificate from Substrate's service-DNS signer)")
 	if err := waitDeploymentRolledOut(ctx, workspacesNamespace, workspacesController, workspacesRolloutTimeout); err != nil {
 		return fmt.Errorf("the NFS CSI controller: %w (the signer issues a certificate only to a pod the Service %s selects; `agentlab pods -n %s`, `kubectl -n %s describe deploy/%s`)",
@@ -396,6 +545,26 @@ func waitWorkspacesProxy(ctx context.Context) error {
 	}
 	note("controller Ready: its proxy serves %s:%d with the certificate of %s, admitting %s alone",
 		workspacesControllerService, workspacesControllerPort, workspacesControllerServerName(), ateAPIServerSPIFFEID)
+	if cfg.WorkspacesCSICompanion() {
+		return waitWorkspacesCompanion(ctx)
+	}
+	return nil
+}
+
+// waitWorkspacesCompanion waits for the chart's CSI companion: its
+// controller behind the mTLS proxy and its node plugin on every Substrate
+// worker, both running the lab's NFS plugin. helm-controller's readiness
+// wait has passed them already; this names them in the summary, and a
+// release that rolled back without them fails here.
+func waitWorkspacesCompanion(ctx context.Context) error {
+	step("Waiting for the chart's CSI companion (%s preset, the lab's NFS plugin as %s)", companionPreset, companionCSIDriver)
+	if err := waitDeploymentRolledOut(ctx, platformNamespace, companionController, workspacesRolloutTimeout); err != nil {
+		return fmt.Errorf("the CSI companion's controller: %w (`kubectl -n %s logs deploy/%s --all-containers`)", err, platformNamespace, companionController)
+	}
+	if err := waitDaemonSetReady(ctx, platformNamespace, companionNode, workspacesRolloutTimeout); err != nil {
+		return fmt.Errorf("the CSI companion's node plugin: %w", err)
+	}
+	note("CSI companion Ready: controller %s and node plugin %s in %s; the chart registers %s with Substrate", companionController, companionNode, platformNamespace, companionCSIDriver)
 	return nil
 }
 
@@ -424,11 +593,11 @@ func workspacesCSIDriverConfig() *unstructured.Unstructured {
 
 // rendersWorkspacesCSIDriverConfig reports whether the component renders the
 // install is about to apply (keyed by release name, platformImages) carry a
-// CSIDriverConfig of the lab's driver: the chart registers it with Substrate
+// CSIDriverConfig of the driver: the chart registers it with Substrate
 // itself. A chart can take the workspaces values and render none from them,
 // so the values schema does not decide it; no renders (the offline render
 // failed) is none, and the lab keeps its own.
-func rendersWorkspacesCSIDriverConfig(renders map[string]string) bool {
+func rendersWorkspacesCSIDriverConfig(renders map[string]string, driver string) bool {
 	for _, rendered := range renders {
 		dec := yaml.NewDecoder(strings.NewReader(rendered))
 		for {
@@ -443,7 +612,7 @@ func rendersWorkspacesCSIDriverConfig(renders map[string]string) bool {
 			if err := dec.Decode(&doc); err != nil {
 				break
 			}
-			if doc.Kind == kindCSIDriverConfig && doc.Metadata.Name == workspacesCSIDriver {
+			if doc.Kind == kindCSIDriverConfig && doc.Metadata.Name == driver {
 				return true
 			}
 		}
@@ -463,9 +632,16 @@ const kindCSIDriverConfig = "CSIDriverConfig"
 // for it to go (an apply over it would go with it) and applies its own; one
 // that outlasts the wait stays the chart's. One applied by hand becomes the
 // lab's.
-func ensureWorkspacesCSIDriverConfig(ctx context.Context, chartRenders bool) error {
+//
+// The companion is registered by the chart alone: its renders without the
+// registration are refused, since the lab's own would name the other
+// driver.
+func ensureWorkspacesCSIDriverConfig(ctx context.Context, cfg *config.Config, chartRenders bool) error {
 	if chartRenders {
 		return nil
+	}
+	if cfg.WorkspacesCSICompanion() {
+		return fmt.Errorf("platform.workspaces.csiCompanion is on but the chart renders no CSIDriverConfig %s: the companion's registration is the chart's (workspaces.substrate.csiCompanion with the substrate component on)", companionCSIDriver)
 	}
 	gvr, err := gvrFor(csiDriverConfigResource)
 	if err != nil {
@@ -530,15 +706,15 @@ func csiDriverConfigRegistrant(obj *unstructured.Unstructured) string {
 	}
 }
 
-// readWorkspacesRegistrant reads who registered the lab's driver with
-// Substrate: a registrant word, or "" when no CSIDriverConfig of it exists
-// or the API is not served.
-func readWorkspacesRegistrant(ctx context.Context) string {
+// readWorkspacesRegistrant reads who registered the driver with Substrate:
+// a registrant word, or "" when no CSIDriverConfig of it exists or the API
+// is not served.
+func readWorkspacesRegistrant(ctx context.Context, driver string) string {
 	gvr, err := gvrFor(csiDriverConfigResource)
 	if err != nil {
 		return ""
 	}
-	obj, err := getObject(ctx, gvr, "", workspacesCSIDriver)
+	obj, err := getObject(ctx, gvr, "", driver)
 	if err != nil {
 		return ""
 	}
@@ -547,11 +723,26 @@ func readWorkspacesRegistrant(ctx context.Context) string {
 
 // workspacesRegistration words the driver's registration with Substrate,
 // one line for `agentlab status` and the platform summary alike.
-func workspacesRegistration(registrant string) string {
+func workspacesRegistration(driver, registrant string) string {
 	if registrant == "" {
 		return "not registered with Substrate (no CSIDriverConfig)"
 	}
-	return "registered with Substrate (CSIDriverConfig " + workspacesCSIDriver + " by " + registrant + ")"
+	return "registered with Substrate (CSIDriverConfig " + driver + " by " + registrant + ")"
+}
+
+// liveWorkspacesCSIDriver is the driver the lab's StorageClass provisions
+// with, read off the cluster: what the volumes are served as. "" without
+// the class.
+func liveWorkspacesCSIDriver(ctx context.Context) string {
+	k, err := labKube()
+	if err != nil {
+		return ""
+	}
+	sc, err := k.clientset.StorageV1().StorageClasses().Get(ctx, workspacesStorageClass, metav1.GetOptions{})
+	if err != nil {
+		return ""
+	}
+	return sc.Provisioner
 }
 
 // removeLabWorkspacesCSIDriverConfig deletes the CSIDriverConfig the lab
@@ -581,7 +772,8 @@ func removeLabWorkspacesCSIDriverConfig(ctx context.Context) error {
 // arguments and names: what workspacesDown removes after the namespace.
 var workspacesClusterObjects = []struct{ resource, name string }{
 	{"storageclasses.storage.k8s.io", workspacesStorageClass},
-	{"csidrivers.storage.k8s.io", workspacesCSIDriver},
+	{csiDriversResource, workspacesCSIDriver},
+	{csiDriversResource, companionCSIDriver},
 	{"clusterrolebindings.rbac.authorization.k8s.io", "agentlab-workspaces-csi-nfs-provisioner"},
 	{"clusterroles.rbac.authorization.k8s.io", "agentlab-workspaces-csi-nfs-provisioner"},
 	{"clusterrolebindings.rbac.authorization.k8s.io", "agentlab-workspaces-csi-nfs-resizer"},
@@ -675,6 +867,12 @@ type WorkspacesStatus struct {
 	Node string `json:"node,omitempty"`
 	// StorageClass reports whether the class exists.
 	StorageClass bool `json:"storageClass"`
+	// Driver is the name the class provisions the volumes with: the lab's
+	// NFS driver as itself, or as the CSI companion's preset driver.
+	Driver string `json:"driver,omitempty"`
+	// Companion is the chart's CSI companion in a word when it runs
+	// (platform.workspaces.csiCompanion): Ready, or what is not.
+	Companion string `json:"companion,omitempty"`
 	// CSIDriverConfig says who registered the driver with Substrate: "the
 	// lab", "the chart", "hand", or "" when nothing did.
 	CSIDriverConfig string `json:"csiDriverConfig,omitempty"`
@@ -722,10 +920,36 @@ func readWorkspacesStatus(ctx context.Context) (*WorkspacesStatus, error) {
 	default:
 		s.NodePlugin = daemonSetStatus(ds)
 	}
-	s.StorageClass = clusterObjectExists(ctx, "storageclasses.storage.k8s.io", workspacesStorageClass)
-	s.CSIDriverConfig = readWorkspacesRegistrant(ctx)
+	s.Driver = liveWorkspacesCSIDriver(ctx)
+	s.StorageClass = s.Driver != ""
+	s.Companion = readCompanionState(ctx, k)
+	s.CSIDriverConfig = readWorkspacesRegistrant(ctx, cmp.Or(s.Driver, workspacesCSIDriver))
 	s.SessionAdmission = readSessionAdmission(ctx)
 	return s, nil
+}
+
+// readCompanionState words the chart's CSI companion: Ready when its
+// controller is rolled out and its node plugin Ready, else what is not; ""
+// when no companion runs.
+func readCompanionState(ctx context.Context, k *kubeClients) string {
+	d, err := k.clientset.AppsV1().Deployments(platformNamespace).Get(ctx, companionController, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return ""
+	}
+	if err != nil {
+		return readState(err)
+	}
+	if _, done, _ := deploymentRolloutStatus(d); !done {
+		return fmt.Sprintf("controller %d of %d replicas available", d.Status.AvailableReplicas, d.Status.Replicas)
+	}
+	ds, err := k.clientset.AppsV1().DaemonSets(platformNamespace).Get(ctx, companionNode, metav1.GetOptions{})
+	switch {
+	case err != nil:
+		return "node plugin " + readState(err)
+	case !daemonSetReady(ds):
+		return "node plugin " + daemonSetStatus(ds)
+	}
+	return conditionReady
 }
 
 // readState words a workload read's failure: missing, or the error.
@@ -753,8 +977,12 @@ func (s *WorkspacesStatus) String() string {
 	if s.StorageClass {
 		class = "StorageClass " + workspacesStorageClass
 	}
+	driver := cmp.Or(s.Driver, workspacesCSIDriver)
 	line := fmt.Sprintf("NFS server %s on %s; CSI controller %s %s with its mTLS proxy; node plugin %s; %s; %s",
-		s.NFSServer, orNone(s.Node), workspacesCSIDriver, s.Controller, s.NodePlugin, class, workspacesRegistration(s.CSIDriverConfig))
+		s.NFSServer, orNone(s.Node), driver, s.Controller, s.NodePlugin, class, workspacesRegistration(driver, s.CSIDriverConfig))
+	if s.Companion != "" {
+		line += fmt.Sprintf("; the chart's CSI companion (%s preset, the lab's NFS plugin) %s", companionPreset, s.Companion)
+	}
 	if s.SessionAdmission != "" {
 		line += "; " + s.SessionAdmission
 	}
@@ -770,7 +998,10 @@ func workspacesHint(cfg *config.Config, chartCarries bool, registrant string) st
 		return "  Workspace storage is off (platform.workspaces in agentlab.yaml; `agentlab configure --workspaces` turns it on)."
 	}
 	hint := fmt.Sprintf("  Workspace storage: an NFS server on %s and the NFS CSI driver behind its mTLS proxy, %s;\n"+
-		"  the read-write-many StorageClass %s. Proof: `agentlab workspaces-test --storage-only`.", WorkspacesNode(cfg), workspacesRegistration(registrant), workspacesStorageClass)
+		"  the read-write-many StorageClass %s. Proof: `agentlab workspaces-test --storage-only`.", WorkspacesNode(cfg), workspacesRegistration(workspacesCSIDriverFor(cfg), registrant), workspacesStorageClass)
+	if cfg.WorkspacesCSICompanion() {
+		hint += fmt.Sprintf("\n  Substrate's driver is the chart's CSI companion (%s preset, the lab's NFS plugin serving %s). Proof: `agentlab workspaces-test --storage-only`, its actors mounting through the companion.", companionPreset, companionCSIDriver)
+	}
 	if rig := workspaceAdmissionValuesFor(cfg, chartCarries); rig != nil {
 		hint += "\n" + rig.hint()
 	}
