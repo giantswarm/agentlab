@@ -106,7 +106,7 @@ func TestPlatformValuesWorkspaces(t *testing.T) {
 // never the viewers.
 func TestPlatformValuesWorkspaceOrganization(t *testing.T) {
 	cfg := workspaceLab(config.WorkspaceProviderFake)
-	wantGroups := []any{"platform-admins", "developers"}
+	wantGroups := []any{platformAdminsGroup, "developers"}
 
 	stubWorkspacesChart(t, chartWorkspaces{Carries: true, Organizations: true})
 	values, _, _, _ := renderWorkspaceTemplates(t, cfg, nil)

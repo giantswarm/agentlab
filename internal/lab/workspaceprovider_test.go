@@ -437,18 +437,21 @@ func TestEnsureWorkspaceGitHubSecret(t *testing.T) {
 		t.Fatalf("placed without a source: %v", *calls)
 	}
 
+	const (
+		keySource    = "op://Lab/workspaces-app/private-key"   // #nosec G101 -- a reference, not a credential
+		secretSource = "op://Lab/workspaces-app/client-secret" // #nosec G101 -- a reference, not a credential
+	)
 	cfg.Platform.Workspaces.GitHub = config.WorkspaceGitHub{
 		AppID: testWorkspaceAppID, ClientID: testWorkspaceClientID,
-		PrivateKeySource:   "op://Lab/workspaces-app/private-key",
-		ClientSecretSource: "op://Lab/workspaces-app/client-secret",
+		PrivateKeySource: keySource, ClientSecretSource: secretSource,
 	}
 	if err := ensureWorkspaceGitHubSecret(cfg); err != nil {
 		t.Fatal(err)
 	}
 	target := "kind-" + cfg.ClusterName + "/agent-platform/" + config.WorkspaceGitHubSecretName + "/"
 	want := [][]string{
-		{"secret", "copy", "op://Lab/workspaces-app/private-key", "--to-secret", target + config.WorkspaceGitHubPrivateKeyKey},
-		{"secret", "copy", "op://Lab/workspaces-app/client-secret", "--to-secret", target + config.GitHubClientSecretKey},
+		secretCopyArgs(keySource, target+config.WorkspaceGitHubPrivateKeyKey),
+		secretCopyArgs(secretSource, target+config.GitHubClientSecretKey),
 	}
 	if !reflect.DeepEqual(*calls, want) {
 		t.Errorf("placements %v, want %v", *calls, want)
