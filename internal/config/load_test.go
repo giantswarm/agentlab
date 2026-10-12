@@ -160,3 +160,57 @@ func TestLoadWithAMissingValuesFile(t *testing.T) {
 		t.Fatalf("CheckValuesFiles: want the entry named, got %v", err)
 	}
 }
+
+// The refusal of a field this release does not know names the agentlab that
+// wrote the file, as its header records it, and the command that installs it.
+func TestLoadRefusalNamesTheWritingRelease(t *testing.T) {
+	for _, tc := range []struct {
+		name, header string
+		want         []string
+	}{
+		{"a release", "# agentlab lab configuration.\n# Written by agentlab v9.1.0.\n", []string{"written by agentlab v9.1.0", "`agentlab self-update` installs it"}},
+		{"a release candidate", "# Written by agentlab v9.1.0-rc.2.\n", []string{"written by agentlab v9.1.0-rc.2", "`agentlab self-update --pre` installs it"}},
+		{"no header", "", []string{"written by a newer release", "`agentlab self-update`"}},
+		{"a line after the header", "clusterName: lab\n# Written by agentlab v9.1.0.\n", []string{"written by a newer release"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			raw := tc.header + "clusterName: lab\nplatform:\n  chartVersion: " + loadTestChart + "\n  frobnicate: true\n"
+			if tc.name == "a line after the header" {
+				raw = tc.header + "platform:\n  frobnicate: true\n"
+			}
+			if err := os.WriteFile(File, []byte(raw), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Load()
+			if err == nil {
+				t.Fatal("a config with an unknown field loaded")
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q lacks %q", err, want)
+				}
+			}
+		})
+	}
+}
+
+// Every write records the agentlab that wrote the file, as a comment an older
+// release reads past.
+func TestSaveRecordsTheWritingRelease(t *testing.T) {
+	t.Chdir(t.TempDir())
+	cfg := Default()
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(File)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := writtenBy(raw); got == "" {
+		t.Fatalf("no writing release in:\n%s", raw)
+	}
+	if _, err := Load(); err != nil {
+		t.Fatalf("the written file does not load: %v", err)
+	}
+}

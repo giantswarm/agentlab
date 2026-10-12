@@ -231,7 +231,7 @@ go test ./internal/forms/ -run TestMinimalFormDrive -count=1 -v   # single test
 ./agentlab logs <dex|muster|backstage>
 ./agentlab login <email>   # headless password grant; --browser for the real Dex login page
 ./agentlab render          # write every manifest to state/ without applying
-./agentlab self-update     # replace the binary with the latest GitHub release (--check only reports; exit 125 when outdated)
+./agentlab self-update     # replace the binary with the latest GitHub release (--check only reports; exit 125 when outdated; --pre follows release candidates)
 ```
 
 The lab's own e2e checks are the `*-test` subcommands, not `go test`.
@@ -284,7 +284,10 @@ The lab's own e2e checks are the `*-test` subcommands, not `go test`.
   (`agentlab-<os>-<arch>.bundle`, signed by the architect orb in CircleCI)
   verifies through the shared `github.com/giantswarm/selfupdate-cosign`
   validator; a release without a bundle or a download that does not verify is
-  refused and the installed binary stays. Also `Remind`, the newer-release
+  refused and the installed binary stays. `--pre` (`Options.Pre`) counts
+  GitHub prereleases too, newest in semver order (rc.6 < the release < the
+  next rc.1), verified the same way; without it, and in the hint and its
+  cache, only stable releases count. Also `Remind`, the newer-release
   hint (no bundle needed: it installs nothing) the root `PersistentPreRun` prints on
   stderr before every user-facing command except `self-update`. A hint,
   never a gate: the command runs whatever the version. GitHub is asked at
@@ -292,7 +295,10 @@ The lab's own e2e checks are the `*-test` subcommands, not `go test`.
   with a two-second cap, and a failed attempt is remembered for ten minutes,
   so an offline machine is not held up. `AGENTLAB_NO_UPDATE_CHECK=1`
   silences it; `dev` builds never check and cannot self-update. Details in
-  docs/cli.md "Keeping agentlab current".
+  docs/cli.md "Keeping agentlab current". `agentlab.yaml`'s header records
+  the agentlab that wrote it (`# Written by agentlab <version>.`, a comment
+  so older releases read past it), and `decodeStrict`'s refusal of an
+  unknown field names that version and the self-update that installs it.
 - `pkg/project` — the build identity (`Version()`, `GitSHA()`,
   `BuildTimestamp()`): stamped by the devctl Makefile / architect CI through
   `-ldflags -X`, else Go's VCS build info (`v0.16.6`, a pseudo-version
