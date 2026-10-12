@@ -52,7 +52,14 @@ plumbing for model servers under
   minutes after the very edit that prompted the reload. The lab uses Dex's
   CRD-backed `kubernetes` storage instead: keys persist across rolls, tokens
   keep verifying, and the state still dies with the cluster.
-- Kubernetes 1.36 (the embedded kind's node image) still accepts the `--oidc-*`
+- **After a Dex signing-key rotation, new tokens get 401 for up to 10
+  minutes.** The apiserver fetches Dex's JWKS again only once its cached copy
+  is within 30 seconds of Dex's 10-minute `max-age`; until then a token signed
+  by the new key fails with `failed to verify id token signature`, and the
+  portal's inventory read answers 401 and hides the installation. That is the
+  lab apiserver's cache, not a portal failure: a rotation test waits it out
+  ([Signing-key rotation and the apiserver's JWKS cache](identity.md#signing-key-rotation-and-the-apiservers-jwks-cache)).
+- Kubernetes 1.37 (the embedded kind's node image) still accepts the `--oidc-*`
   flags. The modern alternative is
   `--authentication-config` (structured `AuthenticationConfiguration`, which
   also supports CEL claim mappings). The flags are simpler and were kept here.

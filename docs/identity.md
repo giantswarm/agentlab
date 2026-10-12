@@ -142,6 +142,66 @@ comes back with `aud: ["kubernetes", "muster", "backstage"]` and is accepted by
 the apiserver (`--oidc-client-id=kubernetes`), by muster
 (`trustedAudiences: [muster]`) and by Backstage itself.
 
+## Signing-key rotation and the apiserver's JWKS cache
+
+Dex rotates its signing key every 6 hours (its default; the lab sets no
+`expiry`). It checks every 30 seconds whether `nextRotation` of its stored
+signing keys has passed, mints a new key, and keeps the retired one in its
+JWKS as a verification key until the last token it signed has expired:
+rotation time plus the id-token lifetime, 24 hours by default
+([`rotation.go`](https://github.com/dexidp/dex/blob/v2.45.1/server/signer/rotation.go)).
+It serves the JWKS with `Cache-Control: max-age=600, must-revalidate`, a
+fixed 10 minutes
+([`handlers.go`](https://github.com/dexidp/dex/blob/v2.45.1/server/handlers.go)).
+
+The apiserver discovers the key set from the issuer's discovery document
+([Kubernetes: OpenID Connect tokens](https://kubernetes.io/docs/reference/access-authn-authz/authentication/#openid-connect-tokens));
+the documentation says nothing about when it fetches it again, which is the
+authenticator's code. The lab's apiserver (Kubernetes 1.37, the embedded
+kind's node image, configured by the `--oidc-*` flags) verifies tokens with
+go-oidc v2.5.0's remote key set
+([`oidc.go` at v1.37.0](https://github.com/kubernetes/kubernetes/blob/v1.37.0/staging/src/k8s.io/apiserver/plugin/pkg/authenticator/token/oidc/oidc.go),
+[go-oidc `jwks.go` at v2.5.0](https://github.com/coreos/go-oidc/blob/v2.5.0/jwks.go)):
+
+- A token whose key id is in the cached key set verifies from the cache, with
+  no fetch, however old the cache is.
+- A token with an unknown key id fetches the JWKS again only when the cached
+  set is within 30 seconds of its `max-age`. Before that it is refused at once
+  with `failed to verify id token signature`, and nothing is fetched. There is
+  no schedule: only such a token, after the cache's expiry, makes the fetch.
+
+So after a rotation:
+
+| Token | In the lab |
+|---|---|
+| Signed by the **new** key | Refused until 9 min 30 s after the apiserver's last JWKS fetch, accepted from the first request after that. A rotation test waits up to **10 minutes**; if the last fetch was more than 9 min 30 s before the rotation, the first such token is accepted at once. |
+| Signed by the **retired** key | Accepted until the token's own `exp`. The cached set holds the retired key, and after a fetch Dex's JWKS still carries it for 24 hours. No wait makes it refused earlier; a test of the refusal uses an expired token. |
+
+The wait is the apiserver's, so a rotation test reads it from there. Its last
+fetch is the `apiserver_authentication_jwt_authenticator_jwks_fetch_last_timestamp_seconds`
+metric (the `StructuredAuthenticationConfigurationJWKSMetrics` gate, on by
+default since 1.35;
+[Kubernetes metrics](https://kubernetes.io/docs/reference/instrumentation/metrics/)):
+
+```sh
+kubectl --kubeconfig state/kubeconfig get --raw /metrics | grep jwks_fetch_last_timestamp
+```
+
+A new-key token is accepted from that timestamp plus 570 seconds. Until then
+every surface that authenticates to the apiserver with the person's token
+answers 401: the portal's inventory read among them, which hides the
+installation before the session list runs. That is the lab apiserver's cache,
+not a portal failure. The agent gateway's JWT policies keep their own copy of
+the JWKS; with its 5-minute refresh, fresh tokens were measured refused for
+4 min 47 s after a rotation in this lab
+([agentgateway-upstream#46](https://github.com/giantswarm/agentgateway-upstream/issues/46)).
+
+Nothing in the flags shortens the apiserver's wait: the `--oidc-*` flags and
+the `AuthenticationConfiguration` file have no JWKS cache setting, and the
+`max-age` is Dex's. Kubernetes after 1.37 moves to go-oidc v3, which fetches
+again on every unknown key id, rate-limited to six fetches a minute; this
+section is re-checked when the embedded kind's node image moves.
+
 ## If you outgrow static passwords
 
 To sign in as a real account — yourself, for a demo or for using the portal as
