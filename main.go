@@ -1688,7 +1688,7 @@ func logsCmd() *cobra.Command {
 // once its signature verifies — the command muster and mcp-kubernetes ship —
 // or, with --check, only says whether one exists.
 func selfUpdateCmd() *cobra.Command {
-	var check bool
+	var opts update.Options
 	cmd := &cobra.Command{
 		Use:   "self-update",
 		Short: "Replace this binary with the latest GitHub release (--check only reports whether one exists)",
@@ -1701,12 +1701,19 @@ Release binaries are signed in CI (cosign, keyless) and published next to
 their Sigstore bundle. The downloaded binary is installed only after that
 bundle verifies for a CircleCI build of ` + update.Repository + `; a release
 without a bundle, or a download that does not match its signature, is refused
-and the installed binary stays as it is.`,
+and the installed binary stays as it is.
+
+Release candidates (v0.97.0-rc.1, published as GitHub prereleases) are left
+out unless --pre: then the newest of the release candidates and the stable
+releases is installed, so a release candidate moves to the next one, or to
+the stable release that follows it, and is verified the same way. The hint
+ahead of other commands names stable releases only.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return update.Run(cmd.Context(), cmd.OutOrStdout(), check)
+			return update.Run(cmd.Context(), cmd.OutOrStdout(), opts)
 		},
 	}
-	cmd.Flags().BoolVar(&check, "check", false, "report the running and the latest release without installing anything; exit status 125 when a newer one exists")
+	cmd.Flags().BoolVar(&opts.Pre, "pre", false, "follow release candidates: install the newest release candidate or stable release, whichever is newer")
+	cmd.Flags().BoolVar(&opts.Check, "check", false, "report the running and the latest release without installing anything; exit status 125 when a newer one exists")
 	return cmd
 }

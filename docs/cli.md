@@ -130,7 +130,7 @@ one helper — see [Agents](agents.md).
 | `certs` | Generate the lab CA and Dex server cert, re-minting only what config or policy require. `--force` regenerates everything and breaks a running cluster's trust. |
 | `render` | Render every manifest from `agentlab.yaml` into `state/` without applying anything. |
 | `reload` | Re-render and re-apply the Dex config after editing `agentlab.yaml` (users, passwords, groups, the [GitHub sign-in](github-signin.md)), without touching the platform. |
-| `self-update` | Replace the binary with the latest GitHub release, once its cosign Sigstore bundle verifies (see below). `--check` only reports the running and the latest version, exit status 125 when a newer one exists. |
+| `self-update` | Replace the binary with the latest GitHub release, once its cosign Sigstore bundle verifies (see below). `--check` only reports the running and the latest version, exit status 125 when a newer one exists. `--pre` follows release candidates too ([below](#release-candidates)). |
 
 Backstage has no command of its own: it deploys with the platform
 (`backstage.enabled` in `agentlab.yaml` and `agentlab up`), and
@@ -211,6 +211,25 @@ without a bundle for your platform is refused before anything is downloaded; a
 download that does not match its signature is refused before anything is
 written. Either way the installed binary stays as it is, and the error says
 why. The hint below installs nothing, so it does not need the bundle.
+
+### Release candidates
+
+Release candidates (`v0.97.0-rc.1`, published as GitHub prereleases) are left
+out unless you ask for them: `agentlab self-update --pre` installs the newest
+of the release candidates and the stable releases, in semver order
+(`v0.96.0-rc.6` < `v0.96.0` < `v0.97.0-rc.1`), verified like any release. A
+release candidate installed by hand thereby moves to the next one, or to the
+stable release that follows it; `--check --pre` reports the same without
+installing. Without `--pre` nothing changes: only stable releases count, and
+an rc binary with nothing stable newer is pointed at `--pre`. The hint below
+names stable releases only.
+
+Every write of `agentlab.yaml` records the agentlab that wrote it in the
+header (`# Written by agentlab v0.97.0-rc.1.`), a comment older releases read
+past. A field this binary does not know is refused, naming that version and
+the command that installs it: `agentlab self-update`, or
+`agentlab self-update --pre` when the file was written by a release
+candidate.
 
 Every command also starts with a one-line hint on stderr while a newer
 release is out — devctl's per-command check, with two deliberate differences:

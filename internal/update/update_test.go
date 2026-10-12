@@ -81,6 +81,8 @@ func (r fakeRelease) GetAssets() []selfupdate.SourceAsset { return r.assets }
 const (
 	running = "v0.19.2"
 	latestV = "v0.19.3"
+	// lastRC is the release candidate latestV was promoted from.
+	lastRC = "v0.19.3-rc.6"
 )
 
 // binaryName is the asset architect publishes for this platform.
@@ -216,6 +218,14 @@ func TestNewerReadsTheVersionsProjectReports(t *testing.T) {
 		{"v1.0.0", latestV, true},
 		{latestV, "dev", false},
 		{"", running, false},
+		// Release candidates: the next rc, then the release, then the next
+		// line's first rc.
+		{lastRC, "v0.19.3-rc.5", true},
+		{"v0.19.3-rc.10", "v0.19.3-rc.9", true}, // numeric, not lexical
+		{latestV, lastRC, true},
+		{lastRC, latestV, false},
+		{"v0.19.4-rc.1", latestV, true},
+		{lastRC, running, true},
 	} {
 		if got := newer(tc.latest, tc.current); got != tc.want {
 			t.Errorf("newer(%q, %q) = %v, want %v", tc.latest, tc.current, got, tc.want)
@@ -373,7 +383,7 @@ func TestRemindWorksWithoutACacheDirectory(t *testing.T) {
 func TestRunCheckReportsANewerRelease(t *testing.T) {
 	f := lab(t, running, &fakeSource{releases: []selfupdate.SourceRelease{release(latestV)}})
 	var out bytes.Buffer
-	err := Run(context.Background(), &out, true)
+	err := Run(context.Background(), &out, Options{Check: true})
 	if !errors.Is(err, ErrOutdated) {
 		t.Fatalf("Run(--check) = %v, want ErrOutdated", err)
 	}
@@ -395,7 +405,7 @@ func TestRunCheckReportsANewerRelease(t *testing.T) {
 func TestRunCheckSaysWhenNothingIsNewer(t *testing.T) {
 	lab(t, latestV, &fakeSource{releases: []selfupdate.SourceRelease{release(latestV)}})
 	var out bytes.Buffer
-	if err := Run(context.Background(), &out, true); err != nil {
+	if err := Run(context.Background(), &out, Options{Check: true}); err != nil {
 		t.Fatalf("Run(--check) = %v", err)
 	}
 	if !strings.Contains(out.String(), "Nothing newer") {
@@ -405,7 +415,7 @@ func TestRunCheckSaysWhenNothingIsNewer(t *testing.T) {
 
 func TestRunRefusesADevelopmentBuild(t *testing.T) {
 	f := lab(t, "dev", &fakeSource{releases: []selfupdate.SourceRelease{release(latestV)}})
-	err := Run(context.Background(), io.Discard, false)
+	err := Run(context.Background(), io.Discard, Options{})
 	if err == nil || !strings.Contains(err.Error(), "development build") {
 		t.Errorf("Run() = %v, want a refusal", err)
 	}
@@ -416,7 +426,7 @@ func TestRunRefusesADevelopmentBuild(t *testing.T) {
 
 func TestRunReportsAnUnreachableGitHub(t *testing.T) {
 	lab(t, running, &fakeSource{err: errors.New("dial tcp: no route to host")})
-	err := Run(context.Background(), io.Discard, false)
+	err := Run(context.Background(), io.Discard, Options{})
 	if err == nil || !strings.Contains(err.Error(), "no route to host") || !strings.Contains(err.Error(), "online") {
 		t.Errorf("Run() = %v, want the network error and the hint", err)
 	}
@@ -435,7 +445,7 @@ func TestRunReplacesTheExecutableOnceTheBundleVerifies(t *testing.T) {
 	newValidator = func() selfupdate.Validator { return v }
 
 	var out bytes.Buffer
-	if err := Run(context.Background(), &out, false); err != nil {
+	if err := Run(context.Background(), &out, Options{}); err != nil {
 		t.Fatalf("Run() = %v\n%s", err, out.String())
 	}
 	got, err := os.ReadFile(filepath.Clean(exe))
@@ -501,7 +511,7 @@ func TestRunRefusesAReleaseWithoutASignatureBundle(t *testing.T) {
 	exe, content := installed(t)
 
 	var out bytes.Buffer
-	err := Run(context.Background(), &out, false)
+	err := Run(context.Background(), &out, Options{})
 	if err == nil {
 		t.Fatal("a release without a bundle must be refused")
 	}
@@ -526,7 +536,7 @@ func TestRunRefusesAReleaseWithoutASignatureBundle(t *testing.T) {
 func TestRunCheckRefusesAReleaseWithoutASignatureBundle(t *testing.T) {
 	lab(t, running, &fakeSource{releases: []selfupdate.SourceRelease{unsignedRelease(latestV)}})
 	var out bytes.Buffer
-	err := Run(context.Background(), &out, true)
+	err := Run(context.Background(), &out, Options{Check: true})
 	if err == nil || errors.Is(err, ErrOutdated) {
 		t.Fatalf("Run(--check) = %v, want the refusal: self-update would install nothing from this release", err)
 	}
@@ -546,7 +556,7 @@ func TestRunRefusesADownloadThatDoesNotVerify(t *testing.T) {
 	exe, content := installed(t)
 
 	var out bytes.Buffer
-	err := Run(context.Background(), &out, false)
+	err := Run(context.Background(), &out, Options{})
 	if err == nil {
 		t.Fatal("a download whose bundle does not verify must be refused")
 	}
@@ -577,5 +587,130 @@ func TestRemindHintsAtAReleaseWithoutASignatureBundle(t *testing.T) {
 	}
 	if c := f.cached(t); c.Latest != latestV || !c.FailedAt.IsZero() {
 		t.Errorf("cache after the hint: %+v", c)
+	}
+}
+
+// prerelease is a release candidate the way GitHub lists it: signed like any
+// release, flagged as a prerelease.
+func prerelease(tag string) fakeRelease {
+	r := release(tag)
+	r.prerelease = true
+	return r
+}
+
+// rcLine is a GitHub that carries a stable release and the release candidates
+// after it, the newest first as GitHub orders them.
+func rcLine() []selfupdate.SourceRelease {
+	return []selfupdate.SourceRelease{
+		prerelease("v0.19.4-rc.2"),
+		prerelease("v0.19.4-rc.1"),
+		release(latestV),
+		prerelease(lastRC),
+		prerelease("v0.19.3-rc.5"),
+	}
+}
+
+// Without --pre nothing changes for a release candidate: the stable release
+// that follows it is the newest, the rcs after that are left out.
+func TestRunLeavesReleaseCandidatesOutWithoutPre(t *testing.T) {
+	f := lab(t, "v0.19.3-rc.5", &fakeSource{releases: rcLine()})
+	var out bytes.Buffer
+	err := Run(context.Background(), &out, Options{Check: true})
+	if !errors.Is(err, ErrOutdated) {
+		t.Fatalf("Run(--check) = %v, want ErrOutdated", err)
+	}
+	if !strings.Contains(out.String(), "Newer release: "+latestV) {
+		t.Errorf("report:\n%s", out.String())
+	}
+	if c := f.cached(t); c.Latest != latestV {
+		t.Errorf("cache = %+v, want the stable release", c)
+	}
+}
+
+// --pre from an rc binary: the newest release candidate, verified and
+// installed like a stable release.
+func TestRunPreInstallsTheNewestReleaseCandidate(t *testing.T) {
+	f := lab(t, "v0.19.3-rc.5", &fakeSource{
+		releases: rcLine(),
+		assets:   map[int64][]byte{binaryID: []byte("rc"), bundleID: []byte("its bundle")},
+	})
+	exe, _ := installed(t)
+	v := &acceptingValidator{}
+	newValidator = func() selfupdate.Validator { return v }
+
+	var out bytes.Buffer
+	if err := Run(context.Background(), &out, Options{Pre: true}); err != nil {
+		t.Fatalf("Run(--pre) = %v\n%s", err, out.String())
+	}
+	got, err := os.ReadFile(filepath.Clean(exe))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "rc" || string(v.bundle) != "its bundle" {
+		t.Errorf("installed %q, verified against %q", got, v.bundle)
+	}
+	for _, want := range []string{"release candidate", "Verified the signature and updated to v0.19.4-rc.2"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output lacks %q:\n%s", want, out.String())
+		}
+	}
+	// The hint names stable releases only: an rc answer stays out of its
+	// cache.
+	if _, err := os.Stat(filepath.Join(f.dir, cacheFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("--pre wrote the hint's cache: %v", err)
+	}
+}
+
+// --pre from an rc binary when the stable release is the newest: that is
+// what it moves to.
+func TestRunPreMovesToTheStableReleaseAfterIt(t *testing.T) {
+	lab(t, lastRC, &fakeSource{releases: []selfupdate.SourceRelease{
+		release(latestV), prerelease(lastRC), prerelease("v0.19.3-rc.5"),
+	}})
+	var out bytes.Buffer
+	if err := Run(context.Background(), &out, Options{Check: true, Pre: true}); !errors.Is(err, ErrOutdated) {
+		t.Fatalf("Run(--check --pre) = %v, want ErrOutdated\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "Newer release or release candidate: "+latestV) {
+		t.Errorf("report:\n%s", out.String())
+	}
+}
+
+// --pre refuses an unsigned release candidate like an unsigned release, and
+// the binary stays.
+func TestRunPreRefusesAnUnsignedReleaseCandidate(t *testing.T) {
+	unsigned := unsignedRelease("v0.19.4-rc.1")
+	unsigned.prerelease = true
+	lab(t, "v0.19.3-rc.5", &fakeSource{
+		releases: []selfupdate.SourceRelease{unsigned, release(latestV)},
+		assets:   map[int64][]byte{binaryID: []byte("an rc, unsigned")},
+	})
+	exe, content := installed(t)
+	newValidator = func() selfupdate.Validator { return &acceptingValidator{} }
+	err := Run(context.Background(), io.Discard, Options{Pre: true})
+	if !errors.Is(err, selfupdate.ErrValidationAssetNotFound) {
+		t.Fatalf("Run(--pre) = %v, want the missing bundle", err)
+	}
+	assertUnchanged(t, exe, content)
+}
+
+// An rc binary with nothing newer among the stable releases is told that
+// --pre follows release candidates.
+func TestRunPointsAnRCBinaryAtPre(t *testing.T) {
+	lab(t, "v0.19.4-rc.1", &fakeSource{releases: rcLine()})
+	var out bytes.Buffer
+	if err := Run(context.Background(), &out, Options{Check: true}); err != nil {
+		t.Fatalf("Run(--check) = %v", err)
+	}
+	if !strings.Contains(out.String(), "`agentlab self-update --pre`") {
+		t.Errorf("report:\n%s", out.String())
+	}
+}
+
+// The hint stays on stable releases, from an rc binary too.
+func TestRemindLeavesReleaseCandidatesOut(t *testing.T) {
+	lab(t, latestV, &fakeSource{releases: rcLine()})
+	if hint := remind(t); hint != "" {
+		t.Errorf("hint at a release candidate:\n%s", hint)
 	}
 }

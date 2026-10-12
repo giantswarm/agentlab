@@ -24,6 +24,8 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/yaml.v3"
+
+	"github.com/giantswarm/agentlab/pkg/project"
 )
 
 // File is the configuration file written next to the binary's working
@@ -1290,9 +1292,10 @@ func Peek(dir string) (*Config, error) {
 // does not know. Every run writes the file back (Load re-hashes passwords,
 // configure and platform record what they found), so a lenient decode would
 // drop such a field silently and the next `platform` would uninstall what it
-// configured — a newer release's switch, say. The refusal names the field and
-// the fix: update agentlab, or remove the field. Every other field defaults;
-// clusterName never does.
+// configured — a newer release's switch, say. The refusal names the field, the
+// agentlab that wrote the file (its header records it) and the fix: the
+// self-update that installs that release, or removing the field. Every other
+// field defaults; clusterName never does.
 func decodeStrict(raw []byte, cfg *Config) error {
 	// The file names its lab: Default's clusterName is the first lab's, and
 	// a file without one would silently act on that lab's cluster.
@@ -1307,9 +1310,55 @@ func decodeStrict(raw []byte, cfg *Config) error {
 		}
 		return nil
 	case strings.Contains(err.Error(), "not found in type"):
-		return fmt.Errorf("%s names a field this agentlab release does not know (%w) — the file was written by a newer release, and this run would drop the field on its next write; update agentlab (https://github.com/giantswarm/agentlab/releases) or remove the field", File, err)
+		return fmt.Errorf("%s names a field this agentlab release (%s) does not know (%w) — %s, and this run would drop the field on its next write; %s, or remove the field", File, project.Version(), err, writerOf(raw), updateHint(writtenBy(raw)))
 	default:
 		return fmt.Errorf("parsing %s: %w", File, err)
+	}
+}
+
+// writtenByPrefix starts the header line that records which agentlab wrote
+// the file. A comment, not a field: a release from before the line reads the
+// file as it always did, and one that does not know a field still finds it.
+const writtenByPrefix = "# Written by agentlab "
+
+// writtenBy is the agentlab version the header of raw names, "" when the file
+// has no such line (written by hand, or by a release from before it).
+func writtenBy(raw []byte) string {
+	for line := range strings.Lines(string(raw)) {
+		if !strings.HasPrefix(line, "#") {
+			// The header ends at the first line that is no comment.
+			return ""
+		}
+		if v, ok := strings.CutPrefix(line, writtenByPrefix); ok {
+			return strings.TrimSuffix(strings.TrimSpace(v), ".")
+		}
+	}
+	return ""
+}
+
+// writerOf says who wrote raw, for the refusal of a field this release does
+// not know.
+func writerOf(raw []byte) string {
+	if v := writtenBy(raw); v != "" {
+		return "the file was written by agentlab " + v
+	}
+	return "the file was written by a newer release"
+}
+
+// updateHint is how to get the release which wrote the file: self-update
+// installs the newest release, and a release candidate only comes with --pre,
+// which follows them. A development build was installed from no release.
+func updateHint(version string) string {
+	v, err := semver.NewVersion(version)
+	switch {
+	case version != "" && err != nil:
+		return "install a build of the same checkout"
+	case err == nil && v.Prerelease() != "":
+		return "`agentlab self-update --pre` installs it or a later release (" + version + " is a release candidate, which only --pre follows)"
+	case err == nil:
+		return "`agentlab self-update` installs it or a later release"
+	default:
+		return "update agentlab with `agentlab self-update` (" + project.Source + "/releases)"
 	}
 }
 
@@ -1328,6 +1377,7 @@ func (c *Config) write() error {
 		return err
 	}
 	header := []byte("# agentlab lab configuration. Regenerate with `agentlab configure`.\n" +
+		writtenByPrefix + project.Version() + ".\n" +
 		"# Passwords are lab-only throwaway credentials; the hash is cached so\n" +
 		"# rendered manifests stay byte-identical across runs (no spurious pod rolls).\n")
 	return os.WriteFile(File, append(header, out...), 0o600)
