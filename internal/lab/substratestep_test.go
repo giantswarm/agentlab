@@ -120,7 +120,9 @@ func TestStepFrom(t *testing.T) {
 // it, so the released line's step 1.8.1 -> 1.8.2 keeps the layout and its
 // goldens, while 1.8.0 -> 1.8.1 (and 1.7.x -> 1.8.x) takes them again.
 func TestCurrentSnapshotLayout(t *testing.T) {
-	v := func(major, minor, patch uint64, pre string) *semver.Version { return semver.New(major, minor, patch, pre, "") }
+	v := func(major, minor, patch uint64, pre string) *semver.Version {
+		return semver.New(major, minor, patch, pre, "")
+	}
 	for _, tc := range []struct {
 		release *semver.Version
 		want    int32
