@@ -52,6 +52,7 @@ agentlab configure --workspaces   # needs --agents (on by default)
 agentlab up                       # or `agentlab platform` on a running lab
 agentlab workspaces-test          # --storage-only: the storage alone
 agentlab workspaces-test --part sync   # workspaces defined through the manager, their mirrors
+agentlab workspaces-test --part access # provider sign-in and the access check at a Session's start
 ```
 
 With the switch off, nothing of it is installed, and `agentlab platform` on a
@@ -200,6 +201,84 @@ minute has passed since the last listing, and the part starts a minute after
 the provider's last change in the request log. The no-op is shown by the
 request log and the manifest, never by timing. The run takes about six
 minutes; `--ready-timeout` bounds each cycle.
+
+### The access part
+
+`agentlab workspaces-test --part access [email]` proves the access check at a
+Session's start: a person signed in to every provider of a workspace, and able
+to read every repository of its last sync, gets a workspace grant from the
+workspace-manager's `authorize_workspace` and starts a Session with it through
+agent-manager's `start_session`. Anyone else is refused, naming what is
+missing, and nothing of the refused start exists. It runs as two people of
+[the lab's Organization](#the-labs-organization): the admin and `[email]`
+(default `dev@lab.local`, who does not read `agentlab-org/platform-infra`). It
+uses [the provider instance `fake`](#the-provider-instance-fake), the
+[Session admission](#the-session-admission) and agent-manager 1.12.0 or later
+(`start_session` with `workspaceGrant`). Without any of them it fails at once
+with the reason.
+
+1. **Preconditions**: the workspace-manager connected to muster. The
+   manager publishes the lab's grant key, kagent's admission trusts its key
+   set, and the claude Agent `agentlab-workspaces-claude` is Ready on the
+   Harness `claude`. Both people are signed in to muster and to kagent.
+2. **Private repository**: `agentlab-org/platform-infra` is in the workspace
+   where the lab GitHub's App is installed on `agentlab-org`. Otherwise the
+   step is skipped with that reason, and so is step 5.
+3. **Workspace**: `create_workspace` for `agentlab-access`, over
+   `agentlab-oss/docs` and the private repository, as the admin. The part
+   waits for its first cycle and reads the volume's CSI driver and handle.
+4. **Not connected**: `[email]` is disconnected first (`list_providers` shows
+   no sign-in). `authorize_workspace` answers `connect_required`, with the
+   reason and the provider's sign-in link, and no grant. A start on the
+   workspace's volume without a grant (kagent `CreateSession` as the person)
+   is refused by the admission. `start_session` names a workspace only
+   through a grant. Without one it starts a Session with no volume and no
+   provider token, as before workspaces.
+5. **Connect**: `connect_provider` as `[email]`. Its link is walked through
+   the lab GitHub's consent and the manager's callback
+   ([a person's sign-in, headlessly](#a-persons-sign-in-headlessly)), and
+   `list_providers` then shows `fake` connected.
+6. **Refused**: `authorize_workspace` as the connected `[email]` answers
+   `refused`, naming `agentlab-org/platform-infra` in its reason and its
+   `unreadable`.
+7. **Grant**: a commit pushed to `agentlab-oss/docs` after the sync, the
+   admin connected, then `authorize_workspace` as the admin. Within the
+   manager's one-minute listing cache, the call repeats until the push shows.
+   The grant names the admin (`sub`), the workspace, its volume (driver and
+   handle), the mounts (`sessions/${SESSION_ID}` read-write, `mirrors`
+   read-only) and `agentlab-oss/docs` as changed since the sync.
+8. **Start**: `start_session` as the admin with the grant. agent-manager
+   creates the Session on kagent as the person, and kagent reports it on the
+   workspace's volume.
+9. **Admission**: three grants refused by kagent's admission, each sent
+   straight to kagent's `CreateSession` with the workspace's volume:
+   - the admin's grant used by `[email]`;
+   - an expired grant: the manager's claims re-signed with the lab's grant
+     key, the manager's own, with the expiry five minutes past;
+   - a grant for another workspace and its volume, signed the same way.
+
+   For the first two, `start_session` is also refused, by agent-manager
+   before kagent, each with its reason. The default proof's admission step
+   already refuses a grant signed by a key the manager does not publish, so
+   that refusal is not repeated here.
+10. **Disconnect**: `disconnect_provider` as the admin. The lab GitHub's
+    request log shows the revocation (`DELETE
+    /api/v3/applications/<client>/grant` or `/token`, answered 2xx),
+    `list_providers` no sign-in, and `authorize_workspace` answers
+    `connect_required` again. A grant issued before stays valid until it
+    expires: a revocation after the start is not checked again.
+11. **Latency**: every `authorize_workspace` call is timed, and the count,
+    minimum, median and maximum are printed.
+12. **Restore**: the Sessions, both sign-ins, the Agent, the session
+    directories, the workspace and its volume removed, and `agentlab-oss/docs`
+    back to its head. A failed run removes the same.
+
+After every refused start (steps 4, 6 and 9), the part lists what exists for
+the person: the Agent's Sessions in kagent, agent-manager's `list_sessions`,
+and Substrate's actors. Nothing may be new. One Session runs a model turn,
+the admitted one: its first message is a one-word reply on the default
+ModelConfig. On the instance `github`, the same steps need one recorded
+browser sign-in of a person's account; the headless part does not run them.
 
 ## The Session admission
 

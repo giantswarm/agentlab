@@ -220,7 +220,10 @@ func TestWorkspacesTestOptionsValidate(t *testing.T) {
 		{WorkspacesTestOptions{Part: WorkspacesPartSync, Email: testDevUser}, ""},
 		{WorkspacesTestOptions{Email: testDevUser}, "signs in as nobody"},
 		{WorkspacesTestOptions{Part: WorkspacesPartSync, StorageOnly: true}, "--storage-only"},
-		{WorkspacesTestOptions{Part: "access"}, "no part"},
+		{WorkspacesTestOptions{Part: WorkspacesPartAccess}, ""},
+		{WorkspacesTestOptions{Part: WorkspacesPartAccess, Email: testDevUser}, ""},
+		{WorkspacesTestOptions{Part: WorkspacesPartAccess, StorageOnly: true}, "--storage-only"},
+		{WorkspacesTestOptions{Part: "billing"}, "no part"},
 	} {
 		err := tc.opts.validate()
 		if (tc.want == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), tc.want)) {

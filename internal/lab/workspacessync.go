@@ -58,7 +58,7 @@ import (
 const WorkspacesPartSync = "sync"
 
 // WorkspacesParts are the parts `workspaces-test --part` takes.
-var WorkspacesParts = []string{WorkspacesPartSync}
+var WorkspacesParts = []string{WorkspacesPartSync, WorkspacesPartAccess}
 
 const (
 	syncFilterWorkspace = "agentlab-sync-filter"
@@ -454,12 +454,19 @@ type syncProof struct {
 	listedAt         time.Time
 	volumes          map[string]syncVolume
 	restored         bool
+	// names are the workspaces the part creates, removed on every path.
+	names []string
+}
+
+// newSyncProof is a part's state on the workspaces it creates.
+func newSyncProof(cfg *config.Config, timeout time.Duration, names ...string) *syncProof {
+	return &syncProof{cfg: cfg, timeout: timeout, tokens: map[string]string{}, volumes: map[string]syncVolume{}, names: names}
 }
 
 // workspacesSyncPart runs the part in stages.
 func workspacesSyncPart(cfg *config.Config, email string, timeout time.Duration) error {
 	p := newProofStages()
-	sp := &syncProof{cfg: cfg, timeout: timeout, tokens: map[string]string{}, volumes: map[string]syncVolume{}}
+	sp := newSyncProof(cfg, timeout, syncFilterWorkspace, syncListWorkspace)
 	err := sp.run(email, p)
 	if !sp.restored {
 		if rerr := sp.restore(); rerr != nil {
@@ -726,7 +733,7 @@ func (sp *syncProof) preconditions(email string) error {
 		return fmt.Errorf("no workspace-manager to define a workspace with: %s", reason)
 	}
 	if !cfg.WorkspaceFakeProvider() {
-		return fmt.Errorf("the sync part pushes, force-pushes and changes topics on the lab's GitHub, the provider instance %s, and platform.workspaces.provider %q does not configure it: `agentlab configure --workspaces-provider %s` (or fake,github), then `agentlab platform`",
+		return fmt.Errorf("the workspaces parts push, force-push and change topics on the lab's GitHub, the provider instance %s, and platform.workspaces.provider %q does not configure it: `agentlab configure --workspaces-provider %s` (or fake,github), then `agentlab platform`",
 			config.WorkspaceProviderFake, cfg.Platform.Workspaces.Provider, config.WorkspaceProviderFake)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
@@ -837,7 +844,7 @@ func (sp *syncProof) preconditions(email string) error {
 // removeLeftovers deletes the workspaces of an interrupted run, their
 // session directory first so the volume can go.
 func (sp *syncProof) removeLeftovers() error {
-	for _, name := range []string{syncFilterWorkspace, syncListWorkspace} {
+	for _, name := range sp.names {
 		gone, err := sp.gone(name)
 		if err != nil {
 			return err
@@ -1297,7 +1304,7 @@ func (sp *syncProof) restore() error {
 	sp.restored = true
 	var errs []error
 	if sp.member != nil {
-		for _, name := range []string{syncFilterWorkspace, syncListWorkspace} {
+		for _, name := range sp.names {
 			if gone, err := sp.gone(name); err == nil && !gone {
 				errs = append(errs, sp.delete(name))
 			}
