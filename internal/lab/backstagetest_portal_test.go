@@ -471,26 +471,26 @@ func TestHITLRequestOf(t *testing.T) {
 	}
 }
 
-// TestSessionsRoutes: the sessions routes as the fake answers them — the
-// create's 201 with the instance, the list, the read, a rename, a delete
-// followed by the 404 — with the person's token on every call and the
-// requestId in the create body.
+// TestSessionsRoutes: the session started through agent-manager's
+// start_session over the portal's muster proxy, with the message, title and
+// requestId as arguments and the first turn's task named, then the sessions
+// routes as the fake answers them — the list, the read, a rename, a delete
+// followed by the 404 — with the person's token on every call.
 func TestSessionsRoutes(t *testing.T) {
 	fp := newFakePortal(t)
 	instance := map[string]any{"id": testSessionID, "creator": testPortalUser, fieldState: instanceStateReady, nameKey: portalSessionName, fieldContextID: testContextID,
 		"agent": map[string]any{fieldNamespace: kagentNamespace, nameKey: testAgentName}}
-	var createBody map[string]any
 	deleted := false
+	fp.tools[startSessionTool] = func(map[string]any) (string, bool) {
+		raw, _ := json.Marshal(map[string]any{fieldSession: instance, "turn": map[string]any{"task": map[string]any{"id": "task-1"}}})
+		return string(raw), false
+	}
 	fp.mux.HandleFunc(portalKagentAPI+kagentSessionsPath, func(w http.ResponseWriter, r *http.Request) {
 		fp.headers[r.URL.Path] = r.Header.Clone()
-		switch r.Method {
-		case http.MethodPost:
-			raw, _ := io.ReadAll(r.Body)
-			_ = json.Unmarshal(raw, &createBody)
-			writeJSON(w, http.StatusCreated, map[string]any{fieldSession: instance})
-		default:
-			writeJSON(w, http.StatusOK, map[string]any{"sessions": []any{instance}})
+		if r.Method != http.MethodGet {
+			t.Errorf("%s %s: the portal has no create route", r.Method, r.URL.Path)
 		}
+		writeJSON(w, http.StatusOK, map[string]any{"sessions": []any{instance}})
 	})
 	fp.mux.HandleFunc(portalKagentAPI+kagentSessionsPath+"/"+testSessionID, func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -511,15 +511,16 @@ func TestSessionsRoutes(t *testing.T) {
 	})
 	ps := fp.session(testPortalUser, platformAdminsGroup)
 	agent := portalAgentRef{Namespace: kagentNamespace, Name: testAgentName}
-	status, created, _, err := ps.createSession(agent, portalSessionName, "req-1")
-	if err != nil || status != http.StatusCreated || created.ID != testSessionID || created.Creator != testPortalUser || created.Agent.Name != testAgentName {
-		t.Fatalf("create: %d %+v %v", status, created, err)
+	created, taskID, err := ps.startSession(agent, portalSessionName, "req-1", "hello")
+	if err != nil || created.ID != testSessionID || created.Creator != testPortalUser || created.Agent.Name != testAgentName || taskID != "task-1" {
+		t.Fatalf("start: %+v %q %v", created, taskID, err)
 	}
-	if createBody["requestId"] != "req-1" || createBody["agentName"] != testAgentName || createBody[nameKey] != portalSessionName {
-		t.Errorf("create body = %v", createBody)
+	args := fp.captured[startSessionTool][0]
+	if args["requestId"] != "req-1" || args[nameKey] != testAgentName || args["namespace"] != kagentNamespace || args["sessionName"] != portalSessionName || args["message"] != "hello" {
+		t.Errorf("start_session arguments = %v", args)
 	}
-	if got := fp.headers[portalKagentAPI+kagentSessionsPath].Get(portalKagentAuthHeader); got != testDexToken {
-		t.Errorf("%s = %q", portalKagentAuthHeader, got)
+	if got := fp.headers[portalMusterAPI+"/call"].Get(portalMusterAuthHeader); got != testDexToken {
+		t.Errorf("%s = %q", portalMusterAuthHeader, got)
 	}
 	list, err := ps.listSessions()
 	if err != nil || len(list) != 1 || list[0].ID != testSessionID {
