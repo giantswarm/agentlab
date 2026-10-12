@@ -99,6 +99,35 @@ func TestPlatformValuesWorkspaces(t *testing.T) {
 	}
 }
 
+// The sessions' cleanup window reaches the workspace-manager as
+// sessions.cleanupAfter only when the lab sets one.
+func TestPlatformValuesSessionsCleanupAfter(t *testing.T) {
+	stubWorkspacesProbe(t, true)
+	cleanupAfter := func(t *testing.T, cfg *config.Config) any {
+		t.Helper()
+		out, err := renderTemplate(cfg, platformValuesTemplate, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var values map[string]any
+		if err := yaml.Unmarshal(out, &values); err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		wm, _ := values["workspace-manager"].(map[string]any)
+		sessions, _ := wm["sessions"].(map[string]any)
+		return sessions["cleanupAfter"]
+	}
+	cfg := config.Default()
+	cfg.Platform.Workspaces.Enabled = true
+	if got := cleanupAfter(t, cfg); got != nil {
+		t.Errorf("sessions.cleanupAfter = %v without the key, want the chart's", got)
+	}
+	cfg.Platform.Workspaces.SessionsCleanupAfter = "7m"
+	if got := cleanupAfter(t, cfg); got != "7m" {
+		t.Errorf("sessions.cleanupAfter = %v, want 7m", got)
+	}
+}
+
 // The lab's Organization: on a chart that forwards workspaces.organizations
 // the list form there and nothing on the subchart (the chart refuses a
 // workspace-manager.organizations of its own); on a chart without the list

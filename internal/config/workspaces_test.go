@@ -140,3 +140,20 @@ func TestWorkspaceGitLabValidate(t *testing.T) {
 		t.Error("the configuration validates a gitlab instance with a bad URL")
 	}
 }
+
+// The sessions' cleanup window: empty keeps the chart's, a positive Go
+// duration is taken, anything else refused.
+func TestWorkspacesSessionsCleanupAfter(t *testing.T) {
+	for value, ok := range map[string]bool{"": true, "10m": true, "720h": true, "0s": false, "-1m": false, "ten minutes": false} {
+		cfg := Default()
+		cfg.Platform.Workspaces.Enabled = true
+		cfg.Platform.Workspaces.SessionsCleanupAfter = value
+		err := cfg.Validate()
+		if ok && err != nil {
+			t.Errorf("%q: %v", value, err)
+		}
+		if !ok && (err == nil || !strings.Contains(err.Error(), "sessionsCleanupAfter")) {
+			t.Errorf("%q: err = %v, want refused", value, err)
+		}
+	}
+}

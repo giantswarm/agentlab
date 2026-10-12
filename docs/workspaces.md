@@ -60,6 +60,8 @@ agentlab workspaces-test          # --storage-only: the storage alone
 agentlab workspaces-test --part sync   # workspaces defined through the manager, their mirrors
 agentlab workspaces-test --part access # provider sign-in and the access check at a Session's start
 agentlab workspaces-test --part gitlab # the provider instance gitlab, end to end (skips without one)
+agentlab configure --workspaces-cleanup-after 10m && agentlab platform   # the sessions part's short cleanup window
+agentlab workspaces-test --part sessions # ten parallel Sessions in their session directories, and the cleanup
 ```
 
 With the switch off, nothing of it is installed, and `agentlab platform` on a
@@ -336,6 +338,71 @@ that has no GitLab.
     connect link again, and GitLab refuses the token released before.
 11. **Restore**: the Sessions, the Agent, the workspace, its volume, the proof
     branches and merge requests removed.
+
+### The sessions part
+
+`agentlab workspaces-test --part sessions [--sessions n]` proves what a
+workspace is for: Sessions started in parallel on one workspace, each at once
+in a session directory of its own on the workspace's one volume, on every
+Harness, and the directories' cleanup after their Session's last turn. It runs
+as the admin on [the provider instance `fake`](#the-provider-instance-fake),
+with the [Session admission](#the-session-admission), agent-manager 1.13.0 or
+later (`start_session` without a first message), workspace-manager 0.4.0 or
+later run with kagent's address (agent-platform 4.128.0 or later derives it)
+and a short cleanup window: `agentlab configure --workspaces-cleanup-after
+10m` (`platform.workspaces.sessionsCleanupAfter`, the manager's
+`sessions.cleanupAfter`; the part takes 5 to 15 minutes), then `agentlab
+platform`. Without any of them it fails at once with the reason.
+
+1. **Preconditions**: the workspace-manager connected to muster, with
+   `--kagent-address` and the window; the lab's grant key published and
+   trusted by kagent's admission; the Agents `agentlab-workspaces-claude` on
+   the Harness `claude` and `agentlab-workspaces-kagent` on the Harness
+   `kagent` (the Go ADK) Ready.
+2. **Workspace**: the sync part's filter workspace `agentlab-sync-filter`
+   (`agentlab-oss/docs`, and the private `agentlab-org/platform-infra` where
+   the App is installed on its owner), created as the admin; its first
+   cycle.
+3. **Push**: a push to `agentlab-oss/docs` after that cycle; the admin
+   connected to `fake`.
+4. **Start**: `--sessions` Sessions (default 10, at least 3), alternating the
+   two Harnesses, started at once: each asks `authorize_workspace` for a grant
+   that names `docs` changed since the sync, starts through `start_session`
+   with it, and runs its first turn. The turn lists its working directory
+   (`/workspace`) and the `origin/HEAD` of every clone at
+   `<owner>/<repository>`, `docs` at the pushed head, and writes a file only
+   it knows (`agentlab-only-<token>`).
+5. **Directories**: a probe on the volume reads one directory per Session
+   under `sessions/<session id>`, each with the setup's record
+   (`.kagent/workspace.json`: when it was set up, what was cloned, `docs`
+   fetched) and its own file alone. The lab GitHub's request log since the
+   push holds exactly one fetch (`GET .../info/refs`) of `docs` per Session
+   and none of any other repository.
+6. **Isolation**: a second turn on every Session at once looks for every
+   `agentlab-only-*` file it can reach and tries a write into `/mirrors`: it
+   finds its own file only, and the write is refused.
+7. **Delete**: a cycle brings the mirrors up to the push; the last Session is
+   deleted; the next cycle removes its directory (the workspace-manager
+   removes a deleted Session's directory at its next cycle, not at once), the
+   other directories, the mirrors' heads and the volume untouched.
+8. **No workspace**: a Session started without a grant on each Harness works
+   in an empty directory, sees no `/mirrors`, and its turn completes.
+9. **Cleanup**: the Sessions suspended, the window waited out, a cycle:
+   every directory removed and the Workspace's `SessionsCleanedUp` condition
+   `True` (the part fails naming its reason otherwise). One Session per
+   Harness resumed works in a fresh directory, the clones back and its file
+   of before gone; the kagent Harness's first turn says the directory was set
+   up again. The claude Harness does not say so yet: the part notes it as a
+   known gap.
+10. **Report**: per Session the times of `start_session` called and
+    answered, the first turn sent, the directory set up (the setup's record)
+    and the first turn ended, and the setup's seconds, as `timing
+    session=<id> harness=<h> ... setupSeconds=<s>` lines and in
+    `state/workspaces-sessions-report.json` with the directories, the heads,
+    the fetch counts and the condition.
+
+Everything is removed on every path: the Sessions, the Agents, the session
+directories, the workspace, the admin's sign-in, and `docs` back at its head.
 
 ## The Session admission
 

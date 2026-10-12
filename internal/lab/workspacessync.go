@@ -58,7 +58,7 @@ import (
 const WorkspacesPartSync = "sync"
 
 // WorkspacesParts are the parts `workspaces-test --part` takes.
-var WorkspacesParts = []string{WorkspacesPartSync, WorkspacesPartAccess, WorkspacesPartGitLab}
+var WorkspacesParts = []string{WorkspacesPartSync, WorkspacesPartAccess, WorkspacesPartGitLab, WorkspacesPartSessions}
 
 const (
 	syncFilterWorkspace = "agentlab-sync-filter"
@@ -600,7 +600,7 @@ func (sp *syncProof) run(email string, p *proofStages) error {
 	if err != nil {
 		return err
 	}
-	if h := probeValue(borrowed, "head"); h != pushed {
+	if h := probeValue(borrowed, probeHeadKey); h != pushed {
 		return fmt.Errorf("the session directory's clone is at %s, want the mirror's head %s:\n%s", h, pushed, borrowed)
 	}
 	note("%s", indent(borrowed, "  "))
@@ -678,7 +678,7 @@ func (sp *syncProof) run(email string, p *proofStages) error {
 	if out, err = sp.onVolume(syncFilterWorkspace, "unborrowed", syncMirrorPresenceScript); err != nil {
 		return err
 	}
-	if probeValue(out, "mirror") != "absent" {
+	if probeValue(out, "mirror") != probeAbsent {
 		return fmt.Errorf("the mirror of %s is still on the volume after its last borrower went:\n%s", syncMovingRepo, out)
 	}
 	note("result %s (trigger %s, sync job %s looked after the volume); the request log: %s; the mirror of %s gone", afterGone.Workspace.LastSync.Result, afterGone.Workspace.LastSync.Trigger, afterGone.Workspace.LastSync.Job, window, syncMovingRepo)
@@ -981,8 +981,8 @@ func (sp *syncProof) firstCycle(d *syncDetail, want []string) error {
 		switch {
 		case got == nil:
 			return fmt.Errorf("no mirror of %s on the volume of %s:\n%s", repo, name, out)
-		case got["head"] != m.Head:
-			return fmt.Errorf("the mirror of %s on the volume is at %s, the manifest says %s", repo, got["head"], m.Head)
+		case got[probeHeadKey] != m.Head:
+			return fmt.Errorf("the mirror of %s on the volume is at %s, the manifest says %s", repo, got[probeHeadKey], m.Head)
 		case got["gc.pruneExpire"] != "never":
 			return fmt.Errorf("the mirror of %s has gc.pruneExpire %q, want never: its unreachable objects are not kept for the sync", repo, got["gc.pruneExpire"])
 		}
@@ -1052,12 +1052,14 @@ func (sp *syncProof) printManifest(d *syncDetail) {
 }
 
 // push commits a file to the moving repository's default branch and pushes
-// it, returning the new head.
+// it, returning the new head. The commit may be empty: a run interrupted
+// after its push leaves the same file on the branch, and the push must still
+// move the head.
 func (sp *syncProof) push() (string, error) {
 	if err := os.WriteFile(filepath.Join(sp.work, syncPushedFile), []byte("# pushed by agentlab workspaces-test --part sync\n"), 0o600); err != nil {
 		return "", err
 	}
-	for _, args := range [][]string{{gitAdd, syncPushedFile}, {gitCommit, "-qm", "workspaces-test: a push"}, {githubPush, "-q", "origin", "HEAD:refs/heads/" + syncMainBranch}} {
+	for _, args := range [][]string{{gitAdd, syncPushedFile}, {gitCommit, "-q", "--allow-empty", "-m", "workspaces-test: a push"}, {githubPush, "-q", "origin", "HEAD:refs/heads/" + syncMainBranch}} {
 		if _, err := sp.gh.git(sp.work, sp.tokens[syncOSS], args...); err != nil {
 			return "", err
 		}
