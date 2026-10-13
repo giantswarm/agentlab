@@ -909,16 +909,15 @@ runtime: Claude Code run headless in a Substrate actor by the kagent line's
 installation turns coding agents on through the meta chart's
 `kagent.harnesses` alone, and the lab does the same: with
 `platform.coding` (`agentlab configure --coding`, agent-platform 4.110.0 or
-newer) `agentlab platform` renders two coding Harnesses into the values,
+newer) `agentlab platform` renders the coding Harness `claude` into the
+values: `KAGENT_PROPAGATE_TOKEN` on (the caller's bearer reaches MCP servers
+through the harness's loopback forwarder, never the process environment),
+snapshots under `s3://ate-snapshots/claude`, no turn limits (the kagent line
+dropped `spec.claude.limits`; a lab whose Harnesses still carry them has them
+removed by `agentlab platform` before the chart is applied).
 
-- `claude`: budgetUSD 1.00 and 10 model turns per turn, `KAGENT_PROPAGATE_TOKEN`
-  on (the caller's bearer reaches MCP servers through the harness's loopback
-  forwarder, never the process environment), snapshots under
-  `s3://ate-snapshots/claude`;
-- `claude-capped`: the same on budgetUSD 0.01, which no turn stays under.
-
-The workspaces proof's claude Session runs on the same `claude` Harness;
-with the workspaces on and coding off the lab renders `claude` alone.
+The workspaces proof's claude Session runs on the same `claude` Harness,
+which the lab also renders with the workspaces on and coding off.
 
 `agentlab coding-test [email]` is the proof, and the floor a coding agent
 rests on. Every stage runs on the lines the lab pins, so it repeats on every
@@ -926,7 +925,7 @@ release candidate:
 
 | Stage | What passes |
 |---|---|
-| harnesses | both Harnesses Ready, their `spec.claude.limits` the values' |
+| harnesses | `claude` Ready, no `spec.claude.limits` on it |
 | write-time guards | agent-manager's `validate_agent` on `claude` refuses `preset:full` (tools without `readOnlyHint`) and an origin outside the Harness's list |
 | create | `create_agent` on `claude` with `preset:read-only` as the person; Ready; the Agent's `spec.egress` is the Harness's origin list agent-manager writes |
 | uid split | the agent's commands run as uid 65532; the root harness's `/proc/<pid>/environ` and `mem` refuse it |
@@ -937,7 +936,7 @@ release candidate:
 | egress | `proxy.golang.org` denied 403 at the egress gate; `api.github.com`, one of the Agent's origins, reached |
 | instruction fixture | a record: what Claude Code loads from a repository's `CLAUDE.md`, `AGENTS.md`, `.claude/` settings, hook, skill, subagent and command and `.mcp.json` on the pinned release |
 | suspend and resume | the Session's file and conversation survive the snapshot |
-| budget cap | a turn on `claude-capped` completes with `stopped_by: budget` and its usage |
+| usage | the resumed turn's task status carries its usage |
 | share refused | a read-write share of the claude Session is refused: a collaborator's turn would run under what the first sender's turns left behind (git hooks, Makefiles, background processes) |
 
 The sandbox stages read one turn: the agent's Bash tool runs a POSIX script

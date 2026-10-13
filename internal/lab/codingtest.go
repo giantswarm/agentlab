@@ -20,7 +20,7 @@ import (
 // (coding.go), with an agent created through agent-manager as the person,
 // the way the portal creates one.
 //
-//  1. The Harnesses claude and claude-capped Ready, their limits the values'.
+//  1. The Harness claude Ready from the values, no limits on it.
 //  2. agent-manager's write-time guards on a claude Harness: validate_agent
 //     refuses a toolset reaching a tool that is not read-only and an egress
 //     origin outside the Harness's list.
@@ -43,18 +43,15 @@ import (
 //     a command, .mcp.json), the next records what Claude Code loaded.
 //  6. Suspend and resume: the Session suspended to the snapshot store and
 //     resumed; a turn reads the first turn's file and recalls its code word.
-//  7. The budget cap: an agent on claude-capped; its turn completes stopped
-//     by the budget with its usage on the task.
+//  7. Usage: the resumed turn's task status carries its usage.
 //  8. A share of the claude Session refused: a colleague's turn in a coding
 //     agent's Session would run under code the first sender's turns left.
 //
 // The agents and Sessions are removed on every exit path.
 
 const (
-	// codingTestAgent and codingTestCappedAgent are the proof's agents,
-	// deleted by the same run.
-	codingTestAgent       = "agentlab-coding"
-	codingTestCappedAgent = "agentlab-coding-capped"
+	// codingTestAgent is the proof's agent, deleted by the same run.
+	codingTestAgent = "agentlab-coding"
 	// codingTestToolset is the coding agent's toolset: read-only, as the
 	// guard requires of a claude Harness agent.
 	codingTestToolset = presetReadOnly
@@ -133,19 +130,19 @@ type codingProof struct {
 
 func (p *codingProof) run() error {
 	ctx := context.Background()
-	p.stages.begin("harnesses", "The coding Harnesses %s and %s Ready from the platform values, their limits the values'", claudeHarness, claudeCappedHarness)
+	p.stages.begin("harnesses", "The coding Harness %s Ready from the platform values, no limits on it", claudeHarness)
 	for _, h := range codingHarnessesFor(p.cfg, nil) {
 		if err := waitHarnessReady(ctx, h.Name, p.timeout); err != nil {
 			return err
 		}
-		budget, turns, err := readHarnessLimits(ctx, h.Name)
+		limits, err := readHarnessLimits(ctx, h.Name)
 		if err != nil {
 			return err
 		}
-		if budget != h.BudgetUSD || turns != int64(h.MaxTurns) {
-			return fmt.Errorf("the limits of Harness %s are budgetUSD %q maxTurns %d, the values render %q and %d", h.Name, budget, turns, h.BudgetUSD, h.MaxTurns)
+		if limits != nil {
+			return fmt.Errorf("the Harness %s carries spec.claude.limits %v, which the values no longer render", h.Name, limits)
 		}
-		note("Harness %s/%s Ready, limits budgetUSD %s maxTurns %d", kagentNamespace, h.Name, budget, turns)
+		note("Harness %s/%s Ready, no limits", kagentNamespace, h.Name)
 	}
 
 	token, err := passwordGrant(p.cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret, p.user.Email, p.user.Password, musterLoginScopes)
@@ -243,25 +240,17 @@ func (p *codingProof) run() error {
 	note("on %s: %s", p.line, loaded)
 
 	p.stages.begin("suspend and resume", "The Session suspended to the snapshot store and resumed: the first turn's file and code word are still there")
-	if err := p.suspendResume(ctx, session); err != nil {
+	meta, err := p.suspendResume(ctx, session)
+	if err != nil {
 		return err
 	}
 
-	p.stages.begin("budget cap", "An agent on %s (budgetUSD %s): its turn completes stopped by the budget, with its usage", claudeCappedHarness, claudeCappedBudgetUSD)
-	capped := spec
-	capped.Name, capped.Harness = codingTestCappedAgent, claudeCappedHarness
-	if _, err := p.createReady(capped); err != nil {
-		return err
+	p.stages.begin("usage", "The resumed turn's task status carries its usage")
+	usage, _ := meta[usageMetadataKey].(map[string]any)
+	if len(usage) == 0 {
+		return fmt.Errorf("the turn on Harness %s completed without %s (status metadata %v; %s)", claudeHarness, usageMetadataKey, meta, p.line)
 	}
-	cappedSession, err := p.createSession(ctx, codingTestCappedAgent)
-	if err != nil {
-		return err
-	}
-	verdict, err := p.budgetCap(ctx, cappedSession)
-	if err != nil {
-		return err
-	}
-	note("%s", verdict)
+	note("cost %v USD over %v model turns", usage["costUsd"], usage["numTurns"])
 
 	p.stages.begin("share refused", "A read-write share of the claude Session refused: a collaborator's turn would run under what the first sender's turns left")
 	return p.shareRefused(ctx, session)
@@ -360,44 +349,30 @@ func (p *codingProof) turn(ctx context.Context, session *apiv1alpha1.Session, pr
 }
 
 // suspendResume suspends the Session, resumes it and has a turn read the
-// first turn's file and recall its code word.
-func (p *codingProof) suspendResume(ctx context.Context, session *apiv1alpha1.Session) error {
+// first turn's file and recall its code word; it returns that turn's status
+// metadata.
+func (p *codingProof) suspendResume(ctx context.Context, session *apiv1alpha1.Session) (map[string]any, error) {
 	opCtx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
 	suspended, err := p.api.suspendSession(opCtx, session.GetId())
 	if err != nil {
-		return err
+		return nil, err
 	}
 	resumed, err := p.api.resumeSession(opCtx, session.GetId())
 	if err != nil {
-		return err
+		return nil, err
 	}
 	note("Session %s: %s, then %s", session.GetId(), sessionState(suspended), sessionState(resumed))
-	reply, _, err := p.turn(ctx, resumed, codingResumePrompt())
+	reply, meta, err := p.turn(ctx, resumed, codingResumePrompt())
 	if err != nil {
-		return err
+		return nil, err
 	}
 	probe := parseCodingProbe(reply)
 	if probe["file"] != codingTestCodeWord || !strings.Contains(probe["code-word"], codingTestCodeWord) {
-		return fmt.Errorf("after the resume the first turn's file reads %q and the code word recalled is %q, wanted %s for both (%s)", probe["file"], probe["code-word"], codingTestCodeWord, p.line)
+		return nil, fmt.Errorf("after the resume the first turn's file reads %q and the code word recalled is %q, wanted %s for both (%s)", probe["file"], probe["code-word"], codingTestCodeWord, p.line)
 	}
 	note("the file %s reads %s, the code word recalled from the conversation", codingTestOwnFile, probe["file"])
-	return nil
-}
-
-// budgetCap runs a turn longer than the Harness's budget: it must complete
-// stopped by the budget, with its usage.
-func (p *codingProof) budgetCap(ctx context.Context, session *apiv1alpha1.Session) (string, error) {
-	_, meta, err := p.turn(ctx, session, "Write a detailed, 2000-word explanation of how git stores objects, then list every git plumbing command you know with one line each.")
-	if err != nil {
-		return "", err
-	}
-	stopped, _ := meta[stoppedByKey].(string)
-	if stopped != stoppedByBudget {
-		return "", fmt.Errorf("the turn on Harness %s completed without %s=%s (status metadata %v; %s)", claudeCappedHarness, stoppedByKey, stoppedByBudget, meta, p.line)
-	}
-	usage, _ := meta[usageMetadataKey].(map[string]any)
-	return fmt.Sprintf("completed with %s=%s, cost %v USD over %v model turns", stoppedByKey, stopped, usage["costUsd"], usage["numTurns"]), nil
+	return meta, nil
 }
 
 // shareRefused asks kagent for a read-write share of the claude Session;
@@ -420,15 +395,13 @@ func (p *codingProof) shareRefused(ctx context.Context, session *apiv1alpha1.Ses
 	return fmt.Errorf("%s created share %s of Session %s on Harness %s (revoked): the refusal of shares on a Harness that runs code is not on this line", p.line, shareID, session.GetId(), claudeHarness)
 }
 
-// removeAgents removes the proof's agents, leftovers of an earlier run too.
+// removeAgents removes the proof's agent, a leftover of an earlier run too.
 func (p *codingProof) removeAgents() {
-	for _, name := range []string{codingTestAgent, codingTestCappedAgent} {
-		if !agentExists(name) {
-			continue
-		}
-		if err := removeAgent(name); err != nil {
-			note("cleanup: %v", err)
-		}
+	if !agentExists(codingTestAgent) {
+		return
+	}
+	if err := removeAgent(codingTestAgent); err != nil {
+		note("cleanup: %v", err)
 	}
 }
 
@@ -442,26 +415,22 @@ func (p *codingProof) cleanup() {
 	}
 }
 
-// The status metadata of a turn a limit ended: the limit, and the usage.
-const (
-	stoppedByKey     = "stopped_by"
-	stoppedByBudget  = "budget"
-	usageMetadataKey = "kagent.dev/a2a/usage"
-)
+// usageMetadataKey is the status metadata a turn's usage is under.
+const usageMetadataKey = "kagent.dev/a2a/usage"
 
-// readHarnessLimits reads a claude Harness's spec.claude.limits.
-func readHarnessLimits(ctx context.Context, name string) (string, int64, error) {
+// readHarnessLimits reads a claude Harness's spec.claude.limits, nil where
+// it carries none.
+func readHarnessLimits(ctx context.Context, name string) (any, error) {
 	gvr, err := gvrFor(harnessResource)
 	if err != nil {
-		return "", 0, err
+		return nil, err
 	}
 	obj, err := getObject(ctx, gvr, kagentNamespace, name)
 	if err != nil {
-		return "", 0, err
+		return nil, err
 	}
-	budget, _, _ := unstructured.NestedString(obj.Object, "spec", "claude", "limits", "budgetUSD")
-	turns, _, _ := unstructured.NestedInt64(obj.Object, "spec", "claude", "limits", "maxTurns")
-	return budget, turns, nil
+	limits, _, _ := unstructured.NestedFieldNoCopy(obj.Object, harnessLimitsPath...)
+	return limits, nil
 }
 
 // readAgentEgress reads the Agent's spec.egress.

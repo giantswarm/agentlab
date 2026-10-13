@@ -464,11 +464,9 @@ type Platform struct {
 	// workspaces-test --storage-only` is the proof.
 	Workspaces Workspaces `yaml:"workspaces"`
 	// Coding agents: the chart's kagent.harnesses renders the lab's coding
-	// Harnesses (internal/lab/coding.go) — claude, Claude Code run headless
-	// with the platform's limits, and claude-capped, the same runtime on a
-	// tiny budget the cap proof ends a turn on. Off by default; --coding
-	// turns it on; needs the agents runtime. `agentlab coding-test` is the
-	// proof.
+	// Harness (internal/lab/coding.go) claude, Claude Code run headless. Off
+	// by default; --coding turns it on; needs the agents runtime. `agentlab
+	// coding-test` is the proof.
 	Coding Coding `yaml:"coding"`
 	// The platform-manager fixture: an invented installation with the agent
 	// platform and workspaces on, in a registry the lab serves, that the

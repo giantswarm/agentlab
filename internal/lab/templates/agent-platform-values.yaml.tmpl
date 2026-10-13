@@ -701,12 +701,11 @@ kagent:
     enabled: false
 {{- end }}
 {{- with .CodingHarnesses }}
-  # The coding Harnesses (the kagent chart's harnesses[], coding.go): Claude
+  # The coding Harness (the kagent chart's harnesses[], coding.go): Claude
   # Code run headless by the chart's claude-harness image at its published
   # digest, calling muster as the person who sent the turn, its snapshots
-  # beside the platform Harness's in the lab's in-cluster store, the
-  # platform's limits on every turn. The workspaces proof's claude Session
-  # and coding-test's agents turn on them.
+  # beside the platform Harness's in the lab's in-cluster store. The
+  # workspaces proof's claude Session and coding-test's agent turn on it.
   harnesses:
 {{- range . }}
     - name: {{ .Name }}
@@ -715,9 +714,6 @@ kagent:
       env:
         - name: KAGENT_PROPAGATE_TOKEN
           value: "true"
-      limits:
-        budgetUSD: "{{ .BudgetUSD }}"
-        maxTurns: {{ .MaxTurns }}
 {{- end }}
 {{- end }}
   # No OTLP gateway in kind; the exporters would only log dial errors.
