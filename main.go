@@ -1459,6 +1459,7 @@ func workspacesMeasureCmd() *cobra.Command {
 	cmd.Flags().IntVar(&opts.LargeRepoMiB, "large-repo-mib", 0, "the lab: add a repository of this many MiB to the lab's GitHub for the large workspace, removed afterwards (default: the fixture's agentlab-org/monorepo)")
 	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", lab.DefaultWorkspacesReadyTimeout, "how long each wait may take: a cycle, a Session's turn, a probe pod")
 	cmd.Flags().StringVar(&opts.RunDir, "run-dir", "", "where the report is written (default state/workspaces-measure-<time>)")
+	cmd.Flags().StringVar(&opts.GoProxy, "goproxy", "", "the module proxy the build's download goes through, a GOPROXY list (default the git image's, proxy.golang.org)")
 	cmd.Flags().StringVar(&opts.KubeContext, "kube-context", "", "another cluster: the context of your kubeconfig the Kubernetes reads and probe pods use (with --muster-url)")
 	cmd.Flags().StringVar(&opts.MusterURL, "muster-url", "", "another cluster: its muster, as the person `muster auth login --endpoint <url>` signed in (with --kube-context)")
 	cmd.Flags().StringVar(&opts.Organization, "organization", "", "another cluster: the Organization the workspaces belong to")

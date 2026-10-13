@@ -51,10 +51,15 @@ const (
 	figCheckoutLocal  = "checkoutLocal"
 	figStatusVolume   = "statusVolume"
 	figStatusLocal    = "statusLocal"
+	figDownloadVolume = "downloadVolume"
+	figDownloadLocal  = "downloadLocal"
 	figBuildVolume    = "buildVolume"
 	figBuildLocal     = "buildLocal"
 	figSessionBytes   = "sessionDirectoryBytes"
 )
+
+// measureSameSpan is a local-disk figure's span: its volume figure's.
+const measureSameSpan = "the same"
 
 // measureFigureDefs are the figures in the order the report lists them.
 var measureFigureDefs = []measureFigureDef{
@@ -68,9 +73,11 @@ var measureFigureDefs = []measureFigureDef{
 	{figCheckoutVolume, "First checkout, volume", "`git switch <default branch>` in the Session's clone, no working tree yet", "the working tree checked out, on the workspace volume", unitSeconds},
 	{figCheckoutLocal, "First checkout, local disk", "the same in a clone of a copy of the mirror", "the working tree checked out, on the node's local disk", unitSeconds},
 	{figStatusVolume, "git status, volume", "`git status --porcelain` after the checkout", "its answer, on the workspace volume", unitSeconds},
-	{figStatusLocal, "git status, local disk", "the same", "its answer, on the node's local disk", unitSeconds},
-	{figBuildVolume, "Build, volume", "`go build ./...` with a cold build cache beside the clone", "the binary written, on the workspace volume", unitSeconds},
-	{figBuildLocal, "Build, local disk", "the same", "the binary written, on the node's local disk", unitSeconds},
+	{figStatusLocal, "git status, local disk", measureSameSpan, "its answer, on the node's local disk", unitSeconds},
+	{figDownloadVolume, "Build's download, volume", "`go list -deps ./...` with a cold module cache beside the clone, through the module proxy", "every module the build needs in the cache, on the workspace volume", unitSeconds},
+	{figDownloadLocal, "Build's download, local disk", measureSameSpan, "every module the build needs in the cache, on the node's local disk", unitSeconds},
+	{figBuildVolume, "Build's compile, volume", "`go build ./...` with the modules downloaded, the proxy off and a cold build cache beside the clone", "the binary written, on the workspace volume", unitSeconds},
+	{figBuildLocal, "Build's compile, local disk", measureSameSpan, "the binary written, on the node's local disk", unitSeconds},
 	{figSessionBytes, "Session directory size", "the Session's directory", "after the measured turns and the checkout (`du -sb`)", unitBytes},
 }
 
@@ -181,7 +188,18 @@ type measureReport struct {
 	Harness          string                   `json:"harness,omitempty"`
 	Workspaces       []measureWorkspaceReport `json:"workspaces"`
 	Leftovers        []measureLeftover        `json:"leftovers,omitempty"`
-	Error            string                   `json:"error,omitempty"`
+	// Failed are the probes that failed: their figures of that run are not
+	// available, the run went on.
+	Failed []measureFailedProbe `json:"failedProbes,omitempty"`
+	Error  string               `json:"error,omitempty"`
+}
+
+// measureFailedProbe is a probe that failed in one run on one workspace.
+type measureFailedProbe struct {
+	Run       int    `json:"run"`
+	Workspace string `json:"workspace"`
+	Probe     string `json:"probe"`
+	Reason    string `json:"reason"`
 }
 
 // measureLeftover is an interrupted run's workspace that was still deleting:
@@ -324,6 +342,12 @@ func (r *measureReport) markdown() string {
 	b.WriteString(".\n")
 	if r.Error != "" {
 		fmt.Fprintf(&b, "\n**The run ended early:** %s\n", r.Error)
+	}
+	if len(r.Failed) > 0 {
+		b.WriteString("\n**Probes that failed** (their figures of that run are not available, the run went on):\n\n| Run | Workspace | Probe | Reason |\n|---|---|---|---|\n")
+		for _, f := range r.Failed {
+			fmt.Fprintf(&b, "| %d | `%s` | %s | %s |\n", f.Run, f.Workspace, f.Probe, mdCell(f.Reason))
+		}
 	}
 	for _, l := range r.Leftovers {
 		fmt.Fprintf(&b, "\n**Leftover:** `%s` of an interrupted run was still deleting; its session directories were cleared and its manager deletes it at its next deletion cycle. This run measured it as `%s`.\n", l.Name, l.MeasuredAs)

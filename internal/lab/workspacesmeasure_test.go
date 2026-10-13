@@ -1,6 +1,8 @@
 package lab
 
 import (
+	"archive/zip"
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -177,8 +179,8 @@ func TestMeasureScriptsParse(t *testing.T) {
 		t.Skip("no sh")
 	}
 	for name, script := range map[string]string{
-		"git":          measureGitScript(syncListRepoB, measureLabBranch),
-		"git, remote":  measureGitScript("o/a", ""),
+		"git":          measureGitScript(syncListRepoB, measureLabBranch, ""),
+		"git, remote":  measureGitScript("o/a", "", "https://proxy.example,direct"),
 		"storage":      measureStorageScript,
 		"fetch (turn)": measureFetchCommand(syncMovingRepo, measureLabBranch),
 	} {
@@ -187,7 +189,7 @@ func TestMeasureScriptsParse(t *testing.T) {
 			t.Errorf("the %s script does not parse: %v\n%s", name, err, out)
 		}
 	}
-	git := measureGitScript(syncListRepoB, measureLabBranch)
+	git := measureGitScript(syncListRepoB, measureLabBranch, "")
 	for _, want := range []string{"switch -q", "status --porcelain", "go build", "--config checkout.workers=0", "rm -rf /workspace/" + measureBuildDir + " 2>/dev/null && break"} {
 		if !strings.Contains(git, want) {
 			t.Errorf("the git script lacks %q", want)
@@ -219,7 +221,7 @@ func TestMeasureLabFixtureBuilds(t *testing.T) {
 	}
 	for _, repo := range []string{measureLabLargeRepo, syncListRepoB} {
 		i := slices.IndexFunc(fixture.Repositories, func(r githubFixtureRepo) bool { return r.fullName() == repo })
-		if i < 0 || fixture.Repositories[i].Files["go.mod"] == "" || fixture.Repositories[i].Files["main.go"] == "" {
+		if i < 0 || fixture.Repositories[i].Files[goModFile] == "" || fixture.Repositories[i].Files[mainGoFile] == "" {
 			t.Errorf("the fixture's %s carries no Go module for the measurement's build", repo)
 		}
 	}
@@ -259,7 +261,7 @@ func TestWorkspaceGitHubGeneratedRepo(t *testing.T) {
 	if out, err := exec.Command("git", "-c", "http.sslCAInfo="+f.caPath, "clone", "-q", f.url+"/"+wsOrg+"/monorepo-2mib.git", dir+"/c").CombinedOutput(); err != nil {
 		t.Fatalf("cloning the generated repository: %v\n%s", err, out)
 	}
-	if out, err := exec.Command("git", "-C", dir+"/c", "ls-files", "go.mod", "main.go").Output(); err != nil || strings.Count(string(out), "\n") != 2 { // #nosec G204 -- the test's clone
+	if out, err := exec.Command("git", "-C", dir+"/c", "ls-files", goModFile, mainGoFile).Output(); err != nil || strings.Count(string(out), "\n") != 2 { // #nosec G204 -- the test's clone
 		t.Fatalf("the generated repository's Go module = %q, %v", out, err)
 	}
 	if resp := f.call(t, http.MethodDelete, githubFakeReposPath+"/"+wsPublic, "", nil, nil); resp.StatusCode != http.StatusConflict {
@@ -325,5 +327,187 @@ func TestMeasureLeftoverReport(t *testing.T) {
 	r := measureReport{Started: started, Ended: started, Runs: 5, Leftovers: []measureLeftover{{Name: "agentlab-measure-small", MeasuredAs: fresh}}}
 	if md := r.markdown(); !strings.Contains(md, "`agentlab-measure-small` of an interrupted run was still deleting") || !strings.Contains(md, "`"+fresh+"`") {
 		t.Fatalf("the Markdown does not name the leftover:\n%s", md)
+	}
+}
+
+// measureTestProxy is a file:// module proxy serving example.com/dep
+// v1.0.0, a module the measured repository depends on.
+func measureTestProxy(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "proxy")
+	v := filepath.Join(dir, "example.com", "dep")
+	if err := os.MkdirAll(filepath.Join(v, "@v"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	mod := "module example.com/dep\n\ngo 1.22\n"
+	var zipped bytes.Buffer
+	zw := zip.NewWriter(&zipped)
+	for name, body := range map[string]string{goModFile: mod, "dep.go": "package dep\n\nfunc Answer() int { return 42 }\n"} {
+		f, err := zw.Create("example.com/dep@v1.0.0/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.Write([]byte(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string][]byte{"@v/list": []byte("v1.0.0\n"), "@v/v1.0.0.info": []byte(`{"Version":"v1.0.0","Time":"2026-01-01T00:00:00Z"}`),
+		"@v/v1.0.0.mod": []byte(mod), "@v/v1.0.0.zip": zipped.Bytes()} {
+		if err := os.WriteFile(filepath.Join(v, name), body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return "file://" + dir
+}
+
+// runMeasureBuild runs the git probe's build in a module of the files and
+// returns its output and the parsed probe.
+func runMeasureBuild(t *testing.T, goproxy string, files map[string]string) (string, measureGitProbe) {
+	t.Helper()
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh")
+	}
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("no go")
+	}
+	root := t.TempDir()
+	mod := filepath.Join(root, "repo")
+	for name, body := range files {
+		path := filepath.Join(mod, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(files) == 0 {
+		if err := os.MkdirAll(mod, 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	script := "ms() { date +%s%3N; }\n" + measureBuildFunction(goproxy) + "cd " + mod + " && build volume " + filepath.Join(root, "build") + "\n"
+	// #nosec G204 -- the test's own script
+	cmd := exec.Command(sh, shExitOnError, "-c", script)
+	// The checksum database is not asked for the test's module; the probe
+	// sets the rest of Go's environment itself.
+	cmd.Env = append(os.Environ(), "GOSUMDB=off", "GOENV=off", "GOPROXY=off", "HOME="+root)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("the build failed the script: %v\n%s", err, out)
+	}
+	return string(out), parseGitProbe(string(out))
+}
+
+// The test module's files.
+const (
+	goModFile           = "go.mod"
+	mainGoFile          = "main.go"
+	measureTestGoMod    = "module example.com/app\n\ngo 1.22\n"
+	measureTestGoModDep = measureTestGoMod + "\nrequire example.com/dep v1.0.0\n"
+)
+
+const measureTestMain = "package main\n\nimport \"example.com/dep\"\n\nfunc main() { println(dep.Answer()) }\n"
+
+func TestMeasureBuildDownloadsDependencies(t *testing.T) {
+	out, p := runMeasureBuild(t, measureTestProxy(t), map[string]string{
+		goModFile:  measureTestGoModDep,
+		mainGoFile: measureTestMain,
+	})
+	for _, key := range []string{"download-volume", "build-volume"} {
+		if _, why := p.value(key, "o/app"); why != "" {
+			t.Errorf("%s not available: %s\n%s", key, why, out)
+		}
+	}
+}
+
+func TestMeasureBuildNotAvailable(t *testing.T) {
+	proxy := measureTestProxy(t)
+	for name, tc := range map[string]struct {
+		files           map[string]string
+		goproxy         string
+		download, build string
+	}{
+		// The probe before it downloaded: every dependency refused.
+		"the proxy off": {files: map[string]string{goModFile: measureTestGoModDep, mainGoFile: measureTestMain}, goproxy: "off",
+			download: "module lookup disabled by GOPROXY=off", build: "the build failed: the download failed"},
+		"no go.mod": {files: nil, download: "no Go module at its root", build: "no Go module at its root"},
+		"compile fails": {files: map[string]string{goModFile: measureTestGoMod, mainGoFile: "package main\n\nfunc main() { undefinedName() }\n"},
+			build: "the build failed: ./main.go:3:15: undefined: undefinedName"},
+		"download fails": {files: map[string]string{goModFile: "module example.com/app\n\ngo 1.22\n\nrequire example.com/missing v1.0.0\n", mainGoFile: "package main\n\nimport _ \"example.com/missing\"\n\nfunc main() {}\n"},
+			download: "the build failed: ", build: "the build failed: the download failed"},
+		"vendored": {files: map[string]string{goModFile: measureTestGoModDep, mainGoFile: measureTestMain,
+			"vendor/modules.txt": "# example.com/dep v1.0.0\n## explicit\nexample.com/dep\n", "vendor/example.com/dep/dep.go": "package dep\n\nfunc Answer() int { return 42 }\n"},
+			download: "vendors its modules"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			out, p := runMeasureBuild(t, cmpOr(tc.goproxy, proxy), tc.files)
+			for key, want := range map[string]string{"download-volume": tc.download, "build-volume": tc.build} {
+				_, why := p.value(key, "o/app")
+				switch {
+				case want == "" && why != "":
+					t.Errorf("%s not available: %s\n%s", key, why, out)
+				case want != "" && !strings.Contains(why, want):
+					t.Errorf("%s: %q, want not available with %q\n%s", key, why, want, out)
+				}
+			}
+		})
+	}
+}
+
+// The git probe's output of a run whose build failed before the probe
+// reported its figures one by one: what it measured is kept.
+func TestParseGitProbeKeepsFigures(t *testing.T) {
+	out := "measure branch=main workers=0 untracked-cache=true many-files=true\nmeasure checkout-volume=2170\nmeasure status-volume=844\nmeasure session-bytes=1517786\n" +
+		"measure download-volume=1200\nmeasure build-volume=fail\nmeasure-why build-volume cmd/serve.go:16:2: undefined: x\nmeasure checkout-local=900\nmeasure build-local=\n"
+	p := parseGitProbe(out)
+	s := newMeasureSamples()
+	for _, f := range measureGitFigures {
+		if v, why := p.value(f.key, "o/a"); why != "" {
+			s.notAvailable(f.fig, why)
+		} else {
+			s.add(f.fig, v)
+		}
+	}
+	byKey := map[string]measureFigure{}
+	for _, f := range s.figures() {
+		byKey[f.Key] = f
+	}
+	for fig, want := range map[string]float64{figCheckoutVolume: 2.17, figStatusVolume: 0.844, figSessionBytes: 1517786, figDownloadVolume: 1.2, figCheckoutLocal: 0.9} {
+		if f := byKey[fig]; len(f.Samples) != 1 || f.Samples[0] != want {
+			t.Errorf("%s = %v (%s), want %v", fig, f.Samples, f.NotAvailable, want)
+		}
+	}
+	for fig, want := range map[string]string{figBuildVolume: "the build failed: cmd/serve.go:16:2: undefined: x", figBuildLocal: `the git probe reported build-local=""`,
+		figStatusLocal: "the git probe reported no status-local"} {
+		if f := byKey[fig]; f.NotAvailable != want {
+			t.Errorf("%s not available %q, want %q", fig, f.NotAvailable, want)
+		}
+	}
+}
+
+func TestMeasureReportFailedProbes(t *testing.T) {
+	r := measureReport{Target: "the lab agentlab", Runs: 5, Failed: []measureFailedProbe{{Run: 2, Workspace: measureSmallWorkspace, Probe: "git (build-volume)", Reason: "a | b"}}}
+	md := r.markdown()
+	if want := "| 2 | `" + measureSmallWorkspace + "` | git (build-volume) | a \\| b |"; !strings.Contains(md, want) {
+		t.Errorf("the Markdown lacks %q:\n%s", want, md)
+	}
+	if strings.Contains(md, "ended early") {
+		t.Errorf("a failed probe is not the run's end:\n%s", md)
+	}
+}
+
+func TestWorkspacesMeasureOptionsGoProxy(t *testing.T) {
+	if err := (WorkspacesMeasureOptions{GoProxy: "https://proxy.example,direct"}).validate(); err != nil {
+		t.Errorf("a GOPROXY list: %v", err)
+	}
+	for _, bad := range []string{"x' ; rm -rf /", "a b"} {
+		if err := (WorkspacesMeasureOptions{GoProxy: bad}).validate(); err == nil {
+			t.Errorf("--goproxy %q accepted", bad)
+		}
 	}
 }
