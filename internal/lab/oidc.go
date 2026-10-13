@@ -87,11 +87,23 @@ func labTLSTransport() (*http.Transport, error) {
 	if err != nil {
 		return nil, err
 	}
-	labTransport.cached = &http.Transport{
+	labTransport.cached = newLabTransport(pool)
+	return labTransport.cached, nil
+}
+
+// labIdleConnTimeout closes a pooled connection idle this long, net/http's
+// default: an installation's load balancer drops an idle connection silently
+// (Azure's after four minutes), and a request reusing it after a long probe
+// would read EOF instead of dialling afresh.
+const labIdleConnTimeout = 90 * time.Second
+
+// newLabTransport is labTLSTransport's transport on pool.
+func newLabTransport(pool *x509.CertPool) *http.Transport {
+	return &http.Transport{
 		TLSClientConfig: &tls.Config{RootCAs: pool},
 		DialContext:     dialLab,
+		IdleConnTimeout: labIdleConnTimeout,
 	}
-	return labTransport.cached, nil
 }
 
 // labCertPool is what every client of the lab trusts — HTTP and gRPC alike:
