@@ -325,6 +325,13 @@ on the Deployment still works for a quick look, but only until
 helm-controller's next release of that component overwrites it — the values
 are the durable path.)
 
+The `workspace-manager` target also runs the manager's sync Jobs on the
+build: the Jobs are made from a template in a ConfigMap, which the override
+does not reach, so the same patch sets the manager's
+`WORKSPACE_MANAGER_SYNC_IMAGE` (its `--sync-image`) to the dev image and
+`WORKSPACE_MANAGER_SYNC_IMAGE_PULL_POLICY` to `IfNotPresent`. Without the
+target neither is set and the Jobs keep the chart's image.
+
 The image name the override replaces is read off the component chart's
 render, the one the boot renders anyway to side-load the platform images —
 not from a table, because it differs between lines: the `kagent` target

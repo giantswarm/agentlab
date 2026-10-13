@@ -66,7 +66,10 @@ import (
 //     lines — and an override that would match nothing in the render is an
 //     error before the install, because kustomize drops it silently. A
 //     target's patch lands on the release whose chart renders the Deployment:
-//     the agentgateway controller's on the agentgateway component. Two
+//     the agentgateway controller's on the agentgateway component. The
+//     workspace-manager's patch also hands its sync Jobs the same build
+//     (syncImagePatch): their image comes from the manager, not from a
+//     Deployment the override reaches. Two
 //     targets are no post-renderer: the `harness` target, since the platform
 //     Harness pins its image by digest through the connectivity values
 //     (kagent.harness.image, the values template), served by the lab
@@ -353,6 +356,39 @@ spec:
 	}
 }
 
+// The workspace-manager's sync image (`--sync-image` and its pull policy, in
+// their variable spelling): the image the manager's sync Jobs run. The
+// chart's Job template lives in a ConfigMap, which the dev image override
+// does not reach, so without them the Jobs keep the chart's image.
+const (
+	syncImageEnv           = "WORKSPACE_MANAGER_SYNC_IMAGE"
+	syncImagePullPolicyEnv = "WORKSPACE_MANAGER_SYNC_IMAGE_PULL_POLICY"
+)
+
+// syncImagePatch is patch 5's third half for the workspace-manager target:
+// the manager hands its sync Jobs the dev image it runs itself (labImageRef,
+// the ref its pod names), taken as side-loaded, so one build serves both.
+func syncImagePatch(target devImageTarget, ref string) kustomizePatch {
+	return kustomizePatch{
+		Target: map[string]string{kindKey: kindDeployment, nameKey: target.deployment},
+		Patch: literalYAML(fmt.Sprintf(`apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: %s
+spec:
+  template:
+    spec:
+      containers:
+        - name: %s
+          env:
+            - name: %s
+              value: %s
+            - name: %s
+              value: IfNotPresent
+`, target.deployment, target.container, syncImageEnv, labImageRef(ref), syncImagePullPolicyEnv)),
+	}
+}
+
 // slackAPIPatch is patch 6: the component's Slack Web API is the lab's
 // Service in front of the proof's fake.
 func slackAPIPatch() kustomizePatch {
@@ -576,6 +612,9 @@ func componentPostRenderers(cfg *config.Config, imageNames map[string]string, si
 		release := target.releaseOf(component)
 		images[release] = append(images[release], devImageOverride(name, cfg.Platform.DevImages[component]))
 		patches[release] = append(patches[release], pullPolicyPatch(target))
+		if component == workspaceManager {
+			patches[release] = append(patches[release], syncImagePatch(target, cfg.Platform.DevImages[component]))
+		}
 	}
 	out := map[string]string{}
 	for component, list := range patches {
