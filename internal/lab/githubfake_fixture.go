@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -175,6 +176,13 @@ const (
 // outside it but loopback.
 func githubFakeHost(domain string) string { return config.GitHubFakeHost(domain) }
 
+// githubFakeNames are the names the fake's TLS leaf carries: the lab's
+// GitHub, and the git and API hosts of its github.com shape (the instance
+// fake-bearer).
+func githubFakeNames(domain string) []string {
+	return []string{githubFakeHost(domain), config.GitHubFakeBearerHost(domain), config.GitHubFakeBearerAPIHost(domain)}
+}
+
 // EnsureGitHubFakeCredentials generates githubFakeCredentialsDir for the
 // platform domain: the TLS leaf re-minted whenever leaf policy says so (the
 // CA rotated, expiry, the domain), the App key pair and the client secret
@@ -188,13 +196,13 @@ func EnsureGitHubFakeCredentials(domain string) (string, error) {
 		return "", err
 	}
 	certPath := filepath.Join(githubFakeCredentialsDir, githubFakeTLSCert)
-	dns := []string{githubFakeHost(domain)}
+	dns := githubFakeNames(domain)
 	if reason := leafRemintReason(readCertFile(certPath), caCert, dns); reason != "" {
 		if err := mintLeaf(caCert, caKey, dns[0], dns, []net.IP{net.ParseIP("127.0.0.1")},
 			certPath, filepath.Join(githubFakeCredentialsDir, githubFakeTLSKey)); err != nil {
 			return "", err
 		}
-		fmt.Printf("Generated %s (%s; SAN: DNS:%s, IP:127.0.0.1)\n", certPath, reason, dns[0])
+		fmt.Printf("Generated %s (%s; SAN: DNS:%s, IP:127.0.0.1)\n", certPath, reason, strings.Join(dns, ", DNS:"))
 	}
 	keyPath := filepath.Join(githubFakeCredentialsDir, githubFakeAppKey)
 	if _, err := os.Stat(keyPath); os.IsNotExist(err) {

@@ -498,3 +498,33 @@ func TestWorkspaceGitLabProviderInstance(t *testing.T) {
 		t.Errorf("providers %v without the client id, want the fake alone", providers)
 	}
 }
+
+// fake-bearer beside the fake: the same App and Secret at the
+// github.com-shaped names, its apiURL on a host of its own, which CoreDNS
+// sends to the fake's Service with the git host; the fake alone renders
+// neither.
+func TestWorkspaceFakeBearerProvider(t *testing.T) {
+	stubWorkspacesProbe(t, true)
+	_, _, _, alone := renderWorkspaceTemplates(t, workspaceLab(""), nil)
+	if strings.Contains(alone, "github-bearer") {
+		t.Errorf("CoreDNS names fake-bearer's hosts without the instance:\n%s", alone)
+	}
+	cfg := workspaceLab("fake,fake-bearer")
+	if got, want := cfg.GitHubFakeBearerAPIURL(), "https://api.github-bearer.127.0.0.1.nip.io"; got != want {
+		t.Fatalf("fake-bearer's API URL %s, want %s", got, want)
+	}
+	values, _, _, coredns := renderWorkspaceTemplates(t, cfg, nil)
+	wm, providers := workspaceManagerBlock(t, values)
+	if len(providers) != 2 || providers[0]["name"] != config.WorkspaceProviderFake || providers[1]["name"] != config.WorkspaceProviderFakeBearer {
+		t.Fatalf("providers %v, want fake then fake-bearer", wm["providers"])
+	}
+	v, _ := providers[1]["values"].(map[string]any)
+	if v["url"] != cfg.GitHubFakeBearerURL() || v["apiURL"] != cfg.GitHubFakeBearerAPIURL() {
+		t.Errorf("fake-bearer's url %v, apiURL %v, want %s and %s", v["url"], v["apiURL"], cfg.GitHubFakeBearerURL(), cfg.GitHubFakeBearerAPIURL())
+	}
+	app, _ := v["app"].(map[string]any)
+	wantSecretRef(t, "fake-bearer app.privateKey", app["privateKey"], config.WorkspaceFakeSecretName, config.WorkspaceGitHubPrivateKeyKey)
+	if !strings.Contains(coredns, `name regex ^(api\.)?github-bearer\.127\.0\.0\.1\.nip\.io\. `+labGitHubService+".agent-platform.svc.cluster.local") {
+		t.Errorf("CoreDNS does not send fake-bearer's hosts to the fake's Service:\n%s", coredns)
+	}
+}

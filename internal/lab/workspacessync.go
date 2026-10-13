@@ -58,7 +58,7 @@ import (
 const WorkspacesPartSync = "sync"
 
 // WorkspacesParts are the parts `workspaces-test --part` takes.
-var WorkspacesParts = []string{WorkspacesPartSync, WorkspacesPartAccess, WorkspacesPartGitLab, WorkspacesPartSessions}
+var WorkspacesParts = []string{WorkspacesPartSync, WorkspacesPartAccess, WorkspacesPartGitLab, WorkspacesPartSessions, WorkspacesPartCallerCredential}
 
 const (
 	syncFilterWorkspace = "agentlab-sync-filter"

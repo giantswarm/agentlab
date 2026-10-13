@@ -21,6 +21,11 @@ import (
 //     fixture's; the App's key pair and the client secret are the lab's own
 //     (certs/github-fake, `agentlab github-fake credentials`), placed as the
 //     Secret agent-platform/workspace-fake by the install.
+//   - fake-bearer, beside the fake: the same GitHub and App as a
+//     github.com-shaped instance, its git host https://github-bearer.<domain>
+//     and its REST API at the root of https://api.github-bearer.<domain>, so
+//     the workspace-manager's grant names a Bearer API host beside the Basic
+//     git host (`workspaces-test --part caller-credential`).
 //   - github: a GitHub App of the lab's own on github.com, its App id and
 //     client id in agentlab.yaml, its private key and client secret in the
 //     Secret agent-platform/workspace-github, which the operator's secret
@@ -56,10 +61,11 @@ const (
 // into workspace-manager.providers. URL is the instance's web URL, the git
 // host: on a github instance the workspace-manager takes its REST API under
 // /api/v3 and empty is github.com; on a gitlab instance under /api/v4.
-// AppID and PrivateKeyKey are a github instance's App, TokenKey a gitlab
-// instance's group access token.
+// APIURL, when set, is the REST API's base URL instead. AppID and
+// PrivateKeyKey are a github instance's App, TokenKey a gitlab instance's
+// group access token.
 type workspaceProviderValues struct {
-	Name, Kind, URL, AppID, ClientID           string
+	Name, Kind, URL, APIURL, AppID, ClientID   string
 	Secret, PrivateKeyKey, SecretKey, TokenKey string
 }
 
@@ -81,6 +87,17 @@ func workspaceFakeValues(cfg *config.Config) (*workspaceProviderValues, error) {
 		PrivateKeyKey: config.WorkspaceGitHubPrivateKeyKey,
 		SecretKey:     config.GitHubClientSecretKey,
 	}, nil
+}
+
+// workspaceFakeBearerValues is the instance fake-bearer: the fake's App and
+// Secret at the lab's GitHub's github.com-shaped names.
+func workspaceFakeBearerValues(cfg *config.Config) (*workspaceProviderValues, error) {
+	v, err := workspaceFakeValues(cfg)
+	if err != nil {
+		return nil, err
+	}
+	v.Name, v.URL, v.APIURL = config.WorkspaceProviderFakeBearer, cfg.GitHubFakeBearerURL(), cfg.GitHubFakeBearerAPIURL()
+	return v, nil
 }
 
 // workspaceGitHubValuesFor is the instance github as agentlab.yaml configures
@@ -125,14 +142,14 @@ func workspaceGitLabValuesFor(cfg *config.Config) *workspaceProviderValues {
 }
 
 // workspaceProvidersFor are the instances a render without a cluster
-// carries, in the workspace-manager's order: the fake when configured, the
-// github and gitlab instances when configured with their ids.
+// carries, in the workspace-manager's order: the fake and fake-bearer when
+// configured, the github and gitlab instances when configured with their ids.
 func workspaceProvidersFor(cfg *config.Config) ([]workspaceProviderValues, error) {
 	return workspaceProviders(cfg, workspaceGitHubValuesFor(cfg), workspaceGitLabValuesFor(cfg))
 }
 
 // workspaceProvidersInstall are the instances the install renders: the fake
-// when configured, the github and gitlab instances as workspaceGitHubFor and
+// and fake-bearer when configured, the github and gitlab instances as workspaceGitHubFor and
 // workspaceGitLabFor allow them.
 func workspaceProvidersInstall(ctx context.Context, cfg *config.Config) ([]workspaceProviderValues, error) {
 	github, err := workspaceGitHubFor(ctx, cfg)
@@ -154,6 +171,13 @@ func workspaceProviders(cfg *config.Config, configured ...*workspaceProviderValu
 			return nil, err
 		}
 		providers = append(providers, *fake)
+	}
+	if cfg.WorkspaceFakeBearerProvider() {
+		bearer, err := workspaceFakeBearerValues(cfg)
+		if err != nil {
+			return nil, err
+		}
+		providers = append(providers, *bearer)
 	}
 	for _, p := range configured {
 		if p != nil {

@@ -1221,7 +1221,8 @@ workspaces:
 # The workspace-manager's provider instances (platform.workspaces.provider;
 # workspaceprovider.go), each of the chart's github kind: fake, the lab's own
 # GitHub at its URL (a GitHub Enterprise-shaped instance, its API under
-# /api/v3), and github, github.com. The base URL carries the gateway port,
+# /api/v3), fake-bearer, the same GitHub shaped like github.com (its apiURL
+# on a host of its own), and github, github.com. The base URL carries the gateway port,
 # which the chart's derivation from global.domain drops: the chart routes its
 # host (/signin, /connect/<instance>, /callback/<instance>) and forwards it,
 # and the lab Dex's agent-platform client lists <base>/signin. The github
@@ -1278,6 +1279,9 @@ workspace-manager:
       values:
 {{- with .URL }}
         url: {{ . }}
+{{- end }}
+{{- with .APIURL }}
+        apiURL: {{ . }}
 {{- end }}
 {{- if eq .Kind "gitlab" }}
         token: {name: {{ .Secret }}, key: {{ .TokenKey }}}

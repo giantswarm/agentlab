@@ -63,6 +63,14 @@ data:
             answer auto
         }
 {{- end }}
+{{- if .WorkspaceFakeBearer }}
+        # The same GitHub as the github.com-shaped instance fake-bearer: its
+        # git host and the API host beside it, both carried by the leaf.
+        rewrite stop {
+            name regex ^(api\.)?github-bearer\.{{ .DomainRegex }}\. agentlab-github.agent-platform.svc.cluster.local
+            answer auto
+        }
+{{- end }}
         # The wildcard matches the absolute name only: a search expansion
         # (<host>.<domain>.<namespace>.svc.cluster.local) falls through to
         # the kubernetes plugin's NXDOMAIN, and the resolver's last try, the

@@ -284,9 +284,9 @@ func workspaceSignInClient(cfg *config.Config) (*http.Client, error) {
 		return nil, err
 	}
 	walk := transport.Clone()
-	host := config.GitHubFakeHost(cfg.Platform.Domain)
+	hosts := []string{config.GitHubFakeHost(cfg.Platform.Domain), config.GitHubFakeBearerHost(cfg.Platform.Domain)}
 	walk.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		if h, _, err := net.SplitHostPort(addr); err == nil && h == host {
+		if h, _, err := net.SplitHostPort(addr); err == nil && slices.Contains(hosts, h) {
 			addr = github
 		}
 		return dialLab(ctx, network, addr)
