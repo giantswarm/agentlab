@@ -183,6 +183,20 @@ func TestWorkspaceManagerFlagJudges(t *testing.T) {
 	}
 }
 
+func TestSessionPollJudge(t *testing.T) {
+	if d, err := judgeSessionPoll([]string{"serve", sessionsPollArg + "30s"}); err != nil || d != 30*time.Second {
+		t.Fatalf("judgeSessionPoll = %s, %v", d, err)
+	}
+	if d, err := judgeSessionPoll([]string{"serve"}); err != nil || d != 0 {
+		t.Fatalf("no poll flag: %s, %v", d, err)
+	}
+	for _, poll := range []string{"soon", "0s", "5m"} {
+		if _, err := judgeSessionPoll([]string{sessionsPollArg + poll}); err == nil {
+			t.Errorf("poll %s judged fine", poll)
+		}
+	}
+}
+
 func TestSessionsTimingLines(t *testing.T) {
 	at := time.Date(2026, 10, 12, 22, 0, 0, 0, time.UTC)
 	lines := sessionsTimingLines([]*sessionRun{{
