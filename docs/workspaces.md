@@ -422,8 +422,11 @@ platform`. Without any of them it fails at once with the reason.
    `agentlab-only-*` file it can reach and tries a write into `/mirrors`: it
    finds its own file only, and the write is refused.
 7. **Delete**: a cycle brings the mirrors up to the push; the last Session is
-   deleted; the next cycle removes its directory (the workspace-manager
-   removes a deleted Session's directory at its next cycle, not at once), the
+   deleted, and no cycle is requested: within 2 minutes its directory is
+   gone and the workspace's last cycle has the trigger `sessionDeleted` (the
+   workspace-manager lists kagent's Sessions every `--sessions-poll` and
+   removes a deleted one's directory at once, from 0.6.0; before, without
+   that flag, the stage requests the next cycle, which removes it), the
    other directories, the mirrors' heads and the volume untouched.
 8. **No workspace**: a Session started without a grant on each Harness works
    in an empty directory, sees no `/mirrors`, and its turn completes.
