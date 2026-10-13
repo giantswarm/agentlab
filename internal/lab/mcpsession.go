@@ -47,8 +47,11 @@ type musterSession struct {
 	client *http.Client
 	url    string
 	token  string
-	id     string
-	seq    int
+	// renew, when set, answers the token before every request: a session
+	// that outlives one token (personToken) sends the current one.
+	renew func() (string, error)
+	id    string
+	seq   int
 	// headers are sent on every request of the session on top of the MCP
 	// ones — the way an agent's kagent runtime sends the X-Muster-Toolset
 	// header its Agent CR declares (headersFrom). Set per request through
@@ -103,6 +106,13 @@ func openMusterSessionAt(base, token, clientName string) (*musterSession, error)
 }
 
 func (s *musterSession) post(sessionID, payload string) (*http.Response, error) {
+	if s.renew != nil {
+		token, err := s.renew()
+		if err != nil {
+			return nil, err
+		}
+		s.token = token
+	}
 	req, err := http.NewRequest(http.MethodPost, s.url, strings.NewReader(payload))
 	if err != nil {
 		return nil, err

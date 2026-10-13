@@ -114,8 +114,8 @@ func newFakeKagent() *fakeKagent {
 }
 
 // serve starts the fake on a bufconn and returns a client dialled to it as
-// the person whose token is given.
-func (f *fakeKagent) serve(t *testing.T, token string) *kagentAPI {
+// the person whose token is given, with the dial options given.
+func (f *fakeKagent) serve(t *testing.T, token string, opts ...grpc.DialOption) *kagentAPI {
 	t.Helper()
 	lis := bufconn.Listen(1 << 20)
 	srv := grpc.NewServer(grpc.UnknownServiceHandler(f.legacySubstrateStatus))
@@ -126,9 +126,9 @@ func (f *fakeKagent) serve(t *testing.T, token string) *kagentAPI {
 	apiv1alpha1.RegisterSystemServiceServer(srv, f)
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
-	conn, err := grpc.NewClient("passthrough:///bufnet",
+	conn, err := grpc.NewClient("passthrough:///bufnet", append(opts,
 		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return lis.Dial() }),
-		grpc.WithTransportCredentials(insecure.NewCredentials()))
+		grpc.WithTransportCredentials(insecure.NewCredentials()))...)
 	if err != nil {
 		t.Fatal(err)
 	}
