@@ -1242,6 +1242,9 @@ func workspaceVolumePod(name, claim, script string) *corev1.Pod {
 		PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: claim},
 	}}}
 	pod.Spec.Containers[0].VolumeMounts = []corev1.VolumeMount{{Name: workspacesTestVolume, MountPath: workspacesTestMountPath}}
+	// The user has no home in the image: git's global config goes to /tmp,
+	// as the sync Job's does.
+	pod.Spec.Containers[0].Env = []corev1.EnvVar{{Name: "HOME", Value: "/tmp"}}
 	user := workspaceVolumeUser
 	pod.Spec.SecurityContext = &corev1.PodSecurityContext{RunAsUser: &user, RunAsGroup: &user, FSGroup: &user}
 	restrictPodSecurity(pod)

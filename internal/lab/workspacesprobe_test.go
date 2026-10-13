@@ -85,6 +85,9 @@ func TestWorkspaceVolumeProbesAreRestricted(t *testing.T) {
 				t.Errorf("%s: %s is %v, want the sync Job's %d", name, field, got, workspaceVolumeUser)
 			}
 		}
+		if env := pod.Spec.Containers[0].Env; len(env) != 1 || env[0].Name != "HOME" || env[0].Value != "/tmp" {
+			t.Errorf("%s: env %+v, want HOME=/tmp: the user has no home, and git config --global writes there", name, env)
+		}
 		if pod.Spec.Volumes[0].PersistentVolumeClaim == nil || pod.Spec.Volumes[0].PersistentVolumeClaim.ClaimName != "claim" {
 			t.Errorf("%s: the first volume is not the workspace's claim: %+v", name, pod.Spec.Volumes[0])
 		}
