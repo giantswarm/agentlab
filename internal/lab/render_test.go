@@ -1240,7 +1240,68 @@ func TestPlatformValuesWorkspaceManagerDevImage(t *testing.T) {
 	if imgs, _ := k["images"].([]any); len(imgs) != 1 || imgs[0].(map[string]any)["name"] != "gsoci.azurecr.io/giantswarm/workspace-manager" || imgs[0].(map[string]any)["newName"] != "localhost/workspace-manager" || imgs[0].(map[string]any)["newTag"] != "dev-5a6b" {
 		t.Errorf("workspace-manager dev image override: %v", k["images"])
 	}
-	if patches, _ := k["patches"].([]any); len(patches) != 1 || !strings.Contains(fmt.Sprint(patches[0]), "name: workspace-manager\n          imagePullPolicy: IfNotPresent") {
-		t.Errorf("workspace-manager: want the pull-policy patch on container workspace-manager, got %v", k["patches"])
+	patches, _ := k["patches"].([]any)
+	if len(patches) != 2 || !strings.Contains(fmt.Sprint(patches[0]), "name: workspace-manager\n          imagePullPolicy: IfNotPresent") {
+		t.Fatalf("workspace-manager: want the pull-policy and the sync-image patch on container workspace-manager, got %v", k["patches"])
 	}
+	if env := workspaceManagerPatchEnv(t, patches[1]); env[syncImageEnv] != "localhost/workspace-manager:dev-5a6b" || env[syncImagePullPolicyEnv] != "IfNotPresent" {
+		t.Errorf("workspace-manager sync image: want %s=localhost/workspace-manager:dev-5a6b and %s=IfNotPresent, got %v", syncImageEnv, syncImagePullPolicyEnv, env)
+	}
+}
+
+// Without platform.devImages.workspace-manager the manager is told no sync
+// image, so its sync Jobs keep the chart's.
+func TestPlatformValuesWorkspaceManagerSyncImageChartDefault(t *testing.T) {
+	cfg := config.Default()
+	cfg.Platform.Workspaces.Enabled = true
+	cfg.Platform.DevImages = map[string]string{"muster": "muster:dev-1a2b"}
+	postRenderers, err := componentPostRenderers(cfg, defaultDevImageNames(cfg), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := renderTemplate(cfg, platformValuesTemplate, func(d *tmplData) { d.PostRenderers = postRenderers })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), syncImageEnv) {
+		t.Errorf("the values set %s without the workspace-manager dev image:\n%s", syncImageEnv, out)
+	}
+}
+
+// workspaceManagerPatchEnv parses one postRenderers patch on Deployment
+// workspace-manager and returns its container workspace-manager's env.
+func workspaceManagerPatchEnv(t *testing.T, entry any) map[string]string {
+	t.Helper()
+	e := entry.(map[string]any)
+	if target := e["target"].(map[string]any); target[kindKey] != kindDeployment || target[nameKey] != workspaceManager {
+		t.Fatalf("patch target: want Deployment %s, got %v", workspaceManager, target)
+	}
+	var d struct {
+		Spec struct {
+			Template struct {
+				Spec struct {
+					Containers []struct {
+						Name string `yaml:"name"`
+						Env  []struct {
+							Name  string `yaml:"name"`
+							Value string `yaml:"value"`
+						} `yaml:"env"`
+					} `yaml:"containers"`
+				} `yaml:"spec"`
+			} `yaml:"template"`
+		} `yaml:"spec"`
+	}
+	if err := yaml.Unmarshal([]byte(e["patch"].(string)), &d); err != nil {
+		t.Fatalf("%v\n%s", err, e["patch"])
+	}
+	env := map[string]string{}
+	for _, c := range d.Spec.Template.Spec.Containers {
+		if c.Name != workspaceManager {
+			t.Errorf("patch container %q, want %s", c.Name, workspaceManager)
+		}
+		for _, v := range c.Env {
+			env[v.Name] = v.Value
+		}
+	}
+	return env
 }
