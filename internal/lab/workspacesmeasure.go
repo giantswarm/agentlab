@@ -1728,10 +1728,13 @@ func (m *measurement) writeReport() error {
 	return nil
 }
 
+// sessionOwnerLine starts each line of sessionOwnersScript.
+const sessionOwnerLine = "owner"
+
 // sessionOwnersScript prints the owner of every session directory as
 // `owner <id> <uid> <gid>`.
 const sessionOwnersScript = `for d in /workspace/` + workspacesTestSessions + `/*/; do test -d "$d" || continue; ` +
-	`echo "owner $(basename "$d") $(stat -c '%u %g' "$d")"; done; true
+	`echo "` + sessionOwnerLine + ` $(basename "$d") $(stat -c '%u %g' "$d")"; done; true
 `
 
 // parseSessionOwners reads sessionOwnersScript's lines.
@@ -1739,7 +1742,7 @@ func parseSessionOwners(out string) map[string]volumeOwner {
 	owners := map[string]volumeOwner{}
 	for _, line := range strings.Split(out, "\n") {
 		f := strings.Fields(line)
-		if len(f) != 4 || f[0] != "owner" {
+		if len(f) != 4 || f[0] != sessionOwnerLine {
 			continue
 		}
 		uid, uerr := strconv.ParseInt(f[2], 10, 64)

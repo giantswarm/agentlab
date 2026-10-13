@@ -114,9 +114,9 @@ func TestRestrictedViolationsRefuseABarePod(t *testing.T) {
 func TestMeasureProbesRunAsSessionOwner(t *testing.T) {
 	actor := volumeOwner{65532, 65532}
 	for name, pod := range map[string]*corev1.Pod{
-		"dirs":  measureVolumePod("claim", "dirs", sessionsDirectoriesScript, nil, actor),
-		"clear": measureVolumePod("claim", "clear", measureClearSessionsScript(actor), nil, actor),
-		"git":   measureVolumePod("claim", "git", measureGitScript("o/r", "main", ""), nil, actor),
+		"dirs":      measureVolumePod("claim", "dirs", sessionsDirectoriesScript, nil, actor),
+		"clear":     measureVolumePod("claim", "clear", measureClearSessionsScript(actor), nil, actor),
+		"git probe": measureVolumePod("claim", "git", measureGitScript("o/r", "main", ""), nil, actor),
 	} {
 		if v := restrictedViolations(pod); len(v) > 0 {
 			t.Errorf("%s: not PodSecurity restricted: %v", name, v)
