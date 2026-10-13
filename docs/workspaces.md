@@ -529,7 +529,7 @@ call to the first read that sees its end (reads every 500 ms):
 | Session directory setup | `start_session` called with the grant → the setup's record `.kagent/workspace.json` in the session directory: the actor Running, every clone in place, the pushed repository fetched |
 | Setup in the actor | the first turn sent → the same record |
 | On-demand fetch | after another push, the setup's own `git fetch --quiet --prune origin` timed in the Session's sandbox by its second turn → the fetch ended at the pushed head |
-| First checkout, `git status`, build | in a pod with the Session's mounts (its directory at `/workspace`, the mirrors read-only at `/mirrors`): `git switch <default branch>` in the Session's clone (the Harness's first checkout), `git status --porcelain`, `go build ./...` with a cold build cache beside the clone; then the same in a clone of a copy of the mirror on an `emptyDir`, the node's local disk |
+| First checkout, `git status`, build | in a pod with the Session's mounts (its directory at `/workspace`, the mirrors read-only at `/mirrors`): `git switch <default branch>` in the Session's clone (the Harness's first checkout), `git status --porcelain`, then the build with a cold module and build cache beside the clone as two figures: its download (`go list -deps ./...` through the module proxy, `--goproxy`, default the image's `proxy.golang.org`; a vendored module downloads nothing) and its compile (`go build ./...` with the proxy off); then the same in a clone of a copy of the mirror on an `emptyDir`, the node's local disk |
 | Session directory size | `du -sb` of the directory after the turns and the checkout, the build's cache and output removed |
 
 Run 1 also times **one online expansion** of the small workspace's volume
@@ -550,9 +550,14 @@ directory (`state/workspaces-measure-<time>/`, or `--run-dir`) as
 `workspaces-measure.json` and `workspaces-measure.md`, and printed: per
 workspace and figure what it measured from and to, its samples, median, p90
 (nearest rank) and max, the StorageClass and the driver. A figure the cluster
-cannot report is listed as not available with the reason, never estimated.
-A run that ends early still writes the report: the figures no run reached are
-not available, and the report says why the run ended. In the lab the NFS
+cannot report is listed as not available with the reason, never estimated:
+a repository without a root `go.mod`, or whose build fails, has its build
+not available with the build's last error line, and the run goes on. A probe
+pod that fails costs only its own figures of that run: every figure it
+reported is kept, the report lists it under **Probes that failed** (run,
+workspace, probe, reason), and the run goes on. A run that ends early still
+writes the report: the figures no run reached are not available, and the
+report says why the run ended. In the lab the NFS
 export lives on the node's own disk, so the volume against the local disk
 measures the NFS protocol, not a network.
 

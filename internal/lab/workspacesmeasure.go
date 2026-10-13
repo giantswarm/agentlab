@@ -89,6 +89,9 @@ const (
 	// measureNoBuild is the git probe's word for a repository without a Go
 	// module.
 	measureNoBuild = "none"
+	// measureVendored is its word for a module that vendors its
+	// dependencies: nothing to download.
+	measureVendored = "vendored"
 )
 
 // The lab's small workspace: two repositories of one owner, the docs
@@ -110,6 +113,9 @@ type WorkspacesMeasureOptions struct {
 	LargeRepoMiB int
 	// ReadyTimeout bounds each wait: a cycle, a Session, a probe pod.
 	ReadyTimeout time.Duration
+	// GoProxy is the module proxy the build's download goes through; "" is
+	// the git image's (Go's default, proxy.golang.org).
+	GoProxy string
 	// RunDir is where the report is written; "" is a directory of its own
 	// under the state directory.
 	RunDir string
@@ -140,6 +146,8 @@ func (o WorkspacesMeasureOptions) validate() error {
 		return fmt.Errorf("--runs %d: at least 1", o.Runs)
 	case o.LargeRepoMiB < 0 || o.LargeRepoMiB > githubFakeMaxGeneratedMiB:
 		return fmt.Errorf("--large-repo-mib %d: 1 to %d, or 0 for the fixture's", o.LargeRepoMiB, githubFakeMaxGeneratedMiB)
+	case strings.ContainsAny(o.GoProxy, "'\\ \t\n"):
+		return fmt.Errorf("--goproxy %q: a GOPROXY list, comma- or pipe-separated, without quotes or spaces", o.GoProxy)
 	}
 	labOnly := map[string]bool{"[email]": o.Email != "", "--large-repo-mib": o.LargeRepoMiB != 0}
 	remoteOnly := map[string]bool{"--organization": o.Organization != "", "--provider": o.Provider != "", "--small-repos": len(o.SmallRepos) > 0,
@@ -261,6 +269,7 @@ type measurement struct {
 	generated string
 	listedAt  map[string]time.Time // owner → the manager's last listing of it
 	ws        []*measureWorkspace
+	runNo     int // the run being measured, for a failed probe's record
 	created   []string
 	report    measureReport
 	runDir    string
@@ -328,6 +337,7 @@ func (m *measurement) run(p *proofStages) error {
 		return err
 	}
 	for run := 1; run <= m.opts.Runs; run++ {
+		m.runNo = run
 		p.begin(fmt.Sprintf("run %d: first sync", run), "Run %d of %d: create_workspace %s, each first cycle timed", run, m.opts.Runs, strings.Join(m.names(), " and "))
 		for _, w := range m.ws {
 			if err := m.firstSync(w, run == 1); err != nil {
@@ -391,8 +401,11 @@ func (m *measurement) preconditions() error {
 			w.samples.notAvailable(figOnDemandFetch, "the measurement pushes only to the lab's GitHub")
 		}
 		if m.sessions != "" {
-			for _, key := range []string{figSessionStart, figSessionSetup, figOnDemandFetch, figCheckoutVolume, figCheckoutLocal, figStatusVolume, figStatusLocal, figBuildVolume, figBuildLocal, figSessionBytes} {
+			for _, key := range []string{figSessionStart, figSessionSetup, figOnDemandFetch, figSessionBytes} {
 				w.samples.notAvailable(key, m.sessions)
+			}
+			for _, f := range measureGitFigures {
+				w.samples.notAvailable(f.fig, m.sessions)
 			}
 		}
 		if err := m.leftover(w); err != nil {
@@ -1051,26 +1064,24 @@ func (m *measurement) session(w *measureWorkspace, last bool) error {
 	if err != nil {
 		return err
 	}
-	record, err := m.setupRecord(w, id)
-	if err != nil {
-		return err
-	}
-	w.samples.since(figSessionStart, startCalled, record.SetUp)
-	w.samples.since(figSessionSetup, sent, record.SetUp)
-	note("%s: Session %s works in %s (%s); start_session to the directory set up %s, the first turn sent to set up %s; cloned %s, fetched %s",
-		w.name, id, first.pwd, headsLine(first.heads), record.SetUp.Sub(startCalled).Round(10*time.Millisecond), record.SetUp.Sub(sent).Round(10*time.Millisecond),
-		strings.Join(record.Cloned, ", "), cmpOr(strings.Join(record.Fetched, ", "), "nothing"))
-	for _, problem := range record.Problems {
-		warn("%s: the setup's problem: %s: %s", w.name, problem.Repository, excerpt(problem.Reason, 300))
+	if record, err := m.setupRecord(w, id); err != nil {
+		m.probeFailed(w, "dirs", err, figSessionStart, figSessionSetup)
+	} else {
+		w.samples.since(figSessionStart, startCalled, record.SetUp)
+		w.samples.since(figSessionSetup, sent, record.SetUp)
+		note("%s: Session %s works in %s (%s); start_session to the directory set up %s, the first turn sent to set up %s; cloned %s, fetched %s",
+			w.name, id, first.pwd, headsLine(first.heads), record.SetUp.Sub(startCalled).Round(10*time.Millisecond), record.SetUp.Sub(sent).Round(10*time.Millisecond),
+			strings.Join(record.Cloned, ", "), cmpOr(strings.Join(record.Fetched, ", "), "nothing"))
+		for _, problem := range record.Problems {
+			warn("%s: the setup's problem: %s: %s", w.name, problem.Repository, excerpt(problem.Reason, 300))
+		}
 	}
 	if w.pushed != "" {
 		if err := m.onDemandFetch(ctx, w, ks); err != nil {
 			return err
 		}
 	}
-	if err := m.gitWork(w, id); err != nil {
-		return err
-	}
+	m.gitWork(w, id)
 	if err := m.storage(w, last); err != nil {
 		return err
 	}
@@ -1228,14 +1239,50 @@ func (m *measurement) onDemandFetch(ctx context.Context, w *measureWorkspace, ks
 	return nil
 }
 
+// measureBuildFunction is the git probe's `build <where> <dir>`: in the
+// working directory's Go module, with a cold module and build cache in dir,
+// the download of every module the build needs (through goproxy, "" the
+// image's) and then the compile with the proxy off, each its own figure, so
+// the volume against the local disk compares the compile. A vendored module
+// downloads nothing. Its lines are `measure <figure>-<where>=<ms|none|vendored|fail>`
+// and, for a failure, `measure-why <figure>-<where> <the last error line>`.
+// It never fails the script: a failed build is a figure not available.
+func measureBuildFunction(goproxy string) string {
+	proxy := ""
+	if goproxy != "" {
+		proxy = "export GOPROXY='" + goproxy + "'; "
+	}
+	return `buildfail() { echo "measure $1=fail"; tail -n 20 "$2" >&2; echo "measure-why $1 $(grep -v '^go: downloading' "$2" | grep . | tail -n 1)"; }
+build() (
+  w=$1; d=$2
+  if [ ! -f go.mod ]; then echo "measure download-$w=` + measureNoBuild + `"; echo "measure build-$w=` + measureNoBuild + `"; exit 0; fi
+  mkdir -p "$d/out"
+  export GOCACHE="$d/cache" GOPATH="$d/gopath" GOTOOLCHAIN=local GOFLAGS="-mod=mod -modcacherw"
+  if [ -f vendor/modules.txt ]; then
+    export GOFLAGS="-mod=vendor"; echo "measure download-$w=` + measureVendored + `"
+  else
+    ` + proxy + `a=$(ms)
+    if ! go list -deps ./... >/dev/null 2>"$d/err"; then
+      buildfail "download-$w" "$d/err"; echo "measure build-$w=fail"; echo "measure-why build-$w the download failed"; exit 0
+    fi
+    z=$(ms); echo "measure download-$w=$((z-a))"
+  fi
+  export GOPROXY=off
+  a=$(ms)
+  if ! go build -o "$d/out/" ./... 2>"$d/err"; then buildfail "build-$w" "$d/err"; exit 0; fi
+  z=$(ms); echo "measure build-$w=$((z-a))"
+)
+`
+}
+
 // measureGitScript times, in the Session's clone of repo on the volume and
 // then in a clone of a copy of its mirror on the node's local disk, the
 // first checkout (the Harness's `git switch` of the default branch), `git
-// status` and a cold `go build ./...`; it reports the session directory's
-// size after the checkout. Its lines are `measure key=value`.
-func measureGitScript(repo, branch string) string {
+// status` and a cold build (measureBuildFunction); it reports the session
+// directory's size after the checkout. Its lines are `measure key=value`.
+func measureGitScript(repo, branch, goproxy string) string {
 	return workspacesGitSetup + `ms() { date +%s%3N; }
-c=/workspace/` + repo + `
+` + measureBuildFunction(goproxy) + `c=/workspace/` + repo + `
 test -d "$c/.git" || { echo "no clone $c in the session directory"; exit 1; }
 alt=$(head -n 1 "$c/.git/objects/info/alternates")
 test -d "$alt" || { echo "the clone borrows from $alt, which this pod does not mount"; exit 1; }
@@ -1243,11 +1290,10 @@ b=` + branch + `
 if [ -z "$b" ]; then b=$(git -C "$c" rev-parse --abbrev-ref origin/HEAD 2>/dev/null | sed 's|^origin/||'); fi
 if [ -z "$b" ] || [ "$b" = HEAD ]; then b=$(git -C "$c" for-each-ref --format='%(refname:lstrip=3)' refs/remotes/origin | grep -v '^HEAD$' | head -n 1); fi
 echo "measure branch=$b workers=$(git -C "$c" config checkout.workers) untracked-cache=$(git -C "$c" config core.untrackedCache) many-files=$(git -C "$c" config feature.manyFiles)"
-build() { if [ ! -f go.mod ]; then echo none; return; fi; mkdir -p "$1/out"; a=$(ms); GOCACHE="$1/cache" GOPATH="$1/gopath" GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local go build -o "$1/out/" ./... >&2; z=$(ms); echo $((z-a)); }
 a=$(ms); git -C "$c" switch -q "$b"; z=$(ms); echo "measure checkout-volume=$((z-a))"
 a=$(ms); git -C "$c" status --porcelain >/dev/null; z=$(ms); echo "measure status-volume=$((z-a))"
 echo "measure session-bytes=$(du -sb /workspace | cut -f1)"
-echo "measure build-volume=$(cd "$c" && build /workspace/` + measureBuildDir + `)"
+(cd "$c" && build volume /workspace/` + measureBuildDir + `)
 # NFS keeps a file another process still holds as .nfs*: the directory goes
 # once it is let go, or with the workspace.
 for i in 1 2 3; do rm -rf /workspace/` + measureBuildDir + ` 2>/dev/null && break; sleep 1; done
@@ -1256,58 +1302,120 @@ git clone -q --shared --no-checkout --config checkout.workers=0 --config core.un
 git -C /local/clone update-ref -d "$(git -C /local/clone symbolic-ref -q HEAD)"
 a=$(ms); git -C /local/clone switch -q "$b"; z=$(ms); echo "measure checkout-local=$((z-a))"
 a=$(ms); git -C /local/clone status --porcelain >/dev/null; z=$(ms); echo "measure status-local=$((z-a))"
-echo "measure build-local=$(cd /local/clone && build /local/build)"
+(cd /local/clone && build local /local/build)
 `
+}
+
+// measureGitFigures are the git probe's keys and their figures.
+var measureGitFigures = []struct{ key, fig string }{
+	{"checkout-volume", figCheckoutVolume}, {"checkout-local", figCheckoutLocal},
+	{"status-volume", figStatusVolume}, {"status-local", figStatusLocal},
+	{"download-volume", figDownloadVolume}, {"download-local", figDownloadLocal},
+	{"build-volume", figBuildVolume}, {"build-local", figBuildLocal},
+	{"session-bytes", figSessionBytes},
+}
+
+// measureGitProbe is what the git probe reported: a figure's value, or why
+// it has none.
+type measureGitProbe struct {
+	values map[string]string
+	why    map[string]string
+}
+
+// parseGitProbe reads the git probe's `measure` and `measure-why` lines.
+func parseGitProbe(out string) measureGitProbe {
+	p := measureGitProbe{values: map[string]string{}, why: map[string]string{}}
+	for _, line := range strings.Split(out, "\n") {
+		if rest, ok := strings.CutPrefix(line, "measure-why "); ok {
+			k, reason, _ := strings.Cut(rest, " ")
+			p.why[k] = strings.TrimSpace(reason)
+		} else if rest, ok := strings.CutPrefix(line, "measure "); ok {
+			for _, f := range strings.Fields(rest) {
+				if k, v, ok := strings.Cut(f, "="); ok {
+					p.values[k] = v
+				}
+			}
+		}
+	}
+	return p
+}
+
+// value is a figure's value in its unit (the probe's milliseconds as
+// seconds), or why it is not available.
+func (p measureGitProbe) value(key, worked string) (float64, string) {
+	raw, ok := p.values[key]
+	switch {
+	case !ok:
+		return 0, "the git probe reported no " + key
+	case raw == measureNoBuild:
+		return 0, worked + " defines no Go module at its root to build"
+	case raw == measureVendored:
+		return 0, worked + " vendors its modules: the build downloads nothing"
+	case raw == "fail":
+		return 0, "the build failed: " + cmpOr(p.why[key], "no error line")
+	}
+	v, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return 0, fmt.Sprintf("the git probe reported %s=%q", key, raw)
+	}
+	if key == "session-bytes" {
+		return v, ""
+	}
+	return v / 1000, ""
 }
 
 // gitWork runs measureGitScript in a pod with the Session's mounts (its
 // directory read-write at the working directory, the mirrors read-only) and
-// an emptyDir as the local disk.
-func (m *measurement) gitWork(w *measureWorkspace, id string) error {
+// an emptyDir as the local disk. Every figure the probe reports is kept; one
+// it cannot report is not available with the reason, and a failed probe is
+// the report's, never the run's end.
+func (m *measurement) gitWork(w *measureWorkspace, id string) {
 	mounts := []corev1.VolumeMount{
 		{Name: workspacesTestVolume, MountPath: workspacesTestMountPath, SubPath: workspacesTestSessions + "/" + id},
 		{Name: workspacesTestVolume, MountPath: workspacesActorMirrorsPath, SubPath: workspacesTestMirrors, ReadOnly: true},
 		{Name: measureLocalVolume, MountPath: "/" + measureLocalVolume},
 	}
-	out, err := m.onVolume(w, "git", measureGitScript(w.worked, w.branch), mounts)
+	out, err := m.onVolume(w, "git", measureGitScript(w.worked, w.branch, m.opts.GoProxy), mounts)
 	if err != nil {
-		return err
+		// The probe's output up to its failure still carries figures.
+		out = err.Error()
+		m.failed(w, "git", err)
 	}
-	values := map[string]string{}
-	for _, line := range strings.Split(out, "\n") {
-		if rest, ok := strings.CutPrefix(line, "measure "); ok {
-			for _, f := range strings.Fields(rest) {
-				if k, v, ok := strings.Cut(f, "="); ok {
-					values[k] = v
-				}
+	p := parseGitProbe(out)
+	for _, f := range measureGitFigures {
+		v, why := p.value(f.key, w.worked)
+		if why != "" {
+			if err != nil {
+				why = "the git probe failed"
 			}
-		}
-	}
-	for _, f := range []struct{ key, fig string }{
-		{"checkout-volume", figCheckoutVolume}, {"checkout-local", figCheckoutLocal},
-		{"status-volume", figStatusVolume}, {"status-local", figStatusLocal},
-		{"build-volume", figBuildVolume}, {"build-local", figBuildLocal},
-	} {
-		raw := values[f.key]
-		if raw == measureNoBuild {
-			w.samples.notAvailable(f.fig, w.worked+" defines no Go module to build")
+			w.samples.notAvailable(f.fig, why)
 			continue
 		}
-		v, err := strconv.ParseFloat(raw, 64)
-		if err != nil {
-			return fmt.Errorf("the git probe on %s reported %s=%q:\n%s", w.name, f.key, raw, out)
+		w.samples.add(f.fig, v)
+	}
+	for _, key := range []string{"download-volume", "build-volume", "download-local", "build-local"} {
+		if p.values[key] == "fail" {
+			m.failed(w, "git ("+key+")", errors.New(cmpOr(p.why[key], "no error line")))
 		}
-		w.samples.add(f.fig, v/1000)
 	}
-	bytes, err := strconv.ParseFloat(values["session-bytes"], 64)
-	if err != nil {
-		return fmt.Errorf("the git probe on %s reported session-bytes=%q:\n%s", w.name, values["session-bytes"], out)
+	note("%s: in %s (branch %s): checkout %s ms on the volume, %s ms local; status %s / %s ms; download %s / %s ms; compile %s / %s ms; the session directory %s B",
+		w.name, w.worked, p.values["branch"], p.values["checkout-volume"], p.values["checkout-local"], p.values["status-volume"], p.values["status-local"],
+		p.values["download-volume"], p.values["download-local"], p.values["build-volume"], p.values["build-local"], p.values["session-bytes"])
+}
+
+// failed records a failed probe in the report and warns.
+func (m *measurement) failed(w *measureWorkspace, probe string, err error) {
+	reason := excerpt(err.Error(), 400)
+	m.report.Failed = append(m.report.Failed, measureFailedProbe{Run: m.runNo, Workspace: w.name, Probe: probe, Reason: reason})
+	warn("run %d, %s: the %s probe failed, its figures of this run are not available: %s", m.runNo, w.name, probe, reason)
+}
+
+// probeFailed records a failed probe and its figures as not available.
+func (m *measurement) probeFailed(w *measureWorkspace, probe string, err error, figs ...string) {
+	m.failed(w, probe, err)
+	for _, f := range figs {
+		w.samples.notAvailable(f, "the "+probe+" probe failed")
 	}
-	w.samples.add(figSessionBytes, bytes)
-	note("%s: in %s (branch %s): checkout %s ms on the volume, %s ms local; status %s / %s ms; build %s / %s ms; the session directory %s",
-		w.name, w.worked, values["branch"], values["checkout-volume"], values["checkout-local"], values["status-volume"], values["status-local"],
-		values["build-volume"], values["build-local"], formatBytes(int64(bytes)))
-	return nil
 }
 
 // measureStorageScript reads the volume's use and its filesystem's size.
@@ -1324,7 +1432,9 @@ func (m *measurement) storage(w *measureWorkspace, last bool) error {
 	}
 	out, err := m.onVolume(w, "storage", measureStorageScript, nil)
 	if err != nil {
-		return err
+		// The standing storage stays unread: the report says so.
+		m.failed(w, "storage", err)
+		return nil
 	}
 	num := func(key string) int64 {
 		v, _ := strconv.ParseInt(probeValue(out, key), 10, 64)
