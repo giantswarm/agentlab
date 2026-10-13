@@ -772,10 +772,11 @@ func (a *kagentAPI) resumeSession(ctx context.Context, id string) (*apiv1alpha1.
 
 // deleteSession is SessionService/DeleteSession; a session that is already
 // gone is success. A session whose runtime cleanup or lifecycle work is still
-// running answers FailedPrecondition: that is retried until
-// sessionSettleTimeout.
+// running answers FailedPrecondition, and a connection the gateway closed
+// while it sat idle answers Unavailable: the delete is idempotent, so both
+// are retried until sessionSettleTimeout.
 func (a *kagentAPI) deleteSession(ctx context.Context, id string) error {
-	return untilSettled(ctx, "DeleteSession", id, sessionSettleTimeout, isFailedPrecondition, func() error {
+	return untilSettled(ctx, "DeleteSession", id, sessionSettleTimeout, deleteRetryable, func() error {
 		_, err := a.sessions.DeleteSession(a.callCtx(ctx), &apiv1alpha1.DeleteSessionRequest{SessionId: id})
 		if status.Code(err) == codes.NotFound {
 			return nil
@@ -793,6 +794,12 @@ func notYetSettled(err error) bool {
 
 func isFailedPrecondition(err error) bool {
 	return status.Code(err) == codes.FailedPrecondition
+}
+
+// deleteRetryable is a DeleteSession answer worth another attempt: the
+// Session not yet settled, or the connection gone (Unavailable).
+func deleteRetryable(err error) bool {
+	return isFailedPrecondition(err) || status.Code(err) == codes.Unavailable
 }
 
 // untilSettled runs call on the session until it answers anything settling
