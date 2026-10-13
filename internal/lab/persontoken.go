@@ -34,6 +34,12 @@ const (
 	// personTokenOpaque is how long a token without an exp claim is kept
 	// before it is asked for again.
 	personTokenOpaque = time.Minute
+	// personTokenFetchAttempts bounds how often a failing source is asked
+	// before its failure is the call's: a sign-in that fails once (the
+	// muster CLI exiting on a transient error) is asked again, pausing from
+	// personTokenFetchBackoff, doubling.
+	personTokenFetchAttempts = 4
+	personTokenFetchBackoff  = 2 * time.Second
 )
 
 func newPersonToken(fetch func() (access, id string, err error)) *personToken {
@@ -83,7 +89,7 @@ func (p *personToken) tokens() (string, string, error) {
 	}
 	renewal := p.id != ""
 	for attempt := 0; ; attempt++ {
-		access, id, err := p.fetch()
+		access, id, err := p.fetchRetrying()
 		if err != nil {
 			return "", "", err
 		}
@@ -101,6 +107,25 @@ func (p *personToken) tokens() (string, string, error) {
 		wait := max(expiry.Sub(p.now())+time.Second, 0)
 		note("the person's token expires at %s, its sign-in renews it then: waiting %s", expiry.Local().Format(time.TimeOnly), wait.Round(time.Second))
 		p.sleep(wait)
+	}
+}
+
+// fetchRetrying asks the source up to personTokenFetchAttempts times with a
+// growing pause; a source that keeps failing answers its last error, with
+// the attempts named.
+func (p *personToken) fetchRetrying() (string, string, error) {
+	pause := personTokenFetchBackoff
+	for attempt := 1; ; attempt++ {
+		access, id, err := p.fetch()
+		if err == nil {
+			return access, id, nil
+		}
+		if attempt == personTokenFetchAttempts {
+			return "", "", fmt.Errorf("the person's token: %d attempts failed, last: %w", attempt, err)
+		}
+		note("the person's token: attempt %d failed (%v), asking again in %s", attempt, err, pause)
+		p.sleep(pause)
+		pause *= 2
 	}
 }
 
