@@ -24,8 +24,9 @@ const githubFakeReposPath = "/_fake/repos"
 // it to its data directory on the host.
 const githubFakeMaxGeneratedMiB = 16 << 10
 
-// githubRepoName is a repository name GitHub accepts.
-var githubRepoName = regexp.MustCompile(`^[A-Za-z0-9._-]{1,100}$`)
+// githubRepoName is a repository name GitHub accepts, never starting with a
+// dot.
+var githubRepoName = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9._-]{0,99}$`)
 
 // generatedRepoRequest is the body of the PUT.
 type generatedRepoRequest struct {
