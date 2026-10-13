@@ -189,7 +189,8 @@ The flags pin a value regardless of the discovery, with or without
 | `NODE_USE_SYSTEM_CA=1` | Node >= 22.15, Claude Code | Makes Node honor the system trust store after `agentlab trust`. Older Node: `NODE_EXTRA_CA_CERTS=$PWD/certs/ca.crt`. See [TLS](tls.md). |
 | `KUBECONFIG` | your shell | Never read by the lab: its embedded Helm and Kubernetes client are built from `state/kubeconfig` alone. `KUBECONFIG=state/kubeconfig kubectl ...` is the lab's view from a shell. A file it names that is a copy of this lab's admin kubeconfig (every entry `kind-<clusterName>` — a lab lease holds one) is refreshed by `up` and every other cluster-facing command once the cluster behind it was recreated, so a copy taken before `down` and `up` reaches the new cluster without a manual step; your own kubeconfig, `~/.kube/config` and another lab's are never written, except that `up` removes a `kind-<clusterName>` context, cluster and user of the recreated lab whose CA is the previous cluster's (the lab's own kubeconfig, or its lease's copy, is the one to use). |
 | `AGENTLAB_TELEMETRY_OPTOUT`, `DO_NOT_TRACK=1` | every command | Disable the anonymous usage signals. See [Usage data](telemetry.md). |
-| `AGENTLAB_TELEMETRY_TESTMODE=1` | every command | File the signals as test data and log delivery errors, for work on the lab itself. |
+| `AGENTLAB_TELEMETRY_TESTMODE=1` | every command | File the signals as test data, for work on the lab itself. |
+| `AGENTLAB_TELEMETRY_DEBUG=1` | every command | Log what happened to the signals (a failed or rejected delivery, an endpoint out of reach) on stderr; telemetry prints nothing otherwise. |
 | `AGENTLAB_NO_UPDATE_CHECK=1` | every command | Silence the newer-release hint (below). |
 
 ## Keeping agentlab current

@@ -6,8 +6,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -373,5 +376,107 @@ func TestCommandFallsBackToTheLibraryIdentifier(t *testing.T) {
 	}
 	if user, _ := signals[0]["clientUser"].(string); len(user) != 64 {
 		t.Errorf("clientUser %q is not a SHA-256 hex digest", user)
+	}
+}
+
+// unreachable makes every new connection hang the way a black-holed route
+// does: the dial never completes until the request gives up. The library's
+// client uses http.DefaultTransport, so swapping it is the network going
+// away for the test.
+func unreachable(t *testing.T) {
+	t.Helper()
+	prev := http.DefaultTransport
+	http.DefaultTransport = &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	}
+	t.Cleanup(func() { http.DefaultTransport = prev })
+}
+
+// stderr captures what the process writes to stderr while fn runs.
+func stderr(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prev := os.Stderr
+	os.Stderr = w
+	prevLog := log.Writer()
+	log.SetOutput(w)
+	out := make(chan string, 1)
+	go func() {
+		b, _ := io.ReadAll(r)
+		out <- string(b)
+	}()
+	fn()
+	os.Stderr = prev
+	log.SetOutput(prevLog)
+	_ = w.Close()
+	return <-out
+}
+
+// TestAnUnreachableEndpointCostsNoWaitAndNoOutput: with the ingest endpoint
+// out of reach, a command that has outlived connectTimeout finishes at once,
+// and nothing about the failed delivery reaches the command's output — not
+// even in test mode, which the lab machines run under.
+func TestAnUnreachableEndpointCostsNoWaitAndNoOutput(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("a signal reached an endpoint that is out of reach")
+	}))
+	defer srv.Close()
+	enable(t, srv)
+	unreachable(t)
+
+	var waited time.Duration
+	out := stderr(t, func() {
+		Command(lab(t, "up"))
+		time.Sleep(connectTimeout) // the command's own work
+		start := time.Now()
+		Flush(context.Background())
+		waited = time.Since(start)
+	})
+	if waited > 50*time.Millisecond {
+		t.Errorf("Flush waited %s for an endpoint that is out of reach", waited)
+	}
+	if out != "" {
+		t.Errorf("telemetry wrote to stderr:\n%s", out)
+	}
+}
+
+// TestAShortCommandWaitsOnlyForTheConnection: a command that finishes before
+// a connection could have been made waits for one no longer than
+// connectTimeout from when its signal set out, not the whole flush budget.
+func TestAShortCommandWaitsOnlyForTheConnection(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+	enable(t, srv)
+	unreachable(t)
+
+	start := time.Now()
+	Command(lab(t, "up"))
+	Flush(context.Background())
+	if waited := time.Since(start); waited < connectTimeout || waited >= flushTimeout {
+		t.Errorf("Flush waited %s on an endpoint out of reach, want about %s", waited, connectTimeout)
+	}
+}
+
+// TestDebugModeReportsTheFailure: AGENTLAB_TELEMETRY_DEBUG is where a failed
+// delivery is told.
+func TestDebugModeReportsTheFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+	enable(t, srv)
+	unreachable(t)
+	t.Setenv(DebugEnv, "1")
+
+	out := stderr(t, func() {
+		Command(lab(t, "up"))
+		Flush(context.Background())
+	})
+	if !strings.Contains(out, "telemetry: ") {
+		t.Errorf("debug mode said nothing about the failed delivery; stderr:\n%s", out)
 	}
 }
