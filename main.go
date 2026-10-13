@@ -814,6 +814,16 @@ func browserCmd() *cobra.Command {
 	}
 }
 
+// errHeadlessForm is what `configure` answers when its form has no terminal:
+// the way without one, in one line.
+var errHeadlessForm = errors.New("the configure form needs a terminal (stdin and stdout); run `agentlab configure --defaults` to skip it, adding the option flags (see --help) to change values, or --accessible for the prompt-per-question mode")
+
+// formTerminal reports whether the configure form can run: stdin and stdout
+// are both terminals. A variable so tests can stand in for the terminal.
+var formTerminal = func() bool {
+	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
+}
+
 func configureCmd() *cobra.Command {
 	var defaults, accessible bool
 	var platform, agents, observability, backstage, modelManager, vmManager, klausGateway bool
@@ -831,6 +841,11 @@ func configureCmd() *cobra.Command {
 		Short: "Discover this machine, then ask for the lab configuration (or keep it with --defaults) and save agentlab.yaml",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// The form needs a terminal; refused here, before anything is
+			// discovered, instead of dying in the TUI.
+			if !defaults && !accessible && !accessibleMode() && !formTerminal() {
+				return errHeadlessForm
+			}
 			if err := enterLab(true); err != nil {
 				return err
 			}

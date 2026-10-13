@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -137,5 +138,31 @@ func TestCleanupAfterHelpNamesTheSessionsRange(t *testing.T) {
 		if !strings.Contains(flag.Usage, want) {
 			t.Errorf("--workspaces-cleanup-after help %q does not name %q", flag.Usage, want)
 		}
+	}
+}
+
+// Without a terminal `configure` refuses before its form starts, and the
+// message names --defaults, the way without one.
+func TestConfigureWithoutATerminalNamesDefaults(t *testing.T) {
+	prev := formTerminal
+	formTerminal = func() bool { return false }
+	t.Cleanup(func() { formTerminal = prev })
+	t.Setenv("ACCESSIBLE", "")
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	cmd := configureCmd()
+	cmd.SetArgs(nil)
+	cmd.SilenceUsage = true
+	cmd.SilenceErrors = true
+	err := cmd.Execute()
+	if !errors.Is(err, errHeadlessForm) {
+		t.Fatalf("configure without a terminal = %v, want errHeadlessForm", err)
+	}
+	if msg := err.Error(); !strings.Contains(msg, "--defaults") || strings.Contains(msg, "TTY") || strings.Contains(msg, "\n") {
+		t.Fatalf("message %q: want one line naming --defaults", msg)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Fatalf("configure wrote %d entries before refusing", len(entries))
 	}
 }
