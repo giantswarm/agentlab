@@ -1068,7 +1068,8 @@ func (m *measurement) session(w *measureWorkspace, last bool) error {
 	if err != nil {
 		return err
 	}
-	if record, err := m.setupRecord(w, id); err != nil {
+	owner := m.sessionOwner(w, id)
+	if record, err := m.setupRecord(w, id, owner); err != nil {
 		m.probeFailed(w, "dirs", err, figSessionStart, figSessionSetup)
 	} else {
 		w.samples.since(figSessionStart, startCalled, record.SetUp)
@@ -1085,7 +1086,7 @@ func (m *measurement) session(w *measureWorkspace, last bool) error {
 			return err
 		}
 	}
-	m.gitWork(w, id)
+	m.gitWork(w, id, owner)
 	if err := m.storage(w, last); err != nil {
 		return err
 	}
@@ -1157,9 +1158,10 @@ func measureTurn(ctx context.Context, api *kagentAPI, session *apiv1alpha1.Sessi
 	return "", sent, err
 }
 
-// setupRecord reads the setup's record of the Session's directory.
-func (m *measurement) setupRecord(w *measureWorkspace, id string) (*workspaceState, error) {
-	out, err := m.onVolume(w, "dirs", sessionsDirectoriesScript, nil)
+// setupRecord reads the setup's record of the Session's directory as its
+// owner.
+func (m *measurement) setupRecord(w *measureWorkspace, id string, owner volumeOwner) (*workspaceState, error) {
+	out, err := m.onVolume(w, "dirs", sessionsDirectoriesScript, nil, owner)
 	if err != nil {
 		return nil, err
 	}
@@ -1370,16 +1372,16 @@ func (p measureGitProbe) value(key, worked string) (float64, string) {
 
 // gitWork runs measureGitScript in a pod with the Session's mounts (its
 // directory read-write at the working directory, the mirrors read-only) and
-// an emptyDir as the local disk. Every figure the probe reports is kept; one
+// an emptyDir as the local disk, as the directory's owner. Every figure the probe reports is kept; one
 // it cannot report is not available with the reason, and a failed probe is
 // the report's, never the run's end.
-func (m *measurement) gitWork(w *measureWorkspace, id string) {
+func (m *measurement) gitWork(w *measureWorkspace, id string, owner volumeOwner) {
 	mounts := []corev1.VolumeMount{
 		{Name: workspacesTestVolume, MountPath: workspacesTestMountPath, SubPath: workspacesTestSessions + "/" + id},
 		{Name: workspacesTestVolume, MountPath: workspacesActorMirrorsPath, SubPath: workspacesTestMirrors, ReadOnly: true},
 		{Name: measureLocalVolume, MountPath: "/" + measureLocalVolume},
 	}
-	out, err := m.onVolume(w, "git", measureGitScript(w.worked, w.branch, m.opts.GoProxy), mounts)
+	out, err := m.onVolume(w, "git", measureGitScript(w.worked, w.branch, m.opts.GoProxy), mounts, owner)
 	if err != nil {
 		// The probe's output up to its failure still carries figures.
 		out = err.Error()
@@ -1434,7 +1436,7 @@ func (m *measurement) storage(w *measureWorkspace, last bool) error {
 	if !last {
 		return nil
 	}
-	out, err := m.onVolume(w, "storage", measureStorageScript, nil)
+	out, err := m.onVolume(w, "storage", measureStorageScript, nil, workspaceVolumeOwner)
 	if err != nil {
 		// The standing storage stays unread: the report says so.
 		m.failed(w, "storage", err)
@@ -1508,11 +1510,13 @@ func (m *measurement) pvDriver(w *measureWorkspace) string {
 	return pv.Spec.CSI.Driver
 }
 
-// measureVolumePod is onVolume's pod: a workspaceVolumePod with the claim
-// mounted whole at /workspace without mounts, else as they say (an emptyDir
-// "local" is added when they name it).
-func measureVolumePod(claim, probe, script string, mounts []corev1.VolumeMount) *corev1.Pod {
+// measureVolumePod is onVolume's pod: a workspaceVolumePod running as owner
+// (its fsGroup stays the sync Job's) with the claim mounted whole at
+// /workspace without mounts, else as they say (an emptyDir "local" is added
+// when they name it).
+func measureVolumePod(claim, probe, script string, mounts []corev1.VolumeMount, owner volumeOwner) *corev1.Pod {
 	pod := workspaceVolumePod("agentlab-measure-"+probe, claim, script)
+	pod.Spec.SecurityContext.RunAsUser, pod.Spec.SecurityContext.RunAsGroup = &owner.uid, &owner.gid
 	if mounts == nil {
 		return pod
 	}
@@ -1524,9 +1528,9 @@ func measureVolumePod(claim, probe, script string, mounts []corev1.VolumeMount) 
 }
 
 // onVolume runs a probe on the git image with the workspace's volume, as
-// measureVolumePod mounts it.
-func (m *measurement) onVolume(w *measureWorkspace, probe, script string, mounts []corev1.VolumeMount) (string, error) {
-	pod := measureVolumePod(w.volume.claim, probe, script, mounts)
+// measureVolumePod mounts it, as owner.
+func (m *measurement) onVolume(w *measureWorkspace, probe, script string, mounts []corev1.VolumeMount, owner volumeOwner) (string, error) {
+	pod := measureVolumePod(w.volume.claim, probe, script, mounts, owner)
 	out, err := runPod(context.Background(), w.volume.namespace, pod, 3*m.timeout)
 	if err != nil {
 		return "", fmt.Errorf("the volume probe %s on workspace %s: %w\n%s", probe, w.name, err, out)
@@ -1549,9 +1553,33 @@ func (m *measurement) deleteAll() error {
 	return nil
 }
 
+// sessionOwners reads the owner of every session directory on the
+// workspace's volume: the sessions directory itself is readable by the sync
+// Job's user, a Session's directory only by its owner where the volume keeps
+// the runtime's owner and mode (Azure Files over NFS).
+func (m *measurement) sessionOwners(w *measureWorkspace) (map[string]volumeOwner, error) {
+	out, err := m.onVolume(w, "owners", sessionOwnersScript, nil, workspaceVolumeOwner)
+	if err != nil {
+		return nil, err
+	}
+	return parseSessionOwners(out), nil
+}
+
+// sessionOwner is the user a probe entering the Session's directory runs
+// as: the directory's owner, else (unread, or root, whom the restricted
+// profile refuses) the sync Job's user.
+func (m *measurement) sessionOwner(w *measureWorkspace, id string) volumeOwner {
+	owners, err := m.sessionOwners(w)
+	if err != nil {
+		warn("%s: the owner of the directory of Session %s is unread, the probes run as the sync Job's user: %s", w.name, id, excerpt(err.Error(), 300))
+		return workspaceVolumeOwner
+	}
+	return owners[id].runnable()
+}
+
 // clearSessions removes the session directories from the workspace's
-// volume, the way the manager's sync Job does, and returns the volume; a
-// workspace without a bound claim has none to clear.
+// volume, each as its owner, and returns the volume; a workspace without a
+// bound claim has none to clear.
 func (m *measurement) clearSessions(w *measureWorkspace) (syncVolume, error) {
 	claims, err := m.claims(w.name)
 	if err != nil {
@@ -1562,11 +1590,17 @@ func (m *measurement) clearSessions(w *measureWorkspace) (syncVolume, error) {
 		return syncVolume{}, nil
 	}
 	w.volume = v
-	out, err := m.onVolume(w, "clear", accessClearSessionsScript, nil)
+	owners, err := m.sessionOwners(w)
 	if err != nil {
 		return syncVolume{}, err
 	}
-	note("%s: %s", w.name, out)
+	for _, o := range distinctOwners(owners) {
+		out, err := m.onVolume(w, "clear", measureClearSessionsScript(o), nil, o.runnable())
+		if err != nil {
+			return syncVolume{}, err
+		}
+		note("%s: %s", w.name, out)
+	}
 	return v, nil
 }
 
@@ -1692,4 +1726,49 @@ func (m *measurement) writeReport() error {
 	}
 	fmt.Printf("\n%s\nReport: %s and %s\n", md, jsonPath, mdPath)
 	return nil
+}
+
+// sessionOwnersScript prints the owner of every session directory as
+// `owner <id> <uid> <gid>`.
+const sessionOwnersScript = `for d in /workspace/` + workspacesTestSessions + `/*/; do test -d "$d" || continue; ` +
+	`echo "owner $(basename "$d") $(stat -c '%u %g' "$d")"; done; true
+`
+
+// parseSessionOwners reads sessionOwnersScript's lines.
+func parseSessionOwners(out string) map[string]volumeOwner {
+	owners := map[string]volumeOwner{}
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Fields(line)
+		if len(f) != 4 || f[0] != "owner" {
+			continue
+		}
+		uid, uerr := strconv.ParseInt(f[2], 10, 64)
+		gid, gerr := strconv.ParseInt(f[3], 10, 64)
+		if uerr != nil || gerr != nil {
+			continue
+		}
+		owners[f[1]] = volumeOwner{uid, gid}
+	}
+	return owners
+}
+
+// distinctOwners is each owner of the directories once, in a stable order.
+func distinctOwners(owners map[string]volumeOwner) []volumeOwner {
+	var list []volumeOwner
+	for _, o := range owners {
+		if !slices.Contains(list, o) {
+			list = append(list, o)
+		}
+	}
+	slices.SortFunc(list, func(a, b volumeOwner) int { return cmp.Or(cmp.Compare(a.uid, b.uid), cmp.Compare(a.gid, b.gid)) })
+	return list
+}
+
+// measureClearSessionsScript removes the session directories the owner's
+// user owns, so its delete is not held by one, and says how many are left.
+func measureClearSessionsScript(o volumeOwner) string {
+	return `for d in /workspace/` + workspacesTestSessions + `/*/; do test -d "$d" || continue; ` +
+		`if [ "$(stat -c %u "$d")" = "` + strconv.FormatInt(o.uid, 10) + `" ]; then rm -rf "$d"; fi; done
+echo "sessions: $(ls -A /workspace/` + workspacesTestSessions + ` 2>/dev/null | wc -l) directories left"
+`
 }
