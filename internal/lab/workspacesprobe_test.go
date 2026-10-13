@@ -89,7 +89,7 @@ func TestWorkspaceVolumeProbesAreRestricted(t *testing.T) {
 			t.Errorf("%s: the first volume is not the workspace's claim: %+v", name, pod.Spec.Volumes[0])
 		}
 	}
-	git := measureVolumePod("claim", "git", "true", gitMounts)
+	git := measureVolumePod("claim", "git", measureGitScript("o/r", "main"), gitMounts)
 	if len(git.Spec.Volumes) != 2 || git.Spec.Volumes[1].EmptyDir == nil || len(git.Spec.Containers[0].VolumeMounts) != len(gitMounts) {
 		t.Errorf("the git probe has volumes %+v and mounts %+v, want the claim, the local emptyDir and its mounts", git.Spec.Volumes, git.Spec.Containers[0].VolumeMounts)
 	}
@@ -98,7 +98,7 @@ func TestWorkspaceVolumeProbesAreRestricted(t *testing.T) {
 // The check itself refuses the probe pod as it was before the fix: no
 // security context at all.
 func TestRestrictedViolationsRefuseABarePod(t *testing.T) {
-	pod := probePod("bare", workspacesTestGitImage, []string{"true"})
+	pod := probePod("bare", workspacesTestGitImage, []string{"sh"})
 	if v := restrictedViolations(pod); len(v) != 5 {
 		t.Errorf("a bare probe pod has violations %v, want runAsNonRoot, runAsUser, privilege escalation, capabilities and seccomp", v)
 	}
