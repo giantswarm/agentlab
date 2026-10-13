@@ -1292,3 +1292,33 @@ func TestDecideUntilSettled(t *testing.T) {
 		})
 	}
 }
+
+// TestDeleteSessionRetriesUnavailable: a DeleteSession on a connection the
+// gateway closed while idle answers Unavailable; the delete is retried and
+// succeeds, while any other answer stays final.
+func TestDeleteSessionRetriesUnavailable(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want bool
+	}{
+		{status.Error(codes.Unavailable, "error reading from server: EOF"), true},
+		{status.Error(codes.FailedPrecondition, notYetSettledMessage), true},
+		{status.Error(codes.PermissionDenied, "no"), false},
+		{status.Error(codes.Internal, "boom"), false},
+	} {
+		if got := deleteRetryable(tc.err); got != tc.want {
+			t.Errorf("deleteRetryable(%v) = %t, want %t", tc.err, got, tc.want)
+		}
+	}
+	calls := 0
+	err := untilSettled(t.Context(), "DeleteSession", fakeSessionID, sessionSettleTimeout, deleteRetryable, func() error {
+		calls++
+		if calls == 1 {
+			return status.Error(codes.Unavailable, "error reading from server: EOF")
+		}
+		return nil
+	})
+	if err != nil || calls != 2 {
+		t.Errorf("an Unavailable delete was not retried to success: %d calls, %v", calls, err)
+	}
+}
