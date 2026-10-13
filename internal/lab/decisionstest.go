@@ -603,7 +603,7 @@ func (p *decisionsProof) ownWordsInModal(email string) error {
 	}
 	if err := p.driver.submitView(p.person, view, map[string]any{
 		"decision_answer_text":   map[string]any{"text": map[string]any{fieldTypeKey: "plain_text_input", slackKeyValue: decisionOwnWordsReply}},
-		"decision_answer_choice": map[string]any{"choice": map[string]any{fieldTypeKey: "static_select", "selected_option": map[string]any{slackKeyValue: "1"}}},
+		"decision_answer_choice": map[string]any{"choice": map[string]any{fieldTypeKey: slackStaticSelect, slackSelectedOption: map[string]any{slackKeyValue: "1"}}},
 	}); err != nil {
 		return err
 	}

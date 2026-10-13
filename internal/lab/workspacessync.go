@@ -1098,6 +1098,50 @@ func (sp *syncProof) forcePush() (string, error) {
 	return head, err
 }
 
+// createNamed defines a workspace of the lab's Organization over the named
+// repositories as the member, waits for its first cycle to mirror exactly
+// them, and returns its volume: the one the workspace's grants name.
+func (sp *syncProof) createNamed(name string, repos []string) (workspaceVolume, error) {
+	var created syncWorkspace
+	if err := sp.member.callServerStructured(workspaceManagerToolPrefix+"create_workspace", map[string]any{
+		nameKey: name, wmOrganizationArg: config.WorkspaceOrganization, wmSourcesArg: syncNamedSources(repos...),
+	}, &created); err != nil {
+		return workspaceVolume{}, err
+	}
+	d, err := sp.waitCycle(name, nil)
+	if err != nil {
+		return workspaceVolume{}, err
+	}
+	if r := d.Workspace.LastSync; r.Result != syncResultSucceed {
+		return workspaceVolume{}, fmt.Errorf("the first cycle of %s ended %s: %s", name, r.Result, r.Message)
+	}
+	want := slices.Sorted(slices.Values(repos))
+	if live := d.live(); !slices.Equal(live, want) {
+		return workspaceVolume{}, fmt.Errorf("the first cycle of %s mirrored %v, want %v", name, live, want)
+	}
+	v, err := sp.volume(name)
+	if err != nil {
+		return workspaceVolume{}, err
+	}
+	k, err := labKube()
+	if err != nil {
+		return workspaceVolume{}, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
+	defer cancel()
+	pv, err := k.clientset.CoreV1().PersistentVolumes().Get(ctx, v.pv, metav1.GetOptions{})
+	if err != nil {
+		return workspaceVolume{}, fmt.Errorf("reading the volume %s of workspace %s: %w", v.pv, name, err)
+	}
+	if pv.Spec.CSI == nil {
+		return workspaceVolume{}, fmt.Errorf("the volume %s of workspace %s is no CSI volume", v.pv, name)
+	}
+	volume := workspaceVolume{Driver: pv.Spec.CSI.Driver, Handle: pv.Spec.CSI.VolumeHandle}
+	note("created %s of Organization %s; first cycle %s; claim %s/%s, volume %s (%s)", name, created.Organization, d.Workspace.LastSync.Result, v.namespace, v.claim, volume.Handle, volume.Driver)
+	sp.printManifest(d)
+	return volume, nil
+}
+
 // get is get_workspace's answer.
 func (sp *syncProof) get(name string) (*syncDetail, error) {
 	var d syncDetail

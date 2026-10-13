@@ -149,6 +149,51 @@ the host-mode cleanup takes the fixtures and the Sessions with it. On a
 lab without the component the proof says so and passes on the host-mode
 assertions alone.
 
+## Workspaces per thread
+
+`agentlab klaus-gateway-test --workspaces` adds the workspace a thread's
+Session works in, after the host-mode assertions and before the component.
+It needs the workspace-manager (`configure --workspaces`, the provider
+instance `fake`) and fails before anything runs without it, naming why; the
+rest of the proof is the same with or without the flag. The host gateway
+restarts on its stores with `--workspace-tools-prefix=x_workspace-manager_`
+and `agentlab-klaus-gateway-test-ws`, an Agent on the `kagent` Harness that
+may reach the lab's GitHub, as its default agent; the person and
+`dev@lab.local` (the colleague, linked too) connect to `fake`. Two
+workspaces: `agentlab-gateway-ws` over the public `agentlab-oss/docs` and
+`agentlab-oss/kagent`, and `agentlab-gateway-ws-private` over
+`agentlab-org/platform-api` and the private `agentlab-org/platform-infra`,
+which only the admin reads (the second only where the App of the lab's
+GitHub is installed on `agentlab-org`; otherwise steps Wf and Wg are skipped
+with the reason).
+
+- **Wa.** A new thread's mention is answered by the workspace prompt and
+  nothing else: no turn, no Session. Picking `agentlab-gateway-ws` starts a
+  Session on its volume, and the held message's turn lists `/workspace`
+  holding a clone of each repository; the volume holds the Session's
+  directory with its setup record naming the same clones.
+- **Wb, Wc.** Two more turns, and one after a gateway restart, ask nothing
+  and run on the same Session (one `session_bound`, one `workspace_chosen`).
+- **Wd.** *No workspace* starts a Session with no volume, in an empty
+  working directory with no mirrors.
+- **We.** The slash command (`/swarmgeist`) opens the agent picker with the
+  Workspace select preset to *No workspace*; a submission with the agent and
+  `agentlab-gateway-ws` starts the Session in it, the thread asks nothing.
+  Reopened, the preset is that workspace with its "Last used with" hint; a
+  change of agent redraws it to *No workspace*, the change back to the
+  workspace.
+- **Wf.** The colleague picks the private workspace: refused privately,
+  naming `agentlab-org/platform-infra` and not the repository they read; kagent
+  (as them), agent-manager's `list_sessions` and Substrate hold nothing new,
+  and the thread is bound to no Session.
+- **Wg.** The admin's thread on the private workspace; the colleague
+  mentions in it, the admin allows them, and the colleague's turn is refused
+  privately naming the repository: no `turn_dispatch` of theirs, the
+  Session's task count unchanged.
+
+The steps' Sessions, Agent, workspaces and provider sign-ins are removed
+before the component runs, and the run fails on any of them left.
+
 ## What the lab cannot prove
 
 **A real OBO sign-in, and a link's refresh.** muster refuses a CIMD
