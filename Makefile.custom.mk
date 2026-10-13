@@ -26,6 +26,11 @@ lint: export PATH := $(GOLANGCI_LINT_DIR):$(PATH)
 # with CGO_ENABLED=0 and use the pure-Go resolver; `install` does the same.
 install: export CGO_ENABLED := 0
 
+# The generated `test` links the same static way, and -race needs cgo, so it
+# cannot take the pure-Go resolver the way `install` does: its test binaries
+# link dynamically instead, and glibc's getaddrinfo loads its NSS modules.
+test: EXTLDFLAGS :=
+
 # Commit of giantswarm/kagent-upstream the kagent.api.v1alpha1 protos under
 # hack/kagent-proto/ are copied from: the tag of the kagent line the platform
 # release the lab follows resolved when they were last copied. Bump it, run
