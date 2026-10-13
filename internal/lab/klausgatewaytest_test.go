@@ -562,11 +562,11 @@ const testFixtureRef = kagentNamespace + "/" + klausGatewayTestAgent
 // openPicker answers a roster row's Select button: the picker for the
 // roster's thread, offering the fixture alone.
 func (g *scriptedGateway) openPicker(channel, thread, ref string) {
-	g.api(slackViewsOpen, map[string]any{"trigger_id": "t", "view": map[string]any{
-		"callback_id": slackPickerCallback, "private_metadata": `{"c":"` + channel + `","t":"` + thread + `"}`,
-		"blocks": []any{map[string]any{"block_id": slackPickerAgentBlock, "element": map[string]any{
+	g.api(slackViewsOpen, map[string]any{slackKeyTriggerID: "t", slackKeyView: map[string]any{
+		slackKeyCallbackID: slackPickerCallback, "private_metadata": `{"c":"` + channel + `","t":"` + thread + `"}`,
+		slackKeyBlocks: []any{map[string]any{slackKeyBlockID: slackPickerAgentBlock, slackKeyElement: map[string]any{
 			"initial_option": map[string]any{slackKeyValue: ref},
-			"options":        []any{map[string]any{slackKeyValue: testFixtureRef}},
+			slackKeyOptions:  []any{map[string]any{slackKeyValue: testFixtureRef}},
 		}}},
 	}})
 }

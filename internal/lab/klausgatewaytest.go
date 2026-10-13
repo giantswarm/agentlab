@@ -1564,7 +1564,7 @@ func (p *slackProof) refusal(user string, roster slackMessage, question string) 
 	shown := len(p.fake.thread(p.channel, roster.ThreadTS))
 	if err := p.driver.submitView(user, picker, map[string]any{
 		slackPickerAgentBlock:    map[string]any{slackPickerAgentAction: map[string]any{fieldTypeKey: slackStaticSelect, slackSelectedOption: map[string]any{slackKeyValue: unadmitted}}},
-		slackPickerQuestionBlock: map[string]any{slackPickerQuestionAction: map[string]any{fieldTypeKey: "plain_text_input", slackKeyValue: question}},
+		slackPickerQuestionBlock: map[string]any{slackPickerQuestionAction: map[string]any{fieldTypeKey: slackPlainTextInput, slackKeyValue: question}},
 	}); err != nil {
 		return "", err
 	}

@@ -127,6 +127,14 @@ const (
 	slackStaticSelect  = "static_select"
 	// slackSelectedOption is a select's pick in an action or a view's state.
 	slackSelectedOption = "selected_option"
+	slackPlainTextInput = "plain_text_input"
+	// The keys of a modal (a view) and of its blocks.
+	slackKeyView       = "view"
+	slackKeyCallbackID = "callback_id"
+	slackKeyBlockID    = "block_id"
+	slackKeyOptions    = "options"
+	slackKeyTriggerID  = "trigger_id"
+	slackKeyElement    = "element"
 )
 
 // The gateway's Block Kit action ids and texts the proof reads.
@@ -448,7 +456,7 @@ func (f *fakeSlack) answer(method string, params map[string]any) map[string]any 
 		}
 		return map[string]any{"ok": false, "error": "users_not_found"}
 	case slackViewsOpen, slackViewsUpdate:
-		if view, ok := params["view"].(map[string]any); ok {
+		if view, ok := params[slackKeyView].(map[string]any); ok {
 			f.views = append(f.views, view)
 		}
 		return ok
@@ -731,12 +739,12 @@ func (d *slackDriver) pick(user string, msg slackMessage, actionID, value string
 func (d *slackDriver) onMessage(user string, msg slackMessage, action map[string]any) error {
 	return d.interaction(map[string]any{
 		fieldTypeKey: "block_actions", slackKeyUser: map[string]any{"id": user}, slackKeyTeam: map[string]any{"id": slackFakeTeam},
-		slackKeyChannel: map[string]any{"id": msg.Channel},
-		"container":     map[string]any{fieldTypeKey: slackKeyMessage, "message_ts": msg.TS, "channel_id": msg.Channel, slackKeyThreadTS: msg.ThreadTS},
-		slackKeyMessage: map[string]any{slackKeyTS: msg.TS, slackKeyThreadTS: msg.ThreadTS, slackKeyBlocks: msg.Blocks},
-		"actions":       []any{action},
-		"trigger_id":    "trigger-" + randomSuffix(),
-		"response_url":  d.responseURL(),
+		slackKeyChannel:   map[string]any{"id": msg.Channel},
+		"container":       map[string]any{fieldTypeKey: slackKeyMessage, "message_ts": msg.TS, "channel_id": msg.Channel, slackKeyThreadTS: msg.ThreadTS},
+		slackKeyMessage:   map[string]any{slackKeyTS: msg.TS, slackKeyThreadTS: msg.ThreadTS, slackKeyBlocks: msg.Blocks},
+		slackBlockActions: []any{action},
+		slackKeyTriggerID: "trigger-" + randomSuffix(),
+		"response_url":    d.responseURL(),
 	})
 }
 
@@ -750,12 +758,12 @@ func (d *slackDriver) pickInView(user string, view map[string]any, blockID, acti
 	held["hash"] = "hash-" + randomSuffix()
 	return d.interaction(map[string]any{
 		fieldTypeKey: "block_actions", slackKeyUser: map[string]any{"id": user}, slackKeyTeam: map[string]any{"id": slackFakeTeam},
-		"container": map[string]any{fieldTypeKey: "view", "view_id": held["id"]},
-		"view":      held,
-		"actions": []any{map[string]any{
-			fieldTypeKey: slackStaticSelect, "block_id": blockID, slackKeyActionID: actionID, slackSelectedOption: map[string]any{slackKeyValue: value},
+		"container":  map[string]any{fieldTypeKey: slackKeyView, "view_id": held["id"]},
+		slackKeyView: held,
+		slackBlockActions: []any{map[string]any{
+			fieldTypeKey: slackStaticSelect, slackKeyBlockID: blockID, slackKeyActionID: actionID, slackSelectedOption: map[string]any{slackKeyValue: value},
 		}},
-		"trigger_id": "trigger-" + randomSuffix(),
+		slackKeyTriggerID: "trigger-" + randomSuffix(),
 	})
 }
 
@@ -774,7 +782,7 @@ func (d *slackDriver) interaction(body map[string]any) error {
 func (d *slackDriver) slashCommand(user, text string) error {
 	form := url.Values{
 		"command": {slackCommand}, slackKeyText: {text}, "user_id": {user}, "channel_id": {d.channel}, slackKeyTeamID: {slackFakeTeam},
-		"trigger_id": {"trigger-" + randomSuffix()}, "response_url": {d.responseURL()},
+		slackKeyTriggerID: {"trigger-" + randomSuffix()}, "response_url": {d.responseURL()},
 	}
 	return d.post(slackCommandsPath, "application/x-www-form-urlencoded", []byte(form.Encode()))
 }
@@ -785,8 +793,8 @@ func (d *slackDriver) slashCommand(user, text string) error {
 func (d *slackDriver) submitView(user string, view map[string]any, values map[string]any) error {
 	return d.interaction(map[string]any{
 		fieldTypeKey: "view_submission", slackKeyUser: map[string]any{"id": user}, slackKeyTeam: map[string]any{"id": slackFakeTeam},
-		"view": map[string]any{
-			"id": "V" + strings.ToUpper(randomSuffix()), "callback_id": view["callback_id"], "private_metadata": view["private_metadata"],
+		slackKeyView: map[string]any{
+			"id": "V" + strings.ToUpper(randomSuffix()), slackKeyCallbackID: view[slackKeyCallbackID], "private_metadata": view["private_metadata"],
 			slackKeyState: map[string]any{"values": values},
 		},
 	})

@@ -377,7 +377,7 @@ func (ws *gatewayWorkspaces) picker() error {
 	roots := len(ws.p.fake.thread(ws.p.channel, ""))
 	if err := ws.p.driver.submitView(user, view, map[string]any{
 		slackPickerAgentBlock:    map[string]any{slackPickerAgentAction: map[string]any{fieldTypeKey: slackStaticSelect, slackSelectedOption: map[string]any{slackKeyValue: ref}}},
-		slackPickerQuestionBlock: map[string]any{slackPickerQuestionAction: map[string]any{fieldTypeKey: "plain_text_input", slackKeyValue: probePrompt(sessionsResumeCommand, "")}},
+		slackPickerQuestionBlock: map[string]any{slackPickerQuestionAction: map[string]any{fieldTypeKey: slackPlainTextInput, slackKeyValue: probePrompt(sessionsResumeCommand, "")}},
 		block:                    map[string]any{slackPickerWorkspaceAction: map[string]any{fieldTypeKey: slackStaticSelect, slackSelectedOption: map[string]any{slackKeyValue: gatewayWSPublic}}},
 	}); err != nil {
 		return err
@@ -541,7 +541,7 @@ func (ws *gatewayWorkspaces) collaborator() error {
 		return err
 	}
 	if len(after) != len(tasks) {
-		return fmt.Errorf("Session %s holds %d task(s) after the colleague's refused turn, %d before", session.GetId(), len(after), len(tasks))
+		return fmt.Errorf("the Session %s holds %d task(s) after the colleague's refused turn, %d before", session.GetId(), len(after), len(tasks))
 	}
 	ws.out.collaborator = excerpt(refusal, 200)
 	note("allowed, then refused privately: %q; no turn_dispatch of %s, Session %s still at %d task(s)", excerpt(refusal, 160), ws.people.colleague, session.GetId(), len(after))
@@ -729,8 +729,8 @@ func (ws *gatewayWorkspaces) openPicker(user string) (map[string]any, error) {
 		}) {
 			return nil, fmt.Errorf("%s opened no picker within %s", slackCommand, klausGatewayReplyWait)
 		}
-		if view["callback_id"] != slackPickerCallback {
-			return nil, fmt.Errorf("%s opened modal %v, not the agent picker %s", slackCommand, view["callback_id"], slackPickerCallback)
+		if view[slackKeyCallbackID] != slackPickerCallback {
+			return nil, fmt.Errorf("%s opened modal %v, not the agent picker %s", slackCommand, view[slackKeyCallbackID], slackPickerCallback)
 		}
 		if _, _, _, ok := pickerWorkspace(view); ok {
 			return view, nil
@@ -859,11 +859,11 @@ func selectOptions(element map[string]any) []map[string]any {
 			}
 		}
 	}
-	collect(element["options"])
+	collect(element[slackKeyOptions])
 	groups, _ := element["option_groups"].([]any)
 	for _, g := range groups {
 		if group, ok := g.(map[string]any); ok {
-			collect(group["options"])
+			collect(group[slackKeyOptions])
 		}
 	}
 	return out
@@ -872,14 +872,14 @@ func selectOptions(element map[string]any) []map[string]any {
 // pickerWorkspace reads the picker's Workspace input: its block_id, the value
 // its select opens on and its hint; ok is false when the picker has none.
 func pickerWorkspace(view map[string]any) (block, initial, hint string, ok bool) {
-	blocks, _ := view["blocks"].([]any)
+	blocks, _ := view[slackKeyBlocks].([]any)
 	for _, b := range blocks {
 		m, _ := b.(map[string]any)
-		id, _ := m["block_id"].(string)
+		id, _ := m[slackKeyBlockID].(string)
 		if !strings.HasPrefix(id, slackPickerWorkspaceBlock+".") {
 			continue
 		}
-		element, _ := m["element"].(map[string]any)
+		element, _ := m[slackKeyElement].(map[string]any)
 		if opt, _ := element["initial_option"].(map[string]any); opt != nil {
 			initial, _ = opt[slackKeyValue].(string)
 		}

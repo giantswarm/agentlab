@@ -22,8 +22,8 @@ func TestPromptWorkspaces(t *testing.T) {
 		{fieldTypeKey: slackBlockSection, slackKeyText: map[string]any{fieldTypeKey: slackMrkdwn, slackKeyText: slackWorkspaceAsk}},
 		{fieldTypeKey: slackBlockActions, slackKeyElements: []any{
 			map[string]any{fieldTypeKey: slackStaticSelect, slackKeyActionID: slackWorkspaceSelect, "option_groups": []any{
-				map[string]any{"options": []any{map[string]any{slackKeyValue: value(gatewayWSPublic)}}},
-				map[string]any{"options": []any{map[string]any{slackKeyValue: value(gatewayWSPrivate)}, map[string]any{slackKeyValue: "not json"}}},
+				map[string]any{slackKeyOptions: []any{map[string]any{slackKeyValue: value(gatewayWSPublic)}}},
+				map[string]any{slackKeyOptions: []any{map[string]any{slackKeyValue: value(gatewayWSPrivate)}, map[string]any{slackKeyValue: "{"}}},
 			}},
 			map[string]any{fieldTypeKey: slackButton, slackKeyActionID: slackWorkspaceNone, slackKeyValue: "1.2"},
 		}},
@@ -45,14 +45,14 @@ func TestPromptWorkspaces(t *testing.T) {
 // at any revision, with the value its select opens on and its hint; the
 // agent refs are the stage's Agent's and the fixture's.
 func TestPickerWorkspace(t *testing.T) {
-	view := map[string]any{"blocks": []any{
-		map[string]any{"block_id": slackPickerAgentBlock, "element": map[string]any{"options": []any{
+	view := map[string]any{slackKeyBlocks: []any{
+		map[string]any{slackKeyBlockID: slackPickerAgentBlock, slackKeyElement: map[string]any{slackKeyOptions: []any{
 			map[string]any{slackKeyValue: kagentNamespace + "/" + gatewayWSAgent},
 			map[string]any{slackKeyValue: kagentNamespace + "/" + klausGatewayTestAgent},
 		}}},
-		map[string]any{"block_id": slackPickerWorkspaceBlock + ".3",
-			"element": map[string]any{"initial_option": map[string]any{slackKeyValue: gatewayWSPublic}},
-			"hint":    map[string]any{slackKeyText: slackPickerLastUsed + " agentlab."}},
+		map[string]any{slackKeyBlockID: slackPickerWorkspaceBlock + ".3",
+			slackKeyElement: map[string]any{"initial_option": map[string]any{slackKeyValue: gatewayWSPublic}},
+			"hint":          map[string]any{slackKeyText: slackPickerLastUsed + " agentlab."}},
 	}}
 	block, initial, hint, ok := pickerWorkspace(view)
 	if !ok || block != slackPickerWorkspaceBlock+".3" || initial != gatewayWSPublic || !strings.HasPrefix(hint, slackPickerLastUsed) {
@@ -69,7 +69,7 @@ func TestPickerWorkspace(t *testing.T) {
 	if err := g.preset(view, slackPickerWorkspaceNone, false, "test"); err == nil {
 		t.Error("a preset of the workspace passed as No workspace")
 	}
-	if _, _, _, ok := pickerWorkspace(map[string]any{"blocks": []any{map[string]any{"block_id": slackPickerAgentBlock}}}); ok {
+	if _, _, _, ok := pickerWorkspace(map[string]any{slackKeyBlocks: []any{map[string]any{slackKeyBlockID: slackPickerAgentBlock}}}); ok {
 		t.Error("a picker without the Workspace input reads as having one")
 	}
 	if _, _, err := pickerRefs(map[string]any{}); err == nil {
@@ -146,15 +146,15 @@ func TestSlackDriverPickerActions(t *testing.T) {
 	defer srv.Close()
 	f := startTestFake(t, nil)
 	d := newSlackDriver(srv.URL, "sekrit", f, "C1")
-	msg := slackMessage{TS: "9.1", Channel: "C1", ThreadTS: "9.0"}
+	msg := slackMessage{TS: "7.1", Channel: "C1", ThreadTS: "9.0"}
 	if err := d.pick("UP", msg, slackWorkspaceSelect, `{"t":"9.0","w":"ws"}`); err != nil {
 		t.Fatal(err)
 	}
-	view := map[string]any{"callback_id": slackPickerCallback, "blocks": []any{}}
+	view := map[string]any{slackKeyCallbackID: slackPickerCallback, slackKeyBlocks: []any{}}
 	if err := d.pickInView("UP", view, slackPickerAgentBlock, slackPickerAgentAction, "kagent/a"); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.slashCommand("UP", "hello"); err != nil {
+	if err := d.slashCommand("UP", "ask"); err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(paths, []string{slackInteractionsPath, slackInteractionsPath, slackCommandsPath}) {
@@ -180,20 +180,20 @@ func TestSlackDriverPickerActions(t *testing.T) {
 			t.Errorf("pick %d = %+v", i, action)
 		}
 	}
-	if action.View["callback_id"] != slackPickerCallback || action.View["id"] == "" || action.View["hash"] == "" {
+	if action.View[slackKeyCallbackID] != slackPickerCallback || action.View["id"] == "" || action.View["hash"] == "" {
 		t.Errorf("the view of the pick in the modal = %v", action.View)
 	}
 	if _, held := view["hash"]; held {
 		t.Error("pickInView changed the caller's view")
 	}
 	form, _ := url.ParseQuery(bodies[2])
-	if form.Get("command") != slackCommand || form.Get("user_id") != "UP" || form.Get("channel_id") != "C1" || form.Get("text") != "hello" || form.Get("trigger_id") == "" || form.Get("response_url") == "" {
+	if form.Get("command") != slackCommand || form.Get("user_id") != "UP" || form.Get("channel_id") != "C1" || form.Get("text") != "ask" || form.Get("trigger_id") == "" || form.Get("response_url") == "" {
 		t.Errorf("slash command = %v", form)
 	}
 
-	callFake(t, f, slackViewsOpen, nil, map[string]any{"view": map[string]any{"callback_id": "first"}})
-	callFake(t, f, slackViewsUpdate, nil, map[string]any{"view_id": "V1", "hash": "h", "view": map[string]any{"callback_id": "redrawn"}})
-	if views := f.openedViews(); len(views) != 2 || views[1]["callback_id"] != "redrawn" {
+	callFake(t, f, slackViewsOpen, nil, map[string]any{slackKeyView: map[string]any{slackKeyCallbackID: "first"}})
+	callFake(t, f, slackViewsUpdate, nil, map[string]any{"view_id": "V1", "hash": "h", slackKeyView: map[string]any{slackKeyCallbackID: "redrawn"}})
+	if views := f.openedViews(); len(views) != 2 || views[1][slackKeyCallbackID] != "redrawn" {
 		t.Errorf("openedViews = %v", views)
 	}
 }
