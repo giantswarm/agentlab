@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -48,8 +49,9 @@ func componentGatewayImage(cfg *config.Config) (gatewayImage, error) {
 }
 
 // klausGatewayReleaseVersion is the chart version the component's HelmRelease
-// last applied (status.history[0].chartVersion); empty when there is no such
-// HelmRelease or it applied nothing yet.
+// last applied (status.history[0].chartVersion) without the build metadata
+// Flux appends for an OCI chart (`4.6.1+<digest>`), which no image tag
+// carries; empty when there is no such HelmRelease or it applied nothing yet.
 func klausGatewayReleaseVersion() (string, error) {
 	gvr, err := gvrFor(fluxHelmReleaseResource)
 	if err != nil {
@@ -64,7 +66,14 @@ func klausGatewayReleaseVersion() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("reading HelmRelease %s/%s: %w", platformNamespace, klausGatewayComponent, err)
 	}
-	return appliedChartVersion(hr), nil
+	return chartImageTag(appliedChartVersion(hr)), nil
+}
+
+// chartImageTag is the image tag of a chart version: the version without
+// its build metadata.
+func chartImageTag(version string) string {
+	tag, _, _ := strings.Cut(version, "+")
+	return tag
 }
 
 // appliedChartVersion reads status.history[0].chartVersion off a Flux

@@ -21,6 +21,15 @@ func TestAppliedChartVersion(t *testing.T) {
 	}
 }
 
+// TestChartImageTag: Flux's chart digest suffix is no part of the image tag.
+func TestChartImageTag(t *testing.T) {
+	for in, want := range map[string]string{"4.6.1+f7b558f04b24": "4.6.1", "4.6.1": "4.6.1", "4.7.0-rc.1": "4.7.0-rc.1"} {
+		if got := chartImageTag(in); got != want {
+			t.Errorf("chartImageTag(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 // TestResolveGatewayImageNamed: a named image or a local build is used as
 // given, without reading the cluster or the chart.
 func TestResolveGatewayImageNamed(t *testing.T) {
