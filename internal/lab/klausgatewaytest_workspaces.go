@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -115,6 +116,9 @@ type gatewayWorkspaces struct {
 	public, private   workspaceVolume
 	withPrivate       bool
 	out               gatewayWorkspacesOutcome
+	// cleaned is set once cleanup ran: the deferred call after the step's
+	// own is a no-op.
+	cleaned bool
 }
 
 // klausGatewayWorkspacesPreflight fails fast, before the proof signs anyone
@@ -688,7 +692,8 @@ func (ws *gatewayWorkspaces) privately(thread, user string, shown int, needle st
 	if err != nil {
 		return "", fmt.Errorf("%s got no private answer carrying %q: %w", user, needle, err)
 	}
-	return m.shown(), nil
+	// The text is the blocks' fallback, the same words: one of them.
+	return cmp.Or(m.Text, m.shown()), nil
 }
 
 // privatelyMsg waits for an ephemeral message to user in the thread after its
@@ -775,6 +780,10 @@ func (ws *gatewayWorkspaces) preset(view map[string]any, want string, lastUsed b
 // the Agent's Sessions of both people, the Agent, the session directories,
 // the workspaces, the moving repository's head, the provider sign-ins.
 func (ws *gatewayWorkspaces) cleanup() error {
+	if ws.cleaned {
+		return nil
+	}
+	ws.cleaned = true
 	var errs []error
 	for _, api := range []*kagentAPI{ws.api, ws.colleagueAPI} {
 		if api == nil {
