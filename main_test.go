@@ -1,9 +1,11 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -121,5 +123,31 @@ func TestEnterLabRegistersTheLabHere(t *testing.T) {
 	got, err := labs.List()
 	if err != nil || len(got) != 1 || got[0].Name != "unregistered" || got[0].Dir != dir {
 		t.Fatalf("labs.List() = %+v, %v; want unregistered in %s", got, err, dir)
+	}
+}
+
+// Without a terminal `configure` refuses before its form starts, and the
+// message names --defaults, the way without one.
+func TestConfigureWithoutATerminalNamesDefaults(t *testing.T) {
+	prev := formTerminal
+	formTerminal = func() bool { return false }
+	t.Cleanup(func() { formTerminal = prev })
+	t.Setenv("ACCESSIBLE", "")
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	cmd := configureCmd()
+	cmd.SetArgs(nil)
+	cmd.SilenceUsage = true
+	cmd.SilenceErrors = true
+	err := cmd.Execute()
+	if !errors.Is(err, errHeadlessForm) {
+		t.Fatalf("configure without a terminal = %v, want errHeadlessForm", err)
+	}
+	if msg := err.Error(); !strings.Contains(msg, "--defaults") || strings.Contains(msg, "TTY") || strings.Contains(msg, "\n") {
+		t.Fatalf("message %q: want one line naming --defaults", msg)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Fatalf("configure wrote %d entries before refusing", len(entries))
 	}
 }
