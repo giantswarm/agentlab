@@ -126,3 +126,23 @@ func TestCodingSandboxCommandKeepsTheToken(t *testing.T) {
 		}
 	}
 }
+
+// TestTakesAnyToolset: agent-manager writes a claude Harness agent with any
+// muster toolset from 1.14.0 on, its release candidates and dev builds
+// included.
+func TestTakesAnyToolset(t *testing.T) {
+	for version, want := range map[string]bool{
+		"1.13.0":      false,
+		"1.13.1-rc.1": false,
+		"v1.13.0":     false,
+		"1.14.0-rc.1": true,
+		"1.14.0":      true,
+		"2.0.0":       true,
+		"dev-40bd6c1": true,
+		"":            true,
+	} {
+		if got := takesAnyToolset(version); got != want {
+			t.Errorf("takesAnyToolset(%q) = %v, want %v", version, got, want)
+		}
+	}
+}
