@@ -1034,10 +1034,17 @@ drain leaves on every template of a Substrate without the golden take retry.
 
 The agent is removed — through kagent, then whatever of it ate-api still
 holds (its ActorTemplate, an actor that crashed on a restore), deleted in
-ate-api itself: the next run's agent compiles to the same template name — and
+ate-api itself, an actor still `DELETING` deleted again until ate-api lets go
+of it: the next run's agent compiles to the same template name — and
 the lab returns to the chart's Substrate (`--stay`
 leaves it on `--to`) — on a failure too, so the next run starts where this
-one did. The verdict names the Substrate versions before and after, the
+one did. The run starts with the same cleanup; what an earlier run left and
+it cannot remove is noted and never fails this run, whose own leftovers do.
+The return to a release before 1.9 removes the rustfs Deployment's
+`serviceAccountName` and its deprecated alias `serviceAccount` first: the
+1.8 chart drops the ServiceAccount, and the apiserver would fill the name
+back from the alias, stalling the rollout until the HelmRelease rolls back.
+The verdict names the Substrate versions before and after, the
 resumed conversation and the volume check:
 
 ```bash
