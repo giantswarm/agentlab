@@ -10,10 +10,10 @@ import (
 // applied; none before its first revision.
 func TestAppliedChartVersion(t *testing.T) {
 	hr := &unstructured.Unstructured{Object: map[string]any{crStatus: map[string]any{historyField: []any{
-		map[string]any{chartVersionField: "4.6.1"},
+		map[string]any{chartVersionField: testGatewayVersion},
 		map[string]any{chartVersionField: "4.6.0"},
 	}}}}
-	if v := appliedChartVersion(hr); v != "4.6.1" {
+	if v := appliedChartVersion(hr); v != testGatewayVersion {
 		t.Errorf("appliedChartVersion = %q", v)
 	}
 	if v := appliedChartVersion(&unstructured.Unstructured{Object: map[string]any{}}); v != "" {
@@ -23,7 +23,7 @@ func TestAppliedChartVersion(t *testing.T) {
 
 // TestChartImageTag: Flux's chart digest suffix is no part of the image tag.
 func TestChartImageTag(t *testing.T) {
-	for in, want := range map[string]string{"4.6.1+f7b558f04b24": "4.6.1", "4.6.1": "4.6.1", "4.7.0-rc.1": "4.7.0-rc.1"} {
+	for in, want := range map[string]string{testGatewayVersion + "+f7b558f04b24": testGatewayVersion, testGatewayVersion: testGatewayVersion, "4.7.0-rc.1": "4.7.0-rc.1"} {
 		if got := chartImageTag(in); got != want {
 			t.Errorf("chartImageTag(%q) = %q, want %q", in, got, want)
 		}
@@ -40,3 +40,6 @@ func TestResolveGatewayImageNamed(t *testing.T) {
 		t.Errorf("binary = %q, %v", img, err)
 	}
 }
+
+// testGatewayVersion is a klaus-gateway release the tests name.
+const testGatewayVersion = "4.6.1"

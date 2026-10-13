@@ -268,7 +268,7 @@ func TestGatewayRecords(t *testing.T) {
 		t.Errorf("version = %q", v)
 	}
 	g := newGatewayProcess(KlausGatewayTestOptions{GatewayBinary: "/bin/x"}.withDefaults(), t.TempDir(), "", "", "", "")
-	if g.describe() != "binary /bin/x" || newGatewayProcess(KlausGatewayTestOptions{GatewayImage: klausGatewayImageRepository + ":4.6.1"}.withDefaults(), "", "", "", "", "").describe() != "image "+klausGatewayImageRepository+":4.6.1" {
+	if g.describe() != "binary /bin/x" || newGatewayProcess(KlausGatewayTestOptions{GatewayImage: klausGatewayImageRepository + ":" + testGatewayVersion}.withDefaults(), "", "", "", "", "").describe() != "image "+klausGatewayImageRepository+":"+testGatewayVersion {
 		t.Error("describe")
 	}
 	if err := g.stop(); err != nil {
