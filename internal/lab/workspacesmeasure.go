@@ -1346,21 +1346,25 @@ func (m *measurement) pvDriver(w *measureWorkspace) string {
 	return pv.Spec.CSI.Driver
 }
 
-// onVolume runs a probe on the git image with the workspace's volume:
-// mounted whole at /workspace without mounts, else as they say (an
-// emptyDir "local" is added when they name it).
-func (m *measurement) onVolume(w *measureWorkspace, probe, script string, mounts []corev1.VolumeMount) (string, error) {
-	pod := probePod("agentlab-measure-"+probe, workspacesTestGitImage, []string{"sh", shExitOnError, script})
-	pod.Spec.Volumes = []corev1.Volume{{Name: workspacesTestVolume, VolumeSource: corev1.VolumeSource{
-		PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: w.volume.claim},
-	}}}
+// measureVolumePod is onVolume's pod: a workspaceVolumePod with the claim
+// mounted whole at /workspace without mounts, else as they say (an emptyDir
+// "local" is added when they name it).
+func measureVolumePod(claim, probe, script string, mounts []corev1.VolumeMount) *corev1.Pod {
+	pod := workspaceVolumePod("agentlab-measure-"+probe, claim, script)
 	if mounts == nil {
-		mounts = []corev1.VolumeMount{{Name: workspacesTestVolume, MountPath: workspacesTestMountPath}}
+		return pod
 	}
 	if slices.ContainsFunc(mounts, func(v corev1.VolumeMount) bool { return v.Name == measureLocalVolume }) {
 		pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{Name: measureLocalVolume, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}})
 	}
 	pod.Spec.Containers[0].VolumeMounts = mounts
+	return pod
+}
+
+// onVolume runs a probe on the git image with the workspace's volume, as
+// measureVolumePod mounts it.
+func (m *measurement) onVolume(w *measureWorkspace, probe, script string, mounts []corev1.VolumeMount) (string, error) {
+	pod := measureVolumePod(w.volume.claim, probe, script, mounts)
 	out, err := runPod(context.Background(), w.volume.namespace, pod, 3*m.timeout)
 	if err != nil {
 		return "", fmt.Errorf("the volume probe %s on workspace %s: %w\n%s", probe, w.name, err, out)
