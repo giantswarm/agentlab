@@ -22,7 +22,7 @@ func storeDeployment() *appsv1.Deployment {
 	d.Spec.Template.Spec.ServiceAccountName = klausGatewayComponent
 	d.Spec.Template.Spec.Containers = []corev1.Container{{
 		Name:  klausGatewayComponent,
-		Image: KlausGatewayImageDefault,
+		Image: klausGatewayImageRepository + ":" + testGatewayVersion,
 		Env: []corev1.EnvVar{
 			{Name: "KLAUS_GATEWAY_OBO_ENABLED", Value: "true"},
 			{Name: oboStoreEnv, Value: oboStoreSecretBackend},

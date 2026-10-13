@@ -64,12 +64,6 @@ import (
 // the answer in its thread. docs/platform.md "The
 // Swarmgeist proof".
 
-// KlausGatewayImageDefault is the gateway the proof runs when no image or
-// binary is named: the current release candidate of the 4.1 line, the first
-// that serves the command words alone (`agents`, `stop`) and keeps a parked
-// message and a paused approval across a restart (steps 5c and 5d).
-const KlausGatewayImageDefault = "gsoci.azurecr.io/giantswarm/klaus-gateway:4.1.1-rc.5"
-
 // Names of what the proof creates in the kagent namespace; all are deleted by
 // the same run, and a leftover of an aborted run is removed first.
 const (
@@ -172,7 +166,8 @@ const (
 // KlausGatewayTestOptions tunes the proof.
 type KlausGatewayTestOptions struct {
 	// GatewayImage is the klaus-gateway image run on the host's network
-	// (default KlausGatewayImageDefault); GatewayBinary, a local build, takes
+	// (default the release the lab's meta chart runs as its klaus-gateway
+	// component, componentGatewayImage); GatewayBinary, a local build, takes
 	// precedence — the proof of a branch.
 	GatewayImage  string
 	GatewayBinary string
@@ -215,6 +210,11 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	if err := portsFree(opts.Port, opts.Port+1, opts.Port+3); err != nil {
 		return err
 	}
+	image, err := resolveGatewayImage(cfg, opts.GatewayImage, opts.GatewayBinary)
+	if err != nil {
+		return err
+	}
+	opts.GatewayImage = image
 	runDir, cleanRunDir, err := klausGatewayRunDir(opts.RunDir)
 	if err != nil {
 		return err
@@ -574,9 +574,6 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 
 // withDefaults fills the zero options.
 func (o KlausGatewayTestOptions) withDefaults() KlausGatewayTestOptions {
-	if o.GatewayImage == "" {
-		o.GatewayImage = KlausGatewayImageDefault
-	}
 	if o.Port == 0 {
 		o.Port = 18090
 	}

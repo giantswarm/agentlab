@@ -113,8 +113,8 @@ func BeekeeperDecisionsTest(cfg *config.Config, opts BeekeeperDecisionsTestOptio
 	if opts.Version == "" {
 		opts.Version = BeekeeperDecisionsVersionDefault
 	}
-	if opts.GatewayImage == "" {
-		opts.GatewayImage = DecisionsGatewayImageDefault
+	if opts.GatewayImage, err = resolveGatewayImage(cfg, opts.GatewayImage, ""); err != nil {
+		return err
 	}
 	if opts.Port == 0 {
 		opts.Port = 18090

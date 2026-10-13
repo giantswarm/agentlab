@@ -204,7 +204,7 @@ func TestGatewayArgs(t *testing.T) {
 		t.Errorf("gatedTarget = %q", got)
 	}
 	opts := KlausGatewayTestOptions{}.withDefaults()
-	if opts.GatewayImage != KlausGatewayImageDefault || opts.Port != 18090 || opts.ModelConfig != defaultModelConfig || opts.ReadyTimeout != klausGatewayReadyTimeout {
+	if opts.GatewayImage != "" || opts.Port != 18090 || opts.ModelConfig != defaultModelConfig || opts.ReadyTimeout != klausGatewayReadyTimeout {
 		t.Errorf("defaults = %+v", opts)
 	}
 }
@@ -268,7 +268,7 @@ func TestGatewayRecords(t *testing.T) {
 		t.Errorf("version = %q", v)
 	}
 	g := newGatewayProcess(KlausGatewayTestOptions{GatewayBinary: "/bin/x"}.withDefaults(), t.TempDir(), "", "", "", "")
-	if g.describe() != "binary /bin/x" || newGatewayProcess(KlausGatewayTestOptions{}.withDefaults(), "", "", "", "", "").describe() != "image "+KlausGatewayImageDefault {
+	if g.describe() != "binary /bin/x" || newGatewayProcess(KlausGatewayTestOptions{GatewayImage: klausGatewayImageRepository + ":" + testGatewayVersion}.withDefaults(), "", "", "", "", "").describe() != "image "+klausGatewayImageRepository+":"+testGatewayVersion {
 		t.Error("describe")
 	}
 	if err := g.stop(); err != nil {

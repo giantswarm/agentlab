@@ -31,10 +31,6 @@ import (
 // POST /conversations: their reply in its thread calls a muster tool as them,
 // and the service's answer lands in the same thread.
 
-// DecisionsGatewayImageDefault is the first klaus-gateway release that
-// serves POST /decisions and POST /conversations.
-const DecisionsGatewayImageDefault = "gsoci.azurecr.io/giantswarm/klaus-gateway:4.1.0-rc.12"
-
 // The proof's caller, the tool its answers call, and how long it waits.
 const (
 	decisionsServiceAccount = "agentlab-decisions"
@@ -74,8 +70,10 @@ const (
 // DecisionsTestOptions tunes the decisions proof.
 type DecisionsTestOptions struct {
 	// GatewayImage is the klaus-gateway image run on the host's network
-	// (default DecisionsGatewayImageDefault); GatewayBinary, a local build,
-	// takes precedence — the proof of a branch.
+	// (default the release the lab's klaus-gateway component runs, as for
+	// klaus-gateway-test; every release from 4.1.0 serves POST /decisions and
+	// POST /conversations); GatewayBinary, a local build, takes precedence —
+	// the proof of a branch.
 	GatewayImage  string
 	GatewayBinary string
 	// Port is the host port of the gateway's endpoints; the admin endpoints
@@ -98,15 +96,17 @@ func DecisionsTest(cfg *config.Config, email string, opts DecisionsTestOptions) 
 	if user == nil {
 		return fmt.Errorf("no user %q in %s", email, config.File)
 	}
-	if opts.GatewayImage == "" {
-		opts.GatewayImage = DecisionsGatewayImageDefault
-	}
 	if opts.Port == 0 {
 		opts.Port = 18090
 	}
 	if err := portsFree(opts.Port, opts.Port+1, opts.Port+2); err != nil {
 		return err
 	}
+	image, err := resolveGatewayImage(cfg, opts.GatewayImage, opts.GatewayBinary)
+	if err != nil {
+		return err
+	}
+	opts.GatewayImage = image
 	runDir, cleanRunDir, err := klausGatewayRunDir(opts.RunDir)
 	if err != nil {
 		return err

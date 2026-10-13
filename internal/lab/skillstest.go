@@ -1013,12 +1013,8 @@ func fluxHelmReleaseVersion(name string) string {
 	if err != nil {
 		return unreadable(err)
 	}
-	if history, _, _ := unstructured.NestedSlice(hr.Object, "status", "history"); len(history) > 0 {
-		if snapshot, ok := history[0].(map[string]any); ok {
-			if v, _, _ := unstructured.NestedString(snapshot, "chartVersion"); v != "" {
-				return v
-			}
-		}
+	if v := appliedChartVersion(hr); v != "" {
+		return v
 	}
 	if v, _, _ := unstructured.NestedString(hr.Object, "status", "lastAttemptedRevision"); v != "" {
 		return v + " (attempted)"

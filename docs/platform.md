@@ -1105,8 +1105,11 @@ anywhere in the run fails the proof.
 
 **Deployment shape.** The gateway runs **out of cluster, on the host** —
 the image on the host network by default
-(`--gateway-image`, `gsoci.azurecr.io/giantswarm/klaus-gateway:4.1.1-rc.5`,
-the 4.1 line that serves the command words alone), or a
+(`--gateway-image`; by default the release the lab's meta chart runs as its
+`klaus-gateway` component — the version its HelmRelease applied, or with the
+component off the newest release the chart's `components.klaus-gateway`
+range admits — so one chart bump moves both shapes; the proof prints which
+image and why), or a
 local build (`--gateway-binary`, the proof of a branch) — with `a2a.url` =
 the lab's public gRPC target `grpcs://agentgateway.<domain>:<gatewayPort>`
 (TLS with the lab CA from `certs/ca.crt`; the JWT `Strict` policy of the
