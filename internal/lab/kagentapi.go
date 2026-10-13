@@ -192,7 +192,7 @@ func dialKagentAPI(cfg *config.Config, token string) (*kagentAPI, error) {
 
 // dialKagentAPIAt is dialKagentAPI through the agentgateway at base, the
 // lab's or another installation's.
-func dialKagentAPIAt(base, token string) (*kagentAPI, error) {
+func dialKagentAPIAt(base, token string, opts ...grpc.DialOption) (*kagentAPI, error) {
 	hostPort, useTLS, err := kagentTargetOf(base)
 	if err != nil {
 		return nil, err
@@ -207,9 +207,10 @@ func dialKagentAPIAt(base, token string) (*kagentAPI, error) {
 	}
 	// passthrough: the authority stays the public hostname (the TLS server
 	// name and the route's host), the dialer takes it to loopback.
-	conn, err := grpc.NewClient("passthrough:///"+hostPort, grpc.WithTransportCredentials(creds), grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
+	opts = append(opts, grpc.WithTransportCredentials(creds), grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
 		return dialLab(ctx, "tcp", addr)
 	}))
+	conn, err := grpc.NewClient("passthrough:///"+hostPort, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("dialling the kagent controller through %s: %w", hostPort, err)
 	}
@@ -220,6 +221,12 @@ func dialKagentAPIAt(base, token string) (*kagentAPI, error) {
 	}
 	api.closeConn = conn.Close
 	return api, nil
+}
+
+// dialKagentAPIAs is dialKagentAPIAt as a person whose token renews during
+// the command: every call carries the ID token current when it starts.
+func dialKagentAPIAs(base string, person *personToken) (*kagentAPI, error) {
+	return dialKagentAPIAt(base, "", renewingBearer(person.idToken)...)
 }
 
 // newKagentAPI is the client on an existing connection (the tests hand in a

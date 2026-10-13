@@ -57,7 +57,10 @@ import (
 // their volumes, the Sessions, the Agent, the probe pods, the pushes, a
 // generated repository) is removed on every path. The lab is the default
 // target; --kube-context and --muster-url measure another cluster with the
-// platform, as the person signed in there (`muster auth login`).
+// platform, as the person signed in there (`muster auth login`). The
+// person's token is renewed before it expires (personToken), so a
+// measurement of many runs outlives it and its cleanup deletes every Session
+// it started.
 
 // DefaultWorkspacesMeasureRuns is how many runs the measurement makes.
 const DefaultWorkspacesMeasureRuns = 5
@@ -257,9 +260,11 @@ type measurement struct {
 	provider  string
 	org       string
 	person    *musterSession
+	token     *personToken     // the person's, renewed for every call to muster and kagent
 	signedIn  *workspacePerson // the lab's person, connected to the provider
 	api       *kagentAPI
 	set       *sessionSet
+	started   int // the Sessions start_session started
 	agentNS   string
 	agentName string
 	sessions  string // why the Session figures are not available, "" when they are
@@ -488,7 +493,11 @@ func (m *measurement) labPreconditions() error {
 	if m.signedIn, err = openWorkspacePerson(cfg, user); err != nil {
 		return err
 	}
+	m.token = labPersonToken(func() (string, error) {
+		return passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret, user.Email, user.Password, musterLoginScopes)
+	})
 	m.person = m.signedIn.session
+	m.person.renew = m.token.accessToken
 	hops, err := connectWorkspaceProvider(cfg, m.signedIn, config.WorkspaceProviderFake)
 	if err != nil {
 		return err
@@ -523,12 +532,12 @@ func (m *measurement) labPreconditions() error {
 	if res := sideloadImages(cfg, hostPullImages([]string{workspacesTestGitImage})); res.n > 0 {
 		note("side-loaded the probes' git image (%s)", res.d)
 	}
-	return m.labAgent(user)
+	return m.labAgent()
 }
 
 // labAgent readies the measurement's Agent on the claude Harness and the
 // kagent API as the person.
-func (m *measurement) labAgent(user *config.User) error {
+func (m *measurement) labAgent() error {
 	cfg := m.cfg
 	ctx := context.Background()
 	if err := waitHarnessReady(ctx, claudeHarness, m.timeout); err != nil {
@@ -551,11 +560,7 @@ func (m *measurement) labAgent(user *config.User) error {
 		return fmt.Errorf("the Agent %s is not Ready on Harness %s after %s: %s", measureAgent, claudeHarness, boot.elapsed.Round(time.Second), boot.reason)
 	}
 	m.agentNS, m.agentName, m.report.Harness = kagentNamespace, measureAgent, claudeHarness
-	token, err := passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret, user.Email, user.Password, musterLoginScopes)
-	if err != nil {
-		return err
-	}
-	if m.api, err = dialKagentAPI(cfg, token); err != nil {
+	if m.api, err = dialKagentAPIAs(cfg.AgentgatewayBaseURL(), m.token); err != nil {
 		return err
 	}
 	m.set = &sessionSet{api: m.api}
@@ -567,13 +572,15 @@ func (m *measurement) labAgent(user *config.User) error {
 // their muster sign-in, the named repositories.
 func (m *measurement) remotePreconditions() error {
 	o := m.opts
-	access, err := musterCLIToken(o.MusterURL, false)
+	m.token = musterPersonToken(o.MusterURL)
+	access, err := m.token.accessToken()
 	if err != nil {
 		return err
 	}
 	if m.person, err = openMusterSessionAt(o.MusterURL, access, "workspaces-measure"); err != nil {
 		return err
 	}
+	m.person.renew = m.token.accessToken
 	note("signed in to %s with the person's muster session; Kubernetes reads through context %s", o.MusterURL, o.KubeContext)
 	m.ws = []*measureWorkspace{
 		{name: measureSmallWorkspace, kind: measureSmall, repos: o.SmallRepos, worked: o.SmallRepos[0], branch: ""},
@@ -583,11 +590,7 @@ func (m *measurement) remotePreconditions() error {
 		m.sessions = "no --agent and --agentgateway-url to start a Session on this cluster with"
 		return nil
 	}
-	id, err := musterCLIToken(o.MusterURL, true)
-	if err != nil {
-		return err
-	}
-	if m.api, err = dialKagentAPIAt(o.AgentgatewayURL, id); err != nil {
+	if m.api, err = dialKagentAPIAs(o.AgentgatewayURL, m.token); err != nil {
 		return err
 	}
 	m.set = &sessionSet{api: m.api}
@@ -1049,6 +1052,7 @@ func (m *measurement) session(w *measureWorkspace, last bool) error {
 	}
 	id := started.Session.ID
 	m.set.add(id)
+	m.started++
 	ctx, cancel := context.WithTimeout(context.Background(), 3*m.timeout)
 	defer cancel()
 	ks, err := m.api.getSession(ctx, id)
@@ -1619,7 +1623,12 @@ func (m *measurement) deleteWorkspace(w *measureWorkspace) error {
 func (m *measurement) cleanup() {
 	var errs []error
 	if m.set != nil {
-		errs = append(errs, m.set.removeAllNow())
+		left := slices.Clone(m.set.ids)
+		if err := m.set.removeAllNow(); err != nil {
+			errs = append(errs, err)
+		} else if len(left) > 0 {
+			note("deleted the Sessions the measurement left: %s", strings.Join(left, ", "))
+		}
 	}
 	if m.person != nil {
 		for _, w := range m.ws {
@@ -1651,7 +1660,7 @@ func (m *measurement) cleanup() {
 		warn("removing what the measurement left: %v", err)
 		return
 	}
-	note("removed what the measurement created: the Sessions, the workspaces and their volumes, the Agent, the pushes")
+	note("removed what the measurement created: the %d Sessions it started, the workspaces and their volumes, the Agent, the pushes", m.started)
 }
 
 // writeReport writes the report's JSON and Markdown to the run directory

@@ -567,6 +567,14 @@ session directories, the workspaces and their volumes, the Agent
 person's sign-in at `fake`, the pushed repositories back at their heads and a
 generated repository.
 
+Every call to muster and kagent, the cleanup's included, carries the
+person's current token: shortly before it expires a new one is taken, a
+fresh password grant in the lab, the renewed tokens of the person's muster
+sign-in on another cluster (muster renews them once they have expired, so the
+measurement waits those seconds). A measurement of many runs outlives any one
+token; each renewal is said, and the cleanup's last line counts the Sessions
+the measurement started and deleted.
+
 A workspace an interrupted run left under a measurement's name has its
 session directories cleared and is deleted before the run. One that is still
 deleting goes only at its manager's next deletion cycle: its session
