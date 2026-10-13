@@ -601,6 +601,10 @@ func (m *measurement) clonePusher(repo string) error {
 	if err != nil {
 		return err
 	}
+	// git runs in the clone: every path it is handed is absolute.
+	if dir, err = filepath.Abs(dir); err != nil {
+		return err
+	}
 	pu := &measurePusher{repo: repo, dir: filepath.Join(dir, "clone"), token: token}
 	m.pushers[repo] = pu
 	if _, err := m.gh.git(dir, token, "clone", "-q", "--depth", "1", "--no-checkout", m.gh.remote(repo), "clone"); err != nil {
@@ -1111,28 +1115,43 @@ func (m *measurement) setupRecord(w *measureWorkspace, id string) (*workspaceSta
 }
 
 // measureFetchCommand times the setup's own fetch in the clone of repo and
-// says what origin's branch is after it.
+// says what origin's branch is after it. The stamps are bash's
+// EPOCHREALTIME (the Bash tool's shell), else date's: both raw, judged by
+// parseFetch.
 func measureFetchCommand(repo, branch string) string {
-	return `echo "` + probeMarker + ` pwd=$(pwd)"; cd ` + repo + ` && s=$(date +%s%N) && git fetch --quiet --prune origin; rc=$?; e=$(date +%s%N); ` +
-		`echo "` + probeMarker + ` fetch=ms=$(( (e - s) / 1000000 )) rc=$rc head=$(git rev-parse origin/` + branch + ` 2>&1 | head -n 1)"`
+	return `now() { if [ -n "$EPOCHREALTIME" ]; then echo "$EPOCHREALTIME"; else date +%s.%N; fi; }; ` +
+		`echo "` + probeMarker + ` pwd=$(pwd)"; cd ` + repo + ` && s=$(now) && git fetch --quiet --prune origin; rc=$?; e=$(now); ` +
+		`echo "` + probeMarker + ` fetch=start=$s end=$e rc=$rc head=$(git rev-parse origin/` + branch + ` 2>&1 | head -n 1)"`
 }
 
-// parseFetch reads the fetch line of a reply: the milliseconds, the exit
-// code and the head.
-func parseFetch(reply string) (ms float64, rc, head string, err error) {
+// parseFetch reads the fetch line of a reply: the seconds between its
+// stamps, the exit code and the head. A clock of whole seconds measures
+// nothing below a second: that is the error.
+func parseFetch(reply string) (seconds float64, rc, head string, err error) {
 	for _, mm := range probeLine.FindAllStringSubmatch(reply, -1) {
 		if mm[1] != "fetch" {
 			continue
 		}
 		value := strings.Trim(strings.TrimSpace(mm[2]), "`")
-		raw := probeValue(value, "ms")
-		v, perr := strconv.ParseFloat(raw, 64)
-		if perr != nil {
-			return 0, "", "", fmt.Errorf("the fetch line carries no milliseconds: %q", value)
+		start, end := probeValue(value, "start"), probeValue(value, "end")
+		if !subSecondStamp(start) || !subSecondStamp(end) {
+			return 0, "", "", fmt.Errorf("the Session's sandbox stamps the fetch %q and %q: no clock below a second (neither bash's EPOCHREALTIME nor date's %%N)", start, end)
 		}
-		return v, probeValue(value, "rc"), probeValue(value, probeHeadKey), nil
+		s, _ := strconv.ParseFloat(start, 64)
+		e, _ := strconv.ParseFloat(end, 64)
+		return e - s, probeValue(value, "rc"), probeValue(value, probeHeadKey), nil
 	}
 	return 0, "", "", fmt.Errorf("the reply carries no %s fetch line: %s", probeMarker, excerpt(reply, 300))
+}
+
+// subSecondStamp says whether a stamp is seconds with a fraction that is not
+// all zeros.
+func subSecondStamp(stamp string) bool {
+	whole, frac, ok := strings.Cut(stamp, ".")
+	if _, err := strconv.ParseFloat(stamp, 64); err != nil || !ok || whole == "" || frac == "" {
+		return false
+	}
+	return strings.Trim(frac, "0") != ""
 }
 
 // onDemandFetch pushes once more and times the setup's fetch command in the
@@ -1146,7 +1165,7 @@ func (m *measurement) onDemandFetch(ctx context.Context, w *measureWorkspace, ks
 	if err != nil {
 		return err
 	}
-	ms, rc, got, err := parseFetch(reply)
+	seconds, rc, got, err := parseFetch(reply)
 	switch {
 	case err != nil:
 		w.samples.notAvailable(figOnDemandFetch, err.Error())
@@ -1155,8 +1174,8 @@ func (m *measurement) onDemandFetch(ctx context.Context, w *measureWorkspace, ks
 		w.samples.notAvailable(figOnDemandFetch, fmt.Sprintf("the fetch in the Session's sandbox ended %s at %s, not at the pushed %s", rc, got, shortSHA(head)))
 		warn("%s: the fetch in the Session's sandbox ended %s at %q, not at the pushed %s", w.name, rc, got, shortSHA(head))
 	default:
-		w.samples.add(figOnDemandFetch, ms/1000)
-		note("%s: on-demand fetch of %s %.0f ms", w.name, w.pushed, ms)
+		w.samples.add(figOnDemandFetch, seconds)
+		note("%s: on-demand fetch of %s %s", w.name, w.pushed, formatMeasure(seconds, unitSeconds))
 	}
 	return nil
 }

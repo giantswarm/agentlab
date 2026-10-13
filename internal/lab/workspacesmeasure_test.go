@@ -129,6 +129,15 @@ func TestMeasureReportMarkdown(t *testing.T) {
 	}
 }
 
+func TestMeasureStorageUnread(t *testing.T) {
+	md := measureStorage{Expansion: &measureExpansion{From: "5Gi", To: "6Gi"}}.markdown()
+	for _, want := range []string{"| Standing storage | not available: no run reached", "| Online expansion | not available: the run ended before the volume grew |"} {
+		if !strings.Contains(md, want) {
+			t.Errorf("an unread storage's Markdown lacks %q:\n%s", want, md)
+		}
+	}
+}
+
 func TestWorkspacesMeasureOptionsValidate(t *testing.T) {
 	remote := WorkspacesMeasureOptions{KubeContext: "ctx", MusterURL: "https://muster.example.com", Organization: "org", Provider: config.WorkspaceProviderGitHub,
 		SmallRepos: []string{"o/a", "o/b"}, LargeRepo: "o/big"}
@@ -185,10 +194,15 @@ func TestMeasureScriptsParse(t *testing.T) {
 
 func TestParseFetch(t *testing.T) {
 	head := "0123456789abcdef0123456789abcdef01234567"
-	reply := probeMarker + " pwd=/workspace\n`" + probeMarker + " fetch=ms=412 rc=0 head=" + head + "`\n"
-	ms, rc, got, err := parseFetch(reply)
-	if err != nil || ms != 412 || rc != "0" || got != head {
-		t.Fatalf("parseFetch = %v, %q, %q, %v", ms, rc, got, err)
+	reply := probeMarker + " pwd=/workspace\n`" + probeMarker + " fetch=start=1760000000.100000 end=1760000000.512000 rc=0 head=" + head + "`\n"
+	seconds, rc, got, err := parseFetch(reply)
+	if err != nil || seconds < 0.4119 || seconds > 0.4121 || rc != "0" || got != head {
+		t.Fatalf("parseFetch = %v, %q, %q, %v", seconds, rc, got, err)
+	}
+	for _, coarse := range []string{"start=1760000000.000000000 end=1760000001.000000000", "start=1760000000.N end=1760000000.N", "start=1760000000 end=1760000001"} {
+		if _, _, _, err := parseFetch(probeMarker + " fetch=" + coarse + " rc=0 head=" + head); err == nil || !strings.Contains(err.Error(), "no clock below a second") {
+			t.Errorf("stamps %s: %v, want no clock below a second", coarse, err)
+		}
 	}
 	if _, _, _, err := parseFetch(probeMarker + " pwd=/workspace\n"); err == nil {
 		t.Fatal("a reply without the fetch line parsed")

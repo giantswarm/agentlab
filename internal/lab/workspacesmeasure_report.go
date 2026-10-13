@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 // The report of `agentlab workspaces-measure`: per workspace, every figure
@@ -316,7 +318,10 @@ func (r *measureReport) markdown() string {
 	}
 	for _, w := range r.Workspaces {
 		fmt.Fprintf(&b, "\n### %s workspace `%s`: %s\n\n", w.Kind, w.Name, strings.Join(w.Repositories, ", "))
-		fmt.Fprintf(&b, "StorageClass `%s`, driver `%s`. Checkout, status and build in `%s`", w.Storage.StorageClass, w.Storage.Driver, w.Worked)
+		if w.Storage.read() {
+			fmt.Fprintf(&b, "StorageClass `%s`, driver `%s`. ", w.Storage.StorageClass, w.Storage.Driver)
+		}
+		fmt.Fprintf(&b, "Checkout, status and build in `%s`", w.Worked)
 		if w.Pushed != "" {
 			fmt.Fprintf(&b, "; pushes to `%s`", w.Pushed)
 		}
@@ -334,10 +339,20 @@ func (r *measureReport) markdown() string {
 	return b.String()
 }
 
+// read says whether a run read the storage.
+func (s measureStorage) read() bool { return s.StorageClass != "" }
+
 // markdown is the storage as a two-column table.
 func (s measureStorage) markdown() string {
 	var b strings.Builder
 	b.WriteString("| Storage | Measured |\n|---|---|\n")
+	if !s.read() {
+		b.WriteString("| Standing storage | not available: no run reached the last run's reading |\n")
+		if e := s.Expansion; e != nil {
+			b.WriteString(e.markdown())
+		}
+		return b.String()
+	}
 	switch {
 	case s.CapacityBytes != nil:
 		fmt.Fprintf(&b, "| Capacity (the claim's status) | %s |\n", formatBytes(*s.CapacityBytes))
@@ -347,7 +362,7 @@ func (s measureStorage) markdown() string {
 	fmt.Fprintf(&b, "| Use (`du`): mirrors, session directories | %s, %s |\n", formatBytes(s.MirrorsBytes), formatBytes(s.SessionsBytes))
 	fmt.Fprintf(&b, "| The filesystem under the volume (`df`): size, available | %s, %s |\n", formatBytes(s.FilesystemBytes), formatBytes(s.FilesystemAvailBytes))
 	if s.NeededSize != "" || s.VolumeSize != "" {
-		fmt.Fprintf(&b, "| The manager's need and volume size | %s, %s |\n", cmpOr(s.NeededSize, "—"), cmpOr(s.VolumeSize, "—"))
+		fmt.Fprintf(&b, "| The manager's need and volume size | %s, %s |\n", formatQuantity(s.NeededSize), formatQuantity(s.VolumeSize))
 	}
 	for _, m := range s.Mirrors {
 		if m.Factor == nil {
@@ -371,14 +386,34 @@ func (s measureStorage) markdown() string {
 		fmt.Fprintf(&b, "| Headroom max(4 GiB, 50 %%) | need %s, wanted %s; not available: %s |\n", formatBytes(h.NeededBytes), formatBytes(h.WantBytes), mdCell(h.NotAvailable))
 	}
 	if e := s.Expansion; e != nil {
-		if e.NotAvailable != "" {
-			fmt.Fprintf(&b, "| Online expansion | not available: %s |\n", mdCell(e.NotAvailable))
-		} else {
-			fmt.Fprintf(&b, "| Online expansion %s → %s | the manager raised the claim %s after update_workspace, the driver resized it %s later |\n",
-				e.From, e.To, formatMeasure(*e.RequestedSeconds, unitSeconds), formatMeasure(*e.ResizedSeconds, unitSeconds))
-		}
+		b.WriteString(e.markdown())
 	}
 	return b.String()
+}
+
+// markdown is the expansion as a row of the storage table.
+func (e measureExpansion) markdown() string {
+	switch {
+	case e.NotAvailable != "":
+		return fmt.Sprintf("| Online expansion | not available: %s |\n", mdCell(e.NotAvailable))
+	case e.RequestedSeconds == nil || e.ResizedSeconds == nil:
+		return "| Online expansion | not available: the run ended before the volume grew |\n"
+	}
+	return fmt.Sprintf("| Online expansion %s → %s | the manager raised the claim %s after update_workspace, the driver resized it %s later |\n",
+		e.From, e.To, formatMeasure(*e.RequestedSeconds, unitSeconds), formatMeasure(*e.ResizedSeconds, unitSeconds))
+}
+
+// formatQuantity words a Kubernetes quantity of bytes the manager reports
+// ("67158407", "5Gi"), as it is where it does not parse.
+func formatQuantity(q string) string {
+	if q == "" {
+		return "—"
+	}
+	v, err := resource.ParseQuantity(q)
+	if err != nil {
+		return q
+	}
+	return formatBytes(v.Value())
 }
 
 // mdCell keeps a table cell on one line and its pipes literal.
