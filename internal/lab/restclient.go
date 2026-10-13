@@ -1,6 +1,8 @@
 package lab
 
 import (
+	"sync"
+
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/client-go/rest"
 
@@ -17,11 +19,19 @@ import (
 // not up fails on the missing file, by name. The REST config it yields is
 // tuned for a boot that touches many objects (client-go's default of five
 // requests a second throttles an install of the platform's size) and
-// identifies the lab in the apiserver's audit log.
+// identifies the lab in the apiserver's audit log. The one exception is a
+// measurement of another cluster (useKubeContext): the person's own
+// kubeconfig at the context it names.
 func labRESTClientGetter(namespace string) genericclioptions.RESTClientGetter {
-	kubeconfig := labKubeconfig()
 	flags := genericclioptions.NewConfigFlags(false)
-	flags.KubeConfig = &kubeconfig
+	if ctx := targetKubeContext(); ctx != "" {
+		// Another cluster: the person's own kubeconfig (KUBECONFIG or
+		// ~/.kube/config), at the context the command names.
+		flags.Context = &ctx
+	} else {
+		kubeconfig := labKubeconfig()
+		flags.KubeConfig = &kubeconfig
+	}
 	if namespace != "" {
 		ns := namespace
 		flags.Namespace = &ns
@@ -38,4 +48,28 @@ func tuneRESTConfig(c *rest.Config) *rest.Config {
 	c.Burst = 100
 	c.UserAgent = "agentlab/" + project.Version()
 	return c
+}
+
+// kubeTarget is the kube context of the person's own kubeconfig that a
+// command measuring another cluster names (workspaces-measure
+// --kube-context); "" is the lab's own kubeconfig, every other command's.
+var kubeTarget struct {
+	sync.Mutex
+	context string
+}
+
+// useKubeContext points every embedded client at the context of the person's
+// kubeconfig instead of the lab's; the cached client bundle is dropped so the
+// next one is built for it.
+func useKubeContext(name string) {
+	kubeTarget.Lock()
+	kubeTarget.context = name
+	kubeTarget.Unlock()
+	resetLabKube()
+}
+
+func targetKubeContext() string {
+	kubeTarget.Lock()
+	defer kubeTarget.Unlock()
+	return kubeTarget.context
 }

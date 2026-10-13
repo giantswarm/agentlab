@@ -444,6 +444,79 @@ platform`. Without any of them it fails at once with the reason.
 Everything is removed on every path: the Sessions, the Agents, the session
 directories, the workspace, the admin's sign-in, and `docs` back at its head.
 
+### The measurements
+
+`agentlab workspaces-measure [email]` measures what the parts prove: how long
+a workspace's sync, a Session's directory and the git work in it take on the
+workspace volume, how much the volume stores, and whether the design's sizing
+defaults hold (a repository not yet mirrored counts 1.5 × the size its
+provider reports, once synced its measured mirror; the headroom is max(4 GiB,
+50 % of the need); an online expansion where the class provisions a size). It
+works through muster as `[email]` (default the admin, a member of the lab's
+Organization) on [the provider instance `fake`](#the-provider-instance-fake),
+with the [Session admission](#the-session-admission) and agent-manager's
+`start_session`; Kubernetes is only read, apart from the probe pods.
+
+Two workspaces, each created and deleted once per run (`--runs`, default 5):
+
+| Workspace | Repositories | Pushes go to | Checkout, status and build in |
+|---|---|---|---|
+| `agentlab-measure-small` | `agentlab-oss/docs`, `agentlab-oss/kagent` | `docs` | `kagent` |
+| `agentlab-measure-large` | `agentlab-org/monorepo` (64 MiB), or with `--large-repo-mib <n>` a repository of n MiB the command adds to the lab's GitHub (`agentlab-org/monorepo-<n>mib`) and removes afterwards | the large one | the large one |
+
+The two have an owner each, so the manager's one-minute listing cache of one
+never shortens the other's cycle. Per run and workspace, each figure from the
+call to the first read that sees its end (reads every 500 ms):
+
+| Figure | From → to |
+|---|---|
+| First sync | `create_workspace` called → `get_workspace` reports the first cycle's result |
+| No-op cycle | `sync_workspace` called once the listing cache let go, nothing pushed → the cycle's `NoChange` (a cycle ending otherwise is not counted, and says so) |
+| Changed cycle | `sync_workspace` called after a push → the cycle's result, the mirror at the pushed head |
+| `authorize_workspace` | each call through muster → its granted answer |
+| Session directory setup | `start_session` called with the grant → the setup's record `.kagent/workspace.json` in the session directory: the actor Running, every clone in place, the pushed repository fetched |
+| Setup in the actor | the first turn sent → the same record |
+| On-demand fetch | after another push, the setup's own `git fetch --quiet --prune origin` timed in the Session's sandbox by its second turn → the fetch ended at the pushed head |
+| First checkout, `git status`, build | in a pod with the Session's mounts (its directory at `/workspace`, the mirrors read-only at `/mirrors`): `git switch <default branch>` in the Session's clone (the Harness's first checkout), `git status --porcelain`, `go build ./...` with a cold build cache beside the clone; then the same in a clone of a copy of the mirror on an `emptyDir`, the node's local disk |
+| Session directory size | `du -sb` of the directory after the turns and the checkout, the build's cache and output removed |
+
+Run 1 also times **one online expansion** of the small workspace's volume
+where its StorageClass allows volume expansion (`agentlab-workspaces` does):
+`update_workspace` raises the workspace's `minimum` a GiB above the claim's
+request, the manager raises the claim's request, the driver resizes the
+volume; on an elastic class it is listed as not available. The last run reads
+the **standing storage**: the claim's capacity, the volume's use (`du` of
+`mirrors/` and `sessions/`), what the filesystem under it reports (`df`: on
+the lab's export or an elastic share that is not the volume's own), the
+manager's need and size, each mirror's measured size against the provider's
+(`preview_workspace`'s `sizeKiB`, GitHub's `size`) with the factor against
+1.5, and whether the capacity left the headroom max(4 GiB, 50 % of the need)
+free.
+
+The output is a JSON document and a Markdown table, written to the run
+directory (`state/workspaces-measure-<time>/`, or `--run-dir`) as
+`workspaces-measure.json` and `workspaces-measure.md`, and printed: per
+workspace and figure what it measured from and to, its samples, median, p90
+(nearest rank) and max, the StorageClass and the driver. A figure the cluster
+cannot report is listed as not available with the reason, never estimated.
+In the lab the NFS export lives on the node's own disk, so the volume against
+the local disk measures the NFS protocol, not a network.
+
+Everything the command creates is removed on every path: the Sessions, the
+session directories, the workspaces and their volumes, the Agent
+`agentlab-workspaces-measure` (Harness `claude`), the probe pods, the
+person's sign-in at `fake`, the pushed repositories back at their heads and a
+generated repository.
+
+**Another cluster with the platform**: `--kube-context <context>` (of your own
+kubeconfig) and `--muster-url <url>`, as the person `muster auth login
+--endpoint <url>` signed in, with `--organization`, `--provider`,
+`--small-repos owner/a,owner/b` (the first is checked out and built) and
+`--large-repo owner/name`. The command pushes only to the lab's GitHub, so
+there the changed cycle and the on-demand fetch are not available;
+`--agentgateway-url` and `--agent namespace/name` (an Agent whose Sessions
+reach the provider) measure the Sessions, which are otherwise not available.
+
 ## The Session admission
 
 kagent admits a Session that names a workspace volume only with a workspace
@@ -676,7 +749,8 @@ and `--fixture <file>` replaces it.
 `monorepo` carries 64 MiB of incompressible content (seeded by its name, so
 every lab clones the same bytes) for the measurements; `--large-repo-mib <n>`
 sets another size. Its `size` field is the repository's size on disk in KiB,
-as GitHub reports it.
+as GitHub reports it. `monorepo` and `kagent` carry a Go module (`go.mod`,
+`main.go`) for the measurements' build.
 
 **The users** are the lab's Dex users (`agentlab.yaml`'s `users`):
 
@@ -713,6 +787,10 @@ Every request is a line of the container's log and an entry of
 `revoked-token`, `app-jwt`, `installation-token`, `user-token` or
 `oauth-client`. Only the path is logged: no token, OAuth code or verifier
 reaches it. `GET /_fake/pulls` lists every pull request with its author.
+`PUT /_fake/repos/{owner}/{repo}` with `generatedMiB` adds a public repository
+of that many generated MiB and a Go module to a fixture owner (the
+measurements' `--large-repo-mib`), `DELETE` removes it again; the fixture's
+repositories are never removed.
 
 ### Running it
 

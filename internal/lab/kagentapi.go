@@ -179,7 +179,13 @@ func kagentTargetOf(base string) (hostPort string, useTLS bool, err error) {
 // `a2a.url: grpcs://agentgateway.<domain>:443` does. The connection is made on
 // the first call; close releases it.
 func dialKagentAPI(cfg *config.Config, token string) (*kagentAPI, error) {
-	hostPort, useTLS, err := kagentTarget(cfg)
+	return dialKagentAPIAt(cfg.AgentgatewayBaseURL(), token)
+}
+
+// dialKagentAPIAt is dialKagentAPI through the agentgateway at base, the
+// lab's or another installation's.
+func dialKagentAPIAt(base, token string) (*kagentAPI, error) {
+	hostPort, useTLS, err := kagentTargetOf(base)
 	if err != nil {
 		return nil, err
 	}

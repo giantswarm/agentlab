@@ -97,6 +97,12 @@ const (
 	// repositoriesKey is the "repositories" key of a workspace source and of
 	// GitHub's installation repository listing the fake serves.
 	repositoriesKey = "repositories"
+	// gitOrigin is a clone's remote.
+	gitOrigin = "origin"
+	// neverRead says a wait never read what it waited for.
+	neverRead = "never read"
+	// shExitOnError runs a probe's script to its first failure.
+	shExitOnError = "-ec"
 )
 
 // syncFilters are the filter workspace's filters, the same on each owner: a
@@ -1059,7 +1065,7 @@ func (sp *syncProof) push() (string, error) {
 	if err := os.WriteFile(filepath.Join(sp.work, syncPushedFile), []byte("# pushed by agentlab workspaces-test --part sync\n"), 0o600); err != nil {
 		return "", err
 	}
-	for _, args := range [][]string{{gitAdd, syncPushedFile}, {gitCommit, "-q", "--allow-empty", "-m", "workspaces-test: a push"}, {githubPush, "-q", "origin", "HEAD:refs/heads/" + syncMainBranch}} {
+	for _, args := range [][]string{{gitAdd, syncPushedFile}, {gitCommit, "-q", "--allow-empty", "-m", "workspaces-test: a push"}, {githubPush, "-q", gitOrigin, "HEAD:refs/heads/" + syncMainBranch}} {
 		if _, err := sp.gh.git(sp.work, sp.tokens[syncOSS], args...); err != nil {
 			return "", err
 		}
@@ -1080,7 +1086,7 @@ func (sp *syncProof) forcePush() (string, error) {
 	if err := os.WriteFile(filepath.Join(sp.work, "force-pushed.md"), []byte("# force-pushed by agentlab workspaces-test --part sync\n"), 0o600); err != nil {
 		return "", err
 	}
-	for _, args := range [][]string{{gitAdd, "force-pushed.md"}, {gitCommit, "-qm", "workspaces-test: a force-push"}, {githubPush, "-q", "--force", "origin", "HEAD:refs/heads/" + syncMainBranch}} {
+	for _, args := range [][]string{{gitAdd, "force-pushed.md"}, {gitCommit, "-qm", "workspaces-test: a force-push"}, {githubPush, "-q", "--force", gitOrigin, "HEAD:refs/heads/" + syncMainBranch}} {
 		if _, err := sp.gh.git(sp.work, sp.tokens[syncOSS], args...); err != nil {
 			return "", err
 		}
@@ -1164,7 +1170,7 @@ func (sp *syncProof) waitCycle(name string, prev *syncLastSync) (*syncDetail, er
 		return w.ActiveSync == nil && w.SyncRequest == nil && w.LastSync != nil && (prev == nil || w.LastSync.Time.After(prev.Time)), nil
 	})
 	if err != nil {
-		state := "never read"
+		state := neverRead
 		if last != nil {
 			state = fmt.Sprintf("last sync %+v, active %v, request %v", last.Workspace.LastSync, last.Workspace.ActiveSync != nil, last.Workspace.SyncRequest != nil)
 		}
@@ -1228,7 +1234,7 @@ func (sp *syncProof) onVolume(name, probe, script string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	pod := probePod("agentlab-sync-"+probe, workspacesTestGitImage, []string{"sh", "-ec", script})
+	pod := probePod("agentlab-sync-"+probe, workspacesTestGitImage, []string{"sh", shExitOnError, script})
 	pod.Spec.Volumes = []corev1.Volume{{Name: workspacesTestVolume, VolumeSource: corev1.VolumeSource{
 		PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: v.claim},
 	}}}
@@ -1320,7 +1326,7 @@ func (sp *syncProof) restore() error {
 	}
 	if sp.work != "" && sp.startHead != "" {
 		if head, err := sp.providerHead(syncMovingRepo); err != nil || head != sp.startHead {
-			_, err := sp.gh.git(sp.work, sp.tokens[syncOSS], "push", "-q", "--force", "origin", sp.startHead+":refs/heads/"+syncMainBranch)
+			_, err := sp.gh.git(sp.work, sp.tokens[syncOSS], "push", "-q", "--force", gitOrigin, sp.startHead+":refs/heads/"+syncMainBranch)
 			errs = append(errs, err)
 		}
 	}

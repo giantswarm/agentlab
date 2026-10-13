@@ -109,6 +109,9 @@ type workspaceRepo struct {
 	sizeKiB  int
 	pushedAt time.Time
 	pulls    []*workspacePull
+	// generated is a repository added at runtime (githubfake_generated.go),
+	// the only kind that can be removed again.
+	generated bool
 }
 
 // githubToken is a token the fake issued: an installation's (Installation,
@@ -216,6 +219,8 @@ func (g *workspaceGitHub) handler() http.Handler {
 	mux.HandleFunc("GET "+githubFakeHealthPath, func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok") })
 	mux.HandleFunc("GET "+githubFakeRequestsPath, g.serveRequests)
 	mux.HandleFunc("GET "+githubFakePullsPath, g.servePulls)
+	mux.HandleFunc("PUT "+githubFakeReposPath+"/{owner}/{repo}", g.addGeneratedRepo)
+	mux.HandleFunc("DELETE "+githubFakeReposPath+"/{owner}/{repo}", g.removeGeneratedRepo)
 
 	mux.HandleFunc("GET /login/oauth/authorize", g.authorize)
 	mux.HandleFunc("POST /login/oauth/access_token", g.accessToken)
