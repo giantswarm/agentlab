@@ -15,11 +15,17 @@ import (
 // paused approval — in the thread's row of its routing store.
 const klausGatewayHeldSince = "4.1.0-rc.15"
 
-// gatewayKeepsHeld reports whether the gateway the log names (gatewayVersion's
-// "klaus-gateway <version> (<sha>)") keeps held state across a restart. Only
-// a release or a release candidate is compared; anything else (a dev build of
-// a branch, a version that does not parse) is the build under proof.
+// gatewayKeepsHeld reports whether the gateway the log names keeps held state
+// across a restart.
 func gatewayKeepsHeld(described string) bool {
+	return gatewayAtLeast(described, klausGatewayHeldSince)
+}
+
+// gatewayAtLeast reports whether the gateway the log names (gatewayVersion's
+// "klaus-gateway <version> (<sha>)") is since or newer. Only a release or a
+// release candidate is compared; anything else (a dev build of a branch, a
+// version that does not parse) is the build under proof.
+func gatewayAtLeast(described, since string) bool {
 	fields := strings.Fields(described)
 	if len(fields) < 2 {
 		return true
@@ -28,7 +34,7 @@ func gatewayKeepsHeld(described string) bool {
 	if err != nil || (v.Prerelease() != "" && !strings.HasPrefix(v.Prerelease(), "rc.")) {
 		return true
 	}
-	return !v.LessThan(mastersemver.MustParse(klausGatewayHeldSince))
+	return !v.LessThan(mastersemver.MustParse(since))
 }
 
 // restartMidSignIn has user, who has no link, open a thread; once the thread

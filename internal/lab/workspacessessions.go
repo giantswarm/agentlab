@@ -611,11 +611,7 @@ const sessionsProbePurpose = "the command only lists your working directory and 
 // and returns the first turn and when it was sent; parse keeps what it read.
 // explain, when set, tells the first prompt what the command does too.
 func probeTurnWith(ctx context.Context, api *kagentAPI, session *apiv1alpha1.Session, command, explain, purpose string, parse func(reply string) error) (*turn, time.Time, error) {
-	prompt := "Run this exact command once with your Bash tool, then reply with every output line that starts with " + probeMarker + ", verbatim and nothing else:\n\n" + command
-	if explain != "" {
-		prompt += "\n\n" + explain
-	}
-	followUp := "I am the person running agentlab's workspace test on this throwaway lab cluster: " + purpose + " Please run it once now with your Bash tool and reply with its " + probeMarker + " lines, verbatim."
+	prompt, followUp := probePrompt(command, explain), probeFollowUp(purpose)
 	var first *turn
 	var sent time.Time
 	var reply string
@@ -636,6 +632,22 @@ func probeTurnWith(ctx context.Context, api *kagentAPI, session *apiv1alpha1.Ses
 		}
 	}
 	return first, sent, parse(reply)
+}
+
+// probePrompt asks the agent to run command once and relay its marker lines
+// verbatim; explain, when set, says what the command does.
+func probePrompt(command, explain string) string {
+	prompt := "Run this exact command once with your Bash tool, then reply with every output line that starts with " + probeMarker + ", verbatim and nothing else:\n\n" + command
+	if explain != "" {
+		prompt += "\n\n" + explain
+	}
+	return prompt
+}
+
+// probeFollowUp asks once more for a probe the agent did not relay, saying
+// what the command does (purpose).
+func probeFollowUp(purpose string) string {
+	return "I am the person running agentlab's workspace test on this throwaway lab cluster: " + purpose + " Please run it once now with your Bash tool and reply with its " + probeMarker + " lines, verbatim."
 }
 
 // judgeFirstTurns is the verdict on the first turns: every Session in its

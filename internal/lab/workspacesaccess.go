@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -270,45 +269,11 @@ func (ap *accessProof) preconditions(adminUser *config.User, email string) error
 // createWorkspace defines the part's workspace as the admin and waits for its
 // first cycle; the volume is the one its grants name.
 func (ap *accessProof) createWorkspace(repos []string) error {
-	sp := ap.sp
-	var created syncWorkspace
-	if err := sp.member.callServerStructured(workspaceManagerToolPrefix+"create_workspace", map[string]any{
-		nameKey: accessWorkspace, wmOrganizationArg: config.WorkspaceOrganization, wmSourcesArg: syncNamedSources(repos...),
-	}, &created); err != nil {
-		return err
-	}
-	d, err := sp.waitCycle(accessWorkspace, nil)
+	v, err := ap.sp.createNamed(accessWorkspace, repos)
 	if err != nil {
 		return err
 	}
-	if r := d.Workspace.LastSync; r.Result != syncResultSucceed {
-		return fmt.Errorf("the first cycle of %s ended %s: %s", accessWorkspace, r.Result, r.Message)
-	}
-	want := slices.Clone(repos)
-	slices.Sort(want)
-	if live := d.live(); !slices.Equal(live, want) {
-		return fmt.Errorf("the first cycle of %s mirrored %v, want %v", accessWorkspace, live, want)
-	}
-	v, err := sp.volume(accessWorkspace)
-	if err != nil {
-		return err
-	}
-	k, err := labKube()
-	if err != nil {
-		return err
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
-	defer cancel()
-	pv, err := k.clientset.CoreV1().PersistentVolumes().Get(ctx, v.pv, metav1.GetOptions{})
-	if err != nil {
-		return fmt.Errorf("reading the volume %s of workspace %s: %w", v.pv, accessWorkspace, err)
-	}
-	if pv.Spec.CSI == nil {
-		return fmt.Errorf("the volume %s of workspace %s is no CSI volume", v.pv, accessWorkspace)
-	}
-	ap.volume = workspaceVolume{Driver: pv.Spec.CSI.Driver, Handle: pv.Spec.CSI.VolumeHandle}
-	note("created %s of Organization %s; first cycle %s; claim %s/%s, volume %s (%s)", accessWorkspace, created.Organization, d.Workspace.LastSync.Result, v.namespace, v.claim, ap.volume.Handle, ap.volume.Driver)
-	sp.printManifest(d)
+	ap.volume = v
 	return nil
 }
 
@@ -675,14 +640,21 @@ type accessTraces struct {
 
 // traces reads what exists now for the person.
 func (ap *accessProof) traces(p *workspacePerson) (accessTraces, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
-	defer cancel()
 	api := ap.secondAPI
 	if p == ap.admin {
 		api = ap.adminAPI
 	}
+	return sessionTraces(p, api, ap.adminAPI, workspacesHarnessAgent)
+}
+
+// sessionTraces reads what exists now of the person's Sessions of agent:
+// kagent's as the person (api), agent-manager's list_sessions as them, and
+// Substrate's actors, read through state.
+func sessionTraces(p *workspacePerson, api, state *kagentAPI, agent string) (accessTraces, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
+	defer cancel()
 	var t accessTraces
-	sessions, err := api.listSessionsOf(ctx, agentRef(workspacesHarnessAgent))
+	sessions, err := api.listSessionsOf(ctx, agentRef(agent))
 	if err != nil {
 		return t, err
 	}
@@ -694,17 +666,17 @@ func (ap *accessProof) traces(p *workspacePerson) (accessTraces, error) {
 			ID string `json:"id"`
 		} `json:"sessions"`
 	}
-	if err := p.session.callServerJSON(agentManagerToolPrefix+"list_sessions", map[string]any{nameKey: workspacesHarnessAgent, namespaceKey: kagentNamespace}, &listed); err != nil {
+	if err := p.session.callServerJSON(agentManagerToolPrefix+"list_sessions", map[string]any{nameKey: agent, namespaceKey: kagentNamespace}, &listed); err != nil {
 		return t, err
 	}
 	for _, s := range listed.Sessions {
 		t.manager = append(t.manager, s.ID)
 	}
-	state, err := ap.adminAPI.substrateState(ctx, kagentNamespace)
+	actors, err := state.substrateState(ctx, kagentNamespace)
 	if err != nil {
 		return t, err
 	}
-	for _, a := range state.actors {
+	for _, a := range actors.actors {
 		t.actors = append(t.actors, a.id)
 	}
 	return t, nil
