@@ -516,10 +516,12 @@ type Workspaces struct {
 	// Provider names the workspace-manager's provider instances:
 	// WorkspaceProviderFake (the lab's own GitHub, served for the lab as a
 	// GitHub Enterprise-shaped instance; the default while empty),
+	// WorkspaceProviderFakeBearer (the same GitHub as a github.com-shaped
+	// instance, its API on a host of its own; only beside the fake),
 	// WorkspaceProviderGitHub (a GitHub App of the lab's own on github.com),
 	// WorkspaceProviderGitLab (a GitLab the lab reaches, its OAuth
 	// application and group access token), or several, comma-separated
-	// ("fake,github,gitlab"). With workspaces on, the
+	// ("fake,fake-bearer,github,gitlab"). With workspaces on, the
 	// workspace-manager's public base URL carries the gateway port
 	// (WorkspaceManagerBaseURL), the chart routes its host, and the lab
 	// Dex's agent-platform client lists <base URL>/signin.
@@ -649,6 +651,7 @@ var WorkspaceOrganizationGroups = []string{groupPlatformAdmins, groupDevelopers}
 // the same keys, and the values only ever reference them.
 const (
 	WorkspaceProviderFake        = "fake"
+	WorkspaceProviderFakeBearer  = "fake-bearer"
 	WorkspaceProviderGitHub      = "github"
 	WorkspaceProviderGitLab      = "gitlab"
 	WorkspaceFakeSecretName      = "workspace-fake"   // #nosec G101 -- Secret NAME, not a credential
@@ -661,11 +664,12 @@ const (
 
 // workspaceProviderNames are the instances platform.workspaces.provider may
 // name, in the order the workspace-manager gets them.
-var workspaceProviderNames = []string{WorkspaceProviderFake, WorkspaceProviderGitHub, WorkspaceProviderGitLab}
+var workspaceProviderNames = []string{WorkspaceProviderFake, WorkspaceProviderFakeBearer, WorkspaceProviderGitHub, WorkspaceProviderGitLab}
 
 // parseWorkspaceProviders reads platform.workspaces.provider: the fake alone
 // for "", else the comma-separated set of known instances, each at most
-// once, in workspaceProviderNames order.
+// once, in workspaceProviderNames order; fake-bearer only beside the fake,
+// whose GitHub serves it.
 func parseWorkspaceProviders(value string) ([]string, error) {
 	if strings.TrimSpace(value) == "" {
 		return []string{WorkspaceProviderFake}, nil
@@ -681,6 +685,10 @@ func parseWorkspaceProviders(value string) ([]string, error) {
 		}
 		names = append(names, name)
 	}
+	if slices.Contains(names, WorkspaceProviderFakeBearer) && !slices.Contains(names, WorkspaceProviderFake) {
+		return nil, fmt.Errorf("platform.workspaces.provider %q names %s without %s: the lab's GitHub of the instance %s serves it, name both (%s,%s)",
+			value, WorkspaceProviderFakeBearer, WorkspaceProviderFake, WorkspaceProviderFake, WorkspaceProviderFake, WorkspaceProviderFakeBearer)
+	}
 	slices.SortFunc(names, func(a, b string) int {
 		return slices.Index(workspaceProviderNames, a) - slices.Index(workspaceProviderNames, b)
 	})
@@ -692,6 +700,16 @@ func parseWorkspaceProviders(value string) ([]string, error) {
 // lab CA's name constraints admit, pods resolve to the fake and its TLS
 // leaf carries.
 func GitHubFakeHost(domain string) string { return "github." + domain }
+
+// GitHubFakeBearerHost is the git host of the lab's GitHub as the
+// github.com-shaped instance fake-bearer, GitHubFakeBearerAPIHost its API
+// host beside it, as api.github.com is beside github.com: the API takes a
+// Bearer credential on a host of its own, the git host Basic. Both are
+// names of the same fake, under the platform domain like GitHubFakeHost.
+func GitHubFakeBearerHost(domain string) string { return "github-bearer." + domain }
+
+// GitHubFakeBearerAPIHost is the API host of the instance fake-bearer.
+func GitHubFakeBearerAPIHost(domain string) string { return "api." + GitHubFakeBearerHost(domain) }
 
 // Serving configures model serving on llm-d in the lab.
 type Serving struct {
@@ -1995,6 +2013,13 @@ func (c *Config) WorkspaceFakeProvider() bool {
 	return slices.Contains(c.WorkspaceProviders(), WorkspaceProviderFake)
 }
 
+// WorkspaceFakeBearerProvider reports whether the workspace-manager gets the
+// provider instance fake-bearer, the lab's GitHub as a github.com-shaped
+// instance: workspaces on and platform.workspaces.provider naming it.
+func (c *Config) WorkspaceFakeBearerProvider() bool {
+	return slices.Contains(c.WorkspaceProviders(), WorkspaceProviderFakeBearer)
+}
+
 // WorkspaceGitHubProvider reports whether the workspace-manager gets the
 // provider instance github: workspaces on with platform.workspaces.provider
 // naming it.
@@ -2014,6 +2039,17 @@ func (c *Config) WorkspaceGitLabProvider() bool {
 // Server. Pods reach it on 443 (CoreDNS sends the name to the fake's
 // Service); this host reaches the fake on the port its container publishes.
 func (c *Config) GitHubFakeURL() string { return "https://" + GitHubFakeHost(c.Platform.Domain) }
+
+// GitHubFakeBearerURL is the instance fake-bearer's web URL, its git host.
+func (c *Config) GitHubFakeBearerURL() string {
+	return "https://" + GitHubFakeBearerHost(c.Platform.Domain)
+}
+
+// GitHubFakeBearerAPIURL is the instance fake-bearer's REST API base URL,
+// at the root of its own host as https://api.github.com is.
+func (c *Config) GitHubFakeBearerAPIURL() string {
+	return "https://" + GitHubFakeBearerAPIHost(c.Platform.Domain)
+}
 
 // WorkspaceManagerBaseURL is the workspace-manager's public base URL through
 // the edge: the browser's sign-in at <base>/signin, each provider instance's

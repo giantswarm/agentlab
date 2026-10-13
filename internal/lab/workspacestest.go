@@ -36,8 +36,9 @@ type WorkspacesTestOptions struct {
 	ReadyTimeout time.Duration
 	// Part runs one part instead of the storage proof: WorkspacesPartSync
 	// (workspacessync.go), WorkspacesPartAccess (workspacesaccess.go),
-	// WorkspacesPartGitLab (workspacesgitlab.go) or WorkspacesPartSessions
-	// (workspacessessions.go). "" is the storage proof.
+	// WorkspacesPartGitLab (workspacesgitlab.go), WorkspacesPartSessions
+	// (workspacessessions.go) or WorkspacesPartCallerCredential
+	// (workspacescallercredential.go). "" is the storage proof.
 	Part string
 	// Sessions is how many Sessions the sessions part starts, alternating
 	// the claude and the kagent Harness; zero is DefaultWorkspacesSessions.
@@ -57,11 +58,11 @@ func (o WorkspacesTestOptions) validate() error {
 		if o.Email != "" {
 			return fmt.Errorf("the storage proof signs in as nobody: [email] names the user of a part (--part %s)", strings.Join(WorkspacesParts, ", "))
 		}
-	case WorkspacesPartSync, WorkspacesPartAccess, WorkspacesPartGitLab, WorkspacesPartSessions:
+	case WorkspacesPartSync, WorkspacesPartAccess, WorkspacesPartGitLab, WorkspacesPartSessions, WorkspacesPartCallerCredential:
 		if o.StorageOnly {
 			return fmt.Errorf("--storage-only is the storage proof's; --part %s proves no storage", o.Part)
 		}
-		if o.Part == WorkspacesPartSessions && o.Email != "" {
+		if (o.Part == WorkspacesPartSessions || o.Part == WorkspacesPartCallerCredential) && o.Email != "" {
 			return fmt.Errorf("--part %s starts its Sessions as the admin: it takes no [email]", o.Part)
 		}
 	default:
@@ -142,6 +143,9 @@ func WorkspacesTest(cfg *config.Config, opts WorkspacesTestOptions) error {
 	}
 	if opts.Part == WorkspacesPartSessions {
 		return workspacesSessionsPart(cfg, opts.Sessions, opts.ReadyTimeout)
+	}
+	if opts.Part == WorkspacesPartCallerCredential {
+		return workspacesCallerCredentialPart(cfg, opts.ReadyTimeout)
 	}
 	ctx := context.Background()
 	timeout := opts.ReadyTimeout

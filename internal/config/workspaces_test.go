@@ -69,6 +69,7 @@ func TestWorkspacesProvider(t *testing.T) {
 		{" github , fake ", []string{WorkspaceProviderFake, WorkspaceProviderGitHub}},
 		{"gitlab", []string{WorkspaceProviderGitLab}},
 		{"gitlab,fake,github", []string{WorkspaceProviderFake, WorkspaceProviderGitHub, WorkspaceProviderGitLab}},
+		{"fake-bearer,fake", []string{WorkspaceProviderFake, WorkspaceProviderFakeBearer}},
 	} {
 		cfg.Platform.Workspaces.Provider = tc.provider
 		if err := cfg.Validate(); err != nil {
@@ -81,8 +82,11 @@ func TestWorkspacesProvider(t *testing.T) {
 			cfg.WorkspaceGitLabProvider() != slices.Contains(tc.want, WorkspaceProviderGitLab) {
 			t.Errorf("provider %q: fake %v, github %v, gitlab %v, want %v", tc.provider, cfg.WorkspaceFakeProvider(), cfg.WorkspaceGitHubProvider(), cfg.WorkspaceGitLabProvider(), tc.want)
 		}
+		if cfg.WorkspaceFakeBearerProvider() != slices.Contains(tc.want, WorkspaceProviderFakeBearer) {
+			t.Errorf("provider %q: fake-bearer %v, want %v", tc.provider, cfg.WorkspaceFakeBearerProvider(), tc.want)
+		}
 	}
-	for _, provider := range []string{"gitea", "fake,gitea", "fake,fake", "github,"} {
+	for _, provider := range []string{"gitea", "fake,gitea", "fake,fake", "github,", "fake-bearer", "github,fake-bearer"} {
 		cfg.Platform.Workspaces.Provider = provider
 		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "platform.workspaces.provider") {
 			t.Errorf("provider %q: err = %v, want refused", provider, err)

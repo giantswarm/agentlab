@@ -33,7 +33,10 @@ import (
 // the fake's TLS leaf (the lab CA's, certs/github-fake) carries the name, so
 // a client that trusts the lab CA verifies it; this host reaches it on the
 // loopback port the container publishes. The instance the values render is a
-// GitHub Enterprise-shaped `github` kind (workspaceprovider.go): the embedded
+// GitHub Enterprise-shaped `github` kind (workspaceprovider.go), and with
+// fake-bearer configured a github.com-shaped one too, its git host
+// github-bearer.<domain> and its API host api.github-bearer.<domain> names of
+// the same container (CoreDNS and the leaf carry them): the embedded
 // fixture's App, whose private key and client secret the lab generated
 // itself and places as the Secret agent-platform/workspace-fake, referenced
 // by the values and read by nothing else.
@@ -100,8 +103,9 @@ func githubFakeUp(cfg *config.Config) error {
 		healthPath: githubFakeHealthPath,
 		// The fake serves git's smart HTTP with git itself; the lab's probe
 		// image carries none.
-		image:  workspacesTestGitImage,
-		args:   []string{"--workspaces", "--credentials", githubFakeCredentialsMount, "--data-dir", githubFakeDataDir},
+		image: workspacesTestGitImage,
+		args: []string{"--workspaces", "--credentials", githubFakeCredentialsMount, "--data-dir", githubFakeDataDir,
+			"--api-host", config.GitHubFakeBearerAPIHost(cfg.Platform.Domain)},
 		mounts: []string{credentials + ":" + githubFakeCredentialsMount + ":ro"},
 		tls:    true,
 	})

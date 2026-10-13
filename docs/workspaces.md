@@ -63,6 +63,8 @@ agentlab workspaces-test --part access # provider sign-in and the access check a
 agentlab workspaces-test --part gitlab # the provider instance gitlab, end to end (skips without one)
 agentlab configure --workspaces-cleanup-after 10m && agentlab platform   # the sessions part's short cleanup window
 agentlab workspaces-test --part sessions # ten parallel Sessions in their session directories, and the cleanup
+agentlab configure --workspaces-provider fake,fake-bearer && agentlab platform   # a Bearer provider
+agentlab workspaces-test --part caller-credential # a Session's actor JWT on its Bearer provider's API host
 ```
 
 With the switch off, nothing of it is installed, and `agentlab platform` on a
@@ -447,6 +449,53 @@ platform`. Without any of them it fails at once with the reason.
 Everything is removed on every path: the Sessions, the Agents, the session
 directories, the workspace, the admin's sign-in, and `docs` back at its head.
 
+### The caller-credential part
+
+`agentlab workspaces-test --part caller-credential` proves a Session's caller
+credential on its Bearer provider end to end: kagent compiles, on the Actor of
+a Session admitted with a grant, a credential header on each of the grant's
+**Bearer** providers' hosts, an actor JWT that Substrate's egress gateway mints
+for that Actor, bound to the provider's audience, and injects in place of the
+`Authorization` the sandbox sent. A **Basic** provider's host (a git host) gets
+none yet. It runs as the admin on [the provider instance
+`fake-bearer`](#the-provider-instance-fake-bearer), the only instance whose
+grant names a Bearer host (the API of `fake` is on its git host), with the
+[Session admission](#the-session-admission) and agent-manager's
+`start_session`: `agentlab configure --workspaces-provider fake,fake-bearer`,
+then `agentlab platform`. Without them it fails at once with the reason.
+
+1. **Preconditions**: the workspace-manager connected to muster and listing
+   `fake-bearer`; the lab's grant key published and trusted by kagent's
+   admission; the Agent `agentlab-workspaces-bearer` on the Harness `claude`
+   Ready, its egress `https://github-bearer.<domain>` and
+   `https://api.github-bearer.<domain>`.
+2. **Workspace**: the admin connected to `fake-bearer`; the workspace
+   `agentlab-caller-credential` over `agentlab-oss/docs` on it and its first
+   cycle.
+3. **Session**: the admin's grant names `api.github-bearer.<domain>` as a
+   `Bearer` provider of audience `fake-bearer` (a grant without it fails
+   here, naming the manager); `start_session` with it, and the providers
+   kagent records on the Session noted.
+4. **The Actor's JWT**: a turn runs `curl` (else `wget`) in the sandbox to
+   `https://api.github-bearer.<domain>/agentlab/caller-credential/<token>`
+   with `Authorization: Bearer agentlab-placeholder`, and names the
+   environment variables and the files under `/data`, `/workspace` and its
+   working directory that hold a JWT. The lab GitHub's request log must hold
+   that request with the credential `jwt`, `aud` containing `fake-bearer` and
+   `sub` `atespaces:<atespace>:actors:session-<id>`, the Session's Actor; the
+   sandbox must hold no JWT. A kagent that compiles no caller credential lets
+   the placeholder through: the stage fails naming the credential the API host
+   received (`placeholder`) instead of the Actor's JWT; a request that never
+   reached the fake fails naming the sandbox's answer (the gateway's 403 when
+   the host is not in the Actor's egress).
+5. **No workspace**: a Session of the same Agent without a grant sends the
+   same request: no `jwt` entry for it in the log.
+
+The fake verifies no JWT it did not sign: it answers such a bearer GitHub's
+401 and logs its `aud` and `sub`, never the token. Everything is removed on
+every path: the Sessions, the Agent, the session directories, the workspace
+and the admin's sign-in to `fake-bearer`.
+
 ### The measurements
 
 `agentlab workspaces-measure [email]` measures what the parts prove: how long
@@ -559,9 +608,9 @@ and on 1.9.x the agent's own clone fails on git's dubious-ownership check.
 
 With workspaces on, the workspace-manager gets the provider instances
 `platform.workspaces.provider` names: `fake`, the default while the key is
-empty; `github`; `gitlab`; or several, such as `fake,github,gitlab`
-(`agentlab configure --workspaces-provider …`). `fake` and `github` are
-instances of the chart's `github` kind, `gitlab` of its `gitlab` kind, each
+empty; `fake-bearer`, beside `fake` only; `github`; `gitlab`; or several,
+such as `fake,github,gitlab` (`agentlab configure --workspaces-provider …`).
+`fake`, `fake-bearer` and `github` are instances of the chart's `github` kind, `gitlab` of its `gitlab` kind, each
 with a Secret of its own that the rendered values reference and nothing else
 reads. The wiring every instance shares is in place with the switch alone:
 the manager's public base URL `https://workspace-manager.<domain>:<gatewayPort>`,
@@ -619,6 +668,22 @@ from its certificate directory regardless, so a `github` instance beside the
 fake still verifies github.com. The App's callback URL,
 `<base URL>/callback/fake`, is any absolute URL to the fake, and the sign-in
 consents at once for the lab user the `login` parameter names.
+
+### The provider instance fake-bearer
+
+The same [lab's GitHub](#the-labs-github), App and Secret as `fake`, shaped
+like github.com: `url: https://github-bearer.<domain>` (the git host, Basic)
+and `apiURL: https://api.github-bearer.<domain>` (the REST API at the root of
+a host of its own, Bearer), so the workspace-manager's grant names a Bearer API
+host beside the Basic git host, as one for github.com does. CoreDNS sends both
+names to the fake's Service, its TLS leaf carries them, and the fake serves
+the API at the root of the API host (`agentlab github-fake --api-host`): the
+answers' web and clone URLs name the git host, their API URLs and `Link`
+headers the API host. `platform.workspaces.provider` names it beside `fake`
+(`fake,fake-bearer`), whose container serves it; the callback URL is
+`<base URL>/callback/fake-bearer`, the audience of its credentials
+`fake-bearer`. [The caller-credential part](#the-caller-credential-part)
+proves it.
 
 #### A person's sign-in, headlessly
 
@@ -779,17 +844,19 @@ owner. `dev` is the member without access, `viewer` the one who cannot push.
 | Pull requests | `POST` and `GET /repos/{o}/{r}/pulls`, and the GraphQL operations of `gh pr create` on `/api/graphql`; `GET /api/v3/meta` reports a GitHub Enterprise version, as gh expects. |
 
 A credential the fake did not issue (the sandbox's placeholder that the egress
-gateway did not replace) and one it issued that expired or was revoked answer
-GitHub's 401 `Bad credentials` wherever they are presented.
+gateway did not replace, or a JWT such as a Session Actor's) and one it issued
+that expired or was revoked answer GitHub's 401 `Bad credentials` wherever
+they are presented.
 
 ### The request log
 
 Every request is a line of the container's log and an entry of
-`GET /_fake/requests`: time, method, path, status, the user (a login, or
-`installation/<id>`) and the kind of credential: `none`, `placeholder`,
-`revoked-token`, `app-jwt`, `installation-token`, `user-token` or
-`oauth-client`. Only the path is logged: no token, OAuth code or verifier
-reaches it. `GET /_fake/pulls` lists every pull request with its author.
+`GET /_fake/requests`: time, host, method, path (as it came, at the root on
+an API host), status, the user (a login, or `installation/<id>`) and the kind
+of credential: `none`, `placeholder`, `revoked-token`, `app-jwt`,
+`installation-token`, `user-token`, `oauth-client`, or `jwt`, a JWT the fake
+did not issue, with its `aud` and `sub` claims. Only the path and those claims
+are logged: no token, OAuth code or verifier reaches it. `GET /_fake/pulls` lists every pull request with its author.
 `PUT /_fake/repos/{owner}/{repo}` with `generatedMiB` adds a public repository
 of that many generated MiB and a Go module to a fixture owner (the
 measurements' `--large-repo-mib`), `DELETE` removes it again; the fixture's

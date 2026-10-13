@@ -129,8 +129,11 @@ type tmplData struct {
 	// install's. WorkspaceFake says the lab's GitHub is among them
 	// (workspacefake.go): CoreDNS sends its name to its Service, and the
 	// workspace-manager trusts the lab CA its leaf is from.
-	WorkspaceProviders []workspaceProviderValues
-	WorkspaceFake      bool
+	// WorkspaceFakeBearer says it serves the instance fake-bearer too:
+	// CoreDNS sends that instance's git and API hosts to the same Service.
+	WorkspaceProviders  []workspaceProviderValues
+	WorkspaceFake       bool
+	WorkspaceFakeBearer bool
 	// WorkspaceAdmission is the rig a Session on a workspace volume is
 	// admitted with (workspacegrant.go): the manager's grant signing key,
 	// kagent's jwt admission of its key set and the claude Harness; nil
@@ -314,6 +317,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		Workspaces:                   workspacesValuesFor(cfg),
 		WorkspaceProviders:           workspaceProviders,
 		WorkspaceFake:                cfg.WorkspaceFakeProvider(),
+		WorkspaceFakeBearer:          cfg.WorkspaceFakeBearerProvider(),
 		WorkspaceAdmission:           workspaceAdmissionValuesFor(cfg, workspacesChart.Carries),
 		CodingHarnesses:              codingHarnessesFor(cfg, workspaceAdmissionValuesFor(cfg, workspacesChart.Carries)),
 		CertsDir:                     certsDir,

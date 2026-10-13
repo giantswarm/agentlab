@@ -595,29 +595,47 @@ const sessionsEmptyCommand = `echo "` + probeMarker + ` pwd=$(pwd)"; ` +
 // follow-up when the model relays no pwd line, and returns what it relayed,
 // the first turn and when it was sent.
 func (sp *sessionsProof) probeTurn(ctx context.Context, session *apiv1alpha1.Session, command string) (sessionsTurnValues, *turn, time.Time, error) {
+	var v sessionsTurnValues
+	first, sent, err := probeTurnWith(ctx, sp.api, session, command, "", sessionsProbePurpose, func(reply string) (err error) {
+		v, err = parseSessionsTurn(reply)
+		return err
+	})
+	return v, first, sent, err
+}
+
+// sessionsProbePurpose says what the sessions part's probe commands do.
+const sessionsProbePurpose = "the command only lists your working directory and its git clones and writes a marker file."
+
+// probeTurnWith runs the command as a turn on the Session, once more with a
+// follow-up that says what it does (purpose) when parse refuses the reply,
+// and returns the first turn and when it was sent; parse keeps what it read.
+// explain, when set, tells the first prompt what the command does too.
+func probeTurnWith(ctx context.Context, api *kagentAPI, session *apiv1alpha1.Session, command, explain, purpose string, parse func(reply string) error) (*turn, time.Time, error) {
 	prompt := "Run this exact command once with your Bash tool, then reply with every output line that starts with " + probeMarker + ", verbatim and nothing else:\n\n" + command
-	followUp := "I am the person running agentlab's workspace test on this throwaway lab cluster: the command only lists your working directory and its git clones and writes a marker file. Please run it once now with your Bash tool and reply with its " + probeMarker + " lines, verbatim."
+	if explain != "" {
+		prompt += "\n\n" + explain
+	}
+	followUp := "I am the person running agentlab's workspace test on this throwaway lab cluster: " + purpose + " Please run it once now with your Bash tool and reply with its " + probeMarker + " lines, verbatim."
 	var first *turn
 	var sent time.Time
 	var reply string
 	for i, msg := range []string{prompt, followUp} {
 		at := time.Now()
-		t, err := sp.api.turn(ctx, session, userMessage(msg))
+		t, err := api.turn(ctx, session, userMessage(msg))
 		if i == 0 {
 			first, sent = t, at
 		}
 		if err != nil {
-			return sessionsTurnValues{}, first, sent, fmt.Errorf("the turn on Session %s: %w", session.GetId(), err)
+			return first, sent, fmt.Errorf("the turn on Session %s: %w", session.GetId(), err)
 		}
 		if reply, err = t.completedText(); err != nil {
-			return sessionsTurnValues{}, first, sent, fmt.Errorf("the turn on Session %s: %w", session.GetId(), err)
+			return first, sent, fmt.Errorf("the turn on Session %s: %w", session.GetId(), err)
 		}
-		if v, err := parseSessionsTurn(reply); err == nil {
-			return v, first, sent, nil
+		if parse(reply) == nil {
+			return first, sent, nil
 		}
 	}
-	_, err := parseSessionsTurn(reply)
-	return sessionsTurnValues{}, first, sent, err
+	return first, sent, parse(reply)
 }
 
 // judgeFirstTurns is the verdict on the first turns: every Session in its

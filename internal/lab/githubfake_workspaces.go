@@ -46,8 +46,13 @@ import (
 //     user and repository, a push moving pushed_at (githubfake_git.go);
 //   - pull requests over REST and the GraphQL calls of `gh pr create`
 //     (githubfake_pulls.go);
-//   - a request log the proofs read: method, path, user and the kind of
-//     credential, never a token.
+//   - a request log the proofs read: host, method, path, user and the kind
+//     of credential, never a token; a JWT bearer the fake did not issue (a
+//     Session Actor's, injected by Substrate's egress gateway) with its aud
+//     and sub claims;
+//   - besides the GitHub Enterprise shape, a github.com shape on the hosts
+//     WorkspaceGitHubOptions.APIHosts names: the REST API at the root of
+//     api.<git host>, the git host's name in its answers' web URLs.
 //
 // It is a separate server from the commit proof's fake (githubfake.go): that
 // one keeps git's objects in memory for the REST git data API, this one keeps
@@ -80,8 +85,10 @@ const githubFakeSuspender = "lab-owner"
 // none; the App's JWT; an installation token; a user's token; the App's
 // OAuth client credentials (revocation's Basic auth); one the fake issued
 // that has expired or was revoked; and anything else (the sandbox's
-// placeholder that the egress gateway did not replace). The last two are
-// refused with GitHub's 401 wherever they are presented.
+// placeholder that the egress gateway did not replace); and a JWT the fake
+// did not issue, logged with its aud and sub. The last three are refused
+// with GitHub's 401 wherever they are presented: the fake verifies no JWT it
+// did not sign.
 const (
 	credNone         = "none"
 	credApp          = "app-jwt"
@@ -90,6 +97,7 @@ const (
 	credClient       = "oauth-client" // #nosec G101 -- the name of a credential kind
 	credRevoked      = "revoked-token"
 	credPlaceholder  = "placeholder"
+	credJWT          = "jwt"
 )
 
 // Token lifetimes, GitHub's own.
@@ -139,16 +147,23 @@ type githubCaller struct {
 	login        string
 	installation int64
 	repos        []string
+	// audience and subject are a JWT bearer's aud and sub claims.
+	audience []string
+	subject  string
 }
 
 // githubRequest is one line of the request log.
 type githubRequest struct {
 	Time       time.Time `json:"time"`
+	Host       string    `json:"host,omitempty"`
 	Method     string    `json:"method"`
 	Path       string    `json:"path"`
 	Status     int       `json:"status"`
 	User       string    `json:"user,omitempty"`
 	Credential string    `json:"credential"`
+	// Audience and Subject are a JWT bearer's aud and sub, never the token.
+	Audience []string `json:"aud,omitempty"`
+	Subject  string   `json:"sub,omitempty"`
 }
 
 // workspaceGitHub is the workspace proofs' GitHub.
@@ -158,6 +173,9 @@ type workspaceGitHub struct {
 	clientSecret string
 	git          *githubGit
 	now          func() time.Time
+	// apiHosts are the hosts that serve the REST API at their root, each
+	// api.<git host>, as api.github.com does.
+	apiHosts []string
 
 	// suspended is when each suspended installation was suspended, under
 	// its own lock: installationJSON reads it with mu held and without.
@@ -183,6 +201,9 @@ type WorkspaceGitHubOptions struct {
 	// LargeRepoMiB overrides the generated size of the fixture's large
 	// repositories; 0 keeps the fixture's.
 	LargeRepoMiB int
+	// APIHosts are host names, each api.<git host>, on which the fake serves
+	// the REST API at the root, shaped like github.com's api.github.com.
+	APIHosts []string
 }
 
 // newWorkspaceGitHub seeds the fixture's repositories into dataDir and
@@ -254,7 +275,51 @@ func (g *workspaceGitHub) handler() http.Handler {
 
 	// git's smart HTTP: https://<fake>/<owner>/<repo>[.git]/...
 	mux.HandleFunc("/", g.serveGit)
-	return g.logged(mux)
+	return g.logged(g.apiHostFront(mux))
+}
+
+// --- the github.com shape -------------------------------------------------------
+
+type apiBaseKey struct{}
+
+// apiHostFront serves a request to one of the API hosts as the same request
+// under /api/v3 of its git host (GraphQL's /graphql under /api/graphql), so
+// every handler answers it as GitHub Enterprise's: the web URLs it writes
+// name the git host, the API URLs the API host.
+func (g *workspaceGitHub) apiHostFront(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := hostName(r.Host)
+		if !slices.Contains(g.apiHosts, host) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		inner := r.Clone(context.WithValue(r.Context(), apiBaseKey{}, "https://"+host))
+		inner.Host = strings.TrimPrefix(host, "api.")
+		if r.URL.Path == "/graphql" {
+			inner.URL.Path = "/api/graphql"
+		} else {
+			inner.URL.Path = githubFakeAPIPath + r.URL.Path
+		}
+		inner.URL.RawPath = ""
+		next.ServeHTTP(w, inner)
+	})
+}
+
+// hostName is a Host header without its port.
+func hostName(host string) string {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		return h
+	}
+	return host
+}
+
+// apiBase is the REST API's base URL as the request reached it: its API
+// host's root, or /api/v3 of the host it came to.
+func apiBase(r *http.Request) string {
+	if base, ok := r.Context().Value(apiBaseKey{}).(string); ok {
+		return base
+	}
+	return "https://" + r.Host + githubFakeAPIPath
 }
 
 // --- the request log ----------------------------------------------------------
@@ -299,11 +364,16 @@ func (g *workspaceGitHub) logged(next http.Handler) http.Handler {
 		if r.URL.Path == githubFakeHealthPath || strings.HasPrefix(r.URL.Path, "/_fake/") {
 			return
 		}
-		entry := githubRequest{Time: g.now().UTC(), Method: r.Method, Path: r.URL.Path, Status: sw.status, User: c.name(), Credential: c.kind}
+		entry := githubRequest{Time: g.now().UTC(), Host: hostName(r.Host), Method: r.Method, Path: r.URL.Path, Status: sw.status, User: c.name(), Credential: c.kind,
+			Audience: c.audience, Subject: c.subject}
 		g.mu.Lock()
 		g.requests = append(g.requests, entry)
 		g.mu.Unlock()
-		fmt.Printf("%s %s %d user=%s credential=%s\n", entry.Method, entry.Path, entry.Status, entry.User, entry.Credential)
+		line := fmt.Sprintf("%s %s%s %d user=%s credential=%s", entry.Method, entry.Host, entry.Path, entry.Status, entry.User, entry.Credential)
+		if c.kind == credJWT {
+			line += fmt.Sprintf(" aud=%s sub=%s", strings.Join(c.audience, ","), c.subject)
+		}
+		fmt.Println(line)
 	})
 }
 
@@ -320,7 +390,9 @@ func (c githubCaller) name() string {
 }
 
 // invalid says whether c presented a credential GitHub refuses.
-func (c githubCaller) invalid() bool { return c.kind == credPlaceholder || c.kind == credRevoked }
+func (c githubCaller) invalid() bool {
+	return c.kind == credPlaceholder || c.kind == credRevoked || c.kind == credJWT
+}
 
 func callerOf(r *http.Request) githubCaller {
 	c, _ := r.Context().Value(callerKey{}).(githubCaller)
@@ -363,15 +435,45 @@ func (g *workspaceGitHub) caller(r *http.Request) githubCaller {
 		return githubCaller{kind: credApp}
 	}
 	g.mu.Lock()
-	defer g.mu.Unlock()
 	t, ok := g.tokens[token]
+	g.mu.Unlock()
 	switch {
-	case !ok || t.refresh:
-		return githubCaller{kind: credPlaceholder}
-	case t.dead || g.now().After(t.expires):
+	case ok && t.refresh:
+	case ok && (t.dead || g.now().After(t.expires)):
 		return githubCaller{kind: credRevoked, login: t.login}
+	case ok:
+		return githubCaller{kind: t.kind, login: t.login, installation: t.installation, repos: t.repos}
 	}
-	return githubCaller{kind: t.kind, login: t.login, installation: t.installation, repos: t.repos}
+	if aud, sub, ok := jwtAudienceSubject(token); ok {
+		return githubCaller{kind: credJWT, audience: aud, subject: sub}
+	}
+	return githubCaller{kind: credPlaceholder}
+}
+
+// jwtAudienceSubject reads a JWT's aud (a string or a list) and sub claims
+// without verifying it; ok false for a token that is no JWT.
+func jwtAudienceSubject(token string) (aud []string, sub string, ok bool) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return nil, "", false
+	}
+	var header struct {
+		Alg string `json:"alg"`
+	}
+	var claims struct {
+		Aud json.RawMessage `json:"aud"`
+		Sub string          `json:"sub"`
+	}
+	if decodeJWTPart(parts[0], &header) != nil || header.Alg == "" || decodeJWTPart(parts[1], &claims) != nil {
+		return nil, "", false
+	}
+	var one string
+	if json.Unmarshal(claims.Aud, &one) == nil {
+		aud = []string{one}
+	} else {
+		_ = json.Unmarshal(claims.Aud, &aud)
+	}
+	return aud, claims.Sub, true
 }
 
 // verifyAppJWT checks an App JWT as GitHub does: RS256 signed by the App's
@@ -834,7 +936,7 @@ func (g *workspaceGitHub) repoJSON(r *http.Request, c githubCaller, repo *worksp
 		"language": repo.Language, "topics": topics, "default_branch": repo.DefaultBranch, "size": repo.sizeKiB,
 		"pushed_at": repo.pushedAt.UTC().Format(time.RFC3339), "updated_at": repo.pushedAt.UTC().Format(time.RFC3339),
 		githubHTMLURL: base + "/" + repo.fullName(), "clone_url": base + "/" + repo.fullName() + ".git",
-		githubURL:         base + githubFakeAPIPath + "/repos/" + repo.fullName(),
+		githubURL:         apiBase(r) + "/repos/" + repo.fullName(),
 		githubPermissions: map[string]bool{"admin": false, githubPush: perm == githubPermWrite, "pull": g.canRead(c, repo)},
 	}
 }
@@ -879,7 +981,7 @@ func (g *workspaceGitHub) listRepos(w http.ResponseWriter, r *http.Request, keep
 		nq := next.Query()
 		nq.Set("page", strconv.Itoa(page+1))
 		next.RawQuery = nq.Encode()
-		w.Header().Set("Link", fmt.Sprintf(`<https://%s%s>; rel="next"`, r.Host, next.RequestURI()))
+		w.Header().Set("Link", fmt.Sprintf(`<%s%s>; rel="next"`, apiBase(r), strings.TrimPrefix(next.RequestURI(), githubFakeAPIPath)))
 	}
 	writeGitHubJSON(w, http.StatusOK, wrap(out, total))
 }
@@ -1048,6 +1150,7 @@ func ServeWorkspaceGitHub(ctx context.Context, opts WorkspaceGitHubOptions) erro
 	if err != nil {
 		return err
 	}
+	g.apiHosts = opts.APIHosts
 	l, err := net.Listen("tcp", opts.Listen)
 	if err != nil {
 		return fmt.Errorf("the fake GitHub cannot listen on %s: %w", opts.Listen, err)

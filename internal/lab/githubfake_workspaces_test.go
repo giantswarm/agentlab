@@ -21,6 +21,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/giantswarm/agentlab/internal/config"
 )
 
 // The workspace fake's test fixture names (templates/github-fixture.yaml).
@@ -608,5 +610,87 @@ func TestWorkspaceGitHubSuspendedInstallation(t *testing.T) {
 	}
 	if _, err := f.git(t, filepath.Join(work, "api"), "push", "-q", "origin", "HEAD:"+wsMain); err != nil {
 		t.Fatalf("the admin's push after unsuspending: %v", err)
+	}
+}
+
+// unsignedJWT is a JWT with the claims and no valid signature: what the fake
+// sees of a token it did not issue.
+func unsignedJWT(claims map[string]any) string {
+	enc := func(v any) string {
+		raw, _ := json.Marshal(v)
+		return base64.RawURLEncoding.EncodeToString(raw)
+	}
+	return enc(map[string]string{"alg": "ES256", "typ": "JWT"}) + "." + enc(claims) + "." + base64.RawURLEncoding.EncodeToString([]byte("signature"))
+}
+
+// On an API host the fake serves the REST API at the root, shaped like
+// api.github.com: the answers' web URLs name the git host, their API URLs
+// the API host. A JWT it did not issue is refused and logged with its aud
+// and sub, under the host and the path as they came.
+func TestWorkspaceGitHubAPIHost(t *testing.T) {
+	f := startWorkspaceFake(t)
+	apiHost, gitHost := config.GitHubFakeBearerAPIHost(wsDomain), config.GitHubFakeBearerHost(wsDomain)
+	f.g.apiHosts = []string{apiHost}
+	call := func(path, credential string, out any) int {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodGet, f.url+path, nil)
+		req.Host = apiHost
+		if credential != "" {
+			req.Header.Set(wsAuthHeader, "Bearer "+credential)
+		}
+		resp, err := f.client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if out != nil && resp.StatusCode == http.StatusOK {
+			if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return resp.StatusCode
+	}
+	var app map[string]any
+	if status := call("/app", f.appJWT(f.appKey, time.Now(), 9*time.Minute), &app); status != http.StatusOK || app["client_id"] != wsClientID {
+		t.Fatalf("GET /app on %s = %d %v", apiHost, status, app)
+	}
+	var repos []map[string]any
+	if status := call("/orgs/"+wsOrg+"/repos?per_page=1", "", &repos); status != http.StatusOK || len(repos) != 1 {
+		t.Fatalf("GET /orgs/%s/repos on %s = %d %v", wsOrg, apiHost, status, repos)
+	}
+	name := repos[0][wsFullName].(string)
+	if got, want := repos[0]["html_url"], "https://"+gitHost+"/"+name; got != want {
+		t.Errorf("html_url = %v, want %s", got, want)
+	}
+	if got, want := repos[0]["url"], "https://"+apiHost+"/repos/"+name; got != want {
+		t.Errorf("url = %v, want %s", got, want)
+	}
+
+	const sub = "atespaces:kagent:actors:session-s1"
+	if status := call("/agentlab/caller-credential/t1", unsignedJWT(map[string]any{"aud": []string{config.WorkspaceProviderFakeBearer}, claimSubject: sub}), nil); status != http.StatusUnauthorized {
+		t.Errorf("a JWT the fake did not issue = %d, want 401", status)
+	}
+	if status := call("/agentlab/caller-credential/t2", unsignedJWT(map[string]any{"aud": "one", claimSubject: sub}), nil); status != http.StatusUnauthorized {
+		t.Errorf("a JWT with a string aud = %d, want 401", status)
+	}
+	if status := call("/agentlab/caller-credential/t3", "agentlab-placeholder", nil); status != http.StatusUnauthorized {
+		t.Errorf("the placeholder = %d, want 401", status)
+	}
+	f.g.mu.Lock()
+	reqs := append([]githubRequest{}, f.g.requests...)
+	f.g.mu.Unlock()
+	for path, want := range map[string]githubRequest{
+		"/agentlab/caller-credential/t1": {Credential: credJWT, Audience: []string{config.WorkspaceProviderFakeBearer}, Subject: sub},
+		"/agentlab/caller-credential/t2": {Credential: credJWT, Audience: []string{"one"}, Subject: sub},
+		"/agentlab/caller-credential/t3": {Credential: credPlaceholder},
+	} {
+		got := requestsTo(reqs, apiHost, path)
+		if len(got) != 1 || got[0].Credential != want.Credential || !slices.Equal(got[0].Audience, want.Audience) || got[0].Subject != want.Subject {
+			t.Errorf("the log of %s%s = %+v, want credential %s aud %v sub %q", apiHost, path, got, want.Credential, want.Audience, want.Subject)
+		}
+	}
+	// The git host's API stays under /api/v3, its log under its own name.
+	if resp := f.call(t, http.MethodGet, "/api/v3/meta", "", nil, nil); resp.StatusCode != http.StatusOK {
+		t.Errorf("GET /api/v3/meta on the test host = %d", resp.StatusCode)
 	}
 }
