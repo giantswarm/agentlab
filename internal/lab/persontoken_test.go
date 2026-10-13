@@ -134,6 +134,52 @@ func TestPersonTokenFailedRenewalTriesAgain(t *testing.T) {
 	}
 }
 
+// TestPersonTokenRenewalRetriesTransientFailure: a renewal whose sign-in
+// fails once is asked again after a pause and answers the renewed token; one
+// that keeps failing ends after personTokenFetchAttempts, naming them and
+// the cause.
+func TestPersonTokenRenewalRetriesTransientFailure(t *testing.T) {
+	f := &fakeSignIn{clock: time.Unix(1_800_000_000, 0), lifetime: 10 * time.Minute}
+	p := f.token()
+	if _, err := p.idToken(); err != nil {
+		t.Fatal(err)
+	}
+	f.clock = f.clock.Add(10 * time.Minute)
+	failures := 1
+	p.fetch = func() (string, string, error) {
+		if failures > 0 {
+			failures--
+			return "", "", errors.New("no muster sign-in for https://muster.example: exit status 2")
+		}
+		return f.fetch()
+	}
+	if id, err := p.idToken(); err != nil || !f.valid(id) || f.issued != 2 {
+		t.Fatalf("a renewal failing once: %v, issued %d", err, f.issued)
+	}
+	if len(f.slept) != 1 || f.slept[0] != personTokenFetchBackoff {
+		t.Errorf("paused %v, want once %s", f.slept, personTokenFetchBackoff)
+	}
+
+	f.slept = nil
+	f.clock = f.clock.Add(10 * time.Minute)
+	fetched := 0
+	p.fetch = func() (string, string, error) {
+		fetched++
+		return "", "", errors.New("no muster sign-in for https://muster.example: exit status 2")
+	}
+	_, err := p.idToken()
+	if err == nil || !strings.Contains(err.Error(), "4 attempts failed") || !strings.Contains(err.Error(), "exit status 2") {
+		t.Errorf("a renewal that keeps failing: %v", err)
+	}
+	if fetched != personTokenFetchAttempts {
+		t.Errorf("asked %d times, want %d", fetched, personTokenFetchAttempts)
+	}
+	want := []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second}
+	if fmt.Sprint(f.slept) != fmt.Sprint(want) {
+		t.Errorf("paused %v, want %v", f.slept, want)
+	}
+}
+
 // TestPersonTokenOpaque: tokens without an exp claim are kept for
 // personTokenOpaque, then asked for again.
 func TestPersonTokenOpaque(t *testing.T) {
