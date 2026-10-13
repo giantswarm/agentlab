@@ -16,7 +16,9 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"gopkg.in/yaml.v3"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/giantswarm/agentlab/internal/config"
 	ateapi "github.com/giantswarm/agentlab/internal/kagent/gen"
@@ -161,7 +163,8 @@ type substrateStepRun struct {
 	templateName  string // the agent's ActorTemplate before the step
 	goldenBefore  string // its golden, worded by kagent
 	stepTaken     bool
-	lines         []string // the PASS lines, in step order
+	lines         []string        // the PASS lines, in step order
+	earlier       map[string]bool // what an earlier run left that the first cleanup could not remove (splitLeftovers)
 
 	// Every golden of the lab before the step, read from ate-api with its
 	// layout (substratedrain.go): the drain case judges every one of them
@@ -210,14 +213,19 @@ func (r *substrateStepRun) prove(user *config.User) error {
 		return err
 	}
 	defer r.api.close()
-	cleanup := func() {
+	// What an earlier run left and this cleanup cannot remove is noted, and
+	// told apart from this run's own at the end.
+	earlier := substrateStepCleanup(r.api)
+	for _, left := range earlier {
+		note("cleanup: an earlier run left this in Substrate, the proof goes on beside it: %s", left.line)
+	}
+	r.earlier = leftoverNames(earlier)
+	defer func() {
 		r.removeSession()
 		for _, left := range substrateStepCleanup(r.api) {
-			note("cleanup: still in Substrate: %s", left)
+			note("cleanup: still in Substrate: %s", left.line)
 		}
-	}
-	cleanup()
-	defer cleanup()
+	}()
 
 	r.stages.begin("agent", "Step 2: an agent on Substrate %s with a conversation of three turns and a known file on its durable volume, suspended", before.version)
 	if err := r.seed(user.Email); err != nil {
@@ -252,8 +260,12 @@ func (r *substrateStepRun) prove(user *config.User) error {
 
 	r.stages.begin("cleanup", "Removing %s", substrateStepAgent)
 	r.removeSession()
-	if left := substrateStepCleanup(r.api); len(left) > 0 {
-		return fmt.Errorf("the deleted agent left this in Substrate: %s", strings.Join(left, "; "))
+	own, inherited := splitLeftovers(substrateStepCleanup(r.api), r.earlier)
+	for _, line := range inherited {
+		note("cleanup: still in Substrate from an earlier run, not this one's: %s", line)
+	}
+	if len(own) > 0 {
+		return fmt.Errorf("the deleted agent left this in Substrate: %s", strings.Join(own, "; "))
 	}
 	return nil
 }
@@ -654,48 +666,127 @@ func ateTemplates(ctx context.Context, api *ateAPI, keep func(name string) bool)
 // Substrate can read empty while ate-api keeps the agent's ActorTemplate (and
 // an actor that crashed on a restore), and the next run's agent, the same
 // spec, compiles to the same template name — on the release before a step,
-// with a golden in the newer layout. Returns what is still there, worded.
-func substrateStepCleanup(api *kagentAPI) []string {
+// with a golden in the newer layout. Returns what is still there.
+func substrateStepCleanup(api *kagentAPI) []stepLeftover {
 	// What kagent leaves is read again below, after the sweep.
 	_ = proofAgentsCleanup(api, substrateStepAgent)
 	left := removeAteLeftovers(substrateStepAgent)
 	if f := skillsFootprint(api, substrateStepAgent); !f.empty() {
-		left = append(left, f.lines()...)
+		left = append(left, footprintLeftovers(f)...)
 	}
 	return left
 }
 
+// stepLeftover is one thing of the proof's agent Substrate still holds after
+// a cleanup: the actor's or ActorTemplate's name ("" for a read that
+// failed) and its line for the notes and the verdict.
+type stepLeftover struct {
+	name, line string
+}
+
+// footprintLeftovers is the agent's footprint in kagent's view, as
+// leftovers.
+func footprintLeftovers(f substrateFootprint) []stepLeftover {
+	if f.err != nil {
+		return []stepLeftover{{line: "Substrate state through the controller: " + f.err.Error()}}
+	}
+	var left []stepLeftover
+	for _, t := range f.templates {
+		left = append(left, stepLeftover{name: t.name, line: t.line()})
+	}
+	for _, a := range f.actors {
+		left = append(left, stepLeftover{name: a.id, line: a.line()})
+	}
+	return left
+}
+
+// leftoverNames is the set of the leftovers' names.
+func leftoverNames(left []stepLeftover) map[string]bool {
+	names := map[string]bool{}
+	for _, l := range left {
+		if l.name != "" {
+			names[l.name] = true
+		}
+	}
+	return names
+}
+
+// splitLeftovers parts what a cleanup left into this run's own and what an
+// earlier run had left already (named in earlier): an actor stuck in ate-api
+// is the run's that left it, never a verdict on this one.
+func splitLeftovers(left []stepLeftover, earlier map[string]bool) (own, inherited []string) {
+	for _, l := range left {
+		if l.name != "" && earlier[l.name] {
+			inherited = append(inherited, l.line)
+			continue
+		}
+		own = append(own, l.line)
+	}
+	return own, inherited
+}
+
+// ateLeftoverWait bounds how long the cleanup waits for ate-api to finish
+// the deletions it issued: an actor in DELETING is still being torn down,
+// and a DeleteActor issued again resumes a deletion that stopped half-way.
+const ateLeftoverWait = 2 * time.Minute
+
 // removeAteLeftovers deletes, in ate-api itself, every actor (in any state)
-// and ActorTemplate of the agent. Returns what could not be removed, worded.
-func removeAteLeftovers(agent string) []string {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+// and ActorTemplate of the agent, the actors until ate-api holds none of
+// them (ateLeftoverWait). Returns what could not be removed.
+func removeAteLeftovers(agent string) []stepLeftover {
+	ctx, cancel := context.WithTimeout(context.Background(), ateLeftoverWait+time.Minute)
 	defer cancel()
 	api, err := dialAteAPI(ctx)
 	if err != nil {
-		return []string{"ate-api: " + err.Error()}
+		return []stepLeftover{{line: "ate-api: " + err.Error()}}
 	}
 	defer api.Close()
-	var left []string
-	actors, err := agentAteActors(ctx, api, agent)
-	if err != nil {
-		left = append(left, err.Error())
-	}
-	for _, actor := range actors {
-		note("cleanup: %s is still in ate-api — deleting it there", actorLine(actor))
-		ref := &ateapi.ObjectRef{Atespace: kagentNamespace, Name: actor.GetMetadata().GetName()}
-		if _, err := api.DeleteActor(ctx, &ateapi.DeleteActorRequest{Actor: ref, AnyState: true}); err != nil && status.Code(err) != codes.NotFound {
-			left = append(left, fmt.Sprintf("actor %s: %v", ref.GetName(), err))
+	var actors []*ateapi.Actor
+	var listErr error
+	failed := map[string]error{}
+	noted := map[string]bool{}
+	gone := waitFor(int(ateLeftoverWait/substrateStepPoll), substrateStepPoll, func() bool {
+		if actors, listErr = agentAteActors(ctx, api, agent); listErr != nil {
+			return false
+		}
+		for _, actor := range actors {
+			name := actor.GetMetadata().GetName()
+			if !noted[name] {
+				note("cleanup: %s is still in ate-api — deleting it there", actorLine(actor))
+				noted[name] = true
+			}
+			ref := &ateapi.ObjectRef{Atespace: kagentNamespace, Name: name}
+			if _, err := api.DeleteActor(ctx, &ateapi.DeleteActorRequest{Actor: ref, AnyState: true}); err != nil && status.Code(err) != codes.NotFound {
+				failed[name] = err
+			} else {
+				delete(failed, name)
+			}
+		}
+		return len(actors) == 0
+	})
+	var left []stepLeftover
+	switch {
+	case listErr != nil:
+		left = append(left, stepLeftover{line: listErr.Error()})
+	case !gone:
+		for _, actor := range actors {
+			name := actor.GetMetadata().GetName()
+			line := fmt.Sprintf("%s, still in ate-api %s after its deletion", actorLine(actor), ateLeftoverWait)
+			if err := failed[name]; err != nil {
+				line += ": " + err.Error()
+			}
+			left = append(left, stepLeftover{name: name, line: line})
 		}
 	}
 	templates, err := agentAteTemplates(ctx, api, agent)
 	if err != nil {
-		left = append(left, err.Error())
+		left = append(left, stepLeftover{line: err.Error()})
 	}
 	for _, t := range templates {
 		ref := &ateapi.ObjectRef{Atespace: kagentNamespace, Name: t.GetMetadata().GetName()}
 		note("cleanup: ActorTemplate %s/%s is still in ate-api — deleting it there", ref.GetAtespace(), ref.GetName())
 		if _, err := api.DeleteActorTemplate(ctx, &ateapi.DeleteActorTemplateRequest{ActorTemplate: ref}); err != nil && status.Code(err) != codes.NotFound {
-			left = append(left, fmt.Sprintf("ActorTemplate %s: %v", ref.GetName(), err))
+			left = append(left, stepLeftover{name: ref.GetName(), line: fmt.Sprintf("ActorTemplate %s: %v", ref.GetName(), err)})
 		}
 	}
 	return left
@@ -804,6 +895,9 @@ func (r *substrateStepRun) removeSession() {
 func (r *substrateStepRun) stepBack() error {
 	step("Returning the lab to the chart's Substrate (%s before the step)", r.before.version)
 	_ = os.Remove(filepath.Join(StateDir, substrateStepValues))
+	if err := clearRustfsServiceAccount(r.before.version); err != nil {
+		return fmt.Errorf("returning to the chart's Substrate: %w (the lab still runs the step's: `agentlab platform`)", err)
+	}
 	if err := PlatformUp(r.cfg, Offers{}); err != nil {
 		return fmt.Errorf("returning to the chart's Substrate: %w (the lab still runs the step's: `agentlab platform`)", err)
 	}
@@ -813,6 +907,66 @@ func (r *substrateStepRun) stepBack() error {
 	}
 	note("back on %s", back)
 	return nil
+}
+
+// The rustfs Deployment of the substrate chart, and the first release whose
+// chart runs it under a ServiceAccount of its own.
+const rustfsDeployment = "rustfs"
+
+// A pod spec's ServiceAccount and its deprecated alias, which the apiserver
+// keeps in step with it.
+const (
+	podServiceAccountNameKey = "serviceAccountName"
+	podServiceAccountKey     = "serviceAccount"
+)
+
+var rustfsServiceAccountFrom = semver.MustParse("1.9.0")
+
+// clearRustfsServiceAccount readies the rustfs Deployment for the return to
+// a release before rustfsServiceAccountFrom, whose chart removes the
+// ServiceAccount and drops serviceAccountName from the pod spec. The
+// apiserver keeps the deprecated serviceAccount field beside it and fills
+// serviceAccountName back from it, so Helm's upgrade leaves the pod naming a
+// ServiceAccount that is gone: the rollout stalls, the HelmRelease times out
+// and rolls back. Both fields are removed before the upgrade; the release
+// returned to renders none.
+func clearRustfsServiceAccount(release string) error {
+	v, err := semver.NewVersion(release)
+	if err != nil || !v.LessThan(rustfsServiceAccountFrom) {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
+	defer cancel()
+	deploy, err := getObject(ctx, gvrDeployments, substrateNamespace, rustfsDeployment)
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	spec, _, _ := unstructured.NestedMap(deploy.Object, "spec", "template", "spec")
+	patch := rustfsServiceAccountPatch(spec)
+	if patch == nil {
+		return nil
+	}
+	note("rustfs: removing the pod spec's ServiceAccount %v, which Substrate %s's chart does not have", spec[podServiceAccountNameKey], release)
+	return patchObject(ctx, gvrDeployments, substrateNamespace, rustfsDeployment, types.JSONPatchType, patch)
+}
+
+// rustfsServiceAccountPatch is the JSON patch that removes the pod spec's
+// serviceAccountName and its deprecated alias serviceAccount, those present;
+// nil when it names neither.
+func rustfsServiceAccountPatch(podSpec map[string]any) []byte {
+	var ops []string
+	for _, field := range []string{podServiceAccountNameKey, podServiceAccountKey} {
+		if _, ok := podSpec[field]; ok {
+			ops = append(ops, fmt.Sprintf(`{"op":"remove","path":"/spec/template/spec/%s"}`, field))
+		}
+	}
+	if len(ops) == 0 {
+		return nil
+	}
+	return []byte("[" + strings.Join(ops, ",") + "]")
 }
 
 // verdict prints the PASS lines of the steps that passed and the FAIL line

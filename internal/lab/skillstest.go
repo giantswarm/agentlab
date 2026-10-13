@@ -792,24 +792,34 @@ func (f substrateFootprint) lines() []string {
 		return append(lines, "Substrate holds no ActorTemplate and no actor of the template")
 	}
 	for _, t := range f.templates {
-		golden := t.golden
-		if golden == "" {
-			golden = "no golden snapshot"
-		}
-		line := fmt.Sprintf("ActorTemplate %s/%s: phase %s, %s", t.namespace, t.name, t.phase, golden)
-		if t.failure != "" {
-			line += ", error: " + t.failure
-		}
-		lines = append(lines, line)
+		lines = append(lines, t.line())
 	}
 	for _, a := range f.actors {
-		worker := "no worker"
-		if a.workerPod != "" {
-			worker = fmt.Sprintf("pinned to worker pod %s/%s (%s)", a.workerNamespace, a.workerPod, a.workerIP)
-		}
-		lines = append(lines, fmt.Sprintf("actor %s of %s: %s, %s", a.id, a.templateName, a.state, worker))
+		lines = append(lines, a.line())
 	}
 	return lines
+}
+
+// line words the ActorTemplate for the notes and the evidence.
+func (t substrateTemplate) line() string {
+	golden := t.golden
+	if golden == "" {
+		golden = "no golden snapshot"
+	}
+	line := fmt.Sprintf("ActorTemplate %s/%s: phase %s, %s", t.namespace, t.name, t.phase, golden)
+	if t.failure != "" {
+		line += ", error: " + t.failure
+	}
+	return line
+}
+
+// line words the actor for the notes and the evidence.
+func (a substrateActor) line() string {
+	worker := "no worker"
+	if a.workerPod != "" {
+		worker = fmt.Sprintf("pinned to worker pod %s/%s (%s)", a.workerNamespace, a.workerPod, a.workerIP)
+	}
+	return fmt.Sprintf("actor %s of %s: %s, %s", a.id, a.templateName, a.state, worker)
 }
 
 // skillsCleanup removes everything the proof creates (proofAgentsCleanup).

@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -386,5 +387,75 @@ func TestActorLine(t *testing.T) {
 	running := &ateapi.Actor{Metadata: &ateapi.ResourceMetadata{Name: "session-2"}, Status: &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_RUNNING}}
 	if got := actorLine(running); got != "actor session-2: RUNNING" {
 		t.Errorf("actorLine = %q", got)
+	}
+}
+
+// TestRustfsServiceAccountPatch: the patch removes the pod spec's
+// ServiceAccount and its deprecated alias, each only where present.
+func TestRustfsServiceAccountPatch(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		spec map[string]any
+		want string
+	}{
+		{"both", map[string]any{podServiceAccountNameKey: rustfsDeployment, podServiceAccountKey: rustfsDeployment},
+			`[{"op":"remove","path":"/spec/template/spec/serviceAccountName"},{"op":"remove","path":"/spec/template/spec/serviceAccount"}]`},
+		{"the alias alone", map[string]any{podServiceAccountKey: rustfsDeployment},
+			`[{"op":"remove","path":"/spec/template/spec/serviceAccount"}]`},
+		{"neither", map[string]any{podContainersKey: []any{}}, ""},
+		{"no spec", nil, ""},
+	} {
+		if got := string(rustfsServiceAccountPatch(tc.spec)); got != tc.want {
+			t.Errorf("%s: patch %s, want %s", tc.name, got, tc.want)
+		}
+	}
+}
+
+// The leftovers the cleanup tests read: an earlier run's actor and the
+// proof agent's template.
+const (
+	testEarlierActor     = "c7eba5fd"
+	testEarlierActorLine = "actor c7eba5fd: DELETING"
+	testStepTemplate     = "agentlab-substrate-step-00aef75d6578"
+)
+
+// TestSplitLeftovers: what an earlier run left, by name, is told apart from
+// this run's own; a failed read is always this run's.
+func TestSplitLeftovers(t *testing.T) {
+	earlier := leftoverNames([]stepLeftover{
+		{name: testEarlierActor, line: testEarlierActorLine},
+		{line: "ListActors: unavailable"},
+	})
+	if len(earlier) != 1 || !earlier[testEarlierActor] {
+		t.Fatalf("earlier names %v, want c7eba5fd alone", earlier)
+	}
+	own, inherited := splitLeftovers([]stepLeftover{
+		{name: testEarlierActor, line: testEarlierActorLine},
+		{name: "a1b2c3d4", line: "actor a1b2c3d4: SUSPENDED"},
+		{line: "ListActors: unavailable"},
+	}, earlier)
+	if strings.Join(inherited, "|") != testEarlierActorLine {
+		t.Errorf("inherited %q, want the earlier run's actor", inherited)
+	}
+	if strings.Join(own, "|") != "actor a1b2c3d4: SUSPENDED|ListActors: unavailable" {
+		t.Errorf("own %q, want this run's actor and the failed read", own)
+	}
+}
+
+// TestFootprintLeftovers: kagent's view of the agent becomes named
+// leftovers, a failed read one without a name.
+func TestFootprintLeftovers(t *testing.T) {
+	left := footprintLeftovers(substrateFootprint{
+		templates: []substrateTemplate{{namespace: kagentNamespace, name: testStepTemplate, phase: "Ready"}},
+		actors:    []substrateActor{{id: testEarlierActor, templateName: testStepTemplate, state: "DELETING"}},
+	})
+	if len(left) != 2 || left[0].name != testStepTemplate || left[1].name != testEarlierActor {
+		t.Fatalf("leftovers %+v, want the template and the actor by name", left)
+	}
+	if !strings.Contains(left[1].line, "DELETING") {
+		t.Errorf("actor line %q does not word its state", left[1].line)
+	}
+	if left := footprintLeftovers(substrateFootprint{err: errors.New("unavailable")}); len(left) != 1 || left[0].name != "" {
+		t.Errorf("a failed read: %+v, want one unnamed leftover", left)
 	}
 }
