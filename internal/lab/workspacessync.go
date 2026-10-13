@@ -1227,6 +1227,27 @@ func (sp *syncProof) manifest(name string) (string, error) {
 	return cm.Data[syncManifestKey], nil
 }
 
+// workspaceVolumeUser is the user and group a workspace volume probe runs
+// as, with the group as its fsGroup: the workspace-manager's sync Job's, the
+// identity that lays the volume out and removes the session directories on
+// it, so a probe reads, writes and removes what the Job can.
+const workspaceVolumeUser int64 = 1000
+
+// workspaceVolumePod is a probe pod on the git image with the workspace's
+// claim mounted whole at /workspace, as the sync Job's user and admitted
+// under the PodSecurity `restricted` profile an installation enforces.
+func workspaceVolumePod(name, claim, script string) *corev1.Pod {
+	pod := probePod(name, workspacesTestGitImage, []string{"sh", shExitOnError, script})
+	pod.Spec.Volumes = []corev1.Volume{{Name: workspacesTestVolume, VolumeSource: corev1.VolumeSource{
+		PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: claim},
+	}}}
+	pod.Spec.Containers[0].VolumeMounts = []corev1.VolumeMount{{Name: workspacesTestVolume, MountPath: workspacesTestMountPath}}
+	user := workspaceVolumeUser
+	pod.Spec.SecurityContext = &corev1.PodSecurityContext{RunAsUser: &user, RunAsGroup: &user, FSGroup: &user}
+	restrictPodSecurity(pod)
+	return pod
+}
+
 // onVolume runs a probe on the git image with the workspace's whole volume
 // at /workspace and returns its output.
 func (sp *syncProof) onVolume(name, probe, script string) (string, error) {
@@ -1234,11 +1255,7 @@ func (sp *syncProof) onVolume(name, probe, script string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	pod := probePod("agentlab-sync-"+probe, workspacesTestGitImage, []string{"sh", shExitOnError, script})
-	pod.Spec.Volumes = []corev1.Volume{{Name: workspacesTestVolume, VolumeSource: corev1.VolumeSource{
-		PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: v.claim},
-	}}}
-	pod.Spec.Containers[0].VolumeMounts = []corev1.VolumeMount{{Name: workspacesTestVolume, MountPath: workspacesTestMountPath}}
+	pod := workspaceVolumePod("agentlab-sync-"+probe, v.claim, script)
 	out, err := runPod(context.Background(), v.namespace, pod, sp.timeout)
 	if err != nil {
 		return "", fmt.Errorf("the volume probe %s on workspace %s: %w\n%s", probe, name, err, out)
