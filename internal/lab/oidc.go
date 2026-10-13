@@ -7,8 +7,10 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/url"
@@ -98,14 +100,20 @@ func labTLSTransport() (*http.Transport, error) {
 func labCertPool() (*x509.CertPool, error) {
 	labDomain.Lock()
 	trust := cmp.Or(labDomain.trust, caCertPath)
+	inLab := labDomain.domain != ""
 	labDomain.Unlock()
-	caPEM, err := os.ReadFile(trust) // #nosec G304 -- the lab's own CA bundle (trustBundleFile)
-	if err != nil {
-		return nil, fmt.Errorf("reading lab CA (run `agentlab up` first?): %w", err)
-	}
 	pool, err := x509.SystemCertPool()
 	if err != nil {
 		pool = x509.NewCertPool()
+	}
+	caPEM, err := os.ReadFile(trust) // #nosec G304 -- the lab's own CA bundle (trustBundleFile)
+	if errors.Is(err, fs.ErrNotExist) && !inLab {
+		// A command measuring another installation outside any lab
+		// (workspaces-measure --muster-url): the system roots alone.
+		return pool, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading lab CA (run `agentlab up` first?): %w", err)
 	}
 	if !pool.AppendCertsFromPEM(caPEM) {
 		return nil, fmt.Errorf("%s contains no usable certificate", trust)

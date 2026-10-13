@@ -37,7 +37,7 @@ repositories:
       README.md: "# platform-infra\n\nPrivate: only admin reads it.\n"
       main.tf: "terraform {}\n"
   # The repository the measurements clone: generatedMiB of incompressible
-  # content, overridden by `--large-repo-mib`.
+  # content, overridden by `--large-repo-mib`, and a Go module they build.
   - owner: agentlab-org
     name: monorepo
     language: Go
@@ -46,6 +46,8 @@ repositories:
     generatedMiB: 64
     files:
       README.md: "# monorepo\n\nThe large repository of the measurements.\n"
+      go.mod: "module github.com/agentlab-org/monorepo\n\ngo 1.26\n"
+      main.go: "package main\n\nfunc main() {}\n"
   - owner: agentlab-org
     name: legacy-tool
     archived: true
@@ -62,6 +64,8 @@ repositories:
     pushedAt: 2026-09-25T10:00:00Z
     files:
       README.md: "# kagent\n\nA fork.\n"
+      go.mod: "module github.com/agentlab-oss/kagent\n\ngo 1.26\n"
+      main.go: "package main\n\nfunc main() {}\n"
   - owner: agentlab-oss
     name: docs
     language: MDX

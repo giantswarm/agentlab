@@ -412,6 +412,43 @@ func (g *labGitHubClient) setTopics(fullName, token string, topics []string) err
 	return nil
 }
 
+// addGeneratedRepo adds a public repository of mib generated MiB to the
+// lab's GitHub (githubfake_generated.go) and returns its size in KiB, as
+// GitHub's `size` reports it. Seeding a large one takes minutes: the call
+// waits for it.
+func (g *labGitHubClient) addGeneratedRepo(fullName string, mib int, language string) (int64, error) {
+	client := *g.client
+	client.Timeout = 30 * time.Minute
+	slow := *g
+	slow.client = &client
+	var out struct {
+		Size int64 `json:"size"`
+	}
+	status, err := slow.do(http.MethodPut, githubFakeReposPath+"/"+fullName, "", generatedRepoRequest{GeneratedMiB: mib, Language: language}, &out)
+	switch {
+	case err != nil:
+		return 0, err
+	case status == http.StatusNotFound || status == http.StatusMethodNotAllowed:
+		return 0, fmt.Errorf("the lab's GitHub answers %d for %s: it runs an agentlab that predates generated repositories; `agentlab platform` with this agentlab starts it afresh", status, githubFakeReposPath)
+	case status != http.StatusOK && status != http.StatusCreated:
+		return 0, fmt.Errorf("adding the generated repository %s of %d MiB answered %d", fullName, mib, status)
+	}
+	return out.Size, nil
+}
+
+// removeGeneratedRepo removes a repository addGeneratedRepo added; one
+// already gone is no error.
+func (g *labGitHubClient) removeGeneratedRepo(fullName string) error {
+	status, err := g.do(http.MethodDelete, githubFakeReposPath+"/"+fullName, "", nil, nil)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusNoContent && status != http.StatusNotFound {
+		return fmt.Errorf("removing the generated repository %s answered %d", fullName, status)
+	}
+	return nil
+}
+
 // remote is the repository's git URL on this host.
 func (g *labGitHubClient) remote(fullName string) string { return g.url + "/" + fullName + ".git" }
 

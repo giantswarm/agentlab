@@ -124,6 +124,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		inGroup(groupTesting, servingTestCmd()),
 		inGroup(groupTesting, vmManagerTestCmd()),
 		inGroup(groupTesting, workspacesTestCmd()),
+		inGroup(groupTesting, workspacesMeasureCmd()),
 		inGroup(groupTesting, codingTestCmd()),
 		inGroup(groupTesting, workspacesSignInTestCmd()),
 		inGroup(groupTesting, skillsTestCmd()),
@@ -1430,6 +1431,41 @@ func codingTestCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", lab.DefaultCodingReadyTimeout, "how long each agent's boot and each turn may take")
+	return cmd
+}
+
+func workspacesMeasureCmd() *cobra.Command {
+	var opts lab.WorkspacesMeasureOptions
+	cmd := &cobra.Command{
+		Use:   "workspaces-measure [email]",
+		Short: "Measure workspaces through muster as [email] (default the admin): two workspaces, a small one and one with a large repository, created and deleted --runs times; the first sync, a no-op and a changed cycle, authorize_workspace, a Session's directory set up through start_session, the on-demand fetch, a first checkout, git status and a build on the workspace volume and on a local disk, the session directory's size, the volume's capacity and use, each mirror against the provider's size (W8's factor 1.5), the headroom max(4 GiB, 50 %) and one online expansion; median, p90 and max per figure, a figure the cluster cannot report listed as not available; JSON and a Markdown table written to the run directory and printed. --kube-context and --muster-url measure another cluster with the platform as the person signed in to its muster",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 1 {
+				opts.Email = args[0]
+			}
+			if opts.KubeContext != "" || opts.MusterURL != "" {
+				return lab.WorkspacesMeasure(nil, opts)
+			}
+			cfg, err := loadProofLab()
+			if err != nil {
+				return err
+			}
+			return lab.WorkspacesMeasure(cfg, opts)
+		},
+	}
+	cmd.Flags().IntVar(&opts.Runs, "runs", lab.DefaultWorkspacesMeasureRuns, "how many times each figure is measured: the workspaces are created and deleted once per run")
+	cmd.Flags().IntVar(&opts.LargeRepoMiB, "large-repo-mib", 0, "the lab: add a repository of this many MiB to the lab's GitHub for the large workspace, removed afterwards (default: the fixture's agentlab-org/monorepo)")
+	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", lab.DefaultWorkspacesReadyTimeout, "how long each wait may take: a cycle, a Session's turn, a probe pod")
+	cmd.Flags().StringVar(&opts.RunDir, "run-dir", "", "where the report is written (default state/workspaces-measure-<time>)")
+	cmd.Flags().StringVar(&opts.KubeContext, "kube-context", "", "another cluster: the context of your kubeconfig the Kubernetes reads and probe pods use (with --muster-url)")
+	cmd.Flags().StringVar(&opts.MusterURL, "muster-url", "", "another cluster: its muster, as the person `muster auth login --endpoint <url>` signed in (with --kube-context)")
+	cmd.Flags().StringVar(&opts.Organization, "organization", "", "another cluster: the Organization the workspaces belong to")
+	cmd.Flags().StringVar(&opts.Provider, "provider", "", "another cluster: the provider instance the repositories are on")
+	cmd.Flags().StringSliceVar(&opts.SmallRepos, "small-repos", nil, "another cluster: the small workspace's repositories, owner/name; the first is the one checked out and built")
+	cmd.Flags().StringVar(&opts.LargeRepo, "large-repo", "", "another cluster: the large workspace's repository, owner/name")
+	cmd.Flags().StringVar(&opts.AgentgatewayURL, "agentgateway-url", "", "another cluster: its agentgateway, through which the Sessions' turns run (with --agent; without both the Session figures are not available)")
+	cmd.Flags().StringVar(&opts.Agent, "agent", "", "another cluster: the Agent the Sessions start on, namespace/name")
 	return cmd
 }
 

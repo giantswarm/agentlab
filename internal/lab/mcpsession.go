@@ -73,11 +73,17 @@ func (s *musterSession) setHeader(name, value string) {
 // openMusterSession initializes an MCP session and returns it ready for
 // tools/call requests.
 func openMusterSession(cfg *config.Config, token, clientName string) (*musterSession, error) {
+	return openMusterSessionAt(cfg.MusterBaseURL(), token, clientName)
+}
+
+// openMusterSessionAt is openMusterSession on the muster at base, the lab's
+// or another installation's.
+func openMusterSessionAt(base, token, clientName string) (*musterSession, error) {
 	client, err := labHTTPClient(60 * time.Second)
 	if err != nil {
 		return nil, err
 	}
-	s := &musterSession{client: client, url: cfg.MusterBaseURL() + "/mcp", token: token}
+	s := &musterSession{client: client, url: strings.TrimSuffix(base, "/") + "/mcp", token: token}
 	resp, err := s.post("", fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":%q,"version":"1"}}}`, clientName))
 	if err != nil {
 		return nil, err

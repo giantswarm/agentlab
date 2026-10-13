@@ -297,7 +297,7 @@ func workspacesTestPVC() *corev1.PersistentVolumeClaim {
 // one volume, mounted as the caller says; readOnly mounts the volume itself
 // read-only, the way a reader of the whole workspace would.
 func workspacesTestPod(name, script string, mounts []corev1.VolumeMount, readOnly bool) *corev1.Pod {
-	pod := probePod(name, workspacesTestGitImage, []string{"sh", "-ec", script})
+	pod := probePod(name, workspacesTestGitImage, []string{"sh", shExitOnError, script})
 	pod.Spec.Volumes = []corev1.Volume{{Name: workspacesTestVolume, VolumeSource: corev1.VolumeSource{
 		PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: workspacesTestClaim, ReadOnly: readOnly},
 	}}}
@@ -311,7 +311,7 @@ func workspacesTestPod(name, script string, mounts []corev1.VolumeMount, readOnl
 func workspacesSessionMounts(session string) []corev1.VolumeMount {
 	return []corev1.VolumeMount{
 		{Name: workspacesTestVolume, MountPath: workspacesTestMountPath, SubPath: workspacesTestSessions + "/" + session},
-		{Name: workspacesTestVolume, MountPath: "/mirrors", SubPath: workspacesTestMirrors, ReadOnly: true},
+		{Name: workspacesTestVolume, MountPath: workspacesActorMirrorsPath, SubPath: workspacesTestMirrors, ReadOnly: true},
 	}
 }
 
