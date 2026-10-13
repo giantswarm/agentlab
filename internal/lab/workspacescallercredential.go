@@ -369,7 +369,7 @@ const jwtPattern = `eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+`
 func callerCredentialCommand(apiURL, token string) string {
 	target := apiURL + callerCredentialPath + token
 	return `echo "` + probeMarker + ` pwd=$(pwd)"; ` +
-		`if command -v curl >/dev/null; then s=$(curl -sS -o /dev/null -w '%{http_code}' -H 'Authorization: ` + callerCredentialPlaceholder + `' '` + target + `' 2>&1 | tail -n 1); ` +
+		`if command -v curl >/dev/null; then s=$(curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: ` + callerCredentialPlaceholder + `' '` + target + `' 2>/dev/null); ` +
 		`elif command -v wget >/dev/null; then s=$(wget -S -O /dev/null --header='Authorization: ` + callerCredentialPlaceholder + `' '` + target + `' 2>&1 | awk '/HTTP\//{c=$2} END{print c}'); ` +
 		`else s=no-curl-or-wget; fi; echo "` + probeMarker + ` api-status=$(echo "$s" | tr ' ' '_')"; ` +
 		`echo "` + probeMarker + ` jwt-env=$(env | grep -E '` + jwtPattern + `' | cut -d= -f1 | sort -u | tr '\n' ' ')"; ` +
