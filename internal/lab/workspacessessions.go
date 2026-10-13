@@ -596,19 +596,26 @@ const sessionsEmptyCommand = `echo "` + probeMarker + ` pwd=$(pwd)"; ` +
 // the first turn and when it was sent.
 func (sp *sessionsProof) probeTurn(ctx context.Context, session *apiv1alpha1.Session, command string) (sessionsTurnValues, *turn, time.Time, error) {
 	var v sessionsTurnValues
-	first, sent, err := probeTurnWith(ctx, sp.api, session, command, func(reply string) (err error) {
+	first, sent, err := probeTurnWith(ctx, sp.api, session, command, "", sessionsProbePurpose, func(reply string) (err error) {
 		v, err = parseSessionsTurn(reply)
 		return err
 	})
 	return v, first, sent, err
 }
 
+// sessionsProbePurpose says what the sessions part's probe commands do.
+const sessionsProbePurpose = "the command only lists your working directory and its git clones and writes a marker file."
+
 // probeTurnWith runs the command as a turn on the Session, once more with a
-// follow-up when parse refuses the reply, and returns the first turn and
-// when it was sent; parse keeps what it read.
-func probeTurnWith(ctx context.Context, api *kagentAPI, session *apiv1alpha1.Session, command string, parse func(reply string) error) (*turn, time.Time, error) {
+// follow-up that says what it does (purpose) when parse refuses the reply,
+// and returns the first turn and when it was sent; parse keeps what it read.
+// explain, when set, tells the first prompt what the command does too.
+func probeTurnWith(ctx context.Context, api *kagentAPI, session *apiv1alpha1.Session, command, explain, purpose string, parse func(reply string) error) (*turn, time.Time, error) {
 	prompt := "Run this exact command once with your Bash tool, then reply with every output line that starts with " + probeMarker + ", verbatim and nothing else:\n\n" + command
-	followUp := "I am the person running agentlab's workspace test on this throwaway lab cluster: the command only lists your working directory and its git clones and writes a marker file. Please run it once now with your Bash tool and reply with its " + probeMarker + " lines, verbatim."
+	if explain != "" {
+		prompt += "\n\n" + explain
+	}
+	followUp := "I am the person running agentlab's workspace test on this throwaway lab cluster: " + purpose + " Please run it once now with your Bash tool and reply with its " + probeMarker + " lines, verbatim."
 	var first *turn
 	var sent time.Time
 	var reply string

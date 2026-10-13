@@ -352,6 +352,13 @@ func parseCallerCredentialTurn(reply string) (callerCredentialValues, error) {
 	return callerCredentialValues{status: values["api-status"], env: strings.Fields(values["jwt-env"]), files: strings.Fields(values["jwt-files"])}, nil
 }
 
+// callerCredentialPurpose and callerCredentialExplain say what the probe
+// command does, for the model that runs it.
+const (
+	callerCredentialPurpose = "the command sends one request with a placeholder Authorization header to the lab's own fake GitHub API, prints only the HTTP status, and checks that no JWT sits in your environment or your files by printing the names of matching variables and files, never a value."
+	callerCredentialExplain = "What it does: this is agentlab's test of the egress gateway on a throwaway lab cluster. " + callerCredentialPurpose + " The gateway, not you, may replace the placeholder; the test reads the result from the fake's own log."
+)
+
 // jwtPattern finds a JWT in the sandbox: three base64url parts, the first
 // two JSON objects.
 const jwtPattern = `eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+`
@@ -377,7 +384,7 @@ func (cp *callerCredentialProof) probe(session *apiv1alpha1.Session, inWorkspace
 	ctx, cancel := context.WithTimeout(context.Background(), cp.timeout)
 	defer cancel()
 	var v callerCredentialValues
-	if _, _, err := probeTurnWith(ctx, cp.api, session, callerCredentialCommand(cp.sp.cfg.GitHubFakeBearerAPIURL(), token), func(reply string) (err error) {
+	if _, _, err := probeTurnWith(ctx, cp.api, session, callerCredentialCommand(cp.sp.cfg.GitHubFakeBearerAPIURL(), token), callerCredentialExplain, callerCredentialPurpose, func(reply string) (err error) {
 		v, err = parseCallerCredentialTurn(reply)
 		return err
 	}); err != nil {
