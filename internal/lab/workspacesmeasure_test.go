@@ -185,7 +185,7 @@ func TestMeasureScriptsParse(t *testing.T) {
 		}
 	}
 	git := measureGitScript(syncListRepoB, measureLabBranch)
-	for _, want := range []string{"switch -q", "status --porcelain", "go build", "--config checkout.workers=0", "rm -rf /workspace/" + measureBuildDir} {
+	for _, want := range []string{"switch -q", "status --porcelain", "go build", "--config checkout.workers=0", "rm -rf /workspace/" + measureBuildDir + " 2>/dev/null && break"} {
 		if !strings.Contains(git, want) {
 			t.Errorf("the git script lacks %q", want)
 		}

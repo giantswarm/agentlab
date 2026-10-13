@@ -1200,7 +1200,9 @@ a=$(ms); git -C "$c" switch -q "$b"; z=$(ms); echo "measure checkout-volume=$((z
 a=$(ms); git -C "$c" status --porcelain >/dev/null; z=$(ms); echo "measure status-volume=$((z-a))"
 echo "measure session-bytes=$(du -sb /workspace | cut -f1)"
 echo "measure build-volume=$(cd "$c" && build /workspace/` + measureBuildDir + `)"
-rm -rf /workspace/` + measureBuildDir + `
+# NFS keeps a file another process still holds as .nfs*: the directory goes
+# once it is let go, or with the workspace.
+for i in 1 2 3; do rm -rf /workspace/` + measureBuildDir + ` 2>/dev/null && break; sleep 1; done
 cp -a "$(dirname "$alt")" /local/mirror.git
 git clone -q --shared --no-checkout --config checkout.workers=0 --config core.untrackedCache=true --config feature.manyFiles=true /local/mirror.git /local/clone
 git -C /local/clone update-ref -d "$(git -C /local/clone symbolic-ref -q HEAD)"
