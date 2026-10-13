@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -394,16 +395,8 @@ func (m *measurement) preconditions() error {
 				w.samples.notAvailable(key, m.sessions)
 			}
 		}
-		gone, err := m.gone(w.name)
-		if err != nil {
+		if err := m.leftover(w); err != nil {
 			return err
-		}
-		if !gone {
-			note("removing the leftover workspace %s of an interrupted run", w.name)
-			m.created = append(m.created, w.name)
-			if err := m.deleteWorkspace(w); err != nil {
-				return err
-			}
 		}
 	}
 	m.report.WorkspaceManager = workspaceManagerImage()
@@ -411,6 +404,43 @@ func (m *measurement) preconditions() error {
 		note("workspace-manager %s", m.report.WorkspaceManager)
 	}
 	return nil
+}
+
+// leftover removes the workspace an interrupted run left under w's name. One
+// still deleting waits on its manager's next deletion cycle, which nothing
+// brings forward: its session directories are cleared, so that cycle lets
+// it go, and the run measures under a fresh name.
+func (m *measurement) leftover(w *measureWorkspace) error {
+	gone, err := m.gone(w.name)
+	if err != nil || gone {
+		return err
+	}
+	d, err := m.get(w.name)
+	if err != nil {
+		return err
+	}
+	if !d.Workspace.Deleting {
+		note("removing the leftover workspace %s of an interrupted run", w.name)
+		m.created = append(m.created, w.name)
+		return m.deleteWorkspace(w)
+	}
+	if _, err := m.clearSessions(w); err != nil {
+		return err
+	}
+	fresh := measureFreshName(w.name, m.report.Started)
+	if gone, err := m.gone(fresh); err != nil || !gone {
+		return cmp.Or(err, fmt.Errorf("the fresh workspace name %s for the leftover %s is taken", fresh, w.name))
+	}
+	note("the leftover workspace %s of an interrupted run is still deleting: its session directories cleared, its manager deletes it at its next deletion cycle; this run measures as %s", w.name, fresh)
+	m.report.Leftovers = append(m.report.Leftovers, measureLeftover{Name: w.name, MeasuredAs: fresh})
+	w.name, w.volume = fresh, syncVolume{}
+	return nil
+}
+
+// measureFreshName is the name a run measures under while the workspace of
+// an interrupted run is still deleting.
+func measureFreshName(name string, started time.Time) string {
+	return name + "-" + started.UTC().Format("20060102-150405")
 }
 
 // labPreconditions is the lab's side: the person signed in and connected to
@@ -778,21 +808,39 @@ func (m *measurement) firstSync(w *measureWorkspace, first bool) error {
 
 // volume finds the workspace's claim by its label.
 func (m *measurement) volume(name string) (syncVolume, error) {
-	k, err := labKube()
+	claims, err := m.claims(name)
 	if err != nil {
 		return syncVolume{}, err
 	}
+	v, ok := boundVolume(claims)
+	if !ok {
+		return syncVolume{}, fmt.Errorf("workspace %s has %d claims labelled %s=%s, want one bound", name, len(claims), syncWorkspaceLabel, name)
+	}
+	return v, nil
+}
+
+// boundVolume is the workspace's volume when its claims are one bound claim.
+func boundVolume(claims []corev1.PersistentVolumeClaim) (syncVolume, bool) {
+	if len(claims) != 1 || claims[0].Spec.VolumeName == "" {
+		return syncVolume{}, false
+	}
+	c := claims[0]
+	return syncVolume{namespace: c.Namespace, claim: c.Name, pv: c.Spec.VolumeName}, true
+}
+
+// claims are the claims labelled with the workspace's name.
+func (m *measurement) claims(name string) ([]corev1.PersistentVolumeClaim, error) {
+	k, err := labKube()
+	if err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	defer cancel()
-	claims, err := k.clientset.CoreV1().PersistentVolumeClaims("").List(ctx, metav1.ListOptions{LabelSelector: syncWorkspaceLabel + "=" + name})
+	list, err := k.clientset.CoreV1().PersistentVolumeClaims("").List(ctx, metav1.ListOptions{LabelSelector: syncWorkspaceLabel + "=" + name})
 	if err != nil {
-		return syncVolume{}, fmt.Errorf("listing the claim of workspace %s: %w", name, err)
+		return nil, fmt.Errorf("listing the claim of workspace %s: %w", name, err)
 	}
-	if len(claims.Items) != 1 || claims.Items[0].Spec.VolumeName == "" {
-		return syncVolume{}, fmt.Errorf("workspace %s has %d claims labelled %s=%s, want one bound", name, len(claims.Items), syncWorkspaceLabel, name)
-	}
-	c := claims.Items[0]
-	return syncVolume{namespace: c.Namespace, claim: c.Name, pv: c.Spec.VolumeName}, nil
+	return list.Items, nil
 }
 
 // sync requests a cycle once the listing cache let go and times it.
@@ -1387,15 +1435,33 @@ func (m *measurement) deleteAll() error {
 	return nil
 }
 
+// clearSessions removes the session directories from the workspace's
+// volume, the way the manager's sync Job does, and returns the volume; a
+// workspace without a bound claim has none to clear.
+func (m *measurement) clearSessions(w *measureWorkspace) (syncVolume, error) {
+	claims, err := m.claims(w.name)
+	if err != nil {
+		return syncVolume{}, err
+	}
+	v, bound := boundVolume(claims)
+	if !bound {
+		return syncVolume{}, nil
+	}
+	w.volume = v
+	out, err := m.onVolume(w, "clear", accessClearSessionsScript, nil)
+	if err != nil {
+		return syncVolume{}, err
+	}
+	note("%s: %s", w.name, out)
+	return v, nil
+}
+
 // deleteWorkspace clears the workspace's session directories, deletes it
 // through delete_workspace and waits for it, its claim and its volume to go.
 func (m *measurement) deleteWorkspace(w *measureWorkspace) error {
-	v, err := m.volume(w.name)
-	if err == nil {
-		w.volume = v
-		if _, err := m.onVolume(w, "clear", accessClearSessionsScript, nil); err != nil {
-			return err
-		}
+	v, err := m.clearSessions(w)
+	if err != nil {
+		return err
 	}
 	var res struct {
 		Sessions []string `json:"sessions"`
@@ -1482,9 +1548,15 @@ func (m *measurement) cleanup() {
 // and prints the Markdown.
 func (m *measurement) writeReport() error {
 	for _, w := range m.ws {
+		// A run that ended before the preconditions set the samples up has
+		// none: every figure is not available.
+		samples := w.samples
+		if samples == nil {
+			samples = newMeasureSamples()
+		}
 		m.report.Workspaces = append(m.report.Workspaces, measureWorkspaceReport{
 			Name: w.name, Kind: w.kind, Repositories: w.repos, Pushed: w.pushed, Worked: w.worked,
-			Figures: w.samples.figures(), Storage: w.storage,
+			Figures: samples.figures(), Storage: w.storage,
 		})
 	}
 	raw, err := json.MarshalIndent(m.report, "", "  ")

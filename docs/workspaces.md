@@ -551,14 +551,22 @@ directory (`state/workspaces-measure-<time>/`, or `--run-dir`) as
 workspace and figure what it measured from and to, its samples, median, p90
 (nearest rank) and max, the StorageClass and the driver. A figure the cluster
 cannot report is listed as not available with the reason, never estimated.
-In the lab the NFS export lives on the node's own disk, so the volume against
-the local disk measures the NFS protocol, not a network.
+A run that ends early still writes the report: the figures no run reached are
+not available, and the report says why the run ended. In the lab the NFS
+export lives on the node's own disk, so the volume against the local disk
+measures the NFS protocol, not a network.
 
 Everything the command creates is removed on every path: the Sessions, the
 session directories, the workspaces and their volumes, the Agent
 `agentlab-workspaces-measure` (Harness `claude`), the probe pods, the
 person's sign-in at `fake`, the pushed repositories back at their heads and a
 generated repository.
+
+A workspace an interrupted run left under a measurement's name has its
+session directories cleared and is deleted before the run. One that is still
+deleting goes only at its manager's next deletion cycle: its session
+directories are cleared so that cycle lets it go, the run measures under
+`<name>-<start time>`, and the report names the leftover.
 
 **Another cluster with the platform**: `--kube-context <context>` (of your own
 kubeconfig) and `--muster-url <url>`, as the person `muster auth login
