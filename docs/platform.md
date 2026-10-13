@@ -926,8 +926,8 @@ release candidate:
 | Stage | What passes |
 |---|---|
 | harnesses | `claude` Ready, no `spec.claude.limits` on it |
-| write-time guards | agent-manager's `validate_agent` on `claude` refuses `preset:full` (tools without `readOnlyHint`) and an origin outside the Harness's list |
-| create | `create_agent` on `claude` with `preset:read-only` as the person; Ready; the Agent's `spec.egress` is the Harness's origin list agent-manager writes |
+| write-time checks | agent-manager's `validate_agent` on `claude` accepts `[preset:read-only, tool:x_agent-manager_create_agent]` (which muster tools a coding agent uses is the person's choice) and refuses an origin outside the Harness's list; an agent-manager below 1.14.0 refuses the write tool, and the proof expects that refusal on it |
+| create | `create_agent` on `claude` with that toolset (`preset:read-only` alone below agent-manager 1.14.0) as the person; Ready; its `RemoteMCPServer` Accepted and sending the toolset as `X-Muster-Toolset`; the Agent's `spec.egress` is the Harness's origin list agent-manager writes |
 | uid split | the agent's commands run as uid 65532; the root harness's `/proc/<pid>/environ` and `mem` refuse it |
 | forwarder paths | the forwarder answers 400 to `../..`, `%2e%2e` and `..%2f`, 404 for a server it does not front, 401 without its token |
 | write tool refused | `x_agent-manager_delete_agent`, called through the forwarder with the turn's bearer, refused by muster as outside the toolset |

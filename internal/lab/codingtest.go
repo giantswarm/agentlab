@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/google/uuid"
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -21,11 +22,15 @@ import (
 // the way the portal creates one.
 //
 //  1. The Harness claude Ready from the values, no limits on it.
-//  2. agent-manager's write-time guards on a claude Harness: validate_agent
-//     refuses a toolset reaching a tool that is not read-only and an egress
-//     origin outside the Harness's list.
-//  3. create_agent on claude with the read-only toolset: Ready, the Agent's
-//     egress the Harness's origin list.
+//  2. agent-manager's write-time checks on a claude Harness: validate_agent
+//     accepts a toolset with a muster write tool and refuses an egress origin
+//     outside the Harness's list. An agent-manager below
+//     agentManagerAnyToolsetFloor refuses the write tool instead, and the
+//     proof expects that refusal on it.
+//  3. create_agent on claude with the read-only preset plus that write tool
+//     (the read-only preset alone below the floor): Ready, its RemoteMCPServer
+//     Accepted and sending the toolset, the Agent's egress the Harness's
+//     origin list.
 //  4. One Session, one turn whose Bash tool probes the sandbox; its lines are
 //     judged stage by stage: Claude Code runs as the unprivileged uid and
 //     cannot read the harness's environment or memory; the caller forwarder
@@ -52,9 +57,18 @@ import (
 const (
 	// codingTestAgent is the proof's agent, deleted by the same run.
 	codingTestAgent = "agentlab-coding"
-	// codingTestToolset is the coding agent's toolset: read-only, as the
-	// guard requires of a claude Harness agent.
+	// codingTestToolset is the coding agent's toolset below
+	// agentManagerAnyToolsetFloor, where a claude Harness agent is held to
+	// read-only tools.
 	codingTestToolset = presetReadOnly
+	// codingTestGrantedTool is the muster write tool the coding agent's
+	// toolset adds from agentManagerAnyToolsetFloor on: which tools a coding
+	// agent uses is the person's choice.
+	codingTestGrantedTool = "tool:" + agentManagerToolPrefix + "create_agent"
+	// agentManagerAnyToolsetFloor is the first agent-manager release that
+	// writes a claude Harness agent with any muster toolset; a release
+	// candidate of it counts.
+	agentManagerAnyToolsetFloor = "1.14.0-0"
 	// codingTestWriteTool is the write tool the sandbox calls through the
 	// forwarder, outside the read-only toolset; its argument names no agent,
 	// so a call muster let through would change nothing.
@@ -126,6 +140,9 @@ type codingProof struct {
 	sessions *sessionSet
 	// line names the releases the proof ran on, for every verdict.
 	line string
+	// anyToolset is whether the line's agent-manager writes a claude
+	// Harness agent with any muster toolset.
+	anyToolset bool
 }
 
 func (p *codingProof) run() error {
@@ -158,13 +175,20 @@ func (p *codingProof) run() error {
 	p.sessions = &sessionSet{api: p.api}
 	p.line = p.releases(ctx)
 	note("the line: %s", p.line)
+	if !p.anyToolset {
+		note("agent-manager below %s holds a claude Harness agent to read-only tools: the write tool's refusal is expected", agentManagerAnyToolsetFloor)
+	}
 	modelConfig, err := agentManagerModelConfig(p.muster)
 	if err != nil {
 		return err
 	}
 	p.removeAgents()
 
-	p.stages.begin("write-time guards", "%svalidate_agent on Harness %s as %s: a toolset reaching tools that are not read-only and an origin outside the Harness's list refused", agentManagerToolPrefix, claudeHarness, p.user.Email)
+	verdict := "accepted"
+	if !p.anyToolset {
+		verdict = "refused"
+	}
+	p.stages.begin("write-time checks", "%svalidate_agent on Harness %s as %s: a toolset with %s %s, an origin outside the Harness's list refused", agentManagerToolPrefix, claudeHarness, p.user.Email, codingTestGrantedTool, verdict)
 	spec := agentSpec{
 		Name: codingTestAgent, ModelConfig: modelConfig, Harness: claudeHarness, SystemMessage: codingTestSystemPrompt,
 		Description: "Throwaway coding agent of `agentlab coding-test`; deleted by the same run.",
@@ -173,10 +197,13 @@ func (p *codingProof) run() error {
 		return err
 	}
 
-	p.stages.begin("create", "%screate_agent %s on Harness %s, toolset [%s]: Ready, the Agent's egress the Harness's origins", agentManagerToolPrefix, codingTestAgent, claudeHarness, codingTestToolset)
-	spec.Toolset = []string{codingTestToolset}
+	spec.Toolset = p.toolset()
+	p.stages.begin("create", "%screate_agent %s on Harness %s, toolset %v: Ready, its RemoteMCPServer Accepted with the toolset, the Agent's egress the Harness's origins", agentManagerToolPrefix, codingTestAgent, claudeHarness, spec.Toolset)
 	egress, err := p.createReady(spec)
 	if err != nil {
+		return err
+	}
+	if err := p.proveBinding(spec.Toolset); err != nil {
 		return err
 	}
 	note("Agent %s Ready on %s, egress [%s]", codingTestAgent, claudeHarness, strings.Join(egress, " "))
@@ -257,7 +284,7 @@ func (p *codingProof) run() error {
 }
 
 // releases words the line under test: the chart and the versions the
-// controller and agent-manager report.
+// controller and agent-manager report; it sets anyToolset from the latter.
 func (p *codingProof) releases(ctx context.Context) string {
 	parts := []string{"agent-platform " + firstNonEmpty(p.cfg.Platform.ChartVersion, p.cfg.Platform.ChartPath, "unread")}
 	if v, err := p.api.version(ctx); err == nil {
@@ -265,39 +292,83 @@ func (p *codingProof) releases(ctx context.Context) string {
 	}
 	if info, err := readAgentManagerInfo(p.muster); err == nil {
 		parts = append(parts, "agent-manager "+info.Version)
+		p.anyToolset = takesAnyToolset(info.Version)
 	}
 	return strings.Join(parts, ", ")
 }
 
-// proveGuards is validate_agent refusing the two writes a claude Harness
-// agent may not make: a toolset with tools that are not read-only, an
-// origin outside the Harness's list.
-func (p *codingProof) proveGuards(spec agentSpec) error {
-	for _, refused := range []struct {
-		what, want string
-		mutate     func(args map[string]any)
-	}{
-		{"toolset [" + presetFull + "]", "read-only", func(args map[string]any) { args[toolsetKey] = []string{presetFull} }},
-		{"egress [" + codingTestRefusedOrigin + "]", "is not one of Harness", func(args map[string]any) {
-			args[toolsetKey] = []string{codingTestToolset}
-			args[egressKey] = []string{codingTestRefusedOrigin}
-		}},
-	} {
-		args, err := createAgentArgs(spec)
-		if err != nil {
-			return err
-		}
-		refused.mutate(args)
-		var report validateReport
-		if err := p.muster.callServerJSON(agentManagerToolPrefix+"validate_agent", args, &report); err != nil {
-			return err
-		}
-		if report.Valid || !slices.ContainsFunc(report.Errors, func(e string) bool { return strings.Contains(e, refused.want) }) {
-			return fmt.Errorf("%s on %s: validate_agent answered valid=%v errors=%v, wanted the refusal %q", refused.what, p.line, report.Valid, report.Errors, refused.want)
-		}
-		note("%s refused: %s", refused.what, excerpt(strings.Join(report.Errors, "; "), 240))
+// takesAnyToolset reports whether an agent-manager version writes a claude
+// Harness agent with any muster toolset: a release at or above
+// agentManagerAnyToolsetFloor, or a build whose version is no release (a dev
+// build is of the current line).
+func takesAnyToolset(version string) bool {
+	v, err := semver.NewVersion(version)
+	if err != nil {
+		return true
 	}
+	return !v.LessThan(semver.MustParse(agentManagerAnyToolsetFloor))
+}
+
+// toolset is the coding agent's toolset on this line: the read-only preset
+// plus a muster write tool, the read-only preset alone below the floor.
+func (p *codingProof) toolset() []string {
+	if p.anyToolset {
+		return []string{codingTestToolset, codingTestGrantedTool}
+	}
+	return []string{codingTestToolset}
+}
+
+// proveGuards is validate_agent on a claude Harness agent: the toolset with
+// a muster write tool accepted (refused below the floor), an origin outside
+// the Harness's list refused.
+func (p *codingProof) proveGuards(spec agentSpec) error {
+	writeToolset := []string{codingTestToolset, codingTestGrantedTool}
+	report, err := p.validate(spec, func(args map[string]any) { args[toolsetKey] = writeToolset })
+	if err != nil {
+		return err
+	}
+	switch {
+	case p.anyToolset && !report.Valid:
+		return fmt.Errorf("toolset %v on %s: validate_agent answered valid=false errors=%v, wanted it accepted", writeToolset, p.line, report.Errors)
+	case p.anyToolset:
+		note("toolset %v accepted", writeToolset)
+	case !report.refused("read-only"):
+		return fmt.Errorf("toolset %v on %s: validate_agent answered valid=%v errors=%v, wanted the read-only refusal of an agent-manager below %s", writeToolset, p.line, report.Valid, report.Errors, agentManagerAnyToolsetFloor)
+	default:
+		note("toolset %v refused below %s: %s", writeToolset, agentManagerAnyToolsetFloor, excerpt(strings.Join(report.Errors, "; "), 240))
+	}
+
+	origin := "egress [" + codingTestRefusedOrigin + "]"
+	report, err = p.validate(spec, func(args map[string]any) {
+		args[toolsetKey] = []string{codingTestToolset}
+		args[egressKey] = []string{codingTestRefusedOrigin}
+	})
+	if err != nil {
+		return err
+	}
+	if !report.refused("is not one of Harness") {
+		return fmt.Errorf("%s on %s: validate_agent answered valid=%v errors=%v, wanted the refusal %q", origin, p.line, report.Valid, report.Errors, "is not one of Harness")
+	}
+	note("%s refused: %s", origin, excerpt(strings.Join(report.Errors, "; "), 240))
 	return nil
+}
+
+// validate is validate_agent on the spec's create arguments as mutate
+// changes them.
+func (p *codingProof) validate(spec agentSpec, mutate func(args map[string]any)) (validateReport, error) {
+	var report validateReport
+	args, err := createAgentArgs(spec)
+	if err != nil {
+		return report, err
+	}
+	mutate(args)
+	err = p.muster.callServerJSON(agentManagerToolPrefix+"validate_agent", args, &report)
+	return report, err
+}
+
+// refused reports whether validate_agent refused with an error containing want.
+func (r validateReport) refused(want string) bool {
+	return !r.Valid && slices.ContainsFunc(r.Errors, func(e string) bool { return strings.Contains(e, want) })
 }
 
 // createReady is create_agent through muster as the person, then the
@@ -319,6 +390,36 @@ func (p *codingProof) createReady(spec agentSpec) ([]string, error) {
 	}
 	note("%s Ready on %s in %s (requestedBy %s)", spec.Name, spec.Harness, boot.elapsed.Round(time.Second), written.RequestedBy)
 	return readAgentEgress(context.Background(), spec.Name)
+}
+
+// proveBinding is the agent's MCP binding: the RemoteMCPServer its template
+// binds Accepted, sending the toolset as declared.
+func (p *codingProof) proveBinding(toolset []string) error {
+	t, err := readAgentTemplate(codingTestAgent)
+	if err != nil {
+		return err
+	}
+	header, found, err := toolsetHeaderOf(t)
+	if err != nil {
+		return fmt.Errorf("agent %s: %w", codingTestAgent, err)
+	}
+	if want := strings.Join(toolset, ","); !found || header != want {
+		return fmt.Errorf("agent %s binds %s %s with %s=%q (present %v), wanted %q", codingTestAgent, remoteMCPServerKind, t.mcpServer(), toolsetHeader, header, found, want)
+	}
+	var accepted string
+	waitFor(int(p.timeout/pollInterval), pollInterval, func() bool {
+		rms, err := readKagentObject(remoteMCPServerResource, t.mcpServer())
+		accepted = ""
+		if err == nil {
+			accepted = conditionStatus(rms, conditionAccepted)
+		}
+		return accepted == conditionTrue
+	})
+	if accepted != conditionTrue {
+		return fmt.Errorf("%s %s of agent %s: Accepted=%q after %s, wanted True (%s)", remoteMCPServerKind, t.mcpServer(), codingTestAgent, accepted, p.timeout, p.line)
+	}
+	note("binds %s/%s Accepted, %s=%s", remoteMCPServerKind, t.mcpServer(), toolsetHeader, header)
+	return nil
 }
 
 // createSession is a Session of the agent as the person, tracked for removal.
