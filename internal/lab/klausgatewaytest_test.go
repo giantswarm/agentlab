@@ -361,6 +361,23 @@ type scriptedGateway struct {
 	bound     map[string]string
 	approvals int
 	running   map[string]chan struct{}
+
+	// answering is every answer still in flight: the adapter answers
+	// after the request that asked, so the fake Slack it posts to stays
+	// up until settle has seen the last one through.
+	answering sync.WaitGroup
+}
+
+// settle ends the essay turns nobody stopped (a test that failed before
+// its stop) and waits until every answer has landed.
+func (g *scriptedGateway) settle() {
+	g.mu.Lock()
+	for thread, stop := range g.running {
+		delete(g.running, thread)
+		close(stop)
+	}
+	g.mu.Unlock()
+	g.answering.Wait()
 }
 
 func (g *scriptedGateway) logs() (string, error) {
@@ -402,7 +419,7 @@ func (g *scriptedGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Event map[string]string `json:"event"`
 		}
 		_ = json.Unmarshal(body, &cb)
-		go g.onMessage(cb.Event)
+		g.answering.Go(func() { g.onMessage(cb.Event) })
 	case slackInteractionsPath:
 		form, _ := url.ParseQuery(string(body))
 		var p struct {
@@ -430,11 +447,15 @@ func (g *scriptedGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal([]byte(form.Get("payload")), &p)
 		switch {
 		case p.Type == "view_submission":
-			go g.onPick(p.User.ID, p.View.PrivateMetadata, p.View.State.Values[slackPickerAgentBlock][slackPickerAgentAction].SelectedOption.Value)
+			g.answering.Go(func() {
+				g.onPick(p.User.ID, p.View.PrivateMetadata, p.View.State.Values[slackPickerAgentBlock][slackPickerAgentAction].SelectedOption.Value)
+			})
 		case p.Actions[0].ActionID == slackActionAgentSelect:
-			go g.openPicker(p.Channel.ID, p.Container.ThreadTS, p.Actions[0].Value)
+			g.answering.Go(func() { g.openPicker(p.Channel.ID, p.Container.ThreadTS, p.Actions[0].Value) })
 		default:
-			go g.onClick(p.User.ID, p.Channel.ID, p.Container.ThreadTS, p.Container.MessageTS, p.Actions[0].ActionID, p.Actions[0].Value)
+			g.answering.Go(func() {
+				g.onClick(p.User.ID, p.Channel.ID, p.Container.ThreadTS, p.Container.MessageTS, p.Actions[0].ActionID, p.Actions[0].Value)
+			})
 		}
 	}
 }
@@ -605,7 +626,14 @@ func TestSlackProof(t *testing.T) {
 	fake := startTestFake(t, map[string]string{"UP": testUser})
 	gw := &scriptedGateway{t: t, secret: "sekrit", fake: fake, ctrl: ctrl, stranger: "US", bound: map[string]string{}, running: map[string]chan struct{}{}}
 	srv := httptest.NewServer(gw)
-	defer srv.Close()
+	// Registered after the fake's, so it runs first: the gateway stops
+	// taking requests and its last answers land before the fake shuts down.
+	// The proof's final steps return before the gateway has answered their
+	// reply (`stop` in a thread whose turn is over).
+	t.Cleanup(func() {
+		srv.Close()
+		gw.settle()
+	})
 	p := &slackProof{driver: newSlackDriver(srv.URL, "sekrit", fake, "C1"), fake: fake, channel: "C1", logs: gw.logs}
 
 	roster, err := p.roster("UP")
