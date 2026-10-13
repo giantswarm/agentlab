@@ -59,7 +59,13 @@ platform:
   second agentgateway and the disruption guards. The chart's edge route for
   the channels (`agentgatewayRoute`) stays off — the public leg is the
   host-mode proof's.
-- **The component's Slack Web API** is the proof's fake: the lab's one
+- **The component trusts the lab CA for muster**: it dials muster's public
+  URL for every Session (agent-manager's tools), the workspace listing and the
+  OBO discovery, and inside a pod that is the edge, whose certificate the lab
+  CA signs. A `postRenderers` strategic merge (HACKS.md U32) mounts Secret
+  `agent-platform/dex-ca` read-only at `/etc/klaus-gateway/lab-ca` and sets
+  `SSL_CERT_FILE` to its `ca.crt`; the image's own roots stay.
+- **The component's Slack Web API** is the proof's fake: a second
   patch on the component (a `postRenderers` strategic merge, HACKS.md U26)
   sets `KLAUS_GATEWAY_SLACK_API_BASE`, which the chart has no value for, to
   `http://agentlab-slack-api.agent-platform.svc.cluster.local/api` — a
@@ -108,8 +114,8 @@ platform:
 and, on a lab with the component, continues on it:
 
 6. **The render.** Deployment `klaus-gateway` runs the Secret store (the env
-   above), mounts no `obo-store` volume, is not `Recreate` and carries the
-   lab's Slack Web API base; Role
+   above), mounts no `obo-store` volume, is not `Recreate`, carries the
+   lab's Slack Web API base and trusts the lab CA for muster; Role
    `klaus-gateway-obo-links` has one rule — the core group's `secrets`,
    `resourceNames: [klaus-gateway-obo-links]`, exactly `get`/`update`/`patch`;
    the RoleBinding binds the Deployment's ServiceAccount to it; the link
@@ -134,7 +140,9 @@ and, on a lab with the component, continues on it:
    the fake thread with the word, its `turn_dispatch` record under the
    person's e-mail and subject — the component forwarding the link's cached
    id_token and talking to the controller over the in-cluster plaintext h2c
-   target, which the host-mode gateway never touches.
+   target, which the host-mode gateway never touches. Its Session starts
+   through agent-manager over muster's public URL, verified with the lab CA;
+   a failed turn names that URL and the CA source.
 
 Then the proof's records are removed (the count is back where it was), and
 the host-mode cleanup takes the fixtures and the Sessions with it. On a

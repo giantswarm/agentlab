@@ -288,10 +288,11 @@ components:
   # Swarmgeist (platform.klausGateway): klaus-gateway as the meta chart's
   # component — A2A to the kagent controller over the in-cluster agentgateway
   # target, Slack on a placeholder Secret, the OBO link store in a Secret
-  # (its own values are in the `klausGateway:` block below). The lab's one
-  # patch points its Slack Web API at the Service in front of
-  # klaus-gateway-test's fake; the dev-image override joins it when
-  # platform.devImages names one.
+  # (its own values are in the `klausGateway:` block below). The lab's two
+  # patches point its Slack Web API at the Service in front of
+  # klaus-gateway-test's fake and make it trust the lab CA for muster's
+  # public URL; the dev-image override joins them when platform.devImages
+  # names one.
   klaus-gateway:
     enabled: true
 {{- with index .PostRenderers "klaus-gateway" }}

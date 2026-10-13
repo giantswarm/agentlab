@@ -731,6 +731,22 @@ A claude Session works in its volume directory from kagent 1.9.0
 On an older kagent line, the proof's Session on the volume reports its default
 directory and fails.
 
+### U32. `postRenderers` patch: the klaus-gateway component trusts the lab CA for muster — ACCEPTED
+The component dials muster at its public URL (`obo.musterUrl`): every Slack
+Session starts through agent-manager's MCP tools over muster, the workspace
+listing and the OBO discovery go there too. Inside a pod that URL is the edge,
+whose certificate the lab CA signs, and the chart has a CA value only for a
+`grpcs://` A2A target, so the turn fails with `x509: certificate signed by
+unknown authority`. **Fix:** a strategic-merge patch in
+`components.klaus-gateway.postRenderers` (`labCAPatch`, `postrenderers.go`)
+mounts the lab's trust bundle, Secret `agent-platform/dex-ca` (the one muster,
+the portal and workspace-manager trust), read-only at
+`/etc/klaus-gateway/lab-ca` and names it as `SSL_CERT_FILE`, the system roots
+Go reads; the image's own roots stay, read from its certificate directory.
+`klaus-gateway-test` asserts the patch on the live Deployment and names the
+muster URL and the CA source in the in-cluster turn's error. Lab-only by
+construction: an installation's edge serves a publicly trusted certificate.
+
 ## Accepted lab trade-offs (not hacks to fix)
 
 - **Checksum stamping via the `REPLACED_AT_APPLY` placeholder** — the standard

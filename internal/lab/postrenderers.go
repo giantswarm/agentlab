@@ -82,6 +82,12 @@ import (
 //     Slack Web API on this host while it runs, since no workspace answers
 //     the lab (klausgateway.go). Lab only.
 //
+//  7. The lab CA in the klaus-gateway component (no chart value outside
+//     A2A): Secret labCASecret mounted read-only and named as SSL_CERT_FILE,
+//     so the component verifies muster's public URL, the edge the lab CA
+//     signs, the way muster, the portal and workspace-manager trust it
+//     (klausgateway.go).
+//
 // The values-side shape is Flux's: `postRenderers: [{kustomize: {patches:
 // [{target, patch}], images: [{name, newName, newTag}]}}]`.
 
@@ -368,6 +374,37 @@ spec:
 	}
 }
 
+// labCAPatch is patch 7: the component trusts the lab CA for muster.
+func labCAPatch() kustomizePatch {
+	return kustomizePatch{
+		Target: map[string]string{kindKey: kindDeployment, nameKey: klausGatewayComponent},
+		Patch: literalYAML(fmt.Sprintf(`apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: %[1]s
+spec:
+  template:
+    spec:
+      containers:
+        - name: %[1]s
+          env:
+            - name: %[2]s
+              value: %[3]s
+          volumeMounts:
+            - name: %[4]s
+              mountPath: %[5]s
+              readOnly: true
+      volumes:
+        - name: %[4]s
+          secret:
+            secretName: %[6]s
+            items:
+              - key: %[7]s
+                path: %[7]s
+`, klausGatewayComponent, sslCertFileEnv, klausGatewayLabCAFile, klausGatewayLabCAVolume, klausGatewayLabCADir, labCASecret, caCertKey)),
+	}
+}
+
 // sidecarPostRenderer is the one-patch postRenderers entry of a release the
 // lab renders itself (mcp-prometheus.yaml.tmpl).
 func sidecarPostRenderer(deployment string, dexPort int) postRenderer {
@@ -522,7 +559,7 @@ func componentPostRenderers(cfg *config.Config, imageNames map[string]string, si
 		patches[component] = []kustomizePatch{hostNetworkPatch(component)}
 	}
 	if cfg.KlausGatewayEnabled() {
-		patches[klausGatewayComponent] = append(patches[klausGatewayComponent], slackAPIPatch())
+		patches[klausGatewayComponent] = append(patches[klausGatewayComponent], slackAPIPatch(), labCAPatch())
 	}
 	for _, component := range slices.Sorted(maps.Keys(sidecars)) {
 		for _, target := range sidecars[component] {

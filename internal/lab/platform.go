@@ -57,6 +57,12 @@ const (
 // Substrate's actor-id trust anchor share.
 const caCertKey = "ca.crt"
 
+// labCASecret is the Secret carrying the lab's trust bundle under caCertKey
+// (trustBundleFile): the lab CA, which signs Dex's certificate and the edge's
+// wildcard, plus an externally provisioned pair's chain. Every in-cluster
+// workload that dials Dex or the edge trusts it from here.
+const labCASecret = "dex-ca"
+
 // The platform's generated secrets (platformSecretsName): created once and
 // then left alone — regenerating the encryption key on every run would
 // invalidate every issued token. dex-client-secret must match the
@@ -337,7 +343,7 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	if err := writeIssuerFiles(cfg); err != nil {
 		return err
 	}
-	if err := ensureSecretFromFiles(platformNamespace, "dex-ca", map[string]string{
+	if err := ensureSecretFromFiles(platformNamespace, labCASecret, map[string]string{
 		caCertKey: trustBundleFile(cfg),
 	}); err != nil {
 		return err
