@@ -749,6 +749,9 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	if line := replacingNote(installed, chart); line != "" {
 		note("%s", line)
 	}
+	if err := dropHarnessLimits(ctx); err != nil {
+		return err
+	}
 	if rev, err := helmDeployedRevision(platformNamespace, platformRelease, chart.version, values); err != nil {
 		return err
 	} else if rev > 0 {
