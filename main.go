@@ -1678,7 +1678,7 @@ func klausGatewayTestCmd() *cobra.Command {
 			return lab.KlausGatewayTest(cfg, email, opts)
 		},
 	}
-	cmd.Flags().StringVar(&opts.GatewayImage, "gateway-image", lab.KlausGatewayImageDefault, "the klaus-gateway image to run on the host network (a 0.x image is the documented negative: it cannot speak A2A v1 over gRPC)")
+	cmd.Flags().StringVar(&opts.GatewayImage, "gateway-image", "", "the klaus-gateway image to run on the host network (default: the release the lab's meta chart runs as its klaus-gateway component; a 0.x image is the documented negative: it cannot speak A2A v1 over gRPC)")
 	cmd.Flags().StringVar(&opts.GatewayBinary, "gateway-binary", "", "a local klaus-gateway build to run instead of the image — the proof of a branch")
 	cmd.Flags().IntVar(&opts.Port, "gateway-port", 18090, "host port of the gateway's Slack endpoints; the admin endpoints take the next port, the fake Slack Web API the one after when it runs in this process")
 	cmd.Flags().StringVar(&opts.Harness, "harness", "", "the Harness the fixture is admitted by and booted on, e.g. a coding Harness (default: the platform Harness kagent)")
@@ -1707,7 +1707,7 @@ func decisionsTestCmd() *cobra.Command {
 			return lab.DecisionsTest(cfg, email, opts)
 		},
 	}
-	cmd.Flags().StringVar(&opts.GatewayImage, "gateway-image", lab.DecisionsGatewayImageDefault, "the klaus-gateway image to run on the host network")
+	cmd.Flags().StringVar(&opts.GatewayImage, "gateway-image", "", "the klaus-gateway image to run on the host network (default: the release the lab's meta chart runs as its klaus-gateway component)")
 	cmd.Flags().StringVar(&opts.GatewayBinary, "gateway-binary", "", "a local klaus-gateway build to run instead of the image — the proof of a branch")
 	cmd.Flags().IntVar(&opts.Port, "gateway-port", 18090, "host port of the gateway's endpoints; the admin endpoints take the next port, the fake Slack Web API the one after")
 	cmd.Flags().StringVar(&opts.RunDir, "run-dir", "", "directory for the gateway's stores, keys and log, kept afterwards (default: a temporary directory, removed)")
@@ -1730,7 +1730,7 @@ func beekeeperDecisionsTestCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&opts.Version, "beekeeper-version", lab.BeekeeperDecisionsVersionDefault, "the beekeeper release whose binary and CRDs run")
 	cmd.Flags().StringVar(&opts.Binary, "beekeeper-binary", "", "a local linux beekeeper build to run instead of the release's binary — the proof of a branch")
-	cmd.Flags().StringVar(&opts.GatewayImage, "gateway-image", lab.DecisionsGatewayImageDefault, "the klaus-gateway image to run on the host network")
+	cmd.Flags().StringVar(&opts.GatewayImage, "gateway-image", "", "the klaus-gateway image to run on the host network (default: the release the lab's meta chart runs as its klaus-gateway component)")
 	cmd.Flags().StringVar(&opts.GatewayBinary, "gateway-binary", "", "a local klaus-gateway build to run instead of the image")
 	cmd.Flags().IntVar(&opts.Port, "gateway-port", 18090, "host port of the gateway's endpoints; the next four take its admin endpoints, the fake Slack Web API, beekeeper serve and its Postgres")
 	cmd.Flags().StringVar(&opts.RunDir, "run-dir", "", "directory for the stores, keys, serve's configuration and the logs, kept afterwards (default: a temporary directory, removed)")
