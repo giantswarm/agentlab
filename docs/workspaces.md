@@ -472,10 +472,10 @@ then `agentlab platform`. Without them it fails at once with the reason.
 2. **Workspace**: the admin connected to `fake-bearer`; the workspace
    `agentlab-caller-credential` over `agentlab-oss/docs` on it and its first
    cycle.
-3. **Session**: `start_session` with the admin's grant; kagent's record of
-   the Session carries the providers of the grant, among them
-   `api.github-bearer.<domain>` as a `Bearer` provider of audience
-   `fake-bearer` (a grant without it fails here, naming the manager).
+3. **Session**: the admin's grant names `api.github-bearer.<domain>` as a
+   `Bearer` provider of audience `fake-bearer` (a grant without it fails
+   here, naming the manager); `start_session` with it, and the providers
+   kagent records on the Session noted.
 4. **The Actor's JWT**: a turn runs `curl` (else `wget`) in the sandbox to
    `https://api.github-bearer.<domain>/agentlab/caller-credential/<token>`
    with `Authorization: Bearer agentlab-placeholder`, and names the

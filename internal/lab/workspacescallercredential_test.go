@@ -42,16 +42,19 @@ func TestJudgeCallerCredential(t *testing.T) {
 	}
 }
 
-func TestJudgeSessionProviders(t *testing.T) {
+func TestJudgeGrantProviders(t *testing.T) {
 	const api, aud = "api.github-bearer.example", "fake-bearer"
-	git := &apiv1alpha1.SessionProvider{Hostname: "github-bearer.example", Scheme: "Basic", Audience: aud, Username: "x-access-token"}
-	if err := judgeSessionProviders([]*apiv1alpha1.SessionProvider{git, {Hostname: api, Scheme: "Bearer", Audience: aud}}, api, aud); err != nil {
+	recorded := toGrantProviders([]*apiv1alpha1.SessionProvider{
+		{Hostname: "github-bearer.example", Scheme: "Basic", Audience: aud, Username: "x-access-token"},
+		{Hostname: api, Scheme: "Bearer", Audience: aud},
+	})
+	if err := judgeGrantProviders(recorded, api, aud); err != nil {
 		t.Error(err)
 	}
-	if err := judgeSessionProviders([]*apiv1alpha1.SessionProvider{git}, api, aud); err == nil || !strings.Contains(err.Error(), "no Bearer API host") {
+	if err := judgeGrantProviders(recorded[:1], api, aud); err == nil || !strings.Contains(err.Error(), "no Bearer API host") {
 		t.Errorf("the git host alone: %v", err)
 	}
-	if err := judgeSessionProviders([]*apiv1alpha1.SessionProvider{{Hostname: api, Scheme: "Basic", Audience: aud}}, api, aud); err == nil {
+	if err := judgeGrantProviders([]grantProvider{{Hostname: api, Scheme: "Basic", Audience: aud}}, api, aud); err == nil {
 		t.Error("a Basic API host passed")
 	}
 }

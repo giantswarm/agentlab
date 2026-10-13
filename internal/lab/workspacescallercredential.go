@@ -25,8 +25,9 @@ import (
 //   - the admin connected to fake-bearer, a workspace of it with one
 //     repository and its first cycle;
 //   - a Session started through agent-manager's start_session with the
-//     admin's grant: kagent records the grant's providers on it, the API host
-//     a Bearer provider of audience fake-bearer;
+//     admin's grant, which names the API host as a Bearer provider of
+//     audience fake-bearer (the providers kagent records on the Session are
+//     noted);
 //   - from the sandbox, a request to the API host with a placeholder
 //     Authorization: the lab's GitHub logs a JWT bearer whose aud is the
 //     provider's audience and whose sub names the Session's Actor, injected
@@ -117,15 +118,17 @@ func (cp *callerCredentialProof) run(p *proofStages) error {
 		return err
 	}
 
-	p.begin("caller-credential: session", "A Session started through start_session with the admin's grant: the API host %s on it as a %s provider of audience %s", cp.apiHost, providerSchemeBearer, config.WorkspaceProviderFakeBearer)
+	p.begin("caller-credential: session", "A Session started through start_session with the admin's grant, which names the API host %s as a %s provider of audience %s", cp.apiHost, providerSchemeBearer, config.WorkspaceProviderFakeBearer)
 	session, err := cp.startSession(true)
 	if err != nil {
 		return err
 	}
-	if err := judgeSessionProviders(session.GetProviders(), cp.apiHost, config.WorkspaceProviderFakeBearer); err != nil {
-		return fmt.Errorf("the Session %s: %w", session.GetId(), err)
+	recorded := toGrantProviders(session.GetProviders())
+	if judgeGrantProviders(recorded, cp.apiHost, config.WorkspaceProviderFakeBearer) == nil {
+		note("kagent records the providers %s on %s", grantProvidersLine(recorded), session.GetId())
+	} else {
+		note("kagent records the providers %s on %s, not the grant's Bearer API host: it compiles no caller credential for it", grantProvidersLine(recorded), session.GetId())
 	}
-	note("%s carries the providers %s", session.GetId(), providersLine(session.GetProviders()))
 
 	p.begin("caller-credential: the Actor's JWT", "From the sandbox, a request to %s with a placeholder Authorization: the lab's GitHub receives the Session Actor's JWT for %s; no JWT in the sandbox", cp.apiHost, config.WorkspaceProviderFakeBearer)
 	if err := cp.probe(session, true); err != nil {
@@ -242,6 +245,17 @@ func (cp *callerCredentialProof) startSession(inWorkspace bool) (*apiv1alpha1.Se
 		if a.Outcome != authorizeGranted || a.Grant == "" {
 			return nil, fmt.Errorf("authorize_workspace %s answered %s (%q, unreadable %v, connect %v), want granted", callerCredentialWorkspace, a.Outcome, a.Reason, a.Unreadable, a.Connect)
 		}
+		var claims struct {
+			Providers []grantProvider `json:"providers"`
+		}
+		parts := strings.Split(a.Grant, ".")
+		if len(parts) != 3 || decodeJWTPart(parts[1], &claims) != nil {
+			return nil, fmt.Errorf("the grant of authorize_workspace %s is no JWT", callerCredentialWorkspace)
+		}
+		if err := judgeGrantProviders(claims.Providers, cp.apiHost, config.WorkspaceProviderFakeBearer); err != nil {
+			return nil, fmt.Errorf("the grant for %s: %w", callerCredentialWorkspace, err)
+		}
+		note("the grant names the providers %s", grantProvidersLine(claims.Providers))
 		args["workspaceGrant"] = a.Grant
 	}
 	env, err := cp.admin.session.callToolEnvelope(agentManagerToolPrefix+"start_session", args)
@@ -273,30 +287,46 @@ func (cp *callerCredentialProof) startSession(inWorkspace bool) (*apiv1alpha1.Se
 	return session, nil
 }
 
-// judgeSessionProviders is the verdict on the providers kagent recorded on a
-// Session from its grant: the API host among them as a Bearer provider of
-// the audience.
-func judgeSessionProviders(providers []*apiv1alpha1.SessionProvider, apiHost, audience string) error {
+// grantProvider is one provider of a workspace grant's providers claim, as
+// kagent records it on the Session.
+type grantProvider struct {
+	Hostname string `json:"hostname"`
+	Audience string `json:"audience"`
+	Scheme   string `json:"scheme"`
+}
+
+// toGrantProviders are the providers kagent recorded on a Session.
+func toGrantProviders(providers []*apiv1alpha1.SessionProvider) []grantProvider {
+	out := make([]grantProvider, 0, len(providers))
 	for _, p := range providers {
-		if p.GetHostname() == apiHost {
-			if !strings.EqualFold(p.GetScheme(), providerSchemeBearer) || p.GetAudience() != audience {
-				return fmt.Errorf("carries %s as a %s provider of audience %q, want %s of audience %s", apiHost, p.GetScheme(), p.GetAudience(), providerSchemeBearer, audience)
+		out = append(out, grantProvider{Hostname: p.GetHostname(), Audience: p.GetAudience(), Scheme: p.GetScheme()})
+	}
+	return out
+}
+
+// judgeGrantProviders is the verdict on a grant's providers: the API host
+// among them as a Bearer provider of the audience.
+func judgeGrantProviders(providers []grantProvider, apiHost, audience string) error {
+	for _, p := range providers {
+		if p.Hostname == apiHost {
+			if !strings.EqualFold(p.Scheme, providerSchemeBearer) || p.Audience != audience {
+				return fmt.Errorf("names %s as a %s provider of audience %q, want %s of audience %s", apiHost, p.Scheme, p.Audience, providerSchemeBearer, audience)
 			}
 			return nil
 		}
 	}
-	return fmt.Errorf("carries the providers %s, none on the API host %s: the workspace-manager's grant names no Bearer API host for %s (a workspace-manager without apiURL, or the instance rendered without it)",
-		providersLine(providers), apiHost, audience)
+	return fmt.Errorf("names the providers %s, none on the API host %s: the workspace-manager names no Bearer API host for %s (one without apiURL, or the instance rendered without it)",
+		grantProvidersLine(providers), apiHost, audience)
 }
 
-// providersLine words a Session's providers: host scheme audience each.
-func providersLine(providers []*apiv1alpha1.SessionProvider) string {
+// grantProvidersLine words providers: host scheme audience each.
+func grantProvidersLine(providers []grantProvider) string {
 	if len(providers) == 0 {
 		return "(none)"
 	}
 	words := make([]string, 0, len(providers))
 	for _, p := range providers {
-		words = append(words, fmt.Sprintf("%s %s aud=%s", p.GetHostname(), p.GetScheme(), p.GetAudience()))
+		words = append(words, fmt.Sprintf("%s %s aud=%s", p.Hostname, p.Scheme, p.Audience))
 	}
 	return strings.Join(words, ", ")
 }
