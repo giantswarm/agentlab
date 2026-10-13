@@ -78,7 +78,7 @@ func observabilityUp(cfg *config.Config) error {
 	if err := ensureNamespace(observabilityNamespace); err != nil {
 		return err
 	}
-	if err := ensureSecretFromFiles(observabilityNamespace, "dex-ca", map[string]string{
+	if err := ensureSecretFromFiles(observabilityNamespace, labCASecret, map[string]string{
 		caCertKey: trustBundleFile(cfg),
 	}); err != nil {
 		return err

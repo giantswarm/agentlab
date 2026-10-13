@@ -74,6 +74,8 @@ const (
 	// its `links` field is the count.
 	storeReadyRecord = `"msg":"obo link store ready"`
 	oboStoreEnv      = "KLAUS_GATEWAY_OBO_STORE"
+	// oboMusterURLEnv is the muster URL the component dials (obo.musterUrl).
+	oboMusterURLEnv = "KLAUS_GATEWAY_OBO_MUSTER_URL"
 	// oboStoreSecretBackend is the store's name in the env and the record.
 	oboStoreSecretBackend = "secret"
 	oboStoreSecret        = "KLAUS_GATEWAY_OBO_STORE_SECRET"
@@ -106,7 +108,7 @@ func klausGatewayComponentProof(token string, identity linkedIdentity, user *con
 	}
 	out := &componentOutcome{}
 
-	step("6. The component: Deployment %s runs the OBO link store in Secret %s — the Role scoped to that Secret, no store volume, RollingUpdate — and calls the Slack Web API at %s", klausGatewayComponent, klausGatewayLinksSecret, klausGatewaySlackAPIBase)
+	step("6. The component: Deployment %s runs the OBO link store in Secret %s — the Role scoped to that Secret, no store volume, RollingUpdate — calls the Slack Web API at %s and trusts the lab CA (Secret %s) for muster", klausGatewayComponent, klausGatewayLinksSecret, klausGatewaySlackAPIBase, labCASecret)
 	deploy, err := k.clientset.AppsV1().Deployments(platformNamespace).Get(ctx, klausGatewayComponent, metav1.GetOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w (platform.klausGateway is on; did `agentlab platform` install the component?)", describe(gvrDeployments, platformNamespace, klausGatewayComponent), err)
@@ -117,6 +119,11 @@ func klausGatewayComponentProof(token string, identity linkedIdentity, user *con
 	if err := assertFakeSlackAPI(deploy); err != nil {
 		return nil, err
 	}
+	musterTrust, err := assertLabCA(deploy)
+	if err != nil {
+		return nil, err
+	}
+	note("%s", musterTrust)
 	role, err := k.clientset.RbacV1().Roles(platformNamespace).Get(ctx, klausGatewayLinksSecret, metav1.GetOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("reading Role %s/%s: %w (the chart renders it with obo.store: secret)", platformNamespace, klausGatewayLinksSecret, err)
@@ -243,7 +250,7 @@ func klausGatewayComponentProof(token string, identity linkedIdentity, user *con
 	thread := &slackThread{user: slackUser}
 	turn, err := p.firstTurn(thread, klausGatewayWordPrompt)
 	if err != nil {
-		return nil, fmt.Errorf("the turn through the component: %w", err)
+		return nil, fmt.Errorf("the turn through the component (%s): %w", musterTrust, err)
 	}
 	if err := assertSlackTurnSaid(turn, klausGatewayWord); err != nil {
 		return nil, fmt.Errorf("the turn through the component: %w", err)
@@ -321,6 +328,38 @@ func assertFakeSlackAPI(d *appsv1.Deployment) error {
 		}
 	}
 	return fmt.Errorf("the Deployment %s does not set %s=%s: run `agentlab platform` to render the lab's patch", d.Name, slackAPIBaseEnv, klausGatewaySlackAPIBase)
+}
+
+// assertLabCA checks the lab's postRenderer makes the component trust the lab
+// CA for muster: its bundle from Secret labCASecret mounted read-only and
+// named as SSL_CERT_FILE. It returns the muster URL the component dials and
+// the CA source it verifies it with, in words for an error of the turn.
+func assertLabCA(d *appsv1.Deployment) (string, error) {
+	missing := fmt.Errorf("the Deployment %s does not trust the lab CA for muster (Secret %s mounted at %s, %s=%s): run `agentlab platform` to render the lab's patch",
+		d.Name, labCASecret, klausGatewayLabCADir, sslCertFileEnv, klausGatewayLabCAFile)
+	var volume bool
+	for _, v := range d.Spec.Template.Spec.Volumes {
+		volume = volume || v.Name == klausGatewayLabCAVolume && v.Secret != nil && v.Secret.SecretName == labCASecret
+	}
+	for _, c := range d.Spec.Template.Spec.Containers {
+		if c.Name != klausGatewayComponent {
+			continue
+		}
+		var mounted bool
+		for _, m := range c.VolumeMounts {
+			mounted = mounted || m.Name == klausGatewayLabCAVolume && m.MountPath == klausGatewayLabCADir
+		}
+		env := map[string]string{}
+		for _, e := range c.Env {
+			env[e.Name] = e.Value
+		}
+		if !volume || !mounted || env[sslCertFileEnv] != klausGatewayLabCAFile {
+			return "", missing
+		}
+		return fmt.Sprintf("muster %s, verified with the lab CA from Secret %s/%s at %s=%s",
+			env[oboMusterURLEnv], platformNamespace, labCASecret, sslCertFileEnv, klausGatewayLabCAFile), nil
+	}
+	return "", missing
 }
 
 // strategyName words the Deployment's strategy.

@@ -37,7 +37,15 @@ import (
 //   - the ServiceMonitor following platform.observability (the chart's
 //     default `true` fails the HelmRelease on a lab without the Prometheus
 //     Operator); the chart's edge route for the channels stays off — the
-//     public leg is the host-mode proof's.
+//     public leg is the host-mode proof's;
+//   - the lab CA trusted for muster: the component dials muster's public URL
+//     (obo.musterUrl) — agent-manager's MCP tools for every Session it
+//     starts, the workspace listing, the OBO discovery — and inside the pod
+//     that is the edge, whose certificate the lab CA signs. The chart has no
+//     CA value outside A2A, so the lab mounts its trust bundle (Secret
+//     labCASecret, which muster and the portal trust too) and names it as
+//     SSL_CERT_FILE, the system roots Go reads; the image's own roots stay,
+//     read from its certificate directory regardless (postrenderers.go).
 //
 // A build of the checkout swaps in through the dev-image loop
 // (platform.devImages.klaus-gateway, devimages.go). What the wiring proves is
@@ -86,6 +94,15 @@ const (
 	klausGatewaySlackAPIBase    = klausGatewaySlackAPIHost + slackAPIPath
 )
 
+// The component's trust of the lab CA: the volume of Secret labCASecret,
+// mounted read-only, and the variable naming its bundle as the system roots.
+const (
+	klausGatewayLabCAVolume = "lab-ca"
+	klausGatewayLabCADir    = "/etc/klaus-gateway/lab-ca"
+	klausGatewayLabCAFile   = klausGatewayLabCADir + "/" + caCertKey
+	sslCertFileEnv          = "SSL_CERT_FILE"
+)
+
 // fakeSlackForPods points the component's Slack Web API Service at the fake's
 // container (fakecontainer.go). The returned func removes the Service.
 func fakeSlackForPods(cfg *config.Config, ip string, port int) (func(), error) {
@@ -113,9 +130,10 @@ type klausGatewayValues struct {
 	// SlackSecret and KeysSecret are the two Secrets above.
 	SlackSecret string
 	KeysSecret  string
-	// MusterURL is muster's public URL, the OBO authorization server the
-	// linker discovers lazily (RFC 8414) on the first link — never in the
-	// lab, see the header.
+	// MusterURL is muster's public URL: the MCP endpoint of agent-manager's
+	// tools every Session starts through, verified with the lab CA (the
+	// header), and the OBO authorization server the linker discovers lazily
+	// (RFC 8414) on the first link — never in the lab.
 	MusterURL string
 	// CallbackBaseURL is the component's public base URL as the OBO redirect
 	// URI and CIMD client_id derive from it: the agentgateway hostname

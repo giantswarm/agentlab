@@ -960,11 +960,13 @@ func TestPlatformValuesKlausGateway(t *testing.T) {
 	if at("components", klausGatewayComponent, "enabled") != true {
 		t.Errorf("components.klaus-gateway.enabled = %v", at("components", klausGatewayComponent, "enabled"))
 	}
-	// The lab's one patch without a dev image: the Slack Web API base on the
-	// Service in front of klaus-gateway-test's fake.
+	// The lab's two patches without a dev image: the Slack Web API base on the
+	// Service in front of klaus-gateway-test's fake, and the lab CA trusted
+	// for muster's public URL.
 	prs, _ := at("components", klausGatewayComponent, "postRenderers").([]any)
-	if len(prs) != 1 || !strings.Contains(fmt.Sprint(prs), "name: "+slackAPIBaseEnv) || !strings.Contains(fmt.Sprint(prs), "value: "+klausGatewaySlackAPIBase) {
-		t.Errorf("without a dev image the lab patches only the Slack Web API base: %v", at("components", klausGatewayComponent, "postRenderers"))
+	if len(prs) != 1 || !strings.Contains(fmt.Sprint(prs), "name: "+slackAPIBaseEnv) || !strings.Contains(fmt.Sprint(prs), "value: "+klausGatewaySlackAPIBase) ||
+		!strings.Contains(fmt.Sprint(prs), "name: "+sslCertFileEnv) || !strings.Contains(fmt.Sprint(prs), "secretName: "+labCASecret) {
+		t.Errorf("without a dev image the lab patches the Slack Web API base and the lab CA: %v", at("components", klausGatewayComponent, "postRenderers"))
 	}
 	// The block's keys as dotted paths under klausGateway.
 	checks := map[string]any{
@@ -1009,9 +1011,9 @@ func TestPlatformValuesKlausGateway(t *testing.T) {
 		t.Errorf("klaus-gateway dev image override: %v", kustomize["images"])
 	}
 	patches, _ := kustomize["patches"].([]any)
-	if len(patches) != 2 || !strings.Contains(fmt.Sprint(patches[0]), slackAPIBaseEnv) ||
-		!strings.Contains(fmt.Sprint(patches[1]), "imagePullPolicy: IfNotPresent") || !strings.Contains(fmt.Sprint(patches[1]), "name: klaus-gateway") {
-		t.Errorf("klaus-gateway Slack Web API and pull-policy patches: %v", kustomize["patches"])
+	if len(patches) != 3 || !strings.Contains(fmt.Sprint(patches[0]), slackAPIBaseEnv) || !strings.Contains(fmt.Sprint(patches[1]), sslCertFileEnv) ||
+		!strings.Contains(fmt.Sprint(patches[2]), "imagePullPolicy: IfNotPresent") || !strings.Contains(fmt.Sprint(patches[2]), "name: klaus-gateway") {
+		t.Errorf("klaus-gateway Slack Web API, lab CA and pull-policy patches: %v", kustomize["patches"])
 	}
 }
 

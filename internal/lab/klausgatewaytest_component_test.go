@@ -234,6 +234,49 @@ func TestAssertFakeSlackAPI(t *testing.T) {
 	}
 }
 
+// TestAssertLabCA: the component must trust the lab CA for muster; a
+// Deployment without the lab's patch is told to re-run `agentlab platform`,
+// a patched one names the muster URL and the CA source for the turn's error,
+// and the patch mounts exactly that Secret and names its bundle.
+func TestAssertLabCA(t *testing.T) {
+	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: klausGatewayComponent, Namespace: platformNamespace}}
+	d.Spec.Template.Spec.Containers = []corev1.Container{{Name: klausGatewayComponent,
+		Env: []corev1.EnvVar{{Name: oboMusterURLEnv, Value: "https://muster.127.0.0.1.nip.io"}}}}
+	if _, err := assertLabCA(d); err == nil || !strings.Contains(err.Error(), "agentlab platform") || !strings.Contains(err.Error(), labCASecret) {
+		t.Errorf("unpatched: %v", err)
+	}
+	c := &d.Spec.Template.Spec.Containers[0]
+	c.Env = append(c.Env, corev1.EnvVar{Name: sslCertFileEnv, Value: klausGatewayLabCAFile})
+	c.VolumeMounts = []corev1.VolumeMount{{Name: klausGatewayLabCAVolume, MountPath: klausGatewayLabCADir, ReadOnly: true}}
+	if _, err := assertLabCA(d); err == nil {
+		t.Error("a mount without the volume passes")
+	}
+	d.Spec.Template.Spec.Volumes = []corev1.Volume{{Name: klausGatewayLabCAVolume,
+		VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: labCASecret}}}}
+	trust, err := assertLabCA(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "muster https://muster.127.0.0.1.nip.io, verified with the lab CA from Secret agent-platform/dex-ca at SSL_CERT_FILE=/etc/klaus-gateway/lab-ca/ca.crt"
+	if trust != want {
+		t.Errorf("trust = %q, want %q", trust, want)
+	}
+
+	patch := string(labCAPatch().Patch)
+	for _, line := range []string{
+		"name: " + sslCertFileEnv, "value: " + klausGatewayLabCAFile,
+		"mountPath: " + klausGatewayLabCADir, "readOnly: true",
+		"secretName: " + labCASecret, "key: " + caCertKey,
+	} {
+		if !strings.Contains(patch, line) {
+			t.Errorf("patch lacks %q:\n%s", line, patch)
+		}
+	}
+	if labCAPatch().Target[nameKey] != klausGatewayComponent {
+		t.Errorf("target = %v", labCAPatch().Target)
+	}
+}
+
 // TestPodReady: Running with Ready True, and nothing else.
 func TestPodReady(t *testing.T) {
 	pod := &corev1.Pod{Status: corev1.PodStatus{Phase: corev1.PodRunning,
