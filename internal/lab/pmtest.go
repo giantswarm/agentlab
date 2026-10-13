@@ -109,7 +109,7 @@ func PMTest(cfg *config.Config, email string, opts PMTestOptions) error {
 		return err
 	}
 	defer uninstall()
-	if err := waitMCPServerState(pmMCPServer, mcpServerStateAuthRequired, mcpServerStateConnected); err != nil {
+	if err := waitMCPServerReachable(pmMCPServer); err != nil {
 		return err
 	}
 

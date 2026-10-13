@@ -206,8 +206,8 @@ func (gp *gitlabProof) preconditions(email string) error {
 	if reason := workspaceManagerSkip(cfg); reason != "" {
 		return fmt.Errorf("no workspace-manager: %s", reason)
 	}
-	if err := waitMCPServerState(workspaceManagerMCPServer, mcpServerStateConnected); err != nil {
-		return fmt.Errorf("the workspace-manager is not connected to muster: %w", err)
+	if err := waitMCPServerReachable(workspaceManagerMCPServer); err != nil {
+		return fmt.Errorf("the workspace-manager is not reachable through muster: %w", err)
 	}
 	gp.adminUser, gp.secondUser = cfg.AdminUser(), cfg.FindUser(email)
 	switch {

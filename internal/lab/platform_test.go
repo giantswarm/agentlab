@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -168,18 +169,7 @@ func TestPlatformReleases(t *testing.T) {
 // TestMCPServerState reads status.state off muster's MCPServer: the state,
 // "" before the first reconcile, the apiserver's NotFound for a missing CR.
 func TestMCPServerState(t *testing.T) {
-	server := func(name, state string) *unstructured.Unstructured {
-		u := &unstructured.Unstructured{Object: map[string]any{
-			fieldAPIVersion: musterMCPServerGVK.GroupVersion().String(),
-			fieldKind:       musterMCPServerGVK.Kind,
-			fieldMetadata:   map[string]any{nameKey: name, fieldNamespace: platformNamespace},
-		}}
-		if state != "" {
-			u.Object[fieldStatus] = map[string]any{"state": state}
-		}
-		return u
-	}
-	newFakeLab(t, server("k8s", "Connected"), server("fresh", ""))
+	newFakeLab(t, mcpServerObject("k8s", "Connected"), mcpServerObject("fresh", ""))
 	if state, err := mcpServerState("k8s"); err != nil || state != "Connected" {
 		t.Errorf("mcpServerState(k8s) = %q, %v", state, err)
 	}
@@ -188,6 +178,65 @@ func TestMCPServerState(t *testing.T) {
 	}
 	if _, err := mcpServerState("absent"); err == nil || !apierrors.IsNotFound(err) {
 		t.Errorf("mcpServerState(absent) = %v, want the apiserver's NotFound", err)
+	}
+}
+
+// mcpServerObject is muster's MCPServer CR in the platform namespace with
+// status.state, none for "".
+func mcpServerObject(name, state string) *unstructured.Unstructured {
+	u := &unstructured.Unstructured{Object: map[string]any{
+		fieldAPIVersion: musterMCPServerGVK.GroupVersion().String(),
+		fieldKind:       musterMCPServerGVK.Kind,
+		fieldMetadata:   map[string]any{nameKey: name, fieldNamespace: platformNamespace},
+	}}
+	if state != "" {
+		u.Object[fieldStatus] = map[string]any{"state": state}
+	}
+	return u
+}
+
+// TestWaitMCPServerReachable: the wait every proof takes for a usable server
+// passes on a server a session uses (Connected) and on a per-session server
+// no session uses yet (Awaiting Session, the workspace-manager's state on
+// muster 5.28.0 and later), and fails on Failed naming every state it accepts
+// and the one it read last.
+func TestWaitMCPServerReachable(t *testing.T) {
+	prevAttempts, prevInterval := mcpServerWaitAttempts, mcpServerWaitInterval
+	mcpServerWaitAttempts, mcpServerWaitInterval = 2, time.Millisecond
+	t.Cleanup(func() { mcpServerWaitAttempts, mcpServerWaitInterval = prevAttempts, prevInterval })
+
+	newFakeLab(t,
+		mcpServerObject("connected", mcpServerStateConnected),
+		mcpServerObject(workspaceManagerMCPServer, mcpServerStateAwaitingSession),
+		mcpServerObject("broken", "Failed"))
+	for _, name := range []string{"connected", workspaceManagerMCPServer} {
+		if err := waitMCPServerReachable(name); err != nil {
+			t.Errorf("waitMCPServerReachable(%s) = %v, want reachable", name, err)
+		}
+	}
+	err := waitMCPServerReachable("broken")
+	if err == nil {
+		t.Fatal("waitMCPServerReachable(broken) passed on Failed")
+	}
+	want := `MCPServer broken never reached Connected, Awaiting Session or Auth Required (last status: "Failed")`
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("error = %q, want it to contain %q", err, want)
+	}
+}
+
+func TestOrList(t *testing.T) {
+	for _, tc := range []struct {
+		states []string
+		want   string
+	}{
+		{nil, ""},
+		{[]string{"A"}, "A"},
+		{[]string{"A", "B"}, "A or B"},
+		{[]string{"A", "B", "C"}, "A, B or C"},
+	} {
+		if got := orList(tc.states); got != tc.want {
+			t.Errorf("orList(%q) = %q, want %q", tc.states, got, tc.want)
+		}
 	}
 }
 

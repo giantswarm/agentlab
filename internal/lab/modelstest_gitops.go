@@ -310,7 +310,7 @@ func proveCommit(cfg *config.Config, user *config.User, token, binary, backendNa
 		return "", err
 	}
 	defer uninstall()
-	if err := waitMCPServerState(gitopsModelManager, mcpServerStateAuthRequired, mcpServerStateConnected); err != nil {
+	if err := waitMCPServerReachable(gitopsModelManager); err != nil {
 		return "", err
 	}
 

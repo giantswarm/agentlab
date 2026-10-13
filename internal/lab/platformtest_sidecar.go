@@ -18,7 +18,7 @@ import (
 
 // dexLocalhostServer is one OAuth resource server platform-test proved the
 // lab's Dex bridge on: its Deployment, the key the sidecar rule selected it
-// by (dexLocalhostKey) and the MCPServer that reads Connected for it (""
+// by (dexLocalhostKey) and the MCPServer that reads reachable for it (""
 // when it registers none).
 type dexLocalhostServer struct {
 	namespace, deployment, key, mcpServer string
@@ -42,8 +42,8 @@ func (s dexLocalhostServer) String() string {
 // must be complete with every pod Ready, every container running and none
 // restarted since the release (restartedSinceRelease) — an unreachable
 // issuer is a crash loop, and that is what this catches; and the MCPServer of its name, when it registers one, must
-// read Connected: muster reached it through the bridge with this session's
-// token. A server the rule finds without the sidecar is the lab's gap — a
+// read reachable (waitMCPServerReachable): muster reached it through the
+// bridge. A server the rule finds without the sidecar is the lab's gap — a
 // component turned on by the chart or an overlay that `agentlab platform`
 // did not patch.
 func proveDexLocalhostSidecars(ctx context.Context, cfg *config.Config) ([]dexLocalhostServer, error) {
@@ -91,7 +91,7 @@ func proveDexLocalhostSidecars(ctx context.Context, cfg *config.Config) ([]dexLo
 				return nil, err
 			} else if registered {
 				server.mcpServer = d.Name
-				if err := waitMCPServerState(d.Name, mcpServerStateConnected); err != nil {
+				if err := waitMCPServerReachable(d.Name); err != nil {
 					return nil, err
 				}
 			} else {
