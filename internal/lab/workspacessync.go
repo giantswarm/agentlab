@@ -1277,6 +1277,22 @@ func (sp *syncProof) manifest(name string) (string, error) {
 // it, so a probe reads, writes and removes what the Job can.
 const workspaceVolumeUser int64 = 1000
 
+// volumeOwner is the user and group a file on a workspace volume belongs to,
+// and a probe that must enter it runs as.
+type volumeOwner struct{ uid, gid int64 }
+
+// workspaceVolumeOwner is the sync Job's user and group.
+var workspaceVolumeOwner = volumeOwner{workspaceVolumeUser, workspaceVolumeUser}
+
+// runnable is the owner a restricted probe can run as: root, whom
+// runAsNonRoot refuses, and the zero owner (unread) are the sync Job's user.
+func (o volumeOwner) runnable() volumeOwner {
+	if o.uid == 0 {
+		return workspaceVolumeOwner
+	}
+	return o
+}
+
 // workspaceVolumePod is a probe pod on the git image with the workspace's
 // claim mounted whole at /workspace, as the sync Job's user and admitted
 // under the PodSecurity `restricted` profile an installation enforces.
