@@ -32,14 +32,7 @@ func Platform(ctx context.Context, cfg *config.Config, chartVersion string) {
 	if !Enabled() {
 		return
 	}
-	c, err := client()
-	if err != nil {
-		logf("creating the TelemetryDeck client: %s", err)
-		return
-	}
-	if err := c.SendSignal(ctx, platformSignalType, platformPayload(cfg, chartVersion)); err != nil {
-		logf("sending the platform signal: %s", err)
-	}
+	send(ctx, platformSignalType, platformPayload(cfg, chartVersion))
 }
 
 // platformPayload is the platform signal's payload. Every value is a string,
