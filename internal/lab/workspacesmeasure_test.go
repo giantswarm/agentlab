@@ -1,8 +1,11 @@
 package lab
 
 import (
+	"encoding/json"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -270,5 +273,57 @@ func TestWorkspaceGitHubGeneratedRepo(t *testing.T) {
 	}
 	if resp := f.call(t, http.MethodDelete, path, "", nil, nil); resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("removing it again = %d, want 404", resp.StatusCode)
+	}
+}
+
+// A run that ends at the preconditions has no samples: the report is still
+// written, every figure not available.
+func TestMeasureWriteReportWithoutSamples(t *testing.T) {
+	m := &measurement{runDir: t.TempDir(), ws: []*measureWorkspace{
+		{name: "agentlab-measure-small", kind: "small", repos: []string{"o/a"}},
+		{name: "agentlab-measure-large", kind: "large", repos: []string{"o/b"}},
+	}}
+	m.report = measureReport{Runs: 5, Error: "workspace agentlab-measure-small is not gone"}
+	if err := m.writeReport(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(m.runDir, measureReportJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got measureReport
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Workspaces) != 2 || got.Error == "" {
+		t.Fatalf("the report = %+v, want both workspaces and the error", got)
+	}
+	for _, w := range got.Workspaces {
+		if len(w.Figures) != len(measureFigureDefs) {
+			t.Fatalf("%s has %d figures, want %d", w.Name, len(w.Figures), len(measureFigureDefs))
+		}
+		for _, f := range w.Figures {
+			if f.Median != nil || f.NotAvailable == "" {
+				t.Errorf("%s %s = %+v, want not available", w.Name, f.Key, f)
+			}
+		}
+	}
+	md, err := os.ReadFile(filepath.Join(m.runDir, measureReportMarkdown))
+	if err != nil || !strings.Contains(string(md), "The run ended early") {
+		t.Fatalf("the Markdown = %q, %v; want the reason the run ended", md, err)
+	}
+}
+
+// A leftover still deleting is measured around under a fresh name, which
+// the report names.
+func TestMeasureLeftoverReport(t *testing.T) {
+	started := time.Date(2026, 10, 13, 17, 40, 5, 0, time.UTC)
+	fresh := measureFreshName("agentlab-measure-small", started)
+	if fresh != "agentlab-measure-small-20261013-174005" || len(fresh) > 63 {
+		t.Fatalf("the fresh name = %q", fresh)
+	}
+	r := measureReport{Started: started, Ended: started, Runs: 5, Leftovers: []measureLeftover{{Name: "agentlab-measure-small", MeasuredAs: fresh}}}
+	if md := r.markdown(); !strings.Contains(md, "`agentlab-measure-small` of an interrupted run was still deleting") || !strings.Contains(md, "`"+fresh+"`") {
+		t.Fatalf("the Markdown does not name the leftover:\n%s", md)
 	}
 }

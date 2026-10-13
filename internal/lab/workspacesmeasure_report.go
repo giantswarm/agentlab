@@ -180,7 +180,16 @@ type measureReport struct {
 	Runs             int                      `json:"runs"`
 	Harness          string                   `json:"harness,omitempty"`
 	Workspaces       []measureWorkspaceReport `json:"workspaces"`
+	Leftovers        []measureLeftover        `json:"leftovers,omitempty"`
 	Error            string                   `json:"error,omitempty"`
+}
+
+// measureLeftover is an interrupted run's workspace that was still deleting:
+// cleared, it goes at its manager's next deletion cycle, and the run
+// measured under another name.
+type measureLeftover struct {
+	Name       string `json:"name"`
+	MeasuredAs string `json:"measuredAs"`
 }
 
 // measureSamples collects a workspace's samples per figure, and the reason
@@ -315,6 +324,9 @@ func (r *measureReport) markdown() string {
 	b.WriteString(".\n")
 	if r.Error != "" {
 		fmt.Fprintf(&b, "\n**The run ended early:** %s\n", r.Error)
+	}
+	for _, l := range r.Leftovers {
+		fmt.Fprintf(&b, "\n**Leftover:** `%s` of an interrupted run was still deleting; its session directories were cleared and its manager deletes it at its next deletion cycle. This run measured it as `%s`.\n", l.Name, l.MeasuredAs)
 	}
 	for _, w := range r.Workspaces {
 		fmt.Fprintf(&b, "\n### %s workspace `%s`: %s\n\n", w.Kind, w.Name, strings.Join(w.Repositories, ", "))
