@@ -76,6 +76,10 @@ type fakeKagent struct {
 	// settling makes DeleteSession answer FailedPrecondition that many
 	// times first, as for a session whose runtime cleanup is still running.
 	settling int
+	// busy makes SuspendSession and ResumeSession answer FailedPrecondition
+	// "not yet settled" that many times first, as for a session whose turn's
+	// runtime work the controller still settles.
+	busy int
 	// shares are the session shares RevokeSessionShare withdraws, by id: the
 	// id of the session each one shares.
 	shares map[string]string
@@ -480,6 +484,45 @@ func (f *fakeKagent) DeleteSession(ctx context.Context, req *apiv1alpha1.DeleteS
 	return &apiv1alpha1.DeleteSessionResponse{Session: session}, nil
 }
 
+// SuspendSession reports the session SUSPENDED once it is settled.
+func (f *fakeKagent) SuspendSession(ctx context.Context, req *apiv1alpha1.SuspendSessionRequest) (*apiv1alpha1.SuspendSessionResponse, error) {
+	session, err := f.operate(ctx, "SuspendSession", req.GetSessionId(), apiv1alpha1.RuntimeState_RUNTIME_STATE_SUSPENDED)
+	if err != nil {
+		return nil, err
+	}
+	return &apiv1alpha1.SuspendSessionResponse{Session: session}, nil
+}
+
+// ResumeSession reports the session READY once it is settled.
+func (f *fakeKagent) ResumeSession(ctx context.Context, req *apiv1alpha1.ResumeSessionRequest) (*apiv1alpha1.ResumeSessionResponse, error) {
+	session, err := f.operate(ctx, "ResumeSession", req.GetSessionId(), apiv1alpha1.RuntimeState_RUNTIME_STATE_READY)
+	if err != nil {
+		return nil, err
+	}
+	return &apiv1alpha1.ResumeSessionResponse{Session: session}, nil
+}
+
+// operate is a suspend or resume: the controller's "not yet settled" while
+// busy lasts, then the session in the state the operation leaves it.
+func (f *fakeKagent) operate(ctx context.Context, method, id string, to apiv1alpha1.RuntimeState) (*apiv1alpha1.Session, error) {
+	f.record(ctx, method)
+	if _, err := edge(ctx); err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	session, ok := f.sessions[id]
+	if !ok {
+		return nil, status.Error(codes.NotFound, "Session not found")
+	}
+	if f.busy > 0 {
+		f.busy--
+		return nil, status.Error(codes.FailedPrecondition, "begin Session operation: runtime cleanup or lifecycle work is not yet settled")
+	}
+	session.State = to
+	return session, nil
+}
+
 // RevokeSessionShare withdraws a share; one unknown, or of a session gone,
 // is NotFound, as the controller answers.
 func (f *fakeKagent) RevokeSessionShare(ctx context.Context, req *apiv1alpha1.RevokeSessionShareRequest) (*apiv1alpha1.RevokeSessionShareResponse, error) {
@@ -767,6 +810,66 @@ func TestDeleteSessionWaitsForSettle(t *testing.T) {
 	cancel()
 	if err := api.deleteSession(ctx, stuck.GetId()); err == nil {
 		t.Error("a canceled context did not end the retry")
+	}
+}
+
+// TestSuspendResumeWaitForSettle: a suspend or resume the controller answers
+// "not yet settled" is retried until it goes through; one that never settles
+// fails after the bound with the controller's last answer; any other
+// FailedPrecondition is final at once.
+func TestSuspendResumeWaitForSettle(t *testing.T) {
+	timeout, backoff := sessionOperationSettleTimeout, sessionSettleBackoff
+	t.Cleanup(func() { sessionOperationSettleTimeout, sessionSettleBackoff = timeout, backoff })
+	sessionOperationSettleTimeout, sessionSettleBackoff = 500*time.Millisecond, 10*time.Millisecond
+
+	f := readyFake(t)
+	api := f.serve(t, fakeToken)
+
+	f.busy = 2
+	suspended, err := api.suspendSession(t.Context(), fakeSessionID)
+	if err != nil {
+		t.Fatalf("a suspend that settles: %v", err)
+	}
+	if suspended.GetState() != apiv1alpha1.RuntimeState_RUNTIME_STATE_SUSPENDED {
+		t.Errorf("suspend answered %s", sessionState(suspended))
+	}
+	if calls := len(f.calls["SuspendSession"]); calls != 3 {
+		t.Errorf("not yet settled was not retried through: %d suspends", calls)
+	}
+
+	f.busy = 2
+	resumed, err := api.resumeSession(t.Context(), fakeSessionID)
+	if err != nil {
+		t.Fatalf("a resume that settles: %v", err)
+	}
+	if resumed.GetState() != apiv1alpha1.RuntimeState_RUNTIME_STATE_READY {
+		t.Errorf("resume answered %s", sessionState(resumed))
+	}
+	if calls := len(f.calls["ResumeSession"]); calls != 3 {
+		t.Errorf("not yet settled was not retried through: %d resumes", calls)
+	}
+
+	f.busy = 1000
+	started := time.Now()
+	_, err = api.suspendSession(t.Context(), fakeSessionID)
+	if err == nil {
+		t.Fatal("a suspend that never settles was reported done")
+	}
+	if elapsed := time.Since(started); elapsed > 2*sessionOperationSettleTimeout {
+		t.Errorf("the retry ran %s, past its %s bound", elapsed, sessionOperationSettleTimeout)
+	}
+	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "did not settle within 500ms") || !strings.Contains(err.Error(), "not yet settled") {
+		t.Errorf("the error names neither the bound nor the last answer: %v", err)
+	}
+
+	final := status.Error(codes.FailedPrecondition, "session is not suspended")
+	before := 0
+	err = untilSettled(t.Context(), "ResumeSession", fakeSessionID, sessionOperationSettleTimeout, notYetSettled, func() error {
+		before++
+		return final
+	})
+	if before != 1 || !errors.Is(err, final) {
+		t.Errorf("another FailedPrecondition was retried (%d calls) or lost: %v", before, err)
 	}
 }
 
