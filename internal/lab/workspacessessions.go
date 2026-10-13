@@ -43,8 +43,10 @@ import (
 //   - isolation: a second turn on each Session finds only its own file
 //     anywhere it can look, and a write into the mirrors refused; on the
 //     volume each file is in its own Session's directory alone;
-//   - a Session deleted: its directory gone at the next cycle, the mirrors'
-//     heads and every other directory untouched;
+//   - a Session deleted: its directory gone with no cycle requested (a
+//     cycle with the trigger sessionDeleted; at the next cycle on a manager
+//     before the Session poll), the mirrors' heads and every other directory
+//     untouched;
 //   - a Session started without a workspace: an empty working directory, no
 //     mirrors, a turn as before;
 //   - the cleanup, with the lab's short window
@@ -88,6 +90,16 @@ const (
 	// sessionsKagentArg is the workspace-manager's flag of the kagent
 	// controller its cleanup lists Sessions from.
 	sessionsKagentArg = "--kagent-address="
+	// sessionsPollArg is the workspace-manager's flag of how often it lists
+	// kagent's Sessions for a deleted one, whose directory then goes at
+	// once (workspace-manager 0.6.0 and newer).
+	sessionsPollArg = "--sessions-poll="
+	// sessionsDeleteWait is how long a deleted Session's directory may stay
+	// on the volume with no cycle requested.
+	sessionsDeleteWait = 2 * time.Minute
+	// triggerSessionDeleted is the cycle the manager runs for a deleted
+	// Session.
+	triggerSessionDeleted = "sessionDeleted"
 	// workspaceResource is the workspace-manager's Workspace.
 	workspaceResource          = "workspaces.workspace-manager.giantswarm.io"
 	conditionSessionsCleanedUp = "SessionsCleanedUp"
@@ -169,7 +181,10 @@ type sessionsProof struct {
 	set      *sessionSet
 	volume   workspaceVolume
 	window   time.Duration
-	report   sessionsReport
+	// poll is the manager's Session poll; zero for a manager that removes a
+	// deleted Session's directory only at its next cycle.
+	poll   time.Duration
+	report sessionsReport
 }
 
 // workspacesSessionsPart runs the part in stages, as the admin.
@@ -182,7 +197,7 @@ func workspacesSessionsPart(cfg *config.Config, sessions int, timeout time.Durat
 	err := sp.run(p)
 	sp.cleanup()
 	if err == nil {
-		fmt.Printf("\nWorkspaces sessions part passed: %d Sessions started in parallel through start_session on %s, each in its own directory on volume %s with a clone of every repository, %s fetched once per Session and nothing else; each Session isolated, the mirrors read-only; a deleted Session's directory gone at the next cycle; a Session without a workspace in an empty directory; after the %s cleanup window every directory removed, %s, and a resumed Session in a fresh directory. Report: %s\n",
+		fmt.Printf("\nWorkspaces sessions part passed: %d Sessions started in parallel through start_session on %s, each in its own directory on volume %s with a clone of every repository, %s fetched once per Session and nothing else; each Session isolated, the mirrors read-only; a deleted Session's directory gone with no cycle requested (at the next cycle before workspace-manager 0.6.0); a Session without a workspace in an empty directory; after the %s cleanup window every directory removed, %s, and a resumed Session in a fresh directory. Report: %s\n",
 			len(sp.report.Sessions), syncFilterWorkspace, sp.volume.Handle, syncMovingRepo, sp.window, sp.report.Condition, filepath.Join(StateDir, sessionsReportFile))
 	}
 	return p.close(err)
@@ -238,7 +253,7 @@ func (sp *sessionsProof) run(p *proofStages) error {
 		return err
 	}
 
-	p.begin("sessions: delete", "A Session deleted: its directory gone at the next cycle, the mirrors and every other directory untouched")
+	p.begin("sessions: delete", "A Session deleted: its directory gone with no cycle requested, the mirrors and every other directory untouched")
 	if err := sp.deleteOne(); err != nil {
 		return err
 	}
@@ -273,6 +288,12 @@ func (sp *sessionsProof) preconditions(adminUser *config.User) error {
 		return err
 	}
 	sp.report.CleanupWindow = sp.window.String()
+	if sp.poll, err = judgeSessionPoll(flags); err != nil {
+		return err
+	}
+	if sp.poll == 0 {
+		note("the workspace-manager has no %s argument: before 0.6.0 it removes a deleted Session's directory at its next cycle, which the delete stage requests", strings.TrimSuffix(sessionsPollArg, "="))
+	}
 	note("the workspace-manager lists Sessions from kagent at %s and cleans a directory up %s after its last turn", flagValue(flags, sessionsKagentArg), sp.window)
 
 	rig := workspaceAdmissionValuesFor(cfg, workspacesChartCarries(cfg))
@@ -905,18 +926,23 @@ func (sp *sessionsProof) deleteOne() error {
 	if err != nil {
 		return err
 	}
-	if _, ok := dirs[victim.ID]; ok {
-		note("right after DeleteSession the directory %s is still on the volume: the workspace-manager removes it at its next cycle (https://github.com/giantswarm/workspace-manager/issues/58 asks for it at once)", victim.ID)
-	}
-	after, _, err := sp.sp.sync(syncFilterWorkspace, prev, false)
-	if err != nil {
-		return err
-	}
-	if out, err = sp.sp.onVolume(syncFilterWorkspace, "sessions-after-delete", sessionsDirectoriesScript); err != nil {
-		return err
-	}
-	if dirs, err = parseSessionDirectories(out); err != nil {
-		return err
+	var after *syncDetail
+	if sp.poll > 0 {
+		// No cycle is requested: the manager's Session poll finds the
+		// Session gone and removes its directory.
+		if after, dirs, err = sp.awaitDeleted(victim.ID, dirs, deletedAt); err != nil {
+			return err
+		}
+	} else {
+		if after, _, err = sp.sp.sync(syncFilterWorkspace, prev, false); err != nil {
+			return err
+		}
+		if out, err = sp.sp.onVolume(syncFilterWorkspace, "sessions-after-delete", sessionsDirectoriesScript); err != nil {
+			return err
+		}
+		if dirs, err = parseSessionDirectories(out); err != nil {
+			return err
+		}
 	}
 	if _, ok := dirs[victim.ID]; ok {
 		return fmt.Errorf("the directory of the deleted Session %s is still on the volume after the cycle %s (trigger %s)", victim.ID, after.Workspace.LastSync.Result, after.Workspace.LastSync.Trigger)
@@ -941,6 +967,42 @@ func (sp *sessionsProof) deleteOne() error {
 	note("deleted %s (%s): its directory gone %s after DeleteSession, with the cycle %s (trigger %s); the %d other directories and the mirrors' heads untouched, the workspace on volume %s",
 		victim.ID, victim.Harness, time.Since(deletedAt).Round(time.Second), after.Workspace.LastSync.Result, after.Workspace.LastSync.Trigger, len(dirs), sp.volume.Handle)
 	return nil
+}
+
+// awaitDeleted waits, with no cycle requested, for the deleted Session's
+// directory to leave the volume and for the workspace's last cycle to be the
+// manager's own for it; dirs is the volume's listing right after the delete.
+func (sp *sessionsProof) awaitDeleted(id string, dirs map[string]sessionDirectory, deletedAt time.Time) (*syncDetail, map[string]sessionDirectory, error) {
+	var err error
+	for _, ok := dirs[id]; ok; _, ok = dirs[id] {
+		if time.Since(deletedAt) > sessionsDeleteWait {
+			return nil, nil, fmt.Errorf("the directory of the deleted Session %s is still on the volume %s after DeleteSession with no cycle requested; the workspace-manager lists kagent's Sessions every %s", id, sessionsDeleteWait, sp.poll)
+		}
+		time.Sleep(5 * time.Second)
+		out, err := sp.sp.onVolume(syncFilterWorkspace, "sessions-after-delete", sessionsDirectoriesScript)
+		if err != nil {
+			return nil, nil, err
+		}
+		if dirs, err = parseSessionDirectories(out); err != nil {
+			return nil, nil, err
+		}
+	}
+	gone := time.Since(deletedAt)
+	var after *syncDetail
+	for {
+		if after, err = sp.sp.get(syncFilterWorkspace); err != nil {
+			return nil, nil, err
+		}
+		if last := after.Workspace.LastSync; last != nil && last.Trigger == triggerSessionDeleted {
+			break
+		}
+		if time.Since(deletedAt) > sessionsDeleteWait {
+			return nil, nil, fmt.Errorf("the deleted Session %s's directory went, but the workspace's last cycle is %+v, not the trigger %s", id, after.Workspace.LastSync, triggerSessionDeleted)
+		}
+		time.Sleep(5 * time.Second)
+	}
+	note("the directory %s gone %s after DeleteSession with no cycle requested", id, gone.Round(time.Second))
+	return after, dirs, nil
 }
 
 // live are the repositories the workspace mirrors.
@@ -1258,6 +1320,22 @@ func judgeCleanupWindow(args []string, least, limit time.Duration) (time.Duratio
 	}
 	if d > limit || d < least {
 		return 0, fmt.Errorf("the workspace-manager cleans a session directory up %s after its last turn; the part needs %s to %s (shorter, a live Session's directory goes during the part; longer, the part waits too long): `agentlab configure --workspaces-cleanup-after 10m`, then `agentlab platform`", d, least, limit)
+	}
+	return d, nil
+}
+
+// judgeSessionPoll reads the manager's Session poll, zero without one.
+func judgeSessionPoll(args []string) (time.Duration, error) {
+	raw := flagValue(args, sessionsPollArg)
+	if raw == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		return 0, fmt.Errorf("the workspace-manager's %s%s is not a positive duration", sessionsPollArg, raw)
+	}
+	if d >= sessionsDeleteWait {
+		return 0, fmt.Errorf("the workspace-manager lists kagent's Sessions every %s; the delete stage waits %s for a deleted Session's directory: a shorter %s", d, sessionsDeleteWait, strings.TrimSuffix(sessionsPollArg, "="))
 	}
 	return d, nil
 }
