@@ -59,8 +59,11 @@ model servers is ever sent, and from `agentlab.yaml` only what the platform
 signal below lists. Help output (`-h`, `--help`) and shell completion do not
 count. The signals go out in the background while the command runs; a command
 that finishes before they have left the machine (`agentlab version`, say)
-waits for them at most half a second, then exits regardless. A signal is
-dropped when the network is unavailable — it never fails a command.
+waits for them at most half a second, then exits regardless. When the
+endpoint is out of reach (no connection within 300ms of the signal setting
+out: offline, or egress blocked), the command does not wait for it at all
+past that point. A signal is dropped when the network is unavailable — it
+never fails a command and never prints anything on its output.
 
 ## The platform signal
 
@@ -130,5 +133,7 @@ export AGENTLAB_TELEMETRY_OPTOUT=1
 ```
 
 Working on the lab itself? `AGENTLAB_TELEMETRY_TESTMODE=1` files your signals
-as test data (kept apart from the production numbers in the dashboard) and
-logs delivery errors to stderr.
+as test data (kept apart from the production numbers in the dashboard).
+`AGENTLAB_TELEMETRY_DEBUG=1` logs what happened to them on stderr — a failed
+or rejected delivery, an endpoint out of reach; without it telemetry prints
+nothing, test mode included.

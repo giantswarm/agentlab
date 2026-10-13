@@ -270,7 +270,9 @@ The lab's own e2e checks are the `*-test` subcommands, not `go test`.
   `Flush` covers both. Opt-outs:
   `AGENTLAB_TELEMETRY_OPTOUT`, `DO_NOT_TRACK=1`. When iterating on the lab,
   `AGENTLAB_TELEMETRY_TESTMODE=1` keeps the runs out of the production
-  numbers (and logs delivery errors). The user identifier is agentlab's own,
+  numbers; `AGENTLAB_TELEMETRY_DEBUG=1` alone logs delivery problems — a
+  command's output never carries telemetry, and `Flush` stops waiting once no
+  request has connected within `connectTimeout`. The user identifier is agentlab's own,
   not the library's: `internal/telemetry/machineid` reads the identifier the
   OS keeps for the computer (macOS `kern.uuid`, Linux `/etc/machine-id`,
   Windows `MachineGuid`) and `telemetry.go` hashes it with the OS user name

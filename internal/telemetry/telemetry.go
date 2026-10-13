@@ -8,9 +8,11 @@
 // leaves the machine. See docs/telemetry.md.
 //
 // Setting AGENTLAB_TELEMETRY_OPTOUT (any value) or the console convention
-// DO_NOT_TRACK=1 disables both. Reporting never fails a command: the signals
-// travel while the command works, and a command that finishes first waits
-// for them at most half a second (Flush) before the process exits.
+// DO_NOT_TRACK=1 disables both. Reporting never fails a command and never
+// speaks on its output: the signals travel while the command works, a command
+// that finishes first waits for them at most half a second (Flush) before the
+// process exits, and not at all once the endpoint has proven out of reach.
+// AGENTLAB_TELEMETRY_DEBUG tells on stderr what happened to them.
 package telemetry
 
 import (
@@ -18,9 +20,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"log"
+	"net/http/httptrace"
 	"os"
 	"os/user"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/giantswarm/telemetrydeck-go"
@@ -41,9 +45,13 @@ const (
 	OptOutEnv = "AGENTLAB_TELEMETRY_OPTOUT"
 
 	// TestModeEnv files the signals as test data (kept apart from production
-	// numbers in the TelemetryDeck dashboard) and logs delivery errors to
-	// stderr — for developing the lab, and for proving the integration.
+	// numbers in the TelemetryDeck dashboard), for developing the lab.
 	TestModeEnv = "AGENTLAB_TELEMETRY_TESTMODE"
+
+	// DebugEnv logs what happens to the signals on stderr: a delivery that
+	// failed, a rejected request with its answer, an endpoint out of reach —
+	// for proving the integration. Without it telemetry prints nothing.
+	DebugEnv = "AGENTLAB_TELEMETRY_DEBUG"
 
 	// doNotTrackEnv is the cross-tool console convention
 	// (https://consoledonottrack.com): "1" (anything but "0"/"false") opts out.
@@ -57,6 +65,14 @@ const (
 	// hundred milliseconds at most, and a slow exit is felt from about half a
 	// second on; a command that ran longer than this finds nothing to wait for.
 	flushTimeout = 500 * time.Millisecond
+
+	// connectTimeout is how long after the first signal set out Flush waits
+	// for its request to hold a connection to the endpoint (name lookup, TCP
+	// and TLS) before it counts the endpoint as out of reach and stops
+	// waiting: a black-holed route would otherwise cost every short command
+	// the whole flushTimeout. A cold connection to the ingest endpoint takes
+	// about 120ms from Europe.
+	connectTimeout = 300 * time.Millisecond
 )
 
 // userSalt prefixes the string agentlab hashes into its user identifier. It
@@ -87,8 +103,46 @@ var (
 var endpoint string
 
 // sender is the client every signal goes through (client), kept for Flush;
-// nil until the first signal.
-var sender *telemetrydeck.Client
+// nil until the first signal. route watches whether its requests reach the
+// endpoint, created with it.
+var (
+	sender *telemetrydeck.Client
+	route  *reach
+)
+
+// reach records whether any signal's request got a connection to the ingest
+// endpoint: since is when the first signal set out, connected is closed by
+// the first connection.
+type reach struct {
+	since     time.Time
+	connected chan struct{}
+	once      sync.Once
+}
+
+func newReach() *reach {
+	return &reach{since: time.Now(), connected: make(chan struct{})}
+}
+
+// trace has ctx's requests tell r when they hold a connection, a fresh or a
+// reused one. A nil ctx (a command that never ran through Execute) is
+// context.Background, as the library takes it.
+func (r *reach) trace(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
+		GotConn: func(httptrace.GotConnInfo) { r.once.Do(func() { close(r.connected) }) },
+	})
+}
+
+func (r *reach) reached() bool {
+	select {
+	case <-r.connected:
+		return true
+	default:
+		return false
+	}
+}
 
 // Enabled reports whether this process sends usage signals.
 func Enabled() bool {
@@ -121,33 +175,57 @@ func Command(cmd *cobra.Command) {
 	if !Enabled() || !UserFacing(cmd) {
 		return
 	}
+	send(cmd.Context(), signalType, map[string]interface{}{
+		"appVersion": project.Version(),
+		"command":    cmd.CommandPath(),
+	})
+}
+
+// send hands one signal to the process's client, traced for Flush. A failure
+// is only logged (logf): telemetry never gets in the user's way.
+func send(ctx context.Context, signalType string, payload map[string]interface{}) {
 	c, err := client()
 	if err != nil {
 		logf("creating the TelemetryDeck client: %s", err)
 		return
 	}
-	err = c.SendSignal(cmd.Context(), signalType, map[string]interface{}{
-		"appVersion": project.Version(),
-		"command":    cmd.CommandPath(),
-	})
-	if err != nil {
-		logf("sending the usage signal: %s", err)
+	if err := c.SendSignal(route.trace(ctx), signalType, payload); err != nil {
+		logf("sending %s: %s", signalType, err)
 	}
 }
 
 // Flush lets the signals sent so far (Command, Platform) finish their trip
 // before the process exits, waiting at most flushTimeout (and no longer than
 // ctx allows): a sub-second command such as `agentlab version` would
-// otherwise exit before its request has left the machine. Never an error for
-// the caller — a signal that did not make it is dropped, and said so only in
-// test mode.
+// otherwise exit before its request has left the machine. An endpoint none of
+// them has connected to within connectTimeout of the first one setting out is
+// out of reach, and Flush stops waiting for it then — at once for a command
+// that ran longer than that. Never an error for the caller — a signal that
+// did not make it is dropped, and said so only under DebugEnv.
 func Flush(ctx context.Context) {
 	if sender == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, flushTimeout)
 	defer cancel()
-	if err := sender.Flush(ctx); err != nil {
+	s, flushed := sender, make(chan error, 1)
+	go func() { flushed <- s.Flush(ctx) }()
+
+	unreachable := time.NewTimer(time.Until(route.since.Add(connectTimeout)))
+	defer unreachable.Stop()
+	select {
+	case err := <-flushed:
+		if err != nil {
+			logf("a usage signal was not delivered within %s: %s", flushTimeout, err)
+		}
+		return
+	case <-unreachable.C:
+	}
+	if !route.reached() {
+		logf("the ingest endpoint was not reached within %s; not waiting for the usage signal", connectTimeout)
+		return
+	}
+	if err := <-flushed; err != nil {
 		logf("a usage signal was not delivered within %s: %s", flushTimeout, err)
 	}
 }
@@ -160,7 +238,7 @@ func client() (*telemetrydeck.Client, error) {
 		if err != nil {
 			return nil, err
 		}
-		sender = c
+		sender, route = c, newReach()
 	}
 	return sender, nil
 }
@@ -204,10 +282,16 @@ func testMode() bool {
 	return os.Getenv(TestModeEnv) != ""
 }
 
-// logf reports a telemetry problem on stderr in test mode; production runs
-// stay silent, telemetry being nobody's concern but the lab's developers.
+// debug says whether AGENTLAB_TELEMETRY_DEBUG is set.
+func debug() bool {
+	return os.Getenv(DebugEnv) != ""
+}
+
+// logf reports a telemetry problem on stderr under DebugEnv; every other run,
+// test mode included, stays silent, telemetry being nobody's concern but the
+// lab's developers and never part of a command's output.
 func logf(format string, args ...any) {
-	if testMode() {
+	if debug() {
 		log.Printf("telemetry: "+format, args...)
 	}
 }
@@ -232,10 +316,10 @@ func newClient(testMode bool) (*telemetrydeck.Client, error) {
 		opts = append(opts, telemetrydeck.WithEndpoint(endpoint))
 	}
 	if testMode {
-		opts = append(opts,
-			telemetrydeck.WithTestMode(),
-			telemetrydeck.WithLogger(log.New(os.Stderr, "telemetry: ", 0)),
-		)
+		opts = append(opts, telemetrydeck.WithTestMode())
+	}
+	if debug() {
+		opts = append(opts, telemetrydeck.WithLogger(log.New(os.Stderr, "telemetry: ", 0)))
 	}
 	opts = append(opts,
 		telemetrydeck.WithAppVersion(project.Version()),
