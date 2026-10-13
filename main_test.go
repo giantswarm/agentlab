@@ -4,11 +4,13 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/agentlab/internal/config"
+	"github.com/giantswarm/agentlab/internal/lab"
 	"github.com/giantswarm/agentlab/internal/labs"
 )
 
@@ -121,5 +123,19 @@ func TestEnterLabRegistersTheLabHere(t *testing.T) {
 	got, err := labs.List()
 	if err != nil || len(got) != 1 || got[0].Name != "unregistered" || got[0].Dir != dir {
 		t.Fatalf("labs.List() = %+v, %v; want unregistered in %s", got, err, dir)
+	}
+}
+
+// The help of --workspaces-cleanup-after names the range the sessions part's
+// precondition requires, taken from the same constants.
+func TestCleanupAfterHelpNamesTheSessionsRange(t *testing.T) {
+	flag := find(rootCmd(), "configure").Flags().Lookup("workspaces-cleanup-after")
+	if flag == nil {
+		t.Fatal("configure has no --workspaces-cleanup-after flag")
+	}
+	for _, want := range []string{lab.SessionsCleanupWindowRange(), lab.SessionsCleanupWindowExample()} {
+		if !strings.Contains(flag.Usage, want) {
+			t.Errorf("--workspaces-cleanup-after help %q does not name %q", flag.Usage, want)
+		}
 	}
 }

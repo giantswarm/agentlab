@@ -183,6 +183,30 @@ func TestWorkspaceManagerFlagJudges(t *testing.T) {
 	}
 }
 
+// The precondition judges by the constants the flag's help prints, and its
+// refusal names that range and a window inside it.
+func TestCleanupWindowPreconditionAgreesWithHelp(t *testing.T) {
+	if SessionsExampleCleanupWindow < SessionsMinCleanupWindow || SessionsExampleCleanupWindow > SessionsMaxCleanupWindow {
+		t.Fatalf("example window %s outside %s", SessionsExampleCleanupWindow, SessionsCleanupWindowRange())
+	}
+	for _, window := range []time.Duration{SessionsMinCleanupWindow, SessionsExampleCleanupWindow, SessionsMaxCleanupWindow} {
+		if _, err := judgeCleanupWindow([]string{sessionsCleanupArg + window.String()}, SessionsMinCleanupWindow, SessionsMaxCleanupWindow); err != nil {
+			t.Errorf("window %s refused: %v", window, err)
+		}
+	}
+	for _, window := range []time.Duration{SessionsMinCleanupWindow - time.Second, SessionsMaxCleanupWindow + time.Second} {
+		_, err := judgeCleanupWindow([]string{sessionsCleanupArg + window.String()}, SessionsMinCleanupWindow, SessionsMaxCleanupWindow)
+		if err == nil {
+			t.Fatalf("window %s accepted", window)
+		}
+		for _, want := range []string{"--workspaces-cleanup-after", SessionsCleanupWindowRange()} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("window %s: %q does not name %q", window, err, want)
+			}
+		}
+	}
+}
+
 func TestSessionPollJudge(t *testing.T) {
 	if d, err := judgeSessionPoll([]string{"serve", sessionsPollArg + "30s"}); err != nil || d != 30*time.Second {
 		t.Fatalf("judgeSessionPoll = %s, %v", d, err)

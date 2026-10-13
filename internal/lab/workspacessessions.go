@@ -73,11 +73,15 @@ const (
 	// sessionsOwnFilePrefix names the file each Session writes into its own
 	// directory, followed by a token only it knows.
 	sessionsOwnFilePrefix = "agentlab-only-"
-	// sessionsMaxCleanupWindow bounds the cleanup window the part waits out;
-	// sessionsMinCleanupWindow keeps the live Sessions' directories through
-	// the cycles before the cleanup stage.
-	sessionsMaxCleanupWindow = 15 * time.Minute
-	sessionsMinCleanupWindow = 5 * time.Minute
+	// SessionsMaxCleanupWindow bounds the cleanup window the part waits out;
+	// SessionsMinCleanupWindow keeps the live Sessions' directories through
+	// the cycles before the cleanup stage. The part's precondition and the
+	// help of `configure --workspaces-cleanup-after` both read them.
+	SessionsMaxCleanupWindow = 15 * time.Minute
+	SessionsMinCleanupWindow = 5 * time.Minute
+	// SessionsExampleCleanupWindow is the window the part's messages and the
+	// flag's help suggest; it lies inside the range.
+	SessionsExampleCleanupWindow = 10 * time.Minute
 	// sessionsWindowMargin is waited past the window, for the clocks.
 	sessionsWindowMargin = 20 * time.Second
 	// sessionsReportFile is the part's report, in the state directory.
@@ -284,7 +288,7 @@ func (sp *sessionsProof) preconditions(adminUser *config.User) error {
 	if err := judgeKagentAddress(flags); err != nil {
 		return err
 	}
-	if sp.window, err = judgeCleanupWindow(flags, sessionsMinCleanupWindow, sessionsMaxCleanupWindow); err != nil {
+	if sp.window, err = judgeCleanupWindow(flags, SessionsMinCleanupWindow, SessionsMaxCleanupWindow); err != nil {
 		return err
 	}
 	sp.report.CleanupWindow = sp.window.String()
@@ -1307,6 +1311,29 @@ func judgeKagentAddress(args []string) error {
 	return nil
 }
 
+// SessionsCleanupWindowRange is the range the sessions part requires of the
+// workspace-manager's cleanup window, as a person types durations: "5m to
+// 15m".
+func SessionsCleanupWindowRange() string {
+	return cleanupWindowRange(SessionsMinCleanupWindow, SessionsMaxCleanupWindow)
+}
+
+// SessionsCleanupWindowExample is the window to suggest, as a person types
+// it: "10m".
+func SessionsCleanupWindowExample() string {
+	return formatWindow(SessionsExampleCleanupWindow)
+}
+
+func cleanupWindowRange(least, limit time.Duration) string {
+	return formatWindow(least) + " to " + formatWindow(limit)
+}
+
+// formatWindow is a whole number of minutes as a person types it: "10m", not
+// "10m0s".
+func formatWindow(d time.Duration) string {
+	return strings.TrimSuffix(d.String(), "m0s") + "m"
+}
+
 // judgeCleanupWindow reads the manager's cleanup window and refuses one
 // outside [least, limit].
 func judgeCleanupWindow(args []string, least, limit time.Duration) (time.Duration, error) {
@@ -1319,7 +1346,7 @@ func judgeCleanupWindow(args []string, least, limit time.Duration) (time.Duratio
 		return 0, fmt.Errorf("the workspace-manager's %s%s: %w", sessionsCleanupArg, raw, err)
 	}
 	if d > limit || d < least {
-		return 0, fmt.Errorf("the workspace-manager cleans a session directory up %s after its last turn; the part needs %s to %s (shorter, a live Session's directory goes during the part; longer, the part waits too long): `agentlab configure --workspaces-cleanup-after 10m`, then `agentlab platform`", d, least, limit)
+		return 0, fmt.Errorf("the workspace-manager cleans a session directory up %s after its last turn; the part needs %s (shorter, a live Session's directory goes during the part; longer, the part waits too long): `agentlab configure --workspaces-cleanup-after %s`, then `agentlab platform`", d, cleanupWindowRange(least, limit), formatWindow(SessionsExampleCleanupWindow))
 	}
 	return d, nil
 }
