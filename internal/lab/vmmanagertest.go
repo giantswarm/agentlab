@@ -447,7 +447,7 @@ func proveVMManagerRegistration() error {
 	if v := cr.Labels[toolGroupLabel]; v != toolGroupAgentPlatform {
 		return fmt.Errorf("MCPServer %s carries %s=%q, want %s", vmManagerMCPServer, toolGroupLabel, v, toolGroupAgentPlatform)
 	}
-	if err := waitMCPServerState(vmManagerMCPServer, "Connected"); err != nil {
+	if err := waitMCPServerState(vmManagerMCPServer, mcpServerStateConnected); err != nil {
 		return err
 	}
 	return nil

@@ -166,7 +166,7 @@ func AgentsGitOpsTest(cfg *config.Config, email string, opts AgentsGitOpsTestOpt
 		return err
 	}
 	defer uninstall()
-	if err := waitMCPServerState(gitopsAgentManager, mcpServerStateAuthRequired, mcpServerStateConnected); err != nil {
+	if err := waitMCPServerReachable(gitopsAgentManager); err != nil {
 		return err
 	}
 

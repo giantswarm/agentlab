@@ -25,10 +25,6 @@ const gitHubMCPServer = "github"
 // clientCredentialsSecretRef defaults.
 var gitHubMCPClientKeys = []string{config.GitHubClientIDKey, config.GitHubClientSecretKey}
 
-// gitHubMCPHealthyStates: Auth Required until a session signs in, Connected
-// while one is.
-var gitHubMCPHealthyStates = []string{mcpServerStateAuthRequired, mcpServerStateConnected}
-
 // ensureGitHubMCP registers GitHub's hosted MCP server with muster while
 // platform.github is on and removes it while it is off. After the umbrella
 // install: the MCPServer CRD ships with muster.
@@ -64,7 +60,7 @@ func ensureGitHubMCP(cfg *config.Config) error {
 		return err
 	}
 	note("sign in once per person: core_auth_login %s through muster, or the portal's Sign in; the OAuth client's callback URL is %s%s", gitHubMCPServer, cfg.MusterBaseURL(), oauthProxyCallbackPath)
-	return waitMCPServerState(gitHubMCPServer, gitHubMCPHealthyStates...)
+	return waitMCPServerReachable(gitHubMCPServer)
 }
 
 // gitHubMCPClientMissing reads the client Secret and answers what it lacks:

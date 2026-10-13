@@ -13,7 +13,7 @@ import (
 
 // platform-test's workspace-manager stage: the component the workspaces
 // switch brings (docs/workspaces.md) is registered with muster by the chart's
-// MCPServer CR and reads Connected, its Deployment is rolled out, and
+// MCPServer CR and reachable (waitMCPServerReachable), its Deployment is rolled out, and
 // list_providers, called through muster as the admin, names every provider
 // instance the lab configured (workspaceprovider.go) and nothing else — the
 // fake, the github instance once its App and Secret are in place, or both.
@@ -79,7 +79,7 @@ func proveWorkspaceManager(cfg *config.Config) ([]string, error) {
 	if !registered {
 		return nil, fmt.Errorf("no MCPServer %s in %s: the chart registers the workspace-manager with muster (workspace-manager.muster.mcpServer.enabled); check `kubectl -n %s get mcpservers.muster.giantswarm.io`", workspaceManagerMCPServer, platformNamespace, platformNamespace)
 	}
-	if err := waitMCPServerState(workspaceManagerMCPServer, mcpServerStateConnected); err != nil {
+	if err := waitMCPServerReachable(workspaceManagerMCPServer); err != nil {
 		return nil, err
 	}
 	rollout, cancelRollout := context.WithTimeout(context.Background(), workerPoolRunningTimeout)

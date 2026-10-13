@@ -425,8 +425,8 @@ func (m *measurement) labPreconditions() error {
 		return fmt.Errorf("the measurement's workspaces are the lab GitHub's, the provider instance %s, and platform.workspaces.provider %q does not configure it: `agentlab configure --workspaces-provider %s`, then `agentlab platform`",
 			config.WorkspaceProviderFake, cfg.Platform.Workspaces.Provider, config.WorkspaceProviderFake)
 	}
-	if err := waitMCPServerState(workspaceManagerMCPServer, mcpServerStateConnected); err != nil {
-		return fmt.Errorf("the workspace-manager is not connected to muster: %w", err)
+	if err := waitMCPServerReachable(workspaceManagerMCPServer); err != nil {
+		return fmt.Errorf("the workspace-manager is not reachable through muster: %w", err)
 	}
 	email := m.opts.Email
 	if email == "" {

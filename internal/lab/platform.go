@@ -1322,33 +1322,39 @@ func waitSidecarMCPServers(ctx context.Context, cfg *config.Config, sidecars map
 	return nil
 }
 
-// waitMCPServerConnected polls one muster MCPServer CR (in the platform
-// namespace) until muster reports the downstream connection up.
-// waitMCPServerReachable waits for a server muster authenticates to per
-// session (auth.forwardToken): Awaiting Session means muster's probe reached
-// it and it waits for the first session (Auth Required on a muster before
-// 5.28.0, which spelled it that way), Connected that a session already uses
-// it. Every downstream the lab aggregates is such a server now, so this
-// replaced the plain Connected wait.
+// waitMCPServerReachable is the wait for a server being usable through
+// muster: muster reached it and a session can call it. Awaiting Session is a
+// server muster serves per session (auth.forwardToken, tokenExchange) with no
+// session connected yet; Auth Required one a session signs in to (OAuth), or a
+// per-session server on a muster before 5.28.0, which spelled it that way;
+// Connected one a session already uses. Every proof waiting for a server to
+// be up takes this, not a single state.
 func waitMCPServerReachable(name string) error {
 	return waitMCPServerState(name, mcpServerReachableStates...)
 }
 
-// mcpServerReachableStates are the CR states of a per-session server that
-// answers: Failed is the state that means trouble.
+// mcpServerReachableStates are the CR states of a server that answers: Failed
+// is the state that means trouble.
 var mcpServerReachableStates = []string{mcpServerStateConnected, mcpServerStateAwaitingSession, mcpServerStateAuthRequired}
 
+// mcpServerWaitAttempts and mcpServerWaitInterval pace waitMCPServerState:
+// two minutes, muster's reconnect backoff included.
+var (
+	mcpServerWaitAttempts = 40
+	mcpServerWaitInterval = 3 * time.Second
+)
+
 // waitMCPServerState polls the MCPServer CR's status.state until it reads one
-// of want.
+// of want; the error names every state accepted and the last one read.
 func waitMCPServerState(name string, want ...string) error {
 	var state string
 	var readErr error
-	reached := waitFor(40, 3*time.Second, func() bool {
+	reached := waitFor(mcpServerWaitAttempts, mcpServerWaitInterval, func() bool {
 		state, readErr = mcpServerState(name)
 		return readErr == nil && slices.Contains(want, state)
 	})
 	if !reached {
-		return notReached("MCPServer "+name, strings.Join(want, " or "), state, readErr,
+		return notReached("MCPServer "+name, orList(want), state, readErr,
 			fmt.Sprintf("check `agentlab logs muster`, `kubectl -n %s describe mcpservers.muster.giantswarm.io %s`\n"+
 				"and the server's rollout: `kubectl -n %s get deploy,pods`", platformNamespace, name, platformNamespace))
 	}

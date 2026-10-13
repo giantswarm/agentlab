@@ -126,3 +126,11 @@ func notReached(subject, want, last string, readErr error, hint string) error {
 	}
 	return fmt.Errorf("%s never reached %s (last status: %q);\n%s", subject, want, last, hint)
 }
+
+// orList words the states a wait accepts: "A", "A or B", "A, B or C".
+func orList(states []string) string {
+	if len(states) < 2 {
+		return strings.Join(states, "")
+	}
+	return strings.Join(states[:len(states)-1], ", ") + " or " + states[len(states)-1]
+}

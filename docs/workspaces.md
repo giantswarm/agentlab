@@ -268,7 +268,7 @@ uses [the provider instance `fake`](#the-provider-instance-fake), the
 (`start_session` with `workspaceGrant`). Without any of them it fails at once
 with the reason.
 
-1. **Preconditions**: the workspace-manager connected to muster. The
+1. **Preconditions**: the workspace-manager reachable through muster. The
    manager publishes the lab's grant key, kagent's admission trusts its key
    set, and the claude Agent `agentlab-workspaces-claude` is Ready on the
    Harness `claude`. Both people are signed in to muster and to kagent.
@@ -341,7 +341,7 @@ never connected). Without the instance, or without any of its settings, every
 stage skips with the reason and the part passes: it never fails for a lab
 that has no GitLab.
 
-1. **Preconditions**: the workspace-manager connected to muster with the
+1. **Preconditions**: the workspace-manager reachable through muster with the
    instance `gitlab` in `list_providers`, the token exchange's client in
    place, the [Session admission](#the-session-admission), the claude Agent
    Ready, both people signed in.
@@ -396,7 +396,7 @@ and a short cleanup window: `agentlab configure --workspaces-cleanup-after
 `sessions.cleanupAfter`; the part takes 5 to 15 minutes), then `agentlab
 platform`. Without any of them it fails at once with the reason.
 
-1. **Preconditions**: the workspace-manager connected to muster, with
+1. **Preconditions**: the workspace-manager reachable through muster, with
    `--kagent-address` and the window; the lab's grant key published and
    trusted by kagent's admission; the Agents `agentlab-workspaces-claude` on
    the Harness `claude` and `agentlab-workspaces-kagent` on the Harness
@@ -464,7 +464,7 @@ grant names a Bearer host (the API of `fake` is on its git host), with the
 `start_session`: `agentlab configure --workspaces-provider fake,fake-bearer`,
 then `agentlab platform`. Without them it fails at once with the reason.
 
-1. **Preconditions**: the workspace-manager connected to muster and listing
+1. **Preconditions**: the workspace-manager reachable through muster and listing
    `fake-bearer`; the lab's grant key published and trusted by kagent's
    admission; the Agent `agentlab-workspaces-bearer` on the Harness `claude`
    Ready, its egress `https://github-bearer.<domain>` and
@@ -617,7 +617,7 @@ the manager's public base URL `https://workspace-manager.<domain>:<gatewayPort>`
 the route the chart renders for it, and the lab Dex's redirect URI
 `<base URL>/signin`
 ([Platform](platform.md#the-workspace-managers-provider-instances-platformworkspacesprovider)).
-`platform-test` proves the manager registered with muster and Connected,
+`platform-test` proves the manager registered with muster and reachable,
 rolled out, `list_providers` as the admin naming every configured
 instance and nothing else, and [the lab's Organization](#the-labs-organization).
 
