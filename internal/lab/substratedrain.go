@@ -356,7 +356,7 @@ func (res *drainResume) worded(start time.Time) string {
 // the rollout, or a resume Substrate still deferred at the controller's own
 // bound) and Aborted (the operation pending from the attempt before, which
 // the next one continues). Any other — FailedPrecondition, the runtime lost —
-// is final.
+// is final; resumeSession has already waited out a "not yet settled".
 func resumeAgain(err error) bool {
 	switch status.Code(err) {
 	case codes.Unavailable, codes.Aborted:

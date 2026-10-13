@@ -118,11 +118,19 @@ const (
 // sessionSettleTimeout bounds deleteSession's retries on a session whose
 // runtime cleanup or lifecycle work is still running (the controller answers
 // FailedPrecondition meanwhile); sessionSettleBackoff is the first pause.
+// sessionOperationSettleTimeout bounds the same wait before a suspend or a
+// resume: the 1.11 controller settles a turn's runtime work after SettleTask
+// has answered, so a suspend right after a turn meets it for a moment.
 // Variables so the tests wait in milliseconds.
 var (
-	sessionSettleTimeout = 3 * time.Minute
-	sessionSettleBackoff = time.Second
+	sessionSettleTimeout          = 3 * time.Minute
+	sessionOperationSettleTimeout = 60 * time.Second
+	sessionSettleBackoff          = time.Second
 )
+
+// notYetSettledMessage is the controller's wording when a Session operation
+// cannot begin because the runtime work before it is still running.
+const notYetSettledMessage = "not yet settled"
 
 // sessionDeleteTimeout is the context a cleanup path gives deleteSession:
 // the settle wait plus one call's margin.
@@ -708,11 +716,15 @@ func (a *kagentAPI) listSessionsOf(ctx context.Context, agent *apiv1alpha1.Resou
 // suspendSession is SessionService/SuspendSession: the Actor is snapshotted
 // to the Harness's store and the session reported SUSPENDED; the next turn
 // restores it. Returns the session as the controller reports it after the
-// suspend.
+// suspend. A session whose runtime work is not yet settled is waited for.
 func (a *kagentAPI) suspendSession(ctx context.Context, id string) (*apiv1alpha1.Session, error) {
-	resp, err := a.sessions.SuspendSession(a.callCtx(ctx), &apiv1alpha1.SuspendSessionRequest{SessionId: id})
+	var resp *apiv1alpha1.SuspendSessionResponse
+	err := untilSettled(ctx, "SuspendSession", id, sessionOperationSettleTimeout, notYetSettled, func() (err error) {
+		resp, err = a.sessions.SuspendSession(a.callCtx(ctx), &apiv1alpha1.SuspendSessionRequest{SessionId: id})
+		return err
+	})
 	if err != nil {
-		return nil, fmt.Errorf("SuspendSession %s: %w", id, err)
+		return nil, err
 	}
 	return resp.GetSession(), nil
 }
@@ -720,11 +732,16 @@ func (a *kagentAPI) suspendSession(ctx context.Context, id string) (*apiv1alpha1
 // resumeSession is SessionService/ResumeSession on a SUSPENDED session: the
 // Actor is restored from its snapshot; returns once the session is READY
 // again. A suspended session accepts no task until then, which is what the
-// surfaces do before a turn.
+// surfaces do before a turn. A session whose runtime work is not yet settled
+// is waited for.
 func (a *kagentAPI) resumeSession(ctx context.Context, id string) (*apiv1alpha1.Session, error) {
-	resp, err := a.sessions.ResumeSession(a.callCtx(ctx), &apiv1alpha1.ResumeSessionRequest{SessionId: id})
+	var resp *apiv1alpha1.ResumeSessionResponse
+	err := untilSettled(ctx, "ResumeSession", id, sessionOperationSettleTimeout, notYetSettled, func() (err error) {
+		resp, err = a.sessions.ResumeSession(a.callCtx(ctx), &apiv1alpha1.ResumeSessionRequest{SessionId: id})
+		return err
+	})
 	if err != nil {
-		return nil, fmt.Errorf("ResumeSession %s: %w", id, err)
+		return nil, err
 	}
 	session := resp.GetSession()
 	deadline := time.Now().Add(sessionReadyTimeout)
@@ -748,27 +765,54 @@ func (a *kagentAPI) resumeSession(ctx context.Context, id string) (*apiv1alpha1.
 
 // deleteSession is SessionService/DeleteSession; a session that is already
 // gone is success. A session whose runtime cleanup or lifecycle work is still
-// running answers FailedPrecondition: that is retried with a growing pause
-// until sessionSettleTimeout, and the error then names the deadline and the
-// controller's last answer.
+// running answers FailedPrecondition: that is retried until
+// sessionSettleTimeout.
 func (a *kagentAPI) deleteSession(ctx context.Context, id string) error {
-	deadline := time.Now().Add(sessionSettleTimeout)
+	return untilSettled(ctx, "DeleteSession", id, sessionSettleTimeout, isFailedPrecondition, func() error {
+		_, err := a.sessions.DeleteSession(a.callCtx(ctx), &apiv1alpha1.DeleteSessionRequest{SessionId: id})
+		if status.Code(err) == codes.NotFound {
+			return nil
+		}
+		return err
+	})
+}
+
+// notYetSettled reports the controller's answer that a Session operation
+// cannot begin before the runtime work ahead of it is settled. Any other
+// FailedPrecondition (a session not suspended, say) is final.
+func notYetSettled(err error) bool {
+	return isFailedPrecondition(err) && strings.Contains(status.Convert(err).Message(), notYetSettledMessage)
+}
+
+func isFailedPrecondition(err error) bool {
+	return status.Code(err) == codes.FailedPrecondition
+}
+
+// untilSettled runs call on the session until it answers anything settling
+// does not match, retrying with a pause growing from sessionSettleBackoff to
+// sessionSettleMaxBackoff, bounded by timeout; the wait is noted once. The
+// error names the method and the session, and, when the bound or the context
+// ends the wait, the attempts and the controller's last answer.
+func untilSettled(ctx context.Context, method, id string, timeout time.Duration, settling func(error) bool, call func() error) error {
+	deadline := time.Now().Add(timeout)
 	pause := sessionSettleBackoff
 	for attempt := 1; ; attempt++ {
-		_, err := a.sessions.DeleteSession(a.callCtx(ctx), &apiv1alpha1.DeleteSessionRequest{SessionId: id})
-		switch status.Code(err) {
-		case codes.OK, codes.NotFound:
+		err := call()
+		if err == nil {
 			return nil
-		case codes.FailedPrecondition:
-		default:
-			return fmt.Errorf("DeleteSession %s: %w", id, err)
+		}
+		if !settling(err) {
+			return fmt.Errorf("%s %s: %w", method, id, err)
 		}
 		if !time.Now().Add(pause).Before(deadline) {
-			return fmt.Errorf("DeleteSession %s: the Session did not settle within %s (%d attempts), last answer: %w", id, sessionSettleTimeout, attempt, err)
+			return fmt.Errorf("%s %s: the Session did not settle within %s (%d attempts), last answer: %w", method, id, timeout, attempt, err)
+		}
+		if attempt == 1 {
+			note("%s %s: the Session's runtime work is not yet settled; retrying for up to %s", method, id, timeout)
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("DeleteSession %s: %w after %d attempts, last answer: %w", id, ctx.Err(), attempt, err)
+			return fmt.Errorf("%s %s: %w after %d attempts, last answer: %w", method, id, ctx.Err(), attempt, err)
 		case <-time.After(pause):
 		}
 		pause = min(2*pause, sessionSettleMaxBackoff)
