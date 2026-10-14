@@ -62,6 +62,9 @@ const (
 	hitlToolApprovalType   = "tool_approval_request"
 	hitlDecisionApprove    = "approve"
 	musterTokenAcceptedLog = "forwarded_id_token_accepted"
+	// kagentUnsettledAnswer is in kagent's 409 to a session operation while
+	// the runtime's cleanup or lifecycle work is pending.
+	kagentUnsettledAnswer = "not yet settled"
 )
 
 // The prompts of the chat proof and their bounds.
@@ -455,13 +458,34 @@ func (ps *portalSession) renameSession(id, name string) error {
 }
 
 // deleteSession is DELETE /kagent/sessions/:id, then the read that must 404.
+// After every turn the controller quiesces the runtime into a snapshot, and
+// until that lifecycle work settles kagent refuses the delete with a 409
+// naming it; the delete is sent again, as a client must, until it settles,
+// bounded by the quiescence a turn is given.
 func (ps *portalSession) deleteSession(id string) error {
-	status, raw, err := ps.kagentRequest(http.MethodDelete, kagentSessionsPath+"/"+id, nil)
+	var status int
+	var raw []byte
+	var err error
+	unsettled := 0
+	accepted := waitFor(int(portalQuiescentTimeout/pollInterval), pollInterval, func() bool {
+		status, raw, err = ps.kagentRequest(http.MethodDelete, kagentSessionsPath+"/"+id, nil)
+		if err == nil && status == http.StatusConflict && strings.Contains(string(raw), kagentUnsettledAnswer) {
+			unsettled++
+			return false
+		}
+		return true
+	})
 	if err != nil {
 		return err
 	}
+	if !accepted {
+		return fmt.Errorf("DELETE %s/%s still answered %d after %s, the session's lifecycle work never settled — the owner is kagent-upstream: %.300s", kagentSessionsPath, id, status, portalQuiescentTimeout, raw)
+	}
 	if status/100 != 2 {
 		return fmt.Errorf("DELETE %s/%s answered %d: %.300s", kagentSessionsPath, id, status, raw)
+	}
+	if unsettled > 0 {
+		note("DELETE %s/%s answered 409 %q %d time(s) before the session's lifecycle work settled", kagentSessionsPath, id, kagentUnsettledAnswer, unsettled)
 	}
 	var last int
 	gone := waitFor(int(portalSessionGoneTimeout/pollInterval), pollInterval, func() bool {

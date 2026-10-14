@@ -481,6 +481,8 @@ func TestSessionsRoutes(t *testing.T) {
 	instance := map[string]any{"id": testSessionID, "creator": testPortalUser, fieldState: instanceStateReady, nameKey: portalSessionName, fieldContextID: testContextID,
 		"agent": map[string]any{fieldNamespace: kagentNamespace, nameKey: testAgentName}}
 	deleted := false
+	// kagent refuses the first delete while the turn's quiescence settles.
+	unsettledDeletes := 1
 	fp.tools[startSessionTool] = func(map[string]any) (string, bool) {
 		raw, _ := json.Marshal(map[string]any{fieldSession: instance, "turn": map[string]any{"task": map[string]any{"id": fakeTaskID}}})
 		return string(raw), false
@@ -494,6 +496,9 @@ func TestSessionsRoutes(t *testing.T) {
 	})
 	fp.mux.HandleFunc(portalKagentAPI+kagentSessionsPath+"/"+testSessionID, func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case r.Method == http.MethodDelete && unsettledDeletes > 0:
+			unsettledDeletes--
+			writeJSON(w, http.StatusConflict, map[string]any{fieldError: map[string]any{fieldMessage: "begin Session operation: runtime cleanup or lifecycle work is " + kagentUnsettledAnswer + ": precondition failed"}})
 		case r.Method == http.MethodDelete:
 			deleted = true
 			writeJSON(w, http.StatusOK, map[string]any{})
@@ -534,6 +539,9 @@ func TestSessionsRoutes(t *testing.T) {
 	}
 	if err := ps.deleteSession(testSessionID); err != nil {
 		t.Fatal(err)
+	}
+	if unsettledDeletes != 0 || !deleted {
+		t.Errorf("the delete was not sent again after the unsettled 409 (refusals left %d, deleted %v)", unsettledDeletes, deleted)
 	}
 	if status, _, err := ps.getSession(testSessionID); err != nil || status != http.StatusNotFound {
 		t.Errorf("after the delete: %d %v", status, err)
