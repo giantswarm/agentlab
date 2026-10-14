@@ -524,7 +524,7 @@ call to the first read that sees its end (reads every 500 ms):
 |---|---|
 | First sync | `create_workspace` called → `get_workspace` reports the first cycle's result |
 | No-op cycle | `sync_workspace` called once the listing cache let go, nothing pushed → the cycle's `NoChange` (a cycle ending otherwise is not counted, and says so) |
-| Changed cycle | `sync_workspace` called after a push → the cycle's result, the mirror at the pushed head |
+| Changed cycle | `sync_workspace` called after a push → the cycle's result: in the lab the mirror at the pushed head, on another cluster `Succeeded` after a push to the scratch branch |
 | `authorize_workspace` | each call through muster → its granted answer |
 | Session directory setup | `start_session` called with the grant → the setup's record `.kagent/workspace.json` in the session directory: the actor Running, every clone in place, the pushed repository fetched |
 | Setup in the actor | the first turn sent → the same record |
@@ -565,7 +565,9 @@ Everything the command creates is removed on every path: the Sessions, the
 session directories, the workspaces and their volumes, the Agent
 `agentlab-workspaces-measure` (Harness `claude`), the probe pods, the
 person's sign-in at `fake`, the pushed repositories back at their heads and a
-generated repository.
+generated repository; on another cluster the scratch branch. A Session the
+cleanup cannot delete is named in the report under **Sessions left**, for a
+person to delete in kagent.
 
 Every call to muster and kagent, the cleanup's included, carries the
 person's current token: shortly before it expires a new one is taken, a
@@ -584,9 +586,25 @@ directories are cleared so that cycle lets it go, the run measures under
 **Another cluster with the platform**: `--kube-context <context>` (of your own
 kubeconfig) and `--muster-url <url>`, as the person `muster auth login
 --endpoint <url>` signed in, with `--organization`, `--provider`,
-`--small-repos owner/a,owner/b` (the first is checked out and built) and
-`--large-repo owner/name`. The command pushes only to the lab's GitHub, so
-there the changed cycle and the on-demand fetch are not available;
+`--small-repos owner/a,owner/b` (the first is checked out, built and pushed
+to) and `--large-repo owner/name`. `[email]` and `--large-repo-mib` are the
+lab's only and refused there: the person is the one signed in to muster.
+
+```sh
+agentlab workspaces-measure --kube-context <context> --muster-url <url> \
+  --organization <organization> --provider <instance> \
+  --small-repos owner/a,owner/b --large-repo owner/big \
+  --agentgateway-url <url> --agent <namespace>/<name>
+```
+
+The pushes go to a scratch branch `agentlab-workspaces-measure-<start time>`
+of the first small repository and of the large one, with your own git
+credentials (`gh auth setup-git` for GitHub; `--git-url` names another
+provider's git base URL, default `https://github.com`): an empty commit on
+the default branch's head per push, which moves the repository's `pushed_at`
+and so starts a changed cycle, the manager mirroring every ref. The branch is
+deleted at the end. A repository you cannot push to has its changed cycle
+and on-demand fetch not available, with git's answer, and the run goes on.
 `--agentgateway-url` and `--agent namespace/name` (an Agent whose Sessions
 reach the provider) measure the Sessions, which are otherwise not available.
 

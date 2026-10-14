@@ -65,7 +65,7 @@ const measureSameSpan = "the same"
 var measureFigureDefs = []measureFigureDef{
 	{figFirstSync, "First sync", "create_workspace called", "get_workspace reports the first cycle's result, every mirror written", unitSeconds},
 	{figNoOpCycle, "No-op cycle", "sync_workspace called, nothing pushed and the manager's listing cache expired", "get_workspace reports the cycle's NoChange", unitSeconds},
-	{figChangedCycle, "Changed cycle", "sync_workspace called after a push to one repository", "get_workspace reports the cycle's result, that mirror at the pushed head", unitSeconds},
+	{figChangedCycle, "Changed cycle", "sync_workspace called after a push to one repository", "get_workspace reports the cycle's result: in the lab that mirror at the pushed head, on another cluster Succeeded after a push to a scratch branch", unitSeconds},
 	{figAuthorize, "authorize_workspace", "the call through muster", "its granted answer", unitSeconds},
 	{figSessionStart, "Session directory setup", "start_session called", "the setup's record in the session directory: the actor Running, every clone in place, the changed repository fetched", unitSeconds},
 	{figSessionSetup, "Setup in the actor", "the first turn sent", "the setup's record in the session directory", unitSeconds},
@@ -188,6 +188,9 @@ type measureReport struct {
 	Harness          string                   `json:"harness,omitempty"`
 	Workspaces       []measureWorkspaceReport `json:"workspaces"`
 	Leftovers        []measureLeftover        `json:"leftovers,omitempty"`
+	// SessionsLeft are the Sessions the cleanup could not delete, for a
+	// person to remove.
+	SessionsLeft []string `json:"sessionsLeft,omitempty"`
 	// Failed are the probes that failed: their figures of that run are not
 	// available, the run went on.
 	Failed []measureFailedProbe `json:"failedProbes,omitempty"`
@@ -351,6 +354,9 @@ func (r *measureReport) markdown() string {
 	}
 	for _, l := range r.Leftovers {
 		fmt.Fprintf(&b, "\n**Leftover:** `%s` of an interrupted run was still deleting; its session directories were cleared and its manager deletes it at its next deletion cycle. This run measured it as `%s`.\n", l.Name, l.MeasuredAs)
+	}
+	if len(r.SessionsLeft) > 0 {
+		fmt.Fprintf(&b, "\n**Sessions left:** the cleanup could not delete %s: delete them in kagent.\n", "`"+strings.Join(r.SessionsLeft, "`, `")+"`")
 	}
 	for _, w := range r.Workspaces {
 		fmt.Fprintf(&b, "\n### %s workspace `%s`: %s\n\n", w.Kind, w.Name, strings.Join(w.Repositories, ", "))
