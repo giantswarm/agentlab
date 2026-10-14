@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"encoding/base64"
 	"errors"
 	"slices"
 	"testing"
@@ -12,23 +13,26 @@ import (
 	"github.com/giantswarm/agentlab/internal/config"
 )
 
+// currentKID is the key Dex signs with in TestJudgeApiserverOIDC.
+const currentKID = "kid-current"
+
 // TestJudgeApiserverOIDC: only an Unauthorized for a key Dex publishes is the
-// stale keyset a restart repairs; an unpublished key is Dex's state and any
-// other error is no authentication answer.
+// apiserver's stale JWKS cache, which platform-test waits out; an unpublished
+// key is Dex's state and any other error is no authentication answer.
 func TestJudgeApiserverOIDC(t *testing.T) {
-	published := []string{"new", "old"}
+	published := []string{currentKID, "kid-retired"}
 	unauthorized := apierrors.NewUnauthorized("Unauthorized")
 	for name, tc := range map[string]struct {
 		kid  string
 		err  error
 		want oidcVerdict
 	}{
-		"accepted":                          {kid: "new", want: oidcAccepted},
-		"refused, key published":            {kid: "new", err: unauthorized, want: oidcStaleKeys},
-		"refused, key not published":        {kid: "gone", err: unauthorized, want: oidcRefused},
+		"the token accepted":                {kid: currentKID, want: oidcAccepted},
+		"refused, key published":            {kid: currentKID, err: unauthorized, want: oidcStaleKeys},
+		"refused, key not published":        {kid: "kid-unpublished", err: unauthorized, want: oidcRefused},
 		"refused, token without a key ID":   {err: unauthorized, want: oidcRefused},
-		"forbidden is an answer, not stale": {kid: "new", err: apierrors.NewForbidden(gvrPods.GroupResource(), "x", errors.New("no")), want: oidcRefused},
-		"apiserver unreachable":             {kid: "new", err: errors.New("connection refused"), want: oidcRefused},
+		"forbidden is an answer, not stale": {kid: currentKID, err: apierrors.NewForbidden(gvrPods.GroupResource(), "x", errors.New("no")), want: oidcRefused},
+		"apiserver unreachable":             {kid: currentKID, err: errors.New("connection refused"), want: oidcRefused},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if got := judgeApiserverOIDC(tc.kid, published, tc.err); got != tc.want {
@@ -41,10 +45,10 @@ func TestJudgeApiserverOIDC(t *testing.T) {
 // TestJWTKeyID: the kid comes off the header; a token that is no compact JWT
 // is refused.
 func TestJWTKeyID(t *testing.T) {
-	// {"alg":"RS256","kid":"abc"} . {} . sig
-	kid, err := jwtKeyID("eyJhbGciOiJSUzI1NiIsImtpZCI6ImFiYyJ9.e30.c2ln")
-	if err != nil || kid != "abc" {
-		t.Fatalf("jwtKeyID = %q, %v; want abc", kid, err)
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","kid":"kid-header"}`))
+	kid, err := jwtKeyID(header + ".e30.c2ln")
+	if err != nil || kid != "kid-header" {
+		t.Fatalf("jwtKeyID = %q, %v; want kid-header", kid, err)
 	}
 	if _, err := jwtKeyID("opaque"); err == nil {
 		t.Fatal("jwtKeyID accepted a token that is no JWT")
@@ -53,8 +57,8 @@ func TestJWTKeyID(t *testing.T) {
 
 // TestParseJWKSKeyIDs: every key's kid, in the document's order.
 func TestParseJWKSKeyIDs(t *testing.T) {
-	ids, err := parseJWKSKeyIDs([]byte(`{"keys":[{"kty":"RSA","kid":"new"},{"kty":"RSA","kid":"old"}]}`))
-	if err != nil || !slices.Equal(ids, []string{"new", "old"}) {
+	ids, err := parseJWKSKeyIDs([]byte(`{"keys":[{"kty":"RSA","kid":"kid-a"},{"kty":"RSA","kid":"kid-b"}]}`))
+	if err != nil || !slices.Equal(ids, []string{"kid-a", "kid-b"}) {
 		t.Fatalf("parseJWKSKeyIDs = %v, %v", ids, err)
 	}
 	if _, err := parseJWKSKeyIDs([]byte("<html>")); err == nil {
