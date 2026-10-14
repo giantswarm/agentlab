@@ -1070,11 +1070,16 @@ backstage:
     # (the overlay's aiChat, backstage-catalog.yaml.tmpl). $GITHUB_TOKEN
     # (githubtoken.go) for the overlay's integrations.github, so the gs
     # backend's skill discovery calls GitHub authenticated — 5000 requests an
-    # hour instead of the 60 this machine's egress address shares.
+    # hour instead of the 60 this machine's egress address shares — and the
+    # skills GitHub App (githubapp.go) for the overlay's integrations.github
+    # apps entry, the same authentication without a token.
     extraEnvVarsSecrets:
       - agentlab-anthropic
 {{- if .GitHubToken }}
       - agentlab-github-token
+{{- end }}
+{{- if .PortalGitHubApp }}
+      - agentlab-portal-github-app
 {{- end }}
     extraVolumes:
       # Restated from the chart (global.identity.ca): the lab CA Backstage

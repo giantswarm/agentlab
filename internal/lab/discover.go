@@ -430,14 +430,19 @@ func (d *Discovery) Report(cfg *config.Config) string {
 	}
 	if d.GitHubApp.Configured() {
 		line("GitHub App", "githubApp %s (installation %s), private key from %s — %s places it into the Secret %s/%s at every up and platform: agent-manager resolves skills as the App, at its rate limit; agentlab never reads the key", d.GitHubApp.AppID, d.GitHubApp.InstallationID, d.GitHubApp.PrivateKeySource, secretTool, platformNamespace, gitHubAppSecret)
+		if d.GitHubApp.HasClient() {
+			line("GitHub App", "client %s, client secret from %s — %s places the key and the client secret into the Secret %s/%s: the portal's skill discovery calls GitHub as the App too", d.GitHubApp.ClientID, d.GitHubApp.ClientSecretSource, secretTool, platformNamespace, portalGitHubAppSecret)
+		}
 	}
 	switch {
 	case d.GitHubTokenSource != "":
 		line("GitHub token", "githubToken.source %s — %s places it into the Secret %s/%s at every up and platform: the portal's skill discovery and agent-manager's skill resolution call GitHub authenticated (5000 requests an hour); agentlab never reads the value", d.GitHubTokenSource, secretTool, platformNamespace, gitHubTokenSecret)
 	case d.GitHubToken:
 		line("GitHub token", "$%s is set — the portal's skill discovery and agent-manager's skill resolution call GitHub authenticated (5000 requests an hour) from deploy time", GitHubTokenEnv)
+	case d.GitHubApp.HasClient():
+		line("GitHub token", "no githubToken.source and $%s is not set — none needed: agent-manager and the portal use the App", GitHubTokenEnv)
 	case d.GitHubApp.Configured():
-		line("GitHub token", "no githubToken.source and $%s is not set — the portal's skill discovery shares this machine's unauthenticated GitHub window (60 requests an hour); agent-manager uses the App", GitHubTokenEnv)
+		line("GitHub token", "no githubToken.source and $%s is not set — the portal's skill discovery shares this machine's unauthenticated GitHub window (60 requests an hour) until the App's OAuth client is recorded (the workspaces GitHub App's clientId and clientSecretSource, or githubApp's); agent-manager uses the App", GitHubTokenEnv)
 	case d.WorkspacesGitHubApp:
 		line("GitHub token", "no githubToken.source, no skills App and $%s is not set — skill discovery and resolution share this machine's unauthenticated GitHub window (60 requests an hour) until agent-manager resolves skills as the workspaces GitHub App (`agentlab configure --github-app-installation-id <its installation id>`) or the token source is recorded, and `agentlab platform` re-runs", GitHubTokenEnv)
 	default:

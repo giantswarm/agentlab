@@ -835,7 +835,7 @@ func configureCmd() *cobra.Command {
 	var workspacesGitHubPrivateKeySource, workspacesGitHubClientSecretSource string
 	var githubSignInOrgs, modelManagerBackends []string
 	var vmManagerImageDir, aiKeySource, gitHubTokenSource string
-	var gitHubAppID, gitHubAppInstallationID, gitHubAppPrivateKeySource string
+	var gitHubAppID, gitHubAppInstallationID, gitHubAppPrivateKeySource, gitHubAppClientID, gitHubAppClientSecretSource string
 	var chartVersion, chartPath, chartBranch string
 	var upgradeSeed, adoptChart bool
 	cmd := &cobra.Command{
@@ -995,6 +995,12 @@ func configureCmd() *cobra.Command {
 			if cmd.Flags().Changed("github-app-private-key-source") {
 				cfg.GitHubApp.PrivateKeySource = gitHubAppPrivateKeySource
 			}
+			if cmd.Flags().Changed("github-app-client-id") {
+				cfg.GitHubApp.ClientID = gitHubAppClientID
+			}
+			if cmd.Flags().Changed("github-app-client-secret-source") {
+				cfg.GitHubApp.ClientSecretSource = gitHubAppClientSecretSource
+			}
 			// Every run discovers the machine — an existing agentlab.yaml
 			// follows the host too: a server that appeared is added, one that
 			// is gone drops out, ports move while no cluster holds them.
@@ -1070,6 +1076,8 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().StringVar(&gitHubAppID, "github-app-id", "", "the skills GitHub App agent-manager resolves skills with (installation tokens at the App's rate limit instead of a token or GitHub's anonymous window): its numeric App id (public); set with --github-app-installation-id and --github-app-private-key-source, \"\" on all three clears it")
 	cmd.Flags().StringVar(&gitHubAppInstallationID, "github-app-installation-id", "", "the skills GitHub App: the numeric id of its installation (public); alone, the App is the workspaces GitHub App (--workspaces-github-app-id and --workspaces-github-private-key-source)")
 	cmd.Flags().StringVar(&gitHubAppPrivateKeySource, "github-app-private-key-source", "", "the skills GitHub App: where its private key lives, a reference `beekeeper secret copy` resolves (op://<vault>/<item>/<field>, or <file>#<path> of a SOPS file), never a value: every up and platform place it into the Secret agentlab-github-app through beekeeper")
+	cmd.Flags().StringVar(&gitHubAppClientID, "github-app-client-id", "", "the skills GitHub App: its OAuth client id (public); with --github-app-client-secret-source the portal's skill discovery calls GitHub as the App too (the workspaces GitHub App's client comes with --github-app-installation-id alone)")
+	cmd.Flags().StringVar(&gitHubAppClientSecretSource, "github-app-client-secret-source", "", "the skills GitHub App: where its client secret lives, in the form --github-app-private-key-source takes: every up and platform place it into the Secret agentlab-portal-github-app through beekeeper")
 	cmd.Flags().BoolVar(&accessible, "accessible", false, "prompt-per-question form mode (for screen readers and plain terminals)")
 	return cmd
 }

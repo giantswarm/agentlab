@@ -28,6 +28,7 @@ var (
 	gitHubNow               = time.Now
 	gitHubSleep             = time.Sleep
 	labGitHubAuthenticated  = agentManagerGitHubAuthenticated
+	portalAuthenticated     = portalGitHubAuthenticated
 )
 
 // gitHubWindow is the core REST API window as /rate_limit reports it.
@@ -97,9 +98,11 @@ func readGitHubWindow() (gitHubWindow, error) {
 // same token (githubtoken.go), so the read is authenticated as theirs are.
 // Without a host token, a lab whose consumers carry one from
 // githubToken.source never waits on the host's anonymous window: it is not
-// theirs. An endpoint that cannot be read is a note, never a failure; a
-// window still short after the wait is.
-func awaitGitHubWindow(what string, need int) error {
+// theirs. portal says the step also reads through the portal's discovery,
+// so it skips the wait only when the portal carries a credential as well as
+// agent-manager. An endpoint that cannot be read is a note, never a failure;
+// a window still short after the wait is.
+func awaitGitHubWindow(what string, need int, portal bool) error {
 	w, err := readGitHubWindow()
 	if err != nil {
 		note("GitHub API window not read (%v); %s proceeds without it", err, what)
@@ -109,15 +112,9 @@ func awaitGitHubWindow(what string, need int) error {
 	if w.Remaining >= need {
 		return nil
 	}
-	if !w.Authenticated {
-		authenticated, err := labGitHubAuthenticated()
-		if err != nil {
-			note("whether the lab's consumers carry a GitHub token was not read (%v); the host's window decides", err)
-		}
-		if authenticated {
-			note("the lab's consumers call GitHub with the token in secret %s/%s, not on this window; %s proceeds", platformNamespace, gitHubTokenSecret, what)
-			return nil
-		}
+	if !w.Authenticated && consumersAuthenticated(portal) {
+		note("the lab's consumers call GitHub with a credential of their own (a token or the skills GitHub App), not on this window; %s proceeds", what)
+		return nil
 	}
 	wait := max(w.Reset.Sub(gitHubNow())+5*time.Second, 0)
 	if wait > gitHubWindowMaxWait {
@@ -134,4 +131,33 @@ func awaitGitHubWindow(what string, need int) error {
 		return fmt.Errorf("GitHub API window still short after waiting for its reset (%s): %d of the %d requests %s spends — export $%s or try again after %s", w.Reset.Local().Format("15:04:05 MST"), w.Remaining, need, what, GitHubTokenEnv, w.Reset.Local().Format("15:04:05 MST"))
 	}
 	return nil
+}
+
+// consumersAuthenticated reports whether every consumer the step reads
+// through carries a GitHub credential: agent-manager, and with portal the
+// portal. One that cannot be read counts as anonymous: the host's window
+// decides.
+func consumersAuthenticated(portal bool) bool {
+	checks := []struct {
+		who   string
+		check func() (bool, error)
+	}{{"agent-manager", labGitHubAuthenticated}}
+	if portal {
+		checks = append(checks, struct {
+			who   string
+			check func() (bool, error)
+		}{"the portal", portalAuthenticated})
+	}
+	for _, c := range checks {
+		ok, err := c.check()
+		if err != nil {
+			note("whether %s carries a GitHub credential was not read (%v); the host's window decides", c.who, err)
+			return false
+		}
+		if !ok {
+			note("%s calls GitHub on this machine's anonymous window", c.who)
+			return false
+		}
+	}
+	return true
 }

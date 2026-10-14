@@ -21,21 +21,38 @@ type GitHubApp struct {
 	// PrivateKeySource is a reference `beekeeper secret copy` resolves to the
 	// App's private key (PEM), in the form AIKey.Source takes.
 	PrivateKeySource string `yaml:"privateKeySource,omitempty"`
+	// ClientID and ClientSecretSource are the App's OAuth client: the
+	// portal's GitHub integration takes an App only with both, so the
+	// portal's skill discovery calls GitHub as the App when they are set.
+	// The client id is public; ClientSecretSource is a reference in the form
+	// PrivateKeySource takes.
+	ClientID           string `yaml:"clientId,omitempty"`
+	ClientSecretSource string `yaml:"clientSecretSource,omitempty"`
 }
 
-// SkillsGitHubApp is the App agent-manager resolves skills with: githubApp,
+// SkillsGitHubApp is the App agent-manager and the portal resolve skills
+// with: githubApp,
 // its appId and privateKeySource those of the workspaces GitHub App
 // (platform.workspaces.github) when githubApp leaves both empty, so a lab
-// whose workspaces App is installed records only the installation id. Zero
+// whose workspaces App is installed records only the installation id; the
+// workspaces App's OAuth client, when it records both halves, comes with it
+// unless githubApp names one. Zero
 // when githubApp records nothing.
 func (c *Config) SkillsGitHubApp() GitHubApp {
 	app := c.GitHubApp
 	if app.Configured() && app.AppID == "" && app.PrivateKeySource == "" {
 		ws := c.Platform.Workspaces.GitHub
 		app.AppID, app.PrivateKeySource = ws.AppID, ws.PrivateKeySource
+		if app.ClientID == "" && app.ClientSecretSource == "" && ws.ClientID != "" && ws.ClientSecretSource != "" {
+			app.ClientID, app.ClientSecretSource = ws.ClientID, ws.ClientSecretSource
+		}
 	}
 	return app
 }
+
+// HasClient reports whether the App's OAuth client is recorded, which the
+// portal's GitHub integration needs besides the App id and key.
+func (a GitHubApp) HasClient() bool { return a.ClientID != "" && a.ClientSecretSource != "" }
 
 // Configured reports whether any part of the App is recorded; Validate
 // refuses a partial one.
@@ -59,6 +76,14 @@ func (a GitHubApp) Validate() error {
 	}
 	if err := ValidateSecretSource(a.PrivateKeySource); err != nil {
 		return fmt.Errorf("privateKeySource %q: %w", a.PrivateKeySource, err)
+	}
+	if (a.ClientID == "") != (a.ClientSecretSource == "") {
+		return errors.New("clientId and clientSecretSource are set together or not at all")
+	}
+	if a.ClientSecretSource != "" {
+		if err := ValidateSecretSource(a.ClientSecretSource); err != nil {
+			return fmt.Errorf("clientSecretSource %q: %w", a.ClientSecretSource, err)
+		}
 	}
 	return nil
 }

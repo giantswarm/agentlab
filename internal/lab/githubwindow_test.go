@@ -29,9 +29,10 @@ func newFakeGitHubRateLimit(t *testing.T, reset time.Time) *fakeGitHubRateLimit 
 		f.auth = append(f.auth, r.Header.Get("Authorization"))
 		_, _ = fmt.Fprintf(w, `{"resources":{"core":{"limit":60,"remaining":%d,"reset":%d}}}`, f.remaining, f.reset.Unix())
 	}))
-	prevEndpoint, prevNow, prevSleep, prevLab := gitHubRateLimitEndpoint, gitHubNow, gitHubSleep, labGitHubAuthenticated
+	prevEndpoint, prevNow, prevSleep, prevLab, prevPortal := gitHubRateLimitEndpoint, gitHubNow, gitHubSleep, labGitHubAuthenticated, portalAuthenticated
 	gitHubRateLimitEndpoint = srv.URL
 	labGitHubAuthenticated = func() (bool, error) { return false, nil }
+	portalAuthenticated = func() (bool, error) { return false, nil }
 	gitHubNow = func() time.Time { return reset.Add(-30 * time.Minute) }
 	// The reset refills the window, as GitHub's does.
 	gitHubSleep = func(d time.Duration) {
@@ -42,7 +43,7 @@ func newFakeGitHubRateLimit(t *testing.T, reset time.Time) *fakeGitHubRateLimit 
 	}
 	t.Cleanup(func() {
 		srv.Close()
-		gitHubRateLimitEndpoint, gitHubNow, gitHubSleep, labGitHubAuthenticated = prevEndpoint, prevNow, prevSleep, prevLab
+		gitHubRateLimitEndpoint, gitHubNow, gitHubSleep, labGitHubAuthenticated, portalAuthenticated = prevEndpoint, prevNow, prevSleep, prevLab, prevPortal
 	})
 	return f
 }
@@ -70,7 +71,7 @@ func TestAwaitGitHubWindow(t *testing.T) {
 	t.Run("unauthenticated with budget", func(t *testing.T) {
 		t.Setenv(GitHubTokenEnv, "")
 		f.set(42)
-		if err := awaitGitHubWindow("the proof", 1); err != nil {
+		if err := awaitGitHubWindow("the proof", 1, false); err != nil {
 			t.Fatal(err)
 		}
 		auth, slept := f.seen()
@@ -85,7 +86,7 @@ func TestAwaitGitHubWindow(t *testing.T) {
 	t.Run("authenticated", func(t *testing.T) {
 		t.Setenv(GitHubTokenEnv, gitHubTestToken)
 		f.set(4999)
-		if err := awaitGitHubWindow("the proof", 1); err != nil {
+		if err := awaitGitHubWindow("the proof", 1, false); err != nil {
 			t.Fatal(err)
 		}
 		auth, _ := f.seen()
@@ -97,7 +98,7 @@ func TestAwaitGitHubWindow(t *testing.T) {
 	t.Run("exhausted waits once until the reset", func(t *testing.T) {
 		t.Setenv(GitHubTokenEnv, "")
 		f.set(0)
-		if err := awaitGitHubWindow("the proof", 1); err != nil {
+		if err := awaitGitHubWindow("the proof", 1, false); err != nil {
 			t.Fatal(err)
 		}
 		auth, slept := f.seen()
@@ -115,11 +116,33 @@ func TestAwaitGitHubWindow(t *testing.T) {
 		labGitHubAuthenticated = func() (bool, error) { return true, nil }
 		t.Cleanup(func() { labGitHubAuthenticated = prev })
 		f.set(0)
-		if err := awaitGitHubWindow("the proof", 1); err != nil {
+		if err := awaitGitHubWindow("the proof", 1, false); err != nil {
 			t.Fatal(err)
 		}
 		if _, slept := f.seen(); len(slept) != 0 {
 			t.Errorf("waited %v on the host's window although the lab's consumers carry a token", slept)
+		}
+	})
+
+	t.Run("a portal step waits while only agent-manager carries a credential", func(t *testing.T) {
+		t.Setenv(GitHubTokenEnv, "")
+		prevLab, prevPortal := labGitHubAuthenticated, portalAuthenticated
+		labGitHubAuthenticated = func() (bool, error) { return true, nil }
+		t.Cleanup(func() { labGitHubAuthenticated, portalAuthenticated = prevLab, prevPortal })
+		f.set(0)
+		if err := awaitGitHubWindow("the proof", 1, true); err != nil {
+			t.Fatal(err)
+		}
+		if _, slept := f.seen(); len(slept) != 1 {
+			t.Errorf("slept %v, want one wait: the portal reads on the anonymous window", slept)
+		}
+		portalAuthenticated = func() (bool, error) { return true, nil }
+		f.set(0)
+		if err := awaitGitHubWindow("the proof", 1, true); err != nil {
+			t.Fatal(err)
+		}
+		if _, slept := f.seen(); len(slept) != 0 {
+			t.Errorf("waited %v although agent-manager and the portal carry a credential", slept)
 		}
 	})
 
@@ -128,7 +151,7 @@ func TestAwaitGitHubWindow(t *testing.T) {
 		gitHubNow = func() time.Time { return reset.Add(-3 * time.Hour) }
 		t.Cleanup(func() { gitHubNow = prev })
 		f.set(0)
-		if err := awaitGitHubWindow("the proof", 1); err != nil {
+		if err := awaitGitHubWindow("the proof", 1, false); err != nil {
 			t.Fatal(err)
 		}
 		if _, slept := f.seen(); len(slept) != 1 || slept[0] != gitHubWindowMaxWait {
@@ -139,7 +162,7 @@ func TestAwaitGitHubWindow(t *testing.T) {
 	t.Run("short of the need waits once", func(t *testing.T) {
 		t.Setenv(GitHubTokenEnv, "")
 		f.set(9)
-		if err := awaitGitHubWindow("the proof", backstageTestGitHubRequests); err != nil {
+		if err := awaitGitHubWindow("the proof", backstageTestGitHubRequests, false); err != nil {
 			t.Fatal(err)
 		}
 		if _, slept := f.seen(); len(slept) != 1 {
@@ -152,7 +175,7 @@ func TestAwaitGitHubWindow(t *testing.T) {
 		gitHubSleep = func(time.Duration) {} // no refill
 		t.Cleanup(func() { gitHubSleep = prev })
 		f.set(0)
-		err := awaitGitHubWindow("the proof", 1)
+		err := awaitGitHubWindow("the proof", 1, false)
 		if err == nil || !strings.Contains(err.Error(), "still short") {
 			t.Errorf("err = %v, want the still-exhausted verdict", err)
 		}
@@ -165,7 +188,7 @@ func TestAwaitGitHubWindowUnreachableIsANote(t *testing.T) {
 	prev := gitHubRateLimitEndpoint
 	gitHubRateLimitEndpoint = "http://127.0.0.1:1/rate_limit"
 	t.Cleanup(func() { gitHubRateLimitEndpoint = prev })
-	if err := awaitGitHubWindow("the proof", 1); err != nil {
+	if err := awaitGitHubWindow("the proof", 1, false); err != nil {
 		t.Errorf("an unreachable /rate_limit failed the proof: %v", err)
 	}
 }
