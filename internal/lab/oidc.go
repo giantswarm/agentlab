@@ -160,13 +160,18 @@ func labHTTPClient(timeout time.Duration) (*http.Client, error) {
 // requiredAudiences and Backstage through components.backstage.extraScopes;
 // a password-grant token must ask for it itself, or the servers' downstream
 // OAuth presents a token the apiserver answers with 401.
-const musterLoginScopes = "openid email groups profile audience:server:client_id:" + config.KubernetesClientID
+const musterLoginScopes = "openid email groups profile " + crossClientScopePrefix + config.KubernetesClientID
 
 // musterWriterScopes adds the audience muster's own Kubernetes writes (a
 // workflow created through core_workflow_create, as the caller) require —
 // the one Backstage's sign-in requests too (components.backstage.extraScopes)
 // and the dex-k8s-authenticator client trusts agent-platform to ask for.
-const musterWriterScopes = musterLoginScopes + " audience:server:client_id:dex-k8s-authenticator"
+const musterWriterScopes = musterLoginScopes + " " + crossClientScopePrefix + config.DexK8sAuthenticatorClientID
+
+// crossClientScopePrefix is Dex's cross-client audience scope: a token
+// requested with crossClientScopePrefix+X carries audience X, provided Dex
+// client X lists the requesting client under trustedPeers.
+const crossClientScopePrefix = "audience:server:client_id:"
 
 func dexToken(cfg *config.Config, clientID, clientSecret string, form url.Values) (string, error) {
 	client, err := labHTTPClient(30 * time.Second)

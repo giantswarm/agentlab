@@ -1254,9 +1254,10 @@ func vmManagerImagesNote(vmm config.VMManager) string {
 func loginCmd() *cobra.Command {
 	var password string
 	var browser bool
+	var audiences []string
 	cmd := &cobra.Command{
 		Use:   "login [email]",
-		Short: "Log in as a lab user and write .token and kubeconfig.oidc (--browser: the real Dex login page)",
+		Short: "Log in as a lab user and write .token and kubeconfig.oidc (--audience agent-platform: a token muster's agent-platform servers accept; --browser: the real Dex login page)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
@@ -1269,6 +1270,9 @@ func loginCmd() *cobra.Command {
 			if browser {
 				if len(args) == 1 || password != "" {
 					return fmt.Errorf("--browser takes no user: the Dex login page asks for it (drop the argument and --password)")
+				}
+				if cmd.Flags().Changed("audience") {
+					return fmt.Errorf("--browser mints the kubernetes audience only: --audience is the headless login's")
 				}
 				return lab.BrowserLogin(cfg)
 			}
@@ -1284,10 +1288,12 @@ func loginCmd() *cobra.Command {
 					return fmt.Errorf("no user %q in %s (pass --password for an ad-hoc one)", email, config.File)
 				}
 			}
-			return lab.Login(cfg, email, pw)
+			return lab.Login(cfg, email, pw, audiences)
 		},
 	}
 	cmd.Flags().StringVar(&password, "password", "", "password (default: the one in agentlab.yaml)")
+	cmd.Flags().StringSliceVar(&audiences, "audience", lab.DefaultLoginAudiences,
+		"the token's audience, repeatable: kubernetes (the apiserver; writes kubeconfig.oidc), agent-platform (muster and the agent-platform MCP servers, workspace-manager among them), dex-k8s-authenticator")
 	cmd.Flags().BoolVar(&browser, "browser", false, "log in on the real Dex login page in a browser (authorization-code flow) instead of the headless password grant")
 	return cmd
 }
