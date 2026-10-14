@@ -96,6 +96,43 @@ func TestPackageChartStampsTheVersion(t *testing.T) {
 	}
 }
 
+// The catch-up asks for a fetch on the OCIRepository the connectivity
+// release's chartRef names: the versioned source of a meta chart that
+// versions it, the chart's own name before, the release's namespace where
+// the ref names none. Anything but an OCIRepository is refused.
+func TestConnectivityChartSource(t *testing.T) {
+	release := func(chartRef map[string]any) *unstructured.Unstructured {
+		hr := &unstructured.Unstructured{Object: map[string]any{}}
+		hr.SetName(config.ConnectivityChartName)
+		hr.SetNamespace(platformNamespace)
+		if chartRef != nil {
+			_ = unstructured.SetNestedField(hr.Object, chartRef, crSpec, "chartRef")
+		}
+		return hr
+	}
+	versioned := config.ConnectivityChartName + "-" + releasedChartVersion
+	for _, c := range []struct {
+		name          string
+		chartRef      map[string]any
+		wantNamespace string
+		wantName      string
+	}{
+		{"versioned source", map[string]any{kindKey: kindOCIRepository, nameKey: versioned, fieldNamespace: platformNamespace}, platformNamespace, versioned},
+		{"fixed name", map[string]any{kindKey: kindOCIRepository, nameKey: config.ConnectivityChartName, fieldNamespace: platformNamespace}, platformNamespace, config.ConnectivityChartName},
+		{"namespace of the ref", map[string]any{kindKey: kindOCIRepository, nameKey: versioned, fieldNamespace: "flux-system"}, "flux-system", versioned},
+		{"no namespace", map[string]any{kindKey: kindOCIRepository, nameKey: versioned}, platformNamespace, versioned},
+		{"no chartRef", nil, platformNamespace, config.ConnectivityChartName},
+	} {
+		namespace, name, err := connectivityChartSource(release(c.chartRef))
+		if err != nil || namespace != c.wantNamespace || name != c.wantName {
+			t.Errorf("%s: source = %s/%s, %v; want %s/%s", c.name, namespace, name, err, c.wantNamespace, c.wantName)
+		}
+	}
+	if _, _, err := connectivityChartSource(release(map[string]any{kindKey: "HelmChart", nameKey: versioned})); err == nil || !strings.Contains(err.Error(), "HelmChart") {
+		t.Errorf("a HelmChart chartRef: want the refusal naming it, got %v", err)
+	}
+}
+
 // The catch-up wait reads the chart digest the connectivity release runs
 // off its current history entry, helm-controller's record of the OCI
 // artifact — "" while the release has none yet.
