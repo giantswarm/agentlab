@@ -147,6 +147,10 @@ type WorkspacesMeasureOptions struct {
 	// GitURL is the provider's git base URL the pushes go to,
 	// <GitURL>/<owner>/<name>.git; "" is https://github.com.
 	GitURL string
+	// SandboxTree adds the spike's two turns in the Session's sandbox: git
+	// with the working tree on the volume, in /data and in /tmp, and which
+	// survive a suspend.
+	SandboxTree bool
 }
 
 // remote says whether the options name another cluster.
@@ -1144,7 +1148,12 @@ func (m *measurement) session(w *measureWorkspace, last bool) error {
 			return err
 		}
 	}
-	m.gitWork(w, id, owner)
+	if os.Getenv("SPIKE_SKIP_GITWORK") == "" {
+		m.gitWork(w, id, owner)
+	}
+	if m.opts.SandboxTree {
+		m.sandboxTree(ctx, w, ks)
+	}
 	if err := m.storage(w, last); err != nil {
 		return err
 	}
