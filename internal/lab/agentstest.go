@@ -877,7 +877,7 @@ func proveAgentsTestRefreshSkills(session *musterSession, fixture SkillsFixture,
 	if !authenticated {
 		step("%supdate_agent refreshSkills: skipped, agent-manager calls GitHub without a token", agentManagerToolPrefix)
 		note("deployment %s/%s carries no GitHub credential (%s): refreshSkills would resolve %s's head on the anonymous window this machine shares", platformNamespace, agentManagerMCPServer, strings.Join(agentManagerGitHubEnv, ", "), fixture.Repo)
-		return fmt.Sprintf("SKIP: update_agent{refreshSkills} — agent-manager calls GitHub unauthenticated, on GitHub's anonymous rate limit (60 requests an hour, shared by this machine); record the skills GitHub App (`agentlab configure --github-app-id <id> --github-app-installation-id <id> --github-app-private-key-source <ref>`), githubToken.source or $%s, then `agentlab platform`, to prove it", GitHubTokenEnv), nil
+		return fmt.Sprintf("SKIP: update_agent{refreshSkills} — agent-manager calls GitHub unauthenticated, on GitHub's anonymous rate limit (60 requests an hour, shared by this machine); record the skills GitHub App (`agentlab configure --github-app-installation-id <id>` for the workspaces GitHub App's installation, or with --github-app-id and --github-app-private-key-source another App), githubToken.source or $%s, then `agentlab platform`, to prove it", GitHubTokenEnv), nil
 	}
 	step("%supdate_agent refreshSkills — the skill re-pins to %s's head %.12s", agentManagerToolPrefix, fixture.Repo, head)
 	refreshed, err := agentManagerUpdate(session, map[string]any{nameKey: agentsTestAgent, refreshSkillsKey: true})

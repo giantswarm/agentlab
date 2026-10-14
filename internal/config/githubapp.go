@@ -23,6 +23,20 @@ type GitHubApp struct {
 	PrivateKeySource string `yaml:"privateKeySource,omitempty"`
 }
 
+// SkillsGitHubApp is the App agent-manager resolves skills with: githubApp,
+// its appId and privateKeySource those of the workspaces GitHub App
+// (platform.workspaces.github) when githubApp leaves both empty, so a lab
+// whose workspaces App is installed records only the installation id. Zero
+// when githubApp records nothing.
+func (c *Config) SkillsGitHubApp() GitHubApp {
+	app := c.GitHubApp
+	if app.Configured() && app.AppID == "" && app.PrivateKeySource == "" {
+		ws := c.Platform.Workspaces.GitHub
+		app.AppID, app.PrivateKeySource = ws.AppID, ws.PrivateKeySource
+	}
+	return app
+}
+
 // Configured reports whether any part of the App is recorded; Validate
 // refuses a partial one.
 func (a GitHubApp) Configured() bool {
@@ -36,7 +50,7 @@ func (a GitHubApp) Validate() error {
 		return nil
 	}
 	if a.AppID == "" || a.InstallationID == "" || a.PrivateKeySource == "" {
-		return errors.New("appId, installationId and privateKeySource are set together or not at all")
+		return errors.New("appId, installationId and privateKeySource are set together or not at all; installationId alone takes appId and privateKeySource from platform.workspaces.github")
 	}
 	for name, id := range map[string]string{"appId": a.AppID, "installationId": a.InstallationID} {
 		if !isDigits(id) {

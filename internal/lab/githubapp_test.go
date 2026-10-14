@@ -104,3 +104,42 @@ func TestEnsureGitHubAppSecret(t *testing.T) {
 		t.Errorf("err = %v, want the failed placement naming githubApp.privateKeySource", err)
 	}
 }
+
+// TestGitHubAppFromWorkspacesWiresAgentManager: a lab recording the
+// workspaces GitHub App and only the skills installation id wires
+// agent-manager's skills.github.app, and the Secret carries the workspaces
+// App's id while its private key source goes to the secret tooling.
+func TestGitHubAppFromWorkspacesWiresAgentManager(t *testing.T) {
+	t.Setenv(GitHubTokenEnv, "")
+	const workspacesKeySource = "/lab/agents.sops.yaml#stringData.private-key"
+	cfg := gitHubTokenTestConfig()
+	cfg.Platform.Workspaces.GitHub = config.WorkspaceGitHub{AppID: "5288072", ClientID: "Iv23liclient", PrivateKeySource: workspacesKeySource}
+	cfg.GitHubApp.InstallationID = "171259128"
+
+	s := renderGitHubTokenSurfaces(t, cfg)
+	if got := dig(s.values, agentManagerValuesKey, "skills", "github", "app", "secretName"); got != gitHubAppSecret {
+		t.Errorf("agent-manager.skills.github.app.secretName = %v, want %s", got, gitHubAppSecret)
+	}
+	for name, text := range s.raw() {
+		if strings.Contains(text, workspacesKeySource) {
+			t.Errorf("%s carries the private key reference:\n%s", name, text)
+		}
+	}
+
+	newFakeLab(t)
+	ctx := context.Background()
+	calls := fakeSecretTool(t, func() error { return nil })
+	if err := ensureGitHubAppSecret(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{secretCopyArgs(workspacesKeySource, secretTarget(cfg, platformNamespace, gitHubAppSecret, gitHubAppSecretPrivateKey))}
+	if !reflect.DeepEqual(*calls, want) {
+		t.Errorf("secret tooling calls = %q, want %q", *calls, want)
+	}
+	for key, value := range map[string]string{gitHubAppSecretAppID: "5288072", gitHubAppSecretInstallationID: "171259128"} {
+		got, err := secretDataKey(ctx, platformNamespace, gitHubAppSecret, key)
+		if err != nil || string(got) != value {
+			t.Errorf("%s/%s key %s = %q (err %v), want %q", platformNamespace, gitHubAppSecret, key, got, err, value)
+		}
+	}
+}

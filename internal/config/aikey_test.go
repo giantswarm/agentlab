@@ -67,3 +67,41 @@ func TestGitHubAppValidate(t *testing.T) {
 		}
 	}
 }
+
+// TestSkillsGitHubAppFromWorkspaces: an installation id alone takes the
+// workspaces GitHub App's id and private key source; a githubApp that names
+// its own App keeps it, and without an installation id there is no skills
+// App and no refusal.
+func TestSkillsGitHubAppFromWorkspaces(t *testing.T) {
+	workspaces := WorkspaceGitHub{AppID: "5288072", ClientID: "Iv23liclient", PrivateKeySource: "/lab/agents.sops.yaml#stringData.private-key"}
+
+	cfg := Default()
+	cfg.Platform.Workspaces.GitHub = workspaces
+	if got := cfg.SkillsGitHubApp(); got.Configured() {
+		t.Errorf("no installation id: skills App = %+v, want none", got)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("a workspaces App without a skills installation refused: %v", err)
+	}
+
+	cfg.GitHubApp.InstallationID = "171259128"
+	want := GitHubApp{AppID: workspaces.AppID, InstallationID: "171259128", PrivateKeySource: workspaces.PrivateKeySource}
+	if got := cfg.SkillsGitHubApp(); got != want {
+		t.Errorf("skills App = %+v, want the workspaces App's %+v", got, want)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("an installation id on the workspaces App refused: %v", err)
+	}
+
+	own := GitHubApp{AppID: "123456", InstallationID: "7890", PrivateKeySource: "op://lab/skills-app/private-key"}
+	cfg.GitHubApp = own
+	if got := cfg.SkillsGitHubApp(); got != own {
+		t.Errorf("skills App = %+v, want its own %+v", got, own)
+	}
+
+	cfg = Default()
+	cfg.GitHubApp.InstallationID = "171259128"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "platform.workspaces.github") {
+		t.Errorf("an installation id without any App: want a refusal naming platform.workspaces.github, got %v", err)
+	}
+}
