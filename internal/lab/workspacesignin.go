@@ -550,7 +550,7 @@ func WorkspacesSignInTest(cfg *config.Config, opts WorkspacesSignInTestOptions) 
 	}
 
 	step("authorize_workspace %s as %s (reads both) and as %s (not %s)", workspaceSignInProofName, admin.user.Email, member.user.Email, workspaceSignInPrivate)
-	granted, err := admin.authorizeWorkspace(workspaceSignInProofName)
+	granted, err := authorizeAfterRoll(admin, opts.SyncTimeout)
 	if err != nil {
 		return err
 	}
@@ -571,6 +571,29 @@ func WorkspacesSignInTest(cfg *config.Config, opts WorkspacesSignInTestOptions) 
 	fmt.Printf("\nWorkspace sign-in proof passed: %s and %s connected to %s headlessly, authorize_workspace granted for the one and refused naming %s for the other.\n",
 		admin.user.Email, member.user.Email, instance, private)
 	return nil
+}
+
+// authorizeAfterRoll is authorize_workspace as the person on a
+// workspace-manager just rolled, which answers before it reaches everything:
+// a call muster cannot deliver yet, or a refusal that asks to try again (the
+// provider not answering in time), is retried until timeout. Every other
+// answer, connect_required among them, is the answer.
+func authorizeAfterRoll(p *workspacePerson, timeout time.Duration) (workspaceAuthorization, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		a, err := p.authorizeWorkspace(workspaceSignInProofName)
+		transient := (err != nil && strings.Contains(err.Error(), "transport error")) ||
+			(err == nil && a.Outcome == "refused" && strings.Contains(a.Reason, "try again"))
+		if !transient || time.Now().After(deadline) {
+			return a, err
+		}
+		if err != nil {
+			note("the rolled workspace-manager does not answer yet: %.200s", err)
+		} else {
+			note("the rolled workspace-manager answers %s (%s): again", a.Outcome, a.Reason)
+		}
+		time.Sleep(5 * time.Second)
+	}
 }
 
 // workspaceView is get_workspace's answer (the workspace-manager's
