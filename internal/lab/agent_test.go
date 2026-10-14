@@ -483,7 +483,7 @@ func fakeMuster(t *testing.T, tool string, result string, isError bool) (*httpte
 		}
 		captured = rpc.Params.Arguments.Arguments
 		envelope, _ := json.Marshal(map[string]any{"isError": isError, "content": []map[string]any{{fieldType: fieldText, fieldText: result}}})
-		answer, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": rpc.ID, "result": map[string]any{"content": []map[string]any{{fieldType: fieldText, fieldText: string(envelope)}}}})
+		answer := rpcAnswer(rpc.ID, map[string]any{mcpContentKey: mcpTextContent(string(envelope))})
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(answer)
 	}))

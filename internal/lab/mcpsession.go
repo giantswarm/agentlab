@@ -2,6 +2,7 @@ package lab
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -148,6 +149,11 @@ func (s *musterSession) callTool(name string, args map[string]any) (map[string]a
 	}
 	defer func() { _ = resp.Body.Close() }()
 	raw, _ := io.ReadAll(resp.Body)
+	// A refusal at the HTTP layer (a 401 whose body is an OAuth error object)
+	// is no JSON-RPC answer: decoding it as one hides the cause.
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil, &musterHTTPError{tool: name, status: resp.StatusCode, body: strings.TrimSpace(string(raw))}
+	}
 	parsed, err := parseMCPResponse(raw)
 	if err != nil {
 		return nil, fmt.Errorf("parsing muster response to %s: %w\n%.300s", name, err, strings.TrimSpace(string(raw)))
@@ -157,6 +163,23 @@ func (s *musterSession) callTool(name string, args map[string]any) (map[string]a
 	}
 	return parsed, nil
 }
+
+// musterHTTPError is muster's non-2xx answer to a tools/call: the status and
+// its body (an OAuth error object on a 401), never parsed as JSON-RPC.
+type musterHTTPError struct {
+	tool   string
+	status int
+	body   string
+}
+
+func (e *musterHTTPError) Error() string {
+	return fmt.Sprintf("muster answered %s with HTTP %d %s: %.300s", e.tool, e.status, http.StatusText(e.status), e.body)
+}
+
+// errEmptyToolAnswer is a call_tool answer without the target tool's result:
+// muster can cut a long call and answer nothing. For a read it stays an
+// error; a mutating call's caller re-checks the state instead.
+var errEmptyToolAnswer = errors.New("call_tool answered without the tool's result")
 
 // The paging arguments of muster's list_tools and filter_tools.
 const (
@@ -236,6 +259,9 @@ func (s *musterSession) callToolEnvelope(name string, args map[string]any) (*too
 				Text string `json:"text"`
 			}{Text: inner})
 			return &env, nil
+		}
+		if strings.TrimSpace(inner) == "" {
+			return nil, fmt.Errorf("%s: %w", name, errEmptyToolAnswer)
 		}
 		return nil, fmt.Errorf("unexpected call_tool payload shape for %s: %.300s", name, inner)
 	}

@@ -2,7 +2,6 @@ package lab
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -249,7 +248,7 @@ func TestMusterSessionRenewsAcrossExpiry(t *testing.T) {
 			http.Error(w, `{"error":"invalid_token"}`, http.StatusUnauthorized)
 			return
 		}
-		answer, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "result": map[string]any{}})
+		answer := rpcAnswer(1, map[string]any{})
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(answer)
 	}))
