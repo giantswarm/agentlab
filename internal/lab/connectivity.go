@@ -150,7 +150,8 @@ func packageChart(dir, version string) ([]byte, error) {
 // pushed. The meta chart's OCIRepository fetches its tag on gitops.interval
 // (ten minutes), and a re-push under the same version changes the content
 // behind the tag, not the object the install wrote — so it is asked to
-// fetch now (the reconcile request annotation), and the release is waited
+// fetch now (the reconcile request annotation) — the OCIRepository the
+// release's spec.chartRef names (connectivityChartSource) — and the release is waited
 // for until its current revision names the pushed manifest digest
 // (status.history[0].ociDigest, what helm-controller stamps into the chart
 // version as <version>+<digest>) and it is Ready. A lab whose release
@@ -166,8 +167,16 @@ func waitConnectivityCatchUp(ctx context.Context, digest string) error {
 		return err
 	}
 	name := config.ConnectivityChartName
+	hr, err := getObject(ctx, hrGVR, platformNamespace, name)
+	if err != nil {
+		return err
+	}
+	sourceNamespace, source, err := connectivityChartSource(hr)
+	if err != nil {
+		return err
+	}
 	patch := fmt.Sprintf(`{"metadata":{"annotations":{%q:%q}}}`, fluxReconcileAnnotation, time.Now().UTC().Format(time.RFC3339Nano))
-	if err := patchObject(ctx, ociGVR, platformNamespace, name, types.MergePatchType, []byte(patch)); err != nil {
+	if err := patchObject(ctx, ociGVR, sourceNamespace, source, types.MergePatchType, []byte(patch)); err != nil {
 		return err
 	}
 	var last string
@@ -184,10 +193,31 @@ func waitConnectivityCatchUp(ctx context.Context, digest string) error {
 	})
 	if !caught {
 		return fmt.Errorf("HelmRelease %s does not run the connectivity chart pushed as %s after %s (%s)\ncheck `kubectl -n %s describe ocirepository %s` and `kubectl -n %s describe helmrelease %s`",
-			name, digest, connectivityCatchUpTimeout, last, platformNamespace, name, platformNamespace, name)
+			name, digest, connectivityCatchUpTimeout, last, sourceNamespace, source, platformNamespace, name)
 	}
 	note("HelmRelease %s runs the connectivity chart of the checkout (%s)", name, digest)
 	return nil
+}
+
+// connectivityChartSource is the OCIRepository the connectivity release
+// renders from, as its spec.chartRef names it: a meta chart that versions
+// the sources of the charts released with it names it
+// agent-platform-connectivity-<version>, an earlier one by the chart's own
+// name. A chartRef without a namespace is the release's; a release without
+// a chartRef (an earlier shape) reads the chart's own name too.
+func connectivityChartSource(hr *unstructured.Unstructured) (namespace, name string, err error) {
+	ref, _, _ := unstructured.NestedStringMap(hr.Object, crSpec, "chartRef")
+	if kind := ref[kindKey]; kind != "" && kind != kindOCIRepository {
+		return "", "", fmt.Errorf("HelmRelease %s/%s renders from a %s, not an %s the lab pushes the connectivity chart for", hr.GetNamespace(), hr.GetName(), kind, kindOCIRepository)
+	}
+	namespace, name = ref["namespace"], ref[nameKey]
+	if namespace == "" {
+		namespace = hr.GetNamespace()
+	}
+	if name == "" {
+		name = config.ConnectivityChartName
+	}
+	return namespace, name, nil
 }
 
 // currentReleaseOCIDigest is the OCI manifest digest of the chart a
