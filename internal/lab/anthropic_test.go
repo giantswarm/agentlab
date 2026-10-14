@@ -346,3 +346,71 @@ func TestWaitDefaultModelConfigResolved(t *testing.T) {
 		t.Errorf("a False that turns True within the looks: %v", err)
 	}
 }
+
+// TestEnsurePortalAnthropicSecret: the portal's copy lands in its own
+// namespace by the agents' rules — the variable on a fresh lab, the recorded
+// source through the tooling to agent-platform/agentlab-anthropic — and the
+// agents' Secret is not touched.
+func TestEnsurePortalAnthropicSecret(t *testing.T) {
+	stored := func(t *testing.T, f *fakeLab) string {
+		t.Helper()
+		encoded, _, _ := unstructured.NestedString(f.stored(t, gvrSecrets, platformNamespace, portalAnthropicSecret).Object, "data", anthropicSecretKey)
+		raw, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+
+	t.Run("from the variable", func(t *testing.T) {
+		t.Setenv(AnthropicKeyEnv, testEnvKey)
+		fakeSecretTool(t, nil)
+		f := newFakeLab(t)
+		wrote, err := ensurePortalAnthropicSecret(config.Default())
+		if err != nil || !wrote {
+			t.Fatalf("wrote %v, %v", wrote, err)
+		}
+		if got := stored(t, f); got != testEnvKey {
+			t.Errorf("key %q, want the variable's", got)
+		}
+		if _, err := f.dyn.Tracker().Get(gvrSecrets, kagentNamespace, anthropicSecret); !apierrors.IsNotFound(err) {
+			t.Errorf("the agents' Secret was written: %v", err)
+		}
+		if wrote, err := ensurePortalAnthropicSecret(config.Default()); err != nil || wrote {
+			t.Errorf("a re-run leaves the key: wrote %v, %v", wrote, err)
+		}
+	})
+
+	t.Run("from the source", func(t *testing.T) {
+		t.Setenv(AnthropicKeyEnv, "")
+		cfg := config.Default()
+		cfg.AIKey.Source = testKeySource
+		f := newFakeLab(t)
+		calls := fakeSecretTool(t, func() error {
+			return ensureSecret(platformNamespace, portalAnthropicSecret, corev1.SecretTypeOpaque, map[string][]byte{anthropicSecretKey: []byte(testVaultKey)})
+		})
+		wrote, err := ensurePortalAnthropicSecret(cfg)
+		if err != nil || !wrote {
+			t.Fatalf("wrote %v, %v", wrote, err)
+		}
+		want := secretCopyArgs(testKeySource, "kind-agentlab/agent-platform/agentlab-anthropic/ANTHROPIC_API_KEY")
+		if len(*calls) != 1 || !reflect.DeepEqual((*calls)[0], want) {
+			t.Errorf("tooling calls %v, want one: %v", *calls, want)
+		}
+		if got := stored(t, f); got != testVaultKey {
+			t.Errorf("key %q, want the one the tooling placed", got)
+		}
+	})
+
+	t.Run("placeholder", func(t *testing.T) {
+		t.Setenv(AnthropicKeyEnv, "")
+		fakeSecretTool(t, nil)
+		f := newFakeLab(t)
+		if wrote, err := ensurePortalAnthropicSecret(config.Default()); err != nil || !wrote {
+			t.Fatalf("wrote %v, %v", wrote, err)
+		}
+		if got := stored(t, f); got != placeholderAPIKey {
+			t.Errorf("key %q, want the placeholder, so the portal's envFrom resolves", got)
+		}
+	})
+}

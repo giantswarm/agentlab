@@ -372,6 +372,21 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	if err := ensureGitHubTokenSecrets(ctx, cfg); err != nil {
 		return err
 	}
+	// The portal's copy of the Anthropic key (anthropic.go) — before the
+	// install too: its envFrom references the Secret without `optional`. A
+	// key written under a running portal rolls it once after the install.
+	var portalKeyWritten bool
+	if cfg.Backstage.Enabled {
+		deployed, err := objectExists(ctx, gvrDeployments, platformNamespace, componentBackstage)
+		if err != nil {
+			return err
+		}
+		wrote, err := ensurePortalAnthropicSecret(cfg)
+		if err != nil {
+			return err
+		}
+		portalKeyWritten = wrote && deployed
+	}
 	// The skills GitHub App (githubapp.go) — before the install too:
 	// agent-manager's env reads its Secret without `optional`.
 	if err := ensureGitHubAppSecret(ctx, cfg); err != nil {
@@ -413,12 +428,14 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	// before the pod starts. Applied on every run, which also puts back a
 	// hand edit (appconfig.go); the roll that a restore or a changed catalog
 	// needs waits for the install, together with the chart's app-config.
-	var rollBackstageAfterInstall bool
+	rollBackstageAfterInstall := portalKeyWritten
 	if cfg.Backstage.Enabled {
 		if overlay, _, err := renderManifest(cfg, backstageOverlayTemplate); err != nil {
 			return err
-		} else if rollBackstageAfterInstall, err = applyBackstageOverlay(ctx, overlay, !cfg.FamilylessChart()); err != nil {
+		} else if roll, err := applyBackstageOverlay(ctx, overlay, !cfg.FamilylessChart()); err != nil {
 			return err
+		} else if roll {
+			rollBackstageAfterInstall = true
 		}
 	}
 
@@ -789,7 +806,8 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 		}
 	}
 	// The chart's app-config ConfigMap put back to its release's render
-	// (appconfig.go), then one Backstage roll for whatever the lab restored.
+	// (appconfig.go), then one Backstage roll for whatever the lab restored
+	// or the Anthropic key it placed under the running portal.
 	if cfg.Backstage.Enabled {
 		restored, err := restoreChartAppConfig(ctx)
 		if err != nil {

@@ -284,16 +284,14 @@ API the lab can drive.
   trap, except this one also swallows the static frontend: every route returns
   `503 Service has not started up yet`, which reads like a crash rather than a
   dependency problem.
-- **`ai-chat` needs `$ANTHROPIC_API_KEY` at deploy time.** The image's base
-  app-config already reads the key from that env var, and the lab overlay sets
-  `aiChat.model` to the lab's `aiModel` (claude-\* routes to Anthropic);
-  the key reaches the pod from a Secret in Backstage's namespace, injected as
-  `optional:` so the pod boots without it.
-  When the key is absent, ai-chat is simply unconfigured — and its
-  assistant-ui runtime then logs five `Maximum update depth exceeded` errors
-  on the signed-out page before React bails out. Cosmetic (the page renders,
-  login works), and disabling the plugin would mean restating the whole
-  extensions list per the first gotcha; the lab accepts the noise instead.
+- **`ai-chat` runs on the lab's `aiModel`.** Backstage's own default is an
+  OpenAI model, for which the lab has no key, so the lab overlay sets
+  `aiChat.model` to `aiModel` (claude-\* routes to Anthropic) and
+  `aiChat.anthropic.apiKey` to `${ANTHROPIC_API_KEY}`. The key reaches the pod
+  from `agent-platform/agentlab-anthropic` (`extraEnvVarsSecrets`), placed by
+  the same rules as the agents' `kagent/kagent-anthropic`: `aiKey.source`,
+  else `$ANTHROPIC_API_KEY` at deploy time, else the placeholder, on which the
+  chat answers nothing. A key placed under a running portal rolls it once.
 - **A muster with no workflows looks like a broken plugin.** The workflow list
   is the plugin's main surface, and a fresh muster has none, so the tab renders
   empty. `agentlab platform` seeds one (`lab-cluster-overview`) that lists

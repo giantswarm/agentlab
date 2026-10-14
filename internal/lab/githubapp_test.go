@@ -30,8 +30,8 @@ func TestGitHubAppWiresAgentManager(t *testing.T) {
 	if got := dig(s.values, agentManagerValuesKey, "skills", "github", "tokenSecret"); got != nil {
 		t.Errorf("agent-manager.skills.github.tokenSecret = %v next to the App, want nothing", got)
 	}
-	if got := dig(s.values, componentBackstage, componentBackstage, "extraEnvVarsSecrets"); !reflect.DeepEqual(got, []any{gitHubTokenSecret}) {
-		t.Errorf("backstage.backstage.extraEnvVarsSecrets = %v, want the portal's token [%s]", got, gitHubTokenSecret)
+	if got := dig(s.values, componentBackstage, componentBackstage, "extraEnvVarsSecrets"); !reflect.DeepEqual(got, []any{portalAnthropicSecret, gitHubTokenSecret}) {
+		t.Errorf("backstage.backstage.extraEnvVarsSecrets = %v, want the portal's key and token [%s %s]", got, portalAnthropicSecret, gitHubTokenSecret)
 	}
 	for name, text := range s.raw() {
 		if strings.Contains(text, gitHubAppTestKeySource) {

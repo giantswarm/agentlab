@@ -176,3 +176,18 @@ func TestAgentManagerVerdict(t *testing.T) {
 		})
 	}
 }
+
+// TestBackstageOverlayAIChatModel: the overlay names the AI chat's model —
+// the lab's aiModel, never Backstage's OpenAI default — and the Anthropic key
+// as the reference the portal's environment resolves, never a value.
+func TestBackstageOverlayAIChatModel(t *testing.T) {
+	cfg := config.Default()
+	cfg.AIModel = "claude-opus-4-1"
+	overlay := backstageOverlayAppConfig(t, cfg)
+	if got := dig(overlay, "aiChat", "model"); got != cfg.AIModel {
+		t.Errorf("overlay aiChat.model = %v, want the lab's aiModel %s", got, cfg.AIModel)
+	}
+	if got := dig(overlay, "aiChat", "anthropic", "apiKey"); got != "${"+AnthropicKeyEnv+"}" {
+		t.Errorf("overlay aiChat.anthropic.apiKey = %v, want ${%s}", got, AnthropicKeyEnv)
+	}
+}
