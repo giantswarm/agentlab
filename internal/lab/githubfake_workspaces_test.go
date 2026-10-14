@@ -666,7 +666,7 @@ func TestWorkspaceGitHubAPIHost(t *testing.T) {
 		t.Errorf("url = %v, want %s", got, want)
 	}
 
-	const sub = "atespaces:kagent:actors:session-s1"
+	const sub = "actor/kagent/session-s1"
 	if status := call("/agentlab/caller-credential/t1", unsignedJWT(map[string]any{"aud": []string{config.WorkspaceProviderFakeBearer}, claimSubject: sub}), nil); status != http.StatusUnauthorized {
 		t.Errorf("a JWT the fake did not issue = %d, want 401", status)
 	}

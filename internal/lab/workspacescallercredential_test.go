@@ -16,12 +16,13 @@ func TestJudgeCallerCredential(t *testing.T) {
 		logged []githubRequest
 		want   string
 	}{
-		"the Actor's JWT":       {[]githubRequest{jwt([]string{aud}, "atespaces:kagent:actors:session-s1")}, ""},
+		"the Actor's JWT":       {[]githubRequest{jwt([]string{aud}, "actor/kagent/session-s1")}, ""},
 		"nothing reached it":    {nil, "never reached the lab's GitHub"},
 		"the placeholder":       {[]githubRequest{{Credential: credPlaceholder}}, "the credential placeholder, not the Session Actor's JWT"},
-		"another audience":      {[]githubRequest{jwt([]string{"fake"}, "atespaces:kagent:actors:session-s1")}, wrongClaims},
-		"another Session":       {[]githubRequest{jwt([]string{aud}, "atespaces:kagent:actors:session-s2")}, wrongClaims},
+		"another audience":      {[]githubRequest{jwt([]string{"fake"}, "actor/kagent/session-s1")}, wrongClaims},
+		"another Session":       {[]githubRequest{jwt([]string{aud}, "actor/kagent/session-s2")}, wrongClaims},
 		"a subject of no Actor": {[]githubRequest{jwt([]string{aud}, "session-s1")}, wrongClaims},
+		"another Actor's path":  {[]githubRequest{jwt([]string{aud}, "actor/kagent/x/session-s1")}, wrongClaims},
 	} {
 		_, err := judgeCallerCredential(tc.logged, "401", aud, session)
 		switch {
