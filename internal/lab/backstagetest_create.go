@@ -357,7 +357,7 @@ func proveCreatePath(primary, viewer *portalSession) (agentSpec, *agentTemplate,
 	// pin; their window is this machine's (githubwindow.go) — printed, and
 	// waited for once when it holds less than the run spends, rather than
 	// failing on the truncated listing below.
-	if err := awaitGitHubWindow("backstage-test's skill discovery and pinning", backstageTestGitHubRequests); err != nil {
+	if err := awaitGitHubWindow("backstage-test's skill discovery and pinning", backstageTestGitHubRequests, true); err != nil {
 		return fail(err)
 	}
 	discovery, err := discoverSkills(primary, skillsTestRepo)

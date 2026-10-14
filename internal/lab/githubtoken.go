@@ -136,6 +136,30 @@ func agentManagerGitHubAuthenticated() (bool, error) {
 	return deploymentSetsEnv(&d, agentManagerGitHubEnv), nil
 }
 
+// portalGitHubAuthenticated reports whether the portal's discovery calls
+// GitHub with a credential: its Deployment takes the token's or the App's
+// Secret through envFrom (the values are never read).
+func portalGitHubAuthenticated() (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	obj, err := getObject(ctx, gvrDeployments, platformNamespace, componentBackstage)
+	if err != nil {
+		return false, err
+	}
+	var d appsv1.Deployment
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(obj.Object, &d); err != nil {
+		return false, fmt.Errorf("reading %s: %w", describe(gvrDeployments, platformNamespace, componentBackstage), err)
+	}
+	for _, c := range d.Spec.Template.Spec.Containers {
+		for _, e := range c.EnvFrom {
+			if e.SecretRef != nil && (e.SecretRef.Name == gitHubTokenSecret || e.SecretRef.Name == portalGitHubAppSecret) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
 // deploymentSetsEnv reports whether any container of the Deployment sets one
 // of the env vars by name (the value, a Secret reference, is never read).
 func deploymentSetsEnv(d *appsv1.Deployment, names []string) bool {

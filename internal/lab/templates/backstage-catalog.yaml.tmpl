@@ -88,16 +88,28 @@ data:
       model: {{ .AIModel }}
       anthropic:
         apiKey: ${ANTHROPIC_API_KEY}
-{{- if .GitHubToken }}
+{{- if or .GitHubToken .PortalGitHubApp }}
     # The portal's skill discovery (the gs backend's GET /api/gs/agent-skills
-    # reads GitHub through Backstage's integrations) authenticates with the
-    # token the lab put into the pod's environment (extraEnvVarsSecrets in
-    # agent-platform-values.yaml, from the Secret githubtoken.go creates). A
-    # reference Backstage resolves at start-up, never the value.
+    # reads GitHub through Backstage's integrations) authenticates with what
+    # the lab put into the pod's environment (extraEnvVarsSecrets in
+    # agent-platform-values.yaml): the skills GitHub App (githubapp.go;
+    # publicAccess, so a public repository of any owner gets an installation
+    # token) and the token (githubtoken.go). References Backstage resolves at
+    # start-up, never the values.
     integrations:
       github:
         - host: github.com
+{{- if .GitHubToken }}
           token: ${GITHUB_TOKEN}
+{{- end }}
+{{- if .PortalGitHubApp }}
+          apps:
+            - appId: ${GITHUB_APP_ID}
+              clientId: ${GITHUB_APP_CLIENT_ID}
+              clientSecret: ${GITHUB_APP_CLIENT_SECRET}
+              privateKey: ${GITHUB_APP_PRIVATE_KEY}
+              publicAccess: true
+{{- end }}
 {{- end }}
 {{- if .Platform.Observability }}
     # The umbrella hardcodes mimirEnabled: false — standalone installations

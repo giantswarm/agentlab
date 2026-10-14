@@ -200,6 +200,11 @@ type tmplData struct {
 	// agentlab-github-app instead of the token, which its chart refuses
 	// together with the App. Only ever the Secret's name.
 	GitHubApp bool
+	// PortalGitHubApp mirrors portalGitHubAppWired(cfg): the App carries its
+	// OAuth client, so the portal's envFrom takes agentlab-portal-github-app
+	// and the overlay's integrations.github lists the App. Only ever the
+	// Secret's name and env var references.
+	PortalGitHubApp bool
 	// BackstageAppConfigChecksum is the data checksum of the lab's app-config
 	// overlay (appconfig.go): stamped on the overlay ConfigMap, where
 	// `agentlab status` reads a hand edit against it, and carried in the
@@ -292,6 +297,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		SubstrateNodeKey:             config.SubstrateNodeKey,
 		GitHubToken:                  gitHubTokenWired(cfg),
 		GitHubApp:                    gitHubAppWired(cfg),
+		PortalGitHubApp:              portalGitHubAppWired(cfg),
 		ModelManagerEnabled:          cfg.ModelManagerEnabled(),
 		LegacyChart:                  cfg.LegacyChart(),
 		FamilylessChart:              cfg.FamilylessChart(),
