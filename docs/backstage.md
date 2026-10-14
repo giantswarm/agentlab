@@ -211,7 +211,9 @@ and the runtime is a snapshot, the logical state still `READY` (`SUSPENDED`
 is the explicit suspend) — and the next message resumes the conversation
 intact (a codeword told in turn one, recalled in turn two); rename, the tasks list,
 `session-states` and `session-usage` read; another user does not list the
-session and reads it as 404; the delete leaves nothing.
+session and reads it as 404; the delete leaves nothing (sent again while
+kagent answers 409 "not yet settled", the turn's quiescence still running,
+bounded by the quiescence a turn is given).
 
 **HITL and Stop**, on a second agent the lab writes itself with
 `muster.requireApproval: true` (chart ≥ 1.1.0; the proof asks the shared
