@@ -158,6 +158,8 @@ func TestWorkspacesMeasureOptionsValidate(t *testing.T) {
 		{"negative runs", WorkspacesMeasureOptions{Runs: -1}, "--runs"},
 		{"a large repository too large", WorkspacesMeasureOptions{LargeRepoMiB: githubFakeMaxGeneratedMiB + 1}, "--large-repo-mib"},
 		{"another cluster's flag in the lab", WorkspacesMeasureOptions{LargeRepo: "o/big"}, "--large-repo names another cluster's"},
+		{"another cluster's git URL in the lab", WorkspacesMeasureOptions{GitURL: "https://git.example.com"}, "--git-url names another cluster's"},
+		{"another cluster with a git URL", func() WorkspacesMeasureOptions { o := remote; o.GitURL = "https://git.example.com"; return o }(), ""},
 		{"another cluster", remote, ""},
 		{"another cluster with an Agent", withAgent, ""},
 		{"a half target", WorkspacesMeasureOptions{KubeContext: "ctx"}, "--muster-url"},
@@ -511,5 +513,112 @@ func TestWorkspacesMeasureOptionsGoProxy(t *testing.T) {
 		if err := (WorkspacesMeasureOptions{GoProxy: bad}).validate(); err == nil {
 			t.Errorf("--goproxy %q accepted", bad)
 		}
+	}
+}
+
+// measureTestPushed is the repository the pusher tests push to.
+const measureTestPushed = "o/pushed"
+
+// measureTestRepo is a bare repository with one commit on main, served to
+// the pusher at a file:// URL.
+func measureTestRepo(t *testing.T) (bare, url, head string) {
+	t.Helper()
+	dir := t.TempDir()
+	bare, work := filepath.Join(dir, "origin.git"), filepath.Join(dir, "work")
+	run := func(d string, args ...string) string {
+		t.Helper()
+		out, err := personGit(d, args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	run(dir, "init", "-q", "--bare", "-b", measureLabBranch, bare)
+	run(dir, "init", "-q", "-b", measureLabBranch, work)
+	if err := os.WriteFile(filepath.Join(work, "README.md"), []byte("# a\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run(work, "add", "README.md")
+	run(work, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "a")
+	run(work, "push", "-q", bare, measureLabBranch)
+	return bare, "file://" + bare, run(work, "rev-parse", "HEAD")
+}
+
+func TestMeasurePusher(t *testing.T) {
+	t.Setenv("GIT_AUTHOR_NAME", "t")
+	t.Setenv("GIT_AUTHOR_EMAIL", "t@example.com")
+	t.Setenv("GIT_COMMITTER_NAME", "t")
+	t.Setenv("GIT_COMMITTER_EMAIL", "t@example.com")
+	// The clones go under the state directory, relative to the working
+	// directory.
+	t.Chdir(t.TempDir())
+	if err := os.Mkdir(StateDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	ref := func(bare, branch string) string {
+		out, _ := personGit(bare, "rev-parse", "--verify", "-q", "refs/heads/"+branch)
+		return out
+	}
+	t.Run("scratch", func(t *testing.T) {
+		bare, url, start := measureTestRepo(t)
+		m := &measurement{pushers: map[string]*measurePusher{}}
+		pu := &measurePusher{repo: measureTestPushed, branch: "agentlab-workspaces-measure-x", scratch: true, git: personGit}
+		if err := m.clonePusher(pu, url); err != nil {
+			t.Fatal(err)
+		}
+		first, err := m.push(measureTestPushed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		second, err := m.push(measureTestPushed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if first == second || ref(bare, pu.branch) != second {
+			t.Errorf("the scratch branch is at %q after pushes %s and %s, want the second", ref(bare, pu.branch), first, second)
+		}
+		if ref(bare, measureLabBranch) != start {
+			t.Errorf("a scratch push moved main to %s from %s", ref(bare, measureLabBranch), start)
+		}
+		if err := pu.unpush(); err != nil {
+			t.Fatal(err)
+		}
+		if got := ref(bare, pu.branch); got != "" {
+			t.Errorf("the scratch branch is still there at %s", got)
+		}
+	})
+	t.Run("the lab's default branch", func(t *testing.T) {
+		bare, url, start := measureTestRepo(t)
+		m := &measurement{pushers: map[string]*measurePusher{}}
+		pu := &measurePusher{repo: measureTestPushed, branch: measureLabBranch, git: personGit}
+		if err := m.clonePusher(pu, url); err != nil {
+			t.Fatal(err)
+		}
+		head, err := m.push(measureTestPushed)
+		if err != nil || ref(bare, measureLabBranch) != head {
+			t.Fatalf("main at %s after a push of %s: %v", ref(bare, measureLabBranch), head, err)
+		}
+		if err := pu.unpush(); err != nil {
+			t.Fatal(err)
+		}
+		if ref(bare, measureLabBranch) != start {
+			t.Errorf("main at %s after the cleanup, want back at %s", ref(bare, measureLabBranch), start)
+		}
+	})
+	t.Run("no push", func(t *testing.T) {
+		pu := &measurePusher{repo: measureTestPushed, branch: "b", scratch: true, git: func(string, ...string) (string, error) {
+			t.Fatal("unpush ran git without a push")
+			return "", nil
+		}}
+		if err := pu.unpush(); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+func TestMeasureReportSessionsLeft(t *testing.T) {
+	md := (&measureReport{Runs: 1, SessionsLeft: []string{"s1", "s2"}}).markdown()
+	if !strings.Contains(md, "**Sessions left:** the cleanup could not delete `s1`, `s2`") {
+		t.Errorf("the Markdown does not name the Sessions left:\n%s", md)
 	}
 }

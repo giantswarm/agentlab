@@ -57,8 +57,10 @@ import (
 // their volumes, the Sessions, the Agent, the probe pods, the pushes, a
 // generated repository) is removed on every path. The lab is the default
 // target; --kube-context and --muster-url measure another cluster with the
-// platform, as the person signed in there (`muster auth login`). The
-// person's token is renewed before it expires (personToken), so a
+// platform, as the person signed in there (`muster auth login`), its pushes
+// going to a scratch branch on the provider with the person's own git
+// credentials (the manager notices a push to any branch and mirrors every
+// ref), the branch deleted afterwards. The person's token is renewed before it expires (personToken), so a
 // measurement of many runs outlives it and its cleanup deletes every Session
 // it started.
 
@@ -77,6 +79,11 @@ const (
 	measureLabLargeRepo = syncOrg + "/monorepo"
 	// measureLabBranch is the default branch of every fixture repository.
 	measureLabBranch = "main"
+	// measureScratchPrefix starts the scratch branch the pushes go to on
+	// another cluster's provider, followed by the run's start time.
+	measureScratchPrefix = "agentlab-workspaces-measure-"
+	// measureGitURL is the provider's git base URL on another cluster.
+	measureGitURL = "https://github.com"
 	// measurePoll is how often a wait looks: the figures are wall-clock
 	// times from a call to the first read that sees its end.
 	measurePoll = 500 * time.Millisecond
@@ -137,6 +144,9 @@ type WorkspacesMeasureOptions struct {
 	// Session figures are not available.
 	AgentgatewayURL string
 	Agent           string
+	// GitURL is the provider's git base URL the pushes go to,
+	// <GitURL>/<owner>/<name>.git; "" is https://github.com.
+	GitURL string
 }
 
 // remote says whether the options name another cluster.
@@ -154,7 +164,7 @@ func (o WorkspacesMeasureOptions) validate() error {
 	}
 	labOnly := map[string]bool{"[email]": o.Email != "", "--large-repo-mib": o.LargeRepoMiB != 0}
 	remoteOnly := map[string]bool{"--organization": o.Organization != "", "--provider": o.Provider != "", "--small-repos": len(o.SmallRepos) > 0,
-		"--large-repo": o.LargeRepo != "", "--agentgateway-url": o.AgentgatewayURL != "", "--agent": o.Agent != ""}
+		"--large-repo": o.LargeRepo != "", "--agentgateway-url": o.AgentgatewayURL != "", "--agent": o.Agent != "", "--git-url": o.GitURL != ""}
 	if !o.remote() {
 		for _, name := range slices.Sorted(maps.Keys(remoteOnly)) {
 			if remoteOnly[name] {
@@ -165,7 +175,7 @@ func (o WorkspacesMeasureOptions) validate() error {
 	}
 	for _, name := range slices.Sorted(maps.Keys(labOnly)) {
 		if labOnly[name] {
-			return fmt.Errorf("%s is the lab's: on another cluster the person is the one signed in to its muster and the repositories are named (--small-repos, --large-repo)", name)
+			return fmt.Errorf("%s is the lab's only: drop it with --kube-context and --muster-url, where the person is the one signed in to its muster and the repositories are named (--small-repos, --large-repo)", name)
 		}
 	}
 	missing := []string{}
@@ -198,14 +208,15 @@ type measureWorkspace struct {
 	name, kind string
 	repos      []string
 	// pushed is the repository pushes go to ("" where the measurement
-	// cannot push); worked the one the checkout, status and build run in.
-	pushed, worked string
-	branch         string
-	volume         syncVolume
-	lastSync       *syncLastSync
-	providerKiB    map[string]int64
-	samples        *measureSamples
-	storage        measureStorage
+	// cannot push, noPush says why); worked the one the checkout, status
+	// and build run in.
+	pushed, noPush, worked string
+	branch                 string
+	volume                 syncVolume
+	lastSync               *syncLastSync
+	providerKiB            map[string]int64
+	samples                *measureSamples
+	storage                measureStorage
 }
 
 func (w *measureWorkspace) owners() []string {
@@ -219,11 +230,16 @@ func (w *measureWorkspace) owners() []string {
 	return out
 }
 
-// measurePusher pushes commits to a repository of the lab's GitHub from a
-// shallow clone on this host, and puts its head back at the end.
+// measurePusher pushes commits to a repository from a shallow clone on this
+// host: in the lab to its default branch, put back at the start at the end;
+// on another cluster to a scratch branch, deleted at the end.
 type measurePusher struct {
-	repo, dir, token, start string
-	pushes                  int
+	repo, dir, start string
+	// branch is the branch the pushes go to.
+	branch  string
+	scratch bool
+	git     func(dir string, args ...string) (string, error)
+	pushes  int
 }
 
 // measureDetail is get_workspace's answer, as far as the measurement reads
@@ -402,8 +418,8 @@ func (m *measurement) preconditions() error {
 		w.samples = newMeasureSamples()
 		w.providerKiB = map[string]int64{}
 		if w.pushed == "" {
-			w.samples.notAvailable(figChangedCycle, "the measurement pushes only to the lab's GitHub")
-			w.samples.notAvailable(figOnDemandFetch, "the measurement pushes only to the lab's GitHub")
+			w.samples.notAvailable(figChangedCycle, w.noPush)
+			w.samples.notAvailable(figOnDemandFetch, w.noPush)
 		}
 		if m.sessions != "" {
 			for _, key := range []string{figSessionStart, figSessionSetup, figOnDemandFetch, figSessionBytes} {
@@ -525,7 +541,13 @@ func (m *measurement) labPreconditions() error {
 		return err
 	}
 	for _, w := range m.ws {
-		if err := m.clonePusher(w.pushed); err != nil {
+		owner, _, _ := strings.Cut(w.pushed, "/")
+		token, err := m.gh.installationToken(owner)
+		if err != nil {
+			return fmt.Errorf("the measurement pushes to %s as the App's installation on %s: %w", w.pushed, owner, err)
+		}
+		pu := &measurePusher{repo: w.pushed, branch: measureLabBranch, git: func(dir string, args ...string) (string, error) { return m.gh.git(dir, token, args...) }}
+		if err := m.clonePusher(pu, m.gh.remote(w.pushed)); err != nil {
 			return err
 		}
 	}
@@ -586,6 +608,22 @@ func (m *measurement) remotePreconditions() error {
 		{name: measureSmallWorkspace, kind: measureSmall, repos: o.SmallRepos, worked: o.SmallRepos[0], branch: ""},
 		{name: measureLargeWorkspace, kind: measureLarge, repos: []string{o.LargeRepo}, worked: o.LargeRepo, branch: ""},
 	}
+	if err := os.MkdirAll(StateDir, 0o750); err != nil {
+		return err
+	}
+	scratch := measureScratchPrefix + m.report.Started.Format("20060102-150405")
+	gitURL := strings.TrimSuffix(cmp.Or(o.GitURL, measureGitURL), "/")
+	for _, w := range m.ws {
+		pu := &measurePusher{repo: w.worked, branch: scratch, scratch: true, git: personGit}
+		if err := m.clonePusher(pu, gitURL+"/"+w.worked+".git"); err != nil {
+			// The person may not push there: the run goes on without the
+			// two figures that need a push.
+			w.noPush = fmt.Sprintf("no push to %s with your git credentials: %s", w.worked, excerpt(err.Error(), 300))
+			warn("%s: %s", w.name, w.noPush)
+			continue
+		}
+		w.pushed = w.worked
+	}
 	if o.Agent == "" {
 		m.sessions = "no --agent and --agentgateway-url to start a Session on this cluster with"
 		return nil
@@ -635,14 +673,9 @@ func workspaceManagerImage() string {
 	return image
 }
 
-// clonePusher makes a shallow clone of repo on this host, without a working
-// tree, to push from.
-func (m *measurement) clonePusher(repo string) error {
-	owner, _, _ := strings.Cut(repo, "/")
-	token, err := m.gh.installationToken(owner)
-	if err != nil {
-		return fmt.Errorf("the measurement pushes to %s as the App's installation on %s: %w", repo, owner, err)
-	}
+// clonePusher makes a shallow clone of the pusher's repository from url on
+// this host, without a working tree or file contents, to push from.
+func (m *measurement) clonePusher(pu *measurePusher, url string) error {
 	dir, err := os.MkdirTemp(StateDir, "workspaces-measure-push-")
 	if err != nil {
 		return err
@@ -651,43 +684,62 @@ func (m *measurement) clonePusher(repo string) error {
 	if dir, err = filepath.Abs(dir); err != nil {
 		return err
 	}
-	pu := &measurePusher{repo: repo, dir: filepath.Join(dir, "clone"), token: token}
-	m.pushers[repo] = pu
-	if _, err := m.gh.git(dir, token, "clone", "-q", "--depth", "1", "--no-checkout", m.gh.remote(repo), "clone"); err != nil {
+	pu.dir = filepath.Join(dir, "clone")
+	m.pushers[pu.repo] = pu
+	if _, err := pu.git(dir, "clone", "-q", "--depth", "1", "--filter=blob:none", "--no-checkout", "--single-branch", url, "clone"); err != nil {
 		return err
 	}
-	if pu.start, err = m.gh.git(pu.dir, "", "rev-parse", "HEAD"); err != nil {
+	if pu.start, err = pu.git(pu.dir, "rev-parse", "HEAD"); err != nil {
 		return err
 	}
-	note("%s cloned on this host at %s, shallow, to push to", repo, shortSHA(pu.start))
+	note("%s cloned on this host at %s, shallow, to push to %s", pu.repo, shortSHA(pu.start), pu.branch)
 	return nil
 }
 
-// push commits a small file on the default branch and pushes it, returning
-// the new head: the index read from HEAD, so no working tree is needed.
+// push commits on the clone's head, the tree unchanged, and pushes it to the
+// pusher's branch, returning the new head.
 func (m *measurement) push(repo string) (string, error) {
 	pu := m.pushers[repo]
 	pu.pushes++
-	file := filepath.Join(filepath.Dir(pu.dir), "pushed.md")
-	content := fmt.Sprintf("# pushed by agentlab workspaces-measure\n\npush %d at %s\n", pu.pushes, time.Now().UTC().Format(time.RFC3339Nano))
-	if err := os.WriteFile(file, []byte(content), 0o600); err != nil {
-		return "", err
-	}
-	blob, err := m.gh.git(pu.dir, "", "hash-object", "-w", file)
+	msg := fmt.Sprintf("agentlab workspaces-measure: push %d at %s", pu.pushes, time.Now().UTC().Format(time.RFC3339Nano))
+	head, err := pu.git(pu.dir, "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", msg)
 	if err != nil {
 		return "", err
 	}
-	for _, args := range [][]string{
-		{"read-tree", "HEAD"},
-		{"update-index", "--add", "--cacheinfo", "100644," + blob + ",agentlab-measure.md"},
-		{gitCommit, "-q", "-m", fmt.Sprintf("workspaces-measure: push %d", pu.pushes)},
-		{githubPush, "-q", gitOrigin, "HEAD:refs/heads/" + measureLabBranch},
-	} {
-		if _, err := m.gh.git(pu.dir, pu.token, args...); err != nil {
-			return "", err
-		}
+	if _, err := pu.git(pu.dir, "update-ref", "HEAD", head); err != nil {
+		return "", err
 	}
-	return m.gh.git(pu.dir, "", "rev-parse", "HEAD")
+	if _, err := pu.git(pu.dir, githubPush, "-q", gitOrigin, "HEAD:refs/heads/"+pu.branch); err != nil {
+		return "", err
+	}
+	return head, nil
+}
+
+// unpush removes the pushes: the scratch branch deleted, the lab's default
+// branch put back at the start.
+func (pu *measurePusher) unpush() error {
+	if pu.start == "" || pu.pushes == 0 {
+		return nil
+	}
+	if pu.scratch {
+		_, err := pu.git(pu.dir, githubPush, "-q", gitOrigin, "--delete", "refs/heads/"+pu.branch)
+		return err
+	}
+	_, err := pu.git(pu.dir, githubPush, "-q", "--force", gitOrigin, pu.start+":refs/heads/"+pu.branch)
+	return err
+}
+
+// personGit runs git with the person's own configuration and credentials,
+// never prompting.
+func personGit(dir string, args ...string) (string, error) {
+	cmd := exec.Command("git", append([]string{"-c", "commit.gpgsign=false"}, args...)...) // #nosec G204 -- git with the measurement's own arguments
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, excerpt(strings.TrimSpace(string(out)), 300))
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 // get is get_workspace's answer.
@@ -918,7 +970,13 @@ func (m *measurement) changed() error {
 			return err
 		}
 		mirror := d.mirror(w.pushed)
-		if mirror == nil || mirror.Head != head {
+		if m.pushers[w.pushed].scratch {
+			// The manifest names the default branch's head: the scratch
+			// branch's push shows as a cycle that changed the mirror.
+			if r := d.Workspace.LastSync; mirror == nil || r.Result != syncResultSucceed {
+				return fmt.Errorf("after a push to %s the cycle of %s ended %s with mirror %v, want %s", w.pushed, w.name, r.Result, mirror, syncResultSucceed)
+			}
+		} else if mirror == nil || mirror.Head != head {
 			return fmt.Errorf("after the changed cycle of %s the manifest names %v for %s, want the pushed head %s", w.name, mirror, w.pushed, head)
 		}
 		w.samples.add(figChangedCycle, took.Seconds())
@@ -1226,7 +1284,7 @@ func (m *measurement) onDemandFetch(ctx context.Context, w *measureWorkspace, ks
 	if err != nil {
 		return err
 	}
-	reply, _, err := measureTurn(ctx, m.api, ks, measureFetchCommand(w.pushed, w.branch))
+	reply, _, err := measureTurn(ctx, m.api, ks, measureFetchCommand(w.pushed, m.pushers[w.pushed].branch))
 	if err != nil {
 		return err
 	}
@@ -1659,6 +1717,9 @@ func (m *measurement) cleanup() {
 	if m.set != nil {
 		left := slices.Clone(m.set.ids)
 		if err := m.set.removeAllNow(); err != nil {
+			// The report names every Session still there, for a person to
+			// delete.
+			m.report.SessionsLeft = m.set.ids
 			errs = append(errs, err)
 		} else if len(left) > 0 {
 			note("deleted the Sessions the measurement left: %s", strings.Join(left, ", "))
@@ -1678,11 +1739,12 @@ func (m *measurement) cleanup() {
 		m.signedIn.disconnect(config.WorkspaceProviderFake)
 	}
 	for _, pu := range m.pushers {
-		if pu.start != "" && pu.pushes > 0 && pu.repo != m.generated {
-			_, err := m.gh.git(pu.dir, pu.token, githubPush, "-q", "--force", gitOrigin, pu.start+":refs/heads/"+measureLabBranch)
-			errs = append(errs, err)
+		if pu.repo != m.generated {
+			errs = append(errs, pu.unpush())
 		}
-		errs = append(errs, os.RemoveAll(filepath.Dir(pu.dir)))
+		if pu.dir != "" {
+			errs = append(errs, os.RemoveAll(filepath.Dir(pu.dir)))
+		}
 	}
 	if m.generated != "" {
 		errs = append(errs, m.gh.removeGeneratedRepo(m.generated))

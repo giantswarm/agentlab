@@ -781,18 +781,20 @@ func (s *sessionSet) add(id string) {
 	}
 }
 
-// removeAllNow deletes every tracked session and reports what refused.
+// removeAllNow deletes every tracked session and reports what refused; the
+// sessions that refused stay tracked.
 func (s *sessionSet) removeAllNow() error {
-	var errs []string
+	var errs, left []string
 	for _, id := range s.ids {
 		ctx, cancel := context.WithTimeout(context.Background(), sessionDeleteTimeout)
 		err := s.api.deleteSession(ctx, id)
 		cancel()
 		if err != nil {
 			errs = append(errs, err.Error())
+			left = append(left, id)
 		}
 	}
-	s.ids = nil
+	s.ids = left
 	if len(errs) > 0 {
 		return fmt.Errorf("deleting the sessions: %s", strings.Join(errs, "; "))
 	}
