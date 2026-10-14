@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -100,31 +101,90 @@ func TestFlagVariable(t *testing.T) {
 
 // platform-test dates a restart against the component's release: one before
 // it (a node restart during the bring-up) is history, one after it fails
-// until the container has run through kubelet's crash-loop reset.
+// until the container has run through kubelet's crash-loop reset — unless
+// the container restarted with its node.
 func TestRestartedSinceRelease(t *testing.T) {
 	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
 	released := now.Add(-30 * time.Minute)
+	nodeStarted := now.Add(-3 * time.Minute)
 	running := func(restarts int32, startedAgo time.Duration) corev1.ContainerStatus {
 		return corev1.ContainerStatus{RestartCount: restarts, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(now.Add(-startedAgo))}}}
 	}
+	lastEnded := func(c corev1.ContainerStatus, reason string, endedAgo time.Duration) corev1.ContainerStatus {
+		c.LastTerminationState.Terminated = &corev1.ContainerStateTerminated{Reason: reason, ExitCode: 1, FinishedAt: metav1.NewTime(now.Add(-endedAgo))}
+		return c
+	}
 	for _, tc := range []struct {
-		name     string
-		c        corev1.ContainerStatus
-		released time.Time
-		want     bool
+		name        string
+		c           corev1.ContainerStatus
+		released    time.Time
+		nodeStarted time.Time
+		want        bool
 	}{
-		{"never restarted", running(0, time.Minute), released, false},
-		{"restart before the release", running(3, 40*time.Minute), released, false},
-		{"restart after the release", running(1, 2*time.Minute), released, true},
-		{"restart after the release, settled since", running(1, 20*time.Minute), released, false},
-		{"no HelmRelease, fresh restart", running(2, time.Minute), time.Time{}, true},
-		{"not running", corev1.ContainerStatus{RestartCount: 4}, released, false},
+		{"never restarted", running(0, time.Minute), released, time.Time{}, false},
+		{"restart before the release", running(3, 40*time.Minute), released, time.Time{}, false},
+		{"restart after the release", running(1, 2*time.Minute), released, time.Time{}, true},
+		{"restart after the release, settled since", running(1, 20*time.Minute), released, time.Time{}, false},
+		{"no HelmRelease, fresh restart", running(2, time.Minute), time.Time{}, time.Time{}, true},
+		{"not running", corev1.ContainerStatus{RestartCount: 4}, released, time.Time{}, false},
+		{"node restart: the last run ended before the node started", lastEnded(running(1, 2*time.Minute), "Error", 10*time.Minute), released, nodeStarted, false},
+		{"node restart: kubelet lost the last run with its sandbox", lastEnded(running(1, 2*time.Minute), terminatedUnknown, time.Minute), released, time.Time{}, false},
+		{"crash loop after the node restart", lastEnded(running(3, time.Minute), "Error", 90*time.Second), released, nodeStarted, true},
+		{"crash loop, node start unknown", lastEnded(running(3, time.Minute), "Error", 90*time.Second), released, time.Time{}, true},
+		{"crash loop on a node that did not restart", lastEnded(running(2, time.Minute), "Error", 90*time.Second), released, now.Add(-2 * time.Hour), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := restartedSinceRelease(tc.c, tc.released, now); got != tc.want {
+			if got := restartedSinceRelease(tc.c, tc.released, tc.nodeStarted, now); got != tc.want {
 				t.Errorf("restartedSinceRelease = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// After a kind node restart every pod's containers restarted once together:
+// platform-test passes on that, and still fails a server that crash-loops
+// since — the case of the issue, over whole pods.
+func TestClassifyRestartsNodeRestart(t *testing.T) {
+	now := time.Date(2026, 10, 14, 21, 0, 0, 0, time.UTC)
+	released := now.Add(-2 * time.Hour)
+	const node = "agentlab-control-plane"
+	nodeDown, nodeStarted := now.Add(-5*time.Minute), now.Add(-4*time.Minute)
+	nodes := nodeStarts{node: nodeStarted}
+	container := func(name string, restarts int32, startedAt, lastEnded time.Time, reason string) corev1.ContainerStatus {
+		return corev1.ContainerStatus{
+			Name: name, Ready: true, RestartCount: restarts,
+			State:                corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(startedAt)}},
+			LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: reason, ExitCode: 255, FinishedAt: metav1.NewTime(lastEnded)}},
+		}
+	}
+	pod := func(name string, sidecar, server corev1.ContainerStatus) corev1.Pod {
+		p := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: platformNamespace, Name: name}}
+		p.Spec.NodeName = node
+		p.Status.Phase = corev1.PodRunning
+		sidecar.Name = dexLocalhostContainer
+		p.Status.InitContainerStatuses = []corev1.ContainerStatus{sidecar, {Name: "chart-init", RestartCount: 1}}
+		p.Status.ContainerStatuses = []corev1.ContainerStatus{server}
+		return p
+	}
+	booted := now.Add(-3 * time.Minute)
+	nodeRestarted := []corev1.Pod{
+		pod("mcp-kubernetes-1", container("", 1, booted, nodeDown, "Unknown"), container("server", 1, booted, nodeDown, "Unknown")),
+		pod("cluster-manager-1", container("", 1, booted, nodeDown, "Completed"), container("server", 1, booted, nodeDown, "Error")),
+	}
+	crashLoops, history := classifyRestarts(nodeRestarted, released, nodes, now)
+	if len(crashLoops) != 0 {
+		t.Errorf("node restart: crash loops %v, want none", crashLoops)
+	}
+	if len(history) != 4 {
+		t.Errorf("node restart: history %v, want the 4 running containers", history)
+	}
+
+	// The server crashed twice more after the node came back.
+	crashed := append(slices.Clone(nodeRestarted),
+		pod("agent-manager-1", container("", 1, booted, nodeDown, "Unknown"), container("server", 3, now.Add(-30*time.Second), now.Add(-45*time.Second), "Error")))
+	crashLoops, _ = classifyRestarts(crashed, released, nodes, now)
+	if len(crashLoops) != 1 || !strings.Contains(crashLoops[0], "agent-manager-1 server ×3") {
+		t.Errorf("crash loop after the node restart: crash loops %v, want agent-manager-1's server", crashLoops)
 	}
 }
 

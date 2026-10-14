@@ -873,6 +873,13 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 		}
 	}
 
+	// A server that crash-looped since its release — the issuer out of reach
+	// after a node restart — is rolled before the waits below read it
+	// (platformtest_sidecar.go).
+	if err := rollCrashLoopedSidecarServers(ctx, cfg); err != nil {
+		return err
+	}
+
 	// Every downstream forwards the user's token (auth.forwardToken), so muster
 	// connects per session, not at startup: until the first session uses it
 	// the CR reads Awaiting Session (Auth Required before muster 5.28.0),
