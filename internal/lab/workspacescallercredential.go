@@ -441,7 +441,7 @@ func requestsLine(reqs []githubRequest) string {
 
 // actorSubject matches the sub of a Session Actor's JWT for the Session.
 func actorSubject(session string) *regexp.Regexp {
-	return regexp.MustCompile(`^atespaces:[^:]+:actors:` + regexp.QuoteMeta(substrateActorName(session)) + `$`)
+	return regexp.MustCompile(`^actor/[^/]+/` + regexp.QuoteMeta(substrateActorName(session)) + `$`)
 }
 
 // judgeCallerCredential is the verdict on what the API host logged from a
@@ -458,7 +458,7 @@ func judgeCallerCredential(logged []githubRequest, status, audience, session str
 			continue
 		}
 		if !slices.Contains(r.Audience, audience) || !actorSubject(session).MatchString(r.Subject) {
-			return r, fmt.Errorf("the API host received a JWT with aud %v and sub %q, want aud %s and the sub of the Session's Actor (atespaces:<atespace>:actors:%s)",
+			return r, fmt.Errorf("the API host received a JWT with aud %v and sub %q, want aud %s and the sub of the Session's Actor (actor/<atespace>/%s)",
 				r.Audience, r.Subject, audience, substrateActorName(session))
 		}
 		return r, nil

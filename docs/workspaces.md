@@ -482,7 +482,7 @@ then `agentlab platform`. Without them it fails at once with the reason.
    environment variables and the files under `/data`, `/workspace` and its
    working directory that hold a JWT. The lab GitHub's request log must hold
    that request with the credential `jwt`, `aud` containing `fake-bearer` and
-   `sub` `atespaces:<atespace>:actors:session-<id>`, the Session's Actor; the
+   `sub` `actor/<atespace>/session-<id>`, the Session's Actor; the
    sandbox must hold no JWT. A kagent that compiles no caller credential lets
    the placeholder through: the stage fails naming the credential the API host
    received (`placeholder`) instead of the Actor's JWT; a request that never
