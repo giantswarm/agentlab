@@ -40,6 +40,7 @@ const (
 	wsRefresh     = "refresh_token"
 	wsGrantType   = "grant_type"
 	wsError       = "error"
+	wsBadRefresh  = "bad_refresh_token"
 	wsPushedAt    = "pushed_at"
 	wsFullName    = "full_name"
 	wsAuthHeader  = "Authorization"
@@ -384,7 +385,7 @@ func TestWorkspaceGitHubRefreshRotation(t *testing.T) {
 	if second[wsAccess] == nil || second[wsRefresh] == first[wsRefresh] {
 		t.Fatalf("a refresh = %v, want a new access and refresh token", second)
 	}
-	if out := f.redeem(t, refresh); out[wsError] != "bad_refresh_token" {
+	if out := f.redeem(t, refresh); out[wsError] != wsBadRefresh {
 		t.Fatalf("the refresh token's second redemption = %v, want bad_refresh_token", out)
 	}
 	if out := f.redeem(t, url.Values{wsGrantType: {wsRefresh}, wsRefresh: {fmt.Sprint(second[wsRefresh])}}); out[wsAccess] == nil {
@@ -416,7 +417,7 @@ func TestWorkspaceGitHubRevocation(t *testing.T) {
 	if resp := f.call(t, http.MethodGet, "/api/v3/user", access, nil, nil); resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("GET /user after the revocation = %d, want 401", resp.StatusCode)
 	}
-	if out := f.redeem(t, url.Values{wsGrantType: {wsRefresh}, wsRefresh: {fmt.Sprint(tokens[wsRefresh])}}); out[wsError] != "bad_refresh_token" {
+	if out := f.redeem(t, url.Values{wsGrantType: {wsRefresh}, wsRefresh: {fmt.Sprint(tokens[wsRefresh])}}); out[wsError] != wsBadRefresh {
 		t.Fatalf("the refresh token after the revocation = %v, want bad_refresh_token", out)
 	}
 	if last := f.g.requests[len(f.g.requests)-2]; last.Credential != credRevoked || last.User != wsDev {
@@ -463,7 +464,7 @@ func TestWorkspaceGitHubTokensSurviveReplacement(t *testing.T) {
 	if out := second.redeem(t, url.Values{wsGrantType: {wsRefresh}, wsRefresh: {fmt.Sprint(dev[wsRefresh])}}); out[wsAccess] == nil {
 		t.Fatalf("the replacement: dev's refresh token = %v, want a new pair", out)
 	}
-	if out := second.redeem(t, url.Values{wsGrantType: {wsRefresh}, wsRefresh: {fmt.Sprint(rotated[wsRefresh])}}); out[wsError] != "bad_refresh_token" {
+	if out := second.redeem(t, url.Values{wsGrantType: {wsRefresh}, wsRefresh: {fmt.Sprint(rotated[wsRefresh])}}); out[wsError] != wsBadRefresh {
 		t.Fatalf("the replacement: a refresh token redeemed before = %v, want bad_refresh_token", out)
 	}
 	if resp := second.call(t, http.MethodGet, "/api/v3/user", viewer, nil, nil); resp.StatusCode != http.StatusUnauthorized {

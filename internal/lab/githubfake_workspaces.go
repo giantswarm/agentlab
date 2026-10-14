@@ -570,7 +570,7 @@ type storedUserToken struct {
 // loadUserTokens reads the users' tokens a former fake kept in the token
 // store, an expired one left out; a store not yet written holds none.
 func (g *workspaceGitHub) loadUserTokens() (int, error) {
-	raw, err := os.ReadFile(g.tokenStore)
+	raw, err := os.ReadFile(g.tokenStore) // #nosec G304 G703 -- the token store the command names
 	if errors.Is(err, os.ErrNotExist) {
 		return 0, nil
 	}
@@ -611,8 +611,8 @@ func (g *workspaceGitHub) saveUserTokens() {
 	raw, err := json.Marshal(stored)
 	if err == nil {
 		tmp := g.tokenStore + ".next"
-		if err = os.WriteFile(tmp, raw, 0o600); err == nil {
-			err = os.Rename(tmp, g.tokenStore)
+		if err = os.WriteFile(tmp, raw, 0o600); err == nil { // #nosec G703 -- beside the token store the command names
+			err = os.Rename(tmp, g.tokenStore) // #nosec G703 -- the token store the command names
 		}
 	}
 	if err != nil {

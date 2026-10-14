@@ -563,7 +563,7 @@ func WorkspacesSignInTest(cfg *config.Config, opts WorkspacesSignInTestOptions) 
 		return err
 	}
 	private := workspaceSignInOwner + "/" + workspaceSignInPrivate
-	if refused.Outcome != "refused" || !slices.ContainsFunc(refused.Unreadable, func(r string) bool { return strings.HasSuffix(r, private) }) {
+	if refused.Outcome != authorizeRefused || !slices.ContainsFunc(refused.Unreadable, func(r string) bool { return strings.HasSuffix(r, private) }) {
 		return fmt.Errorf("authorize_workspace as %s answered %s (%s, unreadable %v), want refused naming %s", member.user.Email, refused.Outcome, refused.Reason, refused.Unreadable, private)
 	}
 	note("%s: refused, unreadable %s (%s)", member.user.Email, strings.Join(refused.Unreadable, ", "), refused.Reason)
@@ -583,7 +583,7 @@ func authorizeAfterRoll(p *workspacePerson, timeout time.Duration) (workspaceAut
 	for {
 		a, err := p.authorizeWorkspace(workspaceSignInProofName)
 		transient := (err != nil && strings.Contains(err.Error(), "transport error")) ||
-			(err == nil && a.Outcome == "refused" && strings.Contains(a.Reason, "try again"))
+			(err == nil && a.Outcome == authorizeRefused && strings.Contains(a.Reason, "try again"))
 		if !transient || time.Now().After(deadline) {
 			return a, err
 		}
