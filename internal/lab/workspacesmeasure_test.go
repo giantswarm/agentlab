@@ -622,3 +622,55 @@ func TestMeasureReportSessionsLeft(t *testing.T) {
 		t.Errorf("the Markdown does not name the Sessions left:\n%s", md)
 	}
 }
+
+// TestMeasureDeleteEmptyAnswer: a delete_workspace whose call_tool answer is
+// empty passes once get_workspace answers not found, and fails naming the
+// empty answer while get_workspace still answers the workspace.
+func TestMeasureDeleteEmptyAnswer(t *testing.T) {
+	const name = "measure-empty"
+	present := toolResult("workspace "+name, false, map[string]any{"workspace": map[string]any{nameKey: name}})
+	notFound := toolResult("workspace "+name+" not found", true, nil)
+	script := func(goneAfter int) func(string, int) mcpAnswer {
+		return func(tool string, n int) mcpAnswer {
+			switch {
+			case tool == workspaceManagerToolPrefix+"delete_workspace":
+				return callToolAnswer(t, nil)
+			case n >= goneAfter:
+				return callToolAnswer(t, notFound)
+			default:
+				return callToolAnswer(t, present)
+			}
+		}
+	}
+
+	m := &measurement{person: scriptedMuster(t, script(1)), timeout: 10 * time.Second}
+	answered, err := m.requestDelete(name)
+	if err != nil || answered {
+		t.Fatalf("requestDelete on an empty answer = %v, %v; want false, nil", answered, err)
+	}
+	if err := m.awaitDeleted(name, syncVolume{}, answered); err != nil {
+		t.Errorf("the workspace gone after an empty answer: %v", err)
+	}
+
+	m = &measurement{person: scriptedMuster(t, script(1<<30)), timeout: 100 * time.Millisecond}
+	answered, err = m.requestDelete(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = m.awaitDeleted(name, syncVolume{}, answered)
+	if err == nil {
+		t.Fatal("the workspace still present after the bound passed")
+	}
+	for _, want := range []string{name, "answered nothing", "get_workspace still answers it"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q lacks %q", err, want)
+		}
+	}
+
+	refusing := &measurement{person: scriptedMuster(t, func(string, int) mcpAnswer {
+		return callToolAnswer(t, toolResult("permission denied", true, nil))
+	}), timeout: time.Second}
+	if _, err := refusing.requestDelete(name); err == nil || !strings.Contains(err.Error(), "permission denied") {
+		t.Errorf("a refused delete: %v, want its error", err)
+	}
+}

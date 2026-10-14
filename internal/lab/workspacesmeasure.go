@@ -1669,22 +1669,54 @@ func (m *measurement) deleteWorkspace(w *measureWorkspace) error {
 	if err != nil {
 		return err
 	}
+	answered, err := m.requestDelete(w.name)
+	if err != nil {
+		return err
+	}
+	if err := m.awaitDeleted(w.name, v, answered); err != nil {
+		return err
+	}
+	m.created = slices.DeleteFunc(m.created, func(n string) bool { return n == w.name })
+	w.lastSync = nil
+	note("deleted %s: the workspace, its claim and its volume %s gone", w.name, cmpOr(v.pv, "(none claimed)"))
+	return nil
+}
+
+// requestDelete calls delete_workspace and says whether it answered. An
+// empty call_tool answer is no verdict: muster can cut a long delete that
+// runs on in the manager, so get_workspace decides (awaitDeleted).
+func (m *measurement) requestDelete(name string) (answered bool, err error) {
 	var res struct {
 		Sessions []string `json:"sessions"`
 	}
-	if err := m.person.callServerStructured(workspaceManagerToolPrefix+"delete_workspace", map[string]any{wmWorkspaceArg: w.name}, &res); err != nil {
-		return err
+	err = m.person.callServerStructured(workspaceManagerToolPrefix+"delete_workspace", map[string]any{wmWorkspaceArg: name}, &res)
+	if errors.Is(err, errEmptyToolAnswer) {
+		warn("%s: delete_workspace answered nothing through muster; get_workspace decides within %s", name, m.timeout)
+		return false, nil
 	}
-	k, err := labKube()
-	if err != nil {
-		return err
+	return err == nil, err
+}
+
+// awaitDeleted waits up to the measurement's timeout for get_workspace to
+// answer not found and, when the workspace claimed a volume, for its claim
+// and volume to go.
+func (m *measurement) awaitDeleted(name string, v syncVolume, answered bool) error {
+	var k *kubeClients
+	if v.claim != "" {
+		var err error
+		if k, err = labKube(); err != nil {
+			return err
+		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), m.timeout)
 	defer cancel()
 	var state string
 	if err := wait.PollUntilContextTimeout(ctx, 2*time.Second, m.timeout, true, func(ctx context.Context) (bool, error) {
-		if gone, err := m.gone(w.name); err != nil || !gone {
-			state = "the workspace is still listed"
+		if gone, err := m.gone(name); err != nil || !gone {
+			state = "get_workspace still answers it"
+			if err != nil {
+				state = "get_workspace failed: " + excerpt(err.Error(), 300)
+			}
 			return false, nil
 		}
 		if v.claim == "" {
@@ -1700,11 +1732,12 @@ func (m *measurement) deleteWorkspace(w *measureWorkspace) error {
 		}
 		return true, nil
 	}); err != nil {
-		return fmt.Errorf("workspace %s is not gone %s after delete_workspace: %s", w.name, m.timeout, state)
+		call := "delete_workspace"
+		if !answered {
+			call = "delete_workspace (which answered nothing through muster)"
+		}
+		return fmt.Errorf("workspace %s is not gone %s after %s: %s", name, m.timeout, call, state)
 	}
-	m.created = slices.DeleteFunc(m.created, func(n string) bool { return n == w.name })
-	w.lastSync = nil
-	note("deleted %s: the workspace, its claim and its volume %s gone", w.name, cmpOr(v.pv, "(none claimed)"))
 	return nil
 }
 
