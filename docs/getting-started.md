@@ -287,6 +287,7 @@ To exercise the identity itself:
 ./agentlab test                    # asserts RBAC for every configured user
 ./agentlab login dev@lab.local     # headless, instant
 ./agentlab login --browser         # real Dex login page in the browser
+./agentlab login --audience agent-platform --audience kubernetes  # a token muster's agent-platform servers accept too
 export KUBECONFIG=$PWD/kubeconfig.oidc
 kubectl auth whoami
 ```

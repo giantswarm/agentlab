@@ -59,6 +59,9 @@ const (
 	// so a token minted for either carries an audience the other trusts.
 	AgentPlatformClientID     = "agent-platform"
 	AgentPlatformClientSecret = "agent-platform-lab-secret" // #nosec G101 -- static throwaway lab credential, by design
+	// An audience-only client: Giant Swarm apiservers trust its id, and it
+	// trusts agent-platform to request its audience. It never runs a flow.
+	DexK8sAuthenticatorClientID = "dex-k8s-authenticator"
 )
 
 // MusterNodePort is the port muster's aggregator binds on the kind node
