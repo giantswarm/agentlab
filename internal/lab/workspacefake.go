@@ -26,7 +26,10 @@ import (
 // --workspaces` (githubfake_workspaces.go) in a container on the kind
 // network, the way a proof's fake runs (fakecontainer.go), kept with the lab
 // rather than with a proof: `agentlab platform` starts it afresh (the fixture
-// is its state), `agentlab platform-down` and `agentlab down` remove it. Pods
+// is its state) but for the users' tokens it issued, which it keeps in
+// state/lab-github/tokens across the replacement, so a person's provider
+// sign-in outlives the run; `agentlab platform-down` and `agentlab down`
+// remove it. Pods
 // reach it as https://github.<domain> (config.GitHubFakeHost): CoreDNS sends
 // the name to the selector-less Service agentlab-github in the platform
 // namespace (coredns.yaml.tmpl), whose EndpointSlice is the container's address, and
@@ -56,6 +59,11 @@ const (
 	// repositories (the image's /tmp: the container runs as the caller).
 	githubFakeCredentialsMount = "/credentials"
 	githubFakeDataDir          = "/tmp/github-fake"
+	// githubFakeTokensMount is where the container keeps the users' tokens
+	// (githubFakeTokenStore), a directory of this host's under state/ that
+	// outlives the container.
+	githubFakeTokensMount = "/tokens"
+	githubFakeTokenStore  = githubFakeTokensMount + "/user-tokens.json"
 	// labGitHubWhat names the container in the refusal of a binary it cannot
 	// run: the instance's name, so a reader finds the knob in agentlab.yaml.
 	labGitHubWhat = "the lab's GitHub for the workspace-manager's provider instance " + config.WorkspaceProviderFake
@@ -79,7 +87,8 @@ func checkLabGitHubBinary(cfg *config.Config) error {
 
 // githubFakeUp runs the lab's GitHub for the provider instance fake: the
 // credentials generated, the container started (a running one replaced: its
-// repositories are the fixture's again), the Service pointed at it and a pod
+// repositories are the fixture's again, the users' tokens it issued kept),
+// the Service pointed at it and a pod
 // proven to reach it by name, and the App's key and client secret placed as
 // the instance's Secret ahead of the install, which references it.
 func githubFakeUp(cfg *config.Config) error {
@@ -96,6 +105,13 @@ func githubFakeUp(cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
+	tokens, err := filepath.Abs(filepath.Join(StateDir, labGitHubContainerSuffix, "tokens"))
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(tokens, 0o700); err != nil {
+		return err
+	}
 	c, err := startFakeContainer(cfg, binary, fakeContainerSpec{
 		what:       labGitHubWhat,
 		suffix:     labGitHubContainerSuffix,
@@ -105,8 +121,8 @@ func githubFakeUp(cfg *config.Config) error {
 		// image carries none.
 		image: workspacesTestGitImage,
 		args: []string{"--workspaces", "--credentials", githubFakeCredentialsMount, "--data-dir", githubFakeDataDir,
-			"--api-host", config.GitHubFakeBearerAPIHost(cfg.Platform.Domain)},
-		mounts: []string{credentials + ":" + githubFakeCredentialsMount + ":ro"},
+			"--api-host", config.GitHubFakeBearerAPIHost(cfg.Platform.Domain), "--token-store", githubFakeTokenStore},
+		mounts: []string{credentials + ":" + githubFakeCredentialsMount + ":ro", tokens + ":" + githubFakeTokensMount},
 		tls:    true,
 	})
 	if err != nil {

@@ -40,6 +40,7 @@ const (
 	wsRefresh     = "refresh_token"
 	wsGrantType   = "grant_type"
 	wsError       = "error"
+	wsBadRefresh  = "bad_refresh_token"
 	wsPushedAt    = "pushed_at"
 	wsFullName    = "full_name"
 	wsAuthHeader  = "Authorization"
@@ -65,6 +66,13 @@ type wsFake struct {
 
 func startWorkspaceFake(t *testing.T) *wsFake {
 	t.Helper()
+	return startWorkspaceFakeKeeping(t, "")
+}
+
+// startWorkspaceFakeKeeping starts a fake that keeps the users' tokens in
+// tokenStore ("" for memory only), reading what a former fake kept there.
+func startWorkspaceFakeKeeping(t *testing.T, tokenStore string) *wsFake {
+	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("the workspace fake serves git with git itself; git is not on PATH")
 	}
@@ -88,6 +96,11 @@ func startWorkspaceFake(t *testing.T) *wsFake {
 	g, err := newWorkspaceGitHub(fixture, pub, string(secret), t.TempDir(), 1)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if g.tokenStore = tokenStore; tokenStore != "" {
+		if _, err := g.loadUserTokens(); err != nil {
+			t.Fatal(err)
+		}
 	}
 	pair, err := tls.LoadX509KeyPair(filepath.Join(dir, githubFakeTLSCert), filepath.Join(dir, githubFakeTLSKey))
 	if err != nil {
@@ -372,7 +385,7 @@ func TestWorkspaceGitHubRefreshRotation(t *testing.T) {
 	if second[wsAccess] == nil || second[wsRefresh] == first[wsRefresh] {
 		t.Fatalf("a refresh = %v, want a new access and refresh token", second)
 	}
-	if out := f.redeem(t, refresh); out[wsError] != "bad_refresh_token" {
+	if out := f.redeem(t, refresh); out[wsError] != wsBadRefresh {
 		t.Fatalf("the refresh token's second redemption = %v, want bad_refresh_token", out)
 	}
 	if out := f.redeem(t, url.Values{wsGrantType: {wsRefresh}, wsRefresh: {fmt.Sprint(second[wsRefresh])}}); out[wsAccess] == nil {
@@ -404,11 +417,61 @@ func TestWorkspaceGitHubRevocation(t *testing.T) {
 	if resp := f.call(t, http.MethodGet, "/api/v3/user", access, nil, nil); resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("GET /user after the revocation = %d, want 401", resp.StatusCode)
 	}
-	if out := f.redeem(t, url.Values{wsGrantType: {wsRefresh}, wsRefresh: {fmt.Sprint(tokens[wsRefresh])}}); out[wsError] != "bad_refresh_token" {
+	if out := f.redeem(t, url.Values{wsGrantType: {wsRefresh}, wsRefresh: {fmt.Sprint(tokens[wsRefresh])}}); out[wsError] != wsBadRefresh {
 		t.Fatalf("the refresh token after the revocation = %v, want bad_refresh_token", out)
 	}
 	if last := f.g.requests[len(f.g.requests)-2]; last.Credential != credRevoked || last.User != wsDev {
 		t.Fatalf("the request log names the revoked call %+v, want credential revoked of dev", last)
+	}
+}
+
+// TestWorkspaceGitHubTokensSurviveReplacement is `agentlab platform`
+// replacing the lab's GitHub after a person signed in: a fake without the
+// store refuses the person's tokens (the workspace-manager then answers
+// connect_required), one with it honours them, a rotated refresh token and a
+// revoked grant staying dead.
+func TestWorkspaceGitHubTokensSurviveReplacement(t *testing.T) {
+	store := filepath.Join(t.TempDir(), "user-tokens.json")
+	first := startWorkspaceFakeKeeping(t, store)
+	dev := first.signIn(t, wsDev)
+	rotated := first.signIn(t, wsDev)
+	if next := first.redeem(t, url.Values{wsGrantType: {wsRefresh}, wsRefresh: {fmt.Sprint(rotated[wsRefresh])}}); next[wsAccess] == nil {
+		t.Fatalf("a refresh = %v", next)
+	}
+	viewer := first.signIn(t, "viewer")[wsAccess].(string)
+	body, _ := json.Marshal(map[string]string{wsAccess: viewer})
+	req, _ := http.NewRequest(http.MethodDelete, first.url+"/api/v3/applications/"+wsClientID+"/grant", strings.NewReader(string(body)))
+	req.SetBasicAuth(wsClientID, first.secret)
+	resp, err := first.client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("viewer's grant revocation = %d, want 204", resp.StatusCode)
+	}
+
+	forgetful := startWorkspaceFake(t)
+	if resp := forgetful.call(t, http.MethodGet, "/api/v3/user", dev[wsAccess].(string), nil, nil); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("a replacement without the store: GET /user with dev's token = %d, want 401", resp.StatusCode)
+	}
+
+	second := startWorkspaceFakeKeeping(t, store)
+	var user map[string]any
+	if resp := second.call(t, http.MethodGet, "/api/v3/user", dev[wsAccess].(string), nil, &user); resp.StatusCode != http.StatusOK || user[githubLogin] != wsDev {
+		t.Fatalf("the replacement: GET /user with dev's token = %d %v, want 200 dev", resp.StatusCode, user)
+	}
+	if out := second.redeem(t, url.Values{wsGrantType: {wsRefresh}, wsRefresh: {fmt.Sprint(dev[wsRefresh])}}); out[wsAccess] == nil {
+		t.Fatalf("the replacement: dev's refresh token = %v, want a new pair", out)
+	}
+	if out := second.redeem(t, url.Values{wsGrantType: {wsRefresh}, wsRefresh: {fmt.Sprint(rotated[wsRefresh])}}); out[wsError] != wsBadRefresh {
+		t.Fatalf("the replacement: a refresh token redeemed before = %v, want bad_refresh_token", out)
+	}
+	if resp := second.call(t, http.MethodGet, "/api/v3/user", viewer, nil, nil); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("the replacement: GET /user with viewer's revoked token = %d, want 401", resp.StatusCode)
+	}
+	if info, err := os.Stat(store); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("the token store = %v %v, want mode 0600", info, err)
 	}
 }
 
