@@ -467,7 +467,9 @@ const DefaultWorkspacesSignInSyncTimeout = 5 * time.Minute
 // over agentlab-org/platform-api and platform-infra created and synced as the
 // admin -> the admin and a developer connected to the provider instance by
 // the browser's walk (connectWorkspaceProvider), list_providers showing each
-// connected -> authorize_workspace granted for the admin, who reads both,
+// connected -> the lab's GitHub replaced and the workspace-manager rolled,
+// as `agentlab platform` does -> authorize_workspace granted for the admin,
+// who reads both,
 // and refused naming platform-infra for the developer, who does not ->
 // the workspace deleted and both sign-ins forgotten.
 func WorkspacesSignInTest(cfg *config.Config, opts WorkspacesSignInTestOptions) error {
@@ -533,6 +535,18 @@ func WorkspacesSignInTest(cfg *config.Config, opts WorkspacesSignInTestOptions) 
 		}
 		note("%s", hops)
 		note("list_providers as %s: %s connected", p.user.Email, instance)
+	}
+
+	step("The lab's GitHub replaced and the workspace-manager rolled, as `agentlab platform` does: both sign-ins outlive it")
+	if err := githubFakeUp(cfg); err != nil {
+		return err
+	}
+	ctx := context.Background()
+	if err := restartDeployment(ctx, platformNamespace, workspaceManagerMCPServer); err != nil {
+		return err
+	}
+	if err := waitDeploymentRolledOut(ctx, platformNamespace, workspaceManagerMCPServer, opts.SyncTimeout); err != nil {
+		return err
 	}
 
 	step("authorize_workspace %s as %s (reads both) and as %s (not %s)", workspaceSignInProofName, admin.user.Email, member.user.Email, workspaceSignInPrivate)

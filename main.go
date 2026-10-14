@@ -219,6 +219,7 @@ func githubFakeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&ws.DataDir, "data-dir", "", "with --workspaces: where the bare repositories live (default: a temporary directory)")
 	cmd.Flags().StringSliceVar(&ws.APIHosts, "api-host", nil, "with --workspaces: a host name api.<git host> that serves the REST API at its root, shaped like api.github.com (repeatable)")
 	cmd.Flags().IntVar(&ws.LargeRepoMiB, "large-repo-mib", 0, "with --workspaces: the size of the fixture's generated repositories in MiB (default: the fixture's)")
+	cmd.Flags().StringVar(&ws.TokenStore, "token-store", "", "with --workspaces: a file the users' access and refresh tokens are kept in across restarts (default: memory only)")
 	for _, on := range []bool{true, false} {
 		use, short := "suspend <owner>", "Suspend the App's installation on <owner> in the lab's GitHub, as an organization owner's Suspend on github.com does (the kill-switch runbook's first switch)"
 		if !on {

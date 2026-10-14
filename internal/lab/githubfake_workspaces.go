@@ -12,6 +12,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -176,6 +177,10 @@ type workspaceGitHub struct {
 	// apiHosts are the hosts that serve the REST API at their root, each
 	// api.<git host>, as api.github.com does.
 	apiHosts []string
+	// tokenStore is the file the users' tokens are kept in across a
+	// replacement of the fake (WorkspaceGitHubOptions.TokenStore), "" for
+	// none.
+	tokenStore string
 
 	// suspended is when each suspended installation was suspended, under
 	// its own lock: installationJSON reads it with mu held and without.
@@ -204,6 +209,11 @@ type WorkspaceGitHubOptions struct {
 	// APIHosts are host names, each api.<git host>, on which the fake serves
 	// the REST API at the root, shaped like github.com's api.github.com.
 	APIHosts []string
+	// TokenStore is a file the users' access and refresh tokens are kept in:
+	// read at the start, rewritten on every issue, rotation and revocation,
+	// so a person's sign-in outlives a replacement of the fake as it outlives
+	// a restart of GitHub. "" keeps them in memory only.
+	TokenStore string
 }
 
 // newWorkspaceGitHub seeds the fixture's repositories into dataDir and
@@ -548,6 +558,68 @@ func (g *workspaceGitHub) issue(prefix string, t *githubToken, ttl time.Duration
 	return token
 }
 
+// storedUserToken is a user's token as the token store keeps it.
+type storedUserToken struct {
+	Token   string    `json:"token"`
+	Login   string    `json:"login"`
+	Refresh bool      `json:"refresh,omitempty"`
+	Expires time.Time `json:"expires"`
+	Dead    bool      `json:"dead,omitempty"`
+}
+
+// loadUserTokens reads the users' tokens a former fake kept in the token
+// store, an expired one left out; a store not yet written holds none.
+func (g *workspaceGitHub) loadUserTokens() (int, error) {
+	raw, err := os.ReadFile(g.tokenStore)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("reading the token store: %w", err)
+	}
+	var stored []storedUserToken
+	if err := json.Unmarshal(raw, &stored); err != nil {
+		return 0, fmt.Errorf("the token store %s: %w", g.tokenStore, err)
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	n := 0
+	for _, s := range stored {
+		if s.Token == "" || g.now().After(s.Expires) {
+			continue
+		}
+		g.tokens[s.Token] = &githubToken{kind: credUser, login: s.Login, refresh: s.Refresh, expires: s.Expires, dead: s.Dead}
+		n++
+	}
+	return n, nil
+}
+
+// saveUserTokens rewrites the token store with the users' unexpired tokens,
+// with g.mu held: written beside it and renamed into place, so a fake
+// replaced mid-write reads the former store whole. A failed write is logged:
+// the sign-in it answers stands, only its survival of a replacement is lost.
+func (g *workspaceGitHub) saveUserTokens() {
+	if g.tokenStore == "" {
+		return
+	}
+	stored := []storedUserToken{}
+	for token, t := range g.tokens {
+		if t.kind == credUser && !g.now().After(t.expires) {
+			stored = append(stored, storedUserToken{Token: token, Login: t.login, Refresh: t.refresh, Expires: t.expires, Dead: t.dead})
+		}
+	}
+	raw, err := json.Marshal(stored)
+	if err == nil {
+		tmp := g.tokenStore + ".next"
+		if err = os.WriteFile(tmp, raw, 0o600); err == nil {
+			err = os.Rename(tmp, g.tokenStore)
+		}
+	}
+	if err != nil {
+		fmt.Printf("keeping the users' tokens in %s: %v\n", g.tokenStore, err)
+	}
+}
+
 // canRead says whether c reads repo: a public one everyone, a private one
 // the users the fixture grants it and the installation on its owner.
 func (g *workspaceGitHub) canRead(c githubCaller, repo *workspaceRepo) bool {
@@ -825,6 +897,7 @@ func (g *workspaceGitHub) accessToken(w http.ResponseWriter, r *http.Request) {
 	}
 	access := g.issue("ghu_", &githubToken{kind: credUser, login: login}, githubUserTokenTTL)
 	refresh := g.issue("ghr_", &githubToken{kind: credUser, login: login, refresh: true}, githubRefreshTokenTTL)
+	g.saveUserTokens()
 	answer(map[string]any{
 		"access_token": access, "expires_in": int(githubUserTokenTTL.Seconds()),
 		"refresh_token": refresh, "refresh_token_expires_in": int(githubRefreshTokenTTL.Seconds()),
@@ -895,6 +968,7 @@ func (g *workspaceGitHub) revoke(grant bool) http.HandlerFunc {
 				}
 			}
 		}
+		g.saveUserTokens()
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
@@ -1151,6 +1225,13 @@ func ServeWorkspaceGitHub(ctx context.Context, opts WorkspaceGitHubOptions) erro
 		return err
 	}
 	g.apiHosts = opts.APIHosts
+	if g.tokenStore = opts.TokenStore; g.tokenStore != "" {
+		n, err := g.loadUserTokens()
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%d users' tokens kept from %s\n", n, g.tokenStore)
+	}
 	l, err := net.Listen("tcp", opts.Listen)
 	if err != nil {
 		return fmt.Errorf("the fake GitHub cannot listen on %s: %w", opts.Listen, err)
