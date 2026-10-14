@@ -26,7 +26,7 @@ const (
 // gitHubAppWired is the render's answer: the App is recorded and the chart
 // line takes the key (the 4.x agent-manager chart's skills.github.app).
 func gitHubAppWired(cfg *config.Config) bool {
-	return cfg.GitHubApp.Configured() && !cfg.LegacyChart()
+	return cfg.SkillsGitHubApp().Configured() && !cfg.LegacyChart()
 }
 
 // ensureGitHubAppSecret is the deploy-time half, run before the install: the
@@ -37,7 +37,7 @@ func ensureGitHubAppSecret(_ context.Context, cfg *config.Config) error {
 	if !gitHubAppWired(cfg) {
 		return nil
 	}
-	app := cfg.GitHubApp
+	app := cfg.SkillsGitHubApp()
 	if err := ensureSecret(platformNamespace, gitHubAppSecret, corev1.SecretTypeOpaque, map[string][]byte{
 		gitHubAppSecretAppID:          []byte(app.AppID),
 		gitHubAppSecretInstallationID: []byte(app.InstallationID),

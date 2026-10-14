@@ -1682,7 +1682,7 @@ func (c *Config) Validate() error {
 	if err := c.GitHubToken.Validate(); err != nil {
 		return fmt.Errorf("githubToken.source %q: %w", c.GitHubToken.Source, err)
 	}
-	if err := c.GitHubApp.Validate(); err != nil {
+	if err := c.SkillsGitHubApp().Validate(); err != nil {
 		return fmt.Errorf("githubApp: %w", err)
 	}
 	if c.GitHubApp.Configured() && c.GitHubToken.Source != "" {
