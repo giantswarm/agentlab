@@ -17,6 +17,7 @@ import (
 
 // The platform proof's stages, in order, as the summary names them.
 const (
+	stageApiserverOIDC        = "apiserver OIDC"
 	stageDexToken             = "Dex token"
 	stageMusterSession        = "muster session"
 	stageKubernetesTools      = "Kubernetes tools"
@@ -76,6 +77,14 @@ func PlatformTest(cfg *config.Config, email string) error {
 func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string, error) {
 	client, err := labHTTPClient(30 * time.Second)
 	if err != nil {
+		return "", err
+	}
+
+	// After a Dex key rotation the apiserver refuses new-key tokens until its
+	// cached JWKS expires (apiserveroidc.go): waited out here, before any
+	// stage reads the cluster as a person.
+	p.begin(stageApiserverOIDC, "Checking the apiserver accepts a fresh Dex token")
+	if err := ensureApiserverAcceptsDex(context.Background(), cfg); err != nil {
 		return "", err
 	}
 

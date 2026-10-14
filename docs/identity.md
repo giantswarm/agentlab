@@ -144,8 +144,10 @@ the apiserver (`--oidc-client-id=kubernetes`), by muster
 
 ## Signing-key rotation and the apiserver's JWKS cache
 
-Dex rotates its signing key every 6 hours (its default; the lab sets no
-`expiry`). It checks every 30 seconds whether `nextRotation` of its stored
+The lab's Dex rotates its signing key every 30 days (`signer.config.keysRotationPeriod:
+720h`; Dex's default is 6 hours), so a lab that lives for days does not meet
+the apiserver's window below every 6 hours. A key that expired while the node
+was down still rotates at Dex's first start after it. Dex checks every 30 seconds whether `nextRotation` of its stored
 signing keys has passed, mints a new key, and keeps the retired one in its
 JWKS as a verification key until the last token it signed has expired:
 rotation time plus the id-token lifetime, 24 hours by default
@@ -195,6 +197,15 @@ not a portal failure. The agent gateway's JWT policies keep their own copy of
 the JWKS; with its 5-minute refresh, fresh tokens were measured refused for
 4 min 47 s after a rotation in this lab
 ([agentgateway-upstream#46](https://github.com/giantswarm/agentgateway-upstream/issues/46)).
+
+`agentlab platform-test` starts with the stage `apiserver OIDC`: a fresh
+token of the first user at `whoami`. Refused while Dex publishes its key, it
+is this window: the stage presents a new token every 15 seconds until the
+apiserver fetches again, at most 10 min 30 s, and the proof goes on. Any other
+refusal fails the stage at once. A rotation is forced for a test by setting
+the SigningKey object's `nextRotation` to a past time (`kubectl -n dex patch
+signingkeies.dex.coreos.com openid-connect-keys --type merge -p
+'{"nextRotation":"<past RFC 3339 time>"}'`); Dex rotates within 30 seconds.
 
 Nothing in the flags shortens the apiserver's wait: the `--oidc-*` flags and
 the `AuthenticationConfiguration` file have no JWKS cache setting, and the
