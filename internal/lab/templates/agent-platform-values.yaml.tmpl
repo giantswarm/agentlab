@@ -1063,14 +1063,17 @@ backstage:
         # the key.
         checksum: "{{ .BackstageAppConfigChecksum }}"
 {{- end }}
-{{- if .GitHubToken }}
-    # $GITHUB_TOKEN into the portal's environment from the Secret the lab
-    # creates (githubtoken.go); the overlay's integrations.github reads it
-    # (backstage-catalog.yaml.tmpl), so the gs backend's skill discovery calls
-    # GitHub authenticated — 5000 requests an hour instead of the 60 this
-    # machine's egress address shares. A separate list from the umbrella's
-    # extraEnvVars, so nothing of the umbrella's is overridden.
+    # Secrets the lab places into the portal's environment, a separate list
+    # from the umbrella's extraEnvVars, so nothing of the umbrella's is
+    # overridden. $ANTHROPIC_API_KEY (anthropic.go: the agents' key, placed
+    # again in the portal's namespace) for the AI chat on the lab's model
+    # (the overlay's aiChat, backstage-catalog.yaml.tmpl). $GITHUB_TOKEN
+    # (githubtoken.go) for the overlay's integrations.github, so the gs
+    # backend's skill discovery calls GitHub authenticated — 5000 requests an
+    # hour instead of the 60 this machine's egress address shares.
     extraEnvVarsSecrets:
+      - agentlab-anthropic
+{{- if .GitHubToken }}
       - agentlab-github-token
 {{- end }}
     extraVolumes:

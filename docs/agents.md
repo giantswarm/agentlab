@@ -79,7 +79,9 @@ renders from the lab's `aiModel` setting (`agentlab.yaml`, default
 credential**, so unlike the lab's throwaway passwords it never enters
 `agentlab.yaml` or the rendered `state/` files. The Secret exists after every
 `agentlab up` and `agentlab platform`, so the ModelConfig resolves on a fresh
-lab too (the run waits for `ResolvedRefs`), from the first of:
+lab too (the run waits for `ResolvedRefs`), from the first of (the portal's
+copy for Backstage's AI chat, `agent-platform/agentlab-anthropic`, by the same
+rules; see [Backstage](backstage.md)):
 
 - **A recorded source** (`aiKey.source` in `agentlab.yaml`; `agentlab
   configure --ai-key-source op://<vault>/<item>/<field>`, or

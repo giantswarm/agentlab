@@ -46,7 +46,7 @@ data:
 # App-config overlay on top of the umbrella's own
 # (agent-platform-backstage-app-config): the catalog locations for the files
 # above, an in-memory database — the lab needs no Postgres for Backstage —
-# and the gatewayPort-aware public URL.
+# the gatewayPort-aware public URL and the AI chat's model.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -78,6 +78,16 @@ data:
           target: /lab-catalog/users.yaml
           rules:
             - allow: [User, Group]
+    # The AI chat on the lab's model (aiModel, the agents' default
+    # ModelConfig's too): Backstage's own default is an OpenAI model, for
+    # which the lab has no key. claude-* routes to Anthropic, authenticated
+    # with the key the lab places in the portal's environment
+    # (agentlab-anthropic in extraEnvVarsSecrets, anthropic.go). A reference
+    # Backstage resolves at start-up, never the value.
+    aiChat:
+      model: {{ .AIModel }}
+      anthropic:
+        apiKey: ${ANTHROPIC_API_KEY}
 {{- if .GitHubToken }}
     # The portal's skill discovery (the gs backend's GET /api/gs/agent-skills
     # reads GitHub through Backstage's integrations) authenticates with the

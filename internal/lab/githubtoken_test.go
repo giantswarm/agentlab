@@ -70,8 +70,8 @@ func TestGitHubTokenWiresBothConsumers(t *testing.T) {
 	t.Setenv(GitHubTokenEnv, gitHubTestToken)
 	s := renderGitHubTokenSurfaces(t, gitHubTokenTestConfig())
 
-	if got := dig(s.values, componentBackstage, componentBackstage, "extraEnvVarsSecrets"); !reflect.DeepEqual(got, []any{gitHubTokenSecret}) {
-		t.Errorf("backstage.backstage.extraEnvVarsSecrets = %v, want [%s]", got, gitHubTokenSecret)
+	if got := dig(s.values, componentBackstage, componentBackstage, "extraEnvVarsSecrets"); !reflect.DeepEqual(got, []any{portalAnthropicSecret, gitHubTokenSecret}) {
+		t.Errorf("backstage.backstage.extraEnvVarsSecrets = %v, want [%s %s]", got, portalAnthropicSecret, gitHubTokenSecret)
 	}
 	tokenSecret := []string{agentManagerValuesKey, "skills", "github", "tokenSecret"}
 	githubToken := []string{agentManagerWiringKey, "migration", "githubToken"}
@@ -111,12 +111,15 @@ func TestGitHubTokenWiresBothConsumers(t *testing.T) {
 }
 
 // TestGitHubTokenUnsetLeavesTheLabAsItWas: without the variable none of the
-// keys render — the consumers call GitHub unauthenticated, as before.
+// keys render — the consumers call GitHub unauthenticated, as before; the
+// portal's environment keeps only the Anthropic key.
 func TestGitHubTokenUnsetLeavesTheLabAsItWas(t *testing.T) {
 	t.Setenv(GitHubTokenEnv, "")
 	s := renderGitHubTokenSurfaces(t, gitHubTokenTestConfig())
+	if got := dig(s.values, componentBackstage, componentBackstage, "extraEnvVarsSecrets"); !reflect.DeepEqual(got, []any{portalAnthropicSecret}) {
+		t.Errorf("backstage.backstage.extraEnvVarsSecrets = %v without $%s, want [%s]", got, GitHubTokenEnv, portalAnthropicSecret)
+	}
 	for _, path := range [][]string{
-		{componentBackstage, componentBackstage, "extraEnvVarsSecrets"},
 		{agentManagerValuesKey, "skills"},
 		{agentManagerWiringKey},
 	} {
@@ -277,8 +280,8 @@ func TestGitHubTokenSourceWiresBothConsumers(t *testing.T) {
 	if got := dig(s.values, agentManagerValuesKey, "skills", "github", "tokenSecret", nameKey); got != gitHubTokenSecret {
 		t.Errorf("agent-manager.skills.github.tokenSecret.name = %v with githubToken.source, want %s", got, gitHubTokenSecret)
 	}
-	if got := dig(s.values, componentBackstage, componentBackstage, "extraEnvVarsSecrets"); !reflect.DeepEqual(got, []any{gitHubTokenSecret}) {
-		t.Errorf("backstage.backstage.extraEnvVarsSecrets = %v with githubToken.source, want [%s]", got, gitHubTokenSecret)
+	if got := dig(s.values, componentBackstage, componentBackstage, "extraEnvVarsSecrets"); !reflect.DeepEqual(got, []any{portalAnthropicSecret, gitHubTokenSecret}) {
+		t.Errorf("backstage.backstage.extraEnvVarsSecrets = %v with githubToken.source, want [%s %s]", got, portalAnthropicSecret, gitHubTokenSecret)
 	}
 }
 
