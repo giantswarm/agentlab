@@ -205,7 +205,8 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 		} `json:"items"`
 	}
 	if err := json.Unmarshal([]byte(wrapped.Content[0].Text), &nsList); err != nil {
-		return "", fmt.Errorf("parsing namespace list: %w", err)
+		// A failed call answers with the tool's own error text, not a list.
+		return "", fmt.Errorf("%slist namespaces answered no namespace list: %s", toolPrefix, strings.TrimSpace(wrapped.Content[0].Text))
 	}
 	names := make([]string, 0, len(nsList.Items))
 	for _, item := range nsList.Items {
