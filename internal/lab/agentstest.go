@@ -389,7 +389,7 @@ func AgentsTest(cfg *config.Config, email string) error {
 		}
 	}
 
-	step("The agent-manager ServiceAccount holds no RBAC of its own (auth can-i --list --as=%s, against a ServiceAccount no binding names)", agentManagerServiceAccount)
+	step("The agent-manager ServiceAccount holds no RBAC of its own but, with skills.mintGitAuthSecret, the skills-Secret Role (auth can-i --list --as=%s, against a ServiceAccount no binding names)", agentManagerServiceAccount)
 	rules, err := serviceAccountRules(agentManagerServiceAccount, kagentNamespace)
 	if err != nil {
 		return err
@@ -398,11 +398,19 @@ func AgentsTest(cfg *config.Config, email string) error {
 	if err != nil {
 		return err
 	}
-	granted := rulesBeyond(rules, baseline)
-	if len(granted) > 0 {
-		return fmt.Errorf("the agent-manager ServiceAccount still holds permissions in %s beyond every ServiceAccount's:\n%s", kagentNamespace, strings.Join(granted, "\n"))
+	values, err := platformValuesWith(cfg, nil)
+	if err != nil {
+		return err
 	}
-	note("nothing beyond what every ServiceAccount holds (%d rows: discovery, self-subject reviews%s)", len(baseline), bootstrapExtras(baseline))
+	minted := mintedSkillsSecretNames(values)
+	granted, err := rulesBeyondMintGrant(rulesBeyond(rules, baseline), minted)
+	if err != nil {
+		return err
+	}
+	if len(granted) > 0 {
+		return fmt.Errorf("the agent-manager ServiceAccount still holds permissions in %s beyond every ServiceAccount's%s:\n%s", kagentNamespace, mintGrantClause(minted), strings.Join(granted, "\n"))
+	}
+	note("nothing beyond what every ServiceAccount holds (%d rows: discovery, self-subject reviews%s)%s", len(baseline), bootstrapExtras(baseline), mintGrantClause(minted))
 
 	step("An Agent on a Harness that does not exist: HelmRelease %s with agent.harness %s applied directly — get_agent_status says failed with the reason", agentsTestUnadmitted, agentsTestNoHarness)
 	unadmittedSpec := agentSpec{
@@ -470,7 +478,7 @@ func AgentsTest(cfg *config.Config, email string) error {
 	if viewer != nil {
 		fmt.Printf("PASS: %s's create is Forbidden by the apiserver as User \"oidc:%s\" (user RBAC, not the ServiceAccount's)\n", viewer.Email, viewer.Email)
 	}
-	fmt.Printf("PASS: %s holds no permissions beyond discovery\n", agentManagerServiceAccount)
+	fmt.Printf("PASS: %s holds no permissions beyond discovery%s\n", agentManagerServiceAccount, mintGrantClause(minted))
 	return nil
 }
 
@@ -810,6 +818,94 @@ func rulesBeyond(rows, baseline []string) []string {
 		granted = append(granted, row)
 	}
 	return granted
+}
+
+// mintedSkillsSecretNames is, with agent-manager.skills.mintGitAuthSecret in
+// the rendered values, the Secrets the agent-manager chart mints and lets its
+// ServiceAccount get and update (templates/skills-token.yaml): the current
+// name, the name before the tenant-credential- prefix, then every
+// skills.previousGitAuthSecretNames entry not already among them. Without
+// minting, nil: the ServiceAccount holds no Role at all.
+func mintedSkillsSecretNames(values map[string]any) []string {
+	if mint, _ := nestedValue(values, agentManagerMCPServer, skillsKey, skillsMintValue).(bool); !mint {
+		return nil
+	}
+	fullname := nestedString(values, agentManagerMCPServer, "fullnameOverride")
+	if fullname == "" {
+		fullname = agentManagerMCPServer
+	}
+	names := []string{"tenant-credential-" + fullname + "-skills-token", fullname + "-skills-token"}
+	previous, _ := nestedValue(values, agentManagerMCPServer, skillsKey, "previousGitAuthSecretNames").([]any)
+	for _, p := range previous {
+		if name, ok := p.(string); ok && name != "" && !slices.Contains(names, name) {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// skillsMintValue is agent-manager's skills value that turns minting on.
+const skillsMintValue = "mintGitAuthSecret"
+
+// mintGrantVerbs are the verbs of the skills-Secret Role minting grants.
+var mintGrantVerbs = []string{"get", "update"}
+
+// rulesBeyondMintGrant drops from granted the skills-Secret Role minting
+// gives the ServiceAccount — secrets, get and update, by the minted names —
+// and returns the rest. With minting on the Role must be there and grant
+// exactly that: a missing name or verb is an error, a row on more names, more
+// verbs or any other resource stays granted. With minting off (no names)
+// granted comes back unchanged.
+func rulesBeyondMintGrant(granted, minted []string) ([]string, error) {
+	if len(minted) == 0 {
+		return granted, nil
+	}
+	var rest, names, verbs []string
+	for _, row := range granted {
+		resource, rowNames, rowVerbs, ok := parseRuleRow(row)
+		if !ok || resource != gvrSecrets.Resource || len(rowNames) == 0 || !subsetOf(rowNames, minted) || !subsetOf(rowVerbs, mintGrantVerbs) {
+			rest = append(rest, row)
+			continue
+		}
+		names = append(names, rowNames...)
+		verbs = append(verbs, rowVerbs...)
+	}
+	if !subsetOf(minted, names) || !subsetOf(mintGrantVerbs, verbs) {
+		return nil, fmt.Errorf("agent-manager.skills.mintGitAuthSecret is on, but the agent-manager ServiceAccount's Role in %s grants secrets %v %v, wanted %v %v: agent-manager cannot keep the minted skills Secret filled",
+			kagentNamespace, names, verbs, minted, mintGrantVerbs)
+	}
+	return rest, nil
+}
+
+// parseRuleRow splits a resource row of ruleRows ("<resource>  []  [<names>]
+// [<verbs>]") into its resource, resource names and verbs; ok is false for a
+// non-resource row.
+func parseRuleRow(row string) (resource string, names, verbs []string, ok bool) {
+	cols := strings.Split(row, "  ")
+	if len(cols) != 4 {
+		return "", nil, nil, false
+	}
+	list := func(col string) []string { return strings.Fields(strings.Trim(col, "[]")) }
+	return cols[0], list(cols[2]), list(cols[3]), true
+}
+
+// subsetOf says whether every element of sub is in set.
+func subsetOf(sub, set []string) bool {
+	for _, s := range sub {
+		if !slices.Contains(set, s) {
+			return false
+		}
+	}
+	return true
+}
+
+// mintGrantClause names the minted skills-Secret Role for the check's lines,
+// "" without minting.
+func mintGrantClause(minted []string) string {
+	if len(minted) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" and the skills-Secret Role minting grants (secrets %v [get update])", minted)
 }
 
 // bootstrapExtras names the resource rows of the baseline beyond the
