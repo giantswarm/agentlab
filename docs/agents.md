@@ -207,6 +207,69 @@ engine runs no kustomize-controller, so no Kustomization resolves it from
 the release's labels here. The agent, the copy, the fake and its Service go
 away at the end of the run.
 
+## Organizations as tenants
+
+`platform.tenants` (`agentlab configure --tenants`) renders the chart's
+`tenants.organizations.enabled: true`: agent-manager's tenant reconciler runs
+(`--multi-tenant`) and the chart admits the agent workers of every namespace
+labelled `giantswarm.io/organization`. The reconciler keeps in each such
+namespace, always, the agent chart's OCIRepository `agent`, the agents' Flux
+ServiceAccount and its RoleBinding (`kagent-flux`) and, when the platform's
+network policies are on, their copies — labelled
+`agent-manager.giantswarm.io/tenant-object=namespace` — and, while the
+namespace holds an agent, copies of the platform Harness, its WorkerPool and
+the pool's ServiceAccount, the default ModelConfig and its key Secret,
+labelled `…/tenant-object=agents`. The switch needs the agents runtime and a
+chart that carries it (giantswarm/agent-platform#1037 and #1050; until a
+release does, a dev build through `--chart-branch`).
+
+Substrate's credential provider reads a namespace's Secrets only where its
+policy allows it. Until the chart selects the organizations' namespaces by
+label (giantswarm/agent-platform#1041, Substrate 1.12), the lab's values list
+the two namespaces `tenants-test` uses by hand in
+`substrate.credentialProvider.namespacePolicies` — each read by the atespace
+of its own name, and by `ate-golden` — next to the chart's two entries. The
+list goes with #1041. A `platform.valuesFiles` overlay that sets that list
+replaces the lab's.
+
+`./agentlab tenants-test [email email]` is the proof
+(giantswarm/agentlab#739). It creates `org-agentlab-tenants-a` and
+`org-agentlab-tenants-b`, labelled, and binds one person to
+`agent-platform:editor` in each (default: the first two users outside
+`platform-admins`, `dev@lab.local` and `viewer@lab.local`; a platform admin is
+refused, being cluster-admin). It calls agent-manager's REST API (`/api/v1`,
+on a port-forward to its pod) as each person with their Dex token (audiences
+`kubernetes` and `agent-platform`) and checks:
+
+1. before an agent, each namespace holds only the always-kept objects;
+2. a person's create in the other organization is refused (403); the create
+   in their own (201, `requestedBy` the person) makes the reconciler copy the
+   Harness, the WorkerPool with agent-manager's
+   `--tenant-worker-pool-replicas`, its ServiceAccount, the ModelConfig and
+   its Secret;
+3. the WorkerPool's workers are Running and ready, the agent `ready`, and a
+   turn as the person (through the edge) answers, the credential provider
+   reading for the namespace's atespace from that namespace only (its log);
+4. the same in the second organization;
+5. as the admin (cluster-admin): a WorkerPool patch and delete and a pod
+   labelled `ate.dev/worker-pool` (server-side dry runs), and an exec into a
+   worker, are refused by the chart's `agent-platform-tenant-*` admission
+   policies; the network policy copies exist — skipped while agent-manager
+   copies none (the lab runs with network policies off); the credential
+   provider's live grants (`/statusz`) give each tenant's atespace its own
+   namespace only — skipped while its policy has no `ownNamespaceSelector`
+   entry;
+6. deleting each namespace's last agent removes the copies and keeps the
+   always-kept objects (giantswarm/agent-manager#175: the delete also
+   removes the OCIRepository, which the reconciler creates again; the proof
+   asserts the end state only).
+
+A lab without the switch fails before any write, naming
+`agentlab configure --tenants` and `agentlab platform`; so does a credential
+policy that does not list the two namespaces. The namespaces, their agents
+and bindings go at the end of the run, also after a failure, and at the
+start of the next one.
+
 ## The UI and the controller's route
 
 The kagent UI is host-published like the other components:

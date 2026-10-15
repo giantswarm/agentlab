@@ -140,6 +140,12 @@ type tmplData struct {
 	// unless the workspaces and the agents are on and the chart takes the
 	// workspaces values.
 	WorkspaceAdmission *workspaceAdmissionValues
+	// TenantsEnabled mirrors cfg.TenantsEnabled(): the chart's
+	// tenants.organizations.enabled, and the credential provider's policies
+	// for TenantsTestNamespaces, tenants-test's two organization namespaces
+	// (tenantstest.go).
+	TenantsEnabled        bool
+	TenantsTestNamespaces []string
 	// CodingHarnesses are the lab's coding Harnesses (coding.go), rendered
 	// as kagent.harnesses; none with coding agents and the workspaces off.
 	CodingHarnesses []codingHarness
@@ -325,6 +331,8 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		WorkspaceFake:                cfg.WorkspaceFakeProvider(),
 		WorkspaceFakeBearer:          cfg.WorkspaceFakeBearerProvider(),
 		WorkspaceAdmission:           workspaceAdmissionValuesFor(cfg, workspacesChart.Carries),
+		TenantsEnabled:               cfg.TenantsEnabled(),
+		TenantsTestNamespaces:        tenantsTestNamespaces[:],
 		CodingHarnesses:              codingHarnessesFor(cfg, workspaceAdmissionValuesFor(cfg, workspacesChart.Carries), nil),
 		CertsDir:                     certsDir,
 		NodeFilesDir:                 nodeFiles,

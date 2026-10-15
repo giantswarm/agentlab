@@ -504,6 +504,12 @@ type Platform struct {
 	// by default; --coding turns it on; needs the agents runtime. `agentlab
 	// coding-test` is the proof.
 	Coding Coding `yaml:"coding"`
+	// The Organizations' namespaces as tenants: the chart's
+	// tenants.organizations.enabled, which turns on agent-manager's tenant
+	// reconciler and admits the agent workers of every namespace labelled
+	// giantswarm.io/organization. Off by default; --tenants turns it on;
+	// needs the agents runtime. `agentlab tenants-test` is the proof.
+	Tenants Tenants `yaml:"tenants"`
 	// The platform-manager fixture: an invented installation with the agent
 	// platform and workspaces on, in a registry the lab serves, that the
 	// released giantswarm-platform-manager plans against
@@ -543,6 +549,12 @@ type Coding struct {
 	// renders on the chart's codex-harness image, which needs a kagent line
 	// whose chart takes `runtime: codex`.
 	Harnesses []string `yaml:"harnesses,omitempty"`
+}
+
+// Tenants configures the Organizations' namespaces as tenants.
+type Tenants struct {
+	// On, `agentlab platform` renders tenants.organizations.enabled: true.
+	Enabled bool `yaml:"enabled"`
 }
 
 // Workspaces configures the workspace storage in the lab.
@@ -1871,6 +1883,9 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("platform.coding needs agent-platform %s or newer (kagent.harnesses forwarded to the kagent chart); %s — `agentlab configure --coding=false`", codingChartFloor, chart)
 		}
 	}
+	if c.Platform.Tenants.Enabled && c.Platform.Enabled && !c.Platform.Agents {
+		return fmt.Errorf("platform.tenants requires platform.agents (the tenant reconciler is agent-manager's, and a tenant's agents run on kagent)")
+	}
 	if c.Platform.Serving.Enabled && c.Platform.Enabled && !c.Platform.Agents {
 		return fmt.Errorf("platform.serving requires platform.agents (model-manager wires a served model into kagent as a ModelConfig)")
 	}
@@ -2019,6 +2034,13 @@ func (c *Config) ChartBackends() []string {
 // server of muster's, not a consumer of the agents runtime.
 func (c *Config) VMManagerEnabled() bool {
 	return c.Platform.Enabled && c.Platform.VMManager.Enabled
+}
+
+// TenantsEnabled reports whether the platform treats the Organizations'
+// namespaces as tenants: the platform with its agents runtime on the current
+// line, and the key on.
+func (c *Config) TenantsEnabled() bool {
+	return c.Platform.Enabled && c.Platform.Agents && c.Platform.Tenants.Enabled && !c.LegacyChart()
 }
 
 // KlausGatewayEnabled reports whether the platform runs the klaus-gateway

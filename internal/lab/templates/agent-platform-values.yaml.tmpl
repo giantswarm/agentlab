@@ -527,6 +527,31 @@ substrate:
         value: "true"
         effect: NoSchedule
 {{- end }}
+{{- if .TenantsEnabled }}
+  # platform.tenants: the credential provider reads an organization
+  # namespace's Secrets only where a policy names it. Until the chart selects
+  # those namespaces by label (giantswarm/agent-platform#1041, Substrate
+  # 1.12), the lab lists tenants-test's two namespaces by hand: the chart's
+  # two entries, ate-golden also reading both, each namespace read by its own
+  # atespace only. Drop this list with #1041 (HACKS.md U33).
+  credentialProvider:
+    namespacePolicies:
+      - atespace: kagent
+        allowedNamespaces: [kagent]
+      - atespace: ate-golden
+        allowedNamespaces: [kagent{{ range .TenantsTestNamespaces }}, {{ . }}{{ end }}]
+{{- range .TenantsTestNamespaces }}
+      - atespace: {{ . }}
+        allowedNamespaces: [{{ . }}]
+{{- end }}
+
+# platform.tenants: the namespaces labelled giantswarm.io/organization are
+# tenants — agent-manager's tenant reconciler keeps what an agent needs in
+# each, and their agent workers are admitted (`agentlab tenants-test`).
+tenants:
+  organizations:
+    enabled: true
+{{- end }}
 {{- end }}
 
 kagent:

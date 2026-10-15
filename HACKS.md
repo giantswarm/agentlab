@@ -731,6 +731,21 @@ A claude Session works in its volume directory from kagent 1.9.0
 On an older kagent line, the proof's Session on the volume reports its default
 directory and fails.
 
+### U33. `agent-platform-values.yaml.tmpl`: the lab lists tenants-test's namespaces in Substrate's credential policy — BLOCKED UPSTREAM
+With `platform.tenants` on, an agent in an organization namespace needs
+Substrate's credential provider to read that namespace's Secrets (its model
+key), and the chart's policy names the kagent namespace only. **Fix:** the
+lab's values set `substrate.credentialProvider.namespacePolicies` to the
+chart's two entries plus `tenants-test`'s two namespaces
+(`tenantsTestNamespaces`, `tenantstest.go`): each read by the atespace of its
+own name, and by `ate-golden`. Other organization namespaces of the lab get
+no credentials. Unblocks when the chart selects the organizations'
+namespaces by label
+([agent-platform#1041](https://github.com/giantswarm/agent-platform/issues/1041),
+Substrate 1.12 with giantswarm/substrate#456): the chart then adds the
+selector entries to the lab's list, `tenants-test` checks the provider's live
+grants, and the list is redundant — the values template drops it.
+
 ### U32. `postRenderers` patch: the klaus-gateway component trusts the lab CA for muster — ACCEPTED
 The component dials muster at its public URL (`obo.musterUrl`): every Slack
 Session starts through agent-manager's MCP tools over muster, the workspace
