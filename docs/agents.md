@@ -242,7 +242,9 @@ on a port-forward to its pod) as each person with their Dex token (audiences
 `kubernetes` and `agent-platform`) and checks:
 
 1. before an agent, each namespace holds only the always-kept objects;
-2. a person's create in the other organization is refused (403); the create
+2. a person's create in the other organization is refused (403; under a name
+   that does not exist there, so a person with the lab's cluster-wide `view`
+   reaches the create and does not get 409); the create
    in their own (201, `requestedBy` the person) makes the reconciler copy the
    Harness, the WorkerPool with agent-manager's
    `--tenant-worker-pool-replicas`, its ServiceAccount, the ModelConfig and

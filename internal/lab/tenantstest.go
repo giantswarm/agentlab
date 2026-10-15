@@ -38,6 +38,11 @@ const (
 	// tenantsTestAgent is the agent tenants-test creates in each
 	// organization namespace, one person's in each.
 	tenantsTestAgent = "agentlab-tenants-test"
+	// tenantsTestCrossAgent is the name of the create in the other
+	// organization. It never exists there: a person with a cluster-wide read
+	// (the lab's viewers have view) would otherwise get 409 for the other
+	// person's tenantsTestAgent before the create is tried as them.
+	tenantsTestCrossAgent = "agentlab-tenants-cross"
 	// organizationLabel marks a namespace as a tenant (agent-manager's
 	// tenants.OrganizationLabel); its value is the organization's name.
 	organizationLabel = "giantswarm.io/organization"
@@ -495,21 +500,21 @@ func TenantsTest(cfg *config.Config, emails []string) error {
 		if i == 1 {
 			n, m = 4, 4
 		}
-		step("%d. %s creates %s in %s, the other organization — expecting 403", n, person.Email, tenantsTestAgent, other)
-		status, raw, err := api.call(http.MethodPost, "/agents", token, tenantsTestAgentSpec(other, rec.modelConfig))
+		step("%d. %s creates %s in %s, the other organization — expecting 403", n, person.Email, tenantsTestCrossAgent, other)
+		status, raw, err := api.call(http.MethodPost, "/agents", token, tenantsTestAgentSpec(other, tenantsTestCrossAgent, rec.modelConfig))
 		if err != nil {
 			return err
 		}
 		if status != http.StatusForbidden {
-			return fmt.Errorf("step %d: %s's create in %s answered %d, want 403 (the person has no role there): %s", n, person.Email, other, status, excerpt(string(raw), 300))
+			return fmt.Errorf("step %d: %s's create in %s answered %d, want 403 (the person cannot create there): %s", n, person.Email, other, status, excerpt(string(raw), 300))
 		}
-		if exists, err := tenantsTestReleaseExists(other); err != nil || exists {
-			return fmt.Errorf("step %d: HelmRelease %s/%s exists (or cannot be read: %v) although the create was refused", n, other, tenantsTestAgent, err)
+		if exists, err := tenantsTestReleaseExists(other, tenantsTestCrossAgent); err != nil || exists {
+			return fmt.Errorf("step %d: HelmRelease %s/%s exists (or cannot be read: %v) although the create was refused", n, other, tenantsTestCrossAgent, err)
 		}
 		note("refused: %s", excerpt(string(raw), 200))
 
 		step("%d. %s creates %s in %s — the reconciler copies %s", n, person.Email, tenantsTestAgent, ns, tenantObjectKeys(withAgents))
-		status, raw, err = api.call(http.MethodPost, "/agents", token, tenantsTestAgentSpec(ns, rec.modelConfig))
+		status, raw, err = api.call(http.MethodPost, "/agents", token, tenantsTestAgentSpec(ns, tenantsTestAgent, rec.modelConfig))
 		if err != nil {
 			return err
 		}
@@ -638,10 +643,10 @@ func TenantsTest(cfg *config.Config, emails []string) error {
 
 // tenantsTestAgentSpec is the create request: a chat-only agent (no MCP
 // binding) on the namespace's own copy of the default ModelConfig.
-func tenantsTestAgentSpec(ns, modelConfig string) map[string]any {
+func tenantsTestAgentSpec(ns, name, modelConfig string) map[string]any {
 	return map[string]any{
 		namespaceKey:   ns,
-		nameKey:        tenantsTestAgent,
+		nameKey:        name,
 		descriptionKey: "Throwaway agent of `agentlab tenants-test`; deleted by the same run.",
 		"modelConfig":  modelConfig,
 		toolsetKey:     []string{presetNone},
@@ -903,8 +908,14 @@ func probeTenantWorkerAdmission(token, ns, pool string) ([]string, error) {
 			return err
 		}},
 		{"exec into " + worker, func() error {
-			_, err := clientset.CoreV1().RESTClient().Post().Namespace(ns).Resource("pods").Name(worker).SubResource("exec").
+			body, err := clientset.CoreV1().RESTClient().Post().Namespace(ns).Resource("pods").Name(worker).SubResource("exec").
 				Param("command", "true").Param("stdout", "true").DoRaw(ctx)
+			// The apiserver answers a refused exec with a JSON Status, which
+			// the clientset's protobuf decoder reads as "unknown": the
+			// refusal's text is only in the body.
+			if err != nil && len(body) > 0 {
+				err = fmt.Errorf("%w: %s", err, body)
+			}
 			return err
 		}},
 	}
@@ -985,14 +996,14 @@ func createTenantsTestNamespace(ns, email string) error {
 
 // tenantsTestReleaseExists reports whether the agent's HelmRelease is in the
 // namespace.
-func tenantsTestReleaseExists(ns string) (bool, error) {
+func tenantsTestReleaseExists(ns, name string) (bool, error) {
 	gvr, err := gvrFor(helmReleaseResource)
 	if err != nil {
 		return false, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	defer cancel()
-	return objectExists(ctx, gvr, ns, tenantsTestAgent)
+	return objectExists(ctx, gvr, ns, name)
 }
 
 // removeTenantsTestNamespace removes the agent's HelmRelease first, while
