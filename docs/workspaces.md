@@ -316,7 +316,7 @@ with the reason.
    - a grant for the Agents of another namespace (`agent_namespace`
      `agentlab-access-other`) presented on the lab's Agent in `kagent`, and a
      grant without `agent_namespace`, signed the same way: both refused
-     naming `admission grant is for another namespace` (kagent 1.11.7 or
+     naming `admission grant is for another namespace` (kagent 1.12.0 or
      newer).
 
    For the first two, `start_session` is also refused, by agent-manager
