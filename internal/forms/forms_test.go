@@ -20,13 +20,16 @@ func TestRunTUIDrive(t *testing.T) {
 		// workspaces confirm, claude model, key source, GitHub token source,
 		// extra models confirm
 		"\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r",
-		"\r", // backstage group: port
+		"\r", "\r", // backstage group: port, portal mode
 	).attach
 	defer func() { testHook = nil }()
 
 	cfg := config.Default()
 	if err := Run(cfg, false, Hints{ModelServers: "Ollama 0.33.2 (:11434)"}); err != nil {
 		t.Fatalf("form run: %v", err)
+	}
+	if cfg.Backstage.Portal != config.PortalAgentPlatform {
+		t.Errorf("portal mode %q, want the default %q kept", cfg.Backstage.Portal, config.PortalAgentPlatform)
 	}
 	if cfg.ClusterName != "agentlab" || cfg.DexPort != 32000 {
 		t.Errorf("defaults not kept: cluster=%q dexPort=%d", cfg.ClusterName, cfg.DexPort)
@@ -54,6 +57,28 @@ func TestRunTUIDrive(t *testing.T) {
 	}
 	if len(cfg.Users) != 3 {
 		t.Errorf("users changed: %d", len(cfg.Users))
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("resulting config invalid: %v", err)
+	}
+}
+
+// TestRunTUIDrivePortalClassic picks the classic portal on the Backstage
+// page and keeps everything else.
+func TestRunTUIDrivePortalClassic(t *testing.T) {
+	testHook = newDriver(
+		"\r", "\r", "\r", "\r", "\r",
+		"\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r",
+		"\r", "j", "\r", // backstage group: port, portal mode one down
+	).attach
+	defer func() { testHook = nil }()
+
+	cfg := config.Default()
+	if err := Run(cfg, false, Hints{}); err != nil {
+		t.Fatalf("form run: %v", err)
+	}
+	if cfg.Backstage.Portal != config.PortalClassic {
+		t.Errorf("portal mode %q, want %q", cfg.Backstage.Portal, config.PortalClassic)
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("resulting config invalid: %v", err)

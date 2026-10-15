@@ -50,6 +50,29 @@ What the lab adds on top of the chart's own app-config
   and the `kubernetes` client trusts it as a peer so the Kubernetes plugin can
   mint apiserver-audience tokens (`components.backstage.extraScopes`).
 
+## Portal mode
+
+Backstage serves either the Agent Platform shell or the classic Platform
+Portal alone, by its `app.portals.agentPlatform`. The lab's switch is
+`backstage.portal` in `agentlab.yaml`, set with `agentlab configure --portal
+agent-platform|classic` (or the form's Backstage page) and applied by the next
+`agentlab platform`, which rolls Backstage once:
+
+| `backstage.portal` | `app.portals.agentPlatform` | `/` |
+|---|---|---|
+| `agent-platform` (default) | `true` | the shell's new-session screen |
+| `classic` | `false` | the classic home page (`app.rootRedirect: /`) |
+
+The lab's app-config overlay renders the key and is merged after the chart's
+own app-config, so it decides for every chart, a checkout of a line that does
+not set it included. It is deliberately an app-config key and never an
+`APP_CONFIG_app_portals_agentPlatform` entry of `backstage.backstage.extraEnvVars`:
+Helm replaces lists, so any `extraEnvVars` of the lab's would drop the chart's
+own entries — `NODE_EXTRA_CA_CERTS` among them — and Backstage would hang at
+start on the Dex TLS. The lab's values add no `extraEnvVars`; its own Secrets go
+through the separate `extraEnvVarsSecrets` list. The headless `backstage-test`
+calls the portal's backend APIs and passes in both modes.
+
 ## Users need no catalog entity
 
 RHDH's `emailLocalPartMatchingUserEntityName` resolver refuses a login it cannot

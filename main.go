@@ -850,7 +850,7 @@ func configureCmd() *cobra.Command {
 	var workspacesProvider, workspacesGitHubAppID, workspacesGitHubClientID, workspacesCleanupAfter, workspacesRefreshAfter string
 	var workspacesGitHubPrivateKeySource, workspacesGitHubClientSecretSource string
 	var githubSignInOrgs, modelManagerBackends []string
-	var vmManagerImageDir, aiKeySource, gitHubTokenSource string
+	var vmManagerImageDir, aiKeySource, gitHubTokenSource, portal string
 	var gitHubAppID, gitHubAppInstallationID, gitHubAppPrivateKeySource, gitHubAppClientID, gitHubAppClientSecretSource string
 	var chartVersion, chartPath, chartBranch string
 	var upgradeSeed, adoptChart bool
@@ -896,6 +896,12 @@ func configureCmd() *cobra.Command {
 			if cmd.Flags().Changed("backstage") {
 				cfg.Backstage.Enabled = backstage
 				cfg.Normalize() // backstage implies the platform
+			}
+			if cmd.Flags().Changed("portal") {
+				if !slices.Contains(config.PortalModes, portal) {
+					return fmt.Errorf("--portal %q: the portal modes are %s", portal, strings.Join(config.PortalModes, ", "))
+				}
+				cfg.Backstage.Portal = portal
 			}
 			if cmd.Flags().Changed("chart-version") {
 				cfg.Platform.ChartVersion = chartVersion
@@ -1075,6 +1081,7 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&agents, "agents", false, "enable/disable the agents runtime (kagent, part of the platform install)")
 	cmd.Flags().BoolVar(&observability, "observability", false, "enable/disable the observability stack (Prometheus + mcp-prometheus)")
 	cmd.Flags().BoolVar(&backstage, "backstage", false, "enable/disable Backstage (implies the platform)")
+	cmd.Flags().StringVar(&portal, "portal", "", fmt.Sprintf("the Backstage portal `mode` (%s): %s serves the Agent Platform shell (app.portals.agentPlatform), %s the classic Platform Portal alone; the next agentlab platform rolls Backstage onto it", strings.Join(config.PortalModes, ", "), config.PortalAgentPlatform, config.PortalClassic))
 	cmd.Flags().BoolVar(&modelManager, "model-manager", false, "pin managed models on/off (needs agents); without it a first configure follows the host model servers the discovery finds and a later one keeps the recorded choice")
 	cmd.Flags().StringVar(&chartVersion, "chart-version", "", "the agent-platform chart release to install (an exact version; default "+config.DefaultChartVersion+")")
 	cmd.Flags().StringVar(&chartPath, "chart-path", "", "install the agent-platform chart from this local directory (an agent-platform checkout's helm/agent-platform) instead of the pinned release; \"\" clears it")
@@ -1135,7 +1142,11 @@ func printSaved(cfg *config.Config, disc *lab.Discovery) {
 	for _, name := range slices.Sorted(maps.Keys(cfg.Platform.DevImages)) {
 		fmt.Printf("  dev image  %s -> %s\n", name, cfg.Platform.DevImages[name])
 	}
-	fmt.Printf("  backstage  %v\n", cfg.Backstage.Enabled)
+	if cfg.Backstage.Enabled {
+		fmt.Printf("  backstage  true (portal %s)\n", cfg.Backstage.Portal)
+	} else {
+		fmt.Println("  backstage  false")
+	}
 	switch {
 	case cfg.AIKey.Source != "":
 		fmt.Printf("  ai model   %s (key placed from %s through beekeeper at deploy time)\n", cfg.AIModel, cfg.AIKey.Source)

@@ -191,3 +191,59 @@ func TestBackstageOverlayAIChatModel(t *testing.T) {
 		t.Errorf("overlay aiChat.anthropic.apiKey = %v, want ${%s}", got, AnthropicKeyEnv)
 	}
 }
+
+// TestBackstagePortalMode: backstage.portal renders app.portals.agentPlatform
+// in the lab's app-config overlay — on for agent-platform (and for a file
+// written before the switch), off for classic, which also sends / to the
+// classic home page instead of the shell's /agent-platform — and in no mode
+// do the values restate backstage.extraEnvVars: Helm replaces that list, so
+// any entry of the lab's would drop the chart's NODE_EXTRA_CA_CERTS.
+func TestBackstagePortalMode(t *testing.T) {
+	for _, tc := range []struct {
+		portal       string
+		want         bool
+		rootRedirect any
+	}{
+		{portal: config.PortalAgentPlatform, want: true},
+		{portal: "", want: true},
+		{portal: config.PortalClassic, want: false, rootRedirect: "/"},
+	} {
+		t.Run(tc.portal, func(t *testing.T) {
+			cfg := config.Default()
+			cfg.Backstage.Portal = tc.portal
+			cfg.Normalize()
+			if err := cfg.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			overlay := backstageOverlayAppConfig(t, cfg)
+			if got := dig(overlay, "app", "portals", "agentPlatform"); got != tc.want {
+				t.Errorf("app.portals.agentPlatform = %v, want %v", got, tc.want)
+			}
+			if got := dig(overlay, "app", "rootRedirect"); got != tc.rootRedirect {
+				t.Errorf("app.rootRedirect = %v, want %v", got, tc.rootRedirect)
+			}
+			raw, err := renderTemplate(cfg, platformValuesTemplate, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var values map[string]any
+			if err := yaml.Unmarshal(raw, &values); err != nil {
+				t.Fatal(err)
+			}
+			if got := dig(values, componentBackstage, componentBackstage, "extraEnvVars"); got != nil {
+				t.Errorf("the values restate backstage.backstage.extraEnvVars (%v): Helm replaces the chart's list, NODE_EXTRA_CA_CERTS with it", got)
+			}
+		})
+	}
+}
+
+// TestBackstagePortalModeRefusesUnknown: a hand-edited mode is refused with
+// the modes there are.
+func TestBackstagePortalModeRefusesUnknown(t *testing.T) {
+	cfg := config.Default()
+	cfg.Backstage.Portal = "shell"
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "backstage.portal") {
+		t.Fatalf("Validate() = %v, want the backstage.portal refusal", err)
+	}
+}

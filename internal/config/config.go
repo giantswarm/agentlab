@@ -1270,7 +1270,26 @@ type Backstage struct {
 	// component (its version range, resolved by the chart's Flux) decides the
 	// version; platform.devImages swaps in a build of your own.
 	Port int `yaml:"port"`
+	// Portal is the portal mode the lab's app-config overlay renders:
+	// PortalAgentPlatform (the Agent Platform shell, app.portals.agentPlatform
+	// on) or PortalClassic (the classic Platform Portal alone). The overlay
+	// is an app-config file Backstage deep-merges last, so the switch never
+	// restates a chart list such as backstage.extraEnvVars.
+	Portal string `yaml:"portal"`
 }
+
+// The Backstage portal modes (backstage.portal).
+const (
+	PortalAgentPlatform = "agent-platform"
+	PortalClassic       = "classic"
+)
+
+// PortalModes lists the portal modes, the default first.
+var PortalModes = []string{PortalAgentPlatform, PortalClassic}
+
+// AgentPlatformPortal reports whether the portal serves the Agent Platform
+// shell (app.portals.agentPlatform).
+func (b Backstage) AgentPlatformPortal() bool { return b.Portal != PortalClassic }
 
 type Config struct {
 	// Kind cluster name; also prefixes RBAC bindings and names the muster
@@ -1351,6 +1370,7 @@ func Default() *Config {
 		Backstage: Backstage{
 			Enabled: true,
 			Port:    7007,
+			Portal:  PortalAgentPlatform,
 		},
 	}
 }
@@ -1654,6 +1674,10 @@ func (c *Config) Normalize() {
 		c.Platform.ChartPinned = false
 	}
 	c.Platform.ModelManager.normalize()
+	// A file written before the switch existed: the chart's own mode.
+	if c.Backstage.Portal == "" {
+		c.Backstage.Portal = PortalAgentPlatform
+	}
 }
 
 // branchSanitizeRe is gitsemver's: every run of characters outside [a-z0-9]
@@ -1996,6 +2020,9 @@ func (c *Config) Validate() error {
 	}
 	if err := ValidatePort(strconv.Itoa(c.Backstage.Port)); err != nil {
 		return fmt.Errorf("backstage.port: %w", err)
+	}
+	if c.Backstage.Portal != "" && !slices.Contains(PortalModes, c.Backstage.Portal) {
+		return fmt.Errorf("backstage.portal: %q is no portal mode (%s)", c.Backstage.Portal, strings.Join(PortalModes, ", "))
 	}
 	return nil
 }
