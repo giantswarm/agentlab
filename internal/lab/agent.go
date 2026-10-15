@@ -150,6 +150,10 @@ type agentSpec struct {
 	// decision. The direct writer only — agent-manager's create_agent has no
 	// such argument.
 	RequireApproval bool
+	// Egress is the HTTP(S) origins the agent reaches beyond its compiled
+	// destinations (agent.egress, the Agent's spec.egress); nil declares
+	// none.
+	Egress []string
 }
 
 // agentSkill is one skills[] entry: a name, a directory and exactly one
@@ -313,6 +317,9 @@ func createAgentArgs(spec agentSpec) (map[string]any, error) {
 	}
 	if len(spec.Skills) > 0 {
 		args[skillsKey] = spec.Skills
+	}
+	if len(spec.Egress) > 0 {
+		args[egressKey] = spec.Egress
 	}
 	return args, nil
 }
@@ -521,6 +528,9 @@ spec:
 // Harness the template is placed on.
 func agentValues(spec agentSpec) map[string]any {
 	agent := map[string]any{nameKey: spec.Name, "harness": spec.harnessValue()}
+	if len(spec.Egress) > 0 {
+		agent[egressKey] = spec.Egress
+	}
 	for key, value := range map[string]string{
 		displayNameKey: spec.DisplayName, descriptionKey: spec.Description, systemMessageKey: spec.SystemMessage, iconURLKey: spec.IconURL,
 	} {
