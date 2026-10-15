@@ -1114,7 +1114,7 @@ header. Four stages, each judged `PASS` or `FAIL`:
    ends with the client's timeout is the tunnel the actor's close did not end.
 
 The actor and its template are removed by the same run, and an earlier run's
-first. On agentlab-2 the case fails on Substrate 1.11.3 (the call waits the
+first. On a lab the case fails on Substrate 1.11.3 (the call waits the
 full 30s) and passes on 1.11.4, which carries the relay change, both pinned
 with `--substrate`, workers included.
 
