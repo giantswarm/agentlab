@@ -197,7 +197,7 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 				Validate(func(s string) error { return config.AIKey{Source: s}.Validate() }),
 			huh.NewInput().
 				Title("GitHub token source").
-				Description("Optional: a reference `beekeeper secret copy` resolves, as above — never the token itself.\nEvery up and platform place it into the Secret agentlab-github-token, so the portal's skill\ndiscovery and agent-manager's skill resolution call GitHub authenticated. Empty: the token\ncomes from $GITHUB_TOKEN at deploy time, else GitHub is called unauthenticated (60 an hour).").
+				Description("Optional: a reference `beekeeper secret copy` resolves, as above — never the token itself.\nEvery up and platform place it into the Secret agentlab-github-token, so the portal's skill\ndiscovery and agent-manager's skill resolution call GitHub authenticated. Empty: GitHub is called\nas the skills GitHub App when one is recorded, else unauthenticated (60 an hour).").
 				Value(&gitHubTokenSource).
 				Validate(func(s string) error { return config.GitHubToken{Source: s}.Validate() }),
 			huh.NewConfirm().

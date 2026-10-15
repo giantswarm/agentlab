@@ -164,9 +164,9 @@ what the proof checks is what the portal shows.
 - skill discovery for `https://github.com/giantswarm/agent-skills` — every
   entry carries the listing's head commit as a full id. The portal reads
   GitHub for this, so the proof first prints the GitHub API window it shares
-  with this machine (authenticated when `$GITHUB_TOKEN` is set — see
-  [The GitHub token](agents.md#the-github-token)) and, when the window holds
-  less than the run spends, waits once for its reset; a listing GitHub truncated is refused
+  with this machine and, when the window holds less than the run spends
+  while the portal or agent-manager calls GitHub without a credential (see
+  [The GitHub token](agents.md#the-github-token)), waits once for its reset; a listing GitHub truncated is refused
   by name, never asserted on;
 - `get_info` and `list_model_configs` through the portal;
 - the dry run (`validate_agent`): valid, mode `create`, the `OCIRepository` at

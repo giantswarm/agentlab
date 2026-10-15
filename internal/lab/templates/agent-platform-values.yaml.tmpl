@@ -746,7 +746,7 @@ agent-manager:
 {{- else if .GitHubToken }}
   # The token agent-manager resolves skills with (list_skills, the
   # create_agent pin, refreshSkills): the Secret the lab places from
-  # githubToken.source or $GITHUB_TOKEN (githubtoken.go), lifting the unauthenticated 60-an-hour
+  # githubToken.source (githubtoken.go), lifting the unauthenticated 60-an-hour
   # window this machine's egress address shares. The chart renders it as the
   # Deployment's GITHUB_TOKEN; the repositories list stays the chart's.
   skills:
@@ -1067,8 +1067,8 @@ backstage:
     # from the umbrella's extraEnvVars, so nothing of the umbrella's is
     # overridden. $ANTHROPIC_API_KEY (anthropic.go: the agents' key, placed
     # again in the portal's namespace) for the AI chat on the lab's model
-    # (the overlay's aiChat, backstage-catalog.yaml.tmpl). $GITHUB_TOKEN
-    # (githubtoken.go) for the overlay's integrations.github, so the gs
+    # (the overlay's aiChat, backstage-catalog.yaml.tmpl). GITHUB_TOKEN
+    # (githubtoken.go, placed from githubToken.source) for the overlay's integrations.github, so the gs
     # backend's skill discovery calls GitHub authenticated — 5000 requests an
     # hour instead of the 60 this machine's egress address shares — and the
     # skills GitHub App (githubapp.go) for the overlay's integrations.github
