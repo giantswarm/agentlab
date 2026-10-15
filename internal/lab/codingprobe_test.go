@@ -1,9 +1,10 @@
 package lab
 
 import (
-	"github.com/giantswarm/agentlab/internal/config"
 	"strings"
 	"testing"
+
+	"github.com/giantswarm/agentlab/internal/config"
 )
 
 // codingReply is a reply as an agent relays the sandbox probe on a line
