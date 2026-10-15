@@ -135,8 +135,61 @@ func Turn(cfg *config.Config, email, template, harness, prompt, sessionID, decid
 		return err
 	}
 	if keep {
-		fmt.Printf("kept: %s (agentlab turn --session %s …)\n", sessionID, sessionID)
+		fmt.Println(keptLine(sessionID))
 	}
+	return nil
+}
+
+// keptLine is what `turn --keep` prints for the Session it leaves: its id,
+// how to continue it, and how to delete it.
+func keptLine(sessionID string) string {
+	return fmt.Sprintf("kept: %s (continue with agentlab turn --session %s …; delete with agentlab turn --session %s --delete)", sessionID, sessionID, sessionID)
+}
+
+// DeleteSession is `agentlab turn --session <id> --delete`: the lab user
+// deletes a Session kept by an earlier `turn --keep`, as its creator, the way
+// a turn's own cleanup does — DeleteSession, retried while the Session's
+// runtime work settles — which releases its actor and snapshot.
+func DeleteSession(cfg *config.Config, email, sessionID string) error {
+	user := cfg.FindUser(email)
+	if user == nil {
+		return fmt.Errorf("no lab user %q in agentlab.yaml", email)
+	}
+	token, err := passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret,
+		user.Email, user.Password, musterLoginScopes)
+	if err != nil {
+		return err
+	}
+	api, err := dialKagentAPI(cfg, token)
+	if err != nil {
+		return err
+	}
+	defer api.close()
+	return deleteKeptSession(api, user.Email, sessionID)
+}
+
+// deleteKeptSession deletes the person's Session and confirms it gone. The
+// controller scopes a Session to its creator and answers NotFound for one of
+// another user, which deleteSession takes for already gone; the Session is
+// therefore read first, so an id the person cannot see — another user's, or
+// none at all — is refused instead of reported deleted.
+func deleteKeptSession(api *kagentAPI, email, sessionID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), sessionDeleteTimeout)
+	defer cancel()
+	session, err := api.getSession(ctx, sessionID)
+	if status.Code(err) == codes.NotFound {
+		return fmt.Errorf("%s has no Session %s to delete: it is gone, or another user's", email, sessionID)
+	}
+	if err != nil {
+		return err
+	}
+	if err := api.deleteSession(ctx, sessionID); err != nil {
+		return err
+	}
+	if _, err := api.getSession(ctx, sessionID); status.Code(err) != codes.NotFound {
+		return fmt.Errorf("session %s still answers GetSession after DeleteSession: %v", sessionID, err)
+	}
+	fmt.Printf("deleted: %s of Agent %s (creator %s, was %s)\n", sessionID, session.GetAgent().GetName(), session.GetCreator(), sessionState(session))
 	return nil
 }
 
