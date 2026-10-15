@@ -50,7 +50,7 @@ func TestGrantPayloadAndJudge(t *testing.T) {
 			t.Errorf("judgeGrant(%s, %s, %s, %v) = %v, want %q", tc.person, tc.workspace, tc.volume.Handle, tc.changed, err, tc.want)
 		}
 	}
-	claims.AgentNamespace = "elsewhere"
+	claims.AgentNamespace = "another-tenant"
 	if err := judgeGrant(claims, testDevUser, accessWorkspace, volume, []string{syncMovingRepo}); err == nil || !strings.Contains(err.Error(), "Agent namespace") {
 		t.Errorf("a grant for another Agent namespace judged %v, want it named", err)
 	}
