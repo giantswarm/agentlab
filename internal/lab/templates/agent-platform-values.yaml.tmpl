@@ -1244,6 +1244,14 @@ workspace-manager:
   sessions:
     cleanupAfter: {{ . }}
 {{- end }}
+{{- with .Platform.Workspaces.SyncRefreshAfter }}
+  # The refresh threshold (platform.workspaces.syncRefreshAfter): a Session
+  # started on a workspace whose last sync is older requests a sync. A
+  # proof's short one, so workspaces-test --part refresh sees a workspace
+  # pass it. Unset, the manager's 1h.
+  sync:
+    refreshAfter: {{ . }}
+{{- end }}
 {{- if not .WorkspacesOrganizationsChart }}
   # The lab's Organization on a chart that does not forward
   # workspaces.organizations: the subchart's own map.

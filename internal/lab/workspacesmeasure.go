@@ -1096,7 +1096,7 @@ func (m *measurement) session(w *measureWorkspace, last bool) error {
 	}
 	startCalled := time.Now()
 	env, err := m.person.callToolEnvelope(agentManagerToolPrefix+"start_session", map[string]any{
-		nameKey: m.agentName, namespaceKey: m.agentNS, startSessionRequestIDArg: uuid.NewString(), "workspaceGrant": grant,
+		nameKey: m.agentName, namespaceKey: m.agentNS, startSessionRequestIDArg: uuid.NewString(), startSessionGrantArg: grant,
 	})
 	if err != nil {
 		return err

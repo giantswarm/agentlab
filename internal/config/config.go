@@ -536,6 +536,12 @@ type Workspaces struct {
 	// sessions.cleanupAfter; empty keeps the chart's 30 days. A short window
 	// is a proof's: `workspaces-test --part sessions` waits it out once.
 	SessionsCleanupAfter string `yaml:"sessionsCleanupAfter,omitempty"`
+	// SyncRefreshAfter is the refresh threshold, a Go duration the
+	// workspace-manager takes as its sync.refreshAfter: a Session started on
+	// a workspace whose last sync is older requests a sync; empty keeps the
+	// manager's 1h. A short threshold is a proof's: `workspaces-test --part
+	// refresh` lets a workspace pass it.
+	SyncRefreshAfter string `yaml:"syncRefreshAfter,omitempty"`
 	// CSICompanion runs the connectivity chart's CSI companion
 	// (workspaces.substrate.csiCompanion) as Substrate's driver in place of
 	// the lab's own registration: its efs preset with the lab's NFS plugin
@@ -1837,6 +1843,11 @@ func (c *Config) Validate() error {
 	if after := c.Platform.Workspaces.SessionsCleanupAfter; after != "" {
 		if d, err := time.ParseDuration(after); err != nil || d <= 0 {
 			return fmt.Errorf("platform.workspaces.sessionsCleanupAfter %q is no positive Go duration (such as 3m, or 720h for the chart's 30 days)", after)
+		}
+	}
+	if after := c.Platform.Workspaces.SyncRefreshAfter; after != "" {
+		if d, err := time.ParseDuration(after); err != nil || d <= 0 {
+			return fmt.Errorf("platform.workspaces.syncRefreshAfter %q is no positive Go duration (such as 1m, or 1h for the manager's default)", after)
 		}
 	}
 	if err := c.Platform.Workspaces.GitHub.Validate(); err != nil {

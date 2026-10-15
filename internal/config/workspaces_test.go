@@ -161,3 +161,20 @@ func TestWorkspacesSessionsCleanupAfter(t *testing.T) {
 		}
 	}
 }
+
+// The refresh threshold: empty keeps the manager's, a positive Go duration
+// is taken, anything else refused.
+func TestWorkspacesSyncRefreshAfter(t *testing.T) {
+	for value, ok := range map[string]bool{"": true, "1m": true, "1h": true, "0s": false, "-1m": false, "a minute": false} {
+		cfg := Default()
+		cfg.Platform.Workspaces.Enabled = true
+		cfg.Platform.Workspaces.SyncRefreshAfter = value
+		err := cfg.Validate()
+		if ok && err != nil {
+			t.Errorf("%q: %v", value, err)
+		}
+		if !ok && (err == nil || !strings.Contains(err.Error(), "syncRefreshAfter")) {
+			t.Errorf("%q: err = %v, want refused", value, err)
+		}
+	}
+}
