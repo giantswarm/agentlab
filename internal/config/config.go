@@ -196,16 +196,17 @@ const DevImageSubstrateAPI = "ate-api-server"
 // (DevRegistryPort) and forwards the digest through kagent.harness.image.
 const DevImageHarness = "harness"
 
-// DevImageClaudeHarness and DevImageCodexHarness are the devImages keys of a
-// coding Harness's image, `<runtime>-harness`: a build of the kagent line's
-// claude-harness or codex-harness, say from a pull request. Like the
-// `harness` target it is no Deployment: the lab pushes it to its registry
-// and forwards the digest as the image of that runtime's kagent.harnesses
-// entry. Meaningful only while the lab renders that Harness
-// (CodingHarnessRendered).
+// DevImageClaudeHarness, DevImageCodexHarness and DevImageOmpHarness are the
+// devImages keys of a coding Harness's image, `<runtime>-harness`: a build
+// of the kagent line's claude-harness, codex-harness or omp-harness, say
+// from a pull request. Like the `harness` target it is no Deployment: the
+// lab pushes it to its registry and forwards the digest as the image of that
+// runtime's kagent.harnesses entry. Meaningful only while the lab renders
+// that Harness (CodingHarnessRendered).
 const (
 	DevImageClaudeHarness = CodingRuntimeClaude + "-harness"
 	DevImageCodexHarness  = CodingRuntimeCodex + "-harness"
+	DevImageOmpHarness    = CodingRuntimeOmp + "-harness"
 )
 
 // CodingHarnessDevImage is the devImages key of a coding runtime's image.
@@ -215,18 +216,34 @@ func CodingHarnessDevImage(runtime string) string { return runtime + "-harness" 
 // registry and pinned by digest (a Harness's image) rather than side-loaded
 // into the node as a Deployment's.
 func RegistryDevImage(component string) bool {
-	return component == DevImageHarness || component == DevImageClaudeHarness || component == DevImageCodexHarness
+	return component == DevImageHarness || component == DevImageClaudeHarness || component == DevImageCodexHarness || component == DevImageOmpHarness
 }
 
 // The coding runtimes the lab renders a Harness of, each named after its
-// runtime: claude (Claude Code) and codex (OpenAI's Codex CLI).
+// runtime: claude (Claude Code), codex (OpenAI's Codex CLI) and omp
+// (oh-my-pi, a BYO Harness on the kagent line's omp-harness adapter).
 const (
 	CodingRuntimeClaude = "claude"
 	CodingRuntimeCodex  = "codex"
+	CodingRuntimeOmp    = "omp"
 )
 
 // CodingRuntimes are the runtimes platform.coding.harnesses takes.
-var CodingRuntimes = []string{CodingRuntimeClaude, CodingRuntimeCodex}
+var CodingRuntimes = []string{CodingRuntimeClaude, CodingRuntimeCodex, CodingRuntimeOmp}
+
+// CodingChartRuntime is the `runtime` the kagent chart's harnesses[] entry
+// of a coding runtime names: the runtime itself where kagent has one, `byo`
+// for omp, which runs the omp-harness adapter on an image the entry names.
+func CodingChartRuntime(runtime string) string {
+	if runtime == CodingRuntimeOmp {
+		return "byo"
+	}
+	return runtime
+}
+
+// codingImageRe is a coding Harness's image pinned by digest, what the kagent
+// chart's harnesses[] entry and the Harness API take.
+var codingImageRe = regexp.MustCompile(`^[^[:space:]@]+@sha256:[a-f0-9]{64}$`)
 
 // vmManagerChartFloor is the first agent-platform release whose vm-manager
 // component (components.vm-manager) comes from gsoci and fetches its guest
@@ -547,8 +564,16 @@ type Coding struct {
 	// Harnesses are the coding Harnesses rendered, by runtime (one of
 	// CodingRuntimes), each named after it; empty is claude alone. codex
 	// renders on the chart's codex-harness image, which needs a kagent line
-	// whose chart takes `runtime: codex`.
+	// whose chart takes `runtime: codex`; omp renders a BYO entry on the
+	// image Images names, which needs a kagent line whose chart takes
+	// `runtime: byo`.
 	Harnesses []string `yaml:"harnesses,omitempty"`
+	// Images are the images of the coding Harnesses the chart has no image
+	// of its own for (omp: the kagent line's omp-harness adapter, the digest
+	// a release's chart stamps as runtimeImages.ompHarness), by runtime,
+	// pinned by digest. A dev image (platform.devImages `<runtime>-harness`)
+	// wins over an entry here.
+	Images map[string]string `yaml:"images,omitempty"`
 }
 
 // Tenants configures the Organizations' namespaces as tenants.
@@ -1870,11 +1895,22 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("platform.coding.harnesses: %q twice", runtime)
 		}
 	}
+	for runtime, image := range c.Platform.Coding.Images {
+		if !slices.Contains(CodingRuntimes, runtime) {
+			return fmt.Errorf("platform.coding.images: unknown runtime %q (one of %s)", runtime, strings.Join(CodingRuntimes, ", "))
+		}
+		if !codingImageRe.MatchString(image) {
+			return fmt.Errorf("platform.coding.images.%s: %q is not an image pinned by digest (<repository>@sha256:<64 hex digits>)", runtime, image)
+		}
+	}
 	for _, runtime := range CodingRuntimes {
 		target := CodingHarnessDevImage(runtime)
 		if _, ok := c.Platform.DevImages[target]; ok && !c.CodingHarnessRendered(runtime) {
 			return fmt.Errorf("platform.devImages.%s: the lab renders no Harness %s (platform.coding.enabled with %s in platform.coding.harnesses) — the override would swap the image of nothing", target, runtime, runtime)
 		}
+	}
+	if c.CodingHarnessRendered(CodingRuntimeOmp) && c.CodingHarnessImage(CodingRuntimeOmp) == "" {
+		return fmt.Errorf("platform.coding.harnesses names %s, whose Harness runs an image the chart has none of its own for: set platform.coding.images.%s (the kagent line's omp-harness by digest, runtimeImages.ompHarness.digest of the release's chart) or platform.devImages.%s", CodingRuntimeOmp, CodingRuntimeOmp, DevImageOmpHarness)
 	}
 	// kagent.harnesses reaches the kagent chart from codingChartFloor on; an
 	// older release drops the key and renders no coding Harness.
@@ -2072,6 +2108,12 @@ func (c *Config) CodingHarnesses() []string {
 		return []string{CodingRuntimeClaude}
 	}
 	return c.Platform.Coding.Harnesses
+}
+
+// CodingHarnessImage is the image platform.coding.images names for a coding
+// runtime, "" where the chart's own image of the runtime applies.
+func (c *Config) CodingHarnessImage(runtime string) string {
+	return c.Platform.Coding.Images[runtime]
 }
 
 // CodingHarnessRendered reports whether the lab renders the coding Harness of

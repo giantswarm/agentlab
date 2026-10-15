@@ -738,8 +738,17 @@ kagent:
 {{- range . }}
     - name: {{ .Name }}
       runtime: {{ .Runtime }}
+{{- with .DisplayName }}
+      displayName: {{ printf "%q" . }}
+{{- end }}
 {{- with .Image }}
       image: {{ . }}
+{{- end }}
+{{- with .Command }}
+      command:
+{{- range . }}
+        - {{ . }}
+{{- end }}
 {{- end }}
       snapshotLocation: {{ .SnapshotLocation }}
 {{- if .PropagateToken }}

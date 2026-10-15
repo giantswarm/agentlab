@@ -846,6 +846,7 @@ func configureCmd() *cobra.Command {
 	var serving, workspaces, workspacesCSICompanion, coding, tenants, github, githubSignIn bool
 	var githubSignInClientID string
 	var codingHarnesses []string
+	var codingImages map[string]string
 	var workspacesProvider, workspacesGitHubAppID, workspacesGitHubClientID, workspacesCleanupAfter, workspacesRefreshAfter string
 	var workspacesGitHubPrivateKeySource, workspacesGitHubClientSecretSource string
 	var githubSignInOrgs, modelManagerBackends []string
@@ -980,6 +981,9 @@ func configureCmd() *cobra.Command {
 			if cmd.Flags().Changed("tenants") {
 				cfg.Platform.Tenants.Enabled = tenants
 			}
+			if cmd.Flags().Changed("coding-images") {
+				cfg.Platform.Coding.Images = codingImages
+			}
 			if cmd.Flags().Changed("workspaces-provider") {
 				cfg.Platform.Workspaces.Provider = workspacesProvider
 			}
@@ -1087,8 +1091,9 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().StringSliceVar(&githubSignInOrgs, "github-signin-orgs", nil, "GitHub sign-in: admit members of these GitHub organizations only, their teams as groups (`<org>:<team-slug>`); empty admits any GitHub account")
 	cmd.Flags().BoolVar(&workspaces, "workspaces", false, "workspace storage: a read-write-many StorageClass that serves git — an in-cluster NFS server, the NFS CSI driver behind an mTLS proxy only Agent Substrate's API server may reach, and the StorageClass "+lab.WorkspacesStorageClass+" (needs agents); --workspaces=false turns it off")
 	cmd.Flags().BoolVar(&coding, "coding", false, "coding agents: the chart's kagent.harnesses renders the coding Harnesses (claude, Claude Code run headless, unless --coding-harnesses names others), which `agentlab coding-test` proves (needs agents); --coding=false turns it off")
-	cmd.Flags().StringSliceVar(&codingHarnesses, "coding-harnesses", nil, fmt.Sprintf("the coding Harnesses rendered with --coding, by runtime (%s; each named after its runtime; default claude alone); codex needs a kagent line whose chart takes runtime codex; \"\" returns to claude alone", strings.Join(config.CodingRuntimes, ", ")))
 	cmd.Flags().BoolVar(&tenants, "tenants", false, "the Organizations' namespaces as tenants: the chart's tenants.organizations.enabled turns on agent-manager's tenant reconciler for every namespace labelled giantswarm.io/organization, which `agentlab tenants-test` proves (needs agents); --tenants=false turns it off")
+	cmd.Flags().StringSliceVar(&codingHarnesses, "coding-harnesses", nil, fmt.Sprintf("the coding Harnesses rendered with --coding, by runtime (%s; each named after its runtime; default claude alone); codex needs a kagent line whose chart takes runtime codex, omp one whose chart takes runtime byo and an image from --coding-images; \"\" returns to claude alone", strings.Join(config.CodingRuntimes, ", ")))
+	cmd.Flags().StringToStringVar(&codingImages, "coding-images", nil, "the image of a coding Harness the chart has none of its own for, <runtime>=<image@sha256:digest> (repeatable): "+config.CodingRuntimeOmp+"=<the kagent line's omp-harness, runtimeImages.ompHarness.digest of the release's chart>; a dev image (platform.devImages "+config.DevImageOmpHarness+") wins; an empty map clears it")
 	cmd.Flags().StringVar(&workspacesProvider, "workspaces-provider", "", "the workspace-manager's provider instances: fake (the lab's own GitHub, the default), fake-bearer (the same GitHub shaped like github.com, its API on a Bearer host of its own; beside fake), github (a GitHub App of the lab's own, docs/workspaces.md), gitlab (a GitLab's OAuth application, docs/workspaces.md) or several, such as fake,github,gitlab")
 	cmd.Flags().BoolVar(&workspacesCSICompanion, "workspaces-csi-companion", false, "with workspaces on, the connectivity chart's CSI companion is Substrate's workspace driver: its efs preset running the lab's NFS plugin, the lab's NFS driver serving the volumes under the preset's driver name — the lab path for proving a companion chart change (docs/workspaces.md); --workspaces-csi-companion=false returns to the lab's own registration")
 	cmd.Flags().StringVar(&workspacesCleanupAfter, "workspaces-cleanup-after", "", "how long a Session's directory on a workspace volume outlives its last turn, a Go duration (the workspace-manager's sessions.cleanupAfter); 'workspaces-test --part sessions' needs a window of "+lab.SessionsCleanupWindowRange()+" (such as "+lab.SessionsCleanupWindowExample()+"); \"\" returns to the chart's 30 days")

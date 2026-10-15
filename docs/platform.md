@@ -276,7 +276,7 @@ Substrate's API server, where the golden snapshots are taken; with the
 agents), the agentgateway component's two Deployments under their own names,
 `agentgateway` (the data-plane proxy) and `agentgateway-controller` —,
 `harness`, the platform Harness's runtime image (the Go ADK every agent runs
-on under kagent API v2), and `claude-harness` and `codex-harness`, a coding
+on under kagent API v2), and `claude-harness`, `codex-harness` and `omp-harness`, a coding
 Harness's image (with that Harness rendered, [below](#coding-harness-targets)):
 
 ```yaml
@@ -435,7 +435,7 @@ the agents on; the 3.x line has no Harness.
 
 ### Coding Harness targets
 
-`claude-harness` and `codex-harness` swap a coding Harness's image for a
+`claude-harness`, `codex-harness` and `omp-harness` swap a coding Harness's image for a
 build of the kagent line's `go/harness/<runtime>/Dockerfile`, say from a
 pull request, so a fork change is proven before its release. They travel the
 `harness` target's way: pushed to the lab registry, pinned by digest, and
@@ -450,9 +450,12 @@ that replaces `kagent.harnesses` is refused while a target is configured.
 platform:
   coding:
     enabled: true
-    harnesses: [claude, codex]
+    harnesses: [claude, codex, omp]
+    images:
+      omp: gsoci.azurecr.io/giantswarm/kagent/omp-harness@sha256:…   # the release's runtimeImages.ompHarness.digest; omp-harness below wins
   devImages:
     codex-harness: codex-harness:pr-123   # docker build -f go/harness/codex/Dockerfile go/ of giantswarm/kagent-upstream
+    omp-harness: omp-harness:pr-456       # docker build -f go/harness/omp/Dockerfile go/
 ```
 
 muster runs with `hostNetwork`, so it binds `:8090` on the node, and the
@@ -961,13 +964,15 @@ the declaration's. The agent and its Session are removed on every exit path.
 A coding agent is an agent whose Agent names a coding Harness: a coding CLI
 run headless in a Substrate actor by the kagent line's image of its runtime
 — `claude` (Claude Code, `claude-harness`, calling muster as the person who
-sent the turn) or `codex` (OpenAI's Codex CLI, `codex-harness`, its MCP
-credentials on upstream's Secret-backed path). An installation turns coding
+sent the turn), `codex` (OpenAI's Codex CLI, `codex-harness`, its MCP
+credentials on upstream's Secret-backed path) or `omp` (oh-my-pi, a BYO
+Harness on the kagent line's `omp-harness` adapter, the same Secret-backed
+path, on the Anthropic ModelConfig claude uses). An installation turns coding
 agents on through the meta chart's `kagent.harnesses` alone, and the lab
 does the same: with `platform.coding` (`agentlab configure --coding`,
 agent-platform 4.110.0 or newer) `agentlab platform` renders one coding
 Harness per runtime of `platform.coding.harnesses`
-(`--coding-harnesses claude,codex`; default `claude` alone), named after it,
+(`--coding-harnesses claude,codex,omp`; default `claude` alone), named after it,
 snapshots under `s3://ate-snapshots/<runtime>`. `claude` carries
 `KAGENT_PROPAGATE_TOKEN` (the caller's bearer reaches MCP servers through
 the harness's loopback forwarder, never the process environment) and no turn
@@ -975,27 +980,33 @@ limits (the kagent line dropped `spec.claude.limits`; a lab whose Harnesses
 still carry them has them removed by `agentlab platform` before the chart is
 applied). `codex` needs a kagent line whose chart takes `runtime: codex`, and
 a ModelConfig codex speaks (the OpenAI Responses API, or Bedrock `gpt-*`).
+`omp` renders a `byo` entry (display name `oh-my-pi`, the title the Dev
+Portal shows), which needs a kagent line whose chart takes
+`runtime: byo`, on the `omp-harness` image `platform.coding.images.omp`
+names by digest (`agentlab configure --coding-images omp=<image>`; the
+release's chart stamps it as `runtimeImages.ompHarness.digest`), a dev
+image (`platform.devImages` `omp-harness`) winning over it.
 
 The workspaces proof's claude Session runs on the same `claude` Harness,
 which the lab also renders with the workspaces on and coding off.
 
-`agentlab coding-test [email] [--harness claude|codex] [--model-config
+`agentlab coding-test [email] [--harness claude|codex|omp] [--model-config
 <name>]` is the proof, and the floor a coding agent rests on, on one Harness
 per run (default `claude`). Every stage runs on the lines the lab pins, so
 it repeats on every release candidate. The stages marked *claude* prove
-Claude Code's own mechanisms and run on `claude` alone; *codex* marks the
-one that runs on `codex` alone:
+Claude Code's own mechanisms and run on `claude` alone; *codex, omp* marks
+the one that runs on both of those:
 
 | Stage | What passes |
 |---|---|
 | harnesses | the Harness Ready; on `claude` no `spec.claude.limits` on it |
 | write-time checks | agent-manager's `validate_agent` on the Harness accepts `[preset:read-only, tool:x_agent-manager_create_agent]` (which muster tools a coding agent uses is the person's choice) and refuses an origin outside the Harness's list; an agent-manager below 1.14.0 refuses the write tool, and the proof expects that refusal on it |
 | create | `create_agent` on the Harness with that toolset (`preset:read-only` alone below agent-manager 1.14.0) as the person; Ready; its `RemoteMCPServer` Accepted and sending the toolset as `X-Muster-Toolset`; the Agent's `spec.egress` is the Harness's origin list agent-manager writes |
-| secret-backed credential (*codex*) | the agent's `RemoteMCPServer` takes at least one header from a Secret: upstream's Secret-backed path, the controller handing the runtime kagent's placeholder and the egress gateway setting the value |
+| secret-backed credential (*codex, omp*) | the agent's `RemoteMCPServer` takes at least one header from a Secret: upstream's Secret-backed path, the controller handing the runtime kagent's placeholder and the egress gateway setting the value |
 | uid split (*claude*) | the agent's commands run as uid 65532; the root harness's `/proc/<pid>/environ` and `mem` refuse it |
 | forwarder paths (*claude*) | the forwarder answers 400 to `../..`, `%2e%2e` and `..%2f`, 404 for a server it does not front, 401 without its token |
 | write tool refused (*claude*) | `x_agent-manager_delete_agent`, called through the forwarder with the turn's bearer, refused by muster as outside the toolset |
-| credentials | no forge token or bearer in the environment or `/data`; the model key kagent's placeholder; on `codex` every `KAGENT_CODEX_MCP_CREDENTIAL_*` the sandbox sees the placeholder too |
+| credentials | no forge token or bearer in the environment or `/data`; the model key kagent's placeholder, or unset where the runtime keeps it out of the shell's environment (omp); on `codex` every `KAGENT_CODEX_MCP_CREDENTIAL_*` the sandbox sees the placeholder too, on `omp` every `KAGENT_CREDENTIAL_*` |
 | dns canary | a recorded state, not a gate: `example.org` through the cluster resolver and directly at 1.1.1.1 |
 | egress | `proxy.golang.org` denied 403 at the egress gate; `api.github.com`, one of the Agent's origins, reached |
 | mcp call | the agent calls `x_agent-manager_list_agents` through its MCP binding and finds itself listed |

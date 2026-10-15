@@ -95,7 +95,7 @@ func TestDevImagesKnowCodingHarnesses(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("the coding Harnesses' images must be devImages targets: %v", err)
 	}
-	for _, target := range []string{DevImageHarness, DevImageClaudeHarness, DevImageCodexHarness} {
+	for _, target := range []string{DevImageHarness, DevImageClaudeHarness, DevImageCodexHarness, DevImageOmpHarness} {
 		if !RegistryDevImage(target) {
 			t.Errorf("%s is not a registry target", target)
 		}
@@ -115,7 +115,8 @@ func TestCodingHarnessesValidate(t *testing.T) {
 		harnesses []string
 		want      string
 	}{
-		"not a runtime": {[]string{"omp"}, "unknown runtime"},
+		"not a runtime": {[]string{"acp"}, "unknown runtime"},
+		"omp alone":     {[]string{CodingRuntimeOmp}, "platform.coding.images.omp"},
 		"twice":         {[]string{CodingRuntimeCodex, CodingRuntimeCodex}, "twice"},
 		"codex alone":   {[]string{CodingRuntimeCodex}, ""},
 		"both":          {[]string{CodingRuntimeClaude, CodingRuntimeCodex}, ""},
