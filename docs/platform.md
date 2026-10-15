@@ -1096,14 +1096,16 @@ preface without an answer, its input unread. The client reaches atenet-router's
 HTTP port through a port-forward and names the actor in the `ate-target-actor`
 header. Four stages, each judged `PASS` or `FAIL`:
 
-1. **substrate** — the Substrate the run is on: the atelet's, the workers' and
-   `ate-api-server`'s images. `--substrate <release>` pins the `substrate` and
-   `substrate-crds` components to the release for the run through a values
-   overlay (`state/substrate-tunnel-values.yaml`), the way the step proof
-   steps, older or newer than the lab's, and the lab returns to the chart's
-   Substrate at the end (`--stay` leaves it). The chart derives the worker
-   image from its range's floor, so a lab whose atelet runs a release can run
-   older workers: the pin applies unless the workers run the release too.
+1. **substrate** — the Substrate the run is on: the atelet's and
+   `ate-api-server`'s images, and the image the worker pods run, where atunnel
+   relays the tunnel — read off the pods, since the WorkerPool's
+   `spec.workerImage` stays at the chart's floor while the controller runs the
+   pods on its own release (condition `WorkerImageOverridden`).
+   `--substrate <release>` pins the `substrate` and `substrate-crds`
+   components to the release for the run through a values overlay
+   (`state/substrate-tunnel-values.yaml`), the way the step proof steps, older
+   or newer than the lab's, unless the lab and its worker pods run it already;
+   the lab returns to the chart's Substrate at the end (`--stay` leaves it).
 2. **actor** — the template's golden snapshot, the actor created and resumed.
 3. **route** — `GET /readyz` over HTTP/1.1 answers 200 through the router
    (waited for up to `--ready-timeout`, default 5m), then over h2c: HTTP/2.0
@@ -1115,8 +1117,7 @@ header. Four stages, each judged `PASS` or `FAIL`:
 
 The actor and its template are removed by the same run, and an earlier run's
 first. On a lab the case fails on Substrate 1.11.3 (the call waits the
-full 30s) and passes on 1.11.4, which carries the relay change, both pinned
-with `--substrate`, workers included.
+full 30s) and passes on 1.11.4, which carries the relay change.
 
 ### The Swarmgeist proof (klaus-gateway on kagent API v2)
 

@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/wait"
 
@@ -173,6 +176,7 @@ type substrateTunnelRun struct {
 	stages      *proofStages
 
 	before, running substrateRunning
+	workers         []string // the images the worker pods run
 	pinTaken        bool
 	lines           []string
 }
@@ -202,10 +206,13 @@ func (r *substrateTunnelRun) prove() error {
 		return err
 	}
 	r.before, r.running = before, before
+	if r.workers, err = workerPodImages(); err != nil {
+		return err
+	}
 	if err := r.pin(); err != nil {
 		return err
 	}
-	r.pass("on %s", r.running)
+	r.pass("on %s; the worker pods, where atunnel relays the tunnel, run %s", r.running, strings.Join(r.workers, ", "))
 
 	ctx := context.Background()
 	api, err := dialAteAPI(ctx)
@@ -243,11 +250,8 @@ func (r *substrateTunnelRun) pin() error {
 	if r.to == nil {
 		return nil
 	}
-	// atunnel, the relay under proof, runs in the worker image, which the
-	// chart derives from its range's floor: a lab whose atelet runs the
-	// release can still run older workers.
-	if workers, err := imageTag(r.before.worker); r.before.version == r.to.String() && err == nil && workers == r.to.String() {
-		note("the lab runs Substrate %s already, its workers included: no pin", r.to)
+	if r.before.version == r.to.String() && r.workersOn(r.to.String()) {
+		note("the lab runs Substrate %s already, its worker pods included: no pin", r.to)
 		return nil
 	}
 	values, err := substrateStepOverlay(r.to.String())
@@ -280,7 +284,49 @@ func (r *substrateTunnelRun) pin() error {
 		return err
 	}
 	r.running = running
-	return nil
+	r.workers, err = workerPodImages()
+	return err
+}
+
+// workersOn tells whether every worker pod runs the release: atunnel, the
+// relay under proof, runs in the worker image.
+func (r *substrateTunnelRun) workersOn(release string) bool {
+	for _, image := range r.workers {
+		if tag, err := imageTag(image); err != nil || tag != release {
+			return false
+		}
+	}
+	return len(r.workers) > 0
+}
+
+// workerPodImages is every distinct image the worker pods in the kagent
+// namespace run, sorted. The WorkerPool's spec.workerImage stays at the
+// chart's floor while the controller runs the pods on its own release
+// (condition WorkerImageOverridden), so the pods are read, not the spec.
+func workerPodImages() ([]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
+	defer cancel()
+	pods, err := listObjects(ctx, gvrPods, kagentNamespace, substrateWorkerLabel)
+	if err != nil {
+		return nil, fmt.Errorf("the worker pods in %s: %w", kagentNamespace, err)
+	}
+	seen := map[string]bool{}
+	for _, pod := range pods {
+		if pod.GetDeletionTimestamp() != nil {
+			continue
+		}
+		containers, _, _ := unstructured.NestedSlice(pod.Object, "spec", podContainersKey)
+		for _, c := range containers {
+			container, _ := c.(map[string]any)
+			if image, _ := container[imageKey].(string); image != "" {
+				seen[image] = true
+			}
+		}
+	}
+	if len(seen) == 0 {
+		return nil, fmt.Errorf("no worker pod in %s", kagentNamespace)
+	}
+	return slices.Sorted(maps.Keys(seen)), nil
 }
 
 // startActor creates the template, waits for its golden, creates the actor
