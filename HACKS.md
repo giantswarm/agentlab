@@ -742,9 +742,9 @@ own name, and by `ate-golden`. Other organization namespaces of the lab get
 no credentials. Unblocks when the chart selects the organizations'
 namespaces by label
 ([agent-platform#1041](https://github.com/giantswarm/agent-platform/issues/1041),
-Substrate 1.12 with giantswarm/substrate#456): then the values template drops
-the list, and `tenants-test` checks the provider's live grants instead of
-skipping that check.
+Substrate 1.12 with giantswarm/substrate#456): the chart then adds the
+selector entries to the lab's list, `tenants-test` checks the provider's live
+grants, and the list is redundant — the values template drops it.
 
 ### U32. `postRenderers` patch: the klaus-gateway component trusts the lab CA for muster — ACCEPTED
 The component dials muster at its public URL (`obo.musterUrl`): every Slack
