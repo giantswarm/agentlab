@@ -117,3 +117,13 @@ func TestCreateAgentArgsEgress(t *testing.T) {
 		t.Errorf("no egress renders %v", agent)
 	}
 }
+
+// TestDenialVerdictReadsTheTLSDestination: a refusal at the TLS handshake
+// names its destination as tls.sni alone, as the gateway logs it.
+func TestDenialVerdictReadsTheTLSDestination(t *testing.T) {
+	logs := "2026-10-15T20:29:29.356210Z\terror\trequest request.id=9 gateway=default/default listener=listener0 http.method=GET http.path=/ http.version=HTTP/1.1 http.status=403 tls.sni=proxy.golang.org protocol=http ate.atespace=kagent error=\"actor egress policy denied TLS destination\" reason=Authorization duration=0ms\n"
+	v, err := denialVerdict("proxy.golang.org", egressRefusals(logs))
+	if err != nil || !strings.Contains(v, "403 GET proxy.golang.org/") {
+		t.Errorf("denialVerdict = %q, %v", v, err)
+	}
+}

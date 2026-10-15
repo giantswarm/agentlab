@@ -161,6 +161,7 @@ func (p *egressProof) run() error {
 	if target.tcpAddress, err = lookupIPv4(egressTestTCPHost); err != nil {
 		return err
 	}
+	turnStarted := time.Now()
 	reply, err := firstTurnAs(p.cfg, egressTestAgent, token, egressProbePrompt(target))
 	if err != nil {
 		return err
@@ -183,7 +184,7 @@ func (p *egressProof) run() error {
 		return err
 	}
 	note("%s", verdict)
-	if verdict, err = gateDenial(target.undeclared); err != nil {
+	if verdict, err = gateDenial(target.undeclared, time.Since(turnStarted)+time.Minute); err != nil {
 		return err
 	}
 	note("%s", verdict)
@@ -376,9 +377,22 @@ func (p codingProbe) rawTCP(t egressProbeTarget) (string, error) {
 		if strings.Contains(words, egressTestTCPBanner) {
 			return "", fmt.Errorf("raw TCP to %s, outside every egress list, passed the actor's egress: the server's banner %q came back (exit %s)", dest, excerpt(words, 80), rc)
 		}
-		refused = append(refused, fmt.Sprintf("%s refused (exit %s%s)", dest, rc, firstNonEmpty(prefixed(": ", words), ", nothing read")))
+		refused = append(refused, fmt.Sprintf("%s refused: %s%s", dest, tcpOutcome(rc), prefixed(" — ", words)))
 	}
 	return strings.Join(refused, "; "), nil
+}
+
+// tcpOutcome words a TCP line's exit code.
+func tcpOutcome(rc string) string {
+	switch rc {
+	case "7":
+		return "the connect failed"
+	case "124":
+		return "no line within the timeout"
+	case "1":
+		return "the connection closed without a line"
+	}
+	return "exit " + rc
 }
 
 // prefixed is s after prefix, or "" for an empty s.
@@ -389,16 +403,16 @@ func prefixed(prefix, s string) string {
 	return prefix + s
 }
 
-// gateDenial reads the egress gateway's access log for the undeclared
-// host's refusal and requires the policy's reason.
-func gateDenial(rawURL string) (string, error) {
+// gateDenial reads the egress gateway's access log since the probe turn for
+// the undeclared host's refusal and requires the policy's reason.
+func gateDenial(rawURL string, since time.Duration) (string, error) {
 	host, err := egressOriginHost(rawURL)
 	if err != nil {
 		return "", err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), egressFindingsReadLimit)
 	defer cancel()
-	logs, err := podLogs(ctx, substrateNamespace, "deploy/"+atenetEgressDeployment, atenetEgressContainer, skillsEvidenceLogSince)
+	logs, err := podLogs(ctx, substrateNamespace, "deploy/"+atenetEgressDeployment, atenetEgressContainer, since)
 	if err != nil {
 		return "", fmt.Errorf("the log of Substrate's egress gateway (deploy/%s) could not be read: %w", atenetEgressDeployment, err)
 	}
