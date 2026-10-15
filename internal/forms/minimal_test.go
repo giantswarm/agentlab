@@ -58,7 +58,7 @@ func TestReducedFormDrivePaced(t *testing.T) {
 // A script one key short fails the run within exhaustedTimeout, naming the
 // field it does not answer, instead of hanging until go test's timeout.
 func TestDriveScriptExhausted(t *testing.T) {
-	name, port := "agentlab", "32000"
+	name, port := "lab", "32000"
 	d := newDriver("\r")
 	form := d.attach(huh.NewForm(huh.NewGroup(
 		huh.NewInput().Title("Cluster name").Value(&name),
