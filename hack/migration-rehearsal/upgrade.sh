@@ -11,7 +11,7 @@
 #   STATUS_FILE     append-only status log; no status lines when unset
 #   STATUS_PREFIX   prefix of every status line (default: agentlab#143-stage2a)
 #   AGENTLAB, YQ    binaries (default: agentlab on PATH; a mikefarah yq v4)
-#   ANTHROPIC_API_KEY  read from the Secret kagent/kagent-anthropic when unset; never printed
+#   ANTHROPIC_API_KEY  the key `agentlab` places, unless agentlab.yaml records aiKey.source; never printed
 #   START_STEP      resume at this step on a lab already on the target, skipping
 #                   the earlier ones: before | config | upgrade | assert-platform
 #                   (alias: assert) | migrate-run1 | gitops-pr | record; preflight
@@ -150,8 +150,8 @@ step_preflight() {
   CLUSTER=$("$YQ" '.clusterName' agentlab.yaml)
   BEFORE_VERSION=$(helm -n agent-platform history agent-platform -o json | jq -r '.[-1].chart' | sed 's/^agent-platform-//')
   lock_require
-  export_anthropic_key 41
-  log "agentlab $v, cluster $CLUSTER, on $BEFORE_VERSION → $TARGET, yq=$YQ, key ${#ANTHROPIC_API_KEY} bytes"
+  require_anthropic_key 41
+  log "agentlab $v, cluster $CLUSTER, on $BEFORE_VERSION → $TARGET, yq=$YQ"
 }
 
 step_before() {
