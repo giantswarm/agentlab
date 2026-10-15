@@ -37,8 +37,9 @@ type WorkspacesTestOptions struct {
 	// Part runs one part instead of the storage proof: WorkspacesPartSync
 	// (workspacessync.go), WorkspacesPartAccess (workspacesaccess.go),
 	// WorkspacesPartGitLab (workspacesgitlab.go), WorkspacesPartSessions
-	// (workspacessessions.go) or WorkspacesPartCallerCredential
-	// (workspacescallercredential.go). "" is the storage proof.
+	// (workspacessessions.go), WorkspacesPartCallerCredential
+	// (workspacescallercredential.go) or WorkspacesPartRefresh
+	// (workspacesrefresh.go). "" is the storage proof.
 	Part string
 	// Sessions is how many Sessions the sessions part starts, alternating
 	// the claude and the kagent Harness; zero is DefaultWorkspacesSessions.
@@ -58,11 +59,11 @@ func (o WorkspacesTestOptions) validate() error {
 		if o.Email != "" {
 			return fmt.Errorf("the storage proof signs in as nobody: [email] names the user of a part (--part %s)", strings.Join(WorkspacesParts, ", "))
 		}
-	case WorkspacesPartSync, WorkspacesPartAccess, WorkspacesPartGitLab, WorkspacesPartSessions, WorkspacesPartCallerCredential:
+	case WorkspacesPartSync, WorkspacesPartAccess, WorkspacesPartGitLab, WorkspacesPartSessions, WorkspacesPartCallerCredential, WorkspacesPartRefresh:
 		if o.StorageOnly {
 			return fmt.Errorf("--storage-only is the storage proof's; --part %s proves no storage", o.Part)
 		}
-		if (o.Part == WorkspacesPartSessions || o.Part == WorkspacesPartCallerCredential) && o.Email != "" {
+		if (o.Part == WorkspacesPartSessions || o.Part == WorkspacesPartCallerCredential || o.Part == WorkspacesPartRefresh) && o.Email != "" {
 			return fmt.Errorf("--part %s starts its Sessions as the admin: it takes no [email]", o.Part)
 		}
 	default:
@@ -146,6 +147,9 @@ func WorkspacesTest(cfg *config.Config, opts WorkspacesTestOptions) error {
 	}
 	if opts.Part == WorkspacesPartCallerCredential {
 		return workspacesCallerCredentialPart(cfg, opts.ReadyTimeout)
+	}
+	if opts.Part == WorkspacesPartRefresh {
+		return workspacesRefreshPart(cfg, opts.ReadyTimeout)
 	}
 	ctx := context.Background()
 	timeout := opts.ReadyTimeout

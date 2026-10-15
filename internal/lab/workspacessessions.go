@@ -110,8 +110,10 @@ const (
 	conditionSessionsCleanedUp = "SessionsCleanedUp"
 	// workspaceStateFile is the setup's record in a session directory.
 	workspaceStateFile = ".kagent/workspace.json"
-	// startSessionRequestIDArg is start_session's idempotency key.
+	// startSessionRequestIDArg is start_session's idempotency key,
+	// startSessionGrantArg its workspace grant.
 	startSessionRequestIDArg = "requestId"
+	startSessionGrantArg     = "workspaceGrant"
 	// The probes' words: a write refused, a directory absent, a mirror's
 	// head.
 	probeRefused = "refused"
@@ -483,7 +485,7 @@ func (sp *sessionsProof) startOne(r *sessionRun) error {
 	r.SyncRequested = a.SyncRequested
 	r.StartCalled = time.Now()
 	env, err := session.callToolEnvelope(agentManagerToolPrefix+"start_session", map[string]any{
-		nameKey: r.Agent, namespaceKey: kagentNamespace, startSessionRequestIDArg: uuid.NewString(), "workspaceGrant": a.Grant,
+		nameKey: r.Agent, namespaceKey: kagentNamespace, startSessionRequestIDArg: uuid.NewString(), startSessionGrantArg: a.Grant,
 	})
 	r.StartAnswered = time.Now()
 	if err != nil {

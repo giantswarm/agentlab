@@ -832,7 +832,7 @@ func configureCmd() *cobra.Command {
 	var platform, agents, observability, backstage, modelManager, vmManager, klausGateway bool
 	var serving, workspaces, workspacesCSICompanion, coding, github, githubSignIn bool
 	var githubSignInClientID string
-	var workspacesProvider, workspacesGitHubAppID, workspacesGitHubClientID, workspacesCleanupAfter string
+	var workspacesProvider, workspacesGitHubAppID, workspacesGitHubClientID, workspacesCleanupAfter, workspacesRefreshAfter string
 	var workspacesGitHubPrivateKeySource, workspacesGitHubClientSecretSource string
 	var githubSignInOrgs, modelManagerBackends []string
 	var vmManagerImageDir, aiKeySource, gitHubTokenSource string
@@ -966,6 +966,9 @@ func configureCmd() *cobra.Command {
 			if cmd.Flags().Changed("workspaces-cleanup-after") {
 				cfg.Platform.Workspaces.SessionsCleanupAfter = workspacesCleanupAfter
 			}
+			if cmd.Flags().Changed("workspaces-refresh-after") {
+				cfg.Platform.Workspaces.SyncRefreshAfter = workspacesRefreshAfter
+			}
 			if cmd.Flags().Changed("workspaces-csi-companion") {
 				cfg.Platform.Workspaces.CSICompanion = workspacesCSICompanion
 			}
@@ -1067,6 +1070,7 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().StringVar(&workspacesProvider, "workspaces-provider", "", "the workspace-manager's provider instances: fake (the lab's own GitHub, the default), fake-bearer (the same GitHub shaped like github.com, its API on a Bearer host of its own; beside fake), github (a GitHub App of the lab's own, docs/workspaces.md), gitlab (a GitLab's OAuth application, docs/workspaces.md) or several, such as fake,github,gitlab")
 	cmd.Flags().BoolVar(&workspacesCSICompanion, "workspaces-csi-companion", false, "with workspaces on, the connectivity chart's CSI companion is Substrate's workspace driver: its efs preset running the lab's NFS plugin, the lab's NFS driver serving the volumes under the preset's driver name — the lab path for proving a companion chart change (docs/workspaces.md); --workspaces-csi-companion=false returns to the lab's own registration")
 	cmd.Flags().StringVar(&workspacesCleanupAfter, "workspaces-cleanup-after", "", "how long a Session's directory on a workspace volume outlives its last turn, a Go duration (the workspace-manager's sessions.cleanupAfter); 'workspaces-test --part sessions' needs a window of "+lab.SessionsCleanupWindowRange()+" (such as "+lab.SessionsCleanupWindowExample()+"); \"\" returns to the chart's 30 days")
+	cmd.Flags().StringVar(&workspacesRefreshAfter, "workspaces-refresh-after", "", "the refresh threshold, a Go duration (the workspace-manager's sync.refreshAfter): a Session started on a workspace whose last sync is older requests a sync; 'workspaces-test --part refresh' needs "+lab.RefreshThresholdRange()+" (such as "+lab.RefreshThresholdExample()+"); \"\" returns to the manager's 1h")
 	cmd.Flags().StringVar(&workspacesGitHubAppID, "workspaces-github-app-id", "", "the App id of the workspaces GitHub App (public; its private key and client secret go into the Secret agent-platform/"+config.WorkspaceGitHubSecretName+")")
 	cmd.Flags().StringVar(&workspacesGitHubClientID, "workspaces-github-client-id", "", "the client id of the workspaces GitHub App (public)")
 	cmd.Flags().StringVar(&workspacesGitHubPrivateKeySource, "workspaces-github-private-key-source", "", "where the workspaces GitHub App's private key is: a reference `beekeeper secret copy` resolves (op://<vault>/<item>/<field>, or <file>#<path> of a SOPS file), never the key; every up and platform place it into the Secret agent-platform/"+config.WorkspaceGitHubSecretName)
@@ -1505,7 +1509,7 @@ func workspacesTestCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&opts.StorageOnly, "storage-only", false, "prove the storage alone, without the claude Session admitted on the volume")
-	cmd.Flags().StringVar(&opts.Part, "part", "", "run one part instead of the storage proof: "+strings.Join(lab.WorkspacesParts, ", ")+" (sync: the workspaces defined through the workspace-manager and their mirrors, as [email], default the admin; access: the provider sign-in and the access check at a Session's start, as the admin and [email], default dev@lab.local; gitlab: the provider instance gitlab end to end, skipped without one; sessions: parallel Sessions in their session directories and the cleanup, as the admin; caller-credential: a Session's actor JWT on the Bearer API host of the provider instance fake-bearer, as the admin)")
+	cmd.Flags().StringVar(&opts.Part, "part", "", "run one part instead of the storage proof: "+strings.Join(lab.WorkspacesParts, ", ")+" (sync: the workspaces defined through the workspace-manager and their mirrors, as [email], default the admin; access: the provider sign-in and the access check at a Session's start, as the admin and [email], default dev@lab.local; gitlab: the provider instance gitlab end to end, skipped without one; sessions: parallel Sessions in their session directories and the cleanup, as the admin; caller-credential: a Session's actor JWT on the Bearer API host of the provider instance fake-bearer, as the admin; refresh: a Session start past the workspace-manager's refresh threshold requests a sync without waiting for it, none within it or without a start, as the admin)")
 	cmd.Flags().IntVar(&opts.Sessions, "sessions", 0, fmt.Sprintf("how many Sessions --part sessions starts at once, alternating the claude and the kagent Harness (default %d)", lab.DefaultWorkspacesSessions))
 	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", lab.DefaultWorkspacesReadyTimeout, "how long each wait may take: the storage's rollouts, a claim bound, a pod finished, a volume gone, a sync cycle")
 	return cmd

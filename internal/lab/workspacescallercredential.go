@@ -256,7 +256,7 @@ func (cp *callerCredentialProof) startSession(inWorkspace bool) (*apiv1alpha1.Se
 			return nil, fmt.Errorf("the grant for %s: %w", callerCredentialWorkspace, err)
 		}
 		note("the grant names the providers %s", grantProvidersLine(claims.Providers))
-		args["workspaceGrant"] = a.Grant
+		args[startSessionGrantArg] = a.Grant
 	}
 	env, err := cp.admin.session.callToolEnvelope(agentManagerToolPrefix+"start_session", args)
 	if err != nil {

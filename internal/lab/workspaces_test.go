@@ -129,6 +129,35 @@ func TestPlatformValuesSessionsCleanupAfter(t *testing.T) {
 	}
 }
 
+// The refresh threshold reaches the workspace-manager as sync.refreshAfter
+// only when the lab sets one.
+func TestPlatformValuesSyncRefreshAfter(t *testing.T) {
+	stubWorkspacesProbe(t, true)
+	refreshAfter := func(t *testing.T, cfg *config.Config) any {
+		t.Helper()
+		out, err := renderTemplate(cfg, platformValuesTemplate, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var values map[string]any
+		if err := yaml.Unmarshal(out, &values); err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		wm, _ := values["workspace-manager"].(map[string]any)
+		sync, _ := wm["sync"].(map[string]any)
+		return sync["refreshAfter"]
+	}
+	cfg := config.Default()
+	cfg.Platform.Workspaces.Enabled = true
+	if got := refreshAfter(t, cfg); got != nil {
+		t.Errorf("sync.refreshAfter = %v without the key, want the manager's", got)
+	}
+	cfg.Platform.Workspaces.SyncRefreshAfter = "1m"
+	if got := refreshAfter(t, cfg); got != "1m" {
+		t.Errorf("sync.refreshAfter = %v, want 1m", got)
+	}
+}
+
 // The lab's Organization: on a chart that forwards workspaces.organizations
 // the list form there and nothing on the subchart (the chart refuses a
 // workspace-manager.organizations of its own); on a chart without the list

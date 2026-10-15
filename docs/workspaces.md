@@ -65,6 +65,8 @@ agentlab configure --workspaces-cleanup-after 10m && agentlab platform   # the s
 agentlab workspaces-test --part sessions # ten parallel Sessions in their session directories, and the cleanup
 agentlab configure --workspaces-provider fake,fake-bearer && agentlab platform   # a Bearer provider
 agentlab workspaces-test --part caller-credential # a Session's actor JWT on its Bearer provider's API host
+agentlab configure --workspaces-refresh-after 1m && agentlab platform   # the refresh part's short threshold
+agentlab workspaces-test --part refresh # the sync a Session's start requests past the refresh threshold
 ```
 
 With the switch off, nothing of it is installed, and `agentlab platform` on a
@@ -499,6 +501,42 @@ The fake verifies no JWT it did not sign: it answers such a bearer GitHub's
 401 and logs its `aud` and `sub`, never the token. Everything is removed on
 every path: the Sessions, the Agent, the session directories, the workspace
 and the admin's sign-in to `fake-bearer`.
+
+### The refresh part
+
+`agentlab workspaces-test --part refresh` proves the refresh at a Session's
+start: a Session started on a workspace whose last sync is older than the
+workspace-manager's refresh threshold (`sync.refreshAfter`, 1h by default)
+requests a sync without waiting for it; a start within the threshold requests
+none, and no cycle runs without a start, a change or a request. It runs as
+the admin on [the provider instance `fake`](#the-provider-instance-fake),
+with the [Session admission](#the-session-admission), workspace-manager 0.8.2
+or later and a short threshold: `agentlab configure
+--workspaces-refresh-after 1m` (`platform.workspaces.syncRefreshAfter`; the
+part takes 30s to 5m), then `agentlab platform`. Without any of them it fails
+at once with the reason. `--workspaces-refresh-after ""` returns to the
+manager's 1h.
+
+1. **Preconditions**: the workspace-manager reachable through muster, its
+   `--sync-refresh-after` in range; the lab's grant key published and trusted
+   by kagent's admission; the Agent `agentlab-workspaces-refresh` on the
+   Harness `kagent` Ready.
+2. **Workspace**: the admin connected to `fake`; `agentlab-refresh` over
+   `agentlab-oss/docs` created and its first cycle.
+3. **Within the threshold**: right after that cycle, `authorize_workspace`
+   grants with `syncRequested: false` and `start_session` starts a Session
+   with the grant (no turn).
+4. **Nothing requested**: `get_workspace` read every 2 seconds until the
+   threshold and 30 more seconds have passed since the cycle: no cycle runs,
+   none is requested, the last sync is still the first cycle.
+5. **Past the threshold**: `authorize_workspace` answers within 10 seconds
+   with `syncRequested: true`, a Session starts with the grant, and a cycle
+   with the trigger `request` follows, ending after that answer: the start
+   did not wait for it.
+6. **Within again**: right after that cycle, a start requests no sync.
+
+Everything is removed on every path: the Sessions, the Agent, the workspace
+and the admin's sign-in to `fake`.
 
 ### The measurements
 
