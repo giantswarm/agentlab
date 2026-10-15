@@ -298,8 +298,9 @@ with the reason.
 7. **Grant**: a commit pushed to `agentlab-oss/docs` after the sync, the
    admin connected, then `authorize_workspace` as the admin. Within the
    manager's one-minute listing cache, the call repeats until the push shows.
-   The grant names the admin (`sub`), the workspace, its volume (driver and
-   handle), the mounts (`sessions/${SESSION_ID}` read-write, `mirrors`
+   The grant names the admin (`sub`), the Agents' namespace `kagent`
+   (`agent_namespace`, workspace-manager 0.9.0 or newer), the workspace, its
+   volume (driver and handle), the mounts (`sessions/${SESSION_ID}` read-write, `mirrors`
    read-only) and `agentlab-oss/docs` as changed since the sync.
 8. **Start**: `start_session` as the admin with the grant. agent-manager
    creates the Session on kagent as the person, and kagent reports it on the
