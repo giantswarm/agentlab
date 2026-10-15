@@ -127,6 +127,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		inGroup(groupTesting, workspacesTestCmd()),
 		inGroup(groupTesting, workspacesMeasureCmd()),
 		inGroup(groupTesting, codingTestCmd()),
+		inGroup(groupTesting, egressTestCmd()),
 		inGroup(groupTesting, workspacesSignInTestCmd()),
 		inGroup(groupTesting, skillsTestCmd()),
 		inGroup(groupTesting, substrateStepTestCmd()),
@@ -1474,6 +1475,30 @@ func codingTestCmd() *cobra.Command {
 	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", lab.DefaultCodingReadyTimeout, "how long each agent's boot and each turn may take")
 	cmd.Flags().StringVar(&opts.Harness, "harness", config.CodingRuntimeClaude, fmt.Sprintf("the coding Harness the proof runs on (%s), one the lab renders (platform.coding.harnesses)", strings.Join(config.CodingRuntimes, ", ")))
 	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the agent runs on (default agent-manager's default one); codex needs an OpenAI Responses API or Bedrock gpt-* ModelConfig")
+	return cmd
+}
+
+func egressTestCmd() *cobra.Command {
+	var opts lab.EgressTestOptions
+	cmd := &cobra.Command{
+		Use:   "egress-test [email]",
+		Short: "Headless agent egress proof: an agent created through agent-manager as [email] (default the admin) with one declared origin, Ready with that spec.egress -> one turn whose bash tool probes from inside the actor: the declared origin reached, an undeclared HTTPS host answered 403 by the egress gate (its log: actor egress policy denied), muster answering with no egress entry, raw TCP to github.com:22 refused by name and by address",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadProofLab()
+			if err != nil {
+				return err
+			}
+			if len(args) == 1 {
+				opts.Email = args[0]
+			}
+			return lab.EgressTest(cfg, opts)
+		},
+	}
+	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", lab.DefaultEgressReadyTimeout, "how long the agent's boot may take")
+	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the agent runs on (default agent-manager's default one)")
+	cmd.Flags().StringVar(&opts.Origin, "origin", lab.DefaultEgressOrigin, "the origin the agent declares and the probe reaches")
+	cmd.Flags().BoolVar(&opts.WithoutEgress, "without-egress", false, "the control run: create the agent without its egress entry and probe the same origin; the declared stage must fail")
 	return cmd
 }
 
