@@ -744,24 +744,33 @@ func podsCmd() *cobra.Command {
 func turnCmd() *cobra.Command {
 	var user, template, harness, session, decide, reason, events, shareWith string
 	var shareTTL time.Duration
-	var list, keep, suspend bool
+	var list, keep, suspend, del bool
 	cmd := &cobra.Command{
-		Use:   "turn (--list | --template <name> <prompt>)",
-		Short: "One turn with an agent as a lab user through the edge, or the roster that user sees (--list)",
+		Use:   "turn (--list | --template <name> <prompt> | --session <id> --delete)",
+		Short: "One turn with an agent as a lab user through the edge, the roster that user sees (--list), or the delete of a kept Session (--delete)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
 			if err != nil {
 				return err
 			}
+			if user == "" {
+				user = cfg.AdminUser().Email
+			}
+			if del {
+				switch {
+				case session == "":
+					return fmt.Errorf("--delete needs --session")
+				case list || template != "" || len(args) == 1 || keep || suspend || shareWith != "" || decide != "" || events != "":
+					return fmt.Errorf("--delete takes only --session and --user")
+				}
+				return lab.DeleteSession(cfg, user, session)
+			}
 			switch {
 			case list && (template != "" || len(args) == 1):
 				return fmt.Errorf("--list takes no template and no prompt")
 			case !list && (template == "" || len(args) != 1):
-				return fmt.Errorf("give --list, or --template <name> and one prompt")
-			}
-			if user == "" {
-				user = cfg.AdminUser().Email
+				return fmt.Errorf("give --list, --template <name> and one prompt, or --session <id> --delete")
 			}
 			prompt := ""
 			if len(args) == 1 {
@@ -789,6 +798,7 @@ func turnCmd() *cobra.Command {
 	cmd.Flags().StringVar(&session, "instance", "", "the former name of --session")
 	_ = cmd.Flags().MarkDeprecated("instance", "use --session")
 	cmd.Flags().BoolVar(&keep, "keep", false, "leave the Session in place after the turn, for a later --session turn")
+	cmd.Flags().BoolVar(&del, "delete", false, "with --session: delete that Session (one kept by --keep) as the --user, its creator, instead of a turn")
 	cmd.Flags().BoolVar(&suspend, "suspend", false, "with --session: suspend the session to the snapshot store before the turn, so the turn restores it")
 	cmd.Flags().StringVar(&decide, "decide", "", "answer every tool approval the turn pauses for: approve or reject (default: print the paused state and stop)")
 	cmd.Flags().StringVar(&shareWith, "share-with", "", "with --session: the --user shares the session read-write with this lab user, the turn runs as that user with the share token, and the share is revoked afterwards")
