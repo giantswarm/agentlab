@@ -930,6 +930,32 @@ line on upstream `main` `800015de` (kagent-dev/kagent#2802: the a2a gateway
 addresses an actor by the `ate-target-actor` header, which only a router from
 v0.0.28 on knows — the three move together).
 
+### The egress proof
+
+An agent's egress on the kagent API v2 line is its compiled destinations —
+the model, its MCP servers (muster), its skill sources, telemetry — plus the
+HTTP(S) origins its Agent's `spec.egress` declares (`agent.egress` of the
+Generic chart, `egress` of agent-manager's `create_agent`); Substrate's
+egress gateway (`atenet-egress`) enforces the actor's policy.
+`agentlab egress-test [email] [--origin <origin>] [--model-config <name>]`
+proves it from inside the actor: one agent on the platform Harness, created
+through agent-manager as the person with the read-only toolset and one
+declared origin (default `https://example.com`), and one turn whose `bash`
+tool runs a script and relays its `AGENTLAB_PROBE` lines:
+
+| Stage | What passes |
+|---|---|
+| create | `create_agent` with `egress: [<origin>]` as the person; Ready; the Agent's `spec.egress` exactly that list |
+| probe turn | the turn relays the probe's lines |
+| declared | the declared origin answers (`wget` exits 0) |
+| undeclared | `https://proxy.golang.org/`, outside every list, answered 403 at the egress gate, and the gateway's access log names the refusal `actor egress policy denied` for that host |
+| muster | muster's URL from the agent's `RemoteMCPServer` answers with muster's own status (401 without a token), not the gate's 403: a compiled destination needs no egress entry |
+| raw tcp | a TCP connection to `github.com:22`, and to the address the lab host resolves it to, reads no server banner: an SSH identification string (`SSH-`) back through the actor's egress fails the proof, naming the destination. The address probe keeps a name the actor's resolver refuses from passing for the gate's refusal |
+
+`--without-egress` is the control: the agent is created with no egress
+entry and the same origin probed; its `declared` stage fails, so the reach is
+the declaration's. The agent and its Session are removed on every exit path.
+
 ### The coding agents proof
 
 A coding agent is an agent whose Agent names a coding Harness: a coding CLI

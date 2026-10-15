@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"slices"
@@ -96,7 +97,9 @@ func egressRefusals(logs string) []egressRefusal {
 			continue
 		}
 		kv := logfmtFields(strings.TrimPrefix(fields[2], "request "))
-		r := egressRefusal{method: kv["http.method"], host: kv["http.host"], path: kv["http.path"], status: kv["http.status"], reason: kv[egressLogErrorField], count: 1}
+		// A request refused at the TLS handshake carries its destination as
+		// tls.sni, without http.host.
+		r := egressRefusal{method: kv["http.method"], host: cmp.Or(kv["http.host"], kv["tls.sni"]), path: kv["http.path"], status: kv["http.status"], reason: kv[egressLogErrorField], count: 1}
 		if i := slices.IndexFunc(refusals, func(o egressRefusal) bool {
 			return o.status == r.status && o.host == r.host && o.path == r.path && o.reason == r.reason
 		}); i >= 0 {
