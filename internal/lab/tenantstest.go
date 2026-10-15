@@ -908,8 +908,14 @@ func probeTenantWorkerAdmission(token, ns, pool string) ([]string, error) {
 			return err
 		}},
 		{"exec into " + worker, func() error {
-			_, err := clientset.CoreV1().RESTClient().Post().Namespace(ns).Resource("pods").Name(worker).SubResource("exec").
+			body, err := clientset.CoreV1().RESTClient().Post().Namespace(ns).Resource("pods").Name(worker).SubResource("exec").
 				Param("command", "true").Param("stdout", "true").DoRaw(ctx)
+			// The apiserver answers a refused exec with a JSON Status, which
+			// the clientset's protobuf decoder reads as "unknown": the
+			// refusal's text is only in the body.
+			if err != nil && len(body) > 0 {
+				err = fmt.Errorf("%w: %s", err, body)
+			}
 			return err
 		}},
 	}
