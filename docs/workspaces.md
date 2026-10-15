@@ -307,12 +307,17 @@ with the reason.
 8. **Start**: `start_session` as the admin with the grant. agent-manager
    creates the Session on kagent as the person, and kagent reports it on the
    workspace's volume.
-9. **Admission**: three grants refused by kagent's admission, each sent
+9. **Admission**: five grants refused by kagent's admission, each sent
    straight to kagent's `CreateSession` with the workspace's volume:
    - the admin's grant used by `[email]`;
    - an expired grant: the manager's claims re-signed with the lab's grant
      key, the manager's own, with the expiry five minutes past;
-   - a grant for another workspace and its volume, signed the same way.
+   - a grant for another workspace and its volume, signed the same way;
+   - a grant for the Agents of another namespace (`agent_namespace`
+     `agentlab-access-other`) presented on the lab's Agent in `kagent`, and a
+     grant without `agent_namespace`, signed the same way: both refused
+     naming `admission grant is for another namespace` (kagent 1.11.7 or
+     newer).
 
    For the first two, `start_session` is also refused, by agent-manager
    before kagent, each with its reason. The default proof's admission step
