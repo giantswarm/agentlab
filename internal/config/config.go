@@ -490,7 +490,7 @@ type PlatformManager struct {
 	// temporary HelmRelease against the lab's registry fixture.
 	Enabled bool `yaml:"enabled"`
 	// Version is the giantswarm-platform-manager chart (and image) version,
-	// a release or a release candidate; empty is
+	// a release, a release candidate or a branch's dev build; empty is
 	// DefaultPlatformManagerVersion.
 	Version string `yaml:"version,omitempty"`
 }

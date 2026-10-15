@@ -140,6 +140,34 @@ func TestPMDryRunAssertsTheWorkspacesChanges(t *testing.T) {
 	}
 }
 
+// get_info's version and the installed chart version match when they name
+// one build: a release in either spelling, or a branch build's Go
+// pseudo-version and chart dev version on the same commit; another commit,
+// base version or release does not.
+func TestSamePMBuild(t *testing.T) {
+	const devChart = "0.76.1-r525fad92t20261015091950h358a409"
+	for _, tc := range []struct {
+		answered, installed string
+		same                bool
+	}{
+		{"v0.69.0", "0.69.0", true},
+		{"v0.71.0-rc.2", "0.71.0-rc.2", true},
+		{"v0.76.1-rc.6.0.20261015091950-358a409b65de", devChart, true},
+		{"v0.76.1-0.20261015091950-358a409b65de", devChart, true},
+		{"v0.76.1-rc.6.0.20261015091950-1111111b65de", devChart, false},
+		{"v0.76.2-rc.6.0.20261015091950-358a409b65de", devChart, false},
+		{"v0.76.1", devChart, false},
+		{"v0.76.1-rc.6", devChart, false},
+		{"v0.69.0", "0.70.0", false},
+		{"v0.71.0-rc.2", "0.71.0-rc.3", false},
+		{"dev", "0.69.0", false},
+	} {
+		if got := samePMBuild(tc.answered, tc.installed); got != tc.same {
+			t.Errorf("samePMBuild(%q, %q) = %v, want %v", tc.answered, tc.installed, got, tc.same)
+		}
+	}
+}
+
 // The release pins the chart at the configured version, the fixture as the
 // GitHub and the registry, and the lab Dex as the authorization server.
 func TestPlatformManagerManifests(t *testing.T) {
