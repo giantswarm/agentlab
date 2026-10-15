@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -140,8 +141,8 @@ func PMTest(cfg *config.Config, email string, opts PMTestOptions) error {
 	if err := pmCall(session, "get_info", nil, &info); err != nil {
 		return err
 	}
-	if strings.TrimPrefix(info.Version, "v") != version {
-		return fmt.Errorf("the manager answers version %q, the lab installed %s", info.Version, version)
+	if !samePMBuild(info.Version, version) {
+		return fmt.Errorf("the manager answers version %q, the lab installed %s: not the same build", info.Version, version)
 	}
 	note("%s %s answers as %s", pmMCPServer, info.Version, info.Caller.Login)
 
@@ -293,6 +294,48 @@ func (c *fakeContainer) registryMisses() ([]string, error) {
 		return nil, fmt.Errorf("reading the registry's misses: %w", err)
 	}
 	return out, nil
+}
+
+// A build's two spellings: get_info answers Go's pseudo-version between tags
+// (vX.Y.Z-[pre.]0.<UTC>-<commit12>), the chart's dev version is gitsemver's
+// X.Y.Z-r<branch hash>t<UTC>h<commit7>.
+var (
+	goPseudoVersionRe = regexp.MustCompile(`^(?:.*\.)?0\.\d{14}-([0-9a-f]{12})$`)
+	chartDevVersionRe = regexp.MustCompile(`^r[0-9a-f]{8}t\d{14}h([0-9a-f]{7,})$`)
+)
+
+// pmBuild is a build's identity: a release (or release candidate) by its
+// version, a branch build by its base version and commit.
+type pmBuild struct {
+	version, commit string
+}
+
+func pmBuildOf(v string) pmBuild {
+	sv, err := semver.NewVersion(strings.TrimPrefix(strings.TrimSpace(v), "v"))
+	if err != nil {
+		return pmBuild{version: v}
+	}
+	for _, re := range []*regexp.Regexp{goPseudoVersionRe, chartDevVersionRe} {
+		if m := re.FindStringSubmatch(sv.Prerelease()); m != nil {
+			return pmBuild{version: fmt.Sprintf("%d.%d.%d", sv.Major(), sv.Minor(), sv.Patch()), commit: m[1]}
+		}
+	}
+	return pmBuild{version: sv.String()}
+}
+
+// samePMBuild says whether the manager's answered version and the installed
+// chart version name one build: the same release, or the same base version
+// and commit (the shorter hash a prefix of the longer).
+func samePMBuild(answered, installed string) bool {
+	a, b := pmBuildOf(answered), pmBuildOf(installed)
+	if a.version != b.version || (a.commit == "") != (b.commit == "") {
+		return false
+	}
+	short, long := a.commit, b.commit
+	if len(short) > len(long) {
+		short, long = long, short
+	}
+	return strings.HasPrefix(long, short)
 }
 
 // installPlatformManager applies the manager's OCIRepository and HelmRelease
