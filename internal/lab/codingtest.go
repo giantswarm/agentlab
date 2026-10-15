@@ -91,24 +91,32 @@ type codingRuntime struct {
 	secretBacked bool
 }
 
-// The environment variables the codex runtime reads its model key and its
-// Secret-backed MCP credentials from: names, never values.
+// The environment variables the codex runtime and a BYO Harness (omp) read
+// their model key and their Secret-backed MCP credentials from: names, never
+// values.
 const (
 	codexOpenAIKeyEnv      = "OPENAI_API_KEY"               // #nosec G101 -- a variable's name
 	codexBedrockKeyEnv     = "AWS_BEARER_TOKEN_BEDROCK"     // #nosec G101 -- a variable's name
 	codexMCPCredentialEnvs = "KAGENT_CODEX_MCP_CREDENTIAL_" // #nosec G101 -- a variable name's prefix
+	byoMCPCredentialEnvs   = "KAGENT_CREDENTIAL_"           // #nosec G101 -- a variable name's prefix
+	anthropicKeyEnv        = "ANTHROPIC_API_KEY"            // #nosec G101 -- a variable's name
 )
 
 // codingRuntimes are the runtimes coding-test proves, by name.
 var codingRuntimes = map[string]codingRuntime{
 	config.CodingRuntimeClaude: {
 		name: config.CodingRuntimeClaude, shellTool: "Bash tool",
-		modelKeys: []string{"ANTHROPIC_API_KEY"}, claude: true,
+		modelKeys: []string{anthropicKeyEnv}, claude: true,
 	},
 	config.CodingRuntimeCodex: {
 		name: config.CodingRuntimeCodex, shellTool: "shell tool",
 		modelKeys:           []string{codexOpenAIKeyEnv, codexBedrockKeyEnv},
 		mcpCredentialPrefix: codexMCPCredentialEnvs, secretBacked: true,
+	},
+	config.CodingRuntimeOmp: {
+		name: config.CodingRuntimeOmp, shellTool: "bash tool",
+		modelKeys:           []string{anthropicKeyEnv},
+		mcpCredentialPrefix: byoMCPCredentialEnvs, secretBacked: true,
 	},
 }
 

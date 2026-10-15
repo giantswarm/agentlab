@@ -92,11 +92,50 @@ func TestCodingHarnessesCodex(t *testing.T) {
 	if codex["name"] != "codex" || codex["runtime"] != "codex" || codex["snapshotLocation"] != codingSnapshotPrefix+"codex" {
 		t.Errorf("kagent.harnesses[1] = %v, want codex on the codex runtime at %scodex", codex, codingSnapshotPrefix)
 	}
+	if _, ok := codex["command"]; ok {
+		t.Errorf("codex carries command %v, wanted none (the chart's image runs its entrypoint)", codex["command"])
+	}
+	if _, ok := codex["displayName"]; ok {
+		t.Errorf("codex carries displayName %v, wanted none (the portal labels the codex runtime itself)", codex["displayName"])
+	}
 	if _, ok := codex["env"]; ok {
 		t.Errorf("codex carries env %v, wanted none (no caller forwarder)", codex["env"])
 	}
 	if _, ok := codex["image"]; ok {
 		t.Errorf("codex carries image %v without a dev image, wanted the chart's", codex["image"])
+	}
+}
+
+// platform.coding.harnesses [omp] renders a BYO entry on the image
+// platform.coding.images names, named omp, on its own snapshot prefix and
+// without the caller forwarder's variable.
+func TestCodingHarnessesOmp(t *testing.T) {
+	cfg := codingLab()
+	cfg.Platform.Coding.Harnesses = []string{config.CodingRuntimeOmp}
+	image := "gsoci.azurecr.io/giantswarm/kagent/omp-harness@sha256:" + strings.Repeat("b", 64)
+	cfg.Platform.Coding.Images = map[string]string{config.CodingRuntimeOmp: image}
+	values, _, _, _ := renderWorkspaceTemplates(t, cfg, nil)
+	kagent, _ := values["kagent"].(map[string]any)
+	harnesses, _ := kagent["harnesses"].([]any)
+	if len(harnesses) != 1 {
+		t.Fatalf("kagent.harnesses = %v, want omp alone", harnesses)
+	}
+	omp, _ := harnesses[0].(map[string]any)
+	if omp["name"] != "omp" || omp["runtime"] != "byo" || omp["image"] != image || omp["snapshotLocation"] != codingSnapshotPrefix+"omp" {
+		t.Errorf("kagent.harnesses[0] = %v, want omp as a byo entry on %s at %somp", omp, image, codingSnapshotPrefix)
+	}
+	if command, _ := omp["command"].([]any); len(command) != 1 || command[0] != ompHarnessCommand[0] {
+		t.Errorf("omp command = %v, want %v (the Harness API requires workload.command on a BYO Harness)", omp["command"], ompHarnessCommand)
+	}
+	if omp["displayName"] != ompDisplayName {
+		t.Errorf("omp displayName = %v, want %q (a BYO entry names what runs)", omp["displayName"], ompDisplayName)
+	}
+	if _, ok := omp["env"]; ok {
+		t.Errorf("omp carries env %v, wanted none (no caller forwarder)", omp["env"])
+	}
+	dev := "localhost:5001/kagent-dev/kagent/omp-harness@sha256:" + strings.Repeat("c", 64)
+	if got := codingHarnessesFor(cfg, nil, map[string]string{config.CodingRuntimeOmp: dev}); len(got) != 1 || got[0].Image != dev {
+		t.Errorf("harnesses = %+v, want omp on the dev image %s over platform.coding.images", got, dev)
 	}
 }
 
