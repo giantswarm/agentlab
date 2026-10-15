@@ -1211,6 +1211,13 @@ func (t *turn) completedText() (string, error) {
 // Shared steps of the proofs call this one; a turn that pauses for a
 // decision is an error (their agents bind nothing that requires approval).
 func agentTurnAs(cfg *config.Config, name, token, prompt string) (string, error) {
+	return agentTurnOf(cfg, agentRef(name), token, prompt)
+}
+
+// agentTurnOf is agentTurnAs for an Agent of any namespace: an organization
+// namespace's agent (tenants-test).
+func agentTurnOf(cfg *config.Config, agent *apiv1alpha1.ResourceReference, token, prompt string) (string, error) {
+	name := agent.GetName()
 	api, err := dialKagentAPI(cfg, token)
 	if err != nil {
 		return "", err
@@ -1218,7 +1225,7 @@ func agentTurnAs(cfg *config.Config, name, token, prompt string) (string, error)
 	defer api.close()
 	ctx, cancel := context.WithTimeout(context.Background(), kagentTurnTimeout)
 	defer cancel()
-	session, err := api.createSession(ctx, name, uuid.NewString())
+	session, err := api.createSessionOf(ctx, agent, uuid.NewString())
 	if err != nil {
 		return "", err
 	}
