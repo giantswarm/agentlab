@@ -246,12 +246,13 @@ Session and no model.
 12. **Restore**: `agentlab-oss/docs` back to the fixture's topics and the head
     it had, and this host's clone removed. A failed run removes the same.
 
-The workspace-manager answers an owner's listing from its cache for a
-minute: a cycle that must see a change at the provider is requested once a
-minute has passed since the last listing, and the part starts a minute after
-the provider's last change in the request log. The no-op is shown by the
-request log and the manifest, never by timing. The run takes about six
-minutes; `--ready-timeout` bounds each cycle.
+A cycle `sync_workspace` requests lists the provider anew (workspace-manager
+0.8.1 and newer), so each one is requested right after the change it must
+see. The first cycle, which the create starts, may read the manager's
+one-minute listing cache: the part starts a minute after the provider's last
+change in the request log. The no-op is shown by the request log and the
+manifest, never by timing. The run takes about a minute; `--ready-timeout`
+bounds each cycle.
 
 ### The access part
 
@@ -419,7 +420,10 @@ platform`. Without any of them it fails at once with the reason.
    (`.kagent/workspace.json`: when it was set up, what was cloned, `docs`
    fetched) and its own file alone. The lab GitHub's request log since the
    push holds exactly one fetch (`GET .../info/refs`) of `docs` per Session
-   and none of any other repository.
+   and none of any other repository. When a grant requested a sync (its
+   `syncRequested`: the workspace's last cycle older than the manager's
+   `sync.refreshAfter`, such as `1s`), the part waits for that cycle to end
+   and the log holds one more fetch of `docs`, the mirror's.
 6. **Isolation**: a second turn on every Session at once looks for every
    `agentlab-only-*` file it can reach and tries a write into `/mirrors`: it
    finds its own file only, and the write is refused.

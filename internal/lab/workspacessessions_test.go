@@ -27,18 +27,25 @@ func TestCountFetches(t *testing.T) {
 
 func TestJudgeFetches(t *testing.T) {
 	const moved = syncMovingRepo
-	if err := judgeFetches(map[string]int{moved: 10}, moved, 10); err != nil {
+	if err := judgeFetches(map[string]int{moved: 10}, moved, 10, false); err != nil {
 		t.Fatalf("one fetch per Session: %v", err)
 	}
+	if err := judgeFetches(map[string]int{moved: 11}, moved, 10, true); err != nil {
+		t.Fatalf("one fetch per Session and the requested sync's: %v", err)
+	}
 	for name, c := range map[string]struct {
-		fetches map[string]int
-		want    string
+		fetches       map[string]int
+		syncRequested bool
+		want          string
 	}{
-		"too few":     {map[string]int{moved: 9}, "fetched 9 times, want once per Session (10)"},
-		"no fetch":    {map[string]int{}, "fetched 0 times"},
-		"another one": {map[string]int{moved: 10, syncPrivateRepo: 1}, syncPrivateRepo + " fetched 1 times, want never"},
+		"too few":             {map[string]int{moved: 9}, false, "fetched 9 times, want once per Session (10)"},
+		"no fetch":            {map[string]int{}, false, "fetched 0 times"},
+		"another one":         {map[string]int{moved: 10, syncPrivateRepo: 1}, false, syncPrivateRepo + " fetched 1 times, want never"},
+		"a refresh unasked":   {map[string]int{moved: 11}, false, "fetched 11 times, want once per Session (10)"},
+		"the refresh missing": {map[string]int{moved: 10}, true, "fetched 10 times, want once per Session (10) and once by the sync a grant requested"},
+		"a second refresh":    {map[string]int{moved: 12}, true, "fetched 12 times"},
 	} {
-		err := judgeFetches(c.fetches, moved, 10)
+		err := judgeFetches(c.fetches, moved, 10, c.syncRequested)
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: judgeFetches = %v, want %q", name, err, c.want)
 		}
