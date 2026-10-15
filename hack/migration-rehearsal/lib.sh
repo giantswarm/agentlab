@@ -117,7 +117,7 @@ github_window() {
     log "GitHub API window not read; $what proceeds without it"
     return 0
   fi
-  log "GitHub API window (unauthenticated: this machine's shared window):$remaining of $limit requests remaining, resets $(date -d "@$reset" +%H:%M:%S)"
+  log "GitHub API window (unauthenticated: this machine's shared window): $remaining of $limit requests remaining, resets $(date -d "@$reset" +%H:%M:%S)"
   if (( remaining == 0 )); then
     wait=$(( reset - $(now) + 5 ))
     (( wait < 0 )) && wait=0
