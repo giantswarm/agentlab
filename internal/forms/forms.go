@@ -77,6 +77,10 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 	gitHubTokenSource := cfg.GitHubToken.Source
 	customizeModels := false
 	backstagePort := strconv.Itoa(cfg.Backstage.Port)
+	backstagePortal := cfg.Backstage.Portal
+	if backstagePortal == "" {
+		backstagePortal = config.PortalAgentPlatform
+	}
 
 	userSummary := func() string {
 		lines := make([]string, 0, len(cfg.Users))
@@ -217,6 +221,14 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 				Description("Backstage binds this port on the kind node (hostNetwork) and kind maps the\nsame number onto this machine, so the URL is identical on both sides.").
 				Value(&backstagePort).
 				Validate(config.ValidatePort),
+			huh.NewSelect[string]().
+				Title("Portal mode").
+				Description("What the portal serves: the Agent Platform shell (app.portals.agentPlatform),\nor the classic Platform Portal alone. `agentlab platform` rolls Backstage onto it.").
+				Options(
+					huh.NewOption("Agent Platform", config.PortalAgentPlatform),
+					huh.NewOption("Classic Platform Portal", config.PortalClassic),
+				).
+				Value(&backstagePortal),
 		).Title("Backstage").
 			WithHideFunc(func() bool { return !slices.Contains(components, "backstage") }),
 	).WithAccessible(accessible)
@@ -247,6 +259,7 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 	cfg.AIKey.Source = aiKeySource
 	cfg.GitHubToken.Source = gitHubTokenSource
 	cfg.Backstage.Port = mustAtoi(backstagePort)
+	cfg.Backstage.Portal = backstagePortal
 
 	if customizeUsers {
 		if err := editUsers(cfg, accessible); err != nil {
