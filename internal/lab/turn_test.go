@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	apiv1alpha1 "github.com/giantswarm/agentlab/internal/kagent/gen/kagent/api/v1alpha1"
 )
@@ -145,4 +146,61 @@ func stdoutOf(t *testing.T, fn func()) string {
 		t.Fatal(err)
 	}
 	return string(out)
+}
+
+// TestDeleteKeptSession: a Session kept for its creator is deleted the way a
+// turn's own cleanup deletes it, retried while its runtime work settles, and
+// read back gone.
+func TestDeleteKeptSession(t *testing.T) {
+	backoff := sessionSettleBackoff
+	t.Cleanup(func() { sessionSettleBackoff = backoff })
+	sessionSettleBackoff = 10 * time.Millisecond
+	f := readyFake(t)
+	f.settling = 2
+
+	out := stdoutOf(t, func() {
+		if err := deleteKeptSession(f.serve(t, fakeToken), "admin@lab.local", fakeSessionID); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	if _, ok := f.sessions[fakeSessionID]; ok {
+		t.Errorf("session %s still in the controller", fakeSessionID)
+	}
+	if want := "deleted: " + fakeSessionID + " of Agent " + a2aTestAgent + " (creator " + fakeToken + ", was READY)\n"; !strings.HasSuffix(out, want) {
+		t.Errorf("output = %q, want it to end with %q", out, want)
+	}
+	if got := strings.Count(strings.Join(f.order, " "), "DeleteSession"); got != 3 {
+		t.Errorf("DeleteSession called %d times, want 3 (two while settling): %v", got, f.order)
+	}
+}
+
+// TestDeleteSessionOfAnotherUserIsRefused: the controller answers NotFound
+// for another user's Session, which is refused rather than reported deleted,
+// and the Session stays.
+func TestDeleteSessionOfAnotherUserIsRefused(t *testing.T) {
+	f := readyFake(t)
+
+	err := deleteKeptSession(f.serve(t, "other-jwt"), "user@lab.local", fakeSessionID)
+
+	if err == nil || !strings.Contains(err.Error(), "user@lab.local has no Session "+fakeSessionID+" to delete") {
+		t.Errorf("deleting another user's Session: %v", err)
+	}
+	if _, ok := f.sessions[fakeSessionID]; !ok {
+		t.Errorf("another user's Session was deleted")
+	}
+	if slices.Contains(f.order, "DeleteSession") {
+		t.Errorf("DeleteSession called for another user's Session: %v", f.order)
+	}
+}
+
+// TestKeptLineNamesTheDelete: the line `turn --keep` prints names both the
+// continuing turn and the delete of the kept Session.
+func TestKeptLineNamesTheDelete(t *testing.T) {
+	got := keptLine(fakeSessionID)
+	for _, want := range []string{"agentlab turn --session " + fakeSessionID + " …", "agentlab turn --session " + fakeSessionID + " --delete"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("kept line %q does not name %q", got, want)
+		}
+	}
 }
