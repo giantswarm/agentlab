@@ -426,6 +426,9 @@ type workspaceAuthorization struct {
 	Repositories []string   `json:"repositories"`
 	Changed      []string   `json:"changed"`
 	Unreadable   []string   `json:"unreadable"`
+	// SyncRequested says the check requested a sync of the workspace, its
+	// last one older than the manager's refresh threshold (refreshAfter).
+	SyncRequested bool `json:"syncRequested"`
 	// Connect are the providers the person signs in to first, each with the
 	// link that starts it.
 	Connect []struct {
