@@ -198,8 +198,8 @@ the JWKS; with its 5-minute refresh, fresh tokens were measured refused for
 4 min 47 s after a rotation in this lab
 ([agentgateway-upstream#46](https://github.com/giantswarm/agentgateway-upstream/issues/46)).
 
-`agentlab platform-test` starts with the stage `apiserver OIDC`: a fresh
-token of the first user at `whoami`. Refused while Dex publishes its key, it
+`agentlab platform-test`, `test`, `backstage-test` and `agents-test` start
+with the stage `apiserver OIDC`: a fresh token of the first user at `whoami`. Refused while Dex publishes its key, it
 is this window: the stage presents a new token every 15 seconds until the
 apiserver fetches again, at most 10 min 30 s, and the proof goes on. Any other
 refusal fails the stage at once. A rotation is forced for a test by setting
