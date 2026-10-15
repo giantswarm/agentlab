@@ -84,3 +84,59 @@ func TestDevImagesKnowSubstrateAPI(t *testing.T) {
 		t.Errorf("without the agents the target must be refused naming the key, got %v", err)
 	}
 }
+
+// A coding Harness's image is a devImages target while the lab renders that
+// Harness, and a registry target, not a Deployment's.
+func TestDevImagesKnowCodingHarnesses(t *testing.T) {
+	cfg := Default()
+	cfg.Platform.Coding.Enabled = true
+	cfg.Platform.Coding.Harnesses = []string{CodingRuntimeClaude, CodingRuntimeCodex}
+	cfg.Platform.DevImages = map[string]string{DevImageClaudeHarness: "claude-harness:dev", DevImageCodexHarness: "codex-harness:dev"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("the coding Harnesses' images must be devImages targets: %v", err)
+	}
+	for _, target := range []string{DevImageHarness, DevImageClaudeHarness, DevImageCodexHarness} {
+		if !RegistryDevImage(target) {
+			t.Errorf("%s is not a registry target", target)
+		}
+	}
+	if RegistryDevImage("muster") {
+		t.Error("muster is a registry target")
+	}
+	cfg.Platform.Coding.Harnesses = nil
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), DevImageCodexHarness) {
+		t.Errorf("codex-harness without the codex Harness must be refused naming the key, got %v", err)
+	}
+}
+
+// platform.coding.harnesses takes the known runtimes once each.
+func TestCodingHarnessesValidate(t *testing.T) {
+	for name, tc := range map[string]struct {
+		harnesses []string
+		want      string
+	}{
+		"not a runtime": {[]string{"omp"}, "unknown runtime"},
+		"twice":         {[]string{CodingRuntimeCodex, CodingRuntimeCodex}, "twice"},
+		"codex alone":   {[]string{CodingRuntimeCodex}, ""},
+		"both":          {[]string{CodingRuntimeClaude, CodingRuntimeCodex}, ""},
+		"empty":         {nil, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := Default()
+			cfg.Platform.Coding.Enabled = true
+			cfg.Platform.Coding.Harnesses = tc.harnesses
+			err := cfg.Validate()
+			if tc.want == "" && err != nil {
+				t.Fatalf("refused: %v", err)
+			}
+			if tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)) {
+				t.Fatalf("got %v, want an error with %q", err, tc.want)
+			}
+		})
+	}
+	cfg := Default()
+	cfg.Platform.Coding.Enabled = true
+	if got := cfg.CodingHarnesses(); len(got) != 1 || got[0] != CodingRuntimeClaude {
+		t.Errorf("CodingHarnesses() = %v, want claude by default", got)
+	}
+}

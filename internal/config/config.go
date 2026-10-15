@@ -144,8 +144,9 @@ func ConnectivityChartDir(chartPath string) string {
 // agent-platform chart's component names (its `components.<name>` entries)
 // for the Deployments the lab's dev loops build from a checkout — the
 // agentgateway component's two Deployments under their own names — plus
-// DevImageHarness for the platform Harness's runtime image.
-var DevImageComponents = []string{"muster", "backstage", "kagent", "mcp-kubernetes", "model-manager", "agent-manager", "vm-manager", DevImageKlausGateway, DevImageClusterManager, DevImageWorkspaceManager, DevImageAgentgateway, DevImageAgentgatewayController, DevImageSubstrateAPI, DevImageHarness}
+// DevImageHarness for the platform Harness's runtime image and one target per
+// coding Harness's image (DevImageClaudeHarness, DevImageCodexHarness).
+var DevImageComponents = []string{"muster", "backstage", "kagent", "mcp-kubernetes", "model-manager", "agent-manager", "vm-manager", DevImageKlausGateway, DevImageClusterManager, DevImageWorkspaceManager, DevImageAgentgateway, DevImageAgentgatewayController, DevImageSubstrateAPI, DevImageHarness, DevImageClaudeHarness, DevImageCodexHarness}
 
 // DevImageKlausGateway is the devImages key of the klaus-gateway component
 // (platform.klausGateway): the Deployment `klaus-gateway`, container
@@ -194,6 +195,38 @@ const DevImageSubstrateAPI = "ate-api-server"
 // own layer cache, so the lab pushes the local build to its registry
 // (DevRegistryPort) and forwards the digest through kagent.harness.image.
 const DevImageHarness = "harness"
+
+// DevImageClaudeHarness and DevImageCodexHarness are the devImages keys of a
+// coding Harness's image, `<runtime>-harness`: a build of the kagent line's
+// claude-harness or codex-harness, say from a pull request. Like the
+// `harness` target it is no Deployment: the lab pushes it to its registry
+// and forwards the digest as the image of that runtime's kagent.harnesses
+// entry. Meaningful only while the lab renders that Harness
+// (CodingHarnessRendered).
+const (
+	DevImageClaudeHarness = CodingRuntimeClaude + "-harness"
+	DevImageCodexHarness  = CodingRuntimeCodex + "-harness"
+)
+
+// CodingHarnessDevImage is the devImages key of a coding runtime's image.
+func CodingHarnessDevImage(runtime string) string { return runtime + "-harness" }
+
+// RegistryDevImage reports whether a devImages target is pushed to the lab
+// registry and pinned by digest (a Harness's image) rather than side-loaded
+// into the node as a Deployment's.
+func RegistryDevImage(component string) bool {
+	return component == DevImageHarness || component == DevImageClaudeHarness || component == DevImageCodexHarness
+}
+
+// The coding runtimes the lab renders a Harness of, each named after its
+// runtime: claude (Claude Code) and codex (OpenAI's Codex CLI).
+const (
+	CodingRuntimeClaude = "claude"
+	CodingRuntimeCodex  = "codex"
+)
+
+// CodingRuntimes are the runtimes platform.coding.harnesses takes.
+var CodingRuntimes = []string{CodingRuntimeClaude, CodingRuntimeCodex}
 
 // vmManagerChartFloor is the first agent-platform release whose vm-manager
 // component (components.vm-manager) comes from gsoci and fetches its guest
@@ -505,6 +538,11 @@ type Coding struct {
 	// On, `agentlab platform` renders the coding Harnesses through the
 	// chart's kagent.harnesses.
 	Enabled bool `yaml:"enabled"`
+	// Harnesses are the coding Harnesses rendered, by runtime (one of
+	// CodingRuntimes), each named after it; empty is claude alone. codex
+	// renders on the chart's codex-harness image, which needs a kagent line
+	// whose chart takes `runtime: codex`.
+	Harnesses []string `yaml:"harnesses,omitempty"`
 }
 
 // Workspaces configures the workspace storage in the lab.
@@ -1812,6 +1850,20 @@ func (c *Config) Validate() error {
 	if c.Platform.Coding.Enabled && c.Platform.Enabled && !c.Platform.Agents {
 		return fmt.Errorf("platform.coding requires platform.agents (a coding Harness is a kagent Harness)")
 	}
+	for i, runtime := range c.Platform.Coding.Harnesses {
+		if !slices.Contains(CodingRuntimes, runtime) {
+			return fmt.Errorf("platform.coding.harnesses: unknown runtime %q (one of %s)", runtime, strings.Join(CodingRuntimes, ", "))
+		}
+		if slices.Contains(c.Platform.Coding.Harnesses[:i], runtime) {
+			return fmt.Errorf("platform.coding.harnesses: %q twice", runtime)
+		}
+	}
+	for _, runtime := range CodingRuntimes {
+		target := CodingHarnessDevImage(runtime)
+		if _, ok := c.Platform.DevImages[target]; ok && !c.CodingHarnessRendered(runtime) {
+			return fmt.Errorf("platform.devImages.%s: the lab renders no Harness %s (platform.coding.enabled with %s in platform.coding.harnesses) — the override would swap the image of nothing", target, runtime, runtime)
+		}
+	}
 	// kagent.harnesses reaches the kagent chart from codingChartFloor on; an
 	// older release drops the key and renders no coding Harness.
 	if c.Platform.Coding.Enabled && c.Platform.Enabled {
@@ -1989,6 +2041,25 @@ func (c *Config) ClusterManagerEnabled() bool {
 // platform with its agents runtime, and the key on.
 func (c *Config) CodingEnabled() bool {
 	return c.Platform.Enabled && c.Platform.Agents && c.Platform.Coding.Enabled
+}
+
+// CodingHarnesses are the coding runtimes the lab renders a Harness of while
+// coding agents are on: platform.coding.harnesses, claude when it is empty.
+func (c *Config) CodingHarnesses() []string {
+	if len(c.Platform.Coding.Harnesses) == 0 {
+		return []string{CodingRuntimeClaude}
+	}
+	return c.Platform.Coding.Harnesses
+}
+
+// CodingHarnessRendered reports whether the lab renders the coding Harness of
+// the runtime: one of CodingHarnesses with coding agents on; claude also for
+// the workspaces proof's Session, whenever the workspaces are on.
+func (c *Config) CodingHarnessRendered(runtime string) bool {
+	if c.CodingEnabled() && slices.Contains(c.CodingHarnesses(), runtime) {
+		return true
+	}
+	return runtime == CodingRuntimeClaude && c.WorkspacesEnabled()
 }
 
 // WorkspacesEnabled reports whether the lab installs the workspace storage:

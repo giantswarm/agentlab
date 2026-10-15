@@ -1003,6 +1003,25 @@ func remoteMCPServerHeader(rms *unstructured.Unstructured, name string) (string,
 	return "", false, nil
 }
 
+// secretBackedHeaders lists the names of a RemoteMCPServer's headersFrom
+// entries whose value comes from a Secret, sorted; never the values.
+func secretBackedHeaders(rms *unstructured.Unstructured) []string {
+	headers, _, _ := unstructured.NestedSlice(rms.Object, "spec", "headersFrom")
+	var names []string
+	for _, h := range headers {
+		m, ok := h.(map[string]any)
+		if !ok {
+			continue
+		}
+		if kind, _, _ := unstructured.NestedString(m, "valueFrom", fieldTypeKey); kind == kindSecret {
+			name, _, _ := unstructured.NestedString(m, nameKey)
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+	return names
+}
+
 // headerNames lists the names of a RemoteMCPServer's headersFrom, sorted.
 func headerNames(rms *unstructured.Unstructured) []string {
 	headers, _, _ := unstructured.NestedSlice(rms.Object, "spec", "headersFrom")

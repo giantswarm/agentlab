@@ -704,6 +704,7 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 		t.PostRenderers = postRenderers
 		if dev != nil {
 			t.HarnessDevImage = dev.harness
+			t.CodingHarnesses = codingHarnessesFor(cfg, t.WorkspaceAdmission, dev.coding)
 		}
 	}); err != nil {
 		return err
@@ -843,6 +844,11 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	}
 	if dev != nil && dev.harness != "" {
 		if err := reportHarnessDevImage(ctx, dev, harnessBefore); err != nil {
+			return err
+		}
+	}
+	if dev != nil && len(dev.coding) > 0 {
+		if err := reportCodingHarnessDevImages(ctx, dev); err != nil {
 			return err
 		}
 	}
@@ -1282,6 +1288,8 @@ func devImagesHint(cfg *config.Config, dev *devImages) string {
 		switch {
 		case name == config.DevImageHarness && dev != nil && dev.harness != "":
 			ref += "  (Harness " + platformHarness + " pins " + dev.harness + ")"
+		case dev != nil && dev.coding[strings.TrimSuffix(name, "-harness")] != "":
+			ref += "  (Harness " + strings.TrimSuffix(name, "-harness") + " pins " + dev.coding[strings.TrimSuffix(name, "-harness")] + ")"
 		case name == agentgatewayComponent && dev != nil && dev.proxy != nil:
 			ref += "  (the controller's proxies run " + dev.proxy.ref() + ")"
 		}

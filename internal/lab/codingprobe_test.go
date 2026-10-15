@@ -3,6 +3,8 @@ package lab
 import (
 	"strings"
 	"testing"
+
+	"github.com/giantswarm/agentlab/internal/config"
 )
 
 // codingReply is a reply as an agent relays the sandbox probe on a line
@@ -115,13 +117,14 @@ func TestCodingFixtureRecord(t *testing.T) {
 // The probe never prints the forwarder's token: it stays in a variable, and
 // every echo of a reading names no $tok.
 func TestCodingSandboxCommandKeepsTheToken(t *testing.T) {
-	for _, line := range strings.Split(codingSandboxCommand(), "\n") {
+	claude := codingRuntimes[config.CodingRuntimeClaude]
+	for _, line := range strings.Split(codingSandboxCommand(claude), "\n") {
 		if strings.Contains(line, "echo") && strings.Contains(line, "$tok") {
 			t.Errorf("a reading echoes the token: %s", line)
 		}
 	}
 	for _, want := range []string{"/mcp/$name/../../x", "%2e%2e/%2e%2e", "..%2fx", codingTestWriteTool, codingTestOutsideHost} {
-		if !strings.Contains(codingSandboxCommand(), want) {
+		if !strings.Contains(codingSandboxCommand(claude), want) {
 			t.Errorf("the probe lacks %q", want)
 		}
 	}
@@ -144,5 +147,34 @@ func TestTakesAnyToolset(t *testing.T) {
 		if got := takesAnyToolset(version); got != want {
 			t.Errorf("takesAnyToolset(%q) = %v, want %v", version, got, want)
 		}
+	}
+}
+
+// On codex the probe has no root harness or forwarder to read, checks the
+// codex model keys and counts the MCP credentials that are not kagent's
+// placeholder.
+func TestCodingSandboxCommandCodex(t *testing.T) {
+	cmd := codingSandboxCommand(codingRuntimes[config.CodingRuntimeCodex])
+	for _, absent := range []string{harnessProcessName, "--mcp-config", "ANTHROPIC_API_KEY"} {
+		if strings.Contains(cmd, absent) {
+			t.Errorf("the codex probe carries %q", absent)
+		}
+	}
+	for _, want := range []string{codexOpenAIKeyEnv, codexBedrockKeyEnv, codexMCPCredentialEnvs, credentialPlaceholder, codingTestOutsideHost} {
+		if !strings.Contains(cmd, want) {
+			t.Errorf("the codex probe lacks %q", want)
+		}
+	}
+}
+
+// An MCP credential in the sandbox that is not the placeholder fails the
+// credentials stage; all placeholders pass it.
+func TestCodingCredentialsMCP(t *testing.T) {
+	base := "AGENTLAB_PROBE env-tokens=0\nAGENTLAB_PROBE data-tokens=0\nAGENTLAB_PROBE model-key=placeholder\n"
+	if _, err := parseCodingProbe(base + "AGENTLAB_PROBE mcp-credentials=1 0\n").credentials(nil); err != nil {
+		t.Errorf("one placeholder credential failed: %v", err)
+	}
+	if _, err := parseCodingProbe(base + "AGENTLAB_PROBE mcp-credentials=1 1\n").credentials(nil); err == nil {
+		t.Error("a real MCP credential in the sandbox passed")
 	}
 }

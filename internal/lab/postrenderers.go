@@ -653,13 +653,13 @@ func devImageOverride(name, ref string) kustomizeImage {
 }
 
 // devImageRefs lists the dev images to side-load into the node under the
-// names their pods use (labImageRef): the Deployment targets. The `harness`
-// image is not among them — nothing on the node's containerd pulls it
+// names their pods use (labImageRef): the Deployment targets. The Harness
+// images (`harness`, `<runtime>-harness`) are not among them — nothing on the node's containerd pulls it
 // (pushDevImage).
 func devImageRefs(cfg *config.Config) []string {
 	var refs []string
 	for component, ref := range cfg.Platform.DevImages {
-		if component == config.DevImageHarness {
+		if config.RegistryDevImage(component) {
 			continue
 		}
 		refs = append(refs, labImageRef(ref))
