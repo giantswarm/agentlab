@@ -100,7 +100,7 @@ func workspacesAccessPart(cfg *config.Config, email string, timeout time.Duratio
 	err := ap.run(cmp.Or(email, accessDefaultSecond), p)
 	ap.cleanup()
 	if err == nil {
-		fmt.Printf("\nWorkspaces access part passed: authorize_workspace answered connect_required to a person not signed in to the provider, refused naming the repository a connected person cannot read and granted the admin a grant naming the person, the workspace, its volume and the changed repository; start_session started the Session on the volume with it; every refused start left no Session in kagent or agent-manager and no Substrate actor; disconnect_provider revoked the sign-in at the provider. authorize_workspace latency: %s.\n", latencySummary(ap.latencies))
+		fmt.Printf("\nWorkspaces access part passed: authorize_workspace answered connect_required to a person not signed in to the provider, refused naming the repository a connected person cannot read and granted the admin a grant naming the person, the Agent namespace, the workspace, its volume and the changed repository; start_session started the Session on the volume with it; every refused start left no Session in kagent or agent-manager and no Substrate actor; disconnect_provider revoked the sign-in at the provider. authorize_workspace latency: %s.\n", latencySummary(ap.latencies))
 	}
 	return p.close(err)
 }
@@ -351,12 +351,13 @@ func (ap *accessProof) refusedNaming() error {
 
 // accessGrantClaims are the claims of a manager's grant the part judges.
 type accessGrantClaims struct {
-	Subject   string            `json:"sub"`
-	Expiry    int64             `json:"exp"`
-	Workspace map[string]string `json:"workspace"`
-	Volume    workspaceVolume   `json:"volume"`
-	Mounts    []workspaceMount  `json:"mounts"`
-	Changed   []string          `json:"changed"`
+	Subject        string            `json:"sub"`
+	Expiry         int64             `json:"exp"`
+	AgentNamespace string            `json:"agent_namespace"`
+	Workspace      map[string]string `json:"workspace"`
+	Volume         workspaceVolume   `json:"volume"`
+	Mounts         []workspaceMount  `json:"mounts"`
+	Changed        []string          `json:"changed"`
 }
 
 // grantPayload decodes a grant's claims without verifying it, generically
@@ -382,12 +383,15 @@ func grantPayload(grant string) (map[string]any, accessGrantClaims, error) {
 }
 
 // judgeGrant is the verdict on the admin's grant: it names the person, the
-// workspace, its volume, the workspace's mounts and exactly the changed
+// namespace of the lab's Agents, the workspace, its volume, the workspace's mounts and exactly the changed
 // repositories.
 func judgeGrant(c accessGrantClaims, person, workspace string, volume workspaceVolume, changed []string) error {
 	var problems []string
 	if c.Subject != person {
 		problems = append(problems, fmt.Sprintf("names %q, not %s", c.Subject, person))
+	}
+	if c.AgentNamespace != kagentNamespace {
+		problems = append(problems, fmt.Sprintf("names Agent namespace %q, not %s (agent_namespace, workspace-manager 0.9.0 or newer)", c.AgentNamespace, kagentNamespace))
 	}
 	if c.Workspace[nameKey] != workspace {
 		problems = append(problems, fmt.Sprintf("names workspace %q, not %s", c.Workspace[nameKey], workspace))
@@ -448,8 +452,8 @@ func (ap *accessProof) grant() (string, error) {
 		return "", fmt.Errorf("%w (pushed %s to %s after the sync)", err, shortSHA(pushed), syncMovingRepo)
 	}
 	expires := time.Unix(claims.Expiry, 0).UTC()
-	note("authorize_workspace: %s in %s — a grant of %d bytes, sub %s, workspace %s/%s, volume %s, mounts %s and %s read-only, changed %s, expires %s (repositories %s)",
-		a.Outcome, ap.latencies[len(ap.latencies)-1].Round(time.Millisecond), len(a.Grant), claims.Subject, claims.Workspace[namespaceKey], claims.Workspace[nameKey], claims.Volume.Handle,
+	note("authorize_workspace: %s in %s — a grant of %d bytes, sub %s, agent_namespace %s, workspace %s/%s, volume %s, mounts %s and %s read-only, changed %s, expires %s (repositories %s)",
+		a.Outcome, ap.latencies[len(ap.latencies)-1].Round(time.Millisecond), len(a.Grant), claims.Subject, claims.AgentNamespace, claims.Workspace[namespaceKey], claims.Workspace[nameKey], claims.Volume.Handle,
 		workspaceGrantSessionDirectory, workspaceGrantMirrors, strings.Join(claims.Changed, ", "), expires.Format(time.RFC3339), strings.Join(a.Repositories, ", "))
 	return a.Grant, nil
 }
