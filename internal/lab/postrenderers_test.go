@@ -13,7 +13,6 @@ import (
 	"github.com/giantswarm/agentlab/internal/config"
 )
 
-
 // Fixture refs, hoisted so the linter's constant check stays quiet.
 const (
 	devMusterRef        = "muster:dev-1a2b"
