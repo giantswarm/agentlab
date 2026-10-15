@@ -69,22 +69,28 @@ lock_note() { # <text>: append a stage note to the owner file, once
 
 # -------------------------------------------------------------------- key ---
 
-# export_anthropic_key <min-bytes>: from the Secret kagent/kagent-anthropic
-# unless the environment carries one; only its length is ever logged.
-export_anthropic_key() {
-  if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
-    local key
-    key=$(kubectl -n kagent get secret kagent-anthropic -o jsonpath='{.data.ANTHROPIC_API_KEY}' | base64 -d)
-    export ANTHROPIC_API_KEY="$key"
+# require_anthropic_key <min-bytes>: the key reaches the lab the way every
+# `agentlab up`/`platform` places it, never read back from a Secret: the
+# aiKey.source agentlab.yaml records (placed through beekeeper, agentlab never
+# reads the value), else ANTHROPIC_API_KEY in the environment, of which only
+# the length is ever logged. Neither dies, since a platform run without one
+# overwrites the lab's key with a placeholder.
+require_anthropic_key() {
+  local source
+  source=$("$YQ" '.aiKey.source // ""' agentlab.yaml)
+  if [ -n "$source" ]; then
+    log "Anthropic key placed from aiKey.source by agentlab (value never read here)"
+    return 0
   fi
+  [ -n "${ANTHROPIC_API_KEY:-}" ] || die "no Anthropic key: record aiKey.source in agentlab.yaml (agentlab configure) or export ANTHROPIC_API_KEY"
   [ "${#ANTHROPIC_API_KEY}" -ge "$1" ] || die "ANTHROPIC_API_KEY has ${#ANTHROPIC_API_KEY} bytes, want at least $1"
-  log "ANTHROPIC_API_KEY exported (${#ANTHROPIC_API_KEY} bytes)"
+  log "ANTHROPIC_API_KEY from the environment (${#ANTHROPIC_API_KEY} bytes)"
 }
 
 # Never let the key reach an evidence file: redact it if a tool echoed it.
 scrub_key() {
   local f="$1"
-  [ -f "$f" ] || return 0
+  [ -f "$f" ] && [ -n "${ANTHROPIC_API_KEY:-}" ] || return 0
   if /usr/bin/grep -qF -- "$ANTHROPIC_API_KEY" "$f"; then
     log "WARNING: the Anthropic key appeared in $f — redacted"
     sed -i "s|$ANTHROPIC_API_KEY|<redacted>|g" "$f"
@@ -95,26 +101,15 @@ scrub_key() {
 
 # github_window <what>: print GitHub's core API window before a step that
 # resolves skills through GitHub (the migrate Job, agent-manager), the way
-# `agentlab backstage-test` and `agents-test` do. Authenticated with
-# GITHUB_TOKEN from the environment, else with the lab's own Secret
-# agent-platform/agentlab-github-token when `agentlab platform` created one;
-# the token reaches curl through a header file, never argv, and is never
-# logged. An exhausted window is waited out once (bounded to an hour and a
-# bit) rather than failing later on a truncated resolution; an endpoint that
-# cannot be read is a log line, never a failure.
+# `agentlab backstage-test` and `agents-test` do: unauthenticated, this
+# machine's shared window, since the rehearsal holds no GitHub credential and
+# never reads one (the lab's consumers call GitHub as the skills GitHub App or
+# with githubToken.source). An exhausted window is waited out once (bounded to
+# an hour and a bit) rather than failing later on a truncated resolution; an
+# endpoint that cannot be read is a log line, never a failure.
 github_window() {
-  local what="$1" token="${GITHUB_TOKEN:-}" who json limit remaining reset wait
-  if [ -z "$token" ]; then
-    token=$(kubectl -n agent-platform get secret agentlab-github-token -o jsonpath='{.data.GITHUB_TOKEN}' 2>/dev/null | base64 -d 2>/dev/null || true)
-  fi
-  who="unauthenticated: this machine's shared window"
-  if [ -n "$token" ]; then
-    who="authenticated with GITHUB_TOKEN"
-    json=$(curl -sS --max-time 15 -H 'Accept: application/vnd.github+json' \
-      -H @<(printf 'Authorization: Bearer %s\n' "$token") https://api.github.com/rate_limit 2>/dev/null) || json=''
-  else
-    json=$(curl -sS --max-time 15 -H 'Accept: application/vnd.github+json' https://api.github.com/rate_limit 2>/dev/null) || json=''
-  fi
+  local what="$1" json limit remaining reset wait
+  json=$(curl -sS --max-time 15 -H 'Accept: application/vnd.github+json' https://api.github.com/rate_limit 2>/dev/null) || json=''
   limit=$(jq -r '.resources.core.limit // empty' <<<"$json" 2>/dev/null || true)
   remaining=$(jq -r '.resources.core.remaining // empty' <<<"$json" 2>/dev/null || true)
   reset=$(jq -r '.resources.core.reset // empty' <<<"$json" 2>/dev/null || true)
@@ -122,12 +117,12 @@ github_window() {
     log "GitHub API window not read; $what proceeds without it"
     return 0
   fi
-  log "GitHub API window ($who): $remaining of $limit requests remaining, resets $(date -d "@$reset" +%H:%M:%S)"
+  log "GitHub API window (unauthenticated: this machine's shared window):$remaining of $limit requests remaining, resets $(date -d "@$reset" +%H:%M:%S)"
   if (( remaining == 0 )); then
     wait=$(( reset - $(now) + 5 ))
     (( wait < 0 )) && wait=0
     (( wait > 3900 )) && wait=3900
-    log "the window is exhausted — waiting ${wait}s for it to reset at $(date -d "@$reset" +%H:%M:%S) before $what (one bounded wait; export GITHUB_TOKEN to lift it to 5000 an hour)"
+    log "the window is exhausted — waiting ${wait}s for it to reset at $(date -d "@$reset" +%H:%M:%S) before $what (one bounded wait)"
     sleep "$wait"
   fi
 }
