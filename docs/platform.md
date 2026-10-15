@@ -149,7 +149,8 @@ reason and the proof still passes.
 
 The lab's patches on the component charts — `hostNetwork` on muster and
 Backstage, the `dex-localhost` sidecar on every server told the lab Dex's
-address, the kagent UI NodePort, and the dev images below — are per-component
+address, the kagent UI NodePort, agentgateway's IPv4 binds, and the dev
+images below — are per-component
 **`postRenderers` values** (`components.<name>.postRenderers` in
 `state/agent-platform-values.yaml`): Kustomize patches the chart forwards to
 that component's `HelmRelease` and the bundled helm-controller applies over
@@ -158,7 +159,9 @@ fixes. The sidecar's targets are read off the component charts' renders
 (every Deployment whose containers are told `localhost:<dexPort>` through a
 name they dial it by — see below), so `agentlab platform` renders the values
 twice: once for the roster, then with the targets for the install. A plain
-`agentlab render` shows the first, without sidecars.
+`agentlab render` shows the first, without sidecars. agentgateway's targets
+are read the same way (every AgentgatewayParameters, every container running
+the data-plane image).
 
 ### Which Deployments get the `dex-localhost` sidecar
 
@@ -1537,6 +1540,7 @@ data the page reads — see [The muster plugin](backstage.md#the-muster-plugin).
 | `muster.rbac.{mcpServerEditor,workflowEditor}.subjects` → `oidc:platform-admins` | The chart binds muster's editor Roles to Giant Swarm's admin groups, which do not exist here. Rebound to the lab's own admin group (`--oidc-groups-prefix=oidc:`, same spelling as the lab RBAC). Lists replace, so the GS groups are dropped. |
 | muster patched to `hostNetwork` + `maxSurge: 0` | Same issuer trick as the apiserver and Backstage. `maxSurge: 0` because two hostNetwork pods cannot both bind `:8090` on a one-node cluster. A Kustomize strategic-merge patch in `components.muster.postRenderers`, which the chart forwards to muster's `HelmRelease` and the bundled helm-controller applies over the muster chart's render. |
 | The `dex-localhost` sidecar on every Deployment told the lab Dex's address — mcp-kubernetes, the managers (model-manager, agent-manager, vm-manager, cluster-manager) and mcp-prometheus | Those servers validate the forwarded Dex token themselves and must reach the issuer URL `https://localhost:32000/dex`, but all listen on `:8080` and cannot share the host network. A socat sidecar on the pod's own loopback forwards `:32000` to the Dex Service (HACKS.md U13) — a `postRenderers` patch on each component, and on the lab's own mcp-prometheus `HelmRelease`. The targets are a rule over the component renders (a Deployment whose containers are told the address through a name they dial it by — `--dex-issuer-url`, `DEX_ISSUER_URL`, `OIDC_ISSUER_URL` — or that the `agentlab.giantswarm.io/dex-localhost` annotation selects; an identity-only variable such as `OAUTH_AUTHORIZATION_SERVER` selects nothing), not a list: a component the chart turns on by default or an overlay turns on is covered without a lab release, and the roster's trailing range renders `components.<name>.postRenderers` for one the lab names no block for. `agentlab platform-test` asserts the sidecar, a clean rollout with no container restarted since the release — a kind node restart, which restarts every container once together, is history, not a crash loop — and the MCPServer reachable (Connected, Awaiting Session or Auth Required) on every such Deployment, naming the key each was selected by; `agentlab platform` rolls such a Deployment once when it crash-looped since its release. |
+| agentgateway binds IPv4: `rawConfig.config.enableIpv6: false` on every AgentgatewayParameters (the edge, the models Gateway), `IPV6_ENABLED=false` on every agentgateway container a component chart runs (Substrate's atenet router and egress) | agentgateway binds its readiness, stats and listener sockets on `[::]` by default, which a host booted with `ipv6.disable=1` cannot create — the pods crash-loop on `Address family not supported by protocol (os error 97)`. The kind cluster is IPv4 single-stack, so the setting is on for every host (HACKS.md U33). A `postRenderers` patch on the connectivity and substrate components, its targets a rule over their renders. |
 | `components.kagent.enabled` from `platform.agents`; kagent ServiceMonitor + OTel off | Agents are part of what the lab tests, so kagent is on by default (the chart defaults it off) but optional — `platform.agents: false` skips the runtime. The controller's authentication is the fleet's (`trusted-proxy` behind the JWT `Strict` policy on the controller route); the kagent line serves no /metrics and there is no OTLP gateway in kind. See [Agents (kagent)](agents.md). |
 | `kagent.controllerRoute.jwtAuthentication.jwks` = the lab Dex (`dex.dex.svc.cluster.local:5556/dex/keys` over TLS) | The chart's default JWKS source is a Giant Swarm Dex; the policy itself (`Strict`, the identity transformation) is the chart's default, unchanged. |
 | `kagent.harness.snapshotLocation: s3://ate-snapshots/kagent` + `substrate.rustfs.enabled: true` | An installation names its own snapshot bucket (S3 with IRSA on CAPA); the lab's store is the substrate chart's bundled in-cluster RustFS. |

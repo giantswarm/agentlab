@@ -695,7 +695,9 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 		}
 		imageNames = dev.names
 	}
-	postRenderers, err := componentPostRenderers(cfg, imageNames, sidecars)
+	gateways := agentgatewayIPv4Targets(renders)
+	noteAgentgatewayIPv4Targets(gateways)
+	postRenderers, err := componentPostRenderers(cfg, imageNames, sidecars, gateways)
 	if err != nil {
 		return err
 	}
@@ -1320,6 +1322,26 @@ func noteDexLocalhostTargets(roster *platformRoster, renders map[string]string, 
 		}
 	}
 	note("%s sidecar on the %d Deployments told the lab Dex address: %s%s", dexLocalhostContainer, len(names), strings.Join(names, ", "), unread)
+}
+
+// noteAgentgatewayIPv4Targets reports patch 8's targets (postrenderers.go)
+// in the boot log.
+func noteAgentgatewayIPv4Targets(gateways map[string][]agentgatewayTarget) {
+	var names []string
+	for _, component := range slices.Sorted(maps.Keys(gateways)) {
+		for _, t := range gateways[component] {
+			name := component + "/" + t.kind + " " + t.name
+			if t.container != "" {
+				name += " (container " + t.container + ")"
+			}
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 {
+		note("no component render runs agentgateway: no IPv4 bind to set")
+		return
+	}
+	note("agentgateway binds IPv4 on the %d objects that run it: %s", len(names), strings.Join(names, ", "))
 }
 
 // waitSidecarMCPServers waits for muster to reach every server the sidecar

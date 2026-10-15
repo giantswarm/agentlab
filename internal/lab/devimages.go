@@ -288,10 +288,15 @@ type renderedContainer struct {
 }
 
 // renderedDeployments lists the Deployments of a multi-document render.
-// Documents that are not objects (comments, empty separators) or not of
-// the shape (a scalar, a list) are skipped; a render that is not YAML ends
-// the list where it breaks.
 func renderedDeployments(rendered string) []renderedWorkload {
+	return renderedObjects(rendered, kindDeployment)
+}
+
+// renderedObjects lists the objects of one kind of a multi-document render,
+// read in the renderedWorkload shape. Documents that are not objects
+// (comments, empty separators) or not of the shape (a scalar, a list) are
+// skipped; a render that is not YAML ends the list where it breaks.
+func renderedObjects(rendered, kind string) []renderedWorkload {
 	dec := yaml.NewDecoder(strings.NewReader(rendered))
 	var out []renderedWorkload
 	for {
@@ -307,7 +312,7 @@ func renderedDeployments(rendered string) []renderedWorkload {
 		if err != nil {
 			return out
 		}
-		if doc.Kind == kindDeployment {
+		if doc.Kind == kind {
 			out = append(out, doc)
 		}
 	}
