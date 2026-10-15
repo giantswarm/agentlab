@@ -702,19 +702,26 @@ kagent:
     enabled: false
 {{- end }}
 {{- with .CodingHarnesses }}
-  # The coding Harness (the kagent chart's harnesses[], coding.go): Claude
-  # Code run headless by the chart's claude-harness image at its published
-  # digest, calling muster as the person who sent the turn, its snapshots
-  # beside the platform Harness's in the lab's in-cluster store. The
-  # workspaces proof's claude Session and coding-test's agent turn on it.
+  # The coding Harnesses (the kagent chart's harnesses[], coding.go), one per
+  # runtime: the coding CLI run headless by the chart's image of the runtime
+  # at its published digest, or a dev build the lab registry serves
+  # (platform.devImages <runtime>-harness), its snapshots beside the platform
+  # Harness's in the lab's in-cluster store. claude calls muster as the
+  # person who sent the turn. The workspaces proof's claude Session and
+  # coding-test's agent turn on them.
   harnesses:
 {{- range . }}
     - name: {{ .Name }}
-      runtime: claude
+      runtime: {{ .Runtime }}
+{{- with .Image }}
+      image: {{ . }}
+{{- end }}
       snapshotLocation: {{ .SnapshotLocation }}
+{{- if .PropagateToken }}
       env:
         - name: KAGENT_PROPAGATE_TOKEN
           value: "true"
+{{- end }}
 {{- end }}
 {{- end }}
   # No OTLP gateway in kind; the exporters would only log dial errors.

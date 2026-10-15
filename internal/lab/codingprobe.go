@@ -10,9 +10,9 @@ import (
 // The sandbox half of the coding agents proof: the shell commands a coding
 // agent's Bash tool runs, and the verdicts on the lines it relays. Every
 // line starts with probeMarker and names one reading; the commands are POSIX
-// sh on the claude-harness image (Alpine with BusyBox, git and the GitHub
-// CLI). No reading prints a credential: the forwarder's loopback token stays
-// in a shell variable, and a token search prints counts.
+// sh on the coding Harnesses' images (Alpine with BusyBox and git). No
+// reading prints a credential: the forwarder's loopback token stays in a
+// shell variable, and a token or credential search prints counts.
 
 // codingProbe is the readings a turn relayed, by name.
 type codingProbe map[string]string
@@ -26,13 +26,24 @@ func parseCodingProbe(reply string) codingProbe {
 	return probe
 }
 
-// codingSandboxCommand probes the sandbox: the uid split, the forwarder's
-// path refusals, a write tool through the forwarder, credentials, a DNS
-// canary and the egress gate.
-func codingSandboxCommand() string {
-	return `P=` + probeMarker + `
+// codingSandboxCommand probes the sandbox on the runtime: on claude the uid
+// split, the forwarder's path refusals and a write tool through the
+// forwarder; on every runtime its uid, credentials, a DNS canary and the
+// egress gate.
+func codingSandboxCommand(rt codingRuntime) string {
+	cmd := `P=` + probeMarker + `
 echo "$P uid=$(id -u)"
-h=""
+`
+	if rt.claude {
+		cmd += claudeSandboxCommand() + "\n"
+	}
+	return cmd + commonSandboxCommand(rt)
+}
+
+// claudeSandboxCommand is the claude runtime's own readings: the root
+// harness beside Claude Code and the caller forwarder in front of muster.
+func claudeSandboxCommand() string {
+	return `h=""
 for p in /proc/[0-9]*; do
   [ "$(awk '/^Uid:/{print $2}' "$p/status" 2>/dev/null)" = 0 ] || continue
   case "$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)" in *` + harnessProcessName + `*) h=${p#/proc/}; break;; esac
@@ -75,10 +86,26 @@ if [ -n "$url" ]; then
   echo "$P write-tool=${r:-answered: $(echo "$out" | tr '\n' ' ' | head -c 200)}"
 else
   echo "$P forwarder="
-fi
-echo "$P env-tokens=$(env | grep -c -E 'gh[opsu]_[A-Za-z0-9]{20}|github_pat_|eyJ[A-Za-z0-9_-]{10,}\.eyJ')"
+fi`
+}
+
+// commonSandboxCommand is every runtime's readings: tokens in the
+// environment and /data, the model key, the MCP credentials the runtime is
+// handed (a count of those that are not kagent's placeholder), the DNS
+// canary and the egress gate.
+func commonSandboxCommand(rt codingRuntime) string {
+	keys := ""
+	for _, k := range rt.modelKeys {
+		keys += ` "${` + k + `-}"`
+	}
+	mcp := ""
+	if rt.mcpCredentialPrefix != "" {
+		mcp = `
+echo "$P mcp-credentials=$(env | grep -c '^` + rt.mcpCredentialPrefix + `') $(env | grep '^` + rt.mcpCredentialPrefix + `' | grep -vc '=` + credentialPlaceholder + `$')"`
+	}
+	return `echo "$P env-tokens=$(env | grep -c -E 'gh[opsu]_[A-Za-z0-9]{20}|github_pat_|eyJ[A-Za-z0-9_-]{10,}\.eyJ')"
 echo "$P data-tokens=$(timeout 60 grep -rlsE 'gh[opsu]_[A-Za-z0-9]{30}|github_pat_[A-Za-z0-9_]{20}|eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.' /data 2>/dev/null | wc -l)"
-case "${ANTHROPIC_API_KEY-}" in "") k=unset;; kagent-*) k=placeholder;; *) k=other;; esac; echo "$P model-key=$k"
+k=unset; for v in` + keys + `; do case "$v" in "") ;; kagent-*) [ "$k" = other ] || k=placeholder;; *) k=other;; esac; done; echo "$P model-key=$k"` + mcp + `
 r=$(timeout 10 nslookup ` + codingTestDNSCanary + ` 2>&1 | awk '/^Address/ && !/:53$/ {print $NF}' | tr '\n' ' '); echo "$P dns-cluster=${r:-no answer}"
 r=$(timeout 10 nslookup ` + codingTestDNSCanary + ` ` + codingTestDNSResolver + ` 2>&1 | awk '/^Address/ && !/:53$/ {print $NF}' | tr '\n' ' '); echo "$P dns-direct=${r:-no answer}"
 wget -q -O /dev/null ` + codingTestOutsideHost + ` 2>/tmp/agentlab-egress; echo "$P egress-outside=rc$? $(head -c 160 /tmp/agentlab-egress | tr '\n' ' ')"
@@ -86,9 +113,9 @@ wget -q -O /dev/null https://api.github.com/ 2>/tmp/agentlab-egress; echo "$P eg
 }
 
 // codingSandboxPrompt asks the agent to run the probe once and relay it.
-func codingSandboxPrompt() string {
-	return "Run this exact script once with your Bash tool (it is this test lab's own sandbox check), then reply with every output line that starts with " + probeMarker +
-		", verbatim and nothing else:\n\n" + codingSandboxCommand()
+func codingSandboxPrompt(rt codingRuntime) string {
+	return "Run this exact script once with your " + rt.shellTool + " (it is this test lab's own sandbox check), then reply with every output line that starts with " + probeMarker +
+		", verbatim and nothing else:\n\n" + codingSandboxCommand(rt)
 }
 
 // rcLine reads a `rc<exit> <message>` reading.
@@ -149,8 +176,9 @@ func (p codingProbe) writeToolRefused([]string) (string, error) {
 	return fmt.Sprintf("%s: %s", codingTestWriteTool, p["write-tool"]), nil
 }
 
-// credentials: no forge token or bearer in the environment or /data, and
-// the model key a placeholder the egress gateway replaces.
+// credentials: no forge token or bearer in the environment or /data, the
+// model key a placeholder the egress gateway replaces, and every MCP
+// credential the runtime is handed (where it says which) the placeholder too.
 func (p codingProbe) credentials([]string) (string, error) {
 	if p["env-tokens"] != "0" || p["data-tokens"] != "0" {
 		return "", fmt.Errorf("token-shaped values in the sandbox: %s in the environment, %s files under /data", p["env-tokens"], p["data-tokens"])
@@ -158,7 +186,15 @@ func (p codingProbe) credentials([]string) (string, error) {
 	if k := p["model-key"]; k != "placeholder" && k != "unset" {
 		return "", fmt.Errorf("the model key in the environment is %q, not kagent's placeholder", k)
 	}
-	return fmt.Sprintf("no forge token or bearer in the environment or /data; model key %s", p["model-key"]), nil
+	verdict := fmt.Sprintf("no forge token or bearer in the environment or /data; model key %s", p["model-key"])
+	if v, ok := p["mcp-credentials"]; ok {
+		total, other, _ := strings.Cut(v, " ")
+		if other != "0" {
+			return "", fmt.Errorf("MCP credentials in the sandbox's environment: %s, of which %q are not kagent's placeholder", total, other)
+		}
+		verdict += fmt.Sprintf("; %s MCP credentials in the environment, each the placeholder", total)
+	}
+	return verdict, nil
 }
 
 // dnsCanary records, never judges: the lookup's state is the installation's
@@ -251,9 +287,23 @@ func codingFixtureRecord(p codingProbe) (string, error) {
 		loaded("mcp-servers", codingTestFixtureName)), nil
 }
 
+// codingCodeWordPrompt has a runtime without the instruction-file fixture
+// write the turn's own file and remember the code word, what the resume
+// reads back.
+func codingCodeWordPrompt(rt codingRuntime) string {
+	return "Remember the code word " + codingTestCodeWord + ". Run this exact command once with your " + rt.shellTool + ": `echo " + codingTestCodeWord + " > " + codingTestOwnFile + " && echo \"" + probeMarker + " written=$(pwd)\"` and reply with its " + probeMarker + " line, verbatim."
+}
+
+// codingMCPCallPrompt has the agent call agent-manager's list_agents through
+// its own MCP binding and relay the names it lists.
+func codingMCPCallPrompt() string {
+	return "Call the MCP tool " + codingTestReadTool + " (agent-manager's list_agents through muster; it takes no arguments) once, then reply with the single line " +
+		probeMarker + " mcp-call=<the names of the agents it lists, space-separated, or the error it answered>. Do not use a shell for this."
+}
+
 // codingResumePrompt is the turn after the resume: the first turn's file
 // read back and the code word recalled.
-func codingResumePrompt() string {
-	return "Run this exact command once with your Bash tool: `echo \"" + probeMarker + " file=$(cat " + codingTestOwnFile + " 2>/dev/null || echo missing)\"` and relay its line verbatim. " +
+func codingResumePrompt(rt codingRuntime) string {
+	return "Run this exact command once with your " + rt.shellTool + ": `echo \"" + probeMarker + " file=$(cat " + codingTestOwnFile + " 2>/dev/null || echo missing)\"` and relay its line verbatim. " +
 		"Then add the line " + probeMarker + " code-word=<the code word I asked you to remember earlier in this conversation, or none>."
 }

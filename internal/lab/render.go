@@ -325,7 +325,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		WorkspaceFake:                cfg.WorkspaceFakeProvider(),
 		WorkspaceFakeBearer:          cfg.WorkspaceFakeBearerProvider(),
 		WorkspaceAdmission:           workspaceAdmissionValuesFor(cfg, workspacesChart.Carries),
-		CodingHarnesses:              codingHarnessesFor(cfg, workspaceAdmissionValuesFor(cfg, workspacesChart.Carries)),
+		CodingHarnesses:              codingHarnessesFor(cfg, workspaceAdmissionValuesFor(cfg, workspacesChart.Carries), nil),
 		CertsDir:                     certsDir,
 		NodeFilesDir:                 nodeFiles,
 		MusterNodePort:               config.MusterNodePort,
