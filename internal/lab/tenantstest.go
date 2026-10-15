@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -101,9 +102,15 @@ type tenantReconciler struct {
 // arguments, with agent-manager's defaults for a flag not given.
 func tenantReconcilerFrom(args []string) (tenantReconciler, error) {
 	r := tenantReconciler{harness: kagentHarness, modelConfig: defaultModelConfig, modelSecret: anthropicSecret, replicas: 1}
+	// The chart writes every flag as --name=value; a bare boolean flag is
+	// true. The AGENT_MANAGER_* environment variables are not read: the
+	// chart sets none of the reconciler's.
 	for _, arg := range args {
 		name, value, ok := strings.Cut(strings.TrimPrefix(arg, "--"), "=")
 		if !ok {
+			if name == "multi-tenant" {
+				r.multiTenant = true
+			}
 			continue
 		}
 		switch name {
@@ -398,8 +405,11 @@ func TenantsTest(cfg *config.Config, emails []string) error {
 	if err != nil {
 		return err
 	}
-	if !rec.multiTenant {
+	switch {
+	case !rec.multiTenant && !cfg.TenantsEnabled():
 		return fmt.Errorf("agent-manager runs without --multi-tenant=true: the tenant reconciler is off — `agentlab configure --tenants` (the chart's tenants.organizations.enabled), then `agentlab platform`")
+	case !rec.multiTenant:
+		return fmt.Errorf("platform.tenants is on in %s, but agent-manager runs without --multi-tenant=true: the installed chart does not turn the tenant reconciler on with tenants.organizations.enabled — it needs giantswarm/agent-platform#1037 and #1050 (a dev build until a release carries them: `agentlab configure --chart-branch <branch>`, then `agentlab platform`)", config.File)
 	}
 	pool, poolServiceAccount, err := platformWorkerPool(rec.harness)
 	if err != nil {
@@ -438,6 +448,11 @@ func TenantsTest(cfg *config.Config, emails []string) error {
 	}
 	cleanup()
 	defer cleanup()
+
+	step("The chart's ClusterRole %s, which the two people are bound to", tenantEditorRole)
+	if err := checkTenantEditorRole(); err != nil {
+		return err
+	}
 
 	var tokens [2]string
 	for i, person := range people {
@@ -756,8 +771,8 @@ func waitTenantObjects(ns string, rec tenantReconciler, want map[string]string, 
 	case readErr != nil:
 		return fmt.Errorf("%s in %s: %w", what, ns, readErr)
 	default:
-		return fmt.Errorf("%s in %s, after %s: %s;\ncheck `agentlab logs` of deploy/%s in %s and `kubectl -n %s get all,sa,rolebindings,secrets -l %s`",
-			what, ns, tenantsTestCopiesTimeout, diff, agentManagerMCPServer, platformNamespace, ns, tenantObjectLabel)
+		return fmt.Errorf("%s in %s, after %s: %s;\ncheck `KUBECONFIG=state/kubeconfig kubectl -n %s logs deploy/%s` and `kubectl -n %s get all,sa,rolebindings,secrets -l %s`",
+			what, ns, tenantsTestCopiesTimeout, diff, platformNamespace, agentManagerMCPServer, ns, tenantObjectLabel)
 	}
 }
 
@@ -769,7 +784,7 @@ func waitTenantWorkers(ns, pool string, replicas int64) ([]string, error) {
 		return nil, err
 	}
 	var running []string
-	var last string
+	var last, wrong string
 	ready := waitFor(int(tenantsTestWorkerTimeout/pollInterval), pollInterval, func() bool {
 		ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 		defer cancel()
@@ -777,6 +792,11 @@ func waitTenantWorkers(ns, pool string, replicas int64) ([]string, error) {
 		if err != nil {
 			last = err.Error()
 			return false
+		}
+		specReplicas, _, _ := unstructured.NestedInt64(p.Object, "spec", "replicas")
+		if specReplicas != replicas {
+			wrong = fmt.Sprintf("WorkerPool %s/%s has spec.replicas %d, want agent-manager's --tenant-worker-pool-replicas %d", ns, pool, specReplicas, replicas)
+			return true
 		}
 		readyReplicas, _, _ := unstructured.NestedInt64(p.Object, "status", "readyReplicas")
 		pods, err := listObjects(ctx, gvrPods, ns, workerPoolLabel+"="+pool)
@@ -791,8 +811,11 @@ func waitTenantWorkers(ns, pool string, replicas int64) ([]string, error) {
 			}
 		}
 		last = fmt.Sprintf("readyReplicas %d of %d, %d worker pod(s) Running of %d", readyReplicas, replicas, len(running), len(pods))
-		return readyReplicas >= replicas && int64(len(running)) >= replicas
+		return readyReplicas == replicas && int64(len(running)) == replicas
 	})
+	if wrong != "" {
+		return nil, errors.New(wrong)
+	}
 	if !ready {
 		return nil, fmt.Errorf("WorkerPool %s/%s not ready within %s (%s): its workers are not admitted or not starting — `kubectl -n %s get events`", ns, pool, tenantsTestWorkerTimeout, last, ns)
 	}
@@ -918,6 +941,26 @@ func credentialProviderGrants(ctx context.Context) (map[string][]string, error) 
 		return nil, fmt.Errorf("the credential provider's /statusz: %w", err)
 	}
 	return status.PolicyGrants, nil
+}
+
+// checkTenantEditorRole fails, naming the role, when the chart renders no
+// agent-platform:editor: a RoleBinding to a missing ClusterRole is accepted
+// and grants nothing, so the creates would fail as a bare 403.
+func checkTenantEditorRole() error {
+	gvr, err := gvrFor("clusterroles.rbac.authorization.k8s.io")
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
+	defer cancel()
+	exists, err := objectExists(ctx, gvr, "", tenantEditorRole)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("no ClusterRole %s: the installed agent-platform chart does not render the platform's roles, which a person needs to write agents in an organization namespace", tenantEditorRole)
+	}
+	return nil
 }
 
 // createTenantsTestNamespace creates the organization namespace and binds

@@ -52,6 +52,9 @@ func TestTenantReconcilerExpectations(t *testing.T) {
 	if err != nil || off.multiTenant {
 		t.Errorf("--multi-tenant=false: multiTenant=%v err=%v", off.multiTenant, err)
 	}
+	if bare, err := tenantReconcilerFrom([]string{"--multi-tenant"}); err != nil || !bare.multiTenant {
+		t.Errorf("a bare --multi-tenant: multiTenant=%v err=%v, want on", bare.multiTenant, err)
+	}
 
 	cilium, err := tenantReconcilerFrom(append(slices.Clone(live), "--tenant-network-policy-flavor=cilium", "--tenant-network-policies=substrate-workers, other"))
 	if err != nil {
