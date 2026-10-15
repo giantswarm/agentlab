@@ -189,8 +189,8 @@ type tmplData struct {
 	// nodes, the values pin atelet and the WorkerPool to them.
 	SubstrateNodeKey string
 	// GitHubToken mirrors gitHubTokenWired(cfg): githubToken.source is
-	// recorded or $GITHUB_TOKEN is set on the host (githubtoken.go), so the
-	// values name the Secret the lab places it in — the portal's
+	// recorded (githubtoken.go), so the values name the Secret the lab
+	// places it in — the portal's
 	// extraEnvVarsSecrets and the overlay's integrations.github,
 	// agent-manager's skills.github.tokenSecret, the migrate Job's
 	// githubToken. Only ever the Secret's name, never the token.

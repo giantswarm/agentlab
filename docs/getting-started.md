@@ -145,7 +145,6 @@ Then bring the lab up:
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...   # optional: powers the agents + Backstage AI chat (or record a vault reference: agents.md "The model")
-export GITHUB_TOKEN=github_pat_...    # optional: skill discovery/resolution call GitHub authenticated (5000/h, not 60/h)
 ./agentlab up              # first run: asks one question, then certs, kind cluster, Dex, RBAC, the agent platform — verified
 ./agentlab open portal     # the portal (Backstage) in the browser; `open agents` the kagent UI
 ./agentlab platform-test   # headless proof: Dex -> muster -> mcp-kubernetes -> apiserver, + the per-server OAuth sign-in challenge
@@ -211,7 +210,7 @@ Discovering this machine:
   LM Studio         api v1 on :1234 — answers on 172.21.0.1 (the address pods dial): yes; 6 downloaded, 4 tool-calling
   KVM               /dev/kvm and /dev/vhost-vsock present — platform.vmManager on, images from /home/you/projects/giantswarm/vm-manager/images/build
   Anthropic key     $ANTHROPIC_API_KEY is set — the agents' default ModelConfig and Backstage's AI chat get the real key at deploy time
-  GitHub token      $GITHUB_TOKEN is set — the portal's skill discovery and agent-manager's skill resolution call GitHub authenticated (5000 requests an hour) from deploy time
+  GitHub token      githubToken.source op://lab/github-token/credential — beekeeper places it into the Secret agent-platform/agentlab-github-token at every up and platform: the portal's skill discovery and agent-manager's skill resolution call GitHub authenticated (5000 requests an hour); agentlab never reads the value
 
 Applied to the configuration:
   platform.modelManager.backends: [ollama] -> [ollama, lemonade, lmstudio]
@@ -267,10 +266,12 @@ Applied to the configuration:
   `$ANTHROPIC_API_KEY` is exported, else the placeholder the agents' default
   ModelConfig gets at deploy time. See [Agents](agents.md#the-model).
 - **The GitHub token**: the source `agentlab.yaml` records
-  (`githubToken.source`, placed through beekeeper), else whether
-  `$GITHUB_TOKEN` is exported, since the portal's skill discovery and
-  agent-manager's skill resolution take it at deploy time and otherwise share this machine's unauthenticated GitHub window (60 requests
-  an hour). See [Agents](agents.md#the-github-token).
+  (`githubToken.source`, placed through beekeeper into the Secret
+  `agent-platform/agentlab-github-token`, key `GITHUB_TOKEN`) or the skills
+  GitHub App, since the portal's skill discovery and agent-manager's skill
+  resolution otherwise share this machine's unauthenticated GitHub window (60
+  requests an hour); without either, the line names the Secret the lab lacks.
+  agentlab never reads `$GITHUB_TOKEN`. See [Agents](agents.md#the-github-token).
 
 Pins override the discovery for that run: `--model-manager[=false]` decides
 the flag regardless of what answers (off keeps the chart's default-on

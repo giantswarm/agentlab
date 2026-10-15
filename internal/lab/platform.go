@@ -368,7 +368,7 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	// The GitHub token (githubtoken.go) — before the install: the portal's
 	// envFrom and agent-manager's env reference the Secret without
 	// `optional`, and the values just rendered name it whenever a token is
-	// configured (githubToken.source or $GITHUB_TOKEN).
+	// configured (githubToken.source).
 	if err := ensureGitHubTokenSecrets(ctx, cfg); err != nil {
 		return err
 	}

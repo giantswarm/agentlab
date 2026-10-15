@@ -132,18 +132,17 @@ address**, and the kind cluster shares this machine's — a handful of
 `backstage-test` runs within an hour exhaust it, after which discovery comes
 back truncated (the proof refuses that by name) until the window resets.
 
-A token lifts that, from one of two places, the first that is set:
+A token lifts that, from a recorded source (`githubToken.source` in
+`agentlab.yaml`; `agentlab configure --github-token-source
+op://<vault>/<item>/<field>`, or `<file>#<path>` of a SOPS file): every `up`
+and `platform` hand it to `beekeeper secret copy --to-secret`, which writes the
+token in its own process; agentlab never reads the value, and a placement that
+fails fails the run. agentlab never reads `$GITHUB_TOKEN` either: a token
+exported in its environment reaches no consumer. Without a source `discover`
+and `platform` name the Secret the lab lacks, `agentlab-github-token` (key
+`GITHUB_TOKEN`) in `agent-platform`.
 
-- **A recorded source** (`githubToken.source` in `agentlab.yaml`; `agentlab
-  configure --github-token-source op://<vault>/<item>/<field>`, or
-  `<file>#<path>` of a SOPS file): every `up` and `platform` hand it to
-  `beekeeper secret copy --to-secret`, which writes the token into the Secret
-  in its own process; agentlab never reads the value, and a placement that
-  fails fails the run. A lab started from an environment without the token,
-  an agent's, is authenticated this way.
-- **`$GITHUB_TOKEN`** on the host.
-
-Either way `agentlab up`/`platform` create **or update** the Secret `agentlab-github-token` (key `GITHUB_TOKEN`) in
+`agentlab up`/`platform` place **or update** the Secret `agentlab-github-token` (key `GITHUB_TOKEN`) in
 `agent-platform` — the portal takes it through `extraEnvVarsSecrets` and the
 lab's app-config overlay (`integrations.github[].token: ${GITHUB_TOKEN}`),
 agent-manager through the chart's `skills.github.tokenSecret` — and in
@@ -151,12 +150,12 @@ agent-manager through the chart's `skills.github.tokenSecret` — and in
 call GitHub authenticated (5000 requests an hour; the rate-limit headers say
 so). A fine-grained token with public read access is enough; a token that
 reads a private skill repository lets agent-manager resolve skills from it.
-As with the Anthropic key, the token is a real credential: it travels host
-environment -> Secret and never enters `agentlab.yaml`, `state/` (the
-rendered values carry the Secret's *name*), a log line or a process's argv.
-Re-running with a new token rotates the Secret.
+The token travels vault -> Secret through beekeeper only and never enters
+`agentlab.yaml`, `state/` (the rendered values carry the Secret's *name*), a
+log line or a process's argv. Re-running after a rotation in the vault
+rotates the Secret.
 
-**A skills GitHub App** is the way a lab reaches GitHub without any token: agent-manager's chart takes a read-only App (`skills.github.app.secretName`) and resolves skills with its installation tokens, at the App's rate limit. `agentlab configure --github-app-id <id> --github-app-installation-id <id> --github-app-private-key-source op://<vault>/<item>/<field>` records it as `githubApp` in `agentlab.yaml` (the ids are public; the key is a reference). A lab that already records the workspaces GitHub App (`platform.workspaces.github`, docs/workspaces.md) records only its installation, `agentlab configure --github-app-installation-id <id>`: agent-manager then resolves skills as that App, its id and private key source taken from the workspaces entry. With the workspaces App's OAuth client recorded too (`clientId` and `clientSecretSource`, or `githubApp.clientId` and `githubApp.clientSecretSource` for an App of its own), the portal's skill discovery calls GitHub as the same App: every `up` and `platform` write the Secret `agentlab-portal-github-app` (`GITHUB_APP_ID` and `GITHUB_APP_CLIENT_ID` applied, `GITHUB_APP_PRIVATE_KEY` and `GITHUB_APP_CLIENT_SECRET` placed by beekeeper), the portal's `extraEnvVarsSecrets` take it, and the overlay's `integrations.github` lists the App with `publicAccess: true`, so a public repository of any owner gets an installation token. Every `up` and `platform` apply the ids to the Secret `agentlab-github-app` in `agent-platform` and hand the key to `beekeeper secret copy --to-secret` (key `private-key`, never read by agentlab; a failed placement fails the run), and the values name the Secret for agent-manager. The chart refuses the App together with `tokenSecret`, so `githubApp` and `githubToken.source` are not recorded together; a `$GITHUB_TOKEN` still reaches the portal and the migrate Job, which take a token only.
+**A skills GitHub App** is the way a lab reaches GitHub without any token: agent-manager's chart takes a read-only App (`skills.github.app.secretName`) and resolves skills with its installation tokens, at the App's rate limit. `agentlab configure --github-app-id <id> --github-app-installation-id <id> --github-app-private-key-source op://<vault>/<item>/<field>` records it as `githubApp` in `agentlab.yaml` (the ids are public; the key is a reference). A lab that already records the workspaces GitHub App (`platform.workspaces.github`, docs/workspaces.md) records only its installation, `agentlab configure --github-app-installation-id <id>`: agent-manager then resolves skills as that App, its id and private key source taken from the workspaces entry. With the workspaces App's OAuth client recorded too (`clientId` and `clientSecretSource`, or `githubApp.clientId` and `githubApp.clientSecretSource` for an App of its own), the portal's skill discovery calls GitHub as the same App: every `up` and `platform` write the Secret `agentlab-portal-github-app` (`GITHUB_APP_ID` and `GITHUB_APP_CLIENT_ID` applied, `GITHUB_APP_PRIVATE_KEY` and `GITHUB_APP_CLIENT_SECRET` placed by beekeeper), the portal's `extraEnvVarsSecrets` take it, and the overlay's `integrations.github` lists the App with `publicAccess: true`, so a public repository of any owner gets an installation token. Every `up` and `platform` apply the ids to the Secret `agentlab-github-app` in `agent-platform` and hand the key to `beekeeper secret copy --to-secret` (key `private-key`, never read by agentlab; a failed placement fails the run), and the values name the Secret for agent-manager. The chart refuses the App together with `tokenSecret`, so `githubApp` and `githubToken.source` are not recorded together.
 
 Without either the lab is as before: the values name no Secret, the
 consumers call GitHub unauthenticated, and a Secret an earlier run created

@@ -24,11 +24,12 @@ func gitHubAppTestConfig() *config.Config {
 
 // TestGitHubAppWiresAgentManager: a recorded App names the Secret in
 // agent-manager's skills.github.app and drops its tokenSecret (the chart
-// refuses both), while the portal keeps the token $GITHUB_TOKEN gives it;
+// refuses both), while the portal keeps the token githubToken.source gives it;
 // the reference itself appears in nothing the render writes.
 func TestGitHubAppWiresAgentManager(t *testing.T) {
-	t.Setenv(GitHubTokenEnv, gitHubTestToken)
-	s := renderGitHubTokenSurfaces(t, gitHubAppTestConfig())
+	cfg := gitHubAppTestConfig()
+	cfg.GitHubToken.Source = gitHubTokenTestSource
+	s := renderGitHubTokenSurfaces(t, cfg)
 	if got := dig(s.values, agentManagerValuesKey, "skills", "github", "app", "secretName"); got != gitHubAppSecret {
 		t.Errorf("agent-manager.skills.github.app.secretName = %v, want %s", got, gitHubAppSecret)
 	}
@@ -48,7 +49,6 @@ func TestGitHubAppWiresAgentManager(t *testing.T) {
 // TestGitHubAppUnsetLeavesTheLabAsItWas: without an App nothing names its
 // Secret.
 func TestGitHubAppUnsetLeavesTheLabAsItWas(t *testing.T) {
-	t.Setenv(GitHubTokenEnv, "")
 	for name, text := range renderGitHubTokenSurfaces(t, gitHubTokenTestConfig()).raw() {
 		if strings.Contains(text, gitHubAppSecret) {
 			t.Errorf("%s names %s without githubApp:\n%s", name, gitHubAppSecret, text)
@@ -58,7 +58,6 @@ func TestGitHubAppUnsetLeavesTheLabAsItWas(t *testing.T) {
 
 // TestGitHubAppLegacyChartTakesNoKeys: the 3.x line has no skills App key.
 func TestGitHubAppLegacyChartTakesNoKeys(t *testing.T) {
-	t.Setenv(GitHubTokenEnv, "")
 	cfg := gitHubAppTestConfig()
 	cfg.Platform.ChartVersion = legacyChartVersion
 	for name, text := range renderGitHubTokenSurfaces(t, cfg).raw() {
@@ -115,7 +114,6 @@ func TestEnsureGitHubAppSecret(t *testing.T) {
 // agent-manager's skills.github.app, and the Secret carries the workspaces
 // App's id while its private key source goes to the secret tooling.
 func TestGitHubAppFromWorkspacesWiresAgentManager(t *testing.T) {
-	t.Setenv(GitHubTokenEnv, "")
 	const workspacesKeySource = "/lab/agents.sops.yaml#stringData.private-key"
 	cfg := gitHubTokenTestConfig()
 	cfg.Platform.Workspaces.GitHub = config.WorkspaceGitHub{AppID: "5288072", ClientID: gitHubAppTestClientID, PrivateKeySource: workspacesKeySource}
@@ -156,7 +154,6 @@ func TestGitHubAppFromWorkspacesWiresAgentManager(t *testing.T) {
 // client secret to the secret tooling. Without the client the portal stays
 // as it was.
 func TestGitHubAppWiresThePortal(t *testing.T) {
-	t.Setenv(GitHubTokenEnv, "")
 	const keySource, clientSecretSource = "/lab/agents.sops.yaml#stringData.private-key", "/lab/agents.sops.yaml#stringData.client-secret" // #nosec G101 -- references, not credentials
 	cfg := gitHubTokenTestConfig()
 	cfg.Platform.Workspaces.GitHub = config.WorkspaceGitHub{AppID: "5288072", ClientID: gitHubAppTestClientID, PrivateKeySource: keySource, ClientSecretSource: clientSecretSource}
