@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -20,7 +21,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
-	"sigs.k8s.io/yaml"
 
 	apiv1alpha1 "github.com/giantswarm/agentlab/internal/kagent/gen/kagent/api/v1alpha1"
 
@@ -234,15 +234,15 @@ func tenantObjectKeys(objects map[string]string) string {
 // credentialPolicy is one entry of the Substrate credential provider's
 // namespace policy file.
 type credentialPolicy struct {
-	Atespace             string         `json:"atespace,omitempty"`
-	AllowedNamespaces    []string       `json:"allowedNamespaces,omitempty"`
-	OwnNamespaceSelector map[string]any `json:"ownNamespaceSelector,omitempty"`
+	Atespace             string         `yaml:"atespace,omitempty"`
+	AllowedNamespaces    []string       `yaml:"allowedNamespaces,omitempty"`
+	OwnNamespaceSelector map[string]any `yaml:"ownNamespaceSelector,omitempty"`
 }
 
 // parseCredentialPolicies reads the policy file the provider loads.
 func parseCredentialPolicies(file string) ([]credentialPolicy, error) {
 	var doc struct {
-		Policies []credentialPolicy `json:"policies"`
+		Policies []credentialPolicy `yaml:"policies"`
 	}
 	if err := yaml.Unmarshal([]byte(file), &doc); err != nil {
 		return nil, fmt.Errorf("the credential provider's namespace policy: %w", err)
