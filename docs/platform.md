@@ -1074,6 +1074,50 @@ repository's pipeline does not have, and its subject is a release of another
 line, not a change of agentlab. The unit tests of every piece it adds run in
 `make test`.
 
+### The Substrate tunnel-close proof (gRPC to an HTTP/1.1-only actor)
+
+`agentlab substrate-tunnel-test` proves that a gRPC call through
+atenet-router to an actor that speaks HTTP/1.1 only fails at once instead of
+waiting out its client's timeout. atenet-router reaches an actor through a
+CONNECT tunnel to atunnel in the worker (the `ateom-gvisor` image), which
+relays it to the actor's port 80. Plain HTTP the router downgrades to
+HTTP/1.1 for such an actor; a gRPC-shaped request it carries as HTTP/2, and
+the actor closes on the HTTP/2 preface. A relay that ends the tunnel with the
+actor's connection lets the router fail the call (gRPC `Unavailable`, or HTTP
+502) in milliseconds; one that waits for the router to stop sending leaves
+the router waiting for the actor's SETTINGS frame until the client gives up.
+
+The agents' actors all speak h2c, so the proof brings its own, with no local
+build: an ActorTemplate `agentlab-substrate-tunnel` in the `kagent` atespace
+on the platform Harness's worker pool and snapshot storage, one container on
+the lab's alpine (pinned by digest, the image the workspaces proof's actors
+run) whose busybox `nc` serves `GET /readyz` over HTTP/1.1 and closes on the
+preface without an answer, its input unread. The client reaches atenet-router's
+HTTP port through a port-forward and names the actor in the `ate-target-actor`
+header. Four stages, each judged `PASS` or `FAIL`:
+
+1. **substrate** — the Substrate the run is on: the atelet's, the workers' and
+   `ate-api-server`'s images. `--substrate <release>` pins the `substrate` and
+   `substrate-crds` components to the release for the run through a values
+   overlay (`state/substrate-tunnel-values.yaml`), the way the step proof
+   steps, older or newer than the lab's, and the lab returns to the chart's
+   Substrate at the end (`--stay` leaves it). The chart derives the worker
+   image from its range's floor, so a lab whose atelet runs a release can run
+   older workers: the pin applies unless the workers run the release too.
+2. **actor** — the template's golden snapshot, the actor created and resumed.
+3. **route** — `GET /readyz` over HTTP/1.1 answers 200 through the router
+   (waited for up to `--ready-timeout`, default 5m), then over h2c: HTTP/2.0
+   200, downgraded to HTTP/1.1 at the actor.
+4. **tunnel-close** — `POST` with `content-type: application/grpc` over h2c,
+   the client's timeout `--client-timeout` (30s): it must fail loudly (HTTP
+   502, or 200 with `grpc-status: 14`) within `--promptly` (5s). A call that
+   ends with the client's timeout is the tunnel the actor's close did not end.
+
+The actor and its template are removed by the same run, and an earlier run's
+first. On agentlab-2 the case fails on Substrate 1.11.3 (the call waits the
+full 30s) and passes on 1.11.4, which carries the relay change, both pinned
+with `--substrate`, workers included.
+
 ### The Swarmgeist proof (klaus-gateway on kagent API v2)
 
 `agentlab klaus-gateway-test` is the lab carrier of

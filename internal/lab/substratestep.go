@@ -893,15 +893,22 @@ func (r *substrateStepRun) removeSession() {
 
 // stepBack returns the lab to the Substrate the chart installs.
 func (r *substrateStepRun) stepBack() error {
-	step("Returning the lab to the chart's Substrate (%s before the step)", r.before.version)
-	_ = os.Remove(filepath.Join(StateDir, substrateStepValues))
-	if err := clearRustfsServiceAccount(r.before.version); err != nil {
-		return fmt.Errorf("returning to the chart's Substrate: %w (the lab still runs the step's: `agentlab platform`)", err)
+	return returnToChartSubstrate(r.cfg, r.before.version, substrateStepValues)
+}
+
+// returnToChartSubstrate removes a proof's values overlay (a file in
+// StateDir) and upgrades the platform onto the lab's own configuration: the
+// Substrate the chart installs, the release before the proof pinned another.
+func returnToChartSubstrate(cfg *config.Config, before, overlay string) error {
+	step("Returning the lab to the chart's Substrate (%s before the proof)", before)
+	_ = os.Remove(filepath.Join(StateDir, overlay))
+	if err := clearRustfsServiceAccount(before); err != nil {
+		return fmt.Errorf("returning to the chart's Substrate: %w (the lab still runs the proof's: `agentlab platform`)", err)
 	}
-	if err := PlatformUp(r.cfg, Offers{}); err != nil {
-		return fmt.Errorf("returning to the chart's Substrate: %w (the lab still runs the step's: `agentlab platform`)", err)
+	if err := PlatformUp(cfg, Offers{}); err != nil {
+		return fmt.Errorf("returning to the chart's Substrate: %w (the lab still runs the proof's: `agentlab platform`)", err)
 	}
-	back, err := readSubstrateRelease(r.cfg)
+	back, err := readSubstrateRelease(cfg)
 	if err != nil {
 		return err
 	}

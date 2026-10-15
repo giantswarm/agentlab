@@ -129,6 +129,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		inGroup(groupTesting, workspacesSignInTestCmd()),
 		inGroup(groupTesting, skillsTestCmd()),
 		inGroup(groupTesting, substrateStepTestCmd()),
+		inGroup(groupTesting, substrateTunnelTestCmd()),
 		inGroup(groupTesting, a2aTestCmd()),
 		inGroup(groupTesting, klausGatewayTestCmd()),
 		inGroup(groupTesting, decisionsTestCmd()),
@@ -1678,6 +1679,28 @@ func substrateStepTestCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.Stay, "stay", false, "leave the lab on the --to release instead of returning it to the chart's Substrate")
 	cmd.Flags().BoolVar(&opts.NoDrain, "no-drain", false, "skip the drain case: by default every worker pod of the WorkerPool is deleted every 8s for a minute from the candidate's ate-api-server Ready, the suspended conversation is resumed during that drain once the release before's ate-api-server pods are gone (its ResumeActor must show in the candidate's RPC log while the drain runs), and every golden of the lab must be in the snapshot layout the candidate writes (taken again on a layout change, kept otherwise) with no terminal error")
 	_ = cmd.MarkFlagRequired("to")
+	return cmd
+}
+
+func substrateTunnelTestCmd() *cobra.Command {
+	var opts lab.SubstrateTunnelOptions
+	cmd := &cobra.Command{
+		Use:   "substrate-tunnel-test",
+		Short: "Headless Substrate tunnel-close proof: an HTTP/1.1-only actor (busybox nc on port 80, an ActorTemplate on the lab's alpine on the platform Harness's worker pool) reached through atenet-router's HTTP port -> HTTP/1.1 and h2c GETs answered (h2c downgraded to HTTP/1.1 at the actor) -> a gRPC call (h2c, application/grpc) fails at once, HTTP 502 or gRPC Unavailable within --promptly, not with its client's timeout: atunnel ends the CONNECT tunnel when the actor closes its connection; --substrate pins the substrate components to a release for the run and returns the lab to the chart's Substrate after",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadProofLab()
+			if err != nil {
+				return err
+			}
+			return lab.SubstrateTunnelTest(cfg, opts)
+		},
+	}
+	cmd.Flags().StringVar(&opts.Substrate, "substrate", "", "pin the substrate and substrate-crds components to this exact Substrate release for the run (1.11.3, 1.11.4-rc.1), older or newer than the lab's (default: the lab's Substrate, no pin)")
+	cmd.Flags().DurationVar(&opts.ClientTimeout, "client-timeout", lab.SubstrateTunnelClientTimeout, "the gRPC call's client timeout")
+	cmd.Flags().DurationVar(&opts.Promptly, "promptly", lab.SubstrateTunnelPromptly, "how soon the gRPC call must fail to pass: the tunnel ended with the actor's connection")
+	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", lab.SubstrateTunnelReadyTimeout, "how long the actor's golden boot, its resume and its route through atenet-router may take")
+	cmd.Flags().BoolVar(&opts.Stay, "stay", false, "leave the lab on the --substrate release instead of returning it to the chart's Substrate")
 	return cmd
 }
 
