@@ -23,6 +23,16 @@ stringData:
       config:
         inCluster: true
 
+    # The signing key rotates every 30 days instead of Dex's 6 hours. After a
+    # rotation the apiserver refuses new-key tokens for up to 10 minutes, until
+    # its cached JWKS expires (docs/identity.md, "Key rotation"); a lab that
+    # lives for days would go through that every 6 hours. A rotation test
+    # still forces one by setting the SigningKey object's nextRotation.
+    signer:
+      type: local
+      config:
+        keysRotationPeriod: 720h
+
     web:
       https: 0.0.0.0:5556
       tlsCert: /etc/dex/tls/tls.crt
