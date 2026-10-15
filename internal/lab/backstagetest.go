@@ -33,6 +33,9 @@ func BackstageTest(cfg *config.Config, emails []string) error {
 			emails = append(emails, u.Email)
 		}
 	}
+	if err := checkApiserverOIDC(cfg); err != nil {
+		return err
+	}
 	var sessions []*portalSession
 	for i, email := range emails {
 		user := cfg.FindUser(email)

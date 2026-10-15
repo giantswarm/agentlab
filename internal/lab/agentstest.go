@@ -81,6 +81,9 @@ func AgentsTest(cfg *config.Config, email string) error {
 	if user == nil {
 		return fmt.Errorf("no user %q in %s", email, config.File)
 	}
+	if err := checkApiserverOIDC(cfg); err != nil {
+		return err
+	}
 	fixture, err := SkillsFixture{}.resolve()
 	if err != nil {
 		return err

@@ -84,7 +84,7 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 	// cached JWKS expires (apiserveroidc.go): waited out here, before any
 	// stage reads the cluster as a person.
 	p.begin(stageApiserverOIDC, "Checking the apiserver accepts a fresh Dex token")
-	if err := ensureApiserverAcceptsDex(context.Background(), cfg); err != nil {
+	if err := apiserverAcceptsDex(context.Background(), cfg); err != nil {
 		return "", err
 	}
 
