@@ -59,3 +59,12 @@ func TestTurnBudgetFlag(t *testing.T) {
 		t.Errorf("turn budget %s (%s), want %s (--turn-timeout)", p.turnTimeout, p.turnBudget, hostedModelTurnTimeout/2)
 	}
 }
+
+// A small model wraps a relayed probe line in markdown: the values read the
+// same as a verbatim relay's.
+func TestCodingProbeMarkdownRelay(t *testing.T) {
+	p := parseCodingProbe("**AGENTLAB_PROBE env-tokens=0**\n`AGENTLAB_PROBE data-tokens=0`\nAGENTLAB_PROBE egress-origin=https://*.githubusercontent.com\n")
+	if p["env-tokens"] != "0" || p["data-tokens"] != "0" || p["egress-origin"] != "https://*.githubusercontent.com" {
+		t.Errorf("parsed %v, want env-tokens=0 data-tokens=0 and the origin's wildcard kept", p)
+	}
+}
