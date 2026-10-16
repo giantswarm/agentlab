@@ -159,11 +159,13 @@ rendered ConfigMap by the post-renderer.
 BOM carries it since the curation that pinned muster 5.7.2. The post-render
 ConfigMap edit is deleted — the values entry alone is effective now.
 
-### U2. hostNetwork + dnsPolicy + maxSurge 0 on the muster (and Backstage) Deployment
+### U2. hostNetwork + dnsPolicy + one replica + maxSurge 0 on the muster (and Backstage) Deployment
 muster must resolve `https://localhost:32000/dex` to the Dex NodePort from
 inside the pod (the lab's one-issuer-URL trick), which needs hostNetwork; and
 with hostNetwork a default rolling update deadlocks on a single node because
-both pods want :8090. The muster chart (checked through 5.6.2) exposes no
+both pods want :8090. For the same reason the lab runs one replica: the
+agent-platform chart's HA default of two muster replicas would leave the
+second pod Pending on the single node and the HelmRelease never Ready. The muster chart (checked through 5.6.2) exposes no
 `hostNetwork`, `dnsPolicy` or `strategy` values; the Backstage chart neither.
 Since 2026-09-08 the patch is a Kustomize strategic merge in
 `components.muster.postRenderers` / `components.backstage.postRenderers`

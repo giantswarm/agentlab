@@ -29,10 +29,12 @@ import (
 //     chart. dnsPolicy ClusterFirstWithHostNet keeps cluster DNS, which the
 //     CoreDNS rewrite needs to point *.<domain> at the edge Gateway.
 //
-//  2. maxSurge 0 on the same Deployments: hostNetwork means the pod binds its
-//     port on the node, so the default rolling update deadlocks on a
-//     single-node cluster — the new pod cannot start until the old one
-//     releases the port. Old pod goes down first.
+//  2. One replica and maxSurge 0 on the same Deployments: hostNetwork means
+//     the pod binds its port on the node, so a second pod on the single kind
+//     node never starts — a chart's two-replica default (muster's HA shape)
+//     would leave it Pending and the HelmRelease never Ready — and the
+//     default rolling update deadlocks the same way: the new pod cannot
+//     start until the old one releases the port. Old pod goes down first.
 //
 //  3. A fixed nodePort on the kagent-ui Service: the values set
 //     `ui.service.type: NodePort` (a chart value), but the chart's ui-service
@@ -252,6 +254,7 @@ kind: Deployment
 metadata:
   name: %s
 spec:
+  replicas: 1
   strategy:
     type: RollingUpdate
     rollingUpdate:
