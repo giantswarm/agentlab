@@ -1530,17 +1530,23 @@ func (c *Config) Save() error {
 }
 
 // write persists the config as-is; Save and Load ensure the hashes first
-// (exactly once — bcrypt-comparing every user is not free).
+// (exactly once — bcrypt-comparing every user is not free). An existing
+// agentlab.yaml is updated in place (mergeInto): only the values that changed
+// are rewritten, so a one-flag `configure` changes that one line.
 func (c *Config) write() error {
-	out, err := yaml.Marshal(c)
+	old, err := os.ReadFile(File)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	out, err := mergeInto(old, c)
 	if err != nil {
 		return err
 	}
-	header := []byte("# agentlab lab configuration. Regenerate with `agentlab configure`.\n" +
+	header := []byte(headerFirstLine + "\n" +
 		writtenByPrefix + project.Version() + ".\n" +
-		"# Passwords are lab-only throwaway credentials; the hash is cached so\n" +
-		"# rendered manifests stay byte-identical across runs (no spurious pod rolls).\n")
-	return os.WriteFile(File, append(header, out...), 0o600)
+		headerPasswordsLine + "\n" +
+		headerManifestsLine + "\n")
+	return os.WriteFile(File, append(header, out...), 0o600) // #nosec G703 -- File is the fixed agentlab.yaml of the lab directory
 }
 
 // EnsureHashes fills in User.PasswordHash wherever it is missing or no longer
