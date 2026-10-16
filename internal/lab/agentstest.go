@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -389,7 +390,7 @@ func AgentsTest(cfg *config.Config, email string) error {
 		}
 	}
 
-	step("The agent-manager ServiceAccount holds no RBAC of its own but, with skills.mintGitAuthSecret, the skills-Secret Role (auth can-i --list --as=%s, against a ServiceAccount no binding names)", agentManagerServiceAccount)
+	step("The agent-manager ServiceAccount holds no RBAC of its own beyond what the lab's switches grant — skills.mintGitAuthSecret the skills-Secret Role, tenants.organizations.enabled the tenant reconciler's ClusterRole (auth can-i --list --as=%s, against a ServiceAccount no binding names)", agentManagerServiceAccount)
 	rules, err := serviceAccountRules(agentManagerServiceAccount, kagentNamespace)
 	if err != nil {
 		return err
@@ -402,15 +403,22 @@ func AgentsTest(cfg *config.Config, email string) error {
 	if err != nil {
 		return err
 	}
-	minted := mintedSkillsSecretNames(values)
-	granted, err := rulesBeyondMintGrant(rulesBeyond(rules, baseline), minted)
+	rec, err := readTenantReconciler()
+	if err != nil {
+		return err
+	}
+	if switchedOn, _ := nestedValue(values, "tenants", "organizations", valuesEnabled).(bool); switchedOn && !rec.multiTenant {
+		note("tenants.organizations.enabled is on, but agent-manager runs without --multi-tenant=true: the installed chart does not turn the tenant reconciler on, so its ClusterRole is not allowed")
+	}
+	grants := agentManagerGrants(values, rec.multiTenant)
+	granted, err := rulesBeyondGrants(rulesBeyond(rules, baseline), grants)
 	if err != nil {
 		return err
 	}
 	if len(granted) > 0 {
-		return fmt.Errorf("the agent-manager ServiceAccount still holds permissions in %s beyond every ServiceAccount's%s:\n%s", kagentNamespace, mintGrantClause(minted), strings.Join(granted, "\n"))
+		return fmt.Errorf("the agent-manager ServiceAccount still holds permissions in %s beyond every ServiceAccount's%s:\n%s", kagentNamespace, grantsClause(grants), strings.Join(granted, "\n"))
 	}
-	note("nothing beyond what every ServiceAccount holds (%d rows: discovery, self-subject reviews%s)%s", len(baseline), bootstrapExtras(baseline), mintGrantClause(minted))
+	note("nothing beyond what every ServiceAccount holds (%d rows: discovery, self-subject reviews%s)%s", len(baseline), bootstrapExtras(baseline), grantsClause(grants))
 
 	step("An Agent on a Harness that does not exist: HelmRelease %s with agent.harness %s applied directly — get_agent_status says failed with the reason", agentsTestUnadmitted, agentsTestNoHarness)
 	unadmittedSpec := agentSpec{
@@ -478,7 +486,7 @@ func AgentsTest(cfg *config.Config, email string) error {
 	if viewer != nil {
 		fmt.Printf("PASS: %s's create is Forbidden by the apiserver as User \"oidc:%s\" (user RBAC, not the ServiceAccount's)\n", viewer.Email, viewer.Email)
 	}
-	fmt.Printf("PASS: %s holds no permissions beyond discovery%s\n", agentManagerServiceAccount, mintGrantClause(minted))
+	fmt.Printf("PASS: %s holds no permissions beyond discovery%s\n", agentManagerServiceAccount, grantsClause(grants))
 	return nil
 }
 
@@ -850,29 +858,146 @@ const skillsMintValue = "mintGitAuthSecret"
 // mintGrantVerbs are the verbs of the skills-Secret Role minting grants.
 var mintGrantVerbs = []string{"get", "update"}
 
-// rulesBeyondMintGrant drops from granted the skills-Secret Role minting
-// gives the ServiceAccount — secrets, get and update, by the minted names —
-// and returns the rest. With minting on the Role must be there and grant
-// exactly that: a missing name or verb is an error, a row on more names, more
-// verbs or any other resource stays granted. With minting off (no names)
-// granted comes back unchanged.
-func rulesBeyondMintGrant(granted, minted []string) ([]string, error) {
-	if len(minted) == 0 {
+// tenantFluxClusterRole is the ClusterRole the tenant reconciler binds in
+// each tenant, the one name its `bind` grant carries (agent-manager's
+// tenantFluxClusterRole helper).
+const tenantFluxClusterRole = "agent-platform-tenant-flux"
+
+// tenantsGrantRows are the rows of the tenant reconciler's ClusterRole
+// (agent-manager's templates/tenants-rbac.yaml) as the rules review words
+// them, but the default ModelConfig's key (tenantsModelKeyRow) and the
+// network policy kind (tenantsPolicyRow), which follow the values.
+const tenantsGrantRows = `namespaces  []  []  [get list watch]
+agents.api.kagent.dev  []  []  [list watch]
+helmreleases.helm.toolkit.fluxcd.io  []  []  [list watch]
+harnesses.api.kagent.dev  []  []  [get list watch create update delete]
+modelconfigs.api.kagent.dev  []  []  [get list watch create update delete]
+workerpools.ate.dev  []  []  [get list watch create update delete]
+ocirepositories.source.toolkit.fluxcd.io  []  []  [get list watch create update]
+serviceaccounts  []  []  [get list watch create delete]
+rolebindings.rbac.authorization.k8s.io  []  []  [get list watch create update delete]
+clusterroles.rbac.authorization.k8s.io  []  [` + tenantFluxClusterRole + `]  [bind]
+secrets  []  []  [create]`
+
+// tenantsModelKeyRow is the tenants' grant on the default ModelConfig's key
+// Secret, by its name.
+const tenantsModelKeyRow = "secrets  []  [%s]  [get list watch update delete]"
+
+// tenantsPolicyRow is the tenants' grant on the workers' network policy
+// kind; tenantsPolicyKinds the kind of each networkPolicy.flavor.
+const tenantsPolicyRow = "%s  []  []  [get list watch create update]"
+
+var tenantsPolicyKinds = map[string]string{"kubernetes": "networkpolicies.networking.k8s.io", "cilium": "ciliumnetworkpolicies.cilium.io"}
+
+// providersDefaultKey is the kagent.providers key naming the default
+// provider, whose apiKeySecretRef is the default ModelConfig's key.
+const providersDefaultKey = "default"
+
+// tenantsGrant is a required grant of tenants.organizations.enabled from
+// its row.
+func tenantsGrant(row string) saGrant {
+	resource, names, verbs, _ := parseRuleRow(row)
+	return saGrant{resource: resource, names: names, verbs: verbs, by: "tenants.organizations.enabled"}
+}
+
+// saGrant is one row a platform switch makes the agent-manager
+// ServiceAccount hold: a resource (as ruleRows words it), the resource names
+// it is narrowed to (none: every name) and its verbs. A required grant must
+// be there in full; an optional one may be missing (a row the chart renders
+// only on conditions the lab's values do not settle). by names the switch.
+type saGrant struct {
+	resource string
+	names    []string
+	verbs    []string
+	optional bool
+	by       string
+}
+
+// String words the grant like a ruleRows row.
+func (g saGrant) String() string {
+	return fmt.Sprintf("%s  []  %v  %v", g.resource, g.names, g.verbs)
+}
+
+// agentManagerGrants is what the switches in the lab's rendered values make
+// the agent-manager ServiceAccount hold in the kagent namespace, nothing
+// without either:
+//   - agent-manager.skills.mintGitAuthSecret: the skills-Secret Role
+//     (templates/skills-token.yaml), secrets get and update by the minted
+//     names;
+//   - tenants.organizations.enabled, where agent-manager runs with
+//     --multi-tenant (a chart that does not pass the switch on renders no
+//     reconciler and no ClusterRole): the tenant reconciler's ClusterRole
+//     (agent-manager's templates/tenants-rbac.yaml) with the default
+//     ModelConfig's key Secret the meta chart derives from
+//     kagent.providers.<default>.apiKeySecretRef, and, with networkPolicy
+//     enabled, the workers' policy kind of networkPolicy.flavor (either kind
+//     for `auto`, which the cluster resolves; optional, as the chart renders
+//     it only with Agent Substrate on).
+func agentManagerGrants(values map[string]any, multiTenant bool) []saGrant {
+	var grants []saGrant
+	if minted := mintedSkillsSecretNames(values); minted != nil {
+		grants = append(grants, saGrant{resource: gvrSecrets.Resource, names: minted, verbs: mintGrantVerbs, by: "agent-manager." + skillsKey + "." + skillsMintValue})
+	}
+	if enabled, _ := nestedValue(values, "tenants", "organizations", valuesEnabled).(bool); !enabled || !multiTenant {
+		return grants
+	}
+	for _, row := range strings.Split(tenantsGrantRows, "\n") {
+		grants = append(grants, tenantsGrant(row))
+	}
+	providers, _ := nestedValue(values, "kagent", "providers").(map[string]any)
+	if key := nestedString(providers, nestedString(providers, providersDefaultKey), "apiKeySecretRef"); key != "" {
+		grants = append(grants, tenantsGrant(fmt.Sprintf(tenantsModelKeyRow, key)))
+	}
+	if enabled, _ := nestedValue(values, "networkPolicy", valuesEnabled).(bool); enabled {
+		flavor := nestedString(values, "networkPolicy", "flavor")
+		for _, f := range slices.Sorted(maps.Keys(tenantsPolicyKinds)) {
+			if flavor == f || flavor == "" || flavor == "auto" {
+				g := tenantsGrant(fmt.Sprintf(tenantsPolicyRow, tenantsPolicyKinds[f]))
+				g.optional = true
+				grants = append(grants, g)
+			}
+		}
+	}
+	return grants
+}
+
+// rulesBeyondGrants drops from granted the rows the switches' grants cover
+// and returns the rest. A row is covered by a grant on the same resource
+// whose verbs include the row's and whose names include the row's (a grant
+// on every name covers only a row on every name). Each required grant must
+// be there in full, its names and verbs spread over the rows that match it:
+// a missing one is an error, as agent-manager then cannot do the switch's
+// work. A row on more names, more verbs or any other resource stays granted.
+func rulesBeyondGrants(granted []string, grants []saGrant) ([]string, error) {
+	if len(grants) == 0 {
 		return granted, nil
 	}
-	var rest, names, verbs []string
+	names := make([][]string, len(grants))
+	verbs := make([][]string, len(grants))
+	var rest []string
 	for _, row := range granted {
 		resource, rowNames, rowVerbs, ok := parseRuleRow(row)
-		if !ok || resource != gvrSecrets.Resource || len(rowNames) == 0 || !subsetOf(rowNames, minted) || !subsetOf(rowVerbs, mintGrantVerbs) {
-			rest = append(rest, row)
-			continue
+		covered := false
+		for i, g := range grants {
+			if !ok || resource != g.resource || (len(g.names) == 0) != (len(rowNames) == 0) || !subsetOf(rowNames, g.names) || !subsetOf(rowVerbs, g.verbs) {
+				continue
+			}
+			covered = true
+			names[i] = append(names[i], rowNames...)
+			verbs[i] = append(verbs[i], rowVerbs...)
 		}
-		names = append(names, rowNames...)
-		verbs = append(verbs, rowVerbs...)
+		if !covered {
+			rest = append(rest, row)
+		}
 	}
-	if !subsetOf(minted, names) || !subsetOf(mintGrantVerbs, verbs) {
-		return nil, fmt.Errorf("agent-manager.skills.mintGitAuthSecret is on, but the agent-manager ServiceAccount's Role in %s grants secrets %v %v, wanted %v %v: agent-manager cannot keep the minted skills Secret filled",
-			kagentNamespace, names, verbs, minted, mintGrantVerbs)
+	var missing []string
+	for i, g := range grants {
+		if !g.optional && (!subsetOf(g.names, names[i]) || !subsetOf(g.verbs, verbs[i])) {
+			missing = append(missing, fmt.Sprintf("%s (%s), held: %v %v", g, g.by, names[i], verbs[i]))
+		}
+	}
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("the agent-manager ServiceAccount lacks in %s what the lab's switches grant it, so agent-manager cannot do their work:\n%s", kagentNamespace, strings.Join(missing, "\n"))
 	}
 	return rest, nil
 }
@@ -899,13 +1024,19 @@ func subsetOf(sub, set []string) bool {
 	return true
 }
 
-// mintGrantClause names the minted skills-Secret Role for the check's lines,
-// "" without minting.
-func mintGrantClause(minted []string) string {
-	if len(minted) == 0 {
+// grantsClause names the switches whose grants the check allows, for its
+// lines; "" without any.
+func grantsClause(grants []saGrant) string {
+	var by []string
+	for _, g := range grants {
+		if !slices.Contains(by, g.by) {
+			by = append(by, g.by)
+		}
+	}
+	if len(by) == 0 {
 		return ""
 	}
-	return fmt.Sprintf(" and the skills-Secret Role minting grants (secrets %v [get update])", minted)
+	return fmt.Sprintf(" and exactly the grants of %s (%d rows)", strings.Join(by, " and "), len(grants))
 }
 
 // bootstrapExtras names the resource rows of the baseline beyond the
