@@ -74,6 +74,9 @@ const (
 	// reached it — muster's api.StateAwaitingSession (from muster 5.28.0; such
 	// a server read Auth Required before).
 	mcpServerStateAwaitingSession = "Awaiting Session"
+	// mcpServerStateFailed is the CRD status.state of a server muster could
+	// not reach, while its reconnect backoff runs.
+	mcpServerStateFailed = "Failed"
 	// fixtureDeleteWait bounds how long a removed fixture member may take to
 	// go away — kubectl's default delete waits too.
 	fixtureDeleteWait = 2 * time.Minute
@@ -334,7 +337,7 @@ func localConnectorLink(page *url.URL, body []byte) string {
 // the lab's state is not the proof's verdict.
 func restartOAuthFixture() {
 	stamp := time.Now().UTC().Format(time.RFC3339)
-	if err := requestOAuthFixtureRestart(stamp); err != nil {
+	if err := requestMCPServerRestart(oauthFixtureServer, stamp); err != nil {
 		note("could not request a restart of %s (%v); it reads Connected until the signed-in session's token expires", oauthFixtureServer, err)
 		return
 	}
@@ -345,9 +348,10 @@ func restartOAuthFixture() {
 	note("%s back to Auth Required", oauthFixtureServer)
 }
 
-// requestOAuthFixtureRestart merge-patches spec.restartRequestedAt on the
-// fixture's MCPServer with the given stamp.
-func requestOAuthFixtureRestart(stamp string) error {
+// requestMCPServerRestart merge-patches spec.restartRequestedAt on one
+// MCPServer with the given stamp: muster restarts the server's service once
+// per new value (closing its connections, dialing again at once).
+func requestMCPServerRestart(name, stamp string) error {
 	gvr, err := gvrFor(musterMCPServerResource)
 	if err != nil {
 		return err
@@ -355,5 +359,5 @@ func requestOAuthFixtureRestart(stamp string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	defer cancel()
 	body := fmt.Sprintf(`{"spec":{"restartRequestedAt":%q}}`, stamp)
-	return patchObject(ctx, gvr, platformNamespace, oauthFixtureServer, types.MergePatchType, []byte(body))
+	return patchObject(ctx, gvr, platformNamespace, name, types.MergePatchType, []byte(body))
 }
