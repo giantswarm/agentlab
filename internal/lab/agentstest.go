@@ -856,6 +856,43 @@ var mintGrantVerbs = []string{"get", "update"}
 // tenantFluxClusterRole helper).
 const tenantFluxClusterRole = "agent-platform-tenant-flux"
 
+// tenantsGrantRows are the rows of the tenant reconciler's ClusterRole
+// (agent-manager's templates/tenants-rbac.yaml) as the rules review words
+// them, but the default ModelConfig's key (tenantsModelKeyRow) and the
+// network policy kind (tenantsPolicyRow), which follow the values.
+const tenantsGrantRows = `namespaces  []  []  [get list watch]
+agents.api.kagent.dev  []  []  [list watch]
+helmreleases.helm.toolkit.fluxcd.io  []  []  [list watch]
+harnesses.api.kagent.dev  []  []  [get list watch create update delete]
+modelconfigs.api.kagent.dev  []  []  [get list watch create update delete]
+workerpools.ate.dev  []  []  [get list watch create update delete]
+ocirepositories.source.toolkit.fluxcd.io  []  []  [get list watch create update]
+serviceaccounts  []  []  [get list watch create delete]
+rolebindings.rbac.authorization.k8s.io  []  []  [get list watch create update delete]
+clusterroles.rbac.authorization.k8s.io  []  [` + tenantFluxClusterRole + `]  [bind]
+secrets  []  []  [create]`
+
+// tenantsModelKeyRow is the tenants' grant on the default ModelConfig's key
+// Secret, by its name.
+const tenantsModelKeyRow = "secrets  []  [%s]  [get list watch update delete]"
+
+// tenantsPolicyRow is the tenants' grant on the workers' network policy
+// kind; tenantsPolicyKinds the kind of each networkPolicy.flavor.
+const tenantsPolicyRow = "%s  []  []  [get list watch create update]"
+
+var tenantsPolicyKinds = map[string]string{"kubernetes": "networkpolicies.networking.k8s.io", "cilium": "ciliumnetworkpolicies.cilium.io"}
+
+// providersDefaultKey is the kagent.providers key naming the default
+// provider, whose apiKeySecretRef is the default ModelConfig's key.
+const providersDefaultKey = "default"
+
+// tenantsGrant is a required grant of tenants.organizations.enabled from
+// its row.
+func tenantsGrant(row string) saGrant {
+	resource, names, verbs, _ := parseRuleRow(row)
+	return saGrant{resource: resource, names: names, verbs: verbs, by: "tenants.organizations.enabled"}
+}
+
 // saGrant is one row a platform switch makes the agent-manager
 // ServiceAccount hold: a resource (as ruleRows words it), the resource names
 // it is narrowed to (none: every name) and its verbs. A required grant must
@@ -892,38 +929,21 @@ func agentManagerGrants(values map[string]any) []saGrant {
 	if minted := mintedSkillsSecretNames(values); minted != nil {
 		grants = append(grants, saGrant{resource: gvrSecrets.Resource, names: minted, verbs: mintGrantVerbs, by: "agent-manager." + skillsKey + "." + skillsMintValue})
 	}
-	if enabled, _ := nestedValue(values, "tenants", "organizations", "enabled").(bool); !enabled {
+	if enabled, _ := nestedValue(values, "tenants", "organizations", valuesEnabled).(bool); !enabled {
 		return grants
 	}
-	const by = "tenants.organizations.enabled"
-	watch := []string{"get", "list", "watch"}
-	keep := append(slices.Clone(watch), "create", "update", "delete")
-	tenant := func(resource string, names []string, verbs ...string) saGrant {
-		return saGrant{resource: resource, names: names, verbs: verbs, by: by}
+	for _, row := range strings.Split(tenantsGrantRows, "\n") {
+		grants = append(grants, tenantsGrant(row))
 	}
-	grants = append(grants,
-		tenant(gvrNamespaces.Resource, nil, watch...),
-		tenant("agents.api.kagent.dev", nil, "list", "watch"),
-		tenant("helmreleases.helm.toolkit.fluxcd.io", nil, "list", "watch"),
-		tenant("harnesses.api.kagent.dev", nil, keep...),
-		tenant("modelconfigs.api.kagent.dev", nil, keep...),
-		tenant("workerpools.ate.dev", nil, keep...),
-		tenant("ocirepositories.source.toolkit.fluxcd.io", nil, append(slices.Clone(watch), "create", "update")...),
-		tenant("serviceaccounts", nil, append(slices.Clone(watch), "create", "delete")...),
-		tenant("rolebindings.rbac.authorization.k8s.io", nil, keep...),
-		tenant("clusterroles.rbac.authorization.k8s.io", []string{tenantFluxClusterRole}, "bind"),
-		tenant(gvrSecrets.Resource, nil, "create"),
-	)
 	providers, _ := nestedValue(values, "kagent", "providers").(map[string]any)
-	if key := nestedString(providers, nestedString(providers, "default"), "apiKeySecretRef"); key != "" {
-		grants = append(grants, tenant(gvrSecrets.Resource, []string{key}, "get", "list", "watch", "update", "delete"))
+	if key := nestedString(providers, nestedString(providers, providersDefaultKey), "apiKeySecretRef"); key != "" {
+		grants = append(grants, tenantsGrant(fmt.Sprintf(tenantsModelKeyRow, key)))
 	}
-	if enabled, _ := nestedValue(values, "networkPolicy", "enabled").(bool); enabled {
-		policyVerbs := append(slices.Clone(watch), "create", "update")
-		kinds := map[string]string{"kubernetes": "networkpolicies.networking.k8s.io", "cilium": "ciliumnetworkpolicies.cilium.io"}
-		for _, flavor := range slices.Sorted(maps.Keys(kinds)) {
-			if f := nestedString(values, "networkPolicy", "flavor"); f == flavor || f == "" || f == "auto" {
-				g := tenant(kinds[flavor], nil, policyVerbs...)
+	if enabled, _ := nestedValue(values, "networkPolicy", valuesEnabled).(bool); enabled {
+		flavor := nestedString(values, "networkPolicy", "flavor")
+		for _, f := range slices.Sorted(maps.Keys(tenantsPolicyKinds)) {
+			if flavor == f || flavor == "" || flavor == "auto" {
+				g := tenantsGrant(fmt.Sprintf(tenantsPolicyRow, tenantsPolicyKinds[f]))
 				g.optional = true
 				grants = append(grants, g)
 			}
