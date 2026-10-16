@@ -4,6 +4,7 @@ import (
 	"errors"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	authorizationv1 "k8s.io/api/authorization/v1"
@@ -68,53 +69,164 @@ func TestMintedSkillsSecretNames(t *testing.T) {
 	}
 }
 
-// TestRulesBeyondMintGrant: minting off leaves every row granted; minting on
-// drops exactly the skills-Secret Role and keeps any other grant — another
-// resource, another Secret, another verb — and refuses a Role that is
-// missing or grants less than the chart renders.
-func TestRulesBeyondMintGrant(t *testing.T) {
-	minted := []string{"tenant-credential-agent-manager-skills-token", "agent-manager-skills-token"}
-	role := ruleRows(&authorizationv1.SubjectRulesReviewStatus{ResourceRules: []authorizationv1.ResourceRule{
-		{Verbs: mintGrantVerbs, APIGroups: []string{""}, Resources: []string{gvrSecrets.Resource}, ResourceNames: minted},
-	}})
-	if got := role[0]; got != "secrets  []  [tenant-credential-agent-manager-skills-token agent-manager-skills-token]  [get update]" {
+// mintRole is the skills-Secret Role agent-manager's chart renders with
+// skills.mintGitAuthSecret (templates/skills-token.yaml).
+var mintRole = []authorizationv1.ResourceRule{
+	{Verbs: []string{"get", "update"}, APIGroups: []string{""}, Resources: []string{"secrets"}, ResourceNames: []string{"tenant-credential-agent-manager-skills-token", "agent-manager-skills-token"}},
+}
+
+// tenantsClusterRole is the tenant reconciler's ClusterRole agent-manager's
+// chart renders with tenants.enabled (templates/tenants-rbac.yaml), the
+// default ModelConfig's key kagent-anthropic, without a network policy.
+var tenantsClusterRole = []authorizationv1.ResourceRule{
+	{Verbs: []string{"get", "list", "watch"}, APIGroups: []string{""}, Resources: []string{"namespaces"}},
+	{Verbs: []string{"list", "watch"}, APIGroups: []string{"api.kagent.dev"}, Resources: []string{"agents"}},
+	{Verbs: []string{"list", "watch"}, APIGroups: []string{"helm.toolkit.fluxcd.io"}, Resources: []string{"helmreleases"}},
+	{Verbs: []string{"get", "list", "watch", "create", "update", "delete"}, APIGroups: []string{"api.kagent.dev"}, Resources: []string{"harnesses", "modelconfigs"}},
+	{Verbs: []string{"get", "list", "watch", "create", "update", "delete"}, APIGroups: []string{"ate.dev"}, Resources: []string{"workerpools"}},
+	{Verbs: []string{"get", "list", "watch", "create", "update"}, APIGroups: []string{"source.toolkit.fluxcd.io"}, Resources: []string{"ocirepositories"}},
+	{Verbs: []string{"get", "list", "watch", "create", "delete"}, APIGroups: []string{""}, Resources: []string{"serviceaccounts"}},
+	{Verbs: []string{"get", "list", "watch", "create", "update", "delete"}, APIGroups: []string{"rbac.authorization.k8s.io"}, Resources: []string{"rolebindings"}},
+	{Verbs: []string{"bind"}, APIGroups: []string{"rbac.authorization.k8s.io"}, Resources: []string{"clusterroles"}, ResourceNames: []string{"agent-platform-tenant-flux"}},
+	{Verbs: []string{"get", "list", "watch", "update", "delete"}, APIGroups: []string{""}, Resources: []string{"secrets"}, ResourceNames: []string{"kagent-anthropic"}},
+	{Verbs: []string{"create"}, APIGroups: []string{""}, Resources: []string{"secrets"}},
+}
+
+// switchValues is the lab's rendered values with minting and the tenants
+// switched as asked, the default provider's key kagent-anthropic.
+func switchValues(mint, tenants bool) map[string]any {
+	return map[string]any{
+		agentManagerMCPServer: map[string]any{skillsKey: map[string]any{skillsMintValue: mint}},
+		"tenants":             map[string]any{"organizations": map[string]any{"enabled": tenants}},
+		"kagent": map[string]any{"providers": map[string]any{
+			"default":   "anthropic",
+			"anthropic": map[string]any{"apiKeySecretRef": "kagent-anthropic"},
+		}},
+	}
+}
+
+// rowsOf words rules as the rules review's rows.
+func rowsOf(rules ...[]authorizationv1.ResourceRule) []string {
+	var all []authorizationv1.ResourceRule
+	for _, r := range rules {
+		all = append(all, r...)
+	}
+	return ruleRows(&authorizationv1.SubjectRulesReviewStatus{ResourceRules: all})
+}
+
+// TestRulesBeyondGrants: for every combination of minting and the tenants,
+// exactly the RBAC the chart renders for the switches that are on passes;
+// a grant of a switch that is off, a grant beyond the chart's on any
+// resource, name or verb, and a switch's grant missing in part all fail.
+func TestRulesBeyondGrants(t *testing.T) {
+	if got := rowsOf(mintRole)[0]; got != "secrets  []  [tenant-credential-agent-manager-skills-token agent-manager-skills-token]  [get update]" {
 		t.Fatalf("the Role's row reads %q, not the shape the check parses", got)
 	}
-	extra := ruleRows(&authorizationv1.SubjectRulesReviewStatus{ResourceRules: []authorizationv1.ResourceRule{
-		{Verbs: []string{verbGet, verbList}, APIGroups: []string{kagentGroupVersion.Group}, Resources: []string{gvrAgentTemplates.Resource}},
-	}})
+	extra := rowsOf([]authorizationv1.ResourceRule{{Verbs: []string{"get", "list"}, APIGroups: []string{"api.kagent.dev"}, Resources: []string{"agenttemplates"}}})
 
-	if got, err := rulesBeyondMintGrant(role, nil); err != nil || !reflect.DeepEqual(got, role) {
-		t.Errorf("minting off: %v, %v; want the Role still granted", got, err)
-	}
-	if got, err := rulesBeyondMintGrant(role, minted); err != nil || len(got) != 0 {
-		t.Errorf("minting on, the Role alone: %v, %v; want nothing granted", got, err)
-	}
-	if got, err := rulesBeyondMintGrant(append(slices.Clone(role), extra...), minted); err != nil || !reflect.DeepEqual(got, extra) {
-		t.Errorf("minting on, the Role and an extra grant: %v, %v; want %v", got, err, extra)
-	}
-
-	for name, rule := range map[string]authorizationv1.ResourceRule{
-		"another Secret":    {Verbs: mintGrantVerbs, Resources: []string{gvrSecrets.Resource}, ResourceNames: append(slices.Clone(minted), "kagent-anthropic")},
-		"another verb":      {Verbs: append(slices.Clone(mintGrantVerbs), verbList), Resources: []string{gvrSecrets.Resource}, ResourceNames: minted},
-		"every Secret":      {Verbs: mintGrantVerbs, Resources: []string{gvrSecrets.Resource}},
-		"the names on pods": {Verbs: mintGrantVerbs, Resources: []string{gvrPods.Resource}, ResourceNames: minted},
+	for _, c := range []struct {
+		name          string
+		mint, tenants bool
+		held          []string
+	}{
+		{"neither", false, false, nil},
+		{"minting", true, false, rowsOf(mintRole)},
+		{"tenants", false, true, rowsOf(tenantsClusterRole)},
+		{"minting and tenants", true, true, rowsOf(tenantsClusterRole, mintRole)},
 	} {
-		wider := ruleRows(&authorizationv1.SubjectRulesReviewStatus{ResourceRules: []authorizationv1.ResourceRule{rule}})
-		got, err := rulesBeyondMintGrant(append(slices.Clone(role), wider...), minted)
+		t.Run(c.name, func(t *testing.T) {
+			grants := agentManagerGrants(switchValues(c.mint, c.tenants))
+			if got, err := rulesBeyondGrants(c.held, grants); err != nil || len(got) != 0 {
+				t.Errorf("exactly the switches' RBAC: %v, %v; want nothing granted", got, err)
+			}
+			if got, err := rulesBeyondGrants(append(slices.Clone(c.held), extra...), grants); err != nil || !reflect.DeepEqual(got, extra) {
+				t.Errorf("with an extra grant: %v, %v; want %v", got, err, extra)
+			}
+			if !c.mint {
+				if got, err := rulesBeyondGrants(append(slices.Clone(c.held), rowsOf(mintRole)...), grants); err != nil || !reflect.DeepEqual(got, rowsOf(mintRole)) {
+					t.Errorf("the minting Role with minting off: %v, %v; want it granted", got, err)
+				}
+			}
+			if !c.tenants {
+				got, err := rulesBeyondGrants(append(slices.Clone(c.held), rowsOf(tenantsClusterRole)...), grants)
+				if err != nil || len(got) != len(tenantsClusterRole)+1 { // harnesses and modelconfigs are one rule, two rows
+					t.Errorf("the tenants' ClusterRole with the tenants off: %v, %v; want every row granted", got, err)
+				}
+			}
+			for i := range c.held {
+				short := slices.Delete(slices.Clone(c.held), i, i+1)
+				if _, err := rulesBeyondGrants(short, grants); err == nil {
+					t.Errorf("without %q: no error", c.held[i])
+				}
+			}
+		})
+	}
+
+	grants := agentManagerGrants(switchValues(true, true))
+	for name, rule := range map[string]authorizationv1.ResourceRule{
+		"another minted Secret": {Verbs: []string{"get", "update"}, Resources: []string{"secrets"}, ResourceNames: []string{"agent-manager-skills-token", "another"}},
+		"another verb":          {Verbs: []string{"get", "update", "list"}, Resources: []string{"secrets"}, ResourceNames: []string{"agent-manager-skills-token"}},
+		"every Secret":          {Verbs: []string{"get"}, Resources: []string{"secrets"}},
+		"the model key deleted": {Verbs: []string{"create", "delete"}, Resources: []string{"secrets"}},
+		"the names on pods":     {Verbs: []string{"get"}, Resources: []string{"pods"}, ResourceNames: []string{"kagent-anthropic"}},
+		"bind any ClusterRole":  {Verbs: []string{"bind"}, APIGroups: []string{"rbac.authorization.k8s.io"}, Resources: []string{"clusterroles"}},
+		"escalate":              {Verbs: []string{"escalate"}, APIGroups: []string{"rbac.authorization.k8s.io"}, Resources: []string{"clusterroles"}, ResourceNames: []string{"agent-platform-tenant-flux"}},
+		"patch a WorkerPool":    {Verbs: []string{"patch"}, APIGroups: []string{"ate.dev"}, Resources: []string{"workerpools"}},
+		"a network policy":      {Verbs: []string{"get"}, APIGroups: []string{"networking.k8s.io"}, Resources: []string{"networkpolicies"}},
+	} {
+		wider := rowsOf([]authorizationv1.ResourceRule{rule})
+		got, err := rulesBeyondGrants(rowsOf(tenantsClusterRole, mintRole, []authorizationv1.ResourceRule{rule}), grants)
 		if err != nil || !reflect.DeepEqual(got, wider) {
 			t.Errorf("%s: %v, %v; want %v still granted", name, got, err, wider)
 		}
 	}
+}
 
-	if _, err := rulesBeyondMintGrant(nil, minted); err == nil {
-		t.Error("minting on without the Role: no error")
+// TestAgentManagerGrants: the tenants' model key follows the default
+// provider's apiKeySecretRef; with networkPolicy enabled the flavor's
+// policy kind is allowed, both kinds for auto, and neither is required.
+func TestAgentManagerGrants(t *testing.T) {
+	values := switchValues(false, true)
+	values["kagent"] = map[string]any{"providers": map[string]any{"default": "openai", "openai": map[string]any{"apiKeySecretRef": "kagent-openai"}}}
+	if !slices.ContainsFunc(agentManagerGrants(values), func(g saGrant) bool { return slices.Equal(g.names, []string{"kagent-openai"}) }) {
+		t.Errorf("the default provider openai's key kagent-openai is not among %v", agentManagerGrants(values))
 	}
-	partial := ruleRows(&authorizationv1.SubjectRulesReviewStatus{ResourceRules: []authorizationv1.ResourceRule{
-		{Verbs: []string{verbGet}, Resources: []string{gvrSecrets.Resource}, ResourceNames: minted[:1]},
-	}})
-	if _, err := rulesBeyondMintGrant(partial, minted); err == nil {
-		t.Error("minting on with get on one name only: no error")
+
+	policies := func(flavor string) []string {
+		values := switchValues(false, true)
+		values["networkPolicy"] = map[string]any{"enabled": true, "flavor": flavor}
+		var kinds []string
+		for _, g := range agentManagerGrants(values) {
+			if strings.Contains(g.resource, "networkpolicies") {
+				if !g.optional {
+					t.Errorf("flavor %q: %s is required", flavor, g)
+				}
+				kinds = append(kinds, g.resource)
+			}
+		}
+		return kinds
+	}
+	for flavor, want := range map[string][]string{
+		"cilium":     {"ciliumnetworkpolicies.cilium.io"},
+		"kubernetes": {"networkpolicies.networking.k8s.io"},
+		"auto":       {"ciliumnetworkpolicies.cilium.io", "networkpolicies.networking.k8s.io"},
+	} {
+		if got := policies(flavor); !reflect.DeepEqual(got, want) {
+			t.Errorf("flavor %q: %v, want %v", flavor, got, want)
+		}
+	}
+	values = switchValues(false, true)
+	values["networkPolicy"] = map[string]any{"enabled": true, "flavor": "cilium"}
+	cilium := rowsOf([]authorizationv1.ResourceRule{{Verbs: []string{"get", "list", "watch", "create", "update"}, APIGroups: []string{"cilium.io"}, Resources: []string{"ciliumnetworkpolicies"}}})
+	if got, err := rulesBeyondGrants(append(rowsOf(tenantsClusterRole), cilium...), agentManagerGrants(values)); err != nil || len(got) != 0 {
+		t.Errorf("tenants with the cilium policy: %v, %v; want nothing granted", got, err)
+	}
+	kubernetes := rowsOf([]authorizationv1.ResourceRule{{Verbs: []string{"get"}, APIGroups: []string{"networking.k8s.io"}, Resources: []string{"networkpolicies"}}})
+	if got, _ := rulesBeyondGrants(append(rowsOf(tenantsClusterRole), kubernetes...), agentManagerGrants(values)); !reflect.DeepEqual(got, kubernetes) {
+		t.Errorf("the kubernetes policy kind with flavor cilium: %v, want it granted", got)
+	}
+	if got := agentManagerGrants(switchValues(false, false)); got != nil {
+		t.Errorf("neither switch: %v, want no grants", got)
 	}
 }
 
