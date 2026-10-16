@@ -156,7 +156,7 @@ func TestPlatformImagesStopsOnAnUnreachableRegistry(t *testing.T) {
 	closed := writeClosedSchemaChart(t, dir)
 	registry := closedRegistry(t)
 	cfg := &config.Config{}
-	chart := platformChart{ref: config.ChartRepository, version: "0.0.0-test"}
+	chart := platformChart{ref: config.ChartRepository, version: testChartVersion}
 
 	release := func(name, url, values string) fluxRelease {
 		t.Helper()
@@ -188,7 +188,7 @@ func TestPlatformImagesStopsOnAnUnreachableRegistry(t *testing.T) {
 		connectionRefused,
 		"the dex-localhost sidecar, platform.devImages",
 		"network and DNS for " + registry,
-		"`agentlab platform`",
+		rerunPlatform,
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the stop does not say %q:\n%s", want, err)

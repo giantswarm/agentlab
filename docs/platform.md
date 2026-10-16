@@ -346,7 +346,8 @@ a target whose chart rendered without the Deployment and container the lab
 patches is **refused before the install**, naming both (`platform.devImages.kagent:
 the kagent chart's render has no Deployment kagent-controller with a container
 controller …`); a chart whose render was skipped (the preload notes why; a
-registry that does not answer stops the boot instead, see the gotchas) falls
+registry that does not answer, or has no such chart, stops the boot instead,
+see the gotchas) falls
 back to the table's name with a note that it is unverified. A target's patch
 lands on the release whose chart renders the Deployment: the
 `agentgateway-controller` target (Deployment `agentgateway-controller`,
