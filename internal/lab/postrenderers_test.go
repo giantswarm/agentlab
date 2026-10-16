@@ -143,8 +143,8 @@ func TestComponentPostRenderers(t *testing.T) {
 
 	for _, c := range []string{componentMuster, componentBackstage} {
 		got := patchOn(c, kindDeployment, c)
-		if len(got) == 0 || !strings.Contains(got[0], "hostNetwork: true") || !strings.Contains(got[0], "maxSurge: 0") {
-			t.Errorf("%s: want the hostNetwork + maxSurge 0 patch, got %q", c, got)
+		if len(got) == 0 || !strings.Contains(got[0], "hostNetwork: true") || !strings.Contains(got[0], "maxSurge: 0") || !strings.Contains(got[0], "replicas: 1") {
+			t.Errorf("%s: want the hostNetwork + one replica + maxSurge 0 patch, got %q", c, got)
 		}
 	}
 	for _, c := range []string{componentMCPKubernetes, modelManagerMCPServer, agentManagerMCPServer, clusterManager} {
