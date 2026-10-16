@@ -374,7 +374,7 @@ func (p *codingProof) run() error {
 	}
 	called := parseCodingProbe(reply)["mcp-call"]
 	if !strings.Contains(called, codingTestAgent) {
-		return fmt.Errorf("%s through the agent's binding on Harness %s answered %q, wanted a list naming %s (%s)", codingTestReadTool, harness, firstNonEmpty(called, excerpt(reply, 400)), codingTestAgent, p.line)
+		return fmt.Errorf("%s through the agent's binding on Harness %s answered %q, wanted a list naming %s; the reply: %q (%s)", codingTestReadTool, harness, called, codingTestAgent, excerpt(reply, 400), p.line)
 	}
 	note("%s listed: %s", codingTestReadTool, excerpt(called, 240))
 
