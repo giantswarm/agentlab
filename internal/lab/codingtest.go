@@ -35,9 +35,11 @@ import (
 //  3. create_agent on the Harness with the read-only preset plus that write
 //     tool (the read-only preset alone below the floor): Ready, its
 //     RemoteMCPServer Accepted and sending the toolset, the Agent's egress
-//     the Harness's origin list. On codex the binding carries its credential
-//     on upstream's Secret-backed path: a header from a Secret, which the
-//     controller hands the runtime as kagent's placeholder.
+//     the Harness's origin list. On codex and omp a binding with a header
+//     from a Secret carries its credential on upstream's Secret-backed path,
+//     which the controller hands the runtime as kagent's placeholder: every
+//     Secret key it names is there. A binding with none, a platform line that
+//     ships no Secret-backed credential, skips the stage.
 //  4. One Session, one turn whose shell tool probes the sandbox; its lines
 //     are judged stage by stage. On claude: Claude Code runs as the
 //     unprivileged uid and cannot read the harness's environment or memory;
@@ -438,8 +440,11 @@ func (p *codingProof) judgedStages() []judgedStage {
 }
 
 // proveSecretBacked is the agent's binding on upstream's Secret-backed path:
-// its RemoteMCPServer takes at least one header from a Secret. Names only;
-// the values stay in the Secret.
+// its RemoteMCPServer takes at least one header from a Secret, and every
+// Secret key it names is there. A binding with no header from a Secret is a
+// platform line that ships no Secret-backed credential: the stage is
+// skipped, naming the headers it has. Names only; the values stay in the
+// Secret.
 func (p *codingProof) proveSecretBacked() error {
 	t, err := readAgentTemplate(codingTestAgent)
 	if err != nil {
@@ -449,12 +454,35 @@ func (p *codingProof) proveSecretBacked() error {
 	if err != nil {
 		return fmt.Errorf("the bound %s %s: %w", remoteMCPServerKind, t.mcpServer(), err)
 	}
-	names := secretBackedHeaders(rms)
-	if len(names) == 0 {
-		return fmt.Errorf("agent %s binds %s %s with headers %v, none from a Secret: its MCP calls carry no credential on upstream's Secret-backed path (%s)", codingTestAgent, remoteMCPServerKind, t.mcpServer(), headerNames(rms), p.line)
+	skip, err := judgeSecretBacked(rms, secretHasKey, p.line)
+	if err != nil {
+		return err
 	}
-	note("binds %s/%s with %v from a Secret", remoteMCPServerKind, t.mcpServer(), names)
+	if skip != "" {
+		p.stages.skip("%s", skip)
+	}
 	return nil
+}
+
+// judgeSecretBacked is the secret-backed credential stage's verdict on the
+// bound RemoteMCPServer: why the stage is skipped when no header comes from
+// a Secret, an error when a Secret key a header names is missing, neither
+// when every one is there. hasKey reports whether a Secret carries a key,
+// never its value.
+func judgeSecretBacked(rms *unstructured.Unstructured, hasKey func(ns, name, key string) bool, line string) (string, error) {
+	sources := secretBackedHeaders(rms)
+	if len(sources) == 0 {
+		return fmt.Sprintf("%s %s takes headers %v, none from a Secret: the platform line (%s) ships no Secret-backed MCP credential", remoteMCPServerKind, rms.GetName(), headerNames(rms), line), nil
+	}
+	var headers []string
+	for _, s := range sources {
+		if !hasKey(rms.GetNamespace(), s.secret, s.key) {
+			return "", fmt.Errorf("%s %s takes header %s from Secret %s/%s key %s, which is missing: its MCP calls carry no credential (%s)", remoteMCPServerKind, rms.GetName(), s.header, rms.GetNamespace(), s.secret, s.key, line)
+		}
+		headers = append(headers, s.header)
+	}
+	note("binds %s/%s with %v from a Secret, every key there", remoteMCPServerKind, rms.GetName(), headers)
+	return "", nil
 }
 
 // releases words the line under test: the chart and the versions the

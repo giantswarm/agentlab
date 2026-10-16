@@ -251,7 +251,7 @@ func agentServer(agent, header string) *unstructured.Unstructured {
 func TestToolsetHeaderOf(t *testing.T) {
 	secretServer := agentServer(toolsetsAgentFull, "")
 	_ = unstructured.SetNestedSlice(secretServer.Object, []any{map[string]any{
-		nameKey: toolsetHeader, "valueFrom": map[string]any{fieldTypeKey: "Secret", nameKey: "toolset-full", "key": "toolset"},
+		nameKey: toolsetHeader, "valueFrom": map[string]any{fieldTypeKey: "Secret", nameKey: "toolset-full", fieldKey: "toolset"},
 	}}, "spec", "headersFrom")
 	newFakeLab(t,
 		agentTemplateBinding(toolsetsAgentReadOnly, toolsetsAgentReadOnly),

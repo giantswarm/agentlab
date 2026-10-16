@@ -1013,23 +1013,33 @@ func remoteMCPServerHeader(rms *unstructured.Unstructured, name string) (string,
 	return "", false, nil
 }
 
-// secretBackedHeaders lists the names of a RemoteMCPServer's headersFrom
-// entries whose value comes from a Secret, sorted; never the values.
-func secretBackedHeaders(rms *unstructured.Unstructured) []string {
+// secretHeaderSource is one headersFrom entry of a RemoteMCPServer whose
+// value comes from a Secret: the header and the Secret key it names, never
+// the value.
+type secretHeaderSource struct {
+	header, secret, key string
+}
+
+// secretBackedHeaders lists a RemoteMCPServer's headersFrom entries whose
+// value comes from a Secret, sorted by header; never the values.
+func secretBackedHeaders(rms *unstructured.Unstructured) []secretHeaderSource {
 	headers, _, _ := unstructured.NestedSlice(rms.Object, "spec", "headersFrom")
-	var names []string
+	var sources []secretHeaderSource
 	for _, h := range headers {
 		m, ok := h.(map[string]any)
 		if !ok {
 			continue
 		}
 		if kind, _, _ := unstructured.NestedString(m, "valueFrom", fieldTypeKey); kind == kindSecret {
-			name, _, _ := unstructured.NestedString(m, nameKey)
-			names = append(names, name)
+			var s secretHeaderSource
+			s.header, _, _ = unstructured.NestedString(m, nameKey)
+			s.secret, _, _ = unstructured.NestedString(m, "valueFrom", nameKey)
+			s.key, _, _ = unstructured.NestedString(m, "valueFrom", "key")
+			sources = append(sources, s)
 		}
 	}
-	slices.Sort(names)
-	return names
+	slices.SortFunc(sources, func(a, b secretHeaderSource) int { return strings.Compare(a.header, b.header) })
+	return sources
 }
 
 // headerNames lists the names of a RemoteMCPServer's headersFrom, sorted.

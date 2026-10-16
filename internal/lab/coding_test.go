@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
 	"github.com/giantswarm/agentlab/internal/config"
 )
 
@@ -148,5 +150,33 @@ func TestCodingHarnessesDevImage(t *testing.T) {
 	got := codingHarnessesFor(cfg, nil, map[string]string{config.CodingRuntimeCodex: pinned})
 	if len(got) != 2 || got[0].Image != "" || got[1].Image != pinned {
 		t.Fatalf("harnesses = %+v, want claude on the chart's image and codex on %s", got, pinned)
+	}
+}
+
+// The secret-backed credential stage is skipped, naming the headers, on a
+// binding with no header from a Secret (a platform line that ships no
+// Secret-backed credential); it passes when every Secret key a header names
+// is there and fails naming the one that is missing.
+func TestJudgeSecretBacked(t *testing.T) {
+	const line = "agent-platform 4.140.0"
+	plain := agentServer(codingTestAgent, presetReadOnly)
+	if skip, err := judgeSecretBacked(plain, func(string, string, string) bool { t.Fatal("a Secret read on a binding with none"); return false }, line); err != nil || !strings.Contains(skip, "["+toolsetHeader+"]") || !strings.Contains(skip, line) {
+		t.Errorf("no Secret-backed header: skip %q, err %v; want a skip naming [%s] and %s", skip, err, toolsetHeader, line)
+	}
+
+	backed := agentServer(codingTestAgent, "")
+	_ = unstructured.SetNestedSlice(backed.Object, []any{
+		map[string]any{nameKey: toolsetHeader, fieldValue: presetReadOnly},
+		map[string]any{nameKey: "Authorization", "valueFrom": map[string]any{fieldTypeKey: kindSecret, nameKey: "agentlab-coding-mcp", fieldKey: "token"}},
+	}, "spec", "headersFrom")
+	present := func(ns, name, key string) bool {
+		return ns == kagentNamespace && name == "agentlab-coding-mcp" && key == "token"
+	}
+	if skip, err := judgeSecretBacked(backed, present, line); err != nil || skip != "" {
+		t.Errorf("Secret key there: skip %q, err %v; want a pass", skip, err)
+	}
+	missing := func(string, string, string) bool { return false }
+	if skip, err := judgeSecretBacked(backed, missing, line); err == nil || skip != "" || !strings.Contains(err.Error(), "agentlab-coding-mcp key token, which is missing") {
+		t.Errorf("Secret key missing: skip %q, err %v; want a failure naming the Secret key", skip, err)
 	}
 }
