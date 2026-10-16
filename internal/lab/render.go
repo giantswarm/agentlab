@@ -257,10 +257,11 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		}
 	}
 	// The patches a render without the component charts can know: the
-	// dev-image overrides with the table's names, no dex-localhost sidecar.
-	// `agentlab platform` re-renders with what the component renders say —
-	// the names (devimages.go) and the sidecar's targets (postrenderers.go).
-	postRenderers, err := componentPostRenderers(cfg, defaultDevImageNames(cfg), nil)
+	// dev-image overrides with the table's names, no dex-localhost sidecar
+	// and no agentgateway IPv4 bind. `agentlab platform` re-renders with what
+	// the component renders say — the names (devimages.go), the sidecar's
+	// and the IPv4 binds' targets (postrenderers.go).
+	postRenderers, err := componentPostRenderers(cfg, defaultDevImageNames(cfg), nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -383,7 +384,8 @@ func (t *tmplData) DexJWKSPort() int {
 // block for — cluster-manager while only an overlay turns it on — and the
 // ones whose block it renders only while the lab's own toggle is on
 // (vm-manager, klaus-gateway, cluster-manager with its dev image,
-// agent-manager with the agents). The template's trailing range renders
+// agent-manager with the agents, agent-platform-connectivity with a
+// checkout's chart). The template's trailing range renders
 // these as `<component>: {postRenderers: …}` so every patch the rule found
 // reaches its release and no component key renders twice. Mirrors the
 // template's conditions: a block that is always there (muster,
@@ -403,6 +405,7 @@ func (t *tmplData) ExtraPostRenderers() map[string]string {
 		klausGatewayComponent:     t.KlausGatewayEnabled,
 		clusterManager:            t.ClusterManagerEnabled,
 		llmisvcResourcesComponent: t.ServingEnabled,
+		connectivityComponent:     t.ConnectivityChart != nil,
 	}
 	extra := map[string]string{}
 	for component, postRenderers := range t.PostRenderers {

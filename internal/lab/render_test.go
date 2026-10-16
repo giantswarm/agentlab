@@ -136,7 +136,8 @@ func TestPlatformValuesLabShape(t *testing.T) {
 		agentManagerMCPServer:  {{agentManagerMCPServer, dexIssuerURLFlag}},
 		clusterManager:         {{clusterManager, dexIssuerURLFlag}},
 	}
-	postRenderers, err := componentPostRenderers(cfg, defaultDevImageNames(cfg), sidecars)
+	gateways := labAgentgatewayTargets
+	postRenderers, err := componentPostRenderers(cfg, defaultDevImageNames(cfg), sidecars, gateways)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,13 +185,16 @@ func TestPlatformValuesLabShape(t *testing.T) {
 			t.Errorf("components.%s.postRenderers missing: %v", c, at("components", c))
 		}
 	}
-	// cluster-manager has no block in the roster without its dev image: its
-	// patch renders through the trailing range, and nothing but the patch —
-	// the chart's default and the overlay decide `enabled`. Its audience is
-	// in place either way: the meta chart forwards the block only while the
-	// component is on.
-	if comp, _ := at("components", clusterManager).(map[string]any); len(comp) != 1 {
-		t.Errorf("components.%s: want the postRenderers only, got %v", clusterManager, comp)
+	// cluster-manager has no block in the roster without its dev image, nor
+	// have the connectivity and substrate releases (patch 8's): their patches
+	// render through the trailing range, and nothing but the patch — the
+	// chart's defaults and the overlay decide `enabled`. cluster-manager's
+	// audience is in place either way: the meta chart forwards the block only
+	// while the component is on.
+	for _, c := range []string{clusterManager, connectivityComponent, substrateComponent} {
+		if comp, _ := at("components", c).(map[string]any); len(comp) != 1 || comp["postRenderers"] == nil {
+			t.Errorf("components.%s: want the postRenderers only, got %v", c, comp)
+		}
 	}
 	if got, _ := at(clusterManager, "muster", "mcpServer", "auth", "requiredAudiences").([]any); len(got) != 1 || got[0] != config.KubernetesClientID {
 		t.Errorf("%s.muster.mcpServer.auth.requiredAudiences = %v, want [%s] whatever turns the component on", clusterManager, got, config.KubernetesClientID)
@@ -252,6 +256,7 @@ func TestPlatformValuesLabShape(t *testing.T) {
 // a duplicate mapping key), which is what pins ExtraPostRenderers to the
 // template's conditions.
 func TestPlatformValuesExtraPostRenderers(t *testing.T) {
+	const connectivityCheckout = "connectivity checkout"
 	sidecars := map[string][]dexLocalhostTarget{
 		componentMCPKubernetes: {{componentMCPKubernetes, dexIssuerURLVar}},
 		modelManagerMCPServer:  {{modelManagerMCPServer, dexIssuerURLFlag}},
@@ -259,6 +264,7 @@ func TestPlatformValuesExtraPostRenderers(t *testing.T) {
 		vmManagerMCPServer:     {{vmManagerMCPServer, dexIssuerURLFlag}},
 		clusterManager:         {{clusterManager, dexIssuerURLFlag}},
 	}
+	gateways := labAgentgatewayTargets
 	for name, cfg := range map[string]*config.Config{
 		"everything off": func() *config.Config {
 			cfg := config.Default()
@@ -274,15 +280,21 @@ func TestPlatformValuesExtraPostRenderers(t *testing.T) {
 			cfg.Platform.DevImages = map[string]string{componentMuster: devMusterRef, componentBackstage: devBackstageRef, clusterManager: "cluster-manager:dev", config.DevImageAgentgatewayController: "agentgateway-controller:dev"}
 			return cfg
 		}(),
+		// A checkout's chart (platform.chartPath) renders the connectivity
+		// block itself: its patch goes there, not through the range.
+		connectivityCheckout: config.Default(),
 	} {
 		t.Run(name, func(t *testing.T) {
-			postRenderers, err := componentPostRenderers(cfg, defaultDevImageNames(cfg), sidecars)
+			postRenderers, err := componentPostRenderers(cfg, defaultDevImageNames(cfg), sidecars, gateways)
 			if err != nil {
 				t.Fatal(err)
 			}
 			out, err := renderTemplate(cfg, platformValuesTemplate, func(d *tmplData) {
 				d.PostRenderers = postRenderers
 				d.ModelManagerEndpoints = map[string]string{ollama: ollamaLabEndpoint}
+				if name == connectivityCheckout {
+					d.ConnectivityChart = &localConnectivityChart{Repository: "oci://agentlab-registry:5000/charts", Version: "4.0.0-checkout"}
+				}
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -292,6 +304,14 @@ func TestPlatformValuesExtraPostRenderers(t *testing.T) {
 			}
 			if err := yaml.Unmarshal(out, &values); err != nil {
 				t.Fatalf("%v\n%s", err, out)
+			}
+			for component := range gateways {
+				if list, ok := values.Components[component]["postRenderers"].([]any); !ok || len(list) != 1 {
+					t.Errorf("components.%s.postRenderers: want the one entry, got %v", component, values.Components[component])
+				}
+			}
+			if name == connectivityCheckout && values.Components[connectivityComponent]["versionRange"] != "4.0.0-checkout" {
+				t.Errorf("components.%s: want the checkout block with its patch, got %v", connectivityComponent, values.Components[connectivityComponent])
 			}
 			for component := range sidecars {
 				comp := values.Components[component]
@@ -348,7 +368,7 @@ func TestPlatformValuesDevImageTargets(t *testing.T) {
 		componentMCPKubernetes: {{componentMCPKubernetes, dexIssuerURLVar}},
 		clusterManager:         {{clusterManager, dexIssuerURLFlag}},
 	}
-	postRenderers, err := componentPostRenderers(cfg, defaultDevImageNames(cfg), sidecars)
+	postRenderers, err := componentPostRenderers(cfg, defaultDevImageNames(cfg), sidecars, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1212,7 +1232,7 @@ func TestPlatformValuesWorkspaceManagerDevImage(t *testing.T) {
 	cfg := config.Default()
 	cfg.Platform.Workspaces.Enabled = true
 	cfg.Platform.DevImages = map[string]string{workspaceManager: "workspace-manager:dev-5a6b"}
-	postRenderers, err := componentPostRenderers(cfg, defaultDevImageNames(cfg), nil)
+	postRenderers, err := componentPostRenderers(cfg, defaultDevImageNames(cfg), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1253,7 +1273,7 @@ func TestPlatformValuesWorkspaceManagerSyncImageChartDefault(t *testing.T) {
 	cfg := config.Default()
 	cfg.Platform.Workspaces.Enabled = true
 	cfg.Platform.DevImages = map[string]string{"muster": "muster:dev-1a2b"}
-	postRenderers, err := componentPostRenderers(cfg, defaultDevImageNames(cfg), nil)
+	postRenderers, err := componentPostRenderers(cfg, defaultDevImageNames(cfg), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

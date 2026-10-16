@@ -183,6 +183,10 @@ components:
     repository: {{ .Repository }}
     insecure: true
     versionRange: "{{ .Version }}"
+{{- with index $.PostRenderers "agent-platform-connectivity" }}
+    postRenderers:
+{{ . | indent 6 }}
+{{- end }}
 {{- end }}
   # The Kubernetes MCP server (registered with muster by the connectivity
   # chart's MCPServer CR): an OAuth resource server against global.identity;

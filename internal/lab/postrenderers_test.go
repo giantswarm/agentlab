@@ -7,14 +7,11 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+	"sigs.k8s.io/kustomize/api/krusty"
+	"sigs.k8s.io/kustomize/kyaml/filesys"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
-
-// connectivityComponent is the meta chart's component name of the
-// agent-platform-connectivity chart, also its release name — named here only
-// to assert the lab renders no patch for it.
-const connectivityComponent = "agent-platform-connectivity"
 
 // Fixture refs, hoisted so the linter's constant check stays quiet.
 const (
@@ -104,7 +101,7 @@ func TestComponentPostRenderers(t *testing.T) {
 		agentManagerMCPServer:  {{agentManagerMCPServer, dexIssuerURLFlag}},
 		clusterManager:         {{clusterManager, dexIssuerURLFlag}},
 	}
-	rendered, err := componentPostRenderers(cfg, names, sidecars)
+	rendered, err := componentPostRenderers(cfg, names, sidecars, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,8 +109,9 @@ func TestComponentPostRenderers(t *testing.T) {
 	if raw, ok := rendered[config.DevImageHarness]; ok {
 		t.Errorf("harness: the Harness pins its image through the values, got postRenderers:\n%s", raw)
 	}
-	// The connectivity chart is not patched: its kagent controller metrics
-	// Service selects kagent's own release since agent-platform 3.20.2.
+	// Without agentgateway targets the connectivity chart is not patched:
+	// its kagent controller metrics Service selects kagent's own release
+	// since agent-platform 3.20.2 (patch 8: TestAgentgatewayIPv4Patches).
 	if raw, ok := rendered[connectivityComponent]; ok {
 		t.Errorf("connectivity: the lab patches nothing on the wiring chart, got postRenderers:\n%s", raw)
 	}
@@ -149,7 +147,7 @@ func TestComponentPostRenderers(t *testing.T) {
 	}
 	for _, c := range []string{componentMCPKubernetes, modelManagerMCPServer, agentManagerMCPServer, clusterManager} {
 		got := patchOn(c, kindDeployment, c)
-		if len(got) != 1 || !strings.Contains(got[0], "name: "+dexLocalhostContainer) || !strings.Contains(got[0], "TCP6-LISTEN:32000,fork,reuseaddr") || !strings.Contains(got[0], "initContainers:") || !strings.Contains(got[0], "restartPolicy: Always") {
+		if len(got) != 1 || !strings.Contains(got[0], "name: "+dexLocalhostContainer) || !strings.Contains(got[0], "TCP6-LISTEN:32000,fork,reuseaddr") || !strings.Contains(got[0], "exec socat TCP4-LISTEN:32000,fork,reuseaddr") || !strings.Contains(got[0], "initContainers:") || !strings.Contains(got[0], "restartPolicy: Always") {
 			t.Errorf("%s: want the dex-localhost native-sidecar patch on the lab Dex port, got %q", c, got)
 		}
 		if imgs := parse(c).Kustomize.Images; len(imgs) != 0 {
@@ -211,7 +209,7 @@ func TestComponentPostRenderers(t *testing.T) {
 	// (resolveDevImageNames refuses that case before the render; here the
 	// table simply has no entry).
 	delete(names, componentMuster)
-	rendered, err = componentPostRenderers(cfg, names, sidecars)
+	rendered, err = componentPostRenderers(cfg, names, sidecars, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +220,7 @@ func TestComponentPostRenderers(t *testing.T) {
 	// Without the renders (a plain `agentlab render`) no sidecar is patched
 	// — the rule has nothing to read — and no dev image, no override.
 	cfg.Platform.Agents, cfg.Platform.ModelManager.Enabled, cfg.Platform.DevImages = false, false, nil
-	rendered, err = componentPostRenderers(cfg, nil, nil)
+	rendered, err = componentPostRenderers(cfg, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -520,5 +518,289 @@ spec:
 	renders = map[string]string{"typo": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: typo\n  annotations:\n    agentlab.giantswarm.io/dex-localhost: nope\nspec:\n  template:\n    spec:\n      containers:\n        - name: x\n"}
 	if _, err := dexLocalhostTargets(cfg, renders); err == nil || !strings.Contains(err.Error(), "Deployment typo") || !strings.Contains(err.Error(), `"nope"`) {
 		t.Errorf("dexLocalhostTargets with an unreadable annotation: err = %v", err)
+	}
+}
+
+// substrateComponent is the meta chart's Substrate component, whose atenet
+// router and egress run agentgateway containers of their own (patch 8).
+const substrateComponent = "substrate"
+
+// labAgentgatewayTargets is patch 8's targets as the rule finds them on the
+// renders of the 4.x line (TestAgentgatewayIPv4Targets): the connectivity
+// chart's AgentgatewayParameters and Substrate's atenet containers.
+var labAgentgatewayTargets = map[string][]agentgatewayTarget{
+	connectivityComponent: {{kind: kindAgentgatewayParameters, name: connectivityComponent}},
+	substrateComponent: {
+		{kind: kindDeployment, name: atenetRouter, container: agentgatewayImage},
+		{kind: kindDeployment, name: atenetEgress, container: agentgatewayImage},
+	},
+}
+
+const (
+	atenetRouter = "atenet-router"
+	atenetEgress = "atenet-egress"
+)
+
+// Renders of the charts that run agentgateway, shaped like the 4.x line's:
+// the connectivity chart's AgentgatewayParameters (the edge's, and the models
+// Gateway's under platform.serving) next to the controller's Deployment,
+// whose image is not the data plane's, and Substrate's atenet router and
+// egress, each with its agentgateway container beside another.
+const (
+	connectivityGatewayRender = `apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayParameters
+metadata:
+  name: agent-platform-connectivity
+spec:
+  deployment:
+    spec:
+      replicas: 2
+      template:
+        spec:
+          containers:
+            - name: agentgateway
+              env:
+                - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayParameters
+metadata:
+  name: models
+spec:
+  service:
+    spec:
+      type: LoadBalancer
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentgateway-controller
+spec:
+  template:
+    spec:
+      containers:
+        - name: controller
+          image: gsoci.azurecr.io/giantswarm/agentgateway-upstream/controller:2.1.2
+`
+	substrateGatewayRender = `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atenet-router
+spec:
+  template:
+    spec:
+      containers:
+        - name: atenet-router
+          image: gsoci.azurecr.io/giantswarm/substrate/atenet:1.1.3
+        - name: agentgateway
+          image: gsoci.azurecr.io/giantswarm/agentgateway-upstream/agentgateway:2.3.0
+          args: [-f, /etc/agentgateway/config.yaml]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atenet-egress
+spec:
+  template:
+    spec:
+      containers:
+        - name: agentgateway
+          image: gsoci.azurecr.io/giantswarm/agentgateway-upstream/agentgateway:2.3.0
+          env:
+            - {name: RUST_LOG, value: debug}
+        - name: ext-proc
+          image: gsoci.azurecr.io/giantswarm/substrate/atenet:1.1.3
+`
+)
+
+// Patch 8 selects, off the renders, every AgentgatewayParameters and every
+// container that runs the agentgateway data-plane image — not the
+// controller, not a sibling container, nothing in a chart without either.
+func TestAgentgatewayIPv4Targets(t *testing.T) {
+	got := agentgatewayIPv4Targets(map[string]string{
+		connectivityComponent: connectivityGatewayRender,
+		substrateComponent:    substrateGatewayRender,
+		componentMuster:       "apiVersion: apps/v1\nkind: Deployment\nmetadata: {name: muster}\nspec:\n  template:\n    spec:\n      containers:\n        - {name: muster, image: gsoci.azurecr.io/giantswarm/muster:5.0.0}\n",
+	})
+	want := map[string][]agentgatewayTarget{
+		connectivityComponent: {
+			{kind: kindAgentgatewayParameters, name: connectivityComponent},
+			{kind: kindAgentgatewayParameters, name: modelsGatewayName},
+		},
+		substrateComponent: labAgentgatewayTargets[substrateComponent],
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("agentgatewayIPv4Targets = %+v, want %+v", got, want)
+	}
+	if got := agentgatewayIPv4Targets(nil); len(got) != 0 {
+		t.Errorf("agentgatewayIPv4Targets(nil) = %v", got)
+	}
+}
+
+// Patch 8 as Flux's helm-controller applies it — kustomize over the chart's
+// render: agentgateway's IPv6 switch off in the AgentgatewayParameters'
+// rawConfig (the controller merges it into the data plane's config file) and
+// on the atenet agentgateway containers, every other field and env entry of
+// the render kept. With IPv6 on the data plane binds [::] and crash-loops on
+// a host that boots with ipv6.disable=1.
+func TestAgentgatewayIPv4Patches(t *testing.T) {
+	gateways := agentgatewayIPv4Targets(map[string]string{
+		connectivityComponent: connectivityGatewayRender,
+		substrateComponent:    substrateGatewayRender,
+	})
+	rendered, err := componentPostRenderers(config.Default(), nil, nil, gateways)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type object struct {
+		Kind     string `yaml:"kind"`
+		Metadata struct {
+			Name string `yaml:"name"`
+		} `yaml:"metadata"`
+		Spec map[string]any `yaml:"spec"`
+	}
+	objects := map[string]object{}
+	for component, render := range map[string]string{connectivityComponent: connectivityGatewayRender, substrateComponent: substrateGatewayRender} {
+		out := kustomizeRender(t, render, rendered[component])
+		dec := yaml.NewDecoder(strings.NewReader(out))
+		for {
+			var o object
+			if dec.Decode(&o) != nil {
+				break
+			}
+			objects[o.Metadata.Name] = o
+		}
+	}
+	at := func(name string, path ...any) any {
+		var cur any = objects[name].Spec
+		for _, key := range path {
+			switch k := key.(type) {
+			case string:
+				m, _ := cur.(map[string]any)
+				cur = m[k]
+			case int:
+				l, _ := cur.([]any)
+				if k >= len(l) {
+					return nil
+				}
+				cur = l[k]
+			}
+		}
+		return cur
+	}
+	for _, name := range []string{connectivityComponent, modelsGatewayName} {
+		if got := at(name, "rawConfig", "config", "enableIpv6"); got != false {
+			t.Errorf("AgentgatewayParameters %s: rawConfig.config.enableIpv6 = %v, want false", name, got)
+		}
+	}
+	if at(connectivityComponent, "deployment", "spec", "replicas") != 2 || at(connectivityComponent, "deployment", "spec", "template", "spec", "containers", 0, "env", 0, "value") != "grpc" ||
+		at(modelsGatewayName, "service", "spec", "type") != "LoadBalancer" {
+		t.Errorf("the patch must keep the chart's fields: %+v / %+v", objects[connectivityComponent].Spec, objects[modelsGatewayName].Spec)
+	}
+	envOf := func(deployment, container string) map[string]any {
+		env := map[string]any{}
+		containers, _ := at(deployment, "template", "spec", "containers").([]any)
+		for _, c := range containers {
+			c := c.(map[string]any)
+			if c["name"] != container {
+				continue
+			}
+			list, _ := c["env"].([]any)
+			for _, e := range list {
+				e := e.(map[string]any)
+				env[e["name"].(string)] = e["value"]
+			}
+		}
+		return env
+	}
+	if env := envOf(atenetRouter, agentgatewayImage); !reflect.DeepEqual(env, map[string]any{agentgatewayIPv6Var: agentgatewayIPv6Off}) {
+		t.Errorf("atenet-router/agentgateway env = %v", env)
+	}
+	if env := envOf(atenetEgress, agentgatewayImage); !reflect.DeepEqual(env, map[string]any{"RUST_LOG": "debug", agentgatewayIPv6Var: agentgatewayIPv6Off}) {
+		t.Errorf("atenet-egress/agentgateway env = %v", env)
+	}
+	for deployment, container := range map[string]string{atenetRouter: atenetRouter, atenetEgress: "ext-proc"} {
+		if env := envOf(deployment, container); len(env) != 0 {
+			t.Errorf("%s/%s: the sibling container is not agentgateway, got env %v", deployment, container, env)
+		}
+	}
+}
+
+// kustomizeRender runs a component's postRenderers (componentPostRenderers'
+// YAML) over its render the way helm-controller's kustomize post-renderer
+// does: the render as the one resource, the patches and images as the
+// Kustomization's.
+func kustomizeRender(t *testing.T, render, postRenderers string) string {
+	t.Helper()
+	var list []postRenderer
+	if err := yaml.Unmarshal([]byte(postRenderers), &list); err != nil || len(list) != 1 {
+		t.Fatalf("postRenderers: %v\n%s", err, postRenderers)
+	}
+	kustomization, err := yaml.Marshal(map[string]any{
+		"apiVersion": "kustomize.config.k8s.io/v1beta1",
+		"kind":       "Kustomization",
+		"resources":  []string{"render.yaml"},
+		"patches":    list[0].Kustomize.Patches,
+		"images":     list[0].Kustomize.Images,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs := filesys.MakeFsInMemory()
+	for name, data := range map[string]string{"render.yaml": render, "kustomization.yaml": string(kustomization)} {
+		if err := fs.WriteFile(name, []byte(data)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resMap, err := krusty.MakeKustomizer(krusty.MakeDefaultOptions()).Run(fs, ".")
+	if err != nil {
+		t.Fatalf("kustomize: %v\n%s", err, kustomization)
+	}
+	out, err := resMap.AsYaml()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
+}
+
+// The dex-localhost sidecar as kustomize leaves it on the server's
+// Deployment: the alpine shell picks socat's listener — the dual-stack IPv6
+// wildcard where the pod has an IPv6 stack, the IPv4 one on a host that
+// boots with ipv6.disable=1, where the IPv6 socket cannot be created — and
+// the server's own container is untouched.
+func TestDexLocalhostPatchListens(t *testing.T) {
+	var pr postRenderer
+	pr.Kustomize.Patches = []kustomizePatch{dexLocalhostPatch(componentMCPKubernetes, 32000)}
+	raw, err := yaml.Marshal([]postRenderer{pr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := kustomizeRender(t, "apiVersion: apps/v1\nkind: Deployment\nmetadata: {name: mcp-kubernetes}\nspec:\n  template:\n    spec:\n      containers:\n        - {name: mcp-kubernetes, image: gsoci.azurecr.io/giantswarm/mcp-kubernetes:1.0.0}\n", string(raw))
+	var d struct {
+		Spec struct {
+			Template struct {
+				Spec struct {
+					InitContainers []struct {
+						Name    string   `yaml:"name"`
+						Command []string `yaml:"command"`
+						Args    []string `yaml:"args"`
+					} `yaml:"initContainers"`
+					Containers []renderedContainer `yaml:"containers"`
+				} `yaml:"spec"`
+			} `yaml:"template"`
+		} `yaml:"spec"`
+	}
+	if err := yaml.Unmarshal([]byte(out), &d); err != nil {
+		t.Fatal(err)
+	}
+	init := d.Spec.Template.Spec.InitContainers
+	want := "if [ -e /proc/net/if_inet6 ]; then exec socat TCP6-LISTEN:32000,fork,reuseaddr TCP:dex.dex.svc.cluster.local:5556; fi; " +
+		"exec socat TCP4-LISTEN:32000,fork,reuseaddr TCP:dex.dex.svc.cluster.local:5556"
+	if len(init) != 1 || init[0].Name != dexLocalhostContainer || !reflect.DeepEqual(init[0].Command, []string{"/bin/sh", "-c"}) || !reflect.DeepEqual(init[0].Args, []string{want}) {
+		t.Errorf("sidecar = %+v, want %s running %q", init, dexLocalhostContainer, want)
+	}
+	if c := d.Spec.Template.Spec.Containers; len(c) != 1 || c[0].Name != componentMCPKubernetes || len(c[0].Args) != 0 {
+		t.Errorf("the server's container must be untouched, got %+v", c)
 	}
 }

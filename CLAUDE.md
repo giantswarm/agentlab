@@ -319,7 +319,7 @@ The lab's own e2e checks are the `*-test` subcommands, not `go test`.
   (`helm.go`: Helm 4's SDK in-process, no `helm` binary — it writes a regular
   release the CLI reads); the lab's patches on the
   component charts (hostNetwork, the dex-localhost sidecar, the kagent UI
-  NodePort, dev images) are per-component `postRenderers` values the chart
+  NodePort, agentgateway's IPv4 binds, dev images) are per-component `postRenderers` values the chart
   forwards to the component HelmReleases (`postrenderers.go`), and the image
   preload resolves the component charts from the rendered OCIRepositories
   (`fluxreleases.go`).
