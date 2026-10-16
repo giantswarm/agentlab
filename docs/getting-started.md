@@ -150,7 +150,7 @@ export ANTHROPIC_API_KEY=sk-ant-...   # optional: powers the agents + Backstage 
 ./agentlab platform-test   # headless proof: Dex -> muster -> mcp-kubernetes -> apiserver, + the per-server OAuth sign-in challenge
 ./agentlab models-test     # with a model server on the host: pull -> ModelConfig -> agent turn -> delete, through the platform
 ./agentlab serving-test    # with platform.serving: the lab preset on llm-d -> Ready on the CPU runtime -> ModelConfig -> a completion through the models Gateway -> agent turn -> unload
-./agentlab agents-test     # agent-manager as the signed-in user: create -> ready -> update -> delete via muster; a viewer's create is Forbidden; the ServiceAccount holds no RBAC
+./agentlab agents-test     # agent-manager as the signed-in user: create -> ready -> update -> delete via muster; a viewer's create is Forbidden; the ServiceAccount holds no RBAC (minting: only the skills-Secret Role)
 ./agentlab toolsets-test   # declared toolsets end to end: agent-manager requires one, the Agent carries the header, muster resolves and refuses per request, agents see their toolset, a per-server sign-in scopes tools to the token, the portal's Tools step and apply path
 ./agentlab a2a-test        # turns over native gRPC through the edge as the surfaces drive them: the route and its JWT policy, no token refused, a forged x-user-id replaced, discovery with annotations, a streamed turn, HITL approve/reject, CancelTask server-side
 ```
