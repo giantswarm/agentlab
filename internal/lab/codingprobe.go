@@ -17,11 +17,13 @@ import (
 // codingProbe is the readings a turn relayed, by name.
 type codingProbe map[string]string
 
-// parseCodingProbe reads the marker lines out of a reply.
+// parseCodingProbe reads the marker lines out of a reply. A value loses the
+// markdown a model wraps a relayed line in (code spans, bold), which a small
+// model adds even when told to relay verbatim.
 func parseCodingProbe(reply string) codingProbe {
 	probe := codingProbe{}
 	for _, m := range probeLine.FindAllStringSubmatch(reply, -1) {
-		probe[m[1]] = strings.TrimSpace(strings.Trim(strings.TrimSpace(m[2]), "`"))
+		probe[m[1]] = strings.TrimSpace(strings.Trim(strings.TrimSpace(m[2]), "`*"))
 	}
 	return probe
 }

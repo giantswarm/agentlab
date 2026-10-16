@@ -1028,6 +1028,14 @@ Claude Code, as on a developer's laptop. Writing to a forge with `git` and
 (`workspaces-test`), once the line carries the person's forge credential in
 the Session.
 
+Each turn has a deadline by the model the agent runs on, which the turn
+prints as it starts: 40 minutes on a model a host model server serves (a
+ModelConfig model-manager wired, or one whose endpoint is
+`host.agentlab.internal`), where a coding runtime's calls take a minute and
+more each on the lab machine's hardware, 10 minutes on a hosted model.
+`--turn-timeout` sets it by hand; `--ready-timeout` bounds the boots and the
+waits outside a turn.
+
 ### The Substrate step proof (conversations across a Substrate release)
 
 `agentlab substrate-step-test --to <release>` proves that agents keep their

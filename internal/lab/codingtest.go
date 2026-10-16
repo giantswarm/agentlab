@@ -165,16 +165,33 @@ const (
 	harnessProcessName = "kagent-claude"
 )
 
-// DefaultCodingReadyTimeout bounds each boot and turn of the proof.
+// DefaultCodingReadyTimeout bounds each boot and wait of the proof.
 const DefaultCodingReadyTimeout = 10 * time.Minute
+
+// The turn budgets by the model the agent runs on: a hosted model answers a
+// turn's calls in seconds, a model a host model server serves on the lab
+// machine's own hardware (qwen3.5:9b on Ollama, for one) takes a minute and
+// more per call, and a coding runtime makes several calls per turn.
+const (
+	hostedModelTurnTimeout = 10 * time.Minute
+	hostModelTurnTimeout   = 40 * time.Minute
+)
+
+// modelManagerBackendLabel names the backend a model-manager ModelConfig's
+// model is served by; in the lab every backend is a host model server.
+const modelManagerBackendLabel = "model-manager.giantswarm.io/backend"
 
 // CodingTestOptions tunes the coding agents proof.
 type CodingTestOptions struct {
 	// Email is the lab user the agents are created by and the turns sent
 	// as; empty is the admin.
 	Email string
-	// ReadyTimeout bounds each agent's boot and each turn.
+	// ReadyTimeout bounds each agent's boot and each wait outside a turn.
 	ReadyTimeout time.Duration
+	// TurnTimeout bounds each turn; zero is the budget of the model the
+	// agent runs on (hostModelTurnTimeout on a host model server's model,
+	// hostedModelTurnTimeout otherwise).
+	TurnTimeout time.Duration
 	// Harness is the coding Harness the proof runs on, one of the runtimes
 	// the lab renders (platform.coding.harnesses); empty is claude.
 	Harness string
@@ -208,7 +225,7 @@ func CodingTest(cfg *config.Config, opts CodingTestOptions) error {
 	if user == nil {
 		return fmt.Errorf("no lab user %q in %s", opts.Email, config.File)
 	}
-	p := &codingProof{cfg: cfg, rt: rt, modelConfig: opts.ModelConfig, user: user, timeout: opts.ReadyTimeout, stages: newProofStages()}
+	p := &codingProof{cfg: cfg, rt: rt, modelConfig: opts.ModelConfig, user: user, timeout: opts.ReadyTimeout, turnTimeout: opts.TurnTimeout, stages: newProofStages()}
 	defer p.cleanup()
 	return p.stages.close(p.run())
 }
@@ -221,6 +238,10 @@ type codingProof struct {
 	modelConfig string
 	user        *config.User
 	timeout     time.Duration
+	// turnTimeout bounds each turn, turnBudget says where it comes from:
+	// the flag or the model the agent runs on.
+	turnTimeout time.Duration
+	turnBudget  string
 	stages      *proofStages
 	muster      *musterSession
 	api         *kagentAPI
@@ -278,6 +299,7 @@ func (p *codingProof) run() error {
 			return err
 		}
 	}
+	p.setTurnBudget(modelConfig)
 	p.removeAgents()
 
 	verdict := "accepted"
@@ -354,7 +376,7 @@ func (p *codingProof) run() error {
 	}
 	called := parseCodingProbe(reply)["mcp-call"]
 	if !strings.Contains(called, codingTestAgent) {
-		return fmt.Errorf("%s through the agent's binding on Harness %s answered %q, wanted a list naming %s (%s)", codingTestReadTool, harness, firstNonEmpty(called, excerpt(reply, 400)), codingTestAgent, p.line)
+		return fmt.Errorf("%s through the agent's binding on Harness %s answered %q, wanted a list naming %s; the reply: %q (%s)", codingTestReadTool, harness, called, codingTestAgent, excerpt(reply, 400), p.line)
 	}
 	note("%s listed: %s", codingTestReadTool, excerpt(called, 240))
 
@@ -616,11 +638,13 @@ func (p *codingProof) createSession(ctx context.Context, agent string) (*apiv1al
 // turn sends one message and waits for the task to settle completed: the
 // reply's text and the status metadata.
 func (p *codingProof) turn(ctx context.Context, session *apiv1alpha1.Session, prompt string) (string, map[string]any, error) {
-	ctx, cancel := context.WithTimeout(ctx, p.timeout)
+	note("turn on Session %s, deadline %s (%s)", session.GetId(), p.turnTimeout, p.turnBudget)
+	ctx, cancel := context.WithTimeout(ctx, p.turnTimeout)
 	defer cancel()
+	start := time.Now()
 	t, err := p.api.turn(ctx, session, userMessage(prompt))
 	if err != nil {
-		return "", nil, fmt.Errorf("the turn on Session %s: %w", session.GetId(), err)
+		return "", nil, fmt.Errorf("the turn on Session %s after %s of its %s deadline (%s): %w", session.GetId(), time.Since(start).Round(time.Second), p.turnTimeout, p.turnBudget, err)
 	}
 	reply, err := t.completedText()
 	if err != nil {
@@ -712,6 +736,56 @@ func readHarnessLimits(ctx context.Context, name string) (any, error) {
 	}
 	limits, _, _ := unstructured.NestedFieldNoCopy(obj.Object, harnessLimitsPath...)
 	return limits, nil
+}
+
+// setTurnBudget sets the turn deadline: --turn-timeout where given, else the
+// budget of the model the ModelConfig names, the host model server's
+// longer one where the lab machine serves it. A ModelConfig that cannot be
+// read gets the hosted budget, said so.
+func (p *codingProof) setTurnBudget(modelConfig string) {
+	if p.turnTimeout > 0 {
+		p.turnBudget = "--turn-timeout"
+		return
+	}
+	mc, err := readModelConfig(modelConfig)
+	if err != nil {
+		p.turnTimeout, p.turnBudget = hostedModelTurnTimeout, fmt.Sprintf("ModelConfig %s unread, the hosted model budget: %v", modelConfig, err)
+		return
+	}
+	if server, ok := hostModelServer(mc); ok {
+		p.turnTimeout, p.turnBudget = hostModelTurnTimeout, fmt.Sprintf("ModelConfig %s: %s on the host model server %s", modelConfig, modelOf(mc), server)
+		return
+	}
+	p.turnTimeout, p.turnBudget = hostedModelTurnTimeout, fmt.Sprintf("ModelConfig %s: %s, a hosted model", modelConfig, modelOf(mc))
+}
+
+// hostModelServer names the host model server a ModelConfig's model runs
+// on: model-manager's backend (every backend of the lab is one), else the
+// lab host the ModelConfig's endpoint names (an extraModels entry on a host
+// server). ok is false for a hosted model.
+func hostModelServer(mc *unstructured.Unstructured) (string, bool) {
+	if backend := mc.GetLabels()[modelManagerBackendLabel]; backend != "" {
+		return backend, true
+	}
+	spec, _, _ := unstructured.NestedMap(mc.Object, "spec")
+	for _, provider := range spec {
+		fields, ok := provider.(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, value := range fields {
+			if endpoint, ok := value.(string); ok && strings.Contains(endpoint, "://"+labHostName) {
+				return endpoint, true
+			}
+		}
+	}
+	return "", false
+}
+
+// modelOf is a ModelConfig's spec.model.
+func modelOf(mc *unstructured.Unstructured) string {
+	model, _, _ := unstructured.NestedString(mc.Object, "spec", "model")
+	return firstNonEmpty(model, "a model")
 }
 
 // readAgentEgress reads the Agent's spec.egress.
