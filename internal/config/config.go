@@ -1184,6 +1184,12 @@ type ExtraModel struct {
 	// reasoning_effort with every call. `none` switches a thinking model's
 	// reasoning off on Ollama's /v1 alias.
 	ReasoningEffort string `yaml:"reasoningEffort,omitempty"`
+	// OpenAI provider only: the ModelConfig's openAI.apiFormat, the HTTP API
+	// the model is called through — the key agent-platform-connectivity's
+	// kagent.modelConfigs[] entries carry. `responses` for a model a codex
+	// agent uses (the codex runtime speaks the Responses API only);
+	// `chatCompletions` is the CRD's default.
+	APIFormat string `yaml:"apiFormat,omitempty"`
 	// Ollama provider only: the ModelConfig's ollama.think, sent as the chat
 	// request's think field. false switches a thinking model's reasoning off
 	// on kagent's native Ollama provider (docs/models.md "Agent proofs without
@@ -1220,6 +1226,9 @@ var ModelProviderNames = []string{ProviderOpenAI, ProviderAnthropic, ProviderGem
 // ReasoningEfforts is the ModelConfig CRD's enum for openAI.reasoningEffort on
 // the kagent line (api.kagent.dev/v1alpha3).
 var ReasoningEfforts = []string{"none", "minimal", "low", "medium", "high", "xhigh"}
+
+// APIFormats is the ModelConfig CRD's enum for openAI.apiFormat.
+var APIFormats = []string{"chatCompletions", "responses"}
 
 // SecretName is the Kubernetes Secret (in ns kagent) holding this model's key.
 func (m ExtraModel) SecretName() string { return "kagent-" + m.Name }
@@ -1642,6 +1651,14 @@ func (m ExtraModel) Validate() error {
 		}
 		if !slices.Contains(ReasoningEfforts, m.ReasoningEffort) {
 			return fmt.Errorf("%s: unknown reasoningEffort %q (one of %s)", m.Name, m.ReasoningEffort, strings.Join(ReasoningEfforts, ", "))
+		}
+	}
+	if m.APIFormat != "" {
+		if m.Provider != ProviderOpenAI {
+			return fmt.Errorf("%s: apiFormat applies to the OpenAI provider only (the ModelConfig's openAI.apiFormat)", m.Name)
+		}
+		if !slices.Contains(APIFormats, m.APIFormat) {
+			return fmt.Errorf("%s: unknown apiFormat %q (one of %s)", m.Name, m.APIFormat, strings.Join(APIFormats, ", "))
 		}
 	}
 	return nil

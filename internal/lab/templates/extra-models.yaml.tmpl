@@ -43,13 +43,16 @@ spec:
   anthropic:
     baseUrl: {{ .BaseURL }}
 {{- end }}
-{{- else if or .BaseURL .ReasoningEffort }}
+{{- else if or .BaseURL .ReasoningEffort .APIFormat }}
   openAI:
 {{- if .BaseURL }}
     baseUrl: {{ .BaseURL }}
 {{- end }}
 {{- if .ReasoningEffort }}
     reasoningEffort: {{ .ReasoningEffort }}
+{{- end }}
+{{- if .APIFormat }}
+    apiFormat: {{ .APIFormat }}
 {{- end }}
 {{- end }}
 {{- end }}

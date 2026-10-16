@@ -19,7 +19,7 @@ import (
 // TestExtraModelsTemplate renders the extra-models template across every
 // provider shape and asserts the provider-specific spec blocks: the OpenAI
 // baseUrl section, the Ollama host mapping, the secret reference wiring, and
-// the tls escape hatch and the reasoning effort.
+// the tls escape hatch, the reasoning effort and the API format.
 func TestExtraModelsTemplate(t *testing.T) {
 	cfg := config.Default()
 	cfg.Platform.ExtraModels = []config.ExtraModel{
@@ -32,6 +32,7 @@ func TestExtraModelsTemplate(t *testing.T) {
 		{Name: "claude-proxy", Provider: config.ProviderAnthropic, Model: "claude-haiku-4-5", BaseURL: "https://proxy.example.com"},
 		{Name: "ollama-v1", Provider: config.ProviderOpenAI, Model: "qwen3.5:2b", BaseURL: "http://172.21.0.1:11434/v1", ReasoningEffort: "none"},
 		{Name: "gpt-low", Provider: config.ProviderOpenAI, Model: "gpt-5", ReasoningEffort: "low"},
+		{Name: "gpt-codex", Provider: config.ProviderOpenAI, Model: "gpt-5-codex", APIFormat: "responses"},
 		{Name: "ollama-native", Provider: config.ProviderOllama, Model: "qwen3.5:2b", BaseURL: "http://172.21.0.1:11434", Think: new(false)},
 	}
 	raw, err := renderTemplate(cfg, "extra-models.yaml.tmpl", nil)
@@ -71,6 +72,12 @@ func TestExtraModelsTemplate(t *testing.T) {
 	}
 	if strings.Count(out, "reasoningEffort:") != 2 {
 		t.Errorf("reasoningEffort rendered for entries that set none:\n%s", out)
+	}
+	if !strings.Contains(out, "model: gpt-5-codex\n  apiKeySecret: kagent-gpt-codex\n  apiKeySecretKey: OPENAI_API_KEY\n  openAI:\n    apiFormat: responses") {
+		t.Errorf("an OpenAI entry's apiFormat must render under openAI, with or without an endpoint:\n%s", out)
+	}
+	if strings.Count(out, "apiFormat:") != 1 {
+		t.Errorf("apiFormat rendered for entries that set none:\n%s", out)
 	}
 	if !strings.Contains(out, "ollama:\n    host: http://172.21.0.1:11434\n    think: false") {
 		t.Errorf("an Ollama entry's think must render under ollama:\n%s", out)
