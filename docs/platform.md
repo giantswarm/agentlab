@@ -988,6 +988,26 @@ names by digest (`agentlab configure --coding-images omp=<image>`; the
 release's chart stamps it as `runtimeImages.ompHarness.digest`), a dev
 image (`platform.devImages` `omp-harness`) winning over it.
 
+A codex proof on a host model needs a model that follows the probe prompts
+and relays their lines verbatim: **`gpt-oss:20b`** on Ollama (13 GB at its
+MXFP4 weights; 16 GiB of memory free while it is loaded), or
+`qwen3-coder:30b` (the 30b-a3b at Q4_K_M, 19 GB; 21 GiB). A small model
+such as `qwen3.5:9b` runs every turn but relays the probe unreliably, and
+the proof fails at a different stage each run. With the codex Harness
+rendered, `agentlab configure` wires the first of the two the host's Ollama
+has downloaded as the extraModels entry `codex-host` (the `OpenAI` provider
+on Ollama's `/v1`, `apiFormat: responses`, keyless), and `coding-test
+--harness codex` runs on the first extraModels entry on the Responses API
+unless `--model-config` names another, under the 40m host model turn
+deadline:
+
+```sh
+ollama pull gpt-oss:20b
+agentlab configure --defaults --coding --coding-harnesses claude,codex
+agentlab platform
+agentlab coding-test --harness codex
+```
+
 The workspaces proof's claude Session runs on the same `claude` Harness,
 which the lab also renders with the workspaces on and coding off.
 
