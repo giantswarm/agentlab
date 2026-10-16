@@ -403,7 +403,14 @@ func AgentsTest(cfg *config.Config, email string) error {
 	if err != nil {
 		return err
 	}
-	grants := agentManagerGrants(values)
+	rec, err := readTenantReconciler()
+	if err != nil {
+		return err
+	}
+	if switchedOn, _ := nestedValue(values, "tenants", "organizations", valuesEnabled).(bool); switchedOn && !rec.multiTenant {
+		note("tenants.organizations.enabled is on, but agent-manager runs without --multi-tenant=true: the installed chart does not turn the tenant reconciler on, so its ClusterRole is not allowed")
+	}
+	grants := agentManagerGrants(values, rec.multiTenant)
 	granted, err := rulesBeyondGrants(rulesBeyond(rules, baseline), grants)
 	if err != nil {
 		return err
@@ -917,19 +924,21 @@ func (g saGrant) String() string {
 //   - agent-manager.skills.mintGitAuthSecret: the skills-Secret Role
 //     (templates/skills-token.yaml), secrets get and update by the minted
 //     names;
-//   - tenants.organizations.enabled: the tenant reconciler's ClusterRole
+//   - tenants.organizations.enabled, where agent-manager runs with
+//     --multi-tenant (a chart that does not pass the switch on renders no
+//     reconciler and no ClusterRole): the tenant reconciler's ClusterRole
 //     (agent-manager's templates/tenants-rbac.yaml) with the default
 //     ModelConfig's key Secret the meta chart derives from
 //     kagent.providers.<default>.apiKeySecretRef, and, with networkPolicy
 //     enabled, the workers' policy kind of networkPolicy.flavor (either kind
 //     for `auto`, which the cluster resolves; optional, as the chart renders
 //     it only with Agent Substrate on).
-func agentManagerGrants(values map[string]any) []saGrant {
+func agentManagerGrants(values map[string]any, multiTenant bool) []saGrant {
 	var grants []saGrant
 	if minted := mintedSkillsSecretNames(values); minted != nil {
 		grants = append(grants, saGrant{resource: gvrSecrets.Resource, names: minted, verbs: mintGrantVerbs, by: "agent-manager." + skillsKey + "." + skillsMintValue})
 	}
-	if enabled, _ := nestedValue(values, "tenants", "organizations", valuesEnabled).(bool); !enabled {
+	if enabled, _ := nestedValue(values, "tenants", "organizations", valuesEnabled).(bool); !enabled || !multiTenant {
 		return grants
 	}
 	for _, row := range strings.Split(tenantsGrantRows, "\n") {

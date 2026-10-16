@@ -133,7 +133,7 @@ func TestRulesBeyondGrants(t *testing.T) {
 		{"minting and tenants", true, true, joined(tenantsRoleRows, mintRoleRows)},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			grants := agentManagerGrants(switchValues(c.mint, c.tenants, "kagent-anthropic"))
+			grants := agentManagerGrants(switchValues(c.mint, c.tenants, "kagent-anthropic"), c.tenants)
 			if got, err := rulesBeyondGrants(c.held, grants); err != nil || len(got) != 0 {
 				t.Errorf("exactly the switches' RBAC: %v, %v; want nothing granted", got, err)
 			}
@@ -158,7 +158,7 @@ func TestRulesBeyondGrants(t *testing.T) {
 		})
 	}
 
-	grants := agentManagerGrants(switchValues(true, true, "kagent-anthropic"))
+	grants := agentManagerGrants(switchValues(true, true, "kagent-anthropic"), true)
 	for name, row := range map[string]string{ // #nosec G101 -- RBAC rows naming Secrets, not credentials
 		"another minted Secret": "secrets  []  [agent-manager-skills-token another]  [get update]",
 		"another verb":          "secrets  []  [agent-manager-skills-token]  [get update list]",
@@ -183,14 +183,14 @@ func TestRulesBeyondGrants(t *testing.T) {
 func TestAgentManagerGrants(t *testing.T) {
 	keyRow := "secrets  []  [kagent-openai]  [get list watch update delete]"
 	held := slices.DeleteFunc(slices.Clone(tenantsRoleRows), func(r string) bool { return strings.Contains(r, "kagent-anthropic") })
-	if got, err := rulesBeyondGrants(append(held, keyRow), agentManagerGrants(switchValues(false, true, "kagent-openai"))); err != nil || len(got) != 0 {
+	if got, err := rulesBeyondGrants(append(held, keyRow), agentManagerGrants(switchValues(false, true, "kagent-openai"), true)); err != nil || len(got) != 0 {
 		t.Errorf("the default provider's key kagent-openai: %v, %v; want nothing granted", got, err)
 	}
 
 	withPolicy := func(flavor string) []saGrant {
 		values := switchValues(false, true, "kagent-anthropic")
 		values["networkPolicy"] = map[string]any{valuesEnabled: true, "flavor": flavor}
-		return agentManagerGrants(values)
+		return agentManagerGrants(values, true)
 	}
 	for flavor, want := range map[string][]string{
 		"cilium":     {"ciliumnetworkpolicies.cilium.io"},
@@ -218,8 +218,14 @@ func TestAgentManagerGrants(t *testing.T) {
 	if got, _ := rulesBeyondGrants(joined(tenantsRoleRows, kubernetes), withPolicy("cilium")); !reflect.DeepEqual(got, kubernetes) {
 		t.Errorf("the kubernetes policy kind with flavor cilium: %v, want it granted", got)
 	}
-	if got := agentManagerGrants(switchValues(false, false, "kagent-anthropic")); got != nil {
+	if got := agentManagerGrants(switchValues(false, false, "kagent-anthropic"), true); got != nil {
 		t.Errorf("no switch: %v, want no grants", got)
+	}
+	if got := agentManagerGrants(switchValues(false, true, "kagent-anthropic"), false); got != nil {
+		t.Errorf("the tenants on, agent-manager without --multi-tenant: %v, want no grants", got)
+	}
+	if _, err := rulesBeyondGrants(nil, agentManagerGrants(switchValues(false, true, "kagent-anthropic"), false)); err != nil {
+		t.Errorf("the tenants on, agent-manager without --multi-tenant, no ClusterRole: %v", err)
 	}
 }
 
