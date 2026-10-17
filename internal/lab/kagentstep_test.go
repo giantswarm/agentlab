@@ -102,7 +102,7 @@ func TestKagentStepConfig(t *testing.T) {
 // TestKagentStepIsStep: --to must be newer than the kagent the lab runs,
 // --chart another chart than the one in place.
 func TestKagentStepIsStep(t *testing.T) {
-	before := kagentRunning{chart: testChartBefore, kagent: testKagentFrom}
+	before := kagentRunning{chart: testChartBefore, kagent: testKagentFrom + "+a9dbe3d860c5"}
 	for _, tc := range []struct {
 		opts KagentStepOptions
 		ok   bool
@@ -132,6 +132,7 @@ func TestKagentStepped(t *testing.T) {
 		wantErr string
 	}{
 		{"pinned", kagentRunning{chart: testChartBefore, kagent: testKagentTo}, KagentStepOptions{To: testKagentTo}, ""},
+		{"pinned, with build metadata", kagentRunning{chart: testChartBefore, kagent: testKagentTo + "+3177c6907334"}, KagentStepOptions{To: testKagentTo}, ""},
 		{"pin not applied", kagentRunning{chart: testChartBefore, kagent: testKagentFrom}, KagentStepOptions{To: testKagentTo}, "not " + testKagentTo},
 		{"candidate steps kagent", kagentRunning{chart: testChartRC, kagent: "1.15.0"}, KagentStepOptions{Chart: testChartRC}, ""},
 		{"candidate keeps kagent", kagentRunning{chart: testChartRC, kagent: testKagentFrom}, KagentStepOptions{Chart: testChartRC}, "moves no kagent step"},

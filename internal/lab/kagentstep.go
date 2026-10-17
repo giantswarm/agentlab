@@ -371,7 +371,9 @@ func kagentStepped(before, after kagentRunning, opts KagentStepOptions) error {
 		return fmt.Errorf("the platform upgrade finished, but the lab runs agent-platform %s, not %s", after.chart, opts.Chart)
 	}
 	if opts.To != "" {
-		if after.kagent != opts.To {
+		// The HelmRelease applies the chart with its build metadata
+		// (1.14.0+3177c6907334), which a version comparison ignores.
+		if got, err := semver.NewVersion(after.kagent); err != nil || !got.Equal(semver.MustParse(opts.To)) {
 			return fmt.Errorf("the platform upgrade finished, but the kagent HelmRelease applied %s, not %s: %s", after.kagent, opts.To, after)
 		}
 		return nil
