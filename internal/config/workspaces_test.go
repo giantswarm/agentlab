@@ -178,3 +178,34 @@ func TestWorkspacesSyncRefreshAfter(t *testing.T) {
 		}
 	}
 }
+
+// The instance muster pins the workspace-manager to: the first instance
+// while grantProvider is empty, the named one otherwise; a name of no
+// configured instance is refused.
+func TestWorkspaceGrantProvider(t *testing.T) {
+	for _, c := range []struct{ provider, grant, want string }{
+		{"", "", WorkspaceProviderFake},
+		{WorkspaceProviderFake + "," + WorkspaceProviderGitHub, "", WorkspaceProviderFake},
+		{WorkspaceProviderGitHub + "," + WorkspaceProviderGitLab, "", WorkspaceProviderGitHub},
+		{WorkspaceProviderFake + "," + WorkspaceProviderGitLab, WorkspaceProviderGitLab, WorkspaceProviderGitLab},
+	} {
+		cfg := Default()
+		cfg.Platform.Workspaces.Enabled = true
+		cfg.Platform.Workspaces.Provider, cfg.Platform.Workspaces.GrantProvider = c.provider, c.grant
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("%q/%q: %v", c.provider, c.grant, err)
+		}
+		if got := cfg.WorkspaceGrantProvider(); got != c.want {
+			t.Errorf("%q/%q: WorkspaceGrantProvider() = %q, want %q", c.provider, c.grant, got, c.want)
+		}
+	}
+	cfg := Default()
+	cfg.Platform.Workspaces.Enabled = true
+	cfg.Platform.Workspaces.Provider, cfg.Platform.Workspaces.GrantProvider = WorkspaceProviderFake, WorkspaceProviderGitLab
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "grantProvider") {
+		t.Errorf("a grantProvider of no configured instance: err = %v, want refused", err)
+	}
+	if got := Default().WorkspaceGrantProvider(); got != "" {
+		t.Errorf("workspaces off: WorkspaceGrantProvider() = %q, want none", got)
+	}
+}

@@ -1224,15 +1224,18 @@ func printSaved(cfg *config.Config, disc *lab.Discovery) {
 		fmt.Printf("  workspaces an NFS server on %s and the NFS CSI driver behind its mTLS proxy; the read-write-many StorageClass %s\n", lab.WorkspacesNode(cfg), lab.WorkspacesStorageClass)
 	}
 	if cfg.WorkspaceFakeProvider() {
-		fmt.Printf("  ws-fake    the workspace-manager's provider instance fake: the lab's own GitHub at %s (its App, key pair and client secret the lab's; Secret %s/%s), the App's callback URL %s, Dex redirect URI %s\n",
-			cfg.GitHubFakeURL(), config.DefaultGitHubSecretNamespace, config.WorkspaceFakeSecretName, cfg.WorkspaceCallbackURL(config.WorkspaceProviderFake), cfg.WorkspaceManagerSignInURL())
+		fmt.Printf("  ws-fake    the workspace-manager's provider instance fake: the lab's own GitHub at %s (its App, key pair and client secret the lab's; Secret %s/%s), the App's callback URLs %s\n",
+			cfg.GitHubFakeURL(), config.DefaultGitHubSecretNamespace, config.WorkspaceFakeSecretName, lab.WorkspaceAppCallbacks(cfg, config.WorkspaceProviderFake))
 	}
 	if cfg.WorkspaceGitHubProvider() {
 		gh := cfg.Platform.Workspaces.GitHub
-		fmt.Printf("  ws-github  the workspace-manager's provider instance github: App id %s, client id %s, the App's callback URL %s, Dex redirect URI %s; private key and client secret from Secret %s/%s (keys %s from %s, %s from %s)\n",
-			orUnset(gh.AppID), orUnset(gh.ClientID), cfg.WorkspaceGitHubCallbackURL(), cfg.WorkspaceManagerSignInURL(),
+		fmt.Printf("  ws-github  the workspace-manager's provider instance github: App id %s, client id %s, the App's callback URLs %s; private key and client secret from Secret %s/%s (keys %s from %s, %s from %s)\n",
+			orUnset(gh.AppID), orUnset(gh.ClientID), lab.WorkspaceAppCallbacks(cfg, config.WorkspaceProviderGitHub),
 			config.DefaultGitHubSecretNamespace, config.WorkspaceGitHubSecretName,
 			config.WorkspaceGitHubPrivateKeyKey, orByHand(gh.PrivateKeySource), config.GitHubClientSecretKey, orByHand(gh.ClientSecretSource))
+	}
+	if grant := cfg.WorkspaceGrantProvider(); grant != "" {
+		fmt.Printf("  ws-grant   muster pins a workspace-manager of 0.10.0 or newer to the App of %s: each person grants it once (core_auth_login)\n", grant)
 	}
 	if cfg.VMManagerEnabled() {
 		fmt.Printf("  vm-manager the platform's VM provisioner as a pod of the node, registered with muster as x_vm-manager_* (%s)\n",
@@ -1478,7 +1481,7 @@ func pmTestCmd() *cobra.Command {
 	var opts lab.PMTestOptions
 	cmd := &cobra.Command{
 		Use:   "pm-test [email]",
-		Short: "Headless platform-manager proof (platform.platformManager): the released giantswarm-platform-manager on the lab's registry fixture -> signed in through muster -> reconcile_capability's dry run of an installation with workspaces on -> the Dex /signin redirect URI and the kept workspace-manager values",
+		Short: "Headless platform-manager proof (platform.platformManager): the released giantswarm-platform-manager on the lab's registry fixture -> signed in through muster -> reconcile_capability's dry run of an installation with workspaces on -> the kept workspace-manager values",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadProofLab()
@@ -1632,7 +1635,7 @@ func workspacesSignInTestCmd() *cobra.Command {
 	var opts lab.WorkspacesSignInTestOptions
 	cmd := &cobra.Command{
 		Use:   "workspaces-signin-test",
-		Short: "Headless workspace-manager provider sign-in proof: a workspace over agentlab-org/platform-api and platform-infra created and synced -> the admin and a developer connected to the lab's GitHub by the browser's walk (connect_provider's link -> the fake's consent -> the manager's callback -> Dex's login -> /signin -> the callback), list_providers showing each connected -> authorize_workspace granted for the admin and refused naming platform-infra for the developer -> the workspace deleted, both disconnected",
+		Short: "Headless workspace-manager provider sign-in proof, the person's grant held by muster: a developer without it gets muster's sign-in link -> the admin and the developer grant the lab GitHub's App by the browser's walk (core_auth_login's link -> the fake's consent -> muster's callback), list_providers showing each connected -> a workspace over agentlab-org/platform-api and platform-infra created and synced -> authorize_workspace granted for the admin and refused naming platform-infra for the developer -> the workspace deleted, both grants dropped",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadProofLab()
@@ -1642,7 +1645,7 @@ func workspacesSignInTestCmd() *cobra.Command {
 			return lab.WorkspacesSignInTest(cfg, opts)
 		},
 	}
-	cmd.Flags().StringVar(&opts.Provider, "provider", "fake", "the provider instance the people connect to (the lab's GitHub)")
+	cmd.Flags().StringVar(&opts.Provider, "provider", "fake", "the provider instance whose App the people grant (the lab's GitHub, the one muster pins the workspace-manager to)")
 	cmd.Flags().DurationVar(&opts.SyncTimeout, "sync-timeout", lab.DefaultWorkspacesSignInSyncTimeout, "how long the workspace's first sync may take")
 	return cmd
 }

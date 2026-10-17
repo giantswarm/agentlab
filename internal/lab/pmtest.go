@@ -43,10 +43,6 @@ const (
 	pmRegistryRepo = "agentlab/registry"
 	pmInstallation = "ember"
 	pmCapability   = "agent-platform"
-	// pmSignInURI is the workspace-manager's browser sign-in the plan must
-	// register on the platform's Dex client: <base URL>/signin, the base URL
-	// the chart derives from the installation's domain.
-	pmSignInURI = "https://workspace-manager." + pmInstallation + ".agentlab.test/signin"
 	// pmAppIssuer is the pinned App's issuer identity, the key muster files
 	// the grant under; nothing fetches it.
 	pmAppIssuer    = "https://github.agentlab.invalid/apps/" + pmMCPServer
@@ -54,7 +50,6 @@ const (
 	pmReleaseWait  = 5 * time.Minute
 	pmConfigsPatch = "installations/" + pmInstallation + "/apps/"
 	pmValuesPatch  = pmConfigsPatch + "agent-platform/configmap-values.yaml.patch"
-	pmDexPatch     = pmConfigsPatch + "dex-app/configmap-values.yaml.patch"
 )
 
 // PMTestOptions are pm-test's flags.
@@ -166,8 +161,8 @@ func PMTest(cfg *config.Config, email string, opts PMTestOptions) error {
 	} else if len(misses) > 0 {
 		note("the registry answered 404 for %d read(s) beyond the fixture: %s", len(misses), strings.Join(misses, ", "))
 	}
-	fmt.Printf("\n✅ pm-test: giantswarm-platform-manager %s plans %s on %s with workspaces on: the Dex client carries %s, the workspace-manager values are kept, nothing written\n",
-		version, pmCapability, pmInstallation, pmSignInURI)
+	fmt.Printf("\n✅ pm-test: giantswarm-platform-manager %s plans %s on %s with workspaces on: the workspace-manager values are kept, nothing written\n",
+		version, pmCapability, pmInstallation)
 	return nil
 }
 
@@ -207,23 +202,15 @@ type pmDryRun struct {
 			Change     string `json:"change"`
 			Content    string `json:"content"`
 		} `json:"files"`
-		DexClients []pmDexClient  `json:"dexClients"`
 		Diff       map[string]int `json:"diff"`
 	} `json:"installations"`
 }
 
-// pmDexClient is a Dex client of the plan: its key and the redirect URIs it
-// registers beside the template's.
-type pmDexClient struct {
-	Client            string   `json:"client"`
-	ExtraRedirectURIs []string `json:"extraRedirectURIs"`
-}
-
 // assertWorkspaces asserts the plan is the fixture's with workspaces on: the
-// installation planned as a dry run, the switch read from the record,
-// the sign-in URI on the platform client in the dex-app patch, the
+// installation planned as a dry run, the switch read from the record, the
 // workspaces and workspace-manager keys kept in the values patch, and the
-// commit not refused.
+// commit not refused. The person's provider sign-in is muster's grant, so
+// nothing of the workspace-manager's own is asked of Dex.
 func (p pmDryRun) assertWorkspaces() error {
 	if !p.DryRun {
 		return fmt.Errorf("reconcile_capability answered dryRun=false to a dry run")
@@ -238,26 +225,9 @@ func (p pmDryRun) assertWorkspaces() error {
 	if ws := inst.Inputs.Installation.Workspaces; ws == nil || !ws.Enabled {
 		return fmt.Errorf("the plan's inputs carry no installation.workspaces.enabled: true read from %s", pmValuesPatch)
 	}
-	muster := slices.IndexFunc(inst.DexClients, func(c pmDexClient) bool { return c.Client == componentMuster })
-	if muster < 0 || !slices.Contains(inst.DexClients[muster].ExtraRedirectURIs, pmSignInURI) {
-		return fmt.Errorf("the plan's Dex clients do not register %s on the platform client muster: %+v", pmSignInURI, inst.DexClients)
-	}
 	files := map[string]string{}
 	for _, f := range inst.Files {
 		files[f.Path] = f.Content
-	}
-	var dex struct {
-		OIDC struct {
-			StaticClients map[string]struct {
-				ExtraRedirectURIs []string `yaml:"extraRedirectURIs"`
-			} `yaml:"staticClients"`
-		} `yaml:"oidc"`
-	}
-	if err := yaml.Unmarshal([]byte(files[pmDexPatch]), &dex); err != nil {
-		return fmt.Errorf("the planned %s: %w", pmDexPatch, err)
-	}
-	if !slices.Contains(dex.OIDC.StaticClients[componentMuster].ExtraRedirectURIs, pmSignInURI) {
-		return fmt.Errorf("the planned %s carries no %s in oidc.staticClients.muster.extraRedirectURIs:\n%s", pmDexPatch, pmSignInURI, files[pmDexPatch])
 	}
 	var values map[string]any
 	if err := yaml.Unmarshal([]byte(files[pmValuesPatch]), &values); err != nil {
@@ -277,7 +247,6 @@ func (p pmDryRun) proofLines() []string {
 		fmt.Sprintf("planned %s: %d create, %d update, %d unchanged in %d pull requests, none opened; the commit not refused (dex-app %s)",
 			inst.Name, inst.Diff["create"], inst.Diff["update"], inst.Diff["unchanged"], len(p.PullRequests), inst.Inputs.Installation.DexAppVersion),
 		"installation.workspaces.enabled: true, read from " + pmValuesPatch,
-		pmDexPatch + ": oidc.staticClients.muster.extraRedirectURIs carries " + pmSignInURI,
 		pmValuesPatch + ": workspaces.enabled: true and the workspace-manager values kept",
 	}
 }

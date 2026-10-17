@@ -81,8 +81,7 @@ trusting the same issuer.
   fixture for giantswarm-platform-manager: an invented installation with the
   agent platform and workspaces on, in a registry the lab serves; `agentlab
   pm-test` installs the released manager against it and proves its dry run
-  registers the workspace-manager's Dex `/signin` redirect URI and keeps the
-  workspace-manager values (see [Platform manager](docs/platform-manager.md)).
+  keeps the workspace-manager values (see [Platform manager](docs/platform-manager.md)).
 - **VMs.** vm-manager, the platform's VM provisioner, as a pod of the KVM
   node (the chart's `components.vm-manager`) registered with muster as
   `x_vm-manager_*`: VMs with an instance metadata service, a vTPM and

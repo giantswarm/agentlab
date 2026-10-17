@@ -15,7 +15,6 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -180,15 +179,6 @@ func ensureWorkspaceTokenExchangeSecret() (string, error) {
 	}
 	fmt.Printf("Generated the workspace token exchange client's secret in %s\n", workspaceGrantDir)
 	return path, nil
-}
-
-// readWorkspaceTokenExchangeSecret reads the token exchange client's secret.
-func readWorkspaceTokenExchangeSecret() (string, error) {
-	raw, err := os.ReadFile(filepath.Join(workspaceGrantDir, workspaceTokenExchangeSecretFile)) // #nosec G304 -- the lab's own credentials directory
-	if err != nil {
-		return "", fmt.Errorf("reading the workspace token exchange client's secret: %w (`agentlab platform` generates it with the workspaces on)", err)
-	}
-	return strings.TrimSpace(string(raw)), nil
 }
 
 // readWorkspaceGrantKey reads the lab's grant signing key.
