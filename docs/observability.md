@@ -74,6 +74,38 @@ alerts), with the same lab-CA trust offer as the portal. In the cluster the
 prefix applies too: mcp-prometheus dials
 `http://prometheus-operated.monitoring.svc.cluster.local:9090/prometheus`.
 
+## Alertmanager
+
+An **optional switch, off by default** (`platform.alertmanager`, `agentlab
+configure --alertmanager`; needs `platform.observability`) for proving
+mcp-prometheus's alert tools (`x_prometheus_get_alertmanager_alerts`,
+mcp-prometheus 0.12 and newer). With it on, the kube-prometheus-stack runs
+its Alertmanager (the operator's `alertmanager-operated` Service on 9093, the
+chart's own config: every alert to the `null` receiver, nothing sent
+anywhere), the lab Prometheus fires one alert at all times,
+`AgentlabWatchdog` (`vector(1)`, like the fleet's Watchdog), and
+mcp-prometheus gets `ALERTMANAGER_URL` pointing at that Service.
+`agentlab platform-test`'s stage "Alertmanager alerts through muster" calls
+the tool as the signed-in person and expects `AgentlabWatchdog`; it is
+skipped with the switch off, or when the mcp-prometheus in place has no alert
+tool.
+
+To prove an mcp-prometheus build or release candidate, swap its image in
+with `platform.devImages.mcp-prometheus` — a local build or a registry ref,
+side-loaded into the node like every Deployment target; the override and the
+pull policy ride the lab's mcp-prometheus HelmRelease's `postRenderers`
+(`mcp-prometheus.yaml.tmpl`), next to the dex-localhost sidecar:
+
+```yaml
+platform:
+  observability: true
+  alertmanager: true
+  devImages:
+    mcp-prometheus: gsoci.azurecr.io/giantswarm/mcp-prometheus:0.12.0-rc.2
+```
+
+Then `agentlab platform` and `agentlab platform-test`.
+
 ## Querying the lab Prometheus from the host
 
 Two paths reach the lab Prometheus without a local port, and both name the
