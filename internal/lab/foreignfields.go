@@ -15,15 +15,16 @@ import (
 // Fields on the platform's workloads that no release renders. A Deployment
 // the platform's Helm releases own carries what the chart renders, plus what
 // a hand on the cluster wrote beside it — a `kubectl patch` of hostNetwork,
-// a `kubectl set env`. Neither `agentlab platform` nor helm-controller's drift
-// correction removes such a field: Helm and drift detection own and correct
-// only the fields the render carries. So a restored lab — its agentlab.yaml
-// back by checksum, every workload Ready, the proofs green — still runs the
-// patch, and a later release that no longer needs it leaves pods that cannot
-// schedule without it. The apiserver records who wrote each field (the
-// object's managedFields): a field written by a manager other than the
-// release's writers is named by `agentlab status`, warned by every proof's
-// opening and by `agentlab platform`, and fails platform-test.
+// a `kubectl set env`. helm-controller's drift correction removes no such
+// field: Helm and drift detection own and correct only the fields the render
+// carries. So a restored lab — its agentlab.yaml back by checksum, every
+// workload Ready — would still run the patch, and a later release that no
+// longer needs it leaves pods that cannot schedule without it. The apiserver
+// records who wrote each field (the object's managedFields): kubectl's edits
+// `agentlab platform` puts back to the render (handfields.go); a field
+// written by any other manager outside the release's writers is named by
+// `agentlab status`, warned by every proof's opening and by `agentlab
+// platform`, and fails platform-test.
 
 // releaseFieldManagers are the managers that write a Helm-owned workload as
 // the lab means it: the Helm SDK the lab runs and the CLI (helmFieldManager),
@@ -94,26 +95,28 @@ func foreignFieldsOf(obj *unstructured.Unstructured) ([]foreignFields, error) {
 // not its every field. The rollout annotation and the maps that hold it
 // (marked owned when the annotation created them) are left out.
 func outermostFields(set *fieldpath.Set) []string {
+	var fields []string
+	for _, p := range outermostPaths(set) {
+		fields = append(fields, p.String())
+	}
+	return fields
+}
+
+// outermostPaths are the paths outermostFields words.
+func outermostPaths(set *fieldpath.Set) []fieldpath.Path {
 	var paths []fieldpath.Path
 	set.Iterate(func(p fieldpath.Path) {
 		if !hasPrefix(restartedAtPath, p) {
 			paths = append(paths, p.Copy())
 		}
 	})
-	var fields []string
+	var outer []fieldpath.Path
 	for _, p := range paths {
-		outer := true
-		for _, q := range paths {
-			if len(q) < len(p) && hasPrefix(p, q) {
-				outer = false
-				break
-			}
-		}
-		if outer {
-			fields = append(fields, p.String())
+		if !slices.ContainsFunc(paths, func(q fieldpath.Path) bool { return len(q) < len(p) && hasPrefix(p, q) }) {
+			outer = append(outer, p)
 		}
 	}
-	return fields
+	return outer
 }
 
 // hasPrefix reports whether prefix is p or one of its ancestors.
@@ -149,7 +152,7 @@ func foreignFieldsError(found []foreignFields) error {
 		lines = append(lines, "  "+f.String())
 	}
 	return fmt.Errorf("%d platform workload field(s) were written outside the platform's Helm releases, which neither `agentlab platform` nor drift correction removes:\n%s\n"+
-		"remove each with the inverse edit (`kubectl patch --type=json` with a remove op, or `kubectl edit`) — a lab change belongs in agentlab.yaml (platform.devImages, platform.chartPath), never a patch",
+		"`agentlab platform` puts back what kubectl set, patched or edited; remove the rest with the inverse edit (`kubectl patch --type=json` with a remove op) — a lab change belongs in agentlab.yaml (platform.devImages, platform.chartPath), never a patch",
 		len(found), strings.Join(lines, "\n"))
 }
 
