@@ -1,7 +1,6 @@
 package lab
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kagent-dev/mockllm"
 	"gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -20,13 +18,16 @@ import (
 )
 
 // The codex coding proof's model (docs/platform.md "The coding agents
-// proof"): kagent's mockllm, scripted for coding-test's turns, so `agentlab
+// proof"): a mock OpenAI Responses API in the shape of kagent's mockllm,
+// scripted for coding-test's turns, so `agentlab
 // coding-test --harness codex` reaches a verdict on a lab with no OpenAI or
 // Bedrock account. It runs the way a proof's fake runs (fakecontainer.go):
 // `agentlab mockllm` in a container on the kind network, reached by the
 // cluster as the Service agentlab-mockllm in the platform namespace, which
 // the lab's ModelConfig agentlab-mockllm (OpenAI provider, Responses API)
-// names as its base URL. The script answers each of the proof's prompts with
+// names as its base URL. It serves the Responses API's stream itself (the
+// events of kagent's mockllm, which codex reads), so the lab carries no SDK
+// for it. The script answers each of the proof's prompts with
 // the shell command or MCP call the prompt asks for, the way kagent's codex
 // e2e fixtures do, then a fixed reply once the runtime returns the tool's
 // output: the readings the proof judges are those outputs, what the sandbox
@@ -88,14 +89,11 @@ func mockLLMScript() []mockLLMTurn {
 
 // The script's wire form, the Responses API's own field names.
 type (
+	// mockLLMScriptEntry answers a request whose last input item
+	// contains match with response.
 	mockLLMScriptEntry struct {
-		Name     string          `json:"name"`
-		Match    mockLLMMatch    `json:"match"`
-		Response mockLLMResponse `json:"response"`
-	}
-	mockLLMMatch struct {
-		MatchType string `json:"match_type"`
-		Input     string `json:"input"`
+		match    string
+		response mockLLMResponse
 	}
 	mockLLMResponse struct {
 		ID                string           `json:"id"`
@@ -105,6 +103,7 @@ type (
 		Output            []mockLLMItem    `json:"output"`
 		ParallelToolCalls bool             `json:"parallel_tool_calls"`
 		Tools             []any            `json:"tools"`
+		Status            string           `json:"status"`
 		Usage             map[string]int64 `json:"usage"`
 	}
 	mockLLMItem struct {
@@ -142,28 +141,29 @@ type (
 // take: the sandbox probe's token search alone may take a minute.
 const mockLLMCommandTimeout = 300_000
 
-// mockLLMItemDone is the status of every item the script answers with,
-// mockLLMMessage the type of a reply's item and of a person's input.
+// mockLLMItemDone is the status of every item the script answers with;
+// the item types and a reply's content type.
 const (
-	mockLLMItemDone = "completed"
-	mockLLMMessage  = "message"
+	mockLLMItemDone     = "completed"
+	mockLLMMessage      = "message"
+	mockLLMFunctionCall = "function_call"
+	mockLLMOutputText   = "output_text"
 )
 
-// mockLLMConfig is the mockllm's configuration for the script, the MCP
-// tools on mcpServer: per turn the tool call answering the prompt, then the
-// reply answering the tool's output (matched by its call id, which the
-// runtime's last input item carries).
-func mockLLMConfig(mcpServer string) (mockllm.Config, error) {
+// mockLLMConfig is the script for the MCP tools on mcpServer: per turn the
+// tool call answering the prompt, then the reply answering the tool's output
+// (matched by its call id, which the runtime's last input item carries).
+func mockLLMConfig(mcpServer string) ([]mockLLMScriptEntry, error) {
 	var entries []mockLLMScriptEntry
 	for _, turn := range mockLLMScript() {
 		callID := "call_agentlab_" + turn.name
 		if turn.command != "" {
 			arguments, err := json.Marshal(mockLLMShellArguments{Command: turn.command, TimeoutMS: mockLLMCommandTimeout})
 			if err != nil {
-				return mockllm.Config{}, err
+				return nil, err
 			}
 			entries = append(entries, mockLLMEntry(turn.name, turn.prompt, mockLLMItem{
-				ID: "fc_agentlab_" + turn.name, Type: "function_call", Status: mockLLMItemDone,
+				ID: "fc_agentlab_" + turn.name, Type: mockLLMFunctionCall, Status: mockLLMItemDone,
 				CallID: callID, Name: "shell_command", Arguments: string(arguments),
 			}))
 		} else {
@@ -178,26 +178,16 @@ func mockLLMConfig(mcpServer string) (mockllm.Config, error) {
 					Arguments: mockLLMSearchArguments{Query: namespace + " " + turn.tool, Limit: 10},
 				}),
 				mockLLMEntry(turn.name+"_call", searchID, mockLLMItem{
-					ID: "fc_agentlab_" + turn.name, Type: "function_call", Status: mockLLMItemDone,
+					ID: "fc_agentlab_" + turn.name, Type: mockLLMFunctionCall, Status: mockLLMItemDone,
 					CallID: callID, Namespace: namespace, Name: turn.tool, Arguments: "{}",
 				}))
 		}
 		entries = append(entries, mockLLMEntry(turn.name+"_reply", callID, mockLLMItem{
 			ID: "msg_agentlab_" + turn.name, Type: mockLLMMessage, Status: mockLLMItemDone, Role: "assistant",
-			Content: []mockLLMContent{{Type: "output_text", Text: turn.reply, Annotations: []any{}}},
+			Content: []mockLLMContent{{Type: mockLLMOutputText, Text: turn.reply, Annotations: []any{}}},
 		}))
 	}
-	raw, err := json.Marshal(struct {
-		OpenAIResponse []mockLLMScriptEntry `json:"openai_response"`
-	}{entries})
-	if err != nil {
-		return mockllm.Config{}, err
-	}
-	var cfg mockllm.Config
-	if err := json.Unmarshal(raw, &cfg); err != nil {
-		return mockllm.Config{}, fmt.Errorf("the mockllm script: %w", err)
-	}
-	return cfg, nil
+	return entries, nil
 }
 
 // mockLLMEntry is one Responses API answer of the script: output, with the
@@ -205,13 +195,109 @@ func mockLLMConfig(mcpServer string) (mockllm.Config, error) {
 // contains match.
 func mockLLMEntry(name, match string, output mockLLMItem) mockLLMScriptEntry {
 	return mockLLMScriptEntry{
-		Name:  "agentlab_" + name,
-		Match: mockLLMMatch{MatchType: "contains", Input: match},
-		Response: mockLLMResponse{
+		match: match,
+		response: mockLLMResponse{
 			ID: "resp_agentlab_" + name, Object: "response", CreatedAt: 1_760_000_000, Model: mockLLMModel,
-			Output: []mockLLMItem{output}, Tools: []any{},
+			Output: []mockLLMItem{output}, Tools: []any{}, Status: mockLLMItemDone,
 			Usage: map[string]int64{"input_tokens": 20, "output_tokens": 10, "total_tokens": 30},
 		},
+	}
+}
+
+// mockLLMMatch is the script's answer to a request: the first entry whose
+// match the last input item (as JSON; the input itself when it is a
+// string) contains, false for none.
+func mockLLMMatch(script []mockLLMScriptEntry, last string) (mockLLMResponse, bool) {
+	for _, entry := range script {
+		if strings.Contains(last, entry.match) {
+			return entry.response, true
+		}
+	}
+	return mockLLMResponse{}, false
+}
+
+// mockLLMEvent is one server-sent event of the Responses API's stream: its
+// type, sequence number and the fields that event carries.
+type mockLLMEvent struct {
+	Type           string           `json:"type"`
+	SequenceNumber int              `json:"sequence_number"`
+	Response       *mockLLMResponse `json:"response,omitempty"`
+	OutputIndex    *int             `json:"output_index,omitempty"`
+	ItemID         string           `json:"item_id,omitempty"`
+	ContentIndex   *int             `json:"content_index,omitempty"`
+	Item           *mockLLMItem     `json:"item,omitempty"`
+	Part           *mockLLMContent  `json:"part,omitempty"`
+	Delta          *string          `json:"delta,omitempty"`
+	Text           *string          `json:"text,omitempty"`
+	Arguments      *string          `json:"arguments,omitempty"`
+	Name           string           `json:"name,omitempty"`
+}
+
+// mockLLMStream is the Responses API's stream of a final response, the
+// events kagent's mockllm sends: created and in progress, each item's own
+// (a message's content part and text, a function call's arguments, a tool
+// search's item done), then completed with the usage.
+func mockLLMStream(response mockLLMResponse) []mockLLMEvent {
+	inProgress := response
+	inProgress.Status, inProgress.Output = "in_progress", []mockLLMItem{}
+	events := []mockLLMEvent{
+		{Type: "response.created", Response: &inProgress},
+		{Type: "response.in_progress", Response: &inProgress},
+	}
+	for i, item := range response.Output {
+		index := i
+		added := item
+		added.Status = "in_progress"
+		switch item.Type {
+		case mockLLMMessage:
+			added.Content = []mockLLMContent{}
+			events = append(events, mockLLMEvent{Type: "response.output_item.added", OutputIndex: &index, Item: &added})
+			for c, content := range item.Content {
+				c, content := c, content
+				empty := mockLLMContent{Type: content.Type, Annotations: []any{}}
+				at := mockLLMEvent{OutputIndex: &index, ItemID: item.ID, ContentIndex: &c}
+				partAdded, delta, textDone, partDone := at, at, at, at
+				partAdded.Type, partAdded.Part = "response.content_part.added", &empty
+				delta.Type, delta.Delta = "response.output_text.delta", &content.Text
+				textDone.Type, textDone.Text = "response.output_text.done", &content.Text
+				partDone.Type, partDone.Part = "response.content_part.done", &content
+				events = append(events, partAdded, delta, textDone, partDone)
+			}
+		case mockLLMFunctionCall:
+			added.Arguments = ""
+			arguments := stringOf(item.Arguments)
+			events = append(events,
+				mockLLMEvent{Type: "response.output_item.added", OutputIndex: &index, Item: &added},
+				mockLLMEvent{Type: "response.function_call_arguments.delta", OutputIndex: &index, ItemID: item.ID, Delta: &arguments},
+				mockLLMEvent{Type: "response.function_call_arguments.done", OutputIndex: &index, ItemID: item.ID, Arguments: &arguments, Name: item.Name})
+		}
+		done := item
+		events = append(events, mockLLMEvent{Type: "response.output_item.done", OutputIndex: &index, Item: &done})
+	}
+	return append(events, mockLLMEvent{Type: "response.completed", Response: &response})
+}
+
+// writeMockLLMStream writes the stream as server-sent events, numbered in
+// order, then [DONE].
+func writeMockLLMStream(w http.ResponseWriter, response mockLLMResponse) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(http.StatusOK)
+	flusher, _ := w.(http.Flusher)
+	for seq, event := range mockLLMStream(response) {
+		event.SequenceNumber = seq
+		data, err := json.Marshal(event)
+		if err != nil {
+			return
+		}
+		_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.Type, data)
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	if flusher != nil {
+		flusher.Flush()
 	}
 }
 
@@ -234,10 +320,12 @@ type mockLLMRequests struct {
 // mockLLMLogItem bounds a logged input item.
 const mockLLMLogItem = 400
 
-// requestLogLine words a Responses API request for the log: the tools it
-// offers the model (a namespace's tools after its name) and its last input
-// item as JSON, the one the script matches.
-func requestLogLine(body []byte) string {
+// mockLLMRequest is what the mock reads of a Responses API request: its
+// last input item as JSON (the input itself when it is a string), the one
+// the script matches, whether it asks for a stream, and its log line: the
+// tools it offers the model (a namespace's tools after its name) and that
+// item.
+func mockLLMRequest(body []byte) (last string, stream bool, line string) {
 	type tool struct {
 		Type  string `json:"type"`
 		Name  string `json:"name"`
@@ -246,11 +334,12 @@ func requestLogLine(body []byte) string {
 		} `json:"tools"`
 	}
 	var req struct {
-		Input json.RawMessage `json:"input"`
-		Tools []tool          `json:"tools"`
+		Input  json.RawMessage `json:"input"`
+		Stream bool            `json:"stream"`
+		Tools  []tool          `json:"tools"`
 	}
-	if json.Unmarshal(body, &req) != nil {
-		return ""
+	if err := json.Unmarshal(body, &req); err != nil {
+		return "", false, "unreadable: " + err.Error()
 	}
 	names := make([]string, 0, len(req.Tools))
 	for _, t := range req.Tools {
@@ -260,12 +349,16 @@ func requestLogLine(body []byte) string {
 		}
 		names = append(names, name)
 	}
-	last := string(req.Input)
+	last = string(req.Input)
 	var items []json.RawMessage
-	if json.Unmarshal(req.Input, &items) == nil && len(items) > 0 {
+	var text string
+	switch {
+	case json.Unmarshal(req.Input, &items) == nil && len(items) > 0:
 		last = string(items[len(items)-1])
+	case json.Unmarshal(req.Input, &text) == nil:
+		last = text
 	}
-	return fmt.Sprintf("tools [%s] last %s", excerpt(strings.Join(names, ", "), mockLLMLogItem), excerpt(last, mockLLMLogItem))
+	return last, req.Stream, fmt.Sprintf("tools [%s] last %s", excerpt(strings.Join(names, ", "), mockLLMLogItem), excerpt(last, mockLLMLogItem))
 }
 
 // ServeMockLLM serves the script for the MCP tools on mcpServer on listen
@@ -293,11 +386,10 @@ func ServeMockLLM(ctx context.Context, listen, mcpServer string) error {
 // Responses API under /v1, its health and its request counts; entries is
 // the script's length.
 func mockLLMHandler(mcpServer string) (handler http.Handler, entries int, err error) {
-	cfg, err := mockLLMConfig(mcpServer)
+	script, err := mockLLMConfig(mcpServer)
 	if err != nil {
 		return nil, 0, err
 	}
-	provider := mockllm.NewOpenAIResponseProvider(cfg.OpenAIResponse)
 	var mu sync.Mutex
 	var counts mockLLMRequests
 	mux := http.NewServeMux()
@@ -314,39 +406,31 @@ func mockLLMHandler(mcpServer string) (handler http.Handler, entries int, err er
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		r.Body = io.NopCloser(bytes.NewReader(body))
-		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
-		provider.Handle(rec, r)
-		line := fmt.Sprintf("%d %s", rec.status, requestLogLine(body))
+		last, stream, line := mockLLMRequest(body)
+		response, matched := mockLLMMatch(script, last)
+		status := http.StatusOK
+		switch {
+		case !matched:
+			status = http.StatusNotFound
+			http.Error(w, "no script entry matches the last input item: "+excerpt(last, mockLLMLogItem), status)
+		case stream:
+			writeMockLLMStream(w, response)
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(response)
+		}
+		line = fmt.Sprintf("%d %s", status, line)
 		fmt.Println(line)
 		mu.Lock()
 		defer mu.Unlock()
 		counts.Log = append(counts.Log, line)
-		if rec.status == http.StatusNotFound {
-			counts.Unmatched++
-		} else {
+		if matched {
 			counts.Answered++
+		} else {
+			counts.Unmatched++
 		}
 	})
-	return mux, len(cfg.OpenAIResponse), nil
-}
-
-// statusRecorder records the status a handler answered with; Flush passes
-// through for the streamed answers.
-type statusRecorder struct {
-	http.ResponseWriter
-	status int
-}
-
-func (r *statusRecorder) WriteHeader(status int) {
-	r.status = status
-	r.ResponseWriter.WriteHeader(status)
-}
-
-func (r *statusRecorder) Flush() {
-	if f, ok := r.ResponseWriter.(http.Flusher); ok {
-		f.Flush()
-	}
+	return mux, len(script), nil
 }
 
 // mockLLMModelConfigYAML is the ModelConfig on the mockllm: the OpenAI

@@ -1039,9 +1039,10 @@ release's chart stamps it as `runtimeImages.ompHarness.digest`), a dev
 image (`platform.devImages` `omp-harness`) winning over it.
 
 `coding-test --harness codex` runs on the in-cluster mockllm unless
-`--model-config` names another model: kagent's mock model
-(`github.com/kagent-dev/mockllm`), scripted for the proof's turns, so the
-proof reaches its verdict on a lab with no OpenAI or Bedrock account. It runs
+`--model-config` names another model: a mock OpenAI Responses API in the
+shape of kagent's mockllm (its matching and its stream's events, served by
+agentlab itself, no SDK), scripted for the proof's turns, so the proof
+reaches its verdict on a lab with no OpenAI or Bedrock account. It runs
 the way a proof's fake runs: `agentlab mockllm` in a container on the kind
 network, reached by the cluster as the Service `agentlab-mockllm` in the
 platform namespace, which the run's ModelConfig `agentlab-mockllm` (the
