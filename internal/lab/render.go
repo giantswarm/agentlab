@@ -264,11 +264,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 	if err != nil {
 		return nil, err
 	}
-	var mcpPrometheusRenderers []postRenderer
-	if dexLocalhostBridged(cfg) {
-		mcpPrometheusRenderers = []postRenderer{sidecarPostRenderer(mcpPrometheusRelease, cfg.DexPort)}
-	}
-	mcpPrometheus, err := yaml.Marshal(mcpPrometheusRenderers)
+	mcpPrometheus, err := yaml.Marshal(mcpPrometheusPostRenderers(cfg, defaultDevImageNames(cfg)))
 	if err != nil {
 		return nil, err
 	}

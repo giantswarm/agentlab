@@ -278,7 +278,7 @@ func TestDexLocalhostPatchRestricted(t *testing.T) {
 	}
 	patches := map[string]kustomizePatch{
 		componentMCPKubernetes: dexLocalhostPatch(componentMCPKubernetes, config.Default().DexPort),
-		"mcp-prometheus":       sidecarPostRenderer("mcp-prometheus", config.Default().DexPort).Kustomize.Patches[0],
+		"mcp-prometheus":       mcpPrometheusPostRenderers(config.Default(), nil)[0].Kustomize.Patches[0],
 	}
 	for name, p := range patches {
 		var d struct {

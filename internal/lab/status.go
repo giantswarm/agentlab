@@ -158,6 +158,9 @@ type Status struct {
 	// Workspaces is the workspace storage in place (workspaces.go); nil
 	// without a platform release.
 	Workspaces *WorkspacesStatus `json:"workspaces,omitempty"`
+	// Observability is the observability stack in place against
+	// platform.observability (observability.go).
+	Observability *ObservabilityStatus `json:"observability,omitempty"`
 }
 
 // LabStatus reads the lab's live state. A lab that is not running is refused
@@ -175,6 +178,9 @@ func LabStatus(cfg *config.Config, dir string) (*Status, error) {
 		return nil, err
 	}
 	s.Chart = installed
+	if s.Observability, err = readObservabilityStatus(context.Background(), cfg); err != nil {
+		return nil, err
+	}
 	if cfg.Platform.Enabled {
 		chart := platformChartFor(cfg)
 		s.Configured = chart.String()
@@ -221,6 +227,9 @@ func PrintStatus(w io.Writer, s *Status, asJSON bool) error {
 	}
 	if s.Workspaces != nil {
 		fmt.Fprintf(&b, "    workspaces  %s\n", s.Workspaces)
+	}
+	if s.Observability != nil {
+		fmt.Fprintf(&b, "    prometheus  %s\n", s.Observability)
 	}
 	_, err := io.WriteString(w, b.String())
 	return err

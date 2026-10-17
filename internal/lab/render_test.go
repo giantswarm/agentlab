@@ -509,6 +509,88 @@ func TestMCPPrometheusRelease(t *testing.T) {
 	}
 }
 
+// platform.devImages.mcp-prometheus swaps the image of the lab's own
+// mcp-prometheus through that HelmRelease's postRenderers (next to the
+// dex-localhost sidecar), never as a meta chart component's values.
+func TestMCPPrometheusDevImage(t *testing.T) {
+	cfg := config.Default()
+	cfg.Platform.DevImages = map[string]string{config.DevImageMCPPrometheus: "mcp-prometheus:dev"}
+	out, err := renderTemplate(cfg, mcpPrometheusTemplate, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(out)
+	for _, want := range []string{
+		"name: gsoci.azurecr.io/giantswarm/mcp-prometheus",
+		"newName: localhost/mcp-prometheus",
+		"newTag: dev",
+		"imagePullPolicy: IfNotPresent",
+		"name: " + dexLocalhostContainer,
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("mcp-prometheus.yaml lacks %q:\n%s", want, s)
+		}
+	}
+	renderers, err := componentPostRenderers(cfg, defaultDevImageNames(cfg), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := renderers[mcpPrometheusRelease]; ok {
+		t.Errorf("the meta chart's values must carry no %s postRenderers, got %s", mcpPrometheusRelease, got)
+	}
+}
+
+// platform.alertmanager runs the Alertmanager with an always-firing alert and
+// points mcp-prometheus at it; off (the default) renders neither.
+func TestAlertmanagerSwitch(t *testing.T) {
+	for _, on := range []bool{false, true} {
+		cfg := config.Default()
+		cfg.Platform.Alertmanager = on
+		kps, err := renderTemplate(cfg, "kube-prometheus-stack-values.yaml.tmpl", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var values struct {
+			KPS struct {
+				Alertmanager struct {
+					Enabled bool `yaml:"enabled"`
+				} `yaml:"alertmanager"`
+				Rules map[string]struct {
+					Groups []struct {
+						Rules []struct {
+							Alert string `yaml:"alert"`
+						} `yaml:"rules"`
+					} `yaml:"groups"`
+				} `yaml:"additionalPrometheusRulesMap"`
+			} `yaml:"kube-prometheus-stack"`
+		}
+		if err := yaml.Unmarshal(kps, &values); err != nil {
+			t.Fatalf("%v\n%s", err, kps)
+		}
+		if values.KPS.Alertmanager.Enabled != on {
+			t.Errorf("alertmanager=%v: alertmanager.enabled = %v", on, values.KPS.Alertmanager.Enabled)
+		}
+		watchdog := false
+		for _, rule := range values.KPS.Rules {
+			for _, g := range rule.Groups {
+				for _, r := range g.Rules {
+					watchdog = watchdog || r.Alert == watchdogAlert
+				}
+			}
+		}
+		if watchdog != on {
+			t.Errorf("alertmanager=%v: %s rule rendered = %v", on, watchdogAlert, watchdog)
+		}
+		mcp, err := renderTemplate(cfg, mcpPrometheusTemplate, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Contains(string(mcp), "http://alertmanager-operated."+observabilityNamespace+".svc.cluster.local:9093"); got != on {
+			t.Errorf("alertmanager=%v: ALERTMANAGER_URL rendered = %v", on, got)
+		}
+	}
+}
+
 // The kind config carries what Substrate's WorkerPools need from the
 // apiserver — the PodCertificateRequest API and ClusterTrustBundle projection,
 // pod identities and trust bundles projected into the ateom workers — and

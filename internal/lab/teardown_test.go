@@ -27,10 +27,13 @@ const (
 
 // workspacesNamespaceObject is the NFS server's namespace as the fake lab
 // stores it.
-func workspacesNamespaceObject() *corev1.Namespace {
+func workspacesNamespaceObject() *corev1.Namespace { return namespaceObject(workspacesNamespace) }
+
+// namespaceObject is a namespace as the fake apiserver serves it.
+func namespaceObject(name string) *corev1.Namespace {
 	return &corev1.Namespace{
 		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Namespace"},
-		ObjectMeta: metav1.ObjectMeta{Name: workspacesNamespace},
+		ObjectMeta: metav1.ObjectMeta{Name: name},
 	}
 }
 
