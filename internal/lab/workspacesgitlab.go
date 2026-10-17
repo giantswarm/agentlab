@@ -186,7 +186,9 @@ func (gp *gitlabProof) run(email string, p *proofStages) error {
 // instance and the claude Agent is Ready.
 func (gp *gitlabProof) preconditions(email string) error {
 	cfg, sp := gp.cfg, gp.sp
-	if reason := workspaceManagerSkip(cfg); reason != "" {
+	if reason, err := workspaceManagerSkip(cfg); err != nil {
+		return err
+	} else if reason != "" {
 		return fmt.Errorf("no workspace-manager: %s", reason)
 	}
 	if err := waitMCPServerReachable(workspaceManagerMCPServer); err != nil {

@@ -38,15 +38,20 @@ const workspaceManagerToolPrefix = "x_" + workspaceManagerMCPServer + "_"
 
 // workspaceManagerSkip is why the stage has no subject: workspaces off, or a
 // platform chart without the workspaces values, which renders no
-// workspace-manager.
-func workspaceManagerSkip(cfg *config.Config) string {
+// workspace-manager. A chart the probe could not load is the probe's error,
+// not a skip.
+func workspaceManagerSkip(cfg *config.Config) (string, error) {
 	if !cfg.WorkspacesEnabled() {
-		return "platform.workspaces is off in " + config.File
+		return "platform.workspaces is off in " + config.File, nil
 	}
-	if !workspacesChartCarries(cfg) {
-		return fmt.Sprintf("%s takes no workspaces values, no workspace-manager to prove", platformChartFor(cfg))
+	w, err := workspacesChartProbed(cfg)
+	if err != nil {
+		return "", fmt.Errorf("probing %s for its workspaces values: %w", platformChartFor(cfg), err)
 	}
-	return ""
+	if !w.Carries {
+		return fmt.Sprintf("%s takes no workspaces values, no workspace-manager to prove", platformChartFor(cfg)), nil
+	}
+	return "", nil
 }
 
 // workspaceProviderStatus is one entry of list_providers: the instance, its

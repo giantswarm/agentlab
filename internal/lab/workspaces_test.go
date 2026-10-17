@@ -3,6 +3,8 @@ package lab
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"reflect"
 	"slices"
 	"strings"
@@ -647,5 +649,48 @@ func TestWorkspacesCompanionWording(t *testing.T) {
 	}
 	if e := substrateDriverEndpointFor(companionConfig()); e.serverName != "csi-companion-controller.agent-platform.svc" || e.namespace != platformNamespace {
 		t.Errorf("the companion's endpoint = %+v", e)
+	}
+}
+
+// TestWorkspaceManagerSkip: a lab with the switch off or a chart without the
+// workspaces values has no workspace-manager to prove, said as a skip; a chart
+// the probe could not load is no such chart, and the probe's failure is
+// returned instead — and not memoized, so the next call probes again.
+func TestWorkspaceManagerSkip(t *testing.T) {
+	cfg := config.Default()
+	if reason, err := workspaceManagerSkip(cfg); err != nil || !strings.Contains(reason, "platform.workspaces is off") {
+		t.Errorf("workspaces off: skip %q, %v; want the switch named", reason, err)
+	}
+
+	cfg.Platform.Workspaces.Enabled = true
+	stubWorkspacesProbe(t, false)
+	if reason, err := workspaceManagerSkip(cfg); err != nil || !strings.Contains(reason, "takes no workspaces values") {
+		t.Errorf("a chart without the values: skip %q, %v; want it refused with the reason", reason, err)
+	}
+
+	stubWorkspacesProbe(t, true)
+	if reason, err := workspaceManagerSkip(cfg); err != nil || reason != "" {
+		t.Errorf("a chart with the values: skip %q, %v; want none", reason, err)
+	}
+
+	stubWorkspacesProbe(t, true)
+	answers := []error{tokenClosed}
+	chartWorkspacesProbe = func(platformChart) (chartWorkspaces, error) {
+		if len(answers) > 0 {
+			err := answers[0]
+			answers = answers[1:]
+			return chartWorkspaces{}, err
+		}
+		return chartWorkspaces{Carries: true}, nil
+	}
+	reason, err := workspaceManagerSkip(cfg)
+	if !errors.Is(err, io.EOF) || reason != "" {
+		t.Errorf("a chart the probe could not load: skip %q, %v; want the probe's failure, not a skip", reason, err)
+	}
+	if err != nil && strings.Contains(err.Error(), "takes no workspaces values") {
+		t.Errorf("a chart the probe could not load is worded as one without the values: %v", err)
+	}
+	if reason, err := workspaceManagerSkip(cfg); err != nil || reason != "" {
+		t.Errorf("the probe once the registry answers: skip %q, %v; want none", reason, err)
 	}
 }

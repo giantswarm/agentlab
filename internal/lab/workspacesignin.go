@@ -574,7 +574,9 @@ const DefaultWorkspacesSignInSyncTimeout = 5 * time.Minute
 // both, and refused naming platform-infra for the developer, who does not
 // -> the workspace deleted and both grants dropped.
 func WorkspacesSignInTest(cfg *config.Config, opts WorkspacesSignInTestOptions) error {
-	if skip := workspaceManagerSkip(cfg); skip != "" {
+	if skip, err := workspaceManagerSkip(cfg); err != nil {
+		return err
+	} else if skip != "" {
 		return fmt.Errorf("no workspace-manager to sign in to: %s", skip)
 	}
 	instance := cmp.Or(opts.Provider, config.WorkspaceProviderFake)
