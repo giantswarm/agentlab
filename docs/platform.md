@@ -465,6 +465,30 @@ default 8090) — no port-forward. Port mappings are fixed at node-creation time
 so changing the port means `agentlab down && agentlab up`; the stopgap on an old
 cluster is `kubectl -n agent-platform port-forward svc/muster 8090:8090`.
 
+### muster on the pod network
+
+`platform.musterPodNetwork: true` (`agentlab configure --muster-pod-network`)
+runs muster the way an installation does, the shape its availability work is
+proven in: on the pod network, at two replicas behind the edge, with a
+PodDisruptionBudget of `minAvailable: 1` (the values set `muster.replicaCount`
+and `muster.podDisruptionBudget`). The host-network patch is not applied to
+muster then; the `dex-localhost` sidecar bridges the issuer
+`https://localhost:<dexPort>/dex` into each muster pod as it does for the MCP
+servers (under `platform.tls` cluster DNS answers the issuer and no sidecar is
+patched). Both replicas share the Valkey stores, and muster checks an MCP
+session ID for its format only, so a session needs no affinity: a request on
+the other replica is served as is. Backstage stays on the host network. The
+direct debug port (`platform.musterPort`) answers nothing in this shape: use
+the edge or `kubectl -n agent-platform port-forward svc/muster 8090:8090`.
+
+`agentlab platform-test` adds its `muster replicas` stage with the option on:
+the Deployment's two Ready pods off the host network, each with the sidecar,
+the budget's `minAvailable: 1`; then one pod is deleted while the proof's MCP
+session calls `tools/list` through the edge every 250 ms, and not one call may
+fail until the replacement is Ready and the Deployment has two Ready pods
+again. With the option off (the default) the stage is skipped and muster runs
+on the host network at one replica.
+
 ## Upgrade proofs from an older line
 
 agentlab refuses a released chart below agent-platform 4.93.0, the first
@@ -1658,7 +1682,7 @@ data the page reads — see [The muster plugin](backstage.md#the-muster-plugin).
 | `global.observability.traces.otlp.endpoint: ""` | The chart's default collector is the fleet's kube-system `otlp-gateway`, which kind does not run, with or without `platform.observability`. Empty, every `auto` exporter turns off (Substrate's signals, kagent's, muster's) instead of logging a resolver error on every export. |
 | `muster.muster.oauth.mcpClient.enabled: true` + the `lab-oauth-fixture` MCPServer | The chart leaves muster's OAuth *client* role — the proxy behind `core_auth_login` and the portal's Sign in — off; real installations turn it on, and without it no per-server sign-in can be exercised. The fixture is the one `Auth Required` downstream to sign in to (muster's own protected `/mcp`); see [Signing in to a downstream server](#signing-in-to-a-downstream-server-muster-as-oauth-client). |
 | `muster.rbac.{mcpServerEditor,workflowEditor}.subjects` → `oidc:platform-admins` | The chart binds muster's editor Roles to Giant Swarm's admin groups, which do not exist here. Rebound to the lab's own admin group (`--oidc-groups-prefix=oidc:`, same spelling as the lab RBAC). Lists replace, so the GS groups are dropped. |
-| muster patched to `hostNetwork` + `maxSurge: 0` | Same issuer trick as the apiserver and Backstage. `maxSurge: 0` because two hostNetwork pods cannot both bind `:8090` on a one-node cluster. A Kustomize strategic-merge patch in `components.muster.postRenderers`, which the chart forwards to muster's `HelmRelease` and the bundled helm-controller applies over the muster chart's render. |
+| muster patched to `hostNetwork` + one replica + `maxSurge: 0` (unless `platform.musterPodNetwork`) | Same issuer trick as the apiserver and Backstage. One replica and `maxSurge: 0` because two hostNetwork pods cannot both bind `:8090` on a one-node cluster. With [muster on the pod network](#muster-on-the-pod-network) it runs two replicas with the `dex-localhost` sidecar instead. A Kustomize strategic-merge patch in `components.muster.postRenderers`, which the chart forwards to muster's `HelmRelease` and the bundled helm-controller applies over the muster chart's render. |
 | The `dex-localhost` sidecar on every Deployment told the lab Dex's address — mcp-kubernetes, the managers (model-manager, agent-manager, vm-manager, cluster-manager) and mcp-prometheus | Those servers validate the forwarded Dex token themselves and must reach the issuer URL `https://localhost:32000/dex`, but all listen on `:8080` and cannot share the host network. A socat sidecar on the pod's own loopback forwards `:32000` to the Dex Service (HACKS.md U13) — a `postRenderers` patch on each component, and on the lab's own mcp-prometheus `HelmRelease`. The targets are a rule over the component renders (a Deployment whose containers are told the address through a name they dial it by — `--dex-issuer-url`, `DEX_ISSUER_URL`, `OIDC_ISSUER_URL` — or that the `agentlab.giantswarm.io/dex-localhost` annotation selects; an identity-only variable such as `OAUTH_AUTHORIZATION_SERVER` selects nothing), not a list: a component the chart turns on by default or an overlay turns on is covered without a lab release, and the roster's trailing range renders `components.<name>.postRenderers` for one the lab names no block for. `agentlab platform-test` asserts the sidecar, a clean rollout with no container restarted since the release — a kind node restart, which restarts every container once together, is history, not a crash loop — and the MCPServer reachable (Connected, Awaiting Session or Auth Required) on every such Deployment, naming the key each was selected by; `agentlab platform` rolls such a Deployment once when it crash-looped since its release. |
 | `components.kagent.enabled` from `platform.agents`; kagent ServiceMonitor + OTel off | Agents are part of what the lab tests, so kagent is on by default (the chart defaults it off) but optional — `platform.agents: false` skips the runtime. The controller's authentication is the fleet's (`trusted-proxy` behind the JWT `Strict` policy on the controller route); the kagent line serves no /metrics and there is no OTLP gateway in kind. See [Agents (kagent)](agents.md). |
 | `kagent.controllerRoute.jwtAuthentication.jwks` = the lab Dex (`dex.dex.svc.cluster.local:5556/dex/keys` over TLS) | The chart's default JWKS source is a Giant Swarm Dex; the policy itself (`Strict`, the identity transformation) is the chart's default, unchanged. |
