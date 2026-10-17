@@ -1079,12 +1079,17 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 %s
 %s%s`, header, reach, usersBlock(cfg), backstageHint, claudeCodeHint(cfg), agentsHint, modelManagerHint(cfg, backendEndpoints), servingHint(cfg), workspacesHint(cfg, workspacesChart, workspacesRegistrant), vmManagerHint(cfg), klausGatewayHint(cfg), obsHint, devImagesHint(cfg, dev), tryItBlock(cfg))
 	// A field a hand wrote on a platform workload outlives this run, which
-	// installs only what the releases render (foreignfields.go): named last,
-	// where the run's reader looks.
+	// installs only what the releases render: kubectl's edits are put back
+	// to the render (handfields.go), any other writer's named last, where the
+	// run's reader looks (foreignfields.go).
+	handErr := putBackHandFields(ctx)
 	warnForeignFields(ctx)
 	// Everything the platform runs is in the node now — record it so the next
 	// boot side-loads instead of pulling.
 	snapshotPreloadImages()
+	if handErr != nil {
+		return handErr
+	}
 	// The two steps the summary above only describes: on a terminal, ask
 	// instead of telling (prompt.go). Optional to the last: whatever the
 	// person answers, the platform is up and this returns nil.
