@@ -368,7 +368,7 @@ func (p *codingProof) run() error {
 		p.stages.begin(judged.name, "%s", judged.title)
 		verdict, err := judged.verdict(probe, egress)
 		if err != nil {
-			return fmt.Errorf("%s: %w", p.line, err)
+			return fmt.Errorf("%s: %w; the reply: %q", p.line, err, excerpt(reply, 1200))
 		}
 		note("%s", verdict)
 	}
