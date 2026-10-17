@@ -822,6 +822,30 @@ pin to a real provider's App needs the person's own browser sign-in once,
 and `platform-test` then ends its workspace-manager stage at muster's
 sign-in link.
 
+### What a run leaves: nothing
+
+The proofs share one lab with each other and with the Dev Portal's
+Playwright suite, so none of them assumes a clean lab or leaves state
+behind (`internal/lab/workspacefixtures.go`):
+
+- Every Workspace a proof creates carries `agentlab.giantswarm.io/fixture:
+  workspace` and the run's id under `agentlab.giantswarm.io/run`; the
+  manager takes no labels, so the lab sets them on its object after
+  `create_workspace`.
+- Every grant of the pinned App a proof uses goes into the run's ledger and
+  is dropped in muster (`core_auth_logout`) when the command ends, on a
+  failure too: after `platform-test`, `workspaces-test`,
+  `workspaces-signin-test`, `workspaces-measure` or `klaus-gateway-test` no
+  lab user holds a grant, so the portal's sign-in specs and the gateway's
+  workspace prompt see the same lab used as fresh.
+- `workspaces-test`, `workspaces-signin-test`, `workspaces-measure` and
+  `klaus-gateway-test` start by removing what an earlier run left: the lab's
+  labelled Workspaces of another run, and the portal suite's `e2e-ws-<run>-…`
+  of a run that started more than three hours ago (the suite's own
+  leftover age, so a portal run going on keeps its own). Each is deleted
+  with its deletion cycle requested at once; one a live Session's directory
+  still holds stays deleting, which no prompt or picker offers.
+
 ### The lab's Organization
 
 The workspace tools act only for a member of a workspace's Organization, and

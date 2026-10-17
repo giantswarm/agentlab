@@ -131,6 +131,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		inGroup(groupTesting, workspacesSignInTestCmd()),
 		inGroup(groupTesting, skillsTestCmd()),
 		inGroup(groupTesting, substrateStepTestCmd()),
+		inGroup(groupTesting, kagentStepTestCmd()),
 		inGroup(groupTesting, substrateTunnelTestCmd()),
 		inGroup(groupTesting, a2aTestCmd()),
 		inGroup(groupTesting, klausGatewayTestCmd()),
@@ -151,6 +152,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 
 		browserCmd(),
 		slackFakeCmd(),
+		mockLLMCmd(),
 		githubFakeCmd(),
 		skillHostCmd(),
 	)
@@ -176,6 +178,26 @@ func slackFakeCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&listen, "listen", "0.0.0.0:8080", "address to serve the fake Slack Web API on")
 	cmd.Flags().StringArrayVar(&emails, "email", nil, "a person users.info answers for, as <slack user id>=<e-mail> (repeatable)")
+	return cmd
+}
+
+// mockLLMCmd is the scripted model coding-test runs a codex agent on, in a
+// container on the kind network: plumbing, hidden, never typed by a person.
+func mockLLMCmd() *cobra.Command {
+	var listen, mcpServer string
+	cmd := &cobra.Command{
+		Use:    "mockllm",
+		Short:  "Serve coding-test's scripted OpenAI Responses API model, the mockllm (run by the proof, in a container)",
+		Args:   cobra.NoArgs,
+		Hidden: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			return lab.ServeMockLLM(ctx, listen, mcpServer)
+		},
+	}
+	cmd.Flags().StringVar(&listen, "listen", "0.0.0.0:8080", "address to serve the Responses API on (under /v1)")
+	cmd.Flags().StringVar(&mcpServer, "mcp-server", "", "the RemoteMCPServer whose tools the script's MCP call names")
 	return cmd
 }
 
@@ -529,7 +551,7 @@ func discoverInto(cfg *config.Config, first bool, pinEnabled *bool, pinBackends 
 	reportVMManager(vmBefore, cfg.Platform.VMManager.Enabled, disc)
 	if m, ok := lab.ApplyCodexHostModel(cfg, disc); ok {
 		fmt.Println("Applied to the configuration:")
-		fmt.Printf("  platform.extraModels: + %s (%s on %s, Responses API): the codex Harness's model (coding-test --harness codex runs on it)\n", m.Name, m.Model, m.BaseURL)
+		fmt.Printf("  platform.extraModels: + %s (%s on %s, Responses API): a model for the codex Harness (coding-test --harness codex --model-config %s runs on it)\n", m.Name, m.Model, m.BaseURL, m.Name)
 		fmt.Println()
 	}
 	return disc
@@ -1579,7 +1601,7 @@ func codingTestCmd() *cobra.Command {
 	var opts lab.CodingTestOptions
 	cmd := &cobra.Command{
 		Use:   "coding-test [email]",
-		Short: "Headless coding agents proof (platform.coding) on one coding Harness (--harness, default claude): the Harness Ready from the platform values (claude: no limits on it) -> validate_agent accepting a toolset with a muster write tool and refusing an origin outside the Harness's list -> a coding agent created through agent-manager as [email] (default the admin), Ready on the Harness (codex: its MCP binding's credential from a Secret) -> one turn probing its sandbox: on claude, Claude Code as uid 65532 cannot read the root harness's environment or memory, the caller forwarder refuses dot segments and encoded slashes, muster refuses a write tool outside the toolset through it; everywhere no forge token or bearer in the environment or /data, the model key and MCP credentials placeholders, a DNS canary recorded, a host outside the Agent's origins denied at the egress gate -> an MCP call through the agent's binding listing the agent -> on claude a repository's instruction files written, the next turn records what Claude Code loaded -> suspend and resume keeping the file and the conversation -> the resumed turn's usage on its task status -> a share of the Session refused",
+		Short: "Headless coding agents proof (platform.coding) on one coding Harness (--harness, default claude): the Harness Ready from the platform values (claude: no limits on it) -> validate_agent accepting a toolset with a muster write tool and refusing an origin outside the Harness's list -> a coding agent created through agent-manager as [email] (default the admin), Ready on the Harness (codex: its MCP binding's credential from a Secret) -> one turn probing its sandbox: on claude, Claude Code as uid 65532 cannot read the root harness's environment or memory, the caller forwarder refuses dot segments and encoded slashes, muster refuses a write tool outside the toolset through it; everywhere no forge token or bearer in the environment or /data, the model key and MCP credentials placeholders, a DNS canary recorded, a host outside the Agent's origins denied at the egress gate -> an MCP call through the agent's binding listing the agent -> on claude a repository's instruction files written, the next turn records what Claude Code loaded -> suspend and resume keeping the file and the conversation -> the resumed turn's usage on its task status -> a share of the Session refused. On codex the model is the in-cluster mockllm (ModelConfig " + lab.MockLLMModelConfig + "), a mock Responses API scripted for these turns, which needs no OpenAI or Bedrock account; --model-config runs a real one",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadProofLab()
@@ -1595,7 +1617,8 @@ func codingTestCmd() *cobra.Command {
 	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", lab.DefaultCodingReadyTimeout, "how long each agent's boot and each wait outside a turn may take")
 	cmd.Flags().DurationVar(&opts.TurnTimeout, "turn-timeout", 0, "how long each turn may take (default by the agent's model: 40m on a host model server's model, 10m on a hosted one); every turn prints its deadline")
 	cmd.Flags().StringVar(&opts.Harness, "harness", config.CodingRuntimeClaude, fmt.Sprintf("the coding Harness the proof runs on (%s), one the lab renders (platform.coding.harnesses)", strings.Join(config.CodingRuntimes, ", ")))
-	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the agent runs on (default on codex the first extraModels entry on the Responses API, which configure adds for a codex host model it finds, else agent-manager's default one); codex needs an OpenAI Responses API or Bedrock gpt-* ModelConfig")
+	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the agent runs on (default on codex the in-cluster mockllm, "+lab.MockLLMModelConfig+", else agent-manager's default one); codex needs an OpenAI Responses API or Bedrock gpt-* ModelConfig, such as the codex host model configure adds")
+	cmd.Flags().StringVar(&opts.MockLLMBinary, "mockllm-binary", "", "the static linux agentlab binary the mockllm's container runs (default this one)")
 	return cmd
 }
 
@@ -1867,6 +1890,34 @@ func substrateStepTestCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.Stay, "stay", false, "leave the lab on the --to release instead of returning it to the chart's Substrate")
 	cmd.Flags().BoolVar(&opts.NoDrain, "no-drain", false, "skip the drain case: by default every worker pod of the WorkerPool is deleted every 8s for a minute from the candidate's ate-api-server Ready, the suspended conversation is resumed during that drain once the release before's ate-api-server pods are gone (its ResumeActor must show in the candidate's RPC log while the drain runs), and every golden of the lab must be in the snapshot layout the candidate writes (taken again on a layout change, kept otherwise) with no terminal error")
 	_ = cmd.MarkFlagRequired("to")
+	return cmd
+}
+
+func kagentStepTestCmd() *cobra.Command {
+	var opts lab.KagentStepOptions
+	cmd := &cobra.Command{
+		Use:   "kagent-step-test [email]",
+		Short: "Headless kagent step proof: an agent on the kagent release the lab runs with a conversation of one turn, suspended -> the kagent and kagent-crds components pinned to --to, the meta chart moved to the candidate --chart, or both, and the platform upgraded in place under it -> the conversation resumes, a turn on it answers the codeword of its first turn, it suspends and resumes again, and the conversation and the agent delete; the kagent line before and after and PASS per step, or FAIL naming the step, the resume, the turn, the suspend or the delete with the cause, then the lab back on its own configuration",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadProofLab()
+			if err != nil {
+				return err
+			}
+			email := cfg.AdminUser().Email
+			if len(args) == 1 {
+				email = args[0]
+			}
+			return lab.KagentStepTest(cfg, email, opts)
+		},
+	}
+	cmd.Flags().StringVar(&opts.To, "to", "", "the kagent release to step to, exact (1.14.0, 1.15.1-rc.2), pinned on the kagent and kagent-crds components; the lab must run an older release before it")
+	cmd.Flags().StringVar(&opts.Chart, "chart", "", "the agent-platform release to step to, exact (4.145.1-rc.6): a candidate whose kagent range moves; with --to as well, the kagent pin rides on it")
+	cmd.Flags().StringToStringVar(&opts.DevImages, "step-dev-image", nil, "a platform.devImages entry for the step alone, <target>=<image> (repeatable), e.g. kagent=<a local build of a change no release carries yet>")
+	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the agent runs on (default: default-model-config, the Anthropic one the lab renders)")
+	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", lab.KagentStepReadyTimeout, "how long the agent's golden boot before the step may take")
+	cmd.Flags().BoolVar(&opts.Stay, "stay", false, "leave the lab on the step instead of returning it to its own configuration")
+	cmd.MarkFlagsOneRequired("to", "chart")
 	return cmd
 }
 

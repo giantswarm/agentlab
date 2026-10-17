@@ -384,7 +384,7 @@ func (sp *sessionsProof) createWorkspace() error {
 		s.private, s.tokens[syncOrg] = true, token
 	}
 	var created syncWorkspace
-	if err := s.member.callServerStructured(workspaceManagerToolPrefix+"create_workspace", map[string]any{
+	if err := s.member.createLabWorkspace(map[string]any{
 		nameKey: syncFilterWorkspace, wmOrganizationArg: config.WorkspaceOrganization, wmSourcesArg: syncFilterSources(s.private),
 	}, &created); err != nil {
 		return err
