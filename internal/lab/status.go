@@ -161,6 +161,9 @@ type Status struct {
 	// Observability is the observability stack in place against
 	// platform.observability (observability.go).
 	Observability *ObservabilityStatus `json:"observability,omitempty"`
+	// Registry is the lab registry container's docker state (devimages.go),
+	// "missing" when there is none; "" when the platform is disabled.
+	Registry string `json:"registry,omitempty"`
 }
 
 // LabStatus reads the lab's live state. A lab that is not running is refused
@@ -182,6 +185,7 @@ func LabStatus(cfg *config.Config, dir string) (*Status, error) {
 		return nil, err
 	}
 	if cfg.Platform.Enabled {
+		s.Registry = devRegistryState(cfg)
 		chart := platformChartFor(cfg)
 		s.Configured = chart.String()
 		if drift := driftBetween(installed, chart); drift != nil {
@@ -225,6 +229,9 @@ func PrintStatus(w io.Writer, s *Status, asJSON bool) error {
 		fmt.Fprintf(&b, "    app-config  %s\n", appConfigLine(s.AppConfigDrift))
 		fmt.Fprintf(&b, "    workloads   %s\n", workloadsLine(s.ForeignFields))
 	}
+	if s.Registry != "" {
+		fmt.Fprintf(&b, "    registry    %s\n", registryLine(s.Name, s.Registry))
+	}
 	if s.Workspaces != nil {
 		fmt.Fprintf(&b, "    workspaces  %s\n", s.Workspaces)
 	}
@@ -233,6 +240,20 @@ func PrintStatus(w io.Writer, s *Status, asJSON bool) error {
 	}
 	_, err := io.WriteString(w, b.String())
 	return err
+}
+
+// registryLine is `agentlab status`'s line on the lab registry: its docker
+// state, and the fix for one that does not serve.
+func registryLine(cluster, state string) string {
+	name := registryContainerName(cluster)
+	switch state {
+	case stateRunning:
+		return name + " running"
+	case registryMissing:
+		return name + " missing — dev images, the guest image and a local connectivity chart cannot be pulled; `agentlab platform` recreates it"
+	default:
+		return name + " " + state + " — `agentlab platform` starts it"
+	}
 }
 
 // chartLine is the chart in place with its revision's provenance, or none.

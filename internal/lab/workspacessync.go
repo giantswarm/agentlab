@@ -778,15 +778,13 @@ func (sp *syncProof) preconditions(email string) error {
 		user *config.User
 		into **musterSession
 	}{{member, &sp.member}, {outsider, &sp.outsider}} {
-		token, err := passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret, u.user.Email, u.user.Password, musterLoginScopes)
+		p, err := openGrantedWorkspacePerson(cfg, u.user)
 		if err != nil {
 			return err
 		}
-		if *u.into, err = openMusterSession(cfg, token, "workspaces-test-sync"); err != nil {
-			return err
-		}
+		*u.into = p.session
 	}
-	note("signed in to muster as %s (member) and %s (outside the Organization)", sp.memberEmail, sp.outsiderEmail)
+	note("signed in to muster as %s (member) and %s (outside the Organization), each holding the workspace-manager's App grant where muster pins one", sp.memberEmail, sp.outsiderEmail)
 
 	if sp.gh, err = openLabGitHub(cfg); err != nil {
 		return err
