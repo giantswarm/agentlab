@@ -540,8 +540,10 @@ type Platform struct {
 	// NFS server, the NFS CSI driver with an mTLS proxy in front of its
 	// controller that admits ate-api-server's pod identity alone, and the
 	// StorageClass the chart's workspaces values name. Off by default;
-	// --workspaces turns it on; needs the agents runtime. `agentlab
-	// workspaces-test --storage-only` is the proof.
+	// --workspaces turns it on. With the agents runtime off it runs without
+	// Agent Substrate (WorkspacesSubstrate): the shape an in-place switch of
+	// the agents starts from. `agentlab workspaces-test --storage-only` is
+	// the proof, with Substrate.
 	Workspaces Workspaces `yaml:"workspaces"`
 	// Coding agents: the chart's kagent.harnesses renders the lab's coding
 	// Harness (internal/lab/coding.go) claude, Claude Code run headless. Off
@@ -2026,12 +2028,11 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("platform.serving needs agent-platform %s or newer (the llm-d control plane alone, components.kserve-runtime-configs and modelServing.modelsGateway); %s — `agentlab configure --serving=false`", servingChartFloor, chart)
 		}
 	}
-	// The driver's controller endpoint is certified by Substrate's service-DNS
-	// signer and admits ate-api-server's pod identity alone, and the clones
-	// are Substrate volume mounts: without the runtime there is nothing to
-	// sign the endpoint or to mount a volume.
-	if c.Platform.Workspaces.Enabled && c.Platform.Enabled && !c.Platform.Agents {
-		return fmt.Errorf("platform.workspaces requires platform.agents (Substrate's signers certify the driver's endpoint, and a Session's workspace is a Substrate volume mount)")
+	// The CSI companion is Substrate's driver, rendered by the chart with the
+	// substrate component: without the runtime there is no Substrate to
+	// register it with. Workspaces alone run without it (WorkspacesSubstrate).
+	if c.Platform.Workspaces.Enabled && c.Platform.Workspaces.CSICompanion && c.Platform.Enabled && !c.Platform.Agents {
+		return fmt.Errorf("platform.workspaces.csiCompanion requires platform.agents (the companion is Agent Substrate's driver, which comes with the agents) — `agentlab configure --agents`, or `--workspaces-csi-companion=false`")
 	}
 	if names, err := parseWorkspaceProviders(c.Platform.Workspaces.Provider); err != nil {
 		return err
@@ -2237,7 +2238,7 @@ func (c *Config) CodingHarnessRendered(runtime string) bool {
 	if c.CodingEnabled() && slices.Contains(c.CodingHarnesses(), runtime) {
 		return true
 	}
-	return runtime == CodingRuntimeClaude && c.WorkspacesEnabled()
+	return runtime == CodingRuntimeClaude && c.WorkspacesSubstrate()
 }
 
 // CodexModelConfig is the ModelConfig a codex agent runs on unless told
@@ -2252,16 +2253,27 @@ func (c *Config) CodexModelConfig() string {
 	return ""
 }
 
-// WorkspacesEnabled reports whether the lab installs the workspace storage:
-// the platform with its agents runtime, and the key on.
+// WorkspacesEnabled reports whether the lab installs the workspace storage
+// and the chart its workspace-manager: the platform and the key on. Agent
+// Substrate follows platform.agents on its own (WorkspacesSubstrate).
 func (c *Config) WorkspacesEnabled() bool {
-	return c.Platform.Enabled && c.Platform.Agents && c.Platform.Workspaces.Enabled
+	return c.Platform.Enabled && c.Platform.Workspaces.Enabled
+}
+
+// WorkspacesSubstrate reports whether the workspaces run with Agent
+// Substrate: the agents on beside them. Without it (the lab shape that
+// switches Substrate on in place) the storage serves the cluster's claims
+// alone: the driver's controller runs without the mTLS proxy Substrate's
+// signers certify, nothing registers the driver with Substrate, and no
+// Session mounts a workspace.
+func (c *Config) WorkspacesSubstrate() bool {
+	return c.WorkspacesEnabled() && c.Platform.Agents
 }
 
 // WorkspacesCSICompanion reports whether the chart's CSI companion is
-// Substrate's workspace driver: workspaces on and the key on.
+// Substrate's workspace driver: workspaces with Substrate and the key on.
 func (c *Config) WorkspacesCSICompanion() bool {
-	return c.WorkspacesEnabled() && c.Platform.Workspaces.CSICompanion
+	return c.WorkspacesSubstrate() && c.Platform.Workspaces.CSICompanion
 }
 
 // WorkspaceProviders names the workspace-manager's provider instances, in
