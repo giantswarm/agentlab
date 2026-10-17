@@ -853,8 +853,12 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 		if err := waitWorkspacesProxy(ctx, cfg); err != nil {
 			return err
 		}
-		if err := ensureWorkspacesCSIDriverConfig(ctx, cfg, workspacesChartRegisters); err != nil {
-			return err
+		// Without Substrate there is no CSIDriverConfig API to register
+		// the driver with: the in-place switch of the agents adds it.
+		if cfg.WorkspacesSubstrate() {
+			if err := ensureWorkspacesCSIDriverConfig(ctx, cfg, workspacesChartRegisters); err != nil {
+				return err
+			}
 		}
 		workspacesRegistrant = readWorkspacesRegistrant(ctx, workspacesCSIDriverFor(cfg))
 	}
