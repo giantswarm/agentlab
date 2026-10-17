@@ -24,7 +24,7 @@ func TestMusterPodNetwork(t *testing.T) {
 		sidecar     bool
 		replicas    int
 	}{
-		{name: "default", hostNetwork: true, replicas: 1},
+		{name: "host network, the default", hostNetwork: true, replicas: 1},
 		{name: "pod network", podNetwork: true, sidecar: true, replicas: 2},
 		{name: "pod network under platform.tls", podNetwork: true, tls: true, replicas: 2},
 	} {
@@ -68,6 +68,11 @@ func TestMusterPodNetwork(t *testing.T) {
 				t.Errorf("backstage lost its hostNetwork patch:\n%s", backstage)
 			}
 
+			if tc.tls {
+				// The values are the pod-network case's; a platform.tls render
+				// needs the pair on disk (byoissuer_test.go).
+				return
+			}
 			out, err := renderTemplate(cfg, platformValuesTemplate, func(d *tmplData) { d.PostRenderers = rendered })
 			if err != nil {
 				t.Fatal(err)
