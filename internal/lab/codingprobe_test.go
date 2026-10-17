@@ -26,7 +26,7 @@ const codingReply = "Here is the output:\n```\n" +
 	"AGENTLAB_PROBE model-key=placeholder\n" +
 	"AGENTLAB_PROBE dns-cluster=93.184.215.14 \n" +
 	"AGENTLAB_PROBE dns-direct=no answer\n" +
-	"AGENTLAB_PROBE egress-outside=rc1 wget: server returned error: HTTP/1.1 403 Forbidden\n" +
+	"AGENTLAB_PROBE egress-outside=rc1 HTTP/1.1 403\n" +
 	"AGENTLAB_PROBE egress-origin=rc0 \n" +
 	"```\n"
 
@@ -64,9 +64,9 @@ func TestCodingProbeFailures(t *testing.T) {
 		{"token in env", "env-tokens=0", "env-tokens=1", codingProbe.credentials},
 		{"token in data", "data-tokens=0", "data-tokens=2", codingProbe.credentials},
 		{"real key", "model-key=placeholder", "model-key=other", codingProbe.credentials},
-		{"outside reached", "egress-outside=rc1 wget: server returned error: HTTP/1.1 403 Forbidden", "egress-outside=rc0 ", codingProbe.egress},
-		{"outside failed otherwise", "egress-outside=rc1 wget: server returned error: HTTP/1.1 403 Forbidden", "egress-outside=rc1 wget: bad address", codingProbe.egress},
-		{"origin denied", "egress-origin=rc0 ", "egress-origin=rc1 wget: server returned error: HTTP/1.1 403 Forbidden", codingProbe.egress},
+		{"outside reached", "egress-outside=rc1 HTTP/1.1 403", "egress-outside=rc0 ", codingProbe.egress},
+		{"outside failed otherwise", "egress-outside=rc1 HTTP/1.1 403", "egress-outside=rc1 wget: bad address", codingProbe.egress},
+		{"origin denied", "egress-origin=rc0 ", "egress-origin=rc1 HTTP/1.1 403", codingProbe.egress},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			reply := strings.Replace(codingReply, "AGENTLAB_PROBE "+tc.line, "AGENTLAB_PROBE "+tc.replace, 1)
