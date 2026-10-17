@@ -29,9 +29,18 @@ import (
 // releaseFieldManagers are the managers that write a Helm-owned workload as
 // the lab means it: the Helm SDK the lab runs and the CLI (helmFieldManager),
 // Flux's helm-controller for the component releases, the lab's own client
-// (applyFieldManager: its rollout restarts), and the controller-manager's
+// (applyFieldManager: its rollout restarts), the connectivity release's
+// config-reload hook (configReloadFieldManager), and the controller-manager's
 // writes beside the spec.
-var releaseFieldManagers = []string{helmFieldManager, "helm-controller", applyFieldManager, "kube-controller-manager"}
+var releaseFieldManagers = []string{helmFieldManager, "helm-controller", applyFieldManager, configReloadFieldManager, "kube-controller-manager"}
+
+// configReloadFieldManager is the field manager of the agent-platform
+// connectivity chart's config-reload hook: after every install or upgrade of
+// that release, its Job stamps the checksum of the rendered Backstage
+// app-config into the Backstage pod template
+// (AGENT_PLATFORM_APP_CONFIG_CHECKSUM), so a config change rolls the portal.
+// The stamp is the release's own write, never a hand's.
+const configReloadFieldManager = "agent-platform-config-reload"
 
 // restartedAtPath is the pod-template annotation a rollout restart stamps:
 // `kubectl rollout restart` and the lab's own (restartDeployment) — a roll,
