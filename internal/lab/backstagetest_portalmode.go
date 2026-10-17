@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/giantswarm/agentlab/internal/config"
@@ -43,7 +44,7 @@ func servedAgentPlatform(indexHTML []byte) (bool, error) {
 		case bool:
 			on = v
 		case string:
-			on = v == "true"
+			on, _ = strconv.ParseBool(v)
 		}
 	}
 	return on, nil
