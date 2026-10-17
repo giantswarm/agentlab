@@ -151,7 +151,7 @@ func foreignFieldsError(found []foreignFields) error {
 	for _, f := range found {
 		lines = append(lines, "  "+f.String())
 	}
-	return fmt.Errorf("%d platform workload field(s) were written outside the platform's Helm releases, which neither `agentlab platform` nor drift correction removes:\n%s\n"+
+	return fmt.Errorf("%d platform workload field(s) were written outside the platform's Helm releases, which no release renders and drift correction never removes:\n%s\n"+
 		"`agentlab platform` puts back what kubectl set, patched or edited; remove the rest with the inverse edit (`kubectl patch --type=json` with a remove op) — a lab change belongs in agentlab.yaml (platform.devImages, platform.chartPath), never a patch",
 		len(found), strings.Join(lines, "\n"))
 }
