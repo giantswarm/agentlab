@@ -1547,6 +1547,7 @@ func pmTestCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&opts.GitHubFakeBinary, "github-fake-binary", "", "the static Linux agentlab the registry's container runs on the kind network (default: this binary)")
+	cmd.Flags().StringVar(&opts.Record, "record", "", "write reconcile_capability's dry run to this file (how internal/lab/testdata/platform-manager/dry-run.json is recorded)")
 	return cmd
 }
 

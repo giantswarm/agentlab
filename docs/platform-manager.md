@@ -73,3 +73,9 @@ recorded at `/_fake/misses`.
 A manager change for the workspaces case is proven by pointing
 `platform.platformManager.version` at its release candidate, or at its
 branch's dev build, and running `agentlab pm-test`.
+
+The unit tests read a recorded dry run,
+`internal/lab/testdata/platform-manager/dry-run.json`, which asks Dex for no
+workspace-manager `/signin` redirect URI. A manager release that changes the
+plan is recorded again with
+`agentlab pm-test --record internal/lab/testdata/platform-manager/dry-run.json`.

@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -57,6 +58,9 @@ type PMTestOptions struct {
 	// GitHubFakeBinary is the static Linux agentlab the registry's container
 	// runs (default: this binary).
 	GitHubFakeBinary string
+	// Record, set, is the file the dry run's answer is written to, indented:
+	// the way testdata/platform-manager/dry-run.json is recorded.
+	Record string
 }
 
 // PMTest is the headless proof of the platform-manager fixture as the lab
@@ -142,11 +146,21 @@ func PMTest(cfg *config.Config, email string, opts PMTestOptions) error {
 	note("%s %s answers as %s", pmMCPServer, info.Version, info.Caller.Login)
 
 	step("reconcile_capability %s on %s, dry run", pmCapability, pmInstallation)
-	var plan pmDryRun
+	var raw json.RawMessage
 	if err := pmCall(session, "reconcile_capability", map[string]any{
 		"installations": []string{pmInstallation}, "capability": pmCapability, "dryRun": true, "content": true,
-	}, &plan); err != nil {
+	}, &raw); err != nil {
 		return err
+	}
+	if opts.Record != "" {
+		if err := recordPMDryRun(opts.Record, raw); err != nil {
+			return err
+		}
+		note("the dry run recorded at %s", opts.Record)
+	}
+	var plan pmDryRun
+	if err := json.Unmarshal(raw, &plan); err != nil {
+		return fmt.Errorf("reconcile_capability's dry run: %w", err)
 	}
 	if err := plan.assertWorkspaces(); err != nil {
 		return err
@@ -175,6 +189,19 @@ func pmCall(s *musterSession, tool string, args map[string]any, out any) error {
 	}
 	if err := json.Unmarshal([]byte(text), out); err != nil {
 		return fmt.Errorf("%s answered no JSON: %w: %.300s", tool, err, text)
+	}
+	return nil
+}
+
+// recordPMDryRun writes the dry run's answer to path, indented two spaces.
+func recordPMDryRun(path string, raw json.RawMessage) error {
+	var out bytes.Buffer
+	if err := json.Indent(&out, raw, "", "  "); err != nil {
+		return fmt.Errorf("indenting the dry run: %w", err)
+	}
+	out.WriteByte('\n')
+	if err := os.WriteFile(path, out.Bytes(), 0o600); err != nil {
+		return fmt.Errorf("recording the dry run: %w", err)
 	}
 	return nil
 }
