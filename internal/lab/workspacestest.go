@@ -118,6 +118,9 @@ func WorkspacesTest(cfg *config.Config, opts WorkspacesTestOptions) error {
 	if !cfg.WorkspacesEnabled() {
 		return fmt.Errorf("platform.workspaces is off in %s — `agentlab configure --workspaces` turns it on, then `agentlab platform`", config.File)
 	}
+	if !cfg.WorkspacesSubstrate() {
+		return fmt.Errorf("the workspaces run without Agent Substrate in %s (platform.agents: false), and every step of the proof mounts through it — `agentlab configure --agents` switches it on in place, then `agentlab platform`", config.File)
+	}
 	if opts.ReadyTimeout <= 0 {
 		opts.ReadyTimeout = DefaultWorkspacesReadyTimeout
 	}
@@ -125,6 +128,11 @@ func WorkspacesTest(cfg *config.Config, opts WorkspacesTestOptions) error {
 		return err
 	}
 	if err := useClusterKubeconfig(cfg); err != nil {
+		return err
+	}
+	end, err := startWorkspaceRun()
+	defer end()
+	if err != nil {
 		return err
 	}
 	if opts.Part == WorkspacesPartSync {

@@ -109,6 +109,25 @@ func TestForeignFieldsOfARenderedDeployment(t *testing.T) {
 	}
 }
 
+// TestForeignFieldsOfTheConfigReloadStamp: the connectivity release's
+// config-reload hook stamps the app-config checksum into the Backstage pod
+// template under its own field manager. It is the release's writer: neither
+// reported as foreign nor put back as a hand's edit.
+func TestForeignFieldsOfTheConfigReloadStamp(t *testing.T) {
+	stamp := managedEntry(configReloadFieldManager, "",
+		`{"f:spec":{"f:template":{"f:spec":{"f:containers":{"k:{\"name\":\"backstage\"}":{"f:env":{"k:{\"name\":\"AGENT_PLATFORM_APP_CONFIG_CHECKSUM\"}":{".":{},"f:name":{},"f:value":{}}}}}}}}}`)
+	found, err := foreignFieldsOf(helmDeployment(renderedFields, statusFields, revisionFields, stamp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) != 0 {
+		t.Errorf("found %+v, want none", found)
+	}
+	if isHandEdit(stamp) {
+		t.Errorf("the config-reload stamp is taken for a hand's edit")
+	}
+}
+
 // TestForeignFieldsJSON: `agentlab status -o json` carries the fields.
 func TestForeignFieldsJSON(t *testing.T) {
 	raw, err := json.Marshal(Status{ForeignFields: []foreignFields{{Kind: kindDeployment, Namespace: platformNamespace, Name: componentMuster, Manager: "kubectl-patch", Fields: []string{".spec.template.spec.hostNetwork"}}}})

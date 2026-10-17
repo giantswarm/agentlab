@@ -60,6 +60,14 @@ func Up(cfg *config.Config, offers Offers) error {
 	if err := preflightRuntimeResources(cfg, topology); err != nil {
 		return err
 	}
+	// A cluster about to be created binds every host port of the
+	// configuration; an existing one already holds its own.
+	clusterExists := kindClusterExists(cfg.ClusterName)
+	if !clusterExists {
+		if err := checkHostPortsFree(cfg); err != nil {
+			return err
+		}
+	}
 
 	// Pure network work that needs no cluster starts first, so it overlaps
 	// with cluster creation: pulling the Dex image plus the last boot's
@@ -76,7 +84,7 @@ func Up(cfg *config.Config, offers Offers) error {
 		return err
 	}
 
-	if kindClusterExists(cfg.ClusterName) {
+	if clusterExists {
 		step("kind cluster %q already exists", cfg.ClusterName)
 		// Its node may be exited — what a `down` that lost its race with
 		// docker leaves behind (node.go); the kubeconfig read below would
@@ -265,7 +273,7 @@ func tryItBlock(cfg *config.Config) string {
 	if cfg.Platform.Enabled && cfg.Platform.Agents {
 		cmds = append(cmds, [2]string{"agentlab agents-test", "agent-manager as the caller: create -> ready -> update -> delete, a viewer refused, the ServiceAccount without RBAC"})
 	}
-	if cfg.WorkspacesEnabled() {
+	if cfg.WorkspacesSubstrate() {
 		cmds = append(cmds, [2]string{"agentlab workspaces-test", "a read-write-many claim, a shared clone per session sub-path, the sessions isolated, the read-only mounts refusing writes, the controller endpoint refused without Substrate's certificate, a claude Session admitted on the volume with a workspace grant"})
 	}
 	width := 0
