@@ -38,8 +38,9 @@ import (
 //   - the admin, connected, after a push to agentlab-oss/docs: a grant
 //     naming the admin, the workspace, its volume and the repository changed
 //     since the sync; start_session with it creates the Session on the
-//     volume. The same grant used by the second user, an expired grant and a
-//     grant for another workspace are refused by kagent's admission (and the
+//     volume. The same grant used by the second user, an expired grant, a
+//     grant for another workspace, one for another namespace's Agents and one
+//     naming no Agent namespace are refused by kagent's admission (and the
 //     first two by agent-manager before kagent);
 //   - disconnect_provider as the admin: the provider's log shows the
 //     revocation, list_providers no sign-in, and authorize_workspace grants
@@ -61,6 +62,12 @@ const (
 	// accessOtherWorkspace names the workspace of the grant for another
 	// workspace.
 	accessOtherWorkspace = "agentlab-access-other"
+	// accessOtherAgentNamespace is the namespace a re-signed grant names in
+	// place of the lab Agents' own.
+	accessOtherAgentNamespace = "agentlab-access-other"
+	// accessOtherNamespaceRefusal is kagent's refusal of a grant naming
+	// another Agent namespace or none.
+	accessOtherNamespaceRefusal = "admission grant is for another namespace"
 	// The outcomes of authorize_workspace.
 	authorizeGranted         = "granted"
 	authorizeConnectRequired = "connect_required"
@@ -172,7 +179,7 @@ func (ap *accessProof) run(email string, p *proofStages) error {
 		return err
 	}
 
-	p.begin("access: admission", "kagent's admission refuses the same grant used by %s, an expired grant and a grant for another workspace; nothing of them exists", email)
+	p.begin("access: admission", "kagent's admission refuses the same grant used by %s, an expired grant, a grant for another workspace, one for another namespace's Agents and one naming none; nothing of them exists", email)
 	if err := ap.admissionRefusals(grant); err != nil {
 		return err
 	}
@@ -539,6 +546,14 @@ func (ap *accessProof) admissionRefusals(grant string) error {
 	if err != nil {
 		return err
 	}
+	otherNamespace, err := resign(func(c map[string]any) { c["agent_namespace"] = accessOtherAgentNamespace })
+	if err != nil {
+		return err
+	}
+	noNamespace, err := resign(func(c map[string]any) { delete(c, "agent_namespace") })
+	if err != nil {
+		return err
+	}
 	source := workspacesHarnessVolumeSource(ap.volume)
 	for _, r := range []struct {
 		what    string
@@ -546,10 +561,14 @@ func (ap *accessProof) admissionRefusals(grant string) error {
 		api     *kagentAPI
 		grant   string
 		manager bool
+		// reason is the refusal kagent must name; empty takes any.
+		reason string
 	}{
-		{fmt.Sprintf("the admin's grant used by %s", ap.second.user.Email), ap.second, ap.secondAPI, grant, true},
-		{"an expired grant (the manager's, re-signed with the lab's grant key with its expiry 5 minutes past)", ap.admin, ap.adminAPI, expired, true},
-		{fmt.Sprintf("a grant for another workspace (%s on another volume, signed with the lab's grant key) presented on %s's volume", accessOtherWorkspace, accessWorkspace), ap.admin, ap.adminAPI, other, false},
+		{fmt.Sprintf("the admin's grant used by %s", ap.second.user.Email), ap.second, ap.secondAPI, grant, true, ""},
+		{"an expired grant (the manager's, re-signed with the lab's grant key with its expiry 5 minutes past)", ap.admin, ap.adminAPI, expired, true, ""},
+		{fmt.Sprintf("a grant for another workspace (%s on another volume, signed with the lab's grant key) presented on %s's volume", accessOtherWorkspace, accessWorkspace), ap.admin, ap.adminAPI, other, false, ""},
+		{fmt.Sprintf("a grant for the Agents of namespace %s (the manager's, re-signed with the lab's grant key) presented on Agent %s/%s", accessOtherAgentNamespace, kagentNamespace, workspacesHarnessAgent), ap.admin, ap.adminAPI, otherNamespace, false, accessOtherNamespaceRefusal},
+		{"a grant without agent_namespace (the manager's, re-signed with the lab's grant key without the claim)", ap.admin, ap.adminAPI, noNamespace, false, accessOtherNamespaceRefusal},
 	} {
 		before, err := ap.traces(r.person)
 		if err != nil {
@@ -570,6 +589,9 @@ func (ap *accessProof) admissionRefusals(grant string) error {
 		reason, err := workspacesHarnessRefused(context.Background(), r.api, source, r.grant)
 		if err != nil {
 			return fmt.Errorf("%s: kagent CreateSession as %s: %w", r.what, r.person.user.Email, err)
+		}
+		if !strings.Contains(reason, r.reason) {
+			return fmt.Errorf("%s: kagent CreateSession as %s refused for another reason than %q: %s", r.what, r.person.user.Email, r.reason, reason)
 		}
 		note("%s: kagent CreateSession as %s refused by the admission — %s", r.what, r.person.user.Email, reason)
 		if err := ap.nothingSince(r.person, before); err != nil {
