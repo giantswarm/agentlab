@@ -186,7 +186,7 @@ func (cp *callerCredentialProof) preconditions(adminUser *config.User) error {
 	if cp.api, err = dialKagentAPI(cfg, token); err != nil {
 		return err
 	}
-	cp.set = &sessionSet{api: cp.api}
+	cp.set = &sessionSet{api: cp.api, manager: cp.admin.session}
 	if err := waitHarnessReady(ctx, claudeHarness, cp.timeout); err != nil {
 		return err
 	}

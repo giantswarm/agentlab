@@ -336,7 +336,7 @@ func (sp *sessionsProof) preconditions(adminUser *config.User) error {
 	if sp.api, err = dialKagentAPI(cfg, sp.token); err != nil {
 		return err
 	}
-	sp.set = &sessionSet{api: sp.api}
+	sp.set = &sessionSet{api: sp.api, manager: sp.admin.session}
 	for _, h := range sessionsHarnesses {
 		if err := waitHarnessReady(ctx, h.harness, sp.timeout); err != nil {
 			return err
@@ -973,7 +973,7 @@ func (sp *sessionsProof) deleteOne() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), sp.timeout)
 	defer cancel()
-	if err := sp.api.deleteSession(ctx, victim.ID); err != nil {
+	if err := sp.set.deleteOne(ctx, victim.ID); err != nil {
 		return err
 	}
 	deletedAt := time.Now()
@@ -1023,7 +1023,7 @@ func (sp *sessionsProof) deleteOne() error {
 	}
 	sp.set.ids = slices.DeleteFunc(sp.set.ids, func(id string) bool { return id == victim.ID })
 	victim.Deleted = true
-	note("deleted %s (%s): its directory gone %s after DeleteSession, with the cycle %s (trigger %s); the %d other directories and the mirrors' heads untouched, the workspace on volume %s",
+	note("deleted %s (%s): its directory gone %s after delete_session, with the cycle %s (trigger %s); the %d other directories and the mirrors' heads untouched, the workspace on volume %s",
 		victim.ID, victim.Harness, time.Since(deletedAt).Round(time.Second), after.Workspace.LastSync.Result, after.Workspace.LastSync.Trigger, len(dirs), sp.volume.Handle)
 	return nil
 }
@@ -1035,7 +1035,7 @@ func (sp *sessionsProof) awaitDeleted(id string, dirs map[string]sessionDirector
 	var err error
 	for _, ok := dirs[id]; ok; _, ok = dirs[id] {
 		if time.Since(deletedAt) > sessionsDeleteWait {
-			return nil, nil, fmt.Errorf("the directory of the deleted Session %s is still on the volume %s after DeleteSession with no cycle requested; the workspace-manager lists kagent's Sessions every %s", id, sessionsDeleteWait, sp.poll)
+			return nil, nil, fmt.Errorf("the directory of the deleted Session %s is still on the volume %s after delete_session with no cycle requested; the workspace-manager lists kagent's Sessions every %s", id, sessionsDeleteWait, sp.poll)
 		}
 		time.Sleep(5 * time.Second)
 		out, err := sp.sp.onVolume(syncFilterWorkspace, "sessions-after-delete", sessionsDirectoriesScript)
@@ -1060,7 +1060,7 @@ func (sp *sessionsProof) awaitDeleted(id string, dirs map[string]sessionDirector
 		}
 		time.Sleep(5 * time.Second)
 	}
-	note("the directory %s gone %s after DeleteSession with no cycle requested", id, gone.Round(time.Second))
+	note("the directory %s gone %s after delete_session with no cycle requested", id, gone.Round(time.Second))
 	return after, dirs, nil
 }
 

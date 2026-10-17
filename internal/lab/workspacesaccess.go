@@ -237,10 +237,11 @@ func (ap *accessProof) preconditions(adminUser *config.User, email string) error
 		return err
 	}
 	for _, person := range []struct {
-		user *config.User
-		api  **kagentAPI
-		set  **sessionSet
-	}{{adminUser, &ap.adminAPI, &ap.adminSessions}, {secondUser, &ap.secondAPI, &ap.secondSessions}} {
+		user   *config.User
+		person *workspacePerson
+		api    **kagentAPI
+		set    **sessionSet
+	}{{adminUser, ap.admin, &ap.adminAPI, &ap.adminSessions}, {secondUser, ap.second, &ap.secondAPI, &ap.secondSessions}} {
 		token, err := passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret, person.user.Email, person.user.Password, musterLoginScopes)
 		if err != nil {
 			return err
@@ -248,7 +249,7 @@ func (ap *accessProof) preconditions(adminUser *config.User, email string) error
 		if *person.api, err = dialKagentAPI(cfg, token); err != nil {
 			return err
 		}
-		*person.set = &sessionSet{api: *person.api}
+		*person.set = &sessionSet{api: *person.api, manager: person.person.session}
 	}
 	note("signed in to muster and kagent as %s (fixture login %s) and %s (fixture login %s)", adminUser.Email, ap.admin.login, email, ap.second.login)
 

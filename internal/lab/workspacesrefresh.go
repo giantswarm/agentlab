@@ -196,7 +196,7 @@ func (rp *refreshProof) preconditions(adminUser *config.User) error {
 	if rp.api, err = dialKagentAPI(cfg, token); err != nil {
 		return err
 	}
-	rp.set = &sessionSet{api: rp.api}
+	rp.set = &sessionSet{api: rp.api, manager: rp.admin.session}
 	if err := waitHarnessReady(ctx, kagentHarness, rp.timeout); err != nil {
 		return err
 	}
