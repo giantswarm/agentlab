@@ -419,6 +419,21 @@ func saveLab(cfg *config.Config) error {
 	return labs.Register(cfg.ClusterName, ".")
 }
 
+// freeClusterName gives a new lab the default name, or, when another lab on
+// this machine holds it, the first free one after it (labs.FreeName) — named
+// on stdout, so a second lab needs no --cluster-name.
+func freeClusterName(cfg *config.Config) error {
+	name, err := labs.FreeName(cfg.ClusterName, ".")
+	if err != nil {
+		return err
+	}
+	if name != cfg.ClusterName {
+		fmt.Printf("  clusterName %s: another lab on this machine is %s (--cluster-name picks another)\n", name, cfg.ClusterName)
+		cfg.ClusterName = name
+	}
+	return nil
+}
+
 func loadOrCreateConfig() (*config.Config, error) {
 	cfg, err := config.Load()
 	if err == nil {
@@ -432,6 +447,9 @@ func loadOrCreateConfig() (*config.Config, error) {
 	}
 	fmt.Printf("No %s yet — checking this machine first.\n\n", config.File)
 	cfg = config.Default()
+	if err := freeClusterName(cfg); err != nil {
+		return nil, err
+	}
 	disc := discoverInto(cfg, true, nil, nil, nil)
 	// The tools before the questions: a missing tool is refused here, not
 	// after the form and a cluster boot.
@@ -857,7 +875,7 @@ func configureCmd() *cobra.Command {
 	var githubSignInOrgs, modelManagerBackends []string
 	var vmManagerImageDir, aiKeySource, gitHubTokenSource, portal string
 	var gitHubAppID, gitHubAppInstallationID, gitHubAppPrivateKeySource, gitHubAppClientID, gitHubAppClientSecretSource string
-	var chartVersion, chartPath, chartBranch string
+	var chartVersion, chartPath, chartBranch, clusterName string
 	var upgradeSeed, adoptChart bool
 	cmd := &cobra.Command{
 		Use:   "configure",
@@ -878,6 +896,16 @@ func configureCmd() *cobra.Command {
 				cfg = config.Default()
 			} else if err != nil {
 				return err
+			}
+			if cmd.Flags().Changed("cluster-name") {
+				if err := config.ValidateClusterName(clusterName); err != nil {
+					return fmt.Errorf("--cluster-name %q: %w", clusterName, err)
+				}
+				cfg.ClusterName = clusterName
+			} else if fresh {
+				if err := freeClusterName(cfg); err != nil {
+					return err
+				}
 			}
 			// The component flags first: what the discovery applies depends
 			// on them (managed models need the agents runtime).
@@ -1085,6 +1113,7 @@ func configureCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&defaults, "defaults", false, "skip the form; keep current values (or the canonical defaults) plus what the discovery finds")
+	cmd.Flags().StringVar(&clusterName, "cluster-name", "", "the lab's name (clusterName): its kind cluster, its registration and --lab <name>; default "+config.DefaultClusterName+", or the first free "+config.DefaultClusterName+"-<n> when another lab on this machine holds it")
 	cmd.Flags().BoolVar(&platform, "platform", false, "enable/disable the agent platform")
 	cmd.Flags().BoolVar(&agents, "agents", false, "enable/disable the agents runtime (kagent, part of the platform install)")
 	cmd.Flags().BoolVar(&observability, "observability", false, "enable/disable the observability stack (Prometheus + mcp-prometheus)")

@@ -166,3 +166,46 @@ func TestConfigureWithoutATerminalNamesDefaults(t *testing.T) {
 		t.Fatalf("configure wrote %d entries before refusing", len(entries))
 	}
 }
+
+// A new lab beside a registered lab named agentlab takes the first free
+// name instead of being refused; --cluster-name is validated before
+// anything is discovered or written.
+func TestConfigureClusterName(t *testing.T) {
+	regDir := t.TempDir()
+	prev := labs.Dir
+	labs.Dir = func() (string, error) { return regDir, nil }
+	t.Cleanup(func() { labs.Dir = prev })
+	other := t.TempDir()
+	if err := os.WriteFile(filepath.Join(other, config.File), []byte("clusterName: agentlab\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := labs.Register("agentlab", other); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(t.TempDir())
+
+	t.Run("the default name moves past a registered lab", func(t *testing.T) {
+		cfg := config.Default()
+		if err := freeClusterName(cfg); err != nil {
+			t.Fatal(err)
+		}
+		if cfg.ClusterName != "agentlab-2" {
+			t.Fatalf("clusterName = %q, want agentlab-2", cfg.ClusterName)
+		}
+	})
+	t.Run("an invalid --cluster-name is refused before anything is written", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Chdir(dir)
+		cmd := configureCmd()
+		cmd.SetArgs([]string{"--defaults", "--cluster-name", "Not_A_Name"})
+		cmd.SilenceUsage = true
+		cmd.SilenceErrors = true
+		err := cmd.Execute()
+		if err == nil || !strings.Contains(err.Error(), "--cluster-name") {
+			t.Fatalf("configure --cluster-name Not_A_Name = %v, want a refusal naming the flag", err)
+		}
+		if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+			t.Fatalf("configure wrote %d entries before refusing", len(entries))
+		}
+	})
+}

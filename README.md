@@ -125,7 +125,9 @@ agentlab platform-test                # headless proof: Dex -> muster -> mcp-kub
 ```
 
 Headless (CI, a coding agent), write the lab first with `agentlab configure
---defaults`: nothing asks without a terminal. On a terminal, `up` ends by asking whether to trust the lab CA (one sudo
+--defaults`: nothing asks without a terminal. A new lab is named `agentlab`,
+or `agentlab-<n>` when another lab on this machine holds that name;
+`--cluster-name <name>` names it. On a terminal, `up` ends by asking whether to trust the lab CA (one sudo
 prompt, so browsers get a green lock) and whether to open the portal — `open
 portal` is the command for later, `open agents` opens the kagent UI and `open
 prometheus` the lab Prometheus.

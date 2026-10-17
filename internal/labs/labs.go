@@ -77,7 +77,7 @@ type TakenError struct {
 
 func (e *TakenError) Error() string {
 	return fmt.Sprintf("a lab named %q already lives in %s — its kind cluster and ports would collide with one in %s.\n"+
-		"  Use that lab with --lab %s (or from its directory), or give this one another clusterName (`agentlab configure`).",
+		"  Use that lab with --lab %s (or from its directory), or give this one another clusterName (`agentlab configure --cluster-name <name>`).",
 		e.Name, e.Other, e.Dir, e.Name)
 }
 
@@ -94,6 +94,25 @@ func Check(name, dir string) error {
 		return err
 	}
 	return reg.taken(name, dir)
+}
+
+// FreeName returns name when Check would accept it for dir, else the first of
+// name-2, name-3, … that no other lab directory holds: the default name of a
+// new lab on a machine where name is taken. It writes nothing.
+func FreeName(name, dir string) (string, error) {
+	dir, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+	reg, err := read()
+	if err != nil {
+		return "", err
+	}
+	candidate := name
+	for i := 2; reg.taken(candidate, dir) != nil; i++ {
+		candidate = fmt.Sprintf("%s-%d", name, i)
+	}
+	return candidate, nil
 }
 
 // taken is Check's rule on an already read registry.

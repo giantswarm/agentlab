@@ -31,7 +31,9 @@ checkout for a lab you made there, `~/.local/state/<lab>` for a leased lab
 
 A lab entered from another directory is named on stderr (`Lab agentlab
 (/path/to/lab)`). `configure` and `up` skip step 3: in a directory without
-`agentlab.yaml` they create a lab there. A `clusterName` another lab
+`agentlab.yaml` they create a lab there, named `agentlab` — or the first free
+`agentlab-<n>` when another lab holds that name — unless `configure
+--cluster-name <name>` names it. A `clusterName` another lab
 directory holds is refused, naming both directories — the two would collide
 on the kind cluster and its ports. `down` keeps the registration (the lab
 still exists as a directory); a lab whose directory or `agentlab.yaml` is gone
@@ -158,6 +160,7 @@ The flags pin a value regardless of the discovery, with or without
 | Flag | Effect |
 |---|---|
 | `--defaults` | Skip the form; keep the current values (or write the canonical lab) plus what the discovery finds. |
+| `--cluster-name <name>` | The lab's name (`clusterName`): its kind cluster, its registration and `--lab <name>`. A new lab defaults to `agentlab`, or to the first free `agentlab-<n>` when another lab on this machine holds it; a name another lab holds is refused. |
 | `--accessible` | Prompt-per-question form mode, for screen readers and plain terminals. |
 | `--platform[=false]` | Enable or disable the agent platform. Off gives a bare kind + Dex OIDC sandbox. |
 | `--agents[=false]` | Enable or disable the agents runtime (kagent, part of the platform install). |
