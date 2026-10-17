@@ -107,15 +107,18 @@ type (
 		Usage             map[string]int64 `json:"usage"`
 	}
 	mockLLMItem struct {
-		ID        string           `json:"id"`
-		Type      string           `json:"type"`
-		Status    string           `json:"status"`
-		Role      string           `json:"role,omitempty"`
-		Content   []mockLLMContent `json:"content,omitempty"`
-		CallID    string           `json:"call_id,omitempty"`
-		Execution string           `json:"execution,omitempty"`
-		Namespace string           `json:"namespace,omitempty"`
-		Name      string           `json:"name,omitempty"`
+		ID     string `json:"id"`
+		Type   string `json:"type"`
+		Status string `json:"status"`
+		Role   string `json:"role,omitempty"`
+		// Content is a message's []mockLLMContent: an interface, so a
+		// message's empty content stays on the wire as [] (codex reads a
+		// message item only with it) and other items carry none.
+		Content   any    `json:"content,omitempty"`
+		CallID    string `json:"call_id,omitempty"`
+		Execution string `json:"execution,omitempty"`
+		Namespace string `json:"namespace,omitempty"`
+		Name      string `json:"name,omitempty"`
 		// Arguments is a JSON string on a function call, an object on a
 		// tool search.
 		Arguments any `json:"arguments,omitempty"`
@@ -252,7 +255,8 @@ func mockLLMStream(response mockLLMResponse) []mockLLMEvent {
 		case mockLLMMessage:
 			added.Content = []mockLLMContent{}
 			events = append(events, mockLLMEvent{Type: "response.output_item.added", OutputIndex: &index, Item: &added})
-			for c, content := range item.Content {
+			contents, _ := item.Content.([]mockLLMContent)
+			for c, content := range contents {
 				c, content := c, content
 				empty := mockLLMContent{Type: content.Type, Annotations: []any{}}
 				at := mockLLMEvent{OutputIndex: &index, ItemID: item.ID, ContentIndex: &c}

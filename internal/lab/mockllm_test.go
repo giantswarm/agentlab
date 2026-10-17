@@ -64,6 +64,9 @@ func mockLLMCall(t *testing.T, srv *httptest.Server, items ...any) mockLLMItem {
 			usage = event.Response.Usage
 		}
 	}
+	if strings.Contains(string(raw), `"type":"message","status":"in_progress"`) && !strings.Contains(string(raw), `"content":[]`) {
+		t.Fatalf("the stream adds a message item without its empty content, which codex needs: %s", excerpt(string(raw), 600))
+	}
 	if item == nil || usage == nil {
 		t.Fatalf("the stream carried item %v usage %v, wanted one item and the usage: %s", item, usage, excerpt(string(raw), 400))
 	}
