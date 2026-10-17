@@ -907,7 +907,7 @@ func configureCmd() *cobra.Command {
 	var vmManagerImageDir, aiKeySource, gitHubTokenSource, portal string
 	var gitHubAppID, gitHubAppInstallationID, gitHubAppPrivateKeySource, gitHubAppClientID, gitHubAppClientSecretSource string
 	var chartVersion, chartPath, chartBranch, clusterName string
-	var upgradeSeed, adoptChart bool
+	var upgradeSeed, adoptChart, released bool
 	cmd := &cobra.Command{
 		Use:   "configure",
 		Short: "Discover this machine, then ask for the lab configuration (or keep it with --defaults) and save agentlab.yaml",
@@ -990,6 +990,23 @@ func configureCmd() *cobra.Command {
 					if old := lab.ResetDevBuildPin(cfg); old != "" {
 						fmt.Printf("  chartVersion %s was the branch's dev build; on the stable channel the lab pins %s (--chart-version picks another release)\n", old, cfg.Platform.ChartVersion)
 					}
+				}
+			}
+			// The restore step before a lab is handed on: the proof state
+			// goes, so the next holder starts on the released platform
+			// (overlays.go).
+			if released {
+				for _, flag := range []string{"chart-path", "chart-branch", "adopt-chart", "vm-manager-image-dir"} {
+					if cmd.Flags().Changed(flag) {
+						return fmt.Errorf("--released drops the proof state; --%s sets some — one or the other", flag)
+					}
+				}
+				dropped := lab.DropProofState(cfg)
+				if len(dropped) == 0 {
+					fmt.Println("  no proof state to drop: the lab is on the released platform")
+				}
+				for _, d := range dropped {
+					fmt.Printf("  dropped %s\n", d)
 				}
 			}
 			// The restore step for a config put back apart from its
@@ -1161,6 +1178,7 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().StringVar(&chartVersion, "chart-version", "", "the agent-platform chart release to install (an exact version; default "+config.DefaultChartVersion+")")
 	cmd.Flags().StringVar(&chartPath, "chart-path", "", "install the agent-platform chart from this local directory (an agent-platform checkout's helm/agent-platform) instead of the pinned release; \"\" clears it")
 	cmd.Flags().BoolVar(&upgradeSeed, "upgrade-seed", false, "seed an upgrade proof: install a released agent-platform chart below agentlab's floor in the shape of its line, to upgrade it in place later with --chart-version and `agentlab platform`; --upgrade-seed=false clears it")
+	cmd.Flags().BoolVar(&released, "released", false, "the restore step before handing the lab on: drop the proof state — every platform.valuesFiles overlay, platform.devImages, a chart directory, the dev channel (a dev build in chartVersion goes back to the default release) and a local guest image — so the next `agentlab platform` installs the released platform; `agentlab status` names what is left; not with --chart-path, --chart-branch, --adopt-chart or --vm-manager-image-dir")
 	cmd.Flags().BoolVar(&adoptChart, "adopt-chart", false, "write the agent-platform chart the running lab cluster carries into chartVersion, so agentlab.yaml says what the cluster runs — the restore step for a config put back from a copy apart from its cluster (`agentlab status` names the drift); a release puts the lab on the stable channel at that release, a dev build of the followed branch pins it; refused for a chart directory's build, whose version is a placeholder; not with --chart-version, --chart-path or --chart-branch")
 	cmd.Flags().StringVar(&chartBranch, "chart-branch", "", "the dev channel: follow this agent-platform branch's newest dev build (resolved now and on every up/platform, written to chartVersion); \"\" returns to the stable channel and, unless --chart-version pins one, the default release takes the branch's build's place in chartVersion")
 	cmd.Flags().StringSliceVar(&modelManagerBackends, "model-manager-backends", nil, fmt.Sprintf("pin the host model servers, in order (%s; the first is model-manager's default backend) instead of the ones the discovery finds", strings.Join(config.ModelManagerBackends, ", ")))
