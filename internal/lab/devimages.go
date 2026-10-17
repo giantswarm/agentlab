@@ -404,7 +404,24 @@ func imageName(ref string) string {
 
 // devRegistryName is the registry container: one per cluster, named after
 // it, on the kind docker network next to the node.
-func devRegistryName(cfg *config.Config) string { return cfg.ClusterName + "-registry" }
+func devRegistryName(cfg *config.Config) string { return registryContainerName(cfg.ClusterName) }
+
+// registryContainerName is the lab registry container of a cluster.
+func registryContainerName(cluster string) string { return cluster + "-registry" }
+
+// registryMissing is the lab registry's state when docker has no such
+// container.
+const registryMissing = "missing"
+
+// devRegistryState is the lab registry container's docker state, or
+// registryMissing.
+func devRegistryState(cfg *config.Config) string {
+	state, err := nodeState(devRegistryName(cfg))
+	if err != nil {
+		return registryMissing
+	}
+	return state
+}
 
 // devRegistryEndpoint is the registry as pods reach it on the kind network:
 // the container's name (docker's embedded DNS resolves it, and CoreDNS

@@ -521,6 +521,17 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 		}
 	}
 
+	// The lab registry (devimages.go) on every run, not only on a push: atelet
+	// always carries --localhost-registry-replacement and the node's
+	// containerd resolves localhost:<port> through it, so a container that
+	// went missing — removed by hand, lost with a docker reset — fails every
+	// later pull from it. Recreated here, ahead of the pushes and the dev
+	// images that need it.
+	step("Ensuring the lab registry %s", devRegistryName(cfg))
+	if err := ensureDevRegistry(cfg); err != nil {
+		return err
+	}
+
 	// The VM provisioner as a pod of the node (vmmanager.go): the node's KVM
 	// devices checked before the install would leave a pod that cannot boot
 	// anything; a local guest image build pushed into the lab registry so the
