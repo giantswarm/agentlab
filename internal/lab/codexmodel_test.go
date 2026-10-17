@@ -24,18 +24,18 @@ func ollamaWith(podHost string, probed bool, models ...HostModel) *Discovery {
 // the name kagent injects a key for: the gateway's IP becomes the lab's host
 // name, a runtime's host alias stays.
 func TestCodexHostModel(t *testing.T) {
-	small := HostModel{ID: "qwen3.5:9b", Tools: true}
-	coder := HostModel{ID: "qwen3-coder:30b", Tools: true}
-	oss := HostModel{ID: "gpt-oss:20b", Tools: true}
+	small := HostModel{ID: modelQwen35, Tools: true}
+	coder := HostModel{ID: modelQwen3Coder30b, Tools: true}
+	oss := HostModel{ID: modelGptOss20b, Tools: true}
 	for name, tc := range map[string]struct {
 		disc      *Discovery
 		model, at string
 	}{
-		"gateway":       {disc: ollamaWith(gatewayIP, true, small, coder, oss), model: "gpt-oss:20b", at: "http://" + labHostName + ":11434/v1"},
-		"not probed":    {disc: ollamaWith("", false, coder), model: "qwen3-coder:30b", at: "http://" + labHostName + ":11434/v1"},
-		"alias":         {disc: ollamaWith(hostDockerInternal, true, oss), model: "gpt-oss:20b", at: "http://" + hostDockerInternal + ":11434/v1"},
+		"gateway":       {disc: ollamaWith(gatewayIP, true, small, coder, oss), model: modelGptOss20b, at: "http://" + labHostName + ":11434/v1"},
+		"not probed":    {disc: ollamaWith("", false, coder), model: modelQwen3Coder30b, at: "http://" + labHostName + ":11434/v1"},
+		"alias":         {disc: ollamaWith(hostDockerInternal, true, oss), model: modelGptOss20b, at: "http://" + hostDockerInternal + ":11434/v1"},
 		"small only":    {disc: ollamaWith(gatewayIP, true, small)},
-		"no tools":      {disc: ollamaWith(gatewayIP, true, HostModel{ID: "gpt-oss:20b"})},
+		"no tools":      {disc: ollamaWith(gatewayIP, true, HostModel{ID: modelGptOss20b})},
 		"unreachable":   {disc: ollamaWith("", true, oss)},
 		"no model host": {disc: &Discovery{}},
 	} {
@@ -63,7 +63,7 @@ func TestCodexHostModel(t *testing.T) {
 // configure adds the entry only for a lab that renders codex and has no
 // Responses API entry of its own, and coding-test's codex default follows it.
 func TestApplyCodexHostModel(t *testing.T) {
-	disc := ollamaWith(gatewayIP, true, HostModel{ID: "gpt-oss:20b", Tools: true})
+	disc := ollamaWith(gatewayIP, true, HostModel{ID: modelGptOss20b, Tools: true})
 
 	cfg := codexLab()
 	if _, ok := ApplyCodexHostModel(cfg, disc); !ok {
@@ -87,3 +87,9 @@ func TestApplyCodexHostModel(t *testing.T) {
 		t.Error("a lab without the codex Harness gets no codex host model")
 	}
 }
+
+// The codex host models, by tag.
+var (
+	modelGptOss20b     = CodexHostModels[0].ID
+	modelQwen3Coder30b = CodexHostModels[1].ID
+)
