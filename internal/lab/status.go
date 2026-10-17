@@ -93,17 +93,21 @@ func platformInstallOptions(cfg *config.Config) helmInstallOptions {
 // installDescription is the revision's log line: the agentlab that ran and
 // the chart source the config named.
 func installDescription(cfg *config.Config) string {
-	by := "agentlab " + project.Version() + ": "
+	return "agentlab " + project.Version() + ": " + chartSource(cfg) + overlaysNote(cfg.Platform.ValuesFiles)
+}
+
+// chartSource words the chart source the config named.
+func chartSource(cfg *config.Config) string {
 	switch cfg.ChartChannel() {
 	case config.ChartChannelPath:
-		return by + "the chart directory " + cfg.Platform.ChartPath
+		return "the chart directory " + cfg.Platform.ChartPath
 	case config.ChartChannelDev:
-		return by + "a dev build of branch " + cfg.Platform.ChartBranch
+		return "a dev build of branch " + cfg.Platform.ChartBranch
 	}
 	if IsDevBuild(cfg.Platform.ChartVersion) {
-		return by + "the dev build pinned in platform.chartVersion"
+		return "the dev build pinned in platform.chartVersion"
 	}
-	return by + "the pinned release"
+	return "the pinned release"
 }
 
 // replacingNote is the line a platform run prints when the cluster runs
@@ -164,6 +168,12 @@ type Status struct {
 	// Registry is the lab registry container's docker state (devimages.go),
 	// "missing" when there is none; "" when the platform is disabled.
 	Registry string `json:"registry,omitempty"`
+	// Overlays are agentlab.yaml's platform.valuesFiles with what each sets
+	// (overlays.go); none without.
+	Overlays []Overlay `json:"overlays,omitempty"`
+	// StaleOverlays are the overlays the release in place was installed with
+	// that agentlab.yaml no longer lists.
+	StaleOverlays []string `json:"staleOverlays,omitempty"`
 }
 
 // LabStatus reads the lab's live state. A lab that is not running is refused
@@ -184,6 +194,8 @@ func LabStatus(cfg *config.Config, dir string) (*Status, error) {
 	if s.Observability, err = readObservabilityStatus(context.Background(), cfg); err != nil {
 		return nil, err
 	}
+	s.Overlays = readOverlays(cfg, dir, installed)
+	s.StaleOverlays = staleOverlays(cfg, installed)
 	if cfg.Platform.Enabled {
 		s.Registry = devRegistryState(cfg)
 		chart := platformChartFor(cfg)
@@ -224,6 +236,9 @@ func PrintStatus(w io.Writer, s *Status, asJSON bool) error {
 	fmt.Fprintf(&b, "%s  %s\n", s.Name, s.Dir)
 	fmt.Fprintf(&b, "    chart       %s\n", chartLine(s))
 	fmt.Fprintf(&b, "    config      %s\n", configLine(s))
+	for _, line := range overlayLines(s) {
+		fmt.Fprintf(&b, "    overlay     %s\n", line)
+	}
 	if s.Chart != nil {
 		fmt.Fprintf(&b, "    releases    %s\n", releasesLine(s.Releases))
 		fmt.Fprintf(&b, "    app-config  %s\n", appConfigLine(s.AppConfigDrift))
