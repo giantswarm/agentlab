@@ -361,7 +361,7 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	if err != nil {
 		return fmt.Errorf("discovery: %w", err)
 	}
-	names := rosterNames(roster.shown())
+	names := rosterNames(roster)
 	if err := assertSlackRoster(names); err != nil {
 		return fmt.Errorf("discovery: %w", err)
 	}
@@ -1503,14 +1503,12 @@ func (p *slackProof) roster(user string) (slackMessage, error) {
 		return slackMessage{}, err
 	}
 	msgs, ok := waitThread(p.fake, p.channel, ts, klausGatewayReplyWait, func(msgs []slackMessage) bool {
-		_, found := findMessage(msgs, slackRosterHeading)
-		return found
+		return slices.ContainsFunc(msgs, slackMessage.isRoster)
 	})
 	if !ok {
 		return slackMessage{}, fmt.Errorf("`@bot %s` got no roster within %s; the thread shows: %s", slackAgentsWord, klausGatewayReplyWait, threadLine(msgs))
 	}
-	post, _ := findMessage(msgs, slackRosterHeading)
-	return post, nil
+	return msgs[slices.IndexFunc(msgs, slackMessage.isRoster)], nil
 }
 
 // assertSlackRoster checks the roster lists the admitted fixture by its

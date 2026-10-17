@@ -930,10 +930,8 @@ in GitHub's UI (Settings, Developer settings, GitHub Apps), and serves every
 lab:
 
 - **Callback URLs**: each lab's muster callback
-  `https://muster.<domain>:<gatewayPort>/oauth/proxy/callback` (with
-  workspace-manager 0.10.0 and newer;
-  `https://workspace-manager.<domain>:<gatewayPort>/callback/github` before;
-  `agentlab configure` prints it; a GitHub App takes up to ten).
+  `https://muster.<domain>:<gatewayPort>/oauth/proxy/callback`
+  (`agentlab configure` prints it; a GitHub App takes up to ten).
 - **User-to-server tokens with expiry** on; no device flow, no webhook.
 - **Repository permissions**: Metadata read; Contents, Pull requests and
   Issues read and write; Checks read.
@@ -976,9 +974,7 @@ GitLab's side, set up once by an administrator of the instance:
 - An instance-wide **OAuth application** (Admin Area, Applications), scopes
   `api read_user read_repository write_repository`, redirect URI each lab's
   muster callback `https://muster.<domain>:<gatewayPort>/oauth/proxy/callback`
-  (with workspace-manager 0.10.0 and newer;
-  `https://workspace-manager.<domain>:<gatewayPort>/callback/gitlab` before;
-  `agentlab configure` prints it), confidential.
+  (`agentlab configure` prints it), confidential.
 - A **group access token** of the group, role Reporter, scopes `read_api
   read_repository`: the sync lists the group's projects and mirrors them over
   HTTPS with it.

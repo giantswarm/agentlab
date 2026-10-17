@@ -2339,20 +2339,8 @@ func (c *Config) GitHubFakeBearerAPIURL() string {
 }
 
 // WorkspaceManagerBaseURL is the workspace-manager's public base URL through
-// the edge: the browser's sign-in at <base>/signin, each provider instance's
-// <base>/connect/<name> and <base>/callback/<name>.
+// the edge, where it serves its MCP endpoint and the grants' key set.
 func (c *Config) WorkspaceManagerBaseURL() string { return c.gatewayURL("workspace-manager") }
-
-// WorkspaceManagerSignInURL is the redirect URI the lab Dex's agent-platform
-// client lists for the workspace-manager's browser sign-in.
-func (c *Config) WorkspaceManagerSignInURL() string { return c.WorkspaceManagerBaseURL() + "/signin" }
-
-// WorkspaceCallbackURL is the callback URL a provider instance's OAuth client
-// is registered with: where the provider returns the browser after the
-// person's sign-in.
-func (c *Config) WorkspaceCallbackURL(instance string) string {
-	return c.WorkspaceManagerBaseURL() + "/callback/" + instance
-}
 
 // The chart channels: where the meta chart the lab installs comes from.
 const (
