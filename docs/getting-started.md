@@ -236,7 +236,10 @@ Applied to the configuration:
   its mappings are fixed at node creation, so the ports it publishes never
   count as occupied and a foreign listener on one of them is **reported**, not
   renumbered around (free it, or `agentlab down`, re-run `configure`,
-  `agentlab up`).
+  `agentlab up`). A port taken after `configure` ran is caught by
+  `agentlab up` itself: before `kind create` it probes the same ports and
+  refuses with one line per held port, naming the setting, the lab and the
+  holding process's name and PID where this user can see it.
 - **Host model servers**: an Ollama on `:11434`, a Lemonade Server on
   `:13305` and an LM Studio on `:1234` (their default ports) are detected,
   each with what it reports itself as, whether it listens on the kind docker

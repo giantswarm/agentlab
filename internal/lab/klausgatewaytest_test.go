@@ -511,7 +511,8 @@ func (g *scriptedGateway) onMessage(ev map[string]string) {
 			slackKeyBlocks: []any{map[string]any{fieldTypeKey: slackBlockActions, slackKeyElements: []any{map[string]any{fieldTypeKey: slackButton, slackKeyActionID: slackActionSignIn, slackKeyURL: "http://gw" + musterlink.LinkPath + "?u=x"}}}}})
 		return
 	case text == slackAgentsWord:
-		g.post(channel, thread, slackRosterHeading+":\n• *"+klausGatewayTestDisplay+"* — Throwaway",
+		g.post(channel, thread, "*Available agents*:\n• *"+klausGatewayTestDisplay+"* — Throwaway",
+			map[string]any{fieldTypeKey: slackBlockHeader, slackKeyText: map[string]any{fieldTypeKey: slackPlainText, slackKeyText: slackRosterTitle}},
 			map[string]any{fieldTypeKey: slackBlockSection, slackKeyText: map[string]any{fieldTypeKey: slackMrkdwn, slackKeyText: "*" + klausGatewayTestDisplay + "*"},
 				"accessory": map[string]any{fieldTypeKey: slackButton, slackKeyActionID: slackActionAgentSelect, slackKeyValue: testFixtureRef}})
 		return
@@ -600,7 +601,7 @@ func (g *scriptedGateway) onPick(user, metadata, ref string) {
 		return
 	}
 	g.api(slackPostEphemeral, map[string]any{slackKeyChannel: pm.C, slackKeyThreadTS: pm.T, slackKeyUser: user,
-		slackKeyText: "*" + klausGatewayTestUnadmittedDisplay + "* is installed but " + slackNotRunnable + ": Agent x " + unadmittedReason + ": blocked by ResolvedRefs. " + slackNotStarted + ".\n\n" + slackRosterHeading + ":\n• *" + klausGatewayTestDisplay + "*"})
+		slackKeyText: "*" + klausGatewayTestUnadmittedDisplay + "* is installed but " + slackNotRunnable + ": Agent x " + unadmittedReason + ": blocked by ResolvedRefs. " + slackNotStarted + ".\n\n*Available agents*:\n• *" + klausGatewayTestDisplay + "*"})
 }
 
 func (g *scriptedGateway) onClick(user, channel, thread, cardTS, action, value string) {
@@ -669,7 +670,7 @@ func TestSlackProof(t *testing.T) {
 	p := &slackProof{driver: newSlackDriver(srv.URL, "sekrit", fake, "C1"), fake: fake, channel: "C1", logs: gw.logs}
 
 	roster, err := p.roster("UP")
-	if names := rosterNames(roster.shown()); err != nil || assertSlackRoster(names) != nil {
+	if names := rosterNames(roster); err != nil || assertSlackRoster(names) != nil {
 		t.Fatalf("roster = %q %v", names, err)
 	}
 	refusal, err := p.refusal("UP", roster, "hi")
