@@ -317,6 +317,9 @@ func WorkspacesMeasure(cfg *config.Config, opts WorkspacesMeasureOptions) error 
 		if cfg == nil || !cfg.WorkspacesEnabled() {
 			return fmt.Errorf("platform.workspaces is off in %s — `agentlab configure --workspaces` turns it on, then `agentlab platform`", config.File)
 		}
+		if !cfg.WorkspacesSubstrate() {
+			return fmt.Errorf("the workspaces run without Agent Substrate in %s (platform.agents: false), and every run starts Sessions on it — `agentlab configure --agents` switches it on in place, then `agentlab platform`", config.File)
+		}
 		if err := useClusterKubeconfig(cfg); err != nil {
 			return err
 		}
