@@ -131,6 +131,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		inGroup(groupTesting, workspacesSignInTestCmd()),
 		inGroup(groupTesting, skillsTestCmd()),
 		inGroup(groupTesting, substrateStepTestCmd()),
+		inGroup(groupTesting, kagentStepTestCmd()),
 		inGroup(groupTesting, substrateTunnelTestCmd()),
 		inGroup(groupTesting, a2aTestCmd()),
 		inGroup(groupTesting, klausGatewayTestCmd()),
@@ -1865,6 +1866,34 @@ func substrateStepTestCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.Stay, "stay", false, "leave the lab on the --to release instead of returning it to the chart's Substrate")
 	cmd.Flags().BoolVar(&opts.NoDrain, "no-drain", false, "skip the drain case: by default every worker pod of the WorkerPool is deleted every 8s for a minute from the candidate's ate-api-server Ready, the suspended conversation is resumed during that drain once the release before's ate-api-server pods are gone (its ResumeActor must show in the candidate's RPC log while the drain runs), and every golden of the lab must be in the snapshot layout the candidate writes (taken again on a layout change, kept otherwise) with no terminal error")
 	_ = cmd.MarkFlagRequired("to")
+	return cmd
+}
+
+func kagentStepTestCmd() *cobra.Command {
+	var opts lab.KagentStepOptions
+	cmd := &cobra.Command{
+		Use:   "kagent-step-test [email]",
+		Short: "Headless kagent step proof: an agent on the kagent release the lab runs with a conversation of one turn, suspended -> the kagent and kagent-crds components pinned to --to, the meta chart moved to the candidate --chart, or both, and the platform upgraded in place under it -> the conversation resumes, a turn on it answers the codeword of its first turn, it suspends and resumes again, and the conversation and the agent delete; the kagent line before and after and PASS per step, or FAIL naming the step, the resume, the turn, the suspend or the delete with the cause, then the lab back on its own configuration",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadProofLab()
+			if err != nil {
+				return err
+			}
+			email := cfg.AdminUser().Email
+			if len(args) == 1 {
+				email = args[0]
+			}
+			return lab.KagentStepTest(cfg, email, opts)
+		},
+	}
+	cmd.Flags().StringVar(&opts.To, "to", "", "the kagent release to step to, exact (1.14.0, 1.15.1-rc.2), pinned on the kagent and kagent-crds components; the lab must run an older release before it")
+	cmd.Flags().StringVar(&opts.Chart, "chart", "", "the agent-platform release to step to, exact (4.145.1-rc.6): a candidate whose kagent range moves; with --to as well, the kagent pin rides on it")
+	cmd.Flags().StringToStringVar(&opts.DevImages, "step-dev-image", nil, "a platform.devImages entry for the step alone, <target>=<image> (repeatable), e.g. kagent=<a local build of a change no release carries yet>")
+	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the agent runs on (default: default-model-config, the Anthropic one the lab renders)")
+	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", lab.KagentStepReadyTimeout, "how long the agent's golden boot before the step may take")
+	cmd.Flags().BoolVar(&opts.Stay, "stay", false, "leave the lab on the step instead of returning it to its own configuration")
+	cmd.MarkFlagsOneRequired("to", "chart")
 	return cmd
 }
 
