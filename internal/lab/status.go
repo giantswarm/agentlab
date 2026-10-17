@@ -152,6 +152,9 @@ type Status struct {
 	// AppConfigDrift names Backstage's app-config ConfigMaps whose data is not
 	// what the lab or the chart rendered (appconfig.go); none in sync.
 	AppConfigDrift []string `json:"appConfigDrift,omitempty"`
+	// ForeignFields are the platform workloads' fields written outside the
+	// platform's Helm releases (foreignfields.go); none as rendered.
+	ForeignFields []foreignFields `json:"foreignFields,omitempty"`
 	// Workspaces is the workspace storage in place (workspaces.go); nil
 	// without a platform release.
 	Workspaces *WorkspacesStatus `json:"workspaces,omitempty"`
@@ -189,6 +192,9 @@ func LabStatus(cfg *config.Config, dir string) (*Status, error) {
 				return nil, err
 			}
 		}
+		if s.ForeignFields, err = foreignWorkloadFields(context.Background()); err != nil {
+			return nil, err
+		}
 		if s.Workspaces, err = readWorkspacesStatus(context.Background()); err != nil {
 			return nil, err
 		}
@@ -211,6 +217,7 @@ func PrintStatus(w io.Writer, s *Status, asJSON bool) error {
 	if s.Chart != nil {
 		fmt.Fprintf(&b, "    releases    %s\n", releasesLine(s.Releases))
 		fmt.Fprintf(&b, "    app-config  %s\n", appConfigLine(s.AppConfigDrift))
+		fmt.Fprintf(&b, "    workloads   %s\n", workloadsLine(s.ForeignFields))
 	}
 	if s.Workspaces != nil {
 		fmt.Fprintf(&b, "    workspaces  %s\n", s.Workspaces)
@@ -271,4 +278,17 @@ func releasesLine(releases []platformReleaseStatus) string {
 		line += "; " + strings.Join(pending, "; ")
 	}
 	return line
+}
+
+// workloadsLine is `agentlab status`'s line on the platform workloads'
+// field managers: as the releases render them, or the fields a hand wrote.
+func workloadsLine(found []foreignFields) string {
+	if len(found) == 0 {
+		return "as the releases render them"
+	}
+	lines := make([]string, 0, len(found))
+	for _, f := range found {
+		lines = append(lines, f.String())
+	}
+	return "patched outside the releases (no platform run removes it): " + strings.Join(lines, "; ")
 }

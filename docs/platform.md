@@ -88,6 +88,19 @@ The lab installs it in its **lab shape**:
   instead of quoting the pin, and `agentlab configure --adopt-chart`
   writes the chart in place into the pin — or `agentlab platform` installs
   the pin over the cluster, the boot naming the downgrade.
+- A field a hand wrote on a platform workload — `kubectl patch` of muster's
+  `hostNetwork`, a `kubectl set env` on Backstage — survives every
+  `agentlab platform`: Helm and helm-controller's drift correction own and
+  correct only the fields the render carries. The apiserver records each
+  field's writer (`managedFields`), so a Helm-owned Deployment, StatefulSet or
+  DaemonSet field written by a manager other than the releases' (`helm`,
+  `helm-controller`, the lab's `agentlab`, `kube-controller-manager`) is named
+  by `agentlab status` on its `workloads` line, warned at the end of
+  `agentlab platform` and at every proof's opening, and fails platform-test's
+  first stage, `workload field managers`. A rollout restart's
+  `restartedAt` annotation is none. Remove the field with the inverse edit;
+  a lab change belongs in `agentlab.yaml` (`platform.devImages`,
+  `platform.chartPath`).
   The one exception is deliberate too: the [dev channel](#dev-channel),
   where `platform.chartBranch` follows a branch's newest dev build — and
   still installs an exact version, written into `chartVersion`.

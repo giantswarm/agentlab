@@ -17,6 +17,7 @@ import (
 
 // The platform proof's stages, in order, as the summary names them.
 const (
+	stageWorkloadFields       = "workload field managers"
 	stageApiserverOIDC        = "apiserver OIDC"
 	stageDexToken             = "Dex token"
 	stageMusterSession        = "muster session"
@@ -79,6 +80,17 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 	client, err := labHTTPClient(30 * time.Second)
 	if err != nil {
 		return "", err
+	}
+
+	// A lab whose workloads run a hand's patch beside the releases' render
+	// proves the patch, not the platform (foreignfields.go): refused first.
+	p.begin(stageWorkloadFields, "Checking the platform workloads carry only what the releases render")
+	foreign, err := foreignWorkloadFields(context.Background())
+	if err != nil {
+		return "", err
+	}
+	if len(foreign) > 0 {
+		return "", foreignFieldsError(foreign)
 	}
 
 	// After a Dex key rotation the apiserver refuses new-key tokens until its

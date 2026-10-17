@@ -1064,6 +1064,10 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 %s
 %s
 %s%s`, header, reach, usersBlock(cfg), backstageHint, claudeCodeHint(cfg), agentsHint, modelManagerHint(cfg, backendEndpoints), servingHint(cfg), workspacesHint(cfg, workspacesChart, workspacesRegistrant), vmManagerHint(cfg), klausGatewayHint(cfg), obsHint, devImagesHint(cfg, dev), tryItBlock(cfg))
+	// A field a hand wrote on a platform workload outlives this run, which
+	// installs only what the releases render (foreignfields.go): named last,
+	// where the run's reader looks.
+	warnForeignFields(ctx)
 	// Everything the platform runs is in the node now — record it so the next
 	// boot side-loads instead of pulling.
 	snapshotPreloadImages()
