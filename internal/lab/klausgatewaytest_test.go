@@ -270,7 +270,7 @@ esac
 func fakeDockerGateway(t *testing.T, env map[string]string) (string, *gatewayProcess) {
 	t.Helper()
 	bin, dir := t.TempDir(), t.TempDir()
-	if err := os.WriteFile(filepath.Join(bin, dockerBin), []byte(fakeDockerScript), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(bin, dockerBin), []byte(fakeDockerScript), 0o700); err != nil { // #nosec G306 -- the fake CLI must be executable
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -299,7 +299,7 @@ func TestGatewayImagePullNotCounted(t *testing.T) {
 	if err := g.start(); err != nil {
 		t.Fatalf("start() with an uncached image = %v", err)
 	}
-	calls, _ := os.ReadFile(filepath.Join(dir, "calls"))
+	calls, _ := os.ReadFile(filepath.Join(dir, "calls")) // #nosec G304 -- the test's own temporary file
 	if !strings.Contains(string(calls), "pull -q "+g.opts.GatewayImage) || !strings.Contains(string(calls), "--name lab-x-"+gatewayContainerSuffix) {
 		t.Errorf("docker calls =\n%s\nwant the pull and the run of the lab's container", calls)
 	}
@@ -328,8 +328,8 @@ func TestGatewayTestPortPerLab(t *testing.T) {
 	if got := gatewayContainerName(first); got != "agentlab-klaus-gateway-test" {
 		t.Errorf("the first lab's container = %q", got)
 	}
-	if got := gatewayContainerName(&config.Config{ClusterName: "agentlab-2"}); got != "agentlab-2-klaus-gateway-test" {
-		t.Errorf("the second lab's container = %q", got)
+	if got := gatewayContainerName(&config.Config{ClusterName: "lab-b"}); got != "lab-b-klaus-gateway-test" {
+		t.Errorf("another lab's container = %q", got)
 	}
 	seen := map[int]int{}
 	for _, api := range []int{1, 6443, 6444, 6445, 6543, 6643, 30000, 65535} {
