@@ -202,7 +202,7 @@ type pmDryRun struct {
 			Change     string `json:"change"`
 			Content    string `json:"content"`
 		} `json:"files"`
-		Diff       map[string]int `json:"diff"`
+		Diff map[string]int `json:"diff"`
 	} `json:"installations"`
 }
 

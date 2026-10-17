@@ -17,8 +17,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/giantswarm/agentlab/internal/config"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/giantswarm/agentlab/internal/config"
 )
 
 // A person's grant of the provider App muster pins the workspace-manager's
