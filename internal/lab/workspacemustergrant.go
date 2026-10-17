@@ -81,14 +81,14 @@ func workspaceGrantOf(p workspaceProviderValues) *workspaceGrantValues {
 		base := strings.TrimSuffix(p.URL, "/")
 		g.Issuer, g.AuthorizationEndpoint, g.TokenEndpoint, g.Scopes = base, base+"/oauth/authorize", base+gitlabTokenPath, workspaceGitLabScopes
 	case p.URL == "":
-		// github.com: the App is known by its client id (agentlab.yaml
+		// github.com: the App is known by its App id (agentlab.yaml
 		// records no slug), and GitHub names its issuer in the response.
-		g.Issuer, g.ExpectedIssuer = "https://github.com/apps/"+p.ClientID, githubOAuthIssuer
+		g.Issuer, g.ExpectedIssuer = "https://github.com/apps/"+p.AppID, githubOAuthIssuer
 		g.AuthorizationEndpoint, g.TokenEndpoint = "https://github.com"+githubAuthorizePath, "https://github.com"+githubAccessTokenPath
 	default:
 		// The lab's GitHub, which names no issuer in its response.
 		base := strings.TrimSuffix(p.URL, "/")
-		g.Issuer, g.AuthorizationEndpoint, g.TokenEndpoint = base+"/apps/"+p.ClientID, base+githubAuthorizePath, base+githubAccessTokenPath
+		g.Issuer, g.AuthorizationEndpoint, g.TokenEndpoint = base+"/apps/"+p.AppID, base+githubAuthorizePath, base+githubAccessTokenPath
 	}
 	return g
 }

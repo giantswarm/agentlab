@@ -12,6 +12,9 @@ import (
 // testGrantClientID is an App's client id in the pin's tests.
 const testGrantClientID = "Iv1.pinned"
 
+// testGrantAppID is that App's id, the issuer's last segment.
+const testGrantAppID = "4711"
+
 // stubWorkspaceManagerTags answers the workspace-manager repository's tag
 // listing with tags, the version memo cleared before and after.
 func stubWorkspaceManagerTags(t *testing.T, tags ...string) {
@@ -100,7 +103,8 @@ func TestRangeFloorAdmitsGrant(t *testing.T) {
 	}
 }
 
-// The pin per instance kind: the lab's GitHub and its own endpoints with no
+// The pin per instance kind, its issuer <url>/apps/<App id> as the meta
+// chart derives it: the lab's GitHub and its own endpoints with no
 // response issuer, github.com with GitHub's, a GitLab with its scopes; the
 // OAuth client is always the instance's Secret.
 func TestWorkspaceGrantOf(t *testing.T) {
@@ -109,11 +113,11 @@ func TestWorkspaceGrantOf(t *testing.T) {
 		p    workspaceProviderValues
 		want workspaceGrantValues
 	}{
-		{workspaceProviderValues{Name: config.WorkspaceProviderFake, Kind: providerKindGitHub, URL: lab, ClientID: testGrantClientID, Secret: config.WorkspaceFakeSecretName},
-			workspaceGrantValues{Provider: config.WorkspaceProviderFake, Issuer: lab + "/apps/" + testGrantClientID,
+		{workspaceProviderValues{Name: config.WorkspaceProviderFake, Kind: providerKindGitHub, URL: lab, AppID: testGrantAppID, ClientID: testGrantClientID, Secret: config.WorkspaceFakeSecretName},
+			workspaceGrantValues{Provider: config.WorkspaceProviderFake, Issuer: lab + "/apps/" + testGrantAppID,
 				AuthorizationEndpoint: lab + githubAuthorizePath, TokenEndpoint: lab + githubAccessTokenPath, Secret: config.WorkspaceFakeSecretName}},
-		{workspaceProviderValues{Name: config.WorkspaceProviderGitHub, Kind: providerKindGitHub, ClientID: testGrantClientID, Secret: config.WorkspaceGitHubSecretName},
-			workspaceGrantValues{Provider: config.WorkspaceProviderGitHub, Issuer: "https://github.com/apps/" + testGrantClientID, ExpectedIssuer: githubOAuthIssuer,
+		{workspaceProviderValues{Name: config.WorkspaceProviderGitHub, Kind: providerKindGitHub, AppID: testGrantAppID, ClientID: testGrantClientID, Secret: config.WorkspaceGitHubSecretName},
+			workspaceGrantValues{Provider: config.WorkspaceProviderGitHub, Issuer: "https://github.com/apps/" + testGrantAppID, ExpectedIssuer: githubOAuthIssuer,
 				AuthorizationEndpoint: "https://github.com" + githubAuthorizePath, TokenEndpoint: "https://github.com" + githubAccessTokenPath, Secret: config.WorkspaceGitHubSecretName}},
 		{workspaceProviderValues{Name: config.WorkspaceProviderGitLab, Kind: providerKindGitLab, URL: gitlab + "/", ClientID: testGrantClientID, Secret: config.WorkspaceGitLabSecretName},
 			workspaceGrantValues{Provider: config.WorkspaceProviderGitLab, Issuer: gitlab, AuthorizationEndpoint: gitlab + "/oauth/authorize",
