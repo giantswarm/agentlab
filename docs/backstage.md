@@ -81,6 +81,36 @@ overlay sets, and serves the classic portal only, so a lab on such a Backstage
 fails here rather than passing without the shell. The default
 `platform.chartVersion` resolves a 3.x Backstage.
 
+## The portal's browser suite
+
+The Dev Portal's Playwright suite (`yarn test:e2e:agentlab` in a
+`giantswarm/backstage` checkout, `e2e/agentlab/`) drives the lab's portal in a
+browser, the complement of the headless `backstage-test`. Its switches are
+environment variables of that run; a spec whose switch the lab cannot back
+skips with the reason, and a skipped spec is unproven.
+
+| Switch | The lab behind it |
+|---|---|
+| `AGENTLAB_PORTAL_MODE=shell` | the Agent Platform shell (`backstage.portal: agent-platform`, the default); without it the shell specs fail at the mode check |
+| `AGENTLAB_KUBECONFIG=<lab>/state/kubeconfig` | any lab: the specs that read or stage objects with kubectl |
+| `AGENTLAB_BACKSTAGE_URL`, `AGENTLAB_CLUSTER` | a lab other than the default edge on `:443` |
+| `AGENTLAB_INSTALLATIONS_PAGE=1` | `backstage.installationsPage: true`: the installations specs (`installations-versions`, `installations-session-expiry`, the Installations link in `agents-list-states`) |
+
+The agent-platform chart lists `page:gs/installations` in
+`backstage.disabledExtensions`, and the Backstage app ships the page off, so a
+lab's portal has no Installations page. `agentlab configure
+--installations-page` sets `backstage.installationsPage: true`, and the next
+`agentlab platform` adds `page:gs/installations` and
+`nav-item:gs/installations` to the lab's `backstage.enabledExtensions` (which
+wins over the disabled list) and rolls Backstage once; no `platform.valuesFiles`
+overlay is needed. `--installations-page=false` takes the page away again.
+
+```bash
+agentlab configure --installations-page && agentlab platform
+AGENTLAB_PORTAL_MODE=shell AGENTLAB_KUBECONFIG=<lab>/state/kubeconfig \
+  AGENTLAB_INSTALLATIONS_PAGE=1 yarn test:e2e:agentlab -g installations
+```
+
 ## Users need no catalog entity
 
 RHDH's `emailLocalPartMatchingUserEntityName` resolver refuses a login it cannot

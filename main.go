@@ -896,7 +896,7 @@ var formTerminal = func() bool {
 
 func configureCmd() *cobra.Command {
 	var defaults, accessible bool
-	var platform, agents, observability, backstage, modelManager, vmManager, klausGateway, musterPodNetwork, alertmanager bool
+	var platform, agents, observability, backstage, modelManager, vmManager, klausGateway, musterPodNetwork, alertmanager, installationsPage bool
 	var serving, workspaces, workspacesCSICompanion, coding, tenants, github, githubSignIn bool
 	var githubSignInClientID string
 	var codingHarnesses []string
@@ -966,6 +966,9 @@ func configureCmd() *cobra.Command {
 					return fmt.Errorf("--portal %q: the portal modes are %s", portal, strings.Join(config.PortalModes, ", "))
 				}
 				cfg.Backstage.Portal = portal
+			}
+			if cmd.Flags().Changed("installations-page") {
+				cfg.Backstage.InstallationsPage = installationsPage
 			}
 			if cmd.Flags().Changed("chart-version") {
 				cfg.Platform.ChartVersion = chartVersion
@@ -1152,6 +1155,7 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&agents, "agents", false, "enable/disable the agents runtime (kagent, part of the platform install)")
 	cmd.Flags().BoolVar(&observability, "observability", false, "enable/disable the observability stack (Prometheus + mcp-prometheus)")
 	cmd.Flags().BoolVar(&backstage, "backstage", false, "enable/disable Backstage (implies the platform)")
+	cmd.Flags().BoolVar(&installationsPage, "installations-page", false, "enable the portal's Installations page (page:gs/installations and its nav item, off in the agent-platform chart) for the portal's installations e2e specs, run with AGENTLAB_INSTALLATIONS_PAGE=1; the next agentlab platform rolls Backstage onto it; --installations-page=false turns it off again")
 	cmd.Flags().StringVar(&portal, "portal", "", fmt.Sprintf("the Backstage portal `mode` (%s): %s serves the Agent Platform shell (app.portals.agentPlatform), %s the classic Platform Portal alone; the next agentlab platform rolls Backstage onto it", strings.Join(config.PortalModes, ", "), config.PortalAgentPlatform, config.PortalClassic))
 	cmd.Flags().BoolVar(&modelManager, "model-manager", false, "pin managed models on/off (needs agents); without it a first configure follows the host model servers the discovery finds and a later one keeps the recorded choice")
 	cmd.Flags().StringVar(&chartVersion, "chart-version", "", "the agent-platform chart release to install (an exact version; default "+config.DefaultChartVersion+")")
@@ -1216,7 +1220,11 @@ func printSaved(cfg *config.Config, disc *lab.Discovery) {
 		fmt.Printf("  dev image  %s -> %s\n", name, cfg.Platform.DevImages[name])
 	}
 	if cfg.Backstage.Enabled {
-		fmt.Printf("  backstage  true (portal %s)\n", cfg.Backstage.Portal)
+		page := ""
+		if cfg.Backstage.InstallationsPage {
+			page = ", installations page"
+		}
+		fmt.Printf("  backstage  true (portal %s%s)\n", cfg.Backstage.Portal, page)
 	} else {
 		fmt.Println("  backstage  false")
 	}
