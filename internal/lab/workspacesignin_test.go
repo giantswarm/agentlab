@@ -32,6 +32,11 @@ func newSignInLab(t *testing.T, chooser bool) *signInLab {
 		}
 		http.Redirect(w, r, "/callback/fake?code=c&state=s", http.StatusFound)
 	})
+	// A sign-in that starts elsewhere (muster's proxy start) reaches the
+	// consent page without the login parameter.
+	mux.HandleFunc("GET /oauth/proxy/start", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/login/oauth/authorize?state=s", http.StatusFound)
+	})
 	mux.HandleFunc("GET /callback/fake", func(w http.ResponseWriter, r *http.Request) {
 		if _, err := r.Cookie("session"); err != nil {
 			http.SetCookie(w, &http.Cookie{Name: "signin", Value: "nonce", Path: "/", Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode})
@@ -110,6 +115,21 @@ func TestWalkProviderSignIn(t *testing.T) {
 		if strings.Contains(worded, "code=") || strings.Contains(worded, "state=") {
 			t.Errorf("chooser %v: the hops carry a query: %s", chooser, worded)
 		}
+	}
+}
+
+// TestWalkSignInNamesTheGitHubAccount starts the walk where muster's does:
+// the walk adds the consenting account to the consent page's hop, and
+// without one the lab's GitHub refuses it.
+func TestWalkSignInNamesTheGitHubAccount(t *testing.T) {
+	l := newSignInLab(t, false)
+	start := l.server.URL + "/oauth/proxy/start?state=s"
+	if _, err := walkSignIn(l.client(t), start, "/callback/fake", testLogin, testPortalUser, "password", nil); err != nil || !l.completed {
+		t.Fatalf("the walk with the account: %v (completed %v)", err, l.completed)
+	}
+	l.completed = false
+	if _, err := walkSignIn(l.client(t), start, "/callback/fake", "", testPortalUser, "password", nil); err == nil || l.completed {
+		t.Fatalf("the walk without the account completed: %v", err)
 	}
 }
 

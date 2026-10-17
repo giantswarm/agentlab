@@ -174,6 +174,9 @@ func signInHops(hops []signInHop) string {
 	return strings.Join(words, " -> ")
 }
 
+// githubAuthorizePath is GitHub's consent page.
+const githubAuthorizePath = "/login/oauth/authorize"
+
 // errSignInStopped is a walk that ended before the callback completed; its
 // message names the hop and the status it stopped at.
 var errSignInStopped = errors.New("the provider sign-in stopped")
@@ -185,6 +188,14 @@ var errSignInStopped = errors.New("the provider sign-in stopped")
 // an error names the hop the walk stopped at, its status and the page's
 // heading.
 func walkProviderSignIn(client *http.Client, link, instance, email, password string, login *providerLogin) ([]signInHop, error) {
+	return walkSignIn(client, link, "/callback/"+url.PathEscape(instance), "", email, password, login)
+}
+
+// walkSignIn walks link to the callback path, as walkProviderSignIn does;
+// githubAccount, when set, is the lab GitHub user who consents: the walk adds
+// it as the login parameter of a hop to GitHub's consent page, which a
+// sign-in that does not start at the lab's GitHub (muster's) cannot name.
+func walkSignIn(client *http.Client, link, callback, githubAccount, email, password string, login *providerLogin) ([]signInHop, error) {
 	var hops []signInHop
 	stopped := func(h signInHop, why string) error {
 		return fmt.Errorf("%w at %s: %s\n  hops: %s", errSignInStopped, h, why, signInHops(hops))
@@ -193,9 +204,13 @@ func walkProviderSignIn(client *http.Client, link, instance, email, password str
 	if err != nil {
 		return nil, fmt.Errorf("the authorization link: %w", err)
 	}
-	callback := "/callback/" + url.PathEscape(instance)
 	var form url.Values
 	for len(hops) < workspaceSignInMaxHops {
+		if githubAccount != "" && next.Path == githubAuthorizePath && next.Query().Get(githubLogin) == "" {
+			q := next.Query()
+			q.Set(githubLogin, githubAccount)
+			next.RawQuery = q.Encode()
+		}
 		method := http.MethodGet
 		var body io.Reader = http.NoBody
 		if form != nil {

@@ -16,6 +16,10 @@ owners:
   - login: agentlab-oss
     type: Organization
     installation: 2
+  # The App is not installed here: the users' App tokens get no permission
+  # on its repositories, whatever the user's own (the write part's refusal).
+  - login: agentlab-ext
+    type: Organization
 
 repositories:
   - owner: agentlab-org
@@ -73,6 +77,22 @@ repositories:
     pushedAt: 2026-07-01T10:00:00Z
     files:
       README.md: "# docs\n"
+  # The write part's refusals: admin reads handbook only, and pushes to
+  # scratch only by a credential that is not the App's.
+  - owner: agentlab-org
+    name: handbook
+    language: Markdown
+    topics: [handbook]
+    pushedAt: 2026-06-01T10:00:00Z
+    files:
+      README.md: "# handbook\n\nadmin reads, never pushes.\n"
+  - owner: agentlab-ext
+    name: scratch
+    language: Shell
+    topics: [scratch]
+    pushedAt: 2026-06-01T10:00:00Z
+    files:
+      README.md: "# scratch\n\nThe App is not installed on its owner.\n"
 
 # The lab's Dex users (agentlab.yaml's users); a login hint names one.
 users:
@@ -86,6 +106,8 @@ users:
       agentlab-org/legacy-tool: write
       agentlab-oss/kagent: write
       agentlab-oss/docs: write
+      agentlab-org/handbook: read
+      agentlab-ext/scratch: write
   # The member without access: agentlab-org/platform-infra is refused.
   - login: dev
     name: Lab Developer

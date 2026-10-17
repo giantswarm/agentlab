@@ -65,6 +65,7 @@ agentlab configure --workspaces-cleanup-after 10m && agentlab platform   # the s
 agentlab workspaces-test --part sessions # ten parallel Sessions in their session directories, and the cleanup
 agentlab configure --workspaces-provider fake,fake-bearer && agentlab platform   # a Bearer provider
 agentlab workspaces-test --part caller-credential # a Session's actor JWT on its Bearer provider's API host
+agentlab workspaces-test --part write # git push and gh pr create from a workspace Session as the person
 agentlab configure --workspaces-refresh-after 1m && agentlab platform   # the refresh part's short threshold
 agentlab workspaces-test --part refresh # the sync a Session's start requests past the refresh threshold
 ```
@@ -503,6 +504,58 @@ The fake verifies no JWT it did not sign: it answers such a bearer GitHub's
 every path: the Sessions, the Agent, the session directories, the workspace
 and the admin's sign-in to `fake-bearer`.
 
+### The write part
+
+`agentlab workspaces-test --part write` proves git and gh as the person from
+a workspace Session on the `claude` Harness: the person grants the workspace
+App once in muster; agent-manager binds the Session's sandbox to the person in
+muster at `start_session`; Substrate's egress gateway asks muster
+(`FetchSecret`, credential URIs `ate-secret://muster.giantswarm.io/<provider
+instance>/<git|api>`) for the person's current App token on each request to
+the provider's hosts and sets it there, Basic on the git host and Bearer on
+the API host. The token never enters the sandbox. It runs as the admin on [the
+provider instance `fake-bearer`](#the-provider-instance-fake-bearer) with the
+[Session admission](#the-session-admission): `agentlab configure
+--workspaces-provider fake,fake-bearer`, then `agentlab platform`. Without
+them, or without muster as the gateway's credential provider, it fails at once
+with the reason.
+
+1. **Preconditions**: the egress gateway's configuration (the ConfigMap
+   `*-atenet-egress-agentgateway-config` in `ate-system`) names the credential
+   provider `muster.giantswarm.io`, which the agent-platform chart renders as
+   Substrate's `credentialProvider.additionalProviders` entry; the admin
+   grants the workspace App in muster: `core_auth_login` on the MCPServer
+   `workspace-manager` answers a challenge, walked through the lab GitHub's
+   consent to muster's callback (a grant the admin already holds answers
+   none); then the caller-credential part's preconditions with the Agent
+   `agentlab-workspaces-write`.
+2. **Workspace**: `agentlab-write` over `agentlab-org/platform-api` on
+   `fake-bearer` and its first cycle.
+3. **Session**: `start_session` with the admin's grant.
+4. **git and gh as the person**: one turn in the Session's clone runs `git
+   switch -c agent/agentlab-write-<token>`, a commit, `git push` and `gh pr
+   create` (`GH_HOST` the git host; `GH_TOKEN` and `GH_ENTERPRISE_TOKEN` the
+   inert placeholder where the Harness sets none). In throwaway clones it
+   pushes to `agentlab-org/handbook`, which admin only reads, and to
+   `agentlab-ext/scratch`, whose owner the App is not installed on although
+   the fixture lets admin write there. It names the environment variables and
+   the files under `/data`, `/workspace`, its working directory, gh's
+   configuration and `~/.git-credentials` that hold a GitHub token or a JWT.
+   The lab GitHub's request log must hold the push as `admin` with the
+   credential `user-token`, the pull request of the branch must be by `admin`,
+   both other pushes must be answered 403 naming `admin`, and the sandbox must
+   hold no token.
+5. **No workspace**: a Session of the same Agent without a grant clones and
+   pushes `agentlab-org/platform-api`: no request with a user token in the
+   log, the push refused.
+
+The lab's GitHub intersects a user token's permission with the App's
+installation, as GitHub does for an App's user token: the fixture's
+permission where the App is installed on the repository's owner, none
+elsewhere. Everything is removed on every path: the Sessions, the Agent, the
+session directories, the workspace and the grant the part made. The branch and
+the pull request stay on the fake; each run's branch is its own.
+
 ### The refresh part
 
 `agentlab workspaces-test --part refresh` proves the refresh at a Session's
@@ -883,8 +936,10 @@ What the fake holds is a fixture file; the embedded default is
 and `--fixture <file>` replaces it.
 
 **The App**: id `1`, slug `agentlab-workspaces`, client id
-`Iv1.agentlab-workspaces`, installed on both owners (installation `1` on
-`agentlab-org`, `2` on `agentlab-oss`), with contents and pull request write.
+`Iv1.agentlab-workspaces`, installed on `agentlab-org` (installation `1`) and
+`agentlab-oss` (`2`), with contents and pull request write; not installed on
+`agentlab-ext`, where a user's App token gets no permission (the [write
+part](#the-write-part)'s refusal).
 
 **The repositories**, each one commit on `main`:
 
@@ -896,6 +951,8 @@ and `--fixture <file>` replaces it.
 | `agentlab-org/legacy-tool` | public | Python | legacy | yes | | 2025-01-10 |
 | `agentlab-oss/kagent` | public | Go | agents, kubernetes | | yes | 2026-09-25 |
 | `agentlab-oss/docs` | public | MDX | docs | | | 2026-07-01 |
+| `agentlab-org/handbook` | public | Markdown | handbook | | | 2026-06-01 |
+| `agentlab-ext/scratch` | public | Shell | scratch | | | 2026-06-01 |
 
 `monorepo` carries 64 MiB of incompressible content (seeded by its name, so
 every lab clones the same bytes) for the measurements; `--large-repo-mib <n>`
@@ -907,13 +964,16 @@ as GitHub reports it. `monorepo` and `kagent` carry a Go module (`go.mod`,
 
 | Login | Reads | Pushes to |
 |---|---|---|
-| `admin` | everything | everything (the archived repository refuses every push) |
+| `admin` | everything | everything but `agentlab-org/handbook` (the archived repository refuses every push; `agentlab-ext/scratch` refuses the App's token) |
 | `dev` | everything but `agentlab-org/platform-infra` | `platform-api`, `monorepo`, `agentlab-oss/*` |
 | `viewer` | the public repositories | nothing |
 
 A public repository is read by everyone, a signed-out caller included; a
 private one by the users that name it and by the App's installation on its
-owner. `dev` is the member without access, `viewer` the one who cannot push.
+owner. A user's token is the App's: it acts only where the App is installed
+on the repository's owner, so `agentlab-ext`'s repositories are read as
+public ones and never pushed to. `dev` is the member without access, `viewer`
+the one who cannot push.
 
 ### What it serves
 

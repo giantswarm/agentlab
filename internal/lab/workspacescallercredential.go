@@ -72,6 +72,12 @@ type callerCredentialProof struct {
 	api     *kagentAPI
 	set     *sessionSet
 	apiHost string
+	// agent, workspace and repo are the part's Agent on the claude Harness,
+	// its workspace and the workspace's one repository.
+	agent, workspace, repo string
+	// grantJudged says the grant must name the API host as a Bearer provider
+	// of fake-bearer's audience, the caller-credential part's contract.
+	grantJudged bool
 	// connected says the admin connected to fake-bearer, which the cleanup
 	// disconnects.
 	connected bool
@@ -85,7 +91,8 @@ type callerCredentialProof struct {
 func workspacesCallerCredentialPart(cfg *config.Config, timeout time.Duration) error {
 	p := newProofStages()
 	cp := &callerCredentialProof{sp: newSyncProof(cfg, timeout, callerCredentialWorkspace), timeout: timeout,
-		apiHost: config.GitHubFakeBearerAPIHost(cfg.Platform.Domain)}
+		apiHost: config.GitHubFakeBearerAPIHost(cfg.Platform.Domain),
+		agent:   callerCredentialAgent, workspace: callerCredentialWorkspace, repo: callerCredentialRepo, grantJudged: true}
 	err := cp.run(p)
 	cp.cleanup()
 	if err == nil {
@@ -165,8 +172,10 @@ func (cp *callerCredentialProof) preconditions(adminUser *config.User) error {
 		return err
 	}
 	note("the manager publishes the lab's grant key as %s; kagent's admission trusts %s", kid, rig.JWKSURL)
-	if cp.admin, err = openWorkspacePerson(cfg, adminUser); err != nil {
-		return err
+	if cp.admin == nil {
+		if cp.admin, err = openWorkspacePerson(cfg, adminUser); err != nil {
+			return err
+		}
 	}
 	if _, err := cp.admin.providerStatus(config.WorkspaceProviderFakeBearer); err != nil {
 		return fmt.Errorf("the workspace-manager has no provider instance %s: %w (`agentlab platform` renders it)", config.WorkspaceProviderFakeBearer, err)
@@ -182,53 +191,59 @@ func (cp *callerCredentialProof) preconditions(adminUser *config.User) error {
 	if err := waitHarnessReady(ctx, claudeHarness, cp.timeout); err != nil {
 		return err
 	}
-	if agentExists(callerCredentialAgent) {
-		if err := removeAgent(callerCredentialAgent); err != nil {
+	if agentExists(cp.agent) {
+		if err := removeAgent(cp.agent); err != nil {
 			return err
 		}
 	}
-	manifest := workspacesAgentManifest(callerCredentialAgent, claudeHarness) +
+	manifest := workspacesAgentManifest(cp.agent, claudeHarness) +
 		fmt.Sprintf("  egress:\n    - %q\n    - %q\n", cfg.GitHubFakeBearerURL(), cfg.GitHubFakeBearerAPIURL())
 	if _, err := applyManifests(ctx, []byte(manifest)); err != nil {
-		return fmt.Errorf("applying the Agent %s: %w", callerCredentialAgent, err)
+		return fmt.Errorf("applying the Agent %s: %w", cp.agent, err)
 	}
-	boot, err := waitAgentReadyOn(callerCredentialAgent, claudeHarness, cp.timeout)
+	boot, err := waitAgentReadyOn(cp.agent, claudeHarness, cp.timeout)
 	if err != nil {
 		return err
 	}
 	if !boot.ready {
-		return fmt.Errorf("the Agent %s is not Ready on Harness %s after %s: %s", callerCredentialAgent, claudeHarness, boot.elapsed.Round(time.Second), boot.reason)
+		return fmt.Errorf("the Agent %s is not Ready on Harness %s after %s: %s", cp.agent, claudeHarness, boot.elapsed.Round(time.Second), boot.reason)
 	}
-	note("the Agent %s Ready on Harness %s in %s, its egress %s and %s", callerCredentialAgent, claudeHarness, boot.elapsed.Round(time.Second), cfg.GitHubFakeBearerURL(), cfg.GitHubFakeBearerAPIURL())
+	note("the Agent %s Ready on Harness %s in %s, its egress %s and %s", cp.agent, claudeHarness, boot.elapsed.Round(time.Second), cfg.GitHubFakeBearerURL(), cfg.GitHubFakeBearerAPIURL())
 	return nil
 }
 
 // createWorkspace connects the admin to fake-bearer and defines the part's
 // workspace with the one repository, waiting for its first cycle.
 func (cp *callerCredentialProof) createWorkspace() error {
-	s, cfg := cp.sp, cp.sp.cfg
-	hops, err := connectWorkspaceProvider(cfg, cp.admin, config.WorkspaceProviderFakeBearer)
+	hops, err := connectWorkspaceProvider(cp.sp.cfg, cp.admin, config.WorkspaceProviderFakeBearer)
 	if err != nil {
 		return err
 	}
 	cp.connected = true
 	note("%s connected to %s: %s", cp.admin.user.Email, config.WorkspaceProviderFakeBearer, hops)
-	owner, name, _ := strings.Cut(callerCredentialRepo, "/")
+	return cp.defineWorkspace()
+}
+
+// defineWorkspace defines the part's workspace on fake-bearer with the one
+// repository, waiting for its first cycle.
+func (cp *callerCredentialProof) defineWorkspace() error {
+	s := cp.sp
+	owner, name, _ := strings.Cut(cp.repo, "/")
 	var created syncWorkspace
 	if err := s.member.callServerStructured(workspaceManagerToolPrefix+"create_workspace", map[string]any{
-		nameKey: callerCredentialWorkspace, wmOrganizationArg: config.WorkspaceOrganization,
+		nameKey: cp.workspace, wmOrganizationArg: config.WorkspaceOrganization,
 		wmSourcesArg: []map[string]any{{wmProviderArg: config.WorkspaceProviderFakeBearer, wmOwnerArg: owner, repositoriesKey: []string{name}}},
 	}, &created); err != nil {
 		return err
 	}
-	d, err := s.waitCycle(callerCredentialWorkspace, nil)
+	d, err := s.waitCycle(cp.workspace, nil)
 	if err != nil {
 		return err
 	}
 	if r := d.Workspace.LastSync; r.Result != syncResultSucceed {
-		return fmt.Errorf("the first cycle of %s ended %s: %s", callerCredentialWorkspace, r.Result, r.Message)
+		return fmt.Errorf("the first cycle of %s ended %s: %s", cp.workspace, r.Result, r.Message)
 	}
-	note("created %s of Organization %s on %s; first cycle %s", callerCredentialWorkspace, created.Organization, config.WorkspaceProviderFakeBearer, d.Workspace.LastSync.Result)
+	note("created %s of Organization %s on %s; first cycle %s", cp.workspace, created.Organization, config.WorkspaceProviderFakeBearer, d.Workspace.LastSync.Result)
 	return nil
 }
 
@@ -236,24 +251,24 @@ func (cp *callerCredentialProof) createWorkspace() error {
 // with the admin's grant for the workspace or without a workspace, and
 // returns it as kagent records it.
 func (cp *callerCredentialProof) startSession(inWorkspace bool) (*apiv1alpha1.Session, error) {
-	args := map[string]any{nameKey: callerCredentialAgent, namespaceKey: kagentNamespace, startSessionRequestIDArg: uuid.NewString()}
+	args := map[string]any{nameKey: cp.agent, namespaceKey: kagentNamespace, startSessionRequestIDArg: uuid.NewString()}
 	if inWorkspace {
-		a, err := cp.admin.authorizeWorkspace(callerCredentialWorkspace)
+		a, err := cp.admin.authorizeWorkspace(cp.workspace)
 		if err != nil {
 			return nil, err
 		}
 		if a.Outcome != authorizeGranted || a.Grant == "" {
-			return nil, fmt.Errorf("authorize_workspace %s answered %s (%q, unreadable %v, connect %v), want granted", callerCredentialWorkspace, a.Outcome, a.Reason, a.Unreadable, a.Connect)
+			return nil, fmt.Errorf("authorize_workspace %s answered %s (%q, unreadable %v, connect %v), want granted", cp.workspace, a.Outcome, a.Reason, a.Unreadable, a.Connect)
 		}
 		var claims struct {
 			Providers []grantProvider `json:"providers"`
 		}
 		parts := strings.Split(a.Grant, ".")
 		if len(parts) != 3 || decodeJWTPart(parts[1], &claims) != nil {
-			return nil, fmt.Errorf("the grant of authorize_workspace %s is no JWT", callerCredentialWorkspace)
+			return nil, fmt.Errorf("the grant of authorize_workspace %s is no JWT", cp.workspace)
 		}
-		if err := judgeGrantProviders(claims.Providers, cp.apiHost, config.WorkspaceProviderFakeBearer); err != nil {
-			return nil, fmt.Errorf("the grant for %s: %w", callerCredentialWorkspace, err)
+		if err := judgeGrantProviders(claims.Providers, cp.apiHost, config.WorkspaceProviderFakeBearer); err != nil && cp.grantJudged {
+			return nil, fmt.Errorf("the grant for %s: %w", cp.workspace, err)
 		}
 		note("the grant names the providers %s", grantProvidersLine(claims.Providers))
 		args[startSessionGrantArg] = a.Grant
@@ -493,13 +508,13 @@ func (cp *callerCredentialProof) cleanup() {
 	if cp.admin != nil && cp.connected {
 		cp.admin.disconnect(config.WorkspaceProviderFakeBearer)
 	}
-	if agentExists(callerCredentialAgent) {
-		errs = append(errs, removeAgent(callerCredentialAgent))
+	if agentExists(cp.agent) {
+		errs = append(errs, removeAgent(cp.agent))
 	}
 	if cp.sp.member != nil {
-		if gone, err := cp.sp.gone(callerCredentialWorkspace); err == nil && !gone {
-			if _, err := cp.sp.volume(callerCredentialWorkspace); err == nil {
-				out, err := cp.sp.onVolume(callerCredentialWorkspace, "sessions-clear", accessClearSessionsScript)
+		if gone, err := cp.sp.gone(cp.workspace); err == nil && !gone {
+			if _, err := cp.sp.volume(cp.workspace); err == nil {
+				out, err := cp.sp.onVolume(cp.workspace, "sessions-clear", accessClearSessionsScript)
 				errs = append(errs, err)
 				if err == nil {
 					note("%s", indent(out, "  "))
