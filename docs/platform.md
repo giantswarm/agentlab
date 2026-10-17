@@ -1038,11 +1038,28 @@ names by digest (`agentlab configure --coding-images omp=<image>`; the
 release's chart stamps it as `runtimeImages.ompHarness.digest`), a dev
 image (`platform.devImages` `omp-harness`) winning over it.
 
-A codex proof judges what the model relays of the probe, so it needs a
-model that runs the script and relays its lines verbatim. A hosted OpenAI
-Responses API model does; name its ModelConfig with `--model-config` (an
-`OpenAI` extraModels entry with `apiFormat: responses` and its key in
-`apiKeyEnv`). No host model passes every stage yet:
+`coding-test --harness codex` runs on the in-cluster mockllm unless
+`--model-config` names another model: kagent's mock model
+(`github.com/kagent-dev/mockllm`), scripted for the proof's turns, so the
+proof reaches its verdict on a lab with no OpenAI or Bedrock account. It runs
+the way a proof's fake runs: `agentlab mockllm` in a container on the kind
+network, reached by the cluster as the Service `agentlab-mockllm` in the
+platform namespace, which the run's ModelConfig `agentlab-mockllm` (the
+`OpenAI` provider, `gpt-5.2-codex`, `apiFormat: responses`, a placeholder
+key) names as its base URL; the run removes all three at its end. The script
+answers each prompt with the tool call it asks for (the probe script, the
+MCP tool through codex's tool search, the code word's file, its read-back)
+and a fixed reply once the tool's output is back. The sandbox stages, the
+MCP call and the resume's file judge those outputs, what the sandbox
+printed and the tool answered, as the harness reports them on the turn's
+tool results; the code word the resumed turn recalls is the script's. The
+`model` stage closes the run: every model call answered by the script, none
+outside it.
+
+A real model is named with `--model-config`: a hosted OpenAI Responses API
+model (an `OpenAI` extraModels entry with `apiFormat: responses` and its key
+in `apiKeyEnv`) relays the probe verbatim. No host model passes every stage
+yet:
 
 | Host model (Ollama) | Memory loaded | On the codex proof |
 |---|---|---|
@@ -1053,16 +1070,15 @@ Responses API model does; name its ModelConfig with `--model-config` (an
 With the codex Harness rendered, `agentlab configure` wires the first of
 `qwen3-coder:30b` and `gpt-oss:20b` the host's Ollama has downloaded as the
 extraModels entry `codex-host` (the `OpenAI` provider on Ollama's `/v1`,
-`apiFormat: responses`, keyless). `coding-test --harness codex` runs on the
-first extraModels entry on the Responses API unless `--model-config` names
-another, under the 40m host model turn deadline; a failed sandbox stage
+`apiFormat: responses`, keyless), which `--model-config codex-host` runs the
+proof on under the 40m host model turn deadline; a failed sandbox stage
 quotes the agent's reply.
 
 ```sh
-ollama pull qwen3-coder:30b
 agentlab configure --defaults --coding --coding-harnesses claude,codex
 agentlab platform
-agentlab coding-test --harness codex
+agentlab coding-test --harness codex                            # the mockllm
+agentlab coding-test --harness codex --model-config codex-host  # a host model
 ```
 
 The workspaces proof's claude Session runs on the same `claude` Harness,
@@ -1092,6 +1108,7 @@ the one that runs on both of those:
 | suspend and resume | the Session's file and conversation survive the snapshot |
 | usage | the resumed turn's task status carries its usage |
 | share refused | a read-write share of the coding Session is refused: a collaborator's turn would run under what the first sender's turns left behind (git hooks, Makefiles, background processes) |
+| model (*codex on the mockllm*) | the mockllm answered every model call of the turns from its script, none outside it |
 
 The sandbox stages read one turn: the agent's shell tool runs a POSIX script
 and relays its `AGENTLAB_PROBE` lines, and each stage judges its own. The
