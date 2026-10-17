@@ -288,6 +288,9 @@ below), `workspace-manager` (with `platform.workspaces`), `ate-api-server` (Agen
 Substrate's API server, where the golden snapshots are taken; with the
 agents), the agentgateway component's two Deployments under their own names,
 `agentgateway` (the data-plane proxy) and `agentgateway-controller` —,
+`mcp-prometheus` (the lab's own release outside the meta chart, with
+`platform.observability`; the swap rides that HelmRelease's `postRenderers`,
+[docs/observability.md](observability.md#alertmanager)),
 `harness`, the platform Harness's runtime image (the Go ADK every agent runs
 on under kagent API v2), and `claude-harness`, `codex-harness` and `omp-harness`, a coding
 Harness's image (with that Harness rendered, [below](#coding-harness-targets)):

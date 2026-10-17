@@ -201,6 +201,10 @@ type postRenderer struct {
 type devImageTarget struct {
 	deployment, container, image string
 	release                      string
+	// labOwned marks a release the lab renders itself rather than a meta
+	// chart component (mcp-prometheus.yaml.tmpl): its swap rides that
+	// template's postRenderers (mcpPrometheusPostRenderers), not the values.
+	labOwned bool
 }
 
 // releaseOf is the component release a target's patch lands on: the named
@@ -234,6 +238,8 @@ var devImageTargets = map[string]devImageTarget{
 	// Substrate's API server, where the ActorTemplate reconciler takes the
 	// golden snapshots, rides the substrate component's postRenderers.
 	config.DevImageSubstrateAPI: {deployment: substrateAPIDeployment, container: substrateAPIDeployment, image: "gsoci.azurecr.io/giantswarm/substrate/ateapi", release: substrateRelease},
+	// The lab's own mcp-prometheus release, outside the meta chart.
+	config.DevImageMCPPrometheus: {deployment: mcpPrometheusRelease, container: mcpPrometheusRelease, image: "gsoci.azurecr.io/giantswarm/mcp-prometheus", labOwned: true},
 }
 
 // defaultDevImageNames is the image name per configured Deployment target as
@@ -447,12 +453,25 @@ spec:
 	}
 }
 
-// sidecarPostRenderer is the one-patch postRenderers entry of a release the
-// lab renders itself (mcp-prometheus.yaml.tmpl).
-func sidecarPostRenderer(deployment string, dexPort int) postRenderer {
+// mcpPrometheusPostRenderers is the postRenderers list of the release the lab
+// renders itself (mcp-prometheus.yaml.tmpl): the dex-localhost sidecar while
+// the issuer is spelled localhost, and the platform.devImages.mcp-prometheus
+// swap under the image name the chart renders (imageNames, as for the meta
+// chart's components). Empty when neither applies.
+func mcpPrometheusPostRenderers(cfg *config.Config, imageNames map[string]string) []postRenderer {
 	var pr postRenderer
-	pr.Kustomize.Patches = []kustomizePatch{dexLocalhostPatch(deployment, dexPort)}
-	return pr
+	if dexLocalhostBridged(cfg) {
+		pr.Kustomize.Patches = append(pr.Kustomize.Patches, dexLocalhostPatch(mcpPrometheusRelease, cfg.DexPort))
+	}
+	if ref, ok := cfg.Platform.DevImages[config.DevImageMCPPrometheus]; ok && imageNames[config.DevImageMCPPrometheus] != "" {
+		target := devImageTargets[config.DevImageMCPPrometheus]
+		pr.Kustomize.Images = []kustomizeImage{devImageOverride(imageNames[config.DevImageMCPPrometheus], ref)}
+		pr.Kustomize.Patches = append(pr.Kustomize.Patches, pullPolicyPatch(target))
+	}
+	if len(pr.Kustomize.Patches) == 0 {
+		return nil
+	}
+	return []postRenderer{pr}
 }
 
 // hostNetworkComponents are the components whose Deployment the lab puts on
@@ -630,7 +649,7 @@ func componentPostRenderers(cfg *config.Config, imageNames map[string]string, si
 	for _, component := range slices.Sorted(maps.Keys(cfg.Platform.DevImages)) {
 		target, ok := devImageTargets[component]
 		name := imageNames[component]
-		if !ok || name == "" {
+		if !ok || name == "" || target.labOwned {
 			continue
 		}
 		release := target.releaseOf(component)

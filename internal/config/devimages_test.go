@@ -141,3 +141,35 @@ func TestCodingHarnessesValidate(t *testing.T) {
 		t.Errorf("CodingHarnesses() = %v, want claude by default", got)
 	}
 }
+
+// TestDevImagesKnowMCPPrometheus: the lab's own mcp-prometheus is a devImages
+// target while the observability stack, which brings it, is on, and refused
+// without it.
+func TestDevImagesKnowMCPPrometheus(t *testing.T) {
+	cfg := Default()
+	cfg.Platform.DevImages = map[string]string{"mcp-prometheus": "mcp-prometheus:dev"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("mcp-prometheus must be a devImages target with observability on: %v", err)
+	}
+	cfg.Platform.Observability = false
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "platform.observability") {
+		t.Fatalf("without observability the target must be refused naming the key, got %v", err)
+	}
+}
+
+// TestAlertmanagerNeedsObservability: platform.alertmanager is off by
+// default, valid with the observability stack and refused without it.
+func TestAlertmanagerNeedsObservability(t *testing.T) {
+	cfg := Default()
+	if cfg.AlertmanagerEnabled() {
+		t.Fatal("the Alertmanager must be off by default")
+	}
+	cfg.Platform.Alertmanager = true
+	if err := cfg.Validate(); err != nil || !cfg.AlertmanagerEnabled() {
+		t.Fatalf("platform.alertmanager with observability: enabled=%v, err=%v", cfg.AlertmanagerEnabled(), err)
+	}
+	cfg.Platform.Observability = false
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "platform.observability") {
+		t.Fatalf("platform.alertmanager without observability must be refused naming the key, got %v", err)
+	}
+}
