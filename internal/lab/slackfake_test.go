@@ -243,7 +243,10 @@ func TestSlackReaders(t *testing.T) {
 		{TS: "1", Text: testCardTitle, Blocks: button("task-old")},
 		{TS: "2", Text: "text"},
 		{TS: "3", Text: testCardTitle, Blocks: button("task-1")},
-		{TS: "4", Text: testApproved, Blocks: []map[string]any{{fieldTypeKey: slackBlockSection, slackKeyText: map[string]any{fieldTypeKey: slackMrkdwn, slackKeyText: "*Approval required* · list"}}}},
+		{TS: "4", Text: testApproved, Blocks: []map[string]any{
+			{fieldTypeKey: slackBlockSection, slackKeyText: map[string]any{fieldTypeKey: slackMrkdwn, slackKeyText: "*Approval required* · list"}},
+			{fieldTypeKey: slackBlockContext, slackKeyElements: []any{map[string]any{fieldTypeKey: slackMrkdwn, slackKeyText: testApproved}}},
+		}},
 	}
 	card, ok := openCard(msgs)
 	if !ok || card.msg.TS != "3" || card.taskID != "task-1" {
@@ -252,7 +255,18 @@ func TestSlackReaders(t *testing.T) {
 	if _, ok := openCard(msgs[3:]); ok {
 		t.Error("a decided card has no buttons left")
 	}
-	roster := slackRosterHeading + ":\n• *agentlab Swarmgeist proof* — Throwaway\n• *Other*"
+	row := func(text string) map[string]any {
+		return map[string]any{fieldTypeKey: slackBlockSection, slackKeyText: map[string]any{fieldTypeKey: slackMrkdwn, slackKeyText: text}}
+	}
+	roster := slackMessage{Text: "*Available agents*:\n• *Fallback only*", Blocks: []map[string]any{
+		{fieldTypeKey: slackBlockHeader, slackKeyText: map[string]any{fieldTypeKey: slackPlainText, slackKeyText: slackRosterTitle}},
+		{fieldTypeKey: slackBlockContext, slackKeyElements: []any{map[string]any{fieldTypeKey: slackMrkdwn, slackKeyText: "2 agents available"}}},
+		row("*agentlab Swarmgeist proof* · default\nThrowaway"),
+		row("*Other*"),
+	}}
+	if !roster.isRoster() || (slackMessage{Text: "*Available agents*:"}).isRoster() {
+		t.Error("isRoster does not go by the header")
+	}
 	if names := rosterNames(roster); !reflect.DeepEqual(names, []string{"agentlab Swarmgeist proof", "Other"}) {
 		t.Errorf("rosterNames = %q", names)
 	}
@@ -273,6 +287,40 @@ func TestSlackReaders(t *testing.T) {
 	}
 	if line := threadLine(nil); !strings.Contains(line, "nothing") {
 		t.Errorf("threadLine(nil) = %q", line)
+	}
+}
+
+// TestSlackShown: a message reads as Slack renders it — its blocks' text
+// alone when a block shows any, its fallback text otherwise; a Connect card
+// whose fallback equals its section shows the sentence once.
+func TestSlackShown(t *testing.T) {
+	const sentence = "Connect *workspace-manager* to let me work on your workspaces."
+	mrkdwn := map[string]any{fieldTypeKey: slackMrkdwn, slackKeyText: sentence}
+	buttons := map[string]any{fieldTypeKey: slackBlockActions, slackKeyElements: []any{map[string]any{fieldTypeKey: slackButton, slackKeyActionID: "connector_connect"}}}
+	for _, c := range []struct {
+		name string
+		msg  slackMessage
+		want string
+	}{
+		{"text alone", slackMessage{Text: "only text"}, "only text"},
+		{"Connect card", slackMessage{Text: sentence, Blocks: []map[string]any{{fieldTypeKey: slackBlockSection, slackKeyText: mrkdwn}, buttons}}, sentence},
+		{"buttons alone", slackMessage{Text: "Sign in first", Blocks: []map[string]any{buttons}}, "Sign in first"},
+		{"header, context and markdown", slackMessage{Text: "fallback", Blocks: []map[string]any{
+			{fieldTypeKey: slackBlockHeader, slackKeyText: map[string]any{fieldTypeKey: slackPlainText, slackKeyText: "Question?"}},
+			{fieldTypeKey: slackBlockMarkdown, slackKeyText: "**body**"},
+			{fieldTypeKey: "divider"},
+			{fieldTypeKey: slackBlockContext, slackKeyElements: []any{mrkdwn}},
+		}}, "Question?\n**body**\n" + sentence},
+		{"rich text", slackMessage{Text: "Commands: help", Blocks: []map[string]any{{fieldTypeKey: slackBlockRichText, slackKeyElements: []any{
+			map[string]any{fieldTypeKey: "rich_text_section", slackKeyElements: []any{map[string]any{fieldTypeKey: slackKeyText, slackKeyText: "Talk"}}},
+			map[string]any{fieldTypeKey: "rich_text_list", slackKeyElements: []any{map[string]any{fieldTypeKey: "rich_text_section", slackKeyElements: []any{
+				map[string]any{fieldTypeKey: slackKeyText, slackKeyText: "help"}, map[string]any{fieldTypeKey: slackKeyText, slackKeyText: "  this list"},
+			}}}},
+		}}}}, "Talk\nhelp  this list"},
+	} {
+		if got := c.msg.shown(); got != c.want {
+			t.Errorf("%s: shown() = %q, want %q", c.name, got, c.want)
+		}
 	}
 }
 

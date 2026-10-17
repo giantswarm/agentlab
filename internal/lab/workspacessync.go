@@ -527,7 +527,7 @@ func (sp *syncProof) run(email string, p *proofStages) error {
 	}
 	for name, sources := range map[string][]map[string]any{syncFilterWorkspace: syncFilterSources(sp.private), syncListWorkspace: syncNamedSources(wantList...)} {
 		var created syncWorkspace
-		if err := sp.member.callServerStructured(workspaceManagerToolPrefix+"create_workspace", map[string]any{
+		if err := sp.member.createLabWorkspace(map[string]any{
 			nameKey: name, wmOrganizationArg: config.WorkspaceOrganization, wmSourcesArg: sources,
 		}, &created); err != nil {
 			return err
@@ -1099,7 +1099,7 @@ func (sp *syncProof) forcePush() (string, error) {
 // them, and returns its volume: the one the workspace's grants name.
 func (sp *syncProof) createNamed(name string, repos []string) (workspaceVolume, error) {
 	var created syncWorkspace
-	if err := sp.member.callServerStructured(workspaceManagerToolPrefix+"create_workspace", map[string]any{
+	if err := sp.member.createLabWorkspace(map[string]any{
 		nameKey: name, wmOrganizationArg: config.WorkspaceOrganization, wmSourcesArg: syncNamedSources(repos...),
 	}, &created); err != nil {
 		return workspaceVolume{}, err
