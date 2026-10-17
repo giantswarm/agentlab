@@ -218,7 +218,8 @@ go test ./internal/forms/ -run TestMinimalFormDrive -count=1 -v   # single test
                            # on a terminal it ends by offering `trust` and the portal (--trust/--open pre-answer)
 ./agentlab open portal     # the portal (Backstage) in the browser; `open agents` the kagent UI, `open prometheus` the lab Prometheus
 ./agentlab list            # the labs on this machine: state, components, URLs, CA trust
-./agentlab status          # the lab's live state: the chart in place (a dev chart named as such) vs agentlab.yaml's, the platform HelmReleases
+./agentlab status          # the lab's live state: the chart in place (a dev chart named as such) vs agentlab.yaml's, every platform.valuesFiles overlay with what it pins, the platform HelmReleases
+./agentlab configure --released  # the restore step before handing a lab on: drops overlays, dev images, chart directory, dev channel
 ./agentlab pods            # the lab's pods (kubectl get pods -A, without kubectl); -n <namespace>
 ./agentlab platform-test   # headless Dex -> muster -> mcp-kubernetes proof
 ./agentlab models-test     # managed models: 401 -> pull -> ModelConfig -> dry runs, gitops_owned, commit on a fake GitHub -> agent turn -> MCP -> unload -> delete (on lmstudio: the 501 refusal -> unwire, U23)
