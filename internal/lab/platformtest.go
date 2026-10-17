@@ -62,6 +62,7 @@ func PlatformTest(cfg *config.Config, email string) error {
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
 	}
+	defer releaseWorkspaceGrants()
 	user := cfg.FindUser(email)
 	if user == nil {
 		return fmt.Errorf("no user %q in %s", email, config.File)

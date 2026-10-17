@@ -127,6 +127,11 @@ func WorkspacesTest(cfg *config.Config, opts WorkspacesTestOptions) error {
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
 	}
+	end, err := startWorkspaceRun()
+	defer end()
+	if err != nil {
+		return err
+	}
 	if opts.Part == WorkspacesPartSync {
 		email := opts.Email
 		if email == "" {
