@@ -8,15 +8,16 @@ import (
 )
 
 // The codex Harness's host model (docs/platform.md "The coding agents
-// proof"): codex speaks the OpenAI Responses API alone, and a small host
-// model (qwen3.5:9b) runs every turn but relays the proof's probe lines
-// unreliably. `agentlab configure` wires the strongest of CodexHostModels the
-// host's Ollama has downloaded as a platform.extraModels entry on its
-// Responses API, which coding-test --harness codex then runs on by default
-// (config.CodexModelConfig).
+// proof"): codex speaks the OpenAI Responses API alone. `agentlab configure`
+// wires the first of CodexHostModels the host's Ollama has downloaded as a
+// platform.extraModels entry on its Responses API, which coding-test
+// --harness codex then runs on by default (config.CodexModelConfig). The
+// proof judges what the model relays of the probe; a hosted Responses API
+// model relays it verbatim, the host models listed here reach the sandbox
+// stages but not yet every stage.
 
-// CodexHostModel is a host model a codex proof passes on, with the memory it
-// needs loaded.
+// CodexHostModel is a host model for a codex proof, with the memory it needs
+// loaded.
 type CodexHostModel struct {
 	// ID is the model's Ollama tag.
 	ID string
@@ -25,11 +26,13 @@ type CodexHostModel struct {
 	GiB int
 }
 
-// CodexHostModels are the host models a codex proof passes on, preferred
-// first: gpt-oss-20b at its MXFP4 weights, qwen3-coder 30b-a3b at Q4_K_M.
+// CodexHostModels are the host models for a codex proof, preferred first:
+// qwen3-coder 30b-a3b at Q4_K_M reaches the sandbox turn, credentials and
+// DNS stages; gpt-oss-20b at its MXFP4 weights answers some Responses API
+// calls with a server error on Ollama.
 var CodexHostModels = []CodexHostModel{
-	{ID: "gpt-oss:20b", GiB: 16},
 	{ID: "qwen3-coder:30b", GiB: 21},
+	{ID: "gpt-oss:20b", GiB: 16},
 }
 
 // CodexHostModelName is the ModelConfig, and extraModels entry, configure

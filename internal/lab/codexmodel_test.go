@@ -31,8 +31,8 @@ func TestCodexHostModel(t *testing.T) {
 		disc      *Discovery
 		model, at string
 	}{
-		"gateway":       {disc: ollamaWith(gatewayIP, true, small, coder, oss), model: modelGptOss20b, at: "http://" + labHostName + ":11434/v1"},
-		"not probed":    {disc: ollamaWith("", false, coder), model: modelQwen3Coder30b, at: "http://" + labHostName + ":11434/v1"},
+		"gateway":       {disc: ollamaWith(gatewayIP, true, small, oss, coder), model: modelQwen3Coder30b, at: "http://" + labHostName + ":11434/v1"},
+		"not probed":    {disc: ollamaWith("", false, oss), model: modelGptOss20b, at: "http://" + labHostName + ":11434/v1"},
 		"alias":         {disc: ollamaWith(hostDockerInternal, true, oss), model: modelGptOss20b, at: "http://" + hostDockerInternal + ":11434/v1"},
 		"small only":    {disc: ollamaWith(gatewayIP, true, small)},
 		"no tools":      {disc: ollamaWith(gatewayIP, true, HostModel{ID: modelGptOss20b})},
@@ -90,6 +90,6 @@ func TestApplyCodexHostModel(t *testing.T) {
 
 // The codex host models, by tag.
 var (
-	modelGptOss20b     = CodexHostModels[0].ID
-	modelQwen3Coder30b = CodexHostModels[1].ID
+	modelQwen3Coder30b = CodexHostModels[0].ID
+	modelGptOss20b     = CodexHostModels[1].ID
 )
