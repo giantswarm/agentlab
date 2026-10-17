@@ -88,6 +88,16 @@ The lab installs it in its **lab shape**:
   instead of quoting the pin, and `agentlab configure --adopt-chart`
   writes the chart in place into the pin — or `agentlab platform` installs
   the pin over the cluster, the boot naming the downgrade.
+- A `platform.valuesFiles` overlay changes what the lab runs without
+  changing the chart version: a proof's `components.<name>.versionRange`
+  pins a component the chart's own range does not admit. `agentlab status`
+  names every overlay with the values it sets, and the ones the release in
+  place was installed with (each platform run records them in its
+  revision's description) that `agentlab.yaml` no longer lists. Before a
+  shared lab is handed on, `agentlab configure --released` drops the proof
+  state (overlays, dev images, a chart directory, the dev channel, a local
+  guest image) and `agentlab platform` installs the released platform, so
+  the next holder starts there.
 - A field a hand wrote on a platform workload — `kubectl patch` of muster's
   `hostNetwork`, a `kubectl set env` on Backstage — is no release's: Helm and
   helm-controller's drift correction own and correct only the fields the
@@ -101,7 +111,9 @@ The lab installs it in its **lab shape**:
   edit's entry, names each (`Put back to its release's render: …`) and waits
   for the roll; a field it cannot put back fails the run, named. A field
   written by any other manager than the releases' (`helm`, `helm-controller`,
-  the lab's `agentlab`, `kube-controller-manager`) is named by `agentlab
+  the lab's `agentlab`, the connectivity release's config-reload hook
+  `agent-platform-config-reload`, which stamps the Backstage app-config
+  checksum into the pod template, `kube-controller-manager`) is named by `agentlab
   status` on its `workloads` line, warned at the end of `agentlab platform`
   and at every proof's opening, and fails platform-test's first stage,
   `workload field managers`. A rollout restart's `restartedAt` annotation is
@@ -1229,6 +1241,53 @@ repository's pipeline does not have, and its subject is a release of another
 line, not a change of agentlab. The unit tests of every piece it adds run in
 `make test`.
 
+### The kagent step proof (conversations across a kagent step)
+
+`agentlab kagent-step-test` proves that an agent and its conversation
+survive a step of the kagent line under them, the way
+`substrate-step-test` proves a Substrate step. It names the step in one of
+two shapes, or both:
+
+- `--to <kagent release>` pins the `kagent` and `kagent-crds` components to
+  that exact release of the kagent line (`1.14.0`, `1.15.1-rc.2`) through a
+  values overlay of the run's own (`state/kagent-step-values.yaml`), on the
+  chart the lab runs: a step within the released line, or to a kagent
+  release candidate. The lab must run an older kagent before it.
+- `--chart <agent-platform release>` moves the meta chart to a candidate
+  release (`4.145.1-rc.6`) whose kagent range moves, with the values that
+  candidate carries for the new line: the step a platform candidate takes
+  when it keeps Substrate and steps kagent, which `substrate-step-test --to`
+  cannot express. A candidate that leaves kagent where it was fails the step
+  stage: it is no subject of this proof.
+
+The run, on the static binary (no scratch driver): the kagent line before
+the step read off the meta chart, the kagent HelmRelease's applied chart and
+the controller's image; an agent on the platform Harness with a
+conversation of one turn (a random codeword), suspended; the platform
+upgraded in place onto the step and the kagent controller rolled out; then
+the conversation from before the step resumed (`resume`), a turn on it that
+must answer the codeword (`turn`), a suspend and a resume more on the new
+controller (`suspend`), and the conversation and the agent deleted, the
+Session gone and Substrate holding nothing of the agent (`delete`). Each
+PASS line names what it proved; a failure's FAIL line starts with the stage
+that failed — `step`, `resume`, `turn`, `suspend` or `delete` — and its
+cause. The lab returns to its own configuration afterwards (the overlay
+removed, `agentlab.yaml`'s chart upgraded back onto); `--stay` leaves it on
+the step. `--step-dev-image <target>=<image>` adds dev images for the step
+alone (a `kagent` controller build), `--ready-timeout` bounds the golden
+boot, `--model-config` names the ModelConfig.
+
+```bash
+agentlab kagent-step-test --to 1.14.0              # a step within the released kagent line
+agentlab kagent-step-test --chart 4.145.1-rc.6     # a platform candidate that steps kagent 1.13 -> 1.15
+```
+
+**Where it runs.** The proof is the lab round of every kagent release
+candidate and every agent-platform candidate that moves the kagent range, on
+a lab on the platform's current release. Like the Substrate step proof it is
+not a CircleCI job of this repository: its turns are model turns. The unit
+tests of its pieces run in `make test`.
+
 ### The Substrate tunnel-close proof (gRPC to an HTTP/1.1-only actor)
 
 `agentlab substrate-tunnel-test` proves that a gRPC call through
@@ -1558,8 +1617,8 @@ A personal access token does not fit: muster sends only literal headers, so the 
 With workspaces on, the workspace-manager gets the provider instances `platform.workspaces.provider` names — `fake` (the default while the key is empty), `github`, `gitlab`, or several such as `fake,github,gitlab` (`agentlab configure --workspaces-provider …`) — `fake` and `github` of the chart's `github` kind, `gitlab` of its `gitlab` kind, whose App the workspace mirrors sync with. Three pieces follow from the switch alone, whatever the instances:
 
 - `workspace-manager.oauth.baseURL` is `https://workspace-manager.<domain>:<gatewayPort>` (port-free on 443), which the chart's own derivation from `global.domain` would drop the port from. The chart routes that host for the grants' key set (`/.well-known/jwks.json`) and forwards the URL.
-- The person's sign-in at a provider is muster's (workspace-manager 0.10.0 and newer): muster pins the manager's registration to one instance's App (`workspace-manager.muster.mcpServer.auth`, the instance `platform.workspaces.grantProvider`, empty for the first), the person grants it once with `core_auth_login`, and muster attaches the person's App token to every call of the manager's tools. The App's callback URL is muster's `/oauth/proxy/callback`; the pin's OAuth client is the instance's Secret with `client-id` beside `client-secret` ([Workspaces](workspaces.md#the-persons-grant-musters)). A manager before 0.10.0 keeps its own `/signin`, `/connect/<instance>` and `/callback/<instance>`, and the lab Dex's `agent-platform` client still lists `<base URL>/signin` for it.
-- `agentlab configure` and `agentlab platform` print each instance's callback URL.
+- The person's sign-in at a provider is muster's (workspace-manager 0.10.0 and newer): muster pins the manager's registration to one instance's App (`workspace-manager.muster.mcpServer.auth`, the instance `platform.workspaces.grantProvider`, empty for the first), the person grants it once with `core_auth_login`, and muster attaches the person's App token to every call of the manager's tools. The App's callback URL is muster's `/oauth/proxy/callback`; the pin's OAuth client is the instance's Secret with `client-id` beside `client-secret` ([Workspaces](workspaces.md#the-persons-grant-musters)). The manager serves no sign-in of its own: its routes are its MCP endpoint and the grants' key set.
+- `agentlab configure` and `agentlab platform` print the callback URL each instance's App names, muster's `/oauth/proxy/callback`.
 
 **`fake`** is the lab's own GitHub ([Workspaces](workspaces.md#the-provider-instance-fake)): `agentlab up` and `agentlab platform` run `agentlab github-fake --workspaces` in a container on the kind network, point the selector-less Service `agent-platform/agentlab-github` at it and send `github.<domain>` there from CoreDNS, so the instance is a GitHub Enterprise-shaped one at `url: https://github.<domain>` (the API under `/api/v3`). Its App is the embedded fixture's (id `1`, client `Iv1.agentlab-workspaces`); the App's private key and the client secret are the lab's own, generated once under `certs/github-fake/` next to the CA and placed as the Secret `agent-platform/workspace-fake` (keys `private-key`, `client-secret` and `client-id`, muster's for the pin) ahead of the install, which references it. The fake serves TLS with a leaf of the lab CA, so the values name the lab CA file the chart already mounts for Dex as the manager's `SSL_CERT_FILE`. Nothing to register: `platform-test` proves the manager registered with muster and listing the instance to the admin.
 
@@ -1572,7 +1631,7 @@ beekeeper secret copy op://<vault>/<item>/client-secret --to-secret kind-agentla
 
 **`gitlab`** is a GitLab's OAuth application with a group access token ([Workspaces](workspaces.md#the-provider-instance-gitlab) names GitLab's side). Its URL and client id are public and live in `agentlab.yaml` (`platform.workspaces.gitlab.url` and `clientId`); the token and the application's secret are the Secret `agent-platform/workspace-gitlab` (keys `token`, `client-secret`), placed from `tokenSource` and `clientSecretSource` on every `up` and `platform`. The instance renders once all four are in place.
 
-(A person without that tooling creates the Secret with `kubectl --context kind-agentlab -n agent-platform create secret generic workspace-github --from-file=private-key=… --from-file=client-secret=…`.) Then `agentlab platform`. While an id is empty, the Secret is missing or a key lacks a value, the run renders no `github` instance (the workspace-manager refuses one without them at start-up), warns with what is missing, the callback URL and the commands, and goes on with the base URL, the route, the redirect URI and the other instance in place.
+(A person without that tooling creates the Secret with `kubectl --context kind-agentlab -n agent-platform create secret generic workspace-github --from-file=private-key=… --from-file=client-secret=…`.) Then `agentlab platform`. While an id is empty, the Secret is missing or a key lacks a value, the run renders no `github` instance (the workspace-manager refuses one without them at start-up), warns with what is missing, the callback URL and the commands, and goes on with the base URL, the route and the other instance in place.
 
 No secret value reaches `agentlab.yaml`, `state/`, a log line or a process argument for either instance: the values carry Secret references, the fake's keys go from `certs/github-fake/` into its Secret through the API (`internal/lab/workspaceprovider_test.go` renders both and checks). The golden renders of the block, one per configuration, are `internal/lab/testdata/workspace-providers/`.
 

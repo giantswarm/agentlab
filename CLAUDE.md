@@ -218,7 +218,8 @@ go test ./internal/forms/ -run TestMinimalFormDrive -count=1 -v   # single test
                            # on a terminal it ends by offering `trust` and the portal (--trust/--open pre-answer)
 ./agentlab open portal     # the portal (Backstage) in the browser; `open agents` the kagent UI, `open prometheus` the lab Prometheus
 ./agentlab list            # the labs on this machine: state, components, URLs, CA trust
-./agentlab status          # the lab's live state: the chart in place (a dev chart named as such) vs agentlab.yaml's, the platform HelmReleases
+./agentlab status          # the lab's live state: the chart in place (a dev chart named as such) vs agentlab.yaml's, every platform.valuesFiles overlay with what it pins, the platform HelmReleases
+./agentlab configure --released  # the restore step before handing a lab on: drops overlays, dev images, chart directory, dev channel
 ./agentlab pods            # the lab's pods (kubectl get pods -A, without kubectl); -n <namespace>
 ./agentlab platform-test   # headless Dex -> muster -> mcp-kubernetes proof
 ./agentlab models-test     # managed models: 401 -> pull -> ModelConfig -> dry runs, gitops_owned, commit on a fake GitHub -> agent turn -> MCP -> unload -> delete (on lmstudio: the 501 refusal -> unwire, U23)
@@ -235,6 +236,7 @@ go test ./internal/forms/ -run TestMinimalFormDrive -count=1 -v   # single test
 ./agentlab egress-test     # an agent with one declared origin, probed from its actor: the origin reached, an undeclared host 403 (actor egress policy denied), muster reached without an entry, raw TCP to github.com:22 refused
 ./agentlab skills-test     # kagent API v2: an AgentTemplate with a git-pinned skill boots (the golden boot) and answers from the skill
 ./agentlab substrate-step-test --to <release>  # a suspended conversation and its /data file survive the step to a newer Substrate; a new one starts from a golden in the layout it writes (taken again on a layout change, kept otherwise)
+./agentlab kagent-step-test --to <kagent> | --chart <agent-platform>  # a suspended conversation resumes, takes a turn, suspends and deletes across a kagent step (a kagent pin, a platform candidate, or both)
 ./agentlab substrate-tunnel-test  # a gRPC call through atenet-router to an HTTP/1.1-only actor fails at once, not with its client's timeout (--substrate <release> pins one for the run)
 ./agentlab down            # delete the cluster (certs/ kept, trust stores untouched)
 ./agentlab trust           # install the lab CA into the system + NSS trust stores (sudo)

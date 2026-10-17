@@ -255,6 +255,11 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	// every exit path.
 	klausGatewayCleanup(api)
 	defer klausGatewayCleanup(api)
+	endWorkspaces, err := startWorkspaceRun()
+	defer endWorkspaces()
+	if err != nil {
+		return err
+	}
 
 	// The fake workspace: the linked person, a person with no link, and the
 	// component half's linked person (klausgatewaytest_component.go), all
@@ -362,7 +367,7 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	if err != nil {
 		return fmt.Errorf("discovery: %w", err)
 	}
-	names := rosterNames(roster.shown())
+	names := rosterNames(roster)
 	if err := assertSlackRoster(names); err != nil {
 		return fmt.Errorf("discovery: %w", err)
 	}
@@ -569,7 +574,7 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	// creates is removed by the cleanup.
 	var component *componentOutcome
 	if cfg.KlausGatewayEnabled() {
-		if component, err = klausGatewayComponentProof(token, identity, user, fake, people.component); err != nil {
+		if component, err = klausGatewayComponentProof(cfg, token, identity, user, fake, people.component); err != nil {
 			return err
 		}
 	} else {
@@ -1516,7 +1521,13 @@ func (p *slackProof) awaitTurn(t *slackThread, before int) (*slackTurn, error) {
 // firstTurn is a thread's first message with one visible retry: a cold
 // worker's first resume can hit Substrate's ResumeActor deadline once.
 func (p *slackProof) firstTurn(t *slackThread, text string) (*slackTurn, error) {
-	turn, err := p.say(t, text)
+	return p.firstTurnBy(p.say, t, text)
+}
+
+// firstTurnBy is firstTurn whose first message is sent by first; the retry
+// is a plain say in the thread it opened.
+func (p *slackProof) firstTurnBy(first func(*slackThread, string) (*slackTurn, error), t *slackThread, text string) (*slackTurn, error) {
+	turn, err := first(t, text)
 	if err == nil && (turn.record.Outcome == outcomeCompleted || turn.record.Outcome == outcomeInputReq) {
 		return turn, nil
 	}
@@ -1568,14 +1579,12 @@ func (p *slackProof) roster(user string) (slackMessage, error) {
 		return slackMessage{}, err
 	}
 	msgs, ok := waitThread(p.fake, p.channel, ts, klausGatewayReplyWait, func(msgs []slackMessage) bool {
-		_, found := findMessage(msgs, slackRosterHeading)
-		return found
+		return slices.ContainsFunc(msgs, slackMessage.isRoster)
 	})
 	if !ok {
 		return slackMessage{}, fmt.Errorf("`@bot %s` got no roster within %s; the thread shows: %s", slackAgentsWord, klausGatewayReplyWait, threadLine(msgs))
 	}
-	post, _ := findMessage(msgs, slackRosterHeading)
-	return post, nil
+	return msgs[slices.IndexFunc(msgs, slackMessage.isRoster)], nil
 }
 
 // assertSlackRoster checks the roster lists the admitted fixture by its

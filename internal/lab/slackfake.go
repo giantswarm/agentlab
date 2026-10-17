@@ -123,6 +123,11 @@ const (
 	slackMarkdownChunk = "markdown_text"
 	slackBlockActions  = "actions"
 	slackBlockSection  = "section"
+	slackBlockHeader   = "header"
+	slackBlockContext  = "context"
+	slackBlockMarkdown = "markdown"
+	slackBlockRichText = "rich_text"
+	slackPlainText     = "plain_text"
 	slackButton        = "button"
 	slackStaticSelect  = "static_select"
 	// slackSelectedOption is a select's pick in an action or a view's state.
@@ -142,8 +147,8 @@ const (
 	slackActionApprove = "hitl_approve"
 	slackActionDeny    = "hitl_deny"
 	slackActionSignIn  = "obo_sign_in"
-	// slackRosterHeading opens the roster's text that `@bot agents` posts.
-	slackRosterHeading = "*Available agents*"
+	// slackRosterTitle is the header of the roster `@bot agents` posts.
+	slackRosterTitle = "Agents"
 	// slackActionAgentSelect is a roster row's Select button: its value is
 	// the agent's ref, and it opens the agent picker with that agent
 	// preselected.
@@ -833,24 +838,68 @@ func openCard(msgs []slackMessage) (hitlCard, bool) {
 	return hitlCard{}, false
 }
 
-// shown is a message's text and the text of its section and context
-// blocks: what a person reads of it.
+// shown is what a person reads of a message, as Slack renders it: the text
+// of its blocks, and its fallback text only when no block shows any (with
+// blocks, Slack keeps the text for notifications).
 func (m slackMessage) shown() string {
-	parts := []string{m.Text}
+	var parts []string
 	for _, block := range m.Blocks {
-		if t, ok := block[slackKeyText].(map[string]any); ok {
-			s, _ := t[slackKeyText].(string)
+		if s := blockText(block); s != "" {
 			parts = append(parts, s)
 		}
+	}
+	if len(parts) == 0 {
+		return m.Text
+	}
+	return strings.Join(parts, "\n")
+}
+
+// blockText is the text a block shows: a header's, a section's or a
+// markdown block's text, a context block's text elements, a rich text
+// block's runs; nothing for actions, dividers and images.
+func blockText(block map[string]any) string {
+	switch block[fieldTypeKey] {
+	case slackBlockMarkdown:
+		s, _ := block[slackKeyText].(string)
+		return s
+	case slackBlockHeader, slackBlockSection:
+		t, _ := block[slackKeyText].(map[string]any)
+		s, _ := t[slackKeyText].(string)
+		return s
+	case slackBlockContext:
+		var parts []string
 		elements, _ := block[slackKeyElements].([]any)
 		for _, e := range elements {
-			if el, ok := e.(map[string]any); ok && el[fieldTypeKey] == slackMrkdwn {
+			if el, ok := e.(map[string]any); ok && (el[fieldTypeKey] == slackMrkdwn || el[fieldTypeKey] == slackPlainText) {
 				s, _ := el[slackKeyText].(string)
 				parts = append(parts, s)
 			}
 		}
+		return strings.Join(parts, " ")
+	case slackBlockRichText:
+		elements, _ := block[slackKeyElements].([]any)
+		return richText(elements)
 	}
-	return strings.Join(parts, "\n")
+	return ""
+}
+
+// richText is the text of rich text elements: a section's runs joined, its
+// nested sections and lists on lines of their own.
+func richText(elements []any) string {
+	var b strings.Builder
+	for _, e := range elements {
+		el, _ := e.(map[string]any)
+		if inner, ok := el[slackKeyElements].([]any); ok {
+			if b.Len() > 0 {
+				b.WriteString("\n")
+			}
+			b.WriteString(richText(inner))
+			continue
+		}
+		s, _ := el[slackKeyText].(string)
+		b.WriteString(s)
+	}
+	return b.String()
 }
 
 // findMessage is the first message whose text carries every needle.
@@ -879,12 +928,21 @@ func streamedSince(msgs []slackMessage, after int) (slackMessage, string) {
 	return last, strings.Join(texts, "\n")
 }
 
-// rosterNames reads the display names of a roster post: its `• *Name*`
-// lines.
-func rosterNames(text string) []string {
+// isRoster is whether a message is the roster `@bot agents` posts: its
+// first block the header slackRosterTitle.
+func (m slackMessage) isRoster() bool {
+	return len(m.Blocks) > 0 && m.Blocks[0][fieldTypeKey] == slackBlockHeader && blockText(m.Blocks[0]) == slackRosterTitle
+}
+
+// rosterNames reads the display names of a roster post: each row is a
+// section whose text opens with the agent's name in bold.
+func rosterNames(m slackMessage) []string {
 	var names []string
-	for _, line := range strings.Split(text, "\n") {
-		rest, ok := strings.CutPrefix(strings.TrimSpace(line), "• *")
+	for _, block := range m.Blocks {
+		if block[fieldTypeKey] != slackBlockSection {
+			continue
+		}
+		rest, ok := strings.CutPrefix(blockText(block), "*")
 		if !ok {
 			continue
 		}
