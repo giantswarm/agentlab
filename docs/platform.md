@@ -277,9 +277,11 @@ host can name that way, goes through the port the registry publishes on the
 host loopback (`platform.devRegistryPort`, 5001 by default) over plain HTTP,
 and the boot log names both (`read on this host as
 oci://localhost:5001/charts/kagent`). A registry that does not answer there
-stops the boot before the install, naming the container to check. The lab
-registry exists once a chartPath or a dev image created it, and goes with
-`agentlab down`. Removing the overlay and re-running `agentlab platform`
+stops the boot before the install, naming the container to check. Every `up`
+and `platform` run ensures the lab registry — created when missing, started
+when stopped — since atelet and the node's containerd point at it whether or
+not a dev image is configured; `agentlab status` names it on its `registry`
+line, and it goes with `agentlab down`. Removing the overlay and re-running `agentlab platform`
 puts the released chart back.
 
 ## Dev images

@@ -30,6 +30,18 @@ func TestOnlyTheInstallSendsThePlatformSignal(t *testing.T) {
 	}
 }
 
+// TestEveryPlatformRunEnsuresTheLabRegistry: `up` and `platform` both have
+// the lab registry running before anything is pushed or pulled from it, on
+// every run and not only when a push needs it — atelet's
+// --localhost-registry-replacement and the node's containerd point at it
+// always, so a container that went missing is recreated by the next run.
+func TestEveryPlatformRunEnsuresTheLabRegistry(t *testing.T) {
+	calls := callSites(t)
+	if calls["ensureDevRegistry"]["platformUp"] != 1 {
+		t.Errorf("ensureDevRegistry is called from %v, want once from platformUp itself", calls["ensureDevRegistry"])
+	}
+}
+
 // callSites maps a callee — `pkg.Func` for a qualified call, `Func` for one
 // of this package's own — to the functions of this package that call it,
 // with the number of calls in each. Test files are left out.

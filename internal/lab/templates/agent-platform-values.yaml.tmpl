@@ -504,7 +504,7 @@ substrate:
   # Harness's new digest can never race ahead of the atelet roll that would
   # carry it — the connectivity release (the Harness) and the substrate
   # release (atelet) reconcile independently. The registry container itself
-  # is created on the first swap.
+  # is ensured on every `up` and `platform` run (recreated when missing).
   #
   # The image-cache policy that follows takes the host disk out of atelet's
   # eviction: the cache dir is the kind node's root overlay, i.e. the host's
