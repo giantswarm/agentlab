@@ -106,12 +106,23 @@ func judgeUnbound(events []musterBindingEvent, session string, deleteCalled time
 // the actor it logged bound at the Session's start.
 func (cp *callerCredentialProof) deleteSession(id string) error {
 	called := time.Now()
-	env, err := cp.admin.session.callToolEnvelope(agentManagerToolPrefix+"delete_session", map[string]any{deleteSessionIDArg: id})
-	if err != nil {
+	var env *toolEnvelope
+	// A Session whose turn just ended is refused as not yet settled until
+	// its runtime work is: the delete is retried the way a cleanup's is.
+	ctx, cancel := context.WithTimeout(context.Background(), sessionDeleteTimeout)
+	defer cancel()
+	if err := untilSettled(ctx, "delete_session", id, sessionSettleTimeout, func(err error) bool {
+		return strings.Contains(err.Error(), notYetSettledMessage)
+	}, func() (err error) {
+		if env, err = cp.admin.session.callToolEnvelope(agentManagerToolPrefix+"delete_session", map[string]any{deleteSessionIDArg: id}); err != nil {
+			return err
+		}
+		if env.IsError {
+			return fmt.Errorf("refused: %.400s", env.Content[0].Text)
+		}
+		return nil
+	}); err != nil {
 		return err
-	}
-	if env.IsError {
-		return fmt.Errorf("delete_session %s refused: %.400s", id, env.Content[0].Text)
 	}
 	var deleted sessionDeleted
 	if err := json.Unmarshal([]byte(env.Content[0].Text), &deleted); err != nil || deleted.Session.ID != id {
