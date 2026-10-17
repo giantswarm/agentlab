@@ -17,7 +17,9 @@ macOS), so the other commands find it from any directory, in this order:
    lab of that name is registered;
 2. the `agentlab.yaml` in the current directory: the lab its `clusterName`
    names (a copy of a registered lab's file enters that lab's directory), else
-   this directory;
+   this directory — always this directory for `render`, which writes the
+   files of the `agentlab.yaml` it reads: a copy renders a scratch lab beside
+   it and never rewrites the registered lab's `certs/` or `state/`;
 3. a picker among the registered labs on a terminal, and off one a refusal
    that names them and `--lab`.
 
@@ -141,7 +143,7 @@ one helper — see [Agents](agents.md).
 |---|---|
 | `platform` | Install the agent platform on a running cluster: the lab Dex re-applied first (the users and the [GitHub sign-in](github-signin.md) as `agentlab.yaml` has them; unchanged, a no-op), then one idempotent upgrade-or-install of the agent-platform chart in its lab shape through the embedded Helm (the `helm upgrade --install --wait` of Helm 4, in-process), then wait for every component. A re-run that would install the same chart version with the same values writes no Helm revision. `up` runs this when the platform is enabled. On the [dev channel](platform.md#dev-channel) it first re-resolves the branch's newest build (and installs Substrate); `--pin` freezes the recorded build instead, `--pin=false` follows the branch again. Like `up`, it ends with the trust and portal questions on a terminal, and takes the same `--trust`/`--open`. |
 | `certs` | Generate the lab CA and Dex server cert, re-minting only what config or policy require. `--force` regenerates everything and breaks a running cluster's trust. |
-| `render` | Render every manifest from `agentlab.yaml` into `state/` without applying anything. |
+| `render` | Render every manifest from `agentlab.yaml` into `state/` without applying anything. It renders the `agentlab.yaml` of the current directory into that directory, a copy of a registered lab's file included (named on stderr); that lab renders from its own directory or with `--lab`. |
 | `reload` | Re-render and re-apply the Dex config after editing `agentlab.yaml` (users, passwords, groups, the [GitHub sign-in](github-signin.md)), without touching the platform. |
 | `self-update` | Replace the binary with the latest GitHub release, once its cosign Sigstore bundle verifies (see below). `--check` only reports the running and the latest version, exit status 125 when a newer one exists. `--pre` follows release candidates too ([below](#release-candidates)). |
 

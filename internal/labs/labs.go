@@ -183,23 +183,41 @@ func Register(name, dir string) error {
 // Picker asks which of several labs a command runs against, on a terminal.
 type Picker func(labs []Lab) (Lab, error)
 
+// Mode is how a command treats the current directory when it resolves its lab.
+type Mode int
+
+const (
+	// Enter is every command that runs against an existing lab: an
+	// agentlab.yaml here enters the lab its clusterName names, wherever that
+	// lab is registered.
+	Enter Mode = iota
+	// Create is for the commands that make a lab where they run
+	// (`configure`, `up`): in the current directory they stay there instead
+	// of reaching for another lab, with or without an agentlab.yaml.
+	Create
+	// Here is for the commands that only write the lab's files from its
+	// agentlab.yaml (`render`): an agentlab.yaml here is this directory's
+	// lab, even a copy of a registered lab's, so the registered lab's certs/
+	// and state/ are never rewritten from a file outside its directory;
+	// without one they resolve as Enter.
+	Here
+)
+
 // Resolve decides which lab directory a command runs against, in one order:
 //
 //  1. --lab <name> (flag), refused naming the registered labs when unknown;
 //  2. the agentlab.yaml in the current directory: the lab its clusterName
 //     names, registered elsewhere (a copy of that lab's file), or else this
-//     directory;
-//  3. unless create: on a terminal (pick non-nil) the person's choice among
+//     directory — always this directory under Create and Here;
+//  3. unless Create: on a terminal (pick non-nil) the person's choice among
 //     the registered labs, off one a refusal naming them and --lab.
 //
 // No lab is ever the default: a command runs against the lab the flag, the
 // directory or the person names, or not at all. dir is "" for the current
 // directory — also when nothing is registered, so the caller's
 // missing-agentlab.yaml path (the first run, or its refusal) stays what it
-// is. create is for the commands that make a lab where they run
-// (`configure`, `up`): in the current directory they stay there instead of
-// reaching for another lab.
-func Resolve(flag string, create bool, pick Picker) (lab Lab, err error) {
+// is.
+func Resolve(flag string, mode Mode, pick Picker) (lab Lab, err error) {
 	if flag != "" {
 		labs, err := List()
 		if err != nil {
@@ -211,14 +229,14 @@ func Resolve(flag string, create bool, pick Picker) (lab Lab, err error) {
 		return Lab{}, fmt.Errorf("no lab named %q is registered on this machine (%s); a lab registers itself on `agentlab configure` and `agentlab up` in its directory", flag, names(labs))
 	}
 	if _, err := os.Stat(config.File); err == nil {
-		if create {
+		if mode != Enter {
 			return Lab{}, nil
 		}
 		return here()
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return Lab{}, err
 	}
-	if create {
+	if mode == Create {
 		return Lab{}, nil
 	}
 	labs, err := List()
