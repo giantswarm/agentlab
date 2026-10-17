@@ -99,19 +99,31 @@ func (c *Config) ports() []labPort {
 	}
 }
 
+// HostPorts returns every host-side port the configuration owns: what another
+// lab on this machine must not use while this one may come up.
+func (c *Config) HostPorts() []int {
+	var out []int
+	for _, lp := range c.ports() {
+		out = append(out, *lp.port)
+	}
+	return out
+}
+
 // ChooseFreePorts probes every host-side port of the configuration on
 // 127.0.0.1 — the address all kind port mappings bind — and moves each
 // unusable one to a nearby free port, returning what changed so the caller
 // can tell the user. Ports in `ours` are the lab's own (published by an
 // existing kind node of this very configuration) and never count as
-// occupied. Ports below minPublishable are ones the container engine cannot
+// occupied. Ports in `recorded` belong to another lab on this machine (its
+// agentlab.yaml records them, the value names it): occupied whether that lab
+// runs or not, since both could never be up together. Ports below minPublishable are ones the container engine cannot
 // bind at all (rootless podman and the privileged range); pass 1 where every
 // port is available. Meant for a configuration whose cluster does not exist
 // (yet, or any more): an existing cluster's mappings are fixed at node
 // creation, where renumbering would only mislead — PortConflicts is the
 // read-only check for that case.
-func (c *Config) ChooseFreePorts(ours map[int]bool, minPublishable int) []PortChange {
-	return c.chooseFreePorts(func(p int) bool { return !ours[p] && portTaken(p) }, minPublishable)
+func (c *Config) ChooseFreePorts(ours map[int]bool, recorded map[int]string, minPublishable int) []PortChange {
+	return c.chooseFreePorts(func(p int) bool { return !ours[p] && portTaken(p) }, recorded, minPublishable)
 }
 
 // PortConflicts reports which host-side ports of the configuration another
@@ -133,11 +145,12 @@ func (c *Config) portConflicts(taken func(int) bool) []PortConflict {
 
 // chooseFreePorts is ChooseFreePorts with the probe injected, so tests can
 // run against a fixed set of "occupied" ports instead of the machine.
-func (c *Config) chooseFreePorts(taken func(int) bool, minPublishable int) []PortChange {
+func (c *Config) chooseFreePorts(taken func(int) bool, recorded map[int]string, minPublishable int) []PortChange {
 	// A port the engine cannot publish is unusable whatever the probe says:
 	// binding it here succeeds as often as not (the lab runs unprivileged
-	// too), so the probe alone would call it free.
-	unusable := func(p int) bool { return p < minPublishable || taken(p) }
+	// too), so the probe alone would call it free. Another lab's recorded
+	// port is unusable whether anything listens on it now or not.
+	unusable := func(p int) bool { return p < minPublishable || recorded[p] != "" || taken(p) }
 	// Every port with a fixed meaning in the lab, so replacements never
 	// collide with each other or with it: the config's own host ports, the
 	// browser-login callback (host-side, pre-registered in Dex), and the
@@ -179,8 +192,11 @@ func (c *Config) chooseFreePorts(taken func(int) bool, minPublishable int) []Por
 		}
 		reserved[to] = true
 		ch := PortChange{Field: lp.field, What: lp.what, From: *lp.port, To: to}
-		if *lp.port < minPublishable {
+		switch {
+		case *lp.port < minPublishable:
 			ch.Why = fmt.Sprintf("cannot be published by this container engine (nothing below %d can)", minPublishable)
+		case recorded[*lp.port] != "":
+			ch.Why = fmt.Sprintf("is the lab %s's", recorded[*lp.port])
 		}
 		if lp.note != nil {
 			ch.Note = lp.note(to)

@@ -67,6 +67,35 @@ func List() ([]Lab, error) {
 	return labs, nil
 }
 
+// RecordedPorts returns the host ports every other registered lab records in
+// its agentlab.yaml — running or stopped — each mapped to that lab's name, so
+// the lab in dir picks ports none of them can come up on. A lab whose
+// agentlab.yaml does not parse is left out: it cannot come up either.
+func RecordedPorts(dir string) (map[int]string, error) {
+	dir, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, err
+	}
+	labs, err := List()
+	if err != nil {
+		return nil, err
+	}
+	ports := map[int]string{}
+	for _, l := range labs {
+		if l.Dir == dir {
+			continue
+		}
+		cfg, err := config.Peek(l.Dir)
+		if err != nil {
+			continue
+		}
+		for _, p := range cfg.HostPorts() {
+			ports[p] = l.Name
+		}
+	}
+	return ports, nil
+}
+
 // TakenError refuses a second lab of a registered name: the two would
 // collide on the kind cluster and its ports.
 type TakenError struct {

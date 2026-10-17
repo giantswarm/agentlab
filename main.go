@@ -527,14 +527,20 @@ func reportVMManager(before, after bool, disc *lab.Discovery) {
 	fmt.Println()
 }
 
-// applyPorts moves the configuration's host ports off foreign listeners when
-// no kind node of this configuration exists (fresh, or after `agentlab
-// down`); with the cluster in place its port mappings are fixed at node
+// applyPorts moves the configuration's host ports off foreign listeners and
+// off the ports every other registered lab records when no kind node of this
+// configuration exists (fresh, or after `agentlab down`); with the cluster in place its port mappings are fixed at node
 // creation, so a foreign listener on one of them is reported, not renumbered
 // around — the lab's own published ports never count as occupied.
 func applyPorts(cfg *config.Config, disc *lab.Discovery) {
 	if !disc.ClusterExists {
-		reportPortChanges(cfg.ChooseFreePorts(disc.ClusterPorts, lab.MinPublishablePort()))
+		// Another registered lab's ports are taken even while it is down:
+		// both labs could never be up together.
+		recorded, err := labs.RecordedPorts(".")
+		if err != nil {
+			fmt.Printf("The other labs' ports are unknown (%v): only the ports in use count as taken.\n\n", err)
+		}
+		reportPortChanges(cfg.ChooseFreePorts(disc.ClusterPorts, recorded, lab.MinPublishablePort()))
 		return
 	}
 	if !disc.ClusterPorts[cfg.APIServerPort] {

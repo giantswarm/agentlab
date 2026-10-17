@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -208,4 +209,37 @@ func TestConfigureClusterName(t *testing.T) {
 			t.Fatalf("configure wrote %d entries before refusing", len(entries))
 		}
 	})
+}
+
+// A new lab beside a registered, stopped lab moves its ports off the ones
+// that lab's agentlab.yaml records: nothing listens on them while it is down,
+// yet both labs could never be up together.
+func TestApplyPortsAvoidsAStoppedRegisteredLab(t *testing.T) {
+	regDir := t.TempDir()
+	prev := labs.Dir
+	labs.Dir = func() (string, error) { return regDir, nil }
+	t.Cleanup(func() { labs.Dir = prev })
+	recorded := map[int]bool{}
+	for _, l := range []struct {
+		name               string
+		dexPort, apiServer int
+	}{{"agentlab", 32000, 6443}, {"agentlab-2", 32001, 6444}} {
+		dir := t.TempDir()
+		yaml := "clusterName: " + l.name + "\ndexPort: " + strconv.Itoa(l.dexPort) + "\napiServerPort: " + strconv.Itoa(l.apiServer) + "\n"
+		if err := os.WriteFile(filepath.Join(dir, config.File), []byte(yaml), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := labs.Register(l.name, dir); err != nil {
+			t.Fatal(err)
+		}
+		recorded[l.dexPort], recorded[l.apiServer] = true, true
+	}
+	t.Chdir(t.TempDir())
+
+	cfg := config.Default()
+	cfg.ClusterName = "agentlab-3"
+	applyPorts(cfg, &lab.Discovery{})
+	if recorded[cfg.DexPort] || recorded[cfg.APIServerPort] {
+		t.Fatalf("dexPort %d, apiServerPort %d: a stopped registered lab records them", cfg.DexPort, cfg.APIServerPort)
+	}
 }
