@@ -101,7 +101,9 @@ The lab installs it in its **lab shape**:
   edit's entry, names each (`Put back to its release's render: …`) and waits
   for the roll; a field it cannot put back fails the run, named. A field
   written by any other manager than the releases' (`helm`, `helm-controller`,
-  the lab's `agentlab`, `kube-controller-manager`) is named by `agentlab
+  the lab's `agentlab`, the connectivity release's config-reload hook
+  `agent-platform-config-reload`, which stamps the Backstage app-config
+  checksum into the pod template, `kube-controller-manager`) is named by `agentlab
   status` on its `workloads` line, warned at the end of `agentlab platform`
   and at every proof's opening, and fails platform-test's first stage,
   `workload field managers`. A rollout restart's `restartedAt` annotation is
