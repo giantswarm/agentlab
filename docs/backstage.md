@@ -73,6 +73,14 @@ start on the Dex TLS. The lab's values add no `extraEnvVars`; its own Secrets go
 through the separate `extraEnvVarsSecrets` list. The headless `backstage-test`
 calls the portal's backend APIs and passes in both modes.
 
+Before any sign-in, `backstage-test` reads which portal Backstage serves from
+the frontend config it injects into its public `index.html` and fails unless it
+is the one `backstage.portal` configures, naming the image. The shell is
+Backstage 3.x: a 2.x portal declares no `app.portals`, injects none whatever the
+overlay sets, and serves the classic portal only, so a lab on such a Backstage
+fails here rather than passing without the shell. The default
+`platform.chartVersion` resolves a 3.x Backstage.
+
 ## Users need no catalog entity
 
 RHDH's `emailLocalPartMatchingUserEntityName` resolver refuses a login it cannot
