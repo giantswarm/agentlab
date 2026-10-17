@@ -1324,9 +1324,13 @@ controller `GRPCRoute` validates the forwarded token at the edge),
 `a2a.namespace: kagent`, the fixture as the default agent, Slack in `events`
 mode on the fake, OBO on the seeded bolt link store, a bolt routing store —
 all in a run directory (`--run-dir` keeps it, together with the keys and the
-gateway's log). The Slack endpoints listen on `127.0.0.1:18090`
-(`--gateway-port`; the admin endpoints take the next port, the fake the one
-after). This is the leg the meta chart's in-cluster component
+gateway's log). The Slack endpoints listen on `127.0.0.1:18090` on the
+first lab, ten ports higher per port a lab's `apiServerPort` sits above
+6443, so two labs never share one (`--gateway-port`; the admin endpoints
+take the next port, the fake the one after). The image shape's container is
+`<clusterName>-klaus-gateway-test`; an uncached image is pulled before the
+30 s readiness wait starts, and the container is removed on every exit,
+a readiness timeout included. This is the leg the meta chart's in-cluster component
 (`components.klaus-gateway`, `klausGateway.a2a.url` = the in-cluster
 `grpc://agentgateway.agent-platform.svc.cluster.local:8080`) does not
 exercise: the public route with TLS and the JWT policy. The component is the

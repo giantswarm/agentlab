@@ -93,7 +93,8 @@ type BeekeeperDecisionsTestOptions struct {
 	Binary  string
 	// The gateway: Port is its endpoints' in the node's network, Port+1
 	// its admin endpoints, Port+3 beekeeper serve's, Port+4 its Postgres'.
-	// Default 18090. GatewayBinary is not used: the gateway runs in the
+	// Default the lab's own block, gatewayTestPort. GatewayBinary is not
+	// used: the gateway runs in the
 	// node's network, as a container.
 	DecisionsTestOptions
 }
@@ -119,9 +120,7 @@ func BeekeeperDecisionsTest(cfg *config.Config, opts BeekeeperDecisionsTestOptio
 	if opts.GatewayImage, err = resolveGatewayImage(cfg, opts.GatewayImage, ""); err != nil {
 		return err
 	}
-	if opts.Port == 0 {
-		opts.Port = 18090
-	}
+	opts.Port = cmp.Or(opts.Port, gatewayTestPort(cfg))
 	servePort, pgPort := opts.Port+3, opts.Port+4
 	if err := portsFree(opts.Port, opts.Port+1, opts.Port+2, servePort, pgPort); err != nil {
 		return err
@@ -207,6 +206,7 @@ func BeekeeperDecisionsTest(cfg *config.Config, opts BeekeeperDecisionsTestOptio
 	musterURL := "http://127.0.0.1:" + strconv.Itoa(musterNodePort)
 	slackAPI := "http://" + net.JoinHostPort(fake.podIP, strconv.Itoa(fakeContainerPort)) + slackAPIPath
 	gw := newGatewayProcess(KlausGatewayTestOptions{GatewayImage: opts.GatewayImage, Port: opts.Port}, runDir, caFile, "grpcs://127.0.0.1:1", slackAPI, musterURL)
+	gw.container = gatewayContainerName(cfg)
 	gw.extraArgs = []string{"--reviews-enabled=true", "--reviews-allowed-callers=" + caller,
 		"--listen-address=" + net.JoinHostPort("0.0.0.0", strconv.Itoa(opts.Port)),
 		"--admin-address=" + net.JoinHostPort("0.0.0.0", strconv.Itoa(opts.Port+1))}
