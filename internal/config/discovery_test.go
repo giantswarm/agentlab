@@ -158,7 +158,7 @@ func TestPortConflictsIgnoreTheClustersOwnPorts(t *testing.T) {
 func TestChooseFreePortsOnExistingConfigWithoutCluster(t *testing.T) {
 	cfg := Default()
 	cfg.Platform.MusterPort = 8092 // moved by an earlier run; still free
-	changes := cfg.chooseFreePorts(takenSet(cfg.Backstage.Port), everyPortPublishable)
+	changes := cfg.chooseFreePorts(takenSet(cfg.Backstage.Port), nil, everyPortPublishable)
 	if len(changes) != 1 || changes[0].Field != "backstage.port" {
 		t.Fatalf("changes = %v, want exactly backstage.port", changes)
 	}

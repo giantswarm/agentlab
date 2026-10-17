@@ -89,7 +89,8 @@ with Dex doing the logins.
 - `agentlab configure` **discovers this machine on every run** (fresh or
   existing `agentlab.yaml`): the tools `up` shells out to, whether this
   configuration's kind node exists and which host ports it publishes (never
-  conflicts; while no node exists, occupied ports move to free ones), the
+  conflicts; while no node exists, occupied ports and those another
+  registered lab records, running or stopped, move to free ones), the
   host model servers — an Ollama on 11434, a Lemonade Server on 13305, an
   LM Studio on 1234 (0.4.0+) — with their downloaded tool-calling models,
   each recognised by the SHAPE of its answer and never by a status code

@@ -227,7 +227,9 @@ Applied to the configuration:
   kind port mappings bind. While **no kind node of this configuration
   exists** (a fresh lab, or after `agentlab down`), an occupied port is moved
   to a nearby free one, with a message saying what moved where (443 falls
-  back to 8443). When the edge leaves 443, every public URL in these docs
+  back to 8443). A port another registered lab's `agentlab.yaml` records
+  counts as occupied too, running or stopped, so two labs on one machine can
+  always be up together. When the edge leaves 443, every public URL in these docs
   gains that port suffix (`https://backstage.127.0.0.1.nip.io:8443`); the
   lab's edge Service serves that port in-cluster as well, so the ported URLs
   resolve from pods too and every proof still passes. Once the cluster exists

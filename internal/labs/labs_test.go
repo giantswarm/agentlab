@@ -296,3 +296,34 @@ func TestFreeName(t *testing.T) {
 		}
 	})
 }
+
+// Every other registered lab's ports are recorded, stopped labs included
+// (nothing here runs); the lab asking is not its own obstacle.
+func TestRecordedPorts(t *testing.T) {
+	cwd := setup(t)
+	other := t.TempDir()
+	if err := os.WriteFile(filepath.Join(other, config.File), []byte("clusterName: agentlab\ndexPort: 32001\napiServerPort: 6444\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Register("agentlab", other); err != nil {
+		t.Fatal(err)
+	}
+	writeConfig(t, cwd, "agentlab-2")
+	if err := Register("agentlab-2", cwd); err != nil {
+		t.Fatal(err)
+	}
+	ports, err := RecordedPorts(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []int{32001, 6444} {
+		if ports[p] != "agentlab" {
+			t.Errorf("port %d recorded by %q, want agentlab", p, ports[p])
+		}
+	}
+	for p, name := range ports {
+		if name != "agentlab" {
+			t.Errorf("port %d recorded by %q: the asking lab counted itself", p, name)
+		}
+	}
+}

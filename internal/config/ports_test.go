@@ -23,7 +23,7 @@ func takenSet(ports ...int) func(int) bool {
 func TestChooseFreePortsNothingTaken(t *testing.T) {
 	cfg := Default()
 	want := Default()
-	if changes := cfg.chooseFreePorts(takenSet(), everyPortPublishable); len(changes) != 0 {
+	if changes := cfg.chooseFreePorts(takenSet(), nil, everyPortPublishable); len(changes) != 0 {
 		t.Fatalf("expected no changes, got %v", changes)
 	}
 	got := []int{cfg.DexPort, cfg.Platform.MusterPort, cfg.Platform.AgentsPort, cfg.Platform.GatewayPort, cfg.Backstage.Port}
@@ -40,7 +40,7 @@ func TestChooseFreePortsMovesEveryTakenPort(t *testing.T) {
 	changes := cfg.chooseFreePorts(takenSet(
 		cfg.DexPort, cfg.Platform.MusterPort, cfg.Platform.AgentsPort,
 		cfg.Platform.GatewayPort, cfg.Backstage.Port, cfg.APIServerPort,
-	), everyPortPublishable)
+	), nil, everyPortPublishable)
 	if len(changes) != 6 {
 		t.Fatalf("expected 6 changes, got %d: %v", len(changes), changes)
 	}
@@ -80,7 +80,7 @@ func TestChooseFreePortsSkipsOtherLabPorts(t *testing.T) {
 	for p := 8082; p <= 8089; p++ {
 		occupied = append(occupied, p)
 	}
-	cfg.chooseFreePorts(takenSet(occupied...), everyPortPublishable)
+	cfg.chooseFreePorts(takenSet(occupied...), nil, everyPortPublishable)
 	if cfg.Platform.AgentsPort != 8091 {
 		t.Fatalf("agentsPort = %d, want 8091 (8090 is muster's)", cfg.Platform.AgentsPort)
 	}
@@ -88,7 +88,7 @@ func TestChooseFreePortsSkipsOtherLabPorts(t *testing.T) {
 
 func TestChooseFreePortsGatewayPrefers8443(t *testing.T) {
 	cfg := Default()
-	changes := cfg.chooseFreePorts(takenSet(443, 8443), everyPortPublishable)
+	changes := cfg.chooseFreePorts(takenSet(443, 8443), nil, everyPortPublishable)
 	if cfg.Platform.GatewayPort != 8444 {
 		t.Fatalf("gatewayPort = %d, want 8444", cfg.Platform.GatewayPort)
 	}
@@ -103,7 +103,7 @@ func TestChooseFreePortsDexWrapsWithinNodePortRange(t *testing.T) {
 	for p := cfg.DexPort; p <= 32767; p++ {
 		occupied = append(occupied, p)
 	}
-	cfg.chooseFreePorts(takenSet(occupied...), everyPortPublishable)
+	cfg.chooseFreePorts(takenSet(occupied...), nil, everyPortPublishable)
 	if cfg.DexPort != 30000 {
 		t.Fatalf("dexPort = %d, want 30000 (wrap to the bottom of the NodePort range)", cfg.DexPort)
 	}
@@ -114,7 +114,7 @@ func TestChooseFreePortsReplacementsDoNotCollide(t *testing.T) {
 	cfg := Default()
 	cfg.Platform.MusterPort = 9000
 	cfg.Platform.AgentsPort = 9001
-	cfg.chooseFreePorts(takenSet(9000, 9001), everyPortPublishable)
+	cfg.chooseFreePorts(takenSet(9000, 9001), nil, everyPortPublishable)
 	if cfg.Platform.MusterPort == cfg.Platform.AgentsPort {
 		t.Fatalf("muster and agents both landed on %d", cfg.Platform.MusterPort)
 	}
@@ -128,7 +128,7 @@ func TestChooseFreePortsReplacementsDoNotCollide(t *testing.T) {
 // reports the real bind error) instead of looping or panicking.
 func TestChooseFreePortsExhaustedRangeKeepsPort(t *testing.T) {
 	cfg := Default()
-	cfg.chooseFreePorts(func(int) bool { return true }, everyPortPublishable)
+	cfg.chooseFreePorts(func(int) bool { return true }, nil, everyPortPublishable)
 	if cfg.DexPort != 32000 {
 		t.Fatalf("dexPort = %d, want the untouched 32000", cfg.DexPort)
 	}
@@ -180,7 +180,7 @@ func TestChooseFreePortsMovesUnpublishablePrivilegedPort(t *testing.T) {
 	if cfg.Platform.GatewayPort >= 1024 {
 		t.Fatalf("this test needs a privileged default gateway port, got %d", cfg.Platform.GatewayPort)
 	}
-	changes := cfg.chooseFreePorts(takenSet(), 1024)
+	changes := cfg.chooseFreePorts(takenSet(), nil, 1024)
 	if len(changes) != 1 {
 		t.Fatalf("expected only the gateway to move, got %v", changes)
 	}
@@ -204,7 +204,7 @@ func TestChooseFreePortsMovesUnpublishablePrivilegedPort(t *testing.T) {
 func TestChooseFreePortsReplacementIsPublishable(t *testing.T) {
 	cfg := Default()
 	cfg.Platform.MusterPort = 700
-	changes := cfg.chooseFreePorts(takenSet(), 1024)
+	changes := cfg.chooseFreePorts(takenSet(), nil, 1024)
 	for _, ch := range changes {
 		if ch.To < 1024 {
 			t.Errorf("%s moved to %d, below the publishable floor", ch.Field, ch.To)
@@ -212,5 +212,19 @@ func TestChooseFreePortsReplacementIsPublishable(t *testing.T) {
 	}
 	if cfg.Platform.MusterPort < 1024 {
 		t.Errorf("muster port stayed at %d, below the publishable floor", cfg.Platform.MusterPort)
+	}
+}
+
+// Another lab's recorded ports move this one's off them though nothing
+// listens there, and the change names that lab.
+func TestChooseFreePortsAvoidsRecordedPorts(t *testing.T) {
+	cfg := Default()
+	recorded := map[int]string{32000: "agentlab", 6443: "agentlab", 32001: "agentlab-2", 6444: "agentlab-2"}
+	changes := cfg.chooseFreePorts(takenSet(), recorded, everyPortPublishable)
+	if cfg.DexPort != 32002 || cfg.APIServerPort != 6445 {
+		t.Fatalf("dexPort %d, apiServerPort %d; want 32002, 6445", cfg.DexPort, cfg.APIServerPort)
+	}
+	if len(changes) != 2 || !strings.Contains(changes[0].String(), "is the lab agentlab's") {
+		t.Fatalf("changes = %v, want dexPort and apiServerPort naming the lab agentlab", changes)
 	}
 }
