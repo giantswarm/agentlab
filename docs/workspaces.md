@@ -467,12 +467,19 @@ a Session admitted with a grant, a credential header on each of the grant's
 **Bearer** providers' hosts, an actor JWT that Substrate's egress gateway mints
 for that Actor, bound to the provider's audience, and injects in place of the
 `Authorization` the sandbox sent. A **Basic** provider's host (a git host) gets
-none yet. It runs as the admin on [the provider instance
-`fake-bearer`](#the-provider-instance-fake-bearer), the only instance whose
+none yet. From agent-platform 4.145.0-rc.5 the egress gateway takes a
+Session's provider credentials from muster instead: kagent compiles each
+provider host into `ate-secret://muster.giantswarm.io/<instance>/<git|api>`,
+and muster answers the person's App token for a Session bound to them. The
+part reads which path the lab runs (the egress gateway's configuration names
+muster's authority) and proves that one. It runs as the admin on [the
+provider instance `fake-bearer`](#the-provider-instance-fake-bearer), the
+only instance whose
 grant names a Bearer host (the API of `fake` is on its git host), with the
 [Session admission](#the-session-admission) and agent-manager's
 `start_session`: `agentlab configure --workspaces-provider fake,fake-bearer
---workspaces-grant-provider fake-bearer`, then `agentlab platform`. Without them it fails at once with the reason.
+--workspaces-grant-provider fake-bearer`, then `agentlab platform`. Without
+them it fails at once with the reason.
 
 1. **Preconditions**: the workspace-manager reachable through muster and listing
    `fake-bearer`; the lab's grant key published and trusted by kagent's
@@ -497,7 +504,10 @@ grant names a Bearer host (the API of `fake` is on its git host), with the
    the placeholder through: the stage fails naming the credential the API host
    received (`placeholder`) instead of the Actor's JWT; a request that never
    reached the fake fails naming the sandbox's answer (the gateway's 403 when
-   the host is not in the Actor's egress).
+   the host is not in the Actor's egress). **The person's token** in its
+   place, where the gateway takes credentials from muster: the same request
+   must reach the API host with the credential `user-token` of the admin's
+   login, and the sandbox must still hold no JWT.
 5. **delete_session**: agent-manager's `delete_session` as the admin deletes
    the workspace Session. At `start_session` agent-manager bound the
    Session's sandbox actor to the admin in muster (`PUT /session-bindings`);
@@ -511,7 +521,7 @@ grant names a Bearer host (the API of `fake` is on its git host), with the
    agent-manager without `muster.bindingsUrl`, logs no `session_bound` and
    the stage fails naming that.
 6. **No workspace**: a Session of the same Agent without a grant sends the
-   same request: no `jwt` entry for it in the log.
+   same request: no `jwt` and no `user-token` entry for it in the log.
 
 The fake verifies no JWT it did not sign: it answers such a bearer GitHub's
 401 and logs its `aud` and `sub`, never the token. Everything is removed on
