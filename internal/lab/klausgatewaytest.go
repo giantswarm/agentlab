@@ -563,7 +563,7 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	// creates is removed by the cleanup.
 	var component *componentOutcome
 	if cfg.KlausGatewayEnabled() {
-		if component, err = klausGatewayComponentProof(token, identity, user, fake, people.component); err != nil {
+		if component, err = klausGatewayComponentProof(cfg, token, identity, user, fake, people.component); err != nil {
 			return err
 		}
 	} else {
@@ -1446,7 +1446,13 @@ func (p *slackProof) awaitTurn(t *slackThread, before int) (*slackTurn, error) {
 // firstTurn is a thread's first message with one visible retry: a cold
 // worker's first resume can hit Substrate's ResumeActor deadline once.
 func (p *slackProof) firstTurn(t *slackThread, text string) (*slackTurn, error) {
-	turn, err := p.say(t, text)
+	return p.firstTurnBy(p.say, t, text)
+}
+
+// firstTurnBy is firstTurn whose first message is sent by first; the retry
+// is a plain say in the thread it opened.
+func (p *slackProof) firstTurnBy(first func(*slackThread, string) (*slackTurn, error), t *slackThread, text string) (*slackTurn, error) {
+	turn, err := first(t, text)
 	if err == nil && (turn.record.Outcome == outcomeCompleted || turn.record.Outcome == outcomeInputReq) {
 		return turn, nil
 	}

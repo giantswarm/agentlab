@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -362,6 +363,12 @@ type scriptedGateway struct {
 	approvals int
 	running   map[string]chan struct{}
 
+	// workspaces has a new thread's first message held behind the
+	// workspace prompt, as the adapter does for a person with workspaces;
+	// held is each prompted thread's message, until No workspace runs it.
+	workspaces bool
+	held       map[string]map[string]string
+
 	// answering is every answer still in flight: the adapter answers
 	// after the request that asked, so the fake Slack it posts to stays
 	// up until settle has seen the last one through.
@@ -522,6 +529,18 @@ func (g *scriptedGateway) onMessage(ev map[string]string) {
 	}
 	g.mu.Lock()
 	instance, known := g.bound[thread]
+	if !known && g.workspaces {
+		if _, prompted := g.held[thread]; !prompted {
+			g.held[thread] = ev
+			g.mu.Unlock()
+			g.post(channel, thread, slackWorkspaceAsk,
+				map[string]any{fieldTypeKey: slackBlockActions, slackKeyElements: []any{
+					map[string]any{fieldTypeKey: slackStaticSelect, slackKeyActionID: slackWorkspaceSelect},
+					map[string]any{fieldTypeKey: slackButton, slackKeyActionID: slackWorkspaceNone, slackKeyValue: thread},
+				}})
+			return
+		}
+	}
 	if !known {
 		instance = "inst-" + thread
 		g.bound[thread] = instance
@@ -585,6 +604,19 @@ func (g *scriptedGateway) onPick(user, metadata, ref string) {
 }
 
 func (g *scriptedGateway) onClick(user, channel, thread, cardTS, action, value string) {
+	if action == slackWorkspaceNone {
+		g.mu.Lock()
+		ev := g.held[thread]
+		g.held[thread] = nil
+		g.mu.Unlock()
+		if ev == nil {
+			g.t.Errorf("No workspace clicked in thread %s, which holds no message", thread)
+			return
+		}
+		g.api(slackUpdate, map[string]any{slackKeyChannel: channel, slackKeyTS: cardTS, slackKeyText: slackWorkspaceNoneIn})
+		g.onMessage(ev)
+		return
+	}
 	var v struct {
 		Thread string `json:"t"`
 		Task   string `json:"id"`
@@ -734,6 +766,42 @@ func TestSlackProof(t *testing.T) {
 	}
 	if _, err := p.stop(main, klausGatewayWordPrompt); err == nil || !strings.Contains(err.Error(), "not canceled") {
 		t.Errorf("stopping a turn that completes: %v", err)
+	}
+}
+
+// TestSayPastWorkspace: step 9's first message through a component that
+// lists the person's workspaces — held behind the workspace prompt, which
+// No workspace answers, then the turn — and through one that asks nothing.
+func TestSayPastWorkspace(t *testing.T) {
+	for name, workspaces := range map[string]bool{"prompted": true, "not asked": false} {
+		t.Run(name, func(t *testing.T) {
+			ctrl := newFakeKagent()
+			ctrl.serve(t, testToken)
+			fake := startTestFake(t, map[string]string{"UP": testUser})
+			gw := &scriptedGateway{t: t, secret: "sekrit", fake: fake, ctrl: ctrl, bound: map[string]string{}, running: map[string]chan struct{}{},
+				workspaces: workspaces, held: map[string]map[string]string{}}
+			srv := httptest.NewServer(gw)
+			t.Cleanup(func() {
+				srv.Close()
+				gw.settle()
+			})
+			p := &slackProof{driver: newSlackDriver(srv.URL, "sekrit", fake, "C1"), fake: fake, channel: "C1", logs: gw.logs}
+			thread := &slackThread{user: "UP"}
+			turn, err := p.firstTurnBy(p.sayPastWorkspace, thread, klausGatewayWordPrompt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := assertSlackTurnSaid(turn, klausGatewayWord); err != nil {
+				t.Error(err)
+			}
+			if _, err := p.dispatch(thread, testSubject, testUser); err != nil {
+				t.Error(err)
+			}
+			answered := slices.ContainsFunc(fake.thread("C1", thread.ts), func(m slackMessage) bool { return m.Text == slackWorkspaceNoneIn })
+			if answered != workspaces {
+				t.Errorf("the workspace prompt answered with No workspace: %v, want %v", answered, workspaces)
+			}
+		})
 	}
 }
 
