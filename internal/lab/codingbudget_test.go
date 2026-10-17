@@ -24,12 +24,12 @@ func TestHostModelServer(t *testing.T) {
 		{
 			name:   "model-manager backend",
 			labels: map[string]any{modelManagerBackendLabel: ollama},
-			spec:   map[string]any{modelField: "qwen3.5:9b"},
+			spec:   map[string]any{modelField: modelQwen35},
 			want:   ollama, host: true,
 		},
 		{
 			name: "extraModels entry on the host's Ollama",
-			spec: map[string]any{modelField: "qwen3.5:9b", ollama: endpoint("http://" + labHostName + ":11434")},
+			spec: map[string]any{modelField: modelQwen35, ollama: endpoint("http://" + labHostName + ":11434")},
 			want: "http://" + labHostName + ":11434", host: true,
 		},
 		{

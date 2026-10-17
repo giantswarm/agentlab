@@ -1238,7 +1238,10 @@ var ModelProviderNames = []string{ProviderOpenAI, ProviderAnthropic, ProviderGem
 var ReasoningEfforts = []string{"none", "minimal", "low", "medium", "high", "xhigh"}
 
 // APIFormats is the ModelConfig CRD's enum for openAI.apiFormat.
-var APIFormats = []string{"chatCompletions", "responses"}
+var APIFormats = []string{"chatCompletions", APIFormatResponses}
+
+// APIFormatResponses is openAI.apiFormat for the Responses API.
+const APIFormatResponses = "responses"
 
 // SecretName is the Kubernetes Secret (in ns kagent) holding this model's key.
 func (m ExtraModel) SecretName() string { return "kagent-" + m.Name }
@@ -2194,6 +2197,18 @@ func (c *Config) CodingHarnessRendered(runtime string) bool {
 		return true
 	}
 	return runtime == CodingRuntimeClaude && c.WorkspacesEnabled()
+}
+
+// CodexModelConfig is the ModelConfig a codex agent runs on unless told
+// otherwise: the first platform.extraModels entry that speaks the Responses
+// API (the only one the codex runtime speaks), "" when none does.
+func (c *Config) CodexModelConfig() string {
+	for _, m := range c.Platform.ExtraModels {
+		if m.Provider == ProviderOpenAI && m.APIFormat == APIFormatResponses {
+			return m.Name
+		}
+	}
+	return ""
 }
 
 // WorkspacesEnabled reports whether the lab installs the workspace storage:

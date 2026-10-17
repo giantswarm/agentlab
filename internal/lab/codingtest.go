@@ -196,6 +196,7 @@ type CodingTestOptions struct {
 	// the lab renders (platform.coding.harnesses); empty is claude.
 	Harness string
 	// ModelConfig is the kagent ModelConfig the agent runs on; empty is
+	// the lab's Responses API entry on codex (config.CodexModelConfig), else
 	// agent-manager's default one.
 	ModelConfig string
 }
@@ -294,6 +295,9 @@ func (p *codingProof) run() error {
 		note("agent-manager below %s holds a coding agent to read-only tools: the write tool's refusal is expected", agentManagerAnyToolsetFloor)
 	}
 	modelConfig := p.modelConfig
+	if modelConfig == "" && p.rt.name == config.CodingRuntimeCodex {
+		modelConfig = p.cfg.CodexModelConfig()
+	}
 	if modelConfig == "" {
 		if modelConfig, err = agentManagerModelConfig(p.muster); err != nil {
 			return err
@@ -364,7 +368,7 @@ func (p *codingProof) run() error {
 		p.stages.begin(judged.name, "%s", judged.title)
 		verdict, err := judged.verdict(probe, egress)
 		if err != nil {
-			return fmt.Errorf("%s: %w", p.line, err)
+			return fmt.Errorf("%s: %w; the reply: %q", p.line, err, excerpt(reply, 1200))
 		}
 		note("%s", verdict)
 	}
