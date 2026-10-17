@@ -873,10 +873,13 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	// The lab's own MCP server for the Prometheus tools rides the same engine
 	// (a HelmRelease of the mcp-prometheus chart) — after the platform, which
 	// brings the engine and the tenant identity the release runs as.
+	// Off, the stack an earlier run installed goes (observabilityDown).
 	if cfg.Platform.Observability {
 		if err := mcpPrometheusUp(cfg); err != nil {
 			return err
 		}
+	} else if err := observabilityDown(ctx); err != nil {
+		return err
 	}
 
 	// A server that crash-looped since its release — the issuer out of reach

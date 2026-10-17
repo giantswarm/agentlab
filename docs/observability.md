@@ -11,6 +11,12 @@ much memory does pod X use?" with real PromQL (`x_prometheus_execute_query`,
 `…_execute_range_query`,
 label/metadata discovery, and the rest of its 18 read-only tools).
 
+Turned off on a lab that ran it, the next `agentlab platform` removes the
+stack: the `mcp-prometheus` HelmRelease, the `kps` release and the
+`monitoring` namespace (the prometheus-operator CRDs stay, as `down` keeps
+them). `agentlab status` reports the stack on its `prometheus` line, and names
+one left over while the switch is off.
+
 The Prometheus is the Giant Swarm
 [kube-prometheus-stack](https://github.com/giantswarm/kube-prometheus-stack-app)
 chart — the **observability bundle's own pinned constituent** (same version,
