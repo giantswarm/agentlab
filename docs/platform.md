@@ -88,6 +88,16 @@ The lab installs it in its **lab shape**:
   instead of quoting the pin, and `agentlab configure --adopt-chart`
   writes the chart in place into the pin — or `agentlab platform` installs
   the pin over the cluster, the boot naming the downgrade.
+- A `platform.valuesFiles` overlay changes what the lab runs without
+  changing the chart version: a proof's `components.<name>.versionRange`
+  pins a component the chart's own range does not admit. `agentlab status`
+  names every overlay with the values it sets, and the ones the release in
+  place was installed with (each platform run records them in its
+  revision's description) that `agentlab.yaml` no longer lists. Before a
+  shared lab is handed on, `agentlab configure --released` drops the proof
+  state (overlays, dev images, a chart directory, the dev channel, a local
+  guest image) and `agentlab platform` installs the released platform, so
+  the next holder starts there.
 - A field a hand wrote on a platform workload — `kubectl patch` of muster's
   `hostNetwork`, a `kubectl set env` on Backstage — is no release's: Helm and
   helm-controller's drift correction own and correct only the fields the
@@ -101,7 +111,9 @@ The lab installs it in its **lab shape**:
   edit's entry, names each (`Put back to its release's render: …`) and waits
   for the roll; a field it cannot put back fails the run, named. A field
   written by any other manager than the releases' (`helm`, `helm-controller`,
-  the lab's `agentlab`, `kube-controller-manager`) is named by `agentlab
+  the lab's `agentlab`, the connectivity release's config-reload hook
+  `agent-platform-config-reload`, which stamps the Backstage app-config
+  checksum into the pod template, `kube-controller-manager`) is named by `agentlab
   status` on its `workloads` line, warned at the end of `agentlab platform`
   and at every proof's opening, and fails platform-test's first stage,
   `workload field managers`. A rollout restart's `restartedAt` annotation is
