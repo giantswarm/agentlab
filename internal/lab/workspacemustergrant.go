@@ -73,6 +73,25 @@ func workspaceGrantFor(cfg *config.Config, providers []workspaceProviderValues) 
 	return nil
 }
 
+// workspaceReleasableFor is the instance muster's credential provider
+// releases while workspaces are on and no instance renders (a github or
+// gitlab instance whose ids or Secret are not in place yet): the fake's, the
+// lab's own App, whose issuer is known without a cluster. The meta chart
+// derives the releasable from the pin and refuses an empty one with
+// Substrate on; without an instance there is no pin, and this keeps the
+// render going until the configured instance renders. Nil with workspaces
+// off.
+func workspaceReleasableFor(cfg *config.Config) (*workspaceGrantValues, error) {
+	if !cfg.WorkspacesEnabled() {
+		return nil, nil
+	}
+	fake, err := workspaceFakeValues(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return workspaceGrantOf(*fake), nil
+}
+
 // workspaceGrantOf is the pin to one instance's App.
 func workspaceGrantOf(p workspaceProviderValues) *workspaceGrantValues {
 	g := &workspaceGrantValues{Provider: p.Name, Secret: p.Secret}
