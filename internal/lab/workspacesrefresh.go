@@ -230,7 +230,7 @@ func (rp *refreshProof) createWorkspace() (*syncLastSync, error) {
 	rp.connected = true
 	note("%s connected to %s: %s", rp.admin.user.Email, config.WorkspaceProviderFake, hops)
 	var created syncWorkspace
-	if err := s.member.callServerStructured(workspaceManagerToolPrefix+"create_workspace", map[string]any{
+	if err := s.member.createLabWorkspace(map[string]any{
 		nameKey: refreshWorkspace, wmOrganizationArg: config.WorkspaceOrganization, wmSourcesArg: syncNamedSources(syncMovingRepo),
 	}, &created); err != nil {
 		return nil, err

@@ -250,6 +250,11 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	// every exit path.
 	klausGatewayCleanup(api)
 	defer klausGatewayCleanup(api)
+	endWorkspaces, err := startWorkspaceRun()
+	defer endWorkspaces()
+	if err != nil {
+		return err
+	}
 
 	// The fake workspace: the linked person, a person with no link, and the
 	// component half's linked person (klausgatewaytest_component.go), all
