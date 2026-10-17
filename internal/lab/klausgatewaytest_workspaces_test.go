@@ -197,3 +197,54 @@ func TestSlackDriverPickerActions(t *testing.T) {
 		t.Errorf("openedViews = %v", views)
 	}
 }
+
+// TestJudgeConnectPrompt: a person without the grant passes only with the
+// Connect prompt whose button opens muster's sign-in link, in a thread that
+// neither says the workspaces could not be listed nor asks for a workspace.
+func TestJudgeConnectPrompt(t *testing.T) {
+	link := "https://muster.127.0.0.1.nip.io" + oauthProxyStartPath + "?server=" + workspaceManagerMCPServer + "&state=s"
+	connect := func(url string) slackMessage {
+		return slackMessage{Method: slackPostEphemeral, Text: "Connect workspace-manager first.", Blocks: []map[string]any{
+			{fieldTypeKey: slackBlockActions, slackKeyElements: []any{
+				map[string]any{fieldTypeKey: slackButton, slackKeyActionID: slackActionConnect, slackKeyURL: url},
+			}},
+		}}
+	}
+	unlisted := slackMessage{Method: slackPostMessage, Text: slackWorkspacesUnlisted + ", so this conversation starts without one."}
+	asked := slackMessage{Method: slackPostMessage, Blocks: []map[string]any{
+		{fieldTypeKey: slackBlockActions, slackKeyElements: []any{map[string]any{fieldTypeKey: slackStaticSelect, slackKeyActionID: slackWorkspaceSelect}}},
+	}}
+	good := connect(link)
+	for _, c := range []struct {
+		name   string
+		prompt slackMessage
+		thread []slackMessage
+		ok     bool
+	}{
+		{"the Connect prompt with muster's link", good, []slackMessage{good}, true},
+		{"no Connect button", unlisted, []slackMessage{unlisted}, false},
+		{"a button off muster's sign-in", connect("https://gateway.example/connect"), nil, false},
+		{"the could-not-list note beside it", good, []slackMessage{unlisted, good}, false},
+		{"a workspace prompt beside it", good, []slackMessage{asked, good}, false},
+	} {
+		if err := judgeConnectPrompt(c.prompt, c.thread); (err == nil) != c.ok {
+			t.Errorf("%s: judgeConnectPrompt = %v, want ok %t", c.name, err, c.ok)
+		}
+	}
+}
+
+// TestWorkspaceSignInGate: a release before the gateway's Connect prompt for
+// muster's auth_required is not judged; a later one and a dev build are.
+func TestWorkspaceSignInGate(t *testing.T) {
+	for described, judged := range map[string]bool{
+		"klaus-gateway 4.8.2-rc.5 (abc)": false,
+		"klaus-gateway 4.8.2 (abc)":      false,
+		"klaus-gateway 4.9.0-rc.1 (abc)": true,
+		"klaus-gateway 4.9.0 (abc)":      true,
+		"klaus-gateway dev (abc)":        true,
+	} {
+		if got := gatewayAtLeast(described, klausGatewayWorkspaceSignInSince); got != judged {
+			t.Errorf("%s judged %t, want %t", described, got, judged)
+		}
+	}
+}

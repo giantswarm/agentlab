@@ -504,7 +504,7 @@ substrate:
   # Harness's new digest can never race ahead of the atelet roll that would
   # carry it — the connectivity release (the Harness) and the substrate
   # release (atelet) reconcile independently. The registry container itself
-  # is created on the first swap.
+  # is ensured on every `up` and `platform` run (recreated when missing).
   #
   # The image-cache policy that follows takes the host disk out of atelet's
   # eviction: the cache dir is the kind node's root overlay, i.e. the host's
@@ -1287,8 +1287,9 @@ workspaces:
 # /api/v3), fake-bearer, the same GitHub shaped like github.com (its apiURL
 # on a host of its own), and github, github.com. The base URL carries the gateway port,
 # which the chart's derivation from global.domain drops: the chart routes its
-# host (/signin, /connect/<instance>, /callback/<instance>) and forwards it,
-# and the lab Dex's agent-platform client lists <base>/signin. The github
+# host (the grants' key set; a manager before 0.10.0 also its own sign-in
+# pages, /signin, /connect/<instance> and /callback/<instance>, which the lab
+# Dex's agent-platform client lists <base>/signin for). The github
 # instance renders once the App's ids are in agentlab.yaml and its Secret
 # carries both keys; the values name each instance's Secret, never a value.
 workspace-manager:
@@ -1324,13 +1325,34 @@ workspace-manager:
   # /.well-known/jwks.json, which kagent's admission above trusts.
   grant:
     signingKey: {name: {{ .Secret }}, key: {{ .SecretKey }}}
-  # The token exchange (POST /token) answers kagent's client, which the
-  # platform does not wire yet: the lab registers it with a secret of its own
-  # (certs/workspace-grant), so the proofs exchange a person's Dex token for
-  # their provider token the way kagent will.
+{{- if not $.WorkspaceGrant }}
+  # A workspace-manager before 0.10.0 keeps the person's sign-in itself, and
+  # its token exchange (POST /token) answers kagent's client: the lab
+  # registers it with a secret of its own (certs/workspace-grant). From
+  # 0.10.0 the sign-in is muster's grant, and the manager has no exchange.
   tokenExchange:
     clientID: {{ .TokenExchangeClientID }}
     clientSecret: {name: {{ .TokenExchangeSecret }}, key: {{ .TokenExchangeSecretKey }}}
+{{- end }}
+{{- end }}
+{{- with .WorkspaceGrant }}
+  # The registration pinned to the instance {{ .Provider }}'s App
+  # (platform.workspaces.grantProvider; workspacemustergrant.go): a person
+  # grants it once in muster (core_auth_login), and muster attaches their
+  # App token to every call, the Dex ID token beside it. The OAuth client is
+  # the instance's Secret, its client id placed beside the secret.
+  muster:
+    mcpServer:
+      auth:
+        provider: {{ .Provider }}
+        authorizationServer:
+          issuer: {{ .Issuer }}
+          expectedIssuer: "{{ .ExpectedIssuer }}"
+          authorizationEndpoint: {{ .AuthorizationEndpoint }}
+          tokenEndpoint: {{ .TokenEndpoint }}
+          scopes: "{{ .Scopes }}"
+          clientCredentialsSecretRef: {name: {{ .Secret }}}
+          grantScope: subject
 {{- end }}
 {{- if .WorkspaceFake }}
   # The lab's GitHub serves TLS with a leaf of the lab CA, and the manager's
