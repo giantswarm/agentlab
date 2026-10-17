@@ -585,7 +585,7 @@ func (m *measurement) labAgent() error {
 	if m.api, err = dialKagentAPIAs(cfg.AgentgatewayBaseURL(), m.token); err != nil {
 		return err
 	}
-	m.set = &sessionSet{api: m.api}
+	m.set = &sessionSet{api: m.api, manager: m.person}
 	note("the Agent %s Ready on Harness %s in %s", measureAgent, claudeHarness, boot.elapsed.Round(time.Second))
 	return nil
 }
@@ -631,7 +631,7 @@ func (m *measurement) remotePreconditions() error {
 	if m.api, err = dialKagentAPIAs(o.AgentgatewayURL, m.token); err != nil {
 		return err
 	}
-	m.set = &sessionSet{api: m.api}
+	m.set = &sessionSet{api: m.api, manager: m.person}
 	m.agentNS, m.agentName, _ = strings.Cut(o.Agent, "/")
 	m.report.Harness = "Agent " + o.Agent + "'s"
 	return nil
@@ -1148,11 +1148,7 @@ func (m *measurement) session(w *measureWorkspace, last bool) error {
 	if err := m.storage(w, last); err != nil {
 		return err
 	}
-	if err := m.api.deleteSession(ctx, id); err != nil {
-		return err
-	}
-	m.set.ids = slices.DeleteFunc(m.set.ids, func(s string) bool { return s == id })
-	return nil
+	return m.set.remove(ctx, id)
 }
 
 // grant asks authorize_workspace, timing every call, until the grant names

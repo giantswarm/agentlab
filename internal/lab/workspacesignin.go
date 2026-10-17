@@ -443,10 +443,18 @@ func (p *workspacePerson) grantLink() (string, error) {
 		return link, nil
 	}
 	text := env.Content[0].Text
-	if !env.IsError && strings.Contains(strings.ToLower(text), "already") {
+	if !env.IsError && grantHeld(text) {
 		return "", nil
 	}
 	return "", fmt.Errorf("core_auth_login %s as %s answered neither a sign-in link nor a held grant: %.300s", workspaceManagerMCPServer, p.user.Email, text)
+}
+
+// grantHeld says whether core_auth_login's answer without a sign-in link
+// is a grant the person holds: muster says it was already held, or that it
+// connected the server with the person's token at once.
+func grantHeld(text string) bool {
+	lower := strings.ToLower(text)
+	return strings.Contains(lower, "already") || strings.Contains(lower, "successfully connected")
 }
 
 // musterSignInLinkRe finds muster's sign-in link in its auth_required answer.
