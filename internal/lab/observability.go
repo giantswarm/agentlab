@@ -43,6 +43,12 @@ const (
 	mcpPrometheusRelease = "mcp-prometheus"
 )
 
+// watchdogAlert is the alert the lab's Prometheus fires at all times while
+// platform.alertmanager is on (kube-prometheus-stack-values.yaml.tmpl), so the
+// Alertmanager always has one for mcp-prometheus's alert tools to read; the
+// name the platform-test stage expects.
+const watchdogAlert = "AgentlabWatchdog"
+
 // prometheusResource is the operator's Prometheus CR as kubectl's resource
 // argument — fully qualified on principle (same reason as mcpservers): other
 // charts may ship colliding kinds.

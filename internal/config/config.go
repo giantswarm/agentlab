@@ -150,7 +150,7 @@ func ConnectivityChartDir(chartPath string) string {
 // agentgateway component's two Deployments under their own names — plus
 // DevImageHarness for the platform Harness's runtime image and one target per
 // coding Harness's image (DevImageClaudeHarness, DevImageCodexHarness).
-var DevImageComponents = []string{"muster", "backstage", "kagent", "mcp-kubernetes", "model-manager", "agent-manager", "vm-manager", DevImageKlausGateway, DevImageClusterManager, DevImageWorkspaceManager, DevImageAgentgateway, DevImageAgentgatewayController, DevImageSubstrateAPI, DevImageHarness, DevImageClaudeHarness, DevImageCodexHarness}
+var DevImageComponents = []string{"muster", "backstage", "kagent", "mcp-kubernetes", "model-manager", "agent-manager", "vm-manager", DevImageKlausGateway, DevImageClusterManager, DevImageWorkspaceManager, DevImageAgentgateway, DevImageAgentgatewayController, DevImageSubstrateAPI, DevImageMCPPrometheus, DevImageHarness, DevImageClaudeHarness, DevImageCodexHarness}
 
 // DevImageKlausGateway is the devImages key of the klaus-gateway component
 // (platform.klausGateway): the Deployment `klaus-gateway`, container
@@ -191,6 +191,12 @@ const DevImageAgentgatewayController = "agentgateway-controller"
 // reconciler and its golden snapshots live. Meaningful only with the agents,
 // which bring Substrate.
 const DevImageSubstrateAPI = "ate-api-server"
+
+// DevImageMCPPrometheus is the devImages key of the lab's own mcp-prometheus
+// (platform.observability): the Deployment `mcp-prometheus`, container
+// `mcp-prometheus`, rendered by the HelmRelease the lab writes outside the
+// meta chart (mcp-prometheus.yaml.tmpl), whose postRenderers carry the swap.
+const DevImageMCPPrometheus = "mcp-prometheus"
 
 // DevImageHarness is the devImages key of the platform Harness's workload
 // image — the Go ADK runtime every agent runs on under kagent API v2. Not a
@@ -346,6 +352,13 @@ type Platform struct {
 	// BOM (yet) — the lab pins the two charts itself (observability.go).
 	// Inert when the platform itself is disabled.
 	Observability bool `yaml:"observability"`
+	// Alertmanager adds the kube-prometheus-stack Alertmanager to the
+	// observability stack, a Prometheus alerting rule that always fires
+	// (AgentlabWatchdog) and ALERTMANAGER_URL on mcp-prometheus, so its alert
+	// tools (x_prometheus_get_alertmanager_alerts) have alerts to read. Off by
+	// default; --alertmanager turns it on; needs platform.observability. See
+	// docs/observability.md "Alertmanager".
+	Alertmanager bool `yaml:"alertmanager,omitempty"`
 	// Retired: the fake fleet. The lab registers its own cluster as the
 	// infrastructure families instead (MCPServerName). Read so a file an
 	// earlier release wrote still loads, never written back.
@@ -1932,6 +1945,12 @@ func (c *Config) Validate() error {
 	if _, ok := c.Platform.DevImages[DevImageSubstrateAPI]; ok && !c.Platform.Agents {
 		return fmt.Errorf("platform.devImages.%s: Agent Substrate comes with the agents (platform.agents: true)", DevImageSubstrateAPI)
 	}
+	if _, ok := c.Platform.DevImages[DevImageMCPPrometheus]; ok && !c.Platform.Observability {
+		return fmt.Errorf("platform.devImages.%s: mcp-prometheus comes with the observability stack (platform.observability: true) — the override would swap the image of nothing", DevImageMCPPrometheus)
+	}
+	if c.Platform.Alertmanager && !c.Platform.Observability {
+		return fmt.Errorf("platform.alertmanager requires platform.observability (the Alertmanager is part of the lab's kube-prometheus-stack)")
+	}
 	if _, ok := c.Platform.DevImages[DevImageKlausGateway]; ok && !c.Platform.KlausGateway.Enabled {
 		return fmt.Errorf("platform.devImages.%s: the component is off (platform.klausGateway.enabled: true, or `agentlab configure --klaus-gateway`) — the override would swap the image of nothing", DevImageKlausGateway)
 	}
@@ -2144,6 +2163,12 @@ func (c *Config) VMManagerEnabled() bool {
 // line, and the key on.
 func (c *Config) TenantsEnabled() bool {
 	return c.Platform.Enabled && c.Platform.Agents && c.Platform.Tenants.Enabled && !c.LegacyChart()
+}
+
+// AlertmanagerEnabled reports whether the lab runs the Alertmanager: the
+// platform with its observability stack, and the key on.
+func (c *Config) AlertmanagerEnabled() bool {
+	return c.Platform.Enabled && c.Platform.Observability && c.Platform.Alertmanager
 }
 
 // KlausGatewayEnabled reports whether the platform runs the klaus-gateway

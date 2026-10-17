@@ -63,7 +63,11 @@ with Dex doing the logins.
   the lab Prometheus) and overrides the chart's `mimirEnabled: false` in
   its app-config overlay (backstage-catalog.yaml.tmpl). mcp-prometheus is a
   lab-rendered Flux HelmRelease through the platform's bundled engine
-  (mcp-prometheus.yaml.tmpl), not a helm install of its own.
+  (mcp-prometheus.yaml.tmpl), not a helm install of its own; its
+  `platform.devImages.mcp-prometheus` swap rides that release's
+  postRenderers. `platform.alertmanager` (off by default) adds the
+  Alertmanager, an always-firing `AgentlabWatchdog` and `ALERTMANAGER_URL`,
+  for the alert tools (docs/observability.md "Alertmanager").
 - The agents runtime (kagent) installs with the platform by default but is
   optional (`platform.agents` in `agentlab.yaml`). Agents are Flux
   HelmReleases of the Generic agent chart (1.x) on every installation:

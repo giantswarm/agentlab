@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"slices"
@@ -40,6 +41,7 @@ const (
 	stagePromQL               = "PromQL through muster"
 	stageScraped              = "platform targets scraped"
 	stageMetricsEndpoint      = "Backstage metrics endpoint"
+	stageAlerts               = "Alertmanager alerts through muster"
 )
 
 // PlatformTest is the headless end-to-end proof: Dex login -> muster
@@ -468,7 +470,7 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 			cfg.ClusterName, strings.Join(labFamilies(cfg), ", "), toolGroupLabel, toolGroupInfrastructure, managementClusterLabel, cfg.ClusterName, oauthFixtureServer)
 	}
 	if !cfg.Platform.Observability {
-		p.leaveOut("platform.observability is off in "+config.File, stagePrometheusTools, stagePromQL, stageScraped, stageMetricsEndpoint)
+		p.leaveOut("platform.observability is off in "+config.File, stagePrometheusTools, stagePromQL, stageScraped, stageMetricsEndpoint, stageAlerts)
 		return verdict, nil
 	}
 
@@ -488,13 +490,15 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 		return "", fmt.Errorf("muster aggregates no %s tools", promPrefix)
 	}
 
-	// promQL runs one instant query through muster and returns the tool's
-	// rendered answer (result.content[0].text is JSON whose own
-	// content[0].text is the actual payload — the same two decode hops as
-	// call_tool above).
-	promQL := func(query string) (string, error) {
-		q, _ := json.Marshal(query)
-		payload := fmt.Sprintf(`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"call_tool","arguments":{"name":%q,"arguments":{%q:%q,"query":%s}}}}`, promPrefix+"execute_query", familyInstanceArg, cfg.PrometheusMCPServerName(), q)
+	// promTool calls one prometheus family tool on the lab's member through
+	// muster and returns the tool's rendered answer (result.content[0].text
+	// is JSON whose own content[0].text is the actual payload — the same two
+	// decode hops as call_tool above). args are the tool's own arguments.
+	promTool := func(tool string, args map[string]string) (string, error) {
+		arguments := map[string]string{familyInstanceArg: cfg.PrometheusMCPServerName()}
+		maps.Copy(arguments, args)
+		a, _ := json.Marshal(arguments)
+		payload := fmt.Sprintf(`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"call_tool","arguments":{"name":%q,"arguments":%s}}}`, promPrefix+tool, a)
 		res, err := call(payload)
 		if err != nil {
 			return "", err
@@ -505,9 +509,13 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 			} `json:"content"`
 		}
 		if err := json.Unmarshal([]byte(innerText(res)), &wrapped); err != nil || len(wrapped.Content) == 0 {
-			return "", fmt.Errorf("unexpected execute_query payload shape")
+			return "", fmt.Errorf("unexpected %s payload shape", tool)
 		}
 		return wrapped.Content[0].Text, nil
+	}
+	// promQL runs one instant query through muster.
+	promQL := func(query string) (string, error) {
+		return promTool("execute_query", map[string]string{"query": query})
 	}
 
 	// `up` is non-empty as soon as Prometheus completes its first scrape,
@@ -601,6 +609,35 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 	}
 	note("the Deployments-page query answers through the edge (deployment=muster found)")
 	verdict += "\nPASS: Backstage metrics path -> edge -> Prometheus (Mimir-shaped /prometheus API)"
+
+	// The Alertmanager (platform.alertmanager): the always-firing
+	// AgentlabWatchdog rule reaches it through Prometheus, and mcp-prometheus
+	// reads it back over ALERTMANAGER_URL. A release without the alert tool
+	// (mcp-prometheus before 0.12) has nothing to prove it with.
+	if !cfg.AlertmanagerEnabled() {
+		p.leaveOut("platform.alertmanager is off in "+config.File, stageAlerts)
+		return verdict, nil
+	}
+	alertsTool := promPrefix + "get_alertmanager_alerts"
+	if !slices.Contains(toolNames, alertsTool) {
+		p.leaveOut(fmt.Sprintf("muster aggregates no %s: the mcp-prometheus in place has no alert tools (platform.devImages.mcp-prometheus swaps in one that has)", alertsTool), stageAlerts)
+		return verdict, nil
+	}
+	p.begin(stageAlerts, "Calling %s through muster (expecting %s)", alertsTool, watchdogAlert)
+	// One rule evaluation plus Prometheus's send to the Alertmanager after a
+	// fresh install.
+	var alerts string
+	alerted := waitFor(30, 5*time.Second, func() bool {
+		var err error
+		alerts, err = promTool("get_alertmanager_alerts", nil)
+		return err == nil && strings.Contains(alerts, watchdogAlert)
+	})
+	if !alerted {
+		return "", fmt.Errorf("%s never listed %s (last payload: %.200s);\ncheck `kubectl -n %s get alertmanager,prometheusrule` and the Prometheus alerts page",
+			alertsTool, watchdogAlert, alerts, observabilityNamespace)
+	}
+	note("the Alertmanager serves %s to mcp-prometheus", watchdogAlert)
+	verdict += "\nPASS: Claude Code -> muster (Dex) -> mcp-prometheus -> Alertmanager (" + watchdogAlert + " firing)"
 	return verdict, nil
 }
 
