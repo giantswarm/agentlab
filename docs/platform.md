@@ -1241,6 +1241,53 @@ repository's pipeline does not have, and its subject is a release of another
 line, not a change of agentlab. The unit tests of every piece it adds run in
 `make test`.
 
+### The kagent step proof (conversations across a kagent step)
+
+`agentlab kagent-step-test` proves that an agent and its conversation
+survive a step of the kagent line under them, the way
+`substrate-step-test` proves a Substrate step. It names the step in one of
+two shapes, or both:
+
+- `--to <kagent release>` pins the `kagent` and `kagent-crds` components to
+  that exact release of the kagent line (`1.14.0`, `1.15.1-rc.2`) through a
+  values overlay of the run's own (`state/kagent-step-values.yaml`), on the
+  chart the lab runs: a step within the released line, or to a kagent
+  release candidate. The lab must run an older kagent before it.
+- `--chart <agent-platform release>` moves the meta chart to a candidate
+  release (`4.145.1-rc.6`) whose kagent range moves, with the values that
+  candidate carries for the new line: the step a platform candidate takes
+  when it keeps Substrate and steps kagent, which `substrate-step-test --to`
+  cannot express. A candidate that leaves kagent where it was fails the step
+  stage: it is no subject of this proof.
+
+The run, on the static binary (no scratch driver): the kagent line before
+the step read off the meta chart, the kagent HelmRelease's applied chart and
+the controller's image; an agent on the platform Harness with a
+conversation of one turn (a random codeword), suspended; the platform
+upgraded in place onto the step and the kagent controller rolled out; then
+the conversation from before the step resumed (`resume`), a turn on it that
+must answer the codeword (`turn`), a suspend and a resume more on the new
+controller (`suspend`), and the conversation and the agent deleted, the
+Session gone and Substrate holding nothing of the agent (`delete`). Each
+PASS line names what it proved; a failure's FAIL line starts with the stage
+that failed — `step`, `resume`, `turn`, `suspend` or `delete` — and its
+cause. The lab returns to its own configuration afterwards (the overlay
+removed, `agentlab.yaml`'s chart upgraded back onto); `--stay` leaves it on
+the step. `--step-dev-image <target>=<image>` adds dev images for the step
+alone (a `kagent` controller build), `--ready-timeout` bounds the golden
+boot, `--model-config` names the ModelConfig.
+
+```bash
+agentlab kagent-step-test --to 1.14.0              # a step within the released kagent line
+agentlab kagent-step-test --chart 4.145.1-rc.6     # a platform candidate that steps kagent 1.13 -> 1.15
+```
+
+**Where it runs.** The proof is the lab round of every kagent release
+candidate and every agent-platform candidate that moves the kagent range, on
+a lab on the platform's current release. Like the Substrate step proof it is
+not a CircleCI job of this repository: its turns are model turns. The unit
+tests of its pieces run in `make test`.
+
 ### The Substrate tunnel-close proof (gRPC to an HTTP/1.1-only actor)
 
 `agentlab substrate-tunnel-test` proves that a gRPC call through
