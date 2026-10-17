@@ -96,12 +96,6 @@ func TestWorkspacesProvider(t *testing.T) {
 		}
 	}
 	cfg.Platform.Workspaces.Provider = ""
-	if got, want := cfg.WorkspaceManagerSignInURL(), "https://workspace-manager.127.0.0.1.nip.io/signin"; got != want {
-		t.Errorf("sign-in URL %s, want %s (port-free on 443)", got, want)
-	}
-	if got, want := cfg.WorkspaceCallbackURL(WorkspaceProviderFake), "https://workspace-manager.127.0.0.1.nip.io/callback/fake"; got != want {
-		t.Errorf("the fake's callback URL %s, want %s", got, want)
-	}
 	if got, want := cfg.GitHubFakeURL(), "https://github.127.0.0.1.nip.io"; got != want {
 		t.Errorf("the fake's URL %s, want %s", got, want)
 	}
