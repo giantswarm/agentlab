@@ -395,15 +395,23 @@ const (
 // switch is on, nothing otherwise; a chart that cannot be probed is a note
 // and nothing, so the lab registers the driver with Substrate itself.
 func workspacesChartFor(cfg *config.Config) chartWorkspaces {
-	if !cfg.WorkspacesEnabled() {
-		return chartWorkspaces{}
-	}
-	w, err := chartWorkspacesOf(platformChartFor(cfg))
+	w, err := workspacesChartProbed(cfg)
 	if err != nil {
 		note("the platform chart's workspaces values could not be probed (%v): the lab registers the driver with Substrate itself", err)
 		return chartWorkspaces{}
 	}
 	return w
+}
+
+// workspacesChartProbed is chartWorkspacesOf for the configured chart when
+// the switch is on, nothing otherwise, with the probe's failure: a proof
+// reads a chart it could not load as no answer, never as one without the
+// values.
+func workspacesChartProbed(cfg *config.Config) (chartWorkspaces, error) {
+	if !cfg.WorkspacesEnabled() {
+		return chartWorkspaces{}, nil
+	}
+	return chartWorkspacesOf(platformChartFor(cfg))
 }
 
 // checkWorkspacesCSICompanion refuses platform.workspaces.csiCompanion on a

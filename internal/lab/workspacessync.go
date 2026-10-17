@@ -738,7 +738,9 @@ func withoutTopic(topics []string, topic string) []string {
 // removes what an interrupted run left and clones the moving repository.
 func (sp *syncProof) preconditions(email string) error {
 	cfg := sp.cfg
-	if reason := workspaceManagerSkip(cfg); reason != "" {
+	if reason, err := workspaceManagerSkip(cfg); err != nil {
+		return err
+	} else if reason != "" {
 		return fmt.Errorf("no workspace-manager to define a workspace with: %s", reason)
 	}
 	if !cfg.WorkspaceFakeProvider() {
