@@ -190,6 +190,15 @@ with the reason).
   mentions in it, the admin allows them, and the colleague's turn is refused
   privately naming the repository: no `turn_dispatch` of theirs, the
   Session's task count unchanged.
+- **Wh.** The colleague without the grant: their grant of the App muster
+  pins the workspace-manager to is dropped (`core_auth_logout`), and muster
+  answers `list_workspaces` and `authorize_workspace` with `auth_required`
+  and its sign-in link (`/oauth/proxy/start`), not the manager's
+  `connect_required`. A new thread of theirs gets the Connect prompt
+  privately, its `connector_connect` button opening muster's sign-in link,
+  with no workspace prompt and no "could not be listed" note. A gateway
+  release before 4.9.0-rc.1 (the first with that prompt) is not judged on the
+  prompt, and the PASS line says so; a dev build always is.
 
 The steps' Sessions, Agent, workspaces and provider sign-ins are removed
 before the component runs, and the run fails on any of them left.
