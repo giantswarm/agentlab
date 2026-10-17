@@ -30,6 +30,8 @@ const (
 	wsOrg         = "agentlab-org"
 	wsPublic      = wsOrg + "/platform-api"
 	wsPrivate     = wsOrg + "/platform-infra"
+	wsReadOnly    = writeReadOnlyRepo
+	wsUninstalled = writeUninstalledRepo
 	wsClientID    = "Iv1.agentlab-workspaces"
 	wsDomain      = "127.0.0.1.nip.io"
 	wsRedirect    = "http://localhost/callback"
@@ -207,8 +209,8 @@ func TestWorkspaceGitHubAppToken(t *testing.T) {
 		Repositories []map[string]any `json:"repositories"`
 	}
 	f.call(t, http.MethodGet, "/api/v3/installation/repositories", tok.Token, nil, &listing)
-	if names := fullNames(listing.Repositories); !slices.Contains(names, wsPrivate) || listing.TotalCount != 4 || slices.ContainsFunc(names, func(n string) bool { return !strings.HasPrefix(n, wsOrg+"/") }) {
-		t.Fatalf("the installation's repositories = %d %v, want agentlab-org's four, the private one included", listing.TotalCount, names)
+	if names := fullNames(listing.Repositories); !slices.Contains(names, wsPrivate) || listing.TotalCount != 5 || slices.ContainsFunc(names, func(n string) bool { return !strings.HasPrefix(n, wsOrg+"/") }) {
+		t.Fatalf("the installation's repositories = %d %v, want agentlab-org's five, the private one included", listing.TotalCount, names)
 	}
 
 	var scoped struct {
@@ -228,8 +230,8 @@ func TestWorkspaceGitHubListing(t *testing.T) {
 	f := startWorkspaceFake(t)
 	var repos []map[string]any
 	f.call(t, http.MethodGet, "/api/v3/orgs/"+wsOrg+"/repos", "", nil, &repos)
-	if names := fullNames(repos); slices.Contains(names, wsPrivate) || len(names) != 3 {
-		t.Fatalf("an anonymous listing of %s = %v, want its three public repositories", wsOrg, names)
+	if names := fullNames(repos); slices.Contains(names, wsPrivate) || len(names) != 4 {
+		t.Fatalf("an anonymous listing of %s = %v, want its four public repositories", wsOrg, names)
 	}
 	byName := map[string]map[string]any{}
 	for _, r := range repos {
@@ -249,7 +251,7 @@ func TestWorkspaceGitHubListing(t *testing.T) {
 		t.Fatalf("type=forks = %v", names)
 	}
 	f.call(t, http.MethodGet, "/api/v3/orgs/"+wsOrg+"/repos?sort=pushed", "", nil, &repos)
-	if names := fullNames(repos); !slices.Equal(names, []string{wsOrg + "/monorepo", wsPublic, wsOrg + "/legacy-tool"}) {
+	if names := fullNames(repos); !slices.Equal(names, []string{wsOrg + "/monorepo", wsPublic, wsReadOnly, wsOrg + "/legacy-tool"}) {
 		t.Fatalf("sort=pushed = %v, want the newest push first", names)
 	}
 	resp := f.call(t, http.MethodGet, "/api/v3/orgs/"+wsOrg+"/repos?per_page=2", "", nil, &repos)
@@ -546,7 +548,7 @@ func TestWorkspaceGitHubPushMovesPushedAt(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(clone, "change.txt"), []byte("change\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]string{{"checkout", "-qb", "feature"}, {"add", "change.txt"}, {"commit", "-qm", wsChange}} {
+	for _, args := range [][]string{{"checkout", "-qb", "feature"}, {"add", "change.txt"}, {gitCommit, "-qm", wsChange}} {
 		if out, err := f.git(t, clone, args...); err != nil {
 			t.Fatalf("git %v: %v: %s", args, err, out)
 		}
@@ -589,6 +591,44 @@ func TestWorkspaceGitHubPushMovesPushedAt(t *testing.T) {
 				t.Fatalf("the request log carries a token: %+v", req)
 			}
 		}
+	}
+}
+
+// TestWorkspaceGitHubAppWriteBounds pushes as admin with the App's user
+// token where GitHub refuses it: a repository admin only reads, and one of
+// an owner the App is not installed on, which the fixture lets admin write;
+// both clone (public) and refuse the push naming admin, and the repository
+// of the uninstalled owner reports no push permission.
+func TestWorkspaceGitHubAppWriteBounds(t *testing.T) {
+	f := startWorkspaceFake(t)
+	admin := f.signIn(t, testLogin)[wsAccess].(string)
+	work := t.TempDir()
+	for _, repo := range []string{wsReadOnly, wsUninstalled} {
+		clone := filepath.Join(work, strings.ReplaceAll(repo, "/", "-"))
+		if out, err := f.git(t, work, "clone", "-q", f.remote(admin, repo), clone); err != nil {
+			t.Fatalf("admin's clone of %s: %v: %s", repo, err, out)
+		}
+		if err := os.WriteFile(filepath.Join(clone, "change.txt"), []byte("change\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, args := range [][]string{{"checkout", "-qb", "agent/change"}, {"add", "change.txt"}, {gitCommit, "-qm", wsChange}} {
+			if out, err := f.git(t, clone, args...); err != nil {
+				t.Fatalf("git %v: %v: %s", args, err, out)
+			}
+		}
+		if out, err := f.git(t, clone, "push", "-q", f.remote(admin, repo), "agent/change"); err == nil || !strings.Contains(out, "denied to "+testLogin) {
+			t.Fatalf("admin's push to %s = %v: %s, want the refusal naming admin", repo, err, out)
+		}
+		var info map[string]any
+		f.call(t, http.MethodGet, "/api/v3/repos/"+repo, admin, nil, &info)
+		if perms, _ := info[githubPermissions].(map[string]any); perms[githubPush] != false || perms["pull"] != true {
+			t.Fatalf("admin's permissions on %s = %v, want pull without push", repo, info[githubPermissions])
+		}
+	}
+	var repos []map[string]any
+	f.call(t, http.MethodGet, "/api/v3/user/repos", admin, nil, &repos)
+	if names := fullNames(repos); slices.Contains(names, wsUninstalled) || !slices.Contains(names, wsReadOnly) {
+		t.Fatalf("admin's repositories = %v, want %s and not %s", names, wsReadOnly, wsUninstalled)
 	}
 }
 

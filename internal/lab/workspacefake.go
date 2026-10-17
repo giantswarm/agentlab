@@ -285,6 +285,15 @@ func (g *labGitHubClient) requests() ([]githubRequest, error) {
 	return out, nil
 }
 
+// pulls are the pull requests opened on the fake's repositories.
+func (g *labGitHubClient) pulls() ([]workspacePull, error) {
+	var out []workspacePull
+	if status, err := g.do(http.MethodGet, githubFakePullsPath, "", nil, &out); err != nil || status != http.StatusOK {
+		return nil, fmt.Errorf("reading the pull requests of the lab's GitHub (%d): %v", status, err)
+	}
+	return out, nil
+}
+
 // appJWT is a fresh JWT of the App, for the calls GitHub admits with it only.
 func (g *labGitHubClient) appJWT() (string, error) {
 	return githubAppJWT(g.appKey, g.appID, time.Now().Add(-githubClockSkew/2), githubAppJWTMaxTTL-githubClockSkew)
