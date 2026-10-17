@@ -131,7 +131,10 @@ type tmplData struct {
 	// workspace-manager trusts the lab CA its leaf is from.
 	// WorkspaceFakeBearer says it serves the instance fake-bearer too:
 	// CoreDNS sends that instance's git and API hosts to the same Service.
-	WorkspaceProviders  []workspaceProviderValues
+	WorkspaceProviders []workspaceProviderValues
+	// WorkspaceGrant is the provider App muster pins the workspace-manager's
+	// registration to (workspacemustergrant.go), nil for none.
+	WorkspaceGrant      *workspaceGrantValues
 	WorkspaceFake       bool
 	WorkspaceFakeBearer bool
 	// WorkspaceAdmission is the rig a Session on a workspace volume is
@@ -324,6 +327,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		WorkspacesOrganizationsChart: workspacesChart.Organizations,
 		Workspaces:                   workspacesValuesFor(cfg),
 		WorkspaceProviders:           workspaceProviders,
+		WorkspaceGrant:               workspaceGrantFor(cfg, workspaceProviders),
 		WorkspaceFake:                cfg.WorkspaceFakeProvider(),
 		WorkspaceFakeBearer:          cfg.WorkspaceFakeBearerProvider(),
 		WorkspaceAdmission:           workspaceAdmissionValuesFor(cfg, workspacesChart.Carries),

@@ -582,9 +582,14 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	if err != nil {
 		return err
 	}
+	workspaceGrant := workspaceGrantFor(cfg, workspaceProviders)
+	if err := ensureWorkspaceGrantClientID(ctx, workspaceGrant, workspaceProviders); err != nil {
+		return err
+	}
 	clusterPins := func(t *tmplData) {
 		t.WorkerPoolArch = workerArch
 		t.WorkspaceProviders = workspaceProviders
+		t.WorkspaceGrant = workspaceGrant
 	}
 
 	_, valuesPath, err := renderManifestWith(cfg, platformValuesTemplate, clusterPins)

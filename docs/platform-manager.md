@@ -63,11 +63,10 @@ recorded at `/_fake/misses`.
    (`v0.76.1-rc.6.0.20261015091950-358a409b65de`);
 5. runs `reconcile_capability` for `agent-platform` on `ember` as a dry run
    and asserts the workspaces case: `installation.workspaces.enabled` read
-   from the record, `https://workspace-manager.ember.agentlab.test/signin` on
-   the Dex client `muster` in the planned dex-app patch
-   (`oidc.staticClients.muster.extraRedirectURIs`) and in the plan's Dex
-   clients, the `workspaces` and `workspace-manager` values kept in the
-   planned agent-platform patch, no commit refusal, and no write reaching the
+   from the record, the `workspaces` and `workspace-manager` values kept in
+   the planned agent-platform patch (the person's provider sign-in is
+   muster's grant, so the proof asks nothing of the workspace-manager of
+   Dex), no commit refusal, and no write reaching the
    registry;
 6. removes the release, the Service and the container.
 

@@ -214,8 +214,8 @@ func TestWorkspaceGitHubProviderWiring(t *testing.T) {
 	if !strings.Contains(dex, "- "+base+"/signin\n") {
 		t.Errorf("the Dex agent-platform client does not list %s/signin:\n%s", base, dex)
 	}
-	if cfg.WorkspaceGitHubCallbackURL() != base+"/callback/github" {
-		t.Errorf("callback URL %s", cfg.WorkspaceGitHubCallbackURL())
+	if cfg.WorkspaceCallbackURL(config.WorkspaceProviderGitHub) != base+"/callback/github" {
+		t.Errorf("callback URL %s", cfg.WorkspaceCallbackURL(config.WorkspaceProviderGitHub))
 	}
 }
 

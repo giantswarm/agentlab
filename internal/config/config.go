@@ -626,9 +626,14 @@ type Workspaces struct {
 	// application and group access token), or several, comma-separated
 	// ("fake,fake-bearer,github,gitlab"). With workspaces on, the
 	// workspace-manager's public base URL carries the gateway port
-	// (WorkspaceManagerBaseURL), the chart routes its host, and the lab
-	// Dex's agent-platform client lists <base URL>/signin.
+	// (WorkspaceManagerBaseURL) and the chart routes its host.
 	Provider string `yaml:"provider,omitempty"`
+	// GrantProvider is the instance whose App muster pins the
+	// workspace-manager's registration to (WorkspaceGrantProvider): a person
+	// grants that App once in muster, and muster attaches the person's token
+	// for it to every call of the manager's tools. Empty is the first
+	// instance of Provider, in the order WorkspaceProviders gives them.
+	GrantProvider string `yaml:"grantProvider,omitempty"`
 	// GitHub is the App behind the provider instance github.
 	GitHub WorkspaceGitHub `yaml:"github,omitempty"`
 	// GitLab is the GitLab behind the provider instance gitlab.
@@ -2023,8 +2028,10 @@ func (c *Config) Validate() error {
 	if c.Platform.Workspaces.Enabled && c.Platform.Enabled && !c.Platform.Agents {
 		return fmt.Errorf("platform.workspaces requires platform.agents (Substrate's signers certify the driver's endpoint, and a Session's workspace is a Substrate volume mount)")
 	}
-	if _, err := parseWorkspaceProviders(c.Platform.Workspaces.Provider); err != nil {
+	if names, err := parseWorkspaceProviders(c.Platform.Workspaces.Provider); err != nil {
 		return err
+	} else if grant := c.Platform.Workspaces.GrantProvider; grant != "" && !slices.Contains(names, grant) {
+		return fmt.Errorf("platform.workspaces.grantProvider %q names no instance of platform.workspaces.provider (%s)", grant, strings.Join(names, ", "))
 	}
 	if after := c.Platform.Workspaces.SessionsCleanupAfter; after != "" {
 		if d, err := time.ParseDuration(after); err != nil || d <= 0 {
@@ -2267,6 +2274,20 @@ func (c *Config) WorkspaceProviders() []string {
 	return names
 }
 
+// WorkspaceGrantProvider is the instance muster pins the workspace-manager's
+// registration to: platform.workspaces.grantProvider, or the first instance;
+// "" with workspaces off.
+func (c *Config) WorkspaceGrantProvider() string {
+	names := c.WorkspaceProviders()
+	if len(names) == 0 {
+		return ""
+	}
+	if grant := c.Platform.Workspaces.GrantProvider; slices.Contains(names, grant) {
+		return grant
+	}
+	return names[0]
+}
+
 // WorkspaceFakeProvider reports whether the workspace-manager gets the
 // provider instance fake, the lab's own GitHub: workspaces on and
 // platform.workspaces.provider naming it or empty.
@@ -2326,12 +2347,6 @@ func (c *Config) WorkspaceManagerSignInURL() string { return c.WorkspaceManagerB
 // person's sign-in.
 func (c *Config) WorkspaceCallbackURL(instance string) string {
 	return c.WorkspaceManagerBaseURL() + "/callback/" + instance
-}
-
-// WorkspaceGitHubCallbackURL is the callback URL the GitHub App behind the
-// provider instance github is registered with.
-func (c *Config) WorkspaceGitHubCallbackURL() string {
-	return c.WorkspaceCallbackURL(WorkspaceProviderGitHub)
 }
 
 // The chart channels: where the meta chart the lab installs comes from.
