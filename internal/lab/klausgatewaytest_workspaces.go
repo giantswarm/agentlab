@@ -38,7 +38,10 @@ import (
 //     repository, and no Session in kagent or agent-manager;
 //   - the colleague allowed into the person's thread on the private
 //     workspace: refused privately naming the repository, no turn reaching
-//     the agent.
+//     the agent;
+//   - the colleague without the grant of the App muster pins the
+//     workspace-manager to: muster's auth_required with its sign-in link on
+//     the manager's tools, and the gateway's Connect prompt opening it.
 
 const (
 	// gatewayWSAgent is the stage's Agent, the gateway's default while the
@@ -52,6 +55,10 @@ const (
 	// workspace prompt, the picker's Workspace select and the collaborator's
 	// workspace check.
 	klausGatewayWorkspacesSince = "4.6.0-rc.1"
+	// klausGatewayWorkspaceSignInSince is the first klaus-gateway that answers
+	// muster's auth_required on the workspace-manager's tools with the
+	// Connect prompt; an earlier one says the workspaces could not be listed.
+	klausGatewayWorkspaceSignInSince = "4.9.0-rc.1"
 	// gatewayWSPwdCommand prints the working directory alone: the turns that
 	// follow the first.
 	gatewayWSPwdCommand   = `echo "` + probeMarker + ` pwd=$(pwd)"`
@@ -81,6 +88,11 @@ const (
 	slackWorkspaceRefused    = "You cannot start in workspace *"
 	slackCollaboratorRefused = "which holds repositories you cannot read"
 	slackAccessAllow         = "access_allow"
+	// slackActionConnect is the Connect prompt's button, opening the sign-in
+	// link; slackWorkspacesUnlisted the note of a gateway that took the
+	// sign-in challenge for a failure to list.
+	slackActionConnect      = "connector_connect"
+	slackWorkspacesUnlisted = "Your workspaces could not be listed right now"
 	// The picker's Workspace input: its block_id prefix (".<revision>"
 	// follows), action, No workspace value and last-used hint.
 	slackPickerWorkspaceBlock  = "ask_agent_workspace"
@@ -98,6 +110,11 @@ type gatewayWorkspacesOutcome struct {
 	refusal, collaborator              string
 	refusalTraces                      accessTraces
 	privateSkipped                     string
+	// authRequired is muster's auth_required for the ungranted colleague,
+	// connectPrompt the gateway's Connect prompt for it, signInSkipped why
+	// the prompt was not judged.
+	authRequired                 bool
+	connectPrompt, signInSkipped string
 }
 
 // gatewayWorkspaces is the stage's state.
@@ -208,24 +225,25 @@ func (ws *gatewayWorkspaces) run(user *config.User, keys gatewayKeys, linksPath 
 	}
 	ws.out.volume, ws.out.repos = ws.public.Handle, gatewayWSPublicRepos
 
-	var colleague *config.User
-	var colleagueToken string
+	// The colleague is linked in Slack whatever the lab's GitHub installs:
+	// the ungranted step drops their grant and asks as them.
+	colleague := cfg.FindUser(accessDefaultSecond)
+	if ws.colleague, err = openWorkspacePerson(cfg, colleague); err != nil {
+		return nil, err
+	}
+	colleagueToken, err := passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret, colleague.Email, colleague.Password, musterLoginScopes)
+	if err != nil {
+		return nil, err
+	}
 	if ws.withPrivate {
 		step("W. The private workspace %s over %s, and the colleague %s connected to %s", gatewayWSPrivate, strings.Join(gatewayWSPrivateRepos, ", "), accessDefaultSecond, config.WorkspaceProviderFake)
 		if ws.private, err = ws.sp.createNamed(gatewayWSPrivate, gatewayWSPrivateRepos); err != nil {
-			return nil, err
-		}
-		colleague = cfg.FindUser(accessDefaultSecond)
-		if ws.colleague, err = openWorkspacePerson(cfg, colleague); err != nil {
 			return nil, err
 		}
 		if hops, err = connectWorkspaceProvider(cfg, ws.colleague, config.WorkspaceProviderFake); err != nil {
 			return nil, err
 		}
 		note("%s connected to %s: %s", colleague.Email, config.WorkspaceProviderFake, hops)
-		if colleagueToken, err = passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret, colleague.Email, colleague.Password, musterLoginScopes); err != nil {
-			return nil, err
-		}
 		if ws.colleagueAPI, err = dialKagentAPI(cfg, colleagueToken); err != nil {
 			return nil, err
 		}
@@ -235,16 +253,14 @@ func (ws *gatewayWorkspaces) run(user *config.User, keys gatewayKeys, linksPath 
 	if err := ws.gw.stop(); err != nil {
 		return nil, err
 	}
-	if colleague != nil {
-		identity, err := tokenIdentity(colleagueToken, time.Now())
-		if err != nil {
-			return nil, fmt.Errorf("the id_token of %s: %w", colleague.Email, err)
-		}
-		if err := seedBoltLink(linksPath, keys.store, ws.people.colleague, identity.link(colleague.Email, colleagueToken)); err != nil {
-			return nil, err
-		}
-		note("Slack user %s linked to %s", ws.people.colleague, colleague.Email)
+	identity, err := tokenIdentity(colleagueToken, time.Now())
+	if err != nil {
+		return nil, fmt.Errorf("the id_token of %s: %w", colleague.Email, err)
 	}
+	if err := seedBoltLink(linksPath, keys.store, ws.people.colleague, identity.link(colleague.Email, colleagueToken)); err != nil {
+		return nil, err
+	}
+	note("Slack user %s linked to %s", ws.people.colleague, colleague.Email)
 	ws.gw.extraArgs = append(ws.gw.extraArgs, "--workspace-tools-prefix="+workspaceManagerToolPrefix)
 	ws.gw.defaultAgent = gatewayWSAgent
 	if err := ws.gw.start(); err != nil {
@@ -259,6 +275,7 @@ func (ws *gatewayWorkspaces) run(user *config.User, keys gatewayKeys, linksPath 
 	if ws.withPrivate {
 		steps = append(steps, ws.refused, ws.collaborator)
 	}
+	steps = append(steps, ws.ungranted)
 	for _, s := range steps {
 		if err := s(); err != nil {
 			return nil, err
@@ -549,6 +566,71 @@ func (ws *gatewayWorkspaces) collaborator() error {
 	}
 	ws.out.collaborator = excerpt(refusal, 200)
 	note("allowed, then refused privately: %q; no turn_dispatch of %s, Session %s still at %d task(s)", excerpt(refusal, 160), ws.people.colleague, session.GetId(), len(after))
+	return nil
+}
+
+// ungranted is Wh: the colleague without the grant of the App muster pins the
+// workspace-manager to. muster answers its tools with auth_required and a
+// sign-in link, not the manager's connect_required; the gateway answers the
+// colleague's new thread with the Connect prompt, private, its button opening
+// muster's sign-in link, and asks for no workspace.
+func (ws *gatewayWorkspaces) ungranted() error {
+	step("Wh. %s without the grant of the workspace-manager's App: muster answers list_workspaces and authorize_workspace with auth_required and its sign-in link; a new thread of theirs gets the Connect prompt for it", accessDefaultSecond)
+	ws.colleague.disconnect(config.WorkspaceProviderFake)
+	for _, call := range []struct {
+		tool string
+		args map[string]any
+	}{
+		{"list_workspaces", map[string]any{wmOrganizationArg: config.WorkspaceOrganization}},
+		{"authorize_workspace", map[string]any{workspaceArg: gatewayWSPublic}},
+	} {
+		if _, err := ws.colleague.grantRequired(call.tool, call.args); err != nil {
+			return err
+		}
+	}
+	ws.out.authRequired = true
+	note("muster answered list_workspaces and authorize_workspace of %s with auth_required and a sign-in link at %s", accessDefaultSecond, oauthProxyStartPath)
+
+	if v := ws.gw.version(); !gatewayAtLeast(v, klausGatewayWorkspaceSignInSince) {
+		ws.out.signInSkipped = fmt.Sprintf("%s predates klaus-gateway %s, the first to answer muster's auth_required on the workspace-manager with the Connect prompt", v, klausGatewayWorkspaceSignInSince)
+		note("the gateway's prompt is not judged: %s", ws.out.signInSkipped)
+		return nil
+	}
+	t := &slackThread{user: ws.people.colleague}
+	ts, err := ws.p.driver.mention(t.user, "", klausGatewayWordPrompt)
+	if err != nil {
+		return err
+	}
+	t.ts = ts
+	prompt, err := ws.privatelyMsg(ts, t.user, 0, func(m slackMessage) bool { _, ok := m.action(slackActionConnect); return ok })
+	if err != nil {
+		return fmt.Errorf("%s, without the grant, got no Connect prompt: %w", accessDefaultSecond, err)
+	}
+	if err := judgeConnectPrompt(prompt, ws.p.fake.thread(ws.p.channel, ts)); err != nil {
+		return fmt.Errorf("the thread of %s, without the grant: %w", accessDefaultSecond, err)
+	}
+	ws.out.connectPrompt = excerpt(prompt.shown(), 200)
+	note("the Connect prompt, to %s alone: %q, its button opening muster's sign-in link", accessDefaultSecond, excerpt(prompt.shown(), 160))
+	return nil
+}
+
+// judgeConnectPrompt checks the Connect prompt a person without the grant
+// gets: its button opens muster's sign-in link, and the thread neither says
+// the workspaces could not be listed nor asks for a workspace.
+func judgeConnectPrompt(prompt slackMessage, thread []slackMessage) error {
+	button, ok := prompt.action(slackActionConnect)
+	if !ok {
+		return fmt.Errorf("the prompt %q carries no %s button", excerpt(prompt.shown(), 200), slackActionConnect)
+	}
+	if link, _ := button[slackKeyURL].(string); !musterSignInLinkRe.MatchString(link) {
+		return fmt.Errorf("the Connect prompt's button opens %q, not muster's sign-in link (%s)", link, oauthProxyStartPath)
+	}
+	if m, ok := findMessage(thread, slackWorkspacesUnlisted); ok {
+		return fmt.Errorf("the thread also reads %q: the gateway took muster's auth_required for workspaces it could not list", excerpt(m.shown(), 200))
+	}
+	if asked := workspacePrompts(thread); asked > 0 {
+		return fmt.Errorf("the thread was asked for its workspace %d time(s)", asked)
+	}
 	return nil
 }
 
@@ -937,13 +1019,22 @@ func gatewayWorkspacesPASS(o *gatewayWorkspacesOutcome) []string {
 			strings.Join(o.presets, "; "), gatewayWSPublic, o.modalSession),
 	}
 	if o.privateSkipped != "" {
-		return append(lines, "the refusal and the collaborator's steps were skipped: "+o.privateSkipped)
+		lines = append(lines, "the refusal and the collaborator's steps were skipped: "+o.privateSkipped)
+	} else {
+		lines = append(lines,
+			fmt.Sprintf("%s picking %s was refused naming %s (%q); kagent listed %d Session(s) of %s for them, agent-manager's list_sessions %d — none new, no Session bound",
+				accessDefaultSecond, gatewayWSPrivate, syncPrivateRepo, o.refusal, len(o.refusalTraces.kagent), gatewayWSAgent, len(o.refusalTraces.manager)),
+			fmt.Sprintf("%s, allowed into a thread on %s, was refused privately (%q) and no turn of theirs reached the agent", accessDefaultSecond, gatewayWSPrivate, o.collaborator),
+		)
 	}
-	return append(lines,
-		fmt.Sprintf("%s picking %s was refused naming %s (%q); kagent listed %d Session(s) of %s for them, agent-manager's list_sessions %d — none new, no Session bound",
-			accessDefaultSecond, gatewayWSPrivate, syncPrivateRepo, o.refusal, len(o.refusalTraces.kagent), gatewayWSAgent, len(o.refusalTraces.manager)),
-		fmt.Sprintf("%s, allowed into a thread on %s, was refused privately (%q) and no turn of theirs reached the agent", accessDefaultSecond, gatewayWSPrivate, o.collaborator),
-	)
+	if !o.authRequired {
+		return lines
+	}
+	ungranted := fmt.Sprintf("%s, without the grant of the workspace-manager's App, got muster's auth_required with a sign-in link from list_workspaces and authorize_workspace", accessDefaultSecond)
+	if o.signInSkipped != "" {
+		return append(lines, ungranted+"; the gateway's Connect prompt was not judged: "+o.signInSkipped)
+	}
+	return append(lines, fmt.Sprintf("%s; their new thread got the Connect prompt privately (%q), its button opening muster's sign-in link, and no workspace prompt", ungranted, o.connectPrompt))
 }
 
 // gatewayWSLeftovers lists what the stage's cleanup did not remove.
