@@ -63,7 +63,7 @@ agentlab workspaces-test --part access # provider sign-in and the access check a
 agentlab workspaces-test --part gitlab # the provider instance gitlab, end to end (skips without one)
 agentlab configure --workspaces-cleanup-after 10m && agentlab platform   # the sessions part's short cleanup window
 agentlab workspaces-test --part sessions # ten parallel Sessions in their session directories, and the cleanup
-agentlab configure --workspaces-provider fake,fake-bearer && agentlab platform   # a Bearer provider
+agentlab configure --workspaces-provider fake,fake-bearer --workspaces-grant-provider fake-bearer && agentlab platform   # a Bearer provider
 agentlab workspaces-test --part caller-credential # a Session's actor JWT on its Bearer provider's API host
 agentlab workspaces-test --part write # git push and gh pr create from a workspace Session as the person
 agentlab configure --workspaces-refresh-after 1m && agentlab platform   # the refresh part's short threshold
@@ -471,8 +471,8 @@ none yet. It runs as the admin on [the provider instance
 `fake-bearer`](#the-provider-instance-fake-bearer), the only instance whose
 grant names a Bearer host (the API of `fake` is on its git host), with the
 [Session admission](#the-session-admission) and agent-manager's
-`start_session`: `agentlab configure --workspaces-provider fake,fake-bearer`,
-then `agentlab platform`. Without them it fails at once with the reason.
+`start_session`: `agentlab configure --workspaces-provider fake,fake-bearer
+--workspaces-grant-provider fake-bearer`, then `agentlab platform`. Without them it fails at once with the reason.
 
 1. **Preconditions**: the workspace-manager reachable through muster and listing
    `fake-bearer`; the lab's grant key published and trusted by kagent's
@@ -530,8 +530,8 @@ the provider's hosts and sets it there, Basic on the git host and Bearer on
 the API host. The token never enters the sandbox. It runs as the admin on [the
 provider instance `fake-bearer`](#the-provider-instance-fake-bearer) with the
 [Session admission](#the-session-admission): `agentlab configure
---workspaces-provider fake,fake-bearer`, then `agentlab platform`. Without
-them, or without muster as the gateway's credential provider, it fails at once
+--workspaces-provider fake,fake-bearer --workspaces-grant-provider fake-bearer`,
+then `agentlab platform`. Without them, or without muster as the gateway's credential provider, it fails at once
 with the reason.
 
 1. **Preconditions**: the egress gateway's configuration (the ConfigMap
@@ -778,8 +778,9 @@ App token to every call of the manager's tools, the Dex ID token beside it.
 A person who has not granted it gets muster's sign-in link instead of a
 tool's answer; the manager stores no token and serves no sign-in pages.
 
-The instance is `platform.workspaces.grantProvider`, empty for the first
-configured one (`fake` while it is listed). The lab pins only a manager it
+The instance is `platform.workspaces.grantProvider` (`agentlab configure
+--workspaces-grant-provider <instance>`), empty for the first configured one
+(`fake` while it is listed). The lab pins only a manager it
 resolves to 0.10.0 or newer, the way Flux resolves
 `components.workspace-manager.versionRange` (from the chart, or a range in
 `platform.valuesFiles` such as a release candidate's); an earlier manager
@@ -858,7 +859,8 @@ answers' web and clone URLs name the git host, their API URLs and `Link`
 headers the API host. `platform.workspaces.provider` names it beside `fake`
 (`fake,fake-bearer`), whose container serves it; the audience of its
 credentials is `fake-bearer`, and muster pins the manager to it with
-`platform.workspaces.grantProvider: fake-bearer`.
+`platform.workspaces.grantProvider: fake-bearer` (`agentlab configure
+--workspaces-grant-provider fake-bearer`).
 [The caller-credential part](#the-caller-credential-part) proves it.
 
 #### A person's sign-in, headlessly

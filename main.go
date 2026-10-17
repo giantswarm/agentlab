@@ -901,7 +901,7 @@ func configureCmd() *cobra.Command {
 	var githubSignInClientID string
 	var codingHarnesses []string
 	var codingImages map[string]string
-	var workspacesProvider, workspacesGitHubAppID, workspacesGitHubClientID, workspacesCleanupAfter, workspacesRefreshAfter string
+	var workspacesProvider, workspacesGrantProvider, workspacesGitHubAppID, workspacesGitHubClientID, workspacesCleanupAfter, workspacesRefreshAfter string
 	var workspacesGitHubPrivateKeySource, workspacesGitHubClientSecretSource string
 	var githubSignInOrgs, modelManagerBackends []string
 	var vmManagerImageDir, aiKeySource, gitHubTokenSource, portal string
@@ -1083,6 +1083,9 @@ func configureCmd() *cobra.Command {
 			if cmd.Flags().Changed("workspaces-provider") {
 				cfg.Platform.Workspaces.Provider = workspacesProvider
 			}
+			if cmd.Flags().Changed("workspaces-grant-provider") {
+				cfg.Platform.Workspaces.GrantProvider = workspacesGrantProvider
+			}
 			if cmd.Flags().Changed("workspaces-cleanup-after") {
 				cfg.Platform.Workspaces.SessionsCleanupAfter = workspacesCleanupAfter
 			}
@@ -1197,6 +1200,7 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().StringSliceVar(&codingHarnesses, "coding-harnesses", nil, fmt.Sprintf("the coding Harnesses rendered with --coding, by runtime (%s; each named after its runtime; default claude alone); codex needs a kagent line whose chart takes runtime codex, omp one whose chart takes runtime byo and an image from --coding-images; \"\" returns to claude alone", strings.Join(config.CodingRuntimes, ", ")))
 	cmd.Flags().StringToStringVar(&codingImages, "coding-images", nil, "the image of a coding Harness the chart has none of its own for, <runtime>=<image@sha256:digest> (repeatable): "+config.CodingRuntimeOmp+"=<the kagent line's omp-harness, runtimeImages.ompHarness.digest of the release's chart>; a dev image (platform.devImages "+config.DevImageOmpHarness+") wins; an empty map clears it")
 	cmd.Flags().StringVar(&workspacesProvider, "workspaces-provider", "", "the workspace-manager's provider instances: fake (the lab's own GitHub, the default), fake-bearer (the same GitHub shaped like github.com, its API on a Bearer host of its own; beside fake), github (a GitHub App of the lab's own, docs/workspaces.md), gitlab (a GitLab's OAuth application, docs/workspaces.md) or several, such as fake,github,gitlab")
+	cmd.Flags().StringVar(&workspacesGrantProvider, "workspaces-grant-provider", "", "the provider instance whose App muster pins the workspace-manager to, the one App a person grants (platform.workspaces.grantProvider): one of --workspaces-provider, such as fake-bearer for 'workspaces-test --part caller-credential' and '--part write'; \"\" returns to the first instance")
 	cmd.Flags().BoolVar(&workspacesCSICompanion, "workspaces-csi-companion", false, "with workspaces on, the connectivity chart's CSI companion is Substrate's workspace driver: its efs preset running the lab's NFS plugin, the lab's NFS driver serving the volumes under the preset's driver name — the lab path for proving a companion chart change (docs/workspaces.md); --workspaces-csi-companion=false returns to the lab's own registration")
 	cmd.Flags().StringVar(&workspacesCleanupAfter, "workspaces-cleanup-after", "", "how long a Session's directory on a workspace volume outlives its last turn, a Go duration (the workspace-manager's sessions.cleanupAfter); 'workspaces-test --part sessions' needs a window of "+lab.SessionsCleanupWindowRange()+" (such as "+lab.SessionsCleanupWindowExample()+"); \"\" returns to the chart's 30 days")
 	cmd.Flags().StringVar(&workspacesRefreshAfter, "workspaces-refresh-after", "", "the refresh threshold, a Go duration (the workspace-manager's sync.refreshAfter): a Session started on a workspace whose last sync is older requests a sync; 'workspaces-test --part refresh' needs "+lab.RefreshThresholdRange()+" (such as "+lab.RefreshThresholdExample()+"); \"\" returns to the manager's 1h")

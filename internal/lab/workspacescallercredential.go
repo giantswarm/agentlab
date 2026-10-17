@@ -112,9 +112,8 @@ func (cp *callerCredentialProof) run(p *proofStages) error {
 		return fmt.Errorf("the caller-credential part needs an admin user in %s (`agentlab configure --defaults` writes one)", config.File)
 	}
 	p.begin("caller-credential: preconditions", "The part's preconditions: the provider instance %s, the Session admission, the Agent %s on the claude Harness, %s signed in", config.WorkspaceProviderFakeBearer, callerCredentialAgent, adminUser.Email)
-	if !cfg.WorkspaceFakeBearerProvider() {
-		return fmt.Errorf("the caller-credential part proves a Bearer provider, the instance %s, and platform.workspaces.provider %q does not configure it: `agentlab configure --workspaces-provider %s,%s`, then `agentlab platform`",
-			config.WorkspaceProviderFakeBearer, cfg.Platform.Workspaces.Provider, config.WorkspaceProviderFake, config.WorkspaceProviderFakeBearer)
+	if err := fakeBearerRefusal(cfg, "caller-credential"); err != nil {
+		return err
 	}
 	if err := cp.sp.preconditions(adminUser.Email); err != nil {
 		return err
@@ -156,6 +155,22 @@ func (cp *callerCredentialProof) run(p *proofStages) error {
 		return err
 	}
 	return cp.probe(bare, false)
+}
+
+// fakeBearerRefusal refuses a lab a part on the provider instance
+// fake-bearer cannot run on: one without the instance, or one whose
+// workspace-manager muster pins to another instance's App, which is the only
+// App a person grants (connectWorkspaceProvider).
+func fakeBearerRefusal(cfg *config.Config, part string) error {
+	if !cfg.WorkspaceFakeBearerProvider() {
+		return fmt.Errorf("the %s part runs on the provider instance %s, and platform.workspaces.provider %q does not configure it: `agentlab configure --workspaces-provider %s,%s --workspaces-grant-provider %s`, then `agentlab platform`",
+			part, config.WorkspaceProviderFakeBearer, cfg.Platform.Workspaces.Provider, config.WorkspaceProviderFake, config.WorkspaceProviderFakeBearer, config.WorkspaceProviderFakeBearer)
+	}
+	if grant := cfg.WorkspaceGrantProvider(); grant != config.WorkspaceProviderFakeBearer {
+		return fmt.Errorf("the %s part grants the App of %s, and muster pins the workspace-manager to the App of %s: `agentlab configure --workspaces-grant-provider %s`, then `agentlab platform`",
+			part, config.WorkspaceProviderFakeBearer, grant, config.WorkspaceProviderFakeBearer)
+	}
+	return nil
 }
 
 // preconditions checks the Session admission, signs the admin in and
