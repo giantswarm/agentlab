@@ -152,6 +152,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 
 		browserCmd(),
 		slackFakeCmd(),
+		mockLLMCmd(),
 		githubFakeCmd(),
 		skillHostCmd(),
 	)
@@ -177,6 +178,26 @@ func slackFakeCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&listen, "listen", "0.0.0.0:8080", "address to serve the fake Slack Web API on")
 	cmd.Flags().StringArrayVar(&emails, "email", nil, "a person users.info answers for, as <slack user id>=<e-mail> (repeatable)")
+	return cmd
+}
+
+// mockLLMCmd is the scripted model coding-test runs a codex agent on, in a
+// container on the kind network: plumbing, hidden, never typed by a person.
+func mockLLMCmd() *cobra.Command {
+	var listen, mcpServer string
+	cmd := &cobra.Command{
+		Use:    "mockllm",
+		Short:  "Serve coding-test's scripted OpenAI Responses API model, the mockllm (run by the proof, in a container)",
+		Args:   cobra.NoArgs,
+		Hidden: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			return lab.ServeMockLLM(ctx, listen, mcpServer)
+		},
+	}
+	cmd.Flags().StringVar(&listen, "listen", "0.0.0.0:8080", "address to serve the Responses API on (under /v1)")
+	cmd.Flags().StringVar(&mcpServer, "mcp-server", "", "the RemoteMCPServer whose tools the script's MCP call names")
 	return cmd
 }
 
@@ -530,7 +551,7 @@ func discoverInto(cfg *config.Config, first bool, pinEnabled *bool, pinBackends 
 	reportVMManager(vmBefore, cfg.Platform.VMManager.Enabled, disc)
 	if m, ok := lab.ApplyCodexHostModel(cfg, disc); ok {
 		fmt.Println("Applied to the configuration:")
-		fmt.Printf("  platform.extraModels: + %s (%s on %s, Responses API): the codex Harness's model (coding-test --harness codex runs on it)\n", m.Name, m.Model, m.BaseURL)
+		fmt.Printf("  platform.extraModels: + %s (%s on %s, Responses API): a model for the codex Harness (coding-test --harness codex --model-config %s runs on it)\n", m.Name, m.Model, m.BaseURL, m.Name)
 		fmt.Println()
 	}
 	return disc
@@ -1192,7 +1213,7 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().StringVar(&githubSignInClientID, "github-signin-client-id", "", "GitHub sign-in through the lab Dex: the GitHub App's client id (turns the sign-in on; \"\" turns it off); the App's callback URL is the lab Dex's own, <issuer>/callback, and its client secret is the Secret platform.githubSignIn.secret names in the dex namespace (default github-signin-client, key client-secret), placed with `beekeeper secret copy --to-secret`, never read by agentlab")
 	cmd.Flags().BoolVar(&githubSignIn, "github-signin", false, "turn the GitHub sign-in on (needs --github-signin-client-id once) or, with =false, off; the client Secret stays")
 	cmd.Flags().StringSliceVar(&githubSignInOrgs, "github-signin-orgs", nil, "GitHub sign-in: admit members of these GitHub organizations only, their teams as groups (`<org>:<team-slug>`); empty admits any GitHub account")
-	cmd.Flags().BoolVar(&workspaces, "workspaces", false, "workspace storage: a read-write-many StorageClass that serves git — an in-cluster NFS server, the NFS CSI driver behind an mTLS proxy only Agent Substrate's API server may reach, and the StorageClass "+lab.WorkspacesStorageClass+" (needs agents); --workspaces=false turns it off")
+	cmd.Flags().BoolVar(&workspaces, "workspaces", false, "workspace storage: a read-write-many StorageClass that serves git — an in-cluster NFS server, the NFS CSI driver behind an mTLS proxy only Agent Substrate's API server may reach, and the StorageClass "+lab.WorkspacesStorageClass+"; with --agents=false the storage and the workspace-manager run without Agent Substrate, the shape a later --agents switches on in place; --workspaces=false turns it off")
 	cmd.Flags().BoolVar(&coding, "coding", false, "coding agents: the chart's kagent.harnesses renders the coding Harnesses (claude, Claude Code run headless, unless --coding-harnesses names others), which `agentlab coding-test` proves (needs agents); --coding=false turns it off")
 	cmd.Flags().BoolVar(&tenants, "tenants", false, "the Organizations' namespaces as tenants: the chart's tenants.organizations.enabled turns on agent-manager's tenant reconciler for every namespace labelled giantswarm.io/organization, which `agentlab tenants-test` proves (needs agents); --tenants=false turns it off")
 	cmd.Flags().StringSliceVar(&codingHarnesses, "coding-harnesses", nil, fmt.Sprintf("the coding Harnesses rendered with --coding, by runtime (%s; each named after its runtime; default claude alone); codex needs a kagent line whose chart takes runtime codex, omp one whose chart takes runtime byo and an image from --coding-images; \"\" returns to claude alone", strings.Join(config.CodingRuntimes, ", ")))
@@ -1272,8 +1293,10 @@ func printSaved(cfg *config.Config, disc *lab.Discovery) {
 	if cfg.ServingEnabled() {
 		fmt.Printf("  serving    llm-d on the node: the llmisvc controller and its CRDs, the well-known runtime configs, the models Gateway at %s, cert-manager\n", lab.ModelsGatewayHost(cfg))
 	}
-	if cfg.WorkspacesEnabled() {
+	if cfg.WorkspacesSubstrate() {
 		fmt.Printf("  workspaces an NFS server on %s and the NFS CSI driver behind its mTLS proxy; the read-write-many StorageClass %s\n", lab.WorkspacesNode(cfg), lab.WorkspacesStorageClass)
+	} else if cfg.WorkspacesEnabled() {
+		fmt.Printf("  workspaces an NFS server on %s and the NFS CSI driver, without Agent Substrate (agents off; --agents switches it on in place); the read-write-many StorageClass %s\n", lab.WorkspacesNode(cfg), lab.WorkspacesStorageClass)
 	}
 	if cfg.WorkspaceFakeProvider() {
 		fmt.Printf("  ws-fake    the workspace-manager's provider instance fake: the lab's own GitHub at %s (its App, key pair and client secret the lab's; Secret %s/%s), the App's callback URL %s\n",
@@ -1548,6 +1571,7 @@ func pmTestCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&opts.GitHubFakeBinary, "github-fake-binary", "", "the static Linux agentlab the registry's container runs on the kind network (default: this binary)")
+	cmd.Flags().StringVar(&opts.Record, "record", "", "write reconcile_capability's dry run to this file (how internal/lab/testdata/platform-manager/dry-run.json is recorded)")
 	return cmd
 }
 
@@ -1578,7 +1602,7 @@ func codingTestCmd() *cobra.Command {
 	var opts lab.CodingTestOptions
 	cmd := &cobra.Command{
 		Use:   "coding-test [email]",
-		Short: "Headless coding agents proof (platform.coding) on one coding Harness (--harness, default claude): the Harness Ready from the platform values (claude: no limits on it) -> validate_agent accepting a toolset with a muster write tool and refusing an origin outside the Harness's list -> a coding agent created through agent-manager as [email] (default the admin), Ready on the Harness (codex: its MCP binding's credential from a Secret) -> one turn probing its sandbox: on claude, Claude Code as uid 65532 cannot read the root harness's environment or memory, the caller forwarder refuses dot segments and encoded slashes, muster refuses a write tool outside the toolset through it; everywhere no forge token or bearer in the environment or /data, the model key and MCP credentials placeholders, a DNS canary recorded, a host outside the Agent's origins denied at the egress gate -> an MCP call through the agent's binding listing the agent -> on claude a repository's instruction files written, the next turn records what Claude Code loaded -> suspend and resume keeping the file and the conversation -> the resumed turn's usage on its task status -> a share of the Session refused",
+		Short: "Headless coding agents proof (platform.coding) on one coding Harness (--harness, default claude): the Harness Ready from the platform values (claude: no limits on it) -> validate_agent accepting a toolset with a muster write tool and refusing an origin outside the Harness's list -> a coding agent created through agent-manager as [email] (default the admin), Ready on the Harness (codex: its MCP binding's credential from a Secret) -> one turn probing its sandbox: on claude, Claude Code as uid 65532 cannot read the root harness's environment or memory, the caller forwarder refuses dot segments and encoded slashes, muster refuses a write tool outside the toolset through it; everywhere no forge token or bearer in the environment or /data, the model key and MCP credentials placeholders, a DNS canary recorded, a host outside the Agent's origins denied at the egress gate -> an MCP call through the agent's binding listing the agent -> on claude a repository's instruction files written, the next turn records what Claude Code loaded -> suspend and resume keeping the file and the conversation -> the resumed turn's usage on its task status -> a share of the Session refused. On codex the model is the in-cluster mockllm (ModelConfig " + lab.MockLLMModelConfig + "), a mock Responses API scripted for these turns, which needs no OpenAI or Bedrock account; --model-config runs a real one",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadProofLab()
@@ -1594,7 +1618,8 @@ func codingTestCmd() *cobra.Command {
 	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", lab.DefaultCodingReadyTimeout, "how long each agent's boot and each wait outside a turn may take")
 	cmd.Flags().DurationVar(&opts.TurnTimeout, "turn-timeout", 0, "how long each turn may take (default by the agent's model: 40m on a host model server's model, 10m on a hosted one); every turn prints its deadline")
 	cmd.Flags().StringVar(&opts.Harness, "harness", config.CodingRuntimeClaude, fmt.Sprintf("the coding Harness the proof runs on (%s), one the lab renders (platform.coding.harnesses)", strings.Join(config.CodingRuntimes, ", ")))
-	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the agent runs on (default on codex the first extraModels entry on the Responses API, which configure adds for a codex host model it finds, else agent-manager's default one); codex needs an OpenAI Responses API or Bedrock gpt-* ModelConfig")
+	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the agent runs on (default on codex the in-cluster mockllm, "+lab.MockLLMModelConfig+", else agent-manager's default one); codex needs an OpenAI Responses API or Bedrock gpt-* ModelConfig, such as the codex host model configure adds")
+	cmd.Flags().StringVar(&opts.MockLLMBinary, "mockllm-binary", "", "the static linux agentlab binary the mockllm's container runs (default this one)")
 	return cmd
 }
 

@@ -62,9 +62,8 @@ recorded at `/_fake/misses`.
    pseudo-version of the same base version and commit
    (`v0.76.1-rc.6.0.20261015091950-358a409b65de`);
 5. runs `reconcile_capability` for `agent-platform` on `ember` as a dry run
-   and asserts the workspaces case: `installation.workspaces.enabled` read
-   from the record, the `workspaces` and `workspace-manager` values kept in
-   the planned agent-platform patch (the person's provider sign-in is
+   and asserts the workspaces case: the `workspaces` and `workspace-manager`
+   values on record kept in the planned agent-platform patch (the person's provider sign-in is
    muster's grant, so the proof asks nothing of the workspace-manager of
    Dex), no commit refusal, and no write reaching the
    registry;
@@ -73,3 +72,9 @@ recorded at `/_fake/misses`.
 A manager change for the workspaces case is proven by pointing
 `platform.platformManager.version` at its release candidate, or at its
 branch's dev build, and running `agentlab pm-test`.
+
+The unit tests read a recorded dry run,
+`internal/lab/testdata/platform-manager/dry-run.json`, which asks Dex for no
+workspace-manager `/signin` redirect URI. A manager release that changes the
+plan is recorded again with
+`agentlab pm-test --record internal/lab/testdata/platform-manager/dry-run.json`.

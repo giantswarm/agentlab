@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -65,6 +66,8 @@ import (
 //  8. Usage: the resumed turn's task status carries its usage.
 //  9. A share of the Session refused: a colleague's turn in a coding agent's
 //     Session would run under code the first sender's turns left.
+// 10. On codex without --model-config, the model: every model call of the
+//     turns answered by the in-cluster mockllm's script (mockllm.go).
 //
 // The agents and Sessions are removed on every exit path.
 
@@ -196,9 +199,12 @@ type CodingTestOptions struct {
 	// the lab renders (platform.coding.harnesses); empty is claude.
 	Harness string
 	// ModelConfig is the kagent ModelConfig the agent runs on; empty is
-	// the lab's Responses API entry on codex (config.CodexModelConfig), else
+	// the in-cluster mockllm on codex (MockLLMModelConfig), else
 	// agent-manager's default one.
 	ModelConfig string
+	// MockLLMBinary is the agentlab binary the mockllm's container runs;
+	// empty is this one.
+	MockLLMBinary string
 }
 
 // CodingTest is the coding agents proof (the stages above).
@@ -227,8 +233,25 @@ func CodingTest(cfg *config.Config, opts CodingTestOptions) error {
 		return fmt.Errorf("no lab user %q in %s", opts.Email, config.File)
 	}
 	p := &codingProof{cfg: cfg, rt: rt, modelConfig: opts.ModelConfig, user: user, timeout: opts.ReadyTimeout, turnTimeout: opts.TurnTimeout, stages: newProofStages()}
+	if opts.ModelConfig == "" && rt.name == config.CodingRuntimeCodex {
+		p.mockBinary = opts.MockLLMBinary
+		if p.mockBinary == "" {
+			exe, err := os.Executable()
+			if err != nil {
+				return fmt.Errorf("locating this binary for the mockllm's container: %w (pass --mockllm-binary)", err)
+			}
+			p.mockBinary = exe
+		}
+		if err := linuxStaticBinary(p.mockBinary, mockLLMWhat, "--mockllm-binary"); err != nil {
+			return err
+		}
+	}
 	defer p.cleanup()
-	return p.stages.close(p.run())
+	err := p.run()
+	if err != nil && p.mock != nil {
+		err = fmt.Errorf("%w\nthe mockllm's requests, the tools and the last input item of each:\n%s", err, p.mock.logTail())
+	}
+	return p.stages.close(err)
 }
 
 // codingProof is one run's state.
@@ -252,6 +275,13 @@ type codingProof struct {
 	// anyToolset is whether the line's agent-manager writes a claude
 	// Harness agent with any muster toolset.
 	anyToolset bool
+	// mockBinary is the binary the mockllm runs, set when the agent runs on
+	// it; mock is the running mockllm.
+	mockBinary string
+	mock       *mockLLM
+	// noMCPCredential is why the secret-backed credential stage skipped:
+	// the runtime's binding carries no credential on the line.
+	noMCPCredential string
 }
 
 func (p *codingProof) run() error {
@@ -295,8 +325,12 @@ func (p *codingProof) run() error {
 		note("agent-manager below %s holds a coding agent to read-only tools: the write tool's refusal is expected", agentManagerAnyToolsetFloor)
 	}
 	modelConfig := p.modelConfig
-	if modelConfig == "" && p.rt.name == config.CodingRuntimeCodex {
-		modelConfig = p.cfg.CodexModelConfig()
+	if p.mockBinary != "" {
+		if err := ensureMockLLMModelConfig(); err != nil {
+			return err
+		}
+		modelConfig = MockLLMModelConfig
+		note("the model: the in-cluster mockllm (ModelConfig %s, %s at %s), scripted for this proof's turns; --model-config runs a real model", MockLLMModelConfig, mockLLMModel, mockLLMURL())
 	}
 	if modelConfig == "" {
 		if modelConfig, err = agentManagerModelConfig(p.muster); err != nil {
@@ -329,6 +363,11 @@ func (p *codingProof) run() error {
 		return err
 	}
 	note("Agent %s Ready on %s, egress [%s]", codingTestAgent, harness, strings.Join(egress, " "))
+	if p.mockBinary != "" {
+		if err := p.startMock(); err != nil {
+			return err
+		}
+	}
 
 	if p.rt.secretBacked {
 		p.stages.begin("secret-backed credential", "The agent's MCP binding carries its credential on upstream's Secret-backed path: a RemoteMCPServer header from a Secret")
@@ -354,11 +393,11 @@ func (p *codingProof) run() error {
 	if err != nil {
 		return err
 	}
-	reply, _, err := p.turn(ctx, session, codingSandboxPrompt(p.rt))
+	sandbox, err := p.turn(ctx, session, codingSandboxPrompt(p.rt))
 	if err != nil {
 		return err
 	}
-	probe := parseCodingProbe(reply)
+	reply, probe := sandbox.reply, sandbox.probe
 	if probe["uid"] == "" {
 		return fmt.Errorf("the reply carries no %s lines (did the agent run its %s?): %s", probeMarker, p.rt.shellTool, excerpt(reply, 400))
 	}
@@ -374,31 +413,39 @@ func (p *codingProof) run() error {
 	}
 
 	p.stages.begin("mcp call", "The agent calls %s through its MCP binding and finds itself listed", codingTestReadTool)
-	reply, _, err = p.turn(ctx, session, codingMCPCallPrompt())
+	mcpTurn, err := p.turn(ctx, session, codingMCPCallPrompt())
 	if err != nil {
 		return err
 	}
-	called := parseCodingProbe(reply)["mcp-call"]
-	if !strings.Contains(called, codingTestAgent) {
+	reply = mcpTurn.reply
+	called := firstNonEmpty(mcpTurn.probe["mcp-call"], mcpTurn.toolOutput(codingTestReadTool))
+	switch {
+	case strings.Contains(called, codingTestAgent):
+		note("%s listed: %s", codingTestReadTool, excerpt(called, 240))
+	case p.noMCPCredential != "":
+		// The binding carries no credential on this line: muster answers
+		// the runtime's MCP connection 401, and the runtime has none of the
+		// binding's tools to call.
+		p.stages.skip("%s through the agent's binding answered %q: the binding carries no credential on this line, so muster refuses the runtime's MCP connection (%s)", codingTestReadTool, excerpt(called, 200), p.noMCPCredential)
+	default:
 		return fmt.Errorf("%s through the agent's binding on Harness %s answered %q, wanted a list naming %s; the reply: %q (%s)", codingTestReadTool, harness, called, codingTestAgent, excerpt(reply, 400), p.line)
 	}
-	note("%s listed: %s", codingTestReadTool, excerpt(called, 240))
 
 	if p.rt.claude {
 		p.stages.begin("instruction fixture", "A repository's instruction sources written into the Session's directory, the next turn records what Claude Code loaded")
-		if _, _, err := p.turn(ctx, session, codingFixturePrompt()); err != nil {
+		if _, err := p.turn(ctx, session, codingFixturePrompt()); err != nil {
 			return err
 		}
-		reply, _, err = p.turn(ctx, session, codingFixtureReadPrompt())
+		read, err := p.turn(ctx, session, codingFixtureReadPrompt())
 		if err != nil {
 			return err
 		}
-		loaded, err := codingFixtureRecord(parseCodingProbe(reply))
+		loaded, err := codingFixtureRecord(read.probe)
 		if err != nil {
 			return err
 		}
 		note("on %s: %s", p.line, loaded)
-	} else if _, _, err := p.turn(ctx, session, codingCodeWordPrompt(p.rt)); err != nil {
+	} else if _, err := p.turn(ctx, session, codingCodeWordPrompt(p.rt)); err != nil {
 		return err
 	}
 
@@ -416,7 +463,40 @@ func (p *codingProof) run() error {
 	note("usage %v", usage)
 
 	p.stages.begin("share refused", "A read-write share of the %s Session refused: a collaborator's turn would run under what the first sender's turns left", harness)
-	return p.shareRefused(ctx, session)
+	if err := p.shareRefused(ctx, session); err != nil || p.mock == nil {
+		return err
+	}
+
+	p.stages.begin("model", "The %s turns ran on the in-cluster mockllm: every model call answered by its script", harness)
+	return p.mockAnswered()
+}
+
+// startMock runs the mockllm for the agent's MCP binding, whose server the
+// script's MCP call names.
+func (p *codingProof) startMock() error {
+	t, err := readAgentTemplate(codingTestAgent)
+	if err != nil {
+		return err
+	}
+	if p.mock, err = startMockLLM(p.cfg, p.mockBinary, t.mcpServer()); err != nil {
+		return err
+	}
+	note("the mockllm serves %s for the MCP tools of %s", mockLLMURL(), t.mcpServer())
+	return nil
+}
+
+// mockAnswered is the mockllm's count of the model calls: some answered,
+// none outside its script.
+func (p *codingProof) mockAnswered() error {
+	counts, err := p.mock.requests()
+	if err != nil {
+		return fmt.Errorf("reading the mockllm's requests: %w", err)
+	}
+	if counts.Answered == 0 || counts.Unmatched > 0 {
+		return fmt.Errorf("the mockllm answered %d model calls of the %s agent and matched no script entry for %d: the runtime asked what the script does not answer (`docker logs %s-%s`)", counts.Answered, p.rt.name, counts.Unmatched, p.cfg.ClusterName, mockLLMContainerSuffix)
+	}
+	note("the mockllm answered all %d model calls of the %s turns (%s, %s)", counts.Answered, p.rt.name, mockLLMModel, mockLLMURL())
+	return nil
 }
 
 // judgedStage is one verdict on the sandbox turn's readings.
@@ -464,6 +544,7 @@ func (p *codingProof) proveSecretBacked() error {
 	}
 	if skip != "" {
 		p.stages.skip("%s", skip)
+		p.noMCPCredential = skip
 	}
 	return nil
 }
@@ -639,22 +720,42 @@ func (p *codingProof) createSession(ctx context.Context, agent string) (*apiv1al
 	return session, err
 }
 
-// turn sends one message and waits for the task to settle completed: the
-// reply's text and the status metadata.
-func (p *codingProof) turn(ctx context.Context, session *apiv1alpha1.Session, prompt string) (string, map[string]any, error) {
+// codingTurn is what one completed turn of the proof answered: the reply's
+// text, the marker lines of the reply and its tools' outputs, the tools'
+// results and the status metadata.
+type codingTurn struct {
+	reply string
+	probe codingProbe
+	tools []harnessToolResult
+	meta  map[string]any
+}
+
+// toolOutput is the output of the turn's call of tool, an MCP tool on any
+// server (codex names one <server>.<tool>), "" when it called none.
+func (t codingTurn) toolOutput(tool string) string {
+	for _, result := range t.tools {
+		if result.name == tool || strings.HasSuffix(result.name, "."+tool) {
+			return result.output
+		}
+	}
+	return ""
+}
+
+// turn sends one message and waits for the task to settle completed.
+func (p *codingProof) turn(ctx context.Context, session *apiv1alpha1.Session, prompt string) (codingTurn, error) {
 	note("turn on Session %s, deadline %s (%s)", session.GetId(), p.turnTimeout, p.turnBudget)
 	ctx, cancel := context.WithTimeout(ctx, p.turnTimeout)
 	defer cancel()
 	start := time.Now()
 	t, err := p.api.turn(ctx, session, userMessage(prompt))
 	if err != nil {
-		return "", nil, fmt.Errorf("the turn on Session %s after %s of its %s deadline (%s): %w", session.GetId(), time.Since(start).Round(time.Second), p.turnTimeout, p.turnBudget, err)
+		return codingTurn{}, fmt.Errorf("the turn on Session %s after %s of its %s deadline (%s): %w", session.GetId(), time.Since(start).Round(time.Second), p.turnTimeout, p.turnBudget, err)
 	}
 	reply, err := t.completedText()
 	if err != nil {
-		return "", nil, fmt.Errorf("the turn on Session %s: %w", session.GetId(), err)
+		return codingTurn{}, fmt.Errorf("the turn on Session %s: %w", session.GetId(), err)
 	}
-	return reply, t.statusMeta, nil
+	return codingTurn{reply: reply, probe: parseTurnProbe(reply, t.toolOutputs()), tools: t.tools, meta: t.statusMeta}, nil
 }
 
 // suspendResume suspends the Session, resumes it and has a turn read the
@@ -672,16 +773,20 @@ func (p *codingProof) suspendResume(ctx context.Context, session *apiv1alpha1.Se
 		return nil, err
 	}
 	note("Session %s: %s, then %s", session.GetId(), sessionState(suspended), sessionState(resumed))
-	reply, meta, err := p.turn(ctx, resumed, codingResumePrompt(p.rt))
+	read, err := p.turn(ctx, resumed, codingResumePrompt(p.rt))
 	if err != nil {
 		return nil, err
 	}
-	probe := parseCodingProbe(reply)
+	probe := read.probe
 	if probe["file"] != codingTestCodeWord || !strings.Contains(probe["code-word"], codingTestCodeWord) {
 		return nil, fmt.Errorf("after the resume the first turn's file reads %q and the code word recalled is %q, wanted %s for both (%s)", probe["file"], probe["code-word"], codingTestCodeWord, p.line)
 	}
-	note("the file %s reads %s, the code word recalled from the conversation", codingTestOwnFile, probe["file"])
-	return meta, nil
+	recalled := "the code word recalled from the conversation"
+	if p.mock != nil {
+		recalled = "the code word the mockllm's script recalls"
+	}
+	note("the file %s reads %s, %s", codingTestOwnFile, probe["file"], recalled)
+	return read.meta, nil
 }
 
 // shareRefused asks kagent for a read-write share of the coding Session;
@@ -719,6 +824,10 @@ func (p *codingProof) cleanup() {
 		p.sessions.removeAll()
 	}
 	p.removeAgents()
+	if p.mockBinary != "" {
+		p.mock.close()
+		removeMockLLMModelConfig()
+	}
 	if p.api != nil {
 		p.api.close()
 	}
