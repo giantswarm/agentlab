@@ -302,7 +302,7 @@ func TestSlackShown(t *testing.T) {
 		msg  slackMessage
 		want string
 	}{
-		{"text alone", slackMessage{Text: "plain"}, "plain"},
+		{"text alone", slackMessage{Text: "only text"}, "only text"},
 		{"Connect card", slackMessage{Text: sentence, Blocks: []map[string]any{{fieldTypeKey: slackBlockSection, slackKeyText: mrkdwn}, buttons}}, sentence},
 		{"buttons alone", slackMessage{Text: "Sign in first", Blocks: []map[string]any{buttons}}, "Sign in first"},
 		{"header, context and markdown", slackMessage{Text: "fallback", Blocks: []map[string]any{
