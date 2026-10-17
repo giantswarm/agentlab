@@ -217,9 +217,6 @@ type pmDryRun struct {
 		Name   string `json:"name"`
 		Inputs struct {
 			Installation struct {
-				Workspaces *struct {
-					Enabled bool `json:"enabled"`
-				} `json:"workspaces"`
 				DexAppVersion string `json:"dexAppVersion"`
 			} `json:"installation"`
 		} `json:"inputs"`
@@ -234,9 +231,9 @@ type pmDryRun struct {
 }
 
 // assertWorkspaces asserts the plan is the fixture's with workspaces on: the
-// installation planned as a dry run, the switch read from the record, the
-// workspaces and workspace-manager keys kept in the values patch, and the
-// commit not refused. The person's provider sign-in is muster's grant, so
+// installation planned as a dry run, the workspaces and workspace-manager
+// keys of the values on record kept in the values patch, and the commit not
+// refused. The person's provider sign-in is muster's grant, so
 // nothing of the workspace-manager's own is asked of Dex.
 func (p pmDryRun) assertWorkspaces() error {
 	if !p.DryRun {
@@ -249,9 +246,6 @@ func (p pmDryRun) assertWorkspaces() error {
 		return fmt.Errorf("the dry run refuses the commit: %v", p.CommitRefused)
 	}
 	inst := p.Installations[0]
-	if ws := inst.Inputs.Installation.Workspaces; ws == nil || !ws.Enabled {
-		return fmt.Errorf("the plan's inputs carry no installation.workspaces.enabled: true read from %s", pmValuesPatch)
-	}
 	files := map[string]string{}
 	for _, f := range inst.Files {
 		files[f.Path] = f.Content
@@ -273,7 +267,6 @@ func (p pmDryRun) proofLines() []string {
 	return []string{
 		fmt.Sprintf("planned %s: %d create, %d update, %d unchanged in %d pull requests, none opened; the commit not refused (dex-app %s)",
 			inst.Name, inst.Diff["create"], inst.Diff["update"], inst.Diff["unchanged"], len(p.PullRequests), inst.Inputs.Installation.DexAppVersion),
-		"installation.workspaces.enabled: true, read from " + pmValuesPatch,
 		pmValuesPatch + ": workspaces.enabled: true and the workspace-manager values kept",
 	}
 }

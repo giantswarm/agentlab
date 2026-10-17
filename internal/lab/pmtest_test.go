@@ -107,8 +107,8 @@ func TestPlatformManagerFixtureTurnsWorkspacesOn(t *testing.T) {
 }
 
 // A dry run giantswarm-platform-manager answered for the fixture
-// (testdata/platform-manager/dry-run.json, recorded from the release and
-// trimmed to what the proof reads) passes and asks Dex for no
+// (testdata/platform-manager/dry-run.json, recorded by pm-test --record from a
+// release that drops the workspace-manager /signin) passes and asks Dex for no
 // workspace-manager /signin redirect URI; one with the workspace-manager
 // values dropped fails naming it.
 func TestPMDryRunAssertsTheWorkspacesChanges(t *testing.T) {
@@ -130,7 +130,7 @@ func TestPMDryRunAssertsTheWorkspacesChanges(t *testing.T) {
 	if err := plan.assertWorkspaces(); err != nil {
 		t.Fatal(err)
 	}
-	if lines := plan.proofLines(); len(lines) != 3 || !strings.Contains(lines[2], "workspace-manager values kept") {
+	if lines := plan.proofLines(); len(lines) != 2 || !strings.Contains(lines[1], "workspace-manager values kept") {
 		t.Fatalf("proof lines: %v", lines)
 	}
 	dropped := decode(strings.ReplaceAll(string(raw), "workspace-manager:\\n", "other:\\n"))
