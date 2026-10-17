@@ -258,3 +258,41 @@ func TestRenameDropsTheOldName(t *testing.T) {
 		t.Fatalf("List() = %+v, want only new", labs)
 	}
 }
+
+func TestFreeName(t *testing.T) {
+	t.Run("a free name is kept", func(t *testing.T) {
+		setup(t)
+		newLab(t, "other")
+		if got, err := FreeName(config.DefaultClusterName, "."); err != nil || got != config.DefaultClusterName {
+			t.Fatalf("FreeName() = %q, %v; want agentlab", got, err)
+		}
+	})
+	t.Run("a taken name moves to the first free suffix", func(t *testing.T) {
+		setup(t)
+		newLab(t, "agentlab")
+		newLab(t, "agentlab-2")
+		if got, err := FreeName(config.DefaultClusterName, "."); err != nil || got != "agentlab-3" {
+			t.Fatalf("FreeName() = %q, %v; want agentlab-3", got, err)
+		}
+	})
+	t.Run("the name this directory holds is its own", func(t *testing.T) {
+		cwd := setup(t)
+		writeConfig(t, cwd, "agentlab")
+		if err := Register("agentlab", cwd); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := FreeName(config.DefaultClusterName, "."); err != nil || got != config.DefaultClusterName {
+			t.Fatalf("FreeName() = %q, %v; want agentlab", got, err)
+		}
+	})
+	t.Run("a stale registration frees its name", func(t *testing.T) {
+		setup(t)
+		dir := newLab(t, "agentlab")
+		if err := os.Remove(filepath.Join(dir, config.File)); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := FreeName(config.DefaultClusterName, "."); err != nil || got != config.DefaultClusterName {
+			t.Fatalf("FreeName() = %q, %v; want agentlab", got, err)
+		}
+	})
+}

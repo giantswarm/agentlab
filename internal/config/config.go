@@ -102,6 +102,10 @@ const GatewayPublicNodePort = 30444
 // NodePort, so nothing else may take one of these numbers.
 var PinnedNodePorts = []int{MusterNodePort, KagentUINodePort, GatewayNodePort, GatewayPublicNodePort}
 
+// DefaultClusterName is a new lab's clusterName when no other lab on the
+// machine holds it.
+const DefaultClusterName = "agentlab"
+
 // DefaultDexPort is the lab Dex NodePort when agentlab.yaml sets none.
 const DefaultDexPort = 32000
 
@@ -1359,7 +1363,7 @@ type Config struct {
 // real platform topology — three users, and Dex on 32000.
 func Default() *Config {
 	return &Config{
-		ClusterName:   "agentlab",
+		ClusterName:   DefaultClusterName,
 		DexPort:       DefaultDexPort,
 		APIServerPort: DefaultAPIServerPort,
 		// groups on staticPasswords requires Dex >= v2.45.0 (docs/identity.md);
