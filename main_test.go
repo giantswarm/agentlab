@@ -119,12 +119,60 @@ func TestEnterLabRegistersTheLabHere(t *testing.T) {
 	}
 	t.Chdir(dir)
 
-	if err := enterLab(false); err != nil {
+	if err := enterLab(labs.Enter); err != nil {
 		t.Fatal(err)
 	}
 	got, err := labs.List()
 	if err != nil || len(got) != 1 || got[0].Name != "unregistered" || got[0].Dir != dir {
 		t.Fatalf("labs.List() = %+v, %v; want unregistered in %s", got, err, dir)
+	}
+}
+
+// `render` from a copy of a registered lab's agentlab.yaml renders the copy
+// into its own directory and leaves the registered lab's certs/ and state/
+// untouched; a scratch lab of an unregistered name renders where it is too.
+func TestRenderStaysInTheDirectoryOfItsConfig(t *testing.T) {
+	regDir := t.TempDir()
+	prev := labs.Dir
+	labs.Dir = func() (string, error) { return regDir, nil }
+	t.Cleanup(func() { labs.Dir = prev })
+	for _, tc := range []struct{ name, clusterName string }{
+		{"a copy of a registered lab's config", "registered"},
+		{"a scratch lab of an unregistered name", "scratch"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			registered := t.TempDir()
+			t.Chdir(registered)
+			cfg := config.Default()
+			cfg.ClusterName = "registered"
+			if err := cfg.Save(); err != nil {
+				t.Fatal(err)
+			}
+			if err := labs.Register(cfg.ClusterName, registered); err != nil {
+				t.Fatal(err)
+			}
+			copyDir := t.TempDir()
+			t.Chdir(copyDir)
+			cfg.ClusterName = tc.clusterName
+			if err := cfg.Save(); err != nil {
+				t.Fatal(err)
+			}
+
+			cmd := renderCmd()
+			cmd.SetArgs(nil)
+			cmd.SilenceUsage = true
+			if err := cmd.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			for _, d := range []string{lab.StateDir, "certs"} {
+				if _, err := os.Stat(filepath.Join(registered, d)); !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("the registered lab's %s/ was written (stat: %v)", d, err)
+				}
+				if _, err := os.Stat(filepath.Join(copyDir, d)); err != nil {
+					t.Errorf("the render left no %s/ in its own directory: %v", d, err)
+				}
+			}
+		})
 	}
 }
 
