@@ -1556,6 +1556,7 @@ func workspacesMeasureCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.LargeRepo, "large-repo", "", "another cluster: the large workspace's repository, owner/name")
 	cmd.Flags().StringVar(&opts.AgentgatewayURL, "agentgateway-url", "", "another cluster: its agentgateway, through which the Sessions' turns run (with --agent; without both the Session figures are not available)")
 	cmd.Flags().StringVar(&opts.Agent, "agent", "", "another cluster: the Agent the Sessions start on, namespace/name")
+	cmd.Flags().BoolVar(&opts.SandboxTree, "sandbox-tree", false, "spike: also time git in the Session's own sandbox with the working tree on the volume, in /data and in /tmp, and check which survive a suspend (sandbox-tree.txt in the run directory)")
 	cmd.Flags().StringVar(&opts.GitURL, "git-url", "", "another cluster: the provider's git base URL the pushes go to, <url>/<owner>/<name>.git (default https://github.com)")
 	return cmd
 }
