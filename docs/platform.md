@@ -89,18 +89,24 @@ The lab installs it in its **lab shape**:
   writes the chart in place into the pin — or `agentlab platform` installs
   the pin over the cluster, the boot naming the downgrade.
 - A field a hand wrote on a platform workload — `kubectl patch` of muster's
-  `hostNetwork`, a `kubectl set env` on Backstage — survives every
-  `agentlab platform`: Helm and helm-controller's drift correction own and
-  correct only the fields the render carries. The apiserver records each
-  field's writer (`managedFields`), so a Helm-owned Deployment, StatefulSet or
-  DaemonSet field written by a manager other than the releases' (`helm`,
-  `helm-controller`, the lab's `agentlab`, `kube-controller-manager`) is named
-  by `agentlab status` on its `workloads` line, warned at the end of
-  `agentlab platform` and at every proof's opening, and fails platform-test's
-  first stage, `workload field managers`. A rollout restart's
-  `restartedAt` annotation is none. Remove the field with the inverse edit;
-  a lab change belongs in `agentlab.yaml` (`platform.devImages`,
-  `platform.chartPath`).
+  `hostNetwork`, a `kubectl set env` on Backstage — is no release's: Helm and
+  helm-controller's drift correction own and correct only the fields the
+  render carries. The apiserver records each field's writer
+  (`managedFields`). `agentlab platform`, the step a lab's restore ends with,
+  puts every field one of kubectl's imperative edits wrote (`kubectl-set`,
+  `kubectl-patch`, `kubectl-edit`, `kubectl-client-side-apply`,
+  `kubectl-label`, `kubectl-annotate`) on a Helm-owned Deployment,
+  StatefulSet or DaemonSet back to its release's render — the rendered value
+  where the render carries the field, removed where it does not — drops the
+  edit's entry, names each (`Put back to its release's render: …`) and waits
+  for the roll; a field it cannot put back fails the run, named. A field
+  written by any other manager than the releases' (`helm`, `helm-controller`,
+  the lab's `agentlab`, `kube-controller-manager`) is named by `agentlab
+  status` on its `workloads` line, warned at the end of `agentlab platform`
+  and at every proof's opening, and fails platform-test's first stage,
+  `workload field managers`. A rollout restart's `restartedAt` annotation is
+  none. A lab change belongs in `agentlab.yaml` (`platform.devImages`,
+  `platform.chartPath`), never a patch.
   The one exception is deliberate too: the [dev channel](#dev-channel),
   where `platform.chartBranch` follows a branch's newest dev build — and
   still installs an exact version, written into `chartVersion`.
@@ -271,9 +277,11 @@ host can name that way, goes through the port the registry publishes on the
 host loopback (`platform.devRegistryPort`, 5001 by default) over plain HTTP,
 and the boot log names both (`read on this host as
 oci://localhost:5001/charts/kagent`). A registry that does not answer there
-stops the boot before the install, naming the container to check. The lab
-registry exists once a chartPath or a dev image created it, and goes with
-`agentlab down`. Removing the overlay and re-running `agentlab platform`
+stops the boot before the install, naming the container to check. Every `up`
+and `platform` run ensures the lab registry — created when missing, started
+when stopped — since atelet and the node's containerd point at it whether or
+not a dev image is configured; `agentlab status` names it on its `registry`
+line, and it goes with `agentlab down`. Removing the overlay and re-running `agentlab platform`
 puts the released chart back.
 
 ## Dev images

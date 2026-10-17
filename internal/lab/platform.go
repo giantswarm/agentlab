@@ -521,6 +521,17 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 		}
 	}
 
+	// The lab registry (devimages.go) on every run, not only on a push: atelet
+	// always carries --localhost-registry-replacement and the node's
+	// containerd resolves localhost:<port> through it, so a container that
+	// went missing — removed by hand, lost with a docker reset — fails every
+	// later pull from it. Recreated here, ahead of the pushes and the dev
+	// images that need it.
+	step("Ensuring the lab registry %s", devRegistryName(cfg))
+	if err := ensureDevRegistry(cfg); err != nil {
+		return err
+	}
+
 	// The VM provisioner as a pod of the node (vmmanager.go): the node's KVM
 	// devices checked before the install would leave a pod that cannot boot
 	// anything; a local guest image build pushed into the lab registry so the
@@ -1073,12 +1084,17 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 %s
 %s%s`, header, reach, usersBlock(cfg), backstageHint, claudeCodeHint(cfg), agentsHint, modelManagerHint(cfg, backendEndpoints), servingHint(cfg), workspacesHint(cfg, workspacesChart, workspacesRegistrant), vmManagerHint(cfg), klausGatewayHint(cfg), obsHint, devImagesHint(cfg, dev), tryItBlock(cfg))
 	// A field a hand wrote on a platform workload outlives this run, which
-	// installs only what the releases render (foreignfields.go): named last,
-	// where the run's reader looks.
+	// installs only what the releases render: kubectl's edits are put back
+	// to the render (handfields.go), any other writer's named last, where the
+	// run's reader looks (foreignfields.go).
+	handErr := putBackHandFields(ctx)
 	warnForeignFields(ctx)
 	// Everything the platform runs is in the node now — record it so the next
 	// boot side-loads instead of pulling.
 	snapshotPreloadImages()
+	if handErr != nil {
+		return handErr
+	}
 	// The two steps the summary above only describes: on a terminal, ask
 	// instead of telling (prompt.go). Optional to the last: whatever the
 	// person answers, the platform is up and this returns nil.
