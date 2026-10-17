@@ -495,7 +495,19 @@ then `agentlab platform`. Without them it fails at once with the reason.
    received (`placeholder`) instead of the Actor's JWT; a request that never
    reached the fake fails naming the sandbox's answer (the gateway's 403 when
    the host is not in the Actor's egress).
-5. **No workspace**: a Session of the same Agent without a grant sends the
+5. **delete_session**: agent-manager's `delete_session` as the admin deletes
+   the workspace Session. At `start_session` agent-manager bound the
+   Session's sandbox actor to the admin in muster (`PUT /session-bindings`);
+   the delete must remove that binding (`DELETE /session-bindings`). muster
+   serves no read of a binding, so its log is the evidence: the answer
+   carries no `warning`, muster logged `session_bound` for the Session
+   (`kagent/<id>`) and its actor at the start, and `session_unbound` for that
+   actor, by the same person, within 30 seconds after the delete. Without the
+   `session_unbound` line the stage fails: the binding would outlive the
+   Session until its TTL. A muster without its `credentialProvider`, or an
+   agent-manager without `muster.bindingsUrl`, logs no `session_bound` and
+   the stage fails naming that.
+6. **No workspace**: a Session of the same Agent without a grant sends the
    same request: no `jwt` entry for it in the log.
 
 The fake verifies no JWT it did not sign: it answers such a bearer GitHub's
