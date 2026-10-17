@@ -204,7 +204,7 @@ func TestSkillsFixtureResolve(t *testing.T) {
 }
 
 // TestTerminalHarnessFailure: the golden boot is waited through while Ready
-// is False for ActorTemplatePending; Substrate's error (ActorTemplateFailed),
+// is False for ActorTemplatePending or ActorTemplateRetrying; Substrate's error (ActorTemplateFailed),
 // a conflict, or an earlier stage False end the wait, quoting the condition.
 func TestTerminalAgentFailure(t *testing.T) {
 	pending := &agentStatus{Conditions: []templateCondition{
@@ -213,6 +213,12 @@ func TestTerminalAgentFailure(t *testing.T) {
 	}}
 	if text, terminal := terminalAgentFailure(pending); terminal {
 		t.Errorf("pending is terminal: %s", text)
+	}
+	retrying := &agentStatus{Conditions: []templateCondition{
+		{Type: condReady, Status: condFalseStatus, Reason: readyReasonRetrying, Message: "golden boot 1 of 6 failed (GoldenActorCrashed: read: connection timed out); starting it over"},
+	}}
+	if text, terminal := terminalAgentFailure(retrying); terminal {
+		t.Errorf("retrying is terminal: %s", text)
 	}
 	failed := &agentStatus{Conditions: []templateCondition{
 		{Type: condReady, Status: condFalseStatus, Reason: "ActorTemplateFailed", Message: "golden actor exited: git fetch: Broken pipe"},
