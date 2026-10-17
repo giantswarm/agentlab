@@ -1257,13 +1257,13 @@ func printSaved(cfg *config.Config, disc *lab.Discovery) {
 		fmt.Printf("  workspaces an NFS server on %s and the NFS CSI driver behind its mTLS proxy; the read-write-many StorageClass %s\n", lab.WorkspacesNode(cfg), lab.WorkspacesStorageClass)
 	}
 	if cfg.WorkspaceFakeProvider() {
-		fmt.Printf("  ws-fake    the workspace-manager's provider instance fake: the lab's own GitHub at %s (its App, key pair and client secret the lab's; Secret %s/%s), the App's callback URLs %s\n",
-			cfg.GitHubFakeURL(), config.DefaultGitHubSecretNamespace, config.WorkspaceFakeSecretName, lab.WorkspaceAppCallbacks(cfg, config.WorkspaceProviderFake))
+		fmt.Printf("  ws-fake    the workspace-manager's provider instance fake: the lab's own GitHub at %s (its App, key pair and client secret the lab's; Secret %s/%s), the App's callback URL %s\n",
+			cfg.GitHubFakeURL(), config.DefaultGitHubSecretNamespace, config.WorkspaceFakeSecretName, lab.WorkspaceAppCallback(cfg))
 	}
 	if cfg.WorkspaceGitHubProvider() {
 		gh := cfg.Platform.Workspaces.GitHub
-		fmt.Printf("  ws-github  the workspace-manager's provider instance github: App id %s, client id %s, the App's callback URLs %s; private key and client secret from Secret %s/%s (keys %s from %s, %s from %s)\n",
-			orUnset(gh.AppID), orUnset(gh.ClientID), lab.WorkspaceAppCallbacks(cfg, config.WorkspaceProviderGitHub),
+		fmt.Printf("  ws-github  the workspace-manager's provider instance github: App id %s, client id %s, the App's callback URL %s; private key and client secret from Secret %s/%s (keys %s from %s, %s from %s)\n",
+			orUnset(gh.AppID), orUnset(gh.ClientID), lab.WorkspaceAppCallback(cfg),
 			config.DefaultGitHubSecretNamespace, config.WorkspaceGitHubSecretName,
 			config.WorkspaceGitHubPrivateKeyKey, orByHand(gh.PrivateKeySource), config.GitHubClientSecretKey, orByHand(gh.ClientSecretSource))
 	}
