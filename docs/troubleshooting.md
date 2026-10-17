@@ -200,3 +200,10 @@ plumbing for model servers under
   manager owns (`helm` from a client-side install, or a binary of another name).
   The conflicting objects and fields are in the Helm log printed above the
   line. What is left cannot be resolved by an upgrade: recreate the lab.
+- **`platform workload field(s) were written outside the platform's Helm
+  releases`** — a workload carries a hand's patch beside the render (the line
+  names the workload, the fields and the writer, `kubectl-patch` for one), and
+  no platform run removes it. Remove each field with the inverse edit (`kubectl
+  patch --type=json -p '[{"op":"remove","path":"/spec/template/spec/hostNetwork"}]'`,
+  or `kubectl edit`), then `agentlab status` reads `workloads   as the releases
+  render them` and platform-test passes its first stage.
