@@ -120,8 +120,8 @@ func TestMockLLMScriptAnswersTheCodexTurns(t *testing.T) {
 		if err := json.Unmarshal([]byte(stringOf(call.Arguments)), &args); err != nil {
 			t.Fatalf("the call's arguments %v: %v", call.Arguments, err)
 		}
-		if call.Type != "function_call" || call.Name != "shell_command" || args.Command != turn.command {
-			t.Fatalf("on %q the mock called %s %s with %q, wanted shell_command with the prompt's command", excerpt(turn.prompt, 60), call.Type, call.Name, args.Command)
+		if call.Type != "function_call" || call.Name != "shell_command" || args.Command != turn.command || args.TimeoutMS < 60_000 {
+			t.Fatalf("on %q the mock called %s %s with %q (timeout %dms), wanted shell_command with the prompt's command and minutes to run it", excerpt(turn.prompt, 60), call.Type, call.Name, args.Command, args.TimeoutMS)
 		}
 		if reply := mockLLMCall(t, srv, userItem(turn.prompt), call, outputOf(call)); reply.Type != mockLLMMessage {
 			t.Fatalf("after the output of %s the mock answered %+v, wanted the reply", call.CallID, reply)
@@ -154,8 +154,11 @@ func TestMockLLMScriptAnswersTheCodexTurns(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&counts); err != nil {
 		t.Fatal(err)
 	}
-	if counts != (mockLLMRequests{Answered: 9, Unmatched: 1}) {
-		t.Fatalf("the mock counts %+v, wanted 9 answered and 1 unmatched", counts)
+	if counts.Answered != 9 || counts.Unmatched != 1 || len(counts.Log) != 10 {
+		t.Fatalf("the mock counts %d answered, %d unmatched, %d log lines; wanted 9, 1 and 10", counts.Answered, counts.Unmatched, len(counts.Log))
+	}
+	if last := counts.Log[9]; !strings.HasPrefix(last, "404 ") || !strings.Contains(last, "not in the script") {
+		t.Fatalf("the unmatched request logs as %q, wanted its 404 and its input", last)
 	}
 }
 
@@ -165,7 +168,7 @@ func TestMockLLMScriptAnswersTheCodexTurns(t *testing.T) {
 func TestTurnProbeReadsTheToolOutputs(t *testing.T) {
 	part := func(kind string, data any) *a2a.Part {
 		p := a2a.NewDataPart(data)
-		p.Metadata = map[string]any{toolActivityTypeKey: kind}
+		p.Metadata = map[string]any{toolActivityTypeKeys[0]: kind}
 		return p
 	}
 	type result struct {
@@ -188,13 +191,18 @@ func TestTurnProbeReadsTheToolOutputs(t *testing.T) {
 		}
 		return part(functionResponseType, data)
 	}
+	upstreamResultPart := func(name string, value any) *a2a.Part {
+		p := resultPart(name, value)
+		p.Metadata = map[string]any{toolActivityTypeKeys[1]: functionResponseType}
+		return p
+	}
 	tr := &turn{}
 	tr.addArtifact(&a2a.Artifact{ID: "a1", Parts: a2a.ContentParts{part("function_call", map[string]any{"args": "echo AGENTLAB_PROBE uid=0"})}}, false)
 	tr.addArtifact(&a2a.Artifact{ID: "a2", Parts: a2a.ContentParts{resultPart("command_execution", struct {
 		Output   string `json:"output"`
 		ExitCode int    `json:"exitCode"`
 	}{"AGENTLAB_PROBE uid=1000\nAGENTLAB_PROBE file=agentlab-saffron\n", 0})}}, false)
-	tr.addArtifact(&a2a.Artifact{ID: "a3", Parts: a2a.ContentParts{resultPart("agentlab-coding-muster."+codingTestReadTool, []string{"agentlab-coding"})}}, false)
+	tr.addArtifact(&a2a.Artifact{ID: "a3", Parts: a2a.ContentParts{upstreamResultPart("agentlab-coding-muster."+codingTestReadTool, []string{"agentlab-coding"})}}, false)
 	tr.addArtifact(&a2a.Artifact{ID: "a4", Parts: a2a.ContentParts{a2a.NewTextPart("AGENTLAB_PROBE code-word=agentlab-saffron\nAGENTLAB_PROBE file=from-the-reply")}}, false)
 
 	if len(tr.tools) != 2 {

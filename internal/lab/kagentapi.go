@@ -1038,19 +1038,29 @@ type harnessToolResult struct {
 	name, output string
 }
 
-// toolActivityTypeKey is the part metadata a harness types its tool
-// activity with; functionResponseType is a tool's result.
-const (
-	toolActivityTypeKey  = "kagent_type"
-	functionResponseType = "function_response"
-)
+// toolActivityTypeKeys are the part metadata a harness types its tool
+// activity with (the kagent line's key, then upstream's);
+// functionResponseType is a tool's result.
+var toolActivityTypeKeys = []string{"kagent.dev/a2a/part-type", "kagent_type"}
+
+const functionResponseType = "function_response"
+
+// toolActivityType is the type a harness gave a part, "" for none.
+func toolActivityType(part *a2a.Part) string {
+	for _, key := range toolActivityTypeKeys {
+		if kind := stringOf(part.Metadata[key]); kind != "" {
+			return kind
+		}
+	}
+	return ""
+}
 
 // toolResults reads the tool results among an artifact's parts: data parts
 // typed function_response, carrying {id, name, response: {result}}.
 func toolResults(parts a2a.ContentParts) []harnessToolResult {
 	var results []harnessToolResult
 	for _, part := range parts {
-		if part == nil || stringOf(part.Metadata[toolActivityTypeKey]) != functionResponseType {
+		if part == nil || toolActivityType(part) != functionResponseType {
 			continue
 		}
 		data, ok := part.Data().(map[string]any)

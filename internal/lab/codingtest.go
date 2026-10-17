@@ -247,7 +247,11 @@ func CodingTest(cfg *config.Config, opts CodingTestOptions) error {
 		}
 	}
 	defer p.cleanup()
-	return p.stages.close(p.run())
+	err := p.run()
+	if err != nil && p.mock != nil {
+		err = fmt.Errorf("%w\nthe mockllm's requests, the tools and the last input item of each:\n%s", err, p.mock.logTail())
+	}
+	return p.stages.close(err)
 }
 
 // codingProof is one run's state.
@@ -275,6 +279,9 @@ type codingProof struct {
 	// it; mock is the running mockllm.
 	mockBinary string
 	mock       *mockLLM
+	// noMCPCredential is why the secret-backed credential stage skipped:
+	// the runtime's binding carries no credential on the line.
+	noMCPCredential string
 }
 
 func (p *codingProof) run() error {
@@ -412,10 +419,17 @@ func (p *codingProof) run() error {
 	}
 	reply = mcpTurn.reply
 	called := firstNonEmpty(mcpTurn.probe["mcp-call"], mcpTurn.toolOutput(codingTestReadTool))
-	if !strings.Contains(called, codingTestAgent) {
+	switch {
+	case strings.Contains(called, codingTestAgent):
+		note("%s listed: %s", codingTestReadTool, excerpt(called, 240))
+	case p.noMCPCredential != "":
+		// The binding carries no credential on this line: muster answers
+		// the runtime's MCP connection 401, and the runtime has none of the
+		// binding's tools to call.
+		p.stages.skip("%s through the agent's binding answered %q: the binding carries no credential on this line, so muster refuses the runtime's MCP connection (%s)", codingTestReadTool, excerpt(called, 200), p.noMCPCredential)
+	default:
 		return fmt.Errorf("%s through the agent's binding on Harness %s answered %q, wanted a list naming %s; the reply: %q (%s)", codingTestReadTool, harness, called, codingTestAgent, excerpt(reply, 400), p.line)
 	}
-	note("%s listed: %s", codingTestReadTool, excerpt(called, 240))
 
 	if p.rt.claude {
 		p.stages.begin("instruction fixture", "A repository's instruction sources written into the Session's directory, the next turn records what Claude Code loaded")
@@ -530,6 +544,7 @@ func (p *codingProof) proveSecretBacked() error {
 	}
 	if skip != "" {
 		p.stages.skip("%s", skip)
+		p.noMCPCredential = skip
 	}
 	return nil
 }

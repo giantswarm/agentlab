@@ -1054,7 +1054,9 @@ MCP call and the resume's file judge those outputs, what the sandbox
 printed and the tool answered, as the harness reports them on the turn's
 tool results; the code word the resumed turn recalls is the script's. The
 `model` stage closes the run: every model call answered by the script, none
-outside it.
+outside it. A failed run quotes the mockllm's last requests: the tools each
+offered the model and its last input item, what the script matched or did
+not.
 
 A real model is named with `--model-config`: a hosted OpenAI Responses API
 model (an `OpenAI` extraModels entry with `apiFormat: responses` and its key
@@ -1103,7 +1105,7 @@ the one that runs on both of those:
 | credentials | no forge token or bearer in the environment or `/data`; the model key kagent's placeholder, or unset where the runtime keeps it out of the shell's environment (omp); on `codex` every `KAGENT_CODEX_MCP_CREDENTIAL_*` the sandbox sees the placeholder too, on `omp` every `KAGENT_CREDENTIAL_*` |
 | dns canary | a recorded state, not a gate: `example.org` through the cluster resolver and directly at 1.1.1.1 |
 | egress | `proxy.golang.org` denied 403 at the egress gate; `api.github.com`, one of the Agent's origins, reached |
-| mcp call | the agent calls `x_agent-manager_list_agents` through its MCP binding and finds itself listed |
+| mcp call | the agent calls `x_agent-manager_list_agents` through its MCP binding and finds itself listed; SKIP where the secret-backed credential stage skipped and the call answered nothing else: the binding carries no credential on that line, so muster refuses the runtime's MCP connection (401) and the runtime has none of the binding's tools |
 | instruction fixture (*claude*) | a record: what Claude Code loads from a repository's `CLAUDE.md`, `AGENTS.md`, `.claude/` settings, hook, skill, subagent and command and `.mcp.json` on the pinned release |
 | suspend and resume | the Session's file and conversation survive the snapshot |
 | usage | the resumed turn's task status carries its usage |

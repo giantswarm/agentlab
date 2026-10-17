@@ -1,9 +1,11 @@
 package lab
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -126,12 +128,19 @@ type (
 	}
 	mockLLMShellArguments struct {
 		Command string `json:"command"`
+		// TimeoutMS bounds the command; codex's default of seconds
+		// cuts the probe's searches and lookups.
+		TimeoutMS int `json:"timeout_ms"`
 	}
 	mockLLMSearchArguments struct {
 		Query string `json:"query"`
 		Limit int    `json:"limit"`
 	}
 )
+
+// mockLLMCommandTimeout is the milliseconds a scripted shell command may
+// take: the sandbox probe's token search alone may take a minute.
+const mockLLMCommandTimeout = 300_000
 
 // mockLLMItemDone is the status of every item the script answers with,
 // mockLLMMessage the type of a reply's item and of a person's input.
@@ -149,7 +158,7 @@ func mockLLMConfig(mcpServer string) (mockllm.Config, error) {
 	for _, turn := range mockLLMScript() {
 		callID := "call_agentlab_" + turn.name
 		if turn.command != "" {
-			arguments, err := json.Marshal(mockLLMShellArguments{Command: turn.command})
+			arguments, err := json.Marshal(mockLLMShellArguments{Command: turn.command, TimeoutMS: mockLLMCommandTimeout})
 			if err != nil {
 				return mockllm.Config{}, err
 			}
@@ -217,6 +226,46 @@ func codexMCPToolNamespace(server string) string {
 type mockLLMRequests struct {
 	Answered  int `json:"answered"`
 	Unmatched int `json:"unmatched"`
+	// Log is one line per request: its status, the tools it offers and
+	// its last input item, what the script matched or did not.
+	Log []string `json:"log"`
+}
+
+// mockLLMLogItem bounds a logged input item.
+const mockLLMLogItem = 400
+
+// requestLogLine words a Responses API request for the log: the tools it
+// offers the model (a namespace's tools after its name) and its last input
+// item as JSON, the one the script matches.
+func requestLogLine(body []byte) string {
+	type tool struct {
+		Type  string `json:"type"`
+		Name  string `json:"name"`
+		Tools []struct {
+			Name string `json:"name"`
+		} `json:"tools"`
+	}
+	var req struct {
+		Input json.RawMessage `json:"input"`
+		Tools []tool          `json:"tools"`
+	}
+	if json.Unmarshal(body, &req) != nil {
+		return ""
+	}
+	names := make([]string, 0, len(req.Tools))
+	for _, t := range req.Tools {
+		name := firstNonEmpty(t.Name, t.Type)
+		for _, inner := range t.Tools {
+			name += " " + inner.Name
+		}
+		names = append(names, name)
+	}
+	last := string(req.Input)
+	var items []json.RawMessage
+	if json.Unmarshal(req.Input, &items) == nil && len(items) > 0 {
+		last = string(items[len(items)-1])
+	}
+	return fmt.Sprintf("tools [%s] last %s", excerpt(strings.Join(names, ", "), mockLLMLogItem), excerpt(last, mockLLMLogItem))
 }
 
 // ServeMockLLM serves the script for the MCP tools on mcpServer on listen
@@ -260,10 +309,19 @@ func mockLLMHandler(mcpServer string) (handler http.Handler, entries int, err er
 		_ = json.NewEncoder(w).Encode(counts)
 	})
 	mux.HandleFunc("POST /v1/responses", func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		provider.Handle(rec, r)
+		line := fmt.Sprintf("%d %s", rec.status, requestLogLine(body))
+		fmt.Println(line)
 		mu.Lock()
 		defer mu.Unlock()
+		counts.Log = append(counts.Log, line)
 		if rec.status == http.StatusNotFound {
 			counts.Unmatched++
 		} else {
@@ -373,6 +431,23 @@ func (m *mockLLM) requests() (mockLLMRequests, error) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	return counts, json.NewDecoder(resp.Body).Decode(&counts)
+}
+
+// mockLLMLogTail is how many of the mockllm's request lines a failure
+// quotes.
+const mockLLMLogTail = 12
+
+// logTail is the mockllm's last request lines, or why they cannot be read.
+func (m *mockLLM) logTail() string {
+	counts, err := m.requests()
+	if err != nil {
+		return "unread: " + err.Error()
+	}
+	log := counts.Log
+	if len(log) > mockLLMLogTail {
+		log = log[len(log)-mockLLMLogTail:]
+	}
+	return "  " + strings.Join(log, "\n  ")
 }
 
 func (m *mockLLM) close() {
