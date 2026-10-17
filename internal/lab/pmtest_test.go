@@ -108,8 +108,8 @@ func TestPlatformManagerFixtureTurnsWorkspacesOn(t *testing.T) {
 
 // A dry run giantswarm-platform-manager answered for the fixture
 // (testdata/platform-manager/dry-run.json, recorded from the release and
-// trimmed to what the proof reads) passes; one without the sign-in URI, or
-// with the workspace-manager values dropped, fails naming it.
+// trimmed to what the proof reads) passes; one with the workspace-manager
+// values dropped fails naming it.
 func TestPMDryRunAssertsTheWorkspacesChanges(t *testing.T) {
 	raw, err := os.ReadFile("testdata/platform-manager/dry-run.json")
 	if err != nil {
@@ -126,13 +126,8 @@ func TestPMDryRunAssertsTheWorkspacesChanges(t *testing.T) {
 	if err := plan.assertWorkspaces(); err != nil {
 		t.Fatal(err)
 	}
-	if lines := plan.proofLines(); len(lines) != 4 || !strings.Contains(lines[2], pmSignInURI) {
+	if lines := plan.proofLines(); len(lines) != 3 || !strings.Contains(lines[2], "workspace-manager values kept") {
 		t.Fatalf("proof lines: %v", lines)
-	}
-
-	noURI := decode(strings.ReplaceAll(string(raw), pmSignInURI, "https://elsewhere.example/signin"))
-	if err := noURI.assertWorkspaces(); err == nil || !strings.Contains(err.Error(), pmSignInURI) {
-		t.Fatalf("a plan without the sign-in URI: %v", err)
 	}
 	dropped := decode(strings.ReplaceAll(string(raw), "workspace-manager:\\n", "other:\\n"))
 	if err := dropped.assertWorkspaces(); err == nil || !strings.Contains(err.Error(), "workspace-manager") {

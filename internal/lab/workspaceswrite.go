@@ -16,9 +16,8 @@ import (
 // instance fake-bearer (the lab's GitHub shaped like github.com), as the
 // admin:
 //
-//   - the admin grants the workspace App once in muster: core_auth_login on
-//     the workspace-manager's MCPServer, walked through the lab GitHub's
-//     consent to muster's callback;
+//   - the admin grants fake-bearer's App once in muster, walked through the
+//     lab GitHub's consent to muster's callback;
 //   - a workspace over agentlab-org/platform-api and a Session started
 //     through start_session with the admin's grant, which agent-manager binds
 //     to the admin in muster;
@@ -73,9 +72,6 @@ const (
 type writeProof struct {
 	*callerCredentialProof
 	gitHost string
-	// granted says this part granted the workspace App in muster, which the
-	// cleanup takes back; a grant the admin had before stays.
-	granted bool
 	branch  string
 	pull    workspacePull
 }
@@ -87,7 +83,7 @@ func workspacesWritePart(cfg *config.Config, timeout time.Duration) error {
 		apiHost: config.GitHubFakeBearerAPIHost(cfg.Platform.Domain), agent: writeAgent, workspace: writeWorkspace, repo: writeRepo},
 		gitHost: config.GitHubFakeBearerHost(cfg.Platform.Domain), branch: writeBranchPrefix + "agentlab-write-" + randomHex(4)}
 	err := wp.run(p)
-	wp.cleanupWrite()
+	wp.cleanup()
 	if err == nil {
 		fmt.Printf("\nWorkspaces write part passed: from a Session in workspace %s on the claude Harness, git pushed %s to %s and gh opened pull request #%d by %s, as the admin with the workspace App's token from muster; pushes to %s (read only) and %s (App not installed) refused with 403; no token in the sandbox beyond the GH_TOKEN placeholder; a Session without a workspace pushed with no credential.\n",
 			writeWorkspace, wp.branch, writeRepo, wp.pull.Number, wp.pull.Author, writeReadOnlyRepo, writeUninstalledRepo)
@@ -101,20 +97,12 @@ func (wp *writeProof) run(p *proofStages) error {
 	if adminUser == nil {
 		return fmt.Errorf("the write part needs an admin user in %s (`agentlab configure --defaults` writes one)", config.File)
 	}
-	p.begin("write: preconditions", "The provider instance %s, muster as the egress gateway's credential provider %s, %s's grant of the workspace App in muster, the Session admission, the Agent %s on the claude Harness", config.WorkspaceProviderFakeBearer, musterCredentialAuthority, adminUser.Email, writeAgent)
+	p.begin("write: preconditions", "The provider instance %s, muster as the egress gateway's credential provider %s, the Session admission, the Agent %s on the claude Harness", config.WorkspaceProviderFakeBearer, musterCredentialAuthority, writeAgent)
 	if !cfg.WorkspaceFakeBearerProvider() {
 		return fmt.Errorf("the write part runs on the provider instance %s, and platform.workspaces.provider %q does not configure it: `agentlab configure --workspaces-provider %s,%s`, then `agentlab platform`",
 			config.WorkspaceProviderFakeBearer, cfg.Platform.Workspaces.Provider, config.WorkspaceProviderFake, config.WorkspaceProviderFakeBearer)
 	}
 	if err := proveMusterCredentialProvider(context.Background()); err != nil {
-		return err
-	}
-	admin, err := openWorkspacePerson(cfg, adminUser)
-	if err != nil {
-		return err
-	}
-	wp.admin = admin
-	if err := wp.grant(); err != nil {
 		return err
 	}
 	if err := wp.sp.preconditions(adminUser.Email); err != nil {
@@ -124,8 +112,8 @@ func (wp *writeProof) run(p *proofStages) error {
 		return err
 	}
 
-	p.begin("write: workspace", "create_workspace %s with %s on %s, its first cycle", writeWorkspace, writeRepo, config.WorkspaceProviderFakeBearer)
-	if err := wp.defineWorkspace(); err != nil {
+	p.begin("write: workspace", "%s grants %s's App in muster, create_workspace %s with %s, its first cycle", adminUser.Email, config.WorkspaceProviderFakeBearer, writeWorkspace, writeRepo)
+	if err := wp.createWorkspace(); err != nil {
 		return err
 	}
 
@@ -171,40 +159,6 @@ func proveMusterCredentialProvider(ctx context.Context) error {
 		return nil
 	}
 	return fmt.Errorf("no egress gateway configuration (ConfigMap *%s) in %s: is Substrate installed (`agentlab platform`)?", egressGatewayConfigSuffix, substrateNamespace)
-}
-
-// grant has the admin grant the workspace App in muster the way the portal's
-// permission prompt does: core_auth_login on the workspace-manager's
-// MCPServer, its challenge walked through the lab GitHub's consent to
-// muster's callback. A grant the admin already holds answers no challenge.
-func (wp *writeProof) grant() error {
-	cfg := wp.sp.cfg
-	env, err := wp.admin.session.callToolEnvelope("core_auth_login", map[string]any{serverKey: workspaceManagerMCPServer})
-	if err != nil {
-		return err
-	}
-	if env.IsError {
-		return fmt.Errorf("core_auth_login for %s refused: %.400s: muster files the workspace App's grant through the workspace-manager's MCPServer, an OAuth server of the App (`agentlab platform` with a workspace-manager and chart that register it so)", workspaceManagerMCPServer, env.Content[0].Text)
-	}
-	if _, ok := env.StructuredContent["authUrl"].(string); !ok {
-		note("%s holds the workspace App's grant in muster already: %.200s", wp.admin.user.Email, strings.TrimSpace(env.Content[0].Text))
-		return nil
-	}
-	challenge, err := signInChallenge(cfg, wp.admin.session, workspaceManagerMCPServer)
-	if err != nil {
-		return err
-	}
-	client, err := workspaceSignInClient(cfg)
-	if err != nil {
-		return err
-	}
-	hops, err := walkSignIn(client, challenge.authURL, oauthProxyCallbackPath, wp.admin.login, wp.admin.user.Email, wp.admin.user.Password, nil)
-	if err != nil {
-		return fmt.Errorf("%s granting the workspace App in muster: %w", wp.admin.user.Email, err)
-	}
-	wp.granted = true
-	note("%s granted the workspace App in muster: %s", wp.admin.user.Email, signInHops(hops))
-	return nil
 }
 
 // writeValues is what the write turn relayed: exit codes with git's or gh's
@@ -430,15 +384,4 @@ func gitRequestsLine(reqs []githubRequest, host string) string {
 		return "no request"
 	}
 	return strings.Join(words, "; ")
-}
-
-// cleanupWrite removes what the caller-credential cleanup removes and takes
-// back the grant this part made.
-func (wp *writeProof) cleanupWrite() {
-	wp.cleanup()
-	if wp.granted && wp.admin != nil {
-		if _, err := wp.admin.session.callToolEnvelope("core_auth_logout", map[string]any{serverKey: workspaceManagerMCPServer}); err != nil {
-			warn("taking back %s's grant of the workspace App: %v", wp.admin.user.Email, err)
-		}
-	}
 }

@@ -78,9 +78,6 @@ type callerCredentialProof struct {
 	// grantJudged says the grant must name the API host as a Bearer provider
 	// of fake-bearer's audience, the caller-credential part's contract.
 	grantJudged bool
-	// connected says the admin connected to fake-bearer, which the cleanup
-	// disconnects.
-	connected bool
 	// with is the Session in the workspace, without the one without a
 	// workspace; jwt is the request the API host logged from with.
 	with, without string
@@ -219,7 +216,6 @@ func (cp *callerCredentialProof) createWorkspace() error {
 	if err != nil {
 		return err
 	}
-	cp.connected = true
 	note("%s connected to %s: %s", cp.admin.user.Email, config.WorkspaceProviderFakeBearer, hops)
 	return cp.defineWorkspace()
 }
@@ -495,8 +491,8 @@ func judgeNoCallerCredential(logged []githubRequest, session string) error {
 	return nil
 }
 
-// cleanup removes the Sessions, the Agent, the admin's connection and the
-// workspace.
+// cleanup removes the Sessions, the Agent and the workspace; the admin's
+// grant of the App stays muster's, as every part's preconditions give it.
 func (cp *callerCredentialProof) cleanup() {
 	if cp.sp.restored {
 		return
@@ -504,9 +500,6 @@ func (cp *callerCredentialProof) cleanup() {
 	var errs []error
 	if cp.set != nil {
 		errs = append(errs, cp.set.removeAllNow())
-	}
-	if cp.admin != nil && cp.connected {
-		cp.admin.disconnect(config.WorkspaceProviderFakeBearer)
 	}
 	if agentExists(cp.agent) {
 		errs = append(errs, removeAgent(cp.agent))

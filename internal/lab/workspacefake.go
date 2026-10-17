@@ -18,6 +18,8 @@ import (
 	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+
 	"github.com/giantswarm/agentlab/internal/config"
 )
 
@@ -133,10 +135,22 @@ func githubFakeUp(cfg *config.Config) error {
 		cfg.GitHubFakeURL()+githubFakeHealthPath); err != nil {
 		return err
 	}
-	return ensureSecretFromFiles(platformNamespace, config.WorkspaceFakeSecretName, map[string]string{
-		config.WorkspaceGitHubPrivateKeyKey: filepath.Join(credentials, githubFakeAppKey),
-		config.GitHubClientSecretKey:        filepath.Join(credentials, githubFakeClientSecret),
-	})
+	// The App's key for the sync, and its OAuth client for muster, which
+	// the person grants it in (workspacemustergrant.go).
+	fixture, err := loadGitHubFixture("")
+	if err != nil {
+		return err
+	}
+	data := map[string][]byte{config.GitHubClientIDKey: []byte(fixture.App.ClientID)}
+	for key, file := range map[string]string{
+		config.WorkspaceGitHubPrivateKeyKey: githubFakeAppKey,
+		config.GitHubClientSecretKey:        githubFakeClientSecret,
+	} {
+		if data[key], err = os.ReadFile(filepath.Join(credentials, file)); err != nil { // #nosec G304 -- the lab's own credentials directory
+			return fmt.Errorf("secret %s/%s key %s: %w", platformNamespace, config.WorkspaceFakeSecretName, key, err)
+		}
+	}
+	return ensureSecret(platformNamespace, config.WorkspaceFakeSecretName, corev1.SecretTypeOpaque, data)
 }
 
 // labGitHubBinary is the binary the lab's GitHub container runs: a copy of

@@ -275,12 +275,13 @@ func workspaceGitHubFor(ctx context.Context, cfg *config.Config) (*workspaceProv
 			missing = append(missing, "Secret "+platformNamespace+"/"+config.WorkspaceGitHubSecretName+" "+key)
 		}
 	}
-	note("workspace-manager at %s: the GitHub App's callback URL is %s, the lab Dex's redirect URI %s", cfg.WorkspaceManagerBaseURL(), cfg.WorkspaceGitHubCallbackURL(), cfg.WorkspaceManagerSignInURL())
+	callback := WorkspaceAppCallbacks(cfg, config.WorkspaceProviderGitHub)
+	note("workspace-manager at %s: the GitHub App's callback URLs are %s", cfg.WorkspaceManagerBaseURL(), callback)
 	if len(missing) == 0 {
 		return workspaceGitHubValuesFor(cfg), nil
 	}
 	warn("platform.workspaces.provider names github but %s missing -- the workspace-manager gets no provider instance %s", strings.Join(missing, ", "), config.WorkspaceProviderGitHub)
-	warn("  register a GitHub App with callback URL %s, record its App id and client id in agentlab.yaml and where its keys are (platform.workspaces.github.privateKeySource and clientSecretSource: every up and platform places them), or place them by hand, one per call:", cfg.WorkspaceGitHubCallbackURL())
+	warn("  register a GitHub App with callback URLs %s, record its App id and client id in agentlab.yaml and where its keys are (platform.workspaces.github.privateKeySource and clientSecretSource: every up and platform places them), or place them by hand, one per call:", callback)
 	for _, key := range workspaceGitHubKeys {
 		warn("  %s secret copy <ref to the %s> --to-secret %s", secretTool, key, secretTarget(cfg, platformNamespace, config.WorkspaceGitHubSecretName, key))
 	}
@@ -316,16 +317,24 @@ func workspaceGitLabFor(ctx context.Context, cfg *config.Config) (*workspaceProv
 			missing = append(missing, "Secret "+platformNamespace+"/"+config.WorkspaceGitLabSecretName+" "+key)
 		}
 	}
-	callback := cfg.WorkspaceCallbackURL(config.WorkspaceProviderGitLab)
-	note("workspace-manager at %s: the GitLab OAuth application's redirect URI is %s", cfg.WorkspaceManagerBaseURL(), callback)
+	callback := WorkspaceAppCallbacks(cfg, config.WorkspaceProviderGitLab)
+	note("workspace-manager at %s: the GitLab OAuth application's redirect URIs are %s", cfg.WorkspaceManagerBaseURL(), callback)
 	if len(missing) == 0 {
 		return workspaceGitLabValuesFor(cfg), nil
 	}
 	warn("platform.workspaces.provider names gitlab but %s missing -- the workspace-manager gets no provider instance %s", strings.Join(missing, ", "), config.WorkspaceProviderGitLab)
-	warn("  register an OAuth application on the GitLab with redirect URI %s and the scopes api read_user read_repository write_repository, record the GitLab's url and the client id in agentlab.yaml and where the keys are (platform.workspaces.gitlab.tokenSource, clientSecretSource, passwordSource: every up and platform places them), or place them by hand, one per call:", callback)
+	warn("  register an OAuth application on the GitLab with redirect URIs %s and the scopes api read_user read_repository write_repository, record the GitLab's url and the client id in agentlab.yaml and where the keys are (platform.workspaces.gitlab.tokenSource, clientSecretSource, passwordSource: every up and platform places them), or place them by hand, one per call:", callback)
 	for _, key := range append(slices.Clone(workspaceGitLabKeys), config.WorkspaceGitLabPasswordKey) {
 		warn("  %s secret copy <ref to the %s> --to-secret %s", secretTool, key, secretTarget(cfg, platformNamespace, config.WorkspaceGitLabSecretName, key))
 	}
 	warn("  then re-run; agentlab never reads the values (docs/workspaces.md)")
 	return nil, nil
+}
+
+// WorkspaceAppCallbacks words the callback URLs an instance's App or OAuth
+// application registers: muster's proxy callback, where the person grants it
+// for a workspace-manager of 0.10.0 and newer (workspacemustergrant.go), and
+// the manager's own callback, which an earlier manager signs in on.
+func WorkspaceAppCallbacks(cfg *config.Config, instance string) string {
+	return fmt.Sprintf("%s%s (workspace-manager 0.10.0 and newer) and %s (before)", cfg.MusterBaseURL(), oauthProxyCallbackPath, cfg.WorkspaceCallbackURL(instance))
 }
