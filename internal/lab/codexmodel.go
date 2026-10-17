@@ -11,10 +11,10 @@ import (
 // proof"): codex speaks the OpenAI Responses API alone. `agentlab configure`
 // wires the first of CodexHostModels the host's Ollama has downloaded as a
 // platform.extraModels entry on its Responses API, which coding-test
-// --harness codex then runs on by default (config.CodexModelConfig). The
-// proof judges what the model relays of the probe; a hosted Responses API
-// model relays it verbatim, the host models listed here reach the sandbox
-// stages but not yet every stage.
+// --harness codex --model-config runs on (the proof's default is the
+// in-cluster mockllm, mockllm.go). The proof judges what the model relays of
+// the probe; a hosted Responses API model relays it verbatim, the host
+// models listed here reach the sandbox stages but not yet every stage.
 
 // CodexHostModel is a host model for a codex proof, with the memory it needs
 // loaded.

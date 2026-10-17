@@ -2240,9 +2240,9 @@ func (c *Config) CodingHarnessRendered(runtime string) bool {
 	return runtime == CodingRuntimeClaude && c.WorkspacesEnabled()
 }
 
-// CodexModelConfig is the ModelConfig a codex agent runs on unless told
-// otherwise: the first platform.extraModels entry that speaks the Responses
-// API (the only one the codex runtime speaks), "" when none does.
+// CodexModelConfig is the lab's model for a codex agent: the first
+// platform.extraModels entry that speaks the Responses API (the only one the
+// codex runtime speaks), "" when none does.
 func (c *Config) CodexModelConfig() string {
 	for _, m := range c.Platform.ExtraModels {
 		if m.Provider == ProviderOpenAI && m.APIFormat == APIFormatResponses {

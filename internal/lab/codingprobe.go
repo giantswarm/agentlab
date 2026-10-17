@@ -294,7 +294,12 @@ func codingFixtureRecord(p codingProbe) (string, error) {
 // write the turn's own file and remember the code word, what the resume
 // reads back.
 func codingCodeWordPrompt(rt codingRuntime) string {
-	return "Remember the code word " + codingTestCodeWord + ". Run this exact command once with your " + rt.shellTool + ": `echo " + codingTestCodeWord + " > " + codingTestOwnFile + " && echo \"" + probeMarker + " written=$(pwd)\"` and reply with its " + probeMarker + " line, verbatim."
+	return "Remember the code word " + codingTestCodeWord + ". Run this exact command once with your " + rt.shellTool + ": `" + codingCodeWordCommand() + "` and reply with its " + probeMarker + " line, verbatim."
+}
+
+// codingCodeWordCommand writes the turn's own file with the code word.
+func codingCodeWordCommand() string {
+	return "echo " + codingTestCodeWord + " > " + codingTestOwnFile + " && echo \"" + probeMarker + " written=$(pwd)\""
 }
 
 // codingMCPCallPrompt has the agent call agent-manager's list_agents through
@@ -307,6 +312,28 @@ func codingMCPCallPrompt() string {
 // codingResumePrompt is the turn after the resume: the first turn's file
 // read back and the code word recalled.
 func codingResumePrompt(rt codingRuntime) string {
-	return "Run this exact command once with your " + rt.shellTool + ": `echo \"" + probeMarker + " file=$(cat " + codingTestOwnFile + " 2>/dev/null || echo missing)\"` and relay its line verbatim. " +
-		"Then add the line " + probeMarker + " code-word=<the code word I asked you to remember earlier in this conversation, or none>."
+	return "Run this exact command once with your " + rt.shellTool + ": `" + codingResumeCommand() + "` and relay its line verbatim. " +
+		"Then add the line " + probeMarker + " " + codingResumeCodeWordAsk + "."
+}
+
+// codingResumeCodeWordAsk asks for the code word the conversation holds.
+const codingResumeCodeWordAsk = "code-word=<the code word I asked you to remember earlier in this conversation, or none>"
+
+// codingResumeCommand reads the first turn's file back.
+func codingResumeCommand() string {
+	return "echo \"" + probeMarker + " file=$(cat " + codingTestOwnFile + " 2>/dev/null || echo missing)\""
+}
+
+// parseTurnProbe reads the marker lines of a turn: the reply's, then those
+// only its tools' outputs carry. A model relays the lines its commands
+// printed; a scripted model (the mockllm) replies with fixed words, and the
+// readings are in the outputs of the commands it had the runtime run.
+func parseTurnProbe(reply, toolOutputs string) codingProbe {
+	probe := parseCodingProbe(reply)
+	for key, value := range parseCodingProbe(toolOutputs) {
+		if _, ok := probe[key]; !ok {
+			probe[key] = value
+		}
+	}
+	return probe
 }
