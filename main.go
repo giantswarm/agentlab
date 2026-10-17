@@ -484,6 +484,11 @@ func discoverInto(cfg *config.Config, first bool, pinEnabled *bool, pinBackends 
 	cfg.Platform.VMManager.ApplyDiscovered(disc.KVMReady(), pinVMManager)
 	reportModelManager(before, cfg.Platform.ModelManager, disc, cfg.Platform.Agents)
 	reportVMManager(vmBefore, cfg.Platform.VMManager.Enabled, disc)
+	if m, ok := lab.ApplyCodexHostModel(cfg, disc); ok {
+		fmt.Println("Applied to the configuration:")
+		fmt.Printf("  platform.extraModels: + %s (%s on %s, Responses API): the codex Harness's model (coding-test --harness codex runs on it)\n", m.Name, m.Model, m.BaseURL)
+		fmt.Println()
+	}
 	return disc
 }
 
@@ -1495,7 +1500,7 @@ func codingTestCmd() *cobra.Command {
 	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", lab.DefaultCodingReadyTimeout, "how long each agent's boot and each wait outside a turn may take")
 	cmd.Flags().DurationVar(&opts.TurnTimeout, "turn-timeout", 0, "how long each turn may take (default by the agent's model: 40m on a host model server's model, 10m on a hosted one); every turn prints its deadline")
 	cmd.Flags().StringVar(&opts.Harness, "harness", config.CodingRuntimeClaude, fmt.Sprintf("the coding Harness the proof runs on (%s), one the lab renders (platform.coding.harnesses)", strings.Join(config.CodingRuntimes, ", ")))
-	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the agent runs on (default agent-manager's default one); codex needs an OpenAI Responses API or Bedrock gpt-* ModelConfig")
+	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the agent runs on (default on codex the first extraModels entry on the Responses API, which configure adds for a codex host model it finds, else agent-manager's default one); codex needs an OpenAI Responses API or Bedrock gpt-* ModelConfig")
 	return cmd
 }
 

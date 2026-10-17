@@ -110,8 +110,9 @@ echo "$P data-tokens=$(timeout 60 grep -rlsE 'gh[opsu]_[A-Za-z0-9]{30}|github_pa
 k=unset; for v in` + keys + `; do case "$v" in "") ;; kagent-*) [ "$k" = other ] || k=placeholder;; *) k=other;; esac; done; echo "$P model-key=$k"` + mcp + `
 r=$(timeout 10 nslookup ` + codingTestDNSCanary + ` 2>&1 | awk '/^Address/ && !/:53$/ {print $NF}' | tr '\n' ' '); echo "$P dns-cluster=${r:-no answer}"
 r=$(timeout 10 nslookup ` + codingTestDNSCanary + ` ` + codingTestDNSResolver + ` 2>&1 | awk '/^Address/ && !/:53$/ {print $NF}' | tr '\n' ' '); echo "$P dns-direct=${r:-no answer}"
-wget -q -O /dev/null ` + codingTestOutsideHost + ` 2>/tmp/agentlab-egress; echo "$P egress-outside=rc$? $(head -c 160 /tmp/agentlab-egress | tr '\n' ' ')"
-wget -q -O /dev/null https://api.github.com/ 2>/tmp/agentlab-egress; echo "$P egress-origin=rc$? $(head -c 160 /tmp/agentlab-egress | tr '\n' ' ')"`
+w() { wget -q -O /dev/null "$1" 2>/tmp/agentlab-egress; rc=$?; s=$(grep -o 'HTTP/1.1 [0-9]*' /tmp/agentlab-egress | head -1); echo "rc$rc ${s:-$(head -c 80 /tmp/agentlab-egress | tr '\n' ' ')}"; }
+echo "$P egress-outside=$(w ` + codingTestOutsideHost + `)"
+echo "$P egress-origin=$(w https://api.github.com/)"`
 }
 
 // codingSandboxPrompt asks the agent to run the probe once and relay it.

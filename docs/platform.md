@@ -1014,6 +1014,33 @@ names by digest (`agentlab configure --coding-images omp=<image>`; the
 release's chart stamps it as `runtimeImages.ompHarness.digest`), a dev
 image (`platform.devImages` `omp-harness`) winning over it.
 
+A codex proof judges what the model relays of the probe, so it needs a
+model that runs the script and relays its lines verbatim. A hosted OpenAI
+Responses API model does; name its ModelConfig with `--model-config` (an
+`OpenAI` extraModels entry with `apiFormat: responses` and its key in
+`apiKeyEnv`). No host model passes every stage yet:
+
+| Host model (Ollama) | Memory loaded | On the codex proof |
+|---|---|---|
+| `qwen3-coder:30b` (30b-a3b, Q4_K_M, 18 GB) | 21 GiB | sandbox turn (1–4 min), credentials and DNS canary pass; the egress readings it relays are not the probe's |
+| `gpt-oss:20b` (MXFP4, 13 GB) | 12 GiB | Ollama answers some `/v1/responses` calls with 500 and codex fails the turn; otherwise the relay drops lines |
+| `qwen3.5:9b` (6.6 GB) | not measured | every turn runs; the relay fails at a different stage each run |
+
+With the codex Harness rendered, `agentlab configure` wires the first of
+`qwen3-coder:30b` and `gpt-oss:20b` the host's Ollama has downloaded as the
+extraModels entry `codex-host` (the `OpenAI` provider on Ollama's `/v1`,
+`apiFormat: responses`, keyless). `coding-test --harness codex` runs on the
+first extraModels entry on the Responses API unless `--model-config` names
+another, under the 40m host model turn deadline; a failed sandbox stage
+quotes the agent's reply.
+
+```sh
+ollama pull qwen3-coder:30b
+agentlab configure --defaults --coding --coding-harnesses claude,codex
+agentlab platform
+agentlab coding-test --harness codex
+```
+
 The workspaces proof's claude Session runs on the same `claude` Harness,
 which the lab also renders with the workspaces on and coding off.
 
