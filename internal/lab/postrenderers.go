@@ -35,6 +35,9 @@ import (
 //     would leave it Pending and the HelmRelease never Ready — and the
 //     default rolling update deadlocks the same way: the new pod cannot
 //     start until the old one releases the port. Old pod goes down first.
+//     With platform.musterPodNetwork muster takes neither patch: it runs on
+//     the pod network at two replicas (the values), and the dex-localhost
+//     sidecar (patch 4) bridges the issuer for it as for the MCP servers.
 //
 //  3. A fixed nodePort on the kagent-ui Service: the values set
 //     `ui.service.type: NodePort` (a chart value), but the chart's ui-service
@@ -454,8 +457,23 @@ func sidecarPostRenderer(deployment string, dexPort int) postRenderer {
 
 // hostNetworkComponents are the components whose Deployment the lab puts on
 // the host network (patch 1+2): they reach the issuer URL as the host does
-// and are no sidecar targets.
-var hostNetworkComponents = []string{componentMuster, componentBackstage}
+// and are no sidecar targets. muster is among them unless it runs on the pod
+// network (platform.musterPodNetwork), where it takes the sidecar instead
+// (musterSidecar).
+func hostNetworkComponents(cfg *config.Config) []string {
+	if cfg.Platform.MusterPodNetwork {
+		return []string{componentBackstage}
+	}
+	return []string{componentMuster, componentBackstage}
+}
+
+// musterSidecar reports whether muster's Deployment gets the dex-localhost
+// sidecar: on the pod network while the issuer is spelled localhost. The
+// rule over the renders cannot select it — muster reads the issuer from its
+// ConfigMap, through no name it dials it by — so it is named here.
+func musterSidecar(cfg *config.Config) bool {
+	return cfg.Platform.MusterPodNetwork && dexLocalhostBridged(cfg)
+}
 
 // dexLocalhostAddr is the lab Dex as the pods are told it — the host:port of
 // the issuer URL (config.Issuer) — the address the sidecar answers on.
@@ -488,7 +506,7 @@ func dexLocalhostTargets(cfg *config.Config, renders map[string]string) (map[str
 		return targets, nil
 	}
 	for _, component := range slices.Sorted(maps.Keys(renders)) {
-		if slices.Contains(hostNetworkComponents, component) {
+		if slices.Contains(hostNetworkComponents(cfg), component) {
 			continue
 		}
 		for _, d := range renderedDeployments(renders[component]) {
@@ -594,8 +612,11 @@ func componentPostRenderers(cfg *config.Config, imageNames map[string]string, si
 	patches := map[string][]kustomizePatch{
 		componentKagent: {kagentUINodePortPatch()},
 	}
-	for _, component := range hostNetworkComponents {
+	for _, component := range hostNetworkComponents(cfg) {
 		patches[component] = []kustomizePatch{hostNetworkPatch(component)}
+	}
+	if musterSidecar(cfg) {
+		patches[componentMuster] = append(patches[componentMuster], dexLocalhostPatch(componentMuster, cfg.DexPort))
 	}
 	if cfg.KlausGatewayEnabled() {
 		patches[klausGatewayComponent] = append(patches[klausGatewayComponent], slackAPIPatch(), labCAPatch())

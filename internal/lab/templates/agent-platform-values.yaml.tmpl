@@ -356,6 +356,17 @@ mcp-kubernetes:
 muster:
   networkPolicy:
     enabled: false
+{{- if .Platform.MusterPodNetwork }}
+  # platform.musterPodNetwork: muster on the pod network in an installation's
+  # HA shape — two replicas sharing the Valkey stores, a budget that keeps one
+  # answering through a voluntary disruption. The empty maxUnavailable clears
+  # the meta chart's single-replica budget (a PDB carries one of the two).
+  replicaCount: {{ .MusterReplicas }}
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+    maxUnavailable: ""
+{{- end }}
   # Who may write MCPServer / Workflow CRs *through muster*. These are session
   # writes made with the caller's own identity, so plain k8s RBAC authorizes
   # them — muster only renders the namespaced Role + RoleBinding.

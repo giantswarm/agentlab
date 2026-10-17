@@ -22,6 +22,7 @@ const (
 	stageMusterSession        = "muster session"
 	stageKubernetesTools      = "Kubernetes tools"
 	stageMCPToolCall          = "MCP tool call"
+	stageMusterReplicas       = "muster replicas"
 	stageProvidedAPIs         = "provided APIs"
 	stageFleetAdmission       = "fleet admission"
 	stageDexReach             = "Dex reach"
@@ -224,6 +225,32 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 	note("namespaces: %s", strings.Join(names, ", "))
 
 	verdict := "PASS: Claude Code -> muster (Dex) -> mcp-kubernetes -> kind apiserver"
+
+	// muster on the pod network (platform.musterPodNetwork,
+	// platformtest_muster.go): two Ready replicas behind the edge, and the
+	// session's calls answered while one of them is deleted and replaced.
+	p.begin(stageMusterReplicas, "muster on the pod network: %d replicas behind the edge, one deleted mid-session", cfg.MusterReplicas())
+	if !cfg.Platform.MusterPodNetwork {
+		p.skip("platform.musterPodNetwork is off: muster runs on the host network at one replica")
+	} else {
+		probeID := 100
+		probe := func() error {
+			probeID++
+			res, err := call(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/list"}`, probeID))
+			if err != nil {
+				return err
+			}
+			if res["error"] != nil || res["result"] == nil {
+				return fmt.Errorf("tools/list answered %v", res["error"])
+			}
+			return nil
+		}
+		avail, err := proveMusterAvailability(context.Background(), cfg, probe)
+		if err != nil {
+			return "", err
+		}
+		verdict += fmt.Sprintf("\nPASS: muster runs %d Ready replicas on the pod network behind the edge (PodDisruptionBudget minAvailable 1); pod %s deleted, %s Ready in its place within %s, all %d calls of one MCP session answered meanwhile", len(avail.pods), avail.deleted, avail.replacement, avail.replaced, avail.calls)
+	}
 
 	// The APIs the lab provides itself (providedapis.go), as `kubectl
 	// api-resources` would list them: a component chart that renders a

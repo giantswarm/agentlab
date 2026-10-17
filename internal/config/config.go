@@ -484,6 +484,16 @@ type Platform struct {
 	// klaus-gateway-test` proves it next to the host-mode gateway
 	// (klausgateway.go).
 	KlausGateway KlausGateway `yaml:"klausGateway"`
+	// MusterPodNetwork runs muster the way an installation does: on the pod
+	// network at two replicas behind the edge, a PodDisruptionBudget of
+	// minAvailable 1 — the shape muster's availability work is proven in.
+	// The issuer stays reachable from its pods as from every other platform
+	// pod: the dex-localhost sidecar while it is spelled localhost, cluster
+	// DNS under platform.tls. Off (the default), muster runs on the host
+	// network at one replica, which muster's direct debug port (musterPort)
+	// needs; with it on that port answers nothing. --muster-pod-network turns
+	// it on. See docs/platform.md "muster on the pod network".
+	MusterPodNetwork bool `yaml:"musterPodNetwork,omitempty"`
 	// GitHub registers GitHub's hosted MCP server with muster, signed in to
 	// as the person through an OAuth client (internal/lab/githubmcp.go).
 	GitHub GitHub `yaml:"github"`
@@ -2133,6 +2143,16 @@ func (c *Config) TenantsEnabled() bool {
 // component: the platform with its agents runtime, and the key on.
 func (c *Config) KlausGatewayEnabled() bool {
 	return c.Platform.Enabled && c.Platform.Agents && c.Platform.KlausGateway.Enabled
+}
+
+// MusterReplicas is the number of muster pods the lab runs: two on the pod
+// network (Platform.MusterPodNetwork), else one — a host-network pod binds
+// its port on the single kind node, so a second one would never start.
+func (c *Config) MusterReplicas() int {
+	if c.Platform.MusterPodNetwork {
+		return 2
+	}
+	return 1
 }
 
 // ClusterManagerEnabled reports whether the lab turns the chart's

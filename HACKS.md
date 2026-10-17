@@ -166,7 +166,9 @@ with hostNetwork a default rolling update deadlocks on a single node because
 both pods want :8090. For the same reason the lab runs one replica: the
 agent-platform chart's HA default of two muster replicas would leave the
 second pod Pending on the single node and the HelmRelease never Ready. The muster chart (checked through 5.6.2) exposes no
-`hostNetwork`, `dnsPolicy` or `strategy` values; the Backstage chart neither.
+`hostNetwork`, `dnsPolicy` or `strategy` values; the Backstage chart neither. The
+option `platform.musterPodNetwork` drops the patch for muster: two replicas on
+the pod network, the issuer bridged by the U13 sidecar.
 Since 2026-09-08 the patch is a Kustomize strategic merge in
 `components.muster.postRenderers` / `components.backstage.postRenderers`
 (`postrenderers.go`), which the agent-platform chart forwards to the component

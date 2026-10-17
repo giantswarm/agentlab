@@ -106,6 +106,9 @@ func BeekeeperDecisionsTest(cfg *config.Config, opts BeekeeperDecisionsTestOptio
 	if !cfg.Platform.Enabled {
 		return fmt.Errorf("the platform is off in %s — the answers run through its muster; enable it and run `agentlab platform` first", config.File)
 	}
+	if cfg.Platform.MusterPodNetwork {
+		return fmt.Errorf("platform.musterPodNetwork is on in %s: this proof reaches muster in the node's network on :%d, where only a host-network muster listens; run it on a lab with the option off (`agentlab configure --muster-pod-network=false`, then `agentlab platform`)", config.File, musterNodePort)
+	}
 	asker, other, group, err := beekeeperUsers(cfg)
 	if err != nil {
 		return err
