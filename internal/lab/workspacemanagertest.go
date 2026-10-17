@@ -17,9 +17,9 @@ import (
 // list_providers, called through muster as the admin, names every provider
 // instance the lab configured (workspaceprovider.go) and nothing else — the
 // fake, the github instance once its App and Secret are in place, or both.
-// The manager runs with kagent's address: without it no session directory
-// is ever cleaned up (every Workspace reads SessionsCleanedUp=False
-// KagentNotConfigured). A manager whose registration muster pins to a
+// With the agents on, the manager runs with kagent's address: without it no
+// session directory is ever cleaned up (every Workspace reads
+// SessionsCleanedUp=False KagentNotConfigured). A manager whose registration muster pins to a
 // provider App (workspacemustergrant.go) shows its tools only to a person
 // who granted that App: the admin and the viewer grant the lab GitHub's
 // first; a pin to an App of a real provider, which no headless walk can
@@ -99,10 +99,16 @@ func proveWorkspaceManager(cfg *config.Config) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := judgeKagentAddress(flags); err != nil {
-		return nil, err
+	// Without the agents there is no kagent to list Sessions from: the
+	// chart derives no address, and no Session has a directory to clean up.
+	if cfg.Platform.Agents {
+		if err := judgeKagentAddress(flags); err != nil {
+			return nil, err
+		}
+		note("the session directories' cleanup lists kagent's Sessions at %s, a directory going %s after its last turn", flagValue(flags, sessionsKagentArg), cmp.Or(flagValue(flags, sessionsCleanupArg), "the manager's default"))
+	} else {
+		note("the agents are off: the manager runs without kagent's address, and no Session has a directory to clean up")
 	}
-	note("the session directories' cleanup lists kagent's Sessions at %s, a directory going %s after its last turn", flagValue(flags, sessionsKagentArg), cmp.Or(flagValue(flags, sessionsCleanupArg), "the manager's default"))
 
 	// What the install configured: the instances the values rendered, read
 	// the way the install reads them (the github instance's Secret keys
