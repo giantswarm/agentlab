@@ -480,6 +480,8 @@ session ID for its format only, so a session needs no affinity: a request on
 the other replica is served as is. Backstage stays on the host network. The
 direct debug port (`platform.musterPort`) answers nothing in this shape: use
 the edge or `kubectl -n agent-platform port-forward svc/muster 8090:8090`.
+`agentlab beekeeper-decisions-test` reaches muster on that port in the node's
+network and refuses to run with the option on.
 
 `agentlab platform-test` adds its `muster replicas` stage with the option on:
 the Deployment's two Ready pods off the host network, each with the sidecar,

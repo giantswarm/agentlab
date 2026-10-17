@@ -51,7 +51,8 @@ const (
 	// sign in to and what the portal lists.
 	oauthFixtureServer = "lab-oauth-fixture"
 	// oauthFixtureURL is muster's own protected /mcp, in-cluster (the muster
-	// Service; the pod is hostNetwork, so the Service forwards to the node).
+	// Service, which reaches the host-network pod on the node and the
+	// pod-network replicas of platform.musterPodNetwork alike).
 	oauthFixtureURL = "http://" + componentMuster + "." + platformNamespace + ".svc.cluster.local:8090/mcp"
 	// oauthProxyStartPath is muster's OAuth proxy start endpoint, the path
 	// every sign-in challenge points the browser at (muster's
