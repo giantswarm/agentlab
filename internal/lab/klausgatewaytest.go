@@ -551,8 +551,8 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 		if err := ws.cleanup(); err != nil {
 			return err
 		}
-		if left := gatewayWSLeftovers(ws); len(left) > 0 {
-			return fmt.Errorf("the workspaces steps left behind: %s", strings.Join(left, "; "))
+		if len(ws.left) > 0 {
+			return fmt.Errorf("the workspaces steps left behind: %s", strings.Join(ws.left, "; "))
 		}
 		note("the Agent %s, its Sessions and the workspaces %s and %s are gone, both people disconnected from %s", gatewayWSAgent, gatewayWSPublic, gatewayWSPrivate, config.WorkspaceProviderFake)
 	}

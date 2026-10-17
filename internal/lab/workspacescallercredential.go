@@ -34,6 +34,9 @@ import (
 //     by Substrate's egress gateway (the Session Actor's own egress policy,
 //     which kagent compiles from the grant); no JWT in the sandbox's
 //     environment, /data or /workspace;
+//   - delete_session through agent-manager deletes that Session: muster's
+//     binding of its sandbox actor to the admin, made at start_session, is
+//     removed (workspacesunbind.go);
 //   - a Session of the same Agent without a workspace sends the same request:
 //     no JWT reaches the lab's GitHub.
 //
@@ -82,6 +85,9 @@ type callerCredentialProof struct {
 	// workspace; jwt is the request the API host logged from with.
 	with, without string
 	jwt           githubRequest
+	// started is when the workspace Session's start_session was called: the
+	// start of muster's log the delete_session stage reads.
+	started time.Time
 }
 
 // workspacesCallerCredentialPart runs the part in stages, as the admin.
@@ -93,7 +99,7 @@ func workspacesCallerCredentialPart(cfg *config.Config, timeout time.Duration) e
 	err := cp.run(p)
 	cp.cleanup()
 	if err == nil {
-		fmt.Printf("\nWorkspaces caller-credential part passed: a Session started in workspace %s on the provider instance %s sent a request from its sandbox to the Bearer API host %s, and the lab's GitHub received a JWT bearer with aud %s and sub %s in place of the sandbox's placeholder; no JWT in the sandbox's environment, /data or /workspace; a Session of the same Agent without a workspace got none on that host.\n",
+		fmt.Printf("\nWorkspaces caller-credential part passed: a Session started in workspace %s on the provider instance %s sent a request from its sandbox to the Bearer API host %s, and the lab's GitHub received a JWT bearer with aud %s and sub %s in place of the sandbox's placeholder; no JWT in the sandbox's environment, /data or /workspace; delete_session removed muster's binding of its sandbox; a Session of the same Agent without a workspace got none on that host.\n",
 			callerCredentialWorkspace, config.WorkspaceProviderFakeBearer, cp.apiHost, strings.Join(cp.jwt.Audience, ","), cp.jwt.Subject)
 	}
 	return p.close(err)
@@ -136,6 +142,11 @@ func (cp *callerCredentialProof) run(p *proofStages) error {
 
 	p.begin("caller-credential: the Actor's JWT", "From the sandbox, a request to %s with a placeholder Authorization: the lab's GitHub receives the Session Actor's JWT for %s; no JWT in the sandbox", cp.apiHost, config.WorkspaceProviderFakeBearer)
 	if err := cp.probe(session, true); err != nil {
+		return err
+	}
+
+	p.begin("caller-credential: delete_session", "The Session deleted through agent-manager's delete_session as %s: muster's binding of its sandbox to the person removed", adminUser.Email)
+	if err := cp.deleteSession(session.GetId()); err != nil {
 		return err
 	}
 
@@ -184,7 +195,7 @@ func (cp *callerCredentialProof) preconditions(adminUser *config.User) error {
 	if cp.api, err = dialKagentAPI(cfg, token); err != nil {
 		return err
 	}
-	cp.set = &sessionSet{api: cp.api}
+	cp.set = &sessionSet{api: cp.api, manager: cp.admin.session}
 	if err := waitHarnessReady(ctx, claudeHarness, cp.timeout); err != nil {
 		return err
 	}
@@ -268,6 +279,7 @@ func (cp *callerCredentialProof) startSession(inWorkspace bool) (*apiv1alpha1.Se
 		}
 		note("the grant names the providers %s", grantProvidersLine(claims.Providers))
 		args[startSessionGrantArg] = a.Grant
+		cp.started = time.Now()
 	}
 	env, err := cp.admin.session.callToolEnvelope(agentManagerToolPrefix+"start_session", args)
 	if err != nil {

@@ -46,7 +46,7 @@ func writeConfig(t *testing.T, dir, name string) {
 func TestResolveOrder(t *testing.T) {
 	t.Run("nothing registered: the current directory", func(t *testing.T) {
 		setup(t)
-		got, err := Resolve("", false, nil)
+		got, err := Resolve("", Enter, nil)
 		if err != nil || got.Dir != "" {
 			t.Fatalf("Resolve() = %+v, %v; want the current directory", got, err)
 		}
@@ -54,7 +54,7 @@ func TestResolveOrder(t *testing.T) {
 	t.Run("one registered lab off a terminal: refused naming it and --lab", func(t *testing.T) {
 		setup(t)
 		dir := newLab(t, "one")
-		_, err := Resolve("", false, nil)
+		_, err := Resolve("", Enter, nil)
 		if err == nil || !strings.Contains(err.Error(), "one in "+dir) || !strings.Contains(err.Error(), "--lab") {
 			t.Fatalf("Resolve() = %v, want a refusal naming one and --lab", err)
 		}
@@ -63,7 +63,7 @@ func TestResolveOrder(t *testing.T) {
 		setup(t)
 		dir := newLab(t, "one")
 		asked := false
-		got, err := Resolve("", false, func(labs []Lab) (Lab, error) { asked = true; return labs[0], nil })
+		got, err := Resolve("", Enter, func(labs []Lab) (Lab, error) { asked = true; return labs[0], nil })
 		if err != nil || !asked || got.Dir != dir {
 			t.Fatalf("Resolve() = %+v, %v (picker asked: %v); want %s from the picker", got, err, asked, dir)
 		}
@@ -72,7 +72,7 @@ func TestResolveOrder(t *testing.T) {
 		cwd := setup(t)
 		newLab(t, "one")
 		writeConfig(t, cwd, "two")
-		got, err := Resolve("", false, func([]Lab) (Lab, error) { t.Fatal("picker asked"); return Lab{}, nil })
+		got, err := Resolve("", Enter, func([]Lab) (Lab, error) { t.Fatal("picker asked"); return Lab{}, nil })
 		if err != nil || got.Dir != "" {
 			t.Fatalf("Resolve() = %+v, %v; want the current directory", got, err)
 		}
@@ -84,7 +84,7 @@ func TestResolveOrder(t *testing.T) {
 		if err := Register("two", cwd); err != nil {
 			t.Fatal(err)
 		}
-		got, err := Resolve("", false, nil)
+		got, err := Resolve("", Enter, nil)
 		if err != nil || got.Dir != "" {
 			t.Fatalf("Resolve() = %+v, %v; want the current directory", got, err)
 		}
@@ -94,7 +94,7 @@ func TestResolveOrder(t *testing.T) {
 		newLab(t, "agentlab")
 		second := newLab(t, "agentlab-2")
 		writeConfig(t, cwd, "agentlab-2")
-		got, err := Resolve("", false, func([]Lab) (Lab, error) { t.Fatal("picker asked"); return Lab{}, nil })
+		got, err := Resolve("", Enter, func([]Lab) (Lab, error) { t.Fatal("picker asked"); return Lab{}, nil })
 		if err != nil || got.Name != "agentlab-2" || got.Dir != second {
 			t.Fatalf("Resolve() = %+v, %v; want agentlab-2 in %s", got, err, second)
 		}
@@ -105,7 +105,7 @@ func TestResolveOrder(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(cwd, config.File), []byte("dexPort: 32000\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		_, err := Resolve("", false, nil)
+		_, err := Resolve("", Enter, nil)
 		if err == nil || !strings.Contains(err.Error(), "clusterName") {
 			t.Fatalf("Resolve() = %v, want a refusal naming clusterName", err)
 		}
@@ -113,15 +113,32 @@ func TestResolveOrder(t *testing.T) {
 	t.Run("create: an empty directory stays the lab", func(t *testing.T) {
 		setup(t)
 		newLab(t, "one")
-		got, err := Resolve("", true, nil)
+		got, err := Resolve("", Create, nil)
 		if err != nil || got.Dir != "" {
 			t.Fatalf("Resolve() = %+v, %v; want the current directory", got, err)
+		}
+	})
+	t.Run("here: a copy of a registered lab's agentlab.yaml is this directory", func(t *testing.T) {
+		cwd := setup(t)
+		newLab(t, "agentlab-2")
+		writeConfig(t, cwd, "agentlab-2")
+		got, err := Resolve("", Here, func([]Lab) (Lab, error) { t.Fatal("picker asked"); return Lab{}, nil })
+		if err != nil || got.Dir != "" {
+			t.Fatalf("Resolve() = %+v, %v; want the current directory", got, err)
+		}
+	})
+	t.Run("here: without an agentlab.yaml the registered labs are offered", func(t *testing.T) {
+		setup(t)
+		dir := newLab(t, "one")
+		got, err := Resolve("", Here, func(labs []Lab) (Lab, error) { return labs[0], nil })
+		if err != nil || got.Dir != dir {
+			t.Fatalf("Resolve() = %+v, %v; want %s from the picker", got, err, dir)
 		}
 	})
 	t.Run("two labs off a terminal: refused naming both and --lab", func(t *testing.T) {
 		setup(t)
 		a, b := newLab(t, "a"), newLab(t, "b")
-		_, err := Resolve("", false, nil)
+		_, err := Resolve("", Enter, nil)
 		if err == nil {
 			t.Fatal("Resolve() = nil error, want a refusal")
 		}
@@ -136,7 +153,7 @@ func TestResolveOrder(t *testing.T) {
 		newLab(t, "a")
 		b := newLab(t, "b")
 		var offered []Lab
-		got, err := Resolve("", false, func(labs []Lab) (Lab, error) { offered = labs; return labs[1], nil })
+		got, err := Resolve("", Enter, func(labs []Lab) (Lab, error) { offered = labs; return labs[1], nil })
 		if err != nil || got.Dir != b {
 			t.Fatalf("Resolve() = %+v, %v; want %s", got, err, b)
 		}
@@ -149,7 +166,7 @@ func TestResolveOrder(t *testing.T) {
 		a := newLab(t, "a")
 		newLab(t, "b")
 		writeConfig(t, cwd, "b")
-		got, err := Resolve("a", false, func([]Lab) (Lab, error) { t.Fatal("picker asked"); return Lab{}, nil })
+		got, err := Resolve("a", Enter, func([]Lab) (Lab, error) { t.Fatal("picker asked"); return Lab{}, nil })
 		if err != nil || got.Dir != a {
 			t.Fatalf("Resolve(a) = %+v, %v; want %s", got, err, a)
 		}
@@ -157,7 +174,7 @@ func TestResolveOrder(t *testing.T) {
 	t.Run("an unknown --lab is refused naming the registered ones", func(t *testing.T) {
 		setup(t)
 		a := newLab(t, "a")
-		_, err := Resolve("nope", false, nil)
+		_, err := Resolve("nope", Enter, nil)
 		if err == nil || !strings.Contains(err.Error(), `"nope"`) || !strings.Contains(err.Error(), "a in "+a) {
 			t.Fatalf("Resolve(nope) = %v, want a refusal naming a", err)
 		}
@@ -180,7 +197,7 @@ func TestPruning(t *testing.T) {
 	}
 	// The vanished lab is not offered.
 	var offered []Lab
-	if _, err := Resolve("", false, func(labs []Lab) (Lab, error) { offered = labs; return labs[0], nil }); err != nil {
+	if _, err := Resolve("", Enter, func(labs []Lab) (Lab, error) { offered = labs; return labs[0], nil }); err != nil {
 		t.Fatal(err)
 	}
 	if len(offered) != 1 || offered[0].Dir != kept {

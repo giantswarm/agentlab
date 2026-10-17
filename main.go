@@ -145,7 +145,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 
 		inGroup(groupAdvanced, platformCmd()),
 		inGroup(groupAdvanced, certsCmd()),
-		inGroup(groupAdvanced, labCmd("render", "Render every manifest from agentlab.yaml into state/ without applying anything", lab.RenderAll)),
+		inGroup(groupAdvanced, renderCmd()),
 		inGroup(groupAdvanced, labCmd("reload", "Re-render and re-apply the Dex config (after editing agentlab.yaml)", lab.ApplyDex)),
 		inGroup(groupAdvanced, selfUpdateCmd()),
 
@@ -288,6 +288,31 @@ func inGroup(id string, cmd *cobra.Command) *cobra.Command {
 	return cmd
 }
 
+// renderCmd writes every manifest of the lab into state/ without applying
+// anything. It renders the agentlab.yaml of the current directory into that
+// directory (labs.Here): a copy of a registered lab's file renders a scratch
+// lab beside it, never the registered lab's certs/ and state/, which only
+// --lab or its own directory renders.
+func renderCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "render",
+		Short: "Render every manifest from agentlab.yaml into state/ without applying anything",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadLab(labs.Here)
+			if err != nil {
+				return err
+			}
+			var taken *labs.TakenError
+			if errors.As(labs.Check(cfg.ClusterName, "."), &taken) {
+				fmt.Fprintf(os.Stderr, "Rendering this directory's %s; the lab %s registered in %s is left untouched (--lab %s renders that one)\n",
+					config.File, taken.Name, taken.Other, taken.Name)
+			}
+			return lab.RenderAll(cfg)
+		},
+	}
+}
+
 // labCmd wires a no-arg lifecycle command: load (or interactively create) the
 // config, then hand it to the lab function. Commands with flags or positional
 // args keep their own constructors below.
@@ -311,7 +336,7 @@ func labCmd(use, short string, run func(*config.Config) error) *cobra.Command {
 // a terminal, and otherwise refuses with a pointer to `agentlab configure
 // --defaults`.
 func loadConfig() (*config.Config, error) {
-	return loadLab(false)
+	return loadLab(labs.Enter)
 }
 
 // loadProofLab is loadConfig for the proofs: before a proof's first step,
@@ -329,9 +354,9 @@ func loadProofLab() (*config.Config, error) {
 	return cfg, nil
 }
 
-// loadLab is loadConfig for either kind of command: create is enterLab's.
-func loadLab(create bool) (*config.Config, error) {
-	if err := enterLab(create); err != nil {
+// loadLab is loadConfig for every kind of command: mode is enterLab's.
+func loadLab(mode labs.Mode) (*config.Config, error) {
+	if err := enterLab(mode); err != nil {
 		return nil, err
 	}
 	cfg, err := loadOrCreateConfig()
@@ -353,17 +378,17 @@ var labFlag string
 // agentlab.yaml in the current directory names, the person's pick on a
 // terminal; never a default (labs.Resolve) — and changes into its
 // directory, so every lab path (agentlab.yaml, certs/, state/) resolves there
-// unchanged. create is for the commands that make a lab where they run
-// (`configure`, `up`): without --lab and an agentlab.yaml here they create
-// one here rather than reach for another lab. A lab entered from elsewhere is
-// named on stderr, so the output never leaves the person guessing which lab
-// it came from.
-func enterLab(create bool) error {
+// unchanged. mode is labs.Resolve's: labs.Create for the commands that make
+// a lab where they run (`configure`, `up`), labs.Here for `render`, which
+// writes the files of the agentlab.yaml here and no other lab's. A lab
+// entered from elsewhere is named on stderr, so the output never leaves the
+// person guessing which lab it came from.
+func enterLab(mode labs.Mode) error {
 	var pick labs.Picker
 	if term.IsTerminal(int(os.Stdin.Fd())) {
 		pick = pickLab
 	}
-	l, err := labs.Resolve(labFlag, create, pick)
+	l, err := labs.Resolve(labFlag, mode, pick)
 	if err != nil {
 		return err
 	}
@@ -627,7 +652,7 @@ func upCmd() *cobra.Command {
 		Short: "Create the kind cluster, deploy Dex and the enabled components, and verify the OIDC chain",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadLab(true)
+			cfg, err := loadLab(labs.Create)
 			if err != nil {
 				return err
 			}
@@ -871,7 +896,7 @@ var formTerminal = func() bool {
 
 func configureCmd() *cobra.Command {
 	var defaults, accessible bool
-	var platform, agents, observability, backstage, modelManager, vmManager, klausGateway, musterPodNetwork, alertmanager bool
+	var platform, agents, observability, backstage, modelManager, vmManager, klausGateway, musterPodNetwork, alertmanager, installationsPage bool
 	var serving, workspaces, workspacesCSICompanion, coding, tenants, github, githubSignIn bool
 	var githubSignInClientID string
 	var codingHarnesses []string
@@ -893,7 +918,7 @@ func configureCmd() *cobra.Command {
 			if !defaults && !accessible && !accessibleMode() && !formTerminal() {
 				return errHeadlessForm
 			}
-			if err := enterLab(true); err != nil {
+			if err := enterLab(labs.Create); err != nil {
 				return err
 			}
 			cfg, err := config.Load()
@@ -941,6 +966,9 @@ func configureCmd() *cobra.Command {
 					return fmt.Errorf("--portal %q: the portal modes are %s", portal, strings.Join(config.PortalModes, ", "))
 				}
 				cfg.Backstage.Portal = portal
+			}
+			if cmd.Flags().Changed("installations-page") {
+				cfg.Backstage.InstallationsPage = installationsPage
 			}
 			if cmd.Flags().Changed("chart-version") {
 				cfg.Platform.ChartVersion = chartVersion
@@ -1127,6 +1155,7 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&agents, "agents", false, "enable/disable the agents runtime (kagent, part of the platform install)")
 	cmd.Flags().BoolVar(&observability, "observability", false, "enable/disable the observability stack (Prometheus + mcp-prometheus)")
 	cmd.Flags().BoolVar(&backstage, "backstage", false, "enable/disable Backstage (implies the platform)")
+	cmd.Flags().BoolVar(&installationsPage, "installations-page", false, "enable the portal's Installations page (page:gs/installations and its nav item, off in the agent-platform chart) for the portal's installations e2e specs, run with AGENTLAB_INSTALLATIONS_PAGE=1; the next agentlab platform rolls Backstage onto it; --installations-page=false turns it off again")
 	cmd.Flags().StringVar(&portal, "portal", "", fmt.Sprintf("the Backstage portal `mode` (%s): %s serves the Agent Platform shell (app.portals.agentPlatform), %s the classic Platform Portal alone; the next agentlab platform rolls Backstage onto it", strings.Join(config.PortalModes, ", "), config.PortalAgentPlatform, config.PortalClassic))
 	cmd.Flags().BoolVar(&modelManager, "model-manager", false, "pin managed models on/off (needs agents); without it a first configure follows the host model servers the discovery finds and a later one keeps the recorded choice")
 	cmd.Flags().StringVar(&chartVersion, "chart-version", "", "the agent-platform chart release to install (an exact version; default "+config.DefaultChartVersion+")")
@@ -1191,7 +1220,11 @@ func printSaved(cfg *config.Config, disc *lab.Discovery) {
 		fmt.Printf("  dev image  %s -> %s\n", name, cfg.Platform.DevImages[name])
 	}
 	if cfg.Backstage.Enabled {
-		fmt.Printf("  backstage  true (portal %s)\n", cfg.Backstage.Portal)
+		page := ""
+		if cfg.Backstage.InstallationsPage {
+			page = ", installations page"
+		}
+		fmt.Printf("  backstage  true (portal %s%s)\n", cfg.Backstage.Portal, page)
 	} else {
 		fmt.Println("  backstage  false")
 	}
@@ -1625,7 +1658,7 @@ func workspacesTestCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&opts.StorageOnly, "storage-only", false, "prove the storage alone, without the claude Session admitted on the volume")
-	cmd.Flags().StringVar(&opts.Part, "part", "", "run one part instead of the storage proof: "+strings.Join(lab.WorkspacesParts, ", ")+" (sync: the workspaces defined through the workspace-manager and their mirrors, as [email], default the admin; access: the provider sign-in and the access check at a Session's start, as the admin and [email], default dev@lab.local; gitlab: the provider instance gitlab end to end, skipped without one; sessions: parallel Sessions in their session directories and the cleanup, as the admin; caller-credential: a Session's actor JWT on the Bearer API host of the provider instance fake-bearer, as the admin; write: git push and gh pr create from a workspace Session on the claude Harness as the admin with the workspace App's token from muster, pushes the App may not make refused, as the admin; refresh: a Session start past the workspace-manager's refresh threshold requests a sync without waiting for it, none within it or without a start, as the admin)")
+	cmd.Flags().StringVar(&opts.Part, "part", "", "run one part instead of the storage proof: "+strings.Join(lab.WorkspacesParts, ", ")+" (sync: the workspaces defined through the workspace-manager and their mirrors, as [email], default the admin; access: the provider sign-in and the access check at a Session's start, as the admin and [email], default dev@lab.local; gitlab: the provider instance gitlab end to end, skipped without one; sessions: parallel Sessions in their session directories and the cleanup, as the admin; caller-credential: a Session's actor JWT on the Bearer API host of the provider instance fake-bearer and muster's binding of its sandbox removed by delete_session, as the admin; write: git push and gh pr create from a workspace Session on the claude Harness with the workspace App's token from muster, pushes the App may not make refused, as the admin; refresh: a Session start past the workspace-manager's refresh threshold requests a sync without waiting for it, none within it or without a start, as the admin)")
 	cmd.Flags().IntVar(&opts.Sessions, "sessions", 0, fmt.Sprintf("how many Sessions --part sessions starts at once, alternating the claude and the kagent Harness (default %d)", lab.DefaultWorkspacesSessions))
 	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", lab.DefaultWorkspacesReadyTimeout, "how long each wait may take: the storage's rollouts, a claim bound, a pod finished, a volume gone, a sync cycle")
 	return cmd

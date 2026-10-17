@@ -117,6 +117,7 @@ const (
 	conditionAccepted   = "Accepted"
 	conditionCompatible = "Compatible"
 	readyReasonPending  = "ActorTemplatePending"
+	readyReasonRetrying = "ActorTemplateRetrying"
 	helmInstallFailed   = "InstallFailed"
 	helmUpgradeFailed   = "UpgradeFailed"
 )
@@ -813,7 +814,8 @@ func readAgentReadinessOn(name, harness string) (agentReadiness, error) {
 // terminalAgentFailure reads an Agent's conditions for a failure the
 // controller will not retry: ResolvedRefs or Compatible False, or Ready False
 // for a reason other than the golden snapshot still pending
-// (ActorTemplatePending). ActorTemplateFailed carries Substrate's own error
+// (ActorTemplatePending) or its boot started over after a failed attempt
+// (ActorTemplateRetrying, while attempts are left). ActorTemplateFailed carries Substrate's own error
 // for the boot, ActorTemplateConflict an immutable-template clash. The text
 // is the condition as the evidence quotes it.
 func terminalAgentFailure(s *agentStatus) (string, bool) {
@@ -825,7 +827,7 @@ func terminalAgentFailure(s *agentStatus) (string, bool) {
 		case conditionResolvedRefs, conditionCompatible:
 			return c.String(), true
 		case conditionReady:
-			if c.Reason != readyReasonPending {
+			if c.Reason != readyReasonPending && c.Reason != readyReasonRetrying {
 				return c.String(), true
 			}
 		}

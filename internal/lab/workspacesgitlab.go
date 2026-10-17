@@ -236,7 +236,7 @@ func (gp *gitlabProof) preconditions(email string) error {
 	if gp.adminAPI, err = dialKagentAPI(cfg, token); err != nil {
 		return err
 	}
-	gp.sessions = &sessionSet{api: gp.adminAPI}
+	gp.sessions = &sessionSet{api: gp.adminAPI, manager: gp.admin.session}
 	if err := waitHarnessReady(context.Background(), rig.ClaudeHarness, gp.timeout); err != nil {
 		return err
 	}

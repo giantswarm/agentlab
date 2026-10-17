@@ -146,3 +146,16 @@ func TestGitLabFormStep(t *testing.T) {
 		t.Errorf("another page: ok %v, err %v", ok, err)
 	}
 }
+
+func TestGrantHeld(t *testing.T) {
+	for text, want := range map[string]bool{
+		"Successfully connected to 'workspace-manager'!": true,
+		"Already authenticated to workspace-manager":     true,
+		"Authentication required: open the link":         false,
+		"":                                               false,
+	} {
+		if got := grantHeld(text); got != want {
+			t.Errorf("grantHeld(%q) = %t, want %t", text, got, want)
+		}
+	}
+}

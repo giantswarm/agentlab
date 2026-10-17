@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 
@@ -245,5 +246,41 @@ func TestBackstagePortalModeRefusesUnknown(t *testing.T) {
 	err := cfg.Validate()
 	if err == nil || !strings.Contains(err.Error(), "backstage.portal") {
 		t.Fatalf("Validate() = %v, want the backstage.portal refusal", err)
+	}
+}
+
+// TestBackstageInstallationsPage pins backstage.installationsPage: on, the
+// lab's values enable the portal's Installations page and its nav item next
+// to Deployments and Clusters, so the portal's installations e2e specs have a
+// page to drive; off (the default), the extensions are what they were.
+func TestBackstageInstallationsPage(t *testing.T) {
+	base := []string{"page:gs/deployments", "nav-item:gs/deployments", "page:gs/clusters", "nav-item:gs/clusters"}
+	for _, tc := range []struct {
+		name string
+		on   bool
+		want []string
+	}{
+		{"off", false, base},
+		{"on", true, append(slices.Clone(base), "page:gs/installations", "nav-item:gs/installations")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.Default()
+			cfg.Backstage.InstallationsPage = tc.on
+			raw, err := renderTemplate(cfg, "agent-platform-values.yaml.tmpl", nil)
+			if err != nil {
+				t.Fatalf("render: %v", err)
+			}
+			var values struct {
+				Backstage struct {
+					EnabledExtensions []string `yaml:"enabledExtensions"`
+				} `yaml:"backstage"`
+			}
+			if err := yaml.Unmarshal(raw, &values); err != nil {
+				t.Fatalf("values are not YAML: %v\n%s", err, raw)
+			}
+			if !slices.Equal(values.Backstage.EnabledExtensions, tc.want) {
+				t.Errorf("backstage.enabledExtensions = %v, want %v", values.Backstage.EnabledExtensions, tc.want)
+			}
+		})
 	}
 }

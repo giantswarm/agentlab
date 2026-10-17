@@ -1320,6 +1320,11 @@ type Backstage struct {
 	// is an app-config file Backstage deep-merges last, so the switch never
 	// restates a chart list such as backstage.extraEnvVars.
 	Portal string `yaml:"portal"`
+	// InstallationsPage enables the portal's Installations page and its
+	// sidebar entry (page:gs/installations, nav-item:gs/installations), which
+	// the agent-platform chart turns off and the Backstage app ships off: the
+	// portal's installations e2e specs drive it (AGENTLAB_INSTALLATIONS_PAGE=1).
+	InstallationsPage bool `yaml:"installationsPage,omitempty"`
 }
 
 // The Backstage portal modes (backstage.portal).
