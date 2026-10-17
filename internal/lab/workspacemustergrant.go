@@ -109,6 +109,31 @@ func workspaceManagerTakesGrant(cfg *config.Config) bool {
 	return err == nil && !v.LessThan(workspaceManagerGrantFloor)
 }
 
+// rangeFloorAdmitsGrant says whether every version the range admits is at or
+// above the grant floor: each of its ||-alternatives carries a lower bound
+// (>=, >, = or a bare version) of the floor or newer. Such a range pins
+// without listing the registry's tags.
+func rangeFloorAdmitsGrant(versionRange string) bool {
+	alternatives := strings.Split(versionRange, "||")
+	for _, alt := range alternatives {
+		floored := false
+		for _, term := range strings.FieldsFunc(alt, func(r rune) bool { return r == ' ' || r == ',' }) {
+			bound := strings.TrimLeft(term, ">=v")
+			if strings.HasPrefix(term, "<") || strings.HasPrefix(term, "!") || strings.ContainsAny(bound, "~^*xX") {
+				continue
+			}
+			v, err := semver.NewVersion(bound)
+			if err == nil && !v.LessThan(workspaceManagerGrantFloor) {
+				floored = true
+			}
+		}
+		if !floored {
+			return false
+		}
+	}
+	return len(alternatives) > 0
+}
+
 // workspaceManagerSource is components.workspace-manager as the install
 // reads it: the chart's defaults, platform.valuesFiles over them.
 type workspaceManagerSource struct {
@@ -119,7 +144,8 @@ type workspaceManagerSource struct {
 // workspaceManagerVersion resolves the workspace-manager's chart version the
 // way source-controller resolves the component's OCIRepository: the highest
 // tag the range (and the semverFilter) admits; "" for a chart that names no
-// such component. Memoized per source.
+// such component; the grant floor itself for a range whose floor is at or
+// above it, without listing tags. Memoized per source.
 func workspaceManagerVersion(cfg *config.Config) (string, error) {
 	src := workspacesChartFor(cfg).Manager
 	if len(cfg.Platform.ValuesFiles) > 0 {
@@ -131,6 +157,9 @@ func workspaceManagerVersion(cfg *config.Config) (string, error) {
 	}
 	if src.repository == "" || src.versionRange == "" {
 		return "", nil // a chart without the component: no manager to pin
+	}
+	if rangeFloorAdmitsGrant(src.versionRange) {
+		return workspaceManagerGrantFloor.Original(), nil // no tag below the floor can resolve
 	}
 	workspaceManagerVersionMu.Lock()
 	defer workspaceManagerVersionMu.Unlock()

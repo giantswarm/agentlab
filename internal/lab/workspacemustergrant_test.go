@@ -60,9 +60,43 @@ func TestWorkspaceManagerTakesGrant(t *testing.T) {
 		t.Error("platform.valuesFiles' range of 0.10.0-rc.5 does not pin the manager")
 	}
 
+	floored := source
+	floored.versionRange = ">=0.10.0-rc.5 <1.0.0"
+	stubWorkspacesChart(t, chartWorkspaces{Carries: true, Organizations: true, Manager: floored})
+	stubWorkspaceManagerTags(t)
+	listChartTags = func(url string, _ bool) ([]string, error) {
+		t.Errorf("a range floored at 0.10.0-rc.5 listed the tags of %s", url)
+		return nil, nil
+	}
+	if !workspaceManagerTakesGrant(workspaceLab("")) {
+		t.Error("a range floored at 0.10.0-rc.5 does not pin the manager")
+	}
+
 	stubWorkspacesChart(t, chartWorkspaces{Carries: true})
 	if workspaceManagerTakesGrant(workspaceLab("")) {
 		t.Error("a chart without the component pins a manager")
+	}
+}
+
+// A range pins without a tag listing only when every alternative's lower
+// bound is at or above 0.10.0-0.
+func TestRangeFloorAdmitsGrant(t *testing.T) {
+	for r, want := range map[string]bool{
+		">=0.10.0-rc.5 <1.0.0":    true,
+		">=0.10.0":                true,
+		"0.10.0-rc.5":             true,
+		"=0.11.0":                 true,
+		">= 0.10.0, < 1.0.0":      true,
+		">=0.5.0 <1.0.0":          false,
+		">0.9.0":                  false,
+		"<1.0.0":                  false,
+		"~0.10.0":                 false,
+		">=0.10.0 || >=0.9.0":     false,
+		">=0.10.0 || 0.12.0-rc.1": true,
+	} {
+		if got := rangeFloorAdmitsGrant(r); got != want {
+			t.Errorf("rangeFloorAdmitsGrant(%q) = %v, want %v", r, got, want)
+		}
 	}
 }
 
