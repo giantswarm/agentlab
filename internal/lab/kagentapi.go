@@ -899,6 +899,9 @@ type turn struct {
 	// working, in order: a runtime's word before the answer, such as the
 	// workspace setup's.
 	notices []string
+	// tools are the results of the tools the turn ran, in order: the
+	// harness's function_response artifacts.
+	tools []harnessToolResult
 	// approval is the tool_approval_request the task paused on at
 	// input-required, nil otherwise.
 	approval *toolApprovalRequest
@@ -983,6 +986,7 @@ func (t *turn) addArtifact(artifact *a2a.Artifact, appendChunk bool) {
 	if _, seen := t.artifactText[artifact.ID]; !seen {
 		t.artifactOrder = append(t.artifactOrder, artifact.ID)
 	}
+	t.tools = append(t.tools, toolResults(artifact.Parts)...)
 	text := partsText(artifact.Parts)
 	if appendChunk {
 		t.artifactText[artifact.ID] += text
@@ -1025,6 +1029,62 @@ func partsText(parts a2a.ContentParts) string {
 		}
 	}
 	return strings.Join(texts, "")
+}
+
+// harnessToolResult is one tool's result as the harness reports it: the tool's
+// name (command_execution for a shell command, <server>.<tool> for an MCP
+// tool on codex) and its output, a command's output or the result's JSON.
+type harnessToolResult struct {
+	name, output string
+}
+
+// toolActivityTypeKey is the part metadata a harness types its tool
+// activity with; functionResponseType is a tool's result.
+const (
+	toolActivityTypeKey  = "kagent_type"
+	functionResponseType = "function_response"
+)
+
+// toolResults reads the tool results among an artifact's parts: data parts
+// typed function_response, carrying {id, name, response: {result}}.
+func toolResults(parts a2a.ContentParts) []harnessToolResult {
+	var results []harnessToolResult
+	for _, part := range parts {
+		if part == nil || stringOf(part.Metadata[toolActivityTypeKey]) != functionResponseType {
+			continue
+		}
+		data, ok := part.Data().(map[string]any)
+		if !ok {
+			continue
+		}
+		response, _ := data["response"].(map[string]any)
+		results = append(results, harnessToolResult{name: stringOf(data["name"]), output: toolOutput(response["result"])})
+	}
+	return results
+}
+
+// toolOutput words a tool's result: a shell command's output where the
+// harness reports one, the result as JSON otherwise.
+func toolOutput(result any) string {
+	if fields, ok := result.(map[string]any); ok {
+		if output, ok := fields["output"].(string); ok {
+			return output
+		}
+	}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		return ""
+	}
+	return string(raw)
+}
+
+// toolOutputs joins the outputs of the turn's tools, one per line.
+func (t *turn) toolOutputs() string {
+	outputs := make([]string, 0, len(t.tools))
+	for _, tool := range t.tools {
+		outputs = append(outputs, tool.output)
+	}
+	return strings.Join(outputs, "\n")
 }
 
 // turn drives one streamed turn on the session to the end of its stream
