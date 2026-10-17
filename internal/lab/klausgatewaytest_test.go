@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -21,6 +22,8 @@ import (
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/giantswarm/klaus-gateway/pkg/auth/musterlink"
+
+	"github.com/giantswarm/agentlab/internal/config"
 )
 
 // Fixed names of the fakes.
@@ -235,6 +238,112 @@ func TestGatewayProcessExitsBeforeReady(t *testing.T) {
 	}
 	if err := g.stop(); err != nil {
 		t.Errorf("stop() after the failed start: %v", err)
+	}
+}
+
+// fakeDockerScript stands in for the docker CLI in $FAKE_DOCKER_DIR: the
+// image is cached once pulled (`image inspect` fails before); `run` pulls an
+// uncached image itself, taking $FAKE_PULL seconds, then creates the
+// container (the file container), marks it ready unless $FAKE_NEVER_READY,
+// and runs until killed; `stop` ends it unless $FAKE_STOP_MISSES (the client
+// still pulling when the stop came); `rm -f` removes it.
+const fakeDockerScript = `#!/bin/sh
+d="$FAKE_DOCKER_DIR"
+echo "$*" >> "$d/calls"
+case "$1" in
+image) [ -e "$d/pulled" ] ;;
+pull) sleep "$FAKE_PULL"; touch "$d/pulled" ;;
+run)
+  [ -e "$d/pulled" ] || { sleep "$FAKE_PULL"; touch "$d/pulled"; }
+  echo $$ > "$d/pid"; touch "$d/container"
+  [ -n "$FAKE_NEVER_READY" ] || touch "$d/ready"
+  exec sleep 600 ;;
+stop)
+  [ -z "$FAKE_STOP_MISSES" ] && [ -e "$d/container" ] || exit 1
+  rm -f "$d/container" "$d/ready"; kill "$(cat "$d/pid")" ;;
+rm) rm -f "$d/container" "$d/ready" ;;
+esac
+`
+
+// fakeDockerGateway puts fakeDockerScript first on PATH and serves the
+// gateway's readiness on an admin port of its own, 200 while the fake's
+// container is ready; it returns the fake's directory and a gateway on it.
+func fakeDockerGateway(t *testing.T, env map[string]string) (string, *gatewayProcess) {
+	t.Helper()
+	bin, dir := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, dockerBin), []byte(fakeDockerScript), 0o700); err != nil { // #nosec G306 -- the fake CLI must be executable
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("FAKE_DOCKER_DIR", dir)
+	for k, v := range env {
+		t.Setenv(k, v)
+	}
+	admin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := os.Stat(filepath.Join(dir, "ready")); err != nil || r.URL.Path != gatewayReadyPath {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}
+	}))
+	t.Cleanup(admin.Close)
+	u, _ := url.Parse(admin.URL)
+	port, _ := strconv.Atoi(u.Port())
+	g := newGatewayProcess(KlausGatewayTestOptions{GatewayImage: "gsoci.azurecr.io/giantswarm/klaus-gateway:9.9.9", Port: port - 1}.withDefaults(), t.TempDir(), "/ca", "grpcs://x:1", "http://s/api", "https://m")
+	g.container, g.startWait, g.stopWait = "lab-x-"+gatewayContainerSuffix, time.Second, time.Second
+	t.Cleanup(func() { _ = g.stop() })
+	return dir, g
+}
+
+// TestGatewayImagePullNotCounted: an uncached image whose pull outlasts the
+// readiness wait still starts — the pull happens before the wait begins.
+func TestGatewayImagePullNotCounted(t *testing.T) {
+	dir, g := fakeDockerGateway(t, map[string]string{"FAKE_PULL": "2"})
+	if err := g.start(); err != nil {
+		t.Fatalf("start() with an uncached image = %v", err)
+	}
+	calls, _ := os.ReadFile(filepath.Join(dir, "calls")) // #nosec G304 -- the test's own temporary file
+	if !strings.Contains(string(calls), "pull -q "+g.opts.GatewayImage) || !strings.Contains(string(calls), "--name lab-x-"+gatewayContainerSuffix) {
+		t.Errorf("docker calls =\n%s\nwant the pull and the run of the lab's container", calls)
+	}
+}
+
+// TestGatewayTimeoutRemovesContainer: after a readiness timeout no container
+// is left, even when `docker stop` missed it and the client had to be killed.
+func TestGatewayTimeoutRemovesContainer(t *testing.T) {
+	dir, g := fakeDockerGateway(t, map[string]string{"FAKE_PULL": "0", "FAKE_NEVER_READY": "1", "FAKE_STOP_MISSES": "1"})
+	err := g.start()
+	if err == nil || !strings.Contains(err.Error(), "did not become ready") {
+		t.Fatalf("start() = %v, want the readiness timeout", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "container")); err == nil {
+		t.Error("the container outlived the readiness timeout")
+	}
+}
+
+// TestGatewayTestPortPerLab: each lab's proofs take a block of their own,
+// derived from its API server port; the container carries the lab's name.
+func TestGatewayTestPortPerLab(t *testing.T) {
+	first := &config.Config{ClusterName: config.DefaultClusterName, APIServerPort: config.DefaultAPIServerPort}
+	if got := gatewayTestPort(first); got != 18090 {
+		t.Errorf("the first lab's port = %d, want 18090", got)
+	}
+	if got := gatewayContainerName(first); got != "agentlab-klaus-gateway-test" {
+		t.Errorf("the first lab's container = %q", got)
+	}
+	if got := gatewayContainerName(&config.Config{ClusterName: "lab-b"}); got != "lab-b-klaus-gateway-test" {
+		t.Errorf("another lab's container = %q", got)
+	}
+	seen := map[int]int{}
+	for _, api := range []int{1, 6443, 6444, 6445, 6543, 6643, 30000, 65535} {
+		p := gatewayTestPort(&config.Config{APIServerPort: api})
+		if p < 1024 || p+gatewayTestPortStride > 65536 {
+			t.Errorf("apiServerPort %d: block %d..%d out of range", api, p, p+gatewayTestPortStride-1)
+		}
+		for q, other := range seen {
+			if p < q+gatewayTestPortStride && q < p+gatewayTestPortStride {
+				t.Errorf("apiServerPort %d and %d share ports (%d, %d)", api, other, p, q)
+			}
+		}
+		seen[p] = api
 	}
 }
 
