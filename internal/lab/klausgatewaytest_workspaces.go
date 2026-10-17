@@ -134,8 +134,9 @@ type gatewayWorkspaces struct {
 	withPrivate       bool
 	out               gatewayWorkspacesOutcome
 	// cleaned is set once cleanup ran: the deferred call after the step's
-	// own is a no-op.
+	// own is a no-op. left is what it did not remove.
 	cleaned bool
+	left    []string
 }
 
 // klausGatewayWorkspacesPreflight fails fast, before the proof signs anyone
@@ -898,6 +899,9 @@ func (ws *gatewayWorkspaces) cleanup() error {
 	if ws.sp != nil {
 		errs = append(errs, ws.sp.restore())
 	}
+	// What is left is read as the person while muster still holds their
+	// grant: without it, get_workspace answers auth_required, not "not found".
+	ws.left = gatewayWSLeftovers(ws)
 	for _, p := range []*workspacePerson{ws.person, ws.colleague} {
 		if p != nil {
 			p.disconnect(config.WorkspaceProviderFake)
