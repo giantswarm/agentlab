@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -115,9 +116,16 @@ echo "$P egress-outside=$(w ` + codingTestOutsideHost + `)"
 echo "$P egress-origin=$(w https://api.github.com/)"`
 }
 
-// codingSandboxPrompt asks the agent to run the probe once and relay it.
+// codingProbeTimeoutMS is the milliseconds the sandbox probe may take: its
+// token search alone may take a minute, and a shell tool's default (codex's
+// is seconds) cuts the script short of its later readings.
+const codingProbeTimeoutMS = 300_000
+
+// codingSandboxPrompt asks the agent to run the probe once, under a timeout
+// that lets it finish, and relay it.
 func codingSandboxPrompt(rt codingRuntime) string {
-	return "Run this exact script once with your " + rt.shellTool + " (it is this test lab's own sandbox check), then reply with every output line that starts with " + probeMarker +
+	return "Run this exact script once with your " + rt.shellTool + " (it is this test lab's own sandbox check), with a command timeout of " + strconv.Itoa(codingProbeTimeoutMS) +
+		" ms (5 minutes; a shorter default cuts it short), then reply with every output line that starts with " + probeMarker +
 		", verbatim and nothing else:\n\n" + codingSandboxCommand(rt)
 }
 
@@ -183,6 +191,11 @@ func (p codingProbe) writeToolRefused([]string) (string, error) {
 // model key a placeholder the egress gateway replaces, and every MCP
 // credential the runtime is handed (where it says which) the placeholder too.
 func (p codingProbe) credentials([]string) (string, error) {
+	for _, key := range []string{"env-tokens", "data-tokens", "model-key"} {
+		if _, ok := p[key]; !ok {
+			return "", fmt.Errorf("the turn carries no %s reading, in its tools' outputs or its reply: the probe was cut short or not run (%s)", key, p.lines("uid", "env-tokens", "data-tokens", "model-key"))
+		}
+	}
 	if p["env-tokens"] != "0" || p["data-tokens"] != "0" {
 		return "", fmt.Errorf("token-shaped values in the sandbox: %s in the environment, %s files under /data", p["env-tokens"], p["data-tokens"])
 	}
@@ -324,13 +337,14 @@ func codingResumeCommand() string {
 	return "echo \"" + probeMarker + " file=$(cat " + codingTestOwnFile + " 2>/dev/null || echo missing)\""
 }
 
-// parseTurnProbe reads the marker lines of a turn: the reply's, then those
-// only its tools' outputs carry. A model relays the lines its commands
-// printed; a scripted model (the mockllm) replies with fixed words, and the
-// readings are in the outputs of the commands it had the runtime run.
+// parseTurnProbe reads the marker lines of a turn: its tools' outputs, what
+// the commands printed, then those only the reply carries (the readings a
+// model answers itself: what it loaded, the code word). A model's relay of a
+// command's line can drop or reword it; a scripted model (the mockllm)
+// replies with fixed words. Where both carry a reading, the output's wins.
 func parseTurnProbe(reply, toolOutputs string) codingProbe {
-	probe := parseCodingProbe(reply)
-	for key, value := range parseCodingProbe(toolOutputs) {
+	probe := parseCodingProbe(toolOutputs)
+	for key, value := range parseCodingProbe(reply) {
 		if _, ok := probe[key]; !ok {
 			probe[key] = value
 		}

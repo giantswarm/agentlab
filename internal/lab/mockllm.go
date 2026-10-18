@@ -140,10 +140,6 @@ type (
 	}
 )
 
-// mockLLMCommandTimeout is the milliseconds a scripted shell command may
-// take: the sandbox probe's token search alone may take a minute.
-const mockLLMCommandTimeout = 300_000
-
 // mockLLMItemDone is the status of every item the script answers with;
 // the item types and a reply's content type.
 const (
@@ -161,7 +157,7 @@ func mockLLMConfig(mcpServer string) ([]mockLLMScriptEntry, error) {
 	for _, turn := range mockLLMScript() {
 		callID := "call_agentlab_" + turn.name
 		if turn.command != "" {
-			arguments, err := json.Marshal(mockLLMShellArguments{Command: turn.command, TimeoutMS: mockLLMCommandTimeout})
+			arguments, err := json.Marshal(mockLLMShellArguments{Command: turn.command, TimeoutMS: codingProbeTimeoutMS})
 			if err != nil {
 				return nil, err
 			}

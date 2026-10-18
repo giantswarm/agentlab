@@ -178,3 +178,39 @@ func TestCodingCredentialsMCP(t *testing.T) {
 		t.Error("a real MCP credential in the sandbox passed")
 	}
 }
+
+// The credentials stage judges what the probe printed, not the model's relay
+// of it: a reply that drops or rewords a line passes on valid credentials and
+// fails on a token the output shows.
+func TestCodingCredentialsFromToolOutput(t *testing.T) {
+	const output = "AGENTLAB_PROBE uid=65532\nAGENTLAB_PROBE env-tokens=0\nAGENTLAB_PROBE data-tokens=0\nAGENTLAB_PROBE model-key=placeholder\nAGENTLAB_PROBE mcp-credentials=1 0\n"
+	const reply = "AGENTLAB_PROBE uid=65532\nAGENTLAB_PROBE env-tokens=none found\n"
+	if got, err := parseTurnProbe(reply, output).credentials(nil); err != nil {
+		t.Errorf("a reply dropping and rewording probe lines failed valid credentials: %v", err)
+	} else if !strings.Contains(got, "1 MCP credentials") {
+		t.Errorf("the verdict %q misses the MCP credentials reading", got)
+	}
+	leaked := strings.Replace(output, "data-tokens=0", "data-tokens=2", 1)
+	if got, err := parseTurnProbe(reply+"AGENTLAB_PROBE data-tokens=0\n", leaked).credentials(nil); err == nil {
+		t.Errorf("a token under /data passed on the reply's word: %q", got)
+	}
+}
+
+// A reading neither the output nor the reply carries is named missing, not
+// judged as a token count.
+func TestCodingCredentialsMissingReading(t *testing.T) {
+	_, err := parseTurnProbe("", "AGENTLAB_PROBE uid=65532\nAGENTLAB_PROBE env-tokens=0\n").credentials(nil)
+	if err == nil || !strings.Contains(err.Error(), "no data-tokens reading") {
+		t.Errorf("a probe cut before its /data search: %v, wanted the missing reading named", err)
+	}
+}
+
+// The sandbox prompt asks for the command timeout the probe needs: codex's
+// default cuts the script at its /data search.
+func TestCodingSandboxPromptTimeout(t *testing.T) {
+	for name, rt := range codingRuntimes {
+		if prompt := codingSandboxPrompt(rt); !strings.Contains(prompt, "300000 ms") {
+			t.Errorf("the %s sandbox prompt names no command timeout: %q", name, prompt[:200])
+		}
+	}
+}
