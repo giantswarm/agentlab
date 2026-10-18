@@ -435,7 +435,6 @@ spec:
               mountPropagation: "Bidirectional"
             - mountPath: /csi
               name: socket-dir
-{{- if .Workspaces.Substrate }}
         - name: envoy
           image: {{ .Workspaces.Images.Proxy }}
           imagePullPolicy: IfNotPresent
@@ -464,7 +463,6 @@ spec:
             - mountPath: /run/podidentity-ca
               name: podidentity-ca
               readOnly: true
-{{- end }}
       volumes:
         - name: pods-mount-dir
           hostPath:
@@ -472,7 +470,6 @@ spec:
             type: Directory
         - name: socket-dir
           emptyDir: {}
-{{- if .Workspaces.Substrate }}
         - name: envoy-config
           configMap:
             name: csi-nfs-proxy
@@ -492,7 +489,6 @@ spec:
                     matchLabels:
                       podcert.ate.dev/canarying: live
                   path: trust-bundle.pem
-{{- end }}
 ---
 # The node plugin (deploy/csi-nfs-node.yaml) on every node: registered with
 # the kubelet at {{ .Workspaces.NodeSocketDir }}, and with Substrate's

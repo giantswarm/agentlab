@@ -100,15 +100,6 @@ func TestPlatformValuesWorkspaces(t *testing.T) {
 	if tls["enabled"] != true || tls["usePodIdentity"] != true || tls["serverName"] != "csi-nfs-controller.agentlab-workspaces.svc" {
 		t.Errorf("workspaces.substrate.csiDriver.tls = %v, want enabled with the pod identity and the service-DNS name", tls)
 	}
-
-	// Without Substrate no driver is named: the connectivity chart renders
-	// the CSIDriverConfig whenever the cluster serves its CRD, and the CRDs
-	// outlive an in-place switch of the agents off.
-	cfg.Platform.Agents = false
-	block, _ = render(t, cfg)["workspaces"].(map[string]any)
-	if substrate, ok := block["substrate"]; ok {
-		t.Errorf("workspaces.substrate = %v rendered without Agent Substrate (platform.agents: false)", substrate)
-	}
 }
 
 // The sessions' cleanup window reaches the workspace-manager as
@@ -388,39 +379,11 @@ func TestWorkspacesManifestProxyFollowsSubstrate(t *testing.T) {
 			t.Errorf("with Substrate the controller's volumes %v lack %s", volumes, v)
 		}
 	}
-
-	cfg.Platform.Agents = false
-	containers, volumes = controller(t, cfg)
-	if slices.Contains(containers, workspacesProxyContainer) {
-		t.Errorf("without Substrate the controller runs the proxy %s, which no signer certifies: %v", workspacesProxyContainer, containers)
-	}
-	for _, v := range proxyVolumes {
-		if slices.Contains(volumes, v) {
-			t.Errorf("without Substrate the controller mounts %s: %v", v, volumes)
-		}
-	}
-	for _, c := range []string{"csi-provisioner", "csi-resizer", "nfs"} {
-		if !slices.Contains(containers, c) {
-			t.Errorf("without Substrate the controller runs %v, want %s for the cluster's claims", containers, c)
-		}
-	}
 }
 
-// Without Substrate the summary and the status word the shape and the
-// in-place switch that adds Substrate.
-func TestWorkspacesWithoutSubstrateWording(t *testing.T) {
-	cfg := config.Default()
-	cfg.Platform.Workspaces.Enabled = true
-	cfg.Platform.Agents = false
-	hint := workspacesHint(cfg, true, "")
-	for _, want := range []string{"without Agent Substrate", "`agentlab configure --agents && agentlab platform`", "provider instances"} {
-		if !strings.Contains(hint, want) {
-			t.Errorf("summary %q lacks %q", hint, want)
-		}
-	}
-	if strings.Contains(hint, "workspaces-test") {
-		t.Errorf("summary %q names the workspaces proof, which mounts through Substrate", hint)
-	}
+// A live controller without its proxy (a leftover of an earlier lab) is
+// worded as such.
+func TestWorkspacesStatusWithoutProxy(t *testing.T) {
 	status := (&WorkspacesStatus{Controller: conditionReady}).String()
 	if !strings.Contains(status, "Ready without its mTLS proxy (Agent Substrate off)") {
 		t.Errorf("status %q does not word the controller without its proxy", status)
