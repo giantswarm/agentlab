@@ -1098,7 +1098,13 @@ not.
 
 A real model is named with `--model-config`: a hosted OpenAI Responses API
 model (an `OpenAI` extraModels entry with `apiFormat: responses` and its key
-in `apiKeyEnv`) relays the probe verbatim. No host model passes every stage
+in `apiKeyEnv`). On every model the stages judge the probe's lines from the
+turn's tool results first, what the commands printed; the reply fills only
+the readings no command prints (what the session loaded, the code word), so a
+relay that drops or rewords a line changes no verdict. The sandbox prompt asks
+for a command timeout of 5 minutes, since codex's default of seconds cuts the
+script at its `/data` token search; a reading neither the outputs nor the
+reply carry fails its stage as missing. No host model passes every stage
 yet:
 
 | Host model (Ollama) | Memory loaded | On the codex proof |

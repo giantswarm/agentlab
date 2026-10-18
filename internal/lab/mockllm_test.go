@@ -166,8 +166,8 @@ func TestMockLLMScriptAnswersTheCodexTurns(t *testing.T) {
 }
 
 // A codex agent's readings on the mockllm are in its tools' outputs, the
-// harness's function_response parts; the reply's lines win where both
-// carry one.
+// harness's function_response parts; the outputs' lines win where the reply
+// relays one too, what the command printed over the model's word for it.
 func TestTurnProbeReadsTheToolOutputs(t *testing.T) {
 	part := func(kind string, data any) *a2a.Part {
 		p := a2a.NewDataPart(data)
@@ -212,8 +212,8 @@ func TestTurnProbeReadsTheToolOutputs(t *testing.T) {
 		t.Fatalf("the turn read %d tool results, wanted the 2 function_response parts: %+v", len(tr.tools), tr.tools)
 	}
 	ct := codingTurn{reply: tr.text(), probe: parseTurnProbe(tr.text(), tr.toolOutputs()), tools: tr.tools}
-	if ct.probe["uid"] != "1000" || ct.probe["code-word"] != "agentlab-saffron" || ct.probe["file"] != "from-the-reply" {
-		t.Fatalf("probe %v: wanted uid from the output, the code word and the file from the reply", ct.probe)
+	if ct.probe["uid"] != "1000" || ct.probe["code-word"] != "agentlab-saffron" || ct.probe["file"] != "agentlab-saffron" {
+		t.Fatalf("probe %v: wanted uid and the file from the output, the code word from the reply", ct.probe)
 	}
 	if got := ct.toolOutput(codingTestReadTool); !strings.Contains(got, "agentlab-coding") {
 		t.Fatalf("the MCP call's output reads %q, wanted the result naming the agent", got)
