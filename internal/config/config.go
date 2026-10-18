@@ -2040,7 +2040,7 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("platform.devImages.%s needs platform.devImages.kagent from the same build of the kagent line: the controller compiles its pinned CLI version (%s) into the Harness with StrictVersion, so a harness whose CLI differs from the lab controller's pin refuses to start on the version mismatch — build the controller from the same giantswarm/kagent-upstream checkout and name it under platform.devImages.kagent", target, pin)
 		}
 	}
-	if c.CodingHarnessRendered(CodingRuntimeOmp) && c.CodingHarnessImage(CodingRuntimeOmp) == "" {
+	if c.CodingHarnessRendered(CodingRuntimeOmp) && c.CodingHarnessImage(CodingRuntimeOmp) == "" && c.Platform.DevImages[DevImageOmpHarness] == "" {
 		return fmt.Errorf("platform.coding.harnesses names %s, whose Harness runs an image the chart has none of its own for: set platform.coding.images.%s (the kagent line's omp-harness by digest, runtimeImages.ompHarness.digest of the release's chart) or platform.devImages.%s", CodingRuntimeOmp, CodingRuntimeOmp, DevImageOmpHarness)
 	}
 	// kagent.harnesses reaches the kagent chart from codingChartFloor on; an

@@ -101,7 +101,8 @@ func TestDocumentedDevImageTargetsAreAccepted(t *testing.T) {
 }
 
 // TestValidationErrorDevImageTargetsAreAccepted: a refusal that sends the
-// person to a devImages target names one the validation accepts.
+// person to a devImages target names one the validation accepts, and setting
+// it clears the refusal.
 func TestValidationErrorDevImageTargetsAreAccepted(t *testing.T) {
 	cfg := Default()
 	cfg.Platform.Coding.Enabled = true
@@ -116,8 +117,10 @@ func TestValidationErrorDevImageTargetsAreAccepted(t *testing.T) {
 		}
 	}
 
+	// Following the refusal's advice is enough: the dev image stands in for
+	// platform.coding.images.omp.
 	cfg.Platform.DevImages = map[string]string{DevImageOmpHarness: "omp-harness:dev"}
-	if err := cfg.Validate(); err != nil && strings.Contains(err.Error(), "unknown target") {
-		t.Fatalf("platform.devImages.%s must be accepted: %v", DevImageOmpHarness, err)
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("omp with platform.devImages.%s must validate: %v", DevImageOmpHarness, err)
 	}
 }
