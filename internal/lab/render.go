@@ -159,7 +159,7 @@ type tmplData struct {
 	// component's entry, its trailing range renders the rest
 	// (ExtraPostRenderers); MCPPrometheusPostRenderers the same for the
 	// lab's own mcp-prometheus HelmRelease. MCPPrometheusChartVersion pins
-	// that release's chart (observability.go).
+	// that release's chart (mcpPrometheusChartFor).
 	PostRenderers              map[string]string
 	MCPPrometheusPostRenderers string
 	MCPPrometheusChartVersion  string
@@ -293,7 +293,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		LabCA:                        labCA,
 		PostRenderers:                postRenderers,
 		MCPPrometheusPostRenderers:   strings.TrimRight(string(mcpPrometheus), "\n"),
-		MCPPrometheusChartVersion:    mcpPrometheusChartVersion,
+		MCPPrometheusChartVersion:    mcpPrometheusChartFor(cfg),
 		LocalRegistryEndpoint:        devRegistryEndpoint(cfg),
 		ConnectivityChart:            connectivity,
 		AteletImageCacheArgs:         ateletImageCacheArgs,

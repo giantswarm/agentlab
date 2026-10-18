@@ -173,3 +173,30 @@ func TestAlertmanagerNeedsObservability(t *testing.T) {
 		t.Fatalf("platform.alertmanager without observability must be refused naming the key, got %v", err)
 	}
 }
+
+// TestMCPPrometheusChartVersion: platform.mcpPrometheusChartVersion takes an
+// exact version (a release candidate included), refuses a range, and needs
+// the observability stack.
+func TestMCPPrometheusChartVersion(t *testing.T) {
+	cfg := Default()
+	if cfg.Platform.MCPPrometheusChartVersion != "" {
+		t.Fatalf("unset by default, got %q", cfg.Platform.MCPPrometheusChartVersion)
+	}
+	for _, v := range []string{"0.8.1", "0.8.1-rc.1"} {
+		cfg.Platform.MCPPrometheusChartVersion = v
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("%s: %v", v, err)
+		}
+	}
+	for _, v := range []string{">=0.8.0", "0.8.x", "~0.8"} {
+		cfg.Platform.MCPPrometheusChartVersion = v
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "platform.mcpPrometheusChartVersion") {
+			t.Errorf("%s: a range must be refused naming the key, got %v", v, err)
+		}
+	}
+	cfg.Platform.MCPPrometheusChartVersion = "0.8.1"
+	cfg.Platform.Observability = false
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "platform.observability") {
+		t.Fatalf("without observability the key must be refused, got %v", err)
+	}
+}

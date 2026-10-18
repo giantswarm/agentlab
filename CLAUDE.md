@@ -56,7 +56,8 @@ with Dex doing the logins.
   `management_cluster: <clusterName>-mcp-prometheus`
   (e.g. `x_prometheus_execute_query`) — the way
   to answer CPU/memory questions about the lab. Chart pins are Go consts in
-  `internal/lab/observability.go`; the bundle itself is deliberately NOT
+  `internal/lab/observability.go` (`platform.mcpPrometheusChartVersion`
+  overrides mcp-prometheus's, for a candidate whose chart changed); the bundle itself is deliberately NOT
   installed (MC-shaped: Flux HelmReleases, Alloy -> Mimir, no local PromQL).
   Backstage's Clusters/Deployments metrics work too: the lab serves the
   Mimir-shaped endpoint (`observability.<domain>/prometheus` on the edge →

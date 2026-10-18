@@ -343,6 +343,21 @@ names a registry that does not have its image (podman spells local builds
 this way itself). A ref that names a registry — the lab registry, a gsoci
 release, a line's dev build on gsoci — is used as written.
 
+The `mcp-prometheus` swap changes the image only; a release candidate whose
+chart changed too pins that chart with `platform.mcpPrometheusChartVersion`
+(an exact version, a release candidate included; with
+`platform.observability`). The lab renders it into its mcp-prometheus
+`OCIRepository` in place of the release this agentlab pins
+(`internal/lab/observability.go`), so the next `agentlab platform` installs
+it, and removing the key returns to the pin:
+
+```yaml
+platform:
+  mcpPrometheusChartVersion: 0.8.1-rc.1
+  devImages:
+    mcp-prometheus: gsoci.azurecr.io/giantswarm/mcp-prometheus:0.8.1-rc.1   # optional: the chart's default image follows its version
+```
+
 ### Deployment targets
 
 `agentlab platform` side-loads the image from the host docker cache into the

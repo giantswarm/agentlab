@@ -27,7 +27,8 @@ const (
 	kpsChartVersion = "22.0.0" // wraps upstream kube-prometheus-stack 87.3.0
 	// 0.8.0: OAuth provider switch and tenancy mode `none` (a single-tenant
 	// Prometheus behind muster; the lab's identity proofs need both). An exact
-	// version: the OCIRepository's semver range is this pin.
+	// version: the OCIRepository's semver range is this pin, unless
+	// platform.mcpPrometheusChartVersion names another (mcpPrometheusChartFor).
 	mcpPrometheusChartVersion = "0.8.0"
 )
 
@@ -147,6 +148,16 @@ func prometheusAvailableReplicas(ctx context.Context) (string, error) {
 	return strconv.FormatInt(n, 10), nil
 }
 
+// mcpPrometheusChartFor is the mcp-prometheus chart release the lab installs:
+// platform.mcpPrometheusChartVersion when set (a candidate whose chart
+// changed, docs/platform.md "Dev images"), else the pin.
+func mcpPrometheusChartFor(cfg *config.Config) string {
+	if v := cfg.Platform.MCPPrometheusChartVersion; v != "" {
+		return v
+	}
+	return mcpPrometheusChartVersion
+}
+
 // mcpPrometheusTemplate renders the lab's mcp-prometheus release: a Flux
 // OCIRepository + HelmRelease in the platform namespace, installed into the
 // observability namespace by the platform's bundled helm-controller as the
@@ -162,7 +173,7 @@ const mcpPrometheusTemplate = "mcp-prometheus.yaml.tmpl"
 // the user's Dex id_token to it. Runs after the platform install: the Flux
 // CRDs and the tenant ServiceAccount come with the chart.
 func mcpPrometheusUp(cfg *config.Config) error {
-	step("Installing mcp-prometheus %s through the platform's engine", mcpPrometheusChartVersion)
+	step("Installing mcp-prometheus %s through the platform's engine", mcpPrometheusChartFor(cfg))
 	manifest, _, err := renderManifest(cfg, mcpPrometheusTemplate)
 	if err != nil {
 		return err

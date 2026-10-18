@@ -359,6 +359,13 @@ type Platform struct {
 	// default; --alertmanager turns it on; needs platform.observability. See
 	// docs/observability.md "Alertmanager".
 	Alertmanager bool `yaml:"alertmanager,omitempty"`
+	// MCPPrometheusChartVersion overrides the mcp-prometheus chart release
+	// the lab installs with the observability stack (an exact version, a
+	// release candidate included), for proving a chart change the image swap
+	// (devImages.mcp-prometheus) cannot carry. Empty keeps the release this
+	// agentlab pins (internal/lab/observability.go); needs
+	// platform.observability.
+	MCPPrometheusChartVersion string `yaml:"mcpPrometheusChartVersion,omitempty"`
 	// Retired: the fake fleet. The lab registers its own cluster as the
 	// infrastructure families instead (MCPServerName). Read so a file an
 	// earlier release wrote still loads, never written back.
@@ -1959,6 +1966,14 @@ func (c *Config) Validate() error {
 	}
 	if _, ok := c.Platform.DevImages[DevImageMCPPrometheus]; ok && !c.Platform.Observability {
 		return fmt.Errorf("platform.devImages.%s: mcp-prometheus comes with the observability stack (platform.observability: true) — the override would swap the image of nothing", DevImageMCPPrometheus)
+	}
+	if v := c.Platform.MCPPrometheusChartVersion; v != "" {
+		if !c.Platform.Observability {
+			return fmt.Errorf("platform.mcpPrometheusChartVersion: mcp-prometheus comes with the observability stack (platform.observability: true) — the override would pin the chart of nothing")
+		}
+		if !exactVersionRe.MatchString(v) {
+			return fmt.Errorf("platform.mcpPrometheusChartVersion %q: must be an exact version (e.g. 0.8.1-rc.1), not a range — the lab never floats", v)
+		}
 	}
 	if c.Platform.Alertmanager && !c.Platform.Observability {
 		return fmt.Errorf("platform.alertmanager requires platform.observability (the Alertmanager is part of the lab's kube-prometheus-stack)")
