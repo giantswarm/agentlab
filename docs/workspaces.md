@@ -40,7 +40,7 @@ names a missing module (on Debian and Ubuntu the kernel's
 `linux-modules-extra` package carries them).
 
 `agentlab status` prints a `workspaces` line: the NFS server and its node, the
-controller with its proxy (or without it, [without Substrate](#without-agent-substrate)), the node plugin, the class, whose
+controller with its proxy (a leftover without it worded as such), the node plugin, the class, whose
 CSIDriverConfig registers the driver, and the chart's CSI companion when it
 runs ([The CSI companion](#the-csi-companion)). `agentlab platform-down`, `agentlab
 down` and `agentlab platform` with the switch off take it apart in one order:
@@ -73,33 +73,15 @@ agentlab workspaces-test --part refresh # the sync a Session's start requests pa
 With the switch off, nothing of it is installed, and `agentlab platform` on a
 lab that had it removes it.
 
-### Without Agent Substrate
+### Workspaces need the agents
 
-Agent Substrate comes with the agents (`platform.agents`). With the agents off
-and the workspaces on, the lab is an installation that runs the workspaces
-before Substrate: the shape an in-place switch of the agents and Substrate
-starts from.
-
-```sh
-agentlab configure --agents=false --workspaces && agentlab platform   # workspaces, no Substrate
-agentlab platform-test                                                # the workspace-manager's stage included
-agentlab configure --agents && agentlab platform                      # Substrate switched on in place
-```
-
-The chart gets the `workspaces:` values without `substrate:`: the
-connectivity chart renders the `CSIDriverConfig` for a named driver whenever
-the cluster serves Substrate's CRDs, and those outlive an in-place switch of
-the agents off. The lab installs the storage without the controller's mTLS proxy, which
-only Substrate's signers certify: the controller runs its provisioner and
-resizer alone, so the class serves the cluster's claims and nothing waits on a
-certificate. No `CSIDriverConfig` registers the driver, and `agentlab status`
-reads `without its mTLS proxy (Agent Substrate off)`. `workspaces-test` and
-`workspaces-measure` refuse the shape, since every step mounts through
-Substrate, and the CSI companion (`--workspaces-csi-companion`), Substrate's
-driver, needs the agents. Switching the agents on re-applies the storage with
-the proxy before the chart, then waits for it and the registration after the
-install, as on a fresh lab. Switching them off in place ends where a lab
-created without them starts: once the chart's substrate release is gone,
+The workspaces live in kagent's namespace, where every Session runs and mounts
+its workspace, and the workspace-manager applies its sync account and Roles
+there; Agent Substrate comes with the agents (`platform.agents`). The lab
+refuses `platform.workspaces` without `platform.agents` before anything
+installs, as the platform chart refuses `workspaces.enabled` without
+`components.kagent.enabled` at render time. Switching the agents off in place
+takes `--workspaces=false` with it; once the chart's substrate release is gone,
 `agentlab platform` removes the lab's own `CSIDriverConfig` and the
 `ate-system` and `podcertificate-controller-system` namespaces (Substrate's
 CRDs stay), and `agentlab status` words a `CSIDriverConfig` left while

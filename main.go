@@ -947,7 +947,7 @@ func configureCmd() *cobra.Command {
 			if err := enterLab(labs.Create); err != nil {
 				return err
 			}
-			cfg, err := config.Load()
+			cfg, err := config.LoadForConfigure()
 			fresh := errors.Is(err, os.ErrNotExist)
 			if fresh {
 				cfg = config.Default()
@@ -1306,10 +1306,8 @@ func printSaved(cfg *config.Config, disc *lab.Discovery) {
 	if cfg.ServingEnabled() {
 		fmt.Printf("  serving    llm-d on the node: the llmisvc controller and its CRDs, the well-known runtime configs, the models Gateway at %s, cert-manager\n", lab.ModelsGatewayHost(cfg))
 	}
-	if cfg.WorkspacesSubstrate() {
+	if cfg.WorkspacesEnabled() {
 		fmt.Printf("  workspaces an NFS server on %s and the NFS CSI driver behind its mTLS proxy; the read-write-many StorageClass %s\n", lab.WorkspacesNode(cfg), lab.WorkspacesStorageClass)
-	} else if cfg.WorkspacesEnabled() {
-		fmt.Printf("  workspaces an NFS server on %s and the NFS CSI driver, without Agent Substrate (agents off; --agents switches it on in place); the read-write-many StorageClass %s\n", lab.WorkspacesNode(cfg), lab.WorkspacesStorageClass)
 	}
 	if cfg.WorkspaceFakeProvider() {
 		fmt.Printf("  ws-fake    the workspace-manager's provider instance fake: the lab's own GitHub at %s (its App, key pair and client secret the lab's; Secret %s/%s), the App's callback URL %s\n",

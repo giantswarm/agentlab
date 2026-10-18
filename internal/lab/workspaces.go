@@ -219,10 +219,6 @@ type workspacesValues struct {
 	// controllerEndpoint, tls.serverName and nodeSocketOverride.
 	ControllerEndpoint, ServerName, NodeSocket  string
 	NodeSocketDir, SubstrateDir, ClientSPIFFEID string
-	// Substrate is whether Agent Substrate runs beside the storage
-	// (config.WorkspacesSubstrate): the controller's mTLS proxy, which only
-	// Substrate's signers certify, renders with it alone.
-	Substrate bool
 	// Node is the control plane, where the NFS server and the controller
 	// run: the export is a directory of that node.
 	Node   string
@@ -257,7 +253,6 @@ func workspacesValuesFor(cfg *config.Config) workspacesValues {
 		NodeSocketDir:      workspacesNodeSocketDir,
 		SubstrateDir:       substrateVolumesDir,
 		ClientSPIFFEID:     ateAPIServerSPIFFEID,
-		Substrate:          cfg.WorkspacesSubstrate(),
 		Node:               WorkspacesNode(cfg),
 		Organization:       config.WorkspaceOrganization,
 		OrganizationGroups: config.WorkspaceOrganizationGroups,
@@ -493,11 +488,7 @@ func workspacesUp(cfg *config.Config) error {
 	ctx := context.Background()
 	node := WorkspacesNode(cfg)
 	driver := workspacesCSIDriverFor(cfg)
-	proxy := " behind its mTLS proxy"
-	if !cfg.WorkspacesSubstrate() {
-		proxy = " without its mTLS proxy, Agent Substrate being off"
-	}
-	step("Installing the workspace storage (an NFS server on %s, the NFS CSI driver %s as %s%s, the read-write-many StorageClass %s)", node, workspacesDriverVersion, driver, proxy, workspacesStorageClass)
+	step("Installing the workspace storage (an NFS server on %s, the NFS CSI driver %s as %s behind its mTLS proxy, the read-write-many StorageClass %s)", node, workspacesDriverVersion, driver, workspacesStorageClass)
 	if err := workspacesHostPreflight(); err != nil {
 		return err
 	}
@@ -561,18 +552,7 @@ func workspacesHostPreflight() error {
 // and its client trust the pod-identity CA's live ClusterTrustBundle —
 // neither exists before the chart, and the kubelet holds the pod until they
 // do.
-//
-// Without Substrate the controller runs without the proxy, nothing waits on
-// a signer, and the note names the in-place switch that adds it.
 func waitWorkspacesProxy(ctx context.Context, cfg *config.Config) error {
-	if !cfg.WorkspacesSubstrate() {
-		step("Waiting for the workspace storage's controller (no mTLS proxy: Agent Substrate is off)")
-		if err := waitDeploymentRolledOut(ctx, workspacesNamespace, workspacesController, workspacesRolloutTimeout); err != nil {
-			return fmt.Errorf("the NFS CSI controller: %w (`kubectl -n %s describe deploy/%s`)", err, workspacesNamespace, workspacesController)
-		}
-		note("%s; `agentlab configure --agents && agentlab platform` switches Substrate on in place", workspacesWithoutSubstrate)
-		return nil
-	}
 	step("Waiting for the workspace storage's controller and its mTLS proxy (their certificate from Substrate's service-DNS signer)")
 	if err := waitDeploymentRolledOut(ctx, workspacesNamespace, workspacesController, workspacesRolloutTimeout); err != nil {
 		return fmt.Errorf("the NFS CSI controller: %w (the signer issues a certificate only to a pod the Service %s selects; `agentlab pods -n %s`, `kubectl -n %s describe deploy/%s`)",
@@ -585,10 +565,6 @@ func waitWorkspacesProxy(ctx context.Context, cfg *config.Config) error {
 	}
 	return nil
 }
-
-// workspacesWithoutSubstrate words the storage of a lab whose agents, and
-// Agent Substrate with them, are off (config.WorkspacesSubstrate).
-const workspacesWithoutSubstrate = "Agent Substrate is off (platform.agents: false): the controller runs without its mTLS proxy, no CSIDriverConfig registers the driver, and the class serves the cluster's own claims"
 
 // waitWorkspacesCompanion waits for the chart's CSI companion: its
 // controller behind the mTLS proxy and its node plugin on every Substrate
@@ -912,8 +888,8 @@ type WorkspacesStatus struct {
 	// Companion is the chart's CSI companion in a word when it runs
 	// (platform.workspaces.csiCompanion): Ready, or what is not.
 	Companion string `json:"companion,omitempty"`
-	// Proxy reports whether the controller runs its mTLS proxy, which only
-	// a lab with Agent Substrate renders (config.WorkspacesSubstrate).
+	// Proxy reports whether the live controller runs its mTLS proxy, which
+	// the lab renders with the workspaces (they come with Agent Substrate).
 	Proxy bool `json:"proxy"`
 	// CSIDriverConfig says who registered the driver with Substrate: "the
 	// lab", "the chart", "hand", or "" when nothing did.
@@ -1054,14 +1030,8 @@ func workspacesHint(cfg *config.Config, chartCarries bool, registrant string) st
 	if !cfg.WorkspacesEnabled() {
 		return "  Workspace storage is off (platform.workspaces in agentlab.yaml; `agentlab configure --workspaces` turns it on)."
 	}
-	var hint string
-	if cfg.WorkspacesSubstrate() {
-		hint = fmt.Sprintf("  Workspace storage: an NFS server on %s and the NFS CSI driver behind its mTLS proxy, %s;\n"+
-			"  the read-write-many StorageClass %s. Proof: `agentlab workspaces-test --storage-only`.", WorkspacesNode(cfg), workspacesRegistration(workspacesCSIDriverFor(cfg), registrant), workspacesStorageClass)
-	} else {
-		hint = fmt.Sprintf("  Workspace storage without Agent Substrate: an NFS server on %s, the NFS CSI driver and the read-write-many StorageClass %s;\n"+
-			"  %s. `agentlab configure --agents && agentlab platform` switches Substrate on in place.", WorkspacesNode(cfg), workspacesStorageClass, workspacesWithoutSubstrate)
-	}
+	hint := fmt.Sprintf("  Workspace storage: an NFS server on %s and the NFS CSI driver behind its mTLS proxy, %s;\n"+
+		"  the read-write-many StorageClass %s. Proof: `agentlab workspaces-test --storage-only`.", WorkspacesNode(cfg), workspacesRegistration(workspacesCSIDriverFor(cfg), registrant), workspacesStorageClass)
 	if cfg.WorkspacesCSICompanion() {
 		hint += fmt.Sprintf("\n  Substrate's driver is the chart's CSI companion (%s preset, the lab's NFS plugin serving %s). Proof: `agentlab workspaces-test --storage-only`, its actors mounting through the companion.", companionPreset, companionCSIDriver)
 	}
