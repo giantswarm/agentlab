@@ -497,7 +497,7 @@ func loadOrCreateConfig() (*config.Config, error) {
 	if err := freeClusterName(cfg); err != nil {
 		return nil, err
 	}
-	disc := discoverInto(cfg, true, nil, nil, nil)
+	disc := discoverInto(cfg, true, nil, nil, nil, false)
 	// The tools before the questions: a missing tool is refused here, not
 	// after the form and a cluster boot.
 	if err := disc.Preflight(); err != nil {
@@ -536,9 +536,11 @@ func loadOrCreateConfig() (*config.Config, error) {
 // model servers that answer (pins from the --model-manager flags win).
 // Whether managed models are on follows the discovery on a first configure
 // only (first: no agentlab.yaml yet); a later run keeps the recorded choice.
+// A codex host model joins platform.extraModels only when asked for
+// (codexHostModel, --codex-host-model): each is over a proof's memory budget.
 // Reachability from pods (bind address, firewall) is checked at platform
 // time, with the fixes.
-func discoverInto(cfg *config.Config, first bool, pinEnabled *bool, pinBackends []string, pinVMManager *bool) *lab.Discovery {
+func discoverInto(cfg *config.Config, first bool, pinEnabled *bool, pinBackends []string, pinVMManager *bool, codexHostModel bool) *lab.Discovery {
 	disc := lab.Discover(cfg)
 	fmt.Print(disc.Report(cfg))
 	fmt.Println()
@@ -549,10 +551,12 @@ func discoverInto(cfg *config.Config, first bool, pinEnabled *bool, pinBackends 
 	cfg.Platform.VMManager.ApplyDiscovered(disc.KVMReady(), pinVMManager)
 	reportModelManager(before, cfg.Platform.ModelManager, disc, cfg.Platform.Agents)
 	reportVMManager(vmBefore, cfg.Platform.VMManager.Enabled, disc)
-	if m, ok := lab.ApplyCodexHostModel(cfg, disc); ok {
+	if m, ok := lab.ApplyCodexHostModel(cfg, disc, codexHostModel); ok {
 		fmt.Println("Applied to the configuration:")
 		fmt.Printf("  platform.extraModels: + %s (%s on %s, Responses API): a model for the codex Harness (coding-test --harness codex --model-config %s runs on it)\n", m.Name, m.Model, m.BaseURL, m.Name)
 		fmt.Println()
+	} else if codexHostModel && cfg.CodexModelConfig() == "" {
+		fmt.Printf("--codex-host-model: no codex host model added; it needs the codex Harness (--coding --coding-harnesses ...,codex) and one of %s with tools on a host Ollama pods reach.\n\n", lab.CodexHostModelIDs())
 	}
 	return disc
 }
@@ -929,7 +933,7 @@ func configureCmd() *cobra.Command {
 	var vmManagerImageDir, aiKeySource, gitHubTokenSource, portal string
 	var gitHubAppID, gitHubAppInstallationID, gitHubAppPrivateKeySource, gitHubAppClientID, gitHubAppClientSecretSource string
 	var chartVersion, chartPath, chartBranch, clusterName, mcpPrometheusChartVersion string
-	var upgradeSeed, adoptChart, released bool
+	var upgradeSeed, adoptChart, released, codexHostModel bool
 	cmd := &cobra.Command{
 		Use:   "configure",
 		Short: "Discover this machine, then ask for the lab configuration (or keep it with --defaults) and save agentlab.yaml",
@@ -1156,7 +1160,7 @@ func configureCmd() *cobra.Command {
 			// Every run discovers the machine — an existing agentlab.yaml
 			// follows the host too: a server that appeared is added, one that
 			// is gone drops out, ports move while no cluster holds them.
-			disc := discoverInto(cfg, fresh, pinEnabled, pinBackends, pinVMManager)
+			disc := discoverInto(cfg, fresh, pinEnabled, pinBackends, pinVMManager, codexHostModel)
 			// The tools before the questions (or, with --defaults, before
 			// the file): what `agentlab up` would refuse is refused here,
 			// with the install hints, instead of after the whole form.
@@ -1224,6 +1228,7 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&coding, "coding", false, "coding agents: the chart's kagent.harnesses renders the coding Harnesses (claude, Claude Code run headless, unless --coding-harnesses names others), which `agentlab coding-test` proves (needs agents); --coding=false turns it off")
 	cmd.Flags().BoolVar(&tenants, "tenants", false, "the Organizations' namespaces as tenants: the chart's tenants.organizations.enabled turns on agent-manager's tenant reconciler for every namespace labelled giantswarm.io/organization, which `agentlab tenants-test` proves (needs agents); --tenants=false turns it off")
 	cmd.Flags().StringSliceVar(&codingHarnesses, "coding-harnesses", nil, fmt.Sprintf("the coding Harnesses rendered with --coding, by runtime (%s; each named after its runtime; default claude alone); codex needs a kagent line whose chart takes runtime codex, omp one whose chart takes runtime byo and an image from --coding-images; \"\" returns to claude alone", strings.Join(config.CodingRuntimes, ", ")))
+	cmd.Flags().BoolVar(&codexHostModel, "codex-host-model", false, fmt.Sprintf("add the extraModels entry %s for the codex Harness: the first of %s the host's Ollama has, on its Responses API (coding-test --harness codex --model-config %s); each needs more memory than a lab proof's host model gets, so configure adds none without this flag", lab.CodexHostModelName, lab.CodexHostModelIDs(), lab.CodexHostModelName))
 	cmd.Flags().StringToStringVar(&codingImages, "coding-images", nil, "the image of a coding Harness the chart has none of its own for, <runtime>=<image@sha256:digest> (repeatable): "+config.CodingRuntimeOmp+"=<the kagent line's omp-harness, runtimeImages.ompHarness.digest of the release's chart>; a dev image (platform.devImages "+config.DevImageOmpHarness+") wins; an empty map clears it")
 	cmd.Flags().StringVar(&workspacesProvider, "workspaces-provider", "", "the workspace-manager's provider instances: fake (the lab's own GitHub, the default), fake-bearer (the same GitHub shaped like github.com, its API on a Bearer host of its own; beside fake), github (a GitHub App of the lab's own, docs/workspaces.md), gitlab (a GitLab's OAuth application, docs/workspaces.md) or several, such as fake,github,gitlab")
 	cmd.Flags().StringVar(&workspacesGrantProvider, "workspaces-grant-provider", "", "the provider instance whose App muster pins the workspace-manager to, the one App a person grants (platform.workspaces.grantProvider): one of --workspaces-provider, such as fake-bearer for 'workspaces-test --part caller-credential' and '--part write'; \"\" returns to the first instance")

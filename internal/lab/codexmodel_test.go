@@ -60,31 +60,49 @@ func TestCodexHostModel(t *testing.T) {
 	}
 }
 
-// configure adds the entry only for a lab that renders codex and has no
-// Responses API entry of its own, and coding-test's codex default follows it.
+// configure adds the entry only when asked (--codex-host-model), for a lab
+// that renders codex and has no Responses API entry of its own, and
+// coding-test's codex default follows it.
 func TestApplyCodexHostModel(t *testing.T) {
 	disc := ollamaWith(gatewayIP, true, HostModel{ID: modelGptOss20b, Tools: true})
 
 	cfg := codexLab()
-	if _, ok := ApplyCodexHostModel(cfg, disc); !ok {
+	if _, ok := ApplyCodexHostModel(cfg, disc, true); !ok {
 		t.Fatal("a codex lab with gpt-oss:20b on Ollama gets the codex host model")
 	}
 	if got := cfg.CodexModelConfig(); got != CodexHostModelName {
 		t.Errorf("CodexModelConfig = %q, want %s", got, CodexHostModelName)
 	}
-	if _, ok := ApplyCodexHostModel(cfg, disc); ok || len(cfg.Platform.ExtraModels) != 1 {
+	if _, ok := ApplyCodexHostModel(cfg, disc, true); ok || len(cfg.Platform.ExtraModels) != 1 {
 		t.Errorf("a second configure must not add it again: %+v", cfg.Platform.ExtraModels)
 	}
 
 	own := config.ExtraModel{Name: "mine", Provider: config.ProviderOpenAI, Model: "gpt-5", APIFormat: config.APIFormatResponses}
 	cfg = codexLab(own)
-	if _, ok := ApplyCodexHostModel(cfg, disc); ok || cfg.CodexModelConfig() != "mine" {
+	if _, ok := ApplyCodexHostModel(cfg, disc, true); ok || cfg.CodexModelConfig() != "mine" {
 		t.Errorf("the person's own Responses API entry wins: %+v", cfg.Platform.ExtraModels)
 	}
 
 	cfg = config.Default()
-	if _, ok := ApplyCodexHostModel(cfg, disc); ok {
+	if _, ok := ApplyCodexHostModel(cfg, disc, true); ok {
 		t.Error("a lab without the codex Harness gets no codex host model")
+	}
+}
+
+// `configure --defaults --coding --coding-harnesses claude,codex` without
+// --codex-host-model writes no host model, whichever codex host models the
+// host's Ollama has: each is over a proof's memory budget.
+func TestApplyCodexHostModelUnasked(t *testing.T) {
+	var all []HostModel
+	for _, m := range CodexHostModels {
+		all = append(all, HostModel{ID: m.ID, Tools: true})
+	}
+	cfg := codexLab()
+	if m, ok := ApplyCodexHostModel(cfg, ollamaWith(gatewayIP, true, all...), false); ok {
+		t.Fatalf("configure added %+v unasked", m)
+	}
+	if len(cfg.Platform.ExtraModels) != 0 || cfg.CodexModelConfig() != "" {
+		t.Errorf("the generated config carries a host model: %+v", cfg.Platform.ExtraModels)
 	}
 }
 
