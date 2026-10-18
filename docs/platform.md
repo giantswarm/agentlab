@@ -498,6 +498,15 @@ needs its Harness rendered (`platform.coding` with the runtime in
 asserts the Harness runs the dev digest and waits for it Ready; an overlay
 that replaces `kagent.harnesses` is refused while a target is configured.
 
+A CLI bump needs `platform.devImages.kagent` from the same build:
+the kagent controller compiles the `claude` and `codex` Harnesses' pinned CLI
+version (`ExpectedClaudeVersion` from `PinnedClaudeVersion`, `ExpectedCodexVersion`
+from `PinnedCodexVersion`) into their config with `StrictVersion`, so a
+`claude-harness` or `codex-harness` whose CLI differs from the lab
+controller's pin refuses to start on the version mismatch and the golden boot
+loops. `agentlab` therefore refuses either target without `kagent`; build
+both from one checkout of giantswarm/kagent-upstream.
+
 ```yaml
 platform:
   coding:
@@ -507,6 +516,7 @@ platform:
       omp: gsoci.azurecr.io/giantswarm/kagent/omp-harness@sha256:…   # the release's runtimeImages.ompHarness.digest; omp-harness below wins
   devImages:
     codex-harness: codex-harness:pr-123   # docker build -f go/harness/codex/Dockerfile go/ of giantswarm/kagent-upstream
+    kagent: kagent-controller:pr-123      # the controller from the same checkout: it pins the harness's CLI version
     omp-harness: omp-harness:pr-456       # docker build -f go/harness/omp/Dockerfile go/
 ```
 

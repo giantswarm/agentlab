@@ -219,6 +219,15 @@ const (
 	DevImageOmpHarness    = CodingRuntimeOmp + "-harness"
 )
 
+// codingHarnessVersionPins are the coding runtimes whose CLI version the
+// kagent controller compiles into the Harness config with StrictVersion, by
+// the constant that pins it on the kagent line: their harness dev image
+// travels with a controller dev image from the same build.
+var codingHarnessVersionPins = map[string]string{
+	CodingRuntimeClaude: "ExpectedClaudeVersion, claudeconfig.PinnedClaudeVersion",
+	CodingRuntimeCodex:  "ExpectedCodexVersion, codexconfig.PinnedCodexVersion",
+}
+
 // CodingHarnessDevImage is the devImages key of a coding runtime's image.
 func CodingHarnessDevImage(runtime string) string { return runtime + "-harness" }
 
@@ -2017,6 +2026,17 @@ func (c *Config) Validate() error {
 		target := CodingHarnessDevImage(runtime)
 		if _, ok := c.Platform.DevImages[target]; ok && !c.CodingHarnessRendered(runtime) {
 			return fmt.Errorf("platform.devImages.%s: the lab renders no Harness %s (platform.coding.enabled with %s in platform.coding.harnesses) — the override would swap the image of nothing", target, runtime, runtime)
+		}
+	}
+	// The kagent controller compiles the claude and codex Harnesses' pinned
+	// CLI version into their config with StrictVersion: a harness built from
+	// another commit of the kagent line than the lab's controller refuses to
+	// start on the CLI version mismatch, and the golden boot loops.
+	for _, runtime := range CodingRuntimes {
+		pin, pinned := codingHarnessVersionPins[runtime]
+		target := CodingHarnessDevImage(runtime)
+		if _, ok := c.Platform.DevImages[target]; ok && pinned && c.Platform.DevImages["kagent"] == "" {
+			return fmt.Errorf("platform.devImages.%s needs platform.devImages.kagent from the same build of the kagent line: the controller compiles its pinned CLI version (%s) into the Harness with StrictVersion, so a harness whose CLI differs from the lab controller's pin refuses to start on the version mismatch — build the controller from the same giantswarm/kagent-upstream checkout and name it under platform.devImages.kagent", target, pin)
 		}
 	}
 	if c.CodingHarnessRendered(CodingRuntimeOmp) && c.CodingHarnessImage(CodingRuntimeOmp) == "" {
