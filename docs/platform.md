@@ -343,6 +343,21 @@ names a registry that does not have its image (podman spells local builds
 this way itself). A ref that names a registry — the lab registry, a gsoci
 release, a line's dev build on gsoci — is used as written.
 
+The `mcp-prometheus` swap changes the image only; a release candidate whose
+chart changed too pins that chart with `platform.mcpPrometheusChartVersion`
+(an exact version, a release candidate included; with
+`platform.observability`). The lab renders it into its mcp-prometheus
+`OCIRepository` in place of the release this agentlab pins
+(`internal/lab/observability.go`), so the next `agentlab platform` installs
+it, and removing the key returns to the pin:
+
+```yaml
+platform:
+  mcpPrometheusChartVersion: 0.8.1-rc.1
+  devImages:
+    mcp-prometheus: gsoci.azurecr.io/giantswarm/mcp-prometheus:0.8.1-rc.1   # optional: the chart's default image follows its version
+```
+
 ### Deployment targets
 
 `agentlab platform` side-loads the image from the host docker cache into the
@@ -483,6 +498,15 @@ needs its Harness rendered (`platform.coding` with the runtime in
 asserts the Harness runs the dev digest and waits for it Ready; an overlay
 that replaces `kagent.harnesses` is refused while a target is configured.
 
+A CLI bump needs `platform.devImages.kagent` from the same build:
+the kagent controller compiles the `claude` and `codex` Harnesses' pinned CLI
+version (`ExpectedClaudeVersion` from `PinnedClaudeVersion`, `ExpectedCodexVersion`
+from `PinnedCodexVersion`) into their config with `StrictVersion`, so a
+`claude-harness` or `codex-harness` whose CLI differs from the lab
+controller's pin refuses to start on the version mismatch and the golden boot
+loops. `agentlab` therefore refuses either target without `kagent`; build
+both from one checkout of giantswarm/kagent-upstream.
+
 ```yaml
 platform:
   coding:
@@ -492,6 +516,7 @@ platform:
       omp: gsoci.azurecr.io/giantswarm/kagent/omp-harness@sha256:…   # the release's runtimeImages.ompHarness.digest; omp-harness below wins
   devImages:
     codex-harness: codex-harness:pr-123   # docker build -f go/harness/codex/Dockerfile go/ of giantswarm/kagent-upstream
+    kagent: kagent-controller:pr-123      # the controller from the same checkout: it pins the harness's CLI version
     omp-harness: omp-harness:pr-456       # docker build -f go/harness/omp/Dockerfile go/
 ```
 

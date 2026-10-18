@@ -18,7 +18,8 @@ spec:
   interval: 10m
   url: oci://gsoci.azurecr.io/charts/giantswarm/mcp-prometheus
   ref:
-    # An exact version (observability.go pins it): the lab never floats.
+    # An exact version (observability.go pins it, platform.mcpPrometheusChartVersion
+    # overrides it): the lab never floats.
     semver: "{{ .MCPPrometheusChartVersion }}"
 ---
 apiVersion: helm.toolkit.fluxcd.io/v2
