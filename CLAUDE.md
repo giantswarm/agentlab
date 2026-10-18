@@ -231,7 +231,7 @@ go test ./internal/forms/ -run TestMinimalFormDrive -count=1 -v   # single test
 ./agentlab decisions-test  # klaus-gateway's POST /decisions as a ServiceAccount: answered by click, modal and thread reply, each a muster tool call as the user; a refusal, a close as defaulted
 ./agentlab beekeeper-decisions-test  # beekeeper serve behind muster puts decisions to people through klaus-gateway: a click (another user's refused), a thread reply, a default at the due time, a withdrawal; the guide conversing with its person in a direct message
 ./agentlab test            # RBAC assertions for every configured user
-./agentlab backstage-test  # headless Backstage sign-in for every user, the portal's Agent Platform and Models pages
+./agentlab backstage-test  # headless Backstage sign-in for every user, the portal's Agent Platform and Models pages (--agent kagent/<name>: on an existing agent, no create or delete)
 ./agentlab tenants-test    # platform.tenants: two organization namespaces, an editor in each: the reconciler's copies with the first agent, the other organization refused, a turn on the namespace's own credentials, the workers held against a cluster-admin, the copies gone with the last agent
 ./agentlab coding-test     # platform.coding: the coding Harness from the values, agent-manager's guards, a coding agent's sandbox floor (uid split, forwarder paths, a write tool refused, no credentials, DNS canary, egress), the instruction fixture, suspend/resume, the turn's usage, a share refused
 ./agentlab egress-test     # an agent with one declared origin, probed from its actor: the origin reached, an undeclared host 403 (actor egress policy denied), muster reached without an entry, raw TCP to github.com:22 refused

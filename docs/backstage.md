@@ -327,6 +327,18 @@ versioned persisted query cache (a stale v1alpha2 entry never renders) — that
 is the frontend's own guard, exercised by the plugin's tests, not by a portal
 API the lab can drive.
 
+**Against an existing agent**: `agentlab backstage-test --agent
+kagent/<name>` writes and deletes no agent. The sign-ins, the MCP servers page
+and the Models page run as above; the create path, the HITL fixture, the edit
+path and both deletes are skipped, and so is the cleanup of an aborted run's
+leftovers. The named agent is waited for with the shared readiness wait
+(Ready on the platform Harness), the agents list must show it Ready on that
+Harness as every `platform-admins` user (owned by its HelmRelease when it has
+one; its display name and toolset are whatever it was given), the chat runs
+on it as the admin with every other user as the boundary, and the agent is
+asserted still there at the end. Use it where the create step fails or is not
+wanted (an agent already deployed, a repeated run of the chat steps only).
+
 ## Backstage gotchas
 
 - **`app.extensions` replaces, it does not merge.** The image ships a list of

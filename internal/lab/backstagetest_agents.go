@@ -177,8 +177,9 @@ func chartVersionBelow(version, floor string) bool {
 // (the wizard needs one), the roster as every user, the chat as the admin
 // with every other user as the boundary, HITL and Stop on the fixture, the
 // edit path, and both agents deleted through agent-manager. Every verdict line is printed
-// at the end.
-func proveAgentPlatform(cfg *config.Config, sessions []*portalSession) error {
+// at the end. With an existing agent the run writes and deletes no agent:
+// proveExistingAgent replaces everything after the Models page.
+func proveAgentPlatform(cfg *config.Config, sessions []*portalSession, existing *portalAgentRef) error {
 	primary := adminSession(sessions)
 	if primary == nil {
 		fmt.Printf("agent platform pages skipped: the portal's create path runs as a %s user and none is among %s\n", platformAdminsGroup, sessionEmails(sessions))
@@ -189,23 +190,25 @@ func proveAgentPlatform(cfg *config.Config, sessions []*portalSession) error {
 		note("no %s-group user among the sessions: the forbidden-write assertions are skipped", viewerGroup)
 	}
 
-	// Leftovers of an aborted run first, and everything this run creates on
-	// every exit path.
-	cleanup := func() {
-		for _, name := range []string{backstageTestAgent, backstageTestHITLAgent, backstageTestAgent + "-viewer"} {
-			if !agentExists(name) {
-				continue
-			}
-			note("cleanup: removing %s", name)
-			if err := removeAgent(name); err != nil {
-				note("cleanup: %v", err)
+	if existing == nil {
+		// Leftovers of an aborted run first, and everything this run creates
+		// on every exit path.
+		cleanup := func() {
+			for _, name := range []string{backstageTestAgent, backstageTestHITLAgent, backstageTestAgent + "-viewer"} {
+				if !agentExists(name) {
+					continue
+				}
+				note("cleanup: removing %s", name)
+				if err := removeAgent(name); err != nil {
+					note("cleanup: %v", err)
+				}
 			}
 		}
-	}
-	cleanup()
-	defer cleanup()
-	if err := ensureAgentChartCarriesApproval(); err != nil {
-		return err
+		cleanup()
+		defer cleanup()
+		if err := ensureAgentChartCarriesApproval(); err != nil {
+			return err
+		}
 	}
 
 	var verdicts []string
@@ -218,13 +221,22 @@ func proveAgentPlatform(cfg *config.Config, sessions []*portalSession) error {
 			return err
 		}
 	}
+	if existing != nil {
+		proven, err := proveExistingAgent(sessions, primary, *existing)
+		verdicts = append(verdicts, proven...)
+		if err != nil {
+			return err
+		}
+		printVerdicts(verdicts)
+		return nil
+	}
 	spec, _, info, created, err := proveCreatePath(primary, viewer)
 	verdicts = append(verdicts, created...)
 	if err != nil {
 		return err
 	}
 
-	rostered, err := proveRoster(sessions, spec)
+	rostered, err := proveRoster(sessions, rosterWantFor(spec))
 	verdicts = append(verdicts, rostered...)
 	if err != nil {
 		return err
@@ -269,11 +281,57 @@ func proveAgentPlatform(cfg *config.Config, sessions []*portalSession) error {
 		return err
 	}
 
+	printVerdicts(verdicts)
+	return nil
+}
+
+// proveExistingAgent is the Agent Platform proof against an agent the run did
+// not write (--agent): the create path, the HITL fixture, the edits and every
+// delete are skipped — they write or remove agents — and the agent is waited
+// for with the shared readiness wait, listed on every user's roster, chatted
+// with as the primary user (the sessions it starts are deleted, the agent is
+// not), and found in place at the end.
+func proveExistingAgent(sessions []*portalSession, primary *portalSession, agent portalAgentRef) ([]string, error) {
+	step("The existing agent %s/%s (--agent): create, HITL fixture, edits and delete skipped; the shared readiness wait", agent.Namespace, agent.Name)
+	readiness, err := waitAgentReady(agent.Name, backstageTestReadyTimeout)
+	if err != nil {
+		return nil, err
+	}
+	if !readiness.ready {
+		return nil, readiness.failure(agent.Name, backstageTestReadyTimeout)
+	}
+	want := rosterWant{Name: agent.Name, Harness: kagentHarness}
+	owner := "no HelmRelease"
+	if readiness.release != nil {
+		want.OwningRelease, owner = agent.Name, "HelmRelease "+agent.Name
+	}
+	note("Ready on Harness %s after %s (%s)", kagentHarness, readiness.elapsed.Round(time.Second), owner)
+	verdicts := []string{fmt.Sprintf("PASS: the existing agent %s/%s is Ready on Harness %s (%s); this run creates and deletes no agent", agent.Namespace, agent.Name, kagentHarness, owner)}
+
+	rostered, err := proveRoster(sessions, want)
+	verdicts = append(verdicts, rostered...)
+	if err != nil {
+		return verdicts, err
+	}
+	chatted, err := proveChat(primary, otherSessions(sessions, primary), agent)
+	verdicts = append(verdicts, chatted...)
+	if err != nil {
+		return verdicts, err
+	}
+
+	step("The existing agent %s/%s is left in place", agent.Namespace, agent.Name)
+	if !agentExists(agent.Name) {
+		return verdicts, fmt.Errorf("the existing agent %s/%s is gone after the run — backstage-test --agent must leave it in place", agent.Namespace, agent.Name)
+	}
+	return append(verdicts, fmt.Sprintf("PASS: %s/%s is still there after the run", agent.Namespace, agent.Name)), nil
+}
+
+// printVerdicts prints every verdict line at the end of the proof.
+func printVerdicts(verdicts []string) {
 	fmt.Println()
 	for _, v := range verdicts {
 		fmt.Println(v)
 	}
-	return nil
 }
 
 // templateRequiresApproval reports whether the agent's template's binding of the
