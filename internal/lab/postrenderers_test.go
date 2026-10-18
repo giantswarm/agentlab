@@ -239,7 +239,7 @@ func TestComponentPostRenderers(t *testing.T) {
 			t.Errorf("config.DevImageComponents names %s, but devImageTargets has no render target for it", c)
 		}
 	}
-	for _, c := range []string{config.DevImageHarness, config.DevImageClaudeHarness, config.DevImageCodexHarness, agentgatewayComponent} {
+	for _, c := range []string{config.DevImageHarness, config.DevImageClaudeHarness, config.DevImageCodexHarness, config.DevImageOmpHarness, agentgatewayComponent} {
 		if _, ok := devImageTargets[c]; ok {
 			t.Errorf("the %s target is in no chart render; devImageTargets must not list it", c)
 		}

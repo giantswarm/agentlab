@@ -149,8 +149,9 @@ func ConnectivityChartDir(chartPath string) string {
 // for the Deployments the lab's dev loops build from a checkout — the
 // agentgateway component's two Deployments under their own names — plus
 // DevImageHarness for the platform Harness's runtime image and one target per
-// coding Harness's image (DevImageClaudeHarness, DevImageCodexHarness).
-var DevImageComponents = []string{"muster", "backstage", "kagent", "mcp-kubernetes", "model-manager", "agent-manager", "vm-manager", DevImageKlausGateway, DevImageClusterManager, DevImageWorkspaceManager, DevImageAgentgateway, DevImageAgentgatewayController, DevImageSubstrateAPI, DevImageMCPPrometheus, DevImageHarness, DevImageClaudeHarness, DevImageCodexHarness}
+// coding Harness's image (DevImageClaudeHarness, DevImageCodexHarness,
+// DevImageOmpHarness).
+var DevImageComponents = []string{"muster", "backstage", "kagent", "mcp-kubernetes", "model-manager", "agent-manager", "vm-manager", DevImageKlausGateway, DevImageClusterManager, DevImageWorkspaceManager, DevImageAgentgateway, DevImageAgentgatewayController, DevImageSubstrateAPI, DevImageMCPPrometheus, DevImageHarness, DevImageClaudeHarness, DevImageCodexHarness, DevImageOmpHarness}
 
 // DevImageKlausGateway is the devImages key of the klaus-gateway component
 // (platform.klausGateway): the Deployment `klaus-gateway`, container
