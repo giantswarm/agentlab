@@ -249,8 +249,8 @@ func TestCodingProbeValueShapes(t *testing.T) {
 	} {
 		got := parseCodingProbe(reply)
 		for _, key := range []string{"file", "code-word"} {
-			if got[key] != "agentlab-saffron" {
-				t.Errorf("%s: %s = %q, want agentlab-saffron", name, key, got[key])
+			if got[key] != codingTestCodeWord {
+				t.Errorf("%s: %s = %q, want %s", name, key, got[key], codingTestCodeWord)
 			}
 		}
 	}
