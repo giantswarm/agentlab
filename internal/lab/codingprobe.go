@@ -21,13 +21,14 @@ type codingProbe map[string]string
 // parseCodingProbe reads the marker lines out of a reply. A value loses the
 // markdown a model wraps a relayed line in (code spans, bold), which a small
 // model adds even when told to relay verbatim. A literal "\n" separates lines
-// like a newline does: a reply can arrive with its newlines escaped, and no
-// reading spans two lines.
+// like a newline does and a literal \" is a quote: a reply can arrive with
+// its newlines and quotes escaped, and no reading spans two lines. A value
+// also loses the quotes around it.
 func parseCodingProbe(reply string) codingProbe {
-	reply = strings.ReplaceAll(reply, `\n`, "\n")
+	reply = strings.NewReplacer(`\n`, "\n", `\"`, `"`).Replace(reply)
 	probe := codingProbe{}
 	for _, m := range probeLine.FindAllStringSubmatch(reply, -1) {
-		probe[m[1]] = strings.TrimSpace(strings.Trim(strings.TrimSpace(m[2]), "`*"))
+		probe[m[1]] = strings.TrimSpace(strings.Trim(strings.TrimSpace(m[2]), "`*\"'"))
 	}
 	return probe
 }
