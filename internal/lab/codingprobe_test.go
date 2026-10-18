@@ -237,3 +237,21 @@ func TestCodingSandboxPromptTimeout(t *testing.T) {
 		}
 	}
 }
+
+// A relayed reading reads the same plain, with escaped quotes and newlines,
+// or wrapped in quotes and markdown.
+func TestCodingProbeValueShapes(t *testing.T) {
+	for name, reply := range map[string]string{
+		"plain":    "AGENTLAB_PROBE file=agentlab-saffron\nAGENTLAB_PROBE code-word=agentlab-saffron\n",
+		"escaped":  `AGENTLAB_PROBE file=agentlab-saffron\"\nAGENTLAB_PROBE code-word=agentlab-saffron\"`,
+		"quoted":   "\"AGENTLAB_PROBE file=agentlab-saffron\"\n'AGENTLAB_PROBE code-word=agentlab-saffron'\n",
+		"markdown": "**AGENTLAB_PROBE file=agentlab-saffron**\n`AGENTLAB_PROBE code-word=agentlab-saffron`\n",
+	} {
+		got := parseCodingProbe(reply)
+		for _, key := range []string{"file", "code-word"} {
+			if got[key] != "agentlab-saffron" {
+				t.Errorf("%s: %s = %q, want agentlab-saffron", name, key, got[key])
+			}
+		}
+	}
+}
