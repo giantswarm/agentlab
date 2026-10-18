@@ -527,7 +527,18 @@ them it fails at once with the reason.
    place, where the gateway takes credentials from muster: the same request
    must reach the API host with the credential `user-token` of the admin's
    login, and the sandbox must still hold no JWT.
-5. **delete_session**: agent-manager's `delete_session` as the admin deletes
+5. **muster as the person**, where kagent recorded the provider `muster` on
+   the Session (the installation names muster as verifying the Actor's own
+   JWT, `kagent.controller.session.actorJWTProviders.muster`, which the meta
+   chart derives while muster's `credentialProvider.actorBearer` is on): a
+   turn sends an MCP `initialize` from the sandbox to muster's in-cluster
+   `http://muster.agent-platform.svc.cluster.local:8090/mcp` with the
+   placeholder `Authorization`. The egress gateway replaces it with the
+   Actor's JWT for muster's audience, and muster must answer 200, serving the
+   person the Session is bound to; muster's log lines for the actor are
+   printed, and the sandbox must hold no JWT. Skipped where kagent records no
+   `muster` provider.
+6. **delete_session**: agent-manager's `delete_session` as the admin deletes
    the workspace Session. At `start_session` agent-manager bound the
    Session's sandbox actor to the admin in muster (`PUT /session-bindings`);
    the delete must remove that binding (`DELETE /session-bindings`). muster
@@ -539,8 +550,10 @@ them it fails at once with the reason.
    Session until its TTL. A muster without its `credentialProvider`, or an
    agent-manager without `muster.bindingsUrl`, logs no `session_bound` and
    the stage fails naming that.
-6. **No workspace**: a Session of the same Agent without a grant sends the
-   same request: no `jwt` and no `user-token` entry for it in the log.
+7. **No workspace**: a Session of the same Agent without a grant sends the
+   same request: no `jwt` and no `user-token` entry for it in the log. Where
+   the muster stage ran, kagent must record no `muster` provider on it, and
+   its `initialize` to muster with the placeholder must not answer 200.
 
 The fake verifies no JWT it did not sign: it answers such a bearer GitHub's
 401 and logs its `aud` and `sub`, never the token. Everything is removed on
