@@ -104,6 +104,11 @@ const (
 	crStatus     = "status"
 	crConditions = "conditions"
 
+	// A tool result's text parts as omp reports them: {content: [{type:
+	// text, text}]}.
+	toolResultContent = "content"
+	toolResultText    = "text"
+
 	// kagentControllerRoute and kagentControllerJWTPolicy are the
 	// connectivity chart's route objects in front of the controller: the
 	// GRPCRoute on the edge and the policy that validates the token and
@@ -1081,11 +1086,11 @@ func toolOutput(result any) string {
 		if output, ok := fields["output"].(string); ok {
 			return output
 		}
-		if parts, ok := fields["content"].([]any); ok {
+		if parts, ok := fields[toolResultContent].([]any); ok {
 			var texts []string
 			for _, part := range parts {
-				if p, ok := part.(map[string]any); ok && p["type"] == "text" {
-					if text, ok := p["text"].(string); ok {
+				if p, ok := part.(map[string]any); ok && p[fieldTypeKey] == toolResultText {
+					if text, ok := p[toolResultText].(string); ok {
 						texts = append(texts, text)
 					}
 				}
