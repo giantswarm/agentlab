@@ -144,7 +144,9 @@ type gatewayWorkspaces struct {
 // provider instance fake, no Session admission, no colleague in the
 // Organization.
 func klausGatewayWorkspacesPreflight(cfg *config.Config, email string) error {
-	if reason := workspaceManagerSkip(cfg); reason != "" {
+	if reason, err := workspaceManagerSkip(cfg); err != nil {
+		return err
+	} else if reason != "" {
 		return fmt.Errorf("--workspaces needs the workspace-manager: %s (`agentlab configure --workspaces`, then `agentlab platform`)", reason)
 	}
 	if !cfg.WorkspaceFakeProvider() {

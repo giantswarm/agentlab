@@ -321,7 +321,9 @@ func (p *slackProof) sayPastWorkspace(t *slackThread, text string) (*slackTurn, 
 // link in the error.
 func grantWorkspaceManager(cfg *config.Config, user *config.User) (string, func(), error) {
 	none := func() {}
-	if reason := workspaceManagerSkip(cfg); reason != "" {
+	if reason, err := workspaceManagerSkip(cfg); err != nil {
+		return "", nil, err
+	} else if reason != "" {
 		return "no grant needed, " + reason, none, nil
 	}
 	pinned, err := workspaceManagerPinnedProvider(cfg)

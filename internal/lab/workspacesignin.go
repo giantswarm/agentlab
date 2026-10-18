@@ -385,7 +385,7 @@ func connectWorkspaceProviderAs(cfg *config.Config, p *workspacePerson, instance
 	if pinned, err := workspaceManagerPinnedProvider(cfg); err != nil {
 		return "", err
 	} else if pinned != instance {
-		return "", fmt.Errorf("muster pins the workspace-manager to the App of %s, not %s: a person grants only that App (platform.workspaces.grantProvider: %s in %s, then `agentlab platform`)", pinned, instance, instance, config.File)
+		return "", fmt.Errorf("muster pins the workspace-manager to the App of %s, not %s: a person grants only that App (`agentlab configure --workspaces-grant-provider %s`, then `agentlab platform`)", pinned, instance, instance)
 	}
 	link, err := p.grantLink()
 	if err != nil {
@@ -576,7 +576,9 @@ const DefaultWorkspacesSignInSyncTimeout = 5 * time.Minute
 // both, and refused naming platform-infra for the developer, who does not
 // -> the workspace deleted and both grants dropped.
 func WorkspacesSignInTest(cfg *config.Config, opts WorkspacesSignInTestOptions) error {
-	if skip := workspaceManagerSkip(cfg); skip != "" {
+	if skip, err := workspaceManagerSkip(cfg); err != nil {
+		return err
+	} else if skip != "" {
 		return fmt.Errorf("no workspace-manager to sign in to: %s", skip)
 	}
 	instance := cmp.Or(opts.Provider, config.WorkspaceProviderFake)

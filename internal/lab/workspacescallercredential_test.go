@@ -43,6 +43,38 @@ func TestJudgeCallerCredential(t *testing.T) {
 	}
 }
 
+// TestJudgePersonCredential: where the egress gateway takes its credentials
+// from muster, the API host receives the bound person's App token; anything
+// else, someone else's token included, fails, and a Session without a
+// workspace never carries a person's token.
+func TestJudgePersonCredential(t *testing.T) {
+	const login, session = "lab-admin", "s1"
+	user := func(login string) githubRequest {
+		return githubRequest{Credential: credUser, User: login, Status: 404}
+	}
+	for name, tc := range map[string]struct {
+		logged []githubRequest
+		want   string
+	}{
+		"the person's token":        {[]githubRequest{user(login)}, ""},
+		"nothing reached it":        {nil, "never reached the lab's GitHub"},
+		"the sandbox's placeholder": {[]githubRequest{{Credential: credPlaceholder}}, "the credential placeholder, not lab-admin's App token"},
+		"the Actor's JWT":           {[]githubRequest{{Credential: credJWT, Audience: []string{"fake-bearer"}}}, "the credential jwt, not lab-admin's App token"},
+		"someone else's token":      {[]githubRequest{user("lab-dev")}, `the user token of "lab-dev"`},
+	} {
+		_, err := judgePersonCredential(tc.logged, "404", login, session)
+		switch {
+		case tc.want == "" && err != nil:
+			t.Errorf("%s: %v", name, err)
+		case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
+			t.Errorf("%s: err = %v, want %q", name, err, tc.want)
+		}
+	}
+	if err := judgeNoCallerCredential([]githubRequest{user(login)}, session); err == nil || !strings.Contains(err.Error(), "never bound to a person") {
+		t.Errorf("a person's token without a workspace: %v, want it refused", err)
+	}
+}
+
 func TestJudgeGrantProviders(t *testing.T) {
 	const api, aud = "api.github-bearer.example", "fake-bearer"
 	recorded := toGrantProviders([]*apiv1alpha1.SessionProvider{

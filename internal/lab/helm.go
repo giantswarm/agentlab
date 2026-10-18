@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -583,17 +584,23 @@ func isSchemaRejection(err error) bool {
 // resolver could not answer, a dial or a read the network refused, a
 // timeout, or a registry that answered 5xx or 429. That failure says nothing
 // about the chart, only about this host's network at this moment, so it is
-// the one worth trying again (retryUnreachable). A registry that did answer
-// (a tag that is not there, a denied pull) and a chart that fails to render
-// are something else.
+// the one worth trying again (retryUnreachable), and so is a connection the
+// registry closed before or during its answer (EOF). A registry that did
+// answer (a tag that is not there, a denied pull) and a chart that fails to
+// render are something else.
 func registryUnreachable(err error) bool { return unreachableCause(err) != nil }
 
 // unreachableCause is the error in err's chain that makes it unreachable
 // (registryUnreachable) — the dialer's or the resolver's own words, the
 // timeout, the registry's status — and nil for any other error. Read off the
 // type chain, which Helm and oras-go keep intact (*url.Error around
-// *net.OpError around *net.DNSError; errcode.ErrorResponse for a status).
+// *net.OpError around *net.DNSError; errcode.ErrorResponse for a status;
+// *url.Error around io.EOF or io.ErrUnexpectedEOF for a closed connection).
 func unreachableCause(err error) error {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) && (errors.Is(urlErr.Err, io.EOF) || errors.Is(urlErr.Err, io.ErrUnexpectedEOF)) {
+		return urlErr
+	}
 	var opErr *net.OpError
 	if errors.As(err, &opErr) {
 		return opErr
@@ -617,14 +624,19 @@ func unreachableCause(err error) error {
 // retriedInTransport reports whether an unreachable cause (unreachableCause)
 // is one the transport under every registry call has already retried: Helm's
 // registry client runs on oras-go's retry.Transport, whose DefaultPolicy
-// retries a timeout and a 5xx or 429 five times per request. It retries
-// neither a name the resolver does not know nor a refused dial — the
-// transient DNS failure a render-level retry is for (retryUnreachable).
+// retries a timeout, a 5xx or 429 and a connection cut mid-answer
+// (io.ErrUnexpectedEOF) five times per request. It retries neither a name the
+// resolver does not know, a refused dial nor a connection the registry closed
+// before answering (io.EOF) — the transient failures a render-level retry is
+// for (retryUnreachable).
 // Retrying the render on top of the transport would multiply a dial timeout
 // (30 s, six times per request) into minutes before the boot stops.
 func retriedInTransport(cause error) bool {
 	var netErr net.Error
 	if errors.As(cause, &netErr) && netErr.Timeout() {
+		return true
+	}
+	if errors.Is(cause, io.ErrUnexpectedEOF) {
 		return true
 	}
 	var response *errcode.ErrorResponse

@@ -437,7 +437,12 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 	// The workspace-manager (workspacemanagertest.go): registered with muster
 	// and Connected, rolled out, and listing every configured provider
 	// instance to the admin through muster.
-	if reason := workspaceManagerSkip(cfg); reason != "" {
+	reason, err := workspaceManagerSkip(cfg)
+	if err != nil {
+		p.begin(stageWorkspaceManager, "The workspace-manager: registered with muster, Ready, list_providers as the admin, the lab's Organization")
+		return "", err
+	}
+	if reason != "" {
 		p.leaveOut(reason, stageWorkspaceManager)
 	} else {
 		p.begin(stageWorkspaceManager, "The workspace-manager: registered with muster, Ready, list_providers as the admin, the lab's Organization")

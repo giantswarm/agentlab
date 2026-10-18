@@ -63,7 +63,7 @@ agentlab workspaces-test --part access # provider sign-in and the access check a
 agentlab workspaces-test --part gitlab # the provider instance gitlab, end to end (skips without one)
 agentlab configure --workspaces-cleanup-after 10m && agentlab platform   # the sessions part's short cleanup window
 agentlab workspaces-test --part sessions # ten parallel Sessions in their session directories, and the cleanup
-agentlab configure --workspaces-provider fake,fake-bearer && agentlab platform   # a Bearer provider
+agentlab configure --workspaces-provider fake,fake-bearer --workspaces-grant-provider fake-bearer && agentlab platform   # a Bearer provider
 agentlab workspaces-test --part caller-credential # a Session's actor JWT on its Bearer provider's API host
 agentlab workspaces-test --part write # git push and gh pr create from a workspace Session as the person
 agentlab configure --workspaces-refresh-after 1m && agentlab platform   # the refresh part's short threshold
@@ -493,12 +493,19 @@ a Session admitted with a grant, a credential header on each of the grant's
 **Bearer** providers' hosts, an actor JWT that Substrate's egress gateway mints
 for that Actor, bound to the provider's audience, and injects in place of the
 `Authorization` the sandbox sent. A **Basic** provider's host (a git host) gets
-none yet. It runs as the admin on [the provider instance
-`fake-bearer`](#the-provider-instance-fake-bearer), the only instance whose
+none yet. From agent-platform 4.145.0-rc.5 the egress gateway takes a
+Session's provider credentials from muster instead: kagent compiles each
+provider host into `ate-secret://muster.giantswarm.io/<instance>/<git|api>`,
+and muster answers the person's App token for a Session bound to them. The
+part reads which path the lab runs (the egress gateway's configuration names
+muster's authority) and proves that one. It runs as the admin on [the
+provider instance `fake-bearer`](#the-provider-instance-fake-bearer), the
+only instance whose
 grant names a Bearer host (the API of `fake` is on its git host), with the
 [Session admission](#the-session-admission) and agent-manager's
-`start_session`: `agentlab configure --workspaces-provider fake,fake-bearer`,
-then `agentlab platform`. Without them it fails at once with the reason.
+`start_session`: `agentlab configure --workspaces-provider fake,fake-bearer
+--workspaces-grant-provider fake-bearer`, then `agentlab platform`. Without
+them it fails at once with the reason.
 
 1. **Preconditions**: the workspace-manager reachable through muster and listing
    `fake-bearer`; the lab's grant key published and trusted by kagent's
@@ -523,7 +530,10 @@ then `agentlab platform`. Without them it fails at once with the reason.
    the placeholder through: the stage fails naming the credential the API host
    received (`placeholder`) instead of the Actor's JWT; a request that never
    reached the fake fails naming the sandbox's answer (the gateway's 403 when
-   the host is not in the Actor's egress).
+   the host is not in the Actor's egress). **The person's token** in its
+   place, where the gateway takes credentials from muster: the same request
+   must reach the API host with the credential `user-token` of the admin's
+   login, and the sandbox must still hold no JWT.
 5. **delete_session**: agent-manager's `delete_session` as the admin deletes
    the workspace Session. At `start_session` agent-manager bound the
    Session's sandbox actor to the admin in muster (`PUT /session-bindings`);
@@ -537,7 +547,7 @@ then `agentlab platform`. Without them it fails at once with the reason.
    agent-manager without `muster.bindingsUrl`, logs no `session_bound` and
    the stage fails naming that.
 6. **No workspace**: a Session of the same Agent without a grant sends the
-   same request: no `jwt` entry for it in the log.
+   same request: no `jwt` and no `user-token` entry for it in the log.
 
 The fake verifies no JWT it did not sign: it answers such a bearer GitHub's
 401 and logs its `aud` and `sub`, never the token. Everything is removed on
@@ -556,8 +566,8 @@ the provider's hosts and sets it there, Basic on the git host and Bearer on
 the API host. The token never enters the sandbox. It runs as the admin on [the
 provider instance `fake-bearer`](#the-provider-instance-fake-bearer) with the
 [Session admission](#the-session-admission): `agentlab configure
---workspaces-provider fake,fake-bearer`, then `agentlab platform`. Without
-them, or without muster as the gateway's credential provider, it fails at once
+--workspaces-provider fake,fake-bearer --workspaces-grant-provider fake-bearer`,
+then `agentlab platform`. Without them, or without muster as the gateway's credential provider, it fails at once
 with the reason.
 
 1. **Preconditions**: the egress gateway's configuration (the ConfigMap
@@ -804,8 +814,9 @@ App token to every call of the manager's tools, the Dex ID token beside it.
 A person who has not granted it gets muster's sign-in link instead of a
 tool's answer; the manager stores no token and serves no sign-in pages.
 
-The instance is `platform.workspaces.grantProvider`, empty for the first
-configured one (`fake` while it is listed). The lab pins only a manager it
+The instance is `platform.workspaces.grantProvider` (`agentlab configure
+--workspaces-grant-provider <instance>`), empty for the first configured one
+(`fake` while it is listed). The lab pins only a manager it
 resolves to 0.10.0 or newer, the way Flux resolves
 `components.workspace-manager.versionRange` (from the chart, or a range in
 `platform.valuesFiles` such as a release candidate's); an earlier manager
@@ -908,7 +919,8 @@ answers' web and clone URLs name the git host, their API URLs and `Link`
 headers the API host. `platform.workspaces.provider` names it beside `fake`
 (`fake,fake-bearer`), whose container serves it; the audience of its
 credentials is `fake-bearer`, and muster pins the manager to it with
-`platform.workspaces.grantProvider: fake-bearer`.
+`platform.workspaces.grantProvider: fake-bearer` (`agentlab configure
+--workspaces-grant-provider fake-bearer`).
 [The caller-credential part](#the-caller-credential-part) proves it.
 
 #### A person's sign-in, headlessly
