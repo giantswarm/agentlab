@@ -15,6 +15,7 @@ const (
 	testKagentFrom  = "1.13.0"
 	testKagentTo    = "1.14.0"
 	testKagentRC    = "1.15.1-rc.2"
+	testKagentNext  = "1.15.0"
 	testChartBefore = "4.142.0"
 	testChartRC     = "4.145.1-rc.6"
 	testLabValues   = "lab-values.yaml"
@@ -134,9 +135,11 @@ func TestKagentStepped(t *testing.T) {
 		{"pinned", kagentRunning{chart: testChartBefore, kagent: testKagentTo}, KagentStepOptions{To: testKagentTo}, ""},
 		{"pinned, with build metadata", kagentRunning{chart: testChartBefore, kagent: testKagentTo + "+3177c6907334"}, KagentStepOptions{To: testKagentTo}, ""},
 		{"pin not applied", kagentRunning{chart: testChartBefore, kagent: testKagentFrom}, KagentStepOptions{To: testKagentTo}, "not " + testKagentTo},
-		{"candidate steps kagent", kagentRunning{chart: testChartRC, kagent: "1.15.0"}, KagentStepOptions{Chart: testChartRC}, ""},
-		{"candidate keeps kagent", kagentRunning{chart: testChartRC, kagent: testKagentFrom}, KagentStepOptions{Chart: testChartRC}, "moves no kagent step"},
-		{"candidate not installed", kagentRunning{chart: testChartBefore, kagent: "1.15.0"}, KagentStepOptions{Chart: testChartRC}, "not " + testChartRC},
+		{"candidate steps kagent", kagentRunning{chart: testChartRC, kagent: testKagentNext}, KagentStepOptions{Chart: testChartRC}, ""},
+		{"candidate keeps kagent", kagentRunning{chart: testChartRC, kagent: testKagentFrom}, KagentStepOptions{Chart: testChartRC}, ""},
+		{"candidate keeps kagent, with build metadata", kagentRunning{chart: testChartRC, kagent: testKagentFrom + "+3177c6907334"}, KagentStepOptions{Chart: testChartRC}, ""},
+		{"candidate steps kagent back", kagentRunning{chart: testChartRC, kagent: "1.12.0"}, KagentStepOptions{Chart: testChartRC}, "steps kagent back"},
+		{"candidate not installed", kagentRunning{chart: testChartBefore, kagent: testKagentNext}, KagentStepOptions{Chart: testChartRC}, "not " + testChartRC},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := kagentStepped(before, tc.after, tc.opts)
@@ -150,6 +153,26 @@ func TestKagentStepped(t *testing.T) {
 				t.Fatalf("err = %v, want one naming %q", err, tc.wantErr)
 			}
 		})
+	}
+}
+
+// TestKagentStepChartOnly: a --chart step that keeps kagent is chart-only; a
+// kagent move or a --to pin is not.
+func TestKagentStepChartOnly(t *testing.T) {
+	before := kagentRunning{chart: testChartBefore, kagent: testKagentFrom}
+	for _, tc := range []struct {
+		after kagentRunning
+		opts  KagentStepOptions
+		want  bool
+	}{
+		{kagentRunning{chart: testChartRC, kagent: testKagentFrom + "+3177c6907334"}, KagentStepOptions{Chart: testChartRC}, true},
+		{kagentRunning{chart: testChartRC, kagent: testKagentNext}, KagentStepOptions{Chart: testChartRC}, false},
+		{kagentRunning{chart: testChartRC, kagent: testKagentTo}, KagentStepOptions{Chart: testChartRC, To: testKagentTo}, false},
+	} {
+		r := &kagentStepRun{before: before, after: tc.after, opts: tc.opts}
+		if got := r.chartOnly(); got != tc.want {
+			t.Errorf("%s with %+v: chartOnly = %v, want %v", tc.after, tc.opts, got, tc.want)
+		}
 	}
 }
 
