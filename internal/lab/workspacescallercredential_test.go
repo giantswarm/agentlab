@@ -56,11 +56,11 @@ func TestJudgePersonCredential(t *testing.T) {
 		logged []githubRequest
 		want   string
 	}{
-		"the person's token":   {[]githubRequest{user(login)}, ""},
-		"nothing reached it":   {nil, "never reached the lab's GitHub"},
-		"the placeholder":      {[]githubRequest{{Credential: credPlaceholder}}, "the credential placeholder, not lab-admin's App token"},
-		"the Actor's JWT":      {[]githubRequest{{Credential: credJWT, Audience: []string{"fake-bearer"}}}, "the credential jwt, not lab-admin's App token"},
-		"someone else's token": {[]githubRequest{user("lab-dev")}, `the user token of "lab-dev"`},
+		"the person's token":        {[]githubRequest{user(login)}, ""},
+		"nothing reached it":        {nil, "never reached the lab's GitHub"},
+		"the sandbox's placeholder": {[]githubRequest{{Credential: credPlaceholder}}, "the credential placeholder, not lab-admin's App token"},
+		"the Actor's JWT":           {[]githubRequest{{Credential: credJWT, Audience: []string{"fake-bearer"}}}, "the credential jwt, not lab-admin's App token"},
+		"someone else's token":      {[]githubRequest{user("lab-dev")}, `the user token of "lab-dev"`},
 	} {
 		_, err := judgePersonCredential(tc.logged, "404", login, session)
 		switch {
