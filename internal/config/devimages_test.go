@@ -91,7 +91,7 @@ func TestDevImagesKnowCodingHarnesses(t *testing.T) {
 	cfg := Default()
 	cfg.Platform.Coding.Enabled = true
 	cfg.Platform.Coding.Harnesses = []string{CodingRuntimeClaude, CodingRuntimeCodex}
-	cfg.Platform.DevImages = map[string]string{DevImageClaudeHarness: "claude-harness:dev", DevImageCodexHarness: "codex-harness:dev"}
+	cfg.Platform.DevImages = map[string]string{DevImageClaudeHarness: "claude-harness:dev", DevImageCodexHarness: "codex-harness:dev", "kagent": "kagent-controller:dev-7e8f"}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("the coding Harnesses' images must be devImages targets: %v", err)
 	}
@@ -106,6 +106,34 @@ func TestDevImagesKnowCodingHarnesses(t *testing.T) {
 	cfg.Platform.Coding.Harnesses = nil
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), DevImageCodexHarness) {
 		t.Errorf("codex-harness without the codex Harness must be refused naming the key, got %v", err)
+	}
+}
+
+// The kagent controller compiles the claude and codex Harnesses' pinned CLI
+// version into their config with StrictVersion, so a harness dev image is
+// refused without the controller from the same build.
+func TestCodingHarnessDevImageNeedsKagent(t *testing.T) {
+	for name, tc := range map[string]struct {
+		target string
+		want   string
+	}{
+		"claude": {DevImageClaudeHarness, "ExpectedClaudeVersion"},
+		"codex":  {DevImageCodexHarness, "PinnedCodexVersion"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := Default()
+			cfg.Platform.Coding.Enabled = true
+			cfg.Platform.Coding.Harnesses = []string{name}
+			cfg.Platform.DevImages = map[string]string{tc.target: tc.target + ":dev"}
+			err := cfg.Validate()
+			if err == nil || !strings.Contains(err.Error(), "platform.devImages.kagent") || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "version mismatch") {
+				t.Fatalf("%s without kagent: got %v, want a refusal naming platform.devImages.kagent, %s and the version mismatch", tc.target, err, tc.want)
+			}
+			cfg.Platform.DevImages["kagent"] = "kagent-controller:dev-9a0b"
+			if err := cfg.Validate(); err != nil {
+				t.Fatalf("%s with kagent refused: %v", tc.target, err)
+			}
+		})
 	}
 }
 
