@@ -359,13 +359,18 @@ func (r *kagentStepRun) step() error {
 	if err := kagentStepped(r.before, after, r.opts); err != nil {
 		return err
 	}
+	if r.chartOnly() {
+		r.pass("after the step: %s, a chart-only step that keeps kagent", after)
+		return nil
+	}
 	r.pass("after the step: %s", after)
 	return nil
 }
 
 // kagentStepped judges the lab after the upgrade: the kagent chart is the
-// one --to names, newer than before without one; the meta chart the one
-// --chart names.
+// one --to names, without one never older than before (a candidate that keeps
+// kagent is a chart-only step, its conversations proven all the same); the
+// meta chart the one --chart names.
 func kagentStepped(before, after kagentRunning, opts KagentStepOptions) error {
 	if opts.Chart != "" && after.chart != opts.Chart {
 		return fmt.Errorf("the platform upgrade finished, but the lab runs agent-platform %s, not %s", after.chart, opts.Chart)
@@ -380,10 +385,23 @@ func kagentStepped(before, after kagentRunning, opts KagentStepOptions) error {
 	}
 	from, errFrom := semver.NewVersion(before.kagent)
 	to, errTo := semver.NewVersion(after.kagent)
-	if errFrom != nil || errTo != nil || !from.LessThan(to) {
-		return fmt.Errorf("agent-platform %s moves no kagent step: kagent %s before, %s after — a candidate that keeps kagent is no subject of this proof (substrate-step-test steps Substrate)", after.chart, before.kagent, after.kagent)
+	if errFrom != nil || errTo != nil {
+		return fmt.Errorf("the kagent HelmRelease's chart is not a version: %s before, %s after", before.kagent, after.kagent)
+	}
+	if to.LessThan(from) {
+		return fmt.Errorf("agent-platform %s steps kagent back: kagent %s before, %s after", after.chart, before.kagent, after.kagent)
 	}
 	return nil
+}
+
+// chartOnly reports a step that moved the meta chart and kept kagent.
+func (r *kagentStepRun) chartOnly() bool {
+	if r.opts.To != "" {
+		return false
+	}
+	from, errFrom := semver.NewVersion(r.before.kagent)
+	to, errTo := semver.NewVersion(r.after.kagent)
+	return errFrom == nil && errTo == nil && from.Equal(to)
 }
 
 // suspendResume suspends the resumed conversation and resumes it once more:

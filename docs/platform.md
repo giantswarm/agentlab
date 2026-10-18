@@ -1299,11 +1299,13 @@ two shapes, or both:
   chart the lab runs: a step within the released line, or to a kagent
   release candidate. The lab must run an older kagent before it.
 - `--chart <agent-platform release>` moves the meta chart to a candidate
-  release (`4.145.1-rc.6`) whose kagent range moves, with the values that
-  candidate carries for the new line: the step a platform candidate takes
-  when it keeps Substrate and steps kagent, which `substrate-step-test --to`
-  cannot express. A candidate that leaves kagent where it was fails the step
-  stage: it is no subject of this proof.
+  release (`4.145.1-rc.6`) with the values that candidate carries: the step
+  a platform candidate takes when it keeps Substrate, which
+  `substrate-step-test --to` cannot express. A candidate whose kagent range
+  moves steps kagent under the conversation; one that keeps kagent and
+  Substrate is a chart-only step (its `step` PASS line says so), and the
+  same resume, turn, suspend and delete prove the conversation survives the
+  chart's upgrade. A candidate that steps kagent back fails the step stage.
 
 The run, on the static binary (no scratch driver): the kagent line before
 the step read off the meta chart, the kagent HelmRelease's applied chart and
@@ -1325,11 +1327,15 @@ boot, `--model-config` names the ModelConfig.
 ```bash
 agentlab kagent-step-test --to 1.14.0              # a step within the released kagent line
 agentlab kagent-step-test --chart 4.145.1-rc.6     # a platform candidate that steps kagent 1.13 -> 1.15
+agentlab kagent-step-test --chart 4.146.0-rc.1     # a chart-only candidate: kagent and Substrate kept
 ```
 
 **Where it runs.** The proof is the lab round of every kagent release
-candidate and every agent-platform candidate that moves the kagent range, on
-a lab on the platform's current release. Like the Substrate step proof it is
+candidate and of every agent-platform candidate that does not move the
+Substrate it pins (one that does takes `substrate-step-test`), on a lab on
+the platform's current release: a promoter's suspended-conversation resume
+proof of a chart-only candidate is `kagent-step-test --chart <rc>`, no turn
+by hand. Like the Substrate step proof it is
 not a CircleCI job of this repository: its turns are model turns. The unit
 tests of its pieces run in `make test`.
 
