@@ -459,6 +459,18 @@ muster:
           type: valkey
           valkey:
             url: muster-valkey:6379
+{{- if and .WorkspacesEnabled .WorkspacesChart (not .WorkspaceProviders) }}
+{{- with .WorkspaceReleasable }}
+    # No provider instance renders yet (the configured one lacks its ids or
+    # Secret), so muster's registration of the workspace-manager is pinned to
+    # none and the chart derives no releasable; it refuses an empty one with
+    # Substrate on. muster releases the lab's own App, {{ .Provider }}'s,
+    # until the configured instance renders (workspacemustergrant.go).
+    credentialProvider:
+      releasable:
+        {{ .Provider }}: {{ .Issuer }}
+{{- end }}
+{{- end }}
 
 {{- if .Platform.Agents }}
 {{- if not .LegacyChart }}
@@ -1317,11 +1329,13 @@ workspace-manager:
     {{ .Workspaces.Organization }}:
       memberGroups: [{{ join .Workspaces.OrganizationGroups ", " }}]
 {{- end }}
+{{- if .WorkspaceProviders }}
 {{- with .WorkspaceAdmission }}
   # The key the workspace grant a Session carries is signed with: the lab's
   # own EC P-256 key (certs/workspace-grant), placed as this Secret ahead of
   # the install; the manager publishes its public half at
-  # /.well-known/jwks.json, which kagent's admission above trusts.
+  # /.well-known/jwks.json, which kagent's admission above trusts. Only
+  # beside a provider instance: the manager refuses a key without one.
   grant:
     signingKey: {name: {{ .Secret }}, key: {{ .SecretKey }}}
 {{- if not $.WorkspaceGrant }}
@@ -1332,6 +1346,7 @@ workspace-manager:
   tokenExchange:
     clientID: {{ .TokenExchangeClientID }}
     clientSecret: {name: {{ .TokenExchangeSecret }}, key: {{ .TokenExchangeSecretKey }}}
+{{- end }}
 {{- end }}
 {{- end }}
 {{- with .WorkspaceGrant }}
