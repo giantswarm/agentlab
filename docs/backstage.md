@@ -73,13 +73,17 @@ start on the Dex TLS. The lab's values add no `extraEnvVars`; its own Secrets go
 through the separate `extraEnvVarsSecrets` list. The headless `backstage-test`
 calls the portal's backend APIs and passes in both modes.
 
-Before any sign-in, `backstage-test` reads which portal Backstage serves from
-the frontend config it injects into its public `index.html` and fails unless it
-is the one `backstage.portal` configures, naming the image. The shell is
-Backstage 3.x: a 2.x portal declares no `app.portals`, injects none whatever the
-overlay sets, and serves the classic portal only, so a lab on such a Backstage
-fails here rather than passing without the shell. The default
-`platform.chartVersion` resolves a 3.x Backstage.
+Every `agentlab up` and `agentlab platform`, once Backstage runs, and
+`backstage-test` before any sign-in, read which portal Backstage serves from the
+frontend config it injects into its public `index.html` and fail unless it is
+the one `backstage.portal` configures, naming the Backstage version and the one
+the mode needs. The shell is Backstage 3.x: a 2.x portal declares no
+`app.portals`, injects none whatever the overlay sets, and serves the classic
+portal only, so a lab declaring `agent-platform` on such a Backstage is refused
+by the run that installed it — it never reads as up, and no shell spec starts
+against it. The default `platform.chartVersion` resolves a 3.x Backstage; the
+refusal names it, a 3.x dev image, or `--portal classic` to keep the
+Backstage.
 
 ## The portal's browser suite
 
