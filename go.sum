@@ -220,8 +220,8 @@ github.com/frankban/quicktest v1.14.6 h1:7Xjx+VpznH+oBnejlPUj8oUpdxnVs4f8XU8WnHk
 github.com/frankban/quicktest v1.14.6/go.mod h1:4ptaffx2x8+WTWXmUCuVU6aPUX1/Mz7zb5vbUoiM6w0=
 github.com/fxamacker/cbor/v2 v2.9.1 h1:2rWm8B193Ll4VdjsJY28jxs70IdDsHRWgQYAI80+rMQ=
 github.com/fxamacker/cbor/v2 v2.9.1/go.mod h1:vM4b+DJCtHn+zz7h3FFp/hDAI9WNWCsZj23V5ytsSxQ=
-github.com/giantswarm/gitops-commit v0.11.2 h1:T21IskhXGMQUpBcjER/brIVmzmYO4nVjr9hOt/6DoXg=
-github.com/giantswarm/gitops-commit v0.11.2/go.mod h1:7wbz73+MY8iezNHc1ZDHiSqlhXX9I5qc84GyEkVCoq8=
+github.com/giantswarm/gitops-commit v0.11.3 h1:Q10rNkTZDOOVfdhopDogtOBff32hiqRPW/dcP0hPqIs=
+github.com/giantswarm/gitops-commit v0.11.3/go.mod h1:7wbz73+MY8iezNHc1ZDHiSqlhXX9I5qc84GyEkVCoq8=
 github.com/giantswarm/go-selfupdate v1.6.3 h1:IF9+CDIzx+p8lWrEqn+7+hznLUu8vooQ6XQWtjOGffs=
 github.com/giantswarm/go-selfupdate v1.6.3/go.mod h1:ZRK84xA7SPPJ+y9c988e8UZ0MuV/QNbWT4mjwBj963I=
 github.com/giantswarm/klaus-gateway v1.21.0 h1:sIdKo97SBYCavdAf2jyMpTTtOmep/b6otknbGpeHAVI=
