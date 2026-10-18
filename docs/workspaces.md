@@ -161,7 +161,12 @@ workspace volumes with it, and installs it under the new name.
    resumed: its heartbeat carries on with the same boot id, still reading its
    file and the mirrors. Both actors are deleted; the PersistentVolume and
    every file stay. A Substrate without existing volumes refuses the
-   template, and the step reports the skip with that refusal.
+   template, and the step reports the skip with that refusal. A fresh lab
+   has no atespace `kagent` until kagent runs an actor there: the step
+   creates it through ate-api-server, the way kagent does, and says so. The
+   template's golden actor gets neither volume (Substrate supplies an
+   existing volume only to an actor that names it), so the actor script idles
+   there instead of exiting, which would crash the golden.
 9. A claude Session admitted on the volume ([the Session admission](#the-session-admission)),
    left out with `--storage-only`:
    - The rig: the workspace-manager's `/.well-known/jwks.json` publishes the
