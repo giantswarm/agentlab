@@ -1332,3 +1332,31 @@ func TestDeleteSessionRetriesUnavailable(t *testing.T) {
 		t.Errorf("an Unavailable delete was not retried to success: %d calls, %v", calls, err)
 	}
 }
+
+func TestToolOutput(t *testing.T) {
+	const probe = "agentlab-probe file=agentlab-saffron\n"
+	for _, tc := range []struct {
+		name   string
+		result any
+		want   string
+	}{
+		{"codex command output", map[string]any{"output": probe}, probe},
+		{"omp text content", map[string]any{
+			toolResultContent: []any{map[string]any{fieldTypeKey: toolResultText, toolResultText: probe}},
+			"details":         map[string]any{"timeoutSeconds": 300},
+		}, probe},
+		{"omp text parts joined", map[string]any{toolResultContent: []any{
+			map[string]any{fieldTypeKey: toolResultText, toolResultText: "a"},
+			map[string]any{fieldTypeKey: imageKey, "data": "x"},
+			map[string]any{fieldTypeKey: toolResultText, toolResultText: "b"},
+		}}, "a\nb"},
+		{"no text part is JSON", map[string]any{toolResultContent: []any{map[string]any{fieldTypeKey: imageKey}}}, `{"content":[{"type":"image"}]}`},
+		{"anything else is JSON", map[string]any{"result": "ok"}, `{"result":"ok"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := toolOutput(tc.result); got != tc.want {
+				t.Errorf("toolOutput = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
