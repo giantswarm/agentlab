@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -32,7 +35,10 @@ import (
 // e2e fixtures do, then a fixed reply once the runtime returns the tool's
 // output: the readings the proof judges are those outputs, what the sandbox
 // printed, never words of the script's. The one reading the script gives
-// itself is the code word the resumed turn recalls.
+// itself is the code word the resumed turn recalls. A shell call goes to the
+// shell tool the request offers: codex's `shell_command`, or its unified
+// `exec_command`, whose command keeps running past its yield and is waited
+// for with an empty `write_stdin` until it exits.
 
 const (
 	// mockLLMCommand is the hidden command the container runs.
@@ -90,9 +96,11 @@ func mockLLMScript() []mockLLMTurn {
 // The script's wire form, the Responses API's own field names.
 type (
 	// mockLLMScriptEntry answers a request whose last input item
-	// contains match with response.
+	// contains match with response; command is the shell command of a
+	// shell call, which goes to the shell tool the request offers.
 	mockLLMScriptEntry struct {
 		match    string
+		command  string
 		response mockLLMResponse
 	}
 	mockLLMResponse struct {
@@ -134,6 +142,22 @@ type (
 		// cuts the probe's searches and lookups.
 		TimeoutMS int `json:"timeout_ms"`
 	}
+	// mockLLMExecArguments are codex's unified exec_command's: the
+	// command, how long the call waits for it before yielding (codex
+	// clamps it to 30 s) and how long it may run.
+	mockLLMExecArguments struct {
+		Cmd         string `json:"cmd"`
+		YieldTimeMS int    `json:"yield_time_ms"`
+		TimeoutMS   int    `json:"timeout_ms"`
+	}
+	// mockLLMWriteStdinArguments wait for a running exec_command's
+	// session: no input, up to the yield (codex allows minutes on an
+	// empty write).
+	mockLLMWriteStdinArguments struct {
+		SessionID   int    `json:"session_id"`
+		Chars       string `json:"chars"`
+		YieldTimeMS int    `json:"yield_time_ms"`
+	}
 	mockLLMSearchArguments struct {
 		Query string `json:"query"`
 		Limit int    `json:"limit"`
@@ -146,7 +170,17 @@ const (
 	mockLLMItemDone     = "completed"
 	mockLLMMessage      = "message"
 	mockLLMFunctionCall = "function_call"
-	mockLLMOutputText   = "output_text"
+	// mockLLMFunctionCallOutput is the runtime's input item returning a
+	// function call's output.
+	mockLLMFunctionCallOutput = "function_call_output"
+	mockLLMOutputText         = "output_text"
+	// The shell tools of codex: the classic one, and the unified exec
+	// and its stdin, which codex 0.163 and later offer instead.
+	mockLLMShellTool      = "shell_command"
+	mockLLMExecTool       = "exec_command"
+	mockLLMWriteStdinTool = "write_stdin"
+	// mockLLMExecYieldMS is the longest an exec_command call waits.
+	mockLLMExecYieldMS = 30_000
 )
 
 // mockLLMConfig is the script for the MCP tools on mcpServer: per turn the
@@ -161,10 +195,12 @@ func mockLLMConfig(mcpServer string) ([]mockLLMScriptEntry, error) {
 			if err != nil {
 				return nil, err
 			}
-			entries = append(entries, mockLLMEntry(turn.name, turn.prompt, mockLLMItem{
+			entry := mockLLMEntry(turn.name, turn.prompt, mockLLMItem{
 				ID: "fc_agentlab_" + turn.name, Type: mockLLMFunctionCall, Status: mockLLMItemDone,
-				CallID: callID, Name: "shell_command", Arguments: string(arguments),
-			}))
+				CallID: callID, Name: mockLLMShellTool, Arguments: string(arguments),
+			})
+			entry.command = turn.command
+			entries = append(entries, entry)
 		} else {
 			// codex defers an MCP server's tools behind its tool search:
 			// the search first, then the call in the server's namespace.
@@ -203,16 +239,68 @@ func mockLLMEntry(name, match string, output mockLLMItem) mockLLMScriptEntry {
 	}
 }
 
-// mockLLMMatch is the script's answer to a request: the first entry whose
-// match the last input item (as JSON; the input itself when it is a
-// string) contains, false for none.
-func mockLLMMatch(script []mockLLMScriptEntry, last string) (mockLLMResponse, bool) {
+// mockLLMMatch is the script's answer to a request offering tools: a wait
+// for an exec_command still running, else the first entry whose match the
+// last input item (as JSON; the input itself when it is a string)
+// contains, its shell call on the shell tool offered; false for none.
+func mockLLMMatch(script []mockLLMScriptEntry, last string, tools []string) (mockLLMResponse, bool) {
+	if wait, ok := mockLLMExecWait(last); ok {
+		return wait, true
+	}
 	for _, entry := range script {
 		if strings.Contains(last, entry.match) {
-			return entry.response, true
+			return entry.onShellTool(tools), true
 		}
 	}
 	return mockLLMResponse{}, false
+}
+
+// onShellTool is the entry's response with its shell call on the tool the
+// request offers: exec_command where it offers that and no shell_command.
+func (e mockLLMScriptEntry) onShellTool(tools []string) mockLLMResponse {
+	if e.command == "" || !slices.Contains(tools, mockLLMExecTool) || slices.Contains(tools, mockLLMShellTool) {
+		return e.response
+	}
+	response := e.response
+	call := response.Output[0]
+	arguments, _ := json.Marshal(mockLLMExecArguments{Cmd: e.command, YieldTimeMS: mockLLMExecYieldMS, TimeoutMS: codingProbeTimeoutMS})
+	call.Name, call.Arguments = mockLLMExecTool, string(arguments)
+	response.Output = []mockLLMItem{call}
+	return response
+}
+
+// mockLLMExecRunning is how codex's exec_command and write_stdin report a
+// command still running past the call's yield.
+var mockLLMExecRunning = regexp.MustCompile(`Process running with session ID (\d+)`)
+
+// mockLLMExecWait answers the output of an exec_command (or of a wait for
+// one) whose command still runs with a write_stdin waiting for it, its call
+// id the output's own with a suffix, so the turn's reply still matches the
+// command's final output; false for any other item.
+func mockLLMExecWait(last string) (mockLLMResponse, bool) {
+	var item struct {
+		Type   string `json:"type"`
+		CallID string `json:"call_id"`
+	}
+	if json.Unmarshal([]byte(last), &item) != nil || item.Type != mockLLMFunctionCallOutput {
+		return mockLLMResponse{}, false
+	}
+	// The output is a string or a list of content items: either way its
+	// text is in the item's JSON as written.
+	running := mockLLMExecRunning.FindStringSubmatch(last)
+	if running == nil {
+		return mockLLMResponse{}, false
+	}
+	session, err := strconv.Atoi(running[1])
+	if err != nil {
+		return mockLLMResponse{}, false
+	}
+	arguments, _ := json.Marshal(mockLLMWriteStdinArguments{SessionID: session, YieldTimeMS: codingProbeTimeoutMS})
+	callID := item.CallID + "_wait"
+	return mockLLMEntry("wait", "", mockLLMItem{
+		ID: "fc_" + callID, Type: mockLLMFunctionCall, Status: mockLLMItemDone,
+		CallID: callID, Name: mockLLMWriteStdinTool, Arguments: string(arguments),
+	}).response, true
 }
 
 // mockLLMEvent is one server-sent event of the Responses API's stream: its
@@ -325,7 +413,7 @@ const mockLLMLogItem = 400
 // the script matches, whether it asks for a stream, and its log line: the
 // tools it offers the model (a namespace's tools after its name) and that
 // item.
-func mockLLMRequest(body []byte) (last string, stream bool, line string) {
+func mockLLMRequest(body []byte) (last string, stream bool, tools []string, line string) {
 	type tool struct {
 		Type  string `json:"type"`
 		Name  string `json:"name"`
@@ -339,10 +427,11 @@ func mockLLMRequest(body []byte) (last string, stream bool, line string) {
 		Tools  []tool          `json:"tools"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
-		return "", false, "unreadable: " + err.Error()
+		return "", false, nil, "unreadable: " + err.Error()
 	}
 	names := make([]string, 0, len(req.Tools))
 	for _, t := range req.Tools {
+		tools = append(tools, t.Name)
 		name := firstNonEmpty(t.Name, t.Type)
 		for _, inner := range t.Tools {
 			name += " " + inner.Name
@@ -358,7 +447,7 @@ func mockLLMRequest(body []byte) (last string, stream bool, line string) {
 	case json.Unmarshal(req.Input, &text) == nil:
 		last = text
 	}
-	return last, req.Stream, fmt.Sprintf("tools [%s] last %s", excerpt(strings.Join(names, ", "), mockLLMLogItem), excerpt(last, mockLLMLogItem))
+	return last, req.Stream, tools, fmt.Sprintf("tools [%s] last %s", excerpt(strings.Join(names, ", "), mockLLMLogItem), excerpt(last, mockLLMLogItem))
 }
 
 // ServeMockLLM serves the script for the MCP tools on mcpServer on listen
@@ -406,8 +495,8 @@ func mockLLMHandler(mcpServer string) (handler http.Handler, entries int, err er
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		last, stream, line := mockLLMRequest(body)
-		response, matched := mockLLMMatch(script, last)
+		last, stream, tools, line := mockLLMRequest(body)
+		response, matched := mockLLMMatch(script, last, tools)
 		status := http.StatusOK
 		switch {
 		case !matched:
