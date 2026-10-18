@@ -3,18 +3,21 @@ package lab
 import (
 	"fmt"
 	"net"
+	"strings"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
 
 // The codex Harness's host model (docs/platform.md "The coding agents
-// proof"): codex speaks the OpenAI Responses API alone. `agentlab configure`
-// wires the first of CodexHostModels the host's Ollama has downloaded as a
-// platform.extraModels entry on its Responses API, which coding-test
-// --harness codex --model-config runs on (the proof's default is the
-// in-cluster mockllm, mockllm.go). The proof judges what the model relays of
-// the probe; a hosted Responses API model relays it verbatim, the host
-// models listed here reach the sandbox stages but not yet every stage.
+// proof"): codex speaks the OpenAI Responses API alone. `agentlab configure
+// --codex-host-model` wires the first of CodexHostModels the host's Ollama
+// has downloaded as a platform.extraModels entry on its Responses API, which
+// coding-test --harness codex --model-config runs on (the proof's default is
+// the in-cluster mockllm, mockllm.go). Every one of them is over the memory a
+// lab proof's host model gets, so configure adds none unasked. The proof
+// judges what the model relays of the probe; a hosted Responses API model
+// relays it verbatim, the host models listed here reach the sandbox stages
+// but not yet every stage.
 
 // CodexHostModel is a host model for a codex proof, with the memory it needs
 // loaded.
@@ -33,6 +36,16 @@ type CodexHostModel struct {
 var CodexHostModels = []CodexHostModel{
 	{ID: "qwen3-coder:30b", GiB: 21},
 	{ID: "gpt-oss:20b", GiB: 16},
+}
+
+// CodexHostModelIDs names CodexHostModels with the memory each needs, for
+// the --codex-host-model help and messages.
+func CodexHostModelIDs() string {
+	ids := make([]string, len(CodexHostModels))
+	for i, m := range CodexHostModels {
+		ids[i] = fmt.Sprintf("%s (%d GiB)", m.ID, m.GiB)
+	}
+	return strings.Join(ids, ", ")
 }
 
 // CodexHostModelName is the ModelConfig, and extraModels entry, configure
@@ -78,11 +91,11 @@ func podHostName(podHost string) string {
 }
 
 // ApplyCodexHostModel adds the discovered codex host model to cfg's
-// extraModels while the lab renders the codex Harness and no entry speaks the
-// Responses API yet; an entry of the person's own wins. It returns the entry
-// added, ok false when none was.
-func ApplyCodexHostModel(cfg *config.Config, d *Discovery) (config.ExtraModel, bool) {
-	if !cfg.CodingHarnessRendered(config.CodingRuntimeCodex) || cfg.CodexModelConfig() != "" {
+// extraModels when the person asked for it (requested), the lab renders the
+// codex Harness and no entry speaks the Responses API yet; an entry of the
+// person's own wins. It returns the entry added, ok false when none was.
+func ApplyCodexHostModel(cfg *config.Config, d *Discovery, requested bool) (config.ExtraModel, bool) {
+	if !requested || !cfg.CodingHarnessRendered(config.CodingRuntimeCodex) || cfg.CodexModelConfig() != "" {
 		return config.ExtraModel{}, false
 	}
 	m, ok := d.CodexHostModel()
