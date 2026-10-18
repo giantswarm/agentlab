@@ -142,7 +142,16 @@ and, on a lab with the component, continues on it:
    id_token and talking to the controller over the in-cluster plaintext h2c
    target, which the host-mode gateway never touches. Its Session starts
    through agent-manager over muster's public URL, verified with the lab CA;
-   a failed turn names that URL and the CA source.
+   a failed turn names that URL and the CA source. With the
+   workspace-manager behind muster, the person holds the grant of the App
+   muster pins it to before the mention, whatever an earlier step or run
+   left: the gateway lists a new thread's workspaces (klaus-gateway 4.9.0 and
+   later hold a listing muster refuses behind the Connect prompt). On the
+   lab's GitHub the step grants it and drops the grant after the turn; a
+   real provider's App the person must have granted, else the run fails with
+   muster's sign-in link. A workspace prompt (the person has workspaces,
+   whatever an earlier proof left in their name) is answered with No
+   workspace: the turn proves the gateway, not a workspace.
 
 Then the proof's records are removed (the count is back where it was), and
 the host-mode cleanup takes the fixtures and the Sessions with it. On a

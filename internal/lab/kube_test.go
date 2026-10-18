@@ -171,6 +171,7 @@ func newFakeLab(t *testing.T, objects ...runtime.Object) *fakeLab {
 		gvrHarnesses:         "HarnessList",
 		gvrRemoteMCPServers:  "RemoteMCPServerList",
 		gvrWorkerPools:       "WorkerPoolList",
+		gvrWorkspaces:        "WorkspaceList",
 	}, seeds...)
 	dyn.PrependReactor("patch", "*", fakeApply(dyn.Tracker()))
 
@@ -202,6 +203,8 @@ func newFakeLab(t *testing.T, objects ...runtime.Object) *fakeLab {
 		gvkRemoteMCPServer,
 		// Substrate's WorkerPool, which the Substrate release check reads.
 		gvkWorkerPool,
+		// workspace-manager's Workspace, which the leftover sweep reads.
+		gvkWorkspace,
 	} {
 		mapper.Add(gvk, meta.RESTScopeNamespace)
 	}

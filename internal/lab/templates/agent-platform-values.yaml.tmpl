@@ -1287,9 +1287,8 @@ workspaces:
 # /api/v3), fake-bearer, the same GitHub shaped like github.com (its apiURL
 # on a host of its own), and github, github.com. The base URL carries the gateway port,
 # which the chart's derivation from global.domain drops: the chart routes its
-# host (the grants' key set; a manager before 0.10.0 also its own sign-in
-# pages, /signin, /connect/<instance> and /callback/<instance>, which the lab
-# Dex's agent-platform client lists <base>/signin for). The github
+# host (its MCP endpoint and the grants' key set; the person's provider
+# sign-in is muster's). The github
 # instance renders once the App's ids are in agentlab.yaml and its Secret
 # carries both keys; the values name each instance's Secret, never a value.
 workspace-manager:

@@ -101,14 +101,16 @@ const (
 	gatewayStateKey       = "obo-state.key"
 	gatewayStoreKey       = "obo-store.key"
 	gatewayReadyPath      = "/readyz"
-	gatewayContainer      = "agentlab-klaus-gateway-test"
-	gatewayLogLevel       = "info"
-	recordBound           = "session_bound"
-	recordTurnDone        = "turn_complete"
-	recordDispatch        = "turn_dispatch"
-	recordRefresh         = "token_refresh"
-	recordTurnResume      = "turn_resume"
-	recordLeftRunning     = "task_left_running"
+	// gatewayContainerSuffix names the image shape's container after the
+	// lab's cluster name, so two labs' proofs never remove each other's.
+	gatewayContainerSuffix = "klaus-gateway-test"
+	gatewayLogLevel        = "info"
+	recordBound            = "session_bound"
+	recordTurnDone         = "turn_complete"
+	recordDispatch         = "turn_dispatch"
+	recordRefresh          = "token_refresh"
+	recordTurnResume       = "turn_resume"
+	recordLeftRunning      = "task_left_running"
 	// gatewayResubscribeFailed is the warning of a recovery attempt whose
 	// resubscription did not reach the controller.
 	gatewayResubscribeFailed = "resubscribe to a turn left running failed"
@@ -133,8 +135,10 @@ const (
 	klausGatewayTurnTimeout = 4 * time.Minute
 	klausGatewayReplyWait   = 90 * time.Second
 	klausGatewayCancelWait  = 90 * time.Second
-	klausGatewayStartWait   = 30 * time.Second
-	klausGatewayStopWait    = 20 * time.Second
+	// klausGatewayStartWait bounds the gateway's readiness once it runs; an
+	// image's pull is not counted (pullGatewayImage).
+	klausGatewayStartWait = 30 * time.Second
+	klausGatewayStopWait  = 20 * time.Second
 	// klausGatewayGateClosed is how long the controller stays out of the
 	// restarted gateway's reach in step 5b: longer than a few quick retries,
 	// so only a recovery that keeps trying delivers the turn.
@@ -173,7 +177,7 @@ type KlausGatewayTestOptions struct {
 	GatewayBinary string
 	// Port is the host port of the gateway's Slack endpoints; the admin
 	// endpoints take Port+1, the fake Slack Web API Port+2 when it runs in
-	// this process. Default 18090.
+	// this process. Default the lab's own block, gatewayTestPort.
 	Port int
 	// SlackFakeBinary is the static Linux agentlab the fake Slack Web API
 	// container runs when the component's pods call it (default: this
@@ -210,6 +214,7 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	if user == nil {
 		return fmt.Errorf("no user %q in %s", email, config.File)
 	}
+	opts.Port = cmp.Or(opts.Port, gatewayTestPort(cfg))
 	opts = opts.withDefaults()
 	if opts.Workspaces {
 		if err := klausGatewayWorkspacesPreflight(cfg, user.Email); err != nil {
@@ -250,6 +255,11 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	// every exit path.
 	klausGatewayCleanup(api)
 	defer klausGatewayCleanup(api)
+	endWorkspaces, err := startWorkspaceRun()
+	defer endWorkspaces()
+	if err != nil {
+		return err
+	}
 
 	// The fake workspace: the linked person, a person with no link, and the
 	// component half's linked person (klausgatewaytest_component.go), all
@@ -332,6 +342,7 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 		return err
 	}
 	gw := newGatewayProcess(opts, runDir, caFile, target, fake.baseURL(), cfg.MusterBaseURL())
+	gw.container = gatewayContainerName(cfg)
 	// The gateway starts a thread's Session through agent-manager's
 	// start_session, a muster call it makes itself as the person, so it
 	// trusts the lab CA for muster as it does for the a2a target.
@@ -356,7 +367,7 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	if err != nil {
 		return fmt.Errorf("discovery: %w", err)
 	}
-	names := rosterNames(roster.shown())
+	names := rosterNames(roster)
 	if err := assertSlackRoster(names); err != nil {
 		return fmt.Errorf("discovery: %w", err)
 	}
@@ -563,7 +574,7 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	// creates is removed by the cleanup.
 	var component *componentOutcome
 	if cfg.KlausGatewayEnabled() {
-		if component, err = klausGatewayComponentProof(token, identity, user, fake, people.component); err != nil {
+		if component, err = klausGatewayComponentProof(cfg, token, identity, user, fake, people.component); err != nil {
 			return err
 		}
 	} else {
@@ -615,7 +626,7 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 // withDefaults fills the zero options.
 func (o KlausGatewayTestOptions) withDefaults() KlausGatewayTestOptions {
 	if o.Port == 0 {
-		o.Port = 18090
+		o.Port = defaultGatewayTestPort
 	}
 	if o.Harness == "" {
 		o.Harness = kagentHarness
@@ -632,6 +643,33 @@ func (o KlausGatewayTestOptions) withDefaults() KlausGatewayTestOptions {
 		}
 	}
 	return o
+}
+
+// The host ports of the host-mode gateway proofs: each lab a block of
+// gatewayTestPortStride ports (a proof takes at most five), the lab on the
+// default API server port at defaultGatewayTestPort.
+const (
+	defaultGatewayTestPort = 18090
+	gatewayTestPortStride  = 10
+	// gatewayTestPortBlocks keeps the last block's ports below 65536.
+	gatewayTestPortBlocks = (65536 - defaultGatewayTestPort) / gatewayTestPortStride
+)
+
+// gatewayTestPort is the lab's default first host port of the gateway
+// proofs, derived from its API server port: no two labs on a machine share
+// that one (another lab's recorded ports are refused), so their blocks never
+// overlap and two labs run the proofs at the same time.
+func gatewayTestPort(cfg *config.Config) int {
+	block := (cfg.APIServerPort - config.DefaultAPIServerPort) % gatewayTestPortBlocks
+	if block < 0 {
+		block += gatewayTestPortBlocks
+	}
+	return defaultGatewayTestPort + block*gatewayTestPortStride
+}
+
+// gatewayContainerName is the image shape's container of the lab's proofs.
+func gatewayContainerName(cfg *config.Config) string {
+	return cfg.ClusterName + "-" + gatewayContainerSuffix
 }
 
 // portsFree refuses to start on a port something else already listens on.
@@ -1064,8 +1102,14 @@ type gatewayProcess struct {
 	// network is the container's docker network (default host); host the
 	// address the proof reaches its endpoints on (default 127.0.0.1).
 	network, host string
-	cmd           *exec.Cmd
-	logFile       *os.File
+	// container names the image shape's container (default the first lab's,
+	// gatewayContainerName); startWait bounds the readiness once it runs and
+	// stopWait the end after stop() asked for it (defaults
+	// klausGatewayStartWait and klausGatewayStopWait).
+	container           string
+	startWait, stopWait time.Duration
+	cmd                 *exec.Cmd
+	logFile             *os.File
 	// exited is closed once the process has ended; exitErr is its Wait result.
 	// A closed channel satisfies every later wait, so a gateway that died
 	// before serving is noticed by the readiness probe and stop() still
@@ -1095,6 +1139,10 @@ func (g *gatewayProcess) adminURL() string {
 }
 
 func (g *gatewayProcess) logPath() string { return filepath.Join(g.runDir, gatewayLogFile) }
+
+func (g *gatewayProcess) containerName() string {
+	return cmp.Or(g.container, config.DefaultClusterName+"-"+gatewayContainerSuffix)
+}
 
 // gatewayFlags is where the gateway listens, what it talks to and where its
 // files are, for one shape.
@@ -1158,6 +1206,14 @@ func dockerRunArgs(image, name, network, runDir, caFile string, uid, gid int, ar
 
 // start launches the gateway and waits for its readiness.
 func (g *gatewayProcess) start() error {
+	startWait := cmp.Or(g.startWait, klausGatewayStartWait)
+	if g.opts.GatewayBinary == "" {
+		// The pull is not the gateway's start: an uncached image is in the
+		// host's cache before the readiness wait begins.
+		if err := pullGatewayImage(g.opts.GatewayImage, startWait); err != nil {
+			return err
+		}
+	}
 	logFile, err := os.OpenFile(g.logPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return err
@@ -1174,9 +1230,9 @@ func (g *gatewayProcess) start() error {
 			g.cmd.Env = append(g.cmd.Env, "SSL_CERT_FILE="+g.caFile)
 		}
 	} else {
-		_ = command(dockerBin, "rm", "-f", gatewayContainer).Run()
+		_ = command(dockerBin, "rm", "-f", g.containerName()).Run()
 		flags.dataDir, flags.caFile = gatewayDataPath, gatewayCAPath
-		args := dockerRunArgs(g.opts.GatewayImage, gatewayContainer, g.network, g.runDir, g.caFile, os.Getuid(), os.Getgid(), append(gatewayArgs(flags), g.extraArgs...))
+		args := dockerRunArgs(g.opts.GatewayImage, g.containerName(), g.network, g.runDir, g.caFile, os.Getuid(), os.Getgid(), append(gatewayArgs(flags), g.extraArgs...))
 		// The mounts and the variables go before the image, which
 		// dockerRunArgs puts right after its own flags.
 		var extra []string
@@ -1199,7 +1255,7 @@ func (g *gatewayProcess) start() error {
 	go func(cmd *exec.Cmd, exited chan<- struct{}) { g.exitErr = cmd.Wait(); close(exited) }(g.cmd, g.exited)
 
 	client := &http.Client{Timeout: 2 * time.Second}
-	ready := waitFor(int(klausGatewayStartWait/(500*time.Millisecond)), 500*time.Millisecond, func() bool {
+	ready := waitFor(int(startWait/(500*time.Millisecond)), 500*time.Millisecond, func() bool {
 		if g.ended() {
 			return true
 		}
@@ -1211,7 +1267,7 @@ func (g *gatewayProcess) start() error {
 		return resp.StatusCode == http.StatusOK
 	})
 	if g.ended() || !ready {
-		why := fmt.Sprintf("did not become ready at %s%s within %s", g.adminURL(), gatewayReadyPath, klausGatewayStartWait)
+		why := fmt.Sprintf("did not become ready at %s%s within %s", g.adminURL(), gatewayReadyPath, startWait)
 		if g.ended() {
 			why = fmt.Sprintf("exited before serving %s (%v)", gatewayReadyPath, g.exitErr)
 		}
@@ -1233,27 +1289,46 @@ func (g *gatewayProcess) ended() bool {
 }
 
 // stop ends the gateway: SIGTERM (docker stop for the container) and a
-// bounded wait, SIGKILL after it. Idempotent; a gateway that never started
-// is nothing to stop.
+// bounded wait, SIGKILL after it. The container is removed whatever the
+// docker client did: a client killed while the daemon still created or ran
+// the container leaves it holding the lab's ports. Idempotent; a gateway
+// that never started is nothing to stop.
 func (g *gatewayProcess) stop() error {
 	if g.cmd == nil {
 		return nil
 	}
-	if g.opts.GatewayBinary == "" {
-		_ = command(dockerBin, "stop", "-t", "15", gatewayContainer).Run()
+	image := g.opts.GatewayBinary == ""
+	if image {
+		_ = command(dockerBin, "stop", "-t", "15", g.containerName()).Run()
 	} else {
 		_ = g.cmd.Process.Signal(syscall.SIGTERM)
 	}
 	select {
 	case <-g.exited:
-	case <-time.After(klausGatewayStopWait):
+	case <-time.After(cmp.Or(g.stopWait, klausGatewayStopWait)):
 		_ = g.cmd.Process.Kill()
 		<-g.exited
+	}
+	if image {
+		_ = command(dockerBin, "rm", "-f", g.containerName()).Run()
 	}
 	g.cmd, g.exited = nil, nil
 	if g.logFile != nil {
 		_ = g.logFile.Close()
 		g.logFile = nil
+	}
+	return nil
+}
+
+// pullGatewayImage puts the image in the host's docker cache unless it is
+// there already.
+func pullGatewayImage(image string, wait time.Duration) error {
+	if _, err := outputQuiet(dockerBin, "image", "inspect", image); err == nil {
+		return nil
+	}
+	note("pulling %s (not counted against the %s readiness wait)", image, wait)
+	if _, err := outputQuiet(dockerBin, "pull", "-q", image); err != nil {
+		return fmt.Errorf("pulling the klaus-gateway image: %w", err)
 	}
 	return nil
 }
@@ -1446,7 +1521,13 @@ func (p *slackProof) awaitTurn(t *slackThread, before int) (*slackTurn, error) {
 // firstTurn is a thread's first message with one visible retry: a cold
 // worker's first resume can hit Substrate's ResumeActor deadline once.
 func (p *slackProof) firstTurn(t *slackThread, text string) (*slackTurn, error) {
-	turn, err := p.say(t, text)
+	return p.firstTurnBy(p.say, t, text)
+}
+
+// firstTurnBy is firstTurn whose first message is sent by first; the retry
+// is a plain say in the thread it opened.
+func (p *slackProof) firstTurnBy(first func(*slackThread, string) (*slackTurn, error), t *slackThread, text string) (*slackTurn, error) {
+	turn, err := first(t, text)
 	if err == nil && (turn.record.Outcome == outcomeCompleted || turn.record.Outcome == outcomeInputReq) {
 		return turn, nil
 	}
@@ -1498,14 +1579,12 @@ func (p *slackProof) roster(user string) (slackMessage, error) {
 		return slackMessage{}, err
 	}
 	msgs, ok := waitThread(p.fake, p.channel, ts, klausGatewayReplyWait, func(msgs []slackMessage) bool {
-		_, found := findMessage(msgs, slackRosterHeading)
-		return found
+		return slices.ContainsFunc(msgs, slackMessage.isRoster)
 	})
 	if !ok {
 		return slackMessage{}, fmt.Errorf("`@bot %s` got no roster within %s; the thread shows: %s", slackAgentsWord, klausGatewayReplyWait, threadLine(msgs))
 	}
-	post, _ := findMessage(msgs, slackRosterHeading)
-	return post, nil
+	return msgs[slices.IndexFunc(msgs, slackMessage.isRoster)], nil
 }
 
 // assertSlackRoster checks the roster lists the admitted fixture by its

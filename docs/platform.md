@@ -88,6 +88,16 @@ The lab installs it in its **lab shape**:
   instead of quoting the pin, and `agentlab configure --adopt-chart`
   writes the chart in place into the pin — or `agentlab platform` installs
   the pin over the cluster, the boot naming the downgrade.
+- A `platform.valuesFiles` overlay changes what the lab runs without
+  changing the chart version: a proof's `components.<name>.versionRange`
+  pins a component the chart's own range does not admit. `agentlab status`
+  names every overlay with the values it sets, and the ones the release in
+  place was installed with (each platform run records them in its
+  revision's description) that `agentlab.yaml` no longer lists. Before a
+  shared lab is handed on, `agentlab configure --released` drops the proof
+  state (overlays, dev images, a chart directory, the dev channel, a local
+  guest image) and `agentlab platform` installs the released platform, so
+  the next holder starts there.
 - A field a hand wrote on a platform workload — `kubectl patch` of muster's
   `hostNetwork`, a `kubectl set env` on Backstage — is no release's: Helm and
   helm-controller's drift correction own and correct only the fields the
@@ -101,7 +111,9 @@ The lab installs it in its **lab shape**:
   edit's entry, names each (`Put back to its release's render: …`) and waits
   for the roll; a field it cannot put back fails the run, named. A field
   written by any other manager than the releases' (`helm`, `helm-controller`,
-  the lab's `agentlab`, `kube-controller-manager`) is named by `agentlab
+  the lab's `agentlab`, the connectivity release's config-reload hook
+  `agent-platform-config-reload`, which stamps the Backstage app-config
+  checksum into the pod template, `kube-controller-manager`) is named by `agentlab
   status` on its `workloads` line, warned at the end of `agentlab platform`
   and at every proof's opening, and fails platform-test's first stage,
   `workload field managers`. A rollout restart's `restartedAt` annotation is
@@ -1038,11 +1050,31 @@ names by digest (`agentlab configure --coding-images omp=<image>`; the
 release's chart stamps it as `runtimeImages.ompHarness.digest`), a dev
 image (`platform.devImages` `omp-harness`) winning over it.
 
-A codex proof judges what the model relays of the probe, so it needs a
-model that runs the script and relays its lines verbatim. A hosted OpenAI
-Responses API model does; name its ModelConfig with `--model-config` (an
-`OpenAI` extraModels entry with `apiFormat: responses` and its key in
-`apiKeyEnv`). No host model passes every stage yet:
+`coding-test --harness codex` runs on the in-cluster mockllm unless
+`--model-config` names another model: a mock OpenAI Responses API in the
+shape of kagent's mockllm (its matching and its stream's events, served by
+agentlab itself, no SDK), scripted for the proof's turns, so the proof
+reaches its verdict on a lab with no OpenAI or Bedrock account. It runs
+the way a proof's fake runs: `agentlab mockllm` in a container on the kind
+network, reached by the cluster as the Service `agentlab-mockllm` in the
+platform namespace, which the run's ModelConfig `agentlab-mockllm` (the
+`OpenAI` provider, `gpt-5.2-codex`, `apiFormat: responses`, a placeholder
+key) names as its base URL; the run removes all three at its end. The script
+answers each prompt with the tool call it asks for (the probe script, the
+MCP tool through codex's tool search, the code word's file, its read-back)
+and a fixed reply once the tool's output is back. The sandbox stages, the
+MCP call and the resume's file judge those outputs, what the sandbox
+printed and the tool answered, as the harness reports them on the turn's
+tool results; the code word the resumed turn recalls is the script's. The
+`model` stage closes the run: every model call answered by the script, none
+outside it. A failed run quotes the mockllm's last requests: the tools each
+offered the model and its last input item, what the script matched or did
+not.
+
+A real model is named with `--model-config`: a hosted OpenAI Responses API
+model (an `OpenAI` extraModels entry with `apiFormat: responses` and its key
+in `apiKeyEnv`) relays the probe verbatim. No host model passes every stage
+yet:
 
 | Host model (Ollama) | Memory loaded | On the codex proof |
 |---|---|---|
@@ -1053,16 +1085,15 @@ Responses API model does; name its ModelConfig with `--model-config` (an
 With the codex Harness rendered, `agentlab configure` wires the first of
 `qwen3-coder:30b` and `gpt-oss:20b` the host's Ollama has downloaded as the
 extraModels entry `codex-host` (the `OpenAI` provider on Ollama's `/v1`,
-`apiFormat: responses`, keyless). `coding-test --harness codex` runs on the
-first extraModels entry on the Responses API unless `--model-config` names
-another, under the 40m host model turn deadline; a failed sandbox stage
+`apiFormat: responses`, keyless), which `--model-config codex-host` runs the
+proof on under the 40m host model turn deadline; a failed sandbox stage
 quotes the agent's reply.
 
 ```sh
-ollama pull qwen3-coder:30b
 agentlab configure --defaults --coding --coding-harnesses claude,codex
 agentlab platform
-agentlab coding-test --harness codex
+agentlab coding-test --harness codex                            # the mockllm
+agentlab coding-test --harness codex --model-config codex-host  # a host model
 ```
 
 The workspaces proof's claude Session runs on the same `claude` Harness,
@@ -1087,11 +1118,12 @@ the one that runs on both of those:
 | credentials | no forge token or bearer in the environment or `/data`; the model key kagent's placeholder, or unset where the runtime keeps it out of the shell's environment (omp); on `codex` every `KAGENT_CODEX_MCP_CREDENTIAL_*` the sandbox sees the placeholder too, on `omp` every `KAGENT_CREDENTIAL_*` |
 | dns canary | a recorded state, not a gate: `example.org` through the cluster resolver and directly at 1.1.1.1 |
 | egress | `proxy.golang.org` denied 403 at the egress gate; `api.github.com`, one of the Agent's origins, reached |
-| mcp call | the agent calls `x_agent-manager_list_agents` through its MCP binding and finds itself listed |
+| mcp call | the agent calls `x_agent-manager_list_agents` through its MCP binding and finds itself listed; SKIP where the secret-backed credential stage skipped and the call answered nothing else: the binding carries no credential on that line, so muster refuses the runtime's MCP connection (401) and the runtime has none of the binding's tools |
 | instruction fixture (*claude*) | a record: what Claude Code loads from a repository's `CLAUDE.md`, `AGENTS.md`, `.claude/` settings, hook, skill, subagent and command and `.mcp.json` on the pinned release |
 | suspend and resume | the Session's file and conversation survive the snapshot |
 | usage | the resumed turn's task status carries its usage |
 | share refused | a read-write share of the coding Session is refused: a collaborator's turn would run under what the first sender's turns left behind (git hooks, Makefiles, background processes) |
+| model (*codex on the mockllm*) | the mockllm answered every model call of the turns from its script, none outside it |
 
 The sandbox stages read one turn: the agent's shell tool runs a POSIX script
 and relays its `AGENTLAB_PROBE` lines, and each stage judges its own. The
@@ -1229,6 +1261,53 @@ repository's pipeline does not have, and its subject is a release of another
 line, not a change of agentlab. The unit tests of every piece it adds run in
 `make test`.
 
+### The kagent step proof (conversations across a kagent step)
+
+`agentlab kagent-step-test` proves that an agent and its conversation
+survive a step of the kagent line under them, the way
+`substrate-step-test` proves a Substrate step. It names the step in one of
+two shapes, or both:
+
+- `--to <kagent release>` pins the `kagent` and `kagent-crds` components to
+  that exact release of the kagent line (`1.14.0`, `1.15.1-rc.2`) through a
+  values overlay of the run's own (`state/kagent-step-values.yaml`), on the
+  chart the lab runs: a step within the released line, or to a kagent
+  release candidate. The lab must run an older kagent before it.
+- `--chart <agent-platform release>` moves the meta chart to a candidate
+  release (`4.145.1-rc.6`) whose kagent range moves, with the values that
+  candidate carries for the new line: the step a platform candidate takes
+  when it keeps Substrate and steps kagent, which `substrate-step-test --to`
+  cannot express. A candidate that leaves kagent where it was fails the step
+  stage: it is no subject of this proof.
+
+The run, on the static binary (no scratch driver): the kagent line before
+the step read off the meta chart, the kagent HelmRelease's applied chart and
+the controller's image; an agent on the platform Harness with a
+conversation of one turn (a random codeword), suspended; the platform
+upgraded in place onto the step and the kagent controller rolled out; then
+the conversation from before the step resumed (`resume`), a turn on it that
+must answer the codeword (`turn`), a suspend and a resume more on the new
+controller (`suspend`), and the conversation and the agent deleted, the
+Session gone and Substrate holding nothing of the agent (`delete`). Each
+PASS line names what it proved; a failure's FAIL line starts with the stage
+that failed — `step`, `resume`, `turn`, `suspend` or `delete` — and its
+cause. The lab returns to its own configuration afterwards (the overlay
+removed, `agentlab.yaml`'s chart upgraded back onto); `--stay` leaves it on
+the step. `--step-dev-image <target>=<image>` adds dev images for the step
+alone (a `kagent` controller build), `--ready-timeout` bounds the golden
+boot, `--model-config` names the ModelConfig.
+
+```bash
+agentlab kagent-step-test --to 1.14.0              # a step within the released kagent line
+agentlab kagent-step-test --chart 4.145.1-rc.6     # a platform candidate that steps kagent 1.13 -> 1.15
+```
+
+**Where it runs.** The proof is the lab round of every kagent release
+candidate and every agent-platform candidate that moves the kagent range, on
+a lab on the platform's current release. Like the Substrate step proof it is
+not a CircleCI job of this repository: its turns are model turns. The unit
+tests of its pieces run in `make test`.
+
 ### The Substrate tunnel-close proof (gRPC to an HTTP/1.1-only actor)
 
 `agentlab substrate-tunnel-test` proves that a gRPC call through
@@ -1324,9 +1403,13 @@ controller `GRPCRoute` validates the forwarded token at the edge),
 `a2a.namespace: kagent`, the fixture as the default agent, Slack in `events`
 mode on the fake, OBO on the seeded bolt link store, a bolt routing store —
 all in a run directory (`--run-dir` keeps it, together with the keys and the
-gateway's log). The Slack endpoints listen on `127.0.0.1:18090`
-(`--gateway-port`; the admin endpoints take the next port, the fake the one
-after). This is the leg the meta chart's in-cluster component
+gateway's log). The Slack endpoints listen on `127.0.0.1:18090` on the
+first lab, ten ports higher per port a lab's `apiServerPort` sits above
+6443, so two labs never share one (`--gateway-port`; the admin endpoints
+take the next port, the fake the one after). The image shape's container is
+`<clusterName>-klaus-gateway-test`; an uncached image is pulled before the
+30 s readiness wait starts, and the container is removed on every exit,
+a readiness timeout included. This is the leg the meta chart's in-cluster component
 (`components.klaus-gateway`, `klausGateway.a2a.url` = the in-cluster
 `grpc://agentgateway.agent-platform.svc.cluster.local:8080`) does not
 exercise: the public route with TLS and the JWT policy. The component is the

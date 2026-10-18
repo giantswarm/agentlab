@@ -40,7 +40,7 @@ names a missing module (on Debian and Ubuntu the kernel's
 `linux-modules-extra` package carries them).
 
 `agentlab status` prints a `workspaces` line: the NFS server and its node, the
-controller with its proxy, the node plugin, the class, whose
+controller with its proxy (or without it, [without Substrate](#without-agent-substrate)), the node plugin, the class, whose
 CSIDriverConfig registers the driver, and the chart's CSI companion when it
 runs ([The CSI companion](#the-csi-companion)). `agentlab platform-down`, `agentlab
 down` and `agentlab platform` with the switch off take it apart in one order:
@@ -55,7 +55,7 @@ good, a node that can then be neither stopped nor removed.
 ### Turning it on
 
 ```sh
-agentlab configure --workspaces   # needs --agents (on by default)
+agentlab configure --workspaces   # with --agents (on by default); without, see below
 agentlab up                       # or `agentlab platform` on a running lab
 agentlab workspaces-test          # --storage-only: the storage alone
 agentlab workspaces-test --part sync   # workspaces defined through the manager, their mirrors
@@ -72,6 +72,32 @@ agentlab workspaces-test --part refresh # the sync a Session's start requests pa
 
 With the switch off, nothing of it is installed, and `agentlab platform` on a
 lab that had it removes it.
+
+### Without Agent Substrate
+
+Agent Substrate comes with the agents (`platform.agents`). With the agents off
+and the workspaces on, the lab is an installation that runs the workspaces
+before Substrate: the shape an in-place switch of the agents and Substrate
+starts from.
+
+```sh
+agentlab configure --agents=false --workspaces && agentlab platform   # workspaces, no Substrate
+agentlab platform-test                                                # the workspace-manager's stage included
+agentlab configure --agents && agentlab platform                      # Substrate switched on in place
+```
+
+The chart gets the same `workspaces:` values as with Substrate; it renders no
+`CSIDriverConfig` and no Substrate-side piece while its substrate component is
+off. The lab installs the storage without the controller's mTLS proxy, which
+only Substrate's signers certify: the controller runs its provisioner and
+resizer alone, so the class serves the cluster's claims and nothing waits on a
+certificate. No `CSIDriverConfig` registers the driver, and `agentlab status`
+reads `without its mTLS proxy (Agent Substrate off)`. `workspaces-test` and
+`workspaces-measure` refuse the shape, since every step mounts through
+Substrate, and the CSI companion (`--workspaces-csi-companion`), Substrate's
+driver, needs the agents. Switching the agents on re-applies the storage with
+the proxy before the chart, then waits for it and the registration after the
+install, as on a fresh lab.
 
 ### The CSI companion
 
@@ -796,6 +822,30 @@ pin to a real provider's App needs the person's own browser sign-in once,
 and `platform-test` then ends its workspace-manager stage at muster's
 sign-in link.
 
+### What a run leaves: nothing
+
+The proofs share one lab with each other and with the Dev Portal's
+Playwright suite, so none of them assumes a clean lab or leaves state
+behind (`internal/lab/workspacefixtures.go`):
+
+- Every Workspace a proof creates carries `agentlab.giantswarm.io/fixture:
+  workspace` and the run's id under `agentlab.giantswarm.io/run`; the
+  manager takes no labels, so the lab sets them on its object after
+  `create_workspace`.
+- Every grant of the pinned App a proof uses goes into the run's ledger and
+  is dropped in muster (`core_auth_logout`) when the command ends, on a
+  failure too: after `platform-test`, `workspaces-test`,
+  `workspaces-signin-test`, `workspaces-measure` or `klaus-gateway-test` no
+  lab user holds a grant, so the portal's sign-in specs and the gateway's
+  workspace prompt see the same lab used as fresh.
+- `workspaces-test`, `workspaces-signin-test`, `workspaces-measure` and
+  `klaus-gateway-test` start by removing what an earlier run left: the lab's
+  labelled Workspaces of another run, and the portal suite's `e2e-ws-<run>-…`
+  of a run that started more than three hours ago (the suite's own
+  leftover age, so a portal run going on keeps its own). Each is deleted
+  with its deletion cycle requested at once; one a live Session's directory
+  still holds stays deleting, which no prompt or picker offers.
+
 ### The lab's Organization
 
 The workspace tools act only for a member of a workspace's Organization, and
@@ -906,10 +956,8 @@ in GitHub's UI (Settings, Developer settings, GitHub Apps), and serves every
 lab:
 
 - **Callback URLs**: each lab's muster callback
-  `https://muster.<domain>:<gatewayPort>/oauth/proxy/callback` (with
-  workspace-manager 0.10.0 and newer;
-  `https://workspace-manager.<domain>:<gatewayPort>/callback/github` before;
-  `agentlab configure` prints it; a GitHub App takes up to ten).
+  `https://muster.<domain>:<gatewayPort>/oauth/proxy/callback`
+  (`agentlab configure` prints it; a GitHub App takes up to ten).
 - **User-to-server tokens with expiry** on; no device flow, no webhook.
 - **Repository permissions**: Metadata read; Contents, Pull requests and
   Issues read and write; Checks read.
@@ -952,9 +1000,7 @@ GitLab's side, set up once by an administrator of the instance:
 - An instance-wide **OAuth application** (Admin Area, Applications), scopes
   `api read_user read_repository write_repository`, redirect URI each lab's
   muster callback `https://muster.<domain>:<gatewayPort>/oauth/proxy/callback`
-  (with workspace-manager 0.10.0 and newer;
-  `https://workspace-manager.<domain>:<gatewayPort>/callback/gitlab` before;
-  `agentlab configure` prints it), confidential.
+  (`agentlab configure` prints it), confidential.
 - A **group access token** of the group, role Reporter, scopes `read_api
   read_repository`: the sync lists the group's projects and mirrors them over
   HTTPS with it.

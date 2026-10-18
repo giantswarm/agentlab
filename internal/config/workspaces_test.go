@@ -6,9 +6,11 @@ import (
 	"testing"
 )
 
-// The workspaces switch: it needs the agents runtime (Substrate's signers
-// certify the driver's endpoint); the NFS driver's node plugin runs on every
-// node, so any number of reserved substrate workers is accepted.
+// The workspaces switch: with the agents runtime the workspaces run with
+// Agent Substrate; without it they run alone, the shape an in-place switch
+// of the agents starts from, and the CSI companion (Substrate's driver) is
+// refused; the NFS driver's node plugin runs on every node, so any number
+// of reserved substrate workers is accepted.
 func TestWorkspacesSwitch(t *testing.T) {
 	cfg := Default()
 	if cfg.WorkspacesEnabled() {
@@ -18,8 +20,8 @@ func TestWorkspacesSwitch(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("workspaces on with agents: %v", err)
 	}
-	if !cfg.WorkspacesEnabled() {
-		t.Fatal("WorkspacesEnabled false with the platform, the agents and the key on")
+	if !cfg.WorkspacesEnabled() || !cfg.WorkspacesSubstrate() {
+		t.Fatal("WorkspacesEnabled or WorkspacesSubstrate false with the platform, the agents and the key on")
 	}
 	cfg.SubstrateNodes = 2
 	if err := cfg.Validate(); err != nil {
@@ -29,11 +31,24 @@ func TestWorkspacesSwitch(t *testing.T) {
 	cfg = Default()
 	cfg.Platform.Workspaces.Enabled = true
 	cfg.Platform.Agents = false
-	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "platform.workspaces requires platform.agents") {
-		t.Errorf("workspaces without agents: err = %v, want the agents requirement", err)
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("workspaces without agents: %v, want accepted (Substrate off)", err)
 	}
-	if cfg.WorkspacesEnabled() {
-		t.Error("WorkspacesEnabled true without the agents runtime")
+	if !cfg.WorkspacesEnabled() {
+		t.Error("WorkspacesEnabled false without the agents runtime, want the storage and the manager on")
+	}
+	if cfg.WorkspacesSubstrate() {
+		t.Error("WorkspacesSubstrate true without the agents runtime")
+	}
+	if cfg.CodingHarnessRendered(CodingRuntimeClaude) {
+		t.Error("the claude Harness renders for the workspaces without the agents runtime")
+	}
+	cfg.Platform.Workspaces.CSICompanion = true
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "platform.workspaces.csiCompanion requires platform.agents") {
+		t.Errorf("the CSI companion without agents: err = %v, want the agents requirement", err)
+	}
+	if cfg.WorkspacesCSICompanion() {
+		t.Error("WorkspacesCSICompanion true without Substrate")
 	}
 
 	cfg = Default()
@@ -96,12 +111,6 @@ func TestWorkspacesProvider(t *testing.T) {
 		}
 	}
 	cfg.Platform.Workspaces.Provider = ""
-	if got, want := cfg.WorkspaceManagerSignInURL(), "https://workspace-manager.127.0.0.1.nip.io/signin"; got != want {
-		t.Errorf("sign-in URL %s, want %s (port-free on 443)", got, want)
-	}
-	if got, want := cfg.WorkspaceCallbackURL(WorkspaceProviderFake), "https://workspace-manager.127.0.0.1.nip.io/callback/fake"; got != want {
-		t.Errorf("the fake's callback URL %s, want %s", got, want)
-	}
 	if got, want := cfg.GitHubFakeURL(), "https://github.127.0.0.1.nip.io"; got != want {
 		t.Errorf("the fake's URL %s, want %s", got, want)
 	}
