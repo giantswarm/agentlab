@@ -124,7 +124,7 @@ const DefaultAPIServerPort = 6443
 // image is the major.minor components.substrate installs) — a chart that
 // leaves the kagent range open across a Substrate release boots no golden
 // actor (agentlab#187).
-const DefaultChartVersion = "4.142.0"
+const DefaultChartVersion = "4.146.0"
 
 // ChartRepository is where the agent-platform chart releases live.
 const ChartRepository = "oci://gsoci.azurecr.io/charts/giantswarm/agent-platform"
