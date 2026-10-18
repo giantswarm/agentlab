@@ -154,6 +154,12 @@ func (cp *callerCredentialProof) run(p *proofStages) error {
 	if err := cp.probe(session, true); err != nil {
 		return err
 	}
+	if hasMusterProvider(session) {
+		p.begin("caller-credential: muster as the person", "From the sandbox, an MCP initialize to %s with a placeholder Authorization: the egress gateway sets the Actor's JWT for muster's audience, muster serves it as %s", musterInClusterURL, adminUser.Email)
+		if err := cp.probeMuster(session, true); err != nil {
+			return err
+		}
+	}
 
 	p.begin("caller-credential: delete_session", "The Session deleted through agent-manager's delete_session as %s: muster's binding of its sandbox to the person removed", adminUser.Email)
 	if err := cp.deleteSession(session.GetId()); err != nil {
@@ -165,7 +171,16 @@ func (cp *callerCredentialProof) run(p *proofStages) error {
 	if err != nil {
 		return err
 	}
-	return cp.probe(bare, false)
+	if err := cp.probe(bare, false); err != nil {
+		return err
+	}
+	if hasMusterProvider(session) {
+		if hasMusterProvider(bare) {
+			return fmt.Errorf("kagent recorded the provider muster on %s, a Session without a grant", bare.GetId())
+		}
+		return cp.probeMuster(bare, false)
+	}
+	return nil
 }
 
 // fakeBearerRefusal refuses a lab a part on the provider instance
@@ -238,7 +253,7 @@ func (cp *callerCredentialProof) preconditions(adminUser *config.User) error {
 		}
 	}
 	manifest := workspacesAgentManifest(cp.agent, claudeHarness) +
-		fmt.Sprintf("  egress:\n    - %q\n    - %q\n", cfg.GitHubFakeBearerURL(), cfg.GitHubFakeBearerAPIURL())
+		fmt.Sprintf("  egress:\n    - %q\n    - %q\n    - %q\n", cfg.GitHubFakeBearerURL(), cfg.GitHubFakeBearerAPIURL(), strings.TrimSuffix(musterInClusterURL, "/mcp"))
 	if _, err := applyManifests(ctx, []byte(manifest)); err != nil {
 		return fmt.Errorf("applying the Agent %s: %w", cp.agent, err)
 	}
