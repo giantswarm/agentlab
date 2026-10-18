@@ -190,6 +190,19 @@ func TestCleanupAfterHelpNamesTheSessionsRange(t *testing.T) {
 	}
 }
 
+// backstage-test documents --agent in its help: the flag and what it skips.
+func TestBackstageTestHelpDocumentsAgent(t *testing.T) {
+	cmd := find(rootCmd(), "backstage-test")
+	if cmd.Flags().Lookup("agent") == nil {
+		t.Fatal("backstage-test has no --agent flag")
+	}
+	for _, want := range []string{"--agent <namespace>/<name>", "skipped", "left in place"} {
+		if !strings.Contains(cmd.Long, want) {
+			t.Errorf("backstage-test help does not say %q", want)
+		}
+	}
+}
+
 // Without a terminal `configure` refuses before its form starts, and the
 // message names --defaults, the way without one.
 func TestConfigureWithoutATerminalNamesDefaults(t *testing.T) {

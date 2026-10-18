@@ -2055,17 +2055,31 @@ func beekeeperCentralTestCmd() *cobra.Command {
 }
 
 func backstageTestCmd() *cobra.Command {
-	return &cobra.Command{
+	var opts lab.BackstageTestOptions
+	cmd := &cobra.Command{
 		Use:   "backstage-test [email...]",
 		Short: "Headless Backstage sign-in + muster proof (default: every user)",
+		Long: `Drives the Backstage sign-in headlessly for every user (or the ones named) and
+the muster hop with each user's own forwarded token; with platform.agents on,
+the Dev Portal's Agent Platform pages the way a person drives them: the
+wizard's create path, the agents list per user, the chat, HITL and Stop, the
+edit path and the delete. Everything it creates is removed on every path.
+
+--agent <namespace>/<name> runs the Agent Platform half against an agent that
+already exists instead: the create path, the HITL fixture, the edits and every
+delete are skipped, the agent is waited for until Ready, listed on every
+user's roster and chatted with, and left in place. Use it where the create
+step fails or is not wanted, or to repeat only the chat steps.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadProofLab()
 			if err != nil {
 				return err
 			}
-			return lab.BackstageTest(cfg, args)
+			return lab.BackstageTest(cfg, args, opts)
 		},
 	}
+	cmd.Flags().StringVar(&opts.Agent, "agent", "", "an existing agent as <namespace>/<name> (namespace kagent): skip the create and teardown steps and prove the roster and the chat on it, leaving it in place")
+	return cmd
 }
 
 func logsCmd() *cobra.Command {

@@ -634,14 +634,72 @@ func TestRoster(t *testing.T) {
 	spec := agentSpec{Name: testRosterRelease, DisplayName: "Display " + testRosterRelease, Toolset: []string{presetReadOnly, workflowIncidentTriage}}
 	viewer := fp.session(testPortalViewer, viewerGroup)
 	viewer.dexIDToken = "viewer-token"
-	verdicts, err := proveRoster([]*portalSession{admin, viewer}, spec)
+	verdicts, err := proveRoster([]*portalSession{admin, viewer}, rosterWantFor(spec))
 	if err != nil || len(verdicts) != 2 || !strings.Contains(verdicts[1], "403") {
 		t.Errorf("proveRoster: %v %v", verdicts, err)
 	}
 	// A developer who can read is a change of the lab's grants, reported.
 	dev := fp.session("dev@lab.local", "developers")
-	if _, err := proveRoster([]*portalSession{dev}, spec); err == nil || !strings.Contains(err.Error(), "grants "+kagentAPIGroup) {
+	if _, err := proveRoster([]*portalSession{dev}, rosterWantFor(spec)); err == nil || !strings.Contains(err.Error(), "grants "+kagentAPIGroup) {
 		t.Errorf("a readable roster for a non-admin: %v", err)
+	}
+}
+
+// testExistingAgent names the agent of the --agent tests.
+const testExistingAgent = "existing"
+
+// TestRosterWant: the row of an agent the run wrote is asserted in full; an
+// existing agent's (--agent) only by Ready on Harness and its owning release
+// when it has one.
+func TestRosterWant(t *testing.T) {
+	row := rosterRow{Name: testExistingAgent, Namespace: kagentNamespace, DisplayName: "Mine", Readiness: rosterReady, Harness: kagentHarness,
+		Toolset: []string{presetReadOnly}, Declared: true, OwningRelease: testExistingAgent}
+	full := rosterWantFor(agentSpec{Name: testExistingAgent, DisplayName: "Mine", Toolset: []string{presetReadOnly}})
+	existing := rosterWant{Name: testExistingAgent, Harness: kagentHarness, OwningRelease: testExistingAgent}
+	for _, tc := range []struct {
+		name    string
+		want    rosterWant
+		mutate  func(*rosterRow)
+		wantErr string
+	}{
+		{"full as written", full, func(*rosterRow) {}, ""},
+		{"full: another display name", full, func(r *rosterRow) { r.DisplayName = "Theirs" }, "owned by HelmRelease"},
+		{"full: another toolset", full, func(r *rosterRow) { r.Toolset = []string{presetNone} }, "declared"},
+		{"existing: any display name and toolset", existing, func(r *rosterRow) { r.DisplayName, r.Toolset, r.Declared = "Theirs", nil, false }, ""},
+		{"existing without a HelmRelease", rosterWant{Name: testExistingAgent, Harness: kagentHarness}, func(r *rosterRow) { r.OwningRelease = "" }, ""},
+		{"existing: not Ready", existing, func(r *rosterRow) { r.Readiness = rosterNotReady }, "wanted " + rosterReady},
+		{"existing: another Harness", existing, func(r *rosterRow) { r.Harness = "nowhere" }, "Harness"},
+		{"existing: another owner", existing, func(r *rosterRow) { r.OwningRelease = "other" }, "owned by HelmRelease"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := row
+			tc.mutate(&r)
+			err := tc.want.check(r)
+			if tc.wantErr == "" && err != nil || tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
+				t.Errorf("check = %v, want %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestParseExistingAgent: --agent is <namespace>/<name> in the lab's agent
+// namespace; empty is the default run that writes its own agents.
+func TestParseExistingAgent(t *testing.T) {
+	if got, err := parseExistingAgent(""); got != nil || err != nil {
+		t.Errorf(`parseExistingAgent("") = %v, %v, want the default run`, got, err)
+	}
+	got, err := parseExistingAgent(kagentNamespace + "/" + testExistingAgent)
+	if err != nil || *got != (portalAgentRef{Namespace: kagentNamespace, Name: testExistingAgent}) {
+		t.Errorf("parseExistingAgent(kagent/%s) = %v, %v", testExistingAgent, got, err)
+	}
+	for _, bad := range []string{testExistingAgent, "/" + testExistingAgent, kagentNamespace + "/", "other/" + testExistingAgent, kagentNamespace + "/a/b"} {
+		if _, err := parseExistingAgent(bad); err == nil {
+			t.Errorf("parseExistingAgent(%q) accepted", bad)
+		}
+	}
+	// A malformed flag is refused before anything touches the lab.
+	if err := BackstageTest(config.Default(), nil, BackstageTestOptions{Agent: testExistingAgent}); err == nil || !strings.Contains(err.Error(), "--agent") {
+		t.Errorf("BackstageTest with --agent mine = %v", err)
 	}
 }
 
