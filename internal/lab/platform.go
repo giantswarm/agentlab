@@ -586,10 +586,18 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	if err := ensureWorkspaceGrantClientID(ctx, workspaceGrant, workspaceProviders); err != nil {
 		return err
 	}
+	// The dev images a Harness runs (`harness`, `<runtime>-harness`), in the
+	// lab registry and pinned by digest before the first render, so the
+	// preload renders the components with the values the install carries.
+	registryImages, err := pushRegistryDevImages(cfg)
+	if err != nil {
+		return err
+	}
 	clusterPins := func(t *tmplData) {
 		t.WorkerPoolArch = workerArch
 		t.WorkspaceProviders = workspaceProviders
 		t.WorkspaceGrant = workspaceGrant
+		registryImages.pin(cfg, t)
 	}
 
 	_, valuesPath, err := renderManifestWith(cfg, platformValuesTemplate, clusterPins)
@@ -686,8 +694,8 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	// every Deployment the component charts tell the lab Dex's localhost
 	// address, the chart's default-on managers and an overlay's included)
 	// and, with dev images (platform.devImages, devimages.go), the Deployment
-	// targets side-loaded and their chart image names read off the renders,
-	// the `harness` image pushed to the lab registry and pinned by digest.
+	// targets side-loaded and their chart image names read off the renders
+	// (the Harness dev images are in every render already).
 	// Then the changed pair goes to the charts once more: the meta chart and
 	// every component whose spec.values moved (recheckReleases), so a schema
 	// that refuses a patch or a dev image is refused here and not after the
@@ -706,7 +714,7 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	var harnessBefore harnessState
 	imageNames := defaultDevImageNames(cfg)
 	if len(cfg.Platform.DevImages) > 0 {
-		if dev, err = prepareDevImages(cfg, renders); err != nil {
+		if dev, err = prepareDevImages(cfg, renders, registryImages); err != nil {
 			return err
 		}
 		imageNames = dev.names
@@ -718,10 +726,6 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	if _, valuesPath, err = renderManifestWith(cfg, platformValuesTemplate, func(t *tmplData) {
 		clusterPins(t)
 		t.PostRenderers = postRenderers
-		if dev != nil {
-			t.HarnessDevImage = dev.harness
-			t.CodingHarnesses = codingHarnessesFor(cfg, t.WorkspaceAdmission, dev.coding)
-		}
 	}); err != nil {
 		return err
 	}

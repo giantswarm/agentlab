@@ -555,3 +555,16 @@ func TestRenderFluxReleaseFromTheLocalChart(t *testing.T) {
 		t.Errorf("a key the local chart's closed schema forbids rendered: %v", err)
 	}
 }
+
+// A skipped render's note carries a chart's own refusal whole — the key it
+// wants is at the end of a long message — and excerpts anything else.
+func TestRenderFailureText(t *testing.T) {
+	refusal := "kagent (kagent 1.15.0): execution error at (kagent/templates/harnesses.yaml:39:4): harnesses[1] (omp) runs a BYO Harness: set harnesses[1].image (" + strings.Repeat("x", 300) + ") and harnesses[1].displayName"
+	if got := renderFailureText(errors.New(refusal)); got != refusal {
+		t.Errorf("the chart's refusal was cut:\n%s", got)
+	}
+	other := "kagent: " + strings.Repeat("y", 400)
+	if got := renderFailureText(errors.New(other)); len(got) >= len(other) || !strings.Contains(got, " ... ") {
+		t.Errorf("a long non-refusal is not excerpted: %d of %d chars", len(got), len(other))
+	}
+}
