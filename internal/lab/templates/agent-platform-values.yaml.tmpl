@@ -1256,6 +1256,11 @@ workspaces:
     storageClassName: {{ .Workspaces.StorageClass }}
     storageClass:
       create: false
+{{- if .Workspaces.Substrate }}
+  # Only with Agent Substrate: the connectivity chart renders the
+  # CSIDriverConfig whenever the cluster serves its CRD, and the CRDs outlive
+  # an in-place switch of the agents off — a named driver would keep the
+  # registration of a Substrate that no longer runs.
   substrate:
 {{- with .Workspaces.Companion }}
     # The chart's CSI companion is Substrate's driver
@@ -1291,6 +1296,7 @@ workspaces:
         enabled: true
         usePodIdentity: true
         serverName: {{ .Workspaces.ServerName }}
+{{- end }}
 {{- end }}
 
 # The workspace-manager's provider instances (platform.workspaces.provider;

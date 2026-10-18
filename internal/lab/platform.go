@@ -849,12 +849,16 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	// a chart whose kagent range admits a worker image from another Substrate
 	// release than its atelet installs green and boots no golden actor —
 	// refused here, with both images and the fix, not five minutes into the
-	// first agents proof.
+	// first agents proof. A chart that ships none (the agents switched off
+	// in place) leaves what the release left behind to the lab
+	// (substrateDown).
 	var substrate []substrateImages
 	if roster.shipsSubstrate() {
 		if substrate, err = settleSubstrateLine(ctx, substrateSkewRemedy(cfg)); err != nil {
 			return err
 		}
+	} else if err := substrateDown(ctx); err != nil {
+		return err
 	}
 	// The summary words the registration as it is live, like status does.
 	var workspacesRegistrant string

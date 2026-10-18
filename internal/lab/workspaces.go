@@ -918,6 +918,9 @@ type WorkspacesStatus struct {
 	// CSIDriverConfig says who registered the driver with Substrate: "the
 	// lab", "the chart", "hand", or "" when nothing did.
 	CSIDriverConfig string `json:"csiDriverConfig,omitempty"`
+	// NoSubstrate reports that Agent Substrate's control plane is not on the
+	// cluster (substrateControlPlaneOn): a CSIDriverConfig then registers nothing.
+	NoSubstrate bool `json:"noSubstrate,omitempty"`
 	// SessionAdmission words the rig a Session on a workspace volume is
 	// admitted with (workspacegrant.go): kagent's jwt admission, the
 	// manager's grant key and the claude Harness.
@@ -969,6 +972,7 @@ func readWorkspacesStatus(ctx context.Context) (*WorkspacesStatus, error) {
 	s.StorageClass = s.Driver != ""
 	s.Companion = readCompanionState(ctx, k)
 	s.CSIDriverConfig = readWorkspacesRegistrant(ctx, cmp.Or(s.Driver, workspacesCSIDriver))
+	s.NoSubstrate = !substrateControlPlaneOn(ctx)
 	s.SessionAdmission = readSessionAdmission(ctx)
 	return s, nil
 }
@@ -1027,8 +1031,12 @@ func (s *WorkspacesStatus) String() string {
 	if !s.Proxy {
 		proxy = "without its mTLS proxy (Agent Substrate off)"
 	}
+	registration := workspacesRegistration(driver, s.CSIDriverConfig)
+	if s.NoSubstrate && s.CSIDriverConfig != "" {
+		registration = fmt.Sprintf("CSIDriverConfig %s by %s left over, Agent Substrate not running (`agentlab platform` removes it)", driver, s.CSIDriverConfig)
+	}
 	line := fmt.Sprintf("NFS server %s on %s; CSI controller %s %s %s; node plugin %s; %s; %s",
-		s.NFSServer, orNone(s.Node), driver, s.Controller, proxy, s.NodePlugin, class, workspacesRegistration(driver, s.CSIDriverConfig))
+		s.NFSServer, orNone(s.Node), driver, s.Controller, proxy, s.NodePlugin, class, registration)
 	if s.Companion != "" {
 		line += fmt.Sprintf("; the chart's CSI companion (%s preset, the lab's NFS plugin) %s", companionPreset, s.Companion)
 	}

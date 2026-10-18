@@ -100,6 +100,15 @@ func TestPlatformValuesWorkspaces(t *testing.T) {
 	if tls["enabled"] != true || tls["usePodIdentity"] != true || tls["serverName"] != "csi-nfs-controller.agentlab-workspaces.svc" {
 		t.Errorf("workspaces.substrate.csiDriver.tls = %v, want enabled with the pod identity and the service-DNS name", tls)
 	}
+
+	// Without Substrate no driver is named: the connectivity chart renders
+	// the CSIDriverConfig whenever the cluster serves its CRD, and the CRDs
+	// outlive an in-place switch of the agents off.
+	cfg.Platform.Agents = false
+	block, _ = render(t, cfg)["workspaces"].(map[string]any)
+	if substrate, ok := block["substrate"]; ok {
+		t.Errorf("workspaces.substrate = %v rendered without Agent Substrate (platform.agents: false)", substrate)
+	}
 }
 
 // The sessions' cleanup window reaches the workspace-manager as
