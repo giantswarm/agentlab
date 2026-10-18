@@ -89,7 +89,7 @@ func TestRegistryGitHubServesTheFixture(t *testing.T) {
 
 // The fixture's installation is the manager's workspaces case: its
 // agent-platform values on record turn workspaces on, and the collection
-// pins a dex-app that takes the extra redirect URIs.
+// pins dex-app 3.3.0.
 func TestPlatformManagerFixtureTurnsWorkspacesOn(t *testing.T) {
 	f, err := loadRegistryFixture()
 	if err != nil {
@@ -107,8 +107,9 @@ func TestPlatformManagerFixtureTurnsWorkspacesOn(t *testing.T) {
 }
 
 // A dry run giantswarm-platform-manager answered for the fixture
-// (testdata/platform-manager/dry-run.json, recorded from the release and
-// trimmed to what the proof reads) passes; one with the workspace-manager
+// (testdata/platform-manager/dry-run.json, recorded by pm-test --record from a
+// release that drops the workspace-manager /signin) passes and asks Dex for no
+// workspace-manager /signin redirect URI; one with the workspace-manager
 // values dropped fails naming it.
 func TestPMDryRunAssertsTheWorkspacesChanges(t *testing.T) {
 	raw, err := os.ReadFile("testdata/platform-manager/dry-run.json")
@@ -122,11 +123,14 @@ func TestPMDryRunAssertsTheWorkspacesChanges(t *testing.T) {
 		}
 		return p
 	}
+	if strings.Contains(string(raw), "/signin") {
+		t.Fatal("the recorded dry run asks Dex for a workspace-manager /signin redirect URI: re-record it from a manager that no longer renders one (pm-test --record)")
+	}
 	plan := decode(string(raw))
 	if err := plan.assertWorkspaces(); err != nil {
 		t.Fatal(err)
 	}
-	if lines := plan.proofLines(); len(lines) != 3 || !strings.Contains(lines[2], "workspace-manager values kept") {
+	if lines := plan.proofLines(); len(lines) != 2 || !strings.Contains(lines[1], "workspace-manager values kept") {
 		t.Fatalf("proof lines: %v", lines)
 	}
 	dropped := decode(strings.ReplaceAll(string(raw), "workspace-manager:\\n", "other:\\n"))

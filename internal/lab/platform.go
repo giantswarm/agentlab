@@ -835,6 +835,15 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 				return err
 			}
 		}
+		// A Backstage the chart's range resolved that cannot serve
+		// backstage.portal (the shell on a 2.x) is refused here, naming both
+		// versions — never a lab that reads as up and fails its shell specs.
+		step("Checking Backstage serves the %s portal", portalMode(cfg))
+		image, err := checkPortalMode(cfg)
+		if err != nil {
+			return err
+		}
+		note("Backstage %s serves the %s portal", backstageVersion(image), portalMode(cfg))
 	}
 	// The two halves of Agent Substrate on one release (proveSubstrateLine):
 	// a chart whose kagent range admits a worker image from another Substrate

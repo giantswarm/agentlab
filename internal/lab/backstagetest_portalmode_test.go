@@ -60,12 +60,39 @@ func TestCheckServedPortal(t *testing.T) {
 	if err == nil {
 		t.Fatal("a classic-only Backstage on a shell lab passed")
 	}
-	for _, want := range []string{"app.portals.agentPlatform", image, "before 3.x", config.DefaultChartVersion} {
+	for _, want := range []string{"app.portals.agentPlatform", image, "Backstage 2.97.0", "Backstage 3.x", config.DefaultChartVersion} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not name %q", err, want)
 		}
 	}
 	if err := checkServedPortal(config.PortalClassic, true, image); err == nil {
 		t.Error("the shell on a classic lab passed")
+	}
+}
+
+// TestBackstageVersion: the version a refusal names is the image's tag, the
+// digest dropped; an image without one is named whole.
+func TestBackstageVersion(t *testing.T) {
+	for image, want := range map[string]string{
+		"gsoci.azurecr.io/giantswarm/backstage:2.97.0":                "2.97.0",
+		"gsoci.azurecr.io/giantswarm/backstage:3.4.1@sha256:0123abcd": "3.4.1",
+		"localhost:5001/backstage:dev-abc":                            "dev-abc",
+		"localhost:5001/backstage@sha256:0123abcd":                    "localhost:5001/backstage@sha256:0123abcd",
+		"": unknownImage,
+	} {
+		if got := backstageVersion(image); got != want {
+			t.Errorf("backstageVersion(%q) = %q, want %q", image, got, want)
+		}
+	}
+}
+
+// TestEveryPlatformRunChecksThePortalMode: `up` and `platform` both refuse a
+// lab whose Backstage cannot serve backstage.portal, once the portal runs —
+// a shell lab on a classic-only Backstage never reads as up, so no shell
+// spec starts against it.
+func TestEveryPlatformRunChecksThePortalMode(t *testing.T) {
+	calls := callSites(t)
+	if calls["checkPortalMode"]["platformUp"] != 1 {
+		t.Errorf("checkPortalMode is called from %v, want once from platformUp itself", calls["checkPortalMode"])
 	}
 }

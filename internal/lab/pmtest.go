@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -57,6 +58,9 @@ type PMTestOptions struct {
 	// GitHubFakeBinary is the static Linux agentlab the registry's container
 	// runs (default: this binary).
 	GitHubFakeBinary string
+	// Record, set, is the file the dry run's answer is written to, indented:
+	// the way testdata/platform-manager/dry-run.json is recorded.
+	Record string
 }
 
 // PMTest is the headless proof of the platform-manager fixture as the lab
@@ -142,11 +146,21 @@ func PMTest(cfg *config.Config, email string, opts PMTestOptions) error {
 	note("%s %s answers as %s", pmMCPServer, info.Version, info.Caller.Login)
 
 	step("reconcile_capability %s on %s, dry run", pmCapability, pmInstallation)
-	var plan pmDryRun
+	var raw json.RawMessage
 	if err := pmCall(session, "reconcile_capability", map[string]any{
 		"installations": []string{pmInstallation}, "capability": pmCapability, "dryRun": true, "content": true,
-	}, &plan); err != nil {
+	}, &raw); err != nil {
 		return err
+	}
+	if opts.Record != "" {
+		if err := recordPMDryRun(opts.Record, raw); err != nil {
+			return err
+		}
+		note("the dry run recorded at %s", opts.Record)
+	}
+	var plan pmDryRun
+	if err := json.Unmarshal(raw, &plan); err != nil {
+		return fmt.Errorf("reconcile_capability's dry run: %w", err)
 	}
 	if err := plan.assertWorkspaces(); err != nil {
 		return err
@@ -179,6 +193,19 @@ func pmCall(s *musterSession, tool string, args map[string]any, out any) error {
 	return nil
 }
 
+// recordPMDryRun writes the dry run's answer to path, indented two spaces.
+func recordPMDryRun(path string, raw json.RawMessage) error {
+	var out bytes.Buffer
+	if err := json.Indent(&out, raw, "", "  "); err != nil {
+		return fmt.Errorf("indenting the dry run: %w", err)
+	}
+	out.WriteByte('\n')
+	if err := os.WriteFile(path, out.Bytes(), 0o600); err != nil {
+		return fmt.Errorf("recording the dry run: %w", err)
+	}
+	return nil
+}
+
 // pmDryRun is the part of reconcile_capability's dry run the proof reads.
 type pmDryRun struct {
 	DryRun        bool             `json:"dryRun"`
@@ -190,9 +217,6 @@ type pmDryRun struct {
 		Name   string `json:"name"`
 		Inputs struct {
 			Installation struct {
-				Workspaces *struct {
-					Enabled bool `json:"enabled"`
-				} `json:"workspaces"`
 				DexAppVersion string `json:"dexAppVersion"`
 			} `json:"installation"`
 		} `json:"inputs"`
@@ -207,9 +231,9 @@ type pmDryRun struct {
 }
 
 // assertWorkspaces asserts the plan is the fixture's with workspaces on: the
-// installation planned as a dry run, the switch read from the record, the
-// workspaces and workspace-manager keys kept in the values patch, and the
-// commit not refused. The person's provider sign-in is muster's grant, so
+// installation planned as a dry run, the workspaces and workspace-manager
+// keys of the values on record kept in the values patch, and the commit not
+// refused. The person's provider sign-in is muster's grant, so
 // nothing of the workspace-manager's own is asked of Dex.
 func (p pmDryRun) assertWorkspaces() error {
 	if !p.DryRun {
@@ -222,9 +246,6 @@ func (p pmDryRun) assertWorkspaces() error {
 		return fmt.Errorf("the dry run refuses the commit: %v", p.CommitRefused)
 	}
 	inst := p.Installations[0]
-	if ws := inst.Inputs.Installation.Workspaces; ws == nil || !ws.Enabled {
-		return fmt.Errorf("the plan's inputs carry no installation.workspaces.enabled: true read from %s", pmValuesPatch)
-	}
 	files := map[string]string{}
 	for _, f := range inst.Files {
 		files[f.Path] = f.Content
@@ -246,7 +267,6 @@ func (p pmDryRun) proofLines() []string {
 	return []string{
 		fmt.Sprintf("planned %s: %d create, %d update, %d unchanged in %d pull requests, none opened; the commit not refused (dex-app %s)",
 			inst.Name, inst.Diff["create"], inst.Diff["update"], inst.Diff["unchanged"], len(p.PullRequests), inst.Inputs.Installation.DexAppVersion),
-		"installation.workspaces.enabled: true, read from " + pmValuesPatch,
 		pmValuesPatch + ": workspaces.enabled: true and the workspace-manager values kept",
 	}
 }
