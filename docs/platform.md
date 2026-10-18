@@ -1107,18 +1107,21 @@ yet:
 | `gpt-oss:20b` (MXFP4, 13 GB) | 12 GiB | Ollama answers some `/v1/responses` calls with 500 and codex fails the turn; otherwise the relay drops lines |
 | `qwen3.5:9b` (6.6 GB) | not measured | every turn runs; the relay fails at a different stage each run |
 
-With the codex Harness rendered, `agentlab configure` wires the first of
-`qwen3-coder:30b` and `gpt-oss:20b` the host's Ollama has downloaded as the
-extraModels entry `codex-host` (the `OpenAI` provider on Ollama's `/v1`,
-`apiFormat: responses`, keyless), which `--model-config codex-host` runs the
-proof on under the 40m host model turn deadline; a failed sandbox stage
-quotes the agent's reply.
+`agentlab configure` adds no host model unasked: each of these needs more
+memory than a lab proof's host model gets. With the codex Harness rendered,
+`configure --codex-host-model` wires the first of `qwen3-coder:30b` and
+`gpt-oss:20b` the host's Ollama has downloaded as the extraModels entry
+`codex-host` (the `OpenAI` provider on Ollama's `/v1`, `apiFormat:
+responses`, keyless), which `--model-config codex-host` runs the proof on
+under the 40m host model turn deadline; a failed sandbox stage quotes the
+agent's reply.
 
 ```sh
 agentlab configure --defaults --coding --coding-harnesses claude,codex
 agentlab platform
 agentlab coding-test --harness codex                            # the mockllm
-agentlab coding-test --harness codex --model-config codex-host  # a host model
+agentlab configure --defaults --codex-host-model                # opt in to a host model
+agentlab coding-test --harness codex --model-config codex-host  # on it
 ```
 
 The workspaces proof's claude Session runs on the same `claude` Harness,
