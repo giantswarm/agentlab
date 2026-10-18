@@ -490,7 +490,9 @@ func measureFreshName(name string, started time.Time) string {
 // clone of each pushed repository on this host, the measurement's Agent.
 func (m *measurement) labPreconditions() error {
 	cfg := m.cfg
-	if reason := workspaceManagerSkip(cfg); reason != "" {
+	if reason, err := workspaceManagerSkip(cfg); err != nil {
+		return err
+	} else if reason != "" {
 		return fmt.Errorf("no workspace-manager to define a workspace with: %s", reason)
 	}
 	if !cfg.WorkspaceFakeProvider() {

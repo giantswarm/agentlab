@@ -2,6 +2,7 @@ package lab
 
 import (
 	"context"
+	"maps"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -529,5 +530,60 @@ func TestWorkspaceFakeBearerProvider(t *testing.T) {
 	wantSecretRef(t, "fake-bearer app.privateKey", app["privateKey"], config.WorkspaceFakeSecretName, config.WorkspaceGitHubPrivateKeyKey)
 	if !strings.Contains(coredns, `name regex ^(api\.)?github-bearer\.127\.0\.0\.1\.nip\.io\. `+labGitHubService+".agent-platform.svc.cluster.local") {
 		t.Errorf("CoreDNS does not send fake-bearer's hosts to the fake's Service:\n%s", coredns)
+	}
+}
+
+// musterReleasable is the rendered muster.muster.credentialProvider.releasable,
+// nil when the values name none.
+func musterReleasable(values map[string]any) map[string]any {
+	muster, _ := values["muster"].(map[string]any)
+	inner, _ := muster["muster"].(map[string]any)
+	provider, _ := inner["credentialProvider"].(map[string]any)
+	releasable, _ := provider["releasable"].(map[string]any)
+	return releasable
+}
+
+// With no provider instance rendered (the github instance before its App's
+// ids, or the install's verdict none), muster's credential provider still
+// releases one: the lab's own App, the fake's, so the chart's guard of the
+// credential provider renders, and the manager gets no grant signing key,
+// which it refuses without an instance; once an instance renders, the chart
+// derives the releasable from the pin and the values name none.
+func TestWorkspaceReleasableWithoutInstance(t *testing.T) {
+	stubWorkspacesProbe(t, true)
+	fake, err := workspaceFakeValues(workspaceLab(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{config.WorkspaceProviderFake: workspaceGrantOf(*fake).Issuer}
+
+	values, _, _, _ := renderWorkspaceTemplates(t, workspaceGitHubLab(), nil)
+	if got := musterReleasable(values); !maps.Equal(got, want) {
+		t.Errorf("github instance without its App's ids: releasable %v, want %v", got, want)
+	}
+	if wm, _ := workspaceManagerBlock(t, values); wm["grant"] != nil || wm["tokenExchange"] != nil {
+		t.Errorf("no instance: grant %v, tokenExchange %v, want neither (the manager refuses a signing key without an instance)", wm["grant"], wm["tokenExchange"])
+	}
+	withIDs := workspaceGitHubLab()
+	withIDs.Platform.Workspaces.GitHub = config.WorkspaceGitHub{AppID: testWorkspaceAppID, ClientID: testWorkspaceClientID}
+	values, _, _, _ = renderWorkspaceTemplates(t, withIDs, func(d *tmplData) { d.WorkspaceProviders = nil })
+	if got := musterReleasable(values); !maps.Equal(got, want) {
+		t.Errorf("the install's verdict none: releasable %v, want %v", got, want)
+	}
+
+	for name, cfg := range map[string]*config.Config{config.WorkspaceProviderFake: workspaceLab(""), config.WorkspaceProviderGitHub: withIDs} {
+		values, _, _, _ := renderWorkspaceTemplates(t, cfg, nil)
+		if got := musterReleasable(values); got != nil {
+			t.Errorf("%s instance rendered: releasable %v, want none (the chart derives it from the pin)", name, got)
+		}
+		if wm, _ := workspaceManagerBlock(t, values); wm["grant"] == nil {
+			t.Errorf("%s instance rendered: no grant signing key", name)
+		}
+	}
+	off := workspaceLab("")
+	off.Platform.Workspaces.Enabled = false
+	values, _, _, _ = renderWorkspaceTemplates(t, off, nil)
+	if got := musterReleasable(values); got != nil {
+		t.Errorf("workspaces off: releasable %v, want none", got)
 	}
 }

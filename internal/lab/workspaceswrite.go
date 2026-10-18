@@ -98,9 +98,8 @@ func (wp *writeProof) run(p *proofStages) error {
 		return fmt.Errorf("the write part needs an admin user in %s (`agentlab configure --defaults` writes one)", config.File)
 	}
 	p.begin("write: preconditions", "The provider instance %s, muster as the egress gateway's credential provider %s, the Session admission, the Agent %s on the claude Harness", config.WorkspaceProviderFakeBearer, musterCredentialAuthority, writeAgent)
-	if !cfg.WorkspaceFakeBearerProvider() {
-		return fmt.Errorf("the write part runs on the provider instance %s, and platform.workspaces.provider %q does not configure it: `agentlab configure --workspaces-provider %s,%s`, then `agentlab platform`",
-			config.WorkspaceProviderFakeBearer, cfg.Platform.Workspaces.Provider, config.WorkspaceProviderFake, config.WorkspaceProviderFakeBearer)
+	if err := fakeBearerRefusal(cfg, "write"); err != nil {
+		return err
 	}
 	if err := proveMusterCredentialProvider(context.Background()); err != nil {
 		return err

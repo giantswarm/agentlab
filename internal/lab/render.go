@@ -134,7 +134,11 @@ type tmplData struct {
 	WorkspaceProviders []workspaceProviderValues
 	// WorkspaceGrant is the provider App muster pins the workspace-manager's
 	// registration to (workspacemustergrant.go), nil for none.
-	WorkspaceGrant      *workspaceGrantValues
+	WorkspaceGrant *workspaceGrantValues
+	// WorkspaceReleasable is the instance muster's credential provider
+	// releases while no instance renders (workspaceReleasableFor), nil with
+	// workspaces off.
+	WorkspaceReleasable *workspaceGrantValues
 	WorkspaceFake       bool
 	WorkspaceFakeBearer bool
 	// WorkspaceAdmission is the rig a Session on a workspace volume is
@@ -287,6 +291,10 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 	if err != nil {
 		return nil, err
 	}
+	workspaceReleasable, err := workspaceReleasableFor(cfg)
+	if err != nil {
+		return nil, err
+	}
 	workspacesChart := workspacesChartFor(cfg)
 	return &tmplData{
 		Config:                       cfg,
@@ -328,6 +336,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		Workspaces:                   workspacesValuesFor(cfg),
 		WorkspaceProviders:           workspaceProviders,
 		WorkspaceGrant:               workspaceGrantFor(cfg, workspaceProviders),
+		WorkspaceReleasable:          workspaceReleasable,
 		WorkspaceFake:                cfg.WorkspaceFakeProvider(),
 		WorkspaceFakeBearer:          cfg.WorkspaceFakeBearerProvider(),
 		WorkspaceAdmission:           workspaceAdmissionValuesFor(cfg, workspacesChart.Carries),
