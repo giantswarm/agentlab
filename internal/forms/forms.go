@@ -185,7 +185,7 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 				Value(&servingEnabled),
 			huh.NewConfirm().
 				Title("Install workspace storage (a read-write-many StorageClass that serves git)?").
-				Description("Optional: an in-cluster NFS server, the NFS CSI driver behind an mTLS proxy only\nAgent Substrate's API server may reach, and the StorageClass agentlab-workspaces.\nWithout the agents runtime they run without Substrate, to switch it on in place later.\n~250 MB of images; the host kernel's NFS modules;\n`agentlab workspaces-test --storage-only` is the proof.").
+				Description("Optional, needs the agents runtime: an in-cluster NFS server, the NFS CSI driver\nbehind an mTLS proxy only Agent Substrate's API server may reach, and the StorageClass\nagentlab-workspaces. ~250 MB of images; the host kernel's NFS modules;\n`agentlab workspaces-test --storage-only` is the proof.").
 				Affirmative("Install").
 				Negative("Skip").
 				Value(&workspacesEnabled),
@@ -252,9 +252,8 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 	cfg.Platform.ModelManager.Enabled = modelManagerEnabled && agentsEnabled
 	// The served model is wired into kagent too.
 	cfg.Platform.Serving.Enabled = servingEnabled && agentsEnabled
-	// The workspace storage runs with or without Substrate
-	// (config.WorkspacesSubstrate).
-	cfg.Platform.Workspaces.Enabled = workspacesEnabled
+	// The workspaces live in kagent's namespace (Config.Validate).
+	cfg.Platform.Workspaces.Enabled = workspacesEnabled && agentsEnabled
 	cfg.Platform.AgentsPort = mustAtoi(agentsPort)
 	cfg.AIModel = aiModel
 	cfg.AIKey.Source = aiKeySource

@@ -557,10 +557,9 @@ type Platform struct {
 	// NFS server, the NFS CSI driver with an mTLS proxy in front of its
 	// controller that admits ate-api-server's pod identity alone, and the
 	// StorageClass the chart's workspaces values name. Off by default;
-	// --workspaces turns it on. With the agents runtime off it runs without
-	// Agent Substrate (WorkspacesSubstrate): the shape an in-place switch of
-	// the agents starts from. `agentlab workspaces-test --storage-only` is
-	// the proof, with Substrate.
+	// --workspaces turns it on; needs the agents runtime: the chart's
+	// workspaces live in kagent's namespace, so Validate refuses them without
+	// it. `agentlab workspaces-test --storage-only` is the proof.
 	Workspaces Workspaces `yaml:"workspaces"`
 	// Coding agents: the chart's kagent.harnesses renders the lab's coding
 	// Harness (internal/lab/coding.go) claude, Claude Code run headless. Off
@@ -1446,6 +1445,18 @@ func Default() *Config {
 // Load reads agentlab.yaml. A missing file is reported as os.ErrNotExist so
 // callers can decide whether to fall back to the form or to defaults.
 func Load() (*Config, error) {
+	return load(true)
+}
+
+// LoadForConfigure reads agentlab.yaml like Load without validating it:
+// configure validates the result after its flags apply, so a file an earlier
+// agentlab wrote in a shape this one refuses is repaired by the configure the
+// refusal names.
+func LoadForConfigure() (*Config, error) {
+	return load(false)
+}
+
+func load(validate bool) (*Config, error) {
 	raw, err := os.ReadFile(File)
 	if err != nil {
 		return nil, err
@@ -1458,8 +1469,10 @@ func Load() (*Config, error) {
 	// Earlier versions wrote the one-backend form (backend/endpoint); read
 	// it as the one-item lists so the same lab renders exactly as before.
 	cfg.Platform.ModelManager.normalize()
-	if err := cfg.Validate(); err != nil {
-		return nil, fmt.Errorf("%s: %w", File, err)
+	if validate {
+		if err := cfg.Validate(); err != nil {
+			return nil, fmt.Errorf("%s: %w", File, err)
+		}
 	}
 	changed, err := cfg.EnsureHashes()
 	if err != nil {
@@ -2064,11 +2077,13 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("platform.serving needs agent-platform %s or newer (the llm-d control plane alone, components.kserve-runtime-configs and modelServing.modelsGateway); %s — `agentlab configure --serving=false`", servingChartFloor, chart)
 		}
 	}
-	// The CSI companion is Substrate's driver, rendered by the chart with the
-	// substrate component: without the runtime there is no Substrate to
-	// register it with. Workspaces alone run without it (WorkspacesSubstrate).
-	if c.Platform.Workspaces.Enabled && c.Platform.Workspaces.CSICompanion && c.Platform.Enabled && !c.Platform.Agents {
-		return fmt.Errorf("platform.workspaces.csiCompanion requires platform.agents (the companion is Agent Substrate's driver, which comes with the agents) — `agentlab configure --agents`, or `--workspaces-csi-companion=false`")
+	// Workspaces need the agents runtime: the chart's workspaces live in
+	// kagent's namespace, where every Session runs and mounts its workspace,
+	// and the workspace-manager applies its sync ServiceAccount and Roles
+	// there. The chart refuses the shape at render time; the lab refuses it
+	// before anything installs.
+	if c.Platform.Workspaces.Enabled && c.Platform.Enabled && !c.Platform.Agents {
+		return fmt.Errorf("platform.workspaces requires platform.agents (the workspaces live in kagent's namespace, where every Session runs and mounts its workspace) — `agentlab configure --agents`, or `--workspaces=false`")
 	}
 	if names, err := parseWorkspaceProviders(c.Platform.Workspaces.Provider); err != nil {
 		return err
@@ -2274,7 +2289,7 @@ func (c *Config) CodingHarnessRendered(runtime string) bool {
 	if c.CodingEnabled() && slices.Contains(c.CodingHarnesses(), runtime) {
 		return true
 	}
-	return runtime == CodingRuntimeClaude && c.WorkspacesSubstrate()
+	return runtime == CodingRuntimeClaude && c.WorkspacesEnabled()
 }
 
 // CodexModelConfig is the lab's model for a codex agent: the first
@@ -2290,26 +2305,17 @@ func (c *Config) CodexModelConfig() string {
 }
 
 // WorkspacesEnabled reports whether the lab installs the workspace storage
-// and the chart its workspace-manager: the platform and the key on. Agent
-// Substrate follows platform.agents on its own (WorkspacesSubstrate).
+// and the chart its workspace-manager: the platform and the key on (Validate
+// requires the agents beside them, and Agent Substrate comes with those).
 func (c *Config) WorkspacesEnabled() bool {
 	return c.Platform.Enabled && c.Platform.Workspaces.Enabled
 }
 
-// WorkspacesSubstrate reports whether the workspaces run with Agent
-// Substrate: the agents on beside them. Without it (the lab shape that
-// switches Substrate on in place) the storage serves the cluster's claims
-// alone: the driver's controller runs without the mTLS proxy Substrate's
-// signers certify, nothing registers the driver with Substrate, and no
-// Session mounts a workspace.
-func (c *Config) WorkspacesSubstrate() bool {
-	return c.WorkspacesEnabled() && c.Platform.Agents
-}
-
 // WorkspacesCSICompanion reports whether the chart's CSI companion is
-// Substrate's workspace driver: workspaces with Substrate and the key on.
+// Substrate's workspace driver: workspaces (which come with the agents, and
+// Substrate with them) and the key on.
 func (c *Config) WorkspacesCSICompanion() bool {
-	return c.WorkspacesSubstrate() && c.Platform.Workspaces.CSICompanion
+	return c.WorkspacesEnabled() && c.Platform.Workspaces.CSICompanion
 }
 
 // WorkspaceProviders names the workspace-manager's provider instances, in

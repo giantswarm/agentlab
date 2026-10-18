@@ -104,16 +104,10 @@ func proveWorkspaceManager(cfg *config.Config) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Without the agents there is no kagent to list Sessions from: the
-	// chart derives no address, and no Session has a directory to clean up.
-	if cfg.Platform.Agents {
-		if err := judgeKagentAddress(flags); err != nil {
-			return nil, err
-		}
-		note("the session directories' cleanup lists kagent's Sessions at %s, a directory going %s after its last turn", flagValue(flags, sessionsKagentArg), cmp.Or(flagValue(flags, sessionsCleanupArg), "the manager's default"))
-	} else {
-		note("the agents are off: the manager runs without kagent's address, and no Session has a directory to clean up")
+	if err := judgeKagentAddress(flags); err != nil {
+		return nil, err
 	}
+	note("the session directories' cleanup lists kagent's Sessions at %s, a directory going %s after its last turn", flagValue(flags, sessionsKagentArg), cmp.Or(flagValue(flags, sessionsCleanupArg), "the manager's default"))
 
 	// What the install configured: the instances the values rendered, read
 	// the way the install reads them (the github instance's Secret keys
