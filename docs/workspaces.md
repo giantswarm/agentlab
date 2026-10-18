@@ -86,9 +86,10 @@ agentlab platform-test                                                # the work
 agentlab configure --agents && agentlab platform                      # Substrate switched on in place
 ```
 
-The chart gets the same `workspaces:` values as with Substrate; it renders no
-`CSIDriverConfig` and no Substrate-side piece while its substrate component is
-off. The lab installs the storage without the controller's mTLS proxy, which
+The chart gets the `workspaces:` values without `substrate:`: the
+connectivity chart renders the `CSIDriverConfig` for a named driver whenever
+the cluster serves Substrate's CRDs, and those outlive an in-place switch of
+the agents off. The lab installs the storage without the controller's mTLS proxy, which
 only Substrate's signers certify: the controller runs its provisioner and
 resizer alone, so the class serves the cluster's claims and nothing waits on a
 certificate. No `CSIDriverConfig` registers the driver, and `agentlab status`
@@ -97,7 +98,12 @@ reads `without its mTLS proxy (Agent Substrate off)`. `workspaces-test` and
 Substrate, and the CSI companion (`--workspaces-csi-companion`), Substrate's
 driver, needs the agents. Switching the agents on re-applies the storage with
 the proxy before the chart, then waits for it and the registration after the
-install, as on a fresh lab.
+install, as on a fresh lab. Switching them off in place ends where a lab
+created without them starts: once the chart's substrate release is gone,
+`agentlab platform` removes the lab's own `CSIDriverConfig` and the
+`ate-system` and `podcertificate-controller-system` namespaces (Substrate's
+CRDs stay), and `agentlab status` words a `CSIDriverConfig` left while
+Substrate's control plane is not running as a leftover, never as registered.
 
 ### The CSI companion
 
