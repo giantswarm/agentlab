@@ -1087,7 +1087,11 @@ platform namespace, which the run's ModelConfig `agentlab-mockllm` (the
 key) names as its base URL; the run removes all three at its end. The script
 answers each prompt with the tool call it asks for (the probe script, the
 MCP tool through codex's tool search, the code word's file, its read-back)
-and a fixed reply once the tool's output is back. The sandbox stages, the
+and a fixed reply once the tool's output is back. A shell command goes to
+the shell tool the runtime offers: `shell_command`, or on codex 0.163 and
+later (kagent 1.16) the unified `exec_command`, whose command runs past the
+call's 30 s yield; the script then waits for it with an empty `write_stdin`
+on its session until it exits, and replies after its final output. The sandbox stages, the
 MCP call and the resume's file judge those outputs, what the sandbox
 printed and the tool answered, as the harness reports them on the turn's
 tool results; the code word the resumed turn recalls is the script's. The

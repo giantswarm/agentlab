@@ -170,7 +170,10 @@ const (
 	mockLLMItemDone     = "completed"
 	mockLLMMessage      = "message"
 	mockLLMFunctionCall = "function_call"
-	mockLLMOutputText   = "output_text"
+	// mockLLMFunctionCallOutput is the runtime's input item returning a
+	// function call's output.
+	mockLLMFunctionCallOutput = "function_call_output"
+	mockLLMOutputText         = "output_text"
 	// The shell tools of codex: the classic one, and the unified exec
 	// and its stdin, which codex 0.163 and later offer instead.
 	mockLLMShellTool      = "shell_command"
@@ -279,7 +282,7 @@ func mockLLMExecWait(last string) (mockLLMResponse, bool) {
 		Type   string `json:"type"`
 		CallID string `json:"call_id"`
 	}
-	if json.Unmarshal([]byte(last), &item) != nil || item.Type != "function_call_output" {
+	if json.Unmarshal([]byte(last), &item) != nil || item.Type != mockLLMFunctionCallOutput {
 		return mockLLMResponse{}, false
 	}
 	// The output is a string or a list of content items: either way its

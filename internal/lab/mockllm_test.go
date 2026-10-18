@@ -25,11 +25,20 @@ func mockLLMCall(t *testing.T, srv *httptest.Server, items ...any) mockLLMItem {
 // tools named tools.
 func mockLLMCallOffering(t *testing.T, srv *httptest.Server, tools []string, items ...any) mockLLMItem {
 	t.Helper()
-	offered := make([]map[string]string, 0, len(tools))
-	for _, name := range tools {
-		offered = append(offered, map[string]string{"type": "function", "name": name})
+	type tool struct {
+		Type string `json:"type"`
+		Name string `json:"name"`
 	}
-	body, err := json.Marshal(map[string]any{"model": mockLLMModel, "input": items, "stream": true, "tools": offered})
+	offered := make([]tool, 0, len(tools))
+	for _, name := range tools {
+		offered = append(offered, tool{Type: "function", Name: name})
+	}
+	body, err := json.Marshal(struct {
+		Model  string `json:"model"`
+		Input  []any  `json:"input"`
+		Stream bool   `json:"stream"`
+		Tools  []tool `json:"tools"`
+	}{mockLLMModel, items, true, offered})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +113,7 @@ func userItem(text string) testInputItem {
 
 // outputOf is the runtime's input item returning a call's output.
 func outputOf(call mockLLMItem) testInputItem {
-	kind := "function_call_output"
+	kind := mockLLMFunctionCallOutput
 	if call.Type == "tool_search_call" {
 		kind = "tool_search_output"
 	}
@@ -258,7 +267,7 @@ func TestMockLLMScriptWaitsForExecCommand(t *testing.T) {
 		t.Fatalf("the mock called %s with %+v, wanted exec_command with the probe, minutes to run and the longest yield", call.Name, exec)
 	}
 
-	running := testInputItem{Type: "function_call_output", CallID: call.CallID, Output: "Chunk ID: 1\nWall time: 30.0 seconds\nProcess running with session ID 7\nOutput:\nAGENTLAB_PROBE uid=1000\n"}
+	running := testInputItem{Type: mockLLMFunctionCallOutput, CallID: call.CallID, Output: "Chunk ID: 1\nWall time: 30.0 seconds\nProcess running with session ID 7\nOutput:\nAGENTLAB_PROBE uid=1000\n"}
 	wait := mockLLMCallOffering(t, srv, tools, prompt, call, running)
 	var stdin mockLLMWriteStdinArguments
 	if err := json.Unmarshal([]byte(stringOf(wait.Arguments)), &stdin); err != nil {
@@ -268,11 +277,11 @@ func TestMockLLMScriptWaitsForExecCommand(t *testing.T) {
 		t.Fatalf("on a running command the mock answered %s %+v (call %s), wanted an empty write_stdin on session 7 waiting minutes, under a call id of its own", wait.Name, stdin, wait.CallID)
 	}
 
-	again := mockLLMCallOffering(t, srv, tools, prompt, call, running, wait, testInputItem{Type: "function_call_output", CallID: wait.CallID, Output: "Process running with session ID 7\nOutput:\n"})
+	again := mockLLMCallOffering(t, srv, tools, prompt, call, running, wait, testInputItem{Type: mockLLMFunctionCallOutput, CallID: wait.CallID, Output: "Process running with session ID 7\nOutput:\n"})
 	if again.Name != mockLLMWriteStdinTool || again.CallID == wait.CallID {
 		t.Fatalf("on a command still running the mock answered %+v, wanted another wait", again)
 	}
-	exited := testInputItem{Type: "function_call_output", CallID: again.CallID, Output: "Process exited with code 0\nOutput:\nAGENTLAB_PROBE file=agentlab-saffron\n"}
+	exited := testInputItem{Type: mockLLMFunctionCallOutput, CallID: again.CallID, Output: "Process exited with code 0\nOutput:\nAGENTLAB_PROBE file=agentlab-saffron\n"}
 	if reply := mockLLMCallOffering(t, srv, tools, prompt, call, running, wait, exited); reply.Type != mockLLMMessage {
 		t.Fatalf("after the command exited the mock answered %+v, wanted the reply", reply)
 	}
