@@ -18,7 +18,18 @@ import (
 // carried, after checking it completes with usage.
 func mockLLMCall(t *testing.T, srv *httptest.Server, items ...any) mockLLMItem {
 	t.Helper()
-	body, err := json.Marshal(map[string]any{"model": mockLLMModel, "input": items, "stream": true})
+	return mockLLMCallOffering(t, srv, nil, items...)
+}
+
+// mockLLMCallOffering is mockLLMCall on a request offering the function
+// tools named tools.
+func mockLLMCallOffering(t *testing.T, srv *httptest.Server, tools []string, items ...any) mockLLMItem {
+	t.Helper()
+	offered := make([]map[string]string, 0, len(tools))
+	for _, name := range tools {
+		offered = append(offered, map[string]string{"type": "function", "name": name})
+	}
+	body, err := json.Marshal(map[string]any{"model": mockLLMModel, "input": items, "stream": true, "tools": offered})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,5 +231,53 @@ func TestTurnProbeReadsTheToolOutputs(t *testing.T) {
 	}
 	if ct.toolOutput("absent") != "" {
 		t.Fatal("a tool the turn did not call has an output")
+	}
+}
+
+// On a codex that offers the unified exec_command instead of shell_command
+// (0.163 and later), the script's shell calls go to exec_command, a command
+// still running at the call's yield is waited for with an empty write_stdin
+// on its session, and the reply follows the command's final output.
+func TestMockLLMScriptWaitsForExecCommand(t *testing.T) {
+	handler, _, err := mockLLMHandler("agentlab-coding-muster")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+	codex := codingRuntimes[config.CodingRuntimeCodex]
+	tools := []string{mockLLMExecTool, mockLLMWriteStdinTool, "list_mcp_resources"}
+	prompt := userItem(codingSandboxPrompt(codex))
+
+	call := mockLLMCallOffering(t, srv, tools, prompt)
+	var exec mockLLMExecArguments
+	if err := json.Unmarshal([]byte(stringOf(call.Arguments)), &exec); err != nil {
+		t.Fatalf("the call's arguments %v: %v", call.Arguments, err)
+	}
+	if call.Name != mockLLMExecTool || exec.Cmd != codingSandboxCommand(codex) || exec.TimeoutMS < 60_000 || exec.YieldTimeMS != mockLLMExecYieldMS {
+		t.Fatalf("the mock called %s with %+v, wanted exec_command with the probe, minutes to run and the longest yield", call.Name, exec)
+	}
+
+	running := testInputItem{Type: "function_call_output", CallID: call.CallID, Output: "Chunk ID: 1\nWall time: 30.0 seconds\nProcess running with session ID 7\nOutput:\nAGENTLAB_PROBE uid=1000\n"}
+	wait := mockLLMCallOffering(t, srv, tools, prompt, call, running)
+	var stdin mockLLMWriteStdinArguments
+	if err := json.Unmarshal([]byte(stringOf(wait.Arguments)), &stdin); err != nil {
+		t.Fatalf("the wait's arguments %v: %v", wait.Arguments, err)
+	}
+	if wait.Name != mockLLMWriteStdinTool || stdin.SessionID != 7 || stdin.Chars != "" || stdin.YieldTimeMS < 60_000 || wait.CallID == call.CallID {
+		t.Fatalf("on a running command the mock answered %s %+v (call %s), wanted an empty write_stdin on session 7 waiting minutes, under a call id of its own", wait.Name, stdin, wait.CallID)
+	}
+
+	again := mockLLMCallOffering(t, srv, tools, prompt, call, running, wait, testInputItem{Type: "function_call_output", CallID: wait.CallID, Output: "Process running with session ID 7\nOutput:\n"})
+	if again.Name != mockLLMWriteStdinTool || again.CallID == wait.CallID {
+		t.Fatalf("on a command still running the mock answered %+v, wanted another wait", again)
+	}
+	exited := testInputItem{Type: "function_call_output", CallID: again.CallID, Output: "Process exited with code 0\nOutput:\nAGENTLAB_PROBE file=agentlab-saffron\n"}
+	if reply := mockLLMCallOffering(t, srv, tools, prompt, call, running, wait, exited); reply.Type != mockLLMMessage {
+		t.Fatalf("after the command exited the mock answered %+v, wanted the reply", reply)
+	}
+
+	if call := mockLLMCallOffering(t, srv, []string{mockLLMShellTool, mockLLMExecTool}, prompt); call.Name != mockLLMShellTool {
+		t.Fatalf("on a codex offering both shell tools the mock called %s, wanted shell_command", call.Name)
 	}
 }
