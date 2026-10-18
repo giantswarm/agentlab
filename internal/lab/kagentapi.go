@@ -1074,11 +1074,25 @@ func toolResults(parts a2a.ContentParts) []harnessToolResult {
 }
 
 // toolOutput words a tool's result: a shell command's output where the
-// harness reports one, the result as JSON otherwise.
+// harness reports one (codex's output, or the text parts of omp's content),
+// the result as JSON otherwise.
 func toolOutput(result any) string {
 	if fields, ok := result.(map[string]any); ok {
 		if output, ok := fields["output"].(string); ok {
 			return output
+		}
+		if parts, ok := fields["content"].([]any); ok {
+			var texts []string
+			for _, part := range parts {
+				if p, ok := part.(map[string]any); ok && p["type"] == "text" {
+					if text, ok := p["text"].(string); ok {
+						texts = append(texts, text)
+					}
+				}
+			}
+			if len(texts) > 0 {
+				return strings.Join(texts, "\n")
+			}
 		}
 	}
 	raw, err := json.Marshal(result)
