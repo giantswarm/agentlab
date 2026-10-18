@@ -1,8 +1,11 @@
 package lab
 
 import (
+	"context"
 	"errors"
+	"os"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -119,5 +122,30 @@ func TestWorkspacesActorScriptsParse(t *testing.T) {
 		if out, err := exec.Command(sh, "-n", "-c", script).CombinedOutput(); err != nil { //nolint:gosec // the proof's own scripts, parsed only
 			t.Errorf("%s script: %v\n%s", name, err, out)
 		}
+	}
+}
+
+// TestWorkspacesActorScriptGoldenIdles: the template's golden actor runs the
+// script without /workspace; it keeps running instead of exiting, which would
+// crash the golden.
+func TestWorkspacesActorScriptGoldenIdles(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh")
+	}
+	if _, err := os.Stat("/workspace"); err == nil {
+		t.Skip("this host has a /workspace")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, sh, "-c", workspacesActorScript) //nolint:gosec // the proof's own script
+	// The killed shell's last sleep holds the output open for a second at most.
+	cmd.WaitDelay = 2 * time.Second
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() == nil {
+		t.Fatalf("the script exited without /workspace (%v):\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "the golden actor, idling") {
+		t.Errorf("output %q does not say it idles", out)
 	}
 }
