@@ -47,6 +47,29 @@ func TestCodingProbePasses(t *testing.T) {
 	}
 }
 
+// A reply whose newlines arrive escaped, as one line of literal "\n"
+// separators, reads the same as one with real newlines.
+func TestCodingProbeLineSeparators(t *testing.T) {
+	want := parseCodingProbe(codingReply)
+	for name, reply := range map[string]string{
+		"real newlines":    codingReply,
+		"literal newlines": strings.ReplaceAll(codingReply, "\n", `\n`),
+	} {
+		got := parseCodingProbe(reply)
+		if got["uid"] != "65532" || len(got) != len(want) {
+			t.Errorf("%s: uid %q, %d readings, want 65532 and %d", name, got["uid"], len(got), len(want))
+		}
+		for key, value := range want {
+			if got[key] != value {
+				t.Errorf("%s: %s = %q, want %q", name, key, got[key], value)
+			}
+		}
+		if _, err := got.uidSplit(nil); err != nil {
+			t.Errorf("%s: uid split: %v", name, err)
+		}
+	}
+}
+
 // Each floor row fails on the reading that breaks it.
 func TestCodingProbeFailures(t *testing.T) {
 	for _, tc := range []struct {
