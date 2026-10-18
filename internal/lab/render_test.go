@@ -509,6 +509,32 @@ func TestMCPPrometheusRelease(t *testing.T) {
 	}
 }
 
+// platform.mcpPrometheusChartVersion pins the lab's mcp-prometheus chart in
+// the OCIRepository; unset, the release this agentlab pins.
+func TestMCPPrometheusChartVersionOverride(t *testing.T) {
+	for _, tc := range []struct{ set, want string }{
+		{"", mcpPrometheusChartVersion},
+		{"0.8.1-rc.1", "0.8.1-rc.1"},
+	} {
+		cfg := config.Default()
+		cfg.Platform.MCPPrometheusChartVersion = tc.set
+		out, err := renderTemplate(cfg, mcpPrometheusTemplate, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		releases, err := fluxReleases(string(out))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(releases) != 1 {
+			t.Fatalf("want one release, got %d", len(releases))
+		}
+		if got := releases[0].Version; got != tc.want {
+			t.Errorf("set %q: want chart %s, got %s", tc.set, tc.want, got)
+		}
+	}
+}
+
 // platform.devImages.mcp-prometheus swaps the image of the lab's own
 // mcp-prometheus through that HelmRelease's postRenderers (next to the
 // dex-localhost sidecar), never as a meta chart component's values.
