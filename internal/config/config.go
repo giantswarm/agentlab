@@ -1445,6 +1445,18 @@ func Default() *Config {
 // Load reads agentlab.yaml. A missing file is reported as os.ErrNotExist so
 // callers can decide whether to fall back to the form or to defaults.
 func Load() (*Config, error) {
+	return load(true)
+}
+
+// LoadForConfigure reads agentlab.yaml like Load without validating it:
+// configure validates the result after its flags apply, so a file an earlier
+// agentlab wrote in a shape this one refuses is repaired by the configure the
+// refusal names.
+func LoadForConfigure() (*Config, error) {
+	return load(false)
+}
+
+func load(validate bool) (*Config, error) {
 	raw, err := os.ReadFile(File)
 	if err != nil {
 		return nil, err
@@ -1457,8 +1469,10 @@ func Load() (*Config, error) {
 	// Earlier versions wrote the one-backend form (backend/endpoint); read
 	// it as the one-item lists so the same lab renders exactly as before.
 	cfg.Platform.ModelManager.normalize()
-	if err := cfg.Validate(); err != nil {
-		return nil, fmt.Errorf("%s: %w", File, err)
+	if validate {
+		if err := cfg.Validate(); err != nil {
+			return nil, fmt.Errorf("%s: %w", File, err)
+		}
 	}
 	changed, err := cfg.EnsureHashes()
 	if err != nil {

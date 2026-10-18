@@ -947,7 +947,7 @@ func configureCmd() *cobra.Command {
 			if err := enterLab(labs.Create); err != nil {
 				return err
 			}
-			cfg, err := config.Load()
+			cfg, err := config.LoadForConfigure()
 			fresh := errors.Is(err, os.ErrNotExist)
 			if fresh {
 				cfg = config.Default()

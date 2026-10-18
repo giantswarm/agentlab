@@ -214,3 +214,24 @@ func TestSaveRecordsTheWritingRelease(t *testing.T) {
 		t.Fatalf("the written file does not load: %v", err)
 	}
 }
+
+// A file an earlier agentlab wrote in a shape this one refuses (workspaces
+// without the agents) fails Load naming the requirement, and loads for
+// configure, which validates the repaired result.
+func TestLoadForConfigureTakesARefusedShape(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := os.WriteFile(File, []byte("clusterName: lab\nplatform:\n  chartVersion: "+loadTestChart+"\n  agents: false\n  workspaces:\n    enabled: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "platform.workspaces requires platform.agents") {
+		t.Fatalf("Load: want the agents requirement, got %v", err)
+	}
+	cfg, err := LoadForConfigure()
+	if err != nil {
+		t.Fatalf("LoadForConfigure: %v", err)
+	}
+	cfg.Platform.Agents = true
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("the repaired configuration: %v", err)
+	}
+}
