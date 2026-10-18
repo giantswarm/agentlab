@@ -270,7 +270,7 @@ func (cp *callerCredentialProof) defineWorkspace() error {
 	s := cp.sp
 	owner, name, _ := strings.Cut(cp.repo, "/")
 	var created syncWorkspace
-	if err := s.member.callServerStructured(workspaceManagerToolPrefix+"create_workspace", map[string]any{
+	if err := s.member.createLabWorkspace(map[string]any{
 		nameKey: cp.workspace, wmOrganizationArg: config.WorkspaceOrganization,
 		wmSourcesArg: []map[string]any{{wmProviderArg: config.WorkspaceProviderFakeBearer, wmOwnerArg: owner, repositoriesKey: []string{name}}},
 	}, &created); err != nil {

@@ -303,7 +303,9 @@ spec:
 ---
 # The controller (deploy/csi-nfs-controller.yaml without the snapshotter):
 # the provisioner and resizer sidecars for the cluster's PVCs, the liveness
-# probe, the driver, and the mTLS proxy for Substrate's direct calls. On the
+# probe, the driver, and the mTLS proxy for Substrate's direct calls — only
+# with Substrate (platform.agents), whose signers alone certify it: without
+# them the kubelet would hold the pod, and its claims with it. On the
 # node's network like upstream, since the driver mounts the export itself to
 # create a volume's directory; beside the NFS server on the control plane.
 apiVersion: apps/v1
@@ -433,6 +435,7 @@ spec:
               mountPropagation: "Bidirectional"
             - mountPath: /csi
               name: socket-dir
+{{- if .Workspaces.Substrate }}
         - name: envoy
           image: {{ .Workspaces.Images.Proxy }}
           imagePullPolicy: IfNotPresent
@@ -461,6 +464,7 @@ spec:
             - mountPath: /run/podidentity-ca
               name: podidentity-ca
               readOnly: true
+{{- end }}
       volumes:
         - name: pods-mount-dir
           hostPath:
@@ -468,6 +472,7 @@ spec:
             type: Directory
         - name: socket-dir
           emptyDir: {}
+{{- if .Workspaces.Substrate }}
         - name: envoy-config
           configMap:
             name: csi-nfs-proxy
@@ -487,6 +492,7 @@ spec:
                     matchLabels:
                       podcert.ate.dev/canarying: live
                   path: trust-bundle.pem
+{{- end }}
 ---
 # The node plugin (deploy/csi-nfs-node.yaml) on every node: registered with
 # the kubelet at {{ .Workspaces.NodeSocketDir }}, and with Substrate's

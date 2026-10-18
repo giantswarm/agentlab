@@ -318,10 +318,110 @@ func TestWorkspacesManifest(t *testing.T) {
 	}
 }
 
+// The controller's mTLS proxy follows Substrate: with the agents it runs
+// beside the driver with the certificate volumes Substrate's signers fill;
+// without them (the Substrate-off shape) neither renders, so the kubelet
+// holds no pod and the class still provisions.
+func TestWorkspacesManifestProxyFollowsSubstrate(t *testing.T) {
+	controller := func(t *testing.T, cfg *config.Config) (containers, volumes []string) {
+		t.Helper()
+		out, err := renderTemplate(cfg, workspacesTemplate, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dec := yaml.NewDecoder(bytes.NewReader(out))
+		for {
+			var doc struct {
+				Kind     string `yaml:"kind"`
+				Metadata struct {
+					Name string `yaml:"name"`
+				} `yaml:"metadata"`
+				Spec struct {
+					Template struct {
+						Spec struct {
+							Containers []struct {
+								Name string `yaml:"name"`
+							} `yaml:"containers"`
+							Volumes []struct {
+								Name string `yaml:"name"`
+							} `yaml:"volumes"`
+						} `yaml:"spec"`
+					} `yaml:"template"`
+				} `yaml:"spec"`
+			}
+			if err := dec.Decode(&doc); err != nil {
+				break
+			}
+			if doc.Kind != "Deployment" || doc.Metadata.Name != workspacesController {
+				continue
+			}
+			for _, c := range doc.Spec.Template.Spec.Containers {
+				containers = append(containers, c.Name)
+			}
+			for _, v := range doc.Spec.Template.Spec.Volumes {
+				volumes = append(volumes, v.Name)
+			}
+			return containers, volumes
+		}
+		t.Fatalf("no Deployment %s in the manifest", workspacesController)
+		return nil, nil
+	}
+	proxyVolumes := []string{"envoy-config", "servicedns-certs", "podidentity-ca"}
+
+	cfg := config.Default()
+	cfg.Platform.Workspaces.Enabled = true
+	containers, volumes := controller(t, cfg)
+	if !slices.Contains(containers, workspacesProxyContainer) {
+		t.Errorf("with Substrate the controller runs %v, want the proxy %s", containers, workspacesProxyContainer)
+	}
+	for _, v := range proxyVolumes {
+		if !slices.Contains(volumes, v) {
+			t.Errorf("with Substrate the controller's volumes %v lack %s", volumes, v)
+		}
+	}
+
+	cfg.Platform.Agents = false
+	containers, volumes = controller(t, cfg)
+	if slices.Contains(containers, workspacesProxyContainer) {
+		t.Errorf("without Substrate the controller runs the proxy %s, which no signer certifies: %v", workspacesProxyContainer, containers)
+	}
+	for _, v := range proxyVolumes {
+		if slices.Contains(volumes, v) {
+			t.Errorf("without Substrate the controller mounts %s: %v", v, volumes)
+		}
+	}
+	for _, c := range []string{"csi-provisioner", "csi-resizer", "nfs"} {
+		if !slices.Contains(containers, c) {
+			t.Errorf("without Substrate the controller runs %v, want %s for the cluster's claims", containers, c)
+		}
+	}
+}
+
+// Without Substrate the summary and the status word the shape and the
+// in-place switch that adds Substrate.
+func TestWorkspacesWithoutSubstrateWording(t *testing.T) {
+	cfg := config.Default()
+	cfg.Platform.Workspaces.Enabled = true
+	cfg.Platform.Agents = false
+	hint := workspacesHint(cfg, true, "")
+	for _, want := range []string{"without Agent Substrate", "`agentlab configure --agents && agentlab platform`", "provider instances"} {
+		if !strings.Contains(hint, want) {
+			t.Errorf("summary %q lacks %q", hint, want)
+		}
+	}
+	if strings.Contains(hint, "workspaces-test") {
+		t.Errorf("summary %q names the workspaces proof, which mounts through Substrate", hint)
+	}
+	status := (&WorkspacesStatus{Controller: conditionReady}).String()
+	if !strings.Contains(status, "Ready without its mTLS proxy (Agent Substrate off)") {
+		t.Errorf("status %q does not word the controller without its proxy", status)
+	}
+}
+
 // The status line words the pieces in place.
 func TestWorkspacesStatusString(t *testing.T) {
 	node := config.Default().ControlPlaneNode()
-	s := &WorkspacesStatus{NFSServer: conditionReady, Controller: conditionReady, NodePlugin: conditionReady, Node: node, StorageClass: true, CSIDriverConfig: "the lab"}
+	s := &WorkspacesStatus{NFSServer: conditionReady, Controller: conditionReady, Proxy: true, NodePlugin: conditionReady, Node: node, StorageClass: true, CSIDriverConfig: "the lab"}
 	got := s.String()
 	for _, want := range []string{"NFS server Ready on " + node, "CSI controller " + workspacesCSIDriver + " Ready with its mTLS proxy", "node plugin Ready", "StorageClass " + workspacesStorageClass, "CSIDriverConfig " + workspacesCSIDriver + " by the lab"} {
 		if !strings.Contains(got, want) {

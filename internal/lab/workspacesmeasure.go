@@ -317,11 +317,19 @@ func WorkspacesMeasure(cfg *config.Config, opts WorkspacesMeasureOptions) error 
 		if cfg == nil || !cfg.WorkspacesEnabled() {
 			return fmt.Errorf("platform.workspaces is off in %s — `agentlab configure --workspaces` turns it on, then `agentlab platform`", config.File)
 		}
+		if !cfg.WorkspacesSubstrate() {
+			return fmt.Errorf("the workspaces run without Agent Substrate in %s (platform.agents: false), and every run starts Sessions on it — `agentlab configure --agents` switches it on in place, then `agentlab platform`", config.File)
+		}
 		if err := useClusterKubeconfig(cfg); err != nil {
 			return err
 		}
 		m.cfg, m.provider, m.org = cfg, config.WorkspaceProviderFake, config.WorkspaceOrganization
 		m.report.Target = "the lab " + cfg.ClusterName
+		end, err := startWorkspaceRun()
+		defer end()
+		if err != nil {
+			return err
+		}
 	}
 	var err error
 	if m.runDir, err = measureRunDir(opts.RunDir, m.report.Started); err != nil {
@@ -849,9 +857,15 @@ func (m *measurement) firstSync(w *measureWorkspace, first bool) error {
 	}
 	start := time.Now()
 	var created syncWorkspace
-	if err := m.person.callServerStructured(workspaceManagerToolPrefix+"create_workspace", map[string]any{
-		nameKey: w.name, wmOrganizationArg: m.org, wmSourcesArg: m.sources(w),
-	}, &created); err != nil {
+	create := map[string]any{nameKey: w.name, wmOrganizationArg: m.org, wmSourcesArg: m.sources(w)}
+	var err error
+	if m.opts.remote() {
+		// An installation's Workspace carries no lab label.
+		err = m.person.callServerStructured(workspaceManagerToolPrefix+"create_workspace", create, &created)
+	} else {
+		err = m.person.createLabWorkspace(create, &created)
+	}
+	if err != nil {
 		return err
 	}
 	if !slices.Contains(m.created, w.name) {

@@ -62,6 +62,7 @@ func PlatformTest(cfg *config.Config, email string) error {
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
 	}
+	defer releaseWorkspaceGrants()
 	user := cfg.FindUser(email)
 	if user == nil {
 		return fmt.Errorf("no user %q in %s", email, config.File)
@@ -449,7 +450,11 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 		if err != nil {
 			return "", err
 		}
-		verdict += fmt.Sprintf("\nPASS: the workspace-manager is registered with muster (MCPServer %s Connected), cleans session directories up from kagent's Sessions, and lists its %d provider instances to the admin: %s; list_workspaces for Organization %s answers a member and refuses a viewer", workspaceManagerMCPServer, len(providers), strings.Join(providers, ", "), config.WorkspaceOrganization)
+		cleanup := ", cleans session directories up from kagent's Sessions,"
+		if !cfg.Platform.Agents {
+			cleanup = " (no kagent: the agents are off)"
+		}
+		verdict += fmt.Sprintf("\nPASS: the workspace-manager is registered with muster (MCPServer %s Connected)%s and lists its %d provider instances to the admin: %s; list_workspaces for Organization %s answers a member and refuses a viewer", workspaceManagerMCPServer, cleanup, len(providers), strings.Join(providers, ", "), config.WorkspaceOrganization)
 	}
 
 	// The per-server sign-in path: muster as OAuth client, challenged by the

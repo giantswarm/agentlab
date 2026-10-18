@@ -647,13 +647,9 @@ func (ws *gatewayWorkspaces) ask(t *slackThread, text string) (slackMessage, err
 	t.ts = ts
 	var prompt slackMessage
 	msgs, ok := waitThread(ws.p.fake, ws.p.channel, ts, klausGatewayReplyWait, func(msgs []slackMessage) bool {
-		for _, m := range msgs {
-			if _, found := m.action(slackWorkspaceSelect); found {
-				prompt = m
-				return true
-			}
-		}
-		return false
+		var found bool
+		prompt, found = workspacePromptIn(msgs)
+		return found
 	})
 	if !ok {
 		return slackMessage{}, fmt.Errorf("the new thread of %s was not asked for its workspace within %s; the thread shows: %s", t.user, klausGatewayReplyWait, threadLine(msgs))
@@ -910,6 +906,17 @@ func (ws *gatewayWorkspaces) cleanup() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// workspacePromptIn is the thread's first message carrying the workspace
+// select, the gateway's workspace prompt.
+func workspacePromptIn(msgs []slackMessage) (slackMessage, bool) {
+	for _, m := range msgs {
+		if _, found := m.action(slackWorkspaceSelect); found {
+			return m, true
+		}
+	}
+	return slackMessage{}, false
 }
 
 // workspacePrompts counts the thread's open workspace prompts: messages that

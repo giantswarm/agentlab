@@ -414,6 +414,8 @@ func connectWorkspaceProviderAs(cfg *config.Config, p *workspacePerson, instance
 	if !status.Connected {
 		return "", fmt.Errorf("the grant of %s at %s reached muster's callback, but list_providers still shows %s\n  hops: %s", p.user.Email, instance, status, hops)
 	}
+	// Held before or granted now, the run drops it at its end.
+	recordWorkspaceGrant(p, instance)
 	return hops, nil
 }
 
@@ -593,6 +595,11 @@ func WorkspacesSignInTest(cfg *config.Config, opts WorkspacesSignInTestOptions) 
 	if _, err := workspaceManagerPinnedProvider(cfg); err != nil {
 		return err
 	}
+	end, err := startWorkspaceRun()
+	defer end()
+	if err != nil {
+		return err
+	}
 	admin, err := openWorkspacePerson(cfg, adminUser)
 	if err != nil {
 		return err
@@ -640,10 +647,9 @@ func WorkspacesSignInTest(cfg *config.Config, opts WorkspacesSignInTestOptions) 
 			repositoriesKey:   []string{workspaceSignInReadable, workspaceSignInPrivate},
 		}},
 	}
-	if env, err := admin.session.callToolEnvelope(workspaceManagerToolPrefix+"create_workspace", create); err != nil {
+	var created syncWorkspace
+	if err := admin.session.createLabWorkspace(create, &created); err != nil {
 		return err
-	} else if env.IsError {
-		return fmt.Errorf("create_workspace refused: %.300s", env.Content[0].Text)
 	}
 	synced, err := waitWorkspaceSynced(admin, opts.SyncTimeout)
 	if err != nil {

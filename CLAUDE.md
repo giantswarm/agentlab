@@ -236,6 +236,7 @@ go test ./internal/forms/ -run TestMinimalFormDrive -count=1 -v   # single test
 ./agentlab egress-test     # an agent with one declared origin, probed from its actor: the origin reached, an undeclared host 403 (actor egress policy denied), muster reached without an entry, raw TCP to github.com:22 refused
 ./agentlab skills-test     # kagent API v2: an AgentTemplate with a git-pinned skill boots (the golden boot) and answers from the skill
 ./agentlab substrate-step-test --to <release>  # a suspended conversation and its /data file survive the step to a newer Substrate; a new one starts from a golden in the layout it writes (taken again on a layout change, kept otherwise)
+./agentlab kagent-step-test --to <kagent> | --chart <agent-platform>  # a suspended conversation resumes, takes a turn, suspends and deletes across a kagent step (a kagent pin, a platform candidate, or both)
 ./agentlab substrate-tunnel-test  # a gRPC call through atenet-router to an HTTP/1.1-only actor fails at once, not with its client's timeout (--substrate <release> pins one for the run)
 ./agentlab down            # delete the cluster (certs/ kept, trust stores untouched)
 ./agentlab trust           # install the lab CA into the system + NSS trust stores (sudo)

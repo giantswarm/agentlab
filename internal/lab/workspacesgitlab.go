@@ -356,7 +356,7 @@ func (gp *gitlabProof) connect() error {
 func (gp *gitlabProof) workspace() error {
 	sp := gp.sp
 	var created syncWorkspace
-	if err := sp.member.callServerStructured(workspaceManagerToolPrefix+"create_workspace", map[string]any{
+	if err := sp.member.createLabWorkspace(map[string]any{
 		nameKey: gitlabWorkspace, wmOrganizationArg: config.WorkspaceOrganization,
 		wmSourcesArg: []map[string]any{{wmProviderArg: config.WorkspaceProviderGitLab, wmOwnerArg: gp.gl.Group, repositoriesKey: []string{gp.gl.Project}}},
 	}, &created); err != nil {
