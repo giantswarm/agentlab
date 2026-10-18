@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -178,5 +179,41 @@ func TestJudgeSecretBacked(t *testing.T) {
 	missing := func(string, string, string) bool { return false }
 	if skip, err := judgeSecretBacked(backed, missing, line); err == nil || skip != "" || !strings.Contains(err.Error(), "agentlab-coding-mcp key token, which is missing") {
 		t.Errorf("Secret key missing: skip %q, err %v; want a failure naming the Secret key", skip, err)
+	}
+}
+
+// The preload renders the kagent chart with the kagent.harnesses the
+// HelmRelease carries: an omp dev image is pinned in the first values render
+// already, so the BYO entry the chart checks has its image, command and
+// displayName in both renders of the run, not only in the install's.
+func TestCodingDevImageInPreloadValues(t *testing.T) {
+	cfg := codingLab()
+	cfg.Platform.Coding.Harnesses = []string{config.CodingRuntimeOmp}
+	cfg.Platform.DevImages = map[string]string{config.CodingHarnessDevImage(config.CodingRuntimeOmp): "omp-harness:dev-1a2b"}
+	dev := "localhost:5001/kagent-dev/kagent/omp-harness@sha256:" + strings.Repeat("d", 64)
+	pushed := registryDevImages{coding: map[string]string{config.CodingRuntimeOmp: dev}}
+	harnesses := func(mutate func(*tmplData)) []any {
+		values, _, _, _ := renderWorkspaceTemplates(t, cfg, mutate)
+		kagent, _ := values["kagent"].(map[string]any)
+		list, _ := kagent["harnesses"].([]any)
+		return list
+	}
+	preload := harnesses(func(d *tmplData) { pushed.pin(cfg, d) })
+	install := harnesses(func(d *tmplData) {
+		pushed.pin(cfg, d)
+		d.PostRenderers = map[string]string{componentKagent: "[]"}
+	})
+	if !reflect.DeepEqual(preload, install) {
+		t.Fatalf("the preload renders kagent.harnesses %v, the HelmRelease carries %v", preload, install)
+	}
+	if len(preload) != 1 {
+		t.Fatalf("kagent.harnesses = %v, want omp alone", preload)
+	}
+	omp, _ := preload[0].(map[string]any)
+	if omp["runtime"] != "byo" || omp["image"] != dev || omp["displayName"] != ompDisplayName {
+		t.Errorf("omp = %v, want a byo entry on %s titled %q", omp, dev, ompDisplayName)
+	}
+	if command, _ := omp["command"].([]any); len(command) != 1 || command[0] != ompHarnessCommand[0] {
+		t.Errorf("omp command = %v, want %v", omp["command"], ompHarnessCommand)
 	}
 }

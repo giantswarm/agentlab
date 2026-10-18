@@ -100,6 +100,15 @@ type devImages struct {
 	// names is the chart image name each configured Deployment target
 	// replaces, from the component render.
 	names map[string]string
+	registryDevImages
+	// proxy is the `agentgateway` dev image as the chart's proxy.image
+	// values carry it (agentgateway.go); nil without the target.
+	proxy *agentgatewayProxyImage
+}
+
+// registryDevImages are the dev images the lab registry serves, pinned by
+// digest: what a Harness runs, which no component render is needed for.
+type registryDevImages struct {
 	// harness is the `harness` dev image as the platform Harness pins it —
 	// the lab registry's ref by digest; "" without the target.
 	harness string
@@ -107,23 +116,73 @@ type devImages struct {
 	// pins it — the lab registry's ref by digest — by runtime; nil without
 	// such a target.
 	coding map[string]string
-	// proxy is the `agentgateway` dev image as the chart's proxy.image
-	// values carry it (agentgateway.go); nil without the target.
-	proxy *agentgatewayProxyImage
 }
 
-// prepareDevImages resolves and stages the configured dev images before the
-// install: the Deployment targets' image names from the component renders
-// (refusing an override that matches nothing), their side-load into the node
-// with the node's own image list as the check, and the `harness` image pushed
-// to the lab registry and pinned by digest. renders is the component renders
-// keyed by release name (platformImages).
-func prepareDevImages(cfg *config.Config, renders map[string]string) (*devImages, error) {
+// pushRegistryDevImages pushes the `harness` and `<runtime>-harness` dev
+// images to the lab registry and pins them by digest, before the first
+// platform values render: the preload's component renders then receive the
+// kagent.harnesses the HelmRelease carries — a BYO entry's image among them,
+// which the kagent chart requires — and not a list the swap completes later.
+func pushRegistryDevImages(cfg *config.Config) (registryDevImages, error) {
+	var pushed registryDevImages
+	if ref := harnessDevImage(cfg); ref != "" {
+		step("Pushing the harness dev image %s to the lab registry", ref)
+		if err := ensureDevRegistry(cfg); err != nil {
+			return pushed, err
+		}
+		pinned, err := pushDevImage(cfg, ref)
+		if err != nil {
+			return pushed, err
+		}
+		pushed.harness = pinned
+		note("the platform Harness %s pins %s (atelet reaches the registry as %s)", platformHarness, pinned, devRegistryEndpoint(cfg))
+	}
+	for _, runtime := range config.CodingRuntimes {
+		ref := cfg.Platform.DevImages[config.CodingHarnessDevImage(runtime)]
+		if ref == "" {
+			continue
+		}
+		step("Pushing the %s dev image %s to the lab registry", config.CodingHarnessDevImage(runtime), ref)
+		if err := ensureDevRegistry(cfg); err != nil {
+			return pushed, err
+		}
+		pinned, err := pushDevImage(cfg, ref)
+		if err != nil {
+			return pushed, err
+		}
+		if pushed.coding == nil {
+			pushed.coding = map[string]string{}
+		}
+		pushed.coding[runtime] = pinned
+		note("the coding Harness %s pins %s (atelet reaches the registry as %s)", runtime, pinned, devRegistryEndpoint(cfg))
+	}
+	return pushed, nil
+}
+
+// pin puts the pushed images into a platform values render; every render of
+// one run takes them, so the values the preload renders the components with
+// are the ones installed.
+func (r registryDevImages) pin(cfg *config.Config, t *tmplData) {
+	if r.harness != "" {
+		t.HarnessDevImage = r.harness
+	}
+	if len(r.coding) > 0 {
+		t.CodingHarnesses = codingHarnessesFor(cfg, t.WorkspaceAdmission, r.coding)
+	}
+}
+
+// prepareDevImages resolves and stages the configured Deployment dev images
+// before the install: their image names from the component renders
+// (refusing an override that matches nothing) and their side-load into the
+// node with the node's own image list as the check. renders is the component
+// renders keyed by release name (platformImages); pushed the registry dev
+// images (pushRegistryDevImages).
+func prepareDevImages(cfg *config.Config, renders map[string]string, pushed registryDevImages) (*devImages, error) {
 	names, err := resolveDevImageNames(cfg, renders)
 	if err != nil {
 		return nil, err
 	}
-	dev := &devImages{names: names, proxy: agentgatewayDevImage(cfg)}
+	dev := &devImages{names: names, registryDevImages: pushed, proxy: agentgatewayDevImage(cfg)}
 	// The Deployment targets (the agentgateway proxy among them) are builds
 	// of this host: never pullable, always side-loaded, so their pods find
 	// them under imagePullPolicy IfNotPresent — which is why each ref is then
@@ -141,37 +200,6 @@ func prepareDevImages(cfg *config.Config, renders map[string]string) (*devImages
 		if err := ensureNodeImages(cfg, refs); err != nil {
 			return nil, err
 		}
-	}
-	if ref := harnessDevImage(cfg); ref != "" {
-		step("Pushing the harness dev image %s to the lab registry", ref)
-		if err := ensureDevRegistry(cfg); err != nil {
-			return nil, err
-		}
-		pinned, err := pushDevImage(cfg, ref)
-		if err != nil {
-			return nil, err
-		}
-		dev.harness = pinned
-		note("the platform Harness %s pins %s (atelet reaches the registry as %s)", platformHarness, pinned, devRegistryEndpoint(cfg))
-	}
-	for _, runtime := range config.CodingRuntimes {
-		ref := cfg.Platform.DevImages[config.CodingHarnessDevImage(runtime)]
-		if ref == "" {
-			continue
-		}
-		step("Pushing the %s dev image %s to the lab registry", config.CodingHarnessDevImage(runtime), ref)
-		if err := ensureDevRegistry(cfg); err != nil {
-			return nil, err
-		}
-		pinned, err := pushDevImage(cfg, ref)
-		if err != nil {
-			return nil, err
-		}
-		if dev.coding == nil {
-			dev.coding = map[string]string{}
-		}
-		dev.coding[runtime] = pinned
-		note("the coding Harness %s pins %s (atelet reaches the registry as %s)", runtime, pinned, devRegistryEndpoint(cfg))
 	}
 	return dev, nil
 }
