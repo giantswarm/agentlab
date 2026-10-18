@@ -628,9 +628,9 @@ func judgeRenderFailures(chart platformChart, errs []renderFailure) error {
 		case refuses:
 			rejected = append(rejected, failure)
 		case reason != "":
-			note("component render skipped (%s): %s", reason, excerptEnds(failure.err.Error(), 300))
+			note("component render skipped (%s): %s", reason, renderFailureText(failure.err))
 		default:
-			note("component render skipped: %s", excerptEnds(failure.err.Error(), 300))
+			note("component render skipped: %s", renderFailureText(failure.err))
 		}
 	}
 	byName := func(a, b renderFailure) int { return strings.Compare(a.rel.Name, b.rel.Name) }
@@ -649,6 +649,22 @@ func judgeRenderFailures(chart platformChart, errs []renderFailure) error {
 	}
 	return errors.Join(stops...)
 }
+
+// renderFailureText words a skipped render's error for its note: a chart's
+// own refusal (a template's `fail`, Helm's "execution error at") whole, since
+// it names every key it wants and an excerpt cuts the one missing; anything
+// else excerpted.
+func renderFailureText(err error) string {
+	msg := err.Error()
+	if strings.Contains(msg, templateFailMarker) {
+		return strings.ReplaceAll(strings.TrimSpace(msg), "\n", " ")
+	}
+	return excerptEnds(msg, 300)
+}
+
+// templateFailMarker is how Helm prefixes the message of a template's `fail`
+// or `required`.
+const templateFailMarker = "execution error at ("
 
 // recheckReleases puts values that changed after the preload's renders (the
 // dev-image swap) to the charts once more — the meta chart, and every
