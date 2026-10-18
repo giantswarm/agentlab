@@ -1104,7 +1104,7 @@ yet:
 | Host model (Ollama) | Memory loaded | On the codex proof |
 |---|---|---|
 | `qwen3-coder:30b` (30b-a3b, Q4_K_M, 18 GB) | 21 GiB | sandbox turn (1–4 min), credentials and DNS canary pass; the egress readings it relays are not the probe's |
-| `gpt-oss:20b` (MXFP4, 13 GB) | 12 GiB | Ollama answers some `/v1/responses` calls with 500 and codex fails the turn; otherwise the relay drops lines |
+| `gpt-oss:20b` (MXFP4, 13 GB) | 16 GiB | Ollama answers some `/v1/responses` calls with 500 and codex fails the turn; otherwise the relay drops lines |
 | `qwen3.5:9b` (6.6 GB) | not measured | every turn runs; the relay fails at a different stage each run |
 
 `agentlab configure` adds no host model unasked: each of these needs more

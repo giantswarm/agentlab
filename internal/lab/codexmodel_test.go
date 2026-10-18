@@ -1,6 +1,9 @@
 package lab
 
 import (
+	"os"
+	"regexp"
+	"strconv"
 	"testing"
 
 	"github.com/giantswarm/agentlab/internal/config"
@@ -111,3 +114,22 @@ var (
 	modelQwen3Coder30b = CodexHostModels[0].ID
 	modelGptOss20b     = CodexHostModels[1].ID
 )
+
+// The codex host model table in docs/platform.md states the memory each
+// CodexHostModels entry asks of the model server.
+func TestCodexHostModelsDocumented(t *testing.T) {
+	doc, err := os.ReadFile("../../docs/platform.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range CodexHostModels {
+		row := regexp.MustCompile("(?m)^\\| `" + regexp.QuoteMeta(m.ID) + "` [^|]*\\| (\\d+) GiB \\|").FindSubmatch(doc)
+		if row == nil {
+			t.Errorf("docs/platform.md has no host model row with a GiB figure for %s", m.ID)
+			continue
+		}
+		if got := string(row[1]); got != strconv.Itoa(m.GiB) {
+			t.Errorf("docs/platform.md gives %s %s GiB, codexmodel.go %d GiB", m.ID, got, m.GiB)
+		}
+	}
+}
