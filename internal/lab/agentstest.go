@@ -614,6 +614,10 @@ type agentManagerInfo struct {
 	} `json:"muster"`
 	Namespaces struct {
 		Default string `json:"default"`
+		// Managed are the namespaces the caller may create agents in
+		// (agent-manager checks each with a SelfSubjectAccessReview): the
+		// tenants of the portal's create flow.
+		Managed []string `json:"managed"`
 	} `json:"namespaces"`
 }
 
