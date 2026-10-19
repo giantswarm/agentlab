@@ -20,19 +20,26 @@ type codingProbe map[string]string
 
 // parseCodingProbe reads the marker lines out of a reply. A value loses the
 // markdown a model wraps a relayed line in (code spans, bold), which a small
-// model adds even when told to relay verbatim. A literal "\n" separates lines
-// like a newline does and a literal \" is a quote: a reply can arrive with
-// its newlines and quotes escaped (once or twice), and no reading spans two
-// lines. A marker ends the reading before it too, so lines a model joins with
-// a space read apart. A value also loses the quotes around it.
+// model adds even when told to relay verbatim. An escaped "\n" separates
+// lines like a newline does and an escaped \" is a quote, however many times
+// the reply was escaped, and no reading spans two lines. A marker ends the
+// reading before it too, so lines a model joins with a space read apart. A
+// value also loses the quotes around it.
 func parseCodingProbe(reply string) codingProbe {
-	reply = strings.NewReplacer(`\\n`, "\n", `\n`, "\n", `\"`, `"`, probeMarker+" ", "\n"+probeMarker+" ").Replace(reply)
+	reply = escapedNewline.ReplaceAllString(reply, "\n")
+	reply = escapedQuote.ReplaceAllString(reply, `"`)
+	reply = strings.ReplaceAll(reply, probeMarker+" ", "\n"+probeMarker+" ")
 	probe := codingProbe{}
 	for _, m := range probeLine.FindAllStringSubmatch(reply, -1) {
-		probe[m[1]] = strings.TrimSpace(strings.Trim(strings.TrimSpace(m[2]), "`*\"'"))
+		probe[m[1]] = strings.Trim(m[2], " \t\r`*\"'")
 	}
 	return probe
 }
+
+var (
+	escapedNewline = regexp.MustCompile(`\\+n`)
+	escapedQuote   = regexp.MustCompile(`\\+"`)
+)
 
 // codingSandboxCommand probes the sandbox on the runtime: on claude the uid
 // split, the forwarder's path refusals and a write tool through the
@@ -147,18 +154,20 @@ func readRC(v string) (rc, message string) {
 // uidSplit: Claude Code runs as the image's unprivileged uid, the harness as
 // root beside it, and neither its environment nor its memory opens.
 func (p codingProbe) uidSplit([]string) (string, error) {
-	if p["uid"] != claudeUnprivilegedUID {
-		return "", fmt.Errorf("the commands of Claude Code run as uid %q, not %s (%s)", p["uid"], claudeUnprivilegedUID, p.lines("uid", "harness"))
+	// A uid is one token: words a model adds after it are not part of it.
+	uid, _, _ := strings.Cut(p["uid"], " ")
+	if uid != claudeUnprivilegedUID {
+		return "", fmt.Errorf("the commands of Claude Code run as uid %q, not %s (%s)", uid, claudeUnprivilegedUID, p.lines("uid", "harness"))
 	}
 	if p["harness"] == "" {
 		return "", fmt.Errorf("no root %s process in the sandbox to probe (%s)", harnessProcessName, p.lines("uid", "harness"))
 	}
 	for _, key := range []string{"harness-environ", "harness-mem"} {
 		if rc, _ := readRC(p[key]); rc == "" || rc == "0" {
-			return "", fmt.Errorf("uid %s read the harness's %s: %q", p["uid"], strings.TrimPrefix(key, "harness-"), p[key])
+			return "", fmt.Errorf("uid %s read the harness's %s: %q", uid, strings.TrimPrefix(key, "harness-"), p[key])
 		}
 	}
-	return fmt.Sprintf("uid %s; harness %s; /proc environ %s; /proc mem %s", p["uid"], p["harness"], p["harness-environ"], p["harness-mem"]), nil
+	return fmt.Sprintf("uid %s; harness %s; /proc environ %s; /proc mem %s", uid, p["harness"], p["harness-environ"], p["harness-mem"]), nil
 }
 
 // forwarderPaths: the three path rows answered 400, an unknown server 404
