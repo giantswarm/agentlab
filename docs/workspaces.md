@@ -1030,6 +1030,12 @@ GitLab's side, set up once by an administrator of the instance:
 - The lab's node reaches the GitLab host over HTTPS, and the host's
   certificate chains to a public root.
 
+With `grantProvider: gitlab`, muster's pin of the workspace-manager names
+GitLab's endpoints, `/oauth/revoke` included once the workspace-manager's
+chart renders it (0.11.0-rc.6 and newer): a disconnect in muster
+(`core_auth_logout`, muster 5.47.0 or newer) revokes the person's tokens at
+GitLab, and their next sign-in walks the application's consent again.
+
 ## The lab's GitHub
 
 

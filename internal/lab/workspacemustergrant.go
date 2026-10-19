@@ -33,6 +33,11 @@ import (
 // registration muster pins to a provider App.
 var workspaceManagerGrantFloor = semver.MustParse("0.10.0-0")
 
+// workspaceManagerRevocationFloor is the first workspace-manager whose chart
+// renders the pin's revocation endpoint; an earlier one's schema refuses the
+// key.
+var workspaceManagerRevocationFloor = semver.MustParse("0.11.0-rc.6")
+
 // workspaceGitLabScopes are the scopes the GitLab OAuth application is
 // registered with, which its authorization asks for.
 const workspaceGitLabScopes = "api read_user read_repository write_repository"
@@ -43,17 +48,21 @@ const (
 	githubAccessTokenPath = "/login/oauth/access_token" // #nosec G101 -- a path, not a credential
 	githubOAuthIssuer     = "https://github.com/login/oauth"
 	gitlabTokenPath       = "/oauth/token" // #nosec G101 -- a path, not a credential
+	gitlabRevokePath      = "/oauth/revoke"
 )
 
 // workspaceGrantValues is the pin as the values template renders it into
 // workspace-manager.muster.mcpServer.auth: the instance, its App's issuer
 // identity (the key muster files the person's grant under), the issuer the
 // provider puts in its authorization response ("" for one that puts none),
-// its endpoints, the scope ("" for a GitHub App) and the Secret of its OAuth
-// client.
+// its endpoints, the RFC 7009 revocation endpoint muster revokes a person's
+// grant at on their disconnect ("" for GitHub, which has none, and for a
+// manager whose chart does not render it), the scope ("" for a GitHub App)
+// and the Secret of its OAuth client.
 type workspaceGrantValues struct {
 	Provider, Issuer, ExpectedIssuer     string
 	AuthorizationEndpoint, TokenEndpoint string
+	RevocationEndpoint                   string
 	Scopes, Secret                       string
 }
 
@@ -67,7 +76,11 @@ func workspaceGrantFor(cfg *config.Config, providers []workspaceProviderValues) 
 	}
 	for _, p := range providers {
 		if p.Name == name {
-			return workspaceGrantOf(p)
+			g := workspaceGrantOf(p)
+			if g.RevocationEndpoint != "" && !workspaceManagerAtLeast(cfg, workspaceManagerRevocationFloor) {
+				g.RevocationEndpoint = ""
+			}
+			return g
 		}
 	}
 	return nil
@@ -99,6 +112,7 @@ func workspaceGrantOf(p workspaceProviderValues) *workspaceGrantValues {
 	case p.Kind == providerKindGitLab:
 		base := strings.TrimSuffix(p.URL, "/")
 		g.Issuer, g.AuthorizationEndpoint, g.TokenEndpoint, g.Scopes = base, base+"/oauth/authorize", base+gitlabTokenPath, workspaceGitLabScopes
+		g.RevocationEndpoint = base + gitlabRevokePath
 	case p.URL == "":
 		// github.com: the App is known by its App id (agentlab.yaml
 		// records no slug), and GitHub names its issuer in the response.
@@ -116,23 +130,35 @@ func workspaceGrantOf(p workspaceProviderValues) *workspaceGrantValues {
 // resolves is 0.10.0 or newer; one that cannot be resolved is a note and no
 // pin.
 func workspaceManagerTakesGrant(cfg *config.Config) bool {
-	version, err := workspaceManagerVersion(cfg)
+	return workspaceManagerAtLeast(cfg, workspaceManagerGrantFloor)
+}
+
+// workspaceManagerAtLeast says whether the workspace-manager the install
+// resolves is floor or newer; one that cannot be resolved is a note and
+// false.
+func workspaceManagerAtLeast(cfg *config.Config, floor *semver.Version) bool {
+	version, err := workspaceManagerVersion(cfg, floor)
 	if err != nil {
-		note("the workspace-manager's chart version could not be resolved (%v): its registration is not pinned to a provider App", err)
+		note("the workspace-manager's chart version could not be resolved (%v): the lab renders nothing that needs %s or newer", err, floor.Original())
 		return false
 	}
 	if version == "" {
 		return false
 	}
 	v, err := semver.NewVersion(version)
-	return err == nil && !v.LessThan(workspaceManagerGrantFloor)
+	return err == nil && !v.LessThan(floor)
 }
 
-// rangeFloorAdmitsGrant says whether every version the range admits is at or
-// above the grant floor: each of its ||-alternatives carries a lower bound
-// (>=, >, = or a bare version) of the floor or newer. Such a range pins
-// without listing the registry's tags.
+// rangeFloorAdmitsGrant is rangeFloorAdmits at the grant floor.
 func rangeFloorAdmitsGrant(versionRange string) bool {
+	return rangeFloorAdmits(versionRange, workspaceManagerGrantFloor)
+}
+
+// rangeFloorAdmits says whether every version the range admits is at or
+// above floor: each of its ||-alternatives carries a lower bound (>=, >, = or
+// a bare version) of the floor or newer. Such a range decides without
+// listing the registry's tags.
+func rangeFloorAdmits(versionRange string, floor *semver.Version) bool {
 	alternatives := strings.Split(versionRange, "||")
 	for _, alt := range alternatives {
 		floored := false
@@ -142,7 +168,7 @@ func rangeFloorAdmitsGrant(versionRange string) bool {
 				continue
 			}
 			v, err := semver.NewVersion(bound)
-			if err == nil && !v.LessThan(workspaceManagerGrantFloor) {
+			if err == nil && !v.LessThan(floor) {
 				floored = true
 			}
 		}
@@ -163,9 +189,9 @@ type workspaceManagerSource struct {
 // workspaceManagerVersion resolves the workspace-manager's chart version the
 // way source-controller resolves the component's OCIRepository: the highest
 // tag the range (and the semverFilter) admits; "" for a chart that names no
-// such component; the grant floor itself for a range whose floor is at or
-// above it, without listing tags. Memoized per source.
-func workspaceManagerVersion(cfg *config.Config) (string, error) {
+// such component; floor itself for a range whose floor is at or above it,
+// without listing tags. Memoized per source.
+func workspaceManagerVersion(cfg *config.Config, floor *semver.Version) (string, error) {
 	src := workspacesChartFor(cfg).Manager
 	if len(cfg.Platform.ValuesFiles) > 0 {
 		overlay, err := helmValuesFiles(cfg.Platform.ValuesFiles...)
@@ -177,8 +203,8 @@ func workspaceManagerVersion(cfg *config.Config) (string, error) {
 	if src.repository == "" || src.versionRange == "" {
 		return "", nil // a chart without the component: no manager to pin
 	}
-	if rangeFloorAdmitsGrant(src.versionRange) {
-		return workspaceManagerGrantFloor.Original(), nil // no tag below the floor can resolve
+	if rangeFloorAdmits(src.versionRange, floor) {
+		return floor.Original(), nil // no tag below the floor can resolve
 	}
 	workspaceManagerVersionMu.Lock()
 	defer workspaceManagerVersionMu.Unlock()

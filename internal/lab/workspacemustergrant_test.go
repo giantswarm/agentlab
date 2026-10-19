@@ -121,7 +121,7 @@ func TestWorkspaceGrantOf(t *testing.T) {
 				AuthorizationEndpoint: "https://github.com" + githubAuthorizePath, TokenEndpoint: "https://github.com" + githubAccessTokenPath, Secret: config.WorkspaceGitHubSecretName}},
 		{workspaceProviderValues{Name: config.WorkspaceProviderGitLab, Kind: providerKindGitLab, URL: gitlab + "/", ClientID: testGrantClientID, Secret: config.WorkspaceGitLabSecretName},
 			workspaceGrantValues{Provider: config.WorkspaceProviderGitLab, Issuer: gitlab, AuthorizationEndpoint: gitlab + "/oauth/authorize",
-				TokenEndpoint: gitlab + gitlabTokenPath, Scopes: workspaceGitLabScopes, Secret: config.WorkspaceGitLabSecretName}},
+				TokenEndpoint: gitlab + gitlabTokenPath, RevocationEndpoint: gitlab + gitlabRevokePath, Scopes: workspaceGitLabScopes, Secret: config.WorkspaceGitLabSecretName}},
 	} {
 		if got := *workspaceGrantOf(c.p); got != c.want {
 			t.Errorf("%s: %+v, want %+v", c.p.Name, got, c.want)
@@ -159,5 +159,58 @@ func TestWorkspaceGrantValues(t *testing.T) {
 	}
 	if _, ok := wm["tokenExchange"]; !ok {
 		t.Error("an unpinned manager's values lost the token exchange")
+	}
+}
+
+// A GitLab pin names GitLab's revocation endpoint only for a manager whose
+// chart renders it (0.11.0-rc.6 and newer, resolved like the grant floor);
+// an earlier chart's schema refuses the key, so its pin goes without.
+func TestWorkspaceGrantForRevocationEndpoint(t *testing.T) {
+	source := workspaceManagerSource{repository: "oci://gsoci.azurecr.io/charts/giantswarm", chart: "workspace-manager", versionRange: ">=0.5.0 <1.0.0"}
+	stubWorkspacesChart(t, chartWorkspaces{Carries: true, Organizations: true, Manager: source})
+	const gitlab = "https://gitlab.example.com"
+	providers := []workspaceProviderValues{{Name: config.WorkspaceProviderGitLab, Kind: providerKindGitLab, URL: gitlab, ClientID: testGrantClientID, Secret: config.WorkspaceGitLabSecretName}}
+	cfg := workspaceLab(config.WorkspaceProviderGitLab)
+
+	stubWorkspaceManagerTags(t, "0.10.2", "0.11.0-rc.5")
+	if g := workspaceGrantFor(cfg, providers); g == nil || g.RevocationEndpoint != "" {
+		t.Errorf("a range resolving to 0.10.2: pin %+v, want one without a revocation endpoint", g)
+	}
+
+	stubWorkspaceManagerTags(t, "0.10.2", "0.11.0")
+	if g := workspaceGrantFor(cfg, providers); g == nil || g.RevocationEndpoint != gitlab+gitlabRevokePath {
+		t.Errorf("a range resolving to 0.11.0: pin %+v, want the revocation endpoint %s", g, gitlab+gitlabRevokePath)
+	}
+
+	floored := source
+	floored.versionRange = ">=0.11.0-rc.6 <1.0.0"
+	stubWorkspacesChart(t, chartWorkspaces{Carries: true, Organizations: true, Manager: floored})
+	stubWorkspaceManagerTags(t)
+	listChartTags = func(url string, _ bool) ([]string, error) {
+		t.Errorf("a range floored at 0.11.0-rc.6 listed the tags of %s", url)
+		return nil, nil
+	}
+	if g := workspaceGrantFor(cfg, providers); g == nil || g.RevocationEndpoint != gitlab+gitlabRevokePath {
+		t.Errorf("a range floored at 0.11.0-rc.6: pin %+v, want the revocation endpoint", g)
+	}
+}
+
+// The values carry the pin's revocation endpoint when it has one, and no key
+// when it has none.
+func TestWorkspaceGrantValuesRevocationEndpoint(t *testing.T) {
+	stubWorkspacesProbe(t, true)
+	for _, endpoint := range []string{"https://gitlab.example.com/oauth/revoke", ""} {
+		grant := &workspaceGrantValues{Provider: config.WorkspaceProviderFake, Issuer: "https://gitlab.example.com", AuthorizationEndpoint: "https://gitlab.example.com/oauth/authorize",
+			TokenEndpoint: "https://gitlab.example.com/oauth/token", RevocationEndpoint: endpoint, Secret: config.WorkspaceFakeSecretName}
+		values, raw, _, _ := renderWorkspaceTemplates(t, workspaceLab(""), func(d *tmplData) { d.WorkspaceGrant = grant })
+		wm, _ := workspaceManagerBlock(t, values)
+		muster, _ := wm["muster"].(map[string]any)
+		server, _ := muster["mcpServer"].(map[string]any)
+		auth, _ := server["auth"].(map[string]any)
+		as, _ := auth["authorizationServer"].(map[string]any)
+		got, ok := as["revocationEndpoint"]
+		if endpoint == "" && ok || endpoint != "" && got != endpoint {
+			t.Errorf("revocationEndpoint %q: rendered %v (present %t)\n%s", endpoint, got, ok, raw)
+		}
 	}
 }
