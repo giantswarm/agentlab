@@ -36,13 +36,19 @@ func hasMusterProvider(session *apiv1alpha1.Session) bool {
 // musterActorCommand posts an MCP initialize to muster with the placeholder
 // and prints the HTTP status.
 func musterActorCommand() string {
-	body := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"agentlab-probe","version":"0"}}}`
-	return `echo "` + probeMarker + ` pwd=$(pwd)"; ` +
-		`if command -v curl >/dev/null; then s=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Authorization: ` + callerCredentialPlaceholder + `' -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' --data '` + body + `' '` + musterInClusterURL + `' 2>/dev/null); ` +
-		`else s=$(wget -S -O /dev/null --header='Authorization: ` + callerCredentialPlaceholder + `' --header='Content-Type: application/json' --header='Accept: application/json, text/event-stream' --post-data='` + body + `' '` + musterInClusterURL + `' 2>&1 | grep -o 'HTTP/[0-9.]* [0-9][0-9][0-9]' | tail -1 | awk '{print $2}'); fi; ` +
+	return `echo "` + probeMarker + ` pwd=$(pwd)"; ` + musterInitializeStatus() + `; ` +
 		`echo "` + probeMarker + ` api-status=$(echo "$s" | tr ' ' '_')"; ` +
 		`echo "` + probeMarker + ` jwt-env=$(env | grep -E '` + jwtPattern + `' | cut -d= -f1 | sort -u | tr '\n' ' ')"; ` +
 		`echo "` + probeMarker + ` jwt-files=$(grep -rlE '` + jwtPattern + `' /data /workspace "$PWD" 2>/dev/null | sort -u | tr '\n' ' ')"`
+}
+
+// musterInitializeStatus posts an MCP initialize to muster with the
+// placeholder and sets s to the HTTP status: curl where the image has it,
+// else BusyBox wget.
+func musterInitializeStatus() string {
+	body := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"agentlab-probe","version":"0"}}}`
+	return `if command -v curl >/dev/null; then s=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Authorization: ` + callerCredentialPlaceholder + `' -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' --data '` + body + `' '` + musterInClusterURL + `' 2>/dev/null); ` +
+		`else s=$(wget -S -O /dev/null --header='Authorization: ` + callerCredentialPlaceholder + `' --header='Content-Type: application/json' --header='Accept: application/json, text/event-stream' --post-data='` + body + `' '` + musterInClusterURL + `' 2>&1 | grep -o 'HTTP/[0-9.]* [0-9][0-9][0-9]' | tail -1 | awk '{print $2}'); fi`
 }
 
 const (

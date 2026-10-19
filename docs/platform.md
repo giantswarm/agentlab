@@ -1094,7 +1094,8 @@ platform namespace, which the run's ModelConfig `agentlab-mockllm` (the
 `OpenAI` provider, `gpt-5.2-codex`, `apiFormat: responses`, a placeholder
 key) names as its base URL; the run removes all three at its end. The script
 answers each prompt with the tool call it asks for (the probe script, the
-MCP tool through codex's tool search, the code word's file, its read-back)
+MCP tool through codex's tool search, the heartbeat and its read-back, the
+code word's file, its read-back)
 and a fixed reply once the tool's output is back. A shell command goes to
 the shell tool the runtime offers: `shell_command`, or on codex 0.163 and
 later (kagent 1.16) the unified `exec_command`, whose command runs past the
@@ -1166,10 +1167,12 @@ the one that runs on both of those:
 | dns canary | a recorded state, not a gate: `example.org` through the cluster resolver and directly at 1.1.1.1 |
 | egress | `proxy.golang.org` denied 403 at the egress gate; `api.github.com`, one of the Agent's origins, reached |
 | mcp call | the agent calls `x_agent-manager_list_agents` through its MCP binding (muster's `call_tool`, which runs every catalogue tool; on `codex` the mockllm's script calls it so) and finds itself listed; in a workspace Session also muster's audit event `[AUDIT] action=actor_bearer outcome=success` for the Session's sandbox actor, naming the person and the Session muster logged bound at `start_session` (muster 5.47.0 and newer): the egress gateway set the Actor's JWT and muster served the call as the person, with no credential in the sandbox, on every Harness; outside a workspace SKIP where the secret-backed credential stage skipped and the call answered nothing else: the binding carries no credential on that line, so muster refuses the runtime's MCP connection (401) and the runtime has none of the binding's tools |
+| turn gap | one turn starts a detached heartbeat in the sandbox: every 3 s it appends the time and muster's status for an MCP initialize with a placeholder `Authorization`; after 90 s without a turn the next turn reads it back. It ticked in its own turn, not once from 20 s after that turn's answer (Substrate suspends the actor once a turn settles) to the next turn's send, and again in the next turn; in a workspace Session muster answered a call of the first turn 200 and audited no actor-JWT call of the Session's actor in the gap. The egress gateway checks no turn: that nothing in the sandbox runs between turns is what keeps a call outside a turn from reaching muster |
 | instruction fixture (*claude*) | a record: what Claude Code loads from a repository's `CLAUDE.md`, `AGENTS.md`, `.claude/` settings, hook, skill, subagent and command and `.mcp.json` on the pinned release |
 | suspend and resume | the Session's file and conversation survive the snapshot |
 | usage | the resumed turn's task status carries its usage |
 | share refused | a read-write share of the coding Session is refused: a collaborator's turn would run under what the first sender's turns left behind (git hooks, Makefiles, background processes) |
+| after delete | in a workspace Session, the Session deleted through agent-manager's `delete_session`: muster logs its actor `session_unbound` by the person who started it, and in the 30 s after accepts no actor-JWT call of that actor (a call it sees is refused, `outcome=failure` "actor is not bound"); SKIP outside a workspace, where muster bound no actor |
 | model (*codex on the mockllm*) | the mockllm answered every model call of the turns from its script, none outside it |
 
 The sandbox stages read one turn: the agent's shell tool runs a POSIX script
