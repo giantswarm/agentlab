@@ -333,7 +333,7 @@ func codingCodeWordCommand() string {
 // codingMCPCallPrompt has the agent call agent-manager's list_agents through
 // its own MCP binding and relay the names it lists.
 func codingMCPCallPrompt() string {
-	return "Call the MCP tool " + codingTestReadTool + " (agent-manager's list_agents through muster; it takes no arguments) once, then reply with the single line " +
+	return "Call the MCP tool " + codingTestReadTool + " (agent-manager's list_agents through muster, which runs it through its " + musterCallTool + " tool; it takes no arguments) once, then reply with the single line " +
 		probeMarker + " mcp-call=<the names of the agents it lists, space-separated, or the error it answered>. Do not use a shell for this."
 }
 
@@ -365,4 +365,10 @@ func parseTurnProbe(reply, toolOutputs string) codingProbe {
 		}
 	}
 	return probe
+}
+
+// musterCallToolArguments are call_tool's arguments that run tool with no
+// arguments of its own.
+func musterCallToolArguments(tool string) string {
+	return `{"name":"` + tool + `","arguments":{}}`
 }

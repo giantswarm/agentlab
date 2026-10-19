@@ -152,7 +152,11 @@ const (
 	codingTestWriteTool = agentManagerToolPrefix + "delete_agent"
 	// codingTestReadTool is the tool the agent calls through its binding: it
 	// lists the agent itself.
-	codingTestReadTool        = agentManagerToolPrefix + "list_agents"
+	codingTestReadTool = agentManagerToolPrefix + "list_agents"
+	// musterCallTool is muster's meta-tool that runs a catalogue tool: muster
+	// lists its meta-tools to an MCP client, and an aggregated tool such as
+	// codingTestReadTool is called through it, never by its own name.
+	musterCallTool            = "call_tool"
 	codingTestAbsentAgent     = "agentlab-coding-absent"
 	codingTestOutsideToolset  = "outside the toolset"
 	codingTestRefusedOrigin   = "https://agentlab-refused-origin.example.org"
@@ -432,7 +436,7 @@ func (p *codingProof) run() error {
 		return err
 	}
 	reply = mcpTurn.reply
-	called := firstNonEmpty(mcpTurn.probe["mcp-call"], mcpTurn.toolOutput(codingTestReadTool))
+	called := firstNonEmpty(mcpTurn.probe["mcp-call"], mcpTurn.toolOutput(codingTestReadTool), mcpTurn.toolOutput(musterCallTool))
 	switch {
 	case strings.Contains(called, codingTestAgent) && p.rig != nil:
 		note("%s listed: %s", codingTestReadTool, excerpt(called, 240))
