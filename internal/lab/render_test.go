@@ -818,6 +818,16 @@ func TestPlatformValuesLegacyChartShape(t *testing.T) {
 			t.Errorf("3.x shape: kagent.controller.%s rendered (no platform Postgres to mount)", key)
 		}
 	}
+	if _, ok := controller["authorization"]; ok {
+		t.Error("3.x shape: kagent.controller.authorization rendered (the 0.10 wrapper's schema is closed)")
+	}
+	// The 4.x controller reviews callers as the lab's API server names them:
+	// oidc: before the user and every group (kind-config.yaml.tmpl), or every
+	// RoleBinding of the lab grants nothing at the controller.
+	currentAuthz, _ := currentValues["kagent"].(map[string]any)["controller"].(map[string]any)["authorization"].(map[string]any)
+	if currentAuthz["usernamePrefix"] != apiserverUserPrefix || currentAuthz["groupsPrefix"] != apiserverUserPrefix {
+		t.Errorf("4.x shape: kagent.controller.authorization = %v, want usernamePrefix and groupsPrefix oidc:", currentAuthz)
+	}
 	if got := controller["auth"].(map[string]any)["mode"]; got != "unsecure" {
 		t.Errorf("3.x shape: kagent.controller.auth.mode = %v, want unsecure (no JWT policy in front)", got)
 	}
@@ -845,6 +855,7 @@ func TestPlatformValuesLegacyChartShape(t *testing.T) {
 	delete(expectedKagent["controllerRoute"].(map[string]any), "jwtAuthentication")
 	delete(expectedKagent["controller"].(map[string]any), "volumes")
 	delete(expectedKagent["controller"].(map[string]any), "volumeMounts")
+	delete(expectedKagent["controller"].(map[string]any), "authorization")
 	expectedKagent["controller"].(map[string]any)["auth"].(map[string]any)["mode"] = "unsecure"
 	expectedKagent["serviceMonitor"].(map[string]any)["enabled"] = legacy.Platform.Observability
 	dropOverlayChecksum(t, expected)

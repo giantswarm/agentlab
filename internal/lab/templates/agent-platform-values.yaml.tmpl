@@ -574,6 +574,15 @@ substrate:
 tenants:
   organizations:
     enabled: true
+
+# platform.tenants: a ModelConfig in an organization namespace must name the
+# LLM listener as its baseUrl (giantswarm/agent-platform#1082; from 4.151 the
+# chart refuses tenants.organizations.enabled without it), so the listener is
+# on: the chart's admission policies fill it into every tenant ModelConfig,
+# the reconciler's copy of the default one included. The platform tenant's
+# default ModelConfig keeps calling Anthropic directly.
+llmRouting:
+  enabled: true
 {{- end }}
 {{- end }}
 
@@ -696,6 +705,17 @@ kagent:
       # above) — the second of the two authentication layers. A caller that
       # bypasses the edge sends no verified bearer and is nobody.
       mode: trusted-proxy
+    # The controller's Kubernetes RBAC authorizer (kubernetes mode, the
+    # chart's default from agent-platform 4.151 on kagent 1.19) reviews each
+    # caller as the API server's OIDC authenticator maps the same token. The
+    # lab's API server puts oidc: before the username and every group
+    # (kind-config.yaml.tmpl), where the chart's default is none, so the
+    # reviews carry the lab's prefixes; a chart without the authorizer
+    # ignores the keys. `agentlab tenants-test` proves it (docs/agents.md
+    # "Organizations as tenants").
+    authorization:
+      usernamePrefix: "oidc:"
+      groupsPrefix: "oidc:"
     volumes:
       - name: cnpg-dsn
         secret:

@@ -1106,6 +1106,13 @@ func configureCmd() *cobra.Command {
 			if cmd.Flags().Changed("tenants") {
 				cfg.Platform.Tenants.Enabled = tenants
 			}
+			if cfg.Platform.Tenants.Enabled {
+				// tenants-test's tenant users, one per organization, in a
+				// group the lab binds nothing to (docs/identity.md).
+				if added := cfg.EnsureTenantUsers(); len(added) > 0 {
+					fmt.Printf("  users      added %s for tenants-test (`agentlab reload` renders them into Dex)\n", strings.Join(added, ", "))
+				}
+			}
 			if cmd.Flags().Changed("coding-images") {
 				cfg.Platform.Coding.Images = codingImages
 			}
@@ -1780,9 +1787,10 @@ func agentsTestCmd() *cobra.Command {
 }
 
 func tenantsTestCmd() *cobra.Command {
-	return &cobra.Command{
+	var opts lab.TenantsTestOptions
+	cmd := &cobra.Command{
 		Use:   "tenants-test [email email]",
-		Short: "Headless tenant reconciler proof (platform.tenants) over two organization namespaces, one person an editor in each (default the first two users outside platform-admins): only the always-kept objects before an agent -> the other organization's create refused, the first agent's copies -> the worker admitted, a turn on the namespace's own credentials -> the same in the second -> the workers held against a cluster-admin -> the last delete removing the copies",
+		Short: "Headless tenant proof (platform.tenants) over two organization namespaces, one person an editor in each (default the first two users outside platform-admins and the tenant groups) and one tenant user bound by group in each: only the always-kept objects before an agent -> the other organization's create refused, the first agent's copies -> the worker admitted, a turn on the namespace's own credentials -> the same in the second -> through the edge, each tenant user lists their organization's agents and the platform tenant's, the other organization's refused, a user writes nothing, an editor writes their organization only, all_creators refused -> in Slack, per-person rosters with tenant labels, the other organization's pick and a collaborator refused -> the workers held against a cluster-admin -> the last delete removing the copies",
 		Args: func(cmd *cobra.Command, args []string) error {
 			if len(args) != 0 && len(args) != 2 {
 				return fmt.Errorf("tenants-test takes no email or two (one editor per organization), got %d", len(args))
@@ -1794,9 +1802,12 @@ func tenantsTestCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return lab.TenantsTest(cfg, args)
+			return lab.TenantsTest(cfg, args, opts)
 		},
 	}
+	cmd.Flags().StringVar(&opts.GatewayImage, "gateway-image", "", "the klaus-gateway image the Slack steps run on the host network (default: the release the lab's meta chart runs as its klaus-gateway component); the steps need one with giantswarm/klaus-gateway#486, 4.10.0 or later")
+	cmd.Flags().StringVar(&opts.GatewayBinary, "gateway-binary", "", "a local klaus-gateway build to run instead of the image")
+	return cmd
 }
 
 func a2aTestCmd() *cobra.Command {

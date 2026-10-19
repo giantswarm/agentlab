@@ -337,20 +337,22 @@ func tenantAdmissionRefusal(what string, err error) error {
 }
 
 // tenantsTestPeople are the two editors, one per namespace: the emails
-// given, else the first two users outside platform-admins. A platform admin
-// is cluster-admin, so the other organization's refusal would prove nothing.
+// given, else the first two users outside platform-admins and the tenant
+// groups (the tenant users, tenantsTestUsers). A platform admin is
+// cluster-admin, so the other organization's refusal would prove nothing.
 func tenantsTestPeople(cfg *config.Config, emails []string) ([2]*config.User, error) {
 	var people [2]*config.User
 	if len(emails) == 0 {
 		n := 0
 		for i := range cfg.Users {
-			if n < len(people) && !slices.Contains(cfg.Users[i].Groups, "platform-admins") {
+			u := cfg.Users[i]
+			if n < len(people) && !u.HasGroup("platform-admins") && !u.HasGroup(config.GroupTenantA) && !u.HasGroup(config.GroupTenantB) {
 				people[n] = &cfg.Users[i]
 				n++
 			}
 		}
 		if n < len(people) {
-			return people, fmt.Errorf("tenants-test needs two users outside platform-admins in %s (one editor per organization), found %d", config.File, n)
+			return people, fmt.Errorf("tenants-test needs two users outside platform-admins and the tenant groups in %s (one editor per organization), found %d", config.File, n)
 		}
 		return people, nil
 	}
@@ -383,9 +385,12 @@ func tenantsTestPeople(cfg *config.Config, emails []string) ([2]*config.User, er
 // worker admitted and a turn on credentials read from the agent's own
 // namespace; the same in the second organization; the workers held against
 // a cluster-admin, the network policy copies and the credential provider's
-// grants where the lab has them; the last delete removing the copies.
-// Leaves nothing behind.
-func TenantsTest(cfg *config.Config, emails []string) error {
+// grants where the lab has them; the last delete removing the copies. In
+// between, with both organizations' agents up, the edge (steps E,
+// tenantstest_edge.go) and Slack (steps S, tenantstest_slack.go) halves of
+// giantswarm/agentlab#166: the kagent controller's RBAC authorizer judging
+// two tenant users bound by their token's group. Leaves nothing behind.
+func TenantsTest(cfg *config.Config, emails []string, opts TenantsTestOptions) error {
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
 	}
@@ -393,6 +398,10 @@ func TenantsTest(cfg *config.Config, emails []string) error {
 		return fmt.Errorf("platform.agents is off in %s — enable it, `agentlab configure --tenants`, then `agentlab platform`", config.File)
 	}
 	people, err := tenantsTestPeople(cfg, emails)
+	if err != nil {
+		return err
+	}
+	users, err := tenantsTestUsers(cfg)
 	if err != nil {
 		return err
 	}
@@ -416,6 +425,15 @@ func TenantsTest(cfg *config.Config, emails []string) error {
 	case !rec.multiTenant:
 		return fmt.Errorf("platform.tenants is on in %s, but agent-manager runs without --multi-tenant=true: the installed chart does not turn the tenant reconciler on with tenants.organizations.enabled — it needs giantswarm/agent-platform#1037 and #1050 (a dev build until a release carries them: `agentlab configure --chart-branch <branch>`, then `agentlab platform`)", config.File)
 	}
+	step("The kagent controller's RBAC authorizer (ConfigMap %s/%s)", kagentNamespace, kagentControllerConfigMap)
+	authz, err := readControllerAuthorization()
+	if err != nil {
+		return err
+	}
+	if problem := authz.problem(); problem != "" {
+		return errors.New(problem)
+	}
+	note("mode %s, groups from claim %q, user prefix %q, group prefix %q", authz.mode, authz.groupsClaim, authz.usernamePrefix, authz.groupsPrefix)
 	pool, poolServiceAccount, err := platformWorkerPool(rec.harness)
 	if err != nil {
 		return err
@@ -445,6 +463,9 @@ func TenantsTest(cfg *config.Config, emails []string) error {
 	// Leftovers of an aborted run first, and everything this run creates on
 	// every exit path.
 	cleanup := func() {
+		if err := removeTenantsTestPlatformAgent(); err != nil {
+			note("cleanup: %v", err)
+		}
 		for _, ns := range namespaces {
 			if err := removeTenantsTestNamespace(ns); err != nil {
 				note("cleanup: %v", err)
@@ -454,9 +475,11 @@ func TenantsTest(cfg *config.Config, emails []string) error {
 	cleanup()
 	defer cleanup()
 
-	step("The chart's ClusterRole %s, which the two people are bound to", tenantEditorRole)
-	if err := checkTenantEditorRole(); err != nil {
-		return err
+	step("The chart's ClusterRoles %s and %s, which the editors and the tenant users are bound to", tenantEditorRole, tenantUserRole)
+	for _, role := range []string{tenantEditorRole, tenantUserRole} {
+		if err := checkTenantRole(role); err != nil {
+			return err
+		}
 	}
 
 	var tokens [2]string
@@ -482,6 +505,21 @@ func TenantsTest(cfg *config.Config, emails []string) error {
 	}
 	defer stopForward()
 
+	// The platform tenant's agent, for the edge and Slack halves: created
+	// first, so its golden boot runs while the organizations' do.
+	step("%s (cluster-admin) creates the platform tenant's agent %s in %s", admin.Email, tenantsTestPlatformAgent, kagentNamespace)
+	adminPlatformToken, err := passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret, admin.Email, admin.Password, musterLoginScopes)
+	if err != nil {
+		return err
+	}
+	status, raw, err := api.call(http.MethodPost, "/agents", adminPlatformToken, tenantsTestAgentSpec(kagentNamespace, tenantsTestPlatformAgent, defaultModelConfig))
+	if err != nil {
+		return err
+	}
+	if status != http.StatusCreated {
+		return fmt.Errorf("the platform tenant's agent: %s's create in %s answered %d, want 201: %s", admin.Email, kagentNamespace, status, excerpt(string(raw), 300))
+	}
+
 	kept := rec.alwaysKept()
 	step("1. Before the first agent: only the always-kept objects (%s) in each namespace", tenantObjectKeys(kept))
 	for _, ns := range namespaces {
@@ -501,7 +539,7 @@ func TenantsTest(cfg *config.Config, emails []string) error {
 			n, m = 4, 4
 		}
 		step("%d. %s creates %s in %s, the other organization — expecting 403", n, person.Email, tenantsTestCrossAgent, other)
-		status, raw, err := api.call(http.MethodPost, "/agents", token, tenantsTestAgentSpec(other, tenantsTestCrossAgent, rec.modelConfig))
+		status, raw, err = api.call(http.MethodPost, "/agents", token, tenantsTestAgentSpec(other, tenantsTestCrossAgent, rec.modelConfig))
 		if err != nil {
 			return err
 		}
@@ -537,7 +575,7 @@ func TenantsTest(cfg *config.Config, emails []string) error {
 		if err != nil {
 			return fmt.Errorf("step %d: %w", m, err)
 		}
-		if err := api.waitAgentReady(ns, token); err != nil {
+		if err := api.waitAgentReady(ns, tenantsTestAgent, token); err != nil {
 			return fmt.Errorf("step %d: %w", m, err)
 		}
 		note("workers Running: %s", strings.Join(workers, ", "))
@@ -557,6 +595,15 @@ func TenantsTest(cfg *config.Config, emails []string) error {
 			return fmt.Errorf("step %d: the credential provider read %v for atespace %s during the turn, want %s and nothing else", m, read, ns, ns)
 		}
 		note("credentials read for atespace %s: %d from %s", ns, len(read), ns)
+	}
+
+	step("The platform tenant's agent %s/%s ready", kagentNamespace, tenantsTestPlatformAgent)
+	if err := api.waitAgentReady(kagentNamespace, tenantsTestPlatformAgent, adminPlatformToken); err != nil {
+		return err
+	}
+	edgeOut, slackOut, err := tenantsTestAuthorization(cfg, tenantsTestNamespaces, users, people, adminPlatformToken, opts)
+	if err != nil {
+		return err
 	}
 
 	step("5. As %s (cluster-admin): the workers of both organizations held by the %s* admission policies", admin.Email, tenantAdmissionPolicyPrefix)
@@ -609,7 +656,7 @@ func TenantsTest(cfg *config.Config, emails []string) error {
 	for i, ns := range namespaces {
 		person, token := people[i], tokens[i]
 		step("6. %s deletes %s in %s, the namespace's last agent — the copies go, the always-kept objects stay", person.Email, tenantsTestAgent, ns)
-		status, raw, err := api.call(http.MethodDelete, "/agents/"+ns+"/"+tenantsTestAgent, token, nil)
+		status, raw, err = api.call(http.MethodDelete, "/agents/"+ns+"/"+tenantsTestAgent, token, nil)
 		if err != nil {
 			return err
 		}
@@ -637,8 +684,71 @@ func TenantsTest(cfg *config.Config, emails []string) error {
 	fmt.Printf("PASS: as %s (cluster-admin), a WorkerPool patch and delete, a pod labelled %s and an exec into a worker are refused by the %s* admission policies\n", admin.Email, workerPoolLabel, tenantAdmissionPolicyPrefix)
 	fmt.Println(netpolVerdict)
 	fmt.Println(grantsVerdict)
+	for _, line := range append(edgeOut, slackOut...) {
+		fmt.Println(line)
+	}
 	fmt.Printf("PASS: deleting each namespace's last agent removes the copies; the always-kept objects stay\n")
 	return nil
+}
+
+// TenantsTestOptions tunes tenants-test's Slack half: the klaus-gateway it
+// runs on the host (klaus-gateway-test's GatewayImage and GatewayBinary).
+type TenantsTestOptions struct {
+	GatewayImage, GatewayBinary string
+}
+
+// tenantsTestAuthorization runs the edge and Slack halves as the tenant
+// users and the editors, with fresh tokens: the turns before them took
+// minutes.
+func tenantsTestAuthorization(cfg *config.Config, namespaces [2]string, users, editors [2]*config.User, adminToken string, opts TenantsTestOptions) (edgeVerdicts, []string, error) {
+	edge := &tenantsEdge{namespaces: namespaces, users: users, editors: editors}
+	login := func(u *config.User) (*kagentAPI, error) {
+		token, err := passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret, u.Email, u.Password, musterLoginScopes)
+		if err != nil {
+			return nil, err
+		}
+		return dialKagentAPI(cfg, token)
+	}
+	var err error
+	for i := range users {
+		if edge.userAPIs[i], err = login(users[i]); err != nil {
+			return nil, nil, err
+		}
+		defer edge.userAPIs[i].close()
+		if edge.editorAPIs[i], err = login(editors[i]); err != nil {
+			return nil, nil, err
+		}
+		defer edge.editorAPIs[i].close()
+	}
+	if edge.admin, err = dialKagentAPI(cfg, adminToken); err != nil {
+		return nil, nil, err
+	}
+	defer edge.admin.close()
+	edgeOut, err := edge.run()
+	if err != nil {
+		return nil, nil, err
+	}
+	slack := &tenantsSlack{cfg: cfg, opts: KlausGatewayTestOptions{GatewayImage: opts.GatewayImage, GatewayBinary: opts.GatewayBinary},
+		namespaces: namespaces, users: users, admin: edge.admin}
+	slackOut, err := slack.run()
+	return edgeOut, slackOut, err
+}
+
+// removeTenantsTestPlatformAgent removes the platform tenant's agent: its
+// HelmRelease, which takes the Agent and its template with it.
+func removeTenantsTestPlatformAgent() error {
+	gvr, err := gvrFor(helmReleaseResource)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), tenantsTestNamespaceTimeout)
+	defer cancel()
+	exists, err := objectExists(ctx, gvr, kagentNamespace, tenantsTestPlatformAgent)
+	if err != nil || !exists {
+		return err
+	}
+	note("cleanup: removing HelmRelease %s/%s", kagentNamespace, tenantsTestPlatformAgent)
+	return deleteObject(ctx, gvr, kagentNamespace, tenantsTestPlatformAgent, tenantsTestNamespaceTimeout)
 }
 
 // tenantsTestAgentSpec is the create request: a chat-only agent (no MCP
@@ -954,22 +1064,22 @@ func credentialProviderGrants(ctx context.Context) (map[string][]string, error) 
 	return status.PolicyGrants, nil
 }
 
-// checkTenantEditorRole fails, naming the role, when the chart renders no
-// agent-platform:editor: a RoleBinding to a missing ClusterRole is accepted
-// and grants nothing, so the creates would fail as a bare 403.
-func checkTenantEditorRole() error {
+// checkTenantRole fails, naming the role, when the chart renders no such
+// ClusterRole: a RoleBinding to a missing ClusterRole is accepted and grants
+// nothing, so the calls would fail as a bare 403.
+func checkTenantRole(role string) error {
 	gvr, err := gvrFor("clusterroles.rbac.authorization.k8s.io")
 	if err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	defer cancel()
-	exists, err := objectExists(ctx, gvr, "", tenantEditorRole)
+	exists, err := objectExists(ctx, gvr, "", role)
 	if err != nil {
 		return err
 	}
 	if !exists {
-		return fmt.Errorf("no ClusterRole %s: the installed agent-platform chart does not render the platform's roles, which a person needs to write agents in an organization namespace", tenantEditorRole)
+		return fmt.Errorf("no ClusterRole %s: the installed agent-platform chart does not render the platform's roles, which a person needs in an organization namespace", role)
 	}
 	return nil
 }
@@ -1086,10 +1196,10 @@ func (a *agentManagerREST) call(method, path, token string, body any) (int, []by
 
 // waitAgentReady polls the agent's status as the person until
 // agent-manager's verdict is ready, bounded.
-func (a *agentManagerREST) waitAgentReady(ns, token string) error {
+func (a *agentManagerREST) waitAgentReady(ns, name, token string) error {
 	var last string
 	ready := waitFor(int(agentsTestReadyTimeout/pollInterval), pollInterval, func() bool {
-		status, raw, err := a.call(http.MethodGet, "/agents/"+ns+"/"+tenantsTestAgent+"/status", token, nil)
+		status, raw, err := a.call(http.MethodGet, "/agents/"+ns+"/"+name+"/status", token, nil)
 		if err != nil {
 			last = err.Error()
 			return false
@@ -1103,7 +1213,7 @@ func (a *agentManagerREST) waitAgentReady(ns, token string) error {
 		return st.Verdict == verdictReady
 	})
 	if !ready {
-		return fmt.Errorf("agent %s/%s not ready within %s (last: %s)", ns, tenantsTestAgent, agentsTestReadyTimeout, last)
+		return fmt.Errorf("agent %s/%s not ready within %s (last: %s)", ns, name, agentsTestReadyTimeout, last)
 	}
 	return nil
 }

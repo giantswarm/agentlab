@@ -16,13 +16,63 @@ The default configuration ships three users (password: `password`):
 | `dev@lab.local`    | `developers` | `edit` inside `ns/demo` only |
 | `viewer@lab.local` | `viewers` | `view` cluster-wide |
 
+`agentlab configure --tenants` adds two more, one per organization of
+`agentlab tenants-test`, when no user carries their group:
+
+| User | Groups in the token | Effective access |
+|---|---|---|
+| `alice@lab.local` | `tenant-a` | the platform tenant; with `tenants-test`, `agent-platform:user` in its first organization |
+| `bob@lab.local`   | `tenant-b` | the platform tenant; with `tenants-test`, `agent-platform:user` in its second organization |
+
 Users are fully configurable: `agentlab configure` lets you keep, edit, remove
 and add users, with per-user passwords and group membership. The **groups are
 a fixed vocabulary** — RBAC binds exactly `platform-admins` → cluster-admin,
-`developers` → edit-in-demo, `viewers` → view — and the form only offers those
-three. Passwords are bcrypt-hashed automatically; the hash is cached in
+`developers` → edit-in-demo, `viewers` → view, and nothing to `tenant-a` and
+`tenant-b`, which `tenants-test` binds per organization — and the form only
+offers those five. Passwords are bcrypt-hashed automatically; the hash is cached in
 `agentlab.yaml` so renders stay deterministic (no spurious Dex pod rolls). After
 editing users, run `agentlab reload`.
+
+## The tenant model
+
+What `agentlab tenants-test` asserts about who sees and runs which agent
+(giantswarm/agentlab#166; the plan is giantswarm/giantswarm#36698):
+
+- **A tenant is a namespace.** The platform tenant is `kagent`; an
+  organization's tenant is a namespace labelled `giantswarm.io/organization`.
+- **Kubernetes RBAC decides, at the kagent controller.** The chart's three
+  ClusterRoles are bound per tenant: `agent-platform:user` (see the agents,
+  start conversations), `agent-platform:editor` (also write agents),
+  `agent-platform:admin`. The chart binds the platform tenant's users to
+  `system:authenticated`, so every signed-in person sees its agents. The
+  controller (`kagent.controller.authorization.mode: kubernetes`, kagent 1.19)
+  asks the API server with a SubjectAccessReview for the caller's email and
+  the `groups` claim of the token the edge verified, each with the `oidc:`
+  prefix the lab's API server puts before them
+  (`kagent.controller.authorization.usernamePrefix` and `groupsPrefix` in the
+  lab's values; the fleet's API servers use none).
+- **What a person sees**: `ListAgents` with no namespace lists the agents of
+  every tenant the person may `list` agents in — the platform tenant and the
+  organizations bound to their groups — and nothing else; a person bound to
+  no organization lists the platform tenant only.
+- **What a person runs**: `CreateSession`, and a first A2A message with no
+  Session, on an agent of a tenant the person is not bound to are
+  `PermissionDenied`, and no turn reaches the model.
+- **What a person writes**: an editor creates, changes and deletes agents in
+  their organization and nowhere else; a user writes nothing.
+- **Everyone's sessions**: `ListSessions` with `all_creators` needs a
+  cluster-wide `list` on `sessions.api.kagent.dev`, which no tenant role
+  grants: refused to a person, answered to a cluster-admin (and to
+  workspace-manager's ServiceAccount, which the chart grants it with
+  workspaces on).
+- **Slack asks as the person**: klaus-gateway (4.10.0 and later) fetches each
+  person's roster as that person, across tenants, each row naming its tenant
+  (`platform`, or `organization <name>` for `org-<name>`), and refuses an
+  agent of another tenant — a pick, or a turn as a thread's collaborator —
+  with a note naming the tenant, sending nothing to it.
+
+A person with a cluster-wide read (`viewers`, `platform-admins`) sees every
+tenant, as on an installation.
 
 ## How the identity plumbing works
 
