@@ -41,32 +41,38 @@ import (
 //     which the controller hands the runtime as kagent's placeholder: every
 //     Secret key it names is there. A binding with none, a platform line that
 //     ships no Secret-backed credential, skips the stage.
-//  4. One Session, one turn whose shell tool probes the sandbox; its lines
+//  4. On a lab with the provider instance fake-bearer, a workspace of one
+//     repository as the person; the Session starts in it through
+//     agent-manager's start_session with the person's grant
+//     (codingworkspace.go). Elsewhere the stage skips and the Session starts
+//     without a workspace.
+//  5. One Session, one turn whose shell tool probes the sandbox; its lines
 //     are judged stage by stage. On claude: Claude Code runs as the
 //     unprivileged uid and cannot read the harness's environment or memory;
 //     the caller forwarder refuses dot segments and encoded slashes, answers
 //     404 for a server it does not front and 401 without its token; a write
 //     tool outside the agent's toolset is refused by muster through the
 //     forwarder with the turn's bearer. On every Harness: no forge token or
-//     bearer in the environment or /data, the model key and every MCP
-//     credential a placeholder; a DNS lookup of a name outside the allowlist
-//     recorded (through the cluster resolver and directly); a host outside
-//     the Agent's origins denied at the egress gate, an origin of its list
-//     reached.
-//  5. An MCP call: the agent calls agent-manager's list_agents through its
-//     binding and finds itself listed.
-//  6. On claude, the instruction-file fixture: one turn writes a
+//     bearer in the environment, /data or /workspace, the model key and
+//     every MCP credential a placeholder; a DNS lookup of a name outside the
+//     allowlist recorded (through the cluster resolver and directly); a host
+//     outside the Agent's origins denied at the egress gate, an origin of
+//     its list reached.
+//  6. An MCP call: the agent calls agent-manager's list_agents through its
+//     binding and finds itself listed; in a workspace Session muster audits
+//     the call as the person the Session's sandbox actor is bound to.
+//  7. On claude, the instruction-file fixture: one turn writes a
 //     repository's instruction sources into the Session's directory
 //     (CLAUDE.md, AGENTS.md, .claude settings with a hook and
 //     permissions.allow, a skill, a subagent, a command, .mcp.json), the next
 //     records what Claude Code loaded. Elsewhere one turn writes the file the
 //     resume reads back.
-//  7. Suspend and resume: the Session suspended to the snapshot store and
+//  8. Suspend and resume: the Session suspended to the snapshot store and
 //     resumed; a turn reads the first turn's file and recalls its code word.
-//  8. Usage: the resumed turn's task status carries its usage.
-//  9. A share of the Session refused: a colleague's turn in a coding agent's
+//  9. Usage: the resumed turn's task status carries its usage.
+// 10. A share of the Session refused: a colleague's turn in a coding agent's
 //     Session would run under code the first sender's turns left.
-// 10. On codex without --model-config, the model: every model call of the
+// 11. On codex without --model-config, the model: every model call of the
 //     turns answered by the in-cluster mockllm's script (mockllm.go).
 //
 // The agents and Sessions are removed on every exit path.
@@ -282,6 +288,9 @@ type codingProof struct {
 	// noMCPCredential is why the secret-backed credential stage skipped:
 	// the runtime's binding carries no credential on the line.
 	noMCPCredential string
+	// rig starts the Session in a workspace (codingworkspace.go); nil on a
+	// lab without the provider instance fake-bearer.
+	rig *workspaceSessionRig
 }
 
 func (p *codingProof) run() error {
@@ -388,6 +397,11 @@ func (p *codingProof) run() error {
 		}
 	}
 
+	p.stages.begin("workspace", "A workspace %s of %s on the provider instance %s, as %s, for the Session to start in", codingTestWorkspace, syncMovingRepo, config.WorkspaceProviderFakeBearer, p.user.Email)
+	if err := p.setupWorkspace(); err != nil {
+		return err
+	}
+
 	p.stages.begin("sandbox turn", "A Session of %s as %s, one turn whose %s probes the sandbox", codingTestAgent, p.user.Email, p.rt.shellTool)
 	session, err := p.createSession(ctx, codingTestAgent)
 	if err != nil {
@@ -420,8 +434,17 @@ func (p *codingProof) run() error {
 	reply = mcpTurn.reply
 	called := firstNonEmpty(mcpTurn.probe["mcp-call"], mcpTurn.toolOutput(codingTestReadTool))
 	switch {
+	case strings.Contains(called, codingTestAgent) && p.rig != nil:
+		note("%s listed: %s", codingTestReadTool, excerpt(called, 240))
+		verdict, err := p.musterAudit(session.GetId())
+		if err != nil {
+			return fmt.Errorf("%w (%s)", err, p.line)
+		}
+		note("%s", verdict)
 	case strings.Contains(called, codingTestAgent):
 		note("%s listed: %s", codingTestReadTool, excerpt(called, 240))
+	case p.rig != nil:
+		return fmt.Errorf("%s through the agent's binding on Harness %s answered %q in a workspace Session, wanted a list naming %s: the egress gateway sets the Actor's JWT on muster's host, so muster serves the call as the person; the reply: %q (%s)", codingTestReadTool, harness, called, codingTestAgent, excerpt(reply, 400), p.line)
 	case p.noMCPCredential != "":
 		// The binding carries no credential on this line: muster answers
 		// the runtime's MCP connection 401, and the runtime has none of the
@@ -709,8 +732,12 @@ func (p *codingProof) proveBinding(toolset []string) error {
 	return nil
 }
 
-// createSession is a Session of the agent as the person, tracked for removal.
+// createSession is a Session of the agent as the person, tracked for
+// removal: in the workspace where the lab offers one.
 func (p *codingProof) createSession(ctx context.Context, agent string) (*apiv1alpha1.Session, error) {
+	if p.rig != nil {
+		return p.startWorkspaceSession(agent)
+	}
 	ctx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
 	session, err := p.api.createSession(ctx, agent, uuid.NewString())
@@ -824,6 +851,11 @@ func (p *codingProof) cleanup() {
 		p.sessions.removeAll()
 	}
 	p.removeAgents()
+	if p.rig != nil {
+		if err := p.rig.cleanup(); err != nil {
+			warn("removing the workspace Session's workspace: %v", err)
+		}
+	}
 	if p.mockBinary != "" {
 		p.mock.close()
 		removeMockLLMModelConfig()
