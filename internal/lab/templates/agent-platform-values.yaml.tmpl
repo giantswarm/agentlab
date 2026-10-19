@@ -158,10 +158,10 @@ components:
     enabled: false
   muster:
 {{- if .TenantsEnabled }}
-    # platform.tenants: the first muster that lists the organizations'
-    # MCPServers as the caller (giantswarm/muster#1601), a release candidate
-    # the chart's range does not select. Drop the pin once a muster release
-    # carries it (HACKS.md U38).
+    # platform.tenants: the first muster that forgets a tenant namespace's
+    # sign-ins when its last server goes (giantswarm/muster#1603); the
+    # chart's range admits older ones. Drop the pin once the chart's range
+    # starts there (HACKS.md U38).
     versionRange: "{{ .TenantsMusterVersion }}"
 {{- end }}
 {{- with index .PostRenderers "muster" }}

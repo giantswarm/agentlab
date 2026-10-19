@@ -348,8 +348,8 @@ and a kagent controller without the RBAC authorizer (its ConfigMap's
 `KAGENT_AUTHORIZATION_MODE` not `kubernetes`, the groups not read from
 `groups`, or the prefixes not the lab API server's `oidc:` — a chart before
 agent-platform 4.151, or values without the lab's prefixes), and a muster
-that serves no organization's MCP servers (an image before 5.47.0-rc.8, or
-`mcpServersInAllNamespaces` off in its `config.yaml`). The namespaces, their agents
+before 5.48.0, or one with `mcpServersInAllNamespaces` off in its
+`config.yaml`. The namespaces, their agents
 and bindings, and the platform tenant's agent go at the end of the run, also after a failure, and at the
 start of the next one.
 
