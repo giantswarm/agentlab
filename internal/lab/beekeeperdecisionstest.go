@@ -91,6 +91,10 @@ type BeekeeperDecisionsTestOptions struct {
 	// into that image, takes precedence — the proof of a branch.
 	Version string
 	Binary  string
+	// LocalBeekeeper, a beekeeper build for the host, runs the person's own
+	// machine for step 9: its standby watch and a background Claude Code
+	// session as their guide (claude on PATH, on its smallest model).
+	LocalBeekeeper string
 	// The gateway: Port is its endpoints' in the node's network, Port+1
 	// its admin endpoints, Port+3 beekeeper serve's, Port+4 its Postgres'.
 	// Default the lab's own block, gatewayTestPort. GatewayBinary is not
@@ -302,6 +306,19 @@ func BeekeeperDecisionsTest(cfg *config.Config, opts BeekeeperDecisionsTestOptio
 	step("8. With the guide off the roster, a reply in its thread is not delivered and the thread says why")
 	if err := p.guideNotRunning(r); err != nil {
 		return err
+	}
+	if opts.LocalBeekeeper != "" {
+		step("9. The guide on %s's machine: its question through their beekeeper, their reply in the thread delivered into the running guide session by the standby watch's mailbox subscription through muster, its answer in the same thread", asker.Email)
+		g, err := startLocalGuide(runDir, opts.LocalBeekeeper, caFile, asker.Email, cfg.MusterBaseURL()+"/mcp", tokens[asker.Email], run)
+		if g != nil {
+			defer g.stop()
+		}
+		if err != nil {
+			return err
+		}
+		if err := p.localGuideConversation(g); err != nil {
+			return err
+		}
 	}
 	note("all beekeeper decisions and the guide's conversation proven")
 	return nil

@@ -2040,6 +2040,7 @@ func beekeeperDecisionsTestCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.Version, "beekeeper-version", lab.BeekeeperDecisionsVersionDefault, "the beekeeper release whose binary and CRDs run")
 	cmd.Flags().StringVar(&opts.Binary, "beekeeper-binary", "", "a local linux beekeeper build to run instead of the release's binary — the proof of a branch")
 	cmd.Flags().StringVar(&opts.GatewayImage, "gateway-image", "", "the klaus-gateway image to run on the host network (default: the release the lab's meta chart runs as its klaus-gateway component)")
+	cmd.Flags().StringVar(&opts.LocalBeekeeper, "local-beekeeper", "", "a host beekeeper build for step 9: the person's own machine, its standby watch delivering the Slack reply into a background Claude Code guide session (claude on PATH)")
 	cmd.Flags().StringVar(&opts.GatewayBinary, "gateway-binary", "", "a local klaus-gateway build to run instead of the image")
 	cmd.Flags().IntVar(&opts.Port, "gateway-port", 0, "host port of the gateway's endpoints; the next four take its admin endpoints, the fake Slack Web API, beekeeper serve and its Postgres (default: the lab's own, 18090 plus ten per port its apiServerPort sits above 6443, so two labs never share one)")
 	cmd.Flags().StringVar(&opts.RunDir, "run-dir", "", "directory for the stores, keys, serve's configuration and the logs, kept afterwards (default: a temporary directory, removed)")
