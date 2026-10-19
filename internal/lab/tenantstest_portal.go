@@ -46,11 +46,13 @@ const (
 	// controller refuses a session (PermissionDenied): the answer the portal
 	// words as a refusal naming the agent's tenant.
 	refusalKagentForbidden = refusalForbidden + " kagent:"
+	// verbDelete is the Kubernetes verb.
+	verbDelete = "delete"
 )
 
 // releaseWriteVerbs are the writes the agent page asks the API server about
 // on an agent's HelmRelease: Edit and Update skills, Delete.
-var releaseWriteVerbs = []string{"update", strings.ToLower(http.MethodDelete)}
+var releaseWriteVerbs = []string{"update", verbDelete}
 
 // portalTenantOf is the tenant the portal names for a namespace
 // (plugins/agent-platform/src/lib/tenants.ts tenantOf): platform for kagent,
@@ -106,6 +108,20 @@ func (r *tenantRoster) refs() refSet {
 		set[ref] = true
 	}
 	return set
+}
+
+// in is the set narrowed to the namespaces, the whole set without any.
+func (s refSet) in(namespaces []string) refSet {
+	if len(namespaces) == 0 {
+		return s
+	}
+	out := refSet{}
+	for ref := range s {
+		if ns, _, _ := strings.Cut(ref, "/"); slices.Contains(namespaces, ns) {
+			out[ref] = true
+		}
+	}
+	return out
 }
 
 // createdBy are the rows whose recorded creator is the email, compared
@@ -224,7 +240,10 @@ func readTenantRoster(ps *portalSession) (*tenantRoster, error) {
 // listed — bounded by tenantRBACSettle (the controller caches its decisions,
 // the API server does not, so the two can disagree for a while) — and
 // returns the last read with the difference left.
-func waitTenantRoster(ps *portalSession, want refSet, listed []string) (*tenantRoster, string, error) {
+//
+// With only, the roster is compared in those namespaces alone: a person may
+// read namespaces outside the run (an earlier hand-made tenant).
+func waitTenantRoster(ps *portalSession, want refSet, listed []string, only ...string) (*tenantRoster, string, error) {
 	var roster *tenantRoster
 	var diff string
 	var readErr error
@@ -233,13 +252,19 @@ func waitTenantRoster(ps *portalSession, want refSet, listed []string) (*tenantR
 		if readErr != nil {
 			return false
 		}
-		diff = rosterDiff(roster.refs(), want)
-		if listed != nil && !slices.Equal(roster.listed, listed) {
+		diff = rosterDiff(roster.refs().in(only), want)
+		if listed != nil && !sameNamespaces(roster.listed, listed) {
 			diff = strings.TrimPrefix(diff+fmt.Sprintf("; GET %s%s names %v, want %v", portalKagentAPI, portalAgentNamespacesPath, roster.listed, listed), "; ")
 		}
 		return diff == ""
 	})
 	return roster, diff, readErr
+}
+
+// sameNamespaces reports whether two namespace lists hold the same names, in
+// any order.
+func sameNamespaces(a, b []string) bool {
+	return slices.Equal(slices.Sorted(slices.Values(a)), slices.Sorted(slices.Values(b)))
 }
 
 // rosterMiss words a roster that is not the wanted one, with what the portal
@@ -286,7 +311,12 @@ func (p *tenantsPortal) run() ([]string, error) {
 		return nil, fmt.Errorf("%s: %w", p.editor.Email, err)
 	}
 
-	step("P1. %s and %s read their rosters through the portal at the same time: their organization's agent and the platform tenant's, each with its tenant, nothing of the other organization", alice.Email, bob.Email)
+	// M5's agent goes with its HelmRelease's uninstall, which M5 does not
+	// wait for: what the rosters must list is read once it is gone.
+	if err := waitAgentGone(a, tenantsTestMusterAgent); err != nil {
+		return nil, err
+	}
+	step("P1. %s and %s read their rosters through the portal at the same time: their organization's agent and the platform tenant's, nothing of the other organization", alice.Email, bob.Email)
 	var wg sync.WaitGroup
 	errs := make([]error, len(sessions))
 	rosters := make([]*tenantRoster, len(sessions))
@@ -315,8 +345,8 @@ func (p *tenantsPortal) run() ([]string, error) {
 	for i, roster := range rosters {
 		note("%s: %s (tenants: %s; refused %v)", sessions[i].user.Email, roster.refs(), tenantLabels(roster), roster.refused)
 	}
-	out = append(out, fmt.Sprintf("PASS: through the portal, at the same time, %s's roster is %s's agent and the platform tenant's (%s), %s's is %s's and the platform tenant's: GET %s%s names each person's tenants, nothing of the other organization",
-		alice.Email, a, tenantLabels(rosters[0]), bob.Email, b, portalKagentAPI, portalAgentNamespacesPath))
+	out = append(out, fmt.Sprintf("PASS: through the portal, at the same time, %s's roster is %s's agent and the platform tenant's, %s's is %s's and the platform tenant's: GET %s%s names each person's tenants, nothing of the other organization (the rows' tenant labels are the browser suite's)",
+		alice.Email, a, bob.Email, b, portalKagentAPI, portalAgentNamespacesPath))
 
 	step("P3. %s (editor of %s only): the create flow's tenants (get_info namespaces.managed) name %s, not %s, and a create through the portal into %s is refused", p.editor.Email, a, a, b, b)
 	info, err := portalInfo(dev)
@@ -415,14 +445,14 @@ func (p *tenantsPortal) run() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	roster, diff, err := waitTenantRoster(dev, want, nil)
+	roster, diff, err := waitTenantRoster(dev, want, nil, kagentNamespace, a, b)
 	if err != nil {
 		return nil, fmt.Errorf("P6: %s: %w", p.editor.Email, err)
 	}
 	if diff != "" {
 		return nil, fmt.Errorf("P6: %s", rosterMiss(p.editor.Email, roster, diff))
 	}
-	if mine := roster.createdBy(p.editor.Email); rosterDiff(mine, refSet{agentA: true}) != "" {
+	if mine := roster.createdBy(p.editor.Email).in([]string{kagentNamespace, a, b}); rosterDiff(mine, refSet{agentA: true}) != "" {
 		return nil, fmt.Errorf("P6: of %s's roster %s, %s names %s as the creator of %s, want %s alone", p.editor.Email, roster.refs(), createdByAnnotation, p.editor.Email, mine, agentA)
 	}
 	note("roster %s; created by %s: %s; GET %s%s: sub %q, email %q", roster.refs(), p.editor.Email, agentA, portalKagentAPI, kagentMePath, me.Sub, me.Email)
@@ -433,6 +463,9 @@ func (p *tenantsPortal) run() ([]string, error) {
 		return nil, err
 	}
 	if err := removeTenantsTestPlatformAgent(); err != nil {
+		return nil, err
+	}
+	if err := waitAgentGone(kagentNamespace, tenantsTestPlatformAgent); err != nil {
 		return nil, err
 	}
 	platform, err := agentsIn(kagentNamespace)
@@ -452,6 +485,11 @@ func (p *tenantsPortal) run() ([]string, error) {
 	if roster.routeErr != nil {
 		return nil, fmt.Errorf("P2: GET %s%s as %s, in no organization: %w, want an answer naming no namespace", portalKagentAPI, portalAgentNamespacesPath, alice.Email, roster.routeErr)
 	}
+	// Read, and empty: a refused platform tenant would leave every namespace
+	// refused, which the portal shows as no access, not as an empty roster.
+	if slices.Contains(roster.refused, kagentNamespace) {
+		return nil, fmt.Errorf("P2: %s's Agents list in %s through %s is refused (403): the chart binds agent-platform:platform-user to every signed-in person there", alice.Email, kagentNamespace, portalKubeProxyAPI)
+	}
 	note("no agent; GET %s%s names none; refused %v", portalKagentAPI, portalAgentNamespacesPath, roster.refused)
 	out = append(out, fmt.Sprintf("PASS: %s, in no organization and with the platform tenant empty, reads an empty roster through the portal, no environment unreadable (GET %s%s names no namespace; refused %v)", alice.Email, portalKagentAPI, portalAgentNamespacesPath, roster.refused))
 	return out, nil
@@ -467,4 +505,25 @@ func tenantLabels(r *tenantRoster) string {
 	}
 	slices.Sort(labels)
 	return strings.Join(labels, ", ")
+}
+
+// waitAgentGone waits until the Agent is gone, bounded: it goes with its
+// HelmRelease's uninstall, after the release itself.
+func waitAgentGone(ns, name string) error {
+	gvr, err := gvrFor(agentResource)
+	if err != nil {
+		return err
+	}
+	var readErr error
+	gone := waitFor(int(tenantsTestCopiesTimeout/pollInterval), pollInterval, func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
+		defer cancel()
+		exists, err := objectExists(ctx, gvr, ns, name)
+		readErr = err
+		return err == nil && !exists
+	})
+	if !gone {
+		return fmt.Errorf("the Agent %s/%s is still there after %s (%v): its HelmRelease's uninstall did not remove it", ns, name, tenantsTestCopiesTimeout, readErr)
+	}
+	return nil
 }

@@ -136,11 +136,18 @@ asserts (steps P, [The Agent Platform proof](backstage.md#the-agent-platform-pro
   controller's refusal (`forbidden: kagent: …` from `start_session`), and
   nothing reaches the agent.
 - **Who created an agent**: agent-manager records the caller's email as
-  `agent-platform.giantswarm.io/created-by`; the portal shows it and filters
-  "Created by: Me" against the person's subject from `GET /kagent/me`. It is
-  never an authorization input.
+  `agent-platform.giantswarm.io/created-by`, and the portal shows it. It is
+  never an authorization input. `GET /kagent/me` answers the token's claims
+  on kagent 1.19: its `email` is the person, its `sub` is Dex's subject. The
+  portal's "Created by: Me" compares the creator with that `sub`, so it keeps
+  nothing (giantswarm/backstage#3161; the browser suite's `tenants.spec.ts`
+  shows it).
 - **No tenant, no agent**: a person bound in no organization, with no platform
-  agent, reads an empty roster, not an error.
+  agent, reads an empty roster, not an error. The chart binds
+  `agent-platform:platform-user` to every signed-in person in `kagent`, so the
+  platform tenant is never refused: the portal shows "No agents yet" and its
+  invitation to create one, not its "No agents for you yet" naming the roles,
+  which needs every namespace refused.
 
 ## How the identity plumbing works
 
