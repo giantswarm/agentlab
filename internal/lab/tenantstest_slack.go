@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"maps"
 	"net"
+	"net/url"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -24,6 +26,9 @@ const (
 	// may not use; slackNothingSent is its promise that nothing reached it.
 	slackNotPermitted = "You cannot use"
 	slackNothingSent  = "Nothing was sent to it"
+	// slackReplayFailed is the gateway's note on a held message it could not
+	// run after the thread's person allowed its sender.
+	slackReplayFailed = "could not be picked up again"
 	// slackPlatformTenant is the platform tenant's label on a roster row.
 	slackPlatformTenant = "platform"
 	// tenantsSlackGatewayHint names the gateway release the half needs.
@@ -160,6 +165,11 @@ func (s *tenantsSlack) run() ([]string, error) {
 		return nil, err
 	}
 	gw := newGatewayProcess(opts, runDir, caFile, "grpcs://"+edge, fake.baseURL(), s.cfg.MusterBaseURL())
+	if opts.GatewayBinary == "" && runtime.GOOS == goosDarwin {
+		if err := s.bridged(gw, edge, fake.baseURL()); err != nil {
+			return nil, err
+		}
+	}
 	gw.container = gatewayContainerName(s.cfg)
 	// A thread's Session starts through agent-manager's start_session, a
 	// muster call the gateway makes as the person.
@@ -239,7 +249,7 @@ func (s *tenantsSlack) run() ([]string, error) {
 	if problem := refusalProblem(refusal, s.namespaces[1]); problem != "" {
 		return nil, fmt.Errorf("S2: the answer to %s's pick of %s: %s: %q", s.users[0].Email, otherRef, problem, excerpt(refusal, 300))
 	}
-	if err := s.nothingReached(ctx, p, otherAgent, before, since, slackUsers[0]); err != nil {
+	if err := s.nothingReached(ctx, p, otherAgent, before, since, slackUsers[0], true); err != nil {
 		return nil, fmt.Errorf("S2: %w", err)
 	}
 	out = append(out, fmt.Sprintf("PASS: %s's pick of %s in Slack is refused (%q) and nothing reaches it", s.users[0].Email, otherRef, excerpt(refusal, 120)))
@@ -271,14 +281,14 @@ func (s *tenantsSlack) run() ([]string, error) {
 		return nil, err
 	}
 	since = time.Now()
-	refusal, err = p.collaboratorRefused(thread, slackUsers[0], klausGatewayWordPrompt)
+	refusal, resent, err := p.collaboratorRefused(thread, slackUsers[0], klausGatewayWordPrompt)
 	if err != nil {
 		return nil, fmt.Errorf("S4: %w", err)
 	}
 	if problem := refusalProblem(refusal, s.namespaces[1]); problem != "" {
 		return nil, fmt.Errorf("S4: the answer to %s in %s's thread: %s: %q", s.users[0].Email, s.users[1].Email, problem, excerpt(refusal, 300))
 	}
-	if err := s.nothingReached(ctx, p, otherAgent, before, since, slackUsers[0]); err != nil {
+	if err := s.nothingReached(ctx, p, otherAgent, before, since, slackUsers[0], false); err != nil {
 		return nil, fmt.Errorf("S4: %w", err)
 	}
 	after, err := apis[1].taskIDs(ctx, session)
@@ -288,20 +298,29 @@ func (s *tenantsSlack) run() ([]string, error) {
 	if len(after) != len(tasks) {
 		return nil, fmt.Errorf("S4: Session %s holds %d task(s) after the collaborator's refused turn, %d before", session.GetId(), len(after), len(tasks))
 	}
-	out = append(out, fmt.Sprintf("PASS: %s's turn in %s's thread on %s is refused (%q); the Session keeps its %d task(s)", s.users[0].Email, s.users[1].Email, otherRef, excerpt(refusal, 120), len(after)))
+	how := ""
+	if resent {
+		how = fmt.Sprintf(" (after the Allow, the held message's replay got the gateway's generic %q note; the refusal came on the message sent again)", slackReplayFailed)
+	}
+	out = append(out, fmt.Sprintf("PASS: %s's turn in %s's thread on %s is refused (%q)%s; the Session keeps its %d task(s)", s.users[0].Email, s.users[1].Email, otherRef, excerpt(refusal, 120), how, len(after)))
 	apis[1].removeSession(session.GetId())
 	return out, nil
 }
 
-// nothingReached checks a refusal reached nothing: no turn_dispatch of the
-// person in the gateway's log, no new Session of the agent (every creator's,
-// read as the admin), no credential read for the agent's atespace since.
-func (s *tenantsSlack) nothingReached(ctx context.Context, p *slackProof, agent *apiv1alpha1.ResourceReference, before []*apiv1alpha1.Session, since time.Time, slackUser string) error {
+// nothingReached checks a refusal reached nothing: no new Session of the
+// agent (every creator's, read as the admin) — and, where the gateway itself
+// refuses (gatewayRefuses: a pick it validates against the person's roster),
+// no turn_dispatch of the person in its log and no credential read for the
+// agent's atespace since. A collaborator's turn is dispatched and the
+// controller refuses it (the surface asks, the controller decides), and the
+// gateway may resume the thread's suspended Session first, which reads the
+// credentials without a turn: there the Session's tasks are the evidence.
+func (s *tenantsSlack) nothingReached(ctx context.Context, p *slackProof, agent *apiv1alpha1.ResourceReference, before []*apiv1alpha1.Session, since time.Time, slackUser string, gatewayRefuses bool) error {
 	time.Sleep(accessTraceSettle)
 	logs, _ := p.logs()
 	for _, d := range gatewayRecords(logs, recordDispatch) {
-		if d.SlackUser == slackUser {
-			return fmt.Errorf("a turn of %s reached agent %s (turn_dispatch in thread %s)", slackUser, d.Agent, d.thread())
+		if gatewayRefuses && d.SlackUser == slackUser {
+			return fmt.Errorf("a turn of %s was dispatched to agent %s (turn_dispatch in thread %s)", slackUser, d.Agent, d.thread())
 		}
 	}
 	after, err := s.admin.allCreatorsSessions(ctx, agent)
@@ -310,6 +329,9 @@ func (s *tenantsSlack) nothingReached(ctx context.Context, p *slackProof, agent 
 	}
 	if len(after) != len(before) {
 		return fmt.Errorf("%s holds %d Session(s) after the refusal, %d before", agentTenant(agent), len(after), len(before))
+	}
+	if !gatewayRefuses {
+		return nil
 	}
 	read, err := tenantCredentialReads(agent.GetNamespace(), since)
 	if err != nil {
@@ -398,13 +420,15 @@ func (p *slackProof) pickStarted(t *slackThread, roster slackMessage, ref, quest
 
 // collaboratorRefused posts the collaborator's mention in the thread; when
 // the gateway asks the thread's person to allow them, the person allows it.
-// It returns the refusal the collaborator gets.
-func (p *slackProof) collaboratorRefused(t *slackThread, collaborator, text string) (string, error) {
+// It returns the refusal the collaborator gets, and whether they had to send
+// again after the held message's replay failed.
+func (p *slackProof) collaboratorRefused(t *slackThread, collaborator, text string) (string, bool, error) {
 	shown := len(p.fake.thread(p.channel, t.ts))
 	if _, err := p.driver.mention(collaborator, t.ts, text); err != nil {
-		return "", err
+		return "", false, err
 	}
 	var refusal, consent *slackMessage
+	var resent bool
 	msgs, ok := waitThread(p.fake, p.channel, t.ts, klausGatewayReplyWait, func(msgs []slackMessage) bool {
 		for i := min(shown, len(msgs)); i < len(msgs); i++ {
 			m := msgs[i]
@@ -420,27 +444,87 @@ func (p *slackProof) collaboratorRefused(t *slackThread, collaborator, text stri
 		return false
 	})
 	if !ok {
-		return "", fmt.Errorf("the collaborator's mention got neither a refusal nor an access prompt to %s within %s; the thread shows: %s", t.user, klausGatewayReplyWait, threadLine(msgs))
+		return "", false, fmt.Errorf("the collaborator's mention got neither a refusal nor an access prompt to %s within %s; the thread shows: %s", t.user, klausGatewayReplyWait, threadLine(msgs))
 	}
 	if consent != nil {
 		note("the gateway asks %s to allow %s; allowed", t.user, collaborator)
 		shown = len(p.fake.thread(p.channel, t.ts))
 		if err := p.driver.click(t.user, *consent, slackAccessAllow); err != nil {
-			return "", err
+			return "", false, err
 		}
+		var replayed bool
 		msgs, ok = waitThread(p.fake, p.channel, t.ts, klausGatewayReplyWait, func(msgs []slackMessage) bool {
-			m, found := findMessage(msgs[min(shown, len(msgs)):], slackNotPermitted)
-			if found {
+			if m, found := findMessage(msgs[min(shown, len(msgs)):], slackNotPermitted); found {
 				refusal = &m
+				return true
 			}
-			return found
+			_, replayed = findMessage(msgs[min(shown, len(msgs)):], slackReplayFailed)
+			return replayed
 		})
 		if !ok {
-			return "", fmt.Errorf("the allowed collaborator got no refusal within %s; the thread shows: %s", klausGatewayReplyWait, threadLine(msgs))
+			return "", false, fmt.Errorf("the allowed collaborator got no refusal within %s; the thread shows: %s", klausGatewayReplyWait, threadLine(msgs))
+		}
+		if refusal == nil {
+			// klaus-gateway 4.10.0-rc.1 answers the held message's replay
+			// after the Allow with its generic replay note, not the refusal
+			// (postReplayFailureNote knows only the share refusal): the
+			// collaborator sends again, as the note asks.
+			note("the held message's replay got %q, not the refusal (a klaus-gateway follow-up); %s sends again", slackReplayFailed, collaborator)
+			resent = true
+			shown = len(p.fake.thread(p.channel, t.ts))
+			if _, err := p.driver.mention(collaborator, t.ts, text); err != nil {
+				return "", false, err
+			}
+			msgs, ok = waitThread(p.fake, p.channel, t.ts, klausGatewayReplyWait, func(msgs []slackMessage) bool {
+				m, found := findMessage(msgs[min(shown, len(msgs)):], slackNotPermitted)
+				if found {
+					refusal = &m
+				}
+				return found
+			})
+			if !ok {
+				return "", false, fmt.Errorf("the allowed collaborator's second message got no refusal within %s; the thread shows: %s", klausGatewayReplyWait, threadLine(msgs))
+			}
 		}
 	}
 	if refusal.Method == slackPostEphemeral && refusal.Recipient != collaborator {
-		return "", fmt.Errorf("the refusal went to %s, not to the collaborator %s", refusal.Recipient, collaborator)
+		return "", false, fmt.Errorf("the refusal went to %s, not to the collaborator %s", refusal.Recipient, collaborator)
 	}
-	return refusal.shown(), nil
+	return refusal.shown(), resent, nil
+}
+
+// bridged runs the gateway's image on the kind network instead of the
+// host's: Docker Desktop gives macOS no route into a host-network container
+// (its host networking is off by default), so the proof could not reach the
+// gateway's ports. The ports are published on loopback, the edge and muster
+// are the node's NodePort under their public names (TLS verifies as usual),
+// and the fake Slack Web API on this host is host.docker.internal.
+func (s *tenantsSlack) bridged(gw *gatewayProcess, edge, slackAPI string) error {
+	node := s.cfg.ControlPlaneNode()
+	nodeIP, err := outputQuiet(dockerBin, "inspect", "-f", `{{with index .NetworkSettings.Networks "`+kindDockerNetwork+`"}}{{.IPAddress}}{{end}}`, node)
+	if err != nil || strings.TrimSpace(nodeIP) == "" {
+		return fmt.Errorf("the address of node %s on network %s: %v", node, kindDockerNetwork, err)
+	}
+	nodeIP = strings.TrimSpace(nodeIP)
+	edgeHost, _, _ := net.SplitHostPort(edge)
+	muster, err := url.Parse(s.cfg.MusterBaseURL())
+	if err != nil {
+		return err
+	}
+	nodePort := strconv.Itoa(config.GatewayNodePort)
+	gw.target = "grpcs://" + net.JoinHostPort(edgeHost, nodePort)
+	muster.Host = net.JoinHostPort(muster.Hostname(), nodePort)
+	gw.musterURL = muster.String()
+	gw.slackAPI = strings.Replace(slackAPI, "127.0.0.1", "host.docker.internal", 1)
+	gw.network = kindDockerNetwork
+	port := gw.opts.Port
+	for _, p := range []int{port, port + 1} {
+		gw.publish = append(gw.publish, fmt.Sprintf("127.0.0.1:%d:%d", p, p))
+	}
+	gw.addHosts = []string{edgeHost + ":" + nodeIP, muster.Hostname() + ":" + nodeIP}
+	gw.extraArgs = append(gw.extraArgs,
+		"--listen-address="+net.JoinHostPort("0.0.0.0", strconv.Itoa(port)),
+		"--admin-address="+net.JoinHostPort("0.0.0.0", strconv.Itoa(port+1)))
+	note("the gateway on network %s: edge and muster at node %s:%s, its ports published on 127.0.0.1, the fake Slack Web API at %s", kindDockerNetwork, nodeIP, nodePort, gw.slackAPI)
+	return nil
 }

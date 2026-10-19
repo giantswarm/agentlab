@@ -462,8 +462,16 @@ func (e *tenantsEdge) run() (edgeVerdicts, error) {
 	if err := editorAPI.createAgent(ctx, edgeAgent(a, tenantsTestAgent, nil)); err != nil {
 		return nil, fmt.Errorf("E5: %s's CreateAgent %s/%s: %w", editor.Email, a, tenantsTestEdgeAgent, err)
 	}
-	if err := editorAPI.updateAgent(ctx, edgeAgent(a, tenantsTestAgent, map[string]string{tenantsTestEdgeLabel: tenantsTestEdgeChange})); err != nil {
-		return nil, fmt.Errorf("E5: %s's UpdateAgent %s/%s: %w", editor.Email, a, tenantsTestEdgeAgent, err)
+	// The controller writes the update over its cached read of the Agent,
+	// which a create a moment ago leaves stale: the API server's conflict
+	// comes back as Internal (kagent's kubecrud Update), so a few tries.
+	var updateErr error
+	waitFor(int(tenantRBACSettle/pollInterval), pollInterval, func() bool {
+		updateErr = editorAPI.updateAgent(ctx, edgeAgent(a, tenantsTestAgent, map[string]string{tenantsTestEdgeLabel: tenantsTestEdgeChange}))
+		return updateErr == nil || status.Code(updateErr) != codes.Internal
+	})
+	if updateErr != nil {
+		return nil, fmt.Errorf("E5: %s's UpdateAgent %s/%s: %w", editor.Email, a, tenantsTestEdgeAgent, updateErr)
 	}
 	changed, err := readEdgeAgentLabel(a)
 	if err != nil {

@@ -766,6 +766,32 @@ Go reads; the image's own roots stay, read from its certificate directory.
 muster URL and the CA source in the in-cluster turn's error. Lab-only by
 construction: an installation's edge serves a publicly trusted certificate.
 
+### U34. `tenantstest_slack.go`: on macOS the Slack steps run the gateway's image on the kind network — ACCEPTED
+`tenants-test`'s Slack steps run klaus-gateway as `klaus-gateway-test` does,
+the image on the host's network. Docker Desktop leaves host networking off by
+default, so the Mac has no route to the container's loopback ports and the
+readiness probe times out with an empty log; a darwin build of the gateway
+cannot verify the lab CA either (`SSL_CERT_FILE` is not read on macOS, and the
+system verifier calls the lab certificate not standards compliant). **Fix:**
+on darwin, with the image, the container joins the `kind` network, its two
+ports are published on 127.0.0.1, `--add-host` names the edge's and muster's
+public hostnames as the node's address, the target and muster are the edge's
+NodePort (`config.GatewayNodePort`) under those names (TLS verifies as on the
+host), and the fake Slack Web API is `host.docker.internal`. Linux keeps the
+host network. The bridged shape is `tenants-test`'s only; `klaus-gateway-test`
+is unchanged.
+
+### U35. `tenantstest_slack.go`: an allowed collaborator sends again after the replay note — BLOCKED UPSTREAM
+After the thread's person allows a collaborator who may not use the thread's
+agent, klaus-gateway 4.10.0-rc.1 replays the held message, the controller
+refuses it, and the replay path answers with its generic "Your message could
+not be picked up again. Send it again." (`postReplayFailureNote` knows only a
+share refusal), not the note naming the agent's tenant. **Fix:** the proof
+records the note and sends the collaborator's message again; that turn gets
+the refusal, and the verdict says so. Unblocks when the gateway's replay note
+uses its not-permitted note (giantswarm/klaus-gateway, `postReplayFailureNote`
+in `pkg/channels/slack/slack.go`): the resend then goes.
+
 ## Accepted lab trade-offs (not hacks to fix)
 
 - **Checksum stamping via the `REPLACED_AT_APPLY` placeholder** — the standard

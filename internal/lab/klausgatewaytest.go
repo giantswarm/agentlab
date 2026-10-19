@@ -1102,6 +1102,10 @@ type gatewayProcess struct {
 	// network is the container's docker network (default host); host the
 	// address the proof reaches its endpoints on (default 127.0.0.1).
 	network, host string
+	// publish are the container's published ports (docker run -p) and
+	// addHosts its extra host entries (--add-host), for the image shape on a
+	// network the host has no route into.
+	publish, addHosts []string
 	// container names the image shape's container (default the first lab's,
 	// gatewayContainerName); startWait bounds the readiness once it runs and
 	// stopWait the end after stop() asked for it (defaults
@@ -1241,6 +1245,12 @@ func (g *gatewayProcess) start() error {
 		}
 		if g.trustLabCA {
 			extra = append(extra, "-e", "SSL_CERT_FILE="+gatewayCAPath)
+		}
+		for _, p := range g.publish {
+			extra = append(extra, "-p", p)
+		}
+		for _, h := range g.addHosts {
+			extra = append(extra, "--add-host", h)
 		}
 		args = slices.Insert(args, slices.Index(args, g.opts.GatewayImage), extra...)
 		g.cmd = command(dockerBin, args...)

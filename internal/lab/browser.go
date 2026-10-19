@@ -94,7 +94,7 @@ func BrowserLogin(cfg *config.Config) error {
 func OpenBrowser(url string) {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
-	case "darwin":
+	case goosDarwin:
 		cmd = exec.Command("open", url) // #nosec G204 -- fixed browser-opener command; the URL is lab-local
 	case "windows":
 		// The shell's own handler; `start` is a cmd.exe builtin, not a binary.

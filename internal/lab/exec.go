@@ -50,6 +50,9 @@ func warn(format string, a ...any) {
 // records a key source.
 const dockerBin = "docker"
 
+// goosDarwin is runtime.GOOS on macOS.
+const goosDarwin = "darwin"
+
 // dockerRun is the start of a `docker run` of the named container on a
 // network; the caller's flags follow, then its image and command.
 func dockerRun(name, network string, flags ...string) []string {
