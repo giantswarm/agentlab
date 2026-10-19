@@ -684,9 +684,10 @@ func (gp *gitlabProof) noWorkspace() error {
 // with or without a workspace: the Harness's messaging channel, kagent's
 // propagation of the turn caller's token to its own broker, the Harness's
 // inert GH_TOKEN placeholder the egress gateway replaces (the write part
-// proves it inert) and GLAB_IS_OAUTH2, which makes glab send its token as a
-// bearer; none is a GitLab credential.
-var gitlabPlatformEnv = []string{"CLAUDE_CODE_MESSAGING_TOKEN", "GH_TOKEN", "GLAB_IS_OAUTH2", "KAGENT_PROPAGATE_TOKEN"}
+// proves it inert), GLAB_IS_OAUTH2, which makes glab send its token as a
+// bearer, and GLAB_CONFIG_DIR, glab's configuration naming the workspace's
+// GitLab hosts; none is a GitLab credential.
+var gitlabPlatformEnv = []string{"CLAUDE_CODE_MESSAGING_TOKEN", "GH_TOKEN", "GLAB_CONFIG_DIR", "GLAB_IS_OAUTH2", "KAGENT_PROPAGATE_TOKEN"}
 
 // gitlabCredentialEnv is the probe's credential-like variable names beyond
 // gitlabPlatformEnv, GITLAB_TOKEN among them unless the probe found it the

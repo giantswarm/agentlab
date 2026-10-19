@@ -393,8 +393,9 @@ passes: it never fails for a lab that has no GitLab.
    creates the Session on the volume, whose turn works in its directory with
    the clone at the mirrored head and holds no credential beyond the
    platform's own variables (`GH_TOKEN` and `GITLAB_TOKEN`, the Harness's
-   inert placeholder the egress gateway replaces, and `GLAB_IS_OAUTH2` are
-   among them; a `GITLAB_TOKEN` of any other value is a credential).
+   inert placeholder the egress gateway replaces, `GLAB_IS_OAUTH2` and
+   `GLAB_CONFIG_DIR`, glab's configuration naming the workspace's GitLab
+   hosts, are among them; a `GITLAB_TOKEN` of any other value is a credential).
 7. **Push and merge request from the Session**: the Session pushes an empty
    commit to a proof branch and deletes the branch again. It holds no GitLab
    credential, so GitLab accepts both only through Substrate's egress
