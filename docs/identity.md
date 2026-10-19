@@ -108,9 +108,10 @@ agent-permissions plan's D9):
   to it gives no token to a server of the same issuer in muster's namespace or
   in another organization. The lab Dex lists the callbacks of `tenants-test`'s
   two namespaces on the platform client.
-- **A tenant server's sign-ins go with it.** muster files them under the
-  `MCPServer` they were made for and forgets them when it is gone: a
-  namespace created again with the same name starts with no sign-in, and
+- **A tenant namespace's sign-ins go with its servers.** muster forgets them
+  when the namespace's last server, or the namespace, goes (a server deleted
+  next to others takes the issuers only it named): a namespace created again
+  with the same name starts with no sign-in, and
   `core_auth_login` there answers a sign-in link, not a connect. Every
   `tenants-test` run creates its namespaces again, so a second run right
   after the first signs in again.

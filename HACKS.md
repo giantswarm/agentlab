@@ -808,7 +808,8 @@ retries it on a fresh read (giantswarm/kagent-upstream,
 tenant server's sign-ins go with its MCPServer, so a namespace created again
 with the same name starts with none, and `core_auth_login` names a pin's
 Secret muster may not read. The chart's range for muster (`>=5.45.0 <6.0.0`)
-admits older musters. **Fix:** with `platform.tenants` on, the values set
+admits older musters; the pin holds the lab on the first muster with #1603
+whatever the range selects. **Fix:** with `platform.tenants` on, the values set
 `components.muster.versionRange` to `tenantsMusterVersion` (5.48.0,
 `tenantstest_muster.go`) next to `muster.muster.mcpServersInAllNamespaces:
 true`; with the tenants off, neither renders. Unblocks when the lab's chart

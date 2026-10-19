@@ -30,8 +30,9 @@ const (
 	// on. HACKS.md U38.
 	tenantsMusterVersion = "5.48.0"
 	// tenantsMusterMinimum is the first muster with giantswarm/muster#1603: a
-	// tenant server's sign-ins go with its MCPServer, and a pin's Secret muster
-	// may not read is named in core_auth_login's answer.
+	// tenant namespace's sign-ins go when its last server or the namespace
+	// goes, and a pin's Secret muster may not read is named in
+	// core_auth_login's answer.
 	tenantsMusterMinimum = "5.48.0"
 	// tenantsMCPServer is the sign-in fixture tenants-test creates in each
 	// organization namespace: the lab's oauth-fixture.yaml.tmpl shape, with
@@ -106,7 +107,7 @@ func (t musterTenancy) problem() string {
 	}
 	minimum := semver.MustParse(tenantsMusterMinimum)
 	if v, err := semver.NewVersion(tag); err == nil && v.LessThan(minimum) {
-		return fmt.Sprintf("muster %s keeps a tenant server's sign-ins after its namespace is gone: it needs %s or later (giantswarm/muster#1603). `agentlab platform` with this agentlab pins %s with platform.tenants on", tag, tenantsMusterMinimum, tenantsMusterVersion)
+		return fmt.Sprintf("muster %s is older than tenants-test needs: it needs %s or later (giantswarm/muster#1601, #1603). `agentlab platform` with this agentlab pins %s with platform.tenants on", tag, tenantsMusterMinimum, tenantsMusterVersion)
 	}
 	if !t.allNamespaces {
 		return "muster runs without mcpServersInAllNamespaces: it serves no organization namespace's MCPServer. `agentlab platform` with this agentlab sets muster.muster.mcpServersInAllNamespaces with platform.tenants on (a platform.valuesFiles overlay that sets it false wins)"
@@ -465,6 +466,7 @@ func signInToTenantServer(cfg *config.Config, s *musterSession, user *config.Use
 	if err != nil {
 		return fmt.Errorf("%s's core_auth_login for %s, in a namespace new in this run: %w", user.Email, key, err)
 	}
+	note("%s's core_auth_login for %s answers a sign-in link: the namespace, new in this run, starts with no sign-in", user.Email, key)
 	redirect, err := tenantSignInRedirect(challenge.authURL)
 	if err != nil {
 		return err
@@ -680,7 +682,7 @@ func (m *tenantsMuster) run() ([]string, error) {
 		}
 		note("%s %s: %s", alice.Email, p.tool, answer)
 	}
-	out = append(out, fmt.Sprintf("PASS: %s's call of %s (%s holds its tools), core_service_start and core_auth_login for %s are answered as for a server that does not exist", alice.Email, tool, bob.Email, keyB))
+	out = append(out, fmt.Sprintf("PASS: %s's core_auth_login for %s, in a namespace new in this run, answered a sign-in link, not a connect; %s's call of %s (%s holds its tools), core_service_start and core_auth_login for %s are answered as for a server that does not exist", bob.Email, keyB, alice.Email, tool, bob.Email, keyB))
 
 	step("M3. A server of %s that asks muster for an identity is not started: each of %s reads %s with the reason", a, refusedFields(m.cfg), mcpServerStateFail)
 	for _, r := range refusedTenantServers(m.cfg) {
