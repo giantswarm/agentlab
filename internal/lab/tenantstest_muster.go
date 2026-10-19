@@ -102,8 +102,8 @@ func (t musterTenancy) problem() string {
 		before := t.image[:at]
 		tag = before[strings.LastIndex(before, ":")+1:]
 	}
-	min := semver.MustParse(tenantsMusterMinimum)
-	if v, err := semver.NewVersion(tag); err == nil && v.LessThan(min) {
+	minimum := semver.MustParse(tenantsMusterMinimum)
+	if v, err := semver.NewVersion(tag); err == nil && v.LessThan(minimum) {
 		return fmt.Sprintf("muster %s lists no organization's MCPServer as the caller: it needs %s or later (giantswarm/muster#1601). `agentlab platform` with this agentlab pins %s with platform.tenants on", tag, tenantsMusterMinimum, tenantsMusterVersion)
 	}
 	if !t.allNamespaces {
@@ -140,6 +140,9 @@ func readMusterTenancy() (musterTenancy, error) {
 		return t, fmt.Errorf("muster's %s: %w", musterConfigKey, err)
 	}
 	t.allNamespaces = conf.MCPServersInAllNamespaces
+	if t.image == "" {
+		return t, fmt.Errorf("the muster Deployment in %s has no container %q with an image: muster's version cannot be read", platformNamespace, componentMuster)
+	}
 	return t, nil
 }
 
@@ -455,7 +458,7 @@ func signInToTenantServer(cfg *config.Config, s *musterSession, user *config.Use
 	// A sign-in of an earlier run outlives its namespace (muster keeps the
 	// person's token under the namespace and issuer), so the person signs
 	// out first: core_auth_login then answers a challenge, not a connect.
-	signOutOfTenantServer(s, key)
+	signOutOf(s, key)
 	challenge, err := signInChallenge(cfg, s, key)
 	if err != nil {
 		return fmt.Errorf("%s's core_auth_login for %s: %w", user.Email, key, err)
@@ -473,11 +476,15 @@ func signInToTenantServer(cfg *config.Config, s *musterSession, user *config.Use
 	return nil
 }
 
-// signOutOfTenantServer drops the session's person's token for the server,
-// best effort.
-func signOutOfTenantServer(s *musterSession, key string) {
-	if r, err := s.callToolEnvelope("core_auth_logout", map[string]any{serverKey: key}); err != nil || r.IsError {
-		note("core_auth_logout for %s: %v %v", key, err, r)
+// signOutOf drops the session's person's token for the server, best
+// effort.
+func signOutOf(s *musterSession, key string) {
+	r, err := s.callToolEnvelope("core_auth_logout", map[string]any{serverKey: key})
+	switch {
+	case err != nil:
+		note("core_auth_logout for %s: %v", key, err)
+	case r.IsError:
+		note("core_auth_logout for %s: %s", key, excerpt(r.Content[0].Text, 160))
 	}
 }
 
@@ -586,9 +593,9 @@ func (m *tenantsMuster) run() ([]string, error) {
 	// The sign-ins of M2 and M4 go at the end: muster keeps them past the
 	// namespaces.
 	defer func() {
-		signOutOfTenantServer(sessions[1], keyB)
-		signOutOfTenantServer(sessions[0], keyA)
-		signOutOfTenantServer(adminSession, keyA)
+		signOutOf(sessions[1], keyB)
+		signOutOf(sessions[0], keyA)
+		signOutOf(adminSession, keyA)
 	}()
 	platform, err := platformMCPServers()
 	if err != nil {
@@ -707,6 +714,10 @@ func (m *tenantsMuster) run() ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("M4: %s after the sign-in to %s: %w", alice.Email, keyA, err)
 	}
+	// A sign-in to lab-oauth-fixture another proof left behind would read
+	// as a leak: both people sign out of it first.
+	signOutOf(sessions[0], oauthFixtureServer)
+	signOutOf(adminSession, oauthFixtureServer)
 	if err := stillNeedsSignIn(m.cfg, sessions[0], oauthFixtureServer, "x_"+oauthFixtureServer+"_", oauthProxyCallbackPath); err != nil {
 		return nil, fmt.Errorf("M4: after %s's sign-in to %s: %w", alice.Email, keyA, err)
 	}
@@ -782,7 +793,42 @@ func (m *tenantsMuster) agentTurn(userToken, keyA, keyB string) (string, error) 
 		return "", fmt.Errorf("M5: the agent reports %v of %s, another organization's server", other, keyB)
 	}
 	note("the agent reports %d tools: %d of %s, %d of agent-manager, none of %s", len(names), len(own), keyA, len(platform), keyB)
-	return fmt.Sprintf("PASS: through %s/%s, a turn as %s reports the tools of %s and of muster's namespace, none of %s", a, tenantsTestMusterAgent, user.Email, keyA, keyB), nil
+	// The tools show only a token: the person has no sign-in to the other
+	// organization's server, so no tool of it could show anyway. The
+	// servers the agent lists show what muster lets the person see.
+	reply, err = agentTurnOf(m.cfg, &apiv1alpha1.ResourceReference{Namespace: a, Name: tenantsTestMusterAgent}, userToken, serverListingPrompt)
+	if err != nil {
+		return "", fmt.Errorf("M5: %w", err)
+	}
+	servers := serverRefsInReply(reply)
+	switch {
+	case !servers[keyA]:
+		return "", fmt.Errorf("M5: the agent's core_mcpserver_list does not list %s (servers: %s; reply: %s)", keyA, servers, excerpt(reply, 300))
+	case !servers[platformNamespace+"/"+agentManagerMCPServer]:
+		return "", fmt.Errorf("M5: the agent's core_mcpserver_list does not list %s/%s of muster's namespace (servers: %s; reply: %s)", platformNamespace, agentManagerMCPServer, servers, excerpt(reply, 300))
+	case servers[keyB]:
+		return "", fmt.Errorf("M5: the agent's core_mcpserver_list lists %s, another organization's server (servers: %s)", keyB, servers)
+	}
+	note("the agent lists the servers %s", servers)
+	return fmt.Sprintf("PASS: through %s/%s, a turn as %s reports the tools of %s and of muster's namespace, none of %s, and lists the servers of muster's namespace and %s, not %s", a, tenantsTestMusterAgent, user.Email, keyA, keyB, keyA, keyB), nil
+}
+
+// serverListingPrompt is the turn of step M5 that has the agent list the
+// servers muster shows its person.
+const serverListingPrompt = "Call the tool core_mcpserver_list exactly once, through your call_tool tool with the arguments {}. " +
+	"Then reply with ONLY each server of its result as namespace/name (its namespace field, a slash, its name field), one per line, no other words. " +
+	"If you cannot call it, reply with exactly NO_SERVERS."
+
+// serverRefsInReply extracts the namespace/name servers an agent reported.
+func serverRefsInReply(reply string) refSet {
+	set := refSet{}
+	for _, field := range strings.FieldsFunc(reply, func(r rune) bool { return r == '\n' || r == ',' || r == ' ' || r == '`' || r == '*' || r == '\t' }) {
+		field = strings.Trim(field, "-.;:()[]\"'")
+		if ns, name, ok := strings.Cut(field, "/"); ok && ns != "" && name != "" && !strings.Contains(name, "/") {
+			set[field] = true
+		}
+	}
+	return set
 }
 
 // noticeOf words a listing's notice for an error, "" without one.

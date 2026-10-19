@@ -469,3 +469,13 @@ func TestMusterTenancyProblem(t *testing.T) {
 		}
 	}
 }
+
+// The servers an agent reports are read as namespace/name, whatever the
+// list markup around them; a word without a slash is no server.
+func TestServerRefsInReply(t *testing.T) {
+	reply := "- `agent-platform/agent-manager`\n* org-a/agentlab-tenants-mcp,\nagent-platform/kagent.\nNO_SERVERS\nsee a/b/c"
+	want := refSet{"agent-platform/agent-manager": true, "org-a/agentlab-tenants-mcp": true, "agent-platform/kagent": true}
+	if got := serverRefsInReply(reply); rosterDiff(got, want) != "" {
+		t.Errorf("serverRefsInReply = %s, want %s (%s)", got, want, rosterDiff(got, want))
+	}
+}

@@ -323,8 +323,11 @@ on a port-forward to its pod) as each person with their Dex token (audiences
      own, on its namespace's callback; M5. the first editor creates
      `agentlab-tenants-muster` in the first organization (toolset
      `preset:full`), and a turn as the first user reports tools of their
-     fixture and of agent-manager, none of the other organization's (the
-     agent is deleted again);
+     fixture and of agent-manager, none of the other organization's, and a
+     second turn has it call `core_mcpserver_list`: it lists the first
+     user's fixture and agent-manager, not the second organization's (the
+     agent is deleted again). The same through Slack (klaus-gateway) is not
+     proved yet;
 5. as the admin (cluster-admin): a WorkerPool patch and delete and a pod
    labelled `ate.dev/worker-pool` (server-side dry runs), and an exec into a
    worker, are refused by the chart's `agent-platform-tenant-*` admission
