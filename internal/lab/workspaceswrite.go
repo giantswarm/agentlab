@@ -79,8 +79,7 @@ type writeProof struct {
 // workspacesWritePart runs the part in stages, as the admin.
 func workspacesWritePart(cfg *config.Config, timeout time.Duration) error {
 	p := newProofStages()
-	wp := &writeProof{callerCredentialProof: &callerCredentialProof{sp: newSyncProof(cfg, timeout, writeWorkspace), timeout: timeout,
-		apiHost: config.GitHubFakeBearerAPIHost(cfg.Platform.Domain), agent: writeAgent, workspace: writeWorkspace, repo: writeRepo},
+	wp := &writeProof{callerCredentialProof: &callerCredentialProof{workspaceSessionRig: newWorkspaceSessionRig(cfg, timeout, writeWorkspace, writeRepo, false), agent: writeAgent},
 		gitHost: config.GitHubFakeBearerHost(cfg.Platform.Domain), branch: writeBranchPrefix + "agentlab-write-" + randomHex(4)}
 	err := wp.run(p)
 	wp.cleanup()
@@ -262,13 +261,13 @@ func (wp *writeProof) probe(session *apiv1alpha1.Session) error {
 	if err != nil {
 		return err
 	}
-	pull, err := judgeWrite(v, window, pulls, wp.gitHost, wp.admin.login, wp.branch)
+	pull, err := judgeWrite(v, window, pulls, wp.gitHost, wp.person.login, wp.branch)
 	if err != nil {
 		return err
 	}
 	wp.pull = pull
 	note("%s: %s pushed to %s and pull request #%d opened by %s; %s and %s refused %s with 403; no token in the sandbox's environment or files",
-		session.GetId(), wp.branch, writeRepo, pull.Number, pull.Author, writeReadOnlyRepo, writeUninstalledRepo, wp.admin.login)
+		session.GetId(), wp.branch, writeRepo, pull.Number, pull.Author, writeReadOnlyRepo, writeUninstalledRepo, wp.person.login)
 	return nil
 }
 

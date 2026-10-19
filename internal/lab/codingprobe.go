@@ -105,9 +105,9 @@ fi`
 }
 
 // commonSandboxCommand is every runtime's readings: tokens in the
-// environment and /data, the model key, the MCP credentials the runtime is
-// handed (a count of those that are not kagent's placeholder), the DNS
-// canary and the egress gate.
+// environment, /data and /workspace, the model key, the MCP credentials the
+// runtime is handed (a count of those that are not kagent's placeholder),
+// the DNS canary and the egress gate.
 func commonSandboxCommand(rt codingRuntime) string {
 	keys := ""
 	for _, k := range rt.modelKeys {
@@ -119,7 +119,7 @@ func commonSandboxCommand(rt codingRuntime) string {
 echo "$P mcp-credentials=$(env | grep -c '^` + rt.mcpCredentialPrefix + `') $(env | grep '^` + rt.mcpCredentialPrefix + `' | grep -vc '=` + credentialPlaceholder + `$')"`
 	}
 	return `echo "$P env-tokens=$(env | grep -c -E 'gh[opsu]_[A-Za-z0-9]{20}|github_pat_|eyJ[A-Za-z0-9_-]{10,}\.eyJ')"
-echo "$P data-tokens=$(timeout 60 grep -rlsE 'gh[opsu]_[A-Za-z0-9]{30}|github_pat_[A-Za-z0-9_]{20}|eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.' /data 2>/dev/null | wc -l)"
+echo "$P data-tokens=$(timeout 60 grep -rlsE 'gh[opsu]_[A-Za-z0-9]{30}|github_pat_[A-Za-z0-9_]{20}|eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.' /data /workspace 2>/dev/null | wc -l)"
 k=unset; for v in` + keys + `; do case "$v" in "") ;; kagent-*) [ "$k" = other ] || k=placeholder;; *) k=other;; esac; done; echo "$P model-key=$k"` + mcp + `
 r=$(timeout 10 nslookup ` + codingTestDNSCanary + ` 2>&1 | awk '/^Address/ && !/:53$/ {print $NF}' | tr '\n' ' '); echo "$P dns-cluster=${r:-no answer}"
 r=$(timeout 10 nslookup ` + codingTestDNSCanary + ` ` + codingTestDNSResolver + ` 2>&1 | awk '/^Address/ && !/:53$/ {print $NF}' | tr '\n' ' '); echo "$P dns-direct=${r:-no answer}"
@@ -201,7 +201,8 @@ func (p codingProbe) writeToolRefused([]string) (string, error) {
 	return fmt.Sprintf("%s: %s", codingTestWriteTool, p["write-tool"]), nil
 }
 
-// credentials: no forge token or bearer in the environment or /data, the
+// credentials: no forge token or bearer in the environment, /data or
+// /workspace, the
 // model key a placeholder the egress gateway replaces, and every MCP
 // credential the runtime is handed (where it says which) the placeholder too.
 func (p codingProbe) credentials([]string) (string, error) {
@@ -211,12 +212,12 @@ func (p codingProbe) credentials([]string) (string, error) {
 		}
 	}
 	if p["env-tokens"] != "0" || p["data-tokens"] != "0" {
-		return "", fmt.Errorf("token-shaped values in the sandbox: %s in the environment, %s files under /data", p["env-tokens"], p["data-tokens"])
+		return "", fmt.Errorf("token-shaped values in the sandbox: %s in the environment, %s files under /data and /workspace", p["env-tokens"], p["data-tokens"])
 	}
 	if k := p["model-key"]; k != "placeholder" && k != "unset" {
 		return "", fmt.Errorf("the model key in the environment is %q, not kagent's placeholder", k)
 	}
-	verdict := fmt.Sprintf("no forge token or bearer in the environment or /data; model key %s", p["model-key"])
+	verdict := fmt.Sprintf("no forge token or bearer in the environment, /data or /workspace; model key %s", p["model-key"])
 	if v, ok := p["mcp-credentials"]; ok {
 		total, other, _ := strings.Cut(v, " ")
 		if other != "0" {
