@@ -1410,6 +1410,9 @@ workspace-manager:
           expectedIssuer: "{{ .ExpectedIssuer }}"
           authorizationEndpoint: {{ .AuthorizationEndpoint }}
           tokenEndpoint: {{ .TokenEndpoint }}
+          {{- with .RevocationEndpoint }}
+          revocationEndpoint: {{ . }}
+          {{- end }}
           scopes: "{{ .Scopes }}"
           clientCredentialsSecretRef: {name: {{ .Secret }}}
           grantScope: subject
