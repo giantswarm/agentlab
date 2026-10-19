@@ -825,8 +825,9 @@ func TestPlatformValuesLegacyChartShape(t *testing.T) {
 	// oidc: before the user and every group (kind-config.yaml.tmpl), or every
 	// RoleBinding of the lab grants nothing at the controller.
 	currentAuthz, _ := currentValues["kagent"].(map[string]any)["controller"].(map[string]any)["authorization"].(map[string]any)
-	if currentAuthz["usernamePrefix"] != apiserverUserPrefix || currentAuthz["groupsPrefix"] != apiserverUserPrefix {
-		t.Errorf("4.x shape: kagent.controller.authorization = %v, want usernamePrefix and groupsPrefix oidc:", currentAuthz)
+	if currentAuthz["mode"] != authorizationModeKubernetes || currentAuthz["groupsClaim"] != tenantsTestGroupsClaim ||
+		currentAuthz["usernamePrefix"] != apiserverUserPrefix || currentAuthz["groupsPrefix"] != apiserverUserPrefix {
+		t.Errorf("4.x shape: kagent.controller.authorization = %v, want mode kubernetes, groupsClaim groups, usernamePrefix and groupsPrefix oidc:", currentAuthz)
 	}
 	if got := controller["auth"].(map[string]any)["mode"]; got != "unsecure" {
 		t.Errorf("3.x shape: kagent.controller.auth.mode = %v, want unsecure (no JWT policy in front)", got)

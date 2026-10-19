@@ -1106,9 +1106,11 @@ func configureCmd() *cobra.Command {
 			if cmd.Flags().Changed("tenants") {
 				cfg.Platform.Tenants.Enabled = tenants
 			}
-			if cfg.Platform.Tenants.Enabled {
+			if cmd.Flags().Changed("tenants") && tenants {
 				// tenants-test's tenant users, one per organization, in a
-				// group the lab binds nothing to (docs/identity.md).
+				// group the lab binds nothing to (docs/identity.md); added
+				// when --tenants is given, so a user removed by hand stays
+				// removed.
 				if added := cfg.EnsureTenantUsers(); len(added) > 0 {
 					fmt.Printf("  users      added %s for tenants-test (`agentlab reload` renders them into Dex)\n", strings.Join(added, ", "))
 				}
@@ -1805,7 +1807,7 @@ func tenantsTestCmd() *cobra.Command {
 			return lab.TenantsTest(cfg, args, opts)
 		},
 	}
-	cmd.Flags().StringVar(&opts.GatewayImage, "gateway-image", "", "the klaus-gateway image the Slack steps run on the host network (default: the release the lab's meta chart runs as its klaus-gateway component); the steps need one with giantswarm/klaus-gateway#486, 4.10.0 or later")
+	cmd.Flags().StringVar(&opts.GatewayImage, "gateway-image", "", "the klaus-gateway image the Slack steps run on the host network (on macOS the kind network, HACKS.md U34; default: the release the lab's meta chart runs as its klaus-gateway component); the steps need one with giantswarm/klaus-gateway#486, 4.10.0 or later")
 	cmd.Flags().StringVar(&opts.GatewayBinary, "gateway-binary", "", "a local klaus-gateway build to run instead of the image")
 	return cmd
 }

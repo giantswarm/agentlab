@@ -176,8 +176,8 @@ func (s *tenantsSlack) run() ([]string, error) {
 	gw.trustLabCA = true
 	gw.defaultAgent = tenantsTestPlatformAgent
 	defer func() { _ = gw.stop() }()
-	step("S. klaus-gateway %s on the host against the edge %s, Slack on the fake at %s; %s and %s linked as Slack users %s and %s",
-		gw.describe(), edge, fake.baseURL(), s.users[0].Email, s.users[1].Email, slackUsers[0], slackUsers[1])
+	step("S. klaus-gateway %s against the edge at %s, Slack on the fake at %s; %s and %s linked as Slack users %s and %s",
+		gw.describe(), gw.target, gw.slackAPI, s.users[0].Email, s.users[1].Email, slackUsers[0], slackUsers[1])
 	if err := gw.start(); err != nil {
 		return nil, err
 	}

@@ -274,6 +274,7 @@ func TestTenantsTestPeople(t *testing.T) {
 		"twice":            {dev, dev},
 		"not a user":       {dev, "nobody@lab.local"},
 		"a single email":   {dev},
+		"a tenant user":    {"alice@lab.local", dev},
 	} {
 		if _, err := tenantsTestPeople(cfg, emails); err == nil {
 			t.Errorf("%s: %v accepted", name, emails)
@@ -333,7 +334,7 @@ func TestControllerAuthorizationProblem(t *testing.T) {
 	for name, tc := range map[string]struct {
 		key, value, want string
 	}{
-		"no authorizer (kagent before 1.14)": {authorizationModeKey, "", `authorization mode "noop"`},
+		"no authorizer (kagent before 1.19)": {authorizationModeKey, "", `authorization mode "noop"`},
 		"noop":                               {authorizationModeKey, "noop", "kagent.controller.authorization.mode kubernetes"},
 		"no groups claim":                    {authorizationGroupsClaimKey, "", "reads the groups from claim"},
 		"the fleet's empty group prefix":     {authorizationGroupsPrefixKey, "", "groupsPrefix"},

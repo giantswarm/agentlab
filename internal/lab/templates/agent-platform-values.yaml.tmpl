@@ -706,14 +706,16 @@ kagent:
       # bypasses the edge sends no verified bearer and is nobody.
       mode: trusted-proxy
     # The controller's Kubernetes RBAC authorizer (kubernetes mode, the
-    # chart's default from agent-platform 4.151 on kagent 1.19) reviews each
-    # caller as the API server's OIDC authenticator maps the same token. The
-    # lab's API server puts oidc: before the username and every group
-    # (kind-config.yaml.tmpl), where the chart's default is none, so the
-    # reviews carry the lab's prefixes; a chart without the authorizer
-    # ignores the keys. `agentlab tenants-test` proves it (docs/agents.md
+    # chart's default from agent-platform 4.151 on kagent 1.19, pinned here so
+    # a chart default that moves cannot leave the lab on noop) reviews each
+    # caller as the API server's OIDC authenticator maps the same token: the
+    # groups claim, and the oidc: the lab's API server puts before the
+    # username and every group (kind-config.yaml.tmpl), where the chart's
+    # default is none; a chart without the authorizer ignores the keys. `agentlab tenants-test` proves it (docs/agents.md
     # "Organizations as tenants").
     authorization:
+      mode: kubernetes
+      groupsClaim: groups
       usernamePrefix: "oidc:"
       groupsPrefix: "oidc:"
     volumes:

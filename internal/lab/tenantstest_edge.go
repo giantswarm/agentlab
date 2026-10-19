@@ -52,6 +52,9 @@ const (
 	// tenantsTestGroupsClaim is the claim the lab's Dex tokens carry the
 	// groups in, as the API server reads it (--oidc-groups-claim).
 	tenantsTestGroupsClaim = "groups"
+	// edgeUpdateConflictWait bounds the editor's update retries while the
+	// controller's cached read of a new Agent is stale (HACKS.md U36).
+	edgeUpdateConflictWait = 30 * time.Second
 	// tenantsTestEdgeChange is the change label's value.
 	tenantsTestEdgeChange = "changed"
 	// agentKind is the kind of a kagent Agent.
@@ -125,7 +128,7 @@ func tenantsTestUsers(cfg *config.Config) ([2]*config.User, error) {
 				group, config.File, tenantUserRole, config.TenantUsers[0].Email, config.TenantUsers[1].Email)
 		}
 		if u.HasGroup(platformAdminsGroup) || u.HasGroup(viewerGroup) {
-			return users, fmt.Errorf("%s (group %s) is also in platform-admins or viewers, which read every namespace: the proof needs a person whose only access is the tenant group", u.Email, group)
+			return users, fmt.Errorf("%s (group %s) is also in platform-admins or viewers, which list agents in every namespace (cluster-admin, view): the proof needs a person whose only access is the tenant group", u.Email, group)
 		}
 		users[i] = u
 	}
@@ -367,12 +370,9 @@ type tenantsEdge struct {
 	admin      *kagentAPI
 }
 
-// edgeVerdicts are the PASS lines of the edge half.
-type edgeVerdicts []string
-
-// run is the edge half, steps E1 to E6.
-func (e *tenantsEdge) run() (edgeVerdicts, error) {
-	var out edgeVerdicts
+// run is the edge half, steps E1 to E6, and returns its PASS lines.
+func (e *tenantsEdge) run() ([]string, error) {
+	var out []string
 	a, b := e.namespaces[0], e.namespaces[1]
 	alice, bob := e.users[0], e.users[1]
 	aliceAPI := e.userAPIs[0]
@@ -451,11 +451,24 @@ func (e *tenantsEdge) run() (edgeVerdicts, error) {
 	aliceAPI.removeSession(session.GetId())
 	out = append(out, fmt.Sprintf("PASS: %s's CreateSession and first A2A message on %s are PermissionDenied: no Session of it (%d before and after), no credential read for its atespace; their CreateSession on %s succeeds", alice.Email, agentTenant(agentB), len(before), agentTenant(agentA)))
 
-	step("E4. %s (a user) writes nothing: CreateAgent in their own organization %s is PermissionDenied", alice.Email, a)
-	if err := wantDenied(fmt.Sprintf("%s's CreateAgent %s/%s", alice.Email, a, tenantsTestEdgeAgent), aliceAPI.createAgent(ctx, edgeAgent(a, tenantsTestAgent, nil))); err != nil {
+	step("E4. %s (a user) writes nothing: CreateAgent, UpdateAgent and DeleteAgent in their own organization %s are PermissionDenied", alice.Email, a)
+	own, err := getAgentObject(a, tenantsTestAgent)
+	if err != nil {
+		return nil, err
+	}
+	ownChanged := own.DeepCopy()
+	ownChanged.SetLabels(map[string]string{tenantsTestEdgeLabel: tenantsTestEdgeChange})
+	if err := deniedWrites(alice.Email, []agentWrite{
+		{"CreateAgent " + a + "/" + tenantsTestEdgeAgent, func() error { return aliceAPI.createAgent(ctx, edgeAgent(a, tenantsTestAgent, nil)) }},
+		{"UpdateAgent " + agentTenant(agentA), func() error { return aliceAPI.updateAgent(ctx, ownChanged.Object) }},
+		{"DeleteAgent " + agentTenant(agentA), func() error { return aliceAPI.deleteAgent(ctx, agentA) }},
+	}); err != nil {
 		return nil, fmt.Errorf("E4: %w", err)
 	}
-	out = append(out, fmt.Sprintf("PASS: %s, a user of %s, cannot create an Agent there (PermissionDenied)", alice.Email, a))
+	if err := unchangedAgent(agentA); err != nil {
+		return nil, fmt.Errorf("E4: %w", err)
+	}
+	out = append(out, fmt.Sprintf("PASS: %s, a user of %s, cannot create, change or delete an Agent there (PermissionDenied) and its agent is unchanged", alice.Email, a))
 
 	editor, editorAPI := e.editors[0], e.editorAPIs[0]
 	step("E5. %s (editor of %s) creates, changes and deletes %s there through the edge; in %s the same writes are PermissionDenied", editor.Email, a, tenantsTestEdgeAgent, b)
@@ -464,9 +477,10 @@ func (e *tenantsEdge) run() (edgeVerdicts, error) {
 	}
 	// The controller writes the update over its cached read of the Agent,
 	// which a create a moment ago leaves stale: the API server's conflict
-	// comes back as Internal (kagent's kubecrud Update), so a few tries.
+	// comes back as Internal (kagent's kubecrud Update), so a few tries
+	// (HACKS.md U36).
 	var updateErr error
-	waitFor(int(tenantRBACSettle/pollInterval), pollInterval, func() bool {
+	waitFor(int(edgeUpdateConflictWait/pollInterval), pollInterval, func() bool {
 		updateErr = editorAPI.updateAgent(ctx, edgeAgent(a, tenantsTestAgent, map[string]string{tenantsTestEdgeLabel: tenantsTestEdgeChange}))
 		return updateErr == nil || status.Code(updateErr) != codes.Internal
 	})
@@ -489,24 +503,15 @@ func (e *tenantsEdge) run() (edgeVerdicts, error) {
 	}
 	otherChanged := other.DeepCopy()
 	otherChanged.SetLabels(map[string]string{tenantsTestEdgeLabel: tenantsTestEdgeChange})
-	for _, w := range []struct {
-		what string
-		call func() error
-	}{
+	if err := deniedWrites(editor.Email, []agentWrite{
 		{"CreateAgent " + b + "/" + tenantsTestEdgeAgent, func() error { return editorAPI.createAgent(ctx, edgeAgent(b, tenantsTestAgent, nil)) }},
 		{"UpdateAgent " + agentTenant(agentB), func() error { return editorAPI.updateAgent(ctx, otherChanged.Object) }},
 		{"DeleteAgent " + agentTenant(agentB), func() error { return editorAPI.deleteAgent(ctx, agentB) }},
-	} {
-		if err := wantDenied(editor.Email+"'s "+w.what, w.call()); err != nil {
-			return nil, fmt.Errorf("E5: %w", err)
-		}
+	}); err != nil {
+		return nil, fmt.Errorf("E5: %w", err)
 	}
-	still, err := getAgentObject(b, tenantsTestAgent)
-	if err != nil {
-		return nil, fmt.Errorf("E5: %s after the refused delete: %w", agentTenant(agentB), err)
-	}
-	if _, ok := still.GetLabels()[tenantsTestEdgeLabel]; ok {
-		return nil, fmt.Errorf("E5: %s carries %s although the update was refused", agentTenant(agentB), tenantsTestEdgeLabel)
+	if err := unchangedAgent(agentB); err != nil {
+		return nil, fmt.Errorf("E5: %w", err)
 	}
 	out = append(out, fmt.Sprintf("PASS: %s, editor of %s, creates, changes and deletes an Agent there through the edge; CreateAgent, UpdateAgent and DeleteAgent in %s are PermissionDenied and its agent is unchanged", editor.Email, a, b))
 
@@ -522,6 +527,35 @@ func (e *tenantsEdge) run() (edgeVerdicts, error) {
 	}
 	out = append(out, fmt.Sprintf("PASS: ListSessions all_creators is PermissionDenied for %s and %s and answered for the cluster-admin", alice.Email, bob.Email))
 	return out, nil
+}
+
+// agentWrite is one write a person tries through the edge.
+type agentWrite struct {
+	what string
+	call func() error
+}
+
+// deniedWrites checks the controller refuses each of the person's writes.
+func deniedWrites(email string, writes []agentWrite) error {
+	for _, w := range writes {
+		if err := wantDenied(email+"'s "+w.what, w.call()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// unchangedAgent checks a refused update and delete left the Agent as it
+// was: there, without the change label.
+func unchangedAgent(ref *apiv1alpha1.ResourceReference) error {
+	obj, err := getAgentObject(ref.GetNamespace(), ref.GetName())
+	if err != nil {
+		return fmt.Errorf("%s after the refused delete: %w", agentTenant(ref), err)
+	}
+	if _, ok := obj.GetLabels()[tenantsTestEdgeLabel]; ok {
+		return fmt.Errorf("%s carries %s although the update was refused", agentTenant(ref), tenantsTestEdgeLabel)
+	}
+	return nil
 }
 
 // getAgentObject reads an Agent with the lab's own kubeconfig.

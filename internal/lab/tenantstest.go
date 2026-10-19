@@ -370,6 +370,9 @@ func tenantsTestPeople(cfg *config.Config, emails []string) ([2]*config.User, er
 		if slices.Contains(user.Groups, "platform-admins") {
 			return people, fmt.Errorf("%s is in platform-admins (cluster-admin): the other organization's refusal would prove nothing — name two users outside it", email)
 		}
+		if user.HasGroup(config.GroupTenantA) || user.HasGroup(config.GroupTenantB) {
+			return people, fmt.Errorf("%s is a tenant user (group %s or %s): the edge steps bind that group as a user, not an editor — name two users outside the tenant groups", email, config.GroupTenantA, config.GroupTenantB)
+		}
 		people[i] = user
 	}
 	return people, nil
@@ -700,7 +703,7 @@ type TenantsTestOptions struct {
 // tenantsTestAuthorization runs the edge and Slack halves as the tenant
 // users and the editors, with fresh tokens: the turns before them took
 // minutes.
-func tenantsTestAuthorization(cfg *config.Config, namespaces [2]string, users, editors [2]*config.User, adminToken string, opts TenantsTestOptions) (edgeVerdicts, []string, error) {
+func tenantsTestAuthorization(cfg *config.Config, namespaces [2]string, users, editors [2]*config.User, adminToken string, opts TenantsTestOptions) ([]string, []string, error) {
 	edge := &tenantsEdge{namespaces: namespaces, users: users, editors: editors}
 	login := func(u *config.User) (*kagentAPI, error) {
 		token, err := passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret, u.Email, u.Password, musterLoginScopes)

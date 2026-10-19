@@ -272,8 +272,8 @@ on a port-forward to its pod) as each person with their Dex token (audiences
      (every creator's, listed by the admin) and the credential provider reads
      nothing for its atespace; on their own organization's agent the
      `CreateSession` succeeds;
-   - E4. the user's `CreateAgent` in their own organization is
-     `PermissionDenied`;
+   - E4. the user's `CreateAgent`, `UpdateAgent` and `DeleteAgent` in their
+     own organization are `PermissionDenied` and its agent is unchanged;
    - E5. the first editor creates, changes (a label) and deletes an Agent in
      their organization through the edge (on a Harness that does not exist,
      so it never boots); `CreateAgent`, `UpdateAgent` and `DeleteAgent` in the
@@ -289,7 +289,9 @@ on a port-forward to its pod) as each person with their Dex token (audiences
      first person's roster is the same when asked again; S2. the first person
      submits the agent picker with the other organization's agent: refused
      with a note naming that tenant, and nothing reaches it (no
-     `turn_dispatch`, no Session, no credential read); S3. the second person
+     `turn_dispatch`, no Session, no credential read) — the picker is how a
+     person starts another agent in Slack: a mention runs the thread's agent
+     or the default, it names none; S3. the second person
      starts a conversation with their agent from the picker and it answers;
      S4. the first person mentions the bot in that thread (allowed by its
      person when the gateway asks): refused with the same note, the Session's

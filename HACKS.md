@@ -792,6 +792,17 @@ the refusal, and the verdict says so. Unblocks when the gateway's replay note
 uses its not-permitted note (giantswarm/klaus-gateway, `postReplayFailureNote`
 in `pkg/channels/slack/slack.go`): the resend then goes.
 
+### U36. `tenantstest_edge.go`: the editor's UpdateAgent is tried again while it answers Internal — BLOCKED UPSTREAM
+Right after the editor's `CreateAgent`, kagent 1.19.0's `UpdateAgent` reads
+the Agent from the controller's cache, which has not seen the create's own
+status write yet, and the API server's conflict comes back as `Internal`
+(`kubecrud.Service.Update` maps every error but Invalid to Internal). **Fix:**
+step E5 tries the update again while it answers `Internal`, for up to 30 s
+(`edgeUpdateConflictWait`); any other answer, or `Internal` after that, fails
+the step. Unblocks when kagent's Update maps a conflict to `Aborted` or
+retries it on a fresh read (giantswarm/kagent-upstream,
+`go/core/internal/service/kubecrud`): the retry then goes.
+
 ## Accepted lab trade-offs (not hacks to fix)
 
 - **Checksum stamping via the `REPLACED_AT_APPLY` placeholder** — the standard
