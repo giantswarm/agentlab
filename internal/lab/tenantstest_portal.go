@@ -125,7 +125,8 @@ func (s refSet) in(namespaces []string) refSet {
 }
 
 // createdBy are the rows whose recorded creator is the email, compared
-// without case: what the portal's "Created by: Me" keeps for that person.
+// without case: the agents the person created (the created-by contract; the
+// portal's "Created by: Me" filter is the browser suite's).
 func (r *tenantRoster) createdBy(email string) refSet {
 	set := refSet{}
 	for ref, row := range r.rows {
