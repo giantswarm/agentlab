@@ -300,6 +300,31 @@ on a port-forward to its pod) as each person with their Dex token (audiences
      note; the person sends again and gets the refusal, HACKS.md U36). On
      macOS the image runs on the `kind` network with its ports published on
      loopback (Docker Desktop's host networking is off, HACKS.md U35);
+   - M. muster's MCP servers per tenant
+     ([MCP servers per tenant](identity.md#mcp-servers-per-tenant)), on a
+     sign-in fixture `agentlab-tenants-mcp` in each organization (muster's own
+     protected `/mcp`, pinned to the lab Dex with the issuer of
+     `lab-oauth-fixture`, its client Secret readable by muster there):
+     M1. through muster (`core_mcpserver_list`, `list_tools`), each tenant
+     user lists the servers of muster's namespace and their organization's
+     fixture, and is offered the sign-in to that one only; the second user,
+     their group's RoleBinding gone a moment, lists muster's namespace's
+     only; M2. the second user signs in to their fixture; the first user's
+     call of one of its tools, `core_service_start` and `core_auth_login` for
+     it are answered word for word as for a server that does not exist;
+     M3. an `MCPServer` of the first organization with `auth.forwardToken`,
+     `auth.requiredAudiences`, `auth.tokenExchange`, `family` or
+     `auth.type: sigv4` reads `Failed` with muster's refusal naming the field;
+     M4. the first user signs in to their fixture: muster sends
+     `redirect_uri` `<muster>/oauth/ns/<namespace>/callback` and the sign-in
+     ends there; `lab-oauth-fixture` (muster's namespace, the same issuer)
+     still awaits its own sign-in on `/oauth/proxy/callback`; the admin signs
+     in to the first organization's fixture and the second's still awaits its
+     own, on its namespace's callback; M5. the first editor creates
+     `agentlab-tenants-muster` in the first organization (toolset
+     `preset:full`), and a turn as the first user reports tools of their
+     fixture and of agent-manager, none of the other organization's (the
+     agent is deleted again);
 5. as the admin (cluster-admin): a WorkerPool patch and delete and a pod
    labelled `ate.dev/worker-pool` (server-side dry runs), and an exec into a
    worker, are refused by the chart's `agent-platform-tenant-*` admission
@@ -319,7 +344,9 @@ policy that does not list the two namespaces, a lab without the tenant users,
 and a kagent controller without the RBAC authorizer (its ConfigMap's
 `KAGENT_AUTHORIZATION_MODE` not `kubernetes`, the groups not read from
 `groups`, or the prefixes not the lab API server's `oidc:` — a chart before
-agent-platform 4.151, or values without the lab's prefixes). The namespaces, their agents
+agent-platform 4.151, or values without the lab's prefixes), and a muster
+that serves no organization's MCP servers (an image before 5.47.0-rc.8, or
+`mcpServersInAllNamespaces` off in its `config.yaml`). The namespaces, their agents
 and bindings, and the platform tenant's agent go at the end of the run, also after a failure, and at the
 start of the next one.
 
