@@ -48,24 +48,53 @@ func TestCodingProbePasses(t *testing.T) {
 }
 
 // A reply whose newlines arrive escaped, as one line of literal "\n"
-// separators, reads the same as one with real newlines.
+// separators at any escape depth, or joined on one line with or without the
+// markdown around each reading, reads the same as one with real newlines.
 func TestCodingProbeLineSeparators(t *testing.T) {
 	want := parseCodingProbe(codingReply)
 	for name, reply := range map[string]string{
-		"real newlines":    codingReply,
-		"literal newlines": strings.ReplaceAll(codingReply, "\n", `\n`),
+		"real newlines":      codingReply,
+		"literal newlines":   strings.ReplaceAll(codingReply, "\n", `\n`),
+		"double-escaped":     strings.ReplaceAll(codingReply, "\n", `\\n`),
+		"triple-escaped":     strings.ReplaceAll(codingReply, "\n", `\\\\n`),
+		"one line":           strings.ReplaceAll(codingReply, "\n"+probeMarker, " "+probeMarker),
+		"one line, spans":    strings.ReplaceAll(codingReply, "\n"+probeMarker, "` `"+probeMarker),
+		"one line, bold":     strings.ReplaceAll(codingReply, "\n"+probeMarker, "** **"+probeMarker),
+		"one line, quotes":   strings.ReplaceAll(codingReply, "\n"+probeMarker, `" "`+probeMarker),
+		"uid words appended": strings.Replace(codingReply, "uid=65532", "uid=65532 (the unprivileged user)", 1),
 	} {
 		got := parseCodingProbe(reply)
-		if got["uid"] != "65532" || len(got) != len(want) {
-			t.Errorf("%s: uid %q, %d readings, want 65532 and %d", name, got["uid"], len(got), len(want))
+		if len(got) != len(want) {
+			t.Errorf("%s: %d readings, want %d", name, len(got), len(want))
 		}
 		for key, value := range want {
+			if key == "uid" {
+				continue
+			}
 			if got[key] != value {
 				t.Errorf("%s: %s = %q, want %q", name, key, got[key], value)
 			}
 		}
 		if _, err := got.uidSplit(nil); err != nil {
 			t.Errorf("%s: uid split: %v", name, err)
+		}
+		wrong := parseCodingProbe(strings.Replace(reply, "uid=65532", "uid=0", 1))
+		if uid, _, _ := strings.Cut(wrong["uid"], " "); uid != "0" {
+			t.Errorf("%s: wrong uid read as %q, want 0", name, wrong["uid"])
+		}
+		if _, err := wrong.uidSplit(nil); err == nil {
+			t.Errorf("%s: uid split passed on uid 0", name)
+		}
+	}
+}
+
+// Quotes escaped at any depth read as quotes, and a value loses those around
+// it.
+func TestCodingProbeEscapedQuotes(t *testing.T) {
+	for name, quote := range map[string]string{"once": `\"`, "twice": `\\\"`, "three times": `\\\\\\\"`} {
+		got := parseCodingProbe(probeMarker + " forwarder=" + quote + "agentlab-coding" + quote + `\n` + probeMarker + " uid=65532")
+		if got["forwarder"] != "agentlab-coding" || got["uid"] != "65532" {
+			t.Errorf("%s: forwarder %q, uid %q", name, got["forwarder"], got["uid"])
 		}
 	}
 }
