@@ -253,6 +253,53 @@ on a port-forward to its pod) as each person with their Dex token (audiences
    turn as the person (through the edge) answers, the credential provider
    reading for the namespace's atespace from that namespace only (its log);
 4. the same in the second organization;
+
+   then, with both organizations' agents up and the platform tenant's
+   (`agentlab-tenants-platform`, created by the admin in `kagent` at the
+   start), the authorizer through the edge (steps E) and in Slack (steps S),
+   as the tenant users of [The tenant model](identity.md#the-tenant-model)
+   — the first user in group `tenant-a` and in `tenant-b`, `alice@lab.local`
+   and `bob@lab.local` after `agentlab configure --tenants`:
+
+   - E1. the first tenant user, whose group is bound nowhere yet, lists
+     (`ListAgents` with no namespace) the platform tenant's agents only;
+   - E2. each group bound to `agent-platform:user` in its organization
+     (RoleBinding `agentlab-tenants-test-users`, subject `oidc:<group>`):
+     each person lists exactly their organization's agents and the platform
+     tenant's, read back against the cluster;
+   - E3. the first user's `CreateSession` and first A2A message on the second
+     organization's agent are `PermissionDenied`, no Session of it is made
+     (every creator's, listed by the admin) and the credential provider reads
+     nothing for its atespace; on their own organization's agent the
+     `CreateSession` succeeds;
+   - E4. the user's `CreateAgent`, `UpdateAgent` and `DeleteAgent` in their
+     own organization are `PermissionDenied` and its agent is unchanged;
+   - E5. the first editor creates, changes (a label) and deletes an Agent in
+     their organization through the edge (on a Harness that does not exist,
+     so it never boots); `CreateAgent`, `UpdateAgent` and `DeleteAgent` in the
+     other organization are `PermissionDenied` and its agent is unchanged;
+   - E6. `ListSessions` with `all_creators` is `PermissionDenied` for both
+     users and answered for the admin;
+   - S. klaus-gateway on the host (klaus-gateway-test's shape: `--gateway-image`
+     or `--gateway-binary`, default the component's release; it needs
+     giantswarm/klaus-gateway#486, 4.10.0 or later), both users linked:
+     S1. `@bot agents` as both at the same time: each roster lists their
+     organization's agent labelled `organization <name>` and the platform
+     tenant's labelled `platform`, nothing of the other organization, and the
+     first person's roster is the same when asked again; S2. the first person
+     submits the agent picker with the other organization's agent: refused
+     with a note naming that tenant, and nothing reaches it (no
+     `turn_dispatch`, no Session, no credential read) — the picker is how a
+     person starts another agent in Slack: a mention runs the thread's agent
+     or the default, it names none; S3. the second person
+     starts a conversation with their agent from the picker and it answers;
+     S4. the first person mentions the bot in that thread (allowed by its
+     person when the gateway asks): refused with the same note, the Session's
+     tasks unchanged (klaus-gateway 4.10.0-rc.1 answers the held message's
+     replay after the Allow with its generic "could not be picked up again"
+     note; the person sends again and gets the refusal, HACKS.md U36). On
+     macOS the image runs on the `kind` network with its ports published on
+     loopback (Docker Desktop's host networking is off, HACKS.md U35);
 5. as the admin (cluster-admin): a WorkerPool patch and delete and a pod
    labelled `ate.dev/worker-pool` (server-side dry runs), and an exec into a
    worker, are refused by the chart's `agent-platform-tenant-*` admission
@@ -268,8 +315,12 @@ on a port-forward to its pod) as each person with their Dex token (audiences
 
 A lab without the switch fails before any write, naming
 `agentlab configure --tenants` and `agentlab platform`; so does a credential
-policy that does not list the two namespaces. The namespaces, their agents
-and bindings go at the end of the run, also after a failure, and at the
+policy that does not list the two namespaces, a lab without the tenant users,
+and a kagent controller without the RBAC authorizer (its ConfigMap's
+`KAGENT_AUTHORIZATION_MODE` not `kubernetes`, the groups not read from
+`groups`, or the prefixes not the lab API server's `oidc:` — a chart before
+agent-platform 4.151, or values without the lab's prefixes). The namespaces, their agents
+and bindings, and the platform tenant's agent go at the end of the run, also after a failure, and at the
 start of the next one.
 
 ## The UI and the controller's route

@@ -33,15 +33,43 @@ import (
 // directory by `agentlab configure` and read by every other command.
 const File = "agentlab.yaml"
 
-// The three lab groups are a fixed vocabulary: RBAC binds exactly these to
-// cluster-admin / edit-in-demo / view (see the rbac template).
+// The lab groups are a fixed vocabulary: RBAC binds the first three to
+// cluster-admin / edit-in-demo / view (see the rbac template). The two
+// tenant groups the lab binds nothing to: `agentlab tenants-test` binds each
+// to agent-platform:user in one organization namespace, so a token's groups
+// claim is what gives its person that tenant.
 const (
 	groupPlatformAdmins = "platform-admins"
 	groupDevelopers     = "developers"
 	groupViewers        = "viewers"
+	GroupTenantA        = "tenant-a"
+	GroupTenantB        = "tenant-b"
 )
 
-var Groups = []string{groupPlatformAdmins, groupDevelopers, groupViewers}
+var Groups = []string{groupPlatformAdmins, groupDevelopers, groupViewers, GroupTenantA, GroupTenantB}
+
+// TenantUsers are the people `agentlab configure --tenants` adds when no user
+// carries their tenant group: one person per organization of tenants-test,
+// in that group alone.
+var TenantUsers = []User{
+	{Email: "alice@lab.local", Username: "alice", Name: "Lab Tenant A", Password: defaultPassword, Groups: []string{GroupTenantA}},
+	{Email: "bob@lab.local", Username: "bob", Name: "Lab Tenant B", Password: defaultPassword, Groups: []string{GroupTenantB}},
+}
+
+// EnsureTenantUsers adds each of TenantUsers whose group no user carries
+// and whose email is free, and returns the emails it added.
+func (c *Config) EnsureTenantUsers() []string {
+	var added []string
+	for _, u := range TenantUsers {
+		if c.FindUserInGroup(u.Groups[0]) != nil || c.FindUser(u.Email) != nil {
+			continue
+		}
+		u.Groups = slices.Clone(u.Groups)
+		c.Users = append(c.Users, u)
+		added = append(added, u.Email)
+	}
+	return added
+}
 
 // defaultPassword is the throwaway password every default lab user starts
 // with; like everything else in the lab's identity, it guards nothing real.
