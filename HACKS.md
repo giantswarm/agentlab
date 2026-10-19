@@ -868,3 +868,16 @@ The same cycle through `agentlab`, on a cold cluster, defaults from
 Form coverage: `go test ./...` drives the real huh form with scripted
 keystrokes (accept defaults, edit fields, toggle components) and unit-tests
 the post-renderer against a synthetic Helm release.
+
+### U34. `exec.go`: the lab's containers run with SELinux separation off — ACCEPTED
+On an SELinux-enforcing host (Fedora) under a rootful engine (Podman through
+`sudo`), a container's process may not read or execute a bind-mounted file
+labelled `user_home_t`, and every lab container bind-mounts one: the fakes
+(the lab's GitHub, the skill host, the mockllm) run agentlab's own binary
+from the user's home, beekeeper and klaus-gateway mount a run directory and
+the lab CA. The fake exits at once and `up` stops at the lab's GitHub with no
+log. **Fix:** `dockerRun` passes `--security-opt label=disable` to every
+`docker run`. Relabelling (`:z`) would change the user's own files and is
+undone by the next `self-update`; the lab's containers are throwaway
+processes of the user's own binary and images, so the separation guards
+nothing the user does not already own.

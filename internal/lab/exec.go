@@ -51,9 +51,13 @@ func warn(format string, a ...any) {
 const dockerBin = "docker"
 
 // dockerRun is the start of a `docker run` of the named container on a
-// network; the caller's flags follow, then its image and command.
+// network; the caller's flags follow, then its image and command. SELinux
+// separation is off: the lab's containers bind-mount files of this host's
+// user (agentlab's own binary, the lab CA, a run directory), labelled
+// user_home_t, which a rootful engine on an enforcing host refuses to a
+// container's process; relabelling them would change the user's own files.
 func dockerRun(name, network string, flags ...string) []string {
-	return append([]string{"run", "--name", name, "--network", network}, flags...)
+	return append([]string{"run", "--name", name, "--network", network, "--security-opt", "label=disable"}, flags...)
 }
 
 // command builds the exec.Cmd behind the helpers below. The child inherits
