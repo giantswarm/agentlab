@@ -76,6 +76,25 @@ const (
 	railsMethodField    = "_method"
 )
 
+// gitlabRedirectRe is the link of GitLab's "Redirecting" page, which an
+// authorization the person already granted answers with a 200 instead of a
+// redirect: the browser follows it by script.
+var gitlabRedirectRe = regexp.MustCompile(`(?is)<a\b[^>]*\bhref\s*=\s*"([^"]*)"[^>]*>\s*Click here to redirect to`)
+
+// gitlabRedirect is the target of GitLab's "Redirecting" page when it is the
+// callback path, "" for any other page.
+func gitlabRedirect(page []byte, callback string) string {
+	m := gitlabRedirectRe.FindSubmatch(page)
+	if m == nil {
+		return ""
+	}
+	target := html.UnescapeString(string(m[1]))
+	if u, err := url.Parse(target); err != nil || u.Path != callback {
+		return ""
+	}
+	return target
+}
+
 var (
 	htmlFormRe  = regexp.MustCompile(`(?is)<form\b([^>]*)>(.*?)</form>`)
 	htmlInputRe = regexp.MustCompile(`(?is)<input\b([^>]*)>`)
@@ -166,8 +185,17 @@ func signInHops(hops []signInHop) string {
 }
 
 // musterSignInSucceeded is the heading of muster's proxy callback page on a
-// completed sign-in.
-const musterSignInSucceeded = "Authentication Successful"
+// completed sign-in: "Signed in" on its pagekit pages, "Authentication
+// Successful" on a muster before them.
+var musterSignInSucceeded = []string{"Signed in", "Authentication Successful"}
+
+// signInCompleted says whether muster's callback page reports a completed
+// sign-in.
+func signInCompleted(page []byte) bool {
+	return slices.ContainsFunc(musterSignInSucceeded, func(heading string) bool {
+		return strings.Contains(string(page), heading)
+	})
+}
 
 // errSignInStopped is a walk that ended before the callback completed; its
 // message names the hop and the status it stopped at.
@@ -238,7 +266,7 @@ func walkProviderSignIn(client *http.Client, link, fixtureLogin string, login *p
 			next = location
 		case resp.StatusCode != http.StatusOK:
 			return hops, stopped(hop, pageHeading(page))
-		case next.Path == callback && !strings.Contains(string(page), musterSignInSucceeded):
+		case next.Path == callback && !signInCompleted(page):
 			return hops, stopped(hop, "muster's callback did not complete the sign-in: "+pageHeading(page))
 		case next.Path == callback:
 			return hops, nil
@@ -250,6 +278,14 @@ func walkProviderSignIn(client *http.Client, link, fixtureLogin string, login *p
 				return hops, stopped(hop, "the form's action: "+err.Error())
 			}
 			next, form = location, glFields
+		case login != nil && gitlabRedirect(page, callback) != "":
+			// An authorization the person granted before: GitLab skips the
+			// consent and sends the browser on to the callback by script.
+			location, err := next.Parse(gitlabRedirect(page, callback))
+			if err != nil {
+				return hops, stopped(hop, "GitLab's redirect: "+err.Error())
+			}
+			next = location
 		default:
 			return hops, stopped(hop, "a page that is neither muster's callback nor a GitLab sign-in or consent form: "+pageHeading(page))
 		}

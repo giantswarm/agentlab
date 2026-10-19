@@ -41,7 +41,7 @@ func newSignInLab(t *testing.T) *signInLab {
 			return
 		}
 		l.completed = true
-		_, _ = w.Write([]byte("<html><body><h1>" + musterSignInSucceeded + "</h1></body></html>"))
+		_, _ = w.Write([]byte("<html><body><h1>" + musterSignInSucceeded[0] + "</h1></body></html>"))
 	})
 	l.server = httptest.NewTLSServer(mux)
 	t.Cleanup(l.server.Close)
@@ -147,6 +147,26 @@ func TestGitLabFormStep(t *testing.T) {
 	}
 }
 
+// GitLab answers an authorization the person granted before with its
+// "Redirecting" page; the walk follows its link only to the callback.
+func TestGitLabRedirect(t *testing.T) {
+	const callback = "/oauth/proxy/callback"
+	page := func(href string) []byte {
+		return []byte(`<h1>Redirecting</h1><div><a href="` + href + `">Click here to redirect to ` + href + `</a></div><script>window.location = "x";</script>`)
+	}
+	for href, want := range map[string]string{
+		"https://muster.example.com/oauth/proxy/callback?code=c&amp;state=s": "https://muster.example.com/oauth/proxy/callback?code=c&state=s",
+		"https://elsewhere.example.com/steal?code=c":                         "",
+	} {
+		if got := gitlabRedirect(page(href), callback); got != want {
+			t.Errorf("gitlabRedirect(%q) = %q, want %q", href, got, want)
+		}
+	}
+	if got := gitlabRedirect([]byte(`<a href="/oauth/proxy/callback">elsewhere</a>`), callback); got != "" {
+		t.Errorf("a page without GitLab's redirect link: %q", got)
+	}
+}
+
 func TestGrantHeld(t *testing.T) {
 	for text, want := range map[string]bool{
 		"Successfully connected to 'workspace-manager'!": true,
@@ -156,6 +176,19 @@ func TestGrantHeld(t *testing.T) {
 	} {
 		if got := grantHeld(text); got != want {
 			t.Errorf("grantHeld(%q) = %t, want %t", text, got, want)
+		}
+	}
+}
+
+func TestSignInCompleted(t *testing.T) {
+	for page, want := range map[string]bool{
+		"<h1>Signed in</h1><p>workspace-manager is now connected</p>": true,
+		"<h1>Authentication Successful</h1>":                          true,
+		"<h1>Authentication Failed</h1>":                              false,
+		"<h1>Sign-in failed</h1>":                                     false,
+	} {
+		if got := signInCompleted([]byte(page)); got != want {
+			t.Errorf("signInCompleted(%q) = %t, want %t", page, got, want)
 		}
 	}
 }
