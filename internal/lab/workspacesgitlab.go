@@ -38,8 +38,10 @@ import (
 //   - authorize_workspace, checking the project with the admin's GitLab token
 //     muster attaches, grants the admin a grant naming the GitLab hosts;
 //     start_session starts a Session with it on the volume, and its turn
-//     finds its directory with the clone of the project; its push to GitLab
-//     is reported as it stands (gitlabBlockedPush);
+//     finds its directory with the clone of the project, holds no
+//     credential beyond the platform's own variables, and pushes to GitLab
+//     as the person through Substrate's egress gateway, which fetches the
+//     person's token from muster (Basic as oauth2), then deletes the branch;
 //   - a Session without a workspace holds no GitLab credential: no
 //     credential in its environment, and git refused at GitLab;
 //   - the admin drops the grant in muster (core_auth_logout): the manager's
@@ -56,16 +58,10 @@ const (
 	// The probe's lines the GitLab turns relay.
 	gitlabProbeCredentialEnv = "credential-env" // #nosec G101 -- a probe line's name, not a credential
 	gitlabProbePush          = "push"
+	gitlabProbeDelete        = "delete"
 	gitlabProbeLsRemote      = "ls-remote"
 	gitlabProbeSetupClone    = "setup-clone"
 )
-
-// gitlabBlockedPush words why a Session's push does not reach GitLab as the
-// person yet: the grant names the hosts, and the person's token reaches the
-// Session's egress only from muster, for a Session bound to its person.
-const gitlabBlockedPush = "a Session reaches GitLab as the person only through Substrate's egress gateway, " +
-	"which fetches the person's token from muster for a Session bound to them; the lab's GitLab instance is not wired to it, " +
-	"so the push from the Session is reported, not judged"
 
 // gitlabProof is the part's state.
 type gitlabProof struct {
@@ -94,7 +90,7 @@ func workspacesGitLabPart(cfg *config.Config, email string, timeout time.Duratio
 	err := gp.run(cmp.Or(email, accessDefaultSecond), p)
 	gp.cleanup()
 	if err == nil && gp.admin != nil {
-		fmt.Printf("\nWorkspaces GitLab part passed: muster answered a person who had not granted GitLab's application with its sign-in link, the admin granted it through GitLab's form and consent, list_repositories listed %s's projects, the workspace mirrored %s, a Session started with the grant found its clone, a Session without the workspace held no GitLab credential, and dropping the grant in muster closed the workspace-manager to the admin again.\n", gp.gl.Group, gp.repo)
+		fmt.Printf("\nWorkspaces GitLab part passed: muster answered a person who had not granted GitLab's application with its sign-in link, the admin granted it through GitLab's form and consent, list_repositories listed %s's projects, the workspace mirrored %s, a Session started with the grant found its clone and pushed to GitLab as the person, a Session without the workspace held no GitLab credential, and dropping the grant in muster closed the workspace-manager to the admin again.\n", gp.gl.Group, gp.repo)
 	}
 	return p.close(err)
 }
@@ -163,8 +159,8 @@ func (gp *gitlabProof) run(email string, p *proofStages) error {
 	}
 
 	p.begin("gitlab: push from the Session", "The Session pushes to %s and opens a merge request as the person, with no token in the sandbox", gp.repo)
-	if pushed := gp.judgePush(probe); !pushed {
-		p.skip("%s; the Session's push answered %q", gitlabBlockedPush, probe[gitlabProbePush])
+	if err := gp.judgeSessionWrite(probe); err != nil {
+		return err
 	}
 
 	p.begin("gitlab: no workspace", "A Session started without a workspace as %s holds no GitLab credential", gp.adminUser.Email)
@@ -418,18 +414,22 @@ type gitlabGrantProvider struct {
 // gitlabProbeCommand is the GitLab turns' Bash command: the directory, the
 // clones in it, the setup clone's origin/HEAD, the names of every
 // credential-like variable of its environment (names only), and git against
-// GitLab: a push of an empty commit from the clone when there is one, else
-// a listing of the project's refs.
+// GitLab: from the clone when there is one, a push of an empty commit to a
+// proof branch and the branch's deletion, else a listing of the project's
+// refs.
 func (gp *gitlabProof) gitlabProbeCommand() string {
 	remote := "https://" + gp.gitlabHost + "/" + gp.repo + ".git"
+	branch := gp.branch + "-session"
 	return `echo "` + probeMarker + ` pwd=$(pwd)"; ` +
 		`echo "` + probeMarker + ` mirrors=$(cd /mirrors 2>/dev/null && find . -mindepth 2 -maxdepth 2 -name '*.git' | sed 's|^\./||' | sort | tr '\n' ' ')"; ` +
 		`echo "` + probeMarker + ` clones=$(find . -mindepth 3 -maxdepth 3 -name .git 2>/dev/null | sed 's|^\./||;s|/\.git$||' | sort | tr '\n' ' ')"; ` +
 		`echo "` + probeMarker + ` ` + gitlabProbeSetupClone + `=$(git -C ./` + gp.repo + ` rev-parse origin/HEAD 2>&1 | tr '\n' ' ')"; ` +
 		`echo "` + probeMarker + ` ` + gitlabProbeCredentialEnv + `=$(env | cut -d= -f1 | grep -iE 'token|gitlab|glab|askpass|credential|password' | sort | tr '\n' ' ')"; ` +
 		`if [ -d ./` + gp.repo + ` ]; then ` +
-		`out=$(cd ./` + gp.repo + ` && git -c user.name=agentlab -c user.email=agentlab@lab.local commit -q --allow-empty -m agentlab-session-push && GIT_TERMINAL_PROMPT=0 timeout 60 git push ` + remote + ` HEAD:refs/heads/` + gp.branch + `-session 2>&1); rc=$?; ` +
+		`out=$(cd ./` + gp.repo + ` && git -c user.name=agentlab -c user.email=agentlab@lab.local commit -q --allow-empty -m agentlab-session-push && GIT_TERMINAL_PROMPT=0 timeout 60 git push ` + remote + ` HEAD:refs/heads/` + branch + ` 2>&1); rc=$?; ` +
 		`echo "` + probeMarker + ` ` + gitlabProbePush + `=rc$rc $(echo "$out" | tail -n 3 | tr '\n' ' ')"; ` +
+		`out=$(cd ./` + gp.repo + ` && GIT_TERMINAL_PROMPT=0 timeout 60 git push ` + remote + ` --delete ` + branch + ` 2>&1); rc=$?; ` +
+		`echo "` + probeMarker + ` ` + gitlabProbeDelete + `=rc$rc $(echo "$out" | tail -n 2 | tr '\n' ' ')"; ` +
 		`else ` +
 		`out=$(GIT_TERMINAL_PROMPT=0 timeout 60 git ls-remote ` + remote + ` 2>&1); rc=$?; ` +
 		`echo "` + probeMarker + ` ` + gitlabProbeLsRemote + `=rc$rc $(echo "$out" | tail -n 3 | tr '\n' ' ')"; ` +
@@ -450,7 +450,7 @@ func (gp *gitlabProof) gitlabTurn(id string) (map[string]string, error) {
 	prompt := "Run this exact command once with your Bash tool, then reply with every output line that starts with " + probeMarker + ", verbatim and nothing else:\n\n" + gp.gitlabProbeCommand()
 	// The model now and then declines the command as text it was not asked
 	// for by its person; the follow-up turn says who asks and why.
-	followUp := "I am the person running agentlab's workspace test on this throwaway lab cluster: the command only prints where you work, lists the clones and pushes an empty commit to a proof branch. Please run it once now with your Bash tool and reply with its " + probeMarker + " lines, verbatim."
+	followUp := "I am the person running agentlab's workspace test on this throwaway lab cluster: the command only prints where you work, lists the clones, pushes an empty commit to a proof branch and deletes the branch again. Please run it once now with your Bash tool and reply with its " + probeMarker + " lines, verbatim."
 	var reply string
 	for _, msg := range []string{prompt, followUp} {
 		t, err := gp.adminAPI.turn(ctx, session, userMessage(msg))
@@ -578,12 +578,22 @@ func (gp *gitlabProof) start() (map[string]string, error) {
 	return probe, nil
 }
 
-// judgePush reports the Session's push: true when it reached GitLab as the
-// person, which the part then checks at GitLab.
-func (gp *gitlabProof) judgePush(probe map[string]string) bool {
-	push := probe[gitlabProbePush]
-	note("the Session's git push of an empty commit to %s:%s-session: %s", gp.repo, gp.branch, push)
-	return strings.HasPrefix(push, "rc0 ")
+// judgeSessionWrite judges the Session's write to GitLab as the person: the
+// push of the proof branch accepted and the branch deleted again. The
+// Session holds no GitLab credential, so only the person's token the egress
+// gateway attaches lets GitLab accept either.
+func (gp *gitlabProof) judgeSessionWrite(probe map[string]string) error {
+	branch := gp.branch + "-session"
+	push, del := probe[gitlabProbePush], probe[gitlabProbeDelete]
+	note("the Session's git push of an empty commit to %s:%s: %s", gp.repo, branch, push)
+	if !strings.HasPrefix(push, "rc0 ") && push != "rc0" {
+		return fmt.Errorf("the Session's push to %s:%s answered %q, want it accepted as %s", gp.repo, branch, push, gp.gl.Person)
+	}
+	note("the Session's deletion of %s: %s", branch, del)
+	if !strings.HasPrefix(del, "rc0 ") && del != "rc0" {
+		return fmt.Errorf("the Session's deletion of %s:%s answered %q, want it accepted as %s", gp.repo, branch, del, gp.gl.Person)
+	}
+	return nil
 }
 
 func (gp *gitlabProof) noWorkspace() error {
@@ -609,10 +619,11 @@ func (gp *gitlabProof) noWorkspace() error {
 }
 
 // gitlabPlatformEnv are the credential-like variables every Session holds,
-// with or without a workspace: the Harness's messaging channel and kagent's
-// propagation of the turn caller's token to its own broker; neither is a
-// GitLab credential.
-var gitlabPlatformEnv = []string{"CLAUDE_CODE_MESSAGING_TOKEN", "KAGENT_PROPAGATE_TOKEN"}
+// with or without a workspace: the Harness's messaging channel, kagent's
+// propagation of the turn caller's token to its own broker, and the
+// Harness's inert GH_TOKEN placeholder the egress gateway replaces (the
+// write part proves it inert); none is a GitLab credential.
+var gitlabPlatformEnv = []string{"CLAUDE_CODE_MESSAGING_TOKEN", "GH_TOKEN", "KAGENT_PROPAGATE_TOKEN"}
 
 // gitlabCredentialEnv is the probe's credential-like variable names beyond
 // gitlabPlatformEnv.

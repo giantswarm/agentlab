@@ -13,9 +13,9 @@ const testGitLabPerson = "gitlab-person"
 func TestGitLabCredentialEnv(t *testing.T) {
 	for names, want := range map[string][]string{
 		"": nil,
-		"CLAUDE_CODE_MESSAGING_TOKEN KAGENT_PROPAGATE_TOKEN ": nil,
-		"GITLAB_TOKEN KAGENT_PROPAGATE_TOKEN":                 {"GITLAB_TOKEN"},
-		"GIT_ASKPASS GLAB_TOKEN":                              {"GIT_ASKPASS", "GLAB_TOKEN"},
+		"CLAUDE_CODE_MESSAGING_TOKEN GH_TOKEN KAGENT_PROPAGATE_TOKEN ": nil,
+		"GITLAB_TOKEN KAGENT_PROPAGATE_TOKEN":                          {"GITLAB_TOKEN"},
+		"GIT_ASKPASS GLAB_TOKEN":                                       {"GIT_ASKPASS", "GLAB_TOKEN"},
 	} {
 		if got := gitlabCredentialEnv(names); !slices.Equal(got, want) {
 			t.Errorf("gitlabCredentialEnv(%q) = %v, want %v", names, got, want)
