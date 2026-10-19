@@ -61,18 +61,24 @@ import (
 //  6. An MCP call: the agent calls agent-manager's list_agents through its
 //     binding and finds itself listed; in a workspace Session muster audits
 //     the call as the person the Session's sandbox actor is bound to.
-//  7. On claude, the instruction-file fixture: one turn writes a
+//  7. The turn gap (codingturngap.go): a heartbeat one turn starts in the
+//     sandbox does not run between turns and runs again in the next; in a
+//     workspace Session muster audits no call of the actor in the gap.
+//  8. On claude, the instruction-file fixture: one turn writes a
 //     repository's instruction sources into the Session's directory
 //     (CLAUDE.md, AGENTS.md, .claude settings with a hook and
 //     permissions.allow, a skill, a subagent, a command, .mcp.json), the next
 //     records what Claude Code loaded. Elsewhere one turn writes the file the
 //     resume reads back.
-//  8. Suspend and resume: the Session suspended to the snapshot store and
+//  9. Suspend and resume: the Session suspended to the snapshot store and
 //     resumed; a turn reads the first turn's file and recalls its code word.
-//  9. Usage: the resumed turn's task status carries its usage.
-// 10. A share of the Session refused: a colleague's turn in a coding agent's
+// 10. Usage: the resumed turn's task status carries its usage.
+// 11. A share of the Session refused: a colleague's turn in a coding agent's
 //     Session would run under code the first sender's turns left.
-// 11. On codex without --model-config, the model: every model call of the
+// 12. In a workspace Session, after delete: the Session deleted through
+//     agent-manager's delete_session, muster unbinds its actor and accepts
+//     no call of it after.
+// 13. On codex without --model-config, the model: every model call of the
 //     turns answered by the in-cluster mockllm's script (mockllm.go).
 //
 // The agents and Sessions are removed on every exit path.
@@ -458,6 +464,11 @@ func (p *codingProof) run() error {
 		return fmt.Errorf("%s through the agent's binding on Harness %s answered %q, wanted a list naming %s; the reply: %q (%s)", codingTestReadTool, harness, called, codingTestAgent, excerpt(reply, 400), p.line)
 	}
 
+	p.stages.begin("turn gap", "A heartbeat the turn starts in the sandbox does not run in the %s without a turn and runs again in the next; in a workspace Session muster audits no call of the actor in the gap", codingTurnGap)
+	if err := p.proveTurnGap(ctx, session); err != nil {
+		return err
+	}
+
 	if p.rt.claude {
 		p.stages.begin("instruction fixture", "A repository's instruction sources written into the Session's directory, the next turn records what Claude Code loaded")
 		if _, err := p.turn(ctx, session, codingFixturePrompt()); err != nil {
@@ -490,8 +501,18 @@ func (p *codingProof) run() error {
 	note("usage %v", usage)
 
 	p.stages.begin("share refused", "A read-write share of the %s Session refused: a collaborator's turn would run under what the first sender's turns left", harness)
-	if err := p.shareRefused(ctx, session); err != nil || p.mock == nil {
+	if err := p.shareRefused(ctx, session); err != nil {
 		return err
+	}
+
+	p.stages.begin("after delete", "The Session deleted through agent-manager's delete_session: muster unbinds its actor and accepts no call of it after")
+	if p.rig == nil {
+		p.stages.skip("no workspace Session on this lab: muster bound no actor of it to unbind")
+	} else if err := p.proveAfterDelete(ctx, session); err != nil {
+		return err
+	}
+	if p.mock == nil {
+		return nil
 	}
 
 	p.stages.begin("model", "The %s turns ran on the in-cluster mockllm: every model call answered by its script", harness)

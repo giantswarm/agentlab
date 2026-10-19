@@ -89,6 +89,8 @@ func mockLLMScript() []mockLLMTurn {
 	return []mockLLMTurn{
 		{name: "sandbox", prompt: "own sandbox check", command: codingSandboxCommand(codex), reply: "The sandbox check ran; its readings are the command's output."},
 		{name: "mcp", prompt: "Do not use a shell for this", tool: musterCallTool, arguments: musterCallToolArguments(codingTestReadTool), reply: "The tool answered; its answer is the call's output."},
+		{name: "heartbeat", prompt: "Start this test lab's heartbeat", command: codingHeartbeatCommand(), reply: "The heartbeat runs."},
+		{name: "heartbeat-read", prompt: "Read this test lab's heartbeat", command: codingHeartbeatReadCommand(), reply: "The heartbeat's ticks are the command's output."},
 		{name: "codeword", prompt: "Remember the code word", command: codingCodeWordCommand(), reply: "The file is written."},
 		{name: "resume", prompt: "the code word I asked you to remember", command: codingResumeCommand(), reply: probeMarker + " code-word=" + codingTestCodeWord},
 	}
