@@ -37,6 +37,10 @@ const (
 	notifResourceUpdated  = "notifications/resources/updated"
 	metaSubscriptionID    = "io.modelcontextprotocol/subscriptionId"
 	subscriptionsWait     = 30 * time.Second
+	// The beekeeper tool arguments the proof sends.
+	beekeeperKeyAgent = "agent"
+	beekeeperKeyHost  = "host"
+	a2aKeyRole        = "role"
 )
 
 // BeekeeperSubscriptionsTestOptions tunes the beekeeper subscriptions proof.
@@ -170,14 +174,14 @@ func BeekeeperSubscriptionsTest(cfg *config.Config, opts BeekeeperSubscriptionsT
 
 	agents := map[string]string{ana.Email: "ana-agent-" + strings.ToLower(run), pia.Email: "pia-agent-" + strings.ToLower(run)}
 	for email, agent := range agents {
-		if _, err := sessions[email].callServerTool(beekeeperRegister, map[string]any{"agent": agent, "host": subscriptionsHost}); err != nil {
+		if _, err := sessions[email].callServerTool(beekeeperRegister, map[string]any{beekeeperKeyAgent: agent, beekeeperKeyHost: subscriptionsHost}); err != nil {
 			return err
 		}
 	}
 	send := func(email, id string) error {
 		_, err := sessions[email].callServerTool(beekeeperSend, map[string]any{
-			"to":      "local:" + subscriptionsHost + "/" + agents[email],
-			"message": map[string]any{"messageId": id, "role": "user", "parts": []any{map[string]any{"kind": "text", "text": "agentlab subscriptions proof"}}},
+			"to":            "local:" + subscriptionsHost + "/" + agents[email],
+			slackKeyMessage: map[string]any{"messageId": id, a2aKeyRole: chatRoleUser, "parts": []any{map[string]any{beekeeperKeyKind: toolResultText, slackKeyText: "agentlab subscriptions proof"}}},
 		})
 		return err
 	}
@@ -243,7 +247,7 @@ func openSubscription(endpoint, token string, id int, uris ...string) (*subscrip
 			"notifications": map[string]any{"resourceSubscriptions": uris},
 			"_meta": map[string]any{
 				"io.modelcontextprotocol/protocolVersion":    subscriptionsProtocol,
-				"io.modelcontextprotocol/clientInfo":         map[string]any{"name": "agentlab-beekeeper-subscriptions", "version": "1"},
+				"io.modelcontextprotocol/clientInfo":         map[string]any{nameKey: "agentlab-beekeeper-subscriptions", "version": "1"},
 				"io.modelcontextprotocol/clientCapabilities": map[string]any{},
 			},
 		},
