@@ -147,6 +147,26 @@ func TestGitLabFormStep(t *testing.T) {
 	}
 }
 
+// GitLab answers an authorization the person granted before with its
+// "Redirecting" page; the walk follows its link only to the callback.
+func TestGitLabRedirect(t *testing.T) {
+	const callback = "/oauth/proxy/callback"
+	page := func(href string) []byte {
+		return []byte(`<h1>Redirecting</h1><div><a href="` + href + `">Click here to redirect to ` + href + `</a></div><script>window.location = "x";</script>`)
+	}
+	for href, want := range map[string]string{
+		"https://muster.example.com/oauth/proxy/callback?code=c&amp;state=s": "https://muster.example.com/oauth/proxy/callback?code=c&state=s",
+		"https://elsewhere.example.com/steal?code=c":                         "",
+	} {
+		if got := gitlabRedirect(page(href), callback); got != want {
+			t.Errorf("gitlabRedirect(%q) = %q, want %q", href, got, want)
+		}
+	}
+	if got := gitlabRedirect([]byte(`<a href="/oauth/proxy/callback">elsewhere</a>`), callback); got != "" {
+		t.Errorf("a page without GitLab's redirect link: %q", got)
+	}
+}
+
 func TestGrantHeld(t *testing.T) {
 	for text, want := range map[string]bool{
 		"Successfully connected to 'workspace-manager'!": true,

@@ -76,6 +76,25 @@ const (
 	railsMethodField    = "_method"
 )
 
+// gitlabRedirectRe is the link of GitLab's "Redirecting" page, which an
+// authorization the person already granted answers with a 200 instead of a
+// redirect: the browser follows it by script.
+var gitlabRedirectRe = regexp.MustCompile(`(?is)<a\b[^>]*\bhref\s*=\s*"([^"]*)"[^>]*>\s*Click here to redirect to`)
+
+// gitlabRedirect is the target of GitLab's "Redirecting" page when it is the
+// callback path, "" for any other page.
+func gitlabRedirect(page []byte, callback string) string {
+	m := gitlabRedirectRe.FindSubmatch(page)
+	if m == nil {
+		return ""
+	}
+	target := html.UnescapeString(string(m[1]))
+	if u, err := url.Parse(target); err != nil || u.Path != callback {
+		return ""
+	}
+	return target
+}
+
 var (
 	htmlFormRe  = regexp.MustCompile(`(?is)<form\b([^>]*)>(.*?)</form>`)
 	htmlInputRe = regexp.MustCompile(`(?is)<input\b([^>]*)>`)
@@ -250,6 +269,14 @@ func walkProviderSignIn(client *http.Client, link, fixtureLogin string, login *p
 				return hops, stopped(hop, "the form's action: "+err.Error())
 			}
 			next, form = location, glFields
+		case login != nil && gitlabRedirect(page, callback) != "":
+			// An authorization the person granted before: GitLab skips the
+			// consent and sends the browser on to the callback by script.
+			location, err := next.Parse(gitlabRedirect(page, callback))
+			if err != nil {
+				return hops, stopped(hop, "GitLab's redirect: "+err.Error())
+			}
+			next = location
 		default:
 			return hops, stopped(hop, "a page that is neither muster's callback nor a GitLab sign-in or consent form: "+pageHeading(page))
 		}
