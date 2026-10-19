@@ -113,6 +113,42 @@ agent-permissions plan's D9):
 - **Through an agent, as the person**: an organization's agent bound to
   muster lists, in a turn as the person, the servers that person sees.
 
+### The portal per tenant
+
+The Dev Portal (Backstage with giantswarm/backstage#3161) reads the same
+model as the person, through its own backend routes. What `tenants-test`
+asserts (steps P, [The Agent Platform proof](backstage.md#the-agent-platform-proof)):
+
+- **The roster per tenant.** The portal asks the controller which namespaces
+  hold an agent the person may list (`GET /api/agent-platform/kagent/agent-namespaces`,
+  `AgentService/ListAgents` with no namespace, as the person, through the
+  agentgateway edge's GRPCRoute) and reads the Agents of each through the
+  Kubernetes API as the person: a tenant user's roster is their
+  organization's agents and the platform tenant's, labelled `organization
+  <name>` and `platform`.
+- **Where a person may create**: the create flow's tenants are agent-manager's
+  `get_info` `namespaces.managed` as the person — an editor of one
+  organization gets that one — and a create elsewhere is `forbidden`.
+- **What a person may change**: the agent page asks the API server
+  (`SelfSubjectAccessReview` for `update` and `delete` on the agent's
+  HelmRelease): a user gets no, an editor yes in their organization only.
+- **What a person may run**: a session start on another tenant's agent is the
+  controller's refusal (`forbidden: kagent: …` from `start_session`), and
+  nothing reaches the agent.
+- **Who created an agent**: agent-manager records the caller's email as
+  `agent-platform.giantswarm.io/created-by`, and the portal shows it. It is
+  never an authorization input. `GET /kagent/me` answers the token's claims
+  on kagent 1.19: its `email` is the person, its `sub` is Dex's subject. The
+  portal's "Created by: Me" compares the creator with that `sub`, so it keeps
+  nothing (giantswarm/backstage#3161; the browser suite's `tenants.spec.ts`
+  shows it).
+- **No tenant, no agent**: a person bound in no organization, with no platform
+  agent, reads an empty roster, not an error. The chart binds
+  `agent-platform:platform-user` to every signed-in person in `kagent`, so the
+  platform tenant is never refused: the portal shows "No agents yet" and its
+  invitation to create one, not its "No agents for you yet" naming the roles,
+  which needs every namespace refused.
+
 ## How the identity plumbing works
 
 ```
