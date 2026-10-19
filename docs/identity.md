@@ -74,6 +74,45 @@ What `agentlab tenants-test` asserts about who sees and runs which agent
 A person with a cluster-wide read (`viewers`, `platform-admins`) sees every
 tenant, as on an installation.
 
+### MCP servers per tenant
+
+With `platform.tenants` on, muster serves the `MCPServer`s of the
+organization namespaces (`org-…`) next to its own namespace's
+(`muster.muster.mcpServersInAllNamespaces`, muster 5.47.0-rc.8 or later; the
+lab pins a release candidate, HACKS.md U38). What `tenants-test` asserts (the
+agent-permissions plan's D9):
+
+- **Kubernetes RBAC decides what a person sees.** muster lists the
+  `MCPServer`s of each namespace with the person's own Dex token: a person
+  sees the servers of every namespace where they may `list`
+  `mcpservers.muster.giantswarm.io` — muster's namespace through the chart's
+  `agent-platform:mcpserver-viewer` binding to every signed-in person, an
+  organization through `agent-platform:user` or `:editor` there. A person in
+  no organization sees muster's namespace only. The token must carry the
+  audience muster checks before it calls the API server
+  (`writesAsCaller.kubernetesAudience`): the lab sets `kubernetes`, the client
+  id the lab's API server trusts, which every lab token for muster carries
+  (the fleet's API servers trust `dex-k8s-authenticator`, muster's default).
+- **A server a person may not see does not exist for them**: not in
+  `core_mcpserver_list` or `list_tools`, and a call of its tools,
+  `core_service_start` and `core_auth_login` for it are answered as for a
+  server that does not exist.
+- **A tenant server gets no identity from muster**: an `MCPServer` of an
+  organization namespace that sets `auth.forwardToken`,
+  `auth.requiredAudiences`, `auth.tokenExchange`, `family` or
+  `auth.type: sigv4` is not started and reads `Failed` with the reason.
+- **A tenant server's sign-in stays in its namespace.** It is keyed
+  `<namespace>/<name>`, its tools are `x_<namespace>_<name>_<tool>`, it signs
+  in through `<muster>/oauth/ns/<namespace>/callback` with a client of its own
+  namespace, and its token is filed under its namespace and issuer: a sign-in
+  to it gives no token to a server of the same issuer in muster's namespace or
+  in another organization. The lab Dex lists the callbacks of `tenants-test`'s
+  two namespaces on the platform client. muster reads the client's Secret in
+  the server's namespace with its own ServiceAccount, which no chart grants
+  there yet: `tenants-test` binds it (HACKS.md U39).
+- **Through an agent, as the person**: an organization's agent bound to
+  muster lists, in a turn as the person, the servers that person sees.
+
 ## How the identity plumbing works
 
 ```

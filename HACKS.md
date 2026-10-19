@@ -803,6 +803,34 @@ the step. Unblocks when kagent's Update maps a conflict to `Aborted` or
 retries it on a fresh read (giantswarm/kagent-upstream,
 `go/core/internal/service/kubecrud`): the retry then goes.
 
+### U38. `agent-platform-values.yaml.tmpl`: with the tenants on, the lab pins muster to a release candidate — BLOCKED UPSTREAM
+muster serves the organization namespaces' MCPServers and lists them as the
+caller from giantswarm/muster#1601 on, first in 5.47.0-rc.8. The chart's
+range for muster (`>=5.45.0 <6.0.0`) selects no release candidate, and the
+muster chart before 5.47.0 refuses `mcpServersInAllNamespaces` (its schema
+has `additionalProperties: false`), so the lab cannot set the key on the
+muster the chart selects. **Fix:** with `platform.tenants` on, the values set
+`components.muster.versionRange` to `tenantsMusterVersion` (5.47.0-rc.9,
+`tenantstest_muster.go`) next to `muster.muster.mcpServersInAllNamespaces:
+true`; with the tenants off, neither renders. Unblocks when muster 5.47.0 is
+released: the chart's range then selects it, and the pin goes.
+
+### U39. `tenantstest_muster.go`: tenants-test lets muster read the sign-in fixture's Secret in each organization namespace — BLOCKED UPSTREAM
+A server of an organization namespace signs in with a pin of its own
+namespace (`authorizationServer.clientCredentialsSecretRef`, giantswarm/muster#1598),
+and muster reads that Secret with its own ServiceAccount. The muster chart
+binds `get` on Secrets in its own namespace only (and in
+`rbac.additionalSecretNamespaces`, which must exist when Helm installs), and
+the platform chart binds nothing in an organization namespace, so muster
+answers `secrets … is forbidden`, defers the pin, and `core_auth_login`
+answers that the server does not exist. #1601's rollout list does not name
+this. **Fix:** tenants-test's fixture carries a Role (`get` on the client
+Secret by name) and a RoleBinding to muster's ServiceAccount in each
+organization namespace, as an organization's set-up would have to. Unblocks
+when the platform chart (or agent-manager's tenant reconciler) gives muster
+that read in each organization namespace: the fixture's Role and RoleBinding
+then go.
+
 ## Accepted lab trade-offs (not hacks to fix)
 
 - **Checksum stamping via the `REPLACED_AT_APPLY` placeholder** — the standard
