@@ -263,9 +263,16 @@ func proveOAuthSignIn(cfg *config.Config, token string) error {
 // the portal (or core_auth_login) handed it the challenge URL: follow the
 // proxy start endpoint to the authorization server's login form, submit the
 // user's credentials, and follow Dex back through muster's proxy callback to
-// its "Authentication Successful" page. The session that produced the
+// its success page (signInCompleted). The session that produced the
 // challenge — identified by the state — then holds the server's token.
 func completeSignIn(challengeURL string, user *config.User) error {
+	return completeSignInAt(challengeURL, user, oauthProxyCallbackPath)
+}
+
+// completeSignInAt is completeSignIn for a server whose sign-in comes back
+// on callbackPath: an organization namespace's own callback
+// (tenantstest_muster.go) instead of muster's proxy callback.
+func completeSignInAt(challengeURL string, user *config.User, callbackPath string) error {
 	transport, err := labTLSTransport()
 	if err != nil {
 		return err
@@ -304,9 +311,9 @@ func completeSignIn(challengeURL string, user *config.User) error {
 	body, _ = io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
 	final := resp.Request.URL.String()
-	if resp.StatusCode != http.StatusOK || !strings.Contains(final, oauthProxyCallbackPath) || !strings.Contains(string(body), "Authentication Successful") {
-		return fmt.Errorf("the sign-in did not end on muster's proxy callback success page (ended on %s with %d):\n%.300s",
-			final, resp.StatusCode, excerpt(string(body), 300))
+	if resp.StatusCode != http.StatusOK || resp.Request.URL.Path != callbackPath || !signInCompleted(body) {
+		return fmt.Errorf("the sign-in did not end on the success page of muster's callback %s (ended on %s with %d):\n%.300s",
+			callbackPath, final, resp.StatusCode, excerpt(string(body), 300))
 	}
 	return nil
 }

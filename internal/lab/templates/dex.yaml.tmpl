@@ -136,6 +136,15 @@ stringData:
           # exactly, no DNS lookups -- unlike muster's own authorization
           # server, whose SSRF guards reject every lab hostname.
           - {{ .MusterBaseURL }}/oauth/proxy/callback
+{{- if .TenantsEnabled }}
+          # platform.tenants: a server in an organization namespace signs in
+          # through that namespace's own callback (giantswarm/muster#1598),
+          # never the one above; tenants-test's sign-in fixtures in its two
+          # namespaces use this client (tenantstest_muster.go).
+{{- range .TenantsTestNamespaces }}
+          - {{ $.MusterBaseURL }}/oauth/ns/{{ . }}/callback
+{{- end }}
+{{- end }}
       # Cross-client audience target. Backstage's GS auth provider requests
       # the scope audience:server:client_id:dex-k8s-authenticator by default
       # (components.backstage.extraScopes); Dex only honors that when the
