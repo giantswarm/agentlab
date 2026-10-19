@@ -76,9 +76,10 @@ func mockLLMURL() string {
 type mockLLMTurn struct {
 	name, prompt string
 	// command is the shell command the runtime runs; tool the MCP tool it
-	// calls instead (on the agent's binding, found through tool search).
-	command, tool string
-	reply         string
+	// calls instead (on the agent's binding, found through tool search),
+	// with arguments, a JSON object.
+	command, tool, arguments string
+	reply                    string
 }
 
 // mockLLMScript is the script of the proof's codex turns. The prompts are
@@ -87,7 +88,7 @@ func mockLLMScript() []mockLLMTurn {
 	codex := codingRuntimes[config.CodingRuntimeCodex]
 	return []mockLLMTurn{
 		{name: "sandbox", prompt: "own sandbox check", command: codingSandboxCommand(codex), reply: "The sandbox check ran; its readings are the command's output."},
-		{name: "mcp", prompt: "Do not use a shell for this", tool: codingTestReadTool, reply: "The tool answered; its answer is the call's output."},
+		{name: "mcp", prompt: "Do not use a shell for this", tool: musterCallTool, arguments: musterCallToolArguments(codingTestReadTool), reply: "The tool answered; its answer is the call's output."},
 		{name: "codeword", prompt: "Remember the code word", command: codingCodeWordCommand(), reply: "The file is written."},
 		{name: "resume", prompt: "the code word I asked you to remember", command: codingResumeCommand(), reply: probeMarker + " code-word=" + codingTestCodeWord},
 	}
@@ -214,7 +215,7 @@ func mockLLMConfig(mcpServer string) ([]mockLLMScriptEntry, error) {
 				}),
 				mockLLMEntry(turn.name+"_call", searchID, mockLLMItem{
 					ID: "fc_agentlab_" + turn.name, Type: mockLLMFunctionCall, Status: mockLLMItemDone,
-					CallID: callID, Namespace: namespace, Name: turn.tool, Arguments: "{}",
+					CallID: callID, Namespace: namespace, Name: turn.tool, Arguments: turn.arguments,
 				}))
 		}
 		entries = append(entries, mockLLMEntry(turn.name+"_reply", callID, mockLLMItem{
