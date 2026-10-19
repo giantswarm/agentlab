@@ -956,12 +956,19 @@ func agentExists(name string) bool {
 // so a failed first turn is said and tried once more — never more, and never
 // silently.
 func firstTurnAs(cfg *config.Config, name, token, prompt string) (string, error) {
-	reply, err := agentTurnAs(cfg, name, token, prompt)
+	reply, _, err := firstSessionTurnAs(cfg, name, token, prompt)
+	return reply, err
+}
+
+// firstSessionTurnAs is firstTurnAs that also returns the id of the Session
+// the answered turn ran in.
+func firstSessionTurnAs(cfg *config.Config, name, token, prompt string) (reply, sessionID string, err error) {
+	reply, sessionID, err = agentSessionTurnOf(cfg, agentRef(name), token, prompt)
 	if err == nil {
-		return reply, nil
+		return reply, sessionID, nil
 	}
 	note("the first turn on %s failed (%s) — one retry, a cold worker's ResumeActor deadline is not retried by Substrate", name, excerpt(err.Error(), 200))
-	return agentTurnAs(cfg, name, token, prompt)
+	return agentSessionTurnOf(cfg, agentRef(name), token, prompt)
 }
 
 // toolsetHeaderOf is the X-Muster-Toolset the agent's runtime sends, read

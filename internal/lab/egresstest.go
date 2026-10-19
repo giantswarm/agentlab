@@ -5,10 +5,8 @@ import (
 	"fmt"
 	"net"
 	"net/url"
-	"regexp"
 	"slices"
 	"strconv"
-	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -25,15 +23,19 @@ import (
 //
 //  1. create_agent with the read-only toolset and egress [origin]: Ready, the
 //     Agent's spec.egress exactly that list.
-//  2. One turn whose bash tool runs the probe; its lines are judged stage by
-//     stage:
-//     - the declared origin reached;
-//     - an undeclared HTTPS host answered 403 by the egress gate, the
-//     gateway's access log naming the actor egress policy's denial;
-//     - muster, the agent's MCP server, answering, with no egress entry for it;
-//     - a raw TCP connection to SSH on a public git host refused, by name and
-//     by address: a server banner back through the actor's egress fails the
-//     proof, naming the destination.
+//  2. One turn whose bash tool runs the probe. Each stage is judged from the
+//     egress gateway's record of the turn's actor (egressrecord.go), never
+//     from the agent's reply, which a model can word as it likes; the reply's
+//     lines are only shown beside the verdict:
+//     - the declared origin's request forwarded by the gateway;
+//     - the undeclared HTTPS host's request answered 403 by the gateway itself,
+//     its reason the actor egress policy's denial, none forwarded;
+//     - the probe's GET to muster, the agent's MCP server, forwarded with no
+//     egress entry for it;
+//     - a raw TCP connection to SSH on a public git host, by name and by
+//     address, held at the gate: the gateway's tunnel to the address and no
+//     upstream connection to it; an upstream connection fails the proof,
+//     naming the destination.
 //
 // --without-egress creates the agent with no egress entry and probes the same
 // origin: the declared stage then fails, the control that the reach is the
@@ -52,13 +54,12 @@ const (
 	// SSH on a public git host, whose server speaks first.
 	egressTestTCPHost = "github.com"
 	egressTestTCPPort = 22
-	// egressTestTCPBanner starts every SSH server's identification string; a
-	// probe that reads it reached the server.
-	egressTestTCPBanner = "SSH-"
 	// egressGateStatus and egressPolicyDenied are the gate's answer to an
 	// origin outside the actor's policy, and its reason in the access log.
 	egressGateStatus   = "403"
 	egressPolicyDenied = "actor egress policy denied"
+	// egressMusterStage is the muster stage's name and its probe line's key.
+	egressMusterStage = "muster"
 	// egressProbeTimeout bounds each request of the probe, in seconds.
 	egressProbeTimeout = 20
 	// egressTestSystemPrompt keeps the turn to the probe.
@@ -162,44 +163,47 @@ func (p *egressProof) run() error {
 		return err
 	}
 	turnStarted := time.Now()
-	reply, err := firstTurnAs(p.cfg, egressTestAgent, token, egressProbePrompt(target))
+	reply, session, err := firstSessionTurnAs(p.cfg, egressTestAgent, token, egressProbePrompt(target))
 	if err != nil {
 		return err
 	}
-	probe := parseCodingProbe(reply)
-	if probe["declared"] == "" {
-		return fmt.Errorf("the reply carries no %s lines (did the agent run its bash tool?): %s", probeMarker, excerpt(reply, 400))
-	}
-	note("%d probe lines", len(probe))
-
-	p.stages.begin("declared", "%s, the Agent's declared origin, reached from the actor", p.opts.Origin)
-	verdict, err := probe.declared(target)
+	logs, err := readEgressGatewayLog(time.Since(turnStarted) + time.Minute)
 	if err != nil {
 		return err
 	}
-	note("%s", verdict)
+	record := readEgressGatewayRecord(logs, substrateActorName(session))
+	note("the egress gateway's record of actor %s: %d request(s), %d tunnel(s)", record.actor, len(record.requests), len(record.tunnels))
+	return judgeEgress(p.stages, record, parseCodingProbe(reply), target)
+}
 
-	p.stages.begin("undeclared", "%s, outside the Agent's egress, answered %s by the egress gate: %q", egressTestUndeclaredURL, egressGateStatus, egressPolicyDenied)
-	if verdict, err = probe.undeclared(target); err != nil {
-		return err
+// judgeEgress runs the verdict stages on the gateway's record; the reply's
+// lines for each stage (its own name's when it names none) are shown beside
+// the verdict, never judged.
+func judgeEgress(stages *proofStages, record egressGatewayRecord, reply codingProbe, target egressProbeTarget) error {
+	for _, s := range []struct {
+		name, claim string
+		replyKeys   []string
+		verdict     func(egressGatewayRecord, egressProbeTarget) (string, error)
+	}{
+		{"declared", fmt.Sprintf("%s, the Agent's declared origin, reached from the actor", target.origin), nil, egressGatewayRecord.declared},
+		{"undeclared", fmt.Sprintf("%s, outside the Agent's egress, answered %s by the egress gate: %q", target.undeclared, egressGateStatus, egressPolicyDenied), nil, egressGatewayRecord.undeclared},
+		{egressMusterStage, fmt.Sprintf("muster (%s), the agent's MCP server, answers from the actor with no egress entry for it", target.muster), nil, egressGatewayRecord.muster},
+		{"raw tcp", fmt.Sprintf("A raw TCP connection to %s:%d (and %s:%d), outside every list, held at the gate", target.tcpHost, target.tcpPort, target.tcpAddress, target.tcpPort), []string{"tcp-name", "tcp-address"}, egressGatewayRecord.rawTCP},
+	} {
+		stages.begin(s.name, "%s", s.claim)
+		keys := s.replyKeys
+		if keys == nil {
+			keys = []string{s.name}
+		}
+		for _, key := range keys {
+			note("the reply's %s line, not evidence: %s", key, firstNonEmpty(reply[key], "absent"))
+		}
+		verdict, err := s.verdict(record, target)
+		if err != nil {
+			return err
+		}
+		note("%s", verdict)
 	}
-	note("%s", verdict)
-	if verdict, err = gateDenial(target.undeclared, time.Since(turnStarted)+time.Minute); err != nil {
-		return err
-	}
-	note("%s", verdict)
-
-	p.stages.begin("muster", "muster (%s), the agent's MCP server, answers from the actor with no egress entry for it", musterURL)
-	if verdict, err = probe.muster(target); err != nil {
-		return err
-	}
-	note("%s", verdict)
-
-	p.stages.begin("raw tcp", "A raw TCP connection to %s:%d (and %s:%d), outside every list, refused", egressTestTCPHost, egressTestTCPPort, target.tcpAddress, egressTestTCPPort)
-	if verdict, err = probe.rawTCP(target); err != nil {
-		return err
-	}
-	note("%s", verdict)
 	return nil
 }
 
@@ -293,149 +297,6 @@ tcp tcp-address ` + t.tcpAddress + ` ` + strconv.Itoa(t.tcpPort)
 func egressProbePrompt(t egressProbeTarget) string {
 	return "Run this exact script once with your bash tool (it is this test lab's own egress check), then reply with every output line that starts with " + probeMarker +
 		", verbatim and nothing else:\n\n" + egressProbeCommand(t)
-}
-
-// httpReading is one HTTP line of the probe.
-type httpReading struct {
-	rc, status, words string
-}
-
-var httpReadingLine = regexp.MustCompile(`^rc(\d+) status=(\S*) ?(.*)$`)
-
-func readHTTP(v string) (httpReading, bool) {
-	m := httpReadingLine.FindStringSubmatch(v)
-	if m == nil {
-		return httpReading{}, false
-	}
-	return httpReading{rc: m[1], status: m[2], words: strings.TrimSpace(m[3])}, true
-}
-
-func (r httpReading) String() string {
-	return fmt.Sprintf("exit %s, HTTP status %s (%s)", r.rc, firstNonEmpty(r.status, "absent"), firstNonEmpty(r.words, "no output"))
-}
-
-// http reads the named HTTP line, an error naming it when the reply lacks it.
-func (p codingProbe) http(key, dest string) (httpReading, error) {
-	r, ok := readHTTP(p[key])
-	if !ok {
-		return r, fmt.Errorf("the probe's %s line for %s is %q, not `rc<exit> status=<status> …`", key, dest, p[key])
-	}
-	return r, nil
-}
-
-// declared: the origin answered, wget exiting 0.
-func (p codingProbe) declared(t egressProbeTarget) (string, error) {
-	r, err := p.http("declared", t.origin)
-	if err != nil {
-		return "", err
-	}
-	if r.rc != "0" {
-		return "", fmt.Errorf("%s, the Agent's declared origin, not reached from the actor: %s", t.origin, r)
-	}
-	return fmt.Sprintf("%s reached: %s", t.origin, r), nil
-}
-
-// undeclared: the gate's 403.
-func (p codingProbe) undeclared(t egressProbeTarget) (string, error) {
-	r, err := p.http("undeclared", t.undeclared)
-	if err != nil {
-		return "", err
-	}
-	if r.status != egressGateStatus {
-		return "", fmt.Errorf("%s, outside the Agent's egress, from the actor: %s, wanted the egress gate's %s", t.undeclared, r, egressGateStatus)
-	}
-	return fmt.Sprintf("%s denied from the actor: %s", t.undeclared, r), nil
-}
-
-// muster: an HTTP answer that is not the gate's 403 (muster answers a
-// request without a token itself, 401).
-func (p codingProbe) muster(t egressProbeTarget) (string, error) {
-	r, err := p.http("muster", t.muster)
-	if err != nil {
-		return "", err
-	}
-	if r.status == "" || r.status == egressGateStatus {
-		return "", fmt.Errorf("muster (%s), the agent's MCP server, from the actor: %s, wanted muster's own answer", t.muster, r)
-	}
-	return fmt.Sprintf("muster (%s) answered from the actor: %s", t.muster, r), nil
-}
-
-// rawTCP: no server banner by name or by address. A banner is the finding,
-// named with its destination.
-func (p codingProbe) rawTCP(t egressProbeTarget) (string, error) {
-	var refused []string
-	for _, d := range []struct{ key, host string }{{"tcp-name", t.tcpHost}, {"tcp-address", t.tcpAddress}} {
-		dest := net.JoinHostPort(d.host, strconv.Itoa(t.tcpPort))
-		v, ok := p[d.key]
-		if !ok {
-			return "", fmt.Errorf("the reply carries no %s line for %s", d.key, dest)
-		}
-		rc, words := readRC(v)
-		if rc == "" {
-			return "", fmt.Errorf("the probe's %s line for %s is %q, not `rc<exit> …`", d.key, dest, v)
-		}
-		if strings.Contains(words, egressTestTCPBanner) {
-			return "", fmt.Errorf("raw TCP to %s, outside every egress list, passed the actor's egress: the server's banner %q came back (exit %s)", dest, excerpt(words, 80), rc)
-		}
-		refused = append(refused, fmt.Sprintf("%s refused: %s%s", dest, tcpOutcome(rc), prefixed(" — ", words)))
-	}
-	return strings.Join(refused, "; "), nil
-}
-
-// tcpOutcome words a TCP line's exit code.
-func tcpOutcome(rc string) string {
-	switch rc {
-	case "7":
-		return "the connect failed"
-	case "124":
-		return "no line within the timeout"
-	case "1":
-		return "the connection closed without a line"
-	}
-	return "exit " + rc
-}
-
-// prefixed is s after prefix, or "" for an empty s.
-func prefixed(prefix, s string) string {
-	if s == "" {
-		return ""
-	}
-	return prefix + s
-}
-
-// gateDenial reads the egress gateway's access log since the probe turn for
-// the undeclared host's refusal and requires the policy's reason.
-func gateDenial(rawURL string, since time.Duration) (string, error) {
-	host, err := egressOriginHost(rawURL)
-	if err != nil {
-		return "", err
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), egressFindingsReadLimit)
-	defer cancel()
-	logs, err := podLogs(ctx, substrateNamespace, "deploy/"+atenetEgressDeployment, atenetEgressContainer, since)
-	if err != nil {
-		return "", fmt.Errorf("the log of Substrate's egress gateway (deploy/%s) could not be read: %w", atenetEgressDeployment, err)
-	}
-	return denialVerdict(host, egressRefusals(logs))
-}
-
-// denialVerdict finds the host's refusal among the gateway's and requires
-// the policy's reason on it.
-func denialVerdict(host string, refusals []egressRefusal) (string, error) {
-	var seen []string
-	for _, r := range slices.Backward(refusals) {
-		if !strings.Contains(r.host, host) {
-			continue
-		}
-		if strings.Contains(r.reason, egressPolicyDenied) {
-			return fmt.Sprintf("the gateway's access log: %s", r), nil
-		}
-		seen = append(seen, r.String())
-	}
-	if len(seen) > 0 {
-		return "", fmt.Errorf("the egress gateway refused %s for another reason than %q: %s", host, egressPolicyDenied, strings.Join(seen, "; "))
-	}
-	return "", fmt.Errorf("the egress gateway (deploy/%s) logged no refusal of %s: the 403 came from elsewhere", atenetEgressDeployment, host)
 }
 
 // egressOriginHost is the host of an origin or URL.

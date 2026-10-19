@@ -1032,16 +1032,24 @@ egress gateway (`atenet-egress`) enforces the actor's policy.
 proves it from inside the actor: one agent on the platform Harness, created
 through agent-manager as the person with the read-only toolset and one
 declared origin (default `https://example.com`), and one turn whose `bash`
-tool runs a script and relays its `AGENTLAB_PROBE` lines:
+tool runs a probe script. Every stage is judged from Substrate's egress
+gateway's own record of the turn's actor (`session-<Session id>`), read from
+the `agentgateway` container of `deploy/atenet-egress` and cited in the
+verdict: its access-log `request` lines (`endpoint=` when it forwarded the
+request, `error=` when it answered itself), its `CONNECT tunnel terminated`
+lines and its `upstream tcp connected` lines (debug, the level Substrate runs
+the gateway at). The agent's reply is no evidence: its `AGENTLAB_PROBE` lines
+are shown beside each verdict and decide nothing, so a reply that claims a
+reach the gateway refused, or denies one it made, changes no outcome.
 
 | Stage | What passes |
 |---|---|
 | create | `create_agent` with `egress: [<origin>]` as the person; Ready; the Agent's `spec.egress` exactly that list |
-| probe turn | the turn relays the probe's lines |
-| declared | the declared origin answers (`wget` exits 0) |
-| undeclared | `https://proxy.golang.org/`, outside every list, answered 403 at the egress gate, and the gateway's access log names the refusal `actor egress policy denied` for that host |
-| muster | muster's URL from the agent's `RemoteMCPServer` answers with muster's own status (401 without a token), not the gate's 403: a compiled destination needs no egress entry |
-| raw tcp | a TCP connection to `github.com:22`, and to the address the lab host resolves it to, reads no server banner: an SSH identification string (`SSH-`) back through the actor's egress fails the proof, naming the destination. The address probe keeps a name the actor's resolver refuses from passing for the gate's refusal |
+| probe turn | the turn completes |
+| declared | the gateway forwarded the actor's `GET` to the declared origin |
+| undeclared | the gateway answered the actor's request to `https://proxy.golang.org/`, outside every list, with its own 403 and the reason `actor egress policy denied`, and forwarded none |
+| muster | the gateway forwarded the probe's `GET` to muster's URL from the agent's `RemoteMCPServer`: a compiled destination needs no egress entry |
+| raw tcp | the gateway took the actor's tunnel to the address the lab host resolves `github.com` to, port 22, and opened no upstream connection to any port-22 tunnel's target nor forwarded a request to it. No tunnel recorded is no evidence and fails; an upstream connection fails, naming the destination |
 
 `--without-egress` is the control: the agent is created with no egress
 entry and the same origin probed; its `declared` stage fails, so the reach is

@@ -1306,29 +1306,35 @@ func agentTurnAs(cfg *config.Config, name, token, prompt string) (string, error)
 // agentTurnOf is agentTurnAs for an Agent of any namespace: an organization
 // namespace's agent (tenants-test).
 func agentTurnOf(cfg *config.Config, agent *apiv1alpha1.ResourceReference, token, prompt string) (string, error) {
+	reply, _, err := agentSessionTurnOf(cfg, agent, token, prompt)
+	return reply, err
+}
+
+// agentSessionTurnOf is agentTurnOf that also returns the id of the Session
+// the turn ran in, which names its Substrate actor.
+func agentSessionTurnOf(cfg *config.Config, agent *apiv1alpha1.ResourceReference, token, prompt string) (reply, sessionID string, err error) {
 	name := agent.GetName()
 	api, err := dialKagentAPI(cfg, token)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer api.close()
 	ctx, cancel := context.WithTimeout(context.Background(), kagentTurnTimeout)
 	defer cancel()
 	session, err := api.createSessionOf(ctx, agent, uuid.NewString())
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer api.removeSession(session.GetId())
 	note("Session %s of %s (creator %s, %s)", session.GetId(), name, session.GetCreator(), sessionState(session))
 	t, err := api.turn(ctx, session, userMessage(prompt))
 	if err != nil {
-		return "", fmt.Errorf("A2A turn on %s: %w", name, err)
+		return "", session.GetId(), fmt.Errorf("A2A turn on %s: %w", name, err)
 	}
-	reply, err := t.completedText()
-	if err != nil {
-		return "", fmt.Errorf("A2A turn on %s: %w", name, err)
+	if reply, err = t.completedText(); err != nil {
+		return "", session.GetId(), fmt.Errorf("A2A turn on %s: %w", name, err)
 	}
-	return reply, nil
+	return reply, session.GetId(), nil
 }
 
 // removeSession deletes a session on the cleanup paths, bounded on its own
