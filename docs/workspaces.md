@@ -392,17 +392,23 @@ passes: it never fails for a lab that has no GitLab.
    audience `gitlab` and no token; `start_session` through agent-manager
    creates the Session on the volume, whose turn works in its directory with
    the clone at the mirrored head and holds no credential beyond the
-   platform's own variables (`GH_TOKEN`, the Harness's inert placeholder the
-   egress gateway replaces, is one of them).
-7. **Push from the Session**: the Session pushes an empty commit to a proof
-   branch and deletes the branch again. It holds no GitLab credential, so
-   GitLab accepts both only through Substrate's egress gateway, which fetches
-   the person's token from muster for a Session bound to them and sends it as
-   Basic with the user `oauth2` (muster's `credentialProvider.gitUsers`,
-   `gitlab: oauth2`).
+   platform's own variables (`GH_TOKEN` and `GITLAB_TOKEN`, the Harness's
+   inert placeholder the egress gateway replaces, and `GLAB_IS_OAUTH2` are
+   among them; a `GITLAB_TOKEN` of any other value is a credential).
+7. **Push and merge request from the Session**: the Session pushes an empty
+   commit to a proof branch and deletes the branch again. It holds no GitLab
+   credential, so GitLab accepts both only through Substrate's egress
+   gateway, which fetches the person's token from muster for a Session bound
+   to them and sends it as Basic with the user `oauth2` (muster's
+   `credentialProvider.gitUsers`, `gitlab: oauth2`). Between the two, on a
+   Harness that gives `glab` its placeholder (`GITLAB_TOKEN` set to kagent's inert placeholder, sent as an
+   OAuth2 bearer through `GLAB_IS_OAUTH2`), `glab api user` names the person
+   and `glab mr create` opens a merge request of the branch authored by them,
+   which the Session closes before it deletes the branch; on an older Harness
+   the stage reports glab's answer and leaves the merge request unjudged.
 8. **No workspace**: a Session started without a workspace works in the
-   default directory, holds no credential beyond the platform's own, and
-   `git ls-remote` of the private project is refused.
+   default directory, holds no credential beyond the platform's own and no
+   `GITLAB_TOKEN`, and `git ls-remote` of the private project is refused.
 9. **Disconnect**: the admin drops the grant in muster (`core_auth_logout`),
    and `list_providers` answers muster's sign-in link again; the admin grants
    it once more for the restore.
