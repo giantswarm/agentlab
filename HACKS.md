@@ -766,7 +766,7 @@ Go reads; the image's own roots stay, read from its certificate directory.
 muster URL and the CA source in the in-cluster turn's error. Lab-only by
 construction: an installation's edge serves a publicly trusted certificate.
 
-### U34. `tenantstest_slack.go`: on macOS the Slack steps run the gateway's image on the kind network — ACCEPTED
+### U35. `tenantstest_slack.go`: on macOS the Slack steps run the gateway's image on the kind network — ACCEPTED
 `tenants-test`'s Slack steps run klaus-gateway as `klaus-gateway-test` does,
 the image on the host's network. Docker Desktop leaves host networking off by
 default, so the Mac has no route to the container's loopback ports and the
@@ -781,7 +781,7 @@ host), and the fake Slack Web API is `host.docker.internal`. Linux keeps the
 host network. The bridged shape is `tenants-test`'s only; `klaus-gateway-test`
 is unchanged.
 
-### U35. `tenantstest_slack.go`: an allowed collaborator sends again after the replay note — BLOCKED UPSTREAM
+### U36. `tenantstest_slack.go`: an allowed collaborator sends again after the replay note — BLOCKED UPSTREAM
 After the thread's person allows a collaborator who may not use the thread's
 agent, klaus-gateway 4.10.0-rc.1 replays the held message, the controller
 refuses it, and the replay path answers with its generic "Your message could
@@ -792,7 +792,7 @@ the refusal, and the verdict says so. Unblocks when the gateway's replay note
 uses its not-permitted note (giantswarm/klaus-gateway, `postReplayFailureNote`
 in `pkg/channels/slack/slack.go`): the resend then goes.
 
-### U36. `tenantstest_edge.go`: the editor's UpdateAgent is tried again while it answers Internal — BLOCKED UPSTREAM
+### U37. `tenantstest_edge.go`: the editor's UpdateAgent is tried again while it answers Internal — BLOCKED UPSTREAM
 Right after the editor's `CreateAgent`, kagent 1.19.0's `UpdateAgent` reads
 the Agent from the controller's cache, which has not seen the create's own
 status write yet, and the API server's conflict comes back as `Internal`
@@ -905,3 +905,16 @@ The same cycle through `agentlab`, on a cold cluster, defaults from
 Form coverage: `go test ./...` drives the real huh form with scripted
 keystrokes (accept defaults, edit fields, toggle components) and unit-tests
 the post-renderer against a synthetic Helm release.
+
+### U34. `exec.go`: the lab's containers run with SELinux separation off — ACCEPTED
+On an SELinux-enforcing host (Fedora) under a rootful engine (Podman through
+`sudo`), a container's process may not read or execute a bind-mounted file
+labelled `user_home_t`, and every lab container bind-mounts one: the fakes
+(the lab's GitHub, the skill host, the mockllm) run agentlab's own binary
+from the user's home, beekeeper and klaus-gateway mount a run directory and
+the lab CA. The fake exits at once and `up` stops at the lab's GitHub with no
+log. **Fix:** `dockerRun` passes `--security-opt label=disable` to every
+`docker run`. Relabelling (`:z`) would change the user's own files and is
+undone by the next `self-update`; the lab's containers are throwaway
+processes of the user's own binary and images, so the separation guards
+nothing the user does not already own.

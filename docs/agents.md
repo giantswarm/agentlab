@@ -297,9 +297,9 @@ on a port-forward to its pod) as each person with their Dex token (audiences
      person when the gateway asks): refused with the same note, the Session's
      tasks unchanged (klaus-gateway 4.10.0-rc.1 answers the held message's
      replay after the Allow with its generic "could not be picked up again"
-     note; the person sends again and gets the refusal, HACKS.md U35). On
+     note; the person sends again and gets the refusal, HACKS.md U36). On
      macOS the image runs on the `kind` network with its ports published on
-     loopback (Docker Desktop's host networking is off, HACKS.md U34);
+     loopback (Docker Desktop's host networking is off, HACKS.md U35);
 5. as the admin (cluster-admin): a WorkerPool patch and delete and a pod
    labelled `ate.dev/worker-pool` (server-side dry runs), and an exec into a
    worker, are refused by the chart's `agent-platform-tenant-*` admission

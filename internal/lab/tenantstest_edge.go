@@ -53,7 +53,7 @@ const (
 	// groups in, as the API server reads it (--oidc-groups-claim).
 	tenantsTestGroupsClaim = "groups"
 	// edgeUpdateConflictWait bounds the editor's update retries while the
-	// controller's cached read of a new Agent is stale (HACKS.md U36).
+	// controller's cached read of a new Agent is stale (HACKS.md U37).
 	edgeUpdateConflictWait = 30 * time.Second
 	// tenantsTestEdgeChange is the change label's value.
 	tenantsTestEdgeChange = "changed"
@@ -478,7 +478,7 @@ func (e *tenantsEdge) run() ([]string, error) {
 	// The controller writes the update over its cached read of the Agent,
 	// which a create a moment ago leaves stale: the API server's conflict
 	// comes back as Internal (kagent's kubecrud Update), so a few tries
-	// (HACKS.md U36).
+	// (HACKS.md U37).
 	var updateErr error
 	waitFor(int(edgeUpdateConflictWait/pollInterval), pollInterval, func() bool {
 		updateErr = editorAPI.updateAgent(ctx, edgeAgent(a, tenantsTestAgent, map[string]string{tenantsTestEdgeLabel: tenantsTestEdgeChange}))
