@@ -434,7 +434,7 @@ type gitlabGrantProvider struct {
 func (gp *gitlabProof) gitlabProbeCommand() string {
 	remote := "https://" + gp.gitlabHost + "/" + gp.repo + ".git"
 	branch := gp.branch + "-session"
-	glab := `GLAB_CHECK_UPDATE=false NO_PROMPT=1 timeout 60 glab`
+	glab := `GLAB_CHECK_UPDATE=false GLAB_NO_PROMPT=1 timeout 60 glab`
 	project := `projects/` + url.PathEscape(gp.repo)
 	return `echo "` + probeMarker + ` pwd=$(pwd)"; ` +
 		`echo "` + probeMarker + ` mirrors=$(cd /mirrors 2>/dev/null && find . -mindepth 2 -maxdepth 2 -name '*.git' | sed 's|^\./||' | sort | tr '\n' ' ')"; ` +
@@ -446,9 +446,9 @@ func (gp *gitlabProof) gitlabProbeCommand() string {
 		`out=$(cd ./` + gp.repo + ` && git -c user.name=agentlab -c user.email=agentlab@lab.local commit -q --allow-empty -m agentlab-session-push && GIT_TERMINAL_PROMPT=0 timeout 60 git push ` + remote + ` HEAD:refs/heads/` + branch + ` 2>&1); rc=$?; ` +
 		`echo "` + probeMarker + ` ` + gitlabProbePush + `=rc$rc $(echo "$out" | tail -n 3 | tr '\n' ' ')"; ` +
 		`out=$(` + glab + ` api --hostname ` + gp.gitlabHost + ` user 2>&1); rc=$?; ` +
-		`echo "` + probeMarker + ` ` + gitlabProbeGlabUser + `=rc$rc $(echo "$out" | grep -o '"username":"[^"]*"' | head -n 1)$(test $rc = 0 || echo "$out" | tail -n 2 | tr '\n' ' ')"; ` +
+		`echo "` + probeMarker + ` ` + gitlabProbeGlabUser + `=rc$rc $(echo "$out" | grep -o '"username":"[^"]*"' | head -n 1)$(test $rc = 0 || echo "$out" | grep -v '^[[:space:]]*$' | tail -n 4 | tr -s ' \n' ' ')"; ` +
 		`out=$(cd ./` + gp.repo + ` && ` + glab + ` mr create -R https://` + gp.gitlabHost + `/` + gp.repo + ` --source-branch ` + branch + ` --title agentlab-session-merge-request --description 'agentlab workspace proof; closed at once' --yes 2>&1); rc=$?; ` +
-		`echo "` + probeMarker + ` ` + gitlabProbeMRCreate + `=rc$rc $(echo "$out" | grep -o 'https://[^ ]*/merge_requests/[0-9]*' | head -n 1)$(test $rc = 0 || echo "$out" | tail -n 2 | tr '\n' ' ')"; ` +
+		`echo "` + probeMarker + ` ` + gitlabProbeMRCreate + `=rc$rc $(echo "$out" | grep -o 'https://[^ ]*/merge_requests/[0-9]*' | head -n 1)$(test $rc = 0 || echo "$out" | grep -v '^[[:space:]]*$' | tail -n 4 | tr -s ' \n' ' ')"; ` +
 		`out=$(` + glab + ` api --hostname ` + gp.gitlabHost + ` '` + project + `/merge_requests?state=opened&source_branch=` + branch + `' 2>&1); ` +
 		`echo "` + probeMarker + ` ` + gitlabProbeMRAuthor + `=$(echo "$out" | grep -o '"author":{[^}]*}' | grep -o '"username":"[^"]*"' | head -n 1)"; ` +
 		`iid=$(echo "$out" | grep -o '"iid":[0-9]*' | head -n 1 | cut -d: -f2); ` +
