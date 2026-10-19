@@ -88,10 +88,11 @@ func TestJudgeMusterAroundTurns(t *testing.T) {
 		want  string
 		fails bool
 	}{
-		"no call after":       {[]string{inTurn}, "saw none", false},
-		"refused after":       {[]string{inTurn, strings.Replace(audit(deleted.Add(5*time.Second), "failure", actor), "session="+session, "error=actor is not bound", 1)}, "refused all 1 calls", false},
-		"accepted after":      {[]string{audit(deleted.Add(5*time.Second), "success", actor)}, "accepted 1 actor-JWT calls", true},
-		"another actor after": {[]string{audit(deleted.Add(5*time.Second), "success", other)}, "saw none", false},
+		"no call after":              {[]string{inTurn}, "saw none", false},
+		"refused after":              {[]string{inTurn, strings.Replace(audit(deleted.Add(5*time.Second), "failure", actor), "session="+session, "error=actor is not bound", 1)}, "refused all 1 calls", false},
+		"accepted after":             {[]string{audit(deleted.Add(5*time.Second), "success", actor)}, "accepted 1 actor-JWT calls", true},
+		"accepted before the unbind": {[]string{audit(deleted.Add(-time.Second), "success", actor)}, "saw none", false},
+		"another actor after":        {[]string{audit(deleted.Add(5*time.Second), "success", other)}, "saw none", false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			verdict, err := judgeAfterDelete(strings.Join(tc.lines, "\n"), actor, deleted, until)

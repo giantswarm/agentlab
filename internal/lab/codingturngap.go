@@ -61,7 +61,8 @@ const (
 	codingHeartbeatPurpose = "this is agentlab's test of the sandbox between turns on a throwaway lab cluster: the script starts one background process that, every few seconds for half an hour, appends the time and the HTTP status of one MCP initialize request with a placeholder Authorization header to the lab's own muster to a file in this directory; it prints no credential."
 )
 
-// codingHeartbeatCommand writes the heartbeat's script and starts it
+// codingHeartbeatCommand writes the heartbeat's script, empties its file
+// (truncated, not removed: codex refuses an rm -f) and starts it
 // detached from the shell tool's call, in a session of its own where the
 // image has setsid. Each tick is a line <unix seconds>:<muster's status>;
 // outside a workspace Session muster refuses the placeholder.
@@ -76,7 +77,7 @@ while [ "$i" -lt ` + strconv.Itoa(codingHeartbeatTicks) + ` ]; do
   sleep ` + strconv.Itoa(int(codingHeartbeatInterval/time.Second)) + `
 done
 AGENTLAB_EOF
-rm -f ` + codingTestHeartbeat + `
+: > ` + codingTestHeartbeat + `
 if command -v setsid >/dev/null; then setsid sh ` + codingTestHeartbeatScript + ` </dev/null >/dev/null 2>&1 &
 else nohup sh ` + codingTestHeartbeatScript + ` </dev/null >/dev/null 2>&1 &
 fi
@@ -211,18 +212,30 @@ func judgeGapAudit(logs, actor string, gap turnGap) (string, error) {
 	return fmt.Sprintf("muster audited no call of the actor %s between the turns", actor), nil
 }
 
-// judgeAfterDelete is the verdict on muster's log from delete_session on:
-// no accepted call of the deleted Session's actor; the refused ones are
-// counted.
-func judgeAfterDelete(logs, actor string, deleteCalled, until time.Time) (string, error) {
-	accepted, refused := actorBearerAudits(logs, actor, deleteCalled.Add(-unbindClockSlack), until)
+// judgeAfterDelete is the verdict on muster's log from the actor's unbind
+// on (delete_session settles the Session's runtime work first, and the
+// calls of a turn still running then are the Session's): no accepted call
+// of the deleted Session's actor; the refused ones are counted.
+func judgeAfterDelete(logs, actor string, unbound, until time.Time) (string, error) {
+	accepted, refused := actorBearerAudits(logs, actor, unbound, until)
 	if len(accepted) > 0 {
-		return "", fmt.Errorf("muster accepted %d actor-JWT calls of the actor %s after delete_session: %s", len(accepted), actor, excerpt(strings.Join(accepted, " | "), 600))
+		return "", fmt.Errorf("muster accepted %d actor-JWT calls of the actor %s after delete_session unbound it: %s", len(accepted), actor, excerpt(strings.Join(accepted, " | "), 600))
 	}
 	if len(refused) > 0 {
 		return fmt.Sprintf("muster refused all %d calls of the unbound actor %s after delete_session: %s", len(refused), actor, excerpt(refused[0], 300)), nil
 	}
-	return fmt.Sprintf("muster accepted no call of the actor %s in the %s after delete_session, and saw none: its sandbox went with the Session", actor, until.Sub(deleteCalled).Round(time.Second)), nil
+	return fmt.Sprintf("muster accepted no call of the actor %s in the %s after delete_session unbound it, and saw none: its sandbox went with the Session", actor, until.Sub(unbound).Round(time.Second)), nil
+}
+
+// unboundAt is when muster logged the actor unbound after the delete was
+// called.
+func unboundAt(events []musterBindingEvent, actor string, deleteCalled time.Time) time.Time {
+	for _, e := range events {
+		if e.Msg == musterSessionUnbound && e.Actor == actor && !e.Time.Before(deleteCalled.Add(-unbindClockSlack)) {
+			return e.Time
+		}
+	}
+	return deleteCalled
 }
 
 // boundActor is the actor muster logged bound to the Session since the
@@ -295,12 +308,15 @@ func (p *codingProof) proveAfterDelete(ctx context.Context, session *apiv1alpha1
 	since := p.rig.started.Add(-unbindClockSlack)
 	deadline := time.Now().Add(unbindLogWait)
 	var bound musterBindingEvent
+	var unbound time.Time
 	for {
 		logs, err := p.rig.musterLog()
 		if err != nil {
 			return err
 		}
-		if bound, err = judgeUnbound(musterBindingEvents(logs, since), name, called); err == nil {
+		events := musterBindingEvents(logs, since)
+		if bound, err = judgeUnbound(events, name, called); err == nil {
+			unbound = unboundAt(events, bound.Actor, called)
 			break
 		}
 		if time.Now().After(deadline) {
@@ -308,13 +324,13 @@ func (p *codingProof) proveAfterDelete(ctx context.Context, session *apiv1alpha1
 		}
 		time.Sleep(3 * time.Second)
 	}
-	note("delete_session: muster logged the actor %s of %s unbound; watching its log for %s", bound.Actor, id, codingAfterDeleteWatch)
+	note("delete_session: muster logged the actor %s of %s unbound at %s; watching its log for %s", bound.Actor, id, unbound.UTC().Format(time.RFC3339), codingAfterDeleteWatch)
 	time.Sleep(codingAfterDeleteWatch)
 	logs, err := p.rig.musterLog()
 	if err != nil {
 		return err
 	}
-	verdict, err := judgeAfterDelete(logs, bound.Actor, called, time.Now())
+	verdict, err := judgeAfterDelete(logs, bound.Actor, unbound, time.Now())
 	if err != nil {
 		return fmt.Errorf("%w (%s)", err, p.line)
 	}
