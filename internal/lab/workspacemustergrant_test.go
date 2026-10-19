@@ -15,6 +15,10 @@ const testGrantClientID = "Iv1.pinned"
 // testGrantAppID is that App's id, the issuer's last segment.
 const testGrantAppID = "4711"
 
+// testWorkspaceManagerRange is the chart's default workspace-manager range,
+// which admits releases below every floor.
+const testWorkspaceManagerRange = ">=0.5.0 <1.0.0"
+
 // stubWorkspaceManagerTags answers the workspace-manager repository's tag
 // listing with tags, the version memo cleared before and after.
 func stubWorkspaceManagerTags(t *testing.T, tags ...string) {
@@ -39,7 +43,7 @@ func stubWorkspaceManagerTags(t *testing.T, tags ...string) {
 // 0.10 release pins, one resolving to 0.9 does not, and a range in
 // platform.valuesFiles admitting a release candidate wins over the chart's.
 func TestWorkspaceManagerTakesGrant(t *testing.T) {
-	source := workspaceManagerSource{repository: "oci://gsoci.azurecr.io/charts/giantswarm", chart: "workspace-manager", versionRange: ">=0.5.0 <1.0.0"}
+	source := workspaceManagerSource{repository: "oci://gsoci.azurecr.io/charts/giantswarm", chart: workspaceManagerMCPServer, versionRange: testWorkspaceManagerRange}
 	stubWorkspacesChart(t, chartWorkspaces{Carries: true, Organizations: true, Manager: source})
 
 	stubWorkspaceManagerTags(t, "0.9.0", "0.10.0-rc.5")
@@ -90,7 +94,7 @@ func TestRangeFloorAdmitsGrant(t *testing.T) {
 		"0.10.0-rc.5":             true,
 		"=0.11.0":                 true,
 		">= 0.10.0, < 1.0.0":      true,
-		">=0.5.0 <1.0.0":          false,
+		testWorkspaceManagerRange: false,
 		">0.9.0":                  false,
 		"<1.0.0":                  false,
 		"~0.10.0":                 false,
@@ -166,7 +170,7 @@ func TestWorkspaceGrantValues(t *testing.T) {
 // chart renders it (0.11.0-rc.6 and newer, resolved like the grant floor);
 // an earlier chart's schema refuses the key, so its pin goes without.
 func TestWorkspaceGrantForRevocationEndpoint(t *testing.T) {
-	source := workspaceManagerSource{repository: "oci://gsoci.azurecr.io/charts/giantswarm", chart: "workspace-manager", versionRange: ">=0.5.0 <1.0.0"}
+	source := workspaceManagerSource{repository: "oci://gsoci.azurecr.io/charts/giantswarm", chart: workspaceManagerMCPServer, versionRange: testWorkspaceManagerRange}
 	stubWorkspacesChart(t, chartWorkspaces{Carries: true, Organizations: true, Manager: source})
 	const gitlab = "https://gitlab.example.com"
 	providers := []workspaceProviderValues{{Name: config.WorkspaceProviderGitLab, Kind: providerKindGitLab, URL: gitlab, ClientID: testGrantClientID, Secret: config.WorkspaceGitLabSecretName}}
@@ -200,8 +204,9 @@ func TestWorkspaceGrantForRevocationEndpoint(t *testing.T) {
 func TestWorkspaceGrantValuesRevocationEndpoint(t *testing.T) {
 	stubWorkspacesProbe(t, true)
 	for _, endpoint := range []string{"https://gitlab.example.com/oauth/revoke", ""} {
-		grant := &workspaceGrantValues{Provider: config.WorkspaceProviderFake, Issuer: "https://gitlab.example.com", AuthorizationEndpoint: "https://gitlab.example.com/oauth/authorize",
-			TokenEndpoint: "https://gitlab.example.com/oauth/token", RevocationEndpoint: endpoint, Secret: config.WorkspaceFakeSecretName}
+		grant := &workspaceGrantValues{Provider: config.WorkspaceProviderFake, Issuer: "https://gitlab.example.com", // #nosec G101 -- endpoints and a Secret name, no credential
+			AuthorizationEndpoint: "https://gitlab.example.com/oauth/authorize",
+			TokenEndpoint:         "https://gitlab.example.com/oauth/token", RevocationEndpoint: endpoint, Secret: config.WorkspaceFakeSecretName}
 		values, raw, _, _ := renderWorkspaceTemplates(t, workspaceLab(""), func(d *tmplData) { d.WorkspaceGrant = grant })
 		wm, _ := workspaceManagerBlock(t, values)
 		muster, _ := wm["muster"].(map[string]any)
