@@ -78,8 +78,8 @@ tenant, as on an installation.
 
 With `platform.tenants` on, muster serves the `MCPServer`s of the
 organization namespaces (`org-…`) next to its own namespace's
-(`muster.muster.mcpServersInAllNamespaces`, muster 5.47.0-rc.8 or later; the
-lab pins a release candidate, HACKS.md U38). What `tenants-test` asserts (the
+(`muster.muster.mcpServersInAllNamespaces`, muster 5.48.0 or later; the lab
+pins 5.48.0, HACKS.md U38). What `tenants-test` asserts (the
 agent-permissions plan's D9):
 
 - **Kubernetes RBAC decides what a person sees.** muster lists the
@@ -107,11 +107,29 @@ agent-permissions plan's D9):
   namespace, and its token is filed under its namespace and issuer: a sign-in
   to it gives no token to a server of the same issuer in muster's namespace or
   in another organization. The lab Dex lists the callbacks of `tenants-test`'s
-  two namespaces on the platform client. muster reads the client's Secret in
-  the server's namespace with its own ServiceAccount, which no chart grants
-  there yet: `tenants-test` binds it (HACKS.md U39).
+  two namespaces on the platform client.
+- **A tenant server's sign-ins go with it.** muster files them under the
+  `MCPServer` they were made for and forgets them when it is gone: a
+  namespace created again with the same name starts with no sign-in, and
+  `core_auth_login` there answers a sign-in link, not a connect. Every
+  `tenants-test` run creates its namespaces again, so a second run right
+  after the first signs in again.
 - **Through an agent, as the person**: an organization's agent bound to
   muster lists, in a turn as the person, the servers that person sees.
+
+What an organization sets up for a server of its own that signs in with a
+client of its namespace (`authorizationServer.clientCredentialsSecretRef`):
+muster reads that Secret with its own ServiceAccount, and no chart grants it a
+read outside muster's namespace (least privilege). So whoever declares the
+`MCPServer` also declares, in its namespace, a Role with `get` on that Secret
+alone (`resourceNames`) and a RoleBinding of it to muster's ServiceAccount
+(`muster` in `agent-platform`), as muster's how-to ["Servers outside muster's
+namespace"](https://github.com/giantswarm/muster/blob/main/docs/how-to/connecting-non-rfc9728-mcp-servers.md#servers-outside-musters-namespace)
+describes. `tenants-test`'s fixture does this for
+`agentlab-tenants-mcp` (the Role and RoleBinding
+`agentlab-tenants-mcp-secret-reader`). Without them, muster answers the
+sign-in with `Cannot sign in to '<namespace>/<name>': the server's sign-in is
+not ready: <reason>`, and the reason names the Secret and the Role.
 
 ### The portal per tenant
 

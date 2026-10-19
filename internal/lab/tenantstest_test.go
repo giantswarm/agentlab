@@ -199,8 +199,8 @@ func TestPlatformValuesTenants(t *testing.T) {
 		t.Errorf("the rendered policy leaves %v uncovered for tenants-test", got)
 	}
 
-	// muster: the setting and the release candidate that carries it with
-	// the tenants on, neither off (an older muster chart refuses the key); the
+	// muster: the setting and the release that tenants-test needs with the
+	// tenants on, neither off (an older muster chart refuses the key); the
 	// audience the lab's API server trusts either way, or every listing as
 	// the caller fails closed.
 	musterOf := func(values map[string]any) (component, chart map[string]any) {
@@ -209,8 +209,8 @@ func TestPlatformValuesTenants(t *testing.T) {
 		return component, chart
 	}
 	component, chart := musterOf(on)
-	if component["versionRange"] != "5.47.0-rc.9" || chart["mcpServersInAllNamespaces"] != true {
-		t.Errorf("with tenants: components.muster.versionRange=%v, muster.muster.mcpServersInAllNamespaces=%v, want 5.47.0-rc.9 and true", component["versionRange"], chart["mcpServersInAllNamespaces"])
+	if component["versionRange"] != "5.48.0" || chart["mcpServersInAllNamespaces"] != true {
+		t.Errorf("with tenants: components.muster.versionRange=%v, muster.muster.mcpServersInAllNamespaces=%v, want 5.48.0 and true", component["versionRange"], chart["mcpServersInAllNamespaces"])
 	}
 	offComponent, offChart := musterOf(off)
 	if offComponent["versionRange"] != nil || offChart["mcpServersInAllNamespaces"] != nil {
@@ -443,25 +443,25 @@ func TestRefusalProblem(t *testing.T) {
 	}
 }
 
-// The muster check passes on a muster with giantswarm/muster#1601 and the
+// The muster check passes on a muster with giantswarm/muster#1603 and the
 // setting on, and otherwise names the missing piece: the red verdict of a
 // lab whose muster serves no organization's MCP servers.
 func TestMusterTenancyProblem(t *testing.T) {
-	const tooOld = "needs 5.47.0-rc.8 or later"
+	const tooOld = "needs 5.48.0 or later"
 	for name, tc := range map[string]struct {
 		tenancy musterTenancy
 		want    string
 	}{
-		"the pinned candidate":       {musterTenancy{"gsoci.azurecr.io/giantswarm/muster:5.47.0-rc.9", true}, ""},
-		"the first with #1601":       {musterTenancy{"gsoci.azurecr.io/giantswarm/muster:5.47.0-rc.8", true}, ""},
-		"its release":                {musterTenancy{"gsoci.azurecr.io/giantswarm/muster:5.47.0", true}, ""},
-		"a dev image, no version":    {musterTenancy{"localhost:5001/muster:dev-1a2b3c", true}, ""},
-		"by digest":                  {musterTenancy{"gsoci.azurecr.io/giantswarm/muster:5.47.0-rc.9@sha256:0123", true}, ""},
-		"the release before":         {musterTenancy{"gsoci.azurecr.io/giantswarm/muster:5.46.10", true}, tooOld},
-		"an earlier candidate":       {musterTenancy{"gsoci.azurecr.io/giantswarm/muster:5.47.0-rc.7", true}, tooOld},
-		"an older one, by digest":    {musterTenancy{"gsoci.azurecr.io/giantswarm/muster:5.46.10@sha256:0123", true}, tooOld},
-		"the setting off":            {musterTenancy{"gsoci.azurecr.io/giantswarm/muster:5.47.0-rc.9", false}, "without mcpServersInAllNamespaces"},
-		"older and off: the version": {musterTenancy{"gsoci.azurecr.io/giantswarm/muster:5.46.10", false}, tooOld},
+		"the first with #1603":        {musterTenancy{"gsoci.azurecr.io/giantswarm/muster:5.48.0", true}, ""},
+		"a later release":             {musterTenancy{"gsoci.azurecr.io/giantswarm/muster:5.48.1", true}, ""},
+		"a dev image, no version":     {musterTenancy{"localhost:5001/muster:dev-1a2b3c", true}, ""},
+		"by digest":                   {musterTenancy{"gsoci.azurecr.io/giantswarm/muster:5.48.0@sha256:0123", true}, ""},
+		"the release before":          {musterTenancy{"gsoci.azurecr.io/giantswarm/muster:5.47.0", true}, tooOld},
+		"a candidate of it":           {musterTenancy{"gsoci.azurecr.io/giantswarm/muster:5.48.0-rc.1", true}, tooOld},
+		"the candidate pinned before": {musterTenancy{"gsoci.azurecr.io/giantswarm/muster:5.47.0-rc.9", true}, tooOld},
+		"an older one, by digest":     {musterTenancy{"gsoci.azurecr.io/giantswarm/muster:5.47.0-rc.9@sha256:0123", true}, tooOld},
+		"the setting off":             {musterTenancy{"gsoci.azurecr.io/giantswarm/muster:5.48.0", false}, "without mcpServersInAllNamespaces"},
+		"older and off: the version":  {musterTenancy{"gsoci.azurecr.io/giantswarm/muster:5.47.0", false}, tooOld},
 	} {
 		p := tc.tenancy.problem()
 		if tc.want == "" && p != "" || tc.want != "" && !strings.Contains(p, tc.want) {

@@ -27,18 +27,20 @@ import (
 // token, and files a tenant server's sign-in under its namespace.
 const (
 	// tenantsMusterVersion is the muster chart the lab pins with the tenants
-	// on: the newest release candidate with giantswarm/muster#1601 (the
-	// listing as the caller). HACKS.md U38.
-	tenantsMusterVersion = "5.47.0-rc.9"
-	// tenantsMusterMinimum is the first muster with #1601.
-	tenantsMusterMinimum = "5.47.0-rc.8"
+	// on. HACKS.md U38.
+	tenantsMusterVersion = "5.48.0"
+	// tenantsMusterMinimum is the first muster with giantswarm/muster#1603: a
+	// tenant server's sign-ins go with its MCPServer, and a pin's Secret muster
+	// may not read is named in core_auth_login's answer.
+	tenantsMusterMinimum = "5.48.0"
 	// tenantsMCPServer is the sign-in fixture tenants-test creates in each
 	// organization namespace: the lab's oauth-fixture.yaml.tmpl shape, with
 	// the same issuer as lab-oauth-fixture in muster's namespace.
 	tenantsMCPServer = "agentlab-tenants-mcp"
 	// tenantsMCPClient is its Secret with the OAuth client (the lab's
 	// platform client), in its own namespace; tenantsMCPSecretReader the Role
-	// and RoleBinding that let muster read it there (HACKS.md U39).
+	// and RoleBinding that let muster read it there (docs/identity.md "MCP
+	// servers per tenant").
 	tenantsMCPClient       = "agentlab-tenants-mcp-client" // #nosec G101 -- a Secret's name
 	tenantsMCPSecretReader = "agentlab-tenants-mcp-secret-reader"
 	// tenantsMCPMissing names a server that exists in no namespace: what an
@@ -104,7 +106,7 @@ func (t musterTenancy) problem() string {
 	}
 	minimum := semver.MustParse(tenantsMusterMinimum)
 	if v, err := semver.NewVersion(tag); err == nil && v.LessThan(minimum) {
-		return fmt.Sprintf("muster %s lists no organization's MCPServer as the caller: it needs %s or later (giantswarm/muster#1601). `agentlab platform` with this agentlab pins %s with platform.tenants on", tag, tenantsMusterMinimum, tenantsMusterVersion)
+		return fmt.Sprintf("muster %s keeps a tenant server's sign-ins after its namespace is gone: it needs %s or later (giantswarm/muster#1603). `agentlab platform` with this agentlab pins %s with platform.tenants on", tag, tenantsMusterMinimum, tenantsMusterVersion)
 	}
 	if !t.allNamespaces {
 		return "muster runs without mcpServersInAllNamespaces: it serves no organization namespace's MCPServer. `agentlab platform` with this agentlab sets muster.muster.mcpServersInAllNamespaces with platform.tenants on (a platform.valuesFiles overlay that sets it false wins)"
@@ -169,8 +171,9 @@ spec:
 // lab fixture's shape (oauth-fixture.yaml.tmpl), with the same issuer as
 // lab-oauth-fixture, so a sign-in that leaked across namespaces would show.
 // muster reads a pin's Secret in the server's namespace with its own
-// ServiceAccount, which neither the muster chart nor the platform chart
-// lets it do outside muster's namespace (HACKS.md U39).
+// ServiceAccount, and no chart grants that outside muster's namespace: the
+// Role and RoleBinding are the set-up whoever declares a tenant server
+// declares with it (muster's how-to "Servers outside muster's namespace").
 func tenantSignInFixture(cfg *config.Config, ns string) string {
 	return fmt.Sprintf(`apiVersion: v1
 kind: Secret
@@ -455,13 +458,12 @@ func tenantSignInRedirect(challengeURL string) (string, error) {
 // completed on that callback.
 func signInToTenantServer(cfg *config.Config, s *musterSession, user *config.User, ns string) error {
 	key := tenantServerKey(ns, tenantsMCPServer)
-	// A sign-in of an earlier run outlives its namespace (muster keeps the
-	// person's token under the namespace and issuer), so the person signs
-	// out first: core_auth_login then answers a challenge, not a connect.
-	signOutOf(s, key)
+	// The namespace is new in every run: core_auth_login answers a challenge,
+	// not a connect, so no sign-in of an earlier run's namespace of the same
+	// name reached it.
 	challenge, err := signInChallenge(cfg, s, key)
 	if err != nil {
-		return fmt.Errorf("%s's core_auth_login for %s: %w", user.Email, key, err)
+		return fmt.Errorf("%s's core_auth_login for %s, in a namespace new in this run: %w", user.Email, key, err)
 	}
 	redirect, err := tenantSignInRedirect(challenge.authURL)
 	if err != nil {
@@ -590,13 +592,6 @@ func (m *tenantsMuster) run() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	// The sign-ins of M2 and M4 go at the end: muster keeps them past the
-	// namespaces.
-	defer func() {
-		signOutOf(sessions[1], keyB)
-		signOutOf(sessions[0], keyA)
-		signOutOf(adminSession, keyA)
-	}()
 	platform, err := platformMCPServers()
 	if err != nil {
 		return nil, err
