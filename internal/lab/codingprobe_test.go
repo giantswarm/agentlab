@@ -54,6 +54,8 @@ func TestCodingProbeLineSeparators(t *testing.T) {
 	for name, reply := range map[string]string{
 		"real newlines":    codingReply,
 		"literal newlines": strings.ReplaceAll(codingReply, "\n", `\n`),
+		"double-escaped":   strings.ReplaceAll(codingReply, "\n", `\\n`),
+		"one line":         strings.ReplaceAll(codingReply, "\n"+probeMarker, " "+probeMarker),
 	} {
 		got := parseCodingProbe(reply)
 		if got["uid"] != "65532" || len(got) != len(want) {
@@ -66,6 +68,10 @@ func TestCodingProbeLineSeparators(t *testing.T) {
 		}
 		if _, err := got.uidSplit(nil); err != nil {
 			t.Errorf("%s: uid split: %v", name, err)
+		}
+		wrong := strings.Replace(reply, "uid=65532", "uid=0", 1)
+		if _, err := parseCodingProbe(wrong).uidSplit(nil); err == nil {
+			t.Errorf("%s: uid split passed on uid 0", name)
 		}
 	}
 }
