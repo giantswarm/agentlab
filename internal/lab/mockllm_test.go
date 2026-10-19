@@ -156,8 +156,8 @@ func TestMockLLMScriptAnswersTheCodexTurns(t *testing.T) {
 		t.Fatalf("on the MCP prompt the mock answered %+v, wanted the tool search", search)
 	}
 	call := mockLLMCall(t, srv, userItem(codingMCPCallPrompt()), search, outputOf(search))
-	if call.Type != "function_call" || call.Name != codingTestReadTool || call.Namespace != "mcp__agentlab_coding_muster" {
-		t.Fatalf("after the search the mock answered %+v, wanted %s in the binding's namespace", call, codingTestReadTool)
+	if call.Type != "function_call" || call.Name != musterCallTool || call.Namespace != "mcp__agentlab_coding_muster" || stringOf(call.Arguments) != musterCallToolArguments(codingTestReadTool) {
+		t.Fatalf("after the search the mock answered %+v, wanted %s running %s in the binding's namespace", call, musterCallTool, codingTestReadTool)
 	}
 	if reply := mockLLMCall(t, srv, userItem(codingMCPCallPrompt()), call, outputOf(call)); reply.Type != mockLLMMessage {
 		t.Fatalf("after the MCP call's output the mock answered %+v", reply)
