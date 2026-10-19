@@ -166,8 +166,17 @@ func signInHops(hops []signInHop) string {
 }
 
 // musterSignInSucceeded is the heading of muster's proxy callback page on a
-// completed sign-in.
-const musterSignInSucceeded = "Authentication Successful"
+// completed sign-in: "Signed in" on its pagekit pages, "Authentication
+// Successful" on a muster before them.
+var musterSignInSucceeded = []string{"Signed in", "Authentication Successful"}
+
+// signInCompleted says whether muster's callback page reports a completed
+// sign-in.
+func signInCompleted(page []byte) bool {
+	return slices.ContainsFunc(musterSignInSucceeded, func(heading string) bool {
+		return strings.Contains(string(page), heading)
+	})
+}
 
 // errSignInStopped is a walk that ended before the callback completed; its
 // message names the hop and the status it stopped at.
@@ -238,7 +247,7 @@ func walkProviderSignIn(client *http.Client, link, fixtureLogin string, login *p
 			next = location
 		case resp.StatusCode != http.StatusOK:
 			return hops, stopped(hop, pageHeading(page))
-		case next.Path == callback && !strings.Contains(string(page), musterSignInSucceeded):
+		case next.Path == callback && !signInCompleted(page):
 			return hops, stopped(hop, "muster's callback did not complete the sign-in: "+pageHeading(page))
 		case next.Path == callback:
 			return hops, nil

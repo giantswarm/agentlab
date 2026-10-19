@@ -41,7 +41,7 @@ func newSignInLab(t *testing.T) *signInLab {
 			return
 		}
 		l.completed = true
-		_, _ = w.Write([]byte("<html><body><h1>" + musterSignInSucceeded + "</h1></body></html>"))
+		_, _ = w.Write([]byte("<html><body><h1>" + musterSignInSucceeded[0] + "</h1></body></html>"))
 	})
 	l.server = httptest.NewTLSServer(mux)
 	t.Cleanup(l.server.Close)
@@ -156,6 +156,19 @@ func TestGrantHeld(t *testing.T) {
 	} {
 		if got := grantHeld(text); got != want {
 			t.Errorf("grantHeld(%q) = %t, want %t", text, got, want)
+		}
+	}
+}
+
+func TestSignInCompleted(t *testing.T) {
+	for page, want := range map[string]bool{
+		"<h1>Signed in</h1><p>workspace-manager is now connected</p>": true,
+		"<h1>Authentication Successful</h1>":                          true,
+		"<h1>Authentication Failed</h1>":                              false,
+		"<h1>Sign-in failed</h1>":                                     false,
+	} {
+		if got := signInCompleted([]byte(page)); got != want {
+			t.Errorf("signInCompleted(%q) = %t, want %t", page, got, want)
 		}
 	}
 }
