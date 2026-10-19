@@ -81,6 +81,7 @@ func TestJudgeMusterAroundTurns(t *testing.T) {
 		t.Errorf("judgeGapAudit on a call in the gap = %v, want a call outside a turn", err)
 	}
 
+	const sawNone = "saw none"
 	deleted := ended.Add(5 * time.Minute)
 	until := deleted.Add(codingAfterDeleteWatch)
 	for name, tc := range map[string]struct {
@@ -88,11 +89,11 @@ func TestJudgeMusterAroundTurns(t *testing.T) {
 		want  string
 		fails bool
 	}{
-		"no call after":              {[]string{inTurn}, "saw none", false},
+		"no call after":              {[]string{inTurn}, sawNone, false},
 		"refused after":              {[]string{inTurn, strings.Replace(audit(deleted.Add(5*time.Second), "failure", actor), "session="+session, "error=actor is not bound", 1)}, "refused all 1 calls", false},
 		"accepted after":             {[]string{audit(deleted.Add(5*time.Second), "success", actor)}, "accepted 1 actor-JWT calls", true},
-		"accepted before the unbind": {[]string{audit(deleted.Add(-time.Second), "success", actor)}, "saw none", false},
-		"another actor after":        {[]string{audit(deleted.Add(5*time.Second), "success", other)}, "saw none", false},
+		"accepted before the unbind": {[]string{audit(deleted.Add(-time.Second), "success", actor)}, sawNone, false},
+		"another actor after":        {[]string{audit(deleted.Add(5*time.Second), "success", other)}, sawNone, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			verdict, err := judgeAfterDelete(strings.Join(tc.lines, "\n"), actor, deleted, until)
