@@ -111,7 +111,7 @@ func (cp *callerCredentialProof) deleteSession(id string) error {
 	called := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), sessionDeleteTimeout)
 	defer cancel()
-	deleted, err := deleteThroughManager(ctx, cp.admin.session, id)
+	deleted, err := deleteThroughManager(ctx, cp.person.session, id)
 	if err != nil {
 		return err
 	}
@@ -169,11 +169,9 @@ func deleteThroughManager(ctx context.Context, ms *musterSession, id string) (*s
 
 // unbound reads muster's log since the Session's start and judges it.
 func (cp *callerCredentialProof) unbound(session string, deleteCalled time.Time) (musterBindingEvent, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	logs, err := podLogs(ctx, platformNamespace, "deploy/"+componentMuster, componentMuster, time.Since(cp.started)+time.Minute)
+	logs, err := cp.musterLog()
 	if err != nil {
-		return musterBindingEvent{}, fmt.Errorf("reading muster's log: %w", err)
+		return musterBindingEvent{}, err
 	}
 	return judgeUnbound(musterBindingEvents(logs, cp.started.Add(-unbindClockSlack)), session, deleteCalled)
 }
