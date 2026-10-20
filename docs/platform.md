@@ -151,8 +151,8 @@ The platform installs as part of `agentlab up` (it is enabled in the default
 configuration); on an already-running cluster the steps are also standalone:
 
 ```bash
-./agentlab platform       # upgrade-or-install of the chart (embedded Helm), then waits for every component
-./agentlab platform-test  # headless proof of the whole chain
+agentlab platform       # upgrade-or-install of the chart (embedded Helm), then waits for every component
+agentlab platform-test  # headless proof of the whole chain
 ```
 
 `platform-test` runs in stages — the Dex token, the muster session, the MCP
