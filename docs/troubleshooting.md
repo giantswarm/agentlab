@@ -115,6 +115,17 @@ plumbing for model servers under
   on its `HelmRelease` minutes later. Fix the host's network or DNS
   (`getent hosts gsoci.azurecr.io`), then run the command the message names —
   `agentlab platform` on a running cluster.
+- **`component chart(s) could not be rendered, the registry has no such chart
+  through the retries`** stops `up` or `platform` before the install for the
+  same reason: the registry answered, but not with the chart the component's
+  `OCIRepository` asks for — `failed to perform "FetchReference" … not found`,
+  or `no tag matches semverFilter …`. The `rendering …: the registry has no
+  such chart yet` lines above it are the retries (some two minutes), which
+  carry a branch build through the moment its tag is listed before its
+  manifest is served. The message names the component, the chart and the
+  version: check the version the meta chart or a `platform.valuesFiles`
+  overlay pins (`components.<name>.versionRange`, `semverFilter`), or wait
+  until that build is published, then run `agentlab platform` again.
 - **Restarts everywhere at the same minute are the host's disk.** When
   kube-scheduler, kube-controller-manager, Kyverno, Flux, the agentgateway
   controller and kagent all show restarts with the same age, each exited
@@ -189,3 +200,10 @@ plumbing for model servers under
   manager owns (`helm` from a client-side install, or a binary of another name).
   The conflicting objects and fields are in the Helm log printed above the
   line. What is left cannot be resolved by an upgrade: recreate the lab.
+- **`platform workload field(s) were written outside the platform's Helm
+  releases`** — a workload carries a hand's patch beside the render (the line
+  names the workload, the fields and the writer, `kubectl-patch` for one), and
+  no platform run removes it. Remove each field with the inverse edit (`kubectl
+  patch --type=json -p '[{"op":"remove","path":"/spec/template/spec/hostNetwork"}]'`,
+  or `kubectl edit`), then `agentlab status` reads `workloads   as the releases
+  render them` and platform-test passes its first stage.

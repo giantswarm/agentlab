@@ -74,6 +74,38 @@ func TestCreateAgentArgs(t *testing.T) {
 	}
 }
 
+// TestAgentPluginJSON: a plugin without a selection omits skills, the
+// Claude-format shape; an empty selection is sent as [], which enables
+// nothing; plugins reach create_agent only when the spec has some.
+func TestAgentPluginJSON(t *testing.T) {
+	git := &gitSkill{URL: pluginExampleURL, Commit: pluginExampleCommit}
+	for _, tc := range []struct {
+		plugin agentPlugin
+		want   string
+	}{
+		{agentPlugin{Git: git, Path: claudePluginPath}, `{"path":"` + claudePluginPath + `","git":{"url":"` + pluginExampleURL + `","commit":"` + pluginExampleCommit + `"}}`},
+		{agentPlugin{Git: git, Skills: []string{}}, `{"git":{"url":"` + pluginExampleURL + `","commit":"` + pluginExampleCommit + `"},"skills":[]}`},
+		{agentPlugin{Git: git, Skills: []string{pluginExampleSkill}}, `{"git":{"url":"` + pluginExampleURL + `","commit":"` + pluginExampleCommit + `"},"skills":["` + pluginExampleSkill + `"]}`},
+	} {
+		got, err := json.Marshal(tc.plugin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != tc.want {
+			t.Errorf("%+v marshals to %s, want %s", tc.plugin, got, tc.want)
+		}
+	}
+	bare, err := createAgentArgs(agentSpec{Name: testAgentName, ModelConfig: defaultModelConfig})
+	if _, sent := bare[pluginsKey]; err != nil || sent {
+		t.Errorf("a spec without plugins composes %v, %v", bare, err)
+	}
+	plugins := []agentPlugin{{Git: git, Skills: []string{pluginExampleSkill}}}
+	args, err := createAgentArgs(agentSpec{Name: testAgentName, ModelConfig: defaultModelConfig, Plugins: plugins})
+	if err != nil || !reflect.DeepEqual(args[pluginsKey], plugins) {
+		t.Errorf("plugins compose %v, %v", args[pluginsKey], err)
+	}
+}
+
 // TestAgentManifests: the direct writer composes agent-manager's two
 // objects — the shared OCIRepository of the chart at 1.x and the agent's
 // HelmRelease as the tenant ServiceAccount on the chart values, skills pinned

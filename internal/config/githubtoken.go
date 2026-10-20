@@ -1,6 +1,6 @@
 package config
 
-// GitHubToken is where the lab's GitHub token comes from: never this file.
+// GitHubToken is where the lab's token for GitHub comes from: never this file.
 // Source names where the operator's secret tooling finds it; `agentlab up`
 // and `platform` hand the reference to that tooling, which writes the value
 // straight into the lab's Secret agentlab-github-token in its own process
@@ -9,8 +9,8 @@ package config
 // recreate and agentlab never reads a value.
 type GitHubToken struct {
 	// Source is a reference `beekeeper secret copy` resolves, in the form
-	// AIKey.Source takes. Empty means the token comes from $GITHUB_TOKEN at
-	// deploy time, else GitHub is called unauthenticated.
+	// AIKey.Source takes. Empty means no token: GitHub is called as the
+	// skills GitHub App when one is recorded, else unauthenticated.
 	Source string `yaml:"source,omitempty"`
 }
 

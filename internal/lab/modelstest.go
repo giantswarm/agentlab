@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"slices"
 	"strings"
 	"time"
@@ -82,13 +81,6 @@ const (
 // downloaded — the one proof that leaves something behind, by design.
 func ModelsTest(cfg *config.Config, email string, opts ModelsTestOptions) error {
 	backendName, model := opts.Backend, opts.Model
-	if opts.GitHubFakeBinary == "" {
-		exe, err := os.Executable()
-		if err != nil {
-			return fmt.Errorf("locating this binary for the fake GitHub API container: %w (pass --github-fake-binary)", err)
-		}
-		opts.GitHubFakeBinary = exe
-	}
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
 	}
@@ -318,21 +310,6 @@ func ModelsTest(cfg *config.Config, email string, opts ModelsTestOptions) error 
 	if err := proveGitOpsOwned(&api, backendName, model, mcName); err != nil {
 		return err
 	}
-	step("Unwiring %s through %s for the commit proof, whose model-manager is an instance of its own", mcName, modelManagerMCPServer)
-	if _, err := api.call("unwire_model", map[string]any{modelField: model, backendField: backendName}); err != nil {
-		return err
-	}
-	commitVerdict, err := proveCommit(cfg, user, token, opts.GitHubFakeBinary, backendName, model, mcName)
-	if err != nil {
-		return err
-	}
-	step("Wiring %s again through %s", mcName, modelManagerMCPServer)
-	if _, err := api.call("wire_model", map[string]any{modelField: model, backendField: backendName}); err != nil {
-		return err
-	}
-	if _, err := readModelConfig(mcName); err != nil {
-		return fmt.Errorf("ModelConfig %s after wiring it again: %w", mcName, err)
-	}
 
 	const pongPrompt = "Reply with exactly the word pong and nothing else."
 	step("Agent turn on %s: an agent created through agent-manager as %s, Ready on Harness %s, one A2A turn through the edge (runtime -> host %s)", mcName, user.Email, kagentHarness, config.BackendServerName(backendName))
@@ -433,7 +410,6 @@ func ModelsTest(cfg *config.Config, email string, opts ModelsTestOptions) error 
 	fmt.Printf("PASS: the caller's identity — job requestedBy=%s; a viewer's wire is Forbidden by the apiserver (user RBAC, not the ServiceAccount's)\n", user.Email)
 	fmt.Println("PASS: dryRun on pull, wire, unwire, load, unload, delete and cancel_job changes nothing; mode commit on pull, delete and load answers unsupported")
 	fmt.Println("PASS: a Flux-labelled ModelConfig is never written live — wire, unwire and delete answer gitops_owned, the object and the model untouched")
-	fmt.Printf("PASS: %s\n", commitVerdict)
 	if !spec.deleteOverREST {
 		fmt.Printf("NOTE: %s is still downloaded on the host — %s has no delete over its API. Remove it there: `%s`\n",
 			model, server, fmt.Sprintf(spec.removeHint, model))

@@ -74,13 +74,14 @@ func proveWorkspacesActorMount(ctx context.Context, driver string, timeout time.
 		return false, err
 	}
 	defer api.Close()
-	if _, err := api.GetAtespace(ctx, &ateapi.GetAtespaceRequest{Atespace: &ateapi.ObjectRef{Name: kagentNamespace}}); err != nil {
-		return false, fmt.Errorf("reading the atespace %s through ate-api-server: %w", kagentNamespace, err)
+	atespace, err := ensureWorkspacesAtespace(ctx, api)
+	if err != nil {
+		return false, err
 	}
 	if !clusterObjectExists(ctx, csiDriverConfigResource, driver) {
 		return false, fmt.Errorf("the driver %s is not registered with Substrate: no CSIDriverConfig %s; `agentlab platform` registers it with the workspace storage", driver, driver)
 	}
-	note("ate-api-server reached as the ate-client ServiceAccount, atespace %s read; the driver registered with Substrate (CSIDriverConfig %s)", kagentNamespace, driver)
+	note("ate-api-server reached as the ate-client ServiceAccount, atespace %s %s; the driver registered with Substrate (CSIDriverConfig %s)", kagentNamespace, atespace, driver)
 
 	rt, err := readWorkspacesActorRuntime(ctx)
 	if err != nil {
@@ -146,6 +147,29 @@ func proveWorkspacesActorMount(ctx context.Context, driver string, timeout time.
 	}
 	note("both actors deleted; the PersistentVolume %s is there, and so are the files:\n%s", pv.Name, indent(strings.TrimSpace(out), "  "))
 	return true, nil
+}
+
+// ensureWorkspacesAtespace reads the atespace the proof's actors run in and
+// creates it where it is missing: kagent creates it with the first actor it
+// runs there, so a fresh lab without an agent has none yet. kagent's own
+// create takes an existing atespace as done. The result says which it was.
+func ensureWorkspacesAtespace(ctx context.Context, api *ateAPI) (string, error) {
+	_, err := api.GetAtespace(ctx, &ateapi.GetAtespaceRequest{Atespace: &ateapi.ObjectRef{Name: kagentNamespace}})
+	if status.Code(err) != codes.NotFound {
+		if err != nil {
+			return "", fmt.Errorf("reading the atespace %s through ate-api-server: %w", kagentNamespace, err)
+		}
+		return "read", nil
+	}
+	_, err = api.CreateAtespace(ctx, &ateapi.CreateAtespaceRequest{Atespace: &ateapi.Atespace{Metadata: &ateapi.ResourceMetadata{Name: kagentNamespace}}})
+	switch status.Code(err) {
+	case codes.OK:
+		return "created (none yet: nothing of kagent has run on the lab)", nil
+	case codes.AlreadyExists:
+		return "read", nil
+	default:
+		return "", fmt.Errorf("creating the atespace %s through ate-api-server (none yet: nothing of kagent has run on the lab): %w", kagentNamespace, err)
+	}
 }
 
 // existingVolumesUnsupported tells a Substrate without existing volumes from
@@ -245,8 +269,12 @@ func workspacesActorVolumes(v workspaceVolume, session string) []*ateapi.Existin
 // of the mirrors, a write into the mirrors refused, a file of its own, all in
 // a report renamed into place at the end; then a heartbeat every second with
 // its boot id, its count and what it reads, which a resume continues and a
-// reboot restarts. The session's name is its directory's marker.
+// reboot restarts. The session's name is its directory's marker. The
+// template's golden actor runs it too, without either volume or its mounts
+// (Substrate supplies an existing volume only to an actor that names it): it
+// idles, since a golden actor whose container exits crashes the template.
 const workspacesActorScript = `set -u
+[ -d /workspace ] || { echo "no /workspace: the golden actor, idling"; while :; do sleep 1; done; }
 r=/workspace/` + workspacesActorReport + `.tmp
 : > "$r"
 say() { echo "$*" >> "$r"; }

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,7 +21,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 
-	"github.com/giantswarm/agentlab/internal/config"
 	apiv1alpha1 "github.com/giantswarm/agentlab/internal/kagent/gen/kagent/api/v1alpha1"
 )
 
@@ -54,10 +52,11 @@ import (
 // A figure the cluster cannot report is listed as not available with the
 // reason, never estimated. The report goes to the run directory as JSON and
 // Markdown and is printed. Everything the command creates (the workspaces,
-// their volumes, the Sessions, the Agent, the probe pods, the pushes, a
-// generated repository) is removed on every path. The lab is the default
-// target; --kube-context and --muster-url measure another cluster with the
-// platform, as the person signed in there (`muster auth login`), its pushes
+// their volumes, the Sessions, the probe pods, the pushes) is removed on
+// every path. --kube-context and --muster-url name the cluster with the
+// platform, a lab's or an installation's, measured as the person signed in
+// there (`muster auth login`) on the provider instance and repositories the
+// command names, its pushes
 // going to a scratch branch on the provider with the person's own git
 // credentials (the manager notices a push to any branch and mirrors every
 // ref), the branch deleted afterwards. The person's token is renewed before it expires (personToken), so a
@@ -73,16 +72,10 @@ const (
 	// The workspaces the measurement creates, removed on every path.
 	measureSmallWorkspace = "agentlab-measure-small"
 	measureLargeWorkspace = "agentlab-measure-large"
-	// measureAgent is the lab's Agent the Sessions run on.
-	measureAgent = "agentlab-workspaces-measure"
-	// measureLabLargeRepo is the lab GitHub's large fixture.
-	measureLabLargeRepo = syncOrg + "/monorepo"
-	// measureLabBranch is the default branch of every fixture repository.
-	measureLabBranch = "main"
 	// measureScratchPrefix starts the scratch branch the pushes go to on
-	// another cluster's provider, followed by the run's start time.
+	// the provider, followed by the run's start time.
 	measureScratchPrefix = "agentlab-workspaces-measure-"
-	// measureGitURL is the provider's git base URL on another cluster.
+	// measureGitURL is the provider's git base URL by default.
 	measureGitURL = "https://github.com"
 	// measurePoll is how often a wait looks: the figures are wall-clock
 	// times from a call to the first read that sees its end.
@@ -104,23 +97,11 @@ const (
 	measureVendored = "vendored"
 )
 
-// The lab's small workspace: two repositories of one owner, the docs
-// repository the pushes go to and a Go module the build runs in.
-var measureLabSmallRepos = []string{syncOSS + "/docs", syncOSS + "/kagent"}
-
 // WorkspacesMeasureOptions tune the measurement.
 type WorkspacesMeasureOptions struct {
-	// Email is the lab user the measurement works as, a member of the lab's
-	// Organization (default the admin); another cluster's person is the one
-	// signed in to its muster.
-	Email string
 	// Runs is how many times each figure is measured; zero is
 	// DefaultWorkspacesMeasureRuns.
 	Runs int
-	// LargeRepoMiB adds a repository of this many MiB to the lab's GitHub
-	// for the large workspace instead of its fixture's; zero keeps the
-	// fixture's.
-	LargeRepoMiB int
 	// ReadyTimeout bounds each wait: a cycle, a Session, a probe pod.
 	ReadyTimeout time.Duration
 	// GoProxy is the module proxy the build's download goes through; "" is
@@ -130,9 +111,9 @@ type WorkspacesMeasureOptions struct {
 	// under the state directory.
 	RunDir string
 
-	// Another cluster with the platform: the context of the person's
-	// kubeconfig and the muster URL (both or neither), the Organization,
-	// the provider instance and the repositories of the two workspaces.
+	// The cluster with the platform: the context of the person's
+	// kubeconfig and the muster URL, the Organization, the provider
+	// instance and the repositories of the two workspaces.
 	KubeContext  string
 	MusterURL    string
 	Organization string
@@ -149,34 +130,13 @@ type WorkspacesMeasureOptions struct {
 	GitURL string
 }
 
-// remote says whether the options name another cluster.
-func (o WorkspacesMeasureOptions) remote() bool { return o.KubeContext != "" || o.MusterURL != "" }
-
-// validate refuses options of one target given to the other.
+// validate refuses options that name no cluster, repository or Agent.
 func (o WorkspacesMeasureOptions) validate() error {
 	switch {
 	case o.Runs < 0:
 		return fmt.Errorf("--runs %d: at least 1", o.Runs)
-	case o.LargeRepoMiB < 0 || o.LargeRepoMiB > githubFakeMaxGeneratedMiB:
-		return fmt.Errorf("--large-repo-mib %d: 1 to %d, or 0 for the fixture's", o.LargeRepoMiB, githubFakeMaxGeneratedMiB)
 	case strings.ContainsAny(o.GoProxy, "'\\ \t\n"):
 		return fmt.Errorf("--goproxy %q: a GOPROXY list, comma- or pipe-separated, without quotes or spaces", o.GoProxy)
-	}
-	labOnly := map[string]bool{"[email]": o.Email != "", "--large-repo-mib": o.LargeRepoMiB != 0}
-	remoteOnly := map[string]bool{"--organization": o.Organization != "", "--provider": o.Provider != "", "--small-repos": len(o.SmallRepos) > 0,
-		"--large-repo": o.LargeRepo != "", "--agentgateway-url": o.AgentgatewayURL != "", "--agent": o.Agent != "", "--git-url": o.GitURL != ""}
-	if !o.remote() {
-		for _, name := range slices.Sorted(maps.Keys(remoteOnly)) {
-			if remoteOnly[name] {
-				return fmt.Errorf("%s names another cluster's setting: give it with --kube-context and --muster-url (the lab's are its own)", name)
-			}
-		}
-		return nil
-	}
-	for _, name := range slices.Sorted(maps.Keys(labOnly)) {
-		if labOnly[name] {
-			return fmt.Errorf("%s is the lab's only: drop it with --kube-context and --muster-url, where the person is the one signed in to its muster and the repositories are named (--small-repos, --large-repo)", name)
-		}
 	}
 	missing := []string{}
 	for name, empty := range map[string]bool{"--kube-context": o.KubeContext == "", "--muster-url": o.MusterURL == "", "--organization": o.Organization == "",
@@ -187,7 +147,7 @@ func (o WorkspacesMeasureOptions) validate() error {
 	}
 	if len(missing) > 0 {
 		slices.Sort(missing)
-		return fmt.Errorf("another cluster needs %s as well", strings.Join(missing, ", "))
+		return fmt.Errorf("the measurement needs %s", strings.Join(missing, ", "))
 	}
 	for _, r := range append(slices.Clone(o.SmallRepos), o.LargeRepo) {
 		if owner, name, ok := strings.Cut(r, "/"); !ok || owner == "" || name == "" || strings.Contains(name, "/") {
@@ -230,16 +190,14 @@ func (w *measureWorkspace) owners() []string {
 	return out
 }
 
-// measurePusher pushes commits to a repository from a shallow clone on this
-// host: in the lab to its default branch, put back at the start at the end;
-// on another cluster to a scratch branch, deleted at the end.
+// measurePusher pushes commits to a scratch branch of a repository from a
+// shallow clone on this host; the branch is deleted at the end.
 type measurePusher struct {
 	repo, dir, start string
-	// branch is the branch the pushes go to.
-	branch  string
-	scratch bool
-	git     func(dir string, args ...string) (string, error)
-	pushes  int
+	// branch is the scratch branch the pushes go to.
+	branch string
+	git    func(dir string, args ...string) (string, error)
+	pushes int
 }
 
 // measureDetail is get_workspace's answer, as far as the measurement reads
@@ -271,23 +229,18 @@ func (d *measureDetail) mirror(repo string) *syncMirror {
 // measurement is the command's state.
 type measurement struct {
 	opts      WorkspacesMeasureOptions
-	cfg       *config.Config // nil on another cluster
 	timeout   time.Duration
 	provider  string
 	org       string
 	person    *musterSession
-	token     *personToken     // the person's, renewed for every call to muster and kagent
-	signedIn  *workspacePerson // the lab's person, connected to the provider
+	token     *personToken // the person's, renewed for every call to muster and kagent
 	api       *kagentAPI
 	set       *sessionSet
 	started   int // the Sessions start_session started
 	agentNS   string
 	agentName string
 	sessions  string // why the Session figures are not available, "" when they are
-	applied   bool   // the lab's Agent is the measurement's
-	gh        *labGitHubClient
 	pushers   map[string]*measurePusher
-	generated string
 	listedAt  map[string]time.Time // owner → the manager's last listing of it
 	ws        []*measureWorkspace
 	runNo     int // the run being measured, for a failed probe's record
@@ -297,7 +250,7 @@ type measurement struct {
 }
 
 // WorkspacesMeasure runs the measurement and writes its report.
-func WorkspacesMeasure(cfg *config.Config, opts WorkspacesMeasureOptions) error {
+func WorkspacesMeasure(opts WorkspacesMeasureOptions) error {
 	if err := opts.validate(); err != nil {
 		return err
 	}
@@ -309,20 +262,9 @@ func WorkspacesMeasure(cfg *config.Config, opts WorkspacesMeasureOptions) error 
 	}
 	m := &measurement{opts: opts, timeout: opts.ReadyTimeout, pushers: map[string]*measurePusher{}, listedAt: map[string]time.Time{}}
 	m.report = measureReport{Started: time.Now().UTC(), Runs: opts.Runs}
-	if opts.remote() {
-		useKubeContext(opts.KubeContext)
-		m.provider, m.org = opts.Provider, opts.Organization
-		m.report.Target = fmt.Sprintf("kube context %s, muster %s", opts.KubeContext, opts.MusterURL)
-	} else {
-		if cfg == nil || !cfg.WorkspacesEnabled() {
-			return fmt.Errorf("platform.workspaces is off in %s — `agentlab configure --workspaces` turns it on, then `agentlab platform`", config.File)
-		}
-		if err := useClusterKubeconfig(cfg); err != nil {
-			return err
-		}
-		m.cfg, m.provider, m.org = cfg, config.WorkspaceProviderFake, config.WorkspaceOrganization
-		m.report.Target = "the lab " + cfg.ClusterName
-	}
+	useKubeContext(opts.KubeContext)
+	m.provider, m.org = opts.Provider, opts.Organization
+	m.report.Target = fmt.Sprintf("kube context %s, muster %s", opts.KubeContext, opts.MusterURL)
 	var err error
 	if m.runDir, err = measureRunDir(opts.RunDir, m.report.Started); err != nil {
 		return err
@@ -407,11 +349,7 @@ func (m *measurement) names() []string {
 // preconditions signs the person in, readies the repositories and the Agent
 // and removes what an interrupted run left.
 func (m *measurement) preconditions() error {
-	if m.opts.remote() {
-		if err := m.remotePreconditions(); err != nil {
-			return err
-		}
-	} else if err := m.labPreconditions(); err != nil {
+	if err := m.remotePreconditions(); err != nil {
 		return err
 	}
 	for _, w := range m.ws {
@@ -477,119 +415,6 @@ func measureFreshName(name string, started time.Time) string {
 	return name + "-" + started.UTC().Format("20060102-150405")
 }
 
-// labPreconditions is the lab's side: the person signed in and connected to
-// the lab's GitHub, the large repository (generated when asked), a shallow
-// clone of each pushed repository on this host, the measurement's Agent.
-func (m *measurement) labPreconditions() error {
-	cfg := m.cfg
-	if reason := workspaceManagerSkip(cfg); reason != "" {
-		return fmt.Errorf("no workspace-manager to define a workspace with: %s", reason)
-	}
-	if !cfg.WorkspaceFakeProvider() {
-		return fmt.Errorf("the measurement's workspaces are the lab GitHub's, the provider instance %s, and platform.workspaces.provider %q does not configure it: `agentlab configure --workspaces-provider %s`, then `agentlab platform`",
-			config.WorkspaceProviderFake, cfg.Platform.Workspaces.Provider, config.WorkspaceProviderFake)
-	}
-	if err := waitMCPServerReachable(workspaceManagerMCPServer); err != nil {
-		return fmt.Errorf("the workspace-manager is not reachable through muster: %w", err)
-	}
-	email := m.opts.Email
-	if email == "" {
-		if admin := cfg.AdminUser(); admin != nil {
-			email = admin.Email
-		}
-	}
-	user := cfg.FindUser(email)
-	if user == nil {
-		return fmt.Errorf("no user %s in %s", email, config.File)
-	}
-	if !slices.ContainsFunc(config.WorkspaceOrganizationGroups, user.HasGroup) {
-		return fmt.Errorf("%s is no member of the Organization %s (groups %s): the measurement creates workspaces as a member", email, config.WorkspaceOrganization, strings.Join(config.WorkspaceOrganizationGroups, ", "))
-	}
-	var err error
-	if m.signedIn, err = openWorkspacePerson(cfg, user); err != nil {
-		return err
-	}
-	m.token = labPersonToken(func() (string, error) {
-		return passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret, user.Email, user.Password, musterLoginScopes)
-	})
-	m.person = m.signedIn.session
-	m.person.renew = m.token.accessToken
-	hops, err := connectWorkspaceProvider(cfg, m.signedIn, config.WorkspaceProviderFake)
-	if err != nil {
-		return err
-	}
-	note("%s signed in to muster and connected to %s: %s", user.Email, config.WorkspaceProviderFake, hops)
-	if m.gh, err = openLabGitHub(cfg); err != nil {
-		return err
-	}
-	large := measureLabLargeRepo
-	if m.opts.LargeRepoMiB > 0 {
-		large = fmt.Sprintf("%s/monorepo-%dmib", syncOrg, m.opts.LargeRepoMiB)
-		note("adding %s, %d MiB generated, to the lab's GitHub (seeding a large one takes minutes)", large, m.opts.LargeRepoMiB)
-		m.generated = large
-		size, err := m.gh.addGeneratedRepo(large, m.opts.LargeRepoMiB, "Go")
-		if err != nil {
-			return err
-		}
-		note("%s on the lab's GitHub: %s as GitHub's size reports it", large, formatBytes(size*1024))
-	}
-	m.ws = []*measureWorkspace{
-		{name: measureSmallWorkspace, kind: measureSmall, repos: measureLabSmallRepos, pushed: syncMovingRepo, worked: syncListRepoB, branch: measureLabBranch},
-		{name: measureLargeWorkspace, kind: measureLarge, repos: []string{large}, pushed: large, worked: large, branch: measureLabBranch},
-	}
-	if err := os.MkdirAll(StateDir, 0o750); err != nil {
-		return err
-	}
-	for _, w := range m.ws {
-		owner, _, _ := strings.Cut(w.pushed, "/")
-		token, err := m.gh.installationToken(owner)
-		if err != nil {
-			return fmt.Errorf("the measurement pushes to %s as the App's installation on %s: %w", w.pushed, owner, err)
-		}
-		pu := &measurePusher{repo: w.pushed, branch: measureLabBranch, git: func(dir string, args ...string) (string, error) { return m.gh.git(dir, token, args...) }}
-		if err := m.clonePusher(pu, m.gh.remote(w.pushed)); err != nil {
-			return err
-		}
-	}
-	if res := sideloadImages(cfg, hostPullImages([]string{workspacesTestGitImage})); res.n > 0 {
-		note("side-loaded the probes' git image (%s)", res.d)
-	}
-	return m.labAgent()
-}
-
-// labAgent readies the measurement's Agent on the claude Harness and the
-// kagent API as the person.
-func (m *measurement) labAgent() error {
-	cfg := m.cfg
-	ctx := context.Background()
-	if err := waitHarnessReady(ctx, claudeHarness, m.timeout); err != nil {
-		return err
-	}
-	if agentExists(measureAgent) {
-		if err := removeAgent(measureAgent); err != nil {
-			return err
-		}
-	}
-	if _, err := applyManifests(ctx, []byte(sessionsAgentManifest(measureAgent, claudeHarness, cfg.GitHubFakeURL()))); err != nil {
-		return fmt.Errorf("applying the Agent %s: %w", measureAgent, err)
-	}
-	m.applied = true
-	boot, err := waitAgentReadyOn(measureAgent, claudeHarness, m.timeout)
-	if err != nil {
-		return err
-	}
-	if !boot.ready {
-		return fmt.Errorf("the Agent %s is not Ready on Harness %s after %s: %s", measureAgent, claudeHarness, boot.elapsed.Round(time.Second), boot.reason)
-	}
-	m.agentNS, m.agentName, m.report.Harness = kagentNamespace, measureAgent, claudeHarness
-	if m.api, err = dialKagentAPIAs(cfg.AgentgatewayBaseURL(), m.token); err != nil {
-		return err
-	}
-	m.set = &sessionSet{api: m.api}
-	note("the Agent %s Ready on Harness %s in %s", measureAgent, claudeHarness, boot.elapsed.Round(time.Second))
-	return nil
-}
-
 // remotePreconditions is another cluster's side: the person's tokens from
 // their muster sign-in, the named repositories.
 func (m *measurement) remotePreconditions() error {
@@ -614,7 +439,7 @@ func (m *measurement) remotePreconditions() error {
 	scratch := measureScratchPrefix + m.report.Started.Format("20060102-150405")
 	gitURL := strings.TrimSuffix(cmp.Or(o.GitURL, measureGitURL), "/")
 	for _, w := range m.ws {
-		pu := &measurePusher{repo: w.worked, branch: scratch, scratch: true, git: personGit}
+		pu := &measurePusher{repo: w.worked, branch: scratch, git: personGit}
 		if err := m.clonePusher(pu, gitURL+"/"+w.worked+".git"); err != nil {
 			// The person may not push there: the run goes on without the
 			// two figures that need a push.
@@ -631,7 +456,7 @@ func (m *measurement) remotePreconditions() error {
 	if m.api, err = dialKagentAPIAs(o.AgentgatewayURL, m.token); err != nil {
 		return err
 	}
-	m.set = &sessionSet{api: m.api}
+	m.set = &sessionSet{api: m.api, manager: m.person}
 	m.agentNS, m.agentName, _ = strings.Cut(o.Agent, "/")
 	m.report.Harness = "Agent " + o.Agent + "'s"
 	return nil
@@ -709,23 +534,18 @@ func (m *measurement) push(repo string) (string, error) {
 	if _, err := pu.git(pu.dir, "update-ref", "HEAD", head); err != nil {
 		return "", err
 	}
-	if _, err := pu.git(pu.dir, githubPush, "-q", gitOrigin, "HEAD:refs/heads/"+pu.branch); err != nil {
+	if _, err := pu.git(pu.dir, "push", "-q", gitOrigin, "HEAD:refs/heads/"+pu.branch); err != nil {
 		return "", err
 	}
 	return head, nil
 }
 
-// unpush removes the pushes: the scratch branch deleted, the lab's default
-// branch put back at the start.
+// unpush removes the pushes: the scratch branch deleted.
 func (pu *measurePusher) unpush() error {
 	if pu.start == "" || pu.pushes == 0 {
 		return nil
 	}
-	if pu.scratch {
-		_, err := pu.git(pu.dir, githubPush, "-q", gitOrigin, "--delete", "refs/heads/"+pu.branch)
-		return err
-	}
-	_, err := pu.git(pu.dir, githubPush, "-q", "--force", gitOrigin, pu.start+":refs/heads/"+pu.branch)
+	_, err := pu.git(pu.dir, "push", "-q", gitOrigin, "--delete", "refs/heads/"+pu.branch)
 	return err
 }
 
@@ -763,9 +583,18 @@ func (m *measurement) gone(name string) (bool, error) {
 // sources are the workspace's sources: its repositories by name, one source
 // per owner.
 func (m *measurement) sources(w *measureWorkspace) []map[string]any {
-	out := syncNamedSources(w.repos...)
-	for _, s := range out {
-		s[wmProviderArg] = m.provider
+	byOwner := map[string][]string{}
+	var owners []string
+	for _, r := range w.repos {
+		owner, name, _ := strings.Cut(r, "/")
+		if _, ok := byOwner[owner]; !ok {
+			owners = append(owners, owner)
+		}
+		byOwner[owner] = append(byOwner[owner], name)
+	}
+	out := make([]map[string]any, 0, len(owners))
+	for _, owner := range owners {
+		out = append(out, map[string]any{wmProviderArg: m.provider, wmOwnerArg: owner, repositoriesKey: byOwner[owner]})
 	}
 	return out
 }
@@ -847,9 +676,9 @@ func (m *measurement) firstSync(w *measureWorkspace, first bool) error {
 	}
 	start := time.Now()
 	var created syncWorkspace
-	if err := m.person.callServerStructured(workspaceManagerToolPrefix+"create_workspace", map[string]any{
-		nameKey: w.name, wmOrganizationArg: m.org, wmSourcesArg: m.sources(w),
-	}, &created); err != nil {
+	create := map[string]any{nameKey: w.name, wmOrganizationArg: m.org, wmSourcesArg: m.sources(w)}
+	// The measured cluster's Workspace carries no lab label.
+	if err := m.person.callServerStructured(workspaceManagerToolPrefix+"create_workspace", create, &created); err != nil {
 		return err
 	}
 	if !slices.Contains(m.created, w.name) {
@@ -969,15 +798,10 @@ func (m *measurement) changed() error {
 		if err != nil {
 			return err
 		}
-		mirror := d.mirror(w.pushed)
-		if m.pushers[w.pushed].scratch {
-			// The manifest names the default branch's head: the scratch
-			// branch's push shows as a cycle that changed the mirror.
-			if r := d.Workspace.LastSync; mirror == nil || r.Result != syncResultSucceed {
-				return fmt.Errorf("after a push to %s the cycle of %s ended %s with mirror %v, want %s", w.pushed, w.name, r.Result, mirror, syncResultSucceed)
-			}
-		} else if mirror == nil || mirror.Head != head {
-			return fmt.Errorf("after the changed cycle of %s the manifest names %v for %s, want the pushed head %s", w.name, mirror, w.pushed, head)
+		// The manifest names the default branch's head: the scratch
+		// branch's push shows as a cycle that changed the mirror.
+		if r, mirror := d.Workspace.LastSync, d.mirror(w.pushed); mirror == nil || r.Result != syncResultSucceed {
+			return fmt.Errorf("after a push to %s the cycle of %s ended %s with mirror %v, want %s", w.pushed, w.name, r.Result, mirror, syncResultSucceed)
 		}
 		w.samples.add(figChangedCycle, took.Seconds())
 		note("%s: changed cycle %s, %s at %s", w.name, took.Round(10*time.Millisecond), w.pushed, shortSHA(head))
@@ -1148,11 +972,7 @@ func (m *measurement) session(w *measureWorkspace, last bool) error {
 	if err := m.storage(w, last); err != nil {
 		return err
 	}
-	if err := m.api.deleteSession(ctx, id); err != nil {
-		return err
-	}
-	m.set.ids = slices.DeleteFunc(m.set.ids, func(s string) bool { return s == id })
-	return nil
+	return m.set.remove(ctx, id)
 }
 
 // grant asks authorize_workspace, timing every call, until the grant names
@@ -1742,9 +1562,8 @@ func (m *measurement) awaitDeleted(name string, v syncVolume, answered bool) err
 }
 
 // cleanup removes what the measurement created on every path, best effort
-// past the first failure: the Sessions, the workspaces, the Agent, the
-// person's sign-in at the lab's GitHub, the pushes and their clones, the
-// generated repository.
+// past the first failure: the Sessions, the workspaces, the pushes and
+// their clones.
 func (m *measurement) cleanup() {
 	var errs []error
 	if m.set != nil {
@@ -1765,22 +1584,11 @@ func (m *measurement) cleanup() {
 			}
 		}
 	}
-	if m.applied && agentExists(measureAgent) {
-		errs = append(errs, removeAgent(measureAgent))
-	}
-	if m.signedIn != nil {
-		m.signedIn.disconnect(config.WorkspaceProviderFake)
-	}
 	for _, pu := range m.pushers {
-		if pu.repo != m.generated {
-			errs = append(errs, pu.unpush())
-		}
+		errs = append(errs, pu.unpush())
 		if pu.dir != "" {
 			errs = append(errs, os.RemoveAll(filepath.Dir(pu.dir)))
 		}
-	}
-	if m.generated != "" {
-		errs = append(errs, m.gh.removeGeneratedRepo(m.generated))
 	}
 	if m.api != nil {
 		m.api.close()
@@ -1789,7 +1597,7 @@ func (m *measurement) cleanup() {
 		warn("removing what the measurement left: %v", err)
 		return
 	}
-	note("removed what the measurement created: the %d Sessions it started, the workspaces and their volumes, the Agent, the pushes", m.started)
+	note("removed what the measurement created: the %d Sessions it started, the workspaces and their volumes, the pushes", m.started)
 }
 
 // writeReport writes the report's JSON and Markdown to the run directory

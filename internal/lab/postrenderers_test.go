@@ -11,11 +11,6 @@ import (
 	"github.com/giantswarm/agentlab/internal/config"
 )
 
-// connectivityComponent is the meta chart's component name of the
-// agent-platform-connectivity chart, also its release name — named here only
-// to assert the lab renders no patch for it.
-const connectivityComponent = "agent-platform-connectivity"
-
 // Fixture refs, hoisted so the linter's constant check stays quiet.
 const (
 	devMusterRef        = "muster:dev-1a2b"
@@ -112,11 +107,6 @@ func TestComponentPostRenderers(t *testing.T) {
 	if raw, ok := rendered[config.DevImageHarness]; ok {
 		t.Errorf("harness: the Harness pins its image through the values, got postRenderers:\n%s", raw)
 	}
-	// The connectivity chart is not patched: its kagent controller metrics
-	// Service selects kagent's own release since agent-platform 3.20.2.
-	if raw, ok := rendered[connectivityComponent]; ok {
-		t.Errorf("connectivity: the lab patches nothing on the wiring chart, got postRenderers:\n%s", raw)
-	}
 	parse := func(component string) postRenderer {
 		raw, ok := rendered[component]
 		if !ok {
@@ -143,8 +133,8 @@ func TestComponentPostRenderers(t *testing.T) {
 
 	for _, c := range []string{componentMuster, componentBackstage} {
 		got := patchOn(c, kindDeployment, c)
-		if len(got) == 0 || !strings.Contains(got[0], "hostNetwork: true") || !strings.Contains(got[0], "maxSurge: 0") {
-			t.Errorf("%s: want the hostNetwork + maxSurge 0 patch, got %q", c, got)
+		if len(got) == 0 || !strings.Contains(got[0], "hostNetwork: true") || !strings.Contains(got[0], "maxSurge: 0") || !strings.Contains(got[0], "replicas: 1") {
+			t.Errorf("%s: want the hostNetwork + one replica + maxSurge 0 patch, got %q", c, got)
 		}
 	}
 	for _, c := range []string{componentMCPKubernetes, modelManagerMCPServer, agentManagerMCPServer, clusterManager} {
@@ -162,6 +152,18 @@ func TestComponentPostRenderers(t *testing.T) {
 		!strings.Contains(got[0], "port: 8080\n      protocol: TCP") {
 		t.Errorf("kagent: want the kagent-ui NodePort pin on the chart's 8080/TCP port entry, got %q", got)
 	}
+	// The wiring chart's one patch: the portal's route drops HSTS.
+	if got := patchOn(config.ConnectivityChartName, kindHTTPRoute, componentBackstage); len(got) != 1 ||
+		!strings.Contains(got[0], "path: /spec/rules/0/filters") || !strings.Contains(got[0], "- "+hstsHeader) {
+		t.Errorf("connectivity: want the HSTS-dropping filter on the backstage route, got %q", got)
+	}
+	cfg.Backstage.Enabled = false
+	if off, err := componentPostRenderers(cfg, names, sidecars); err != nil {
+		t.Fatal(err)
+	} else if raw, ok := off[config.ConnectivityChartName]; ok {
+		t.Errorf("connectivity: without Backstage the lab patches nothing on the wiring chart, got postRenderers:\n%s", raw)
+	}
+	cfg.Backstage.Enabled = true
 
 	// The dev images: the override to the fully qualified local ref and the
 	// pull policy on the chart's container.
@@ -232,14 +234,14 @@ func TestComponentPostRenderers(t *testing.T) {
 		}
 	}
 	// Every Deployment target of the config's list has a render target — the
-	// list and the lab's table cannot drift apart; the harness and the
-	// agentgateway proxy are the two keys that travel as values.
+	// list and the lab's table cannot drift apart; the Harness images and the
+	// agentgateway proxy are the keys that travel as values.
 	for _, c := range config.DevImageComponents {
-		if _, ok := devImageTargets[c]; !ok && c != config.DevImageHarness && c != agentgatewayComponent {
+		if _, ok := devImageTargets[c]; !ok && !config.RegistryDevImage(c) && c != agentgatewayComponent {
 			t.Errorf("config.DevImageComponents names %s, but devImageTargets has no render target for it", c)
 		}
 	}
-	for _, c := range []string{config.DevImageHarness, agentgatewayComponent} {
+	for _, c := range []string{config.DevImageHarness, config.DevImageClaudeHarness, config.DevImageCodexHarness, config.DevImageOmpHarness, agentgatewayComponent} {
 		if _, ok := devImageTargets[c]; ok {
 			t.Errorf("the %s target is in no chart render; devImageTargets must not list it", c)
 		}
@@ -278,7 +280,7 @@ func TestDexLocalhostPatchRestricted(t *testing.T) {
 	}
 	patches := map[string]kustomizePatch{
 		componentMCPKubernetes: dexLocalhostPatch(componentMCPKubernetes, config.Default().DexPort),
-		"mcp-prometheus":       sidecarPostRenderer("mcp-prometheus", config.Default().DexPort).Kustomize.Patches[0],
+		"mcp-prometheus":       mcpPrometheusPostRenderers(config.Default(), nil)[0].Kustomize.Patches[0],
 	}
 	for name, p := range patches {
 		var d struct {

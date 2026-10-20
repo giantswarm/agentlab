@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/Masterminds/semver/v3"
@@ -119,6 +120,9 @@ func NoteChartUnderTest(cfg *config.Config) (*installedChart, error) {
 			warn("%s", drift)
 		}
 	}
+	// A field a hand wrote on a platform workload is not under test either
+	// (foreignfields.go).
+	warnForeignFields(context.Background())
 	return installed, nil
 }
 

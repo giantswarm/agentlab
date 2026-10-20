@@ -25,12 +25,39 @@ kyvernoPolicyExceptions:
   enabled: false
 
 kube-prometheus-stack:
-  # Alerting and dashboards are out of scope: no Alertmanager to route to and
-  # the platform has no Grafana; the query path is mcp-prometheus via muster.
+  # Dashboards are out of scope: the platform has no Grafana; the query path
+  # is mcp-prometheus via muster. The fleet's alerting rules are too — on a
+  # one-node kind cluster they would only page about kind.
   defaultRules:
     create: false
+{{- if .AlertmanagerEnabled }}
+  # platform.alertmanager: one Alertmanager (the operator's
+  # alertmanager-operated Service on 9093, which mcp-prometheus's
+  # ALERTMANAGER_URL names) with the chart's own config — every alert routed
+  # to the `null` receiver, so nothing is sent anywhere and the API still
+  # lists it. The Prometheus sends to it through the alertingEndpoints the
+  # chart wires while it is on.
+  alertmanager:
+    enabled: true
+  # The one alert the lab fires: always, like the fleet's Watchdog, so the
+  # Alertmanager has an alert for mcp-prometheus's alert tools to read
+  # (watchdogAlert in observability.go; platform-test expects it).
+  additionalPrometheusRulesMap:
+    agentlab-watchdog:
+      groups:
+        - name: agentlab
+          rules:
+            - alert: AgentlabWatchdog
+              expr: vector(1)
+              labels:
+                severity: none
+              annotations:
+                summary: Always firing, so the lab's Alertmanager has an alert to serve.
+{{- else }}
+  # No Alertmanager unless platform.alertmanager is on.
   alertmanager:
     enabled: false
+{{- end }}
   grafana:
     enabled: false
   # GS clusters get node metrics from the separate node-exporter-app, so the

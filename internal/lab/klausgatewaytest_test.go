@@ -13,6 +13,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -20,6 +22,8 @@ import (
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/giantswarm/klaus-gateway/pkg/auth/musterlink"
+
+	"github.com/giantswarm/agentlab/internal/config"
 )
 
 // Fixed names of the fakes.
@@ -148,9 +152,9 @@ func TestControllerReads(t *testing.T) {
 }
 
 // TestMusterAttribution: only records stamped after the turn began count; the
-// accepted-token audit record must name the email and a tools/call request's
-// truncated subject must prefix the token's subject; a pod prefix before the
-// JSON is tolerated.
+// accepted-token audit record must name the email, an actor bearer record's
+// and a tools/call request's truncated subject must prefix the token's
+// subject; a pod prefix before the JSON is tolerated.
 func TestMusterAttribution(t *testing.T) {
 	since := time.Date(2026, 9, 11, 17, 0, 0, 0, time.UTC)
 	logs := strings.Join([]string{
@@ -159,10 +163,13 @@ func TestMusterAttribution(t *testing.T) {
 		`{"time":"2026-09-11T17:00:02Z","level":"INFO","msg":"security_audit","audit":{"event_type":"forwarded_id_token_accepted","details":{"email":"dev@lab.local"}}}`,
 		`{"time":"2026-09-11T17:00:03Z","level":"INFO","msg":"tools/call request","subsystem":"MCP-Protocol","subject":"CiRjNGNl...","tool":"call_tool"}`,
 		`{"time":"2026-09-11T17:00:04Z","level":"INFO","msg":"tools/call request","subsystem":"MCP-Protocol","subject":"Cg9vdGhl...","tool":"call_tool"}`,
+		`{"time":"2026-09-11T17:00:05Z","level":"INFO","msg":"[AUDIT] action=actor_bearer outcome=success subject=CiRjNGNl... target=muster details=actor=spiffe://substrate-actor.local/actor/kagent/session-x session=kagent/x","subsystem":"AUDIT"}`,
+		`{"time":"2026-09-11T17:00:06Z","level":"INFO","msg":"[AUDIT] action=actor_bearer outcome=success subject=Cg9vdGhl... target=muster details=actor=spiffe://substrate-actor.local/actor/kagent/session-y session=kagent/y","subsystem":"AUDIT"}`,
+		`{"time":"2026-09-11T17:00:07Z","level":"INFO","msg":"[AUDIT] action=actor_bearer outcome=failure target=muster details=actor=spiffe://substrate-actor.local/actor/kagent/session-z error=actor is not bound","subsystem":"AUDIT"}`,
 		`not json at all`,
 	}, "\n")
 	accepted, calls, subjects := musterAttribution(logs, testUser, "CiRjNGNlZGFmNS0...", since)
-	if accepted != 1 || calls != 1 || len(subjects) != 2 {
+	if accepted != 2 || calls != 1 || len(subjects) != 2 {
 		t.Errorf("accepted=%d calls=%d subjects=%v", accepted, calls, subjects)
 	}
 }
@@ -188,7 +195,7 @@ func TestGatewayArgs(t *testing.T) {
 		t.Errorf("gatewayArgs =\n%q\nwant\n%q", args, want)
 	}
 	docker := dockerRunArgs("img:1", "ctr", "", "/run/x", "/lab/certs/ca.crt", 1000, 100, []string{"--flag"})
-	wantDocker := []string{"run", "--name", "ctr", "--network", "host", "--rm", "--user", "1000:100",
+	wantDocker := []string{"run", "--name", "ctr", "--network", "host", "--security-opt", "label=disable", "--rm", "--user", "1000:100",
 		"-v", "/run/x:" + gatewayDataPath, "-v", "/lab/certs/ca.crt:" + gatewayCAPath + ":ro", "img:1", "--flag"}
 	if !reflect.DeepEqual(docker, wantDocker) {
 		t.Errorf("dockerRunArgs =\n%q\nwant\n%q", docker, wantDocker)
@@ -234,6 +241,112 @@ func TestGatewayProcessExitsBeforeReady(t *testing.T) {
 	}
 	if err := g.stop(); err != nil {
 		t.Errorf("stop() after the failed start: %v", err)
+	}
+}
+
+// fakeDockerScript stands in for the docker CLI in $FAKE_DOCKER_DIR: the
+// image is cached once pulled (`image inspect` fails before); `run` pulls an
+// uncached image itself, taking $FAKE_PULL seconds, then creates the
+// container (the file container), marks it ready unless $FAKE_NEVER_READY,
+// and runs until killed; `stop` ends it unless $FAKE_STOP_MISSES (the client
+// still pulling when the stop came); `rm -f` removes it.
+const fakeDockerScript = `#!/bin/sh
+d="$FAKE_DOCKER_DIR"
+echo "$*" >> "$d/calls"
+case "$1" in
+image) [ -e "$d/pulled" ] ;;
+pull) sleep "$FAKE_PULL"; touch "$d/pulled" ;;
+run)
+  [ -e "$d/pulled" ] || { sleep "$FAKE_PULL"; touch "$d/pulled"; }
+  echo $$ > "$d/pid"; touch "$d/container"
+  [ -n "$FAKE_NEVER_READY" ] || touch "$d/ready"
+  exec sleep 600 ;;
+stop)
+  [ -z "$FAKE_STOP_MISSES" ] && [ -e "$d/container" ] || exit 1
+  rm -f "$d/container" "$d/ready"; kill "$(cat "$d/pid")" ;;
+rm) rm -f "$d/container" "$d/ready" ;;
+esac
+`
+
+// fakeDockerGateway puts fakeDockerScript first on PATH and serves the
+// gateway's readiness on an admin port of its own, 200 while the fake's
+// container is ready; it returns the fake's directory and a gateway on it.
+func fakeDockerGateway(t *testing.T, env map[string]string) (string, *gatewayProcess) {
+	t.Helper()
+	bin, dir := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, dockerBin), []byte(fakeDockerScript), 0o700); err != nil { // #nosec G306 -- the fake CLI must be executable
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("FAKE_DOCKER_DIR", dir)
+	for k, v := range env {
+		t.Setenv(k, v)
+	}
+	admin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := os.Stat(filepath.Join(dir, "ready")); err != nil || r.URL.Path != gatewayReadyPath {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}
+	}))
+	t.Cleanup(admin.Close)
+	u, _ := url.Parse(admin.URL)
+	port, _ := strconv.Atoi(u.Port())
+	g := newGatewayProcess(KlausGatewayTestOptions{GatewayImage: "gsoci.azurecr.io/giantswarm/klaus-gateway:9.9.9", Port: port - 1}.withDefaults(), t.TempDir(), "/ca", "grpcs://x:1", "http://s/api", "https://m")
+	g.container, g.startWait, g.stopWait = "lab-x-"+gatewayContainerSuffix, time.Second, time.Second
+	t.Cleanup(func() { _ = g.stop() })
+	return dir, g
+}
+
+// TestGatewayImagePullNotCounted: an uncached image whose pull outlasts the
+// readiness wait still starts — the pull happens before the wait begins.
+func TestGatewayImagePullNotCounted(t *testing.T) {
+	dir, g := fakeDockerGateway(t, map[string]string{"FAKE_PULL": "2"})
+	if err := g.start(); err != nil {
+		t.Fatalf("start() with an uncached image = %v", err)
+	}
+	calls, _ := os.ReadFile(filepath.Join(dir, "calls")) // #nosec G304 -- the test's own temporary file
+	if !strings.Contains(string(calls), "pull -q "+g.opts.GatewayImage) || !strings.Contains(string(calls), "--name lab-x-"+gatewayContainerSuffix) {
+		t.Errorf("docker calls =\n%s\nwant the pull and the run of the lab's container", calls)
+	}
+}
+
+// TestGatewayTimeoutRemovesContainer: after a readiness timeout no container
+// is left, even when `docker stop` missed it and the client had to be killed.
+func TestGatewayTimeoutRemovesContainer(t *testing.T) {
+	dir, g := fakeDockerGateway(t, map[string]string{"FAKE_PULL": "0", "FAKE_NEVER_READY": "1", "FAKE_STOP_MISSES": "1"})
+	err := g.start()
+	if err == nil || !strings.Contains(err.Error(), "did not become ready") {
+		t.Fatalf("start() = %v, want the readiness timeout", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "container")); err == nil {
+		t.Error("the container outlived the readiness timeout")
+	}
+}
+
+// TestGatewayTestPortPerLab: each lab's proofs take a block of their own,
+// derived from its API server port; the container carries the lab's name.
+func TestGatewayTestPortPerLab(t *testing.T) {
+	first := &config.Config{ClusterName: config.DefaultClusterName, APIServerPort: config.DefaultAPIServerPort}
+	if got := gatewayTestPort(first); got != 18090 {
+		t.Errorf("the first lab's port = %d, want 18090", got)
+	}
+	if got := gatewayContainerName(first); got != "agentlab-klaus-gateway-test" {
+		t.Errorf("the first lab's container = %q", got)
+	}
+	if got := gatewayContainerName(&config.Config{ClusterName: "lab-b"}); got != "lab-b-klaus-gateway-test" {
+		t.Errorf("another lab's container = %q", got)
+	}
+	seen := map[int]int{}
+	for _, api := range []int{1, 6443, 6444, 6445, 6543, 6643, 30000, 65535} {
+		p := gatewayTestPort(&config.Config{APIServerPort: api})
+		if p < 1024 || p+gatewayTestPortStride > 65536 {
+			t.Errorf("apiServerPort %d: block %d..%d out of range", api, p, p+gatewayTestPortStride-1)
+		}
+		for q, other := range seen {
+			if p < q+gatewayTestPortStride && q < p+gatewayTestPortStride {
+				t.Errorf("apiServerPort %d and %d share ports (%d, %d)", api, other, p, q)
+			}
+		}
+		seen[p] = api
 	}
 }
 
@@ -349,6 +462,13 @@ func TestGatewayFiles(t *testing.T) {
 // clicks the way the adapter does — through the fake Slack Web API — writes
 // the adapter's records into its log, and moves the fake controller's tasks
 // the way the turns would.
+// The real gateway's words on its workspace prompt the fake gateway posts:
+// the prompt and its card once No workspace answered it.
+const (
+	slackWorkspaceAsk    = "Which workspace should this conversation work in?"
+	slackWorkspaceNoneIn = "Working without a workspace"
+)
+
 type scriptedGateway struct {
 	t        *testing.T
 	secret   string
@@ -361,6 +481,12 @@ type scriptedGateway struct {
 	bound     map[string]string
 	approvals int
 	running   map[string]chan struct{}
+
+	// workspaces has a new thread's first message held behind the
+	// workspace prompt, as the adapter does for a person with workspaces;
+	// held is each prompted thread's message, until No workspace runs it.
+	workspaces bool
+	held       map[string]map[string]string
 
 	// answering is every answer still in flight: the adapter answers
 	// after the request that asked, so the fake Slack it posts to stays
@@ -504,7 +630,8 @@ func (g *scriptedGateway) onMessage(ev map[string]string) {
 			slackKeyBlocks: []any{map[string]any{fieldTypeKey: slackBlockActions, slackKeyElements: []any{map[string]any{fieldTypeKey: slackButton, slackKeyActionID: slackActionSignIn, slackKeyURL: "http://gw" + musterlink.LinkPath + "?u=x"}}}}})
 		return
 	case text == slackAgentsWord:
-		g.post(channel, thread, slackRosterHeading+":\n• *"+klausGatewayTestDisplay+"* — Throwaway",
+		g.post(channel, thread, "*Available agents*:\n• *"+klausGatewayTestDisplay+"* — Throwaway",
+			map[string]any{fieldTypeKey: slackBlockHeader, slackKeyText: map[string]any{fieldTypeKey: slackPlainText, slackKeyText: slackRosterTitle}},
 			map[string]any{fieldTypeKey: slackBlockSection, slackKeyText: map[string]any{fieldTypeKey: slackMrkdwn, slackKeyText: "*" + klausGatewayTestDisplay + "*"},
 				"accessory": map[string]any{fieldTypeKey: slackButton, slackKeyActionID: slackActionAgentSelect, slackKeyValue: testFixtureRef}})
 		return
@@ -522,6 +649,18 @@ func (g *scriptedGateway) onMessage(ev map[string]string) {
 	}
 	g.mu.Lock()
 	instance, known := g.bound[thread]
+	if !known && g.workspaces {
+		if _, prompted := g.held[thread]; !prompted {
+			g.held[thread] = ev
+			g.mu.Unlock()
+			g.post(channel, thread, slackWorkspaceAsk,
+				map[string]any{fieldTypeKey: slackBlockActions, slackKeyElements: []any{
+					map[string]any{fieldTypeKey: slackStaticSelect, slackKeyActionID: slackWorkspaceSelect},
+					map[string]any{fieldTypeKey: slackButton, slackKeyActionID: slackWorkspaceNone, slackKeyValue: thread},
+				}})
+			return
+		}
+	}
 	if !known {
 		instance = "inst-" + thread
 		g.bound[thread] = instance
@@ -581,10 +720,23 @@ func (g *scriptedGateway) onPick(user, metadata, ref string) {
 		return
 	}
 	g.api(slackPostEphemeral, map[string]any{slackKeyChannel: pm.C, slackKeyThreadTS: pm.T, slackKeyUser: user,
-		slackKeyText: "*" + klausGatewayTestUnadmittedDisplay + "* is installed but " + slackNotRunnable + ": Agent x " + unadmittedReason + ": blocked by ResolvedRefs. " + slackNotStarted + ".\n\n" + slackRosterHeading + ":\n• *" + klausGatewayTestDisplay + "*"})
+		slackKeyText: "*" + klausGatewayTestUnadmittedDisplay + "* is installed but " + slackNotRunnable + ": Agent x " + unadmittedReason + ": blocked by ResolvedRefs. " + slackNotStarted + ".\n\n*Available agents*:\n• *" + klausGatewayTestDisplay + "*"})
 }
 
 func (g *scriptedGateway) onClick(user, channel, thread, cardTS, action, value string) {
+	if action == slackWorkspaceNone {
+		g.mu.Lock()
+		ev := g.held[thread]
+		g.held[thread] = nil
+		g.mu.Unlock()
+		if ev == nil {
+			g.t.Errorf("No workspace clicked in thread %s, which holds no message", thread)
+			return
+		}
+		g.api(slackUpdate, map[string]any{slackKeyChannel: channel, slackKeyTS: cardTS, slackKeyText: slackWorkspaceNoneIn})
+		g.onMessage(ev)
+		return
+	}
 	var v struct {
 		Thread string `json:"t"`
 		Task   string `json:"id"`
@@ -637,7 +789,7 @@ func TestSlackProof(t *testing.T) {
 	p := &slackProof{driver: newSlackDriver(srv.URL, "sekrit", fake, "C1"), fake: fake, channel: "C1", logs: gw.logs}
 
 	roster, err := p.roster("UP")
-	if names := rosterNames(roster.shown()); err != nil || assertSlackRoster(names) != nil {
+	if names := rosterNames(roster); err != nil || assertSlackRoster(names) != nil {
 		t.Fatalf("roster = %q %v", names, err)
 	}
 	refusal, err := p.refusal("UP", roster, "hi")
@@ -737,6 +889,42 @@ func TestSlackProof(t *testing.T) {
 	}
 }
 
+// TestSayPastWorkspace: step 9's first message through a component that
+// lists the person's workspaces — held behind the workspace prompt, which
+// No workspace answers, then the turn — and through one that asks nothing.
+func TestSayPastWorkspace(t *testing.T) {
+	for name, workspaces := range map[string]bool{"prompted": true, "not asked": false} {
+		t.Run(name, func(t *testing.T) {
+			ctrl := newFakeKagent()
+			ctrl.serve(t, testToken)
+			fake := startTestFake(t, map[string]string{"UP": testUser})
+			gw := &scriptedGateway{t: t, secret: "sekrit", fake: fake, ctrl: ctrl, bound: map[string]string{}, running: map[string]chan struct{}{},
+				workspaces: workspaces, held: map[string]map[string]string{}}
+			srv := httptest.NewServer(gw)
+			t.Cleanup(func() {
+				srv.Close()
+				gw.settle()
+			})
+			p := &slackProof{driver: newSlackDriver(srv.URL, "sekrit", fake, "C1"), fake: fake, channel: "C1", logs: gw.logs}
+			thread := &slackThread{user: "UP"}
+			turn, err := p.firstTurnBy(p.sayPastWorkspace, thread, klausGatewayWordPrompt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := assertSlackTurnSaid(turn, klausGatewayWord); err != nil {
+				t.Error(err)
+			}
+			if _, err := p.dispatch(thread, testSubject, testUser); err != nil {
+				t.Error(err)
+			}
+			answered := slices.ContainsFunc(fake.thread("C1", thread.ts), func(m slackMessage) bool { return m.Text == slackWorkspaceNoneIn })
+			if answered != workspaces {
+				t.Errorf("the workspace prompt answered with No workspace: %v, want %v", answered, workspaces)
+			}
+		})
+	}
+}
+
 // A relative --run-dir is made absolute: docker run -v takes a bare name
 // for a named volume, which the gateway's container cannot write.
 func TestKlausGatewayRunDirIsAbsolute(t *testing.T) {
@@ -766,5 +954,71 @@ func TestGatewayKeepsHeld(t *testing.T) {
 		if got := gatewayKeepsHeld(described); got != want {
 			t.Errorf("gatewayKeepsHeld(%q) = %v, want %v", described, got, want)
 		}
+	}
+}
+
+// TestSlackDriverPickerActions: a pick on a message, a pick inside an open
+// modal (the view as Slack holds it, with an id and a hash) and the slash
+// command reach the gateway's endpoints as Slack sends them; the fake keeps
+// a views.update as the modal's latest state.
+func TestSlackDriverPickerActions(t *testing.T) {
+	var paths []string
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		paths, bodies = append(paths, r.URL.Path), append(bodies, string(body))
+	}))
+	defer srv.Close()
+	f := startTestFake(t, nil)
+	d := newSlackDriver(srv.URL, "sekrit", f, "C1")
+	msg := slackMessage{TS: "7.1", Channel: "C1", ThreadTS: "9.0"}
+	if err := d.pick("UP", msg, slackWorkspaceSelect, `{"t":"9.0","w":"ws"}`); err != nil {
+		t.Fatal(err)
+	}
+	view := map[string]any{slackKeyCallbackID: slackPickerCallback, slackKeyBlocks: []any{}}
+	if err := d.pickInView("UP", view, slackPickerAgentBlock, slackPickerAgentAction, "kagent/a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.slashCommand("UP", "ask"); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(paths, []string{slackInteractionsPath, slackInteractionsPath, slackCommandsPath}) {
+		t.Fatalf("paths = %v", paths)
+	}
+	var action struct {
+		Type    string `json:"type"`
+		Actions []struct {
+			Type           string `json:"type"`
+			ActionID       string `json:"action_id"`
+			SelectedOption struct {
+				Value string `json:"value"`
+			} `json:"selected_option"`
+		} `json:"actions"`
+		View map[string]any `json:"view"`
+	}
+	for i, want := range []string{`{"t":"9.0","w":"ws"}`, "kagent/a"} {
+		form, _ := url.ParseQuery(bodies[i])
+		if err := json.Unmarshal([]byte(form.Get("payload")), &action); err != nil {
+			t.Fatal(err)
+		}
+		if action.Type != "block_actions" || len(action.Actions) != 1 || action.Actions[0].Type != slackStaticSelect || action.Actions[0].SelectedOption.Value != want {
+			t.Errorf("pick %d = %+v", i, action)
+		}
+	}
+	if action.View[slackKeyCallbackID] != slackPickerCallback || action.View["id"] == "" || action.View["hash"] == "" {
+		t.Errorf("the view of the pick in the modal = %v", action.View)
+	}
+	if _, held := view["hash"]; held {
+		t.Error("pickInView changed the caller's view")
+	}
+	form, _ := url.ParseQuery(bodies[2])
+	if form.Get("command") != slackCommand || form.Get("user_id") != "UP" || form.Get("channel_id") != "C1" || form.Get("text") != "ask" || form.Get("trigger_id") == "" || form.Get("response_url") == "" {
+		t.Errorf("slash command = %v", form)
+	}
+
+	callFake(t, f, slackViewsOpen, nil, map[string]any{slackKeyView: map[string]any{slackKeyCallbackID: "first"}})
+	callFake(t, f, slackViewsUpdate, nil, map[string]any{"view_id": "V1", "hash": "h", slackKeyView: map[string]any{slackKeyCallbackID: "redrawn"}})
+	if views := f.openedViews(); len(views) != 2 || views[1][slackKeyCallbackID] != "redrawn" {
+		t.Errorf("openedViews = %v", views)
 	}
 }

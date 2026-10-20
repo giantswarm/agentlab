@@ -19,8 +19,8 @@ import (
 // and the bundled helm-controller runs them as Kustomize post-renderers over
 // the component chart's render — the same mechanism the fleet has for chart
 // fixes, and the plain replacement for the post-renderer binary earlier
-// agentlab versions wrapped around `helm install`. Every patch is a strategic
-// merge on one named object, so a chart bump needs no hand-copying:
+// agentlab versions wrapped around `helm install`. Every patch but 8 is a
+// strategic merge on one named object, so a chart bump needs no hand-copying:
 //
 //  1. hostNetwork + dnsPolicy on the muster and backstage Deployments: both
 //     must resolve the issuer URL to the Dex NodePort from inside the pod so
@@ -29,10 +29,15 @@ import (
 //     chart. dnsPolicy ClusterFirstWithHostNet keeps cluster DNS, which the
 //     CoreDNS rewrite needs to point *.<domain> at the edge Gateway.
 //
-//  2. maxSurge 0 on the same Deployments: hostNetwork means the pod binds its
-//     port on the node, so the default rolling update deadlocks on a
-//     single-node cluster — the new pod cannot start until the old one
-//     releases the port. Old pod goes down first.
+//  2. One replica and maxSurge 0 on the same Deployments: hostNetwork means
+//     the pod binds its port on the node, so a second pod on the single kind
+//     node never starts — a chart's two-replica default (muster's HA shape)
+//     would leave it Pending and the HelmRelease never Ready — and the
+//     default rolling update deadlocks the same way: the new pod cannot
+//     start until the old one releases the port. Old pod goes down first.
+//     With platform.musterPodNetwork muster takes neither patch: it runs on
+//     the pod network at two replicas (the values), and the dex-localhost
+//     sidecar (patch 4) bridges the issuer for it as for the MCP servers.
 //
 //  3. A fixed nodePort on the kagent-ui Service: the values set
 //     `ui.service.type: NodePort` (a chart value), but the chart's ui-service
@@ -91,8 +96,21 @@ import (
 //     signs, the way muster, the portal and workspace-manager trust it
 //     (klausgateway.go).
 //
+//  8. No HSTS from the portal: Backstage's helmet sends
+//     `Strict-Transport-Security: max-age=15552000; includeSubDomains` with no
+//     setting to turn it off, and a browser that trusted one lab CA then pins
+//     the hostname for 180 days — a lab recreated with a fresh CA, or another
+//     lab on the same name, is refused with no way past the warning. A lab
+//     edge on a machine-local CA has nothing HSTS protects, so the connectivity
+//     chart's `backstage` HTTPRoute drops the header (a ResponseHeaderModifier
+//     filter, JSON 6902: the route's rules are a list without merge keys).
+//     Lab only.
+//
 // The values-side shape is Flux's: `postRenderers: [{kustomize: {patches:
 // [{target, patch}], images: [{name, newName, newTag}]}}]`.
+
+// hstsHeader is the response header patch 8 removes at the edge.
+const hstsHeader = "Strict-Transport-Security"
 
 // dexLocalhostImage is the socat image of the sidecar (side-loaded like every
 // other lab image): the gsoci mirror of alpine/socat.
@@ -150,6 +168,7 @@ const (
 	kindDeployment = "Deployment"
 	kindService    = "Service"
 	kindConfigMap  = "ConfigMap"
+	kindHTTPRoute  = "HTTPRoute"
 )
 
 // kustomizePatch is one Flux postRenderers kustomize patch: a strategic merge
@@ -196,6 +215,10 @@ type postRenderer struct {
 type devImageTarget struct {
 	deployment, container, image string
 	release                      string
+	// labOwned marks a release the lab renders itself rather than a meta
+	// chart component (mcp-prometheus.yaml.tmpl): its swap rides that
+	// template's postRenderers (mcpPrometheusPostRenderers), not the values.
+	labOwned bool
 }
 
 // releaseOf is the component release a target's patch lands on: the named
@@ -229,6 +252,8 @@ var devImageTargets = map[string]devImageTarget{
 	// Substrate's API server, where the ActorTemplate reconciler takes the
 	// golden snapshots, rides the substrate component's postRenderers.
 	config.DevImageSubstrateAPI: {deployment: substrateAPIDeployment, container: substrateAPIDeployment, image: "gsoci.azurecr.io/giantswarm/substrate/ateapi", release: substrateRelease},
+	// The lab's own mcp-prometheus release, outside the meta chart.
+	config.DevImageMCPPrometheus: {deployment: mcpPrometheusRelease, container: mcpPrometheusRelease, image: "gsoci.azurecr.io/giantswarm/mcp-prometheus", labOwned: true},
 }
 
 // defaultDevImageNames is the image name per configured Deployment target as
@@ -252,6 +277,7 @@ kind: Deployment
 metadata:
   name: %s
 spec:
+  replicas: 1
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -441,18 +467,63 @@ spec:
 	}
 }
 
-// sidecarPostRenderer is the one-patch postRenderers entry of a release the
-// lab renders itself (mcp-prometheus.yaml.tmpl).
-func sidecarPostRenderer(deployment string, dexPort int) postRenderer {
+// noHSTSPatch is patch 8: the portal's route drops the HSTS header its
+// backend sends. The chart's backstage route carries one rule; a second one
+// would keep the header and fail backstage-test's check, not pass silently.
+func noHSTSPatch() kustomizePatch {
+	return kustomizePatch{
+		Target: map[string]string{kindKey: kindHTTPRoute, nameKey: componentBackstage},
+		Patch: literalYAML(fmt.Sprintf(`- op: add
+  path: /spec/rules/0/filters
+  value:
+    - type: ResponseHeaderModifier
+      responseHeaderModifier:
+        remove:
+          - %s
+`, hstsHeader)),
+	}
+}
+
+// mcpPrometheusPostRenderers is the postRenderers list of the release the lab
+// renders itself (mcp-prometheus.yaml.tmpl): the dex-localhost sidecar while
+// the issuer is spelled localhost, and the platform.devImages.mcp-prometheus
+// swap under the image name the chart renders (imageNames, as for the meta
+// chart's components). Empty when neither applies.
+func mcpPrometheusPostRenderers(cfg *config.Config, imageNames map[string]string) []postRenderer {
 	var pr postRenderer
-	pr.Kustomize.Patches = []kustomizePatch{dexLocalhostPatch(deployment, dexPort)}
-	return pr
+	if dexLocalhostBridged(cfg) {
+		pr.Kustomize.Patches = append(pr.Kustomize.Patches, dexLocalhostPatch(mcpPrometheusRelease, cfg.DexPort))
+	}
+	if ref, ok := cfg.Platform.DevImages[config.DevImageMCPPrometheus]; ok && imageNames[config.DevImageMCPPrometheus] != "" {
+		target := devImageTargets[config.DevImageMCPPrometheus]
+		pr.Kustomize.Images = []kustomizeImage{devImageOverride(imageNames[config.DevImageMCPPrometheus], ref)}
+		pr.Kustomize.Patches = append(pr.Kustomize.Patches, pullPolicyPatch(target))
+	}
+	if len(pr.Kustomize.Patches) == 0 {
+		return nil
+	}
+	return []postRenderer{pr}
 }
 
 // hostNetworkComponents are the components whose Deployment the lab puts on
 // the host network (patch 1+2): they reach the issuer URL as the host does
-// and are no sidecar targets.
-var hostNetworkComponents = []string{componentMuster, componentBackstage}
+// and are no sidecar targets. muster is among them unless it runs on the pod
+// network (platform.musterPodNetwork), where it takes the sidecar instead
+// (musterSidecar).
+func hostNetworkComponents(cfg *config.Config) []string {
+	if cfg.Platform.MusterPodNetwork {
+		return []string{componentBackstage}
+	}
+	return []string{componentMuster, componentBackstage}
+}
+
+// musterSidecar reports whether muster's Deployment gets the dex-localhost
+// sidecar: on the pod network while the issuer is spelled localhost. The
+// rule over the renders cannot select it — muster reads the issuer from its
+// ConfigMap, through no name it dials it by — so it is named here.
+func musterSidecar(cfg *config.Config) bool {
+	return cfg.Platform.MusterPodNetwork && dexLocalhostBridged(cfg)
+}
 
 // dexLocalhostAddr is the lab Dex as the pods are told it — the host:port of
 // the issuer URL (config.Issuer) — the address the sidecar answers on.
@@ -485,7 +556,7 @@ func dexLocalhostTargets(cfg *config.Config, renders map[string]string) (map[str
 		return targets, nil
 	}
 	for _, component := range slices.Sorted(maps.Keys(renders)) {
-		if slices.Contains(hostNetworkComponents, component) {
+		if slices.Contains(hostNetworkComponents(cfg), component) {
 			continue
 		}
 		for _, d := range renderedDeployments(renders[component]) {
@@ -591,11 +662,17 @@ func componentPostRenderers(cfg *config.Config, imageNames map[string]string, si
 	patches := map[string][]kustomizePatch{
 		componentKagent: {kagentUINodePortPatch()},
 	}
-	for _, component := range hostNetworkComponents {
+	for _, component := range hostNetworkComponents(cfg) {
 		patches[component] = []kustomizePatch{hostNetworkPatch(component)}
+	}
+	if musterSidecar(cfg) {
+		patches[componentMuster] = append(patches[componentMuster], dexLocalhostPatch(componentMuster, cfg.DexPort))
 	}
 	if cfg.KlausGatewayEnabled() {
 		patches[klausGatewayComponent] = append(patches[klausGatewayComponent], slackAPIPatch(), labCAPatch())
+	}
+	if cfg.Backstage.Enabled {
+		patches[config.ConnectivityChartName] = []kustomizePatch{noHSTSPatch()}
 	}
 	for _, component := range slices.Sorted(maps.Keys(sidecars)) {
 		for _, target := range sidecars[component] {
@@ -606,7 +683,7 @@ func componentPostRenderers(cfg *config.Config, imageNames map[string]string, si
 	for _, component := range slices.Sorted(maps.Keys(cfg.Platform.DevImages)) {
 		target, ok := devImageTargets[component]
 		name := imageNames[component]
-		if !ok || name == "" {
+		if !ok || name == "" || target.labOwned {
 			continue
 		}
 		release := target.releaseOf(component)
@@ -653,13 +730,13 @@ func devImageOverride(name, ref string) kustomizeImage {
 }
 
 // devImageRefs lists the dev images to side-load into the node under the
-// names their pods use (labImageRef): the Deployment targets. The `harness`
-// image is not among them — nothing on the node's containerd pulls it
+// names their pods use (labImageRef): the Deployment targets. The Harness
+// images (`harness`, `<runtime>-harness`) are not among them — nothing on the node's containerd pulls it
 // (pushDevImage).
 func devImageRefs(cfg *config.Config) []string {
 	var refs []string
 	for component, ref := range cfg.Platform.DevImages {
-		if component == config.DevImageHarness {
+		if config.RegistryDevImage(component) {
 			continue
 		}
 		refs = append(refs, labImageRef(ref))

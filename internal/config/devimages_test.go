@@ -84,3 +84,147 @@ func TestDevImagesKnowSubstrateAPI(t *testing.T) {
 		t.Errorf("without the agents the target must be refused naming the key, got %v", err)
 	}
 }
+
+// A coding Harness's image is a devImages target while the lab renders that
+// Harness, and a registry target, not a Deployment's.
+func TestDevImagesKnowCodingHarnesses(t *testing.T) {
+	cfg := Default()
+	cfg.Platform.Coding.Enabled = true
+	cfg.Platform.Coding.Harnesses = []string{CodingRuntimeClaude, CodingRuntimeCodex}
+	cfg.Platform.DevImages = map[string]string{DevImageClaudeHarness: "claude-harness:dev", DevImageCodexHarness: "codex-harness:dev", "kagent": "kagent-controller:dev-7e8f"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("the coding Harnesses' images must be devImages targets: %v", err)
+	}
+	for _, target := range []string{DevImageHarness, DevImageClaudeHarness, DevImageCodexHarness, DevImageOmpHarness} {
+		if !RegistryDevImage(target) {
+			t.Errorf("%s is not a registry target", target)
+		}
+	}
+	if RegistryDevImage("muster") {
+		t.Error("muster is a registry target")
+	}
+	cfg.Platform.Coding.Harnesses = nil
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), DevImageCodexHarness) {
+		t.Errorf("codex-harness without the codex Harness must be refused naming the key, got %v", err)
+	}
+}
+
+// The kagent controller compiles the claude and codex Harnesses' pinned CLI
+// version into their config with StrictVersion, so a harness dev image is
+// refused without the controller from the same build.
+func TestCodingHarnessDevImageNeedsKagent(t *testing.T) {
+	for name, tc := range map[string]struct {
+		target string
+		want   string
+	}{
+		"claude": {DevImageClaudeHarness, "ExpectedClaudeVersion"},
+		"codex":  {DevImageCodexHarness, "PinnedCodexVersion"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := Default()
+			cfg.Platform.Coding.Enabled = true
+			cfg.Platform.Coding.Harnesses = []string{name}
+			cfg.Platform.DevImages = map[string]string{tc.target: tc.target + ":dev"}
+			err := cfg.Validate()
+			if err == nil || !strings.Contains(err.Error(), "platform.devImages.kagent") || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "version mismatch") {
+				t.Fatalf("%s without kagent: got %v, want a refusal naming platform.devImages.kagent, %s and the version mismatch", tc.target, err, tc.want)
+			}
+			cfg.Platform.DevImages["kagent"] = "kagent-controller:dev-9a0b"
+			if err := cfg.Validate(); err != nil {
+				t.Fatalf("%s with kagent refused: %v", tc.target, err)
+			}
+		})
+	}
+}
+
+// platform.coding.harnesses takes the known runtimes once each.
+func TestCodingHarnessesValidate(t *testing.T) {
+	for name, tc := range map[string]struct {
+		harnesses []string
+		want      string
+	}{
+		"not a runtime": {[]string{"acp"}, "unknown runtime"},
+		"omp alone":     {[]string{CodingRuntimeOmp}, "platform.coding.images.omp"},
+		"twice":         {[]string{CodingRuntimeCodex, CodingRuntimeCodex}, "twice"},
+		"codex alone":   {[]string{CodingRuntimeCodex}, ""},
+		"both":          {[]string{CodingRuntimeClaude, CodingRuntimeCodex}, ""},
+		"empty":         {nil, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := Default()
+			cfg.Platform.Coding.Enabled = true
+			cfg.Platform.Coding.Harnesses = tc.harnesses
+			err := cfg.Validate()
+			if tc.want == "" && err != nil {
+				t.Fatalf("refused: %v", err)
+			}
+			if tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)) {
+				t.Fatalf("got %v, want an error with %q", err, tc.want)
+			}
+		})
+	}
+	cfg := Default()
+	cfg.Platform.Coding.Enabled = true
+	if got := cfg.CodingHarnesses(); len(got) != 1 || got[0] != CodingRuntimeClaude {
+		t.Errorf("CodingHarnesses() = %v, want claude by default", got)
+	}
+}
+
+// TestDevImagesKnowMCPPrometheus: the lab's own mcp-prometheus is a devImages
+// target while the observability stack, which brings it, is on, and refused
+// without it.
+func TestDevImagesKnowMCPPrometheus(t *testing.T) {
+	cfg := Default()
+	cfg.Platform.DevImages = map[string]string{"mcp-prometheus": "mcp-prometheus:dev"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("mcp-prometheus must be a devImages target with observability on: %v", err)
+	}
+	cfg.Platform.Observability = false
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "platform.observability") {
+		t.Fatalf("without observability the target must be refused naming the key, got %v", err)
+	}
+}
+
+// TestAlertmanagerNeedsObservability: platform.alertmanager is off by
+// default, valid with the observability stack and refused without it.
+func TestAlertmanagerNeedsObservability(t *testing.T) {
+	cfg := Default()
+	if cfg.AlertmanagerEnabled() {
+		t.Fatal("the Alertmanager must be off by default")
+	}
+	cfg.Platform.Alertmanager = true
+	if err := cfg.Validate(); err != nil || !cfg.AlertmanagerEnabled() {
+		t.Fatalf("platform.alertmanager with observability: enabled=%v, err=%v", cfg.AlertmanagerEnabled(), err)
+	}
+	cfg.Platform.Observability = false
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "platform.observability") {
+		t.Fatalf("platform.alertmanager without observability must be refused naming the key, got %v", err)
+	}
+}
+
+// TestMCPPrometheusChartVersion: platform.mcpPrometheusChartVersion takes an
+// exact version (a release candidate included), refuses a range, and needs
+// the observability stack.
+func TestMCPPrometheusChartVersion(t *testing.T) {
+	cfg := Default()
+	if cfg.Platform.MCPPrometheusChartVersion != "" {
+		t.Fatalf("unset by default, got %q", cfg.Platform.MCPPrometheusChartVersion)
+	}
+	for _, v := range []string{"0.8.1", "0.8.1-rc.1"} {
+		cfg.Platform.MCPPrometheusChartVersion = v
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("%s: %v", v, err)
+		}
+	}
+	for _, v := range []string{">=0.8.0", "0.8.x", "~0.8"} {
+		cfg.Platform.MCPPrometheusChartVersion = v
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "platform.mcpPrometheusChartVersion") {
+			t.Errorf("%s: a range must be refused naming the key, got %v", v, err)
+		}
+	}
+	cfg.Platform.MCPPrometheusChartVersion = "0.8.1"
+	cfg.Platform.Observability = false
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "platform.observability") {
+		t.Fatalf("without observability the key must be refused, got %v", err)
+	}
+}

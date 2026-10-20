@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"html"
 	"io"
-	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -17,36 +16,33 @@ import (
 	"strings"
 	"time"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
 	"github.com/giantswarm/agentlab/internal/config"
 )
 
-// A person's sign-in at a workspace-manager provider instance, walked
-// headlessly the way a browser walks it, so a proof reaches what only a
-// connected person sees (authorize_workspace's granted and refused):
+// A person's grant of the provider App muster pins the workspace-manager's
+// registration to (workspacemustergrant.go), walked headlessly the way a
+// browser walks it, so a proof reaches what only a person who granted it
+// sees (the manager's tools, authorize_workspace's granted and refused):
 //
-//  1. connect_provider, called through muster as the person, answers with the
-//     provider's authorization link; the lab's GitHub consents at once for
-//     the fixture user its login parameter names (githubfake_workspaces.go),
-//     so the walk adds the person's fixture login.
-//  2. The provider redirects to the workspace-manager's /callback/<instance>
-//     through the edge. The callback page completes only for a browser
-//     signed in to the manager's pages, so it sends a new browser to Dex
-//     first.
-//  3. Dex's login form takes the person's lab credentials and returns to the
-//     manager's /signin, which sets the page session and returns to the
-//     callback, which completes the sign-in: list_providers then shows the
-//     person connected.
+//  1. core_auth_login for the workspace-manager, called through muster as
+//     the person, answers with muster's sign-in link (/oauth/proxy/start).
+//  2. muster's proxy sends the browser to the provider's authorization
+//     endpoint (PKCE). A GitLab instance answers with GitLab's sign-in form,
+//     which takes the provider person's GitLab login and password
+//     (providerLogin), then with the OAuth application's consent form,
+//     whose Authorize the walk submits.
+//  3. The provider redirects to muster's /oauth/proxy/callback, which
+//     redeems the code and files the person's token under the person
+//     (grantScope subject): every later MCP session of theirs has it, and
+//     list_providers shows the instance connected.
 //
-// From this host every hop is a name the lab dials: the platform's names on
-// the edge's loopback port (dialLab), Dex on its issuer URL, and the lab's
-// GitHub, whose name pods resolve to its Service (coredns.yaml.tmpl), on the
-// loopback port its container publishes: the edge has no route for it.
-//
-// A GitLab instance is a real GitLab: its link leads a new browser to
-// GitLab's sign-in form, which takes the provider person's GitLab login and
-// password (providerLogin), then to the OAuth application's consent form,
-// whose Authorize the walk submits; GitLab then redirects to the callback as
-// above.
+// From this host every hop is a name the lab dials as a browser does: the
+// platform's names on the edge's loopback port (dialLab), Dex on its issuer
+// URL. A GitHub App's grant takes github.com's sign-in in a person's browser,
+// which no headless walk makes: a proof finds it held or answers muster's
+// sign-in link (openGrantedWorkspacePerson).
 
 // The workspace-manager tools' argument names the walk and the proof pass.
 const (
@@ -55,20 +51,10 @@ const (
 	workspaceOwnerArg    = "owner"
 )
 
-// workspaceSignInMaxHops bounds the walk: the provider (a GitLab's
-// authorization, sign-in form, its post and consent included), the callback,
-// Dex's authorize, its connector and login pages, the login's return,
-// /signin and the callback again, with room for a Dex that adds a hop.
-const workspaceSignInMaxHops = 24
-
-// dexPasswordField is the password input of Dex's local login form, how the
-// walk recognizes the form among the pages it is handed.
-const dexPasswordField = `name="` + passwordParam + `"`
-
-// dexLocalConnectorRe finds the local connector's link on Dex's connector
-// chooser, which a Dex with more than one connector (the lab's github
-// sign-in) shows instead of the login form.
-var dexLocalConnectorRe = regexp.MustCompile(`href="([^"]*/auth/local[^"]*)"`)
+// workspaceSignInMaxHops bounds the walk: muster's proxy start, the
+// provider (a GitLab's authorization, sign-in form, its post and consent
+// included) and muster's callback, with room for a provider that adds hops.
+const workspaceSignInMaxHops = 16
 
 // pageHeadingRe is the heading of the workspace-manager's pages, its verdict
 // on a sign-in in a few words.
@@ -85,11 +71,33 @@ const (
 	railsMethodField    = "_method"
 )
 
+// gitlabRedirectRe is the link of GitLab's "Redirecting" page, which an
+// authorization the person already granted answers with a 200 instead of a
+// redirect: the browser follows it by script.
+var gitlabRedirectRe = regexp.MustCompile(`(?is)<a\b[^>]*\bhref\s*=\s*"([^"]*)"[^>]*>\s*Click here to redirect to`)
+
+// gitlabRedirect is the target of GitLab's "Redirecting" page when it is the
+// callback path, "" for any other page.
+func gitlabRedirect(page []byte, callback string) string {
+	m := gitlabRedirectRe.FindSubmatch(page)
+	if m == nil {
+		return ""
+	}
+	target := html.UnescapeString(string(m[1]))
+	if u, err := url.Parse(target); err != nil || u.Path != callback {
+		return ""
+	}
+	return target
+}
+
 var (
 	htmlFormRe  = regexp.MustCompile(`(?is)<form\b([^>]*)>(.*?)</form>`)
 	htmlInputRe = regexp.MustCompile(`(?is)<input\b([^>]*)>`)
 	htmlAttrRe  = regexp.MustCompile(`(?is)([a-z_:-]+)\s*=\s*"([^"]*)"`)
 )
+
+// htmlPost is a form's method as htmlForms reads it for a POST.
+const htmlPost = "post"
 
 // htmlForm is one form of a page: its action, method and the named inputs'
 // values, unescaped.
@@ -124,8 +132,7 @@ func htmlForms(page []byte) []htmlForm {
 }
 
 // providerLogin is the person's own login at a provider whose sign-in is a
-// real login form (a GitLab), nil for the lab's GitHub, which consents for
-// the login its link names.
+// login form a headless walk fills (a GitLab).
 type providerLogin struct {
 	login, password string
 }
@@ -136,7 +143,7 @@ type providerLogin struct {
 func gitlabFormStep(page []byte, login *providerLogin, posted bool) (action string, form url.Values, ok bool, err error) {
 	for _, f := range htmlForms(page) {
 		switch {
-		case f.method == "post" && strings.HasSuffix(f.action, gitlabSignInAction) && strings.Contains(string(page), gitlabPasswordField):
+		case f.method == htmlPost && strings.HasSuffix(f.action, gitlabSignInAction) && strings.Contains(string(page), gitlabPasswordField):
 			if login == nil {
 				return "", nil, true, fmt.Errorf("GitLab asks for a sign-in, and the walk has no GitLab login for the person")
 			}
@@ -147,7 +154,7 @@ func gitlabFormStep(page []byte, login *providerLogin, posted bool) (action stri
 			f.fields.Set("user[password]", login.password)
 			f.fields.Set("user[remember_me]", "0")
 			return f.action, f.fields, true, nil
-		case f.method == "post" && strings.HasSuffix(f.action, gitlabAuthorizePath) && f.fields.Get(railsMethodField) == "":
+		case f.method == htmlPost && strings.HasSuffix(f.action, gitlabAuthorizePath) && f.fields.Get(railsMethodField) == "":
 			return f.action, f.fields, true, nil
 		}
 	}
@@ -174,17 +181,29 @@ func signInHops(hops []signInHop) string {
 	return strings.Join(words, " -> ")
 }
 
+// musterSignInSucceeded is the heading of muster's proxy callback page on a
+// completed sign-in: "Signed in" on its pagekit pages, "Authentication
+// Successful" on a muster before them.
+var musterSignInSucceeded = []string{"Signed in", "Authentication Successful"}
+
+// signInCompleted says whether muster's callback page reports a completed
+// sign-in.
+func signInCompleted(page []byte) bool {
+	return slices.ContainsFunc(musterSignInSucceeded, func(heading string) bool {
+		return strings.Contains(string(page), heading)
+	})
+}
+
 // errSignInStopped is a walk that ended before the callback completed; its
 // message names the hop and the status it stopped at.
 var errSignInStopped = errors.New("the provider sign-in stopped")
 
-// walkProviderSignIn walks a provider's authorization link to the
-// workspace-manager's callback for instance, signing in to Dex with the
-// person's credentials when the callback sends the browser there. client
-// follows no redirect itself and keeps the cookies. It returns the hops;
-// an error names the hop the walk stopped at, its status and the page's
-// heading.
-func walkProviderSignIn(client *http.Client, link, instance, email, password string, login *providerLogin) ([]signInHop, error) {
+// walkProviderSignIn walks muster's sign-in link to its proxy callback.
+// client follows no redirect itself and keeps the cookies. On a GitLab the
+// walk fills its sign-in form with login and submits its consent; without a
+// login it follows redirects alone. It returns the hops; an error names the
+// hop the walk stopped at, its status and the page's heading.
+func walkProviderSignIn(client *http.Client, link string, login *providerLogin) ([]signInHop, error) {
 	var hops []signInHop
 	stopped := func(h signInHop, why string) error {
 		return fmt.Errorf("%w at %s: %s\n  hops: %s", errSignInStopped, h, why, signInHops(hops))
@@ -193,7 +212,7 @@ func walkProviderSignIn(client *http.Client, link, instance, email, password str
 	if err != nil {
 		return nil, fmt.Errorf("the authorization link: %w", err)
 	}
-	callback := "/callback/" + url.PathEscape(instance)
+	callback := oauthProxyCallbackPath
 	var form url.Values
 	for len(hops) < workspaceSignInMaxHops {
 		method := http.MethodGet
@@ -224,7 +243,8 @@ func walkProviderSignIn(client *http.Client, link, instance, email, password str
 		var glFields url.Values
 		var glForm bool
 		var glErr error
-		if login != nil && resp.StatusCode == http.StatusOK && next.Path != callback {
+		switch {
+		case login != nil && resp.StatusCode == http.StatusOK && next.Path != callback:
 			glAction, glFields, glForm, glErr = gitlabFormStep(page, login, method == http.MethodPost && strings.HasSuffix(next.Path, gitlabSignInAction))
 		}
 		switch {
@@ -236,6 +256,8 @@ func walkProviderSignIn(client *http.Client, link, instance, email, password str
 			next = location
 		case resp.StatusCode != http.StatusOK:
 			return hops, stopped(hop, pageHeading(page))
+		case next.Path == callback && !signInCompleted(page):
+			return hops, stopped(hop, "muster's callback did not complete the sign-in: "+pageHeading(page))
 		case next.Path == callback:
 			return hops, nil
 		case glErr != nil:
@@ -246,18 +268,16 @@ func walkProviderSignIn(client *http.Client, link, instance, email, password str
 				return hops, stopped(hop, "the form's action: "+err.Error())
 			}
 			next, form = location, glFields
-		case strings.Contains(string(page), dexPasswordField) && method == http.MethodPost:
-			return hops, stopped(hop, "Dex answered the login with its form again: it refused "+email+"'s credentials")
-		case strings.Contains(string(page), dexPasswordField):
-			form = url.Values{githubLogin: {email}, passwordParam: {password}}
-		case dexLocalConnectorRe.Match(page):
-			location, err := next.Parse(html.UnescapeString(string(dexLocalConnectorRe.FindSubmatch(page)[1])))
+		case login != nil && gitlabRedirect(page, callback) != "":
+			// An authorization the person granted before: GitLab skips the
+			// consent and sends the browser on to the callback by script.
+			location, err := next.Parse(gitlabRedirect(page, callback))
 			if err != nil {
-				return hops, stopped(hop, "the local connector's link: "+err.Error())
+				return hops, stopped(hop, "GitLab's redirect: "+err.Error())
 			}
 			next = location
 		default:
-			return hops, stopped(hop, "a page that is neither the callback, Dex's login form nor its connector chooser: "+pageHeading(page))
+			return hops, stopped(hop, "a page that is neither muster's callback nor a provider's sign-in or consent form: "+pageHeading(page))
 		}
 	}
 	return hops, fmt.Errorf("%w after %d hops without reaching the callback %s\n  hops: %s", errSignInStopped, len(hops), callback, signInHops(hops))
@@ -272,125 +292,83 @@ func pageHeading(page []byte) string {
 }
 
 // workspaceSignInClient is a browser for the walk: the lab's TLS trust, its
-// own cookie jar, no redirect followed, and the lab's GitHub dialed on the
-// loopback port its container publishes.
-func workspaceSignInClient(cfg *config.Config) (*http.Client, error) {
+// own cookie jar and no redirect followed. Every name is dialled as a
+// browser on this host dials it.
+func workspaceSignInClient() (*http.Client, error) {
 	transport, err := labTLSTransport()
 	if err != nil {
 		return nil, err
-	}
-	github, err := labGitHubHostAddr(cfg)
-	if err != nil {
-		return nil, err
-	}
-	walk := transport.Clone()
-	hosts := []string{config.GitHubFakeHost(cfg.Platform.Domain), config.GitHubFakeBearerHost(cfg.Platform.Domain)}
-	walk.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		if h, _, err := net.SplitHostPort(addr); err == nil && slices.Contains(hosts, h) {
-			addr = github
-		}
-		return dialLab(ctx, network, addr)
 	}
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		return nil, err
 	}
-	return &http.Client{Jar: jar, Transport: walk, Timeout: 60 * time.Second,
+	return &http.Client{Jar: jar, Transport: transport, Timeout: 60 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, nil
 }
 
-// labGitHubHostAddr is the loopback address the lab's GitHub container
-// publishes its port on.
-func labGitHubHostAddr(cfg *config.Config) (string, error) {
-	name := cfg.ClusterName + "-" + labGitHubContainerSuffix
-	published, err := outputQuiet(dockerBin, "port", name, strconv.Itoa(fakeContainerPort)+"/tcp")
-	if addr := publishedLoopback(published); err == nil && addr != "" {
-		return addr, nil
-	}
-	return "", fmt.Errorf("the lab's GitHub, container %s, publishes no port on this host: `agentlab platform` starts it for the provider instance %s", name, config.WorkspaceProviderFake)
-}
-
 // workspacePerson is a lab user signed in to muster for the workspace-manager's
-// tools, with the fixture login the lab's GitHub knows them by.
+// tools.
 type workspacePerson struct {
 	user    *config.User
-	login   string
 	session *musterSession
 }
 
 // openWorkspacePerson signs user in to muster (Dex password grant, client
-// agent-platform) and finds their login in the lab GitHub's fixture.
+// agent-platform).
 func openWorkspacePerson(cfg *config.Config, user *config.User) (*workspacePerson, error) {
-	fixture, err := loadGitHubFixture("")
-	if err != nil {
-		return nil, err
-	}
-	i := slices.IndexFunc(fixture.Users, func(u githubFixtureUser) bool { return strings.EqualFold(u.Email, user.Email) })
-	if i < 0 {
-		return nil, fmt.Errorf("the lab's GitHub has no fixture user with the email %s: nobody to consent as", user.Email)
-	}
 	token, err := passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret, user.Email, user.Password, musterLoginScopes)
 	if err != nil {
 		return nil, err
 	}
-	session, err := openMusterSession(cfg, token, "workspaces-signin-"+fixture.Users[i].Login)
+	login, _, _ := strings.Cut(user.Email, "@")
+	session, err := openMusterSession(cfg, token, "workspaces-"+login)
 	if err != nil {
 		return nil, err
 	}
-	return &workspacePerson{user: user, login: fixture.Users[i].Login, session: session}, nil
+	return &workspacePerson{user: user, session: session}, nil
 }
 
-// connectWorkspaceProvider connects the person to the provider instance the
-// way a browser does: connect_provider's link walked to the callback, then
-// list_providers checked to show them connected. It returns the walk's hops,
-// worded; an error says where the walk stopped. The proofs that need a
-// connected person call it (workspaces-signin-test, workspaces-test's
-// access part).
-func connectWorkspaceProvider(cfg *config.Config, p *workspacePerson, instance string) (string, error) {
-	return connectWorkspaceProviderAs(cfg, p, instance, nil)
-}
-
-// connectWorkspaceProviderAs is connectWorkspaceProvider at a provider whose
-// sign-in is a real login form: login is the person's account there (a
-// GitLab's). Without one the walk adds the person's fixture login for the
-// lab's GitHub.
-func connectWorkspaceProviderAs(cfg *config.Config, p *workspacePerson, instance string, login *providerLogin) (string, error) {
-	var started struct {
-		AuthorizationURL string `json:"authorizationURL"`
-	}
-	if err := p.session.callServerStructured(workspaceManagerToolPrefix+"connect_provider", map[string]any{workspaceProviderArg: instance}, &started); err != nil {
+// connectWorkspaceProvider has the person grant the provider instance's App
+// in muster the way a browser does: core_auth_login's link walked through
+// the provider's sign-in and consent to muster's callback, then
+// list_providers checked to show them connected. instance must be the one
+// muster pins the workspace-manager to; login is the person's account at
+// the provider (a GitLab's). It returns the walk's hops, worded ("already
+// granted" for a person who had granted it); an error says where the walk
+// stopped.
+func connectWorkspaceProvider(cfg *config.Config, p *workspacePerson, instance string, login *providerLogin) (string, error) {
+	if pinned, err := workspaceManagerPinnedProvider(cfg); err != nil {
 		return "", err
+	} else if pinned != instance {
+		return "", fmt.Errorf("muster pins the workspace-manager to the App of %s, not %s: a person grants only that App (`agentlab configure --workspaces-grant-provider %s`, then `agentlab platform`)", pinned, instance, instance)
 	}
-	link, err := url.Parse(started.AuthorizationURL)
-	if err != nil || link.Host == "" {
-		return "", fmt.Errorf("connect_provider for %s answered no authorization link: %q", instance, started.AuthorizationURL)
-	}
-	// The lab's GitHub consents for the fixture user the login parameter
-	// names, as GitHub would for the browser's signed-in account.
-	account := p.login
-	if login == nil {
-		q := link.Query()
-		q.Set(githubLogin, p.login)
-		link.RawQuery = q.Encode()
-	} else {
-		account = login.login
-	}
-	client, err := workspaceSignInClient(cfg)
+	link, err := p.grantLink()
 	if err != nil {
 		return "", err
 	}
-	hops, err := walkProviderSignIn(client, link.String(), instance, p.user.Email, p.user.Password, login)
-	if err != nil {
-		return "", fmt.Errorf("%s connecting %s as %s: %w", p.user.Email, instance, account, err)
+	hops := "already granted"
+	if link != "" {
+		client, err := workspaceSignInClient()
+		if err != nil {
+			return "", err
+		}
+		walked, err := walkProviderSignIn(client, link, login)
+		if err != nil {
+			return "", fmt.Errorf("%s granting %s as %s: %w", p.user.Email, instance, login.login, err)
+		}
+		hops = signInHops(walked)
 	}
 	status, err := p.providerStatus(instance)
 	if err != nil {
 		return "", err
 	}
 	if !status.Connected {
-		return "", fmt.Errorf("the sign-in of %s at %s reached the callback, but list_providers still shows %s\n  hops: %s", p.user.Email, instance, status, signInHops(hops))
+		return "", fmt.Errorf("the grant of %s at %s reached muster's callback, but list_providers still shows %s\n  hops: %s", p.user.Email, instance, status, hops)
 	}
-	return signInHops(hops), nil
+	// Held before or granted now, the run drops it at its end.
+	recordWorkspaceGrant(p, instance)
+	return hops, nil
 }
 
 // providerStatus is list_providers' entry for the instance, as the person.
@@ -408,11 +386,82 @@ func (p *workspacePerson) providerStatus(instance string) (workspaceProviderStat
 	return listed.Providers[i], nil
 }
 
-// disconnect forgets the person's sign-in at the instance, best effort: a
-// later proof starts from a person who is not connected.
-func (p *workspacePerson) disconnect(instance string) {
-	if _, err := p.session.callToolEnvelope(workspaceManagerToolPrefix+"disconnect_provider", map[string]any{workspaceProviderArg: instance}); err != nil {
-		warn("disconnecting %s from %s: %v", p.user.Email, instance, err)
+// grantLink is core_auth_login's sign-in link for the workspace-manager, as
+// the person; "" when muster holds their grant already.
+func (p *workspacePerson) grantLink() (string, error) {
+	env, err := p.session.callToolEnvelope("core_auth_login", map[string]any{serverKey: workspaceManagerMCPServer})
+	if err != nil {
+		return "", err
+	}
+	if link, _ := env.StructuredContent["authUrl"].(string); link != "" {
+		return link, nil
+	}
+	text := env.Content[0].Text
+	if !env.IsError && grantHeld(text) {
+		return "", nil
+	}
+	return "", fmt.Errorf("core_auth_login %s as %s answered neither a sign-in link nor a held grant: %.300s", workspaceManagerMCPServer, p.user.Email, text)
+}
+
+// grantHeld says whether core_auth_login's answer without a sign-in link
+// is a grant the person holds: muster says it was already held, or that it
+// connected the server with the person's token at once.
+func grantHeld(text string) bool {
+	lower := strings.ToLower(text)
+	return strings.Contains(lower, "already") || strings.Contains(lower, "successfully connected")
+}
+
+// musterSignInLinkRe finds muster's sign-in link in its auth_required answer.
+var musterSignInLinkRe = regexp.MustCompile(`https?://[^\s"'\\]*` + regexp.QuoteMeta(oauthProxyStartPath) + `[^\s"'\\]*`)
+
+// grantRequired is the answer of a workspace-manager tool to a person who
+// has not granted the pinned App: muster's auth_required with its sign-in
+// link, which it returns. Any other answer is an error.
+func (p *workspacePerson) grantRequired(tool string, args map[string]any) (string, error) {
+	env, err := p.session.callToolEnvelope(workspaceManagerToolPrefix+tool, args)
+	var text string
+	switch {
+	case err != nil:
+		text = err.Error()
+	case env.StructuredContent["authUrl"] != nil:
+		text, _ = env.StructuredContent["authUrl"].(string)
+	default:
+		text = env.Content[0].Text
+	}
+	if link := musterSignInLinkRe.FindString(text); link != "" {
+		return link, nil
+	}
+	return "", fmt.Errorf("%s as %s, who has not granted the workspace-manager's App, answered no muster sign-in link: %.400s", tool, p.user.Email, text)
+}
+
+// workspaceManagerPinnedProvider is the instance whose App the live
+// workspace-manager MCPServer is pinned to, the lab's grantProvider once the
+// MCPServer carries an authorization server: the chart renders one only with
+// muster.mcpServer.auth.provider, which the lab sets on a workspace-manager
+// of 0.10.0 or newer alone.
+func workspaceManagerPinnedProvider(cfg *config.Config) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
+	defer cancel()
+	mcpServers, err := gvrFor(musterMCPServerResource)
+	if err != nil {
+		return "", err
+	}
+	obj, err := getObject(ctx, mcpServers, platformNamespace, workspaceManagerMCPServer)
+	if err != nil {
+		return "", err
+	}
+	issuer, _, _ := unstructured.NestedString(obj.Object, "spec", "auth", "authorizationServer", "issuer")
+	if issuer == "" {
+		return "", fmt.Errorf("the MCPServer %s/%s is not pinned to a provider App: the person's sign-in moved to muster in workspace-manager 0.10.0, which the lab pins (components.workspace-manager.versionRange in platform.valuesFiles, then `agentlab platform`)", platformNamespace, workspaceManagerMCPServer)
+	}
+	return cfg.WorkspaceGrantProvider(), nil
+}
+
+// disconnect drops the person's grant of the pinned App in muster, best
+// effort: a later proof starts from a person who has not granted it.
+func (p *workspacePerson) disconnect(string) {
+	if _, err := p.session.callToolEnvelope("core_auth_logout", map[string]any{serverKey: workspaceManagerMCPServer}); err != nil {
+		warn("dropping %s's grant of the workspace-manager's App: %v", p.user.Email, err)
 	}
 }
 
@@ -442,212 +491,4 @@ func (p *workspacePerson) authorizeWorkspace(workspace string) (workspaceAuthori
 	var a workspaceAuthorization
 	err := p.session.callServerStructured(workspaceManagerToolPrefix+"authorize_workspace", map[string]any{workspaceArg: workspace}, &a)
 	return a, err
-}
-
-// The workspace the sign-in proof creates: the lab GitHub's agentlab-org
-// repositories one fixture member reads both of and the other only one.
-const (
-	workspaceSignInProofName = "agentlab-signin-proof"
-	workspaceSignInOwner     = "agentlab-org"
-	workspaceSignInReadable  = "platform-api"
-	// workspaceSignInPrivate is the repository only the admin reads
-	// (github-fixture.yaml).
-	workspaceSignInPrivate = "platform-infra"
-)
-
-// WorkspacesSignInTestOptions tune the sign-in proof.
-type WorkspacesSignInTestOptions struct {
-	// Provider is the provider instance the people connect to.
-	Provider string
-	// SyncTimeout bounds the wait for the workspace's first sync.
-	SyncTimeout time.Duration
-}
-
-// DefaultWorkspacesSignInSyncTimeout is the proof's default wait for a sync.
-const DefaultWorkspacesSignInSyncTimeout = 5 * time.Minute
-
-// WorkspacesSignInTest is the headless provider sign-in proof: a workspace
-// over agentlab-org/platform-api and platform-infra created and synced as the
-// admin -> the admin and a developer connected to the provider instance by
-// the browser's walk (connectWorkspaceProvider), list_providers showing each
-// connected -> the lab's GitHub replaced and the workspace-manager rolled,
-// as `agentlab platform` does -> authorize_workspace granted for the admin,
-// who reads both,
-// and refused naming platform-infra for the developer, who does not ->
-// the workspace deleted and both sign-ins forgotten.
-func WorkspacesSignInTest(cfg *config.Config, opts WorkspacesSignInTestOptions) error {
-	if skip := workspaceManagerSkip(cfg); skip != "" {
-		return fmt.Errorf("no workspace-manager to sign in to: %s", skip)
-	}
-	instance := cmp.Or(opts.Provider, config.WorkspaceProviderFake)
-	if instance != config.WorkspaceProviderFake || !cfg.WorkspaceFakeProvider() {
-		return fmt.Errorf("the sign-in proof walks the lab's GitHub, the provider instance %s: platform.workspaces.provider in %s must name it", config.WorkspaceProviderFake, config.File)
-	}
-	if opts.SyncTimeout <= 0 {
-		opts.SyncTimeout = DefaultWorkspacesSignInSyncTimeout
-	}
-	adminUser, memberUser := cfg.FindUserInGroup("platform-admins"), cfg.FindUser("dev@lab.local")
-	if adminUser == nil || memberUser == nil {
-		return fmt.Errorf("the sign-in proof needs a platform-admins user and dev@lab.local in %s (`agentlab configure --defaults` writes them)", config.File)
-	}
-	admin, err := openWorkspacePerson(cfg, adminUser)
-	if err != nil {
-		return err
-	}
-	member, err := openWorkspacePerson(cfg, memberUser)
-	if err != nil {
-		return err
-	}
-
-	step("A workspace %s of Organization %s over %s/%s and %s/%s, created as %s", workspaceSignInProofName, config.WorkspaceOrganization,
-		workspaceSignInOwner, workspaceSignInReadable, workspaceSignInOwner, workspaceSignInPrivate, admin.user.Email)
-	deleteWorkspace := func() {
-		_, _ = admin.session.callToolEnvelope(workspaceManagerToolPrefix+"delete_workspace", map[string]any{workspaceArg: workspaceSignInProofName})
-	}
-	deleteWorkspace()
-	if err := waitWorkspaceGone(admin, opts.SyncTimeout); err != nil {
-		return err
-	}
-	defer deleteWorkspace()
-	create := map[string]any{
-		nameKey:        workspaceSignInProofName,
-		"organization": config.WorkspaceOrganization,
-		"sources": []map[string]any{{
-			"provider":        instance,
-			workspaceOwnerArg: workspaceSignInOwner,
-			repositoriesKey:   []string{workspaceSignInReadable, workspaceSignInPrivate},
-		}},
-	}
-	if env, err := admin.session.callToolEnvelope(workspaceManagerToolPrefix+"create_workspace", create); err != nil {
-		return err
-	} else if env.IsError {
-		return fmt.Errorf("create_workspace refused: %.300s", env.Content[0].Text)
-	}
-	synced, err := waitWorkspaceSynced(admin, opts.SyncTimeout)
-	if err != nil {
-		return err
-	}
-	note("synced: %s", synced)
-
-	for _, p := range []*workspacePerson{admin, member} {
-		step("%s connects %s as fixture user %s: the authorization link walked through the callback and Dex", p.user.Email, instance, p.login)
-		defer p.disconnect(instance)
-		hops, err := connectWorkspaceProvider(cfg, p, instance)
-		if err != nil {
-			return err
-		}
-		note("%s", hops)
-		note("list_providers as %s: %s connected", p.user.Email, instance)
-	}
-
-	step("The lab's GitHub replaced and the workspace-manager rolled, as `agentlab platform` does: both sign-ins outlive it")
-	if err := githubFakeUp(cfg); err != nil {
-		return err
-	}
-	ctx := context.Background()
-	if err := restartDeployment(ctx, platformNamespace, workspaceManagerMCPServer); err != nil {
-		return err
-	}
-	if err := waitDeploymentRolledOut(ctx, platformNamespace, workspaceManagerMCPServer, opts.SyncTimeout); err != nil {
-		return err
-	}
-
-	step("authorize_workspace %s as %s (reads both) and as %s (not %s)", workspaceSignInProofName, admin.user.Email, member.user.Email, workspaceSignInPrivate)
-	granted, err := authorizeAfterRoll(admin, opts.SyncTimeout)
-	if err != nil {
-		return err
-	}
-	if granted.Outcome != "granted" || granted.Grant == "" {
-		return fmt.Errorf("authorize_workspace as %s answered %s (%s), want granted with a grant", admin.user.Email, granted.Outcome, granted.Reason)
-	}
-	note("%s: granted, a grant of %d bytes", admin.user.Email, len(granted.Grant))
-	refused, err := member.authorizeWorkspace(workspaceSignInProofName)
-	if err != nil {
-		return err
-	}
-	private := workspaceSignInOwner + "/" + workspaceSignInPrivate
-	if refused.Outcome != authorizeRefused || !slices.ContainsFunc(refused.Unreadable, func(r string) bool { return strings.HasSuffix(r, private) }) {
-		return fmt.Errorf("authorize_workspace as %s answered %s (%s, unreadable %v), want refused naming %s", member.user.Email, refused.Outcome, refused.Reason, refused.Unreadable, private)
-	}
-	note("%s: refused, unreadable %s (%s)", member.user.Email, strings.Join(refused.Unreadable, ", "), refused.Reason)
-
-	fmt.Printf("\nWorkspace sign-in proof passed: %s and %s connected to %s headlessly, authorize_workspace granted for the one and refused naming %s for the other.\n",
-		admin.user.Email, member.user.Email, instance, private)
-	return nil
-}
-
-// authorizeAfterRoll is authorize_workspace as the person on a
-// workspace-manager just rolled, which answers before it reaches everything:
-// a call muster cannot deliver yet, or a refusal that asks to try again (the
-// provider not answering in time), is retried until timeout. Every other
-// answer, connect_required among them, is the answer.
-func authorizeAfterRoll(p *workspacePerson, timeout time.Duration) (workspaceAuthorization, error) {
-	deadline := time.Now().Add(timeout)
-	for {
-		a, err := p.authorizeWorkspace(workspaceSignInProofName)
-		transient := (err != nil && strings.Contains(err.Error(), "transport error")) ||
-			(err == nil && a.Outcome == authorizeRefused && strings.Contains(a.Reason, "try again"))
-		if !transient || time.Now().After(deadline) {
-			return a, err
-		}
-		if err != nil {
-			note("the rolled workspace-manager does not answer yet: %.200s", err)
-		} else {
-			note("the rolled workspace-manager answers %s (%s): again", a.Outcome, a.Reason)
-		}
-		time.Sleep(5 * time.Second)
-	}
-}
-
-// workspaceView is get_workspace's answer (the workspace-manager's
-// WorkspaceDetail), the fields the proof waits on.
-type workspaceView struct {
-	Workspace struct {
-		LastSync *struct {
-			Time    time.Time `json:"time"`
-			Result  string    `json:"result"`
-			Message string    `json:"message"`
-		} `json:"lastSync"`
-	} `json:"workspace"`
-}
-
-// waitWorkspaceSynced waits for the proof workspace's first sync and words it;
-// a sync that ended other than succeeded fails the wait.
-func waitWorkspaceSynced(p *workspacePerson, timeout time.Duration) (string, error) {
-	deadline := time.Now().Add(timeout)
-	for {
-		var w workspaceView
-		if err := p.session.callServerStructured(workspaceManagerToolPrefix+"get_workspace", map[string]any{workspaceArg: workspaceSignInProofName}, &w); err != nil {
-			return "", err
-		}
-		if s := w.Workspace.LastSync; s != nil {
-			if !strings.EqualFold(s.Result, "succeeded") {
-				return "", fmt.Errorf("workspace %s's sync ended %s: %s", workspaceSignInProofName, s.Result, s.Message)
-			}
-			return fmt.Sprintf("%s at %s", s.Result, s.Time.UTC().Format(time.RFC3339)), nil
-		}
-		if time.Now().After(deadline) {
-			return "", fmt.Errorf("workspace %s did not sync within %s: check `kubectl -n %s logs deploy/%s`", workspaceSignInProofName, timeout, platformNamespace, workspaceManagerMCPServer)
-		}
-		time.Sleep(5 * time.Second)
-	}
-}
-
-// waitWorkspaceGone waits until the proof workspace an earlier run left is
-// gone, so the create starts afresh.
-func waitWorkspaceGone(p *workspacePerson, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for {
-		env, err := p.session.callToolEnvelope(workspaceManagerToolPrefix+"get_workspace", map[string]any{workspaceArg: workspaceSignInProofName})
-		if err != nil {
-			return err
-		}
-		if env.IsError && strings.Contains(env.Content[0].Text, "not found") {
-			return nil
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("workspace %s of an earlier run is not gone within %s", workspaceSignInProofName, timeout)
-		}
-		time.Sleep(2 * time.Second)
-	}
 }

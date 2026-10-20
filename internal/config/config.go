@@ -4,7 +4,6 @@ package config
 
 import (
 	"bytes"
-	"cmp"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
@@ -13,6 +12,7 @@ import (
 	"io"
 	"io/fs"
 	"maps"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -33,15 +33,43 @@ import (
 // directory by `agentlab configure` and read by every other command.
 const File = "agentlab.yaml"
 
-// The three lab groups are a fixed vocabulary: RBAC binds exactly these to
-// cluster-admin / edit-in-demo / view (see the rbac template).
+// The lab groups are a fixed vocabulary: RBAC binds the first three to
+// cluster-admin / edit-in-demo / view (see the rbac template). The two
+// tenant groups the lab binds nothing to: `agentlab tenants-test` binds each
+// to agent-platform:user in one organization namespace, so a token's groups
+// claim is what gives its person that tenant.
 const (
 	groupPlatformAdmins = "platform-admins"
 	groupDevelopers     = "developers"
 	groupViewers        = "viewers"
+	GroupTenantA        = "tenant-a"
+	GroupTenantB        = "tenant-b"
 )
 
-var Groups = []string{groupPlatformAdmins, groupDevelopers, groupViewers}
+var Groups = []string{groupPlatformAdmins, groupDevelopers, groupViewers, GroupTenantA, GroupTenantB}
+
+// TenantUsers are the people `agentlab configure --tenants` adds when no user
+// carries their tenant group: one person per organization of tenants-test,
+// in that group alone.
+var TenantUsers = []User{
+	{Email: "alice@lab.local", Username: "alice", Name: "Lab Tenant A", Password: defaultPassword, Groups: []string{GroupTenantA}},
+	{Email: "bob@lab.local", Username: "bob", Name: "Lab Tenant B", Password: defaultPassword, Groups: []string{GroupTenantB}},
+}
+
+// EnsureTenantUsers adds each of TenantUsers whose group no user carries
+// and whose email is free, and returns the emails it added.
+func (c *Config) EnsureTenantUsers() []string {
+	var added []string
+	for _, u := range TenantUsers {
+		if c.FindUserInGroup(u.Groups[0]) != nil || c.FindUser(u.Email) != nil {
+			continue
+		}
+		u.Groups = slices.Clone(u.Groups)
+		c.Users = append(c.Users, u)
+		added = append(added, u.Email)
+	}
+	return added
+}
 
 // defaultPassword is the throwaway password every default lab user starts
 // with; like everything else in the lab's identity, it guards nothing real.
@@ -102,6 +130,10 @@ const GatewayPublicNodePort = 30444
 // NodePort, so nothing else may take one of these numbers.
 var PinnedNodePorts = []int{MusterNodePort, KagentUINodePort, GatewayNodePort, GatewayPublicNodePort}
 
+// DefaultClusterName is a new lab's clusterName when no other lab on the
+// machine holds it.
+const DefaultClusterName = "agentlab"
+
 // DefaultDexPort is the lab Dex NodePort when agentlab.yaml sets none.
 const DefaultDexPort = 32000
 
@@ -120,7 +152,7 @@ const DefaultAPIServerPort = 6443
 // image is the major.minor components.substrate installs) — a chart that
 // leaves the kagent range open across a Substrate release boots no golden
 // actor (agentlab#187).
-const DefaultChartVersion = "4.133.1"
+const DefaultChartVersion = "4.157.1"
 
 // ChartRepository is where the agent-platform chart releases live.
 const ChartRepository = "oci://gsoci.azurecr.io/charts/giantswarm/agent-platform"
@@ -144,8 +176,10 @@ func ConnectivityChartDir(chartPath string) string {
 // agent-platform chart's component names (its `components.<name>` entries)
 // for the Deployments the lab's dev loops build from a checkout — the
 // agentgateway component's two Deployments under their own names — plus
-// DevImageHarness for the platform Harness's runtime image.
-var DevImageComponents = []string{"muster", "backstage", "kagent", "mcp-kubernetes", "model-manager", "agent-manager", "vm-manager", DevImageKlausGateway, DevImageClusterManager, DevImageWorkspaceManager, DevImageAgentgateway, DevImageAgentgatewayController, DevImageSubstrateAPI, DevImageHarness}
+// DevImageHarness for the platform Harness's runtime image and one target per
+// coding Harness's image (DevImageClaudeHarness, DevImageCodexHarness,
+// DevImageOmpHarness).
+var DevImageComponents = []string{"muster", "backstage", "kagent", "mcp-kubernetes", "model-manager", "agent-manager", "vm-manager", DevImageKlausGateway, DevImageClusterManager, DevImageWorkspaceManager, DevImageAgentgateway, DevImageAgentgatewayController, DevImageSubstrateAPI, DevImageMCPPrometheus, DevImageHarness, DevImageClaudeHarness, DevImageCodexHarness, DevImageOmpHarness}
 
 // DevImageKlausGateway is the devImages key of the klaus-gateway component
 // (platform.klausGateway): the Deployment `klaus-gateway`, container
@@ -187,6 +221,12 @@ const DevImageAgentgatewayController = "agentgateway-controller"
 // which bring Substrate.
 const DevImageSubstrateAPI = "ate-api-server"
 
+// DevImageMCPPrometheus is the devImages key of the lab's own mcp-prometheus
+// (platform.observability): the Deployment `mcp-prometheus`, container
+// `mcp-prometheus`, rendered by the HelmRelease the lab writes outside the
+// meta chart (mcp-prometheus.yaml.tmpl), whose postRenderers carry the swap.
+const DevImageMCPPrometheus = "mcp-prometheus"
+
 // DevImageHarness is the devImages key of the platform Harness's workload
 // image — the Go ADK runtime every agent runs on under kagent API v2. Not a
 // Deployment: the connectivity chart renders the image by digest into the
@@ -194,6 +234,64 @@ const DevImageSubstrateAPI = "ate-api-server"
 // own layer cache, so the lab pushes the local build to its registry
 // (DevRegistryPort) and forwards the digest through kagent.harness.image.
 const DevImageHarness = "harness"
+
+// DevImageClaudeHarness, DevImageCodexHarness and DevImageOmpHarness are the
+// devImages keys of a coding Harness's image, `<runtime>-harness`: a build
+// of the kagent line's claude-harness, codex-harness or omp-harness, say
+// from a pull request. Like the `harness` target it is no Deployment: the
+// lab pushes it to its registry and forwards the digest as the image of that
+// runtime's kagent.harnesses entry. Meaningful only while the lab renders
+// that Harness (CodingHarnessRendered).
+const (
+	DevImageClaudeHarness = CodingRuntimeClaude + "-harness"
+	DevImageCodexHarness  = CodingRuntimeCodex + "-harness"
+	DevImageOmpHarness    = CodingRuntimeOmp + "-harness"
+)
+
+// codingHarnessVersionPins are the coding runtimes whose CLI version the
+// kagent controller compiles into the Harness config with StrictVersion, by
+// the constant that pins it on the kagent line: their harness dev image
+// travels with a controller dev image from the same build.
+var codingHarnessVersionPins = map[string]string{
+	CodingRuntimeClaude: "ExpectedClaudeVersion, claudeconfig.PinnedClaudeVersion",
+	CodingRuntimeCodex:  "ExpectedCodexVersion, codexconfig.PinnedCodexVersion",
+}
+
+// CodingHarnessDevImage is the devImages key of a coding runtime's image.
+func CodingHarnessDevImage(runtime string) string { return runtime + "-harness" }
+
+// RegistryDevImage reports whether a devImages target is pushed to the lab
+// registry and pinned by digest (a Harness's image) rather than side-loaded
+// into the node as a Deployment's.
+func RegistryDevImage(component string) bool {
+	return component == DevImageHarness || component == DevImageClaudeHarness || component == DevImageCodexHarness || component == DevImageOmpHarness
+}
+
+// The coding runtimes the lab renders a Harness of, each named after its
+// runtime: claude (Claude Code), codex (OpenAI's Codex CLI) and omp
+// (oh-my-pi, a BYO Harness on the kagent line's omp-harness adapter).
+const (
+	CodingRuntimeClaude = "claude"
+	CodingRuntimeCodex  = "codex"
+	CodingRuntimeOmp    = "omp"
+)
+
+// CodingRuntimes are the runtimes platform.coding.harnesses takes.
+var CodingRuntimes = []string{CodingRuntimeClaude, CodingRuntimeCodex, CodingRuntimeOmp}
+
+// CodingChartRuntime is the `runtime` the kagent chart's harnesses[] entry
+// of a coding runtime names: the runtime itself where kagent has one, `byo`
+// for omp, which runs the omp-harness adapter on an image the entry names.
+func CodingChartRuntime(runtime string) string {
+	if runtime == CodingRuntimeOmp {
+		return "byo"
+	}
+	return runtime
+}
+
+// codingImageRe is a coding Harness's image pinned by digest, what the kagent
+// chart's harnesses[] entry and the Harness API take.
+var codingImageRe = regexp.MustCompile(`^[^[:space:]@]+@sha256:[a-f0-9]{64}$`)
 
 // vmManagerChartFloor is the first agent-platform release whose vm-manager
 // component (components.vm-manager) comes from gsoci and fetches its guest
@@ -292,6 +390,20 @@ type Platform struct {
 	// BOM (yet) — the lab pins the two charts itself (observability.go).
 	// Inert when the platform itself is disabled.
 	Observability bool `yaml:"observability"`
+	// Alertmanager adds the kube-prometheus-stack Alertmanager to the
+	// observability stack, a Prometheus alerting rule that always fires
+	// (AgentlabWatchdog) and ALERTMANAGER_URL on mcp-prometheus, so its alert
+	// tools (x_prometheus_get_alertmanager_alerts) have alerts to read. Off by
+	// default; --alertmanager turns it on; needs platform.observability. See
+	// docs/observability.md "Alertmanager".
+	Alertmanager bool `yaml:"alertmanager,omitempty"`
+	// MCPPrometheusChartVersion overrides the mcp-prometheus chart release
+	// the lab installs with the observability stack (an exact version, a
+	// release candidate included), for proving a chart change the image swap
+	// (devImages.mcp-prometheus) cannot carry. Empty keeps the release this
+	// agentlab pins (internal/lab/observability.go); needs
+	// platform.observability.
+	MCPPrometheusChartVersion string `yaml:"mcpPrometheusChartVersion,omitempty"`
 	// Retired: the fake fleet. The lab registers its own cluster as the
 	// infrastructure families instead (MCPServerName). Read so a file an
 	// earlier release wrote still loads, never written back.
@@ -316,6 +428,12 @@ type Platform struct {
 	// that port in-cluster, so the ported URLs resolve from pods too. Change
 	// only if 443 is taken.
 	GatewayPort int `yaml:"gatewayPort"`
+	// GatewayAddress is the loopback address the edge is published on, empty
+	// for 127.0.0.1. A second lab on the machine takes 127.0.0.<n> with the
+	// domain lab<n>.127.0.0.<n>.nip.io (`configure` picks both), so it serves
+	// on 443 too and its URLs carry no port: Linux routes all of 127.0.0.0/8
+	// to loopback. Fixed at node creation like the ports.
+	GatewayAddress string `yaml:"gatewayAddress,omitempty"`
 	// TLS optionally hands the edge an externally provisioned certificate
 	// pair (PEM) instead of the minted lab-CA wildcard — for users who own a
 	// real domain (wildcard record -> 127.0.0.1) and run their own ACME
@@ -434,6 +552,16 @@ type Platform struct {
 	// klaus-gateway-test` proves it next to the host-mode gateway
 	// (klausgateway.go).
 	KlausGateway KlausGateway `yaml:"klausGateway"`
+	// MusterPodNetwork runs muster the way an installation does: on the pod
+	// network at two replicas behind the edge, a PodDisruptionBudget of
+	// minAvailable 1 — the shape muster's availability work is proven in.
+	// The issuer stays reachable from its pods as from every other platform
+	// pod: the dex-localhost sidecar while it is spelled localhost, cluster
+	// DNS under platform.tls. Off (the default), muster runs on the host
+	// network at one replica, which muster's direct debug port (musterPort)
+	// needs; with it on that port answers nothing. --muster-pod-network turns
+	// it on. See docs/platform.md "muster on the pod network".
+	MusterPodNetwork bool `yaml:"musterPodNetwork,omitempty"`
 	// GitHub registers GitHub's hosted MCP server with muster, signed in to
 	// as the person through an OAuth client (internal/lab/githubmcp.go).
 	GitHub GitHub `yaml:"github"`
@@ -463,47 +591,49 @@ type Platform struct {
 	// NFS server, the NFS CSI driver with an mTLS proxy in front of its
 	// controller that admits ate-api-server's pod identity alone, and the
 	// StorageClass the chart's workspaces values name. Off by default;
-	// --workspaces turns it on; needs the agents runtime. `agentlab
-	// workspaces-test --storage-only` is the proof.
+	// --workspaces turns it on; needs the agents runtime: the chart's
+	// workspaces live in kagent's namespace, so Validate refuses them without
+	// it. `agentlab workspaces-test --storage-only` is the proof.
 	Workspaces Workspaces `yaml:"workspaces"`
 	// Coding agents: the chart's kagent.harnesses renders the lab's coding
 	// Harness (internal/lab/coding.go) claude, Claude Code run headless. Off
 	// by default; --coding turns it on; needs the agents runtime. `agentlab
 	// coding-test` is the proof.
 	Coding Coding `yaml:"coding"`
-	// The platform-manager fixture: an invented installation with the agent
-	// platform and workspaces on, in a registry the lab serves, that the
-	// released giantswarm-platform-manager plans against
-	// (internal/lab/pmtest.go). Off by default; `agentlab pm-test` is the
-	// proof and refuses while it is off.
-	PlatformManager PlatformManager `yaml:"platformManager"`
-}
-
-// DefaultPlatformManagerVersion is the giantswarm-platform-manager release
-// pm-test installs while platform.platformManager.version is empty: a stable
-// release of the chart and image on gsoci.
-const DefaultPlatformManagerVersion = "0.69.0"
-
-// PlatformManager configures the platform-manager fixture.
-type PlatformManager struct {
-	// On, `agentlab pm-test` runs: the manager's chart at Version as a
-	// temporary HelmRelease against the lab's registry fixture.
-	Enabled bool `yaml:"enabled"`
-	// Version is the giantswarm-platform-manager chart (and image) version,
-	// a release, a release candidate or a branch's dev build; empty is
-	// DefaultPlatformManagerVersion.
-	Version string `yaml:"version,omitempty"`
-}
-
-// PlatformManagerVersion is the manager release pm-test installs.
-func (c *Config) PlatformManagerVersion() string {
-	return cmp.Or(strings.TrimPrefix(strings.TrimSpace(c.Platform.PlatformManager.Version), "v"), DefaultPlatformManagerVersion)
+	// The Organizations' namespaces as tenants: the chart's
+	// tenants.organizations.enabled, which turns on agent-manager's tenant
+	// reconciler and admits the agent workers of every namespace labelled
+	// giantswarm.io/organization. Off by default; --tenants turns it on;
+	// needs the agents runtime. `agentlab tenants-test` is the proof.
+	Tenants Tenants `yaml:"tenants"`
+	// Retired: the platform-manager fixture. Read so a file an earlier
+	// release wrote still loads, never written back.
+	RetiredPlatformManager any `yaml:"platformManager,omitempty"`
 }
 
 // Coding configures the lab's coding Harnesses.
 type Coding struct {
 	// On, `agentlab platform` renders the coding Harnesses through the
 	// chart's kagent.harnesses.
+	Enabled bool `yaml:"enabled"`
+	// Harnesses are the coding Harnesses rendered, by runtime (one of
+	// CodingRuntimes), each named after it; empty is claude alone. codex
+	// renders on the chart's codex-harness image, which needs a kagent line
+	// whose chart takes `runtime: codex`; omp renders a BYO entry on the
+	// image Images names, which needs a kagent line whose chart takes
+	// `runtime: byo`.
+	Harnesses []string `yaml:"harnesses,omitempty"`
+	// Images are the images of the coding Harnesses the chart has no image
+	// of its own for (omp: the kagent line's omp-harness adapter, the digest
+	// a release's chart stamps as runtimeImages.ompHarness), by runtime,
+	// pinned by digest. A dev image (platform.devImages `<runtime>-harness`)
+	// wins over an entry here.
+	Images map[string]string `yaml:"images,omitempty"`
+}
+
+// Tenants configures the Organizations' namespaces as tenants.
+type Tenants struct {
+	// On, `agentlab platform` renders tenants.organizations.enabled: true.
 	Enabled bool `yaml:"enabled"`
 }
 
@@ -515,18 +645,19 @@ type Workspaces struct {
 	// key.
 	Enabled bool `yaml:"enabled"`
 	// Provider names the workspace-manager's provider instances:
-	// WorkspaceProviderFake (the lab's own GitHub, served for the lab as a
-	// GitHub Enterprise-shaped instance; the default while empty),
-	// WorkspaceProviderFakeBearer (the same GitHub as a github.com-shaped
-	// instance, its API on a host of its own; only beside the fake),
-	// WorkspaceProviderGitHub (a GitHub App of the lab's own on github.com),
-	// WorkspaceProviderGitLab (a GitLab the lab reaches, its OAuth
-	// application and group access token), or several, comma-separated
-	// ("fake,fake-bearer,github,gitlab"). With workspaces on, the
+	// WorkspaceProviderGitHub (a GitHub App of the lab's own on github.com;
+	// the default while empty), WorkspaceProviderGitLab (a GitLab the lab
+	// reaches, its OAuth application and group access token), or both,
+	// comma-separated ("github,gitlab"). With workspaces on, the
 	// workspace-manager's public base URL carries the gateway port
-	// (WorkspaceManagerBaseURL), the chart routes its host, and the lab
-	// Dex's agent-platform client lists <base URL>/signin.
+	// (WorkspaceManagerBaseURL) and the chart routes its host.
 	Provider string `yaml:"provider,omitempty"`
+	// GrantProvider is the instance whose App muster pins the
+	// workspace-manager's registration to (WorkspaceGrantProvider): a person
+	// grants that App once in muster, and muster attaches the person's token
+	// for it to every call of the manager's tools. Empty is the first
+	// instance of Provider, in the order WorkspaceProviders gives them.
+	GrantProvider string `yaml:"grantProvider,omitempty"`
 	// GitHub is the App behind the provider instance github.
 	GitHub WorkspaceGitHub `yaml:"github,omitempty"`
 	// GitLab is the GitLab behind the provider instance gitlab.
@@ -605,7 +736,7 @@ func (g WorkspaceGitLab) Validate() error {
 	return nil
 }
 
-// WorkspaceGitHub is the lab's GitHub App for the workspace-manager's
+// WorkspaceGitHub is the GitHub App of the workspace-manager's
 // provider instance github: an App of its own, apart from the lab Dex's
 // sign-in App and muster's github server client. Its App id and client id
 // are public and live here, empty until the App is registered; its private
@@ -652,16 +783,11 @@ const WorkspaceOrganization = "lab"
 
 var WorkspaceOrganizationGroups = []string{groupPlatformAdmins, groupDevelopers}
 
-// The workspace providers, and the Secrets of their Apps: the fake's holds
-// the key pair and client secret the lab generated itself (certs/github-fake),
-// the github instance's what the operator's secret tooling placed. Both carry
-// the same keys, and the values only ever reference them.
+// The workspace providers, and the Secrets of their Apps: what the
+// operator's secret tooling placed, which the values only ever reference.
 const (
-	WorkspaceProviderFake        = "fake"
-	WorkspaceProviderFakeBearer  = "fake-bearer"
 	WorkspaceProviderGitHub      = "github"
 	WorkspaceProviderGitLab      = "gitlab"
-	WorkspaceFakeSecretName      = "workspace-fake"   // #nosec G101 -- Secret NAME, not a credential
 	WorkspaceGitHubSecretName    = "workspace-github" // #nosec G101 -- Secret NAME, not a credential
 	WorkspaceGitHubPrivateKeyKey = "private-key"      // #nosec G101 -- Secret KEY name, not a credential
 	WorkspaceGitLabSecretName    = "workspace-gitlab" // #nosec G101 -- Secret NAME, not a credential
@@ -671,52 +797,31 @@ const (
 
 // workspaceProviderNames are the instances platform.workspaces.provider may
 // name, in the order the workspace-manager gets them.
-var workspaceProviderNames = []string{WorkspaceProviderFake, WorkspaceProviderFakeBearer, WorkspaceProviderGitHub, WorkspaceProviderGitLab}
+var workspaceProviderNames = []string{WorkspaceProviderGitHub, WorkspaceProviderGitLab}
 
-// parseWorkspaceProviders reads platform.workspaces.provider: the fake alone
+// parseWorkspaceProviders reads platform.workspaces.provider: github alone
 // for "", else the comma-separated set of known instances, each at most
-// once, in workspaceProviderNames order; fake-bearer only beside the fake,
-// whose GitHub serves it.
+// once, in workspaceProviderNames order.
 func parseWorkspaceProviders(value string) ([]string, error) {
 	if strings.TrimSpace(value) == "" {
-		return []string{WorkspaceProviderFake}, nil
+		return []string{WorkspaceProviderGitHub}, nil
 	}
 	var names []string
 	for raw := range strings.SplitSeq(value, ",") {
 		name := strings.TrimSpace(raw)
 		if !slices.Contains(workspaceProviderNames, name) {
-			return nil, fmt.Errorf("platform.workspaces.provider %q: want %s, several comma-separated; %q is none of them", value, strings.Join(workspaceProviderNames, ", "), name)
+			return nil, fmt.Errorf("platform.workspaces.provider %q: want %s, several comma-separated; %q is none of them (`agentlab configure --defaults --workspaces-provider <instances>` rewrites it)", value, strings.Join(workspaceProviderNames, ", "), name)
 		}
 		if slices.Contains(names, name) {
 			return nil, fmt.Errorf("platform.workspaces.provider %q names %s twice", value, name)
 		}
 		names = append(names, name)
 	}
-	if slices.Contains(names, WorkspaceProviderFakeBearer) && !slices.Contains(names, WorkspaceProviderFake) {
-		return nil, fmt.Errorf("platform.workspaces.provider %q names %s without %s: the lab's GitHub of the instance %s serves it, name both (%s,%s)",
-			value, WorkspaceProviderFakeBearer, WorkspaceProviderFake, WorkspaceProviderFake, WorkspaceProviderFake, WorkspaceProviderFakeBearer)
-	}
 	slices.SortFunc(names, func(a, b string) int {
 		return slices.Index(workspaceProviderNames, a) - slices.Index(workspaceProviderNames, b)
 	})
 	return names, nil
 }
-
-// GitHubFakeHost is the lab's GitHub's name under the platform domain
-// (`agentlab github-fake --workspaces`, docs/workspaces.md): the one the
-// lab CA's name constraints admit, pods resolve to the fake and its TLS
-// leaf carries.
-func GitHubFakeHost(domain string) string { return "github." + domain }
-
-// GitHubFakeBearerHost is the git host of the lab's GitHub as the
-// github.com-shaped instance fake-bearer, GitHubFakeBearerAPIHost its API
-// host beside it, as api.github.com is beside github.com: the API takes a
-// Bearer credential on a host of its own, the git host Basic. Both are
-// names of the same fake, under the platform domain like GitHubFakeHost.
-func GitHubFakeBearerHost(domain string) string { return "github-bearer." + domain }
-
-// GitHubFakeBearerAPIHost is the API host of the instance fake-bearer.
-func GitHubFakeBearerAPIHost(domain string) string { return "api." + GitHubFakeBearerHost(domain) }
 
 // Serving configures model serving on llm-d in the lab.
 type Serving struct {
@@ -1109,6 +1214,12 @@ type ExtraModel struct {
 	// reasoning_effort with every call. `none` switches a thinking model's
 	// reasoning off on Ollama's /v1 alias.
 	ReasoningEffort string `yaml:"reasoningEffort,omitempty"`
+	// OpenAI provider only: the ModelConfig's openAI.apiFormat, the HTTP API
+	// the model is called through — the key agent-platform-connectivity's
+	// kagent.modelConfigs[] entries carry. `responses` for a model a codex
+	// agent uses (the codex runtime speaks the Responses API only);
+	// `chatCompletions` is the CRD's default.
+	APIFormat string `yaml:"apiFormat,omitempty"`
 	// Ollama provider only: the ModelConfig's ollama.think, sent as the chat
 	// request's think field. false switches a thinking model's reasoning off
 	// on kagent's native Ollama provider (docs/models.md "Agent proofs without
@@ -1145,6 +1256,12 @@ var ModelProviderNames = []string{ProviderOpenAI, ProviderAnthropic, ProviderGem
 // ReasoningEfforts is the ModelConfig CRD's enum for openAI.reasoningEffort on
 // the kagent line (api.kagent.dev/v1alpha3).
 var ReasoningEfforts = []string{"none", "minimal", "low", "medium", "high", "xhigh"}
+
+// APIFormats is the ModelConfig CRD's enum for openAI.apiFormat.
+var APIFormats = []string{"chatCompletions", APIFormatResponses}
+
+// APIFormatResponses is openAI.apiFormat for the Responses API.
+const APIFormatResponses = "responses"
 
 // SecretName is the Kubernetes Secret (in ns kagent) holding this model's key.
 func (m ExtraModel) SecretName() string { return "kagent-" + m.Name }
@@ -1195,7 +1312,31 @@ type Backstage struct {
 	// component (its version range, resolved by the chart's Flux) decides the
 	// version; platform.devImages swaps in a build of your own.
 	Port int `yaml:"port"`
+	// Portal is the portal mode the lab's app-config overlay renders:
+	// PortalAgentPlatform (the Agent Platform shell, app.portals.agentPlatform
+	// on) or PortalClassic (the classic Platform Portal alone). The overlay
+	// is an app-config file Backstage deep-merges last, so the switch never
+	// restates a chart list such as backstage.extraEnvVars.
+	Portal string `yaml:"portal"`
+	// InstallationsPage enables the portal's Installations page and its
+	// sidebar entry (page:gs/installations, nav-item:gs/installations), which
+	// the agent-platform chart turns off and the Backstage app ships off: the
+	// portal's installations e2e specs drive it (AGENTLAB_INSTALLATIONS_PAGE=1).
+	InstallationsPage bool `yaml:"installationsPage,omitempty"`
 }
+
+// The Backstage portal modes (backstage.portal).
+const (
+	PortalAgentPlatform = "agent-platform"
+	PortalClassic       = "classic"
+)
+
+// PortalModes lists the portal modes, the default first.
+var PortalModes = []string{PortalAgentPlatform, PortalClassic}
+
+// AgentPlatformPortal reports whether the portal serves the Agent Platform
+// shell (app.portals.agentPlatform).
+func (b Backstage) AgentPlatformPortal() bool { return b.Portal != PortalClassic }
 
 type Config struct {
 	// Kind cluster name; also prefixes RBAC bindings and names the muster
@@ -1228,7 +1369,7 @@ type Config struct {
 	AIModel string `yaml:"aiModel"`
 	// AIKey is where the key of the default ModelConfig comes from.
 	AIKey AIKey `yaml:"aiKey,omitempty"`
-	// GitHubToken is where the token of the lab's GitHub calls comes from.
+	// GitHubToken is where the token of the lab's calls to GitHub comes from.
 	GitHubToken GitHubToken `yaml:"githubToken,omitempty"`
 	// GitHubApp is the skills GitHub App agent-manager resolves skills with.
 	GitHubApp GitHubApp `yaml:"githubApp,omitempty"`
@@ -1243,7 +1384,7 @@ type Config struct {
 // real platform topology — three users, and Dex on 32000.
 func Default() *Config {
 	return &Config{
-		ClusterName:   "agentlab",
+		ClusterName:   DefaultClusterName,
 		DexPort:       DefaultDexPort,
 		APIServerPort: DefaultAPIServerPort,
 		// groups on staticPasswords requires Dex >= v2.45.0 (docs/identity.md);
@@ -1276,6 +1417,7 @@ func Default() *Config {
 		Backstage: Backstage{
 			Enabled: true,
 			Port:    7007,
+			Portal:  PortalAgentPlatform,
 		},
 	}
 }
@@ -1283,6 +1425,18 @@ func Default() *Config {
 // Load reads agentlab.yaml. A missing file is reported as os.ErrNotExist so
 // callers can decide whether to fall back to the form or to defaults.
 func Load() (*Config, error) {
+	return load(true)
+}
+
+// LoadForConfigure reads agentlab.yaml like Load without validating it:
+// configure validates the result after its flags apply, so a file an earlier
+// agentlab wrote in a shape this one refuses is repaired by the configure the
+// refusal names.
+func LoadForConfigure() (*Config, error) {
+	return load(false)
+}
+
+func load(validate bool) (*Config, error) {
 	raw, err := os.ReadFile(File)
 	if err != nil {
 		return nil, err
@@ -1292,11 +1446,14 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	cfg.Platform.RetiredFakeFleet = nil
+	cfg.Platform.RetiredPlatformManager = nil
 	// Earlier versions wrote the one-backend form (backend/endpoint); read
 	// it as the one-item lists so the same lab renders exactly as before.
 	cfg.Platform.ModelManager.normalize()
-	if err := cfg.Validate(); err != nil {
-		return nil, fmt.Errorf("%s: %w", File, err)
+	if validate {
+		if err := cfg.Validate(); err != nil {
+			return nil, fmt.Errorf("%s: %w", File, err)
+		}
 	}
 	changed, err := cfg.EnsureHashes()
 	if err != nil {
@@ -1330,18 +1487,119 @@ func (c *Config) CheckValuesFiles() error {
 
 // Peek reads the agentlab.yaml of the lab in dir without validating,
 // re-hashing or writing anything — `agentlab list`'s look at a lab that is
-// not the one the command runs against.
+// not the one the command runs against. It writes nothing, so it reads past
+// a field this release does not know (decodeTolerant).
 func Peek(dir string) (*Config, error) {
 	raw, err := os.ReadFile(filepath.Join(dir, File)) // #nosec G304 -- a registered lab directory
 	if err != nil {
 		return nil, err
 	}
 	cfg := Default()
-	if err := decodeStrict(raw, cfg); err != nil {
+	if _, err := decodeTolerant(raw, cfg); err != nil {
 		return nil, err
 	}
 	cfg.Normalize()
 	return cfg, nil
+}
+
+// LoadReadOnly reads agentlab.yaml for a command that never writes it
+// (`trust`, `status`, `open`, …): like Load, except that a field this release
+// does not know — the file was written by a newer agentlab — is read past and
+// returned as the note to show, not refused. The strict refusal exists so a
+// write never drops such a field; a command that writes nothing cannot, and
+// the person can still trust, inspect and open a lab a newer build wrote.
+// Nothing is re-hashed or written.
+func LoadReadOnly() (cfg *Config, note string, err error) {
+	raw, err := os.ReadFile(File)
+	if err != nil {
+		return nil, "", err
+	}
+	cfg = Default()
+	note, err = decodeTolerant(raw, cfg)
+	if err != nil {
+		return nil, "", err
+	}
+	cfg.Platform.RetiredFakeFleet = nil
+	cfg.Platform.RetiredPlatformManager = nil
+	cfg.Platform.ModelManager.normalize()
+	if err := cfg.Validate(); err != nil {
+		return nil, "", fmt.Errorf("%s: %w", File, err)
+	}
+	return cfg, note, nil
+}
+
+// decodeTolerant is decodeStrict for a reader that writes nothing: a field
+// this release does not know is skipped, and note says which, who wrote the
+// file and how to get that release. Any other error is decodeStrict's.
+func decodeTolerant(raw []byte, cfg *Config) (note string, err error) {
+	strict := decodeStrict(raw, cfg)
+	if strict == nil || !strings.Contains(strict.Error(), "not found in type") {
+		return "", strict
+	}
+	*cfg = *Default()
+	cfg.ClusterName = ""
+	if err := yaml.Unmarshal(raw, cfg); err != nil {
+		return "", fmt.Errorf("parsing %s: %w", File, err)
+	}
+	return fmt.Sprintf("%s names fields this agentlab release (%s) does not know — %s; read without them, nothing is written. %s.",
+		File, project.Version(), writerOf(raw), capitalize(updateHint(writtenBy(raw)))), nil
+}
+
+// capitalize upper-cases the first letter of s, for a hint that starts a
+// sentence.
+func capitalize(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+// Exists reports whether a lab's agentlab.yaml is at path (a link to one
+// included).
+func Exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// RebasePaths makes every relative path in the agentlab.yaml at file —
+// platform.chartPath, platform.valuesFiles, platform.tls's certFile and
+// keyFile, platform.vmManager.imageDir — absolute against dir, the lab
+// directory they are relative to, and writes the file when any changed: the
+// step before a lab moves out of dir. A file with relative paths and a field
+// this release does not know is refused and left as it is: the write would
+// drop the field.
+func RebasePaths(file, dir string) error {
+	raw, err := os.ReadFile(file) // #nosec G304 -- a lab's agentlab.yaml
+	if err != nil {
+		return err
+	}
+	cfg := Default()
+	note, err := decodeTolerant(raw, cfg)
+	if err != nil {
+		return err
+	}
+	changed := false
+	abs := func(p *string) {
+		if *p != "" && !filepath.IsAbs(*p) {
+			*p = filepath.Join(dir, *p)
+			changed = true
+		}
+	}
+	abs(&cfg.Platform.ChartPath)
+	for i := range cfg.Platform.ValuesFiles {
+		abs(&cfg.Platform.ValuesFiles[i])
+	}
+	abs(&cfg.Platform.TLS.CertFile)
+	abs(&cfg.Platform.TLS.KeyFile)
+	abs(&cfg.Platform.VMManager.ImageDir)
+	if !changed {
+		return nil
+	}
+	if note != "" {
+		// A write would drop the fields this release does not know.
+		return fmt.Errorf("%s names fields this agentlab release does not know, so it is not rewritten", File)
+	}
+	return cfg.writeTo(file)
 }
 
 // decodeStrict reads agentlab.yaml into cfg and refuses a field this release
@@ -1426,17 +1684,28 @@ func (c *Config) Save() error {
 }
 
 // write persists the config as-is; Save and Load ensure the hashes first
-// (exactly once — bcrypt-comparing every user is not free).
+// (exactly once — bcrypt-comparing every user is not free). An existing
+// agentlab.yaml is updated in place (mergeInto): only the values that changed
+// are rewritten, so a one-flag `configure` changes that one line.
 func (c *Config) write() error {
-	out, err := yaml.Marshal(c)
+	return c.writeTo(File)
+}
+
+// writeTo is write to the agentlab.yaml at path.
+func (c *Config) writeTo(path string) error {
+	old, err := os.ReadFile(path) // #nosec G304 -- a lab's agentlab.yaml
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	out, err := mergeInto(old, c)
 	if err != nil {
 		return err
 	}
-	header := []byte("# agentlab lab configuration. Regenerate with `agentlab configure`.\n" +
+	header := []byte(headerFirstLine + "\n" +
 		writtenByPrefix + project.Version() + ".\n" +
-		"# Passwords are lab-only throwaway credentials; the hash is cached so\n" +
-		"# rendered manifests stay byte-identical across runs (no spurious pod rolls).\n")
-	return os.WriteFile(File, append(header, out...), 0o600)
+		headerPasswordsLine + "\n" +
+		headerManifestsLine + "\n")
+	return os.WriteFile(path, append(header, out...), 0o600) // #nosec G703 -- a lab's agentlab.yaml
 }
 
 // EnsureHashes fills in User.PasswordHash wherever it is missing or no longer
@@ -1549,6 +1818,14 @@ func (m ExtraModel) Validate() error {
 			return fmt.Errorf("%s: unknown reasoningEffort %q (one of %s)", m.Name, m.ReasoningEffort, strings.Join(ReasoningEfforts, ", "))
 		}
 	}
+	if m.APIFormat != "" {
+		if m.Provider != ProviderOpenAI {
+			return fmt.Errorf("%s: apiFormat applies to the OpenAI provider only (the ModelConfig's openAI.apiFormat)", m.Name)
+		}
+		if !slices.Contains(APIFormats, m.APIFormat) {
+			return fmt.Errorf("%s: unknown apiFormat %q (one of %s)", m.Name, m.APIFormat, strings.Join(APIFormats, ", "))
+		}
+	}
 	return nil
 }
 
@@ -1579,6 +1856,10 @@ func (c *Config) Normalize() {
 		c.Platform.ChartPinned = false
 	}
 	c.Platform.ModelManager.normalize()
+	// A file written before the switch existed: the chart's own mode.
+	if c.Backstage.Portal == "" {
+		c.Backstage.Portal = PortalAgentPlatform
+	}
 }
 
 // branchSanitizeRe is gitsemver's: every run of characters outside [a-z0-9]
@@ -1736,6 +2017,11 @@ func (c *Config) Validate() error {
 	if err := ValidatePort(strconv.Itoa(c.Platform.GatewayPort)); err != nil {
 		return fmt.Errorf("platform.gatewayPort: %w", err)
 	}
+	if a := c.Platform.GatewayAddress; a != "" {
+		if ip := net.ParseIP(a); ip == nil || ip.To4() == nil || !ip.IsLoopback() {
+			return fmt.Errorf("platform.gatewayAddress %q: want an IPv4 loopback address (127.0.0.0/8)", a)
+		}
+	}
 	if (c.Platform.TLS.CertFile == "") != (c.Platform.TLS.KeyFile == "") {
 		return fmt.Errorf("platform.tls: certFile and keyFile must be set together")
 	}
@@ -1793,6 +2079,20 @@ func (c *Config) Validate() error {
 	if _, ok := c.Platform.DevImages[DevImageSubstrateAPI]; ok && !c.Platform.Agents {
 		return fmt.Errorf("platform.devImages.%s: Agent Substrate comes with the agents (platform.agents: true)", DevImageSubstrateAPI)
 	}
+	if _, ok := c.Platform.DevImages[DevImageMCPPrometheus]; ok && !c.Platform.Observability {
+		return fmt.Errorf("platform.devImages.%s: mcp-prometheus comes with the observability stack (platform.observability: true) — the override would swap the image of nothing", DevImageMCPPrometheus)
+	}
+	if v := c.Platform.MCPPrometheusChartVersion; v != "" {
+		if !c.Platform.Observability {
+			return fmt.Errorf("platform.mcpPrometheusChartVersion: mcp-prometheus comes with the observability stack (platform.observability: true) — the override would pin the chart of nothing")
+		}
+		if !exactVersionRe.MatchString(v) {
+			return fmt.Errorf("platform.mcpPrometheusChartVersion %q: must be an exact version (e.g. 0.8.1-rc.1), not a range — the lab never floats", v)
+		}
+	}
+	if c.Platform.Alertmanager && !c.Platform.Observability {
+		return fmt.Errorf("platform.alertmanager requires platform.observability (the Alertmanager is part of the lab's kube-prometheus-stack)")
+	}
 	if _, ok := c.Platform.DevImages[DevImageKlausGateway]; ok && !c.Platform.KlausGateway.Enabled {
 		return fmt.Errorf("platform.devImages.%s: the component is off (platform.klausGateway.enabled: true, or `agentlab configure --klaus-gateway`) — the override would swap the image of nothing", DevImageKlausGateway)
 	}
@@ -1812,12 +2112,51 @@ func (c *Config) Validate() error {
 	if c.Platform.Coding.Enabled && c.Platform.Enabled && !c.Platform.Agents {
 		return fmt.Errorf("platform.coding requires platform.agents (a coding Harness is a kagent Harness)")
 	}
+	for i, runtime := range c.Platform.Coding.Harnesses {
+		if !slices.Contains(CodingRuntimes, runtime) {
+			return fmt.Errorf("platform.coding.harnesses: unknown runtime %q (one of %s)", runtime, strings.Join(CodingRuntimes, ", "))
+		}
+		if slices.Contains(c.Platform.Coding.Harnesses[:i], runtime) {
+			return fmt.Errorf("platform.coding.harnesses: %q twice", runtime)
+		}
+	}
+	for runtime, image := range c.Platform.Coding.Images {
+		if !slices.Contains(CodingRuntimes, runtime) {
+			return fmt.Errorf("platform.coding.images: unknown runtime %q (one of %s)", runtime, strings.Join(CodingRuntimes, ", "))
+		}
+		if !codingImageRe.MatchString(image) {
+			return fmt.Errorf("platform.coding.images.%s: %q is not an image pinned by digest (<repository>@sha256:<64 hex digits>)", runtime, image)
+		}
+	}
+	for _, runtime := range CodingRuntimes {
+		target := CodingHarnessDevImage(runtime)
+		if _, ok := c.Platform.DevImages[target]; ok && !c.CodingHarnessRendered(runtime) {
+			return fmt.Errorf("platform.devImages.%s: the lab renders no Harness %s (platform.coding.enabled with %s in platform.coding.harnesses) — the override would swap the image of nothing", target, runtime, runtime)
+		}
+	}
+	// The kagent controller compiles the claude and codex Harnesses' pinned
+	// CLI version into their config with StrictVersion: a harness built from
+	// another commit of the kagent line than the lab's controller refuses to
+	// start on the CLI version mismatch, and the golden boot loops.
+	for _, runtime := range CodingRuntimes {
+		pin, pinned := codingHarnessVersionPins[runtime]
+		target := CodingHarnessDevImage(runtime)
+		if _, ok := c.Platform.DevImages[target]; ok && pinned && c.Platform.DevImages["kagent"] == "" {
+			return fmt.Errorf("platform.devImages.%s needs platform.devImages.kagent from the same build of the kagent line: the controller compiles its pinned CLI version (%s) into the Harness with StrictVersion, so a harness whose CLI differs from the lab controller's pin refuses to start on the version mismatch — build the controller from the same giantswarm/kagent-upstream checkout and name it under platform.devImages.kagent", target, pin)
+		}
+	}
+	if c.CodingHarnessRendered(CodingRuntimeOmp) && c.CodingHarnessImage(CodingRuntimeOmp) == "" && c.Platform.DevImages[DevImageOmpHarness] == "" {
+		return fmt.Errorf("platform.coding.harnesses names %s, whose Harness runs an image the chart has none of its own for: set platform.coding.images.%s (the kagent line's omp-harness by digest, runtimeImages.ompHarness.digest of the release's chart) or platform.devImages.%s", CodingRuntimeOmp, CodingRuntimeOmp, DevImageOmpHarness)
+	}
 	// kagent.harnesses reaches the kagent chart from codingChartFloor on; an
 	// older release drops the key and renders no coding Harness.
 	if c.Platform.Coding.Enabled && c.Platform.Enabled {
 		if chart, below := c.chartBelow(codingChartFloor); below {
 			return fmt.Errorf("platform.coding needs agent-platform %s or newer (kagent.harnesses forwarded to the kagent chart); %s — `agentlab configure --coding=false`", codingChartFloor, chart)
 		}
+	}
+	if c.Platform.Tenants.Enabled && c.Platform.Enabled && !c.Platform.Agents {
+		return fmt.Errorf("platform.tenants requires platform.agents (the tenant reconciler is agent-manager's, and a tenant's agents run on kagent)")
 	}
 	if c.Platform.Serving.Enabled && c.Platform.Enabled && !c.Platform.Agents {
 		return fmt.Errorf("platform.serving requires platform.agents (model-manager wires a served model into kagent as a ModelConfig)")
@@ -1830,15 +2169,18 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("platform.serving needs agent-platform %s or newer (the llm-d control plane alone, components.kserve-runtime-configs and modelServing.modelsGateway); %s — `agentlab configure --serving=false`", servingChartFloor, chart)
 		}
 	}
-	// The driver's controller endpoint is certified by Substrate's service-DNS
-	// signer and admits ate-api-server's pod identity alone, and the clones
-	// are Substrate volume mounts: without the runtime there is nothing to
-	// sign the endpoint or to mount a volume.
+	// Workspaces need the agents runtime: the chart's workspaces live in
+	// kagent's namespace, where every Session runs and mounts its workspace,
+	// and the workspace-manager applies its sync ServiceAccount and Roles
+	// there. The chart refuses the shape at render time; the lab refuses it
+	// before anything installs.
 	if c.Platform.Workspaces.Enabled && c.Platform.Enabled && !c.Platform.Agents {
-		return fmt.Errorf("platform.workspaces requires platform.agents (Substrate's signers certify the driver's endpoint, and a Session's workspace is a Substrate volume mount)")
+		return fmt.Errorf("platform.workspaces requires platform.agents (the workspaces live in kagent's namespace, where every Session runs and mounts its workspace) — `agentlab configure --agents`, or `--workspaces=false`")
 	}
-	if _, err := parseWorkspaceProviders(c.Platform.Workspaces.Provider); err != nil {
+	if names, err := parseWorkspaceProviders(c.Platform.Workspaces.Provider); err != nil {
 		return err
+	} else if grant := c.Platform.Workspaces.GrantProvider; grant != "" && !slices.Contains(names, grant) {
+		return fmt.Errorf("platform.workspaces.grantProvider %q names no instance of platform.workspaces.provider (%s)", grant, strings.Join(names, ", "))
 	}
 	if after := c.Platform.Workspaces.SessionsCleanupAfter; after != "" {
 		if d, err := time.ParseDuration(after); err != nil || d <= 0 {
@@ -1893,6 +2235,9 @@ func (c *Config) Validate() error {
 	}
 	if err := ValidatePort(strconv.Itoa(c.Backstage.Port)); err != nil {
 		return fmt.Errorf("backstage.port: %w", err)
+	}
+	if c.Backstage.Portal != "" && !slices.Contains(PortalModes, c.Backstage.Portal) {
+		return fmt.Errorf("backstage.portal: %q is no portal mode (%s)", c.Backstage.Portal, strings.Join(PortalModes, ", "))
 	}
 	return nil
 }
@@ -1969,10 +2314,33 @@ func (c *Config) VMManagerEnabled() bool {
 	return c.Platform.Enabled && c.Platform.VMManager.Enabled
 }
 
+// TenantsEnabled reports whether the platform treats the Organizations'
+// namespaces as tenants: the platform with its agents runtime on the current
+// line, and the key on.
+func (c *Config) TenantsEnabled() bool {
+	return c.Platform.Enabled && c.Platform.Agents && c.Platform.Tenants.Enabled && !c.LegacyChart()
+}
+
+// AlertmanagerEnabled reports whether the lab runs the Alertmanager: the
+// platform with its observability stack, and the key on.
+func (c *Config) AlertmanagerEnabled() bool {
+	return c.Platform.Enabled && c.Platform.Observability && c.Platform.Alertmanager
+}
+
 // KlausGatewayEnabled reports whether the platform runs the klaus-gateway
 // component: the platform with its agents runtime, and the key on.
 func (c *Config) KlausGatewayEnabled() bool {
 	return c.Platform.Enabled && c.Platform.Agents && c.Platform.KlausGateway.Enabled
+}
+
+// MusterReplicas is the number of muster pods the lab runs: two on the pod
+// network (Platform.MusterPodNetwork), else one — a host-network pod binds
+// its port on the single kind node, so a second one would never start.
+func (c *Config) MusterReplicas() int {
+	if c.Platform.MusterPodNetwork {
+		return 2
+	}
+	return 1
 }
 
 // ClusterManagerEnabled reports whether the lab turns the chart's
@@ -1991,20 +2359,59 @@ func (c *Config) CodingEnabled() bool {
 	return c.Platform.Enabled && c.Platform.Agents && c.Platform.Coding.Enabled
 }
 
-// WorkspacesEnabled reports whether the lab installs the workspace storage:
-// the platform with its agents runtime, and the key on.
+// CodingHarnesses are the coding runtimes the lab renders a Harness of while
+// coding agents are on: platform.coding.harnesses, claude when it is empty.
+func (c *Config) CodingHarnesses() []string {
+	if len(c.Platform.Coding.Harnesses) == 0 {
+		return []string{CodingRuntimeClaude}
+	}
+	return c.Platform.Coding.Harnesses
+}
+
+// CodingHarnessImage is the image platform.coding.images names for a coding
+// runtime, "" where the chart's own image of the runtime applies.
+func (c *Config) CodingHarnessImage(runtime string) string {
+	return c.Platform.Coding.Images[runtime]
+}
+
+// CodingHarnessRendered reports whether the lab renders the coding Harness of
+// the runtime: one of CodingHarnesses with coding agents on; claude also for
+// the workspaces proof's Session, whenever the workspaces are on.
+func (c *Config) CodingHarnessRendered(runtime string) bool {
+	if c.CodingEnabled() && slices.Contains(c.CodingHarnesses(), runtime) {
+		return true
+	}
+	return runtime == CodingRuntimeClaude && c.WorkspacesEnabled()
+}
+
+// CodexModelConfig is the lab's model for a codex agent: the first
+// platform.extraModels entry that speaks the Responses API (the only one the
+// codex runtime speaks), "" when none does.
+func (c *Config) CodexModelConfig() string {
+	for _, m := range c.Platform.ExtraModels {
+		if m.Provider == ProviderOpenAI && m.APIFormat == APIFormatResponses {
+			return m.Name
+		}
+	}
+	return ""
+}
+
+// WorkspacesEnabled reports whether the lab installs the workspace storage
+// and the chart its workspace-manager: the platform and the key on (Validate
+// requires the agents beside them, and Agent Substrate comes with those).
 func (c *Config) WorkspacesEnabled() bool {
-	return c.Platform.Enabled && c.Platform.Agents && c.Platform.Workspaces.Enabled
+	return c.Platform.Enabled && c.Platform.Workspaces.Enabled
 }
 
 // WorkspacesCSICompanion reports whether the chart's CSI companion is
-// Substrate's workspace driver: workspaces on and the key on.
+// Substrate's workspace driver: workspaces (which come with the agents, and
+// Substrate with them) and the key on.
 func (c *Config) WorkspacesCSICompanion() bool {
 	return c.WorkspacesEnabled() && c.Platform.Workspaces.CSICompanion
 }
 
 // WorkspaceProviders names the workspace-manager's provider instances, in
-// the order it gets them: what platform.workspaces.provider names, the fake
+// the order it gets them: what platform.workspaces.provider names, github
 // alone while it is empty; none with workspaces off. A value Validate
 // refused yields none too.
 func (c *Config) WorkspaceProviders() []string {
@@ -2018,18 +2425,18 @@ func (c *Config) WorkspaceProviders() []string {
 	return names
 }
 
-// WorkspaceFakeProvider reports whether the workspace-manager gets the
-// provider instance fake, the lab's own GitHub: workspaces on and
-// platform.workspaces.provider naming it or empty.
-func (c *Config) WorkspaceFakeProvider() bool {
-	return slices.Contains(c.WorkspaceProviders(), WorkspaceProviderFake)
-}
-
-// WorkspaceFakeBearerProvider reports whether the workspace-manager gets the
-// provider instance fake-bearer, the lab's GitHub as a github.com-shaped
-// instance: workspaces on and platform.workspaces.provider naming it.
-func (c *Config) WorkspaceFakeBearerProvider() bool {
-	return slices.Contains(c.WorkspaceProviders(), WorkspaceProviderFakeBearer)
+// WorkspaceGrantProvider is the instance muster pins the workspace-manager's
+// registration to: platform.workspaces.grantProvider, or the first instance;
+// "" with workspaces off.
+func (c *Config) WorkspaceGrantProvider() string {
+	names := c.WorkspaceProviders()
+	if len(names) == 0 {
+		return ""
+	}
+	if grant := c.Platform.Workspaces.GrantProvider; slices.Contains(names, grant) {
+		return grant
+	}
+	return names[0]
 }
 
 // WorkspaceGitHubProvider reports whether the workspace-manager gets the
@@ -2046,44 +2453,9 @@ func (c *Config) WorkspaceGitLabProvider() bool {
 	return slices.Contains(c.WorkspaceProviders(), WorkspaceProviderGitLab)
 }
 
-// GitHubFakeURL is the lab's GitHub as its provider instance names it, the
-// git host; the REST API is under /api/v3 of it, as on a GitHub Enterprise
-// Server. Pods reach it on 443 (CoreDNS sends the name to the fake's
-// Service); this host reaches the fake on the port its container publishes.
-func (c *Config) GitHubFakeURL() string { return "https://" + GitHubFakeHost(c.Platform.Domain) }
-
-// GitHubFakeBearerURL is the instance fake-bearer's web URL, its git host.
-func (c *Config) GitHubFakeBearerURL() string {
-	return "https://" + GitHubFakeBearerHost(c.Platform.Domain)
-}
-
-// GitHubFakeBearerAPIURL is the instance fake-bearer's REST API base URL,
-// at the root of its own host as https://api.github.com is.
-func (c *Config) GitHubFakeBearerAPIURL() string {
-	return "https://" + GitHubFakeBearerAPIHost(c.Platform.Domain)
-}
-
 // WorkspaceManagerBaseURL is the workspace-manager's public base URL through
-// the edge: the browser's sign-in at <base>/signin, each provider instance's
-// <base>/connect/<name> and <base>/callback/<name>.
+// the edge, where it serves its MCP endpoint and the grants' key set.
 func (c *Config) WorkspaceManagerBaseURL() string { return c.gatewayURL("workspace-manager") }
-
-// WorkspaceManagerSignInURL is the redirect URI the lab Dex's agent-platform
-// client lists for the workspace-manager's browser sign-in.
-func (c *Config) WorkspaceManagerSignInURL() string { return c.WorkspaceManagerBaseURL() + "/signin" }
-
-// WorkspaceCallbackURL is the callback URL a provider instance's OAuth client
-// is registered with: where the provider returns the browser after the
-// person's sign-in.
-func (c *Config) WorkspaceCallbackURL(instance string) string {
-	return c.WorkspaceManagerBaseURL() + "/callback/" + instance
-}
-
-// WorkspaceGitHubCallbackURL is the callback URL the GitHub App behind the
-// provider instance github is registered with.
-func (c *Config) WorkspaceGitHubCallbackURL() string {
-	return c.WorkspaceCallbackURL(WorkspaceProviderGitHub)
-}
 
 // The chart channels: where the meta chart the lab installs comes from.
 const (
@@ -2280,6 +2652,19 @@ func (c *Config) MCPServerName() string {
 // prometheus family (the agent-platform-mcps entry's default name):
 // x_prometheus_<tool> with management_cluster set to the lab.
 func (c *Config) PrometheusMCPServerName() string { return c.ClusterName + "-mcp-prometheus" }
+
+// DefaultGatewayAddress is where the edge is published without
+// platform.gatewayAddress.
+const DefaultGatewayAddress = "127.0.0.1"
+
+// GatewayHostAddress is the loopback address the edge is published on, the
+// address every public hostname of the lab resolves to on the host.
+func (c *Config) GatewayHostAddress() string {
+	if c.Platform.GatewayAddress != "" {
+		return c.Platform.GatewayAddress
+	}
+	return DefaultGatewayAddress
+}
 
 // gatewayURL builds the public URL of a platform hostname: through the
 // agentgateway edge, port-free when the edge sits on 443. The chart's

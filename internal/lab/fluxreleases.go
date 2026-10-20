@@ -14,6 +14,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"gopkg.in/yaml.v3"
+	"oras.land/oras-go/v2/errdef"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -286,7 +287,8 @@ func onlyAdditionalProperties(rejection *schemaRejection) bool {
 // fluxReleaseImages templates every release's chart at the resolved version
 // with its values and scrapes the images, concurrently (one registry pull
 // each; a render the registry did not answer is tried again,
-// retryUnreachable). A release that does not render comes back as a failure
+// retryUnreachable, and so is a chart the registry does not have yet,
+// retryNotFound). A release that does not render comes back as a failure
 // with its release, for the caller to sort into notes and stops
 // (judgeRenderFailures). The versions picked through a semverFilter
 // come back as "<name> <version>" lines, sorted — the channel evidence the
@@ -300,9 +302,11 @@ func fluxReleaseImages(releases []fluxRelease, apiVersions []string) (images, fi
 	for _, rel := range releases {
 		wg.Go(func() {
 			var rendered, version string
-			err := retryUnreachable("rendering "+rel.Name, func() (err error) {
-				rendered, version, err = renderFluxRelease(rel, apiVersions)
-				return err
+			err := retryNotFound("rendering "+rel.Name, func() error {
+				return retryUnreachable("rendering "+rel.Name, func() (err error) {
+					rendered, version, err = renderFluxRelease(rel, apiVersions)
+					return err
+				})
 			})
 			mu.Lock()
 			defer mu.Unlock()
@@ -360,8 +364,9 @@ var listChartTags = helmChartTagsFrom
 // help — it knows no filter and would pick the range's highest RELEASE over
 // the channel's dev build, whose schema the dev values then fail — so the
 // pick is made here: the repository's tags, those the filter's regexp
-// matches, those the range admits, the highest. No such tag is an error the
-// caller reports and skips: the node pulls that component's images itself.
+// matches, those the range admits, the highest. No such tag is a chart the
+// registry does not have (chartNotFound): retried, then a stop
+// (judgeRenderFailures).
 func resolveComponentVersion(url, versionRange, filter string, plainHTTP bool) (string, error) {
 	if filter == "" {
 		return versionRange, nil
@@ -390,7 +395,7 @@ func pickFilteredTag(tags []string, versionRange, filter string) (string, error)
 		return re.MatchString(v.Original()) && constraint.Check(v)
 	})
 	if !ok {
-		return "", fmt.Errorf("no tag matches semverFilter %s within %s (among %d)", filter, versionRange, len(tags))
+		return "", fmt.Errorf("no tag matches semverFilter %s within %s (among %d): %w", filter, versionRange, len(tags), errdef.ErrNotFound)
 	}
 	return tag, nil
 }
@@ -535,12 +540,13 @@ const cnpgRelease = "cloudnative-pg"
 // run time — the FluxInstance's source- and helm-controller — are in no
 // render; the snapshot manifest covers them from the second boot on.
 // Best-effort for the images — a render that is skipped is a note, and the
-// node pulls those images itself — with two exceptions it returns an error
+// node pulls those images itself — with three exceptions it returns an error
 // for (judgeRenderFailures): a chart that REFUSES the values its HelmRelease
 // carries (refusesTheInstall), which is not a preload problem but the
 // install's outcome, known early; and a render the registry did not answer
-// through its retries (registryUnreachable), since the renders are more
-// than the images: the lab's patches are read off them. Stopping here costs
+// (registryUnreachable) or has no chart for (chartNotFound) through its
+// retries, since the renders are more than the images: the lab's patches
+// are read off them. Stopping here costs
 // seconds instead of the install's whole wait, and nothing is side-loaded
 // for an install that will not start. The component renders come back too,
 // keyed by release name (nil without a roster): the dex-localhost sidecar's
@@ -584,8 +590,8 @@ func platformImages(cfg *config.Config, roster *platformRoster) ([]string, map[s
 	return images, renders, nil
 }
 
-// judgeRenderFailures sorts the component render failures into the three
-// outcomes of a render that produced no manifest. Two stop the boot before
+// judgeRenderFailures sorts the component render failures into the four
+// outcomes of a render that produced no manifest. Three stop the boot before
 // the install, each as one error naming every release it holds for:
 //
 //   - unreachable: the registry did not answer through every retry
@@ -594,19 +600,27 @@ func platformImages(cfg *config.Config, roster *platformRoster) ([]string, map[s
 //     so the install would run it unpatched, and the symptom (a server
 //     crash-looping on a Dex it cannot reach, the install failing minutes
 //     later on its HelmRelease) points nowhere near the network.
+//   - missing: the registry has no such chart through every retry
+//     (chartNotFound) — a tag the range or the filter does not find, or one
+//     the registry lists before it serves its manifest. Unpatched for the
+//     same reason; a branch build that publishes in the meantime is rendered
+//     by a retry (retryNotFound).
 //   - refused: the chart refuses the values its HelmRelease carries
 //     (refusesTheInstall), so the install would fail after its wait.
 //
 // Everything else is a skip, noted with why where the chart did refuse: a
 // render the offline render cannot do the way the cluster does (a
 // kubeVersion guard, a verdict helm-controller never asks for or the
-// cluster's values may answer), or a registry that answered no (a tag that
-// is not there), which the install reports in helm-controller's words.
+// cluster's values may answer).
 func judgeRenderFailures(chart platformChart, errs []renderFailure) error {
-	var unreachable, rejected []renderFailure
+	var unreachable, missing, rejected []renderFailure
 	for _, failure := range errs {
 		if registryUnreachable(failure.err) {
 			unreachable = append(unreachable, failure)
+			continue
+		}
+		if chartNotFound(failure.err) {
+			missing = append(missing, failure)
 			continue
 		}
 		refuses, reason := failure.refusesTheInstall()
@@ -614,9 +628,9 @@ func judgeRenderFailures(chart platformChart, errs []renderFailure) error {
 		case refuses:
 			rejected = append(rejected, failure)
 		case reason != "":
-			note("component render skipped (%s): %s", reason, excerptEnds(failure.err.Error(), 300))
+			note("component render skipped (%s): %s", reason, renderFailureText(failure.err))
 		default:
-			note("component render skipped: %s", excerptEnds(failure.err.Error(), 300))
+			note("component render skipped: %s", renderFailureText(failure.err))
 		}
 	}
 	byName := func(a, b renderFailure) int { return strings.Compare(a.rel.Name, b.rel.Name) }
@@ -625,12 +639,32 @@ func judgeRenderFailures(chart platformChart, errs []renderFailure) error {
 		slices.SortFunc(unreachable, byName)
 		stops = append(stops, unreachableComponentsError(unreachable))
 	}
+	if len(missing) > 0 {
+		slices.SortFunc(missing, byName)
+		stops = append(stops, missingComponentsError(chart, missing))
+	}
 	if len(rejected) > 0 {
 		slices.SortFunc(rejected, byName)
 		stops = append(stops, rejectedComponentsError(chart, rejected))
 	}
 	return errors.Join(stops...)
 }
+
+// renderFailureText words a skipped render's error for its note: a chart's
+// own refusal (a template's `fail`, Helm's "execution error at") whole, since
+// it names every key it wants and an excerpt cuts the one missing; anything
+// else excerpted.
+func renderFailureText(err error) string {
+	msg := err.Error()
+	if strings.Contains(msg, templateFailMarker) {
+		return strings.ReplaceAll(strings.TrimSpace(msg), "\n", " ")
+	}
+	return excerptEnds(msg, 300)
+}
+
+// templateFailMarker is how Helm prefixes the message of a template's `fail`
+// or `required`.
+const templateFailMarker = "execution error at ("
 
 // recheckReleases puts values that changed after the preload's renders (the
 // dev-image swap) to the charts once more — the meta chart, and every
@@ -716,17 +750,83 @@ func renderAttempts() int { return 1 + len(renderRetryDelays) }
 // retry is noted with the cause (unreachableCause), so the boot log shows
 // the network failing before the boot stops on it.
 func retryUnreachable(what string, render func() error) error {
-	err := render()
-	for i, delay := range renderRetryDelays {
+	return retryRender(what, "the registry did not answer", renderRetryDelays, func(err error) error {
 		cause := unreachableCause(err)
 		if cause == nil || retriedInTransport(cause) {
+			return nil
+		}
+		return cause
+	}, render)
+}
+
+// notFoundRetryDelays are the waits before each retry of a component render
+// the registry has no chart for (chartNotFound): some two minutes in all —
+// what a branch build takes from its tag showing in the listing to its
+// manifest being served — before the boot stops on it. A variable so tests
+// do not sleep.
+var notFoundRetryDelays = []time.Duration{5 * time.Second, 10 * time.Second, 20 * time.Second, 30 * time.Second, 60 * time.Second}
+
+// retryNotFound runs a component render until it succeeds, fails for any
+// reason but a chart the registry does not have (chartNotFound), or has
+// spent its retries, and returns its last error — noting each retry, so the
+// boot log shows the wait for a build that is still being published.
+func retryNotFound(what string, render func() error) error {
+	return retryRender(what, "the registry has no such chart yet", notFoundRetryDelays, func(err error) error {
+		if chartNotFound(err) {
 			return err
 		}
-		note("%s: the registry did not answer (%v); retry %d of %d in %s", what, cause, i+1, len(renderRetryDelays), delay)
+		return nil
+	}, render)
+}
+
+// retryRender runs render, and again after each of delays while retriable
+// names a cause in its error (nil: not worth another attempt), noting why
+// before each wait; it returns the last error.
+func retryRender(what, why string, delays []time.Duration, retriable func(error) error, render func() error) error {
+	err := render()
+	for i, delay := range delays {
+		cause := retriable(err)
+		if cause == nil {
+			return err
+		}
+		note("%s: %s (%v); retry %d of %d in %s", what, why, excerptEnds(cause.Error(), 300), i+1, len(delays), delay)
 		time.Sleep(delay)
 		err = render()
 	}
 	return err
+}
+
+// chartNotFound reports whether a render or a tag pick failed because the
+// registry answered that the chart is not there: the tag's manifest not
+// found (oras-go's errdef.ErrNotFound, which Helm keeps in the chain, as in
+// `failed to perform "FetchReference" on source: …: not found`), or no tag
+// the range and the semverFilter admit (pickFilteredTag).
+func chartNotFound(err error) bool { return errors.Is(err, errdef.ErrNotFound) }
+
+// missingComponentsError words the component charts the registry had no
+// chart for through every retry, and why that stops the boot: the lab's
+// patches for a component are read off its render (judgeRenderFailures).
+// Printed whole: each release's error names the chart, the range and the
+// version it resolved to, and ends with the registry's own words.
+func missingComponentsError(chart platformChart, missing []renderFailure) error {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d component chart(s) could not be rendered, the registry has no such chart through the retries:\n", len(missing))
+	var labOwned []string
+	for _, f := range missing {
+		fmt.Fprintf(&b, "\n%s\n", indent(strings.TrimSpace(f.err.Error()), "  "))
+		if f.rel.LabOwned {
+			labOwned = append(labOwned, f.rel.Name)
+		}
+	}
+	fmt.Fprintf(&b, "\nThe install is not started: the lab's patches for a component (the %s sidecar, platform.devImages) are read off its render, and without one it would run unpatched.", dexLocalhostContainer)
+	if len(labOwned) < len(missing) {
+		fmt.Fprintf(&b, " Check the version the component's OCIRepository asks for — set by %s, or by a platform.valuesFiles overlay (components.<name>.versionRange, semverFilter) — or wait until that build is published.", chart)
+	}
+	if len(labOwned) > 0 {
+		fmt.Fprintf(&b, " %s: the lab's own release, outside the meta chart — its chart version is agentlab's: update agentlab, or turn platform.observability off.", strings.Join(labOwned, ", "))
+	}
+	b.WriteString(" Then run `agentlab platform` again")
+	return errors.New(b.String())
 }
 
 // unreachableComponentsError words the component charts the registry did

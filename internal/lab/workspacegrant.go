@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -15,7 +16,6 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -180,15 +180,6 @@ func ensureWorkspaceTokenExchangeSecret() (string, error) {
 	}
 	fmt.Printf("Generated the workspace token exchange client's secret in %s\n", workspaceGrantDir)
 	return path, nil
-}
-
-// readWorkspaceTokenExchangeSecret reads the token exchange client's secret.
-func readWorkspaceTokenExchangeSecret() (string, error) {
-	raw, err := os.ReadFile(filepath.Join(workspaceGrantDir, workspaceTokenExchangeSecretFile)) // #nosec G304 -- the lab's own credentials directory
-	if err != nil {
-		return "", fmt.Errorf("reading the workspace token exchange client's secret: %w (`agentlab platform` generates it with the workspaces on)", err)
-	}
-	return strings.TrimSpace(string(raw)), nil
 }
 
 // readWorkspaceGrantKey reads the lab's grant signing key.
@@ -408,4 +399,11 @@ func readSessionAdmission(ctx context.Context) string {
 	}
 	return fmt.Sprintf("Session admission: kagent trusts %s (issuer %s), %s, %s",
 		cm.Data[admissionJWKSURLKey], cm.Data[admissionIssuerKey], key, harness)
+}
+
+// randomHex is n random bytes, hex-encoded.
+func randomHex(n int) string {
+	b := make([]byte, n)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }

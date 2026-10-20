@@ -18,6 +18,14 @@ import (
 	"github.com/giantswarm/agentlab/internal/config"
 )
 
+// Words of OAuth's requests and answers.
+const (
+	oauthClientID    = "client_id"
+	oauthRedirectURI = "redirect_uri"
+	oauthCodeParam   = "code"
+	oauthStateParam  = "state"
+)
+
 // The per-server OAuth sign-in fixture.
 //
 // Every downstream the lab aggregates (mcp-kubernetes, mcp-prometheus,
@@ -51,7 +59,8 @@ const (
 	// sign in to and what the portal lists.
 	oauthFixtureServer = "lab-oauth-fixture"
 	// oauthFixtureURL is muster's own protected /mcp, in-cluster (the muster
-	// Service; the pod is hostNetwork, so the Service forwards to the node).
+	// Service, which reaches the host-network pod on the node and the
+	// pod-network replicas of platform.musterPodNetwork alike).
 	oauthFixtureURL = "http://" + componentMuster + "." + platformNamespace + ".svc.cluster.local:8090/mcp"
 	// oauthProxyStartPath is muster's OAuth proxy start endpoint, the path
 	// every sign-in challenge points the browser at (muster's
@@ -248,7 +257,7 @@ func proveOAuthSignIn(cfg *config.Config, token string) error {
 	switch {
 	case strings.HasPrefix(location, cfg.Issuer()+"/auth"):
 		note("proxy start redirects to %s://%s%s (the pinned authorization server, client %s)",
-			target.Scheme, target.Host, target.Path, target.Query().Get("client_id"))
+			target.Scheme, target.Host, target.Path, target.Query().Get(oauthClientID))
 	case strings.Contains(target.Path, "authorize"):
 		note("proxy start redirects to %s://%s%s (the discovered authorization server — the fixture is not pinned to Dex: re-run `agentlab platform` with this binary for a sign-in that completes)",
 			target.Scheme, target.Host, target.Path)
@@ -262,9 +271,16 @@ func proveOAuthSignIn(cfg *config.Config, token string) error {
 // the portal (or core_auth_login) handed it the challenge URL: follow the
 // proxy start endpoint to the authorization server's login form, submit the
 // user's credentials, and follow Dex back through muster's proxy callback to
-// its "Authentication Successful" page. The session that produced the
+// its success page (signInCompleted). The session that produced the
 // challenge — identified by the state — then holds the server's token.
 func completeSignIn(challengeURL string, user *config.User) error {
+	return completeSignInAt(challengeURL, user, oauthProxyCallbackPath)
+}
+
+// completeSignInAt is completeSignIn for a server whose sign-in comes back
+// on callbackPath: an organization namespace's own callback
+// (tenantstest_muster.go) instead of muster's proxy callback.
+func completeSignInAt(challengeURL string, user *config.User, callbackPath string) error {
 	transport, err := labTLSTransport()
 	if err != nil {
 		return err
@@ -303,9 +319,9 @@ func completeSignIn(challengeURL string, user *config.User) error {
 	body, _ = io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
 	final := resp.Request.URL.String()
-	if resp.StatusCode != http.StatusOK || !strings.Contains(final, oauthProxyCallbackPath) || !strings.Contains(string(body), "Authentication Successful") {
-		return fmt.Errorf("the sign-in did not end on muster's proxy callback success page (ended on %s with %d):\n%.300s",
-			final, resp.StatusCode, excerpt(string(body), 300))
+	if resp.StatusCode != http.StatusOK || resp.Request.URL.Path != callbackPath || !signInCompleted(body) {
+		return fmt.Errorf("the sign-in did not end on the success page of muster's callback %s (ended on %s with %d):\n%.300s",
+			callbackPath, final, resp.StatusCode, excerpt(string(body), 300))
 	}
 	return nil
 }

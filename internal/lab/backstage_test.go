@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 
@@ -189,5 +190,97 @@ func TestBackstageOverlayAIChatModel(t *testing.T) {
 	}
 	if got := dig(overlay, "aiChat", "anthropic", "apiKey"); got != "${"+AnthropicKeyEnv+"}" {
 		t.Errorf("overlay aiChat.anthropic.apiKey = %v, want ${%s}", got, AnthropicKeyEnv)
+	}
+}
+
+// TestBackstagePortalMode: backstage.portal renders app.portals.agentPlatform
+// in the lab's app-config overlay — on for agent-platform (and for a file
+// written before the switch), off for classic, which also sends / to the
+// classic home page instead of the shell's /agent-platform — and in no mode
+// do the values restate backstage.extraEnvVars: Helm replaces that list, so
+// any entry of the lab's would drop the chart's NODE_EXTRA_CA_CERTS.
+func TestBackstagePortalMode(t *testing.T) {
+	for _, tc := range []struct {
+		portal       string
+		want         bool
+		rootRedirect any
+	}{
+		{portal: config.PortalAgentPlatform, want: true},
+		{portal: "", want: true},
+		{portal: config.PortalClassic, want: false, rootRedirect: "/"},
+	} {
+		t.Run(tc.portal, func(t *testing.T) {
+			cfg := config.Default()
+			cfg.Backstage.Portal = tc.portal
+			cfg.Normalize()
+			if err := cfg.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			overlay := backstageOverlayAppConfig(t, cfg)
+			if got := dig(overlay, "app", "portals", "agentPlatform"); got != tc.want {
+				t.Errorf("app.portals.agentPlatform = %v, want %v", got, tc.want)
+			}
+			if got := dig(overlay, "app", "rootRedirect"); got != tc.rootRedirect {
+				t.Errorf("app.rootRedirect = %v, want %v", got, tc.rootRedirect)
+			}
+			raw, err := renderTemplate(cfg, platformValuesTemplate, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var values map[string]any
+			if err := yaml.Unmarshal(raw, &values); err != nil {
+				t.Fatal(err)
+			}
+			if got := dig(values, componentBackstage, componentBackstage, "extraEnvVars"); got != nil {
+				t.Errorf("the values restate backstage.backstage.extraEnvVars (%v): Helm replaces the chart's list, NODE_EXTRA_CA_CERTS with it", got)
+			}
+		})
+	}
+}
+
+// TestBackstagePortalModeRefusesUnknown: a hand-edited mode is refused with
+// the modes there are.
+func TestBackstagePortalModeRefusesUnknown(t *testing.T) {
+	cfg := config.Default()
+	cfg.Backstage.Portal = "shell"
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "backstage.portal") {
+		t.Fatalf("Validate() = %v, want the backstage.portal refusal", err)
+	}
+}
+
+// TestBackstageInstallationsPage pins backstage.installationsPage: on, the
+// lab's values enable the portal's Installations page and its nav item next
+// to Deployments and Clusters, so the portal's installations e2e specs have a
+// page to drive; off (the default), the extensions are what they were.
+func TestBackstageInstallationsPage(t *testing.T) {
+	base := []string{"page:gs/deployments", "nav-item:gs/deployments", "page:gs/clusters", "nav-item:gs/clusters"}
+	for _, tc := range []struct {
+		name string
+		on   bool
+		want []string
+	}{
+		{"off", false, base},
+		{"on", true, append(slices.Clone(base), "page:gs/installations", "nav-item:gs/installations")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.Default()
+			cfg.Backstage.InstallationsPage = tc.on
+			raw, err := renderTemplate(cfg, "agent-platform-values.yaml.tmpl", nil)
+			if err != nil {
+				t.Fatalf("render: %v", err)
+			}
+			var values struct {
+				Backstage struct {
+					EnabledExtensions []string `yaml:"enabledExtensions"`
+				} `yaml:"backstage"`
+			}
+			if err := yaml.Unmarshal(raw, &values); err != nil {
+				t.Fatalf("values are not YAML: %v\n%s", err, raw)
+			}
+			if !slices.Equal(values.Backstage.EnabledExtensions, tc.want) {
+				t.Errorf("backstage.enabledExtensions = %v, want %v", values.Backstage.EnabledExtensions, tc.want)
+			}
+		})
 	}
 }

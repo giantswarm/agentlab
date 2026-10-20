@@ -13,7 +13,7 @@
 #   STATUS_PREFIX   prefix of every status line (default: agentlab#143-stage1)
 #   LOCK_OWNER      text of state/lab-lock/owner
 #   AGENTLAB, YQ    binaries (default: agentlab on PATH; a mikefarah yq v4)
-#   ANTHROPIC_API_KEY  read from the Secret kagent/kagent-anthropic when unset; never printed
+#   ANTHROPIC_API_KEY  the key `agentlab` places, unless agentlab.yaml records aiKey.source; never printed
 #
 # The recipe is docs/migration-rehearsal.md. Steps are idempotent where that is
 # cheap, so a failed run can be resumed by re-running with the same arguments.
@@ -129,7 +129,7 @@ step_lock_and_before() {
   BEFORE_READY=$(awk 'NR>1 && $4=="True"' "$EVIDENCE/before-helmreleases.txt" | wc -l)
   BEFORE_TOTAL=$(awk 'NR>1' "$EVIDENCE/before-helmreleases.txt" | wc -l)
 
-  export_anthropic_key 108
+  require_anthropic_key 108
 }
 
 step_config() {

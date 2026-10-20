@@ -3,6 +3,8 @@ package lab
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"reflect"
 	"slices"
 	"strings"
@@ -164,7 +166,7 @@ func TestPlatformValuesSyncRefreshAfter(t *testing.T) {
 // the subchart's map. Either way the platform admins and the developers,
 // never the viewers.
 func TestPlatformValuesWorkspaceOrganization(t *testing.T) {
-	cfg := workspaceLab(config.WorkspaceProviderFake)
+	cfg := workspaceGitHubLab()
 	wantGroups := []any{platformAdminsGroup, "developers"}
 
 	stubWorkspacesChart(t, chartWorkspaces{Carries: true, Organizations: true})
@@ -316,10 +318,82 @@ func TestWorkspacesManifest(t *testing.T) {
 	}
 }
 
+// The controller's mTLS proxy follows Substrate: with the agents it runs
+// beside the driver with the certificate volumes Substrate's signers fill;
+// without them (the Substrate-off shape) neither renders, so the kubelet
+// holds no pod and the class still provisions.
+func TestWorkspacesManifestProxyFollowsSubstrate(t *testing.T) {
+	controller := func(t *testing.T, cfg *config.Config) (containers, volumes []string) {
+		t.Helper()
+		out, err := renderTemplate(cfg, workspacesTemplate, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dec := yaml.NewDecoder(bytes.NewReader(out))
+		for {
+			var doc struct {
+				Kind     string `yaml:"kind"`
+				Metadata struct {
+					Name string `yaml:"name"`
+				} `yaml:"metadata"`
+				Spec struct {
+					Template struct {
+						Spec struct {
+							Containers []struct {
+								Name string `yaml:"name"`
+							} `yaml:"containers"`
+							Volumes []struct {
+								Name string `yaml:"name"`
+							} `yaml:"volumes"`
+						} `yaml:"spec"`
+					} `yaml:"template"`
+				} `yaml:"spec"`
+			}
+			if err := dec.Decode(&doc); err != nil {
+				break
+			}
+			if doc.Kind != "Deployment" || doc.Metadata.Name != workspacesController {
+				continue
+			}
+			for _, c := range doc.Spec.Template.Spec.Containers {
+				containers = append(containers, c.Name)
+			}
+			for _, v := range doc.Spec.Template.Spec.Volumes {
+				volumes = append(volumes, v.Name)
+			}
+			return containers, volumes
+		}
+		t.Fatalf("no Deployment %s in the manifest", workspacesController)
+		return nil, nil
+	}
+	proxyVolumes := []string{"envoy-config", "servicedns-certs", "podidentity-ca"}
+
+	cfg := config.Default()
+	cfg.Platform.Workspaces.Enabled = true
+	containers, volumes := controller(t, cfg)
+	if !slices.Contains(containers, workspacesProxyContainer) {
+		t.Errorf("with Substrate the controller runs %v, want the proxy %s", containers, workspacesProxyContainer)
+	}
+	for _, v := range proxyVolumes {
+		if !slices.Contains(volumes, v) {
+			t.Errorf("with Substrate the controller's volumes %v lack %s", volumes, v)
+		}
+	}
+}
+
+// A live controller without its proxy (a leftover of an earlier lab) is
+// worded as such.
+func TestWorkspacesStatusWithoutProxy(t *testing.T) {
+	status := (&WorkspacesStatus{Controller: conditionReady}).String()
+	if !strings.Contains(status, "Ready without its mTLS proxy (Agent Substrate off)") {
+		t.Errorf("status %q does not word the controller without its proxy", status)
+	}
+}
+
 // The status line words the pieces in place.
 func TestWorkspacesStatusString(t *testing.T) {
 	node := config.Default().ControlPlaneNode()
-	s := &WorkspacesStatus{NFSServer: conditionReady, Controller: conditionReady, NodePlugin: conditionReady, Node: node, StorageClass: true, CSIDriverConfig: "the lab"}
+	s := &WorkspacesStatus{NFSServer: conditionReady, Controller: conditionReady, Proxy: true, NodePlugin: conditionReady, Node: node, StorageClass: true, CSIDriverConfig: "the lab"}
 	got := s.String()
 	for _, want := range []string{"NFS server Ready on " + node, "CSI controller " + workspacesCSIDriver + " Ready with its mTLS proxy", "node plugin Ready", "StorageClass " + workspacesStorageClass, "CSIDriverConfig " + workspacesCSIDriver + " by the lab"} {
 		if !strings.Contains(got, want) {
@@ -647,5 +721,48 @@ func TestWorkspacesCompanionWording(t *testing.T) {
 	}
 	if e := substrateDriverEndpointFor(companionConfig()); e.serverName != "csi-companion-controller.agent-platform.svc" || e.namespace != platformNamespace {
 		t.Errorf("the companion's endpoint = %+v", e)
+	}
+}
+
+// TestWorkspaceManagerSkip: a lab with the switch off or a chart without the
+// workspaces values has no workspace-manager to prove, said as a skip; a chart
+// the probe could not load is no such chart, and the probe's failure is
+// returned instead — and not memoized, so the next call probes again.
+func TestWorkspaceManagerSkip(t *testing.T) {
+	cfg := config.Default()
+	if reason, err := workspaceManagerSkip(cfg); err != nil || !strings.Contains(reason, "platform.workspaces is off") {
+		t.Errorf("workspaces off: skip %q, %v; want the switch named", reason, err)
+	}
+
+	cfg.Platform.Workspaces.Enabled = true
+	stubWorkspacesProbe(t, false)
+	if reason, err := workspaceManagerSkip(cfg); err != nil || !strings.Contains(reason, "takes no workspaces values") {
+		t.Errorf("a chart without the values: skip %q, %v; want it refused with the reason", reason, err)
+	}
+
+	stubWorkspacesProbe(t, true)
+	if reason, err := workspaceManagerSkip(cfg); err != nil || reason != "" {
+		t.Errorf("a chart with the values: skip %q, %v; want none", reason, err)
+	}
+
+	stubWorkspacesProbe(t, true)
+	answers := []error{tokenClosed}
+	chartWorkspacesProbe = func(platformChart) (chartWorkspaces, error) {
+		if len(answers) > 0 {
+			err := answers[0]
+			answers = answers[1:]
+			return chartWorkspaces{}, err
+		}
+		return chartWorkspaces{Carries: true}, nil
+	}
+	reason, err := workspaceManagerSkip(cfg)
+	if !errors.Is(err, io.EOF) || reason != "" {
+		t.Errorf("a chart the probe could not load: skip %q, %v; want the probe's failure, not a skip", reason, err)
+	}
+	if err != nil && strings.Contains(err.Error(), "takes no workspaces values") {
+		t.Errorf("a chart the probe could not load is worded as one without the values: %v", err)
+	}
+	if reason, err := workspaceManagerSkip(cfg); err != nil || reason != "" {
+		t.Errorf("the probe once the registry answers: skip %q, %v; want none", reason, err)
 	}
 }

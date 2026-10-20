@@ -93,17 +93,21 @@ func platformInstallOptions(cfg *config.Config) helmInstallOptions {
 // installDescription is the revision's log line: the agentlab that ran and
 // the chart source the config named.
 func installDescription(cfg *config.Config) string {
-	by := "agentlab " + project.Version() + ": "
+	return "agentlab " + project.Version() + ": " + chartSource(cfg) + overlaysNote(cfg.Platform.ValuesFiles)
+}
+
+// chartSource words the chart source the config named.
+func chartSource(cfg *config.Config) string {
 	switch cfg.ChartChannel() {
 	case config.ChartChannelPath:
-		return by + "the chart directory " + cfg.Platform.ChartPath
+		return "the chart directory " + cfg.Platform.ChartPath
 	case config.ChartChannelDev:
-		return by + "a dev build of branch " + cfg.Platform.ChartBranch
+		return "a dev build of branch " + cfg.Platform.ChartBranch
 	}
 	if IsDevBuild(cfg.Platform.ChartVersion) {
-		return by + "the dev build pinned in platform.chartVersion"
+		return "the dev build pinned in platform.chartVersion"
 	}
-	return by + "the pinned release"
+	return "the pinned release"
 }
 
 // replacingNote is the line a platform run prints when the cluster runs
@@ -152,9 +156,24 @@ type Status struct {
 	// AppConfigDrift names Backstage's app-config ConfigMaps whose data is not
 	// what the lab or the chart rendered (appconfig.go); none in sync.
 	AppConfigDrift []string `json:"appConfigDrift,omitempty"`
+	// ForeignFields are the platform workloads' fields written outside the
+	// platform's Helm releases (foreignfields.go); none as rendered.
+	ForeignFields []foreignFields `json:"foreignFields,omitempty"`
 	// Workspaces is the workspace storage in place (workspaces.go); nil
 	// without a platform release.
 	Workspaces *WorkspacesStatus `json:"workspaces,omitempty"`
+	// Observability is the observability stack in place against
+	// platform.observability (observability.go).
+	Observability *ObservabilityStatus `json:"observability,omitempty"`
+	// Registry is the lab registry container's docker state (devimages.go),
+	// "missing" when there is none; "" when the platform is disabled.
+	Registry string `json:"registry,omitempty"`
+	// Overlays are agentlab.yaml's platform.valuesFiles with what each sets
+	// (overlays.go); none without.
+	Overlays []Overlay `json:"overlays,omitempty"`
+	// StaleOverlays are the overlays the release in place was installed with
+	// that agentlab.yaml no longer lists.
+	StaleOverlays []string `json:"staleOverlays,omitempty"`
 }
 
 // LabStatus reads the lab's live state. A lab that is not running is refused
@@ -172,7 +191,13 @@ func LabStatus(cfg *config.Config, dir string) (*Status, error) {
 		return nil, err
 	}
 	s.Chart = installed
+	if s.Observability, err = readObservabilityStatus(context.Background(), cfg); err != nil {
+		return nil, err
+	}
+	s.Overlays = readOverlays(cfg, dir, installed)
+	s.StaleOverlays = staleOverlays(cfg, installed)
 	if cfg.Platform.Enabled {
+		s.Registry = devRegistryState(cfg)
 		chart := platformChartFor(cfg)
 		s.Configured = chart.String()
 		if drift := driftBetween(installed, chart); drift != nil {
@@ -188,6 +213,9 @@ func LabStatus(cfg *config.Config, dir string) (*Status, error) {
 			if s.AppConfigDrift, err = appConfigDrift(context.Background()); err != nil {
 				return nil, err
 			}
+		}
+		if s.ForeignFields, err = foreignWorkloadFields(context.Background()); err != nil {
+			return nil, err
 		}
 		if s.Workspaces, err = readWorkspacesStatus(context.Background()); err != nil {
 			return nil, err
@@ -208,15 +236,39 @@ func PrintStatus(w io.Writer, s *Status, asJSON bool) error {
 	fmt.Fprintf(&b, "%s  %s\n", s.Name, s.Dir)
 	fmt.Fprintf(&b, "    chart       %s\n", chartLine(s))
 	fmt.Fprintf(&b, "    config      %s\n", configLine(s))
+	for _, line := range overlayLines(s) {
+		fmt.Fprintf(&b, "    overlay     %s\n", line)
+	}
 	if s.Chart != nil {
 		fmt.Fprintf(&b, "    releases    %s\n", releasesLine(s.Releases))
 		fmt.Fprintf(&b, "    app-config  %s\n", appConfigLine(s.AppConfigDrift))
+		fmt.Fprintf(&b, "    workloads   %s\n", workloadsLine(s.ForeignFields))
+	}
+	if s.Registry != "" {
+		fmt.Fprintf(&b, "    registry    %s\n", registryLine(s.Name, s.Registry))
 	}
 	if s.Workspaces != nil {
 		fmt.Fprintf(&b, "    workspaces  %s\n", s.Workspaces)
 	}
+	if s.Observability != nil {
+		fmt.Fprintf(&b, "    prometheus  %s\n", s.Observability)
+	}
 	_, err := io.WriteString(w, b.String())
 	return err
+}
+
+// registryLine is `agentlab status`'s line on the lab registry: its docker
+// state, and the fix for one that does not serve.
+func registryLine(cluster, state string) string {
+	name := registryContainerName(cluster)
+	switch state {
+	case stateRunning:
+		return name + " running"
+	case registryMissing:
+		return name + " missing — dev images, the guest image and a local connectivity chart cannot be pulled; `agentlab platform` recreates it"
+	default:
+		return name + " " + state + " — `agentlab platform` starts it"
+	}
 }
 
 // chartLine is the chart in place with its revision's provenance, or none.
@@ -271,4 +323,17 @@ func releasesLine(releases []platformReleaseStatus) string {
 		line += "; " + strings.Join(pending, "; ")
 	}
 	return line
+}
+
+// workloadsLine is `agentlab status`'s line on the platform workloads'
+// field managers: as the releases render them, or the fields a hand wrote.
+func workloadsLine(found []foreignFields) string {
+	if len(found) == 0 {
+		return "as the releases render them"
+	}
+	lines := make([]string, 0, len(found))
+	for _, f := range found {
+		lines = append(lines, f.String())
+	}
+	return "patched outside the releases (no platform run removes it): " + strings.Join(lines, "; ")
 }

@@ -218,7 +218,7 @@ func nodeSupportsSystemCA() bool {
 
 // certutilHint names the package that ships NSS's certutil on this OS.
 func certutilHint() string {
-	if runtime.GOOS == "darwin" {
+	if runtime.GOOS == goosDarwin {
 		return "brew install nss"
 	}
 	return "apt install libnss3-tools / dnf install nss-tools / pacman -S nss"

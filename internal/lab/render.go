@@ -126,20 +126,30 @@ type tmplData struct {
 	// WorkspaceProviders are the workspace-manager's provider instances
 	// (workspaceprovider.go), none while none is rendered: agentlab.yaml's
 	// in a render without a cluster, what the cluster allows in the
-	// install's. WorkspaceFake says the lab's GitHub is among them
-	// (workspacefake.go): CoreDNS sends its name to its Service, and the
-	// workspace-manager trusts the lab CA its leaf is from.
-	// WorkspaceFakeBearer says it serves the instance fake-bearer too:
-	// CoreDNS sends that instance's git and API hosts to the same Service.
-	WorkspaceProviders  []workspaceProviderValues
-	WorkspaceFake       bool
-	WorkspaceFakeBearer bool
+	// install's.
+	WorkspaceProviders []workspaceProviderValues
+	// WorkspaceGrant is the provider App muster pins the workspace-manager's
+	// registration to (workspacemustergrant.go), nil for none.
+	WorkspaceGrant *workspaceGrantValues
+	// WorkspaceReleasable is the instance muster's credential provider
+	// releases while no instance renders (workspaceReleasableFor), nil with
+	// workspaces off.
+	WorkspaceReleasable *workspaceGrantValues
 	// WorkspaceAdmission is the rig a Session on a workspace volume is
 	// admitted with (workspacegrant.go): the manager's grant signing key,
 	// kagent's jwt admission of its key set and the claude Harness; nil
 	// unless the workspaces and the agents are on and the chart takes the
 	// workspaces values.
 	WorkspaceAdmission *workspaceAdmissionValues
+	// TenantsEnabled mirrors cfg.TenantsEnabled(): the chart's
+	// tenants.organizations.enabled, and the credential provider's policies
+	// for TenantsTestNamespaces, tenants-test's two organization namespaces
+	// (tenantstest.go).
+	TenantsEnabled        bool
+	TenantsTestNamespaces []string
+	// TenantsMusterVersion is the muster the lab pins with the tenants on
+	// (tenantsMusterVersion, tenantstest_muster.go).
+	TenantsMusterVersion string
 	// CodingHarnesses are the lab's coding Harnesses (coding.go), rendered
 	// as kagent.harnesses; none with coding agents and the workspaces off.
 	CodingHarnesses []codingHarness
@@ -150,7 +160,7 @@ type tmplData struct {
 	// component's entry, its trailing range renders the rest
 	// (ExtraPostRenderers); MCPPrometheusPostRenderers the same for the
 	// lab's own mcp-prometheus HelmRelease. MCPPrometheusChartVersion pins
-	// that release's chart (observability.go).
+	// that release's chart (mcpPrometheusChartFor).
 	PostRenderers              map[string]string
 	MCPPrometheusPostRenderers string
 	MCPPrometheusChartVersion  string
@@ -189,8 +199,8 @@ type tmplData struct {
 	// nodes, the values pin atelet and the WorkerPool to them.
 	SubstrateNodeKey string
 	// GitHubToken mirrors gitHubTokenWired(cfg): githubToken.source is
-	// recorded or $GITHUB_TOKEN is set on the host (githubtoken.go), so the
-	// values name the Secret the lab places it in — the portal's
+	// recorded (githubtoken.go), so the values name the Secret the lab
+	// places it in — the portal's
 	// extraEnvVarsSecrets and the overlay's integrations.github,
 	// agent-manager's skills.github.tokenSecret, the migrate Job's
 	// githubToken. Only ever the Secret's name, never the token.
@@ -258,11 +268,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 	if err != nil {
 		return nil, err
 	}
-	var mcpPrometheusRenderers []postRenderer
-	if dexLocalhostBridged(cfg) {
-		mcpPrometheusRenderers = []postRenderer{sidecarPostRenderer(mcpPrometheusRelease, cfg.DexPort)}
-	}
-	mcpPrometheus, err := yaml.Marshal(mcpPrometheusRenderers)
+	mcpPrometheus, err := yaml.Marshal(mcpPrometheusPostRenderers(cfg, defaultDevImageNames(cfg)))
 	if err != nil {
 		return nil, err
 	}
@@ -278,17 +284,14 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		}
 		labCA = strings.TrimRight(string(raw), "\n")
 	}
-	workspaceProviders, err := workspaceProvidersFor(cfg)
-	if err != nil {
-		return nil, err
-	}
+	workspaceProviders := workspaceProvidersFor(cfg)
 	workspacesChart := workspacesChartFor(cfg)
 	return &tmplData{
 		Config:                       cfg,
 		LabCA:                        labCA,
 		PostRenderers:                postRenderers,
 		MCPPrometheusPostRenderers:   strings.TrimRight(string(mcpPrometheus), "\n"),
-		MCPPrometheusChartVersion:    mcpPrometheusChartVersion,
+		MCPPrometheusChartVersion:    mcpPrometheusChartFor(cfg),
 		LocalRegistryEndpoint:        devRegistryEndpoint(cfg),
 		ConnectivityChart:            connectivity,
 		AteletImageCacheArgs:         ateletImageCacheArgs,
@@ -322,10 +325,13 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		WorkspacesOrganizationsChart: workspacesChart.Organizations,
 		Workspaces:                   workspacesValuesFor(cfg),
 		WorkspaceProviders:           workspaceProviders,
-		WorkspaceFake:                cfg.WorkspaceFakeProvider(),
-		WorkspaceFakeBearer:          cfg.WorkspaceFakeBearerProvider(),
+		WorkspaceGrant:               workspaceGrantFor(cfg, workspaceProviders),
+		WorkspaceReleasable:          workspaceReleasableFor(cfg),
 		WorkspaceAdmission:           workspaceAdmissionValuesFor(cfg, workspacesChart.Carries),
-		CodingHarnesses:              codingHarnessesFor(cfg, workspaceAdmissionValuesFor(cfg, workspacesChart.Carries)),
+		TenantsEnabled:               cfg.TenantsEnabled(),
+		TenantsTestNamespaces:        tenantsTestNamespaces[:],
+		TenantsMusterVersion:         tenantsMusterVersion,
+		CodingHarnesses:              codingHarnessesFor(cfg, workspaceAdmissionValuesFor(cfg, workspacesChart.Carries), nil),
 		CertsDir:                     certsDir,
 		NodeFilesDir:                 nodeFiles,
 		MusterNodePort:               config.MusterNodePort,
@@ -379,22 +385,23 @@ func (t *tmplData) DexJWKSPort() int {
 // these as `<component>: {postRenderers: …}` so every patch the rule found
 // reaches its release and no component key renders twice. Mirrors the
 // template's conditions: a block that is always there (muster,
-// agentgateway, mcp-kubernetes, kagent, model-manager, backstage — the last
+// agentgateway, the connectivity chart whenever it is patched, mcp-kubernetes, kagent, model-manager, backstage — the last
 // three carry their `enabled` from a toggle and render their patches only
 // while it is on) is never extra.
 func (t *tmplData) ExtraPostRenderers() map[string]string {
 	named := map[string]bool{
-		componentMuster:           true,
-		agentgatewayComponent:     true,
-		componentMCPKubernetes:    true,
-		componentKagent:           true,
-		componentBackstage:        true,
-		modelManagerMCPServer:     true,
-		agentManagerMCPServer:     t.Platform.Agents,
-		vmManagerMCPServer:        t.VMManagerEnabled,
-		klausGatewayComponent:     t.KlausGatewayEnabled,
-		clusterManager:            t.ClusterManagerEnabled,
-		llmisvcResourcesComponent: t.ServingEnabled,
+		componentMuster:              true,
+		agentgatewayComponent:        true,
+		config.ConnectivityChartName: true,
+		componentMCPKubernetes:       true,
+		componentKagent:              true,
+		componentBackstage:           true,
+		modelManagerMCPServer:        true,
+		agentManagerMCPServer:        t.Platform.Agents,
+		vmManagerMCPServer:           t.VMManagerEnabled,
+		klausGatewayComponent:        t.KlausGatewayEnabled,
+		clusterManager:               t.ClusterManagerEnabled,
+		llmisvcResourcesComponent:    t.ServingEnabled,
 	}
 	extra := map[string]string{}
 	for component, postRenderers := range t.PostRenderers {

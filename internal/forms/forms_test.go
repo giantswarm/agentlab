@@ -11,7 +11,7 @@ import (
 // users, keep the preselected components (platform AND Backstage — the
 // canonical lab), and accept their defaults.
 func TestRunTUIDrive(t *testing.T) {
-	testHook = newDriver(
+	d := newDriver(
 		"\r", "\r", "\r", // group 1: cluster name, dex port, dex image
 		"\r", // group 2: customize users? -> keep as is
 		"\r", // group 3: platform + backstage preselected; submit as is
@@ -20,13 +20,17 @@ func TestRunTUIDrive(t *testing.T) {
 		// workspaces confirm, claude model, key source, GitHub token source,
 		// extra models confirm
 		"\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r",
-		"\r", // backstage group: port
-	).attach
+		"\r", "\r", // backstage group: port, portal mode
+	)
+	testHook = d.attach
 	defer func() { testHook = nil }()
 
 	cfg := config.Default()
 	if err := Run(cfg, false, Hints{ModelServers: "Ollama 0.33.2 (:11434)"}); err != nil {
-		t.Fatalf("form run: %v", err)
+		t.Fatalf("form run: %v", d.failure(err))
+	}
+	if cfg.Backstage.Portal != config.PortalAgentPlatform {
+		t.Errorf("portal mode %q, want the default %q kept", cfg.Backstage.Portal, config.PortalAgentPlatform)
 	}
 	if cfg.ClusterName != "agentlab" || cfg.DexPort != 32000 {
 		t.Errorf("defaults not kept: cluster=%q dexPort=%d", cfg.ClusterName, cfg.DexPort)
@@ -60,10 +64,33 @@ func TestRunTUIDrive(t *testing.T) {
 	}
 }
 
+// TestRunTUIDrivePortalClassic picks the classic portal on the Backstage
+// page and keeps everything else.
+func TestRunTUIDrivePortalClassic(t *testing.T) {
+	d := newDriver(
+		"\r", "\r", "\r", "\r", "\r",
+		"\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r",
+		"\r", "j", "\r", // backstage group: port, portal mode one down
+	)
+	testHook = d.attach
+	defer func() { testHook = nil }()
+
+	cfg := config.Default()
+	if err := Run(cfg, false, Hints{}); err != nil {
+		t.Fatalf("form run: %v", d.failure(err))
+	}
+	if cfg.Backstage.Portal != config.PortalClassic {
+		t.Errorf("portal mode %q, want %q", cfg.Backstage.Portal, config.PortalClassic)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("resulting config invalid: %v", err)
+	}
+}
+
 // TestRunTUIDriveEdit changes the cluster name and dex port through the form:
 // ctrl+u clears an input's pre-filled value before typing a replacement.
 func TestRunTUIDriveEdit(t *testing.T) {
-	testHook = newDriver(
+	d := newDriver(
 		"\x15", "renamed", "\r", // clear + retype cluster name
 		"\x15", "31000", "\r", // clear + retype dex port
 		"\r", // dex image: keep
@@ -71,12 +98,13 @@ func TestRunTUIDriveEdit(t *testing.T) {
 		// components: deselect the preselected platform, arrow down,
 		// deselect the preselected backstage -> none
 		" ", "\x1b[B", " ", "\r",
-	).attach
+	)
+	testHook = d.attach
 	defer func() { testHook = nil }()
 
 	cfg := config.Default()
 	if err := Run(cfg, false, Hints{}); err != nil {
-		t.Fatalf("form run: %v", err)
+		t.Fatalf("form run: %v", d.failure(err))
 	}
 	if cfg.ClusterName != "renamed" {
 		t.Errorf("cluster name not edited: %q", cfg.ClusterName)

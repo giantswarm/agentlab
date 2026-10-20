@@ -36,10 +36,8 @@ type Discovery struct {
 	KeySource  string
 	SecretTool string
 	// GitHubTokenSource is the reference recorded for the GitHub token
-	// (githubToken.source), "" when none; GitHubToken whether $GITHUB_TOKEN
-	// is set on the host.
+	// (githubToken.source), "" when none.
 	GitHubTokenSource string
-	GitHubToken       bool
 	// GitHubApp is the skills GitHub App recorded (githubApp, completed from
 	// the workspaces App), zero when none.
 	GitHubApp config.GitHubApp
@@ -117,7 +115,7 @@ const flmOwner = "FastFlowLM"
 // Discover probes this machine. Nothing here needs the cluster; every probe
 // is loopback or a local CLI and degrades to "not found".
 func Discover(cfg *config.Config) *Discovery {
-	d := &Discovery{AnthropicKey: os.Getenv(AnthropicKeyEnv) != "", KeySource: cfg.AIKey.Source, GitHubTokenSource: cfg.GitHubToken.Source, GitHubToken: os.Getenv(GitHubTokenEnv) != "", GitHubApp: cfg.SkillsGitHubApp(), WorkspacesGitHubApp: cfg.Platform.Workspaces.GitHub.AppID != "" && cfg.Platform.Workspaces.GitHub.PrivateKeySource != ""}
+	d := &Discovery{AnthropicKey: os.Getenv(AnthropicKeyEnv) != "", KeySource: cfg.AIKey.Source, GitHubTokenSource: cfg.GitHubToken.Source, GitHubApp: cfg.SkillsGitHubApp(), WorkspacesGitHubApp: cfg.Platform.Workspaces.GitHub.AppID != "" && cfg.Platform.Workspaces.GitHub.PrivateKeySource != ""}
 	d.Tools = toolVersions(dockerVersion())
 	if d.KeySource != "" || d.GitHubTokenSource != "" || d.GitHubApp.Configured() {
 		d.SecretTool = secretToolVersion()
@@ -437,16 +435,14 @@ func (d *Discovery) Report(cfg *config.Config) string {
 	switch {
 	case d.GitHubTokenSource != "":
 		line("GitHub token", "githubToken.source %s — %s places it into the Secret %s/%s at every up and platform: the portal's skill discovery and agent-manager's skill resolution call GitHub authenticated (5000 requests an hour); agentlab never reads the value", d.GitHubTokenSource, secretTool, platformNamespace, gitHubTokenSecret)
-	case d.GitHubToken:
-		line("GitHub token", "$%s is set — the portal's skill discovery and agent-manager's skill resolution call GitHub authenticated (5000 requests an hour) from deploy time", GitHubTokenEnv)
 	case d.GitHubApp.HasClient():
-		line("GitHub token", "no githubToken.source and $%s is not set — none needed: agent-manager and the portal use the App", GitHubTokenEnv)
+		line("GitHub token", "no githubToken.source, so no Secret %s/%s (key %s) — none needed: agent-manager and the portal use the App", platformNamespace, gitHubTokenSecret, gitHubTokenSecretKey)
 	case d.GitHubApp.Configured():
-		line("GitHub token", "no githubToken.source and $%s is not set — the portal's skill discovery shares this machine's unauthenticated GitHub window (60 requests an hour) until the App's OAuth client is recorded (the workspaces GitHub App's clientId and clientSecretSource, or githubApp's); agent-manager uses the App", GitHubTokenEnv)
+		line("GitHub token", "no githubToken.source, so no Secret %s/%s (key %s) — the portal's skill discovery shares this machine's unauthenticated GitHub window (60 requests an hour) until the App's OAuth client is recorded (the workspaces GitHub App's clientId and clientSecretSource, or githubApp's); agent-manager uses the App", platformNamespace, gitHubTokenSecret, gitHubTokenSecretKey)
 	case d.WorkspacesGitHubApp:
-		line("GitHub token", "no githubToken.source, no skills App and $%s is not set — skill discovery and resolution share this machine's unauthenticated GitHub window (60 requests an hour) until agent-manager resolves skills as the workspaces GitHub App (`agentlab configure --github-app-installation-id <its installation id>`) or the token source is recorded, and `agentlab platform` re-runs", GitHubTokenEnv)
+		line("GitHub token", "no githubToken.source and no skills App, so no Secret %s/%s (key %s) — skill discovery and resolution share this machine's unauthenticated GitHub window (60 requests an hour) until agent-manager resolves skills as the workspaces GitHub App (`agentlab configure --github-app-installation-id <its installation id>`) or the token source is recorded, and `agentlab platform` re-runs", platformNamespace, gitHubTokenSecret, gitHubTokenSecretKey)
 	default:
-		line("GitHub token", "no githubToken.source and $%s is not set — skill discovery and resolution share this machine's unauthenticated GitHub window (60 requests an hour) until the source is recorded (`agentlab configure --github-token-source <ref>`) or the variable exported, and `agentlab platform` re-runs", GitHubTokenEnv)
+		line("GitHub token", "no githubToken.source, so no Secret %s/%s (key %s) — skill discovery and resolution share this machine's unauthenticated GitHub window (60 requests an hour) until the source is recorded (`agentlab configure --github-token-source <ref>`) and `agentlab platform` re-runs", platformNamespace, gitHubTokenSecret, gitHubTokenSecretKey)
 	}
 	return b.String()
 }

@@ -1,10 +1,12 @@
-certs/
+# A lab's files in a checkout, or the links a lab moved into the freedesktop
+# folders leaves there (no trailing slash: a link is no directory).
+certs
 .token
 kubeconfig.oidc
 .kubeconfig.*
 /agentlab
 /agentlab.yaml
-/state/
+/state
 
 # Manual scratch next to the config: timestamped copies of agentlab.yaml taken
 # before `agentlab configure` rewrites it, and saved `kubectl get pods -A`

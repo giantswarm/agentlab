@@ -2,6 +2,7 @@ package lab
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -77,7 +78,8 @@ type DecisionsTestOptions struct {
 	GatewayImage  string
 	GatewayBinary string
 	// Port is the host port of the gateway's endpoints; the admin endpoints
-	// take Port+1, the fake Slack Web API Port+2. Default 18090.
+	// take Port+1, the fake Slack Web API Port+2. Default the lab's own block,
+	// gatewayTestPort.
 	Port int
 	// RunDir holds the stores, the keys and the gateway's log; empty picks
 	// a temporary directory removed at the end.
@@ -96,9 +98,7 @@ func DecisionsTest(cfg *config.Config, email string, opts DecisionsTestOptions) 
 	if user == nil {
 		return fmt.Errorf("no user %q in %s", email, config.File)
 	}
-	if opts.Port == 0 {
-		opts.Port = 18090
-	}
+	opts.Port = cmp.Or(opts.Port, gatewayTestPort(cfg))
 	if err := portsFree(opts.Port, opts.Port+1, opts.Port+2); err != nil {
 		return err
 	}
@@ -166,6 +166,7 @@ func DecisionsTest(cfg *config.Config, email string, opts DecisionsTestOptions) 
 	}
 	gwOpts := KlausGatewayTestOptions{GatewayImage: opts.GatewayImage, GatewayBinary: opts.GatewayBinary, Port: opts.Port}
 	gw := newGatewayProcess(gwOpts, runDir, caFile, "grpcs://"+edge, fake.baseURL(), cfg.MusterBaseURL())
+	gw.container = gatewayContainerName(cfg)
 	gw.extraArgs = []string{"--reviews-enabled=true", "--reviews-allowed-callers=" + caller}
 	gw.kubeconfig = kubeconfig
 	gw.trustLabCA = true

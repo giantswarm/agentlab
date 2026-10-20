@@ -3,24 +3,21 @@ package lab
 import (
 	"context"
 	"fmt"
-	"os"
 	"slices"
 	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
 
-// GitHubTokenEnv is where the lab reads a GitHub token from at deploy time
-// (`agentlab up`/`platform`) and before the proofs that resolve skills. Like
-// the Anthropic key (anthropic.go) it is a real credential: it travels host
-// environment -> Kubernetes Secret only and never enters agentlab.yaml, the
-// rendered state/ files, a log line or a process's argv. The same variable
-// lifts the anonymous rate limit of the self-update check (internal/update).
+// GitHubTokenEnv is the env var name the consumers read the GitHub token
+// under: the key of the Secret below. agentlab itself never reads a variable
+// of this name — the token reaches the lab only through githubToken.source,
+// placed by the secret tooling, so its value never passes through agentlab
+// or the session that runs it.
 const GitHubTokenEnv = "GITHUB_TOKEN" // #nosec G101 -- env var NAME, not a credential
 
 // gitHubTokenSecret is the Secret the consumers read — one key, named after
@@ -41,10 +38,8 @@ const (
 
 // gitHubTokenSet reports whether the lab has a GitHub token to place — the
 // one input the render and the Secret creation decide on: the reference
-// githubToken.source records, else $GITHUB_TOKEN in the host environment.
-func gitHubTokenSet(cfg *config.Config) bool {
-	return cfg.GitHubToken.Source != "" || os.Getenv(GitHubTokenEnv) != ""
-}
+// githubToken.source records.
+func gitHubTokenSet(cfg *config.Config) bool { return cfg.GitHubToken.Source != "" }
 
 // gitHubTokenWired is the render's answer: a token is set and the chart
 // line takes the keys (the 4.x agent-manager chart's skills.github.tokenSecret
@@ -69,7 +64,9 @@ func gitHubTokenWired(cfg *config.Config) bool { return gitHubTokenSet(cfg) && !
 func ensureGitHubTokenSecrets(ctx context.Context, cfg *config.Config) error {
 	if !gitHubTokenSet(cfg) {
 		if exists, err := objectExists(ctx, gvrSecrets, platformNamespace, gitHubTokenSecret); err == nil && exists {
-			note("no githubToken.source and $%s is not set — secret %s/%s from an earlier run stays, but nothing references it: GitHub is called unauthenticated (60 requests an hour, shared by this machine)", GitHubTokenEnv, platformNamespace, gitHubTokenSecret)
+			note("no githubToken.source — secret %s/%s (key %s) from an earlier run stays, but nothing references it", platformNamespace, gitHubTokenSecret, gitHubTokenSecretKey)
+		} else if err == nil && !gitHubAppWired(cfg) {
+			note("no githubToken.source and no skills GitHub App — no secret %s/%s (key %s): skill discovery and resolution call GitHub unauthenticated (60 requests an hour, shared by this machine)", platformNamespace, gitHubTokenSecret, gitHubTokenSecretKey)
 		}
 		return nil
 	}
@@ -86,31 +83,22 @@ func ensureGitHubTokenSecrets(ctx context.Context, cfg *config.Config) error {
 	return ensureGitHubTokenSecret(ctx, cfg, kagentNamespace)
 }
 
-// ensureGitHubTokenSecret writes ns/gitHubTokenSecret on every run, so a
+// ensureGitHubTokenSecret places ns/gitHubTokenSecret on every run, so a
 // rotated token reaches the lab with the next `up` or `platform`; a no-op
-// without a token. A recorded source is placed by the secret tooling and its
-// failure fails the run — the values already name the Secret, so a lab whose
-// configuration says where the token is never deploys without it.
+// without a source. The secret tooling places it and its failure fails the
+// run — the values already name the Secret, so a lab whose configuration
+// says where the token is never deploys without it.
 func ensureGitHubTokenSecret(_ context.Context, cfg *config.Config, ns string) error {
-	if source := cfg.GitHubToken.Source; source != "" {
-		answer, err := runSecretTool(secretCopyArgs(source, secretTarget(cfg, ns, gitHubTokenSecret, gitHubTokenSecretKey))...)
-		if err != nil {
-			return fmt.Errorf("secret %s/%s key %s from githubToken.source %s: %w\n  the portal and agent-manager reference it; when %s answers, re-run `agentlab platform`",
-				ns, gitHubTokenSecret, gitHubTokenSecretKey, source, err, secretTool)
-		}
-		note("secret %s/%s key %s placed from %s by %s (%s); agentlab never read the value — skill discovery and resolution call GitHub authenticated", ns, gitHubTokenSecret, gitHubTokenSecretKey, source, secretTool, strings.TrimSpace(answer))
+	source := cfg.GitHubToken.Source
+	if source == "" {
 		return nil
 	}
-	token := os.Getenv(GitHubTokenEnv)
-	if token == "" {
-		return nil
+	answer, err := runSecretTool(secretCopyArgs(source, secretTarget(cfg, ns, gitHubTokenSecret, gitHubTokenSecretKey))...)
+	if err != nil {
+		return fmt.Errorf("secret %s/%s key %s from githubToken.source %s: %w\n  the portal and agent-manager reference it; when %s answers, re-run `agentlab platform`",
+			ns, gitHubTokenSecret, gitHubTokenSecretKey, source, err, secretTool)
 	}
-	// Applied in-process, so the token never appears in a process's argv or
-	// in a file; server-side apply creates or updates.
-	if err := ensureSecret(ns, gitHubTokenSecret, corev1.SecretTypeOpaque, map[string][]byte{gitHubTokenSecretKey: []byte(token)}); err != nil {
-		return err
-	}
-	note("secret %s/%s from $%s — skill discovery and resolution call GitHub authenticated", ns, gitHubTokenSecret, GitHubTokenEnv)
+	note("secret %s/%s key %s placed from %s by %s (%s); agentlab never read the value — skill discovery and resolution call GitHub authenticated", ns, gitHubTokenSecret, gitHubTokenSecretKey, source, secretTool, strings.TrimSpace(answer))
 	return nil
 }
 

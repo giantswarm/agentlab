@@ -509,6 +509,114 @@ func TestMCPPrometheusRelease(t *testing.T) {
 	}
 }
 
+// platform.mcpPrometheusChartVersion pins the lab's mcp-prometheus chart in
+// the OCIRepository; unset, the release this agentlab pins.
+func TestMCPPrometheusChartVersionOverride(t *testing.T) {
+	for _, tc := range []struct{ set, want string }{
+		{"", mcpPrometheusChartVersion},
+		{"0.8.1-rc.1", "0.8.1-rc.1"},
+	} {
+		cfg := config.Default()
+		cfg.Platform.MCPPrometheusChartVersion = tc.set
+		out, err := renderTemplate(cfg, mcpPrometheusTemplate, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		releases, err := fluxReleases(string(out))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(releases) != 1 {
+			t.Fatalf("want one release, got %d", len(releases))
+		}
+		if got := releases[0].Version; got != tc.want {
+			t.Errorf("set %q: want chart %s, got %s", tc.set, tc.want, got)
+		}
+	}
+}
+
+// platform.devImages.mcp-prometheus swaps the image of the lab's own
+// mcp-prometheus through that HelmRelease's postRenderers (next to the
+// dex-localhost sidecar), never as a meta chart component's values.
+func TestMCPPrometheusDevImage(t *testing.T) {
+	cfg := config.Default()
+	cfg.Platform.DevImages = map[string]string{config.DevImageMCPPrometheus: "mcp-prometheus:dev"}
+	out, err := renderTemplate(cfg, mcpPrometheusTemplate, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(out)
+	for _, want := range []string{
+		"name: gsoci.azurecr.io/giantswarm/mcp-prometheus",
+		"newName: localhost/mcp-prometheus",
+		"newTag: dev",
+		"imagePullPolicy: IfNotPresent",
+		"name: " + dexLocalhostContainer,
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("mcp-prometheus.yaml lacks %q:\n%s", want, s)
+		}
+	}
+	renderers, err := componentPostRenderers(cfg, defaultDevImageNames(cfg), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := renderers[mcpPrometheusRelease]; ok {
+		t.Errorf("the meta chart's values must carry no %s postRenderers, got %s", mcpPrometheusRelease, got)
+	}
+}
+
+// platform.alertmanager runs the Alertmanager with an always-firing alert and
+// points mcp-prometheus at it; off (the default) renders neither.
+func TestAlertmanagerSwitch(t *testing.T) {
+	for _, on := range []bool{false, true} {
+		cfg := config.Default()
+		cfg.Platform.Alertmanager = on
+		kps, err := renderTemplate(cfg, "kube-prometheus-stack-values.yaml.tmpl", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var values struct {
+			KPS struct {
+				Alertmanager struct {
+					Enabled bool `yaml:"enabled"`
+				} `yaml:"alertmanager"`
+				Rules map[string]struct {
+					Groups []struct {
+						Rules []struct {
+							Alert string `yaml:"alert"`
+						} `yaml:"rules"`
+					} `yaml:"groups"`
+				} `yaml:"additionalPrometheusRulesMap"`
+			} `yaml:"kube-prometheus-stack"`
+		}
+		if err := yaml.Unmarshal(kps, &values); err != nil {
+			t.Fatalf("%v\n%s", err, kps)
+		}
+		if values.KPS.Alertmanager.Enabled != on {
+			t.Errorf("alertmanager=%v: alertmanager.enabled = %v", on, values.KPS.Alertmanager.Enabled)
+		}
+		watchdog := false
+		for _, rule := range values.KPS.Rules {
+			for _, g := range rule.Groups {
+				for _, r := range g.Rules {
+					watchdog = watchdog || r.Alert == watchdogAlert
+				}
+			}
+		}
+		if watchdog != on {
+			t.Errorf("alertmanager=%v: %s rule rendered = %v", on, watchdogAlert, watchdog)
+		}
+		mcp, err := renderTemplate(cfg, mcpPrometheusTemplate, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Contains(string(mcp), "http://alertmanager-operated."+observabilityNamespace+".svc.cluster.local:9093"); got != on {
+			t.Errorf("alertmanager=%v: ALERTMANAGER_URL rendered = %v", on, got)
+		}
+	}
+}
+
 // The kind config carries what Substrate's WorkerPools need from the
 // apiserver — the PodCertificateRequest API and ClusterTrustBundle projection,
 // pod identities and trust bundles projected into the ateom workers — and
@@ -535,6 +643,33 @@ func TestKindConfigSubstrateGates(t *testing.T) {
 	}
 	if len(kindCfg.ContainerdConfigPatches) != 1 || !strings.Contains(kindCfg.ContainerdConfigPatches[0], `config_path = "/etc/containerd/certs.d"`) {
 		t.Errorf("containerdConfigPatches = %q, want the one certs.d config_path patch", kindCfg.ContainerdConfigPatches)
+	}
+}
+
+// The edge binds the lab's own loopback address (platform.gatewayAddress), so
+// a second lab serves 443 too; every other mapping stays on 127.0.0.1, where
+// the issuer's localhost resolves.
+func TestKindConfigGatewayAddress(t *testing.T) {
+	for addr, want := range map[string]string{"": config.DefaultGatewayAddress, secondEdgeAddress: secondEdgeAddress} {
+		cfg := config.Default()
+		cfg.Platform.GatewayAddress = addr
+		out, err := renderTemplate(cfg, "kind-config.yaml.tmpl", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var kindCfg v1alpha4.Cluster
+		if err := yaml.Unmarshal(out, &kindCfg); err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		for _, m := range kindCfg.Nodes[0].ExtraPortMappings {
+			wantAddr := config.DefaultGatewayAddress
+			if m.ContainerPort == config.GatewayNodePort {
+				wantAddr = want
+			}
+			if m.ListenAddress != wantAddr {
+				t.Errorf("gatewayAddress %q: mapping %d->%d listens on %s, want %s", addr, m.HostPort, m.ContainerPort, m.ListenAddress, wantAddr)
+			}
+		}
 	}
 }
 
@@ -664,11 +799,9 @@ func TestPlatformValuesExportNoOTLP(t *testing.T) {
 // /metrics). Everything else is the current line's render, byte for byte:
 // the legacy values are exactly the 4.x values minus those keys.
 func TestPlatformValuesLegacyChartShape(t *testing.T) {
-	// Only the 4.x line takes the $GITHUB_TOKEN keys (githubtoken.go), so an
-	// exported token separates the shapes in something the chart line has no
-	// part in — that half is TestGitHubTokenLegacyChartTakesNoKeys'.
-	t.Setenv(GitHubTokenEnv, "")
-
+	// The GitHub token keys the 4.x line alone takes (githubtoken.go) stay
+	// out of both renders: no githubToken.source is recorded — that half is
+	// TestGitHubTokenLegacyChartTakesNoKeys'.
 	render := func(cfg *config.Config) (map[string]any, string) {
 		out, err := renderTemplate(cfg, "agent-platform-values.yaml.tmpl", nil)
 		if err != nil {
@@ -712,6 +845,17 @@ func TestPlatformValuesLegacyChartShape(t *testing.T) {
 			t.Errorf("3.x shape: kagent.controller.%s rendered (no platform Postgres to mount)", key)
 		}
 	}
+	if _, ok := controller["authorization"]; ok {
+		t.Error("3.x shape: kagent.controller.authorization rendered (the 0.10 wrapper's schema is closed)")
+	}
+	// The 4.x controller reviews callers as the lab's API server names them:
+	// oidc: before the user and every group (kind-config.yaml.tmpl), or every
+	// RoleBinding of the lab grants nothing at the controller.
+	currentAuthz, _ := currentValues["kagent"].(map[string]any)["controller"].(map[string]any)["authorization"].(map[string]any)
+	if currentAuthz["mode"] != authorizationModeKubernetes || currentAuthz["groupsClaim"] != tenantsTestGroupsClaim ||
+		currentAuthz["usernamePrefix"] != apiserverUserPrefix || currentAuthz["groupsPrefix"] != apiserverUserPrefix {
+		t.Errorf("4.x shape: kagent.controller.authorization = %v, want mode kubernetes, groupsClaim groups, usernamePrefix and groupsPrefix oidc:", currentAuthz)
+	}
 	if got := controller["auth"].(map[string]any)["mode"]; got != "unsecure" {
 		t.Errorf("3.x shape: kagent.controller.auth.mode = %v, want unsecure (no JWT policy in front)", got)
 	}
@@ -739,6 +883,7 @@ func TestPlatformValuesLegacyChartShape(t *testing.T) {
 	delete(expectedKagent["controllerRoute"].(map[string]any), "jwtAuthentication")
 	delete(expectedKagent["controller"].(map[string]any), "volumes")
 	delete(expectedKagent["controller"].(map[string]any), "volumeMounts")
+	delete(expectedKagent["controller"].(map[string]any), "authorization")
 	expectedKagent["controller"].(map[string]any)["auth"].(map[string]any)["mode"] = "unsecure"
 	expectedKagent["serviceMonitor"].(map[string]any)["enabled"] = legacy.Platform.Observability
 	dropOverlayChecksum(t, expected)
@@ -802,10 +947,13 @@ func TestPlatformValuesLegacyChartShape(t *testing.T) {
 		})
 		directoryValues, _ := render(directory)
 		components, _ := directoryValues["components"].(map[string]any)
-		if _, set := components[config.ConnectivityChartName]; !set {
+		connectivity, _ := components[config.ConnectivityChartName].(map[string]any)
+		if _, set := connectivity["repository"]; !set {
 			t.Errorf("%s: the render names no connectivity source", name)
 		}
-		delete(components, config.ConnectivityChartName)
+		for _, key := range connectivitySourceKeys {
+			delete(connectivity, key)
+		}
 		// Rendered afresh: the comparison above stripped the 4.x keys off
 		// the first render's values.
 		wantValues, _ := render(tc.want)
@@ -1134,6 +1282,10 @@ func TestPlatformValuesServing(t *testing.T) {
 	}
 }
 
+// connectivitySourceKeys are the keys a chartPath lab sets on the
+// connectivity component to install the checkout's chart.
+var connectivitySourceKeys = []string{"repository", "insecure", "versionRange"}
+
 // A chartPath lab's values point the connectivity component at the lab
 // registry (the kind-network name pods pull from, plain HTTP) at the meta
 // chart directory's own version — the knobs the meta chart admits on a
@@ -1156,14 +1308,27 @@ func TestPlatformValuesLocalConnectivityChart(t *testing.T) {
 		}
 		return values.Components
 	}
-	if _, set := components()[config.ConnectivityChartName]; set {
-		t.Error("a registry chart's values name a connectivity source")
+	// The source keys alone: the component's postRenderers (the HSTS patch)
+	// are there either way.
+	source := func() map[string]any {
+		t.Helper()
+		connectivity, _ := components()[config.ConnectivityChartName].(map[string]any)
+		out := map[string]any{}
+		for _, key := range connectivitySourceKeys {
+			if v, ok := connectivity[key]; ok {
+				out[key] = v
+			}
+		}
+		return out
+	}
+	if got := source(); len(got) != 0 {
+		t.Errorf("a registry chart's values name a connectivity source: %v", got)
 	}
 
 	cfg.Platform.ChartPath = writeChartFiles(t, t.TempDir(), "agent-platform", map[string]string{
 		chartYAML: metaChartYAML,
 	})
-	got := components()[config.ConnectivityChartName]
+	got := source()
 	want := map[string]any{"repository": "oci://agentlab-x-registry:5000/charts", "insecure": true, "versionRange": placeholderChartVersion}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("components.%s = %v, want %v", config.ConnectivityChartName, got, want)

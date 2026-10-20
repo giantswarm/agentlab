@@ -132,12 +132,6 @@ const helmInstallTimeout = 15 * time.Minute
 // release is the Helm CLI's too — `helm upgrade` from a shell stays the lab's
 // day-2 tool.
 func PlatformUp(cfg *config.Config, offers Offers) error {
-	// A binary the lab's GitHub container cannot run is refused before the
-	// preload and the installs (workspacefake.go), not when the container
-	// starts after the storage install; `up` judges it before the cluster.
-	if err := checkLabGitHubBinary(cfg); err != nil {
-		return err
-	}
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
 	}
@@ -368,7 +362,7 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	// The GitHub token (githubtoken.go) — before the install: the portal's
 	// envFrom and agent-manager's env reference the Secret without
 	// `optional`, and the values just rendered name it whenever a token is
-	// configured (githubToken.source or $GITHUB_TOKEN).
+	// configured (githubToken.source).
 	if err := ensureGitHubTokenSecrets(ctx, cfg); err != nil {
 		return err
 	}
@@ -479,20 +473,6 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 			return err
 		}
 	}
-	// The lab's GitHub for the workspace-manager's provider instance fake
-	// (workspacefake.go): its container, Service and Secret before the
-	// install, which references the Secret; gone when the instance is not
-	// configured, with the Service, so nothing resolves to it.
-	if cfg.WorkspaceFakeProvider() {
-		if err := githubFakeUp(cfg); err != nil {
-			return err
-		}
-	} else {
-		githubFakeDown(cfg)
-		if err := githubFakeServiceDown(ctx); err != nil {
-			return err
-		}
-	}
 	// The workspace grant's signing key (workspacegrant.go): generated once
 	// and placed as the manager's Secret ahead of the install, which names
 	// it in workspace-manager.grant.signingKey.
@@ -519,6 +499,17 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 				return err
 			}
 		}
+	}
+
+	// The lab registry (devimages.go) on every run, not only on a push: atelet
+	// always carries --localhost-registry-replacement and the node's
+	// containerd resolves localhost:<port> through it, so a container that
+	// went missing — removed by hand, lost with a docker reset — fails every
+	// later pull from it. Recreated here, ahead of the pushes and the dev
+	// images that need it.
+	step("Ensuring the lab registry %s", devRegistryName(cfg))
+	if err := ensureDevRegistry(cfg); err != nil {
+		return err
 	}
 
 	// The VM provisioner as a pod of the node (vmmanager.go): the node's KVM
@@ -571,9 +562,22 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	if err != nil {
 		return err
 	}
+	workspaceGrant := workspaceGrantFor(cfg, workspaceProviders)
+	if err := ensureWorkspaceGrantClientID(ctx, workspaceGrant, workspaceProviders); err != nil {
+		return err
+	}
+	// The dev images a Harness runs (`harness`, `<runtime>-harness`), in the
+	// lab registry and pinned by digest before the first render, so the
+	// preload renders the components with the values the install carries.
+	registryImages, err := pushRegistryDevImages(cfg)
+	if err != nil {
+		return err
+	}
 	clusterPins := func(t *tmplData) {
 		t.WorkerPoolArch = workerArch
 		t.WorkspaceProviders = workspaceProviders
+		t.WorkspaceGrant = workspaceGrant
+		registryImages.pin(cfg, t)
 	}
 
 	_, valuesPath, err := renderManifestWith(cfg, platformValuesTemplate, clusterPins)
@@ -670,8 +674,8 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	// every Deployment the component charts tell the lab Dex's localhost
 	// address, the chart's default-on managers and an overlay's included)
 	// and, with dev images (platform.devImages, devimages.go), the Deployment
-	// targets side-loaded and their chart image names read off the renders,
-	// the `harness` image pushed to the lab registry and pinned by digest.
+	// targets side-loaded and their chart image names read off the renders
+	// (the Harness dev images are in every render already).
 	// Then the changed pair goes to the charts once more: the meta chart and
 	// every component whose spec.values moved (recheckReleases), so a schema
 	// that refuses a patch or a dev image is refused here and not after the
@@ -690,7 +694,7 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	var harnessBefore harnessState
 	imageNames := defaultDevImageNames(cfg)
 	if len(cfg.Platform.DevImages) > 0 {
-		if dev, err = prepareDevImages(cfg, renders); err != nil {
+		if dev, err = prepareDevImages(cfg, renders, registryImages); err != nil {
 			return err
 		}
 		imageNames = dev.names
@@ -702,9 +706,6 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	if _, valuesPath, err = renderManifestWith(cfg, platformValuesTemplate, func(t *tmplData) {
 		clusterPins(t)
 		t.PostRenderers = postRenderers
-		if dev != nil {
-			t.HarnessDevImage = dev.harness
-		}
 	}); err != nil {
 		return err
 	}
@@ -818,17 +819,30 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 				return err
 			}
 		}
+		// A Backstage the chart's range resolved that cannot serve
+		// backstage.portal (the shell on a 2.x) is refused here, naming both
+		// versions — never a lab that reads as up and fails its shell specs.
+		step("Checking Backstage serves the %s portal", portalMode(cfg))
+		image, err := checkPortalMode(cfg)
+		if err != nil {
+			return err
+		}
+		note("Backstage %s serves the %s portal", backstageVersion(image), portalMode(cfg))
 	}
 	// The two halves of Agent Substrate on one release (proveSubstrateLine):
 	// a chart whose kagent range admits a worker image from another Substrate
 	// release than its atelet installs green and boots no golden actor —
 	// refused here, with both images and the fix, not five minutes into the
-	// first agents proof.
+	// first agents proof. A chart that ships none (the agents switched off
+	// in place) leaves what the release left behind to the lab
+	// (substrateDown).
 	var substrate []substrateImages
 	if roster.shipsSubstrate() {
 		if substrate, err = settleSubstrateLine(ctx, substrateSkewRemedy(cfg)); err != nil {
 			return err
 		}
+	} else if err := substrateDown(ctx); err != nil {
+		return err
 	}
 	// The summary words the registration as it is live, like status does.
 	var workspacesRegistrant string
@@ -843,6 +857,11 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	}
 	if dev != nil && dev.harness != "" {
 		if err := reportHarnessDevImage(ctx, dev, harnessBefore); err != nil {
+			return err
+		}
+	}
+	if dev != nil && len(dev.coding) > 0 {
+		if err := reportCodingHarnessDevImages(ctx, dev); err != nil {
 			return err
 		}
 	}
@@ -867,10 +886,13 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	// The lab's own MCP server for the Prometheus tools rides the same engine
 	// (a HelmRelease of the mcp-prometheus chart) — after the platform, which
 	// brings the engine and the tenant identity the release runs as.
+	// Off, the stack an earlier run installed goes (observabilityDown).
 	if cfg.Platform.Observability {
 		if err := mcpPrometheusUp(cfg); err != nil {
 			return err
 		}
+	} else if err := observabilityDown(ctx); err != nil {
+		return err
 	}
 
 	// A server that crash-looped since its release — the issuer out of reach
@@ -1058,9 +1080,18 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 %s
 %s
 %s%s`, header, reach, usersBlock(cfg), backstageHint, claudeCodeHint(cfg), agentsHint, modelManagerHint(cfg, backendEndpoints), servingHint(cfg), workspacesHint(cfg, workspacesChart, workspacesRegistrant), vmManagerHint(cfg), klausGatewayHint(cfg), obsHint, devImagesHint(cfg, dev), tryItBlock(cfg))
+	// A field a hand wrote on a platform workload outlives this run, which
+	// installs only what the releases render: kubectl's edits are put back
+	// to the render (handfields.go), any other writer's named last, where the
+	// run's reader looks (foreignfields.go).
+	handErr := putBackHandFields(ctx)
+	warnForeignFields(ctx)
 	// Everything the platform runs is in the node now — record it so the next
 	// boot side-loads instead of pulling.
 	snapshotPreloadImages()
+	if handErr != nil {
+		return handErr
+	}
 	// The two steps the summary above only describes: on a terminal, ask
 	// instead of telling (prompt.go). Optional to the last: whatever the
 	// person answers, the platform is up and this returns nil.
@@ -1282,6 +1313,8 @@ func devImagesHint(cfg *config.Config, dev *devImages) string {
 		switch {
 		case name == config.DevImageHarness && dev != nil && dev.harness != "":
 			ref += "  (Harness " + platformHarness + " pins " + dev.harness + ")"
+		case dev != nil && dev.coding[strings.TrimSuffix(name, "-harness")] != "":
+			ref += "  (Harness " + strings.TrimSuffix(name, "-harness") + " pins " + dev.coding[strings.TrimSuffix(name, "-harness")] + ")"
 		case name == agentgatewayComponent && dev != nil && dev.proxy != nil:
 			ref += "  (the controller's proxies run " + dev.proxy.ref() + ")"
 		}

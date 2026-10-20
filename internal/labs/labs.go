@@ -2,8 +2,9 @@
 // cluster name, pointing at the lab directory that holds its agentlab.yaml,
 // certs/ and state/. `configure` and `up` write it; every command that runs
 // against a lab resolves the lab through it (Resolve), so a person no longer
-// has to `cd` into the lab first. The lab's own layout does not move: the
-// registry only points at directories.
+// has to `cd` into the lab first. An entry is a lab's Home under the
+// freedesktop folders, or a lab directory from before them, which the first
+// command that enters it moves there (Settle).
 package labs
 
 import (
@@ -17,23 +18,17 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/giantswarm/agentlab/internal/config"
-	"github.com/giantswarm/agentlab/pkg/project"
+	"github.com/giantswarm/agentlab/internal/xdg"
 )
 
 // file is the registry's name inside Dir.
 const file = "labs.yaml"
 
-// Dir is the registry's directory: agentlab's own under the user's config
-// directory (~/.config/agentlab on Linux, ~/Library/Application
-// Support/agentlab on macOS), the sibling of the update check's cache. A
-// variable so tests can point it at a temporary directory.
-var Dir = func() (string, error) {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, project.Name), nil
-}
+// Dir is the registry's directory: agentlab's configuration folder
+// ($XDG_CONFIG_HOME/agentlab, ~/.config/agentlab by default;
+// ~/Library/Application Support/agentlab on macOS). A variable so tests can
+// point it at a temporary directory.
+var Dir = xdg.ConfigHome
 
 // Lab is one registered lab: its cluster name (agentlab.yaml's clusterName,
 // the lab's name everywhere) and its absolute directory.
@@ -67,6 +62,58 @@ func List() ([]Lab, error) {
 	return labs, nil
 }
 
+// RecordedPorts returns the host addresses (host:port) every other registered
+// lab records in its agentlab.yaml — running or stopped — each mapped to that
+// lab's name, so the lab in dir picks ports none of them can come up on. A
+// lab whose agentlab.yaml does not parse is left out: it cannot come up either.
+func RecordedPorts(dir string) (map[string]string, error) {
+	ports := map[string]string{}
+	err := eachOther(dir, func(name string, cfg *config.Config) {
+		for _, p := range cfg.HostPorts() {
+			ports[p] = name
+		}
+	})
+	return ports, err
+}
+
+// RecordedDomains returns the platform domain every other registered lab
+// records, mapped to the first lab by name that records it: two labs on one
+// domain serve the same hostnames, and a browser's state for one (cookies, an
+// HSTS pin, the trusted CA) then applies to the other.
+func RecordedDomains(dir string) (map[string]string, error) {
+	domains := map[string]string{}
+	err := eachOther(dir, func(name string, cfg *config.Config) {
+		if domains[cfg.Platform.Domain] == "" {
+			domains[cfg.Platform.Domain] = name
+		}
+	})
+	return domains, err
+}
+
+// eachOther calls fn with every registered lab but the one in dir whose
+// agentlab.yaml parses.
+func eachOther(dir string, fn func(name string, cfg *config.Config)) error {
+	dir, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+	labs, err := List()
+	if err != nil {
+		return err
+	}
+	for _, l := range labs {
+		if l.Dir == dir {
+			continue
+		}
+		cfg, err := config.Peek(l.Dir)
+		if err != nil {
+			continue
+		}
+		fn(l.Name, cfg)
+	}
+	return nil
+}
+
 // TakenError refuses a second lab of a registered name: the two would
 // collide on the kind cluster and its ports.
 type TakenError struct {
@@ -77,7 +124,7 @@ type TakenError struct {
 
 func (e *TakenError) Error() string {
 	return fmt.Sprintf("a lab named %q already lives in %s — its kind cluster and ports would collide with one in %s.\n"+
-		"  Use that lab with --lab %s (or from its directory), or give this one another clusterName (`agentlab configure`).",
+		"  Use that lab with --lab %s (or from its directory), or give this one another clusterName (`agentlab configure --cluster-name <name>`).",
 		e.Name, e.Other, e.Dir, e.Name)
 }
 
@@ -96,9 +143,30 @@ func Check(name, dir string) error {
 	return reg.taken(name, dir)
 }
 
-// taken is Check's rule on an already read registry.
+// FreeName returns name when Check would accept it for dir, else the first of
+// name-2, name-3, … that no other lab directory holds: the default name of a
+// new lab on a machine where name is taken. It writes nothing.
+func FreeName(name, dir string) (string, error) {
+	dir, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+	reg, err := read()
+	if err != nil {
+		return "", err
+	}
+	candidate := name
+	for i := 2; reg.taken(candidate, dir) != nil; i++ {
+		candidate = fmt.Sprintf("%s-%d", name, i)
+	}
+	return candidate, nil
+}
+
+// taken is Check's rule on an already read registry. A directory whose
+// agentlab.yaml is the other's very file — the link a moved lab left — is
+// that lab, not a second one.
 func (reg *registry) taken(name, dir string) error {
-	if other, ok := reg.Labs[name]; ok && other != dir && isLab(other) {
+	if other, ok := reg.Labs[name]; ok && other != dir && isLab(other) && !sameConfig(other, dir) {
 		return &TakenError{Name: name, Dir: dir, Other: other}
 	}
 	return nil
@@ -124,7 +192,7 @@ func Register(name, dir string) error {
 		return nil // already recorded: no write on every `up`
 	}
 	for n, d := range reg.Labs {
-		if d == dir || !isLab(d) {
+		if d == dir || !isLab(d) || sameConfig(d, dir) {
 			delete(reg.Labs, n)
 		}
 	}
@@ -135,23 +203,41 @@ func Register(name, dir string) error {
 // Picker asks which of several labs a command runs against, on a terminal.
 type Picker func(labs []Lab) (Lab, error)
 
+// Mode is how a command treats the current directory when it resolves its lab.
+type Mode int
+
+const (
+	// Enter is every command that runs against an existing lab: an
+	// agentlab.yaml here enters the lab its clusterName names, wherever that
+	// lab is registered.
+	Enter Mode = iota
+	// Create is for the commands that make a lab where they run
+	// (`configure`, `up`): in the current directory they stay there instead
+	// of reaching for another lab, with or without an agentlab.yaml.
+	Create
+	// Here is for the commands that only write the lab's files from its
+	// agentlab.yaml (`render`): an agentlab.yaml here is this directory's
+	// lab, even a copy of a registered lab's, so the registered lab's certs/
+	// and state/ are never rewritten from a file outside its directory;
+	// without one they resolve as Enter.
+	Here
+)
+
 // Resolve decides which lab directory a command runs against, in one order:
 //
 //  1. --lab <name> (flag), refused naming the registered labs when unknown;
 //  2. the agentlab.yaml in the current directory: the lab its clusterName
 //     names, registered elsewhere (a copy of that lab's file), or else this
-//     directory;
-//  3. unless create: on a terminal (pick non-nil) the person's choice among
+//     directory — always this directory under Create and Here;
+//  3. unless Create: on a terminal (pick non-nil) the person's choice among
 //     the registered labs, off one a refusal naming them and --lab.
 //
 // No lab is ever the default: a command runs against the lab the flag, the
 // directory or the person names, or not at all. dir is "" for the current
 // directory — also when nothing is registered, so the caller's
 // missing-agentlab.yaml path (the first run, or its refusal) stays what it
-// is. create is for the commands that make a lab where they run
-// (`configure`, `up`): in the current directory they stay there instead of
-// reaching for another lab.
-func Resolve(flag string, create bool, pick Picker) (lab Lab, err error) {
+// is.
+func Resolve(flag string, mode Mode, pick Picker) (lab Lab, err error) {
 	if flag != "" {
 		labs, err := List()
 		if err != nil {
@@ -163,14 +249,19 @@ func Resolve(flag string, create bool, pick Picker) (lab Lab, err error) {
 		return Lab{}, fmt.Errorf("no lab named %q is registered on this machine (%s); a lab registers itself on `agentlab configure` and `agentlab up` in its directory", flag, names(labs))
 	}
 	if _, err := os.Stat(config.File); err == nil {
-		if create {
+		// The link a moved lab left in its old directory (Settle) is that
+		// lab, whatever the mode: its files are no longer here.
+		if l, ok, err := linkedHere(); err != nil || ok {
+			return l, err
+		}
+		if mode != Enter {
 			return Lab{}, nil
 		}
 		return here()
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return Lab{}, err
 	}
-	if create {
+	if mode == Create {
 		return Lab{}, nil
 	}
 	labs, err := List()
@@ -213,6 +304,33 @@ func here() (Lab, error) {
 	return l, nil
 }
 
+// linkedHere returns the registered lab whose agentlab.yaml is the very file
+// the current directory's names — the link Settle leaves at a lab's old
+// directory — and whether there is one.
+func linkedHere() (Lab, bool, error) {
+	here, err := os.Stat(config.File)
+	if err != nil {
+		return Lab{}, false, err
+	}
+	labs, err := List()
+	if err != nil {
+		return Lab{}, false, err
+	}
+	cwd, err := filepath.Abs(".")
+	if err != nil {
+		return Lab{}, false, err
+	}
+	for _, l := range labs {
+		if l.Dir == cwd {
+			continue
+		}
+		if fi, err := os.Stat(filepath.Join(l.Dir, config.File)); err == nil && os.SameFile(here, fi) {
+			return l, true, nil
+		}
+	}
+	return Lab{}, false, nil
+}
+
 // named returns the lab of that name among labs.
 func named(labs []Lab, name string) (Lab, bool) {
 	for _, l := range labs {
@@ -244,6 +362,16 @@ func namesOf(reg *registry, dir string) []string {
 		}
 	}
 	return out
+}
+
+// sameConfig reports whether the agentlab.yaml of a and of b are one file.
+func sameConfig(a, b string) bool {
+	fa, err := os.Stat(filepath.Join(a, config.File))
+	if err != nil {
+		return false
+	}
+	fb, err := os.Stat(filepath.Join(b, config.File))
+	return err == nil && os.SameFile(fa, fb)
 }
 
 // isLab reports whether dir still holds a lab: its agentlab.yaml exists.

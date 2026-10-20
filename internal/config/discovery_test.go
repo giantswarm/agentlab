@@ -137,14 +137,14 @@ func TestPortConflictsIgnoreTheClustersOwnPorts(t *testing.T) {
 	// Every lab port "listens" (the kind node holds them) plus a foreign
 	// process on the kagent UI port — the only conflict to report.
 	taken := func(p int) bool { return ours[p] || p == cfg.Platform.AgentsPort }
-	conflicts := cfg.portConflicts(func(p int) bool { return !ours[p] && taken(p) })
+	conflicts := cfg.portConflicts(func(_ string, p int) bool { return !ours[p] && taken(p) })
 	if len(conflicts) != 0 {
 		t.Fatalf("the cluster's own ports reported as conflicts: %v", conflicts)
 	}
 	// Now the cluster does not publish the kagent UI port (an older node)
 	// and a foreign process holds it.
 	delete(ours, cfg.Platform.AgentsPort)
-	conflicts = cfg.portConflicts(func(p int) bool { return !ours[p] && taken(p) })
+	conflicts = cfg.portConflicts(func(_ string, p int) bool { return !ours[p] && taken(p) })
 	if len(conflicts) != 1 || conflicts[0].Field != "platform.agentsPort" || conflicts[0].Port != cfg.Platform.AgentsPort {
 		t.Fatalf("conflicts = %v, want exactly platform.agentsPort", conflicts)
 	}
@@ -158,7 +158,7 @@ func TestPortConflictsIgnoreTheClustersOwnPorts(t *testing.T) {
 func TestChooseFreePortsOnExistingConfigWithoutCluster(t *testing.T) {
 	cfg := Default()
 	cfg.Platform.MusterPort = 8092 // moved by an earlier run; still free
-	changes := cfg.chooseFreePorts(takenSet(cfg.Backstage.Port), everyPortPublishable)
+	changes := cfg.chooseFreePorts(takenSet(cfg.Backstage.Port), nil, everyPortPublishable)
 	if len(changes) != 1 || changes[0].Field != "backstage.port" {
 		t.Fatalf("changes = %v, want exactly backstage.port", changes)
 	}
