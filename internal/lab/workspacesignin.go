@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"html"
 	"io"
-	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -30,18 +29,18 @@ import (
 //  1. core_auth_login for the workspace-manager, called through muster as
 //     the person, answers with muster's sign-in link (/oauth/proxy/start).
 //  2. muster's proxy sends the browser to the provider's authorization
-//     endpoint (PKCE). The lab's GitHub consents at once for the fixture
-//     user its login parameter names (githubfake_workspaces.go), so the walk
-//     adds the person's fixture login.
+//     endpoint (PKCE). The lab's GitHub answers with its consent page
+//     (githubfake_workspaces.go), whose Authorize of the person's fixture
+//     login the walk posts, as the person's click does.
 //  3. The provider redirects to muster's /oauth/proxy/callback, which
 //     redeems the code and files the person's App token under the person
 //     (grantScope subject): every later MCP session of theirs has it, and
 //     list_providers shows the instance connected.
 //
-// From this host every hop is a name the lab dials: the platform's names on
-// the edge's loopback port (dialLab), Dex on its issuer URL, and the lab's
-// GitHub, whose name pods resolve to its Service (coredns.yaml.tmpl), on the
-// loopback port its container publishes: the edge has no route for it.
+// From this host every hop is a name the lab dials as a browser does: the
+// platform's names on the edge's loopback port (dialLab), Dex on its issuer
+// URL, and the lab's GitHub's consent page on the edge too, whose route goes
+// to the Service pods resolve its name to (workspacefake.go).
 //
 // A GitLab instance is a real GitLab: muster's link leads a new browser to
 // GitLab's sign-in form, which takes the provider person's GitLab login and
@@ -101,6 +100,9 @@ var (
 	htmlAttrRe  = regexp.MustCompile(`(?is)([a-z_:-]+)\s*=\s*"([^"]*)"`)
 )
 
+// htmlPost is a form's method as htmlForms reads it for a POST.
+const htmlPost = "post"
+
 // htmlForm is one form of a page: its action, method and the named inputs'
 // values, unescaped.
 type htmlForm struct {
@@ -146,7 +148,7 @@ type providerLogin struct {
 func gitlabFormStep(page []byte, login *providerLogin, posted bool) (action string, form url.Values, ok bool, err error) {
 	for _, f := range htmlForms(page) {
 		switch {
-		case f.method == "post" && strings.HasSuffix(f.action, gitlabSignInAction) && strings.Contains(string(page), gitlabPasswordField):
+		case f.method == htmlPost && strings.HasSuffix(f.action, gitlabSignInAction) && strings.Contains(string(page), gitlabPasswordField):
 			if login == nil {
 				return "", nil, true, fmt.Errorf("GitLab asks for a sign-in, and the walk has no GitLab login for the person")
 			}
@@ -157,7 +159,22 @@ func gitlabFormStep(page []byte, login *providerLogin, posted bool) (action stri
 			f.fields.Set("user[password]", login.password)
 			f.fields.Set("user[remember_me]", "0")
 			return f.action, f.fields, true, nil
-		case f.method == "post" && strings.HasSuffix(f.action, gitlabAuthorizePath) && f.fields.Get(railsMethodField) == "":
+		case f.method == htmlPost && strings.HasSuffix(f.action, gitlabAuthorizePath) && f.fields.Get(railsMethodField) == "":
+			return f.action, f.fields, true, nil
+		}
+	}
+	return "", nil, false, nil
+}
+
+// githubConsentStep answers the lab's GitHub's consent page: its form
+// posted with the Authorize of fixtureLogin, as the person's click posts it.
+func githubConsentStep(page []byte, fixtureLogin string) (action string, form url.Values, ok bool, err error) {
+	for _, f := range htmlForms(page) {
+		if f.method == htmlPost && f.action == githubAuthorizePath {
+			if !strings.Contains(string(page), `name="`+githubLogin+`" value="`+html.EscapeString(fixtureLogin)+`"`) {
+				return "", nil, true, fmt.Errorf("the lab's GitHub offers no Authorize for the fixture login %q", fixtureLogin)
+			}
+			f.fields.Set(githubLogin, fixtureLogin)
 			return f.action, f.fields, true, nil
 		}
 	}
@@ -219,13 +236,6 @@ func walkProviderSignIn(client *http.Client, link, fixtureLogin string, login *p
 	callback := oauthProxyCallbackPath
 	var form url.Values
 	for len(hops) < workspaceSignInMaxHops {
-		if login == nil && next.Path == githubAuthorizePath && next.Query().Get(githubLogin) == "" {
-			// The lab's GitHub consents for the fixture user the login
-			// parameter names, as GitHub would for the browser's account.
-			q := next.Query()
-			q.Set(githubLogin, fixtureLogin)
-			next.RawQuery = q.Encode()
-		}
 		method := http.MethodGet
 		var body io.Reader = http.NoBody
 		if form != nil {
@@ -254,8 +264,13 @@ func walkProviderSignIn(client *http.Client, link, fixtureLogin string, login *p
 		var glFields url.Values
 		var glForm bool
 		var glErr error
-		if login != nil && resp.StatusCode == http.StatusOK && next.Path != callback {
+		switch {
+		case login != nil && resp.StatusCode == http.StatusOK && next.Path != callback:
 			glAction, glFields, glForm, glErr = gitlabFormStep(page, login, method == http.MethodPost && strings.HasSuffix(next.Path, gitlabSignInAction))
+		case login == nil && resp.StatusCode == http.StatusOK && next.Path == githubAuthorizePath:
+			// The lab's GitHub's consent page, the one a person's browser
+			// shows: the Authorize of the person's fixture login.
+			glAction, glFields, glForm, glErr = githubConsentStep(page, fixtureLogin)
 		}
 		switch {
 		case resp.StatusCode >= 300 && resp.StatusCode < 400:
@@ -287,7 +302,7 @@ func walkProviderSignIn(client *http.Client, link, fixtureLogin string, login *p
 			}
 			next = location
 		default:
-			return hops, stopped(hop, "a page that is neither muster's callback nor a GitLab sign-in or consent form: "+pageHeading(page))
+			return hops, stopped(hop, "a page that is neither muster's callback nor a provider's sign-in or consent form: "+pageHeading(page))
 		}
 	}
 	return hops, fmt.Errorf("%w after %d hops without reaching the callback %s\n  hops: %s", errSignInStopped, len(hops), callback, signInHops(hops))
@@ -302,42 +317,20 @@ func pageHeading(page []byte) string {
 }
 
 // workspaceSignInClient is a browser for the walk: the lab's TLS trust, its
-// own cookie jar, no redirect followed, and the lab's GitHub dialed on the
-// loopback port its container publishes.
-func workspaceSignInClient(cfg *config.Config) (*http.Client, error) {
+// own cookie jar and no redirect followed. Every name is dialled as a
+// browser on this host dials it, the lab's GitHub included: the edge serves
+// its consent page (workspacefake.go).
+func workspaceSignInClient() (*http.Client, error) {
 	transport, err := labTLSTransport()
 	if err != nil {
 		return nil, err
-	}
-	github, err := labGitHubHostAddr(cfg)
-	if err != nil {
-		return nil, err
-	}
-	walk := transport.Clone()
-	hosts := []string{config.GitHubFakeHost(cfg.Platform.Domain), config.GitHubFakeBearerHost(cfg.Platform.Domain)}
-	walk.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		if h, _, err := net.SplitHostPort(addr); err == nil && slices.Contains(hosts, h) {
-			addr = github
-		}
-		return dialLab(ctx, network, addr)
 	}
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		return nil, err
 	}
-	return &http.Client{Jar: jar, Transport: walk, Timeout: 60 * time.Second,
+	return &http.Client{Jar: jar, Transport: transport, Timeout: 60 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, nil
-}
-
-// labGitHubHostAddr is the loopback address the lab's GitHub container
-// publishes its port on.
-func labGitHubHostAddr(cfg *config.Config) (string, error) {
-	name := cfg.ClusterName + "-" + labGitHubContainerSuffix
-	published, err := outputQuiet(dockerBin, "port", name, strconv.Itoa(fakeContainerPort)+"/tcp")
-	if addr := publishedLoopback(published); err == nil && addr != "" {
-		return addr, nil
-	}
-	return "", fmt.Errorf("the lab's GitHub, container %s, publishes no port on this host: `agentlab platform` starts it for the provider instance %s", name, config.WorkspaceProviderFake)
 }
 
 // workspacePerson is a lab user signed in to muster for the workspace-manager's
@@ -433,7 +426,7 @@ func connectWorkspaceProviderAs(cfg *config.Config, p *workspacePerson, instance
 		if login != nil {
 			account = login.login
 		}
-		client, err := workspaceSignInClient(cfg)
+		client, err := workspaceSignInClient()
 		if err != nil {
 			return "", err
 		}
