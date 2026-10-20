@@ -467,15 +467,21 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	if !declined.finalState.Terminal() {
 		return fmt.Errorf("after %d denial(s) task %s is still %s at the controller", declined.rounds, declined.taskID, declined.finalState)
 	}
-	calls, err := musterCallsSince(declineStart, user.Email, identity.subject)
+	// Judged by the denied task's own tool calls: the person's other muster
+	// clients (a Dev Portal tab polling as them) call muster meanwhile.
+	deniedTools, err := musterToolNames(declined.tools)
+	if err != nil {
+		return fmt.Errorf("task %s: %w", declined.taskID, err)
+	}
+	ran, err := musterTaskCallsSince(declineStart, identity.subject, deniedTools)
 	if err != nil {
 		return err
 	}
-	if calls.calls != 0 {
-		return fmt.Errorf("muster logged %d tools/call by %s during the denied task — the denied tool ran anyway", calls.calls, user.Email)
+	if len(ran) != 0 {
+		return fmt.Errorf("muster logged %s by %s during the denied task — the denied tool ran anyway", strings.Join(ran, ", "), user.Email)
 	}
-	note("%d denial(s) on task %s → %s at the controller (turn outcome %s); no tools/call by %s reached muster; the thread shows %q",
-		declined.rounds, declined.taskID, declined.finalState, declined.outcome, user.Email, excerpt(declined.answer, 80))
+	note("%d denial(s) on task %s → %s at the controller (turn outcome %s); none of its tools (%s) reached muster as %s; the thread shows %q",
+		declined.rounds, declined.taskID, declined.finalState, declined.outcome, strings.Join(deniedTools, ", "), user.Email, excerpt(declined.answer, 80))
 
 	step("4. `stop`: a long turn is stopped from the thread; the gateway cancels the task at the controller and the thread takes a following turn")
 	tasksBefore, err := api.taskIDs(context.Background(), session)
@@ -1761,9 +1767,12 @@ func (p *slackProof) dispatch(t *slackThread, subject, email string) (gatewayRec
 
 // decisionOutcome is how an approval round trip ended.
 type decisionOutcome struct {
-	taskID     string
-	rounds     int
-	cards      []string
+	taskID string
+	rounds int
+	cards  []string
+	// tools are the tool calls the decisions answered, as the paused task's
+	// tool_approval_request named them.
+	tools      []hitlTool
 	finalState a2a.TaskState
 	outcome    string
 	answer     string
@@ -1806,6 +1815,9 @@ func (p *slackProof) decideUntilSettled(api *kagentAPI, session *apiv1alpha1.Ses
 		}
 		if state := task.Status.State; state != a2a.TaskStateInputRequired {
 			return nil, fmt.Errorf("the thread shows an approval card for task %s but the controller has it %s, not TASK_STATE_INPUT_REQUIRED", out.taskID, state)
+		}
+		if req := parseToolApprovalRequest(task.Status.Message); req != nil {
+			out.tools = append(out.tools, req.decidedTools()...)
 		}
 		before := len(turn.msgs)
 		if err := p.driver.click(t.user, card.msg, action); err != nil {

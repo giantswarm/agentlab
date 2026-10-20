@@ -1172,7 +1172,7 @@ the one that runs on both of those:
 | workspace | on a lab with the provider instance `fake-bearer` (`configure --workspaces-provider fake,fake-bearer --workspaces-grant-provider fake-bearer`), the workspace `agentlab-coding` of `agentlab-oss/docs` as the person, its first cycle succeeded; the Session then starts in it through agent-manager's `start_session` with the person's grant, and kagent records the provider `muster` on it; SKIP, naming the fix, on a lab without `fake-bearer`, where the Session starts without a workspace |
 | secret-backed credential (*codex, omp*) | every header the agent's `RemoteMCPServer` takes from a Secret names a Secret key that is there: upstream's Secret-backed path, the controller handing the runtime kagent's placeholder and the egress gateway setting the value; SKIP, naming the headers, on a platform line whose binding takes no header from a Secret (no released component writes one yet) |
 | uid split (*claude*) | the agent's commands run as uid 65532; the root harness's `/proc/<pid>/environ` and `mem` refuse it |
-| forwarder paths (*claude*) | the forwarder answers 400 to `../..`, `%2e%2e` and `..%2f`, 404 for a server it does not front, 401 without its token; skipped in a workspace Session that runs no forwarder (Claude Code calls muster's actor-JWT host directly) |
+| forwarder paths (*claude*) | the forwarder answers 400 to `../..`, `%2e%2e` and `..%2f`, 404 for a server it does not front (401 where the MCP config holds only kagent's placeholder: the probe has no loopback token to send, and the forwarder refuses before it matches a server), 401 without its token; skipped in a workspace Session that runs no forwarder (Claude Code calls muster's actor-JWT host directly) |
 | write tool refused (*claude*) | `x_agent-manager_delete_agent`, called through the forwarder with the turn's bearer, refused by muster as outside the toolset; skipped like forwarder paths |
 | no loopback token (*claude*, workspace Session) | Claude Code's MCP config (`--mcp-config`) carries no `Authorization` but kagent's placeholder `kagent-credential-injected`, counted without printing a value: a server kept on the forwarder for its tool selection carries the placeholder too, so no loopback token is left for a sandbox process to replay; `--muster-tools meta` gives the agent the tool selection on muster a platform agent binds (muster's 11 meta-tools, the Generic chart's `muster.tools` set on its HelmRelease) |
 | credentials | no forge token or bearer in the environment, `/data` or `/workspace`; the model key kagent's placeholder, or unset where the runtime keeps it out of the shell's environment (omp); on `codex` every `KAGENT_CODEX_MCP_CREDENTIAL_*` the sandbox sees the placeholder too, on `omp` every `KAGENT_CREDENTIAL_*` |
@@ -1538,7 +1538,11 @@ directly so it depends on no chart release resolving in the lab); and
    token's subject. **Deny**: in a second thread (a fresh session: the first
    one's conversation already holds the count) each Deny click
    (`hitl_deny`) rewrites the card to `Denied by <@…>`; the task ends in a
-   terminal state and no `tools/call` by the person reaches muster.
+   terminal state and none of the task's tools reaches muster as the person:
+   no `tools/call request` for a meta-tool its `tool_approval_request`s
+   named, no `tool dispatched` for a tool its `call_tool` named. The
+   person's other muster calls meanwhile (a Dev Portal tab polling as them)
+   do not count.
 4. **stop**: once a long answer streams, a `stop` reply in the thread ends
    the turn `canceled`, the thread is told `Stopped.`, the new task is
    `TASK_STATE_CANCELED` at the controller, and the thread takes a following

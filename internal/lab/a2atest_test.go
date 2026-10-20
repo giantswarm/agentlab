@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"slices"
 	"testing"
 	"time"
 )
@@ -26,6 +27,47 @@ garbage line
 	}
 	if !subjectMatches("CiRjNGNl...", "CiRjNGNlNWQ0") || subjectMatches("CiRvdGhlcg...", "CiRjNGNlNWQ0") || subjectMatches("", "x") || subjectMatches("x", "") {
 		t.Error("subjectMatches compares the logged prefix with the token's subject")
+	}
+}
+
+// TestMusterTaskCallsIn: a denied task is judged by its own tools — a
+// meta-tool's request by name, call_tool by the tool it dispatches — so the
+// person's other muster calls in the window (a portal tab's call_tool
+// polls, another tool's dispatch) and other subjects' never count.
+func TestMusterTaskCallsIn(t *testing.T) {
+	const listTool = "x_kubernetes_list"
+	tools, err := musterToolNames([]hitlTool{
+		{ID: "denied-1", Name: fakeTool, Args: map[string]any{"pattern": "kubernetes"}},
+		{ID: "denied-2", Name: musterMetaCallTool, Args: map[string]any{nameKey: listTool}},
+		{ID: "denied-3", Name: fakeTool},
+	})
+	if err != nil || !slices.Equal(tools, []string{fakeTool, listTool}) {
+		t.Fatalf("musterToolNames = %v, %v", tools, err)
+	}
+	if _, err := musterToolNames(nil); err == nil {
+		t.Error("no requested tool must not judge the task clean")
+	}
+	if _, err := musterToolNames([]hitlTool{{ID: "denied-4", Name: musterMetaCallTool}}); err == nil {
+		t.Error("a call_tool naming no tool must not judge the task clean")
+	}
+
+	since := time.Date(2026, 10, 20, 10, 28, 0, 0, time.UTC)
+	const subject = "CiRjNGNlNWQ0ZC0xMjM0EgVsb2NhbA"
+	portal := `{"time":"2026-10-20T10:28:38.229035738Z","msg":"tools/call request","transportSessionID":"","subject":"CiRjNGNl...","tool":"call_tool"}
+{"time":"2026-10-20T10:28:38.231Z","msg":"tool dispatched","subject":"CiRjNGNl...","server":"agent-manager","tool":"x_agent-manager_list_agents","outcome":"ok"}
+{"time":"2026-10-20T10:28:39Z","msg":"tools/call request","subject":"CiRvdGhlcg...","tool":"filter_tools"}
+{"time":"2026-10-20T10:27:59Z","msg":"tools/call request","subject":"CiRjNGNl...","tool":"filter_tools"}
+garbage line
+`
+	if got := musterTaskCallsIn(portal, since, subject, tools); len(got) != 0 {
+		t.Errorf("the portal's polls, another subject's and older lines counted: %v", got)
+	}
+	ran := portal + `{"time":"2026-10-20T10:28:40Z","msg":"tools/call request","subject":"CiRjNGNl...","tool":"filter_tools"}
+{"time":"2026-10-20T10:28:41Z","msg":"tools/call request","subject":"CiRjNGNl...","tool":"call_tool"}
+{"time":"2026-10-20T10:28:41.1Z","msg":"tool dispatched","subject":"CiRjNGNl...","server":"agentlab-mcp-kubernetes","tool":"x_kubernetes_list","outcome":"ok"}
+`
+	if got := musterTaskCallsIn(ran, since, subject, tools); len(got) != 2 {
+		t.Errorf("the task's filter_tools request and its x_kubernetes_list dispatch: %v", got)
 	}
 }
 
