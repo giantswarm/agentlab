@@ -2,6 +2,7 @@ package labs
 
 import (
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -333,14 +334,53 @@ func TestRecordedPorts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range []int{32001, 6444} {
+	for _, p := range []string{"127.0.0.1:32001", "127.0.0.1:6444"} {
 		if ports[p] != "agentlab" {
-			t.Errorf("port %d recorded by %q, want agentlab", p, ports[p])
+			t.Errorf("%s recorded by %q, want agentlab", p, ports[p])
 		}
 	}
 	for p, name := range ports {
 		if name != "agentlab" {
-			t.Errorf("port %d recorded by %q: the asking lab counted itself", p, name)
+			t.Errorf("%s recorded by %q: the asking lab counted itself", p, name)
 		}
+	}
+}
+
+// Every other registered lab's domain is recorded, the default of a file that
+// names none included, under the first lab by name; the lab asking is not its
+// own obstacle.
+// The labs and the domain TestRecordedDomains registers.
+const (
+	secondLab  = config.DefaultClusterName + "-2"
+	thirdLab   = config.DefaultClusterName + "-3"
+	lab3Domain = "lab3.127.0.0.1.nip.io"
+)
+
+func TestRecordedDomains(t *testing.T) {
+	cwd := setup(t)
+	for name, body := range map[string]string{
+		config.DefaultClusterName: "clusterName: " + config.DefaultClusterName + "\n",
+		thirdLab:                  "clusterName: " + thirdLab + "\nplatform:\n  domain: " + lab3Domain + "\n",
+		"scratch":                 "clusterName: scratch\n",
+	} {
+		other := t.TempDir()
+		if err := os.WriteFile(filepath.Join(other, config.File), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := Register(name, other); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeConfig(t, cwd, secondLab)
+	if err := Register(secondLab, cwd); err != nil {
+		t.Fatal(err)
+	}
+	domains, err := RecordedDomains(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{config.Default().Platform.Domain: config.DefaultClusterName, lab3Domain: thirdLab}
+	if !maps.Equal(domains, want) {
+		t.Errorf("RecordedDomains() = %v, want %v", domains, want)
 	}
 }
