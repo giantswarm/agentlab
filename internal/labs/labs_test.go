@@ -2,6 +2,7 @@ package labs
 
 import (
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -342,5 +343,35 @@ func TestRecordedPorts(t *testing.T) {
 		if name != "agentlab" {
 			t.Errorf("port %d recorded by %q: the asking lab counted itself", p, name)
 		}
+	}
+}
+
+// Every other registered lab's domain is recorded, the default of a file that
+// names none included; the lab asking is not its own obstacle.
+func TestRecordedDomains(t *testing.T) {
+	cwd := setup(t)
+	for name, body := range map[string]string{
+		"agentlab":   "clusterName: agentlab\n",
+		"agentlab-3": "clusterName: agentlab-3\nplatform:\n  domain: lab3.127.0.0.1.nip.io\n",
+	} {
+		other := t.TempDir()
+		if err := os.WriteFile(filepath.Join(other, config.File), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := Register(name, other); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeConfig(t, cwd, "agentlab-2")
+	if err := Register("agentlab-2", cwd); err != nil {
+		t.Fatal(err)
+	}
+	domains, err := RecordedDomains(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{config.Default().Platform.Domain: "agentlab", "lab3.127.0.0.1.nip.io": "agentlab-3"}
+	if !maps.Equal(domains, want) {
+		t.Errorf("RecordedDomains() = %v, want %v", domains, want)
 	}
 }

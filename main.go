@@ -546,6 +546,7 @@ func discoverInto(cfg *config.Config, first bool, pinEnabled *bool, pinBackends 
 	fmt.Print(disc.Report(cfg))
 	fmt.Println()
 	applyPorts(cfg, disc)
+	applyDomain(cfg, disc)
 	before := cfg.Platform.ModelManager
 	cfg.Platform.ModelManager.ApplyDiscovered(disc.Backends(), cfg.Platform.Agents, first, pinEnabled, pinBackends)
 	vmBefore := cfg.Platform.VMManager.Enabled
@@ -609,6 +610,32 @@ func applyPorts(cfg *config.Config, disc *lab.Discovery) {
 	fmt.Println("  The kind node cannot bind them while they are taken. Free the port, or `agentlab down`,")
 	fmt.Println("  re-run `agentlab configure` (which then picks free ones) and `agentlab up`.")
 	fmt.Println()
+}
+
+// applyDomain gives the lab a platform domain no other registered lab
+// records while no kind node of this configuration exists, as applyPorts does
+// for the ports: a second lab's hostnames are then backstage.lab2.<base> and
+// so on, its own in the browser. An existing cluster keeps its domain (its CA
+// and every rendered URL name it): a clash is reported with the way out.
+func applyDomain(cfg *config.Config, disc *lab.Discovery) {
+	recorded, err := labs.RecordedDomains(".")
+	if err != nil {
+		fmt.Printf("The other labs' domains are unknown (%v): platform.domain stays %s.\n\n", err, cfg.Platform.Domain)
+		return
+	}
+	if disc.ClusterExists {
+		if other := recorded[cfg.Platform.Domain]; other != "" {
+			fmt.Printf("platform.domain %s is also the lab %s's: both serve the same hostnames, and a browser mixes them up.\n", cfg.Platform.Domain, other)
+			fmt.Println("  `agentlab down`, re-run `agentlab configure` (which then picks a free one) and `agentlab up`.")
+			fmt.Println()
+		}
+		return
+	}
+	if ch := cfg.ChooseFreeDomain(recorded); ch != nil {
+		fmt.Println("Applied to the configuration:")
+		fmt.Printf("  %s\n", ch)
+		fmt.Println()
+	}
 }
 
 // reportPortChanges tells the user which ports this machine cannot serve the
