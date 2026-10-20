@@ -575,37 +575,68 @@ func githubFakeEdgeHosts(cfg *config.Config) []string {
 // as a ConfigMap, the BackendTLSPolicy verifying the fake's leaf against it
 // on the Service, and the HTTPRoute of the authorization endpoint alone.
 func githubFakeEdgeManifest(cfg *config.Config, caPEM []byte) ([]byte, error) {
-	meta := map[string]any{"name": labGitHubEdge, "namespace": platformNamespace,
-		"labels": map[string]string{managedByLabel: managedByAgentlabValue}}
-	objs := []map[string]any{
-		{"apiVersion": "v1", "kind": "ConfigMap", "metadata": meta, "data": map[string]string{caCertKey: string(caPEM)}},
-		{"apiVersion": "gateway.networking.k8s.io/v1", "kind": "BackendTLSPolicy", "metadata": meta, "spec": map[string]any{
-			"targetRefs": []map[string]string{{"group": "", "kind": "Service", "name": labGitHubService}},
-			"validation": map[string]any{
-				"hostname":          config.GitHubFakeHost(cfg.Platform.Domain),
-				"caCertificateRefs": []map[string]string{{"group": "", "kind": "ConfigMap", "name": labGitHubEdge}},
-			},
-		}},
-		{"apiVersion": "gateway.networking.k8s.io/v1", "kind": "HTTPRoute", "metadata": meta, "spec": map[string]any{
-			"parentRefs": []map[string]string{{"group": "gateway.networking.k8s.io", "kind": "Gateway",
-				"name": "agentgateway", "namespace": platformNamespace, "sectionName": "https"}},
-			"hostnames": githubFakeEdgeHosts(cfg),
-			"rules": []map[string]any{{
-				"matches":     []map[string]any{{"path": map[string]string{"type": "Exact", "value": githubAuthorizePath}}},
-				"backendRefs": []map[string]any{{"name": labGitHubService, "port": labGitHubServicePort}},
-			}},
-		}},
+	ca, err := json.Marshal(string(caPEM)) // a JSON string is a YAML scalar
+	if err != nil {
+		return nil, err
 	}
-	var out bytes.Buffer
-	for _, o := range objs {
-		raw, err := json.Marshal(o)
-		if err != nil {
-			return nil, err
-		}
-		out.Write(raw)
-		out.WriteString("\n")
+	hosts, err := json.Marshal(githubFakeEdgeHosts(cfg))
+	if err != nil {
+		return nil, err
 	}
-	return out.Bytes(), nil
+	return fmt.Appendf(nil, `apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: %[1]s
+  namespace: %[2]s
+  labels:
+    %[3]s: %[4]s
+data:
+  %[5]s: %[6]s
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: %[1]s
+  namespace: %[2]s
+  labels:
+    %[3]s: %[4]s
+spec:
+  targetRefs:
+    - group: ""
+      kind: Service
+      name: %[7]s
+  validation:
+    hostname: %[8]s
+    caCertificateRefs:
+      - group: ""
+        kind: ConfigMap
+        name: %[1]s
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: %[1]s
+  namespace: %[2]s
+  labels:
+    %[3]s: %[4]s
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: agentgateway
+      namespace: %[2]s
+      sectionName: https
+  hostnames: %[9]s
+  rules:
+    - matches:
+        - path:
+            type: Exact
+            value: %[10]s
+      backendRefs:
+        - name: %[7]s
+          port: %[11]d
+`, labGitHubEdge, platformNamespace, managedByLabel, managedByAgentlabValue, caCertKey, ca,
+		labGitHubService, config.GitHubFakeHost(cfg.Platform.Domain), hosts, githubAuthorizePath, labGitHubServicePort), nil
 }
 
 // githubFakeEdgeUp puts the consent page on the edge and waits until the
@@ -653,9 +684,9 @@ func githubFakeEdgeUp(cfg *config.Config) error {
 // githubConsentProbeURL is an authorization request a browser would make,
 // on host, with a challenge that redeems nothing.
 func githubConsentProbeURL(host, clientID string) string {
-	q := url.Values{"client_id": {clientID}, "redirect_uri": {"https://" + host + "/probe"},
-		"code_challenge": {"probe"}, "code_challenge_method": {"S256"}}
-	return "https://" + host + githubAuthorizePath + "?" + q.Encode()
+	q := url.Values{oauthClientID: {clientID}, oauthRedirectURI: {httpsScheme + "://" + host + "/probe"},
+		oauthChallenge: {"probe"}, oauthChallengeMethod: {oauthPKCES256}}
+	return httpsScheme + "://" + host + githubAuthorizePath + "?" + q.Encode()
 }
 
 // consentPageAnswer is "" when page answers the consent page, else what it

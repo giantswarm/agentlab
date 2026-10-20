@@ -31,8 +31,8 @@ func newSignInLab(t *testing.T) *signInLab {
 	l := &signInLab{}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET "+oauthProxyStartPath, func(w http.ResponseWriter, r *http.Request) {
-		q := url.Values{githubState: {r.URL.Query().Get(githubState)}, "client_id": {fixture.App.ClientID},
-			"redirect_uri": {l.server.URL + oauthProxyCallbackPath}, "code_challenge": {"c"}, "code_challenge_method": {"S256"}}
+		q := url.Values{githubState: {r.URL.Query().Get(githubState)}, oauthClientID: {fixture.App.ClientID},
+			oauthRedirectURI: {l.server.URL + oauthProxyCallbackPath}, oauthChallenge: {"c"}, oauthChallengeMethod: {oauthPKCES256}}
 		http.Redirect(w, r, githubAuthorizePath+"?"+q.Encode(), http.StatusFound)
 	})
 	mux.HandleFunc("GET "+githubAuthorizePath, github.authorize)

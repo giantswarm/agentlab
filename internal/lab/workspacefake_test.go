@@ -45,12 +45,13 @@ func TestCheckLabGitHubBinary(t *testing.T) {
 // alone, on the instance's host and fake-bearer's git host where that is
 // configured, to the fake's Service over TLS verified against the lab CA.
 func TestGitHubFakeEdgeManifest(t *testing.T) {
+	const host = "github.lab.test"
 	for _, tc := range []struct {
 		providers string
 		hosts     []string
 	}{
-		{"", []string{"github.lab.test"}},
-		{config.WorkspaceProviderFake + "," + config.WorkspaceProviderFakeBearer, []string{"github.lab.test", "github-bearer.lab.test"}},
+		{"", []string{host}},
+		{config.WorkspaceProviderFake + "," + config.WorkspaceProviderFakeBearer, []string{host, "github-bearer.lab.test"}},
 	} {
 		cfg := workspaceLab(tc.providers)
 		cfg.Platform.Domain = "lab.test"
@@ -72,7 +73,7 @@ func TestGitHubFakeEdgeManifest(t *testing.T) {
 		if got, _, _ := unstructured.NestedString(byKind["ConfigMap"], "data", caCertKey); got != "CA PEM" {
 			t.Errorf("the CA ConfigMap carries %q", got)
 		}
-		if got, _, _ := unstructured.NestedString(byKind["BackendTLSPolicy"], "spec", "validation", "hostname"); got != "github.lab.test" {
+		if got, _, _ := unstructured.NestedString(byKind["BackendTLSPolicy"], "spec", "validation", "hostname"); got != host {
 			t.Errorf("the BackendTLSPolicy verifies %q", got)
 		}
 		hosts, _, _ := unstructured.NestedStringSlice(byKind["HTTPRoute"], "spec", "hostnames")

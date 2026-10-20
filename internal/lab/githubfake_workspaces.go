@@ -71,9 +71,16 @@ const (
 
 // Words of OAuth's requests and answers.
 const (
-	oauthError = "error"
-	oauthScope = "scope"
-	httpScheme = "http"
+	oauthError           = "error"
+	oauthScope           = "scope"
+	oauthClientID        = "client_id"
+	oauthRedirectURI     = "redirect_uri"
+	oauthCodeParam       = "code"
+	oauthChallenge       = "code_challenge"
+	oauthChallengeMethod = "code_challenge_method"
+	oauthPKCES256        = "S256"
+	httpScheme           = "http"
+	httpsScheme          = "https"
 )
 
 // githubPermissions is the key of an installation's and a repository's
@@ -710,7 +717,7 @@ func (g *workspaceGitHub) appCall(h http.HandlerFunc) http.HandlerFunc {
 
 func (g *workspaceGitHub) getApp(w http.ResponseWriter, r *http.Request) {
 	a := g.fixture.App
-	writeGitHubJSON(w, http.StatusOK, map[string]any{"id": a.ID, "slug": a.Slug, nameKey: a.Slug, "client_id": a.ClientID,
+	writeGitHubJSON(w, http.StatusOK, map[string]any{"id": a.ID, "slug": a.Slug, nameKey: a.Slug, oauthClientID: a.ClientID,
 		githubHTMLURL: "https://" + r.Host + "/apps/" + a.Slug})
 }
 
@@ -853,9 +860,9 @@ func (g *workspaceGitHub) authorize(w http.ResponseWriter, r *http.Request) {
 	}
 	code := randomHex(10)
 	g.mu.Lock()
-	g.codes[code] = &oauthCode{login: login, redirectURI: q.Get("redirect_uri"), challenge: q.Get("code_challenge"), expires: g.now().Add(githubOAuthCodeTTL)}
+	g.codes[code] = &oauthCode{login: login, redirectURI: q.Get(oauthRedirectURI), challenge: q.Get(oauthChallenge), expires: g.now().Add(githubOAuthCodeTTL)}
 	g.mu.Unlock()
-	redirectBack(w, r, redirect, url.Values{"code": {code}, githubState: {q.Get(githubState)}})
+	redirectBack(w, r, redirect, url.Values{oauthCodeParam: {code}, githubState: {q.Get(githubState)}})
 }
 
 // oauthCancel is the consent form's Cancel button.
@@ -864,13 +871,13 @@ const oauthCancel = "cancel"
 // authorizeRequest checks an authorization request's client, redirect_uri and
 // PKCE challenge, answering the error itself when one fails.
 func (g *workspaceGitHub) authorizeRequest(w http.ResponseWriter, q url.Values) (*url.URL, bool) {
-	redirect, err := url.Parse(q.Get("redirect_uri"))
+	redirect, err := url.Parse(q.Get(oauthRedirectURI))
 	switch {
-	case q.Get("client_id") != g.fixture.App.ClientID:
+	case q.Get(oauthClientID) != g.fixture.App.ClientID:
 		http.Error(w, "unknown client_id", http.StatusNotFound)
-	case err != nil || (redirect.Scheme != "https" && redirect.Scheme != httpScheme) || redirect.Host == "":
+	case err != nil || (redirect.Scheme != httpsScheme && redirect.Scheme != httpScheme) || redirect.Host == "":
 		http.Error(w, "redirect_uri is not an absolute http(s) URL", http.StatusBadRequest)
-	case q.Get("code_challenge") == "" || q.Get("code_challenge_method") != "S256":
+	case q.Get(oauthChallenge) == "" || q.Get(oauthChallengeMethod) != oauthPKCES256:
 		http.Error(w, "the fake requires PKCE: code_challenge with code_challenge_method S256", http.StatusBadRequest)
 	default:
 		return redirect, true
@@ -894,7 +901,7 @@ func redirectBack(w http.ResponseWriter, r *http.Request, redirect *url.URL, par
 
 // consentRequestParams are the authorization request's parameters the
 // consent form carries back in its post.
-var consentRequestParams = []string{"client_id", "redirect_uri", githubState, oauthScope, "code_challenge", "code_challenge_method"}
+var consentRequestParams = []string{oauthClientID, oauthRedirectURI, githubState, oauthScope, oauthChallenge, oauthChallengeMethod}
 
 // consentPage is the page a person's browser shows for an authorization
 // request: the App asking, one Authorize button per lab user (the fake has
@@ -941,7 +948,7 @@ func (g *workspaceGitHub) accessToken(w http.ResponseWriter, r *http.Request) {
 	fail := func(code, description string) {
 		answer(map[string]any{oauthError: code, "error_description": description})
 	}
-	if in.Get("client_id") != g.fixture.App.ClientID || !g.clientSecretMatches(in.Get("client_secret")) {
+	if in.Get(oauthClientID) != g.fixture.App.ClientID || !g.clientSecretMatches(in.Get("client_secret")) {
 		fail("incorrect_client_credentials", "The client_id and/or client_secret passed are incorrect.")
 		return
 	}
@@ -958,9 +965,9 @@ func (g *workspaceGitHub) accessToken(w http.ResponseWriter, r *http.Request) {
 		t.dead = true
 		login = t.login
 	case in.Get("grant_type") == "" || in.Get("grant_type") == "authorization_code":
-		c, ok := g.codes[in.Get("code")]
-		delete(g.codes, in.Get("code"))
-		if !ok || g.now().After(c.expires) || (in.Get("redirect_uri") != "" && in.Get("redirect_uri") != c.redirectURI) {
+		c, ok := g.codes[in.Get(oauthCodeParam)]
+		delete(g.codes, in.Get(oauthCodeParam))
+		if !ok || g.now().After(c.expires) || (in.Get(oauthRedirectURI) != "" && in.Get(oauthRedirectURI) != c.redirectURI) {
 			fail("bad_verification_code", "The code passed is incorrect or expired.")
 			return
 		}

@@ -52,7 +52,7 @@ const (
 	wsChange      = "change"
 	wsMain        = "main"
 	wsVerifierKey = "code_verifier"
-	wsRedirectKey = "redirect_uri"
+	wsRedirectKey = oauthRedirectURI
 )
 
 // wsFake is the fake served over TLS from the lab's own credentials, in a
@@ -176,7 +176,7 @@ func TestWorkspaceGitHubAppToken(t *testing.T) {
 	jwt := f.appJWT(f.appKey, time.Now(), 9*time.Minute)
 
 	var app map[string]any
-	if resp := f.call(t, http.MethodGet, "/api/v3/app", jwt, nil, &app); resp.StatusCode != http.StatusOK || app["client_id"] != wsClientID {
+	if resp := f.call(t, http.MethodGet, "/api/v3/app", jwt, nil, &app); resp.StatusCode != http.StatusOK || app[oauthClientID] != wsClientID {
 		t.Fatalf("GET /app = %d %v", resp.StatusCode, app)
 	}
 	var inst map[string]any
@@ -311,11 +311,11 @@ func (f *wsFake) signIn(t *testing.T, login string) map[string]any {
 func (f *wsFake) authorize(t *testing.T, login, verifier string) string {
 	t.Helper()
 	sum := sha256.Sum256([]byte(verifier))
-	q := url.Values{"client_id": {wsClientID}, wsRedirectKey: {wsRedirect}, "state": {"st"}, "login": {login},
-		"code_challenge": {base64.RawURLEncoding.EncodeToString(sum[:])}, "code_challenge_method": {"S256"}}
+	q := url.Values{oauthClientID: {wsClientID}, wsRedirectKey: {wsRedirect}, githubState: {"st"}, "login": {login},
+		oauthChallenge: {base64.RawURLEncoding.EncodeToString(sum[:])}, oauthChallengeMethod: {oauthPKCES256}}
 	resp := f.call(t, http.MethodGet, "/login/oauth/authorize?"+q.Encode(), "", nil, nil)
 	loc, err := url.Parse(resp.Header.Get("Location"))
-	if resp.StatusCode != http.StatusFound || err != nil || loc.Query().Get("state") != "st" || loc.Query().Get(wsCode) == "" {
+	if resp.StatusCode != http.StatusFound || err != nil || loc.Query().Get(githubState) != "st" || loc.Query().Get(wsCode) == "" {
 		t.Fatalf("authorize for %s = %d, Location %q", login, resp.StatusCode, resp.Header.Get("Location"))
 	}
 	return loc.Query().Get(wsCode)
@@ -324,7 +324,7 @@ func (f *wsFake) authorize(t *testing.T, login, verifier string) string {
 // redeem posts the token request with the client's credentials.
 func (f *wsFake) redeem(t *testing.T, form url.Values) map[string]any {
 	t.Helper()
-	form.Set("client_id", wsClientID)
+	form.Set(oauthClientID, wsClientID)
 	form.Set("client_secret", f.secret)
 	req, _ := http.NewRequest(http.MethodPost, f.url+"/login/oauth/access_token", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -348,8 +348,8 @@ func (f *wsFake) redeem(t *testing.T, form url.Values) map[string]any {
 func TestWorkspaceGitHubBrowserConsent(t *testing.T) {
 	f := startWorkspaceFake(t)
 	sum := sha256.Sum256([]byte(wsVerifier))
-	q := url.Values{"client_id": {wsClientID}, wsRedirectKey: {wsRedirect}, "state": {"st"},
-		"code_challenge": {base64.RawURLEncoding.EncodeToString(sum[:])}, "code_challenge_method": {"S256"}}
+	q := url.Values{oauthClientID: {wsClientID}, wsRedirectKey: {wsRedirect}, githubState: {"st"},
+		oauthChallenge: {base64.RawURLEncoding.EncodeToString(sum[:])}, oauthChallengeMethod: {oauthPKCES256}}
 	resp, err := f.client.Get(f.url + githubAuthorizePath + "?" + q.Encode())
 	if err != nil {
 		t.Fatal(err)
@@ -360,10 +360,10 @@ func TestWorkspaceGitHubBrowserConsent(t *testing.T) {
 		t.Fatalf("the consent page = %d %s", resp.StatusCode, resp.Header.Get("Content-Type"))
 	}
 	forms := htmlForms(page)
-	if len(forms) != 1 || forms[0].method != "post" || forms[0].action != githubAuthorizePath {
+	if len(forms) != 1 || forms[0].method != htmlPost || forms[0].action != githubAuthorizePath {
 		t.Fatalf("the consent page's forms = %+v", forms)
 	}
-	for _, k := range []string{"client_id", wsRedirectKey, "state", "code_challenge", "code_challenge_method"} {
+	for _, k := range []string{oauthClientID, wsRedirectKey, githubState, oauthChallenge, oauthChallengeMethod} {
 		if forms[0].fields.Get(k) != q.Get(k) {
 			t.Errorf("the form carries %s = %q, want %q", k, forms[0].fields.Get(k), q.Get(k))
 		}
@@ -386,7 +386,7 @@ func TestWorkspaceGitHubBrowserConsent(t *testing.T) {
 	consent.Set("login", wsDev)
 	resp = post(consent)
 	loc, err := url.Parse(resp.Header.Get("Location"))
-	if resp.StatusCode != http.StatusFound || err != nil || loc.Query().Get("state") != "st" || loc.Query().Get(wsCode) == "" {
+	if resp.StatusCode != http.StatusFound || err != nil || loc.Query().Get(githubState) != "st" || loc.Query().Get(wsCode) == "" {
 		t.Fatalf("the consent's Authorize = %d, Location %q", resp.StatusCode, resp.Header.Get("Location"))
 	}
 	tokens := f.redeem(t, url.Values{wsCode: {loc.Query().Get(wsCode)}, wsVerifierKey: {wsVerifier}, wsRedirectKey: {wsRedirect}})
@@ -406,7 +406,7 @@ func TestWorkspaceGitHubBrowserConsent(t *testing.T) {
 		t.Fatalf("a post naming no lab user = %d, want 400", resp.StatusCode)
 	}
 	noPKCE := maps.Clone(forms[0].fields)
-	noPKCE.Del("code_challenge")
+	noPKCE.Del(oauthChallenge)
 	noPKCE.Set("login", wsDev)
 	if resp := post(noPKCE); resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("a post without PKCE = %d, want 400", resp.StatusCode)
@@ -415,7 +415,7 @@ func TestWorkspaceGitHubBrowserConsent(t *testing.T) {
 
 func TestWorkspaceGitHubOAuthWithPKCE(t *testing.T) {
 	f := startWorkspaceFake(t)
-	noPKCE := url.Values{"client_id": {wsClientID}, wsRedirectKey: {wsRedirect}, "login": {wsDev}}
+	noPKCE := url.Values{oauthClientID: {wsClientID}, wsRedirectKey: {wsRedirect}, "login": {wsDev}}
 	if resp := f.call(t, http.MethodGet, "/login/oauth/authorize?"+noPKCE.Encode(), "", nil, nil); resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("authorize without PKCE = %d, want 400", resp.StatusCode)
 	}
@@ -439,7 +439,7 @@ func TestWorkspaceGitHubOAuthWithPKCE(t *testing.T) {
 		t.Fatalf("GET /user with the refresh token = %d, want 401", resp.StatusCode)
 	}
 	wrongSecret := url.Values{wsCode: {f.authorize(t, wsDev, wsVerifier)}, wsVerifierKey: {wsVerifier}}
-	wrongSecret.Set("client_id", wsClientID)
+	wrongSecret.Set(oauthClientID, wsClientID)
 	wrongSecret.Set("client_secret", "wrong")
 	req, _ := http.NewRequest(http.MethodPost, f.url+"/login/oauth/access_token?"+wrongSecret.Encode(), nil)
 	req.Header.Set(wsAccept, wsJSON)
@@ -827,7 +827,7 @@ func TestWorkspaceGitHubAPIHost(t *testing.T) {
 		return resp.StatusCode
 	}
 	var app map[string]any
-	if status := call("/app", f.appJWT(f.appKey, time.Now(), 9*time.Minute), &app); status != http.StatusOK || app["client_id"] != wsClientID {
+	if status := call("/app", f.appJWT(f.appKey, time.Now(), 9*time.Minute), &app); status != http.StatusOK || app[oauthClientID] != wsClientID {
 		t.Fatalf("GET /app on %s = %d %v", apiHost, status, app)
 	}
 	var repos []map[string]any

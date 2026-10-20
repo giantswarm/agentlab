@@ -100,6 +100,9 @@ var (
 	htmlAttrRe  = regexp.MustCompile(`(?is)([a-z_:-]+)\s*=\s*"([^"]*)"`)
 )
 
+// htmlPost is a form's method as htmlForms reads it for a POST.
+const htmlPost = "post"
+
 // htmlForm is one form of a page: its action, method and the named inputs'
 // values, unescaped.
 type htmlForm struct {
@@ -145,7 +148,7 @@ type providerLogin struct {
 func gitlabFormStep(page []byte, login *providerLogin, posted bool) (action string, form url.Values, ok bool, err error) {
 	for _, f := range htmlForms(page) {
 		switch {
-		case f.method == "post" && strings.HasSuffix(f.action, gitlabSignInAction) && strings.Contains(string(page), gitlabPasswordField):
+		case f.method == htmlPost && strings.HasSuffix(f.action, gitlabSignInAction) && strings.Contains(string(page), gitlabPasswordField):
 			if login == nil {
 				return "", nil, true, fmt.Errorf("GitLab asks for a sign-in, and the walk has no GitLab login for the person")
 			}
@@ -156,7 +159,7 @@ func gitlabFormStep(page []byte, login *providerLogin, posted bool) (action stri
 			f.fields.Set("user[password]", login.password)
 			f.fields.Set("user[remember_me]", "0")
 			return f.action, f.fields, true, nil
-		case f.method == "post" && strings.HasSuffix(f.action, gitlabAuthorizePath) && f.fields.Get(railsMethodField) == "":
+		case f.method == htmlPost && strings.HasSuffix(f.action, gitlabAuthorizePath) && f.fields.Get(railsMethodField) == "":
 			return f.action, f.fields, true, nil
 		}
 	}
@@ -167,7 +170,7 @@ func gitlabFormStep(page []byte, login *providerLogin, posted bool) (action stri
 // posted with the Authorize of fixtureLogin, as the person's click posts it.
 func githubConsentStep(page []byte, fixtureLogin string) (action string, form url.Values, ok bool, err error) {
 	for _, f := range htmlForms(page) {
-		if f.method == "post" && f.action == githubAuthorizePath {
+		if f.method == htmlPost && f.action == githubAuthorizePath {
 			if !strings.Contains(string(page), `name="`+githubLogin+`" value="`+html.EscapeString(fixtureLogin)+`"`) {
 				return "", nil, true, fmt.Errorf("the lab's GitHub offers no Authorize for the fixture login %q", fixtureLogin)
 			}
