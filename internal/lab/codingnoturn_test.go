@@ -12,6 +12,7 @@ import (
 // ticks while the actor ran with no turn must all be the egress gateway's
 // 403, at least one, and the next turn must reach muster again.
 func TestJudgeNoTurn(t *testing.T) {
+	const wantRefused = "wanted 403"
 	resumed := time.Unix(1_800_000_000, 0)
 	w := noTurnWindow{resumed: resumed, suspended: resumed.Add(codingNoTurnWindow), next: resumed.Add(codingNoTurnWindow + time.Second)}
 	at := func(offset time.Duration, status string) heartbeatTick {
@@ -28,11 +29,11 @@ func TestJudgeNoTurn(t *testing.T) {
 	}{
 		{name: "refused, then reopened", ticks: concat(before, refused, reopened)},
 		{name: "never ran", ticks: concat(before, reopened), want: "never ticked"},
-		{name: "muster answered", ticks: concat(before, refused, []heartbeatTick{at(12*time.Second, "401")}, reopened), want: "wanted 403"},
-		{name: "served as the person", ticks: concat(before, []heartbeatTick{at(3*time.Second, "200")}, reopened), want: "wanted 403"},
+		{name: "muster answered", ticks: concat(before, refused, []heartbeatTick{at(12*time.Second, "401")}, reopened), want: wantRefused},
+		{name: "served as the person", ticks: concat(before, []heartbeatTick{at(3*time.Second, "200")}, reopened), want: wantRefused},
 		{name: "not reopened", ticks: concat(before, refused, []heartbeatTick{at(codingNoTurnWindow+10*time.Second, "403")}), want: "did not open"},
 		{name: "the next turn's call in the send's second", ticks: concat(before, refused, []heartbeatTick{at(codingNoTurnWindow+time.Second, "200")}, reopened)},
-		{name: "served in the suspend's second", ticks: concat(before, refused, []heartbeatTick{at(codingNoTurnWindow-time.Second, "200")}, reopened), want: "wanted 403"},
+		{name: "served in the suspend's second", ticks: concat(before, refused, []heartbeatTick{at(codingNoTurnWindow-time.Second, "200")}, reopened), want: wantRefused},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			verdict, err := judgeNoTurn(test.ticks, w)
