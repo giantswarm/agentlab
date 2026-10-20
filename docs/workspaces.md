@@ -535,9 +535,11 @@ id and the first two keys are in place; the part's person needs the third.
 GitLab's side, set up once by an administrator of the instance:
 
 - An instance-wide **OAuth application** (Admin Area, Applications), scopes
-  `api read_user read_repository write_repository`, redirect URI each lab's
+  `api read_user read_repository write_repository`, redirect URIs each lab's
   muster callback `https://muster.<domain>:<gatewayPort>/oauth/proxy/callback`
-  (`agentlab configure` prints it), confidential.
+  (`agentlab configure` prints it), confidential. A lab with a new muster host
+  adds its callback to the application before its first connect; GitLab
+  answers any other with "The redirect URI included is not valid".
 - A **group access token** of the group, role Reporter, scopes `read_api
   read_repository`: the sync lists the group's projects and mirrors them over
   HTTPS with it.
