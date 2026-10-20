@@ -1389,7 +1389,7 @@ workspace-manager:
   # beside a provider instance: the manager refuses a key without one.
   grant:
     signingKey: {name: {{ .Secret }}, key: {{ .SecretKey }}}
-{{- if not $.WorkspaceGrant }}
+{{- if not (or $.WorkspaceGrant $.WorkspaceProviderApps) }}
   # A workspace-manager before 0.10.0 keeps the person's sign-in itself, and
   # its token exchange (POST /token) answers kagent's client: the lab
   # registers it with a secret of its own (certs/workspace-grant). From
@@ -1399,6 +1399,13 @@ workspace-manager:
     clientSecret: {name: {{ .TokenExchangeSecret }}, key: {{ .TokenExchangeSecretKey }}}
 {{- end }}
 {{- end }}
+{{- end }}
+{{- with .WorkspaceProviderApps }}
+  # No pin (platform.workspaces.grantProvider: apps;
+  # workspacemustergrant.go): the chart keeps one muster provider App per
+  # instance with person sign-in ({{ join . ", " }}), side by side, and the
+  # registration receives the grants of each. A person grants each App once
+  # in muster (core_auth_login app=<instance>).
 {{- end }}
 {{- with .WorkspaceGrant }}
   # The registration pinned to the instance {{ .Provider }}'s App

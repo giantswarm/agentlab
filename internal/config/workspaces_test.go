@@ -190,3 +190,25 @@ func TestWorkspaceGrantProvider(t *testing.T) {
 		t.Errorf("workspaces off: WorkspaceGrantProvider() = %q, want none", got)
 	}
 }
+
+// grantProvider apps pins no instance: muster keeps one provider App per
+// instance, which takes two or more instances.
+func TestWorkspaceProviderApps(t *testing.T) {
+	cfg := Default()
+	cfg.Platform.Workspaces.Enabled = true
+	cfg.Platform.Workspaces.Provider = WorkspaceProviderGitHub + "," + WorkspaceProviderGitLab
+	cfg.Platform.Workspaces.GrantProvider = WorkspaceGrantProviderApps
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("apps beside github and gitlab: %v", err)
+	}
+	if !cfg.WorkspaceProviderApps() || cfg.WorkspaceGrantProvider() != "" {
+		t.Errorf("apps: WorkspaceProviderApps() = %t, WorkspaceGrantProvider() = %q, want true and no pin", cfg.WorkspaceProviderApps(), cfg.WorkspaceGrantProvider())
+	}
+	cfg.Platform.Workspaces.Provider = WorkspaceProviderGitLab
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "two or more") {
+		t.Errorf("apps beside one instance: err = %v, want refused", err)
+	}
+	if cfg.WorkspaceProviderApps() {
+		t.Error("apps beside one instance: WorkspaceProviderApps() = true, want false")
+	}
+}

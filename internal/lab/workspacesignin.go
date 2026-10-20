@@ -22,12 +22,16 @@ import (
 )
 
 // A person's grant of the provider App muster pins the workspace-manager's
-// registration to (workspacemustergrant.go), walked headlessly the way a
-// browser walks it, so a proof reaches what only a person who granted it
-// sees (the manager's tools, authorize_workspace's granted and refused):
+// registration to (workspacemustergrant.go), or, with no pin, of one
+// instance's provider App muster keeps beside the others, walked headlessly
+// the way a browser walks it, so a proof reaches what only a person who
+// granted it sees (the manager's tools, authorize_workspace's granted and
+// refused):
 //
-//  1. core_auth_login for the workspace-manager, called through muster as
-//     the person, answers with muster's sign-in link (/oauth/proxy/start).
+//  1. core_auth_login for the workspace-manager (server=workspace-manager),
+//     or for the instance's App (app=<instance>) with no pin, called through
+//     muster as the person, answers with muster's sign-in link
+//     (/oauth/proxy/start).
 //  2. muster's proxy sends the browser to the provider's authorization
 //     endpoint (PKCE). A GitLab instance answers with GitLab's sign-in form,
 //     which takes the provider person's GitLab login and password
@@ -308,10 +312,13 @@ func workspaceSignInClient() (*http.Client, error) {
 }
 
 // workspacePerson is a lab user signed in to muster for the workspace-manager's
-// tools.
+// tools. perApp is a lab whose registration is pinned to no App
+// (config.WorkspaceProviderApps): the person grants and drops each
+// instance's App by its name.
 type workspacePerson struct {
 	user    *config.User
 	session *musterSession
+	perApp  bool
 }
 
 // openWorkspacePerson signs user in to muster (Dex password grant, client
@@ -326,24 +333,22 @@ func openWorkspacePerson(cfg *config.Config, user *config.User) (*workspacePerso
 	if err != nil {
 		return nil, err
 	}
-	return &workspacePerson{user: user, session: session}, nil
+	return &workspacePerson{user: user, session: session, perApp: cfg.WorkspaceProviderApps()}, nil
 }
 
 // connectWorkspaceProvider has the person grant the provider instance's App
 // in muster the way a browser does: core_auth_login's link walked through
 // the provider's sign-in and consent to muster's callback, then
-// list_providers checked to show them connected. instance must be the one
-// muster pins the workspace-manager to; login is the person's account at
-// the provider (a GitLab's). It returns the walk's hops, worded ("already
-// granted" for a person who had granted it); an error says where the walk
-// stopped.
+// list_providers checked to show them connected. The workspace-manager's
+// registration must receive instance's grant (workspaceManagerReceives);
+// login is the person's account at the provider (a GitLab's). It returns the
+// walk's hops, worded ("already granted" for a person who had granted it);
+// an error says where the walk stopped.
 func connectWorkspaceProvider(cfg *config.Config, p *workspacePerson, instance string, login *providerLogin) (string, error) {
-	if pinned, err := workspaceManagerPinnedProvider(cfg); err != nil {
+	if err := workspaceManagerReceives(cfg, instance); err != nil {
 		return "", err
-	} else if pinned != instance {
-		return "", fmt.Errorf("muster pins the workspace-manager to the App of %s, not %s: a person grants only that App (`agentlab configure --workspaces-grant-provider %s`, then `agentlab platform`)", pinned, instance, instance)
 	}
-	link, err := p.grantLink()
+	link, err := p.grantLink(instance)
 	if err != nil {
 		return "", err
 	}
@@ -373,23 +378,94 @@ func connectWorkspaceProvider(cfg *config.Config, p *workspacePerson, instance s
 
 // providerStatus is list_providers' entry for the instance, as the person.
 func (p *workspacePerson) providerStatus(instance string) (workspaceProviderStatus, error) {
+	listed, err := p.providerStatuses()
+	if err != nil {
+		return workspaceProviderStatus{}, err
+	}
+	i := slices.IndexFunc(listed, func(s workspaceProviderStatus) bool { return s.Name == instance })
+	if i < 0 {
+		return workspaceProviderStatus{}, fmt.Errorf("list_providers does not list %s for %s", instance, p.user.Email)
+	}
+	return listed[i], nil
+}
+
+// musterAppArg is the argument of core_auth_login and core_auth_logout that
+// names a provider App muster keeps instead of a server.
+const musterAppArg = "app"
+
+// grantArgs are core_auth_login's and core_auth_logout's arguments for the
+// instance's grant: its App by name with no pin, else the workspace-manager,
+// whose pinned App is the instance's.
+func (p *workspacePerson) grantArgs(instance string) map[string]any {
+	if p.perApp {
+		return map[string]any{musterAppArg: instance}
+	}
+	return map[string]any{serverKey: workspaceManagerMCPServer}
+}
+
+// providerStatuses is list_providers' answer, every instance, as the person.
+func (p *workspacePerson) providerStatuses() ([]workspaceProviderStatus, error) {
 	var listed struct {
 		Providers []workspaceProviderStatus `json:"providers"`
 	}
 	if err := p.session.callServerStructured(workspaceManagerToolPrefix+"list_providers", nil, &listed); err != nil {
-		return workspaceProviderStatus{}, err
+		return nil, err
 	}
-	i := slices.IndexFunc(listed.Providers, func(s workspaceProviderStatus) bool { return s.Name == instance })
-	if i < 0 {
-		return workspaceProviderStatus{}, fmt.Errorf("list_providers does not list %s for %s", instance, p.user.Email)
-	}
-	return listed.Providers[i], nil
+	return listed.Providers, nil
 }
 
-// grantLink is core_auth_login's sign-in link for the workspace-manager, as
+// workspaceProviderStatusesWorded words list_providers' answer, instance by
+// instance.
+func workspaceProviderStatusesWorded(listed []workspaceProviderStatus) string {
+	words := make([]string, len(listed))
+	for i, s := range listed {
+		words[i] = s.String()
+	}
+	return strings.Join(words, ", ")
+}
+
+// notConnectedTo checks list_providers shows the instance not connected to
+// the person.
+func (p *workspacePerson) notConnectedTo(instance string) error {
+	status, err := p.providerStatus(instance)
+	if err != nil {
+		return err
+	}
+	if status.Connected {
+		return fmt.Errorf("list_providers as %s shows %s, who holds no grant of its App", p.user.Email, status)
+	}
+	note("list_providers as %s: %s", p.user.Email, status)
+	return nil
+}
+
+// othersUnchanged checks, after the person dropped instance's grant, that
+// list_providers shows instance not connected and every other instance as
+// before: one App's drop touches no other App's grant.
+func (p *workspacePerson) othersUnchanged(instance string, before []workspaceProviderStatus) error {
+	after, err := p.providerStatuses()
+	if err != nil {
+		return err
+	}
+	for _, b := range before {
+		i := slices.IndexFunc(after, func(a workspaceProviderStatus) bool { return a.Name == b.Name })
+		switch {
+		case i < 0:
+			return fmt.Errorf("list_providers as %s no longer lists %s after dropping the grant of %s", p.user.Email, b.Name, instance)
+		case b.Name == instance && after[i].Connected:
+			return fmt.Errorf("list_providers as %s shows %s after core_auth_logout dropped its grant", p.user.Email, after[i])
+		case b.Name != instance && after[i].Connected != b.Connected:
+			return fmt.Errorf("dropping the grant of %s moved %s from %s to %s: one App's drop touches no other's grant", instance, b.Name, b, after[i])
+		}
+	}
+	note("list_providers as %s after core_auth_logout app=%s: %s (was %s)", p.user.Email, instance, workspaceProviderStatusesWorded(after), workspaceProviderStatusesWorded(before))
+	return nil
+}
+
+// grantLink is core_auth_login's sign-in link for the instance's App, as
 // the person; "" when muster holds their grant already.
-func (p *workspacePerson) grantLink() (string, error) {
-	env, err := p.session.callToolEnvelope("core_auth_login", map[string]any{serverKey: workspaceManagerMCPServer})
+func (p *workspacePerson) grantLink(instance string) (string, error) {
+	args := p.grantArgs(instance)
+	env, err := p.session.callToolEnvelope("core_auth_login", args)
 	if err != nil {
 		return "", err
 	}
@@ -400,7 +476,7 @@ func (p *workspacePerson) grantLink() (string, error) {
 	if !env.IsError && grantHeld(text) {
 		return "", nil
 	}
-	return "", fmt.Errorf("core_auth_login %s as %s answered neither a sign-in link nor a held grant: %.300s", workspaceManagerMCPServer, p.user.Email, text)
+	return "", fmt.Errorf("core_auth_login %v as %s answered neither a sign-in link nor a held grant: %.300s", args, p.user.Email, text)
 }
 
 // grantHeld says whether core_auth_login's answer without a sign-in link
@@ -457,11 +533,51 @@ func workspaceManagerPinnedProvider(cfg *config.Config) (string, error) {
 	return cfg.WorkspaceGrantProvider(), nil
 }
 
-// disconnect drops the person's grant of the pinned App in muster, best
+// workspaceManagerReceives checks that the live workspace-manager MCPServer
+// receives the person's grant of instance's App: named in its
+// spec.auth.providerApps with no pin (config.WorkspaceProviderApps), else
+// pinned to it (workspaceManagerPinnedProvider).
+func workspaceManagerReceives(cfg *config.Config, instance string) error {
+	if !cfg.WorkspaceProviderApps() {
+		pinned, err := workspaceManagerPinnedProvider(cfg)
+		if err == nil && pinned != instance {
+			err = fmt.Errorf("muster pins the workspace-manager to the App of %s, not %s: a person grants only that App (`agentlab configure --workspaces-grant-provider %s` or %s, then `agentlab platform`)", pinned, instance, instance, config.WorkspaceGrantProviderApps)
+		}
+		return err
+	}
+	apps, err := workspaceManagerProviderApps()
+	if err != nil {
+		return err
+	}
+	if !slices.Contains(apps, instance) {
+		return fmt.Errorf("the MCPServer %s/%s receives the grants of the provider Apps [%s], not %s: platform.workspaces.grantProvider %s needs a chart that keeps one muster provider App per instance (agent-platform.workspaceManager.providerApps), then `agentlab platform`", platformNamespace, workspaceManagerMCPServer, strings.Join(apps, ", "), instance, config.WorkspaceGrantProviderApps)
+	}
+	return nil
+}
+
+// workspaceManagerProviderApps are the provider Apps whose grants the live
+// workspace-manager MCPServer receives (spec.auth.providerApps), none for a
+// pinned or unauthenticated registration.
+func workspaceManagerProviderApps() ([]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
+	defer cancel()
+	mcpServers, err := gvrFor(musterMCPServerResource)
+	if err != nil {
+		return nil, err
+	}
+	obj, err := getObject(ctx, mcpServers, platformNamespace, workspaceManagerMCPServer)
+	if err != nil {
+		return nil, err
+	}
+	apps, _, _ := unstructured.NestedStringSlice(obj.Object, "spec", "auth", "providerApps")
+	return apps, nil
+}
+
+// disconnect drops the person's grant of the instance's App in muster, best
 // effort: a later proof starts from a person who has not granted it.
-func (p *workspacePerson) disconnect(string) {
-	if _, err := p.session.callToolEnvelope("core_auth_logout", map[string]any{serverKey: workspaceManagerMCPServer}); err != nil {
-		warn("dropping %s's grant of the workspace-manager's App: %v", p.user.Email, err)
+func (p *workspacePerson) disconnect(instance string) {
+	if _, err := p.session.callToolEnvelope("core_auth_logout", p.grantArgs(instance)); err != nil {
+		warn("dropping %s's grant of the App of %s: %v", p.user.Email, instance, err)
 	}
 }
 
