@@ -57,8 +57,9 @@ const (
 )
 
 // probeMuster runs the initialize from the Session's sandbox: answered 200
-// for a Session in the workspace, refused for one without.
-func (cp *callerCredentialProof) probeMuster(session *apiv1alpha1.Session, inWorkspace bool) error {
+// for a Session kagent lists muster on (its Actor bound to the person),
+// refused for one without.
+func (cp *callerCredentialProof) probeMuster(session *apiv1alpha1.Session, bound bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), cp.timeout)
 	defer cancel()
 	var v callerCredentialValues
@@ -80,11 +81,11 @@ func (cp *callerCredentialProof) probeMuster(session *apiv1alpha1.Session, inWor
 	if len(v.env) > 0 || len(v.files) > 0 {
 		return fmt.Errorf("a JWT in the sandbox of Session %s: environment variables %v, files %v", session.GetId(), v.env, v.files)
 	}
-	if inWorkspace && v.status != "200" {
-		return fmt.Errorf("muster answered the workspace Session %s's initialize %s, want 200: the Actor's JWT for muster's audience served as the bound person", session.GetId(), v.status)
+	if bound && v.status != "200" {
+		return fmt.Errorf("muster answered the Session %s's initialize %s, want 200: the Actor's JWT for muster's audience served as the bound person", session.GetId(), v.status)
 	}
-	if !inWorkspace && v.status == "200" {
-		return fmt.Errorf("muster answered the Session %s without a workspace 200 on a placeholder: an actor JWT reached muster for a Session kagent admitted no muster provider to", session.GetId())
+	if !bound && v.status == "200" {
+		return fmt.Errorf("muster answered the Session %s 200 on a placeholder: an actor JWT reached muster for a Session kagent admitted no muster provider to", session.GetId())
 	}
 	return nil
 }

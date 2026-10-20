@@ -27,7 +27,10 @@ a demo or for using the portal as yourself.
   works because GitHub only redirects the browser there. `agentlab configure`
   and the `up`/`platform`/`reload` runs print it.
 - One App serves several labs: GitHub Apps take up to ten callback URLs, so
-  every lab, or every Dex port, adds its own to the list. Register an App of
+  every lab, or every Dex port, adds its own to the list. The same holds for
+  an App whose callback is muster's: a second lab's muster lives on its own
+  domain (`https://muster.lab2.127.0.0.2.nip.io/oauth/proxy/callback`, [Domain and address](getting-started.md)),
+  so its callback is a URL of its own. Register an App of
   your own under your account or organization, or reuse one your team shares;
   what reaches the lab is its client id and its client secret, nothing else.
 

@@ -13,6 +13,7 @@ import (
 	"io"
 	"io/fs"
 	"maps"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -428,6 +429,12 @@ type Platform struct {
 	// that port in-cluster, so the ported URLs resolve from pods too. Change
 	// only if 443 is taken.
 	GatewayPort int `yaml:"gatewayPort"`
+	// GatewayAddress is the loopback address the edge is published on, empty
+	// for 127.0.0.1. A second lab on the machine takes 127.0.0.<n> with the
+	// domain lab<n>.127.0.0.<n>.nip.io (`configure` picks both), so it serves
+	// on 443 too and its URLs carry no port: Linux routes all of 127.0.0.0/8
+	// to loopback. Fixed at node creation like the ports.
+	GatewayAddress string `yaml:"gatewayAddress,omitempty"`
 	// TLS optionally hands the edge an externally provisioned certificate
 	// pair (PEM) instead of the minted lab-CA wildcard — for users who own a
 	// real domain (wildcard record -> 127.0.0.1) and run their own ACME
@@ -2063,6 +2070,11 @@ func (c *Config) Validate() error {
 	if err := ValidatePort(strconv.Itoa(c.Platform.GatewayPort)); err != nil {
 		return fmt.Errorf("platform.gatewayPort: %w", err)
 	}
+	if a := c.Platform.GatewayAddress; a != "" {
+		if ip := net.ParseIP(a); ip == nil || ip.To4() == nil || !ip.IsLoopback() {
+			return fmt.Errorf("platform.gatewayAddress %q: want an IPv4 loopback address (127.0.0.0/8)", a)
+		}
+	}
 	if (c.Platform.TLS.CertFile == "") != (c.Platform.TLS.KeyFile == "") {
 		return fmt.Errorf("platform.tls: certFile and keyFile must be set together")
 	}
@@ -2724,6 +2736,19 @@ func (c *Config) MCPServerName() string {
 // prometheus family (the agent-platform-mcps entry's default name):
 // x_prometheus_<tool> with management_cluster set to the lab.
 func (c *Config) PrometheusMCPServerName() string { return c.ClusterName + "-mcp-prometheus" }
+
+// DefaultGatewayAddress is where the edge is published without
+// platform.gatewayAddress.
+const DefaultGatewayAddress = "127.0.0.1"
+
+// GatewayHostAddress is the loopback address the edge is published on, the
+// address every public hostname of the lab resolves to on the host.
+func (c *Config) GatewayHostAddress() string {
+	if c.Platform.GatewayAddress != "" {
+		return c.Platform.GatewayAddress
+	}
+	return DefaultGatewayAddress
+}
 
 // gatewayURL builds the public URL of a platform hostname: through the
 // agentgateway edge, port-free when the edge sits on 443. The chart's

@@ -137,14 +137,14 @@ func TestPortConflictsIgnoreTheClustersOwnPorts(t *testing.T) {
 	// Every lab port "listens" (the kind node holds them) plus a foreign
 	// process on the kagent UI port — the only conflict to report.
 	taken := func(p int) bool { return ours[p] || p == cfg.Platform.AgentsPort }
-	conflicts := cfg.portConflicts(func(p int) bool { return !ours[p] && taken(p) })
+	conflicts := cfg.portConflicts(func(_ string, p int) bool { return !ours[p] && taken(p) })
 	if len(conflicts) != 0 {
 		t.Fatalf("the cluster's own ports reported as conflicts: %v", conflicts)
 	}
 	// Now the cluster does not publish the kagent UI port (an older node)
 	// and a foreign process holds it.
 	delete(ours, cfg.Platform.AgentsPort)
-	conflicts = cfg.portConflicts(func(p int) bool { return !ours[p] && taken(p) })
+	conflicts = cfg.portConflicts(func(_ string, p int) bool { return !ours[p] && taken(p) })
 	if len(conflicts) != 1 || conflicts[0].Field != "platform.agentsPort" || conflicts[0].Port != cfg.Platform.AgentsPort {
 		t.Fatalf("conflicts = %v, want exactly platform.agentsPort", conflicts)
 	}

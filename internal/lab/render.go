@@ -400,22 +400,23 @@ func (t *tmplData) DexJWKSPort() int {
 // these as `<component>: {postRenderers: …}` so every patch the rule found
 // reaches its release and no component key renders twice. Mirrors the
 // template's conditions: a block that is always there (muster,
-// agentgateway, mcp-kubernetes, kagent, model-manager, backstage — the last
+// agentgateway, the connectivity chart whenever it is patched, mcp-kubernetes, kagent, model-manager, backstage — the last
 // three carry their `enabled` from a toggle and render their patches only
 // while it is on) is never extra.
 func (t *tmplData) ExtraPostRenderers() map[string]string {
 	named := map[string]bool{
-		componentMuster:           true,
-		agentgatewayComponent:     true,
-		componentMCPKubernetes:    true,
-		componentKagent:           true,
-		componentBackstage:        true,
-		modelManagerMCPServer:     true,
-		agentManagerMCPServer:     t.Platform.Agents,
-		vmManagerMCPServer:        t.VMManagerEnabled,
-		klausGatewayComponent:     t.KlausGatewayEnabled,
-		clusterManager:            t.ClusterManagerEnabled,
-		llmisvcResourcesComponent: t.ServingEnabled,
+		componentMuster:              true,
+		agentgatewayComponent:        true,
+		config.ConnectivityChartName: true,
+		componentMCPKubernetes:       true,
+		componentKagent:              true,
+		componentBackstage:           true,
+		modelManagerMCPServer:        true,
+		agentManagerMCPServer:        t.Platform.Agents,
+		vmManagerMCPServer:           t.VMManagerEnabled,
+		klausGatewayComponent:        t.KlausGatewayEnabled,
+		clusterManager:               t.ClusterManagerEnabled,
+		llmisvcResourcesComponent:    t.ServingEnabled,
 	}
 	extra := map[string]string{}
 	for component, postRenderers := range t.PostRenderers {

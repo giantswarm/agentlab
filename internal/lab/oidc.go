@@ -28,14 +28,14 @@ import (
 // public DNS merely agrees (the nip.io wildcard). The lab's own HTTP clients
 // therefore dial loopback directly for those names, so health checks and
 // smoke tests never flake on external DNS resolving a name that was always
-// going to mean 127.0.0.1.
+// going to mean the edge's address (127.0.0.1, or platform.gatewayAddress).
 //
 // trust is the CA bundle those clients add to the system roots
 // (trustBundleFile): the lab CA, plus an externally provisioned pair's chain
 // when platform.tls is set; empty means the lab CA.
 var labDomain struct {
 	sync.Mutex
-	domain, trust string
+	domain, addr, trust string
 }
 
 // SetPlatform registers the platform domain for the loopback dialer and the
@@ -44,13 +44,15 @@ func SetPlatform(cfg *config.Config) {
 	labDomain.Lock()
 	defer labDomain.Unlock()
 	labDomain.domain = cfg.Platform.Domain
+	labDomain.addr = cfg.GatewayHostAddress()
 	labDomain.trust = trustBundleFile(cfg)
 }
 
-// dialLabAddr rewrites a *.<domain> (or apex) dial target to loopback.
+// dialLabAddr rewrites a *.<domain> (or apex) dial target to the loopback
+// address the edge is published on.
 func dialLabAddr(addr string) string {
 	labDomain.Lock()
-	domain := labDomain.domain
+	domain, edge := labDomain.domain, labDomain.addr
 	labDomain.Unlock()
 	if domain == "" {
 		return addr
@@ -60,7 +62,7 @@ func dialLabAddr(addr string) string {
 		return addr
 	}
 	if host == domain || strings.HasSuffix(host, "."+domain) {
-		return net.JoinHostPort("127.0.0.1", port)
+		return net.JoinHostPort(edge, port)
 	}
 	return addr
 }

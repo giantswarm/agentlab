@@ -62,20 +62,45 @@ func List() ([]Lab, error) {
 	return labs, nil
 }
 
-// RecordedPorts returns the host ports every other registered lab records in
-// its agentlab.yaml — running or stopped — each mapped to that lab's name, so
-// the lab in dir picks ports none of them can come up on. A lab whose
-// agentlab.yaml does not parse is left out: it cannot come up either.
-func RecordedPorts(dir string) (map[int]string, error) {
+// RecordedPorts returns the host addresses (host:port) every other registered
+// lab records in its agentlab.yaml — running or stopped — each mapped to that
+// lab's name, so the lab in dir picks ports none of them can come up on. A
+// lab whose agentlab.yaml does not parse is left out: it cannot come up either.
+func RecordedPorts(dir string) (map[string]string, error) {
+	ports := map[string]string{}
+	err := eachOther(dir, func(name string, cfg *config.Config) {
+		for _, p := range cfg.HostPorts() {
+			ports[p] = name
+		}
+	})
+	return ports, err
+}
+
+// RecordedDomains returns the platform domain every other registered lab
+// records, mapped to the first lab by name that records it: two labs on one
+// domain serve the same hostnames, and a browser's state for one (cookies, an
+// HSTS pin, the trusted CA) then applies to the other.
+func RecordedDomains(dir string) (map[string]string, error) {
+	domains := map[string]string{}
+	err := eachOther(dir, func(name string, cfg *config.Config) {
+		if domains[cfg.Platform.Domain] == "" {
+			domains[cfg.Platform.Domain] = name
+		}
+	})
+	return domains, err
+}
+
+// eachOther calls fn with every registered lab but the one in dir whose
+// agentlab.yaml parses.
+func eachOther(dir string, fn func(name string, cfg *config.Config)) error {
 	dir, err := filepath.Abs(dir)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	labs, err := List()
 	if err != nil {
-		return nil, err
+		return err
 	}
-	ports := map[int]string{}
 	for _, l := range labs {
 		if l.Dir == dir {
 			continue
@@ -84,11 +109,9 @@ func RecordedPorts(dir string) (map[int]string, error) {
 		if err != nil {
 			continue
 		}
-		for _, p := range cfg.HostPorts() {
-			ports[p] = l.Name
-		}
+		fn(l.Name, cfg)
 	}
-	return ports, nil
+	return nil
 }
 
 // TakenError refuses a second lab of a registered name: the two would
