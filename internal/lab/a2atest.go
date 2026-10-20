@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -845,14 +846,85 @@ type musterCalls struct {
 // security audit `forwarded_id_token_accepted` carries the person's email,
 // its `tools/call request` the Dex subject (muster prints a prefix of it).
 func musterCallsSince(since time.Time, email, subject string) (musterCalls, error) {
+	logs, err := musterLogSince(since)
+	if err != nil {
+		return musterCalls{}, err
+	}
+	return musterCallsIn(logs, since, email, subject), nil
+}
+
+// musterLogSince is muster's log from a minute before the instant on.
+func musterLogSince(since time.Time) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	window := time.Since(since) + time.Minute
 	logs, err := podLogs(ctx, platformNamespace, "deploy/"+componentMuster, componentMuster, window)
 	if err != nil {
-		return musterCalls{}, fmt.Errorf("reading muster's log: %w", err)
+		return "", fmt.Errorf("reading muster's log: %w", err)
 	}
-	return musterCallsIn(logs, since, email, subject), nil
+	return logs, nil
+}
+
+// musterMetaCallTool is muster's meta-tool that runs another tool by name.
+const musterMetaCallTool = "call_tool"
+
+// musterToolNames are the muster tools a task's approval requests asked to
+// run: each requested tool by its name, and for call_tool the tool it names,
+// the one muster dispatches.
+func musterToolNames(tools []hitlTool) ([]string, error) {
+	if len(tools) == 0 {
+		return nil, errors.New("no tool_approval_request named a tool to judge")
+	}
+	var names []string
+	for _, tool := range tools {
+		name := tool.Name
+		if name == musterMetaCallTool {
+			name = stringOf(tool.Args[nameKey])
+			if name == "" {
+				return nil, fmt.Errorf("the %s request %s names no tool to run", musterMetaCallTool, tool.ID)
+			}
+		}
+		if !slices.Contains(names, name) {
+			names = append(names, name)
+		}
+	}
+	return names, nil
+}
+
+// musterTaskCallsSince reads muster's log since the instant for a task's
+// tool calls by the token's subject.
+func musterTaskCallsSince(since time.Time, subject string, tools []string) ([]string, error) {
+	logs, err := musterLogSince(since)
+	if err != nil {
+		return nil, err
+	}
+	return musterTaskCallsIn(logs, since, subject, tools), nil
+}
+
+// musterTaskCallsIn lists, from the instant on, the subject's muster records
+// of the tools: a meta-tool's tools/call request by its name, any other
+// tool's dispatch through call_tool. A call_tool request itself names no
+// tool, so the subject's other clients — a Dev Portal tab polling as the
+// person — never count.
+func musterTaskCallsIn(logs string, since time.Time, subject string, tools []string) []string {
+	var ran []string
+	for _, line := range strings.Split(logs, "\n") {
+		var entry struct {
+			Time    time.Time `json:"time"`
+			Msg     string    `json:"msg"`
+			Tool    string    `json:"tool"`
+			Subject string    `json:"subject"`
+		}
+		start := strings.IndexByte(line, '{')
+		if start < 0 || json.Unmarshal([]byte(line[start:]), &entry) != nil || entry.Time.Before(since) ||
+			!subjectMatches(entry.Subject, subject) || !slices.Contains(tools, entry.Tool) {
+			continue
+		}
+		if entry.Msg == "tool dispatched" || entry.Msg == "tools/call request" && entry.Tool != musterMetaCallTool {
+			ran = append(ran, entry.Msg+" "+entry.Tool+" at "+entry.Time.UTC().Format(time.RFC3339))
+		}
+	}
+	return ran
 }
 
 // musterCallsIn counts the lines of a muster log for the person from the

@@ -1538,7 +1538,11 @@ directly so it depends on no chart release resolving in the lab); and
    token's subject. **Deny**: in a second thread (a fresh session: the first
    one's conversation already holds the count) each Deny click
    (`hitl_deny`) rewrites the card to `Denied by <@…>`; the task ends in a
-   terminal state and no `tools/call` by the person reaches muster.
+   terminal state and none of the task's tools reaches muster as the person:
+   no `tools/call request` for a meta-tool its `tool_approval_request`s
+   named, no `tool dispatched` for a tool its `call_tool` named. The
+   person's other muster calls meanwhile (a Dev Portal tab polling as them)
+   do not count.
 4. **stop**: once a long answer streams, a `stop` reply in the thread ends
    the turn `canceled`, the thread is told `Stopped.`, the new task is
    `TASK_STATE_CANCELED` at the controller, and the thread takes a following
