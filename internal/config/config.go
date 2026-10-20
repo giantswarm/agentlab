@@ -810,7 +810,7 @@ func parseWorkspaceProviders(value string) ([]string, error) {
 	for raw := range strings.SplitSeq(value, ",") {
 		name := strings.TrimSpace(raw)
 		if !slices.Contains(workspaceProviderNames, name) {
-			return nil, fmt.Errorf("platform.workspaces.provider %q: want %s, several comma-separated; %q is none of them (`agentlab configure --workspaces-provider <instances>` rewrites it)", value, strings.Join(workspaceProviderNames, ", "), name)
+			return nil, fmt.Errorf("platform.workspaces.provider %q: want %s, several comma-separated; %q is none of them (`agentlab configure --defaults --workspaces-provider <instances>` rewrites it)", value, strings.Join(workspaceProviderNames, ", "), name)
 		}
 		if slices.Contains(names, name) {
 			return nil, fmt.Errorf("platform.workspaces.provider %q names %s twice", value, name)

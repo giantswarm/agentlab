@@ -111,7 +111,7 @@ func gitlabSkip(cfg *config.Config) string {
 	}
 	switch {
 	case !cfg.WorkspaceGitLabProvider():
-		return fmt.Sprintf("platform.workspaces.provider %q configures no instance %s (`agentlab configure --workspaces-provider github,%s` and platform.workspaces.gitlab, docs/workspaces.md)", cfg.Platform.Workspaces.Provider, config.WorkspaceProviderGitLab, config.WorkspaceProviderGitLab)
+		return fmt.Sprintf("platform.workspaces.provider %q configures no instance %s (`agentlab configure --defaults --workspaces-provider github,%s` and platform.workspaces.gitlab, docs/workspaces.md)", cfg.Platform.Workspaces.Provider, config.WorkspaceProviderGitLab, config.WorkspaceProviderGitLab)
 	case len(missing) > 0:
 		return "the instance gitlab lacks " + strings.Join(missing, ", ")
 	case cfg.WorkspaceGrantProvider() != config.WorkspaceProviderGitLab:
