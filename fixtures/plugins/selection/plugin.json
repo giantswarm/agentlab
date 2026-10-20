@@ -1,0 +1,6 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "agentlab-selection",
+  "version": "0.1.0",
+  "description": "The agentlab fixture for plugin skill selection: an Agent Plugins package with two skills, of which an agent loads only the ones it selects."
+}
