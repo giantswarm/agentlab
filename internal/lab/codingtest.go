@@ -223,7 +223,16 @@ type CodingTestOptions struct {
 	// MockLLMBinary is the agentlab binary the mockllm's container runs;
 	// empty is this one.
 	MockLLMBinary string
+	// MusterTools is the agent's tool selection on its muster binding
+	// (the Generic chart's muster.tools), as a platform agent selects
+	// muster's meta-tools; MusterMetaTools names all of them. Empty binds
+	// muster without a selection.
+	MusterTools []string
 }
+
+// MusterMetaTools are muster's meta-tools, the selection a platform coding
+// agent binds.
+var MusterMetaTools = []string{"list_tools", "describe_tool", "list_core_tools", "filter_tools", "call_tool", "list_resources", "describe_resource", "get_resource", "list_prompts", "describe_prompt", "get_prompt"}
 
 // CodingTest is the coding agents proof (the stages above).
 func CodingTest(cfg *config.Config, opts CodingTestOptions) error {
@@ -250,7 +259,7 @@ func CodingTest(cfg *config.Config, opts CodingTestOptions) error {
 	if user == nil {
 		return fmt.Errorf("no lab user %q in %s", opts.Email, config.File)
 	}
-	p := &codingProof{cfg: cfg, rt: rt, modelConfig: opts.ModelConfig, user: user, timeout: opts.ReadyTimeout, turnTimeout: opts.TurnTimeout, stages: newProofStages()}
+	p := &codingProof{cfg: cfg, rt: rt, modelConfig: opts.ModelConfig, user: user, timeout: opts.ReadyTimeout, turnTimeout: opts.TurnTimeout, musterTools: opts.MusterTools, stages: newProofStages()}
 	if opts.ModelConfig == "" && rt.name == config.CodingRuntimeCodex {
 		p.mockBinary = opts.MockLLMBinary
 		if p.mockBinary == "" {
@@ -303,6 +312,8 @@ type codingProof struct {
 	// rig starts the Session in a workspace (codingworkspace.go); nil on a
 	// lab without the provider instance fake-bearer.
 	rig *workspaceSessionRig
+	// musterTools is the agent's tool selection on muster; empty is none.
+	musterTools []string
 }
 
 func (p *codingProof) run() error {
@@ -380,6 +391,9 @@ func (p *codingProof) run() error {
 	if err != nil {
 		return err
 	}
+	if err := p.selectMusterTools(); err != nil {
+		return err
+	}
 	if err := p.proveBinding(spec.Toolset); err != nil {
 		return err
 	}
@@ -432,7 +446,7 @@ func (p *codingProof) run() error {
 	for _, judged := range p.judgedStages() {
 		p.stages.begin(judged.name, "%s", judged.title)
 		if judged.forwarder && p.rig != nil && probe["forwarder"] == "" {
-			p.stages.skip("no caller forwarder in a workspace Session: Claude Code calls muster's actor-JWT host directly and the egress gateway sets the Actor's JWT (the mcp call stage proves muster's audit of the person); %s", p.line)
+			p.stages.skip("no caller forwarder in a workspace Session: Claude Code calls muster's actor-JWT host directly and the egress gateway sets the Actor's JWT (no loopback token judges its MCP config, the mcp call stage muster's audit of the person); %s", p.line)
 			continue
 		}
 		verdict, err := judged.verdict(probe, egress)
@@ -572,6 +586,9 @@ func (p *codingProof) judgedStages() []judgedStage {
 			judgedStage{"forwarder paths", "The caller forwarder refuses dot segments and encoded slashes before it matches a server", codingProbe.forwarderPaths, true},
 			judgedStage{"write tool refused", "A write tool outside the toolset, called through the forwarder with the turn's bearer, refused by muster", codingProbe.writeToolRefused, true},
 		)
+		if p.rig != nil {
+			stages = append(stages, judgedStage{"no loopback token", "In a workspace Session Claude Code's MCP config carries no Authorization but the placeholder", codingProbe.noLoopbackToken, false})
+		}
 	}
 	return append(stages,
 		judgedStage{"credentials", "No forge token or bearer in the environment or /data; the model key and the MCP credentials placeholders", codingProbe.credentials, false},

@@ -1158,7 +1158,7 @@ The workspaces proof's claude Session runs on the same `claude` Harness,
 which the lab also renders with the workspaces on and coding off.
 
 `agentlab coding-test [email] [--harness claude|codex|omp] [--model-config
-<name>]` is the proof, and the floor a coding agent rests on, on one Harness
+<name>] [--muster-tools meta|<tool,…>]` is the proof, and the floor a coding agent rests on, on one Harness
 per run (default `claude`). Every stage runs on the lines the lab pins, so
 it repeats on every release candidate. The stages marked *claude* prove
 Claude Code's own mechanisms and run on `claude` alone; *codex, omp* marks
@@ -1174,6 +1174,7 @@ the one that runs on both of those:
 | uid split (*claude*) | the agent's commands run as uid 65532; the root harness's `/proc/<pid>/environ` and `mem` refuse it |
 | forwarder paths (*claude*) | the forwarder answers 400 to `../..`, `%2e%2e` and `..%2f`, 404 for a server it does not front, 401 without its token; skipped in a workspace Session that runs no forwarder (Claude Code calls muster's actor-JWT host directly) |
 | write tool refused (*claude*) | `x_agent-manager_delete_agent`, called through the forwarder with the turn's bearer, refused by muster as outside the toolset; skipped like forwarder paths |
+| no loopback token (*claude*, workspace Session) | Claude Code's MCP config (`--mcp-config`) carries no `Authorization` but kagent's placeholder `kagent-credential-injected`, counted without printing a value: a server kept on the forwarder for its tool selection carries the placeholder too, so no loopback token is left for a sandbox process to replay; `--muster-tools meta` gives the agent the tool selection on muster a platform agent binds (muster's 11 meta-tools, the Generic chart's `muster.tools` set on its HelmRelease) |
 | credentials | no forge token or bearer in the environment, `/data` or `/workspace`; the model key kagent's placeholder, or unset where the runtime keeps it out of the shell's environment (omp); on `codex` every `KAGENT_CODEX_MCP_CREDENTIAL_*` the sandbox sees the placeholder too, on `omp` every `KAGENT_CREDENTIAL_*` |
 | dns canary | a recorded state, not a gate: `example.org` through the cluster resolver and directly at 1.1.1.1 |
 | egress | `proxy.golang.org` denied 403 at the egress gate; `api.github.com`, one of the Agent's origins, reached |
