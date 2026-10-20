@@ -7,6 +7,7 @@ const (
 	lab2Domain    = "lab2.127.0.0.2.nip.io"
 	lab3Domain    = "lab3.127.0.0.3.nip.io"
 	secondLab     = DefaultClusterName + "-2"
+	secondAddress = "127.0.0.2"
 )
 
 func TestChooseFreeDomain(t *testing.T) {
@@ -21,14 +22,14 @@ func TestChooseFreeDomain(t *testing.T) {
 		wantAddr string
 	}{
 		"the only lab keeps the default":      {defaultDomain, nil, linux, false, "", ""},
-		"a second lab takes 127.0.0.2":        {defaultDomain, map[string]string{defaultDomain: DefaultClusterName}, linux, false, lab2Domain, "127.0.0.2"},
+		"a second lab takes 127.0.0.2":        {defaultDomain, map[string]string{defaultDomain: DefaultClusterName}, linux, false, lab2Domain, secondAddress},
 		"a third lab skips a taken lab2":      {defaultDomain, map[string]string{defaultDomain: DefaultClusterName, lab2Domain: secondLab}, linux, false, lab3Domain, "127.0.0.3"},
 		"a lab domain counts from its base":   {lab2Domain, map[string]string{defaultDomain: DefaultClusterName, lab2Domain: secondLab}, linux, false, lab3Domain, "127.0.0.3"},
 		"a free lab domain stays":             {lab3Domain, map[string]string{defaultDomain: DefaultClusterName, lab2Domain: secondLab}, linux, false, "", ""},
 		"without 127.0.0.2 the domain alone":  {defaultDomain, map[string]string{defaultDomain: DefaultClusterName}, macOS, false, "lab2." + defaultDomain, ""},
 		"an own certificate's domain stays":   {defaultDomain, map[string]string{defaultDomain: DefaultClusterName}, linux, true, "", ""},
 		"another base keeps its own name":     {"lab.example.com", map[string]string{"lab.example.com": DefaultClusterName}, linux, false, "lab2.lab.example.com", ""},
-		"sslip.io takes the address like nip": {"127.0.0.1.sslip.io", map[string]string{"127.0.0.1.sslip.io": DefaultClusterName}, linux, false, "lab2.127.0.0.2.sslip.io", "127.0.0.2"},
+		"sslip.io takes the address like nip": {"127.0.0.1.sslip.io", map[string]string{"127.0.0.1.sslip.io": DefaultClusterName}, linux, false, "lab2.127.0.0.2.sslip.io", secondAddress},
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := Default()

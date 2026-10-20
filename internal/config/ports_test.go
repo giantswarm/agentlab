@@ -237,7 +237,7 @@ func TestChooseFreePortsAvoidsRecordedPorts(t *testing.T) {
 // recorded host:port counts, so a second lab keeps 443 on 127.0.0.2.
 func TestChooseFreePortsGatewayOnItsOwnAddress(t *testing.T) {
 	cfg := Default()
-	cfg.Platform.GatewayAddress = "127.0.0.2"
+	cfg.Platform.GatewayAddress = secondAddress
 	recorded := map[string]string{loopback(443): DefaultClusterName}
 	cfg.chooseFreePorts(takenSet(), recorded, everyPortPublishable)
 	if cfg.Platform.GatewayPort != 443 {

@@ -650,7 +650,7 @@ func TestKindConfigSubstrateGates(t *testing.T) {
 // a second lab serves 443 too; every other mapping stays on 127.0.0.1, where
 // the issuer's localhost resolves.
 func TestKindConfigGatewayAddress(t *testing.T) {
-	for addr, want := range map[string]string{"": config.DefaultGatewayAddress, "127.0.0.2": "127.0.0.2"} {
+	for addr, want := range map[string]string{"": config.DefaultGatewayAddress, secondEdgeAddress: secondEdgeAddress} {
 		cfg := config.Default()
 		cfg.Platform.GatewayAddress = addr
 		out, err := renderTemplate(cfg, "kind-config.yaml.tmpl", nil)
