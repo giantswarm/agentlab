@@ -149,3 +149,31 @@ func portalMode(cfg *config.Config) string {
 	}
 	return config.PortalClassic
 }
+
+// proveNoHSTS is backstage-test's check that the edge drops the portal's
+// HSTS header (postrenderers.go, patch 8): a browser that kept it would
+// refuse the hostname once the lab CA changes, with no way past the warning.
+func proveNoHSTS(cfg *config.Config) error {
+	client, err := labHTTPClient(30 * time.Second)
+	if err != nil {
+		return err
+	}
+	resp, err := client.Get(cfg.BackstageBaseURL() + "/")
+	if err != nil {
+		return err
+	}
+	_ = resp.Body.Close()
+	if err := checkNoHSTS(resp.Header); err != nil {
+		return fmt.Errorf("%s: %w", cfg.BackstageBaseURL(), err)
+	}
+	fmt.Println("PASS: the portal sends no HSTS through the edge")
+	return nil
+}
+
+// checkNoHSTS refuses a response that carries the HSTS header.
+func checkNoHSTS(h http.Header) error {
+	if v := h.Get(hstsHeader); v != "" {
+		return fmt.Errorf("the edge passes %s: %s — the connectivity chart's backstage route lost the lab's ResponseHeaderModifier (a rule beyond the first?)", hstsHeader, v)
+	}
+	return nil
+}

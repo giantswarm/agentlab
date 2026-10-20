@@ -16,14 +16,13 @@ import (
 // MCPServer CR and reachable (waitMCPServerReachable), its Deployment is rolled out, and
 // list_providers, called through muster as the admin, names every provider
 // instance the lab configured (workspaceprovider.go) and nothing else — the
-// fake, the github instance once its App and Secret are in place, or both.
+// github and gitlab instances once their ids and Secrets are in place.
 // With the agents on, the manager runs with kagent's address: without it no
 // session directory is ever cleaned up (every Workspace reads
 // SessionsCleanedUp=False KagentNotConfigured). A manager whose registration muster pins to a
 // provider App (workspacemustergrant.go) shows its tools only to a person
-// who granted that App: the admin and the viewer grant the lab GitHub's
-// first; a pin to an App of a real provider, which no headless walk can
-// grant, ends the stage at muster's sign-in link.
+// who granted that App in a browser: an admin or viewer who has not ends
+// the stage at muster's sign-in link.
 // list_workspaces for the lab's Organization (config.WorkspaceOrganization)
 // answers the admin, a member, and refuses the viewer as not a member: the
 // values gave the manager the Organization and its member groups.
@@ -134,7 +133,7 @@ func proveWorkspaceManager(cfg *config.Config) ([]string, error) {
 		return nil, err
 	}
 	if pinned, err := workspaceManagerPinnedProvider(cfg); err == nil {
-		if done, err := grantForStage(cfg, pinned, adminPerson, viewerPerson); err != nil || done != nil {
+		if done, err := grantForStage(pinned, adminPerson, viewerPerson); err != nil || done != nil {
 			return done, err
 		}
 	}
@@ -188,26 +187,21 @@ func proveWorkspaceManager(cfg *config.Config) ([]string, error) {
 	return worded, nil
 }
 
-// grantForStage has the people grant the pinned App of the lab's GitHub;
-// a pin to a real provider's App ends the stage (done, non-nil) with
-// muster's sign-in link asserted for the admin instead.
-func grantForStage(cfg *config.Config, pinned string, people ...*workspacePerson) (done []string, err error) {
-	if pinned != config.WorkspaceProviderFake && pinned != config.WorkspaceProviderFakeBearer {
-		link, err := people[0].grantLink()
-		if err != nil || link == "" {
-			return nil, err // granted in an earlier sign-in: the stage goes on
-		}
-		note("pinned to the App of %s, which no headless walk grants: muster's sign-in link for %s is %s", pinned, people[0].user.Email, excerpt(link, 100))
-		return []string{pinned + " (pinned, its App not granted)"}, nil
-	}
+// grantForStage asks whether the people hold the grant of the pinned
+// provider App, which only a person in a browser makes: one without it ends
+// the stage (done, non-nil) with muster's sign-in link asserted for them.
+func grantForStage(pinned string, people ...*workspacePerson) (done []string, err error) {
 	for _, p := range people {
-		hops, err := connectWorkspaceProvider(cfg, p, pinned)
+		link, err := p.grantLink()
 		if err != nil {
 			return nil, err
 		}
-		note("%s granted the App of %s in muster: %s", p.user.Email, pinned, hops)
+		if link != "" {
+			note("pinned to the App of %s, which no headless walk grants: muster's sign-in link for %s is %s", pinned, p.user.Email, excerpt(link, 100))
+			return []string{pinned + " (pinned, its App not granted by " + p.user.Email + ")"}, nil
+		}
 	}
-	return nil, nil
+	return nil, nil // granted in an earlier sign-in: the stage goes on
 }
 
 // callServerStructured runs an aggregated server tool through muster and

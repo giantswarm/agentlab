@@ -124,7 +124,7 @@ func outputOf(call mockLLMItem) testInputItem {
 // the prompt asks for, then a reply once the tool's output is back, and
 // counts a request outside it.
 func TestMockLLMScriptAnswersTheCodexTurns(t *testing.T) {
-	handler, _, err := mockLLMHandler("agentlab-coding-muster")
+	handler, _, err := mockLLMHandler("agentlab-coding-muster", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,6 +134,8 @@ func TestMockLLMScriptAnswersTheCodexTurns(t *testing.T) {
 
 	shellTurns := []struct{ prompt, command string }{
 		{codingSandboxPrompt(codex), codingSandboxCommand(codex)},
+		{codingHeartbeatPrompt(codex), codingHeartbeatCommand()},
+		{codingHeartbeatReadPrompt(codex), codingHeartbeatReadCommand()},
 		{codingCodeWordPrompt(codex), codingCodeWordCommand()},
 		{codingResumePrompt(codex), codingResumeCommand()},
 	}
@@ -156,8 +158,8 @@ func TestMockLLMScriptAnswersTheCodexTurns(t *testing.T) {
 		t.Fatalf("on the MCP prompt the mock answered %+v, wanted the tool search", search)
 	}
 	call := mockLLMCall(t, srv, userItem(codingMCPCallPrompt()), search, outputOf(search))
-	if call.Type != "function_call" || call.Name != codingTestReadTool || call.Namespace != "mcp__agentlab_coding_muster" {
-		t.Fatalf("after the search the mock answered %+v, wanted %s in the binding's namespace", call, codingTestReadTool)
+	if call.Type != "function_call" || call.Name != musterCallTool || call.Namespace != "mcp__agentlab_coding_muster" || stringOf(call.Arguments) != musterCallToolArguments(codingTestReadTool) {
+		t.Fatalf("after the search the mock answered %+v, wanted %s running %s in the binding's namespace", call, musterCallTool, codingTestReadTool)
 	}
 	if reply := mockLLMCall(t, srv, userItem(codingMCPCallPrompt()), call, outputOf(call)); reply.Type != mockLLMMessage {
 		t.Fatalf("after the MCP call's output the mock answered %+v", reply)
@@ -177,10 +179,10 @@ func TestMockLLMScriptAnswersTheCodexTurns(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&counts); err != nil {
 		t.Fatal(err)
 	}
-	if counts.Answered != 9 || counts.Unmatched != 1 || len(counts.Log) != 10 {
-		t.Fatalf("the mock counts %d answered, %d unmatched, %d log lines; wanted 9, 1 and 10", counts.Answered, counts.Unmatched, len(counts.Log))
+	if counts.Answered != 13 || counts.Unmatched != 1 || len(counts.Log) != 14 {
+		t.Fatalf("the mock counts %d answered, %d unmatched, %d log lines; wanted 13, 1 and 14", counts.Answered, counts.Unmatched, len(counts.Log))
 	}
-	if last := counts.Log[9]; !strings.HasPrefix(last, "404 ") || !strings.Contains(last, "not in the script") {
+	if last := counts.Log[13]; !strings.HasPrefix(last, "404 ") || !strings.Contains(last, "not in the script") {
 		t.Fatalf("the unmatched request logs as %q, wanted its 404 and its input", last)
 	}
 }
@@ -248,7 +250,7 @@ func TestTurnProbeReadsTheToolOutputs(t *testing.T) {
 // still running at the call's yield is waited for with an empty write_stdin
 // on its session, and the reply follows the command's final output.
 func TestMockLLMScriptWaitsForExecCommand(t *testing.T) {
-	handler, _, err := mockLLMHandler("agentlab-coding-muster")
+	handler, _, err := mockLLMHandler("agentlab-coding-muster", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,5 +290,37 @@ func TestMockLLMScriptWaitsForExecCommand(t *testing.T) {
 
 	if call := mockLLMCallOffering(t, srv, []string{mockLLMShellTool, mockLLMExecTool}, prompt); call.Name != mockLLMShellTool {
 		t.Fatalf("on a codex offering both shell tools the mock called %s, wanted shell_command", call.Name)
+	}
+}
+
+// The mockllm records, per request, the watched names its body carries
+// anywhere, an earlier input item or the instructions as much as the last
+// item, and watchedSince counts them from a mark on.
+func TestMockLLMWatchesNames(t *testing.T) {
+	handler, _, err := mockLLMHandler("agentlab-coding-muster", []string{pluginExampleSkill})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+	codex := codingRuntimes[config.CodingRuntimeCodex]
+	skills := testInputItem{Type: mockLLMMessage, Role: "developer", Content: []testInputContent{{Type: "input_text", Text: "## Skills\n- " + pluginExampleSkill + ": migrate a plugin"}}}
+	mockLLMCall(t, srv, skills, userItem(codingSandboxPrompt(codex)))
+	mockLLMCall(t, srv, userItem(codingCodeWordPrompt(codex)))
+
+	resp, err := srv.Client().Get(srv.URL + mockLLMRequestsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var counts mockLLMRequests
+	if err := json.NewDecoder(resp.Body).Decode(&counts); err != nil {
+		t.Fatal(err)
+	}
+	if carried, requests := counts.watchedSince(0, pluginExampleSkill); carried != 1 || requests != 2 {
+		t.Errorf("from the start %d of %d requests carry %s, wanted 1 of 2", carried, requests, pluginExampleSkill)
+	}
+	if carried, requests := counts.watchedSince(1, pluginExampleSkill); carried != 0 || requests != 1 {
+		t.Errorf("from the mark %d of %d requests carry %s, wanted 0 of 1", carried, requests, pluginExampleSkill)
 	}
 }

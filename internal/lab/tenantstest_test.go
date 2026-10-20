@@ -2,6 +2,7 @@ package lab
 
 import (
 	"errors"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -157,6 +158,13 @@ func TestPlatformValuesTenants(t *testing.T) {
 	if orgs, _ := on["tenants"].(map[string]any)["organizations"].(map[string]any); orgs["enabled"] != true {
 		t.Errorf("tenants.organizations.enabled = %v, want true", on["tenants"])
 	}
+	// The chart refuses tenants without the LLM listener (agent-platform 4.151).
+	if r, _ := on["llmRouting"].(map[string]any); r["enabled"] != true {
+		t.Errorf("llmRouting = %v, want enabled with tenants", on["llmRouting"])
+	}
+	if off["llmRouting"] != nil {
+		t.Errorf("off by default: llmRouting=%v", off["llmRouting"])
+	}
 	cp, _ := on["substrate"].(map[string]any)["credentialProvider"].(map[string]any)
 	raw, err := yaml.Marshal(cp)
 	if err != nil {
@@ -189,6 +197,46 @@ func TestPlatformValuesTenants(t *testing.T) {
 	}
 	if got := uncoveredNamespaces(policies, tenantsTestNamespaces[:]); len(got) != 0 {
 		t.Errorf("the rendered policy leaves %v uncovered for tenants-test", got)
+	}
+
+	// muster: the setting and the release that tenants-test needs with the
+	// tenants on, neither off (an older muster chart refuses the key); the
+	// audience the lab's API server trusts either way, or every listing as
+	// the caller fails closed.
+	musterOf := func(values map[string]any) (component, chart map[string]any) {
+		component, _ = values["components"].(map[string]any)[componentMuster].(map[string]any)
+		chart, _ = values[componentMuster].(map[string]any)[componentMuster].(map[string]any)
+		return component, chart
+	}
+	component, chart := musterOf(on)
+	if component["versionRange"] != "5.48.0" || chart["mcpServersInAllNamespaces"] != true {
+		t.Errorf("with tenants: components.muster.versionRange=%v, muster.muster.mcpServersInAllNamespaces=%v, want 5.48.0 and true", component["versionRange"], chart["mcpServersInAllNamespaces"])
+	}
+	offComponent, offChart := musterOf(off)
+	if offComponent["versionRange"] != nil || offChart["mcpServersInAllNamespaces"] != nil {
+		t.Errorf("off by default: components.muster.versionRange=%v, mcpServersInAllNamespaces=%v, want neither", offComponent["versionRange"], offChart["mcpServersInAllNamespaces"])
+	}
+	for name, c := range map[string]map[string]any{"tenants off": offChart, "tenants on": chart} {
+		if w, _ := c["writesAsCaller"].(map[string]any); w["kubernetesAudience"] != config.KubernetesClientID {
+			t.Errorf("%s: muster.muster.writesAsCaller = %v, want kubernetesAudience %s", name, c["writesAsCaller"], config.KubernetesClientID)
+		}
+	}
+	// Dex: each organization namespace's own callback on the platform
+	// client, with the tenants only.
+	for name, tc := range map[string]struct {
+		cfg  *config.Config
+		want bool
+	}{"tenants off": {config.Default(), false}, "tenants on": {cfg, true}} {
+		dex, err := renderTemplate(tc.cfg, "dex.yaml.tmpl", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, ns := range tenantsTestNamespaces {
+			uri := tc.cfg.MusterBaseURL() + "/oauth/ns/" + ns + "/callback"
+			if got := strings.Contains(string(dex), "- "+uri+"\n"); got != tc.want {
+				t.Errorf("%s: Dex lists the redirect URI %s: %v, want %v", name, uri, got, tc.want)
+			}
+		}
 	}
 
 	cfg.Platform.Agents = false
@@ -266,9 +314,168 @@ func TestTenantsTestPeople(t *testing.T) {
 		"twice":            {dev, dev},
 		"not a user":       {dev, "nobody@lab.local"},
 		"a single email":   {dev},
+		"a tenant user":    {"alice@lab.local", dev},
 	} {
 		if _, err := tenantsTestPeople(cfg, emails); err == nil {
 			t.Errorf("%s: %v accepted", name, emails)
 		}
+	}
+}
+
+// The editors default to users outside platform-admins and the tenant groups,
+// whatever their order: a tenant user is bound by group, not as an editor.
+func TestTenantsTestPeopleSkipsTenantUsers(t *testing.T) {
+	cfg := config.Default()
+	cfg.EnsureTenantUsers()
+	cfg.Users = append([]config.User{cfg.Users[0], cfg.Users[3], cfg.Users[4]}, cfg.Users[1:3]...)
+	people, err := tenantsTestPeople(cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dev, viewer := config.Default().Users[1].Email, config.Default().Users[2].Email; people[0].Email != dev || people[1].Email != viewer {
+		t.Errorf("default editors %s, %s; want %s and %s", people[0].Email, people[1].Email, dev, viewer)
+	}
+}
+
+// The tenant users are the first user of each tenant group, and the proof
+// refuses a lab without one, or one whose tenant user also reads every
+// namespace (a viewer), since that user would list every tenant's agents.
+func TestTenantsTestUsers(t *testing.T) {
+	cfg := config.Default()
+	if _, err := tenantsTestUsers(cfg); err == nil || !strings.Contains(err.Error(), "agentlab configure --tenants") {
+		t.Errorf("without tenant users: %v, want the configure hint", err)
+	}
+	cfg.EnsureTenantUsers()
+	users, err := tenantsTestUsers(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if users[0].Email != "alice@lab.local" || users[1].Email != "bob@lab.local" {
+		t.Errorf("tenant users %s, %s; want alice@lab.local and bob@lab.local", users[0].Email, users[1].Email)
+	}
+	cfg.FindUser("bob@lab.local").Groups = []string{config.GroupTenantB, viewerGroup}
+	if _, err := tenantsTestUsers(cfg); err == nil {
+		t.Error("a tenant user in viewers accepted")
+	}
+}
+
+// The authorizer check passes only on the lab's shape and otherwise names
+// the missing piece: the red verdict of a lab without the authorizer.
+func TestControllerAuthorizationProblem(t *testing.T) {
+	lab := map[string]string{
+		authorizationModeKey:           authorizationModeKubernetes,
+		authorizationGroupsClaimKey:    tenantsTestGroupsClaim,
+		authorizationUsernamePrefixKey: apiserverUserPrefix,
+		authorizationGroupsPrefixKey:   apiserverUserPrefix,
+	}
+	if p := controllerAuthorizationFrom(lab).problem(); p != "" {
+		t.Errorf("the lab's shape: %s", p)
+	}
+	for name, tc := range map[string]struct {
+		key, value, want string
+	}{
+		"no authorizer (kagent before 1.19)": {authorizationModeKey, "", `authorization mode "noop"`},
+		"noop":                               {authorizationModeKey, "noop", "kagent.controller.authorization.mode kubernetes"},
+		"no groups claim":                    {authorizationGroupsClaimKey, "", "reads the groups from claim"},
+		"the fleet's empty group prefix":     {authorizationGroupsPrefixKey, "", "groupsPrefix"},
+		"the fleet's empty user prefix":      {authorizationUsernamePrefixKey, "", "usernamePrefix"},
+	} {
+		data := maps.Clone(lab)
+		data[tc.key] = tc.value
+		if p := controllerAuthorizationFrom(data).problem(); !strings.Contains(p, tc.want) {
+			t.Errorf("%s: %q, want it to name %q", name, p, tc.want)
+		}
+	}
+}
+
+// A Slack roster passes when it lists the person's organization's agent
+// and the platform tenant's, each row naming its tenant, and nothing of
+// another namespace.
+func TestRosterProblem(t *testing.T) {
+	own, other := tenantsTestNamespaces[0], tenantsTestNamespaces[1]
+	ownRef, otherRef := own+"/"+tenantsTestAgent, other+"/"+tenantsTestAgent
+	good := map[string]string{
+		tenantsTestPlatformAgent: "*" + tenantsTestPlatformAgent + "* · platform · default",
+		ownRef:                   "*" + tenantsTestAgent + "* · organization agentlab-tenants-a",
+	}
+	if p := rosterProblem(good, own, tenantsTestPlatformAgent); p != "" {
+		t.Errorf("a good roster: %s", p)
+	}
+	withOther := maps.Clone(good)
+	withOther[otherRef] = "*" + tenantsTestAgent + "* · organization agentlab-tenants-b"
+	unlabelled := maps.Clone(good)
+	unlabelled[ownRef] = "*" + tenantsTestAgent + "*"
+	// A gateway before giantswarm/klaus-gateway#486 lists the served
+	// namespace only, by bare name, with no tenant.
+	before486 := map[string]string{tenantsTestPlatformAgent: "*" + tenantsTestPlatformAgent + "*"}
+	for name, tc := range map[string]struct {
+		rows map[string]string
+		want string
+	}{
+		"another tenant's agent":   {withOther, "another tenant's"},
+		"no tenant on the row":     {unlabelled, "does not name its tenant"},
+		"a gateway before #486":    {before486, "no row of " + ownRef},
+		"no platform tenant's row": {map[string]string{ownRef: good[ownRef]}, "no row of the platform tenant's"},
+	} {
+		if p := rosterProblem(tc.rows, own, tenantsTestPlatformAgent); !strings.Contains(p, tc.want) {
+			t.Errorf("%s: %q, want %q", name, p, tc.want)
+		}
+	}
+}
+
+// The refusal must be the not-permitted note, name the other tenant and say
+// nothing was sent: a generic failure note would pass for a refusal
+// otherwise.
+func TestRefusalProblem(t *testing.T) {
+	other := tenantsTestNamespaces[1]
+	note := "You cannot use *agentlab-tenants-test* (organization agentlab-tenants-b): it is not one of the agents you have access to. Nothing was sent to it. Ask an admin of the organization agentlab-tenants-b for access."
+	if p := refusalProblem(note, other); p != "" {
+		t.Errorf("the gateway's note: %s", p)
+	}
+	for name, text := range map[string]string{
+		"a failure note":  "Something went wrong talking to the agent.",
+		"another tenant":  strings.ReplaceAll(note, "tenants-b", "tenants-a"),
+		"no nothing-sent": strings.ReplaceAll(note, "Nothing was sent to it.", ""),
+	} {
+		if refusalProblem(text, other) == "" {
+			t.Errorf("%s accepted as the refusal", name)
+		}
+	}
+}
+
+// The muster check passes on a muster with giantswarm/muster#1603 and the
+// setting on, and otherwise names the missing piece: the red verdict of a
+// lab whose muster serves no organization's MCP servers.
+func TestMusterTenancyProblem(t *testing.T) {
+	const tooOld = "needs 5.48.0 or later"
+	for name, tc := range map[string]struct {
+		tenancy musterTenancy
+		want    string
+	}{
+		"the first with #1603":        {musterTenancy{"gsoci.azurecr.io/giantswarm/muster:5.48.0", true}, ""},
+		"a later release":             {musterTenancy{"gsoci.azurecr.io/giantswarm/muster:5.48.1", true}, ""},
+		"a dev image, no version":     {musterTenancy{"localhost:5001/muster:dev-1a2b3c", true}, ""},
+		"by digest":                   {musterTenancy{"gsoci.azurecr.io/giantswarm/muster:5.48.0@sha256:0123", true}, ""},
+		"the release before":          {musterTenancy{"gsoci.azurecr.io/giantswarm/muster:5.47.0", true}, tooOld},
+		"a candidate of it":           {musterTenancy{"gsoci.azurecr.io/giantswarm/muster:5.48.0-rc.1", true}, tooOld},
+		"the candidate pinned before": {musterTenancy{"gsoci.azurecr.io/giantswarm/muster:5.47.0-rc.9", true}, tooOld},
+		"an older one, by digest":     {musterTenancy{"gsoci.azurecr.io/giantswarm/muster:5.47.0-rc.9@sha256:0123", true}, tooOld},
+		"the setting off":             {musterTenancy{"gsoci.azurecr.io/giantswarm/muster:5.48.0", false}, "without mcpServersInAllNamespaces"},
+		"older and off: the version":  {musterTenancy{"gsoci.azurecr.io/giantswarm/muster:5.47.0", false}, tooOld},
+	} {
+		p := tc.tenancy.problem()
+		if tc.want == "" && p != "" || tc.want != "" && !strings.Contains(p, tc.want) {
+			t.Errorf("%s: %q, want %q", name, p, tc.want)
+		}
+	}
+}
+
+// The servers an agent reports are read as namespace/name, whatever the
+// list markup around them; a word without a slash is no server.
+func TestServerRefsInReply(t *testing.T) {
+	reply := "- `agent-platform/agent-manager`\n* org-a/agentlab-tenants-mcp,\nagent-platform/kagent.\nNO_SERVERS\nsee a/b/c"
+	want := refSet{"agent-platform/agent-manager": true, "org-a/agentlab-tenants-mcp": true, "agent-platform/kagent": true}
+	if got := serverRefsInReply(reply); rosterDiff(got, want) != "" {
+		t.Errorf("serverRefsInReply = %s, want %s (%s)", got, want, rosterDiff(got, want))
 	}
 }

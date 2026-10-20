@@ -179,6 +179,9 @@ func anotherBinary(flag, verb string) string {
 // few seconds on a node whose probe image is already there.
 const fakePreflightTries = 15
 
+// fakePortName names a fake's port on its Service and EndpointSlice.
+const fakePortName = "http"
+
 // fakeServiceForPods points the selector-less Service at the fake's
 // container, on servicePort, and proves a pod reaches it through the Service
 // before the proof starts anything else — found here in seconds, not as a
@@ -250,13 +253,13 @@ func pointFakeService(ctx context.Context, k *kubeClients, service, what, hostIP
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{Name: service, Namespace: platformNamespace, Labels: labels},
 		Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{
-			Name: "http", Port: sp, Protocol: corev1.ProtocolTCP, TargetPort: intstr.FromInt32(p),
+			Name: fakePortName, Port: sp, Protocol: corev1.ProtocolTCP, TargetPort: intstr.FromInt32(p),
 		}}},
 	}
 	if _, err := services.Create(ctx, svc, metav1.CreateOptions{}); err != nil {
 		return nil, fmt.Errorf("creating the Service %s/%s of %s: %w", platformNamespace, service, what, err)
 	}
-	name, proto := "http", corev1.ProtocolTCP
+	name, proto := fakePortName, corev1.ProtocolTCP
 	ready := true
 	slice := &discoveryv1.EndpointSlice{
 		ObjectMeta: metav1.ObjectMeta{Name: service, Namespace: platformNamespace,

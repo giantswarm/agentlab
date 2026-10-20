@@ -34,7 +34,7 @@ func BrowserLogin(cfg *config.Config) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
-		if q.Get("code") == "" {
+		if q.Get(oauthCodeParam) == "" {
 			http.Error(w, "no code in callback", http.StatusBadRequest)
 			return
 		}
@@ -46,7 +46,7 @@ func BrowserLogin(cfg *config.Config) error {
 		_, _ = fmt.Fprint(w, "<html><body style='font-family:sans-serif;padding:3rem'>"+
 			"<h2>Logged in.</h2><p>You can close this tab and go back to the terminal.</p>"+
 			"</body></html>")
-		codeCh <- q.Get("code")
+		codeCh <- q.Get(oauthCodeParam)
 	})
 
 	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", config.BrowserCallbackPort))
@@ -58,11 +58,11 @@ func BrowserLogin(cfg *config.Config) error {
 	defer func() { _ = srv.Shutdown(context.Background()) }()
 
 	authURL := cfg.Issuer() + "/auth?" + url.Values{
-		"client_id":     {config.KubernetesClientID},
-		"redirect_uri":  {redirect},
-		"response_type": {"code"},
-		"scope":         {"openid email profile groups offline_access"},
-		"state":         {state},
+		oauthClientID:    {config.KubernetesClientID},
+		oauthRedirectURI: {redirect},
+		"response_type":  {"code"},
+		"scope":          {"openid email profile groups offline_access"},
+		"state":          {state},
 	}.Encode()
 
 	fmt.Println("Opening the Dex login page in your browser...")
@@ -78,9 +78,9 @@ func BrowserLogin(cfg *config.Config) error {
 	}
 
 	token, err := dexToken(cfg, config.KubernetesClientID, config.KubernetesClientSecret, url.Values{
-		grantTypeParam: {"authorization_code"},
-		"code":         {code},
-		"redirect_uri": {redirect},
+		grantTypeParam:   {"authorization_code"},
+		oauthCodeParam:   {code},
+		oauthRedirectURI: {redirect},
 	})
 	if err != nil {
 		return fmt.Errorf("token exchange failed: %w", err)
@@ -94,7 +94,7 @@ func BrowserLogin(cfg *config.Config) error {
 func OpenBrowser(url string) {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
-	case "darwin":
+	case goosDarwin:
 		cmd = exec.Command("open", url) // #nosec G204 -- fixed browser-opener command; the URL is lab-local
 	case "windows":
 		// The shell's own handler; `start` is a cmd.exe builtin, not a binary.

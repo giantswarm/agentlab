@@ -25,7 +25,8 @@ import (
 // the issuer, and the claude Harness with a snapshot location of its own.
 func TestWorkspaceAdmissionValues(t *testing.T) {
 	stubWorkspacesProbe(t, true)
-	cfg := workspaceLab("")
+	cfg := workspaceGitHubLab()
+	cfg.Platform.Workspaces.GitHub = config.WorkspaceGitHub{AppID: testWorkspaceAppID, ClientID: testWorkspaceClientID}
 	values, _, _, _ := renderWorkspaceTemplates(t, cfg, nil)
 
 	wm, _ := workspaceManagerBlock(t, values)
@@ -236,8 +237,8 @@ func TestAdmissionMatches(t *testing.T) {
 func TestWorkspacesHarnessProbe(t *testing.T) {
 	reply := "Here is the output:\n```\n" +
 		"AGENTLAB_PROBE pwd=/workspace\n" +
-		"AGENTLAB_PROBE mirrors=agentlab-org/platform-api.git \n" +
-		"AGENTLAB_PROBE clones=agentlab-org/platform-api \n" +
+		"AGENTLAB_PROBE mirrors=agentlab/platform-api.git \n" +
+		"AGENTLAB_PROBE clones=agentlab/platform-api \n" +
 		"AGENTLAB_PROBE mirrors-write=refused\n" +
 		"AGENTLAB_PROBE own-write=session\n```"
 	p, err := parseWorkspacesHarnessProbe(reply)
@@ -276,7 +277,7 @@ func TestWorkspacesHarnessProbe(t *testing.T) {
 // The session directory's verdict: the agent's own clone of the mirror and
 // the setup clone, each failure named with what git said.
 func TestWorkspacesHarnessProbeClones(t *testing.T) {
-	const base = "AGENTLAB_PROBE pwd=/workspace\nAGENTLAB_PROBE mirrors=agentlab-org/platform-api.git\nAGENTLAB_PROBE clones=agentlab-org/platform-api\n" +
+	const base = "AGENTLAB_PROBE pwd=/workspace\nAGENTLAB_PROBE mirrors=agentlab/platform-api.git\nAGENTLAB_PROBE clones=agentlab/platform-api\n" +
 		"AGENTLAB_PROBE mirrors-write=refused\nAGENTLAB_PROBE id=65532:65532\n"
 	for _, tc := range []struct {
 		name, lines string
@@ -286,17 +287,17 @@ func TestWorkspacesHarnessProbeClones(t *testing.T) {
 		{
 			name:  "both clones",
 			lines: "AGENTLAB_PROBE own-clone=rc0 head=ec17e3f Cloning into './agentlab-own-clone'... done.\nAGENTLAB_PROBE setup-clone=ec17e3f \n",
-			want:  []string{"as uid:gid 65532:65532 at ec17e3f", "the setup clone ./agentlab-org/platform-api at ec17e3f"},
+			want:  []string{"as uid:gid 65532:65532 at ec17e3f", "the setup clone ./agentlab/platform-api at ec17e3f"},
 		},
 		{
 			name:  "own clone refused",
-			lines: "AGENTLAB_PROBE own-clone=rc128 head= Cloning into './agentlab-own-clone'... fatal: detected dubious ownership in repository at '/mirrors/agentlab-org/platform-api.git'\nAGENTLAB_PROBE setup-clone=ec17e3f\n",
+			lines: "AGENTLAB_PROBE own-clone=rc128 head= Cloning into './agentlab-own-clone'... fatal: detected dubious ownership in repository at '/mirrors/agentlab/platform-api.git'\nAGENTLAB_PROBE setup-clone=ec17e3f\n",
 			want:  []string{"failed with exit 128", "dubious ownership", "65532:65532"},
 			fails: true,
 		},
 		{
 			name:  "no setup clone",
-			lines: "AGENTLAB_PROBE own-clone=rc0 head=ec17e3f Cloning into './agentlab-own-clone'... done.\nAGENTLAB_PROBE setup-clone=fatal: cannot change to './agentlab-org/platform-api': No such file or directory\n",
+			lines: "AGENTLAB_PROBE own-clone=rc0 head=ec17e3f Cloning into './agentlab-own-clone'... done.\nAGENTLAB_PROBE setup-clone=fatal: cannot change to './agentlab/platform-api': No such file or directory\n",
 			want:  []string{"holds no setup clone", "cannot change to"},
 			fails: true,
 		},

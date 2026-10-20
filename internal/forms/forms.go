@@ -125,7 +125,7 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 				Title("Customize the lab users?").
 				DescriptionFunc(func() string {
 					return "Current users:\n" + userSummary() +
-						"\n\nGroups map to fixed roles: platform-admins -> cluster-admin,\ndevelopers -> edit in ns/demo, viewers -> view cluster-wide."
+						"\n\nGroups map to fixed roles: platform-admins -> cluster-admin,\ndevelopers -> edit in ns/demo, viewers -> view cluster-wide;\ntenant-a, tenant-b -> nothing (tenants-test binds them per organization)."
 				}, &cfg.Users).
 				Affirmative("Edit them").
 				Negative("Keep as is").

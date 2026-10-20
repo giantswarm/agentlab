@@ -50,13 +50,13 @@ func TestWorkspacesSwitch(t *testing.T) {
 	}
 }
 
-// The provider instances: the fake alone by default, github, or both in
-// the workspace-manager's order however they are written; anything else
+// The provider instances: github alone by default, gitlab, or both in the
+// workspace-manager's order however they are written; anything else
 // refused; and they count only with workspaces on.
 func TestWorkspacesProvider(t *testing.T) {
 	cfg := Default()
 	cfg.Platform.Workspaces.Provider = WorkspaceProviderGitHub
-	if cfg.WorkspaceGitHubProvider() || cfg.WorkspaceFakeProvider() || cfg.WorkspaceProviders() != nil {
+	if cfg.WorkspaceGitHubProvider() || cfg.WorkspaceProviders() != nil {
 		t.Error("a provider counts with workspaces off")
 	}
 	cfg.Platform.Workspaces.Enabled = true
@@ -64,14 +64,11 @@ func TestWorkspacesProvider(t *testing.T) {
 		provider string
 		want     []string
 	}{
-		{"", []string{WorkspaceProviderFake}},
-		{"fake", []string{WorkspaceProviderFake}},
+		{"", []string{WorkspaceProviderGitHub}},
 		{"github", []string{WorkspaceProviderGitHub}},
-		{"fake,github", []string{WorkspaceProviderFake, WorkspaceProviderGitHub}},
-		{" github , fake ", []string{WorkspaceProviderFake, WorkspaceProviderGitHub}},
 		{"gitlab", []string{WorkspaceProviderGitLab}},
-		{"gitlab,fake,github", []string{WorkspaceProviderFake, WorkspaceProviderGitHub, WorkspaceProviderGitLab}},
-		{"fake-bearer,fake", []string{WorkspaceProviderFake, WorkspaceProviderFakeBearer}},
+		{"gitlab,github", []string{WorkspaceProviderGitHub, WorkspaceProviderGitLab}},
+		{" gitlab , github ", []string{WorkspaceProviderGitHub, WorkspaceProviderGitLab}},
 	} {
 		cfg.Platform.Workspaces.Provider = tc.provider
 		if err := cfg.Validate(); err != nil {
@@ -80,15 +77,11 @@ func TestWorkspacesProvider(t *testing.T) {
 		if got := cfg.WorkspaceProviders(); !slices.Equal(got, tc.want) {
 			t.Errorf("provider %q: instances %v, want %v", tc.provider, got, tc.want)
 		}
-		if cfg.WorkspaceFakeProvider() != slices.Contains(tc.want, WorkspaceProviderFake) || cfg.WorkspaceGitHubProvider() != slices.Contains(tc.want, WorkspaceProviderGitHub) ||
-			cfg.WorkspaceGitLabProvider() != slices.Contains(tc.want, WorkspaceProviderGitLab) {
-			t.Errorf("provider %q: fake %v, github %v, gitlab %v, want %v", tc.provider, cfg.WorkspaceFakeProvider(), cfg.WorkspaceGitHubProvider(), cfg.WorkspaceGitLabProvider(), tc.want)
-		}
-		if cfg.WorkspaceFakeBearerProvider() != slices.Contains(tc.want, WorkspaceProviderFakeBearer) {
-			t.Errorf("provider %q: fake-bearer %v, want %v", tc.provider, cfg.WorkspaceFakeBearerProvider(), tc.want)
+		if cfg.WorkspaceGitHubProvider() != slices.Contains(tc.want, WorkspaceProviderGitHub) || cfg.WorkspaceGitLabProvider() != slices.Contains(tc.want, WorkspaceProviderGitLab) {
+			t.Errorf("provider %q: github %v, gitlab %v, want %v", tc.provider, cfg.WorkspaceGitHubProvider(), cfg.WorkspaceGitLabProvider(), tc.want)
 		}
 	}
-	for _, provider := range []string{"gitea", "fake,gitea", "fake,fake", "github,", "fake-bearer", "github,fake-bearer"} {
+	for _, provider := range []string{"gitea", "github,gitea", "github,github", "github,", "ghe"} {
 		cfg.Platform.Workspaces.Provider = provider
 		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "platform.workspaces.provider") {
 			t.Errorf("provider %q: err = %v, want refused", provider, err)
@@ -96,14 +89,6 @@ func TestWorkspacesProvider(t *testing.T) {
 		if cfg.WorkspaceProviders() != nil {
 			t.Errorf("provider %q: instances %v, want none for a refused value", provider, cfg.WorkspaceProviders())
 		}
-	}
-	cfg.Platform.Workspaces.Provider = ""
-	if got, want := cfg.GitHubFakeURL(), "https://github.127.0.0.1.nip.io"; got != want {
-		t.Errorf("the fake's URL %s, want %s", got, want)
-	}
-	cfg.Platform.GatewayPort = 8443
-	if got, want := cfg.GitHubFakeURL(), "https://github.127.0.0.1.nip.io"; got != want {
-		t.Errorf("the fake's URL %s, want %s: pods reach it on 443 whatever the gateway port", got, want)
 	}
 }
 
@@ -133,7 +118,7 @@ func TestWorkspaceGitLabValidate(t *testing.T) {
 	}
 	cfg := Default()
 	cfg.Platform.Workspaces.Enabled = true
-	cfg.Platform.Workspaces.Provider = "fake,gitlab"
+	cfg.Platform.Workspaces.Provider = "github,gitlab"
 	cfg.Platform.Workspaces.GitLab = ok
 	cfg.Platform.Workspaces.GitLab.URL = "ftp://gitlab.example.com"
 	if err := cfg.Validate(); err == nil {
@@ -180,10 +165,10 @@ func TestWorkspacesSyncRefreshAfter(t *testing.T) {
 // configured instance is refused.
 func TestWorkspaceGrantProvider(t *testing.T) {
 	for _, c := range []struct{ provider, grant, want string }{
-		{"", "", WorkspaceProviderFake},
-		{WorkspaceProviderFake + "," + WorkspaceProviderGitHub, "", WorkspaceProviderFake},
+		{"", "", WorkspaceProviderGitHub},
+		{WorkspaceProviderGitLab, "", WorkspaceProviderGitLab},
 		{WorkspaceProviderGitHub + "," + WorkspaceProviderGitLab, "", WorkspaceProviderGitHub},
-		{WorkspaceProviderFake + "," + WorkspaceProviderGitLab, WorkspaceProviderGitLab, WorkspaceProviderGitLab},
+		{WorkspaceProviderGitHub + "," + WorkspaceProviderGitLab, WorkspaceProviderGitLab, WorkspaceProviderGitLab},
 	} {
 		cfg := Default()
 		cfg.Platform.Workspaces.Enabled = true
@@ -197,7 +182,7 @@ func TestWorkspaceGrantProvider(t *testing.T) {
 	}
 	cfg := Default()
 	cfg.Platform.Workspaces.Enabled = true
-	cfg.Platform.Workspaces.Provider, cfg.Platform.Workspaces.GrantProvider = WorkspaceProviderFake, WorkspaceProviderGitLab
+	cfg.Platform.Workspaces.Provider, cfg.Platform.Workspaces.GrantProvider = WorkspaceProviderGitHub, WorkspaceProviderGitLab
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "grantProvider") {
 		t.Errorf("a grantProvider of no configured instance: err = %v, want refused", err)
 	}

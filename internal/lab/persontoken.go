@@ -46,15 +46,6 @@ func newPersonToken(fetch func() (access, id string, err error)) *personToken {
 	return &personToken{fetch: fetch, now: time.Now, sleep: time.Sleep}
 }
 
-// labPersonToken is the lab user's: a password grant at Dex, its id_token
-// muster and kagent both take.
-func labPersonToken(grant func() (string, error)) *personToken {
-	return newPersonToken(func() (string, string, error) {
-		token, err := grant()
-		return token, token, err
-	})
-}
-
 // musterPersonToken is the person's muster sign-in at url: muster renews its
 // access token, and with it the ID token, once the access token has expired.
 func musterPersonToken(url string) *personToken {

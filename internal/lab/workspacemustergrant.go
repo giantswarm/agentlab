@@ -33,6 +33,11 @@ import (
 // registration muster pins to a provider App.
 var workspaceManagerGrantFloor = semver.MustParse("0.10.0-0")
 
+// workspaceManagerRevocationFloor is the first workspace-manager whose chart
+// renders the pin's revocation endpoint; an earlier one's schema refuses the
+// key.
+var workspaceManagerRevocationFloor = semver.MustParse("0.11.0-rc.6")
+
 // workspaceGitLabScopes are the scopes the GitLab OAuth application is
 // registered with, which its authorization asks for.
 const workspaceGitLabScopes = "api read_user read_repository write_repository"
@@ -43,17 +48,21 @@ const (
 	githubAccessTokenPath = "/login/oauth/access_token" // #nosec G101 -- a path, not a credential
 	githubOAuthIssuer     = "https://github.com/login/oauth"
 	gitlabTokenPath       = "/oauth/token" // #nosec G101 -- a path, not a credential
+	gitlabRevokePath      = "/oauth/revoke"
 )
 
 // workspaceGrantValues is the pin as the values template renders it into
 // workspace-manager.muster.mcpServer.auth: the instance, its App's issuer
 // identity (the key muster files the person's grant under), the issuer the
 // provider puts in its authorization response ("" for one that puts none),
-// its endpoints, the scope ("" for a GitHub App) and the Secret of its OAuth
-// client.
+// its endpoints, the RFC 7009 revocation endpoint muster revokes a person's
+// grant at on their disconnect ("" for GitHub, which has none, and for a
+// manager whose chart does not render it), the scope ("" for a GitHub App)
+// and the Secret of its OAuth client.
 type workspaceGrantValues struct {
 	Provider, Issuer, ExpectedIssuer     string
 	AuthorizationEndpoint, TokenEndpoint string
+	RevocationEndpoint                   string
 	Scopes, Secret                       string
 }
 
@@ -67,7 +76,11 @@ func workspaceGrantFor(cfg *config.Config, providers []workspaceProviderValues) 
 	}
 	for _, p := range providers {
 		if p.Name == name {
-			return workspaceGrantOf(p)
+			g := workspaceGrantOf(p)
+			if g.RevocationEndpoint != "" && !workspaceManagerAtLeast(cfg, workspaceManagerRevocationFloor) {
+				g.RevocationEndpoint = ""
+			}
+			return g
 		}
 	}
 	return nil
@@ -75,39 +88,40 @@ func workspaceGrantFor(cfg *config.Config, providers []workspaceProviderValues) 
 
 // workspaceReleasableFor is the instance muster's credential provider
 // releases while workspaces are on and no instance renders (a github or
-// gitlab instance whose ids or Secret are not in place yet): the fake's, the
-// lab's own App, whose issuer is known without a cluster. The meta chart
-// derives the releasable from the pin and refuses an empty one with
-// Substrate on; without an instance there is no pin, and this keeps the
-// render going until the configured instance renders. Nil with workspaces
-// off.
-func workspaceReleasableFor(cfg *config.Config) (*workspaceGrantValues, error) {
+// gitlab instance whose ids or Secret are not in place yet): the pinned
+// instance with the issuer agentlab.yaml gives it, github.com's OAuth
+// issuer while the App's id is empty. The meta chart derives the
+// releasable from the pin and refuses an empty one with Substrate on;
+// without an instance there is no pin, and this keeps the render going
+// until the configured instance renders. Nil with workspaces off.
+func workspaceReleasableFor(cfg *config.Config) *workspaceGrantValues {
 	if !cfg.WorkspacesEnabled() {
-		return nil, nil
+		return nil
 	}
-	fake, err := workspaceFakeValues(cfg)
-	if err != nil {
-		return nil, err
+	name := cfg.WorkspaceGrantProvider()
+	if gl := cfg.Platform.Workspaces.GitLab; name == config.WorkspaceProviderGitLab && gl.URL != "" {
+		return workspaceGrantOf(workspaceProviderValues{Name: name, Kind: providerKindGitLab, URL: gl.URL})
 	}
-	return workspaceGrantOf(*fake), nil
+	issuer := githubOAuthIssuer
+	if id := cfg.Platform.Workspaces.GitHub.AppID; id != "" {
+		issuer = workspaceGrantOf(workspaceProviderValues{Name: name, Kind: providerKindGitHub, AppID: id}).Issuer
+	}
+	return &workspaceGrantValues{Provider: name, Issuer: issuer}
 }
 
 // workspaceGrantOf is the pin to one instance's App.
 func workspaceGrantOf(p workspaceProviderValues) *workspaceGrantValues {
 	g := &workspaceGrantValues{Provider: p.Name, Secret: p.Secret}
-	switch {
-	case p.Kind == providerKindGitLab:
+	switch p.Kind {
+	case providerKindGitLab:
 		base := strings.TrimSuffix(p.URL, "/")
 		g.Issuer, g.AuthorizationEndpoint, g.TokenEndpoint, g.Scopes = base, base+"/oauth/authorize", base+gitlabTokenPath, workspaceGitLabScopes
-	case p.URL == "":
+		g.RevocationEndpoint = base + gitlabRevokePath
+	default:
 		// github.com: the App is known by its App id (agentlab.yaml
 		// records no slug), and GitHub names its issuer in the response.
 		g.Issuer, g.ExpectedIssuer = "https://github.com/apps/"+p.AppID, githubOAuthIssuer
 		g.AuthorizationEndpoint, g.TokenEndpoint = "https://github.com"+githubAuthorizePath, "https://github.com"+githubAccessTokenPath
-	default:
-		// The lab's GitHub, which names no issuer in its response.
-		base := strings.TrimSuffix(p.URL, "/")
-		g.Issuer, g.AuthorizationEndpoint, g.TokenEndpoint = base+"/apps/"+p.AppID, base+githubAuthorizePath, base+githubAccessTokenPath
 	}
 	return g
 }
@@ -116,23 +130,35 @@ func workspaceGrantOf(p workspaceProviderValues) *workspaceGrantValues {
 // resolves is 0.10.0 or newer; one that cannot be resolved is a note and no
 // pin.
 func workspaceManagerTakesGrant(cfg *config.Config) bool {
-	version, err := workspaceManagerVersion(cfg)
+	return workspaceManagerAtLeast(cfg, workspaceManagerGrantFloor)
+}
+
+// workspaceManagerAtLeast says whether the workspace-manager the install
+// resolves is floor or newer; one that cannot be resolved is a note and
+// false.
+func workspaceManagerAtLeast(cfg *config.Config, floor *semver.Version) bool {
+	version, err := workspaceManagerVersion(cfg, floor)
 	if err != nil {
-		note("the workspace-manager's chart version could not be resolved (%v): its registration is not pinned to a provider App", err)
+		note("the workspace-manager's chart version could not be resolved (%v): the lab renders nothing that needs %s or newer", err, floor.Original())
 		return false
 	}
 	if version == "" {
 		return false
 	}
 	v, err := semver.NewVersion(version)
-	return err == nil && !v.LessThan(workspaceManagerGrantFloor)
+	return err == nil && !v.LessThan(floor)
 }
 
-// rangeFloorAdmitsGrant says whether every version the range admits is at or
-// above the grant floor: each of its ||-alternatives carries a lower bound
-// (>=, >, = or a bare version) of the floor or newer. Such a range pins
-// without listing the registry's tags.
+// rangeFloorAdmitsGrant is rangeFloorAdmits at the grant floor.
 func rangeFloorAdmitsGrant(versionRange string) bool {
+	return rangeFloorAdmits(versionRange, workspaceManagerGrantFloor)
+}
+
+// rangeFloorAdmits says whether every version the range admits is at or
+// above floor: each of its ||-alternatives carries a lower bound (>=, >, = or
+// a bare version) of the floor or newer. Such a range decides without
+// listing the registry's tags.
+func rangeFloorAdmits(versionRange string, floor *semver.Version) bool {
 	alternatives := strings.Split(versionRange, "||")
 	for _, alt := range alternatives {
 		floored := false
@@ -142,7 +168,7 @@ func rangeFloorAdmitsGrant(versionRange string) bool {
 				continue
 			}
 			v, err := semver.NewVersion(bound)
-			if err == nil && !v.LessThan(workspaceManagerGrantFloor) {
+			if err == nil && !v.LessThan(floor) {
 				floored = true
 			}
 		}
@@ -163,9 +189,9 @@ type workspaceManagerSource struct {
 // workspaceManagerVersion resolves the workspace-manager's chart version the
 // way source-controller resolves the component's OCIRepository: the highest
 // tag the range (and the semverFilter) admits; "" for a chart that names no
-// such component; the grant floor itself for a range whose floor is at or
-// above it, without listing tags. Memoized per source.
-func workspaceManagerVersion(cfg *config.Config) (string, error) {
+// such component; floor itself for a range whose floor is at or above it,
+// without listing tags. Memoized per source.
+func workspaceManagerVersion(cfg *config.Config, floor *semver.Version) (string, error) {
 	src := workspacesChartFor(cfg).Manager
 	if len(cfg.Platform.ValuesFiles) > 0 {
 		overlay, err := helmValuesFiles(cfg.Platform.ValuesFiles...)
@@ -177,8 +203,8 @@ func workspaceManagerVersion(cfg *config.Config) (string, error) {
 	if src.repository == "" || src.versionRange == "" {
 		return "", nil // a chart without the component: no manager to pin
 	}
-	if rangeFloorAdmitsGrant(src.versionRange) {
-		return workspaceManagerGrantFloor.Original(), nil // no tag below the floor can resolve
+	if rangeFloorAdmits(src.versionRange, floor) {
+		return floor.Original(), nil // no tag below the floor can resolve
 	}
 	workspaceManagerVersionMu.Lock()
 	defer workspaceManagerVersionMu.Unlock()
@@ -222,11 +248,10 @@ func (s workspaceManagerSource) over(values map[string]any) workspaceManagerSour
 }
 
 // ensureWorkspaceGrantClientID places the pinned instance's OAuth client id
-// in its Secret under GitHubClientIDKey, where muster reads the client; the
-// fake's Secret carries it from its creation (githubFakeUp). The id is
-// public: agentlab writes it and reads no value of the Secret.
+// in its Secret under GitHubClientIDKey, where muster reads the client. The
+// id is public: agentlab writes it and reads no value of the Secret.
 func ensureWorkspaceGrantClientID(ctx context.Context, grant *workspaceGrantValues, providers []workspaceProviderValues) error {
-	if grant == nil || grant.Secret == config.WorkspaceFakeSecretName {
+	if grant == nil {
 		return nil
 	}
 	for _, p := range providers {
