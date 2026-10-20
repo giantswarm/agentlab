@@ -32,7 +32,14 @@ command says so (`Moved lab agentlab from … to …`). Every moved file leaves 
 link at its old path: the kind node of a running lab mounts `certs/` and
 `state/node` by their old paths, and an older agentlab run in the old
 directory still finds its lab. A lab on another file system than the state
-folder stays where it is, said on stderr.
+folder stays where it is, said on stderr. A lab already in its directory
+whose `agentlab.yaml` there is a file, not the link (the layout before the
+configuration folder, or an older release's save over the link), has the
+file moved to the configuration folder byte for byte on its first command,
+the link in its place (`Moved lab agentlab's agentlab.yaml to …`); a copy
+equal to the configuration folder's file gives way to the link, and one
+that differs is refused, naming both files and the newer, until one of the
+two is moved aside.
 
 ## Which lab
 

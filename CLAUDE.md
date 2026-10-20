@@ -281,7 +281,10 @@ The lab's own e2e checks are the `*-test` subcommands, not `go test`.
   from the directory. A lab elsewhere moves there by renames on the first
   command that enters it, leaving links at the old paths — the kind node
   mounts `certs/` and `state/node` by absolute path, and an older release run
-  there still finds the lab. The command then changes into the lab
+  there still finds the lab. An `agentlab.yaml` file of its own in the lab
+  directory moves to the configuration folder, the link in its place; one
+  differing from the configuration folder's is refused, both kept
+  (`adoptConfig`). The command then changes into the lab
   directory, so the lab's cwd-relative paths hold. The read-only commands
   (`trust`, `status`, `open`, `pods`, `logs`, `list`) read an `agentlab.yaml`
   a newer release wrote (`config.LoadReadOnly`, `Peek`); every writer keeps
