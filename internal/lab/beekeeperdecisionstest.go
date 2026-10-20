@@ -573,7 +573,7 @@ func (p *beekeeperProof) add(forWho, question, due string) (int, error) {
 		"status_quo": "The lab's merge lane takes one release a night.",
 		"why":        "Only the lab's owners pick what rolls.",
 		"options":    []any{"Roll tonight: the lane clears at 22:00", "Wait for Monday: nothing rolls before Monday"},
-		"recommend":  2, "due": due, beekeeperKeyDefault: beekeeperDefault,
+		"recommend":  2, beekeeperKeyDue: due, beekeeperKeyDefault: beekeeperDefault,
 	})
 	if err != nil {
 		return 0, err
