@@ -255,7 +255,8 @@ Applied to the configuration:
   Dex issuer stays `https://localhost:<dexPort>/dex`, each lab on its own
   port. An existing cluster keeps both (its CA, its port mapping and every
   rendered URL name them); a clash is reported with the way out (`agentlab
-  down`, `configure`, `up`). A domain of your own certificate
+  down`, `configure`, `up`). A moved domain re-mints the lab CA, whose name
+  constraints pin the domain ([TLS](tls.md)): `agentlab trust` again. A domain of your own certificate
   ([TLS](tls.md#bring-your-own-certificate)) is never moved.
 - **Host model servers**: an Ollama on `:11434`, a Lemonade Server on
   `:13305` and an LM Studio on `:1234` (their default ports) are detected,
