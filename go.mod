@@ -10,7 +10,7 @@ require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/a2aproject/a2a-go/v2 v2.6.0
 	github.com/charmbracelet/x/ansi v0.11.9
-	github.com/giantswarm/gitops-commit v0.11.4
+	github.com/giantswarm/gitops-commit v0.11.5
 	github.com/giantswarm/go-selfupdate v1.6.5
 	github.com/giantswarm/klaus-gateway v1.21.0
 	github.com/giantswarm/selfupdate-cosign v0.3.8
@@ -129,7 +129,7 @@ require (
 	github.com/google/gnostic-models v0.7.0 // indirect
 	github.com/google/go-containerregistry v0.22.1 // indirect
 	github.com/google/go-github/v86 v86.0.0 // indirect
-	github.com/google/go-github/v92 v92.0.0 // indirect
+	github.com/google/go-github/v93 v93.0.0 // indirect
 	github.com/google/go-querystring v1.2.0 // indirect
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 // indirect
 	github.com/gosuri/uitable v0.0.4 // indirect
