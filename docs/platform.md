@@ -151,8 +151,8 @@ The platform installs as part of `agentlab up` (it is enabled in the default
 configuration); on an already-running cluster the steps are also standalone:
 
 ```bash
-./agentlab platform       # upgrade-or-install of the chart (embedded Helm), then waits for every component
-./agentlab platform-test  # headless proof of the whole chain
+agentlab platform       # upgrade-or-install of the chart (embedded Helm), then waits for every component
+agentlab platform-test  # headless proof of the whole chain
 ```
 
 `platform-test` runs in stages — the Dex token, the muster session, the MCP
@@ -1178,7 +1178,7 @@ the one that runs on both of those:
 | forwarder paths (*claude*) | the forwarder answers 400 to `../..`, `%2e%2e` and `..%2f`, 404 for a server it does not front (401 where the MCP config holds only kagent's placeholder: the probe has no loopback token to send, and the forwarder refuses before it matches a server), 401 without its token; skipped in a workspace Session that runs no forwarder (Claude Code calls muster's actor-JWT host directly) |
 | write tool refused (*claude*) | `x_agent-manager_delete_agent`, called through the forwarder with the turn's bearer, refused by muster as outside the toolset; skipped like forwarder paths |
 | no loopback token (*claude*, workspace Session) | Claude Code's MCP config (`--mcp-config`) carries no `Authorization` but kagent's placeholder `kagent-credential-injected`, counted without printing a value: a server kept on the forwarder for its tool selection carries the placeholder too, so no loopback token is left for a sandbox process to replay; `--muster-tools meta` gives the agent the tool selection on muster a platform agent binds (muster's 11 meta-tools, the Generic chart's `muster.tools` set on its HelmRelease) |
-| credentials | no forge token or bearer in the environment, `/data` or `/workspace`; the model key kagent's placeholder, or unset where the runtime keeps it out of the shell's environment (omp); on `codex` every `KAGENT_CODEX_MCP_CREDENTIAL_*` the sandbox sees the placeholder too, on `omp` every `KAGENT_CREDENTIAL_*` |
+| credentials | no forge token or bearer in the environment, `/data` or `/workspace` (one admitted: Claude Code's signed policy cache `/data/claude/policy-limits.json.signature.json`, while its every match is a JWS of header `typ: cc-signed-cache+jws`, Anthropic's signature over the cached policy that authenticates nothing); the model key kagent's placeholder, or unset where the runtime keeps it out of the shell's environment (omp); on `codex` every `KAGENT_CODEX_MCP_CREDENTIAL_*` the sandbox sees the placeholder too, on `omp` every `KAGENT_CREDENTIAL_*` |
 | dns canary | a recorded state, not a gate: `example.org` through the cluster resolver and directly at 1.1.1.1 |
 | egress | `proxy.golang.org` denied 403 at the egress gate; `api.github.com`, one of the Agent's origins, reached |
 | plugin skills | the agent has the selected plugin skill and no other: on a real model its own listing of the skills it can invoke (`migrate-agent-plugin`); on `codex` on the mockllm the requests the runtime sent the model carry `migrate-agent-plugin` (the mockllm records which watched names each request carries anywhere: what the runtime presented to the model) |

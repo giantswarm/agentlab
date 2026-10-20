@@ -115,7 +115,7 @@ docker at least 4 CPUs and 6 GiB for the full lab; `agentlab up` checks before
 it touches anything (see [Docker resources](docs/getting-started.md#docker-resources)).
 
 ```bash
-go install github.com/giantswarm/agentlab@latest   # or a release binary, or `go build -o agentlab .`
+GOBIN=~/.local/bin go install github.com/giantswarm/agentlab@latest   # or a release binary in ~/.local/bin; `agentlab self-update` keeps it there
 
 export ANTHROPIC_API_KEY=sk-ant-...   # optional: powers the agents and Backstage's AI chat
 agentlab up                           # one question (the detected defaults, or customize), then certs, kind cluster, Dex, RBAC, the platform — verified
@@ -142,7 +142,7 @@ Then point Claude Code at the platform:
 
 ```bash
 agentlab trust                # if you said no above: one sudo prompt, `agentlab untrust` reverts it
-export NODE_USE_SYSTEM_CA=1   # Node >= 22.15; older Node: NODE_EXTRA_CA_CERTS=$PWD/certs/ca.crt
+export NODE_USE_SYSTEM_CA=1   # Node >= 22.15; older Node: NODE_EXTRA_CA_CERTS=~/.local/state/agentlab/labs/<lab>/certs/ca.crt
 claude mcp add --transport http muster https://muster.127.0.0.1.nip.io/mcp
 # in Claude Code:  /mcp  ->  authenticate  ->  Dex login page  ->  done
 ```

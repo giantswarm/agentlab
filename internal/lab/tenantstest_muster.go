@@ -450,7 +450,7 @@ func tenantSignInRedirect(challengeURL string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("proxy start redirect %q: %w", location, err)
 	}
-	return target.Query().Get("redirect_uri"), nil
+	return target.Query().Get(oauthRedirectURI), nil
 }
 
 // signInToTenantServer signs the session's person in to a server of an

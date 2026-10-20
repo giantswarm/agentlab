@@ -123,21 +123,26 @@ cache survives `agentlab down`, so a re-boot does not pay for them again.
 
 ## Quick start
 
-Install the `agentlab` binary one of three ways:
+Install the `agentlab` binary into `~/.local/bin` (on your `PATH`) one of
+three ways:
 
 ```bash
-# From source (clone this repo first):
-go build -o agentlab .
-
-# Via go install:
-go install github.com/giantswarm/agentlab@latest
-
 # From a GitHub release — assets are named agentlab-<os>-<arch>:
-curl -Lo agentlab https://github.com/giantswarm/agentlab/releases/latest/download/agentlab-linux-amd64
-chmod +x agentlab
+curl -Lo ~/.local/bin/agentlab https://github.com/giantswarm/agentlab/releases/latest/download/agentlab-linux-amd64
+chmod +x ~/.local/bin/agentlab
+
+# Via go install (GOBIN names the folder):
+GOBIN=~/.local/bin go install github.com/giantswarm/agentlab@latest
+
+# From source (clone this repo first):
+CGO_ENABLED=0 go build -o ~/.local/bin/agentlab .
 ```
 
-Keep it current with `agentlab self-update`. Every command also starts with a
+Keep it current with `agentlab self-update`, which installs into
+`~/.local/bin` and moves a release installed elsewhere there. Labs live in
+the freedesktop folders — configuration in `~/.config/agentlab`, state (the
+lab CA, kubeconfigs) in `~/.local/state/agentlab` — so `agentlab` runs from any
+directory (see [Where things live](cli.md#where-things-live)). Every command also starts with a
 one-line hint on stderr while a newer release is out — a hint, never a gate:
 an outdated agentlab keeps working (see [Keeping agentlab current](cli.md#keeping-agentlab-current)).
 
@@ -145,14 +150,14 @@ Then bring the lab up:
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...   # optional: powers the agents + Backstage AI chat (or record a vault reference: agents.md "The model")
-./agentlab up              # first run: asks one question, then certs, kind cluster, Dex, RBAC, the agent platform — verified
-./agentlab open portal     # the portal (Backstage) in the browser; `open agents` the kagent UI
-./agentlab platform-test   # headless proof: Dex -> muster -> mcp-kubernetes -> apiserver, + the per-server OAuth sign-in challenge
-./agentlab models-test     # with a model server on the host: pull -> ModelConfig -> agent turn -> delete, through the platform
-./agentlab serving-test    # with platform.serving: the lab preset on llm-d -> Ready on the CPU runtime -> ModelConfig -> a completion through the models Gateway -> agent turn -> unload
-./agentlab agents-test     # agent-manager as the signed-in user: create -> ready -> update -> delete via muster; a viewer's create is Forbidden; the ServiceAccount holds no RBAC beyond its switches' (minting: the skills-Secret Role; tenants: the reconciler's ClusterRole)
-./agentlab toolsets-test   # declared toolsets end to end: agent-manager requires one, the Agent carries the header, muster resolves and refuses per request, agents see their toolset, a per-server sign-in scopes tools to the token, the portal's Tools step and apply path
-./agentlab a2a-test        # turns over native gRPC through the edge as the surfaces drive them: the route and its JWT policy, no token refused, a forged x-user-id replaced, discovery with annotations, a streamed turn, HITL approve/reject, CancelTask server-side
+agentlab up              # first run: asks one question, then certs, kind cluster, Dex, RBAC, the agent platform — verified
+agentlab open portal     # the portal (Backstage) in the browser; `open agents` the kagent UI
+agentlab platform-test   # headless proof: Dex -> muster -> mcp-kubernetes -> apiserver, + the per-server OAuth sign-in challenge
+agentlab models-test     # with a model server on the host: pull -> ModelConfig -> agent turn -> delete, through the platform
+agentlab serving-test    # with platform.serving: the lab preset on llm-d -> Ready on the CPU runtime -> ModelConfig -> a completion through the models Gateway -> agent turn -> unload
+agentlab agents-test     # agent-manager as the signed-in user: create -> ready -> update -> delete via muster; a viewer's create is Forbidden; the ServiceAccount holds no RBAC beyond its switches' (minting: the skills-Secret Role; tenants: the reconciler's ClusterRole)
+agentlab toolsets-test   # declared toolsets end to end: agent-manager requires one, the Agent carries the header, muster resolves and refuses per request, agents see their toolset, a per-server sign-in scopes tools to the token, the portal's Tools step and apply path
+agentlab a2a-test        # turns over native gRPC through the edge as the surfaces drive them: the route and its JWT policy, no token refused, a forged x-user-id replaced, discovery with annotations, a streamed turn, HITL approve/reject, CancelTask server-side
 ```
 
 In an empty directory `up` runs the same discovery as `configure` (below),
@@ -175,8 +180,8 @@ Then point Claude Code at the platform (`.mcp.json` in this repo already does
 that):
 
 ```bash
-./agentlab trust             # if you said no above: green locks everywhere (one sudo prompt)
-export NODE_USE_SYSTEM_CA=1  # Node >= 22.15 (older Node: export NODE_EXTRA_CA_CERTS=$PWD/certs/ca.crt)
+agentlab trust             # if you said no above: green locks everywhere (one sudo prompt)
+export NODE_USE_SYSTEM_CA=1  # Node >= 22.15 (older Node: export NODE_EXTRA_CA_CERTS=~/.local/state/agentlab/labs/<lab>/certs/ca.crt)
 claude mcp add --transport http muster https://muster.127.0.0.1.nip.io/mcp
 # in Claude Code:  /mcp  ->  authenticate  ->  Dex login page  ->  done
 ```
@@ -308,12 +313,12 @@ extra models and the pinned chart ref stay as they are.
 To exercise the identity itself:
 
 ```bash
-./agentlab test                    # asserts RBAC for every configured user
-./agentlab login dev@lab.local     # headless, instant
-./agentlab login --browser         # real Dex login page in the browser
-./agentlab login --audience agent-platform --audience kubernetes  # a token muster's agent-platform servers accept too
+agentlab test                    # asserts RBAC for every configured user
+agentlab login dev@lab.local     # headless, instant
+agentlab login --browser         # real Dex login page in the browser
+agentlab login --audience agent-platform --audience kubernetes  # a token muster's agent-platform servers accept too
 export KUBECONFIG=$PWD/kubeconfig.oidc
 kubectl auth whoami
 ```
 
-Tear down with `./agentlab down`.
+Tear down with `agentlab down`.

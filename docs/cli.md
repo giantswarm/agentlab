@@ -1,25 +1,52 @@
 # Command reference
 
 `agentlab --help` and `agentlab <command> --help` are authoritative; this page
-is the map. Every command runs against one lab — a directory holding
-`agentlab.yaml` (written by `configure`; on a terminal, a missing file starts
-the form), `certs/` and `state/` — and talks to its kind cluster through the
-cluster's own exported kubeconfig, `state/kubeconfig`, never your shell's
-current-context.
+is the map. Every command runs against one lab — its `agentlab.yaml` (written
+by `configure`; on a terminal, a missing file starts the form), `certs/` and
+`state/` — and talks to its kind cluster through the cluster's own exported
+kubeconfig, `state/kubeconfig`, never your shell's current-context.
+
+## Where things live
+
+agentlab keeps to the freedesktop folders, like every other program on the
+machine (each `XDG_*` variable counts when it holds an absolute path):
+
+| What | Where |
+|---|---|
+| The binary | `~/.local/bin/agentlab` (`$XDG_BIN_HOME`), where `self-update` installs it |
+| A lab's configuration | `~/.config/agentlab/labs/<lab>/agentlab.yaml` (`$XDG_CONFIG_HOME`) |
+| A lab's state: the lab CA and certificates (`certs/`), kubeconfigs and rendered manifests (`state/`) | `~/.local/state/agentlab/labs/<lab>/` (`$XDG_STATE_HOME`), the lab's directory; its `agentlab.yaml` links to the configuration |
+| The registry of the labs | `~/.config/agentlab/labs.yaml` |
+| The update check's cache | `~/.cache/agentlab/` (`$XDG_CACHE_HOME`) |
+
+On macOS the configuration and the state are under `~/Library/Application
+Support/agentlab/`, the cache under `~/Library/Caches/agentlab/`.
+
+A lab is its name: it keeps its directory, and with it its CA, across `down`
+and `up`. A lab from before these folders — a checkout, a directory of its
+own — moves into them on the first command that enters it: its
+`agentlab.yaml` to the configuration folder, `certs/`, `state/`,
+`kubeconfig.oidc` and `.token` into its directory, each by a rename, nothing
+copied or dropped, relative paths in `agentlab.yaml` made absolute first. The
+command says so (`Moved lab agentlab from … to …`). Every moved file leaves a
+link at its old path: the kind node of a running lab mounts `certs/` and
+`state/node` by their old paths, and an older agentlab run in the old
+directory still finds its lab. A lab on another file system than the state
+folder stays where it is, said on stderr.
 
 ## Which lab
 
-`configure` and `up` register their lab under its `clusterName` in
-`~/.config/agentlab/labs.yaml` (`~/Library/Application Support/agentlab/` on
-macOS), so the other commands find it from any directory, in this order:
+`configure` and `up` register their lab under its `clusterName`, so the
+other commands find it from any directory, in this order:
 
 1. `--lab <name>` (every command), refused naming the registered labs when no
    lab of that name is registered;
 2. the `agentlab.yaml` in the current directory: the lab its `clusterName`
-   names (a copy of a registered lab's file enters that lab's directory), else
-   this directory — always this directory for `render`, which writes the
-   files of the `agentlab.yaml` it reads: a copy renders a scratch lab beside
-   it and never rewrites the registered lab's `certs/` or `state/`;
+   names (a copy of a registered lab's file, or the link a moved lab left,
+   enters that lab), else this directory's lab, which settles in the folders —
+   always this directory for `render`, which writes the files of the
+   `agentlab.yaml` it reads: a copy renders a scratch lab beside it and never
+   rewrites the registered lab's `certs/` or `state/`;
 3. a picker among the registered labs on a terminal, and off one a refusal
    that names them and `--lab`.
 
@@ -27,23 +54,25 @@ No lab is a default, not even the only one registered: a command runs against
 the lab `--lab`, the directory or the person names, or refuses. An
 `agentlab.yaml` without a `clusterName` is refused too: the file names its lab.
 
-A lab's directory is where its `agentlab.yaml`, `certs/` and `state/` live: the
-checkout for a lab you made there, `~/.local/state/<lab>` for a leased lab
-(`agentlab-1`, `agentlab-2`).
-
 A lab entered from another directory is named on stderr (`Lab agentlab
-(/path/to/lab)`). `configure` and `up` skip step 3: in a directory without
-`agentlab.yaml` they create a lab there, named `agentlab` — or the first free
-`agentlab-<n>` when another lab holds that name — unless `configure
---cluster-name <name>` names it. A `clusterName` another lab
-directory holds is refused, naming both directories — the two would collide
-on the kind cluster and its ports. `down` keeps the registration (the lab
-still exists as a directory); a lab whose directory or `agentlab.yaml` is gone
-is neither offered nor listed, and back once its `agentlab.yaml` is (the next
-registration drops the entries still gone). `agentlab list` also shows every
-kind cluster no registered lab names, marked `lab directory unknown`: any
-command run in a lab's directory (`agentlab pods`) registers the lab. `self-update`, `completion` and `help` touch
-no lab.
+(~/.local/state/agentlab/labs/agentlab)`). `configure` and `up` skip step 3:
+in a directory without `agentlab.yaml` they create a new lab in the folders,
+named `agentlab` — or the first free `agentlab-<n>` when another lab holds
+that name — unless `configure --cluster-name <name>` names it. A
+`clusterName` another lab holds is refused, naming both directories — the two
+would collide on the kind cluster and its ports. `down` keeps the
+registration (the lab still exists); a lab whose directory or
+`agentlab.yaml` is gone is neither offered nor listed, and back once its
+`agentlab.yaml` is (the next registration drops the entries still gone).
+`agentlab list` also shows every kind cluster no registered lab names, marked
+`lab directory unknown`: any command run in a lab's directory (`agentlab
+pods`) registers the lab. `self-update`, `completion` and `help` touch no lab.
+
+The commands that only read a lab — `trust`, `untrust`, `list`, `status`,
+`open`, `pods`, `logs` — read an `agentlab.yaml` a newer agentlab wrote: a
+field this release does not know is read past with a note naming the release
+that wrote it, and nothing is written. Every command that writes the file
+refuses it instead, so a newer release's switch is never dropped.
 
 ## Headless use
 
@@ -210,7 +239,7 @@ The flags pin a value regardless of the discovery, with or without
 | `ANTHROPIC_API_KEY` | `up`, `platform` | Becomes the Secret `kagent/kagent-anthropic` at deploy time while `agentlab.yaml` records no `aiKey.source`; never written to `agentlab.yaml` or `state/`. With a source the Secret is placed from it through `beekeeper secret copy --to-secret` instead, and without either it holds a placeholder (the ModelConfig resolves, agent turns fail until the key is placed). See [Agents](agents.md#the-model). |
 | `GITHUB_TOKEN` | the update check | Lifts GitHub's anonymous rate limit of the update check. `up`, `platform`, `discover`, `backstage-test`, `agents-test` and the migration rehearsal never read it: the lab's consumers get a token only from `githubToken.source` (or call GitHub as the skills GitHub App). See [Agents](agents.md#the-github-token). |
 | `<name>` per `extraModels[].apiKeyEnv` | `up`, `platform` | The key for that model config, same handling. See [Models](models.md). |
-| `NODE_USE_SYSTEM_CA=1` | Node >= 22.15, Claude Code | Makes Node honor the system trust store after `agentlab trust`. Older Node: `NODE_EXTRA_CA_CERTS=$PWD/certs/ca.crt`. See [TLS](tls.md). |
+| `NODE_USE_SYSTEM_CA=1` | Node >= 22.15, Claude Code | Makes Node honor the system trust store after `agentlab trust`. Older Node: `NODE_EXTRA_CA_CERTS=~/.local/state/agentlab/labs/<lab>/certs/ca.crt`. See [TLS](tls.md). |
 | `KUBECONFIG` | your shell | Never read by the lab: its embedded Helm and Kubernetes client are built from `state/kubeconfig` alone. `KUBECONFIG=state/kubeconfig kubectl ...` is the lab's view from a shell. A file it names that is a copy of this lab's admin kubeconfig (every entry `kind-<clusterName>` — a lab lease holds one) is refreshed by `up` and every other cluster-facing command once the cluster behind it was recreated, so a copy taken before `down` and `up` reaches the new cluster without a manual step; your own kubeconfig, `~/.kube/config` and another lab's are never written, except that `up` removes a `kind-<clusterName>` context, cluster and user of the recreated lab whose CA is the previous cluster's (the lab's own kubeconfig, or its lease's copy, is the one to use). |
 | `AGENTLAB_TELEMETRY_OPTOUT`, `DO_NOT_TRACK=1` | every command | Disable the anonymous usage signals. See [Usage data](telemetry.md). |
 | `AGENTLAB_TELEMETRY_TESTMODE=1` | every command | File the signals as test data, for work on the lab itself. |
@@ -219,9 +248,13 @@ The flags pin a value regardless of the discovery, with or without
 
 ## Keeping agentlab current
 
-`agentlab self-update` replaces the running binary with the latest GitHub
-release for your OS and architecture — the command muster and mcp-kubernetes
-have too. `agentlab self-update --check` only reports the running and the
+`agentlab self-update` installs the latest GitHub release for your OS and
+architecture — the command muster and mcp-kubernetes have too — at
+`~/.local/bin/agentlab` (`$XDG_BIN_HOME`). A release installed anywhere else
+(`~/go/bin`, a download folder) moves there on the first `self-update`, also
+when nothing is newer, and leaves a link at its old path, so either order of
+the two folders on `PATH` runs the one binary; `self-update` says when
+`~/.local/bin` is not on `PATH`. `agentlab self-update --check` only reports the running and the
 latest version, with exit status 125 when a newer one exists (for scripts). A
 binary without a release version (`agentlab --version` says `dev`) is
 refused: reinstall it from a release or with `go install`. A `go build` from

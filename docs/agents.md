@@ -188,7 +188,7 @@ offers the write only once the dry run is valid, so the dry run takes `mode`
 too and answers as the write would: `gitops_owned` in mode apply, valid with
 the composed manifests in mode commit.
 
-`./agentlab agents-gitops-test` is that edit, headless and as the person: the
+`agentlab agents-gitops-test` is that edit, headless and as the person: the
 platform's agent-manager composes a release, the proof applies it with the
 Flux labels and reads it back `managed: gitops`; the platform's own
 agent-manager (not pinned to a GitHub App) answers the change's dry run
@@ -232,7 +232,7 @@ of its own name, and by `ate-golden` — next to the chart's two entries. The
 list goes with #1041. A `platform.valuesFiles` overlay that sets that list
 replaces the lab's.
 
-`./agentlab tenants-test [email email]` is the proof
+`agentlab tenants-test [email email]` is the proof
 (giantswarm/agentlab#739). It creates `org-agentlab-tenants-a` and
 `org-agentlab-tenants-b`, labelled, and binds one person to
 `agent-platform:editor` in each (default: the first two users outside
