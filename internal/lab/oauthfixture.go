@@ -249,7 +249,7 @@ func proveOAuthSignIn(cfg *config.Config, token string) error {
 	switch {
 	case strings.HasPrefix(location, cfg.Issuer()+"/auth"):
 		note("proxy start redirects to %s://%s%s (the pinned authorization server, client %s)",
-			target.Scheme, target.Host, target.Path, target.Query().Get("client_id"))
+			target.Scheme, target.Host, target.Path, target.Query().Get(oauthClientID))
 	case strings.Contains(target.Path, "authorize"):
 		note("proxy start redirects to %s://%s%s (the discovered authorization server — the fixture is not pinned to Dex: re-run `agentlab platform` with this binary for a sign-in that completes)",
 			target.Scheme, target.Host, target.Path)
