@@ -427,14 +427,21 @@ func settleHere() error {
 // that moves is named on stderr with both places; its relative paths in
 // agentlab.yaml (platform.valuesFiles, chartPath, …) are made absolute first,
 // so they still name the files next to its old directory. A lab on another
-// file system than the state folder stays where it is, said on stderr.
+// file system than the state folder stays where it is, said on stderr, and
+// an agentlab.yaml that is a file of its own in the lab's directory moves to
+// the configuration folder, said there too.
 func settleLab(name, dir string) (string, error) {
 	from, err := filepath.Abs(dir)
 	if err != nil {
 		return "", err
 	}
-	if home, err := labs.Home(name); err == nil && home != from {
-		rebaseLabPaths(from)
+	loose := false
+	if home, err := labs.Home(name); err == nil {
+		if home != from {
+			rebaseLabPaths(from)
+		}
+		fi, err := os.Lstat(filepath.Join(home, config.File))
+		loose = err == nil && fi.Mode().IsRegular()
 	}
 	home, err := labs.Settle(name, from)
 	if cross := (*labs.CrossDeviceError)(nil); errors.As(err, &cross) {
@@ -448,6 +455,11 @@ func settleLab(name, dir string) (string, error) {
 		cfgFile, _ := labs.ConfigFile(name)
 		fmt.Fprintf(os.Stderr, "Moved lab %s from %s to %s, its %s to %s; links at the old paths keep its cluster and older agentlab releases working\n",
 			name, from, home, config.File, cfgFile)
+	}
+	if fi, err := os.Lstat(filepath.Join(home, config.File)); loose && err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		cfgFile, _ := labs.ConfigFile(name)
+		fmt.Fprintf(os.Stderr, "Moved lab %s's %s to %s, byte for byte; a link at %s keeps its place\n",
+			name, config.File, cfgFile, filepath.Join(home, config.File))
 	}
 	return home, labs.Register(name, home)
 }
