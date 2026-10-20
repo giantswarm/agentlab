@@ -76,8 +76,10 @@ for p in /proc/[0-9]*; do
   [ -n "$c" ] && { cfg=$c; break; }
 done
 url=""; [ -n "$cfg" ] && [ -r "$cfg" ] && url=$(grep -o 'http://127\.0\.0\.1:[0-9]*/mcp/[^"]*' "$cfg" | head -1)
+n=unread; [ -n "$cfg" ] && [ -r "$cfg" ] && n=$(grep -o 'Bearer [^"]*' "$cfg" | grep -vc '^Bearer ` + credentialPlaceholder + `$')
+echo "$P mcp-config-tokens=$n"
 if [ -n "$url" ]; then
-  tok=$(grep -o 'Bearer [0-9a-f]*' "$cfg" | head -1 | cut -d' ' -f2)
+  tok=$(grep -o 'Bearer [0-9a-f]*' "$cfg" | head -1 | cut -d' ' -f2); [ -n "$tok" ] || tok=` + credentialPlaceholder + `
   port=$(echo "$url" | sed 's|http://127\.0\.0\.1:\([0-9]*\)/.*|\1|'); name=${url##*/mcp/}
   echo "$P forwarder=$name"
   get() { printf 'GET %s HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer %s\r\n\r\n' "$1" "${2:-$tok}" | nc -w 5 127.0.0.1 "$port" 2>/dev/null | head -1 | cut -d' ' -f2; }
@@ -97,6 +99,7 @@ if [ -n "$url" ]; then
   }
   call '{"jsonrpc":"2.0","method":"notifications/initialized"}' >/dev/null
   out=$(call '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"` + codingTestWriteTool + `","arguments":{"name":"` + codingTestAbsentAgent + `"}}}')
+  case "$out" in *"Unknown tool"*) out=$(call '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"` + musterCallTool + `","arguments":{"name":"` + codingTestWriteTool + `","arguments":{"name":"` + codingTestAbsentAgent + `"}}}}');; esac
   r=$(echo "$out" | tr '\n' ' ' | sed -n 's/.*"error":{[^}]*"message":"\([^"]*\)".*/\1/p' | head -c 200)
   echo "$P write-tool=${r:-answered: $(echo "$out" | tr '\n' ' ' | head -c 200)}"
 else
@@ -189,8 +192,24 @@ func (p codingProbe) forwarderPaths([]string) (string, error) {
 	return fmt.Sprintf("forwarder of %s: ../.. %s, %%2e%%2e %s, ..%%2f %s, an unknown server %s, no token %s", p["forwarder"], p["fwd-dots"], p["fwd-encoded-dots"], p["fwd-encoded-slash"], p["fwd-unknown"], p["fwd-no-token"]), nil
 }
 
+// noLoopbackToken: Claude Code's MCP config carries no Authorization but
+// kagent's placeholder, which the egress gateway replaces with the Actor's
+// JWT on an actor-JWT host: no loopback token a process in the sandbox could
+// replay. A count, never the value.
+func (p codingProbe) noLoopbackToken([]string) (string, error) {
+	n := p["mcp-config-tokens"]
+	if n != "0" {
+		return "", fmt.Errorf("the MCP config of Claude Code carries %s Authorization values other than the placeholder %s, wanted none: a loopback token the sandbox can read and replay (%s)", n, credentialPlaceholder, p.lines("forwarder", "mcp-config-tokens"))
+	}
+	if p["forwarder"] != "" {
+		return fmt.Sprintf("the MCP config keeps %s on the forwarder with the placeholder %s, no loopback token", p["forwarder"], credentialPlaceholder), nil
+	}
+	return fmt.Sprintf("the MCP config carries no loopback server and no Authorization but the placeholder %s", credentialPlaceholder), nil
+}
+
 // writeToolRefused: muster refuses the write tool through the forwarder,
-// naming the toolset.
+// naming the toolset. Under a tool selection on muster the forwarder knows
+// the write tool only behind muster's call_tool, which the probe then calls.
 func (p codingProbe) writeToolRefused([]string) (string, error) {
 	// Under the toolset muster resolves the agent's endpoint to the
 	// toolset's tools alone: a tool outside it is refused as outside the

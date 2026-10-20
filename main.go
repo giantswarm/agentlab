@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -1622,7 +1623,7 @@ func codingTestCmd() *cobra.Command {
 	var opts lab.CodingTestOptions
 	cmd := &cobra.Command{
 		Use:   "coding-test [email]",
-		Short: "Headless coding agents proof (platform.coding) on one coding Harness (--harness, default claude): the Harness Ready from the platform values (claude: no limits on it) -> validate_agent accepting a toolset with a muster write tool and refusing an origin outside the Harness's list -> a coding agent created through agent-manager as [email] (default the admin), Ready on the Harness (codex: its MCP binding's credential from a Secret) -> on a lab with the provider instance fake-bearer, a workspace the Session starts in through start_session -> one turn probing its sandbox: on claude, Claude Code as uid 65532 cannot read the root harness's environment or memory, the caller forwarder refuses dot segments and encoded slashes, muster refuses a write tool outside the toolset through it (both skipped in a workspace Session without the forwarder, where Claude Code calls muster's actor-JWT host directly); everywhere no forge token or bearer in the environment, /data or /workspace, the model key and MCP credentials placeholders, a DNS canary recorded, a host outside the Agent's origins denied at the egress gate -> an MCP call through the agent's binding listing the agent (in a workspace Session audited by muster as the person) -> a heartbeat one turn starts in the sandbox not running in the gap without a turn and running again in the next (in a workspace Session no muster call of the actor in the gap) -> on claude a repository's instruction files written, the next turn records what Claude Code loaded -> suspend and resume keeping the file and the conversation -> the resumed turn's usage on its task status -> a share of the Session refused -> in a workspace Session, deleted through delete_session: muster unbinds its actor and accepts no call of it after. On codex the model is the in-cluster mockllm (ModelConfig " + lab.MockLLMModelConfig + "), a mock Responses API scripted for these turns, which needs no OpenAI or Bedrock account; --model-config runs a real one",
+		Short: "Headless coding agents proof (platform.coding) on one coding Harness (--harness, default claude): the Harness Ready from the platform values (claude: no limits on it) -> validate_agent accepting a toolset with a muster write tool and refusing an origin outside the Harness's list -> a coding agent created through agent-manager as [email] (default the admin), Ready on the Harness (codex: its MCP binding's credential from a Secret) -> on a lab with the provider instance fake-bearer, a workspace the Session starts in through start_session -> one turn probing its sandbox: on claude, Claude Code as uid 65532 cannot read the root harness's environment or memory, the caller forwarder refuses dot segments and encoded slashes, muster refuses a write tool outside the toolset through it (both skipped in a workspace Session without the forwarder, where Claude Code calls muster's actor-JWT host directly), and in a workspace Session no Authorization in Claude Code's MCP config but the placeholder (--muster-tools gives the agent a tool selection on muster, as platform agents have); everywhere no forge token or bearer in the environment, /data or /workspace, the model key and MCP credentials placeholders, a DNS canary recorded, a host outside the Agent's origins denied at the egress gate -> an MCP call through the agent's binding listing the agent (in a workspace Session audited by muster as the person) -> a heartbeat one turn starts in the sandbox not running in the gap without a turn and running again in the next (in a workspace Session no muster call of the actor in the gap) -> on claude a repository's instruction files written, the next turn records what Claude Code loaded -> suspend and resume keeping the file and the conversation -> the resumed turn's usage on its task status -> a share of the Session refused -> in a workspace Session, deleted through delete_session: muster unbinds its actor and accepts no call of it after. On codex the model is the in-cluster mockllm (ModelConfig " + lab.MockLLMModelConfig + "), a mock Responses API scripted for these turns, which needs no OpenAI or Bedrock account; --model-config runs a real one",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadProofLab()
@@ -1632,6 +1633,9 @@ func codingTestCmd() *cobra.Command {
 			if len(args) == 1 {
 				opts.Email = args[0]
 			}
+			if slices.Equal(opts.MusterTools, []string{"meta"}) {
+				opts.MusterTools = lab.MusterMetaTools
+			}
 			return lab.CodingTest(cfg, opts)
 		},
 	}
@@ -1640,6 +1644,7 @@ func codingTestCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.Harness, "harness", config.CodingRuntimeClaude, fmt.Sprintf("the coding Harness the proof runs on (%s), one the lab renders (platform.coding.harnesses)", strings.Join(config.CodingRuntimes, ", ")))
 	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the agent runs on (default on codex the in-cluster mockllm, "+lab.MockLLMModelConfig+", else agent-manager's default one); codex needs an OpenAI Responses API or Bedrock gpt-* ModelConfig, such as the codex host model configure adds")
 	cmd.Flags().StringVar(&opts.MockLLMBinary, "mockllm-binary", "", "the static linux agentlab binary the mockllm's container runs (default this one)")
+	cmd.Flags().StringSliceVar(&opts.MusterTools, "muster-tools", nil, "the agent's tool selection on its muster binding (the Generic chart's muster.tools), as a platform agent binds muster: tool names, or meta for muster's "+strconv.Itoa(len(lab.MusterMetaTools))+" meta-tools (default none: muster bound whole)")
 	return cmd
 }
 
