@@ -152,9 +152,9 @@ func TestControllerReads(t *testing.T) {
 }
 
 // TestMusterAttribution: only records stamped after the turn began count; the
-// accepted-token audit record must name the email and a tools/call request's
-// truncated subject must prefix the token's subject; a pod prefix before the
-// JSON is tolerated.
+// accepted-token audit record must name the email, an actor bearer record's
+// and a tools/call request's truncated subject must prefix the token's
+// subject; a pod prefix before the JSON is tolerated.
 func TestMusterAttribution(t *testing.T) {
 	since := time.Date(2026, 9, 11, 17, 0, 0, 0, time.UTC)
 	logs := strings.Join([]string{
@@ -163,10 +163,13 @@ func TestMusterAttribution(t *testing.T) {
 		`{"time":"2026-09-11T17:00:02Z","level":"INFO","msg":"security_audit","audit":{"event_type":"forwarded_id_token_accepted","details":{"email":"dev@lab.local"}}}`,
 		`{"time":"2026-09-11T17:00:03Z","level":"INFO","msg":"tools/call request","subsystem":"MCP-Protocol","subject":"CiRjNGNl...","tool":"call_tool"}`,
 		`{"time":"2026-09-11T17:00:04Z","level":"INFO","msg":"tools/call request","subsystem":"MCP-Protocol","subject":"Cg9vdGhl...","tool":"call_tool"}`,
+		`{"time":"2026-09-11T17:00:05Z","level":"INFO","msg":"[AUDIT] action=actor_bearer outcome=success subject=CiRjNGNl... target=muster details=actor=spiffe://substrate-actor.local/actor/kagent/session-x session=kagent/x","subsystem":"AUDIT"}`,
+		`{"time":"2026-09-11T17:00:06Z","level":"INFO","msg":"[AUDIT] action=actor_bearer outcome=success subject=Cg9vdGhl... target=muster details=actor=spiffe://substrate-actor.local/actor/kagent/session-y session=kagent/y","subsystem":"AUDIT"}`,
+		`{"time":"2026-09-11T17:00:07Z","level":"INFO","msg":"[AUDIT] action=actor_bearer outcome=failure target=muster details=actor=spiffe://substrate-actor.local/actor/kagent/session-z error=actor is not bound","subsystem":"AUDIT"}`,
 		`not json at all`,
 	}, "\n")
 	accepted, calls, subjects := musterAttribution(logs, testUser, "CiRjNGNlZGFmNS0...", since)
-	if accepted != 1 || calls != 1 || len(subjects) != 2 {
+	if accepted != 2 || calls != 1 || len(subjects) != 2 {
 		t.Errorf("accepted=%d calls=%d subjects=%v", accepted, calls, subjects)
 	}
 }
