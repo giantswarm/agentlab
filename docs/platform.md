@@ -953,6 +953,17 @@ A red boot whose worker log says `field user-invocable not found in type
 skill.Frontmatter` is the loader refusing the fields; green is the skill
 listed, loaded and its codeword answered.
 
+A third fixture is a plugin rather than a skill:
+`fixtures/plugins/selection`, an Agent Plugins package (`plugin.json` at its
+root) with two skills, `selected-codeword` (codeword **saffron-viaduct**)
+and `unselected-codeword` (codeword **pewter-orchard**). An agent with the
+plugin and only `selected-codeword` in its `plugins[].skills` must answer
+the first codeword and not know the second: the package materialises only
+the skills an agent selects. With this repository among the portal's and
+agent-manager's skill repositories (a `platform.valuesFiles` overlay), the
+Dev Portal's wizard lists the package on its skills step with both skills
+as checkboxes.
+
 **Outcome (2026-09-11): positive — once every gate on the actor's egress
 admits a resuming actor.** Three gates stood between a booting actor and
 the network, found by reading the line's code and by the proof's evidence:
