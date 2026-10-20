@@ -170,3 +170,17 @@ func TestRegisterAMovedLabOverItsOldDirectory(t *testing.T) {
 		t.Fatalf("List() = %+v, %v; want the lab in %s only", got, err, home)
 	}
 }
+
+// A name that is no clusterName never becomes a path: nothing moves.
+func TestSettleRefusesANameThatIsNoClusterName(t *testing.T) {
+	cwd := setup(t)
+	writeConfig(t, cwd, "x")
+	for _, name := range []string{"../escape", "a/b", "", "UPPER"} {
+		if _, err := Settle(name, cwd); err == nil {
+			t.Errorf("Settle(%q) succeeded", name)
+		}
+	}
+	if fi, err := os.Lstat(filepath.Join(cwd, config.File)); err != nil || !fi.Mode().IsRegular() {
+		t.Errorf("agentlab.yaml moved: %v", err)
+	}
+}

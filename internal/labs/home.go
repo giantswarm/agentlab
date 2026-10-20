@@ -29,6 +29,9 @@ var (
 // rest of what the lab writes. Every command runs in it, so the lab's
 // relative paths hold. Its agentlab.yaml is a link to ConfigFile.
 func Home(name string) (string, error) {
+	if err := validName(name); err != nil {
+		return "", err
+	}
 	dir, err := stateHome()
 	if err != nil {
 		return "", fmt.Errorf("locating agentlab's state folder: %w", err)
@@ -39,11 +42,23 @@ func Home(name string) (string, error) {
 // ConfigFile is the lab's agentlab.yaml under agentlab's configuration folder
 // ($XDG_CONFIG_HOME/agentlab/labs/<name>/agentlab.yaml).
 func ConfigFile(name string) (string, error) {
+	if err := validName(name); err != nil {
+		return "", err
+	}
 	dir, err := configHome()
 	if err != nil {
 		return "", fmt.Errorf("locating agentlab's configuration folder: %w", err)
 	}
 	return filepath.Join(dir, labsDir, name, config.File), nil
+}
+
+// validName refuses a lab name that is no clusterName — one read from an
+// unvalidated agentlab.yaml could otherwise name a path outside the folders.
+func validName(name string) error {
+	if err := config.ValidateClusterName(name); err != nil {
+		return fmt.Errorf("lab name %q: %w", name, err)
+	}
+	return nil
 }
 
 // moved are the lab files a lab directory from before the freedesktop
