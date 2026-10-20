@@ -164,7 +164,10 @@ func (p *codingProof) proveNoTurn(ctx context.Context, session *apiv1alpha1.Sess
 	if err != nil {
 		return err
 	}
-	verdict, err = judgeGapAudit(logs, bound, turnGap{ended: w.resumed.Add(-codingTurnSettle), next: w.suspended.Add(2 * unbindClockSlack)})
+	// The audit window is the resume to the suspend: the next turn is sent
+	// at once after it, and its MCP session's first calls reach muster
+	// within the clock slack.
+	verdict, err = judgeGapAudit(logs, bound, turnGap{ended: w.resumed.Add(-codingTurnSettle), next: w.suspended})
 	if err != nil {
 		return fmt.Errorf("%w (%s)", err, p.line)
 	}
