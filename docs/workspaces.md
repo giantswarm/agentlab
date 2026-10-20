@@ -428,7 +428,9 @@ A person's grant of a GitHub App takes github.com's sign-in in a person's
 browser: the real GitHub App login, through a browser worker with an SSO
 session; no headless walk grants it. A proof that calls the manager's tools
 as a person finds the grant held, or answers muster's sign-in link, and
-`platform-test` then ends its workspace-manager stage at that link. The
+`platform-test` then ends its workspace-manager stage at that link: its
+verdict passes the link and reports `list_providers` and `list_workspaces`
+as SKIP, never as proven. The
 headless sign-in walk exists only for GitLab
 ([the GitLab part](#the-gitlab-part)).
 
