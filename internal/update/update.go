@@ -37,6 +37,7 @@ import (
 	"github.com/giantswarm/go-selfupdate"
 	selfupdatecosign "github.com/giantswarm/selfupdate-cosign"
 
+	"github.com/giantswarm/agentlab/internal/xdg"
 	"github.com/giantswarm/agentlab/pkg/project"
 )
 
@@ -81,8 +82,8 @@ var ErrOutdated = errors.New("a newer agentlab release is available")
 // (the shared cosign validator for releases of Repository: it pins the
 // CircleCI issuer, a CircleCI pipeline as the subject and this repository as
 // the source, against the Sigstore public-good trust root), the cache
-// location ("" disables the cache), the clock, the executable to replace and
-// the running version.
+// location ("" disables the cache), the clock, the executable to replace,
+// the folder it settles in and the running version.
 var (
 	newSource = func() selfupdate.Source {
 		// The error is for GitHub Enterprise URLs only; nil makes NewUpdater
@@ -96,12 +97,13 @@ var (
 	}
 	newValidator = func() selfupdate.Validator { return selfupdatecosign.New(Repository) }
 	cacheDir     = func() string {
-		dir, err := os.UserCacheDir()
+		dir, err := xdg.CacheHome()
 		if err != nil {
 			return ""
 		}
-		return filepath.Join(dir, project.Name)
+		return dir
 	}
+	binHome        = xdg.BinHome
 	now            = time.Now
 	executable     = selfupdate.ExecutablePath
 	currentVersion = project.Version
@@ -142,7 +144,8 @@ type Options struct {
 // Run is `agentlab self-update`. It looks up the newest release (release
 // candidates included with opts.Pre) and, unless opts.Check, downloads the binary for this OS and architecture and its
 // Sigstore bundle, verifies the one against the other, and only then writes
-// it over the running executable — the flow muster and mcp-kubernetes ship.
+// it over the running executable — the flow muster and mcp-kubernetes ship —
+// which then settles in ~/.local/bin (settle), also when nothing is newer.
 // Progress goes to w. A development build is refused: "dev" compares with
 // nothing and was not installed from a release to begin with. A release
 // without a bundle for this platform's binary is refused before anything is
@@ -189,7 +192,14 @@ func Run(ctx context.Context, w io.Writer, opts Options) error {
 		if cur.Prerelease() != "" && !opts.Pre {
 			_, _ = fmt.Fprintf(w, "%s is a release candidate: `agentlab self-update --pre` follows release candidates too.\n", current)
 		}
-		return nil
+		if opts.Check {
+			return nil
+		}
+		exe, err := executable()
+		if err != nil {
+			return fmt.Errorf("locating the running executable: %w", err)
+		}
+		return settle(w, exe)
 	}
 	_, _ = fmt.Fprintf(w, "Newer %s: %s (published %s)\n  %s\n", which, latest, rel.PublishedAt.Format(time.RFC3339), rel.URL)
 	if opts.Check {
@@ -208,7 +218,58 @@ func Run(ctx context.Context, w io.Writer, opts Options) error {
 		return fmt.Errorf("updating %s failed, it is unchanged: %w", exe, err)
 	}
 	_, _ = fmt.Fprintf(w, "Verified the signature and updated to %s.\n", latest)
+	return settle(w, exe)
+}
+
+// settle moves the installed binary at exe into the freedesktop folder of
+// the user's executables (xdg.BinHome, ~/.local/bin) when it lives anywhere
+// else, and leaves a link at exe: whichever of the two folders comes first
+// on PATH, `agentlab` runs the one binary self-update keeps current. A file
+// already in that folder is replaced by the rename, in one step. On
+// Windows, where a link needs a privilege, the binary stays where it is.
+func settle(w io.Writer, exe string) error {
+	if runtime.GOOS == goosWindows {
+		return nil
+	}
+	bin, err := binHome()
+	if err != nil {
+		return fmt.Errorf("locating the folder of your executables: %w", err)
+	}
+	from, err := filepath.EvalSymlinks(exe)
+	if err != nil {
+		return err
+	}
+	if realBin, err := filepath.EvalSymlinks(bin); err == nil && filepath.Dir(from) == realBin {
+		return nil
+	}
+	to := filepath.Join(bin, project.Name)
+	if err := os.MkdirAll(bin, 0o750); err != nil {
+		return err
+	}
+	if err := os.Rename(from, to); err != nil {
+		return fmt.Errorf("moving %s to %s (it stays where it is): %w", from, to, err)
+	}
+	if err := os.Symlink(to, from); err != nil {
+		return fmt.Errorf("moved %s to %s, but the link at the old path is missing: %w", from, to, err)
+	}
+	_, _ = fmt.Fprintf(w, "Installed at %s; %s links to it.\n", to, from)
+	if !onPath(bin) {
+		_, _ = fmt.Fprintf(w, "  %s is not on your PATH: add it, so `agentlab` finds it there.\n", bin)
+	}
 	return nil
+}
+
+// goosWindows is runtime.GOOS on Windows.
+const goosWindows = "windows"
+
+// onPath reports whether dir is one of PATH's folders.
+func onPath(dir string) bool {
+	for _, p := range filepath.SplitList(os.Getenv("PATH")) {
+		if filepath.Clean(p) == filepath.Clean(dir) {
+			return true
+		}
+	}
+	return false
 }
 
 // detect asks GitHub for the newest release with a binary for this platform
