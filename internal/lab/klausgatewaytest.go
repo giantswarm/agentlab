@@ -323,7 +323,9 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	if err != nil {
 		return err
 	}
-	gate, err := startTCPGate(net.JoinHostPort("127.0.0.1", strconv.Itoa(opts.Port+3)), edge)
+	// The gate listens where the lab's hostnames resolve on the host: a
+	// second lab's domain resolves to its own loopback address.
+	gate, err := startTCPGate(net.JoinHostPort(cfg.GatewayHostAddress(), strconv.Itoa(opts.Port+3)), edge)
 	if err != nil {
 		return fmt.Errorf("the gate in front of the edge: %w", err)
 	}
@@ -696,7 +698,8 @@ func edgeHostPort(httpsBase string) (string, error) {
 
 // gatedTarget is the gateway's grpcs:// target through the gate on port: the
 // edge's own hostname, so TLS verifies against the lab CA as usual — the
-// lab's domain resolves to loopback, where the gate listens.
+// lab's domain resolves to the lab's loopback address, where the gate
+// listens.
 func gatedTarget(edge string, port int) string {
 	host, _, _ := net.SplitHostPort(edge)
 	return "grpcs://" + net.JoinHostPort(host, strconv.Itoa(port))
