@@ -32,9 +32,15 @@ import (
 //     accepts a toolset with a muster write tool and refuses an egress origin
 //     outside the Harness's list. An agent-manager below
 //     agentManagerAnyToolsetFloor refuses the write tool instead, and the
-//     proof expects that refusal on it.
+//     proof expects that refusal on it. Agent Plugins (codingplugins.go):
+//     validate_agent accepts the example package with its skill selected on
+//     every Harness of the namespace; a public Claude-format package is
+//     refused by validate_agent and create_agent on codex, nothing written;
+//     the refusal on kagent skips until agent-manager checks plugins there.
 //  3. create_agent on the Harness with the read-only preset plus that write
-//     tool (the read-only preset alone below the floor): Ready, its
+//     tool (the read-only preset alone below the floor) and the example
+//     package, on claude with the Claude-format package beside it:
+//     Ready, its
 //     RemoteMCPServer Accepted and sending the toolset, the Agent's egress
 //     the Harness's origin list. On codex and omp a binding with a header
 //     from a Secret carries its credential on upstream's Secret-backed path,
@@ -59,7 +65,10 @@ import (
 //     every MCP credential a placeholder; a DNS lookup of a name outside the
 //     allowlist recorded (through the cluster resolver and directly); a host
 //     outside the Agent's origins denied at the egress gate, an origin of
-//     its list reached.
+//     its list reached. Then the plugin skills: the agent has the selected
+//     ones and no other (on the mockllm, the requests the runtime sent carry
+//     the selected skill); on claude the Claude-format package's hook ran,
+//     and update_agent moving the agent to codex refused, nothing written.
 //  6. An MCP call: the agent calls agent-manager's list_agents through its
 //     binding and finds itself listed; in a workspace Session muster audits
 //     the call as the person the Session's sandbox actor is bound to.
@@ -80,7 +89,10 @@ import (
 // 12. In a workspace Session, after delete: the Session deleted through
 //     agent-manager's delete_session, muster unbinds its actor and accepts
 //     no call of it after.
-// 13. On codex without --model-config, the model: every model call of the
+// 13. The empty selection: update_agent with the example package's selection
+//     empty, the agent Ready on a new revision, a new Session's agent
+//     without its skill.
+// 14. On codex without --model-config, the model: every model call of the
 //     turns answered by the in-cluster mockllm's script (mockllm.go).
 //
 // The agents and Sessions are removed on every exit path.
@@ -314,6 +326,12 @@ type codingProof struct {
 	rig *workspaceSessionRig
 	// musterTools is the agent's tool selection on muster; empty is none.
 	musterTools []string
+	// harnesses are the Harnesses of the agents' namespace.
+	harnesses []string
+	// codexModel is the Responses API ModelConfig the codex plugin rows
+	// write with; mockModelPlaced says the run placed the mockllm's for them.
+	codexModel      string
+	mockModelPlaced bool
 }
 
 func (p *codingProof) run() error {
@@ -371,6 +389,15 @@ func (p *codingProof) run() error {
 	}
 	p.setTurnBudget(modelConfig)
 	p.removeAgents()
+	if p.harnesses, err = namespaceHarnesses(ctx); err != nil {
+		return err
+	}
+	codex := slices.Contains(p.harnesses, config.CodingRuntimeCodex)
+	if codex {
+		if err := p.prepareCodexModel(modelConfig); err != nil {
+			return err
+		}
+	}
 
 	verdict := "accepted"
 	if !p.anyToolset {
@@ -385,8 +412,21 @@ func (p *codingProof) run() error {
 		return err
 	}
 
-	spec.Toolset = p.toolset()
-	p.stages.begin("create", "%screate_agent %s on Harness %s, toolset %v: Ready, its RemoteMCPServer Accepted with the toolset, the Agent's egress the Harness's origins", agentManagerToolPrefix, codingTestAgent, harness, spec.Toolset)
+	p.stages.begin("plugins accepted", "%svalidate_agent on every Harness of the namespace (%s): %s @ %.12s with skill %s selected, no plugin refused", agentManagerToolPrefix, strings.Join(p.harnesses, ", "), pluginExampleURL, pluginExampleCommit, pluginExampleSkill)
+	if err := p.provePluginsAccepted(spec); err != nil {
+		return err
+	}
+	p.stages.begin("claude-format refused on codex", "%s %s (Claude-format) on Harness codex: validate_agent and create_agent refuse it, naming the root plugin.json, and write nothing", claudePluginURL, claudePluginPath)
+	if !codex {
+		p.stages.skip("the lab renders no Harness codex: add it to platform.coding.harnesses in %s (`agentlab configure --coding-harnesses %s`), then `agentlab platform`", config.File, strings.Join(append(slices.Clone(p.cfg.CodingHarnesses()), config.CodingRuntimeCodex), ","))
+	} else if err := p.proveClaudeFormatRefused(spec); err != nil {
+		return err
+	}
+	p.stages.begin("claude-format refused on kagent", "The Claude-format package on Harness %s: validate_agent and create_agent refuse it, naming the root plugin.json", kagentHarness)
+	p.stages.skip("agent-manager runs its plugin check on the kagent Harness from %s, not released on this line (%s): until then a Claude-format git plugin passes the write on kagent and fails at its golden boot", kagentPluginCheck, p.line)
+
+	spec.Toolset, spec.Plugins = p.toolset(), p.codingPlugins([]string{pluginExampleSkill})
+	p.stages.begin("create", "%screate_agent %s on Harness %s, toolset %v, plugins %s: Ready, its RemoteMCPServer Accepted with the toolset, the Agent's egress the Harness's origins", agentManagerToolPrefix, codingTestAgent, harness, spec.Toolset, p.pluginsWords())
 	egress, err := p.createReady(spec)
 	if err != nil {
 		return err
@@ -454,6 +494,28 @@ func (p *codingProof) run() error {
 			return fmt.Errorf("%s: %w; the reply: %q", p.line, err, excerpt(reply, 1200))
 		}
 		note("%s", verdict)
+	}
+
+	p.stages.begin("plugin skills", "The agent on %s has the plugin skills selected and no other: %v", harness, p.pluginSkillsKnown())
+	listing, err := p.provePluginSkills(ctx, session, true, 0, p.rt.claude)
+	if err != nil {
+		return err
+	}
+	if p.rt.claude {
+		p.stages.begin("plugin hook", "The Claude-format package loaded whole: its SessionStart hook added its context to the Session")
+		verdict, err := judgeClaudePluginHook(listing)
+		if err != nil {
+			return fmt.Errorf("on Harness %s: %w (%s)", harness, err, p.line)
+		}
+		note("%s", verdict)
+		p.stages.begin("harness change refused", "%supdate_agent moving %s, which binds the Claude-format package, to Harness codex refused as Claude-format: the HelmRelease not written, the Agent still on %s", agentManagerToolPrefix, codingTestAgent, harness)
+		if !codex {
+			p.stages.skip("the lab renders no Harness codex: add it to platform.coding.harnesses in %s, then `agentlab platform`", config.File)
+		} else if err := p.proveHarnessChangeRefused(); err != nil {
+			return err
+		}
+		p.stages.begin("harness change to kagent refused", "%supdate_agent moving %s, which binds the Claude-format package, to Harness %s refused as Claude-format", agentManagerToolPrefix, codingTestAgent, kagentHarness)
+		p.stages.skip("agent-manager runs its plugin check on the kagent Harness from %s, not released on this line (%s): the move is not attempted, since it would write a revision that never boots", kagentPluginCheck, p.line)
 	}
 
 	p.stages.begin("mcp call", "The agent calls %s through its MCP binding and finds itself listed", codingTestReadTool)
@@ -531,6 +593,11 @@ func (p *codingProof) run() error {
 	} else if err := p.proveAfterDelete(ctx, session); err != nil {
 		return err
 	}
+
+	p.stages.begin("empty selection", "%supdate_agent with %s's skill selection empty: the agent Ready on the new revision, a new Session's agent has none of its skills", agentManagerToolPrefix, pluginExampleURL)
+	if err := p.proveEmptySelection(ctx); err != nil {
+		return err
+	}
 	if p.mock == nil {
 		return nil
 	}
@@ -546,7 +613,7 @@ func (p *codingProof) startMock() error {
 	if err != nil {
 		return err
 	}
-	if p.mock, err = startMockLLM(p.cfg, p.mockBinary, t.mcpServer()); err != nil {
+	if p.mock, err = startMockLLM(p.cfg, p.mockBinary, t.mcpServer(), []string{pluginExampleSkill}); err != nil {
 		return err
 	}
 	note("the mockllm serves %s for the MCP tools of %s", mockLLMURL(), t.mcpServer())
@@ -887,13 +954,15 @@ func (p *codingProof) shareRefused(ctx context.Context, session *apiv1alpha1.Ses
 	return fmt.Errorf("%s created share %s of Session %s on Harness %s (revoked): the refusal of shares on a Harness that runs code is not on this line", p.line, shareID, session.GetId(), p.rt.name)
 }
 
-// removeAgents removes the proof's agent, a leftover of an earlier run too.
+// removeAgents removes the proof's agents, a leftover of an earlier run too.
 func (p *codingProof) removeAgents() {
-	if !agentExists(codingTestAgent) {
-		return
-	}
-	if err := removeAgent(codingTestAgent); err != nil {
-		note("cleanup: %v", err)
+	for _, name := range []string{codingTestAgent, codingTestPluginAgent} {
+		if !agentExists(name) {
+			continue
+		}
+		if err := removeAgent(name); err != nil {
+			note("cleanup: %v", err)
+		}
 	}
 }
 
@@ -907,7 +976,7 @@ func (p *codingProof) cleanup() {
 			warn("removing the workspace Session's workspace: %v", err)
 		}
 	}
-	if p.mockBinary != "" {
+	if p.mockBinary != "" || p.mockModelPlaced {
 		p.mock.close()
 		removeMockLLMModelConfig()
 	}
