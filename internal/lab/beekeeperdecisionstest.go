@@ -36,10 +36,11 @@ import (
 // guide, and with the guide off the roster the thread says the reply was
 // not delivered.
 
-// BeekeeperDecisionsVersionDefault is the first beekeeper release that puts
-// decisions to people through klaus-gateway and lets their guide converse
-// with them there.
-const BeekeeperDecisionsVersionDefault = "v0.79.0-rc.1"
+// BeekeeperDecisionsVersionDefault is the beekeeper release the proof passes
+// against: it puts decisions to people through klaus-gateway, each naming the
+// thread its answer is recorded on, and lets their guide converse with them
+// there.
+const BeekeeperDecisionsVersionDefault = "v0.152.4"
 
 // The proof's names: the MCPServer muster aggregates beekeeper under (its
 // tools are x_beekeeper_*), the team the lab users decide as, and the due
@@ -61,6 +62,11 @@ const (
 	beekeeperKeyKind    = "kind"
 	beekeeperKeyDefault = "default"
 	beekeeperKeyNote    = "note"
+	beekeeperKeyRefs    = "refs"
+	// beekeeperDecisionRef is the thread every decision names: serve refuses
+	// a decision without one, the issue or pull request its answer is
+	// recorded on.
+	beekeeperDecisionRef = "giantswarm/agentlab-decisions-proof#1"
 	// musterNodePort is muster's plain listener in the node's network.
 	musterNodePort      = 8090
 	beekeeperDefaultDue = "1m"
@@ -574,6 +580,7 @@ func (p *beekeeperProof) add(forWho, question, due string) (int, error) {
 		"why":        "Only the lab's owners pick what rolls.",
 		"options":    []any{"Roll tonight: the lane clears at 22:00", "Wait for Monday: nothing rolls before Monday"},
 		"recommend":  2, beekeeperKeyDue: due, beekeeperKeyDefault: beekeeperDefault,
+		beekeeperKeyRefs: []any{beekeeperDecisionRef},
 	})
 	if err != nil {
 		return 0, err
@@ -734,7 +741,8 @@ func (p *beekeeperProof) withdrawn() error {
 }
 
 // beekeeperOutcomes wants the Events beekeeper recorded: two answers from
-// Slack, one default.
+// Slack (answer.recorded, note.answered before beekeeper recorded answers on
+// their thread), one default.
 func beekeeperOutcomes() error {
 	k, err := labKube()
 	if err != nil {
@@ -749,16 +757,16 @@ func beekeeperOutcomes() error {
 	var answered, defaulted int
 	for _, e := range evs.Items {
 		switch {
-		case e.Reason == "note.answered" && strings.Contains(e.Message, "via slack"):
+		case (e.Reason == "answer.recorded" || e.Reason == "note.answered") && strings.Contains(e.Message, "via slack"):
 			answered++
 		case e.Reason == "note.defaulted" && strings.Contains(e.Message, beekeeperDefault):
 			defaulted++
 		}
 	}
 	if answered != 2 || defaulted != 1 {
-		return fmt.Errorf("%s holds %d note.answered via slack and %d note.defaulted Events, want 2 and 1", beekeeperNamespace, answered, defaulted)
+		return fmt.Errorf("%s holds %d answers via slack and %d note.defaulted Events, want 2 and 1", beekeeperNamespace, answered, defaulted)
 	}
-	note("2 note.answered via slack, 1 note.defaulted")
+	note("2 answers via slack, 1 note.defaulted")
 	return nil
 }
 
