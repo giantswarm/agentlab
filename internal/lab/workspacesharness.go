@@ -38,7 +38,9 @@ import (
 //  4. A Session without a volume: its turn works in its default directory
 //     and sees no mirrors. Its creator is the person the grants name.
 //  5. Refusals at create: a volume without a grant, a grant signed by a key
-//     the manager does not publish, and a grant for another person.
+//     the manager does not publish, a grant for another person, and, naming
+//     another namespace, a grant for another namespace's Agents and one
+//     naming no Agent namespace.
 //  6. A Session admitted with a grant on the volume: its turn works in its
 //     own directory, sees the mirror at <owner>/<repository>.git read-only,
 //     writes a file of its own, and that file is on the volume at
@@ -59,6 +61,12 @@ const (
 	// workspacesHarnessOwnFile is the file the Session's turn writes into its
 	// own directory, read back from the volume.
 	workspacesHarnessOwnFile = "agentlab-probe"
+	// workspacesHarnessOtherNamespace is the Agent namespace a refused grant
+	// names in place of the lab Agents' own.
+	workspacesHarnessOtherNamespace = "agentlab-workspaces-other"
+	// workspacesHarnessNamespaceRefusal is kagent's refusal of a grant
+	// naming another Agent namespace or none.
+	workspacesHarnessNamespaceRefusal = "admission grant is for another namespace"
 	// workspacesHarnessGrantTTL is how long the proof's grants are valid,
 	// the manager's default.
 	workspacesHarnessGrantTTL = 5 * time.Minute
@@ -303,10 +311,10 @@ func proveWorkspacesHarnessSession(cfg *config.Config, timeout time.Duration) (s
 	person := plain.GetCreator()
 	// kagent's admission compares the grant's sub with the Session's
 	// creator, the person's email, which the manager's authorize_workspace
-	// signs too (--part access proves its grant admitted).
+	// signs too.
 	note("Session %s (creator %s): %s", plain.GetId(), person, probe)
 
-	step("Refused at create: a volume without a grant, a grant the manager's key set does not verify, a grant for another person")
+	step("Refused at create: a volume without a grant, a grant the manager's key set does not verify, a grant for another person, a grant for another namespace's Agents and one naming none")
 	source := workspacesHarnessVolumeSource(volume)
 	foreign, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -315,14 +323,24 @@ func proveWorkspacesHarnessSession(cfg *config.Config, timeout time.Duration) (s
 	for _, refusal := range []struct {
 		what  string
 		token func() (string, error)
+		// reason is what kagent's refusal must name; empty takes any.
+		reason string
 	}{
-		{"no grant", func() (string, error) { return "", nil }},
+		{"no grant", func() (string, error) { return "", nil }, ""},
 		{"a grant signed by a key the manager does not publish", func() (string, error) {
 			return signWorkspaceGrant(foreign, workspaceGrantJWK(&foreign.PublicKey).Kid, newWorkspaceGrant(rig.Issuer, person, workspacesHarnessWorkspace, volume, time.Now(), workspacesHarnessGrantTTL))
-		}},
+		}, ""},
 		{"a grant for another person", func() (string, error) {
 			return signWorkspaceGrant(key, kid, newWorkspaceGrant(rig.Issuer, "someone-else@lab.local", workspacesHarnessWorkspace, volume, time.Now(), workspacesHarnessGrantTTL))
-		}},
+		}, ""},
+		{fmt.Sprintf("a grant for the Agents of namespace %s presented on Agent %s/%s", workspacesHarnessOtherNamespace, kagentNamespace, workspacesHarnessAgent), func() (string, error) {
+			grant := newWorkspaceGrant(rig.Issuer, person, workspacesHarnessWorkspace, volume, time.Now(), workspacesHarnessGrantTTL)
+			grant.AgentNamespace = workspacesHarnessOtherNamespace
+			return signWorkspaceGrant(key, kid, grant)
+		}, workspacesHarnessNamespaceRefusal},
+		{"a grant without agent_namespace", func() (string, error) {
+			return signGrantWithout(key, kid, newWorkspaceGrant(rig.Issuer, person, workspacesHarnessWorkspace, volume, time.Now(), workspacesHarnessGrantTTL), "agent_namespace")
+		}, workspacesHarnessNamespaceRefusal},
 	} {
 		grant, err := refusal.token()
 		if err != nil {
@@ -331,6 +349,9 @@ func proveWorkspacesHarnessSession(cfg *config.Config, timeout time.Duration) (s
 		reason, err := workspacesHarnessRefused(ctx, api, source, grant)
 		if err != nil {
 			return "", fmt.Errorf("%s: %w", refusal.what, err)
+		}
+		if !strings.Contains(reason, refusal.reason) {
+			return "", fmt.Errorf("%s: kagent %s refused for another reason than %q: %s", refusal.what, controller, refusal.reason, reason)
 		}
 		note("%s: %s", refusal.what, reason)
 	}

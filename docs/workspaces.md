@@ -172,8 +172,11 @@ workspace volumes with it, and installs it under the new name.
      `/data/workspace` and sees no `/mirrors`. Its creator is the person the
      grants name.
    - Refused at create, each with kagent's reason: a volume without a grant,
-     a grant signed by a key the manager does not publish, and a grant for
-     another person.
+     a grant signed by a key the manager does not publish, a grant for
+     another person, and two refused naming
+     `admission grant is for another namespace`: a grant for the Agents of
+     namespace `agentlab-workspaces-other` presented on the Agent in `kagent`,
+     and a grant without `agent_namespace`.
    - A Session with the volume source the manager's grant allows
      (`sessions/${SESSION_ID}` read-write at `/workspace`, `mirrors`
      read-only at `/mirrors`) and a grant signed with the lab's key: its turn
@@ -425,7 +428,9 @@ A person's grant of a GitHub App takes github.com's sign-in in a person's
 browser: the real GitHub App login, through a browser worker with an SSO
 session; no headless walk grants it. A proof that calls the manager's tools
 as a person finds the grant held, or answers muster's sign-in link, and
-`platform-test` then ends its workspace-manager stage at that link. The
+`platform-test` then ends its workspace-manager stage at that link: its
+verdict passes the link and reports `list_providers` and `list_workspaces`
+as SKIP, never as proven. The
 headless sign-in walk exists only for GitLab
 ([the GitLab part](#the-gitlab-part)).
 
