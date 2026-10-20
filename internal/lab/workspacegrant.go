@@ -318,6 +318,23 @@ func signWorkspaceGrant(key *ecdsa.PrivateKey, kid string, grant workspaceGrant)
 	return signWorkspaceClaims(key, kid, grant)
 }
 
+// signGrantWithout signs the grant with the claims named left out, as a
+// compact JWS: a grant the manager would never sign.
+func signGrantWithout(key *ecdsa.PrivateKey, kid string, grant workspaceGrant, claims ...string) (string, error) {
+	raw, err := json.Marshal(grant)
+	if err != nil {
+		return "", err
+	}
+	var generic map[string]any
+	if err := json.Unmarshal(raw, &generic); err != nil {
+		return "", err
+	}
+	for _, c := range claims {
+		delete(generic, c)
+	}
+	return signWorkspaceClaims(key, kid, generic)
+}
+
 // signWorkspaceClaims signs any claims with ES256 under kid, as a compact
 // JWS: a grant of the proof's, or a manager's grant with a claim changed.
 func signWorkspaceClaims(key *ecdsa.PrivateKey, kid string, claims any) (string, error) {
