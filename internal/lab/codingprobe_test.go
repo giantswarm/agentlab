@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -281,6 +282,26 @@ func TestCodingProbeValueShapes(t *testing.T) {
 			if got[key] != codingTestCodeWord {
 				t.Errorf("%s: %s = %q, want %s", name, key, got[key], codingTestCodeWord)
 			}
+		}
+	}
+}
+
+// The stages a workspace Session without the caller forwarder skips are the
+// two that probe it, on claude alone.
+func TestCodingForwarderStages(t *testing.T) {
+	for name, rt := range codingRuntimes {
+		var forwarder []string
+		for _, s := range (&codingProof{rt: rt}).judgedStages() {
+			if s.forwarder {
+				forwarder = append(forwarder, s.name)
+			}
+		}
+		want := []string(nil)
+		if rt.claude {
+			want = []string{"forwarder paths", "write tool refused"}
+		}
+		if !slices.Equal(forwarder, want) {
+			t.Errorf("%s: forwarder stages %v, want %v", name, forwarder, want)
 		}
 	}
 }

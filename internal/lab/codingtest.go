@@ -52,7 +52,9 @@ import (
 //     the caller forwarder refuses dot segments and encoded slashes, answers
 //     404 for a server it does not front and 401 without its token; a write
 //     tool outside the agent's toolset is refused by muster through the
-//     forwarder with the turn's bearer. On every Harness: no forge token or
+//     forwarder with the turn's bearer. A workspace Session whose Claude Code
+//     calls muster's actor-JWT host directly runs no forwarder: its two
+//     forwarder stages skip. On every Harness: no forge token or
 //     bearer in the environment, /data or /workspace, the model key and
 //     every MCP credential a placeholder; a DNS lookup of a name outside the
 //     allowlist recorded (through the cluster resolver and directly); a host
@@ -429,6 +431,10 @@ func (p *codingProof) run() error {
 
 	for _, judged := range p.judgedStages() {
 		p.stages.begin(judged.name, "%s", judged.title)
+		if judged.forwarder && p.rig != nil && probe["forwarder"] == "" {
+			p.stages.skip("no caller forwarder in a workspace Session: Claude Code calls muster's actor-JWT host directly and the egress gateway sets the Actor's JWT (the mcp call stage proves muster's audit of the person); %s", p.line)
+			continue
+		}
 		verdict, err := judged.verdict(probe, egress)
 		if err != nil {
 			return fmt.Errorf("%s: %w; the reply: %q", p.line, err, excerpt(reply, 1200))
@@ -547,10 +553,13 @@ func (p *codingProof) mockAnswered() error {
 	return nil
 }
 
-// judgedStage is one verdict on the sandbox turn's readings.
+// judgedStage is one verdict on the sandbox turn's readings. A forwarder
+// stage probes the caller forwarder, which a workspace Session on a line
+// that sends Claude Code to muster's actor-JWT host directly does not run.
 type judgedStage struct {
 	name, title string
 	verdict     func(codingProbe, []string) (string, error)
+	forwarder   bool
 }
 
 // judgedStages are the verdicts on the sandbox turn for the runtime: Claude
@@ -559,15 +568,15 @@ func (p *codingProof) judgedStages() []judgedStage {
 	var stages []judgedStage
 	if p.rt.claude {
 		stages = append(stages,
-			judgedStage{"uid split", "Claude Code as uid " + claudeUnprivilegedUID + " cannot read the root harness's environment or memory", codingProbe.uidSplit},
-			judgedStage{"forwarder paths", "The caller forwarder refuses dot segments and encoded slashes before it matches a server", codingProbe.forwarderPaths},
-			judgedStage{"write tool refused", "A write tool outside the toolset, called through the forwarder with the turn's bearer, refused by muster", codingProbe.writeToolRefused},
+			judgedStage{"uid split", "Claude Code as uid " + claudeUnprivilegedUID + " cannot read the root harness's environment or memory", codingProbe.uidSplit, false},
+			judgedStage{"forwarder paths", "The caller forwarder refuses dot segments and encoded slashes before it matches a server", codingProbe.forwarderPaths, true},
+			judgedStage{"write tool refused", "A write tool outside the toolset, called through the forwarder with the turn's bearer, refused by muster", codingProbe.writeToolRefused, true},
 		)
 	}
 	return append(stages,
-		judgedStage{"credentials", "No forge token or bearer in the environment or /data; the model key and the MCP credentials placeholders", codingProbe.credentials},
-		judgedStage{"dns canary", "A lookup of " + codingTestDNSCanary + ", outside the allowlist, recorded", codingProbe.dnsCanary},
-		judgedStage{"egress", "A host outside the Agent's origins denied at the egress gate, an origin of its list reached", codingProbe.egress},
+		judgedStage{"credentials", "No forge token or bearer in the environment or /data; the model key and the MCP credentials placeholders", codingProbe.credentials, false},
+		judgedStage{"dns canary", "A lookup of " + codingTestDNSCanary + ", outside the allowlist, recorded", codingProbe.dnsCanary, false},
+		judgedStage{"egress", "A host outside the Agent's origins denied at the egress gate, an origin of its list reached", codingProbe.egress, false},
 	)
 }
 
