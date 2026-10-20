@@ -95,6 +95,9 @@ type BeekeeperDecisionsTestOptions struct {
 	// machine for step 9: its standby watch and a background Claude Code
 	// session as their guide (claude on PATH, on its smallest model).
 	LocalBeekeeper string
+	// GuideOnly runs the guide's conversation steps (6 to 9) without the
+	// decisions (1 to 5).
+	GuideOnly bool
 	// The gateway: Port is its endpoints' in the node's network, Port+1
 	// its admin endpoints, Port+3 beekeeper serve's, Port+4 its Postgres'.
 	// Default the lab's own block, gatewayTestPort. GatewayBinary is not
@@ -274,25 +277,27 @@ func BeekeeperDecisionsTest(cfg *config.Config, opts BeekeeperDecisionsTestOptio
 	p := &beekeeperProof{s: askerS, otherS: otherS, fake: fake, driver: newSlackDriver(gw.baseURL(), keys.signing, fake, channel),
 		asker: asker.Email, askerSlack: askerSlack, otherSlack: otherSlack, channel: channel}
 
-	step("1. A decision for %s, filed through muster: a direct message; %s's click is refused, %s's answers it", asker.Email, other.Email, asker.Email)
-	if err := p.personByClick(); err != nil {
-		return err
-	}
-	step("2. A decision for team:%s in %s, answered by %s's reply in its thread", beekeeperTeam, channel, other.Email)
-	if err := p.teamByThreadReply(); err != nil {
-		return err
-	}
-	step("3. A decision nobody answers closes with its default at its due time (%s); a late click is refused", beekeeperDefaultDue)
-	if err := p.defaulted(); err != nil {
-		return err
-	}
-	step("4. A decision its filer withdraws (note_done) loses its buttons")
-	if err := p.withdrawn(); err != nil {
-		return err
-	}
-	step("5. beekeeper recorded each outcome as an Event in %s", beekeeperNamespace)
-	if err := beekeeperOutcomes(); err != nil {
-		return err
+	if !opts.GuideOnly {
+		step("1. A decision for %s, filed through muster: a direct message; %s's click is refused, %s's answers it", asker.Email, other.Email, asker.Email)
+		if err := p.personByClick(); err != nil {
+			return err
+		}
+		step("2. A decision for team:%s in %s, answered by %s's reply in its thread", beekeeperTeam, channel, other.Email)
+		if err := p.teamByThreadReply(); err != nil {
+			return err
+		}
+		step("3. A decision nobody answers closes with its default at its due time (%s); a late click is refused", beekeeperDefaultDue)
+		if err := p.defaulted(); err != nil {
+			return err
+		}
+		step("4. A decision its filer withdraws (note_done) loses its buttons")
+		if err := p.withdrawn(); err != nil {
+			return err
+		}
+		step("5. beekeeper recorded each outcome as an Event in %s", beekeeperNamespace)
+		if err := beekeeperOutcomes(); err != nil {
+			return err
+		}
 	}
 	step("6. The guide in Slack: %s's guide writes to them, their reply in the thread reaches the guide's mailbox from Slack, the guide's answer lands in the same thread", asker.Email)
 	r, err := p.guideConversation()
@@ -319,6 +324,10 @@ func BeekeeperDecisionsTest(cfg *config.Config, opts BeekeeperDecisionsTestOptio
 		if err := p.localGuideConversation(g); err != nil {
 			return err
 		}
+	}
+	if opts.GuideOnly {
+		note("the guide's conversation proven")
+		return nil
 	}
 	note("all beekeeper decisions and the guide's conversation proven")
 	return nil

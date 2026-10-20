@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -40,7 +41,7 @@ type localGuide struct {
 	name, short       string
 	transcript        string
 	watch             *exec.Cmd
-	watchOut          *bytes.Buffer
+	watchOut          *lockedBuffer
 }
 
 // startLocalGuide writes the person's machine, starts the guide as a
@@ -104,7 +105,7 @@ func startLocalGuide(runDir, bin, ca, email, endpoint, token, run string) (*loca
 	if out, err := reg.CombinedOutput(); err != nil {
 		return g, fmt.Errorf("agents register: %v: %s", err, excerpt(string(out), 300))
 	}
-	g.watchOut = &bytes.Buffer{}
+	g.watchOut = &lockedBuffer{}
 	g.watch = exec.Command(bin, "--config", cfgFile, "watch", "--standby") //nolint:gosec // the proof's beekeeper
 	g.watch.Env = append(os.Environ(), "SSL_CERT_FILE="+ca, "CLAUDE_CODE_SESSION_ID=")
 	g.watch.Stdout, g.watch.Stderr = g.watchOut, g.watchOut
@@ -168,7 +169,7 @@ func (p *beekeeperProof) localGuideConversation(g *localGuide) error {
 		text, err = g.converse(localGuideAsk)
 		return err == nil
 	}) {
-		return fmt.Errorf("beekeeper converse as %s: %v: %s; the watch says: %s", g.name, err, excerpt(text, 300), excerpt(g.watchOut.String(), 600))
+		return fmt.Errorf("beekeeper converse as %s: %v: %s; the watch says: %s", g.name, err, excerpt(text, 300), excerptEnds(g.output(), 600))
 	}
 	r := guideThread{channel: directChannel(p.askerSlack)}
 	if _, err := fmt.Sscanf(text, "converse: opened conversation %s", &r.id); err != nil {
@@ -185,16 +186,48 @@ func (p *beekeeperProof) localGuideConversation(g *localGuide) error {
 		return err
 	}
 	stamp := "Message from " + p.asker + " via slack"
-	if !waitFor(int(localGuideWait/time.Second), time.Second, func() bool { return g.said(stamp) && g.said(localGuideSays) }) {
-		return fmt.Errorf("the reply did not reach the running guide session %s within %s; the watch says: %s", g.short, localGuideWait, excerpt(g.watchOut.String(), 600))
-	}
-	if !strings.Contains(g.watchOut.String(), "MAILBOX to "+g.name) {
-		return fmt.Errorf("the watch did not say its delivery: %s", excerpt(g.watchOut.String(), 600))
+	// The session takes the message while the watch's send still runs: the
+	// watch says its delivery once the send returned.
+	delivered := "MAILBOX to " + g.name
+	if !waitFor(int(localGuideWait/time.Second), time.Second, func() bool {
+		return g.said(stamp) && g.said(localGuideSays) && strings.Contains(g.output(), delivered)
+	}) {
+		return fmt.Errorf("the reply did not reach the running guide session %s within %s (in its transcript: %t); the watch says: %s",
+			g.short, localGuideWait, g.said(stamp), excerptEnds(g.output(), 600))
 	}
 	note("the reply is in the running guide session, stamped %q", stamp)
-	if err := p.inThread(r, "the guide's answer", localGuideAnswer); err != nil {
-		return fmt.Errorf("%w; the watch says: %s", err, excerpt(g.watchOut.String(), 600))
+	// The guide's turn on the reply is a model's: it gets localGuideWait.
+	if !waitFor(int(localGuideWait/time.Second), time.Second, func() bool {
+		for _, m := range p.fake.thread(r.channel, r.ts) {
+			if strings.Contains(m.shown(), localGuideAnswer) {
+				return true
+			}
+		}
+		return false
+	}) {
+		return fmt.Errorf("the guide's answer did not appear in conversation %s within %s; the watch says: %s", r.id, localGuideWait, excerptEnds(g.output(), 600))
 	}
 	note("the guide's answer, from its own session, is in the same thread")
 	return nil
+}
+
+// output is what the watch printed so far.
+func (g *localGuide) output() string { return g.watchOut.String() }
+
+// lockedBuffer is a buffer the watch writes to while the proof reads it.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
