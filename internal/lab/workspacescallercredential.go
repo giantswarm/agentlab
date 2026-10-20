@@ -159,10 +159,12 @@ func (cp *callerCredentialProof) run(p *proofStages) error {
 		return err
 	}
 	if hasMusterProvider(session) {
-		if hasMusterProvider(bare) {
-			return fmt.Errorf("kagent recorded the provider muster on %s, a Session without a grant", bare.GetId())
-		}
-		return cp.probeMuster(bare, false)
+		// start_session binds the Actor of every Session it starts in muster,
+		// a grant-less one included, so kagent 1.20 lists muster on it
+		// (bind_actor); an older kagent lists it on a grant-less one never.
+		bound := hasMusterProvider(bare)
+		note("%s, no workspace: kagent records muster as a provider: %v", bare.GetId(), bound)
+		return cp.probeMuster(bare, bound)
 	}
 	return nil
 }
