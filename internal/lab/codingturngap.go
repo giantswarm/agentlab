@@ -14,12 +14,12 @@ import (
 )
 
 // coding-test's turn boundaries: what the sandbox's processes may do outside
-// a turn. The egress gateway sets the Actor's JWT on every request of a bound
-// actor to muster and checks no turn; what keeps a sandbox from calling
-// muster between turns is that nothing in it runs then (Substrate suspends
-// the actor once a turn settles and resumes it with the next), and what
-// keeps it from calling muster after delete_session is that the actor's
-// binding is gone (muster refuses an unbound actor) along with the actor.
+// a turn. Nothing in the sandbox runs between turns (Substrate suspends the
+// actor once a turn settles and resumes it with the next); should a process
+// run all the same, the egress gateway refuses its calls to muster, as kagent
+// keeps muster's host off the actor's egress policy outside a turn
+// (codingnoturn.go). After delete_session the actor's binding is gone
+// (muster refuses an unbound actor) along with the actor.
 //
 //   - turn gap: one turn starts a detached heartbeat in the sandbox, a
 //     process that every codingHeartbeatInterval appends the time and the

@@ -66,6 +66,11 @@ import (
 //  7. The turn gap (codingturngap.go): a heartbeat one turn starts in the
 //     sandbox does not run between turns and runs again in the next; in a
 //     workspace Session muster audits no call of the actor in the gap.
+//  7a. In a workspace Session, no turn (codingnoturn.go): the actor resumed
+//     through ate-api with no turn running; the egress gateway refuses the
+//     heartbeat's muster calls 403 (kagent keeps muster's host off the
+//     actor's egress policy outside a turn), muster audits none, and the
+//     next turn's calls are answered 200 again.
 //  8. On claude, the instruction-file fixture: one turn writes a
 //     repository's instruction sources into the Session's directory
 //     (CLAUDE.md, AGENTS.md, .claude settings with a hook and
@@ -486,6 +491,13 @@ func (p *codingProof) run() error {
 
 	p.stages.begin("turn gap", "A heartbeat the turn starts in the sandbox does not run in the %s without a turn and runs again in the next; in a workspace Session muster audits no call of the actor in the gap", codingTurnGap)
 	if err := p.proveTurnGap(ctx, session); err != nil {
+		return err
+	}
+
+	p.stages.begin("no turn", "In a workspace Session, the actor resumed with no turn running: the egress gateway refuses its muster calls (403), muster audits none, the next turn reaches muster again")
+	if p.rig == nil {
+		p.stages.skip("no workspace Session on this lab: its calls to muster carry no actor JWT to bound by a turn")
+	} else if err := p.proveNoTurn(ctx, session); err != nil {
 		return err
 	}
 
