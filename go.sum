@@ -16,6 +16,7 @@ cloud.google.com/go/auth v0.23.2 h1:pxSCpfiji41hpzpPdMCftEUCezpgpqmmDdYiAjCKXxo=
 cloud.google.com/go/auth v0.23.2/go.mod h1:4DhBRcqvtljQN3dJ57qtqbib5ZGCYE5f2crfiiC2EM0=
 cloud.google.com/go/auth/oauth2adapt v0.2.8 h1:keo8NaayQZ6wimpNSmW5OPc283g65QNIiLpZnkHRbnc=
 cloud.google.com/go/auth/oauth2adapt v0.2.8/go.mod h1:XQ9y31RkqZCcwJWNSx2Xvric3RrU88hAYYbjDWYDL+c=
+cloud.google.com/go/compute v1.62.0 h1:tJ7lKJ8YEVa6vZX03Jc8o1YePbjKDOQhDw1BscMZ1bs=
 cloud.google.com/go/compute/metadata v0.9.0 h1:pDUj4QMoPejqq20dK0Pg2N4yG9zIkYGdBtwLoEkH9Zs=
 cloud.google.com/go/compute/metadata v0.9.0/go.mod h1:E0bWwX5wTnLPedCKqk3pJmVgCBSM6qQI1yTBdEb3C10=
 cloud.google.com/go/iam v1.12.0 h1:Aki3bX9aHUDKPHfnRJfDcTdVedvy6quGBQcTqx3DRXk=
@@ -220,8 +221,6 @@ github.com/frankban/quicktest v1.14.6 h1:7Xjx+VpznH+oBnejlPUj8oUpdxnVs4f8XU8WnHk
 github.com/frankban/quicktest v1.14.6/go.mod h1:4ptaffx2x8+WTWXmUCuVU6aPUX1/Mz7zb5vbUoiM6w0=
 github.com/fxamacker/cbor/v2 v2.9.1 h1:2rWm8B193Ll4VdjsJY28jxs70IdDsHRWgQYAI80+rMQ=
 github.com/fxamacker/cbor/v2 v2.9.1/go.mod h1:vM4b+DJCtHn+zz7h3FFp/hDAI9WNWCsZj23V5ytsSxQ=
-github.com/giantswarm/gitops-commit v0.11.5 h1:f2zG16zgsEDq7QUwhJ/Wa73ExF6xhPAJ2eJHoG84YlI=
-github.com/giantswarm/gitops-commit v0.11.5/go.mod h1:VDD68iaQVEaDNyE/+gRTlw9AkATp8MLBwZwb2EIjejo=
 github.com/giantswarm/go-selfupdate v1.6.5 h1:5H+9BX1Ki2OWToYheTrLARKg9Bguxyw7ePwIROckiwI=
 github.com/giantswarm/go-selfupdate v1.6.5/go.mod h1:ZRK84xA7SPPJ+y9c988e8UZ0MuV/QNbWT4mjwBj963I=
 github.com/giantswarm/klaus-gateway v1.21.0 h1:sIdKo97SBYCavdAf2jyMpTTtOmep/b6otknbGpeHAVI=
@@ -331,8 +330,6 @@ github.com/google/go-containerregistry v0.22.1 h1:RZuuSYhTvlDvtsK+NkutoCZ//C0X2e
 github.com/google/go-containerregistry v0.22.1/go.mod h1:bJR35SK8XgisYmhg/FMQ/5RK0S/XrOAqLBV5/LR2XE0=
 github.com/google/go-github/v86 v86.0.0 h1:S/6aANJhwRm8EQmGKVML3j41yq0h2BsTP8FnDkO7kcA=
 github.com/google/go-github/v86 v86.0.0/go.mod h1:zKv1l4SwDXNFMGByi2FWkq71KwSXqj/eQRZuqtmcot8=
-github.com/google/go-github/v93 v93.0.0 h1:qElXPLv+XbSz1qrLdWyb0t3gSYGsWBTzr9T4/PZTCfk=
-github.com/google/go-github/v93 v93.0.0/go.mod h1:l8I3rt4/mdjANKpg4Y84LEy9HJQCetUkZ8WTl2bPU8M=
 github.com/google/go-querystring v1.2.0 h1:yhqkPbu2/OH+V9BfpCVPZkNmUXhb2gBxJArfhIxNtP0=
 github.com/google/go-querystring v1.2.0/go.mod h1:8IFJqpSRITyJ8QhQ13bmbeMBDfmeEJZD5A0egEOmkqU=
 github.com/google/gofuzz v1.0.0/go.mod h1:dBl0BpW6vV/+mYPU4Po3pmUjxk6FQPldtuIdl/M65Eg=
