@@ -646,6 +646,33 @@ func TestKindConfigSubstrateGates(t *testing.T) {
 	}
 }
 
+// The edge binds the lab's own loopback address (platform.gatewayAddress), so
+// a second lab serves 443 too; every other mapping stays on 127.0.0.1, where
+// the issuer's localhost resolves.
+func TestKindConfigGatewayAddress(t *testing.T) {
+	for addr, want := range map[string]string{"": config.DefaultGatewayAddress, secondEdgeAddress: secondEdgeAddress} {
+		cfg := config.Default()
+		cfg.Platform.GatewayAddress = addr
+		out, err := renderTemplate(cfg, "kind-config.yaml.tmpl", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var kindCfg v1alpha4.Cluster
+		if err := yaml.Unmarshal(out, &kindCfg); err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		for _, m := range kindCfg.Nodes[0].ExtraPortMappings {
+			wantAddr := config.DefaultGatewayAddress
+			if m.ContainerPort == config.GatewayNodePort {
+				wantAddr = want
+			}
+			if m.ListenAddress != wantAddr {
+				t.Errorf("gatewayAddress %q: mapping %d->%d listens on %s, want %s", addr, m.HostPort, m.ContainerPort, m.ListenAddress, wantAddr)
+			}
+		}
+	}
+}
+
 // The API server's host address is fixed, so a recreated lab keeps the
 // 127.0.0.1:<port> an agent sandbox's allow list names.
 func TestKindConfigPinsAPIServer(t *testing.T) {
@@ -920,10 +947,13 @@ func TestPlatformValuesLegacyChartShape(t *testing.T) {
 		})
 		directoryValues, _ := render(directory)
 		components, _ := directoryValues["components"].(map[string]any)
-		if _, set := components[config.ConnectivityChartName]; !set {
+		connectivity, _ := components[config.ConnectivityChartName].(map[string]any)
+		if _, set := connectivity["repository"]; !set {
 			t.Errorf("%s: the render names no connectivity source", name)
 		}
-		delete(components, config.ConnectivityChartName)
+		for _, key := range connectivitySourceKeys {
+			delete(connectivity, key)
+		}
 		// Rendered afresh: the comparison above stripped the 4.x keys off
 		// the first render's values.
 		wantValues, _ := render(tc.want)
@@ -1252,6 +1282,10 @@ func TestPlatformValuesServing(t *testing.T) {
 	}
 }
 
+// connectivitySourceKeys are the keys a chartPath lab sets on the
+// connectivity component to install the checkout's chart.
+var connectivitySourceKeys = []string{"repository", "insecure", "versionRange"}
+
 // A chartPath lab's values point the connectivity component at the lab
 // registry (the kind-network name pods pull from, plain HTTP) at the meta
 // chart directory's own version — the knobs the meta chart admits on a
@@ -1274,14 +1308,27 @@ func TestPlatformValuesLocalConnectivityChart(t *testing.T) {
 		}
 		return values.Components
 	}
-	if _, set := components()[config.ConnectivityChartName]; set {
-		t.Error("a registry chart's values name a connectivity source")
+	// The source keys alone: the component's postRenderers (the HSTS patch)
+	// are there either way.
+	source := func() map[string]any {
+		t.Helper()
+		connectivity, _ := components()[config.ConnectivityChartName].(map[string]any)
+		out := map[string]any{}
+		for _, key := range connectivitySourceKeys {
+			if v, ok := connectivity[key]; ok {
+				out[key] = v
+			}
+		}
+		return out
+	}
+	if got := source(); len(got) != 0 {
+		t.Errorf("a registry chart's values name a connectivity source: %v", got)
 	}
 
 	cfg.Platform.ChartPath = writeChartFiles(t, t.TempDir(), "agent-platform", map[string]string{
 		chartYAML: metaChartYAML,
 	})
-	got := components()[config.ConnectivityChartName]
+	got := source()
 	want := map[string]any{"repository": "oci://agentlab-x-registry:5000/charts", "insecure": true, "versionRange": placeholderChartVersion}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("components.%s = %v, want %v", config.ConnectivityChartName, got, want)

@@ -47,6 +47,20 @@ hostname, and `export NODE_EXTRA_CA_CERTS=$PWD/certs/ca.crt` for Node
 clients. The headless `*-test` commands trust `certs/ca.crt` directly and
 never need any of this.
 
+## No HSTS, one domain per lab
+
+The lab's edge sends no `Strict-Transport-Security`: Backstage's own header
+(180 days, `includeSubDomains`) is dropped on the portal's route. A browser
+pins a hostname that sent it, and a pinned hostname whose certificate stops
+verifying — a lab recreated with a fresh CA, a CA re-minted for another
+domain — is refused with no way past the warning. A second lab on the
+machine gets a domain and a loopback address of its own
+(`lab2.127.0.0.2.nip.io` on `127.0.0.2:443`, chosen by `configure`;
+[Getting started](getting-started.md)), so its hostnames never share a
+browser's state with the first lab's. A browser that already pinned
+a lab hostname forgets it under `chrome://net-internals/#hsts` (*Delete
+domain security policies*) or with its site data.
+
 ## Node and Claude Code
 
 With the CA in the system store, Node **>= 22.15** picks it up with one env

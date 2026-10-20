@@ -45,6 +45,9 @@ func BackstageTest(cfg *config.Config, emails []string, opts BackstageTestOption
 	if err := proveServedPortal(cfg); err != nil {
 		return err
 	}
+	if err := proveNoHSTS(cfg); err != nil {
+		return err
+	}
 	var sessions []*portalSession
 	for i, email := range emails {
 		user := cfg.FindUser(email)
