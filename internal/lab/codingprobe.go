@@ -79,9 +79,10 @@ url=""; [ -n "$cfg" ] && [ -r "$cfg" ] && url=$(grep -o 'http://127\.0\.0\.1:[0-
 n=unread; [ -n "$cfg" ] && [ -r "$cfg" ] && n=$(grep -o 'Bearer [^"]*' "$cfg" | grep -vc '^Bearer ` + credentialPlaceholder + `$')
 echo "$P mcp-config-tokens=$n"
 if [ -n "$url" ]; then
-  tok=$(grep -o 'Bearer [0-9a-f]*' "$cfg" | head -1 | cut -d' ' -f2); [ -n "$tok" ] || tok=` + credentialPlaceholder + `
+  tok=$(grep -o 'Bearer [0-9a-f]*' "$cfg" | head -1 | cut -d' ' -f2); kind=loopback; [ -n "$tok" ] || { tok=` + credentialPlaceholder + `; kind=placeholder; }
   port=$(echo "$url" | sed 's|http://127\.0\.0\.1:\([0-9]*\)/.*|\1|'); name=${url##*/mcp/}
   echo "$P forwarder=$name"
+  echo "$P fwd-token=$kind"
   get() { printf 'GET %s HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer %s\r\n\r\n' "$1" "${2:-$tok}" | nc -w 5 127.0.0.1 "$port" 2>/dev/null | head -1 | cut -d' ' -f2; }
   echo "$P fwd-dots=$(get "/mcp/$name/../../x")"
   echo "$P fwd-encoded-dots=$(get "/mcp/$name/%2e%2e/%2e%2e/x")"
@@ -174,12 +175,18 @@ func (p codingProbe) uidSplit([]string) (string, error) {
 }
 
 // forwarderPaths: the three path rows answered 400, an unknown server 404
-// and a request without the loopback token 401.
+// and a request without the loopback token 401. Where the MCP config holds
+// only kagent's placeholder (fwd-token=placeholder), the probe has no
+// loopback token to send: the forwarder refuses the unknown server's
+// request at its authentication, 401, before it matches a server.
 func (p codingProbe) forwarderPaths([]string) (string, error) {
 	if p["forwarder"] == "" {
 		return "", fmt.Errorf("the session runs Claude Code without a caller forwarder (no loopback MCP endpoint in its --mcp-config): the agent has no MCP server, or KAGENT_PROPAGATE_TOKEN is off on the Harness")
 	}
 	want := map[string]string{"fwd-dots": "400", "fwd-encoded-dots": "400", "fwd-encoded-slash": "400", "fwd-unknown": "404", "fwd-no-token": "401"}
+	if p["fwd-token"] == "placeholder" {
+		want["fwd-unknown"] = "401"
+	}
 	var wrong []string
 	for _, key := range []string{"fwd-dots", "fwd-encoded-dots", "fwd-encoded-slash", "fwd-unknown", "fwd-no-token"} {
 		if p[key] != want[key] {
