@@ -275,6 +275,7 @@ func (g *workspaceGitHub) handler() http.Handler {
 	mux.HandleFunc("GET "+api+"/orgs/{owner}/repos", g.ownerRepositories)
 	mux.HandleFunc("GET "+api+"/users/{owner}/repos", g.ownerRepositories)
 	mux.HandleFunc("GET "+api+"/user/repos", g.userRepositories)
+	mux.HandleFunc("GET "+api+"/user/installations", g.userInstallations)
 	mux.HandleFunc("GET "+api+"/repos/{owner}/{repo}", g.getRepository)
 	mux.HandleFunc("GET "+api+"/repos/{owner}/{repo}/topics", g.getTopics)
 	mux.HandleFunc("PUT "+api+"/repos/{owner}/{repo}/topics", g.replaceTopics)
