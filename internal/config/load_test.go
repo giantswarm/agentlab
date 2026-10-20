@@ -243,7 +243,7 @@ func TestLoadForConfigureTakesARefusedShape(t *testing.T) {
 func TestLoadReadOnlyReadsAFileANewerReleaseWrote(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
-	raw := []byte(writtenByPrefix + "v9.0.0.\nclusterName: newer\nplatform:\n  chartVersion: " + loadTestChart + "\n  gatewayAddress: 127.0.0.2\n  serving:\n    enabled: true\n")
+	raw := []byte(writtenByPrefix + "v9.0.0.\nclusterName: newer\nplatform:\n  chartVersion: " + loadTestChart + "\n  frobnicate: true\n  serving:\n    enabled: true\n")
 	if err := os.WriteFile(File, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -322,8 +322,8 @@ func TestRebasePathsLeavesANewerFile(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, File)
 	for raw, refused := range map[string]bool{
-		"clusterName: newer\nplatform:\n  gatewayAddress: 127.0.0.2\n":                               false,
-		"clusterName: newer\nplatform:\n  gatewayAddress: 127.0.0.2\n  valuesFiles:\n    - o.yaml\n": true,
+		"clusterName: newer\nplatform:\n  frobnicate: true\n":                               false,
+		"clusterName: newer\nplatform:\n  frobnicate: true\n  valuesFiles:\n    - o.yaml\n": true,
 	} {
 		if err := os.WriteFile(file, []byte(raw), 0o600); err != nil {
 			t.Fatal(err)
