@@ -117,6 +117,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 
 		inGroup(groupTesting, labCmd("test", "Assert RBAC for every configured user (token from Dex, kubectl auth can-i)", lab.Test)),
 		inGroup(groupTesting, platformTestCmd()),
+		inGroup(groupTesting, polexTestCmd()),
 		inGroup(groupTesting, agentsTestCmd()),
 		inGroup(groupTesting, agentsGitOpsTestCmd()),
 		inGroup(groupTesting, tenantsTestCmd()),
@@ -1554,6 +1555,24 @@ func platformTestCmd() *cobra.Command {
 			return lab.PlatformTest(cfg, email)
 		},
 	}
+}
+
+func polexTestCmd() *cobra.Command {
+	var opts lab.PolexTestOptions
+	cmd := &cobra.Command{
+		Use:   "polex-test",
+		Short: "Headless proof of the chart's Kyverno PolicyExceptions: the meta chart and its component releases rendered with the lab's values and kyvernoPolicies.enabled: true, every PolicyException created as a server-side dry run against the lab's Kyverno (the fleet's) — fails with the apiserver's refusal for one an installation refuses; platform-test runs the same stage",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadProofLab()
+			if err != nil {
+				return err
+			}
+			return lab.PolexTest(cfg, opts)
+		},
+	}
+	cmd.Flags().StringVar(&opts.ChartVersion, "chart-version", "", "an exact agent-platform release to render instead of the chart agentlab.yaml installs (a candidate before the lab runs it); the lab's values stay the same")
+	return cmd
 }
 
 func modelsTestCmd() *cobra.Command {
