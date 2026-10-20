@@ -9,7 +9,7 @@ RHDH: the GS build is the one that carries the first-party `muster` plugin,
 which is the whole reason to run a portal in this lab at all.
 
 ```bash
-./agentlab up            # the whole stack, Backstage included
+agentlab up            # the whole stack, Backstage included
 open https://backstage.127.0.0.1.nip.io
 ```
 

@@ -88,7 +88,7 @@ const (
 // binaryName is the asset architect publishes for this platform.
 func binaryName() string {
 	name := "agentlab-" + runtime.GOOS + "-" + runtime.GOARCH
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == goosWindows {
 		name += ".exe"
 	}
 	return name
@@ -169,7 +169,35 @@ func installed(t *testing.T) (string, []byte) {
 		t.Fatal(err)
 	}
 	executable = func() (string, error) { return exe, nil }
+	prevBin := binHome
+	binHome = func() (string, error) { return filepath.Dir(exe), nil }
+	t.Cleanup(func() { binHome = prevBin })
 	return exe, content
+}
+
+// A release installed outside ~/.local/bin settles there: the binary moves,
+// a link stays at its old path, and a second run leaves both as they are.
+func TestSettleMovesTheBinaryIntoBinHome(t *testing.T) {
+	if runtime.GOOS == goosWindows {
+		t.Skip("the binary stays where it is on Windows")
+	}
+	exe, content := installed(t)
+	bin := filepath.Join(t.TempDir(), "bin")
+	binHome = func() (string, error) { return bin, nil }
+	var out bytes.Buffer
+	for range 2 {
+		if err := settle(&out, exe); err != nil {
+			t.Fatal(err)
+		}
+	}
+	to := filepath.Join(bin, "agentlab")
+	assertUnchanged(t, to, content)
+	if dest, err := os.Readlink(exe); err != nil || dest != to {
+		t.Fatalf("the old path links to %q (%v), want %s", dest, err, to)
+	}
+	if !strings.Contains(out.String(), "Installed at "+to) {
+		t.Errorf("output %q does not name the new place", out.String())
+	}
 }
 
 func assertUnchanged(t *testing.T, exe string, content []byte) {
@@ -455,7 +483,7 @@ func TestRunReplacesTheExecutableOnceTheBundleVerifies(t *testing.T) {
 	if string(got) != "new" {
 		t.Errorf("executable holds %q after the update", got)
 	}
-	if runtime.GOOS != "windows" {
+	if runtime.GOOS != goosWindows {
 		// The file keeps its mode, and the update leaves nothing beside it.
 		info, err := os.Stat(exe)
 		if err != nil {

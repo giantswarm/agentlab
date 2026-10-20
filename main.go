@@ -15,6 +15,7 @@ import (
 	"maps"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -105,7 +106,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 	root.AddCommand(
 		inGroup(groupSetup, upCmd()),
 		inGroup(groupSetup, configureCmd()),
-		inGroup(groupSetup, labCmd("trust", "Install the lab CA into the system and browser trust stores (one sudo prompt; reversible)", lab.Trust)),
+		inGroup(groupSetup, readOnlyLabCmd("trust", "Install the lab CA into the system and browser trust stores (one sudo prompt; reversible)", lab.Trust)),
 
 		inGroup(groupEveryday, openCmd()),
 		inGroup(groupEveryday, listCmd()),
@@ -142,7 +143,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		inGroup(groupTesting, backstageTestCmd()),
 
 		inGroup(groupCleanup, labCmd("down", "Destroy the kind cluster", lab.Down)),
-		inGroup(groupCleanup, labCmd("untrust", "Remove the lab CA from the system and browser trust stores", lab.Untrust)),
+		inGroup(groupCleanup, readOnlyLabCmd("untrust", "Remove the lab CA from the system and browser trust stores", lab.Untrust)),
 		inGroup(groupCleanup, labCmd("platform-down", "Remove the agent platform (leaves Dex and the cluster alone)", lab.PlatformDown)),
 
 		inGroup(groupAdvanced, platformCmd()),
@@ -364,6 +365,43 @@ func loadConfig() (*config.Config, error) {
 	return loadLab(labs.Enter)
 }
 
+// loadReadOnly is loadConfig for the commands that never write agentlab.yaml
+// (`trust`, `untrust`, `status`, `open`, `pods`, `logs`): a file a newer
+// agentlab wrote is read past the fields this release does not know, with a
+// note on stderr, instead of refused (config.LoadReadOnly) — the lab can be
+// trusted and inspected whichever agentlab wrote it.
+func loadReadOnly() (*config.Config, error) {
+	if err := enterLab(labs.Enter); err != nil {
+		return nil, err
+	}
+	cfg, note, err := config.LoadReadOnly()
+	if errors.Is(err, os.ErrNotExist) {
+		return loadOrCreateConfig()
+	}
+	if err != nil {
+		return nil, err
+	}
+	if note != "" {
+		fmt.Fprintf(os.Stderr, "Note: %s\n", note)
+	}
+	lab.SetPlatform(cfg)
+	return cfg, nil
+}
+
+// readOnlyLabCmd is labCmd for a command that never writes agentlab.yaml
+// (loadReadOnly).
+func readOnlyLabCmd(use, short string, run func(*config.Config) error) *cobra.Command {
+	cmd := labCmd(use, short, run)
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		cfg, err := loadReadOnly()
+		if err != nil {
+			return err
+		}
+		return run(cfg)
+	}
+	return cmd
+}
+
 // loadProofLab is loadConfig for the proofs: before a proof's first step,
 // the chart it runs against is named from the cluster, with the drift from
 // agentlab.yaml's pin when there is one (lab.NoteChartUnderTest) — a verdict
@@ -401,13 +439,14 @@ var labFlag string
 
 // enterLab resolves the lab the command runs against — --lab, the lab the
 // agentlab.yaml in the current directory names, the person's pick on a
-// terminal; never a default (labs.Resolve) — and changes into its
-// directory, so every lab path (agentlab.yaml, certs/, state/) resolves there
-// unchanged. mode is labs.Resolve's: labs.Create for the commands that make
-// a lab where they run (`configure`, `up`), labs.Here for `render`, which
-// writes the files of the agentlab.yaml here and no other lab's. A lab
-// entered from elsewhere is named on stderr, so the output never leaves the
-// person guessing which lab it came from.
+// terminal; never a default (labs.Resolve) — settles it in the freedesktop
+// folders (settleLab) and changes into its directory, so every lab path
+// (agentlab.yaml, certs/, state/) resolves there unchanged. mode is
+// labs.Resolve's: labs.Create for the commands that make a lab where they run
+// (`configure`, `up`), labs.Here for `render`, which writes the files of the
+// agentlab.yaml here and no other lab's. A lab entered from elsewhere is named
+// on stderr, so the output never leaves the person guessing which lab it came
+// from.
 func enterLab(mode labs.Mode) error {
 	var pick labs.Picker
 	if term.IsTerminal(int(os.Stdin.Fd())) {
@@ -418,27 +457,86 @@ func enterLab(mode labs.Mode) error {
 		return err
 	}
 	if l.Dir == "" {
-		registerHere()
-		return nil
+		if mode == labs.Here {
+			// `render` writes the files of the agentlab.yaml here,
+			// where it is.
+			return nil
+		}
+		return settleHere()
 	}
-	if err := os.Chdir(l.Dir); err != nil {
+	dir, err := settleLab(l.Name, l.Dir)
+	if err != nil {
+		return err
+	}
+	if err := os.Chdir(dir); err != nil {
 		return fmt.Errorf("entering lab %s: %w", l.Name, err)
 	}
-	fmt.Fprintf(os.Stderr, "Lab %s (%s)\n", l.Name, l.Dir)
+	fmt.Fprintf(os.Stderr, "Lab %s (%s)\n", l.Name, dir)
 	return nil
 }
 
-// registerHere registers the lab of the current directory, if there is one:
-// a lab from before the registry, or one whose entry is gone, is found from
-// any directory again after any command run in it. A convenience: silent,
-// it never fails the command, and a name another lab holds stays refused
-// (`up` and `configure` say so).
-func registerHere() {
+// settleHere settles the lab of the current directory, if there is one — a
+// lab from before the registry or the freedesktop folders, or one whose entry
+// is gone — and enters it. Without an agentlab.yaml here there is nothing to
+// settle yet: a new lab settles when it is saved (saveLab). An agentlab.yaml
+// whose clusterName another lab holds is a copy of that lab's (`render`
+// renders it here) and stays where it is.
+func settleHere() error {
 	cfg, err := config.Peek(".")
 	if err != nil {
+		return nil
+	}
+	if labs.Check(cfg.ClusterName, ".") != nil {
+		return nil
+	}
+	dir, err := settleLab(cfg.ClusterName, ".")
+	if err != nil {
+		return err
+	}
+	return os.Chdir(dir)
+}
+
+// settleLab puts the lab of that name, now in dir, into the freedesktop
+// folders (labs.Settle), registers it there and returns its directory. A lab
+// that moves is named on stderr with both places; its relative paths in
+// agentlab.yaml (platform.valuesFiles, chartPath, …) are made absolute first,
+// so they still name the files next to its old directory. A lab on another
+// file system than the state folder stays where it is, said on stderr.
+func settleLab(name, dir string) (string, error) {
+	from, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+	if home, err := labs.Home(name); err == nil && home != from {
+		rebaseLabPaths(from)
+	}
+	home, err := labs.Settle(name, from)
+	if cross := (*labs.CrossDeviceError)(nil); errors.As(err, &cross) {
+		fmt.Fprintf(os.Stderr, "Note: %v\n", err)
+		home, err = from, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if home != from && config.Exists(filepath.Join(home, config.File)) {
+		cfgFile, _ := labs.ConfigFile(name)
+		fmt.Fprintf(os.Stderr, "Moved lab %s from %s to %s, its %s to %s; links at the old paths keep its cluster and older agentlab releases working\n",
+			name, from, home, config.File, cfgFile)
+	}
+	return home, labs.Register(name, home)
+}
+
+// rebaseLabPaths makes the relative paths of the agentlab.yaml in dir
+// absolute against dir, before the lab moves away from it. A file this
+// release cannot read is left as it is (its paths are said to need a look).
+func rebaseLabPaths(dir string) {
+	file := filepath.Join(dir, config.File)
+	if !config.Exists(file) {
 		return
 	}
-	_ = labs.Register(cfg.ClusterName, ".")
+	if err := config.RebasePaths(file, dir); err != nil {
+		fmt.Fprintf(os.Stderr, "Note: the relative paths in %s stay as they are (%v); they now resolve against the lab's new directory\n", file, err)
+	}
 }
 
 // pickLab asks which registered lab to use, on a terminal.
@@ -458,15 +556,20 @@ func pickLab(ls []labs.Lab) (labs.Lab, error) {
 
 // saveLab saves a new or changed agentlab.yaml and registers the lab: its
 // clusterName checked first, so a name another lab holds is refused before
-// anything is written.
+// anything is written; the lab settled in the freedesktop folders under that
+// name first (settleLab), so a new lab is made there and a renamed one moves.
 func saveLab(cfg *config.Config) error {
 	if err := labs.Check(cfg.ClusterName, "."); err != nil {
 		return err
 	}
-	if err := cfg.Save(); err != nil {
+	dir, err := settleLab(cfg.ClusterName, ".")
+	if err != nil {
 		return err
 	}
-	return labs.Register(cfg.ClusterName, ".")
+	if err := os.Chdir(dir); err != nil {
+		return err
+	}
+	return cfg.Save()
 }
 
 // freeClusterName gives a new lab the default name, or, when another lab on
@@ -754,7 +857,7 @@ func openCmd() *cobra.Command {
 		Args:      cobra.MaximumNArgs(1),
 		ValidArgs: lab.OpenTargets(),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfig()
+			cfg, err := loadReadOnly()
 			if err != nil {
 				return err
 			}
@@ -812,7 +915,7 @@ func statusCmd() *cobra.Command {
 			if output != "" && output != outputJSON {
 				return fmt.Errorf("--output %q: the one format besides the default is json", output)
 			}
-			cfg, err := loadConfig()
+			cfg, err := loadReadOnly()
 			if err != nil {
 				return err
 			}
@@ -842,7 +945,7 @@ func podsCmd() *cobra.Command {
 		Short: "List the lab's pods across namespaces (kubectl get pods -A, without kubectl)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfig()
+			cfg, err := loadReadOnly()
 			if err != nil {
 				return err
 			}
@@ -2141,7 +2244,7 @@ func logsCmd() *cobra.Command {
 		Args:      cobra.ExactArgs(1),
 		ValidArgs: lab.LogComponents(),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfig()
+			cfg, err := loadReadOnly()
 			if err != nil {
 				return err
 			}
