@@ -37,10 +37,8 @@ const (
 	notifResourceUpdated  = "notifications/resources/updated"
 	metaSubscriptionID    = "io.modelcontextprotocol/subscriptionId"
 	subscriptionsWait     = 30 * time.Second
-	// The beekeeper tool arguments the proof sends.
-	beekeeperKeyAgent = "agent"
-	beekeeperKeyHost  = "host"
-	a2aKeyRole        = "role"
+	// a2aKeyRole is the role key of the message the proof sends.
+	a2aKeyRole = "role"
 )
 
 // BeekeeperSubscriptionsTestOptions tunes the beekeeper subscriptions proof.
