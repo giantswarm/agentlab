@@ -315,3 +315,24 @@ func TestRebasePaths(t *testing.T) {
 		t.Errorf("a file without relative paths was rewritten")
 	}
 }
+
+// A file a newer release wrote is rebased only when it has no relative path:
+// a write would drop the field this release does not know.
+func TestRebasePathsLeavesANewerFile(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, File)
+	for raw, refused := range map[string]bool{
+		"clusterName: newer\nplatform:\n  gatewayAddress: 127.0.0.2\n":                               false,
+		"clusterName: newer\nplatform:\n  gatewayAddress: 127.0.0.2\n  valuesFiles:\n    - o.yaml\n": true,
+	} {
+		if err := os.WriteFile(file, []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := RebasePaths(file, dir); (err != nil) != refused {
+			t.Errorf("RebasePaths(%q) = %v, want refused %v", raw, err, refused)
+		}
+		if after, _ := os.ReadFile(filepath.Clean(file)); string(after) != raw {
+			t.Errorf("the newer file was rewritten:\n%s", after)
+		}
+	}
+}

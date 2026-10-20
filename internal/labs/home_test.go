@@ -149,3 +149,24 @@ func TestResolveFollowsTheLinkOfAMovedLab(t *testing.T) {
 		}
 	}
 }
+
+// Registering a moved lab under its Home is no clash with the old directory
+// the registry still names: the link there is the lab's own file.
+func TestRegisterAMovedLabOverItsOldDirectory(t *testing.T) {
+	setup(t)
+	dir := t.TempDir()
+	writeConfig(t, dir, "moving")
+	if err := Register("moving", dir); err != nil {
+		t.Fatal(err)
+	}
+	home, err := Settle("moving", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Register("moving", home); err != nil {
+		t.Fatalf("Register(Home) = %v", err)
+	}
+	if got, err := List(); err != nil || len(got) != 1 || got[0].Dir != home {
+		t.Fatalf("List() = %+v, %v; want the lab in %s only", got, err, home)
+	}
+}

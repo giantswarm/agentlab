@@ -139,9 +139,11 @@ func FreeName(name, dir string) (string, error) {
 	return candidate, nil
 }
 
-// taken is Check's rule on an already read registry.
+// taken is Check's rule on an already read registry. A directory whose
+// agentlab.yaml is the other's very file — the link a moved lab left — is
+// that lab, not a second one.
 func (reg *registry) taken(name, dir string) error {
-	if other, ok := reg.Labs[name]; ok && other != dir && isLab(other) {
+	if other, ok := reg.Labs[name]; ok && other != dir && isLab(other) && !sameConfig(other, dir) {
 		return &TakenError{Name: name, Dir: dir, Other: other}
 	}
 	return nil
@@ -167,7 +169,7 @@ func Register(name, dir string) error {
 		return nil // already recorded: no write on every `up`
 	}
 	for n, d := range reg.Labs {
-		if d == dir || !isLab(d) {
+		if d == dir || !isLab(d) || sameConfig(d, dir) {
 			delete(reg.Labs, n)
 		}
 	}
@@ -337,6 +339,16 @@ func namesOf(reg *registry, dir string) []string {
 		}
 	}
 	return out
+}
+
+// sameConfig reports whether the agentlab.yaml of a and of b are one file.
+func sameConfig(a, b string) bool {
+	fa, err := os.Stat(filepath.Join(a, config.File))
+	if err != nil {
+		return false
+	}
+	fb, err := os.Stat(filepath.Join(b, config.File))
+	return err == nil && os.SameFile(fa, fb)
 }
 
 // isLab reports whether dir still holds a lab: its agentlab.yaml exists.

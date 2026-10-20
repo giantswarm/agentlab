@@ -1611,15 +1611,17 @@ func Exists(path string) bool {
 // platform.chartPath, platform.valuesFiles, platform.tls's certFile and
 // keyFile, platform.vmManager.imageDir — absolute against dir, the lab
 // directory they are relative to, and writes the file when any changed: the
-// step before a lab moves out of dir. A file this release cannot read is
-// refused and left as it is.
+// step before a lab moves out of dir. A file with relative paths and a field
+// this release does not know is refused and left as it is: the write would
+// drop the field.
 func RebasePaths(file, dir string) error {
 	raw, err := os.ReadFile(file) // #nosec G304 -- a lab's agentlab.yaml
 	if err != nil {
 		return err
 	}
 	cfg := Default()
-	if err := decodeStrict(raw, cfg); err != nil {
+	note, err := decodeTolerant(raw, cfg)
+	if err != nil {
 		return err
 	}
 	changed := false
@@ -1638,6 +1640,10 @@ func RebasePaths(file, dir string) error {
 	abs(&cfg.Platform.VMManager.ImageDir)
 	if !changed {
 		return nil
+	}
+	if note != "" {
+		// A write would drop the fields this release does not know.
+		return fmt.Errorf("%s names fields this agentlab release does not know, so it is not rewritten", File)
 	}
 	return cfg.writeTo(file)
 }
