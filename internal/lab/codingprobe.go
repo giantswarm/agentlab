@@ -121,13 +121,37 @@ func commonSandboxCommand(rt codingRuntime) string {
 echo "$P mcp-credentials=$(env | grep -c '^` + rt.mcpCredentialPrefix + `') $(env | grep '^` + rt.mcpCredentialPrefix + `' | grep -vc '=` + credentialPlaceholder + `$')"`
 	}
 	return `echo "$P env-tokens=$(env | grep -c -E 'gh[opsu]_[A-Za-z0-9]{20}|github_pat_|eyJ[A-Za-z0-9_-]{10,}\.eyJ')"
-echo "$P data-tokens=$(timeout 60 grep -rlsE 'gh[opsu]_[A-Za-z0-9]{30}|github_pat_[A-Za-z0-9_]{20}|eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.' /data /workspace 2>/dev/null | wc -l)"
+` + dataTokensCommand("/data /workspace", claudeSignedCacheFile) + `
 k=unset; for v in` + keys + `; do case "$v" in "") ;; kagent-*) [ "$k" = other ] || k=placeholder;; *) k=other;; esac; done; echo "$P model-key=$k"` + mcp + `
 r=$(timeout 10 nslookup ` + codingTestDNSCanary + ` 2>&1 | awk '/^Address/ && !/:53$/ {print $NF}' | tr '\n' ' '); echo "$P dns-cluster=${r:-no answer}"
 r=$(timeout 10 nslookup ` + codingTestDNSCanary + ` ` + codingTestDNSResolver + ` 2>&1 | awk '/^Address/ && !/:53$/ {print $NF}' | tr '\n' ' '); echo "$P dns-direct=${r:-no answer}"
 w() { wget -q -O /dev/null "$1" 2>/tmp/agentlab-egress; rc=$?; s=$(grep -o 'HTTP/1.1 [0-9]*' /tmp/agentlab-egress | head -1); echo "rc$rc ${s:-$(head -c 80 /tmp/agentlab-egress | tr '\n' ' ')}"; }
 echo "$P egress-outside=$(w ` + codingTestOutsideHost + `)"
 echo "$P egress-origin=$(w https://api.github.com/)"`
+}
+
+// claudeSignedCacheFile is Claude Code's signed policy-limits cache in the
+// claude Harness's config directory: a JWS of header typ claudeSignedCacheType
+// that Anthropic signs over the organization's policy limits. It attests the
+// policy file's content and authenticates nothing, so it is the one
+// token-shaped value the search admits, and only when every match in the file
+// is such a JWS.
+const (
+	claudeSignedCacheFile = "/data/claude/policy-limits.json.signature.json"
+	claudeSignedCacheType = "cc-signed-cache+jws"
+)
+
+// dataTokensCommand counts the files under roots holding a GitHub token or a
+// JWT, all but signedCache when its every match is a JWS whose
+// header names claudeSignedCacheType. It prints a count, never a value: a
+// match stays in a shell variable while its header is decoded.
+func dataTokensCommand(roots, signedCache string) string {
+	return `sc() { m=0; for t in $(grep -oE 'gh[opsu]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,}|eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]*' "$1"); do
+  case "$t" in eyJ*) ;; *) return 1;; esac
+  h=$(printf %s "${t%%.*}" | tr '_-' '/+'); while [ $((${#h} % 4)) -ne 0 ]; do h="$h="; done
+  printf %s "$h" | base64 -d 2>/dev/null | grep -q '"typ" *: *"` + claudeSignedCacheType + `"' || return 1; m=1
+done; [ "$m" = 1 ]; }
+echo "$P data-tokens=$(timeout 60 grep -rlsE 'gh[opsu]_[A-Za-z0-9]{30}|github_pat_[A-Za-z0-9_]{20}|eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.' ` + roots + ` 2>/dev/null | while IFS= read -r f; do [ "$f" = '` + signedCache + `' ] && sc "$f" && continue; echo; done | wc -l | tr -d ' ')"`
 }
 
 // codingProbeTimeoutMS is the milliseconds the sandbox probe may take: its
