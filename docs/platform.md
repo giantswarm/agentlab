@@ -1292,6 +1292,9 @@ of the lab that had a golden before the step must hold one in that layout
 within `--retake-timeout` — its own, kept, or one taken again — and none may
 record a terminal `GoldenSnapshotStatus` error — the `GoldenActorCrashed` a
 drain leaves on every template of a Substrate without the golden take retry.
+Each poll re-reads ate-api's `ListActorTemplates`: a template no longer listed
+is a superseded revision kagent deleted during the run, named in the PASS line
+and not judged.
 
 The agent is removed — through kagent, then whatever of it ate-api still
 holds (its ActorTemplate, an actor that crashed on a restore), deleted in

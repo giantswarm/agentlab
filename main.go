@@ -139,6 +139,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		inGroup(groupTesting, decisionsTestCmd()),
 		inGroup(groupTesting, beekeeperDecisionsTestCmd()),
 		inGroup(groupTesting, beekeeperCentralTestCmd()),
+		inGroup(groupTesting, beekeeperSubscriptionsTestCmd()),
 		inGroup(groupTesting, backstageTestCmd()),
 
 		inGroup(groupCleanup, labCmd("down", "Destroy the kind cluster", lab.Down)),
@@ -2099,6 +2100,27 @@ func beekeeperCentralTestCmd() *cobra.Command {
 	cmd.Flags().IntVar(&opts.Port, "port", 18093, "beekeeper serve's port in the node's network; the next one takes its Postgres")
 	cmd.Flags().StringVar(&opts.Chart, "chart", "", "a beekeeper chart directory or oci:// reference (at --beekeeper-version): serve runs in the lab cluster from the chart, as an installation runs it, its Environment and lane from the chart's values and its mailboxes in a CloudNativePG database, instead of on the host")
 	cmd.Flags().StringVar(&opts.RunDir, "run-dir", "", "directory for serve's configuration, the two machines and the logs, kept afterwards (default: a temporary directory, removed)")
+	return cmd
+}
+
+func beekeeperSubscriptionsTestCmd() *cobra.Command {
+	var opts lab.BeekeeperSubscriptionsTestOptions
+	cmd := &cobra.Command{
+		Use:   "beekeeper-subscriptions-test",
+		Short: "Headless proof of resource subscriptions relayed per user by muster: beekeeper serve on the host behind muster, two lab users subscribed with subscriptions/listen (MCP 2026-07-28) to their own mailboxes; each message reaches its person's stream only, a subscription to the other's mailbox is refused",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			return lab.BeekeeperSubscriptionsTest(cfg, opts)
+		},
+	}
+	cmd.Flags().StringVar(&opts.Version, "beekeeper-version", lab.BeekeeperSubscriptionsVersionDefault, "the beekeeper release whose serve and CRDs run")
+	cmd.Flags().StringVar(&opts.Binary, "beekeeper-binary", "", "a local static linux beekeeper build for serve instead of the release's binary")
+	cmd.Flags().IntVar(&opts.Port, "port", 18095, "beekeeper serve's port in the node's network; the next one takes its Postgres")
+	cmd.Flags().StringVar(&opts.RunDir, "run-dir", "", "directory for serve's configuration and log, kept afterwards (default: a temporary directory, removed)")
 	return cmd
 }
 
