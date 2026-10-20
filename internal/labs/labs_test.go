@@ -334,14 +334,14 @@ func TestRecordedPorts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range []int{32001, 6444} {
+	for _, p := range []string{"127.0.0.1:32001", "127.0.0.1:6444"} {
 		if ports[p] != "agentlab" {
-			t.Errorf("port %d recorded by %q, want agentlab", p, ports[p])
+			t.Errorf("%s recorded by %q, want agentlab", p, ports[p])
 		}
 	}
 	for p, name := range ports {
 		if name != "agentlab" {
-			t.Errorf("port %d recorded by %q: the asking lab counted itself", p, name)
+			t.Errorf("%s recorded by %q: the asking lab counted itself", p, name)
 		}
 	}
 }

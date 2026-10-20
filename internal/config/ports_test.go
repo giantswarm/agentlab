@@ -11,14 +11,18 @@ import (
 // — docker, and podman run by root. Nothing is out of reach.
 const everyPortPublishable = 1
 
-// takenSet builds a probe stub that reports exactly the given ports occupied.
-func takenSet(ports ...int) func(int) bool {
+// takenSet builds a probe stub that reports exactly the given ports occupied,
+// on any address.
+func takenSet(ports ...int) func(string, int) bool {
 	set := map[int]bool{}
 	for _, p := range ports {
 		set[p] = true
 	}
-	return func(p int) bool { return set[p] }
+	return func(_ string, p int) bool { return set[p] }
 }
+
+// loopback is a recorded host:port on 127.0.0.1.
+func loopback(port int) string { return net.JoinHostPort(DefaultGatewayAddress, strconv.Itoa(port)) }
 
 func TestChooseFreePortsNothingTaken(t *testing.T) {
 	cfg := Default()
@@ -128,7 +132,7 @@ func TestChooseFreePortsReplacementsDoNotCollide(t *testing.T) {
 // reports the real bind error) instead of looping or panicking.
 func TestChooseFreePortsExhaustedRangeKeepsPort(t *testing.T) {
 	cfg := Default()
-	cfg.chooseFreePorts(func(int) bool { return true }, nil, everyPortPublishable)
+	cfg.chooseFreePorts(func(string, int) bool { return true }, nil, everyPortPublishable)
 	if cfg.DexPort != 32000 {
 		t.Fatalf("dexPort = %d, want the untouched 32000", cfg.DexPort)
 	}
@@ -140,11 +144,11 @@ func TestPortTakenProbe(t *testing.T) {
 		t.Fatal(err)
 	}
 	port := l.Addr().(*net.TCPAddr).Port
-	if !portTaken(port) {
+	if !portTaken(DefaultGatewayAddress, port) {
 		t.Errorf("port %d has a listener but probes free", port)
 	}
 	_ = l.Close()
-	if portTaken(port) {
+	if portTaken(DefaultGatewayAddress, port) {
 		t.Errorf("port %d is closed but probes taken", port)
 	}
 }
@@ -219,12 +223,29 @@ func TestChooseFreePortsReplacementIsPublishable(t *testing.T) {
 // listens there, and the change names that lab.
 func TestChooseFreePortsAvoidsRecordedPorts(t *testing.T) {
 	cfg := Default()
-	recorded := map[int]string{32000: "agentlab", 6443: "agentlab", 32001: "agentlab-2", 6444: "agentlab-2"}
+	recorded := map[string]string{loopback(32000): "agentlab", loopback(6443): "agentlab", loopback(32001): "agentlab-2", loopback(6444): "agentlab-2"}
 	changes := cfg.chooseFreePorts(takenSet(), recorded, everyPortPublishable)
 	if cfg.DexPort != 32002 || cfg.APIServerPort != 6445 {
 		t.Fatalf("dexPort %d, apiServerPort %d; want 32002, 6445", cfg.DexPort, cfg.APIServerPort)
 	}
 	if len(changes) != 2 || !strings.Contains(changes[0].String(), "is the lab agentlab's") {
 		t.Fatalf("changes = %v, want dexPort and apiServerPort naming the lab agentlab", changes)
+	}
+}
+
+// The edge on its own loopback address is not another lab's 443: only the
+// recorded host:port counts, so a second lab keeps 443 on 127.0.0.2.
+func TestChooseFreePortsGatewayOnItsOwnAddress(t *testing.T) {
+	cfg := Default()
+	cfg.Platform.GatewayAddress = "127.0.0.2"
+	recorded := map[string]string{loopback(443): DefaultClusterName}
+	cfg.chooseFreePorts(takenSet(), recorded, everyPortPublishable)
+	if cfg.Platform.GatewayPort != 443 {
+		t.Errorf("gatewayPort %d on 127.0.0.2, want 443 kept", cfg.Platform.GatewayPort)
+	}
+	cfg.Platform.GatewayAddress = ""
+	cfg.chooseFreePorts(takenSet(), recorded, everyPortPublishable)
+	if cfg.Platform.GatewayPort != 8443 {
+		t.Errorf("gatewayPort %d on 127.0.0.1, want 8443", cfg.Platform.GatewayPort)
 	}
 }

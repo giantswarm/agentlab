@@ -67,12 +67,12 @@ func List() ([]Lab, error) {
 	return labs, nil
 }
 
-// RecordedPorts returns the host ports every other registered lab records in
-// its agentlab.yaml — running or stopped — each mapped to that lab's name, so
-// the lab in dir picks ports none of them can come up on. A lab whose
-// agentlab.yaml does not parse is left out: it cannot come up either.
-func RecordedPorts(dir string) (map[int]string, error) {
-	ports := map[int]string{}
+// RecordedPorts returns the host addresses (host:port) every other registered
+// lab records in its agentlab.yaml — running or stopped — each mapped to that
+// lab's name, so the lab in dir picks ports none of them can come up on. A
+// lab whose agentlab.yaml does not parse is left out: it cannot come up either.
+func RecordedPorts(dir string) (map[string]string, error) {
+	ports := map[string]string{}
 	err := eachOther(dir, func(name string, cfg *config.Config) {
 		for _, p := range cfg.HostPorts() {
 			ports[p] = name

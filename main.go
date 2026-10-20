@@ -545,8 +545,8 @@ func discoverInto(cfg *config.Config, first bool, pinEnabled *bool, pinBackends 
 	disc := lab.Discover(cfg)
 	fmt.Print(disc.Report(cfg))
 	fmt.Println()
-	applyPorts(cfg, disc)
 	applyDomain(cfg, disc)
+	applyPorts(cfg, disc)
 	before := cfg.Platform.ModelManager
 	cfg.Platform.ModelManager.ApplyDiscovered(disc.Backends(), cfg.Platform.Agents, first, pinEnabled, pinBackends)
 	vmBefore := cfg.Platform.VMManager.Enabled
@@ -614,9 +614,11 @@ func applyPorts(cfg *config.Config, disc *lab.Discovery) {
 
 // applyDomain gives the lab a platform domain no other registered lab
 // records while no kind node of this configuration exists, as applyPorts does
-// for the ports: a second lab's hostnames are then backstage.lab2.<base> and
-// so on, its own in the browser. An existing cluster keeps its domain (its CA
-// and every rendered URL name it): a clash is reported with the way out.
+// for the ports: a second lab serves backstage.lab2.127.0.0.2.nip.io on
+// 127.0.0.2:443, its own site in the browser with no port in its URLs. It
+// runs before applyPorts, which then probes the edge on its new address. An
+// existing cluster keeps its domain (its CA and every rendered URL name it):
+// a clash is reported with the way out.
 func applyDomain(cfg *config.Config, disc *lab.Discovery) {
 	recorded, err := labs.RecordedDomains(".")
 	if err != nil {
@@ -631,7 +633,7 @@ func applyDomain(cfg *config.Config, disc *lab.Discovery) {
 		}
 		return
 	}
-	if ch := cfg.ChooseFreeDomain(recorded); ch != nil {
+	if ch := cfg.ChooseFreeDomain(recorded, config.LoopbackBindable); ch != nil {
 		fmt.Println("Applied to the configuration:")
 		fmt.Printf("  %s\n", ch)
 		fmt.Println()
