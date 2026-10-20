@@ -15,7 +15,6 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -182,15 +181,6 @@ func ensureWorkspaceTokenExchangeSecret() (string, error) {
 	return path, nil
 }
 
-// readWorkspaceTokenExchangeSecret reads the token exchange client's secret.
-func readWorkspaceTokenExchangeSecret() (string, error) {
-	raw, err := os.ReadFile(filepath.Join(workspaceGrantDir, workspaceTokenExchangeSecretFile)) // #nosec G304 -- the lab's own credentials directory
-	if err != nil {
-		return "", fmt.Errorf("reading the workspace token exchange client's secret: %w (`agentlab platform` generates it with the workspaces on)", err)
-	}
-	return strings.TrimSpace(string(raw)), nil
-}
-
 // readWorkspaceGrantKey reads the lab's grant signing key.
 func readWorkspaceGrantKey() (*ecdsa.PrivateKey, error) {
 	path := filepath.Join(workspaceGrantDir, workspaceGrantKeyFile)
@@ -276,18 +266,21 @@ func publishedWorkspaceGrantKey(jwks []byte, key *ecdsa.PublicKey) (string, erro
 // workspaceGrant is a grant's payload in the manager's claims, which are
 // kagent's jwt admission's.
 type workspaceGrant struct {
-	Issuer    string              `json:"iss"`
-	Subject   string              `json:"sub"`
-	Audience  []string            `json:"aud"`
-	IssuedAt  int64               `json:"iat"`
-	NotBefore int64               `json:"nbf"`
-	Expiry    int64               `json:"exp"`
-	ID        string              `json:"jti"`
-	Workspace map[string]string   `json:"workspace"`
-	Volume    workspaceVolume     `json:"volume"`
-	Mounts    []workspaceMount    `json:"mounts"`
-	Changed   []string            `json:"changed,omitempty"`
-	Providers []map[string]string `json:"providers,omitempty"`
+	Issuer    string   `json:"iss"`
+	Subject   string   `json:"sub"`
+	Audience  []string `json:"aud"`
+	IssuedAt  int64    `json:"iat"`
+	NotBefore int64    `json:"nbf"`
+	Expiry    int64    `json:"exp"`
+	ID        string   `json:"jti"`
+	// AgentNamespace is the namespace whose Agents may start a Session
+	// with the grant, the manager's --grant-agent-namespace.
+	AgentNamespace string              `json:"agent_namespace"`
+	Workspace      map[string]string   `json:"workspace"`
+	Volume         workspaceVolume     `json:"volume"`
+	Mounts         []workspaceMount    `json:"mounts"`
+	Changed        []string            `json:"changed,omitempty"`
+	Providers      []map[string]string `json:"providers,omitempty"`
 }
 
 type workspaceVolume struct {
@@ -308,9 +301,10 @@ func newWorkspaceGrant(issuer, subject, workspace string, volume workspaceVolume
 	return workspaceGrant{
 		Issuer: issuer, Subject: subject, Audience: []string{workspaceGrantAudience},
 		IssuedAt: issued.Unix(), NotBefore: issued.Unix(), Expiry: issued.Add(ttl).Unix(),
-		ID:        randomHex(16),
-		Workspace: map[string]string{"namespace": kagentNamespace, nameKey: workspace},
-		Volume:    volume,
+		ID:             randomHex(16),
+		AgentNamespace: kagentNamespace,
+		Workspace:      map[string]string{"namespace": kagentNamespace, nameKey: workspace},
+		Volume:         volume,
 		Mounts: []workspaceMount{
 			{SubPath: workspaceGrantSessionDirectory},
 			{SubPath: workspaceGrantMirrors, ReadOnly: true},

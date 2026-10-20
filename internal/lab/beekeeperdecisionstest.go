@@ -91,9 +91,17 @@ type BeekeeperDecisionsTestOptions struct {
 	// into that image, takes precedence — the proof of a branch.
 	Version string
 	Binary  string
+	// LocalBeekeeper, a beekeeper build for the host, runs the person's own
+	// machine for step 9: its standby watch and a background Claude Code
+	// session as their guide (claude on PATH, on its smallest model).
+	LocalBeekeeper string
+	// GuideOnly runs the guide's conversation steps (6 to 9) without the
+	// decisions (1 to 5).
+	GuideOnly bool
 	// The gateway: Port is its endpoints' in the node's network, Port+1
 	// its admin endpoints, Port+3 beekeeper serve's, Port+4 its Postgres'.
-	// Default 18090. GatewayBinary is not used: the gateway runs in the
+	// Default the lab's own block, gatewayTestPort. GatewayBinary is not
+	// used: the gateway runs in the
 	// node's network, as a container.
 	DecisionsTestOptions
 }
@@ -106,6 +114,9 @@ func BeekeeperDecisionsTest(cfg *config.Config, opts BeekeeperDecisionsTestOptio
 	if !cfg.Platform.Enabled {
 		return fmt.Errorf("the platform is off in %s — the answers run through its muster; enable it and run `agentlab platform` first", config.File)
 	}
+	if cfg.Platform.MusterPodNetwork {
+		return fmt.Errorf("platform.musterPodNetwork is on in %s: this proof reaches muster in the node's network on :%d, where only a host-network muster listens; run it on a lab with the option off (`agentlab configure --muster-pod-network=false`, then `agentlab platform`)", config.File, musterNodePort)
+	}
 	asker, other, group, err := beekeeperUsers(cfg)
 	if err != nil {
 		return err
@@ -116,9 +127,7 @@ func BeekeeperDecisionsTest(cfg *config.Config, opts BeekeeperDecisionsTestOptio
 	if opts.GatewayImage, err = resolveGatewayImage(cfg, opts.GatewayImage, ""); err != nil {
 		return err
 	}
-	if opts.Port == 0 {
-		opts.Port = 18090
-	}
+	opts.Port = cmp.Or(opts.Port, gatewayTestPort(cfg))
 	servePort, pgPort := opts.Port+3, opts.Port+4
 	if err := portsFree(opts.Port, opts.Port+1, opts.Port+2, servePort, pgPort); err != nil {
 		return err
@@ -204,6 +213,7 @@ func BeekeeperDecisionsTest(cfg *config.Config, opts BeekeeperDecisionsTestOptio
 	musterURL := "http://127.0.0.1:" + strconv.Itoa(musterNodePort)
 	slackAPI := "http://" + net.JoinHostPort(fake.podIP, strconv.Itoa(fakeContainerPort)) + slackAPIPath
 	gw := newGatewayProcess(KlausGatewayTestOptions{GatewayImage: opts.GatewayImage, Port: opts.Port}, runDir, caFile, "grpcs://127.0.0.1:1", slackAPI, musterURL)
+	gw.container = gatewayContainerName(cfg)
 	gw.extraArgs = []string{"--reviews-enabled=true", "--reviews-allowed-callers=" + caller,
 		"--listen-address=" + net.JoinHostPort("0.0.0.0", strconv.Itoa(opts.Port)),
 		"--admin-address=" + net.JoinHostPort("0.0.0.0", strconv.Itoa(opts.Port+1))}
@@ -267,25 +277,27 @@ func BeekeeperDecisionsTest(cfg *config.Config, opts BeekeeperDecisionsTestOptio
 	p := &beekeeperProof{s: askerS, otherS: otherS, fake: fake, driver: newSlackDriver(gw.baseURL(), keys.signing, fake, channel),
 		asker: asker.Email, askerSlack: askerSlack, otherSlack: otherSlack, channel: channel}
 
-	step("1. A decision for %s, filed through muster: a direct message; %s's click is refused, %s's answers it", asker.Email, other.Email, asker.Email)
-	if err := p.personByClick(); err != nil {
-		return err
-	}
-	step("2. A decision for team:%s in %s, answered by %s's reply in its thread", beekeeperTeam, channel, other.Email)
-	if err := p.teamByThreadReply(); err != nil {
-		return err
-	}
-	step("3. A decision nobody answers closes with its default at its due time (%s); a late click is refused", beekeeperDefaultDue)
-	if err := p.defaulted(); err != nil {
-		return err
-	}
-	step("4. A decision its filer withdraws (note_done) loses its buttons")
-	if err := p.withdrawn(); err != nil {
-		return err
-	}
-	step("5. beekeeper recorded each outcome as an Event in %s", beekeeperNamespace)
-	if err := beekeeperOutcomes(); err != nil {
-		return err
+	if !opts.GuideOnly {
+		step("1. A decision for %s, filed through muster: a direct message; %s's click is refused, %s's answers it", asker.Email, other.Email, asker.Email)
+		if err := p.personByClick(); err != nil {
+			return err
+		}
+		step("2. A decision for team:%s in %s, answered by %s's reply in its thread", beekeeperTeam, channel, other.Email)
+		if err := p.teamByThreadReply(); err != nil {
+			return err
+		}
+		step("3. A decision nobody answers closes with its default at its due time (%s); a late click is refused", beekeeperDefaultDue)
+		if err := p.defaulted(); err != nil {
+			return err
+		}
+		step("4. A decision its filer withdraws (note_done) loses its buttons")
+		if err := p.withdrawn(); err != nil {
+			return err
+		}
+		step("5. beekeeper recorded each outcome as an Event in %s", beekeeperNamespace)
+		if err := beekeeperOutcomes(); err != nil {
+			return err
+		}
 	}
 	step("6. The guide in Slack: %s's guide writes to them, their reply in the thread reaches the guide's mailbox from Slack, the guide's answer lands in the same thread", asker.Email)
 	r, err := p.guideConversation()
@@ -299,6 +311,23 @@ func BeekeeperDecisionsTest(cfg *config.Config, opts BeekeeperDecisionsTestOptio
 	step("8. With the guide off the roster, a reply in its thread is not delivered and the thread says why")
 	if err := p.guideNotRunning(r); err != nil {
 		return err
+	}
+	if opts.LocalBeekeeper != "" {
+		step("9. The guide on %s's machine: its question through their beekeeper, their reply in the thread delivered into the running guide session by the standby watch's mailbox subscription through muster, its answer in the same thread", asker.Email)
+		g, err := startLocalGuide(runDir, opts.LocalBeekeeper, caFile, asker.Email, cfg.MusterBaseURL()+"/mcp", tokens[asker.Email], run)
+		if g != nil {
+			defer g.stop()
+		}
+		if err != nil {
+			return err
+		}
+		if err := p.localGuideConversation(g); err != nil {
+			return err
+		}
+	}
+	if opts.GuideOnly {
+		note("the guide's conversation proven")
+		return nil
 	}
 	note("all beekeeper decisions and the guide's conversation proven")
 	return nil

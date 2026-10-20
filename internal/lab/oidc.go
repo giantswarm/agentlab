@@ -162,10 +162,13 @@ func labHTTPClient(timeout time.Duration) (*http.Client, error) {
 // OAuth presents a token the apiserver answers with 401.
 const musterLoginScopes = "openid email groups profile " + crossClientScopePrefix + config.KubernetesClientID
 
-// musterWriterScopes adds the audience muster's own Kubernetes writes (a
-// workflow created through core_workflow_create, as the caller) require —
-// the one Backstage's sign-in requests too (components.backstage.extraScopes)
-// and the dex-k8s-authenticator client trusts agent-platform to ask for.
+// musterWriterScopes adds dex-k8s-authenticator, the audience muster's own
+// Kubernetes writes (a workflow created through core_workflow_create, as the
+// caller) require by muster's default — the one Backstage's sign-in requests
+// too (components.backstage.extraScopes) and the dex-k8s-authenticator client
+// trusts agent-platform to ask for. The lab's values set muster's
+// writesAsCaller.kubernetesAudience to kubernetes, which musterLoginScopes
+// asks for already.
 const musterWriterScopes = musterLoginScopes + " " + crossClientScopePrefix + config.DexK8sAuthenticatorClientID
 
 // crossClientScopePrefix is Dex's cross-client audience scope: a token

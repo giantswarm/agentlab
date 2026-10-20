@@ -253,7 +253,7 @@ func (g *workspaceGitHub) handler() http.Handler {
 	mux.HandleFunc("PUT "+githubFakeReposPath+"/{owner}/{repo}", g.addGeneratedRepo)
 	mux.HandleFunc("DELETE "+githubFakeReposPath+"/{owner}/{repo}", g.removeGeneratedRepo)
 
-	mux.HandleFunc("GET /login/oauth/authorize", g.authorize)
+	mux.HandleFunc("GET "+githubAuthorizePath, g.authorize)
 	mux.HandleFunc("POST /login/oauth/access_token", g.accessToken)
 	mux.HandleFunc("DELETE "+api+"/applications/{client}/grant", g.revoke(true))
 	mux.HandleFunc("DELETE "+api+"/applications/{client}/token", g.revoke(false))
@@ -633,18 +633,22 @@ func (g *workspaceGitHub) canWrite(c githubCaller, repo *workspaceRepo) bool {
 
 // permission is c's explicit permission on repo: an installation token
 // writes to every repository of its owner (or of its list), a user what the
-// fixture grants.
+// fixture grants where the App is installed on the repository's owner. A
+// user token is the App's: GitHub intersects the user's permission with the
+// installation's (contents write), so a repository of an owner without the
+// App gets none.
 func (g *workspaceGitHub) permission(c githubCaller, repo *workspaceRepo) string {
-	if g.isSuspended(g.installationOf(repo.Owner)) {
+	installation := g.installationOf(repo.Owner)
+	if g.isSuspended(installation) {
 		return ""
 	}
 	switch c.kind {
 	case credInstallation:
-		if g.installationOf(repo.Owner) == c.installation && (len(c.repos) == 0 || slices.Contains(c.repos, repo.Name)) {
+		if installation == c.installation && (len(c.repos) == 0 || slices.Contains(c.repos, repo.Name)) {
 			return githubPermWrite
 		}
 	case credUser:
-		if u, ok := g.fixture.fixtureUser(c.login); ok {
+		if u, ok := g.fixture.fixtureUser(c.login); ok && installation != 0 {
 			return u.Repositories[repo.fullName()]
 		}
 	}

@@ -104,6 +104,11 @@ const (
 	crStatus     = "status"
 	crConditions = "conditions"
 
+	// A tool result's text parts as omp reports them: {content: [{type:
+	// text, text}]}.
+	toolResultContent = "content"
+	toolResultText    = "text"
+
 	// kagentControllerRoute and kagentControllerJWTPolicy are the
 	// connectivity chart's route objects in front of the controller: the
 	// GRPCRoute on the edge and the policy that validates the token and
@@ -899,6 +904,9 @@ type turn struct {
 	// working, in order: a runtime's word before the answer, such as the
 	// workspace setup's.
 	notices []string
+	// tools are the results of the tools the turn ran, in order: the
+	// harness's function_response artifacts.
+	tools []harnessToolResult
 	// approval is the tool_approval_request the task paused on at
 	// input-required, nil otherwise.
 	approval *toolApprovalRequest
@@ -983,6 +991,7 @@ func (t *turn) addArtifact(artifact *a2a.Artifact, appendChunk bool) {
 	if _, seen := t.artifactText[artifact.ID]; !seen {
 		t.artifactOrder = append(t.artifactOrder, artifact.ID)
 	}
+	t.tools = append(t.tools, toolResults(artifact.Parts)...)
 	text := partsText(artifact.Parts)
 	if appendChunk {
 		t.artifactText[artifact.ID] += text
@@ -1025,6 +1034,86 @@ func partsText(parts a2a.ContentParts) string {
 		}
 	}
 	return strings.Join(texts, "")
+}
+
+// harnessToolResult is one tool's result as the harness reports it: the tool's
+// name (command_execution for a shell command, <server>.<tool> for an MCP
+// tool on codex) and its output, a command's output or the result's JSON.
+type harnessToolResult struct {
+	name, output string
+}
+
+// toolActivityTypeKeys are the part metadata a harness types its tool
+// activity with (the kagent line's key, then upstream's);
+// functionResponseType is a tool's result.
+var toolActivityTypeKeys = []string{"kagent.dev/a2a/part-type", "kagent_type"}
+
+const functionResponseType = "function_response"
+
+// toolActivityType is the type a harness gave a part, "" for none.
+func toolActivityType(part *a2a.Part) string {
+	for _, key := range toolActivityTypeKeys {
+		if kind := stringOf(part.Metadata[key]); kind != "" {
+			return kind
+		}
+	}
+	return ""
+}
+
+// toolResults reads the tool results among an artifact's parts: data parts
+// typed function_response, carrying {id, name, response: {result}}.
+func toolResults(parts a2a.ContentParts) []harnessToolResult {
+	var results []harnessToolResult
+	for _, part := range parts {
+		if part == nil || toolActivityType(part) != functionResponseType {
+			continue
+		}
+		data, ok := part.Data().(map[string]any)
+		if !ok {
+			continue
+		}
+		response, _ := data["response"].(map[string]any)
+		results = append(results, harnessToolResult{name: stringOf(data["name"]), output: toolOutput(response["result"])})
+	}
+	return results
+}
+
+// toolOutput words a tool's result: a shell command's output where the
+// harness reports one (codex's output, or the text parts of omp's content),
+// the result as JSON otherwise.
+func toolOutput(result any) string {
+	if fields, ok := result.(map[string]any); ok {
+		if output, ok := fields["output"].(string); ok {
+			return output
+		}
+		if parts, ok := fields[toolResultContent].([]any); ok {
+			var texts []string
+			for _, part := range parts {
+				if p, ok := part.(map[string]any); ok && p[fieldTypeKey] == toolResultText {
+					if text, ok := p[toolResultText].(string); ok {
+						texts = append(texts, text)
+					}
+				}
+			}
+			if len(texts) > 0 {
+				return strings.Join(texts, "\n")
+			}
+		}
+	}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		return ""
+	}
+	return string(raw)
+}
+
+// toolOutputs joins the outputs of the turn's tools, one per line.
+func (t *turn) toolOutputs() string {
+	outputs := make([]string, 0, len(t.tools))
+	for _, tool := range t.tools {
+		outputs = append(outputs, tool.output)
+	}
+	return strings.Join(outputs, "\n")
 }
 
 // turn drives one streamed turn on the session to the end of its stream
@@ -1211,28 +1300,41 @@ func (t *turn) completedText() (string, error) {
 // Shared steps of the proofs call this one; a turn that pauses for a
 // decision is an error (their agents bind nothing that requires approval).
 func agentTurnAs(cfg *config.Config, name, token, prompt string) (string, error) {
+	return agentTurnOf(cfg, agentRef(name), token, prompt)
+}
+
+// agentTurnOf is agentTurnAs for an Agent of any namespace: an organization
+// namespace's agent (tenants-test).
+func agentTurnOf(cfg *config.Config, agent *apiv1alpha1.ResourceReference, token, prompt string) (string, error) {
+	reply, _, err := agentSessionTurnOf(cfg, agent, token, prompt)
+	return reply, err
+}
+
+// agentSessionTurnOf is agentTurnOf that also returns the id of the Session
+// the turn ran in, which names its Substrate actor.
+func agentSessionTurnOf(cfg *config.Config, agent *apiv1alpha1.ResourceReference, token, prompt string) (reply, sessionID string, err error) {
+	name := agent.GetName()
 	api, err := dialKagentAPI(cfg, token)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer api.close()
 	ctx, cancel := context.WithTimeout(context.Background(), kagentTurnTimeout)
 	defer cancel()
-	session, err := api.createSession(ctx, name, uuid.NewString())
+	session, err := api.createSessionOf(ctx, agent, uuid.NewString())
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer api.removeSession(session.GetId())
 	note("Session %s of %s (creator %s, %s)", session.GetId(), name, session.GetCreator(), sessionState(session))
 	t, err := api.turn(ctx, session, userMessage(prompt))
 	if err != nil {
-		return "", fmt.Errorf("A2A turn on %s: %w", name, err)
+		return "", session.GetId(), fmt.Errorf("A2A turn on %s: %w", name, err)
 	}
-	reply, err := t.completedText()
-	if err != nil {
-		return "", fmt.Errorf("A2A turn on %s: %w", name, err)
+	if reply, err = t.completedText(); err != nil {
+		return "", session.GetId(), fmt.Errorf("A2A turn on %s: %w", name, err)
 	}
-	return reply, nil
+	return reply, session.GetId(), nil
 }
 
 // removeSession deletes a session on the cleanup paths, bounded on its own

@@ -14,6 +14,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -109,6 +110,8 @@ const (
 	// workspacesProxyPort is the proxy's listener: on the node's network,
 	// like the controller pod it sits in.
 	workspacesProxyPort = 10000
+	// workspacesProxyContainer is the controller's mTLS proxy container.
+	workspacesProxyContainer = "envoy"
 	// workspacesController and workspacesNodePlugin are the driver's
 	// Deployment and DaemonSet.
 	workspacesController = "csi-nfs-controller"
@@ -334,8 +337,11 @@ func WorkspacesNode(cfg *config.Config) string {
 // CSICompanion, the CSI companion's block `workspaces.substrate.csiCompanion`
 // (agent-platform 4.128.0 and newer), which platform.workspaces.csiCompanion
 // needs.
+// Manager is the chart's components.workspace-manager source, which
+// workspaceManagerVersion resolves.
 type chartWorkspaces struct {
 	Carries, Organizations, CSICompanion bool
+	Manager                              workspaceManagerSource
 }
 
 // chartWorkspacesOf probes the chart once: memoized per chart, since a
@@ -373,6 +379,7 @@ var (
 			Carries:       chartValuesCarry(c.Schema, c.Values, valuesWorkspaces),
 			Organizations: chartValuesCarry(c.Schema, c.Values, valuesWorkspaces, valuesWorkspacesOrganizations),
 			CSICompanion:  chartValuesCarry(c.Schema, c.Values, valuesWorkspaces, valuesWorkspacesSubstrate, valuesWorkspacesCSICompanion),
+			Manager:       workspaceManagerSourceOf(c.Values),
 		}, nil
 	}
 )
@@ -391,15 +398,23 @@ const (
 // switch is on, nothing otherwise; a chart that cannot be probed is a note
 // and nothing, so the lab registers the driver with Substrate itself.
 func workspacesChartFor(cfg *config.Config) chartWorkspaces {
-	if !cfg.WorkspacesEnabled() {
-		return chartWorkspaces{}
-	}
-	w, err := chartWorkspacesOf(platformChartFor(cfg))
+	w, err := workspacesChartProbed(cfg)
 	if err != nil {
 		note("the platform chart's workspaces values could not be probed (%v): the lab registers the driver with Substrate itself", err)
 		return chartWorkspaces{}
 	}
 	return w
+}
+
+// workspacesChartProbed is chartWorkspacesOf for the configured chart when
+// the switch is on, nothing otherwise, with the probe's failure: a proof
+// reads a chart it could not load as no answer, never as one without the
+// values.
+func workspacesChartProbed(cfg *config.Config) (chartWorkspaces, error) {
+	if !cfg.WorkspacesEnabled() {
+		return chartWorkspaces{}, nil
+	}
+	return chartWorkspacesOf(platformChartFor(cfg))
 }
 
 // checkWorkspacesCSICompanion refuses platform.workspaces.csiCompanion on a
@@ -873,9 +888,15 @@ type WorkspacesStatus struct {
 	// Companion is the chart's CSI companion in a word when it runs
 	// (platform.workspaces.csiCompanion): Ready, or what is not.
 	Companion string `json:"companion,omitempty"`
+	// Proxy reports whether the live controller runs its mTLS proxy, which
+	// the lab renders with the workspaces (they come with Agent Substrate).
+	Proxy bool `json:"proxy"`
 	// CSIDriverConfig says who registered the driver with Substrate: "the
 	// lab", "the chart", "hand", or "" when nothing did.
 	CSIDriverConfig string `json:"csiDriverConfig,omitempty"`
+	// NoSubstrate reports that Agent Substrate's control plane is not on the
+	// cluster (substrateControlPlaneOn): a CSIDriverConfig then registers nothing.
+	NoSubstrate bool `json:"noSubstrate,omitempty"`
 	// SessionAdmission words the rig a Session on a workspace volume is
 	// admitted with (workspacegrant.go): kagent's jwt admission, the
 	// manager's grant key and the claude Harness.
@@ -909,6 +930,9 @@ func readWorkspacesStatus(ctx context.Context) (*WorkspacesStatus, error) {
 				*w.into = fmt.Sprintf("%d of %d replicas available", d.Status.AvailableReplicas, d.Status.Replicas)
 			}
 			s.Node = d.Spec.Template.Spec.NodeSelector["kubernetes.io/hostname"]
+			if w.name == workspacesController {
+				s.Proxy = slices.ContainsFunc(d.Spec.Template.Spec.Containers, func(c corev1.Container) bool { return c.Name == workspacesProxyContainer })
+			}
 		}
 	}
 	ds, err := k.clientset.AppsV1().DaemonSets(workspacesNamespace).Get(ctx, workspacesNodePlugin, metav1.GetOptions{})
@@ -924,6 +948,7 @@ func readWorkspacesStatus(ctx context.Context) (*WorkspacesStatus, error) {
 	s.StorageClass = s.Driver != ""
 	s.Companion = readCompanionState(ctx, k)
 	s.CSIDriverConfig = readWorkspacesRegistrant(ctx, cmp.Or(s.Driver, workspacesCSIDriver))
+	s.NoSubstrate = !substrateControlPlaneOn(ctx)
 	s.SessionAdmission = readSessionAdmission(ctx)
 	return s, nil
 }
@@ -978,8 +1003,16 @@ func (s *WorkspacesStatus) String() string {
 		class = "StorageClass " + workspacesStorageClass
 	}
 	driver := cmp.Or(s.Driver, workspacesCSIDriver)
-	line := fmt.Sprintf("NFS server %s on %s; CSI controller %s %s with its mTLS proxy; node plugin %s; %s; %s",
-		s.NFSServer, orNone(s.Node), driver, s.Controller, s.NodePlugin, class, workspacesRegistration(driver, s.CSIDriverConfig))
+	proxy := "with its mTLS proxy"
+	if !s.Proxy {
+		proxy = "without its mTLS proxy (Agent Substrate off)"
+	}
+	registration := workspacesRegistration(driver, s.CSIDriverConfig)
+	if s.NoSubstrate && s.CSIDriverConfig != "" {
+		registration = fmt.Sprintf("CSIDriverConfig %s by %s left over, Agent Substrate not running (`agentlab platform` removes it)", driver, s.CSIDriverConfig)
+	}
+	line := fmt.Sprintf("NFS server %s on %s; CSI controller %s %s %s; node plugin %s; %s; %s",
+		s.NFSServer, orNone(s.Node), driver, s.Controller, proxy, s.NodePlugin, class, registration)
 	if s.Companion != "" {
 		line += fmt.Sprintf("; the chart's CSI companion (%s preset, the lab's NFS plugin) %s", companionPreset, s.Companion)
 	}

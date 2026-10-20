@@ -117,6 +117,7 @@ const (
 	conditionAccepted   = "Accepted"
 	conditionCompatible = "Compatible"
 	readyReasonPending  = "ActorTemplatePending"
+	readyReasonRetrying = "ActorTemplateRetrying"
 	helmInstallFailed   = "InstallFailed"
 	helmUpgradeFailed   = "UpgradeFailed"
 )
@@ -150,6 +151,10 @@ type agentSpec struct {
 	// decision. The direct writer only — agent-manager's create_agent has no
 	// such argument.
 	RequireApproval bool
+	// Egress is the HTTP(S) origins the agent reaches beyond its compiled
+	// destinations (agent.egress, the Agent's spec.egress); nil declares
+	// none.
+	Egress []string
 }
 
 // agentSkill is one skills[] entry: a name, a directory and exactly one
@@ -313,6 +318,9 @@ func createAgentArgs(spec agentSpec) (map[string]any, error) {
 	}
 	if len(spec.Skills) > 0 {
 		args[skillsKey] = spec.Skills
+	}
+	if len(spec.Egress) > 0 {
+		args[egressKey] = spec.Egress
 	}
 	return args, nil
 }
@@ -521,6 +529,9 @@ spec:
 // Harness the template is placed on.
 func agentValues(spec agentSpec) map[string]any {
 	agent := map[string]any{nameKey: spec.Name, "harness": spec.harnessValue()}
+	if len(spec.Egress) > 0 {
+		agent[egressKey] = spec.Egress
+	}
 	for key, value := range map[string]string{
 		displayNameKey: spec.DisplayName, descriptionKey: spec.Description, systemMessageKey: spec.SystemMessage, iconURLKey: spec.IconURL,
 	} {
@@ -803,7 +814,8 @@ func readAgentReadinessOn(name, harness string) (agentReadiness, error) {
 // terminalAgentFailure reads an Agent's conditions for a failure the
 // controller will not retry: ResolvedRefs or Compatible False, or Ready False
 // for a reason other than the golden snapshot still pending
-// (ActorTemplatePending). ActorTemplateFailed carries Substrate's own error
+// (ActorTemplatePending) or its boot started over after a failed attempt
+// (ActorTemplateRetrying, while attempts are left). ActorTemplateFailed carries Substrate's own error
 // for the boot, ActorTemplateConflict an immutable-template clash. The text
 // is the condition as the evidence quotes it.
 func terminalAgentFailure(s *agentStatus) (string, bool) {
@@ -815,7 +827,7 @@ func terminalAgentFailure(s *agentStatus) (string, bool) {
 		case conditionResolvedRefs, conditionCompatible:
 			return c.String(), true
 		case conditionReady:
-			if c.Reason != readyReasonPending {
+			if c.Reason != readyReasonPending && c.Reason != readyReasonRetrying {
 				return c.String(), true
 			}
 		}
@@ -944,12 +956,19 @@ func agentExists(name string) bool {
 // so a failed first turn is said and tried once more — never more, and never
 // silently.
 func firstTurnAs(cfg *config.Config, name, token, prompt string) (string, error) {
-	reply, err := agentTurnAs(cfg, name, token, prompt)
+	reply, _, err := firstSessionTurnAs(cfg, name, token, prompt)
+	return reply, err
+}
+
+// firstSessionTurnAs is firstTurnAs that also returns the id of the Session
+// the answered turn ran in.
+func firstSessionTurnAs(cfg *config.Config, name, token, prompt string) (reply, sessionID string, err error) {
+	reply, sessionID, err = agentSessionTurnOf(cfg, agentRef(name), token, prompt)
 	if err == nil {
-		return reply, nil
+		return reply, sessionID, nil
 	}
 	note("the first turn on %s failed (%s) — one retry, a cold worker's ResumeActor deadline is not retried by Substrate", name, excerpt(err.Error(), 200))
-	return agentTurnAs(cfg, name, token, prompt)
+	return agentSessionTurnOf(cfg, agentRef(name), token, prompt)
 }
 
 // toolsetHeaderOf is the X-Muster-Toolset the agent's runtime sends, read
@@ -1001,6 +1020,35 @@ func remoteMCPServerHeader(rms *unstructured.Unstructured, name string) (string,
 		return string(value), true, nil
 	}
 	return "", false, nil
+}
+
+// secretHeaderSource is one headersFrom entry of a RemoteMCPServer whose
+// value comes from a Secret: the header and the Secret key it names, never
+// the value.
+type secretHeaderSource struct {
+	header, secret, key string
+}
+
+// secretBackedHeaders lists a RemoteMCPServer's headersFrom entries whose
+// value comes from a Secret, sorted by header; never the values.
+func secretBackedHeaders(rms *unstructured.Unstructured) []secretHeaderSource {
+	headers, _, _ := unstructured.NestedSlice(rms.Object, "spec", "headersFrom")
+	var sources []secretHeaderSource
+	for _, h := range headers {
+		m, ok := h.(map[string]any)
+		if !ok {
+			continue
+		}
+		if kind, _, _ := unstructured.NestedString(m, "valueFrom", fieldTypeKey); kind == kindSecret {
+			var s secretHeaderSource
+			s.header, _, _ = unstructured.NestedString(m, nameKey)
+			s.secret, _, _ = unstructured.NestedString(m, "valueFrom", nameKey)
+			s.key, _, _ = unstructured.NestedString(m, "valueFrom", "key")
+			sources = append(sources, s)
+		}
+	}
+	slices.SortFunc(sources, func(a, b secretHeaderSource) int { return strings.Compare(a.header, b.header) })
+	return sources
 }
 
 // headerNames lists the names of a RemoteMCPServer's headersFrom, sorted.

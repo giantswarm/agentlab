@@ -159,12 +159,16 @@ rendered ConfigMap by the post-renderer.
 BOM carries it since the curation that pinned muster 5.7.2. The post-render
 ConfigMap edit is deleted — the values entry alone is effective now.
 
-### U2. hostNetwork + dnsPolicy + maxSurge 0 on the muster (and Backstage) Deployment
+### U2. hostNetwork + dnsPolicy + one replica + maxSurge 0 on the muster (and Backstage) Deployment
 muster must resolve `https://localhost:32000/dex` to the Dex NodePort from
 inside the pod (the lab's one-issuer-URL trick), which needs hostNetwork; and
 with hostNetwork a default rolling update deadlocks on a single node because
-both pods want :8090. The muster chart (checked through 5.6.2) exposes no
-`hostNetwork`, `dnsPolicy` or `strategy` values; the Backstage chart neither.
+both pods want :8090. For the same reason the lab runs one replica: the
+agent-platform chart's HA default of two muster replicas would leave the
+second pod Pending on the single node and the HelmRelease never Ready. The muster chart (checked through 5.6.2) exposes no
+`hostNetwork`, `dnsPolicy` or `strategy` values; the Backstage chart neither. The
+option `platform.musterPodNetwork` drops the patch for muster: two replicas on
+the pod network, the issuer bridged by the U13 sidecar.
 Since 2026-09-08 the patch is a Kustomize strategic merge in
 `components.muster.postRenderers` / `components.backstage.postRenderers`
 (`postrenderers.go`), which the agent-platform chart forwards to the component
@@ -731,6 +735,21 @@ A claude Session works in its volume directory from kagent 1.9.0
 On an older kagent line, the proof's Session on the volume reports its default
 directory and fails.
 
+### U33. `agent-platform-values.yaml.tmpl`: the lab lists tenants-test's namespaces in Substrate's credential policy — BLOCKED UPSTREAM
+With `platform.tenants` on, an agent in an organization namespace needs
+Substrate's credential provider to read that namespace's Secrets (its model
+key), and the chart's policy names the kagent namespace only. **Fix:** the
+lab's values set `substrate.credentialProvider.namespacePolicies` to the
+chart's two entries plus `tenants-test`'s two namespaces
+(`tenantsTestNamespaces`, `tenantstest.go`): each read by the atespace of its
+own name, and by `ate-golden`. Other organization namespaces of the lab get
+no credentials. Unblocks when the chart selects the organizations'
+namespaces by label
+([agent-platform#1041](https://github.com/giantswarm/agent-platform/issues/1041),
+Substrate 1.12 with giantswarm/substrate#456): the chart then adds the
+selector entries to the lab's list, `tenants-test` checks the provider's live
+grants, and the list is redundant — the values template drops it.
+
 ### U32. `postRenderers` patch: the klaus-gateway component trusts the lab CA for muster — ACCEPTED
 The component dials muster at its public URL (`obo.musterUrl`): every Slack
 Session starts through agent-manager's MCP tools over muster, the workspace
@@ -746,6 +765,56 @@ Go reads; the image's own roots stay, read from its certificate directory.
 `klaus-gateway-test` asserts the patch on the live Deployment and names the
 muster URL and the CA source in the in-cluster turn's error. Lab-only by
 construction: an installation's edge serves a publicly trusted certificate.
+
+### U35. `tenantstest_slack.go`: on macOS the Slack steps run the gateway's image on the kind network — ACCEPTED
+`tenants-test`'s Slack steps run klaus-gateway as `klaus-gateway-test` does,
+the image on the host's network. Docker Desktop leaves host networking off by
+default, so the Mac has no route to the container's loopback ports and the
+readiness probe times out with an empty log; a darwin build of the gateway
+cannot verify the lab CA either (`SSL_CERT_FILE` is not read on macOS, and the
+system verifier calls the lab certificate not standards compliant). **Fix:**
+on darwin, with the image, the container joins the `kind` network, its two
+ports are published on 127.0.0.1, `--add-host` names the edge's and muster's
+public hostnames as the node's address, the target and muster are the edge's
+NodePort (`config.GatewayNodePort`) under those names (TLS verifies as on the
+host), and the fake Slack Web API is `host.docker.internal`. Linux keeps the
+host network. The bridged shape is `tenants-test`'s only; `klaus-gateway-test`
+is unchanged.
+
+### U36. `tenantstest_slack.go`: an allowed collaborator sends again after the replay note — BLOCKED UPSTREAM
+After the thread's person allows a collaborator who may not use the thread's
+agent, klaus-gateway 4.10.0-rc.1 replays the held message, the controller
+refuses it, and the replay path answers with its generic "Your message could
+not be picked up again. Send it again." (`postReplayFailureNote` knows only a
+share refusal), not the note naming the agent's tenant. **Fix:** the proof
+records the note and sends the collaborator's message again; that turn gets
+the refusal, and the verdict says so. Unblocks when the gateway's replay note
+uses its not-permitted note (giantswarm/klaus-gateway, `postReplayFailureNote`
+in `pkg/channels/slack/slack.go`): the resend then goes.
+
+### U37. `tenantstest_edge.go`: the editor's UpdateAgent is tried again while it answers Internal — BLOCKED UPSTREAM
+Right after the editor's `CreateAgent`, kagent 1.19.0's `UpdateAgent` reads
+the Agent from the controller's cache, which has not seen the create's own
+status write yet, and the API server's conflict comes back as `Internal`
+(`kubecrud.Service.Update` maps every error but Invalid to Internal). **Fix:**
+step E5 tries the update again while it answers `Internal`, for up to 30 s
+(`edgeUpdateConflictWait`); any other answer, or `Internal` after that, fails
+the step. Unblocks when kagent's Update maps a conflict to `Aborted` or
+retries it on a fresh read (giantswarm/kagent-upstream,
+`go/core/internal/service/kubecrud`): the retry then goes.
+
+### U38. `agent-platform-values.yaml.tmpl`: with the tenants on, the lab pins muster 5.48.0 — BLOCKED UPSTREAM
+`tenants-test` needs muster 5.48.0 or later (giantswarm/muster#1603): a
+tenant server's sign-ins go with its MCPServer, so a namespace created again
+with the same name starts with none, and `core_auth_login` names a pin's
+Secret muster may not read. The chart's range for muster (`>=5.45.0 <6.0.0`)
+admits older musters; the pin holds the lab on the first muster with #1603
+whatever the range selects. **Fix:** with `platform.tenants` on, the values set
+`components.muster.versionRange` to `tenantsMusterVersion` (5.48.0,
+`tenantstest_muster.go`) next to `muster.muster.mcpServersInAllNamespaces:
+true`; with the tenants off, neither renders. Unblocks when the lab's chart
+carries giantswarm/agent-platform#1150, whose range for muster starts at
+5.48.0: the pin then goes.
 
 ## Accepted lab trade-offs (not hacks to fix)
 
@@ -849,3 +918,16 @@ The same cycle through `agentlab`, on a cold cluster, defaults from
 Form coverage: `go test ./...` drives the real huh form with scripted
 keystrokes (accept defaults, edit fields, toggle components) and unit-tests
 the post-renderer against a synthetic Helm release.
+
+### U34. `exec.go`: the lab's containers run with SELinux separation off — ACCEPTED
+On an SELinux-enforcing host (Fedora) under a rootful engine (Podman through
+`sudo`), a container's process may not read or execute a bind-mounted file
+labelled `user_home_t`, and every lab container bind-mounts one: the fakes
+(the lab's GitHub, the skill host, the mockllm) run agentlab's own binary
+from the user's home, beekeeper and klaus-gateway mount a run directory and
+the lab CA. The fake exits at once and `up` stops at the lab's GitHub with no
+log. **Fix:** `dockerRun` passes `--security-opt label=disable` to every
+`docker run`. Relabelling (`:z`) would change the user's own files and is
+undone by the next `self-update`; the lab's containers are throwaway
+processes of the user's own binary and images, so the separation guards
+nothing the user does not already own.

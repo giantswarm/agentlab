@@ -18,6 +18,9 @@ func Test(cfg *config.Config) error {
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
 	}
+	if err := checkApiserverOIDC(cfg); err != nil {
+		return err
+	}
 	pass, fail := 0, 0
 
 	check := func(user *rest.Config, desc, expect string, canIArgs ...string) {

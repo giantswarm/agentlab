@@ -50,6 +50,72 @@ What the lab adds on top of the chart's own app-config
   and the `kubernetes` client trusts it as a peer so the Kubernetes plugin can
   mint apiserver-audience tokens (`components.backstage.extraScopes`).
 
+## Portal mode
+
+Backstage serves either the Agent Platform shell or the classic Platform
+Portal alone, by its `app.portals.agentPlatform`. The lab's switch is
+`backstage.portal` in `agentlab.yaml`, set with `agentlab configure --portal
+agent-platform|classic` (or the form's Backstage page) and applied by the next
+`agentlab platform`, which rolls Backstage once:
+
+| `backstage.portal` | `app.portals.agentPlatform` | `/` |
+|---|---|---|
+| `agent-platform` (default) | `true` | the shell's new-session screen |
+| `classic` | `false` | the classic home page (`app.rootRedirect: /`) |
+
+The lab's app-config overlay renders the key and is merged after the chart's
+own app-config, so it decides for every chart, a checkout of a line that does
+not set it included. It is deliberately an app-config key and never an
+`APP_CONFIG_app_portals_agentPlatform` entry of `backstage.backstage.extraEnvVars`:
+Helm replaces lists, so any `extraEnvVars` of the lab's would drop the chart's
+own entries — `NODE_EXTRA_CA_CERTS` among them — and Backstage would hang at
+start on the Dex TLS. The lab's values add no `extraEnvVars`; its own Secrets go
+through the separate `extraEnvVarsSecrets` list. The headless `backstage-test`
+calls the portal's backend APIs and passes in both modes.
+
+Every `agentlab up` and `agentlab platform`, once Backstage runs, and
+`backstage-test` before any sign-in, read which portal Backstage serves from the
+frontend config it injects into its public `index.html` and fail unless it is
+the one `backstage.portal` configures, naming the Backstage version and the one
+the mode needs. The shell is Backstage 3.x: a 2.x portal declares no
+`app.portals`, injects none whatever the overlay sets, and serves the classic
+portal only, so a lab declaring `agent-platform` on such a Backstage is refused
+by the run that installed it — it never reads as up, and no shell spec starts
+against it. The default `platform.chartVersion` resolves a 3.x Backstage; the
+refusal names it, a 3.x dev image, or `--portal classic` to keep the
+Backstage.
+
+## The portal's browser suite
+
+The Dev Portal's Playwright suite (`yarn test:e2e:agentlab` in a
+`giantswarm/backstage` checkout, `e2e/agentlab/`) drives the lab's portal in a
+browser, the complement of the headless `backstage-test`. Its switches are
+environment variables of that run; a spec whose switch the lab cannot back
+skips with the reason, and a skipped spec is unproven.
+
+| Switch | The lab behind it |
+|---|---|
+| `AGENTLAB_PORTAL_MODE=shell` | the Agent Platform shell (`backstage.portal: agent-platform`, the default); without it the shell specs fail at the mode check |
+| `AGENTLAB_KUBECONFIG=<lab>/state/kubeconfig` | any lab: the specs that read or stage objects with kubectl |
+| `AGENTLAB_BACKSTAGE_URL`, `AGENTLAB_CLUSTER` | a lab other than the default edge on `:443` |
+| `AGENTLAB_INSTALLATIONS_PAGE=1` | `backstage.installationsPage: true`: the installations specs (`installations-versions`, `installations-session-expiry`, the Installations link in `agents-list-states`) |
+| `AGENTLAB_TENANTS=1` | `platform.tenants: true` (`agentlab configure --tenants`): `tenants.spec.ts`, agents per tenant in an organization namespace it labels and binds (with `AGENTLAB_KUBECONFIG`; run it first or alone, its empty state needs a platform tenant with no agent) |
+
+The agent-platform chart lists `page:gs/installations` in
+`backstage.disabledExtensions`, and the Backstage app ships the page off, so a
+lab's portal has no Installations page. `agentlab configure
+--installations-page` sets `backstage.installationsPage: true`, and the next
+`agentlab platform` adds `page:gs/installations` and
+`nav-item:gs/installations` to the lab's `backstage.enabledExtensions` (which
+wins over the disabled list) and rolls Backstage once; no `platform.valuesFiles`
+overlay is needed. `--installations-page=false` takes the page away again.
+
+```bash
+agentlab configure --installations-page && agentlab platform
+AGENTLAB_PORTAL_MODE=shell AGENTLAB_KUBECONFIG=<lab>/state/kubeconfig \
+  AGENTLAB_INSTALLATIONS_PAGE=1 yarn test:e2e:agentlab -g installations
+```
+
 ## Users need no catalog entity
 
 RHDH's `emailLocalPartMatchingUserEntityName` resolver refuses a login it cannot
@@ -164,9 +230,9 @@ what the proof checks is what the portal shows.
 - skill discovery for `https://github.com/giantswarm/agent-skills` — every
   entry carries the listing's head commit as a full id. The portal reads
   GitHub for this, so the proof first prints the GitHub API window it shares
-  with this machine (authenticated when `$GITHUB_TOKEN` is set — see
-  [The GitHub token](agents.md#the-github-token)) and, when the window holds
-  less than the run spends, waits once for its reset; a listing GitHub truncated is refused
+  with this machine and, when the window holds less than the run spends
+  while the portal or agent-manager calls GitHub without a credential (see
+  [The GitHub token](agents.md#the-github-token)), waits once for its reset; a listing GitHub truncated is refused
   by name, never asserted on;
 - `get_info` and `list_model_configs` through the portal;
 - the dry run (`validate_agent`): valid, mode `create`, the `OCIRepository` at
@@ -261,6 +327,63 @@ aborted run first. Not provable headlessly and out of scope: the browser's
 versioned persisted query cache (a stale v1alpha2 entry never renders) — that
 is the frontend's own guard, exercised by the plugin's tests, not by a portal
 API the lab can drive.
+
+**Per tenant** (`agentlab tenants-test`, steps P, with `platform.tenants`;
+giantswarm/backstage#3161): the same routes as each person, in the two
+organization namespaces `tenants-test` builds, while their agents and the
+platform tenant's run (docs/identity.md, [The portal per
+tenant](identity.md#the-portal-per-tenant)):
+
+- **P1 roster**: alice (`tenant-a`) and bob (`tenant-b`) read their rosters at
+  the same time, as the Agents tab does: the cluster-wide Agents list is
+  refused (403), `GET /api/agent-platform/kagent/agent-namespaces` — the
+  controller's `AgentService/ListAgents` with no namespace, as the person —
+  names exactly `kagent` and their own organization's namespace, and the
+  per-namespace reads through `/api/kubernetes/proxy` list exactly their
+  organization's agent and the platform tenant's, nothing of the other
+  organization. A portal without the route (a released 3.10.5) lists the
+  platform tenant only, and the step fails naming the route's 404.
+- **P3 tenant picker**: the editor's (`dev@lab.local`, editor of the first
+  organization only) `get_info` through the portal names that organization in
+  `namespaces.managed` and not the other, and their `create_agent` through the portal into
+  the other organization is `forbidden: …`, no HelmRelease written.
+- **P4 actions**: the agent page's `SelfSubjectAccessReview` for `update` and
+  `delete` on the agent's HelmRelease, through the portal's Kubernetes proxy:
+  no for alice (a user) on her organization's agent, yes for the editor
+  there, no for the editor in the other organization.
+- **P5 session refusal**: alice's `start_session` through the portal on the
+  other organization's agent answers `forbidden: kagent: …` (the controller's
+  `PermissionDenied`, which the portal words as a refusal naming the agent and
+  its tenant); no Session of that agent and no credential read for its
+  atespace.
+- **P6 owner**: of the editor's roster through the portal (their agent and
+  the platform tenant's, the admin's), `agent-platform.giantswarm.io/created-by`
+  names them on their agent alone, and `GET /kagent/me` names them by
+  `email` — its `sub` is Dex's subject, not the email agent-manager records.
+  The "Created by: Me" filter itself is the browser suite's.
+- **P2 nothing visible**, last: alice's group binding in her organization is
+  removed and the platform tenant's agent deleted; her roster through the
+  portal is empty, the route names no namespace and nothing reads as
+  unreadable. The empty state's words are the browser suite's
+  (`tenants.spec.ts`): the chart binds `agent-platform:platform-user` to
+  `system:authenticated` in `kagent`, so no person's every namespace is
+  refused.
+
+What only a browser shows — the empty state, the picked tenant's sentence,
+the note on the agent page, the tenant on each row, the filter — is
+`tenants.spec.ts` in the portal's browser suite (`AGENTLAB_TENANTS=1`).
+
+**Against an existing agent**: `agentlab backstage-test --agent
+kagent/<name>` writes and deletes no agent. The sign-ins, the MCP servers page
+and the Models page run as above; the create path, the HITL fixture, the edit
+path and both deletes are skipped, and so is the cleanup of an aborted run's
+leftovers. The named agent is waited for with the shared readiness wait
+(Ready on the platform Harness), the agents list must show it Ready on that
+Harness as every `platform-admins` user (owned by its HelmRelease when it has
+one; its display name and toolset are whatever it was given), the chat runs
+on it as the admin with every other user as the boundary, and the agent is
+asserted still there at the end. Use it where the create step fails or is not
+wanted (an agent already deployed, a repeated run of the chat steps only).
 
 ## Backstage gotchas
 

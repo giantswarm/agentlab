@@ -81,8 +81,7 @@ trusting the same issuer.
   fixture for giantswarm-platform-manager: an invented installation with the
   agent platform and workspaces on, in a registry the lab serves; `agentlab
   pm-test` installs the released manager against it and proves its dry run
-  registers the workspace-manager's Dex `/signin` redirect URI and keeps the
-  workspace-manager values (see [Platform manager](docs/platform-manager.md)).
+  keeps the workspace-manager values (see [Platform manager](docs/platform-manager.md)).
 - **VMs.** vm-manager, the platform's VM provisioner, as a pod of the KVM
   node (the chart's `components.vm-manager`) registered with muster as
   `x_vm-manager_*`: VMs with an instance metadata service, a vTPM and
@@ -119,14 +118,15 @@ it touches anything (see [Docker resources](docs/getting-started.md#docker-resou
 go install github.com/giantswarm/agentlab@latest   # or a release binary, or `go build -o agentlab .`
 
 export ANTHROPIC_API_KEY=sk-ant-...   # optional: powers the agents and Backstage's AI chat
-export GITHUB_TOKEN=github_pat_...    # optional: skill discovery/resolution call GitHub authenticated (5000/h, not 60/h)
 agentlab up                           # one question (the detected defaults, or customize), then certs, kind cluster, Dex, RBAC, the platform — verified
 agentlab open portal                  # the portal in your browser (the URL is printed too)
 agentlab platform-test                # headless proof: Dex -> muster -> mcp-kubernetes -> apiserver
 ```
 
 Headless (CI, a coding agent), write the lab first with `agentlab configure
---defaults`: nothing asks without a terminal. On a terminal, `up` ends by asking whether to trust the lab CA (one sudo
+--defaults`: nothing asks without a terminal. A new lab is named `agentlab`,
+or `agentlab-<n>` when another lab on this machine holds that name;
+`--cluster-name <name>` names it. On a terminal, `up` ends by asking whether to trust the lab CA (one sudo
 prompt, so browsers get a green lock) and whether to open the portal — `open
 portal` is the command for later, `open agents` opens the kagent UI and `open
 prometheus` the lab Prometheus.

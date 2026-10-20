@@ -9,8 +9,8 @@ package config
 // recreate and agentlab never reads a value.
 type GitHubToken struct {
 	// Source is a reference `beekeeper secret copy` resolves, in the form
-	// AIKey.Source takes. Empty means the token comes from $GITHUB_TOKEN at
-	// deploy time, else GitHub is called unauthenticated.
+	// AIKey.Source takes. Empty means no token: GitHub is called as the
+	// skills GitHub App when one is recorded, else unauthenticated.
 	Source string `yaml:"source,omitempty"`
 }
 

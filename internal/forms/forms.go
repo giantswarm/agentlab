@@ -77,6 +77,10 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 	gitHubTokenSource := cfg.GitHubToken.Source
 	customizeModels := false
 	backstagePort := strconv.Itoa(cfg.Backstage.Port)
+	backstagePortal := cfg.Backstage.Portal
+	if backstagePortal == "" {
+		backstagePortal = config.PortalAgentPlatform
+	}
 
 	userSummary := func() string {
 		lines := make([]string, 0, len(cfg.Users))
@@ -121,7 +125,7 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 				Title("Customize the lab users?").
 				DescriptionFunc(func() string {
 					return "Current users:\n" + userSummary() +
-						"\n\nGroups map to fixed roles: platform-admins -> cluster-admin,\ndevelopers -> edit in ns/demo, viewers -> view cluster-wide."
+						"\n\nGroups map to fixed roles: platform-admins -> cluster-admin,\ndevelopers -> edit in ns/demo, viewers -> view cluster-wide;\ntenant-a, tenant-b -> nothing (tenants-test binds them per organization)."
 				}, &cfg.Users).
 				Affirmative("Edit them").
 				Negative("Keep as is").
@@ -181,7 +185,7 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 				Value(&servingEnabled),
 			huh.NewConfirm().
 				Title("Install workspace storage (a read-write-many StorageClass that serves git)?").
-				Description("Optional, needs the agents runtime: an in-cluster NFS server, the NFS CSI driver behind an\nmTLS proxy only Agent Substrate's API server may reach, and the StorageClass\nagentlab-workspaces. ~250 MB of images; the host kernel's NFS modules;\n`agentlab workspaces-test --storage-only` is the proof.").
+				Description("Optional, needs the agents runtime: an in-cluster NFS server, the NFS CSI driver\nbehind an mTLS proxy only Agent Substrate's API server may reach, and the StorageClass\nagentlab-workspaces. ~250 MB of images; the host kernel's NFS modules;\n`agentlab workspaces-test --storage-only` is the proof.").
 				Affirmative("Install").
 				Negative("Skip").
 				Value(&workspacesEnabled),
@@ -197,7 +201,7 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 				Validate(func(s string) error { return config.AIKey{Source: s}.Validate() }),
 			huh.NewInput().
 				Title("GitHub token source").
-				Description("Optional: a reference `beekeeper secret copy` resolves, as above — never the token itself.\nEvery up and platform place it into the Secret agentlab-github-token, so the portal's skill\ndiscovery and agent-manager's skill resolution call GitHub authenticated. Empty: the token\ncomes from $GITHUB_TOKEN at deploy time, else GitHub is called unauthenticated (60 an hour).").
+				Description("Optional: a reference `beekeeper secret copy` resolves, as above — never the token itself.\nEvery up and platform place it into the Secret agentlab-github-token, so the portal's skill\ndiscovery and agent-manager's skill resolution call GitHub authenticated. Empty: GitHub is called\nas the skills GitHub App when one is recorded, else unauthenticated (60 an hour).").
 				Value(&gitHubTokenSource).
 				Validate(func(s string) error { return config.GitHubToken{Source: s}.Validate() }),
 			huh.NewConfirm().
@@ -217,6 +221,14 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 				Description("Backstage binds this port on the kind node (hostNetwork) and kind maps the\nsame number onto this machine, so the URL is identical on both sides.").
 				Value(&backstagePort).
 				Validate(config.ValidatePort),
+			huh.NewSelect[string]().
+				Title("Portal mode").
+				Description("What the portal serves: the Agent Platform shell (app.portals.agentPlatform),\nor the classic Platform Portal alone. `agentlab platform` rolls Backstage onto it.").
+				Options(
+					huh.NewOption("Agent Platform", config.PortalAgentPlatform),
+					huh.NewOption("Classic Platform Portal", config.PortalClassic),
+				).
+				Value(&backstagePortal),
 		).Title("Backstage").
 			WithHideFunc(func() bool { return !slices.Contains(components, "backstage") }),
 	).WithAccessible(accessible)
@@ -240,13 +252,14 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 	cfg.Platform.ModelManager.Enabled = modelManagerEnabled && agentsEnabled
 	// The served model is wired into kagent too.
 	cfg.Platform.Serving.Enabled = servingEnabled && agentsEnabled
-	// The workspace storage serves Substrate's actors.
+	// The workspaces live in kagent's namespace (Config.Validate).
 	cfg.Platform.Workspaces.Enabled = workspacesEnabled && agentsEnabled
 	cfg.Platform.AgentsPort = mustAtoi(agentsPort)
 	cfg.AIModel = aiModel
 	cfg.AIKey.Source = aiKeySource
 	cfg.GitHubToken.Source = gitHubTokenSource
 	cfg.Backstage.Port = mustAtoi(backstagePort)
+	cfg.Backstage.Portal = backstagePortal
 
 	if customizeUsers {
 		if err := editUsers(cfg, accessible); err != nil {

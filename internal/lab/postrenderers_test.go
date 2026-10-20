@@ -143,8 +143,8 @@ func TestComponentPostRenderers(t *testing.T) {
 
 	for _, c := range []string{componentMuster, componentBackstage} {
 		got := patchOn(c, kindDeployment, c)
-		if len(got) == 0 || !strings.Contains(got[0], "hostNetwork: true") || !strings.Contains(got[0], "maxSurge: 0") {
-			t.Errorf("%s: want the hostNetwork + maxSurge 0 patch, got %q", c, got)
+		if len(got) == 0 || !strings.Contains(got[0], "hostNetwork: true") || !strings.Contains(got[0], "maxSurge: 0") || !strings.Contains(got[0], "replicas: 1") {
+			t.Errorf("%s: want the hostNetwork + one replica + maxSurge 0 patch, got %q", c, got)
 		}
 	}
 	for _, c := range []string{componentMCPKubernetes, modelManagerMCPServer, agentManagerMCPServer, clusterManager} {
@@ -232,14 +232,14 @@ func TestComponentPostRenderers(t *testing.T) {
 		}
 	}
 	// Every Deployment target of the config's list has a render target — the
-	// list and the lab's table cannot drift apart; the harness and the
-	// agentgateway proxy are the two keys that travel as values.
+	// list and the lab's table cannot drift apart; the Harness images and the
+	// agentgateway proxy are the keys that travel as values.
 	for _, c := range config.DevImageComponents {
-		if _, ok := devImageTargets[c]; !ok && c != config.DevImageHarness && c != agentgatewayComponent {
+		if _, ok := devImageTargets[c]; !ok && !config.RegistryDevImage(c) && c != agentgatewayComponent {
 			t.Errorf("config.DevImageComponents names %s, but devImageTargets has no render target for it", c)
 		}
 	}
-	for _, c := range []string{config.DevImageHarness, agentgatewayComponent} {
+	for _, c := range []string{config.DevImageHarness, config.DevImageClaudeHarness, config.DevImageCodexHarness, config.DevImageOmpHarness, agentgatewayComponent} {
 		if _, ok := devImageTargets[c]; ok {
 			t.Errorf("the %s target is in no chart render; devImageTargets must not list it", c)
 		}
@@ -278,7 +278,7 @@ func TestDexLocalhostPatchRestricted(t *testing.T) {
 	}
 	patches := map[string]kustomizePatch{
 		componentMCPKubernetes: dexLocalhostPatch(componentMCPKubernetes, config.Default().DexPort),
-		"mcp-prometheus":       sidecarPostRenderer("mcp-prometheus", config.Default().DexPort).Kustomize.Patches[0],
+		"mcp-prometheus":       mcpPrometheusPostRenderers(config.Default(), nil)[0].Kustomize.Patches[0],
 	}
 	for name, p := range patches {
 		var d struct {

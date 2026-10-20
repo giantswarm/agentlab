@@ -4,35 +4,61 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 )
 
 // The sandbox half of the coding agents proof: the shell commands a coding
 // agent's Bash tool runs, and the verdicts on the lines it relays. Every
 // line starts with probeMarker and names one reading; the commands are POSIX
-// sh on the claude-harness image (Alpine with BusyBox, git and the GitHub
-// CLI). No reading prints a credential: the forwarder's loopback token stays
-// in a shell variable, and a token search prints counts.
+// sh on the coding Harnesses' images (Alpine with BusyBox and git). No
+// reading prints a credential: the forwarder's loopback token stays in a
+// shell variable, and a token or credential search prints counts.
 
 // codingProbe is the readings a turn relayed, by name.
 type codingProbe map[string]string
 
-// parseCodingProbe reads the marker lines out of a reply.
+// parseCodingProbe reads the marker lines out of a reply. A value loses the
+// markdown a model wraps a relayed line in (code spans, bold), which a small
+// model adds even when told to relay verbatim. An escaped "\n" separates
+// lines like a newline does and an escaped \" is a quote, however many times
+// the reply was escaped, and no reading spans two lines. A marker ends the
+// reading before it too, so lines a model joins with a space read apart. A
+// value also loses the quotes around it.
 func parseCodingProbe(reply string) codingProbe {
+	reply = escapedNewline.ReplaceAllString(reply, "\n")
+	reply = escapedQuote.ReplaceAllString(reply, `"`)
+	reply = strings.ReplaceAll(reply, probeMarker+" ", "\n"+probeMarker+" ")
 	probe := codingProbe{}
 	for _, m := range probeLine.FindAllStringSubmatch(reply, -1) {
-		probe[m[1]] = strings.TrimSpace(strings.Trim(strings.TrimSpace(m[2]), "`"))
+		probe[m[1]] = strings.Trim(m[2], " \t\r`*\"'")
 	}
 	return probe
 }
 
-// codingSandboxCommand probes the sandbox: the uid split, the forwarder's
-// path refusals, a write tool through the forwarder, credentials, a DNS
-// canary and the egress gate.
-func codingSandboxCommand() string {
-	return `P=` + probeMarker + `
+var (
+	escapedNewline = regexp.MustCompile(`\\+n`)
+	escapedQuote   = regexp.MustCompile(`\\+"`)
+)
+
+// codingSandboxCommand probes the sandbox on the runtime: on claude the uid
+// split, the forwarder's path refusals and a write tool through the
+// forwarder; on every runtime its uid, credentials, a DNS canary and the
+// egress gate.
+func codingSandboxCommand(rt codingRuntime) string {
+	cmd := `P=` + probeMarker + `
 echo "$P uid=$(id -u)"
-h=""
+`
+	if rt.claude {
+		cmd += claudeSandboxCommand() + "\n"
+	}
+	return cmd + commonSandboxCommand(rt)
+}
+
+// claudeSandboxCommand is the claude runtime's own readings: the root
+// harness beside Claude Code and the caller forwarder in front of muster.
+func claudeSandboxCommand() string {
+	return `h=""
 for p in /proc/[0-9]*; do
   [ "$(awk '/^Uid:/{print $2}' "$p/status" 2>/dev/null)" = 0 ] || continue
   case "$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)" in *` + harnessProcessName + `*) h=${p#/proc/}; break;; esac
@@ -75,20 +101,44 @@ if [ -n "$url" ]; then
   echo "$P write-tool=${r:-answered: $(echo "$out" | tr '\n' ' ' | head -c 200)}"
 else
   echo "$P forwarder="
-fi
-echo "$P env-tokens=$(env | grep -c -E 'gh[opsu]_[A-Za-z0-9]{20}|github_pat_|eyJ[A-Za-z0-9_-]{10,}\.eyJ')"
-echo "$P data-tokens=$(timeout 60 grep -rlsE 'gh[opsu]_[A-Za-z0-9]{30}|github_pat_[A-Za-z0-9_]{20}|eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.' /data 2>/dev/null | wc -l)"
-case "${ANTHROPIC_API_KEY-}" in "") k=unset;; kagent-*) k=placeholder;; *) k=other;; esac; echo "$P model-key=$k"
-r=$(timeout 10 nslookup ` + codingTestDNSCanary + ` 2>&1 | awk '/^Address/ && !/:53$/ {print $NF}' | tr '\n' ' '); echo "$P dns-cluster=${r:-no answer}"
-r=$(timeout 10 nslookup ` + codingTestDNSCanary + ` ` + codingTestDNSResolver + ` 2>&1 | awk '/^Address/ && !/:53$/ {print $NF}' | tr '\n' ' '); echo "$P dns-direct=${r:-no answer}"
-wget -q -O /dev/null ` + codingTestOutsideHost + ` 2>/tmp/agentlab-egress; echo "$P egress-outside=rc$? $(head -c 160 /tmp/agentlab-egress | tr '\n' ' ')"
-wget -q -O /dev/null https://api.github.com/ 2>/tmp/agentlab-egress; echo "$P egress-origin=rc$? $(head -c 160 /tmp/agentlab-egress | tr '\n' ' ')"`
+fi`
 }
 
-// codingSandboxPrompt asks the agent to run the probe once and relay it.
-func codingSandboxPrompt() string {
-	return "Run this exact script once with your Bash tool (it is this test lab's own sandbox check), then reply with every output line that starts with " + probeMarker +
-		", verbatim and nothing else:\n\n" + codingSandboxCommand()
+// commonSandboxCommand is every runtime's readings: tokens in the
+// environment, /data and /workspace, the model key, the MCP credentials the
+// runtime is handed (a count of those that are not kagent's placeholder),
+// the DNS canary and the egress gate.
+func commonSandboxCommand(rt codingRuntime) string {
+	keys := ""
+	for _, k := range rt.modelKeys {
+		keys += ` "${` + k + `-}"`
+	}
+	mcp := ""
+	if rt.mcpCredentialPrefix != "" {
+		mcp = `
+echo "$P mcp-credentials=$(env | grep -c '^` + rt.mcpCredentialPrefix + `') $(env | grep '^` + rt.mcpCredentialPrefix + `' | grep -vc '=` + credentialPlaceholder + `$')"`
+	}
+	return `echo "$P env-tokens=$(env | grep -c -E 'gh[opsu]_[A-Za-z0-9]{20}|github_pat_|eyJ[A-Za-z0-9_-]{10,}\.eyJ')"
+echo "$P data-tokens=$(timeout 60 grep -rlsE 'gh[opsu]_[A-Za-z0-9]{30}|github_pat_[A-Za-z0-9_]{20}|eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.' /data /workspace 2>/dev/null | wc -l)"
+k=unset; for v in` + keys + `; do case "$v" in "") ;; kagent-*) [ "$k" = other ] || k=placeholder;; *) k=other;; esac; done; echo "$P model-key=$k"` + mcp + `
+r=$(timeout 10 nslookup ` + codingTestDNSCanary + ` 2>&1 | awk '/^Address/ && !/:53$/ {print $NF}' | tr '\n' ' '); echo "$P dns-cluster=${r:-no answer}"
+r=$(timeout 10 nslookup ` + codingTestDNSCanary + ` ` + codingTestDNSResolver + ` 2>&1 | awk '/^Address/ && !/:53$/ {print $NF}' | tr '\n' ' '); echo "$P dns-direct=${r:-no answer}"
+w() { wget -q -O /dev/null "$1" 2>/tmp/agentlab-egress; rc=$?; s=$(grep -o 'HTTP/1.1 [0-9]*' /tmp/agentlab-egress | head -1); echo "rc$rc ${s:-$(head -c 80 /tmp/agentlab-egress | tr '\n' ' ')}"; }
+echo "$P egress-outside=$(w ` + codingTestOutsideHost + `)"
+echo "$P egress-origin=$(w https://api.github.com/)"`
+}
+
+// codingProbeTimeoutMS is the milliseconds the sandbox probe may take: its
+// token search alone may take a minute, and a shell tool's default (codex's
+// is seconds) cuts the script short of its later readings.
+const codingProbeTimeoutMS = 300_000
+
+// codingSandboxPrompt asks the agent to run the probe once, under a timeout
+// that lets it finish, and relay it.
+func codingSandboxPrompt(rt codingRuntime) string {
+	return "Run this exact script once with your " + rt.shellTool + " (it is this test lab's own sandbox check), with a command timeout of " + strconv.Itoa(codingProbeTimeoutMS) +
+		" ms (5 minutes; a shorter default cuts it short), then reply with every output line that starts with " + probeMarker +
+		", verbatim and nothing else:\n\n" + codingSandboxCommand(rt)
 }
 
 // rcLine reads a `rc<exit> <message>` reading.
@@ -104,18 +154,20 @@ func readRC(v string) (rc, message string) {
 // uidSplit: Claude Code runs as the image's unprivileged uid, the harness as
 // root beside it, and neither its environment nor its memory opens.
 func (p codingProbe) uidSplit([]string) (string, error) {
-	if p["uid"] != claudeUnprivilegedUID {
-		return "", fmt.Errorf("the commands of Claude Code run as uid %q, not %s (%s)", p["uid"], claudeUnprivilegedUID, p.lines("uid", "harness"))
+	// A uid is one token: words a model adds after it are not part of it.
+	uid, _, _ := strings.Cut(p["uid"], " ")
+	if uid != claudeUnprivilegedUID {
+		return "", fmt.Errorf("the commands of Claude Code run as uid %q, not %s (%s)", uid, claudeUnprivilegedUID, p.lines("uid", "harness"))
 	}
 	if p["harness"] == "" {
 		return "", fmt.Errorf("no root %s process in the sandbox to probe (%s)", harnessProcessName, p.lines("uid", "harness"))
 	}
 	for _, key := range []string{"harness-environ", "harness-mem"} {
 		if rc, _ := readRC(p[key]); rc == "" || rc == "0" {
-			return "", fmt.Errorf("uid %s read the harness's %s: %q", p["uid"], strings.TrimPrefix(key, "harness-"), p[key])
+			return "", fmt.Errorf("uid %s read the harness's %s: %q", uid, strings.TrimPrefix(key, "harness-"), p[key])
 		}
 	}
-	return fmt.Sprintf("uid %s; harness %s; /proc environ %s; /proc mem %s", p["uid"], p["harness"], p["harness-environ"], p["harness-mem"]), nil
+	return fmt.Sprintf("uid %s; harness %s; /proc environ %s; /proc mem %s", uid, p["harness"], p["harness-environ"], p["harness-mem"]), nil
 }
 
 // forwarderPaths: the three path rows answered 400, an unknown server 404
@@ -149,16 +201,31 @@ func (p codingProbe) writeToolRefused([]string) (string, error) {
 	return fmt.Sprintf("%s: %s", codingTestWriteTool, p["write-tool"]), nil
 }
 
-// credentials: no forge token or bearer in the environment or /data, and
-// the model key a placeholder the egress gateway replaces.
+// credentials: no forge token or bearer in the environment, /data or
+// /workspace, the
+// model key a placeholder the egress gateway replaces, and every MCP
+// credential the runtime is handed (where it says which) the placeholder too.
 func (p codingProbe) credentials([]string) (string, error) {
+	for _, key := range []string{"env-tokens", "data-tokens", "model-key"} {
+		if _, ok := p[key]; !ok {
+			return "", fmt.Errorf("the turn carries no %s reading, in its tools' outputs or its reply: the probe was cut short or not run (%s)", key, p.lines("uid", "env-tokens", "data-tokens", "model-key"))
+		}
+	}
 	if p["env-tokens"] != "0" || p["data-tokens"] != "0" {
-		return "", fmt.Errorf("token-shaped values in the sandbox: %s in the environment, %s files under /data", p["env-tokens"], p["data-tokens"])
+		return "", fmt.Errorf("token-shaped values in the sandbox: %s in the environment, %s files under /data and /workspace", p["env-tokens"], p["data-tokens"])
 	}
 	if k := p["model-key"]; k != "placeholder" && k != "unset" {
 		return "", fmt.Errorf("the model key in the environment is %q, not kagent's placeholder", k)
 	}
-	return fmt.Sprintf("no forge token or bearer in the environment or /data; model key %s", p["model-key"]), nil
+	verdict := fmt.Sprintf("no forge token or bearer in the environment, /data or /workspace; model key %s", p["model-key"])
+	if v, ok := p["mcp-credentials"]; ok {
+		total, other, _ := strings.Cut(v, " ")
+		if other != "0" {
+			return "", fmt.Errorf("MCP credentials in the sandbox's environment: %s, of which %q are not kagent's placeholder", total, other)
+		}
+		verdict += fmt.Sprintf("; %s MCP credentials in the environment, each the placeholder", total)
+	}
+	return verdict, nil
 }
 
 // dnsCanary records, never judges: the lookup's state is the installation's
@@ -251,9 +318,57 @@ func codingFixtureRecord(p codingProbe) (string, error) {
 		loaded("mcp-servers", codingTestFixtureName)), nil
 }
 
+// codingCodeWordPrompt has a runtime without the instruction-file fixture
+// write the turn's own file and remember the code word, what the resume
+// reads back.
+func codingCodeWordPrompt(rt codingRuntime) string {
+	return "Remember the code word " + codingTestCodeWord + ". Run this exact command once with your " + rt.shellTool + ": `" + codingCodeWordCommand() + "` and reply with its " + probeMarker + " line, verbatim."
+}
+
+// codingCodeWordCommand writes the turn's own file with the code word.
+func codingCodeWordCommand() string {
+	return "echo " + codingTestCodeWord + " > " + codingTestOwnFile + " && echo \"" + probeMarker + " written=$(pwd)\""
+}
+
+// codingMCPCallPrompt has the agent call agent-manager's list_agents through
+// its own MCP binding and relay the names it lists.
+func codingMCPCallPrompt() string {
+	return "Call the MCP tool " + codingTestReadTool + " (agent-manager's list_agents through muster, which runs it through its " + musterCallTool + " tool; it takes no arguments) once, then reply with the single line " +
+		probeMarker + " mcp-call=<the names of the agents it lists, space-separated, or the error it answered>. Do not use a shell for this."
+}
+
 // codingResumePrompt is the turn after the resume: the first turn's file
 // read back and the code word recalled.
-func codingResumePrompt() string {
-	return "Run this exact command once with your Bash tool: `echo \"" + probeMarker + " file=$(cat " + codingTestOwnFile + " 2>/dev/null || echo missing)\"` and relay its line verbatim. " +
-		"Then add the line " + probeMarker + " code-word=<the code word I asked you to remember earlier in this conversation, or none>."
+func codingResumePrompt(rt codingRuntime) string {
+	return "Run this exact command once with your " + rt.shellTool + ": `" + codingResumeCommand() + "` and relay its line verbatim. " +
+		"Then add the line " + probeMarker + " " + codingResumeCodeWordAsk + "."
+}
+
+// codingResumeCodeWordAsk asks for the code word the conversation holds.
+const codingResumeCodeWordAsk = "code-word=<the code word I asked you to remember earlier in this conversation, or none>"
+
+// codingResumeCommand reads the first turn's file back.
+func codingResumeCommand() string {
+	return "echo \"" + probeMarker + " file=$(cat " + codingTestOwnFile + " 2>/dev/null || echo missing)\""
+}
+
+// parseTurnProbe reads the marker lines of a turn: its tools' outputs, what
+// the commands printed, then those only the reply carries (the readings a
+// model answers itself: what it loaded, the code word). A model's relay of a
+// command's line can drop or reword it; a scripted model (the mockllm)
+// replies with fixed words. Where both carry a reading, the output's wins.
+func parseTurnProbe(reply, toolOutputs string) codingProbe {
+	probe := parseCodingProbe(toolOutputs)
+	for key, value := range parseCodingProbe(reply) {
+		if _, ok := probe[key]; !ok {
+			probe[key] = value
+		}
+	}
+	return probe
+}
+
+// musterCallToolArguments are call_tool's arguments that run tool with no
+// arguments of its own.
+func musterCallToolArguments(tool string) string {
+	return `{"name":"` + tool + `","arguments":{}}`
 }

@@ -60,43 +60,31 @@ func (f *fakeGitHubRateLimit) seen() (auth []string, slept []time.Duration) {
 	return append([]string(nil), f.auth...), append([]time.Duration(nil), f.slept...)
 }
 
-// TestAwaitGitHubWindow: one read, authenticated exactly when the host has a
-// token; no wait while the window has budget; one bounded wait until the
-// reset when it is exhausted, then a re-read; an error only when the window
-// is still empty after the wait. The print never carries the token.
+// TestAwaitGitHubWindow: one read, always unauthenticated — agentlab holds no
+// GitHub credential, a $GITHUB_TOKEN in its environment included; no wait
+// while the window has budget; one bounded wait until the reset when it is
+// exhausted, then a re-read; an error only when the window is still empty
+// after the wait.
 func TestAwaitGitHubWindow(t *testing.T) {
 	reset := time.Unix(time.Now().Add(30*time.Minute).Unix(), 0)
 	f := newFakeGitHubRateLimit(t, reset)
 
-	t.Run("unauthenticated with budget", func(t *testing.T) {
-		t.Setenv(GitHubTokenEnv, "")
+	t.Run("unauthenticated with budget, whatever the environment holds", func(t *testing.T) {
+		t.Setenv(GitHubTokenEnv, gitHubTestToken)
 		f.set(42)
 		if err := awaitGitHubWindow("the proof", 1, false); err != nil {
 			t.Fatal(err)
 		}
 		auth, slept := f.seen()
 		if len(auth) != 1 || auth[0] != "" {
-			t.Errorf("Authorization headers = %q without a token, want one empty", auth)
+			t.Errorf("Authorization headers = %q, want one empty: agentlab never reads $%s", auth, GitHubTokenEnv)
 		}
 		if len(slept) != 0 {
 			t.Errorf("waited %v on a window with budget", slept)
 		}
 	})
 
-	t.Run("authenticated", func(t *testing.T) {
-		t.Setenv(GitHubTokenEnv, gitHubTestToken)
-		f.set(4999)
-		if err := awaitGitHubWindow("the proof", 1, false); err != nil {
-			t.Fatal(err)
-		}
-		auth, _ := f.seen()
-		if len(auth) != 1 || auth[0] != "Bearer "+gitHubTestToken {
-			t.Errorf("Authorization headers = %q, want the bearer token once", auth)
-		}
-	})
-
 	t.Run("exhausted waits once until the reset", func(t *testing.T) {
-		t.Setenv(GitHubTokenEnv, "")
 		f.set(0)
 		if err := awaitGitHubWindow("the proof", 1, false); err != nil {
 			t.Fatal(err)
@@ -111,7 +99,6 @@ func TestAwaitGitHubWindow(t *testing.T) {
 	})
 
 	t.Run("a lab with its own token never waits on the host's window", func(t *testing.T) {
-		t.Setenv(GitHubTokenEnv, "")
 		prev := labGitHubAuthenticated
 		labGitHubAuthenticated = func() (bool, error) { return true, nil }
 		t.Cleanup(func() { labGitHubAuthenticated = prev })
@@ -125,7 +112,6 @@ func TestAwaitGitHubWindow(t *testing.T) {
 	})
 
 	t.Run("a portal step waits while only agent-manager carries a credential", func(t *testing.T) {
-		t.Setenv(GitHubTokenEnv, "")
 		prevLab, prevPortal := labGitHubAuthenticated, portalAuthenticated
 		labGitHubAuthenticated = func() (bool, error) { return true, nil }
 		t.Cleanup(func() { labGitHubAuthenticated, portalAuthenticated = prevLab, prevPortal })
@@ -160,7 +146,6 @@ func TestAwaitGitHubWindow(t *testing.T) {
 	})
 
 	t.Run("short of the need waits once", func(t *testing.T) {
-		t.Setenv(GitHubTokenEnv, "")
 		f.set(9)
 		if err := awaitGitHubWindow("the proof", backstageTestGitHubRequests, false); err != nil {
 			t.Fatal(err)
@@ -193,16 +178,16 @@ func TestAwaitGitHubWindowUnreachableIsANote(t *testing.T) {
 	}
 }
 
-// TestGitHubWindowPrintNamesTheVariableNotTheToken pins the print's shape.
-func TestGitHubWindowPrintNamesTheVariableNotTheToken(t *testing.T) {
-	w := gitHubWindow{Limit: 5000, Remaining: 4321, Reset: time.Unix(1_800_000_000, 0), Authenticated: true}
-	got := w.String()
-	for _, want := range []string{"4321 of 5000", "$" + GitHubTokenEnv, "resets "} {
+// TestGitHubWindowPrint pins the print's shape: the machine's anonymous
+// window, never a variable to export.
+func TestGitHubWindowPrint(t *testing.T) {
+	got := gitHubWindow{Limit: 60, Remaining: 42, Reset: time.Unix(1_800_000_000, 0)}.String()
+	for _, want := range []string{"unauthenticated", "42 of 60", "resets "} {
 		if !strings.Contains(got, want) {
 			t.Errorf("%q lacks %q", got, want)
 		}
 	}
-	if !strings.Contains(gitHubWindow{Limit: 60, Remaining: 0}.String(), "unauthenticated") {
-		t.Errorf("an unauthenticated window must say so: %q", gitHubWindow{Limit: 60}.String())
+	if strings.Contains(got, "$"+GitHubTokenEnv) {
+		t.Errorf("%q names $%s, which agentlab never reads", got, GitHubTokenEnv)
 	}
 }

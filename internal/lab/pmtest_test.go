@@ -89,7 +89,7 @@ func TestRegistryGitHubServesTheFixture(t *testing.T) {
 
 // The fixture's installation is the manager's workspaces case: its
 // agent-platform values on record turn workspaces on, and the collection
-// pins a dex-app that takes the extra redirect URIs.
+// pins dex-app 3.3.0.
 func TestPlatformManagerFixtureTurnsWorkspacesOn(t *testing.T) {
 	f, err := loadRegistryFixture()
 	if err != nil {
@@ -107,9 +107,10 @@ func TestPlatformManagerFixtureTurnsWorkspacesOn(t *testing.T) {
 }
 
 // A dry run giantswarm-platform-manager answered for the fixture
-// (testdata/platform-manager/dry-run.json, recorded from the release and
-// trimmed to what the proof reads) passes; one without the sign-in URI, or
-// with the workspace-manager values dropped, fails naming it.
+// (testdata/platform-manager/dry-run.json, recorded by pm-test --record from a
+// release that drops the workspace-manager /signin) passes and asks Dex for no
+// workspace-manager /signin redirect URI; one with the workspace-manager
+// values dropped fails naming it.
 func TestPMDryRunAssertsTheWorkspacesChanges(t *testing.T) {
 	raw, err := os.ReadFile("testdata/platform-manager/dry-run.json")
 	if err != nil {
@@ -122,21 +123,47 @@ func TestPMDryRunAssertsTheWorkspacesChanges(t *testing.T) {
 		}
 		return p
 	}
+	if strings.Contains(string(raw), "/signin") {
+		t.Fatal("the recorded dry run asks Dex for a workspace-manager /signin redirect URI: re-record it from a manager that no longer renders one (pm-test --record)")
+	}
 	plan := decode(string(raw))
 	if err := plan.assertWorkspaces(); err != nil {
 		t.Fatal(err)
 	}
-	if lines := plan.proofLines(); len(lines) != 4 || !strings.Contains(lines[2], pmSignInURI) {
+	if lines := plan.proofLines(); len(lines) != 2 || !strings.Contains(lines[1], "workspace-manager values kept") {
 		t.Fatalf("proof lines: %v", lines)
-	}
-
-	noURI := decode(strings.ReplaceAll(string(raw), pmSignInURI, "https://elsewhere.example/signin"))
-	if err := noURI.assertWorkspaces(); err == nil || !strings.Contains(err.Error(), pmSignInURI) {
-		t.Fatalf("a plan without the sign-in URI: %v", err)
 	}
 	dropped := decode(strings.ReplaceAll(string(raw), "workspace-manager:\\n", "other:\\n"))
 	if err := dropped.assertWorkspaces(); err == nil || !strings.Contains(err.Error(), "workspace-manager") {
 		t.Fatalf("a plan without the workspace-manager values: %v", err)
+	}
+}
+
+// get_info's version and the installed chart version match when they name
+// one build: a release in either spelling, or a branch build's Go
+// pseudo-version and chart dev version on the same commit; another commit,
+// base version or release does not.
+func TestSamePMBuild(t *testing.T) {
+	const devChart = "0.76.1-r525fad92t20261015091950h358a409"
+	for _, tc := range []struct {
+		answered, installed string
+		same                bool
+	}{
+		{"v0.69.0", "0.69.0", true},
+		{"v0.71.0-rc.2", "0.71.0-rc.2", true},
+		{"v0.76.1-rc.6.0.20261015091950-358a409b65de", devChart, true},
+		{"v0.76.1-0.20261015091950-358a409b65de", devChart, true},
+		{"v0.76.1-rc.6.0.20261015091950-1111111b65de", devChart, false},
+		{"v0.76.2-rc.6.0.20261015091950-358a409b65de", devChart, false},
+		{"v0.76.1", devChart, false},
+		{"v0.76.1-rc.6", devChart, false},
+		{"v0.69.0", "0.70.0", false},
+		{"v0.71.0-rc.2", "0.71.0-rc.3", false},
+		{"dev", "0.69.0", false},
+	} {
+		if got := samePMBuild(tc.answered, tc.installed); got != tc.same {
+			t.Errorf("samePMBuild(%q, %q) = %v, want %v", tc.answered, tc.installed, got, tc.same)
+		}
 	}
 }
 

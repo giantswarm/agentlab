@@ -9,11 +9,12 @@ require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/a2aproject/a2a-go/v2 v2.6.0
-	github.com/giantswarm/gitops-commit v0.11.2
-	github.com/giantswarm/go-selfupdate v1.6.3
+	github.com/charmbracelet/x/ansi v0.11.9
+	github.com/giantswarm/gitops-commit v0.11.4
+	github.com/giantswarm/go-selfupdate v1.6.5
 	github.com/giantswarm/klaus-gateway v1.21.0
-	github.com/giantswarm/selfupdate-cosign v0.3.4
-	github.com/giantswarm/telemetrydeck-go v0.3.5
+	github.com/giantswarm/selfupdate-cosign v0.3.8
+	github.com/giantswarm/telemetrydeck-go v0.3.7
 	github.com/giantswarm/vm-manager v0.24.10
 	github.com/google/uuid v1.6.0
 	github.com/smallstep/truststore v0.13.0
@@ -30,8 +31,9 @@ require (
 	k8s.io/cli-runtime v0.37.1
 	k8s.io/client-go v0.37.1
 	k8s.io/klog/v2 v2.140.0
-	oras.land/oras-go/v2 v2.6.3
+	oras.land/oras-go/v2 v2.6.4
 	sigs.k8s.io/kind v0.33.0
+	sigs.k8s.io/structured-merge-diff/v6 v6.4.2
 )
 
 require (
@@ -68,7 +70,6 @@ require (
 	github.com/chai2010/gettext-go v1.0.2 // indirect
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
 	github.com/charmbracelet/ultraviolet v0.0.0-20261008173134-6b8d4baf91b4 // indirect
-	github.com/charmbracelet/x/ansi v0.11.9 // indirect
 	github.com/charmbracelet/x/exp/ordered v0.1.0 // indirect
 	github.com/charmbracelet/x/exp/strings v0.0.0-20240722160745-212f7b056ed0 // indirect
 	github.com/charmbracelet/x/term v0.2.2 // indirect
@@ -124,7 +125,7 @@ require (
 	github.com/gobwas/glob v0.2.3 // indirect
 	github.com/gofrs/flock v0.13.0 // indirect
 	github.com/google/btree v1.1.3 // indirect
-	github.com/google/certificate-transparency-go v1.3.4-0.20261001183712-569ba82b542b // indirect
+	github.com/google/certificate-transparency-go v1.4.0 // indirect
 	github.com/google/gnostic-models v0.7.0 // indirect
 	github.com/google/go-containerregistry v0.22.1 // indirect
 	github.com/google/go-github/v86 v86.0.0 // indirect
@@ -228,6 +229,5 @@ require (
 	sigs.k8s.io/kustomize/api v0.21.1 // indirect
 	sigs.k8s.io/kustomize/kyaml v0.21.1 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
-	sigs.k8s.io/structured-merge-diff/v6 v6.4.2 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )

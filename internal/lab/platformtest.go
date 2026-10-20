@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"slices"
@@ -17,11 +18,13 @@ import (
 
 // The platform proof's stages, in order, as the summary names them.
 const (
+	stageWorkloadFields       = "workload field managers"
 	stageApiserverOIDC        = "apiserver OIDC"
 	stageDexToken             = "Dex token"
 	stageMusterSession        = "muster session"
 	stageKubernetesTools      = "Kubernetes tools"
 	stageMCPToolCall          = "MCP tool call"
+	stageMusterReplicas       = "muster replicas"
 	stageProvidedAPIs         = "provided APIs"
 	stageFleetAdmission       = "fleet admission"
 	stageDexReach             = "Dex reach"
@@ -38,6 +41,7 @@ const (
 	stagePromQL               = "PromQL through muster"
 	stageScraped              = "platform targets scraped"
 	stageMetricsEndpoint      = "Backstage metrics endpoint"
+	stageAlerts               = "Alertmanager alerts through muster"
 )
 
 // PlatformTest is the headless end-to-end proof: Dex login -> muster
@@ -58,6 +62,7 @@ func PlatformTest(cfg *config.Config, email string) error {
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
 	}
+	defer releaseWorkspaceGrants()
 	user := cfg.FindUser(email)
 	if user == nil {
 		return fmt.Errorf("no user %q in %s", email, config.File)
@@ -80,11 +85,22 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 		return "", err
 	}
 
+	// A lab whose workloads run a hand's patch beside the releases' render
+	// proves the patch, not the platform (foreignfields.go): refused first.
+	p.begin(stageWorkloadFields, "Checking the platform workloads carry only what the releases render")
+	foreign, err := foreignWorkloadFields(context.Background())
+	if err != nil {
+		return "", err
+	}
+	if len(foreign) > 0 {
+		return "", foreignFieldsError(foreign)
+	}
+
 	// After a Dex key rotation the apiserver refuses new-key tokens until its
 	// cached JWKS expires (apiserveroidc.go): waited out here, before any
 	// stage reads the cluster as a person.
 	p.begin(stageApiserverOIDC, "Checking the apiserver accepts a fresh Dex token")
-	if err := ensureApiserverAcceptsDex(context.Background(), cfg); err != nil {
+	if err := apiserverAcceptsDex(context.Background(), cfg); err != nil {
 		return "", err
 	}
 
@@ -224,6 +240,32 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 	note("namespaces: %s", strings.Join(names, ", "))
 
 	verdict := "PASS: Claude Code -> muster (Dex) -> mcp-kubernetes -> kind apiserver"
+
+	// muster on the pod network (platform.musterPodNetwork,
+	// platformtest_muster.go): two Ready replicas behind the edge, and the
+	// session's calls answered while one of them is deleted and replaced.
+	p.begin(stageMusterReplicas, "muster on the pod network: %d replicas behind the edge, one deleted mid-session", cfg.MusterReplicas())
+	if !cfg.Platform.MusterPodNetwork {
+		p.skip("platform.musterPodNetwork is off: muster runs on the host network at one replica")
+	} else {
+		probeID := 100
+		probe := func() error {
+			probeID++
+			res, err := call(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/list"}`, probeID))
+			if err != nil {
+				return err
+			}
+			if res["error"] != nil || res["result"] == nil {
+				return fmt.Errorf("tools/list answered %v", res["error"])
+			}
+			return nil
+		}
+		avail, err := proveMusterAvailability(context.Background(), cfg, probe)
+		if err != nil {
+			return "", err
+		}
+		verdict += fmt.Sprintf("\nPASS: muster runs %d Ready replicas on the pod network behind the edge (PodDisruptionBudget minAvailable 1); pod %s deleted, %s Ready in its place within %s, all %d calls of one MCP session answered meanwhile", len(avail.pods), avail.deleted, avail.replacement, avail.replaced, avail.calls)
+	}
 
 	// The APIs the lab provides itself (providedapis.go), as `kubectl
 	// api-resources` would list them: a component chart that renders a
@@ -395,7 +437,12 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 	// The workspace-manager (workspacemanagertest.go): registered with muster
 	// and Connected, rolled out, and listing every configured provider
 	// instance to the admin through muster.
-	if reason := workspaceManagerSkip(cfg); reason != "" {
+	reason, err := workspaceManagerSkip(cfg)
+	if err != nil {
+		p.begin(stageWorkspaceManager, "The workspace-manager: registered with muster, Ready, list_providers as the admin, the lab's Organization")
+		return "", err
+	}
+	if reason != "" {
 		p.leaveOut(reason, stageWorkspaceManager)
 	} else {
 		p.begin(stageWorkspaceManager, "The workspace-manager: registered with muster, Ready, list_providers as the admin, the lab's Organization")
@@ -403,7 +450,11 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 		if err != nil {
 			return "", err
 		}
-		verdict += fmt.Sprintf("\nPASS: the workspace-manager is registered with muster (MCPServer %s Connected), cleans session directories up from kagent's Sessions, and lists its %d provider instances to the admin: %s; list_workspaces for Organization %s answers a member and refuses a viewer", workspaceManagerMCPServer, len(providers), strings.Join(providers, ", "), config.WorkspaceOrganization)
+		cleanup := ", cleans session directories up from kagent's Sessions,"
+		if !cfg.Platform.Agents {
+			cleanup = " (no kagent: the agents are off)"
+		}
+		verdict += fmt.Sprintf("\nPASS: the workspace-manager is registered with muster (MCPServer %s Connected)%s and lists its %d provider instances to the admin: %s; list_workspaces for Organization %s answers a member and refuses a viewer", workspaceManagerMCPServer, cleanup, len(providers), strings.Join(providers, ", "), config.WorkspaceOrganization)
 	}
 
 	// The per-server sign-in path: muster as OAuth client, challenged by the
@@ -429,7 +480,7 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 			cfg.ClusterName, strings.Join(labFamilies(cfg), ", "), toolGroupLabel, toolGroupInfrastructure, managementClusterLabel, cfg.ClusterName, oauthFixtureServer)
 	}
 	if !cfg.Platform.Observability {
-		p.leaveOut("platform.observability is off in "+config.File, stagePrometheusTools, stagePromQL, stageScraped, stageMetricsEndpoint)
+		p.leaveOut("platform.observability is off in "+config.File, stagePrometheusTools, stagePromQL, stageScraped, stageMetricsEndpoint, stageAlerts)
 		return verdict, nil
 	}
 
@@ -449,13 +500,15 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 		return "", fmt.Errorf("muster aggregates no %s tools", promPrefix)
 	}
 
-	// promQL runs one instant query through muster and returns the tool's
-	// rendered answer (result.content[0].text is JSON whose own
-	// content[0].text is the actual payload — the same two decode hops as
-	// call_tool above).
-	promQL := func(query string) (string, error) {
-		q, _ := json.Marshal(query)
-		payload := fmt.Sprintf(`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"call_tool","arguments":{"name":%q,"arguments":{%q:%q,"query":%s}}}}`, promPrefix+"execute_query", familyInstanceArg, cfg.PrometheusMCPServerName(), q)
+	// promTool calls one prometheus family tool on the lab's member through
+	// muster and returns the tool's rendered answer (result.content[0].text
+	// is JSON whose own content[0].text is the actual payload — the same two
+	// decode hops as call_tool above). args are the tool's own arguments.
+	promTool := func(tool string, args map[string]string) (string, error) {
+		arguments := map[string]string{familyInstanceArg: cfg.PrometheusMCPServerName()}
+		maps.Copy(arguments, args)
+		a, _ := json.Marshal(arguments)
+		payload := fmt.Sprintf(`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"call_tool","arguments":{"name":%q,"arguments":%s}}}`, promPrefix+tool, a)
 		res, err := call(payload)
 		if err != nil {
 			return "", err
@@ -466,9 +519,13 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 			} `json:"content"`
 		}
 		if err := json.Unmarshal([]byte(innerText(res)), &wrapped); err != nil || len(wrapped.Content) == 0 {
-			return "", fmt.Errorf("unexpected execute_query payload shape")
+			return "", fmt.Errorf("unexpected %s payload shape", tool)
 		}
 		return wrapped.Content[0].Text, nil
+	}
+	// promQL runs one instant query through muster.
+	promQL := func(query string) (string, error) {
+		return promTool("execute_query", map[string]string{"query": query})
 	}
 
 	// `up` is non-empty as soon as Prometheus completes its first scrape,
@@ -562,6 +619,35 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 	}
 	note("the Deployments-page query answers through the edge (deployment=muster found)")
 	verdict += "\nPASS: Backstage metrics path -> edge -> Prometheus (Mimir-shaped /prometheus API)"
+
+	// The Alertmanager (platform.alertmanager): the always-firing
+	// AgentlabWatchdog rule reaches it through Prometheus, and mcp-prometheus
+	// reads it back over ALERTMANAGER_URL. A release without the alert tool
+	// (mcp-prometheus before 0.12) has nothing to prove it with.
+	if !cfg.AlertmanagerEnabled() {
+		p.leaveOut("platform.alertmanager is off in "+config.File, stageAlerts)
+		return verdict, nil
+	}
+	alertsTool := promPrefix + "get_alertmanager_alerts"
+	if !slices.Contains(toolNames, alertsTool) {
+		p.leaveOut(fmt.Sprintf("muster aggregates no %s: the mcp-prometheus in place has no alert tools (platform.devImages.mcp-prometheus swaps in one that has)", alertsTool), stageAlerts)
+		return verdict, nil
+	}
+	p.begin(stageAlerts, "Calling %s through muster (expecting %s)", alertsTool, watchdogAlert)
+	// One rule evaluation plus Prometheus's send to the Alertmanager after a
+	// fresh install.
+	var alerts string
+	alerted := waitFor(30, 5*time.Second, func() bool {
+		var err error
+		alerts, err = promTool("get_alertmanager_alerts", nil)
+		return err == nil && strings.Contains(alerts, watchdogAlert)
+	})
+	if !alerted {
+		return "", fmt.Errorf("%s never listed %s (last payload: %.200s);\ncheck `kubectl -n %s get alertmanager,prometheusrule` and the Prometheus alerts page",
+			alertsTool, watchdogAlert, alerts, observabilityNamespace)
+	}
+	note("the Alertmanager serves %s to mcp-prometheus", watchdogAlert)
+	verdict += "\nPASS: Claude Code -> muster (Dex) -> mcp-prometheus -> Alertmanager (" + watchdogAlert + " firing)"
 	return verdict, nil
 }
 

@@ -88,6 +88,37 @@ The lab installs it in its **lab shape**:
   instead of quoting the pin, and `agentlab configure --adopt-chart`
   writes the chart in place into the pin — or `agentlab platform` installs
   the pin over the cluster, the boot naming the downgrade.
+- A `platform.valuesFiles` overlay changes what the lab runs without
+  changing the chart version: a proof's `components.<name>.versionRange`
+  pins a component the chart's own range does not admit. `agentlab status`
+  names every overlay with the values it sets, and the ones the release in
+  place was installed with (each platform run records them in its
+  revision's description) that `agentlab.yaml` no longer lists. Before a
+  shared lab is handed on, `agentlab configure --released` drops the proof
+  state (overlays, dev images, a chart directory, the dev channel, a local
+  guest image) and `agentlab platform` installs the released platform, so
+  the next holder starts there.
+- A field a hand wrote on a platform workload — `kubectl patch` of muster's
+  `hostNetwork`, a `kubectl set env` on Backstage — is no release's: Helm and
+  helm-controller's drift correction own and correct only the fields the
+  render carries. The apiserver records each field's writer
+  (`managedFields`). `agentlab platform`, the step a lab's restore ends with,
+  puts every field one of kubectl's imperative edits wrote (`kubectl-set`,
+  `kubectl-patch`, `kubectl-edit`, `kubectl-client-side-apply`,
+  `kubectl-label`, `kubectl-annotate`) on a Helm-owned Deployment,
+  StatefulSet or DaemonSet back to its release's render — the rendered value
+  where the render carries the field, removed where it does not — drops the
+  edit's entry, names each (`Put back to its release's render: …`) and waits
+  for the roll; a field it cannot put back fails the run, named. A field
+  written by any other manager than the releases' (`helm`, `helm-controller`,
+  the lab's `agentlab`, the connectivity release's config-reload hook
+  `agent-platform-config-reload`, which stamps the Backstage app-config
+  checksum into the pod template, `kube-controller-manager`) is named by `agentlab
+  status` on its `workloads` line, warned at the end of `agentlab platform`
+  and at every proof's opening, and fails platform-test's first stage,
+  `workload field managers`. A rollout restart's `restartedAt` annotation is
+  none. A lab change belongs in `agentlab.yaml` (`platform.devImages`,
+  `platform.chartPath`), never a patch.
   The one exception is deliberate too: the [dev channel](#dev-channel),
   where `platform.chartBranch` follows a branch's newest dev build — and
   still installs an exact version, written into `chartVersion`.
@@ -258,9 +289,11 @@ host can name that way, goes through the port the registry publishes on the
 host loopback (`platform.devRegistryPort`, 5001 by default) over plain HTTP,
 and the boot log names both (`read on this host as
 oci://localhost:5001/charts/kagent`). A registry that does not answer there
-stops the boot before the install, naming the container to check. The lab
-registry exists once a chartPath or a dev image created it, and goes with
-`agentlab down`. Removing the overlay and re-running `agentlab platform`
+stops the boot before the install, naming the container to check. Every `up`
+and `platform` run ensures the lab registry — created when missing, started
+when stopped — since atelet and the node's containerd point at it whether or
+not a dev image is configured; `agentlab status` names it on its `registry`
+line, and it goes with `agentlab down`. Removing the overlay and re-running `agentlab platform`
 puts the released chart back.
 
 ## Dev images
@@ -274,9 +307,13 @@ controller), `mcp-kubernetes`, `model-manager`, `agent-manager`,
 below), `workspace-manager` (with `platform.workspaces`), `ate-api-server` (Agent
 Substrate's API server, where the golden snapshots are taken; with the
 agents), the agentgateway component's two Deployments under their own names,
-`agentgateway` (the data-plane proxy) and `agentgateway-controller` — and
+`agentgateway` (the data-plane proxy) and `agentgateway-controller` —,
+`mcp-prometheus` (the lab's own release outside the meta chart, with
+`platform.observability`; the swap rides that HelmRelease's `postRenderers`,
+[docs/observability.md](observability.md#alertmanager)),
 `harness`, the platform Harness's runtime image (the Go ADK every agent runs
-on under kagent API v2):
+on under kagent API v2), and `claude-harness`, `codex-harness` and `omp-harness`, a coding
+Harness's image (with that Harness rendered, [below](#coding-harness-targets)):
 
 ```yaml
 platform:
@@ -305,6 +342,21 @@ override, so the pod's ref and the node's copy agree and no pod of the lab
 names a registry that does not have its image (podman spells local builds
 this way itself). A ref that names a registry — the lab registry, a gsoci
 release, a line's dev build on gsoci — is used as written.
+
+The `mcp-prometheus` swap changes the image only; a release candidate whose
+chart changed too pins that chart with `platform.mcpPrometheusChartVersion`
+(an exact version, a release candidate included; with
+`platform.observability`). The lab renders it into its mcp-prometheus
+`OCIRepository` in place of the release this agentlab pins
+(`internal/lab/observability.go`), so the next `agentlab platform` installs
+it, and removing the key returns to the pin:
+
+```yaml
+platform:
+  mcpPrometheusChartVersion: 0.8.1-rc.1
+  devImages:
+    mcp-prometheus: gsoci.azurecr.io/giantswarm/mcp-prometheus:0.8.1-rc.1   # optional: the chart's default image follows its version
+```
 
 ### Deployment targets
 
@@ -345,7 +397,8 @@ a target whose chart rendered without the Deployment and container the lab
 patches is **refused before the install**, naming both (`platform.devImages.kagent:
 the kagent chart's render has no Deployment kagent-controller with a container
 controller …`); a chart whose render was skipped (the preload notes why; a
-registry that does not answer stops the boot instead, see the gotchas) falls
+registry that does not answer, or has no such chart, stops the boot instead,
+see the gotchas) falls
 back to the table's name with a note that it is unverified. A target's patch
 lands on the release whose chart renders the Deployment: the
 `agentgateway-controller` target (Deployment `agentgateway-controller`,
@@ -432,11 +485,72 @@ not apply here, and a pushed image is pulled once per node. The mechanism
 needs the platform Harness, so the target is for the 4.x meta chart with
 the agents on; the 3.x line has no Harness.
 
+### Coding Harness targets
+
+`claude-harness`, `codex-harness` and `omp-harness` swap a coding Harness's image for a
+build of the kagent line's `go/harness/<runtime>/Dockerfile`, say from a
+pull request, so a fork change is proven before its release. They travel the
+`harness` target's way: pushed to the lab registry, pinned by digest, and
+forwarded as the `image` of that runtime's `kagent.harnesses` entry, which
+the kagent chart renders into the Harness instead of its own image. A target
+needs its Harness rendered (`platform.coding` with the runtime in
+`platform.coding.harnesses`; `claude` also with the workspaces on). The boot
+asserts the Harness runs the dev digest and waits for it Ready; an overlay
+that replaces `kagent.harnesses` is refused while a target is configured.
+
+A CLI bump needs `platform.devImages.kagent` from the same build:
+the kagent controller compiles the `claude` and `codex` Harnesses' pinned CLI
+version (`ExpectedClaudeVersion` from `PinnedClaudeVersion`, `ExpectedCodexVersion`
+from `PinnedCodexVersion`) into their config with `StrictVersion`, so a
+`claude-harness` or `codex-harness` whose CLI differs from the lab
+controller's pin refuses to start on the version mismatch and the golden boot
+loops. `agentlab` therefore refuses either target without `kagent`; build
+both from one checkout of giantswarm/kagent-upstream.
+
+```yaml
+platform:
+  coding:
+    enabled: true
+    harnesses: [claude, codex, omp]
+    images:
+      omp: gsoci.azurecr.io/giantswarm/kagent/omp-harness@sha256:…   # the release's runtimeImages.ompHarness.digest; omp-harness below wins
+  devImages:
+    codex-harness: codex-harness:pr-123   # docker build -f go/harness/codex/Dockerfile go/ of giantswarm/kagent-upstream
+    kagent: kagent-controller:pr-123      # the controller from the same checkout: it pins the harness's CLI version
+    omp-harness: omp-harness:pr-456       # docker build -f go/harness/omp/Dockerfile go/
+```
+
 muster runs with `hostNetwork`, so it binds `:8090` on the node, and the
 rendered kind config publishes that onto the Mac (host port `platform.musterPort`,
 default 8090) — no port-forward. Port mappings are fixed at node-creation time,
 so changing the port means `agentlab down && agentlab up`; the stopgap on an old
 cluster is `kubectl -n agent-platform port-forward svc/muster 8090:8090`.
+
+### muster on the pod network
+
+`platform.musterPodNetwork: true` (`agentlab configure --muster-pod-network`)
+runs muster the way an installation does, the shape its availability work is
+proven in: on the pod network, at two replicas behind the edge, with a
+PodDisruptionBudget of `minAvailable: 1` (the values set `muster.replicaCount`
+and `muster.podDisruptionBudget`). The host-network patch is not applied to
+muster then; the `dex-localhost` sidecar bridges the issuer
+`https://localhost:<dexPort>/dex` into each muster pod as it does for the MCP
+servers (under `platform.tls` cluster DNS answers the issuer and no sidecar is
+patched). Both replicas share the Valkey stores, and muster checks an MCP
+session ID for its format only, so a session needs no affinity: a request on
+the other replica is served as is. Backstage stays on the host network. The
+direct debug port (`platform.musterPort`) answers nothing in this shape: use
+the edge or `kubectl -n agent-platform port-forward svc/muster 8090:8090`.
+`agentlab beekeeper-decisions-test` reaches muster on that port in the node's
+network and refuses to run with the option on.
+
+`agentlab platform-test` adds its `muster replicas` stage with the option on:
+the Deployment's two Ready pods off the host network, each with the sidecar,
+the budget's `minAvailable: 1`; then one pod is deleted while the proof's MCP
+session calls `tools/list` through the edge every 250 ms, and not one call may
+fail until the replacement is Ready and the Deployment has two Ready pods
+again. With the option off (the default) the stage is skipped and muster runs
+on the host network at one replica.
 
 ## Upgrade proofs from an older line
 
@@ -489,7 +603,6 @@ registry.
 ```bash
 agentlab configure --defaults --chart-branch my-feature
 export ANTHROPIC_API_KEY=sk-ant-...
-export GITHUB_TOKEN=github_pat_...   # optional: the proofs' skill discovery/resolution off the 60/h window (agents.md)
 agentlab up
 agentlab platform-test && agentlab test && agentlab backstage-test
 ```
@@ -908,45 +1021,161 @@ line on upstream `main` `800015de` (kagent-dev/kagent#2802: the a2a gateway
 addresses an actor by the `ate-target-actor` header, which only a router from
 v0.0.28 on knows — the three move together).
 
+### The egress proof
+
+An agent's egress on the kagent API v2 line is its compiled destinations —
+the model, its MCP servers (muster), its skill sources, telemetry — plus the
+HTTP(S) origins its Agent's `spec.egress` declares (`agent.egress` of the
+Generic chart, `egress` of agent-manager's `create_agent`); Substrate's
+egress gateway (`atenet-egress`) enforces the actor's policy.
+`agentlab egress-test [email] [--origin <origin>] [--model-config <name>]`
+proves it from inside the actor: one agent on the platform Harness, created
+through agent-manager as the person with the read-only toolset and one
+declared origin (default `https://example.com`), and one turn whose `bash`
+tool runs a probe script. Every stage is judged from Substrate's egress
+gateway's own record of the turn's actor (`session-<Session id>`), read from
+the `agentgateway` container of `deploy/atenet-egress` and cited in the
+verdict: its access-log `request` lines (`endpoint=` when it forwarded the
+request, `error=` when it answered itself), its `CONNECT tunnel terminated`
+lines and its `upstream tcp connected` lines (debug, the level Substrate runs
+the gateway at). The agent's reply is no evidence: its `AGENTLAB_PROBE` lines
+are shown beside each verdict and decide nothing, so a reply that claims a
+reach the gateway refused, or denies one it made, changes no outcome.
+
+| Stage | What passes |
+|---|---|
+| create | `create_agent` with `egress: [<origin>]` as the person; Ready; the Agent's `spec.egress` exactly that list |
+| probe turn | the turn completes |
+| declared | the gateway forwarded the actor's `GET` to the declared origin |
+| undeclared | the gateway answered the actor's request to `https://proxy.golang.org/`, outside every list, with its own 403 and the reason `actor egress policy denied`, and forwarded none |
+| muster | the gateway forwarded the probe's `GET` to muster's URL from the agent's `RemoteMCPServer`: a compiled destination needs no egress entry |
+| raw tcp | the gateway took the actor's tunnel to the address the lab host resolves `github.com` to, port 22, and opened no upstream connection to any port-22 tunnel's target nor forwarded a request to it. No tunnel recorded is no evidence and fails; an upstream connection fails, naming the destination |
+
+`--without-egress` is the control: the agent is created with no egress
+entry and the same origin probed; its `declared` stage fails, so the reach is
+the declaration's. The agent and its Session are removed on every exit path.
+
 ### The coding agents proof
 
-A coding agent is an agent whose Agent names a Harness with the `claude`
-runtime: Claude Code run headless in a Substrate actor by the kagent line's
-`claude-harness` image, calling muster as the person who sent the turn. An
-installation turns coding agents on through the meta chart's
-`kagent.harnesses` alone, and the lab does the same: with
-`platform.coding` (`agentlab configure --coding`, agent-platform 4.110.0 or
-newer) `agentlab platform` renders the coding Harness `claude` into the
-values: `KAGENT_PROPAGATE_TOKEN` on (the caller's bearer reaches MCP servers
-through the harness's loopback forwarder, never the process environment),
-snapshots under `s3://ate-snapshots/claude`, no turn limits (the kagent line
-dropped `spec.claude.limits`; a lab whose Harnesses still carry them has them
-removed by `agentlab platform` before the chart is applied).
+A coding agent is an agent whose Agent names a coding Harness: a coding CLI
+run headless in a Substrate actor by the kagent line's image of its runtime
+— `claude` (Claude Code, `claude-harness`, calling muster as the person who
+sent the turn), `codex` (OpenAI's Codex CLI, `codex-harness`, its MCP
+credentials on upstream's Secret-backed path) or `omp` (oh-my-pi, a BYO
+Harness on the kagent line's `omp-harness` adapter, the same Secret-backed
+path, on the Anthropic ModelConfig claude uses). An installation turns coding
+agents on through the meta chart's `kagent.harnesses` alone, and the lab
+does the same: with `platform.coding` (`agentlab configure --coding`,
+agent-platform 4.110.0 or newer) `agentlab platform` renders one coding
+Harness per runtime of `platform.coding.harnesses`
+(`--coding-harnesses claude,codex,omp`; default `claude` alone), named after it,
+snapshots under `s3://ate-snapshots/<runtime>`. `claude` carries
+`KAGENT_PROPAGATE_TOKEN` (the caller's bearer reaches MCP servers through
+the harness's loopback forwarder, never the process environment) and no turn
+limits (the kagent line dropped `spec.claude.limits`; a lab whose Harnesses
+still carry them has them removed by `agentlab platform` before the chart is
+applied). `codex` needs a kagent line whose chart takes `runtime: codex`, and
+a ModelConfig codex speaks (the OpenAI Responses API, or Bedrock `gpt-*`).
+`omp` renders a `byo` entry (display name `oh-my-pi`, the title the Dev
+Portal shows), which needs a kagent line whose chart takes
+`runtime: byo`, on the `omp-harness` image `platform.coding.images.omp`
+names by digest (`agentlab configure --coding-images omp=<image>`; the
+release's chart stamps it as `runtimeImages.ompHarness.digest`), a dev
+image (`platform.devImages` `omp-harness`) winning over it.
+
+`coding-test --harness codex` runs on the in-cluster mockllm unless
+`--model-config` names another model: a mock OpenAI Responses API in the
+shape of kagent's mockllm (its matching and its stream's events, served by
+agentlab itself, no SDK), scripted for the proof's turns, so the proof
+reaches its verdict on a lab with no OpenAI or Bedrock account. It runs
+the way a proof's fake runs: `agentlab mockllm` in a container on the kind
+network, reached by the cluster as the Service `agentlab-mockllm` in the
+platform namespace, which the run's ModelConfig `agentlab-mockllm` (the
+`OpenAI` provider, `gpt-5.2-codex`, `apiFormat: responses`, a placeholder
+key) names as its base URL; the run removes all three at its end. The script
+answers each prompt with the tool call it asks for (the probe script, the
+MCP tool through codex's tool search, the heartbeat and its read-back, the
+code word's file, its read-back)
+and a fixed reply once the tool's output is back. A shell command goes to
+the shell tool the runtime offers: `shell_command`, or on codex 0.163 and
+later (kagent 1.16) the unified `exec_command`, whose command runs past the
+call's 30 s yield; the script then waits for it with an empty `write_stdin`
+on its session until it exits, and replies after its final output. The sandbox stages, the
+MCP call and the resume's file judge those outputs, what the sandbox
+printed and the tool answered, as the harness reports them on the turn's
+tool results; the code word the resumed turn recalls is the script's. The
+`model` stage closes the run: every model call answered by the script, none
+outside it. A failed run quotes the mockllm's last requests: the tools each
+offered the model and its last input item, what the script matched or did
+not.
+
+A real model is named with `--model-config`: a hosted OpenAI Responses API
+model (an `OpenAI` extraModels entry with `apiFormat: responses` and its key
+in `apiKeyEnv`). On every model the stages judge the probe's lines from the
+turn's tool results first, what the commands printed; the reply fills only
+the readings no command prints (what the session loaded, the code word), so a
+relay that drops or rewords a line changes no verdict. The sandbox prompt asks
+for a command timeout of 5 minutes, since codex's default of seconds cuts the
+script at its `/data` token search; a reading neither the outputs nor the
+reply carry fails its stage as missing. No host model passes every stage
+yet:
+
+| Host model (Ollama) | Memory loaded | On the codex proof |
+|---|---|---|
+| `qwen3-coder:30b` (30b-a3b, Q4_K_M, 18 GB) | 21 GiB | sandbox turn (1–4 min), credentials and DNS canary pass; the egress readings it relays are not the probe's |
+| `gpt-oss:20b` (MXFP4, 13 GB) | 16 GiB | Ollama answers some `/v1/responses` calls with 500 and codex fails the turn; otherwise the relay drops lines |
+| `qwen3.5:9b` (6.6 GB) | not measured | every turn runs; the relay fails at a different stage each run |
+
+`agentlab configure` adds no host model unasked: each of these needs more
+memory than a lab proof's host model gets. With the codex Harness rendered,
+`configure --codex-host-model` wires the first of `qwen3-coder:30b` and
+`gpt-oss:20b` the host's Ollama has downloaded as the extraModels entry
+`codex-host` (the `OpenAI` provider on Ollama's `/v1`, `apiFormat:
+responses`, keyless), which `--model-config codex-host` runs the proof on
+under the 40m host model turn deadline; a failed sandbox stage quotes the
+agent's reply.
+
+```sh
+agentlab configure --defaults --coding --coding-harnesses claude,codex
+agentlab platform
+agentlab coding-test --harness codex                            # the mockllm
+agentlab configure --defaults --codex-host-model                # opt in to a host model
+agentlab coding-test --harness codex --model-config codex-host  # on it
+```
 
 The workspaces proof's claude Session runs on the same `claude` Harness,
 which the lab also renders with the workspaces on and coding off.
 
-`agentlab coding-test [email]` is the proof, and the floor a coding agent
-rests on. Every stage runs on the lines the lab pins, so it repeats on every
-release candidate:
+`agentlab coding-test [email] [--harness claude|codex|omp] [--model-config
+<name>]` is the proof, and the floor a coding agent rests on, on one Harness
+per run (default `claude`). Every stage runs on the lines the lab pins, so
+it repeats on every release candidate. The stages marked *claude* prove
+Claude Code's own mechanisms and run on `claude` alone; *codex, omp* marks
+the one that runs on both of those:
 
 | Stage | What passes |
 |---|---|
-| harnesses | `claude` Ready, no `spec.claude.limits` on it |
-| write-time checks | agent-manager's `validate_agent` on `claude` accepts `[preset:read-only, tool:x_agent-manager_create_agent]` (which muster tools a coding agent uses is the person's choice) and refuses an origin outside the Harness's list; an agent-manager below 1.14.0 refuses the write tool, and the proof expects that refusal on it |
-| create | `create_agent` on `claude` with that toolset (`preset:read-only` alone below agent-manager 1.14.0) as the person; Ready; its `RemoteMCPServer` Accepted and sending the toolset as `X-Muster-Toolset`; the Agent's `spec.egress` is the Harness's origin list agent-manager writes |
-| uid split | the agent's commands run as uid 65532; the root harness's `/proc/<pid>/environ` and `mem` refuse it |
-| forwarder paths | the forwarder answers 400 to `../..`, `%2e%2e` and `..%2f`, 404 for a server it does not front, 401 without its token |
-| write tool refused | `x_agent-manager_delete_agent`, called through the forwarder with the turn's bearer, refused by muster as outside the toolset |
-| credentials | no forge token or bearer in the environment or `/data`; the model key kagent's placeholder |
+| harnesses | the Harness Ready; on `claude` no `spec.claude.limits` on it |
+| write-time checks | agent-manager's `validate_agent` on the Harness accepts `[preset:read-only, tool:x_agent-manager_create_agent]` (which muster tools a coding agent uses is the person's choice) and refuses an origin outside the Harness's list; an agent-manager below 1.14.0 refuses the write tool, and the proof expects that refusal on it |
+| create | `create_agent` on the Harness with that toolset (`preset:read-only` alone below agent-manager 1.14.0) as the person; Ready; its `RemoteMCPServer` Accepted and sending the toolset as `X-Muster-Toolset`; the Agent's `spec.egress` is the Harness's origin list agent-manager writes |
+| workspace | on a lab with the provider instance `fake-bearer` (`configure --workspaces-provider fake,fake-bearer --workspaces-grant-provider fake-bearer`), the workspace `agentlab-coding` of `agentlab-oss/docs` as the person, its first cycle succeeded; the Session then starts in it through agent-manager's `start_session` with the person's grant, and kagent records the provider `muster` on it; SKIP, naming the fix, on a lab without `fake-bearer`, where the Session starts without a workspace |
+| secret-backed credential (*codex, omp*) | every header the agent's `RemoteMCPServer` takes from a Secret names a Secret key that is there: upstream's Secret-backed path, the controller handing the runtime kagent's placeholder and the egress gateway setting the value; SKIP, naming the headers, on a platform line whose binding takes no header from a Secret (no released component writes one yet) |
+| uid split (*claude*) | the agent's commands run as uid 65532; the root harness's `/proc/<pid>/environ` and `mem` refuse it |
+| forwarder paths (*claude*) | the forwarder answers 400 to `../..`, `%2e%2e` and `..%2f`, 404 for a server it does not front, 401 without its token |
+| write tool refused (*claude*) | `x_agent-manager_delete_agent`, called through the forwarder with the turn's bearer, refused by muster as outside the toolset |
+| credentials | no forge token or bearer in the environment, `/data` or `/workspace`; the model key kagent's placeholder, or unset where the runtime keeps it out of the shell's environment (omp); on `codex` every `KAGENT_CODEX_MCP_CREDENTIAL_*` the sandbox sees the placeholder too, on `omp` every `KAGENT_CREDENTIAL_*` |
 | dns canary | a recorded state, not a gate: `example.org` through the cluster resolver and directly at 1.1.1.1 |
 | egress | `proxy.golang.org` denied 403 at the egress gate; `api.github.com`, one of the Agent's origins, reached |
-| instruction fixture | a record: what Claude Code loads from a repository's `CLAUDE.md`, `AGENTS.md`, `.claude/` settings, hook, skill, subagent and command and `.mcp.json` on the pinned release |
+| mcp call | the agent calls `x_agent-manager_list_agents` through its MCP binding (muster's `call_tool`, which runs every catalogue tool; on `codex` the mockllm's script calls it so) and finds itself listed; in a workspace Session also muster's audit event `[AUDIT] action=actor_bearer outcome=success` for the Session's sandbox actor, naming the person and the Session muster logged bound at `start_session` (muster 5.47.0 and newer): the egress gateway set the Actor's JWT and muster served the call as the person, with no credential in the sandbox, on every Harness; outside a workspace SKIP where the secret-backed credential stage skipped and the call answered nothing else: the binding carries no credential on that line, so muster refuses the runtime's MCP connection (401) and the runtime has none of the binding's tools |
+| turn gap | one turn starts a detached heartbeat in the sandbox: every 3 s it appends the time and muster's status for an MCP initialize with a placeholder `Authorization`; after 90 s without a turn the next turn reads it back. It ticked in its own turn, not once from 20 s after that turn's answer (Substrate suspends the actor once a turn settles) to the next turn's send, and again in the next turn; in a workspace Session muster answered a call of the first turn 200 and audited no actor-JWT call of the Session's actor in the gap. The egress gateway checks no turn: that nothing in the sandbox runs between turns is what keeps a call outside a turn from reaching muster |
+| instruction fixture (*claude*) | a record: what Claude Code loads from a repository's `CLAUDE.md`, `AGENTS.md`, `.claude/` settings, hook, skill, subagent and command and `.mcp.json` on the pinned release |
 | suspend and resume | the Session's file and conversation survive the snapshot |
 | usage | the resumed turn's task status carries its usage |
-| share refused | a read-write share of the claude Session is refused: a collaborator's turn would run under what the first sender's turns left behind (git hooks, Makefiles, background processes) |
+| share refused | a read-write share of the coding Session is refused: a collaborator's turn would run under what the first sender's turns left behind (git hooks, Makefiles, background processes) |
+| after delete | in a workspace Session, the Session deleted through agent-manager's `delete_session`: muster logs its actor `session_unbound` by the person who started it, and in the 30 s after accepts no actor-JWT call of that actor (a call it sees is refused, `outcome=failure` "actor is not bound"); SKIP outside a workspace, where muster bound no actor |
+| model (*codex on the mockllm*) | the mockllm answered every model call of the turns from its script, none outside it |
 
-The sandbox stages read one turn: the agent's Bash tool runs a POSIX script
+The sandbox stages read one turn: the agent's shell tool runs a POSIX script
 and relays its `AGENTLAB_PROBE` lines, and each stage judges its own. The
 script never prints a credential: the forwarder's loopback token stays in a
 shell variable, and the token search prints counts. The DNS canary and the
@@ -957,6 +1186,14 @@ Claude Code, as on a developer's laptop. Writing to a forge with `git` and
 `gh` from a workspace, as the person, is the workspaces proof's
 (`workspaces-test`), once the line carries the person's forge credential in
 the Session.
+
+Each turn has a deadline by the model the agent runs on, which the turn
+prints as it starts: 40 minutes on a model a host model server serves (a
+ModelConfig model-manager wired, or one whose endpoint is
+`host.agentlab.internal`), where a coding runtime's calls take a minute and
+more each on the lab machine's hardware, 10 minutes on a hosted model.
+`--turn-timeout` sets it by hand; `--ready-timeout` bounds the boots and the
+waits outside a turn.
 
 ### The Substrate step proof (conversations across a Substrate release)
 
@@ -1074,6 +1311,104 @@ repository's pipeline does not have, and its subject is a release of another
 line, not a change of agentlab. The unit tests of every piece it adds run in
 `make test`.
 
+### The kagent step proof (conversations across a kagent step)
+
+`agentlab kagent-step-test` proves that an agent and its conversation
+survive a step of the kagent line under them, the way
+`substrate-step-test` proves a Substrate step. It names the step in one of
+two shapes, or both:
+
+- `--to <kagent release>` pins the `kagent` and `kagent-crds` components to
+  that exact release of the kagent line (`1.14.0`, `1.15.1-rc.2`) through a
+  values overlay of the run's own (`state/kagent-step-values.yaml`), on the
+  chart the lab runs: a step within the released line, or to a kagent
+  release candidate. The lab must run an older kagent before it.
+- `--chart <agent-platform release>` moves the meta chart to a candidate
+  release (`4.145.1-rc.6`) with the values that candidate carries: the step
+  a platform candidate takes when it keeps Substrate, which
+  `substrate-step-test --to` cannot express. A candidate whose kagent range
+  moves steps kagent under the conversation; one that keeps kagent and
+  Substrate is a chart-only step (its `step` PASS line says so), and the
+  same resume, turn, suspend and delete prove the conversation survives the
+  chart's upgrade. A candidate that steps kagent back fails the step stage.
+
+The run, on the static binary (no scratch driver): the kagent line before
+the step read off the meta chart, the kagent HelmRelease's applied chart and
+the controller's image; an agent on the platform Harness with a
+conversation of one turn (a random codeword), suspended; the platform
+upgraded in place onto the step and the kagent controller rolled out; then
+the conversation from before the step resumed (`resume`), a turn on it that
+must answer the codeword (`turn`), a suspend and a resume more on the new
+controller (`suspend`), and the conversation and the agent deleted, the
+Session gone and Substrate holding nothing of the agent (`delete`). Each
+PASS line names what it proved; a failure's FAIL line starts with the stage
+that failed — `step`, `resume`, `turn`, `suspend` or `delete` — and its
+cause. The lab returns to its own configuration afterwards (the overlay
+removed, `agentlab.yaml`'s chart upgraded back onto); `--stay` leaves it on
+the step. `--step-dev-image <target>=<image>` adds dev images for the step
+alone (a `kagent` controller build), `--ready-timeout` bounds the golden
+boot, `--model-config` names the ModelConfig.
+
+```bash
+agentlab kagent-step-test --to 1.14.0              # a step within the released kagent line
+agentlab kagent-step-test --chart 4.145.1-rc.6     # a platform candidate that steps kagent 1.13 -> 1.15
+agentlab kagent-step-test --chart 4.146.0-rc.1     # a chart-only candidate: kagent and Substrate kept
+```
+
+**Where it runs.** The proof is the lab round of every kagent release
+candidate and of every agent-platform candidate that does not move the
+Substrate it pins (one that does takes `substrate-step-test`), on a lab on
+the platform's current release: a promoter's suspended-conversation resume
+proof of a chart-only candidate is `kagent-step-test --chart <rc>`, no turn
+by hand. Like the Substrate step proof it is
+not a CircleCI job of this repository: its turns are model turns. The unit
+tests of its pieces run in `make test`.
+
+### The Substrate tunnel-close proof (gRPC to an HTTP/1.1-only actor)
+
+`agentlab substrate-tunnel-test` proves that a gRPC call through
+atenet-router to an actor that speaks HTTP/1.1 only fails at once instead of
+waiting out its client's timeout. atenet-router reaches an actor through a
+CONNECT tunnel to atunnel in the worker (the `ateom-gvisor` image), which
+relays it to the actor's port 80. Plain HTTP the router downgrades to
+HTTP/1.1 for such an actor; a gRPC-shaped request it carries as HTTP/2, and
+the actor closes on the HTTP/2 preface. A relay that ends the tunnel with the
+actor's connection lets the router fail the call (gRPC `Unavailable`, or HTTP
+502) in milliseconds; one that waits for the router to stop sending leaves
+the router waiting for the actor's SETTINGS frame until the client gives up.
+
+The agents' actors all speak h2c, so the proof brings its own, with no local
+build: an ActorTemplate `agentlab-substrate-tunnel` in the `kagent` atespace
+on the platform Harness's worker pool and snapshot storage, one container on
+the lab's alpine (pinned by digest, the image the workspaces proof's actors
+run) whose busybox `nc` serves `GET /readyz` over HTTP/1.1 and closes on the
+preface without an answer, its input unread. The client reaches atenet-router's
+HTTP port through a port-forward and names the actor in the `ate-target-actor`
+header. Four stages, each judged `PASS` or `FAIL`:
+
+1. **substrate** — the Substrate the run is on: the atelet's and
+   `ate-api-server`'s images, and the image the worker pods run, where atunnel
+   relays the tunnel — read off the pods, since the WorkerPool's
+   `spec.workerImage` stays at the chart's floor while the controller runs the
+   pods on its own release (condition `WorkerImageOverridden`).
+   `--substrate <release>` pins the `substrate` and `substrate-crds`
+   components to the release for the run through a values overlay
+   (`state/substrate-tunnel-values.yaml`), the way the step proof steps, older
+   or newer than the lab's, unless the lab and its worker pods run it already;
+   the lab returns to the chart's Substrate at the end (`--stay` leaves it).
+2. **actor** — the template's golden snapshot, the actor created and resumed.
+3. **route** — `GET /readyz` over HTTP/1.1 answers 200 through the router
+   (waited for up to `--ready-timeout`, default 5m), then over h2c: HTTP/2.0
+   200, downgraded to HTTP/1.1 at the actor.
+4. **tunnel-close** — `POST` with `content-type: application/grpc` over h2c,
+   the client's timeout `--client-timeout` (30s): it must fail loudly (HTTP
+   502, or 200 with `grpc-status: 14`) within `--promptly` (5s). A call that
+   ends with the client's timeout is the tunnel the actor's close did not end.
+
+The actor and its template are removed by the same run, and an earlier run's
+first. On a lab the case fails on Substrate 1.11.3 (the call waits the
+full 30s) and passes on 1.11.4, which carries the relay change.
+
 ### The Swarmgeist proof (klaus-gateway on kagent API v2)
 
 `agentlab klaus-gateway-test` is the lab carrier of
@@ -1124,9 +1459,13 @@ controller `GRPCRoute` validates the forwarded token at the edge),
 `a2a.namespace: kagent`, the fixture as the default agent, Slack in `events`
 mode on the fake, OBO on the seeded bolt link store, a bolt routing store —
 all in a run directory (`--run-dir` keeps it, together with the keys and the
-gateway's log). The Slack endpoints listen on `127.0.0.1:18090`
-(`--gateway-port`; the admin endpoints take the next port, the fake the one
-after). This is the leg the meta chart's in-cluster component
+gateway's log). The Slack endpoints listen on `127.0.0.1:18090` on the
+first lab, ten ports higher per port a lab's `apiServerPort` sits above
+6443, so two labs never share one (`--gateway-port`; the admin endpoints
+take the next port, the fake the one after). The image shape's container is
+`<clusterName>-klaus-gateway-test`; an uncached image is pulled before the
+30 s readiness wait starts, and the container is removed on every exit,
+a readiness timeout included. This is the leg the meta chart's in-cluster component
 (`components.klaus-gateway`, `klausGateway.a2a.url` = the in-cluster
 `grpc://agentgateway.agent-platform.svc.cluster.local:8080`) does not
 exercise: the public route with TLS and the JWT policy. The component is the
@@ -1351,13 +1690,13 @@ A personal access token does not fit: muster sends only literal headers, so the 
 
 ## The workspace-manager's provider instances (`platform.workspaces.provider`)
 
-With workspaces on, the workspace-manager gets the provider instances `platform.workspaces.provider` names — `fake` (the default while the key is empty), `github`, `gitlab`, or several such as `fake,github,gitlab` (`agentlab configure --workspaces-provider …`) — `fake` and `github` of the chart's `github` kind, `gitlab` of its `gitlab` kind, through which the person connects their account to the platform and the workspace mirrors sync with the instance's App. Three pieces follow from the switch alone, whatever the instances:
+With workspaces on, the workspace-manager gets the provider instances `platform.workspaces.provider` names — `fake` (the default while the key is empty), `github`, `gitlab`, or several such as `fake,github,gitlab` (`agentlab configure --workspaces-provider …`) — `fake` and `github` of the chart's `github` kind, `gitlab` of its `gitlab` kind, whose App the workspace mirrors sync with. Three pieces follow from the switch alone, whatever the instances:
 
-- `workspace-manager.oauth.baseURL` is `https://workspace-manager.<domain>:<gatewayPort>` (port-free on 443), which the chart's own derivation from `global.domain` would drop the port from. The chart routes that host's `/signin`, `/connect/<instance>` and `/callback/<instance>` and forwards the URL.
-- The lab Dex's `agent-platform` client lists `<base URL>/signin`, where the manager signs the browser in before a connect.
-- `agentlab configure` and `agentlab platform` print each instance's callback URL and the redirect URI.
+- `workspace-manager.oauth.baseURL` is `https://workspace-manager.<domain>:<gatewayPort>` (port-free on 443), which the chart's own derivation from `global.domain` would drop the port from. The chart routes that host for the grants' key set (`/.well-known/jwks.json`) and forwards the URL.
+- The person's sign-in at a provider is muster's (workspace-manager 0.10.0 and newer): muster pins the manager's registration to one instance's App (`workspace-manager.muster.mcpServer.auth`, the instance `platform.workspaces.grantProvider`, empty for the first), the person grants it once with `core_auth_login`, and muster attaches the person's App token to every call of the manager's tools. The App's callback URL is muster's `/oauth/proxy/callback`; the pin's OAuth client is the instance's Secret with `client-id` beside `client-secret` ([Workspaces](workspaces.md#the-persons-grant-musters)). The manager serves no sign-in of its own: its routes are its MCP endpoint and the grants' key set.
+- `agentlab configure` and `agentlab platform` print the callback URL each instance's App names, muster's `/oauth/proxy/callback`.
 
-**`fake`** is the lab's own GitHub ([Workspaces](workspaces.md#the-provider-instance-fake)): `agentlab up` and `agentlab platform` run `agentlab github-fake --workspaces` in a container on the kind network, point the selector-less Service `agent-platform/agentlab-github` at it and send `github.<domain>` there from CoreDNS, so the instance is a GitHub Enterprise-shaped one at `url: https://github.<domain>` (the API under `/api/v3`). Its App is the embedded fixture's (id `1`, client `Iv1.agentlab-workspaces`); the App's private key and the client secret are the lab's own, generated once under `certs/github-fake/` next to the CA and placed as the Secret `agent-platform/workspace-fake` (keys `private-key`, `client-secret`) ahead of the install, which references it. The fake serves TLS with a leaf of the lab CA, so the values name the lab CA file the chart already mounts for Dex as the manager's `SSL_CERT_FILE`. Nothing to register: `platform-test` proves the manager registered with muster and listing the instance to the admin.
+**`fake`** is the lab's own GitHub ([Workspaces](workspaces.md#the-provider-instance-fake)): `agentlab up` and `agentlab platform` run `agentlab github-fake --workspaces` in a container on the kind network, point the selector-less Service `agent-platform/agentlab-github` at it and send `github.<domain>` there from CoreDNS, so the instance is a GitHub Enterprise-shaped one at `url: https://github.<domain>` (the API under `/api/v3`). Its App is the embedded fixture's (id `1`, client `Iv1.agentlab-workspaces`); the App's private key and the client secret are the lab's own, generated once under `certs/github-fake/` next to the CA and placed as the Secret `agent-platform/workspace-fake` (keys `private-key`, `client-secret` and `client-id`, muster's for the pin) ahead of the install, which references it. The fake serves TLS with a leaf of the lab CA, so the values name the lab CA file the chart already mounts for Dex as the manager's `SSL_CERT_FILE`. Nothing to register: `platform-test` proves the manager registered with muster and listing the instance to the admin.
 
 **`github`** needs a GitHub App of the lab's own on github.com, apart from the [sign-in App](github-signin.md) and from the [`github` MCP server's client](#github-as-the-person-platformgithub); [Workspaces](workspaces.md#the-provider-instance-github) names its callback and permissions. Its App id and client id are public and live in `agentlab.yaml` (`platform.workspaces.github.appId` and `clientId`, or `--workspaces-github-app-id` and `--workspaces-github-client-id`), empty until the App exists. Its private key and client secret live in one Kubernetes Secret, `agent-platform/workspace-github`, keys `private-key` and `client-secret`; the values agentlab renders reference it (`app.privateKey`, `oauth.clientSecret`). agentlab never reads, writes or deletes the values; it reads which keys the Secret carries. The operator's secret tooling places it, one key per call, straight from the vault into the lab's apiserver. Recorded in `agentlab.yaml` (`platform.workspaces.github.privateKeySource` and `clientSecretSource`, or `--workspaces-github-private-key-source` and `--workspaces-github-client-secret-source`: references `beekeeper secret copy` resolves, never a value), every `agentlab up` and `agentlab platform` places both before the install, so a recreated lab carries the instance without a manual step, and a placement that fails fails the run. By hand:
 
@@ -1368,7 +1707,7 @@ beekeeper secret copy op://<vault>/<item>/client-secret --to-secret kind-agentla
 
 **`gitlab`** is a GitLab's OAuth application with a group access token ([Workspaces](workspaces.md#the-provider-instance-gitlab) names GitLab's side). Its URL and client id are public and live in `agentlab.yaml` (`platform.workspaces.gitlab.url` and `clientId`); the token and the application's secret are the Secret `agent-platform/workspace-gitlab` (keys `token`, `client-secret`), placed from `tokenSource` and `clientSecretSource` on every `up` and `platform`. The instance renders once all four are in place.
 
-(A person without that tooling creates the Secret with `kubectl --context kind-agentlab -n agent-platform create secret generic workspace-github --from-file=private-key=… --from-file=client-secret=…`.) Then `agentlab platform`. While an id is empty, the Secret is missing or a key lacks a value, the run renders no `github` instance (the workspace-manager refuses one without them at start-up), warns with what is missing, the callback URL and the commands, and goes on with the base URL, the route, the redirect URI and the other instance in place.
+(A person without that tooling creates the Secret with `kubectl --context kind-agentlab -n agent-platform create secret generic workspace-github --from-file=private-key=… --from-file=client-secret=…`.) Then `agentlab platform`. While an id is empty, the Secret is missing or a key lacks a value, the run renders no `github` instance (the workspace-manager refuses one without them at start-up), warns with what is missing, the callback URL and the commands, and goes on with the base URL, the route and the other instance in place.
 
 No secret value reaches `agentlab.yaml`, `state/`, a log line or a process argument for either instance: the values carry Secret references, the fake's keys go from `certs/github-fake/` into its Secret through the API (`internal/lab/workspaceprovider_test.go` renders both and checks). The golden renders of the block, one per configuration, are `internal/lab/testdata/workspace-providers/`.
 
@@ -1535,7 +1874,7 @@ data the page reads — see [The muster plugin](backstage.md#the-muster-plugin).
 | `global.observability.traces.otlp.endpoint: ""` | The chart's default collector is the fleet's kube-system `otlp-gateway`, which kind does not run, with or without `platform.observability`. Empty, every `auto` exporter turns off (Substrate's signals, kagent's, muster's) instead of logging a resolver error on every export. |
 | `muster.muster.oauth.mcpClient.enabled: true` + the `lab-oauth-fixture` MCPServer | The chart leaves muster's OAuth *client* role — the proxy behind `core_auth_login` and the portal's Sign in — off; real installations turn it on, and without it no per-server sign-in can be exercised. The fixture is the one `Auth Required` downstream to sign in to (muster's own protected `/mcp`); see [Signing in to a downstream server](#signing-in-to-a-downstream-server-muster-as-oauth-client). |
 | `muster.rbac.{mcpServerEditor,workflowEditor}.subjects` → `oidc:platform-admins` | The chart binds muster's editor Roles to Giant Swarm's admin groups, which do not exist here. Rebound to the lab's own admin group (`--oidc-groups-prefix=oidc:`, same spelling as the lab RBAC). Lists replace, so the GS groups are dropped. |
-| muster patched to `hostNetwork` + `maxSurge: 0` | Same issuer trick as the apiserver and Backstage. `maxSurge: 0` because two hostNetwork pods cannot both bind `:8090` on a one-node cluster. A Kustomize strategic-merge patch in `components.muster.postRenderers`, which the chart forwards to muster's `HelmRelease` and the bundled helm-controller applies over the muster chart's render. |
+| muster patched to `hostNetwork` + one replica + `maxSurge: 0` (unless `platform.musterPodNetwork`) | Same issuer trick as the apiserver and Backstage. One replica and `maxSurge: 0` because two hostNetwork pods cannot both bind `:8090` on a one-node cluster. With [muster on the pod network](#muster-on-the-pod-network) it runs two replicas with the `dex-localhost` sidecar instead. A Kustomize strategic-merge patch in `components.muster.postRenderers`, which the chart forwards to muster's `HelmRelease` and the bundled helm-controller applies over the muster chart's render. |
 | The `dex-localhost` sidecar on every Deployment told the lab Dex's address — mcp-kubernetes, the managers (model-manager, agent-manager, vm-manager, cluster-manager) and mcp-prometheus | Those servers validate the forwarded Dex token themselves and must reach the issuer URL `https://localhost:32000/dex`, but all listen on `:8080` and cannot share the host network. A socat sidecar on the pod's own loopback forwards `:32000` to the Dex Service (HACKS.md U13) — a `postRenderers` patch on each component, and on the lab's own mcp-prometheus `HelmRelease`. The targets are a rule over the component renders (a Deployment whose containers are told the address through a name they dial it by — `--dex-issuer-url`, `DEX_ISSUER_URL`, `OIDC_ISSUER_URL` — or that the `agentlab.giantswarm.io/dex-localhost` annotation selects; an identity-only variable such as `OAUTH_AUTHORIZATION_SERVER` selects nothing), not a list: a component the chart turns on by default or an overlay turns on is covered without a lab release, and the roster's trailing range renders `components.<name>.postRenderers` for one the lab names no block for. `agentlab platform-test` asserts the sidecar, a clean rollout with no container restarted since the release — a kind node restart, which restarts every container once together, is history, not a crash loop — and the MCPServer reachable (Connected, Awaiting Session or Auth Required) on every such Deployment, naming the key each was selected by; `agentlab platform` rolls such a Deployment once when it crash-looped since its release. |
 | `components.kagent.enabled` from `platform.agents`; kagent ServiceMonitor + OTel off | Agents are part of what the lab tests, so kagent is on by default (the chart defaults it off) but optional — `platform.agents: false` skips the runtime. The controller's authentication is the fleet's (`trusted-proxy` behind the JWT `Strict` policy on the controller route); the kagent line serves no /metrics and there is no OTLP gateway in kind. See [Agents (kagent)](agents.md). |
 | `kagent.controllerRoute.jwtAuthentication.jwks` = the lab Dex (`dex.dex.svc.cluster.local:5556/dex/keys` over TLS) | The chart's default JWKS source is a Giant Swarm Dex; the policy itself (`Strict`, the identity transformation) is the chart's default, unchanged. |

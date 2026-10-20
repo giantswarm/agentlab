@@ -322,6 +322,11 @@ func WorkspacesMeasure(cfg *config.Config, opts WorkspacesMeasureOptions) error 
 		}
 		m.cfg, m.provider, m.org = cfg, config.WorkspaceProviderFake, config.WorkspaceOrganization
 		m.report.Target = "the lab " + cfg.ClusterName
+		end, err := startWorkspaceRun()
+		defer end()
+		if err != nil {
+			return err
+		}
 	}
 	var err error
 	if m.runDir, err = measureRunDir(opts.RunDir, m.report.Started); err != nil {
@@ -482,7 +487,9 @@ func measureFreshName(name string, started time.Time) string {
 // clone of each pushed repository on this host, the measurement's Agent.
 func (m *measurement) labPreconditions() error {
 	cfg := m.cfg
-	if reason := workspaceManagerSkip(cfg); reason != "" {
+	if reason, err := workspaceManagerSkip(cfg); err != nil {
+		return err
+	} else if reason != "" {
 		return fmt.Errorf("no workspace-manager to define a workspace with: %s", reason)
 	}
 	if !cfg.WorkspaceFakeProvider() {
@@ -585,7 +592,7 @@ func (m *measurement) labAgent() error {
 	if m.api, err = dialKagentAPIAs(cfg.AgentgatewayBaseURL(), m.token); err != nil {
 		return err
 	}
-	m.set = &sessionSet{api: m.api}
+	m.set = &sessionSet{api: m.api, manager: m.person}
 	note("the Agent %s Ready on Harness %s in %s", measureAgent, claudeHarness, boot.elapsed.Round(time.Second))
 	return nil
 }
@@ -631,7 +638,7 @@ func (m *measurement) remotePreconditions() error {
 	if m.api, err = dialKagentAPIAs(o.AgentgatewayURL, m.token); err != nil {
 		return err
 	}
-	m.set = &sessionSet{api: m.api}
+	m.set = &sessionSet{api: m.api, manager: m.person}
 	m.agentNS, m.agentName, _ = strings.Cut(o.Agent, "/")
 	m.report.Harness = "Agent " + o.Agent + "'s"
 	return nil
@@ -847,9 +854,15 @@ func (m *measurement) firstSync(w *measureWorkspace, first bool) error {
 	}
 	start := time.Now()
 	var created syncWorkspace
-	if err := m.person.callServerStructured(workspaceManagerToolPrefix+"create_workspace", map[string]any{
-		nameKey: w.name, wmOrganizationArg: m.org, wmSourcesArg: m.sources(w),
-	}, &created); err != nil {
+	create := map[string]any{nameKey: w.name, wmOrganizationArg: m.org, wmSourcesArg: m.sources(w)}
+	var err error
+	if m.opts.remote() {
+		// An installation's Workspace carries no lab label.
+		err = m.person.callServerStructured(workspaceManagerToolPrefix+"create_workspace", create, &created)
+	} else {
+		err = m.person.createLabWorkspace(create, &created)
+	}
+	if err != nil {
 		return err
 	}
 	if !slices.Contains(m.created, w.name) {
@@ -1096,7 +1109,7 @@ func (m *measurement) session(w *measureWorkspace, last bool) error {
 	}
 	startCalled := time.Now()
 	env, err := m.person.callToolEnvelope(agentManagerToolPrefix+"start_session", map[string]any{
-		nameKey: m.agentName, namespaceKey: m.agentNS, startSessionRequestIDArg: uuid.NewString(), "workspaceGrant": grant,
+		nameKey: m.agentName, namespaceKey: m.agentNS, startSessionRequestIDArg: uuid.NewString(), startSessionGrantArg: grant,
 	})
 	if err != nil {
 		return err
@@ -1148,11 +1161,7 @@ func (m *measurement) session(w *measureWorkspace, last bool) error {
 	if err := m.storage(w, last); err != nil {
 		return err
 	}
-	if err := m.api.deleteSession(ctx, id); err != nil {
-		return err
-	}
-	m.set.ids = slices.DeleteFunc(m.set.ids, func(s string) bool { return s == id })
-	return nil
+	return m.set.remove(ctx, id)
 }
 
 // grant asks authorize_workspace, timing every call, until the grant names

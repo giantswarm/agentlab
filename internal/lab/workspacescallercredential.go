@@ -2,15 +2,12 @@ package lab
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
 	"slices"
 	"strings"
 	"time"
-
-	"github.com/google/uuid"
 
 	"github.com/giantswarm/agentlab/internal/config"
 	apiv1alpha1 "github.com/giantswarm/agentlab/internal/kagent/gen/kagent/api/v1alpha1"
@@ -34,6 +31,9 @@ import (
 //     by Substrate's egress gateway (the Session Actor's own egress policy,
 //     which kagent compiles from the grant); no JWT in the sandbox's
 //     environment, /data or /workspace;
+//   - delete_session through agent-manager deletes that Session: muster's
+//     binding of its sandbox actor to the admin, made at start_session, is
+//     removed (workspacesunbind.go);
 //   - a Session of the same Agent without a workspace sends the same request:
 //     no JWT reaches the lab's GitHub.
 //
@@ -66,15 +66,13 @@ var callerCredentialRepo = syncMovingRepo
 
 // callerCredentialProof is the part's state.
 type callerCredentialProof struct {
-	sp      *syncProof
-	timeout time.Duration
-	admin   *workspacePerson
-	api     *kagentAPI
-	set     *sessionSet
-	apiHost string
-	// connected says the admin connected to fake-bearer, which the cleanup
-	// disconnects.
-	connected bool
+	*workspaceSessionRig
+	// agent is the part's Agent on the claude Harness.
+	agent string
+	// fromMuster says the egress gateway takes a Session's provider
+	// credentials from muster (agent-platform 4.145.0-rc.5 and newer): the
+	// API host gets the person's App token, not the Session Actor's JWT.
+	fromMuster bool
 	// with is the Session in the workspace, without the one without a
 	// workspace; jwt is the request the API host logged from with.
 	with, without string
@@ -84,12 +82,15 @@ type callerCredentialProof struct {
 // workspacesCallerCredentialPart runs the part in stages, as the admin.
 func workspacesCallerCredentialPart(cfg *config.Config, timeout time.Duration) error {
 	p := newProofStages()
-	cp := &callerCredentialProof{sp: newSyncProof(cfg, timeout, callerCredentialWorkspace), timeout: timeout,
-		apiHost: config.GitHubFakeBearerAPIHost(cfg.Platform.Domain)}
+	cp := &callerCredentialProof{workspaceSessionRig: newWorkspaceSessionRig(cfg, timeout, callerCredentialWorkspace, callerCredentialRepo, true),
+		agent: callerCredentialAgent}
 	err := cp.run(p)
 	cp.cleanup()
-	if err == nil {
-		fmt.Printf("\nWorkspaces caller-credential part passed: a Session started in workspace %s on the provider instance %s sent a request from its sandbox to the Bearer API host %s, and the lab's GitHub received a JWT bearer with aud %s and sub %s in place of the sandbox's placeholder; no JWT in the sandbox's environment, /data or /workspace; a Session of the same Agent without a workspace got none on that host.\n",
+	if err == nil && cp.fromMuster {
+		fmt.Printf("\nWorkspaces caller-credential part passed: a Session started in workspace %s on the provider instance %s sent a request from its sandbox to the Bearer API host %s, and the lab's GitHub received %s's App token from muster in place of the sandbox's placeholder; no JWT in the sandbox's environment, /data or /workspace; delete_session removed muster's binding of its sandbox; a Session of the same Agent without a workspace got no credential on that host.\n",
+			callerCredentialWorkspace, config.WorkspaceProviderFakeBearer, cp.apiHost, cp.jwt.User)
+	} else if err == nil {
+		fmt.Printf("\nWorkspaces caller-credential part passed: a Session started in workspace %s on the provider instance %s sent a request from its sandbox to the Bearer API host %s, and the lab's GitHub received a JWT bearer with aud %s and sub %s in place of the sandbox's placeholder; no JWT in the sandbox's environment, /data or /workspace; delete_session removed muster's binding of its sandbox; a Session of the same Agent without a workspace got none on that host.\n",
 			callerCredentialWorkspace, config.WorkspaceProviderFakeBearer, cp.apiHost, strings.Join(cp.jwt.Audience, ","), cp.jwt.Subject)
 	}
 	return p.close(err)
@@ -102,9 +103,8 @@ func (cp *callerCredentialProof) run(p *proofStages) error {
 		return fmt.Errorf("the caller-credential part needs an admin user in %s (`agentlab configure --defaults` writes one)", config.File)
 	}
 	p.begin("caller-credential: preconditions", "The part's preconditions: the provider instance %s, the Session admission, the Agent %s on the claude Harness, %s signed in", config.WorkspaceProviderFakeBearer, callerCredentialAgent, adminUser.Email)
-	if !cfg.WorkspaceFakeBearerProvider() {
-		return fmt.Errorf("the caller-credential part proves a Bearer provider, the instance %s, and platform.workspaces.provider %q does not configure it: `agentlab configure --workspaces-provider %s,%s`, then `agentlab platform`",
-			config.WorkspaceProviderFakeBearer, cfg.Platform.Workspaces.Provider, config.WorkspaceProviderFake, config.WorkspaceProviderFakeBearer)
+	if err := fakeBearerRefusal(cfg, "caller-credential"); err != nil {
+		return err
 	}
 	if err := cp.sp.preconditions(adminUser.Email); err != nil {
 		return err
@@ -130,8 +130,23 @@ func (cp *callerCredentialProof) run(p *proofStages) error {
 		note("kagent records the providers %s on %s, not the grant's Bearer API host: it compiles no caller credential for it", grantProvidersLine(recorded), session.GetId())
 	}
 
-	p.begin("caller-credential: the Actor's JWT", "From the sandbox, a request to %s with a placeholder Authorization: the lab's GitHub receives the Session Actor's JWT for %s; no JWT in the sandbox", cp.apiHost, config.WorkspaceProviderFakeBearer)
+	if cp.fromMuster {
+		p.begin("caller-credential: the person's token", "From the sandbox, a request to %s with a placeholder Authorization: the egress gateway sets %s's App token from muster; no JWT in the sandbox", cp.apiHost, adminUser.Email)
+	} else {
+		p.begin("caller-credential: the Actor's JWT", "From the sandbox, a request to %s with a placeholder Authorization: the lab's GitHub receives the Session Actor's JWT for %s; no JWT in the sandbox", cp.apiHost, config.WorkspaceProviderFakeBearer)
+	}
 	if err := cp.probe(session, true); err != nil {
+		return err
+	}
+	if hasMusterProvider(session) {
+		p.begin("caller-credential: muster as the person", "From the sandbox, an MCP initialize to %s with a placeholder Authorization: the egress gateway sets the Actor's JWT for muster's audience, muster serves it as %s", musterInClusterURL, adminUser.Email)
+		if err := cp.probeMuster(session, true); err != nil {
+			return err
+		}
+	}
+
+	p.begin("caller-credential: delete_session", "The Session deleted through agent-manager's delete_session as %s: muster's binding of its sandbox to the person removed", adminUser.Email)
+	if err := cp.deleteSession(session.GetId()); err != nil {
 		return err
 	}
 
@@ -140,7 +155,32 @@ func (cp *callerCredentialProof) run(p *proofStages) error {
 	if err != nil {
 		return err
 	}
-	return cp.probe(bare, false)
+	if err := cp.probe(bare, false); err != nil {
+		return err
+	}
+	if hasMusterProvider(session) {
+		if hasMusterProvider(bare) {
+			return fmt.Errorf("kagent recorded the provider muster on %s, a Session without a grant", bare.GetId())
+		}
+		return cp.probeMuster(bare, false)
+	}
+	return nil
+}
+
+// fakeBearerRefusal refuses a lab a part on the provider instance
+// fake-bearer cannot run on: one without the instance, or one whose
+// workspace-manager muster pins to another instance's App, which is the only
+// App a person grants (connectWorkspaceProvider).
+func fakeBearerRefusal(cfg *config.Config, part string) error {
+	if !cfg.WorkspaceFakeBearerProvider() {
+		return fmt.Errorf("the %s part runs on the provider instance %s, and platform.workspaces.provider %q does not configure it: `agentlab configure --workspaces-provider %s,%s --workspaces-grant-provider %s`, then `agentlab platform`",
+			part, config.WorkspaceProviderFakeBearer, cfg.Platform.Workspaces.Provider, config.WorkspaceProviderFake, config.WorkspaceProviderFakeBearer, config.WorkspaceProviderFakeBearer)
+	}
+	if grant := cfg.WorkspaceGrantProvider(); grant != config.WorkspaceProviderFakeBearer {
+		return fmt.Errorf("the %s part grants the App of %s, and muster pins the workspace-manager to the App of %s: `agentlab configure --workspaces-grant-provider %s`, then `agentlab platform`",
+			part, config.WorkspaceProviderFakeBearer, grant, config.WorkspaceProviderFakeBearer)
+	}
+	return nil
 }
 
 // preconditions checks the Session admission, signs the admin in and
@@ -149,135 +189,54 @@ func (cp *callerCredentialProof) run(p *proofStages) error {
 func (cp *callerCredentialProof) preconditions(adminUser *config.User) error {
 	cfg := cp.sp.cfg
 	ctx := context.Background()
-	rig := workspaceAdmissionValuesFor(cfg, workspacesChartCarries(cfg))
-	if rig == nil {
-		return fmt.Errorf("no Session admission on this lab (the chart takes no workspaces values, or platform.agents is off): the caller-credential part starts a Session on a workspace volume")
-	}
-	key, err := readWorkspaceGrantKey()
-	if err != nil {
-		return err
-	}
-	kid, err := proveWorkspaceManagerPublishesGrantKey(ctx, key)
-	if err != nil {
-		return err
-	}
-	if err := proveKagentAdmissionTrusts(ctx, rig); err != nil {
-		return err
-	}
-	note("the manager publishes the lab's grant key as %s; kagent's admission trusts %s", kid, rig.JWKSURL)
-	if cp.admin, err = openWorkspacePerson(cfg, adminUser); err != nil {
-		return err
-	}
-	if _, err := cp.admin.providerStatus(config.WorkspaceProviderFakeBearer); err != nil {
-		return fmt.Errorf("the workspace-manager has no provider instance %s: %w (`agentlab platform` renders it)", config.WorkspaceProviderFakeBearer, err)
-	}
 	token, err := passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret, adminUser.Email, adminUser.Password, musterLoginScopes)
 	if err != nil {
 		return err
 	}
-	if cp.api, err = dialKagentAPI(cfg, token); err != nil {
+	api, err := dialKagentAPI(cfg, token)
+	if err != nil {
 		return err
 	}
-	cp.set = &sessionSet{api: cp.api}
+	if err := cp.workspaceSessionRig.preconditions(adminUser, api); err != nil {
+		return err
+	}
+	// From agent-platform 4.145.0-rc.5 kagent compiles a Session's provider
+	// hosts into muster's credential URIs, and the egress gateway asks muster
+	// for the person's token on them.
+	if err := proveMusterCredentialProvider(ctx); err == nil {
+		cp.fromMuster = true
+		note("the egress gateway takes a Session's provider credentials from muster (%s): the API host gets the person's App token", musterCredentialAuthority)
+	}
 	if err := waitHarnessReady(ctx, claudeHarness, cp.timeout); err != nil {
 		return err
 	}
-	if agentExists(callerCredentialAgent) {
-		if err := removeAgent(callerCredentialAgent); err != nil {
+	if agentExists(cp.agent) {
+		if err := removeAgent(cp.agent); err != nil {
 			return err
 		}
 	}
-	manifest := workspacesAgentManifest(callerCredentialAgent, claudeHarness) +
-		fmt.Sprintf("  egress:\n    - %q\n    - %q\n", cfg.GitHubFakeBearerURL(), cfg.GitHubFakeBearerAPIURL())
+	manifest := workspacesAgentManifest(cp.agent, claudeHarness) +
+		fmt.Sprintf("  egress:\n    - %q\n    - %q\n    - %q\n", cfg.GitHubFakeBearerURL(), cfg.GitHubFakeBearerAPIURL(), strings.TrimSuffix(musterInClusterURL, "/mcp"))
 	if _, err := applyManifests(ctx, []byte(manifest)); err != nil {
-		return fmt.Errorf("applying the Agent %s: %w", callerCredentialAgent, err)
+		return fmt.Errorf("applying the Agent %s: %w", cp.agent, err)
 	}
-	boot, err := waitAgentReadyOn(callerCredentialAgent, claudeHarness, cp.timeout)
+	boot, err := waitAgentReadyOn(cp.agent, claudeHarness, cp.timeout)
 	if err != nil {
 		return err
 	}
 	if !boot.ready {
-		return fmt.Errorf("the Agent %s is not Ready on Harness %s after %s: %s", callerCredentialAgent, claudeHarness, boot.elapsed.Round(time.Second), boot.reason)
+		return fmt.Errorf("the Agent %s is not Ready on Harness %s after %s: %s", cp.agent, claudeHarness, boot.elapsed.Round(time.Second), boot.reason)
 	}
-	note("the Agent %s Ready on Harness %s in %s, its egress %s and %s", callerCredentialAgent, claudeHarness, boot.elapsed.Round(time.Second), cfg.GitHubFakeBearerURL(), cfg.GitHubFakeBearerAPIURL())
+	note("the Agent %s Ready on Harness %s in %s, its egress %s and %s", cp.agent, claudeHarness, boot.elapsed.Round(time.Second), cfg.GitHubFakeBearerURL(), cfg.GitHubFakeBearerAPIURL())
 	return nil
 }
 
-// createWorkspace connects the admin to fake-bearer and defines the part's
-// workspace with the one repository, waiting for its first cycle.
-func (cp *callerCredentialProof) createWorkspace() error {
-	s, cfg := cp.sp, cp.sp.cfg
-	hops, err := connectWorkspaceProvider(cfg, cp.admin, config.WorkspaceProviderFakeBearer)
-	if err != nil {
-		return err
-	}
-	cp.connected = true
-	note("%s connected to %s: %s", cp.admin.user.Email, config.WorkspaceProviderFakeBearer, hops)
-	owner, name, _ := strings.Cut(callerCredentialRepo, "/")
-	var created syncWorkspace
-	if err := s.member.callServerStructured(workspaceManagerToolPrefix+"create_workspace", map[string]any{
-		nameKey: callerCredentialWorkspace, wmOrganizationArg: config.WorkspaceOrganization,
-		wmSourcesArg: []map[string]any{{wmProviderArg: config.WorkspaceProviderFakeBearer, wmOwnerArg: owner, repositoriesKey: []string{name}}},
-	}, &created); err != nil {
-		return err
-	}
-	d, err := s.waitCycle(callerCredentialWorkspace, nil)
-	if err != nil {
-		return err
-	}
-	if r := d.Workspace.LastSync; r.Result != syncResultSucceed {
-		return fmt.Errorf("the first cycle of %s ended %s: %s", callerCredentialWorkspace, r.Result, r.Message)
-	}
-	note("created %s of Organization %s on %s; first cycle %s", callerCredentialWorkspace, created.Organization, config.WorkspaceProviderFakeBearer, d.Workspace.LastSync.Result)
-	return nil
-}
-
-// startSession starts a Session of the part's Agent through start_session,
-// with the admin's grant for the workspace or without a workspace, and
-// returns it as kagent records it.
+// startSession starts a Session of the part's Agent, in the workspace or
+// without one, and records it as with or without.
 func (cp *callerCredentialProof) startSession(inWorkspace bool) (*apiv1alpha1.Session, error) {
-	args := map[string]any{nameKey: callerCredentialAgent, namespaceKey: kagentNamespace, startSessionRequestIDArg: uuid.NewString()}
-	if inWorkspace {
-		a, err := cp.admin.authorizeWorkspace(callerCredentialWorkspace)
-		if err != nil {
-			return nil, err
-		}
-		if a.Outcome != authorizeGranted || a.Grant == "" {
-			return nil, fmt.Errorf("authorize_workspace %s answered %s (%q, unreadable %v, connect %v), want granted", callerCredentialWorkspace, a.Outcome, a.Reason, a.Unreadable, a.Connect)
-		}
-		var claims struct {
-			Providers []grantProvider `json:"providers"`
-		}
-		parts := strings.Split(a.Grant, ".")
-		if len(parts) != 3 || decodeJWTPart(parts[1], &claims) != nil {
-			return nil, fmt.Errorf("the grant of authorize_workspace %s is no JWT", callerCredentialWorkspace)
-		}
-		if err := judgeGrantProviders(claims.Providers, cp.apiHost, config.WorkspaceProviderFakeBearer); err != nil {
-			return nil, fmt.Errorf("the grant for %s: %w", callerCredentialWorkspace, err)
-		}
-		note("the grant names the providers %s", grantProvidersLine(claims.Providers))
-		args["workspaceGrant"] = a.Grant
-	}
-	env, err := cp.admin.session.callToolEnvelope(agentManagerToolPrefix+"start_session", args)
+	session, err := cp.workspaceSessionRig.startSession(cp.agent, inWorkspace)
 	if err != nil {
 		return nil, err
-	}
-	if env.IsError {
-		return nil, fmt.Errorf("start_session refused: %.400s", env.Content[0].Text)
-	}
-	var started accessStarted
-	if err := json.Unmarshal([]byte(env.Content[0].Text), &started); err != nil || started.Session.ID == "" {
-		return nil, fmt.Errorf("start_session answered no session: %.400s", env.Content[0].Text)
-	}
-	cp.set.add(started.Session.ID)
-	ctx, cancel := context.WithTimeout(context.Background(), cp.timeout)
-	defer cancel()
-	session, err := cp.api.getSession(ctx, started.Session.ID)
-	if err != nil {
-		return nil, err
-	}
-	if !inWorkspace && session.GetVolumeSource() != nil {
-		return nil, fmt.Errorf("the Session %s started without a workspace carries volume %q", session.GetId(), session.GetVolumeSource().GetVolume().GetVolumeHandle())
 	}
 	if inWorkspace {
 		cp.with = session.GetId()
@@ -399,14 +358,23 @@ func (cp *callerCredentialProof) probe(session *apiv1alpha1.Session, inWorkspace
 	if !inWorkspace {
 		return judgeNoCallerCredential(logged, session.GetId())
 	}
+	if len(v.env) > 0 || len(v.files) > 0 {
+		return fmt.Errorf("a JWT in the sandbox of Session %s: environment variables %v, files %v; the caller credential stays in the egress gateway", session.GetId(), v.env, v.files)
+	}
+	if cp.fromMuster {
+		r, err := judgePersonCredential(logged, v.status, cp.person.login, session.GetId())
+		if err != nil {
+			return err
+		}
+		cp.jwt = r
+		note("%s: %s's App token from muster on %s; no JWT in the sandbox's environment, /data or /workspace", session.GetId(), r.User, cp.apiHost)
+		return nil
+	}
 	jwt, err := judgeCallerCredential(logged, v.status, config.WorkspaceProviderFakeBearer, session.GetId())
 	if err != nil {
 		return err
 	}
 	cp.jwt = jwt
-	if len(v.env) > 0 || len(v.files) > 0 {
-		return fmt.Errorf("a JWT in the sandbox of Session %s: environment variables %v, files %v; the Actor's JWT stays in the egress gateway", session.GetId(), v.env, v.files)
-	}
 	note("%s: the Actor's JWT on %s, aud %s, sub %s; no JWT in the sandbox's environment, /data or /workspace", session.GetId(), cp.apiHost, strings.Join(jwt.Audience, ","), jwt.Subject)
 	return nil
 }
@@ -467,47 +435,52 @@ func judgeCallerCredential(logged []githubRequest, status, audience, session str
 		strings.Join(slices.Compact(kinds), ", "), audience)
 }
 
+// judgePersonCredential is the verdict on what the API host logged from a
+// Session in the workspace when the egress gateway takes its credentials
+// from muster: the App's user token of login, the person the Session is
+// bound to. status is what the sandbox's request answered.
+func judgePersonCredential(logged []githubRequest, status, login, session string) (githubRequest, error) {
+	if len(logged) == 0 {
+		return githubRequest{}, fmt.Errorf("the sandbox's request answered %s and never reached the lab's GitHub: the egress gateway did not pass it to the API host (a 403 is the gateway's: muster released no token for the host, or it is not in the Session Actor's egress)", status)
+	}
+	var kinds []string
+	for _, r := range logged {
+		if r.Credential != credUser {
+			kinds = append(kinds, r.Credential)
+			continue
+		}
+		if r.User != login {
+			return r, fmt.Errorf("the API host received the user token of %q from Session %s, want %s's: muster released someone else's grant", r.User, session, login)
+		}
+		return r, nil
+	}
+	return githubRequest{}, fmt.Errorf("the API host received the credential %s, not %s's App token: muster set no credential for the Session's actor (credential none or placeholder: agent-manager bound no person to its sandbox, or muster releases no grant of the instance)",
+		strings.Join(slices.Compact(kinds), ", "), login)
+}
+
 // judgeNoCallerCredential is the verdict on a Session without a workspace:
 // no JWT on the API host, the request refused at the gateway or carrying
 // the placeholder.
 func judgeNoCallerCredential(logged []githubRequest, session string) error {
 	for _, r := range logged {
-		if r.Credential == credJWT {
+		switch r.Credential {
+		case credJWT:
 			return fmt.Errorf("the Session %s without a workspace sent a JWT (aud %v, sub %q) to the API host: a Session without a grant must get no caller credential", session, r.Audience, r.Subject)
+		case credUser:
+			return fmt.Errorf("the Session %s without a workspace reached the API host as %s with a user token: a Session without a workspace is never bound to a person", session, r.User)
 		}
 	}
-	note("%s, no workspace: no JWT reached the lab's GitHub", session)
+	note("%s, no workspace: no caller credential reached the lab's GitHub", session)
 	return nil
 }
 
-// cleanup removes the Sessions, the Agent, the admin's connection and the
-// workspace.
+// cleanup removes the Sessions, the Agent and the workspace; the admin's
+// grant of the App stays muster's, as every part's preconditions give it.
 func (cp *callerCredentialProof) cleanup() {
-	if cp.sp.restored {
-		return
+	errs := []error{cp.workspaceSessionRig.cleanup()}
+	if agentExists(cp.agent) {
+		errs = append(errs, removeAgent(cp.agent))
 	}
-	var errs []error
-	if cp.set != nil {
-		errs = append(errs, cp.set.removeAllNow())
-	}
-	if cp.admin != nil && cp.connected {
-		cp.admin.disconnect(config.WorkspaceProviderFakeBearer)
-	}
-	if agentExists(callerCredentialAgent) {
-		errs = append(errs, removeAgent(callerCredentialAgent))
-	}
-	if cp.sp.member != nil {
-		if gone, err := cp.sp.gone(callerCredentialWorkspace); err == nil && !gone {
-			if _, err := cp.sp.volume(callerCredentialWorkspace); err == nil {
-				out, err := cp.sp.onVolume(callerCredentialWorkspace, "sessions-clear", accessClearSessionsScript)
-				errs = append(errs, err)
-				if err == nil {
-					note("%s", indent(out, "  "))
-				}
-			}
-		}
-	}
-	errs = append(errs, cp.sp.restore())
 	if cp.api != nil {
 		cp.api.close()
 	}

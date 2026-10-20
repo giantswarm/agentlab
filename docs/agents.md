@@ -132,18 +132,17 @@ address**, and the kind cluster shares this machine's — a handful of
 `backstage-test` runs within an hour exhaust it, after which discovery comes
 back truncated (the proof refuses that by name) until the window resets.
 
-A token lifts that, from one of two places, the first that is set:
+A token lifts that, from a recorded source (`githubToken.source` in
+`agentlab.yaml`; `agentlab configure --github-token-source
+op://<vault>/<item>/<field>`, or `<file>#<path>` of a SOPS file): every `up`
+and `platform` hand it to `beekeeper secret copy --to-secret`, which writes the
+token in its own process; agentlab never reads the value, and a placement that
+fails fails the run. agentlab never reads `$GITHUB_TOKEN` either: a token
+exported in its environment reaches no consumer. Without a source `discover`
+and `platform` name the Secret the lab lacks, `agentlab-github-token` (key
+`GITHUB_TOKEN`) in `agent-platform`.
 
-- **A recorded source** (`githubToken.source` in `agentlab.yaml`; `agentlab
-  configure --github-token-source op://<vault>/<item>/<field>`, or
-  `<file>#<path>` of a SOPS file): every `up` and `platform` hand it to
-  `beekeeper secret copy --to-secret`, which writes the token into the Secret
-  in its own process; agentlab never reads the value, and a placement that
-  fails fails the run. A lab started from an environment without the token,
-  an agent's, is authenticated this way.
-- **`$GITHUB_TOKEN`** on the host.
-
-Either way `agentlab up`/`platform` create **or update** the Secret `agentlab-github-token` (key `GITHUB_TOKEN`) in
+`agentlab up`/`platform` place **or update** the Secret `agentlab-github-token` (key `GITHUB_TOKEN`) in
 `agent-platform` — the portal takes it through `extraEnvVarsSecrets` and the
 lab's app-config overlay (`integrations.github[].token: ${GITHUB_TOKEN}`),
 agent-manager through the chart's `skills.github.tokenSecret` — and in
@@ -151,12 +150,12 @@ agent-manager through the chart's `skills.github.tokenSecret` — and in
 call GitHub authenticated (5000 requests an hour; the rate-limit headers say
 so). A fine-grained token with public read access is enough; a token that
 reads a private skill repository lets agent-manager resolve skills from it.
-As with the Anthropic key, the token is a real credential: it travels host
-environment -> Secret and never enters `agentlab.yaml`, `state/` (the
-rendered values carry the Secret's *name*), a log line or a process's argv.
-Re-running with a new token rotates the Secret.
+The token travels vault -> Secret through beekeeper only and never enters
+`agentlab.yaml`, `state/` (the rendered values carry the Secret's *name*), a
+log line or a process's argv. Re-running after a rotation in the vault
+rotates the Secret.
 
-**A skills GitHub App** is the way a lab reaches GitHub without any token: agent-manager's chart takes a read-only App (`skills.github.app.secretName`) and resolves skills with its installation tokens, at the App's rate limit. `agentlab configure --github-app-id <id> --github-app-installation-id <id> --github-app-private-key-source op://<vault>/<item>/<field>` records it as `githubApp` in `agentlab.yaml` (the ids are public; the key is a reference). A lab that already records the workspaces GitHub App (`platform.workspaces.github`, docs/workspaces.md) records only its installation, `agentlab configure --github-app-installation-id <id>`: agent-manager then resolves skills as that App, its id and private key source taken from the workspaces entry. With the workspaces App's OAuth client recorded too (`clientId` and `clientSecretSource`, or `githubApp.clientId` and `githubApp.clientSecretSource` for an App of its own), the portal's skill discovery calls GitHub as the same App: every `up` and `platform` write the Secret `agentlab-portal-github-app` (`GITHUB_APP_ID` and `GITHUB_APP_CLIENT_ID` applied, `GITHUB_APP_PRIVATE_KEY` and `GITHUB_APP_CLIENT_SECRET` placed by beekeeper), the portal's `extraEnvVarsSecrets` take it, and the overlay's `integrations.github` lists the App with `publicAccess: true`, so a public repository of any owner gets an installation token. Every `up` and `platform` apply the ids to the Secret `agentlab-github-app` in `agent-platform` and hand the key to `beekeeper secret copy --to-secret` (key `private-key`, never read by agentlab; a failed placement fails the run), and the values name the Secret for agent-manager. The chart refuses the App together with `tokenSecret`, so `githubApp` and `githubToken.source` are not recorded together; a `$GITHUB_TOKEN` still reaches the portal and the migrate Job, which take a token only.
+**A skills GitHub App** is the way a lab reaches GitHub without any token: agent-manager's chart takes a read-only App (`skills.github.app.secretName`) and resolves skills with its installation tokens, at the App's rate limit. `agentlab configure --github-app-id <id> --github-app-installation-id <id> --github-app-private-key-source op://<vault>/<item>/<field>` records it as `githubApp` in `agentlab.yaml` (the ids are public; the key is a reference). A lab that already records the workspaces GitHub App (`platform.workspaces.github`, docs/workspaces.md) records only its installation, `agentlab configure --github-app-installation-id <id>`: agent-manager then resolves skills as that App, its id and private key source taken from the workspaces entry. With the workspaces App's OAuth client recorded too (`clientId` and `clientSecretSource`, or `githubApp.clientId` and `githubApp.clientSecretSource` for an App of its own), the portal's skill discovery calls GitHub as the same App: every `up` and `platform` write the Secret `agentlab-portal-github-app` (`GITHUB_APP_ID` and `GITHUB_APP_CLIENT_ID` applied, `GITHUB_APP_PRIVATE_KEY` and `GITHUB_APP_CLIENT_SECRET` placed by beekeeper), the portal's `extraEnvVarsSecrets` take it, and the overlay's `integrations.github` lists the App with `publicAccess: true`, so a public repository of any owner gets an installation token. Every `up` and `platform` apply the ids to the Secret `agentlab-github-app` in `agent-platform` and hand the key to `beekeeper secret copy --to-secret` (key `private-key`, never read by agentlab; a failed placement fails the run), and the values name the Secret for agent-manager. The chart refuses the App together with `tokenSecret`, so `githubApp` and `githubToken.source` are not recorded together.
 
 Without either the lab is as before: the values name no Secret, the
 consumers call GitHub unauthenticated, and a Secret an earlier run created
@@ -207,6 +206,152 @@ The commit target is named (`repository`, `branch`, `path`): the lab's
 engine runs no kustomize-controller, so no Kustomization resolves it from
 the release's labels here. The agent, the copy, the fake and its Service go
 away at the end of the run.
+
+## Organizations as tenants
+
+`platform.tenants` (`agentlab configure --tenants`) renders the chart's
+`tenants.organizations.enabled: true`: agent-manager's tenant reconciler runs
+(`--multi-tenant`) and the chart admits the agent workers of every namespace
+labelled `giantswarm.io/organization`. The reconciler keeps in each such
+namespace, always, the agent chart's OCIRepository `agent`, the agents' Flux
+ServiceAccount and its RoleBinding (`kagent-flux`) and, when the platform's
+network policies are on, their copies — labelled
+`agent-manager.giantswarm.io/tenant-object=namespace` — and, while the
+namespace holds an agent, copies of the platform Harness, its WorkerPool and
+the pool's ServiceAccount, the default ModelConfig and its key Secret,
+labelled `…/tenant-object=agents`. The switch needs the agents runtime and a
+chart that carries it (giantswarm/agent-platform#1037 and #1050; until a
+release does, a dev build through `--chart-branch`).
+
+Substrate's credential provider reads a namespace's Secrets only where its
+policy allows it. Until the chart selects the organizations' namespaces by
+label (giantswarm/agent-platform#1041, Substrate 1.12), the lab's values list
+the two namespaces `tenants-test` uses by hand in
+`substrate.credentialProvider.namespacePolicies` — each read by the atespace
+of its own name, and by `ate-golden` — next to the chart's two entries. The
+list goes with #1041. A `platform.valuesFiles` overlay that sets that list
+replaces the lab's.
+
+`./agentlab tenants-test [email email]` is the proof
+(giantswarm/agentlab#739). It creates `org-agentlab-tenants-a` and
+`org-agentlab-tenants-b`, labelled, and binds one person to
+`agent-platform:editor` in each (default: the first two users outside
+`platform-admins`, `dev@lab.local` and `viewer@lab.local`; a platform admin is
+refused, being cluster-admin). It calls agent-manager's REST API (`/api/v1`,
+on a port-forward to its pod) as each person with their Dex token (audiences
+`kubernetes` and `agent-platform`) and checks:
+
+1. before an agent, each namespace holds only the always-kept objects;
+2. a person's create in the other organization is refused (403; under a name
+   that does not exist there, so a person with the lab's cluster-wide `view`
+   reaches the create and does not get 409); the create
+   in their own (201, `requestedBy` the person) makes the reconciler copy the
+   Harness, the WorkerPool with agent-manager's
+   `--tenant-worker-pool-replicas`, its ServiceAccount, the ModelConfig and
+   its Secret;
+3. the WorkerPool's workers are Running and ready, the agent `ready`, and a
+   turn as the person (through the edge) answers, the credential provider
+   reading for the namespace's atespace from that namespace only (its log);
+4. the same in the second organization;
+
+   then, with both organizations' agents up and the platform tenant's
+   (`agentlab-tenants-platform`, created by the admin in `kagent` at the
+   start), the authorizer through the edge (steps E) and in Slack (steps S),
+   as the tenant users of [The tenant model](identity.md#the-tenant-model)
+   — the first user in group `tenant-a` and in `tenant-b`, `alice@lab.local`
+   and `bob@lab.local` after `agentlab configure --tenants`:
+
+   - E1. the first tenant user, whose group is bound nowhere yet, lists
+     (`ListAgents` with no namespace) the platform tenant's agents only;
+   - E2. each group bound to `agent-platform:user` in its organization
+     (RoleBinding `agentlab-tenants-test-users`, subject `oidc:<group>`):
+     each person lists exactly their organization's agents and the platform
+     tenant's, read back against the cluster;
+   - E3. the first user's `CreateSession` and first A2A message on the second
+     organization's agent are `PermissionDenied`, no Session of it is made
+     (every creator's, listed by the admin) and the credential provider reads
+     nothing for its atespace; on their own organization's agent the
+     `CreateSession` succeeds;
+   - E4. the user's `CreateAgent`, `UpdateAgent` and `DeleteAgent` in their
+     own organization are `PermissionDenied` and its agent is unchanged;
+   - E5. the first editor creates, changes (a label) and deletes an Agent in
+     their organization through the edge (on a Harness that does not exist,
+     so it never boots); `CreateAgent`, `UpdateAgent` and `DeleteAgent` in the
+     other organization are `PermissionDenied` and its agent is unchanged;
+   - E6. `ListSessions` with `all_creators` is `PermissionDenied` for both
+     users and answered for the admin;
+   - S. klaus-gateway on the host (klaus-gateway-test's shape: `--gateway-image`
+     or `--gateway-binary`, default the component's release; it needs
+     giantswarm/klaus-gateway#486, 4.10.0 or later), both users linked:
+     S1. `@bot agents` as both at the same time: each roster lists their
+     organization's agent labelled `organization <name>` and the platform
+     tenant's labelled `platform`, nothing of the other organization, and the
+     first person's roster is the same when asked again; S2. the first person
+     submits the agent picker with the other organization's agent: refused
+     with a note naming that tenant, and nothing reaches it (no
+     `turn_dispatch`, no Session, no credential read) — the picker is how a
+     person starts another agent in Slack: a mention runs the thread's agent
+     or the default, it names none; S3. the second person
+     starts a conversation with their agent from the picker and it answers;
+     S4. the first person mentions the bot in that thread (allowed by its
+     person when the gateway asks): refused with the same note, the Session's
+     tasks unchanged (klaus-gateway 4.10.0-rc.1 answers the held message's
+     replay after the Allow with its generic "could not be picked up again"
+     note; the person sends again and gets the refusal, HACKS.md U36). On
+     macOS the image runs on the `kind` network with its ports published on
+     loopback (Docker Desktop's host networking is off, HACKS.md U35);
+   - M. muster's MCP servers per tenant
+     ([MCP servers per tenant](identity.md#mcp-servers-per-tenant)), on a
+     sign-in fixture `agentlab-tenants-mcp` in each organization (muster's own
+     protected `/mcp`, pinned to the lab Dex with the issuer of
+     `lab-oauth-fixture`, its client Secret readable by muster there):
+     M1. through muster (`core_mcpserver_list`, `list_tools`), each tenant
+     user lists the servers of muster's namespace and their organization's
+     fixture, and is offered the sign-in to that one only; the second user,
+     their group's RoleBinding gone a moment, lists muster's namespace's
+     only; M2. the second user signs in to their fixture; the first user's
+     call of one of its tools, `core_service_start` and `core_auth_login` for
+     it are answered word for word as for a server that does not exist;
+     M3. an `MCPServer` of the first organization with `auth.forwardToken`,
+     `auth.requiredAudiences`, `auth.tokenExchange`, `family` or
+     `auth.type: sigv4` reads `Failed` with muster's refusal naming the field;
+     M4. the first user signs in to their fixture: muster sends
+     `redirect_uri` `<muster>/oauth/ns/<namespace>/callback` and the sign-in
+     ends there; `lab-oauth-fixture` (muster's namespace, the same issuer)
+     still awaits its own sign-in on `/oauth/proxy/callback`; the admin signs
+     in to the first organization's fixture and the second's still awaits its
+     own, on its namespace's callback; M5. the first editor creates
+     `agentlab-tenants-muster` in the first organization (toolset
+     `preset:full`), and a turn as the first user reports tools of their
+     fixture and of agent-manager, none of the other organization's, and a
+     second turn has it call `core_mcpserver_list`: it lists the first
+     user's fixture and agent-manager, not the second organization's (the
+     agent is deleted again). The same through Slack (klaus-gateway) is not
+     proved yet;
+5. as the admin (cluster-admin): a WorkerPool patch and delete and a pod
+   labelled `ate.dev/worker-pool` (server-side dry runs), and an exec into a
+   worker, are refused by the chart's `agent-platform-tenant-*` admission
+   policies; the network policy copies exist — skipped while agent-manager
+   copies none (the lab runs with network policies off); the credential
+   provider's live grants (`/statusz`) give each tenant's atespace its own
+   namespace only — skipped while its policy has no `ownNamespaceSelector`
+   entry;
+6. deleting each namespace's last agent removes the copies and keeps the
+   always-kept objects (giantswarm/agent-manager#175: the delete also
+   removes the OCIRepository, which the reconciler creates again; the proof
+   asserts the end state only).
+
+A lab without the switch fails before any write, naming
+`agentlab configure --tenants` and `agentlab platform`; so does a credential
+policy that does not list the two namespaces, a lab without the tenant users,
+and a kagent controller without the RBAC authorizer (its ConfigMap's
+`KAGENT_AUTHORIZATION_MODE` not `kubernetes`, the groups not read from
+`groups`, or the prefixes not the lab API server's `oidc:` — a chart before
+agent-platform 4.151, or values without the lab's prefixes), and a muster
+before 5.48.0, or one with `mcpServersInAllNamespaces` off in its
+`config.yaml`. The namespaces, their agents
+and bindings, and the platform tenant's agent go at the end of the run, also after a failure, and at the
+start of the next one.
 
 ## The UI and the controller's route
 
@@ -317,3 +462,61 @@ server-side (`GetTask` reports it canceled) and the session takes a
 following turn. It leaves nothing behind: the sessions over gRPC
 (`ListSessions` lists none of its), the agent's release and render on
 the cluster.
+
+## The codex coder
+
+`fixtures/agents/codex-coder/` is one coding agent's definition, the same on
+the lab and on an installation: a codex agent on a ChatGPT subscription
+login whose Sessions work in a workspace of `giantswarm` repositories. It is
+the inputs of the platform's own tools, applied through muster as the person,
+nothing applied by hand:
+
+| File | What |
+|---|---|
+| `values.yaml` | The agent-platform values for its model: the `kagent.modelConfigs` entry `openai-chatgpt-codex` (`credentialType: chatgptOAuth`, `apiFormat: responses`, the login Secret `kagent-chatgpt-login`). On the lab a `platform.valuesFiles` overlay; on an installation the same entry in its values |
+| `agent.json` | agent-manager's `create_agent` input: `codex-coder` on the Harness `codex` and that ModelConfig, the toolset `preset:read-only`, a system message for branch-per-change work in `/workspace` |
+| `workspace.json` | workspace-manager's `create_workspace` input: the workspace `giantswarm`, one source on the provider instance `github`, owner `giantswarm`, the public repositories by name. `organization` and the provider instance are the lab's (`lab`, `github`); an installation sets its own, and adds the private repositories it is meant to see with `update_workspace` |
+
+The agent carries no repository and no workspace: a workspace is chosen when
+a Session starts. Read and write access is the person's own, through the
+workspace's provider: the person grants the provider instance's GitHub App
+once in muster, `authorize_workspace` checks that the person reads every
+repository and signs the grant, `start_session` takes it, and the egress
+gateway sets the person's App token on the provider's git and API hosts per
+request ([Workspaces](workspaces.md#the-write-part)). The sandbox holds no
+token; `git push` and `gh pr create` work as the person, and only where the
+App is installed and the person may write.
+
+What it needs where it runs:
+
+- The codex Harness: `platform.coding` with `codex` among
+  `platform.coding.harnesses` on the lab; `kagent.harnesses` on an
+  installation ([The coding agents proof](platform.md#the-coding-agents-proof)).
+- The login Secret `kagent/kagent-chatgpt-login` (`access_token`,
+  `refresh_token`, `account_id`, labelled `kagent.dev/chatgpt-login: "true"`):
+  one `codex login --device-auth` of its own per lab or installation, since
+  the refresh token rotates on every use and two refreshers on one login
+  spend each other's. On the lab the three keys are placed from that login's
+  `auth.json` with the operator's secret tooling, never read by a session,
+  and the Secret labelled; on an installation it is a SOPS Secret
+  (agent-platform `docs/chatgpt-login.md`).
+- The workspaces with a GitHub provider instance whose App is installed on
+  `giantswarm` with Contents, Pull requests and Issues read and write
+  ([The provider instance github](workspaces.md#the-provider-instance-github)),
+  and the Session admission.
+
+The order, as the person through muster (`agentlab login --audience
+agent-platform` gives a lab user the token for it):
+
+1. `x_workspace-manager_create_workspace` with `workspace.json`, then
+   `x_workspace-manager_get_workspace giantswarm` until `lastSync.result` is
+   `Succeeded`.
+2. `x_agent-manager_create_agent` with `agent.json`, then
+   `x_agent-manager_get_agent_status codex-coder` until it is Ready.
+3. `x_workspace-manager_authorize_workspace giantswarm`: `granted` with a
+   `grant`, or `connect_required` with muster's sign-in for the App.
+4. `x_agent-manager_start_session codex-coder` with `workspaceGrant` and the
+   first message; `x_agent-manager_get_session` reads the answer.
+
+`go test ./fixtures/...` checks the definition against what the tools refuse
+at write time and the model it names against the values entry.

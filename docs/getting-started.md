@@ -145,13 +145,12 @@ Then bring the lab up:
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...   # optional: powers the agents + Backstage AI chat (or record a vault reference: agents.md "The model")
-export GITHUB_TOKEN=github_pat_...    # optional: skill discovery/resolution call GitHub authenticated (5000/h, not 60/h)
 ./agentlab up              # first run: asks one question, then certs, kind cluster, Dex, RBAC, the agent platform — verified
 ./agentlab open portal     # the portal (Backstage) in the browser; `open agents` the kagent UI
 ./agentlab platform-test   # headless proof: Dex -> muster -> mcp-kubernetes -> apiserver, + the per-server OAuth sign-in challenge
 ./agentlab models-test     # with a model server on the host: pull -> ModelConfig -> agent turn -> delete, through the platform
 ./agentlab serving-test    # with platform.serving: the lab preset on llm-d -> Ready on the CPU runtime -> ModelConfig -> a completion through the models Gateway -> agent turn -> unload
-./agentlab agents-test     # agent-manager as the signed-in user: create -> ready -> update -> delete via muster; a viewer's create is Forbidden; the ServiceAccount holds no RBAC
+./agentlab agents-test     # agent-manager as the signed-in user: create -> ready -> update -> delete via muster; a viewer's create is Forbidden; the ServiceAccount holds no RBAC beyond its switches' (minting: the skills-Secret Role; tenants: the reconciler's ClusterRole)
 ./agentlab toolsets-test   # declared toolsets end to end: agent-manager requires one, the Agent carries the header, muster resolves and refuses per request, agents see their toolset, a per-server sign-in scopes tools to the token, the portal's Tools step and apply path
 ./agentlab a2a-test        # turns over native gRPC through the edge as the surfaces drive them: the route and its JWT policy, no token refused, a forged x-user-id replaced, discovery with annotations, a streamed turn, HITL approve/reject, CancelTask server-side
 ```
@@ -211,7 +210,7 @@ Discovering this machine:
   LM Studio         api v1 on :1234 — answers on 172.21.0.1 (the address pods dial): yes; 6 downloaded, 4 tool-calling
   KVM               /dev/kvm and /dev/vhost-vsock present — platform.vmManager on, images from /home/you/projects/giantswarm/vm-manager/images/build
   Anthropic key     $ANTHROPIC_API_KEY is set — the agents' default ModelConfig and Backstage's AI chat get the real key at deploy time
-  GitHub token      $GITHUB_TOKEN is set — the portal's skill discovery and agent-manager's skill resolution call GitHub authenticated (5000 requests an hour) from deploy time
+  GitHub token      githubToken.source op://lab/github-token/credential — beekeeper places it into the Secret agent-platform/agentlab-github-token at every up and platform: the portal's skill discovery and agent-manager's skill resolution call GitHub authenticated (5000 requests an hour); agentlab never reads the value
 
 Applied to the configuration:
   platform.modelManager.backends: [ollama] -> [ollama, lemonade, lmstudio]
@@ -228,14 +227,19 @@ Applied to the configuration:
   kind port mappings bind. While **no kind node of this configuration
   exists** (a fresh lab, or after `agentlab down`), an occupied port is moved
   to a nearby free one, with a message saying what moved where (443 falls
-  back to 8443). When the edge leaves 443, every public URL in these docs
+  back to 8443). A port another registered lab's `agentlab.yaml` records
+  counts as occupied too, running or stopped, so two labs on one machine can
+  always be up together. When the edge leaves 443, every public URL in these docs
   gains that port suffix (`https://backstage.127.0.0.1.nip.io:8443`); the
   lab's edge Service serves that port in-cluster as well, so the ported URLs
   resolve from pods too and every proof still passes. Once the cluster exists
   its mappings are fixed at node creation, so the ports it publishes never
   count as occupied and a foreign listener on one of them is **reported**, not
   renumbered around (free it, or `agentlab down`, re-run `configure`,
-  `agentlab up`).
+  `agentlab up`). A port taken after `configure` ran is caught by
+  `agentlab up` itself: before `kind create` it probes the same ports and
+  refuses with one line per held port, naming the setting, the lab and the
+  holding process's name and PID where this user can see it.
 - **Host model servers**: an Ollama on `:11434`, a Lemonade Server on
   `:13305` and an LM Studio on `:1234` (their default ports) are detected,
   each with what it reports itself as, whether it listens on the kind docker
@@ -267,10 +271,12 @@ Applied to the configuration:
   `$ANTHROPIC_API_KEY` is exported, else the placeholder the agents' default
   ModelConfig gets at deploy time. See [Agents](agents.md#the-model).
 - **The GitHub token**: the source `agentlab.yaml` records
-  (`githubToken.source`, placed through beekeeper), else whether
-  `$GITHUB_TOKEN` is exported, since the portal's skill discovery and
-  agent-manager's skill resolution take it at deploy time and otherwise share this machine's unauthenticated GitHub window (60 requests
-  an hour). See [Agents](agents.md#the-github-token).
+  (`githubToken.source`, placed through beekeeper into the Secret
+  `agent-platform/agentlab-github-token`, key `GITHUB_TOKEN`) or the skills
+  GitHub App, since the portal's skill discovery and agent-manager's skill
+  resolution otherwise share this machine's unauthenticated GitHub window (60
+  requests an hour); without either, the line names the Secret the lab lacks.
+  agentlab never reads `$GITHUB_TOKEN`. See [Agents](agents.md#the-github-token).
 
 Pins override the discovery for that run: `--model-manager[=false]` decides
 the flag regardless of what answers (off keeps the chart's default-on

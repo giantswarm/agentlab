@@ -354,19 +354,26 @@ func (r *substrateStepRun) turn(ctx context.Context, session *apiv1alpha1.Sessio
 // awaitSuspended polls the session until the controller reports it
 // SUSPENDED: the snapshot is written.
 func (r *substrateStepRun) awaitSuspended(ctx context.Context, session *apiv1alpha1.Session) (*apiv1alpha1.Session, error) {
+	return awaitSessionSuspended(ctx, r.api, session)
+}
+
+// awaitSessionSuspended polls the session until the controller reports it
+// SUSPENDED: the snapshot is written.
+func awaitSessionSuspended(ctx context.Context, api *kagentAPI, session *apiv1alpha1.Session) (*apiv1alpha1.Session, error) {
+	id := session.GetId()
 	var err error
 	suspended := waitFor(int(sessionReadyTimeout/pollInterval), pollInterval, func() bool {
 		if session.GetState() == apiv1alpha1.RuntimeState_RUNTIME_STATE_SUSPENDED {
 			return true
 		}
-		session, err = r.api.getSession(ctx, r.session)
+		session, err = api.getSession(ctx, id)
 		return err != nil
 	})
 	if err != nil {
 		return session, err
 	}
 	if !suspended {
-		return session, fmt.Errorf("session %s is still %s %s after the suspend", r.session, sessionState(session), sessionReadyTimeout)
+		return session, fmt.Errorf("session %s is still %s %s after the suspend", id, sessionState(session), sessionReadyTimeout)
 	}
 	return session, nil
 }
@@ -893,15 +900,22 @@ func (r *substrateStepRun) removeSession() {
 
 // stepBack returns the lab to the Substrate the chart installs.
 func (r *substrateStepRun) stepBack() error {
-	step("Returning the lab to the chart's Substrate (%s before the step)", r.before.version)
-	_ = os.Remove(filepath.Join(StateDir, substrateStepValues))
-	if err := clearRustfsServiceAccount(r.before.version); err != nil {
-		return fmt.Errorf("returning to the chart's Substrate: %w (the lab still runs the step's: `agentlab platform`)", err)
+	return returnToChartSubstrate(r.cfg, r.before.version, substrateStepValues)
+}
+
+// returnToChartSubstrate removes a proof's values overlay (a file in
+// StateDir) and upgrades the platform onto the lab's own configuration: the
+// Substrate the chart installs, the release before the proof pinned another.
+func returnToChartSubstrate(cfg *config.Config, before, overlay string) error {
+	step("Returning the lab to the chart's Substrate (%s before the proof)", before)
+	_ = os.Remove(filepath.Join(StateDir, overlay))
+	if err := clearRustfsServiceAccount(before); err != nil {
+		return fmt.Errorf("returning to the chart's Substrate: %w (the lab still runs the proof's: `agentlab platform`)", err)
 	}
-	if err := PlatformUp(r.cfg, Offers{}); err != nil {
-		return fmt.Errorf("returning to the chart's Substrate: %w (the lab still runs the step's: `agentlab platform`)", err)
+	if err := PlatformUp(cfg, Offers{}); err != nil {
+		return fmt.Errorf("returning to the chart's Substrate: %w (the lab still runs the proof's: `agentlab platform`)", err)
 	}
-	back, err := readSubstrateRelease(r.cfg)
+	back, err := readSubstrateRelease(cfg)
 	if err != nil {
 		return err
 	}
@@ -1081,19 +1095,34 @@ func substrateStepOverlay(to string) ([]byte, error) {
 }
 
 // substrateStepConfig is the lab's configuration for the step: the overlay
-// after the lab's own values files, the step's dev images over the lab's.
-// The lab's configuration is left as it is — agentlab.yaml is never written
-// with the step in it — and the result is validated like agentlab.yaml.
+// after the lab's own values files, the step's dev images over the lab's
+// (steppedConfig).
 func substrateStepConfig(cfg *config.Config, to, overlay string, devImages map[string]string) (*config.Config, error) {
+	stepped, err := steppedConfig(cfg, overlay, devImages)
+	if err != nil {
+		return nil, fmt.Errorf("the step to Substrate %s: %w", to, err)
+	}
+	return stepped, nil
+}
+
+// steppedConfig is the lab's configuration with a proof's values overlay
+// after the lab's own values files ("" for none) and the proof's dev images
+// over the lab's. The lab's configuration is left as it is — agentlab.yaml is
+// never written with the step in it — and the result is validated like
+// agentlab.yaml.
+func steppedConfig(cfg *config.Config, overlay string, devImages map[string]string) (*config.Config, error) {
 	stepped := *cfg
-	stepped.Platform.ValuesFiles = append(slices.Clone(cfg.Platform.ValuesFiles), overlay)
+	stepped.Platform.ValuesFiles = slices.Clone(cfg.Platform.ValuesFiles)
+	if overlay != "" {
+		stepped.Platform.ValuesFiles = append(stepped.Platform.ValuesFiles, overlay)
+	}
 	stepped.Platform.DevImages = maps.Clone(cfg.Platform.DevImages)
 	if len(devImages) > 0 && stepped.Platform.DevImages == nil {
 		stepped.Platform.DevImages = map[string]string{}
 	}
 	maps.Copy(stepped.Platform.DevImages, devImages)
 	if err := stepped.Validate(); err != nil {
-		return nil, fmt.Errorf("the step to Substrate %s: %w", to, err)
+		return nil, err
 	}
 	return &stepped, nil
 }

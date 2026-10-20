@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -26,7 +27,8 @@ const (
 	kpsChartVersion = "22.0.0" // wraps upstream kube-prometheus-stack 87.3.0
 	// 0.8.0: OAuth provider switch and tenancy mode `none` (a single-tenant
 	// Prometheus behind muster; the lab's identity proofs need both). An exact
-	// version: the OCIRepository's semver range is this pin.
+	// version: the OCIRepository's semver range is this pin, unless
+	// platform.mcpPrometheusChartVersion names another (mcpPrometheusChartFor).
 	mcpPrometheusChartVersion = "0.8.0"
 )
 
@@ -42,6 +44,12 @@ const (
 	kpsRelease           = "kps"
 	mcpPrometheusRelease = "mcp-prometheus"
 )
+
+// watchdogAlert is the alert the lab's Prometheus fires at all times while
+// platform.alertmanager is on (kube-prometheus-stack-values.yaml.tmpl), so the
+// Alertmanager always has one for mcp-prometheus's alert tools to read; the
+// name the platform-test stage expects.
+const watchdogAlert = "AgentlabWatchdog"
 
 // prometheusResource is the operator's Prometheus CR as kubectl's resource
 // argument — fully qualified on principle (same reason as mcpservers): other
@@ -140,6 +148,16 @@ func prometheusAvailableReplicas(ctx context.Context) (string, error) {
 	return strconv.FormatInt(n, 10), nil
 }
 
+// mcpPrometheusChartFor is the mcp-prometheus chart release the lab installs:
+// platform.mcpPrometheusChartVersion when set (a candidate whose chart
+// changed, docs/platform.md "Dev images"), else the pin.
+func mcpPrometheusChartFor(cfg *config.Config) string {
+	if v := cfg.Platform.MCPPrometheusChartVersion; v != "" {
+		return v
+	}
+	return mcpPrometheusChartVersion
+}
+
 // mcpPrometheusTemplate renders the lab's mcp-prometheus release: a Flux
 // OCIRepository + HelmRelease in the platform namespace, installed into the
 // observability namespace by the platform's bundled helm-controller as the
@@ -155,7 +173,7 @@ const mcpPrometheusTemplate = "mcp-prometheus.yaml.tmpl"
 // the user's Dex id_token to it. Runs after the platform install: the Flux
 // CRDs and the tenant ServiceAccount come with the chart.
 func mcpPrometheusUp(cfg *config.Config) error {
-	step("Installing mcp-prometheus %s through the platform's engine", mcpPrometheusChartVersion)
+	step("Installing mcp-prometheus %s through the platform's engine", mcpPrometheusChartFor(cfg))
 	manifest, _, err := renderManifest(cfg, mcpPrometheusTemplate)
 	if err != nil {
 		return err
@@ -214,4 +232,86 @@ func installOCIChart(cfg *config.Config, namespace, release, chartRef, version s
 		}
 	}
 	return helmUpgradeInstall(namespace, release, chartRef, version, values, timeout, helmInstallOptions{CreateNamespace: true})
+}
+
+// observabilityDown removes what observabilityUp and mcpPrometheusUp
+// installed: the mcp-prometheus HelmRelease and its OCIRepository first,
+// while the engine that finalizes them still runs, then the kps release and
+// the observability namespace (the edge route and the lab-CA copy with it).
+// The prometheus-operator CRDs stay, as platform-down keeps them. Nothing
+// installed is no work.
+func observabilityDown(ctx context.Context) error {
+	if mcpPrometheusReleaseExists(ctx) {
+		step("Uninstalling mcp-prometheus (platform.observability is off)")
+		gvr, err := gvrFor(fluxHelmReleaseResource)
+		if err != nil {
+			return err
+		}
+		if err := deleteObject(ctx, gvr, platformNamespace, mcpPrometheusRelease, mcpPrometheusDeleteTimeout); err != nil {
+			return err
+		}
+		if gvr, err := gvrFor(fluxOCIRepositoryResource); err == nil {
+			if err := deleteObject(ctx, gvr, platformNamespace, mcpPrometheusRelease, 0); err != nil {
+				return err
+			}
+		}
+	}
+	if helmReleaseExists(observabilityNamespace, kpsRelease) {
+		step("Uninstalling the observability stack (release %s in %s)", kpsRelease, observabilityNamespace)
+		// Unwaited: the namespace delete below waits for what is namespaced.
+		if err := helmUninstall(observabilityNamespace, kpsRelease, false, kpsUninstallTimeout); err != nil {
+			return err
+		}
+	}
+	return deleteNamespace(ctx, observabilityNamespace)
+}
+
+// ObservabilityStatus is the observability stack in place against
+// platform.observability: what `agentlab status` reports.
+type ObservabilityStatus struct {
+	// Configured is platform.observability.
+	Configured bool `json:"configured"`
+	// Namespace reports the observability namespace (kps and its pods);
+	// MCPPrometheus the mcp-prometheus HelmRelease.
+	Namespace     bool `json:"namespace"`
+	MCPPrometheus bool `json:"mcpPrometheus"`
+}
+
+// readObservabilityStatus reads what of the stack runs on the cluster.
+func readObservabilityStatus(ctx context.Context, cfg *config.Config) (*ObservabilityStatus, error) {
+	ns, err := objectExists(ctx, gvrNamespaces, "", observabilityNamespace)
+	if err != nil {
+		return nil, err
+	}
+	return &ObservabilityStatus{
+		Configured:    cfg.Platform.Enabled && cfg.Platform.Observability,
+		Namespace:     ns,
+		MCPPrometheus: mcpPrometheusReleaseExists(ctx),
+	}, nil
+}
+
+// leftover names what runs although platform.observability is off.
+func (s ObservabilityStatus) leftover() []string {
+	if s.Configured {
+		return nil
+	}
+	var parts []string
+	if s.Namespace {
+		parts = append(parts, "namespace "+observabilityNamespace)
+	}
+	if s.MCPPrometheus {
+		parts = append(parts, "HelmRelease "+mcpPrometheusRelease)
+	}
+	return parts
+}
+
+func (s ObservabilityStatus) String() string {
+	switch left := s.leftover(); {
+	case s.Configured:
+		return "on (platform.observability)"
+	case len(left) > 0:
+		return "off, but left over from an earlier run: " + strings.Join(left, ", ") + "; `agentlab platform` removes it"
+	default:
+		return "off (platform.observability)"
+	}
 }

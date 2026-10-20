@@ -18,7 +18,8 @@ spec:
   interval: 10m
   url: oci://gsoci.azurecr.io/charts/giantswarm/mcp-prometheus
   ref:
-    # An exact version (observability.go pins it): the lab never floats.
+    # An exact version (observability.go pins it, platform.mcpPrometheusChartVersion
+    # overrides it): the lab never floats.
     semver: "{{ .MCPPrometheusChartVersion }}"
 ---
 apiVersion: helm.toolkit.fluxcd.io/v2
@@ -78,6 +79,13 @@ spec:
           value: "{{ .Issuer }}"
         - name: DEX_CLIENT_ID
           value: agent-platform
+{{- if .AlertmanagerEnabled }}
+        # platform.alertmanager: the operator's headless Service of the lab
+        # Alertmanager (kube-prometheus-stack-values.yaml.tmpl), for the alert
+        # tools (get_alertmanager_alerts, mcp-prometheus 0.12 and newer).
+        - name: ALERTMANAGER_URL
+          value: http://alertmanager-operated.monitoring.svc.cluster.local:9093
+{{- end }}
       oauth:
         enabled: true
         provider: dex

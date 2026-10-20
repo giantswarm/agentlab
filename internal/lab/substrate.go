@@ -39,6 +39,45 @@ const (
 	substrateRelease           = "substrate"
 )
 
+// substrateDown brings a lab whose chart ships no Agent Substrate (the agents
+// switched off in place) to the end state of one created that way: the lab's
+// own CSIDriverConfig of the workspace driver goes, the substrate
+// HelmRelease is waited out while helm-controller uninstalls it, then its
+// namespaces go — Helm leaves a namespace it created behind. Substrate's
+// CRDs stay, as platform-down keeps every chart's CRDs. Quiet on a lab that
+// never had it.
+func substrateDown(ctx context.Context) error {
+	exists, err := objectExists(ctx, gvrNamespaces, "", substrateNamespace)
+	if err != nil {
+		return err
+	}
+	if !exists && !clusterObjectExists(ctx, csiDriverConfigResource, workspacesCSIDriver) {
+		return nil
+	}
+	step("Removing what Agent Substrate left behind (platform.agents is off)")
+	if err := removeLabWorkspacesCSIDriverConfig(ctx); err != nil {
+		return err
+	}
+	if gvr, err := gvrFor(fluxHelmReleaseResource); err == nil {
+		if err := deleteObject(ctx, gvr, platformNamespace, substrateRelease, fluxActionTimeout); err != nil {
+			return err
+		}
+	}
+	for _, ns := range []string{substrateNamespace, podCertControllerNamespace} {
+		if err := deleteNamespace(ctx, ns); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// substrateControlPlaneOn reports whether Agent Substrate's control plane is on the
+// cluster: the live answer to whether a registration with it means anything.
+func substrateControlPlaneOn(ctx context.Context) bool {
+	exists, err := objectExists(ctx, gvrDeployments, substrateNamespace, substrateAPIDeployment)
+	return err == nil && exists
+}
+
 // podCertificateAPIPath is the API Substrate cannot start a pod without: the
 // PodCertificateRequest API behind the certificates.k8s.io/v1beta1 gate.
 const podCertificateAPIPath = "/apis/certificates.k8s.io/v1beta1"

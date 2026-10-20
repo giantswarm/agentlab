@@ -74,7 +74,12 @@ Two practical notes for self-hosted endpoints: the URL must be reachable
 field for it), and `Ollama` requires one (its `host`) and is keyless. An
 `OpenAI` entry may set `reasoningEffort` (`none`, `minimal`, `low`,
 `medium`, `high` or `xhigh`), rendered as the ModelConfig's
-`openAI.reasoningEffort`, and an `Ollama` entry may set `think` (`true` or
+`openAI.reasoningEffort`, and `apiFormat` (`chatCompletions` or
+`responses`, the key agent-platform-connectivity's `kagent.modelConfigs[]`
+entries carry), rendered as the ModelConfig's `openAI.apiFormat` — `responses`
+for a model a codex agent uses, since the codex runtime speaks the Responses
+API only and its compiler refuses any other OpenAI option, `tls` included;
+an `Ollama` entry may set `think` (`true` or
 `false`, kagent 1.0.3 or newer), rendered as the ModelConfig's
 `ollama.think`; `reasoningEffort: none` and `think: false` switch a local
 model's thinking off (see

@@ -1,10 +1,12 @@
 package lab
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -42,10 +44,6 @@ const (
 	pmRegistryRepo = "agentlab/registry"
 	pmInstallation = "ember"
 	pmCapability   = "agent-platform"
-	// pmSignInURI is the workspace-manager's browser sign-in the plan must
-	// register on the platform's Dex client: <base URL>/signin, the base URL
-	// the chart derives from the installation's domain.
-	pmSignInURI = "https://workspace-manager." + pmInstallation + ".agentlab.test/signin"
 	// pmAppIssuer is the pinned App's issuer identity, the key muster files
 	// the grant under; nothing fetches it.
 	pmAppIssuer    = "https://github.agentlab.invalid/apps/" + pmMCPServer
@@ -53,7 +51,6 @@ const (
 	pmReleaseWait  = 5 * time.Minute
 	pmConfigsPatch = "installations/" + pmInstallation + "/apps/"
 	pmValuesPatch  = pmConfigsPatch + "agent-platform/configmap-values.yaml.patch"
-	pmDexPatch     = pmConfigsPatch + "dex-app/configmap-values.yaml.patch"
 )
 
 // PMTestOptions are pm-test's flags.
@@ -61,6 +58,9 @@ type PMTestOptions struct {
 	// GitHubFakeBinary is the static Linux agentlab the registry's container
 	// runs (default: this binary).
 	GitHubFakeBinary string
+	// Record, set, is the file the dry run's answer is written to, indented:
+	// the way testdata/platform-manager/dry-run.json is recorded.
+	Record string
 }
 
 // PMTest is the headless proof of the platform-manager fixture as the lab
@@ -140,17 +140,27 @@ func PMTest(cfg *config.Config, email string, opts PMTestOptions) error {
 	if err := pmCall(session, "get_info", nil, &info); err != nil {
 		return err
 	}
-	if strings.TrimPrefix(info.Version, "v") != version {
-		return fmt.Errorf("the manager answers version %q, the lab installed %s", info.Version, version)
+	if !samePMBuild(info.Version, version) {
+		return fmt.Errorf("the manager answers version %q, the lab installed %s: not the same build", info.Version, version)
 	}
 	note("%s %s answers as %s", pmMCPServer, info.Version, info.Caller.Login)
 
 	step("reconcile_capability %s on %s, dry run", pmCapability, pmInstallation)
-	var plan pmDryRun
+	var raw json.RawMessage
 	if err := pmCall(session, "reconcile_capability", map[string]any{
 		"installations": []string{pmInstallation}, "capability": pmCapability, "dryRun": true, "content": true,
-	}, &plan); err != nil {
+	}, &raw); err != nil {
 		return err
+	}
+	if opts.Record != "" {
+		if err := recordPMDryRun(opts.Record, raw); err != nil {
+			return err
+		}
+		note("the dry run recorded at %s", opts.Record)
+	}
+	var plan pmDryRun
+	if err := json.Unmarshal(raw, &plan); err != nil {
+		return fmt.Errorf("reconcile_capability's dry run: %w", err)
 	}
 	if err := plan.assertWorkspaces(); err != nil {
 		return err
@@ -165,8 +175,8 @@ func PMTest(cfg *config.Config, email string, opts PMTestOptions) error {
 	} else if len(misses) > 0 {
 		note("the registry answered 404 for %d read(s) beyond the fixture: %s", len(misses), strings.Join(misses, ", "))
 	}
-	fmt.Printf("\n✅ pm-test: giantswarm-platform-manager %s plans %s on %s with workspaces on: the Dex client carries %s, the workspace-manager values are kept, nothing written\n",
-		version, pmCapability, pmInstallation, pmSignInURI)
+	fmt.Printf("\n✅ pm-test: giantswarm-platform-manager %s plans %s on %s with workspaces on: the workspace-manager values are kept, nothing written\n",
+		version, pmCapability, pmInstallation)
 	return nil
 }
 
@@ -183,6 +193,19 @@ func pmCall(s *musterSession, tool string, args map[string]any, out any) error {
 	return nil
 }
 
+// recordPMDryRun writes the dry run's answer to path, indented two spaces.
+func recordPMDryRun(path string, raw json.RawMessage) error {
+	var out bytes.Buffer
+	if err := json.Indent(&out, raw, "", "  "); err != nil {
+		return fmt.Errorf("indenting the dry run: %w", err)
+	}
+	out.WriteByte('\n')
+	if err := os.WriteFile(path, out.Bytes(), 0o600); err != nil {
+		return fmt.Errorf("recording the dry run: %w", err)
+	}
+	return nil
+}
+
 // pmDryRun is the part of reconcile_capability's dry run the proof reads.
 type pmDryRun struct {
 	DryRun        bool             `json:"dryRun"`
@@ -194,9 +217,6 @@ type pmDryRun struct {
 		Name   string `json:"name"`
 		Inputs struct {
 			Installation struct {
-				Workspaces *struct {
-					Enabled bool `json:"enabled"`
-				} `json:"workspaces"`
 				DexAppVersion string `json:"dexAppVersion"`
 			} `json:"installation"`
 		} `json:"inputs"`
@@ -206,23 +226,15 @@ type pmDryRun struct {
 			Change     string `json:"change"`
 			Content    string `json:"content"`
 		} `json:"files"`
-		DexClients []pmDexClient  `json:"dexClients"`
-		Diff       map[string]int `json:"diff"`
+		Diff map[string]int `json:"diff"`
 	} `json:"installations"`
 }
 
-// pmDexClient is a Dex client of the plan: its key and the redirect URIs it
-// registers beside the template's.
-type pmDexClient struct {
-	Client            string   `json:"client"`
-	ExtraRedirectURIs []string `json:"extraRedirectURIs"`
-}
-
 // assertWorkspaces asserts the plan is the fixture's with workspaces on: the
-// installation planned as a dry run, the switch read from the record,
-// the sign-in URI on the platform client in the dex-app patch, the
-// workspaces and workspace-manager keys kept in the values patch, and the
-// commit not refused.
+// installation planned as a dry run, the workspaces and workspace-manager
+// keys of the values on record kept in the values patch, and the commit not
+// refused. The person's provider sign-in is muster's grant, so
+// nothing of the workspace-manager's own is asked of Dex.
 func (p pmDryRun) assertWorkspaces() error {
 	if !p.DryRun {
 		return fmt.Errorf("reconcile_capability answered dryRun=false to a dry run")
@@ -234,29 +246,9 @@ func (p pmDryRun) assertWorkspaces() error {
 		return fmt.Errorf("the dry run refuses the commit: %v", p.CommitRefused)
 	}
 	inst := p.Installations[0]
-	if ws := inst.Inputs.Installation.Workspaces; ws == nil || !ws.Enabled {
-		return fmt.Errorf("the plan's inputs carry no installation.workspaces.enabled: true read from %s", pmValuesPatch)
-	}
-	muster := slices.IndexFunc(inst.DexClients, func(c pmDexClient) bool { return c.Client == componentMuster })
-	if muster < 0 || !slices.Contains(inst.DexClients[muster].ExtraRedirectURIs, pmSignInURI) {
-		return fmt.Errorf("the plan's Dex clients do not register %s on the platform client muster: %+v", pmSignInURI, inst.DexClients)
-	}
 	files := map[string]string{}
 	for _, f := range inst.Files {
 		files[f.Path] = f.Content
-	}
-	var dex struct {
-		OIDC struct {
-			StaticClients map[string]struct {
-				ExtraRedirectURIs []string `yaml:"extraRedirectURIs"`
-			} `yaml:"staticClients"`
-		} `yaml:"oidc"`
-	}
-	if err := yaml.Unmarshal([]byte(files[pmDexPatch]), &dex); err != nil {
-		return fmt.Errorf("the planned %s: %w", pmDexPatch, err)
-	}
-	if !slices.Contains(dex.OIDC.StaticClients[componentMuster].ExtraRedirectURIs, pmSignInURI) {
-		return fmt.Errorf("the planned %s carries no %s in oidc.staticClients.muster.extraRedirectURIs:\n%s", pmDexPatch, pmSignInURI, files[pmDexPatch])
 	}
 	var values map[string]any
 	if err := yaml.Unmarshal([]byte(files[pmValuesPatch]), &values); err != nil {
@@ -275,8 +267,6 @@ func (p pmDryRun) proofLines() []string {
 	return []string{
 		fmt.Sprintf("planned %s: %d create, %d update, %d unchanged in %d pull requests, none opened; the commit not refused (dex-app %s)",
 			inst.Name, inst.Diff["create"], inst.Diff["update"], inst.Diff["unchanged"], len(p.PullRequests), inst.Inputs.Installation.DexAppVersion),
-		"installation.workspaces.enabled: true, read from " + pmValuesPatch,
-		pmDexPatch + ": oidc.staticClients.muster.extraRedirectURIs carries " + pmSignInURI,
 		pmValuesPatch + ": workspaces.enabled: true and the workspace-manager values kept",
 	}
 }
@@ -293,6 +283,48 @@ func (c *fakeContainer) registryMisses() ([]string, error) {
 		return nil, fmt.Errorf("reading the registry's misses: %w", err)
 	}
 	return out, nil
+}
+
+// A build's two spellings: get_info answers Go's pseudo-version between tags
+// (vX.Y.Z-[pre.]0.<UTC>-<commit12>), the chart's dev version is gitsemver's
+// X.Y.Z-r<branch hash>t<UTC>h<commit7>.
+var (
+	goPseudoVersionRe = regexp.MustCompile(`^(?:.*\.)?0\.\d{14}-([0-9a-f]{12})$`)
+	chartDevVersionRe = regexp.MustCompile(`^r[0-9a-f]{8}t\d{14}h([0-9a-f]{7,})$`)
+)
+
+// pmBuild is a build's identity: a release (or release candidate) by its
+// version, a branch build by its base version and commit.
+type pmBuild struct {
+	version, commit string
+}
+
+func pmBuildOf(v string) pmBuild {
+	sv, err := semver.NewVersion(strings.TrimPrefix(strings.TrimSpace(v), "v"))
+	if err != nil {
+		return pmBuild{version: v}
+	}
+	for _, re := range []*regexp.Regexp{goPseudoVersionRe, chartDevVersionRe} {
+		if m := re.FindStringSubmatch(sv.Prerelease()); m != nil {
+			return pmBuild{version: fmt.Sprintf("%d.%d.%d", sv.Major(), sv.Minor(), sv.Patch()), commit: m[1]}
+		}
+	}
+	return pmBuild{version: sv.String()}
+}
+
+// samePMBuild says whether the manager's answered version and the installed
+// chart version name one build: the same release, or the same base version
+// and commit (the shorter hash a prefix of the longer).
+func samePMBuild(answered, installed string) bool {
+	a, b := pmBuildOf(answered), pmBuildOf(installed)
+	if a.version != b.version || (a.commit == "") != (b.commit == "") {
+		return false
+	}
+	short, long := a.commit, b.commit
+	if len(short) > len(long) {
+		short, long = long, short
+	}
+	return strings.HasPrefix(long, short)
 }
 
 // installPlatformManager applies the manager's OCIRepository and HelmRelease

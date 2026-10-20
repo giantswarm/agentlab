@@ -66,7 +66,6 @@ func TestLabFamilyMembers(t *testing.T) {
 // mcp-prometheus as the prometheus member (no name: the chart's
 // <cluster>-mcp-prometheus); the 3.x line keeps its singleton.
 func TestPlatformValuesRegisterTheFamilies(t *testing.T) {
-	t.Setenv(GitHubTokenEnv, "")
 	cfg := config.Default()
 	cfg.Platform.Observability = true
 	out, err := renderTemplate(cfg, platformValuesTemplate, nil)

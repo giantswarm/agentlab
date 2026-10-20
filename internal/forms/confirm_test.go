@@ -17,12 +17,13 @@ func TestConfirmDrive(t *testing.T) {
 		{name: "arrow moves off the default", keys: []string{"\x1b[C", "\r"}, dflt: true, want: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			testHook = newDriver(tc.keys...).attach
+			d := newDriver(tc.keys...)
+			testHook = d.attach
 			defer func() { testHook = nil }()
 
 			got, err := Confirm("Trust the lab CA now?", "one sudo prompt", "Trust it", "Not now", tc.dflt)
 			if err != nil {
-				t.Fatalf("Confirm: %v", err)
+				t.Fatalf("Confirm: %v", d.failure(err))
 			}
 			if got != tc.want {
 				t.Errorf("Confirm() = %v, want %v", got, tc.want)
@@ -43,12 +44,13 @@ func TestUseDefaultsDrive(t *testing.T) {
 		{name: "arrow then enter customizes", keys: []string{"\x1b[C", "\r"}, want: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			testHook = newDriver(tc.keys...).attach
+			d := newDriver(tc.keys...)
+			testHook = d.attach
 			defer func() { testHook = nil }()
 
 			got, err := UseDefaults(false)
 			if err != nil {
-				t.Fatalf("UseDefaults: %v", err)
+				t.Fatalf("UseDefaults: %v", d.failure(err))
 			}
 			if got != tc.want {
 				t.Errorf("UseDefaults() = %v, want %v", got, tc.want)

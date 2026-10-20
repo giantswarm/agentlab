@@ -168,6 +168,14 @@ func edge(ctx context.Context) (string, error) {
 	return strings.TrimPrefix(auth[0], "Bearer "), nil
 }
 
+// visible mirrors the controller's creator scoping of a Session: its
+// creator sees it, so does a caller presenting a share token; another
+// user's Session answers NotFound. A fixture Session without a creator is
+// everyone's.
+func visible(ctx context.Context, session *apiv1alpha1.Session, who string) bool {
+	return session.GetCreator() == "" || session.GetCreator() == who || len(metadata.ValueFromIncomingContext(ctx, "x-share-token")) != 0
+}
+
 // routed mirrors the controller's A2A gateway: the bearer, and the tenant
 // `<namespace>/<name>` naming an Agent one of the person's sessions is of.
 func (f *fakeKagent) routed(ctx context.Context, tenant string) error {
@@ -427,13 +435,14 @@ func (f *fakeKagent) CreateSession(ctx context.Context, req *apiv1alpha1.CreateS
 
 func (f *fakeKagent) GetSession(ctx context.Context, req *apiv1alpha1.GetSessionRequest) (*apiv1alpha1.GetSessionResponse, error) {
 	f.record(ctx, "GetSession")
-	if _, err := edge(ctx); err != nil {
+	who, err := edge(ctx)
+	if err != nil {
 		return nil, err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	session, ok := f.sessions[req.GetSessionId()]
-	if !ok {
+	if !ok || !visible(ctx, session, who) {
 		return nil, status.Error(codes.NotFound, "Session not found")
 	}
 	return &apiv1alpha1.GetSessionResponse{Session: session}, nil
@@ -466,13 +475,14 @@ func (f *fakeKagent) ListSessions(ctx context.Context, req *apiv1alpha1.ListSess
 
 func (f *fakeKagent) DeleteSession(ctx context.Context, req *apiv1alpha1.DeleteSessionRequest) (*apiv1alpha1.DeleteSessionResponse, error) {
 	f.record(ctx, "DeleteSession")
-	if _, err := edge(ctx); err != nil {
+	who, err := edge(ctx)
+	if err != nil {
 		return nil, err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	session, ok := f.sessions[req.GetSessionId()]
-	if !ok {
+	if !ok || !visible(ctx, session, who) {
 		return nil, status.Error(codes.NotFound, "Session not found")
 	}
 	if f.settling > 0 {
@@ -1320,5 +1330,33 @@ func TestDeleteSessionRetriesUnavailable(t *testing.T) {
 	})
 	if err != nil || calls != 2 {
 		t.Errorf("an Unavailable delete was not retried to success: %d calls, %v", calls, err)
+	}
+}
+
+func TestToolOutput(t *testing.T) {
+	const probe = "agentlab-probe file=agentlab-saffron\n"
+	for _, tc := range []struct {
+		name   string
+		result any
+		want   string
+	}{
+		{"codex command output", map[string]any{"output": probe}, probe},
+		{"omp text content", map[string]any{
+			toolResultContent: []any{map[string]any{fieldTypeKey: toolResultText, toolResultText: probe}},
+			"details":         map[string]any{"timeoutSeconds": 300},
+		}, probe},
+		{"omp text parts joined", map[string]any{toolResultContent: []any{
+			map[string]any{fieldTypeKey: toolResultText, toolResultText: "a"},
+			map[string]any{fieldTypeKey: imageKey, "data": "x"},
+			map[string]any{fieldTypeKey: toolResultText, toolResultText: "b"},
+		}}, "a\nb"},
+		{"no text part is JSON", map[string]any{toolResultContent: []any{map[string]any{fieldTypeKey: imageKey}}}, `{"content":[{"type":"image"}]}`},
+		{"anything else is JSON", map[string]any{"result": "ok"}, `{"result":"ok"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := toolOutput(tc.result); got != tc.want {
+				t.Errorf("toolOutput = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

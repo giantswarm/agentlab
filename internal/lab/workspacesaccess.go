@@ -8,8 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -26,24 +24,26 @@ import (
 //
 //   - a workspace over agentlab-oss/docs and, where the App is installed on
 //     its owner, the private agentlab-org/platform-infra, synced;
-//   - the second user, not connected to the provider: authorize_workspace
-//     answers connect_required with the provider's sign-in link, and a start
-//     on the workspace's volume without a grant is refused by kagent's
-//     admission (start_session cannot name a workspace without a grant);
-//   - connect_provider as that user: the link walked through the lab
-//     GitHub's consent and the workspace-manager's callback, list_providers
-//     showing the provider connected;
+//   - the second user, who has not granted the provider's App in muster
+//     (muster pins the workspace-manager's registration to it):
+//     authorize_workspace answers muster's sign-in link, and a start on the
+//     workspace's volume without a grant is refused by kagent's admission
+//     (start_session cannot name a workspace without a grant);
+//   - that user grants the App: muster's link walked through the lab
+//     GitHub's consent to muster's callback, list_providers showing the
+//     provider connected;
 //   - the connected second user, who cannot read the private repository:
 //     authorize_workspace refused naming it;
 //   - the admin, connected, after a push to agentlab-oss/docs: a grant
 //     naming the admin, the workspace, its volume and the repository changed
 //     since the sync; start_session with it creates the Session on the
-//     volume. The same grant used by the second user, an expired grant and a
-//     grant for another workspace are refused by kagent's admission (and the
+//     volume. The same grant used by the second user, an expired grant, a
+//     grant for another workspace, one for another namespace's Agents and one
+//     naming no Agent namespace are refused by kagent's admission (and the
 //     first two by agent-manager before kagent);
-//   - disconnect_provider as the admin: the provider's log shows the
-//     revocation, list_providers no sign-in, and authorize_workspace grants
-//     no more.
+//   - the admin drops the grant in muster (core_auth_logout): the
+//     workspace-manager's tools answer muster's sign-in link again, and
+//     authorize_workspace grants no more.
 //
 // Every refused start is followed by the evidence that nothing of it exists:
 // no new Session of the Agent in kagent for the person, none in
@@ -61,6 +61,12 @@ const (
 	// accessOtherWorkspace names the workspace of the grant for another
 	// workspace.
 	accessOtherWorkspace = "agentlab-access-other"
+	// accessOtherAgentNamespace is the namespace a re-signed grant names in
+	// place of the lab Agents' own.
+	accessOtherAgentNamespace = "agentlab-access-other"
+	// accessOtherNamespaceRefusal is kagent's refusal of a grant naming
+	// another Agent namespace or none.
+	accessOtherNamespaceRefusal = "admission grant is for another namespace"
 	// The outcomes of authorize_workspace.
 	authorizeGranted         = "granted"
 	authorizeConnectRequired = "connect_required"
@@ -72,10 +78,6 @@ const (
 	// Session: one short turn.
 	accessFirstMessage = "Reply with the single word ready."
 )
-
-// accessRevocationPath is the GitHub API's revocation of a person's token or
-// grant by the App.
-var accessRevocationPath = regexp.MustCompile(`^` + githubFakeAPIPath + `/applications/[^/]+/(grant|token)$`)
 
 // accessProof is the part's state.
 type accessProof struct {
@@ -100,7 +102,7 @@ func workspacesAccessPart(cfg *config.Config, email string, timeout time.Duratio
 	err := ap.run(cmp.Or(email, accessDefaultSecond), p)
 	ap.cleanup()
 	if err == nil {
-		fmt.Printf("\nWorkspaces access part passed: authorize_workspace answered connect_required to a person not signed in to the provider, refused naming the repository a connected person cannot read and granted the admin a grant naming the person, the workspace, its volume and the changed repository; start_session started the Session on the volume with it; every refused start left no Session in kagent or agent-manager and no Substrate actor; disconnect_provider revoked the sign-in at the provider. authorize_workspace latency: %s.\n", latencySummary(ap.latencies))
+		fmt.Printf("\nWorkspaces access part passed: authorize_workspace answered muster's sign-in link to a person who had not granted the provider's App, refused naming the repository a person who granted it cannot read and granted the admin a grant naming the person, the Agent namespace, the workspace, its volume and the changed repository; start_session started the Session on the volume with it; every refused start left no Session in kagent or agent-manager and no Substrate actor; dropping the grant in muster closed the workspace-manager to the admin again. authorize_workspace latency: %s.\n", latencySummary(ap.latencies))
 	}
 	return p.close(err)
 }
@@ -140,19 +142,19 @@ func (ap *accessProof) run(email string, p *proofStages) error {
 		return err
 	}
 
-	p.begin("access: not connected", "%s, not signed in to %s: authorize_workspace answers with the provider's sign-in link, a start on the volume without a grant is refused, and nothing of it exists", email, config.WorkspaceProviderFake)
+	p.begin("access: not connected", "%s, who has not granted %s's App in muster: authorize_workspace answers muster's sign-in link, a start on the volume without a grant is refused, and nothing of it exists", email, config.WorkspaceProviderFake)
 	if err := ap.notConnected(); err != nil {
 		return err
 	}
 
-	p.begin("access: connect", "connect_provider as %s: the link walked through the lab GitHub's consent and the workspace-manager's callback, list_providers showing %s connected", email, config.WorkspaceProviderFake)
+	p.begin("access: connect", "%s grants %s's App: muster's sign-in link walked through the lab GitHub's consent to muster's callback, list_providers showing %s connected", email, config.WorkspaceProviderFake, config.WorkspaceProviderFake)
 	hops, err := connectWorkspaceProvider(cfg, ap.second, config.WorkspaceProviderFake)
 	if err != nil {
 		return err
 	}
 	note("%s", hops)
 	note("list_providers as %s: %s connected", email, config.WorkspaceProviderFake)
-	note("the github provider's sign-in, a browser sign-in of a person's account, is not run here")
+	note("a grant of the github instance's App, a browser sign-in of a person's account, is not run here")
 
 	p.begin("access: refused", "authorize_workspace as the connected %s, who cannot read %s: refused naming it, and nothing of the attempt exists", email, syncPrivateRepo)
 	if !sp.private {
@@ -172,12 +174,12 @@ func (ap *accessProof) run(email string, p *proofStages) error {
 		return err
 	}
 
-	p.begin("access: admission", "kagent's admission refuses the same grant used by %s, an expired grant and a grant for another workspace; nothing of them exists", email)
+	p.begin("access: admission", "kagent's admission refuses the same grant used by %s, an expired grant, a grant for another workspace, one for another namespace's Agents and one naming none; nothing of them exists", email)
 	if err := ap.admissionRefusals(grant); err != nil {
 		return err
 	}
 
-	p.begin("access: disconnect", "disconnect_provider as %s: the provider's log shows the revocation, and authorize_workspace grants no more", adminUser.Email)
+	p.begin("access: disconnect", "%s drops the grant in muster (core_auth_logout): authorize_workspace answers muster's sign-in link again, and grants no more", adminUser.Email)
 	if err := ap.disconnect(); err != nil {
 		return err
 	}
@@ -194,9 +196,15 @@ func (ap *accessProof) run(email string, p *proofStages) error {
 func isNoInstallation(err error) bool { return errors.Is(err, errNoInstallation) }
 
 // preconditions signs both people in to muster and kagent, and checks the
-// Session admission's rig and the claude Agent the starts are made on.
+// workspace-manager's pin to the lab GitHub's App, the Session admission's
+// rig and the claude Agent the starts are made on.
 func (ap *accessProof) preconditions(adminUser *config.User, email string) error {
 	cfg := ap.sp.cfg
+	if pinned, err := workspaceManagerPinnedProvider(cfg); err != nil {
+		return err
+	} else if pinned != config.WorkspaceProviderFake {
+		return fmt.Errorf("the access part grants the App of the lab's GitHub, and muster pins the workspace-manager to %s's: platform.workspaces.grantProvider: %s (or empty with %s first), then `agentlab platform`", pinned, config.WorkspaceProviderFake, config.WorkspaceProviderFake)
+	}
 	secondUser := cfg.FindUser(email)
 	switch {
 	case secondUser == nil:
@@ -229,10 +237,11 @@ func (ap *accessProof) preconditions(adminUser *config.User, email string) error
 		return err
 	}
 	for _, person := range []struct {
-		user *config.User
-		api  **kagentAPI
-		set  **sessionSet
-	}{{adminUser, &ap.adminAPI, &ap.adminSessions}, {secondUser, &ap.secondAPI, &ap.secondSessions}} {
+		user   *config.User
+		person *workspacePerson
+		api    **kagentAPI
+		set    **sessionSet
+	}{{adminUser, ap.admin, &ap.adminAPI, &ap.adminSessions}, {secondUser, ap.second, &ap.secondAPI, &ap.secondSessions}} {
 		token, err := passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret, person.user.Email, person.user.Password, musterLoginScopes)
 		if err != nil {
 			return err
@@ -240,7 +249,7 @@ func (ap *accessProof) preconditions(adminUser *config.User, email string) error
 		if *person.api, err = dialKagentAPI(cfg, token); err != nil {
 			return err
 		}
-		*person.set = &sessionSet{api: *person.api}
+		*person.set = &sessionSet{api: *person.api, manager: person.person.session}
 	}
 	note("signed in to muster and kagent as %s (fixture login %s) and %s (fixture login %s)", adminUser.Email, ap.admin.login, email, ap.second.login)
 
@@ -288,38 +297,21 @@ func (ap *accessProof) authorize(p *workspacePerson) (workspaceAuthorization, er
 	return a, err
 }
 
-// notConnected proves the second user, signed in nowhere, is asked to
-// connect, and that a start on the volume without a grant is refused
-// leaving nothing behind.
+// notConnected proves the second user, who has not granted the provider's
+// App, gets muster's sign-in link from authorize_workspace, and that a start
+// on the volume without a grant is refused leaving nothing behind.
 func (ap *accessProof) notConnected() error {
 	p := ap.second
 	p.disconnect(config.WorkspaceProviderFake)
-	status, err := p.providerStatus(config.WorkspaceProviderFake)
-	if err != nil {
-		return err
-	}
-	if status.Connected {
-		return fmt.Errorf("list_providers shows %s still connected for %s after disconnect_provider", config.WorkspaceProviderFake, p.user.Email)
-	}
-	note("list_providers as %s: %s", p.user.Email, status)
 	before, err := ap.traces(p)
 	if err != nil {
 		return err
 	}
-	a, err := ap.authorize(p)
+	link, err := p.grantRequired("authorize_workspace", map[string]any{workspaceArg: accessWorkspace})
 	if err != nil {
 		return err
 	}
-	i := slices.IndexFunc(a.Connect, func(c struct {
-		Provider string `json:"provider"`
-		URL      string `json:"url"`
-	}) bool {
-		return c.Provider == config.WorkspaceProviderFake
-	})
-	if a.Outcome != authorizeConnectRequired || a.Grant != "" || i < 0 || a.Connect[i].URL == "" {
-		return fmt.Errorf("authorize_workspace as %s, not connected, answered %s (%s, connect %v, a grant: %t), want %s with %s's sign-in link and no grant", p.user.Email, a.Outcome, a.Reason, a.Connect, a.Grant != "", authorizeConnectRequired, config.WorkspaceProviderFake)
-	}
-	note("authorize_workspace: %s in %s — %q; sign-in link %s", a.Outcome, ap.latencies[len(ap.latencies)-1].Round(time.Millisecond), a.Reason, a.Connect[i].URL)
+	note("authorize_workspace as %s: muster's sign-in link %s, the manager's tools closed to them", p.user.Email, excerpt(link, 120))
 
 	reason, err := workspacesHarnessRefused(context.Background(), ap.secondAPI, workspacesHarnessVolumeSource(ap.volume), "")
 	if err != nil {
@@ -351,12 +343,13 @@ func (ap *accessProof) refusedNaming() error {
 
 // accessGrantClaims are the claims of a manager's grant the part judges.
 type accessGrantClaims struct {
-	Subject   string            `json:"sub"`
-	Expiry    int64             `json:"exp"`
-	Workspace map[string]string `json:"workspace"`
-	Volume    workspaceVolume   `json:"volume"`
-	Mounts    []workspaceMount  `json:"mounts"`
-	Changed   []string          `json:"changed"`
+	Subject        string            `json:"sub"`
+	Expiry         int64             `json:"exp"`
+	AgentNamespace string            `json:"agent_namespace"`
+	Workspace      map[string]string `json:"workspace"`
+	Volume         workspaceVolume   `json:"volume"`
+	Mounts         []workspaceMount  `json:"mounts"`
+	Changed        []string          `json:"changed"`
 }
 
 // grantPayload decodes a grant's claims without verifying it, generically
@@ -382,12 +375,15 @@ func grantPayload(grant string) (map[string]any, accessGrantClaims, error) {
 }
 
 // judgeGrant is the verdict on the admin's grant: it names the person, the
-// workspace, its volume, the workspace's mounts and exactly the changed
+// namespace of the lab's Agents, the workspace, its volume, the workspace's mounts and exactly the changed
 // repositories.
 func judgeGrant(c accessGrantClaims, person, workspace string, volume workspaceVolume, changed []string) error {
 	var problems []string
 	if c.Subject != person {
 		problems = append(problems, fmt.Sprintf("names %q, not %s", c.Subject, person))
+	}
+	if c.AgentNamespace != kagentNamespace {
+		problems = append(problems, fmt.Sprintf("names Agent namespace %q, not %s (agent_namespace, workspace-manager 0.9.0 or newer)", c.AgentNamespace, kagentNamespace))
 	}
 	if c.Workspace[nameKey] != workspace {
 		problems = append(problems, fmt.Sprintf("names workspace %q, not %s", c.Workspace[nameKey], workspace))
@@ -448,8 +444,8 @@ func (ap *accessProof) grant() (string, error) {
 		return "", fmt.Errorf("%w (pushed %s to %s after the sync)", err, shortSHA(pushed), syncMovingRepo)
 	}
 	expires := time.Unix(claims.Expiry, 0).UTC()
-	note("authorize_workspace: %s in %s — a grant of %d bytes, sub %s, workspace %s/%s, volume %s, mounts %s and %s read-only, changed %s, expires %s (repositories %s)",
-		a.Outcome, ap.latencies[len(ap.latencies)-1].Round(time.Millisecond), len(a.Grant), claims.Subject, claims.Workspace[namespaceKey], claims.Workspace[nameKey], claims.Volume.Handle,
+	note("authorize_workspace: %s in %s — a grant of %d bytes, sub %s, agent_namespace %s, workspace %s/%s, volume %s, mounts %s and %s read-only, changed %s, expires %s (repositories %s)",
+		a.Outcome, ap.latencies[len(ap.latencies)-1].Round(time.Millisecond), len(a.Grant), claims.Subject, claims.AgentNamespace, claims.Workspace[namespaceKey], claims.Workspace[nameKey], claims.Volume.Handle,
 		workspaceGrantSessionDirectory, workspaceGrantMirrors, strings.Join(claims.Changed, ", "), expires.Format(time.RFC3339), strings.Join(a.Repositories, ", "))
 	return a.Grant, nil
 }
@@ -468,7 +464,7 @@ type accessStarted struct {
 func startSession(p *workspacePerson, grant string) (*toolEnvelope, error) {
 	args := map[string]any{nameKey: workspacesHarnessAgent, namespaceKey: kagentNamespace, "message": accessFirstMessage, startSessionRequestIDArg: uuid.NewString()}
 	if grant != "" {
-		args["workspaceGrant"] = grant
+		args[startSessionGrantArg] = grant
 	}
 	return p.session.callToolEnvelope(agentManagerToolPrefix+"start_session", args)
 }
@@ -535,6 +531,14 @@ func (ap *accessProof) admissionRefusals(grant string) error {
 	if err != nil {
 		return err
 	}
+	otherNamespace, err := resign(func(c map[string]any) { c["agent_namespace"] = accessOtherAgentNamespace })
+	if err != nil {
+		return err
+	}
+	noNamespace, err := resign(func(c map[string]any) { delete(c, "agent_namespace") })
+	if err != nil {
+		return err
+	}
 	source := workspacesHarnessVolumeSource(ap.volume)
 	for _, r := range []struct {
 		what    string
@@ -542,10 +546,14 @@ func (ap *accessProof) admissionRefusals(grant string) error {
 		api     *kagentAPI
 		grant   string
 		manager bool
+		// reason is the refusal kagent must name; empty takes any.
+		reason string
 	}{
-		{fmt.Sprintf("the admin's grant used by %s", ap.second.user.Email), ap.second, ap.secondAPI, grant, true},
-		{"an expired grant (the manager's, re-signed with the lab's grant key with its expiry 5 minutes past)", ap.admin, ap.adminAPI, expired, true},
-		{fmt.Sprintf("a grant for another workspace (%s on another volume, signed with the lab's grant key) presented on %s's volume", accessOtherWorkspace, accessWorkspace), ap.admin, ap.adminAPI, other, false},
+		{fmt.Sprintf("the admin's grant used by %s", ap.second.user.Email), ap.second, ap.secondAPI, grant, true, ""},
+		{"an expired grant (the manager's, re-signed with the lab's grant key with its expiry 5 minutes past)", ap.admin, ap.adminAPI, expired, true, ""},
+		{fmt.Sprintf("a grant for another workspace (%s on another volume, signed with the lab's grant key) presented on %s's volume", accessOtherWorkspace, accessWorkspace), ap.admin, ap.adminAPI, other, false, ""},
+		{fmt.Sprintf("a grant for the Agents of namespace %s (the manager's, re-signed with the lab's grant key) presented on Agent %s/%s", accessOtherAgentNamespace, kagentNamespace, workspacesHarnessAgent), ap.admin, ap.adminAPI, otherNamespace, false, accessOtherNamespaceRefusal},
+		{"a grant without agent_namespace (the manager's, re-signed with the lab's grant key without the claim)", ap.admin, ap.adminAPI, noNamespace, false, accessOtherNamespaceRefusal},
 	} {
 		before, err := ap.traces(r.person)
 		if err != nil {
@@ -567,6 +575,9 @@ func (ap *accessProof) admissionRefusals(grant string) error {
 		if err != nil {
 			return fmt.Errorf("%s: kagent CreateSession as %s: %w", r.what, r.person.user.Email, err)
 		}
+		if !strings.Contains(reason, r.reason) {
+			return fmt.Errorf("%s: kagent CreateSession as %s refused for another reason than %q: %s", r.what, r.person.user.Email, r.reason, reason)
+		}
 		note("%s: kagent CreateSession as %s refused by the admission — %s", r.what, r.person.user.Email, reason)
 		if err := ap.nothingSince(r.person, before); err != nil {
 			return err
@@ -576,59 +587,30 @@ func (ap *accessProof) admissionRefusals(grant string) error {
 	return nil
 }
 
-// disconnect forgets the admin's sign-in and proves the provider revoked it
-// and that authorize_workspace grants no more.
+// disconnect drops the admin's grant of the provider's App in muster and
+// proves the workspace-manager's tools answer muster's sign-in link again,
+// so authorize_workspace grants no more. The person's token stays the
+// provider's to revoke: muster drops its hold on it.
 func (ap *accessProof) disconnect() error {
-	sp, p := ap.sp, ap.admin
-	mark, err := sp.mark()
-	if err != nil {
-		return err
-	}
-	env, err := p.session.callToolEnvelope(workspaceManagerToolPrefix+"disconnect_provider", map[string]any{workspaceProviderArg: config.WorkspaceProviderFake})
+	p := ap.admin
+	env, err := p.session.callToolEnvelope("core_auth_logout", map[string]any{serverKey: workspaceManagerMCPServer})
 	if err != nil {
 		return err
 	}
 	if env.IsError {
-		return fmt.Errorf("disconnect_provider as %s refused: %.300s", p.user.Email, env.Content[0].Text)
+		return fmt.Errorf("core_auth_logout %s as %s refused: %.300s", workspaceManagerMCPServer, p.user.Email, env.Content[0].Text)
 	}
-	reqs, err := sp.gh.requests()
+	note("core_auth_logout %s as %s: %.200s", workspaceManagerMCPServer, p.user.Email, env.Content[0].Text)
+	link, err := p.grantRequired("authorize_workspace", map[string]any{workspaceArg: accessWorkspace})
 	if err != nil {
 		return err
 	}
-	revocations := revocationsOf(reqs[min(mark, len(reqs)):])
-	if len(revocations) == 0 {
-		return fmt.Errorf("the lab GitHub's request log shows no revocation (DELETE %s/applications/<client>/grant or /token answered 2xx) after disconnect_provider as %s", githubFakeAPIPath, p.user.Email)
+	note("authorize_workspace as %s: muster's sign-in link %s again; a grant issued before stays valid until its expiry (a revocation after start is not checked again)", p.user.Email, excerpt(link, 120))
+	// The cleanup removes the workspace as the admin, through the manager.
+	if _, err := connectWorkspaceProvider(ap.sp.cfg, p, config.WorkspaceProviderFake); err != nil {
+		return fmt.Errorf("granting the App again for the cleanup: %w", err)
 	}
-	note("the provider's log: %s", strings.Join(revocations, "; "))
-	status, err := p.providerStatus(config.WorkspaceProviderFake)
-	if err != nil {
-		return err
-	}
-	if status.Connected {
-		return fmt.Errorf("list_providers shows %s still connected for %s after disconnect_provider", config.WorkspaceProviderFake, p.user.Email)
-	}
-	note("list_providers as %s: %s", p.user.Email, status)
-	a, err := ap.authorize(p)
-	if err != nil {
-		return err
-	}
-	if a.Outcome != authorizeConnectRequired || a.Grant != "" {
-		return fmt.Errorf("authorize_workspace as %s after disconnect_provider answered %s (%q, a grant: %t), want %s", p.user.Email, a.Outcome, a.Reason, a.Grant != "", authorizeConnectRequired)
-	}
-	note("authorize_workspace: %s in %s — %q; a grant issued before stays valid until its expiry (a revocation after start is not checked again)", a.Outcome, ap.latencies[len(ap.latencies)-1].Round(time.Millisecond), a.Reason)
 	return nil
-}
-
-// revocationsOf words the request log's revocations: each DELETE of a token
-// or grant by the App that the provider accepted.
-func revocationsOf(reqs []githubRequest) []string {
-	var out []string
-	for _, r := range reqs {
-		if r.Method == http.MethodDelete && accessRevocationPath.MatchString(r.Path) && r.Status/100 == 2 {
-			out = append(out, fmt.Sprintf("%s %s %s %d", r.Time.UTC().Format(time.RFC3339), r.Method, r.Path, r.Status))
-		}
-	}
-	return out
 }
 
 // accessTraces is what a start leaves: the Agent's Sessions in kagent for the
@@ -740,18 +722,13 @@ echo "sessions: $(ls -A /workspace/` + workspacesTestSessions + ` 2>/dev/null | 
 `
 
 // cleanupNow removes what the part created and returns the first failure:
-// the Sessions, both people's sign-ins, the Agent, the session directories,
-// the workspace and the moving repository's head.
+// the Sessions, the Agent, the session directories, the workspace, the
+// moving repository's head and, last, both people's grants.
 func (ap *accessProof) cleanupNow() error {
 	var errs []error
 	for _, s := range []*sessionSet{ap.adminSessions, ap.secondSessions} {
 		if s != nil {
 			errs = append(errs, s.removeAllNow())
-		}
-	}
-	for _, p := range []*workspacePerson{ap.admin, ap.second} {
-		if p != nil {
-			p.disconnect(config.WorkspaceProviderFake)
 		}
 	}
 	if agentExists(workspacesHarnessAgent) {
@@ -769,6 +746,11 @@ func (ap *accessProof) cleanupNow() error {
 		}
 	}
 	errs = append(errs, ap.sp.restore())
+	for _, p := range []*workspacePerson{ap.admin, ap.second} {
+		if p != nil {
+			p.disconnect(config.WorkspaceProviderFake)
+		}
+	}
 	for _, api := range []*kagentAPI{ap.adminAPI, ap.secondAPI} {
 		if api != nil {
 			api.close()

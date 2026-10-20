@@ -16,7 +16,7 @@ The fixture is opt-in:
 platform:
   platformManager:
     enabled: true
-    version: 0.69.0   # optional: a release or release candidate of the chart and image; empty is the pinned default
+    version: 0.69.0   # optional: a release, a release candidate or a branch's dev build of the chart and image; empty is the pinned default
 ```
 
 Nothing runs until `agentlab pm-test`; the test refuses while the key is off.
@@ -57,17 +57,24 @@ recorded at `/_fake/misses`.
    client — the shape of the manager's own lab values — and waits for the
    MCPServer `giantswarm-platform-manager`;
 3. signs the person in to it through muster (`core_auth_login`, the Dex form);
-4. asserts `get_info` names the installed version;
+4. asserts `get_info` names the installed build: the same release, or for a
+   branch's dev build (`0.76.1-r525fad92t20261015091950h358a409`) the Go
+   pseudo-version of the same base version and commit
+   (`v0.76.1-rc.6.0.20261015091950-358a409b65de`);
 5. runs `reconcile_capability` for `agent-platform` on `ember` as a dry run
-   and asserts the workspaces case: `installation.workspaces.enabled` read
-   from the record, `https://workspace-manager.ember.agentlab.test/signin` on
-   the Dex client `muster` in the planned dex-app patch
-   (`oidc.staticClients.muster.extraRedirectURIs`) and in the plan's Dex
-   clients, the `workspaces` and `workspace-manager` values kept in the
-   planned agent-platform patch, no commit refusal, and no write reaching the
+   and asserts the workspaces case: the `workspaces` and `workspace-manager`
+   values on record kept in the planned agent-platform patch (the person's provider sign-in is
+   muster's grant, so the proof asks nothing of the workspace-manager of
+   Dex), no commit refusal, and no write reaching the
    registry;
 6. removes the release, the Service and the container.
 
 A manager change for the workspaces case is proven by pointing
-`platform.platformManager.version` at its release candidate and running
-`agentlab pm-test`.
+`platform.platformManager.version` at its release candidate, or at its
+branch's dev build, and running `agentlab pm-test`.
+
+The unit tests read a recorded dry run,
+`internal/lab/testdata/platform-manager/dry-run.json`, which asks Dex for no
+workspace-manager `/signin` redirect URI. A manager release that changes the
+plan is recorded again with
+`agentlab pm-test --record internal/lab/testdata/platform-manager/dry-run.json`.

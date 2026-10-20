@@ -131,7 +131,14 @@ type tmplData struct {
 	// workspace-manager trusts the lab CA its leaf is from.
 	// WorkspaceFakeBearer says it serves the instance fake-bearer too:
 	// CoreDNS sends that instance's git and API hosts to the same Service.
-	WorkspaceProviders  []workspaceProviderValues
+	WorkspaceProviders []workspaceProviderValues
+	// WorkspaceGrant is the provider App muster pins the workspace-manager's
+	// registration to (workspacemustergrant.go), nil for none.
+	WorkspaceGrant *workspaceGrantValues
+	// WorkspaceReleasable is the instance muster's credential provider
+	// releases while no instance renders (workspaceReleasableFor), nil with
+	// workspaces off.
+	WorkspaceReleasable *workspaceGrantValues
 	WorkspaceFake       bool
 	WorkspaceFakeBearer bool
 	// WorkspaceAdmission is the rig a Session on a workspace volume is
@@ -140,6 +147,15 @@ type tmplData struct {
 	// unless the workspaces and the agents are on and the chart takes the
 	// workspaces values.
 	WorkspaceAdmission *workspaceAdmissionValues
+	// TenantsEnabled mirrors cfg.TenantsEnabled(): the chart's
+	// tenants.organizations.enabled, and the credential provider's policies
+	// for TenantsTestNamespaces, tenants-test's two organization namespaces
+	// (tenantstest.go).
+	TenantsEnabled        bool
+	TenantsTestNamespaces []string
+	// TenantsMusterVersion is the muster the lab pins with the tenants on
+	// (tenantsMusterVersion, tenantstest_muster.go).
+	TenantsMusterVersion string
 	// CodingHarnesses are the lab's coding Harnesses (coding.go), rendered
 	// as kagent.harnesses; none with coding agents and the workspaces off.
 	CodingHarnesses []codingHarness
@@ -150,7 +166,7 @@ type tmplData struct {
 	// component's entry, its trailing range renders the rest
 	// (ExtraPostRenderers); MCPPrometheusPostRenderers the same for the
 	// lab's own mcp-prometheus HelmRelease. MCPPrometheusChartVersion pins
-	// that release's chart (observability.go).
+	// that release's chart (mcpPrometheusChartFor).
 	PostRenderers              map[string]string
 	MCPPrometheusPostRenderers string
 	MCPPrometheusChartVersion  string
@@ -189,8 +205,8 @@ type tmplData struct {
 	// nodes, the values pin atelet and the WorkerPool to them.
 	SubstrateNodeKey string
 	// GitHubToken mirrors gitHubTokenWired(cfg): githubToken.source is
-	// recorded or $GITHUB_TOKEN is set on the host (githubtoken.go), so the
-	// values name the Secret the lab places it in — the portal's
+	// recorded (githubtoken.go), so the values name the Secret the lab
+	// places it in — the portal's
 	// extraEnvVarsSecrets and the overlay's integrations.github,
 	// agent-manager's skills.github.tokenSecret, the migrate Job's
 	// githubToken. Only ever the Secret's name, never the token.
@@ -258,11 +274,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 	if err != nil {
 		return nil, err
 	}
-	var mcpPrometheusRenderers []postRenderer
-	if dexLocalhostBridged(cfg) {
-		mcpPrometheusRenderers = []postRenderer{sidecarPostRenderer(mcpPrometheusRelease, cfg.DexPort)}
-	}
-	mcpPrometheus, err := yaml.Marshal(mcpPrometheusRenderers)
+	mcpPrometheus, err := yaml.Marshal(mcpPrometheusPostRenderers(cfg, defaultDevImageNames(cfg)))
 	if err != nil {
 		return nil, err
 	}
@@ -282,13 +294,17 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 	if err != nil {
 		return nil, err
 	}
+	workspaceReleasable, err := workspaceReleasableFor(cfg)
+	if err != nil {
+		return nil, err
+	}
 	workspacesChart := workspacesChartFor(cfg)
 	return &tmplData{
 		Config:                       cfg,
 		LabCA:                        labCA,
 		PostRenderers:                postRenderers,
 		MCPPrometheusPostRenderers:   strings.TrimRight(string(mcpPrometheus), "\n"),
-		MCPPrometheusChartVersion:    mcpPrometheusChartVersion,
+		MCPPrometheusChartVersion:    mcpPrometheusChartFor(cfg),
 		LocalRegistryEndpoint:        devRegistryEndpoint(cfg),
 		ConnectivityChart:            connectivity,
 		AteletImageCacheArgs:         ateletImageCacheArgs,
@@ -322,10 +338,15 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		WorkspacesOrganizationsChart: workspacesChart.Organizations,
 		Workspaces:                   workspacesValuesFor(cfg),
 		WorkspaceProviders:           workspaceProviders,
+		WorkspaceGrant:               workspaceGrantFor(cfg, workspaceProviders),
+		WorkspaceReleasable:          workspaceReleasable,
 		WorkspaceFake:                cfg.WorkspaceFakeProvider(),
 		WorkspaceFakeBearer:          cfg.WorkspaceFakeBearerProvider(),
 		WorkspaceAdmission:           workspaceAdmissionValuesFor(cfg, workspacesChart.Carries),
-		CodingHarnesses:              codingHarnessesFor(cfg, workspaceAdmissionValuesFor(cfg, workspacesChart.Carries)),
+		TenantsEnabled:               cfg.TenantsEnabled(),
+		TenantsTestNamespaces:        tenantsTestNamespaces[:],
+		TenantsMusterVersion:         tenantsMusterVersion,
+		CodingHarnesses:              codingHarnessesFor(cfg, workspaceAdmissionValuesFor(cfg, workspacesChart.Carries), nil),
 		CertsDir:                     certsDir,
 		NodeFilesDir:                 nodeFiles,
 		MusterNodePort:               config.MusterNodePort,

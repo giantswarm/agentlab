@@ -62,6 +62,14 @@ func TestExtraModelValidate(t *testing.T) {
 		{"unknown reasoning effort", func(m ExtraModel) ExtraModel { m.ReasoningEffort = "maximal"; return m }, "unknown reasoningEffort"},
 		{"ollama think off", func(m ExtraModel) ExtraModel { m = ollama(m); m.Think = new(false); return m }, ""},
 		{"think on openai", func(m ExtraModel) ExtraModel { m.Think = new(false); return m }, "Ollama provider only"},
+		{"openai api format responses", func(m ExtraModel) ExtraModel { m.APIFormat = "responses"; return m }, ""},
+		{"openai api format chat completions", func(m ExtraModel) ExtraModel { m.APIFormat = "chatCompletions"; return m }, ""},
+		{"unknown api format", func(m ExtraModel) ExtraModel { m.APIFormat = "Responses"; return m }, "unknown apiFormat"},
+		{"api format on anthropic", func(m ExtraModel) ExtraModel {
+			m.Provider = ProviderAnthropic
+			m.APIFormat = "responses"
+			return m
+		}, "OpenAI provider only"},
 		{"reasoning effort on ollama", func(m ExtraModel) ExtraModel { m = ollama(m); m.ReasoningEffort = "none"; return m }, "OpenAI provider only"},
 	}
 	for _, tc := range cases {

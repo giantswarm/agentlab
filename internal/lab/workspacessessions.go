@@ -38,8 +38,9 @@ import (
 //     every clone at <owner>/<repository>, the pushed repository at its new
 //     head, and writes a file only it knows; the lab GitHub's request log
 //     shows exactly one fetch of the pushed repository per Session and none
-//     of the others; the volume holds one directory per Session, each set up
-//     once (.kagent/workspace.json, the setup's own record);
+//     of the others, plus the mirror's one when a grant requested a sync (the
+//     manager's refreshAfter shorter than the time since the sync); the
+//     volume holds one directory per Session, each set up once (.kagent/workspace.json, the setup's own record);
 //   - isolation: a second turn on each Session finds only its own file
 //     anywhere it can look, and a write into the mirrors refused; on the
 //     volume each file is in its own Session's directory alone;
@@ -109,8 +110,10 @@ const (
 	conditionSessionsCleanedUp = "SessionsCleanedUp"
 	// workspaceStateFile is the setup's record in a session directory.
 	workspaceStateFile = ".kagent/workspace.json"
-	// startSessionRequestIDArg is start_session's idempotency key.
+	// startSessionRequestIDArg is start_session's idempotency key,
+	// startSessionGrantArg its workspace grant.
 	startSessionRequestIDArg = "requestId"
+	startSessionGrantArg     = "workspaceGrant"
 	// The probes' words: a write refused, a directory absent, a mirror's
 	// head.
 	probeRefused = "refused"
@@ -159,7 +162,10 @@ type sessionRun struct {
 	// Notices are the first turn's status messages: the setup's word on
 	// what it could not clone or fetch.
 	Notices []string `json:"notices,omitempty"`
-	err     error
+	// SyncRequested says the Session's grant requested a sync of the
+	// workspace.
+	SyncRequested bool `json:"syncRequested,omitempty"`
+	err           error
 }
 
 // sessionsReport is the part's report file.
@@ -241,6 +247,10 @@ func (sp *sessionsProof) run(p *proofStages) error {
 	if err != nil {
 		return err
 	}
+	synced, err := s.get(syncFilterWorkspace)
+	if err != nil {
+		return err
+	}
 
 	p.begin("sessions: start", "%d Sessions started at once through start_session with the admin's grant, alternating the claude and the kagent Harness, each first turn listing its directory and every clone's head", sp.sessions)
 	if err := sp.startAll(); err != nil {
@@ -248,7 +258,7 @@ func (sp *sessionsProof) run(p *proofStages) error {
 	}
 
 	p.begin("sessions: directories", "One directory per Session on the volume, %s fetched once per Session and nothing else", syncMovingRepo)
-	if err := sp.directories(mark); err != nil {
+	if err := sp.directories(mark, synced.Workspace.LastSync); err != nil {
 		return err
 	}
 
@@ -326,7 +336,7 @@ func (sp *sessionsProof) preconditions(adminUser *config.User) error {
 	if sp.api, err = dialKagentAPI(cfg, sp.token); err != nil {
 		return err
 	}
-	sp.set = &sessionSet{api: sp.api}
+	sp.set = &sessionSet{api: sp.api, manager: sp.admin.session}
 	for _, h := range sessionsHarnesses {
 		if err := waitHarnessReady(ctx, h.harness, sp.timeout); err != nil {
 			return err
@@ -374,7 +384,7 @@ func (sp *sessionsProof) createWorkspace() error {
 		s.private, s.tokens[syncOrg] = true, token
 	}
 	var created syncWorkspace
-	if err := s.member.callServerStructured(workspaceManagerToolPrefix+"create_workspace", map[string]any{
+	if err := s.member.createLabWorkspace(map[string]any{
 		nameKey: syncFilterWorkspace, wmOrganizationArg: config.WorkspaceOrganization, wmSourcesArg: syncFilterSources(s.private),
 	}, &created); err != nil {
 		return err
@@ -472,9 +482,10 @@ func (sp *sessionsProof) startOne(r *sessionRun) error {
 	if err != nil {
 		return err
 	}
+	r.SyncRequested = a.SyncRequested
 	r.StartCalled = time.Now()
 	env, err := session.callToolEnvelope(agentManagerToolPrefix+"start_session", map[string]any{
-		nameKey: r.Agent, namespaceKey: kagentNamespace, startSessionRequestIDArg: uuid.NewString(), "workspaceGrant": a.Grant,
+		nameKey: r.Agent, namespaceKey: kagentNamespace, startSessionRequestIDArg: uuid.NewString(), startSessionGrantArg: a.Grant,
 	})
 	r.StartAnswered = time.Now()
 	if err != nil {
@@ -710,10 +721,14 @@ func countFetches(reqs []githubRequest) map[string]int {
 }
 
 // judgeFetches is the verdict on the fetches of n Sessions: exactly n of
-// moved, none of any other repository.
-func judgeFetches(fetches map[string]int, moved string, n int) error {
+// moved, plus the mirror's one when a grant requested a sync, none of any
+// other repository.
+func judgeFetches(fetches map[string]int, moved string, n int, syncRequested bool) error {
 	var problems []string
-	if fetches[moved] != n {
+	switch {
+	case syncRequested && fetches[moved] != n+1:
+		problems = append(problems, fmt.Sprintf("%s fetched %d times, want once per Session (%d) and once by the sync a grant requested", moved, fetches[moved], n))
+	case !syncRequested && fetches[moved] != n:
 		problems = append(problems, fmt.Sprintf("%s fetched %d times, want once per Session (%d)", moved, fetches[moved], n))
 	}
 	for _, repo := range slices.Sorted(maps.Keys(fetches)) {
@@ -788,8 +803,10 @@ func parseSessionDirectories(out string) (map[string]sessionDirectory, error) {
 
 // directories reads the volume and the request log: one directory per
 // Session, set up once with every clone, the moved repository fetched once
-// per Session and nothing else.
-func (sp *sessionsProof) directories(mark int) error {
+// per Session and, when a grant requested a sync (the workspace synced longer
+// than refreshAfter ago), once into the mirror by that sync, which ends after
+// synced; nothing else.
+func (sp *sessionsProof) directories(mark int, synced *syncLastSync) error {
 	out, err := sp.sp.onVolume(syncFilterWorkspace, "sessions-dirs", sessionsDirectoriesScript)
 	if err != nil {
 		return err
@@ -821,12 +838,20 @@ func (sp *sessionsProof) directories(mark int) error {
 	if len(dirs) != len(runs) {
 		problems = append(problems, fmt.Sprintf("the volume holds %d session directories, want %d", len(dirs), len(runs)))
 	}
+	syncRequested := slices.ContainsFunc(runs, func(r *sessionRun) bool { return r.SyncRequested })
+	if syncRequested {
+		d, err := sp.sp.waitCycle(syncFilterWorkspace, synced)
+		if err != nil {
+			return err
+		}
+		note("a grant requested a sync (refreshAfter is shorter than the time since the sync): cycle %s, trigger %s, %s", d.Workspace.LastSync.Job, d.Workspace.LastSync.Trigger, d.Workspace.LastSync.Message)
+	}
 	reqs, err := sp.sp.gh.requests()
 	if err != nil {
 		return err
 	}
 	sp.report.Fetches = countFetches(reqs[min(mark, len(reqs)):])
-	if err := judgeFetches(sp.report.Fetches, syncMovingRepo, len(runs)); err != nil {
+	if err := judgeFetches(sp.report.Fetches, syncMovingRepo, len(runs), syncRequested); err != nil {
 		problems = append(problems, err.Error())
 	}
 	for _, r := range runs {
@@ -939,7 +964,7 @@ func (sp *sessionsProof) deleteOne() error {
 	if err != nil {
 		return err
 	}
-	if prev, _, err = sp.sp.sync(syncFilterWorkspace, prev, true); err != nil {
+	if prev, _, err = sp.sp.sync(syncFilterWorkspace, prev); err != nil {
 		return err
 	}
 	before, err := sp.sp.onVolume(syncFilterWorkspace, "sessions-mirrors-before", syncMirrorsScript(repos))
@@ -948,7 +973,7 @@ func (sp *sessionsProof) deleteOne() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), sp.timeout)
 	defer cancel()
-	if err := sp.api.deleteSession(ctx, victim.ID); err != nil {
+	if err := sp.set.deleteOne(ctx, victim.ID); err != nil {
 		return err
 	}
 	deletedAt := time.Now()
@@ -968,7 +993,7 @@ func (sp *sessionsProof) deleteOne() error {
 			return err
 		}
 	} else {
-		if after, _, err = sp.sp.sync(syncFilterWorkspace, prev, false); err != nil {
+		if after, _, err = sp.sp.sync(syncFilterWorkspace, prev); err != nil {
 			return err
 		}
 		if out, err = sp.sp.onVolume(syncFilterWorkspace, "sessions-after-delete", sessionsDirectoriesScript); err != nil {
@@ -998,7 +1023,7 @@ func (sp *sessionsProof) deleteOne() error {
 	}
 	sp.set.ids = slices.DeleteFunc(sp.set.ids, func(id string) bool { return id == victim.ID })
 	victim.Deleted = true
-	note("deleted %s (%s): its directory gone %s after DeleteSession, with the cycle %s (trigger %s); the %d other directories and the mirrors' heads untouched, the workspace on volume %s",
+	note("deleted %s (%s): its directory gone %s after delete_session, with the cycle %s (trigger %s); the %d other directories and the mirrors' heads untouched, the workspace on volume %s",
 		victim.ID, victim.Harness, time.Since(deletedAt).Round(time.Second), after.Workspace.LastSync.Result, after.Workspace.LastSync.Trigger, len(dirs), sp.volume.Handle)
 	return nil
 }
@@ -1010,7 +1035,7 @@ func (sp *sessionsProof) awaitDeleted(id string, dirs map[string]sessionDirector
 	var err error
 	for _, ok := dirs[id]; ok; _, ok = dirs[id] {
 		if time.Since(deletedAt) > sessionsDeleteWait {
-			return nil, nil, fmt.Errorf("the directory of the deleted Session %s is still on the volume %s after DeleteSession with no cycle requested; the workspace-manager lists kagent's Sessions every %s", id, sessionsDeleteWait, sp.poll)
+			return nil, nil, fmt.Errorf("the directory of the deleted Session %s is still on the volume %s after delete_session with no cycle requested; the workspace-manager lists kagent's Sessions every %s", id, sessionsDeleteWait, sp.poll)
 		}
 		time.Sleep(5 * time.Second)
 		out, err := sp.sp.onVolume(syncFilterWorkspace, "sessions-after-delete", sessionsDirectoriesScript)
@@ -1035,7 +1060,7 @@ func (sp *sessionsProof) awaitDeleted(id string, dirs map[string]sessionDirector
 		}
 		time.Sleep(5 * time.Second)
 	}
-	note("the directory %s gone %s after DeleteSession with no cycle requested", id, gone.Round(time.Second))
+	note("the directory %s gone %s after delete_session with no cycle requested", id, gone.Round(time.Second))
 	return after, dirs, nil
 }
 
@@ -1127,7 +1152,7 @@ func (sp *sessionsProof) cleanupCycle() error {
 	if err != nil {
 		return err
 	}
-	after, _, err := sp.sp.sync(syncFilterWorkspace, prev, false)
+	after, _, err := sp.sp.sync(syncFilterWorkspace, prev)
 	if err != nil {
 		return err
 	}

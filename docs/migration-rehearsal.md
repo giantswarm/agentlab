@@ -51,16 +51,16 @@ The recipe needs **agentlab v0.39.1 or newer** — the release that renders the
 3.x lab shape for a `chartVersion` below 4.0.0 (`config.LegacyChart`; see
 [The agent platform](platform.md)) — and, for `contract.sh`, the release that
 carries `agentlab turn` (the one this page ships with). A mikefarah `yq` v4,
-`kubectl`, `helm`, `jq` and `kind` on the machine; the Anthropic key is read
-from the Secret `kagent/kagent-anthropic` of the running lab unless
-`ANTHROPIC_API_KEY` is set, and never printed. The migrate Job resolves every
-seeded skill through GitHub: with `GITHUB_TOKEN` exported when `upgrade.sh`
-runs `agentlab platform`, the Job (and agent-manager) call GitHub
-authenticated through the Secret the lab creates (see
-[The GitHub token](agents.md#the-github-token)); either way `upgrade.sh` and
-`contract.sh` print the GitHub API window before the Job runs and wait once
-for its reset when it is exhausted (`lib.sh github_window`; the token is never
-logged).
+`kubectl`, `helm`, `jq` and `kind` on the machine. The Anthropic key reaches
+the lab the way `agentlab platform` places it: from the `aiKey.source` that
+`agentlab.yaml` records, else from `ANTHROPIC_API_KEY` in the environment
+(never printed); the scripts never read a Secret's value and stop when neither
+is there. The migrate Job resolves every seeded skill through GitHub, as the
+skills GitHub App or with `githubToken.source` (see
+[The GitHub token](agents.md#the-github-token)); `upgrade.sh` and
+`contract.sh` print this machine's anonymous GitHub API window before the Job
+runs and wait once for its reset when it is exhausted (`lib.sh
+github_window`, which holds no GitHub credential).
 
 ```sh
 cd <lab dir>                      # agentlab.yaml, state/, certs/

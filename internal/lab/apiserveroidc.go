@@ -24,6 +24,19 @@ import (
 // apiserver's last fetch. ensureApiserverAcceptsDex tells that window from
 // any other refusal and waits it out.
 
+// apiserverAcceptsDex is the apiserver OIDC stage: every proof that presents
+// a Dex token to the apiserver, to muster or to the Dev Portal runs it before
+// its first one (platform-test, test, backstage-test, agents-test). A seam for
+// the proofs' tests.
+var apiserverAcceptsDex = ensureApiserverAcceptsDex
+
+// checkApiserverOIDC runs the apiserver OIDC stage as a step of a proof
+// without proofStages.
+func checkApiserverOIDC(cfg *config.Config) error {
+	step("%s: checking the apiserver accepts a fresh Dex token", stageApiserverOIDC)
+	return apiserverAcceptsDex(context.Background(), cfg)
+}
+
 // apiserverJWKSWindow bounds the wait: Dex's max-age plus a margin for the
 // first token after the expiry to make the fetch.
 const apiserverJWKSWindow = 10*time.Minute + 30*time.Second

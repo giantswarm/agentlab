@@ -56,14 +56,21 @@ with Dex doing the logins.
   `management_cluster: <clusterName>-mcp-prometheus`
   (e.g. `x_prometheus_execute_query`) — the way
   to answer CPU/memory questions about the lab. Chart pins are Go consts in
-  `internal/lab/observability.go`; the bundle itself is deliberately NOT
+  `internal/lab/observability.go` (`platform.mcpPrometheusChartVersion`
+  overrides mcp-prometheus's, for a candidate whose chart changed); the bundle itself is deliberately NOT
   installed (MC-shaped: Flux HelmReleases, Alloy -> Mimir, no local PromQL).
   Backstage's Clusters/Deployments metrics work too: the lab serves the
   Mimir-shaped endpoint (`observability.<domain>/prometheus` on the edge →
   the lab Prometheus) and overrides the chart's `mimirEnabled: false` in
   its app-config overlay (backstage-catalog.yaml.tmpl). mcp-prometheus is a
   lab-rendered Flux HelmRelease through the platform's bundled engine
-  (mcp-prometheus.yaml.tmpl), not a helm install of its own.
+  (mcp-prometheus.yaml.tmpl), not a helm install of its own; its
+  `platform.devImages.mcp-prometheus` swap rides that release's
+  postRenderers. `platform.alertmanager` (off by default) adds the
+  Alertmanager, an always-firing `AgentlabWatchdog` and `ALERTMANAGER_URL`,
+  for the alert tools (docs/observability.md "Alertmanager"). Off, `platform`
+  removes what an earlier run installed (`observabilityDown`; the operator
+  CRDs stay) and `status` names a leftover on its `prometheus` line.
 - The agents runtime (kagent) installs with the platform by default but is
   optional (`platform.agents` in `agentlab.yaml`). Agents are Flux
   HelmReleases of the Generic agent chart (1.x) on every installation:
@@ -89,7 +96,8 @@ with Dex doing the logins.
 - `agentlab configure` **discovers this machine on every run** (fresh or
   existing `agentlab.yaml`): the tools `up` shells out to, whether this
   configuration's kind node exists and which host ports it publishes (never
-  conflicts; while no node exists, occupied ports move to free ones), the
+  conflicts; while no node exists, occupied ports and those another
+  registered lab records, running or stopped, move to free ones), the
   host model servers — an Ollama on 11434, a Lemonade Server on 13305, an
   LM Studio on 1234 (0.4.0+) — with their downloaded tool-calling models,
   each recognised by the SHAPE of its answer and never by a status code
@@ -211,21 +219,26 @@ go test ./internal/forms/ -run TestMinimalFormDrive -count=1 -v   # single test
                            # on a terminal it ends by offering `trust` and the portal (--trust/--open pre-answer)
 ./agentlab open portal     # the portal (Backstage) in the browser; `open agents` the kagent UI, `open prometheus` the lab Prometheus
 ./agentlab list            # the labs on this machine: state, components, URLs, CA trust
-./agentlab status          # the lab's live state: the chart in place (a dev chart named as such) vs agentlab.yaml's, the platform HelmReleases
+./agentlab status          # the lab's live state: the chart in place (a dev chart named as such) vs agentlab.yaml's, every platform.valuesFiles overlay with what it pins, the platform HelmReleases
+./agentlab configure --released  # the restore step before handing a lab on: drops overlays, dev images, chart directory, dev channel
 ./agentlab pods            # the lab's pods (kubectl get pods -A, without kubectl); -n <namespace>
 ./agentlab platform-test   # headless Dex -> muster -> mcp-kubernetes proof
 ./agentlab models-test     # managed models: 401 -> pull -> ModelConfig -> dry runs, gitops_owned, commit on a fake GitHub -> agent turn -> MCP -> unload -> delete (on lmstudio: the 501 refusal -> unwire, U23)
 ./agentlab serving-test    # platform.serving: llm-d controller + models Gateway up -> 401 -> the lab preset fits the node -> load -> Ready on the CPU runtime -> ModelConfig -> a completion through the models Gateway -> agent turn -> unload
-./agentlab pm-test         # platform.platformManager: the released platform manager plans the lab's workspaces-on installation fixture (dry run: the Dex /signin redirect URI, the kept workspace-manager values)
+./agentlab pm-test         # platform.platformManager: the released platform manager plans the lab's workspaces-on installation fixture (dry run: the kept workspace-manager values)
 ./agentlab vm-manager-test # the vm-manager pod as the person: 401 anonymous -> tools via muster -> create_vm -> ready -> attestation -> delete_vm
 ./agentlab klaus-gateway-test # Swarmgeist on the host against the edge, and with platform.klausGateway the in-cluster component: the OBO link store in a Secret across a pod loss
 ./agentlab decisions-test  # klaus-gateway's POST /decisions as a ServiceAccount: answered by click, modal and thread reply, each a muster tool call as the user; a refusal, a close as defaulted
 ./agentlab beekeeper-decisions-test  # beekeeper serve behind muster puts decisions to people through klaus-gateway: a click (another user's refused), a thread reply, a default at the due time, a withdrawal; the guide conversing with its person in a direct message
 ./agentlab test            # RBAC assertions for every configured user
-./agentlab backstage-test  # headless Backstage sign-in for every user, the portal's Agent Platform and Models pages
-./agentlab coding-test     # platform.coding: the coding Harness from the values, agent-manager's guards, a coding agent's sandbox floor (uid split, forwarder paths, a write tool refused, no credentials, DNS canary, egress), the instruction fixture, suspend/resume, the turn's usage, a share refused
+./agentlab backstage-test  # headless Backstage sign-in for every user, the portal's Agent Platform and Models pages (--agent kagent/<name>: on an existing agent, no create or delete)
+./agentlab tenants-test    # platform.tenants: two organization namespaces, an editor in each: the reconciler's copies with the first agent, the other organization refused, a turn on the namespace's own credentials, the edge's RBAC authorizer and klaus-gateway as two tenant users bound by group (own roster, the other organization refused), muster's MCP servers per tenant (listed as the person, another organization's answered as missing, a tenant sign-in kept in its namespace), the Dev Portal's routes as each person (roster per tenant, the create flow's tenants, the access reviews behind Edit and Delete, a refused session start, the creator), the workers held against a cluster-admin, the copies gone with the last agent
+./agentlab coding-test     # platform.coding: the coding Harness from the values, agent-manager's guards, a coding agent's sandbox floor (uid split, forwarder paths, a write tool refused, no credentials, DNS canary, egress), a workspace Session's MCP call audited by muster as the person, nothing in the sandbox running between turns, the instruction fixture, suspend/resume, the turn's usage, a share refused, no muster call of the actor accepted after delete_session
+./agentlab egress-test     # an agent with one declared origin, probed from its actor and judged from the egress gateway's record, never the reply: the origin forwarded, an undeclared host 403 (actor egress policy denied), muster forwarded without an entry, raw TCP to github.com:22 held at the gate
 ./agentlab skills-test     # kagent API v2: an AgentTemplate with a git-pinned skill boots (the golden boot) and answers from the skill
 ./agentlab substrate-step-test --to <release>  # a suspended conversation and its /data file survive the step to a newer Substrate; a new one starts from a golden in the layout it writes (taken again on a layout change, kept otherwise)
+./agentlab kagent-step-test --to <kagent> | --chart <agent-platform>  # a suspended conversation resumes, takes a turn, suspends and deletes across a kagent step (a kagent pin, a platform candidate — chart-only included — or both)
+./agentlab substrate-tunnel-test  # a gRPC call through atenet-router to an HTTP/1.1-only actor fails at once, not with its client's timeout (--substrate <release> pins one for the run)
 ./agentlab down            # delete the cluster (certs/ kept, trust stores untouched)
 ./agentlab trust           # install the lab CA into the system + NSS trust stores (sudo)
 ./agentlab untrust         # remove exactly the lab CA from those stores
@@ -346,6 +359,13 @@ Load-bearing invariants (details in docs/):
   apiserver resolves it through its own hosts file, pods through a CoreDNS
   rewrite to the `dex-issuer` Service (no sidecar) — docs/tls.md "Bring your
   own certificate".
+- **muster runs on the host network at one replica** by default, the issuer
+  reached as the host does. `platform.musterPodNetwork` (`configure
+  --muster-pod-network`) is the installation's shape instead: two replicas
+  on the pod network behind a PodDisruptionBudget of minAvailable 1, the
+  issuer bridged by the `dex-localhost` sidecar, proven by `platform-test`'s
+  `muster replicas` stage (one pod deleted mid-session) — docs/platform.md
+  "muster on the pod network".
 - **The lab shape of the agent-platform chart**: the bundled Flux engine ON
   (`components.flux.enabled: true` — the lab has no Flux of its own, and the
   chart refuses a second one) and self-management OFF (`gitops.self.enabled:

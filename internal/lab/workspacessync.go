@@ -48,17 +48,18 @@ import (
 //   - update_workspace re-resolving the list workspace; delete_workspace,
 //     after which the volume goes, no session directory being left.
 //
-// The workspace-manager answers an owner's listing from its cache for a
-// minute (its provider.ListingFreshness): each cycle that must see a change
-// at the provider is requested once that minute has passed since the last
-// listing. Everything the part creates is removed on every path, and the
+// A requested cycle (sync_workspace) lists every owner anew (workspace-manager
+// 0.8.1 and newer), so the part requests each one right after the change it
+// must see. The first cycle of a new workspace is not requested and may read
+// the manager's minute-long listing cache: the part starts once a minute has
+// passed since a previous run's last change at the provider. Everything the part creates is removed on every path, and the
 // moving repository's topics and head are put back.
 
 // WorkspacesPartSync is the sync part of workspaces-test.
 const WorkspacesPartSync = "sync"
 
 // WorkspacesParts are the parts `workspaces-test --part` takes.
-var WorkspacesParts = []string{WorkspacesPartSync, WorkspacesPartAccess, WorkspacesPartGitLab, WorkspacesPartSessions, WorkspacesPartCallerCredential}
+var WorkspacesParts = []string{WorkspacesPartSync, WorkspacesPartAccess, WorkspacesPartGitLab, WorkspacesPartSessions, WorkspacesPartCallerCredential, WorkspacesPartWrite, WorkspacesPartRefresh}
 
 const (
 	syncFilterWorkspace = "agentlab-sync-filter"
@@ -76,8 +77,8 @@ const (
 	// syncSession is the session directory the part lays out on the filter
 	// workspace's volume, as a Session's would be.
 	syncSession = "agentlab-sync-proof"
-	// syncListingFreshness is the workspace-manager's listing cache, a
-	// minute, and a margin.
+	// syncListingFreshness is the workspace-manager's listing cache for a
+	// cycle that is not requested, a minute, and a margin.
 	syncListingFreshness = time.Minute + 5*time.Second
 	// syncWorkspaceLabel labels a workspace's claim with its name.
 	syncWorkspaceLabel = "workspace-manager.giantswarm.io/workspace"
@@ -460,7 +461,6 @@ type syncProof struct {
 	startHead        string
 	startTopics      []string
 	private          bool
-	listedAt         time.Time
 	volumes          map[string]syncVolume
 	restored         bool
 	// names are the workspaces the part creates, removed on every path.
@@ -527,7 +527,7 @@ func (sp *syncProof) run(email string, p *proofStages) error {
 	}
 	for name, sources := range map[string][]map[string]any{syncFilterWorkspace: syncFilterSources(sp.private), syncListWorkspace: syncNamedSources(wantList...)} {
 		var created syncWorkspace
-		if err := sp.member.callServerStructured(workspaceManagerToolPrefix+"create_workspace", map[string]any{
+		if err := sp.member.createLabWorkspace(map[string]any{
 			nameKey: name, wmOrganizationArg: config.WorkspaceOrganization, wmSourcesArg: sources,
 		}, &created); err != nil {
 			return err
@@ -567,7 +567,7 @@ func (sp *syncProof) run(email string, p *proofStages) error {
 	if err != nil {
 		return err
 	}
-	noop, window, err := sp.sync(syncFilterWorkspace, filter, true)
+	noop, window, err := sp.sync(syncFilterWorkspace, filter)
 	if err != nil {
 		return err
 	}
@@ -588,7 +588,7 @@ func (sp *syncProof) run(email string, p *proofStages) error {
 	if err != nil {
 		return err
 	}
-	afterPush, window, err := sp.sync(syncFilterWorkspace, noop, true)
+	afterPush, window, err := sp.sync(syncFilterWorkspace, noop)
 	if err != nil {
 		return err
 	}
@@ -614,7 +614,7 @@ func (sp *syncProof) run(email string, p *proofStages) error {
 	if err != nil {
 		return err
 	}
-	afterForce, window, err := sp.sync(syncFilterWorkspace, afterPush, true)
+	afterForce, window, err := sp.sync(syncFilterWorkspace, afterPush)
 	if err != nil {
 		return err
 	}
@@ -642,7 +642,7 @@ func (sp *syncProof) run(email string, p *proofStages) error {
 	if err := sp.gh.setTopics(syncMovingRepo, sp.tokens[syncOSS], withoutTopic(sp.startTopics, syncMovingTopic)); err != nil {
 		return err
 	}
-	afterTopic, window, err := sp.sync(syncFilterWorkspace, afterForce, true)
+	afterTopic, window, err := sp.sync(syncFilterWorkspace, afterForce)
 	if err != nil {
 		return err
 	}
@@ -671,7 +671,7 @@ func (sp *syncProof) run(email string, p *proofStages) error {
 		return err
 	}
 	note("%s", indent(out, "  "))
-	afterGone, window, err := sp.sync(syncFilterWorkspace, afterTopic, false)
+	afterGone, window, err := sp.sync(syncFilterWorkspace, afterTopic)
 	if err != nil {
 		return err
 	}
@@ -738,7 +738,9 @@ func withoutTopic(topics []string, topic string) []string {
 // removes what an interrupted run left and clones the moving repository.
 func (sp *syncProof) preconditions(email string) error {
 	cfg := sp.cfg
-	if reason := workspaceManagerSkip(cfg); reason != "" {
+	if reason, err := workspaceManagerSkip(cfg); err != nil {
+		return err
+	} else if reason != "" {
 		return fmt.Errorf("no workspace-manager to define a workspace with: %s", reason)
 	}
 	if !cfg.WorkspaceFakeProvider() {
@@ -778,15 +780,13 @@ func (sp *syncProof) preconditions(email string) error {
 		user *config.User
 		into **musterSession
 	}{{member, &sp.member}, {outsider, &sp.outsider}} {
-		token, err := passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret, u.user.Email, u.user.Password, musterLoginScopes)
+		p, err := openGrantedWorkspacePerson(cfg, u.user)
 		if err != nil {
 			return err
 		}
-		if *u.into, err = openMusterSession(cfg, token, "workspaces-test-sync"); err != nil {
-			return err
-		}
+		*u.into = p.session
 	}
-	note("signed in to muster as %s (member) and %s (outside the Organization)", sp.memberEmail, sp.outsiderEmail)
+	note("signed in to muster as %s (member) and %s (outside the Organization), each holding the workspace-manager's App grant where muster pins one", sp.memberEmail, sp.outsiderEmail)
 
 	if sp.gh, err = openLabGitHub(cfg); err != nil {
 		return err
@@ -841,7 +841,6 @@ func (sp *syncProof) preconditions(email string) error {
 		return err
 	}
 	if changed := lastProviderChange(reqs); !changed.IsZero() {
-		sp.listedAt = changed
 		if wait := time.Until(changed.Add(syncListingFreshness)); wait > 0 {
 			note("waiting %s: a repository changed at the provider at %s, and the manager may still answer a listing from before it", wait.Round(time.Second), changed.UTC().Format(time.RFC3339))
 			time.Sleep(wait)
@@ -877,7 +876,6 @@ func (sp *syncProof) preview(sources []map[string]any, want []string) error {
 	}, &preview); err != nil {
 		return err
 	}
-	sp.listedAt = time.Now()
 	var got []string
 	for _, r := range preview.Repositories {
 		got = append(got, r.Repository)
@@ -1103,7 +1101,7 @@ func (sp *syncProof) forcePush() (string, error) {
 // them, and returns its volume: the one the workspace's grants name.
 func (sp *syncProof) createNamed(name string, repos []string) (workspaceVolume, error) {
 	var created syncWorkspace
-	if err := sp.member.callServerStructured(workspaceManagerToolPrefix+"create_workspace", map[string]any{
+	if err := sp.member.createLabWorkspace(map[string]any{
 		nameKey: name, wmOrganizationArg: config.WorkspaceOrganization, wmSourcesArg: syncNamedSources(repos...),
 	}, &created); err != nil {
 		return workspaceVolume{}, err
@@ -1166,15 +1164,10 @@ func (sp *syncProof) mark() (int, error) {
 	return len(reqs), err
 }
 
-// sync requests a cycle and waits for its end; fresh waits first for the
-// listing cache to let go of the last listing, so the cycle sees what
-// changed at the provider. It returns the workspace after the cycle and what
-// the cycle asked of the provider.
-func (sp *syncProof) sync(name string, prev *syncDetail, fresh bool) (*syncDetail, syncWindow, error) {
-	if wait := time.Until(sp.listedAt.Add(syncListingFreshness)); fresh && wait > 0 {
-		note("waiting %s: the workspace-manager answers a listing from its cache for a minute, and this cycle lists anew", wait.Round(time.Second))
-		time.Sleep(wait)
-	}
+// sync requests a cycle and waits for its end; the requested cycle lists the
+// provider anew, so it sees what changed there. It returns the workspace after
+// the cycle and what the cycle asked of the provider.
+func (sp *syncProof) sync(name string, prev *syncDetail) (*syncDetail, syncWindow, error) {
 	mark, err := sp.mark()
 	if err != nil {
 		return nil, syncWindow{}, err
@@ -1220,7 +1213,6 @@ func (sp *syncProof) waitCycle(name string, prev *syncLastSync) (*syncDetail, er
 		}
 		return nil, fmt.Errorf("no cycle of %s ended within %s (%s; last error %v): the workspace-manager's log, `kubectl -n kagent get jobs`", name, sp.timeout, state, lastErr)
 	}
-	sp.listedAt = time.Now()
 	if r := last.Workspace.LastSync; r.Result == syncResultFailed {
 		return nil, fmt.Errorf("the cycle of %s failed (trigger %s, job %s): %s", name, r.Trigger, r.Job, r.Message)
 	}

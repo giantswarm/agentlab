@@ -275,12 +275,13 @@ func workspaceGitHubFor(ctx context.Context, cfg *config.Config) (*workspaceProv
 			missing = append(missing, "Secret "+platformNamespace+"/"+config.WorkspaceGitHubSecretName+" "+key)
 		}
 	}
-	note("workspace-manager at %s: the GitHub App's callback URL is %s, the lab Dex's redirect URI %s", cfg.WorkspaceManagerBaseURL(), cfg.WorkspaceGitHubCallbackURL(), cfg.WorkspaceManagerSignInURL())
+	callback := WorkspaceAppCallback(cfg)
+	note("workspace-manager at %s: the GitHub App's callback URL is %s", cfg.WorkspaceManagerBaseURL(), callback)
 	if len(missing) == 0 {
 		return workspaceGitHubValuesFor(cfg), nil
 	}
 	warn("platform.workspaces.provider names github but %s missing -- the workspace-manager gets no provider instance %s", strings.Join(missing, ", "), config.WorkspaceProviderGitHub)
-	warn("  register a GitHub App with callback URL %s, record its App id and client id in agentlab.yaml and where its keys are (platform.workspaces.github.privateKeySource and clientSecretSource: every up and platform places them), or place them by hand, one per call:", cfg.WorkspaceGitHubCallbackURL())
+	warn("  register a GitHub App with callback URL %s, record its App id and client id in agentlab.yaml and where its keys are (platform.workspaces.github.privateKeySource and clientSecretSource: every up and platform places them), or place them by hand, one per call:", callback)
 	for _, key := range workspaceGitHubKeys {
 		warn("  %s secret copy <ref to the %s> --to-secret %s", secretTool, key, secretTarget(cfg, platformNamespace, config.WorkspaceGitHubSecretName, key))
 	}
@@ -316,7 +317,7 @@ func workspaceGitLabFor(ctx context.Context, cfg *config.Config) (*workspaceProv
 			missing = append(missing, "Secret "+platformNamespace+"/"+config.WorkspaceGitLabSecretName+" "+key)
 		}
 	}
-	callback := cfg.WorkspaceCallbackURL(config.WorkspaceProviderGitLab)
+	callback := WorkspaceAppCallback(cfg)
 	note("workspace-manager at %s: the GitLab OAuth application's redirect URI is %s", cfg.WorkspaceManagerBaseURL(), callback)
 	if len(missing) == 0 {
 		return workspaceGitLabValuesFor(cfg), nil
@@ -328,4 +329,11 @@ func workspaceGitLabFor(ctx context.Context, cfg *config.Config) (*workspaceProv
 	}
 	warn("  then re-run; agentlab never reads the values (docs/workspaces.md)")
 	return nil, nil
+}
+
+// WorkspaceAppCallback is the callback URL every instance's App or OAuth
+// application registers: muster's proxy callback, where the person grants it
+// (workspacemustergrant.go).
+func WorkspaceAppCallback(cfg *config.Config) string {
+	return cfg.MusterBaseURL() + oauthProxyCallbackPath
 }

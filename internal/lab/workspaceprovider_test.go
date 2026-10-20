@@ -2,6 +2,7 @@ package lab
 
 import (
 	"context"
+	"maps"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -123,8 +124,8 @@ func checkGolden(t *testing.T, name string, block map[string]any) {
 // lab's GitHub at its URL (the API under /api/v3 is the kind's derivation),
 // the embedded fixture's App and client, each credential a reference to
 // the lab's Secret; the manager trusts the lab CA for it; CoreDNS sends its
-// name to its Service; the base URL carries the gateway port and the lab
-// Dex's agent-platform client lists <base>/signin.
+// name to its Service; the base URL carries the gateway port, the lab Dex
+// lists none of the manager's routes and the App's one callback is muster's.
 func TestWorkspaceFakeProviderDefault(t *testing.T) {
 	stubWorkspacesProbe(t, true)
 	cfg := workspaceLab("")
@@ -179,13 +180,21 @@ func TestWorkspaceFakeProviderDefault(t *testing.T) {
 	if !strings.Contains(coredns, `name regex ^github\.127\.0\.0\.1\.nip\.io\. `+labGitHubService+".agent-platform.svc.cluster.local") {
 		t.Errorf("CoreDNS does not send %s to the fake's Service:\n%s", config.GitHubFakeHost(cfg.Platform.Domain), coredns)
 	}
-	if !strings.Contains(dex, "- "+base+"/signin\n") {
-		t.Errorf("the Dex agent-platform client does not list %s/signin:\n%s", base, dex)
-	}
-	if got := cfg.WorkspaceCallbackURL(config.WorkspaceProviderFake); got != base+"/callback/fake" {
-		t.Errorf("callback URL %s", got)
-	}
+	wantNoManagerSignIn(t, cfg, dex)
 	checkGolden(t, "fake", wm)
+}
+
+// wantNoManagerSignIn asserts the person's provider sign-in is muster's: the
+// lab Dex lists no route of the workspace-manager, and every instance's App
+// registers muster's proxy callback alone.
+func wantNoManagerSignIn(t *testing.T, cfg *config.Config, dex string) {
+	t.Helper()
+	if strings.Contains(dex, cfg.WorkspaceManagerBaseURL()) {
+		t.Errorf("the lab Dex lists a workspace-manager route:\n%s", dex)
+	}
+	if got, want := WorkspaceAppCallback(cfg), cfg.MusterBaseURL()+"/oauth/proxy/callback"; got != want {
+		t.Errorf("the App's callback URL %q, want muster's %s alone", got, want)
+	}
 }
 
 // With the github instance alone, the values forward the base URL, no
@@ -211,12 +220,7 @@ func TestWorkspaceGitHubProviderWiring(t *testing.T) {
 	if strings.Contains(coredns, labGitHubService) {
 		t.Errorf("CoreDNS sends the fake's name to its Service without the fake:\n%s", coredns)
 	}
-	if !strings.Contains(dex, "- "+base+"/signin\n") {
-		t.Errorf("the Dex agent-platform client does not list %s/signin:\n%s", base, dex)
-	}
-	if cfg.WorkspaceGitHubCallbackURL() != base+"/callback/github" {
-		t.Errorf("callback URL %s", cfg.WorkspaceGitHubCallbackURL())
-	}
+	wantNoManagerSignIn(t, cfg, dex)
 }
 
 // With the App's ids set, the github instance names the Secret for the
@@ -526,5 +530,60 @@ func TestWorkspaceFakeBearerProvider(t *testing.T) {
 	wantSecretRef(t, "fake-bearer app.privateKey", app["privateKey"], config.WorkspaceFakeSecretName, config.WorkspaceGitHubPrivateKeyKey)
 	if !strings.Contains(coredns, `name regex ^(api\.)?github-bearer\.127\.0\.0\.1\.nip\.io\. `+labGitHubService+".agent-platform.svc.cluster.local") {
 		t.Errorf("CoreDNS does not send fake-bearer's hosts to the fake's Service:\n%s", coredns)
+	}
+}
+
+// musterReleasable is the rendered muster.muster.credentialProvider.releasable,
+// nil when the values name none.
+func musterReleasable(values map[string]any) map[string]any {
+	muster, _ := values["muster"].(map[string]any)
+	inner, _ := muster["muster"].(map[string]any)
+	provider, _ := inner["credentialProvider"].(map[string]any)
+	releasable, _ := provider["releasable"].(map[string]any)
+	return releasable
+}
+
+// With no provider instance rendered (the github instance before its App's
+// ids, or the install's verdict none), muster's credential provider still
+// releases one: the lab's own App, the fake's, so the chart's guard of the
+// credential provider renders, and the manager gets no grant signing key,
+// which it refuses without an instance; once an instance renders, the chart
+// derives the releasable from the pin and the values name none.
+func TestWorkspaceReleasableWithoutInstance(t *testing.T) {
+	stubWorkspacesProbe(t, true)
+	fake, err := workspaceFakeValues(workspaceLab(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{config.WorkspaceProviderFake: workspaceGrantOf(*fake).Issuer}
+
+	values, _, _, _ := renderWorkspaceTemplates(t, workspaceGitHubLab(), nil)
+	if got := musterReleasable(values); !maps.Equal(got, want) {
+		t.Errorf("github instance without its App's ids: releasable %v, want %v", got, want)
+	}
+	if wm, _ := workspaceManagerBlock(t, values); wm["grant"] != nil || wm["tokenExchange"] != nil {
+		t.Errorf("no instance: grant %v, tokenExchange %v, want neither (the manager refuses a signing key without an instance)", wm["grant"], wm["tokenExchange"])
+	}
+	withIDs := workspaceGitHubLab()
+	withIDs.Platform.Workspaces.GitHub = config.WorkspaceGitHub{AppID: testWorkspaceAppID, ClientID: testWorkspaceClientID}
+	values, _, _, _ = renderWorkspaceTemplates(t, withIDs, func(d *tmplData) { d.WorkspaceProviders = nil })
+	if got := musterReleasable(values); !maps.Equal(got, want) {
+		t.Errorf("the install's verdict none: releasable %v, want %v", got, want)
+	}
+
+	for name, cfg := range map[string]*config.Config{config.WorkspaceProviderFake: workspaceLab(""), config.WorkspaceProviderGitHub: withIDs} {
+		values, _, _, _ := renderWorkspaceTemplates(t, cfg, nil)
+		if got := musterReleasable(values); got != nil {
+			t.Errorf("%s instance rendered: releasable %v, want none (the chart derives it from the pin)", name, got)
+		}
+		if wm, _ := workspaceManagerBlock(t, values); wm["grant"] == nil {
+			t.Errorf("%s instance rendered: no grant signing key", name)
+		}
+	}
+	off := workspaceLab("")
+	off.Platform.Workspaces.Enabled = false
+	values, _, _, _ = renderWorkspaceTemplates(t, off, nil)
+	if got := musterReleasable(values); got != nil {
+		t.Errorf("workspaces off: releasable %v, want none", got)
 	}
 }

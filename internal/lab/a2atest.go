@@ -772,7 +772,13 @@ func (a *kagentAPI) cancelRunningTurn(session *apiv1alpha1.Session, prompt strin
 // them.
 type sessionSet struct {
 	api *kagentAPI
-	ids []string
+	// manager, when set, is the person's muster session the sessions were
+	// started through with agent-manager's start_session: they are deleted
+	// through its delete_session, which also removes muster's binding of a
+	// workspace Session's sandbox (a delete straight at kagent leaves it
+	// until its TTL).
+	manager *musterSession
+	ids     []string
 }
 
 func (s *sessionSet) add(id string) {
@@ -781,13 +787,33 @@ func (s *sessionSet) add(id string) {
 	}
 }
 
+// deleteOne deletes one session the way the set's sessions were started:
+// through agent-manager's delete_session when the set has a manager, else
+// straight at kagent.
+func (s *sessionSet) deleteOne(ctx context.Context, id string) error {
+	if s.manager != nil {
+		_, err := deleteThroughManager(ctx, s.manager, id)
+		return err
+	}
+	return s.api.deleteSession(ctx, id)
+}
+
+// remove deletes one tracked session and stops tracking it.
+func (s *sessionSet) remove(ctx context.Context, id string) error {
+	if err := s.deleteOne(ctx, id); err != nil {
+		return err
+	}
+	s.ids = slices.DeleteFunc(s.ids, func(t string) bool { return t == id })
+	return nil
+}
+
 // removeAllNow deletes every tracked session and reports what refused; the
 // sessions that refused stay tracked.
 func (s *sessionSet) removeAllNow() error {
 	var errs, left []string
 	for _, id := range s.ids {
 		ctx, cancel := context.WithTimeout(context.Background(), sessionDeleteTimeout)
-		err := s.api.deleteSession(ctx, id)
+		err := s.deleteOne(ctx, id)
 		cancel()
 		if err != nil {
 			errs = append(errs, err.Error())

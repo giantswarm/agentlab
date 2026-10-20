@@ -6,9 +6,11 @@ import (
 	"testing"
 )
 
-// The workspaces switch: it needs the agents runtime (Substrate's signers
-// certify the driver's endpoint); the NFS driver's node plugin runs on every
-// node, so any number of reserved substrate workers is accepted.
+// The workspaces switch: with the agents runtime the workspaces run with
+// Agent Substrate; without it they are refused (the chart's workspaces live
+// in kagent's namespace), with the CSI companion or not; the NFS driver's
+// node plugin runs on every node, so any number of reserved substrate
+// workers is accepted.
 func TestWorkspacesSwitch(t *testing.T) {
 	cfg := Default()
 	if cfg.WorkspacesEnabled() {
@@ -26,14 +28,14 @@ func TestWorkspacesSwitch(t *testing.T) {
 		t.Errorf("workspaces with two substrate nodes: %v, want accepted (the node plugin runs on every node)", err)
 	}
 
-	cfg = Default()
-	cfg.Platform.Workspaces.Enabled = true
-	cfg.Platform.Agents = false
-	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "platform.workspaces requires platform.agents") {
-		t.Errorf("workspaces without agents: err = %v, want the agents requirement", err)
-	}
-	if cfg.WorkspacesEnabled() {
-		t.Error("WorkspacesEnabled true without the agents runtime")
+	for _, companion := range []bool{false, true} {
+		cfg = Default()
+		cfg.Platform.Workspaces.Enabled = true
+		cfg.Platform.Workspaces.CSICompanion = companion
+		cfg.Platform.Agents = false
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "platform.workspaces requires platform.agents") {
+			t.Errorf("workspaces without agents (csiCompanion %v): err = %v, want the agents requirement", companion, err)
+		}
 	}
 
 	cfg = Default()
@@ -96,12 +98,6 @@ func TestWorkspacesProvider(t *testing.T) {
 		}
 	}
 	cfg.Platform.Workspaces.Provider = ""
-	if got, want := cfg.WorkspaceManagerSignInURL(), "https://workspace-manager.127.0.0.1.nip.io/signin"; got != want {
-		t.Errorf("sign-in URL %s, want %s (port-free on 443)", got, want)
-	}
-	if got, want := cfg.WorkspaceCallbackURL(WorkspaceProviderFake), "https://workspace-manager.127.0.0.1.nip.io/callback/fake"; got != want {
-		t.Errorf("the fake's callback URL %s, want %s", got, want)
-	}
 	if got, want := cfg.GitHubFakeURL(), "https://github.127.0.0.1.nip.io"; got != want {
 		t.Errorf("the fake's URL %s, want %s", got, want)
 	}
@@ -159,5 +155,53 @@ func TestWorkspacesSessionsCleanupAfter(t *testing.T) {
 		if !ok && (err == nil || !strings.Contains(err.Error(), "sessionsCleanupAfter")) {
 			t.Errorf("%q: err = %v, want refused", value, err)
 		}
+	}
+}
+
+// The refresh threshold: empty keeps the manager's, a positive Go duration
+// is taken, anything else refused.
+func TestWorkspacesSyncRefreshAfter(t *testing.T) {
+	for value, ok := range map[string]bool{"": true, "1m": true, "1h": true, "0s": false, "-1m": false, "a minute": false} {
+		cfg := Default()
+		cfg.Platform.Workspaces.Enabled = true
+		cfg.Platform.Workspaces.SyncRefreshAfter = value
+		err := cfg.Validate()
+		if ok && err != nil {
+			t.Errorf("%q: %v", value, err)
+		}
+		if !ok && (err == nil || !strings.Contains(err.Error(), "syncRefreshAfter")) {
+			t.Errorf("%q: err = %v, want refused", value, err)
+		}
+	}
+}
+
+// The instance muster pins the workspace-manager to: the first instance
+// while grantProvider is empty, the named one otherwise; a name of no
+// configured instance is refused.
+func TestWorkspaceGrantProvider(t *testing.T) {
+	for _, c := range []struct{ provider, grant, want string }{
+		{"", "", WorkspaceProviderFake},
+		{WorkspaceProviderFake + "," + WorkspaceProviderGitHub, "", WorkspaceProviderFake},
+		{WorkspaceProviderGitHub + "," + WorkspaceProviderGitLab, "", WorkspaceProviderGitHub},
+		{WorkspaceProviderFake + "," + WorkspaceProviderGitLab, WorkspaceProviderGitLab, WorkspaceProviderGitLab},
+	} {
+		cfg := Default()
+		cfg.Platform.Workspaces.Enabled = true
+		cfg.Platform.Workspaces.Provider, cfg.Platform.Workspaces.GrantProvider = c.provider, c.grant
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("%q/%q: %v", c.provider, c.grant, err)
+		}
+		if got := cfg.WorkspaceGrantProvider(); got != c.want {
+			t.Errorf("%q/%q: WorkspaceGrantProvider() = %q, want %q", c.provider, c.grant, got, c.want)
+		}
+	}
+	cfg := Default()
+	cfg.Platform.Workspaces.Enabled = true
+	cfg.Platform.Workspaces.Provider, cfg.Platform.Workspaces.GrantProvider = WorkspaceProviderFake, WorkspaceProviderGitLab
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "grantProvider") {
+		t.Errorf("a grantProvider of no configured instance: err = %v, want refused", err)
+	}
+	if got := Default().WorkspaceGrantProvider(); got != "" {
+		t.Errorf("workspaces off: WorkspaceGrantProvider() = %q, want none", got)
 	}
 }

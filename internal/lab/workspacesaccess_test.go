@@ -4,7 +4,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -49,6 +48,10 @@ func TestGrantPayloadAndJudge(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("judgeGrant(%s, %s, %s, %v) = %v, want %q", tc.person, tc.workspace, tc.volume.Handle, tc.changed, err, tc.want)
 		}
+	}
+	claims.AgentNamespace = "another-tenant"
+	if err := judgeGrant(claims, testDevUser, accessWorkspace, volume, []string{syncMovingRepo}); err == nil || !strings.Contains(err.Error(), "Agent namespace") {
+		t.Errorf("a grant for another Agent namespace judged %v, want it named", err)
 	}
 	if _, _, err := grantPayload("not.a"); err == nil {
 		t.Error("a token of two parts decoded as a grant")
@@ -103,19 +106,6 @@ func TestJudgeNothingNew(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("%v does not name %q", err, want)
 		}
-	}
-}
-
-func TestRevocationsOf(t *testing.T) {
-	at := time.Date(2026, 10, 12, 16, 0, 0, 0, time.UTC)
-	got := revocationsOf([]githubRequest{
-		{Time: at, Method: http.MethodDelete, Path: githubFakeAPIPath + "/applications/Iv1.lab/grant", Status: http.StatusNoContent},
-		{Time: at, Method: http.MethodDelete, Path: githubFakeAPIPath + "/applications/Iv1.lab/token", Status: http.StatusNotFound},
-		{Time: at, Method: http.MethodGet, Path: githubFakeAPIPath + "/applications/Iv1.lab/grant", Status: http.StatusOK},
-		{Time: at, Method: http.MethodDelete, Path: githubFakeAPIPath + "/repos/agentlab-oss/docs", Status: http.StatusNoContent},
-	})
-	if len(got) != 1 || !strings.Contains(got[0], "/applications/Iv1.lab/grant 204") {
-		t.Errorf("revocationsOf = %v, want the one accepted grant revocation", got)
 	}
 }
 

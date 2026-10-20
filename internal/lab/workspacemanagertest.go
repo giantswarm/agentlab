@@ -17,9 +17,13 @@ import (
 // list_providers, called through muster as the admin, names every provider
 // instance the lab configured (workspaceprovider.go) and nothing else — the
 // fake, the github instance once its App and Secret are in place, or both.
-// The manager runs with kagent's address: without it no session directory
-// is ever cleaned up (every Workspace reads SessionsCleanedUp=False
-// KagentNotConfigured).
+// With the agents on, the manager runs with kagent's address: without it no
+// session directory is ever cleaned up (every Workspace reads
+// SessionsCleanedUp=False KagentNotConfigured). A manager whose registration muster pins to a
+// provider App (workspacemustergrant.go) shows its tools only to a person
+// who granted that App: the admin and the viewer grant the lab GitHub's
+// first; a pin to an App of a real provider, which no headless walk can
+// grant, ends the stage at muster's sign-in link.
 // list_workspaces for the lab's Organization (config.WorkspaceOrganization)
 // answers the admin, a member, and refuses the viewer as not a member: the
 // values gave the manager the Organization and its member groups.
@@ -34,25 +38,32 @@ const workspaceManagerToolPrefix = "x_" + workspaceManagerMCPServer + "_"
 
 // workspaceManagerSkip is why the stage has no subject: workspaces off, or a
 // platform chart without the workspaces values, which renders no
-// workspace-manager.
-func workspaceManagerSkip(cfg *config.Config) string {
+// workspace-manager. A chart the probe could not load is the probe's error,
+// not a skip.
+func workspaceManagerSkip(cfg *config.Config) (string, error) {
 	if !cfg.WorkspacesEnabled() {
-		return "platform.workspaces is off in " + config.File
+		return "platform.workspaces is off in " + config.File, nil
 	}
-	if !workspacesChartCarries(cfg) {
-		return fmt.Sprintf("%s takes no workspaces values, no workspace-manager to prove", platformChartFor(cfg))
+	w, err := workspacesChartProbed(cfg)
+	if err != nil {
+		return "", fmt.Errorf("probing %s for its workspaces values: %w", platformChartFor(cfg), err)
 	}
-	return ""
+	if !w.Carries {
+		return fmt.Sprintf("%s takes no workspaces values, no workspace-manager to prove", platformChartFor(cfg)), nil
+	}
+	return "", nil
 }
 
-// workspaceProviderStatus is one entry of list_providers (the
-// workspace-manager's connect.Status): the instance, its kind, whether the
-// caller is connected to it and its connect link.
+// workspaceProviderStatus is one entry of list_providers: the instance, its
+// kind, whether the caller is connected to it, and how they connect while
+// they are not: the manager's own connect link before workspace-manager
+// 0.10.0 (connectURL), how to grant its App in muster from it (signIn).
 type workspaceProviderStatus struct {
 	Name       string `json:"name"`
 	Kind       string `json:"kind"`
 	Connected  bool   `json:"connected"`
 	ConnectURL string `json:"connectURL"`
+	SignIn     string `json:"signIn"`
 }
 
 func (s workspaceProviderStatus) String() string {
@@ -114,16 +125,21 @@ func proveWorkspaceManager(cfg *config.Config) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	adminPerson, err := openWorkspacePerson(cfg, admin)
+	if err != nil {
+		return nil, err
+	}
+	viewerPerson, err := openWorkspacePerson(cfg, viewer)
+	if err != nil {
+		return nil, err
+	}
+	if pinned, err := workspaceManagerPinnedProvider(cfg); err == nil {
+		if done, err := grantForStage(cfg, pinned, adminPerson, viewerPerson); err != nil || done != nil {
+			return done, err
+		}
+	}
+	session := adminPerson.session
 	step("Calling %slist_providers through muster as %s, expecting %s", workspaceManagerToolPrefix, admin.Email, strings.Join(want, ", "))
-	token, err := passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret,
-		admin.Email, admin.Password, musterLoginScopes)
-	if err != nil {
-		return nil, err
-	}
-	session, err := openMusterSession(cfg, token, "platform-test-workspaces")
-	if err != nil {
-		return nil, err
-	}
 	var listed struct {
 		Providers []workspaceProviderStatus `json:"providers"`
 	}
@@ -137,8 +153,8 @@ func proveWorkspaceManager(cfg *config.Config) ([]string, error) {
 		if i := slices.IndexFunc(configured, func(c workspaceProviderValues) bool { return c.Name == p.Name }); i >= 0 && p.Kind != configured[i].Kind {
 			return nil, fmt.Errorf("list_providers lists %s with kind %q, want the chart's %s kind", p.Name, p.Kind, configured[i].Kind)
 		}
-		if p.ConnectURL == "" {
-			return nil, fmt.Errorf("list_providers lists %s without a connect link", p.Name)
+		if !p.Connected && p.ConnectURL == "" && p.SignIn == "" {
+			return nil, fmt.Errorf("list_providers lists %s, not connected, without a connect link or how to grant its App in muster", p.Name)
 		}
 	}
 	slices.Sort(got)
@@ -161,16 +177,7 @@ func proveWorkspaceManager(cfg *config.Config) ([]string, error) {
 		return nil, fmt.Errorf("%w\n  the values give the workspace-manager the Organization %s with the member groups %s; check its --organization flag", err, config.WorkspaceOrganization, strings.Join(config.WorkspaceOrganizationGroups, ", "))
 	}
 	note("list_workspaces for %s as %s: %d workspaces", config.WorkspaceOrganization, admin.Email, len(workspaces.Workspaces))
-	viewerToken, err := passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret,
-		viewer.Email, viewer.Password, musterLoginScopes)
-	if err != nil {
-		return nil, err
-	}
-	viewerSession, err := openMusterSession(cfg, viewerToken, "platform-test-workspaces-viewer")
-	if err != nil {
-		return nil, err
-	}
-	env, err := viewerSession.callToolEnvelope(workspaceManagerToolPrefix+"list_workspaces", org)
+	env, err := viewerPerson.session.callToolEnvelope(workspaceManagerToolPrefix+"list_workspaces", org)
 	if err != nil {
 		return nil, err
 	}
@@ -179,6 +186,28 @@ func proveWorkspaceManager(cfg *config.Config) ([]string, error) {
 	}
 	note("list_workspaces for %s as %s refused: %.200s", config.WorkspaceOrganization, viewer.Email, env.Content[0].Text)
 	return worded, nil
+}
+
+// grantForStage has the people grant the pinned App of the lab's GitHub;
+// a pin to a real provider's App ends the stage (done, non-nil) with
+// muster's sign-in link asserted for the admin instead.
+func grantForStage(cfg *config.Config, pinned string, people ...*workspacePerson) (done []string, err error) {
+	if pinned != config.WorkspaceProviderFake && pinned != config.WorkspaceProviderFakeBearer {
+		link, err := people[0].grantLink()
+		if err != nil || link == "" {
+			return nil, err // granted in an earlier sign-in: the stage goes on
+		}
+		note("pinned to the App of %s, which no headless walk grants: muster's sign-in link for %s is %s", pinned, people[0].user.Email, excerpt(link, 100))
+		return []string{pinned + " (pinned, its App not granted)"}, nil
+	}
+	for _, p := range people {
+		hops, err := connectWorkspaceProvider(cfg, p, pinned)
+		if err != nil {
+			return nil, err
+		}
+		note("%s granted the App of %s in muster: %s", p.user.Email, pinned, hops)
+	}
+	return nil, nil
 }
 
 // callServerStructured runs an aggregated server tool through muster and
