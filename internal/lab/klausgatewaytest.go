@@ -164,7 +164,13 @@ const (
 // Muster's audit and protocol records the attribution reads.
 const (
 	musterTokenAccepted = "forwarded_id_token_accepted"
-	musterToolCall      = `"msg":"tools/call request"`
+	// musterActorBearerAccepted is muster's audit record of a call that
+	// carried the Session's actor JWT, served as the person the actor is
+	// bound to: kagent lists muster on a Session agent-manager's
+	// start_session binds, and the egress gateway replaces the forwarded
+	// id_token with that JWT.
+	musterActorBearerAccepted = "action=actor_bearer outcome=success"
+	musterToolCall            = `"msg":"tools/call request"`
 )
 
 // KlausGatewayTestOptions tunes the proof.
@@ -434,11 +440,11 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	note("%d approval(s) on task %s (%s); GetTask=%s; nothing of the session left at input-required; answered %q",
 		approved.rounds, approved.taskID, strings.Join(approved.cards, "; "), approved.finalState, excerpt(approved.answer, 80))
 
-	step("The turn is attributed to %s at muster (the forwarded id_token accepted, the tool calls under that subject)", user.Email)
+	step("The turn is attributed to %s at muster (the forwarded id_token accepted or the Session's actor bound to the person, the tool calls under that subject)", user.Email)
 	if err := assertMusterAttribution(user.Email, identity.subject, toolTurnStart); err != nil {
 		return err
 	}
-	note("muster's audit log: %s email=%s; tools/call requests under subject %.8s…", musterTokenAccepted, user.Email, identity.subject)
+	note("muster's audit log: %s email=%s or %s for subject %.8s…; tools/call requests under that subject", musterTokenAccepted, user.Email, musterActorBearerAccepted, identity.subject)
 
 	step("3b. Deny in a second thread: the tool call never reaches muster and the task ends")
 	denied := &slackThread{user: people.person}
@@ -1952,9 +1958,11 @@ func (p *slackProof) recoveryFailures(thread string) []string {
 }
 
 // assertMusterAttribution reads muster's log since the tool-using turn began:
-// the forwarded id_token of the person accepted (the audit record with the
-// email), and tools/call requests under the token's subject — the agent's
-// muster calls ran as the person, not as the gateway or the Harness.
+// the person's credential accepted — the forwarded id_token (the audit record
+// with the email) or the Session's actor JWT served as the person it is bound
+// to (the actor bearer record with the subject) — and tools/call requests
+// under the token's subject: the agent's muster calls ran as the person, not
+// as the gateway or the Harness.
 func assertMusterAttribution(email, subject string, since time.Time) error {
 	var accepted, calls int
 	var lines []string
@@ -1969,17 +1977,18 @@ func assertMusterAttribution(email, subject string, since time.Time) error {
 		return accepted > 0 && calls > 0
 	})
 	if accepted == 0 {
-		return fmt.Errorf("muster's log since %s carries no %s record for %s: the agent's tool calls did not ride the person's forwarded id_token", since.UTC().Format(time.RFC3339), musterTokenAccepted, email)
+		return fmt.Errorf("muster's log since %s carries no %s record for %s and no %s record for subject %.8s…: the agent's tool calls rode neither the person's forwarded id_token nor an actor bound to the person", since.UTC().Format(time.RFC3339), musterTokenAccepted, email, musterActorBearerAccepted, subject)
 	}
 	if calls == 0 {
-		return fmt.Errorf("muster's log since %s carries %d %s record(s) for %s but no tools/call request under subject %.8s…: %s", since.UTC().Format(time.RFC3339), accepted, musterTokenAccepted, email, subject, strings.Join(lines, " | "))
+		return fmt.Errorf("muster's log since %s carries %d accepted credential record(s) for %s but no tools/call request under subject %.8s…: %s", since.UTC().Format(time.RFC3339), accepted, email, subject, strings.Join(lines, " | "))
 	}
 	return nil
 }
 
 // musterAttribution counts, in muster's log lines stamped after since, the
-// accepted-token audit records naming the email and the tools/call requests
-// whose (truncated) subject is a prefix of the token's subject.
+// accepted-credential audit records — a forwarded id_token naming the email,
+// or an actor bearer whose (truncated) subject is a prefix of the token's
+// subject — and the tools/call requests whose (truncated) subject is.
 func musterAttribution(logs, email, subject string, since time.Time) (accepted, calls int, subjects []string) {
 	for _, line := range strings.Split(logs, "\n") {
 		// A line may carry a pod prefix before its JSON record.
@@ -2002,6 +2011,10 @@ func musterAttribution(logs, email, subject string, since time.Time) (accepted, 
 		switch {
 		case strings.Contains(line, musterTokenAccepted) && strings.Contains(line, `"email":"`+email+`"`):
 			accepted++
+		case strings.Contains(line, musterActorBearerAccepted):
+			if logged := strings.TrimSuffix(auditField(line, "subject"), "..."); logged != "" && strings.HasPrefix(subject, logged) {
+				accepted++
+			}
 		case strings.Contains(line, musterToolCall):
 			call := rec
 			logged := strings.TrimSuffix(call.Subject, "...")
@@ -2012,4 +2025,15 @@ func musterAttribution(logs, email, subject string, since time.Time) (accepted, 
 		}
 	}
 	return accepted, calls, subjects
+}
+
+// auditField is the value of key=value in a muster [AUDIT] line, up to the
+// next space; empty when the line has none.
+func auditField(line, key string) string {
+	_, rest, ok := strings.Cut(line, " "+key+"=")
+	if !ok {
+		return ""
+	}
+	value, _, _ := strings.Cut(rest, " ")
+	return value
 }
