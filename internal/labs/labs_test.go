@@ -347,12 +347,14 @@ func TestRecordedPorts(t *testing.T) {
 }
 
 // Every other registered lab's domain is recorded, the default of a file that
-// names none included; the lab asking is not its own obstacle.
+// names none included, under the first lab by name; the lab asking is not its
+// own obstacle.
 func TestRecordedDomains(t *testing.T) {
 	cwd := setup(t)
 	for name, body := range map[string]string{
 		"agentlab":   "clusterName: agentlab\n",
 		"agentlab-3": "clusterName: agentlab-3\nplatform:\n  domain: lab3.127.0.0.1.nip.io\n",
+		"scratch":    "clusterName: scratch\n",
 	} {
 		other := t.TempDir()
 		if err := os.WriteFile(filepath.Join(other, config.File), []byte(body), 0o600); err != nil {

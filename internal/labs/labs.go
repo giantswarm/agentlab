@@ -82,13 +82,15 @@ func RecordedPorts(dir string) (map[int]string, error) {
 }
 
 // RecordedDomains returns the platform domain every other registered lab
-// records, mapped to that lab's name: two labs on one domain serve the same
-// hostnames, and a browser's state for one (cookies, an HSTS pin, the trusted
-// CA) then applies to the other.
+// records, mapped to the first lab by name that records it: two labs on one
+// domain serve the same hostnames, and a browser's state for one (cookies, an
+// HSTS pin, the trusted CA) then applies to the other.
 func RecordedDomains(dir string) (map[string]string, error) {
 	domains := map[string]string{}
 	err := eachOther(dir, func(name string, cfg *config.Config) {
-		domains[cfg.Platform.Domain] = name
+		if domains[cfg.Platform.Domain] == "" {
+			domains[cfg.Platform.Domain] = name
+		}
 	})
 	return domains, err
 }
