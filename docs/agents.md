@@ -462,3 +462,61 @@ server-side (`GetTask` reports it canceled) and the session takes a
 following turn. It leaves nothing behind: the sessions over gRPC
 (`ListSessions` lists none of its), the agent's release and render on
 the cluster.
+
+## The codex coder
+
+`fixtures/agents/codex-coder/` is one coding agent's definition, the same on
+the lab and on an installation: a codex agent on a ChatGPT subscription
+login whose Sessions work in a workspace of `giantswarm` repositories. It is
+the inputs of the platform's own tools, applied through muster as the person,
+nothing applied by hand:
+
+| File | What |
+|---|---|
+| `values.yaml` | The agent-platform values for its model: the `kagent.modelConfigs` entry `openai-chatgpt-codex` (`credentialType: chatgptOAuth`, `apiFormat: responses`, the login Secret `kagent-chatgpt-login`). On the lab a `platform.valuesFiles` overlay; on an installation the same entry in its values |
+| `agent.json` | agent-manager's `create_agent` input: `codex-coder` on the Harness `codex` and that ModelConfig, the toolset `preset:read-only`, a system message for branch-per-change work in `/workspace` |
+| `workspace.json` | workspace-manager's `create_workspace` input: the workspace `giantswarm`, one source on the provider instance `github`, owner `giantswarm`, the public repositories by name. `organization` and the provider instance are the lab's (`lab`, `github`); an installation sets its own, and adds the private repositories it is meant to see with `update_workspace` |
+
+The agent carries no repository and no workspace: a workspace is chosen when
+a Session starts. Read and write access is the person's own, through the
+workspace's provider: the person grants the provider instance's GitHub App
+once in muster, `authorize_workspace` checks that the person reads every
+repository and signs the grant, `start_session` takes it, and the egress
+gateway sets the person's App token on the provider's git and API hosts per
+request ([Workspaces](workspaces.md#the-write-part)). The sandbox holds no
+token; `git push` and `gh pr create` work as the person, and only where the
+App is installed and the person may write.
+
+What it needs where it runs:
+
+- The codex Harness: `platform.coding` with `codex` among
+  `platform.coding.harnesses` on the lab; `kagent.harnesses` on an
+  installation ([The coding agents proof](platform.md#the-coding-agents-proof)).
+- The login Secret `kagent/kagent-chatgpt-login` (`access_token`,
+  `refresh_token`, `account_id`, labelled `kagent.dev/chatgpt-login: "true"`):
+  one `codex login --device-auth` of its own per lab or installation, since
+  the refresh token rotates on every use and two refreshers on one login
+  spend each other's. On the lab the three keys are placed from that login's
+  `auth.json` with the operator's secret tooling, never read by a session,
+  and the Secret labelled; on an installation it is a SOPS Secret
+  (agent-platform `docs/chatgpt-login.md`).
+- The workspaces with a GitHub provider instance whose App is installed on
+  `giantswarm` with Contents, Pull requests and Issues read and write
+  ([The provider instance github](workspaces.md#the-provider-instance-github)),
+  and the Session admission.
+
+The order, as the person through muster (`agentlab login --audience
+agent-platform` gives a lab user the token for it):
+
+1. `x_workspace-manager_create_workspace` with `workspace.json`, then
+   `x_workspace-manager_get_workspace giantswarm` until `lastSync.result` is
+   `Succeeded`.
+2. `x_agent-manager_create_agent` with `agent.json`, then
+   `x_agent-manager_get_agent_status codex-coder` until it is Ready.
+3. `x_workspace-manager_authorize_workspace giantswarm`: `granted` with a
+   `grant`, or `connect_required` with muster's sign-in for the App.
+4. `x_agent-manager_start_session codex-coder` with `workspaceGrant` and the
+   first message; `x_agent-manager_get_session` reads the answer.
+
+`go test ./fixtures/...` checks the definition against what the tools refuse
+at write time and the model it names against the values entry.
