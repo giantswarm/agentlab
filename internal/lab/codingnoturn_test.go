@@ -31,6 +31,8 @@ func TestJudgeNoTurn(t *testing.T) {
 		{name: "muster answered", ticks: concat(before, refused, []heartbeatTick{at(12*time.Second, "401")}, reopened), want: "wanted 403"},
 		{name: "served as the person", ticks: concat(before, []heartbeatTick{at(3*time.Second, "200")}, reopened), want: "wanted 403"},
 		{name: "not reopened", ticks: concat(before, refused, []heartbeatTick{at(codingNoTurnWindow+10*time.Second, "403")}), want: "did not open"},
+		{name: "the next turn's call in the send's second", ticks: concat(before, refused, []heartbeatTick{at(codingNoTurnWindow+time.Second, "200")}, reopened)},
+		{name: "served in the suspend's second", ticks: concat(before, refused, []heartbeatTick{at(codingNoTurnWindow-time.Second, "200")}, reopened), want: "wanted 403"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			verdict, err := judgeNoTurn(test.ticks, w)

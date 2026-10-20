@@ -43,14 +43,21 @@ type noTurnWindow struct {
 // judgeNoTurn is the verdict on the heartbeat's ticks: some in the window,
 // every one of them refused 403 at the egress gateway, and one answered 200
 // in the next turn.
+//
+// A tick carries its whole second, read off the node's clock, which is the
+// host's: a tick of second S ran in [S, S+1). The window holds the seconds
+// from the resume's up to the suspend's, the next turn those after the
+// send's; a tick of the suspend's or the send's second may be either, so it
+// is judged in neither, never as a call with no turn that the next turn made.
 func judgeNoTurn(ticks []heartbeatTick, w noTurnWindow) (string, error) {
 	var in, after []heartbeatTick
+	resumed, suspended, next := w.resumed.Truncate(time.Second), w.suspended.Truncate(time.Second), w.next.Truncate(time.Second)
 	for _, t := range ticks {
 		switch {
-		case t.at.Before(w.resumed.Add(-unbindClockSlack)):
-		case !t.at.After(w.suspended.Add(unbindClockSlack)):
+		case t.at.Before(resumed):
+		case t.at.Before(suspended):
 			in = append(in, t)
-		case !t.at.Before(w.next.Add(-unbindClockSlack)):
+		case t.at.After(next):
 			after = append(after, t)
 		}
 	}
