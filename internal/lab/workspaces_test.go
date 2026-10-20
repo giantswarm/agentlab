@@ -166,7 +166,7 @@ func TestPlatformValuesSyncRefreshAfter(t *testing.T) {
 // the subchart's map. Either way the platform admins and the developers,
 // never the viewers.
 func TestPlatformValuesWorkspaceOrganization(t *testing.T) {
-	cfg := workspaceLab(config.WorkspaceProviderFake)
+	cfg := workspaceGitHubLab()
 	wantGroups := []any{platformAdminsGroup, "developers"}
 
 	stubWorkspacesChart(t, chartWorkspaces{Carries: true, Organizations: true})

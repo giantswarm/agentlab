@@ -15,6 +15,10 @@ const testGrantClientID = "Iv1.pinned"
 // testGrantAppID is that App's id, the issuer's last segment.
 const testGrantAppID = "4711"
 
+// testWorkspaceManagerRange is the chart's default workspace-manager range,
+// which admits releases below every floor.
+const testWorkspaceManagerRange = ">=0.5.0 <1.0.0"
+
 // stubWorkspaceManagerTags answers the workspace-manager repository's tag
 // listing with tags, the version memo cleared before and after.
 func stubWorkspaceManagerTags(t *testing.T, tags ...string) {
@@ -39,7 +43,7 @@ func stubWorkspaceManagerTags(t *testing.T, tags ...string) {
 // 0.10 release pins, one resolving to 0.9 does not, and a range in
 // platform.valuesFiles admitting a release candidate wins over the chart's.
 func TestWorkspaceManagerTakesGrant(t *testing.T) {
-	source := workspaceManagerSource{repository: "oci://gsoci.azurecr.io/charts/giantswarm", chart: "workspace-manager", versionRange: ">=0.5.0 <1.0.0"}
+	source := workspaceManagerSource{repository: "oci://gsoci.azurecr.io/charts/giantswarm", chart: workspaceManagerMCPServer, versionRange: testWorkspaceManagerRange}
 	stubWorkspacesChart(t, chartWorkspaces{Carries: true, Organizations: true, Manager: source})
 
 	stubWorkspaceManagerTags(t, "0.9.0", "0.10.0-rc.5")
@@ -90,7 +94,7 @@ func TestRangeFloorAdmitsGrant(t *testing.T) {
 		"0.10.0-rc.5":             true,
 		"=0.11.0":                 true,
 		">= 0.10.0, < 1.0.0":      true,
-		">=0.5.0 <1.0.0":          false,
+		testWorkspaceManagerRange: false,
 		">0.9.0":                  false,
 		"<1.0.0":                  false,
 		"~0.10.0":                 false,
@@ -103,25 +107,21 @@ func TestRangeFloorAdmitsGrant(t *testing.T) {
 	}
 }
 
-// The pin per instance kind, its issuer <url>/apps/<App id> as the meta
-// chart derives it: the lab's GitHub and its own endpoints with no
-// response issuer, github.com with GitHub's, a GitLab with its scopes; the
-// OAuth client is always the instance's Secret.
+// The pin per instance kind, as the meta chart derives it: github.com's App
+// (issuer https://github.com/apps/<App id>) with GitHub's response issuer, a
+// GitLab with its scopes; the OAuth client is always the instance's Secret.
 func TestWorkspaceGrantOf(t *testing.T) {
-	const lab, gitlab = "https://github.lab.example", "https://gitlab.example.com"
+	const gitlab = testGitLabURL
 	for _, c := range []struct {
 		p    workspaceProviderValues
 		want workspaceGrantValues
 	}{
-		{workspaceProviderValues{Name: config.WorkspaceProviderFake, Kind: providerKindGitHub, URL: lab, AppID: testGrantAppID, ClientID: testGrantClientID, Secret: config.WorkspaceFakeSecretName},
-			workspaceGrantValues{Provider: config.WorkspaceProviderFake, Issuer: lab + "/apps/" + testGrantAppID,
-				AuthorizationEndpoint: lab + githubAuthorizePath, TokenEndpoint: lab + githubAccessTokenPath, Secret: config.WorkspaceFakeSecretName}},
 		{workspaceProviderValues{Name: config.WorkspaceProviderGitHub, Kind: providerKindGitHub, AppID: testGrantAppID, ClientID: testGrantClientID, Secret: config.WorkspaceGitHubSecretName},
 			workspaceGrantValues{Provider: config.WorkspaceProviderGitHub, Issuer: "https://github.com/apps/" + testGrantAppID, ExpectedIssuer: githubOAuthIssuer,
 				AuthorizationEndpoint: "https://github.com" + githubAuthorizePath, TokenEndpoint: "https://github.com" + githubAccessTokenPath, Secret: config.WorkspaceGitHubSecretName}},
 		{workspaceProviderValues{Name: config.WorkspaceProviderGitLab, Kind: providerKindGitLab, URL: gitlab + "/", ClientID: testGrantClientID, Secret: config.WorkspaceGitLabSecretName},
 			workspaceGrantValues{Provider: config.WorkspaceProviderGitLab, Issuer: gitlab, AuthorizationEndpoint: gitlab + "/oauth/authorize",
-				TokenEndpoint: gitlab + gitlabTokenPath, Scopes: workspaceGitLabScopes, Secret: config.WorkspaceGitLabSecretName}},
+				TokenEndpoint: gitlab + gitlabTokenPath, RevocationEndpoint: gitlab + gitlabRevokePath, Scopes: workspaceGitLabScopes, Secret: config.WorkspaceGitLabSecretName}},
 	} {
 		if got := *workspaceGrantOf(c.p); got != c.want {
 			t.Errorf("%s: %+v, want %+v", c.p.Name, got, c.want)
@@ -134,30 +134,88 @@ func TestWorkspaceGrantOf(t *testing.T) {
 // the exchange and no pin.
 func TestWorkspaceGrantValues(t *testing.T) {
 	stubWorkspacesProbe(t, true)
-	grant := workspaceGrantOf(workspaceProviderValues{Name: config.WorkspaceProviderFake, Kind: providerKindGitHub, URL: "https://github.lab.example", ClientID: testGrantClientID, Secret: config.WorkspaceFakeSecretName})
-	values, raw, _, _ := renderWorkspaceTemplates(t, workspaceLab(""), func(d *tmplData) { d.WorkspaceGrant = grant })
+	cfg := workspaceGitHubLab()
+	cfg.Platform.Workspaces.GitHub = config.WorkspaceGitHub{AppID: testGrantAppID, ClientID: testGrantClientID}
+	grant := workspaceGrantOf(workspaceProviderValues{Name: config.WorkspaceProviderGitHub, Kind: providerKindGitHub, AppID: testGrantAppID, ClientID: testGrantClientID, Secret: config.WorkspaceGitHubSecretName})
+	values, raw, _, _ := renderWorkspaceTemplates(t, cfg, func(d *tmplData) { d.WorkspaceGrant = grant })
 	wm, _ := workspaceManagerBlock(t, values)
 	muster, _ := wm["muster"].(map[string]any)
 	server, _ := muster["mcpServer"].(map[string]any)
 	auth, _ := server["auth"].(map[string]any)
 	as, _ := auth["authorizationServer"].(map[string]any)
-	if auth["provider"] != config.WorkspaceProviderFake || as["issuer"] != grant.Issuer || as["expectedIssuer"] != "" || as["scopes"] != "" ||
+	if auth["provider"] != config.WorkspaceProviderGitHub || as["issuer"] != grant.Issuer || as["expectedIssuer"] != githubOAuthIssuer || as["scopes"] != "" ||
 		as["authorizationEndpoint"] != grant.AuthorizationEndpoint || as["tokenEndpoint"] != grant.TokenEndpoint || as["grantScope"] != "subject" {
 		t.Errorf("workspace-manager.muster.mcpServer.auth = %v", auth)
 	}
-	if ref, _ := as["clientCredentialsSecretRef"].(map[string]any); ref["name"] != config.WorkspaceFakeSecretName {
-		t.Errorf("clientCredentialsSecretRef = %v, want %s", as["clientCredentialsSecretRef"], config.WorkspaceFakeSecretName)
+	if ref, _ := as["clientCredentialsSecretRef"].(map[string]any); ref["name"] != config.WorkspaceGitHubSecretName {
+		t.Errorf("clientCredentialsSecretRef = %v, want %s", as["clientCredentialsSecretRef"], config.WorkspaceGitHubSecretName)
 	}
 	if _, ok := wm["tokenExchange"]; ok {
 		t.Errorf("a pinned manager's values carry a token exchange:\n%s", raw)
 	}
 
-	values, _, _, _ = renderWorkspaceTemplates(t, workspaceLab(""), nil)
+	values, _, _, _ = renderWorkspaceTemplates(t, cfg, func(d *tmplData) { d.WorkspaceGrant = nil })
 	wm, _ = workspaceManagerBlock(t, values)
 	if _, ok := wm["muster"]; ok {
 		t.Errorf("an unpinned manager's values carry a pin: %v", wm["muster"])
 	}
 	if _, ok := wm["tokenExchange"]; !ok {
 		t.Error("an unpinned manager's values lost the token exchange")
+	}
+}
+
+// A GitLab pin names GitLab's revocation endpoint only for a manager whose
+// chart renders it (0.11.0-rc.6 and newer, resolved like the grant floor);
+// an earlier chart's schema refuses the key, so its pin goes without.
+func TestWorkspaceGrantForRevocationEndpoint(t *testing.T) {
+	source := workspaceManagerSource{repository: "oci://gsoci.azurecr.io/charts/giantswarm", chart: workspaceManagerMCPServer, versionRange: testWorkspaceManagerRange}
+	stubWorkspacesChart(t, chartWorkspaces{Carries: true, Organizations: true, Manager: source})
+	const gitlab = testGitLabURL
+	providers := []workspaceProviderValues{{Name: config.WorkspaceProviderGitLab, Kind: providerKindGitLab, URL: gitlab, ClientID: testGrantClientID, Secret: config.WorkspaceGitLabSecretName}}
+	cfg := workspaceLab(config.WorkspaceProviderGitLab)
+
+	stubWorkspaceManagerTags(t, "0.10.2", "0.11.0-rc.5")
+	if g := workspaceGrantFor(cfg, providers); g == nil || g.RevocationEndpoint != "" {
+		t.Errorf("a range resolving to 0.10.2: pin %+v, want one without a revocation endpoint", g)
+	}
+
+	stubWorkspaceManagerTags(t, "0.10.2", "0.11.0")
+	if g := workspaceGrantFor(cfg, providers); g == nil || g.RevocationEndpoint != gitlab+gitlabRevokePath {
+		t.Errorf("a range resolving to 0.11.0: pin %+v, want the revocation endpoint %s", g, gitlab+gitlabRevokePath)
+	}
+
+	floored := source
+	floored.versionRange = ">=0.11.0-rc.6 <1.0.0"
+	stubWorkspacesChart(t, chartWorkspaces{Carries: true, Organizations: true, Manager: floored})
+	stubWorkspaceManagerTags(t)
+	listChartTags = func(url string, _ bool) ([]string, error) {
+		t.Errorf("a range floored at 0.11.0-rc.6 listed the tags of %s", url)
+		return nil, nil
+	}
+	if g := workspaceGrantFor(cfg, providers); g == nil || g.RevocationEndpoint != gitlab+gitlabRevokePath {
+		t.Errorf("a range floored at 0.11.0-rc.6: pin %+v, want the revocation endpoint", g)
+	}
+}
+
+// The values carry the pin's revocation endpoint when it has one, and no key
+// when it has none.
+func TestWorkspaceGrantValuesRevocationEndpoint(t *testing.T) {
+	stubWorkspacesProbe(t, true)
+	gitlabLab := workspaceLab(config.WorkspaceProviderGitLab)
+	gitlabLab.Platform.Workspaces.GitLab = testWorkspaceGitLab(testGrantClientID)
+	for _, endpoint := range []string{"https://gitlab.example.com/oauth/revoke", ""} {
+		grant := &workspaceGrantValues{Provider: config.WorkspaceProviderGitLab, Issuer: "https://gitlab.example.com", // #nosec G101 -- endpoints and a Secret name, no credential
+			AuthorizationEndpoint: "https://gitlab.example.com/oauth/authorize",
+			TokenEndpoint:         "https://gitlab.example.com/oauth/token", RevocationEndpoint: endpoint, Secret: config.WorkspaceGitLabSecretName}
+		values, raw, _, _ := renderWorkspaceTemplates(t, gitlabLab, func(d *tmplData) { d.WorkspaceGrant = grant })
+		wm, _ := workspaceManagerBlock(t, values)
+		muster, _ := wm["muster"].(map[string]any)
+		server, _ := muster["mcpServer"].(map[string]any)
+		auth, _ := server["auth"].(map[string]any)
+		as, _ := auth["authorizationServer"].(map[string]any)
+		got, ok := as["revocationEndpoint"]
+		if endpoint == "" && ok || endpoint != "" && got != endpoint {
+			t.Errorf("revocationEndpoint %q: rendered %v (present %t)\n%s", endpoint, got, ok, raw)
+		}
 	}
 }

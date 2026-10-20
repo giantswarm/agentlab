@@ -52,6 +52,9 @@ func (pc PortConflict) String() string {
 type labPort struct {
 	field, what string
 	port        *int
+	// addr is the host address the mapping binds: 127.0.0.1, or for the edge
+	// platform.gatewayAddress.
+	addr string
 	// pick chooses a free replacement given the scanner; a nil note means
 	// the move has no caveat beyond the number.
 	pick func(scan func(lo, hi int) (int, bool)) (int, bool)
@@ -61,25 +64,26 @@ type labPort struct {
 // ports lists every host-side port the configuration owns, in the order they
 // are probed and reported.
 func (c *Config) ports() []labPort {
+	lo := DefaultGatewayAddress
 	return []labPort{
 		// Dex must stay in the NodePort range (host port == NodePort); scan
 		// upward from the current value and wrap around the range.
-		{"dexPort", "the Dex issuer", &c.DexPort, func(scan func(int, int) (int, bool)) (int, bool) {
+		{"dexPort", "the Dex issuer", &c.DexPort, lo, func(scan func(int, int) (int, bool)) (int, bool) {
 			if p, ok := scan(c.DexPort+1, 32767); ok {
 				return p, true
 			}
 			return scan(30000, c.DexPort-1)
 		}, nil},
-		{"platform.musterPort", "muster's direct debug access", &c.Platform.MusterPort, func(scan func(int, int) (int, bool)) (int, bool) {
+		{"platform.musterPort", "muster's direct debug access", &c.Platform.MusterPort, lo, func(scan func(int, int) (int, bool)) (int, bool) {
 			return scan(c.Platform.MusterPort+1, 65535)
 		}, nil},
-		{"platform.agentsPort", "the kagent UI", &c.Platform.AgentsPort, func(scan func(int, int) (int, bool)) (int, bool) {
+		{"platform.agentsPort", "the kagent UI", &c.Platform.AgentsPort, lo, func(scan func(int, int) (int, bool)) (int, bool) {
 			return scan(c.Platform.AgentsPort+1, 65535)
 		}, nil},
 		// The edge prefers 8443 over 444: dodging the whole privileged range
 		// keeps later probes honest (they can bind instead of dial), and
 		// 8443 is the conventional alternate HTTPS port.
-		{"platform.gatewayPort", "the agentgateway edge", &c.Platform.GatewayPort, func(scan func(int, int) (int, bool)) (int, bool) {
+		{"platform.gatewayPort", "the agentgateway edge", &c.Platform.GatewayPort, c.GatewayHostAddress(), func(scan func(int, int) (int, bool)) (int, bool) {
 			lo := c.Platform.GatewayPort + 1
 			if c.Platform.GatewayPort < 1024 {
 				lo = 8443
@@ -88,23 +92,24 @@ func (c *Config) ports() []labPort {
 		}, func(to int) string {
 			return fmt.Sprintf("public URLs gain :%d", to)
 		}},
-		{"apiServerPort", "the Kubernetes API server", &c.APIServerPort, func(scan func(int, int) (int, bool)) (int, bool) {
+		{"apiServerPort", "the Kubernetes API server", &c.APIServerPort, lo, func(scan func(int, int) (int, bool)) (int, bool) {
 			return scan(c.APIServerPort+1, 65535)
 		}, func(to int) string {
 			return fmt.Sprintf("an agent sandbox's allow list needs 127.0.0.1:%d", to)
 		}},
-		{"backstage.port", "Backstage's direct debug access", &c.Backstage.Port, func(scan func(int, int) (int, bool)) (int, bool) {
+		{"backstage.port", "Backstage's direct debug access", &c.Backstage.Port, lo, func(scan func(int, int) (int, bool)) (int, bool) {
 			return scan(c.Backstage.Port+1, 65535)
 		}, nil},
 	}
 }
 
-// HostPorts returns every host-side port the configuration owns: what another
-// lab on this machine must not use while this one may come up.
-func (c *Config) HostPorts() []int {
-	var out []int
+// HostPorts returns every host-side address the configuration binds, as
+// host:port: what another lab on this machine must not use while this one
+// may come up.
+func (c *Config) HostPorts() []string {
+	var out []string
 	for _, lp := range c.ports() {
-		out = append(out, *lp.port)
+		out = append(out, net.JoinHostPort(lp.addr, strconv.Itoa(*lp.port)))
 	}
 	return out
 }
@@ -122,21 +127,21 @@ func (c *Config) HostPorts() []int {
 // (yet, or any more): an existing cluster's mappings are fixed at node
 // creation, where renumbering would only mislead — PortConflicts is the
 // read-only check for that case.
-func (c *Config) ChooseFreePorts(ours map[int]bool, recorded map[int]string, minPublishable int) []PortChange {
-	return c.chooseFreePorts(func(p int) bool { return !ours[p] && portTaken(p) }, recorded, minPublishable)
+func (c *Config) ChooseFreePorts(ours map[int]bool, recorded map[string]string, minPublishable int) []PortChange {
+	return c.chooseFreePorts(func(addr string, p int) bool { return !ours[p] && portTaken(addr, p) }, recorded, minPublishable)
 }
 
 // PortConflicts reports which host-side ports of the configuration another
 // process holds, ignoring the lab's own (`ours`, the ports the existing kind
 // node publishes). Nothing is changed.
 func (c *Config) PortConflicts(ours map[int]bool) []PortConflict {
-	return c.portConflicts(func(p int) bool { return !ours[p] && portTaken(p) })
+	return c.portConflicts(func(addr string, p int) bool { return !ours[p] && portTaken(addr, p) })
 }
 
-func (c *Config) portConflicts(taken func(int) bool) []PortConflict {
+func (c *Config) portConflicts(taken func(addr string, port int) bool) []PortConflict {
 	var conflicts []PortConflict
 	for _, lp := range c.ports() {
-		if taken(*lp.port) {
+		if taken(lp.addr, *lp.port) {
 			conflicts = append(conflicts, PortConflict{Field: lp.field, What: lp.what, Port: *lp.port})
 		}
 	}
@@ -145,12 +150,14 @@ func (c *Config) portConflicts(taken func(int) bool) []PortConflict {
 
 // chooseFreePorts is ChooseFreePorts with the probe injected, so tests can
 // run against a fixed set of "occupied" ports instead of the machine.
-func (c *Config) chooseFreePorts(taken func(int) bool, recorded map[int]string, minPublishable int) []PortChange {
+func (c *Config) chooseFreePorts(taken func(addr string, port int) bool, recorded map[string]string, minPublishable int) []PortChange {
 	// A port the engine cannot publish is unusable whatever the probe says:
 	// binding it here succeeds as often as not (the lab runs unprivileged
 	// too), so the probe alone would call it free. Another lab's recorded
 	// port is unusable whether anything listens on it now or not.
-	unusable := func(p int) bool { return p < minPublishable || recorded[p] != "" || taken(p) }
+	unusable := func(addr string, p int) bool {
+		return p < minPublishable || recorded[net.JoinHostPort(addr, strconv.Itoa(p))] != "" || taken(addr, p)
+	}
 	// Every port with a fixed meaning in the lab, so replacements never
 	// collide with each other or with it: the config's own host ports, the
 	// browser-login callback (host-side, pre-registered in Dex), and the
@@ -170,19 +177,18 @@ func (c *Config) chooseFreePorts(taken func(int) bool, recorded map[int]string, 
 		reserved[p] = true
 	}
 
-	scan := func(lo, hi int) (int, bool) {
-		for p := lo; p <= hi; p++ {
-			if !reserved[p] && !unusable(p) {
-				return p, true
-			}
-		}
-		return 0, false
-	}
-
 	var changes []PortChange
 	for _, lp := range c.ports() {
-		if !unusable(*lp.port) {
+		if !unusable(lp.addr, *lp.port) {
 			continue
+		}
+		scan := func(lo, hi int) (int, bool) {
+			for p := lo; p <= hi; p++ {
+				if !reserved[p] && !unusable(lp.addr, p) {
+					return p, true
+				}
+			}
+			return 0, false
 		}
 		to, ok := lp.pick(scan)
 		if !ok {
@@ -192,11 +198,11 @@ func (c *Config) chooseFreePorts(taken func(int) bool, recorded map[int]string, 
 		}
 		reserved[to] = true
 		ch := PortChange{Field: lp.field, What: lp.what, From: *lp.port, To: to}
-		switch {
+		switch other := recorded[net.JoinHostPort(lp.addr, strconv.Itoa(*lp.port))]; {
 		case *lp.port < minPublishable:
 			ch.Why = fmt.Sprintf("cannot be published by this container engine (nothing below %d can)", minPublishable)
-		case recorded[*lp.port] != "":
-			ch.Why = fmt.Sprintf("is the lab %s's", recorded[*lp.port])
+		case other != "":
+			ch.Why = fmt.Sprintf("is the lab %s's", other)
 		}
 		if lp.note != nil {
 			ch.Note = lp.note(to)
@@ -208,13 +214,13 @@ func (c *Config) chooseFreePorts(taken func(int) bool, recorded map[int]string, 
 }
 
 // portTaken reports whether anything on this machine already occupies
-// 127.0.0.1:<port>, the exact address every kind port mapping binds. A bind
+// <addr>:<port>, the exact address a kind port mapping binds. A bind
 // probe catches every listener (including 0.0.0.0 binds, which conflict with
 // a later 127.0.0.1 bind); privileged ports (the gateway's 443) may refuse
 // the bind with EACCES even when free — docker binds those as root — so they
 // fall back to dialing, where only an actual listener answers.
-func portTaken(port int) bool {
-	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+func portTaken(host string, port int) bool {
+	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	l, err := net.Listen("tcp", addr)
 	if err == nil {
 		_ = l.Close()

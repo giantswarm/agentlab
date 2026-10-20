@@ -59,8 +59,9 @@ type agentTemplate struct {
 		ModelConfig *struct {
 			Name string `json:"name"`
 		} `json:"modelConfig"`
-		SystemPrompt string          `json:"systemPrompt"`
-		Skills       []templateSkill `json:"skills"`
+		SystemPrompt string           `json:"systemPrompt"`
+		Skills       []templateSkill  `json:"skills"`
+		Plugins      []templatePlugin `json:"plugins"`
 		Tools        []struct {
 			MCP *struct {
 				Server struct {
@@ -86,6 +87,20 @@ type templateSkill struct {
 		OCI  string `json:"oci"`
 		Path string `json:"path"`
 	} `json:"source"`
+}
+
+// templatePlugin is one spec.plugins[] entry as the chart renders it:
+// {source: {git: {url, commit} | oci, path}, skills}.
+type templatePlugin struct {
+	Source struct {
+		Git *struct {
+			URL    string `json:"url"`
+			Commit string `json:"commit"`
+		} `json:"git"`
+		OCI  string `json:"oci"`
+		Path string `json:"path"`
+	} `json:"source"`
+	Skills []string `json:"skills"`
 }
 
 // agentObject is the part of a kagent Agent the proofs read: the template

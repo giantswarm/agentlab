@@ -9,7 +9,7 @@ RHDH: the GS build is the one that carries the first-party `muster` plugin,
 which is the whole reason to run a portal in this lab at all.
 
 ```bash
-./agentlab up            # the whole stack, Backstage included
+agentlab up            # the whole stack, Backstage included
 open https://backstage.127.0.0.1.nip.io
 ```
 
@@ -99,6 +99,7 @@ skips with the reason, and a skipped spec is unproven.
 | `AGENTLAB_KUBECONFIG=<lab>/state/kubeconfig` | any lab: the specs that read or stage objects with kubectl |
 | `AGENTLAB_BACKSTAGE_URL`, `AGENTLAB_CLUSTER` | a lab other than the default edge on `:443` |
 | `AGENTLAB_INSTALLATIONS_PAGE=1` | `backstage.installationsPage: true`: the installations specs (`installations-versions`, `installations-session-expiry`, the Installations link in `agents-list-states`) |
+| `AGENTLAB_TENANTS=1` | `platform.tenants: true` (`agentlab configure --tenants`): `tenants.spec.ts`, agents per tenant in an organization namespace it labels and binds (with `AGENTLAB_KUBECONFIG`; run it first or alone, its empty state needs a platform tenant with no agent) |
 
 The agent-platform chart lists `page:gs/installations` in
 `backstage.disabledExtensions`, and the Backstage app ships the page off, so a
@@ -326,6 +327,51 @@ aborted run first. Not provable headlessly and out of scope: the browser's
 versioned persisted query cache (a stale v1alpha2 entry never renders) — that
 is the frontend's own guard, exercised by the plugin's tests, not by a portal
 API the lab can drive.
+
+**Per tenant** (`agentlab tenants-test`, steps P, with `platform.tenants`;
+giantswarm/backstage#3161): the same routes as each person, in the two
+organization namespaces `tenants-test` builds, while their agents and the
+platform tenant's run (docs/identity.md, [The portal per
+tenant](identity.md#the-portal-per-tenant)):
+
+- **P1 roster**: alice (`tenant-a`) and bob (`tenant-b`) read their rosters at
+  the same time, as the Agents tab does: the cluster-wide Agents list is
+  refused (403), `GET /api/agent-platform/kagent/agent-namespaces` — the
+  controller's `AgentService/ListAgents` with no namespace, as the person —
+  names exactly `kagent` and their own organization's namespace, and the
+  per-namespace reads through `/api/kubernetes/proxy` list exactly their
+  organization's agent and the platform tenant's, nothing of the other
+  organization. A portal without the route (a released 3.10.5) lists the
+  platform tenant only, and the step fails naming the route's 404.
+- **P3 tenant picker**: the editor's (`dev@lab.local`, editor of the first
+  organization only) `get_info` through the portal names that organization in
+  `namespaces.managed` and not the other, and their `create_agent` through the portal into
+  the other organization is `forbidden: …`, no HelmRelease written.
+- **P4 actions**: the agent page's `SelfSubjectAccessReview` for `update` and
+  `delete` on the agent's HelmRelease, through the portal's Kubernetes proxy:
+  no for alice (a user) on her organization's agent, yes for the editor
+  there, no for the editor in the other organization.
+- **P5 session refusal**: alice's `start_session` through the portal on the
+  other organization's agent answers `forbidden: kagent: …` (the controller's
+  `PermissionDenied`, which the portal words as a refusal naming the agent and
+  its tenant); no Session of that agent and no credential read for its
+  atespace.
+- **P6 owner**: of the editor's roster through the portal (their agent and
+  the platform tenant's, the admin's), `agent-platform.giantswarm.io/created-by`
+  names them on their agent alone, and `GET /kagent/me` names them by
+  `email` — its `sub` is Dex's subject, not the email agent-manager records.
+  The "Created by: Me" filter itself is the browser suite's.
+- **P2 nothing visible**, last: alice's group binding in her organization is
+  removed and the platform tenant's agent deleted; her roster through the
+  portal is empty, the route names no namespace and nothing reads as
+  unreadable. The empty state's words are the browser suite's
+  (`tenants.spec.ts`): the chart binds `agent-platform:platform-user` to
+  `system:authenticated` in `kagent`, so no person's every namespace is
+  refused.
+
+What only a browser shows — the empty state, the picked tenant's sentence,
+the note on the agent page, the tenant on each row, the filter — is
+`tenants.spec.ts` in the portal's browser suite (`AGENTLAB_TENANTS=1`).
 
 **Against an existing agent**: `agentlab backstage-test --agent
 kagent/<name>` writes and deletes no agent. The sign-ins, the MCP servers page

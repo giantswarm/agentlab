@@ -105,10 +105,11 @@ func find(root *cobra.Command, name string) *cobra.Command {
 	return nil
 }
 
-// A command run in a lab directory the registry does not know registers it:
-// a lab from before the registry, or one whose entry is gone, is found from
-// any directory again.
-func TestEnterLabRegistersTheLabHere(t *testing.T) {
+// A command run in a lab directory the registry does not know settles it:
+// a lab from before the registry or the freedesktop folders, or one whose
+// entry is gone, moves into its Home, is registered there and found from any
+// directory again; its old directory keeps links to the moved files.
+func TestEnterLabSettlesTheLabHere(t *testing.T) {
 	regDir := t.TempDir()
 	prev := labs.Dir
 	labs.Dir = func() (string, error) { return regDir, nil }
@@ -117,14 +118,29 @@ func TestEnterLabRegistersTheLabHere(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, config.File), []byte("clusterName: unregistered\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(filepath.Join(dir, "certs"), 0o750); err != nil {
+		t.Fatal(err)
+	}
 	t.Chdir(dir)
 
 	if err := enterLab(labs.Enter); err != nil {
 		t.Fatal(err)
 	}
+	home, err := labs.Home("unregistered")
+	if err != nil {
+		t.Fatal(err)
+	}
 	got, err := labs.List()
-	if err != nil || len(got) != 1 || got[0].Name != "unregistered" || got[0].Dir != dir {
-		t.Fatalf("labs.List() = %+v, %v; want unregistered in %s", got, err, dir)
+	if err != nil || len(got) != 1 || got[0].Name != "unregistered" || got[0].Dir != home {
+		t.Fatalf("labs.List() = %+v, %v; want unregistered in %s", got, err, home)
+	}
+	if cwd, _ := os.Getwd(); cwd != home {
+		t.Errorf("the command runs in %s, want the lab's Home %s", cwd, home)
+	}
+	for _, f := range []string{config.File, "certs"} {
+		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
+			t.Errorf("the old directory's %s does not resolve: %v", f, err)
+		}
 	}
 }
 
@@ -173,20 +189,6 @@ func TestRenderStaysInTheDirectoryOfItsConfig(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-// The help of --workspaces-cleanup-after names the range the sessions part's
-// precondition requires, taken from the same constants.
-func TestCleanupAfterHelpNamesTheSessionsRange(t *testing.T) {
-	flag := find(rootCmd(), "configure").Flags().Lookup("workspaces-cleanup-after")
-	if flag == nil {
-		t.Fatal("configure has no --workspaces-cleanup-after flag")
-	}
-	for _, want := range []string{lab.SessionsCleanupWindowRange(), lab.SessionsCleanupWindowExample()} {
-		if !strings.Contains(flag.Usage, want) {
-			t.Errorf("--workspaces-cleanup-after help %q does not name %q", flag.Usage, want)
-		}
 	}
 }
 

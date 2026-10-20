@@ -16,13 +16,157 @@ The default configuration ships three users (password: `password`):
 | `dev@lab.local`    | `developers` | `edit` inside `ns/demo` only |
 | `viewer@lab.local` | `viewers` | `view` cluster-wide |
 
+`agentlab configure --tenants` adds two more, one per organization of
+`agentlab tenants-test`, when no user carries their group:
+
+| User | Groups in the token | Effective access |
+|---|---|---|
+| `alice@lab.local` | `tenant-a` | the platform tenant; with `tenants-test`, `agent-platform:user` in its first organization |
+| `bob@lab.local`   | `tenant-b` | the platform tenant; with `tenants-test`, `agent-platform:user` in its second organization |
+
 Users are fully configurable: `agentlab configure` lets you keep, edit, remove
 and add users, with per-user passwords and group membership. The **groups are
 a fixed vocabulary** — RBAC binds exactly `platform-admins` → cluster-admin,
-`developers` → edit-in-demo, `viewers` → view — and the form only offers those
-three. Passwords are bcrypt-hashed automatically; the hash is cached in
+`developers` → edit-in-demo, `viewers` → view, and nothing to `tenant-a` and
+`tenant-b`, which `tenants-test` binds per organization — and the form only
+offers those five. Passwords are bcrypt-hashed automatically; the hash is cached in
 `agentlab.yaml` so renders stay deterministic (no spurious Dex pod rolls). After
 editing users, run `agentlab reload`.
+
+## The tenant model
+
+What `agentlab tenants-test` asserts about who sees and runs which agent
+(giantswarm/agentlab#166; the plan is giantswarm/giantswarm#36698):
+
+- **A tenant is a namespace.** The platform tenant is `kagent`; an
+  organization's tenant is a namespace labelled `giantswarm.io/organization`.
+- **Kubernetes RBAC decides, at the kagent controller.** The chart's three
+  ClusterRoles are bound per tenant: `agent-platform:user` (see the agents,
+  start conversations), `agent-platform:editor` (also write agents),
+  `agent-platform:admin`. The chart binds the platform tenant's users to
+  `system:authenticated`, so every signed-in person sees its agents. The
+  controller (`kagent.controller.authorization.mode: kubernetes`, kagent 1.19)
+  asks the API server with a SubjectAccessReview for the caller's email and
+  the `groups` claim of the token the edge verified, each with the `oidc:`
+  prefix the lab's API server puts before them
+  (`kagent.controller.authorization.usernamePrefix` and `groupsPrefix` in the
+  lab's values; the fleet's API servers use none).
+- **What a person sees**: `ListAgents` with no namespace lists the agents of
+  every tenant the person may `list` agents in — the platform tenant and the
+  organizations bound to their groups — and nothing else; a person bound to
+  no organization lists the platform tenant only.
+- **What a person runs**: `CreateSession`, and a first A2A message with no
+  Session, on an agent of a tenant the person is not bound to are
+  `PermissionDenied`, and no turn reaches the model.
+- **What a person writes**: an editor creates, changes and deletes agents in
+  their organization and nowhere else; a user writes nothing.
+- **Everyone's sessions**: `ListSessions` with `all_creators` needs a
+  cluster-wide `list` on `sessions.api.kagent.dev`, which no tenant role
+  grants: refused to a person, answered to a cluster-admin (and to
+  workspace-manager's ServiceAccount, which the chart grants it with
+  workspaces on).
+- **Slack asks as the person**: klaus-gateway (4.10.0 and later) fetches each
+  person's roster as that person, across tenants, each row naming its tenant
+  (`platform`, or `organization <name>` for `org-<name>`), and refuses an
+  agent of another tenant — a pick, or a turn as a thread's collaborator —
+  with a note naming the tenant, sending nothing to it.
+
+A person with a cluster-wide read (`viewers`, `platform-admins`) sees every
+tenant, as on an installation.
+
+### MCP servers per tenant
+
+With `platform.tenants` on, muster serves the `MCPServer`s of the
+organization namespaces (`org-…`) next to its own namespace's
+(`muster.muster.mcpServersInAllNamespaces`, muster 5.48.0 or later; the lab
+pins 5.48.0, HACKS.md U38). What `tenants-test` asserts (the
+agent-permissions plan's D9):
+
+- **Kubernetes RBAC decides what a person sees.** muster lists the
+  `MCPServer`s of each namespace with the person's own Dex token: a person
+  sees the servers of every namespace where they may `list`
+  `mcpservers.muster.giantswarm.io` — muster's namespace through the chart's
+  `agent-platform:mcpserver-viewer` binding to every signed-in person, an
+  organization through `agent-platform:user` or `:editor` there. A person in
+  no organization sees muster's namespace only. The token must carry the
+  audience muster checks before it calls the API server
+  (`writesAsCaller.kubernetesAudience`): the lab sets `kubernetes`, the client
+  id the lab's API server trusts, which every lab token for muster carries
+  (the fleet's API servers trust `dex-k8s-authenticator`, muster's default).
+- **A server a person may not see does not exist for them**: not in
+  `core_mcpserver_list` or `list_tools`, and a call of its tools,
+  `core_service_start` and `core_auth_login` for it are answered as for a
+  server that does not exist.
+- **A tenant server gets no identity from muster**: an `MCPServer` of an
+  organization namespace that sets `auth.forwardToken`,
+  `auth.requiredAudiences`, `auth.tokenExchange`, `family` or
+  `auth.type: sigv4` is not started and reads `Failed` with the reason.
+- **A tenant server's sign-in stays in its namespace.** It is keyed
+  `<namespace>/<name>`, its tools are `x_<namespace>_<name>_<tool>`, it signs
+  in through `<muster>/oauth/ns/<namespace>/callback` with a client of its own
+  namespace, and its token is filed under its namespace and issuer: a sign-in
+  to it gives no token to a server of the same issuer in muster's namespace or
+  in another organization. The lab Dex lists the callbacks of `tenants-test`'s
+  two namespaces on the platform client.
+- **A tenant namespace's sign-ins go with its servers.** muster forgets them
+  when the namespace's last server, or the namespace, goes (a server deleted
+  next to others takes the issuers only it named): a namespace created again
+  with the same name starts with no sign-in, and
+  `core_auth_login` there answers a sign-in link, not a connect. Every
+  `tenants-test` run creates its namespaces again, so a second run right
+  after the first signs in again.
+- **Through an agent, as the person**: an organization's agent bound to
+  muster lists, in a turn as the person, the servers that person sees.
+
+What an organization sets up for a server of its own that signs in with a
+client of its namespace (`authorizationServer.clientCredentialsSecretRef`):
+muster reads that Secret with its own ServiceAccount, and no chart grants it a
+read outside muster's namespace (least privilege). So whoever declares the
+`MCPServer` also declares, in its namespace, a Role with `get` on that Secret
+alone (`resourceNames`) and a RoleBinding of it to muster's ServiceAccount
+(`muster` in `agent-platform`), as muster's how-to ["Servers outside muster's
+namespace"](https://github.com/giantswarm/muster/blob/main/docs/how-to/connecting-non-rfc9728-mcp-servers.md#servers-outside-musters-namespace)
+describes. `tenants-test`'s fixture does this for
+`agentlab-tenants-mcp` (the Role and RoleBinding
+`agentlab-tenants-mcp-secret-reader`). Without them, muster answers the
+sign-in with `Cannot sign in to '<namespace>/<name>': the server's sign-in is
+not ready: <reason>`, and the reason names the Secret and the Role.
+
+### The portal per tenant
+
+The Dev Portal (Backstage with giantswarm/backstage#3161) reads the same
+model as the person, through its own backend routes. What `tenants-test`
+asserts (steps P, [The Agent Platform proof](backstage.md#the-agent-platform-proof)):
+
+- **The roster per tenant.** The portal asks the controller which namespaces
+  hold an agent the person may list (`GET /api/agent-platform/kagent/agent-namespaces`,
+  `AgentService/ListAgents` with no namespace, as the person, through the
+  agentgateway edge's GRPCRoute) and reads the Agents of each through the
+  Kubernetes API as the person: a tenant user's roster is their
+  organization's agents and the platform tenant's, labelled `organization
+  <name>` and `platform`.
+- **Where a person may create**: the create flow's tenants are agent-manager's
+  `get_info` `namespaces.managed` as the person — an editor of one
+  organization gets that one — and a create elsewhere is `forbidden`.
+- **What a person may change**: the agent page asks the API server
+  (`SelfSubjectAccessReview` for `update` and `delete` on the agent's
+  HelmRelease): a user gets no, an editor yes in their organization only.
+- **What a person may run**: a session start on another tenant's agent is the
+  controller's refusal (`forbidden: kagent: …` from `start_session`), and
+  nothing reaches the agent.
+- **Who created an agent**: agent-manager records the caller's email as
+  `agent-platform.giantswarm.io/created-by`, and the portal shows it. It is
+  never an authorization input. `GET /kagent/me` answers the token's claims
+  on kagent 1.19: its `email` is the person, its `sub` is Dex's subject. The
+  portal's "Created by: Me" compares the creator with that `sub`, so it keeps
+  nothing (giantswarm/backstage#3161; the browser suite's `tenants.spec.ts`
+  shows it).
+- **No tenant, no agent**: a person bound in no organization, with no platform
+  agent, reads an empty roster, not an error. The chart binds
+  `agent-platform:platform-user` to every signed-in person in `kagent`, so the
+  platform tenant is never refused: the portal shows "No agents yet" and its
+  invitation to create one, not its "No agents for you yet" naming the roles,
+  which needs every namespace refused.
 
 ## How the identity plumbing works
 

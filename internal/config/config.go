@@ -4,7 +4,6 @@ package config
 
 import (
 	"bytes"
-	"cmp"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
@@ -13,6 +12,7 @@ import (
 	"io"
 	"io/fs"
 	"maps"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -33,15 +33,43 @@ import (
 // directory by `agentlab configure` and read by every other command.
 const File = "agentlab.yaml"
 
-// The three lab groups are a fixed vocabulary: RBAC binds exactly these to
-// cluster-admin / edit-in-demo / view (see the rbac template).
+// The lab groups are a fixed vocabulary: RBAC binds the first three to
+// cluster-admin / edit-in-demo / view (see the rbac template). The two
+// tenant groups the lab binds nothing to: `agentlab tenants-test` binds each
+// to agent-platform:user in one organization namespace, so a token's groups
+// claim is what gives its person that tenant.
 const (
 	groupPlatformAdmins = "platform-admins"
 	groupDevelopers     = "developers"
 	groupViewers        = "viewers"
+	GroupTenantA        = "tenant-a"
+	GroupTenantB        = "tenant-b"
 )
 
-var Groups = []string{groupPlatformAdmins, groupDevelopers, groupViewers}
+var Groups = []string{groupPlatformAdmins, groupDevelopers, groupViewers, GroupTenantA, GroupTenantB}
+
+// TenantUsers are the people `agentlab configure --tenants` adds when no user
+// carries their tenant group: one person per organization of tenants-test,
+// in that group alone.
+var TenantUsers = []User{
+	{Email: "alice@lab.local", Username: "alice", Name: "Lab Tenant A", Password: defaultPassword, Groups: []string{GroupTenantA}},
+	{Email: "bob@lab.local", Username: "bob", Name: "Lab Tenant B", Password: defaultPassword, Groups: []string{GroupTenantB}},
+}
+
+// EnsureTenantUsers adds each of TenantUsers whose group no user carries
+// and whose email is free, and returns the emails it added.
+func (c *Config) EnsureTenantUsers() []string {
+	var added []string
+	for _, u := range TenantUsers {
+		if c.FindUserInGroup(u.Groups[0]) != nil || c.FindUser(u.Email) != nil {
+			continue
+		}
+		u.Groups = slices.Clone(u.Groups)
+		c.Users = append(c.Users, u)
+		added = append(added, u.Email)
+	}
+	return added
+}
 
 // defaultPassword is the throwaway password every default lab user starts
 // with; like everything else in the lab's identity, it guards nothing real.
@@ -124,7 +152,7 @@ const DefaultAPIServerPort = 6443
 // image is the major.minor components.substrate installs) — a chart that
 // leaves the kagent range open across a Substrate release boots no golden
 // actor (agentlab#187).
-const DefaultChartVersion = "4.148.0"
+const DefaultChartVersion = "4.157.1"
 
 // ChartRepository is where the agent-platform chart releases live.
 const ChartRepository = "oci://gsoci.azurecr.io/charts/giantswarm/agent-platform"
@@ -400,6 +428,12 @@ type Platform struct {
 	// that port in-cluster, so the ported URLs resolve from pods too. Change
 	// only if 443 is taken.
 	GatewayPort int `yaml:"gatewayPort"`
+	// GatewayAddress is the loopback address the edge is published on, empty
+	// for 127.0.0.1. A second lab on the machine takes 127.0.0.<n> with the
+	// domain lab<n>.127.0.0.<n>.nip.io (`configure` picks both), so it serves
+	// on 443 too and its URLs carry no port: Linux routes all of 127.0.0.0/8
+	// to loopback. Fixed at node creation like the ports.
+	GatewayAddress string `yaml:"gatewayAddress,omitempty"`
 	// TLS optionally hands the edge an externally provisioned certificate
 	// pair (PEM) instead of the minted lab-CA wildcard — for users who own a
 	// real domain (wildcard record -> 127.0.0.1) and run their own ACME
@@ -572,33 +606,9 @@ type Platform struct {
 	// giantswarm.io/organization. Off by default; --tenants turns it on;
 	// needs the agents runtime. `agentlab tenants-test` is the proof.
 	Tenants Tenants `yaml:"tenants"`
-	// The platform-manager fixture: an invented installation with the agent
-	// platform and workspaces on, in a registry the lab serves, that the
-	// released giantswarm-platform-manager plans against
-	// (internal/lab/pmtest.go). Off by default; `agentlab pm-test` is the
-	// proof and refuses while it is off.
-	PlatformManager PlatformManager `yaml:"platformManager"`
-}
-
-// DefaultPlatformManagerVersion is the giantswarm-platform-manager release
-// pm-test installs while platform.platformManager.version is empty: a stable
-// release of the chart and image on gsoci.
-const DefaultPlatformManagerVersion = "0.69.0"
-
-// PlatformManager configures the platform-manager fixture.
-type PlatformManager struct {
-	// On, `agentlab pm-test` runs: the manager's chart at Version as a
-	// temporary HelmRelease against the lab's registry fixture.
-	Enabled bool `yaml:"enabled"`
-	// Version is the giantswarm-platform-manager chart (and image) version,
-	// a release, a release candidate or a branch's dev build; empty is
-	// DefaultPlatformManagerVersion.
-	Version string `yaml:"version,omitempty"`
-}
-
-// PlatformManagerVersion is the manager release pm-test installs.
-func (c *Config) PlatformManagerVersion() string {
-	return cmp.Or(strings.TrimPrefix(strings.TrimSpace(c.Platform.PlatformManager.Version), "v"), DefaultPlatformManagerVersion)
+	// Retired: the platform-manager fixture. Read so a file an earlier
+	// release wrote still loads, never written back.
+	RetiredPlatformManager any `yaml:"platformManager,omitempty"`
 }
 
 // Coding configures the lab's coding Harnesses.
@@ -635,14 +645,10 @@ type Workspaces struct {
 	// key.
 	Enabled bool `yaml:"enabled"`
 	// Provider names the workspace-manager's provider instances:
-	// WorkspaceProviderFake (the lab's own GitHub, served for the lab as a
-	// GitHub Enterprise-shaped instance; the default while empty),
-	// WorkspaceProviderFakeBearer (the same GitHub as a github.com-shaped
-	// instance, its API on a host of its own; only beside the fake),
-	// WorkspaceProviderGitHub (a GitHub App of the lab's own on github.com),
-	// WorkspaceProviderGitLab (a GitLab the lab reaches, its OAuth
-	// application and group access token), or several, comma-separated
-	// ("fake,fake-bearer,github,gitlab"). With workspaces on, the
+	// WorkspaceProviderGitHub (a GitHub App of the lab's own on github.com;
+	// the default while empty), WorkspaceProviderGitLab (a GitLab the lab
+	// reaches, its OAuth application and group access token), or both,
+	// comma-separated ("github,gitlab"). With workspaces on, the
 	// workspace-manager's public base URL carries the gateway port
 	// (WorkspaceManagerBaseURL) and the chart routes its host.
 	Provider string `yaml:"provider,omitempty"`
@@ -730,7 +736,7 @@ func (g WorkspaceGitLab) Validate() error {
 	return nil
 }
 
-// WorkspaceGitHub is the lab's GitHub App for the workspace-manager's
+// WorkspaceGitHub is the GitHub App of the workspace-manager's
 // provider instance github: an App of its own, apart from the lab Dex's
 // sign-in App and muster's github server client. Its App id and client id
 // are public and live here, empty until the App is registered; its private
@@ -777,16 +783,11 @@ const WorkspaceOrganization = "lab"
 
 var WorkspaceOrganizationGroups = []string{groupPlatformAdmins, groupDevelopers}
 
-// The workspace providers, and the Secrets of their Apps: the fake's holds
-// the key pair and client secret the lab generated itself (certs/github-fake),
-// the github instance's what the operator's secret tooling placed. Both carry
-// the same keys, and the values only ever reference them.
+// The workspace providers, and the Secrets of their Apps: what the
+// operator's secret tooling placed, which the values only ever reference.
 const (
-	WorkspaceProviderFake        = "fake"
-	WorkspaceProviderFakeBearer  = "fake-bearer"
 	WorkspaceProviderGitHub      = "github"
 	WorkspaceProviderGitLab      = "gitlab"
-	WorkspaceFakeSecretName      = "workspace-fake"   // #nosec G101 -- Secret NAME, not a credential
 	WorkspaceGitHubSecretName    = "workspace-github" // #nosec G101 -- Secret NAME, not a credential
 	WorkspaceGitHubPrivateKeyKey = "private-key"      // #nosec G101 -- Secret KEY name, not a credential
 	WorkspaceGitLabSecretName    = "workspace-gitlab" // #nosec G101 -- Secret NAME, not a credential
@@ -796,52 +797,31 @@ const (
 
 // workspaceProviderNames are the instances platform.workspaces.provider may
 // name, in the order the workspace-manager gets them.
-var workspaceProviderNames = []string{WorkspaceProviderFake, WorkspaceProviderFakeBearer, WorkspaceProviderGitHub, WorkspaceProviderGitLab}
+var workspaceProviderNames = []string{WorkspaceProviderGitHub, WorkspaceProviderGitLab}
 
-// parseWorkspaceProviders reads platform.workspaces.provider: the fake alone
+// parseWorkspaceProviders reads platform.workspaces.provider: github alone
 // for "", else the comma-separated set of known instances, each at most
-// once, in workspaceProviderNames order; fake-bearer only beside the fake,
-// whose GitHub serves it.
+// once, in workspaceProviderNames order.
 func parseWorkspaceProviders(value string) ([]string, error) {
 	if strings.TrimSpace(value) == "" {
-		return []string{WorkspaceProviderFake}, nil
+		return []string{WorkspaceProviderGitHub}, nil
 	}
 	var names []string
 	for raw := range strings.SplitSeq(value, ",") {
 		name := strings.TrimSpace(raw)
 		if !slices.Contains(workspaceProviderNames, name) {
-			return nil, fmt.Errorf("platform.workspaces.provider %q: want %s, several comma-separated; %q is none of them", value, strings.Join(workspaceProviderNames, ", "), name)
+			return nil, fmt.Errorf("platform.workspaces.provider %q: want %s, several comma-separated; %q is none of them (`agentlab configure --defaults --workspaces-provider <instances>` rewrites it)", value, strings.Join(workspaceProviderNames, ", "), name)
 		}
 		if slices.Contains(names, name) {
 			return nil, fmt.Errorf("platform.workspaces.provider %q names %s twice", value, name)
 		}
 		names = append(names, name)
 	}
-	if slices.Contains(names, WorkspaceProviderFakeBearer) && !slices.Contains(names, WorkspaceProviderFake) {
-		return nil, fmt.Errorf("platform.workspaces.provider %q names %s without %s: the lab's GitHub of the instance %s serves it, name both (%s,%s)",
-			value, WorkspaceProviderFakeBearer, WorkspaceProviderFake, WorkspaceProviderFake, WorkspaceProviderFake, WorkspaceProviderFakeBearer)
-	}
 	slices.SortFunc(names, func(a, b string) int {
 		return slices.Index(workspaceProviderNames, a) - slices.Index(workspaceProviderNames, b)
 	})
 	return names, nil
 }
-
-// GitHubFakeHost is the lab's GitHub's name under the platform domain
-// (`agentlab github-fake --workspaces`, docs/workspaces.md): the one the
-// lab CA's name constraints admit, pods resolve to the fake and its TLS
-// leaf carries.
-func GitHubFakeHost(domain string) string { return "github." + domain }
-
-// GitHubFakeBearerHost is the git host of the lab's GitHub as the
-// github.com-shaped instance fake-bearer, GitHubFakeBearerAPIHost its API
-// host beside it, as api.github.com is beside github.com: the API takes a
-// Bearer credential on a host of its own, the git host Basic. Both are
-// names of the same fake, under the platform domain like GitHubFakeHost.
-func GitHubFakeBearerHost(domain string) string { return "github-bearer." + domain }
-
-// GitHubFakeBearerAPIHost is the API host of the instance fake-bearer.
-func GitHubFakeBearerAPIHost(domain string) string { return "api." + GitHubFakeBearerHost(domain) }
 
 // Serving configures model serving on llm-d in the lab.
 type Serving struct {
@@ -1389,7 +1369,7 @@ type Config struct {
 	AIModel string `yaml:"aiModel"`
 	// AIKey is where the key of the default ModelConfig comes from.
 	AIKey AIKey `yaml:"aiKey,omitempty"`
-	// GitHubToken is where the token of the lab's GitHub calls comes from.
+	// GitHubToken is where the token of the lab's calls to GitHub comes from.
 	GitHubToken GitHubToken `yaml:"githubToken,omitempty"`
 	// GitHubApp is the skills GitHub App agent-manager resolves skills with.
 	GitHubApp GitHubApp `yaml:"githubApp,omitempty"`
@@ -1466,6 +1446,7 @@ func load(validate bool) (*Config, error) {
 		return nil, err
 	}
 	cfg.Platform.RetiredFakeFleet = nil
+	cfg.Platform.RetiredPlatformManager = nil
 	// Earlier versions wrote the one-backend form (backend/endpoint); read
 	// it as the one-item lists so the same lab renders exactly as before.
 	cfg.Platform.ModelManager.normalize()
@@ -1506,18 +1487,119 @@ func (c *Config) CheckValuesFiles() error {
 
 // Peek reads the agentlab.yaml of the lab in dir without validating,
 // re-hashing or writing anything — `agentlab list`'s look at a lab that is
-// not the one the command runs against.
+// not the one the command runs against. It writes nothing, so it reads past
+// a field this release does not know (decodeTolerant).
 func Peek(dir string) (*Config, error) {
 	raw, err := os.ReadFile(filepath.Join(dir, File)) // #nosec G304 -- a registered lab directory
 	if err != nil {
 		return nil, err
 	}
 	cfg := Default()
-	if err := decodeStrict(raw, cfg); err != nil {
+	if _, err := decodeTolerant(raw, cfg); err != nil {
 		return nil, err
 	}
 	cfg.Normalize()
 	return cfg, nil
+}
+
+// LoadReadOnly reads agentlab.yaml for a command that never writes it
+// (`trust`, `status`, `open`, …): like Load, except that a field this release
+// does not know — the file was written by a newer agentlab — is read past and
+// returned as the note to show, not refused. The strict refusal exists so a
+// write never drops such a field; a command that writes nothing cannot, and
+// the person can still trust, inspect and open a lab a newer build wrote.
+// Nothing is re-hashed or written.
+func LoadReadOnly() (cfg *Config, note string, err error) {
+	raw, err := os.ReadFile(File)
+	if err != nil {
+		return nil, "", err
+	}
+	cfg = Default()
+	note, err = decodeTolerant(raw, cfg)
+	if err != nil {
+		return nil, "", err
+	}
+	cfg.Platform.RetiredFakeFleet = nil
+	cfg.Platform.RetiredPlatformManager = nil
+	cfg.Platform.ModelManager.normalize()
+	if err := cfg.Validate(); err != nil {
+		return nil, "", fmt.Errorf("%s: %w", File, err)
+	}
+	return cfg, note, nil
+}
+
+// decodeTolerant is decodeStrict for a reader that writes nothing: a field
+// this release does not know is skipped, and note says which, who wrote the
+// file and how to get that release. Any other error is decodeStrict's.
+func decodeTolerant(raw []byte, cfg *Config) (note string, err error) {
+	strict := decodeStrict(raw, cfg)
+	if strict == nil || !strings.Contains(strict.Error(), "not found in type") {
+		return "", strict
+	}
+	*cfg = *Default()
+	cfg.ClusterName = ""
+	if err := yaml.Unmarshal(raw, cfg); err != nil {
+		return "", fmt.Errorf("parsing %s: %w", File, err)
+	}
+	return fmt.Sprintf("%s names fields this agentlab release (%s) does not know — %s; read without them, nothing is written. %s.",
+		File, project.Version(), writerOf(raw), capitalize(updateHint(writtenBy(raw)))), nil
+}
+
+// capitalize upper-cases the first letter of s, for a hint that starts a
+// sentence.
+func capitalize(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+// Exists reports whether a lab's agentlab.yaml is at path (a link to one
+// included).
+func Exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// RebasePaths makes every relative path in the agentlab.yaml at file —
+// platform.chartPath, platform.valuesFiles, platform.tls's certFile and
+// keyFile, platform.vmManager.imageDir — absolute against dir, the lab
+// directory they are relative to, and writes the file when any changed: the
+// step before a lab moves out of dir. A file with relative paths and a field
+// this release does not know is refused and left as it is: the write would
+// drop the field.
+func RebasePaths(file, dir string) error {
+	raw, err := os.ReadFile(file) // #nosec G304 -- a lab's agentlab.yaml
+	if err != nil {
+		return err
+	}
+	cfg := Default()
+	note, err := decodeTolerant(raw, cfg)
+	if err != nil {
+		return err
+	}
+	changed := false
+	abs := func(p *string) {
+		if *p != "" && !filepath.IsAbs(*p) {
+			*p = filepath.Join(dir, *p)
+			changed = true
+		}
+	}
+	abs(&cfg.Platform.ChartPath)
+	for i := range cfg.Platform.ValuesFiles {
+		abs(&cfg.Platform.ValuesFiles[i])
+	}
+	abs(&cfg.Platform.TLS.CertFile)
+	abs(&cfg.Platform.TLS.KeyFile)
+	abs(&cfg.Platform.VMManager.ImageDir)
+	if !changed {
+		return nil
+	}
+	if note != "" {
+		// A write would drop the fields this release does not know.
+		return fmt.Errorf("%s names fields this agentlab release does not know, so it is not rewritten", File)
+	}
+	return cfg.writeTo(file)
 }
 
 // decodeStrict reads agentlab.yaml into cfg and refuses a field this release
@@ -1606,7 +1688,12 @@ func (c *Config) Save() error {
 // agentlab.yaml is updated in place (mergeInto): only the values that changed
 // are rewritten, so a one-flag `configure` changes that one line.
 func (c *Config) write() error {
-	old, err := os.ReadFile(File)
+	return c.writeTo(File)
+}
+
+// writeTo is write to the agentlab.yaml at path.
+func (c *Config) writeTo(path string) error {
+	old, err := os.ReadFile(path) // #nosec G304 -- a lab's agentlab.yaml
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
@@ -1618,7 +1705,7 @@ func (c *Config) write() error {
 		writtenByPrefix + project.Version() + ".\n" +
 		headerPasswordsLine + "\n" +
 		headerManifestsLine + "\n")
-	return os.WriteFile(File, append(header, out...), 0o600) // #nosec G703 -- File is the fixed agentlab.yaml of the lab directory
+	return os.WriteFile(path, append(header, out...), 0o600) // #nosec G703 -- a lab's agentlab.yaml
 }
 
 // EnsureHashes fills in User.PasswordHash wherever it is missing or no longer
@@ -1929,6 +2016,11 @@ func (c *Config) Validate() error {
 	}
 	if err := ValidatePort(strconv.Itoa(c.Platform.GatewayPort)); err != nil {
 		return fmt.Errorf("platform.gatewayPort: %w", err)
+	}
+	if a := c.Platform.GatewayAddress; a != "" {
+		if ip := net.ParseIP(a); ip == nil || ip.To4() == nil || !ip.IsLoopback() {
+			return fmt.Errorf("platform.gatewayAddress %q: want an IPv4 loopback address (127.0.0.0/8)", a)
+		}
 	}
 	if (c.Platform.TLS.CertFile == "") != (c.Platform.TLS.KeyFile == "") {
 		return fmt.Errorf("platform.tls: certFile and keyFile must be set together")
@@ -2319,7 +2411,7 @@ func (c *Config) WorkspacesCSICompanion() bool {
 }
 
 // WorkspaceProviders names the workspace-manager's provider instances, in
-// the order it gets them: what platform.workspaces.provider names, the fake
+// the order it gets them: what platform.workspaces.provider names, github
 // alone while it is empty; none with workspaces off. A value Validate
 // refused yields none too.
 func (c *Config) WorkspaceProviders() []string {
@@ -2347,20 +2439,6 @@ func (c *Config) WorkspaceGrantProvider() string {
 	return names[0]
 }
 
-// WorkspaceFakeProvider reports whether the workspace-manager gets the
-// provider instance fake, the lab's own GitHub: workspaces on and
-// platform.workspaces.provider naming it or empty.
-func (c *Config) WorkspaceFakeProvider() bool {
-	return slices.Contains(c.WorkspaceProviders(), WorkspaceProviderFake)
-}
-
-// WorkspaceFakeBearerProvider reports whether the workspace-manager gets the
-// provider instance fake-bearer, the lab's GitHub as a github.com-shaped
-// instance: workspaces on and platform.workspaces.provider naming it.
-func (c *Config) WorkspaceFakeBearerProvider() bool {
-	return slices.Contains(c.WorkspaceProviders(), WorkspaceProviderFakeBearer)
-}
-
 // WorkspaceGitHubProvider reports whether the workspace-manager gets the
 // provider instance github: workspaces on with platform.workspaces.provider
 // naming it.
@@ -2373,23 +2451,6 @@ func (c *Config) WorkspaceGitHubProvider() bool {
 // naming it.
 func (c *Config) WorkspaceGitLabProvider() bool {
 	return slices.Contains(c.WorkspaceProviders(), WorkspaceProviderGitLab)
-}
-
-// GitHubFakeURL is the lab's GitHub as its provider instance names it, the
-// git host; the REST API is under /api/v3 of it, as on a GitHub Enterprise
-// Server. Pods reach it on 443 (CoreDNS sends the name to the fake's
-// Service); this host reaches the fake on the port its container publishes.
-func (c *Config) GitHubFakeURL() string { return "https://" + GitHubFakeHost(c.Platform.Domain) }
-
-// GitHubFakeBearerURL is the instance fake-bearer's web URL, its git host.
-func (c *Config) GitHubFakeBearerURL() string {
-	return "https://" + GitHubFakeBearerHost(c.Platform.Domain)
-}
-
-// GitHubFakeBearerAPIURL is the instance fake-bearer's REST API base URL,
-// at the root of its own host as https://api.github.com is.
-func (c *Config) GitHubFakeBearerAPIURL() string {
-	return "https://" + GitHubFakeBearerAPIHost(c.Platform.Domain)
 }
 
 // WorkspaceManagerBaseURL is the workspace-manager's public base URL through
@@ -2591,6 +2652,19 @@ func (c *Config) MCPServerName() string {
 // prometheus family (the agent-platform-mcps entry's default name):
 // x_prometheus_<tool> with management_cluster set to the lab.
 func (c *Config) PrometheusMCPServerName() string { return c.ClusterName + "-mcp-prometheus" }
+
+// DefaultGatewayAddress is where the edge is published without
+// platform.gatewayAddress.
+const DefaultGatewayAddress = "127.0.0.1"
+
+// GatewayHostAddress is the loopback address the edge is published on, the
+// address every public hostname of the lab resolves to on the host.
+func (c *Config) GatewayHostAddress() string {
+	if c.Platform.GatewayAddress != "" {
+		return c.Platform.GatewayAddress
+	}
+	return DefaultGatewayAddress
+}
 
 // gatewayURL builds the public URL of a platform hostname: through the
 // agentgateway edge, port-free when the edge sits on 443. The chart's

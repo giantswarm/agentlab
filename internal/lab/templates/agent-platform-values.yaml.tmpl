@@ -157,6 +157,13 @@ components:
   dicebear:
     enabled: false
   muster:
+{{- if .TenantsEnabled }}
+    # platform.tenants: the first muster that forgets a tenant namespace's
+    # sign-ins when its last server goes (giantswarm/muster#1603); the
+    # chart's range admits older ones. Drop the pin once the chart's range
+    # starts there (HACKS.md U38).
+    versionRange: "{{ .TenantsMusterVersion }}"
+{{- end }}
 {{- with index .PostRenderers "muster" }}
     postRenderers:
 {{ . | indent 6 }}
@@ -172,17 +179,26 @@ components:
 {{- end }}
   agent-platform-mcps:
     enabled: true
-{{- with .ConnectivityChart }}
-  # The wiring chart of the checkout (platform.chartPath; connectivity.go).
-  # The meta chart installs agent-platform-connectivity at its own version —
-  # for a checkout the placeholder of its Chart.yaml, which no registry
-  # publishes — so the lab pushes the checkout's copy into the lab registry
-  # at that version and points the release there: the two charts of one
-  # working tree, as CI publishes them for a commit.
+{{- $connectivityPatches := index .PostRenderers "agent-platform-connectivity" }}
+{{- if or .ConnectivityChart $connectivityPatches }}
+  # The wiring chart, which renders the public routes; its one patch drops the
+  # portal's HSTS header at the edge (postrenderers.go, patch 8).
   agent-platform-connectivity:
+{{- with .ConnectivityChart }}
+    # The wiring chart of the checkout (platform.chartPath; connectivity.go).
+    # The meta chart installs agent-platform-connectivity at its own version —
+    # for a checkout the placeholder of its Chart.yaml, which no registry
+    # publishes — so the lab pushes the checkout's copy into the lab registry
+    # at that version and points the release there: the two charts of one
+    # working tree, as CI publishes them for a commit.
     repository: {{ .Repository }}
     insecure: true
     versionRange: "{{ .Version }}"
+{{- end }}
+{{- with $connectivityPatches }}
+    postRenderers:
+{{ . | indent 6 }}
+{{- end }}
 {{- end }}
   # The Kubernetes MCP server (registered with muster by the connectivity
   # chart's MCPServer CR): an OAuth resource server against global.identity;
@@ -391,6 +407,23 @@ muster:
           kind: Group
           name: "oidc:platform-admins"
   muster:
+    # The audience muster checks a person's token for before it calls the
+    # API server with it (its writes as the caller, and with
+    # mcpServersInAllNamespaces its listing of MCPServers as the caller). The
+    # muster default is dex-k8s-authenticator (Giant Swarm API servers); this
+    # lab's API server trusts client id `kubernetes`, the audience every lab
+    # token for muster carries already.
+    writesAsCaller:
+      kubernetesAudience: kubernetes
+{{- if .TenantsEnabled }}
+    # platform.tenants: muster also serves the MCPServers of the
+    # organization namespaces (org-…), each seen only by a person whom RBAC
+    # lets list mcpservers there (the agent-permissions plan, D9;
+    # docs/identity.md "MCP servers per tenant"). The chart binds that list in
+    # muster's namespace to every signed-in person
+    # (agent-platform:mcpserver-viewer).
+    mcpServersInAllNamespaces: true
+{{- end }}
     # muster's ServiceMonitor, PrometheusRule and Grafana dashboard: the chart
     # would derive them from global.observability (`auto`); explicit for the
     # same reason as there. Only viable with platform.observability, which
@@ -464,8 +497,8 @@ muster:
     # No provider instance renders yet (the configured one lacks its ids or
     # Secret), so muster's registration of the workspace-manager is pinned to
     # none and the chart derives no releasable; it refuses an empty one with
-    # Substrate on. muster releases the lab's own App, {{ .Provider }}'s,
-    # until the configured instance renders (workspacemustergrant.go).
+    # Substrate on. muster releases {{ .Provider }}'s issuer until the
+    # configured instance renders (workspacemustergrant.go).
     credentialProvider:
       releasable:
         {{ .Provider }}: {{ .Issuer }}
@@ -574,6 +607,15 @@ substrate:
 tenants:
   organizations:
     enabled: true
+
+# platform.tenants: a ModelConfig in an organization namespace must name the
+# LLM listener as its baseUrl (giantswarm/agent-platform#1082; from 4.151 the
+# chart refuses tenants.organizations.enabled without it), so the listener is
+# on: the chart's admission policies fill it into every tenant ModelConfig,
+# the reconciler's copy of the default one included. The platform tenant's
+# default ModelConfig keeps calling Anthropic directly.
+llmRouting:
+  enabled: true
 {{- end }}
 {{- end }}
 
@@ -696,6 +738,19 @@ kagent:
       # above) — the second of the two authentication layers. A caller that
       # bypasses the edge sends no verified bearer and is nobody.
       mode: trusted-proxy
+    # The controller's Kubernetes RBAC authorizer (kubernetes mode, the
+    # chart's default from agent-platform 4.151 on kagent 1.19, pinned here so
+    # a chart default that moves cannot leave the lab on noop) reviews each
+    # caller as the API server's OIDC authenticator maps the same token: the
+    # groups claim, and the oidc: the lab's API server puts before the
+    # username and every group (kind-config.yaml.tmpl), where the chart's
+    # default is none; a chart without the authorizer ignores the keys. `agentlab tenants-test` proves it (docs/agents.md
+    # "Organizations as tenants").
+    authorization:
+      mode: kubernetes
+      groupsClaim: groups
+      usernamePrefix: "oidc:"
+      groupsPrefix: "oidc:"
     volumes:
       - name: cnpg-dsn
         secret:
@@ -1294,31 +1349,27 @@ workspaces:
 {{- end }}
 
 # The workspace-manager's provider instances (platform.workspaces.provider;
-# workspaceprovider.go), each of the chart's github kind: fake, the lab's own
-# GitHub at its URL (a GitHub Enterprise-shaped instance, its API under
-# /api/v3), fake-bearer, the same GitHub shaped like github.com (its apiURL
-# on a host of its own), and github, github.com. The base URL carries the gateway port,
-# which the chart's derivation from global.domain drops: the chart routes its
-# host (its MCP endpoint and the grants' key set; the person's provider
-# sign-in is muster's). The github
-# instance renders once the App's ids are in agentlab.yaml and its Secret
-# carries both keys; the values name each instance's Secret, never a value.
+# workspaceprovider.go): github, a GitHub App on github.com, and gitlab, a
+# GitLab the lab reaches. The base URL carries the gateway port, which the
+# chart's derivation from global.domain drops: the chart routes its host (its
+# MCP endpoint and the grants' key set; the person's provider sign-in is
+# muster's). The github instance renders once the App's ids are in
+# agentlab.yaml and its Secret carries both keys; the values name each
+# instance's Secret, never a value.
 workspace-manager:
   oauth:
     baseURL: {{ .WorkspaceManagerBaseURL }}
 {{- with .Platform.Workspaces.SessionsCleanupAfter }}
   # How long a Session's directory outlives its last turn
-  # (platform.workspaces.sessionsCleanupAfter): a proof's short window, so
-  # workspaces-test --part sessions sees a directory cleaned up and its
-  # Session resume in a fresh one. Unset, the chart's 30 days.
+  # (platform.workspaces.sessionsCleanupAfter). Unset, the chart's 30
+  # days.
   sessions:
     cleanupAfter: {{ . }}
 {{- end }}
 {{- with .Platform.Workspaces.SyncRefreshAfter }}
   # The refresh threshold (platform.workspaces.syncRefreshAfter): a Session
-  # started on a workspace whose last sync is older requests a sync. A
-  # proof's short one, so workspaces-test --part refresh sees a workspace
-  # pass it. Unset, the manager's 1h.
+  # started on a workspace whose last sync is older requests a sync. Unset,
+  # the manager's 1h.
   sync:
     refreshAfter: {{ . }}
 {{- end }}
@@ -1364,19 +1415,12 @@ workspace-manager:
           expectedIssuer: "{{ .ExpectedIssuer }}"
           authorizationEndpoint: {{ .AuthorizationEndpoint }}
           tokenEndpoint: {{ .TokenEndpoint }}
+          {{- with .RevocationEndpoint }}
+          revocationEndpoint: {{ . }}
+          {{- end }}
           scopes: "{{ .Scopes }}"
           clientCredentialsSecretRef: {name: {{ .Secret }}}
           grantScope: subject
-{{- end }}
-{{- if .WorkspaceFake }}
-  # The lab's GitHub serves TLS with a leaf of the lab CA, and the manager's
-  # HTTP client takes the system roots: the lab CA file the chart mounts for
-  # Dex (global.identity.ca) is named for them too. The image's own roots
-  # stay, read from its certificate directory regardless, so a github
-  # instance beside the fake still verifies github.com.
-  extraEnv:
-    - name: SSL_CERT_FILE
-      value: /etc/workspace-manager/idp-ca/ca.crt
 {{- end }}
 {{- with .WorkspaceProviders }}
   providers:

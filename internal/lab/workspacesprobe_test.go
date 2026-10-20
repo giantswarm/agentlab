@@ -75,7 +75,6 @@ func TestWorkspaceVolumeProbesAreRestricted(t *testing.T) {
 		"measure dirs":  measureVolumePod("claim", "dirs", sessionsDirectoriesScript, nil, workspaceVolumeOwner),
 		"measure clear": measureVolumePod("claim", "clear", measureClearSessionsScript(workspaceVolumeOwner), nil, workspaceVolumeOwner),
 		"measure git":   measureVolumePod("claim", "git", measureGitScript("o/r", "main", ""), gitMounts, workspaceVolumeOwner),
-		"sync clear":    workspaceVolumePod("agentlab-sync-clear", "claim", syncRemoveSessionScript),
 	} {
 		if v := restrictedViolations(pod); len(v) > 0 {
 			t.Errorf("%s: not PodSecurity restricted: %v", name, v)

@@ -101,6 +101,7 @@ const (
 const (
 	iconURLKey       = "iconUrl"
 	skillsKey        = "skills"
+	pluginsKey       = "plugins"
 	refreshSkillsKey = "refreshSkills"
 	// requireApprovalKey is the chart's muster.requireApproval value.
 	requireApprovalKey = "requireApproval"
@@ -155,6 +156,9 @@ type agentSpec struct {
 	// destinations (agent.egress, the Agent's spec.egress); nil declares
 	// none.
 	Egress []string
+	// Plugins are the packages the agent binds (agent-manager's plugins,
+	// the chart's plugins), pinned by commit.
+	Plugins []agentPlugin
 }
 
 // agentSkill is one skills[] entry: a name, a directory and exactly one
@@ -174,6 +178,32 @@ type gitSkill struct {
 	URL    string `json:"url"`
 	Ref    string `json:"ref,omitempty"`
 	Commit string `json:"commit,omitempty"`
+}
+
+// agentPlugin is one plugins[] entry: exactly one source, the plugin's
+// directory in it and the skills to enable from an Agent Plugins format
+// package. Skills nil omits the selection, as a Claude-format plugin takes
+// none; an empty Skills sends [], the selection that enables nothing.
+type agentPlugin struct {
+	Path   string
+	Git    *gitSkill
+	OCI    string
+	Skills []string
+}
+
+func (p agentPlugin) MarshalJSON() ([]byte, error) {
+	type source struct {
+		Path string    `json:"path,omitempty"`
+		Git  *gitSkill `json:"git,omitempty"`
+		OCI  string    `json:"oci,omitempty"`
+	}
+	if p.Skills == nil {
+		return json.Marshal(source{p.Path, p.Git, p.OCI})
+	}
+	return json.Marshal(struct {
+		source
+		Skills []string `json:"skills"`
+	}{source{p.Path, p.Git, p.OCI}, p.Skills})
 }
 
 // harnessValue is the Harness the spec's Agent references (agent.harness).
@@ -321,6 +351,9 @@ func createAgentArgs(spec agentSpec) (map[string]any, error) {
 	}
 	if len(spec.Egress) > 0 {
 		args[egressKey] = spec.Egress
+	}
+	if len(spec.Plugins) > 0 {
+		args[pluginsKey] = spec.Plugins
 	}
 	return args, nil
 }

@@ -59,7 +59,9 @@ import (
 // What the lab does not carry: the fleet's Pod Security Standards policies
 // and the chart's own Kyverno objects (kyvernoPolicies.enabled: false in the
 // values template — PolicyExceptions to policies that are not here and
-// mutate policies the lab never ran). The Flux kinds the policy also names —
+// mutate policies the lab never ran). The chart's PolicyExceptions are
+// judged without installing them: polextest.go dry-runs them against this
+// Kyverno. The Flux kinds the policy also names —
 // Kustomization, Alert, Receiver, ImagePolicy — are not served in the lab:
 // the platform's engine runs source-controller and helm-controller only, so
 // those rules match nothing here and the HelmRelease rules are the ones the

@@ -152,9 +152,9 @@ func TestControllerReads(t *testing.T) {
 }
 
 // TestMusterAttribution: only records stamped after the turn began count; the
-// accepted-token audit record must name the email and a tools/call request's
-// truncated subject must prefix the token's subject; a pod prefix before the
-// JSON is tolerated.
+// accepted-token audit record must name the email, an actor bearer record's
+// and a tools/call request's truncated subject must prefix the token's
+// subject; a pod prefix before the JSON is tolerated.
 func TestMusterAttribution(t *testing.T) {
 	since := time.Date(2026, 9, 11, 17, 0, 0, 0, time.UTC)
 	logs := strings.Join([]string{
@@ -163,10 +163,13 @@ func TestMusterAttribution(t *testing.T) {
 		`{"time":"2026-09-11T17:00:02Z","level":"INFO","msg":"security_audit","audit":{"event_type":"forwarded_id_token_accepted","details":{"email":"dev@lab.local"}}}`,
 		`{"time":"2026-09-11T17:00:03Z","level":"INFO","msg":"tools/call request","subsystem":"MCP-Protocol","subject":"CiRjNGNl...","tool":"call_tool"}`,
 		`{"time":"2026-09-11T17:00:04Z","level":"INFO","msg":"tools/call request","subsystem":"MCP-Protocol","subject":"Cg9vdGhl...","tool":"call_tool"}`,
+		`{"time":"2026-09-11T17:00:05Z","level":"INFO","msg":"[AUDIT] action=actor_bearer outcome=success subject=CiRjNGNl... target=muster details=actor=spiffe://substrate-actor.local/actor/kagent/session-x session=kagent/x","subsystem":"AUDIT"}`,
+		`{"time":"2026-09-11T17:00:06Z","level":"INFO","msg":"[AUDIT] action=actor_bearer outcome=success subject=Cg9vdGhl... target=muster details=actor=spiffe://substrate-actor.local/actor/kagent/session-y session=kagent/y","subsystem":"AUDIT"}`,
+		`{"time":"2026-09-11T17:00:07Z","level":"INFO","msg":"[AUDIT] action=actor_bearer outcome=failure target=muster details=actor=spiffe://substrate-actor.local/actor/kagent/session-z error=actor is not bound","subsystem":"AUDIT"}`,
 		`not json at all`,
 	}, "\n")
 	accepted, calls, subjects := musterAttribution(logs, testUser, "CiRjNGNlZGFmNS0...", since)
-	if accepted != 1 || calls != 1 || len(subjects) != 2 {
+	if accepted != 2 || calls != 1 || len(subjects) != 2 {
 		t.Errorf("accepted=%d calls=%d subjects=%v", accepted, calls, subjects)
 	}
 }
@@ -459,6 +462,13 @@ func TestGatewayFiles(t *testing.T) {
 // clicks the way the adapter does — through the fake Slack Web API — writes
 // the adapter's records into its log, and moves the fake controller's tasks
 // the way the turns would.
+// The real gateway's words on its workspace prompt the fake gateway posts:
+// the prompt and its card once No workspace answered it.
+const (
+	slackWorkspaceAsk    = "Which workspace should this conversation work in?"
+	slackWorkspaceNoneIn = "Working without a workspace"
+)
+
 type scriptedGateway struct {
 	t        *testing.T
 	secret   string
@@ -944,5 +954,71 @@ func TestGatewayKeepsHeld(t *testing.T) {
 		if got := gatewayKeepsHeld(described); got != want {
 			t.Errorf("gatewayKeepsHeld(%q) = %v, want %v", described, got, want)
 		}
+	}
+}
+
+// TestSlackDriverPickerActions: a pick on a message, a pick inside an open
+// modal (the view as Slack holds it, with an id and a hash) and the slash
+// command reach the gateway's endpoints as Slack sends them; the fake keeps
+// a views.update as the modal's latest state.
+func TestSlackDriverPickerActions(t *testing.T) {
+	var paths []string
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		paths, bodies = append(paths, r.URL.Path), append(bodies, string(body))
+	}))
+	defer srv.Close()
+	f := startTestFake(t, nil)
+	d := newSlackDriver(srv.URL, "sekrit", f, "C1")
+	msg := slackMessage{TS: "7.1", Channel: "C1", ThreadTS: "9.0"}
+	if err := d.pick("UP", msg, slackWorkspaceSelect, `{"t":"9.0","w":"ws"}`); err != nil {
+		t.Fatal(err)
+	}
+	view := map[string]any{slackKeyCallbackID: slackPickerCallback, slackKeyBlocks: []any{}}
+	if err := d.pickInView("UP", view, slackPickerAgentBlock, slackPickerAgentAction, "kagent/a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.slashCommand("UP", "ask"); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(paths, []string{slackInteractionsPath, slackInteractionsPath, slackCommandsPath}) {
+		t.Fatalf("paths = %v", paths)
+	}
+	var action struct {
+		Type    string `json:"type"`
+		Actions []struct {
+			Type           string `json:"type"`
+			ActionID       string `json:"action_id"`
+			SelectedOption struct {
+				Value string `json:"value"`
+			} `json:"selected_option"`
+		} `json:"actions"`
+		View map[string]any `json:"view"`
+	}
+	for i, want := range []string{`{"t":"9.0","w":"ws"}`, "kagent/a"} {
+		form, _ := url.ParseQuery(bodies[i])
+		if err := json.Unmarshal([]byte(form.Get("payload")), &action); err != nil {
+			t.Fatal(err)
+		}
+		if action.Type != "block_actions" || len(action.Actions) != 1 || action.Actions[0].Type != slackStaticSelect || action.Actions[0].SelectedOption.Value != want {
+			t.Errorf("pick %d = %+v", i, action)
+		}
+	}
+	if action.View[slackKeyCallbackID] != slackPickerCallback || action.View["id"] == "" || action.View["hash"] == "" {
+		t.Errorf("the view of the pick in the modal = %v", action.View)
+	}
+	if _, held := view["hash"]; held {
+		t.Error("pickInView changed the caller's view")
+	}
+	form, _ := url.ParseQuery(bodies[2])
+	if form.Get("command") != slackCommand || form.Get("user_id") != "UP" || form.Get("channel_id") != "C1" || form.Get("text") != "ask" || form.Get("trigger_id") == "" || form.Get("response_url") == "" {
+		t.Errorf("slash command = %v", form)
+	}
+
+	callFake(t, f, slackViewsOpen, nil, map[string]any{slackKeyView: map[string]any{slackKeyCallbackID: "first"}})
+	callFake(t, f, slackViewsUpdate, nil, map[string]any{"view_id": "V1", "hash": "h", slackKeyView: map[string]any{slackKeyCallbackID: "redrawn"}})
+	if views := f.openedViews(); len(views) != 2 || views[1][slackKeyCallbackID] != "redrawn" {
+		t.Errorf("openedViews = %v", views)
 	}
 }

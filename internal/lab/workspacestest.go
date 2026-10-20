@@ -34,22 +34,16 @@ type WorkspacesTestOptions struct {
 	// ReadyTimeout bounds each wait: the storage's rollouts, a claim bound,
 	// a pod finished, a volume gone, a sync cycle.
 	ReadyTimeout time.Duration
-	// Part runs one part instead of the storage proof: WorkspacesPartSync
-	// (workspacessync.go), WorkspacesPartAccess (workspacesaccess.go),
-	// WorkspacesPartGitLab (workspacesgitlab.go), WorkspacesPartSessions
-	// (workspacessessions.go), WorkspacesPartCallerCredential
-	// (workspacescallercredential.go), WorkspacesPartWrite (workspaceswrite.go)
-	// or WorkspacesPartRefresh (workspacesrefresh.go). "" is the storage proof.
+	// Part runs one part instead of the storage proof: WorkspacesPartGitLab
+	// (workspacesgitlab.go). "" is the storage proof.
 	Part string
-	// Sessions is how many Sessions the sessions part starts, alternating
-	// the claude and the kagent Harness; zero is DefaultWorkspacesSessions.
-	Sessions int
-	// Email is the lab user a part signs in as, a member of the lab's
-	// Organization: the sync part's member (default the admin), the access
-	// and GitLab parts' second user beside the admin (default
-	// dev@lab.local).
+	// Email is the GitLab part's second user beside the admin, a member of
+	// the lab's Organization (default dev@lab.local).
 	Email string
 }
+
+// WorkspacesParts are the parts `workspaces-test --part` takes.
+var WorkspacesParts = []string{WorkspacesPartGitLab}
 
 // validate refuses a part workspaces-test does not have, and the flags and
 // argument of one run given to the other.
@@ -59,27 +53,15 @@ func (o WorkspacesTestOptions) validate() error {
 		if o.Email != "" {
 			return fmt.Errorf("the storage proof signs in as nobody: [email] names the user of a part (--part %s)", strings.Join(WorkspacesParts, ", "))
 		}
-	case WorkspacesPartSync, WorkspacesPartAccess, WorkspacesPartGitLab, WorkspacesPartSessions, WorkspacesPartCallerCredential, WorkspacesPartRefresh, WorkspacesPartWrite:
+	case WorkspacesPartGitLab:
 		if o.StorageOnly {
 			return fmt.Errorf("--storage-only is the storage proof's; --part %s proves no storage", o.Part)
-		}
-		if (o.Part == WorkspacesPartSessions || o.Part == WorkspacesPartCallerCredential || o.Part == WorkspacesPartRefresh || o.Part == WorkspacesPartWrite) && o.Email != "" {
-			return fmt.Errorf("--part %s starts its Sessions as the admin: it takes no [email]", o.Part)
 		}
 	default:
 		return fmt.Errorf("no part %q of workspaces-test: --part takes %s", o.Part, strings.Join(WorkspacesParts, ", "))
 	}
-	switch {
-	case o.Sessions != 0 && o.Part != WorkspacesPartSessions:
-		return fmt.Errorf("--sessions is the sessions part's (--part %s)", WorkspacesPartSessions)
-	case o.Sessions != 0 && o.Sessions < workspacesMinSessions:
-		return fmt.Errorf("--sessions %d: the sessions part needs %d or more, so a Session per Harness is left after one is deleted", o.Sessions, workspacesMinSessions)
-	}
 	return nil
 }
-
-// workspacesMinSessions is the fewest Sessions the sessions part starts.
-const workspacesMinSessions = 3
 
 // DefaultWorkspacesReadyTimeout is the proof's default wait.
 const DefaultWorkspacesReadyTimeout = 5 * time.Minute
@@ -132,32 +114,8 @@ func WorkspacesTest(cfg *config.Config, opts WorkspacesTestOptions) error {
 	if err != nil {
 		return err
 	}
-	if opts.Part == WorkspacesPartSync {
-		email := opts.Email
-		if email == "" {
-			if admin := cfg.AdminUser(); admin != nil {
-				email = admin.Email
-			}
-		}
-		return workspacesSyncPart(cfg, email, opts.ReadyTimeout)
-	}
-	if opts.Part == WorkspacesPartAccess {
-		return workspacesAccessPart(cfg, opts.Email, opts.ReadyTimeout)
-	}
 	if opts.Part == WorkspacesPartGitLab {
 		return workspacesGitLabPart(cfg, opts.Email, opts.ReadyTimeout)
-	}
-	if opts.Part == WorkspacesPartSessions {
-		return workspacesSessionsPart(cfg, opts.Sessions, opts.ReadyTimeout)
-	}
-	if opts.Part == WorkspacesPartCallerCredential {
-		return workspacesCallerCredentialPart(cfg, opts.ReadyTimeout)
-	}
-	if opts.Part == WorkspacesPartRefresh {
-		return workspacesRefreshPart(cfg, opts.ReadyTimeout)
-	}
-	if opts.Part == WorkspacesPartWrite {
-		return workspacesWritePart(cfg, opts.ReadyTimeout)
 	}
 	ctx := context.Background()
 	timeout := opts.ReadyTimeout

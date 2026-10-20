@@ -1,6 +1,8 @@
 package lab
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
@@ -80,4 +82,13 @@ func TestSaveLoginArtifactsWithoutKubernetesAudience(t *testing.T) {
 	if _, err := os.Stat("kubeconfig.oidc"); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("kubeconfig.oidc stays beside a token the apiserver refuses: %v", err)
 	}
+}
+
+// unsignedJWT is a JWT with the claims and no valid signature.
+func unsignedJWT(claims map[string]any) string {
+	enc := func(v any) string {
+		raw, _ := json.Marshal(v)
+		return base64.RawURLEncoding.EncodeToString(raw)
+	}
+	return enc(map[string]string{"alg": "ES256", "typ": "JWT"}) + "." + enc(claims) + "." + base64.RawURLEncoding.EncodeToString([]byte("signature"))
 }

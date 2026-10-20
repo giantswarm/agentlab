@@ -4,10 +4,26 @@ import (
 	"maps"
 	"slices"
 	"testing"
+
+	"github.com/giantswarm/agentlab/internal/config"
 )
 
-// testGitLabPerson is the GitLab username the tests sign in as.
-const testGitLabPerson = "gitlab-person"
+// testGitLabPerson is the GitLab username the tests sign in as, at the
+// GitLab testGitLabURL.
+const (
+	testGitLabPerson = "gitlab-person"
+	testGitLabURL    = "https://gitlab.example.com"
+)
+
+// testWorkspaceGitLab is the gitlab instance at testGitLabURL with the
+// OAuth application clientID; testWorkspaceGitLabAt the same at url.
+func testWorkspaceGitLab(clientID string) config.WorkspaceGitLab {
+	return testWorkspaceGitLabAt(testGitLabURL, clientID)
+}
+
+func testWorkspaceGitLabAt(url, clientID string) config.WorkspaceGitLab {
+	return config.WorkspaceGitLab{URL: url, ClientID: clientID, Group: "proof-group", Project: "proof", Person: testGitLabPerson}
+}
 
 // A Session's credential-like variables beyond the platform's own are what
 // the GitLab part judges: none, or the names that would carry a token. A

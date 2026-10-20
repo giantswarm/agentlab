@@ -15,7 +15,9 @@ import (
 	"maps"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -104,7 +106,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 	root.AddCommand(
 		inGroup(groupSetup, upCmd()),
 		inGroup(groupSetup, configureCmd()),
-		inGroup(groupSetup, labCmd("trust", "Install the lab CA into the system and browser trust stores (one sudo prompt; reversible)", lab.Trust)),
+		inGroup(groupSetup, readOnlyLabCmd("trust", "Install the lab CA into the system and browser trust stores (one sudo prompt; reversible)", lab.Trust)),
 
 		inGroup(groupEveryday, openCmd()),
 		inGroup(groupEveryday, listCmd()),
@@ -116,19 +118,18 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 
 		inGroup(groupTesting, labCmd("test", "Assert RBAC for every configured user (token from Dex, kubectl auth can-i)", lab.Test)),
 		inGroup(groupTesting, platformTestCmd()),
+		inGroup(groupTesting, polexTestCmd()),
 		inGroup(groupTesting, agentsTestCmd()),
 		inGroup(groupTesting, agentsGitOpsTestCmd()),
 		inGroup(groupTesting, tenantsTestCmd()),
 		inGroup(groupTesting, toolsetsTestCmd()),
 		inGroup(groupTesting, modelsTestCmd()),
-		inGroup(groupTesting, pmTestCmd()),
 		inGroup(groupTesting, servingTestCmd()),
 		inGroup(groupTesting, vmManagerTestCmd()),
 		inGroup(groupTesting, workspacesTestCmd()),
 		inGroup(groupTesting, workspacesMeasureCmd()),
 		inGroup(groupTesting, codingTestCmd()),
 		inGroup(groupTesting, egressTestCmd()),
-		inGroup(groupTesting, workspacesSignInTestCmd()),
 		inGroup(groupTesting, skillsTestCmd()),
 		inGroup(groupTesting, substrateStepTestCmd()),
 		inGroup(groupTesting, kagentStepTestCmd()),
@@ -141,7 +142,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		inGroup(groupTesting, backstageTestCmd()),
 
 		inGroup(groupCleanup, labCmd("down", "Destroy the kind cluster", lab.Down)),
-		inGroup(groupCleanup, labCmd("untrust", "Remove the lab CA from the system and browser trust stores", lab.Untrust)),
+		inGroup(groupCleanup, readOnlyLabCmd("untrust", "Remove the lab CA from the system and browser trust stores", lab.Untrust)),
 		inGroup(groupCleanup, labCmd("platform-down", "Remove the agent platform (leaves Dex and the cluster alone)", lab.PlatformDown)),
 
 		inGroup(groupAdvanced, platformCmd()),
@@ -153,7 +154,6 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		browserCmd(),
 		slackFakeCmd(),
 		mockLLMCmd(),
-		githubFakeCmd(),
 		skillHostCmd(),
 	)
 	return root
@@ -185,6 +185,7 @@ func slackFakeCmd() *cobra.Command {
 // container on the kind network: plumbing, hidden, never typed by a person.
 func mockLLMCmd() *cobra.Command {
 	var listen, mcpServer string
+	var watch []string
 	cmd := &cobra.Command{
 		Use:    "mockllm",
 		Short:  "Serve coding-test's scripted OpenAI Responses API model, the mockllm (run by the proof, in a container)",
@@ -193,83 +194,12 @@ func mockLLMCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
-			return lab.ServeMockLLM(ctx, listen, mcpServer)
+			return lab.ServeMockLLM(ctx, listen, mcpServer, watch)
 		},
 	}
 	cmd.Flags().StringVar(&listen, "listen", "0.0.0.0:8080", "address to serve the Responses API on (under /v1)")
 	cmd.Flags().StringVar(&mcpServer, "mcp-server", "", "the RemoteMCPServer whose tools the script's MCP call names")
-	return cmd
-}
-
-// githubFakeCmd is the fake GitHub REST API models-test runs in a container
-// on the kind network, where model-manager's pods reach it: plumbing, hidden,
-// never typed by a person.
-func githubFakeCmd() *cobra.Command {
-	var listen, repo, branch string
-	var files []string
-	var workspaces, platformManager bool
-	var ws lab.WorkspaceGitHubOptions
-	cmd := &cobra.Command{
-		Use:    "github-fake",
-		Short:  "Serve a fake GitHub: models-test's REST API, or with --workspaces the workspace proofs' GitHub (run by the proofs, in a container)",
-		Args:   cobra.NoArgs,
-		Hidden: true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
-			defer stop()
-			if platformManager {
-				if workspaces || repo != "" || len(files) > 0 {
-					return fmt.Errorf("--platform-manager serves the registry fixture's repositories: drop --workspaces, --repo and --file")
-				}
-				return lab.ServeRegistryGitHub(ctx, listen)
-			}
-			if workspaces {
-				if repo != "" || len(files) > 0 {
-					return fmt.Errorf("--workspaces serves its fixture's repositories: drop --repo and --file")
-				}
-				ws.Listen = listen
-				return lab.ServeWorkspaceGitHub(ctx, ws)
-			}
-			return lab.ServeFakeGitHub(ctx, listen, repo, branch, files)
-		},
-	}
-	cmd.Flags().StringVar(&listen, "listen", "0.0.0.0:8080", "address to serve the fake GitHub API on")
-	cmd.Flags().StringVar(&repo, "repo", "", "the one repository the fake holds, owner/name")
-	cmd.Flags().StringVar(&branch, "branch", "main", "its base branch")
-	cmd.Flags().StringArrayVar(&files, "file", nil, "a file of the base branch, as <path>=<base64 content> (repeatable)")
-	cmd.Flags().BoolVar(&workspaces, "workspaces", false, "serve the workspace proofs' GitHub over TLS: App, OAuth, listings, git and pull requests (docs/workspaces.md)")
-	cmd.Flags().BoolVar(&platformManager, "platform-manager", false, "serve pm-test's registry fixture to the platform manager, read-only (docs/platform-manager.md)")
-	cmd.Flags().StringVar(&ws.Fixture, "fixture", "", "with --workspaces: the fixture file (default: the embedded one)")
-	cmd.Flags().StringVar(&ws.Credentials, "credentials", "", "with --workspaces: the directory `agentlab github-fake credentials` generated")
-	cmd.Flags().StringVar(&ws.DataDir, "data-dir", "", "with --workspaces: where the bare repositories live (default: a temporary directory)")
-	cmd.Flags().StringSliceVar(&ws.APIHosts, "api-host", nil, "with --workspaces: a host name api.<git host> that serves the REST API at its root, shaped like api.github.com (repeatable)")
-	cmd.Flags().IntVar(&ws.LargeRepoMiB, "large-repo-mib", 0, "with --workspaces: the size of the fixture's generated repositories in MiB (default: the fixture's)")
-	cmd.Flags().StringVar(&ws.TokenStore, "token-store", "", "with --workspaces: a file the users' access and refresh tokens are kept in across restarts (default: memory only)")
-	for _, on := range []bool{true, false} {
-		use, short := "suspend <owner>", "Suspend the App's installation on <owner> in the lab's GitHub, as an organization owner's Suspend on github.com does (the kill-switch runbook's first switch)"
-		if !on {
-			use, short = "unsuspend <owner>", "Unsuspend the App's installation on <owner> in the lab's GitHub"
-		}
-		cmd.AddCommand(&cobra.Command{
-			Use: use, Short: short, Args: cobra.ExactArgs(1),
-			RunE: func(cmd *cobra.Command, args []string) error {
-				cfg, err := loadConfig()
-				if err != nil {
-					return err
-				}
-				return lab.SuspendLabGitHubInstallation(cfg, args[0], on)
-			},
-		})
-	}
-	cmd.AddCommand(labCmd("installations", "List the App's installations in the lab's GitHub, with when each suspended one was suspended", lab.LabGitHubInstallations))
-	cmd.AddCommand(labCmd("credentials", "Generate the workspace fake's TLS pair, App key pair and OAuth client secret under certs/github-fake",
-		func(cfg *config.Config) error {
-			dir, err := lab.EnsureGitHubFakeCredentials(cfg.Platform.Domain)
-			if err == nil {
-				fmt.Println(dir)
-			}
-			return err
-		}))
+	cmd.Flags().StringArrayVar(&watch, "watch", nil, "a name to record each request carrying (repeatable): a skill the runtime presents to the model")
 	return cmd
 }
 
@@ -361,6 +291,43 @@ func loadConfig() (*config.Config, error) {
 	return loadLab(labs.Enter)
 }
 
+// loadReadOnly is loadConfig for the commands that never write agentlab.yaml
+// (`trust`, `untrust`, `status`, `open`, `pods`, `logs`): a file a newer
+// agentlab wrote is read past the fields this release does not know, with a
+// note on stderr, instead of refused (config.LoadReadOnly) — the lab can be
+// trusted and inspected whichever agentlab wrote it.
+func loadReadOnly() (*config.Config, error) {
+	if err := enterLab(labs.Enter); err != nil {
+		return nil, err
+	}
+	cfg, note, err := config.LoadReadOnly()
+	if errors.Is(err, os.ErrNotExist) {
+		return loadOrCreateConfig()
+	}
+	if err != nil {
+		return nil, err
+	}
+	if note != "" {
+		fmt.Fprintf(os.Stderr, "Note: %s\n", note)
+	}
+	lab.SetPlatform(cfg)
+	return cfg, nil
+}
+
+// readOnlyLabCmd is labCmd for a command that never writes agentlab.yaml
+// (loadReadOnly).
+func readOnlyLabCmd(use, short string, run func(*config.Config) error) *cobra.Command {
+	cmd := labCmd(use, short, run)
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		cfg, err := loadReadOnly()
+		if err != nil {
+			return err
+		}
+		return run(cfg)
+	}
+	return cmd
+}
+
 // loadProofLab is loadConfig for the proofs: before a proof's first step,
 // the chart it runs against is named from the cluster, with the drift from
 // agentlab.yaml's pin when there is one (lab.NoteChartUnderTest) — a verdict
@@ -398,13 +365,14 @@ var labFlag string
 
 // enterLab resolves the lab the command runs against — --lab, the lab the
 // agentlab.yaml in the current directory names, the person's pick on a
-// terminal; never a default (labs.Resolve) — and changes into its
-// directory, so every lab path (agentlab.yaml, certs/, state/) resolves there
-// unchanged. mode is labs.Resolve's: labs.Create for the commands that make
-// a lab where they run (`configure`, `up`), labs.Here for `render`, which
-// writes the files of the agentlab.yaml here and no other lab's. A lab
-// entered from elsewhere is named on stderr, so the output never leaves the
-// person guessing which lab it came from.
+// terminal; never a default (labs.Resolve) — settles it in the freedesktop
+// folders (settleLab) and changes into its directory, so every lab path
+// (agentlab.yaml, certs/, state/) resolves there unchanged. mode is
+// labs.Resolve's: labs.Create for the commands that make a lab where they run
+// (`configure`, `up`), labs.Here for `render`, which writes the files of the
+// agentlab.yaml here and no other lab's. A lab entered from elsewhere is named
+// on stderr, so the output never leaves the person guessing which lab it came
+// from.
 func enterLab(mode labs.Mode) error {
 	var pick labs.Picker
 	if term.IsTerminal(int(os.Stdin.Fd())) {
@@ -415,27 +383,86 @@ func enterLab(mode labs.Mode) error {
 		return err
 	}
 	if l.Dir == "" {
-		registerHere()
-		return nil
+		if mode == labs.Here {
+			// `render` writes the files of the agentlab.yaml here,
+			// where it is.
+			return nil
+		}
+		return settleHere()
 	}
-	if err := os.Chdir(l.Dir); err != nil {
+	dir, err := settleLab(l.Name, l.Dir)
+	if err != nil {
+		return err
+	}
+	if err := os.Chdir(dir); err != nil {
 		return fmt.Errorf("entering lab %s: %w", l.Name, err)
 	}
-	fmt.Fprintf(os.Stderr, "Lab %s (%s)\n", l.Name, l.Dir)
+	fmt.Fprintf(os.Stderr, "Lab %s (%s)\n", l.Name, dir)
 	return nil
 }
 
-// registerHere registers the lab of the current directory, if there is one:
-// a lab from before the registry, or one whose entry is gone, is found from
-// any directory again after any command run in it. A convenience: silent,
-// it never fails the command, and a name another lab holds stays refused
-// (`up` and `configure` say so).
-func registerHere() {
+// settleHere settles the lab of the current directory, if there is one — a
+// lab from before the registry or the freedesktop folders, or one whose entry
+// is gone — and enters it. Without an agentlab.yaml here there is nothing to
+// settle yet: a new lab settles when it is saved (saveLab). An agentlab.yaml
+// whose clusterName another lab holds is a copy of that lab's (`render`
+// renders it here) and stays where it is.
+func settleHere() error {
 	cfg, err := config.Peek(".")
 	if err != nil {
+		return nil
+	}
+	if labs.Check(cfg.ClusterName, ".") != nil {
+		return nil
+	}
+	dir, err := settleLab(cfg.ClusterName, ".")
+	if err != nil {
+		return err
+	}
+	return os.Chdir(dir)
+}
+
+// settleLab puts the lab of that name, now in dir, into the freedesktop
+// folders (labs.Settle), registers it there and returns its directory. A lab
+// that moves is named on stderr with both places; its relative paths in
+// agentlab.yaml (platform.valuesFiles, chartPath, …) are made absolute first,
+// so they still name the files next to its old directory. A lab on another
+// file system than the state folder stays where it is, said on stderr.
+func settleLab(name, dir string) (string, error) {
+	from, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+	if home, err := labs.Home(name); err == nil && home != from {
+		rebaseLabPaths(from)
+	}
+	home, err := labs.Settle(name, from)
+	if cross := (*labs.CrossDeviceError)(nil); errors.As(err, &cross) {
+		fmt.Fprintf(os.Stderr, "Note: %v\n", err)
+		home, err = from, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if home != from && config.Exists(filepath.Join(home, config.File)) {
+		cfgFile, _ := labs.ConfigFile(name)
+		fmt.Fprintf(os.Stderr, "Moved lab %s from %s to %s, its %s to %s; links at the old paths keep its cluster and older agentlab releases working\n",
+			name, from, home, config.File, cfgFile)
+	}
+	return home, labs.Register(name, home)
+}
+
+// rebaseLabPaths makes the relative paths of the agentlab.yaml in dir
+// absolute against dir, before the lab moves away from it. A file this
+// release cannot read is left as it is (its paths are said to need a look).
+func rebaseLabPaths(dir string) {
+	file := filepath.Join(dir, config.File)
+	if !config.Exists(file) {
 		return
 	}
-	_ = labs.Register(cfg.ClusterName, ".")
+	if err := config.RebasePaths(file, dir); err != nil {
+		fmt.Fprintf(os.Stderr, "Note: the relative paths in %s stay as they are (%v); they now resolve against the lab's new directory\n", file, err)
+	}
 }
 
 // pickLab asks which registered lab to use, on a terminal.
@@ -455,15 +482,20 @@ func pickLab(ls []labs.Lab) (labs.Lab, error) {
 
 // saveLab saves a new or changed agentlab.yaml and registers the lab: its
 // clusterName checked first, so a name another lab holds is refused before
-// anything is written.
+// anything is written; the lab settled in the freedesktop folders under that
+// name first (settleLab), so a new lab is made there and a renamed one moves.
 func saveLab(cfg *config.Config) error {
 	if err := labs.Check(cfg.ClusterName, "."); err != nil {
 		return err
 	}
-	if err := cfg.Save(); err != nil {
+	dir, err := settleLab(cfg.ClusterName, ".")
+	if err != nil {
 		return err
 	}
-	return labs.Register(cfg.ClusterName, ".")
+	if err := os.Chdir(dir); err != nil {
+		return err
+	}
+	return cfg.Save()
 }
 
 // freeClusterName gives a new lab the default name, or, when another lab on
@@ -544,6 +576,7 @@ func discoverInto(cfg *config.Config, first bool, pinEnabled *bool, pinBackends 
 	disc := lab.Discover(cfg)
 	fmt.Print(disc.Report(cfg))
 	fmt.Println()
+	applyDomain(cfg, disc)
 	applyPorts(cfg, disc)
 	before := cfg.Platform.ModelManager
 	cfg.Platform.ModelManager.ApplyDiscovered(disc.Backends(), cfg.Platform.Agents, first, pinEnabled, pinBackends)
@@ -608,6 +641,34 @@ func applyPorts(cfg *config.Config, disc *lab.Discovery) {
 	fmt.Println("  The kind node cannot bind them while they are taken. Free the port, or `agentlab down`,")
 	fmt.Println("  re-run `agentlab configure` (which then picks free ones) and `agentlab up`.")
 	fmt.Println()
+}
+
+// applyDomain gives the lab a platform domain no other registered lab
+// records while no kind node of this configuration exists, as applyPorts does
+// for the ports: a second lab serves backstage.lab2.127.0.0.2.nip.io on
+// 127.0.0.2:443, its own site in the browser with no port in its URLs. It
+// runs before applyPorts, which then probes the edge on its new address. An
+// existing cluster keeps its domain (its CA and every rendered URL name it):
+// a clash is reported with the way out.
+func applyDomain(cfg *config.Config, disc *lab.Discovery) {
+	recorded, err := labs.RecordedDomains(".")
+	if err != nil {
+		fmt.Printf("The other labs' domains are unknown (%v): platform.domain stays %s.\n\n", err, cfg.Platform.Domain)
+		return
+	}
+	if disc.ClusterExists {
+		if other := recorded[cfg.Platform.Domain]; other != "" {
+			fmt.Printf("platform.domain %s is also the lab %s's: both serve the same hostnames, and a browser mixes them up.\n", cfg.Platform.Domain, other)
+			fmt.Println("  `agentlab down`, re-run `agentlab configure` (which then picks a free one) and `agentlab up`.")
+			fmt.Println()
+		}
+		return
+	}
+	if ch := cfg.ChooseFreeDomain(recorded, config.LoopbackBindable); ch != nil {
+		fmt.Println("Applied to the configuration:")
+		fmt.Printf("  %s\n", ch)
+		fmt.Println()
+	}
 }
 
 // reportPortChanges tells the user which ports this machine cannot serve the
@@ -722,7 +783,7 @@ func openCmd() *cobra.Command {
 		Args:      cobra.MaximumNArgs(1),
 		ValidArgs: lab.OpenTargets(),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfig()
+			cfg, err := loadReadOnly()
 			if err != nil {
 				return err
 			}
@@ -780,7 +841,7 @@ func statusCmd() *cobra.Command {
 			if output != "" && output != outputJSON {
 				return fmt.Errorf("--output %q: the one format besides the default is json", output)
 			}
-			cfg, err := loadConfig()
+			cfg, err := loadReadOnly()
 			if err != nil {
 				return err
 			}
@@ -810,7 +871,7 @@ func podsCmd() *cobra.Command {
 		Short: "List the lab's pods across namespaces (kubectl get pods -A, without kubectl)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfig()
+			cfg, err := loadReadOnly()
 			if err != nil {
 				return err
 			}
@@ -1106,6 +1167,15 @@ func configureCmd() *cobra.Command {
 			if cmd.Flags().Changed("tenants") {
 				cfg.Platform.Tenants.Enabled = tenants
 			}
+			if cmd.Flags().Changed("tenants") && tenants {
+				// tenants-test's tenant users, one per organization, in a
+				// group the lab binds nothing to (docs/identity.md); added
+				// when --tenants is given, so a user removed by hand stays
+				// removed.
+				if added := cfg.EnsureTenantUsers(); len(added) > 0 {
+					fmt.Printf("  users      added %s for tenants-test (`agentlab reload` renders them into Dex)\n", strings.Join(added, ", "))
+				}
+			}
 			if cmd.Flags().Changed("coding-images") {
 				cfg.Platform.Coding.Images = codingImages
 			}
@@ -1230,11 +1300,11 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().StringSliceVar(&codingHarnesses, "coding-harnesses", nil, fmt.Sprintf("the coding Harnesses rendered with --coding, by runtime (%s; each named after its runtime; default claude alone); codex needs a kagent line whose chart takes runtime codex, omp one whose chart takes runtime byo and an image from --coding-images; \"\" returns to claude alone", strings.Join(config.CodingRuntimes, ", ")))
 	cmd.Flags().BoolVar(&codexHostModel, "codex-host-model", false, fmt.Sprintf("add the extraModels entry %s for the codex Harness: the first of %s the host's Ollama has, on its Responses API (coding-test --harness codex --model-config %s); each needs more memory than a lab proof's host model gets, so configure adds none without this flag", lab.CodexHostModelName, lab.CodexHostModelIDs(), lab.CodexHostModelName))
 	cmd.Flags().StringToStringVar(&codingImages, "coding-images", nil, "the image of a coding Harness the chart has none of its own for, <runtime>=<image@sha256:digest> (repeatable): "+config.CodingRuntimeOmp+"=<the kagent line's omp-harness, runtimeImages.ompHarness.digest of the release's chart>; a dev image (platform.devImages "+config.DevImageOmpHarness+") wins; an empty map clears it")
-	cmd.Flags().StringVar(&workspacesProvider, "workspaces-provider", "", "the workspace-manager's provider instances: fake (the lab's own GitHub, the default), fake-bearer (the same GitHub shaped like github.com, its API on a Bearer host of its own; beside fake), github (a GitHub App of the lab's own, docs/workspaces.md), gitlab (a GitLab's OAuth application, docs/workspaces.md) or several, such as fake,github,gitlab")
-	cmd.Flags().StringVar(&workspacesGrantProvider, "workspaces-grant-provider", "", "the provider instance whose App muster pins the workspace-manager to, the one App a person grants (platform.workspaces.grantProvider): one of --workspaces-provider, such as fake-bearer for 'workspaces-test --part caller-credential' and '--part write'; \"\" returns to the first instance")
+	cmd.Flags().StringVar(&workspacesProvider, "workspaces-provider", "", "the workspace-manager's provider instances: github (a GitHub App of the lab's own, the default, docs/workspaces.md), gitlab (a GitLab's OAuth application, docs/workspaces.md) or both, github,gitlab")
+	cmd.Flags().StringVar(&workspacesGrantProvider, "workspaces-grant-provider", "", "the provider instance whose App muster pins the workspace-manager to, the one App a person grants (platform.workspaces.grantProvider): one of --workspaces-provider, such as gitlab for 'workspaces-test --part gitlab'; \"\" returns to the first instance")
 	cmd.Flags().BoolVar(&workspacesCSICompanion, "workspaces-csi-companion", false, "with workspaces on, the connectivity chart's CSI companion is Substrate's workspace driver: its efs preset running the lab's NFS plugin, the lab's NFS driver serving the volumes under the preset's driver name — the lab path for proving a companion chart change (docs/workspaces.md); --workspaces-csi-companion=false returns to the lab's own registration")
-	cmd.Flags().StringVar(&workspacesCleanupAfter, "workspaces-cleanup-after", "", "how long a Session's directory on a workspace volume outlives its last turn, a Go duration (the workspace-manager's sessions.cleanupAfter); 'workspaces-test --part sessions' needs a window of "+lab.SessionsCleanupWindowRange()+" (such as "+lab.SessionsCleanupWindowExample()+"); \"\" returns to the chart's 30 days")
-	cmd.Flags().StringVar(&workspacesRefreshAfter, "workspaces-refresh-after", "", "the refresh threshold, a Go duration (the workspace-manager's sync.refreshAfter): a Session started on a workspace whose last sync is older requests a sync; 'workspaces-test --part refresh' needs "+lab.RefreshThresholdRange()+" (such as "+lab.RefreshThresholdExample()+"); \"\" returns to the manager's 1h")
+	cmd.Flags().StringVar(&workspacesCleanupAfter, "workspaces-cleanup-after", "", "how long a Session's directory on a workspace volume outlives its last turn, a Go duration (the workspace-manager's sessions.cleanupAfter); \"\" returns to the chart's 30 days")
+	cmd.Flags().StringVar(&workspacesRefreshAfter, "workspaces-refresh-after", "", "the refresh threshold, a Go duration (the workspace-manager's sync.refreshAfter): a Session started on a workspace whose last sync is older requests a sync; \"\" returns to the manager's 1h")
 	cmd.Flags().StringVar(&workspacesGitHubAppID, "workspaces-github-app-id", "", "the App id of the workspaces GitHub App (public; its private key and client secret go into the Secret agent-platform/"+config.WorkspaceGitHubSecretName+")")
 	cmd.Flags().StringVar(&workspacesGitHubClientID, "workspaces-github-client-id", "", "the client id of the workspaces GitHub App (public)")
 	cmd.Flags().StringVar(&workspacesGitHubPrivateKeySource, "workspaces-github-private-key-source", "", "where the workspaces GitHub App's private key is: a reference `beekeeper secret copy` resolves (op://<vault>/<item>/<field>, or <file>#<path> of a SOPS file), never the key; every up and platform place it into the Secret agent-platform/"+config.WorkspaceGitHubSecretName)
@@ -1308,10 +1378,6 @@ func printSaved(cfg *config.Config, disc *lab.Discovery) {
 	}
 	if cfg.WorkspacesEnabled() {
 		fmt.Printf("  workspaces an NFS server on %s and the NFS CSI driver behind its mTLS proxy; the read-write-many StorageClass %s\n", lab.WorkspacesNode(cfg), lab.WorkspacesStorageClass)
-	}
-	if cfg.WorkspaceFakeProvider() {
-		fmt.Printf("  ws-fake    the workspace-manager's provider instance fake: the lab's own GitHub at %s (its App, key pair and client secret the lab's; Secret %s/%s), the App's callback URL %s\n",
-			cfg.GitHubFakeURL(), config.DefaultGitHubSecretNamespace, config.WorkspaceFakeSecretName, lab.WorkspaceAppCallback(cfg))
 	}
 	if cfg.WorkspaceGitHubProvider() {
 		gh := cfg.Platform.Workspaces.GitHub
@@ -1515,11 +1581,29 @@ func platformTestCmd() *cobra.Command {
 	}
 }
 
+func polexTestCmd() *cobra.Command {
+	var opts lab.PolexTestOptions
+	cmd := &cobra.Command{
+		Use:   "polex-test",
+		Short: "Headless proof of the chart's Kyverno PolicyExceptions: the meta chart and its component releases rendered with the lab's values and kyvernoPolicies.enabled: true, every PolicyException created as a server-side dry run against the lab's Kyverno (the fleet's) — fails with the apiserver's refusal for one an installation refuses; platform-test runs the same stage",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadProofLab()
+			if err != nil {
+				return err
+			}
+			return lab.PolexTest(cfg, opts)
+		},
+	}
+	cmd.Flags().StringVar(&opts.ChartVersion, "chart-version", "", "an exact agent-platform release to render instead of the chart agentlab.yaml installs (a candidate before the lab runs it); the lab's values stay the same")
+	return cmd
+}
+
 func modelsTestCmd() *cobra.Command {
 	var opts lab.ModelsTestOptions
 	cmd := &cobra.Command{
 		Use:   "models-test [email]",
-		Short: "Headless managed-models proof: 401 without a token, then pull -> ModelConfig -> dry runs, gitops_owned, a commit as the person on a fake GitHub -> agent turn -> MCP via muster -> unload -> delete (a refused delete + unwire where the server has none)",
+		Short: "Headless managed-models proof: 401 without a token, then pull -> ModelConfig -> dry runs, gitops_owned -> agent turn -> MCP via muster -> unload -> delete (a refused delete + unwire where the server has none)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadProofLab()
@@ -1535,7 +1619,6 @@ func modelsTestCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&opts.Backend, "backend", "", "the backend to prove, one of platform.modelManager.backends (default: the first — model-manager's default backend)")
 	cmd.Flags().StringVar(&opts.Model, "model", "", fmt.Sprintf("the model to pull, small and tool-calling capable (default: %s)", lab.ModelsTestModelDefaults()))
-	cmd.Flags().StringVar(&opts.GitHubFakeBinary, "github-fake-binary", "", "the static Linux agentlab the fake GitHub API container of the commit proof runs on the kind network (default: this binary)")
 	return cmd
 }
 
@@ -1560,29 +1643,6 @@ func servingTestCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.Preset, "preset", "", "the published preset to serve (default: the lab's, "+lab.ServingPresetName+")")
 	cmd.Flags().BoolVar(&opts.SkipChat, "skip-chat", false, "skip the agent turn on the wired ModelConfig")
 	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", lab.DefaultServingReadyTimeout, "how long the model may take to serve: the weights download and the runtime's start")
-	return cmd
-}
-
-func pmTestCmd() *cobra.Command {
-	var opts lab.PMTestOptions
-	cmd := &cobra.Command{
-		Use:   "pm-test [email]",
-		Short: "Headless platform-manager proof (platform.platformManager): the released giantswarm-platform-manager on the lab's registry fixture -> signed in through muster -> reconcile_capability's dry run of an installation with workspaces on -> the kept workspace-manager values",
-		Args:  cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadProofLab()
-			if err != nil {
-				return err
-			}
-			email := cfg.AdminUser().Email
-			if len(args) == 1 {
-				email = args[0]
-			}
-			return lab.PMTest(cfg, email, opts)
-		},
-	}
-	cmd.Flags().StringVar(&opts.GitHubFakeBinary, "github-fake-binary", "", "the static Linux agentlab the registry's container runs on the kind network (default: this binary)")
-	cmd.Flags().StringVar(&opts.Record, "record", "", "write reconcile_capability's dry run to this file (how internal/lab/testdata/platform-manager/dry-run.json is recorded)")
 	return cmd
 }
 
@@ -1613,7 +1673,7 @@ func codingTestCmd() *cobra.Command {
 	var opts lab.CodingTestOptions
 	cmd := &cobra.Command{
 		Use:   "coding-test [email]",
-		Short: "Headless coding agents proof (platform.coding) on one coding Harness (--harness, default claude): the Harness Ready from the platform values (claude: no limits on it) -> validate_agent accepting a toolset with a muster write tool and refusing an origin outside the Harness's list -> a coding agent created through agent-manager as [email] (default the admin), Ready on the Harness (codex: its MCP binding's credential from a Secret) -> on a lab with the provider instance fake-bearer, a workspace the Session starts in through start_session -> one turn probing its sandbox: on claude, Claude Code as uid 65532 cannot read the root harness's environment or memory, the caller forwarder refuses dot segments and encoded slashes, muster refuses a write tool outside the toolset through it; everywhere no forge token or bearer in the environment, /data or /workspace, the model key and MCP credentials placeholders, a DNS canary recorded, a host outside the Agent's origins denied at the egress gate -> an MCP call through the agent's binding listing the agent (in a workspace Session audited by muster as the person) -> on claude a repository's instruction files written, the next turn records what Claude Code loaded -> suspend and resume keeping the file and the conversation -> the resumed turn's usage on its task status -> a share of the Session refused. On codex the model is the in-cluster mockllm (ModelConfig " + lab.MockLLMModelConfig + "), a mock Responses API scripted for these turns, which needs no OpenAI or Bedrock account; --model-config runs a real one",
+		Short: "Headless coding agents proof (platform.coding) on one coding Harness (--harness, default claude): the Harness Ready from the platform values (claude: no limits on it) -> validate_agent accepting a toolset with a muster write tool and refusing an origin outside the Harness's list -> Agent Plugins at write time: the upstream example package accepted on every Harness, a public Claude-format plugin refused on codex by validate_agent and create_agent (on kagent skipped until agent-manager checks plugins there) -> a coding agent created through agent-manager as [email] (default the admin) with the example package's skill selected (claude: the Claude-format plugin beside it), Ready on the Harness (codex: its MCP binding's credential from a Secret) -> one turn probing its sandbox: on claude, Claude Code as uid 65532 cannot read the root harness's environment or memory, the caller forwarder refuses dot segments and encoded slashes, muster refuses a write tool outside the toolset through it (--muster-tools gives the agent a tool selection on muster, as platform agents have); everywhere no forge token or bearer in the environment, /data or /workspace, the model key and MCP credentials placeholders, a DNS canary recorded, a host outside the Agent's origins denied at the egress gate -> the agent has the selected plugin skills and no other (claude: the Claude-format plugin's hook ran, a move to codex through update_agent refused, nothing written) -> an MCP call through the agent's binding listing the agent -> a heartbeat one turn starts in the sandbox not running in the gap without a turn and running again in the next -> on claude a repository's instruction files written, the next turn records what Claude Code loaded -> suspend and resume keeping the file and the conversation -> the resumed turn's usage on its task status -> a share of the Session refused -> update_agent emptying the example package's selection: a new Session's agent without its skill. On codex the model is the in-cluster mockllm (ModelConfig " + lab.MockLLMModelConfig + "), a mock Responses API scripted for these turns, which needs no OpenAI or Bedrock account; --model-config runs a real one",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadProofLab()
@@ -1623,6 +1683,9 @@ func codingTestCmd() *cobra.Command {
 			if len(args) == 1 {
 				opts.Email = args[0]
 			}
+			if slices.Equal(opts.MusterTools, []string{"meta"}) {
+				opts.MusterTools = lab.MusterMetaTools
+			}
 			return lab.CodingTest(cfg, opts)
 		},
 	}
@@ -1631,6 +1694,7 @@ func codingTestCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.Harness, "harness", config.CodingRuntimeClaude, fmt.Sprintf("the coding Harness the proof runs on (%s), one the lab renders (platform.coding.harnesses)", strings.Join(config.CodingRuntimes, ", ")))
 	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the agent runs on (default on codex the in-cluster mockllm, "+lab.MockLLMModelConfig+", else agent-manager's default one); codex needs an OpenAI Responses API or Bedrock gpt-* ModelConfig, such as the codex host model configure adds")
 	cmd.Flags().StringVar(&opts.MockLLMBinary, "mockllm-binary", "", "the static linux agentlab binary the mockllm's container runs (default this one)")
+	cmd.Flags().StringSliceVar(&opts.MusterTools, "muster-tools", nil, "the agent's tool selection on its muster binding (the Generic chart's muster.tools), as a platform agent binds muster: tool names, or meta for muster's "+strconv.Itoa(len(lab.MusterMetaTools))+" meta-tools (default none: muster bound whole)")
 	return cmd
 }
 
@@ -1661,37 +1725,26 @@ func egressTestCmd() *cobra.Command {
 func workspacesMeasureCmd() *cobra.Command {
 	var opts lab.WorkspacesMeasureOptions
 	cmd := &cobra.Command{
-		Use:   "workspaces-measure [email]",
-		Short: "Measure workspaces through muster as [email] (default the admin): two workspaces, a small one and one with a large repository, created and deleted --runs times; the first sync, a no-op and a changed cycle, authorize_workspace, a Session's directory set up through start_session, the on-demand fetch, a first checkout, git status and a build on the workspace volume and on a local disk, the session directory's size, the volume's capacity and use, each mirror against the provider's size (W8's factor 1.5), the headroom max(4 GiB, 50 %) and one online expansion; median, p90 and max per figure, a figure the cluster cannot report listed as not available; JSON and a Markdown table written to the run directory and printed. --kube-context and --muster-url measure another cluster with the platform as the person signed in to its muster, pushing to a scratch branch on the provider with the person's git credentials, deleted afterwards. Lab only: [email] and --large-repo-mib; another cluster refuses them",
-		Args:  cobra.MaximumNArgs(1),
+		Use:   "workspaces-measure",
+		Short: "Measure workspaces on the cluster --kube-context and --muster-url name, through its muster as the person signed in there: two workspaces, a small one and one with a large repository, created and deleted --runs times; the first sync, a no-op and a changed cycle, authorize_workspace, a Session's directory set up through start_session, the on-demand fetch, a first checkout, git status and a build on the workspace volume and on a local disk, the session directory's size, the volume's capacity and use, each mirror against the provider's size (W8's factor 1.5), the headroom max(4 GiB, 50 %) and one online expansion; median, p90 and max per figure, a figure the cluster cannot report listed as not available; JSON and a Markdown table written to the run directory and printed. The pushes go to a scratch branch on the provider with the person's git credentials, deleted afterwards",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) == 1 {
-				opts.Email = args[0]
-			}
-			if opts.KubeContext != "" || opts.MusterURL != "" {
-				return lab.WorkspacesMeasure(nil, opts)
-			}
-			cfg, err := loadProofLab()
-			if err != nil {
-				return err
-			}
-			return lab.WorkspacesMeasure(cfg, opts)
+			return lab.WorkspacesMeasure(opts)
 		},
 	}
 	cmd.Flags().IntVar(&opts.Runs, "runs", lab.DefaultWorkspacesMeasureRuns, "how many times each figure is measured: the workspaces are created and deleted once per run")
-	cmd.Flags().IntVar(&opts.LargeRepoMiB, "large-repo-mib", 0, "the lab: add a repository of this many MiB to the lab's GitHub for the large workspace, removed afterwards (default: the fixture's agentlab-org/monorepo)")
 	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", lab.DefaultWorkspacesReadyTimeout, "how long each wait may take: a cycle, a Session's turn, a probe pod")
 	cmd.Flags().StringVar(&opts.RunDir, "run-dir", "", "where the report is written (default state/workspaces-measure-<time>)")
 	cmd.Flags().StringVar(&opts.GoProxy, "goproxy", "", "the module proxy the build's download goes through, a GOPROXY list (default the git image's, proxy.golang.org)")
-	cmd.Flags().StringVar(&opts.KubeContext, "kube-context", "", "another cluster: the context of your kubeconfig the Kubernetes reads and probe pods use (with --muster-url)")
-	cmd.Flags().StringVar(&opts.MusterURL, "muster-url", "", "another cluster: its muster, as the person `muster auth login --endpoint <url>` signed in (with --kube-context)")
-	cmd.Flags().StringVar(&opts.Organization, "organization", "", "another cluster: the Organization the workspaces belong to")
-	cmd.Flags().StringVar(&opts.Provider, "provider", "", "another cluster: the provider instance the repositories are on")
-	cmd.Flags().StringSliceVar(&opts.SmallRepos, "small-repos", nil, "another cluster: the small workspace's repositories, owner/name; the first is the one checked out and built")
-	cmd.Flags().StringVar(&opts.LargeRepo, "large-repo", "", "another cluster: the large workspace's repository, owner/name")
-	cmd.Flags().StringVar(&opts.AgentgatewayURL, "agentgateway-url", "", "another cluster: its agentgateway, through which the Sessions' turns run (with --agent; without both the Session figures are not available)")
-	cmd.Flags().StringVar(&opts.Agent, "agent", "", "another cluster: the Agent the Sessions start on, namespace/name")
-	cmd.Flags().StringVar(&opts.GitURL, "git-url", "", "another cluster: the provider's git base URL the pushes go to, <url>/<owner>/<name>.git (default https://github.com)")
+	cmd.Flags().StringVar(&opts.KubeContext, "kube-context", "", "the context of your kubeconfig the Kubernetes reads and probe pods use (with --muster-url)")
+	cmd.Flags().StringVar(&opts.MusterURL, "muster-url", "", "the cluster's muster, as the person `muster auth login --endpoint <url>` signed in (with --kube-context)")
+	cmd.Flags().StringVar(&opts.Organization, "organization", "", "the Organization the workspaces belong to")
+	cmd.Flags().StringVar(&opts.Provider, "provider", "", "the provider instance the repositories are on")
+	cmd.Flags().StringSliceVar(&opts.SmallRepos, "small-repos", nil, "the small workspace's repositories, owner/name; the first is the one checked out and built")
+	cmd.Flags().StringVar(&opts.LargeRepo, "large-repo", "", "the large workspace's repository, owner/name")
+	cmd.Flags().StringVar(&opts.AgentgatewayURL, "agentgateway-url", "", "the cluster's agentgateway, through which the Sessions' turns run (with --agent; without both the Session figures are not available)")
+	cmd.Flags().StringVar(&opts.Agent, "agent", "", "the Agent the Sessions start on, namespace/name")
+	cmd.Flags().StringVar(&opts.GitURL, "git-url", "", "the provider's git base URL the pushes go to, <url>/<owner>/<name>.git (default https://github.com)")
 	return cmd
 }
 
@@ -1699,7 +1752,7 @@ func workspacesTestCmd() *cobra.Command {
 	var opts lab.WorkspacesTestOptions
 	cmd := &cobra.Command{
 		Use:   "workspaces-test [email]",
-		Short: "Headless workspace storage proof: the NFS server, the CSI driver and the class in place -> a read-write-many claim bound -> a bare mirror seeded -> two pods on their own session sub-paths with a shared clone each, modes and links intact, isolated, the mirrors read-only -> the whole volume read-only -> the controller endpoint refused without Substrate's client certificate -> the actor-level mount (skipped until the Substrate line carries it) -> a claude Harness Session admitted on the volume with a workspace grant the manager's key set verifies, one headless turn in its own directory (not with --storage-only) -> everything removed. --part sync instead defines workspaces through the workspace-manager as [email] and proves their mirrors: preview, create, the Organization's boundary, the first cycle, a no-op cycle, a push and a force-push fetched alone, a dropped repository's mirror kept while borrowed, update, delete. --part access instead proves the access check at a Session's start as the admin and [email] (default dev@lab.local): connect_required with the sign-in link, connect_provider, refused naming the unreadable repository, the admin's grant and start_session with it, kagent's admission refusing the grant used by another person, an expired one and another workspace's, disconnect_provider revoking at the provider; no Session or actor after any refused start; the latency of authorize_workspace. --part gitlab instead proves the provider instance gitlab against a real GitLab: the picker, connect_provider through GitLab's sign-in, the token exchange, a workspace's mirror, start_session with the clone and no token in the Session, disconnect_provider; it skips without the instance. --part sessions instead starts --sessions Sessions (default 10) at once through start_session as the admin on the sync part's filter workspace after a push since its sync, alternating the claude and the kagent Harness: each in its own directory on the volume with a clone of every repository at its head, the pushed one fetched once per Session and nothing else, each isolated with the mirrors read-only, a deleted Session's directory gone with no cycle requested (at the next cycle before workspace-manager 0.6.0), a Session without a workspace in an empty directory, and after the lab's short cleanup window (configure --workspaces-cleanup-after) every directory removed, SessionsCleanedUp=True and a resumed Session in a fresh directory; the Sessions' timings go to state/workspaces-sessions-report.json. Lab only: the whole command, [email] included, runs against the lab",
+		Short: "Headless workspace storage proof: the NFS server, the CSI driver and the class in place -> a read-write-many claim bound -> a bare mirror seeded -> two pods on their own session sub-paths with a shared clone each, modes and links intact, isolated, the mirrors read-only -> the whole volume read-only -> the controller endpoint refused without Substrate's client certificate -> the actor-level mount (skipped until the Substrate line carries it) -> a claude Harness Session admitted on the volume with a workspace grant the manager's key set verifies, one headless turn in its own directory (not with --storage-only) -> everything removed. --part gitlab instead proves the provider instance gitlab against a real GitLab as the admin and [email] (default dev@lab.local): the picker, connect_provider through GitLab's sign-in, the token exchange, a workspace's mirror, start_session with the clone and no token in the Session, disconnect_provider; it skips without the instance. Lab only: the whole command, [email] included, runs against the lab",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadProofLab()
@@ -1713,36 +1766,15 @@ func workspacesTestCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&opts.StorageOnly, "storage-only", false, "prove the storage alone, without the claude Session admitted on the volume")
-	cmd.Flags().StringVar(&opts.Part, "part", "", "run one part instead of the storage proof: "+strings.Join(lab.WorkspacesParts, ", ")+" (sync: the workspaces defined through the workspace-manager and their mirrors, as [email], default the admin; access: the provider sign-in and the access check at a Session's start, as the admin and [email], default dev@lab.local; gitlab: the provider instance gitlab end to end, skipped without one; sessions: parallel Sessions in their session directories and the cleanup, as the admin; caller-credential: a Session's actor JWT on the Bearer API host of the provider instance fake-bearer and muster's binding of its sandbox removed by delete_session, as the admin; write: git push and gh pr create from a workspace Session on the claude Harness with the workspace App's token from muster, pushes the App may not make refused, as the admin; refresh: a Session start past the workspace-manager's refresh threshold requests a sync without waiting for it, none within it or without a start, as the admin)")
-	cmd.Flags().IntVar(&opts.Sessions, "sessions", 0, fmt.Sprintf("how many Sessions --part sessions starts at once, alternating the claude and the kagent Harness (default %d)", lab.DefaultWorkspacesSessions))
+	cmd.Flags().StringVar(&opts.Part, "part", "", "run one part instead of the storage proof: "+strings.Join(lab.WorkspacesParts, ", ")+" (gitlab: the provider instance gitlab end to end, as the admin and [email], default dev@lab.local; skipped without one)")
 	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", lab.DefaultWorkspacesReadyTimeout, "how long each wait may take: the storage's rollouts, a claim bound, a pod finished, a volume gone, a sync cycle")
 	return cmd
 }
 
-func workspacesSignInTestCmd() *cobra.Command {
-	var opts lab.WorkspacesSignInTestOptions
-	cmd := &cobra.Command{
-		Use:   "workspaces-signin-test",
-		Short: "Headless workspace-manager provider sign-in proof, the person's grant held by muster: a developer without it gets muster's sign-in link -> the admin and the developer grant the lab GitHub's App by the browser's walk (core_auth_login's link -> the fake's consent -> muster's callback), list_providers showing each connected -> a workspace over agentlab-org/platform-api and platform-infra created and synced -> authorize_workspace granted for the admin and refused naming platform-infra for the developer -> the workspace deleted, both grants dropped",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadProofLab()
-			if err != nil {
-				return err
-			}
-			return lab.WorkspacesSignInTest(cfg, opts)
-		},
-	}
-	cmd.Flags().StringVar(&opts.Provider, "provider", "fake", "the provider instance whose App the people grant (the lab's GitHub, the one muster pins the workspace-manager to)")
-	cmd.Flags().DurationVar(&opts.SyncTimeout, "sync-timeout", lab.DefaultWorkspacesSignInSyncTimeout, "how long the workspace's first sync may take")
-	return cmd
-}
-
 func agentsGitOpsTestCmd() *cobra.Command {
-	var opts lab.AgentsGitOpsTestOptions
-	cmd := &cobra.Command{
+	return &cobra.Command{
 		Use:   "agents-gitops-test [email]",
-		Short: "Headless proof of editing an agent applied from git, as the portal does it: validate_agent refuses mode apply (gitops_owned) and validates mode commit, update_agent mode commit opens the pull request as the person on a fake GitHub, the live release untouched",
+		Short: "Headless proof of an agent applied from git, as the portal sees it: managed gitops, validate_agent refuses mode apply (gitops_owned) and mode commit (unsupported on the platform's agent-manager, which no GitHub App pins), update_agent refused, the live release untouched",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
@@ -1753,11 +1785,9 @@ func agentsGitOpsTestCmd() *cobra.Command {
 			if len(args) == 1 {
 				email = args[0]
 			}
-			return lab.AgentsGitOpsTest(cfg, email, opts)
+			return lab.AgentsGitOpsTest(cfg, email)
 		},
 	}
-	cmd.Flags().StringVar(&opts.GitHubFakeBinary, "github-fake-binary", "", "the static Linux agentlab the fake GitHub API container runs on the kind network (default: this binary)")
-	return cmd
 }
 
 func agentsTestCmd() *cobra.Command {
@@ -1780,9 +1810,10 @@ func agentsTestCmd() *cobra.Command {
 }
 
 func tenantsTestCmd() *cobra.Command {
-	return &cobra.Command{
+	var opts lab.TenantsTestOptions
+	cmd := &cobra.Command{
 		Use:   "tenants-test [email email]",
-		Short: "Headless tenant reconciler proof (platform.tenants) over two organization namespaces, one person an editor in each (default the first two users outside platform-admins): only the always-kept objects before an agent -> the other organization's create refused, the first agent's copies -> the worker admitted, a turn on the namespace's own credentials -> the same in the second -> the workers held against a cluster-admin -> the last delete removing the copies",
+		Short: "Headless tenant proof (platform.tenants) over two organization namespaces, one person an editor in each (default the first two users outside platform-admins and the tenant groups) and one tenant user bound by group in each: only the always-kept objects before an agent -> the other organization's create refused, the first agent's copies -> the worker admitted, a turn on the namespace's own credentials -> the same in the second -> through the edge, each tenant user lists their organization's agents and the platform tenant's, the other organization's refused, a user writes nothing, an editor writes their organization only, all_creators refused -> in Slack, per-person rosters with tenant labels, the other organization's pick and a collaborator refused -> through the Dev Portal's routes, each tenant user's roster per tenant, the editor's create flow offering their organization only, the access reviews behind Edit and Delete, a refused session start, the creator, an empty roster -> the workers held against a cluster-admin -> the last delete removing the copies",
 		Args: func(cmd *cobra.Command, args []string) error {
 			if len(args) != 0 && len(args) != 2 {
 				return fmt.Errorf("tenants-test takes no email or two (one editor per organization), got %d", len(args))
@@ -1794,9 +1825,12 @@ func tenantsTestCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return lab.TenantsTest(cfg, args)
+			return lab.TenantsTest(cfg, args, opts)
 		},
 	}
+	cmd.Flags().StringVar(&opts.GatewayImage, "gateway-image", "", "the klaus-gateway image the Slack steps run on the host network (on macOS the kind network, HACKS.md U35; default: the release the lab's meta chart runs as its klaus-gateway component); the steps need one with giantswarm/klaus-gateway#486, 4.10.0 or later")
+	cmd.Flags().StringVar(&opts.GatewayBinary, "gateway-binary", "", "a local klaus-gateway build to run instead of the image")
+	return cmd
 }
 
 func a2aTestCmd() *cobra.Command {
@@ -1959,7 +1993,7 @@ func klausGatewayTestCmd() *cobra.Command {
 	var opts lab.KlausGatewayTestOptions
 	cmd := &cobra.Command{
 		Use:   "klaus-gateway-test [email]",
-		Short: "Headless Swarmgeist proof (kagent API v2) through the Slack adapter: klaus-gateway runs on the host against the lab's edge (A2A v1 over gRPC, TLS with the lab CA, JWT at the edge) with a fake Slack Web API, signed Events API messages and Block Kit clicks, the user linked by a record in its OBO link store that carries the user's Dex id_token — `@bot agents` lists the Agent (one on a Harness that does not exist hidden there and in the picker its Select button opens, and refused), an unlinked person is asked to sign in, one branded turn attributed to the person at muster, Approve and Deny on the approval card, `stop` cancelled server-side, a restart on the stores that keeps the thread → Session mapping, a restart mid-turn with the edge out of reach for 45 s whose answer is still posted, a restart mid-sign-in that replays the parked message and one mid-approval whose Approve resumes the paused task; with platform.klausGateway on, the meta chart's in-cluster component too — the Role scoped to the OBO link Secret, two links seeded through the store package, the pod deleted and its replacement Ready with the same links, one Slack turn through the pod; with --workspaces, the workspace a thread's Session works in",
+		Short: "Headless Swarmgeist proof (kagent API v2) through the Slack adapter: klaus-gateway runs on the host against the lab's edge (A2A v1 over gRPC, TLS with the lab CA, JWT at the edge) with a fake Slack Web API, signed Events API messages and Block Kit clicks, the user linked by a record in its OBO link store that carries the user's Dex id_token — `@bot agents` lists the Agent (one on a Harness that does not exist hidden there and in the picker its Select button opens, and refused), an unlinked person is asked to sign in, one branded turn attributed to the person at muster, Approve and Deny on the approval card, `stop` cancelled server-side, a restart on the stores that keeps the thread → Session mapping, a restart mid-turn with the edge out of reach for 45 s whose answer is still posted, a restart mid-sign-in that replays the parked message and one mid-approval whose Approve resumes the paused task; with platform.klausGateway on, the meta chart's in-cluster component too — the Role scoped to the OBO link Secret, two links seeded through the store package, the pod deleted and its replacement Ready with the same links, one Slack turn through the pod",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadProofLab()
@@ -1981,7 +2015,6 @@ func klausGatewayTestCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the fixture runs on (default: default-model-config, the Anthropic one the lab renders)")
 	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", 0, "how long the fixture's golden boot may take to reach Ready on the Harness (default 10m)")
 	cmd.Flags().StringVar(&opts.RunDir, "run-dir", "", "directory for the gateway's stores, keys and log, kept afterwards (default: a temporary directory, removed)")
-	cmd.Flags().BoolVar(&opts.Workspaces, "workspaces", false, "add the workspaces steps, the workspace a thread's Session works in, on a lab with the workspace-manager (`configure --workspaces`): a new thread asked once and its Session in its session directory, two more turns and a restart asking nothing, No workspace, the slash command's picker and its Workspace select preset, a workspace refused naming the repository with no Session, a collaborator refused privately; without the workspace-manager it fails before anything runs")
 	return cmd
 }
 
@@ -2027,6 +2060,8 @@ func beekeeperDecisionsTestCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.Version, "beekeeper-version", lab.BeekeeperDecisionsVersionDefault, "the beekeeper release whose binary and CRDs run")
 	cmd.Flags().StringVar(&opts.Binary, "beekeeper-binary", "", "a local linux beekeeper build to run instead of the release's binary — the proof of a branch")
 	cmd.Flags().StringVar(&opts.GatewayImage, "gateway-image", "", "the klaus-gateway image to run on the host network (default: the release the lab's meta chart runs as its klaus-gateway component)")
+	cmd.Flags().BoolVar(&opts.GuideOnly, "guide-only", false, "run the guide's conversation steps (6 to 9) without the decisions (1 to 5)")
+	cmd.Flags().StringVar(&opts.LocalBeekeeper, "local-beekeeper", "", "a host beekeeper build for step 9: the person's own machine, its standby watch delivering the Slack reply into a background Claude Code guide session (claude on PATH)")
 	cmd.Flags().StringVar(&opts.GatewayBinary, "gateway-binary", "", "a local klaus-gateway build to run instead of the image")
 	cmd.Flags().IntVar(&opts.Port, "gateway-port", 0, "host port of the gateway's endpoints; the next four take its admin endpoints, the fake Slack Web API, beekeeper serve and its Postgres (default: the lab's own, 18090 plus ten per port its apiServerPort sits above 6443, so two labs never share one)")
 	cmd.Flags().StringVar(&opts.RunDir, "run-dir", "", "directory for the stores, keys, serve's configuration and the logs, kept afterwards (default: a temporary directory, removed)")
@@ -2037,7 +2072,7 @@ func beekeeperCentralTestCmd() *cobra.Command {
 	var opts lab.BeekeeperCentralTestOptions
 	cmd := &cobra.Command{
 		Use:   "beekeeper-central-test",
-		Short: "Headless proof of beekeeper's central resources: beekeeper serve on the host behind muster, two local beekeepers as two lab users through it; a lease one claims refused to the other with its holder, a central lane hold stopping the other's merges, two merges into one lane taking turns, a machine's agent on the central roster, an unreachable central instance refused with exit 69",
+		Short: "Headless proof of beekeeper's central resources: beekeeper serve behind muster (on the host, or in the lab cluster from its chart with --chart), two local beekeepers as two lab users through it; a lease one claims refused to the other with its holder, a central lane hold stopping the other's merges, two merges into one lane taking turns, a machine's agent on the central roster, an unreachable central instance refused with exit 69, a team note answered by the other",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
@@ -2050,6 +2085,7 @@ func beekeeperCentralTestCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.Version, "beekeeper-version", lab.BeekeeperCentralVersionDefault, "the beekeeper release whose binary and CRDs run")
 	cmd.Flags().StringVar(&opts.Binary, "beekeeper-binary", "", "a local static linux beekeeper build for serve and both machines instead of the release's binary — the proof of a branch")
 	cmd.Flags().IntVar(&opts.Port, "port", 18093, "beekeeper serve's port in the node's network; the next one takes its Postgres")
+	cmd.Flags().StringVar(&opts.Chart, "chart", "", "a beekeeper chart directory or oci:// reference (at --beekeeper-version): serve runs in the lab cluster from the chart, as an installation runs it, its Environment and lane from the chart's values and its mailboxes in a CloudNativePG database, instead of on the host")
 	cmd.Flags().StringVar(&opts.RunDir, "run-dir", "", "directory for serve's configuration, the two machines and the logs, kept afterwards (default: a temporary directory, removed)")
 	return cmd
 }
@@ -2089,7 +2125,7 @@ func logsCmd() *cobra.Command {
 		Args:      cobra.ExactArgs(1),
 		ValidArgs: lab.LogComponents(),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfig()
+			cfg, err := loadReadOnly()
 			if err != nil {
 				return err
 			}

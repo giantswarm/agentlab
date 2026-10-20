@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -62,6 +63,11 @@ type BeekeeperCentralTestOptions struct {
 	// Postgres'. Default 18093.
 	Port   int
 	RunDir string
+	// Chart, a beekeeper chart directory or oci:// reference (at Version),
+	// runs serve in the lab cluster from the chart instead of on the host,
+	// as an installation runs it (beekeepercentralchart.go); Binary then
+	// runs the two machines only.
+	Chart string
 }
 
 // BeekeeperCentralTest is the headless proof of the central resources in
@@ -79,9 +85,10 @@ func BeekeeperCentralTest(cfg *config.Config, opts BeekeeperCentralTestOptions) 
 	}
 	opts.Version = cmp.Or(opts.Version, BeekeeperCentralVersionDefault)
 	opts.Port = cmp.Or(opts.Port, 18093)
-	servePort, pgPort := opts.Port, opts.Port+1
-	if err := portsFree(servePort, pgPort); err != nil {
-		return err
+	if opts.Chart == "" {
+		if err := portsFree(opts.Port, opts.Port+1); err != nil {
+			return err
+		}
 	}
 	runDir, cleanRunDir, err := klausGatewayRunDir(opts.RunDir)
 	if err != nil {
@@ -99,60 +106,27 @@ func BeekeeperCentralTest(cfg *config.Config, opts BeekeeperCentralTestOptions) 
 		tokens[u.Email] = tok
 	}
 
-	node := cfg.ControlPlaneNode()
-	nodeIP, err := outputQuiet(dockerBin, "inspect", "-f", `{{with index .NetworkSettings.Networks "`+kindDockerNetwork+`"}}{{.IPAddress}}{{end}}`, node)
-	if err != nil || strings.TrimSpace(nodeIP) == "" {
-		return fmt.Errorf("the address of node %s on network %s: %v", node, kindDockerNetwork, err)
-	}
-	nodeIP = strings.TrimSpace(nodeIP)
-	inNode := "container:" + node
-	run := strings.ToUpper(randomSuffix())
-
-	// serve reads the lab cluster through it, from the node's network.
-	if _, err := nodeKubeconfig(runDir); err != nil {
-		return err
-	}
 	caFile, err := filepath.Abs(trustBundleFile(cfg))
 	if err != nil {
 		return err
 	}
-	if err := copyFile(caFile, filepath.Join(runDir, beekeeperCAFile)); err != nil {
-		return err
-	}
-
-	step("Applying beekeeper %s's CRDs, the team namespace %s, Environment %s and MergeLane %s", opts.Version, beekeeperNamespace, centralEnvironment, centralLane)
-	removeCRDs, err := applyBeekeeperCRDs(opts.Version)
-	if err != nil {
-		return err
-	}
-	defer removeCRDs()
 	removeNS, err := ensureBeekeeperNamespace()
 	if err != nil {
 		return err
 	}
 	defer removeNS()
-	removeShared, err := applyCentralShared()
-	if err != nil {
-		return err
-	}
-	defer removeShared()
-
-	step("Starting Postgres for serve's mailboxes in node %s's network on :%d (%s)", node, pgPort, beekeeperPostgresImage)
-	stopPG, err := startBeekeeperPostgres(run, inNode, pgPort)
-	if err != nil {
-		return err
-	}
-	defer stopPG()
-	serveCfg := fmt.Sprintf("serve:\n  issuer: %q\n  clientIDs: [%q, %q]\n  organization: %q\n  teams: {%q: %q}\n",
-		cfg.Issuer(), config.AgentPlatformClientID, config.KubernetesClientID, group, group, beekeeperTeam)
 	image := beekeeperImage + ":" + strings.TrimPrefix(opts.Version, "v")
-	step("Starting beekeeper serve (%s) in node %s's network on :%d", cmp.Or(opts.Binary, image), node, servePort)
-	stopServe, err := startBeekeeperServe(image, opts.Binary, run, inNode, runDir, serveCfg, nodeIP, servePort, pgPort)
+	var url string
+	var stopServe func()
+	if opts.Chart != "" {
+		url, stopServe, err = startBeekeeperChart(cfg, opts.Chart, opts.Version, group)
+	} else {
+		url, stopServe, err = startBeekeeperHost(cfg, opts, image, group, caFile, runDir)
+	}
 	if err != nil {
 		return err
 	}
 	defer stopServe()
-	url := "http://127.0.0.1:" + strconv.Itoa(servePort) + "/mcp"
 	step("Registering MCPServer %s at %s in muster, the person's token forwarded", beekeeperServer, url)
 	removeServer, err := registerBeekeeperServer(url)
 	if err != nil {
@@ -209,8 +183,74 @@ func BeekeeperCentralTest(cfg *config.Config, opts BeekeeperCentralTestOptions) 
 	if err := m.unreachable(); err != nil {
 		return err
 	}
-	note("the central leases, holds, lanes and roster proven across two machines")
+	step("6. A note %s files for team %s is listed for %s, who answers it; it is closed for both", ana.Email, beekeeperTeam, pia.Email)
+	if err := m.notes(); err != nil {
+		return err
+	}
+	note("the central leases, holds, lanes, roster and notes proven across two machines")
 	return nil
+}
+
+// startBeekeeperHost runs serve from image (or opts.Binary) in the node's
+// network on opts.Port, beside a Postgres on the next port, over the
+// release's CRDs and the proof's Environment and lane; it returns serve's
+// MCP URL and the func that removes everything it created.
+func startBeekeeperHost(cfg *config.Config, opts BeekeeperCentralTestOptions, image, group, caFile, runDir string) (string, func(), error) {
+	var undo []func()
+	stop := func() {
+		for i := len(undo) - 1; i >= 0; i-- {
+			undo[i]()
+		}
+	}
+	fail := func(err error) (string, func(), error) {
+		stop()
+		return "", nil, err
+	}
+	servePort, pgPort := opts.Port, opts.Port+1
+	node := cfg.ControlPlaneNode()
+	nodeIP, err := outputQuiet(dockerBin, "inspect", "-f", `{{with index .NetworkSettings.Networks "`+kindDockerNetwork+`"}}{{.IPAddress}}{{end}}`, node)
+	if err != nil || strings.TrimSpace(nodeIP) == "" {
+		return fail(fmt.Errorf("the address of node %s on network %s: %v", node, kindDockerNetwork, err))
+	}
+	nodeIP = strings.TrimSpace(nodeIP)
+	inNode := "container:" + node
+	run := strings.ToUpper(randomSuffix())
+
+	// serve reads the lab cluster through it, from the node's network.
+	if _, err := nodeKubeconfig(runDir); err != nil {
+		return fail(err)
+	}
+	if err := copyFile(caFile, filepath.Join(runDir, beekeeperCAFile)); err != nil {
+		return fail(err)
+	}
+
+	step("Applying beekeeper %s's CRDs, Environment %s and MergeLane %s", opts.Version, centralEnvironment, centralLane)
+	removeCRDs, err := applyBeekeeperCRDs(opts.Version)
+	if err != nil {
+		return fail(err)
+	}
+	undo = append(undo, removeCRDs)
+	removeShared, err := applyCentralShared()
+	if err != nil {
+		return fail(err)
+	}
+	undo = append(undo, removeShared)
+
+	step("Starting Postgres for serve's mailboxes in node %s's network on :%d (%s)", node, pgPort, beekeeperPostgresImage)
+	stopPG, err := startBeekeeperPostgres(run, inNode, pgPort)
+	if err != nil {
+		return fail(err)
+	}
+	undo = append(undo, stopPG)
+	serveCfg := fmt.Sprintf("serve:\n  issuer: %q\n  clientIDs: [%q, %q]\n  organization: %q\n  teams: {%q: %q}\n",
+		cfg.Issuer(), config.AgentPlatformClientID, config.KubernetesClientID, group, group, beekeeperTeam)
+	step("Starting beekeeper serve (%s) in node %s's network on :%d", cmp.Or(opts.Binary, image), node, servePort)
+	stopServe, err := startBeekeeperServe(image, opts.Binary, run, inNode, runDir, serveCfg, nodeIP, servePort, pgPort)
+	if err != nil {
+		return fail(err)
+	}
+	undo = append(undo, stopServe)
+	return "http://127.0.0.1:" + strconv.Itoa(servePort) + "/mcp", stop, nil
 }
 
 // applyCentralShared creates the shared installation and its lane; the
@@ -305,7 +345,7 @@ func (p *centralProof) beekeeper(cfgFile, agent string, args ...string) (string,
 		env = []string{"CLAUDE_CODE_SESSION_ID=" + centralSessionID, "CLAUDE_CODE_SESSION_NAME=" + centralSession}
 	}
 	cmd := exec.Command(p.bin, argv...) //nolint:gosec // the proof's beekeeper
-	cmd.Env = append(append(os.Environ(), "SSL_CERT_FILE="+p.ca), env...)
+	cmd.Env = append(append(withoutClaudeSession(os.Environ()), "SSL_CERT_FILE="+p.ca), env...)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		return string(out), 0
@@ -314,6 +354,15 @@ func (p *centralProof) beekeeper(cfgFile, agent string, args ...string) (string,
 		return string(out), e.ExitCode()
 	}
 	return string(out) + err.Error(), -1
+}
+
+// withoutClaudeSession drops the Claude Code session the proof may itself run
+// in (CLAUDE_CODE_HOST_SESSION_ID, CLAUDE_PID, …): beekeeper would otherwise
+// name the machine's agent after that session instead of the proof's own.
+func withoutClaudeSession(environ []string) []string {
+	return slices.DeleteFunc(slices.Clone(environ), func(kv string) bool {
+		return strings.HasPrefix(kv, "CLAUDE")
+	})
 }
 
 // expect runs beekeeper and checks its exit code and that its output says
@@ -390,8 +439,8 @@ func (p *centralProof) holds() error {
 // laneCall calls a lane tool through muster as one person's agent and
 // returns its structured result.
 func laneCall(s *musterSession, tool, agent string, pr int, extra map[string]any) (map[string]any, error) {
-	args := map[string]any{"repo": centralRepo, "pr": pr, "host": centralContext}
-	args["agent"] = agent
+	args := map[string]any{"repo": centralRepo, "pr": pr, beekeeperKeyHost: centralContext}
+	args[beekeeperKeyAgent] = agent
 	for k, v := range extra {
 		args[k] = v
 	}
@@ -471,4 +520,55 @@ func (p *centralProof) unreachable() error {
 		return err
 	}
 	return p.expect(p.downCfg, centralPiaAgent, 0, []string{verbLease, verbRelease, centralLocal})
+}
+
+// centralQuestion is the note the proof files for the team.
+const centralQuestion = "Central proof: may the shared lane roll tonight?"
+
+// The parameters every serve tool takes to name the calling agent.
+const (
+	beekeeperKeyAgent = "agent"
+	beekeeperKeyHost  = "host"
+	beekeeperKeyDue   = "due"
+)
+
+func (p *centralProof) notes() error {
+	text, err := p.anaS.callServerTool(beekeeperNoteAdd, map[string]any{
+		slackKeyText: centralQuestion, "for": "team:" + beekeeperTeam, beekeeperKeyAgent: centralAnaAgent, beekeeperKeyHost: centralContext,
+		"status_quo":    "The shared lane rolls one release a night.",
+		"why":           "Only the team picks what rolls on the shared installation.",
+		slackKeyOptions: []any{"Roll tonight: the lane clears at 22:00", "Wait: nothing rolls before Monday"},
+		beekeeperKeyDue: "3h", beekeeperKeyDefault: "nothing rolls tonight",
+		"refs": []any{centralRepo + "#1"},
+	})
+	if err != nil {
+		return err
+	}
+	var id int
+	if _, err := fmt.Sscanf(text, "note #%d", &id); err != nil {
+		return fmt.Errorf("%s answered %q, not a note number", beekeeperNoteAdd, excerpt(text, 200))
+	}
+	note("note #%d filed for team:%s", id, beekeeperTeam)
+	listed, err := p.piaS.callServerTool(beekeeperNoteList, map[string]any{beekeeperKeyAgent: centralPiaAgent, beekeeperKeyHost: centralContext})
+	if err != nil {
+		return err
+	}
+	if !strings.Contains(listed, centralQuestion) {
+		return fmt.Errorf("%s's note_list lacks note #%d: %s", p.pia, id, excerpt(listed, 400))
+	}
+	note("%s lists note #%d", p.pia, id)
+	if _, err := p.piaS.callServerTool("x_"+beekeeperServer+"_note_answer", map[string]any{
+		beekeeperKeyNote: id, "choice": 2, slackKeyText: "wait for Monday", beekeeperKeyAgent: centralPiaAgent, beekeeperKeyHost: centralContext,
+	}); err != nil {
+		return err
+	}
+	listed, err = p.anaS.callServerTool(beekeeperNoteList, map[string]any{beekeeperKeyAgent: centralAnaAgent, beekeeperKeyHost: centralContext})
+	if err != nil {
+		return err
+	}
+	if strings.Contains(listed, centralQuestion) {
+		return fmt.Errorf("note #%d is still open after %s's answer: %s", id, p.pia, excerpt(listed, 400))
+	}
+	note("%s answered note #%d; it is closed for %s", p.pia, id, p.ana)
+	return nil
 }

@@ -427,7 +427,6 @@ agentlab models-test
 ==> Auto-created kagent ModelConfig                        -> Ollama provider, Accepted
 ==> dryRun on every write tool changes nothing             -> manifests / plans, the lab unchanged
 ==> A ModelConfig Flux applies from git is never written live -> gitops_owned on wire, unwire, delete
-==> Commit mode: the fake GitHub API, model-manager-gitops -> a pull request as admin, files = dry run
 ==> Agent turn on qwen2-5-0-5b (kagent Agent, runtime go -> host Ollama)
 ==> MCP tools through muster (x_model-manager_*)           -> get_model
 ==> Unloading qwen2.5:0.5b                                 -> gone from list_loaded_models
@@ -460,43 +459,12 @@ the labels, the Kustomization and that CustomResourceDefinition again. Wire,
 unwire and delete (`unwire=true`) must answer `gitops_owned` pointing at mode
 commit, the object and the model untouched.
 
-Commit mode opens a pull request as the person, so model-manager has to be
-pinned to a GitHub App (the chart's `github.enabled`): the bearer of every call
-is then the person's App user token. The platform's model-manager is not
-pinned — every other proof and the portal forward the Dex token to it — so the
-run applies a second, temporary release, **`model-manager-gitops`**: a copy of
-the platform's model-manager HelmRelease — its chart, values and the lab's
-post-renderers, the dex-localhost sidecar and a dev image included — with
-auto-wire off and two pins of its own:
-
-- **the App** is the lab Dex — its endpoints with the platform client, the
-  OAuth fixture's Secret, whose client lists muster's proxy callback — so
-  `core_auth_login server=model-manager-gitops` and the Dex login form complete
-  headlessly, and muster puts the person's Dex access token on every call as
-  the "App user token";
-- **the GitHub API** is a fake: `agentlab github-fake`, the run's own binary in
-  a container on the kind network behind the Service `agentlab-github-api`
-  (like klaus-gateway-test's fake Slack; `--github-fake-binary` names another
-  static Linux build). It holds one repository, `agentlab/gitops@main`, with
-  a `kustomization.yaml` under `clusters/agentlab/kagent` and a `.sops.yaml`
-  whose age recipient has no private key anywhere, and answers the calls
-  gitops-commit's GitHub remote makes (refs, commits, trees, blobs, contents,
-  pull requests) and `GET /user` — the login is the local part of the e-mail
-  the bearer carries.
-
-`wire_model mode: commit` against that repository, first as a dry run (the
-files, the author, no pull request, nothing reaching the fake), then for real,
-must open exactly one pull request authored by the person whose files are the
-dry run's byte for byte (a Secret file SOPS-encrypted), with nothing written
-live. The pinned release is a model-manager instance of its own, and only the
-instance that created a ModelConfig writes it, so the platform's model-manager
-unwires the model before the commit proof and wires it again after. Then the `kagent` namespace gets the Flux labels
-of a HelmRelease that does not exist, what a namespace left behind by a removed
-release carries, for the length of one step: `wire_model mode: commit` without
-an explicit target must answer `invalid_request` naming the gone release and
-asking for `repository`, `branch` and `path`; the namespace's own labels come
-back. The HelmRelease, the Service and the container go away at the end of the
-run.
+Commit mode opens a pull request as the person, which takes model-manager
+pinned to a GitHub App (the chart's `github.enabled`) and a person who
+granted that App in a browser. The platform's model-manager is not pinned —
+every proof and the portal forward the Dex token to it — so `models-test`
+proves no commit: its commit-mode checks are the `unsupported` answers above
+and `gitops_owned` naming mode commit.
 
 Load and unload through model-manager (or the portal's Load) pre-warm and
 evict; they do not change how long agent traffic keeps a model resident —

@@ -36,10 +36,11 @@ import (
 // guide, and with the guide off the roster the thread says the reply was
 // not delivered.
 
-// BeekeeperDecisionsVersionDefault is the first beekeeper release that puts
-// decisions to people through klaus-gateway and lets their guide converse
-// with them there.
-const BeekeeperDecisionsVersionDefault = "v0.79.0-rc.1"
+// BeekeeperDecisionsVersionDefault is the beekeeper release the proof passes
+// against: it puts decisions to people through klaus-gateway, each naming the
+// thread its answer is recorded on, and lets their guide converse with them
+// there.
+const BeekeeperDecisionsVersionDefault = "v0.152.4"
 
 // The proof's names: the MCPServer muster aggregates beekeeper under (its
 // tools are x_beekeeper_*), the team the lab users decide as, and the due
@@ -61,6 +62,11 @@ const (
 	beekeeperKeyKind    = "kind"
 	beekeeperKeyDefault = "default"
 	beekeeperKeyNote    = "note"
+	beekeeperKeyRefs    = "refs"
+	// beekeeperDecisionRef is the thread every decision names: serve refuses
+	// a decision without one, the issue or pull request its answer is
+	// recorded on.
+	beekeeperDecisionRef = "giantswarm/agentlab-decisions-proof#1"
 	// musterNodePort is muster's plain listener in the node's network.
 	musterNodePort      = 8090
 	beekeeperDefaultDue = "1m"
@@ -91,6 +97,13 @@ type BeekeeperDecisionsTestOptions struct {
 	// into that image, takes precedence — the proof of a branch.
 	Version string
 	Binary  string
+	// LocalBeekeeper, a beekeeper build for the host, runs the person's own
+	// machine for step 9: its standby watch and a background Claude Code
+	// session as their guide (claude on PATH, on its smallest model).
+	LocalBeekeeper string
+	// GuideOnly runs the guide's conversation steps (6 to 9) without the
+	// decisions (1 to 5).
+	GuideOnly bool
 	// The gateway: Port is its endpoints' in the node's network, Port+1
 	// its admin endpoints, Port+3 beekeeper serve's, Port+4 its Postgres'.
 	// Default the lab's own block, gatewayTestPort. GatewayBinary is not
@@ -270,25 +283,27 @@ func BeekeeperDecisionsTest(cfg *config.Config, opts BeekeeperDecisionsTestOptio
 	p := &beekeeperProof{s: askerS, otherS: otherS, fake: fake, driver: newSlackDriver(gw.baseURL(), keys.signing, fake, channel),
 		asker: asker.Email, askerSlack: askerSlack, otherSlack: otherSlack, channel: channel}
 
-	step("1. A decision for %s, filed through muster: a direct message; %s's click is refused, %s's answers it", asker.Email, other.Email, asker.Email)
-	if err := p.personByClick(); err != nil {
-		return err
-	}
-	step("2. A decision for team:%s in %s, answered by %s's reply in its thread", beekeeperTeam, channel, other.Email)
-	if err := p.teamByThreadReply(); err != nil {
-		return err
-	}
-	step("3. A decision nobody answers closes with its default at its due time (%s); a late click is refused", beekeeperDefaultDue)
-	if err := p.defaulted(); err != nil {
-		return err
-	}
-	step("4. A decision its filer withdraws (note_done) loses its buttons")
-	if err := p.withdrawn(); err != nil {
-		return err
-	}
-	step("5. beekeeper recorded each outcome as an Event in %s", beekeeperNamespace)
-	if err := beekeeperOutcomes(); err != nil {
-		return err
+	if !opts.GuideOnly {
+		step("1. A decision for %s, filed through muster: a direct message; %s's click is refused, %s's answers it", asker.Email, other.Email, asker.Email)
+		if err := p.personByClick(); err != nil {
+			return err
+		}
+		step("2. A decision for team:%s in %s, answered by %s's reply in its thread", beekeeperTeam, channel, other.Email)
+		if err := p.teamByThreadReply(); err != nil {
+			return err
+		}
+		step("3. A decision nobody answers closes with its default at its due time (%s); a late click is refused", beekeeperDefaultDue)
+		if err := p.defaulted(); err != nil {
+			return err
+		}
+		step("4. A decision its filer withdraws (note_done) loses its buttons")
+		if err := p.withdrawn(); err != nil {
+			return err
+		}
+		step("5. beekeeper recorded each outcome as an Event in %s", beekeeperNamespace)
+		if err := beekeeperOutcomes(); err != nil {
+			return err
+		}
 	}
 	step("6. The guide in Slack: %s's guide writes to them, their reply in the thread reaches the guide's mailbox from Slack, the guide's answer lands in the same thread", asker.Email)
 	r, err := p.guideConversation()
@@ -302,6 +317,23 @@ func BeekeeperDecisionsTest(cfg *config.Config, opts BeekeeperDecisionsTestOptio
 	step("8. With the guide off the roster, a reply in its thread is not delivered and the thread says why")
 	if err := p.guideNotRunning(r); err != nil {
 		return err
+	}
+	if opts.LocalBeekeeper != "" {
+		step("9. The guide on %s's machine: its question through their beekeeper, their reply in the thread delivered into the running guide session by the standby watch's mailbox subscription through muster, its answer in the same thread", asker.Email)
+		g, err := startLocalGuide(runDir, opts.LocalBeekeeper, caFile, asker.Email, cfg.MusterBaseURL()+"/mcp", tokens[asker.Email], run)
+		if g != nil {
+			defer g.stop()
+		}
+		if err != nil {
+			return err
+		}
+		if err := p.localGuideConversation(g); err != nil {
+			return err
+		}
+	}
+	if opts.GuideOnly {
+		note("the guide's conversation proven")
+		return nil
 	}
 	note("all beekeeper decisions and the guide's conversation proven")
 	return nil
@@ -547,7 +579,8 @@ func (p *beekeeperProof) add(forWho, question, due string) (int, error) {
 		"status_quo": "The lab's merge lane takes one release a night.",
 		"why":        "Only the lab's owners pick what rolls.",
 		"options":    []any{"Roll tonight: the lane clears at 22:00", "Wait for Monday: nothing rolls before Monday"},
-		"recommend":  2, "due": due, beekeeperKeyDefault: beekeeperDefault,
+		"recommend":  2, beekeeperKeyDue: due, beekeeperKeyDefault: beekeeperDefault,
+		beekeeperKeyRefs: []any{beekeeperDecisionRef},
 	})
 	if err != nil {
 		return 0, err
@@ -708,7 +741,8 @@ func (p *beekeeperProof) withdrawn() error {
 }
 
 // beekeeperOutcomes wants the Events beekeeper recorded: two answers from
-// Slack, one default.
+// Slack (answer.recorded, note.answered before beekeeper recorded answers on
+// their thread), one default.
 func beekeeperOutcomes() error {
 	k, err := labKube()
 	if err != nil {
@@ -723,16 +757,16 @@ func beekeeperOutcomes() error {
 	var answered, defaulted int
 	for _, e := range evs.Items {
 		switch {
-		case e.Reason == "note.answered" && strings.Contains(e.Message, "via slack"):
+		case (e.Reason == "answer.recorded" || e.Reason == "note.answered") && strings.Contains(e.Message, "via slack"):
 			answered++
 		case e.Reason == "note.defaulted" && strings.Contains(e.Message, beekeeperDefault):
 			defaulted++
 		}
 	}
 	if answered != 2 || defaulted != 1 {
-		return fmt.Errorf("%s holds %d note.answered via slack and %d note.defaulted Events, want 2 and 1", beekeeperNamespace, answered, defaulted)
+		return fmt.Errorf("%s holds %d answers via slack and %d note.defaulted Events, want 2 and 1", beekeeperNamespace, answered, defaulted)
 	}
-	note("2 note.answered via slack, 1 note.defaulted")
+	note("2 answers via slack, 1 note.defaulted")
 	return nil
 }
 

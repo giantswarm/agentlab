@@ -302,7 +302,7 @@ func egressProbePrompt(t egressProbeTarget) string {
 // egressOriginHost is the host of an origin or URL.
 func egressOriginHost(raw string) (string, error) {
 	u, err := url.Parse(raw)
-	if err != nil || u.Hostname() == "" || (u.Scheme != httpScheme && u.Scheme != httpScheme+"s") {
+	if err != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") {
 		return "", fmt.Errorf("%q is no HTTP(S) origin", raw)
 	}
 	return u.Hostname(), nil

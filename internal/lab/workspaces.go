@@ -1041,9 +1041,6 @@ func workspacesHint(cfg *config.Config, chartCarries bool, registrant string) st
 	if chartCarries {
 		hint += fmt.Sprintf("\n  The workspace-manager's provider instances: %s (the base URL %s; `agentlab platform-test` lists them as the admin).",
 			strings.Join(cfg.WorkspaceProviders(), ", "), cfg.WorkspaceManagerBaseURL())
-		if cfg.WorkspaceFakeProvider() {
-			hint += fmt.Sprintf("\n  The lab's GitHub serves the instance %s at %s, its credentials the lab's own.", config.WorkspaceProviderFake, cfg.GitHubFakeURL())
-		}
 	}
 	return hint
 }

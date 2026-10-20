@@ -126,11 +126,7 @@ type tmplData struct {
 	// WorkspaceProviders are the workspace-manager's provider instances
 	// (workspaceprovider.go), none while none is rendered: agentlab.yaml's
 	// in a render without a cluster, what the cluster allows in the
-	// install's. WorkspaceFake says the lab's GitHub is among them
-	// (workspacefake.go): CoreDNS sends its name to its Service, and the
-	// workspace-manager trusts the lab CA its leaf is from.
-	// WorkspaceFakeBearer says it serves the instance fake-bearer too:
-	// CoreDNS sends that instance's git and API hosts to the same Service.
+	// install's.
 	WorkspaceProviders []workspaceProviderValues
 	// WorkspaceGrant is the provider App muster pins the workspace-manager's
 	// registration to (workspacemustergrant.go), nil for none.
@@ -139,8 +135,6 @@ type tmplData struct {
 	// releases while no instance renders (workspaceReleasableFor), nil with
 	// workspaces off.
 	WorkspaceReleasable *workspaceGrantValues
-	WorkspaceFake       bool
-	WorkspaceFakeBearer bool
 	// WorkspaceAdmission is the rig a Session on a workspace volume is
 	// admitted with (workspacegrant.go): the manager's grant signing key,
 	// kagent's jwt admission of its key set and the claude Harness; nil
@@ -153,6 +147,9 @@ type tmplData struct {
 	// (tenantstest.go).
 	TenantsEnabled        bool
 	TenantsTestNamespaces []string
+	// TenantsMusterVersion is the muster the lab pins with the tenants on
+	// (tenantsMusterVersion, tenantstest_muster.go).
+	TenantsMusterVersion string
 	// CodingHarnesses are the lab's coding Harnesses (coding.go), rendered
 	// as kagent.harnesses; none with coding agents and the workspaces off.
 	CodingHarnesses []codingHarness
@@ -287,14 +284,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		}
 		labCA = strings.TrimRight(string(raw), "\n")
 	}
-	workspaceProviders, err := workspaceProvidersFor(cfg)
-	if err != nil {
-		return nil, err
-	}
-	workspaceReleasable, err := workspaceReleasableFor(cfg)
-	if err != nil {
-		return nil, err
-	}
+	workspaceProviders := workspaceProvidersFor(cfg)
 	workspacesChart := workspacesChartFor(cfg)
 	return &tmplData{
 		Config:                       cfg,
@@ -336,12 +326,11 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		Workspaces:                   workspacesValuesFor(cfg),
 		WorkspaceProviders:           workspaceProviders,
 		WorkspaceGrant:               workspaceGrantFor(cfg, workspaceProviders),
-		WorkspaceReleasable:          workspaceReleasable,
-		WorkspaceFake:                cfg.WorkspaceFakeProvider(),
-		WorkspaceFakeBearer:          cfg.WorkspaceFakeBearerProvider(),
+		WorkspaceReleasable:          workspaceReleasableFor(cfg),
 		WorkspaceAdmission:           workspaceAdmissionValuesFor(cfg, workspacesChart.Carries),
 		TenantsEnabled:               cfg.TenantsEnabled(),
 		TenantsTestNamespaces:        tenantsTestNamespaces[:],
+		TenantsMusterVersion:         tenantsMusterVersion,
 		CodingHarnesses:              codingHarnessesFor(cfg, workspaceAdmissionValuesFor(cfg, workspacesChart.Carries), nil),
 		CertsDir:                     certsDir,
 		NodeFilesDir:                 nodeFiles,
@@ -396,22 +385,23 @@ func (t *tmplData) DexJWKSPort() int {
 // these as `<component>: {postRenderers: …}` so every patch the rule found
 // reaches its release and no component key renders twice. Mirrors the
 // template's conditions: a block that is always there (muster,
-// agentgateway, mcp-kubernetes, kagent, model-manager, backstage — the last
+// agentgateway, the connectivity chart whenever it is patched, mcp-kubernetes, kagent, model-manager, backstage — the last
 // three carry their `enabled` from a toggle and render their patches only
 // while it is on) is never extra.
 func (t *tmplData) ExtraPostRenderers() map[string]string {
 	named := map[string]bool{
-		componentMuster:           true,
-		agentgatewayComponent:     true,
-		componentMCPKubernetes:    true,
-		componentKagent:           true,
-		componentBackstage:        true,
-		modelManagerMCPServer:     true,
-		agentManagerMCPServer:     t.Platform.Agents,
-		vmManagerMCPServer:        t.VMManagerEnabled,
-		klausGatewayComponent:     t.KlausGatewayEnabled,
-		clusterManager:            t.ClusterManagerEnabled,
-		llmisvcResourcesComponent: t.ServingEnabled,
+		componentMuster:              true,
+		agentgatewayComponent:        true,
+		config.ConnectivityChartName: true,
+		componentMCPKubernetes:       true,
+		componentKagent:              true,
+		componentBackstage:           true,
+		modelManagerMCPServer:        true,
+		agentManagerMCPServer:        t.Platform.Agents,
+		vmManagerMCPServer:           t.VMManagerEnabled,
+		klausGatewayComponent:        t.KlausGatewayEnabled,
+		clusterManager:               t.ClusterManagerEnabled,
+		llmisvcResourcesComponent:    t.ServingEnabled,
 	}
 	extra := map[string]string{}
 	for component, postRenderers := range t.PostRenderers {

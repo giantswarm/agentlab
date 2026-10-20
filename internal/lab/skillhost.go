@@ -111,7 +111,7 @@ func (r skillHostRequest) String() string {
 // skillHost is the fixture's server: the repository's directory and commit,
 // the Authorization it requires, the record.
 type skillHost struct {
-	git                               *githubGit
+	git                               *gitServer
 	commit, authorization, credential string
 
 	mu       sync.Mutex
@@ -152,10 +152,9 @@ func ServeSkillHost(ctx context.Context, addr string) error {
 
 // newSkillHost creates the repository under root — one commit with the
 // fixture's SKILL.md, a bare copy that serves any full commit a client wants
-// — and the handler requiring authorization. git runs as the workspace
-// GitHub fake runs it (githubfake_git.go).
+// — and the handler requiring authorization (skillhost_git.go).
 func newSkillHost(root, authorization string) (*skillHost, error) {
-	g, err := newGitHubGit(root)
+	g, err := newGitServer(root)
 	if err != nil {
 		return nil, err
 	}
@@ -172,7 +171,7 @@ func newSkillHost(root, authorization string) (*skillHost, error) {
 	for _, args := range [][]string{
 		{"init", "--quiet", "--initial-branch=main"},
 		{"add", "."},
-		{"-c", "user.name=agentlab", "-c", "user.email=agentlab@lab.local", gitCommit, "--quiet", "--message", "The skill host fixture"},
+		{"-c", "user.name=agentlab", "-c", "user.email=agentlab@lab.local", "commit", "--quiet", "--message", "The skill host fixture"},
 	} {
 		if _, err := g.run(work, args...); err != nil {
 			return nil, err
@@ -213,12 +212,12 @@ func (h *skillHost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Fetches only: the fixture takes no push.
-	fullName, service, advertise, ok := gitService(r)
-	if !ok || fullName != skillHostRepositoryName || service != gitUploadPack {
+	fullName, advertise, ok := gitFetchService(r)
+	if !ok || fullName != skillHostRepositoryName {
 		http.NotFound(w, r)
 		return
 	}
-	if err := h.git.serveService(w, r, fullName, service, advertise); err != nil {
+	if err := h.git.serveFetch(w, r, fullName, advertise); err != nil {
 		note("skill host: %s %s: %v", r.Method, r.URL.Path, err)
 	}
 }

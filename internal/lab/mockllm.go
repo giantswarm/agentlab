@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -76,9 +77,10 @@ func mockLLMURL() string {
 type mockLLMTurn struct {
 	name, prompt string
 	// command is the shell command the runtime runs; tool the MCP tool it
-	// calls instead (on the agent's binding, found through tool search).
-	command, tool string
-	reply         string
+	// calls instead (on the agent's binding, found through tool search),
+	// with arguments, a JSON object.
+	command, tool, arguments string
+	reply                    string
 }
 
 // mockLLMScript is the script of the proof's codex turns. The prompts are
@@ -87,7 +89,9 @@ func mockLLMScript() []mockLLMTurn {
 	codex := codingRuntimes[config.CodingRuntimeCodex]
 	return []mockLLMTurn{
 		{name: "sandbox", prompt: "own sandbox check", command: codingSandboxCommand(codex), reply: "The sandbox check ran; its readings are the command's output."},
-		{name: "mcp", prompt: "Do not use a shell for this", tool: codingTestReadTool, reply: "The tool answered; its answer is the call's output."},
+		{name: "mcp", prompt: "Do not use a shell for this", tool: musterCallTool, arguments: musterCallToolArguments(codingTestReadTool), reply: "The tool answered; its answer is the call's output."},
+		{name: "heartbeat", prompt: "Start this test lab's heartbeat", command: codingHeartbeatCommand(), reply: "The heartbeat runs."},
+		{name: "heartbeat-read", prompt: "Read this test lab's heartbeat", command: codingHeartbeatReadCommand(), reply: "The heartbeat's ticks are the command's output."},
 		{name: "codeword", prompt: "Remember the code word", command: codingCodeWordCommand(), reply: "The file is written."},
 		{name: "resume", prompt: "the code word I asked you to remember", command: codingResumeCommand(), reply: probeMarker + " code-word=" + codingTestCodeWord},
 	}
@@ -214,7 +218,7 @@ func mockLLMConfig(mcpServer string) ([]mockLLMScriptEntry, error) {
 				}),
 				mockLLMEntry(turn.name+"_call", searchID, mockLLMItem{
 					ID: "fc_agentlab_" + turn.name, Type: mockLLMFunctionCall, Status: mockLLMItemDone,
-					CallID: callID, Namespace: namespace, Name: turn.tool, Arguments: "{}",
+					CallID: callID, Namespace: namespace, Name: turn.tool, Arguments: turn.arguments,
 				}))
 		}
 		entries = append(entries, mockLLMEntry(turn.name+"_reply", callID, mockLLMItem{
@@ -403,6 +407,33 @@ type mockLLMRequests struct {
 	// Log is one line per request: its status, the tools it offers and
 	// its last input item, what the script matched or did not.
 	Log []string `json:"log"`
+	// Watched is, per request in Log's order, the watched names its body
+	// carries anywhere: in the instructions or any input item, what the
+	// runtime presented to the model.
+	Watched [][]string `json:"watched"`
+}
+
+// mockLLMWatched is the watched names a request body carries.
+func mockLLMWatched(body []byte, watch []string) []string {
+	seen := []string{}
+	for _, name := range watch {
+		if bytes.Contains(body, []byte(name)) {
+			seen = append(seen, name)
+		}
+	}
+	return seen
+}
+
+// watchedSince is the requests from index from on that carry name, and how
+// many requests there were from there.
+func (r mockLLMRequests) watchedSince(from int, name string) (carried, requests int) {
+	for i := from; i < len(r.Watched); i++ {
+		requests++
+		if slices.Contains(r.Watched[i], name) {
+			carried++
+		}
+	}
+	return carried, requests
 }
 
 // mockLLMLogItem bounds a logged input item.
@@ -451,9 +482,9 @@ func mockLLMRequest(body []byte) (last string, stream bool, tools []string, line
 }
 
 // ServeMockLLM serves the script for the MCP tools on mcpServer on listen
-// until ctx ends.
-func ServeMockLLM(ctx context.Context, listen, mcpServer string) error {
-	handler, entries, err := mockLLMHandler(mcpServer)
+// until ctx ends, recording which of the watch names each request carries.
+func ServeMockLLM(ctx context.Context, listen, mcpServer string, watch []string) error {
+	handler, entries, err := mockLLMHandler(mcpServer, watch)
 	if err != nil {
 		return err
 	}
@@ -472,9 +503,9 @@ func ServeMockLLM(ctx context.Context, listen, mcpServer string) error {
 }
 
 // mockLLMHandler is the mockllm's API for the MCP tools on mcpServer: the
-// Responses API under /v1, its health and its request counts; entries is
-// the script's length.
-func mockLLMHandler(mcpServer string) (handler http.Handler, entries int, err error) {
+// Responses API under /v1, its health and its request counts with the watch
+// names each request carries; entries is the script's length.
+func mockLLMHandler(mcpServer string, watch []string) (handler http.Handler, entries int, err error) {
 	script, err := mockLLMConfig(mcpServer)
 	if err != nil {
 		return nil, 0, err
@@ -513,6 +544,7 @@ func mockLLMHandler(mcpServer string) (handler http.Handler, entries int, err er
 		mu.Lock()
 		defer mu.Unlock()
 		counts.Log = append(counts.Log, line)
+		counts.Watched = append(counts.Watched, mockLLMWatched(body, watch))
 		if matched {
 			counts.Answered++
 		} else {
@@ -576,12 +608,17 @@ type mockLLM struct {
 	removeService func()
 }
 
-// startMockLLM runs the mockllm for the MCP tools on mcpServer and points
-// the Service at it, proven reachable from a pod.
-func startMockLLM(cfg *config.Config, binary, mcpServer string) (*mockLLM, error) {
+// startMockLLM runs the mockllm for the MCP tools on mcpServer, watching
+// for the watch names, and points the Service at it, proven reachable from
+// a pod.
+func startMockLLM(cfg *config.Config, binary, mcpServer string, watch []string) (*mockLLM, error) {
+	args := []string{"--mcp-server", mcpServer}
+	for _, name := range watch {
+		args = append(args, "--watch", name)
+	}
 	c, err := startFakeContainer(cfg, binary, fakeContainerSpec{
 		what: mockLLMWhat, suffix: mockLLMContainerSuffix, command: mockLLMCommand,
-		healthPath: mockLLMHealthPath, args: []string{"--mcp-server", mcpServer},
+		healthPath: mockLLMHealthPath, args: args,
 	})
 	if err != nil {
 		return nil, err
