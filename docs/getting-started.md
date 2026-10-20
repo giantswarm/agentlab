@@ -240,17 +240,23 @@ Applied to the configuration:
   `agentlab up` itself: before `kind create` it probes the same ports and
   refuses with one line per held port, naming the setting, the lab and the
   holding process's name and PID where this user can see it.
-- **Domain**: every public hostname is `<service>.<platform.domain>`. While
-  no kind node of this configuration exists, a domain another registered
-  lab records moves to the first free `lab<n>.<base>`: the first lab serves
+- **Domain and address**: every public hostname is `<service>.<platform.domain>`,
+  and the edge is published on `platform.gatewayAddress` (127.0.0.1 when
+  unset). While no kind node of this configuration exists, a domain another
+  registered lab records moves: lab *n* takes its own loopback address and
+  the domain that resolves to it, `127.0.0.<n>` and `lab<n>.127.0.0.<n>.nip.io`,
+  with the edge on 443 there. The first lab serves
   `https://backstage.127.0.0.1.nip.io`, a second one
-  `https://backstage.lab2.127.0.0.1.nip.io:8443`, its muster, Dex, GitHub
-  App and OAuth callback URLs with it. Each lab is then its own site in the
-  browser — cookies, a trusted CA and its sign-ins never cross over. An
-  existing cluster keeps its domain (its CA and every rendered URL name it);
-  a clash is reported with the way out (`agentlab down`, `configure`, `up`).
-  A domain of your own certificate ([TLS](tls.md#bring-your-own-certificate))
-  is never moved.
+  `https://backstage.lab2.127.0.0.2.nip.io` — no port in any URL — its
+  muster, GitHub App and OAuth callback URLs with it. Each lab is its own site
+  in the browser: cookies, a trusted CA and its sign-ins never cross over.
+  Linux routes all of 127.0.0.0/8 to loopback; where only 127.0.0.1 binds
+  (macOS) the lab takes `lab<n>.<base>` alone and the edge a free port. The
+  Dex issuer stays `https://localhost:<dexPort>/dex`, each lab on its own
+  port. An existing cluster keeps both (its CA, its port mapping and every
+  rendered URL name them); a clash is reported with the way out (`agentlab
+  down`, `configure`, `up`). A domain of your own certificate
+  ([TLS](tls.md#bring-your-own-certificate)) is never moved.
 - **Host model servers**: an Ollama on `:11434`, a Lemonade Server on
   `:13305` and an LM Studio on `:1234` (their default ports) are detected,
   each with what it reports itself as, whether it listens on the kind docker

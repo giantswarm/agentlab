@@ -646,6 +646,33 @@ func TestKindConfigSubstrateGates(t *testing.T) {
 	}
 }
 
+// The edge binds the lab's own loopback address (platform.gatewayAddress), so
+// a second lab serves 443 too; every other mapping stays on 127.0.0.1, where
+// the issuer's localhost resolves.
+func TestKindConfigGatewayAddress(t *testing.T) {
+	for addr, want := range map[string]string{"": config.DefaultGatewayAddress, "127.0.0.2": "127.0.0.2"} {
+		cfg := config.Default()
+		cfg.Platform.GatewayAddress = addr
+		out, err := renderTemplate(cfg, "kind-config.yaml.tmpl", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var kindCfg v1alpha4.Cluster
+		if err := yaml.Unmarshal(out, &kindCfg); err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		for _, m := range kindCfg.Nodes[0].ExtraPortMappings {
+			wantAddr := config.DefaultGatewayAddress
+			if m.ContainerPort == config.GatewayNodePort {
+				wantAddr = want
+			}
+			if m.ListenAddress != wantAddr {
+				t.Errorf("gatewayAddress %q: mapping %d->%d listens on %s, want %s", addr, m.HostPort, m.ContainerPort, m.ListenAddress, wantAddr)
+			}
+		}
+	}
+}
+
 // The API server's host address is fixed, so a recreated lab keeps the
 // 127.0.0.1:<port> an agent sandbox's allow list names.
 func TestKindConfigPinsAPIServer(t *testing.T) {

@@ -98,7 +98,8 @@ with Dex doing the logins.
   configuration's kind node exists and which host ports it publishes (never
   conflicts; while no node exists, occupied ports and those another
   registered lab records, running or stopped, move to free ones, and so does
-  a `platform.domain` another lab records: to `lab<n>.<base>`), the
+  a `platform.domain` another lab records: lab n to `127.0.0.<n>:443` with
+  `lab<n>.127.0.0.<n>.nip.io`), the
   host model servers — an Ollama on 11434, a Lemonade Server on 13305, an
   LM Studio on 1234 (0.4.0+) — with their downloaded tool-calling models,
   each recognised by the SHAPE of its answer and never by a status code
