@@ -8,8 +8,10 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -121,7 +123,16 @@ func ensureExtraModels(cfg *config.Config) error {
 	// Secrets before the CRs: the controller hashes the referenced Secret
 	// into the ModelConfig status, so the reference should resolve on the
 	// controller's first look.
+	unplaced := map[string]bool{}
 	for _, m := range models {
+		if m.ChatGPTLogin() {
+			placed, err := ensureChatGPTLogin(m)
+			if err != nil {
+				return err
+			}
+			unplaced[m.Name] = !placed
+			continue
+		}
 		if err := ensureModelKeySecret(m); err != nil {
 			return err
 		}
@@ -135,6 +146,9 @@ func ensureExtraModels(cfg *config.Config) error {
 		return err
 	}
 	for _, m := range models {
+		if unplaced[m.Name] {
+			continue
+		}
 		if err := waitModelConfigAccepted(m.Name); err != nil {
 			return err
 		}
@@ -181,6 +195,45 @@ func ensureModelKeySecret(m config.ExtraModel) error {
 	return nil
 }
 
+// ensureChatGPTLogin checks the login Secret of a ChatGPT-login model, which
+// the operator places from a `codex login --device-auth` (agentlab never
+// creates or reads a login): absent, the run goes on with the ModelConfig
+// waiting for it and says how to place it (placed false); present, it must
+// hold config.ChatGPTLoginKeys, and carries the label kagent's refresher
+// needs, which agentlab adds when it is missing. Only key names are read.
+func ensureChatGPTLogin(m config.ExtraModel) (placed bool, err error) {
+	ctx := context.Background()
+	secret, err := getObject(ctx, gvrSecrets, kagentNamespace, m.SecretName())
+	if apierrors.IsNotFound(err) {
+		note("model %s: its ChatGPT login Secret %s/%s is not placed; the ModelConfig waits for it.", m.Name, kagentNamespace, m.SecretName())
+		note("  place the keys %s of a `codex login --device-auth` auth.json (its tokens) with your secret tooling, then re-run `agentlab platform`",
+			strings.Join(config.ChatGPTLoginKeys, ", "))
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	data, _, _ := unstructured.NestedMap(secret.Object, "data")
+	var missing []string
+	for _, key := range config.ChatGPTLoginKeys {
+		if _, ok := data[key]; !ok {
+			missing = append(missing, key)
+		}
+	}
+	if len(missing) > 0 {
+		return false, fmt.Errorf("model %s: the ChatGPT login Secret %s/%s lacks %s (a login holds %s)",
+			m.Name, kagentNamespace, m.SecretName(), strings.Join(missing, ", "), strings.Join(config.ChatGPTLoginKeys, ", "))
+	}
+	if !config.IsChatGPTLoginSecret(secret.GetLabels()) {
+		patch := fmt.Sprintf(`{"metadata":{"labels":{%q:"true"}}}`, config.ChatGPTLoginLabel)
+		if err := patchObject(ctx, gvrSecrets, kagentNamespace, m.SecretName(), types.MergePatchType, []byte(patch)); err != nil {
+			return false, err
+		}
+		note("labelled secret %s/%s %s for kagent's login refresher", kagentNamespace, m.SecretName(), config.ChatGPTLoginLabel)
+	}
+	return true, nil
+}
+
 // pruneExtraModels deletes lab-labeled ModelConfigs (and their Secrets) that
 // are not among the wanted entries any more — removed from agentlab.yaml, or
 // gone from the host server they were wired from — so a removal is a real
@@ -209,7 +262,12 @@ func pruneExtraModels(want []config.ExtraModel) error {
 			return err
 		}
 		// Its key Secret rides along; a missing one is fine — keyless
-		// providers never had one.
+		// providers never had one. A ChatGPT login stays: the operator
+		// placed it, and its rotated refresh token cannot be placed again.
+		if secret, err := getObject(ctx, gvrSecrets, kagentNamespace, "kagent-"+name); err == nil && config.IsChatGPTLoginSecret(secret.GetLabels()) {
+			note("keeping the ChatGPT login secret %s/kagent-%s", kagentNamespace, name)
+			continue
+		}
 		if err := deleteObject(ctx, gvrSecrets, kagentNamespace, "kagent-"+name, modelDeleteWait); err != nil {
 			return err
 		}

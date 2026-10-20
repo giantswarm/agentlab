@@ -464,7 +464,7 @@ nothing applied by hand:
 
 | File | What |
 |---|---|
-| `values.yaml` | The agent-platform values for its model: the `kagent.modelConfigs` entry `openai-chatgpt-codex` (`credentialType: chatgptOAuth`, `apiFormat: responses`, the login Secret `kagent-chatgpt-login`). On the lab a `platform.valuesFiles` overlay; on an installation the same entry in its values |
+| `values.yaml` | The agent-platform values for its model: the `kagent.modelConfigs` entry `openai-chatgpt-codex` (`credentialType: chatgptOAuth`, `apiFormat: responses`, the login Secret `kagent-chatgpt-login`). On an installation the same entry in its values; on the lab a `platform.valuesFiles` overlay on a chart that renders `credentialType`, or on any chart the `platform.extraModels` entry `chatgpt-login` with `credentialType: chatgptOAuth`, whose ModelConfig agentlab renders itself ([Extra model configs](models.md#extra-model-configs-self-hosted-openrouter-gemini-openai)) |
 | `agent.json` | agent-manager's `create_agent` input: `codex-coder` on the Harness `codex` and that ModelConfig, the toolset `preset:read-only`, a system message for branch-per-change work in `/workspace` |
 | `workspace.json` | workspace-manager's `create_workspace` input: the workspace `giantswarm`, one source on the provider instance `github`, owner `giantswarm`, the public repositories by name. `organization` and the provider instance are the lab's (`lab`, `github`); an installation sets its own, and adds the private repositories it is meant to see with `update_workspace` |
 
