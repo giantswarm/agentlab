@@ -199,6 +199,46 @@ func TestPlatformValuesTenants(t *testing.T) {
 		t.Errorf("the rendered policy leaves %v uncovered for tenants-test", got)
 	}
 
+	// muster: the setting and the release that tenants-test needs with the
+	// tenants on, neither off (an older muster chart refuses the key); the
+	// audience the lab's API server trusts either way, or every listing as
+	// the caller fails closed.
+	musterOf := func(values map[string]any) (component, chart map[string]any) {
+		component, _ = values["components"].(map[string]any)[componentMuster].(map[string]any)
+		chart, _ = values[componentMuster].(map[string]any)[componentMuster].(map[string]any)
+		return component, chart
+	}
+	component, chart := musterOf(on)
+	if component["versionRange"] != "5.48.0" || chart["mcpServersInAllNamespaces"] != true {
+		t.Errorf("with tenants: components.muster.versionRange=%v, muster.muster.mcpServersInAllNamespaces=%v, want 5.48.0 and true", component["versionRange"], chart["mcpServersInAllNamespaces"])
+	}
+	offComponent, offChart := musterOf(off)
+	if offComponent["versionRange"] != nil || offChart["mcpServersInAllNamespaces"] != nil {
+		t.Errorf("off by default: components.muster.versionRange=%v, mcpServersInAllNamespaces=%v, want neither", offComponent["versionRange"], offChart["mcpServersInAllNamespaces"])
+	}
+	for name, c := range map[string]map[string]any{"tenants off": offChart, "tenants on": chart} {
+		if w, _ := c["writesAsCaller"].(map[string]any); w["kubernetesAudience"] != config.KubernetesClientID {
+			t.Errorf("%s: muster.muster.writesAsCaller = %v, want kubernetesAudience %s", name, c["writesAsCaller"], config.KubernetesClientID)
+		}
+	}
+	// Dex: each organization namespace's own callback on the platform
+	// client, with the tenants only.
+	for name, tc := range map[string]struct {
+		cfg  *config.Config
+		want bool
+	}{"tenants off": {config.Default(), false}, "tenants on": {cfg, true}} {
+		dex, err := renderTemplate(tc.cfg, "dex.yaml.tmpl", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, ns := range tenantsTestNamespaces {
+			uri := tc.cfg.MusterBaseURL() + "/oauth/ns/" + ns + "/callback"
+			if got := strings.Contains(string(dex), "- "+uri+"\n"); got != tc.want {
+				t.Errorf("%s: Dex lists the redirect URI %s: %v, want %v", name, uri, got, tc.want)
+			}
+		}
+	}
+
 	cfg.Platform.Agents = false
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "platform.tenants requires platform.agents") {
 		t.Errorf("tenants without agents: err = %v, want the agents requirement", err)
@@ -400,5 +440,42 @@ func TestRefusalProblem(t *testing.T) {
 		if refusalProblem(text, other) == "" {
 			t.Errorf("%s accepted as the refusal", name)
 		}
+	}
+}
+
+// The muster check passes on a muster with giantswarm/muster#1603 and the
+// setting on, and otherwise names the missing piece: the red verdict of a
+// lab whose muster serves no organization's MCP servers.
+func TestMusterTenancyProblem(t *testing.T) {
+	const tooOld = "needs 5.48.0 or later"
+	for name, tc := range map[string]struct {
+		tenancy musterTenancy
+		want    string
+	}{
+		"the first with #1603":        {musterTenancy{"gsoci.azurecr.io/giantswarm/muster:5.48.0", true}, ""},
+		"a later release":             {musterTenancy{"gsoci.azurecr.io/giantswarm/muster:5.48.1", true}, ""},
+		"a dev image, no version":     {musterTenancy{"localhost:5001/muster:dev-1a2b3c", true}, ""},
+		"by digest":                   {musterTenancy{"gsoci.azurecr.io/giantswarm/muster:5.48.0@sha256:0123", true}, ""},
+		"the release before":          {musterTenancy{"gsoci.azurecr.io/giantswarm/muster:5.47.0", true}, tooOld},
+		"a candidate of it":           {musterTenancy{"gsoci.azurecr.io/giantswarm/muster:5.48.0-rc.1", true}, tooOld},
+		"the candidate pinned before": {musterTenancy{"gsoci.azurecr.io/giantswarm/muster:5.47.0-rc.9", true}, tooOld},
+		"an older one, by digest":     {musterTenancy{"gsoci.azurecr.io/giantswarm/muster:5.47.0-rc.9@sha256:0123", true}, tooOld},
+		"the setting off":             {musterTenancy{"gsoci.azurecr.io/giantswarm/muster:5.48.0", false}, "without mcpServersInAllNamespaces"},
+		"older and off: the version":  {musterTenancy{"gsoci.azurecr.io/giantswarm/muster:5.47.0", false}, tooOld},
+	} {
+		p := tc.tenancy.problem()
+		if tc.want == "" && p != "" || tc.want != "" && !strings.Contains(p, tc.want) {
+			t.Errorf("%s: %q, want %q", name, p, tc.want)
+		}
+	}
+}
+
+// The servers an agent reports are read as namespace/name, whatever the
+// list markup around them; a word without a slash is no server.
+func TestServerRefsInReply(t *testing.T) {
+	reply := "- `agent-platform/agent-manager`\n* org-a/agentlab-tenants-mcp,\nagent-platform/kagent.\nNO_SERVERS\nsee a/b/c"
+	want := refSet{"agent-platform/agent-manager": true, "org-a/agentlab-tenants-mcp": true, "agent-platform/kagent": true}
+	if got := serverRefsInReply(reply); rosterDiff(got, want) != "" {
+		t.Errorf("serverRefsInReply = %s, want %s (%s)", got, want, rosterDiff(got, want))
 	}
 }

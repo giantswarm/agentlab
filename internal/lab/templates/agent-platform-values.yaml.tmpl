@@ -157,6 +157,13 @@ components:
   dicebear:
     enabled: false
   muster:
+{{- if .TenantsEnabled }}
+    # platform.tenants: the first muster that forgets a tenant namespace's
+    # sign-ins when its last server goes (giantswarm/muster#1603); the
+    # chart's range admits older ones. Drop the pin once the chart's range
+    # starts there (HACKS.md U38).
+    versionRange: "{{ .TenantsMusterVersion }}"
+{{- end }}
 {{- with index .PostRenderers "muster" }}
     postRenderers:
 {{ . | indent 6 }}
@@ -391,6 +398,23 @@ muster:
           kind: Group
           name: "oidc:platform-admins"
   muster:
+    # The audience muster checks a person's token for before it calls the
+    # API server with it (its writes as the caller, and with
+    # mcpServersInAllNamespaces its listing of MCPServers as the caller). The
+    # muster default is dex-k8s-authenticator (Giant Swarm API servers); this
+    # lab's API server trusts client id `kubernetes`, the audience every lab
+    # token for muster carries already.
+    writesAsCaller:
+      kubernetesAudience: kubernetes
+{{- if .TenantsEnabled }}
+    # platform.tenants: muster also serves the MCPServers of the
+    # organization namespaces (org-…), each seen only by a person whom RBAC
+    # lets list mcpservers there (the agent-permissions plan, D9;
+    # docs/identity.md "MCP servers per tenant"). The chart binds that list in
+    # muster's namespace to every signed-in person
+    # (agent-platform:mcpserver-viewer).
+    mcpServersInAllNamespaces: true
+{{- end }}
     # muster's ServiceMonitor, PrometheusRule and Grafana dashboard: the chart
     # would derive them from global.observability (`auto`); explicit for the
     # same reason as there. Only viable with platform.observability, which

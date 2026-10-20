@@ -392,7 +392,9 @@ func tenantsTestPeople(cfg *config.Config, emails []string) ([2]*config.User, er
 // between, with both organizations' agents up, the edge (steps E,
 // tenantstest_edge.go) and Slack (steps S, tenantstest_slack.go) halves of
 // giantswarm/agentlab#166: the kagent controller's RBAC authorizer judging
-// two tenant users bound by their token's group. Leaves nothing behind.
+// two tenant users bound by their token's group; then muster's MCP servers
+// per tenant (steps M, tenantstest_muster.go) and the Dev Portal's routes as
+// each person (steps P, tenantstest_portal.go). Leaves nothing behind.
 func TenantsTest(cfg *config.Config, emails []string, opts TenantsTestOptions) error {
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
@@ -437,6 +439,15 @@ func TenantsTest(cfg *config.Config, emails []string, opts TenantsTestOptions) e
 		return errors.New(problem)
 	}
 	note("mode %s, groups from claim %q, user prefix %q, group prefix %q", authz.mode, authz.groupsClaim, authz.usernamePrefix, authz.groupsPrefix)
+	step("muster serves the organizations' MCP servers (mcpServersInAllNamespaces, muster %s or later)", tenantsMusterMinimum)
+	tenancy, err := readMusterTenancy()
+	if err != nil {
+		return err
+	}
+	if problem := tenancy.problem(); problem != "" {
+		return errors.New(problem)
+	}
+	note("image %s, mcpServersInAllNamespaces on", tenancy.image)
 	pool, poolServiceAccount, err := platformWorkerPool(rec.harness)
 	if err != nil {
 		return err
@@ -608,6 +619,14 @@ func TenantsTest(cfg *config.Config, emails []string, opts TenantsTestOptions) e
 	if err != nil {
 		return err
 	}
+	musterOut, err := (&tenantsMuster{cfg: cfg, namespaces: tenantsTestNamespaces, users: users, admin: admin, editor: people[0], api: api}).run()
+	if err != nil {
+		return err
+	}
+	portalOut, err := (&tenantsPortal{cfg: cfg, namespaces: tenantsTestNamespaces, users: users, editor: people[0], admin: admin}).run()
+	if err != nil {
+		return err
+	}
 
 	step("5. As %s (cluster-admin): the workers of both organizations held by the %s* admission policies", admin.Email, tenantAdmissionPolicyPrefix)
 	adminToken, err := passwordGrant(cfg, config.KubernetesClientID, config.KubernetesClientSecret, admin.Email, admin.Password, loginScopes)
@@ -687,7 +706,7 @@ func TenantsTest(cfg *config.Config, emails []string, opts TenantsTestOptions) e
 	fmt.Printf("PASS: as %s (cluster-admin), a WorkerPool patch and delete, a pod labelled %s and an exec into a worker are refused by the %s* admission policies\n", admin.Email, workerPoolLabel, tenantAdmissionPolicyPrefix)
 	fmt.Println(netpolVerdict)
 	fmt.Println(grantsVerdict)
-	for _, line := range append(edgeOut, slackOut...) {
+	for _, line := range slices.Concat(edgeOut, slackOut, musterOut, portalOut) {
 		fmt.Println(line)
 	}
 	fmt.Printf("PASS: deleting each namespace's last agent removes the copies; the always-kept objects stay\n")
@@ -1134,8 +1153,10 @@ func removeTenantsTestNamespace(ns string) error {
 	if err != nil {
 		return err
 	}
-	if err := deleteObject(ctx, gvr, ns, tenantsTestAgent, tenantsTestNamespaceTimeout); err != nil {
-		note("cleanup: %v", err)
+	for _, agent := range []string{tenantsTestAgent, tenantsTestMusterAgent} {
+		if err := deleteObject(ctx, gvr, ns, agent, tenantsTestNamespaceTimeout); err != nil {
+			note("cleanup: %v", err)
+		}
 	}
 	return deleteObject(ctx, gvrNamespaces, "", ns, tenantsTestNamespaceTimeout)
 }

@@ -134,6 +134,8 @@ func TestMockLLMScriptAnswersTheCodexTurns(t *testing.T) {
 
 	shellTurns := []struct{ prompt, command string }{
 		{codingSandboxPrompt(codex), codingSandboxCommand(codex)},
+		{codingHeartbeatPrompt(codex), codingHeartbeatCommand()},
+		{codingHeartbeatReadPrompt(codex), codingHeartbeatReadCommand()},
 		{codingCodeWordPrompt(codex), codingCodeWordCommand()},
 		{codingResumePrompt(codex), codingResumeCommand()},
 	}
@@ -177,10 +179,10 @@ func TestMockLLMScriptAnswersTheCodexTurns(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&counts); err != nil {
 		t.Fatal(err)
 	}
-	if counts.Answered != 9 || counts.Unmatched != 1 || len(counts.Log) != 10 {
-		t.Fatalf("the mock counts %d answered, %d unmatched, %d log lines; wanted 9, 1 and 10", counts.Answered, counts.Unmatched, len(counts.Log))
+	if counts.Answered != 13 || counts.Unmatched != 1 || len(counts.Log) != 14 {
+		t.Fatalf("the mock counts %d answered, %d unmatched, %d log lines; wanted 13, 1 and 14", counts.Answered, counts.Unmatched, len(counts.Log))
 	}
-	if last := counts.Log[9]; !strings.HasPrefix(last, "404 ") || !strings.Contains(last, "not in the script") {
+	if last := counts.Log[13]; !strings.HasPrefix(last, "404 ") || !strings.Contains(last, "not in the script") {
 		t.Fatalf("the unmatched request logs as %q, wanted its 404 and its input", last)
 	}
 }
