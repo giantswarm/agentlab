@@ -8,12 +8,13 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 // signInLab stands in for the walk's parties on one test server: muster's
 // proxy start, which sends the browser to the provider's authorization
-// endpoint, the lab GitHub's consent for the user its login parameter
-// names, and muster's proxy callback, which completes the grant once.
+// endpoint, the lab GitHub's own consent page and its post, and muster's
+// proxy callback, which completes the grant once.
 type signInLab struct {
 	server    *httptest.Server
 	fails     bool
@@ -22,19 +23,20 @@ type signInLab struct {
 
 func newSignInLab(t *testing.T) *signInLab {
 	t.Helper()
+	fixture, err := loadGitHubFixture("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	github := &workspaceGitHub{fixture: fixture, now: time.Now, codes: map[string]*oauthCode{}}
 	l := &signInLab{}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET "+oauthProxyStartPath, func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, githubAuthorizePath+"?"+url.Values{githubState: {r.URL.Query().Get(githubState)}}.Encode(), http.StatusFound)
+		q := url.Values{githubState: {r.URL.Query().Get(githubState)}, "client_id": {fixture.App.ClientID},
+			"redirect_uri": {l.server.URL + oauthProxyCallbackPath}, "code_challenge": {"c"}, "code_challenge_method": {"S256"}}
+		http.Redirect(w, r, githubAuthorizePath+"?"+q.Encode(), http.StatusFound)
 	})
-	mux.HandleFunc("GET "+githubAuthorizePath, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get(githubLogin) == "" {
-			http.Error(w, "no lab user", http.StatusBadRequest)
-			return
-		}
-		// #nosec G710 -- the test's own callback path, the state echoed as an OAuth server does
-		http.Redirect(w, r, oauthProxyCallbackPath+"?code=c&state="+url.QueryEscape(r.URL.Query().Get(githubState)), http.StatusFound)
-	})
+	mux.HandleFunc("GET "+githubAuthorizePath, github.authorize)
+	mux.HandleFunc("POST "+githubAuthorizePath, github.authorize)
 	mux.HandleFunc("GET "+oauthProxyCallbackPath, func(w http.ResponseWriter, _ *http.Request) {
 		if l.fails {
 			_, _ = w.Write([]byte("<html><body><h1>Authentication Failed</h1></body></html>"))
@@ -71,7 +73,7 @@ func TestWalkProviderSignIn(t *testing.T) {
 		t.Fatalf("muster's callback never completed: %s", signInHops(hops))
 	}
 	worded := signInHops(hops)
-	for _, want := range []string{"GET " + l.server.URL + oauthProxyStartPath + " 302", "GET " + l.server.URL + githubAuthorizePath + " 302", "GET " + l.server.URL + oauthProxyCallbackPath + " 200"} {
+	for _, want := range []string{"GET " + l.server.URL + oauthProxyStartPath + " 302", "GET " + l.server.URL + githubAuthorizePath + " 200", "POST " + l.server.URL + githubAuthorizePath + " 302", "GET " + l.server.URL + oauthProxyCallbackPath + " 200"} {
 		if !strings.Contains(worded, want) {
 			t.Errorf("hops %s lack %q", worded, want)
 		}
@@ -84,8 +86,8 @@ func TestWalkProviderSignIn(t *testing.T) {
 func TestWalkProviderSignInStops(t *testing.T) {
 	l := newSignInLab(t)
 	_, err := walkProviderSignIn(l.client(t), l.link(), "", nil)
-	if !errors.Is(err, errSignInStopped) || !strings.Contains(err.Error(), githubAuthorizePath+" 400") {
-		t.Fatalf("a refused consent: got %v, want the walk stopped at the authorize hop with 400", err)
+	if !errors.Is(err, errSignInStopped) || !strings.Contains(err.Error(), githubAuthorizePath+" 200") || !strings.Contains(err.Error(), "no Authorize") {
+		t.Fatalf("a consent without the person: got %v, want the walk stopped at the consent page", err)
 	}
 
 	l = newSignInLab(t)

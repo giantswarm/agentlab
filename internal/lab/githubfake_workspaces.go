@@ -14,6 +14,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"net"
 	"net/http"
@@ -39,8 +40,10 @@ import (
 //     of the owner's repositories (public ones stay readable);
 //   - repository listings with the fields their filters read (language,
 //     topics, archived, fork, pushed_at), per caller's visibility;
-//   - the user-to-server OAuth flow: authorize with PKCE consenting at once
-//     for the lab user a login hint names, expiring access tokens, refresh
+//   - the user-to-server OAuth flow: authorize with PKCE, a consent page
+//     for a person's browser (one Authorize per lab user, served on the
+//     edge: workspacefake.go) or consent at once for the lab user a login
+//     hint names, expiring access tokens, refresh
 //     tokens that rotate (a second redemption is refused), grant and token
 //     revocation, GET /user;
 //   - git's smart HTTP served by git itself, Basic auth checked per
@@ -254,6 +257,7 @@ func (g *workspaceGitHub) handler() http.Handler {
 	mux.HandleFunc("DELETE "+githubFakeReposPath+"/{owner}/{repo}", g.removeGeneratedRepo)
 
 	mux.HandleFunc("GET "+githubAuthorizePath, g.authorize)
+	mux.HandleFunc("POST "+githubAuthorizePath, g.authorize)
 	mux.HandleFunc("POST /login/oauth/access_token", g.accessToken)
 	mux.HandleFunc("DELETE "+api+"/applications/{client}/grant", g.revoke(true))
 	mux.HandleFunc("DELETE "+api+"/applications/{client}/token", g.revoke(false))
@@ -820,24 +824,29 @@ func (g *workspaceGitHub) installationToken(w http.ResponseWriter, r *http.Reque
 
 // --- OAuth --------------------------------------------------------------------
 
-// authorize is GitHub's consent page, consenting at once for the lab user
-// the login hint names: PKCE (S256) is required, and the code goes back to
-// redirect_uri with the state.
+// authorize is GitHub's consent page, GET and POST on the one path as on
+// GitHub: PKCE (S256) is required, and the code goes back to redirect_uri with
+// the state. A GET with a login hint naming a lab user consents for that user
+// at once (a headless client's shortcut); a GET without one is the page a
+// person's browser shows, one Authorize button per lab user, which posts the
+// request back with the chosen login; its Cancel answers redirect_uri with
+// GitHub's access_denied.
 func (g *workspaceGitHub) authorize(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	redirect, err := url.Parse(q.Get("redirect_uri"))
-	switch {
-	case q.Get("client_id") != g.fixture.App.ClientID:
-		http.Error(w, "unknown client_id", http.StatusNotFound)
-		return
-	case err != nil || (redirect.Scheme != "https" && redirect.Scheme != httpScheme) || redirect.Host == "":
-		http.Error(w, "redirect_uri is not an absolute http(s) URL", http.StatusBadRequest)
-		return
-	case q.Get("code_challenge") == "" || q.Get("code_challenge_method") != "S256":
-		http.Error(w, "the fake requires PKCE: code_challenge with code_challenge_method S256", http.StatusBadRequest)
+	q := oauthParams(r)
+	redirect, ok := g.authorizeRequest(w, q)
+	if !ok {
 		return
 	}
-	login := q.Get("login")
+	login := q.Get(githubLogin)
+	if r.Method == http.MethodPost && q.Get(oauthCancel) != "" {
+		redirectBack(w, r, redirect, url.Values{oauthError: {"access_denied"},
+			"error_description": {"The user has denied your application access."}, githubState: {q.Get(githubState)}})
+		return
+	}
+	if r.Method == http.MethodGet && login == "" {
+		g.consentPage(w, q)
+		return
+	}
 	if _, ok := g.fixture.fixtureUser(login); !ok {
 		http.Error(w, fmt.Sprintf("no lab user %q: the login parameter names the user who consents", login), http.StatusBadRequest)
 		return
@@ -846,14 +855,80 @@ func (g *workspaceGitHub) authorize(w http.ResponseWriter, r *http.Request) {
 	g.mu.Lock()
 	g.codes[code] = &oauthCode{login: login, redirectURI: q.Get("redirect_uri"), challenge: q.Get("code_challenge"), expires: g.now().Add(githubOAuthCodeTTL)}
 	g.mu.Unlock()
+	redirectBack(w, r, redirect, url.Values{"code": {code}, githubState: {q.Get(githubState)}})
+}
+
+// oauthCancel is the consent form's Cancel button.
+const oauthCancel = "cancel"
+
+// authorizeRequest checks an authorization request's client, redirect_uri and
+// PKCE challenge, answering the error itself when one fails.
+func (g *workspaceGitHub) authorizeRequest(w http.ResponseWriter, q url.Values) (*url.URL, bool) {
+	redirect, err := url.Parse(q.Get("redirect_uri"))
+	switch {
+	case q.Get("client_id") != g.fixture.App.ClientID:
+		http.Error(w, "unknown client_id", http.StatusNotFound)
+	case err != nil || (redirect.Scheme != "https" && redirect.Scheme != httpScheme) || redirect.Host == "":
+		http.Error(w, "redirect_uri is not an absolute http(s) URL", http.StatusBadRequest)
+	case q.Get("code_challenge") == "" || q.Get("code_challenge_method") != "S256":
+		http.Error(w, "the fake requires PKCE: code_challenge with code_challenge_method S256", http.StatusBadRequest)
+	default:
+		return redirect, true
+	}
+	return nil, false
+}
+
+// redirectBack sends the browser to the client's redirect_uri with params
+// added to its query, an empty one left out.
+func redirectBack(w http.ResponseWriter, r *http.Request, redirect *url.URL, params url.Values) {
 	back := redirect.Query()
-	back.Set("code", code)
-	if state := q.Get(githubState); state != "" {
-		back.Set(githubState, state)
+	for k, v := range params {
+		if v[0] != "" {
+			back.Set(k, v[0])
+		}
 	}
 	redirect.RawQuery = back.Encode()
 	// #nosec G710 -- an OAuth server redirects to the client's redirect_uri; the fake serves lab clients only
 	http.Redirect(w, r, redirect.String(), http.StatusFound)
+}
+
+// consentRequestParams are the authorization request's parameters the
+// consent form carries back in its post.
+var consentRequestParams = []string{"client_id", "redirect_uri", githubState, oauthScope, "code_challenge", "code_challenge_method"}
+
+// consentPage is the page a person's browser shows for an authorization
+// request: the App asking, one Authorize button per lab user (the fake has
+// no sessions: the person picks who they are), and Cancel.
+func (g *workspaceGitHub) consentPage(w http.ResponseWriter, q url.Values) {
+	var hidden, users strings.Builder
+	for _, k := range consentRequestParams {
+		if v := q.Get(k); v != "" {
+			fmt.Fprintf(&hidden, `<input type="hidden" name="%s" value="%s">`+"\n", k, html.EscapeString(v))
+		}
+	}
+	for _, u := range g.fixture.Users {
+		fmt.Fprintf(&users, `<li><button type="submit" name="%s" value="%s">Authorize as <b>%s</b> (%s, %s)</button></li>`+"\n",
+			githubLogin, html.EscapeString(u.Login), html.EscapeString(u.Login), html.EscapeString(u.Name), html.EscapeString(u.Email))
+	}
+	app := html.EscapeString(g.fixture.App.Slug)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = fmt.Fprintf(w, `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Authorize %[1]s</title>
+<style>body{font-family:system-ui,sans-serif;max-width:32rem;margin:3rem auto;padding:0 1rem;color:#1f2328}
+ul{list-style:none;padding:0}li{margin:.5rem 0}button{width:100%%;padding:.6rem;font-size:1rem;cursor:pointer}
+.cancel{background:none;border:none;color:#0969da;width:auto}p.note{color:#59636e;font-size:.9rem}</style></head>
+<body><h1>Authorize %[1]s</h1>
+<p><b>%[1]s</b> wants to act on your behalf on the lab's GitHub.</p>
+<form method="post" action="%[2]s">
+%[3]s<ul>
+%[4]s</ul>
+<button type="submit" class="cancel" name="%[5]s" value="1">Cancel</button>
+</form>
+<p class="note">The lab's GitHub has no accounts of its own: choose the lab user you signed in to the portal as.</p>
+</body></html>
+`, app, githubAuthorizePath, hidden.String(), users.String(), oauthCancel)
 }
 
 // accessToken is POST /login/oauth/access_token: an authorization code with

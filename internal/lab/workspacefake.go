@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -45,6 +47,15 @@ import (
 // fixture's App, whose private key and client secret the lab generated
 // itself and places as the Secret agent-platform/workspace-fake, referenced
 // by the values and read by nothing else.
+//
+// A person's browser reaches the consent page on the edge: the names are
+// the lab domain's, which resolve to the edge's loopback address on this
+// host, so the edge routes the authorization endpoint (and only it: the
+// API, git and the request log stay off the edge) to the same Service,
+// re-encrypting to the fake's leaf with the lab CA (a BackendTLSPolicy and
+// its ConfigMap, the CA agentgateway trusts for it). muster's Sign in link
+// opens it; the person picks the lab user they are and muster's callback
+// gets the code, which muster redeems from its pod.
 
 const (
 	// labGitHubService is the Service pods reach the lab's GitHub through, on
@@ -133,6 +144,9 @@ func githubFakeUp(cfg *config.Config) error {
 	note("the lab's GitHub on %s (this host) and %s (pods); its request log at %s%s", c.hostURL, cfg.GitHubFakeURL(), c.hostURL, githubFakeRequestsPath)
 	if _, err := fakeServiceForPods(cfg, labGitHubService, "the lab's GitHub", c.podIP, fakeContainerPort, labGitHubServicePort,
 		cfg.GitHubFakeURL()+githubFakeHealthPath); err != nil {
+		return err
+	}
+	if err := githubFakeEdgeUp(cfg); err != nil {
 		return err
 	}
 	// The App's key for the sync, and its OAuth client for muster, which
@@ -520,5 +534,141 @@ func githubFakeServiceDown(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	for _, o := range githubFakeEdgeObjects {
+		gvr, err := k.gvrFor(o.resource)
+		if err != nil {
+			// A platform without the Gateway API's kinds has no edge objects.
+			continue
+		}
+		if err := deleteObject(ctx, gvr, platformNamespace, labGitHubEdge, 0); err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+	}
 	return removeFakeService(ctx, k, labGitHubService)
+}
+
+// labGitHubEdge names the edge's route to the consent page, its
+// BackendTLSPolicy and the CA ConfigMap that policy trusts.
+const labGitHubEdge = "agentlab-github"
+
+// githubFakeEdgeObjects are the kinds of the edge's objects for the lab's
+// GitHub, removed with its Service.
+var githubFakeEdgeObjects = []struct{ resource string }{
+	{httpRouteResource}, {"backendtlspolicies.gateway.networking.k8s.io"}, {"configmaps"},
+}
+
+// githubFakeEdgeReady bounds the edge's programming of the route.
+const githubFakeEdgeReady = time.Minute
+
+// githubFakeEdgeHosts are the names a browser opens the consent page on:
+// the instance fake's host, and fake-bearer's git host where it is
+// configured.
+func githubFakeEdgeHosts(cfg *config.Config) []string {
+	hosts := []string{config.GitHubFakeHost(cfg.Platform.Domain)}
+	if cfg.WorkspaceFakeBearerProvider() {
+		hosts = append(hosts, config.GitHubFakeBearerHost(cfg.Platform.Domain))
+	}
+	return hosts
+}
+
+// githubFakeEdgeManifest is the edge's way to the consent page: the lab CA
+// as a ConfigMap, the BackendTLSPolicy verifying the fake's leaf against it
+// on the Service, and the HTTPRoute of the authorization endpoint alone.
+func githubFakeEdgeManifest(cfg *config.Config, caPEM []byte) ([]byte, error) {
+	meta := map[string]any{"name": labGitHubEdge, "namespace": platformNamespace,
+		"labels": map[string]string{managedByLabel: managedByAgentlabValue}}
+	objs := []map[string]any{
+		{"apiVersion": "v1", "kind": "ConfigMap", "metadata": meta, "data": map[string]string{caCertKey: string(caPEM)}},
+		{"apiVersion": "gateway.networking.k8s.io/v1", "kind": "BackendTLSPolicy", "metadata": meta, "spec": map[string]any{
+			"targetRefs": []map[string]string{{"group": "", "kind": "Service", "name": labGitHubService}},
+			"validation": map[string]any{
+				"hostname":          config.GitHubFakeHost(cfg.Platform.Domain),
+				"caCertificateRefs": []map[string]string{{"group": "", "kind": "ConfigMap", "name": labGitHubEdge}},
+			},
+		}},
+		{"apiVersion": "gateway.networking.k8s.io/v1", "kind": "HTTPRoute", "metadata": meta, "spec": map[string]any{
+			"parentRefs": []map[string]string{{"group": "gateway.networking.k8s.io", "kind": "Gateway",
+				"name": "agentgateway", "namespace": platformNamespace, "sectionName": "https"}},
+			"hostnames": githubFakeEdgeHosts(cfg),
+			"rules": []map[string]any{{
+				"matches":     []map[string]any{{"path": map[string]string{"type": "Exact", "value": githubAuthorizePath}}},
+				"backendRefs": []map[string]any{{"name": labGitHubService, "port": labGitHubServicePort}},
+			}},
+		}},
+	}
+	var out bytes.Buffer
+	for _, o := range objs {
+		raw, err := json.Marshal(o)
+		if err != nil {
+			return nil, err
+		}
+		out.Write(raw)
+		out.WriteString("\n")
+	}
+	return out.Bytes(), nil
+}
+
+// githubFakeEdgeUp puts the consent page on the edge and waits until the
+// edge answers it from this host, as a person's browser reaches it.
+func githubFakeEdgeUp(cfg *config.Config) error {
+	ca, err := os.ReadFile(caCertPath)
+	if err != nil {
+		return err
+	}
+	manifest, err := githubFakeEdgeManifest(cfg, ca)
+	if err != nil {
+		return err
+	}
+	if _, err := applyManifests(context.Background(), manifest); err != nil {
+		return fmt.Errorf("the edge's route to the lab's GitHub: %w", err)
+	}
+	client, err := labHTTPClient(10 * time.Second)
+	if err != nil {
+		return err
+	}
+	fixture, err := loadGitHubFixture("")
+	if err != nil {
+		return err
+	}
+	pages := make([]string, 0, 2)
+	for _, host := range githubFakeEdgeHosts(cfg) {
+		pages = append(pages, githubConsentProbeURL(host, fixture.App.ClientID))
+	}
+	var last string
+	if !waitFor(int(githubFakeEdgeReady/(2*time.Second)), 2*time.Second, func() bool {
+		for _, page := range pages {
+			if last = consentPageAnswer(client, page); last != "" {
+				return false
+			}
+		}
+		return true
+	}) {
+		return fmt.Errorf("the edge does not serve the lab's GitHub consent page within %s (HTTPRoute and BackendTLSPolicy %s/%s): %s",
+			githubFakeEdgeReady, platformNamespace, labGitHubEdge, last)
+	}
+	note("a browser reaches the lab's GitHub consent page through the edge on %s", strings.Join(githubFakeEdgeHosts(cfg), ", "))
+	return nil
+}
+
+// githubConsentProbeURL is an authorization request a browser would make,
+// on host, with a challenge that redeems nothing.
+func githubConsentProbeURL(host, clientID string) string {
+	q := url.Values{"client_id": {clientID}, "redirect_uri": {"https://" + host + "/probe"},
+		"code_challenge": {"probe"}, "code_challenge_method": {"S256"}}
+	return "https://" + host + githubAuthorizePath + "?" + q.Encode()
+}
+
+// consentPageAnswer is "" when page answers the consent page, else what it
+// answered instead.
+func consentPageAnswer(client *http.Client, page string) string {
+	resp, err := client.Get(page)
+	if err != nil {
+		return err.Error()
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if resp.StatusCode == http.StatusOK && bytes.Contains(body, []byte(`action="`+githubAuthorizePath+`"`)) {
+		return ""
+	}
+	return fmt.Sprintf("%s answered %d %.120q", strings.SplitN(page, "?", 2)[0], resp.StatusCode, strings.TrimSpace(string(body)))
 }

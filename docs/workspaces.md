@@ -914,8 +914,21 @@ HTTP client takes the system roots, so the values name the lab CA file the
 chart mounts for Dex as its `SSL_CERT_FILE`; the image's own roots stay, read
 from its certificate directory regardless, so a `github` instance beside the
 fake still verifies github.com. The App takes any absolute callback URL,
-muster's included, and its authorization (PKCE) consents at once for the lab
-user the `login` parameter names.
+muster's included. Its authorization (PKCE) shows a person's browser a
+consent page with one Authorize per lab user and Cancel; a request with a
+`login` parameter naming a lab user consents for that user at once.
+
+A browser on the lab host reaches that page through the edge: every
+`*.<domain>` name resolves to the edge there. The edge routes
+`/login/oauth/authorize` alone (exact path: the API, git and the request log
+stay off the edge) on `github.<domain>`, and on `github-bearer.<domain>` with
+[fake-bearer](#the-provider-instance-fake-bearer), to the Service
+`agent-platform/agentlab-github`. The HTTPRoute, a `BackendTLSPolicy`
+verifying the fake's leaf, and the lab CA as a ConfigMap all carry the name
+`agentlab-github`. `agentlab platform` waits until the edge answers the
+page. So the portal's Sign in (MCP servers → workspace-manager) completes
+for a person: the page, their Authorize, muster's callback, which redeems
+the code from its pod.
 
 ### The provider instance fake-bearer
 
@@ -942,8 +955,8 @@ granted it sees. `dev@lab.local`'s grant is dropped first, and
 `authorize_workspace` answers muster's sign-in link. The admin and
 `dev@lab.local` then each grant it: `core_auth_login` for the
 workspace-manager through muster as the person, its link
-(`/oauth/proxy/start`, 302) walked to the fake's authorization with the
-person's fixture login added (302), to muster's `/oauth/proxy/callback`,
+(`/oauth/proxy/start`, 302) walked to the fake's consent page (200), its
+Authorize of the person's fixture login posted (302), to muster's `/oauth/proxy/callback`,
 which redeems the code and answers "Authentication Successful" (200), and
 `list_providers` showing the person connected. A workspace of the lab's
 Organization over `agentlab-org/platform-api` and `platform-infra` is
@@ -954,9 +967,8 @@ fresh MCP sessions: the grants are the people's, muster's.
 naming `agentlab-org/platform-infra` for the developer, who cannot read it.
 The workspace is deleted and both grants dropped at the end.
 
-The walk runs on this host: the platform's names on the edge's loopback
-port, and `github.<domain>`, which the edge has no route for, on the loopback
-port the fake's container publishes. Each hop is printed as method, URL
+The walk runs on this host as a browser does: every name on the edge's
+loopback port, the fake's consent page included. Each hop is printed as method, URL
 without its query, and status, and a walk that stops says at which hop, with
 which status and the page's heading. The walk is `connectWorkspaceProvider`
 in `internal/lab/workspacesignin.go`, which every proof that calls the
@@ -1105,7 +1117,7 @@ the one who cannot push.
 | The App | `GET /app`, `/app/installations`, `/orgs/{o}/installation`, `/users/{u}/installation`, `/repos/{o}/{r}/installation`; `POST /app/installations/{id}/access_tokens` (optionally limited to `repositories`). The App's JWT is RS256, signed by the key the lab generated, issued by the App id, valid for at most ten minutes. `PUT` and `DELETE /app/installations/{id}/suspended`: a suspended installation is listed with `suspended_at` and `suspended_by`, issues no token (403), its tokens are refused (403), and neither they nor the App's user tokens act on the owner's repositories (its public ones stay readable); `agentlab github-fake suspend <owner>`, `unsuspend <owner>` and `installations` drive it from the host, the lab's stand-in for an organization owner's Suspend on github.com. |
 | Listings | `GET /orgs/{o}/repos`, `/users/{u}/repos` (`type`), `/user/repos` (`visibility`), `/installation/repositories`, `/repos/{o}/{r}`: `language`, `topics`, `archived`, `fork`, `pushed_at`, `size`, `permissions`; `sort` (`full_name`, `pushed`, `updated`), `direction`, `per_page`, `page` with the `Link` header. |
 | Topics | `GET /repos/{o}/{r}/topics`; `PUT /repos/{o}/{r}/topics` with `names` replaces them, lower-cased, for a caller that writes to the repository (an installation token on its owner, a user with write). It is no push: `pushed_at` stays. |
-| OAuth | `GET /login/oauth/authorize` consents at once for the lab user its `login` parameter names and requires PKCE (`S256`); `POST /login/oauth/access_token` answers access tokens valid eight hours and refresh tokens that **rotate**: each redeems once, a second redemption answers `bad_refresh_token`. `DELETE /api/v3/applications/{client_id}/grant` revokes every token of the person, `/token` the one access token (Basic auth with the client id and secret). `GET /user`. With `--token-store <file>` the users' tokens (access and refresh, their expiry, rotated and revoked state) are kept in the file and read at the start, so a sign-in outlives a restart as it outlives GitHub's; the lab's container keeps them in `state/lab-github/tokens/`, so a person connected before `agentlab platform` stays connected after it. |
+| OAuth | `GET /login/oauth/authorize` requires PKCE (`S256`) and consents at once for the lab user its `login` parameter names; without one it is the consent page a browser shows, one Authorize per lab user and Cancel, posting to `POST /login/oauth/authorize`, which redirects with the code (or `error=access_denied` for Cancel); `POST /login/oauth/access_token` answers access tokens valid eight hours and refresh tokens that **rotate**: each redeems once, a second redemption answers `bad_refresh_token`. `DELETE /api/v3/applications/{client_id}/grant` revokes every token of the person, `/token` the one access token (Basic auth with the client id and secret). `GET /user`. With `--token-store <file>` the users' tokens (access and refresh, their expiry, rotated and revoked state) are kept in the file and read at the start, so a sign-in outlives a restart as it outlives GitHub's; the lab's container keeps them in `state/lab-github/tokens/`, so a person connected before `agentlab platform` stays connected after it. |
 | git | Smart HTTP at `https://<fake>/<owner>/<repo>[.git]`, served by git's own `upload-pack` and `receive-pack` in stateless RPC mode (what `git http-backend` runs; protocol v0 to v2): clone, fetch and push, the token as the Basic auth password. A private repository answers 401 without a credential and "not found" to a user who does not read it; a push needs write, 401 without a credential, 403 naming the user otherwise. A push moves `pushed_at`. |
 | Pull requests | `POST` and `GET /repos/{o}/{r}/pulls`, and the GraphQL operations of `gh pr create` on `/api/graphql`; `GET /api/v3/meta` reports a GitHub Enterprise version, as gh expects. |
 

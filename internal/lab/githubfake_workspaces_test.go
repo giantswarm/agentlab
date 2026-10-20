@@ -11,6 +11,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -338,6 +339,78 @@ func (f *wsFake) redeem(t *testing.T, form url.Values) map[string]any {
 		t.Fatal(err)
 	}
 	return out
+}
+
+// TestWorkspaceGitHubBrowserConsent walks the consent page as a person's
+// browser does: the page without a login hint, its form posted with one
+// Authorize, the code redeemed with the PKCE verifier; Cancel answers
+// access_denied and a post naming nobody is refused.
+func TestWorkspaceGitHubBrowserConsent(t *testing.T) {
+	f := startWorkspaceFake(t)
+	sum := sha256.Sum256([]byte(wsVerifier))
+	q := url.Values{"client_id": {wsClientID}, wsRedirectKey: {wsRedirect}, "state": {"st"},
+		"code_challenge": {base64.RawURLEncoding.EncodeToString(sum[:])}, "code_challenge_method": {"S256"}}
+	resp, err := f.client.Get(f.url + githubAuthorizePath + "?" + q.Encode())
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/html") {
+		t.Fatalf("the consent page = %d %s", resp.StatusCode, resp.Header.Get("Content-Type"))
+	}
+	forms := htmlForms(page)
+	if len(forms) != 1 || forms[0].method != "post" || forms[0].action != githubAuthorizePath {
+		t.Fatalf("the consent page's forms = %+v", forms)
+	}
+	for _, k := range []string{"client_id", wsRedirectKey, "state", "code_challenge", "code_challenge_method"} {
+		if forms[0].fields.Get(k) != q.Get(k) {
+			t.Errorf("the form carries %s = %q, want %q", k, forms[0].fields.Get(k), q.Get(k))
+		}
+	}
+	for _, u := range f.g.fixture.Users {
+		if !strings.Contains(string(page), `name="login" value="`+u.Login+`"`) {
+			t.Errorf("the consent page has no Authorize for %s", u.Login)
+		}
+	}
+	post := func(form url.Values) *http.Response {
+		t.Helper()
+		resp, err := f.client.PostForm(f.url+githubAuthorizePath, form)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		return resp
+	}
+	consent := maps.Clone(forms[0].fields)
+	consent.Set("login", wsDev)
+	resp = post(consent)
+	loc, err := url.Parse(resp.Header.Get("Location"))
+	if resp.StatusCode != http.StatusFound || err != nil || loc.Query().Get("state") != "st" || loc.Query().Get(wsCode) == "" {
+		t.Fatalf("the consent's Authorize = %d, Location %q", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	tokens := f.redeem(t, url.Values{wsCode: {loc.Query().Get(wsCode)}, wsVerifierKey: {wsVerifier}, wsRedirectKey: {wsRedirect}})
+	var user map[string]any
+	if resp := f.call(t, http.MethodGet, "/api/v3/user", fmt.Sprint(tokens[wsAccess]), nil, &user); resp.StatusCode != http.StatusOK || user[githubLogin] != wsDev {
+		t.Fatalf("GET /user after the browser's consent = %d %v", resp.StatusCode, user)
+	}
+
+	cancel := maps.Clone(forms[0].fields)
+	cancel.Set(oauthCancel, "1")
+	resp = post(cancel)
+	if loc, _ := url.Parse(resp.Header.Get("Location")); resp.StatusCode != http.StatusFound || loc.Query().Get(oauthError) != "access_denied" || loc.Query().Get(wsCode) != "" {
+		t.Fatalf("Cancel = %d, Location %q, want access_denied and no code", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	nobody := maps.Clone(forms[0].fields)
+	if resp := post(nobody); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("a post naming no lab user = %d, want 400", resp.StatusCode)
+	}
+	noPKCE := maps.Clone(forms[0].fields)
+	noPKCE.Del("code_challenge")
+	noPKCE.Set("login", wsDev)
+	if resp := post(noPKCE); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("a post without PKCE = %d, want 400", resp.StatusCode)
+	}
 }
 
 func TestWorkspaceGitHubOAuthWithPKCE(t *testing.T) {
