@@ -1148,7 +1148,7 @@ git runs in, as the lab's own user, with the credentials mounted — the same
 run by hand, for a fake of one's own:
 
 ```bash
-./agentlab github-fake credentials
+agentlab github-fake credentials
 docker run -d --rm --name agentlab-github --network kind --user "$(id -u):$(id -g)" \
   -v "$PWD/agentlab:/agentlab:ro" -v "$PWD/certs/github-fake:/credentials:ro" \
   -p 127.0.0.1:8443:8443 gsoci.azurecr.io/giantswarm/golang:1.25.3 \

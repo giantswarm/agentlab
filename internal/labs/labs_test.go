@@ -10,14 +10,19 @@ import (
 	"github.com/giantswarm/agentlab/internal/config"
 )
 
-// setup points the registry at a temporary directory and changes into an
-// empty working directory, so every test starts with no lab anywhere.
+// setup points the registry and the freedesktop folders at temporary
+// directories and changes into an empty working directory, so every test
+// starts with no lab anywhere.
 func setup(t *testing.T) (cwd string) {
 	t.Helper()
 	regDir := t.TempDir()
 	prev := Dir
 	Dir = func() (string, error) { return regDir, nil }
-	t.Cleanup(func() { Dir = prev })
+	prevConfig, prevState := configHome, stateHome
+	cfgDir, stateDir := t.TempDir(), t.TempDir()
+	configHome = func() (string, error) { return cfgDir, nil }
+	stateHome = func() (string, error) { return stateDir, nil }
+	t.Cleanup(func() { Dir, configHome, stateHome = prev, prevConfig, prevState })
 	cwd = t.TempDir()
 	t.Chdir(cwd)
 	return cwd

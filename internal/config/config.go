@@ -1534,18 +1534,112 @@ func (c *Config) CheckValuesFiles() error {
 
 // Peek reads the agentlab.yaml of the lab in dir without validating,
 // re-hashing or writing anything — `agentlab list`'s look at a lab that is
-// not the one the command runs against.
+// not the one the command runs against. It writes nothing, so it reads past
+// a field this release does not know (decodeTolerant).
 func Peek(dir string) (*Config, error) {
 	raw, err := os.ReadFile(filepath.Join(dir, File)) // #nosec G304 -- a registered lab directory
 	if err != nil {
 		return nil, err
 	}
 	cfg := Default()
-	if err := decodeStrict(raw, cfg); err != nil {
+	if _, err := decodeTolerant(raw, cfg); err != nil {
 		return nil, err
 	}
 	cfg.Normalize()
 	return cfg, nil
+}
+
+// LoadReadOnly reads agentlab.yaml for a command that never writes it
+// (`trust`, `status`, `open`, …): like Load, except that a field this release
+// does not know — the file was written by a newer agentlab — is read past and
+// returned as the note to show, not refused. The strict refusal exists so a
+// write never drops such a field; a command that writes nothing cannot, and
+// the person can still trust, inspect and open a lab a newer build wrote.
+// Nothing is re-hashed or written.
+func LoadReadOnly() (cfg *Config, note string, err error) {
+	raw, err := os.ReadFile(File)
+	if err != nil {
+		return nil, "", err
+	}
+	cfg = Default()
+	note, err = decodeTolerant(raw, cfg)
+	if err != nil {
+		return nil, "", err
+	}
+	cfg.Platform.RetiredFakeFleet = nil
+	cfg.Platform.ModelManager.normalize()
+	if err := cfg.Validate(); err != nil {
+		return nil, "", fmt.Errorf("%s: %w", File, err)
+	}
+	return cfg, note, nil
+}
+
+// decodeTolerant is decodeStrict for a reader that writes nothing: a field
+// this release does not know is skipped, and note says which, who wrote the
+// file and how to get that release. Any other error is decodeStrict's.
+func decodeTolerant(raw []byte, cfg *Config) (note string, err error) {
+	strict := decodeStrict(raw, cfg)
+	if strict == nil || !strings.Contains(strict.Error(), "not found in type") {
+		return "", strict
+	}
+	*cfg = *Default()
+	cfg.ClusterName = ""
+	if err := yaml.Unmarshal(raw, cfg); err != nil {
+		return "", fmt.Errorf("parsing %s: %w", File, err)
+	}
+	return fmt.Sprintf("%s names fields this agentlab release (%s) does not know — %s; read without them, nothing is written. %s.",
+		File, project.Version(), writerOf(raw), capitalize(updateHint(writtenBy(raw)))), nil
+}
+
+// capitalize upper-cases the first letter of s, for a hint that starts a
+// sentence.
+func capitalize(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+// Exists reports whether a lab's agentlab.yaml is at path (a link to one
+// included).
+func Exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// RebasePaths makes every relative path in the agentlab.yaml at file —
+// platform.chartPath, platform.valuesFiles, platform.tls's certFile and
+// keyFile, platform.vmManager.imageDir — absolute against dir, the lab
+// directory they are relative to, and writes the file when any changed: the
+// step before a lab moves out of dir. A file this release cannot read is
+// refused and left as it is.
+func RebasePaths(file, dir string) error {
+	raw, err := os.ReadFile(file) // #nosec G304 -- a lab's agentlab.yaml
+	if err != nil {
+		return err
+	}
+	cfg := Default()
+	if err := decodeStrict(raw, cfg); err != nil {
+		return err
+	}
+	changed := false
+	abs := func(p *string) {
+		if *p != "" && !filepath.IsAbs(*p) {
+			*p = filepath.Join(dir, *p)
+			changed = true
+		}
+	}
+	abs(&cfg.Platform.ChartPath)
+	for i := range cfg.Platform.ValuesFiles {
+		abs(&cfg.Platform.ValuesFiles[i])
+	}
+	abs(&cfg.Platform.TLS.CertFile)
+	abs(&cfg.Platform.TLS.KeyFile)
+	abs(&cfg.Platform.VMManager.ImageDir)
+	if !changed {
+		return nil
+	}
+	return cfg.writeTo(file)
 }
 
 // decodeStrict reads agentlab.yaml into cfg and refuses a field this release
@@ -1634,7 +1728,12 @@ func (c *Config) Save() error {
 // agentlab.yaml is updated in place (mergeInto): only the values that changed
 // are rewritten, so a one-flag `configure` changes that one line.
 func (c *Config) write() error {
-	old, err := os.ReadFile(File)
+	return c.writeTo(File)
+}
+
+// writeTo is write to the agentlab.yaml at path.
+func (c *Config) writeTo(path string) error {
+	old, err := os.ReadFile(path) // #nosec G304 -- a lab's agentlab.yaml
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
@@ -1646,7 +1745,7 @@ func (c *Config) write() error {
 		writtenByPrefix + project.Version() + ".\n" +
 		headerPasswordsLine + "\n" +
 		headerManifestsLine + "\n")
-	return os.WriteFile(File, append(header, out...), 0o600) // #nosec G703 -- File is the fixed agentlab.yaml of the lab directory
+	return os.WriteFile(path, append(header, out...), 0o600) // #nosec G703 -- a lab's agentlab.yaml
 }
 
 // EnsureHashes fills in User.PasswordHash wherever it is missing or no longer

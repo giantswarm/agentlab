@@ -2,8 +2,9 @@
 // cluster name, pointing at the lab directory that holds its agentlab.yaml,
 // certs/ and state/. `configure` and `up` write it; every command that runs
 // against a lab resolves the lab through it (Resolve), so a person no longer
-// has to `cd` into the lab first. The lab's own layout does not move: the
-// registry only points at directories.
+// has to `cd` into the lab first. An entry is a lab's Home under the
+// freedesktop folders, or a lab directory from before them, which the first
+// command that enters it moves there (Settle).
 package labs
 
 import (
@@ -17,23 +18,17 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/giantswarm/agentlab/internal/config"
-	"github.com/giantswarm/agentlab/pkg/project"
+	"github.com/giantswarm/agentlab/internal/xdg"
 )
 
 // file is the registry's name inside Dir.
 const file = "labs.yaml"
 
-// Dir is the registry's directory: agentlab's own under the user's config
-// directory (~/.config/agentlab on Linux, ~/Library/Application
-// Support/agentlab on macOS), the sibling of the update check's cache. A
-// variable so tests can point it at a temporary directory.
-var Dir = func() (string, error) {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, project.Name), nil
-}
+// Dir is the registry's directory: agentlab's configuration folder
+// ($XDG_CONFIG_HOME/agentlab, ~/.config/agentlab by default;
+// ~/Library/Application Support/agentlab on macOS). A variable so tests can
+// point it at a temporary directory.
+var Dir = xdg.ConfigHome
 
 // Lab is one registered lab: its cluster name (agentlab.yaml's clusterName,
 // the lab's name everywhere) and its absolute directory.
@@ -229,6 +224,11 @@ func Resolve(flag string, mode Mode, pick Picker) (lab Lab, err error) {
 		return Lab{}, fmt.Errorf("no lab named %q is registered on this machine (%s); a lab registers itself on `agentlab configure` and `agentlab up` in its directory", flag, names(labs))
 	}
 	if _, err := os.Stat(config.File); err == nil {
+		// The link a moved lab left in its old directory (Settle) is that
+		// lab, whatever the mode: its files are no longer here.
+		if l, ok, err := linkedHere(); err != nil || ok {
+			return l, err
+		}
 		if mode != Enter {
 			return Lab{}, nil
 		}
@@ -277,6 +277,33 @@ func here() (Lab, error) {
 		return Lab{}, nil
 	}
 	return l, nil
+}
+
+// linkedHere returns the registered lab whose agentlab.yaml is the very file
+// the current directory's names — the link Settle leaves at a lab's old
+// directory — and whether there is one.
+func linkedHere() (Lab, bool, error) {
+	here, err := os.Stat(config.File)
+	if err != nil {
+		return Lab{}, false, err
+	}
+	labs, err := List()
+	if err != nil {
+		return Lab{}, false, err
+	}
+	cwd, err := filepath.Abs(".")
+	if err != nil {
+		return Lab{}, false, err
+	}
+	for _, l := range labs {
+		if l.Dir == cwd {
+			continue
+		}
+		if fi, err := os.Stat(filepath.Join(l.Dir, config.File)); err == nil && os.SameFile(here, fi) {
+			return l, true, nil
+		}
+	}
+	return Lab{}, false, nil
 }
 
 // named returns the lab of that name among labs.

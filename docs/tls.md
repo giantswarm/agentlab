@@ -8,7 +8,7 @@ trusts it automatically (muster's trust pool, Backstage, the apiserver's OIDC
 flags). Your browser and your Node don't, until you say so:
 
 ```bash
-./agentlab trust      # one sudo prompt; ./agentlab untrust reverts it
+agentlab trust      # one sudo prompt; agentlab untrust reverts it
 ```
 
 `trust` installs `certs/ca.crt` into the system trust store (Linux
@@ -43,7 +43,7 @@ The CA you are trusting is deliberately narrow:
   at boot.
 
 Skipping the trust step keeps the old behavior: browser warnings once per
-hostname, and `export NODE_EXTRA_CA_CERTS=$PWD/certs/ca.crt` for Node
+hostname, and `export NODE_EXTRA_CA_CERTS=~/.local/state/agentlab/labs/<lab>/certs/ca.crt` for Node
 clients. The headless `*-test` commands trust `certs/ca.crt` directly and
 never need any of this.
 
