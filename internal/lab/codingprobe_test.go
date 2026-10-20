@@ -16,6 +16,7 @@ const codingReply = "Here is the output:\n```\n" +
 	"AGENTLAB_PROBE harness-environ=rc1 cat: can't open '/proc/7/environ': Permission denied\n" +
 	"AGENTLAB_PROBE harness-mem=rc1 head: /proc/7/mem: Permission denied\n" +
 	"AGENTLAB_PROBE forwarder=agentlab-coding\n" +
+	"AGENTLAB_PROBE fwd-token=loopback\n" +
 	"AGENTLAB_PROBE fwd-dots=400\n" +
 	"AGENTLAB_PROBE fwd-encoded-dots=400\n" +
 	"AGENTLAB_PROBE mcp-config-tokens=0\n" +
@@ -113,6 +114,7 @@ func TestCodingProbeFailures(t *testing.T) {
 		{"dots forwarded", "fwd-dots=400", "fwd-dots=200", codingProbe.forwarderPaths},
 		{"encoded slash forwarded", "fwd-encoded-slash=400", "fwd-encoded-slash=404", codingProbe.forwarderPaths},
 		{"no forwarder", "forwarder=agentlab-coding", "forwarder=", codingProbe.forwarderPaths},
+		{"unknown server refused with the loopback token", "fwd-unknown=404", "fwd-unknown=401", codingProbe.forwarderPaths},
 		{"loopback token", "mcp-config-tokens=0", "mcp-config-tokens=1", codingProbe.noLoopbackToken},
 		{"config unread", "mcp-config-tokens=0", "mcp-config-tokens=unread", codingProbe.noLoopbackToken},
 		{"write tool other error", "write-tool=outside the toolset [preset:read-only]", "write-tool=unauthorized", codingProbe.writeToolRefused},
@@ -133,6 +135,23 @@ func TestCodingProbeFailures(t *testing.T) {
 				t.Errorf("passed: %q", got)
 			}
 		})
+	}
+}
+
+// With only kagent's placeholder in the MCP config the probe sends the
+// placeholder: the forwarder refuses an unknown server at its
+// authentication (401); a 404 then means it routed an unauthenticated
+// request.
+func TestCodingProbeForwarderPlaceholderToken(t *testing.T) {
+	reply := strings.Replace(codingReply, "fwd-token=loopback", "fwd-token=placeholder", 1)
+	if _, err := parseCodingProbe(reply).forwarderPaths(nil); err == nil {
+		t.Error("an unknown server answered 404 to the placeholder passed")
+	}
+	reply = strings.Replace(reply, "fwd-unknown=404", "fwd-unknown=401", 1)
+	if got, err := parseCodingProbe(reply).forwarderPaths(nil); err != nil {
+		t.Errorf("the placeholder's 401 for an unknown server: %v", err)
+	} else if !strings.Contains(got, "an unknown server 401") {
+		t.Errorf("verdict = %q", got)
 	}
 }
 
