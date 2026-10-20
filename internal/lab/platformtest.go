@@ -27,6 +27,7 @@ const (
 	stageMusterReplicas       = "muster replicas"
 	stageProvidedAPIs         = "provided APIs"
 	stageFleetAdmission       = "fleet admission"
+	stageChartExceptions      = "chart PolicyExceptions"
 	stageDexReach             = "Dex reach"
 	stageDownstreamIdentity   = "downstream identity"
 	stageControllerIdentity   = "controller identity"
@@ -301,6 +302,18 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 		caseLines = append(caseLines, c.String())
 	}
 	verdict += fmt.Sprintf("\nPASS: the fleet's %s policy (Enforce, Kyverno %s) answers as an installation does for %d HelmRelease shapes in %s — %s", fleetPolicyName, kyvernoVersion, len(cases), orgNamespace, strings.Join(caseLines, "; "))
+
+	// The chart's PolicyExceptions (polextest.go): rendered with
+	// kyvernoPolicies.enabled: true, the shape an installation with Kyverno
+	// installs, and dry-run against the lab's Kyverno, which refuses what the
+	// fleet's refuses.
+	chart := platformChartFor(cfg)
+	p.begin(stageChartExceptions, "Verifying the lab's Kyverno admits the PolicyExceptions %s renders (%s)", chart, polexShape(cfg))
+	polex, err := proveChartPolicyExceptions(cfg, chart)
+	if err != nil {
+		return "", err
+	}
+	verdict += "\n" + polex
 
 	// The lab's Dex bridge: every OAuth resource server the rule selects on
 	// the live Deployments carries the dex-localhost sidecar, runs without a

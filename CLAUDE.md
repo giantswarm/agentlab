@@ -225,6 +225,7 @@ agentlab status          # the lab's live state: the chart in place (a dev chart
 agentlab configure --released  # the restore step before handing a lab on: drops overlays, dev images, chart directory, dev channel
 agentlab pods            # the lab's pods (kubectl get pods -A, without kubectl); -n <namespace>
 agentlab platform-test   # headless Dex -> muster -> mcp-kubernetes proof
+agentlab polex-test      # the chart's Kyverno PolicyExceptions dry-run against the lab's Kyverno (--chart-version <release> for a candidate)
 agentlab models-test     # managed models: 401 -> pull -> ModelConfig -> dry runs, gitops_owned -> agent turn -> MCP -> unload -> delete (on lmstudio: the 501 refusal -> unwire, U23)
 agentlab serving-test    # platform.serving: llm-d controller + models Gateway up -> 401 -> the lab preset fits the node -> load -> Ready on the CPU runtime -> ModelConfig -> a completion through the models Gateway -> agent turn -> unload
 agentlab vm-manager-test # the vm-manager pod as the person: 401 anonymous -> tools via muster -> create_vm -> ready -> attestation -> delete_vm
@@ -412,7 +413,11 @@ Load-bearing invariants (details in docs/):
   installation; `platform-test` proves the matrix. Never "fix" a denial by
   exempting a namespace or turning the policy to Audit — the denial is the
   finding. The chart's own Kyverno objects stay pinned off
-  (`kyvernoPolicies.enabled: false`).
+  (`kyvernoPolicies.enabled: false`); its PolicyExceptions are judged
+  anyway: `polex-test` (and the `platform-test` stage of that name)
+  renders them with `kyvernoPolicies.enabled: true` and the tenants on and
+  dry-runs each against the lab's Kyverno, PolicyExceptions on as on the
+  fleet (`polextest.go`).
 - The lab's credentials are throwaway by design; plaintext passwords in
   `agentlab.yaml` are fine.
 
