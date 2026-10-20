@@ -89,7 +89,11 @@ func TestExtraModelValidate(t *testing.T) {
 		}, "credentialType applies to the OpenAI provider"},
 		{"chatgpt login on chat completions", func(m ExtraModel) ExtraModel { m = chatgpt(m); m.APIFormat = "chatCompletions"; return m }, "needs apiFormat responses"},
 		{"chatgpt login with key env", func(m ExtraModel) ExtraModel { m = chatgpt(m); m.APIKeyEnv = "OPENAI_API_KEY"; return m }, "takes no apiKeyEnv"},
-		{"chatgpt login with base url", func(m ExtraModel) ExtraModel { m = chatgpt(m); m.BaseURL = "https://chatgpt.com/backend-api/codex"; return m }, "takes no baseUrl"},
+		{"chatgpt login with base url", func(m ExtraModel) ExtraModel {
+			m = chatgpt(m)
+			m.BaseURL = "https://chatgpt.com/backend-api/codex"
+			return m
+		}, "takes no baseUrl"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
