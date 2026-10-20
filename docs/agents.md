@@ -193,19 +193,10 @@ platform's agent-manager composes a release, the proof applies it with the
 Flux labels and reads it back `managed: gitops`; the platform's own
 agent-manager (not pinned to a GitHub App) answers the change's dry run
 `gitops_owned` in mode apply and `unsupported` in mode commit, as its writes
-do; then, against a temporary copy of the agent-manager release pinned to the
-lab Dex as its GitHub App and to the fake GitHub API (the shape `models-test`
-uses, see [Models](models.md) "Dry runs, GitOps-owned objects and commit
-mode"), `validate_agent` in mode apply still answers `gitops_owned`, `force`
-or not, `validate_agent` in mode commit answers a valid update whose
-HelmRelease carries the change and opens nothing, and `update_agent` in mode
-commit opens exactly one pull request authored by the person whose file is
-the dry run's manifest byte for byte, while the live release's
-`resourceVersion` stays as it was and a mode apply write is still refused.
-The commit target is named (`repository`, `branch`, `path`): the lab's
-engine runs no kustomize-controller, so no Kustomization resolves it from
-the release's labels here. The agent, the copy, the fake and its Service go
-away at the end of the run.
+do; `update_agent` is refused and the live release stays as it was. The
+pull request itself takes an agent-manager pinned to a GitHub App and a
+person who granted that App in a browser, which the proof does not walk. The
+agent goes away at the end of the run.
 
 ## Organizations as tenants
 

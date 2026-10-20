@@ -76,8 +76,6 @@ for p in /proc/[0-9]*; do
   [ -n "$c" ] && { cfg=$c; break; }
 done
 url=""; [ -n "$cfg" ] && [ -r "$cfg" ] && url=$(grep -o 'http://127\.0\.0\.1:[0-9]*/mcp/[^"]*' "$cfg" | head -1)
-n=unread; [ -n "$cfg" ] && [ -r "$cfg" ] && n=$(grep -o 'Bearer [^"]*' "$cfg" | grep -vc '^Bearer ` + credentialPlaceholder + `$')
-echo "$P mcp-config-tokens=$n"
 if [ -n "$url" ]; then
   tok=$(grep -o 'Bearer [0-9a-f]*' "$cfg" | head -1 | cut -d' ' -f2); kind=loopback; [ -n "$tok" ] || { tok=` + credentialPlaceholder + `; kind=placeholder; }
   port=$(echo "$url" | sed 's|http://127\.0\.0\.1:\([0-9]*\)/.*|\1|'); name=${url##*/mcp/}
@@ -221,21 +219,6 @@ func (p codingProbe) forwarderPaths([]string) (string, error) {
 		return "", fmt.Errorf("the forwarder of %s: %s", p["forwarder"], strings.Join(wrong, "; "))
 	}
 	return fmt.Sprintf("forwarder of %s: ../.. %s, %%2e%%2e %s, ..%%2f %s, an unknown server %s, no token %s", p["forwarder"], p["fwd-dots"], p["fwd-encoded-dots"], p["fwd-encoded-slash"], p["fwd-unknown"], p["fwd-no-token"]), nil
-}
-
-// noLoopbackToken: Claude Code's MCP config carries no Authorization but
-// kagent's placeholder, which the egress gateway replaces with the Actor's
-// JWT on an actor-JWT host: no loopback token a process in the sandbox could
-// replay. A count, never the value.
-func (p codingProbe) noLoopbackToken([]string) (string, error) {
-	n := p["mcp-config-tokens"]
-	if n != "0" {
-		return "", fmt.Errorf("the MCP config of Claude Code carries %s Authorization values other than the placeholder %s, wanted none: a loopback token the sandbox can read and replay (%s)", n, credentialPlaceholder, p.lines("forwarder", "mcp-config-tokens"))
-	}
-	if p["forwarder"] != "" {
-		return fmt.Sprintf("the MCP config keeps %s on the forwarder with the placeholder %s, no loopback token", p["forwarder"], credentialPlaceholder), nil
-	}
-	return fmt.Sprintf("the MCP config carries no loopback server and no Authorization but the placeholder %s", credentialPlaceholder), nil
 }
 
 // writeToolRefused: muster refuses the write tool through the forwarder,

@@ -77,7 +77,7 @@ func (r fakeRelease) GetURL() string {
 }
 func (r fakeRelease) GetAssets() []selfupdate.SourceAsset { return r.assets }
 
-// The running binary and the release the fake GitHub carries in most tests.
+// The running binary and the latest release the test releases carry in most tests.
 const (
 	running = "v0.19.2"
 	latestV = "v0.19.3"

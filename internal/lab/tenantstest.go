@@ -759,7 +759,7 @@ func tenantsTestAuthorization(cfg *config.Config, namespaces [2]string, users, e
 // removeTenantsTestPlatformAgent removes the platform tenant's agent: its
 // HelmRelease, which takes the Agent and its template with it.
 func removeTenantsTestPlatformAgent() error {
-	gvr, err := gvrFor(helmReleaseResource)
+	gvr, err := gvrFor(fluxHelmReleaseResource)
 	if err != nil {
 		return err
 	}
@@ -1129,7 +1129,7 @@ func createTenantsTestNamespace(ns, email string) error {
 // tenantsTestReleaseExists reports whether the agent's HelmRelease is in the
 // namespace.
 func tenantsTestReleaseExists(ns, name string) (bool, error) {
-	gvr, err := gvrFor(helmReleaseResource)
+	gvr, err := gvrFor(fluxHelmReleaseResource)
 	if err != nil {
 		return false, err
 	}
@@ -1149,7 +1149,7 @@ func removeTenantsTestNamespace(ns string) error {
 		return err
 	}
 	note("cleanup: removing namespace %s", ns)
-	gvr, err := gvrFor(helmReleaseResource)
+	gvr, err := gvrFor(fluxHelmReleaseResource)
 	if err != nil {
 		return err
 	}

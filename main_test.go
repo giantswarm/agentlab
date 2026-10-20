@@ -192,20 +192,6 @@ func TestRenderStaysInTheDirectoryOfItsConfig(t *testing.T) {
 	}
 }
 
-// The help of --workspaces-cleanup-after names the range the sessions part's
-// precondition requires, taken from the same constants.
-func TestCleanupAfterHelpNamesTheSessionsRange(t *testing.T) {
-	flag := find(rootCmd(), "configure").Flags().Lookup("workspaces-cleanup-after")
-	if flag == nil {
-		t.Fatal("configure has no --workspaces-cleanup-after flag")
-	}
-	for _, want := range []string{lab.SessionsCleanupWindowRange(), lab.SessionsCleanupWindowExample()} {
-		if !strings.Contains(flag.Usage, want) {
-			t.Errorf("--workspaces-cleanup-after help %q does not name %q", flag.Usage, want)
-		}
-	}
-}
-
 // backstage-test documents --agent in its help: the flag and what it skips.
 func TestBackstageTestHelpDocumentsAgent(t *testing.T) {
 	cmd := find(rootCmd(), "backstage-test")

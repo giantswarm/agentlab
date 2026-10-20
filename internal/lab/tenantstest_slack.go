@@ -31,6 +31,12 @@ const (
 	slackReplayFailed = "could not be picked up again"
 	// slackPlatformTenant is the platform tenant's label on a roster row.
 	slackPlatformTenant = "platform"
+	// slackAccessAllow is the button of the gateway's access prompt that
+	// lets a collaborator into the thread.
+	slackAccessAllow = "access_allow"
+	// tenantsTraceSettle lets the gateway's log and the controller catch up
+	// with a refusal before the proof reads them.
+	tenantsTraceSettle = 3 * time.Second
 	// tenantsSlackGatewayHint names the gateway release the half needs.
 	tenantsSlackGatewayHint = "klaus-gateway with giantswarm/klaus-gateway#486 (4.10.0 or later: `--gateway-image gsoci.azurecr.io/giantswarm/klaus-gateway:4.10.0-rc.1` until 4.10.0 is released)"
 )
@@ -316,7 +322,7 @@ func (s *tenantsSlack) run() ([]string, error) {
 // gateway may resume the thread's suspended Session first, which reads the
 // credentials without a turn: there the Session's tasks are the evidence.
 func (s *tenantsSlack) nothingReached(ctx context.Context, p *slackProof, agent *apiv1alpha1.ResourceReference, before []*apiv1alpha1.Session, since time.Time, slackUser string, gatewayRefuses bool) error {
-	time.Sleep(accessTraceSettle)
+	time.Sleep(tenantsTraceSettle)
 	logs, _ := p.logs()
 	for _, d := range gatewayRecords(logs, recordDispatch) {
 		if gatewayRefuses && d.SlackUser == slackUser {

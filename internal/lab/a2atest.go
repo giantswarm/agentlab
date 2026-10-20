@@ -799,6 +799,52 @@ func (s *sessionSet) deleteOne(ctx context.Context, id string) error {
 	return s.api.deleteSession(ctx, id)
 }
 
+// deleteSessionIDArg is delete_session's session id; agentManagerNotFound
+// opens agent-manager's answer for a Session that is not there (or another
+// person's).
+const (
+	deleteSessionIDArg   = "sessionId"
+	agentManagerNotFound = "not_found:"
+)
+
+// sessionDeleted is delete_session's answer, the fields the proofs read.
+type sessionDeleted struct {
+	Session struct {
+		ID    string `json:"id"`
+		State string `json:"state"`
+	} `json:"session"`
+	Warning string `json:"warning"`
+}
+
+// deleteThroughManager is agent-manager's delete_session as the person the
+// muster session signs in as. A Session whose turn just ended is refused as
+// not yet settled until its runtime work is: the delete is retried the way
+// kagent's is. A Session already gone answers nil and no error.
+func deleteThroughManager(ctx context.Context, ms *musterSession, id string) (*sessionDeleted, error) {
+	var env *toolEnvelope
+	if err := untilSettled(ctx, "delete_session", id, sessionSettleTimeout, func(err error) bool {
+		return strings.Contains(err.Error(), notYetSettledMessage)
+	}, func() (err error) {
+		if env, err = ms.callToolEnvelope(agentManagerToolPrefix+"delete_session", map[string]any{deleteSessionIDArg: id}); err != nil {
+			return err
+		}
+		if env.IsError {
+			return fmt.Errorf("refused: %.400s", env.Content[0].Text)
+		}
+		return nil
+	}); err != nil {
+		if env != nil && env.IsError && strings.HasPrefix(env.Content[0].Text, agentManagerNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var deleted sessionDeleted
+	if err := json.Unmarshal([]byte(env.Content[0].Text), &deleted); err != nil || deleted.Session.ID != id {
+		return nil, fmt.Errorf("delete_session answered no Session %s: %.400s", id, env.Content[0].Text)
+	}
+	return &deleted, nil
+}
+
 // remove deletes one tracked session and stops tracking it.
 func (s *sessionSet) remove(ctx context.Context, id string) error {
 	if err := s.deleteOne(ctx, id); err != nil {

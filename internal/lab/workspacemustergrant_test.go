@@ -107,19 +107,15 @@ func TestRangeFloorAdmitsGrant(t *testing.T) {
 	}
 }
 
-// The pin per instance kind, its issuer <url>/apps/<App id> as the meta
-// chart derives it: the lab's GitHub and its own endpoints with no
-// response issuer, github.com with GitHub's, a GitLab with its scopes; the
-// OAuth client is always the instance's Secret.
+// The pin per instance kind, as the meta chart derives it: github.com's App
+// (issuer https://github.com/apps/<App id>) with GitHub's response issuer, a
+// GitLab with its scopes; the OAuth client is always the instance's Secret.
 func TestWorkspaceGrantOf(t *testing.T) {
-	const lab, gitlab = "https://github.lab.example", "https://gitlab.example.com"
+	const gitlab = testGitLabURL
 	for _, c := range []struct {
 		p    workspaceProviderValues
 		want workspaceGrantValues
 	}{
-		{workspaceProviderValues{Name: config.WorkspaceProviderFake, Kind: providerKindGitHub, URL: lab, AppID: testGrantAppID, ClientID: testGrantClientID, Secret: config.WorkspaceFakeSecretName},
-			workspaceGrantValues{Provider: config.WorkspaceProviderFake, Issuer: lab + "/apps/" + testGrantAppID,
-				AuthorizationEndpoint: lab + githubAuthorizePath, TokenEndpoint: lab + githubAccessTokenPath, Secret: config.WorkspaceFakeSecretName}},
 		{workspaceProviderValues{Name: config.WorkspaceProviderGitHub, Kind: providerKindGitHub, AppID: testGrantAppID, ClientID: testGrantClientID, Secret: config.WorkspaceGitHubSecretName},
 			workspaceGrantValues{Provider: config.WorkspaceProviderGitHub, Issuer: "https://github.com/apps/" + testGrantAppID, ExpectedIssuer: githubOAuthIssuer,
 				AuthorizationEndpoint: "https://github.com" + githubAuthorizePath, TokenEndpoint: "https://github.com" + githubAccessTokenPath, Secret: config.WorkspaceGitHubSecretName}},
@@ -138,25 +134,27 @@ func TestWorkspaceGrantOf(t *testing.T) {
 // the exchange and no pin.
 func TestWorkspaceGrantValues(t *testing.T) {
 	stubWorkspacesProbe(t, true)
-	grant := workspaceGrantOf(workspaceProviderValues{Name: config.WorkspaceProviderFake, Kind: providerKindGitHub, URL: "https://github.lab.example", ClientID: testGrantClientID, Secret: config.WorkspaceFakeSecretName})
-	values, raw, _, _ := renderWorkspaceTemplates(t, workspaceLab(""), func(d *tmplData) { d.WorkspaceGrant = grant })
+	cfg := workspaceGitHubLab()
+	cfg.Platform.Workspaces.GitHub = config.WorkspaceGitHub{AppID: testGrantAppID, ClientID: testGrantClientID}
+	grant := workspaceGrantOf(workspaceProviderValues{Name: config.WorkspaceProviderGitHub, Kind: providerKindGitHub, AppID: testGrantAppID, ClientID: testGrantClientID, Secret: config.WorkspaceGitHubSecretName})
+	values, raw, _, _ := renderWorkspaceTemplates(t, cfg, func(d *tmplData) { d.WorkspaceGrant = grant })
 	wm, _ := workspaceManagerBlock(t, values)
 	muster, _ := wm["muster"].(map[string]any)
 	server, _ := muster["mcpServer"].(map[string]any)
 	auth, _ := server["auth"].(map[string]any)
 	as, _ := auth["authorizationServer"].(map[string]any)
-	if auth["provider"] != config.WorkspaceProviderFake || as["issuer"] != grant.Issuer || as["expectedIssuer"] != "" || as["scopes"] != "" ||
+	if auth["provider"] != config.WorkspaceProviderGitHub || as["issuer"] != grant.Issuer || as["expectedIssuer"] != githubOAuthIssuer || as["scopes"] != "" ||
 		as["authorizationEndpoint"] != grant.AuthorizationEndpoint || as["tokenEndpoint"] != grant.TokenEndpoint || as["grantScope"] != "subject" {
 		t.Errorf("workspace-manager.muster.mcpServer.auth = %v", auth)
 	}
-	if ref, _ := as["clientCredentialsSecretRef"].(map[string]any); ref["name"] != config.WorkspaceFakeSecretName {
-		t.Errorf("clientCredentialsSecretRef = %v, want %s", as["clientCredentialsSecretRef"], config.WorkspaceFakeSecretName)
+	if ref, _ := as["clientCredentialsSecretRef"].(map[string]any); ref["name"] != config.WorkspaceGitHubSecretName {
+		t.Errorf("clientCredentialsSecretRef = %v, want %s", as["clientCredentialsSecretRef"], config.WorkspaceGitHubSecretName)
 	}
 	if _, ok := wm["tokenExchange"]; ok {
 		t.Errorf("a pinned manager's values carry a token exchange:\n%s", raw)
 	}
 
-	values, _, _, _ = renderWorkspaceTemplates(t, workspaceLab(""), nil)
+	values, _, _, _ = renderWorkspaceTemplates(t, cfg, func(d *tmplData) { d.WorkspaceGrant = nil })
 	wm, _ = workspaceManagerBlock(t, values)
 	if _, ok := wm["muster"]; ok {
 		t.Errorf("an unpinned manager's values carry a pin: %v", wm["muster"])
@@ -172,7 +170,7 @@ func TestWorkspaceGrantValues(t *testing.T) {
 func TestWorkspaceGrantForRevocationEndpoint(t *testing.T) {
 	source := workspaceManagerSource{repository: "oci://gsoci.azurecr.io/charts/giantswarm", chart: workspaceManagerMCPServer, versionRange: testWorkspaceManagerRange}
 	stubWorkspacesChart(t, chartWorkspaces{Carries: true, Organizations: true, Manager: source})
-	const gitlab = "https://gitlab.example.com"
+	const gitlab = testGitLabURL
 	providers := []workspaceProviderValues{{Name: config.WorkspaceProviderGitLab, Kind: providerKindGitLab, URL: gitlab, ClientID: testGrantClientID, Secret: config.WorkspaceGitLabSecretName}}
 	cfg := workspaceLab(config.WorkspaceProviderGitLab)
 
@@ -203,11 +201,13 @@ func TestWorkspaceGrantForRevocationEndpoint(t *testing.T) {
 // when it has none.
 func TestWorkspaceGrantValuesRevocationEndpoint(t *testing.T) {
 	stubWorkspacesProbe(t, true)
+	gitlabLab := workspaceLab(config.WorkspaceProviderGitLab)
+	gitlabLab.Platform.Workspaces.GitLab = testWorkspaceGitLab(testGrantClientID)
 	for _, endpoint := range []string{"https://gitlab.example.com/oauth/revoke", ""} {
-		grant := &workspaceGrantValues{Provider: config.WorkspaceProviderFake, Issuer: "https://gitlab.example.com", // #nosec G101 -- endpoints and a Secret name, no credential
+		grant := &workspaceGrantValues{Provider: config.WorkspaceProviderGitLab, Issuer: "https://gitlab.example.com", // #nosec G101 -- endpoints and a Secret name, no credential
 			AuthorizationEndpoint: "https://gitlab.example.com/oauth/authorize",
-			TokenEndpoint:         "https://gitlab.example.com/oauth/token", RevocationEndpoint: endpoint, Secret: config.WorkspaceFakeSecretName}
-		values, raw, _, _ := renderWorkspaceTemplates(t, workspaceLab(""), func(d *tmplData) { d.WorkspaceGrant = grant })
+			TokenEndpoint:         "https://gitlab.example.com/oauth/token", RevocationEndpoint: endpoint, Secret: config.WorkspaceGitLabSecretName}
+		values, raw, _, _ := renderWorkspaceTemplates(t, gitlabLab, func(d *tmplData) { d.WorkspaceGrant = grant })
 		wm, _ := workspaceManagerBlock(t, values)
 		muster, _ := wm["muster"].(map[string]any)
 		server, _ := muster["mcpServer"].(map[string]any)

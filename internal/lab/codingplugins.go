@@ -120,7 +120,7 @@ func judgeClaudeFormat(errs []string) (claudeFormatVerdict, string) {
 
 // uncheckedFix is how agent-manager reaches GitHub past the anonymous
 // window this machine shares.
-const uncheckedFix = "record the lab's GitHub credential (githubToken.source or the skills GitHub App, docs/agents.md \"The GitHub token\"), then `agentlab platform`"
+const uncheckedFix = "record a GitHub credential (githubToken.source or the skills GitHub App, docs/agents.md \"The GitHub token\"), then `agentlab platform`"
 
 // judgePluginSkills is the plugin skills an agent listed against the
 // selection: every name of want listed, no other name of known. listed is

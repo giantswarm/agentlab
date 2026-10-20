@@ -1,6 +1,6 @@
 package config
 
-// GitHubToken is where the lab's GitHub token comes from: never this file.
+// GitHubToken is where the lab's token for GitHub comes from: never this file.
 // Source names where the operator's secret tooling finds it; `agentlab up`
 // and `platform` hand the reference to that tooling, which writes the value
 // straight into the lab's Secret agentlab-github-token in its own process

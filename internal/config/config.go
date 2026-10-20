@@ -4,7 +4,6 @@ package config
 
 import (
 	"bytes"
-	"cmp"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
@@ -607,33 +606,9 @@ type Platform struct {
 	// giantswarm.io/organization. Off by default; --tenants turns it on;
 	// needs the agents runtime. `agentlab tenants-test` is the proof.
 	Tenants Tenants `yaml:"tenants"`
-	// The platform-manager fixture: an invented installation with the agent
-	// platform and workspaces on, in a registry the lab serves, that the
-	// released giantswarm-platform-manager plans against
-	// (internal/lab/pmtest.go). Off by default; `agentlab pm-test` is the
-	// proof and refuses while it is off.
-	PlatformManager PlatformManager `yaml:"platformManager"`
-}
-
-// DefaultPlatformManagerVersion is the giantswarm-platform-manager release
-// pm-test installs while platform.platformManager.version is empty: a stable
-// release of the chart and image on gsoci.
-const DefaultPlatformManagerVersion = "0.69.0"
-
-// PlatformManager configures the platform-manager fixture.
-type PlatformManager struct {
-	// On, `agentlab pm-test` runs: the manager's chart at Version as a
-	// temporary HelmRelease against the lab's registry fixture.
-	Enabled bool `yaml:"enabled"`
-	// Version is the giantswarm-platform-manager chart (and image) version,
-	// a release, a release candidate or a branch's dev build; empty is
-	// DefaultPlatformManagerVersion.
-	Version string `yaml:"version,omitempty"`
-}
-
-// PlatformManagerVersion is the manager release pm-test installs.
-func (c *Config) PlatformManagerVersion() string {
-	return cmp.Or(strings.TrimPrefix(strings.TrimSpace(c.Platform.PlatformManager.Version), "v"), DefaultPlatformManagerVersion)
+	// Retired: the platform-manager fixture. Read so a file an earlier
+	// release wrote still loads, never written back.
+	RetiredPlatformManager any `yaml:"platformManager,omitempty"`
 }
 
 // Coding configures the lab's coding Harnesses.
@@ -670,14 +645,10 @@ type Workspaces struct {
 	// key.
 	Enabled bool `yaml:"enabled"`
 	// Provider names the workspace-manager's provider instances:
-	// WorkspaceProviderFake (the lab's own GitHub, served for the lab as a
-	// GitHub Enterprise-shaped instance; the default while empty),
-	// WorkspaceProviderFakeBearer (the same GitHub as a github.com-shaped
-	// instance, its API on a host of its own; only beside the fake),
-	// WorkspaceProviderGitHub (a GitHub App of the lab's own on github.com),
-	// WorkspaceProviderGitLab (a GitLab the lab reaches, its OAuth
-	// application and group access token), or several, comma-separated
-	// ("fake,fake-bearer,github,gitlab"). With workspaces on, the
+	// WorkspaceProviderGitHub (a GitHub App of the lab's own on github.com;
+	// the default while empty), WorkspaceProviderGitLab (a GitLab the lab
+	// reaches, its OAuth application and group access token), or both,
+	// comma-separated ("github,gitlab"). With workspaces on, the
 	// workspace-manager's public base URL carries the gateway port
 	// (WorkspaceManagerBaseURL) and the chart routes its host.
 	Provider string `yaml:"provider,omitempty"`
@@ -765,7 +736,7 @@ func (g WorkspaceGitLab) Validate() error {
 	return nil
 }
 
-// WorkspaceGitHub is the lab's GitHub App for the workspace-manager's
+// WorkspaceGitHub is the GitHub App of the workspace-manager's
 // provider instance github: an App of its own, apart from the lab Dex's
 // sign-in App and muster's github server client. Its App id and client id
 // are public and live here, empty until the App is registered; its private
@@ -812,16 +783,11 @@ const WorkspaceOrganization = "lab"
 
 var WorkspaceOrganizationGroups = []string{groupPlatformAdmins, groupDevelopers}
 
-// The workspace providers, and the Secrets of their Apps: the fake's holds
-// the key pair and client secret the lab generated itself (certs/github-fake),
-// the github instance's what the operator's secret tooling placed. Both carry
-// the same keys, and the values only ever reference them.
+// The workspace providers, and the Secrets of their Apps: what the
+// operator's secret tooling placed, which the values only ever reference.
 const (
-	WorkspaceProviderFake        = "fake"
-	WorkspaceProviderFakeBearer  = "fake-bearer"
 	WorkspaceProviderGitHub      = "github"
 	WorkspaceProviderGitLab      = "gitlab"
-	WorkspaceFakeSecretName      = "workspace-fake"   // #nosec G101 -- Secret NAME, not a credential
 	WorkspaceGitHubSecretName    = "workspace-github" // #nosec G101 -- Secret NAME, not a credential
 	WorkspaceGitHubPrivateKeyKey = "private-key"      // #nosec G101 -- Secret KEY name, not a credential
 	WorkspaceGitLabSecretName    = "workspace-gitlab" // #nosec G101 -- Secret NAME, not a credential
@@ -831,52 +797,31 @@ const (
 
 // workspaceProviderNames are the instances platform.workspaces.provider may
 // name, in the order the workspace-manager gets them.
-var workspaceProviderNames = []string{WorkspaceProviderFake, WorkspaceProviderFakeBearer, WorkspaceProviderGitHub, WorkspaceProviderGitLab}
+var workspaceProviderNames = []string{WorkspaceProviderGitHub, WorkspaceProviderGitLab}
 
-// parseWorkspaceProviders reads platform.workspaces.provider: the fake alone
+// parseWorkspaceProviders reads platform.workspaces.provider: github alone
 // for "", else the comma-separated set of known instances, each at most
-// once, in workspaceProviderNames order; fake-bearer only beside the fake,
-// whose GitHub serves it.
+// once, in workspaceProviderNames order.
 func parseWorkspaceProviders(value string) ([]string, error) {
 	if strings.TrimSpace(value) == "" {
-		return []string{WorkspaceProviderFake}, nil
+		return []string{WorkspaceProviderGitHub}, nil
 	}
 	var names []string
 	for raw := range strings.SplitSeq(value, ",") {
 		name := strings.TrimSpace(raw)
 		if !slices.Contains(workspaceProviderNames, name) {
-			return nil, fmt.Errorf("platform.workspaces.provider %q: want %s, several comma-separated; %q is none of them", value, strings.Join(workspaceProviderNames, ", "), name)
+			return nil, fmt.Errorf("platform.workspaces.provider %q: want %s, several comma-separated; %q is none of them (`agentlab configure --defaults --workspaces-provider <instances>` rewrites it)", value, strings.Join(workspaceProviderNames, ", "), name)
 		}
 		if slices.Contains(names, name) {
 			return nil, fmt.Errorf("platform.workspaces.provider %q names %s twice", value, name)
 		}
 		names = append(names, name)
 	}
-	if slices.Contains(names, WorkspaceProviderFakeBearer) && !slices.Contains(names, WorkspaceProviderFake) {
-		return nil, fmt.Errorf("platform.workspaces.provider %q names %s without %s: the lab's GitHub of the instance %s serves it, name both (%s,%s)",
-			value, WorkspaceProviderFakeBearer, WorkspaceProviderFake, WorkspaceProviderFake, WorkspaceProviderFake, WorkspaceProviderFakeBearer)
-	}
 	slices.SortFunc(names, func(a, b string) int {
 		return slices.Index(workspaceProviderNames, a) - slices.Index(workspaceProviderNames, b)
 	})
 	return names, nil
 }
-
-// GitHubFakeHost is the lab's GitHub's name under the platform domain
-// (`agentlab github-fake --workspaces`, docs/workspaces.md): the one the
-// lab CA's name constraints admit, pods resolve to the fake and its TLS
-// leaf carries.
-func GitHubFakeHost(domain string) string { return "github." + domain }
-
-// GitHubFakeBearerHost is the git host of the lab's GitHub as the
-// github.com-shaped instance fake-bearer, GitHubFakeBearerAPIHost its API
-// host beside it, as api.github.com is beside github.com: the API takes a
-// Bearer credential on a host of its own, the git host Basic. Both are
-// names of the same fake, under the platform domain like GitHubFakeHost.
-func GitHubFakeBearerHost(domain string) string { return "github-bearer." + domain }
-
-// GitHubFakeBearerAPIHost is the API host of the instance fake-bearer.
-func GitHubFakeBearerAPIHost(domain string) string { return "api." + GitHubFakeBearerHost(domain) }
 
 // Serving configures model serving on llm-d in the lab.
 type Serving struct {
@@ -1424,7 +1369,7 @@ type Config struct {
 	AIModel string `yaml:"aiModel"`
 	// AIKey is where the key of the default ModelConfig comes from.
 	AIKey AIKey `yaml:"aiKey,omitempty"`
-	// GitHubToken is where the token of the lab's GitHub calls comes from.
+	// GitHubToken is where the token of the lab's calls to GitHub comes from.
 	GitHubToken GitHubToken `yaml:"githubToken,omitempty"`
 	// GitHubApp is the skills GitHub App agent-manager resolves skills with.
 	GitHubApp GitHubApp `yaml:"githubApp,omitempty"`
@@ -1501,6 +1446,7 @@ func load(validate bool) (*Config, error) {
 		return nil, err
 	}
 	cfg.Platform.RetiredFakeFleet = nil
+	cfg.Platform.RetiredPlatformManager = nil
 	// Earlier versions wrote the one-backend form (backend/endpoint); read
 	// it as the one-item lists so the same lab renders exactly as before.
 	cfg.Platform.ModelManager.normalize()
@@ -1574,6 +1520,7 @@ func LoadReadOnly() (cfg *Config, note string, err error) {
 		return nil, "", err
 	}
 	cfg.Platform.RetiredFakeFleet = nil
+	cfg.Platform.RetiredPlatformManager = nil
 	cfg.Platform.ModelManager.normalize()
 	if err := cfg.Validate(); err != nil {
 		return nil, "", fmt.Errorf("%s: %w", File, err)
@@ -2464,7 +2411,7 @@ func (c *Config) WorkspacesCSICompanion() bool {
 }
 
 // WorkspaceProviders names the workspace-manager's provider instances, in
-// the order it gets them: what platform.workspaces.provider names, the fake
+// the order it gets them: what platform.workspaces.provider names, github
 // alone while it is empty; none with workspaces off. A value Validate
 // refused yields none too.
 func (c *Config) WorkspaceProviders() []string {
@@ -2492,20 +2439,6 @@ func (c *Config) WorkspaceGrantProvider() string {
 	return names[0]
 }
 
-// WorkspaceFakeProvider reports whether the workspace-manager gets the
-// provider instance fake, the lab's own GitHub: workspaces on and
-// platform.workspaces.provider naming it or empty.
-func (c *Config) WorkspaceFakeProvider() bool {
-	return slices.Contains(c.WorkspaceProviders(), WorkspaceProviderFake)
-}
-
-// WorkspaceFakeBearerProvider reports whether the workspace-manager gets the
-// provider instance fake-bearer, the lab's GitHub as a github.com-shaped
-// instance: workspaces on and platform.workspaces.provider naming it.
-func (c *Config) WorkspaceFakeBearerProvider() bool {
-	return slices.Contains(c.WorkspaceProviders(), WorkspaceProviderFakeBearer)
-}
-
 // WorkspaceGitHubProvider reports whether the workspace-manager gets the
 // provider instance github: workspaces on with platform.workspaces.provider
 // naming it.
@@ -2518,23 +2451,6 @@ func (c *Config) WorkspaceGitHubProvider() bool {
 // naming it.
 func (c *Config) WorkspaceGitLabProvider() bool {
 	return slices.Contains(c.WorkspaceProviders(), WorkspaceProviderGitLab)
-}
-
-// GitHubFakeURL is the lab's GitHub as its provider instance names it, the
-// git host; the REST API is under /api/v3 of it, as on a GitHub Enterprise
-// Server. Pods reach it on 443 (CoreDNS sends the name to the fake's
-// Service); this host reaches the fake on the port its container publishes.
-func (c *Config) GitHubFakeURL() string { return "https://" + GitHubFakeHost(c.Platform.Domain) }
-
-// GitHubFakeBearerURL is the instance fake-bearer's web URL, its git host.
-func (c *Config) GitHubFakeBearerURL() string {
-	return "https://" + GitHubFakeBearerHost(c.Platform.Domain)
-}
-
-// GitHubFakeBearerAPIURL is the instance fake-bearer's REST API base URL,
-// at the root of its own host as https://api.github.com is.
-func (c *Config) GitHubFakeBearerAPIURL() string {
-	return "https://" + GitHubFakeBearerAPIHost(c.Platform.Domain)
 }
 
 // WorkspaceManagerBaseURL is the workspace-manager's public base URL through

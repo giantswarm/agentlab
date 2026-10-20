@@ -132,12 +132,6 @@ const helmInstallTimeout = 15 * time.Minute
 // release is the Helm CLI's too — `helm upgrade` from a shell stays the lab's
 // day-2 tool.
 func PlatformUp(cfg *config.Config, offers Offers) error {
-	// A binary the lab's GitHub container cannot run is refused before the
-	// preload and the installs (workspacefake.go), not when the container
-	// starts after the storage install; `up` judges it before the cluster.
-	if err := checkLabGitHubBinary(cfg); err != nil {
-		return err
-	}
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
 	}
@@ -476,20 +470,6 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	} else {
 		// The volumes released before the NFS server goes (teardown.go).
 		if err := workspacesTeardown(ctx, cfg); err != nil {
-			return err
-		}
-	}
-	// The lab's GitHub for the workspace-manager's provider instance fake
-	// (workspacefake.go): its container, Service and Secret before the
-	// install, which references the Secret; gone when the instance is not
-	// configured, with the Service, so nothing resolves to it.
-	if cfg.WorkspaceFakeProvider() {
-		if err := githubFakeUp(cfg); err != nil {
-			return err
-		}
-	} else {
-		githubFakeDown(cfg)
-		if err := githubFakeServiceDown(ctx); err != nil {
 			return err
 		}
 	}

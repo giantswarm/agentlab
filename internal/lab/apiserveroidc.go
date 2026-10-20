@@ -2,6 +2,7 @@ package lab
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -197,4 +198,13 @@ func parseJWKSKeyIDs(body []byte) ([]string, error) {
 		ids = append(ids, k.KeyID)
 	}
 	return ids, nil
+}
+
+// decodeJWTPart decodes one base64url part of a JWT into v.
+func decodeJWTPart(part string, v any) error {
+	raw, err := base64.RawURLEncoding.DecodeString(part)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(raw, v)
 }

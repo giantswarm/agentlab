@@ -24,8 +24,6 @@ func Down(cfg *config.Config) error {
 			note("releasing the workspace volumes: %v", err)
 		}
 	}
-	// The lab's GitHub (workspacefake.go), a container beside the nodes.
-	githubFakeDown(cfg)
 	if err := deleteClusterWithinBound(cfg.ClusterName, cfg.ControlPlaneNode()); err != nil {
 		var broken *brokenNodeError
 		if errors.As(err, &broken) {
@@ -129,9 +127,6 @@ func PlatformDown(cfg *config.Config) error {
 	if err := workspacesTeardown(ctx, cfg); err != nil {
 		return err
 	}
-	// The lab's GitHub (workspacefake.go); its Service and Secret went with
-	// the namespace.
-	githubFakeDown(cfg)
 	// What an earlier agentlab installed next to the umbrella: its own Flux
 	// controllers for the agent create flow. The chart brings the engine now
 	// and refuses a second Flux (refuseOlderLabShape), so they go with the

@@ -14,11 +14,9 @@ GOOS=windows go vet ./...  # and GOOS=linux, GOOS=darwin
 `make build` and `make install` build with `CGO_ENABLED=0`, as the releases
 are built: a static binary with the pure-Go resolver. A plain `go build` on a
 glibc host links the binary dynamically, and the lab runs copies of its own
-binary in containers on the kind network — the lab's GitHub for the
-workspace-manager's [provider instance `fake`](workspaces.md#the-provider-instance-fake),
-the proofs' fakes — whose image has no dynamic loader: `agentlab up` and
-`agentlab platform` refuse such a binary before their first step, naming the
-build. (A static link with cgo left on crashes instead, in glibc's resolver.)
+binary in containers on the kind network — the skill host, the proofs'
+fakes — whose image has no dynamic loader: the step that starts such a
+container refuses the binary, naming the build. (A static link with cgo left on crashes instead, in glibc's resolver.)
 
 `make lint` is the lint CI runs, not an approximation of it: the golangci-lint
 version the generated pre-commit workflow pins (installed under `bin/` on first

@@ -1,7 +1,6 @@
 package lab
 
 import (
-	"slices"
 	"strings"
 	"testing"
 
@@ -19,7 +18,6 @@ const codingReply = "Here is the output:\n```\n" +
 	"AGENTLAB_PROBE fwd-token=loopback\n" +
 	"AGENTLAB_PROBE fwd-dots=400\n" +
 	"AGENTLAB_PROBE fwd-encoded-dots=400\n" +
-	"AGENTLAB_PROBE mcp-config-tokens=0\n" +
 	"AGENTLAB_PROBE fwd-encoded-slash=400\n" +
 	"AGENTLAB_PROBE fwd-unknown=404\n" +
 	"AGENTLAB_PROBE fwd-no-token=401\n" +
@@ -38,7 +36,7 @@ var codingOrigins = []string{"https://github.com", "https://api.github.com"}
 func TestCodingProbePasses(t *testing.T) {
 	p := parseCodingProbe(codingReply)
 	for name, verdict := range map[string]func(codingProbe, []string) (string, error){
-		"uid split": codingProbe.uidSplit, "forwarder": codingProbe.forwarderPaths, "write tool": codingProbe.writeToolRefused, "loopback token": codingProbe.noLoopbackToken,
+		"uid split": codingProbe.uidSplit, "forwarder": codingProbe.forwarderPaths, "write tool": codingProbe.writeToolRefused,
 		"credentials": codingProbe.credentials, "dns": codingProbe.dnsCanary, "egress": codingProbe.egress,
 	} {
 		if got, err := verdict(p, codingOrigins); err != nil || got == "" {
@@ -115,8 +113,6 @@ func TestCodingProbeFailures(t *testing.T) {
 		{"encoded slash forwarded", "fwd-encoded-slash=400", "fwd-encoded-slash=404", codingProbe.forwarderPaths},
 		{"no forwarder", "forwarder=agentlab-coding", "forwarder=", codingProbe.forwarderPaths},
 		{"unknown server refused with the loopback token", "fwd-unknown=404", "fwd-unknown=401", codingProbe.forwarderPaths},
-		{"loopback token", "mcp-config-tokens=0", "mcp-config-tokens=1", codingProbe.noLoopbackToken},
-		{"config unread", "mcp-config-tokens=0", "mcp-config-tokens=unread", codingProbe.noLoopbackToken},
 		{"write tool other error", "write-tool=outside the toolset [preset:read-only]", "write-tool=unauthorized", codingProbe.writeToolRefused},
 		{"write tool answered", "write-tool=outside the toolset [preset:read-only]", "write-tool=answered: {\"result\":{}}", codingProbe.writeToolRefused},
 		{"token in env", "env-tokens=0", "env-tokens=1", codingProbe.credentials},
@@ -305,49 +301,5 @@ func TestCodingProbeValueShapes(t *testing.T) {
 				t.Errorf("%s: %s = %q, want %s", name, key, got[key], codingTestCodeWord)
 			}
 		}
-	}
-}
-
-// The stages a workspace Session without the caller forwarder skips are the
-// two that probe it, on claude alone.
-func TestCodingForwarderStages(t *testing.T) {
-	for name, rt := range codingRuntimes {
-		var forwarder []string
-		for _, s := range (&codingProof{rt: rt}).judgedStages() {
-			if s.forwarder {
-				forwarder = append(forwarder, s.name)
-			}
-		}
-		want := []string(nil)
-		if rt.claude {
-			want = []string{"forwarder paths", "write tool refused"}
-		}
-		if !slices.Equal(forwarder, want) {
-			t.Errorf("%s: forwarder stages %v, want %v", name, forwarder, want)
-		}
-	}
-}
-
-// Without the forwarder the MCP config passes on the placeholder alone.
-func TestCodingProbeNoLoopbackServer(t *testing.T) {
-	reply := strings.Replace(codingReply, "forwarder=agentlab-coding", "forwarder=", 1)
-	got, err := parseCodingProbe(reply).noLoopbackToken(nil)
-	if err != nil || !strings.Contains(got, "no loopback server") {
-		t.Errorf("%q, %v", got, err)
-	}
-}
-
-// A claude workspace Session judges the MCP config's Authorization; a
-// Session without a workspace keeps the loopback token and is not judged.
-func TestCodingLoopbackTokenStage(t *testing.T) {
-	has := func(p *codingProof) bool {
-		return slices.ContainsFunc(p.judgedStages(), func(s judgedStage) bool { return s.name == "no loopback token" })
-	}
-	claude := codingRuntimes["claude"]
-	if !has(&codingProof{rt: claude, rig: &workspaceSessionRig{}}) {
-		t.Error("a claude workspace Session does not judge its MCP config")
-	}
-	if has(&codingProof{rt: claude}) {
-		t.Error("a claude Session without a workspace judges its MCP config")
 	}
 }
