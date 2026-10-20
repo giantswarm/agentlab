@@ -123,14 +123,12 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		inGroup(groupTesting, tenantsTestCmd()),
 		inGroup(groupTesting, toolsetsTestCmd()),
 		inGroup(groupTesting, modelsTestCmd()),
-		inGroup(groupTesting, pmTestCmd()),
 		inGroup(groupTesting, servingTestCmd()),
 		inGroup(groupTesting, vmManagerTestCmd()),
 		inGroup(groupTesting, workspacesTestCmd()),
 		inGroup(groupTesting, workspacesMeasureCmd()),
 		inGroup(groupTesting, codingTestCmd()),
 		inGroup(groupTesting, egressTestCmd()),
-		inGroup(groupTesting, workspacesSignInTestCmd()),
 		inGroup(groupTesting, skillsTestCmd()),
 		inGroup(groupTesting, substrateStepTestCmd()),
 		inGroup(groupTesting, kagentStepTestCmd()),
@@ -155,7 +153,6 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		browserCmd(),
 		slackFakeCmd(),
 		mockLLMCmd(),
-		githubFakeCmd(),
 		skillHostCmd(),
 	)
 	return root
@@ -202,78 +199,6 @@ func mockLLMCmd() *cobra.Command {
 	cmd.Flags().StringVar(&listen, "listen", "0.0.0.0:8080", "address to serve the Responses API on (under /v1)")
 	cmd.Flags().StringVar(&mcpServer, "mcp-server", "", "the RemoteMCPServer whose tools the script's MCP call names")
 	cmd.Flags().StringArrayVar(&watch, "watch", nil, "a name to record each request carrying (repeatable): a skill the runtime presents to the model")
-	return cmd
-}
-
-// githubFakeCmd is the fake GitHub REST API models-test runs in a container
-// on the kind network, where model-manager's pods reach it: plumbing, hidden,
-// never typed by a person.
-func githubFakeCmd() *cobra.Command {
-	var listen, repo, branch string
-	var files []string
-	var workspaces, platformManager bool
-	var ws lab.WorkspaceGitHubOptions
-	cmd := &cobra.Command{
-		Use:    "github-fake",
-		Short:  "Serve a fake GitHub: models-test's REST API, or with --workspaces the workspace proofs' GitHub (run by the proofs, in a container)",
-		Args:   cobra.NoArgs,
-		Hidden: true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
-			defer stop()
-			if platformManager {
-				if workspaces || repo != "" || len(files) > 0 {
-					return fmt.Errorf("--platform-manager serves the registry fixture's repositories: drop --workspaces, --repo and --file")
-				}
-				return lab.ServeRegistryGitHub(ctx, listen)
-			}
-			if workspaces {
-				if repo != "" || len(files) > 0 {
-					return fmt.Errorf("--workspaces serves its fixture's repositories: drop --repo and --file")
-				}
-				ws.Listen = listen
-				return lab.ServeWorkspaceGitHub(ctx, ws)
-			}
-			return lab.ServeFakeGitHub(ctx, listen, repo, branch, files)
-		},
-	}
-	cmd.Flags().StringVar(&listen, "listen", "0.0.0.0:8080", "address to serve the fake GitHub API on")
-	cmd.Flags().StringVar(&repo, "repo", "", "the one repository the fake holds, owner/name")
-	cmd.Flags().StringVar(&branch, "branch", "main", "its base branch")
-	cmd.Flags().StringArrayVar(&files, "file", nil, "a file of the base branch, as <path>=<base64 content> (repeatable)")
-	cmd.Flags().BoolVar(&workspaces, "workspaces", false, "serve the workspace proofs' GitHub over TLS: App, OAuth, listings, git and pull requests (docs/workspaces.md)")
-	cmd.Flags().BoolVar(&platformManager, "platform-manager", false, "serve pm-test's registry fixture to the platform manager, read-only (docs/platform-manager.md)")
-	cmd.Flags().StringVar(&ws.Fixture, "fixture", "", "with --workspaces: the fixture file (default: the embedded one)")
-	cmd.Flags().StringVar(&ws.Credentials, "credentials", "", "with --workspaces: the directory `agentlab github-fake credentials` generated")
-	cmd.Flags().StringVar(&ws.DataDir, "data-dir", "", "with --workspaces: where the bare repositories live (default: a temporary directory)")
-	cmd.Flags().StringSliceVar(&ws.APIHosts, "api-host", nil, "with --workspaces: a host name api.<git host> that serves the REST API at its root, shaped like api.github.com (repeatable)")
-	cmd.Flags().IntVar(&ws.LargeRepoMiB, "large-repo-mib", 0, "with --workspaces: the size of the fixture's generated repositories in MiB (default: the fixture's)")
-	cmd.Flags().StringVar(&ws.TokenStore, "token-store", "", "with --workspaces: a file the users' access and refresh tokens are kept in across restarts (default: memory only)")
-	for _, on := range []bool{true, false} {
-		use, short := "suspend <owner>", "Suspend the App's installation on <owner> in the lab's GitHub, as an organization owner's Suspend on github.com does (the kill-switch runbook's first switch)"
-		if !on {
-			use, short = "unsuspend <owner>", "Unsuspend the App's installation on <owner> in the lab's GitHub"
-		}
-		cmd.AddCommand(&cobra.Command{
-			Use: use, Short: short, Args: cobra.ExactArgs(1),
-			RunE: func(cmd *cobra.Command, args []string) error {
-				cfg, err := loadConfig()
-				if err != nil {
-					return err
-				}
-				return lab.SuspendLabGitHubInstallation(cfg, args[0], on)
-			},
-		})
-	}
-	cmd.AddCommand(labCmd("installations", "List the App's installations in the lab's GitHub, with when each suspended one was suspended", lab.LabGitHubInstallations))
-	cmd.AddCommand(labCmd("credentials", "Generate the workspace fake's TLS pair, App key pair and OAuth client secret under certs/github-fake",
-		func(cfg *config.Config) error {
-			dir, err := lab.EnsureGitHubFakeCredentials(cfg.Platform.Domain)
-			if err == nil {
-				fmt.Println(dir)
-			}
-			return err
-		}))
 	return cmd
 }
 
@@ -1374,11 +1299,11 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().StringSliceVar(&codingHarnesses, "coding-harnesses", nil, fmt.Sprintf("the coding Harnesses rendered with --coding, by runtime (%s; each named after its runtime; default claude alone); codex needs a kagent line whose chart takes runtime codex, omp one whose chart takes runtime byo and an image from --coding-images; \"\" returns to claude alone", strings.Join(config.CodingRuntimes, ", ")))
 	cmd.Flags().BoolVar(&codexHostModel, "codex-host-model", false, fmt.Sprintf("add the extraModels entry %s for the codex Harness: the first of %s the host's Ollama has, on its Responses API (coding-test --harness codex --model-config %s); each needs more memory than a lab proof's host model gets, so configure adds none without this flag", lab.CodexHostModelName, lab.CodexHostModelIDs(), lab.CodexHostModelName))
 	cmd.Flags().StringToStringVar(&codingImages, "coding-images", nil, "the image of a coding Harness the chart has none of its own for, <runtime>=<image@sha256:digest> (repeatable): "+config.CodingRuntimeOmp+"=<the kagent line's omp-harness, runtimeImages.ompHarness.digest of the release's chart>; a dev image (platform.devImages "+config.DevImageOmpHarness+") wins; an empty map clears it")
-	cmd.Flags().StringVar(&workspacesProvider, "workspaces-provider", "", "the workspace-manager's provider instances: fake (the lab's own GitHub, the default), fake-bearer (the same GitHub shaped like github.com, its API on a Bearer host of its own; beside fake), github (a GitHub App of the lab's own, docs/workspaces.md), gitlab (a GitLab's OAuth application, docs/workspaces.md) or several, such as fake,github,gitlab")
-	cmd.Flags().StringVar(&workspacesGrantProvider, "workspaces-grant-provider", "", "the provider instance whose App muster pins the workspace-manager to, the one App a person grants (platform.workspaces.grantProvider): one of --workspaces-provider, such as fake-bearer for 'workspaces-test --part caller-credential' and '--part write'; \"\" returns to the first instance")
+	cmd.Flags().StringVar(&workspacesProvider, "workspaces-provider", "", "the workspace-manager's provider instances: github (a GitHub App of the lab's own, the default, docs/workspaces.md), gitlab (a GitLab's OAuth application, docs/workspaces.md) or both, github,gitlab")
+	cmd.Flags().StringVar(&workspacesGrantProvider, "workspaces-grant-provider", "", "the provider instance whose App muster pins the workspace-manager to, the one App a person grants (platform.workspaces.grantProvider): one of --workspaces-provider, such as gitlab for 'workspaces-test --part gitlab'; \"\" returns to the first instance")
 	cmd.Flags().BoolVar(&workspacesCSICompanion, "workspaces-csi-companion", false, "with workspaces on, the connectivity chart's CSI companion is Substrate's workspace driver: its efs preset running the lab's NFS plugin, the lab's NFS driver serving the volumes under the preset's driver name — the lab path for proving a companion chart change (docs/workspaces.md); --workspaces-csi-companion=false returns to the lab's own registration")
-	cmd.Flags().StringVar(&workspacesCleanupAfter, "workspaces-cleanup-after", "", "how long a Session's directory on a workspace volume outlives its last turn, a Go duration (the workspace-manager's sessions.cleanupAfter); 'workspaces-test --part sessions' needs a window of "+lab.SessionsCleanupWindowRange()+" (such as "+lab.SessionsCleanupWindowExample()+"); \"\" returns to the chart's 30 days")
-	cmd.Flags().StringVar(&workspacesRefreshAfter, "workspaces-refresh-after", "", "the refresh threshold, a Go duration (the workspace-manager's sync.refreshAfter): a Session started on a workspace whose last sync is older requests a sync; 'workspaces-test --part refresh' needs "+lab.RefreshThresholdRange()+" (such as "+lab.RefreshThresholdExample()+"); \"\" returns to the manager's 1h")
+	cmd.Flags().StringVar(&workspacesCleanupAfter, "workspaces-cleanup-after", "", "how long a Session's directory on a workspace volume outlives its last turn, a Go duration (the workspace-manager's sessions.cleanupAfter); \"\" returns to the chart's 30 days")
+	cmd.Flags().StringVar(&workspacesRefreshAfter, "workspaces-refresh-after", "", "the refresh threshold, a Go duration (the workspace-manager's sync.refreshAfter): a Session started on a workspace whose last sync is older requests a sync; \"\" returns to the manager's 1h")
 	cmd.Flags().StringVar(&workspacesGitHubAppID, "workspaces-github-app-id", "", "the App id of the workspaces GitHub App (public; its private key and client secret go into the Secret agent-platform/"+config.WorkspaceGitHubSecretName+")")
 	cmd.Flags().StringVar(&workspacesGitHubClientID, "workspaces-github-client-id", "", "the client id of the workspaces GitHub App (public)")
 	cmd.Flags().StringVar(&workspacesGitHubPrivateKeySource, "workspaces-github-private-key-source", "", "where the workspaces GitHub App's private key is: a reference `beekeeper secret copy` resolves (op://<vault>/<item>/<field>, or <file>#<path> of a SOPS file), never the key; every up and platform place it into the Secret agent-platform/"+config.WorkspaceGitHubSecretName)
@@ -1452,10 +1377,6 @@ func printSaved(cfg *config.Config, disc *lab.Discovery) {
 	}
 	if cfg.WorkspacesEnabled() {
 		fmt.Printf("  workspaces an NFS server on %s and the NFS CSI driver behind its mTLS proxy; the read-write-many StorageClass %s\n", lab.WorkspacesNode(cfg), lab.WorkspacesStorageClass)
-	}
-	if cfg.WorkspaceFakeProvider() {
-		fmt.Printf("  ws-fake    the workspace-manager's provider instance fake: the lab's own GitHub at %s (its App, key pair and client secret the lab's; Secret %s/%s), the App's callback URL %s\n",
-			cfg.GitHubFakeURL(), config.DefaultGitHubSecretNamespace, config.WorkspaceFakeSecretName, lab.WorkspaceAppCallback(cfg))
 	}
 	if cfg.WorkspaceGitHubProvider() {
 		gh := cfg.Platform.Workspaces.GitHub
@@ -1663,7 +1584,7 @@ func modelsTestCmd() *cobra.Command {
 	var opts lab.ModelsTestOptions
 	cmd := &cobra.Command{
 		Use:   "models-test [email]",
-		Short: "Headless managed-models proof: 401 without a token, then pull -> ModelConfig -> dry runs, gitops_owned, a commit as the person on a fake GitHub -> agent turn -> MCP via muster -> unload -> delete (a refused delete + unwire where the server has none)",
+		Short: "Headless managed-models proof: 401 without a token, then pull -> ModelConfig -> dry runs, gitops_owned -> agent turn -> MCP via muster -> unload -> delete (a refused delete + unwire where the server has none)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadProofLab()
@@ -1679,7 +1600,6 @@ func modelsTestCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&opts.Backend, "backend", "", "the backend to prove, one of platform.modelManager.backends (default: the first — model-manager's default backend)")
 	cmd.Flags().StringVar(&opts.Model, "model", "", fmt.Sprintf("the model to pull, small and tool-calling capable (default: %s)", lab.ModelsTestModelDefaults()))
-	cmd.Flags().StringVar(&opts.GitHubFakeBinary, "github-fake-binary", "", "the static Linux agentlab the fake GitHub API container of the commit proof runs on the kind network (default: this binary)")
 	return cmd
 }
 
@@ -1704,29 +1624,6 @@ func servingTestCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.Preset, "preset", "", "the published preset to serve (default: the lab's, "+lab.ServingPresetName+")")
 	cmd.Flags().BoolVar(&opts.SkipChat, "skip-chat", false, "skip the agent turn on the wired ModelConfig")
 	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", lab.DefaultServingReadyTimeout, "how long the model may take to serve: the weights download and the runtime's start")
-	return cmd
-}
-
-func pmTestCmd() *cobra.Command {
-	var opts lab.PMTestOptions
-	cmd := &cobra.Command{
-		Use:   "pm-test [email]",
-		Short: "Headless platform-manager proof (platform.platformManager): the released giantswarm-platform-manager on the lab's registry fixture -> signed in through muster -> reconcile_capability's dry run of an installation with workspaces on -> the kept workspace-manager values",
-		Args:  cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadProofLab()
-			if err != nil {
-				return err
-			}
-			email := cfg.AdminUser().Email
-			if len(args) == 1 {
-				email = args[0]
-			}
-			return lab.PMTest(cfg, email, opts)
-		},
-	}
-	cmd.Flags().StringVar(&opts.GitHubFakeBinary, "github-fake-binary", "", "the static Linux agentlab the registry's container runs on the kind network (default: this binary)")
-	cmd.Flags().StringVar(&opts.Record, "record", "", "write reconcile_capability's dry run to this file (how internal/lab/testdata/platform-manager/dry-run.json is recorded)")
 	return cmd
 }
 
@@ -1757,7 +1654,7 @@ func codingTestCmd() *cobra.Command {
 	var opts lab.CodingTestOptions
 	cmd := &cobra.Command{
 		Use:   "coding-test [email]",
-		Short: "Headless coding agents proof (platform.coding) on one coding Harness (--harness, default claude): the Harness Ready from the platform values (claude: no limits on it) -> validate_agent accepting a toolset with a muster write tool and refusing an origin outside the Harness's list -> Agent Plugins at write time: the upstream example package accepted on every Harness, a public Claude-format plugin refused on codex by validate_agent and create_agent (on kagent skipped until agent-manager checks plugins there) -> a coding agent created through agent-manager as [email] (default the admin) with the example package's skill selected (claude: the Claude-format plugin beside it), Ready on the Harness (codex: its MCP binding's credential from a Secret) -> on a lab with the provider instance fake-bearer, a workspace the Session starts in through start_session -> one turn probing its sandbox: on claude, Claude Code as uid 65532 cannot read the root harness's environment or memory, the caller forwarder refuses dot segments and encoded slashes, muster refuses a write tool outside the toolset through it (both skipped in a workspace Session without the forwarder, where Claude Code calls muster's actor-JWT host directly), and in a workspace Session no Authorization in Claude Code's MCP config but the placeholder (--muster-tools gives the agent a tool selection on muster, as platform agents have); everywhere no forge token or bearer in the environment, /data or /workspace, the model key and MCP credentials placeholders, a DNS canary recorded, a host outside the Agent's origins denied at the egress gate -> the agent has the selected plugin skills and no other (claude: the Claude-format plugin's hook ran, a move to codex through update_agent refused, nothing written) -> an MCP call through the agent's binding listing the agent (in a workspace Session audited by muster as the person) -> a heartbeat one turn starts in the sandbox not running in the gap without a turn and running again in the next (in a workspace Session no muster call of the actor in the gap) -> on claude a repository's instruction files written, the next turn records what Claude Code loaded -> suspend and resume keeping the file and the conversation -> the resumed turn's usage on its task status -> a share of the Session refused -> in a workspace Session, deleted through delete_session: muster unbinds its actor and accepts no call of it after -> update_agent emptying the example package's selection: a new Session's agent without its skill. On codex the model is the in-cluster mockllm (ModelConfig " + lab.MockLLMModelConfig + "), a mock Responses API scripted for these turns, which needs no OpenAI or Bedrock account; --model-config runs a real one",
+		Short: "Headless coding agents proof (platform.coding) on one coding Harness (--harness, default claude): the Harness Ready from the platform values (claude: no limits on it) -> validate_agent accepting a toolset with a muster write tool and refusing an origin outside the Harness's list -> Agent Plugins at write time: the upstream example package accepted on every Harness, a public Claude-format plugin refused on codex by validate_agent and create_agent (on kagent skipped until agent-manager checks plugins there) -> a coding agent created through agent-manager as [email] (default the admin) with the example package's skill selected (claude: the Claude-format plugin beside it), Ready on the Harness (codex: its MCP binding's credential from a Secret) -> one turn probing its sandbox: on claude, Claude Code as uid 65532 cannot read the root harness's environment or memory, the caller forwarder refuses dot segments and encoded slashes, muster refuses a write tool outside the toolset through it (--muster-tools gives the agent a tool selection on muster, as platform agents have); everywhere no forge token or bearer in the environment, /data or /workspace, the model key and MCP credentials placeholders, a DNS canary recorded, a host outside the Agent's origins denied at the egress gate -> the agent has the selected plugin skills and no other (claude: the Claude-format plugin's hook ran, a move to codex through update_agent refused, nothing written) -> an MCP call through the agent's binding listing the agent -> a heartbeat one turn starts in the sandbox not running in the gap without a turn and running again in the next -> on claude a repository's instruction files written, the next turn records what Claude Code loaded -> suspend and resume keeping the file and the conversation -> the resumed turn's usage on its task status -> a share of the Session refused -> update_agent emptying the example package's selection: a new Session's agent without its skill. On codex the model is the in-cluster mockllm (ModelConfig " + lab.MockLLMModelConfig + "), a mock Responses API scripted for these turns, which needs no OpenAI or Bedrock account; --model-config runs a real one",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadProofLab()
@@ -1809,37 +1706,26 @@ func egressTestCmd() *cobra.Command {
 func workspacesMeasureCmd() *cobra.Command {
 	var opts lab.WorkspacesMeasureOptions
 	cmd := &cobra.Command{
-		Use:   "workspaces-measure [email]",
-		Short: "Measure workspaces through muster as [email] (default the admin): two workspaces, a small one and one with a large repository, created and deleted --runs times; the first sync, a no-op and a changed cycle, authorize_workspace, a Session's directory set up through start_session, the on-demand fetch, a first checkout, git status and a build on the workspace volume and on a local disk, the session directory's size, the volume's capacity and use, each mirror against the provider's size (W8's factor 1.5), the headroom max(4 GiB, 50 %) and one online expansion; median, p90 and max per figure, a figure the cluster cannot report listed as not available; JSON and a Markdown table written to the run directory and printed. --kube-context and --muster-url measure another cluster with the platform as the person signed in to its muster, pushing to a scratch branch on the provider with the person's git credentials, deleted afterwards. Lab only: [email] and --large-repo-mib; another cluster refuses them",
-		Args:  cobra.MaximumNArgs(1),
+		Use:   "workspaces-measure",
+		Short: "Measure workspaces on the cluster --kube-context and --muster-url name, through its muster as the person signed in there: two workspaces, a small one and one with a large repository, created and deleted --runs times; the first sync, a no-op and a changed cycle, authorize_workspace, a Session's directory set up through start_session, the on-demand fetch, a first checkout, git status and a build on the workspace volume and on a local disk, the session directory's size, the volume's capacity and use, each mirror against the provider's size (W8's factor 1.5), the headroom max(4 GiB, 50 %) and one online expansion; median, p90 and max per figure, a figure the cluster cannot report listed as not available; JSON and a Markdown table written to the run directory and printed. The pushes go to a scratch branch on the provider with the person's git credentials, deleted afterwards",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) == 1 {
-				opts.Email = args[0]
-			}
-			if opts.KubeContext != "" || opts.MusterURL != "" {
-				return lab.WorkspacesMeasure(nil, opts)
-			}
-			cfg, err := loadProofLab()
-			if err != nil {
-				return err
-			}
-			return lab.WorkspacesMeasure(cfg, opts)
+			return lab.WorkspacesMeasure(opts)
 		},
 	}
 	cmd.Flags().IntVar(&opts.Runs, "runs", lab.DefaultWorkspacesMeasureRuns, "how many times each figure is measured: the workspaces are created and deleted once per run")
-	cmd.Flags().IntVar(&opts.LargeRepoMiB, "large-repo-mib", 0, "the lab: add a repository of this many MiB to the lab's GitHub for the large workspace, removed afterwards (default: the fixture's agentlab-org/monorepo)")
 	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", lab.DefaultWorkspacesReadyTimeout, "how long each wait may take: a cycle, a Session's turn, a probe pod")
 	cmd.Flags().StringVar(&opts.RunDir, "run-dir", "", "where the report is written (default state/workspaces-measure-<time>)")
 	cmd.Flags().StringVar(&opts.GoProxy, "goproxy", "", "the module proxy the build's download goes through, a GOPROXY list (default the git image's, proxy.golang.org)")
-	cmd.Flags().StringVar(&opts.KubeContext, "kube-context", "", "another cluster: the context of your kubeconfig the Kubernetes reads and probe pods use (with --muster-url)")
-	cmd.Flags().StringVar(&opts.MusterURL, "muster-url", "", "another cluster: its muster, as the person `muster auth login --endpoint <url>` signed in (with --kube-context)")
-	cmd.Flags().StringVar(&opts.Organization, "organization", "", "another cluster: the Organization the workspaces belong to")
-	cmd.Flags().StringVar(&opts.Provider, "provider", "", "another cluster: the provider instance the repositories are on")
-	cmd.Flags().StringSliceVar(&opts.SmallRepos, "small-repos", nil, "another cluster: the small workspace's repositories, owner/name; the first is the one checked out and built")
-	cmd.Flags().StringVar(&opts.LargeRepo, "large-repo", "", "another cluster: the large workspace's repository, owner/name")
-	cmd.Flags().StringVar(&opts.AgentgatewayURL, "agentgateway-url", "", "another cluster: its agentgateway, through which the Sessions' turns run (with --agent; without both the Session figures are not available)")
-	cmd.Flags().StringVar(&opts.Agent, "agent", "", "another cluster: the Agent the Sessions start on, namespace/name")
-	cmd.Flags().StringVar(&opts.GitURL, "git-url", "", "another cluster: the provider's git base URL the pushes go to, <url>/<owner>/<name>.git (default https://github.com)")
+	cmd.Flags().StringVar(&opts.KubeContext, "kube-context", "", "the context of your kubeconfig the Kubernetes reads and probe pods use (with --muster-url)")
+	cmd.Flags().StringVar(&opts.MusterURL, "muster-url", "", "the cluster's muster, as the person `muster auth login --endpoint <url>` signed in (with --kube-context)")
+	cmd.Flags().StringVar(&opts.Organization, "organization", "", "the Organization the workspaces belong to")
+	cmd.Flags().StringVar(&opts.Provider, "provider", "", "the provider instance the repositories are on")
+	cmd.Flags().StringSliceVar(&opts.SmallRepos, "small-repos", nil, "the small workspace's repositories, owner/name; the first is the one checked out and built")
+	cmd.Flags().StringVar(&opts.LargeRepo, "large-repo", "", "the large workspace's repository, owner/name")
+	cmd.Flags().StringVar(&opts.AgentgatewayURL, "agentgateway-url", "", "the cluster's agentgateway, through which the Sessions' turns run (with --agent; without both the Session figures are not available)")
+	cmd.Flags().StringVar(&opts.Agent, "agent", "", "the Agent the Sessions start on, namespace/name")
+	cmd.Flags().StringVar(&opts.GitURL, "git-url", "", "the provider's git base URL the pushes go to, <url>/<owner>/<name>.git (default https://github.com)")
 	return cmd
 }
 
@@ -1847,7 +1733,7 @@ func workspacesTestCmd() *cobra.Command {
 	var opts lab.WorkspacesTestOptions
 	cmd := &cobra.Command{
 		Use:   "workspaces-test [email]",
-		Short: "Headless workspace storage proof: the NFS server, the CSI driver and the class in place -> a read-write-many claim bound -> a bare mirror seeded -> two pods on their own session sub-paths with a shared clone each, modes and links intact, isolated, the mirrors read-only -> the whole volume read-only -> the controller endpoint refused without Substrate's client certificate -> the actor-level mount (skipped until the Substrate line carries it) -> a claude Harness Session admitted on the volume with a workspace grant the manager's key set verifies, one headless turn in its own directory (not with --storage-only) -> everything removed. --part sync instead defines workspaces through the workspace-manager as [email] and proves their mirrors: preview, create, the Organization's boundary, the first cycle, a no-op cycle, a push and a force-push fetched alone, a dropped repository's mirror kept while borrowed, update, delete. --part access instead proves the access check at a Session's start as the admin and [email] (default dev@lab.local): connect_required with the sign-in link, connect_provider, refused naming the unreadable repository, the admin's grant and start_session with it, kagent's admission refusing the grant used by another person, an expired one and another workspace's, disconnect_provider revoking at the provider; no Session or actor after any refused start; the latency of authorize_workspace. --part gitlab instead proves the provider instance gitlab against a real GitLab: the picker, connect_provider through GitLab's sign-in, the token exchange, a workspace's mirror, start_session with the clone and no token in the Session, disconnect_provider; it skips without the instance. --part sessions instead starts --sessions Sessions (default 10) at once through start_session as the admin on the sync part's filter workspace after a push since its sync, alternating the claude and the kagent Harness: each in its own directory on the volume with a clone of every repository at its head, the pushed one fetched once per Session and nothing else, each isolated with the mirrors read-only, a deleted Session's directory gone with no cycle requested (at the next cycle before workspace-manager 0.6.0), a Session without a workspace in an empty directory, and after the lab's short cleanup window (configure --workspaces-cleanup-after) every directory removed, SessionsCleanedUp=True and a resumed Session in a fresh directory; the Sessions' timings go to state/workspaces-sessions-report.json. Lab only: the whole command, [email] included, runs against the lab",
+		Short: "Headless workspace storage proof: the NFS server, the CSI driver and the class in place -> a read-write-many claim bound -> a bare mirror seeded -> two pods on their own session sub-paths with a shared clone each, modes and links intact, isolated, the mirrors read-only -> the whole volume read-only -> the controller endpoint refused without Substrate's client certificate -> the actor-level mount (skipped until the Substrate line carries it) -> a claude Harness Session admitted on the volume with a workspace grant the manager's key set verifies, one headless turn in its own directory (not with --storage-only) -> everything removed. --part gitlab instead proves the provider instance gitlab against a real GitLab as the admin and [email] (default dev@lab.local): the picker, connect_provider through GitLab's sign-in, the token exchange, a workspace's mirror, start_session with the clone and no token in the Session, disconnect_provider; it skips without the instance. Lab only: the whole command, [email] included, runs against the lab",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadProofLab()
@@ -1861,36 +1747,15 @@ func workspacesTestCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&opts.StorageOnly, "storage-only", false, "prove the storage alone, without the claude Session admitted on the volume")
-	cmd.Flags().StringVar(&opts.Part, "part", "", "run one part instead of the storage proof: "+strings.Join(lab.WorkspacesParts, ", ")+" (sync: the workspaces defined through the workspace-manager and their mirrors, as [email], default the admin; access: the provider sign-in and the access check at a Session's start, as the admin and [email], default dev@lab.local; gitlab: the provider instance gitlab end to end, skipped without one; sessions: parallel Sessions in their session directories and the cleanup, as the admin; caller-credential: a Session's actor JWT on the Bearer API host of the provider instance fake-bearer and muster's binding of its sandbox removed by delete_session, as the admin; write: git push and gh pr create from a workspace Session on the claude Harness with the workspace App's token from muster, pushes the App may not make refused, as the admin; refresh: a Session start past the workspace-manager's refresh threshold requests a sync without waiting for it, none within it or without a start, as the admin)")
-	cmd.Flags().IntVar(&opts.Sessions, "sessions", 0, fmt.Sprintf("how many Sessions --part sessions starts at once, alternating the claude and the kagent Harness (default %d)", lab.DefaultWorkspacesSessions))
+	cmd.Flags().StringVar(&opts.Part, "part", "", "run one part instead of the storage proof: "+strings.Join(lab.WorkspacesParts, ", ")+" (gitlab: the provider instance gitlab end to end, as the admin and [email], default dev@lab.local; skipped without one)")
 	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", lab.DefaultWorkspacesReadyTimeout, "how long each wait may take: the storage's rollouts, a claim bound, a pod finished, a volume gone, a sync cycle")
 	return cmd
 }
 
-func workspacesSignInTestCmd() *cobra.Command {
-	var opts lab.WorkspacesSignInTestOptions
-	cmd := &cobra.Command{
-		Use:   "workspaces-signin-test",
-		Short: "Headless workspace-manager provider sign-in proof, the person's grant held by muster: a developer without it gets muster's sign-in link -> the admin and the developer grant the lab GitHub's App by the browser's walk (core_auth_login's link -> the fake's consent -> muster's callback), list_providers showing each connected -> a workspace over agentlab-org/platform-api and platform-infra created and synced -> authorize_workspace granted for the admin and refused naming platform-infra for the developer -> the workspace deleted, both grants dropped",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadProofLab()
-			if err != nil {
-				return err
-			}
-			return lab.WorkspacesSignInTest(cfg, opts)
-		},
-	}
-	cmd.Flags().StringVar(&opts.Provider, "provider", "fake", "the provider instance whose App the people grant (the lab's GitHub, the one muster pins the workspace-manager to)")
-	cmd.Flags().DurationVar(&opts.SyncTimeout, "sync-timeout", lab.DefaultWorkspacesSignInSyncTimeout, "how long the workspace's first sync may take")
-	return cmd
-}
-
 func agentsGitOpsTestCmd() *cobra.Command {
-	var opts lab.AgentsGitOpsTestOptions
-	cmd := &cobra.Command{
+	return &cobra.Command{
 		Use:   "agents-gitops-test [email]",
-		Short: "Headless proof of editing an agent applied from git, as the portal does it: validate_agent refuses mode apply (gitops_owned) and validates mode commit, update_agent mode commit opens the pull request as the person on a fake GitHub, the live release untouched",
+		Short: "Headless proof of an agent applied from git, as the portal sees it: managed gitops, validate_agent refuses mode apply (gitops_owned) and mode commit (unsupported on the platform's agent-manager, which no GitHub App pins), update_agent refused, the live release untouched",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
@@ -1901,11 +1766,9 @@ func agentsGitOpsTestCmd() *cobra.Command {
 			if len(args) == 1 {
 				email = args[0]
 			}
-			return lab.AgentsGitOpsTest(cfg, email, opts)
+			return lab.AgentsGitOpsTest(cfg, email)
 		},
 	}
-	cmd.Flags().StringVar(&opts.GitHubFakeBinary, "github-fake-binary", "", "the static Linux agentlab the fake GitHub API container runs on the kind network (default: this binary)")
-	return cmd
 }
 
 func agentsTestCmd() *cobra.Command {
@@ -2111,7 +1974,7 @@ func klausGatewayTestCmd() *cobra.Command {
 	var opts lab.KlausGatewayTestOptions
 	cmd := &cobra.Command{
 		Use:   "klaus-gateway-test [email]",
-		Short: "Headless Swarmgeist proof (kagent API v2) through the Slack adapter: klaus-gateway runs on the host against the lab's edge (A2A v1 over gRPC, TLS with the lab CA, JWT at the edge) with a fake Slack Web API, signed Events API messages and Block Kit clicks, the user linked by a record in its OBO link store that carries the user's Dex id_token — `@bot agents` lists the Agent (one on a Harness that does not exist hidden there and in the picker its Select button opens, and refused), an unlinked person is asked to sign in, one branded turn attributed to the person at muster, Approve and Deny on the approval card, `stop` cancelled server-side, a restart on the stores that keeps the thread → Session mapping, a restart mid-turn with the edge out of reach for 45 s whose answer is still posted, a restart mid-sign-in that replays the parked message and one mid-approval whose Approve resumes the paused task; with platform.klausGateway on, the meta chart's in-cluster component too — the Role scoped to the OBO link Secret, two links seeded through the store package, the pod deleted and its replacement Ready with the same links, one Slack turn through the pod; with --workspaces, the workspace a thread's Session works in",
+		Short: "Headless Swarmgeist proof (kagent API v2) through the Slack adapter: klaus-gateway runs on the host against the lab's edge (A2A v1 over gRPC, TLS with the lab CA, JWT at the edge) with a fake Slack Web API, signed Events API messages and Block Kit clicks, the user linked by a record in its OBO link store that carries the user's Dex id_token — `@bot agents` lists the Agent (one on a Harness that does not exist hidden there and in the picker its Select button opens, and refused), an unlinked person is asked to sign in, one branded turn attributed to the person at muster, Approve and Deny on the approval card, `stop` cancelled server-side, a restart on the stores that keeps the thread → Session mapping, a restart mid-turn with the edge out of reach for 45 s whose answer is still posted, a restart mid-sign-in that replays the parked message and one mid-approval whose Approve resumes the paused task; with platform.klausGateway on, the meta chart's in-cluster component too — the Role scoped to the OBO link Secret, two links seeded through the store package, the pod deleted and its replacement Ready with the same links, one Slack turn through the pod",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadProofLab()
@@ -2133,7 +1996,6 @@ func klausGatewayTestCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the fixture runs on (default: default-model-config, the Anthropic one the lab renders)")
 	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", 0, "how long the fixture's golden boot may take to reach Ready on the Harness (default 10m)")
 	cmd.Flags().StringVar(&opts.RunDir, "run-dir", "", "directory for the gateway's stores, keys and log, kept afterwards (default: a temporary directory, removed)")
-	cmd.Flags().BoolVar(&opts.Workspaces, "workspaces", false, "add the workspaces steps, the workspace a thread's Session works in, on a lab with the workspace-manager (`configure --workspaces`): a new thread asked once and its Session in its session directory, two more turns and a restart asking nothing, No workspace, the slash command's picker and its Workspace select preset, a workspace refused naming the repository with no Session, a collaborator refused privately; without the workspace-manager it fails before anything runs")
 	return cmd
 }
 

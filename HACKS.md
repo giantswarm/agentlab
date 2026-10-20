@@ -931,9 +931,9 @@ the post-renderer against a synthetic Helm release.
 On an SELinux-enforcing host (Fedora) under a rootful engine (Podman through
 `sudo`), a container's process may not read or execute a bind-mounted file
 labelled `user_home_t`, and every lab container bind-mounts one: the fakes
-(the lab's GitHub, the skill host, the mockllm) run agentlab's own binary
+(the skill host, the fake Slack Web API, the mockllm) run agentlab's own binary
 from the user's home, beekeeper and klaus-gateway mount a run directory and
-the lab CA. The fake exits at once and `up` stops at the lab's GitHub with no
+the lab CA. The container exits at once and the step that started it stops with no
 log. **Fix:** `dockerRun` passes `--security-opt label=disable` to every
 `docker run`. Relabelling (`:z`) would change the user's own files and is
 undone by the next `self-update`; the lab's containers are throwaway

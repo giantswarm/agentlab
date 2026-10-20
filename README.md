@@ -75,13 +75,8 @@ trusting the same issuer.
   workspace grant the workspace-manager's key set verifies. With
   `platform.workspaces.csiCompanion` the connectivity chart's CSI companion
   mounts the volumes for Substrate instead, the lab's path for proving a
-  companion change. `agentlab github-fake --workspaces` serves the lab's own
-  GitHub for the workspace proofs.
-- **Platform manager.** With `platform.platformManager` (off by default), a
-  fixture for giantswarm-platform-manager: an invented installation with the
-  agent platform and workspaces on, in a registry the lab serves; `agentlab
-  pm-test` installs the released manager against it and proves its dry run
-  keeps the workspace-manager values (see [Platform manager](docs/platform-manager.md)).
+  companion change. The workspace-manager's provider instances are a GitHub
+  App of the lab's own and a GitLab; a person grants the App in a browser.
 - **VMs.** vm-manager, the platform's VM provisioner, as a pod of the KVM
   node (the chart's `components.vm-manager`) registered with muster as
   `x_vm-manager_*`: VMs with an instance metadata service, a vTPM and
@@ -231,7 +226,7 @@ check above.
 | [Observability](docs/observability.md) | Prometheus + mcp-prometheus, and Backstage's metrics views |
 | [Backstage](docs/backstage.md) | The human frontend: the muster plugin, agents and models in the portal, the agent create flow |
 | [Identity](docs/identity.md) | Users and groups, the shared issuer, the Dex version, wiring another app, `trustedPeers` |
-| [Workspaces](docs/workspaces.md) | The workspace storage switch (the NFS server, the NFS CSI driver behind its mTLS proxy, the read-write-many class, the proof) and the lab's GitHub for the workspace proofs: the fixture's App, repositories and users, OAuth with PKCE and rotating refresh tokens, git over smart HTTP, `gh pr create`, the request log |
+| [Workspaces](docs/workspaces.md) | The workspace storage switch (the NFS server, the NFS CSI driver behind its mTLS proxy, the read-write-many class, the proof) and the workspace-manager's provider instances, a GitHub App of the lab's own and a GitLab |
 | [GitHub sign-in](docs/github-signin.md) | GitHub as a second way into the lab: the App and its callback, the client secret placed as a Secret, what a GitHub user is in the lab |
 | [Troubleshooting](docs/troubleshooting.md) | The gotchas that cost time |
 | [Usage data](docs/telemetry.md) | The anonymous usage signals — one per command, one per platform install naming the chart line — and how to opt out |

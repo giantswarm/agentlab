@@ -55,7 +55,7 @@ const (
 	workspacesHarnessWorkspace = "agentlab-workspaces-test"
 	// workspacesHarnessRepository is the mirror the volume holds, as the
 	// workspace sync names it: <owner>/<repository>.
-	workspacesHarnessRepository = "agentlab-org/platform-api"
+	workspacesHarnessRepository = "agentlab/platform-api"
 	// workspacesHarnessOwnFile is the file the Session's turn writes into its
 	// own directory, read back from the volume.
 	workspacesHarnessOwnFile = "agentlab-probe"
@@ -374,7 +374,7 @@ func proveWorkspacesHarnessSession(cfg *config.Config, timeout time.Duration) (s
 
 // workspacesHarnessMirrorScript lays the mirror out under
 // mirrors/<owner>/<repository>.git, from the seed's repository.
-const workspacesHarnessMirrorScript = workspacesGitSetup + `mkdir -p /workspace/` + workspacesTestMirrors + `/agentlab-org
+const workspacesHarnessMirrorScript = workspacesGitSetup + `mkdir -p /workspace/` + workspacesTestMirrors + `/agentlab
 git clone -q --bare /workspace/` + workspacesTestMirrors + `/` + workspacesTestRepo + ` /workspace/` + workspacesTestMirrors + `/` + workspacesHarnessRepository + `.git
 echo "mirror ` + workspacesTestMirrors + `/` + workspacesHarnessRepository + `.git at $(git -C /workspace/` + workspacesTestMirrors + `/` + workspacesHarnessRepository + `.git rev-parse --short HEAD)"
 `

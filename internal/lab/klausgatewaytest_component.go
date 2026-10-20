@@ -231,11 +231,10 @@ func klausGatewayComponentProof(cfg *config.Config, token string, identity linke
 	note("pod %s Ready %s after the deletion; %s read %d links from %s at start; both records still read back unchanged", out.replacement, out.elapsed, out.version, out.links, klausGatewayLinksSecret)
 
 	step("9. One Slack turn through the component: %s holds the grant of the workspace-manager's App, a port-forward to pod %s, a signed mention as %s answered in the fake thread over the in-cluster target %s", user.Email, out.replacement, slackUser, klausGatewayInClusterTarget)
-	granted, dropGrant, err := grantWorkspaceManager(cfg, user)
+	granted, err := grantWorkspaceManager(cfg, user)
 	if err != nil {
 		return nil, err
 	}
-	defer dropGrant()
 	note("%s and the workspace-manager's App: %s", user.Email, granted)
 	local, stopForward, err := portForwardPod(ctx, platformNamespace, out.replacement, gatewayHTTPPort)
 	if err != nil {
@@ -310,45 +309,35 @@ func (p *slackProof) sayPastWorkspace(t *slackThread, text string) (*slackTurn, 
 	return p.awaitTurn(t, before)
 }
 
-// grantWorkspaceManager has the person whose link step 7 wrote hold the
-// grant of the App muster pins the workspace-manager to, whatever an earlier
-// step or run left: a gateway that lists the person's workspaces for a new
-// thread (klaus-gateway 4.9.0 and later) holds a listing muster answers with
-// its sign-in challenge behind the workspace-manager's Connect prompt, and
-// step 9's turn never runs. It returns how, worded, and drop, which gives
-// back a grant this step made (a no-op otherwise). A grant of a real
-// provider's App takes a browser, so a person without one gets its sign-in
-// link in the error.
-func grantWorkspaceManager(cfg *config.Config, user *config.User) (string, func(), error) {
-	none := func() {}
+// grantWorkspaceManager checks that the person whose link step 7 wrote
+// holds the grant of the App muster pins the workspace-manager to: a gateway
+// that lists the person's workspaces for a new thread (klaus-gateway 4.9.0
+// and later) holds a listing muster answers with its sign-in challenge
+// behind the workspace-manager's Connect prompt, and step 9's turn never
+// runs. It returns how, worded. The grant of a provider's App takes a
+// browser, so a person without one gets its sign-in link in the error.
+func grantWorkspaceManager(cfg *config.Config, user *config.User) (string, error) {
 	if reason, err := workspaceManagerSkip(cfg); err != nil {
-		return "", nil, err
+		return "", err
 	} else if reason != "" {
-		return "no grant needed, " + reason, none, nil
+		return "no grant needed, " + reason, nil
 	}
 	pinned, err := workspaceManagerPinnedProvider(cfg)
 	if err != nil {
-		return "no grant needed, the workspace-manager is pinned to no provider App", none, nil
+		return "no grant needed, the workspace-manager is pinned to no provider App", nil
 	}
 	p, err := openWorkspacePerson(cfg, user)
 	if err != nil {
-		return "", nil, err
+		return "", err
 	}
 	link, err := p.grantLink()
 	if err != nil {
-		return "", nil, err
+		return "", err
 	}
 	if link == "" {
-		return "already granted", none, nil
+		return "already granted", nil
 	}
-	if pinned != config.WorkspaceProviderFake && pinned != config.WorkspaceProviderFakeBearer {
-		return "", nil, fmt.Errorf("%s has not granted the App of %s, which muster pins the workspace-manager to and no headless walk grants, so the component would hold step 9's thread behind its Connect prompt: sign in once at %s", user.Email, pinned, link)
-	}
-	hops, err := connectWorkspaceProvider(cfg, p, pinned)
-	if err != nil {
-		return "", nil, err
-	}
-	return "granted for the turn and dropped after it: " + hops, func() { p.disconnect(pinned) }, nil
+	return "", fmt.Errorf("%s has not granted the App of %s, which muster pins the workspace-manager to and no headless walk grants, so the component would hold step 9's thread behind its Connect prompt: sign in once at %s", user.Email, pinned, link)
 }
 
 // assertStoreDeployment checks the Deployment runs the Secret link store: the
@@ -657,4 +646,22 @@ func storeReadyLinks(logs string) (int, error) {
 		return *rec.Links, nil
 	}
 	return 0, fmt.Errorf("no %s record in the gateway's log", storeReadyRecord)
+}
+
+// The gateway's Block Kit ids of the workspace prompt a new thread may get:
+// its select and its No workspace button.
+const (
+	slackWorkspaceSelect = "workspace_select"
+	slackWorkspaceNone   = "workspace_none"
+)
+
+// workspacePromptIn is the thread's workspace prompt: a message carrying the
+// workspace select.
+func workspacePromptIn(msgs []slackMessage) (slackMessage, bool) {
+	for _, m := range msgs {
+		if _, found := m.action(slackWorkspaceSelect); found {
+			return m, true
+		}
+	}
+	return slackMessage{}, false
 }

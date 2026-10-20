@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -398,4 +399,11 @@ func readSessionAdmission(ctx context.Context) string {
 	}
 	return fmt.Sprintf("Session admission: kagent trusts %s (issuer %s), %s, %s",
 		cm.Data[admissionJWKSURLKey], cm.Data[admissionIssuerKey], key, harness)
+}
+
+// randomHex is n random bytes, hex-encoded.
+func randomHex(n int) string {
+	b := make([]byte, n)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }

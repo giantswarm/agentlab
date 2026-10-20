@@ -47,20 +47,13 @@ import (
 //     which the controller hands the runtime as kagent's placeholder: every
 //     Secret key it names is there. A binding with none, a platform line that
 //     ships no Secret-backed credential, skips the stage.
-//  4. On a lab with the provider instance fake-bearer, a workspace of one
-//     repository as the person; the Session starts in it through
-//     agent-manager's start_session with the person's grant
-//     (codingworkspace.go). Elsewhere the stage skips and the Session starts
-//     without a workspace.
-//  5. One Session, one turn whose shell tool probes the sandbox; its lines
+//  4. One Session, one turn whose shell tool probes the sandbox; its lines
 //     are judged stage by stage. On claude: Claude Code runs as the
 //     unprivileged uid and cannot read the harness's environment or memory;
 //     the caller forwarder refuses dot segments and encoded slashes, answers
 //     404 for a server it does not front and 401 without its token; a write
 //     tool outside the agent's toolset is refused by muster through the
-//     forwarder with the turn's bearer. A workspace Session whose Claude Code
-//     calls muster's actor-JWT host directly runs no forwarder: its two
-//     forwarder stages skip. On every Harness: no forge token or
+//     forwarder with the turn's bearer. On every Harness: no forge token or
 //     bearer in the environment, /data or /workspace, the model key and
 //     every MCP credential a placeholder; a DNS lookup of a name outside the
 //     allowlist recorded (through the cluster resolver and directly); a host
@@ -69,30 +62,25 @@ import (
 //     ones and no other (on the mockllm, the requests the runtime sent carry
 //     the selected skill); on claude the Claude-format package's hook ran,
 //     and update_agent moving the agent to codex refused, nothing written.
-//  6. An MCP call: the agent calls agent-manager's list_agents through its
-//     binding and finds itself listed; in a workspace Session muster audits
-//     the call as the person the Session's sandbox actor is bound to.
-//  7. The turn gap (codingturngap.go): a heartbeat one turn starts in the
-//     sandbox does not run between turns and runs again in the next; in a
-//     workspace Session muster audits no call of the actor in the gap.
-//  8. On claude, the instruction-file fixture: one turn writes a
+//  5. An MCP call: the agent calls agent-manager's list_agents through its
+//     binding and finds itself listed.
+//  6. The turn gap (codingturngap.go): a heartbeat one turn starts in the
+//     sandbox does not run between turns and runs again in the next.
+//  7. On claude, the instruction-file fixture: one turn writes a
 //     repository's instruction sources into the Session's directory
 //     (CLAUDE.md, AGENTS.md, .claude settings with a hook and
 //     permissions.allow, a skill, a subagent, a command, .mcp.json), the next
 //     records what Claude Code loaded. Elsewhere one turn writes the file the
 //     resume reads back.
-//  9. Suspend and resume: the Session suspended to the snapshot store and
+//  8. Suspend and resume: the Session suspended to the snapshot store and
 //     resumed; a turn reads the first turn's file and recalls its code word.
-// 10. Usage: the resumed turn's task status carries its usage.
-// 11. A share of the Session refused: a colleague's turn in a coding agent's
+//  9. Usage: the resumed turn's task status carries its usage.
+// 10. A share of the Session refused: a colleague's turn in a coding agent's
 //     Session would run under code the first sender's turns left.
-// 12. In a workspace Session, after delete: the Session deleted through
-//     agent-manager's delete_session, muster unbinds its actor and accepts
-//     no call of it after.
-// 13. The empty selection: update_agent with the example package's selection
+// 11. The empty selection: update_agent with the example package's selection
 //     empty, the agent Ready on a new revision, a new Session's agent
 //     without its skill.
-// 14. On codex without --model-config, the model: every model call of the
+// 12. On codex without --model-config, the model: every model call of the
 //     turns answered by the in-cluster mockllm's script (mockllm.go).
 //
 // The agents and Sessions are removed on every exit path.
@@ -321,9 +309,6 @@ type codingProof struct {
 	// noMCPCredential is why the secret-backed credential stage skipped:
 	// the runtime's binding carries no credential on the line.
 	noMCPCredential string
-	// rig starts the Session in a workspace (codingworkspace.go); nil on a
-	// lab without the provider instance fake-bearer.
-	rig *workspaceSessionRig
 	// musterTools is the agent's tool selection on muster; empty is none.
 	musterTools []string
 	// harnesses are the Harnesses of the agents' namespace.
@@ -463,11 +448,6 @@ func (p *codingProof) run() error {
 		}
 	}
 
-	p.stages.begin("workspace", "A workspace %s of %s on the provider instance %s, as %s, for the Session to start in", codingTestWorkspace, syncMovingRepo, config.WorkspaceProviderFakeBearer, p.user.Email)
-	if err := p.setupWorkspace(); err != nil {
-		return err
-	}
-
 	p.stages.begin("sandbox turn", "A Session of %s as %s, one turn whose %s probes the sandbox", codingTestAgent, p.user.Email, p.rt.shellTool)
 	session, err := p.createSession(ctx, codingTestAgent)
 	if err != nil {
@@ -485,10 +465,6 @@ func (p *codingProof) run() error {
 
 	for _, judged := range p.judgedStages() {
 		p.stages.begin(judged.name, "%s", judged.title)
-		if judged.forwarder && p.rig != nil && probe["forwarder"] == "" {
-			p.stages.skip("no caller forwarder in a workspace Session: Claude Code calls muster's actor-JWT host directly and the egress gateway sets the Actor's JWT (no loopback token judges its MCP config, the mcp call stage muster's audit of the person); %s", p.line)
-			continue
-		}
 		verdict, err := judged.verdict(probe, egress)
 		if err != nil {
 			return fmt.Errorf("%s: %w; the reply: %q", p.line, err, excerpt(reply, 1200))
@@ -526,17 +502,8 @@ func (p *codingProof) run() error {
 	reply = mcpTurn.reply
 	called := firstNonEmpty(mcpTurn.probe["mcp-call"], mcpTurn.toolOutput(codingTestReadTool), mcpTurn.toolOutput(musterCallTool))
 	switch {
-	case strings.Contains(called, codingTestAgent) && p.rig != nil:
-		note("%s listed: %s", codingTestReadTool, excerpt(called, 240))
-		verdict, err := p.musterAudit(session.GetId())
-		if err != nil {
-			return fmt.Errorf("%w (%s)", err, p.line)
-		}
-		note("%s", verdict)
 	case strings.Contains(called, codingTestAgent):
 		note("%s listed: %s", codingTestReadTool, excerpt(called, 240))
-	case p.rig != nil:
-		return fmt.Errorf("%s through the agent's binding on Harness %s answered %q in a workspace Session, wanted a list naming %s: the egress gateway sets the Actor's JWT on muster's host, so muster serves the call as the person; the reply: %q (%s)", codingTestReadTool, harness, called, codingTestAgent, excerpt(reply, 400), p.line)
 	case p.noMCPCredential != "":
 		// The binding carries no credential on this line: muster answers
 		// the runtime's MCP connection 401, and the runtime has none of the
@@ -546,7 +513,7 @@ func (p *codingProof) run() error {
 		return fmt.Errorf("%s through the agent's binding on Harness %s answered %q, wanted a list naming %s; the reply: %q (%s)", codingTestReadTool, harness, called, codingTestAgent, excerpt(reply, 400), p.line)
 	}
 
-	p.stages.begin("turn gap", "A heartbeat the turn starts in the sandbox does not run in the %s without a turn and runs again in the next; in a workspace Session muster audits no call of the actor in the gap", codingTurnGap)
+	p.stages.begin("turn gap", "A heartbeat the turn starts in the sandbox does not run in the %s without a turn and runs again in the next", codingTurnGap)
 	if err := p.proveTurnGap(ctx, session); err != nil {
 		return err
 	}
@@ -584,13 +551,6 @@ func (p *codingProof) run() error {
 
 	p.stages.begin("share refused", "A read-write share of the %s Session refused: a collaborator's turn would run under what the first sender's turns left", harness)
 	if err := p.shareRefused(ctx, session); err != nil {
-		return err
-	}
-
-	p.stages.begin("after delete", "The Session deleted through agent-manager's delete_session: muster unbinds its actor and accepts no call of it after")
-	if p.rig == nil {
-		p.stages.skip("no workspace Session on this lab: muster bound no actor of it to unbind")
-	} else if err := p.proveAfterDelete(ctx, session); err != nil {
 		return err
 	}
 
@@ -634,13 +594,10 @@ func (p *codingProof) mockAnswered() error {
 	return nil
 }
 
-// judgedStage is one verdict on the sandbox turn's readings. A forwarder
-// stage probes the caller forwarder, which a workspace Session on a line
-// that sends Claude Code to muster's actor-JWT host directly does not run.
+// judgedStage is one verdict on the sandbox turn's readings.
 type judgedStage struct {
 	name, title string
 	verdict     func(codingProbe, []string) (string, error)
-	forwarder   bool
 }
 
 // judgedStages are the verdicts on the sandbox turn for the runtime: Claude
@@ -649,18 +606,15 @@ func (p *codingProof) judgedStages() []judgedStage {
 	var stages []judgedStage
 	if p.rt.claude {
 		stages = append(stages,
-			judgedStage{"uid split", "Claude Code as uid " + claudeUnprivilegedUID + " cannot read the root harness's environment or memory", codingProbe.uidSplit, false},
-			judgedStage{"forwarder paths", "The caller forwarder refuses dot segments and encoded slashes before it matches a server", codingProbe.forwarderPaths, true},
-			judgedStage{"write tool refused", "A write tool outside the toolset, called through the forwarder with the turn's bearer, refused by muster", codingProbe.writeToolRefused, true},
+			judgedStage{"uid split", "Claude Code as uid " + claudeUnprivilegedUID + " cannot read the root harness's environment or memory", codingProbe.uidSplit},
+			judgedStage{"forwarder paths", "The caller forwarder refuses dot segments and encoded slashes before it matches a server", codingProbe.forwarderPaths},
+			judgedStage{"write tool refused", "A write tool outside the toolset, called through the forwarder with the turn's bearer, refused by muster", codingProbe.writeToolRefused},
 		)
-		if p.rig != nil {
-			stages = append(stages, judgedStage{"no loopback token", "In a workspace Session Claude Code's MCP config carries no Authorization but the placeholder", codingProbe.noLoopbackToken, false})
-		}
 	}
 	return append(stages,
-		judgedStage{"credentials", "No forge token or bearer in the environment or /data; the model key and the MCP credentials placeholders", codingProbe.credentials, false},
-		judgedStage{"dns canary", "A lookup of " + codingTestDNSCanary + ", outside the allowlist, recorded", codingProbe.dnsCanary, false},
-		judgedStage{"egress", "A host outside the Agent's origins denied at the egress gate, an origin of its list reached", codingProbe.egress, false},
+		judgedStage{"credentials", "No forge token or bearer in the environment or /data; the model key and the MCP credentials placeholders", codingProbe.credentials},
+		judgedStage{"dns canary", "A lookup of " + codingTestDNSCanary + ", outside the allowlist, recorded", codingProbe.dnsCanary},
+		judgedStage{"egress", "A host outside the Agent's origins denied at the egress gate, an origin of its list reached", codingProbe.egress},
 	)
 }
 
@@ -851,11 +805,8 @@ func (p *codingProof) proveBinding(toolset []string) error {
 }
 
 // createSession is a Session of the agent as the person, tracked for
-// removal: in the workspace where the lab offers one.
+// removal.
 func (p *codingProof) createSession(ctx context.Context, agent string) (*apiv1alpha1.Session, error) {
-	if p.rig != nil {
-		return p.startWorkspaceSession(agent)
-	}
 	ctx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
 	session, err := p.api.createSession(ctx, agent, uuid.NewString())
@@ -971,11 +922,6 @@ func (p *codingProof) cleanup() {
 		p.sessions.removeAll()
 	}
 	p.removeAgents()
-	if p.rig != nil {
-		if err := p.rig.cleanup(); err != nil {
-			warn("removing the workspace Session's workspace: %v", err)
-		}
-	}
 	if p.mockBinary != "" || p.mockModelPlaced {
 		p.mock.close()
 		removeMockLLMModelConfig()

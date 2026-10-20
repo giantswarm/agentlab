@@ -661,7 +661,7 @@ func substrateShipped(ctx context.Context, cfg *config.Config) (bool, error) {
 	if cfg.LegacyChart() {
 		return false, nil
 	}
-	gvr, err := gvrFor(helmReleaseResource)
+	gvr, err := gvrFor(fluxHelmReleaseResource)
 	if err != nil {
 		return false, err
 	}

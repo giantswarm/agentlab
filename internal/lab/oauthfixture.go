@@ -18,6 +18,14 @@ import (
 	"github.com/giantswarm/agentlab/internal/config"
 )
 
+// Words of OAuth's requests and answers.
+const (
+	oauthClientID    = "client_id"
+	oauthRedirectURI = "redirect_uri"
+	oauthCodeParam   = "code"
+	oauthStateParam  = "state"
+)
+
 // The per-server OAuth sign-in fixture.
 //
 // Every downstream the lab aggregates (mcp-kubernetes, mcp-prometheus,

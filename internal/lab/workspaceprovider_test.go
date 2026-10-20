@@ -3,7 +3,6 @@ package lab
 import (
 	"context"
 	"maps"
-	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -120,70 +119,6 @@ func checkGolden(t *testing.T, name string, block map[string]any) {
 	}
 }
 
-// With workspaces on and nothing named, the fake is the one instance: the
-// lab's GitHub at its URL (the API under /api/v3 is the kind's derivation),
-// the embedded fixture's App and client, each credential a reference to
-// the lab's Secret; the manager trusts the lab CA for it; CoreDNS sends its
-// name to its Service; the base URL carries the gateway port, the lab Dex
-// lists none of the manager's routes and the App's one callback is muster's.
-func TestWorkspaceFakeProviderDefault(t *testing.T) {
-	stubWorkspacesProbe(t, true)
-	cfg := workspaceLab("")
-	const base = "https://workspace-manager.127.0.0.1.nip.io:8443"
-	if got := cfg.WorkspaceManagerBaseURL(); got != base {
-		t.Fatalf("base URL %s, want %s", got, base)
-	}
-	if got, want := cfg.GitHubFakeURL(), "https://github.127.0.0.1.nip.io"; got != want {
-		t.Fatalf("the fake's URL %s, want %s (port-free: pods reach its Service on 443)", got, want)
-	}
-	values, _, dex, coredns := renderWorkspaceTemplates(t, cfg, nil)
-	wm, providers := workspaceManagerBlock(t, values)
-	oauth, _ := wm["oauth"].(map[string]any)
-	if oauth["baseURL"] != base {
-		t.Fatalf("workspace-manager.oauth.baseURL = %v, want %s", oauth["baseURL"], base)
-	}
-	u, err := url.Parse(base)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if u.Hostname() != "workspace-manager."+cfg.Platform.Domain {
-		t.Errorf("route host %s, want workspace-manager.%s", u.Hostname(), cfg.Platform.Domain)
-	}
-	if len(providers) != 1 || providers[0]["name"] != config.WorkspaceProviderFake || providers[0]["kind"] != config.WorkspaceProviderGitHub {
-		t.Fatalf("providers %v, want the fake instance of the github kind", wm["providers"])
-	}
-	fixture, err := loadGitHubFixture("")
-	if err != nil {
-		t.Fatal(err)
-	}
-	v, _ := providers[0]["values"].(map[string]any)
-	app, _ := v["app"].(map[string]any)
-	appOAuth, _ := v["oauth"].(map[string]any)
-	if v["url"] != cfg.GitHubFakeURL() {
-		t.Errorf("url = %v, want %s", v["url"], cfg.GitHubFakeURL())
-	}
-	if _, set := v["apiURL"]; set {
-		t.Errorf("apiURL set to %v: the kind derives <url>/api/v3 itself", v["apiURL"])
-	}
-	if app["id"] != "1" || appOAuth["clientID"] != fixture.App.ClientID {
-		t.Errorf("app %v, oauth %v: want the embedded fixture's App %d and client %s", app, appOAuth, fixture.App.ID, fixture.App.ClientID)
-	}
-	wantSecretRef(t, "app.privateKey", app["privateKey"], config.WorkspaceFakeSecretName, config.WorkspaceGitHubPrivateKeyKey)
-	wantSecretRef(t, "oauth.clientSecret", appOAuth["clientSecret"], config.WorkspaceFakeSecretName, config.GitHubClientSecretKey)
-	env, _ := wm["extraEnv"].([]any)
-	if len(env) != 1 {
-		t.Fatalf("extraEnv %v, want the one entry that names the lab CA", wm["extraEnv"])
-	}
-	if e, _ := env[0].(map[string]any); e["name"] != "SSL_CERT_FILE" || e["value"] != "/etc/workspace-manager/idp-ca/ca.crt" {
-		t.Errorf("extraEnv %v, want SSL_CERT_FILE naming the mounted Dex CA (the lab CA)", e)
-	}
-	if !strings.Contains(coredns, `name regex ^github\.127\.0\.0\.1\.nip\.io\. `+labGitHubService+".agent-platform.svc.cluster.local") {
-		t.Errorf("CoreDNS does not send %s to the fake's Service:\n%s", config.GitHubFakeHost(cfg.Platform.Domain), coredns)
-	}
-	wantNoManagerSignIn(t, cfg, dex)
-	checkGolden(t, "fake", wm)
-}
-
 // wantNoManagerSignIn asserts the person's provider sign-in is muster's: the
 // lab Dex lists no route of the workspace-manager, and every instance's App
 // registers muster's proxy callback alone.
@@ -197,30 +132,30 @@ func wantNoManagerSignIn(t *testing.T, cfg *config.Config, dex string) {
 	}
 }
 
-// With the github instance alone, the values forward the base URL, no
+// With workspaces on and nothing named, github is the one instance; alone
+// or named, the values forward the base URL (the gateway port in it), no
 // instance renders while the App's ids are empty (the workspace-manager
-// refuses one without them at start-up), nothing names the lab CA and
-// CoreDNS leaves the fake's name to the wildcard.
+// refuses one without them at start-up), the lab Dex lists none of the
+// manager's routes and the App's one callback is muster's.
 func TestWorkspaceGitHubProviderWiring(t *testing.T) {
 	stubWorkspacesProbe(t, true)
-	cfg := workspaceGitHubLab()
 	const base = "https://workspace-manager.127.0.0.1.nip.io:8443"
-	values, _, dex, coredns := renderWorkspaceTemplates(t, cfg, nil)
-	wm, _ := workspaceManagerBlock(t, values)
-	oauth, _ := wm["oauth"].(map[string]any)
-	if oauth["baseURL"] != base {
-		t.Fatalf("workspace-manager.oauth.baseURL = %v, want %s", oauth["baseURL"], base)
+	for _, provider := range []string{"", config.WorkspaceProviderGitHub} {
+		cfg := workspaceLab(provider)
+		if got := cfg.WorkspaceProviders(); !reflect.DeepEqual(got, []string{config.WorkspaceProviderGitHub}) {
+			t.Fatalf("provider %q: instances %v, want github alone", provider, got)
+		}
+		values, _, dex, _ := renderWorkspaceTemplates(t, cfg, nil)
+		wm, _ := workspaceManagerBlock(t, values)
+		oauth, _ := wm["oauth"].(map[string]any)
+		if oauth["baseURL"] != base {
+			t.Fatalf("provider %q: workspace-manager.oauth.baseURL = %v, want %s", provider, oauth["baseURL"], base)
+		}
+		if _, ok := wm["providers"]; ok {
+			t.Errorf("provider %q: an instance rendered without the App's ids: %v", provider, wm["providers"])
+		}
+		wantNoManagerSignIn(t, cfg, dex)
 	}
-	if _, ok := wm["providers"]; ok {
-		t.Errorf("a provider instance rendered without the App's ids: %v", wm["providers"])
-	}
-	if _, ok := wm["extraEnv"]; ok {
-		t.Errorf("the lab CA named without the fake: %v", wm["extraEnv"])
-	}
-	if strings.Contains(coredns, labGitHubService) {
-		t.Errorf("CoreDNS sends the fake's name to its Service without the fake:\n%s", coredns)
-	}
-	wantNoManagerSignIn(t, cfg, dex)
 }
 
 // With the App's ids set, the github instance names the Secret for the
@@ -261,30 +196,25 @@ func TestWorkspaceGitHubProviderInstance(t *testing.T) {
 	}
 }
 
-// Both at once: two instances in the workspace-manager's order, the fake
-// first, each with its own Secret, the lab CA named for the fake.
+// Both at once: two instances in the workspace-manager's order, github
+// first, each with its own Secret.
 func TestWorkspaceBothProviders(t *testing.T) {
 	stubWorkspacesProbe(t, true)
-	cfg := workspaceLab("github, fake")
+	cfg := workspaceLab("github, gitlab")
 	cfg.Platform.Workspaces.GitHub = config.WorkspaceGitHub{AppID: testWorkspaceAppID, ClientID: testWorkspaceClientID}
+	cfg.Platform.Workspaces.GitLab = testWorkspaceGitLab(testWorkspaceClientID)
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	values, _, _, coredns := renderWorkspaceTemplates(t, cfg, nil)
+	values, _, _, _ := renderWorkspaceTemplates(t, cfg, nil)
 	wm, providers := workspaceManagerBlock(t, values)
-	if len(providers) != 2 || providers[0]["name"] != config.WorkspaceProviderFake || providers[1]["name"] != config.WorkspaceProviderGitHub {
-		t.Fatalf("providers %v, want fake then github", wm["providers"])
+	if len(providers) != 2 || providers[0]["name"] != config.WorkspaceProviderGitHub || providers[1]["name"] != config.WorkspaceProviderGitLab {
+		t.Fatalf("providers %v, want github then gitlab", wm["providers"])
 	}
-	for i, want := range []string{config.WorkspaceFakeSecretName, config.WorkspaceGitHubSecretName} {
+	for i, want := range []string{config.WorkspaceGitHubSecretName, config.WorkspaceGitLabSecretName} {
 		v, _ := providers[i]["values"].(map[string]any)
-		app, _ := v["app"].(map[string]any)
-		wantSecretRef(t, providers[i]["name"].(string)+" app.privateKey", app["privateKey"], want, config.WorkspaceGitHubPrivateKeyKey)
-	}
-	if _, ok := wm["extraEnv"]; !ok {
-		t.Error("the lab CA is not named with the fake among the instances")
-	}
-	if !strings.Contains(coredns, labGitHubService) {
-		t.Error("CoreDNS does not send the fake's name to its Service with the fake among the instances")
+		oauth, _ := v["oauth"].(map[string]any)
+		wantSecretRef(t, providers[i]["name"].(string)+" oauth.clientSecret", oauth["clientSecret"], want, config.GitHubClientSecretKey)
 	}
 	checkGolden(t, "both", wm)
 }
@@ -297,14 +227,14 @@ func TestWorkspaceProviderInertWithWorkspacesOff(t *testing.T) {
 	plain := config.Default()
 	plain.Platform.GatewayPort = 8443
 	_, wantValues, wantDex, wantCoreDNS := renderWorkspaceTemplates(t, plain, nil)
-	if strings.Contains(wantValues, "workspace-manager:") || strings.Contains(wantDex, "workspace-manager") || strings.Contains(wantCoreDNS, labGitHubService) {
+	if strings.Contains(wantValues, "workspace-manager:") || strings.Contains(wantDex, "workspace-manager") || strings.Contains(wantCoreDNS, "workspace-manager") {
 		t.Fatalf("a lab without workspaces renders the workspace-manager wiring")
 	}
-	for _, provider := range []string{"", config.WorkspaceProviderGitHub, "fake,github"} {
+	for _, provider := range []string{"", config.WorkspaceProviderGitHub, "github,gitlab"} {
 		cfg := workspaceLab(provider)
 		cfg.Platform.Workspaces.Enabled = false
 		cfg.Platform.Workspaces.GitHub = config.WorkspaceGitHub{AppID: testWorkspaceAppID, ClientID: testWorkspaceClientID}
-		if cfg.WorkspaceFakeProvider() || cfg.WorkspaceGitHubProvider() || len(cfg.WorkspaceProviders()) != 0 {
+		if cfg.WorkspaceGitHubProvider() || cfg.WorkspaceGitLabProvider() || len(cfg.WorkspaceProviders()) != 0 {
 			t.Errorf("provider %q counts with workspaces off", provider)
 		}
 		_, values, dex, coredns := renderWorkspaceTemplates(t, cfg, nil)
@@ -320,66 +250,26 @@ func TestWorkspaceProviderInertWithWorkspacesOff(t *testing.T) {
 	}
 }
 
-// No secret value reaches a rendered file: with the fake's credentials
-// generated (the App's private key, the client secret), every manifest
-// `agentlab render` writes into state/ and the values the install hands the
-// chart reference the Secrets and carry neither.
-func TestWorkspaceProvidersRenderNoSecretValue(t *testing.T) {
+// The instances' credentials reach the render as references only: every
+// manifest `agentlab render` writes into state/ names the Secrets, and the
+// values the install hands the chart reference each instance's Secret.
+func TestWorkspaceProvidersRenderSecretReferences(t *testing.T) {
 	stubWorkspacesProbe(t, true)
 	t.Chdir(t.TempDir())
-	cfg := workspaceLab("fake,github")
+	cfg := workspaceLab("github,gitlab")
 	cfg.Platform.Workspaces.GitHub = config.WorkspaceGitHub{AppID: testWorkspaceAppID, ClientID: testWorkspaceClientID}
+	cfg.Platform.Workspaces.GitLab = testWorkspaceGitLab(testWorkspaceClientID)
 	if err := GenCerts(cfg.Platform.Domain, false); err != nil {
 		t.Fatal(err)
 	}
-	dir, err := EnsureGitHubFakeCredentials(cfg.Platform.Domain)
-	if err != nil {
-		t.Fatal(err)
-	}
-	secret, err := os.ReadFile(filepath.Join(dir, githubFakeClientSecret)) // #nosec G304 -- the test's own credentials
-	if err != nil {
-		t.Fatal(err)
-	}
-	key, err := os.ReadFile(filepath.Join(dir, githubFakeAppKey)) // #nosec G304 -- the test's own credentials
-	if err != nil {
-		t.Fatal(err)
-	}
-	keyLines := strings.Split(strings.TrimSpace(string(key)), "\n")
-	if len(keyLines) < 3 {
-		t.Fatalf("the App's key is not a PEM block:\n%s", key)
-	}
-	values := []string{strings.TrimSpace(string(secret)), keyLines[1], "PRIVATE KEY"}
 	if err := RenderAll(cfg); err != nil {
 		t.Fatal(err)
-	}
-	var files []string
-	if err := filepath.WalkDir(StateDir, func(path string, d os.DirEntry, err error) error {
-		if err == nil && !d.IsDir() {
-			files = append(files, path)
-		}
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if len(files) == 0 {
-		t.Fatalf("agentlab render wrote nothing into %s", StateDir)
-	}
-	for _, path := range files {
-		raw, err := os.ReadFile(path) // #nosec G304 -- the render's own output
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, v := range values {
-			if strings.Contains(string(raw), v) {
-				t.Errorf("%s carries a secret value (%.12s…)", path, v)
-			}
-		}
 	}
 	rendered, err := os.ReadFile(filepath.Join(StateDir, manifests[platformValuesTemplate].out)) // #nosec G304 -- the render's own output
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{config.WorkspaceFakeSecretName, config.WorkspaceGitHubSecretName} {
+	for _, want := range []string{config.WorkspaceGitHubSecretName, config.WorkspaceGitLabSecretName} {
 		if !strings.Contains(string(rendered), "{name: "+want+", key: ") {
 			t.Errorf("the values do not reference the Secret %s:\n%s", want, rendered)
 		}
@@ -387,11 +277,11 @@ func TestWorkspaceProvidersRenderNoSecretValue(t *testing.T) {
 }
 
 // workspaceGitHubFor reads which keys the Secret carries: the instance once
-// the App's ids and both keys are there, none while either is missing; and
-// the install's instance list carries the fake regardless.
+// the App's ids and both keys are there, none while either is missing; the
+// install's instance list follows it.
 func TestWorkspaceGitHubForReadsTheSecretsKeys(t *testing.T) {
 	ctx := context.Background()
-	cfg := workspaceLab("fake,github")
+	cfg := workspaceGitHubLab()
 	cfg.Platform.Workspaces.GitHub = config.WorkspaceGitHub{AppID: testWorkspaceAppID, ClientID: testWorkspaceClientID}
 	secret := func(keys ...string) *corev1.Secret {
 		s := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: config.WorkspaceGitHubSecretName, Namespace: platformNamespace}, Data: map[string][]byte{}}
@@ -406,8 +296,8 @@ func TestWorkspaceGitHubForReadsTheSecretsKeys(t *testing.T) {
 		t.Errorf("without the Secret: %v, %v; want no instance", got, err)
 	}
 	providers, err := workspaceProvidersInstall(ctx, cfg)
-	if err != nil || len(providers) != 1 || providers[0].Name != config.WorkspaceProviderFake {
-		t.Errorf("the install's instances without the Secret: %v, %v; want the fake alone", providers, err)
+	if err != nil || len(providers) != 0 {
+		t.Errorf("the install's instances without the Secret: %v, %v; want none", providers, err)
 	}
 	newFakeLab(t, secret(config.WorkspaceGitHubPrivateKeyKey))
 	if got, err := workspaceGitHubFor(ctx, cfg); err != nil || got != nil {
@@ -419,8 +309,8 @@ func TestWorkspaceGitHubForReadsTheSecretsKeys(t *testing.T) {
 		t.Errorf("with both keys: %+v, %v; want the instance", got, err)
 	}
 	providers, err = workspaceProvidersInstall(ctx, cfg)
-	if err != nil || len(providers) != 2 || providers[1].Name != config.WorkspaceProviderGitHub {
-		t.Errorf("the install's instances with both keys: %v, %v; want the fake and github", providers, err)
+	if err != nil || len(providers) != 1 || providers[0].Name != config.WorkspaceProviderGitHub {
+		t.Errorf("the install's instances with both keys: %v, %v; want github", providers, err)
 	}
 	noIDs := workspaceGitHubLab()
 	if got, err := workspaceGitHubFor(ctx, noIDs); err != nil || got != nil {
@@ -466,7 +356,7 @@ func TestEnsureWorkspaceGitHubSecret(t *testing.T) {
 		t.Errorf("a failed placement answered %v, want the run failed naming the source", err)
 	}
 
-	cfg.Platform.Workspaces.Provider = config.WorkspaceProviderFake
+	cfg.Platform.Workspaces.Provider = config.WorkspaceProviderGitLab
 	calls = fakeSecretTool(t, func() error { return nil })
 	if err := ensureWorkspaceSecrets(cfg); err != nil || len(*calls) != 0 {
 		t.Errorf("placed %v (%v) without the github instance", *calls, err)
@@ -477,16 +367,16 @@ func TestEnsureWorkspaceGitHubSecret(t *testing.T) {
 // secret: references only, its URL and client id as agentlab.yaml has them.
 func TestWorkspaceGitLabProviderInstance(t *testing.T) {
 	stubWorkspacesProbe(t, true)
-	cfg := workspaceLab("fake,gitlab")
-	cfg.Platform.Workspaces.GitLab = config.WorkspaceGitLab{URL: "https://gitlab.example.com/", ClientID: testWorkspaceClientID, Group: "proof-group", Project: "proof", Person: testGitLabPerson}
+	cfg := workspaceLab(config.WorkspaceProviderGitLab)
+	cfg.Platform.Workspaces.GitLab = testWorkspaceGitLabAt(testGitLabURL+"/", testWorkspaceClientID)
 	values, _, _, _ := renderWorkspaceTemplates(t, cfg, nil)
 	wm, providers := workspaceManagerBlock(t, values)
-	if len(providers) != 2 || providers[1]["name"] != config.WorkspaceProviderGitLab || providers[1]["kind"] != config.WorkspaceProviderGitLab {
-		t.Fatalf("providers %v, want fake then gitlab", wm["providers"])
+	if len(providers) != 1 || providers[0]["name"] != config.WorkspaceProviderGitLab || providers[0]["kind"] != config.WorkspaceProviderGitLab {
+		t.Fatalf("providers %v, want gitlab", wm["providers"])
 	}
-	v, _ := providers[1]["values"].(map[string]any)
+	v, _ := providers[0]["values"].(map[string]any)
 	oauth, _ := v["oauth"].(map[string]any)
-	if v["url"] != "https://gitlab.example.com" || oauth["clientID"] != testWorkspaceClientID {
+	if v["url"] != testGitLabURL || oauth["clientID"] != testWorkspaceClientID {
 		t.Errorf("url %v, oauth %v", v["url"], oauth)
 	}
 	if _, set := v["app"]; set {
@@ -498,38 +388,8 @@ func TestWorkspaceGitLabProviderInstance(t *testing.T) {
 
 	cfg.Platform.Workspaces.GitLab.ClientID = ""
 	values, _, _, _ = renderWorkspaceTemplates(t, cfg, nil)
-	if _, providers = workspaceManagerBlock(t, values); len(providers) != 1 {
-		t.Errorf("providers %v without the client id, want the fake alone", providers)
-	}
-}
-
-// fake-bearer beside the fake: the same App and Secret at the
-// github.com-shaped names, its apiURL on a host of its own, which CoreDNS
-// sends to the fake's Service with the git host; the fake alone renders
-// neither.
-func TestWorkspaceFakeBearerProvider(t *testing.T) {
-	stubWorkspacesProbe(t, true)
-	_, _, _, alone := renderWorkspaceTemplates(t, workspaceLab(""), nil)
-	if strings.Contains(alone, "github-bearer") {
-		t.Errorf("CoreDNS names fake-bearer's hosts without the instance:\n%s", alone)
-	}
-	cfg := workspaceLab("fake,fake-bearer")
-	if got, want := cfg.GitHubFakeBearerAPIURL(), "https://api.github-bearer.127.0.0.1.nip.io"; got != want {
-		t.Fatalf("fake-bearer's API URL %s, want %s", got, want)
-	}
-	values, _, _, coredns := renderWorkspaceTemplates(t, cfg, nil)
-	wm, providers := workspaceManagerBlock(t, values)
-	if len(providers) != 2 || providers[0]["name"] != config.WorkspaceProviderFake || providers[1]["name"] != config.WorkspaceProviderFakeBearer {
-		t.Fatalf("providers %v, want fake then fake-bearer", wm["providers"])
-	}
-	v, _ := providers[1]["values"].(map[string]any)
-	if v["url"] != cfg.GitHubFakeBearerURL() || v["apiURL"] != cfg.GitHubFakeBearerAPIURL() {
-		t.Errorf("fake-bearer's url %v, apiURL %v, want %s and %s", v["url"], v["apiURL"], cfg.GitHubFakeBearerURL(), cfg.GitHubFakeBearerAPIURL())
-	}
-	app, _ := v["app"].(map[string]any)
-	wantSecretRef(t, "fake-bearer app.privateKey", app["privateKey"], config.WorkspaceFakeSecretName, config.WorkspaceGitHubPrivateKeyKey)
-	if !strings.Contains(coredns, `name regex ^(api\.)?github-bearer\.127\.0\.0\.1\.nip\.io\. `+labGitHubService+".agent-platform.svc.cluster.local") {
-		t.Errorf("CoreDNS does not send fake-bearer's hosts to the fake's Service:\n%s", coredns)
+	if _, providers = workspaceManagerBlock(t, values); len(providers) != 0 {
+		t.Errorf("providers %v without the client id, want none", providers)
 	}
 }
 
@@ -545,19 +405,15 @@ func musterReleasable(values map[string]any) map[string]any {
 
 // With no provider instance rendered (the github instance before its App's
 // ids, or the install's verdict none), muster's credential provider still
-// releases one: the lab's own App, the fake's, so the chart's guard of the
-// credential provider renders, and the manager gets no grant signing key,
-// which it refuses without an instance; once an instance renders, the chart
-// derives the releasable from the pin and the values name none.
+// releases the configured instance (github.com's OAuth issuer before the
+// App's id, the App's own after), so the chart's guard of the credential
+// provider renders, and the manager gets no grant signing key, which it
+// refuses without an instance; once an instance renders, the chart derives
+// the releasable from the pin and the values name none.
 func TestWorkspaceReleasableWithoutInstance(t *testing.T) {
 	stubWorkspacesProbe(t, true)
-	fake, err := workspaceFakeValues(workspaceLab(""))
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := map[string]any{config.WorkspaceProviderFake: workspaceGrantOf(*fake).Issuer}
-
 	values, _, _, _ := renderWorkspaceTemplates(t, workspaceGitHubLab(), nil)
+	want := map[string]any{config.WorkspaceProviderGitHub: githubOAuthIssuer}
 	if got := musterReleasable(values); !maps.Equal(got, want) {
 		t.Errorf("github instance without its App's ids: releasable %v, want %v", got, want)
 	}
@@ -567,20 +423,19 @@ func TestWorkspaceReleasableWithoutInstance(t *testing.T) {
 	withIDs := workspaceGitHubLab()
 	withIDs.Platform.Workspaces.GitHub = config.WorkspaceGitHub{AppID: testWorkspaceAppID, ClientID: testWorkspaceClientID}
 	values, _, _, _ = renderWorkspaceTemplates(t, withIDs, func(d *tmplData) { d.WorkspaceProviders = nil })
+	want = map[string]any{config.WorkspaceProviderGitHub: "https://github.com/apps/" + testWorkspaceAppID}
 	if got := musterReleasable(values); !maps.Equal(got, want) {
 		t.Errorf("the install's verdict none: releasable %v, want %v", got, want)
 	}
 
-	for name, cfg := range map[string]*config.Config{config.WorkspaceProviderFake: workspaceLab(""), config.WorkspaceProviderGitHub: withIDs} {
-		values, _, _, _ := renderWorkspaceTemplates(t, cfg, nil)
-		if got := musterReleasable(values); got != nil {
-			t.Errorf("%s instance rendered: releasable %v, want none (the chart derives it from the pin)", name, got)
-		}
-		if wm, _ := workspaceManagerBlock(t, values); wm["grant"] == nil {
-			t.Errorf("%s instance rendered: no grant signing key", name)
-		}
+	values, _, _, _ = renderWorkspaceTemplates(t, withIDs, nil)
+	if got := musterReleasable(values); got != nil {
+		t.Errorf("github instance rendered: releasable %v, want none (the chart derives it from the pin)", got)
 	}
-	off := workspaceLab("")
+	if wm, _ := workspaceManagerBlock(t, values); wm["grant"] == nil {
+		t.Error("github instance rendered: no grant signing key")
+	}
+	off := workspaceGitHubLab()
 	off.Platform.Workspaces.Enabled = false
 	values, _, _, _ = renderWorkspaceTemplates(t, off, nil)
 	if got := musterReleasable(values); got != nil {

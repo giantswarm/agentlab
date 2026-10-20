@@ -111,7 +111,7 @@ func gitlabSkip(cfg *config.Config) string {
 	}
 	switch {
 	case !cfg.WorkspaceGitLabProvider():
-		return fmt.Sprintf("platform.workspaces.provider %q configures no instance %s (`agentlab configure --workspaces-provider fake,%s` and platform.workspaces.gitlab, docs/workspaces.md)", cfg.Platform.Workspaces.Provider, config.WorkspaceProviderGitLab, config.WorkspaceProviderGitLab)
+		return fmt.Sprintf("platform.workspaces.provider %q configures no instance %s (`agentlab configure --workspaces-provider github,%s` and platform.workspaces.gitlab, docs/workspaces.md)", cfg.Platform.Workspaces.Provider, config.WorkspaceProviderGitLab, config.WorkspaceProviderGitLab)
 	case len(missing) > 0:
 		return "the instance gitlab lacks " + strings.Join(missing, ", ")
 	case cfg.WorkspaceGrantProvider() != config.WorkspaceProviderGitLab:
@@ -333,7 +333,7 @@ func (gp *gitlabProof) notConnected() error {
 // GitLab's own sign-in and consent, then checks the instance's kind and
 // removes what an earlier run left, now that the manager's tools answer.
 func (gp *gitlabProof) connect() error {
-	hops, err := connectWorkspaceProviderAs(gp.cfg, gp.admin, config.WorkspaceProviderGitLab, gp.login)
+	hops, err := connectWorkspaceProvider(gp.cfg, gp.admin, config.WorkspaceProviderGitLab, gp.login)
 	if err != nil {
 		return err
 	}
@@ -653,7 +653,7 @@ func (gp *gitlabProof) disconnect() error {
 	}
 	note("list_providers as %s after core_auth_logout: muster's sign-in link %s", gp.adminUser.Email, excerpt(link, 120))
 	// The cleanup removes the workspace as the admin, through the manager.
-	if _, err := connectWorkspaceProviderAs(gp.cfg, gp.admin, config.WorkspaceProviderGitLab, gp.login); err != nil {
+	if _, err := connectWorkspaceProvider(gp.cfg, gp.admin, config.WorkspaceProviderGitLab, gp.login); err != nil {
 		return fmt.Errorf("granting GitLab's application again for the cleanup: %w", err)
 	}
 	return nil

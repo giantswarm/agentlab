@@ -63,26 +63,28 @@ func TestLoadKnownFieldsAndANamelessFile(t *testing.T) {
 	}
 }
 
-// The retired platform.fakeFleet key, which every file an earlier release
-// wrote carries, still loads and is not written back.
-func TestLoadDropsTheRetiredFakeFleet(t *testing.T) {
-	t.Chdir(t.TempDir())
-	if err := os.WriteFile(File, []byte("clusterName: lab\nplatform:\n  chartVersion: "+loadTestChart+"\n  fakeFleet: true\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := cfg.Save(); err != nil {
-		t.Fatal(err)
-	}
-	after, err := os.ReadFile(File)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(after), "fakeFleet") {
-		t.Errorf("the retired key was written back:\n%s", after)
+// The retired platform keys, which files an earlier release wrote carry,
+// still load and are not written back.
+func TestLoadDropsTheRetiredKeys(t *testing.T) {
+	for _, retired := range []string{"fakeFleet: true", "platformManager:\n    enabled: false\n    version: 0.69.0"} {
+		t.Chdir(t.TempDir())
+		if err := os.WriteFile(File, []byte("clusterName: lab\nplatform:\n  chartVersion: "+loadTestChart+"\n  "+retired+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("%s: %v", retired, err)
+		}
+		if err := cfg.Save(); err != nil {
+			t.Fatal(err)
+		}
+		after, err := os.ReadFile(File)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if key, _, _ := strings.Cut(retired, ":"); strings.Contains(string(after), key) {
+			t.Errorf("the retired key %s was written back:\n%s", key, after)
+		}
 	}
 }
 

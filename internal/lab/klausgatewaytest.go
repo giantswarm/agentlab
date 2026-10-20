@@ -200,10 +200,6 @@ type KlausGatewayTestOptions struct {
 	// RunDir holds the stores, the keys and the gateway's log; empty picks
 	// a temporary directory removed at the end.
 	RunDir string
-	// Workspaces adds the workspaces steps, the workspace a thread's Session works in
-	// (klausgatewaytest_workspaces.go); a lab without the workspace-manager
-	// fails it before anything runs.
-	Workspaces bool
 }
 
 // KlausGatewayTest is the headless Swarmgeist proof: klaus-gateway against
@@ -222,11 +218,6 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	}
 	opts.Port = cmp.Or(opts.Port, gatewayTestPort(cfg))
 	opts = opts.withDefaults()
-	if opts.Workspaces {
-		if err := klausGatewayWorkspacesPreflight(cfg, user.Email); err != nil {
-			return err
-		}
-	}
 	if err := portsFree(opts.Port, opts.Port+1, opts.Port+3); err != nil {
 		return err
 	}
@@ -279,11 +270,6 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 		component: slackUserPrefix + run + "C",
 	}
 	emails := map[string]string{people.person: user.Email, people.stranger: "stranger@lab.local", people.component: user.Email}
-	if opts.Workspaces {
-		// The workspaces steps' colleague, linked when they start.
-		people.colleague = slackUserPrefix + run + "W"
-		emails[people.colleague] = accessDefaultSecond
-	}
 	var fake slackWorkspace
 	if cfg.KlausGatewayEnabled() {
 		step("Starting the fake Slack Web API as a container on the %s network (%s slack-fake, in %s) and pointing the component's Service %s/%s at it",
@@ -559,27 +545,6 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 		note("%s predates klaus-gateway %s, which keeps a parked message and a paused approval across a restart: steps 5c and 5d skipped", gw.version(), klausGatewayHeldSince)
 	}
 
-	var workspaces *gatewayWorkspacesOutcome
-	if opts.Workspaces {
-		ws := &gatewayWorkspaces{cfg: cfg, timeout: opts.ReadyTimeout, p: p, gw: gw, people: people, api: api}
-		defer func() {
-			if err := ws.cleanup(); err != nil {
-				warn("removing what the workspaces steps left: %v", err)
-			}
-		}()
-		if workspaces, err = ws.run(user, keys, filepath.Join(runDir, gatewayLinksFile)); err != nil {
-			return err
-		}
-		step("W. Removing the workspaces steps' Sessions, Agent, workspaces and provider sign-ins")
-		if err := ws.cleanup(); err != nil {
-			return err
-		}
-		if len(ws.left) > 0 {
-			return fmt.Errorf("the workspaces steps left behind: %s", strings.Join(ws.left, "; "))
-		}
-		note("the Agent %s, its Sessions and the workspaces %s and %s are gone, both people disconnected from %s", gatewayWSAgent, gatewayWSPublic, gatewayWSPrivate, config.WorkspaceProviderFake)
-	}
-
 	// The component half (klausgatewaytest_component.go) while the meta
 	// chart's klaus-gateway runs in this lab: its fixtures are the ones
 	// above, its Slack Web API the same fake, and the session its turn
@@ -619,11 +584,6 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	if signedIn != nil {
 		fmt.Printf("PASS: a restart between the sign-in prompt and the sign-in lost nothing: the restarted gateway replayed %s's parked message, answered %q\n", people.stranger, excerpt(signedIn.answer, 40))
 		fmt.Printf("PASS: a restart while task %s waited on its approval card lost nothing: %d Approve click(s) after the restart resumed it in place to %s\n", approvedAfter.taskID, approvedAfter.rounds, approvedAfter.finalState)
-	}
-	if workspaces != nil {
-		for _, line := range gatewayWorkspacesPASS(workspaces) {
-			fmt.Printf("PASS: %s\n", line)
-		}
 	}
 	if component != nil {
 		fmt.Printf("PASS: the meta chart's %s component runs the OBO link store in Secret %s — Role %s grants get/update/patch on that Secret alone, no store volume, RollingUpdate\n", klausGatewayComponent, klausGatewayLinksSecret, klausGatewayLinksSecret)
@@ -1459,10 +1419,9 @@ func tailLines(s string, n int) string {
 // --- Slack, driven as the people -----------------------------------------------
 
 // slackPeople are the Slack users of the fake workspace: the linked person,
-// one with no link, the person the component half links in its Secret, and
-// the workspaces steps' colleague (empty without --workspaces).
+// one with no link, and the person the component half links in its Secret.
 type slackPeople struct {
-	person, stranger, component, colleague string
+	person, stranger, component string
 }
 
 // slackThread is one conversation of the proof: the thread's ts (empty until
