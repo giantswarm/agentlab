@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"net/http"
 	"strings"
 	"testing"
 
@@ -94,5 +95,17 @@ func TestEveryPlatformRunChecksThePortalMode(t *testing.T) {
 	calls := callSites(t)
 	if calls["checkPortalMode"]["platformUp"] != 1 {
 		t.Errorf("checkPortalMode is called from %v, want once from platformUp itself", calls["checkPortalMode"])
+	}
+}
+
+// The portal's HSTS header fails the check; a response without it passes.
+func TestCheckNoHSTS(t *testing.T) {
+	if err := checkNoHSTS(http.Header{}); err != nil {
+		t.Errorf("no header: %v", err)
+	}
+	h := http.Header{}
+	h.Set(hstsHeader, "max-age=15552000; includeSubDomains")
+	if err := checkNoHSTS(h); err == nil || !strings.Contains(err.Error(), "max-age=15552000") {
+		t.Errorf("HSTS header: got %v, want the header named", err)
 	}
 }

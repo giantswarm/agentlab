@@ -818,6 +818,14 @@ carries giantswarm/agent-platform#1150, whose range for muster starts at
 
 ## Accepted lab trade-offs (not hacks to fix)
 
+- **No HSTS from the portal** — Backstage's helmet sends
+  `Strict-Transport-Security: max-age=15552000; includeSubDomains` and has no
+  setting for it; a browser that trusted one lab CA then refuses the hostname
+  for 180 days with no way past the warning once the CA changes (a recreated
+  lab, another domain's re-mint). The lab's edge drops the header on the
+  connectivity chart's `backstage` route (postrenderers.go, patch 8);
+  `backstage-test` asserts it is gone. A machine-local CA has nothing HSTS
+  protects.
 - **Checksum stamping via the `REPLACED_AT_APPLY` placeholder** — the standard
   Helm `checksum/config` pattern, done with sed because there is no templating
   engine here. Deduplicated into one script (H3), otherwise kept.
