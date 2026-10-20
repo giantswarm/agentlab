@@ -554,8 +554,11 @@ them it fails at once with the reason.
    the stage fails naming that.
 7. **No workspace**: a Session of the same Agent without a grant sends the
    same request: no `jwt` and no `user-token` entry for it in the log. Where
-   the muster stage ran, kagent must record no `muster` provider on it, and
-   its `initialize` to muster with the placeholder must not answer 200.
+   the muster stage ran, its `initialize` to muster must agree with the
+   providers kagent recorded: `start_session` binds the Actor of every Session
+   it starts, so from kagent 1.20 (`bind_actor`) the Session lists `muster`
+   and muster answers 200 as the person; without the `muster` provider (an
+   older kagent) the placeholder must not answer 200.
 
 The fake verifies no JWT it did not sign: it answers such a bearer GitHub's
 401 and logs its `aud` and `sub`, never the token. Everything is removed on
