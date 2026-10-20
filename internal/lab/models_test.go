@@ -227,7 +227,7 @@ func TestPruneExtraModels(t *testing.T) {
 		customObject(gvkModelConfig, kagentNamespace, "default-model-config", nil),
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "kagent-keep", Namespace: kagentNamespace}},
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "kagent-drop", Namespace: kagentNamespace}},
-		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "kagent-login", Namespace: kagentNamespace, Labels: map[string]string{config.ChatGPTLoginLabel: "true"}}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "kagent-login", Namespace: kagentNamespace, Labels: map[string]string{config.ChatGPTLoginLabel: config.ChatGPTLoginLabelValue}}},
 	)
 	if err := pruneExtraModels([]config.ExtraModel{{Name: "keep"}}); err != nil {
 		t.Fatal(err)

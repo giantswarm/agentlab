@@ -1281,13 +1281,16 @@ const CredentialTypeChatGPT = "chatgptOAuth" // #nosec G101 -- the CRD's enum va
 // rotates its tokens in place; kagent refuses a login Secret without it.
 const ChatGPTLoginLabel = "kagent.dev/chatgpt-login"
 
+// ChatGPTLoginLabelValue is ChatGPTLoginLabel's opt-in value.
+const ChatGPTLoginLabelValue = "true"
+
 // ChatGPTLoginKeys are the keys of a ChatGPT login's Secret.
 var ChatGPTLoginKeys = []string{"access_token", "refresh_token", "account_id"}
 
 // IsChatGPTLoginSecret reports whether a Secret's labels opt it in to
 // kagent's login refresher.
 func IsChatGPTLoginSecret(labels map[string]string) bool {
-	return labels[ChatGPTLoginLabel] == "true"
+	return labels[ChatGPTLoginLabel] == ChatGPTLoginLabelValue
 }
 
 // ChatGPTLogin reports whether the model runs on a ChatGPT login.

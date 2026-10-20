@@ -225,7 +225,7 @@ func ensureChatGPTLogin(m config.ExtraModel) (placed bool, err error) {
 			m.Name, kagentNamespace, m.SecretName(), strings.Join(missing, ", "), strings.Join(config.ChatGPTLoginKeys, ", "))
 	}
 	if !config.IsChatGPTLoginSecret(secret.GetLabels()) {
-		patch := fmt.Sprintf(`{"metadata":{"labels":{%q:"true"}}}`, config.ChatGPTLoginLabel)
+		patch := fmt.Sprintf(`{"metadata":{"labels":{%q:%q}}}`, config.ChatGPTLoginLabel, config.ChatGPTLoginLabelValue)
 		if err := patchObject(ctx, gvrSecrets, kagentNamespace, m.SecretName(), types.MergePatchType, []byte(patch)); err != nil {
 			return false, err
 		}
