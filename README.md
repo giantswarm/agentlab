@@ -121,6 +121,7 @@ export ANTHROPIC_API_KEY=sk-ant-...   # optional: powers the agents and Backstag
 agentlab up                           # one question (the detected defaults, or customize), then certs, kind cluster, Dex, RBAC, the platform — verified
 agentlab open portal                  # the portal in your browser (the URL is printed too)
 agentlab platform-test                # headless proof: Dex -> muster -> mcp-kubernetes -> apiserver
+agentlab polex-test                   # the chart's Kyverno PolicyExceptions dry-run against the lab's Kyverno (the fleet's)
 ```
 
 Headless (CI, a coding agent), write the lab first with `agentlab configure

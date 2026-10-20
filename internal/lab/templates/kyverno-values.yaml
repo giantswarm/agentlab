@@ -10,6 +10,10 @@
 # app's PolicyExceptions and policies for the fleet's own components, the
 # HPA, the ServiceMonitor, API priority and fairness, the installation's
 # PriorityClass giantswarm-critical, and every controller but admission.
+# PolicyExceptions stay as the app ships them, on for every namespace
+# (features.policyExceptions), the fleet's setting: the exception webhook
+# validates a chart's exceptions either way, and with it on the engine
+# applies an exception the way an installation's does (polextest.go).
 # policy-reporter is a dependency without a condition: its one Deployment
 # stays, its UI, plugins and monitoring off.
 ciliumNetworkPolicy:
@@ -86,8 +90,6 @@ kyverno:
     backgroundScan:
       enabled: false
     generateValidatingAdmissionPolicy:
-      enabled: false
-    policyExceptions:
       enabled: false
   crds:
     migration:
