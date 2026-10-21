@@ -677,7 +677,7 @@ func (g *scriptedGateway) onMessage(ev map[string]string) {
 	switch text {
 	case klausGatewayToolPrompt:
 		g.card(channel, thread, "task-"+thread)
-	case klausGatewayEssayPrompt:
+	case klausGatewayStopPrompt:
 		stop := make(chan struct{})
 		g.mu.Lock()
 		g.running[thread] = stop
@@ -864,7 +864,7 @@ func TestSlackProof(t *testing.T) {
 	}
 
 	before, _ := api.taskIDs(context.Background(), session)
-	stopped, err := p.stop(main, klausGatewayEssayPrompt)
+	stopped, err := p.stop(main, klausGatewayStopPrompt)
 	if err != nil {
 		t.Fatal(err)
 	}
