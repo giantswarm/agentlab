@@ -38,6 +38,9 @@ import (
 //     default `true` fails the HelmRelease on a lab without the Prometheus
 //     Operator); the chart's edge route for the channels stays off — the
 //     public leg is the host-mode proof's;
+//   - the egress refusal notices, which the chart runs where Slack, kagent
+//     and Substrate are (agent-platform 4.154.0 and later), the egress read
+//     every 10s for the proof's refusal step (klausgatewaytest_refusal.go);
 //   - the lab CA trusted for muster: the component dials muster's public URL
 //     (obo.musterUrl) — agent-manager's MCP tools for every Session it
 //     starts, the workspace listing, the OBO discovery — and inside the pod

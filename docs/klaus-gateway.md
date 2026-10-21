@@ -152,6 +152,26 @@ and, on a lab with the component, continues on it:
    muster's sign-in link. A workspace prompt (the person has workspaces,
    whatever an earlier proof left in their name) is answered with No
    workspace: the turn proves the gateway, not a workspace.
+10. **The egress refusal notice.** The chart runs the notices
+    (`klausGateway.refusals`) where Slack, kagent and Substrate are, from
+    agent-platform 4.154.0 on; the lab sets only `refusals.interval: 10s`.
+    An agent named `agentlab-refusal-<run>` is created through
+    agent-manager as the person (its Agent's
+    `agent-platform.giantswarm.io/created-by` must be the person's e-mail),
+    its egress `https://example.com` alone; one turn in a Session of it
+    fetches `https://proxy.golang.org/`, which the Substrate egress refuses.
+    The Session stays until the notice is in, since the gateway resolves the
+    refusing actor through it. Within 3 minutes the fake must hold exactly
+    one notice for the agent in the person's direct message — the person is
+    the Slack user the fake answers `users.lookupByEmail` with, the lowest
+    id carrying the e-mail — and the section naming `proxy.golang.org:443`
+    must be mrkdwn sent `verbatim` with no link in it, so Slack shows the
+    destination as written. The name is per run because the notice's record
+    covers an agent and a destination for 24 hours: a rerun's notice for the
+    same name would rewrite the last run's message instead of posting. The
+    agent and its Session are removed, and an aborted run's
+    `agentlab-refusal-*` agents first. On an older meta chart the step is
+    skipped with a note.
 
 Then the proof's records are removed (the count is back where it was), and
 the host-mode cleanup takes the fixtures and the Sessions with it. On a

@@ -1130,6 +1130,13 @@ klausGateway:
     existingSecret: {{ .KlausGateway.KeysSecret }}
   serviceMonitor:
     enabled: {{ .Platform.Observability }}
+{{- if .RefusalNotices }}
+  # The egress refusal notices run where Slack, kagent and Substrate are (the
+  # chart derives the rest): the egress read every 10s instead of every
+  # minute, so klaus-gateway-test's refusal step waits seconds for its notice.
+  refusals:
+    interval: 10s
+{{- end }}
 {{- end }}
 
 {{- if .Backstage.Enabled }}

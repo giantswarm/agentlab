@@ -383,15 +383,8 @@ func assertStoreDeployment(d *appsv1.Deployment) error {
 // by an agentlab without it answers on slack.com, where the placeholder
 // credentials fail.
 func assertFakeSlackAPI(d *appsv1.Deployment) error {
-	for _, c := range d.Spec.Template.Spec.Containers {
-		if c.Name != klausGatewayComponent {
-			continue
-		}
-		for _, e := range c.Env {
-			if e.Name == slackAPIBaseEnv && e.Value == klausGatewaySlackAPIBase {
-				return nil
-			}
-		}
+	if containerEnv(d.Spec.Template.Spec.Containers, klausGatewayComponent)[slackAPIBaseEnv] == klausGatewaySlackAPIBase {
+		return nil
 	}
 	return fmt.Errorf("the Deployment %s does not set %s=%s: run `agentlab platform` to render the lab's patch", d.Name, slackAPIBaseEnv, klausGatewaySlackAPIBase)
 }
