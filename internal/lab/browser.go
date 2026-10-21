@@ -10,7 +10,9 @@ import (
 	"net/url"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/giantswarm/pagekit"
 
@@ -32,9 +34,9 @@ func BrowserLogin(cfg *config.Config) error {
 	}
 	state := base64.RawURLEncoding.EncodeToString(stateBuf)
 
-	codeCh := make(chan string, 1)
+	results := make(chan callbackResult, 1)
 	mux := http.NewServeMux()
-	mux.HandleFunc("/callback", browserCallback(state, codeCh))
+	mux.HandleFunc("/callback", browserCallback(state, results))
 
 	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", config.BrowserCallbackPort))
 	if err != nil {
@@ -59,7 +61,11 @@ func BrowserLogin(cfg *config.Config) error {
 
 	var code string
 	select {
-	case code = <-codeCh:
+	case res := <-results:
+		if res.err != nil {
+			return res.err
+		}
+		code = res.code
 	case <-time.After(5 * time.Minute):
 		return fmt.Errorf("timed out waiting for the browser callback")
 	}
@@ -75,27 +81,41 @@ func BrowserLogin(cfg *config.Config) error {
 	return saveLoginArtifacts(cfg, token)
 }
 
-// browserCallback answers Dex's redirect: it hands a code that comes with
-// the expected state to codeCh and shows the outcome in the browser.
-func browserCallback(state string, codeCh chan<- string) http.HandlerFunc {
+// callbackResult is what the browser callback hands to BrowserLogin: the
+// authorization code, or why the sign-in failed.
+type callbackResult struct {
+	code string
+	err  error
+}
+
+// browserCallback answers Dex's redirect: it hands BrowserLogin the outcome
+// of a callback that carries the expected state and shows it in the browser.
+func browserCallback(state string, results chan<- callbackResult) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
-		if e := q.Get("error"); e != "" {
-			renderBrowserFailure(w, "The sign-in was denied or failed", e)
-			return
-		}
+		// A callback without this sign-in's state, error responses included,
+		// is not this sign-in's: any page can send the browser here. It gets
+		// a page, and the login keeps waiting for the real callback.
 		if q.Get("state") != state {
 			renderBrowserFailure(w, "The sign-in response could not be verified", "")
 			return
 		}
-		if q.Get(oauthCodeParam) == "" {
+		if e := q.Get("error"); e != "" {
+			reason := e
+			if desc := q.Get("error_description"); desc != "" {
+				reason += " (" + desc + ")"
+			}
+			handOver(results, callbackResult{err: fmt.Errorf("sign-in refused by Dex: %s", withoutControlCharacters(reason))})
+			renderBrowserFailure(w, "The sign-in was denied or failed", e)
+			return
+		}
+		code := q.Get(oauthCodeParam)
+		if code == "" {
+			handOver(results, callbackResult{err: fmt.Errorf("the browser callback carried no code")})
 			renderBrowserFailure(w, "The sign-in response is incomplete", "")
 			return
 		}
-		select {
-		case codeCh <- q.Get(oauthCodeParam):
-		default: // a repeated load of the callback; the first code counts
-		}
+		handOver(results, callbackResult{code: code})
 		pagekit.Render(w, http.StatusOK, pagekit.Page{
 			Title:   "Signed in to agentlab",
 			Heading: "Signed in",
@@ -103,6 +123,27 @@ func browserCallback(state string, codeCh chan<- string) http.HandlerFunc {
 			Message: "You can close this tab and return to the terminal.",
 		})
 	}
+}
+
+// handOver passes a callback's outcome to BrowserLogin without blocking: on
+// a repeated load of the callback, the first outcome counts.
+func handOver(results chan<- callbackResult, res callbackResult) {
+	select {
+	case results <- res:
+	default:
+	}
+}
+
+// withoutControlCharacters drops control characters from text a callback
+// carries before it reaches the terminal, where escape sequences could move
+// the cursor or rewrite what is shown.
+func withoutControlCharacters(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 // renderBrowserFailure writes the page for a failed sign-in. errorCode is
