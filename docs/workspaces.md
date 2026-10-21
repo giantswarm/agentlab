@@ -58,7 +58,9 @@ good, a node that can then be neither stopped nor removed.
 agentlab configure --workspaces   # with --agents (on by default); without, see below
 agentlab up                       # or `agentlab platform` on a running lab
 agentlab workspaces-test          # --storage-only: the storage alone
-agentlab workspaces-test --part gitlab # the provider instance gitlab, end to end (skips without one)
+agentlab workspaces-test --part sync     # every kind of sync cycle on the github instance's proof repositories
+agentlab workspaces-test --part sessions # Sessions on both Harnesses with a requested sync cycle
+agentlab workspaces-test --part gitlab   # the provider instance gitlab, end to end (skips without one)
 ```
 
 With the switch off, nothing of it is installed, and `agentlab platform` on a
@@ -196,6 +198,131 @@ workspace volumes with it, and installs it under the new name.
 `--ready-timeout` bounds each wait (default 5m). A resume on
 another node is proven on a cloud installation, not in the lab: the lab's
 export is one node's disk.
+
+### The sync part
+
+`agentlab workspaces-test --part sync [--provider github|gitlab]` proves the
+workspace-manager's sync cycles on the real provider, never a stand-in: a
+workspace over the instance's two proof repositories
+(`platform.workspaces.<instance>.proofRepositories`, see
+[the proof repositories](#the-proof-repositories)), defined through the
+manager's tools through muster as the admin, a member of the lab's
+Organization. A fetch is read on the volume: `git fetch` writes a mirror's
+`FETCH_HEAD`, which a clone and a mirror left unchanged never touch.
+
+1. **Preconditions**: the workspace-manager reachable through muster, the
+   admin holding the instance's grant ([the grant](#the-grant-a-proof-waits-for)),
+   the pushed repository cloned on this host (shallow, no working tree) and
+   the scratch branch `agentlab-workspaces-proof` an interrupted run left
+   deleted.
+2. **First cycle**: `create_workspace`; the cycle the create starts mirrors
+   both repositories bare at `mirrors/<owner>/<name>.git`, each default
+   branch at the provider's head (`git ls-remote`), `gc.pruneExpire=never`,
+   the manifest naming each; a requested cycle then settles the listing the
+   first one may have read from the manager's minute-long cache.
+3. **No-op**: `sync_workspace` with nothing changed ends `NoChange` with no
+   sync Job, no mirror's `FETCH_HEAD` moves, and the manifest is byte for
+   byte the same.
+4. **Push**: an empty commit pushed to the scratch branch of the first
+   repository with the person's own git credentials, then requested cycles
+   (up to five, 15 s apart, while the provider's listing catches up) until
+   one fetches it: that mirror alone fetched, the branch at the pushed commit
+   in it, no default branch moved, the second repository untouched.
+5. **Force-push**: a session directory with a `git clone --shared` of the
+   mirror (git alternates), a force-push over the pushed commit, and the
+   cycle after which the clone still reads every object (`fsck
+   --connectivity-only`, the overwritten commit's tree), the overwritten
+   commit kept unreachable in the mirror; `get_workspace` lists the session
+   directory.
+6. **Dropped**: `update_workspace` selecting the second repository alone:
+   the first leaves the selection, marked dropped in the manifest, its mirror
+   kept while the session directory borrows from it.
+7. **Borrower gone**: the session directory removed, the next cycle deletes
+   the dropped mirror and its manifest entry.
+8. **Update**: `update_workspace` selecting both again clones the first
+   anew at the provider's head.
+9. **Delete**: `delete_workspace`; the claim and the volume go, nothing of
+   it left on the export. The scratch branch and the host's clone are
+   removed on every path; no default branch is ever written.
+
+### The sessions part
+
+`agentlab workspaces-test --part sessions [--provider github|gitlab]
+[--sessions n]` proves many Sessions on one workspace at once, the shape of
+a Session's setup racing the sync: on a workspace over the instance's proof
+repositories, after a push to the scratch branch of the first since the
+workspace's first cycle:
+
+1. **Preconditions**: the workspace-manager with its kagent address and a
+   cleanup window of 5m to 15m (`agentlab configure
+   --workspaces-cleanup-after 10m`, then `agentlab platform`), the
+   [Session admission](#the-session-admission), an Agent Ready on the claude
+   and on the kagent (Go ADK) Harness, the admin holding the instance's
+   grant.
+2. **Push**: one grant per Session from `authorize_workspace`, each naming
+   the pushed repository changed since the sync.
+3. **Start**: `sync_workspace` and every Session's `start_session` with its
+   grant released at once (`--sessions`, default 10, at least 3, alternating
+   the Harnesses); each first turn lists its directory and every clone's
+   heads and writes a file only it knows.
+4. **Directories**: one directory per Session, each set up once, whose setup
+   record (`.kagent/workspace.json`) names the pushed repository fetched from
+   the provider exactly once and nothing else; every clone at the
+   provider's default heads, the pushed repository's scratch branch at the
+   pushed commit; the requested cycle fetched the pushed commit into the
+   mirror.
+5. **Isolation**: a second turn on each Session finds only its own file
+   anywhere it can look, and a write into the mirrors is refused.
+6. **Delete**: a deleted Session's directory goes with no cycle requested
+   (the manager's Session poll), the mirrors' heads and every other
+   directory untouched.
+7. **No workspace**: a Session started without a workspace on each Harness
+   works in an empty directory with no mirrors.
+8. **Cleanup**: the Sessions suspended, the window waited out, a cycle
+   removes every directory and the Workspace reads `SessionsCleanedUp=True`;
+   one Session per Harness resumed works in a fresh directory.
+9. **Report**: each Session's timings (`start_session` called and answered,
+   first turn sent, directory set up, first turn ended) in
+   `workspaces-sessions-report.json` in the state directory, and as `timing`
+   lines.
+
+### The proof repositories
+
+The sync and sessions parts run on a provider instance's two proof
+repositories, recorded in `agentlab.yaml`:
+
+```yaml
+platform:
+  workspaces:
+    github:
+      proofRepositories:
+        - giantswarm/workspace-proof   # pushed to: its scratch branch only
+        - giantswarm/agent-sandbox     # left as it is
+    gitlab:
+      proofRepositories:               # <group>/<project>, nested groups too
+        - workspaces/workspace-proof
+        - workspaces/other
+```
+
+The instance's App reaches both. The first takes pushes to the scratch
+branch `agentlab-workspaces-proof`, which the parts create and delete: a
+default branch protected against direct pushes stays untouched. On
+`github` the pushes go out with the person's own git credentials (their
+credential helper, `gh auth git-credential` for one); on `gitlab` as the
+instance's person, with the password the GitLab part reads, handed to git
+through its environment. Without the list the part skips with the reason.
+
+### The grant a proof waits for
+
+A GitHub App's grant takes github.com's sign-in in a browser, which no
+headless walk makes. A part that finds the admin without the grant of the
+`github` instance's App prints muster's sign-in link, writes it to
+`workspaces-grant-github.url` in the state directory and waits up to 15
+minutes for `list_providers` to show it connected: open the link in a
+browser signed in to GitHub, which takes GitHub's consent of the lab's App
+once and redirects to muster's callback. The grant is dropped at the run's
+end, as every proof's. A GitLab's grant is walked headlessly through its
+sign-in form, as in the GitLab part.
 
 ### The GitLab part
 
