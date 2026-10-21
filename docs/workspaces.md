@@ -472,7 +472,8 @@ the workspaces values, as the subchart's own
 `list_workspaces` for `lab` as the admin, which answers, and as the viewer,
 who is kept out: refused as not a member when they hold the pinned
 provider App's grant, or asked by muster's `auth_required` and its sign-in
-link to grant it first; the stage's note says which. A workspace a lab user creates names
+link to grant it first; the stage's note says which. A workspace a lab user
+creates names
 `organization: lab`.
 
 ### The provider instance github
@@ -537,9 +538,11 @@ id and the first two keys are in place; the part's person needs the third.
 GitLab's side, set up once by an administrator of the instance:
 
 - An instance-wide **OAuth application** (Admin Area, Applications), scopes
-  `api read_user read_repository write_repository`, redirect URI each lab's
+  `api read_user read_repository write_repository`, redirect URIs each lab's
   muster callback `https://muster.<domain>:<gatewayPort>/oauth/proxy/callback`
-  (`agentlab configure` prints it), confidential.
+  (`agentlab configure` prints it), confidential. A lab with a new muster host
+  adds its callback to the application before its first connect; GitLab
+  answers any other with "The redirect URI included is not valid".
 - A **group access token** of the group, role Reporter, scopes `read_api
   read_repository`: the sync lists the group's projects and mirrors them over
   HTTPS with it.
