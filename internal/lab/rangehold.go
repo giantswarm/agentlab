@@ -66,10 +66,7 @@ var (
 	activeHold *RangeHold
 	// rangeHoldHost and processAlive are test seams.
 	rangeHoldHost = os.Hostname
-	processAlive  = func(pid int) bool {
-		err := syscall.Kill(pid, 0)
-		return err == nil || errors.Is(err, syscall.EPERM)
-	}
+	processAlive  = pidAlive
 )
 
 // HoldComponentRanges suspends the platform's range-tracking OCIRepositories
@@ -230,9 +227,7 @@ func releaseOnSignal(h *RangeHold) func() {
 			if err := h.drop(context.Background()); err != nil {
 				warn("resuming the version ranges after %s: %v", sig, err)
 			}
-			if s, ok := sig.(syscall.Signal); ok {
-				_ = syscall.Kill(os.Getpid(), s)
-			}
+			resignal(sig)
 		case <-done:
 		}
 	}()
