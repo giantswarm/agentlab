@@ -10,7 +10,7 @@ require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/a2aproject/a2a-go/v2 v2.6.0
 	github.com/charmbracelet/x/ansi v0.11.9
-	github.com/giantswarm/go-selfupdate v1.6.5
+	github.com/giantswarm/go-selfupdate v1.6.6
 	github.com/giantswarm/klaus-gateway v1.21.0
 	github.com/giantswarm/selfupdate-cosign v0.3.8
 	github.com/giantswarm/telemetrydeck-go v0.3.7
