@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/giantswarm/agentlab/internal/config"
 )
 
 // signInLab stands in for the walk's parties on one test server: muster's
@@ -201,5 +203,18 @@ func TestSignInCompleted(t *testing.T) {
 		if got := signInCompleted([]byte(page)); got != want {
 			t.Errorf("signInCompleted(%q) = %t, want %t", page, got, want)
 		}
+	}
+}
+
+// A pinned lab grants and drops through the workspace-manager's server; a
+// lab with no pin through each instance's App by name.
+func TestWorkspacePersonGrantArgs(t *testing.T) {
+	pinned := &workspacePerson{}
+	if got := pinned.grantArgs(config.WorkspaceProviderGitLab); got[serverKey] != workspaceManagerMCPServer || len(got) != 1 {
+		t.Errorf("pinned: %v, want server=%s", got, workspaceManagerMCPServer)
+	}
+	perApp := &workspacePerson{perApp: true}
+	if got := perApp.grantArgs(config.WorkspaceProviderGitLab); got[musterAppArg] != config.WorkspaceProviderGitLab || len(got) != 1 {
+		t.Errorf("per App: %v, want app=%s", got, config.WorkspaceProviderGitLab)
 	}
 }

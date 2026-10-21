@@ -203,11 +203,21 @@ export is one node's disk.
 `agentlab workspaces-test --part gitlab [email]` proves
 [the provider instance `gitlab`](#the-provider-instance-gitlab) end to end
 against a real GitLab, with muster pinning the workspace-manager to the
-GitLab OAuth application (`platform.workspaces.grantProvider: gitlab`), as the
-admin (granting it as `platform.workspaces.gitlab.person`) and `[email]`
-(default `dev@lab.local`, never granting it). Without the instance, any of
-its settings or the pin, every stage skips with the reason and the part
-passes: it never fails for a lab that has no GitLab.
+GitLab OAuth application (`platform.workspaces.grantProvider: gitlab`), or
+keeping one provider App per instance, GitLab's beside GitHub's
+(`grantProvider: apps`, [provider Apps side by side](#provider-apps-side-by-side)),
+as the admin (granting it as `platform.workspaces.gitlab.person`) and
+`[email]` (default `dev@lab.local`, never granting it). Without the
+instance, any of its settings, or with the pin on another instance, every
+stage skips with the reason and the part passes: it never fails for a lab
+that has no GitLab. With `apps`, the part grants and drops GitLab's App by
+its name (`core_auth_login` / `core_auth_logout` with `app=gitlab`): the
+second person's `list_providers` shows `gitlab` not connected and
+`core_auth_login app=gitlab` answers the sign-in link; the admin's
+`list_providers` after the grant lists every instance with its own status
+(`github` connected too when the admin granted the GitHub App in a
+browser); after the drop `gitlab` is not connected and every other instance
+reads as before.
 
 1. **Preconditions**: the workspace-manager reachable through muster and
    pinned to the instance's application, the
@@ -229,17 +239,24 @@ passes: it never fails for a lab that has no GitLab.
    audience `gitlab` and no token; `start_session` through agent-manager
    creates the Session on the volume, whose turn works in its directory with
    the clone at the mirrored head and holds no credential beyond the
-   platform's own variables (`GH_TOKEN`, the Harness's inert placeholder the
-   egress gateway replaces, is one of them).
-7. **Push from the Session**: the Session pushes an empty commit to a proof
-   branch and deletes the branch again. It holds no GitLab credential, so
-   GitLab accepts both only through Substrate's egress gateway, which fetches
-   the person's token from muster for a Session bound to them and sends it as
-   Basic with the user `oauth2` (muster's `credentialProvider.gitUsers`,
-   `gitlab: oauth2`).
+   platform's own variables (`GH_TOKEN` and `GITLAB_TOKEN`, the Harness's
+   inert placeholder the egress gateway replaces, `GLAB_IS_OAUTH2` and
+   `GLAB_CONFIG_DIR`, glab's configuration naming the workspace's GitLab
+   hosts, are among them; a `GITLAB_TOKEN` of any other value is a credential).
+7. **Push and merge request from the Session**: the Session pushes an empty
+   commit to a proof branch and deletes the branch again. It holds no GitLab
+   credential, so GitLab accepts both only through Substrate's egress
+   gateway, which fetches the person's token from muster for a Session bound
+   to them and sends it as Basic with the user `oauth2` (muster's
+   `credentialProvider.gitUsers`, `gitlab: oauth2`). Between the two, on a
+   Harness that gives `glab` its placeholder (`GITLAB_TOKEN` set to kagent's inert placeholder, sent as an
+   OAuth2 bearer through `GLAB_IS_OAUTH2`), `glab api user` names the person
+   and `glab mr create` opens a merge request of the branch authored by them,
+   which the Session closes before it deletes the branch; on an older Harness
+   the stage reports glab's answer and leaves the merge request unjudged.
 8. **No workspace**: a Session started without a workspace works in the
-   default directory, holds no credential beyond the platform's own, and
-   `git ls-remote` of the private project is refused.
+   default directory, holds no credential beyond the platform's own and no
+   `GITLAB_TOKEN`, and `git ls-remote` of the private project is refused.
 9. **Disconnect**: the admin drops the grant in muster (`core_auth_logout`),
    and `list_providers` answers muster's sign-in link again; the admin grants
    it once more for the restore.
@@ -425,6 +442,22 @@ under `client-id` for muster beside `client-secret`: the lab writes it into
 `workspace-github` or `workspace-gitlab` ahead of the install. The App's callback URL is muster's,
 `https://muster.<domain>:<gatewayPort>/oauth/proxy/callback`.
 
+#### Provider Apps side by side
+
+`platform.workspaces.grantProvider: apps` (`agentlab configure
+--workspaces-grant-provider apps`, two or more instances) pins nothing: the
+lab renders no `muster.mcpServer.auth.provider`, and an agent-platform chart
+that keeps one muster provider App per instance
+(`agent-platform.workspaceManager.providerApps`) derives an App of each
+instance with person sign-in, GitHub's and GitLab's side by side, and the
+registration's `providerApps` naming them all. A person grants each App once
+by name (`core_auth_login app=<instance>`), `list_providers` lists each
+instance connected or not, and `core_auth_logout app=<instance>` drops one
+App's grant and no other. The lab writes `client-id` into every instance's
+Secret. On a chart without provider Apps the registration falls back to the
+chart's single-App pin; `workspaces-test --part gitlab` then fails its
+preconditions naming the MCPServer's `providerApps`.
+
 A person's grant of a GitHub App takes github.com's sign-in in a person's
 browser: the real GitHub App login, through a browser worker with an SSO
 session; no headless walk grants it. A proof that calls the manager's tools
@@ -471,7 +504,10 @@ developers]}]`, which the chart turns into the manager's
 the workspaces values, as the subchart's own
 `workspace-manager.organizations` map. `platform-test` calls
 `list_workspaces` for `lab` as the admin, which answers, and as the viewer,
-which is refused as not a member. A workspace a lab user creates names
+who is kept out: refused as not a member when they hold the pinned
+provider App's grant, or asked by muster's `auth_required` and its sign-in
+link to grant it first; the stage's note says which. A workspace a lab user
+creates names
 `organization: lab`.
 
 ### The provider instance github

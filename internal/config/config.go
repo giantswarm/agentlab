@@ -657,6 +657,10 @@ type Workspaces struct {
 	// grants that App once in muster, and muster attaches the person's token
 	// for it to every call of the manager's tools. Empty is the first
 	// instance of Provider, in the order WorkspaceProviders gives them.
+	// WorkspaceGrantProviderApps pins nothing: muster keeps one provider
+	// App per instance, side by side (WorkspaceProviderApps), and a person
+	// grants each once (core_auth_login app=<instance>); it takes two or
+	// more instances.
 	GrantProvider string `yaml:"grantProvider,omitempty"`
 	// GitHub is the App behind the provider instance github.
 	GitHub WorkspaceGitHub `yaml:"github,omitempty"`
@@ -794,6 +798,10 @@ const (
 	WorkspaceGitLabTokenKey      = "token"            // #nosec G101 -- Secret KEY name, not a credential
 	WorkspaceGitLabPasswordKey   = "person-password"  // #nosec G101 -- Secret KEY name, not a credential
 )
+
+// WorkspaceGrantProviderApps is the grantProvider that pins no instance:
+// one muster provider App per instance, side by side.
+const WorkspaceGrantProviderApps = "apps"
 
 // workspaceProviderNames are the instances platform.workspaces.provider may
 // name, in the order the workspace-manager gets them.
@@ -1220,6 +1228,13 @@ type ExtraModel struct {
 	// agent uses (the codex runtime speaks the Responses API only);
 	// `chatCompletions` is the CRD's default.
 	APIFormat string `yaml:"apiFormat,omitempty"`
+	// OpenAI provider only: the ModelConfig's openAI.credentialType.
+	// `chatgptOAuth` runs the model on a ChatGPT subscription login instead
+	// of an API key: the Secret kagent-<name> holds ChatGPTLoginKeys of a
+	// `codex login --device-auth`, placed by the operator's secret tooling,
+	// never by agentlab. It serves codex only, so it needs apiFormat
+	// responses.
+	CredentialType string `yaml:"credentialType,omitempty"`
 	// Ollama provider only: the ModelConfig's ollama.think, sent as the chat
 	// request's think field. false switches a thinking model's reasoning off
 	// on kagent's native Ollama provider (docs/models.md "Agent proofs without
@@ -1263,15 +1278,47 @@ var APIFormats = []string{"chatCompletions", APIFormatResponses}
 // APIFormatResponses is openAI.apiFormat for the Responses API.
 const APIFormatResponses = "responses"
 
+// CredentialTypes is the ModelConfig CRD's enum for openAI.credentialType.
+var CredentialTypes = []string{"apiKey", CredentialTypeChatGPT}
+
+// CredentialTypeChatGPT is openAI.credentialType for a ChatGPT subscription
+// login.
+const CredentialTypeChatGPT = "chatgptOAuth" // #nosec G101 -- the CRD's enum value, no credential
+
+// ChatGPTLoginLabel opts a login Secret in to kagent's refresher, which
+// rotates its tokens in place; kagent refuses a login Secret without it.
+const ChatGPTLoginLabel = "kagent.dev/chatgpt-login"
+
+// ChatGPTLoginLabelValue is ChatGPTLoginLabel's opt-in value.
+const ChatGPTLoginLabelValue = "true"
+
+// ChatGPTLoginKeys are the keys of a ChatGPT login's Secret.
+var ChatGPTLoginKeys = []string{"access_token", "refresh_token", "account_id"}
+
+// IsChatGPTLoginSecret reports whether a Secret's labels opt it in to
+// kagent's login refresher.
+func IsChatGPTLoginSecret(labels map[string]string) bool {
+	return labels[ChatGPTLoginLabel] == ChatGPTLoginLabelValue
+}
+
+// ChatGPTLogin reports whether the model runs on a ChatGPT login.
+func (m ExtraModel) ChatGPTLogin() bool { return m.CredentialType == CredentialTypeChatGPT }
+
 // SecretName is the Kubernetes Secret (in ns kagent) holding this model's key.
 func (m ExtraModel) SecretName() string { return "kagent-" + m.Name }
 
 // SecretKey is the key inside the Secret — the provider's canonical env var
-// name. Empty for keyless providers (no Secret attached at all).
-func (m ExtraModel) SecretKey() string { return ModelProviders[m.Provider] }
+// name. Empty for keyless providers (no Secret attached at all) and for a
+// ChatGPT login, whose Secret holds ChatGPTLoginKeys.
+func (m ExtraModel) SecretKey() string {
+	if m.ChatGPTLogin() {
+		return ""
+	}
+	return ModelProviders[m.Provider]
+}
 
 // NeedsSecret reports whether this model's ModelConfig references a Secret.
-func (m ExtraModel) NeedsSecret() bool { return m.SecretKey() != "" }
+func (m ExtraModel) NeedsSecret() bool { return m.ChatGPTLogin() || m.SecretKey() != "" }
 
 // PlatformTLS is an externally provisioned certificate for the edge; see
 // Platform.TLS.
@@ -1826,6 +1873,24 @@ func (m ExtraModel) Validate() error {
 			return fmt.Errorf("%s: unknown apiFormat %q (one of %s)", m.Name, m.APIFormat, strings.Join(APIFormats, ", "))
 		}
 	}
+	if m.CredentialType != "" {
+		if m.Provider != ProviderOpenAI {
+			return fmt.Errorf("%s: credentialType applies to the OpenAI provider only (the ModelConfig's openAI.credentialType)", m.Name)
+		}
+		if !slices.Contains(CredentialTypes, m.CredentialType) {
+			return fmt.Errorf("%s: unknown credentialType %q (one of %s)", m.Name, m.CredentialType, strings.Join(CredentialTypes, ", "))
+		}
+	}
+	if m.ChatGPTLogin() {
+		switch {
+		case m.APIFormat != APIFormatResponses:
+			return fmt.Errorf("%s: a ChatGPT login serves codex only, which needs apiFormat %s", m.Name, APIFormatResponses)
+		case m.APIKeyEnv != "":
+			return fmt.Errorf("%s: a ChatGPT login takes no apiKeyEnv (its Secret %s is placed by the operator's secret tooling)", m.Name, m.SecretName())
+		case m.BaseURL != "":
+			return fmt.Errorf("%s: a ChatGPT login takes no baseUrl (kagent calls the ChatGPT Codex backend)", m.Name)
+		}
+	}
 	return nil
 }
 
@@ -2179,8 +2244,10 @@ func (c *Config) Validate() error {
 	}
 	if names, err := parseWorkspaceProviders(c.Platform.Workspaces.Provider); err != nil {
 		return err
-	} else if grant := c.Platform.Workspaces.GrantProvider; grant != "" && !slices.Contains(names, grant) {
-		return fmt.Errorf("platform.workspaces.grantProvider %q names no instance of platform.workspaces.provider (%s)", grant, strings.Join(names, ", "))
+	} else if grant := c.Platform.Workspaces.GrantProvider; grant == WorkspaceGrantProviderApps && len(names) < 2 {
+		return fmt.Errorf("platform.workspaces.grantProvider %q keeps one muster provider App per instance, side by side, and takes two or more instances of platform.workspaces.provider (%s): `agentlab configure --workspaces-provider %s,%s`", grant, strings.Join(names, ", "), WorkspaceProviderGitHub, WorkspaceProviderGitLab)
+	} else if grant != "" && grant != WorkspaceGrantProviderApps && !slices.Contains(names, grant) {
+		return fmt.Errorf("platform.workspaces.grantProvider %q names no instance of platform.workspaces.provider (%s), nor %q (one muster provider App per instance)", grant, strings.Join(names, ", "), WorkspaceGrantProviderApps)
 	}
 	if after := c.Platform.Workspaces.SessionsCleanupAfter; after != "" {
 		if d, err := time.ParseDuration(after); err != nil || d <= 0 {
@@ -2427,16 +2494,25 @@ func (c *Config) WorkspaceProviders() []string {
 
 // WorkspaceGrantProvider is the instance muster pins the workspace-manager's
 // registration to: platform.workspaces.grantProvider, or the first instance;
-// "" with workspaces off.
+// "" with workspaces off and with WorkspaceProviderApps, which pins none.
 func (c *Config) WorkspaceGrantProvider() string {
 	names := c.WorkspaceProviders()
-	if len(names) == 0 {
+	if len(names) == 0 || c.WorkspaceProviderApps() {
 		return ""
 	}
 	if grant := c.Platform.Workspaces.GrantProvider; slices.Contains(names, grant) {
 		return grant
 	}
 	return names[0]
+}
+
+// WorkspaceProviderApps reports whether muster keeps one provider App per
+// instance, side by side, with the workspace-manager's registration pinned
+// to none (platform.workspaces.grantProvider: WorkspaceGrantProviderApps):
+// the meta chart derives the Apps, and a person grants each once
+// (core_auth_login app=<instance>).
+func (c *Config) WorkspaceProviderApps() bool {
+	return c.Platform.Workspaces.GrantProvider == WorkspaceGrantProviderApps && len(c.WorkspaceProviders()) > 1
 }
 
 // WorkspaceGitHubProvider reports whether the workspace-manager gets the
