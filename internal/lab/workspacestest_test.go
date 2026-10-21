@@ -3,6 +3,8 @@ package lab
 import (
 	"strings"
 	"testing"
+
+	"github.com/giantswarm/agentlab/internal/config"
 )
 
 func TestWorkspacesTestOptionsValidate(t *testing.T) {
@@ -12,11 +14,11 @@ func TestWorkspacesTestOptionsValidate(t *testing.T) {
 		wantErr string
 	}{
 		{name: "the storage proof on claude", opts: WorkspacesTestOptions{}},
-		{name: "codex with its model", opts: WorkspacesTestOptions{Harness: "codex", ModelConfig: "chatgpt-login"}},
-		{name: "claude with another model", opts: WorkspacesTestOptions{Harness: "claude", ModelConfig: "other"}},
-		{name: "codex without a model", opts: WorkspacesTestOptions{Harness: "codex"}, wantErr: "needs --model-config"},
-		{name: "storage only with a Harness", opts: WorkspacesTestOptions{StorageOnly: true, Harness: "codex", ModelConfig: "m"}, wantErr: "--storage-only runs none"},
-		{name: "the GitLab part with a Harness", opts: WorkspacesTestOptions{Part: WorkspacesPartGitLab, Harness: "codex"}, wantErr: "runs the claude Session"},
+		{name: "codex with its model", opts: WorkspacesTestOptions{Harness: config.CodingRuntimeCodex, ModelConfig: "chatgpt-login"}},
+		{name: "claude with another model", opts: WorkspacesTestOptions{Harness: claudeHarness, ModelConfig: "another-model"}},
+		{name: "codex without a model", opts: WorkspacesTestOptions{Harness: config.CodingRuntimeCodex}, wantErr: "needs --model-config"},
+		{name: "storage only with a Harness", opts: WorkspacesTestOptions{StorageOnly: true, Harness: config.CodingRuntimeCodex, ModelConfig: "m"}, wantErr: "--storage-only runs none"},
+		{name: "the GitLab part with a Harness", opts: WorkspacesTestOptions{Part: WorkspacesPartGitLab, Harness: config.CodingRuntimeCodex}, wantErr: "runs the claude Session"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := tc.opts.validate()
@@ -38,8 +40,8 @@ func TestWorkspacesSessionHarnessFor(t *testing.T) {
 	if claude.name != claudeHarness || claude.modelConfig != defaultModelConfig || claude.agent != workspacesHarnessAgent || claude.shellTool != "Bash tool" {
 		t.Errorf("the default Session = %+v, want the claude Agent %s on %s", claude, workspacesHarnessAgent, defaultModelConfig)
 	}
-	codex := workspacesSessionHarnessFor("codex", "chatgpt-login")
-	if codex.name != "codex" || codex.modelConfig != "chatgpt-login" || codex.agent != "agentlab-workspaces-codex" || codex.shellTool != "shell tool" {
+	codex := workspacesSessionHarnessFor(config.CodingRuntimeCodex, "chatgpt-login")
+	if codex.name != config.CodingRuntimeCodex || codex.modelConfig != "chatgpt-login" || codex.agent != "agentlab-workspaces-codex" || codex.shellTool != "shell tool" {
 		t.Errorf("the codex Session = %+v", codex)
 	}
 	manifest := workspacesAgentManifest(codex.agent, codex.name, codex.modelConfig, "probe")
