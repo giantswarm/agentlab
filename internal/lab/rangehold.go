@@ -110,9 +110,9 @@ func (h *RangeHold) take(ctx context.Context) error {
 			warn("not holding the version range of OCIRepository %s/%s: it has not resolved its current spec yet", platformNamespace, src.GetName())
 			continue
 		}
-		held, err := updateHold(ctx, *gvr, src.GetName(), func(holders []string, suspended bool) ([]string, bool, bool) {
-			if suspended && len(holders) == 0 {
-				return nil, false, false // someone's own suspend
+		held, err := updateHold(ctx, *gvr, src.GetName(), func(holders []string, ownSuspend bool) ([]string, bool, bool) {
+			if ownSuspend {
+				return nil, false, false
 			}
 			if !slices.Contains(holders, h.holder) {
 				holders = append(holders, h.holder)
@@ -331,9 +331,10 @@ func pruneDeadHolders(holders []string) []string {
 
 // updateHold rewrites one source's holders and suspend under optimistic
 // concurrency. change gets the live holders (dead ones pruned) and whether the
-// source is suspended, and returns the new holders, the new suspend and
+// source carries someone's own suspend (suspended, and no hold was ever
+// recorded on it), and returns the new holders, the new suspend and
 // whether to write at all. Reports whether the source is held afterwards.
-func updateHold(ctx context.Context, gvr schema.GroupVersionResource, name string, change func(holders []string, suspended bool) ([]string, bool, bool)) (bool, error) {
+func updateHold(ctx context.Context, gvr schema.GroupVersionResource, name string, change func(holders []string, ownSuspend bool) ([]string, bool, bool)) (bool, error) {
 	k, err := labKube()
 	if err != nil {
 		return false, err
@@ -346,7 +347,8 @@ func updateHold(ctx context.Context, gvr schema.GroupVersionResource, name strin
 			return err
 		}
 		suspended, _, _ := unstructured.NestedBool(src.Object, "spec", "suspend")
-		holders, suspend, write := change(pruneDeadHolders(rangeHolders(src)), suspended)
+		recorded := rangeHolders(src)
+		holders, suspend, write := change(pruneDeadHolders(recorded), suspended && len(recorded) == 0)
 		held = write && len(holders) > 0
 		if !write {
 			return nil
