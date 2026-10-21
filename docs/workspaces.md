@@ -470,7 +470,9 @@ developers]}]`, which the chart turns into the manager's
 the workspaces values, as the subchart's own
 `workspace-manager.organizations` map. `platform-test` calls
 `list_workspaces` for `lab` as the admin, which answers, and as the viewer,
-which is refused as not a member. A workspace a lab user creates names
+who is kept out: refused as not a member when they hold the pinned
+provider App's grant, or asked by muster's `auth_required` and its sign-in
+link to grant it first; the stage's note says which. A workspace a lab user creates names
 `organization: lab`.
 
 ### The provider instance github

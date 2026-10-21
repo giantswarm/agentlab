@@ -21,11 +21,13 @@ import (
 // session directory is ever cleaned up (every Workspace reads
 // SessionsCleanedUp=False KagentNotConfigured). A manager whose registration muster pins to a
 // provider App (workspacemustergrant.go) shows its tools only to a person
-// who granted that App in a browser: an admin or viewer who has not ends
-// the stage at muster's sign-in link.
+// who granted that App in a browser: an admin who has not ends the stage at
+// muster's sign-in link.
 // list_workspaces for the lab's Organization (config.WorkspaceOrganization)
-// answers the admin, a member, and refuses the viewer as not a member: the
-// values gave the manager the Organization and its member groups.
+// answers the admin, a member, and keeps the viewer out: the workspace-manager
+// refuses them as not a member (the values gave it the Organization and its
+// member groups), or, before that, muster asks them to grant the pinned App
+// with its sign-in link.
 
 // workspaceManagerMCPServer is the chart's MCPServer CR for the component,
 // whose tools muster exposes as x_workspace-manager_<tool>.
@@ -74,11 +76,13 @@ func (s workspaceProviderStatus) String() string {
 }
 
 // workspaceManagerProof is what the stage ran: the instances as
-// list_providers worded them, or, when a person had not granted the pinned
-// provider App, where it stopped instead (ungranted, non-nil), before
-// list_providers and list_workspaces.
+// list_providers worded them and how list_workspaces kept the viewer out
+// (viewer), or, when the admin had not granted the pinned provider App,
+// where it stopped instead (ungranted, non-nil), before list_providers and
+// list_workspaces.
 type workspaceManagerProof struct {
 	providers []string
+	viewer    string
 	ungranted *workspaceGrantStop
 }
 
@@ -147,7 +151,7 @@ func proveWorkspaceManager(cfg *config.Config) (*workspaceManagerProof, error) {
 		return nil, err
 	}
 	if pinned, err := workspaceManagerPinnedProvider(cfg); err == nil {
-		if stop, err := grantForStage(pinned, adminPerson, viewerPerson); err != nil || stop != nil {
+		if stop, err := grantForStage(pinned, adminPerson); err != nil || stop != nil {
 			return &workspaceManagerProof{ungranted: stop}, err
 		}
 	}
@@ -190,20 +194,39 @@ func proveWorkspaceManager(cfg *config.Config) (*workspaceManagerProof, error) {
 		return nil, fmt.Errorf("%w\n  the values give the workspace-manager the Organization %s with the member groups %s; check its --organization flag", err, config.WorkspaceOrganization, strings.Join(config.WorkspaceOrganizationGroups, ", "))
 	}
 	note("list_workspaces for %s as %s: %d workspaces", config.WorkspaceOrganization, admin.Email, len(workspaces.Workspaces))
-	env, err := viewerPerson.session.callToolEnvelope(workspaceManagerToolPrefix+"list_workspaces", org)
+	kept, err := viewerKeptOut(viewerPerson.session.callToolEnvelope(workspaceManagerToolPrefix+"list_workspaces", org))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list_workspaces for %s as %s: %w", config.WorkspaceOrganization, viewer.Email, err)
 	}
-	if !env.IsError || !strings.Contains(env.Content[0].Text, "not a member") {
-		return nil, fmt.Errorf("list_workspaces for %s as %s answered %.300q, want a refusal as not a member: the viewers are outside the lab's Organization", config.WorkspaceOrganization, viewer.Email, env.Content[0].Text)
+	note("list_workspaces for %s as %s: %s", config.WorkspaceOrganization, viewer.Email, kept)
+	return &workspaceManagerProof{providers: worded, viewer: kept}, nil
+}
+
+// viewerKeptOut judges the viewer's list_workspaces for the lab's
+// Organization, whose member groups the viewers are outside: the
+// workspace-manager's refusal as not a member (the viewer holds the pinned
+// App's grant), or muster's auth_required with its sign-in link (they do
+// not, so muster never reached the workspace-manager). It returns which,
+// worded; any other answer is an error.
+func viewerKeptOut(env *toolEnvelope, err error) (string, error) {
+	if err == nil && env.IsError && strings.Contains(env.Content[0].Text, "not a member") {
+		return fmt.Sprintf("refused as not a member: %.200s", env.Content[0].Text), nil
 	}
-	note("list_workspaces for %s as %s refused: %.200s", config.WorkspaceOrganization, viewer.Email, env.Content[0].Text)
-	return &workspaceManagerProof{providers: worded}, nil
+	link, text := musterSignInLink(env, err)
+	if link != "" {
+		return "asked to grant the pinned App first, muster's sign-in link " + excerpt(link, 100), nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return "", fmt.Errorf("answered %.300q, want a refusal as not a member, or muster's auth_required with its sign-in link for a viewer without the pinned App's grant: the viewers are outside the lab's Organization", text)
 }
 
 // grantForStage asks whether the people hold the grant of the pinned
 // provider App, which only a person in a browser makes: one without it ends
 // the stage (stop, non-nil) with muster's sign-in link asserted for them.
+// The stage asks it of the admin alone, whose calls need the grant; the
+// viewer's list_workspaces is judged either way (viewerKeptOut).
 func grantForStage(pinned string, people ...*workspacePerson) (stop *workspaceGrantStop, err error) {
 	for _, p := range people {
 		link, err := p.grantLink()
@@ -231,7 +254,7 @@ func workspaceManagerVerdict(proof *workspaceManagerProof, agents bool) string {
 		return registered + fmt.Sprintf(" and asserts muster's sign-in link for %s, who has not granted the pinned App of %s", g.email, g.pinned) +
 			fmt.Sprintf("\nSKIP: the workspace-manager's list_providers and list_workspaces for Organization %s — %s has not granted the pinned App of %s, which only a person in a browser grants (muster's sign-in link: %s)", config.WorkspaceOrganization, g.email, g.pinned, excerpt(g.link, 100))
 	}
-	return registered + fmt.Sprintf(" and lists its %d provider instances to the admin: %s; list_workspaces for Organization %s answers a member and refuses a viewer", len(proof.providers), strings.Join(proof.providers, ", "), config.WorkspaceOrganization)
+	return registered + fmt.Sprintf(" and lists its %d provider instances to the admin: %s; list_workspaces for Organization %s answers a member and keeps a viewer out (%s)", len(proof.providers), strings.Join(proof.providers, ", "), config.WorkspaceOrganization, proof.viewer)
 }
 
 // callServerStructured runs an aggregated server tool through muster and
