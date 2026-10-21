@@ -36,8 +36,8 @@ type WorkspacesTestOptions struct {
 	ReadyTimeout time.Duration
 	// Part runs one part instead of the storage proof: WorkspacesPartSync
 	// (workspacessyncpart.go), WorkspacesPartSessions
-	// (workspacessessionspart.go) or WorkspacesPartGitLab
-	// (workspacesgitlab.go). "" is the storage proof.
+	// (workspacessessionspart.go), WorkspacesPartGit (workspacesgitpart.go)
+	// or WorkspacesPartGitLab (workspacesgitlab.go). "" is the storage proof.
 	Part string
 	// Provider is the provider instance the sync and sessions parts run on,
 	// github (the default) or gitlab.
@@ -58,7 +58,7 @@ type WorkspacesTestOptions struct {
 }
 
 // WorkspacesParts are the parts `workspaces-test --part` takes.
-var WorkspacesParts = []string{WorkspacesPartSync, WorkspacesPartSessions, WorkspacesPartGitLab}
+var WorkspacesParts = []string{WorkspacesPartSync, WorkspacesPartSessions, WorkspacesPartGit, WorkspacesPartGitLab}
 
 // validate refuses a part workspaces-test does not have, and the flags and
 // argument of one run given to the other.
@@ -75,7 +75,7 @@ func (o WorkspacesTestOptions) validate() error {
 		if o.Harness != "" && o.Harness != claudeHarness && o.ModelConfig == "" {
 			return fmt.Errorf("--harness %s needs --model-config: the default ModelConfig is the claude Harness's", o.Harness)
 		}
-	case WorkspacesPartSync, WorkspacesPartSessions, WorkspacesPartGitLab:
+	case WorkspacesPartSync, WorkspacesPartSessions, WorkspacesPartGit, WorkspacesPartGitLab:
 		if o.StorageOnly {
 			return fmt.Errorf("--storage-only is the storage proof's; --part %s proves no storage", o.Part)
 		}
@@ -168,6 +168,8 @@ func WorkspacesTest(cfg *config.Config, opts WorkspacesTestOptions) error {
 		return workspacesSyncPart(cfg, provider, opts.ReadyTimeout)
 	case WorkspacesPartSessions:
 		return workspacesSessionsPart(cfg, provider, opts.Sessions, opts.ReadyTimeout)
+	case WorkspacesPartGit:
+		return workspacesGitPart(cfg, opts.ReadyTimeout)
 	}
 	ctx := context.Background()
 	timeout := opts.ReadyTimeout

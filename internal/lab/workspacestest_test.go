@@ -19,6 +19,10 @@ func TestWorkspacesTestOptionsValidate(t *testing.T) {
 		{name: "codex without a model", opts: WorkspacesTestOptions{Harness: config.CodingRuntimeCodex}, wantErr: "needs --model-config"},
 		{name: "storage only with a Harness", opts: WorkspacesTestOptions{StorageOnly: true, Harness: config.CodingRuntimeCodex, ModelConfig: "m"}, wantErr: "--storage-only runs none"},
 		{name: "the GitLab part with a Harness", opts: WorkspacesTestOptions{Part: WorkspacesPartGitLab, Harness: config.CodingRuntimeCodex}, wantErr: "runs the claude Session"},
+		{name: "the git part", opts: WorkspacesTestOptions{Part: WorkspacesPartGit}},
+		{name: "the git part with a Harness", opts: WorkspacesTestOptions{Part: WorkspacesPartGit, Harness: config.CodingRuntimeCodex}, wantErr: "chooses its own Sessions"},
+		{name: "the git part with an email", opts: WorkspacesTestOptions{Part: WorkspacesPartGit, Email: accessDefaultSecond}, wantErr: "takes no [email]"},
+		{name: "the git part with a provider", opts: WorkspacesTestOptions{Part: WorkspacesPartGit, Provider: config.WorkspaceProviderGitHub}, wantErr: "--provider names the instance"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := tc.opts.validate()

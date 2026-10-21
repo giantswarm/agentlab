@@ -640,14 +640,14 @@ func (gp *gitlabProof) judgeSessionWrite(probe map[string]string) error {
 	branch := gp.branch + "-session"
 	push, del := probe[gitlabProbePush], probe[gitlabProbeDelete]
 	note("the Session's git push of an empty commit to %s:%s: %s", gp.repo, branch, push)
-	if !strings.HasPrefix(push, "rc0 ") && push != "rc0" {
+	if !rcOK(push) {
 		return fmt.Errorf("the Session's push to %s:%s answered %q, want it accepted as %s", gp.repo, branch, push, gp.gl.Person)
 	}
 	if err := gp.judgeSessionMergeRequest(probe); err != nil {
 		return err
 	}
 	note("the Session's deletion of %s: %s", branch, del)
-	if !strings.HasPrefix(del, "rc0 ") && del != "rc0" {
+	if !rcOK(del) {
 		return fmt.Errorf("the Session's deletion of %s:%s answered %q, want it accepted as %s", gp.repo, branch, del, gp.gl.Person)
 	}
 	return nil
@@ -711,7 +711,7 @@ func (gp *gitlabProof) noWorkspace() error {
 // gitlabPlatformEnv are the credential-like variables every Session holds,
 // with or without a workspace: the Harness's messaging channel, kagent's
 // propagation of the turn caller's token to its own broker, the Harness's
-// inert GH_TOKEN placeholder the egress gateway replaces (the write part
+// inert GH_TOKEN placeholder the egress gateway replaces (the git part
 // proves it inert), GLAB_IS_OAUTH2, which makes glab send its token as a
 // bearer, and GLAB_CONFIG_DIR, glab's configuration naming the workspace's
 // GitLab hosts; none is a GitLab credential.

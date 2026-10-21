@@ -61,6 +61,7 @@ agentlab workspaces-test          # --storage-only: the storage alone
 agentlab workspaces-test --harness codex --model-config <name> # the Session on the codex Harness
 agentlab workspaces-test --part sync     # every kind of sync cycle on the github instance's proof repositories
 agentlab workspaces-test --part sessions # Sessions on both Harnesses with a requested sync cycle
+agentlab workspaces-test --part git      # git and gh as the person from a Session on both Harnesses, on GitHub
 agentlab workspaces-test --part gitlab   # the provider instance gitlab, end to end (skips without one)
 ```
 
@@ -287,9 +288,49 @@ workspace's first cycle:
    `workspaces-sessions-report.json` in the state directory, and as `timing`
    lines.
 
+### The git part
+
+`agentlab workspaces-test --part git` proves a workspace Session works with
+git and `gh` as the person, on GitHub through the `github` instance's App,
+on the claude and the kagent (Go ADK) Harness, with the person's token never
+in the sandbox and no GitHub MCP server. What happened at GitHub is read back
+from GitHub's own API, by the Session as the person; nothing stands in for
+GitHub.
+
+1. **Preconditions**: the instance's [proof repositories](#the-proof-repositories),
+   the workspace-manager, the [Session admission](#the-session-admission), an
+   Agent Ready on each Harness, the admin holding the instance's
+   [grant](#the-grant-a-proof-waits-for); the branches
+   `agentlab-workspaces-git-*` an interrupted run left on the pushed
+   repository deleted.
+2. **Workspace**: `create_workspace agentlab-git` over the pushed repository,
+   its first cycle.
+3. **Push and pull request**, per Harness: a Session started through
+   `start_session` with the admin's grant; one turn in its clone switches to
+   `agentlab-workspaces-git-<run>-<harness>`, commits and `git push`es,
+   runs `gh api user` (a person's login, type `User`: an App's installation
+   token answers no `/user`), `gh pr create`, reads the pull request's author
+   and the push's actor (GitHub's repository activity) back, both the
+   person, and closes the pull request with its branch deleted. The commit's
+   committer is the turn's person. `GH_TOKEN` is the Harness's inert
+   placeholder, and no GitHub token (`gh?_…`, `github_pat_…`) is in the
+   environment, `/data`, `/workspace`, the working directory or the home
+   directory: names are printed, never values.
+4. **Pause and resume**, per Harness: the same Session leaves a file
+   uncommitted on a new branch and asks the person whether to commit it; it
+   is suspended while the person answers, resumed, and the answer's turn
+   finds the same volume, working directory, branch and untracked file, the
+   setup record's time unchanged (not set up again).
+5. **No workspace**, per Harness: a Session started without a grant;
+   `gh api user` and a `git push` to the pushed repository are refused, and
+   no GitHub token is anywhere it looks.
+
+The Sessions, the Agents, the workspace and every branch of the run are
+removed on every path.
+
 ### The proof repositories
 
-The sync and sessions parts run on a provider instance's two proof
+The sync, sessions and git parts run on a provider instance's two proof
 repositories, recorded in `agentlab.yaml`:
 
 ```yaml
