@@ -120,7 +120,7 @@ func workspacesGitPart(cfg *config.Config, timeout time.Duration) error {
 		for _, r := range gp.runs {
 			done = append(done, fmt.Sprintf("%s (pull request %s by %s)", r.harness, r.pr, r.login))
 		}
-		fmt.Printf("\nWorkspaces git part passed on GitHub: from a Session in workspace %s on %s, git pushed and gh opened and closed a pull request on %s as the person, the push's actor and the pull request's author the person; no GitHub token in the sandbox beyond gh's placeholder; a Session paused on its question resumed in the same directory with its branch and uncommitted file; a Session without a workspace refused at GitHub.\n",
+		fmt.Printf("\nWorkspaces git part passed on GitHub: from a Session in workspace %s on %s, git pushed and gh opened and closed a pull request on %s as the person, the push's actor and the pull request's author the person; no GitHub token in the sandbox beyond gh's placeholder; a Session paused on its question resumed in the same directory with its branch and uncommitted file; a Session without a workspace refused (gh api user and git push).\n",
 			gitWorkspace, strings.Join(done, " and "), gp.pr.pushed)
 	}
 	return p.close(err)
